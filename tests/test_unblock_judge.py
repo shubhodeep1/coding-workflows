@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from scripts.security_dependency import security_dependency_number
+
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "unblock_ledger.py"
 SPEC = importlib.util.spec_from_file_location("unblock_ledger", SCRIPT)
@@ -574,6 +576,60 @@ def test_security_reissue_keeps_a_finding_open_or_transfers_its_marker() -> None
 	assert "newest issue" not in project_child[1]["body"]
 
 
+def test_security_reissue_carries_canonical_metadata() -> None:
+	labels = ["ai:blocked", "ai:security"]
+	source = "<!-- ai:security-finding:abc-1 -->\n- Integration branch: `claude/x`\n- Depends on: #42"
+	ctx = _ctx(labels=labels, security_finding_id="abc-1", security_source_body=source)
+	assert ctx["security_source_body"] == source
+	assert ctx["security_depends_on"] == 42
+	assert ctx["security_target_branch"] == "claude/x"
+	assert not ctx["security_metadata_unsafe"]
+	ops = actions.plan(_verdict("reissue", instructions="correct spec"), ctx)
+	assert [op["op"] for op in ops] == ["create_issue", "close"]
+	body = ops[0]["body"]
+	assert body.endswith("- Integration branch: `claude/x`\n- Depends on: #42")
+	assert security_dependency_number({"number": 901, "body": body, "labels": ["ai:security"]}) == 42
+	alias = _ctx(labels=labels, security_finding_id="abc-1", security_source_body="<!-- ai:security-finding:abc-1 -->\n**Target branch:** `claude/x` (integration branch)")
+	assert alias["security_target_branch"] == "claude/x"
+	assert actions.plan(_verdict("reissue", instructions="correct spec"), alias)[0]["body"].endswith("- Integration branch: `claude/x`")
+	baseline = _ctx(labels=labels, security_finding_id="abc-1")
+	assert actions.plan(_verdict("reissue", instructions="correct spec"), _ctx(labels=labels, security_finding_id="abc-1", security_source_body="No metadata")) == actions.plan(_verdict("reissue", instructions="correct spec"), baseline)
+
+
+@pytest.mark.parametrize("body,finding_id", [
+	("<!-- ai:security-finding:abc-1 -->\n- Depends on: #42\n- Depends on: #43", "abc-1"),
+	("<!-- ai:security-finding:abc-1 -->\n- Depends on: #42 extra", "abc-1"),
+	("<!-- ai:security-finding:abc-1 -->\n- Depends on: #7", "abc-1"),
+	("<!-- ai:security-finding:abc-1 -->\nIntegration branch: `claude/a`\nIntegration branch: `claude/b`", "abc-1"),
+	("<!-- ai:security-finding:abc-1 -->\nIntegration branch: `a..b`", "abc-1"),
+	("- Depends on: #42", None),
+	("<!-- ai:security-finding:abc-1 -->\n- Depends on: #42 <!-- ai:security-finding:other -->", "abc-1"),
+	("<!-- ai:security-finding:abc def -->\n- Integration branch: `claude/x`\n- Depends on: #42", "abc def"),
+])
+def test_security_reissue_refuses_unsafe_metadata(body: str, finding_id: str | None) -> None:
+	ctx = _ctx(labels=["ai:security", "ai:blocked"], security_source_body=body, security_finding_id=finding_id)
+	assert ctx["security_metadata_unsafe"]
+	ops = actions.plan(_verdict("reissue", instructions="correct spec"), ctx)
+	assert [op["op"] for op in ops] == ["comment", "telegram"]
+	assert "stays open" in ops[0]["body"]
+	assert ops[1]["level"] == "WARNING"
+
+
+@pytest.mark.parametrize("kind,labels,body", [
+	("pr", ["ai:security"], "- Depends on: #42"),
+	("project", ["ai:security"], "- Depends on: #42"),
+	("issue", ["ai:blocked"], "- Depends on: #42"),
+	("issue", ["ai:security"], 10),
+	("issue", ["ai:security"], "x" * 65537),
+])
+def test_security_source_body_ignored_outside_bounded_security_issues(kind: str, labels: list[str], body: object) -> None:
+	ctx = _ctx(kind, labels=labels, security_source_body=body)
+	assert ctx["security_source_body"] is None
+	assert ctx["security_depends_on"] is None
+	assert ctx["security_target_branch"] is None
+	assert not ctx["security_metadata_unsafe"]
+
+
 @pytest.mark.parametrize("finding_id", ["abc -->", "abc def", "abc\ndef", "a" * 121, 42, None])
 def test_security_finding_id_is_validated(finding_id: object) -> None:
 	assert _ctx(security_finding_id=finding_id)["security_finding_id"] is None
@@ -800,7 +856,8 @@ if method == "POST" and endpoint.endswith("/issues"):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
 	state["created"].append(f)
-	done("901" if jq else json.dumps({"number": 901}))
+	created_labels = os.environ.get("FAKE_GH_CREATE_LABELS", f.get("labels[]", ""))
+	done("901\t" + created_labels if jq else json.dumps({"number": 901}))
 if endpoint.endswith("/comments?per_page=100"):
 	if os.environ.get("FAKE_GH_FAIL_COMMENTS"):
 		json.dump(state, open(state_path, "w"))
@@ -1363,23 +1420,35 @@ def test_security_close_alerts_even_when_terminal_label_fails(tmp_path: Path) ->
 
 
 def test_security_reissue_transfers_marker_before_closing_original(tmp_path: Path) -> None:
-	item = dict(ISSUE, labels=ISSUE["labels"] + [{"name": "ai:security"}], body="<!-- ai:security-finding:abc-1 -->\nDo it")
+	source_body = "<!-- ai:security-finding:abc-1 -->\nDo it\n- Integration branch: `claude/x`\n- Depends on: #42"
+	item = dict(ISSUE, labels=ISSUE["labels"] + [{"name": "ai:security"}], body=source_body)
 	result, state = _judge(tmp_path, item, verdict={"verdict": "reissue", "reason": "r", "instructions": "correct spec"})
 	assert "verdict=reissue round=1 outcome=acted" in result.stdout, result.stderr
 	assert state["created"][0]["labels[]"] == "ai:security"
 	assert state["created"][0]["body"].startswith("<!-- ai:security-finding:abc-1 -->\n")
+	assert state["created"][0]["body"].endswith("- Integration branch: `claude/x`\n- Depends on: #42")
+	assert json.loads((tmp_path / "rt" / "context.json").read_text(encoding="utf-8"))["security_source_body"] == source_body
 	assert any(endpoint == "repos/o/r/issues/7" and fields.get("state") == "closed" for endpoint, fields in state["patched"])
+	result, state = _judge(tmp_path, item, verdict={"verdict": "reissue", "reason": "r", "instructions": "correct spec"}, FAKE_GH_CREATE_LABELS="")
+	assert "op=create_issue outcome=labels_missing issue=901" in result.stdout
+	assert "reason=actuation_failed" in result.stdout
+	assert not any(fields.get("state") == "closed" for _, fields in state["patched"])
 	result, state = _judge(tmp_path, item, verdict={"verdict": "reissue", "reason": "r", "instructions": "correct spec"}, FAKE_GH_FAIL_CREATE="1")
 	assert "reason=actuation_failed" in result.stdout
 	assert not any(fields.get("state") == "closed" for _, fields in state["patched"])
 
 
+def test_non_security_issue_context_has_no_security_source_body(tmp_path: Path) -> None:
+	result, _ = _judge(tmp_path, ISSUE, verdict={"verdict": "close", "reason": "nothing left"})
+	assert result.returncode == 0
+	assert json.loads((tmp_path / "rt" / "context.json").read_text(encoding="utf-8"))["security_source_body"] is None
+
+
 def test_security_reissue_with_unsafe_marker_keeps_the_original_open(tmp_path: Path) -> None:
-	item = dict(ISSUE, labels=ISSUE["labels"] + [{"name": "ai:security"}], body="<!-- ai:security-finding:abc def -->")
+	item = dict(ISSUE, labels=ISSUE["labels"] + [{"name": "ai:security"}], body="<!-- ai:security-finding:abc def -->\n- Integration branch: `claude/x`\n- Depends on: #42")
 	result, state = _judge(tmp_path, item, verdict={"verdict": "reissue", "reason": "r", "instructions": "correct spec"})
 	assert "verdict=reissue round=1 outcome=acted" in result.stdout, result.stderr
-	assert state["created"][0]["labels[]"] == "ai:security"
-	assert not state["created"][0]["body"].startswith("<!-- ai:security-finding:")
+	assert state["created"] == []
 	assert not any(fields.get("state") == "closed" for _, fields in state["patched"])
 	assert json.loads((tmp_path / "rt" / "context.json").read_text(encoding="utf-8"))["security_finding_id"] == "abc def"
 

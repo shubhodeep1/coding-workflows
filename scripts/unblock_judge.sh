@@ -214,12 +214,24 @@ unblock_run_ops()
 				while IFS= read -r label; do
 					[ -n "${label}" ] && create_args+=(-f "labels[]=${label}")
 				done < <(jq -r ".ops[${idx}].labels[]" "${ops_file}")
-				created="$(gh api "repos/${REPOSITORY}/issues" "${create_args[@]}" --jq '.number' 2>/dev/null || true)"
+				created="$(gh api "repos/${REPOSITORY}/issues" "${create_args[@]}" --jq '[.number, ([.labels[].name] | join(","))] | @tsv' 2>/dev/null || true)"
+				local created_labels=""
+				created_labels="${created#*$'\t'}"
+				created="${created%%$'\t'*}"
 				if ! [[ "${created}" =~ ^[0-9]+$ ]]; then
 					ops_failed="true"
 					unblock_log "item=${ITEM} op=create_issue outcome=failed"
 					continue
 				fi
+				while IFS= read -r label; do
+					[ -n "${label}" ] || continue
+					if [[ ",${created_labels}," != *",${label},"* ]]; then
+						ops_failed="true"
+						unblock_log "item=${ITEM} op=create_issue outcome=labels_missing issue=${created}"
+						break
+					fi
+				done < <(jq -r ".ops[${idx}].labels[]" "${ops_file}")
+				[ "${ops_failed}" != "true" ] || continue
 				number="$(jq -r ".ops[${idx}].wait_on // empty" "${ops_file}")"
 				if [[ "${number}" =~ ^[0-9]+$ ]]; then
 					gh api "repos/${REPOSITORY}/issues/${number}/comments" \
@@ -552,8 +564,9 @@ unblock_main()
 	jq -n --arg repo "${REPOSITORY}" --arg kind "${ITEM_KIND}" --argjson item "${ITEM}" --arg stop "${ITEM_STOP}" \
 		--slurpfile labels "${RUNTIME_DIR}/labels.json" --arg tracking "${tracking}" --arg linked "${linked}" --arg finding "${finding}" \
 		--argjson has_plan "${has_plan}" --arg title "$(jq -r '.title // ""' "${RUNTIME_DIR}/item.json")" \
+		--arg security_body "${body_text}" \
 		--argjson pr_trusted "${pr_trusted}" --arg pr_author "${pr_author}" --arg pr_head_repo "${pr_head_repo}" --arg pr_head_sha "${head_sha}" \
-		'{repo: $repo, kind: $kind, item: $item, stop: $stop, labels: $labels[0], tracking: (if $tracking == "" then null else ($tracking | tonumber) end), linked_issue: (if $linked == "" then null else ($linked | tonumber) end), has_plan: $has_plan, title: $title, security_finding_id: (if $finding == "" then null else $finding end), pr_trusted: $pr_trusted, pr_author: $pr_author, pr_head_repo: $pr_head_repo, pr_head_sha: $pr_head_sha}' \
+		'{repo: $repo, kind: $kind, item: $item, stop: $stop, labels: $labels[0], tracking: (if $tracking == "" then null else ($tracking | tonumber) end), linked_issue: (if $linked == "" then null else ($linked | tonumber) end), has_plan: $has_plan, title: $title, security_finding_id: (if $finding == "" then null else $finding end), security_source_body: (if $kind == "issue" and ($labels[0] | index("ai:security")) != null then $security_body else null end), pr_trusted: $pr_trusted, pr_author: $pr_author, pr_head_repo: $pr_head_repo, pr_head_sha: $pr_head_sha}' \
 		> "${RUNTIME_DIR}/context.json"
 
 	# A pending fix-up comes first (Q11): wait for it, or run its follow-up.

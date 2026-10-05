@@ -218,9 +218,15 @@ changelog.d/6226-unblock-judge-run-log-binding.md
 changelog.d/6232-unblock-judge-claude-isolation.md
 changelog.d/6233-scope-override-protected-paths.md
 changelog.d/6234-unblock-pr-project-binding.md
+changelog.d/6268-unblock-override-bound-to-rejection.md
+changelog.d/6269-unblock-untrusted-pr-fail-closed.md
 changelog.d/6270-unblock-judge-pr-project-binding.md
+changelog.d/6274-unblock-keeps-security-findings-open.md
+changelog.d/6277-unblock-judge-stale-project.md
 changelog.d/6286-pr-merge-guard-appended-git-dir.md
 changelog.d/6293-numeric-push-refspec-redirect.md
+changelog.d/6304-pr-merge-guard-spaced-numeric-refspec.md
+changelog.d/6322-pr-merge-guard-single-json-output.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/release-smoke-run-lookup.md
 changelog.d/review-tier-random-reviewers.md

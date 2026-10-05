@@ -10,7 +10,7 @@ the network; the shell only executes.
   plan --verdict-file PATH --context-file PATH
       PATH of --verdict-file is `unblock_ledger.py validate` output. The
       context is `{"repo", "kind", "item", "stop", "labels", "tracking",
-       "has_plan", "linked_issue", "title", "security_finding_id",
+       "has_plan", "linked_issue", "title", "security_finding_id", "security_source_body",
        "pr_trusted", "pr_author",
        "pr_head_repo", "pr_head_sha"}` (`tracking` is the project's
        tracking issue number for a project item or a child issue, else null;
@@ -61,6 +61,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from security_dependency import security_dependency_number
+
 SOURCE_REPO = "shubhodeep1/coding-workflows"
 PROJECT_VALIDATION_STOPS = ("validation-failed", "validate-failed", "harness-broken")
 CLARIFY_STOPS = ("clarify-failed", "clarify-respond-failed", "plan-failed")
@@ -69,6 +72,9 @@ CLOSED_LABEL = "ai:unblock-closed"
 SECURITY_LABEL = "ai:security"
 SECURITY_FINDING_MARKER_PREFIX = "<!-- ai:security-finding:"
 SECURITY_FINDING_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
+INTEGRATION_BRANCH_LINE_RE = re.compile(r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$", re.MULTILINE)
+TARGET_BRANCH_LINE_RE = re.compile(r"^\s*(?:-\s*)?(?:\*\*Target branch:\*\*|Target branch:)\s*(?:`\s*([^`\n]+?)\s*`(?:\s.*)?|([^`\s]+))\s*$", re.MULTILINE)
+SECURITY_BRANCH_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
 MAX_COMMAND_TEXT = 300
 
 
@@ -94,6 +100,22 @@ def _read_json(path: str, flag: str) -> object:
 
 def _one_line(text: str) -> str:
 	return " ".join(str(text or "").split())[:MAX_COMMAND_TEXT]
+
+
+def _security_reissue_metadata(body: str, labels: list[str], item: int) -> tuple[int | None, str | None, bool]:
+	try:
+		dependency = security_dependency_number({"number": item, "body": body, "labels": labels})
+	except ValueError:
+		return None, None, True
+	branches = [match.group(1).strip() for match in INTEGRATION_BRANCH_LINE_RE.finditer(body)]
+	if not branches:
+		branches = [(match.group(1) or match.group(2)).strip() for match in TARGET_BRANCH_LINE_RE.finditer(body)]
+	if len(set(branches)) > 1 or any(
+		not SECURITY_BRANCH_REF_RE.fullmatch(branch) or ".." in branch or "//" in branch
+		or branch.endswith(("/", ".", ".lock")) for branch in branches
+	):
+		return None, None, True
+	return dependency, branches[0] if branches else None, False
 
 
 def _context(raw: object) -> dict:
@@ -131,6 +153,15 @@ def _context(raw: object) -> dict:
 		and isinstance(pr_head_sha, str)
 		and re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", pr_head_sha) is not None
 	)
+	security_source_body = raw.get("security_source_body")
+	if kind != "issue" or SECURITY_LABEL not in labels or not isinstance(security_source_body, str) or len(security_source_body) > 65536:
+		security_source_body = None
+	security_depends_on, security_target_branch, security_metadata_unsafe = (
+		_security_reissue_metadata(security_source_body, labels, item)
+		if security_source_body is not None else (None, None, False)
+	)
+	if security_source_body is not None and SECURITY_FINDING_MARKER_PREFIX in security_source_body and finding_id is None:
+		security_metadata_unsafe = True
 	return {
 		"repo": str(raw.get("repo") or ""),
 		"kind": kind,
@@ -142,6 +173,10 @@ def _context(raw: object) -> dict:
 		"linked_issue": linked,
 		"title": _one_line(raw.get("title") or ""),
 		"security_finding_id": finding_id,
+		"security_source_body": security_source_body,
+		"security_depends_on": security_depends_on,
+		"security_target_branch": security_target_branch,
+		"security_metadata_unsafe": security_metadata_unsafe,
 		"pr_trusted": pr_trusted,
 		"pr_author": pr_author if pr_trusted else "",
 		"pr_head_repo": pr_head_repo if pr_trusted else "",
@@ -329,8 +364,18 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 		title = f"Re-issue of #{item}: {ctx['title']}"[:240]
 		body = "\n".join([f"Re-issued by the unblock judge from #{item}.", "", f"Specification: {verdict['instructions']}", "", f"Why: {verdict['reason']}"])
 		security_issue = _is_security_issue(ctx)
+		if security_issue and not ctx["tracking"] and ctx.get("security_metadata_unsafe"):
+			return [
+				{"op": "comment", "issue": item, "body": "This security finding stays open: its finding marker, dependency or target-branch metadata could not be carried to a replacement safely, so no re-issue was created."},
+				{"op": "telegram", "level": "WARNING", "text": f"Unblock judge could not safely re-issue security finding #{item}; its metadata needs correction."},
+			]
 		if security_issue and not ctx["tracking"] and ctx.get("security_finding_id"):
 			body = f"{SECURITY_FINDING_MARKER_PREFIX}{ctx['security_finding_id']} -->\n{body}"
+		if security_issue and not ctx["tracking"]:
+			if ctx.get("security_target_branch"):
+				body += f"\n\n- Integration branch: `{ctx['security_target_branch']}`"
+			if ctx.get("security_depends_on") is not None:
+				body += f"\n- Depends on: #{ctx['security_depends_on']}"
 		labels = [SECURITY_LABEL] if security_issue else []
 		if ctx["kind"] == "pr":
 			# PR body lineage is author-controlled; never route its reissue
