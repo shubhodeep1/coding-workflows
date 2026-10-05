@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Do not retain GH_PAT in the checkout used for review.\"\n  expected_change_site: `.github/workflows/review_autofix.yml`, review checkout authentication setup before static prompt assembly\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: The PR diff adds symlink guards but does not remove or clean up the token-bearing remote URL set at lines 2601 and 6282. The static context assembly at line 3088 runs while the checkout still carries the credential; At line 2601, the workflow still runs `git remote set-url origin \"https://x-access-token:${GH_TOKEN}@...\"`, persisting GH_PAT in the checkout's `.git/config`. The static prompt assembly at line 3088 runs after that, so a symlink that pointed at `.git/config` would still surface the token until the symlink guard rejects it. Line 6282 sets a token-bearing remote URL again during push. None of the three write sites are reverted, scrubbed, or replaced with a non-token URL by this PR; Lines 2592-2601 set `origin` to a URL containing `GH_TOKEN` before static context assembly at line 3088; no cleanup occurs between them. The workflow also sets a token-bearing remote URL at line 6282; At line 2601, the workflow still writes `${GH_TOKEN}` into the checkout's `origin` URL, before static context is assembled at line 3088; no cleanup removes it in between. The workflow also sets a token-bearing remote URL again at line 6282.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- TASK_GAP\n  Requirement: \"Do not retain GH_PAT in the checkout used for review.\"\n  Expected change site: .github/workflows/review_autofix.yml, review checkout credential cleanup before static prompt assembly.\n  Evidence of absence: The PR diff adds symlink guards but does not remove or clean up the token-bearing remote URL set at lines 2601 and 6282. The static context assembly at line 3088 runs while the checkout still carries the credential.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n  Deferral note: The PR owner's issue comment entry[0] explicitly scopes credential persistence out of this change: \"Keep credential persistence unchanged in this change; the expected outcome is to close the prompt-leak path without disrupting review workflows.\" The editor deferred this finding across three autofix runs citing that instruction. The symlink guards close the direct prompt-leak vector described in the exploit scenario, leaving credential removal as a separate follow-up.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Do not retain GH_PAT in the checkout used for review.\" (Issue #6248 body)\n  Expected change site: .github/workflows/review_autofix.yml, the review checkout authentication setup that runs before static prompt assembly.\n  Evidence of absence: The PR adds symlink guards to block the leak path but does not modify the authentication setup. At line 2601, the workflow still runs `git remote set-url origin \"https://x-access-token:${GH_TOKEN}@...\"`, persisting GH_PAT in the checkout's `.git/config`. The static prompt assembly at line 3088 runs after that, so a symlink that pointed at `.git/config` would still surface the token until the symlink guard rejects it. Line 6282 sets a token-bearing remote URL again during push. None of the three write sites are reverted, scrubbed, or replaced with a non-token URL by this PR.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n  Note: PR comment entry[0] (shubhodeep1) explicitly scopes this out (\"Keep credential persistence unchanged in this change\"), so the author has chosen to close only the symlink-read path. Per \u00a72 anti-rules, an author-explicit deferral is not a strict gap, but the issue text still names the deliverable, so it is flagged here for the human reviewer's awareness.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cDo not retain GH_PAT in the checkout used for review.\u201d\n  Expected change site: `.github/workflows/review_autofix.yml`, review checkout authentication setup before static prompt assembly.\n  Evidence of absence: The PR adds symlink guards but does not remove credential persistence. Lines 2592-2601 set `origin` to a URL containing `GH_TOKEN` before static context assembly at line 3088; no cleanup occurs between them. The workflow also sets a token-bearing remote URL at line 6282.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"Do not retain GH_PAT in the checkout used for review.\"\n  Expected change site: `.github/workflows/review_autofix.yml`, in the review checkout authentication setup before static prompt assembly.\n  Evidence of absence: The PR adds symlink guards but does not change the authentication setup. At line 2601, the workflow still writes `${GH_TOKEN}` into the checkout's `origin` URL, before static context is assembled at line 3088; no cleanup removes it in between. The workflow also sets a token-bearing remote URL again at line 6282.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n  Note: PR comment entry[0] explicitly states \"Keep credential persistence unchanged in this change\" and the editor summaries confirm this was a deliberate scope decision. The linked issue frames this as a recommendation (\"Do not retain GH_PAT...\"), and the PR owner has explicitly deferred it. This is an acknowledged scope limitation, not an implementation gap. The symlink guards successfully close the prompt-leak path that was the primary vulnerability.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "72a2fa935264ec66892728cd241622287999878feacb64e2b2d1fc0bb648834d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6253,
+    "run_id": "37257087642",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37257087642",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005034937_ffc2cefc52",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6253,
+    "run_id": "37257087642"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T03:49:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
