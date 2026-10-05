@@ -50,6 +50,7 @@ def test_review_job_protects_host_python_imports() -> None:
 def test_workspace_helper_isolates_every_stdin_python_invocation() -> None:
 	python_lines = [line for line in WORKSPACE_HELPER.read_text(encoding="utf-8").splitlines() if re.search(r'\bpython3\s+-', line)]
 	assert len(python_lines) == 2
+	assert all(re.search(r'\bPYTHONSAFEPATH=1\b', line) for line in python_lines), "stdin Python calls must set inline PYTHONSAFEPATH=1"
 	assert all(re.search(r'\bpython3\s+-I\s+-B\s+-\s', line) for line in python_lines)
 
 
