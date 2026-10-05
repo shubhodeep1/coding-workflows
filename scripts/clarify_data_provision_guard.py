@@ -59,7 +59,7 @@ _WEAKENS_CONTROL_PATTERNS = [
 	),
 	re.compile(
 		r"\b(?:verification|validation|checks?|signatures?|authorization|authentication|security|reviews?|approvals?|audits?|scans?|test\s+is|tests\s+are|gates?|guards?|controls?)\b"
-		r"\s+(?:(?:is|are|was|were|should\s+be|to\s+be|being)\s+)?(?:skipped|disabled|bypassed|omitted|waived|optional|not\s+required|advisory|best\s+effort|relax\w*)\b",
+		r"\s+(?:(?:is|are|was|were|should\s+be|to\s+be|being)\s+)?(?:skipped|disabled|bypassed|omitted|waived|optional|not\s+required|no\s+longer\s+(?:required|needed)|advisory|best\s+effort|relax\w*)\b",
 		re.IGNORECASE,
 	),
 	re.compile(
@@ -180,6 +180,9 @@ def _option_weakens_control(text: str) -> bool:
 
 def _required_data_present(option_text: str, evidence_text: str) -> bool:
 	"""Unknown data kinds cannot be proven present by a textual match."""
+	# Only split explicit alternatives without a shared "and" requirement.
+	if re.search(r"\bor\b", option_text, re.IGNORECASE) and not re.search(r"\band\b", option_text, re.IGNORECASE):
+		return any(_required_data_present(part, evidence_text) for part in re.split(r"\bor\b", option_text, flags=re.IGNORECASE))
 	requested = [detector for keyword, detector in _DATA_EVIDENCE_PATTERNS.values() if keyword.search(option_text)]
 	if _DATA_EVIDENCE_PATTERNS["url"][0].search(option_text) and _DATA_EVIDENCE_PATTERNS["pr"][0].search(option_text):
 		if not re.search(r"https?://\S+/pull/\d+\b", evidence_text, re.IGNORECASE):

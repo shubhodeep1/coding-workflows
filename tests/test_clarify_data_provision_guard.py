@@ -113,6 +113,7 @@ def test_nonweakening_fallback_still_avoids_loop(tmp_path: Path, fallback: str) 
 	"Verification won't run", "The review won't be verified", "Won't be verified", "The review wouldn't be performed",
 	"Verification doesn't require a check", "Doesn't require verification", "Verification doesn't verify the PR",
 	"Security checks don't require approval", "Checks didn't verify the PR head",
+	"Verification is no longer required", "Security check is no longer needed", "PR head verification is no longer required",
 ])
 def test_weakening_fallbacks_are_rejected(tmp_path: Path, fallback: str) -> None:
 	questions = f"Q1: Which path?\n- A — Provide the PR URL for verification\n- B — {fallback}\n"
@@ -142,6 +143,19 @@ def test_no_fallback_preserves_original_decision(tmp_path: Path) -> None:
 	evidence = tmp_path / "issue_body.txt"
 	evidence.write_text("PR: https://github.com/o/r/pull/12", encoding="utf-8")
 	assert _run_guard(tmp_path, questions=questions, evidence_files=(evidence,)) == ANSWER
+
+
+def test_alternative_evidence_accepts_supplied_sha_or_pr_url(tmp_path: Path) -> None:
+	questions = "Q1: Which path?\n- A — Provide the PR URL or commit SHA for verification\n- B — Skip verification\n"
+	evidence = tmp_path / "issue_body.txt"
+	for supplied in ("Commit SHA: a1b2c3d4", "PR: https://github.com/o/r/pull/12"):
+		evidence.write_text(supplied, encoding="utf-8")
+		assert _run_guard(tmp_path, questions=questions, evidence_files=(evidence,)) == ANSWER
+	evidence.write_text("https://example.com/other", encoding="utf-8")
+	assert "Q1: ESCALATE" in _run_guard(tmp_path, questions=questions, evidence_files=(evidence,))
+	questions = questions.replace(" or commit SHA", " and commit SHA")
+	evidence.write_text("Commit SHA: a1b2c3d4", encoding="utf-8")
+	assert "Q1: ESCALATE" in _run_guard(tmp_path, questions=questions, evidence_files=(evidence,))
 
 
 @pytest.mark.parametrize("option", [
