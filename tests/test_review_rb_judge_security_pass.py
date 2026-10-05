@@ -252,6 +252,9 @@ def test_judge_script_wiring() -> None:
 	assert 'if ! rb_security_post_extension "$(git rev-parse HEAD 2>/dev/null || true)"; then' in text
 	assert 'exit 42' in text
 	assert 'if ! rb_security_findings_render' in text
+	assert 'fix) [ "${IS_FINAL}" = "true" ] && RB_MERGE_ACTION="true"' in text
+	assert 'The final-attempt fix is treated as a merge because judge fix retries are exhausted; no fix commit was created.' in text
+	assert 'echo "::warning::Failed to push judge fix — falling back to manual intervention."\n            exit 1' in text
 	assert "review_rb_judge_security_pass.sh" in STAGE.read_text(encoding="utf-8")
 
 

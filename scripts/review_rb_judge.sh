@@ -1743,18 +1743,22 @@ post_review_blocked_assessment \
 # security-exhaustion mode): a clean audit of the head merges; otherwise the
 # gate dispatches or waits for the audit and the merge is held. The audit's
 # report re-runs the review, and the still-capped review brings the judge
-# back. `fix` on the final attempt is a merge too.
+# back. `fix` on the final attempt is treated as a merge without a fix commit.
 RB_MERGE_ACTION="false"
 case "${RB_ACTION}" in
   merge|merge_with_followup) RB_MERGE_ACTION="true" ;;
   fix) [ "${IS_FINAL}" = "true" ] && RB_MERGE_ACTION="true" ;;
 esac
 if [ "${RB_MERGE_ACTION}" = "true" ] && [ "${PR_ALREADY_MERGED:-false}" != "true" ] && ! rb_security_merge_gate; then
-  echo "Judge chose ${RB_ACTION} for PR #${PR_NUMBER}, but the single-issue security pass holds the merge."
+  RB_SECURITY_FINAL_FIX_NOTE=""
+  if [ "${RB_ACTION}" = "fix" ]; then
+    RB_SECURITY_FINAL_FIX_NOTE="The final-attempt fix is treated as a merge because judge fix retries are exhausted; no fix commit was created. "
+  fi
+  echo "Judge chose ${RB_ACTION} for PR #${PR_NUMBER}; ${RB_SECURITY_FINAL_FIX_NOTE}the single-issue security pass holds the merge."
   gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
     -f body="## Review-Blocked Judge — merge held for the security pass
 
-The judge chose **${RB_ACTION}**, but this PR's single-issue security audit has not passed for its current head, so the merge waits. The audit result re-runs the review, and the judge decides again then." >/dev/null 2>&1 || true
+The judge chose **${RB_ACTION}**. ${RB_SECURITY_FINAL_FIX_NOTE}This PR's single-issue security audit has not passed for its current head, so the merge waits. The audit result re-runs the review, and the judge decides again then." >/dev/null 2>&1 || true
   echo "judge_handled=true" >> "$GITHUB_OUTPUT"
   echo "judge_action=security_hold" >> "$GITHUB_OUTPUT"
   exit 0
@@ -2108,6 +2112,7 @@ ${RB_FIX_DESC}"
             echo "judge_action=fix" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::Failed to push judge fix — falling back to manual intervention."
+            exit 1
           fi
         else
           echo "Judge staged no effective changes. Treating as merge."

@@ -133,19 +133,48 @@ single_pass_markers()
 }
 
 # Prints how many extra audit cycles the security-exhaustion judge granted:
-# one per extension marker by the pipeline account.
+# one per trusted extension whose fix commit is reachable from the audited
+# branch head. A marker posted before a failed push must not extend the budget.
 single_pass_extensions()
 {
-	local comments_file="$1" count=0
-	if [ -n "${SECURITY_PASS_AUTHOR_LOGIN:-}" ] && [ -s "${comments_file}" ]; then
-		count="$(jq -r --arg author "${SECURITY_PASS_AUTHOR_LOGIN}" '
+	local comments_file="$1" audited_head="$2" checkout="$3" branch_ref="$4" count=0 extension_line extension_sha extension_lines extension_ancestor_rc
+	if [ -z "${SECURITY_PASS_AUTHOR_LOGIN:-}" ] || [ ! -s "${comments_file}" ] \
+		|| [ "$(git -C "${checkout}" rev-parse HEAD 2>/dev/null || true)" != "${audited_head}" ]; then
+		return 1
+	fi
+	if ! extension_lines="$(jq -r --arg author "${SECURITY_PASS_AUTHOR_LOGIN}" '
 			.[]?
 			| select(type == "object")
 			| select(.user.login == $author)
 			| ((.body // "") | split("\n") | map(select(test("\\S"))) | last // "" | gsub("^\\s+|\\s+$"; ""))
-		' "${comments_file}" 2>/dev/null | grep -cE "${SECURITY_PASS_EXTENSION_MARKER_RE}" || true)"
+		' "${comments_file}" 2>/dev/null)"; then
+		return 1
 	fi
-	[[ "${count}" =~ ^[0-9]+$ ]] || count=0
+	while IFS= read -r extension_line; do
+		if [[ "${extension_line}" =~ ${SECURITY_PASS_EXTENSION_MARKER_RE} ]]; then
+			extension_sha="${BASH_REMATCH[1]}"
+			if ! git -C "${checkout}" cat-file -e "${extension_sha}^{commit}" 2>/dev/null; then
+				if [ "$(git -C "${checkout}" rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
+					# An absent object in a shallow clone may be a real fix outside
+					# the fetched history, not an orphan from a failed push.
+					if [ "${SINGLE_PASS_STATUS_ONLY}" = "true" ] || ! git check-ref-format --branch "${branch_ref}" >/dev/null 2>&1 \
+						|| ! git -C "${checkout}" fetch --no-tags --unshallow origin "+refs/heads/${branch_ref}:refs/remotes/origin/${branch_ref}" 2>/dev/null; then
+						return 1
+					fi
+				fi
+				if ! git -C "${checkout}" cat-file -e "${extension_sha}^{commit}" 2>/dev/null; then
+					continue
+				fi
+			fi
+			extension_ancestor_rc=0
+			git -C "${checkout}" merge-base --is-ancestor "${extension_sha}" "${audited_head}" 2>/dev/null || extension_ancestor_rc=$?
+			case "${extension_ancestor_rc}" in
+				0) count=$((count + 1)) ;;
+				1) ;;
+				*) return 1 ;;
+			esac
+		fi
+	done <<< "${extension_lines}"
 	echo "${count}"
 }
 
@@ -233,7 +262,12 @@ single_pass_gate()
 		return 0
 	fi
 	cycles_used="$(printf '%s\n' "${markers}" | awk -F'\t' 'NF >= 5 && $5 + 0 > m { m = $5 + 0 } END { print m + 0 }')"
-	extensions="$(single_pass_extensions "${comments}")"
+	if ! extensions="$(single_pass_extensions "${comments}" "${head_sha}" . "${head_ref}")"; then
+		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=extensions_unverifiable"
+		single_pass_state unverifiable
+		single_pass_output true
+		return 0
+	fi
 	effective_max=$((max_cycles + extensions))
 	latest="$(printf '%s\n' "${markers}" | awk -F'\t' -v h="${head_sha}" '$4 == h' | tail -n 1)"
 	latest_created="$(printf '%s' "${latest}" | cut -f1)"
@@ -374,7 +408,11 @@ single_pass_report()
 	fi; } 2>/dev/null | jq -s 'add // []' > "${comments_file}" 2>/dev/null \
 		&& jq -e 'type == "array"' "${comments_file}" >/dev/null 2>&1; then
 		cycle="$(single_pass_markers "${comments_file}" | awk -F'\t' -v h="${head_sha}" '$3 == "pending" && $4 == h { c = $5 } END { print c + 0 }')"
-		extensions="$(single_pass_extensions "${comments_file}")"
+		if ! extensions="$(single_pass_extensions "${comments_file}" "${head_sha}" "${GITHUB_WORKSPACE:-.}/audit-data" "${SECURITY_PASS_AUDIT_BRANCH}")"; then
+			rm -f "${comments_file}"
+			single_pass_log "mode=report pr=${pr_number} head=${head_sha} outcome=skip reason=extensions_unverifiable"
+			return 0
+		fi
 	else
 		cycle=0
 	fi
