@@ -440,6 +440,19 @@ def test_read_isolation_unsafe_support_lock_is_terminal(sandbox: dict) -> None:
 	assert not (sandbox["tmp"] / "out.txt").exists()
 
 
+@pytest.mark.parametrize("tamper", [False, True])
+@pytest.mark.parametrize("signal_name, signal_rc", [("INT", 130), ("TERM", 143)])
+def test_read_isolation_signal_preserves_support_failure(sandbox: dict, tamper: bool, signal_name: str, signal_rc: int) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	mutation = 'chmod 0755 "${FAKE_SUPPORT_FILE}"; printf "# tampered\\n" >> "${FAKE_SUPPORT_FILE}";' if tamper else ""
+	result = _bash(sandbox, f'_ai_engine_claude_run_isolated() {{ {mutation} kill -{signal_name} "${{BASHPID}}"; }}; '
+		f'claude_run SECURITY_AUDIT {shlex.quote(str(sandbox["prompt"]))} '
+		f'{shlex.quote(str(sandbox["tmp"] / "out.txt"))} {shlex.quote(str(sandbox["work"]))}')
+	assert result.returncode == (86 if tamper else signal_rc), result.stderr
+	assert f"AI_ENGINE_SUPPORT_LOCK role=SECURITY_AUDIT outcome={'tampered' if tamper else 'verified'}" in result.stderr
+	assert stat.S_IMODE((sandbox["support"] / "scripts" / "ai_engine.sh").stat().st_mode) == 0o644
+
+
 def test_read_isolation_image_cache_skips_build(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_OK")
 	(sandbox["tmp"] / "docker-cache-hit").touch()

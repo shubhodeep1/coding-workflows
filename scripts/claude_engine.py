@@ -642,7 +642,7 @@ def _support_lock_records(workdir: Path) -> dict[str, Any]:
 				raise EngineError(f"unsafe support tree: {str(base)!r}")
 			for parent, child_dirs, child_files in os.walk(base, followlinks=False, onerror=_abort_support_walk):
 				parent_path = Path(parent)
-				if workdir != root and (parent_path == workdir or workdir in parent_path.parents):
+				if root in workdir.parents and (parent_path == workdir or workdir in parent_path.parents):
 					child_dirs[:] = []
 					continue
 				child_dirs[:] = sorted(name for name in child_dirs if name != ".git" and parent_path / name != workdir)

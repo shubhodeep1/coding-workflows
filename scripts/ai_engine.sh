@@ -510,8 +510,8 @@ claude_run()
 		echo "AI_ENGINE_SUPPORT_LOCK role=${role} outcome=locked files=${locked_files}" >&2
 		old_int_trap="$(trap -p INT)"
 		old_term_trap="$(trap -p TERM)"
-		trap '_ai_engine_support_finish "${run_dir}" "${role}" || true; exit 130' INT
-		trap '_ai_engine_support_finish "${run_dir}" "${role}" || true; exit 143' TERM
+		trap '_ai_engine_support_finish "${run_dir}" "${role}" || exit "${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"; exit 130' INT
+		trap '_ai_engine_support_finish "${run_dir}" "${role}" || exit "${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"; exit 143' TERM
 		_ai_engine_claude_run_isolated "${role}" "${prompt_file}" "${out_file}" "${workdir}" "${session_id}" "${model}" "${effort}" "${instructions}" "${pool_dir}" "${run_dir}" "${hide_claude_md}" || rc=$?
 		_ai_engine_support_finish "${run_dir}" "${role}" || rc="${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"
 		trap - INT TERM

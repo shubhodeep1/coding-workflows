@@ -103,6 +103,27 @@ def test_support_lock_detects_changes_and_restores_modes(tmp_path: Path, monkeyp
 	assert ce.cmd_support_unlock(verify_args) == 0
 
 
+def test_support_lock_covers_support_nested_in_workdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	workdir = tmp_path / "consumer"
+	root = workdir / ".codex-workflow-src"
+	(root / "scripts").mkdir(parents=True)
+	support_file = root / "scripts" / "helper.sh"
+	support_file.write_text("trusted\n", encoding="utf-8")
+	support_file.chmod(0o755)
+	monkeypatch.setattr(ce, "support_roots", lambda: [root])
+	manifest = tmp_path / "manifest.json"
+	args = type("Args", (), {"manifest": str(manifest), "workdir": str(workdir)})()
+	assert ce.cmd_support_lock(args) == 0
+	assert stat.S_IMODE(support_file.stat().st_mode) == 0o555
+	assert "scripts/helper.sh" in manifest.read_text(encoding="utf-8")
+	assert ce.cmd_support_verify(args) == 0
+	support_file.chmod(0o755)
+	support_file.write_text("tampered\n", encoding="utf-8")
+	assert ce.cmd_support_verify(args) == 1
+	assert ce.cmd_support_unlock(args) == 0
+	assert stat.S_IMODE(support_file.stat().st_mode) == 0o755
+
+
 @pytest.mark.parametrize("mutation", ["added", "removed"])
 def test_support_lock_checks_directory_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mutation: str) -> None:
 	root = tmp_path / "root"
