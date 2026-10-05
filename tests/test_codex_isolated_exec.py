@@ -307,8 +307,13 @@ def test_prepare_deps_networked_container_sees_no_source(sandbox):
 		assert run_helper(sandbox, "cleanup", "--root", str(root)).returncode == 0
 
 
-def test_prepare_deps_pyproject_source_install_is_offline(sandbox):
+@pytest.mark.parametrize("with_node,with_requirements", [(False, False), (True, False), (False, True), (True, True)])
+def test_prepare_deps_pyproject_source_install_is_offline(sandbox, with_node, with_requirements):
 	(sandbox["repo"] / "pyproject.toml").write_text('[project]\nname = "sample"\ndependencies = ["requests"]\n')
+	if with_node:
+		(sandbox["repo"] / "package.json").write_text('{}\n')
+	if with_requirements:
+		(sandbox["repo"] / "requirements.txt").write_text('pytest==8\n')
 	prep = run_helper(sandbox, "prepare", "--deps")
 	assert prep.returncode == 0, prep.stderr
 	root = Path(prep.stdout.strip())
@@ -359,11 +364,13 @@ def test_dependency_prepare_has_only_allowlisted_proxy_egress(sandbox):
 	assert prep.returncode == 0, prep.stderr
 	root = Path(prep.stdout.strip())
 	runs = docker_runs(sandbox["docker_log"])
-	assert len(runs) == 1
+	assert len(runs) == 2
 	argv = runs[0]["argv"]
 	assert argv[argv.index("--network") + 1] == "none"
 	assert any(f"src={root}/deps-stage,dst=/codex-deps" in mount for mount in mounts_of(runs[0]))
 	assert not any(f"src={root}/work" in mount for mount in mounts_of(runs[0]))
+	assert any(f"src={root}/work" in mount for mount in mounts_of(runs[1]))
+	assert runs[1]["argv"][runs[1]["argv"].index("--network") + 1] == "none"
 	assert any(mount.endswith("dst=/socket") for mount in mounts_of(runs[0]))
 	assert any(mount.endswith("dst=/support/dependency_registry_proxy.py,readonly") for mount in mounts_of(runs[0]))
 	assert "HTTPS_PROXY=http://127.0.0.1:3128" in argv

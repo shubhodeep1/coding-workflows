@@ -405,17 +405,20 @@ def test_stage_deps_filters_requirements_and_preserves_precedence(tmp_path):
 		"other @ file:///tmp/other", "other @ http://evil.invalid/pkg",
 		"other --index-url=https://evil.invalid", "other @ https://user:pass@evil.invalid/pkg",
 	]) + "\n")
-	(work / "pyproject.toml").write_text('[project]\nname = "my.pkg"\ndependencies = ["ignored"]\n')
+	(work / "pyproject.toml").write_text('[project]\nname = "my.pkg"\ndependencies = ["from-project==1"]\n[project.optional-dependencies]\ndev = ["dev-tool==1"]\n[build-system]\nrequires = ["setuptools==68"]\n')
 	(work / "pytest.ini").write_text("[pytest]\n")
 	stage = tmp_path / "stage"
 	run("stage-deps", work, stage)
 	meta = stage / ".codex-deps"
-	assert (meta / "python").read_text().strip() == "requirements"
+	assert (meta / "python").read_text().strip() == "both"
 	assert (meta / "requirements.txt").read_text().splitlines() == [
 		"requests==2.31", 'foo[bar]>=1; python_version>"3.8"',
 		"x @ https://example.org/x.whl", "valid==1 --hash=sha256:abc123",
 	]
-	assert not (meta / "source-install").exists()
+	assert (meta / "base.txt").read_text().splitlines() == ["from-project==1"]
+	assert (meta / "dev.txt").read_text().splitlines() == ["dev-tool==1"]
+	assert (meta / "build.txt").read_text().splitlines() == ["setuptools==68"]
+	assert (meta / "source-install").exists()
 	assert (meta / "want-pytest").exists()
 	assert "evil.invalid" not in (meta / "requirements.txt").read_text()
 
@@ -444,7 +447,20 @@ addopts = "-q"
 	(work / "package.json").write_text("{}")
 	stage2 = tmp_path / "stage2"
 	run("stage-deps", work, stage2)
-	assert (stage2 / ".codex-deps" / "python").read_text().strip() == "none"
+	assert (stage2 / ".codex-deps" / "python").read_text().strip() == "pyproject"
+	assert (stage2 / ".codex-deps" / "source-install").exists()
+
+
+def test_stage_deps_requirements_only_installs_source_offline(tmp_path):
+	work = tmp_path / "work"
+	work.mkdir()
+	(work / "requirements.txt").write_text("requests==2\n-e .\n")
+	stage = tmp_path / "stage"
+	run("stage-deps", work, stage)
+	meta = stage / ".codex-deps"
+	assert (meta / "python").read_text().strip() == "requirements"
+	assert (meta / "requirements.txt").read_text().splitlines() == ["requests==2"]
+	assert (meta / "source-install").exists()
 
 
 def test_stage_deps_bad_pyproject_degrades_without_install(tmp_path):

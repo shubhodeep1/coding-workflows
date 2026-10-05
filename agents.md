@@ -565,7 +565,8 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   `HEAD`, so filtered tracked files cannot be retrieved with `git show`.
 - **Dependencies.** `codex_isolated_exec.sh prepare --deps` (implement) installs
   dependencies once per job. The network-isolated, credential-free container sees
-  only staged Node manifests and filtered third-party Python requirements,
+  only staged Node manifests and filtered third-party Python requirements
+  from both `requirements.txt` and `pyproject.toml` when present,
   never the source tree. A host-side
   `scripts/dependency_registry_proxy.py` accepts only HTTPS CONNECT tunnels to
   allowlisted public registry hosts, vets all resolved IPs and connects by IP.
@@ -574,7 +575,8 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   A missing proxy skips dependency installation without restoring direct
   container network access; review preparation continues, but validations
   needing those dependencies may be unverified.
-  An editable source install runs separately with `--network none`;
+  An editable source install runs separately with `--network none` for
+  Python dependency projects, including requirements-only and Node/Python hybrids;
   `prep-finalize` restores source files and keeps dependency output in the
   sandbox ("prep roots"), never copying it back.
   The agent itself has no network: it marks validators it cannot run

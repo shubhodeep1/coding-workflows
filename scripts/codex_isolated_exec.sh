@@ -352,6 +352,8 @@ if [ "${action}" = prepare ]; then
 					esac
 					case "$(cat .codex-deps/python)" in
 						requirements) pip install -r .codex-deps/requirements.txt 2>&1 || install_failed=true ;;
+						both) pip install -r .codex-deps/requirements.txt -r .codex-deps/build.txt -r .codex-deps/base.txt -r .codex-deps/dev.txt 2>&1 \
+							|| pip install -r .codex-deps/requirements.txt -r .codex-deps/build.txt -r .codex-deps/base.txt 2>&1 || install_failed=true ;;
 						pyproject) pip install -r .codex-deps/build.txt -r .codex-deps/base.txt -r .codex-deps/dev.txt 2>&1 \
 							|| pip install -r .codex-deps/build.txt -r .codex-deps/base.txt 2>&1 || install_failed=true ;;
 					esac

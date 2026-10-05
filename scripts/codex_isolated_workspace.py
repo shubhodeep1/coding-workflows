@@ -697,6 +697,7 @@ def stage_deps(work, stage):
 	requirements = deps_manifest(work, "requirements.txt")
 	pyproject = deps_manifest(work, "pyproject.toml")
 	project = None
+	remaining = MAX_DEPS_REQUIREMENTS
 	if pyproject is not None:
 		try:
 			import tomllib
@@ -710,25 +711,26 @@ def stage_deps(work, stage):
 			log("stage-deps skipped=requirements.txt reason=decode_failed")
 		else:
 			project_name = project.get("project", {}).get("name", "") if isinstance(project, dict) and isinstance(project.get("project"), dict) else ""
-			filtered = deps_filter(lines, project_name if isinstance(project_name, str) else "")
+			filtered = deps_filter(lines, project_name if isinstance(project_name, str) else "", remaining)
+			remaining -= len(filtered)
 			(meta / "requirements.txt").write_text("\n".join(filtered) + "\n", encoding="utf-8")
 			python_mode = "requirements"
-	elif pyproject is not None and package is None and project is not None:
+	if pyproject is not None and project is not None:
 		project_info = project.get("project", {})
 		optional = project_info.get("optional-dependencies", {}) if isinstance(project_info, dict) else {}
 		build_info = project.get("build-system", {})
 		name = project_info.get("name", "") if isinstance(project_info, dict) else ""
 		if not isinstance(name, str):
 			name = ""
-		remaining = MAX_DEPS_REQUIREMENTS
 		for filename, values in (("build.txt", build_info.get("requires", []) if isinstance(build_info, dict) else []),
 				("base.txt", project_info.get("dependencies", []) if isinstance(project_info, dict) else []),
 				("dev.txt", optional.get("dev", []) if isinstance(optional, dict) else [])):
 			filtered = deps_filter(values if isinstance(values, list) else [], name, remaining)
 			remaining -= len(filtered)
 			(meta / filename).write_text("\n".join(filtered) + "\n", encoding="utf-8")
+		python_mode = "both" if python_mode == "requirements" else "pyproject"
+	if python_mode != "none":
 		(meta / "source-install").touch()
-		python_mode = "pyproject"
 	(meta / "python").write_text(python_mode + "\n", encoding="ascii")
 	if (any(deps_manifest(work, name) is not None for name in ("pytest.ini", "conftest.py", "tests/conftest.py"))
 		or isinstance(project, dict) and isinstance(project.get("tool"), dict)
