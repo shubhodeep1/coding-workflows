@@ -621,7 +621,7 @@ unblock_select_run_log()
 			continue
 		fi
 		if ! jq -e --arg id "${candidate_id}" --arg repo "${REPOSITORY}" --arg kind "${ITEM_KIND}" \
-				--arg item "${ITEM}" --arg title "$(jq -r '.title // ""' "${RUNTIME_DIR}/item.json")" \
+				--arg item "${ITEM}" \
 				--arg sha "${head_sha:-}" --arg ref "${head_ref:-}" '
 				(.id == ($id | tonumber) and .repository.full_name == $repo and .head_repository.full_name == $repo)
 				and (if $kind == "pr" then
@@ -631,13 +631,9 @@ unblock_select_run_log()
 					or any(.pull_requests[]?; .number == ($item | tonumber))
 				elif $kind == "issue" then
 					.head_branch == ("ai/issue-" + $item)
-					# Issue-event runs have no item-number run name. After validating
-					# the pipeline citation, use the current title as a conservative match.
-					or ($title != "" and (.event == "issues" or .event == "issue_comment") and .display_title == $title)
 				else
 					.head_branch == ("orchestrator/project-" + $item)
 					or ((.display_title // "") | endswith("[tracking:" + $item + "]"))
-					or ($title != "" and (.event == "issues" or .event == "issue_comment") and .display_title == $title)
 				end)
 			' <<< "${run_json}" >/dev/null 2>&1; then
 			continue

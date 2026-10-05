@@ -612,7 +612,7 @@ def test_newer_untrusted_link_does_not_replace_bound_pipeline_link(tmp_path: Pat
 	result, state = _judge(tmp_path, ISSUE, comments=[
 		_comment("Failure: /actions/runs/222"), _comment("See /actions/runs/111", "mallory"),
 	], verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"},
-		FAKE_GH_RUNS=json.dumps({"222": _run_metadata(222, event="issue_comment", display_title="Add cache")}))
+		FAKE_GH_RUNS=json.dumps({"222": _run_metadata(222, head_branch="ai/issue-7")}))
 	assert "op=run_log outcome=attached run=222" in result.stdout, result.stderr
 	assert len(_run_calls(state, "metadata")) == 1
 	assert [call[2] for call in _run_calls(state, "view")] == ["222"]
@@ -627,6 +627,16 @@ def test_unrelated_or_fork_run_is_refused(tmp_path: Path, run: dict) -> None:
 	result, state = _judge(tmp_path, ISSUE, comments=[_comment("/actions/runs/111")],
 		verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"}, FAKE_GH_RUNS=json.dumps({"111": run}))
 	assert "op=run_log outcome=omitted reason=run_unbound candidates=1" in result.stdout, result.stderr
+	assert len(_run_calls(state, "metadata")) == 1 and not _run_calls(state, "view")
+
+
+@pytest.mark.parametrize("kind", ["issue", "project"])
+def test_same_title_issue_event_does_not_bind_run(tmp_path: Path, kind: str) -> None:
+	item = ISSUE if kind == "issue" else dict(ISSUE, labels=[{"name": "ai:orchestrator-tracking"}])
+	result, state = _judge(tmp_path, item, comments=[_comment("/actions/runs/111")],
+		verdict={"verdict": "retry_budget", "reason": "r", "instructions": "retry"},
+		FAKE_GH_RUNS=json.dumps({"111": _run_metadata(111, event="issue_comment", display_title="Add cache")}))
+	assert result.returncode == 0 and "op=run_log outcome=omitted reason=run_unbound candidates=1" in result.stdout
 	assert len(_run_calls(state, "metadata")) == 1 and not _run_calls(state, "view")
 
 

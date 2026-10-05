@@ -2615,7 +2615,9 @@ and resolver chains, a failed project) now goes to the unblock judge
   consumer) calls `.github/workflows/unblock_judge.yml`, which runs
   `scripts/unblock_judge.sh` with the UNBLOCK_JUDGE role
   (`prompts/mode-judge-unblock.txt`). It reads the item, its comments, the
-  failing run's log tail, the PR diff and, for a project, its state and
+  verified failing run's log tail (omitted when the run cannot be bound to the
+  item by PR head/number, item branch or tracking run name; a matching issue
+  title alone is insufficient), the PR diff and, for a project, its state and
   specification, and picks one verdict: `retry_budget`, `auto_answer`,
   `descope`, `override_guard`, `reissue`, `accept_with_followup`,
   `operator_step` or `close`.
