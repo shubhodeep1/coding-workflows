@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The existing guard already blocks edits to unrelated workflows and scripts. What should this issue deliver?\nChoices:\nA. Verify the existing guard on the integration branch and add one regression test for this exact case: a judge `fix` that edits a workflow or script not in the PR's file list is rejected and not pushed. No change to runtime behaviour. (RECOMMENDED)\nB. Option A, plus tighten the guard: a protected path is accepted only if it is in the PR's file list and also cited by the judge in its verdict.\nC. Option A, plus tighten the guard: a protected path is accepted only if it is in the PR's file list and also in the linked issue's trusted `files_touched` / `Files to change` metadata (author-association-verified). Issues without that metadata keep today's behaviour.\nD. Treat it as already fixed by #6360: close with a comment pointing to `rb_fix_scope_check` and make no code change.\n**Note:** B and C can be combined (`B+C`). D makes Q2 irrelevant.\nQ2: Which branch should the fix PR target? The issue names `claude/lucid-ptolemy-f20vwu`, which may already be merged or deleted.\nChoices:\nA. Target the issue's `Integration branch:` line (`claude/lucid-ptolemy-f20vwu`). If that branch is already merged, let the existing retarget-after-merged-base logic move the PR to its base. (RECOMMENDED)\nB. Target the default branch (`main`) directly and ignore the `Integration branch:` line.",
+  "fingerprint": "5224b70634e354f45d414d393c54d502b3cb832ed6a4008635a7535e89adac00",
+  "lineage": {
+    "issue_number": 6361,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37339098095",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37339098095",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261005161815_bf64c687d3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6361,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37339098095"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6361 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-05T16:18:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
