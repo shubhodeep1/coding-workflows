@@ -336,7 +336,14 @@ Several Symphony-era behaviors are configured by optional committed files rather
 
 Copy the ready-to-use templates from [`workflow-templates/`](workflow-templates/) into your repo's `.github/workflows/` directory. Reference implementations also live in [`.github/workflows/internal-*.yml`](.github/workflows/) in this repository.
 
-At minimum, create these three core wrappers. Each job carries the same `if:` predicate as the
+At minimum, create `ai-clarify.yml`, `ai-plan.yml`, `ai-implement.yml`, and
+`ai-orchestrate-clarify-respond.yml`. The fourth wrapper listens for clarification
+questions posted by `ai-clarify.yml`; without it, the default standalone worker
+delegation has no listener and suppresses the clarification alert. Copy the
+[responder template](workflow-templates/ai-orchestrate-clarify-respond.yml) along
+with the three wrappers below. For an existing three-wrapper installation, add
+the responder or set `STANDALONE_CLARIFY_RESPOND_ENABLED=false` to retain the
+RECOMMENDED-only answer path. Each job carries the same `if:` predicate as the
 reusable workflow it calls (see `agents.md`, "Phase wrapper predicate parity"). `ai-clarify`
 automatically triages newly opened issues only when the original author is a GitHub `User` with
 `author_association` of `OWNER`, `MEMBER`, or `COLLABORATOR`, or the exact `github-actions[bot]`
@@ -447,6 +454,9 @@ not re-run the same blocked plan. Resume with `/answer` to re-plan, or remove `a
 add `ai:awaiting-approval` and comment `/approved` to re-run the approved plan.
 
 #### Optional wrappers
+
+The responder shown below is required for default standalone auto-decisions;
+the other wrappers in this section are optional.
 
 **`.github/workflows/ai-review.yml`** — Multi-model PR review with automated fixes
 ```yaml
@@ -826,6 +836,8 @@ jobs:
 
 Standalone questions run the worker with a new GitHub facts fetch (which fails open if unavailable); semantic-cache lookup and storage are skipped for this mode because the cache key does not include current PR, branch, or run state. Orchestrator-managed issues keep the existing semantic cache behavior.
 
+For manual installation, copy the [template](workflow-templates/ai-orchestrate-clarify-respond.yml), including its job-level event predicate and `id-token: write` permission.
+
 ```yaml
 name: AI Orchestrate Clarify Respond
 on:
@@ -834,8 +846,18 @@ on:
 permissions:
   contents: read
   issues: write
+  id-token: write
 jobs:
   respond:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.pull_request == null &&
+      (
+        (github.event.comment.user.type == 'Bot' && github.event.comment.user.login == 'github-actions[bot]') ||
+        (github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+      ) &&
+      contains(github.event.comment.body, 'Clarification required')
     uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate_clarify_respond.yml@<40-character-release-sha> # stable
     secrets: inherit
 ```
@@ -1006,8 +1028,9 @@ Profile downgrades are non-destructive: switching from `full` to `core` or
 `standard` stops creating out-of-profile wrappers in future syncs, but does
 not delete wrappers that are already present in `.github/workflows/`.
 
-> **Terminology note:** the minimum manual-bootstrap wrappers are
-> `ai-clarify.yml`, `ai-plan.yml`, and `ai-implement.yml`. The `core` install
+> **Terminology note:** the minimum manual-bootstrap wrappers with default
+> standalone auto-decisions are `ai-clarify.yml`, `ai-plan.yml`,
+> `ai-implement.yml`, and `ai-orchestrate-clarify-respond.yml`. The `core` install
 > profile is a separate seven-wrapper auto-install manifest used only by
 > `ai-update-workflows.yml`.
 

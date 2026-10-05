@@ -73,6 +73,9 @@ def test_profile_manifests_match_contracts() -> None:
 
 def test_install_profile_docs_and_agents_contracts() -> None:
 	readme = README_MD.read_text(encoding="utf-8")
+	manual_bootstrap = readme.split("### 2. Create wrapper workflows", 1)[1].split("#### Optional wrappers", 1)[0]
+	assert "ai-orchestrate-clarify-respond.yml" in manual_bootstrap
+	assert "STANDALONE_CLARIFY_RESPOND_ENABLED=false" in manual_bootstrap
 	assert "#### Install profiles" in readme
 	assert "`WORKFLOW_PROFILE` repository variable" in readme
 	assert "[`workflow-templates/profiles/core.txt`](workflow-templates/profiles/core.txt)" in readme
