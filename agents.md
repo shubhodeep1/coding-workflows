@@ -498,6 +498,8 @@ a new value, add it to the appropriate overrides file with a
   bootstrap import probes run from private neutral directories; Serena's
   trusted absolute-path handshake probe retains the project cwd for
   `--project-from-cwd` without passing safe-path to its server subprocess.
+  Serena requires an absolute `HOME` for Codex config writes; a relative or
+  missing `HOME` leaves the tool unavailable rather than writing under the PR tree.
   Other pre-review `python3 -c`, `-m` and stdin calls set `PYTHONSAFEPATH=1`
   per call, without changing script-file imports or the checkout's Git auth.
 - `orchestrate.yml` and `orchestrate_clarify_respond.yml` also assemble static

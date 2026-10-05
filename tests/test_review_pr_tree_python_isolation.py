@@ -83,12 +83,15 @@ def test_serena_config_clear_and_uv_ignore_pr_tree(tmp_path: Path) -> None:
 		"HOME": str(tmp_path / "home"), "GITHUB_WORKSPACE": str(pr_tree),
 		"GITHUB_ENV": str(github_env), "SERENA_UV_PYTHON_BIN": sys.executable,
 		"UV_LOG": str(uv_log), "PATH": f"{uv_bin}:{os.environ['PATH']}",
+		# Invoke the stub through bash so this test also works on noexec temp mounts.
+		"UV_STUB": str(uv_stub), "BASH_FUNC_uv%%": '() { bash "$UV_STUB" "$@"; }',
 	}
 	for enabled in ("false", "true"):
 		result = _run("setup_serena.sh", pr_tree, {**base_env, "SERENA_ENABLED": enabled})
 		assert result.returncode == 0, result.stderr
 		assert not marker.exists()
 	assert "SERENA_AVAILABLE=false" in github_env.read_text(encoding="utf-8")
+	assert uv_log.exists(), result.stderr
 	uv_calls = uv_log.read_text(encoding="utf-8").splitlines()
 	assert any("tool install" in call for call in uv_calls)
 	assert all(call.split("|", 2)[0] != str(pr_tree) and call.split("|", 2)[1] == "1" for call in uv_calls)
