@@ -1051,6 +1051,13 @@ not delete wrappers that are already present in `.github/workflows/`.
 > (see the retired-files paragraph below). Nothing to configure in the
 > consumer. For an unresolved `GIT_DIR+=` or `GIT_WORK_TREE+=` push override,
 > the merged-PR guard ignores the unresolved value and checks the session checkout.
+> When a `git push` source cannot be resolved locally (for example,
+> a shell-expanded source), the merged-PR guard asks for confirmation rather
+> than using the session checkout as a substitute for the pushed commit.
+> A push with a destination that cannot be resolved locally (such as
+> `git push origin HEAD:$DEST`) also asks instead of checking the checkout branch.
+> If `--repo` and a positional remote are both supplied, the guard checks the
+> refspecs after that remote, not the remote name as a branch.
 
 > **Retired upstream files are removed on sync:** the `update_workflows.yml`
 > step `Remove retired upstream files` reads the manifest
