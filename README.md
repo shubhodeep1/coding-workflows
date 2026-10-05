@@ -823,6 +823,9 @@ jobs:
 ```
 
 **`.github/workflows/ai-orchestrate-clarify-respond.yml`** — Auto-answers clarification questions on orchestrator-managed issues and on standalone issues (`STANDALONE_CLARIFY_RESPOND_ENABLED`)
+
+Standalone questions run the worker with a new GitHub facts fetch (which fails open if unavailable); semantic-cache lookup and storage are skipped for this mode because the cache key does not include current PR, branch, or run state. Orchestrator-managed issues keep the existing semantic cache behavior.
+
 ```yaml
 name: AI Orchestrate Clarify Respond
 on:

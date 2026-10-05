@@ -21,13 +21,16 @@ Phases of the unattended pipeline (each is a separate workflow file under
    decide whether clarifying questions are needed, emit `STATUS: CLEAR` or
    a `Q1`/`Q2` batch.
 2. **clarify-respond** (`orchestrate_clarify_respond.yml`) — answer the
-   clarifier's questions on behalf of an orchestrator-managed issue.
+   clarifier's questions on orchestrator-managed and standalone issues.
    Both clarification workflows run the selected Claude or Codex engine through
    `scripts/clarify_isolated_run.sh`
    in a read-only, network-isolated container with a host-side model broker.
    They stage the helper and Dockerfile from the support ref (main fallback);
    isolation failures never fall back to host Codex. GitHub-side fetching,
    memory, retry, and comment handling remain on the runner.
+   Standalone clarify-respond skips semantic-cache lookup and storage (including
+   SQLite restore/save) because live referenced PR, branch and run state is
+   absent from the cache key. Orchestrator mode keeps the existing cache path.
 3. **plan** (`plan.yml`, `internal-plan.yml`) — read the clarified issue and
    emit a structured implementation plan with files-to-change and a
    per-issue ≤60-minute time budget.

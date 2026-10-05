@@ -196,6 +196,10 @@ def test_facts_are_fetched_on_the_host_and_given_to_the_model() -> None:
 	facts = steps["Fetch GitHub facts for the questions"]
 	assert facts["continue-on-error"] is True
 	assert "steps.semantic_cache_lookup.outputs.cache_hit != 'true'" in facts["if"]
+	# A standalone question about live GitHub state must not replay a
+	# semantic-cache answer produced before that state changed.
+	for name in ("Semantic cache lookup", "Semantic cache store", "Restore semantic cache SQLite", "Save semantic cache SQLite"):
+		assert "steps.check_orchestrator.outputs.mode != 'standalone'" in steps[name]["if"]
 	assert names.index("Semantic cache lookup") < names.index("Fetch GitHub facts for the questions") < names.index("Remove git auth before Codex execution")
 	assert "python3 scripts/clarify_github_facts.py" in facts["run"]
 	run = steps["Build prompt and run Codex"]["run"]
@@ -309,6 +313,7 @@ def test_from_answers_reads_picks_rationale_and_setup() -> None:
 	assert first["why"] == "Write-profile roles read the same files, so the engine fix covers them too."
 	assert [alt["letter"] for alt in first["alternatives"]] == ["A", "B"]
 	assert result["setup"] == ["FIXER_APP_TOKEN (secret): a GitHub App token used only by the fixer; until set: verdict-triggered auto-merge is skipped."]
+	assert auto.from_answers(QUESTIONS, WORKER_ANSWER.replace("Q1: Write-profile", "**Q1**: Write-profile"))["decisions"][0]["why"] == first["why"]
 
 
 def test_from_answers_handles_strategies_guard_overrides_and_missing_decisions() -> None:

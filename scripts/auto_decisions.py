@@ -81,7 +81,7 @@ SETUP_RE = re.compile(r"^- \*\*SETUP-([1-9][0-9]*)\*\* (.*)$")
 ANSWER_RE = re.compile(
 	r"^\s*\*?\*?(Q[1-9][0-9]*)\*?\*?\s*:\s*\*?\*?([A-Z](?:\+[A-Z])*|DERIVE_FROM_REPO|SYNTHESIZE|REFRAME|ESCALATE)\*?\*?\s*$"
 )
-RATIONALE_RE = re.compile(r"^\s*(Q[1-9][0-9]*)\s*:\s*(.+?)\s*$")
+RATIONALE_RE = re.compile(r"^\s*\*?\*?(Q[1-9][0-9]*)\*?\*?\s*:\s*(.+?)\s*$")
 SECTION_RE = re.compile(r"^\s*([A-Z][A-Z -]*[A-Z])\s*(?:\([^)]*\))?\s*:\s*$")
 BULLET_RE = re.compile(r"^\s*[-*]\s+(.+?)\s*$")
 MAX_SETUP = 50
@@ -295,7 +295,7 @@ def _setup_lines(body: str) -> list[str]:
 
 def render(comments: object, decisions: object, source: str) -> dict:
 	if not isinstance(decisions, dict) or not isinstance(decisions.get("decisions"), list):
-		raise UsageError("--decisions-file must hold the output of `parse`")
+		raise UsageError("--decisions-file must hold a decisions list from `parse` or `from-answers`")
 	setup = decisions.get("setup", [])
 	if not isinstance(setup, list) or not all(isinstance(item, str) for item in setup):
 		raise UsageError("setup must be a list of strings")

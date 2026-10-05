@@ -606,7 +606,7 @@ jobs:
           python3 -m pip install --user --disable-pip-version-check "redis>=5,<6"
 
       - name: Restore semantic cache SQLite
-        if: steps.check_orchestrator.outputs.respond == 'true' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec'
+        if: steps.check_orchestrator.outputs.respond == 'true' && steps.check_orchestrator.outputs.mode != 'standalone' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec'
         continue-on-error: true
         uses: actions/cache/restore@v4
         with:
@@ -616,7 +616,9 @@ jobs:
             semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}-
       - name: Semantic cache lookup
         id: semantic_cache_lookup
-        if: steps.check_orchestrator.outputs.respond == 'true'
+        # Standalone decisions can depend on live PR, branch and run state,
+        # which is not part of the semantic cache key.
+        if: steps.check_orchestrator.outputs.respond == 'true' && steps.check_orchestrator.outputs.mode != 'standalone'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
@@ -1050,7 +1052,7 @@ jobs:
           fi
 
       - name: Semantic cache store
-        if: always() && steps.check_orchestrator.outputs.respond == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success'
+        if: always() && steps.check_orchestrator.outputs.respond == 'true' && steps.check_orchestrator.outputs.mode != 'standalone' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
@@ -1078,7 +1080,7 @@ jobs:
           fi
 
       - name: Save semantic cache SQLite
-        if: always() && steps.check_orchestrator.outputs.respond == 'true' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec' && steps.run_codex.outcome == 'success'
+        if: always() && steps.check_orchestrator.outputs.respond == 'true' && steps.check_orchestrator.outputs.mode != 'standalone' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec' && steps.run_codex.outcome == 'success'
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
