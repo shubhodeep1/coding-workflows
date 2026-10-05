@@ -52,6 +52,7 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 
@@ -207,8 +208,12 @@ def _commit_authorization(
 		associations = pr_cache[sha]
 		if not isinstance(associations, list) or len(associations) >= 100 or any(not isinstance(pr, dict) for pr in associations):
 			raise ValueError("invalid commit associations")
-		if any(pr.get("merged_at") is not None and (not isinstance(pr["merged_at"], str) or not pr["merged_at"]) for pr in associations):
-			raise ValueError("invalid merge timestamp")
+		for pr in associations:
+			merged_at = pr.get("merged_at")
+			if merged_at is not None:
+				if not isinstance(merged_at, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", merged_at):
+					raise ValueError("invalid merge timestamp")
+				datetime.strptime(merged_at, "%Y-%m-%dT%H:%M:%SZ")
 		merged = [pr for pr in associations if pr.get("merged_at")]
 		if not merged:
 			return False, "no_merged_pr", "none"
@@ -315,7 +320,12 @@ def _carry_forward(root: Path, after: str, branch: str, paths: list[str], drifte
 			if prior_relative not in drifted or path in main_changed or prior_relative in paths:
 				continue
 			prior_copy = _git(root, "show", f"FETCH_HEAD:{path}", check=False)
-			if prior_copy.returncode == 0 and prior_copy.stdout == (root / TEMPLATE_PREFIX / prior_relative).read_text(encoding="utf-8"):
+			try:
+				carried_template_text = (root / TEMPLATE_PREFIX / prior_relative).read_text(encoding="utf-8")
+			except OSError:
+				log(f"error reason=template_read_failed path={TEMPLATE_PREFIX}{prior_relative}")
+				return None
+			if prior_copy.returncode == 0 and prior_copy.stdout == carried_template_text:
 				extra_paths.append(prior_relative)
 	elif remote_result.returncode != 2:
 		log("error reason=sync_branch_lookup_failed")

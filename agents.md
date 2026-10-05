@@ -776,6 +776,7 @@ behind; #6133 (the merged-PR guard hook) and #6176 (four command files) broke
   nor any PR commit subject carries a pipeline marker or a squash `(#N)` suffix.
   Unverifiable paths instead go to `ai/sync-claude-live-copies-held` as a draft
   PR for human review, with a Telegram WARNING listing their source commits.
+  Malformed merge timestamps also fail authorization and hold the path.
   A ready held PR is converted back to draft before a refresh pushes content.
   Logs add `CLAUDE_LIVE_SYNC authorized`, `held`, and `converted_to_draft`;
   the history cap defaults to 30 distinct commits per run

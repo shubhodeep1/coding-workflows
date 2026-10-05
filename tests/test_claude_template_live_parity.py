@@ -333,6 +333,22 @@ def test_sync_refresh_keeps_earlier_unmerged_live_copies(tmp_path: Path, monkeyp
 	assert _git(remote, "show", "ai/sync-claude-live-copies:.claude/hooks/second.py") == "v3"
 
 
+def test_carry_forward_reports_template_read_failure(tmp_path: Path, monkeypatch, capsys) -> None:
+	root, _remote = _sync_repo(tmp_path, monkeypatch)
+	after = _git(root, "rev-parse", "HEAD")
+	branch = "ai/sync-claude-live-copies"
+	_git(root, "checkout", "-q", "-b", branch)
+	(root / ".claude/hooks/guard.py").write_text("v2\n", encoding="utf-8")
+	_git(root, "add", ".claude/hooks/guard.py")
+	_git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "sync")
+	_git(root, "push", "-q", "origin", f"HEAD:refs/heads/{branch}")
+	_git(root, "checkout", "-q", "main")
+	(root / "workflow-templates/.claude/hooks/guard.py").unlink()
+
+	assert sync_mod._carry_forward(root, after, branch, [], {"hooks/guard.py"}) is None
+	assert "reason=template_read_failed path=workflow-templates/.claude/hooks/guard.py" in capsys.readouterr().err
+
+
 def test_sync_refuses_base_branch_override(tmp_path: Path, monkeypatch, capsys) -> None:
 	root = _scratch_repo(tmp_path)
 	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
@@ -435,7 +451,7 @@ def test_unassociated_change_goes_only_to_draft_and_reports_source(tmp_path: Pat
 def test_pipeline_provenance_is_held(head, subject, pr_subject, reason, monkeypatch) -> None:
 	def api(*args):
 		if "/commits/" in args[0]:
-			return [{"number": 12, "merged_at": "today", "head": {"ref": head}}]
+			return [{"number": 12, "merged_at": "2026-10-01T00:00:00Z", "head": {"ref": head}}]
 		return [{"commit": {"message": pr_subject}}]
 	monkeypatch.setattr(sync_mod, "_gh_json", api)
 	ok, actual, _pr = sync_mod._commit_authorization("octo/repo", "a" * 40, subject, {}, {})
@@ -445,7 +461,7 @@ def test_pipeline_provenance_is_held(head, subject, pr_subject, reason, monkeypa
 def test_provenance_truncation_and_malformed_api_fail_closed(monkeypatch) -> None:
 	def too_many(*args):
 		if "/commits/" in args[0]:
-			return [{"number": 12, "merged_at": "today", "head": {"ref": "feature/x"}}]
+			return [{"number": 12, "merged_at": "2026-10-01T00:00:00Z", "head": {"ref": "feature/x"}}]
 		return [{"commit": {"message": "normal"}}] * 100
 	monkeypatch.setattr(sync_mod, "_gh_json", too_many)
 	assert sync_mod._commit_authorization("octo/repo", "a" * 40, "normal", {}, {})[1] == "pr_commits_truncated"
@@ -453,12 +469,15 @@ def test_provenance_truncation_and_malformed_api_fail_closed(monkeypatch) -> Non
 	assert sync_mod._commit_authorization("octo/repo", "a" * 40, "normal", {}, {})[1] == "api_failed"
 	monkeypatch.setattr(sync_mod, "_gh_json", lambda *args: [{"number": 12, "merged_at": True, "head": {"ref": "feature/x"}}])
 	assert sync_mod._commit_authorization("octo/repo", "a" * 40, "normal", {}, {})[1] == "api_failed"
+	for invalid_timestamp in ("invalid", "2026-13-01T00:00:00Z", "2026-10-01T00:00:00", ""):
+		monkeypatch.setattr(sync_mod, "_gh_json", lambda *args: [{"number": 12, "merged_at": invalid_timestamp, "head": {"ref": "feature/x"}}])
+		assert sync_mod._commit_authorization("octo/repo", "a" * 40, "normal", {}, {})[1] == "api_failed"
 
 
 def test_pr_commit_pagination_inspects_later_pages(monkeypatch) -> None:
 	def api(*args):
 		if "/commits/" in args[0] and "/pulls?" in args[0]:
-			return [{"number": 12, "merged_at": "today", "head": {"ref": "feature/x"}}]
+			return [{"number": 12, "merged_at": "2026-10-01T00:00:00Z", "head": {"ref": "feature/x"}}]
 		if "&page=1" in args[0]:
 			return [{"commit": {"message": "human"}}] * 100
 		return [{"commit": {"message": "[judge-fix] hidden edit"}}]
