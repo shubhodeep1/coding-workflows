@@ -1,0 +1,19 @@
+{
+  "entries": [
+    {
+      "context": "## \u274c Runtime validation harness error The failure is in the generated validation harness, not the project plan or application implementation. `scripts/validate_driver.sh:789-790` runs `validation/te",
+      "cycle": 1,
+      "outcome": "failed",
+      "raw_conclusion": "failure",
+      "raw_status": "harness_error",
+      "recorded_at": "2026-10-05T13:44:11Z",
+      "run_attempt": 1,
+      "run_id": 37315007990,
+      "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37315007990",
+      "source": "orchestrate_poll.mark_validation_failed"
+    }
+  ],
+  "integration_sha": "c10053e3862930cd13244258894099ac4070d0bd",
+  "repository": "shubhodeep1/coding-workflows",
+  "schema_version": "v1"
+}
