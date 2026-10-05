@@ -1192,6 +1192,17 @@ def test_security_audit_claude_failure_only_reports_sanitized_stderr() -> None:
 		assert "provider=429" in proc.stderr
 		assert "codex-stderr-tail begin" in proc.stderr and "HTTP\\ Error\\ 429" in proc.stderr
 		assert secret not in proc.stderr
+		# The forwarded tail can start mid-secret; the sanitizer must discard
+		# that partial first line rather than publishing an unrecognized fragment.
+		oversized_stderr = "prefix " + secret + "\n" + " " * 65510 + "\nHTTP Error 429\n"
+		proc = subprocess.run(["bash", "-c", script], cwd=work_dir,
+			env={**os.environ, "AI_ENGINE_RESOLVED_SECURITY_AUDIT": "claude", "AUDIT_TEST_SECRET": secret,
+				"MOCK_CLAUDE_STDERR": oversized_stderr},
+			capture_output=True, text=True, check=False)
+		assert proc.returncode == 9, proc.stderr
+		assert secret[-8:] in (work_dir / "err.txt").read_text(encoding="utf-8")
+		assert secret[-8:] not in proc.stderr
+		assert "provider=429" in proc.stderr
 
 
 def test_security_audit_redacts_credential_shaped_path_context() -> None:

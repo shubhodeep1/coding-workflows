@@ -2066,6 +2066,7 @@ jobs:
           AI_ENGINE_IMPLEMENT: ${{ vars.AI_ENGINE_IMPLEMENT || '' }}
           AI_ENGINE_IMPLEMENT_REPAIR: ${{ vars.AI_ENGINE_IMPLEMENT_REPAIR || '' }}
           AI_ENGINE_IMPLEMENT_DIAGNOSE: ${{ vars.AI_ENGINE_IMPLEMENT_DIAGNOSE || '' }}
+          AI_ENGINE_SUMMARISER: ${{ vars.AI_ENGINE_SUMMARISER || '' }}
           AI_ENGINE_MODEL_HINT: ${{ env.MODEL_EDITOR }}
           AI_ENGINE_EFFORT_HINT: ${{ env.MODEL_REASONING_EFFORT }}
         run: |
@@ -2076,7 +2077,7 @@ jobs:
           export AI_ENGINE_LABELS
           echo "AI_ENGINE_LABELS=${AI_ENGINE_LABELS}" >> "$GITHUB_ENV"
           any_claude="false"
-          for role in IMPLEMENT IMPLEMENT_REPAIR IMPLEMENT_DIAGNOSE; do
+          for role in IMPLEMENT IMPLEMENT_REPAIR IMPLEMENT_DIAGNOSE SUMMARISER; do
             engine="codex"
             if [ -f scripts/ai_engine.sh ]; then
               # shellcheck disable=SC1091
@@ -5200,7 +5201,22 @@ jobs:
               sanitize_codex_prompt_file "${_summary_combined_prompt}"
             fi
             bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/workspace_safety_check.sh"
-            codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_summary_combined_prompt}" > "${ISSUE_SUMMARY_FILE}" || true
+            # Claude engine (replace-claude-sessions plan Phase 5d, Q43): the
+            # summary runs as the SUMMARISER role with the read-only tool
+            # profile. Exit 75 (role on codex, Claude unavailable, or no
+            # engine staged) runs the unchanged codex call below.
+            summary_claude_rc=75
+            summary_engine_sh="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/ai_engine.sh"
+            if [ -f "${summary_engine_sh}" ]; then
+              summary_claude_rc=0
+              # shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
+              AI_ENGINE_READ_ONLY=true bash -c 'source "$1" && claude_run_selected SUMMARISER "$2" "$3" "$4"' _ \
+                "${summary_engine_sh}" "${_summary_combined_prompt}" "${ISSUE_SUMMARY_FILE}" "${PWD}" \
+                || summary_claude_rc=$?
+            fi
+            if [ "${summary_claude_rc}" -eq 75 ]; then
+              codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_summary_combined_prompt}" > "${ISSUE_SUMMARY_FILE}" || true
+            fi
             if [ -s "${ISSUE_SUMMARY_FILE}" ] && grep -q '^### AI Issue Summary' "${ISSUE_SUMMARY_FILE}"; then
               echo "Summary generated on attempt ${_summary_attempt}."
               break

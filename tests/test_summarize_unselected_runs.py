@@ -802,6 +802,146 @@ def test_main_fail_open_when_summarizer_raises():
 # ---------- script-mode entry point --------------------------------------
 
 
+
+# ---------- Claude engine (LOG_SUMMARY, replace-claude-sessions Phase 5d) ----
+
+_FAKE_ENGINE = r"""
+claude_run_selected() {
+  printf '%s|%s|%s|%s\n' "$1" "${AI_ENGINE_READ_ONLY:-}" "${GH_TOKEN-unset}" "${OPENROUTER_API_KEY-unset}" >> "${FAKE_CALLS}"
+  case "${FAKE_MODE}" in
+    success) printf -- '- claude summary\n' > "$3"; return 0 ;;
+    unavailable) return 75 ;;
+    *) return 1 ;;
+  esac
+}
+"""
+
+
+class _TwoRunCollector:
+	@staticmethod
+	def _fetch_run_log_archive(repo, run_id, *, token, cache=None):
+		return b"<archive bytes>"
+
+	@staticmethod
+	def extract_full_logs(_archive):
+		return [{"step_name": "build", "content": "ok"}]
+
+
+class _FakeHttpSummarizer:
+	calls = 0
+
+	def __init__(self, *_a, **_k):
+		pass
+
+	def summarize(self, _run, _text):
+		_FakeHttpSummarizer.calls += 1
+		return ("- http summary", 7)
+
+
+def _run_claude_case(*, mode, openrouter_key, resolved="claude", time_budget=None, expire_during_fetch=False):
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		scripts_dir = tmp_path / "scripts"
+		scripts_dir.mkdir()
+		(scripts_dir / "ai_engine.sh").write_text(_FAKE_ENGINE, encoding="utf-8")
+		calls = tmp_path / "calls"
+		report = tmp_path / "report.json"
+		_write_report(report, {"runs": [
+			{"repository": "a/b", "run_id": 1, "created_at": "2026-04-30T00:00:02Z"},
+			{"repository": "a/b", "run_id": 2, "created_at": "2026-04-30T00:00:01Z"},
+		]})
+		saved = (summarizer.SCRIPTS_DIR, summarizer._load_collector_module, summarizer.OpenRouterSummarizer, summarizer.time.monotonic)
+		clock = [0.0]
+		class _ExpiringCollector(_TwoRunCollector):
+			@staticmethod
+			def _fetch_run_log_archive(repo, run_id, *, token, cache=None):
+				clock[0] = 2.0
+				return b"<archive bytes>"
+		summarizer.SCRIPTS_DIR = scripts_dir
+		summarizer._load_collector_module = lambda: _ExpiringCollector if expire_during_fetch else _TwoRunCollector
+		summarizer.OpenRouterSummarizer = _FakeHttpSummarizer
+		if expire_during_fetch:
+			summarizer.time.monotonic = lambda: clock[0]
+		_FakeHttpSummarizer.calls = 0
+		try:
+			env = {
+				"OPENROUTER_API_KEY": openrouter_key,
+				"GH_TOKEN": "ghs_test",
+				"GITHUB_TOKEN": None,
+				"GH_PAT": None,
+				"AI_ENGINE_RESOLVED_LOG_SUMMARY": resolved,
+				"FAKE_MODE": mode,
+				"FAKE_CALLS": str(calls),
+				"WORKFLOW_LOG_SUMMARY_TIME_BUDGET_SECS": time_budget,
+			}
+			with _env(**env), _capture_std() as (_out, err):
+				rc = summarizer.main(["--report", str(report)])
+		finally:
+			summarizer.SCRIPTS_DIR, summarizer._load_collector_module, summarizer.OpenRouterSummarizer, summarizer.time.monotonic = saved
+		assert rc == 0
+		telemetry = json.loads(next(line for line in err.getvalue().splitlines() if line.startswith("AI_MEMORY_TELEMETRY: ")).split(": ", 1)[1])
+		rows = json.loads(report.read_text(encoding="utf-8"))["runs"]
+		return rows, (calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []), telemetry, err.getvalue()
+
+
+def test_claude_summarizes_without_an_openrouter_key_and_without_credentials():
+	rows, calls, telemetry, _err = _run_claude_case(mode="success", openrouter_key="")
+	assert calls == ["LOG_SUMMARY|true|unset|unset"] * 2
+	assert [row["log_summary"] for row in rows] == ["- claude summary"] * 2
+	assert {row["log_summary_meta"]["engine"] for row in rows} == {"claude"}
+	assert {row["log_summary_meta"]["model"] for row in rows} == {"claude-sonnet-5-5"}
+	assert telemetry["claude_summarized"] == 2
+	assert _FakeHttpSummarizer.calls == 0
+
+
+def test_claude_unavailable_switches_the_batch_to_openrouter():
+	rows, calls, telemetry, _err = _run_claude_case(mode="unavailable", openrouter_key="orkey")
+	assert len(calls) == 1
+	assert [row["log_summary"] for row in rows] == ["- http summary"] * 2
+	assert {row["log_summary_meta"]["engine"] for row in rows} == {"openrouter"}
+	assert telemetry["claude_fallback_reason"] == "unavailable"
+	assert _FakeHttpSummarizer.calls == 2
+
+
+def test_claude_unavailable_without_a_key_leaves_runs_unsummarized():
+	rows, calls, telemetry, err = _run_claude_case(mode="unavailable", openrouter_key="")
+	assert len(calls) == 1
+	assert all("log_summary" not in row for row in rows)
+	assert telemetry["skipped_no_engine"] == 2
+	assert "remaining runs stay unsummarized" in err
+
+
+def test_claude_time_budget_spent_moves_the_rest_to_openrouter():
+	rows, calls, telemetry, _err = _run_claude_case(mode="success", openrouter_key="orkey", time_budget="0")
+	assert calls == []
+	assert [row["log_summary"] for row in rows] == ["- http summary"] * 2
+	assert telemetry["claude_fallback_reason"] == "time_budget"
+
+
+def test_claude_time_budget_spent_during_fetch_uses_openrouter_for_that_run():
+	rows, calls, telemetry, _err = _run_claude_case(mode="success", openrouter_key="orkey", time_budget="1", expire_during_fetch=True)
+	assert calls == []
+	assert [row["log_summary"] for row in rows] == ["- http summary"] * 2
+	assert telemetry["claude_fallback_reason"] == "time_budget"
+	assert telemetry["skipped_summary_error"] == 0
+
+
+def test_claude_crash_skips_only_that_run():
+	rows, calls, telemetry, _err = _run_claude_case(mode="crash", openrouter_key="orkey")
+	assert len(calls) == 2
+	assert all("log_summary" not in row for row in rows)
+	assert telemetry["skipped_summary_error"] == 2
+	assert _FakeHttpSummarizer.calls == 0
+
+
+def test_role_on_codex_never_runs_claude():
+	rows, calls, _telemetry, _err = _run_claude_case(mode="success", openrouter_key="orkey", resolved="codex")
+	assert calls == []
+	assert [row["log_summary"] for row in rows] == ["- http summary"] * 2
+	rows, calls, telemetry, _err = _run_claude_case(mode="success", openrouter_key="", resolved="codex")
+	assert calls == [] and telemetry["skipped_disabled"] == 1
+
+
 def main() -> int:
 	test_funcs = sorted(
 		(name, obj)
