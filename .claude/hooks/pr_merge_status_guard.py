@@ -261,23 +261,17 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	segment: list[str] = []
 	operator = ""
 	redirect_target = False
-	previous_token_end = -1
+	redirect_fd = False
 	for token in lexer:
 		if redirect_target:
 			redirect_target = False
-			previous_token_end = -1
+			redirect_fd = False
 			continue
 		if token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token):
-			# A bare digit immediately adjacent to the redirect is an fd, not
-			# a push refspec. A separated or quoted digit is a real argument.
-			if (segment and segment[-1].isascii() and segment[-1].isdigit()
-				and previous_token_end >= len(segment[-1])
-				and command[previous_token_end - len(segment[-1]):previous_token_end] == segment[-1]
-				and command[previous_token_end - len(segment[-1]) - 1:previous_token_end - len(segment[-1])] not in ("\\", "'", '"')
-				and command[previous_token_end:previous_token_end + 1] in "<>"):
+			if redirect_fd and segment:
 				segment.pop()
 			redirect_target = True
-			previous_token_end = -1
+			redirect_fd = False
 			continue
 		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
 			if segment:
@@ -286,7 +280,11 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 			operator = token
 		else:
 			segment.append(token)
-			previous_token_end = lexer.instream.tell() - 1
+			# shlex has read one character ahead: only an adjacent, unquoted
+			# integer is an IO_NUMBER, not a numeric push refspec.
+			redirect_fd = bool(token.isdigit() and re.search(
+				r"(?:^|[\s;&|])\d+[<>]$", command[:lexer.instream.tell()]
+			))
 	if segment:
 		result.append((operator, segment))
 	return result
@@ -480,15 +478,10 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 	if uncertain:
 		return [_GuardTarget(checkout, {}, "", "HEAD", True,
 			"could not resolve git push options; checking the current branch instead")]
-	# A positional configured remote overrides --repo, even when a local branch
-	# has the same name. Otherwise every positional after --repo is a refspec.
-	if remote_provided and positionals and positionals[0] != "HEAD" and ":" not in positionals[0]:
-		with _git_environment(invocation.environment):
-			remote_status, remote_listing, _ = _run(["git", "remote"], invocation.cwd, _GIT_TIMEOUT_SECONDS)
-		is_repository = remote_status == 0 and positionals[0] in remote_listing.splitlines()
-		refspecs = positionals[1:] if is_repository else positionals
-	elif remote_provided and positionals and (positionals[0] == "HEAD" or ":" in positionals[0]):
-		refspecs = positionals
+	# A positional repository always consumes the first positional, even
+	# with --repo; --repo alone supplies no positional refspecs.
+	if remote_provided and not positionals:
+		refspecs = []
 	else:
 		refspecs = positionals[1:]
 	if not refspecs and tags and not bulk:
