@@ -275,7 +275,7 @@ def test_project_close_refuses_unverified_labels(tmp_path: Path, comments: list[
 
 @pytest.mark.parametrize(("status", "stop", "labels", "expected_posts"), [
 	("failed", "project-failed", ["ai:unblock-closed"], ["posted"]),
-	("security-pass", "security-pass-failed", ["ai:unblock-closed", "ai:security-pass-failed"], ["posted"]),
+	("failed", "security-pass-failed", ["ai:unblock-closed", "ai:security-pass-failed"], ["posted"]),
 	("abandoned", "project-failed", ["ai:unblock-closed"], []),
 ])
 def test_project_close_requires_current_trusted_verdict_and_retries_failed_close(tmp_path: Path,
@@ -289,18 +289,19 @@ def test_project_close_requires_current_trusted_verdict_and_retries_failed_close
 
 def test_project_close_refuses_a_removed_stop_label(tmp_path: Path) -> None:
 	result, state, calls, posts = _run_close_hook(tmp_path, [_close_comment(1, stop="security-pass-failed")],
-		["ai:unblock-closed"], "security-pass")
+		["ai:unblock-closed"], "failed")
 	assert result.returncode == 0, result.stderr
 	assert "outcome=refused reason=state_mismatch" in result.stdout
-	assert state["status"] == "security-pass" and calls == [] and posts == []
+	assert state["status"] == "failed" and calls == [] and posts == []
 
 
-def test_project_close_refuses_a_resumed_project_even_with_stale_block_label(tmp_path: Path) -> None:
+@pytest.mark.parametrize("status", ["in_progress", "security-pass", "security-pass-fixing"])
+def test_project_close_refuses_a_resumed_project_even_with_stale_block_label(tmp_path: Path, status: str) -> None:
 	result, state, calls, posts = _run_close_hook(tmp_path, [_close_comment(1, stop="security-pass-failed")],
-		["ai:unblock-closed", "ai:security-pass-failed"], "in_progress")
+		["ai:unblock-closed", "ai:security-pass-failed"], status)
 	assert result.returncode == 0, result.stderr
 	assert "outcome=refused reason=state_mismatch" in result.stdout
-	assert state["status"] == "in_progress" and calls == [] and posts == []
+	assert state["status"] == status and calls == [] and posts == []
 
 
 def test_project_close_orders_same_timestamp_verdicts_by_comment_id(tmp_path: Path) -> None:
@@ -310,10 +311,13 @@ def test_project_close_orders_same_timestamp_verdicts_by_comment_id(tmp_path: Pa
 	assert state["status"] == "abandoned" and len(calls) == 1 and posts == ["posted"]
 
 
-@pytest.mark.parametrize("state_header", ["<!-- ORCHESTRATOR_STATE_V1 -->",
+@pytest.mark.parametrize("state_header", ["<!-- ORCHESTRATOR_STATE_V1",
 	"<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest=" + "0" * 64 + " -->"])
 def test_project_close_refuses_a_verdict_before_a_later_failure_state(tmp_path: Path, state_header: str) -> None:
-	state_comment = {"id": 2, "user": {"login": BOT}, "body": f"{state_header}\n{{}}"}
+	state_body = f"{state_header}\n{{}}"
+	if state_header.endswith("_V1"):
+		state_body += "\nORCHESTRATOR_STATE_V1 -->"
+	state_comment = {"id": 2, "user": {"login": BOT}, "body": state_body}
 	result, state, calls, posts = _run_close_hook(tmp_path,
 		[_close_comment(1), state_comment], ["ai:unblock-closed"], "failed")
 	assert result.returncode == 0, result.stderr
@@ -328,7 +332,7 @@ def test_project_close_refuses_a_verdict_before_a_later_failure_state(tmp_path: 
 
 def test_project_close_retry_allows_its_own_abandoned_state_write(tmp_path: Path) -> None:
 	result, state, calls, posts = _run_close_hook(tmp_path,
-		[_close_comment(1), {"id": 2, "user": {"login": BOT}, "body": "<!-- ORCHESTRATOR_STATE_V1 -->\n{}"}],
+		[_close_comment(1), {"id": 2, "user": {"login": BOT}, "body": "<!-- ORCHESTRATOR_STATE_V1\n{}\nORCHESTRATOR_STATE_V1 -->"}],
 		["ai:unblock-closed"], "abandoned")
 	assert result.returncode == 10, result.stderr
 	assert state["status"] == "abandoned" and len(calls) == 1 and posts == []

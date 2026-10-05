@@ -15786,7 +15786,7 @@ handle_unblock_judge_project_hooks() {
         | . as $verdict
         # A new state write after the verdict can represent a resume and a later failure.
         | . + {state_after: any($comments[]; (.user.login // "") == $login and (.id | type) == "number" and .id > $verdict.id
-          and ((.body // "") | test("^<!-- ORCHESTRATOR_STATE_V(1 -->|2 part=[0-9]+/[0-9]+ manifest=[0-9a-f]{64} -->)")))}' 2>/dev/null)"; then
+          and ((.body // "") | test("^<!-- ORCHESTRATOR_STATE_V(1\\r?\\n|2 part=[0-9]+/[0-9]+ manifest=[0-9a-f]{64} -->)")))}' 2>/dev/null)"; then
         close_reason="comments_unavailable"
       elif [ -z "${close_marker}" ]; then
         close_reason="no_trusted_marker"
@@ -15798,7 +15798,7 @@ handle_unblock_judge_project_hooks() {
         close_stop="$(printf '%s' "${close_marker}" | jq -r '.stop')"
         if [ "${close_stop}" = "project-failed" ]; then
           [ "${PROJECT_STATUS}" = "failed" ] || close_reason="state_mismatch"
-        elif [ "${PROJECT_STATUS}" = "in_progress" ] || [ "${PROJECT_STATUS}" = "complete" ] \
+        elif [ "${PROJECT_STATUS}" != "failed" ] \
           || ! printf '%s' "${TRACKING_LABELS}" | jq -e --arg label "ai:${close_stop}" 'type == "array" and index($label) != null' >/dev/null 2>&1; then
           close_reason="state_mismatch"
         fi
