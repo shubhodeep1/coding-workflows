@@ -205,6 +205,7 @@ def sandbox(tmp_path: Path):
 			"FAKE_SUPPORT_FILE": str(support / "scripts" / "ai_engine.sh"),
 			"PYTHONDONTWRITEBYTECODE": "1",
 			"CODEX_HEARTBEAT_INTERVAL_SECS": "30",
+			"ALLOW_WORKFLOW_EDITS": "false",
 			"ANTHROPIC_API_KEY": "must-not-reach-the-cli",
 		}
 	)

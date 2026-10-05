@@ -712,6 +712,10 @@ def main(argv: list[str] | None = None) -> int:
 	# archive at a time.
 
 	for index, run in enumerate(targets):
+		if stats["tokens_used"] >= args.token_budget:
+			# Stop before either engine fallback can misattribute a spent token budget.
+			stats["skipped_budget_exhausted"] += len(targets) - index
+			break
 		if claude_summarizer is not None and time.monotonic() >= claude_deadline:
 			_warn(f"Claude time budget spent; {len(targets) - index} remaining run(s) go over OpenRouter" if summarizer is not None else f"Claude time budget spent; {len(targets) - index} remaining run(s) stay unsummarized")
 			stats["claude_fallback_reason"] = "time_budget"
@@ -719,11 +723,6 @@ def main(argv: list[str] | None = None) -> int:
 		if claude_summarizer is None and summarizer is None:
 			# Claude stopped (exit 75 or time budget) and there is no OpenRouter key.
 			stats["skipped_no_engine"] += len(targets) - index
-			break
-		if stats["tokens_used"] >= args.token_budget:
-			# Account for the current run plus everything after it in one shot,
-			# then bail — no point fetching log archives we won't summarize.
-			stats["skipped_budget_exhausted"] += len(targets) - index
 			break
 		repository = str(run.get("repository") or "")
 		run_id = _to_int(run.get("run_id"), 0)

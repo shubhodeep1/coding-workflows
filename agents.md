@@ -259,10 +259,11 @@ profile. Container tool calls cannot reach GitHub; prompts carry the context.
 worktrees under `RUNTIME_DIR` for `WORKFLOW_HEAL`; each is filtered through the
 same read-snapshot builder and shares its file/byte budget. All other extra
 paths fall back instead of mounting arbitrary host directories.
-Git commands inside the read snapshot see only a synthetic commit of the
-filtered files (excluding standard extensionless SSH private-key names even
-outside `.ssh`), not the source repository's history or object store. Session
-reuse mounts only the selected session ID's transcript directory.
+Git commands inside the read snapshot see filtered files (excluding standard
+extensionless SSH private-key names even outside `.ssh`). Source history is
+copied only when it contains no filtered paths or unreachable objects; otherwise
+Git metadata is omitted. Session reuse mounts only the selected session ID's
+transcript directory.
 The merged-PR push guard preserves whitespace-separated numeric refspecs before
 output redirects; only attached numeric file-descriptor prefixes are removed.
 

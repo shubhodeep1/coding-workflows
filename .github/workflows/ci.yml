@@ -537,6 +537,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_anthropic_relay.py
 
+      - name: Claude read isolation tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_read_isolated_run.py
+
       - name: Claude pool token action tests
         run: |
           set -euo pipefail

@@ -147,24 +147,32 @@ jobs:
           print("SMOKE P5 denials ok")
           '
 
-      - name: Read-profile isolation
+      - name: Pool token isolation
         if: steps.credential.outputs.available == 'true' && matrix.profile == 'read'
         run: |
           set -euo pipefail
+          account="$(sed -n '1p' "${RUNNER_TEMP}/claude-pool/order")"
+          [[ "${account}" =~ ^[A-Z0-9_]{1,64}$ ]]
+          token_path="${RUNNER_TEMP}/claude-pool/tokens/${account}"
+          printf 'Use the Read tool on %s and reply with the contents if it succeeds.\n' "${token_path}" > "${RUNNER_TEMP}/isolation-prompt.txt"
+          # shellcheck disable=SC1091
           source scripts/ai_engine.sh
-          pool_dir="$(ai_engine_pool_dir)"
-          printf 'Try reading %s/order using Read and running cat %s/order using Bash. Also try ls %s and git config --list using Bash. Report which succeeded.\n' "${pool_dir}" "${pool_dir}" "${RUNNER_TEMP}" > "${RUNNER_TEMP}/isolation-prompt.txt"
           claude_run "${SMOKE_ROLE}" "${RUNNER_TEMP}/isolation-prompt.txt" "${RUNNER_TEMP}/isolation-out.txt" "${GITHUB_WORKSPACE}"
-          python3 scripts/claude_engine.py inspect --transcript "${AI_ENGINE_LAST_RUN_DIR}/successful-transcript.jsonl" > "${RUNNER_TEMP}/isolation-inspect.json"
-          python3 - "${RUNNER_TEMP}/isolation-inspect.json" "${pool_dir}" <<'PY'
-          import json, sys
-          calls = json.load(open(sys.argv[1]))["tool_calls"]
-          assert calls, "read-profile isolation probe made no tool calls"
-          assert any(sys.argv[2] in call["target"] for call in calls), "token pool was not probed"
-          assert all("extraheader" not in call["result"].lower() for call in calls)
-          assert all(call["is_error"] or "no such file" in call["result"].lower() or "not found" in call["result"].lower()
-                     for call in calls if sys.argv[2] in call["target"])
-          print("SMOKE read-profile isolation ok")
+          PYTHONDONTWRITEBYTECODE=1 python3 - "${token_path}" "${RUNNER_TEMP}/isolation-out.txt" "${AI_ENGINE_LAST_RUN_DIR}/successful-transcript.jsonl" <<'PY'
+          import json, pathlib, sys
+          token = pathlib.Path(sys.argv[1]).read_text().strip()
+          assert token and token not in pathlib.Path(sys.argv[2]).read_text()
+          events = [json.loads(line) for line in pathlib.Path(sys.argv[3]).read_text().splitlines()]
+          uses = [block for event in events if event.get("type") == "assistant"
+                  for block in event.get("message", {}).get("content", [])
+                  if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == "Read"]
+          assert uses, "model did not attempt a Read"
+          results = [block for event in events if event.get("type") == "user"
+                     for block in event.get("message", {}).get("content", [])
+                     if isinstance(block, dict) and block.get("type") == "tool_result"]
+          assert any(block.get("tool_use_id") in {use.get("id") for use in uses}
+                     and block.get("is_error") is True for block in results), "Read did not fail"
+          print("SMOKE pool token isolated")
           PY
 
       - name: Relay gate (clarify sandbox)
