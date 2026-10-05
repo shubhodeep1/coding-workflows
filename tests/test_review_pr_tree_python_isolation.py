@@ -118,12 +118,13 @@ def test_reviewer_usage_probe_never_imports_pr_json(tmp_path: Path) -> None:
 	pr_tree.mkdir()
 	marker = tmp_path / "poisoned"
 	_poison_module(pr_tree / "json.py", marker)
+	_poison_module(pr_tree / "openrouter_prompt_cache.py", marker)
 	reviewer_script = (SCRIPTS / "review_run_reviewers.sh").read_text(encoding="utf-8")
 	reviewer_function = "normalize_openrouter_usage() {" + reviewer_script.split("normalize_openrouter_usage() {", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
 	child_env = os.environ.copy()
 	for inherited_name in ("PYTHONPATH", "PYTHONSAFEPATH", "BASH_ENV", "ENV", "WORKSPACE_PATH"):
 		child_env.pop(inherited_name, None)
-	child_env.update({"SUPPORT_SCRIPTS_DIR": str(SCRIPTS), "PYTHONDONTWRITEBYTECODE": "1"})
+	child_env.update({"SUPPORT_SCRIPTS_DIR": str(SCRIPTS), "PYTHONPATH": str(pr_tree), "PYTHONDONTWRITEBYTECODE": "1"})
 	result = subprocess.run(
 		["bash", "-c", reviewer_function + 'normalize_openrouter_usage "$1" review probe model',
 			"reviewer probe", str(tmp_path / "usage.log")],
@@ -134,13 +135,47 @@ def test_reviewer_usage_probe_never_imports_pr_json(tmp_path: Path) -> None:
 	assert not marker.exists()
 
 
+def test_consolidator_probe_never_imports_pr_json(tmp_path: Path) -> None:
+	pr_tree = tmp_path / "pr"
+	pr_tree.mkdir()
+	marker = tmp_path / "poisoned"
+	_poison_module(pr_tree / "json.py", marker)
+	consolidator_script = (SCRIPTS / "review_consolidate.sh").read_text(encoding="utf-8")
+	consolidator_function = "first_linked_issue_number()\n{" + consolidator_script.split("first_linked_issue_number()\n{", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+	child_env = os.environ.copy()
+	for inherited_name in ("PYTHONPATH", "PYTHONSAFEPATH", "BASH_ENV", "ENV", "WORKSPACE_PATH"):
+		child_env.pop(inherited_name, None)
+	child_env["LINKED_ISSUES_JSON"] = '[{"number":123}]'
+	result = subprocess.run(
+		["bash", "-c", consolidator_function + "first_linked_issue_number"],
+		cwd=pr_tree, env=child_env, capture_output=True, text=True, timeout=15, check=False,
+	)
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.strip() == "123"
+	assert not marker.exists()
+
+
+def test_rejection_verifier_never_imports_pr_json(tmp_path: Path) -> None:
+	pr_tree = tmp_path / "pr"
+	pr_tree.mkdir()
+	marker = tmp_path / "poisoned"
+	_poison_module(pr_tree / "json.py", marker)
+	result = _run("review_reject_verify.sh", pr_tree, {
+		"RUNTIME_DIR": str(tmp_path), "PR_NUMBER": "123", "ROUND_NUMBER": "0",
+	})
+	assert result.returncode == 0, result.stderr
+	assert not marker.exists()
+	assert (pr_tree / ".ai/review_runtime/pr-123/round-1/verified_rejections.json").is_file()
+
+
 def test_pre_review_python_invocations_are_safe_path_scoped() -> None:
 	shared = (
 		"review_collect_pr_metadata.sh", "memory_helpers.sh", "opencode_helpers.sh",
 		"workspace_init.sh", "gh_helpers.sh", "transcript_archive.sh",
 		"write_opencode_config.sh", "review_filter_uninteresting_files.sh",
 		"review_agents_md_materiality.sh", "review_run_reviewers.sh",
-		"review_apply_fixes.sh",
+		"review_apply_fixes.sh", "review_consolidate.sh", "review_reject_verify.sh",
+		"codex_heartbeat.sh", "codex_stall_guard.sh", "review_commit_changes.sh",
 	)
 	# Only interpreter option/inline invocations need the cwd removed from sys.path.
 	for filename in shared:
@@ -148,6 +183,16 @@ def test_pre_review_python_invocations_are_safe_path_scoped() -> None:
 		for match in re.finditer(r"\bpython3\s+(?:-c|-m|-)\s", text):
 			line = text[text.rfind("\n", 0, match.start()) + 1:match.start()]
 			assert "PYTHONSAFEPATH=1" in line or (filename == "transcript_archive.sh" and "PYTHONSAFEPATH=1" in text[match.start() - 120:match.start()]), (filename, line)
+	sandbox = (SCRIPTS / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert 'if ! PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${config}"' in sandbox
+	reviewer = (SCRIPTS / "review_run_reviewers.sh").read_text(encoding="utf-8")
+	assert '"${SUPPORT_ROOT_DIR:-}" != /* || "${SUPPORT_SCRIPTS_DIR:-}" != /*' in reviewer
+	assert 'PYTHONPATH="${SUPPORT_ROOT_DIR:-.}' not in reviewer
+	assert 'PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}' not in reviewer
+	assert '${PYTHONPATH:+:$PYTHONPATH}' not in reviewer
+	editor = (SCRIPTS / "review_apply_fixes.sh").read_text(encoding="utf-8")
+	assert editor.count('[[ "${SUPPORT_SCRIPTS_DIR:-}" == /* ]] || return 0') >= 2
+	assert 'PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}' not in editor
 
 	installer = (SCRIPTS / "install_semble.sh").read_text(encoding="utf-8")
 	builder = (SCRIPTS / "build_semble_wrapper.sh").read_text(encoding="utf-8")
@@ -160,10 +205,11 @@ def test_pre_review_python_invocations_are_safe_path_scoped() -> None:
 	assert serena.count("serena_python - <<'PY'") == 2
 	assert serena.count("serena_uv tool install") == 2
 	assert "UV_NO_CONFIG=1 uv" in serena
-	# The trusted absolute script is safe without a cwd move: its subprocess
-	# must keep the project cwd for Serena's --project-from-cwd setting.
+	# The server keeps the project cwd for --project-from-cwd, while safe-path
+	# and a cleared PYTHONPATH prevent imports from that checkout.
 	probe = serena.split("probe_mcp_handshake()", 1)[1].split("\nmain()", 1)[0]
 	assert '"${SERENA_UV_PYTHON_BIN}" "${SCRIPT_DIR}/mcp_handshake_probe.py"' in probe
+	assert "env -u PYTHONPATH PYTHONSAFEPATH=1" in probe
 	assert 'cd -- "${serena_neutral_dir}"' not in probe
 
 	workflow = (ROOT / ".github/workflows/review_autofix.yml").read_text(encoding="utf-8")

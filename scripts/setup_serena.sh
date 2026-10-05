@@ -418,12 +418,12 @@ probe_mcp_handshake()
 {
 	local serena_bin="${1:?probe_mcp_handshake: serena binary path required}"
 
-	# The trusted script's absolute path keeps its imports off the PR tree.
-	# Keep the project cwd for --project-from-cwd and avoid inheriting safe-path
-	# into the server's own Python subprocesses (which import their siblings).
+	# Keep the project cwd for --project-from-cwd, but prevent both the trusted
+	# probe and the Serena server it spawns from importing checkout modules.
 	MCP_HANDSHAKE_PROBE_TIMEOUT="${MCP_HANDSHAKE_PROBE_TIMEOUT:-${SERENA_STARTUP_TIMEOUT_SEC}}" \
 	PYTHONDONTWRITEBYTECODE=1 \
-	"${SERENA_UV_PYTHON_BIN}" "${SCRIPT_DIR}/mcp_handshake_probe.py" \
+	env -u PYTHONPATH PYTHONSAFEPATH=1 \
+		"${SERENA_UV_PYTHON_BIN}" "${SCRIPT_DIR}/mcp_handshake_probe.py" \
 		--name "serena" \
 		-- "${serena_bin}" start-mcp-server --context=codex --project-from-cwd --transport stdio
 }

@@ -56,6 +56,10 @@ if [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
   opencode_emit_failure_alert review_run_reviewers reviewer "${reviewer_helpers_alert_model}" 1 config_writer_missing || true
   exit 1
 fi
+if [[ "${SUPPORT_ROOT_DIR:-}" != /* || "${SUPPORT_SCRIPTS_DIR:-}" != /* ]]; then
+  echo '::error::Reviewer Python requires absolute trusted support paths.' >&2
+  exit 1
+fi
 
 WATCHDOG_HELPERS="${SUPPORT_SCRIPTS_DIR:-scripts}/watchdog_helpers.sh"
 if [ -f "${WATCHDOG_HELPERS}" ]; then
@@ -82,7 +86,7 @@ emit_context_budget_warn_for_prompt() {
 
   warn_line="$({
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}" \
+    PYTHONPATH="${SUPPORT_SCRIPTS_DIR}" \
     PYTHONSAFEPATH=1 python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
 import sys
 
@@ -463,7 +467,7 @@ normalize_openrouter_usage() {
   local phase_label="$2"
   local call_label="$3"
   local model_name="$4"
-  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - "$log_file" "$phase_label" "$call_label" "$model_name" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_SCRIPTS_DIR}" python3 - "$log_file" "$phase_label" "$call_label" "$model_name" <<'PY'
 import json
 import os
 import sys
@@ -860,7 +864,7 @@ filter_reviewer_paths_file_against_skips() {
   local output_file="$2"
   local skipped_file="$3"
 
-  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR}:${SUPPORT_SCRIPTS_DIR}" python3 - \
     "$input_file" "$output_file" "$skipped_file" <<'PY'
 from pathlib import Path
 import sys
@@ -894,7 +898,7 @@ filter_reviewer_stat_file_against_skips() {
   local output_file="$2"
   local skipped_file="$3"
 
-  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR}:${SUPPORT_SCRIPTS_DIR}" python3 - \
     "$input_file" "$output_file" "$skipped_file" <<'PY'
 from pathlib import Path
 import sys
@@ -1152,7 +1156,7 @@ reviewer_count_diff_loc() {
 reviewer_count_paths_file() {
   local paths_file="$1"
 
-  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR}:${SUPPORT_SCRIPTS_DIR}" python3 - \
     "$paths_file" <<'PY'
 from pathlib import Path
 import sys
@@ -1422,7 +1426,7 @@ reviewer_collect_review_tier_path_metadata() {
   local paths_file="$1"
   local diff_file="${2:-}"
 
-  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR}:${SUPPORT_SCRIPTS_DIR}" python3 - \
     "$paths_file" "$diff_file" <<'PY'
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -1931,7 +1935,7 @@ build_reviewer_iteration_scope_artifacts() {
   local output_paths_file="$3"
   local output_summary_file="$4"
 
-  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR}:${SUPPORT_SCRIPTS_DIR}" python3 - \
     "$changed_files_file" "$ledger_status_file" "$output_paths_file" "$output_summary_file" <<'PY'
 from pathlib import Path
 import sys
@@ -3363,7 +3367,7 @@ reviewer_random_int_upto() {
 
 reviewer_cache_status_for_model() {
   local model_name="$1"
-  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - "${model_name}" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_SCRIPTS_DIR}" python3 - "${model_name}" <<'PY'
 import sys
 
 try:
