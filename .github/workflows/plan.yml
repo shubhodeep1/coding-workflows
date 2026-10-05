@@ -1152,12 +1152,15 @@ jobs:
       # Actions logs (no token / sign-in), so for a trusted ai:workflow-heal
       # issue a trusted step fetches the failing runs' sliced logs, artifact
       # files and provenance into an evidence folder the prompt points at.
-      # actions/cache carries completed runs from the previous stage, so a
-      # later stage spends ~5 API calls instead of ~20. Fail-open throughout.
+      # Each stage fetches its own evidence (~20 API calls); Actions caches
+      # saved on the default branch are readable by fork PR runs. Purge old
+      # heal-evidence caches best-effort. Fail-open throughout (refs #3576).
       - name: Gate workflow-heal evidence
         id: heal_evidence_gate
         if: env.SKIP_PLAN != 'true'
         continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
           enabled=false
@@ -1166,17 +1169,9 @@ jobs:
             [ "$(printf '%s' "${gate}" | jq -r '.eligible // false' 2>/dev/null)" = "true" ] && enabled=true
           fi
           echo "enabled=${enabled}" >> "$GITHUB_OUTPUT"
-          echo "cache_key=heal-evidence-${ISSUE_NUMBER}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
-          echo "cache_prefix=heal-evidence-${ISSUE_NUMBER}-" >> "$GITHUB_OUTPUT"
-
-      - name: Restore workflow-heal evidence cache
-        if: env.SKIP_PLAN != 'true' && steps.heal_evidence_gate.outputs.enabled == 'true'
-        continue-on-error: true
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ runner.temp }}/heal-evidence
-          key: ${{ steps.heal_evidence_gate.outputs.cache_key }}
-          restore-keys: ${{ steps.heal_evidence_gate.outputs.cache_prefix }}
+          if [ "${enabled}" = "true" ]; then
+            PYTHONDONTWRITEBYTECODE=1 python3 scripts/workflow_failure_heal_evidence.py purge-legacy-cache --repo "${GITHUB_REPOSITORY}" || true
+          fi
 
       - name: Collect workflow-heal evidence
         if: env.SKIP_PLAN != 'true' && steps.heal_evidence_gate.outputs.enabled == 'true'
@@ -1198,14 +1193,6 @@ jobs:
           if [ -s "${evidence_dir}/INDEX.md" ]; then
             echo "HEAL_EVIDENCE_DIR=${evidence_dir}" >> "$GITHUB_ENV"
           fi
-
-      - name: Save workflow-heal evidence cache
-        if: env.SKIP_PLAN != 'true' && steps.heal_evidence_gate.outputs.enabled == 'true' && env.HEAL_EVIDENCE_DIR != ''
-        continue-on-error: true
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ runner.temp }}/heal-evidence
-          key: ${{ steps.heal_evidence_gate.outputs.cache_key }}
 
       # Claude engine (replace-claude-sessions plan Phase 5a): the PLAN role
       # runs on Claude unless the issue's labels, AI_ENGINE_PLAN or AI_ENGINE

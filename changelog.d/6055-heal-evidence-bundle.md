@@ -8,7 +8,7 @@ The heal pipeline's agents cannot open GitHub Actions logs: the web UI needs a s
 | Heal issues surveyed | 51 (49 closed, 2 open) |
 | Reports the intake read with no log (`runs=0`) | 8, now read through the review job (including its claude-branch-review variant) |
 | Evidence folder cap | 400 KB in total, 60 KB per file |
-| GitHub REST calls | about 20 for the first stage, about 5 for later stages |
+| GitHub REST calls | about 20 per stage |
 | Optional parts skipped below | 500 remaining core calls |
 | Real #6055 review log | 2,046,723 bytes sliced to 48,140, keeping the env and working-tree checkpoints that show the cause |
 
@@ -16,6 +16,6 @@ What this means for operators: heal issues should stop blocking on missing logs,
 
 ### For contributors
 
-`slice-log` replaces only what the diagnosis prompt reads; `filter_log` still feeds the fingerprint. Run links come from the issue's `runs=` marker, its `**Failed run:**` lines and occurrence comments by the issue's own author, limited to the issue's and the source repository. Cross-repository reads require that source to be registered in `.github/ai/consumer_repos.json`; an absent registry skips them. Finished runs are cached between stages with actions/cache (`heal-evidence-<issue>-<run>-<attempt>`); a run with a failed fetch is fetched again by the next stage. A `script_ref` equal to the pull request's head SHA still targets the pull request's branch; otherwise a SHA contained by both `stable` and `main` targets `stable`, whose hotfix is forwarded to `main`. A vanished support branch also falls back to `stable` if it exists. Log prefix: `WORKFLOW_HEAL_EVIDENCE`. Tests: `tests/test_workflow_failure_heal_evidence.py` and the new targeting and review-job cases in `tests/test_workflow_failure_heal.py`.
+`slice-log` replaces only what the diagnosis prompt reads; `filter_log` still feeds the fingerprint. Run links come from the issue's `runs=` marker, its `**Failed run:**` lines and occurrence comments by the issue's own author, limited to the issue's and the source repository. Cross-repository reads require that source to be registered in `.github/ai/consumer_repos.json`; an absent registry skips them. Each stage collects its own evidence; nothing is cached between stages. A `script_ref` equal to the pull request's head SHA still targets the pull request's branch; otherwise a SHA contained by both `stable` and `main` targets `stable`, whose hotfix is forwarded to `main`. A vanished support branch also falls back to `stable` if it exists. Log prefix: `WORKFLOW_HEAL_EVIDENCE`. Tests: `tests/test_workflow_failure_heal_evidence.py` and the new targeting and review-job cases in `tests/test_workflow_failure_heal.py`.
 
 The consumer merge guard template distinguishes a numeric file-descriptor prefix (`2>/dev/null`) from a separated or quoted numeric push refspec (`2 > /dev/null`), checking the branch actually pushed in either case. When a push refspec has an unresolved destination or source, the guard asks for confirmation and tells the operator to verify the actual push destination and source tip rather than relying on the checked-out branch alone.

@@ -200,13 +200,14 @@ Phases of the unattended pipeline (each is a separate workflow file under
     folder** for a trusted `ai:workflow-heal` issue (`collect`: sliced job
     logs, allowlisted artifact files, provenance, lineage with whether each
     fix reached `main`, runs on the failing head, rate limit / OpenRouter key
-    status; 400 KB, reused across stages through actions/cache). Cross-repo
+    status; 400 KB, fetched separately by each stage without an Actions cache,
+    which pull-request runs can read). Cross-repo
     reads require the source repo in the intake's consumer registry; missing
     registry data skips them. Run references also require intake-account-only
     authorship and edit history for the heal issue and occurrence comments;
     cross-repo runs additionally require matching run metadata (repo, reported
     head SHA, and PR or head branch). Unverifiable runs are skipped before
-    log/artifact reads, including when a cached run is restored; rejected intake-origin
+    log/artifact reads; rejected intake-origin
     references are listed with reasons under `Skipped` in `INDEX.md`. The
     folder is mounted read-only at `/evidence` in the clarify sandbox, and
     point the prompt at it

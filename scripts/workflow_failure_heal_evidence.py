@@ -28,8 +28,8 @@ API budget (CLAUDE.md §15), per ``collect`` call:
     for the heal issue and up to 20 occurrence comments;
   * cross-repo run identity: reuse the head-SHA timeline listing, falling
     back to 1 run GET per selected cross-repo run not in that listing;
-  * runs already in the out dir from an earlier stage (actions/cache) are
-    reused; each new run costs 1 jobs call + 1 job-log call per selected job
+  * runs already in the out dir are reused; each new run costs 1 jobs call +
+    1 job-log call per selected job
     (at most ``--max-jobs``) + 1 artifact list + at most 2 artifact
     downloads;
   * provenance: 1 source-PR call, at most 2 compare calls;
@@ -37,7 +37,7 @@ API budget (CLAUDE.md §15), per ``collect`` call:
     lineage issue's closing PRs, at most 5 compare calls for merges not yet
     known to have reached the default branch (a positive answer is cached);
   * timeline: 1 call; ``GET /rate_limit`` is free.
-A first stage spends about 20 calls, a later stage about 5. When fewer than
+Each stage spends about 20 calls. When fewer than
 ``--min-rate-remaining`` core calls are left, the optional parts (artifacts,
 timeline, lineage compares) are skipped and recorded under ``skipped``.
 
@@ -87,6 +87,7 @@ MAX_ARTIFACT_BYTES = 25 * 1024 * 1024
 MAX_ARTIFACT_MEMBERS = 40
 MAX_PROVENANCE_COMMENTS = 20
 _NODE_ID_RE = re.compile(r"^[A-Za-z0-9_=-]{1,100}$")
+LEGACY_CACHE_KEY_RE = re.compile(r"heal-evidence-[0-9]+-[0-9]+-[0-9]+")
 
 # The review workflow's job is "codex-agent" (consumer wrapper) or
 # "review / codex-agent" (internal). A review/autofix failure usually ends
@@ -406,6 +407,10 @@ class GitHub:
 			return json.loads(data.decode("utf-8"))
 		except (UnicodeError, ValueError):
 			return None
+
+	def delete(self, path: str) -> bool:
+		# A successful DELETE returns HTTP 204 and an empty byte string.
+		return self._run(["-X", "DELETE", path]) is not None
 
 	def raw(self, path: str, *, escapes: bool = False) -> bytes | None:
 		# Job logs carry ANSI colour codes, which newer gh releases refuse to
@@ -1298,6 +1303,31 @@ def render_index(
 # ---------------------------------------------------------------------------
 
 
+def purge_legacy_evidence_caches(gh: GitHub, repo: str) -> dict[str, Any]:
+	"""Delete at most one page of the old PR-readable evidence caches."""
+	result: dict[str, Any] = {"listed": 0, "matched": 0, "deleted": 0, "failed": 0, "status": "list_failed"}
+	listing = gh.json(f"repos/{repo}/actions/caches?key=heal-evidence-&per_page=100")
+	if not isinstance(listing, dict) or not isinstance(listing.get("actions_caches"), list):
+		log("warn purge_list_failed")
+		return result
+	entries = listing["actions_caches"]
+	result["listed"] = len(entries)
+	result["status"] = "ok" if entries else "none"
+	for entry in entries:
+		if not isinstance(entry, dict) or not isinstance(entry.get("key"), str) or not LEGACY_CACHE_KEY_RE.fullmatch(entry["key"]):
+			continue
+		cache_id = entry.get("id")
+		if type(cache_id) is not int or cache_id <= 0:
+			continue
+		result["matched"] += 1
+		if gh.delete(f"repos/{repo}/actions/caches/{cache_id}"):
+			result["deleted"] += 1
+		else:
+			result["failed"] += 1
+	log(f"purged_legacy_cache repo={repo} listed={result['listed']} deleted={result['deleted']} failed={result['failed']}")
+	return result
+
+
 def _cmd_slice_log(args: argparse.Namespace) -> int:
 	text = Path(args.log_file).read_text(encoding="utf-8", errors="replace")
 	steps: list[dict[str, Any]] = []
@@ -1337,6 +1367,11 @@ def _cmd_prompt_section(args: argparse.Namespace) -> int:
 def _cmd_eligible(args: argparse.Namespace) -> int:
 	ok, reason = eligibility(_load_json_lenient(args.issue_json))
 	print(json.dumps({"eligible": ok, "reason": reason}))
+	return 0
+
+
+def _cmd_purge_legacy_cache(args: argparse.Namespace) -> int:
+	print(json.dumps(purge_legacy_evidence_caches(GitHub(), args.repo)))
 	return 0
 
 
@@ -1401,6 +1436,10 @@ def build_parser() -> argparse.ArgumentParser:
 	p = sub.add_parser("eligible", help="is this issue a trusted heal issue")
 	p.add_argument("--issue-json", required=True)
 	p.set_defaults(func=_cmd_eligible)
+
+	p = sub.add_parser("purge-legacy-cache", help="delete old PR-readable evidence caches")
+	p.add_argument("--repo", required=True)
+	p.set_defaults(func=_cmd_purge_legacy_cache)
 
 	p = sub.add_parser("collect", help="collect the evidence folder for one heal issue")
 	p.add_argument("--repo", required=True)
