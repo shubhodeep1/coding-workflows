@@ -32,6 +32,8 @@
 # Both engines run in a network-isolated container with a host-side provider relay;
 # its output is data, and verdicts containing literal or encoded credentials
 # are rejected before only ledger-approved operations are acted on.
+# A PR binds to a project only with a same-repository head, an ai/issue-<n>
+# head branch, and <n> in pipeline-authored project state.
 #
 # Never fails its caller: every problem is logged and the exit code is 0.
 # API budget (CLAUDE.md §15), per run: one `user` read, the item, its
@@ -381,16 +383,17 @@ unblock_main()
 	fi
 
 	# The project an item belongs to, and a PR's linked issue.
-	local tracking="" linked="" body_text pr_json="" head_sha="" head_ref=""
+	local tracking="" linked="" body_text pr_json="" head_sha="" head_ref="" head_repo="" binding_issue=""
 	body_text="$(jq -r '.body // ""' "${RUNTIME_DIR}/item.json")"
 	if [ "${ITEM_KIND}" = "project" ]; then
 		tracking="${ITEM}"
 	elif [ "${ITEM_KIND}" = "issue" ] && jq -e 'index("ai:orchestrator-managed")' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1; then
 		tracking="$(printf '%s\n' "${body_text}" | sed -n 's/^[[:space:]]*-\{0,1\}[[:space:]]*\(\*\*\)\{0,1\}Tracking issue:\(\*\*\)\{0,1\}[[:space:]]*#\([0-9][0-9]*\)[[:space:]]*$/\3/p' | head -n1)"
+		binding_issue="${ITEM}"
 	fi
 	if [ "${ITEM_KIND}" = "pr" ]; then
-		# PR body references are untrusted; only its GitHub-reported base can
-		# bind a fix-up and its verdict ledger to an orchestrator project.
+		# PR body references are untrusted; project binding also requires a
+		# same-repository head and trusted project-state membership below.
 		pr_json="$(gh api "repos/${REPOSITORY}/pulls/${ITEM}" 2>/dev/null || true)"
 		if ! jq -e --argjson item "${ITEM}" '.number == $item and (.base.ref | type == "string")' <<< "${pr_json}" >/dev/null 2>&1; then
 			unblock_log "item=${ITEM} outcome=skip reason=pr_unreadable"
@@ -398,6 +401,17 @@ unblock_main()
 		fi
 		if [[ "$(jq -r '.base.ref' <<< "${pr_json}")" =~ ^orchestrator/project-([1-9][0-9]*)$ ]]; then
 			tracking="${BASH_REMATCH[1]}"
+			head_repo="$(jq -r '.head.repo.full_name // ""' <<< "${pr_json}")"
+			head_ref="$(jq -r '.head.ref // ""' <<< "${pr_json}")"
+			if [ -z "${head_repo}" ] || [ "${head_repo,,}" != "${REPOSITORY,,}" ]; then
+				unblock_log "item=${ITEM} outcome=skip reason=project_binding_unverified detail=fork_head"
+				return 0
+			fi
+			if [[ ! "${head_ref}" =~ ^ai/issue-([1-9][0-9]*)$ ]]; then
+				unblock_log "item=${ITEM} outcome=skip reason=project_binding_unverified detail=head_ref"
+				return 0
+			fi
+			binding_issue="${BASH_REMATCH[1]}"
 		fi
 		head_sha="$(jq -r '.head.sha // ""' <<< "${pr_json}")"
 		head_ref="$(jq -r '.head.ref // ""' <<< "${pr_json}")"
@@ -494,9 +508,16 @@ unblock_main()
 				unblock_log "item=${ITEM} outcome=skip reason=project_comments_unavailable"
 				return 0
 			fi
-			if [ "${ITEM_KIND}" = "issue" ]; then
-				if ! unblock_py "${SUPPORT_DIR}/scripts/orchestrate_state_v2.py" extract --comments-json "${RUNTIME_DIR}/project_comments.json" > "${RUNTIME_DIR}/project_binding.json" 2>/dev/null \
-					|| ! jq -e --argjson issue "${ITEM}" 'any((.issue_number_map // {})[]; . == $issue) or any(.waves[]?.issues[]?; .github_issue == $issue) or any(.security_pass_active_fix_issues[]?; . == $issue) or any(.validation_active_fix_issues[]?; . == $issue)' "${RUNTIME_DIR}/project_binding.json" >/dev/null 2>&1; then
+		fi
+		if ! jq -e --arg login "${UNBLOCK_LOGIN}" '[.[] | select((.user.login // "") == $login)]' \
+			"${RUNTIME_DIR}/project_comments.json" > "${RUNTIME_DIR}/project_state_comments.json"; then
+			unblock_log "item=${ITEM} outcome=skip reason=project_ledger_unreadable detail=state_filter"
+			return 0
+		fi
+		if [ "${tracking}" != "${ITEM}" ]; then
+			if [ "${ITEM_KIND}" = "issue" ] || [ "${ITEM_KIND}" = "pr" ]; then
+				if ! unblock_py "${SUPPORT_DIR}/scripts/orchestrate_state_v2.py" extract --comments-json "${RUNTIME_DIR}/project_state_comments.json" > "${RUNTIME_DIR}/project_binding.json" 2>/dev/null \
+					|| ! jq -e --argjson issue "${binding_issue}" 'any((.issue_number_map // {})[]; . == $issue) or any(.waves[]?.issues[]?; .github_issue == $issue) or any(.security_pass_active_fix_issues[]?; . == $issue) or any(.validation_active_fix_issues[]?; . == $issue)' "${RUNTIME_DIR}/project_binding.json" >/dev/null 2>&1; then
 					unblock_log "item=${ITEM} outcome=skip reason=project_binding_unverified"
 					return 0
 				fi
@@ -668,8 +689,8 @@ unblock_ask_model()
 	fi
 	echo '{}' > "${RUNTIME_DIR}/state_slice.json"
 	local spec=""
-	if [ -s "${RUNTIME_DIR}/project_comments.json" ] 2>/dev/null; then
-		if unblock_py "${SUPPORT_DIR}/scripts/orchestrate_state_v2.py" extract --comments-json "${RUNTIME_DIR}/project_comments.json" > "${RUNTIME_DIR}/state_full.json" 2>/dev/null; then
+	if [ -n "${tracking:-}" ] && [ -s "${RUNTIME_DIR}/project_state_comments.json" ]; then
+		if unblock_py "${SUPPORT_DIR}/scripts/orchestrate_state_v2.py" extract --comments-json "${RUNTIME_DIR}/project_state_comments.json" > "${RUNTIME_DIR}/state_full.json" 2>/dev/null; then
 			jq '{status, current_wave, integration_branch, judge_cycle, recovery_count, validation_last_raw_status, validation_failure_reason, security_pass_status, final_merge_status, waves: [(.waves // [])[] | {issues: [(.issues // [])[] | {id, github_issue, status}]}]}' \
 				"${RUNTIME_DIR}/state_full.json" > "${RUNTIME_DIR}/state_slice.json" 2>/dev/null || echo '{}' > "${RUNTIME_DIR}/state_slice.json"
 		fi
