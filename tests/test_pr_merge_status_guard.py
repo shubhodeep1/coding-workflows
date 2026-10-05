@@ -24,6 +24,8 @@ GUARD_PATH = REPO_ROOT / ".claude" / "hooks" / "pr_merge_status_guard.py"
 TEMPLATE_GUARD_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "hooks" / "pr_merge_status_guard.py"
 SETTINGS_PATH = REPO_ROOT / ".claude" / "settings.json"
 TEMPLATE_SETTINGS_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "settings.json"
+if not SETTINGS_PATH.is_file():
+	SETTINGS_PATH = TEMPLATE_SETTINGS_PATH
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 TEMPLATE_CLAUDE_MD = REPO_ROOT / "workflow-templates" / "CLAUDE.md"
 
@@ -219,6 +221,8 @@ def test_slug_extraction_matches_the_bash_implementation_it_mirrors() -> None:
 	unrelated github.com repo.
 	"""
 	session_start = REPO_ROOT / ".claude" / "hooks" / "session-start.sh"
+	if not session_start.is_file():
+		session_start = REPO_ROOT / "workflow-templates" / ".claude" / "hooks" / "session-start.sh"
 	urls = [
 		"https://github.com/owner/repo.git",
 		"git@github.com:owner/repo.git",
@@ -901,8 +905,13 @@ def test_conditional_cd_outside_its_list_warns_and_uses_checkout(merged_branch_r
 @pytest.mark.parametrize("command", [
 	"git push origin HEAD",
 	"COUNT+=1 git push origin HEAD:feature/x",
+	"git push --repo=origin",
 	"git push --repo origin HEAD:feature/x",
 	"git push --repo=origin HEAD:feature/x",
+	"git push --repo=upstream origin",
+	"git push origin --repo=upstream",
+	"git push origin HEAD:feature/x --repo=upstream",
+	"git push --repo=upstream origin HEAD:feature/x",
 	"git push origin HEAD~0:feature/x",
 	"git push origin HEAD:feature/x 2>&1",
 	"git push origin 2>/dev/null",
@@ -923,31 +932,38 @@ def test_push_parser_guards_real_destination(merged_branch_repo, monkeypatch, co
 	assert lookups == ["feature/x"]
 
 
-@pytest.mark.parametrize("command", ['git push origin "$TARGET"', 'git push origin HEAD:"$TARGET"'])
-def test_unresolved_push_destination_requests_confirmation(merged_branch_repo, command: str, capsys) -> None:
+@pytest.mark.parametrize("command", [
+	'git push origin "$TARGET"',
+	'git push origin HEAD:"$TARGET"',
+	'git push origin HEAD:$DEST',
+	'git push origin HEAD:"${DEST}"',
+])
+def test_unresolved_push_destination_requests_confirmation(merged_branch_repo, monkeypatch, command: str, capsys) -> None:
 	repo, _ = merged_branch_repo
 	_git(repo, "checkout", "main")
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("cannot validate unknown destination"))
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
 		"tool_input": {"command": command}})
 	assert code == 0, message
 	assert any(
 		item.get("hookSpecificOutput", {}).get("permissionDecision") == "ask"
-		and "unresolved git push destination" in item.get("systemMessage", "")
-		and "actual push destination and source tip" in item.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
+		and "could not resolve git push destination" in item.get("systemMessage", "")
 		for item in map(json.loads, capsys.readouterr().out.splitlines())
 	)
 
 
-def test_unresolved_push_source_requests_confirmation(merged_branch_repo, capsys) -> None:
+@pytest.mark.parametrize("command", ['git push origin "$SOURCE":feature/x', 'git push origin "$SOURCE:feature/x"'])
+def test_unresolved_push_source_requests_confirmation(merged_branch_repo, monkeypatch, capsys, command: str) -> None:
 	repo, _ = merged_branch_repo
 	_git(repo, "checkout", "main")
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("cannot validate unknown tip"))
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
-		"tool_input": {"command": 'git push origin "$SOURCE":feature/x'}})
+		"tool_input": {"command": command}})
 	assert code == 0, message
 	assert any(
 		item.get("hookSpecificOutput", {}).get("permissionDecision") == "ask"
-		and "unresolved git push source" in item.get("systemMessage", "")
-		and "actual push destination and source tip" in item.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
+		and "could not resolve git push source" in item.get("systemMessage", "")
+		and "feature/x" in item.get("systemMessage", "")
 		for item in map(json.loads, capsys.readouterr().out.splitlines())
 	)
 
@@ -1062,7 +1078,6 @@ def test_numeric_redirects_do_not_hide_refspecs(merged_branch_repo, monkeypatch,
 	repo, _ = merged_branch_repo
 	merged_sha = _git(repo, "rev-parse", "HEAD")
 	_git(repo, "branch", "2", "feature/x")
-	_git(repo, "branch", "1", "feature/x")
 	lookups: list[str] = []
 	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
 	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
@@ -1081,7 +1096,60 @@ def test_unresolved_push_refspec_requires_confirmation(merged_branch_repo, capsy
 	assert guard.evaluate({"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": command}}) == (0, "")
 	output = capsys.readouterr().out
 	assert '"permissionDecision": "ask"' in output
-	assert "verify the actual push destination and source tip" in output
+	assert "could not resolve git push" in output
+
+
+@pytest.mark.parametrize("command", [
+	"git push origin 123 > /dev/null",
+	'git push origin "123">/dev/null',
+])
+def test_spaced_redirect_keeps_numeric_refspec(merged_branch_repo, monkeypatch, command: str) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "branch", "123")
+	_git(repo, "checkout", "main")
+	lookups: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		lookups.append(branch)
+		return [dict(MERGED_PR, headRefOid=merged_sha)]
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": command}})
+	assert code == 2, message
+	assert lookups == ["123"]
+
+
+def test_unresolved_destination_does_not_hide_literal_merged_branch(monkeypatch, merged_branch_repo) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "checkout", "main")
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		assert branch == "feature/x"
+		return [dict(MERGED_PR, headRefOid=merged_sha)]
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push origin HEAD:$DEST feature/x:feature/x"}})
+	assert code == 2
+	assert "Branch `feature/x`" in message
+
+
+@pytest.mark.parametrize("command", [
+	'git push --all origin; git push origin HEAD:$DEST',
+	'git push --all origin; git push origin "$SOURCE:feature/x"',
+])
+def test_bulk_and_unresolved_push_emit_one_confirmation(merged_branch_repo, capsys, command: str) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "checkout", "main")
+	assert guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": command}}) == (0, "")
+	response = json.loads(capsys.readouterr().out)
+	assert response["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "Bulk git push" in response["systemMessage"]
+	assert "could not resolve git push" in response["systemMessage"]
 
 
 def test_cd_or_exit_preserves_worktree_for_push(merged_branch_repo, monkeypatch) -> None:
@@ -1159,10 +1227,12 @@ def test_session_start_hook_is_preserved(path: Path) -> None:
 def test_template_copies_are_identical() -> None:
 	"""Consumer repos receive the guard via the workflow-templates/.claude mirror."""
 	assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
-	assert TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8") == SETTINGS_PATH.read_text(
-		encoding="utf-8"
-	)
-	assert TEMPLATE_CLAUDE_MD.read_text(encoding="utf-8") == CLAUDE_MD.read_text(encoding="utf-8")
+	if SETTINGS_PATH != TEMPLATE_SETTINGS_PATH:
+		assert TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8") == SETTINGS_PATH.read_text(
+			encoding="utf-8"
+		)
+	if TEMPLATE_CLAUDE_MD.is_file():
+		assert TEMPLATE_CLAUDE_MD.read_text(encoding="utf-8") == CLAUDE_MD.read_text(encoding="utf-8")
 
 
 def test_review_editor_can_transfer_guard_without_opening_other_claude_hooks() -> None:
