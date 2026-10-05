@@ -144,6 +144,7 @@ def test_override_guard_only_for_the_guard_latches() -> None:
 
 def test_rejection_requires_latest_trusted_unused_item_marker() -> None:
 	line = _rejection_marker(["src/a.py"])
+	assert ledger.latest_rejection([_comment(line.replace("paths=", "paths=!!!"), "mallory")], BOT, 7, "scope-blocked")["reason"] == "untrusted"
 	comments = [_comment(line, "mallory"), _comment(_rejection_marker(["other.py"], item=8)),
 		_comment(line + "\nnot the last line"), _comment("guard failed\n" + line + "\r")]
 	assert ledger.latest_rejection(comments, BOT, 7, "scope-blocked")["paths"] == ["src/a.py"]
@@ -1387,7 +1388,7 @@ def test_project_label_failure_sends_critical_without_claiming_it_closed(tmp_pat
 	assert "op=add_labels issue=7 label=ai:unblock-closed outcome=failed" in result.stdout
 	assert "reason=actuation_failed" in result.stdout
 	assert state["patched"] == []
-	assert "could not mark project #7 for closure" in alerts.read_text(encoding="utf-8")
+	assert "could not complete closure of project #7" in alerts.read_text(encoding="utf-8")
 
 
 def test_judge_closes_without_the_model_when_the_caps_are_spent(tmp_path: Path) -> None:

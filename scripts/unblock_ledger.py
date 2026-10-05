@@ -317,7 +317,7 @@ def latest_rejection(comments: object, trusted_login: str, item: int, stop: str)
 		user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
 		login = user.get("login") or comment.get("author_login") or ""
 		if login != trusted_login:
-			if match and int(match.group("item")) == item:
+			if rejection_item and int(rejection_item.group(1)) == item:
 				untrusted = True
 			continue
 		if any(entry["item"] == item for entry in parse_markers([comment], trusted_login)):

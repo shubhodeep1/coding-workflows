@@ -296,7 +296,7 @@ PY
 			telegram)
 				if [ "${ops_failed}" = "true" ] && [ "${close_succeeded}" != "true" ]; then
 					if [ "${ITEM_KIND}" = "project" ] && [ "$(jq -r ".ops[${idx}].level" "${ops_file}")" = "CRITICAL" ]; then
-						unblock_tg "CRITICAL" "Unblock judge could not mark project #${ITEM} for closure; label write failed (${REPOSITORY})."
+						unblock_tg "CRITICAL" "Unblock judge could not complete closure of project #${ITEM}; inspect the failed operation in the workflow log (${REPOSITORY})."
 					elif [ "${ITEM_KIND}" = "pr" ] && jq -e '.ops[0].op == "comment" and .ops[1].op == "close" and .ops[3].op == "telegram" and .ops[3].level == "WARNING"' "${ops_file}" >/dev/null 2>&1; then
 						unblock_tg "WARNING" "Unblock judge could not close untrusted PR #${ITEM}; a write failed (${REPOSITORY})."
 					fi
