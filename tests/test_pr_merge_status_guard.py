@@ -996,6 +996,8 @@ def test_push_parser_guards_real_destination(merged_branch_repo, monkeypatch, co
 @pytest.mark.parametrize("command", [
 	"git -c remote.main.url=https://github.com/o/r.git -c push.default=current push main",
 	"git -c push.default=upstream -c branch.feature/x.merge=refs/heads/feature/x push origin",
+	"git -c push.default=current push",
+	"git -c push.default=simple push",
 ])
 def test_inline_config_push_checks_effective_destination(merged_branch_repo, monkeypatch, command: str) -> None:
 	repo, _ = merged_branch_repo
@@ -1103,6 +1105,7 @@ def test_inline_push_observes_existing_branch_push_remote(merged_branch_repo, mo
 def test_positional_remote_without_inline_config_keeps_legacy_mapping(merged_branch_repo, monkeypatch) -> None:
 	repo, _ = merged_branch_repo
 	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("default branch skipped"))
+	monkeypatch.setattr(guard, "_request_confirmation", lambda *args: pytest.fail("default branch must not ask"))
 	assert guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
 		"tool_input": {"command": "git push --repo=origin main"}}) == (0, "")
 
@@ -1126,6 +1129,8 @@ def test_positional_remote_without_inline_config_keeps_legacy_mapping(merged_bra
 	"env -v GIT_CONFIG_COUNT=1 git commit -m x",
 	"env -a git GIT_CONFIG_COUNT=1 git push origin",
 	"env --argv0 git GIT_CONFIG_PARAMETERS=x git push origin",
+	"/bin/env GIT_CONFIG_PARAMETERS=x git push origin",
+	"/usr/local/bin/env GIT_CONFIG_COUNT=1 git push origin",
 	"git -c remote.main.url=$URL push origin",
 	"git -c remote.origin.push=refs/heads/feature/x:refs/heads/main push origin",
 	"git -c remote.origin.pushurl=https://github.com/o/r.git push origin",
@@ -1164,6 +1169,7 @@ def test_config_env_global_option_does_not_hide_push() -> None:
 	assert "push" in guard.git_subcommands("/usr/bin/env --default-signal=PIPE /usr/bin/git push origin")
 	assert "push" in guard.git_subcommands("env -a git git push origin")
 	assert "push" in guard.git_subcommands("env --argv0 git git push origin")
+	assert "push" in guard.git_subcommands("/bin/env GIT_CONFIG_COUNT=1 git push origin")
 
 
 @pytest.mark.parametrize("command", [
@@ -1172,6 +1178,7 @@ def test_config_env_global_option_does_not_hide_push() -> None:
 	"env -S'GIT_CONFIG_PARAMETERS=x git push origin feature/x'",
 	'env -S"git commit -m x"',
 	"env -S 'git\npush origin feature/x'",
+	"/bin/env -S 'git\npush origin feature/x'",
 ])
 def test_env_split_string_push_is_denied_when_mapping_is_unknown(command: str) -> None:
 	code, message = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})

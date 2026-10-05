@@ -1060,8 +1060,9 @@ not delete wrappers that are already present in `.github/workflows/`.
 > `git push origin HEAD:$DEST`) also asks instead of checking the checkout branch.
 > Without inline config, if `--repo` and a positional remote are both supplied,
 > the guard checks the refspecs after that remote, not the remote name as a
-> branch. If the local remote-config lookup errors rather than reporting no
-> such remote, the guard asks instead of guessing which branch the push targets.
+> branch. If the positional is not a configured remote, it is treated as a
+> refspec only when `--repo` names a configured remote; otherwise the guard
+> asks. A remote-config lookup error also asks instead of guessing.
 > With inline `git -c` options, a configured positional remote overrides
 > `--repo`; any remaining positional arguments are refspecs. The guard reads
 > the selected remote's push URL and effective `push.default`/upstream mapping,
@@ -1072,7 +1073,8 @@ not delete wrappers that are already present in `.github/workflows/`.
 > resolved safely are blocked, as are `env -S` Git writes (including attached
 > split strings), unrecognized `env` options before Git writes, and unmappable
 > inline bulk/refspec pushes. `env -a`/`--argv0` values are skipped before
-> parsing the real Git executable.
+> parsing the real Git executable. These checks also apply to path-qualified
+> `env` invocations such as `/bin/env`.
 > Inline remote-URL overrides on `git commit` are blocked so the commit check
 > still uses the checkout's repository identity. Ordinary pushes without
 > inline config retain the previous origin-based check and confirmation path.

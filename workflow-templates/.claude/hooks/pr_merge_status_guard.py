@@ -406,7 +406,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			elif name in ("GIT_DIR", "GIT_WORK_TREE"):
 				environment[name] = value
 			index += 1
-		if index < len(tokens) and tokens[index] in ("env", "/usr/bin/env"):
+		if index < len(tokens) and (tokens[index] == "env" or tokens[index].endswith("/env")):
 			index += 1
 			while index < len(tokens) and tokens[index].startswith("-"):
 				option = tokens[index]
@@ -605,10 +605,14 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 		with _git_environment(invocation.environment):
 			code, _, _ = _run(["git", "config", "--get", f"remote.{positionals[0]}.url"],
 				invocation.cwd, _GIT_TIMEOUT_SECONDS)
-		if code not in (0, 1):
+		refspecs = positionals[1:] if code == 0 else positionals
+		if code == 1:
+			with _git_environment(invocation.environment):
+				code, _, _ = _run(["git", "config", "--get", f"remote.{selected_remote}.url"],
+					invocation.cwd, _GIT_TIMEOUT_SECONDS)
+		if code != 0:
 			return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
 				"could not resolve git push positional repository; destination branch is unknown")]
-		refspecs = positionals[1:] if code == 0 else positionals
 	elif positionals:
 		with _git_environment(invocation.environment, invocation.config):
 			code, _, _ = _run(
@@ -840,7 +844,7 @@ def git_subcommands(command: str) -> set[str]:
 		index = 0
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
 			index += 1
-		if index < len(tokens) and tokens[index] in ("env", "/usr/bin/env"):
+		if index < len(tokens) and (tokens[index] == "env" or tokens[index].endswith("/env")):
 			index += 1
 			while index < len(tokens) and tokens[index].startswith("-"):
 				option = tokens[index]
@@ -1509,7 +1513,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			index = 0
 			while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
 				index += 1
-			if index < len(tokens) and tokens[index] in ("env", "/usr/bin/env") and any(
+			if index < len(tokens) and (tokens[index] == "env" or tokens[index].endswith("/env")) and any(
 				option == "-S" or option.startswith(("-S", "--split-string")) for option in tokens[index + 1:]
 			):
 				if re.search(r"\bgit\b[\s\S]*\b(?:push|commit)\b", " ".join(
