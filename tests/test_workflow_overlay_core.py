@@ -386,6 +386,25 @@ def test_trusted_overlay_ignores_checkout_override_and_copies_fragment() -> None
 		assert "overlay=present fragments=1" in proc.stdout
 
 
+def test_trusted_overlay_fetches_filtered_fragment_blob_on_demand() -> None:
+	with tempfile.TemporaryDirectory(prefix="trusted_overlay_filtered_") as td:
+		root = Path(td)
+		_checkout, trusted_root, remote = _trusted_fixture(root, overlay="---\nschema_version: workflow_overlay.v1\n---\n", fragment="Trusted appendix\n")
+		subprocess.run(["git", "-C", str(remote), "config", "uploadpack.allowFilter", "true"], check=True)
+		sys.path.insert(0, str(REPO_ROOT))
+		try:
+			from scripts import load_workflow_overlay as overlay_loader
+		finally:
+			sys.path.pop(0)
+		git_dir = root / "filtered.git"
+		with patch.dict(os.environ, {"GITHUB_SERVER_URL": root.as_uri(), "GH_TOKEN": "", "GITHUB_TOKEN": ""}):
+			sha = overlay_loader.fetch_trusted_overlay_source("owner/repo", "main", git_dir)
+			blob_oid = subprocess.check_output(["git", f"--git-dir={git_dir}", "rev-parse", f"{sha}:fragment.txt"], text=True).strip()
+			assert subprocess.run(["git", f"--git-dir={git_dir}", "cat-file", "-e", blob_oid], env={**_base_env(), "GIT_NO_LAZY_FETCH": "1"}, capture_output=True).returncode != 0
+			assert overlay_loader.materialize_trusted_file(git_dir, sha, "fragment.txt", trusted_root)
+		assert (trusted_root / "fragment.txt").read_text(encoding="utf-8") == "Trusted appendix\n"
+
+
 def test_trusted_overlay_absent_disables_checkout_overlay() -> None:
 	with tempfile.TemporaryDirectory(prefix="trusted_overlay_absent_") as td:
 		root = Path(td)
@@ -643,6 +662,7 @@ if __name__ == "__main__":
 	test_render_prompt_rejects_nonexistent_overlay_repo_root()
 	test_render_prompt_rejects_invalid_overlay_mode_names()
 	test_trusted_overlay_ignores_checkout_override_and_copies_fragment()
+	test_trusted_overlay_fetches_filtered_fragment_blob_on_demand()
 	test_trusted_overlay_absent_disables_checkout_overlay()
 	test_trusted_overlay_resolves_remote_head_without_event_and_ignores_checkout_git_env()
 	test_trusted_overlay_fetch_failure_disables_without_leaking_token()
