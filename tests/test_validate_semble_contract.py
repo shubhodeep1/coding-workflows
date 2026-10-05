@@ -275,15 +275,15 @@ def test_shared_wrapper_script_owns_bm25_implementation() -> None:
 	# inspect the shared script. Keeping them so a regression in either
 	# extraction or future renames is caught at test time.
 	wrapper = (REPO_ROOT / "scripts" / "build_semble_wrapper.sh").read_text(encoding="utf-8")
-	assert "MAX_INDEX_FILES = 5000" in wrapper
-	assert "Semble indexing skipped after {MAX_INDEX_FILES} files" in wrapper
+	installer = (REPO_ROOT / "scripts" / "install_semble.sh").read_text(encoding="utf-8")
+	assert "MAX_INDEX_FILES = 5000" in installer
+	assert "Semble indexing skipped after {MAX_INDEX_FILES} files" in installer
 	assert 'write_env_kv "SEMBLE_AVAILABLE" "true"' in wrapper
 	assert 'write_env_kv "SEMBLE_INDEX_AVAILABLE" "true"' in wrapper
 	assert 'write_env_kv "SEMBLE_BIN"' in wrapper
-	assert "def _default_index_path() -> Path:" in wrapper
-	assert 'Path(os.environ.get("SEMBLE_INDEX_PATH", str(_default_index_path())))' in wrapper
-	assert "payload.get('version', 'unknown')" in wrapper
-	assert 'print("semble 0.1.3")' not in wrapper
+	assert 'docker run --rm' in wrapper
+	assert 'pickle.load(handle)' in installer
+	assert 'pickle.load(handle)' not in wrapper
 
 
 def test_validate_process_includes_serena_bootstrap_and_prompt_hooks() -> None:

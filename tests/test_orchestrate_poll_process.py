@@ -22205,6 +22205,8 @@ def _exercise_lazy_poll_semble(
 		github_env.write_text("OUTER_ENV_UNCHANGED=true\n", encoding="utf-8")
 		(root / "scripts" / "install_semble.sh").write_text(
 			"#!/usr/bin/env bash\n"
+			f"CALL_LOG={str(call_log)!r}\n"
+			f"MOCK_SEMBLE_FAILURE={failure!r}\n"
 			'echo install >> "$CALL_LOG"\n'
 			'if [ "$MOCK_SEMBLE_FAILURE" = "install" ]; then exit 1; fi\n'
 			'if [ "$MOCK_SEMBLE_FAILURE" = "install-incomplete" ]; then exit 0; fi\n'
@@ -22214,6 +22216,8 @@ def _exercise_lazy_poll_semble(
 		if not missing_helper:
 			(root / "scripts" / "build_semble_wrapper.sh").write_text(
 				"#!/usr/bin/env bash\n"
+				f"CALL_LOG={str(call_log)!r}\n"
+				f"MOCK_SEMBLE_FAILURE={failure!r}\n"
 				'echo build >> "$CALL_LOG"\n'
 				'if [ "$MOCK_SEMBLE_FAILURE" = "build" ]; then\n'
 				'  echo SEMBLE_INDEX_AVAILABLE=false >> "$GITHUB_ENV"; exit 0\n'

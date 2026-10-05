@@ -338,13 +338,19 @@ render_judge_semble_prefetch_from_query_file() {
       return 0
     fi
     : > "${semble_install_env}" || return 0
-    if ! GITHUB_ENV="${semble_install_env}" GITHUB_PATH= bash scripts/install_semble.sh > "${RUNTIME_DIR}/semble_install.log" 2>&1 \
+    # Helpers build an isolated image and a .git-free snapshot; scrub the
+    # poller's GitHub, provider and notification credentials before both calls.
+    if ! env -i PATH="${PATH}" HOME="${HOME:-/tmp}" RUNNER_TEMP="${RUNNER_TEMP:-}" \
+      RUNTIME_DIR="${RUNTIME_DIR}" GITHUB_WORKSPACE="${GITHUB_WORKSPACE:-$PWD}" \
+      GITHUB_ENV="${semble_install_env}" bash scripts/install_semble.sh > "${RUNTIME_DIR}/semble_install.log" 2>&1 \
       || ! grep -Fxq 'SEMBLE_AVAILABLE=true' "${semble_install_env}"; then
       echo "::warning::Poll Semble install unavailable; continuing without judge prefetch." >&2
       return 0
     fi
     : > "${semble_build_env}" || return 0
-    if ! GITHUB_ENV="${semble_build_env}" GITHUB_PATH= SEMBLE_INDEX_PATH="${semble_index_path}" \
+    if ! env -i PATH="${PATH}" HOME="${HOME:-/tmp}" RUNNER_TEMP="${RUNNER_TEMP:-}" \
+      RUNTIME_DIR="${RUNTIME_DIR}" GITHUB_WORKSPACE="${GITHUB_WORKSPACE:-$PWD}" \
+      GITHUB_ENV="${semble_build_env}" SEMBLE_INDEX_PATH="${semble_index_path}" \
       SEMBLE_WRAPPER_DIR="${RUNTIME_DIR}/semble/bin" bash scripts/build_semble_wrapper.sh > "${RUNTIME_DIR}/semble_index.log" 2>&1 \
       || ! grep -Fxq 'SEMBLE_AVAILABLE=true' "${semble_build_env}" \
       || ! grep -Fxq 'SEMBLE_INDEX_AVAILABLE=true' "${semble_build_env}" \

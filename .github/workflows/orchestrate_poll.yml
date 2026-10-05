@@ -604,7 +604,7 @@ jobs:
 
           rm -rf .codex-workflow-src-main
 
-      # Semble is installed and indexed lazily by
+      # Semble is built and indexed lazily in a credential-free sandbox by
       # render_judge_semble_prefetch_from_query_file in
       # scripts/orchestrate_poll_process.sh on the first judge query, so
       # this job has no eager setup-uv / install / index steps.

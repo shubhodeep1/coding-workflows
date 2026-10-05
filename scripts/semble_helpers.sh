@@ -127,7 +127,7 @@ semble_query_block()
 	local target=""
 	local semble_bin=""
 	local semble_index=""
-	local timeout_secs="${SEMBLE_QUERY_TIMEOUT_SECS:-5}"
+	local timeout_secs="${SEMBLE_QUERY_TIMEOUT_SECS:-15}"
 	local start_ms=""
 	local elapsed_ms="0"
 	local tmp_stdout=""

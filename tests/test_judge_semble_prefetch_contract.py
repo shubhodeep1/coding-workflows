@@ -277,6 +277,9 @@ def test_orchestrate_poll_workflow_bootstraps_optional_semble_support_for_judges
     assert ': > "${semble_attempt_marker}"' in prefetch
     assert 'bash scripts/install_semble.sh' in prefetch
     assert 'bash scripts/build_semble_wrapper.sh' in prefetch
+    assert prefetch.count('env -i PATH="${PATH}" HOME="${HOME:-/tmp}"') == 2
+    assert 'GH_TOKEN="${GH_TOKEN}"' not in prefetch
+    assert 'OPENROUTER_API_KEY="${OPENROUTER_API_KEY}"' not in prefetch
     assert 'SEMBLE_BIN="${semble_wrapper_path}"' in prefetch
 
 
