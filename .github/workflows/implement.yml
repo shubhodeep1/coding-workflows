@@ -1024,7 +1024,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py workflow_failure_heal.py workflow_failure_heal_evidence.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh security_dependency.py auto_decisions.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py workflow_failure_heal.py workflow_failure_heal_evidence.py editor_git_credentials.sh validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh security_dependency.py auto_decisions.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -2078,6 +2078,7 @@ jobs:
           fi
 
       - name: Collect workflow-heal evidence
+        id: collect_heal_evidence
         if: env.SKIP_IMPLEMENT != 'true' && steps.heal_evidence_gate.outputs.enabled == 'true'
         continue-on-error: true
         env:
@@ -2096,7 +2097,23 @@ jobs:
             --default-branch "${HEAL_EVIDENCE_DEFAULT_BRANCH}"
           if [ -s "${evidence_dir}/INDEX.md" ]; then
             echo "HEAL_EVIDENCE_DIR=${evidence_dir}" >> "$GITHUB_ENV"
+            echo 'present=true' >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Derive heal-evidence scope allowlist
+        id: heal_evidence_scope
+        if: env.SKIP_IMPLEMENT != 'true' && steps.collect_heal_evidence.outputs.present == 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          result="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/workflow_failure_heal_evidence.py scope-allowlist --issue-body-file "${ISSUE_BODY_FILE}" --plan-file "${PLAN_FILE}" || echo '{}')"
+          delimiter="HEAL_SCOPE_$(date +%s%N)"
+          {
+            echo "allowlist<<${delimiter}"
+            printf '%s' "${result}" | jq -r '.allowlist[]? // empty' || true
+            echo "${delimiter}"
+            printf 'source=%s\n' "$(printf '%s' "${result}" | jq -r '.source // "none"' || echo none)"
+          } >> "$GITHUB_OUTPUT"
 
       # Claude engine (replace-claude-sessions plan Phase 5b): IMPLEMENT,
       # IMPLEMENT_REPAIR and IMPLEMENT_DIAGNOSE each resolve their engine from
@@ -2406,7 +2423,7 @@ jobs:
             cat "${IMPLEMENTATION_CONTEXT_FILE}"
             if [ -n "${HEAL_EVIDENCE_DIR:-}" ]; then
               echo
-              PYTHONDONTWRITEBYTECODE=1 python3 scripts/workflow_failure_heal_evidence.py prompt-section --evidence-dir "${HEAL_EVIDENCE_DIR}" || true
+              PYTHONDONTWRITEBYTECODE=1 python3 scripts/workflow_failure_heal_evidence.py prompt-section --format structured --evidence-dir "${HEAL_EVIDENCE_DIR}" || true
             fi
           } > "${CODEX_PROMPT_FILE}"
 
@@ -2697,6 +2714,8 @@ jobs:
             # shellcheck source=/dev/null
             source scripts/codex_thread_reuse.sh
 
+            trap 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" restore' EXIT
+
             for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex implement attempt ${attempt}/${max_attempts}..."
 
@@ -2842,6 +2861,8 @@ jobs:
             # variables on main, but a review-blocked baseline branch or an
             # unsynced integration branch checks out an older conftest.py, so
             # the workflow side has to hold on its own.
+            # heal-evidence-privileged-prompt-injection: scrub child credentials.
+            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" hide
             CODEX_THREAD_REUSE_STATE_KEY="implement" \
               CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT:-codex}" \
               CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT" \
@@ -2855,8 +2876,11 @@ jobs:
               CODEX_THREAD_REUSE_STATUS_FILE="${attempt_stall_status_file}" \
               CODEX_THREAD_REUSE_STALL_GUARD_HELPER="${CODEX_STALL_GUARD_HELPER}" \
               CODEX_THREAD_REUSE_TIMEOUT_SECS="${attempt_wall}" \
+              env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_CHAT_ID -u TG_ADMIN_CHAT_ID -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH \
               env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \
               bash scripts/codex_thread_reuse.sh direct-run || cmd_rc=$?
+
+            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" restore
 
             emit_implement_substate "implement" "implement" "Finishing" "${attempt}" "${attempt_log_file}"
 
@@ -3373,6 +3397,9 @@ jobs:
         # cleanup/exclusion rules, without mutating the real index/worktree.
         if: env.SKIP_IMPLEMENT != 'true'
         id: preflight_destructive_guard
+        env:
+          HEAL_EVIDENCE_SCOPE_LOCK: ${{ steps.collect_heal_evidence.outputs.present == 'true' && 'true' || 'false' }}
+          HEAL_EVIDENCE_SCOPE_ALLOWLIST: ${{ steps.heal_evidence_scope.outputs.allowlist }}
         run: |
           set -euo pipefail
 
@@ -3619,7 +3646,7 @@ jobs:
           # is still the temp index here). Fails OPEN — no allowlist, master
           # toggle off, or a missing helper all log-and-allow, matching the
           # missing-allowlist posture used elsewhere in this workflow.
-          if [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ]; then
+          if [ "${HEAL_EVIDENCE_SCOPE_LOCK:-false}" != "true" ] && [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ]; then
             echo "::notice::files_touched scope guard disabled (ENFORCE_FILES_TOUCHED='${ENFORCE_FILES_TOUCHED:-true}')."
           else
             scope_staged="$(git diff --cached --name-only --diff-filter=ACMRD || true)"
@@ -3627,12 +3654,19 @@ jobs:
               scope_staged_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-staged.XXXXXX")"
               scope_allowlist_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-allowlist.XXXXXX")"
               printf '%s\n' "${scope_staged}" > "${scope_staged_file}"
+              scope_input_args=(--issue-body-file "${ISSUE_BODY_FILE:-}")
+              if [ "${HEAL_EVIDENCE_SCOPE_LOCK:-false}" = "true" ]; then
+                scope_input_file="$(mktemp "${TMPDIR:-/tmp}/implement-heal-scope.XXXXXX")"
+                printf '%s\n' "${HEAL_EVIDENCE_SCOPE_ALLOWLIST:-}" > "${scope_input_file}"
+                scope_input_args=(--allowlist-file "${scope_input_file}")
+                echo "HEAL_EVIDENCE_SCOPE_LOCK lock=true entries=$(printf '%s\n' "${HEAL_EVIDENCE_SCOPE_ALLOWLIST:-}" | sed '/^$/d' | wc -l | tr -d ' ')"
+              fi
               scope_violations=""
               scope_rc=0
               if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
                 set +e
                 scope_violations="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
-                  --issue-body-file "${ISSUE_BODY_FILE:-}" \
+                  "${scope_input_args[@]}" \
                   --staged-file "${scope_staged_file}" \
                   --allowlist-out "${scope_allowlist_file}")"
                 scope_rc=$?
@@ -3640,18 +3674,24 @@ jobs:
               else
                 scope_rc=127
               fi
-              rm -f "${scope_staged_file}"
+              rm -f "${scope_staged_file}" "${scope_input_file:-}"
               case "${scope_rc}" in
                 0)
                   echo "files_touched scope guard: all staged paths fall within the issue allowlist."
                   ;;
                 10)
+                  if [ "${HEAL_EVIDENCE_SCOPE_LOCK:-false}" = "true" ]; then
+                    echo '::error::Heal-evidence scope lock requires a non-empty allowlist.'
+                    echo 'scope_violation_blocked=heal-evidence-no-allowlist' >> "$GITHUB_OUTPUT"
+                    rm -f "${scope_allowlist_file}"
+                    exit 1
+                  fi
                   echo "::notice::files_touched scope guard skipped: issue declares no files_touched allowlist."
                   ;;
                 20)
                   scope_count="$(printf '%s\n' "${scope_violations}" | sed '/^$/d' | wc -l | tr -d ' ')"
                   scope_allowlist="$(sed '/^$/d' "${scope_allowlist_file}" 2>/dev/null || true)"
-                  if [ "${ALLOW_OUT_OF_SCOPE_FILES:-false}" = "true" ]; then
+                  if [ "${HEAL_EVIDENCE_SCOPE_LOCK:-false}" != "true" ] && [ "${ALLOW_OUT_OF_SCOPE_FILES:-false}" = "true" ]; then
                     echo "::warning::files_touched scope guard: ${scope_count} staged path(s) outside the allowlist, but ALLOW_OUT_OF_SCOPE_FILES=true — allowing."
                     printf '%s\n' "${scope_violations}" | sed '/^$/d;s/^/  - /'
                   else
@@ -3672,6 +3712,12 @@ jobs:
                   fi
                   ;;
                 *)
+                  if [ "${HEAL_EVIDENCE_SCOPE_LOCK:-false}" = "true" ]; then
+                    echo "::error::Heal-evidence scope guard unavailable (exit ${scope_rc})."
+                    echo 'scope_violation_blocked=heal-evidence-guard-unavailable' >> "$GITHUB_OUTPUT"
+                    rm -f "${scope_allowlist_file}"
+                    exit 1
+                  fi
                   echo "::warning::files_touched scope guard failed open (helper exit ${scope_rc}); staged change set not scope-checked this run."
                   ;;
               esac
@@ -3698,6 +3744,7 @@ jobs:
         continue-on-error: true
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           set -euo pipefail
           echo "repaired=false" >> "$GITHUB_OUTPUT"
@@ -4086,6 +4133,7 @@ jobs:
             emit_implement_substate "implement_repair" "implement_repair" "InitializingSession" "${attempt}" "${REPAIR_LOG_FILE}"
             emit_implement_substate "implement_repair" "implement_repair" "StreamingTurn" "${attempt}" "${REPAIR_LOG_FILE}"
             # Same ledger scrub as the implementation launch above.
+            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" hide
             if ! CODEX_THREAD_REUSE_STATE_KEY="implement-repair" \
               CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex}" \
               CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT_REPAIR" \
@@ -4099,13 +4147,16 @@ jobs:
               CODEX_THREAD_REUSE_CONTINUATION_FILE="${repair_thread_reuse_continuation_file}" \
               CODEX_THREAD_REUSE_TRANSFORM_MODE="replace-prefix" \
               CODEX_THREAD_REUSE_MARKER_START="=== CAPTURED SYNTAX DIAGNOSTICS (FULL) ===" \
+              env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_CHAT_ID -u TG_ADMIN_CHAT_ID -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH \
               env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \
               bash scripts/codex_thread_reuse.sh direct-run; then
+              bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" restore
               emit_implement_substate "implement_repair" "implement_repair" "Finishing" "${attempt}" "${REPAIR_LOG_FILE}"
               echo "::warning::Post-Codex repair attempt ${attempt} failed while invoking Codex."
               emit_implement_substate "implement_repair" "implement_repair" "Failed" "${attempt}" "${REPAIR_LOG_FILE}"
               continue
             fi
+            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" restore
             emit_implement_substate "implement_repair" "implement_repair" "Finishing" "${attempt}" "${REPAIR_LOG_FILE}"
 
             tracked_strays=()
@@ -4194,6 +4245,12 @@ jobs:
           rm -f "${CAPTURE_FILE}"
           echo "repaired=true" >> "$GITHUB_OUTPUT"
 
+      - name: Restore git credentials after syntax repair
+        if: always() && env.SKIP_IMPLEMENT != 'true' && steps.post_codex_syntax_repair.outcome != 'skipped'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" restore
+
       - name: Protect workflow files from implementation edits
         if: env.SKIP_IMPLEMENT != 'true'
         id: protect_workflow_files
@@ -4281,6 +4338,9 @@ jobs:
       - name: Commit changes
         if: env.SKIP_IMPLEMENT != 'true'
         id: commit_changes
+        env:
+          HEAL_EVIDENCE_SCOPE_LOCK: ${{ steps.collect_heal_evidence.outputs.present == 'true' && 'true' || 'false' }}
+          HEAL_EVIDENCE_SCOPE_ALLOWLIST: ${{ steps.heal_evidence_scope.outputs.allowlist }}
         run: |
           set -euo pipefail
           bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"
@@ -4617,7 +4677,7 @@ jobs:
           for attempt in 1 2 3; do
             # Fetch latest remote state before pushing so local tracking refs
             # are up to date.
-            if ! git fetch --no-tags --prune origin "+refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"; then
+            if ! git -c core.hooksPath=/dev/null fetch --no-tags --prune origin "+refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"; then
               echo "Fetch attempt ${attempt} failed; using local refs."
             fi
 
@@ -4638,7 +4698,7 @@ jobs:
             fi
 
             PUSH_EXIT=0
-            git push "${PUSH_ARGS[@]}" || PUSH_EXIT=$?
+            git -c core.hooksPath=/dev/null push "${PUSH_ARGS[@]}" || PUSH_EXIT=$?
             if [ "${PUSH_EXIT}" -eq 0 ]; then
               echo "Push succeeded on attempt ${attempt}."
               exit 0
@@ -4654,8 +4714,8 @@ jobs:
               if [ "${ALLOW_FORCE_PUSH:-false}" != "true" ]; then
                 if git show-ref --verify --quiet "refs/remotes/origin/${TARGET_BRANCH}"; then
                   echo "Attempting rebase onto origin/${TARGET_BRANCH} to reconcile non-fast-forward..."
-                  if ! git rebase "origin/${TARGET_BRANCH}"; then
-                    if ! git rebase --abort; then
+                  if ! git -c core.hooksPath=/dev/null rebase "origin/${TARGET_BRANCH}"; then
+                    if ! git -c core.hooksPath=/dev/null rebase --abort; then
                       echo "::error::Rebase abort failed; refusing force-with-lease fallback."
                       exit 1
                     fi
@@ -4674,14 +4734,14 @@ jobs:
                       # Ensure the remote-tracking ref is fresh for an accurate
                       # force-with-lease pin; best-effort - if fetch fails we
                       # fall back to the previously cached remote SHA.
-                      if ! git fetch --no-tags --prune origin "+refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"; then
+                      if ! git -c core.hooksPath=/dev/null fetch --no-tags --prune origin "+refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}"; then
                         echo "Fetch before force-with-lease failed; using last-known remote SHA. Push may still fail due to stale lease."
                       fi
                       if ! REMOTE_SHA="$(git rev-parse "refs/remotes/origin/${TARGET_BRANCH}")"; then
                         echo "::error::Failed to resolve remote SHA for ${TARGET_BRANCH}; refusing force-with-lease fallback."
                         exit 1
                       fi
-                      if git push -u origin "HEAD:${TARGET_BRANCH}" \
+                      if git -c core.hooksPath=/dev/null push -u origin "HEAD:${TARGET_BRANCH}" \
                            --force-with-lease="refs/heads/${TARGET_BRANCH}:${REMOTE_SHA}"; then
                         echo "Force-with-lease push succeeded after rebase conflict on ${TARGET_BRANCH}."
                         exit 0

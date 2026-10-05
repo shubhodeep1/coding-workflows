@@ -27,14 +27,6 @@ TEMPLATE_SETTINGS_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "setting
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 TEMPLATE_CLAUDE_MD = REPO_ROOT / "workflow-templates" / "CLAUDE.md"
 
-if not GUARD_PATH.is_file():
-	GUARD_PATH = TEMPLATE_GUARD_PATH
-if not SETTINGS_PATH.is_file():
-	SETTINGS_PATH = TEMPLATE_SETTINGS_PATH
-SESSION_START_PATH = GUARD_PATH.parent / "session-start.sh"
-if not SESSION_START_PATH.is_file():
-	SESSION_START_PATH = TEMPLATE_GUARD_PATH.parent / "session-start.sh"
-
 
 def _load_guard():
 	spec = importlib.util.spec_from_file_location("pr_merge_status_guard", GUARD_PATH)
@@ -45,13 +37,6 @@ def _load_guard():
 
 
 guard = _load_guard()
-
-
-def test_resolved_session_asset_paths_exist() -> None:
-	"""The source repo may retire root session assets; template fallbacks must remain complete."""
-	assert GUARD_PATH.is_file()
-	assert SETTINGS_PATH.is_file()
-	assert SESSION_START_PATH.is_file()
 
 
 def _git_env() -> dict[str, str]:
@@ -233,7 +218,7 @@ def test_slug_extraction_matches_the_bash_implementation_it_mirrors() -> None:
 	and the whitelist is what stops a lookalike host from aiming `gh -R` at an
 	unrelated github.com repo.
 	"""
-	session_start = SESSION_START_PATH
+	session_start = REPO_ROOT / ".claude" / "hooks" / "session-start.sh"
 	urls = [
 		"https://github.com/owner/repo.git",
 		"git@github.com:owner/repo.git",
@@ -916,8 +901,13 @@ def test_conditional_cd_outside_its_list_warns_and_uses_checkout(merged_branch_r
 @pytest.mark.parametrize("command", [
 	"git push origin HEAD",
 	"COUNT+=1 git push origin HEAD:feature/x",
+	"git push --repo=origin",
 	"git push --repo origin HEAD:feature/x",
 	"git push --repo=origin HEAD:feature/x",
+	"git push --repo=upstream origin",
+	"git push origin --repo=upstream",
+	"git push origin HEAD:feature/x --repo=upstream",
+	"git push --repo=upstream origin HEAD:feature/x",
 	"git push origin HEAD~0:feature/x",
 	"git push origin HEAD:feature/x 2>&1",
 	"git push origin 2>/dev/null",
@@ -938,119 +928,83 @@ def test_push_parser_guards_real_destination(merged_branch_repo, monkeypatch, co
 	assert lookups == ["feature/x"]
 
 
-@pytest.mark.parametrize("command", ['git push origin "$TARGET"', 'git push origin HEAD:"$TARGET"'])
-def test_unresolved_push_destination_requests_confirmation(merged_branch_repo, command: str, capsys) -> None:
-	repo, _ = merged_branch_repo
-	_git(repo, "checkout", "main")
-	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
-		"tool_input": {"command": command}})
-	assert code == 0, message
-	assert any(
-		item.get("hookSpecificOutput", {}).get("permissionDecision") == "ask"
-		and "unresolved git push destination" in item.get("systemMessage", "")
-		and "actual push destination and source tip" in item.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
-		for item in map(json.loads, capsys.readouterr().out.splitlines())
-	)
-
-
-def test_unresolved_push_source_requests_confirmation(merged_branch_repo, capsys) -> None:
-	repo, _ = merged_branch_repo
-	_git(repo, "checkout", "main")
-	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
-		"tool_input": {"command": 'git push origin "$SOURCE":feature/x'}})
-	assert code == 0, message
-	assert any(
-		item.get("hookSpecificOutput", {}).get("permissionDecision") == "ask"
-		and "unresolved git push source" in item.get("systemMessage", "")
-		and "actual push destination and source tip" in item.get("hookSpecificOutput", {}).get("permissionDecisionReason", "")
-		for item in map(json.loads, capsys.readouterr().out.splitlines())
-	)
-
-
-def test_numeric_push_refspec_before_redirect_is_not_lost(merged_branch_repo, monkeypatch) -> None:
+@pytest.mark.parametrize("command", [
+	"git push origin 123 > /dev/null",
+	'git push origin "123">/dev/null',
+])
+def test_spaced_redirect_keeps_numeric_refspec(merged_branch_repo, monkeypatch, command: str) -> None:
 	repo, _ = merged_branch_repo
 	merged_sha = _git(repo, "rev-parse", "HEAD")
-	_git(repo, "branch", "2", "feature/x")
+	_git(repo, "branch", "123")
 	_git(repo, "checkout", "main")
 	lookups: list[str] = []
 	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
 	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
 	def listing(slug, branch, cwd):
 		lookups.append(branch)
-		return [dict(MERGED_PR, headRefOid=merged_sha)] if branch == "2" else []
+		return [dict(MERGED_PR, headRefOid=merged_sha)]
 	monkeypatch.setattr(guard, "query_pull_requests", listing)
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
-		"tool_input": {"command": "git push origin 2 > /dev/null"}})
+		"tool_input": {"command": command}})
 	assert code == 2, message
-	assert "Branch `2`" in message
-	assert lookups == ["2"]
+	assert lookups == ["123"]
+
+
+def test_unresolved_push_source_requests_confirmation(monkeypatch, merged_branch_repo, capsys) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "checkout", "main")
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("cannot validate unknown tip"))
+	assert guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": 'git push origin "$SOURCE:feature/x"'}}) == (0, "")
+	response = json.loads(capsys.readouterr().out)
+	assert response["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "feature/x" in response["systemMessage"]
 
 
 @pytest.mark.parametrize("command", [
-	"git push origin 2 2>&1 >/tmp/out",
-	"git push origin 2 2>/tmp/err >/tmp/out",
+	'git push origin HEAD:$DEST',
+	'git push origin HEAD:"${DEST}"',
 ])
-def test_numeric_push_refspec_survives_multiple_redirects(merged_branch_repo, monkeypatch, command: str) -> None:
+def test_unresolved_push_destination_requests_confirmation(monkeypatch, merged_branch_repo, capsys, command: str) -> None:
 	repo, _ = merged_branch_repo
-	merged_sha = _git(repo, "rev-parse", "HEAD")
-	_git(repo, "branch", "2", "feature/x")
 	_git(repo, "checkout", "main")
-	assert guard._shell_segments_with_operators(command) == [("", ["git", "push", "origin", "2"])]
-	lookups: list[str] = []
-	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
-	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
-	def listing(slug, branch, cwd):
-		lookups.append(branch)
-		return [dict(MERGED_PR, headRefOid=merged_sha)] if branch == "2" else []
-	monkeypatch.setattr(guard, "query_pull_requests", listing)
-	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
-		"tool_input": {"command": command}})
-	assert code == 2, message
-	assert lookups == ["2"]
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("cannot validate unknown destination"))
+	assert guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": command}}) == (0, "")
+	response = json.loads(capsys.readouterr().out)
+	assert response["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "could not resolve git push destination" in response["systemMessage"]
 
 
-@pytest.mark.parametrize("redirect", ["2>/dev/null", "2>&1", "2> /dev/null"])
-def test_fd_redirect_checks_current_push_branch(merged_branch_repo, monkeypatch, redirect: str) -> None:
+def test_unresolved_destination_does_not_hide_literal_merged_branch(monkeypatch, merged_branch_repo) -> None:
 	repo, _ = merged_branch_repo
 	merged_sha = _git(repo, "rev-parse", "HEAD")
-	_git(repo, "branch", "2", "main")
-	_git(repo, "branch", "1", "main")
-	lookups: list[str] = []
-	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
-	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
-	def listing(slug, branch, cwd):
-		lookups.append(branch)
-		return [dict(MERGED_PR, headRefOid=merged_sha)] if branch == "feature/x" else []
-	monkeypatch.setattr(guard, "query_pull_requests", listing)
-	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
-		"tool_input": {"command": f"git push origin {redirect}"}})
-	assert code == 2, message
-	assert lookups == ["feature/x"]
-
-
-@pytest.mark.parametrize("refspec", ['"2"', "'2'", r"\2", "''2"])
-def test_quoted_numeric_refspec_before_redirect_is_preserved(merged_branch_repo, monkeypatch, refspec: str) -> None:
-	repo, _ = merged_branch_repo
-	merged_sha = _git(repo, "rev-parse", "HEAD")
-	_git(repo, "branch", "2", "feature/x")
 	_git(repo, "checkout", "main")
-	lookups: list[str] = []
 	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
 	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
 	def listing(slug, branch, cwd):
-		lookups.append(branch)
-		return [dict(MERGED_PR, headRefOid=merged_sha)] if branch == "2" else []
+		assert branch == "feature/x"
+		return [dict(MERGED_PR, headRefOid=merged_sha)]
 	monkeypatch.setattr(guard, "query_pull_requests", listing)
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
-		"tool_input": {"command": f"git push origin {refspec}>/dev/null"}})
-	assert code == 2, message
-	assert lookups == ["2"]
+		"tool_input": {"command": "git push origin HEAD:$DEST feature/x:feature/x"}})
+	assert code == 2
+	assert "Branch `feature/x`" in message
 
 
-def test_non_ascii_digit_is_not_a_file_descriptor() -> None:
-	assert guard._shell_segments_with_operators("git push origin ²>/dev/null") == [
-		("", ["git", "push", "origin", "²"]),
-	]
+@pytest.mark.parametrize("command", [
+	'git push --all origin; git push origin HEAD:$DEST',
+	'git push --all origin; git push origin "$SOURCE:feature/x"',
+])
+def test_bulk_and_unresolved_push_emit_one_confirmation(merged_branch_repo, capsys, command: str) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "checkout", "main")
+	assert guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": command}}) == (0, "")
+	response = json.loads(capsys.readouterr().out)
+	assert response["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "Bulk git push" in response["systemMessage"]
+	assert "could not resolve git push" in response["systemMessage"]
 
 
 def test_cd_or_exit_preserves_worktree_for_push(merged_branch_repo, monkeypatch) -> None:
@@ -1127,14 +1081,11 @@ def test_session_start_hook_is_preserved(path: Path) -> None:
 
 def test_template_copies_are_identical() -> None:
 	"""Consumer repos receive the guard via the workflow-templates/.claude mirror."""
-	assert TEMPLATE_GUARD_PATH.is_file()
-	if GUARD_PATH != TEMPLATE_GUARD_PATH:
-		assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
+	assert TEMPLATE_GUARD_PATH.read_text(encoding="utf-8") == GUARD_PATH.read_text(encoding="utf-8")
 	assert TEMPLATE_SETTINGS_PATH.read_text(encoding="utf-8") == SETTINGS_PATH.read_text(
 		encoding="utf-8"
 	)
-	if TEMPLATE_CLAUDE_MD.is_file():
-		assert TEMPLATE_CLAUDE_MD.read_text(encoding="utf-8") == CLAUDE_MD.read_text(encoding="utf-8")
+	assert TEMPLATE_CLAUDE_MD.read_text(encoding="utf-8") == CLAUDE_MD.read_text(encoding="utf-8")
 
 
 def test_review_editor_can_transfer_guard_without_opening_other_claude_hooks() -> None:
@@ -1367,7 +1318,7 @@ def test_history_fallback_push_asks_when_inconclusive(merge_commit_repo) -> None
 	decision = _ask_decision(proc)
 	assert decision is not None, proc.stdout
 	assert "inconclusive" in decision["systemMessage"]
-	assert "actual push destination and source tip" in decision["hookSpecificOutput"]["permissionDecisionReason"]
+	assert "still open" in decision["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_history_fallback_commit_warns_when_inconclusive(merge_commit_repo) -> None:

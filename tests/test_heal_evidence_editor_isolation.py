@@ -1,0 +1,317 @@
+"""Contracts for the heal-evidence editor trust boundary."""
+
+import os
+import subprocess
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+WORKFLOWS = ROOT / ".github" / "workflows"
+HELPER = ROOT / "scripts" / "editor_git_credentials.sh"
+
+
+def _git(repo: Path, *args: str) -> str:
+	return subprocess.check_output(["git", "-C", str(repo), *args], text=True).strip()
+
+
+def test_git_credentials_hidden_and_restored_without_marker_secrets(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	_git(repo, "config", "--local", "http.https://github.com/.extraheader", "AUTHORIZATION: basic oldsecret")
+	support = repo / ".codex-workflow-src"
+	support.mkdir()
+	_git(support, "init", "-q")
+	_git(support, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/shubhodeep1/coding-workflows.git")
+	_git(support, "config", "--local", "http.https://github.com/.extraheader", "AUTHORIZATION: basic oldsecret")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret", GIT_DIR=str(repo / ".git"), GIT_WORK_TREE=str(repo))
+	missing_marker = subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True, text=True)
+	assert missing_marker.returncode == 0 and "reason=marker_missing" in missing_marker.stderr
+	hide = subprocess.run(["bash", str(HELPER), "hide", str(repo), str(support), str(tmp_path / "missing")], env=env, capture_output=True, text=True)
+	assert hide.returncode == 0
+	marker = tmp_path / "editor_git_credentials_hidden.txt"
+	assert "oldsecret" not in marker.read_text() + (repo / ".git" / "config").read_text()
+	assert "x-access-token" not in _git(repo, "remote", "get-url", "origin")
+	assert "oldsecret" not in (support / ".git" / "config").read_text()
+	assert "non-git" in hide.stderr
+	restore = subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True, text=True)
+	assert restore.returncode == 0
+	assert "newsecret" in _git(repo, "remote", "get-url", "origin")
+	assert "newsecret" in _git(support, "remote", "get-url", "origin")
+	assert "AUTHORIZATION: basic" in _git(repo, "config", "--local", "--get", "http.https://github.com/owner/repo.git.extraheader")
+	assert subprocess.run(["git", "-C", str(repo), "config", "--local", "--get", "http.https://github.com/.extraheader"], capture_output=True).returncode != 0
+	assert "http.https://x-access-token" not in (repo / ".git" / "config").read_text()
+	assert not marker.read_text()
+	subprocess.run(["bash", str(HELPER), "hide", str(repo)], env=env, check=True, capture_output=True)
+	env.pop("GH_TOKEN")
+	missing = subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True, text=True)
+	assert missing.returncode != 0 and "outcome=warn" in missing.stderr
+	assert "newsecret" not in (repo / ".git" / "config").read_text()
+
+
+def test_restore_does_not_send_token_to_an_editor_changed_origin(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	subprocess.run(["bash", str(HELPER), "hide"], env=env, check=True, capture_output=True)
+	_git(repo, "remote", "set-url", "origin", "https://attacker.example/repo.git")
+	proc = subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True, text=True)
+	assert proc.returncode != 0
+	assert "newsecret" not in (repo / ".git" / "config").read_text()
+	_git(repo, "remote", "set-url", "origin", "https://github.com/attacker/repo.git")
+	proc = subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True, text=True)
+	assert proc.returncode != 0
+	assert "newsecret" not in (repo / ".git" / "config").read_text()
+
+
+def test_restore_validates_an_origin_without_embedded_auth(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://github.com/owner/repo.git")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	subprocess.run(["bash", str(HELPER), "hide"], env=env, check=True, capture_output=True)
+	_git(repo, "remote", "set-url", "origin", "https://github.com/attacker/repo.git")
+	assert subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True).returncode != 0
+	assert "newsecret" not in (repo / ".git" / "config").read_text()
+
+
+def test_restore_rejects_a_repo_name_matching_regex_punctuation(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/my.repo.git")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/my.repo", GH_TOKEN="newsecret")
+	subprocess.run(["bash", str(HELPER), "hide"], env=env, check=True, capture_output=True)
+	_git(repo, "remote", "set-url", "origin", "https://github.com/owner/myXrepo.git")
+	assert subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True).returncode != 0
+	assert "newsecret" not in (repo / ".git" / "config").read_text()
+
+
+def test_restore_rejects_editor_changed_push_url(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	subprocess.run(["bash", str(HELPER), "hide"], env=env, check=True, capture_output=True)
+	_git(repo, "config", "--local", "remote.origin.pushurl", "https://github.com/attacker/repo.git")
+	proc = subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True, text=True)
+	assert proc.returncode != 0
+	assert "newsecret" not in (repo / ".git" / "config").read_text()
+
+
+def test_restore_rejects_multiple_origin_urls(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	subprocess.run(["bash", str(HELPER), "hide"], env=env, check=True, capture_output=True)
+	_git(repo, "config", "--local", "--add", "remote.origin.url", "https://github.com/attacker/repo.git")
+	_git(repo, "config", "--local", "--add", "remote.origin.url", "https://github.com/owner/repo.git")
+	assert subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True).returncode != 0
+	assert "newsecret" not in (repo / ".git" / "config").read_text()
+
+
+def test_restore_scopes_header_to_origin_without_git_suffix(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://github.com/owner/repo")
+	_git(repo, "config", "--local", "http.https://github.com/.extraheader", "AUTHORIZATION: basic oldsecret")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	subprocess.run(["bash", str(HELPER), "hide"], env=env, check=True, capture_output=True)
+	subprocess.run(["bash", str(HELPER), "restore"], env=env, check=True, capture_output=True)
+	assert "AUTHORIZATION: basic" in _git(repo, "config", "--local", "--get", "http.https://github.com/owner/repo.extraheader")
+
+
+def test_hide_rejects_an_explicit_push_url_before_editor_launch(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	_git(repo, "config", "--local", "remote.origin.pushurl", "https://x-access-token:oldsecret@github.com/attacker/repo.git")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	result = subprocess.run(["bash", str(HELPER), "hide"], env=env, capture_output=True)
+	assert result.returncode != 0
+	assert "oldsecret" in (repo / ".git" / "config").read_text()
+
+
+def test_hide_rejects_preexisting_push_url_rewrite(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	_git(repo, "config", "--local", "url.https://github.com/attacker/repo.git.pushInsteadOf", "https://github.com/owner/repo.git")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	result = subprocess.run(["bash", str(HELPER), "hide"], env=env, capture_output=True)
+	assert result.returncode != 0
+	assert "oldsecret" in (repo / ".git" / "config").read_text()
+
+
+def test_restore_rejects_editor_changed_push_url_rewrite(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	subprocess.run(["bash", str(HELPER), "hide"], env=env, check=True, capture_output=True)
+	_git(repo, "config", "--local", "url.https://github.com/attacker/repo.git.pushInsteadOf", "https://github.com/owner/repo.git")
+	result = subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True)
+	assert result.returncode != 0
+	assert "newsecret" not in (repo / ".git" / "config").read_text()
+
+
+def test_hide_fails_when_an_unrestored_marker_exists(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	subprocess.run(["bash", str(HELPER), "hide"], env=env, check=True, capture_output=True)
+	assert subprocess.run(["bash", str(HELPER), "hide"], env=env, capture_output=True).returncode != 0
+	assert "oldsecret" not in (repo / ".git" / "config").read_text()
+
+
+def test_hide_skips_non_checkout_inside_parent_repository(tmp_path: Path) -> None:
+	parent = tmp_path / "parent"
+	parent.mkdir()
+	_git(parent, "init", "-q")
+	_git(parent, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	nested = parent / "not-a-checkout"
+	nested.mkdir()
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(nested), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	result = subprocess.run(["bash", str(HELPER), "hide"], env=env, capture_output=True, text=True)
+	assert result.returncode == 0 and "non-git" in result.stderr
+	assert "oldsecret" in _git(parent, "remote", "get-url", "origin")
+
+
+def test_restore_rejects_untrusted_extraheader_scope(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	_git(repo, "config", "--local", "http.https://github.com/attacker/repo.extraheader", "AUTHORIZATION: basic oldsecret")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	subprocess.run(["bash", str(HELPER), "hide"], env=env, check=True, capture_output=True)
+	result = subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True)
+	assert result.returncode != 0
+	assert "newsecret" not in (repo / ".git" / "config").read_text()
+
+
+def test_hide_fails_without_trusted_repository_identity(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GH_TOKEN="newsecret")
+	env.pop("GITHUB_REPOSITORY", None)
+	result = subprocess.run(["bash", str(HELPER), "hide"], env=env, capture_output=True)
+	assert result.returncode != 0
+	assert "oldsecret" in (repo / ".git" / "config").read_text()
+
+
+def test_restore_validates_every_checkout_before_injecting_any_token(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	support = repo / ".codex-workflow-src"
+	support.mkdir()
+	_git(support, "init", "-q")
+	_git(support, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/shubhodeep1/coding-workflows.git")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	subprocess.run(["bash", str(HELPER), "hide"], env=env, check=True, capture_output=True)
+	_git(support, "remote", "set-url", "origin", "https://github.com/attacker/repo.git")
+	result = subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True)
+	assert result.returncode != 0
+	assert "newsecret" not in (repo / ".git" / "config").read_text()
+	assert "newsecret" not in (support / ".git" / "config").read_text()
+
+
+def test_restore_rejects_marker_header_without_a_validated_origin(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	support = repo / ".codex-workflow-src"
+	support.mkdir()
+	_git(support, "init", "-q")
+	_git(support, "remote", "add", "origin", "https://github.com/shubhodeep1/coding-workflows.git")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	subprocess.run(["bash", str(HELPER), "hide"], env=env, check=True, capture_output=True)
+	marker = tmp_path / "editor_git_credentials_hidden.txt"
+	marker.write_text(f"{repo}\torigin\n{support}\textraheader:http.https://github.com/.extraheader\n")
+	result = subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True, text=True)
+	assert result.returncode != 0 and "reason=header_without_origin" in result.stderr
+	assert "newsecret" not in (repo / ".git" / "config").read_text()
+	assert "newsecret" not in (support / ".git" / "config").read_text()
+
+
+def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
+	implement = (WORKFLOWS / "implement.yml").read_text()
+	plan = (WORKFLOWS / "plan.yml").read_text()
+	assert "editor_git_credentials.sh" in implement and "editor_git_credentials.sh" in plan
+	assert "steps.collect_heal_evidence.outputs.present == 'true'" in implement
+	for step in ("Preflight destructive-commit guard", "Commit changes"):
+		block = implement.split(f"      - name: {step}\n", 1)[1].split("      - name: ", 1)[0]
+		assert "HEAL_EVIDENCE_SCOPE_LOCK: ${{ steps.collect_heal_evidence.outputs.present" in block
+		assert "HEAL_EVIDENCE_SCOPE_ALLOWLIST: ${{ steps.heal_evidence_scope.outputs.allowlist }}" in block
+	assert implement.count('editor_git_credentials.sh" hide') == 2
+	assert implement.count('editor_git_credentials.sh" restore') >= 2
+	assert "if: always() && env.SKIP_IMPLEMENT != 'true' && steps.post_codex_syntax_repair.outcome != 'skipped'" in implement
+	assert "--format structured" in implement
+	assert "--format structured" in (ROOT / "scripts" / "run_plan_codex.sh").read_text()
+	assert "--format structured" not in (WORKFLOWS / "clarify.yml").read_text()
+	repair = implement.split("      - name: Attempt post-Codex syntax repair\n", 1)[1].split("      - name: ", 1)[0]
+	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in repair
+	assert repair.count('editor_git_credentials.sh" restore') == 2
+	assert repair.index('editor_git_credentials.sh" restore') < repair.index('echo "::warning::Post-Codex repair attempt')
+	assert implement.count('env -u GH_TOKEN -u GH_PAT') == 2
+	assert implement.count('-u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH \\') == 2
+	plan_runner = (ROOT / "scripts" / "run_plan_codex.sh").read_text()
+	assert 'ACTIONS_ID_TOKEN_REQUEST_URL HEAL_EVIDENCE_DIR GITHUB_ENV GITHUB_PATH' in plan_runner
+	assert '-u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH codex' in plan_runner
+	assert 'git -c core.hooksPath=/dev/null commit' in (ROOT / "scripts" / "implement_commit_changes.sh").read_text()
+	assert implement.count('git -c core.hooksPath=/dev/null push') == 2
+	assert implement.count('git -c core.hooksPath=/dev/null fetch') == 2
+	assert 'git -c core.hooksPath=/dev/null rebase' in implement
+
+
+def test_review_workspace_accepts_only_the_known_helper_path() -> None:
+	from scripts.review_untrusted_workspace import allowed
+
+	assert allowed("scripts/editor_git_credentials.sh")
+	assert not allowed("scripts/other_credentials.sh")
+
+
+def test_credentialed_commit_disables_editor_written_hook(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "config", "user.email", "test@example.invalid")
+	_git(repo, "config", "user.name", "test")
+	(repo / "README.md").write_text("safe\n")
+	_git(repo, "add", "README.md")
+	hook = repo / ".git" / "hooks" / "pre-commit"
+	hook.write_text("#!/bin/sh\nexit 1\n")
+	hook.chmod(0o755)
+	_git(repo, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "safe")
+	assert _git(repo, "show", "--format=", "--name-only", "HEAD") == "README.md"
+
+
+def test_editor_credential_scrub_retains_model_and_thread_settings(tmp_path: Path) -> None:
+	command = (
+		"CODEX_THREAD_REUSE_STATE_KEY=implement env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN "
+		"-u TG_BOT_SECRET -u TG_CHAT_ID -u TG_ADMIN_CHAT_ID -u ACTIONS_RUNTIME_TOKEN "
+		"-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR "
+		"-u GITHUB_ENV -u GITHUB_PATH env | grep -E '^(GH_TOKEN|GH_PAT|TG_BOT_SECRET|ACTIONS_RUNTIME_TOKEN|HEAL_EVIDENCE_DIR|GITHUB_ENV|GITHUB_PATH|OPENROUTER_API_KEY|CODEX_THREAD_REUSE_STATE_KEY)='"
+	)
+	env = dict(os.environ, GH_TOKEN="test", GH_PAT="test", TG_BOT_SECRET="test", ACTIONS_RUNTIME_TOKEN="test", HEAL_EVIDENCE_DIR="/tmp/untrusted", GITHUB_ENV="/tmp/runner-env", GITHUB_PATH="/tmp/runner-path", OPENROUTER_API_KEY="model")
+	proc = subprocess.run(["bash", "-c", command], env=env, cwd=tmp_path, capture_output=True, text=True)
+	assert proc.returncode == 0
+	assert proc.stdout.splitlines() == ["OPENROUTER_API_KEY=model", "CODEX_THREAD_REUSE_STATE_KEY=implement"] or set(proc.stdout.splitlines()) == {"OPENROUTER_API_KEY=model", "CODEX_THREAD_REUSE_STATE_KEY=implement"}
