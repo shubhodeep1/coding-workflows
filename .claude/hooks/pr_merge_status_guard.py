@@ -89,6 +89,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections import deque
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -246,6 +247,13 @@ def _shell_segments(command: str) -> list[list[str]]:
 	return segments
 
 
+def _is_unquoted_fd_prefix(command: str, digits: str, operator: str) -> bool:
+	"""Only recognize a literal descriptor immediately before a redirect."""
+	return re.search(
+		r"(?:^|[\s;&|()])" + re.escape(digits) + re.escape(operator[0]), command
+	) is not None
+
+
 def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	"""Return simple commands and the operator preceding each one.
 
@@ -260,22 +268,41 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	segment: list[str] = []
 	operator = ""
 	redirect_target = False
+	last_token_attached_redirect = False
 	for token in lexer:
 		if redirect_target:
 			redirect_target = False
+			last_token_attached_redirect = False
 			continue
 		if token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token):
-			if segment and segment[-1].isdigit():
+			if (
+				segment and token[0] in "<>" and last_token_attached_redirect
+				and re.fullmatch(r"[0-9]+", segment[-1])
+				# The raw-text check excludes quoted digits ("12">x). A repeated
+				# unquoted descriptor elsewhere can still match; keep this parser
+				# conservative without changing its shell-tokenization contract.
+				and _is_unquoted_fd_prefix(command, segment[-1], token)
+			):
 				segment.pop()
 			redirect_target = True
+			last_token_attached_redirect = False
 			continue
 		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
 			if segment:
 				result.append((operator, segment))
 				segment = []
 			operator = token
+			last_token_attached_redirect = False
 		else:
 			segment.append(token)
+			# shlex buffers immediately adjacent punctuation; whitespace leaves
+			# this deque empty. If the private buffer changes, retain the word.
+			pushback_chars = getattr(lexer, "_pushback_chars", None)
+			last_token_attached_redirect = (
+				isinstance(pushback_chars, deque)
+				and bool(pushback_chars)
+				and pushback_chars[0] in "<>"
+			)
 	if segment:
 		result.append((operator, segment))
 	return result

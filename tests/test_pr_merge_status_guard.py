@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -89,6 +90,30 @@ def test_unguarded_commands_are_ignored(command: str) -> None:
 
 def test_unbalanced_quotes_do_not_raise() -> None:
 	assert guard.git_subcommands("git commit -m 'unterminated") == set()
+
+
+@pytest.mark.parametrize(("command", "expected"), [
+	("git push origin 123 > /dev/null", ["git", "push", "origin", "123"]),
+	("git push origin 123 >/dev/null", ["git", "push", "origin", "123"]),
+	("git push origin 123 2>&1", ["git", "push", "origin", "123"]),
+	("git push origin 7 &>/dev/null", ["git", "push", "origin", "7"]),
+	('git push origin "12">x', ["git", "push", "origin", "12"]),
+	("git push origin 2>/dev/null", ["git", "push", "origin"]),
+	("git push origin 123>x", ["git", "push", "origin"]),
+	("git push origin ² > x", ["git", "push", "origin", "²"]),
+])
+def test_numeric_push_target_before_redirect(command: str, expected: list[str]) -> None:
+	assert guard._shell_segments_with_operators(command) == [("", expected)]
+
+
+def test_shlex_pushback_distinguishes_attached_redirect() -> None:
+	for command, expected in (("2>/dev/null", ">"), ("123 > x", "")):
+		lexer = shlex.shlex(command, posix=True, punctuation_chars=guard._SHELL_PUNCTUATION_CHARS)
+		lexer.commenters = ""
+		lexer.whitespace = " \t\r"
+		lexer.whitespace_split = True
+		assert next(lexer) == command.split(">", 1)[0].strip()
+		assert "".join(lexer._pushback_chars) == expected
 
 
 @pytest.mark.parametrize(
@@ -921,6 +946,27 @@ def test_push_parser_guards_real_destination(merged_branch_repo, monkeypatch, co
 		"tool_input": {"command": command}})
 	assert code == 2, message
 	assert lookups == ["feature/x"]
+
+
+@pytest.mark.parametrize("command", [
+	"git push origin 123 > /dev/null",
+	"git push origin 123 2>&1",
+])
+def test_numeric_push_refspec_guards_merged_branch(merged_branch_repo, monkeypatch, command: str) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "branch", "123", merged_sha)
+	lookups: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		lookups.append(branch)
+		return [dict(MERGED_PR, headRefOid=merged_sha)] if branch == "123" else []
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": command}})
+	assert code == 2, message
+	assert lookups == ["123"]
 
 
 def test_cd_or_exit_preserves_worktree_for_push(merged_branch_repo, monkeypatch) -> None:
