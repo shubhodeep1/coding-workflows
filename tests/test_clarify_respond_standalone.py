@@ -358,12 +358,32 @@ def test_from_answers_handles_strategies_guard_overrides_and_missing_decisions()
 	assert bare["decisions"][0]["why"] == "Every read-profile role"
 
 
-@pytest.mark.parametrize("section_header", ["**RATIONALE:**", "## RATIONALE:", "EXECUTION PLAN (required for any non-letter decision):"])
+@pytest.mark.parametrize("section_header", [
+	"**RATIONALE:**", "## RATIONALE:", "EXECUTION PLAN (required for any non-letter decision):",
+	"ESCALATION (required for any ESCALATE decision):", "SETUP REQUIRED (only when a decision relies on a placeholder):",
+	"**DATA-PROVISION GUARD OVERRIDES:**",
+])
 def test_data_guard_ignores_lettered_lines_outside_decisions(section_header: str) -> None:
 	guard_spec = importlib.util.spec_from_file_location("clarify_data_provision_guard", ROOT / "scripts" / "clarify_data_provision_guard.py")
 	guard_module = importlib.util.module_from_spec(guard_spec)
 	guard_spec.loader.exec_module(guard_module)
 	assert guard_module._parse_answers(f"DECISIONS:\nQ1: A\n{section_header}\nQ1: B\n") == {"Q1": ["A"]}
+
+
+def test_data_guard_rewrites_emphasized_decisions_before_posting(tmp_path: Path) -> None:
+	questions = QUESTIONS.replace("A dedicated bot identity; provision its credentials privately", "Provide the PR URL for verification")
+	questions = questions.replace("Disable verdict-triggered auto-merge", "Skip this verification")
+	clarification = tmp_path / "questions.txt"
+	clarification.write_text(questions, encoding="utf-8")
+	answers = tmp_path / "answer.txt"
+	answers.write_text("**DECISIONS:**\n**Q1**: **B**\n**Q2**: **A**\n\n**RATIONALE:**\nQ2: This needs a URL.\n", encoding="utf-8")
+	result = subprocess.run(
+		[sys.executable, str(ROOT / "scripts" / "clarify_data_provision_guard.py"),
+		 "--clarification-file", str(clarification), "--answers-file", str(answers)],
+		capture_output=True, text=True, check=True,
+	)
+	assert "Q2: B\n" in result.stdout and "Q2: overrode A -> B" in result.stdout
+	assert auto.from_answers(questions, result.stdout)["answers"] == "Q1: B\nQ2: B\n"
 
 
 def test_setup_items_cannot_inject_a_comment_delimiter_or_reference_an_issue() -> None:
