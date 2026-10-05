@@ -86,7 +86,7 @@ def test_thread_reuse_launches_through_the_isolated_launcher():
 		("scripts/implement_diagnose_post_codex_failure.sh", 'diagnose_codex_cmd=(bash "${CODEX_ISOLATED_EXEC}" run --mode read-only --)'),
 		("scripts/workflow_retro_fanout.sh", 'codex_isolated_exec.sh" run --mode read-only --workdir "${REPO_ROOT}"'),
 		("scripts/check_failure_triage.sh", 'codex_isolated_exec.sh" run --mode read-only --'),
-		("scripts/security_audit.sh", 'codex_isolated_exec.sh" run --mode read-only --'),
+		("scripts/security_audit.sh", 'codex_isolated_exec.sh" run --mode read-only ${audit_isolated_args[@]+"${audit_isolated_args[@]}"} --'),
 		("scripts/workflow_failure_heal_intake.sh", 'heal_isolated_args=(run --mode read-only)'),
 		("scripts/validation_discovery_bootstrap.py", 'CODEX_ISOLATED_EXEC = Path(__file__).resolve().parent / "codex_isolated_exec.sh"'),
 		("scripts/orchestrate_poll_process.sh", 'ORCH_CODEX_ISOLATED_EXEC="${ORCH_SCRIPTS_ROOT}/codex_isolated_exec.sh"'),
