@@ -2694,7 +2694,8 @@ and resolver chains, a failed project) now goes to the unblock judge
   a failed close is logged for recovery. A failed scope edit cannot be followed by `/approved`. A PR `reissue`
   creates a standalone replacement before closing the PR;
   a standalone `ai:security` issue reissue copies its finding marker and label
-  to the replacement before closing the original. If the marker is invalid or
+  to the replacement before closing the original. If the marker is malformed,
+  no replacement is created and the original stays open. If the marker is
   missing, or the issue belongs to a project, the original finding stays open.
   PR project fix-ups and verdict history use the GitHub-reported
   `orchestrator/project-<n>` base. Issue project fix-ups require the

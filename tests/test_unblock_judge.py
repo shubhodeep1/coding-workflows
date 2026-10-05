@@ -604,6 +604,7 @@ def test_security_reissue_carries_canonical_metadata() -> None:
 	("<!-- ai:security-finding:abc-1 -->\nIntegration branch: `a..b`", "abc-1"),
 	("- Depends on: #42", None),
 	("<!-- ai:security-finding:abc-1 -->\n- Depends on: #42 <!-- ai:security-finding:other -->", "abc-1"),
+	("<!-- ai:security-finding:abc def -->\n- Integration branch: `claude/x`\n- Depends on: #42", "abc def"),
 ])
 def test_security_reissue_refuses_unsafe_metadata(body: str, finding_id: str | None) -> None:
 	ctx = _ctx(labels=["ai:security", "ai:blocked"], security_source_body=body, security_finding_id=finding_id)
@@ -1444,11 +1445,10 @@ def test_non_security_issue_context_has_no_security_source_body(tmp_path: Path) 
 
 
 def test_security_reissue_with_unsafe_marker_keeps_the_original_open(tmp_path: Path) -> None:
-	item = dict(ISSUE, labels=ISSUE["labels"] + [{"name": "ai:security"}], body="<!-- ai:security-finding:abc def -->")
+	item = dict(ISSUE, labels=ISSUE["labels"] + [{"name": "ai:security"}], body="<!-- ai:security-finding:abc def -->\n- Integration branch: `claude/x`\n- Depends on: #42")
 	result, state = _judge(tmp_path, item, verdict={"verdict": "reissue", "reason": "r", "instructions": "correct spec"})
 	assert "verdict=reissue round=1 outcome=acted" in result.stdout, result.stderr
-	assert state["created"][0]["labels[]"] == "ai:security"
-	assert not state["created"][0]["body"].startswith("<!-- ai:security-finding:")
+	assert state["created"] == []
 	assert not any(fields.get("state") == "closed" for _, fields in state["patched"])
 	assert json.loads((tmp_path / "rt" / "context.json").read_text(encoding="utf-8"))["security_finding_id"] == "abc def"
 

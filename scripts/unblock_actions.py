@@ -160,6 +160,8 @@ def _context(raw: object) -> dict:
 		_security_reissue_metadata(security_source_body, labels, item)
 		if security_source_body is not None else (None, None, False)
 	)
+	if security_source_body is not None and SECURITY_FINDING_MARKER_PREFIX in security_source_body and finding_id is None:
+		security_metadata_unsafe = True
 	return {
 		"repo": str(raw.get("repo") or ""),
 		"kind": kind,
@@ -364,7 +366,7 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 		security_issue = _is_security_issue(ctx)
 		if security_issue and not ctx["tracking"] and ctx.get("security_metadata_unsafe"):
 			return [
-				{"op": "comment", "issue": item, "body": "This security finding stays open: its dependency or target-branch metadata could not be carried to a replacement safely, so no re-issue was created."},
+				{"op": "comment", "issue": item, "body": "This security finding stays open: its finding marker, dependency or target-branch metadata could not be carried to a replacement safely, so no re-issue was created."},
 				{"op": "telegram", "level": "WARNING", "text": f"Unblock judge could not safely re-issue security finding #{item}; its metadata needs correction."},
 			]
 		if security_issue and not ctx["tracking"] and ctx.get("security_finding_id"):
