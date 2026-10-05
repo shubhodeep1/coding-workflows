@@ -72,10 +72,12 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `.claude/hooks/pr_merge_status_guard.py`, and
    `scripts/claude_settings.json.tmpl`. It also admits each
    `.claude/commands/<name>.md` whose `workflow-templates/.claude/commands/<name>.md`
-   twin exists in the host checkout when the snapshot is taken (checked on
-   the host, never in the editor's workspace). The admitted command set is
-   fixed for the whole run; later transfers and retries cannot widen it.
-   The editor can still repair a template parity failure; other `.github/ai/`
+   twin exists both in the host checkout and the verified workflow-support
+   checkout (`GITHUB_WORKSPACE/.codex-workflow-src`) when the snapshot is
+   taken. A PR-added twin absent from trusted support cannot authorize a new
+   command; missing support admits none. The admitted command set is fixed
+   for the whole run; later transfers and retries cannot widen it. The editor
+   can still repair parity for existing supported commands; other `.github/ai/`
    and `.claude/` files remain excluded from
    snapshot and transfer. An editor write to an excluded file in an
    admitted directory is dropped; a new directory outside the admitted ones

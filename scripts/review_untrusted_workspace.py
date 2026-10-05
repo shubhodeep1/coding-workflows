@@ -154,7 +154,11 @@ def snapshot(host, workspace, manifest, host_git_dir=None):
 		git += ["--git-dir", str(host_git_dir), "--work-tree", str(host)]
 	for cmd in (git + ["ls-files", "-z"], git + ["ls-files", "--others", "--exclude-standard", "-z"]):
 		paths.update(p.decode("utf-8") for p in subprocess.check_output(cmd, cwd=host, env=env).split(b"\0") if p)
-	commands = template_command_inventory(host)
+	# The PR worktree can add twins before snapshot; only names present in the
+	# verified workflow-support checkout may authorize a command for this run.
+	trusted_checkout = os.environ.get("GITHUB_WORKSPACE")
+	commands = (template_command_inventory(Path(trusted_checkout) / ".codex-workflow-src") &
+		template_command_inventory(host)) if trusted_checkout else frozenset()
 	baseline = {}
 	total = 0
 	for name in sorted(paths):
