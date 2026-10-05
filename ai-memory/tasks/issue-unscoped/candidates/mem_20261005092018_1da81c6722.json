@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description states \"tests/test_claude_engine_utility_roles.py (28 tests, own ci.yml step)\" covering \"the heal block run against a stand-in engine (Claude, codex, unavailable, crash)\".\n  expected_change_site: tests/test_claude_engine_utility_roles.py _run_heal_block fixture\n  confidence=[3]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: tests/test_claude_engine_utility_roles.py only initializes a git repository and supplies HEAL_SUPPORT_SHA for the success path; no test exercises rejection cases such as a mismatched or unset HEAL_SUPPORT_SHA, dirty working tree, untracked/ignored files, or git rev-parse failure at scripts/workflow_failure_heal_intake.sh:704-712.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: The PR description claims \"tests/test_claude_engine_utility_roles.py (28 tests, own ci.yml step)\" covering \"the heal block run against a stand-in engine (Claude, codex, unavailable, crash)\".\n  Expected change site: tests/test_claude_engine_utility_roles.py \u2014 coverage matrix for the integrity guard at scripts/workflow_failure_heal_intake.sh:704-712\n  Evidence of absence: The last run only adds a Git repository fixture and supplies HEAL_SUPPORT_SHA=heal_support_sha in the test env, which makes the success path pass. The production guard at scripts/workflow_failure_heal_intake.sh:704-712 has four short-circuit conditions (HEAL_SUPPORT_SHA empty, HEAD != HEAL_SUPPORT_SHA, untracked/ignored files present, git rev-parse failure) that all map to exit 86, but no test exercises any of these failure branches. The test runner never sees the guard actually rejecting a tampered support checkout.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: The PR description states \"tests/test_claude_engine_utility_roles.py (28 tests, own ci.yml step)\" covering \"the heal block run against a stand-in engine (Claude, codex, unavailable, crash)\".\n  Expected change site: tests/test_claude_engine_utility_roles.py _run_heal_block fixture\n  Evidence of absence: The last run diff updates the fixture to initialize a git repository and supply HEAL_SUPPORT_SHA, which the production code requires at scripts/workflow_failure_heal_intake.sh:704-712. The fixture now satisfies the happy path (valid SHA, clean git state). However, no test case exercises the failure path where the guard trips: a mismatched HEAL_SUPPORT_SHA, an unset HEAL_SUPPORT_SHA with no GITHUB_SHA fallback, or a dirty git working tree. The production code exits 86 in these cases, but the test suite does not verify that behavior. The PR description's claim of covering \"the heal block run against a stand-in engine\" is satisfied for the success path, but the defensive guard's rejection path remains untested.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "b745ea2e919ef7f30e3c26f4d9371f15c205bdde880e7ea52423a36797d9ae69",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6209,
+    "run_id": "37285309791",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37285309791",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005092018_1da81c6722",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6209,
+    "run_id": "37285309791"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T09:20:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
