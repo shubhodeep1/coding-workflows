@@ -159,7 +159,7 @@ export CODEX_STALL_HEARTBEAT_DIR_EFFECTIVE="${stall_heartbeat_dir}"
 export CODEX_STALL_RUN_ID="${stall_run_id}"
 export CODEX_STALL_ISSUE="${stall_issue}"
 
-exec python3 -c "$(cat <<'PY'
+exec env PYTHONSAFEPATH=1 python3 -c "$(cat <<'PY'
 from __future__ import annotations
 
 import errno

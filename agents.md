@@ -495,12 +495,31 @@ a new value, add it to the appropriate overrides file with a
   source/workspace/PR-metadata SHA mismatch, or a branch that advances during
   fetch, sets `AUTOFIX_STALE_BASE_SKIP` so no reviewer, editor or merge acts
   on stale files.
+- Before host-side pre-review helpers run against the PR tree, `review_autofix.yml`
+  requires a Python that honors `PYTHONSAFEPATH`. The Semble and Serena
+  bootstrap import probes run from private neutral directories; Serena's
+  trusted absolute-path handshake probe retains the project cwd for
+  `--project-from-cwd` while clearing `PYTHONPATH` and passing safe-path to its
+  server subprocess.
+  Serena requires an absolute `HOME` for Codex config writes; a relative or
+  missing `HOME` leaves the tool unavailable rather than writing under the PR tree.
+  Other pre-review `python3 -c`, `-m` and stdin calls set `PYTHONSAFEPATH=1`
+  per call, including consolidator, reviewer and host-side editor helpers;
+  reviewer Python imports require absolute trusted support directories rather
+  than falling back to the PR checkout. The host-side partial-finalize timeout
+  extractor also uses safe-path when reading the workflow YAML. Script-file
+  imports and the checkout's Git auth are unchanged.
 - `orchestrate.yml` and `orchestrate_clarify_respond.yml` also assemble static
   context on the host. They reject symlinked required instructions and pipeline
   files before writing prompt output, and omit symlinked local agents files,
   `README.md`, and the optional overflow-runbook pointer with warnings. Regular
-  files retain their existing content and `AGENTS.md` precedence in the
+  files retain their existing content and local agents-file precedence in the
   clarify-respond workflow. Checkout credential handling is unchanged.
+- Review's optional break-glass scan and conflict-resolution prompt rendering
+  also use safe-path Python in the credential-bearing checkout. The conflict
+  preparation path can run before reviewers when pre-review conflict resolution
+  is enabled; resolver retries remain host-side but no longer import checkout
+  modules through Python's implicit current-directory entry.
 - `internal-review.yml` itself must not forward a `with:` input that
   `review_autofix.yml` on `main` does not define yet: GitHub validates the
   call against `main`'s file, so every review run on the PR adding the input

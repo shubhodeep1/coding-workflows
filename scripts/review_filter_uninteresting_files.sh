@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PYTHONDONTWRITEBYTECODE=1 python3 - "$@" <<'PY'
+PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "$@" <<'PY'
 from __future__ import annotations
 
 import argparse

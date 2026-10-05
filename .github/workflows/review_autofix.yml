@@ -2586,6 +2586,17 @@ jobs:
             fi
           done
 
+      - name: Require safe-path Python before PR-tree helpers
+        run: |
+          set -euo pipefail
+          safe_python_dir="$(mktemp -d)" || { echo "::error::Unable to create neutral Python directory."; exit 1; }
+          trap 'rm -rf -- "${safe_python_dir}"' EXIT
+          cd -- "${safe_python_dir}"
+          if ! PYTHONSAFEPATH=1 python3 -c 'import sys; raise SystemExit(0 if sys.flags.safe_path else 1)'; then
+            echo "::error::Review runner Python does not honor PYTHONSAFEPATH; refusing PR-tree helper execution."
+            exit 1
+          fi
+
       - name: Show disk usage (post checkout)
         run: df -h /
 
@@ -3292,7 +3303,7 @@ jobs:
           RESUME_ROUND_LIMIT="${resume_round_limit}" \
           CURRENT_PREVIOUS_REVIEWS_DIR="${PREVIOUS_REVIEWS_DIR:-}" \
           CURRENT_RUNTIME_DIR="${RUNTIME_DIR:-}" \
-          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' > "${resume_env_file}"
+          PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' > "${resume_env_file}"
           from __future__ import annotations
 
           import json
@@ -5018,7 +5029,7 @@ jobs:
             if [ ! -f "${workflow_timeout_source_path}" ]; then
               workflow_timeout_source_path=".github/workflows/review_autofix.yml"
             fi
-            if ! read -r job_timeout_minutes resolver_timeout_minutes < <(PYTHONDONTWRITEBYTECODE=1 python3 -c 'from pathlib import Path; import sys, yaml; workflow = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8")) or {}; jobs = workflow.get("jobs") or {}; codex_agent_job = jobs.get("codex-agent") or {}; job_timeout_minutes = codex_agent_job.get("timeout-minutes"); resolver_timeout_minutes = next((step.get("timeout-minutes") for step in (codex_agent_job.get("steps") or []) if isinstance(step, dict) and step.get("name") == "Run Codex resolver, validate, stage, commit"), None); sys.exit(1) if not isinstance(job_timeout_minutes, int) or not isinstance(resolver_timeout_minutes, int) else print(job_timeout_minutes, resolver_timeout_minutes)' "${workflow_timeout_source_path}"); then
+            if ! read -r job_timeout_minutes resolver_timeout_minutes < <(PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 -c 'from pathlib import Path; import sys, yaml; workflow = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8")) or {}; jobs = workflow.get("jobs") or {}; codex_agent_job = jobs.get("codex-agent") or {}; job_timeout_minutes = codex_agent_job.get("timeout-minutes"); resolver_timeout_minutes = next((step.get("timeout-minutes") for step in (codex_agent_job.get("steps") or []) if isinstance(step, dict) and step.get("name") == "Run Codex resolver, validate, stage, commit"), None); sys.exit(1) if not isinstance(job_timeout_minutes, int) or not isinstance(resolver_timeout_minutes, int) else print(job_timeout_minutes, resolver_timeout_minutes)' "${workflow_timeout_source_path}"); then
               job_timeout_minutes="240"
               resolver_timeout_minutes="170"
             fi
@@ -5943,7 +5954,7 @@ jobs:
             exit 0
           fi
 
-          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' >> "$GITHUB_ENV"
+          PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' >> "$GITHUB_ENV"
           import json
           import os
           import re
