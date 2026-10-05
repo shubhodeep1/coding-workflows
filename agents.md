@@ -90,7 +90,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
    three PR-derived Claude review roles run through the editor's network-isolated
    sandbox and credential-free relay: the consolidator uses its prepared
    read-only snapshot, and the judge and resolver prepare fresh snapshots
-   without installing dependencies. Host `claude_run` refuses all four review
+   without installing dependencies. The relay suppresses peer disconnects and
+   timeouts on rejection, but other write errors reach the server error handler.
+   Host `claude_run` refuses all four review
    roles; unavailable sandbox support falls back to OpenCode, never host Claude.
    The judge verdict uses read access; its fix and the resolver use write access
    with validated transfer back to the workspace. The

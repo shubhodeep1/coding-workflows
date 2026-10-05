@@ -241,14 +241,14 @@ def test_broker_rejection_ignores_peer_abort_during_response(chain, monkeypatch:
 
 
 def test_broker_rejection_reports_unexpected_write_error(chain, monkeypatch: pytest.MonkeyPatch) -> None:
-	def unexpected_write_error(_handler, _status):
+	def unexpected_write_error(_handler, _status, _message):
 		raise OSError("rejection write failed")
 
 	reported_write_error = threading.Event()
 	def record_error(_server, _request, _client_address):
 		reported_write_error.set()
 
-	monkeypatch.setattr(relay.Relay, "_reject", unexpected_write_error)
+	monkeypatch.setattr(relay.Relay, "send_error", unexpected_write_error)
 	monkeypatch.setattr(relay.UnixHTTPServer, "handle_error", record_error)
 	connection = relay.UnixHTTPConnection(chain["socket"])
 	connection.request("POST", "/v1/messages", b"{}", {"Content-Type": "application/json", "Authorization": "Bearer mine"})
