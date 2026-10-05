@@ -525,6 +525,9 @@ case "$1" in
     printf 'run|%s|%s|%s\n' "$8" "$9" "${REVIEW_SANDBOX_ROOT}" >> "${CALLS}"
     case "${MODE}" in
       success) printf 'verdict\n' > "$3" ;;
+      transfer_failed) : > "${RUNTIME_DIR}/review_sandbox_transfer_failed"; exit 1 ;;
+      unsafe_directory) printf '::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=.claude/commands\n' > "${RUNTIME_DIR}/review_sandbox_transfer_reason_${3##*/}"; : > "${RUNTIME_DIR}/review_sandbox_transfer_failed"; exit 1 ;;
+      marker_on_success) : > "${RUNTIME_DIR}/review_sandbox_transfer_failed" ;;
       unavailable) exit 75 ;;
       outdated) exit 2 ;;
       *) exit 1 ;;
@@ -549,7 +552,7 @@ def _run_rb_helper(tmp: Path, *, engine: str, mode: str, access: str = "read", s
 		(scripts / "review_untrusted_sandbox.sh").write_text(FAKE_SANDBOX, encoding="utf-8")
 	(tmp / "prompt.txt").write_text("judge\n", encoding="utf-8")
 	calls = tmp / "calls"
-	script = _rb_helper() + f'rc=0; review_rb_claude_run {access} prompt.txt out.txt err.txt high || rc=$?; echo "rc=$rc"\n'
+	script = _rb_helper() + f'rc=0; review_rb_claude_run {access} prompt.txt out.txt err.txt high || rc=$?; echo "rc=$rc flag=${{RB_SANDBOX_TRANSFER_FAILED:-false}}"\n'
 	env = dict(os.environ, SUPPORT_SCRIPTS_DIR=str(scripts), RB_OPENCODE_WORKSPACE=str(tmp), MODEL_EDITOR="openai/gpt-6-sol",
 		AI_ENGINE_RESOLVED_RB_JUDGE=engine, MODE=mode, CALLS=str(calls), FAKE_ROOT=str(tmp / "fake-root"), RUNTIME_DIR=str(tmp))
 	for inherited in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
@@ -582,6 +585,43 @@ def test_rb_helper_returns_75_off_claude_unavailable_or_unstaged(tmp_path):
 	crash.mkdir()
 	proc, _calls = _run_rb_helper(crash, engine="claude", mode="crash")
 	assert "rc=1" in proc.stdout
+
+
+def test_rb_helper_keeps_transfer_failure_after_cleanup(tmp_path):
+	for mode in ("transfer_failed", "marker_on_success"):
+		work = tmp_path / mode
+		work.mkdir()
+		# A stale marker must not count as a failure of this attempt.
+		(work / "review_sandbox_transfer_failed").touch()
+		proc, calls = _run_rb_helper(work, engine="claude", mode=mode, access="write")
+		assert "rc=1 flag=true" in proc.stdout, proc.stderr
+		assert calls.splitlines()[-1] == "cleanup"
+		assert not (work / "review_sandbox_transfer_failed").exists()
+	clean = tmp_path / "clean"
+	clean.mkdir()
+	(clean / "review_sandbox_transfer_failed").touch()
+	proc, _ = _run_rb_helper(clean, engine="claude", mode="success", access="write")
+	assert "rc=0 flag=false" in proc.stdout, proc.stderr
+
+
+def test_rb_helper_reports_unsafe_directory_without_repeating_path(tmp_path):
+	proc, calls = _run_rb_helper(tmp_path, engine="claude", mode="unsafe_directory", access="write")
+	assert "rc=1 flag=true" in proc.stdout, proc.stderr
+	assert "sandbox transfer failed; refusing to commit the fix. reason=unsafe_directory" in proc.stderr
+	assert "dir=.claude/commands" not in proc.stderr
+	assert calls.splitlines()[-1] == "cleanup"
+
+
+def test_rb_fix_refuses_failed_claude_transfer_before_commit_or_merge():
+	text = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
+	block = text.split('  fix)\n', 1)[1].split('  merge_with_followup)', 1)[0]
+	gate = block.index('if [ "${rb_fix_claude_rc}" -ne 75 ] && { [ "${rb_fix_rc}" -ne 0 ] || [ "${RB_SANDBOX_TRANSFER_FAILED:-false}" = "true" ]; }; then')
+	for needle in ('git status --porcelain', 'git commit -m "[judge-fix]', 'Treating as merge.'):
+		assert gate < block.index(needle), needle
+	assert 'judge_skip_reason=fix_transfer_failed' in block
+	assert 'judge_skip_reason=fix_failed' in block
+	helper = _rb_helper()
+	assert helper.index('RB_SANDBOX_TRANSFER_FAILED=true') < helper.index('rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"', helper.index('RB_SANDBOX_TRANSFER_FAILED=true'))
 
 
 def test_sandbox_reports_progress_while_claude_streams():

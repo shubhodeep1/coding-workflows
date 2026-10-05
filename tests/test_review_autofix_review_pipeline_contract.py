@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 from unittest import mock
 
+import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -8135,6 +8136,83 @@ def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:
 		assert (host / "scripts/new.py").read_text() == "new\n"
 
 
+def _review_transfer_fixture(root: Path, files: dict[str, bytes]) -> tuple[Path, Path, Path]:
+	host = root / "host"
+	source = root / "isolated" / "source"
+	source.mkdir(parents=True)
+	for name, data in files.items():
+		path = host / name
+		path.parent.mkdir(parents=True, exist_ok=True)
+		path.write_bytes(data)
+		if name == "a.py":
+			path.chmod(0o755)
+	subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+	subprocess.run(["git", "add", "--all"], cwd=host, env=_git_clean_env(), check=True)
+	manifest = root / "isolated" / "baseline.json"
+	result = subprocess.run([sys.executable, str(REPO_ROOT / "scripts/review_untrusted_workspace.py"),
+		"snapshot", str(host), str(source), str(manifest)], capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	return host, source, manifest
+
+
+def test_review_transfer_rejects_extensionless_parent_before_writes(tmp_path):
+	for parent_name in ("zblocked", "scripts/zblocked"):
+		root = tmp_path / parent_name.replace("/", "-")
+		host, source, manifest = _review_transfer_fixture(root, {"a.py": b"before", parent_name: b"file"})
+		before = manifest.read_bytes()
+		(source / "a.py").write_bytes(b"after")
+		(source / parent_name / "next.py").parent.mkdir(parents=True)
+		(source / parent_name / "next.py").write_bytes(b"new")
+		result = subprocess.run([sys.executable, str(REPO_ROOT / "scripts/review_untrusted_workspace.py"),
+			"transfer", str(host), str(source), str(manifest)], capture_output=True, text=True)
+		assert result.returncode == 1
+		assert result.stderr.strip().endswith("reason=host_path_conflict")
+		assert (host / "a.py").read_bytes() == b"before"
+		assert manifest.read_bytes() == before
+		assert not list(host.glob(".review-isolated-*"))
+
+
+def test_review_transfer_rolls_back_after_mid_apply_failure(tmp_path):
+	host, source, manifest = _review_transfer_fixture(tmp_path, {"a.py": b"before", "c.py": b"delete"})
+	manifest_before = manifest.read_bytes()
+	(source / "a.py").write_bytes(b"after")
+	(source / "b").mkdir()
+	(source / "b/new.py").write_bytes(b"created")
+	(source / "c.py").unlink()
+	(source / "z.py").write_bytes(b"late")
+	spec = importlib.util.spec_from_file_location("review_transfer_atomic_test", REPO_ROOT / "scripts/review_untrusted_workspace.py")
+	assert spec and spec.loader
+	workspace_module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(workspace_module)
+	original_link = workspace_module.os.link
+	def fail_late(source_path, target_path, **kwargs):
+		if Path(target_path).name == "z.py":
+			raise OSError("injected apply failure")
+		return original_link(source_path, target_path, **kwargs)
+	with mock.patch.object(workspace_module.os, "link", side_effect=fail_late):
+		with pytest.raises(OSError, match="injected apply failure"):
+			workspace_module.transfer(host, source, manifest)
+	assert (host / "a.py").read_bytes() == b"before"
+	assert (host / "a.py").stat().st_mode & 0o777 == 0o755
+	assert (host / "c.py").read_bytes() == b"delete"
+	assert not (host / "b").exists() and not (host / "z.py").exists()
+	assert not list(host.glob(".review-isolated-*"))
+	assert manifest.read_bytes() == manifest_before
+
+
+def test_review_transfer_replaces_deleted_file_with_directory(tmp_path):
+	host, source, manifest = _review_transfer_fixture(tmp_path, {"d.py": b"old"})
+	(source / "d.py").unlink()
+	(source / "d.py").mkdir()
+	(source / "d.py/x.py").write_bytes(b"new")
+	result = subprocess.run([sys.executable, str(REPO_ROOT / "scripts/review_untrusted_workspace.py"),
+		"transfer", str(host), str(source), str(manifest)], capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	assert (host / "d.py/x.py").read_bytes() == b"new"
+	assert "d.py/x.py" in json.loads(manifest.read_text())
+	assert "d.py" not in json.loads(manifest.read_text())
+
+
 def test_review_isolation_unsafe_directory_names_bounded_dir() -> None:
 	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
 	with tempfile.TemporaryDirectory() as td:
@@ -8214,6 +8292,7 @@ def test_review_isolation_transfer_failure_evidence() -> None:
 		valid_reason = "::error::Review isolation snapshot or transfer rejected (ValueError) reason=host_baseline_changed\n"
 		for diagnostic, expected in (
 			(valid_reason, "host_baseline_changed"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=transfer_rollback_failed\n", "transfer_rollback_failed"),
 			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=.claude/commands\n", "unsafe_directory dir=.claude/commands"),
 			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=redacted\n", "unsafe_directory dir=redacted"),
 			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=../x\n", "unknown"),

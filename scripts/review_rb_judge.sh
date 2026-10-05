@@ -112,11 +112,26 @@ review_rb_claude_run()
     echo 'AI_ENGINE_FALLBACK role=RB_JUDGE reason=sandbox_prepare_failed' >&2
     return 75
   fi
+  RB_SANDBOX_TRANSFER_FAILED=false
+  rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
   REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" bash "${rb_sandbox_sh}" run \
     "${prompt_file}" "${output_file}" "${MODEL_EDITOR}" "${effort}" /dev/null claude RB_JUDGE "${access}" \
     2>>"${stderr_file}" || rb_sandbox_rc=$?
   REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" bash "${rb_sandbox_sh}" cleanup 2>>"${stderr_file}" || rb_sandbox_rc=1
-  rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
+  if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then
+    RB_SANDBOX_TRANSFER_FAILED=true
+    local rb_transfer_reason="" rb_transfer_reason_file="${RUNTIME_DIR}/review_sandbox_transfer_reason_${output_file##*/}"
+    if [ -f "${rb_transfer_reason_file}" ] && [ ! -L "${rb_transfer_reason_file}" ] &&
+       [ "$(wc -c < "${rb_transfer_reason_file}")" -le 240 ] &&
+       [[ "$(< "${rb_transfer_reason_file}")" =~ ^::error::Review\ isolation\ snapshot\ or\ transfer\ rejected\ \(ValueError\)\ reason=(admitted_inventory_missing|symlink_path|unsafe_file|file_changed|entry_limit|unsafe_directory(\ dir=[A-Za-z0-9._/-]{1,64})?|unsafe_result_path|workspace_size_limit|host_baseline_changed|host_path_conflict|transfer_rollback_failed)$ ]]; then
+      rb_transfer_reason=" reason=${BASH_REMATCH[1]%% *}"
+    fi
+    echo "::error::Review-blocked judge sandbox transfer failed; refusing to commit the fix.${rb_transfer_reason}" >&2
+    if [ "${rb_sandbox_rc}" -eq 0 ] || [ "${rb_sandbox_rc}" -eq 2 ]; then
+      rb_sandbox_rc=1
+    fi
+    rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
+  fi
   if [ "${rb_sandbox_rc}" -eq 2 ]; then
     echo 'AI_ENGINE_FALLBACK role=RB_JUDGE reason=sandbox_helper_outdated' >&2
     return 75
@@ -1999,7 +2014,15 @@ __EDIT_DISCIPLINE__
       rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}"
 
       # Check for changes and commit
-      if codex_stall_guard_kill_detected "${rb_fix_rc}" "${rb_fix_stall_state}"; then
+      if [ "${rb_fix_claude_rc}" -ne 75 ] && { [ "${rb_fix_rc}" -ne 0 ] || [ "${RB_SANDBOX_TRANSFER_FAILED:-false}" = "true" ]; }; then
+        echo "::error::Refusing [judge-fix] commit/push after failed Claude fix (rc=${rb_fix_rc} transfer_failed=${RB_SANDBOX_TRANSFER_FAILED:-false})."
+        echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+        if [ "${RB_SANDBOX_TRANSFER_FAILED:-false}" = "true" ]; then
+          echo "judge_skip_reason=fix_transfer_failed" >> "$GITHUB_OUTPUT"
+        else
+          echo "judge_skip_reason=fix_failed" >> "$GITHUB_OUTPUT"
+        fi
+      elif codex_stall_guard_kill_detected "${rb_fix_rc}" "${rb_fix_stall_state}"; then
         echo "::warning::Review-blocked fix OpenCode was killed by codex stall guard; skipping commit/merge and falling back to manual intervention."
       elif [ -n "$(git status --porcelain)" ]; then
         git config user.name "codex-bot"

@@ -105,6 +105,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
    with validated transfer back to the workspace. The poller's review-blocked
    judge uses the same sandbox from the verified workflow support checkout,
    with read access for a verdict and validated transfer for a combined fix;
+   transfer checks destination parents and stages all changes before writing,
+   rolling host changes back on failure. After a failed Claude fix or transfer
+   the judge neither commits/pushes nor treats it as merged
+   (`judge_skip_reason=fix_transfer_failed|fix_failed`). For the poller's judge,
    missing isolation defers and escalates after three failures on the same
    head (configurable with `RB_JUDGE_ISOLATION_MAX_FAILURES`); unavailable
    Claude retries OpenCode in a fresh sandbox, never host Codex. Failed transfer discards the
