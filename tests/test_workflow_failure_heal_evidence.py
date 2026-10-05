@@ -410,7 +410,49 @@ def test_artifact_extraction_is_allowlisted_and_traversal_safe() -> None:
 def test_artifact_extraction_limits_cumulative_decompression(monkeypatch) -> None:
 	monkeypatch.setattr(ev, "MAX_ARTIFACT_BYTES", 8)
 	blob = _zip({"a.err": b"a" * 6, "b.err": b"b" * 6})
-	assert dict(ev.extract_artifact_texts(blob, max_file_bytes=100)) == {"a.err": "a" * 6}
+	assert set(dict(ev.extract_artifact_texts(blob, max_file_bytes=100))) == {"a.err"}
+
+
+def test_artifact_extract_drops_environment_assignments() -> None:
+	lines = [
+		"CUSTOM_SERVICE_PASSWORD=hunter2secret", "export FOO_TOKEN=abc", "declare -x BAR=1",
+		"failed api_key: zzz", 'error "password": "p"',
+		"error https://u:pw@example.com", "::error::boom CUSTOM_SERVICE_PASSWORD=x",
+		"error api_key=leaked", "error prefix CUSTOM_SERVICE_PASSWORD=embedded",
+	]
+	text = dict(ev.extract_artifact_texts(_zip({"editor_attempt_1.err": "\n".join(lines).encode()}), max_file_bytes=6000))["editor_attempt_1.err"]
+	assert "kept 0 of 9 line(s)" in text and "(9 line(s) denied)" in text
+	assert "(no allowlisted diagnostic lines)" in text
+	for secret in ("hunter2secret", "abc", "zzz", '"p"', "pw@example.com", "embedded", "leaked"):
+		assert secret not in text
+
+
+def test_artifact_extract_keeps_allowlisted_diagnostics() -> None:
+	lines = [
+		"plain prose", "::error::x", "Process completed with exit code 1",
+		"Review isolation snapshot or transfer rejected", "AUTOFIX_FOO pr=1 reason=bar",
+		"Traceback (most recent call last):",
+	]
+	text = dict(ev.extract_artifact_texts(_zip({"editor_attempt_1.err": "\n".join(lines).encode()}), max_file_bytes=6000))["editor_attempt_1.err"]
+	assert "kept 5 of 6 line(s)" in text and "(0 line(s) denied)" in text
+	for number, line in enumerate(lines[1:], 2):
+		assert f"L{number}: {line}" in text
+	assert "plain prose" not in text
+
+
+def test_status_member_keeps_status_token_only() -> None:
+	blob = _zip({"status_x.txt": b"success\n", "other.err": b"success\n"})
+	status_text, error_text = dict(ev.extract_artifact_texts(blob, max_file_bytes=1000)).values()
+	assert "L1: success" in status_text
+	assert "(no allowlisted diagnostic lines)" in error_text
+
+
+def test_artifact_extract_bounds_lines_and_line_length() -> None:
+	lines = ["::error::" + "x" * 500] * 205
+	text = dict(ev.extract_artifact_texts(_zip({"editor_attempt_1.err": "\n".join(lines).encode()}), max_file_bytes=100000))["editor_attempt_1.err"]
+	assert "kept 200 of 205 line(s)" in text
+	assert "L6: " in text and "L5: " not in text
+	assert len(text.splitlines()[1].partition(": ")[2]) == ev.MAX_ARTIFACT_LINE_CHARS
 
 
 def test_index_does_not_report_unmerged_prior_fix_as_merged() -> None:
@@ -534,6 +576,54 @@ def test_collect_builds_the_bundle_and_index(tmp_path: Path) -> None:
 	# PR, compare, issue list, GraphQL, lineage compare, timeline.
 	assert manifest["api_calls"] == len([p for p in fake.paths if p != "rate_limit"])
 	assert manifest["api_calls"] <= 20
+
+
+def test_collected_evidence_never_contains_artifact_assignment_secret(tmp_path: Path) -> None:
+	fake = FakeGh()
+	secret = "unique_assignment_value_6335"
+	fake.routes[f"repos/{REPO}/actions/artifacts/501/zip"] = _zip({
+		"editor_attempt_1.err": f"::error::failed CUSTOM_SERVICE_PASSWORD={secret}\nReview isolation snapshot or transfer rejected\n".encode(),
+	})
+	_collector(tmp_path, fake).collect(_issue(), [], issue_repo=REPO)
+	out = tmp_path / "evidence"
+	assert all(secret not in path.read_text() for path in out.rglob("*") if path.is_file())
+	assert secret not in ev.render_prompt_section(str(out))
+	run_meta = json.loads((out / f"runs/{REPO.replace('/', '__')}__111/meta.json").read_text())
+	assert run_meta["artifact_format"] == ev.ARTIFACT_EXTRACT_FORMAT
+
+
+def test_stale_cached_artifacts_are_recollected(tmp_path: Path) -> None:
+	_collector(tmp_path, FakeGh()).collect(_issue(), [], issue_repo=REPO)
+	run_dir = tmp_path / "evidence" / f"runs/{REPO.replace('/', '__')}__111"
+	artifact_dir = run_dir / "artifact-codex-review-autofix-failure-logs-111-1"
+	secret = "old_artifact_password_6335"
+	(artifact_dir / "editor_attempt_1.err").write_text(f"CUSTOM_SERVICE_PASSWORD={secret}")
+	(artifact_dir / "old.err").write_text(f"::error::{secret}")
+	meta_path = run_dir / "meta.json"
+	meta = json.loads(meta_path.read_text())
+	meta.pop("artifact_format")
+	meta_path.write_text(json.dumps(meta))
+	fake = FakeGh()
+	_collector(tmp_path, fake).collect(_issue(), [], issue_repo=REPO)
+	assert f"repos/{REPO}/actions/artifacts/501/zip" in fake.paths
+	assert not (artifact_dir / "old.err").exists()
+	assert all(secret not in path.read_text() for path in (tmp_path / "evidence").rglob("*") if path.is_file())
+
+
+def test_low_rate_removes_stale_artifacts(tmp_path: Path) -> None:
+	_collector(tmp_path, FakeGh()).collect(_issue(), [], issue_repo=REPO)
+	run_dir = tmp_path / "evidence" / f"runs/{REPO.replace('/', '__')}__111"
+	artifact_dir = run_dir / "artifact-legacy"
+	artifact_dir.mkdir(parents=True)
+	(artifact_dir / "raw.err").write_text("CUSTOM_SERVICE_PASSWORD=old")
+	meta_path = run_dir / "meta.json"
+	meta = json.loads(meta_path.read_text())
+	meta.pop("artifact_format")
+	meta_path.write_text(json.dumps(meta))
+	fake = FakeGh(remaining=100)
+	_collector(tmp_path, fake).collect(_issue(), [], issue_repo=REPO)
+	assert not artifact_dir.exists()
+	assert f"repos/{REPO}/actions/artifacts/501/zip" not in fake.paths
 
 
 def test_structured_diagnostics_are_bounded_and_revalidated(tmp_path: Path) -> None:

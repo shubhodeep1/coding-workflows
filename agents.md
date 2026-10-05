@@ -208,7 +208,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
     step's env, the working-tree / summary groups); the fingerprint still uses
     `filter_log`. Clarify, plan and implement add a **workflow-heal evidence
     folder** for a trusted `ai:workflow-heal` issue (`collect`: sliced job
-    logs, allowlisted artifact files, provenance, lineage with whether each
+    logs, bounded diagnostic lines from allowlisted artifact files (environment
+    assignments and free-form text dropped), provenance, lineage with whether each
     fix reached `main`, runs on the failing head, rate limit / OpenRouter key
     status; 400 KB, fetched separately by each stage without an Actions cache,
     which pull-request runs can read). Cross-repo

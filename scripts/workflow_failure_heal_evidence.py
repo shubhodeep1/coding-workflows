@@ -16,8 +16,8 @@ evidence to a folder the agents read:
     comes from it, so existing lineages keep their fingerprints.
   * ``collect``: for one ``ai:workflow-heal`` issue, reads the run links from
     the trusted issue body and occurrence comments and writes, per run, the
-    sliced log of the failing (or focus) job and the allowlisted artifact
-    files; plus provenance (source PR state, the failing head against the
+    sliced log of the failing (or focus) job and allowlisted diagnostic lines
+    from artifact files; plus provenance (source PR state, the failing head against the
     default and target branches), the heal lineage with where each fix PR
     merged and whether that reached the default branch, the other runs on
     the failing head, and the GitHub rate limit / OpenRouter key status.
@@ -103,6 +103,20 @@ ARTIFACT_MEMBER_RES = {
 	"codex-review-autofix-failure-logs": re.compile(r"(?:^|/)(?:editor_attempt_[^/]*|[^/]*\.err|[^/]*summar[^/]*|status_[^/]*)$"),
 	"reviewer-logs": re.compile(r"(?:^|/)(?:status_[^/]*\.txt|[^/]*\.err)$"),
 }
+ARTIFACT_EXTRACT_FORMAT = "allowlist-lines.v1"
+MAX_ARTIFACT_KEPT_LINES = 200
+MAX_ARTIFACT_LINE_CHARS = 400
+_ARTIFACT_ERROR_WORD_RE = re.compile(
+	r"\b(?:error|errors|failed|failure|fatal|exception|traceback|panic|rejected|denied|timed out|timeout|killed|not found|exit(?:ed)? (?:code|status))\b|\brc=\d{1,3}\b",
+	re.IGNORECASE,
+)
+_ARTIFACT_STATUS_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_-]{0,39}$")
+_ARTIFACT_ENV_ASSIGNMENT_RES = (
+	re.compile(r"^\s*(?:export\s+|declare\s+-\w+\s+|env\s+|set\s+)?[A-Za-z_][A-Za-z0-9_]*\s*="),
+	re.compile(r"\b[A-Za-z_]*[A-Z][A-Za-z0-9_]*="),
+	re.compile(r"[\"']?[A-Za-z_]*(?:pass|pwd|secret|token|key|auth|cred|cookie|session|private|signature|bearer)[A-Za-z0-9_]*[\"']?\s*(?:=|:)\s*", re.IGNORECASE),
+	re.compile(r"://[^/\s:@]+:[^/\s@]+@"),
+)
 FAILED_CONCLUSIONS = frozenset({"failure", "timed_out", "cancelled", "startup_failure"})
 KNOWN_CONCLUSIONS = FAILED_CONCLUSIONS | {"success", "skipped", "neutral", "action_required"}
 DIAGNOSTIC_SCHEMA = "workflow_failure_heal_diagnostics.v1"
@@ -714,8 +728,28 @@ def _artifact_kind(name: str) -> str:
 	return name.rsplit("-", 2)[0] if ARTIFACT_NAME_RE.match(name or "") else ""
 
 
+def _artifact_diagnostic_extract(member_name: str, text: str) -> str:
+	"""Keep bounded diagnostic lines only, never raw artifact prose or assignments."""
+	lines = text.splitlines()
+	kept: list[str] = []
+	denied = 0
+	status_member = PurePosixPath(member_name).name.startswith("status_")
+	for number, line in enumerate(lines, 1):
+		if any(pattern.search(line) for pattern in _ARTIFACT_ENV_ASSIGNMENT_RES):
+			denied += 1
+			continue
+		if (_ERROR_LINE_RE.match(line) or _DIAGNOSTIC_LINE_RE.search(line) or _EXIT_CODE_RE.search(line)
+			or _ARTIFACT_ERROR_WORD_RE.search(line)
+			or (status_member and _ARTIFACT_STATUS_TOKEN_RE.fullmatch(line.strip()))):
+			kept.append(f"L{number}: {line[:MAX_ARTIFACT_LINE_CHARS]}")
+	kept = kept[-MAX_ARTIFACT_KEPT_LINES:]
+	header = (f"# Extract ({ARTIFACT_EXTRACT_FORMAT}): kept {len(kept)} of {len(lines)} line(s); "
+		f"environment assignments and free-form text dropped ({denied} line(s) denied)")
+	return header + "\n" + ("\n".join(kept) if kept else "(no allowlisted diagnostic lines)")
+
+
 def extract_artifact_texts(blob: bytes, *, max_file_bytes: int, member_re: re.Pattern[str] | None = None) -> list[tuple[str, str]]:
-	"""Allowlisted text members of an artifact zip as ``(safe_name, text)``."""
+	"""Allowlisted artifact members as ``(safe_name, diagnostic line extract)``."""
 	out: list[tuple[str, str]] = []
 	remaining = MAX_ARTIFACT_BYTES
 	try:
@@ -746,7 +780,7 @@ def extract_artifact_texts(blob: bytes, *, max_file_bytes: int, member_re: re.Pa
 			remaining -= len(data)
 			text = heal.sanitize_text(data.decode("utf-8", errors="replace"))
 			safe = "__".join(_safe_name(part, 60) for part in parts)
-			out.append((safe, _clip_bytes(text, max_file_bytes, keep="tail")))
+			out.append((safe, _clip_bytes(_artifact_diagnostic_extract(name, text), max_file_bytes, keep="tail")))
 	return out
 
 
@@ -911,10 +945,17 @@ class Collector:
 					for job in cached_review_jobs
 				) or any(old_log.name not in {f"job-{job['id']}.txt" for job in cached_review_jobs}
 					for old_log in (self.out / run_dir).glob("job-*.txt"))):
+				self._clear_artifact_dirs(run_dir)
 				self._skip(f"run:{ref['repo']}:{ref['run_id']}", "unverified_run_not_failed")
 				return {"skipped": True}
-			cached["reused"] = True
-			return cached
+			if cached.get("artifact_format") == ARTIFACT_EXTRACT_FORMAT or cached.get("artifacts") == []:
+				if cached.get("artifacts") == []:
+					self._clear_artifact_dirs(run_dir)
+				cached["reused"] = True
+				return cached
+		# Remove legacy raw artifact copies even when the re-fetch or rate-limit
+		# check fails; a later stage must not find them in the evidence folder.
+		self._clear_artifact_dirs(run_dir)
 		meta: dict[str, Any] = {"repo": ref["repo"], "run_id": ref["run_id"], "url": ref["url"], "dir": run_dir, "jobs": [], "artifacts": [], "complete": False}
 		jobs_data = self.gh.json(f"repos/{ref['repo']}/actions/runs/{ref['run_id']}/jobs?per_page=100")
 		jobs = jobs_data.get("jobs") if isinstance(jobs_data, dict) else None
@@ -981,8 +1022,30 @@ class Collector:
 		self._write_json(f"{run_dir}/meta.json", meta)
 		return meta
 
+	def _clear_artifact_dirs(self, run_dir: str) -> None:
+		root = self.out.resolve()
+		run_path = self.out / run_dir
+		if run_path.is_symlink() or not run_path.resolve().is_relative_to(root):
+			raise ValueError("unsafe artifact cache path")
+		if not run_path.is_dir():
+			return
+		for child in run_path.iterdir():
+			if not child.name.startswith("artifact-"):
+				continue
+			if child.is_symlink() or not child.resolve().is_relative_to(root):
+				raise ValueError("unsafe artifact cache path")
+			if child.is_dir():
+				for path in sorted(child.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+					if path.is_symlink() or not path.resolve().is_relative_to(root):
+						raise ValueError("unsafe artifact cache path")
+					path.rmdir() if path.is_dir() else path.unlink()
+				child.rmdir()
+			elif child.is_file():
+				child.unlink()
+
 	def _collect_artifacts(self, ref: dict[str, str], run_dir: str, meta: dict[str, Any]) -> bool:
 		"""Fetch the allowlisted artifacts; False when a fetch failed (retry later)."""
+		meta["artifact_format"] = ARTIFACT_EXTRACT_FORMAT
 		listing = self.gh.json(f"repos/{ref['repo']}/actions/runs/{ref['run_id']}/artifacts?per_page=100")
 		artifacts = listing.get("artifacts") if isinstance(listing, dict) else None
 		if not isinstance(artifacts, list):
