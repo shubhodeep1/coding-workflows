@@ -57,6 +57,8 @@ verdict, 2 unreadable input):
   validate --verdict-file <path> --decision-file <path> --repo <owner/repo>
       Check a judge verdict against the `decide` output and the hard limits,
       and print the normalised verdict.
+  rejection --item <n> --stop <id> --comments-file <path> --trusted-login <login>
+      Find the latest trusted, unused guard rejection on the blocked item.
   marker --item <n> --stop <id> --fingerprint <fp> --verdict <v> --round <k>
          [--override bulk_delete]
       The marker line to end the verdict comment with.
@@ -68,6 +70,8 @@ comments they already fetched.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import datetime as dt
 import hashlib
 import json
@@ -116,6 +120,8 @@ VERDICTS = (
 )
 TERMINAL_VERDICT = "close"
 GUARD_STOPS = ("scope-blocked", "destructive-blocked")
+GUARD_FOR_STOP = {"scope-blocked": "scope", "destructive-blocked": "destructive"}
+OVERRIDABLE_DESTRUCTIVE_REASONS = ("bulk-delete",)
 ITEM_KINDS = ("issue", "pr", "project")
 ISSUE_ONLY_VERDICTS = ("auto_answer", "override_guard")
 NOT_FOR_PROJECT_VERDICTS = ("reissue",)
@@ -148,6 +154,11 @@ MARKER_RE = re.compile(
 	r"^<!-- ai:unblock:v1 item=(?P<item>[1-9][0-9]*) stop=(?P<stop>[a-z-]+) "
 	r"fingerprint=(?P<fp>[0-9a-f]{12}) verdict=(?P<verdict>[a-z_]+) round=(?P<round>[1-9][0-9]*)"
 	r"(?: override=(?P<override>[a-z_]+))? -->$"
+)
+REJECTION_RE = re.compile(
+	r"^<!-- ai:guard-rejection:v1 item=(?P<item>[1-9][0-9]*) guard=(?P<guard>scope|scope-lock|destructive) "
+	r"reason=(?P<reason>[a-z-]+) run=(?P<run>[0-9]+) count=(?P<count>[0-9]+) "
+	r"truncated=(?P<truncated>true|false) paths=(?P<paths>[A-Za-z0-9+/=]+) -->$"
 )
 LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$")
 
@@ -287,6 +298,77 @@ def parse_markers(comments: object, trusted_login: str) -> list[dict]:
 	return entries
 
 
+def latest_rejection(comments: object, trusted_login: str, item: int, stop: str) -> dict:
+	"""Select the newest trusted guard rejection after the last item verdict."""
+	if not isinstance(comments, list):
+		raise InputError("comments must be a JSON array")
+	newest_rejection = None
+	newest_verdict_index = -1
+	untrusted = False
+	for index, comment in enumerate(comments):
+		if not isinstance(comment, dict):
+			continue
+		lines = [line.strip() for line in str(comment.get("body") or "").splitlines() if line.strip()]
+		if not lines:
+			continue
+		line = lines[-1]
+		match = REJECTION_RE.fullmatch(line)
+		rejection_item = re.match(r"^<!-- ai:guard-rejection:v1 item=([1-9][0-9]*)\b", line)
+		user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
+		login = user.get("login") or comment.get("author_login") or ""
+		if login != trusted_login:
+			if match and int(match.group("item")) == item:
+				untrusted = True
+			continue
+		if any(entry["item"] == item for entry in parse_markers([comment], trusted_login)):
+			newest_verdict_index = index
+		if rejection_item and int(rejection_item.group(1)) == item:
+			newest_rejection = (index, match, comment)
+		elif lines[0] in (
+			"🚨 **files_touched scope guard rejected this implementation run.**",
+			"🚨 **Issue scope-lock rejected this implementation run.**",
+			"🚨 **Destructive-commit guard rejected this implementation run.**",
+		):
+			# A later handler that could not encode its marker must not leave
+			# an older, otherwise-valid rejection available for override.
+			newest_rejection = (index, None, comment)
+	if newest_rejection is None:
+		return {"status": "none", "reason": "untrusted" if untrusted else "missing"}
+	index, match, comment = newest_rejection
+	if index <= newest_verdict_index:
+		return {"status": "none", "reason": "stale"}
+	if match is None:
+		return {"status": "none", "reason": "malformed"}
+	if match.group("guard") != GUARD_FOR_STOP.get(stop) or (
+		stop == "scope-blocked" and match.group("reason") != "out-of-scope"
+	):
+		return {"status": "none", "reason": "guard_mismatch"}
+	if stop == "destructive-blocked" and match.group("reason") not in OVERRIDABLE_DESTRUCTIVE_REASONS:
+		return {"status": "none", "reason": "reason_not_overridable"}
+	if match.group("truncated") == "true":
+		return {"status": "none", "reason": "truncated"}
+	try:
+		encoded = match.group("paths")
+		if len(encoded) > 512000:
+			raise ValueError("oversized rejection")
+		paths = json.loads(base64.b64decode(encoded, validate=True))
+		count = int(match.group("count"))
+		if not isinstance(paths, list) or not 0 < count < 100 or len(paths) != count:
+			raise ValueError("invalid rejection count")
+		if not all(isinstance(path, str) for path in paths):
+			raise ValueError("invalid rejection path")
+		cleaned = [_clean_path(path) for path in paths]
+		if len(set(cleaned)) != len(cleaned):
+			raise ValueError("duplicate rejection path")
+	except (ValueError, UnicodeDecodeError, binascii.Error, UsageError):
+		return {"status": "none", "reason": "malformed"}
+	return {
+		"status": "ok", "guard": match.group("guard"), "reason": match.group("reason"),
+		"run": match.group("run"), "paths": cleaned, "comment_id": comment.get("id"),
+		"created_at": comment.get("created_at", ""),
+	}
+
+
 def decide(
 	item: int,
 	stop: str,
@@ -296,6 +378,7 @@ def decide(
 	now: dt.datetime,
 	kind: str = "issue",
 	last_activity: dt.datetime | None = None,
+	rejection: dict | None = None,
 ) -> dict:
 	"""What the judge may still do for this item."""
 	if kind not in ITEM_KINDS:
@@ -320,7 +403,11 @@ def decide(
 		for verdict in VERDICTS
 		if verdict == TERMINAL_VERDICT or verdict not in used
 	]
-	if stop not in GUARD_STOPS:
+	if stop not in GUARD_STOPS or not isinstance(rejection, dict) or rejection.get("status") != "ok" \
+		or rejection.get("guard") != GUARD_FOR_STOP.get(stop) or not isinstance(rejection.get("paths"), list) \
+		or not 0 < len(rejection["paths"]) <= MAX_OVERRIDE_PATHS \
+		or (stop == "scope-blocked" and rejection.get("reason") != "out-of-scope") \
+		or (stop == "destructive-blocked" and rejection.get("reason") not in OVERRIDABLE_DESTRUCTIVE_REASONS):
 		allowed = [verdict for verdict in allowed if verdict != "override_guard"]
 	if stop in NO_WAIVER_STOPS:
 		allowed = [verdict for verdict in allowed if verdict != "accept_with_followup"]
@@ -388,7 +475,7 @@ def _clean_path(value: object) -> str:
 	return path
 
 
-def validate(verdict: object, decision: object, repo: str) -> dict:
+def validate(verdict: object, decision: object, repo: str, rejection: dict | None = None) -> dict:
 	"""Refuse anything outside the menu or the hard limits; return the normalised verdict."""
 	if not isinstance(verdict, dict) or not isinstance(decision, dict):
 		raise UsageError("verdict and decision must be JSON objects")
@@ -429,6 +516,23 @@ def validate(verdict: object, decision: object, repo: str) -> dict:
 				if CANONICAL_SOURCE_RE.match(path):
 					raise UsageError(f"override_guard never allows deleting the canonical workflow source {path!r}")
 			normalised["override"] = "bulk_delete"
+		if not isinstance(rejection, dict) or rejection.get("status") != "ok" \
+			or rejection.get("guard") != GUARD_FOR_STOP.get(decision.get("stop")) \
+			or (decision.get("stop") == "scope-blocked" and rejection.get("reason") != "out-of-scope") \
+			or (decision.get("stop") == "destructive-blocked" and rejection.get("reason") not in OVERRIDABLE_DESTRUCTIVE_REASONS) \
+			or not isinstance(rejection.get("paths"), list) or not isinstance(rejection.get("run"), str) \
+			or not re.fullmatch(r"[0-9]+", rejection["run"]):
+			raise UsageError("override paths must equal the guard-rejected paths; missing: [], additional: [] (no bound rejection)")
+		try:
+			rejected_paths = {_clean_path(path) for path in rejection["paths"]}
+		except UsageError as exc:
+			raise UsageError("invalid guard-rejected paths") from exc
+		if set(cleaned) != rejected_paths:
+			raise UsageError(
+				f"override paths must equal the guard-rejected paths; missing: {sorted(rejected_paths - set(cleaned))}, "
+				f"additional: {sorted(set(cleaned) - rejected_paths)}"
+			)
+		normalised["rejection_run"] = rejection["run"]
 		normalised["paths"] = cleaned
 	if name == "operator_step":
 		flag = verdict.get("placeholder")
@@ -478,10 +582,17 @@ def build_parser() -> argparse.ArgumentParser:
 	decide_cmd.add_argument("--now", required=True)
 	decide_cmd.add_argument("--kind", default="issue")
 	decide_cmd.add_argument("--last-activity", default="")
+	decide_cmd.add_argument("--rejection-file")
 	validate_cmd = sub.add_parser("validate")
 	validate_cmd.add_argument("--verdict-file", required=True)
 	validate_cmd.add_argument("--decision-file", required=True)
 	validate_cmd.add_argument("--repo", required=True)
+	validate_cmd.add_argument("--rejection-file")
+	rejection_cmd = sub.add_parser("rejection")
+	rejection_cmd.add_argument("--item", required=True)
+	rejection_cmd.add_argument("--stop", required=True)
+	rejection_cmd.add_argument("--comments-file", required=True)
+	rejection_cmd.add_argument("--trusted-login", required=True)
 	marker_cmd = sub.add_parser("marker")
 	marker_cmd.add_argument("--item", required=True)
 	marker_cmd.add_argument("--stop", required=True)
@@ -505,6 +616,11 @@ def run(argv: list[str] | None = None) -> dict:
 	if args.command == "fingerprint":
 		evidence = _read_json(args.evidence_file, "--evidence-file")
 		return {"stop": args.stop, "fingerprint": fingerprint(args.stop, evidence)}
+	if args.command == "rejection":
+		if not LOGIN_RE.fullmatch(args.trusted_login):
+			raise UsageError("--trusted-login is not a GitHub login")
+		return latest_rejection(_read_json(args.comments_file, "--comments-file"), args.trusted_login,
+			_check_item(args.item), _check_stop(args.stop))
 	if args.command == "decide":
 		if not LOGIN_RE.match(args.trusted_login):
 			raise UsageError(f"--trusted-login is not a GitHub login: {args.trusted_login!r}")
@@ -516,12 +632,14 @@ def run(argv: list[str] | None = None) -> dict:
 		if args.project_comments_file:
 			project_entries = parse_markers(_read_json(args.project_comments_file, "--project-comments-file"), args.trusted_login)
 		last_activity = _parse_time(args.last_activity) if args.last_activity else None
-		return decide(item, stop, fp, item_entries, project_entries, _parse_time(args.now), args.kind, last_activity)
+		rejection = _read_json(args.rejection_file, "--rejection-file") if args.rejection_file else None
+		return decide(item, stop, fp, item_entries, project_entries, _parse_time(args.now), args.kind, last_activity, rejection)
 	if args.command == "validate":
 		return validate(
 			_read_json(args.verdict_file, "--verdict-file"),
 			_read_json(args.decision_file, "--decision-file"),
 			args.repo,
+			_read_json(args.rejection_file, "--rejection-file") if args.rejection_file else None,
 		)
 	item = _check_item(args.item)
 	return {

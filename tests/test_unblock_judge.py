@@ -37,6 +37,19 @@ def _marker(item: int = 7, stop: str = "blocked", fp: str = FP, verdict: str = "
 	return ledger.marker(item, stop, fp, verdict, round_number)
 
 
+def _rejection(stop: str = "scope-blocked", paths: list[str] | None = None) -> dict:
+	return {"status": "ok", "guard": ledger.GUARD_FOR_STOP[stop],
+		"reason": "bulk-delete" if stop == "destructive-blocked" else "out-of-scope",
+		"run": "777", "paths": paths if paths is not None else ["src/a.py"]}
+
+
+def _rejection_marker(paths: list[str], *, item: int = 7, guard: str = "scope", reason: str = "out-of-scope",
+		run: str = "777", count: int | None = None, truncated: bool = False) -> str:
+	encoded = base64.b64encode(json.dumps(paths, separators=(",", ":")).encode()).decode()
+	return (f"<!-- ai:guard-rejection:v1 item={item} guard={guard} reason={reason} run={run} "
+		f"count={len(paths) if count is None else count} truncated={str(truncated).lower()} paths={encoded} -->")
+
+
 def _cli(*args: str) -> tuple[int, dict]:
 	result = subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, check=False)
 	return result.returncode, json.loads(result.stdout)
@@ -122,9 +135,78 @@ def test_still_blocked_24_hours_after_the_last_round_is_terminal() -> None:
 
 
 def test_override_guard_only_for_the_guard_latches() -> None:
-	assert "override_guard" in ledger.decide(7, "scope-blocked", FP, [], None, NOW)["allowed"]
-	assert "override_guard" in ledger.decide(7, "destructive-blocked", FP, [], None, NOW)["allowed"]
+	assert "override_guard" not in ledger.decide(7, "scope-blocked", FP, [], None, NOW)["allowed"]
+	assert "override_guard" in ledger.decide(7, "scope-blocked", FP, [], None, NOW, rejection=_rejection())["allowed"]
+	assert "override_guard" in ledger.decide(7, "destructive-blocked", FP, [], None, NOW,
+		rejection=_rejection("destructive-blocked"))["allowed"]
 	assert "override_guard" not in ledger.decide(7, "needs-human", FP, [], None, NOW)["allowed"]
+
+
+def test_rejection_requires_latest_trusted_unused_item_marker() -> None:
+	line = _rejection_marker(["src/a.py"])
+	comments = [_comment(line, "mallory"), _comment(_rejection_marker(["other.py"], item=8)),
+		_comment(line + "\nnot the last line"), _comment("guard failed\n" + line + "\r")]
+	assert ledger.latest_rejection(comments, BOT, 7, "scope-blocked")["paths"] == ["src/a.py"]
+	assert ledger.latest_rejection(comments[:3], BOT, 7, "scope-blocked")["reason"] == "untrusted"
+	comments.append(_comment(_marker(stop="scope-blocked")))
+	assert ledger.latest_rejection(comments, BOT, 7, "scope-blocked")["reason"] == "stale"
+	comments.append(_comment(_rejection_marker(["src/new.py"])))
+	assert ledger.latest_rejection(comments, BOT, 7, "scope-blocked")["paths"] == ["src/new.py"]
+	comments.append(_comment("🚨 **files_touched scope guard rejected this implementation run.**\nEncoding failed"))
+	assert ledger.latest_rejection(comments, BOT, 7, "scope-blocked")["reason"] == "malformed"
+	comments.append(_comment(_rejection_marker(["src/next.py"]).replace("paths=", "paths=!!!")))
+	assert ledger.latest_rejection(comments, BOT, 7, "scope-blocked")["reason"] == "malformed"
+
+
+@pytest.mark.parametrize(("marker_line", "stop", "reason"), [
+	(_rejection_marker(["src/a.py"], truncated=True), "scope-blocked", "truncated"),
+	(_rejection_marker(["src/a.py"], count=2), "scope-blocked", "malformed"),
+	(_rejection_marker(["src/a.py"], guard="scope-lock", reason="scope-lock-label"), "scope-blocked", "guard_mismatch"),
+	(_rejection_marker(["docs/x.md"], guard="destructive", reason="canonical-source"), "destructive-blocked", "reason_not_overridable"),
+	(_rejection_marker(["../escape"]), "scope-blocked", "malformed"),
+	(_rejection_marker(["src/a.py", "src/a.py"]), "scope-blocked", "malformed"),
+	(_rejection_marker(["src/a.py"]).replace("paths=", "paths=!!!"), "scope-blocked", "malformed"),
+	(_rejection_marker(["src/a.py"]).split("paths=")[0] + "paths=bm90LWpzb24= -->", "scope-blocked", "malformed"),
+])
+def test_invalid_guard_rejections_cannot_enable_override(marker_line: str, stop: str, reason: str) -> None:
+	result = ledger.latest_rejection([_comment(marker_line)], BOT, 7, stop)
+	assert result == {"status": "none", "reason": reason}
+	assert "override_guard" not in ledger.decide(7, stop, FP, [], None, NOW, rejection=result)["allowed"]
+
+
+def test_override_requires_exact_rejected_set() -> None:
+	rejection = _rejection(paths=["src/a.py", "docs/b.md"])
+	decision = _decision(paths=rejection["paths"])
+	verdict = {"verdict": "override_guard", "reason": "both are required", "paths": ["./docs/b.md", "src/a.py"]}
+	assert ledger.validate(verdict, decision, "o/r", rejection)["rejection_run"] == "777"
+	for paths, missing, additional in [(["src/a.py"], "docs/b.md", ""),
+		(["src/a.py", "docs/b.md", "src/auth.py"], "", "src/auth.py")]:
+		with pytest.raises(ledger.UsageError, match="override paths must equal the guard-rejected paths") as err:
+			ledger.validate(dict(verdict, paths=paths), decision, "o/r", rejection)
+		assert missing in str(err.value) and additional in str(err.value)
+	with pytest.raises(ledger.UsageError, match="no bound rejection"):
+		ledger.validate(verdict, decision, "o/r")
+	assert "override_guard" not in ledger.decide(7, "scope-blocked", FP, [], None, NOW,
+		rejection=_rejection(paths=[f"src/{index}.py" for index in range(21)]))["allowed"]
+
+
+def test_rejection_cli_round_trip(tmp_path: Path) -> None:
+	comments = tmp_path / "comments.json"
+	comments.write_text(json.dumps([_comment(_rejection_marker(["src/a.py"]))]), encoding="utf-8")
+	rc, rejection = _cli("rejection", "--item", "7", "--stop", "scope-blocked", "--comments-file", str(comments), "--trusted-login", BOT)
+	assert rc == 0 and rejection["status"] == "ok"
+	rejection_file = tmp_path / "rejection.json"
+	rejection_file.write_text(json.dumps(rejection), encoding="utf-8")
+	rc, decision = _cli("decide", "--item", "7", "--stop", "scope-blocked", "--fingerprint", FP,
+		"--comments-file", str(comments), "--trusted-login", BOT, "--now", NOW.isoformat(), "--rejection-file", str(rejection_file))
+	assert rc == 0 and "override_guard" in decision["allowed"]
+	decision_file = tmp_path / "decision.json"
+	decision_file.write_text(json.dumps(decision), encoding="utf-8")
+	verdict_file = tmp_path / "verdict.json"
+	verdict_file.write_text(json.dumps({"verdict": "override_guard", "reason": "r", "paths": ["src/a.py"]}), encoding="utf-8")
+	rc, validated = _cli("validate", "--verdict-file", str(verdict_file), "--decision-file", str(decision_file),
+		"--repo", "o/r", "--rejection-file", str(rejection_file))
+	assert rc == 0 and validated["rejection_run"] == "777"
 
 
 @pytest.mark.parametrize("stop", ["security-pass-failed", "validation-failed", "validate-failed", "harness-broken"])
@@ -132,8 +214,8 @@ def test_no_waiver_for_security_or_validation(stop: str) -> None:
 	assert "accept_with_followup" not in ledger.decide(7, stop, FP, [], None, NOW)["allowed"]
 
 
-def _decision(stop: str = "scope-blocked") -> dict:
-	return ledger.decide(7, stop, FP, [], None, NOW)
+def _decision(stop: str = "scope-blocked", paths: list[str] | None = None) -> dict:
+	return ledger.decide(7, stop, FP, [], None, NOW, rejection=_rejection(stop, paths) if stop in ledger.GUARD_STOPS else None)
 
 
 @pytest.mark.parametrize("path", ["scripts/x.sh", "scripts", "./scripts/y.py"])
@@ -141,7 +223,7 @@ def test_override_never_covers_protected_paths_in_coding_workflows(path: str) ->
 	verdict = {"verdict": "override_guard", "reason": "audited", "paths": [path]}
 	with pytest.raises(ledger.UsageError):
 		ledger.validate(verdict, _decision(), "shubhodeep1/coding-workflows")
-	assert ledger.validate(verdict, _decision(), "o/consumer")["paths"]
+	assert ledger.validate(verdict, _decision(paths=[path]), "o/consumer", _rejection(paths=[path]))["paths"]
 
 
 @pytest.mark.parametrize("path", ["../etc/passwd", "/abs", "src/*.py", "a//b", ""])
@@ -210,14 +292,14 @@ def test_issue_only_verdicts_are_not_offered_for_prs_or_projects() -> None:
 
 
 def test_destructive_override_refuses_canonical_sources_everywhere() -> None:
-	decision = _decide("destructive-blocked", "issue")
+	decision = _decide("destructive-blocked", "issue", rejection=_rejection("destructive-blocked", ["docs/old.md", "src/a.py"]))
 	verdict = {"verdict": "override_guard", "reason": "the deletions are the task", "paths": ["docs/old.md", "src/a.py"]}
-	normalised = ledger.validate(verdict, decision, "acme/app")
+	normalised = ledger.validate(verdict, decision, "acme/app", _rejection("destructive-blocked", verdict["paths"]))
 	assert normalised["override"] == "bulk_delete"
 	for path in ("prompts/mode-x.txt", "agents.md", ".github/ai/x.json"):
 		with pytest.raises(ledger.UsageError):
 			ledger.validate(dict(verdict, paths=[path]), decision, "acme/app")
-	scope = ledger.validate(dict(verdict, paths=["src/a.py"]), _decide("scope-blocked", "issue"), "acme/app")
+	scope = ledger.validate(dict(verdict, paths=["src/a.py"]), _decide("scope-blocked", "issue", rejection=_rejection()), "acme/app", _rejection())
 	assert "override" not in scope
 
 
@@ -232,19 +314,20 @@ def test_destructive_override_refuses_canonical_sources_everywhere() -> None:
 def test_override_refuses_protected_automation_in_every_repo(path: str, stop: str, repo: str) -> None:
 	verdict = {"verdict": "override_guard", "reason": "audited", "paths": [path]}
 	with pytest.raises(ledger.UsageError, match="protected automation path"):
-		ledger.validate(verdict, _decide(stop), repo)
+		ledger.validate(verdict, _decide(stop, rejection=_rejection(stop, [path])), repo, _rejection(stop, [path]))
 
 
 def test_scope_override_refuses_a_mixed_list_without_partial_approval() -> None:
 	verdict = {"verdict": "override_guard", "reason": "audited", "paths": ["src/a.py", ".github/actions/a/action.yml"]}
 	with pytest.raises(ledger.UsageError, match="protected automation path"):
-		ledger.validate(verdict, _decide("scope-blocked"), "o/consumer")
+		ledger.validate(verdict, _decide("scope-blocked", rejection=_rejection(paths=verdict["paths"])),
+			"o/consumer", _rejection(paths=verdict["paths"]))
 
 
 @pytest.mark.parametrize("path", ["src/a.py", "docs/github.md", "my.github/x", "scripts/x.sh", "prompts/x.txt"])
 def test_consumer_scope_override_still_accepts_non_automation_paths(path: str) -> None:
 	verdict = {"verdict": "override_guard", "reason": "audited", "paths": [path]}
-	assert ledger.validate(verdict, _decide("scope-blocked"), "o/consumer")["paths"] == [path]
+	assert ledger.validate(verdict, _decide("scope-blocked", rejection=_rejection(paths=[path])), "o/consumer", _rejection(paths=[path]))["paths"] == [path]
 
 
 def test_override_marker_round_trips_and_is_counted() -> None:
@@ -971,6 +1054,24 @@ def test_judge_refuses_a_verdict_outside_the_menu(tmp_path: Path) -> None:
 	assert "reason=invalid_verdict" in result.stdout
 	assert len(state["comments"]) == 1 and "ai:unblock-wait:v1 item=7 reason=invalid_verdict" in state["comments"][0]["body"]
 	assert state["labels_removed"] == [] and state["created"] == []
+
+
+@pytest.mark.parametrize("paths, valid", [(["docs/x.md", "src/auth.py"], False), (["docs/x.md"], True)])
+def test_judge_binds_scope_override_to_guard_comment(tmp_path: Path, paths: list[str], valid: bool) -> None:
+	issue = dict(ISSUE, labels=[{"name": "ai:scope-blocked"}], body="files_touched:\n  - src/a.py")
+	comments = [_comment("Implementation Plan: approved"), _comment("Guard failed\n" + _rejection_marker(["docs/x.md"]))]
+	result, state = _judge(tmp_path, issue, comments=comments,
+		verdict={"verdict": "override_guard", "reason": "expected scope", "paths": paths})
+	assert result.returncode == 0, result.stderr
+	if valid:
+		assert "outcome=acted" in result.stdout
+		assert any("Bound to guard rejection from run 777." in entry["body"] for entry in state["comments"])
+		assert any("docs/x.md" in patch[1].get("body", "") for patch in state["patched"])
+		assert any(entry["body"] == "/approved" for entry in state["comments"])
+	else:
+		assert "reason=invalid_verdict" in result.stdout
+		assert not state["patched"] and not state["labels_removed"]
+		assert not any(entry["body"].startswith("/approved") for entry in state["comments"])
 
 
 def test_comment_fetch_failure_does_not_reset_the_ledger(tmp_path: Path) -> None:

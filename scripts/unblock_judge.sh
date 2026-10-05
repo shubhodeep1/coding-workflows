@@ -482,9 +482,13 @@ unblock_main()
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} outcome=skip reason=fingerprint_failed"
 		return 0
 	fi
+	if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" rejection --item "${ITEM}" --stop "${ITEM_STOP}" \
+		--comments-file "${RUNTIME_DIR}/item_comments.json" --trusted-login "${UNBLOCK_LOGIN}" > "${RUNTIME_DIR}/rejection.json"; then
+		echo '{"status":"none","reason":"unreadable"}' > "${RUNTIME_DIR}/rejection.json"
+	fi
 
 	local -a decide_args=(decide --item "${ITEM}" --stop "${ITEM_STOP}" --fingerprint "${fp}" --comments-file "${RUNTIME_DIR}/item_comments.json"
-		--trusted-login "${UNBLOCK_LOGIN}" --now "${now}" --kind "${ITEM_KIND}")
+		--trusted-login "${UNBLOCK_LOGIN}" --now "${now}" --kind "${ITEM_KIND}" --rejection-file "${RUNTIME_DIR}/rejection.json")
 	[ -n "${last_activity}" ] && decide_args+=(--last-activity "${last_activity}")
 	if [[ "${tracking}" =~ ^[0-9]+$ ]]; then
 		if [ "${tracking}" = "${ITEM}" ]; then
@@ -543,7 +547,8 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 		unblock_ask_model || return 0
 	fi
 	if ! unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" validate --verdict-file "${RUNTIME_DIR}/verdict_raw.json" \
-		--decision-file "${RUNTIME_DIR}/decision.json" --repo "${REPOSITORY}" > "${RUNTIME_DIR}/verdict.json"; then
+		--decision-file "${RUNTIME_DIR}/decision.json" --repo "${REPOSITORY}" \
+		--rejection-file "${RUNTIME_DIR}/rejection.json" > "${RUNTIME_DIR}/verdict.json"; then
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} outcome=skip reason=invalid_verdict detail=$(jq -r '.error // ""' "${RUNTIME_DIR}/verdict.json" | tr ' ' '_' | cut -c1-120)"
 		gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="The unblock judge could not reach a valid verdict this time and will try again later.
 
@@ -565,6 +570,7 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 		+ (if (.answer // "") != "" then "Answer: " + .answer + "\n\n" else "" end)
 		+ (if (.paths // []) | length > 0 then "Paths: " + ((.paths // []) | map("`" + . + "`") | join(", ")) + "\n\n" else "" end)
 		+ (if (.override // "") == "bulk_delete" then "Approved deletions: " + (.paths | tojson) + "\n\n" else "" end)
+		+ (if (.rejection_run // "") != "" then "Bound to guard rejection from run " + .rejection_run + ".\n\n" else "" end)
 		+ (if (.placeholder // "") != "" then "Stays off behind `" + .placeholder + "` until the operator step is done.\n\n" else "" end)
 		+ $marker
 	' "${RUNTIME_DIR}/verdict.json")"
@@ -681,6 +687,7 @@ unblock_ask_model()
 		--slurpfile context "${RUNTIME_DIR}/context.json" \
 		--slurpfile decision "${RUNTIME_DIR}/decision.json" \
 		--slurpfile evidence "${RUNTIME_DIR}/evidence.json" \
+		--slurpfile rejection "${RUNTIME_DIR}/rejection.json" \
 		--slurpfile comments "${RUNTIME_DIR}/item_comments.json" \
 		--slurpfile state "${RUNTIME_DIR}/state_slice.json" \
 		--arg login "${UNBLOCK_LOGIN}" \
@@ -692,6 +699,7 @@ unblock_ask_model()
 			evidence: $evidence[0],
 			allowed: $decision[0].allowed,
 			used_for_this_fingerprint: $decision[0].used,
+			guard_rejection: (if $rejection[0].status == "ok" then ($rejection[0] | {guard, paths, run}) else null end),
 			rounds: {item: $decision[0].item_rounds, project: $decision[0].project_rounds},
 			prior_unblock_verdicts: [$comments[0][] | select((.user.login // "") == $login and ((.body // "") | test("<!-- ai:unblock:v1 "))) | {created_at, body: ((.body // "")[0:1500])}] | .[-5:],
 			last_comments: [$comments[0][-20:][] | {author: (.user.login // ""), created_at, body: ((.body // "")[0:2000])}],
