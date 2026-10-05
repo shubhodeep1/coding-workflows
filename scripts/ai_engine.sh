@@ -36,7 +36,8 @@
 #       credential, no policy, or every account hit its usage limit or was
 #       rejected), after logging AI_ENGINE_FALLBACK, so the caller runs the
 #       codex path (D1); 124 on a timeout; any other non-zero status on a
-#       crash, which follows the role's existing retry rules.
+#       crash, which follows the role's existing retry rules; 86 if trusted
+#       support was changed (terminal: never fall back to codex).
 #       AI_ENGINE_LAST_RUN_DIR names the run directory afterwards; it holds
 #       transcript-<NAME>.jsonl and stderr-<NAME>.txt for each account tried.
 #       Read-profile calls use a network-isolated container and a bounded,
@@ -57,9 +58,12 @@
 #                           (read-profile Claude children receive no GitHub,
 #                           Telegram, OpenRouter or Actions OIDC credentials)
 #   SUPPORT_INSTRUCTIONS_FILE   unattended_system_instructions.md
+#   AI_ENGINE_ISOLATED_READ_PATHS  colon-separated extra read-only directories
+#                                   for read-profile calls (default empty)
 #
-# The OAuth token reaches the CLI only through CLAUDE_CODE_OAUTH_TOKEN in a
-# subshell, never argv, a log line or a file outside the pool directory.
+# Write-profile calls pass the OAuth token to the host CLI in a subshell.
+# Read-profile calls instead run in a networkless container with a placeholder
+# token; only the host relay reads the pool. Isolation failures return 75.
 
 if [ "${_AI_ENGINE_LOADED:-}" = "true" ]; then
 	return 0 2>/dev/null || true
@@ -68,6 +72,7 @@ _AI_ENGINE_LOADED="true"
 
 _AI_ENGINE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _AI_ENGINE_EXIT_FALLBACK=75
+_AI_ENGINE_EXIT_SUPPORT_TAMPERED=86
 
 _ai_engine_py()
 {
@@ -183,146 +188,262 @@ _ai_engine_instructions_file()
 	return 1
 }
 
-_claude_run_read_isolated()
-(
-	local role="$1" prompt_file="$2" out_file="$3" workdir="$4" session_id="$5"
-	local model="$6" effort="$7" instructions="$8" hide_claude_md="$9" pool_dir="${10}" run_dir="${11}"
-	shift 11
-	local -a accounts=("$@") git_mount=() snapshot_args=()
-	local guard_hook snapshot git_objects image version probe_model name broker_pid="" container_name="" attempt_rc verdict outcome reason
-	# shellcheck disable=SC2317 # EXIT/INT/TERM traps call this function.
-	cleanup_read_isolation()
-	{
-		if [ -n "${container_name}" ]; then
-			env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker rm -f -- "${container_name}" >/dev/null 2>&1 || true
+_ai_engine_support_finish()
+{
+	local run_dir="$1" role="$2" status=0
+	# Run the pre-model copy: the installed verifier itself may have been
+	# overwritten by the model. Always restore modes, even on a mismatch.
+	PYTHONDONTWRITEBYTECODE=1 python3 "${run_dir}/claude_engine.py" support-verify --manifest "${run_dir}/support-lock.json" || status=1
+	PYTHONDONTWRITEBYTECODE=1 python3 "${run_dir}/claude_engine.py" support-unlock --manifest "${run_dir}/support-lock.json" || status=1
+	if [ "${status}" -ne 0 ]; then
+		echo "AI_ENGINE_SUPPORT_LOCK role=${role} outcome=tampered" >&2
+		return "${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"
+	fi
+	echo "AI_ENGINE_SUPPORT_LOCK role=${role} outcome=verified" >&2
+}
+
+_ai_engine_isolation_preflight()
+{
+	local pool_dir="$1" workdir="$2" prompt_file="$3" instructions="$4" entry
+	AI_ENGINE_ISOLATION_FAILURE=""
+	command -v docker >/dev/null 2>&1 || { AI_ENGINE_ISOLATION_FAILURE=isolation_docker_missing; return 1; }
+	command -v python3 >/dev/null 2>&1 || { AI_ENGINE_ISOLATION_FAILURE=isolation_python_missing; return 1; }
+	for entry in setsid ps git realpath sha256sum; do
+		command -v "${entry}" >/dev/null 2>&1 || { AI_ENGINE_ISOLATION_FAILURE=isolation_support_missing; return 1; }
+	done
+	if [ ! -f "${_AI_ENGINE_DIR}/claude_anthropic_relay.py" ] || [ ! -f "${_AI_ENGINE_DIR}/clarify_sandbox/Dockerfile" ]; then
+		AI_ENGINE_ISOLATION_FAILURE=isolation_support_missing; return 1
+	fi
+	AI_ENGINE_ISOLATION_GUARD="$(_ai_engine_py support-file --name guard-hook 2>/dev/null)" || { AI_ENGINE_ISOLATION_FAILURE=policy_unavailable; return 1; }
+	[ -f "${AI_ENGINE_ISOLATION_GUARD}" ] || { AI_ENGINE_ISOLATION_FAILURE=policy_unavailable; return 1; }
+	AI_ENGINE_ISOLATION_PATHS=()
+	if [ -n "${AI_ENGINE_ISOLATED_READ_PATHS:-}" ]; then
+		local -a entries=()
+		IFS=: read -r -a entries <<< "${AI_ENGINE_ISOLATED_READ_PATHS}"
+		if [ "${#entries[@]}" -gt 8 ] || [[ "${AI_ENGINE_ISOLATED_READ_PATHS}" == *: ]]; then
+			AI_ENGINE_ISOLATION_FAILURE=isolation_read_path_invalid; return 1
 		fi
-		if [ -n "${broker_pid}" ]; then
-			kill "${broker_pid}" 2>/dev/null || true
-			wait "${broker_pid}" 2>/dev/null || true
+		for entry in "${entries[@]}"; do
+			if [[ "${entry}" != /* ]] || [ ! -d "${entry}" ] || [ -L "${entry}" ] || [[ "${entry}" == *,* ]]; then
+				AI_ENGINE_ISOLATION_FAILURE=isolation_read_path_invalid; return 1
+			fi
+			AI_ENGINE_ISOLATION_PATHS+=("$(realpath -e -- "${entry}")")
+		done
+	fi
+	local pool_real candidate
+	pool_real="$(realpath -e -- "${pool_dir}")" || { AI_ENGINE_ISOLATION_FAILURE=isolation_pool_overlap; return 1; }
+	for candidate in "${workdir}" "${prompt_file}" "${instructions}" "${AI_ENGINE_ISOLATION_PATHS[@]}"; do
+		candidate="$(realpath -e -- "${candidate}")" || { AI_ENGINE_ISOLATION_FAILURE=isolation_read_path_invalid; return 1; }
+		if [[ "${candidate}" == *,* || "${candidate}" == *$'\n'* ]]; then
+			AI_ENGINE_ISOLATION_FAILURE=isolation_read_path_invalid; return 1
 		fi
-		rm -rf -- "${run_dir}/source" "${run_dir}/socket"
-	}
-	trap cleanup_read_isolation EXIT
-	trap 'exit 130' INT
-	trap 'exit 143' TERM
-	if ! command -v docker >/dev/null 2>&1 || [ ! -f "${_AI_ENGINE_DIR}/claude_anthropic_relay.py" ] ||
-		! guard_hook="$(_ai_engine_py support-file --name guard-hook)"; then
-		ai_engine_fallback "${role}" isolation_unavailable
-		return "${_AI_ENGINE_EXIT_FALLBACK}"
+		if [[ "${candidate}/" == "${pool_real}/"* || "${pool_real}/" == "${candidate}/"* ]]; then
+			AI_ENGINE_ISOLATION_FAILURE=isolation_pool_overlap; return 1
+		fi
+	done
+}
+
+_ai_engine_isolation_image()
+{
+	local dockerfile="${_AI_ENGINE_DIR}/clarify_sandbox/Dockerfile" version tag
+	version="$(ai_engine_cli_version)" || return 1
+	[[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+	tag="coding-workflows-claude-read:${version}-$(sha256sum "${dockerfile}" | cut -c1-12)"
+	if ! env -i PATH="${PATH}" docker image inspect "${tag}" >/dev/null 2>&1; then
+		env -i PATH="${PATH}" docker build -q --build-arg "CLAUDE_CLI_VERSION=${version}" \
+			-t "${tag}" -f "${dockerfile}" "${_AI_ENGINE_DIR}/clarify_sandbox" >/dev/null || return 1
 	fi
-	mkdir -m 0755 -- "${run_dir}/source" || { ai_engine_fallback "${role}" snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"; }
-	if [ "${hide_claude_md}" = "true" ]; then snapshot_args+=(--omit-claude-md); fi
-	if ! snapshot="$(_ai_engine_py read-snapshot --source "${workdir}" --dest "${run_dir}/source" "${snapshot_args[@]}")"; then
-		ai_engine_fallback "${role}" snapshot_failed
-		return "${_AI_ENGINE_EXIT_FALLBACK}"
+	printf '%s\n' "${tag}"
+}
+
+_ai_engine_git_mask_configs()
+{
+	local run_dir="$1" directory gitdir common config config_real mount_dir key count=0 keys_file
+	AI_ENGINE_ISOLATION_MASKS=()
+	local -a seen=()
+	for directory in "${AI_ENGINE_ISOLATION_WORKDIR}" "${AI_ENGINE_ISOLATION_PATHS[@]}" \
+			"${AI_ENGINE_ISOLATION_WORKDIR}/.codex-workflow-src" \
+			"${AI_ENGINE_ISOLATION_WORKDIR}/.codex-workflow-src-main"; do
+		if ! gitdir="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR git -C "${directory}" rev-parse --absolute-git-dir 2>/dev/null)"; then
+			# A malformed checkout must not bypass masking just because git cannot parse it.
+			[ ! -e "${directory}/.git" ] && [ ! -L "${directory}/.git" ] || return 1
+			continue
+		fi
+		common="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR git -C "${directory}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+		for config in "${gitdir}/config" "${gitdir}/config.worktree" "${common}/config"; do
+			[ -f "${config}" ] || continue
+			config_real="$(realpath -e -- "${config}")" || return 1
+			for mount_dir in "${AI_ENGINE_ISOLATION_WORKDIR}" "${AI_ENGINE_ISOLATION_PATHS[@]}"; do
+				[[ "${config_real}" == "${mount_dir}/"* ]] || continue
+				if printf '%s\n' "${seen[@]}" | grep -Fxq -- "${config_real}"; then break; fi
+				seen+=("${config_real}")
+				count=$((count + 1))
+				[ "${count}" -le 20 ] || return 1
+				mkdir -p "${run_dir}/git-mask/${count}" || return 1
+				cp -- "${config_real}" "${run_dir}/git-mask/${count}/config" || return 1
+				keys_file="${run_dir}/git-mask/${count}/keys"
+				local git_rc=0
+				# Remote URLs can themselves contain an embedded username/password.
+				git config --file "${run_dir}/git-mask/${count}/config" --name-only --get-regexp '^(http(\..*)?\.extraheader|credential\.|url\..*\.insteadof|include\.|includeif\.|remote\..*\.(url|pushurl))' > "${keys_file}" || git_rc=$?
+				case "${git_rc}" in 0|1) ;; *) return 1 ;; esac
+				sort -u -o "${keys_file}" "${keys_file}" || return 1
+				while IFS= read -r key; do
+					[ -n "${key}" ] || continue
+					git config --file "${run_dir}/git-mask/${count}/config" --unset-all "${key}" || return 1
+				done < "${keys_file}"
+				AI_ENGINE_ISOLATION_MASKS+=(--mount "type=bind,src=${run_dir}/git-mask/${count}/config,dst=${config_real},readonly")
+				break
+			done
+		done
+	done
+}
+
+_ai_engine_claude_run_isolated()
+{
+	local role="$1" prompt_file="$2" out_file="$3" workdir="$4" session_id="$5" model="$6" effort="$7" instructions="$8" pool_dir="$9" run_dir="${10}" hide_claude_md="${11}"
+	local guard_hook image probe_model reason name token_file transcript stderr_file verdict outcome attempt_rc broker_pid reaper_pid container_name parent_pid attempt=0 relay_failures=0 i session_mount_root pool_mount_root
+	local -a mounts=() session_args=() cmd=() accounts=()
+	local AI_ENGINE_ISOLATION_WORKDIR AI_ENGINE_ISOLATION_FAILURE AI_ENGINE_ISOLATION_GUARD
+	local -a AI_ENGINE_ISOLATION_PATHS=() AI_ENGINE_ISOLATION_MASKS=()
+	AI_ENGINE_ISOLATION_WORKDIR="${workdir}"
+	if ! _ai_engine_isolation_preflight "${pool_dir}" "${workdir}" "${prompt_file}" "${instructions}"; then
+		ai_engine_fallback "${role}" "${AI_ENGINE_ISOLATION_FAILURE}"; return "${_AI_ENGINE_EXIT_FALLBACK}"
 	fi
-	if ! _ai_engine_py settings --checkout /source --out "${run_dir}/claude-settings.json" \
-		--profile read --guard-hook /guard.py --read-guard-hook /claude_engine.py; then
-		ai_engine_fallback "${role}" policy_unavailable
-		return "${_AI_ENGINE_EXIT_FALLBACK}"
+	guard_hook="${AI_ENGINE_ISOLATION_GUARD}"
+	if ! _ai_engine_py settings --checkout "${workdir}" --out "${run_dir}/claude-settings.json" --profile read --guard-hook /guard.py --read-guard-hook /read-guard.py; then
+		ai_engine_fallback "${role}" policy_unavailable; return "${_AI_ENGINE_EXIT_FALLBACK}"
 	fi
-	chmod 0644 "${run_dir}/claude-settings.json" || { ai_engine_fallback "${role}" policy_unavailable; return "${_AI_ENGINE_EXIT_FALLBACK}"; }
-	if [ "$(_ai_engine_json_field "${snapshot}" git)" = present ]; then
-		git_objects="$(_ai_engine_json_field "${snapshot}" git_objects)" || return 1
-		[ -d "${git_objects}" ] || { ai_engine_fallback "${role}" snapshot_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"; }
-		git_mount=(--mount "type=bind,src=${git_objects},dst=/git-objects,readonly")
+	chmod 0644 "${run_dir}/claude-settings.json"
+	if ! image="$(_ai_engine_isolation_image)"; then
+		ai_engine_fallback "${role}" isolation_image_build_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
 	fi
-	if ! version="$(ai_engine_cli_version)" || ! probe_model="$(_ai_engine_py config --key probe_model)"; then
-		ai_engine_fallback "${role}" policy_unavailable
-		return "${_AI_ENGINE_EXIT_FALLBACK}"
+	if ! _ai_engine_git_mask_configs "${run_dir}"; then
+		ai_engine_fallback "${role}" isolation_mask_failed; return "${_AI_ENGINE_EXIT_FALLBACK}"
 	fi
-	if ! image="$(env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker build -q --build-arg "CLAUDE_CLI_VERSION=${version}" - <<'DOCKERFILE'
-FROM node:22.16.0-bookworm-slim
-ARG CLAUDE_CLI_VERSION
-RUN apt-get update && apt-get install -y --no-install-recommends python3 git ca-certificates bash && rm -rf /var/lib/apt/lists/*
-RUN npm install -g "@anthropic-ai/claude-code@${CLAUDE_CLI_VERSION}"
-DOCKERFILE
-	)" || [ -z "${image}" ]; then
-		ai_engine_fallback "${role}" image_unavailable
-		return "${_AI_ENGINE_EXIT_FALLBACK}"
+	mounts=(--mount "type=bind,src=${workdir},dst=${workdir},readonly")
+	for name in "${AI_ENGINE_ISOLATION_PATHS[@]}"; do
+		mounts+=(--mount "type=bind,src=${name},dst=${name},readonly")
+	done
+	mounts+=("${AI_ENGINE_ISOLATION_MASKS[@]}")
+	if [ "${hide_claude_md}" = true ] && [ -f "${workdir}/CLAUDE.md" ] && [ ! -L "${workdir}/CLAUDE.md" ]; then
+		: > "${run_dir}/empty-claude-md"
+		mounts+=(--mount "type=bind,src=${run_dir}/empty-claude-md,dst=${workdir}/CLAUDE.md,readonly")
 	fi
 	if [ -n "${session_id}" ]; then
-		echo "::notice::claude_run: read-profile session resume unavailable in isolation" >&2
+		mkdir -p "${RUNNER_TEMP:-/tmp}/claude-read-sessions" && chmod 0700 "${RUNNER_TEMP:-/tmp}/claude-read-sessions" || { ai_engine_fallback "${role}" isolation_session_dir_unavailable; return 75; }
+		session_mount_root="$(realpath -e -- "${RUNNER_TEMP:-/tmp}/claude-read-sessions")" || { ai_engine_fallback "${role}" isolation_session_dir_unavailable; return 75; }
+		pool_mount_root="$(realpath -e -- "${pool_dir}")" || { ai_engine_fallback "${role}" isolation_pool_unavailable; return 75; }
+		if [[ "${session_mount_root}/" == "${pool_mount_root}/"* || "${pool_mount_root}/" == "${session_mount_root}/"* ]]; then
+			ai_engine_fallback "${role}" isolation_pool_overlap; return 75
+		fi
+		if compgen -G "${RUNNER_TEMP:-/tmp}/claude-read-sessions/*/${session_id}.jsonl" >/dev/null; then
+			session_args=(--resume "${session_id}")
+		else
+			session_args=(--session-id "${session_id}")
+		fi
+		mounts+=(--mount "type=bind,src=${RUNNER_TEMP:-/tmp}/claude-read-sessions,dst=/home/agent/.claude/projects")
 	fi
-	mkdir -m 0700 -- "${run_dir}/socket" || { ai_engine_fallback "${role}" isolation_unavailable; return "${_AI_ENGINE_EXIT_FALLBACK}"; }
+	probe_model="$(_ai_engine_py config --key probe_model)" || { ai_engine_fallback "${role}" policy_unavailable; return 75; }
+	mapfile -t accounts < <(ai_engine_accounts)
+	echo "CLAUDE_ISOLATION role=${role} profile=read mode=container" >&2
 	for name in "${accounts[@]}"; do
-		# Only the host broker opens the pool file; the container sees a placeholder.
-		env -i PATH="${PATH}" PYTHONDONTWRITEBYTECODE=1 \
-			python3 "${_AI_ENGINE_DIR}/claude_anthropic_relay.py" broker \
-			"${run_dir}/socket/provider.sock" "${pool_dir}/tokens/${name}" "${model},${probe_model}" \
-			>/dev/null 2>"${run_dir}/relay-stderr-${name}.txt" &
+		attempt=$((attempt + 1))
+		token_file="${pool_dir}/tokens/${name}"
+		mkdir -p "${run_dir}/sock" && chmod 0700 "${run_dir}/sock" || { ai_engine_fallback "${role}" isolation_relay_unavailable; return 75; }
+		rm -f -- "${run_dir}/sock/provider.sock"
+		container_name="claude-read-${GITHUB_RUN_ID:-local}-${BASHPID}-${attempt}"
+		parent_pid="${BASHPID}"
+		env -i PATH="${PATH}" PYTHONDONTWRITEBYTECODE=1 python3 "${_AI_ENGINE_DIR}/claude_anthropic_relay.py" broker "${run_dir}/sock/provider.sock" "${token_file}" "${model},${probe_model}" >/dev/null 2>"${run_dir}/relay-${name}.stderr" &
 		broker_pid=$!
+		# Start the reaper before waiting for the socket: SIGKILL skips shell traps.
+		# shellcheck disable=SC2016 # This is the reaper's shell, not the caller's.
+		setsid bash -c 'parent=$1; container=$2; broker=$3; while kill -0 "$parent" 2>/dev/null && [ "$(ps -o stat= -p "$parent" 2>/dev/null)" != Z ]; do sleep 1; done; docker rm -f "$container" >/dev/null 2>&1; kill "$broker" 2>/dev/null' _ "${parent_pid}" "${container_name}" "${broker_pid}" >/dev/null 2>&1 < /dev/null &
+		reaper_pid=$!
 		for ((i=0; i<50; i++)); do
-			[ -S "${run_dir}/socket/provider.sock" ] && break
+			[ -S "${run_dir}/sock/provider.sock" ] && break
 			kill -0 "${broker_pid}" 2>/dev/null || break
 			sleep 0.1
 		done
-		if [ ! -S "${run_dir}/socket/provider.sock" ]; then
+		if [ ! -S "${run_dir}/sock/provider.sock" ]; then
 			echo "CLAUDE_POOL run role=${role} account=${name} outcome=crashed reason=relay_unavailable" >&2
-			kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; broker_pid=""
+			kill "${broker_pid}" "${reaper_pid}" 2>/dev/null || true
+			wait "${broker_pid}" "${reaper_pid}" 2>/dev/null || true
+			relay_failures=$((relay_failures + 1))
 			continue
 		fi
-		container_name="claude-read-$(basename "${run_dir}")-$$"
-		local -a cmd=(env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run --rm --name "${container_name}"
-			--user "$(id -u):$(id -g)" --network none --read-only --cap-drop ALL --security-opt no-new-privileges
+		cmd=(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN -u GH_HOST
+			-u GH_PAT -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID -u OPENROUTER_API_KEY
+			-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_RUNTIME_TOKEN
+			-u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL
+			docker run --rm -i --name "${container_name}" --user "$(id -u):$(id -g)"
+			--network none --read-only --cap-drop ALL --security-opt no-new-privileges
 			--pids-limit 128 --memory 2g --cpus 2
-			--tmpfs "/tmp:rw,nosuid,nodev,size=64m" --tmpfs "/home/sandbox:rw,nosuid,nodev,size=64m,mode=1777"
-			--mount "type=bind,src=${run_dir}/source,dst=/source,readonly" "${git_mount[@]}"
-			--mount "type=bind,src=${prompt_file},dst=/prompt,readonly"
+			--tmpfs "/tmp:rw,nosuid,nodev,size=64m" --tmpfs "/home/agent:rw,nosuid,nodev,size=64m,mode=1777"
+			"${mounts[@]}"
+			--mount "type=bind,src=${run_dir}/sock,dst=/socket,readonly"
+			--mount "type=bind,src=${_AI_ENGINE_DIR}/claude_anthropic_relay.py,dst=/relay.py,readonly"
+			--mount "type=bind,src=${_AI_ENGINE_DIR}/claude_engine.py,dst=/read-guard.py,readonly"
 			--mount "type=bind,src=${instructions},dst=/instructions.md,readonly"
 			--mount "type=bind,src=${run_dir}/claude-settings.json,dst=/settings.json,readonly"
 			--mount "type=bind,src=${guard_hook},dst=/guard.py,readonly"
-			--mount "type=bind,src=${_AI_ENGINE_DIR}/claude_engine.py,dst=/claude_engine.py,readonly"
-			--mount "type=bind,src=${_AI_ENGINE_DIR}/claude_anthropic_relay.py,dst=/relay.py,readonly"
-			--mount "type=bind,src=${run_dir}/socket,dst=/socket,readonly"
-			--env HOME=/home/sandbox --env ANTHROPIC_BASE_URL=http://127.0.0.1:8765
-			--env CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder
-			--env CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 --env DISABLE_AUTOUPDATER=1
-			--env "CLAUDE_MODEL=${model}" --env "CLAUDE_EFFORT=${effort}" --env "CLAUDE_SESSION_ID=${session_id}"
-			--workdir /source "${image}" /bin/bash -c '
+			--env HOME=/home/agent --env ANTHROPIC_BASE_URL=http://127.0.0.1:8765
+			--env CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder --env CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+			--env DISABLE_AUTOUPDATER=1 --env "CLAUDE_MODEL=${model}" --env "CLAUDE_EFFORT=${effort}"
+			--env "CLAUDE_WORKDIR=${workdir}" --workdir "${workdir}" "${image}" /bin/bash -c '
 				set -euo pipefail
-				printf "{\"projects\":{\"/source\":{\"hasTrustDialogAccepted\":true}}}\n" > "${HOME}/.claude.json"
+				python3 -c '\''import json,os; open(os.path.join(os.environ["HOME"], ".claude.json"), "w").write(json.dumps({"projects": {os.environ["CLAUDE_WORKDIR"]: {"hasTrustDialogAccepted": True}}}))'\''
 				python3 /relay.py bridge /socket/provider.sock &
 				bridge_pid=$!
 				trap '\''kill "${bridge_pid}" 2>/dev/null || true'\'' EXIT
 				python3 -c '\''import socket,time; [(time.sleep(.1) if s.connect_ex(("127.0.0.1",8765)) else exit(0)) for s in (socket.socket() for _ in range(50))]; exit(1)'\''
-				session_args=()
-				[ -z "${CLAUDE_SESSION_ID}" ] || session_args=(--session-id "${CLAUDE_SESSION_ID}")
-				claude -p --model "${CLAUDE_MODEL}" --effort "${CLAUDE_EFFORT}" \
-					--system-prompt-file /instructions.md --setting-sources "" --settings /settings.json \
-					--strict-mcp-config --disable-slash-commands --exclude-dynamic-system-prompt-sections \
-					--tools Read,Grep,Glob,Bash --permission-mode dontAsk \
-					--output-format stream-json --verbose "${session_args[@]}" < /prompt
-			')
+				printf "CLAUDE_READ_CONTAINER_READY\n" >&2
+				claude -p --model "${CLAUDE_MODEL}" --effort "${CLAUDE_EFFORT}" --system-prompt-file /instructions.md \
+					--setting-sources "" --settings /settings.json --strict-mcp-config --disable-slash-commands \
+					--exclude-dynamic-system-prompt-sections --tools Read,Grep,Glob,Bash --permission-mode dontAsk \
+					--output-format stream-json --verbose "$@"
+			' _ "${session_args[@]}")
+		transcript="${run_dir}/transcript-${name}.jsonl"
+		stderr_file="${run_dir}/stderr-${name}.txt"
 		attempt_rc=0
 		if [ -f "${_AI_ENGINE_DIR}/codex_stall_guard.sh" ]; then
 			bash "${_AI_ENGINE_DIR}/codex_stall_guard.sh" --phase "${role,,}" --engine claude \
-				--stdout-file "${run_dir}/transcript-${name}.jsonl" --stderr-file "${run_dir}/stderr-${name}.txt" -- "${cmd[@]}" || attempt_rc=$?
+				--stdout-file "${transcript}" --stderr-file "${stderr_file}" -- "${cmd[@]}" < "${prompt_file}" || attempt_rc=$?
 		else
-			"${cmd[@]}" >"${run_dir}/transcript-${name}.jsonl" 2>"${run_dir}/stderr-${name}.txt" || attempt_rc=$?
+			"${cmd[@]}" < "${prompt_file}" > "${transcript}" 2> "${stderr_file}" || attempt_rc=$?
 		fi
-		# A killed docker client may leave a live container despite --rm.
-		env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker rm -f -- "${container_name}" >/dev/null 2>&1 || true
-		container_name=""
-		kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; broker_pid=""
-		rm -f -- "${run_dir}/socket/provider.sock"
-		verdict="$(_ai_engine_py classify --transcript "${run_dir}/transcript-${name}.jsonl" --exit-code "${attempt_rc}")" || verdict='{"outcome":"crashed","reason":"classify_failed"}'
+		env -i PATH="${PATH}" docker rm -f "${container_name}" >/dev/null 2>&1 || true
+		kill "${broker_pid}" "${reaper_pid}" 2>/dev/null || true
+		wait "${broker_pid}" "${reaper_pid}" 2>/dev/null || true
+		# Do not run the checkout's classifier/extractor after the model if its
+		# trusted support changed. The caller will unlock and report the mismatch.
+		if ! PYTHONDONTWRITEBYTECODE=1 python3 "${run_dir}/claude_engine.py" support-verify --manifest "${run_dir}/support-lock.json"; then
+			return "${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"
+		fi
+		verdict="$(_ai_engine_py classify --transcript "${transcript}" --exit-code "${attempt_rc}")" || verdict='{"outcome":"crashed","reason":"classify_failed"}'
 		outcome="$(_ai_engine_json_field "${verdict}" outcome)"
 		reason="$(_ai_engine_json_field "${verdict}" reason)"
 		echo "CLAUDE_POOL run role=${role} account=${name} outcome=${outcome} reason=${reason} exit_code=${attempt_rc}" >&2
+		if [ "${attempt_rc}" -ne 0 ] && ! grep -Fxq 'CLAUDE_READ_CONTAINER_READY' "${stderr_file}"; then
+			ai_engine_fallback "${role}" isolation_container_start_failed
+			return "${_AI_ENGINE_EXIT_FALLBACK}"
+		fi
 		case "${outcome}" in
 			success)
-				_ai_engine_py extract --transcript "${run_dir}/transcript-${name}.jsonl" --out "${out_file}" >&2 || return 1
+				_ai_engine_py extract --transcript "${transcript}" --out "${out_file}" >&2 || return 1
 				ln -s -- "transcript-${name}.jsonl" "${run_dir}/successful-transcript.jsonl" || return 1
 				return 0 ;;
 			usage_limit|auth_failed) continue ;;
 			timeout) return 124 ;;
-			*) _ai_engine_py extract --transcript "${run_dir}/transcript-${name}.jsonl" --out "${out_file}" >&2 || true; return 1 ;;
+			*) _ai_engine_py extract --transcript "${transcript}" --out "${out_file}" >&2 || true; return 1 ;;
 		esac
 	done
-	ai_engine_fallback "${role}" all_accounts_failed
+	if [ "${relay_failures}" -eq "${#accounts[@]}" ]; then
+		ai_engine_fallback "${role}" isolation_relay_unavailable
+	else
+		ai_engine_fallback "${role}" all_accounts_failed
+	fi
 	return "${_AI_ENGINE_EXIT_FALLBACK}"
-)
+}
 
 claude_run()
 {
@@ -339,11 +460,6 @@ claude_run()
 		echo "::error::claude_run: session_id must be a lower-case UUID" >&2
 		return 2
 	fi
-	if ! command -v claude >/dev/null 2>&1; then
-		ai_engine_fallback "${role}" cli_missing
-		return "${_AI_ENGINE_EXIT_FALLBACK}"
-	fi
-
 	local resolved model effort profile hide_claude_md instructions
 	if ! resolved="$(_ai_engine_py resolve --role "${role}" --model-hint "${AI_ENGINE_MODEL_HINT:-}" --effort-hint "${AI_ENGINE_EFFORT_HINT:-}")"; then
 		ai_engine_fallback "${role}" resolve_failed
@@ -356,6 +472,10 @@ claude_run()
 	# one call (the review-blocked judge's verdict pass); it never widens one.
 	if [ "${AI_ENGINE_READ_ONLY:-false}" = "true" ]; then
 		profile="read"
+	fi
+	if [ "${profile}" != read ] && ! command -v claude >/dev/null 2>&1; then
+		ai_engine_fallback "${role}" cli_missing
+		return "${_AI_ENGINE_EXIT_FALLBACK}"
 	fi
 	hide_claude_md="$(_ai_engine_py config --key hide_claude_md 2>/dev/null || echo false)"
 	if ! instructions="$(_ai_engine_instructions_file)"; then
@@ -375,15 +495,31 @@ claude_run()
 		return "${_AI_ENGINE_EXIT_FALLBACK}"
 	fi
 
-	local run_dir
+	local run_dir rc=0
 	run_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/claude-run-XXXXXXXX")" || return 1
 	# The caller may read the transcripts (transcript-<NAME>.jsonl) after the run.
 	# shellcheck disable=SC2034  # read by callers after claude_run returns
 	AI_ENGINE_LAST_RUN_DIR="${run_dir}"
-	if [ "${profile}" = "read" ]; then
-		_claude_run_read_isolated "${role}" "${prompt_file}" "${out_file}" "${workdir}" "${session_id}" \
-			"${model}" "${effort}" "${instructions}" "${hide_claude_md}" "${pool_dir}" "${run_dir}" "${accounts[@]}"
-		return $?
+	if [ "${profile}" = read ]; then
+		# Keep the verifier outside the checkout that the model reads.
+		local locked_files old_int_trap old_term_trap
+		if ! cp -- "${_AI_ENGINE_DIR}/claude_engine.py" "${run_dir}/claude_engine.py" ||
+		   ! locked_files="$(_ai_engine_py support-lock --manifest "${run_dir}/support-lock.json" --workdir "${workdir}")"; then
+			echo "::error::Claude read profile could not lock trusted support." >&2
+			echo "AI_ENGINE_SUPPORT_LOCK role=${role} outcome=tampered" >&2
+			return "${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"
+		fi
+		echo "AI_ENGINE_SUPPORT_LOCK role=${role} outcome=locked files=${locked_files}" >&2
+		old_int_trap="$(trap -p INT)"
+		old_term_trap="$(trap -p TERM)"
+		trap '_ai_engine_support_finish "${run_dir}" "${role}" || exit "${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"; exit 130' INT
+		trap '_ai_engine_support_finish "${run_dir}" "${role}" || exit "${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"; exit 143' TERM
+		_ai_engine_claude_run_isolated "${role}" "${prompt_file}" "${out_file}" "${workdir}" "${session_id}" "${model}" "${effort}" "${instructions}" "${pool_dir}" "${run_dir}" "${hide_claude_md}" || rc=$?
+		_ai_engine_support_finish "${run_dir}" "${role}" || rc="${_AI_ENGINE_EXIT_SUPPORT_TAMPERED}"
+		trap - INT TERM
+		[ -z "${old_int_trap}" ] || eval "${old_int_trap}"
+		[ -z "${old_term_trap}" ] || eval "${old_term_trap}"
+		return "${rc}"
 	fi
 	local -a settings_args=(settings --checkout "${workdir}" --out "${run_dir}/claude-settings.json" --profile "${profile}")
 	[ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ] && settings_args+=(--allow-workflow-edits)
@@ -402,7 +538,6 @@ claude_run()
 		*) tools="Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch"; mode="bypassPermissions" ;;
 	esac
 
-	local rc=0
 	(
 		trap 'exit 130' INT
 		trap 'exit 143' TERM

@@ -371,6 +371,7 @@ jobs:
           SECURITY_PASS_AUDIT_OUTCOME: ${{ steps.run_security_audit.outcome }}
           SECURITY_PASS_AUDIT_BRANCH: ${{ env.AUDIT_BRANCH }}
           SECURITY_PASS_AUTHOR_LOGIN_FALLBACK: ${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}
+          SUPPORT_SHA: ${{ steps.resolve_support.outputs.support_sha }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           SUPPORT_SCRIPTS_SHA256: ${{ steps.support_integrity.outputs.support_scripts_sha256 }}
         run: |
@@ -395,5 +396,12 @@ jobs:
           if [ ! -f "${GITHUB_WORKSPACE}/scripts/review_single_issue_security_pass.sh" ]; then
             echo "::warning::review_single_issue_security_pass.sh is not in the audit support checkout; PR #${SECURITY_PASS_PR_NUMBER} gets no result."
             exit 0
+          fi
+          if ! support_status="$(git -C "${GITHUB_WORKSPACE}" status --porcelain --untracked-files=all -- . ':(exclude)audit-data' 2>/dev/null)" ||
+             [ -z "${SUPPORT_SHA}" ] ||
+             [ "$(git -C "${GITHUB_WORKSPACE}" rev-parse HEAD 2>/dev/null)" != "${SUPPORT_SHA}" ] ||
+             [ -n "${support_status}" ]; then
+            echo "::error::Security audit support checkout changed after the audit; refusing to run support scripts."
+            exit 1
           fi
           bash "${GITHUB_WORKSPACE}/scripts/review_single_issue_security_pass.sh" report

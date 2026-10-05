@@ -90,6 +90,16 @@ poller_claude_judge()
   [ "${judge_engine}" = "claude" ] || return 75
   AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
     claude_run "${role}" "${prompt_file}" "${output_file}" "${PWD}" 2> >(tee -a "${log_file}" >&2) || judge_rc=$?
+  if [ "${judge_rc}" -eq 86 ]; then
+    echo "::error::Trusted support changed during the read-only judge run." >&2
+    exit 86
+  fi
+  if [ -n "${SUPPORT_INTEGRITY_MANIFEST:-}" ] &&
+     { [ ! -r "${SUPPORT_INTEGRITY_MANIFEST}" ] || ! sha256sum --quiet --strict -c "${SUPPORT_INTEGRITY_MANIFEST}" ||
+       ! cmp -s "${SUPPORT_INTEGRITY_MANIFEST}.paths" <(find scripts prompts ai-memory/schemas .codex-workflow-src .codex-workflow-src-main -path '*/.git' -prune -o -type f -print0 2>/dev/null | sort -z); }; then
+    echo "::error::Trusted poller support changed during the judge run." >&2
+    exit 86
+  fi
   return "${judge_rc}"
 }
 # shellcheck source=scripts/semble_helpers.sh
@@ -7041,7 +7051,8 @@ run_security_pass_inline() {
     return 1
   fi
 
-  if ! SECURITY_AUDIT_OUTPUT_MODE="findings-json" \
+  local security_audit_run_rc=0
+  SECURITY_AUDIT_OUTPUT_MODE="findings-json" \
     SECURITY_AUDIT_FINDINGS_OUT="${findings_file}" \
     SECURITY_AUDIT_DIFF_BASE="${merge_base_sha}" \
     SECURITY_AUDIT_DIFF_HEAD="${current_head_sha}" \
@@ -7056,7 +7067,15 @@ run_security_pass_inline() {
     bash scripts/codex_heartbeat.sh \
       --phase "orchestrate-security-pass" \
       --stderr-file "${audit_error_file}" \
-      -- bash scripts/security_audit.sh "${context_file}"; then
+      -- bash scripts/security_audit.sh "${context_file}" || security_audit_run_rc=$?
+  if [ "${security_audit_run_rc}" -eq 86 ] ||
+     { [ -n "${SUPPORT_INTEGRITY_MANIFEST:-}" ] &&
+       { [ ! -r "${SUPPORT_INTEGRITY_MANIFEST}" ] || ! sha256sum --quiet --strict -c "${SUPPORT_INTEGRITY_MANIFEST}" ||
+         ! cmp -s "${SUPPORT_INTEGRITY_MANIFEST}.paths" <(find scripts prompts ai-memory/schemas .codex-workflow-src .codex-workflow-src-main -path '*/.git' -prune -o -type f -print0 2>/dev/null | sort -z); }; }; then
+    echo "::error::Trusted poller support changed during the security audit." >&2
+    exit 86
+  fi
+  if [ "${security_audit_run_rc}" -ne 0 ]; then
     security_pass_fail_closed "engine_unavailable" "The findings-JSON security audit engine exited without a usable result." "${prior_security_status}"
     return 1
   fi

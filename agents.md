@@ -636,6 +636,7 @@ a new value, add it to the appropriate overrides file with a
 | implement (main editor) | `openai/gpt-6-sol` | `high` (smoke: no override — see `.github/workflows/implement.yml:597-606`) | `low` | Claude (Opus 5.5; codex fallback) · `IMPLEMENT` |
 | implement-repair, implement-repair-syntax | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; codex fallback) · `IMPLEMENT_REPAIR` |
 | implement-diagnose | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; codex fallback) · `IMPLEMENT_DIAGNOSE` |
+| implement issue summary (PR comment) | `openai/gpt-6-sol` (`MODEL_EDITOR`) | default | `low` | Claude (Sonnet 5.5, read-only; codex fallback) · `SUMMARISER` |
 | review autofix editor | `openai/gpt-6-sol` | `high` (smoke: `medium`) | `low` | Claude (Opus 5.5; OpenCode fallback; `CLAUDE_FIXER_ENABLED=false` keeps OpenCode) · `REVIEW_EDITOR` |
 | review autofix reviewers (pass 1) | `REVIEWER_MODELS` (default roster: `minimax/minimax-m3`, `z-ai/glm-5.2`, `deepseek/deepseek-v4-pro`, `google/gemini-3.8-flash`, `qwen/qwen3.7-plus`, `openai/gpt-6-luna`) | `xhigh` per reviewer call (hardcoded at the `run_reviewer_pass ... "xhigh"` callsite in `scripts/review_run_reviewers.sh:4733`; not affected by the smoke `REVIEWER_REASONING_EFFORT=low` override in two-pass mode) | `low` | OpenCode only (no engine switch) |
 | review autofix reviewers (pass 2) | `REVIEWER_MODELS` (same roster, after pass-2 scope / tier filtering) | `high` on diffs below `REVIEWER_PASS2_DIFF_LARGE_LOC=200`, `xhigh` at or above that threshold; smoke: `low`; operator override wins | `low` | OpenCode only (no engine switch) |
@@ -647,14 +648,24 @@ a new value, add it to the appropriate overrides file with a
 | workflow log analyze | `openai/gpt-6-sol` | `xhigh` | `low` | Claude (Opus 5.5; codex fallback) · `LOG_ANALYSIS` |
 | workflow audit | `openai/gpt-6-sol` | `xhigh` (hardcoded in `.github/workflows/workflow-log-analysis.yml:716-717`) | `low` | Claude (Opus 5.5; codex fallback) · `LOG_AUDIT` |
 | workflow api-redundancy | `openai/gpt-6-sol` | `high` (default of `THINKING_LEVEL_ANALYSIS`) | `low` | Claude (Opus 5.5; codex fallback) · `LOG_ANALYSIS` |
-| workflow log summary | `openai/gpt-6-luna` | default | `low` | OpenRouter HTTP (no CLI call) · `LOG_SUMMARY` |
+| workflow log summary | `openai/gpt-6-luna` | default | `low` | Claude (Sonnet 5.5, read-only; OpenRouter HTTP fallback, and after `WORKFLOW_LOG_SUMMARY_TIME_BUDGET_SECS`, default `900`) · `LOG_SUMMARY` |
 | reviewer consensus summariser | `openai/gpt-6-luna` | `medium` (`XPOLL_SUMMARISER_REASONING`) | `low` | Claude (Sonnet 5.5, read-only; OpenCode fallback) · `SUMMARISER` |
 
 The **Engine · Claude role** column names today's engine and the role name
 `scripts/ai_engine.sh` resolves for that row (README "Claude engine").
+Host read-profile Claude runs (including SECURITY_AUDIT, SECURITY_JUDGE and
+WORKFLOW_HEAL) use an exact-command PreToolUse Bash guard and temporarily
+remove write bits from trusted support while recording hashes and directory
+entries. Verification precedes unlock; lock failures and mismatches return 86
+without a codex fallback. The security-audit report, heal intake and poller
+also verify their support checkout or staged manifest before executing further
+support code.
+On self-hosted runners, a job killed before unlocking may leave support
+directories read-only; restore them with `claude_engine.py support-unlock`
+against the leftover per-run manifest before reusing that workspace.
 Every role's default in `.github/ai/claude_engine.json` is `codex`
 until its cutover (Phase 5a moved `CLARIFY`, `CLARIFY_RESPOND` and `PLAN`
-to `claude`, Phase 5b `IMPLEMENT`, `IMPLEMENT_REPAIR` and `IMPLEMENT_DIAGNOSE`, Phase 5c `ORCHESTRATE`, the four orchestrator judges and the review write roles `REVIEW_EDITOR`, `REVIEW_CONSOLIDATOR`, `CONFLICT_RESOLVER` and `RB_JUDGE`, Phase 5d `VALIDATE`, `VALIDATE_SELF_HEAL`, `VALIDATION_REFRESH`, `SECURITY_AUDIT`, `CHECK_TRIAGE`, `WORKFLOW_HEAL`, `LOG_ANALYSIS`, `LOG_AUDIT`, `RETRO`, `SUMMARISER` and `BEHAVIOURAL_SMOKE`; a missing config file still means codex for every role);
+to `claude`, Phase 5b `IMPLEMENT`, `IMPLEMENT_REPAIR` and `IMPLEMENT_DIAGNOSE`, Phase 5c `ORCHESTRATE`, the four orchestrator judges and the review write roles `REVIEW_EDITOR`, `REVIEW_CONSOLIDATOR`, `CONFLICT_RESOLVER` and `RB_JUDGE`, Phase 5d `VALIDATE`, `VALIDATE_SELF_HEAL`, `VALIDATION_REFRESH`, `SECURITY_AUDIT`, `CHECK_TRIAGE`, `WORKFLOW_HEAL`, `LOG_ANALYSIS`, `LOG_AUDIT`, `RETRO`, `SUMMARISER`, `BEHAVIOURAL_SMOKE`, `MATERIALITY` (Q42) and `LOG_SUMMARY` (Q41); a missing config file still means codex for every role);
 `AI_ENGINE_<ROLE>`, `AI_ENGINE` or the `ai:engine-claude`
 / `ai:codex` labels select it per run. On Claude a role uses its existing
 model variable only when that value starts with `claude-`, else Opus 5.5
@@ -665,6 +676,8 @@ engine switch. When Claude is unavailable (`claude_run` exit 75,
 `AI_ENGINE_FALLBACK`), the run uses the codex/OpenCode path unchanged. The
 pinned CLI is `@anthropic-ai/claude-code` `cli_version` from the same file,
 installed by `.github/actions/install-claude`.
+Read-profile `claude_run` calls use a `--network none` container with a placeholder token; the host `scripts/claude_anthropic_relay.py` alone reads the pool token. Isolation failures fall back with `AI_ENGINE_FALLBACK reason=isolation_*`.
+Session reuse rejects a pool path overlapping the mounted session directory with `reason=isolation_pool_overlap` before starting the container.
 
 OpenCode version `1.18.23` is installed by the dispatch-only
 `.github/workflows/opencode-live-smoke.yml` rollout gate and by production
@@ -1230,6 +1243,7 @@ and shipped:
 - `STANDALONE_AUTO_DECIDE` (`clarify.yml` "Standalone auto-decide": `issue= outcome=answered|skip|failed reason= decisions=`)
 - `AI_ENGINE_SELECTED` (`scripts/ai_engine.sh`: `role= engine= model= effort= source=`)
 - `AI_ENGINE_FALLBACK` (`scripts/ai_engine.sh`: `role= reason=`; the run uses codex)
+- `AI_ENGINE_SUPPORT_LOCK` (`scripts/ai_engine.sh`: `role= outcome=locked|verified|tampered`; tampering exits 86 without codex fallback)
 - `CLAUDE_POOL` (`scripts/ai_engine.sh` and the sandbox Claude branches: `run role= account= outcome= reason= exit_code=`, `account_skipped account= reason=`)
 - `AI_ENGINE_PROJECT_LABEL` (`orchestrate.yml` "Ensure orchestrator labels exist": `label=`, `none` when unset; the label the tracking and wave-1 issues get)
 - `AI_ENGINE_PR_LABEL` (`implement.yml` "Create Pull Request": `issue= label=`; the engine label copied from the issue to its PR)
@@ -1434,6 +1448,7 @@ LOG_PREFIX.name=RETARGET_MERGED_BASE
 LOG_PREFIX.name=STANDALONE_AUTO_DECIDE
 LOG_PREFIX.name=AI_ENGINE_SELECTED
 LOG_PREFIX.name=AI_ENGINE_FALLBACK
+LOG_PREFIX.name=AI_ENGINE_SUPPORT_LOCK
 LOG_PREFIX.name=CLAUDE_POOL
 LOG_PREFIX.name=AI_ENGINE_PROJECT_LABEL
 LOG_PREFIX.name=AI_ENGINE_PR_LABEL
@@ -1672,7 +1687,7 @@ depend on it.
 - `scripts/review_filter_uninteresting_files.sh` strips low-signal lock/generated/minified paths before reviewer fan-out and emits `REVIEWER_FILTER_SKIP: <path> <reason>` for each skipped file. Default exemptions remain `db/contracts/**`, `**/migrations/**`, and `**/migrate/**`.
 - `.github/workflows/review_autofix.yml` now runs a fail-open local slop-scan preflight (gated by `SLOP_SCAN_ENABLED`, default `true`) on PR-changed `scripts/*.py`, `scripts/*.sh`, and `validation/**/*.sh` Python heredocs. It writes `.ai/slop_scan/findings.json`, feeds that JSON to reviewer and consolidator prompts as advisory untrusted context, and removes the runtime artifact before commit-producing steps so it cannot leak into staged changes.
 - Consumer-repo review commits snapshot untracked paths before the editor runs in `PRE_EDITOR_UNTRACKED_FILE`. `scripts/review_commit_changes.sh` removes paths that were already untracked plus pipeline-owned artifacts, records removals in `REVIEW_REMOVED_NEW_FILES_FILE`, and preserves other editor-created files for the existing staging and write-guard path; a missing snapshot retains the legacy delete-all fallback.
-- `scripts/review_agents_md_materiality.sh` is deterministic-path-glob v1: it writes a JSON result payload plus a non-blocking PR comment headed `## AI Materiality Advisory` when materiality is `high` or `medium` and root `agents.md` is unchanged. `AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED` is reserved only; enabling it still does not trigger a model call in the current shipped script.
+- `scripts/review_agents_md_materiality.sh` is deterministic-path-glob v1: it writes a JSON result payload plus a non-blocking PR comment headed `## AI Materiality Advisory` when materiality is `high` or `medium` and root `agents.md` is unchanged. With `AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED` on (the default), a PR the path rules rate `low` whose `agents.md` is unchanged also gets a Claude review (`claude_run_selected MATERIALITY`, read-only, `AGENTS_MD_MATERIALITY_LLM_TIMEOUT_SECS`); Claude can only raise the rating, and the result JSON records `llm_fallback_engine`, `llm_fallback_status` and, when it raised the rating, `llm_fallback_reason`. Any Claude failure keeps the deterministic result.
 - When `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED=true`, `scripts/review_consolidate.sh` feeds that helper JSON into the consolidator prompt as advisory untrusted context. This is the Lens 7 companion to the separate advisory comment path controlled by `AGENTS_MD_MATERIALITY_ENABLED`. Lens 7 (`NAMING / BACKWARD COMPATIBILITY`) may then emit a default-`high` `AGENTS.md materiality` finding when operator-visible structural changes leave root `agents.md` unchanged, but downgrades or omits it when equivalent touched docs already cover the behavior.
 - The deterministic review skip requires a complete paginated `/pulls/{n}/files` list for both small-diff and doc-only candidates, matched against the existing PR-details `changed_files` count. Missing/malformed/empty/partial responses and GitHub's 3,000-file ceiling route to review. Both names of a rename are checked; nested or case-variant agent instructions and automation paths (`.github/`, `.claude/`, `scripts/`, `prompts/`, `workflow-templates/`, `validation/`, `ai-memory/`, `db/contracts/`) plus root build/dependency/lint config suppress skip independently of `AGENTS_MD_MATERIALITY_ENABLED`. Benign docs and small code changes still qualify when evidence is complete; the head-bound merge check remains in place.
 - `REVIEW_LEDGER_REREVIEW_ENABLED` gates consolidator-side suppression of repeated `accepted-residual` / `won't-fix` findings from the existing review ledger and the review-blocked judge's ledger-fed prior-round decision input. `scripts/review_rb_judge.sh` renders that `=== BEGIN PRIOR ROUND DECISIONS ===` block via `render_review_rb_prior_round_decisions_file`, and `prompts/mode-judge-review-blocked.txt` treats it as advisory history rather than fresh reviewer evidence.
@@ -1744,8 +1759,9 @@ depend on it.
 | `REVIEWER_HEALTH_OPEN_THRESHOLD` | `3` | Consecutive retryable failures required to mark a reviewer slot `open` in the health cache. |
 | `REVIEWER_HEALTH_OPEN_TTL_SECS` | `1800` | Seconds an `open` reviewer-health entry suppresses dispatch before automatic expiry. |
 | `AGENTS_MD_MATERIALITY_ENABLED` | `1` | Post the deterministic, non-blocking `AGENTS.md` materiality advisory comment when a material change omits an `agents.md` update (on by default; set `0` to disable). |
-| `AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED` | `0` | Reserved only; deterministic v1 still makes no materiality model call when this flag is on. |
-| `AGENTS_MD_MATERIALITY_MODEL` | `openai/gpt-6-luna` | Reserved future materiality fallback model slug. |
+| `AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED` | `1` | Claude review of PRs the path rules rate `low` (role `MATERIALITY`, Sonnet 5.5, read-only tool profile). It can only raise the rating to `medium` or `high`, which posts the advisory with Claude's one-line reason; a Claude failure, timeout, unparseable answer or `AI_ENGINE_MATERIALITY=codex` keeps the path-rule result (there is no codex path). Skipped when `agents.md` changed. `0` turns it off. |
+| `AGENTS_MD_MATERIALITY_LLM_TIMEOUT_SECS` | `300` | Per-PR timeout for the Claude materiality review (30 to 1800; other values fall back to `300` with a `::warning::`). The CLI's process group is killed at the deadline. |
+| `AGENTS_MD_MATERIALITY_MODEL` | `openai/gpt-6-luna` | Recorded in the result JSON only; the Claude review's model comes from the `MATERIALITY` role in `.github/ai/claude_engine.json`. |
 | `AGENTS_MD_MATERIALITY_REASONING` | `medium` | Reserved future materiality fallback reasoning effort. |
 | `CONTEXT_BUDGET_WARN_RATIO` | `0.7` | Per-model context-window ratio above which review-surface prompt builders emit `CONTEXT_BUDGET_WARN`. |
 | `MAX_PROMPT_TOKENS_FOR_PHASE` | `(empty)` | Absolute prompt-token override that takes precedence over `CONTEXT_BUDGET_WARN_RATIO`; phase-specific `MAX_PROMPT_TOKENS_FOR_<PHASE>` overrides remain supported. |
