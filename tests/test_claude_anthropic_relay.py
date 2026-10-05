@@ -259,6 +259,29 @@ def test_rejected_body_drain_has_total_deadline_and_bounded_reads(monkeypatch) -
 	connection.settimeout.assert_called_with(1)
 
 
+def test_rejected_body_drain_resets_timeout_after_read_error(monkeypatch) -> None:
+	clock = [0.0]
+	connection = Mock()
+
+	def stalled_read(_limit):
+		clock[0] = 0.999
+		raise socket.timeout("timed out")
+
+	def reject(status):
+		connection.settimeout.assert_called_with(1)
+		return status
+
+	request = SimpleNamespace(
+		server=SimpleNamespace(mode="broker"), path="/v1/messages",
+		headers={"Authorization": "Bearer mine", "Content-Length": "4"},
+		connection=connection, rfile=SimpleNamespace(read1=stalled_read), _reject=reject,
+	)
+	with monkeypatch.context() as patch:
+		patch.setattr(relay.time, "monotonic", lambda: clock[0])
+		assert relay.Relay.do_POST(request) == 400
+	assert connection.settimeout.call_count == 2
+
+
 def test_upstream_failure_is_a_bare_502(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 	def refused(host, timeout=None, context=None):
 		return http.client.HTTPConnection("127.0.0.1", 9, timeout=2)

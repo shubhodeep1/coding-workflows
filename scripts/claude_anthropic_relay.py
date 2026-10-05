@@ -139,7 +139,10 @@ class Relay(http.server.BaseHTTPRequestHandler):
 						if not drain_chunk:
 							break
 						drain_remaining -= len(drain_chunk)
-					# Give the rejection write its own bounded timeout, not the last drain interval.
+				except OSError:
+					pass
+				# Give the rejection write its own bounded timeout even if draining failed.
+				try:
 					self.connection.settimeout(1)
 				except OSError:
 					pass
