@@ -675,7 +675,7 @@ fi
 		cat ./pre_assembled_static.txt
 		echo
 	fi
-	if [ -s "${RUNTIME_DIR}/static_readme_trimmed.txt" ]; then
+	if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/static_readme_trimmed.txt" ]; then
 		echo "=== BEGIN UNTRUSTED PR README.MD (trimmed) ==="
 		while IFS= read -r review_readme_line || [ -n "${review_readme_line}" ]; do
 			printf 'UNTRUSTED_DATA: %s\n' "${review_readme_line}"

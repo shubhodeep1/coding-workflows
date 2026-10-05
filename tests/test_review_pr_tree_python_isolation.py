@@ -171,7 +171,7 @@ def test_rejection_verifier_never_imports_pr_json(tmp_path: Path) -> None:
 
 def test_pre_review_python_invocations_are_safe_path_scoped() -> None:
 	shared = (
-		"review_collect_pr_metadata.sh", "memory_helpers.sh", "opencode_helpers.sh",
+		"build_static_context.sh", "review_collect_pr_metadata.sh", "memory_helpers.sh", "opencode_helpers.sh",
 		"workspace_init.sh", "gh_helpers.sh", "transcript_archive.sh",
 		"write_opencode_config.sh", "review_filter_uninteresting_files.sh",
 		"review_agents_md_materiality.sh", "review_run_reviewers.sh",
