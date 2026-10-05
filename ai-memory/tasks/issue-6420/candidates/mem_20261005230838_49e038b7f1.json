@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where should the committed-tree parity / provenance policy be enforced before templates reach consumers?\nChoices:\n- A: In the `validate-scripts` job of both `mark-stable.yml` and `test-and-mark-stable.yml`, run the parity test against the committed tree (no dry-run preparation) and fail the release on any drift that is not allowlisted. The promote and auto-release paths dispatch these gates, so every route to `stable` is covered. A matching committed live copy already shows provenance: pipeline editors cannot write `.claude/**`, so the copy came from a human edit or an authorized or human-merged sync PR. (RECOMMENDED)\n- B: Option A, plus re-run the sync script's provenance authorization over template commits since the last `stable` tag inside the release gates.\n- C: Option A, plus a consumer-side guard in `update_workflows.yml` (\"Sync .claude/ assets from upstream\"). It would skip syncing a `.claude` asset, and warn, when the upstream template differs from the upstream live copy at the release ref (allowlisted files excepted).\n- D: Options A, B and C together.\nQ2: What should happen to the PR-time step \"Prepare template-only PR live copies for parity tests\" (`ci.yml:401`)?\nChoices:\n- A: Leave it unchanged. Template-only PRs still pass CI, which avoids repeating the #6133 / #6176 breakage where editors could not touch `.claude/**`. The release-gate check from Q1 stops unreviewed drift from shipping. (RECOMMENDED)\n- B: Keep it, but add an advisory warning to the job summary listing the template paths whose live copies were only prepared, not committed.\n- C: Remove the preparation so template-only PRs fail CI until both copies are committed. **Note:** editors cannot write `.claude/**`, so every AI template-only PR would fail CI.",
+  "fingerprint": "20b06eb80e50e6d02ca93a25ffc75ca9d2b90e990ce36b33f066a839d4677439",
+  "lineage": {
+    "issue_number": 6420,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37385767540",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37385767540",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261005230838_49e038b7f1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6420,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37385767540"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6420 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-05T23:08:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
