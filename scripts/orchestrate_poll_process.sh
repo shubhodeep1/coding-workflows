@@ -21002,6 +21002,18 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         fi
       fi
 
+      # A cross-reference does not prove the selected PR belongs to this repo.
+      # Reject fork heads before their diff can drive a judge merge or close.
+      _rb_selected_head_repo="$(printf '%s' "${_rb_pr_json}" | jq -r '.head.repo.full_name // empty | strings' 2>/dev/null || true)"
+      if ! _pr_json_head_repo_is_origin "${_rb_pr_json}"; then
+        _rb_selected_identity_reason="cross_repository"
+        [ -n "${_rb_selected_head_repo}" ] || _rb_selected_identity_reason="head_repo_unavailable"
+        _rb_safe_selected_repo="$(printf '%s' "${_rb_selected_head_repo:-none}" | LC_ALL=C tr -c '[:alnum:]/_.-' '?' | cut -c1-100)"
+        echo "::warning::Review-blocked PR #${RB_PR} head identity rejected (${_rb_selected_identity_reason}); judge skipped."
+        echo "REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=${rb_issue} pr=${RB_PR} reason=${_rb_selected_identity_reason} head_repo=${_rb_safe_selected_repo}"
+        continue
+      fi
+
       # ------------------------------------------------------------------
       # Pre-judge auto-unstick / dirty-first dispatch
       # ------------------------------------------------------------------
@@ -21276,6 +21288,8 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
           _rb_safe_head_repo="$(printf '%s' "${_rb_api_head_repo:-none}" | LC_ALL=C tr -c '[:alnum:]/_.-' '?' | cut -c1-100)"
           echo "::warning::Review-blocked PR #${RB_PR} head identity rejected (${_rb_identity_reason}); combined-mode branch prep skipped."
           echo "REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=${rb_issue} pr=${RB_PR} reason=${_rb_identity_reason} head_repo=${_rb_safe_head_repo}"
+          rm -f -- "${RB_JUDGE_SEMBLE_QUERY_FILE}"
+          continue
         elif [ "${RB_PR_MERGED}" = "true" ]; then
           RB_TARGET_MERGED="true"
           resolve_active_orchestrator_context_for_issue "${rb_issue}" "${TRACKING_NUM:-}"
@@ -21387,6 +21401,8 @@ ${FOLLOWUP_BLOCK_REASON}"
             [[ "${_rb_verified_head_sha}" =~ ^[0-9a-fA-F]{40}$ ]] && _rb_log_fetched_head_sha="${_rb_verified_head_sha}"
             echo "::warning::Review-blocked PR #${RB_PR} head SHA could not be verified (${_rb_identity_reason}); combined-mode branch prep skipped."
             echo "REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=${rb_issue} pr=${RB_PR} reason=${_rb_identity_reason} expected_sha=${_rb_log_api_head_sha} fetched_sha=${_rb_log_fetched_head_sha}"
+            rm -f -- "${RB_JUDGE_SEMBLE_QUERY_FILE}"
+            continue
           elif git worktree add --force -B "${HEAD_REF}" "${RB_COMBINED_WORKDIR}" "${_rb_verified_head_sha}" >/dev/null 2>&1; then
             RB_COMBINED_MODE="true"
             RB_COMBINED_BRANCH_INFO="You are now on the PR branch (${HEAD_REF}) at verified head ${_rb_verified_head_sha}."

@@ -609,6 +609,11 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   `.github/ai/`, or `.github/workflows/` reject through that same path even
   if present in the PR's file list; `.github/prompts/` and `.github/scripts/`
   remain excluded from staging and forbidden when pre-staged.
+  The review-blocked poller rejects a selected PR whose head repository is
+  not the origin before its diff reaches the judge. For open PRs, branch
+  preparation also requires the fetched origin tip to match the PR head SHA;
+  identity, ref, or fetch failures defer the judge without consuming a fix
+  retry, so the next poll tick can check again.
   The review-blocked judge's OpenCode fix writer runs in
   `scripts/review_untrusted_sandbox.sh`.
 - **Sites.** plan, implement (attempts, post-Codex repair, diagnose, PR issue

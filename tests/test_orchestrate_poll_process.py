@@ -9707,26 +9707,31 @@ def _review_blocked_fix_scope_case(
 	head_repo: str | None = "owner/repo", head_sha: str = "@sandbox_head",
 	head_ref_from_api: str = "ai/issue-10",
 	missing_git_branch_fetches: list[str] | None = None,
+	refetched_head_ref: str | None = None, codex_action: str = "fix",
 ) -> dict:
 	state = _base_state(status="in_progress")
 	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	pr_details = {
+		"number": 901, "state": "open", "merged": False,
+		"baseRefName": "main", "headRefName": "ai/issue-10",
+		"headRefFromApi": head_ref_from_api, "mergeable": True,
+		"mergeable_state": "clean", "title": "Test PR",
+		"body": "Body", "files": files,
+		"headSha": head_sha, "headRepoFullName": head_repo,
+		"changed_files": len(files) if pr_changed_file_count is None else pr_changed_file_count,
+	}
 	return _run_poller(
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:review-blocked"]},
 		issue_linked_prs={10: 901},
-		prs=[{
-			"number": 901, "state": "open", "merged": False,
-			"baseRefName": "main", "headRefName": "ai/issue-10",
-			"headRefFromApi": head_ref_from_api, "mergeable": True,
-			"mergeable_state": "clean", "title": "Test PR",
-			"body": "Body", "files": files,
-			"headSha": head_sha, "headRepoFullName": head_repo,
-			"changed_files": len(files) if pr_changed_file_count is None else pr_changed_file_count,
-		}],
+		prs=[pr_details],
+		pr_api_sequence={901: [dict(pr_details) for _ in range(4)] + [
+			{**pr_details, "headRefFromApi": refetched_head_ref},
+		]} if refetched_head_ref is not None else None,
 		codex_json={
-			"action": "fix", "justification": "apply fixes",
+			"action": codex_action, "justification": "apply fixes",
 			"fix_description": description,
 			"remaining_issues_summary": "remaining",
 			"remaining_issues": remaining or [],
@@ -9771,12 +9776,41 @@ def test_review_blocked_rejects_unverified_open_pr_head():
 		assert not any("ai/issue-10" in call for call in result.get("git_worktree_add_calls", []))
 		assert "ai:review-blocked" in result["issues"]["10"]["labels"]
 		assert "reusing local HEAD as PR branch base" not in result["stdout"]
+		assert result["latest_state"]["review_blocked_retries"].get("10", 0) == 0
+		assert "Judge decision for #10" not in result["stdout"]
+
+
+def test_review_blocked_rejects_changed_pr_head_ref_before_judge():
+	result = _review_blocked_fix_scope_case(
+		touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
+		refetched_head_ref="ai/issue-elsewhere",
+	)
+	assert "REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=10 pr=901 reason=head_ref_mismatch" in result["stdout"]
+	assert result["latest_state"]["review_blocked_retries"].get("10", 0) == 0
+	assert result.get("git_push_calls", []) == []
+	assert "Judge decision for #10" not in result["stdout"]
+
+
+def test_review_blocked_rejects_fork_before_any_judge_action():
+	for action in ("merge", "merge_with_followup", "close_and_reissue"):
+		result = _review_blocked_fix_scope_case(
+			touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
+			head_repo="attacker/repo", codex_action=action,
+			env_overrides={"MAX_REVIEW_BLOCKED_RETRIES": "0"},
+		)
+		assert "REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=10 pr=901 reason=cross_repository" in result["stdout"]
+		assert "Judge decision for #10" not in result["stdout"]
+		assert result["latest_state"]["review_blocked_retries"].get("10", 0) == 0
+		assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+		assert result.get("git_push_calls", []) == []
 
 
 def test_review_blocked_open_pr_head_identity_contract():
 	text = POLLER_SCRIPT.read_text(encoding="utf-8")
 	assert '"${RB_COMBINED_WORKDIR}" "${_rb_verified_head_sha}"' in text
 	assert "reusing local HEAD as PR branch base" not in text
+	judge_section = text.split("# Guard: check PR state before invoking the judge", 1)[1]
+	assert judge_section.index('if ! _pr_json_head_repo_is_origin "${_rb_pr_json}"; then') < judge_section.index("# Run the judge")
 
 
 def test_review_blocked_rejects_fork_head_on_merged_followup():
