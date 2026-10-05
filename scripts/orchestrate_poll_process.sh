@@ -8563,6 +8563,7 @@ invoke_judge_for_integration_conflict() {
   # it (_integration_judge_commit_and_push).
   local judge_wt="${RUNTIME_DIR:-/tmp}/integration-judge-wt-${final_pr}"
   local judge_conflicts=""
+  local baseline_dir=""
   _integration_judge_remove_worktree "${judge_wt}"
   if ! git fetch --no-tags origin \
       "+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" \
@@ -8581,6 +8582,16 @@ invoke_judge_for_integration_conflict() {
     _integration_judge_remove_worktree "${judge_wt}"
     return 1
   fi
+  baseline_dir="$(mktemp -d "${RUNTIME_DIR:-/tmp}/integration-judge-baseline-${final_pr}.XXXXXX")" || {
+    _integration_judge_remove_worktree "${judge_wt}"
+    return 1
+  }
+  if ! _integration_judge_capture_baseline "${judge_wt}" "${baseline_dir}"; then
+    echo "::warning::[integration-heal] Judge baseline unavailable for PR #${final_pr}; nothing pushed."
+    _integration_judge_remove_worktree "${judge_wt}"
+    rm -rf -- "${baseline_dir}"
+    return 1
+  fi
 
   local prompt_file
   local output_file
@@ -8592,6 +8603,7 @@ invoke_judge_for_integration_conflict() {
   if ! assemble_judge_static_context "${judge_static_file}"; then
     rm -f "${prompt_file}" "${output_file}" "${judge_static_file}"
     _integration_judge_remove_worktree "${judge_wt}"
+    rm -rf -- "${baseline_dir}"
     return 1
   fi
 
@@ -8667,6 +8679,10 @@ invoke_judge_for_integration_conflict() {
     echo "Conflicted files:"
     printf '%s\n' "${judge_conflicts}"
     echo
+    echo 'Edit only the conflicted files listed above. Changes to other paths,'
+    echo 'or lines in conflicted .github/workflows/ or .github/actions/ files'
+    echo 'that come from neither side, reject the resolution without a push.'
+    echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
     echo "Context:"
@@ -8723,12 +8739,16 @@ invoke_judge_for_integration_conflict() {
     echo "::warning::Judge exec failed for integration conflict on PR #${final_pr}."
     rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
     _integration_judge_remove_worktree "${judge_wt}"
+    rm -rf -- "${baseline_dir}"
     return 1
   fi
   echo "  [integration-heal] Judge exec completed for PR #${final_pr}."
-  _integration_judge_commit_and_push "${judge_wt}" "${final_pr}" "${integration_branch}" "${default_branch}" || true
+  local expected_conflict_count
+  expected_conflict_count="$(tr -cd '\000' < "${baseline_dir}/conflicted.z" | wc -c)"
+  _integration_judge_commit_and_push "${judge_wt}" "${final_pr}" "${integration_branch}" "${default_branch}" "${baseline_dir}" "${expected_conflict_count}" || true
   rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
   _integration_judge_remove_worktree "${judge_wt}"
+  rm -rf -- "${baseline_dir}"
   return 0
 }
 
@@ -8741,7 +8761,168 @@ _integration_judge_remove_worktree() {
   git worktree prune >/dev/null 2>&1 || true
 }
 
-# _integration_judge_commit_and_push <worktree> <final_pr> <integration_branch> <default_branch>
+# Record the trusted merge index before the isolated judge edits the worktree.
+# Removing unmerged entries from a private index makes both trees comparable.
+_integration_judge_capture_baseline() {
+  local wt="$1" baseline_dir="$2" index_path
+  git -C "${wt}" diff --name-only -z --diff-filter=U > "${baseline_dir}/conflicted.z" || return 1
+  git -C "${wt}" ls-files -u -z > "${baseline_dir}/unmerged.z" || return 1
+  index_path="$(git -C "${wt}" rev-parse --git-path index)" || return 1
+  case "${index_path}" in /*) ;; *) index_path="${wt}/${index_path}" ;; esac
+  cp -- "${index_path}" "${baseline_dir}/index" || return 1
+  GIT_INDEX_FILE="${baseline_dir}/index" git -C "${wt}" update-index -z --force-remove --stdin < "${baseline_dir}/conflicted.z" || return 1
+  GIT_INDEX_FILE="${baseline_dir}/index" git -C "${wt}" write-tree > "${baseline_dir}/tree" || return 1
+}
+
+# Print the validated staged tree only after checking all agent-controlled changes.
+_integration_judge_verify_scope() {
+  local wt="$1" baseline_dir="$2" final_pr="$3"
+  PYTHONDONTWRITEBYTECODE=1 python3 - "${wt}" "${baseline_dir}" "${final_pr}" <<'PY'
+import bisect
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from collections import Counter
+
+wt, baseline_dir, final_pr = sys.argv[1:]
+git_env = os.environ.copy()
+for git_var_name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
+    git_env.pop(git_var_name, None)
+
+def log(outcome, reason, paths=()):
+    print(f"INTEGRATION_JUDGE_SCOPE pr={final_pr} outcome={outcome} reason={reason} paths={len(paths)}", file=sys.stderr)
+    for path in paths[:20]:
+        print(f"  path={ascii(os.fsdecode(path))}", file=sys.stderr)
+
+def git(*args, index=None):
+    env = git_env.copy()
+    if index is not None:
+        env["GIT_INDEX_FILE"] = index
+    return subprocess.run(("git", "-C", wt, *args), env=env, check=True, stdout=subprocess.PIPE).stdout
+
+try:
+    with open(os.path.join(baseline_dir, "tree"), "rb") as tree_file:
+        baseline_tree = tree_file.read().strip()
+    if not re.fullmatch(rb"[0-9a-f]{40,64}", baseline_tree):
+        raise ValueError("missing baseline tree")
+    with open(os.path.join(baseline_dir, "conflicted.z"), "rb") as conflicts_file:
+        conflicts = [path for path in conflicts_file.read().split(b"\0") if path]
+    with open(os.path.join(baseline_dir, "unmerged.z"), "rb") as unmerged_file:
+        unmerged = unmerged_file.read()
+    index_path = os.fsdecode(git("rev-parse", "--git-path", "index").strip())
+    if not os.path.isabs(index_path):
+        index_path = os.path.join(wt, index_path)
+    with tempfile.TemporaryDirectory(dir=baseline_dir) as scratch:
+        post_index = os.path.join(scratch, "index")
+        shutil.copyfile(index_path, post_index)
+        subprocess.run(("git", "-C", wt, "update-index", "-z", "--force-remove", "--stdin"),
+                       input=b"\0".join(conflicts) + (b"\0" if conflicts else b""),
+                       env={**git_env, "GIT_INDEX_FILE": post_index}, check=True, stdout=subprocess.PIPE)
+        post_tree = git("write-tree", index=post_index).strip()
+    changed = [path for path in git("diff-tree", "-r", "-z", "--no-renames", "--name-only",
+                                   baseline_tree.decode(), post_tree.decode()).split(b"\0") if path]
+    if changed:
+        log("rejected", "out_of_scope", changed)
+        sys.exit(1)
+except (OSError, ValueError, subprocess.CalledProcessError, UnicodeError):
+    log("rejected", "baseline_unavailable")
+    sys.exit(1)
+
+try:
+    stages = {}
+    for entry in unmerged.split(b"\0"):
+        if not entry:
+            continue
+        header, path = entry.split(b"\t", 1)
+        mode, blob, stage = header.split(b" ")
+        stages.setdefault(path, {})[stage] = (mode, blob)
+    if set(stages) != set(conflicts) or len(conflicts) != len(set(conflicts)):
+        raise ValueError("conflict metadata mismatch")
+    work = 0
+    for path in conflicts:
+        if not path.startswith((b".github/workflows/", b".github/actions/")):
+            continue
+        sides = stages[path]
+        indexed = git("ls-files", "-s", "-z", "--", ":(literal)" + os.fsdecode(path))
+        if not indexed:
+            if b"2" in sides and b"3" in sides:
+                raise ValueError("deleted both present sides")
+            continue
+        entries = [item for item in indexed.split(b"\0") if item]
+        if len(entries) != 1:
+            raise ValueError("invalid staged entry")
+        header, indexed_path = entries[0].split(b"\t", 1)
+        mode, blob, stage = header.split(b" ")
+        if indexed_path != path or stage != b"0" or mode not in (b"100644", b"100755"):
+            raise ValueError("invalid protected mode")
+        if mode not in {side[0] for side in sides.values() if side}:
+            raise ValueError("changed protected mode")
+        allowed = set()
+        side_lines = []
+        side_counts = []
+        for side_stage in (b"2", b"3"):
+            if side_stage in sides:
+                side_lines.append(git("cat-file", "blob", sides[side_stage][1].decode()).splitlines(keepends=True))
+                allowed.update(side_lines[-1])
+                side_counts.append(Counter(side_lines[-1]))
+        resolved_lines = git("cat-file", "blob", blob.decode()).splitlines(keepends=True)
+        if not set(resolved_lines) <= allowed:
+            raise ValueError("invented protected line")
+        base_counts = (Counter(git("cat-file", "blob", sides[b"1"][1].decode()).splitlines(keepends=True))
+                       if b"1" in sides else Counter())
+        for resolved_line, resolved_count in Counter(resolved_lines).items():
+            base_count = base_counts[resolved_line]
+            if resolved_count > base_count + sum(max(0, counts[resolved_line] - base_count) for counts in side_counts):
+                raise ValueError("duplicated unchanged protected line")
+        if resolved_lines not in side_lines:
+            # Assign each occurrence to one side, preserving order on that side.
+            side_indexes = []
+            for source_lines in side_lines:
+                line_positions = {}
+                for line_index, source_line in enumerate(source_lines):
+                    line_positions.setdefault(source_line, []).append(line_index)
+                side_indexes.append(line_positions)
+            while len(side_indexes) < 2:
+                side_indexes.append({})
+            frontier = {(0, 0)}
+            for resolved_line in resolved_lines:
+                work += len(frontier)
+                if work > 100000:
+                    raise ValueError("protected line provenance work limit exceeded")
+                next_frontier = set()
+                for first_pos, second_pos in frontier:
+                    for side_num, source_pos in enumerate((first_pos, second_pos)):
+                        positions = side_indexes[side_num].get(resolved_line, ())
+                        match_index = bisect.bisect_left(positions, source_pos)
+                        if match_index < len(positions):
+                            if side_num == 0:
+                                next_frontier.add((positions[match_index] + 1, second_pos))
+                            else:
+                                next_frontier.add((first_pos, positions[match_index] + 1))
+                if not next_frontier:
+                    raise ValueError("reordered or duplicated protected line")
+                # A state with both cursors further along cannot enable a later match.
+                frontier = set()
+                best_second = float("inf")
+                for first_pos, second_pos in sorted(next_frontier):
+                    if second_pos < best_second:
+                        frontier.add((first_pos, second_pos))
+                        best_second = second_pos
+    validated_tree = git("write-tree").strip()
+    if not re.fullmatch(rb"[0-9a-f]{40,64}", validated_tree):
+        raise ValueError("invalid staged tree")
+except (OSError, ValueError, subprocess.CalledProcessError, UnicodeError):
+    log("rejected", "protected_path_provenance")
+    sys.exit(1)
+log("accepted", "none", conflicts)
+print(validated_tree.decode())
+PY
+}
+
+# _integration_judge_commit_and_push <worktree> <final_pr> <integration_branch> <default_branch> <baseline_dir> <expected_conflict_count>
 #
 # Trusted half of the integration-conflict judge: the agent edited files in
 # <worktree> (through scripts/codex_isolated_exec.sh); this stages them,
@@ -8754,7 +8935,9 @@ _integration_judge_commit_and_push() {
   local final_pr="$2"
   local integration_branch="$3"
   local default_branch="$4"
-  local fp_file fp_exit=0
+  local baseline_dir="$5"
+  local expected_conflict_count="$6"
+  local fp_file fp_exit=0 validated_tree
 
   if ! git -C "${wt}" add -A -- . >/dev/null 2>&1; then
     echo "::warning::[integration-heal] Could not stage the judge resolution for PR #${final_pr}; nothing pushed."
@@ -8764,6 +8947,10 @@ _integration_judge_commit_and_push() {
     echo "::warning::[integration-heal] Judge left unmerged paths for PR #${final_pr}; nothing pushed."
     return 1
   fi
+  validated_tree="$(_integration_judge_verify_scope "${wt}" "${baseline_dir}" "${final_pr}")" || {
+    echo "::warning::[integration-heal] Judge scope check rejected PR #${final_pr} (expected conflicts: ${expected_conflict_count}); nothing pushed."
+    return 1
+  }
   if git -C "${wt}" diff --cached 2>/dev/null | grep -Eq '^\+(<<<<<<<|>>>>>>>)( |$)'; then
     echo "::warning::[integration-heal] Conflict markers remain in the judge resolution for PR #${final_pr}; nothing pushed."
     return 1
@@ -8796,6 +8983,10 @@ _integration_judge_commit_and_push() {
   if ! git -C "${wt}" -c user.name="codex-bot" -c user.email="codex@users.noreply.github.com" -c commit.gpgsign=false \
       commit --no-verify -q -m "Merge ${default_branch} into ${integration_branch} (integration judge, PR #${final_pr})" >/dev/null 2>&1; then
     echo "::warning::[integration-heal] Could not commit the judge resolution for PR #${final_pr}; nothing pushed."
+    return 1
+  fi
+  if [ "$(git -C "${wt}" rev-parse 'HEAD^{tree}' 2>/dev/null)" != "${validated_tree}" ]; then
+    echo "::warning::[integration-heal] Committed tree differs from validated judge tree for PR #${final_pr}; nothing pushed."
     return 1
   fi
   # Worktrees share the poller's Git config; use a one-shot credential helper

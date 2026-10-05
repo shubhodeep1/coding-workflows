@@ -204,11 +204,15 @@ def test_poller_file_editing_judges_use_worktrees_and_trusted_push():
 	# Integration judge: the poller fetches, merges, verifies and pushes; the
 	# agent only resolves files and is told it has no network or credentials.
 	assert 'run --mode workspace --workdir "${judge_wt}"' in text
+	assert text.index('_integration_judge_capture_baseline "${judge_wt}"') < text.index('run --mode workspace --workdir "${judge_wt}"')
 	assert "fetch both branches" not in text
 	assert "Do NOT run git commit, git push or any" in text
 	assert '_integration_judge_commit_and_push "${judge_wt}"' in text
 	assert 'python3 "${ORCH_FINGERPRINT_VERIFIER}" "${fp_file}"' in text
-	assert '_integration_judge_commit_and_push "${judge_wt}" "${final_pr}" "${integration_branch}" "${default_branch}" || true' in text
+	assert '_integration_judge_commit_and_push "${judge_wt}" "${final_pr}" "${integration_branch}" "${default_branch}" "${baseline_dir}" "${expected_conflict_count}" || true' in text
+	commit_block = text[text.index('_integration_judge_commit_and_push() {'):text.index('# _refresh_integration_resolver_tooling')]
+	assert commit_block.index('_integration_judge_verify_scope "${wt}" "${baseline_dir}"') < commit_block.index('commit --no-verify')
+	assert "rev-parse 'HEAD^{tree}'" in commit_block
 	assert 'return 0\n}\n\n# _integration_judge_remove_worktree' in text
 	assert 'git -C "${wt}" rev-parse -q --verify MERGE_HEAD' in text
 	assert 'if ! jq -ce' in text
