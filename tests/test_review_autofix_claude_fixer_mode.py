@@ -526,6 +526,7 @@ case "$1" in
     case "${MODE}" in
       success) printf 'verdict\n' > "$3" ;;
       transfer_failed) : > "${RUNTIME_DIR}/review_sandbox_transfer_failed"; exit 1 ;;
+      unsafe_directory) printf '::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=.claude/commands\n' > "${RUNTIME_DIR}/review_sandbox_transfer_reason_${3##*/}"; : > "${RUNTIME_DIR}/review_sandbox_transfer_failed"; exit 1 ;;
       marker_on_success) : > "${RUNTIME_DIR}/review_sandbox_transfer_failed" ;;
       unavailable) exit 75 ;;
       outdated) exit 2 ;;
@@ -601,6 +602,14 @@ def test_rb_helper_keeps_transfer_failure_after_cleanup(tmp_path):
 	(clean / "review_sandbox_transfer_failed").touch()
 	proc, _ = _run_rb_helper(clean, engine="claude", mode="success", access="write")
 	assert "rc=0 flag=false" in proc.stdout, proc.stderr
+
+
+def test_rb_helper_reports_unsafe_directory_without_repeating_path(tmp_path):
+	proc, calls = _run_rb_helper(tmp_path, engine="claude", mode="unsafe_directory", access="write")
+	assert "rc=1 flag=true" in proc.stdout, proc.stderr
+	assert "sandbox transfer failed; refusing to commit the fix. reason=unsafe_directory" in proc.stderr
+	assert "dir=.claude/commands" not in proc.stderr
+	assert calls.splitlines()[-1] == "cleanup"
 
 
 def test_rb_fix_refuses_failed_claude_transfer_before_commit_or_merge():
