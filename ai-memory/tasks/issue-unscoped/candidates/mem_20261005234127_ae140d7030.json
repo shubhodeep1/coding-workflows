@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:8908 | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The cleanup trap may run while an active judge call is still using the output file or sandbox.\n  WHY: If the poller receives a termination signal during a judge call, cleanup may run prematurely and cause race conditions.\n- scripts/review_untrusted_workspace.py:57 | severity=critical | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The exclusion list for `allowed()` has been modified, but the transfer logic for `RB_JUDGE` still permits a write-mode transfer.\n  WHY: If sandbox isolation is breached or misconfigured, a compromised or malfunctioning judge with write access could stage or overwrite files in the host checkout.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Replace Claude Code sessions with CLI engine for orchestrator judges and review write roles (Phase 5c).\n  expected_change_site: .github/ai/claude_engine.json (ORCHESTRATE, WAVE_JUDGE, STALL_JUDGE, INTEGRATION_JUDGE, SECURITY_JUDGE, REVIEW_EDITOR, REVIEW_CONSOLIDATOR, CONFLICT_RESOLVER, RB_JUDGE).\n  confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff implements the engine switch for `ORCHESTRATE` and the review write roles (`REVIEW_EDITOR`, `REVIEW_CONSOLIDATOR`, `CONFLICT_RESOLVER`, `RB_JUDGE`), but the orchestrator judges (`WAVE_JUDGE`, `STALL_JUDGE`, `INTEGRATION_JUDGE`, `SECURITY_JUDGE`) in `.github/ai/claude_engine.json` were updated to `\"engine\": \"claude\"` but the poller-judge infrastructure for them might be incomplete if they are meant to run on Claude in the same way the review write roles do (the task intent is to move all these roles).\n- requirement: \u201cEvery call keeps its unchanged codex or OpenCode command as the exit-75 fallback in the same attempt.\u201d\n  expected_change_site: `scripts/orchestrate_poll_process.sh::poller_judge_isolated`\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: When Claude returns 75, the poller invokes `_poller_rb_judge_sandbox_attempt codex`; that path runs the isolated OpenCode runner, not the unchanged Codex command used before this change. The PR description explicitly promises the unchanged command as fallback, while the implementation substitutes OpenCode for the poller judges.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:8908 | severity=high | confidence=3\n  PROBLEM: The cleanup trap runs on `EXIT` and may trigger while an active judge call is still using the output file.\n  WHY: If the poller receives a termination signal, the trap may execute, potentially cleaning up the sandbox or output file prematurely and causing race conditions.\n- scripts/review_untrusted_workspace.py:57 | severity=critical | confidence=4\n  PROBLEM: The exclusion list for `allowed()` (transferable files) has been modified, but the transfer logic for `RB_JUDGE` still permits a write-mode transfer.\n  WHY: If sandbox isolation is breached or misconfigured, a compromised or malfunctioning judge (when configured with write access) could stage or overwrite files in the host checkout if the boundary is not adequately enforced.\n- TASK_GAP\n  Requirement: Replace Claude Code sessions with CLI engine for orchestrator judges and review write roles (Phase 5c).\n  Expected change site: .github/ai/claude_engine.json (ORCHESTRATE, WAVE_JUDGE, STALL_JUDGE, INTEGRATION_JUDGE, SECURITY_JUDGE, REVIEW_EDITOR, REVIEW_CONSOLIDATOR, CONFLICT_RESOLVER, RB_JUDGE).\n  Evidence of absence: The PR diff implements the engine switch for `ORCHESTRATE` and the review write roles (`REVIEW_EDITOR`, `REVIEW_CONSOLIDATOR`, `CONFLICT_RESOLVER`, `RB_JUDGE`), but the orchestrator judges (`WAVE_JUDGE`, `STALL_JUDGE`, `INTEGRATION_JUDGE`, `SECURITY_JUDGE`) in `.github/ai/claude_engine.json` were updated to `\"engine\": \"claude\"` but the poller-judge infrastructure for them might be incomplete if they are meant to run on Claude in the same way the review write roles do (the task intent is to move all these roles).\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cEvery call keeps its unchanged codex or OpenCode command as the exit-75 fallback in the same attempt.\u201d\n  Expected change site: `scripts/orchestrate_poll_process.sh::poller_judge_isolated`\n  Evidence of absence: When Claude returns 75, the poller invokes `_poller_rb_judge_sandbox_attempt codex`; that path runs the isolated OpenCode runner, not the unchanged Codex command used before this change. The PR description explicitly promises the unchanged command as fallback, while the implementation substitutes OpenCode for the poller judges.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4d0f1d3501b4ee9165037bfe2f3496da91a74c982b2b8366dcdc32b1f9fb2dcb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6208,
+    "run_id": "37387032233",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37387032233",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005234127_ae140d7030",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6208,
+    "run_id": "37387032233"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T23:41:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
