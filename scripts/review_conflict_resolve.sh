@@ -573,6 +573,9 @@ _resolver_fail_closed()
 {
   echo "AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=$1 action=fail_closed" >&2
   echo "::error::Conflict resolver isolation unavailable (reason=$1); refusing host fallback." >&2
+  if type _persist_resolver_retry_state_from_current_failure >/dev/null 2>&1; then
+    RESOLVER_ISOLATION_FAILURE_REASON="$1" _persist_resolver_retry_state_from_current_failure || true
+  fi
   emit_conflict_resolver_substate "Failed" "${attempt}"
   rm -f -- "${tmp_output}" "${_stall_status_file}"
   exit 1
@@ -603,8 +606,9 @@ _resolver_sandbox_attempt()
     fi
   fi
   if ! : > "${tmp_output}"; then
-    REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" bash "${resolver_sandbox_sh}" cleanup || return 1
-    return 1
+    resolver_sandbox_failure_reason=sandbox_output_unavailable
+    REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" bash "${resolver_sandbox_sh}" cleanup || true
+    return 77
   fi
   REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" \
     timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
@@ -1492,6 +1496,12 @@ def select_verification_tier_from_pr_payload(pr_payload: dict[str, Any], thresho
     if retry_state_head_sha != head_sha:
         return {"tier": "strict", "reason": "retry_state_head_sha_mismatch", "consecutive_failure_count": 0}
     consecutive_failure_count = _parse_nonnegative_int(retry_state.get("consecutive_failure_count"), 0)
+    if str(retry_state.get("isolation_failure_reason", "") or "").strip():
+        return {
+            "tier": "strict",
+            "reason": f"isolation_failure_count={consecutive_failure_count}",
+            "consecutive_failure_count": consecutive_failure_count,
+        }
     return {
         "tier": select_verification_tier(consecutive_failure_count, threshold),
         "reason": f"retry_state_count={consecutive_failure_count}",
@@ -1726,6 +1736,7 @@ def build_resolver_retry_state_artifact(
     run_url: str,
     verifier_module: Any,
     max_items: int = 10,
+    isolation_failure_reason: str = "",
 ) -> dict[str, Any]:
     body = str(pr_payload.get("body", "") or "")
     head = pr_payload.get("head") or {}
@@ -1733,11 +1744,21 @@ def build_resolver_retry_state_artifact(
     if not head_sha:
         return {"ok": False, "reason": "missing PR head SHA in PR_PAYLOAD_FILE"}
 
-    regressed_by_resolver, pre_existing_drift = compute_failure_sets(
-        fingerprints,
-        baseline_state,
-        verifier_module,
-    )
+    if isolation_failure_reason:
+        regressed_by_resolver = [{
+            "issue": "",
+            "pr": pr_number,
+            "kind": "isolation_failure",
+            "path": "",
+            "fp_key": ["isolation_failure", isolation_failure_reason],
+        }]
+        pre_existing_drift = []
+    else:
+        regressed_by_resolver, pre_existing_drift = compute_failure_sets(
+            fingerprints,
+            baseline_state,
+            verifier_module,
+        )
     if not regressed_by_resolver and not pre_existing_drift:
         return {"ok": False, "reason": "no fingerprint failures detected for retry-state persistence"}
 
@@ -1768,15 +1789,18 @@ def build_resolver_retry_state_artifact(
     max_items = max(1, _parse_positive_int(max_items, 10))
     now_iso = _utc_now_iso()
     previous_verification_tier = "strict"
-    if previous_head_sha == head_sha and previous_signature == failure_signature_sha256:
-        previous_verification_tier = select_verification_tier(previous_count, threshold)
-    verification_tier = select_verification_tier(consecutive_failure_count, threshold)
-    tier_downgrade_marker = build_tier_downgrade_marker(
-        previous_verification_tier,
-        verification_tier,
-        consecutive_failure_count,
-        threshold,
-    )
+    verification_tier = "strict"
+    tier_downgrade_marker = ""
+    if not isolation_failure_reason:
+        if previous_head_sha == head_sha and previous_signature == failure_signature_sha256:
+            previous_verification_tier = select_verification_tier(previous_count, threshold)
+        verification_tier = select_verification_tier(consecutive_failure_count, threshold)
+        tier_downgrade_marker = build_tier_downgrade_marker(
+            previous_verification_tier,
+            verification_tier,
+            consecutive_failure_count,
+            threshold,
+        )
     escalated = consecutive_failure_count >= escalation_threshold
     if (
         escalated
@@ -1808,6 +1832,8 @@ def build_resolver_retry_state_artifact(
         "escalated_at": escalated_at,
         "updated_at": now_iso,
     }
+    if isolation_failure_reason:
+        retry_state["isolation_failure_reason"] = isolation_failure_reason
 
     return {
         "ok": True,
@@ -1840,12 +1866,14 @@ def build_resolver_retry_state_artifact(
 
 def main() -> int:
     support_scripts_dir = os.environ.get("SUPPORT_SCRIPTS_DIR", "scripts")
+    isolation_failure_reason = os.environ.get("RESOLVER_ISOLATION_FAILURE_REASON", "").strip()
     verifier_module = None
-    try:
-        verifier_module = load_verifier_module(support_scripts_dir)
-    except Exception as exc:  # noqa: BLE001 - fail-open in shell caller
-        print(json.dumps({"ok": False, "reason": f"failed to load verifier module: {exc}"}, ensure_ascii=True))
-        return 0
+    if not isolation_failure_reason:
+        try:
+            verifier_module = load_verifier_module(support_scripts_dir)
+        except Exception as exc:  # noqa: BLE001 - fail-open in shell caller
+            print(json.dumps({"ok": False, "reason": f"failed to load verifier module: {exc}"}, ensure_ascii=True))
+            return 0
 
     pr_payload, pr_payload_err = _load_json_path(
         os.environ.get("PR_PAYLOAD_FILE", ""),
@@ -1865,23 +1893,26 @@ def main() -> int:
         print(json.dumps({"ok": False, "reason": pr_issue_comments_err}, ensure_ascii=True))
         return 0
 
-    fingerprints, fingerprints_err = _load_json_path(
-        os.environ.get("INTEGRATION_FINGERPRINTS_FILE", ""),
-        dict,
-        {},
-    )
-    if fingerprints_err is not None:
-        print(json.dumps({"ok": False, "reason": fingerprints_err}, ensure_ascii=True))
-        return 0
+    fingerprints = {}
+    baseline_state = {}
+    if not isolation_failure_reason:
+        fingerprints, fingerprints_err = _load_json_path(
+            os.environ.get("INTEGRATION_FINGERPRINTS_FILE", ""),
+            dict,
+            {},
+        )
+        if fingerprints_err is not None:
+            print(json.dumps({"ok": False, "reason": fingerprints_err}, ensure_ascii=True))
+            return 0
 
-    baseline_state, baseline_err = _load_json_path(
-        os.environ.get("RESOLVER_FP_BASELINE_STATE_FILE", ""),
-        dict,
-        {},
-    )
-    if baseline_err is not None:
-        print(json.dumps({"ok": False, "reason": baseline_err}, ensure_ascii=True))
-        return 0
+        baseline_state, baseline_err = _load_json_path(
+            os.environ.get("RESOLVER_FP_BASELINE_STATE_FILE", ""),
+            dict,
+            {},
+        )
+        if baseline_err is not None:
+            print(json.dumps({"ok": False, "reason": baseline_err}, ensure_ascii=True))
+            return 0
 
     run_url = ""
     repository = os.environ.get("GITHUB_REPOSITORY", "")
@@ -1901,6 +1932,7 @@ def main() -> int:
         run_url=run_url,
         verifier_module=verifier_module,
         max_items=_parse_positive_int(os.environ.get("RESOLVER_RETRY_STATE_MAX_ITEMS"), 10),
+        isolation_failure_reason=isolation_failure_reason,
     )
     print(json.dumps(result, sort_keys=True, ensure_ascii=True))
     return 0
@@ -1930,10 +1962,13 @@ _sync_local_pr_body_from_file()
 
 _persist_resolver_retry_state_from_current_failure()
 {
+  local _resolver_isolation_failure_reason="${RESOLVER_ISOLATION_FAILURE_REASON:-}"
   if [ "${IS_INTEGRATION_SYNC:-false}" != "true" ]; then
     return 0
   fi
-  if [ "${RESOLVER_FP_EXIT:-0}" -ne 1 ] && [ "${RESOLVER_FP_VERIFICATION_TIER:-strict}" != "warn_only" ]; then
+  if [ -z "${_resolver_isolation_failure_reason}" ] \
+    && [ "${RESOLVER_FP_EXIT:-0}" -ne 1 ] \
+    && [ "${RESOLVER_FP_VERIFICATION_TIER:-strict}" != "warn_only" ]; then
     return 0
   fi
   if ! [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]]; then
@@ -1948,7 +1983,8 @@ _persist_resolver_retry_state_from_current_failure()
     echo "::warning::Resolver retry-state persistence skipped: PR_PAYLOAD_FILE is missing."
     return 0
   fi
-  if [ ! -f "${INTEGRATION_FINGERPRINTS_FILE:-/nonexistent}" ]; then
+  if [ -z "${_resolver_isolation_failure_reason}" ] \
+    && [ ! -f "${INTEGRATION_FINGERPRINTS_FILE:-/nonexistent}" ]; then
     echo "::warning::Resolver retry-state persistence skipped: INTEGRATION_FINGERPRINTS_FILE is missing."
     return 0
   fi
@@ -1962,7 +1998,8 @@ _persist_resolver_retry_state_from_current_failure()
     echo "::warning::Resolver retry-state persistence continuing without baseline fingerprints state; treating current failures as regressed for retry-state accounting."
     _retry_state_baseline_file=""
   fi
-  if [ ! -f "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" ]; then
+  if [ -z "${_resolver_isolation_failure_reason}" ] \
+    && [ ! -f "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" ]; then
     echo "::warning::Resolver retry-state persistence skipped: verify_integration_fingerprints.py unavailable."
     return 0
   fi

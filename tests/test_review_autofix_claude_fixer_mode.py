@@ -575,6 +575,8 @@ def _run_resolver_claude_section(tmp: Path, *, mode: str, engine: str = "claude"
 		'  printf "%s\\n" "$1" >> "${CONFIG_ARGS}"\n  shift\ndone\n', encoding="utf-8")
 	(tmp / "paths.txt").write_text(path + "\n", encoding="utf-8")
 	(tmp / "prompt.txt").write_text("Resolve this conflict\n", encoding="utf-8")
+	if mode == "output_unavailable":
+		(tmp / "output.txt").symlink_to(scripts, target_is_directory=True)
 	# The call site is run after setup, with the host branch intact as a sentinel.
 	functions, call = _resolver_claude_sections().split('    resolver_claude_rc=75\n', 1)
 	script = ("set -euo pipefail\n" + functions + '\nemit_conflict_resolver_substate() { :; }\n'
@@ -604,6 +606,7 @@ def test_resolver_claude_isolation_failures_never_call_host(tmp_path):
 		("outdated", "scripts/a.py", True, False, "sandbox_helper_outdated"),
 		("cleanup_failed", "scripts/a.py", True, False, "sandbox_cleanup_failed"),
 		("transfer_failed", "scripts/a.py", True, False, "sandbox_transfer_failed"),
+		("output_unavailable", "scripts/a.py", True, False, "sandbox_output_unavailable"),
 		("claude_unavailable", "scripts/a.py", True, True, "opencode_config_failed"),
 		("unavailable", "scripts/a.py", True, False, "sandbox_opencode_unavailable"),
 	)):
@@ -617,6 +620,8 @@ def test_resolver_claude_isolation_failures_never_call_host(tmp_path):
 			assert calls == []
 		if reason == "opencode_config_failed":
 			assert calls[-1] == "cleanup"
+		if reason == "sandbox_output_unavailable":
+			assert calls == ["prepare-ephemeral", "cleanup"]
 		if reason == "sandbox_transfer_failed":
 			assert (work / "review_sandbox_transfer_failed").exists()
 

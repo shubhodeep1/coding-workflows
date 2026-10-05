@@ -116,6 +116,7 @@ def test_claude_resolver_isolation_failures_do_not_select_host_writer():
 	text = (ROOT / "scripts/review_conflict_resolve.sh").read_text(encoding="utf-8")
 	closed = text[text.index('_resolver_fail_closed()'):].split('\n}\n', 1)[0] + '\n}'
 	assert 'action=fail_closed' in closed
+	assert 'RESOLVER_ISOLATION_FAILURE_REASON="$1" _persist_resolver_retry_state_from_current_failure' in closed
 	assert closed.rstrip().endswith('exit 1\n}')
 	branch = text[text.index('resolver_claude_rc=75'):text.index('if [ "${resolver_claude_rc}" -ne 75 ]; then')]
 	assert branch.count('AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER') == 1
