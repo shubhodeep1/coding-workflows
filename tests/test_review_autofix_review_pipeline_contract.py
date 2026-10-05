@@ -18,6 +18,7 @@ import textwrap
 import sys
 import threading
 import time
+from types import SimpleNamespace
 from pathlib import Path
 from unittest import mock
 
@@ -353,6 +354,13 @@ if args[:1] == ["api"]:
 			if not stderr.endswith("\n"):
 				sys.stderr.write("\n")
 		sys.exit(exit_code)
+	if path.endswith("/protection"):
+		state["protection_calls"] = state.get("protection_calls", 0) + 1
+		exit_code, stdout, stderr = render_response(state.get("protection_response", {"exit_code": 1}))
+		save()
+		sys.stdout.write(stdout)
+		sys.stderr.write(stderr)
+		sys.exit(exit_code)
 
 save()
 sys.stderr.write(f"mock gh: unsupported args: {args!r}\n")
@@ -376,6 +384,7 @@ def _run_collect_pr_check_runs_harness(
 	log_tail_bytes: str = "0",
 	gh_retry_max_attempts: str = "1",
 	strict_merge_snapshot: str = "false",
+	protection_response: dict[str, object] | None = None,
 ) -> dict[str, object]:
 	with tempfile.TemporaryDirectory(prefix="collect-pr-check-runs-") as td:
 		tmp = Path(td)
@@ -388,6 +397,7 @@ def _run_collect_pr_check_runs_harness(
 		_install_check_runs_mock_gh(bin_dir, gh_state_file)
 		gh_state_file.write_text(json.dumps({
 			"check_runs_responses": check_runs_responses or [],
+			"protection_response": protection_response or {"exit_code": 1},
 		}), encoding="utf-8")
 
 		pr_payload_file = runtime_dir / "pr_payload.json"
@@ -3326,11 +3336,12 @@ def test_collect_pr_check_runs_helper_closes_direct_log_redirect_response() -> N
 
 def test_collect_pr_check_runs_helper_ready_contract_preserves_self_run_exclusion() -> None:
 	result = _run_collect_pr_check_runs_harness(
-		pr_payload={"head": {"sha": "abc123"}},
+		pr_payload={"head": {"sha": "a" * 40}},
 		self_run_id="777",
 		check_runs_responses=[{
 			"json": [
 				{
+					"total_count": 2,
 					"check_runs": [
 						{
 							"id": 41,
@@ -3345,6 +3356,7 @@ def test_collect_pr_check_runs_helper_ready_contract_preserves_self_run_exclusio
 					],
 				},
 				{
+					"total_count": 2,
 					"check_runs": [
 						{
 							"id": 99,
@@ -3374,14 +3386,224 @@ def test_collect_pr_check_runs_helper_ready_contract_preserves_self_run_exclusio
 	assert any("--paginate" in call and "--slurp" in call and "/check-runs?per_page=100" in call for call in call_texts)
 
 
+def test_check_runs_wait_budgets_and_late_unknown() -> None:
+	spec = importlib.util.spec_from_file_location("bounded_check_runs_test", CHECK_RUNS_HELPER)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	head = "a" * 40
+	base_time = 1_800_000_000
+	required = {"id": 1, "head_sha": head, "name": "CI", "status": "in_progress",
+		"started_at": "2027-01-15T07:50:00Z", "conclusion": None}
+	# Keep the start age well beyond 300 seconds independent of local time.
+	required["started_at"] = __import__("datetime").datetime.fromtimestamp(
+		base_time - 600, __import__("datetime").timezone.utc).isoformat()
+
+	def run_case(pages: list[list[dict] | dict[str, object]], *, timeout: int = 300,
+		lookup: frozenset[str] | None = frozenset({"CI"}),
+		self_id: str = "", first_poll_delay: int = 0) -> tuple[str, str, list[int], int]:
+		clock = [base_time]
+		sleeps: list[int] = []
+		reads = [0]
+		lookups = [0]
+
+		def read(**_kwargs: object) -> subprocess.CompletedProcess[str]:
+			index = min(reads[0], len(pages) - 1)
+			reads[0] += 1
+			if reads[0] == 1:
+				clock[0] += first_poll_delay
+			runs = pages[index]
+			page = runs if isinstance(runs, dict) else {"total_count": len(runs), "check_runs": runs}
+			return subprocess.CompletedProcess(["gh"], 0, json.dumps([page]), "")
+
+		def sleep(seconds: int) -> None:
+			sleeps.append(seconds)
+			clock[0] += seconds
+
+		def protected(*_args: object) -> frozenset[str] | None:
+			lookups[0] += 1
+			assert _args[3] == min(60, max(0, base_time + timeout - clock[0]))
+			return lookup
+
+		with tempfile.TemporaryDirectory() as td:
+			payload = Path(td) / "pr.json"
+			output = Path(td) / "checks.txt"
+			payload.write_text(json.dumps({"head": {"sha": head}, "base": {"ref": "main"}}), encoding="utf-8")
+			stdout = io.StringIO()
+			with (mock.patch.dict(os.environ, {"PR_PAYLOAD_FILE": str(payload), "PR_CHECK_RUNS_CONTEXT_FILE": str(output),
+				"CHECK_RUNS_WAIT_TIMEOUT_SECS": str(timeout), "CHECK_RUNS_POLL_INTERVAL_SECS": "20",
+				"CHECK_RUNS_LOG_TAIL_BYTES": "0", "GITHUB_REPOSITORY": "owner/repo", "SELF_RUN_ID": self_id,
+				"CHECK_RUNS_STRICT_MERGE_SNAPSHOT": "false", "CHECK_RUNS_AUTOFIX_ENABLED": "true"}),
+				mock.patch.object(module, "_run_check_runs_api", read),
+				mock.patch.object(module, "_lookup_protected_required_names", protected),
+				mock.patch.object(module, "time", SimpleNamespace(time=lambda: clock[0], sleep=sleep)),
+				contextlib.redirect_stdout(stdout)):
+				assert module.main() == 0
+			return output.read_text(encoding="utf-8"), stdout.getvalue(), sleeps, lookups[0]
+
+	context, log, sleeps, lookups = run_case([[required]])
+	assert "collection_status: timeout" in context and "incomplete[0].name: CI" in context
+	assert "budget_secs=60" in log and "reason=known_long_running_required" in log
+	assert "CHECK_RUNS_WAIT_TIMEOUT reached after 60s" in log
+	assert sum(sleeps) == 60 and lookups == 1
+
+	unknown = {**required, "id": 2, "name": "optional"}
+	for runs in ([unknown], [required, unknown], [{**required, "status": "queued"}],
+		[{**required, "status": "completed", "conclusion": None}],
+		[{**required, "started_at": None}], [{**required, "started_at": "2999-01-01T00:00:00Z"}],
+		[{**required, "started_at": __import__("datetime").datetime.fromtimestamp(
+			base_time - 30, __import__("datetime").timezone.utc).isoformat()}]):
+		context, log, sleeps, lookups = run_case([runs])
+		assert "collection_status: timeout" in context and "budget_secs=300" in log
+		assert sum(sleeps) == 300 and sleeps[:3] == [20, 40, 80], sleeps
+		assert lookups <= 1
+	becomes_old = {**required, "started_at": __import__("datetime").datetime.fromtimestamp(
+		base_time - 200, __import__("datetime").timezone.utc).isoformat()}
+	context, log, sleeps, lookups = run_case([[becomes_old]])
+	assert "collection_status: timeout" in context and "incomplete[0].name: CI" in context
+	assert "budget_secs=60" not in log and "reason=recently_started" in log
+	assert sum(sleeps) == 300 and lookups == 0
+	context, log, sleeps, lookups = run_case([[required, unknown], [required]])
+	assert "collection_status: timeout" in context and "reason=initial_wait_not_eligible" in log
+	assert "budget_secs=60" not in log and sum(sleeps) == 300 and lookups == 1
+	for middle in ([required, unknown], [{**required, "head_sha": "b" * 40}], {"check_runs": [required]}):
+		context, log, sleeps, lookups = run_case([[required], middle, [required]])
+		assert "collection_status: timeout" in context and "budget_secs=300" in log
+		assert sum(sleeps) == 300 and lookups == 1
+
+	context, log, sleeps, lookups = run_case([[required]], lookup=None)
+	assert "reason=no_required_set" in log and "budget_secs=300" in log and sum(sleeps) == 300 and lookups == 1
+	context, log, sleeps, lookups = run_case([[required]], lookup=None, first_poll_delay=290)
+	assert "collection_status: timeout" in context and sum(sleeps) == 10 and lookups == 1
+	context, log, sleeps, lookups = run_case([[required]], timeout=30)
+	assert "budget_secs=30" in log and sum(sleeps) == 30 and lookups == 0
+	context, log, sleeps, lookups = run_case([[required]], timeout=60)
+	assert "budget_secs=60" in log and sum(sleeps) == 60 and lookups == 0
+	context, log, sleeps, lookups = run_case([[required], [required, unknown]])
+	assert "budget_secs=60" in log and "budget_secs=300" in log
+	assert sum(sleeps) == 300 and lookups == 1
+	context, log, sleeps, lookups = run_case([[required], [{**required, "status": "completed", "conclusion": "success"}]])
+	assert "collection_status: ready" in context and "incomplete_count: 0" in context
+	assert sleeps == [20] and lookups == 1
+	self_run = {**unknown, "details_url": "https://github.com/owner/repo/actions/runs/999/job/1"}
+	context, log, sleeps, lookups = run_case([[required, self_run]], self_id="999")
+	assert "budget_secs=60" in log and lookups == 1
+	completed = {**required, "status": "completed", "conclusion": "success"}
+	for page in ({"check_runs": []}, {"check_runs": [completed]},
+		{"total_count": 2, "check_runs": [completed]}):
+		context, log, sleeps, lookups = run_case([page], timeout=0)
+		assert "collection_status: api_error" in context and "reason=malformed_snapshot" in log
+		assert not sleeps and lookups == 0
+	context, log, sleeps, lookups = run_case([[{**completed, "head_sha": "b" * 40}]], timeout=0)
+	assert "collection_status: api_error" in context and "reason=stale_head" in log
+	context, log, sleeps, lookups = run_case([{"total_count": 2, "check_runs": [completed]}, [completed]])
+	assert "collection_status: ready" in context and sleeps == [20] and lookups == 0
+	context, log, sleeps, lookups = run_case([[{**completed, "head_sha": "b" * 40}], [completed]])
+	assert "collection_status: ready" in context and sleeps == [20] and lookups == 0
+	context, log, sleeps, lookups = run_case([{"check_runs": [completed]}])
+	assert "collection_status: api_error" in context and sum(sleeps) == 300 and lookups == 0
+	bulk_runs = [{**completed, "id": idx + 1, "head_sha": "a" * 64} for idx in range(1000)]
+	bulk_pages = [{"total_count": 1000, "check_runs": bulk_runs[idx:idx + 100]} for idx in range(0, 1000, 100)]
+	assert module._short_wait_eligibility(json.dumps(bulk_pages), "A" * 64, "", frozenset({"CI"}), base_time)[:2] == (
+		False, "lookup_skipped",
+	)
+
+
+def test_check_runs_wait_diagnostics_are_bounded() -> None:
+	spec = importlib.util.spec_from_file_location("bounded_check_runs_diag_test", CHECK_RUNS_HELPER)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	stdout = io.StringIO()
+	with contextlib.redirect_stdout(stdout):
+		module._emit_wait_diag("outcome", 60, 300, "unknown_check", "a" * 40, 60,
+			[("::error::%SECRET\n" + "x" * 500, "in_progress")] * 12, "timeout")
+	line = stdout.getvalue()
+	assert line.startswith("CHECK_RUNS_WAIT_V1 phase=outcome")
+	assert "pending=12" in line and ",+2" in line and "final_status=timeout" in line
+	assert "::error::" not in line and "%SECRET" not in line and "\n" == line[-1]
+	assert len(line) < 900
+
+
+def test_check_runs_protection_lookup_and_zero_wait() -> None:
+	spec = importlib.util.spec_from_file_location("bounded_check_runs_lookup_test", CHECK_RUNS_HELPER)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	with mock.patch.object(module.subprocess, "Popen") as launch, mock.patch.object(module.os, "killpg") as kill_group:
+		child = launch.return_value.__enter__.return_value
+		child.pid = 333
+		child.communicate.side_effect = [subprocess.TimeoutExpired("bash", 0.01), ("", "")]
+		assert module._lookup_protected_required_names("owner/repo", "main", CHECK_RUNS_HELPER.parent, 0.01) is None
+		assert child.communicate.call_args_list[0].kwargs["timeout"] == 0.01
+		kill_group.assert_called_once_with(333, module.signal.SIGKILL)
+	assert module._lookup_protected_required_names("owner/repo", "main", CHECK_RUNS_HELPER.parent, 0) is None
+	with tempfile.TemporaryDirectory() as td:
+		bin_dir = Path(td) / "bin"
+		bin_dir.mkdir()
+		state_file = Path(td) / "state.json"
+		_install_check_runs_mock_gh(bin_dir, state_file)
+		for response in ({"json": {"required_status_checks": {"contexts": ["CI"]}}},
+			{"exit_code": 1, "stderr": "gh: Not Found (HTTP 404)"},
+			{"exit_code": 1, "stderr": "Resource not accessible by integration (HTTP 403)"},
+			{"stdout": "not json"}, {"json": {"required_status_checks": {"contexts": []}}}):
+			state_file.write_text(json.dumps({"protection_response": response}), encoding="utf-8")
+			with mock.patch.dict(os.environ, {"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+				"MOCK_GH_STATE_FILE": str(state_file), "GH_RETRY_MAX_ATTEMPTS": "1"}):
+				names = module._lookup_protected_required_names("owner/repo", "release/v1", CHECK_RUNS_HELPER.parent)
+			assert names == (frozenset({"CI"}) if response.get("json") == {"required_status_checks": {"contexts": ["CI"]}} else None)
+			state = json.loads(state_file.read_text(encoding="utf-8"))
+			assert state.get("protection_calls") == 1
+			assert any("release%2Fv1/protection" in " ".join(call) for call in state["calls"])
+		assert module._lookup_protected_required_names("owner/repo", "main", bin_dir) is None
+	assert module._load_base_ref(Path(td) / "missing.json") == ""
+	for ref in ("-bad", "bad\nbranch", "x" * 256, ""):
+		with tempfile.TemporaryDirectory() as td2:
+			payload = Path(td2) / "pr.json"
+			payload.write_text(json.dumps({"base": {"ref": ref}}), encoding="utf-8")
+			assert module._load_base_ref(payload) == ""
+
+	zero = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "a" * 40}, "base": {"ref": "main"}},
+		wait_timeout_secs="0", check_runs_responses=[{"json": [{"total_count": 1, "check_runs": [
+			{"id": 1, "name": "CI", "status": "in_progress", "head_sha": "a" * 40,
+				"started_at": "2020-01-01T00:00:00Z"}]}]}],
+	)
+	assert zero["mock_state"].get("protection_calls", 0) == 0
+	assert "collection_status: timeout" in zero["context_text"]
+	assert "CHECK_RUNS_WAIT_V1 phase=outcome" in zero["stdout"]
+	strict = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "a" * 40}, "base": {"ref": "main"}},
+		strict_merge_snapshot="true", wait_timeout_secs="0",
+		check_runs_responses=[{"json": [{"total_count": 1, "check_runs": [
+			{"id": 1, "name": "CI", "status": "in_progress", "head_sha": "a" * 40,
+				"started_at": "2020-01-01T00:00:00Z"}]}]}],
+	)
+	assert strict["mock_state"].get("protection_calls", 0) == 0
+	assert "collection_status: not_ready" in strict["context_text"]
+	assert "reason=strict_merge" in strict["stdout"]
+	partial = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "a" * 40}}, wait_timeout_secs="0",
+		check_runs_responses=[{"json": [{"total_count": 2, "check_runs": [
+			{"id": 1, "name": "CI", "status": "completed", "conclusion": "success", "head_sha": "a" * 40}]}]}],
+	)
+	assert "collection_status: api_error" in partial["context_text"]
+	assert "reason=malformed_snapshot" in partial["stdout"]
+	failed = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "a" * 40}}, check_runs_responses=[{"exit_code": 1}],
+	)
+	assert "collection_status: api_error" in failed["context_text"]
+	assert "final_status=api_error" in failed["stdout"]
+
+
 def test_post_review_snapshot_ignores_only_its_own_incomplete_check() -> None:
 	runs = [
 		{"id": 1, "name": "review / codex-agent", "status": "in_progress", "details_url": "https://github.com/owner/repo/actions/runs/777/job/1"},
 		{"id": 2, "name": "ci", "status": "completed", "conclusion": "success"},
 	]
 	result = _run_collect_pr_check_runs_harness(
-		pr_payload={"head": {"sha": "abc123"}}, self_run_id="777", exclude_self_from_context="true",
-		check_runs_responses=[{"json": [{"check_runs": runs}]}],
+		pr_payload={"head": {"sha": "a" * 40}}, self_run_id="777", exclude_self_from_context="true",
+		check_runs_responses=[{"json": [{"total_count": 2, "check_runs": runs}]}],
 	)
 	assert "collection_status: ready\n" in result["context_text"]
 	assert "total_check_runs: 1\n" in result["context_text"]
@@ -3436,8 +3658,8 @@ def test_strict_merge_snapshot_requires_complete_same_head_evidence() -> None:
 
 def test_pending_and_startup_failure_checks_cannot_look_clean() -> None:
 	result = _run_collect_pr_check_runs_harness(
-		pr_payload={"head": {"sha": "abc123"}}, wait_timeout_secs="0",
-		check_runs_responses=[{"json": [{"check_runs": [
+		pr_payload={"head": {"sha": "a" * 40}}, wait_timeout_secs="0",
+		check_runs_responses=[{"json": [{"total_count": 3, "check_runs": [
 			{"id": 1, "name": "ci", "status": "pending"},
 			{"id": 2, "name": "lint", "status": "completed", "conclusion": "startup_failure"},
 			{"id": 3, "name": "unknown", "status": "completed", "conclusion": None},
@@ -3450,8 +3672,8 @@ def test_pending_and_startup_failure_checks_cannot_look_clean() -> None:
 
 def test_collect_pr_check_runs_helper_accepts_genuine_empty_check_list() -> None:
 	result = _run_collect_pr_check_runs_harness(
-		pr_payload={"head": {"sha": "abc123"}},
-		check_runs_responses=[{"json": [{"check_runs": []}]}],
+		pr_payload={"head": {"sha": "a" * 40}},
+		check_runs_responses=[{"json": [{"total_count": 0, "check_runs": []}]}],
 	)
 	assert result["returncode"] == 0, result
 	assert "collection_status: ready\n" in result["context_text"]
@@ -3488,8 +3710,8 @@ def test_collect_pr_check_runs_helper_rejects_malformed_successful_output() -> N
 
 def test_collect_pr_check_runs_helper_recovers_from_malformed_snapshot() -> None:
 	result = _run_collect_pr_check_runs_harness(
-		pr_payload={"head": {"sha": "abc123"}}, wait_timeout_secs="15", poll_interval_secs="5",
-		check_runs_responses=[{"stdout": "garbage"}, {"json": [{"check_runs": [
+		pr_payload={"head": {"sha": "a" * 40}}, wait_timeout_secs="15", poll_interval_secs="5",
+		check_runs_responses=[{"stdout": "garbage"}, {"json": [{"total_count": 1, "check_runs": [
 			{"id": 1, "name": "ci", "status": "completed", "conclusion": "success"},
 		]}]}],
 	)
@@ -3518,10 +3740,10 @@ def test_collect_pr_check_runs_helper_retry_drops_failed_attempt_stdout() -> Non
 		for idx in range(4)
 	]
 	result = _run_collect_pr_check_runs_harness(
-		pr_payload={"head": {"sha": "abc123"}}, gh_retry_max_attempts="2",
+		pr_payload={"head": {"sha": "a" * 40}}, gh_retry_max_attempts="2",
 		check_runs_responses=[
 			{"exit_code": 1, "stdout": '{"message":"FAILED-ATTEMPT-BODY"}', "stderr": "gh: HTTP 502: Bad Gateway"},
-			{"json": [{"check_runs": runs}]},
+			{"json": [{"total_count": 4, "check_runs": runs}]},
 		],
 	)
 	assert result["returncode"] == 0, result
@@ -3571,12 +3793,12 @@ def test_collect_pr_check_runs_helper_writer_error_is_observable_and_fail_open()
 	with tempfile.TemporaryDirectory(prefix="collect-pr-check-runs-writer-error-") as td:
 		tmp = Path(td)
 		pr_payload_file = tmp / "pr_payload.json"
-		pr_payload_file.write_text(json.dumps({"head": {"sha": "abc123"}}), encoding="utf-8")
+		pr_payload_file.write_text(json.dumps({"head": {"sha": "a" * 40}}), encoding="utf-8")
 		context_file = tmp / "pr_check_runs_context.txt"
 		context_file.write_text("stale-context\n", encoding="utf-8")
 
 		def _fake_run_check_runs_api(*, repository: str, head_sha: str, script_dir: Path) -> subprocess.CompletedProcess[str]:
-			return subprocess.CompletedProcess(args=["gh"], returncode=0, stdout='[{"check_runs": []}]', stderr="")
+			return subprocess.CompletedProcess(args=["gh"], returncode=0, stdout='[{"total_count": 0, "check_runs": []}]', stderr="")
 
 		def _boom(*, raw_text: str, head_sha: str, final_status: str) -> str:
 			raise RuntimeError("boom")
@@ -3610,7 +3832,7 @@ def test_collect_pr_check_runs_helper_writer_error_is_observable_and_fail_open()
 		assert returncode == 0
 		assert context_file.read_text(encoding="utf-8") == (
 			"PR_CHECK_RUNS_CONTEXT\n"
-			"head_sha: abc123\n"
+			"head_sha: " + "a" * 40 + "\n"
 			"collection_status: writer_error\n"
 			"total_check_runs: 0\n"
 			"failed_count: 0\n"
@@ -3620,7 +3842,7 @@ def test_collect_pr_check_runs_helper_writer_error_is_observable_and_fail_open()
 		)
 		assert "stale-context" not in context_file.read_text(encoding="utf-8")
 		assert "RuntimeError: boom" in stderr.getvalue()
-		assert "::warning::CHECK_RUNS_AUTOFIX_WRITER_ERROR head_sha=abc123 writer_ok=False" in stdout.getvalue()
+		assert f"::warning::CHECK_RUNS_AUTOFIX_WRITER_ERROR head_sha={'a' * 40} writer_ok=False" in stdout.getvalue()
 
 
 def test_collect_pr_check_runs_helper_top_level_exception_is_fail_open() -> None:
@@ -3632,7 +3854,7 @@ def test_collect_pr_check_runs_helper_top_level_exception_is_fail_open() -> None
 	with tempfile.TemporaryDirectory(prefix="collect-pr-check-runs-top-level-") as td:
 		tmp = Path(td)
 		pr_payload_file = tmp / "pr_payload.json"
-		pr_payload_file.write_text(json.dumps({"head": {"sha": "abc123"}}), encoding="utf-8")
+		pr_payload_file.write_text(json.dumps({"head": {"sha": "a" * 40}}), encoding="utf-8")
 		context_file = tmp / "pr_check_runs_context.txt"
 		context_file.write_text("stale-context\n", encoding="utf-8")
 
@@ -3671,7 +3893,7 @@ def test_collect_pr_check_runs_helper_top_level_exception_is_fail_open() -> None
 		assert returncode == 0
 		assert context_file.read_text(encoding="utf-8") == (
 			"PR_CHECK_RUNS_CONTEXT\n"
-			"head_sha: abc123\n"
+			"head_sha: " + "a" * 40 + "\n"
 			"collection_status: writer_error\n"
 			"total_check_runs: 0\n"
 			"failed_count: 0\n"
@@ -3681,7 +3903,7 @@ def test_collect_pr_check_runs_helper_top_level_exception_is_fail_open() -> None
 		)
 		assert "stale-context" not in context_file.read_text(encoding="utf-8")
 		assert "RuntimeError: wait-view boom" in stderr.getvalue()
-		assert "::warning::CHECK_RUNS_AUTOFIX_WRITER_ERROR head_sha=abc123 writer_ok=False" in stdout.getvalue()
+		assert f"::warning::CHECK_RUNS_AUTOFIX_WRITER_ERROR head_sha={'a' * 40} writer_ok=False" in stdout.getvalue()
 
 
 def test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode() -> None:
@@ -8235,6 +8457,9 @@ def main() -> int:
 	test_collect_pr_check_runs_helper_is_bootstrapped_and_delegated()
 	test_collect_pr_check_runs_helper_closes_direct_log_redirect_response()
 	test_collect_pr_check_runs_helper_ready_contract_preserves_self_run_exclusion()
+	test_check_runs_wait_budgets_and_late_unknown()
+	test_check_runs_wait_diagnostics_are_bounded()
+	test_check_runs_protection_lookup_and_zero_wait()
 	test_post_review_snapshot_ignores_only_its_own_incomplete_check()
 	test_pending_and_startup_failure_checks_cannot_look_clean()
 	test_collect_pr_check_runs_helper_accepts_genuine_empty_check_list()

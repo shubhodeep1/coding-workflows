@@ -241,6 +241,31 @@ def test_branch_protection_lookup_falls_back_to_python_encoder() -> None:
 	assert rc == 1 and reason == "blocking", (rc, reason)
 
 
+def test_protection_only_names_and_encoded_ref() -> None:
+	prot = json.dumps({"required_status_checks": {"contexts": ["CI", "tests/integration"]}})
+	res = _run(
+		'_pr_required_check_names_from_protection "release/v1"',
+		prot_json=prot,
+		env={**REPO_ENV, "PROT_EXPECT_PATH": "repos/owner/repo/branches/release%2Fv1/protection"},
+	)
+	assert res.returncode == 0, res.stderr
+	assert res.stdout == "CI\ntests/integration\n"
+
+
+def test_protection_only_lookup_never_returns_fallback() -> None:
+	for prot in ("", "not json", "{}", '{"required_status_checks":{"contexts":[]}}',
+		'{"required_status_checks":{"contexts":[1]}}'):
+		res = _run(
+			'_pr_required_check_names_from_protection "main"',
+			prot_json=prot,
+			env={**REPO_ENV, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI"},
+		)
+		assert res.returncode != 0 and res.stdout == "", (prot, res)
+	res = _run('_pr_required_check_names_from_protection "main"', prot_json='{"required_status_checks":{"contexts":["CI"]}}',
+		jq_fail_uri_encode=True, env=REPO_ENV)
+	assert res.returncode == 0 and res.stdout.strip() == "CI"
+
+
 # ---------------------------------------------------------------------------
 # Self-run exclusion in the required-set branch (needed by review_rb_judge.sh).
 # ---------------------------------------------------------------------------
