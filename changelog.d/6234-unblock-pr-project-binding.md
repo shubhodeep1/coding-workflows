@@ -1,0 +1,2 @@
+<!-- changelog: security -->
+- **Project unblock fix-ups now require verified PR membership.** The unblock judge accepts project-base PRs only from same-repository `ai/issue-<n>` branches listed in a project-state comment posted by the pipeline's authenticated login; the poller uses that state, not an untrusted working snapshot, to distinguish project issues from PRs before filing even a pre-existing fix-up request. Missing trusted state or PR data, or a mismatch between the working and trusted project branches, defers the request; definitively rejected PRs remain blocked.
