@@ -939,6 +939,10 @@ def test_push_parser_guards_real_destination(merged_branch_repo, monkeypatch, co
 	("2", "git push origin ''2&>/tmp/out"),
 	("123", 'git push origin ""123>>/dev/null'),
 	("2", "git push origin '2'>/tmp/out"),
+	("2", "git push origin ''2>/dev/null"),
+	("2", 'git push origin ""2>/dev/null'),
+	("12", "git push origin ''12>/dev/null"),
+	("2", "git push origin ''2>&1"),
 	("2", "git push origin \\2>/tmp/out"),
 	("12", "git push origin \\12>/tmp/out"),
 	("12", "git push origin '1'2>/tmp/out"),
@@ -977,10 +981,21 @@ def test_empty_quoted_numeric_refspec_is_not_an_fd() -> None:
 
 
 @pytest.mark.parametrize("command", [
+	"git push origin ''2>/dev/null",
+	'git push origin ""2>/dev/null',
+])
+def test_empty_quoted_numeric_word_is_kept_as_refspec(command: str) -> None:
+	invocations = guard._guarded_git_invocations(command, "/repo")
+	assert len(invocations) == 1
+	assert invocations[0].arguments == ["origin", "2"]
+
+
+@pytest.mark.parametrize("command", [
 	"git push origin HEAD:feature/open 2>/dev/null",
 	"git push origin HEAD:feature/open 2>&1",
 	"git push origin HEAD:feature/open 12>/dev/null",
 	"git push origin HEAD:feature/open 2>out 2>&1",
+	"git push origin HEAD:feature/open\t2>/dev/null",
 ])
 def test_adjacent_fd_redirect_does_not_create_numeric_refspec(command: str) -> None:
 	invocations = guard._guarded_git_invocations(command, "/repo")
