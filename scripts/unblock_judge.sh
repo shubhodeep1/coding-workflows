@@ -343,6 +343,13 @@ print(json.dumps(evidence))
 PY
 }
 
+# A project may only claim an issue that its authenticated V2 state lists.
+unblock_state_lists_issue()
+{
+	local bound_issue="$1" binding_json="$2"
+	jq -e --argjson issue "${bound_issue}" 'any((.issue_number_map // {})[]; . == $issue) or any(.waves[]?.issues[]?; .github_issue == $issue) or any(.security_pass_active_fix_issues[]?; . == $issue) or any(.validation_active_fix_issues[]?; . == $issue)' "${binding_json}" >/dev/null 2>&1
+}
+
 unblock_main()
 {
 	local now stop_json fp verdict_name round marker_line comment_body terminal ops_file wait
@@ -517,7 +524,7 @@ unblock_main()
 		if [ "${tracking}" != "${ITEM}" ]; then
 			if [ "${ITEM_KIND}" = "issue" ] || [ "${ITEM_KIND}" = "pr" ]; then
 				if ! unblock_py "${SUPPORT_DIR}/scripts/orchestrate_state_v2.py" extract --comments-json "${RUNTIME_DIR}/project_state_comments.json" > "${RUNTIME_DIR}/project_binding.json" 2>/dev/null \
-					|| ! jq -e --argjson issue "${binding_issue}" 'any((.issue_number_map // {})[]; . == $issue) or any(.waves[]?.issues[]?; .github_issue == $issue) or any(.security_pass_active_fix_issues[]?; . == $issue) or any(.validation_active_fix_issues[]?; . == $issue)' "${RUNTIME_DIR}/project_binding.json" >/dev/null 2>&1; then
+					|| ! unblock_state_lists_issue "${binding_issue}" "${RUNTIME_DIR}/project_binding.json"; then
 					unblock_log "item=${ITEM} outcome=skip reason=project_binding_unverified"
 					return 0
 				fi
