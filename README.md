@@ -1052,6 +1052,8 @@ not delete wrappers that are already present in `.github/workflows/`.
 > consumer. The merged-PR guard requests confirmation for any unparsable
 > Bash command, since an earlier complete line may execute even if a later
 > line has an unmatched quote. This also covers quoted or escaped `git` names.
+> For `>|`, an adjacent numeric prefix is a file descriptor, not a push refspec;
+> the guard checks the current branch for a default `git push origin`.
 
 > **Retired upstream files are removed on sync:** the `update_workflows.yml`
 > step `Remove retired upstream files` reads the manifest

@@ -770,10 +770,24 @@ def test_numeric_branch_before_ampersand_redirect_is_checked(
 	("git push origin 2>&1", ["git", "push", "origin"]),
 	("git push origin 123>&2", ["git", "push", "origin"]),
 	("git push origin 123>>f", ["git", "push", "origin"]),
+	("git push origin 123>|f", ["git", "push", "origin"]),
+	("git push origin 123 >|f", ["git", "push", "origin", "123"]),
+	("git push origin >|f", ["git", "push", "origin"]),
 	("git push origin 123<>f", ["git", "push", "origin"]),
 ])
 def test_fd_prefix_only_removed_for_supported_redirects(command: str, arguments: list[str]) -> None:
 	assert guard._shell_segments_with_operators(command) == [("", arguments)]
+
+
+def test_clobber_redirect_checks_current_branch(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, branch, cwd: [dict(MERGED_PR, headRefOid=merged_sha)] if branch == "feature/x" else [])
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push origin 123>|/dev/null"}})
+	assert code == 2 and "Branch `feature/x`" in message
 
 
 @pytest.mark.parametrize("command", [
