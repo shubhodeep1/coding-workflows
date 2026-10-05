@@ -2930,8 +2930,7 @@ except Exception:
 
 output = os.environ.get('MOCK_CODEX_JSON', '{}')
 parsed = json.loads(output)
-touch_file = os.environ.get('MOCK_CODEX_TOUCH_FILE', '')
-if touch_file:
+for touch_file in os.environ.get('MOCK_CODEX_TOUCH_FILE', '').splitlines():
 	os.makedirs(os.path.dirname(os.path.abspath(touch_file)), exist_ok=True)
 	with open(touch_file, 'a', encoding='utf-8') as fh:
 		fh.write("mock change\\n")
@@ -9752,6 +9751,18 @@ def test_review_blocked_fix_scope_rejects_workflow_edit_opt_out():
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
 	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
+
+
+def test_review_blocked_fix_scope_reports_all_workflow_edit_opt_out_paths():
+	result = _review_blocked_fix_scope_case(
+		touch="scripts/a.sh", files=["scripts/a.sh", "scripts/b.sh"],
+		env_overrides={"ALLOW_WORKFLOW_EDITS": "false", "MOCK_CODEX_TOUCH_FILE": "scripts/a.sh\nscripts/b.sh"},
+	)
+	assert "reason=workflow_edits_disabled rejected=2 paths=scripts/a.sh,scripts/b.sh" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+	assert any("scripts/a.sh,scripts/b.sh" in n.get("message", "") for n in result["telegram_notifications"])
 
 
 def test_review_blocked_fix_scope_accepts_non_protected_judge_citation():

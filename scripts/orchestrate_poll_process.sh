@@ -21382,24 +21382,22 @@ ${FOLLOWUP_BLOCK_REASON}"
         rm -f -- "${staged_file}"
         RB_FIX_SCOPE_STAGED_COUNT=${#staged_paths[@]}
         [ "${RB_FIX_SCOPE_STAGED_COUNT}" -gt 0 ] || { RB_FIX_SCOPE_REASON=no_staged_changes; return 1; }
-        RB_FIX_SCOPE_REJECTED_PATHS=("${staged_paths[@]}")
-
         for path in "${staged_paths[@]}"; do
           case "${path}" in
             .github/prompts/*|.github/scripts/*)
               RB_FIX_SCOPE_REASON=forbidden_artifact
-              RB_FIX_SCOPE_REJECTED_PATHS=("${path}")
-              return 1
+              RB_FIX_SCOPE_REJECTED_PATHS+=("${path}")
               ;;
             scripts/*|prompts/*|.github/ai/*|.github/workflows/*)
               if [ "${ALLOW_WORKFLOW_EDITS:-true}" != "true" ]; then
-                RB_FIX_SCOPE_REASON=workflow_edits_disabled
-                RB_FIX_SCOPE_REJECTED_PATHS=("${path}")
-                return 1
+                [ "${RB_FIX_SCOPE_REASON}" = forbidden_artifact ] || RB_FIX_SCOPE_REASON=workflow_edits_disabled
+                RB_FIX_SCOPE_REJECTED_PATHS+=("${path}")
               fi
               ;;
           esac
         done
+        [ "${#RB_FIX_SCOPE_REJECTED_PATHS[@]}" -eq 0 ] || return 1
+        RB_FIX_SCOPE_REJECTED_PATHS=("${staged_paths[@]}")
 
         # §14: _fetch_pr_json/PR_META have no file list; the superseded-check
         # listing covers other PRs and is not cached on this fix path.
