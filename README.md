@@ -58,6 +58,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | Secret | Required | Used By | Description |
 |---|---|---|---|
 | `GH_PAT` | **Yes** | All workflows | GitHub Personal Access Token with `repo` scope |
+| `CHECK_TRIAGE_ISSUES_TOKEN` | **Yes** | check_failure_triage | Fine-grained PAT scoped to this repository with Issues: write and Metadata: read, used only to post a triage issue. `GITHUB_TOKEN` cannot trigger the downstream `issues: opened` workflow, and the broader `GH_PAT` is never exposed to the posting step. |
 | `OPENROUTER_API_KEY` | **Yes** | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, issue_pr_status, memory_maintenance, security-audit (source repo only) | [OpenRouter](https://openrouter.ai) API key for LLM access and AI memory keyword extraction |
 | `TG_BOT_SECRET` | No | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, issue_pr_status | Telegram bot token for notifications and message cleanup |
 | `DIGITALOCEAN_ACCESS_TOKEN` | No | Interactive Claude Code sessions only (CLAUDE.md §22) — no Actions workflow reads it | DigitalOcean API token. Set as an env var in the Claude Code session environment (not required as an Actions secret). Lets interactive sessions pull DigitalOcean data (app specs, deployed env vars, logs, deployment status) self-serve for verification and debugging; provisioning or mutating resources always requires asking the user first. Resource IDs per repo live in the `## DigitalOcean resources` section of `agents.md`/`AGENTS.md`. |
@@ -1229,11 +1230,20 @@ the way to a fix PR without human action.
   environment data, and log or Telegram display values are single-line and
   bounded before the secret-bearing triage job starts.
 - **Diagnosis:** for same-repo PRs, the repo is checked out at the failing head
-  SHA; the diagnosis model (`WORKFLOW_CHECK_TRIAGE_MODEL`, default
-  `openai/gpt-6-sol`, `high`) reads the failing check's logs (via
+  SHA without persisted checkout credentials. The workflow collects PR metadata
+  and logs with `GH_PAT`, then runs Codex from a separate trusted support directory
+  with no GitHub token in the diagnosis step. Missing trusted instructions stop
+  triage rather than falling back to PR-head instructions. The diagnosis model
+  (`WORKFLOW_CHECK_TRIAGE_MODEL`, default `openai/gpt-6-sol`, `high`) reads the failing check's logs (via
   `collect_pr_check_runs_context.py`) and the branch code, then writes the
   issue body (summary, evidence, root cause, suggested fix, affected files)
-  per `prompts/mode-check-failure-triage.txt`.
+  per `prompts/mode-check-failure-triage.txt`. The separate posting step uses
+  the required `CHECK_TRIAGE_ISSUES_TOKEN` (a fine-grained PAT scoped to this
+  repo with Issues: write and Metadata: read). The broader `GH_PAT` is limited
+  to context collection and is never exposed to diagnosis or posting. The
+  automatic `GITHUB_TOKEN` is not used to post: issues it creates would not
+  trigger the downstream `issues: opened` clarification workflow. Token values
+  are redacted before posting; a missing body or redaction failure stops the run.
 - **De-duplication:** a per-`repo+PR+check` concurrency group keeps one triage
   in flight; an HTML-comment fingerprint marker
   (`<!-- check-failure-triage:fp=… -->`) means no second issue is opened for a
@@ -1246,10 +1256,11 @@ the way to a fix PR without human action.
   `ai:check-triage-escalated` and sends a Telegram CRITICAL for human
   attention. The triage workflow also skips its own check-run by name to
   prevent self-triggering.
-- **Failure modes:** the workflow fails open. Missing logs → the issue is filed
+- **Failure modes:** missing logs → the issue is filed
   with raw context; an empty model response → a fallback body is filed; a
   failed `gh issue create` or a triage-workflow crash → a Telegram CRITICAL is
-  sent and the run fails (no partial state is left). Stable log lines are
+  sent and the run fails (no partial state is left). Missing trusted support
+  or context prevents issue creation. Stable log lines are
   prefixed `CHECK_TRIAGE`.
 
 ### Workflow Failure Heal
