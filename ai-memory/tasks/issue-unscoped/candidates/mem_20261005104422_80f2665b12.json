@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "7953009cb1b7fb87751a1d9037bb14070b9779c2bae8b01da664df128875f72d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6343,
+    "run_id": "37297463015",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37297463015",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005104422_80f2665b12",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6343,
+    "run_id": "37297463015"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T10:44:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
