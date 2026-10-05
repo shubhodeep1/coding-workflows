@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_pr_merge_status_guard.py: Lines 992-993; lines 1040-1041 | severity=critical | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite]\n  PROBLEM: The added `--repo upstream` and `--rep upstream` test cases are reported to expect blocking behavior and a branch lookup, although the guard classifies `upstream` as an unverified remote.\n  WHY: The reviewers report that the guard requests confirmation with return code 0 and performs no lookup, so the asserted code 2 and lookup fail; severity was BLOCKER and MAJOR, with BLOCKER used here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_pr_merge_status_guard.py: Lines 992-993 | severity=high | confidence=5\n  PROBLEM: The two new parameterized cases for `git push --repo upstream` and `git push --rep upstream` are reported to assert behavior that does not match the guard.\n  WHY: The reviewer reports the guard classifies `upstream` as an unverified destination, requests confirmation with return code 0, and never calls `query_pull_requests`, so the expected code 2 and lookup fail.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_pr_merge_status_guard.py: lines 1040-1041 (added test cases) | severity=critical | confidence=5\n  PROBLEM: The newly added `--repo upstream` and `--rep upstream` test cases are reported to fail their assertions because the guard returns code 0 without performing the expected lookup or blocking behavior.\n  WHY: The reviewer reports that these argument formats are not handled as expected, preventing the CI test suite from passing.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "281dcdfa5d9292f881fc0af28a0e2c68a5092408b2fdf9021e2746614982da41",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6395,
+    "run_id": "37377771119",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37377771119",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005221218_1b12f0c6b2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6395,
+    "run_id": "37377771119"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T22:12:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
