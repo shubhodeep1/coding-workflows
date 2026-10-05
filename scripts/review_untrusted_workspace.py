@@ -35,6 +35,8 @@ def allowed(name):
 	parts = PurePosixPath(name).parts
 	if not parts or name.startswith("/") or ".." in parts or "\\" in name or "\n" in name or "\r" in name:
 		return False
+	if name == "scripts/editor_git_credentials.sh":
+		return True
 	if any(part.lower() in EXCLUDED or part.lower().startswith(".env") or "secret" in part.lower() or "credential" in part.lower() or part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore", ".egg-info", ".dist-info")) for part in parts):
 		return False
 	if name in (".github/ai/claude_engine.json", ".claude/hooks/gh_api_write_guard.py", ".claude/hooks/pr_merge_status_guard.py", "scripts/claude_settings.json.tmpl"):

@@ -1404,7 +1404,8 @@ through `clarify → plan → implement → review`.
   only). Plan and implement receive only a bounded, revalidated structured
   diagnostics section (from `diagnostics.json`), without raw log paths.
   Free-form step names and error signatures are represented only by SHA-256
-  fingerprints. Their editor processes drop GitHub/Telegram credentials and temporarily hide git
+  fingerprints. Their editor processes drop GitHub/Telegram credentials and the
+  raw-evidence directory pointer, and temporarily hide git
   checkout credentials; network access for the model remains available. The
   credential helper rejects failed hides/restores and restores auth only when
   the origin still names the workflow's original repository (or its trusted

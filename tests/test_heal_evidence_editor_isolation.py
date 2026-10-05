@@ -90,6 +90,18 @@ def test_hide_rejects_an_explicit_push_url_before_editor_launch(tmp_path: Path) 
 	assert "oldsecret" in (repo / ".git" / "config").read_text()
 
 
+def test_hide_rejects_preexisting_push_url_rewrite(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	_git(repo, "config", "--local", "url.https://github.com/attacker/repo.git.pushInsteadOf", "https://github.com/owner/repo.git")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	result = subprocess.run(["bash", str(HELPER), "hide"], env=env, capture_output=True)
+	assert result.returncode != 0
+	assert "oldsecret" in (repo / ".git" / "config").read_text()
+
+
 def test_restore_rejects_editor_changed_push_url_rewrite(tmp_path: Path) -> None:
 	repo = tmp_path / "repo"
 	repo.mkdir()
@@ -189,16 +201,28 @@ def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
 	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in repair
 	assert repair.count('editor_git_credentials.sh" restore') == 2
 	assert repair.index('editor_git_credentials.sh" restore') < repair.index('echo "::warning::Post-Codex repair attempt')
+	assert implement.count('env -u GH_TOKEN -u GH_PAT') == 2
+	assert implement.count('-u HEAL_EVIDENCE_DIR \\') == 2
+	plan_runner = (ROOT / "scripts" / "run_plan_codex.sh").read_text()
+	assert 'ACTIONS_ID_TOKEN_REQUEST_URL HEAL_EVIDENCE_DIR' in plan_runner
+	assert '-u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR codex' in plan_runner
+
+
+def test_review_workspace_accepts_only_the_known_helper_path() -> None:
+	from scripts.review_untrusted_workspace import allowed
+
+	assert allowed("scripts/editor_git_credentials.sh")
+	assert not allowed("scripts/other_credentials.sh")
 
 
 def test_editor_credential_scrub_retains_model_and_thread_settings(tmp_path: Path) -> None:
 	command = (
 		"CODEX_THREAD_REUSE_STATE_KEY=implement env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN "
 		"-u TG_BOT_SECRET -u TG_CHAT_ID -u TG_ADMIN_CHAT_ID -u ACTIONS_RUNTIME_TOKEN "
-		"-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL "
-		"env | grep -E '^(GH_TOKEN|GH_PAT|TG_BOT_SECRET|ACTIONS_RUNTIME_TOKEN|OPENROUTER_API_KEY|CODEX_THREAD_REUSE_STATE_KEY)='"
+		"-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR "
+		"env | grep -E '^(GH_TOKEN|GH_PAT|TG_BOT_SECRET|ACTIONS_RUNTIME_TOKEN|HEAL_EVIDENCE_DIR|OPENROUTER_API_KEY|CODEX_THREAD_REUSE_STATE_KEY)='"
 	)
-	env = dict(os.environ, GH_TOKEN="test", GH_PAT="test", TG_BOT_SECRET="test", ACTIONS_RUNTIME_TOKEN="test", OPENROUTER_API_KEY="model")
+	env = dict(os.environ, GH_TOKEN="test", GH_PAT="test", TG_BOT_SECRET="test", ACTIONS_RUNTIME_TOKEN="test", HEAL_EVIDENCE_DIR="/tmp/untrusted", OPENROUTER_API_KEY="model")
 	proc = subprocess.run(["bash", "-c", command], env=env, cwd=tmp_path, capture_output=True, text=True)
 	assert proc.returncode == 0
 	assert proc.stdout.splitlines() == ["OPENROUTER_API_KEY=model", "CODEX_THREAD_REUSE_STATE_KEY=implement"] or set(proc.stdout.splitlines()) == {"OPENROUTER_API_KEY=model", "CODEX_THREAD_REUSE_STATE_KEY=implement"}
