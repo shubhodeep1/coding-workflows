@@ -702,8 +702,12 @@ Read-profile calls through `scripts/ai_engine.sh::claude_run` (including
 The host-side Anthropic relay retains OAuth credentials; the container sees
 only tracked-file snapshots, sanitized git metadata when history contains no
 filtered paths, shared worktrees or unreachable objects (otherwise no git
-metadata), the prompt and trusted support,
-with an optional `AI_ENGINE_READ_EXTRA_DIRS` snapshot for the heal worktrees.
+metadata), the prompt and trusted support.
+The heal intake passes successfully checked-out `heal_src` / `heal_branch_tip`
+through `AI_ENGINE_ISOLATED_READ_PATHS` so the strict WORKFLOW_HEAL path check
+applies; an unavailable checkout is not included. A failed Codex-config setup
+does not stop a Claude-selected orchestrator security audit, but the Codex
+fallback still fails preflight if its configuration is unavailable.
 Missing isolation returns exit 75, never host Claude.
 
 OpenCode version `1.18.23` is installed by the dispatch-only

@@ -136,6 +136,31 @@ def test_poll_job_verifies_support_before_running_followup_steps() -> None:
 	assert 'if [ "${security_audit_run_rc}" -eq 86 ]' in POLLER.read_text(encoding="utf-8")
 
 
+def test_security_pass_codex_config_failure_only_blocks_codex_selected_audit(tmp_path: Path) -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	start = text.index('  effective_security_model="${WORKFLOW_EDITOR_MODEL:-${MODEL_EDITOR:-openai/gpt-6-sol}}"\n')
+	end = text.index('  local security_audit_run_rc=0\n', start)
+	(tmp_path / "scripts").mkdir()
+	(tmp_path / "scripts" / "write_codex_config.sh").write_text("exit 1\n", encoding="utf-8")
+	script = (
+		"set -euo pipefail\n"
+		"security_pass_fail_closed() { echo \"$1\" > failure.txt; }\n"
+		"check_audit_setup() {\nprior_security_status=pending\naudit_error_file=config.err\n"
+		+ text[start:end]
+		+ "}\ncheck_audit_setup\n"
+	)
+	for engine, expected_rc in (("claude", 0), ("codex", 1)):
+		proc = subprocess.run(["bash", "-c", script], cwd=tmp_path,
+			env={**os.environ, "AI_ENGINE_RESOLVED_SECURITY_AUDIT": engine},
+			capture_output=True, text=True, check=False)
+		assert proc.returncode == expected_rc, proc.stderr
+		if engine == "claude":
+			assert "Codex fallback will fail preflight" in proc.stdout
+			assert not (tmp_path / "failure.txt").exists()
+		else:
+			assert (tmp_path / "failure.txt").read_text(encoding="utf-8").strip() == "engine_unavailable"
+
+
 def test_missing_ai_engine_returns_75(tmp_path: Path) -> None:
 	proc, calls = _run_helper(tmp_path, engine="claude", with_engine=False)
 	assert "rc=75" in proc.stdout, proc.stderr

@@ -1957,6 +1957,9 @@ account gated: exit `75`, logged
 `AI_ENGINE_FALLBACK`), the same attempt runs the unchanged codex call.
 For `SECURITY_AUDIT`, the Codex config and binary are checked only when that
 fallback is needed; missing prerequisites still fail with `codex-preflight`.
+The orchestrator's security pass tries to prepare Codex configuration ahead
+of the audit, but a setup failure no longer prevents a Claude-selected audit;
+if Claude then falls back, missing Codex configuration still fails the pass.
 On a non-fallback Claude failure, the audit classifies provider errors from
 private CLI stderr and publishes only a bounded, sanitized diagnostic tail.
 `AI_ENGINE_<ROLE>=codex` (or `ai:codex` on

@@ -123,7 +123,7 @@ FAKE_ENGINE = r"""
 claude_run_selected() {
   local resolved_var="AI_ENGINE_RESOLVED_$1"
   printf '%s|%s|%s|%s|%s|%s|%s\n' "$1" "$(basename "$2")" "$(basename "$3")" "$4" "${!resolved_var:-codex}" "${AI_ENGINE_READ_ONLY:-}" "${GH_TOKEN-unset}" >> "${CALLS}"
-  [ -z "${READ_PATHS_CALLS:-}" ] || printf '%s\n' "${AI_ENGINE_ISOLATED_READ_PATHS:-}" > "${READ_PATHS_CALLS}"
+  [ -z "${READ_PATHS_CALLS:-}" ] || printf '%s\n' "${RUNTIME_DIR:-unset}|${AI_ENGINE_ISOLATED_READ_PATHS:-}" > "${READ_PATHS_CALLS}"
   [ "${!resolved_var:-codex}" = "claude" ] || return 75
   case "${MODE}" in
     success) printf '%s\n' "${CLAUDE_ANSWER:-claude answer}" > "$3"; return 0 ;;
@@ -142,7 +142,7 @@ def _heal_block() -> str:
 	return text[start:end]
 
 
-def _run_heal_block(tmp_path: Path, *, resolved: str, mode: str, with_worktrees: bool = False) -> tuple[subprocess.CompletedProcess[str], str, str]:
+def _run_heal_block(tmp_path: Path, *, resolved: str, mode: str, with_worktrees: bool = False, checkouts_succeeded: bool = True) -> tuple[subprocess.CompletedProcess[str], str, str]:
 	(tmp_path / "scripts").mkdir()
 	(tmp_path / "scripts" / "ai_engine.sh").write_text(FAKE_ENGINE, encoding="utf-8")
 	bin_dir = tmp_path / "bin"
@@ -162,10 +162,13 @@ def _run_heal_block(tmp_path: Path, *, resolved: str, mode: str, with_worktrees:
 		for name, key in (("heal_src", "HEAL_SOURCE_DIR"), ("heal_branch_tip", "HEAL_BRANCH_TIP_DIR")):
 			(tmp_path / name).mkdir()
 			heal_paths[key] = str(tmp_path / name)
+		if checkouts_succeeded:
+			heal_paths["HEAL_SOURCE_NOTE"] = f"{tmp_path / 'heal_src'} (coding-workflows at test-ref)"
+			heal_paths["HEAL_BRANCH_TIP_NOTE"] = f"{tmp_path / 'heal_branch_tip'} (coding-workflows at test-ref)"
 	script = (
 		"set -euo pipefail\n"
 		"log() { echo \"LOG $*\"; }\n"
-		"PROMPT_FILE=prompt.txt\nDIAG_FILE=diag.md\nRUNTIME_DIR=.\nDIAGNOSIS_FALLBACK_REASON=none\n"
+		f"PROMPT_FILE=prompt.txt\nDIAG_FILE=diag.md\nRUNTIME_DIR={tmp_path}\nDIAGNOSIS_FALLBACK_REASON=none\n"
 		+ _heal_block()
 		+ 'echo "reason=${DIAGNOSIS_FALLBACK_REASON}"\n'
 	)
@@ -181,7 +184,13 @@ def test_heal_on_claude_runs_claude_without_credentials(tmp_path: Path) -> None:
 	assert calls.splitlines() == [f"WORKFLOW_HEAL|prompt.txt|diag.md|{tmp_path}|claude||unset"]
 	assert codex_calls == ""
 	assert (tmp_path / "diag.md").read_text(encoding="utf-8") == "claude answer\n"
-	assert (tmp_path / "read_paths").read_text(encoding="utf-8").strip() == f"{tmp_path / 'heal_src'}:{tmp_path / 'heal_branch_tip'}"
+	assert (tmp_path / "read_paths").read_text(encoding="utf-8").strip() == f"{tmp_path}|{tmp_path / 'heal_src'}:{tmp_path / 'heal_branch_tip'}"
+
+
+def test_heal_does_not_mount_failed_worktree_checkouts(tmp_path: Path) -> None:
+	proc, _calls, _codex_calls = _run_heal_block(tmp_path, resolved="claude", mode="success", with_worktrees=True, checkouts_succeeded=False)
+	assert proc.returncode == 0, proc.stderr
+	assert (tmp_path / "read_paths").read_text(encoding="utf-8").strip() == f"{tmp_path}|"
 
 
 def test_heal_on_codex_or_unavailable_runs_the_codex_call(tmp_path: Path) -> None:

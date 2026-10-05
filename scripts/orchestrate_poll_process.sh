@@ -7047,8 +7047,11 @@ run_security_pass_inline() {
 
   effective_security_model="${WORKFLOW_EDITOR_MODEL:-${MODEL_EDITOR:-openai/gpt-6-sol}}"
   if ! bash scripts/write_codex_config.sh --model "${effective_security_model}" --reasoning xhigh >/dev/null 2>"${audit_error_file}"; then
-    security_pass_fail_closed "engine_unavailable" "The security-pass model configuration could not be prepared." "${prior_security_status}"
-    return 1
+    if [ "${AI_ENGINE_RESOLVED_SECURITY_AUDIT:-codex}" != "claude" ]; then
+      security_pass_fail_closed "engine_unavailable" "The security-pass model configuration could not be prepared." "${prior_security_status}"
+      return 1
+    fi
+    echo "::warning::Codex configuration unavailable; the Claude security audit can run, but its Codex fallback will fail preflight."
   fi
 
   local security_audit_run_rc=0
