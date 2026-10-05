@@ -208,6 +208,7 @@ changelog.d/6133-pr-merge-guard-live-copy-sync.md
 changelog.d/6181-review-transfer-failure-evidence.md
 changelog.d/6193-claude-write-role-tool-list.md
 changelog.d/6202-claude-md-25-scheduled-status-checks.md
+changelog.d/6321-merge-guard-empty-quote-fd.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/hopeful-fermat-9pb74t-guard-redirect-parsing.md
 changelog.d/release-smoke-run-lookup.md

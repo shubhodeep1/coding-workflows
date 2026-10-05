@@ -781,6 +781,46 @@ def _merge_conflict_fixture(tmp: Path) -> tuple[Path, dict[str, str]]:
 	}
 
 
+def _modify_delete_conflict_fixture(tmp: Path) -> tuple[Path, dict[str, str]]:
+	"""A marker-free worktree file with an unresolved modify/delete index."""
+	repo = tmp / "repo"
+	repo.mkdir()
+	env = _clean_git_env()
+	git = ["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid"]
+	subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, env=env)
+	(repo / "conflict.txt").write_text("base\n", encoding="utf-8")
+	subprocess.run([*git, "add", "--", "conflict.txt"], check=True, env=env)
+	subprocess.run([*git, "commit", "-qm", "base"], check=True, env=env)
+	subprocess.run([*git, "checkout", "-qb", "theirs"], check=True, env=env)
+	subprocess.run([*git, "rm", "-q", "--", "conflict.txt"], check=True, env=env)
+	subprocess.run([*git, "commit", "-qm", "delete"], check=True, env=env)
+	subprocess.run([*git, "checkout", "-q", "main"], check=True, env=env)
+	(repo / "conflict.txt").write_text("modified\n", encoding="utf-8")
+	subprocess.run([*git, "commit", "-qam", "modify"], check=True, env=env)
+	merge = subprocess.run([*git, "merge", "-q", "theirs"], env=env, capture_output=True, text=True, check=False)
+	assert merge.returncode != 0
+	assert (repo / "conflict.txt").read_text(encoding="utf-8") == "modified\n"
+	assert subprocess.run([*git, "ls-files", "-u", "--", "conflict.txt"], env=env, capture_output=True, check=True).stdout
+	allowed = tmp / "conflicted_paths.txt"
+	allowed.write_text("conflict.txt\n", encoding="utf-8")
+	initial = tmp / "resolver_initial_unmerged_paths.txt"
+	initial.write_text("conflict.txt\n", encoding="utf-8")
+	allowlist = tmp / "resolver_unmerged_allowlist.txt"
+	allowlist.write_text("conflict.txt\n", encoding="utf-8")
+	return repo, {
+		**env,
+		"RESOLVER_SCOPE_SNAPSHOT_DIR": str(tmp / "scope-snapshot"),
+		"RESOLVER_SCOPE_VIOLATIONS_FILE": str(tmp / "violations.txt"),
+		"RESOLVER_ATTEMPT_TREE_DIR": str(tmp / "attempt-tree"),
+		"CONFLICTED_PATHS_FILE": str(allowed),
+		"RESOLVER_INITIAL_UNMERGED_PATHS_FILE": str(initial),
+		"RESOLVER_ALLOWLIST_FILE": str(allowlist),
+		"RESOLVER_MODEL_INDEX_FILE": str(tmp / "runtime" / "resolver_model_index"),
+		"GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "test@example.invalid",
+		"GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "test@example.invalid",
+	}
+
+
 def _run_model_attempt(repo: Path, env: dict[str, str], model_action: str, *, source_repo: bool = True) -> subprocess.CompletedProcess[str]:
 	"""Capture both scope baselines, run a stub model through the loop's own
 	private-index block, then report both scope checks (#5627)."""
@@ -941,6 +981,106 @@ def test_model_index_is_fresh_per_attempt_and_fails_closed() -> None:
 		assert not (Path(directory) / "copy").exists()
 
 
+def _run_private_index_reconciliation(repo: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+	src = _resolve_script_text()
+	stage_start = src.index("stage_resolver_touched_path_or_fail() {")
+	verify_start = src.index("verify_resolver_index_complete_or_fail() {")
+	merge_gate = re.search(r'^  if git diff --cached --quiet && \[ "\$\{resolver_private_index_reconciled:-false\}" != "true" \]; then$', src, re.MULTILINE)
+	assert merge_gate is not None
+	program = (
+		"set -euo pipefail\n"
+		+ src[stage_start:src.index("\n}\n", stage_start) + 3] + "\n"
+		+ src[verify_start:src.index("\n}\n", verify_start) + 3] + "\n"
+		+ _named_function_source("_resolver_reconcile_private_index_resolutions")
+		+ "_resolver_reconcile_private_index_resolutions\n"
+		+ "verify_resolver_index_complete_or_fail\n"
+		+ merge_gate.group(0).strip() + " exit 33; fi\n"
+	)
+	return subprocess.run(
+		["bash", "-c", program], cwd=repo,
+		env={**env, "RUNTIME_DIR": str(Path(env["RESOLVER_MODEL_INDEX_FILE"]).parent),
+		     "GITHUB_ENV": str(Path(env["RESOLVER_MODEL_INDEX_FILE"]).parent / "github-env")},
+		capture_output=True, text=True, check=False,
+	)
+
+
+def test_marker_free_conflict_staged_only_in_private_index_is_reconciled() -> None:
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _modify_delete_conflict_fixture(Path(directory))
+		result = _run_model_attempt(repo, env, "git add -- conflict.txt")
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert "scope_rc=0" in result.stdout and "attempt_rc=0" in result.stdout
+		assert _git_out(repo, env, "ls-files", "-u", "--", "conflict.txt")
+		result = _run_private_index_reconciliation(repo, env)
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert "reconciled: conflict.txt (kept)" in result.stdout
+		assert not _git_out(repo, env, "ls-files", "-u", "--", "conflict.txt")
+		# Keeping HEAD's content is an empty first-parent diff, not an empty
+		# merge: the production no-op gate must still permit its merge commit.
+		assert subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=repo, env=env, check=False).returncode == 0
+		subprocess.run(["git", "commit", "-qm", "resolve"], cwd=repo, env=env, check=True)
+		assert _git_out(repo, env, "show", "HEAD:conflict.txt") == "modified\n"
+		assert len(_git_out(repo, env, "rev-list", "--parents", "-n", "1", "HEAD").split()) == 3
+
+
+def test_private_index_reconciliation_rejects_unacknowledged_or_mismatched_resolution() -> None:
+	for action, expected_reason in (
+		(":", "still_unmerged_in_model_index"),
+		("printf 'different\\n' > conflict.txt && git add -- conflict.txt && printf 'modified\\n' > conflict.txt", "content_mismatch"),
+	):
+		with tempfile.TemporaryDirectory() as directory:
+			repo, env = _modify_delete_conflict_fixture(Path(directory))
+			attempt = _run_model_attempt(repo, env, action)
+			assert attempt.returncode == 0, attempt.stdout + attempt.stderr
+			assert "scope_rc=0" in attempt.stdout and "attempt_rc=0" in attempt.stdout
+			result = _run_private_index_reconciliation(repo, env)
+			assert result.returncode != 0
+			assert f"reason={expected_reason}" in result.stdout, result.stdout + result.stderr
+			assert _git_out(repo, env, "ls-files", "-u", "--", "conflict.txt")
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _modify_delete_conflict_fixture(Path(directory))
+		attempt = _run_model_attempt(repo, env, "git add -- conflict.txt")
+		assert attempt.returncode == 0, attempt.stdout + attempt.stderr
+		Path(env["RESOLVER_ALLOWLIST_FILE"]).write_text("", encoding="utf-8")
+		result = _run_private_index_reconciliation(repo, env)
+		assert result.returncode != 0
+		assert _git_out(repo, env, "ls-files", "-u", "--", "conflict.txt")
+	with tempfile.TemporaryDirectory() as directory:
+		repo, env = _modify_delete_conflict_fixture(Path(directory))
+		attempt = _run_model_attempt(repo, env, "git add -- conflict.txt")
+		assert attempt.returncode == 0, attempt.stdout + attempt.stderr
+		Path(env["RESOLVER_MODEL_INDEX_FILE"]).unlink()
+		result = _run_private_index_reconciliation(repo, env)
+		assert result.returncode != 0
+		assert _git_out(repo, env, "ls-files", "-u", "--", "conflict.txt")
+
+
+def test_private_index_reconciliation_stages_deletion_and_matching_modes() -> None:
+	for action, result_type, expected_mode in (
+		("rm conflict.txt && git add -u -- conflict.txt", "deleted", None),
+		("chmod +x conflict.txt && git add -- conflict.txt", "kept", "100755"),
+		("rm conflict.txt && ln -s outside-target conflict.txt && git add -- conflict.txt", "kept", "120000"),
+	):
+		with tempfile.TemporaryDirectory() as directory:
+			repo, env = _modify_delete_conflict_fixture(Path(directory))
+			attempt = _run_model_attempt(repo, env, action)
+			assert attempt.returncode == 0, attempt.stdout + attempt.stderr
+			assert "scope_rc=0" in attempt.stdout and "attempt_rc=0" in attempt.stdout
+			result = _run_private_index_reconciliation(repo, env)
+			assert result.returncode == 0, result.stdout + result.stderr
+			assert f"reconciled: conflict.txt ({result_type})" in result.stdout
+			assert not _git_out(repo, env, "ls-files", "-u", "--", "conflict.txt")
+			index_entry = _git_out(repo, env, "ls-files", "--stage", "--", "conflict.txt")
+			if expected_mode:
+				assert index_entry.startswith(expected_mode + " ")
+			else:
+				assert not index_entry
+			subprocess.run(["git", "commit", "-qm", "resolve"], cwd=repo, env=env, check=True)
+			assert len(_git_out(repo, env, "rev-list", "--parents", "-n", "1", "HEAD").split()) == 3
+			if result_type == "deleted":
+				assert not _git_out(repo, env, "ls-tree", "--name-only", "HEAD", "--", "conflict.txt")
+
+
 def test_resolver_opencode_snapshot_opt_out() -> None:
 	"""OpenCode's snapshot git calls inherit GIT_INDEX_FILE, so the resolver's
 	own config turns snapshots off; every other key is kept, and a malformed
@@ -998,6 +1138,18 @@ def test_private_model_index_wiring() -> None:
 	assert "Never call it with\n# GIT_INDEX_FILE pointing at the model's private copy" in src[:staging_def]
 	staging_call = src.index('if ! stage_resolver_touched_path_or_fail "${touched_path}"; then')
 	assert "GIT_INDEX_FILE=" not in src[src.rindex("This staging runs on the real index on purpose", 0, staging_call):staging_call]
+	reconcile_call = src.index("if ! _resolver_reconcile_private_index_resolutions; then")
+	assert src.index("resolver_private_index_reconciled=false") < reconcile_call
+	assert src.index('done < "${RESOLVER_TOUCHED_FILE}"') < reconcile_call
+	assert reconcile_call < src.index('rm -f "${RESOLVER_TOUCHED_FILE}"\n  else', reconcile_call)
+	assert reconcile_call < src.index("if ! verify_resolver_index_complete_or_fail; then", reconcile_call)
+	assert "GIT_INDEX_FILE=" not in src[src.index('done < "${RESOLVER_TOUCHED_FILE}"'):reconcile_call]
+	reconcile = _named_function_source("_resolver_reconcile_private_index_resolutions")
+	assert reconcile.count('GIT_INDEX_FILE=') == 1
+	assert 'GIT_INDEX_FILE="${RESOLVER_MODEL_INDEX_FILE}" git ls-files --stage -- "${_reconcile_path}"' in reconcile
+	assert 'stage_resolver_touched_path_or_fail "${_reconcile_path}"' in reconcile
+	assert 'grep -Fxq -- "${_reconcile_path}" "${RESOLVER_ALLOWLIST_FILE}"' in reconcile
+	assert 'GIT_LITERAL_PATHSPECS=1 stage_resolver_touched_path_or_fail "${_reconcile_path}"' in reconcile
 
 
 def main() -> int:
@@ -1023,6 +1175,9 @@ def main() -> int:
 	test_model_out_of_scope_staging_cannot_reach_commit()
 	test_model_bypassing_private_index_still_fails_closed()
 	test_model_index_is_fresh_per_attempt_and_fails_closed()
+	test_marker_free_conflict_staged_only_in_private_index_is_reconciled()
+	test_private_index_reconciliation_rejects_unacknowledged_or_mismatched_resolution()
+	test_private_index_reconciliation_stages_deletion_and_matching_modes()
 	test_resolver_opencode_snapshot_opt_out()
 	test_private_model_index_wiring()
 	print(

@@ -548,8 +548,9 @@ RESOLVER_MODEL_INDEX_FILE="${RUNTIME_DIR}/resolver_model_index"
 # copy of the captured merge index through GIT_INDEX_FILE, so a `git add` of
 # the file it resolved never changes the real index, which both attempt-scope
 # guards require to stay unchanged. The copy is refreshed before every attempt
-# and never read back: the script stages the accepted resolution itself. A
-# model that bypasses the copy still changes the real index and fails closed.
+# and read back only for acknowledged, worktree-matching resolutions (#6344):
+# the script stages the accepted resolution itself. A model that bypasses the
+# copy still changes the real index and fails closed.
 _resolver_model_index_prepare()
 {
   local _real_index
@@ -567,6 +568,80 @@ _resolver_model_index_prepare()
   rm -f -- "${RESOLVER_MODEL_INDEX_FILE}" "${RESOLVER_MODEL_INDEX_FILE}.lock" || return 1
   cp -- "${_real_index}" "${RESOLVER_MODEL_INDEX_FILE}" || return 1
   cmp -s -- "${_real_index}" "${RESOLVER_MODEL_INDEX_FILE}"
+}
+
+# Source-repo only (#6344): an already marker-free conflict can be staged by
+# the model without a worktree edit. Reconcile only resolutions it acknowledged
+# in its private index, and only when the indexed bytes/mode match the worktree.
+_resolver_reconcile_private_index_resolutions()
+{
+  local _reconcile_real_index _reconcile_path _reconcile_unmerged
+  local _reconcile_model_entry _reconcile_worktree_oid _reconcile_worktree_mode
+  local _reconcile_expected_entry _reconcile_kind _reconcile_staged_entry
+
+  case "${RESOLVER_MODEL_INDEX_FILE:-}" in
+    /*) ;;
+    *) return 0 ;;
+  esac
+  [ -f "${RESOLVER_MODEL_INDEX_FILE}" ] && [ ! -L "${RESOLVER_MODEL_INDEX_FILE}" ] || return 0
+  [ -f "${RESOLVER_INITIAL_UNMERGED_PATHS_FILE:-}" ] && [ -f "${RESOLVER_ALLOWLIST_FILE:-}" ] || return 0
+  _reconcile_real_index="$(git rev-parse --path-format=absolute --git-path index)" || return 0
+  if [ "${_reconcile_real_index}" = "${RESOLVER_MODEL_INDEX_FILE}" ] \
+     || [ "${_reconcile_real_index}" -ef "${RESOLVER_MODEL_INDEX_FILE}" ]; then
+    return 0
+  fi
+
+  while IFS= read -r _reconcile_path; do
+    [ -n "${_reconcile_path}" ] || continue
+    grep -Fxq -- "${_reconcile_path}" "${RESOLVER_ALLOWLIST_FILE}" || continue
+    _reconcile_unmerged="$(GIT_LITERAL_PATHSPECS=1 git ls-files -u -- "${_reconcile_path}")" || continue
+    [ -n "${_reconcile_unmerged}" ] || continue
+    if ! _reconcile_model_entry="$(GIT_LITERAL_PATHSPECS=1 GIT_INDEX_FILE="${RESOLVER_MODEL_INDEX_FILE}" git ls-files --stage -- "${_reconcile_path}")"; then
+      echo "Resolver private-index resolution not reconciled: ${_reconcile_path} reason=not_in_model_index"
+      continue
+    fi
+
+    if [ -z "${_reconcile_model_entry}" ]; then
+      if [ -e "${_reconcile_path}" ] || [ -L "${_reconcile_path}" ]; then
+        echo "Resolver private-index resolution not reconciled: ${_reconcile_path} reason=not_in_model_index"
+        continue
+      fi
+      _reconcile_kind=deleted
+      _reconcile_expected_entry=""
+    else
+      if [[ "${_reconcile_model_entry}" == *$'\n'* ]] \
+         || [[ "${_reconcile_model_entry}" != *" 0"$'\t'* ]]; then
+        echo "Resolver private-index resolution not reconciled: ${_reconcile_path} reason=still_unmerged_in_model_index"
+        continue
+      fi
+      if [ -L "${_reconcile_path}" ]; then
+        _reconcile_worktree_mode=120000
+        _reconcile_worktree_oid="$(readlink -n -- "${_reconcile_path}" | git hash-object --stdin)" || return 0
+      elif [ -f "${_reconcile_path}" ]; then
+        _reconcile_worktree_mode=100644
+        [ ! -x "${_reconcile_path}" ] || _reconcile_worktree_mode=100755
+        _reconcile_worktree_oid="$(git hash-object -- "${_reconcile_path}")" || return 0
+      else
+        echo "Resolver private-index resolution not reconciled: ${_reconcile_path} reason=content_mismatch"
+        continue
+      fi
+      _reconcile_expected_entry="${_reconcile_worktree_mode} ${_reconcile_worktree_oid} 0"$'\t'"${_reconcile_path}"
+      if [ "${_reconcile_model_entry}" != "${_reconcile_expected_entry}" ]; then
+        echo "Resolver private-index resolution not reconciled: ${_reconcile_path} reason=content_mismatch"
+        continue
+      fi
+      _reconcile_kind=kept
+    fi
+
+    GIT_LITERAL_PATHSPECS=1 stage_resolver_touched_path_or_fail "${_reconcile_path}" || return 1
+    _reconcile_staged_entry="$(GIT_LITERAL_PATHSPECS=1 git ls-files --stage -- "${_reconcile_path}")" || return 1
+    if [ "${_reconcile_staged_entry}" != "${_reconcile_expected_entry}" ]; then
+      echo "::error::Resolver worktree changed during private-index reconciliation; refusing to commit."
+      return 1
+    fi
+    resolver_private_index_reconciled=true
+    echo "Resolver private-index resolution reconciled: ${_reconcile_path} (${_reconcile_kind})"
+  done < "${RESOLVER_INITIAL_UNMERGED_PATHS_FILE}"
 }
 
 # Source-repo only: the final touched-set gate compares against the prepare
@@ -2758,6 +2833,7 @@ if [ -n "$(git status --porcelain)" ]; then
   git config user.email "codex@users.noreply.github.com"
   git rm -r --cached node_modules 2>/dev/null || true
   if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
+    resolver_private_index_reconciled=false
     # On the workflow source repo, identify the files Codex actually
     # wrote during conflict resolution so we can surface them in
     # the job log and (below) stage them on top of the live merge
@@ -2946,8 +3022,8 @@ if [ -n "$(git status --porcelain)" ]; then
     # resolved content.  Auto-merged paths the editor did not
     # touch stay in the index as git merged them.
     # This staging runs on the real index on purpose: the model's
-    # private copy (RESOLVER_MODEL_INDEX_FILE, #5627) is never read
-    # back, so GIT_INDEX_FILE must not be set here.
+    # private copy (RESOLVER_MODEL_INDEX_FILE, #5627) is only read for
+    # acknowledged resolutions; GIT_INDEX_FILE must not be set here.
     git rm -r --cached --ignore-unmatch -- node_modules 2>/dev/null || true
     while IFS= read -r touched_path; do
       [ -z "${touched_path}" ] && continue
@@ -2959,6 +3035,12 @@ if [ -n "$(git status --porcelain)" ]; then
         exit 1
       fi
     done < "${RESOLVER_TOUCHED_FILE}"
+    # #6344 / run 37283422592: the model can resolve a marker-free conflict
+    # only in its private index; stage it here after the attempt-scope guards.
+    if ! _resolver_reconcile_private_index_resolutions; then
+      rm -f "${RESOLVER_TOUCHED_FILE}"
+      exit 1
+    fi
     rm -f "${RESOLVER_TOUCHED_FILE}"
   else
     # Build per-file exclusions from scripts/.gitignore when present.
@@ -3002,7 +3084,9 @@ if [ -n "$(git status --porcelain)" ]; then
   if ! verify_resolver_index_complete_or_fail; then
     exit 1
   fi
-  if git diff --cached --quiet; then
+  # A marker-free modify/delete resolution can keep HEAD's bytes exactly.
+  # It still needs a merge commit to record the second parent (#6344).
+  if git diff --cached --quiet && [ "${resolver_private_index_reconciled:-false}" != "true" ]; then
     echo "No staged merge resolution changes remain; skipping merge-resolve commit."
     echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
     exit 0
