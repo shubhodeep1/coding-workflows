@@ -1299,7 +1299,8 @@ if [ -f "${security_audit_engine_sh}" ]; then
 			if [ "$audit_claude_call_rc" -ne 0 ] && [ "$audit_claude_call_rc" -ne 75 ] && [ -n "${AI_ENGINE_LAST_RUN_DIR:-}" ]; then
 				for audit_claude_stderr_file in "${AI_ENGINE_LAST_RUN_DIR}"/stderr-*.txt; do
 					[ -f "$audit_claude_stderr_file" ] || continue
-					tail -c 65537 -- "$audit_claude_stderr_file" >&2
+					# Keep one extra byte so the sanitizer detects a cut first line.
+					tail -c 65538 -- "$audit_claude_stderr_file" >&2
 				done
 			fi
 			exit "$audit_claude_call_rc"
