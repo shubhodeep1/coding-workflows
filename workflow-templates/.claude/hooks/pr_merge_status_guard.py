@@ -319,20 +319,36 @@ def _literal_guard_path(
 
 
 def _env_wrapped_git_index(tokens: list[str], index: int) -> int:
-	"""Skip a simple `env` prefix; callers must not trust its Git configuration."""
+	"""Skip a simple `env` prefix; return -1 when its command is ambiguous."""
 	if index >= len(tokens) or (tokens[index] != "env" and not tokens[index].endswith("/env")):
 		return index
 	index += 1
 	while index < len(tokens):
 		word = tokens[index]
-		if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", word) or word in ("-i", "--ignore-environment", "--"):
+		if re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", word) or word in ("-", "-i", "--ignore-environment", "--"):
 			index += 1
 		elif word in ("-u", "--unset", "-C", "--chdir") and index + 1 < len(tokens):
 			index += 2
 		elif word.startswith(("--unset=", "--chdir=")) or (word.startswith(("-u", "-C")) and len(word) > 2):
 			index += 1
+		elif word in ("-S", "--split-string") or word.startswith(("-S", "--split-string=")):
+			inline = word not in ("-S", "--split-string")
+			if not inline and index + 1 >= len(tokens):
+				return -1
+			value = word.split("=", 1)[1] if word.startswith("--split-string=") else word[2:] if inline else tokens[index + 1]
+			# GNU env expands backslashes and ${VAR} itself; shlex cannot safely
+			# predict the resulting command in those cases.
+			if "$" in value or "\\" in value:
+				return -1
+			try:
+				split_words = shlex.split(value)
+			except ValueError:
+				return -1
+			if not split_words:
+				return -1
+			tokens[index:index + (1 if inline else 2)] = split_words
 		else:
-			break
+			return -1 if word.startswith("-") else index
 	return index
 
 
@@ -384,14 +400,27 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			index += 1
 		env_index = index
 		index = _env_wrapped_git_index(tokens, index)
+		if index == -1:
+			if any("git" in word or "$" in word for word in tokens[env_index + 1:]):
+				invocations.append(_GitInvocation(checkout, {}, "push", [], "unparsed env wrapper", True))
+			continue
+		env_cwd = working_directory
 		if index != env_index:
 			config_override = True
-			if any(word in ("-C", "--chdir") or word.startswith(("-C", "--chdir=")) for word in tokens[env_index:index]):
-				working_directory = None
+			for position in range(env_index + 1, index):
+				word = tokens[position]
+				if word in ("-C", "--chdir") or word.startswith(("-C", "--chdir=")):
+					env_word_value = (tokens[position + 1] if word in ("-C", "--chdir") else
+						word.split("=", 1)[1] if word.startswith("--chdir=") else word[2:])
+					env_cwd = _literal_guard_path(env_word_value, env_cwd) if env_cwd else None
+				elif re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", word):
+					env_name, env_word_value = word.split("=", 1)
+					if env_name in ("GIT_DIR", "GIT_WORK_TREE"):
+						environment[env_name] = env_word_value
 		if index >= len(tokens) or (tokens[index] != "git" and not tokens[index].endswith("/git")):
 			continue
 		index += 1
-		git_cwd = working_directory
+		git_cwd = env_cwd
 		uncertain = git_cwd is None
 		while index < len(tokens) and tokens[index].startswith("-"):
 			option = tokens[index]
@@ -434,7 +463,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			checkout if uncertain else git_cwd or checkout,
 			{} if uncertain else environment,
 			tokens[index], tokens[index + 1:],
-			"could not resolve git command directory; checking the session checkout instead" if uncertain else "",
+			"could not resolve git command directory" if uncertain else "",
 			config_override,
 		))
 	return invocations
@@ -694,7 +723,12 @@ def git_subcommands(command: str) -> set[str]:
 		index = 0
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
 			index += 1
+		env_index = index
 		index = _env_wrapped_git_index(tokens, index)
+		if index == -1:
+			if any("git" in word or "$" in word for word in tokens[env_index + 1:]):
+				found.add("push")  # Unparseable env commands must request confirmation.
+			continue
 		if index >= len(tokens):
 			continue
 
@@ -1347,8 +1381,14 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	unverified_destinations: set[str] = set()
 	for invocation in _guarded_git_invocations(command, checkout):
 		if invocation.subcommand == "push" and invocation.config_override:
-			unverified_destinations.add("per-command Git configuration may redirect the push")
+			unverified_destinations.add(
+				"unparsed env-wrapped Git command" if invocation.warning == "unparsed env wrapper"
+				else "per-command Git configuration may redirect the push"
+			)
 			continue  # Origin's PR history cannot authorize a push with overridden configuration.
+		if invocation.subcommand == "commit" and invocation.warning:
+			unverified_destinations.add("could not resolve the git commit directory")
+			continue
 		targets = (
 			_push_targets(invocation, checkout) if invocation.subcommand == "push" else
 			[_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", False, invocation.warning)]
@@ -1436,7 +1476,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		return 2, "\n\n".join(blocks)
 	if bulk_reasons or unverified_destinations:
 		_request_confirmation(
-			"Git push may write outside the checked repository or branch: "
+			"Git write may target an unverified repository or branch: "
 			+ ", ".join(sorted(set(bulk_reasons) | unverified_destinations))
 		)
 	return 0, ""

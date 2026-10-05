@@ -972,6 +972,13 @@ def test_per_command_config_push_asks_without_using_origin_prs(merged_branch_rep
 	"env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.url GIT_CONFIG_VALUE_0=https://github.com/other/repo git push origin HEAD:feature/x",
 	"/usr/bin/env -i GIT_CONFIG_GLOBAL=/tmp/other-config git push origin HEAD:feature/x",
 	"env -u GIT_CONFIG_GLOBAL git push origin HEAD:feature/x",
+	"env - git push origin HEAD:feature/x",
+	"env FOO+=bar git push origin HEAD:feature/x",
+	"env -S 'git push origin HEAD:feature/x'",
+	"env --split-string='git push origin HEAD:feature/x'",
+	"env -S 'GIT_CONFIG_COUNT=1 git push origin HEAD:feature/x'",
+	"env -v git push origin HEAD:feature/x",
+	"env -S 'git push origin ${TARGET}'",
 ])
 def test_environment_config_push_asks_without_using_origin_prs(merged_branch_repo, monkeypatch, capsys, command: str) -> None:
 	repo, _ = merged_branch_repo
@@ -983,15 +990,81 @@ def test_environment_config_push_asks_without_using_origin_prs(merged_branch_rep
 	assert "other/repo" not in json.dumps(decision)
 
 
-def test_env_wrapped_commit_keeps_the_merged_pr_check(merged_branch_repo, monkeypatch) -> None:
+@pytest.mark.parametrize("command", [
+	"env GIT_CONFIG_COUNT=0 git commit -m x",
+	"env - git commit -m x",
+	"env FOO+=bar git commit -m x",
+	"env -S 'git commit -m x'",
+	"env --split-string='git commit -m x'",
+])
+def test_env_wrapped_commit_keeps_the_merged_pr_check(merged_branch_repo, monkeypatch, command: str) -> None:
 	repo, _ = merged_branch_repo
 	merged_sha = _git(repo, "rev-parse", "HEAD")
 	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
 	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
 	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: [dict(MERGED_PR, headRefOid=merged_sha)])
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
-		"tool_input": {"command": "env GIT_CONFIG_COUNT=0 git commit -m x"}})
+		"tool_input": {"command": command}})
 	assert code == 2 and "Branch `feature/x`" in message
+
+
+@pytest.mark.parametrize("wrapper", [
+	"env -C {repo} git commit -m x",
+	"env --chdir={repo} git commit -m x",
+	"env GIT_DIR={repo}/.git GIT_WORK_TREE={repo} git commit -m x",
+	"env -S 'GIT_DIR={repo}/.git git commit -m x'",
+])
+def test_env_wrapped_commit_checks_selected_repo(merged_branch_repo, monkeypatch, wrapper: str) -> None:
+	repo, _ = merged_branch_repo
+	other = repo.parent / "open-worktree"
+	_git(repo, "worktree", "add", "-b", "feature/open", str(other), "main")
+	merged_sha = _git(repo, "rev-parse", "feature/x")
+	seen: list[tuple[str, str]] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		seen.append((branch, cwd))
+		return [dict(MERGED_PR, headRefOid=merged_sha)] if branch == "feature/x" else [OPEN_PR]
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	command = wrapper.format(repo=repo)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(other), "tool_input": {"command": command}})
+	assert code == 2 and "Branch `feature/x`" in message
+	# GIT_DIR selects the repository without changing process cwd; env -C
+	# changes cwd but leaves the Git environment alone.
+	assert seen == [("feature/x", str(other) if "GIT_DIR=" in command else str(repo))]
+
+
+@pytest.mark.parametrize("command", [
+	"env -C /does-not-exist git commit -m x",
+	"env -S 'git commit -m ${MESSAGE}'",
+	"env -v git commit -m x",
+])
+def test_env_unresolved_commit_directory_asks_instead_of_checking_checkout(merged_branch_repo, monkeypatch, capsys, command: str) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("must not check the wrong checkout"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": command}})
+	assert code == 0 and message == ""
+	decision = json.loads(capsys.readouterr().out.splitlines()[-1])
+	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_env_chdir_does_not_change_subsequent_command_directory(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	other = repo.parent / "open-worktree"
+	_git(repo, "worktree", "add", "-b", "feature/open", str(other), "main")
+	merged_sha = _git(repo, "rev-parse", "feature/x")
+	seen: list[tuple[str, str]] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		seen.append((branch, cwd))
+		return [dict(MERGED_PR, headRefOid=merged_sha)] if branch == "feature/x" else [OPEN_PR]
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(other),
+		"tool_input": {"command": f"env -C {repo} git commit -m x; git commit -m y"}})
+	assert code == 2 and "Branch `feature/x`" in message
+	assert seen == [("feature/x", str(repo)), ("feature/open", str(other))]
 
 
 def test_per_command_config_commit_keeps_the_merged_pr_check(merged_branch_repo, monkeypatch) -> None:

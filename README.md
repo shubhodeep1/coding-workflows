@@ -1232,7 +1232,9 @@ an override can redirect `origin`, so the guard does not use its stored PR histo
 The same confirmation applies to inline `GIT_CONFIG_*` or `GIT_CONFIG`
 assignments and to `env`-wrapped pushes; the guard does not use origin PR
 history to authorize those pushes. Wrapped commits still receive the normal
-merged-PR check.
+merged-PR check in the worktree selected by `env -C` or `GIT_DIR`; if that
+location or an `env -S` command cannot be resolved, the guard asks instead
+of checking the session checkout.
 
 ### Workflow file size limit
 
