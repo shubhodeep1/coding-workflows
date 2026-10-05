@@ -880,7 +880,15 @@ class Collector:
 		cached = self._read_json(f"{run_dir}/meta.json")
 		if isinstance(cached, dict) and cached.get("complete"):
 			cached_jobs = cached.get("job_table")
-			if review_only and (not isinstance(cached_jobs, list) or not all(isinstance(job, dict) for job in cached_jobs) or not select_jobs(cached_jobs, self.max_jobs)):
+			cached_review_jobs = cached.get("jobs")
+			if review_only and (not isinstance(cached_jobs, list) or not all(isinstance(job, dict) for job in cached_jobs)
+				or not any(FOCUS_JOB_RE.search(job.get("name") or "") for job in cached_jobs)
+				or not isinstance(cached_review_jobs, list) or not cached_review_jobs or not all(
+					isinstance(job, dict) and FOCUS_JOB_RE.search(job.get("name") or "")
+					and isinstance(job.get("id"), int) and job.get("file") == f"{run_dir}/job-{job['id']}.txt"
+					for job in cached_review_jobs
+				) or any(old_log.name not in {f"job-{job['id']}.txt" for job in cached_review_jobs}
+					for old_log in (self.out / run_dir).glob("job-*.txt"))):
 				self._skip(f"run:{ref['repo']}:{ref['run_id']}", "unverified_run_not_failed")
 				return {"skipped": True}
 			cached["reused"] = True
@@ -892,7 +900,9 @@ class Collector:
 			self._skip(f"run:{ref['run_id']}", "jobs_unavailable")
 			return meta
 		jobs = [job for job in jobs if isinstance(job, dict)]
-		if review_only and not select_jobs(jobs, self.max_jobs):
+		selected = ([job for job in jobs if FOCUS_JOB_RE.search(job.get("name") or "")][:self.max_jobs]
+			if review_only else select_jobs(jobs, self.max_jobs))
+		if review_only and not selected:
 			self._skip(f"run:{ref['repo']}:{ref['run_id']}", "unverified_run_not_failed")
 			return {"skipped": True}
 		all_complete = all((job.get("status") or "") == "completed" for job in jobs) if jobs else False
@@ -905,7 +915,11 @@ class Collector:
 			meta["head_branch"] = heal.single_line(jobs[0].get("head_branch"), 200)
 			meta["workflow_name"] = heal.single_line(jobs[0].get("workflow_name"), 200)
 		fetched_all = True
-		selected = select_jobs(jobs, self.max_jobs)
+		if review_only:
+			selected_names = {f"job-{job['id']}.txt" for job in selected if isinstance(job.get("id"), int)}
+			for previous_log in (self.out / run_dir).glob("job-*.txt"):
+				if previous_log.name not in selected_names:
+					previous_log.unlink()
 		if not selected:
 			self._skip(f"run:{ref['run_id']}", "no_failed_or_focus_job")
 		for job in selected:

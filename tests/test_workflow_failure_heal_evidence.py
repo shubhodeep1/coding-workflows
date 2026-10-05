@@ -866,6 +866,75 @@ def test_review_only_run_does_not_trust_malformed_cached_job_table(tmp_path: Pat
 	assert not any("/actions/jobs/" in path or "/artifacts" in path for path in fake.paths)
 
 
+def test_review_only_run_rejects_empty_cached_review_jobs(tmp_path: Path) -> None:
+	fake = FakeGh()
+	run_dir = tmp_path / "evidence" / f"runs/{REPO.replace('/', '__')}__111"
+	run_dir.mkdir(parents=True)
+	(run_dir / "meta.json").write_text(json.dumps({"complete": True, "job_table": [{"name": "review / codex-agent"}], "jobs": []}))
+	manifest = _collector(tmp_path, fake).collect(_issue(), [], issue_repo=REPO)
+	assert {"part": f"run:{REPO}:111", "reason": "unverified_run_not_failed"} in manifest["skipped"]
+	assert not run_dir.exists()
+
+
+@pytest.mark.parametrize("run_status,run_conclusion", [("completed", "success"), ("in_progress", None)])
+def test_review_only_run_ignores_failed_non_review_jobs(tmp_path: Path, run_status: str, run_conclusion: str | None) -> None:
+	fake = FakeGh()
+	fake.routes[f"repos/{REPO}/actions/runs?head_sha={HEAD_SHA}&per_page=30"]["workflow_runs"][0].update({"status": run_status, "conclusion": run_conclusion})
+	fake.routes[f"repos/{REPO}/actions/runs/111/jobs?per_page=100"]["jobs"].insert(0, {
+		"id": 10, "name": "build", "conclusion": "failure", "status": "completed",
+	})
+	fake.routes[f"repos/{REPO}/actions/jobs/10/logs"] = b"non-review job log"
+	run_dir = tmp_path / "evidence" / f"runs/{REPO.replace('/', '__')}__111"
+	run_dir.mkdir(parents=True)
+	(run_dir / "job-10.txt").write_text("stale non-review job log")
+	manifest = _collector(tmp_path, fake).collect(_issue(), [], issue_repo=REPO)
+	assert f"repos/{REPO}/actions/jobs/11/logs" in fake.paths
+	assert f"repos/{REPO}/actions/jobs/10/logs" not in fake.paths
+	assert not (run_dir / "job-10.txt").exists()
+	assert (run_dir / "job-11.txt").is_file()
+	assert all(item["path"] != f"runs/{REPO.replace('/', '__')}__111/job-10.txt" for item in manifest["files"])
+
+
+def test_review_only_run_with_only_failed_non_review_job_skips_evidence(tmp_path: Path) -> None:
+	fake = FakeGh()
+	fake.routes[f"repos/{REPO}/actions/runs/111/jobs?per_page=100"] = {"jobs": [
+		{"id": 10, "name": "build", "conclusion": "failure", "status": "completed"},
+	]}
+	manifest = _collector(tmp_path, fake).collect(_issue(), [], issue_repo=REPO)
+	assert {"part": f"run:{REPO}:111", "reason": "unverified_run_not_failed"} in manifest["skipped"]
+	assert not any("/actions/jobs/" in path or "/artifacts" in path for path in fake.paths)
+
+
+def test_review_only_run_rejects_cached_non_review_log_even_with_review_job(tmp_path: Path) -> None:
+	fake = FakeGh()
+	fake.routes[f"repos/{REPO}/actions/runs/111"]["conclusion"] = "failure"
+	fake.routes[f"repos/{REPO}/actions/runs?head_sha={HEAD_SHA}&per_page=30"]["workflow_runs"][0]["conclusion"] = "failure"
+	fake.routes[f"repos/{REPO}/actions/runs/111/jobs?per_page=100"]["jobs"].insert(0, {
+		"id": 10, "name": "build", "conclusion": "failure", "status": "completed",
+	})
+	fake.routes[f"repos/{REPO}/actions/jobs/10/logs"] = b"non-review job log"
+	_collector(tmp_path, fake).collect(_issue(), [], issue_repo=REPO)
+	run_dir = tmp_path / "evidence" / f"runs/{REPO.replace('/', '__')}__111"
+	assert (run_dir / "job-10.txt").exists()
+	fake.routes[f"repos/{REPO}/actions/runs?head_sha={HEAD_SHA}&per_page=30"]["workflow_runs"][0]["conclusion"] = "success"
+	fake.paths.clear()
+	manifest = _collector(tmp_path, fake).collect(_issue(), [], issue_repo=REPO)
+	assert {"part": f"run:{REPO}:111", "reason": "unverified_run_not_failed"} in manifest["skipped"]
+	assert not run_dir.exists()
+	assert not any("/actions/jobs/" in path or "/artifacts" in path for path in fake.paths)
+
+
+def test_review_only_run_rejects_orphaned_cached_non_review_log(tmp_path: Path) -> None:
+	_collector(tmp_path, FakeGh()).collect(_issue(), [], issue_repo=REPO)
+	run_dir = tmp_path / "evidence" / f"runs/{REPO.replace('/', '__')}__111"
+	(run_dir / "job-10.txt").write_text("old non-review log")
+	fake = FakeGh()
+	manifest = _collector(tmp_path, fake).collect(_issue(), [], issue_repo=REPO)
+	assert {"part": f"run:{REPO}:111", "reason": "unverified_run_not_failed"} in manifest["skipped"]
+	assert not run_dir.exists()
+	assert not any("/actions/jobs/" in path or "/artifacts" in path for path in fake.paths)
+
+
 def test_same_repo_release_run_with_branch_and_failed_conclusion(tmp_path: Path) -> None:
 	issue = _issue(body=_issue()["body"].replace(f"{REPO}#6133", f"{REPO}#run"))
 	fake = FakeGh()
