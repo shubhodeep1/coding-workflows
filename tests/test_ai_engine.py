@@ -86,6 +86,15 @@ if argv[0] == "run":
 	if mode == "hang":
 		import time
 		time.sleep(30)
+	if mode == "startup-fail":
+		print("docker: container could not start", file=sys.stderr)
+		sys.exit(125)
+	if mode == "startup-kill":
+		sys.exit(137)
+	if mode == "cli-crash":
+		print("CLAUDE_READ_CONTAINER_READY", file=sys.stderr)
+		sys.exit(1)
+	print("CLAUDE_READ_CONTAINER_READY", file=sys.stderr)
 	if mode == "limit":
 		print(json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}}))
 		print(json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True, "result": "API Error"}))
@@ -374,6 +383,26 @@ def test_read_isolation_build_failure_falls_back(sandbox: dict) -> None:
 	assert "AI_ENGINE_FALLBACK role=SECURITY_AUDIT reason=isolation_image_build_failed" in result.stderr
 	assert not _docker_calls(sandbox)
 	assert _calls(sandbox) == []
+
+
+@pytest.mark.parametrize("mode", ["startup-fail", "startup-kill"])
+def test_read_isolation_container_start_failure_falls_back(sandbox: dict, mode: str) -> None:
+	_accounts(sandbox, A="TOK_OK", B="TOK_OK")
+	(sandbox["tmp"] / "docker-mode").write_text(mode)
+	result = _claude_run(sandbox, "SECURITY_AUDIT")
+	assert _rc(result) == 75, result.stderr
+	assert "AI_ENGINE_FALLBACK role=SECURITY_AUDIT reason=isolation_container_start_failed" in result.stderr
+	assert len(_docker_calls(sandbox)) == 1
+	assert _calls(sandbox) == []
+
+
+def test_read_isolation_cli_crash_is_not_startup_failure(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK", B="TOK_OK")
+	(sandbox["tmp"] / "docker-mode").write_text("cli-crash")
+	result = _claude_run(sandbox, "SECURITY_AUDIT")
+	assert _rc(result) == 1, result.stderr
+	assert "AI_ENGINE_FALLBACK" not in result.stderr
+	assert len(_docker_calls(sandbox)) == 1
 
 
 @pytest.mark.parametrize("reason,env", [

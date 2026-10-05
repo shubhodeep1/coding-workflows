@@ -368,6 +368,7 @@ _ai_engine_claude_run_isolated()
 				bridge_pid=$!
 				trap '\''kill "${bridge_pid}" 2>/dev/null || true'\'' EXIT
 				python3 -c '\''import socket,time; [(time.sleep(.1) if s.connect_ex(("127.0.0.1",8765)) else exit(0)) for s in (socket.socket() for _ in range(50))]; exit(1)'\''
+				printf "CLAUDE_READ_CONTAINER_READY\n" >&2
 				claude -p --model "${CLAUDE_MODEL}" --effort "${CLAUDE_EFFORT}" --system-prompt-file /instructions.md \
 					--setting-sources "" --settings /settings.json --strict-mcp-config --disable-slash-commands \
 					--exclude-dynamic-system-prompt-sections --tools Read,Grep,Glob,Bash --permission-mode dontAsk \
@@ -389,6 +390,10 @@ _ai_engine_claude_run_isolated()
 		outcome="$(_ai_engine_json_field "${verdict}" outcome)"
 		reason="$(_ai_engine_json_field "${verdict}" reason)"
 		echo "CLAUDE_POOL run role=${role} account=${name} outcome=${outcome} reason=${reason} exit_code=${attempt_rc}" >&2
+		if [ "${attempt_rc}" -ne 0 ] && ! grep -Fxq 'CLAUDE_READ_CONTAINER_READY' "${stderr_file}"; then
+			ai_engine_fallback "${role}" isolation_container_start_failed
+			return "${_AI_ENGINE_EXIT_FALLBACK}"
+		fi
 		case "${outcome}" in
 			success)
 				_ai_engine_py extract --transcript "${transcript}" --out "${out_file}" >&2 || return 1
