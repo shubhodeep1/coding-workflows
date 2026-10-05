@@ -1952,7 +1952,7 @@ attempts of that role in the same job.
 | `scripts/ai_engine.sh` | Sourced by call sites. `ai_engine_for_role <ROLE>` prints `codex` or `claude` and logs `AI_ENGINE_SELECTED role= engine= model= effort= source=`. `claude_run <ROLE> <prompt> <out> <workdir> [session_id]` runs the CLI and writes the final answer to `<out>`, the file the codex path writes. |
 | `scripts/claude_engine.py` | Every decision: role resolution, the P5 settings, transcript extraction and classification (`success`, `auth_failed`, `usage_limit`, `crashed`, `timeout`), probe parsing, account order. No API calls. |
 | `scripts/claude_settings.json.tmpl` | P5 permission policy, rendered per run: denies `gh pr merge`, `gh api … DELETE`, force pushes and remote branch deletes, and edits to the checkout's `.github/workflows/**` (unless `ALLOW_WORKFLOW_EDITS=true`) and `.claude/**`; runs `gh_api_write_guard.py` on every Bash call (a headless "ask" is a denial); its `env` block carries no credential. |
-| `scripts/claude_anthropic_relay.py` | Host relay for the sandboxed roles (clarify, review editor): the container gets `ANTHROPIC_BASE_URL=http://127.0.0.1:8765` and a placeholder token; the host side swaps in the real OAuth token and forwards only `POST /v1/messages` to `api.anthropic.com`. |
+| `scripts/claude_anthropic_relay.py` | Host relay for the sandboxed roles (clarify, review editor, read-profile `claude_run`): the container gets `ANTHROPIC_BASE_URL=http://127.0.0.1:8765` and a placeholder token; the host side swaps in the real OAuth token and forwards only `POST /v1/messages` to `api.anthropic.com`. |
 | `.github/actions/install-claude` | Installs and verifies the pinned `@anthropic-ai/claude-code` on Node 22. |
 | `.github/workflows/claude-engine-smoke.yml` | Dispatch-only self-test per tool profile: offline checks, then the context gate, P5 denials and relay gate when a credential is available, or the codex fallback when it is not. |
 
@@ -2028,6 +2028,16 @@ which only adds `engine=claude` to its log lines, and every success prints the
 stream-json `result` usage line that `scripts/cost_audit.py` totals under
 "Claude engine usage".
 
+Effective read-profile calls, including calls narrowed by
+`AI_ENGINE_READ_ONLY=true`, run in a no-network, read-only container with a
+filtered copy of source and newly built credential-free Git metadata. The host
+Anthropic relay alone reads account tokens; the container sees a placeholder.
+`CLAUDE_READ_ISOLATION role= outcome=started|unavailable reason=` logs setup.
+If Docker, support, policy or snapshot setup fails, Claude is not run on the
+host: the call returns 75 with `AI_ENGINE_FALLBACK reason=isolation_unavailable`
+and the caller uses its existing fallback. Write-profile roles still run on
+the host and require a separate credential-isolation follow-up.
+
 **Context gate.** `--bare` is not used because it never reads OAuth
 credentials. The smoke run checks that a no-op run starts below 25,000 input
 tokens and that a marker placed only in the checkout's `CLAUDE.md` is not
@@ -2035,7 +2045,9 @@ visible. If it is, set `hide_claude_md: true` in `claude_engine.json`:
 `claude_run` then moves `CLAUDE.md` out of the checkout for the call and puts
 it back afterwards. If the run creates a new `CLAUDE.md`, it keeps the new
 file, saves the original as `CLAUDE.md.original.<unique suffix>` beside it,
-and reports that path instead of overwriting the new content.
+and reports that path instead of overwriting the new content. For read-profile
+calls, the file is omitted from the isolated snapshot instead of moving the
+checkout's copy.
 
 **Token broker.** The account tokens never live in coding-workflows or in a
 consumer repo. They are `CLAUDE_POOL_TOKEN_<NAME>` secrets in

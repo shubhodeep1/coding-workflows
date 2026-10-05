@@ -240,6 +240,14 @@ reject shell control syntax and write-capable git options, including abbreviated
 `--output` and `git grep -O`. The security audit also strips credentials from
 its model call and fingerprints the trusted `scripts/` tree before running its
 single-issue reporter; a mismatch fails closed without executing that script.
+All effective read-profile `claude_run` calls (including `AI_ENGINE_READ_ONLY`)
+use `scripts/claude_read_isolated_run.sh`: a filtered source snapshot and
+regenerated, credential-free Git metadata inside a no-network, read-only
+container. Only the host `claude_anthropic_relay.py` reads pool tokens; a
+missing sandbox or rejected snapshot returns 75 (`AI_ENGINE_FALLBACK
+reason=isolation_unavailable`), never a host Claude call. Write-profile roles
+remain on the host pending a separate fix. `CLAUDE_READ_ISOLATION` logs the
+read sandbox's started/unavailable outcome.
 The merged-PR push guard preserves whitespace-separated numeric refspecs before
 output redirects; only attached numeric file-descriptor prefixes are removed.
 
@@ -1227,6 +1235,7 @@ and shipped:
 - `AI_ENGINE_SELECTED` (`scripts/ai_engine.sh`: `role= engine= model= effort= source=`)
 - `AI_ENGINE_FALLBACK` (`scripts/ai_engine.sh`: `role= reason=`; the run uses codex)
 - `CLAUDE_POOL` (`scripts/ai_engine.sh` and the sandbox Claude branches: `run role= account= outcome= reason= exit_code=`, `account_skipped account= reason=`)
+- `CLAUDE_READ_ISOLATION` (`role= outcome=started|unavailable reason=`)
 - `AI_ENGINE_PROJECT_LABEL` (`orchestrate.yml` "Ensure orchestrator labels exist": `label=`, `none` when unset; the label the tracking and wave-1 issues get)
 - `AI_ENGINE_PR_LABEL` (`implement.yml` "Create Pull Request": `issue= label=`; the engine label copied from the issue to its PR)
 - `SINGLE_ISSUE_SECURITY_PASS` (`scripts/review_single_issue_security_pass.sh`: `mode=gate|report pr= head= outcome=clean|hold|dispatched|skip|findings|failed reason= cycle=`; clean markers require the authenticated pipeline author and an exact audited PR head. Missing/disabled audits report failed, and an unverifiable marker source holds auto-merge. If result publication fails, report skips review re-dispatch so it cannot run without the marker.)
@@ -1431,6 +1440,7 @@ LOG_PREFIX.name=STANDALONE_AUTO_DECIDE
 LOG_PREFIX.name=AI_ENGINE_SELECTED
 LOG_PREFIX.name=AI_ENGINE_FALLBACK
 LOG_PREFIX.name=CLAUDE_POOL
+LOG_PREFIX.name=CLAUDE_READ_ISOLATION
 LOG_PREFIX.name=AI_ENGINE_PROJECT_LABEL
 LOG_PREFIX.name=AI_ENGINE_PR_LABEL
 LOG_PREFIX.name=SINGLE_ISSUE_SECURITY_PASS

@@ -39,6 +39,9 @@
 #       crash, which follows the role's existing retry rules.
 #       AI_ENGINE_LAST_RUN_DIR names the run directory afterwards; it holds
 #       transcript-<NAME>.jsonl and stderr-<NAME>.txt for each account tried.
+#       Effective read-profile calls use a credential-free container and the
+#       host Anthropic relay. Isolation setup failure returns 75, never an
+#       unisolated Claude call.
 #
 # Inputs (environment):
 #   AI_ENGINE_LABELS        work-item labels (comma/space list or JSON list)
@@ -237,6 +240,21 @@ claude_run()
 	# The caller may read the transcripts (transcript-<NAME>.jsonl) after the run.
 	# shellcheck disable=SC2034  # read by callers after claude_run returns
 	AI_ENGINE_LAST_RUN_DIR="${run_dir}"
+	if [ "${profile}" = "read" ]; then
+		if [ ! -f "${_AI_ENGINE_DIR}/claude_read_isolated_run.sh" ]; then
+			ai_engine_fallback "${role}" isolation_unavailable
+			return "${_AI_ENGINE_EXIT_FALLBACK}"
+		fi
+		local isolation_rc=0 isolation_reason
+			printf '%s\n' "${accounts[@]}" | bash "${_AI_ENGINE_DIR}/claude_read_isolated_run.sh" \
+			"${role}" "${prompt_file}" "${out_file}" "${workdir}" "${run_dir}" "${model}" "${effort}" "${instructions}" "${hide_claude_md}" "${session_id}" || isolation_rc=$?
+		if [ "${isolation_rc}" -eq "${_AI_ENGINE_EXIT_FALLBACK}" ]; then
+			isolation_reason="$(< "${run_dir}/fallback_reason")" 2>/dev/null || isolation_reason=isolation_unavailable
+			case "${isolation_reason}" in isolation_unavailable|all_accounts_failed) ;; *) isolation_reason=isolation_unavailable ;; esac
+			ai_engine_fallback "${role}" "${isolation_reason}"
+		fi
+		return "${isolation_rc}"
+	fi
 	local -a settings_args=(settings --checkout "${workdir}" --out "${run_dir}/claude-settings.json" --profile "${profile}")
 	[ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ] && settings_args+=(--allow-workflow-edits)
 	if ! _ai_engine_py "${settings_args[@]}"; then

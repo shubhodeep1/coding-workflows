@@ -17,6 +17,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from test_claude_read_isolated_run import fake_docker
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 AI_ENGINE = REPO_ROOT / "scripts" / "ai_engine.sh"
@@ -85,7 +86,8 @@ def sandbox(tmp_path: Path):
 	env = {
 		key: value
 		for key, value in os.environ.items()
-		if not key.startswith(("AI_ENGINE", "CLAUDE_", "ANTHROPIC_", "SUPPORT_", "TG_", "GITHUB_WORKSPACE", "GITHUB_EVENT_PATH"))
+		if key not in ("BASH_ENV", "ENV", "WORKSPACE_PATH")
+		and not key.startswith(("AI_ENGINE", "CLAUDE_", "ANTHROPIC_", "SUPPORT_", "TG_", "GITHUB_WORKSPACE", "GITHUB_EVENT_PATH"))
 	}
 	env.update(
 		{
@@ -97,6 +99,7 @@ def sandbox(tmp_path: Path):
 			"FAKE_CLAUDE_LOG": str(tmp_path / "calls.jsonl"),
 			"PYTHONDONTWRITEBYTECODE": "1",
 			"CODEX_HEARTBEAT_INTERVAL_SECS": "30",
+			"ALLOW_WORKFLOW_EDITS": "false",
 			"ANTHROPIC_API_KEY": "must-not-reach-the-cli",
 		}
 	)
@@ -297,12 +300,17 @@ def test_write_role_command_line(sandbox: dict) -> None:
 
 def test_read_role_command_line(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_OK")
+	docker_log = fake_docker(sandbox["bin"])
 	result = _claude_run(sandbox, "SECURITY_AUDIT", AI_ENGINE_MODEL_HINT="claude-sonnet-5-5")
 	assert _rc(result) == 0, result.stderr
-	argv = _calls(sandbox)[0]["argv"]
-	assert argv[argv.index("--tools") + 1] == "Read,Grep,Glob,Bash"
-	assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
-	assert argv[argv.index("--model") + 1] == "claude-sonnet-5-5"
+	assert not _calls(sandbox)
+	runs = [json.loads(row) for row in docker_log.read_text().splitlines()]
+	argv = next(row for row in runs if row[0] == "run")
+	assert "--network" in argv and "none" in argv and "--read-only" in argv
+	assert "--cap-drop" in argv and "ALL" in argv
+	assert "CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder" in argv
+	assert "CLAUDE_MODEL=claude-sonnet-5-5" in argv
+	assert "TOK_OK" not in json.dumps(argv) and str(sandbox["pool"]) not in json.dumps(argv)
 
 
 @pytest.mark.parametrize("role, read_only", [
@@ -310,6 +318,7 @@ def test_read_role_command_line(sandbox: dict) -> None:
 ])
 def test_read_profile_strips_credentials_from_claude_only(sandbox: dict, role: str, read_only: bool) -> None:
 	_accounts(sandbox, A="TOK_OK")
+	docker_log = fake_docker(sandbox["bin"])
 	credential_names = (
 		"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_PAT", "GH_HOST",
 		"TG_BOT_SECRET", "TG_ADMIN_CHAT_ID", "TG_CHAT_ID", "OPENROUTER_API_KEY",
@@ -321,16 +330,15 @@ def test_read_profile_strips_credentials_from_claude_only(sandbox: dict, role: s
 	result = _claude_run(sandbox, role, **dict.fromkeys(credential_names, "not-a-real-credential"),
 		AI_ENGINE_READ_ONLY="true" if read_only else "false", GH_CONFIG_DIR=str(inherited_gh_config))
 	assert _rc(result) == 0, result.stderr
-	call = _calls(sandbox)[0]
-	assert call["credentials"] == dict.fromkeys(credential_names, role == "IMPLEMENT")
-	assert call["token"] == "TOK_OK"
 	if role == "IMPLEMENT":
+		call = _calls(sandbox)[0]
+		assert call["credentials"] == dict.fromkeys(credential_names, True)
+		assert call["token"] == "TOK_OK"
 		assert call["gh_config_dir"] == str(inherited_gh_config)
 	else:
-		assert Path(call["gh_config_dir"]).parent == Path(next(
-			line[8:] for line in result.stdout.splitlines() if line.startswith("RUN_DIR=")))
-		assert Path(call["gh_config_dir"]) != inherited_gh_config
-		assert list(Path(call["gh_config_dir"]).iterdir()) == []
+		assert not _calls(sandbox)
+		argv = next(json.loads(row) for row in docker_log.read_text().splitlines() if json.loads(row)[0] == "run")
+		assert all(value not in json.dumps(argv) for value in ("TOK_OK", "not-a-real-credential", str(inherited_gh_config)))
 
 
 @pytest.mark.parametrize("value, tools, mode", [
@@ -340,10 +348,40 @@ def test_read_profile_strips_credentials_from_claude_only(sandbox: dict, role: s
 ])
 def test_read_only_switch_narrows_a_write_role(sandbox: dict, value: str, tools: str, mode: str) -> None:
 	_accounts(sandbox, A="TOK_OK")
+	docker_log = fake_docker(sandbox["bin"])
 	result = _claude_run(sandbox, "RB_JUDGE", AI_ENGINE_READ_ONLY=value)
 	assert _rc(result) == 0, result.stderr
-	argv = _calls(sandbox)[0]["argv"]
-	assert (argv[argv.index("--tools") + 1], argv[argv.index("--permission-mode") + 1]) == (tools, mode)
+	if value == "true":
+		assert not _calls(sandbox)
+		argv = next(json.loads(row) for row in docker_log.read_text().splitlines() if json.loads(row)[0] == "run")
+		assert f"--tools {tools} --permission-mode {mode}" in argv[-1]
+	else:
+		argv = _calls(sandbox)[0]["argv"]
+		assert (argv[argv.index("--tools") + 1], argv[argv.index("--permission-mode") + 1]) == (tools, mode)
+
+
+def test_read_role_without_docker_falls_back_and_never_uses_host_claude(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	# Keep only the commands required before the isolation preflight on PATH.
+	for name in ("bash", "dirname", "python3", "mktemp", "tr", "cut"):
+		(sandbox["bin"] / name).symlink_to(Path("/usr/bin") / name)
+	result = _claude_run(sandbox, "SECURITY_AUDIT", PATH=str(sandbox["bin"]))
+	assert _rc(result) == 75
+	assert "AI_ENGINE_FALLBACK role=SECURITY_AUDIT reason=isolation_unavailable" in result.stderr
+	assert not _calls(sandbox)
+
+
+def test_read_role_without_helper_falls_back(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	copy = sandbox["tmp"] / "support"
+	copy.mkdir()
+	for name in ("ai_engine.sh", "claude_engine.py", "claude_settings.json.tmpl"):
+		(copy / name).write_bytes((REPO_ROOT / "scripts" / name).read_bytes())
+	result = subprocess.run(["bash", "-c", f'source "{copy / "ai_engine.sh"}"; claude_run SECURITY_AUDIT "{sandbox["prompt"]}" "{sandbox["tmp"] / "out.txt"}" "{sandbox["work"]}"'],
+		env=sandbox["env"], capture_output=True, text=True, check=False)
+	assert result.returncode == 75
+	assert "reason=isolation_unavailable" in result.stderr
+	assert not _calls(sandbox)
 
 
 def _claude_run_selected(sandbox: dict, role: str, **extra_env: str) -> subprocess.CompletedProcess:

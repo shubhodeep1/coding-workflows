@@ -957,7 +957,7 @@ def cmd_settings(args: argparse.Namespace) -> int:
 		guard_hook,
 		profile=args.profile,
 		allow_workflow_edits=args.allow_workflow_edits,
-		read_guard_hook=str(Path(__file__).resolve()),
+		read_guard_hook=args.read_guard_hook or str(Path(__file__).resolve()),
 	)
 	out = Path(args.out)
 	out.parent.mkdir(parents=True, exist_ok=True)
@@ -1083,6 +1083,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--allow-workflow-edits", action="store_true")
 	p.add_argument("--template", default="")
 	p.add_argument("--guard-hook", default="")
+	p.add_argument("--read-guard-hook", default="")
 	p.set_defaults(func=cmd_settings)
 
 	p = sub.add_parser("read-guard")

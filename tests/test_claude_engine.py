@@ -314,6 +314,17 @@ def test_read_profile_settings_have_a_bash_guard_without_changing_write_settings
 			ce.render_settings(template, "/w", "/trusted/gh_guard.py", profile="read", read_guard_hook=path)
 
 
+def test_settings_cli_can_mount_read_guard_without_changing_the_default(tmp_path: Path) -> None:
+	isolated = tmp_path / "isolated.json"
+	default = tmp_path / "default.json"
+	assert _run("settings", "--checkout", "/source", "--out", str(isolated), "--profile", "read",
+		"--read-guard-hook", "/claude_engine.py").returncode == 0
+	assert _run("settings", "--checkout", "/source", "--out", str(default), "--profile", "read").returncode == 0
+	commands = lambda path: [hook["hooks"][0]["command"] for hook in json.loads(path.read_text())["hooks"]["PreToolUse"]]
+	assert 'python3 "/claude_engine.py" read-guard' in commands(isolated)
+	assert str(SCRIPT) in " ".join(commands(default))
+
+
 @pytest.mark.parametrize("command", [
 	"git log --oneline -5", "git show HEAD:scripts/x.sh", "git diff --stat a..b -- 'p q'",
 	"git diff --text", "git diff --no-ext-diff", "git grep -n foo",
