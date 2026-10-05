@@ -222,6 +222,7 @@ jobs:
           ref: ${{ inputs.head_sha || github.sha }}
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
+          persist-credentials: false
 
       - name: Install Codex CLI
         uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
@@ -248,6 +249,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Checkout workflow support source fallback
         if: ${{ steps.checkout_support_source.outcome == 'failure' }}
@@ -258,6 +260,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Stage workflow support files
         run: |
@@ -299,6 +302,7 @@ jobs:
           fi
 
           for f in unattended_system_instructions.md; do
+            # These workspace copies only serve older, unset-directory callers.
             if [ ! -f "${f}" ] && [ -f ".codex-workflow-src/${f}" ]; then
               install -m 0644 ".codex-workflow-src/${f}" "${f}"
             fi
@@ -319,6 +323,27 @@ jobs:
               printf '%s\n' "${_fetched[@]}" .gitignore
             } > scripts/.gitignore
           fi
+
+          # Never render instructions from the PR checkout (including prompt
+          # includes, personas and identity files). Keep it visible as code data.
+          trusted_dir="${RUNNER_TEMP}/check-triage-trusted-support"
+          if [ ! -f .codex-workflow-src/unattended_system_instructions.md ] ||
+             [ ! -f .codex-workflow-src/prompts/mode-check-failure-triage.txt ]; then
+            echo "::error::Required trusted triage instructions are missing from the support ref"
+            exit 1
+          fi
+          rm -rf "${trusted_dir}"
+          mkdir -p "${trusted_dir}/scripts" "${trusted_dir}/prompts"
+          cp -R .codex-workflow-src/prompts/. "${trusted_dir}/prompts/"
+          install -m 0644 .codex-workflow-src/unattended_system_instructions.md "${trusted_dir}/unattended_system_instructions.md"
+          if [ -f .codex-workflow-src/agents.md ]; then
+            install -m 0644 .codex-workflow-src/agents.md "${trusted_dir}/agents_canonical.md"
+          fi
+          install -m 0755 .codex-workflow-src/scripts/render_prompt.sh "${trusted_dir}/scripts/render_prompt.sh"
+          if [ -f .codex-workflow-src/scripts/render_prompt.py ]; then
+            install -m 0755 .codex-workflow-src/scripts/render_prompt.py "${trusted_dir}/scripts/render_prompt.py"
+          fi
+          echo "CHECK_TRIAGE_TRUSTED_SUPPORT_DIR=${trusted_dir}" >> "$GITHUB_ENV"
 
           rm -rf .codex-workflow-src
 
