@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:1313-1317 | flagged_by: [minimax_minimax-m3]\n  PROBLEM: The appended message duplicates the existing per-invocation \u201ccould not resolve git command directory\u201d warning.\n  WHY: `_evaluate_bash` already emits that warning at `_warn(target.warning)` (line 1325-1326), so users see the same fact twice when the push also lacks a resolved branch.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/pr_merge_status_guard.py:1313-1317\n  PROBLEM: The appended message duplicates the existing per-invocation \u201ccould not resolve git command directory\u201d warning.\n  WHY: `_evaluate_bash` already emits that warning at `_warn(target.warning)` (line 1325-1326); the suggested minimal fix is to shorten the appended string to \u201cthe session checkout's branch may not match the pushed branch.\u201d HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "05a4732e230062b3b6b1884a9054c23aa617284e53fc9898a68649bb9f8a3b8a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6286,
+    "run_id": "37272295279",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37272295279",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005065317_79aff83c40",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6286,
+    "run_id": "37272295279"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T06:53:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
