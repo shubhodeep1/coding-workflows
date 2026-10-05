@@ -1123,6 +1123,9 @@ def test_positional_remote_without_inline_config_keeps_legacy_mapping(merged_bra
 	"env -i GIT_CONFIG_PARAMETERS=x git push origin",
 	"env -C /tmp GIT_CONFIG_PARAMETERS=x git push origin",
 	"env -u GIT_CONFIG_COUNT git push origin",
+	"env --debug GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=current git push origin",
+	"/usr/bin/env --default-signal=PIPE GIT_CONFIG_PARAMETERS=x /usr/bin/git push origin",
+	"env -v GIT_CONFIG_COUNT=1 git commit -m x",
 	"git -c remote.main.url=$URL push origin",
 	"git -c remote.origin.push=refs/heads/feature/x:refs/heads/main push origin",
 	"git -c remote.origin.pushurl=https://github.com/o/r.git push origin",
@@ -1157,6 +1160,8 @@ def test_config_env_global_option_does_not_hide_push() -> None:
 	assert "push" in guard.git_subcommands("env -u UNUSED GIT_CONFIG_COUNT=1 git push origin")
 	assert "push" in guard.git_subcommands("/usr/bin/env -- GIT_CONFIG_COUNT=1 git push origin")
 	assert "push" in guard.git_subcommands("env -C /tmp GIT_CONFIG_COUNT=1 git push origin")
+	assert "push" in guard.git_subcommands("env --debug GIT_CONFIG_COUNT=1 git push origin")
+	assert "push" in guard.git_subcommands("/usr/bin/env --default-signal=PIPE /usr/bin/git push origin")
 
 
 @pytest.mark.parametrize("command", [

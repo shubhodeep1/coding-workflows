@@ -1069,8 +1069,8 @@ not delete wrappers that are already present in `.github/workflows/`.
 > remote despite an inline `remote.<name>.url` override; a newly defined inline
 > remote uses that URL. Inline `--config-env` and `GIT_CONFIG_*`
 > assignments (including option-prefixed `env GIT_CONFIG_*=... git push`) that cannot be
-> resolved safely are blocked, as are `env -S` Git writes and unmappable inline
-> bulk/refspec pushes.
+> resolved safely are blocked, as are `env -S` Git writes, unrecognized `env`
+> options before Git writes, and unmappable inline bulk/refspec pushes.
 > Inline remote-URL overrides on `git commit` are blocked so the commit check
 > still uses the checkout's repository identity. Ordinary pushes without
 > inline config retain the previous origin-based check and confirmation path.

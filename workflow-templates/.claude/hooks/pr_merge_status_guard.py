@@ -426,6 +426,9 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 						config_block = "env directory or Git configuration override"
 					index += 1
 				else:
+					config_block = "env option not recognized by the guard"
+					while index < len(tokens) and tokens[index] != "git" and not tokens[index].endswith("/git"):
+						index += 1
 					break
 			while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
 				name, value = tokens[index].split("=", 1)
@@ -852,6 +855,8 @@ def git_subcommands(command: str) -> set[str]:
 				elif option in ("-i", "--ignore-environment", "-0", "--null") or option.startswith(("-u", "--unset=", "--chdir=")):
 					index += 1
 				else:
+					while index < len(tokens) and tokens[index] != "git" and not tokens[index].endswith("/git"):
+						index += 1
 					break
 			while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
 				index += 1
