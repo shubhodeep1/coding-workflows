@@ -1323,9 +1323,6 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			if target.bulk:
 				bulk_reasons.append(target.bulk)
 			if target.warning:
-				if target.warning.startswith("could not resolve git push refspec"):
-					_request_confirmation("could not resolve git push refspec; verify the actual push destination and source tip")
-					continue
 				_warn(target.warning)
 			if target.tip != "HEAD":
 				with _git_environment(target.environment):
