@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_evidence.py:1296-1301 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: Re-collecting after `_enforce_total_budget` removes a cached job log can cause `_job_diagnostics` to raise `FileNotFoundError`.\n  WHY: The collection wrapper catches the error and fails open, but the run's diagnostics are empty and a `collect_failed` warning is logged.\n- workflow_failure_heal_evidence.py:1600-1607 | severity=low | confidence=1\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: A non-raw regex is flagged.\n  WHY: The reviewer explicitly states that no runtime failure was identified.\n- editor_git_credentials.sh | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The system-scope `credential.helper` setting is flagged.\n  WHY: The concern is theoretical and requires root to write `/etc/gitconfig`.\n- editor_git_credentials.sh:334 | severity=low | confidence=1\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Marker truncation is flagged.\n  WHY: The reviewer notes that `test_hide_fails_when_an_unrestored_marker_exists` documents the marker condition.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow_failure_heal_evidence.py:1600-1607 | severity=low | confidence=1\n  PROBLEM: Non-raw regex.\n  WHY: The reviewer explicitly states there is no runtime failure.\n- FileNotFoundError on re-collect after `_enforce_total_budget` deletes a cached `job-[id].txt` | severity=low | confidence=3\n  PROBLEM: Re-collecting after `_enforce_total_budget` removes a cached job log can cause `FileNotFoundError`.\n  WHY: The wrapper catches the error and fails open; the stage still produces a usable `INDEX.md`, but the run's diagnostics are empty and a `collect_failed` warning is logged.\n- editor_git_credentials.sh | severity=low | confidence=2\n  PROBLEM: System-scope `credential.helper`.\n  WHY: The concern is theoretical and requires root to write `/etc/gitconfig`.\n- editor_git_credentials.sh:334 | severity=low | confidence=1\n  PROBLEM: Marker truncation.\n  WHY: The reviewer notes that `test_hide_fails_when_an_unrestored_marker_exists` documents the marker condition.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/workflow_failure_heal_evidence.py:1296-1301 | severity=low | confidence=3\n  PROBLEM: When cached meta.json carries job[\"diagnostics\"] but the on-disk job-[id].txt was removed by _enforce_total_budget between the prior collect and the new one, the loop recomputes _job_diagnostics from the missing log file at line 1300, which raises FileNotFoundError.\n  WHY: A re-collect after _enforce_total_budget deleted the cached job-[id].txt will raise FileNotFoundError from Path.read_text at line 1300. The _cmd_collect wrapper catches (OSError, ValueError) and logs collect_failed, so the stage fails open with {\"collected\": False, \"reason\": \"collect_failed\"}. The evidence folder is then missing the job log for that run in the next stage, and the diagnostics for that job will be {} in diagnostics.json. The next stage still produces a usable INDEX.md; this is observable as a single warn collect_failed line and an empty diagnostics.json for that run. This is a TOCTOU race in single-threaded code, extremely unlikely in practice, and fails open correctly.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "2a709082eca4fcf108899fa999496ebacb82b21c12b91429543af6fcecfbad65",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6178,
+    "run_id": "37381051381",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37381051381",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005223429_cd259ad03b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6178,
+    "run_id": "37381051381"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T22:34:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
