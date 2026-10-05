@@ -50,7 +50,10 @@ def test_review_static_context_skips_symlink_and_preserves_regular_readme() -> N
 		overflow = root / "probably_unnecessary_but_read_if_stuck.md"
 		overflow.symlink_to(secret)
 		env = _safe_env()
-		env.update(SUPPORT_INSTRUCTIONS_FILE=str(instructions), SUPPORT_AGENTS_FILE=str(agents))
+		runtime = root / "runtime"
+		runtime.mkdir()
+		env.update(SUPPORT_INSTRUCTIONS_FILE=str(instructions), SUPPORT_AGENTS_FILE=str(agents),
+			SUPPORT_SCRIPTS_DIR=str(REPO_ROOT / "scripts"), RUNTIME_DIR=str(runtime))
 		for symlinked in (True, False):
 			if not symlinked:
 				readme.unlink()
@@ -72,10 +75,12 @@ def test_review_static_context_skips_symlink_and_preserves_regular_readme() -> N
 				assert "=== README.MD" not in context
 				assert "=== OVERFLOW REFERENCE ===" not in context
 				assert "read ./probably_unnecessary_but_read_if_stuck.md" not in context
-				assert "::warning::README.md is a symbolic link" in result.stdout + result.stderr
+				assert "reason=symlink_path" in result.stdout + result.stderr
+				assert "::warning::Review static README omitted" in result.stdout + result.stderr
 				assert "::warning::probably_unnecessary_but_read_if_stuck.md is a symbolic link" in result.stdout + result.stderr
 			else:
-				assert "=== README.MD (trimmed) ===\npublic overview\n" in context
+				assert "public overview" not in context
+				assert (runtime / "static_readme_trimmed.txt").read_text() == "public overview\n"
 				assert "=== OVERFLOW REFERENCE ===" in context
 				assert "private runbook" not in context
 

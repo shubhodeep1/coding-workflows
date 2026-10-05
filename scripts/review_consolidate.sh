@@ -483,6 +483,10 @@ render_prior_round_decisions_file "${REVIEW_LEDGER_PATH}" "${PRIOR_ROUND_DECISIO
 		cat ./pre_assembled_static.txt
 		echo
 	fi
+	if [ -s "${RUNTIME_DIR}/static_readme_trimmed.txt" ]; then
+		emit_consolidator_untrusted_file 'PR README.MD (trimmed)' "${RUNTIME_DIR}/static_readme_trimmed.txt"
+		echo
+	fi
 	echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE:-50}"
 	echo
 	echo "=== CONSOLIDATOR PROMPT ==="
