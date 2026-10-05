@@ -513,7 +513,8 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
             tests/test_codex_agent_isolation_contract.py tests/test_codex_isolated_exec.py \
-            tests/test_codex_isolated_workspace.py tests/test_codex_isolated_exec_docker_e2e.py
+            tests/test_codex_isolated_workspace.py tests/test_codex_isolated_exec_docker_e2e.py \
+            tests/test_integration_judge_scope_guard.py
 
       - name: Claude engine decision tests
         run: |

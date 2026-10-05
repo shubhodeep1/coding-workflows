@@ -8680,8 +8680,11 @@ invoke_judge_for_integration_conflict() {
     printf '%s\n' "${judge_conflicts}"
     echo
     echo 'Edit only the conflicted files listed above. Changes to other paths,'
-    echo 'or lines in conflicted .github/workflows/ or .github/actions/ files'
-    echo 'that come from neither side, reject the resolution without a push.'
+    echo 'or lines in conflicted protected paths that come from neither merge side,'
+    echo 'reject the resolution without a push. Protected paths include .github/,'
+    echo '.claude/, scripts/, prompts/, workflow-templates/, validation/,'
+    echo 'ai-memory/, db/contracts/, agent-instruction files, and build,'
+    echo 'dependency, config and script files.'
     echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
@@ -8786,11 +8789,35 @@ import subprocess
 import sys
 import tempfile
 from collections import Counter
+from fnmatch import fnmatchcase
 
 wt, baseline_dir, final_pr = sys.argv[1:]
 git_env = os.environ.copy()
 for git_var_name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
     git_env.pop(git_var_name, None)
+
+# Keep these four pattern groups in sync with PROTECTED_SKIP_SUPPRESSED in
+# review_autofix.yml; tests/test_integration_judge_scope_guard.py pins parity.
+PROTECTED_BASENAMES = (
+    "agents.md|claude.md|unattended_system_instructions.md"
+).split("|")
+PROTECTED_PATH_GLOBS = (
+    ".github/*|.claude/*|scripts/*|prompts/*|workflow-templates/*|validation/*|ai-memory/*|db/contracts/*"
+).split("|")
+PROTECTED_BASENAME_GLOBS = (
+    "dockerfile|dockerfile.*|dockerfile-*|*.dockerfile|*.dockerfile.*|*.dockerfile-*|containerfile|containerfile.*|containerfile-*|*.containerfile|*.containerfile.*|*.containerfile-*|.dockerignore|.containerignore|compose.yml|compose.yaml|compose.*.yml|compose.*.yaml|compose-*.yml|compose-*.yaml|docker-compose.yml|docker-compose.yaml|docker-compose.*.yml|docker-compose.*.yaml|docker-compose-*.yml|docker-compose-*.yaml|makefile|makefile.*|gnumakefile|gnumakefile.*|justfile|justfile.*|taskfile|taskfile.*|rakefile|rakefile.*|jenkinsfile|jenkinsfile.*|cmakelists.txt|meson.build|meson_options.txt|pom.xml|build.xml|build.gradle*|settings.gradle*|gradlew|gradlew.bat|gulpfile.*|gruntfile.*|package.json|build|build.bazel|workspace|workspace.bazel|module.bazel|*.bazel|*.bzl|*.mk|*.cmake|*.gradle|*.gradle.kts|requirements*.txt|constraints*.txt|go.mod|go.sum|pipfile|pipfile.lock|*.lock|*.lockb|config|*.config|*.config.*|*.conf|*.ini|*.toml|*.yaml|*.yml|*.json|*.jsonc|*.properties|*.xml|*.tf|*.hcl|.*rc|.*rc.*|.env|.env.*|*.sh|*.bash|*.zsh|*.ps1|*.cmd|*.bat"
+).split("|")
+PROTECTED_ROOT_BASENAME_GLOBS = (
+    "package.json|pyproject.toml|cargo.toml|go.mod|go.work|makefile|.editorconfig|turbo.json|pytest.ini|tox.ini|noxfile.py|*.config.js|*.config.cjs|*.config.mjs|*.config.ts|package-lock.json|bun.lock|bun.lockb|yarn.lock|pnpm-lock.yaml|cargo.lock|poetry.lock|uv.lock|go.sum|pipfile|pipfile.lock|requirements*.txt|constraints*.txt|.eslintrc*|eslint.config.*|.prettierrc*|.stylelintrc*|stylelint.config.*|ruff.toml|.ruff.toml|.flake8|pylintrc|biome.json|biome.jsonc"
+).split("|")
+
+def is_protected_conflict_path(path):
+    lower = os.fsdecode(path).lower()
+    base = lower.rsplit("/", 1)[-1]
+    return (base in PROTECTED_BASENAMES
+            or any(fnmatchcase(lower, glob) for glob in PROTECTED_PATH_GLOBS)
+            or any(fnmatchcase(base, glob) for glob in PROTECTED_BASENAME_GLOBS)
+            or (lower == base and any(fnmatchcase(base, glob) for glob in PROTECTED_ROOT_BASENAME_GLOBS)))
 
 def log(outcome, reason, paths=()):
     print(f"INTEGRATION_JUDGE_SCOPE pr={final_pr} outcome={outcome} reason={reason} paths={len(paths)}", file=sys.stderr)
@@ -8833,6 +8860,7 @@ except (OSError, ValueError, subprocess.CalledProcessError, UnicodeError):
 
 try:
     stages = {}
+    current_path = None
     for entry in unmerged.split(b"\0"):
         if not entry:
             continue
@@ -8843,7 +8871,8 @@ try:
         raise ValueError("conflict metadata mismatch")
     work = 0
     for path in conflicts:
-        if not path.startswith((b".github/workflows/", b".github/actions/")):
+        current_path = path
+        if not is_protected_conflict_path(path):
             continue
         sides = stages[path]
         indexed = git("ls-files", "-s", "-z", "--", ":(literal)" + os.fsdecode(path))
@@ -8915,7 +8944,7 @@ try:
     if not re.fullmatch(rb"[0-9a-f]{40,64}", validated_tree):
         raise ValueError("invalid staged tree")
 except (OSError, ValueError, subprocess.CalledProcessError, UnicodeError):
-    log("rejected", "protected_path_provenance")
+    log("rejected", "protected_path_provenance", [current_path] if current_path else [])
     sys.exit(1)
 log("accepted", "none", conflicts)
 print(validated_tree.decode())
