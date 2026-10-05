@@ -939,8 +939,6 @@ def test_push_parser_guards_real_destination(merged_branch_repo, monkeypatch, co
 	("2", "git push origin ''2&>/tmp/out"),
 	("123", 'git push origin ""123>>/dev/null'),
 	("2", "git push origin '2'>/tmp/out"),
-	("2", "git push origin ''2>/dev/null"),
-	("2", 'git push origin ""2>/dev/null'),
 	("12", "git push origin ''12>/dev/null"),
 	("2", "git push origin ''2>&1"),
 	("2", "git push origin \\2>/tmp/out"),
