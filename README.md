@@ -1049,7 +1049,13 @@ not delete wrappers that are already present in `.github/workflows/`.
 > (`hooks/pr_watch_guard.py`, §25). The former post-push PR status check-in
 > reminder, the permission-prompt logger and their helper scripts were retired
 > (see the retired-files paragraph below). Nothing to configure in the
-> consumer.
+> consumer. When a `git push` source cannot be resolved locally (for example,
+> a shell-expanded source), the merged-PR guard asks for confirmation rather
+> than using the session checkout as a substitute for the pushed commit.
+> A push with a destination that cannot be resolved locally (such as
+> `git push origin HEAD:$DEST`) also asks instead of checking the checkout branch.
+> If `--repo` and a positional remote are both supplied, the guard checks the
+> refspecs after that remote, not the remote name as a branch.
 
 > **Retired upstream files are removed on sync:** the `update_workflows.yml`
 > step `Remove retired upstream files` reads the manifest
@@ -1953,8 +1959,20 @@ attempts of that role in the same job.
 | `scripts/claude_engine.py` | Every decision: role resolution, the P5 settings, transcript extraction and classification (`success`, `auth_failed`, `usage_limit`, `crashed`, `timeout`), probe parsing, account order. No API calls. |
 | `scripts/claude_settings.json.tmpl` | P5 permission policy, rendered per run: denies `gh pr merge`, `gh api … DELETE`, force pushes and remote branch deletes, and edits to the checkout's `.github/workflows/**` (unless `ALLOW_WORKFLOW_EDITS=true`) and `.claude/**`; runs `gh_api_write_guard.py` on every Bash call (a headless "ask" is a denial); its `env` block carries no credential. |
 | `scripts/claude_anthropic_relay.py` | Host relay for the sandboxed roles (clarify, review editor): the container gets `ANTHROPIC_BASE_URL=http://127.0.0.1:8765` and a placeholder token; the host side swaps in the real OAuth token and forwards only `POST /v1/messages` to `api.anthropic.com`. |
+| `CLAUDE_READ_SNAPSHOT_MAX_FILES` | Read-profile `claude_run` snapshot file limit (default `20000`); exceeding it falls back to codex/OpenCode instead of reading the host filesystem. |
+| `CLAUDE_READ_SNAPSHOT_MAX_BYTES` | Read-profile `claude_run` snapshot total byte limit (default `268435456`, 256 MiB); exceeding it falls back to codex/OpenCode. Docker is required for read-profile Claude calls; tools have no GitHub network access in the isolated container. |
 | `.github/actions/install-claude` | Installs and verifies the pinned `@anthropic-ai/claude-code` on Node 22. |
 | `.github/workflows/claude-engine-smoke.yml` | Dispatch-only self-test per tool profile: offline checks, then the context gate, P5 denials and relay gate when a credential is available, or the codex fallback when it is not. |
+
+Read-profile calls reject non-empty `AI_ENGINE_ISOLATED_READ_PATHS` instead of
+bind-mounting additional host paths; the caller falls back with
+`reason=isolation_read_path_invalid`. Only the filtered checkout snapshot and
+trusted support inputs are mounted. Its Git history is a synthetic commit of
+the filtered files (including exclusion of standard extensionless SSH keys,
+such as `id_ed25519`, `id_ed25519_sk`, and `id_ecdsa_sk`); historical revisions
+and the source Git object store are not available to read-profile tools.
+Session reuse mounts only the selected session ID's transcript directory,
+not other sessions.
 
 **Which engine a role uses**, first match wins: `CLAUDE_FIXER_ENABLED=false`
 for the four review write roles, the work item's labels (`ai:codex` beats `ai:engine-claude`, which also forces Opus 5.5 at `high`),
@@ -2019,6 +2037,15 @@ in `claude-engine-smoke.yml`.
 writes (`CLAUDE_ENGINE_POOL_DIR`, default `$RUNNER_TEMP/claude-pool`: an
 `order` file, best account first, and one `0600` file per account under
 `tokens/`). A usage-limited or rejected account moves the run to the next one.
+Read-profile calls run in a `--network none` container with a placeholder
+token; the host `scripts/claude_anthropic_relay.py` alone reads the pool token.
+The container masks credential-bearing Git configuration in the checkout and
+its nested `.codex-workflow-src` / `.codex-workflow-src-main` support checkouts.
+If isolation cannot start, `AI_ENGINE_FALLBACK reason=isolation_*` returns 75.
+For read-profile session reuse, an unavailable session directory reports
+`reason=isolation_session_dir_unavailable` before any container starts.
+If the pool directory disappears after isolation preflight, the fallback is
+`reason=isolation_pool_unavailable`, not a session-directory error.
 When no CLI, policy, instructions file or account is usable, it logs
 `AI_ENGINE_FALLBACK role= reason=`, sends at most one Telegram note per job,
 and returns `75`; the caller then runs its codex path unchanged. A crash
@@ -2027,6 +2054,12 @@ returns `124`. Runs are wrapped by `codex_stall_guard.sh --engine claude`,
 which only adds `engine=claude` to its log lines, and every success prints the
 stream-json `result` usage line that `scripts/cost_audit.py` totals under
 "Claude engine usage".
+When session reuse is requested, a pool directory that overlaps the mounted
+session directory falls back with `reason=isolation_pool_overlap` before the
+container starts.
+The read-profile container still mounts the full checkout and any configured
+extra read directories; do not place credentials or other secrets in those
+paths. There is no per-file read allowlist yet.
 
 **Read-profile isolation.** Every `claude_run` with a `read` profile (also a
 write role narrowed by `AI_ENGINE_READ_ONLY=true`) runs in a network-less,
@@ -2052,10 +2085,12 @@ returns `75` for the caller's existing fallback, never unisolated Claude.
 credentials. The smoke run checks that a no-op run starts below 25,000 input
 tokens and that a marker placed only in the checkout's `CLAUDE.md` is not
 visible. If it is, set `hide_claude_md: true` in `claude_engine.json`:
-write-profile `claude_run` then moves `CLAUDE.md` out of the checkout for the
-call and puts it back afterwards. If the run creates a new `CLAUDE.md`, it
-keeps the new file and preserves the original alongside it. Read-profile
-calls instead omit root `CLAUDE.md` from their snapshot without moving it.
+For write profiles, `claude_run` then moves `CLAUDE.md` out of the checkout for the call and puts
+it back afterwards. If the run creates a new `CLAUDE.md`, it keeps the new
+file, saves the original as `CLAUDE.md.original.<unique suffix>` beside it,
+and reports that path instead of overwriting the new content.
+Read profiles omit `CLAUDE.md` from the sanitized container snapshot without
+moving the host checkout's file.
 
 **Token broker.** The account tokens never live in coding-workflows or in a
 consumer repo. They are `CLAUDE_POOL_TOKEN_<NAME>` secrets in

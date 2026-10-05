@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import shlex
+import signal
 import stat
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -59,6 +62,11 @@ if token.startswith("TOK_CRASH"):
 if token.startswith("TOK_WRITE_MD"):
 	with open("CLAUDE.md", "w", encoding="utf-8") as handle:
 		handle.write("new instructions\n")
+if token.startswith("TOK_TAMPER"):
+	path = os.environ["FAKE_SUPPORT_FILE"]
+	os.chmod(path, 0o755)
+	with open(path, "a", encoding="utf-8") as handle:
+		handle.write("# tampered\n")
 emit({"type": "result", "subtype": "success", "is_error": False, "result": "done", "total_cost_usd": 0.01, "usage": {"input_tokens": 1, "output_tokens": 2}})
 '''
 
@@ -66,22 +74,71 @@ FAKE_DOCKER = r'''#!/usr/bin/env python3
 import json, os, sys
 from pathlib import Path
 log = Path(__DOCKER_LOG__)
+argv = sys.argv[1:]
+record = {"argv": argv, "env": dict(os.environ), "stdin": sys.stdin.read() if argv[0] == "run" else ""}
+if argv[0] == "run":
+	for arg in argv:
+		if arg.startswith("type=bind,src=") and "/source-snapshot,dst=" in arg:
+			snapshot = Path(arg.split("src=", 1)[1].split(",dst=", 1)[0])
+			record["snapshot_files"] = sorted(str(p.relative_to(snapshot)) for p in snapshot.rglob("*") if p.is_file())
+			record["snapshot_config"] = (snapshot / ".git" / "config").read_text() if (snapshot / ".git" / "config").exists() else ""
+		if arg.startswith("type=bind,src=") and ",dst=/home/agent/.claude/projects" in arg:
+			session_mount = Path(arg.split("src=", 1)[1].split(",dst=", 1)[0])
+			record["session_files"] = sorted(str(p.relative_to(session_mount)) for p in session_mount.rglob("*") if p.is_file())
+		if arg.startswith("type=bind,src=") and "/extra-snapshots/" in arg:
+			extra_mount = Path(arg.split("src=", 1)[1].split(",dst=", 1)[0])
+			record["extra_snapshot_files"] = sorted(str(p.relative_to(extra_mount)) for p in extra_mount.rglob("*") if p.is_file())
 with log.open("a", encoding="utf-8") as handle:
-	handle.write(json.dumps({"argv": sys.argv[1:], "env": sorted(os.environ)}) + "\n")
-if sys.argv[1] == "build":
-	sys.stdin.read()
-	if log.with_name("docker_build_fail").exists():
-		sys.exit(1)
-	print("sha256:fake-image")
-elif sys.argv[1] == "run":
-	sys.stdin.read()
-	if log.with_name("docker_run_fail").exists():
+	handle.write(json.dumps(record) + "\n")
+if argv[:2] == ["image", "inspect"]:
+	sys.exit(0 if log.with_name("docker-cache-hit").exists() else 1)
+if argv[0] == "build":
+	sys.exit(1 if log.with_name("docker-build-fail").exists() else 0)
+if argv[0] == "run":
+	mode_file = log.with_name("docker-mode")
+	mode = mode_file.read_text().strip() if mode_file.exists() else "success"
+	if mode == "limit-once":
+		attempt_file = log.with_name("docker-attempt")
+		mode = "success" if attempt_file.exists() else "limit"
+		attempt_file.touch()
+	if mode == "hang":
+		import time
+		time.sleep(30)
+	if mode == "startup-fail":
+		print("docker: container could not start", file=sys.stderr)
 		sys.exit(125)
-	previous_runs = sum(json.loads(line)["argv"][0] == "run" for line in log.read_text(encoding="utf-8").splitlines())
-	if log.with_name("docker_limit_first").exists() and previous_runs == 1:
+	if mode == "startup-kill":
+		sys.exit(137)
+	if mode == "cli-crash":
+		print("CLAUDE_READ_CONTAINER_READY", file=sys.stderr)
+		sys.exit(1)
+	print("CLAUDE_READ_CONTAINER_READY", file=sys.stderr)
+	if mode == "tamper-support":
+		path = os.environ["FAKE_SUPPORT_FILE"]
+		os.chmod(path, 0o755)
+		with open(path, "a", encoding="utf-8") as handle:
+			handle.write("# tampered\n")
+	if mode == "limit":
 		print(json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}}))
-	else:
-		print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "done"}))
+		print(json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True, "result": "API Error"}))
+		sys.exit(1)
+	print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "done", "usage": {"input_tokens": 1}}))
+'''
+
+FAKE_PS = r'''#!/usr/bin/env python3
+import sys
+from pathlib import Path
+if sys.argv[1:3] == ["-eo", "args="]:
+	for process_path in Path("/proc").glob("[0-9]*"):
+		try:
+			print((process_path / "cmdline").read_bytes().replace(b"\x00", b" ").decode(errors="replace"))
+		except OSError:
+			pass
+	sys.exit(0)
+try:
+	print(Path(f"/proc/{sys.argv[-1]}/stat").read_text().split(") ", 1)[1].split()[0])
+except (OSError, IndexError):
+	sys.exit(1)
 '''
 
 
@@ -93,8 +150,11 @@ def sandbox(tmp_path: Path):
 	fake.write_text(FAKE_CLAUDE, encoding="utf-8")
 	fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
 	docker = fake_bin / "docker"
-	docker.write_text(FAKE_DOCKER.replace("__DOCKER_LOG__", repr(str(tmp_path / "docker_calls.jsonl"))), encoding="utf-8")
+	docker.write_text(FAKE_DOCKER.replace("__DOCKER_LOG__", repr(str(tmp_path / "docker.jsonl"))), encoding="utf-8")
 	docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+	ps = fake_bin / "ps"
+	ps.write_text(FAKE_PS, encoding="utf-8")
+	ps.chmod(ps.stat().st_mode | stat.S_IXUSR)
 	home = tmp_path / "home"
 	home.mkdir()
 	runner_temp = tmp_path / "rt"
@@ -106,6 +166,18 @@ def sandbox(tmp_path: Path):
 	prompt.write_text("do the thing\n", encoding="utf-8")
 	pool = tmp_path / "pool"
 	(pool / "tokens").mkdir(parents=True)
+	# A read-profile lock must never chmod the live repository in a test.
+	support = tmp_path / "trusted-support"
+	(support / "scripts").mkdir(parents=True)
+	(support / ".claude" / "hooks").mkdir(parents=True)
+	(support / ".github" / "ai").mkdir(parents=True)
+	for filename in ("ai_engine.sh", "claude_engine.py", "claude_anthropic_relay.py", "claude_settings.json.tmpl", "codex_stall_guard.sh"):
+		shutil.copy2(REPO_ROOT / "scripts" / filename, support / "scripts" / filename)
+	(support / "scripts" / "clarify_sandbox").mkdir()
+	shutil.copy2(REPO_ROOT / "scripts" / "clarify_sandbox" / "Dockerfile", support / "scripts" / "clarify_sandbox" / "Dockerfile")
+	shutil.copy2(REPO_ROOT / ".claude/hooks/gh_api_write_guard.py", support / ".claude/hooks/gh_api_write_guard.py")
+	shutil.copy2(REPO_ROOT / ".github/ai/claude_engine.json", support / ".github/ai/claude_engine.json")
+	shutil.copy2(INSTRUCTIONS, support / "unattended_system_instructions.md")
 	env = {
 		key: value
 		for key, value in os.environ.items()
@@ -119,12 +191,13 @@ def sandbox(tmp_path: Path):
 			"CLAUDE_ENGINE_POOL_DIR": str(pool),
 			"SUPPORT_INSTRUCTIONS_FILE": str(INSTRUCTIONS),
 			"FAKE_CLAUDE_LOG": str(tmp_path / "calls.jsonl"),
+			"FAKE_SUPPORT_FILE": str(support / "scripts" / "ai_engine.sh"),
 			"PYTHONDONTWRITEBYTECODE": "1",
 			"CODEX_HEARTBEAT_INTERVAL_SECS": "30",
 			"ANTHROPIC_API_KEY": "must-not-reach-the-cli",
 		}
 	)
-	return {"tmp": tmp_path, "env": env, "pool": pool, "work": work, "prompt": prompt, "home": home, "bin": fake_bin}
+	return {"tmp": tmp_path, "env": env, "pool": pool, "work": work, "prompt": prompt, "home": home, "bin": fake_bin, "support": support}
 
 
 def _accounts(sandbox: dict, **tokens: str) -> None:
@@ -138,7 +211,7 @@ def _accounts(sandbox: dict, **tokens: str) -> None:
 def _bash(sandbox: dict, script: str, **extra_env: str) -> subprocess.CompletedProcess:
 	env = dict(sandbox["env"], **extra_env)
 	return subprocess.run(
-		["bash", "-c", f"set -euo pipefail; source {shlex.quote(str(AI_ENGINE))}; {script}"],
+		["bash", "-c", f"set -euo pipefail; source {shlex.quote(str(sandbox['support'] / 'scripts/ai_engine.sh'))}; {script}"],
 		capture_output=True,
 		text=True,
 		env=env,
@@ -161,9 +234,9 @@ def _calls(sandbox: dict) -> list[dict]:
 	return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
-def _docker_calls(sandbox: dict) -> list[dict]:
-	path = sandbox["tmp"] / "docker_calls.jsonl"
-	return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
+def _docker_calls(sandbox: dict, command: str = "run") -> list[dict]:
+	path = sandbox["tmp"] / "docker.jsonl"
+	return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if json.loads(line)["argv"][0] == command] if path.exists() else []
 
 
 def _rc(result: subprocess.CompletedProcess) -> int:
@@ -326,66 +399,227 @@ def test_write_role_command_line(sandbox: dict) -> None:
 
 def test_read_role_command_line(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_OK")
+	(sandbox["work"] / ".env").write_text("PRIVATE=do-not-mount\n")
+	(sandbox["work"] / "file.txt").write_text("safe\n")
+	subprocess.run(["git", "-C", str(sandbox["work"]), "init", "-q"], check=True)
+	subprocess.run(["git", "-C", str(sandbox["work"]), "add", "file.txt"], check=True)
+	subprocess.run(["git", "-C", str(sandbox["work"]), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "base"], check=True)
+	subprocess.run(["git", "-C", str(sandbox["work"]), "config", "http.extraheader", "AUTHORIZATION: hidden"], check=True)
 	result = _claude_run(sandbox, "SECURITY_AUDIT", AI_ENGINE_MODEL_HINT="claude-sonnet-5-5")
 	assert _rc(result) == 0, result.stderr
 	assert _calls(sandbox) == []
-	argv = next(call["argv"] for call in _docker_calls(sandbox) if call["argv"][0] == "run")
-	for flag, value in (("--network", "none"), ("--cap-drop", "ALL"), ("--env", "HOME=/home/agent")):
-		assert value == argv[argv.index(flag) + 1]
-	assert "--read-only" in argv
+	call = _docker_calls(sandbox)[0]
+	argv = call["argv"]
+	assert "--network" in argv and argv[argv.index("--network") + 1] == "none"
+	assert "--read-only" in argv and argv[argv.index("--cap-drop") + 1] == "ALL"
+	assert "--user" in argv
 	assert "CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder" in argv
-	assert 'claude-sonnet-5-5' in argv
-	assert "TOK_OK" not in json.dumps(_docker_calls(sandbox))
-	assert str(sandbox["pool"]) not in json.dumps(_docker_calls(sandbox))
-	assert "--tools Read,Grep,Glob,Bash --permission-mode dontAsk" in " ".join(argv)
+	assert "ANTHROPIC_BASE_URL=http://127.0.0.1:8765" in argv
+	assert "--tools Read,Grep,Glob,Bash" in argv[-2]
+	assert "--model \"${CLAUDE_MODEL}\"" in argv[-2]
+	assert "CLAUDE_MODEL=claude-sonnet-5-5" in argv
+	assert subprocess.run(["bash", "-n"], input=argv[-2], capture_output=True, text=True).returncode == 0
+	assert call["stdin"] == "do the thing\n"
+	assert (sandbox["tmp"] / "out.txt").read_text() == "done"
+	assert "CLAUDE_ISOLATION role=SECURITY_AUDIT profile=read mode=container" in result.stderr
+	assert "AI_ENGINE_SUPPORT_LOCK role=SECURITY_AUDIT outcome=locked" in result.stderr
+	assert "AI_ENGINE_SUPPORT_LOCK role=SECURITY_AUDIT outcome=verified" in result.stderr
+	snapshot_mount = next(arg for arg in argv if arg.startswith("type=bind,src=") and f",dst={sandbox['work']},readonly" in arg)
+	snapshot = Path(snapshot_mount.split("src=", 1)[1].split(",dst=", 1)[0])
+	assert snapshot != sandbox["work"] and "file.txt" in call["snapshot_files"]
+	assert ".env" not in call["snapshot_files"]
+	assert "hidden" not in call["snapshot_config"]
+	assert not any("dst=/git-objects" in arg or f"src={sandbox['work'] / '.git' / 'objects'}" in arg for arg in argv)
+	assert not snapshot.exists()
+	assert all(f"src={sandbox['work']}," not in arg for arg in argv)
+	assert stat.S_IMODE(sandbox["support"].stat().st_mode) == 0o755
+	settings_path = next(arg.split("src=", 1)[1].split(",dst=", 1)[0] for arg in argv if "dst=/settings.json" in arg)
+	policy = json.loads(Path(settings_path).read_text(encoding="utf-8"))
+	assert policy["hooks"]["PreToolUse"][1]["hooks"][0]["command"] == 'python3 "/read-guard.py" guard-read-bash'
+	assert not any(str(sandbox["pool"]) in arg for arg in argv)
+	assert "TOK_OK" not in json.dumps(call) + result.stdout + result.stderr
+	for key in ("GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
+		assert key not in call["env"]
 
 
-def test_read_isolation_falls_back_on_rejected_snapshot_and_build(sandbox: dict) -> None:
+def test_read_isolation_tamper_stops_before_checkout_classifier(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_OK")
-	result = _claude_run(sandbox, "SECURITY_AUDIT", CLAUDE_READ_SNAPSHOT_MAX_BYTES="1")
-	assert _rc(result) == 75
-	assert "reason=snapshot_rejected" in result.stderr
-	assert _calls(sandbox) == []
-	(sandbox["tmp"] / "docker_build_fail").touch()
+	(sandbox["tmp"] / "docker-mode").write_text("tamper-support")
+	result = _claude_run(sandbox, "SECURITY_AUDIT")
+	assert _rc(result) == 86, result.stderr
+	assert "AI_ENGINE_SUPPORT_LOCK role=SECURITY_AUDIT outcome=tampered" in result.stderr
+	assert "AI_ENGINE_FALLBACK" not in result.stderr
+	assert not (sandbox["tmp"] / "out.txt").exists()
+	assert stat.S_IMODE((sandbox["support"] / "scripts" / "ai_engine.sh").stat().st_mode) == 0o644
+
+
+def test_read_isolation_unsafe_support_lock_is_terminal(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	(sandbox["support"] / "scripts" / "unsafe.sh").symlink_to(sandbox["work"] / "CLAUDE.md")
+	result = _claude_run(sandbox, "SECURITY_AUDIT")
+	assert _rc(result) == 86, result.stderr
+	assert "symlink in trusted support" in result.stderr
+	assert "AI_ENGINE_SUPPORT_LOCK role=SECURITY_AUDIT outcome=tampered" in result.stderr
+	assert "AI_ENGINE_FALLBACK" not in result.stderr
+	assert not _docker_calls(sandbox)
+	assert not (sandbox["tmp"] / "out.txt").exists()
+
+
+@pytest.mark.parametrize("tamper", [False, True])
+@pytest.mark.parametrize("signal_name, signal_rc", [("INT", 130), ("TERM", 143)])
+def test_read_isolation_signal_preserves_support_failure(sandbox: dict, tamper: bool, signal_name: str, signal_rc: int) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	mutation = 'chmod 0755 "${FAKE_SUPPORT_FILE}"; printf "# tampered\\n" >> "${FAKE_SUPPORT_FILE}";' if tamper else ""
+	result = _bash(sandbox, f'_ai_engine_claude_run_isolated() {{ {mutation} kill -{signal_name} "${{BASHPID}}"; }}; '
+		f'claude_run SECURITY_AUDIT {shlex.quote(str(sandbox["prompt"]))} '
+		f'{shlex.quote(str(sandbox["tmp"] / "out.txt"))} {shlex.quote(str(sandbox["work"]))}')
+	assert result.returncode == (86 if tamper else signal_rc), result.stderr
+	assert f"AI_ENGINE_SUPPORT_LOCK role=SECURITY_AUDIT outcome={'tampered' if tamper else 'verified'}" in result.stderr
+	assert stat.S_IMODE((sandbox["support"] / "scripts" / "ai_engine.sh").stat().st_mode) == 0o644
+
+
+def test_read_isolation_image_cache_skips_build(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	(sandbox["tmp"] / "docker-cache-hit").touch()
+	assert _rc(_claude_run(sandbox, "SECURITY_AUDIT")) == 0
+	assert not _docker_calls(sandbox, "build")
+
+
+def test_read_isolation_build_failure_falls_back(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	(sandbox["tmp"] / "docker-build-fail").touch()
 	result = _claude_run(sandbox, "SECURITY_AUDIT")
 	assert _rc(result) == 75
-	assert "reason=image_build_failed" in result.stderr
+	assert "AI_ENGINE_FALLBACK role=SECURITY_AUDIT reason=isolation_image_build_failed" in result.stderr
+	assert not _docker_calls(sandbox)
 	assert _calls(sandbox) == []
 
 
-def test_read_isolation_never_runs_host_claude_when_support_missing(sandbox: dict) -> None:
+def test_read_snapshot_limit_falls_back_without_mounting_checkout(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_OK")
-	engine_dir = sandbox["tmp"] / "engine"
-	engine_dir.mkdir()
-	(engine_dir / "ai_engine.sh").write_bytes(AI_ENGINE.read_bytes())
-	(engine_dir / "claude_engine.py").write_bytes((REPO_ROOT / "scripts/claude_engine.py").read_bytes())
-	args = " ".join(shlex.quote(str(value)) for value in
-		("SECURITY_AUDIT", sandbox["prompt"], sandbox["tmp"] / "out.txt", sandbox["work"]))
-	result = subprocess.run(["bash", "-c", f'source {shlex.quote(str(engine_dir / "ai_engine.sh"))}; claude_run {args}'],
-		env=sandbox["env"], capture_output=True, text=True, check=False)
-	assert result.returncode == 75
-	assert "reason=isolation_support_missing" in result.stderr
-	assert _calls(sandbox) == []
+	(sandbox["work"] / "file.txt").write_text("too big")
+	args = " ".join(shlex.quote(str(part)) for part in ("SECURITY_AUDIT", sandbox["prompt"], sandbox["tmp"] / "out.txt", sandbox["work"]))
+	result = _bash(sandbox, f'_ai_engine_isolation_image() {{ printf "%s\\n" fake-image; }}; rc=0; claude_run {args} || rc=$?; echo "RC=${{rc}}"', CLAUDE_READ_SNAPSHOT_MAX_BYTES="1")
+	assert _rc(result) == 75, result.stderr
+	assert "reason=isolation_snapshot_failed" in result.stderr
+	assert not _docker_calls(sandbox)
 
 
-def test_read_isolation_requires_docker_even_with_host_claude(sandbox: dict) -> None:
-	_accounts(sandbox, A="TOK_OK")
-	bin_only = sandbox["tmp"] / "safe-bin"
-	bin_only.mkdir()
-	for name in ("bash", "python3", "dirname", "mktemp", "tr", "cut", "rm"):
-		(bin_only / name).symlink_to(Path("/usr/bin") / name)
-	result = _claude_run(sandbox, "SECURITY_AUDIT", PATH=str(bin_only))
-	assert _rc(result) == 75
-	assert "reason=isolation_unavailable" in result.stderr
-	assert _calls(sandbox) == []
-
-
-def test_read_isolation_container_start_failure_uses_fallback(sandbox: dict) -> None:
-	_accounts(sandbox, A="TOK_OK")
-	(sandbox["tmp"] / "docker_run_fail").touch()
+@pytest.mark.parametrize("mode", ["startup-fail", "startup-kill"])
+def test_read_isolation_container_start_failure_falls_back(sandbox: dict, mode: str) -> None:
+	_accounts(sandbox, A="TOK_OK", B="TOK_OK")
+	(sandbox["tmp"] / "docker-mode").write_text(mode)
 	result = _claude_run(sandbox, "SECURITY_AUDIT")
 	assert _rc(result) == 75, result.stderr
-	assert "reason=isolation_unavailable" in result.stderr
+	assert "AI_ENGINE_FALLBACK role=SECURITY_AUDIT reason=isolation_container_start_failed" in result.stderr
+	assert len(_docker_calls(sandbox)) == 1
+	assert _calls(sandbox) == []
+
+
+def test_read_isolation_cli_crash_is_not_startup_failure(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK", B="TOK_OK")
+	(sandbox["tmp"] / "docker-mode").write_text("cli-crash")
+	result = _claude_run(sandbox, "SECURITY_AUDIT")
+	assert _rc(result) == 1, result.stderr
+	assert "AI_ENGINE_FALLBACK" not in result.stderr
+	assert len(_docker_calls(sandbox)) == 1
+
+
+@pytest.mark.parametrize("reason,env", [
+	("isolation_pool_overlap", {"pool_in_work": True}),
+	("isolation_read_path_invalid", {"AI_ENGINE_ISOLATED_READ_PATHS": "/not-a-directory"}),
+])
+def test_read_isolation_rejects_invalid_mounts(sandbox: dict, reason: str, env: dict) -> None:
+	if env.pop("pool_in_work", False):
+		sandbox["pool"] = sandbox["work"] / "pool"
+		(sandbox["pool"] / "tokens").mkdir(parents=True)
+		env["CLAUDE_ENGINE_POOL_DIR"] = str(sandbox["pool"])
+	_accounts(sandbox, A="TOK_OK")
+	result = _claude_run(sandbox, "SECURITY_AUDIT", **env)
+	assert _rc(result) == 75
+	assert f"reason={reason}" in result.stderr
+	assert not _docker_calls(sandbox)
+	assert _calls(sandbox) == []
+
+
+def test_read_isolation_rejects_session_mount_containing_pool(sandbox: dict) -> None:
+	sandbox["pool"] = sandbox["tmp"] / "rt"
+	(sandbox["pool"] / "tokens").mkdir()
+	_accounts(sandbox, A="TOK_OK")
+	args = " ".join(shlex.quote(str(part)) for part in (
+		"SECURITY_AUDIT", sandbox["prompt"], sandbox["tmp"] / "out.txt", sandbox["work"],
+		"0123abcd-0000-4000-8000-00000000abcd",
+	))
+	script = (
+		'command() { if [ "$1" = -v ] && [ "$2" = ps ]; then return 0; fi; builtin command "$@"; }; '
+		'_ai_engine_isolation_image() { printf "%s\\n" test-image; }; '
+		f'rc=0; claude_run {args} || rc=$?; echo "RC=${{rc}}"'
+	)
+	result = _bash(sandbox, script, CLAUDE_ENGINE_POOL_DIR=str(sandbox["pool"]))
+	assert _rc(result) == 75, result.stderr
+	assert "reason=isolation_pool_overlap" in result.stderr
+	assert not _docker_calls(sandbox)
+
+
+def test_read_isolation_mounts_only_selected_session(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	session = "0123abcd-0000-4000-8000-00000000abcd"
+	sessions = sandbox["tmp"] / "rt" / "claude-read-sessions"
+	(sessions / "other-session" / "project").mkdir(parents=True)
+	(sessions / "other-session" / "project" / "private.jsonl").write_text("foreign transcript")
+	(sessions / session / "project").mkdir(parents=True)
+	(sessions / session / "project" / f"{session}.jsonl").write_text("own transcript")
+	result = _claude_run(sandbox, "SECURITY_AUDIT", session=session)
+	assert _rc(result) == 0, result.stderr
+	call = _docker_calls(sandbox)[0]
+	assert f"type=bind,src={sessions / session},dst=/home/agent/.claude/projects" in call["argv"]
+	assert call["session_files"] == [f"project/{session}.jsonl"]
+	assert call["argv"][-1] == session and call["argv"][-2] == "--resume"
+	assert "foreign transcript" not in json.dumps(call)
+
+
+def test_read_isolation_rejects_symlinked_session(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	session = "0123abcd-0000-4000-8000-00000000abcd"
+	sessions = sandbox["tmp"] / "rt" / "claude-read-sessions"
+	(sessions / "other-session").mkdir(parents=True)
+	(sessions / session).symlink_to(sessions / "other-session", target_is_directory=True)
+	result = _claude_run(sandbox, "SECURITY_AUDIT", session=session)
+	assert _rc(result) == 75, result.stderr
+	assert "reason=isolation_session_dir_unavailable" in result.stderr
+	assert not _docker_calls(sandbox)
+
+
+def test_read_isolation_missing_docker_falls_back(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	args = " ".join(shlex.quote(str(part)) for part in ("SECURITY_AUDIT", sandbox["prompt"], sandbox["tmp"] / "out.txt", sandbox["work"]))
+	script = f'command() {{ if [ "$1" = -v ] && [ "$2" = docker ]; then return 1; fi; builtin command "$@"; }}; rc=0; claude_run {args} || rc=$?; echo "RC=${{rc}}"; '
+	script += 'for name in AI_ENGINE_ISOLATION_WORKDIR AI_ENGINE_ISOLATION_FAILURE AI_ENGINE_ISOLATION_GUARD AI_ENGINE_ISOLATION_PATHS AI_ENGINE_ISOLATION_MASKS; do if declare -p "$name" >/dev/null 2>&1; then echo "leaked=$name"; fi; done'
+	result = _bash(sandbox, script)
+	assert _rc(result) == 75
+	assert "reason=isolation_docker_missing" in result.stderr
+	assert _calls(sandbox) == []
+	assert "leaked=" not in result.stdout
+
+
+def test_read_isolation_missing_python_falls_back(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	args = " ".join(shlex.quote(str(part)) for part in ("SECURITY_AUDIT", sandbox["prompt"], sandbox["tmp"] / "out.txt", sandbox["work"]))
+	result = _bash(sandbox, f'command() {{ if [ "$1" = -v ] && [ "$2" = python3 ]; then return 1; fi; builtin command "$@"; }}; rc=0; claude_run {args} || rc=$?; echo "RC=${{rc}}"')
+	assert _rc(result) == 75
+	assert "reason=isolation_python_missing" in result.stderr
+	assert _calls(sandbox) == []
+
+
+def test_read_isolation_missing_support_falls_back(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	support_scripts = sandbox["tmp"] / "support-scripts"
+	support_scripts.mkdir()
+	(support_scripts / "claude_engine.py").write_bytes((REPO_ROOT / "scripts" / "claude_engine.py").read_bytes())
+	args = " ".join(shlex.quote(str(part)) for part in ("SECURITY_AUDIT", sandbox["prompt"], sandbox["tmp"] / "out.txt", sandbox["work"]))
+	result = _bash(sandbox, f'_AI_ENGINE_DIR={shlex.quote(str(support_scripts))}; rc=0; claude_run {args} || rc=$?; echo "RC=${{rc}}"')
+	assert _rc(result) == 75
+	assert "reason=isolation_support_missing" in result.stderr
 	assert _calls(sandbox) == []
 
 
@@ -398,8 +632,7 @@ def test_read_isolation_relay_unavailable_and_account_rotation(sandbox: dict) ->
 	run_dir = Path(next(line[8:] for line in result.stdout.splitlines() if line.startswith("RUN_DIR=")))
 	assert (run_dir / "successful-transcript.jsonl").resolve() == run_dir / "transcript-B.jsonl"
 	(sandbox["pool"] / "tokens" / "A").chmod(0o600)
-	(sandbox["tmp"] / "docker_calls.jsonl").unlink()
-	(sandbox["tmp"] / "docker_limit_first").touch()
+	(sandbox["tmp"] / "docker-mode").write_text("limit-once")
 	result = _claude_run(sandbox, "SECURITY_AUDIT")
 	assert _rc(result) == 0, result.stderr
 	assert "outcome=usage_limit" in result.stderr
@@ -412,7 +645,7 @@ def test_read_isolation_all_relays_unavailable_falls_back(sandbox: dict) -> None
 	result = _claude_run(sandbox, "SECURITY_AUDIT")
 	assert _rc(result) == 75
 	assert "reason=relay_unavailable" in result.stderr
-	assert "AI_ENGINE_FALLBACK role=SECURITY_AUDIT reason=all_accounts_failed" in result.stderr
+	assert "AI_ENGINE_FALLBACK role=SECURITY_AUDIT reason=isolation_relay_unavailable" in result.stderr
 	assert _calls(sandbox) == []
 
 
@@ -424,8 +657,7 @@ def test_read_isolation_hides_claude_md_without_moving_host_file(sandbox: dict) 
 	result = _claude_run(sandbox, "SECURITY_AUDIT", SUPPORT_ROOT_DIR=str(support))
 	assert _rc(result) == 0, result.stderr
 	assert (sandbox["work"] / "CLAUDE.md").read_text(encoding="utf-8") == "checkout CLAUDE.md\n"
-	run_dir = Path(next(line[8:] for line in result.stdout.splitlines() if line.startswith("RUN_DIR=")))
-	assert not (run_dir / "sandbox/root" / sandbox["work"].relative_to("/") / "CLAUDE.md").exists()
+	assert "CLAUDE.md" not in _docker_calls(sandbox)[0]["snapshot_files"]
 
 
 def test_read_isolation_mounts_only_sanitized_extra_directories(sandbox: dict) -> None:
@@ -437,13 +669,154 @@ def test_read_isolation_mounts_only_sanitized_extra_directories(sandbox: dict) -
 	result = _claude_run(sandbox, "WORKFLOW_HEAL", AI_ENGINE_READ_EXTRA_DIRS=f"{extra}:{sandbox['pool']}")
 	assert _rc(result) == 0, result.stderr
 	assert "extra_dirs=1" in result.stderr
-	run_dir = Path(next(line[8:] for line in result.stdout.splitlines() if line.startswith("RUN_DIR=")))
-	assert (run_dir / "sandbox/root" / extra.relative_to("/") / "source.txt").exists()
-	assert not (run_dir / "sandbox/root" / extra.relative_to("/") / "private.key").exists()
-	assert not (run_dir / "sandbox/root" / sandbox["pool"].relative_to("/")).exists()
-	argv = next(call["argv"] for call in _docker_calls(sandbox) if call["argv"][0] == "run")
+	call = _docker_calls(sandbox)[0]
+	assert "source.txt" in call["extra_snapshot_files"]
+	assert "private.key" not in call["extra_snapshot_files"]
+	argv = call["argv"]
 	assert f"dst={extra},readonly" in " ".join(argv)
 	assert str(sandbox["pool"]) not in " ".join(argv)
+
+
+def test_read_isolation_relay_failure_falls_back(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	args = " ".join(shlex.quote(str(part)) for part in ("SECURITY_AUDIT", sandbox["prompt"], sandbox["tmp"] / "out.txt", sandbox["work"]))
+	script = (
+		'_ai_engine_py() { if [ "$1" = config ] && [ "$2" = --key ] && [ "$3" = probe_model ]; '
+		'then echo invalid-model; else PYTHONDONTWRITEBYTECODE=1 python3 "${_AI_ENGINE_DIR}/claude_engine.py" "$@"; fi; }; '
+		f'rc=0; claude_run {args} || rc=$?; echo "RC=${{rc}}"'
+	)
+	result = _bash(sandbox, script)
+	assert _rc(result) == 75, result.stderr
+	assert "account=A outcome=crashed reason=relay_unavailable" in result.stderr
+	assert "reason=isolation_relay_unavailable" in result.stderr
+	assert not _docker_calls(sandbox)
+
+
+def test_read_isolation_masks_checkout_credential_and_claude_md(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	subprocess.run(["git", "init", "-q", str(sandbox["work"])], check=True)
+	subprocess.run(["git", "-C", str(sandbox["work"]), "config", "http.https://github.com/.extraheader", "AUTHORIZATION: basic SECRET"], check=True)
+	subprocess.run(["git", "-C", str(sandbox["work"]), "config", "http.extraheader", "AUTHORIZATION: basic TOP_LEVEL_SECRET"], check=True)
+	for checkout_name in (".codex-workflow-src", ".codex-workflow-src-main"):
+		checkout_path = sandbox["work"] / checkout_name
+		subprocess.run(["git", "init", "-q", str(checkout_path)], check=True)
+		subprocess.run(["git", "-C", str(checkout_path), "config", "http.https://github.com/.extraheader", "AUTHORIZATION: basic NESTED_SECRET"], check=True)
+		assert "NESTED_SECRET" in (checkout_path / ".git" / "config").read_text()
+	for push_url in ("https://user:PASS_ONE@example.com/repo", "https://user:PASS_TWO@example.com/repo"):
+		subprocess.run(["git", "-C", str(sandbox["work"]), "config", "--add", "remote.origin.pushurl", push_url], check=True)
+	support = sandbox["tmp"] / "support"
+	(support / ".github" / "ai").mkdir(parents=True)
+	(support / ".github" / "ai" / "claude_engine.json").write_text('{"hide_claude_md": true}')
+	result = _claude_run(sandbox, "SECURITY_AUDIT", SUPPORT_ROOT_DIR=str(support))
+	assert _rc(result) == 0, result.stderr
+	argv = _docker_calls(sandbox)[0]["argv"]
+	assert "SECRET" not in json.dumps(_docker_calls(sandbox))
+	assert "SECRET" in (sandbox["work"] / ".git" / "config").read_text()
+	assert "PASS_TWO" in (sandbox["work"] / ".git" / "config").read_text()
+	assert (sandbox["work"] / "CLAUDE.md").read_text() == "checkout CLAUDE.md\n"
+	snapshot_mount = next(arg for arg in argv if arg.startswith("type=bind,src=") and f",dst={sandbox['work']},readonly" in arg)
+	assert "/source-snapshot,dst=" in snapshot_mount
+	assert "CLAUDE.md" not in _docker_calls(sandbox)[0]["snapshot_files"]
+	assert not any(".codex-workflow-src" in path for path in _docker_calls(sandbox)[0]["snapshot_files"])
+	assert "SECRET" not in _docker_calls(sandbox)[0]["snapshot_config"]
+	assert not any("/git-mask/" in arg for arg in argv)
+
+
+def test_read_isolation_fails_closed_if_git_config_cannot_be_masked(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	subprocess.run(["git", "init", "-q", str(sandbox["work"])], check=True)
+	(sandbox["work"] / ".git" / "config").write_text("[http \"https://github.com/\"]\n\textraheader=SECRET\n[broken\n")
+	args = " ".join(shlex.quote(str(part)) for part in ("SECURITY_AUDIT", sandbox["prompt"], sandbox["tmp"] / "out.txt", sandbox["work"]))
+	result = _bash(sandbox, f'_ai_engine_isolation_image() {{ printf "%s\\n" fake-image; }}; rc=0; claude_run {args} || rc=$?; echo "RC=${{rc}}"')
+	assert _rc(result) == 75
+	assert "reason=isolation_snapshot_failed" in result.stderr
+	assert not _docker_calls(sandbox)
+
+
+def test_read_isolation_session_dir_failure_reports_its_cause(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	(sandbox["tmp"] / "rt" / "claude-read-sessions").write_text("not a directory")
+	args = " ".join(shlex.quote(str(part)) for part in (
+		"SECURITY_AUDIT", sandbox["prompt"], sandbox["tmp"] / "out.txt", sandbox["work"],
+		"0123abcd-0000-4000-8000-00000000abcd",
+	))
+	# This path fails before Docker starts or the reaper needs ps.
+	test_script = (
+		'command() { if [ "$1" = -v ] && [ "$2" = ps ]; then return 0; fi; builtin command "$@"; }; '
+		'_ai_engine_isolation_image() { printf "%s\\n" test-image; }; '
+		f'rc=0; claude_run {args} || rc=$?; echo "RC=${{rc}}"'
+	)
+	result = _bash(sandbox, test_script)
+	assert _rc(result) == 75, result.stderr
+	assert "AI_ENGINE_FALLBACK role=SECURITY_AUDIT reason=isolation_session_dir_unavailable" in result.stderr
+	assert not _docker_calls(sandbox)
+
+
+def test_read_isolation_pool_removed_after_preflight_reports_its_cause(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	args = " ".join(shlex.quote(str(part)) for part in (
+		"SECURITY_AUDIT", sandbox["prompt"], sandbox["tmp"] / "out.txt", sandbox["work"],
+		"0123abcd-0000-4000-8000-00000000abcd",
+	))
+	test_script = (
+		'command() { if [ "$1" = -v ] && [ "$2" = ps ]; then return 0; fi; builtin command "$@"; }; '
+		'_ai_engine_isolation_image() { mv -- "$CLAUDE_ENGINE_POOL_DIR" "${CLAUDE_ENGINE_POOL_DIR}.gone"; printf "%s\\n" test-image; }; '
+		f'rc=0; claude_run {args} || rc=$?; echo "RC=${{rc}}"'
+	)
+	result = _bash(sandbox, test_script)
+	assert _rc(result) == 75, result.stderr
+	assert "AI_ENGINE_FALLBACK role=SECURITY_AUDIT reason=isolation_pool_unavailable" in result.stderr
+	assert not _docker_calls(sandbox)
+
+
+def test_read_isolation_rotates_accounts(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK", B="TOK_OK")
+	# The stub emits a rate limit on the first attempt only.
+	(sandbox["tmp"] / "docker-mode").write_text("limit-once")
+	result = _claude_run(sandbox, "SECURITY_AUDIT")
+	assert _rc(result) == 0, result.stderr
+	assert len(_docker_calls(sandbox)) == 2
+	assert "account=A outcome=usage_limit" in result.stderr
+	assert "account=B outcome=success" in result.stderr
+
+
+def test_read_isolation_reaps_container_on_parent_sigkill(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	(sandbox["tmp"] / "docker-mode").write_text("hang")
+	args = " ".join(shlex.quote(str(part)) for part in ("SECURITY_AUDIT", sandbox["prompt"], sandbox["tmp"] / "out.txt", sandbox["work"]))
+	process = subprocess.Popen(
+		["bash", "-c", f'source {shlex.quote(str(sandbox["support"] / "scripts/ai_engine.sh"))}; claude_run {args}'],
+		cwd=sandbox["tmp"], env=sandbox["env"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+		start_new_session=True,
+	)
+	try:
+		deadline = time.monotonic() + 12
+		while time.monotonic() < deadline and not _docker_calls(sandbox):
+			time.sleep(0.1)
+		assert _docker_calls(sandbox), "docker run was not reached"
+		process.kill()
+		process.wait(timeout=5)
+		while time.monotonic() < deadline and not any(
+			call["argv"][:2] == ["rm", "-f"] for call in _docker_calls(sandbox, "rm")
+		):
+			time.sleep(0.2)
+		assert _docker_calls(sandbox, "rm"), "orphan reaper did not remove the container"
+		while time.monotonic() < deadline:
+			broker_processes = subprocess.run([str(sandbox["bin"] / "ps"), "-eo", "args="], capture_output=True, text=True, check=True).stdout
+			if not any("claude_anthropic_relay.py broker" in line and str(sandbox["tmp"]) in line for line in broker_processes.splitlines()):
+				break
+			time.sleep(0.1)
+		else:
+			pytest.fail("orphan reaper did not stop the broker")
+	finally:
+		# A fake docker run process may still be sleeping after its client is killed.
+		try:
+			os.killpg(process.pid, signal.SIGKILL)
+		except ProcessLookupError:
+			pass
+		process.wait(timeout=5)
+		for manifest in (sandbox["tmp"] / "rt").glob("claude-run-*/support-lock.json"):
+			subprocess.run(["python3", str(manifest.parent / "claude_engine.py"), "support-unlock", "--manifest", str(manifest)], check=True)
 
 
 @pytest.mark.parametrize("role, read_only", [
@@ -462,18 +835,16 @@ def test_read_profile_strips_credentials_from_claude_only(sandbox: dict, role: s
 	result = _claude_run(sandbox, role, **dict.fromkeys(credential_names, "not-a-real-credential"),
 		AI_ENGINE_READ_ONLY="true" if read_only else "false", GH_CONFIG_DIR=str(inherited_gh_config))
 	assert _rc(result) == 0, result.stderr
-	if role != "IMPLEMENT":
+	if role == "IMPLEMENT":
+		call = _calls(sandbox)[0]
+		assert call["credentials"] == dict.fromkeys(credential_names, True)
+		assert call["token"] == "TOK_OK"
+		assert call["gh_config_dir"] == str(inherited_gh_config)
+	else:
 		assert _calls(sandbox) == []
 		calls = _docker_calls(sandbox)
-		assert calls and all(not any(key in call["env"] for key in credential_names) for call in calls)
-		assert not any(key in json.dumps(calls) for key in credential_names)
-		assert str(sandbox["pool"]) not in json.dumps(calls)
-		return
-	call = _calls(sandbox)[0]
-	assert call["credentials"] == dict.fromkeys(credential_names, True)
-	assert call["token"] == "TOK_OK"
-	if role == "IMPLEMENT":
-		assert call["gh_config_dir"] == str(inherited_gh_config)
+		assert calls and all(not any(name in call["env"] for name in credential_names) for call in calls)
+		assert all(str(sandbox["pool"]) not in " ".join(call["argv"]) for call in calls)
 
 
 @pytest.mark.parametrize("value, tools, mode", [
@@ -487,8 +858,8 @@ def test_read_only_switch_narrows_a_write_role(sandbox: dict, value: str, tools:
 	assert _rc(result) == 0, result.stderr
 	if value == "true":
 		assert _calls(sandbox) == []
-		argv = next(call["argv"] for call in _docker_calls(sandbox) if call["argv"][0] == "run")
-		assert f"--tools {tools} --permission-mode {mode}" in " ".join(argv)
+		argv = _docker_calls(sandbox)[0]["argv"]
+		assert f"--tools {tools}" in argv[-2] and f"--permission-mode {mode}" in argv[-2]
 	else:
 		argv = _calls(sandbox)[0]["argv"]
 		assert (argv[argv.index("--tools") + 1], argv[argv.index("--permission-mode") + 1]) == (tools, mode)
