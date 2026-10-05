@@ -1918,7 +1918,7 @@ jobs:
           fi
           # The issue/comments read above cannot prove a rejection happened.
           # Fetch Actions provenance only for an unspent bulk-delete verdict.
-          rejection_artifacts="$(gh api "repos/${{ github.repository }}/actions/artifacts?name=destructive-rejection-issue-${ISSUE_NUMBER}&per_page=100" 2>/dev/null)" || {
+          rejection_artifacts="$(gh api "repos/${{ github.repository }}/actions/runs/${rejection_run_id}/artifacts?per_page=100" 2>/dev/null)" || {
             echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=rejection_snapshot_unverified"
             exit 0
           }

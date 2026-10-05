@@ -446,6 +446,7 @@ def test_bulk_override_spend_and_judge_log_reference_extract_scalar_captures() -
 	judge = (ROOT / "scripts/unblock_judge.sh").read_text(encoding="utf-8")
 	assert 'reason=rejection_run_unbound' in implement
 	assert 'reason=rejection_snapshot_unverified' in implement
+	assert 'actions/runs/${rejection_run_id}/artifacts?per_page=100' in implement
 	assert 'reason=approved_paths_not_rejected' in implement
 	assert '--approved-json "${approved_deletions}"' in implement
 	assert '(.created_at | type == "string") and .created_at <= $approved_at' in implement

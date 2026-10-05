@@ -389,12 +389,17 @@ unblock_rejection_snapshot()
 {
 	local artifact_id rejection_run_id rejection_artifact_file="${RUNTIME_DIR}/rejection_artifact.json"
 	rm -f "${RUNTIME_DIR}/rejected_deletions.json"
-	if ! gh api "repos/${REPOSITORY}/actions/artifacts?name=destructive-rejection-issue-${ITEM}&per_page=5" > "${RUNTIME_DIR}/rejection_artifacts.json" 2>/dev/null; then
+	rejection_run_id="$(jq -r 'if .status == "ok" and (.run | type) == "string" then .run else empty end' "${RUNTIME_DIR}/rejection.json")"
+	if ! [[ "${rejection_run_id}" =~ ^[1-9][0-9]*$ ]]; then
+		unblock_log "item=${ITEM} op=rejection_snapshot outcome=failed reason=rejection_run_unbound"
+		return 1
+	fi
+	if ! gh api "repos/${REPOSITORY}/actions/runs/${rejection_run_id}/artifacts?per_page=100" > "${RUNTIME_DIR}/rejection_artifacts.json" 2>/dev/null; then
 		unblock_log "item=${ITEM} op=rejection_snapshot outcome=failed reason=artifact_list_unavailable"
 		return 1
 	fi
-	if ! jq -e --arg name "destructive-rejection-issue-${ITEM}" '
-		[.artifacts[]? | select(.name == $name and .expired == false and (.workflow_run.id | type == "number"))]
+	if ! jq -e --arg name "destructive-rejection-issue-${ITEM}" --argjson run "${rejection_run_id}" '
+		[.artifacts[]? | select(.name == $name and .expired == false and .workflow_run.id == $run)]
 		| sort_by(.created_at) | last // empty
 	' "${RUNTIME_DIR}/rejection_artifacts.json" > "${rejection_artifact_file}" 2>/dev/null; then
 		unblock_log "item=${ITEM} op=rejection_snapshot outcome=failed reason=artifact_missing"

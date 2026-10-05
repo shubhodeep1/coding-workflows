@@ -190,6 +190,8 @@ def test_override_requires_exact_rejected_set() -> None:
 		ledger.validate(verdict, decision, "o/r")
 	assert "override_guard" not in ledger.decide(7, "scope-blocked", FP, [], None, NOW,
 		rejection=_rejection(paths=[f"src/{index}.py" for index in range(21)]))["allowed"]
+	assert "override_guard" in ledger.decide(7, "destructive-blocked", FP, [], None, NOW,
+		rejection=_rejection("destructive-blocked", [f"src/{index}.py" for index in range(21)]))["allowed"]
 
 
 def test_rejection_cli_round_trip(tmp_path: Path) -> None:
@@ -302,6 +304,10 @@ def test_destructive_override_refuses_canonical_sources_everywhere() -> None:
 	assert normalised["override"] == "bulk_delete"
 	assert normalised["rejected_run"] == 101
 	assert normalised["rejection_run"] == "101"
+	subset = dict(verdict, paths=["src/a.py"])
+	assert ledger.validate(subset, decision, "acme/app", rejection, rejected)["paths"] == ["src/a.py"]
+	with pytest.raises(ledger.UsageError, match="guard-rejected paths"):
+		ledger.validate(subset, decision, "acme/app", dict(rejection, paths=["docs/old.md"]), rejected)
 	with pytest.raises(ledger.UsageError, match="verified rejected-deletion snapshot"):
 		ledger.validate(verdict, decision, "acme/app", rejection)
 	with pytest.raises(ledger.UsageError, match="not rejected"):
@@ -737,7 +743,7 @@ endpoint = next((a for a in args[1:] if a == "user" or a.startswith("repos/")), 
 jq = args[args.index("--jq") + 1] if "--jq" in args else ""
 if endpoint == "user":
 	done("pipeline-bot")
-if endpoint.startswith("repos/o/r/actions/artifacts?"):
+if endpoint.startswith("repos/o/r/actions/runs/") and "/artifacts?" in endpoint:
 	done(os.environ.get("FAKE_GH_ARTIFACTS", '{"artifacts": []}'))
 if endpoint == "repos/o/r/actions/artifacts/202/zip" and os.environ.get("FAKE_GH_ZIP"):
 	json.dump(state, open(state_path, "w"))
@@ -1646,14 +1652,16 @@ def test_judge_refuses_a_verdict_outside_the_menu(tmp_path: Path) -> None:
 def test_destructive_override_judge_requires_actual_rejection_artifact(tmp_path: Path) -> None:
 	item = dict(ISSUE, labels=[{"name": "ai:destructive-blocked"}])
 	verdict = {"verdict": "override_guard", "reason": "audited", "paths": ["src/a.py"]}
-	comments = [_comment("Guard failed\n" + _rejection_marker(["src/a.py"], guard="destructive", reason="bulk-delete", run="101"))]
+	comments = [_comment("Guard failed\n" + _rejection_marker(["src/a.py", "docs/old.md"], guard="destructive", reason="bulk-delete", run="101"))]
 	run, artifact, zip_path = _rejection_fixture(tmp_path)
 	run["repository"] = {"full_name": "o/r"}
 	run["head_repository"] = {"full_name": "o/r"}
+	other_artifact = dict(artifact, id=203, workflow_run={"id": 102}, created_at="2026-10-05T11:00:00Z")
 	result, state = _judge(tmp_path, item, comments=comments, verdict=verdict,
-		FAKE_GH_ARTIFACTS=json.dumps({"artifacts": [artifact]}), FAKE_GH_RUNS=json.dumps({"101": run}),
+		FAKE_GH_ARTIFACTS=json.dumps({"artifacts": [artifact, other_artifact]}), FAKE_GH_RUNS=json.dumps({"101": run}),
 		FAKE_GH_ZIP=base64.b64encode(zip_path.read_bytes()).decode("ascii"))
 	assert "verdict=override_guard" in result.stdout, result.stderr
+	assert any("repos/o/r/actions/runs/101/artifacts?per_page=100" in call for call in state["calls"])
 	assert "Approved deletions: [\"src/a.py\"]" in state["comments"][0]["body"]
 	assert "Rejected run: 101" in state["comments"][0]["body"]
 	assert "Bound to guard rejection from run 101." in state["comments"][0]["body"]

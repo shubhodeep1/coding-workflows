@@ -412,7 +412,7 @@ def decide(
 	]
 	if stop not in GUARD_STOPS or not isinstance(rejection, dict) or rejection.get("status") != "ok" \
 		or rejection.get("guard") != GUARD_FOR_STOP.get(stop) or not isinstance(rejection.get("paths"), list) \
-		or not 0 < len(rejection["paths"]) <= MAX_OVERRIDE_PATHS \
+		or not rejection["paths"] or (stop == "scope-blocked" and len(rejection["paths"]) > MAX_OVERRIDE_PATHS) \
 		or (stop == "scope-blocked" and rejection.get("reason") != "out-of-scope") \
 		or (stop == "destructive-blocked" and rejection.get("reason") not in OVERRIDABLE_DESTRUCTIVE_REASONS):
 		allowed = [verdict for verdict in allowed if verdict != "override_guard"]
@@ -598,7 +598,9 @@ def validate(verdict: object, decision: object, repo: str, rejection: dict | Non
 			rejected_paths = {_clean_path(path) for path in rejection["paths"]}
 		except UsageError as exc:
 			raise UsageError("invalid guard-rejected paths") from exc
-		if set(cleaned) != rejected_paths:
+		if decision.get("stop") == "destructive-blocked" and not set(cleaned) <= rejected_paths:
+			raise UsageError(f"override paths must be within guard-rejected paths; additional: {sorted(set(cleaned) - rejected_paths)}")
+		if decision.get("stop") != "destructive-blocked" and set(cleaned) != rejected_paths:
 			raise UsageError(
 				f"override paths must equal the guard-rejected paths; missing: {sorted(rejected_paths - set(cleaned))}, "
 				f"additional: {sorted(set(cleaned) - rejected_paths)}"

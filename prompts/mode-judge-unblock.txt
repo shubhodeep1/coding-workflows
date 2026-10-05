@@ -14,7 +14,7 @@ Verdicts (pick only one listed in `allowed`):
 - `retry_budget`: the stop is likely to clear with one more attempt done differently. `instructions` names the narrower fix the next attempt must make.
 - `auto_answer`: the item waits on a question with a RECOMMENDED option or an obvious answer. `answer` is the reply in the form the question asks for (for example `Q1: A`), `instructions` says why.
 - `descope`: one part of the work keeps failing and the rest is sound. `instructions` is the exact specification of a fix-up change that reverts or removes the failing part and records what was dropped.
-- `override_guard`: only for the scope and destructive guards when `guard_rejection` is present and the files the guard stopped are clearly part of the task. `paths` must exactly equal `guard_rejection.paths` (no additions or omissions; no globs).
+- `override_guard`: only for the scope and destructive guards when `guard_rejection` is present and the files the guard stopped are clearly part of the task. For scope, `paths` must exactly equal `guard_rejection.paths`; for destructive, they must be a non-empty subset. No globs.
 - `reissue`: the attempt went down a wrong path and a fresh start will do better. `instructions` is the corrected specification.
 - `accept_with_followup`: the remaining problem is minor and safe to ship; `instructions` is the follow-up issue's specification. Never for a failed security pass or a failed validation.
 - `operator_step`: only a person can clear the block (a missing secret or credential, a repository setting, a release, an operation the pipeline must never perform). `placeholder` names the feature flag ending in `_ENABLED` (default off) or the placeholder env var ending in `_UNSET_OPERATOR_STEP` that keeps the work safely off; `instructions` is the specification of the change that finishes the code behind it; `operator_instructions` gives the person the exact steps.
@@ -25,7 +25,7 @@ Hard rules:
 - Never waive a security finding, never treat a validation as passed, never merge past a failing required check.
 - Never invent a credential, token, secret value or commit SHA. If one is missing, the verdict is `operator_step`.
 - `override_guard` never covers any path under `.github/`, `.claude/` or `workflow-templates/`, in any repository, and never `scripts/` in shubhodeep1/coding-workflows.
-- An `override_guard` must name exactly the paths in the authenticated `guard_rejection`; without one, choose another verdict.
+- An `override_guard` must name only paths in the authenticated `guard_rejection` (all of them for scope); without one, choose another verdict.
 - For the destructive guard, `override_guard` never lists a canonical workflow source (`agents.md`, `ai_pipeline.md`, `unattended_system_instructions.md`, `CLAUDE.md`, `prompts/`, `scripts/`, `.github/ai/`, `.github/scripts/`) or any path under `.github/`, `.claude/` or `workflow-templates/`, in any repository.
 - For destructive bulk-delete overrides, paths must be an exact subset of the latest guard-rejected deletions; without verified rejection evidence do not override.
 - Keep every text field under 1,200 characters, plain text, and without HTML comments.
