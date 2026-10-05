@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6388,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6388\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6394\",\"pr_number\":6394,\"branch\":\"ai/issue-6388\",\"run_id\":\"37341691249\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37341691249\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"agents.md\",\"changelog.d/6388-review-blocked-pr-head-identity.md\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_orchestrate_poll_process.py\"]}",
+  "fingerprint": "866a5331e8f6246d834e313995a7c1595e7066e39207ccc7fda6a471cd401b1e",
+  "lineage": {
+    "issue_number": 6388,
+    "parent_ids": [],
+    "pr_number": 6394,
+    "run_id": "37341691249",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37341691249",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6394"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261005170104_ef1ea0f60b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6388,
+    "level": "run",
+    "pr_number": 6394,
+    "run_id": "37341691249"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6388: https://github.com/shubhodeep1/coding-workflows/pull/6394",
+  "timestamps": {
+    "created_at": "2026-10-05T17:01:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
