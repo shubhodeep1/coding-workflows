@@ -58,8 +58,8 @@ _WEAKENS_CONTROL_PATTERNS = [
 		re.IGNORECASE,
 	),
 	re.compile(
-		r"\b(?:verif|validat|check|signature|auth|security|review|approv|audit|scan|test|gate|guard|control)\w*\b"
-		r".{0,40}?\b(?:skipped|disabled|bypassed|omitted|waived|optional|not\s+required|advisory|best\s+effort|relax\w*)\b",
+		r"\b(?:verification|validation|checks?|signatures?|authorization|authentication|security|reviews?|approvals?|audits?|scans?|test\s+is|tests\s+are|gates?|guards?|controls?)\b"
+		r"\s+(?:(?:is|are|was|were|should\s+be|to\s+be|being)\s+)?(?:skipped|disabled|bypassed|omitted|waived|optional|not\s+required|advisory|best\s+effort|relax\w*)\b",
 		re.IGNORECASE,
 	),
 	re.compile(
@@ -145,6 +145,10 @@ def _option_requires_data(option_text: str) -> bool:
 
 
 def _option_weakens_control(text: str) -> bool:
+	text = re.sub(
+		r"\b(?:do\s+not|don't|never)\s+(?:skip\w*|disabl\w*|bypass\w*|omit\w*|ignor\w*|waiv\w*|drop\w*|remov\w*|relax\w*)\b",
+		"", text, flags=re.IGNORECASE,
+	)
 	return any(pattern.search(text) for pattern in _WEAKENS_CONTROL_PATTERNS)
 
 
@@ -200,9 +204,8 @@ def run_guard(clarification_file: Path, answers_file: Path, evidence_files: tupl
 	if not questions or not answers:
 		return answers_text
 
-	# The question's own examples are not evidence. Strip decision lines so
-	# only the respondent's rationale/plan and supplied context can count.
-	evidence_text = "\n".join(line for line in answers_text.splitlines() if not _LETTER_DECISION_RE.fullmatch(line.strip()))
+	# The model's answer can invent a plausible URL; use supplied context only.
+	evidence_text = ""
 	for evidence_file in evidence_files:
 		if evidence_file.is_file():
 			evidence_text += "\n" + evidence_file.read_text(encoding="utf-8", errors="replace")

@@ -41,9 +41,12 @@ def test_required_verification_escalates_instead_of_skipping(tmp_path: Path) -> 
 	assert auto_decisions.from_answers(QUESTIONS, result)["answers"] == "Q1: ESCALATE\n"
 
 
-def test_worker_plan_supplies_required_evidence(tmp_path: Path) -> None:
+def test_worker_plan_alone_is_not_evidence(tmp_path: Path) -> None:
 	answer = ANSWER + "\nEXECUTION PLAN:\nPR: https://github.com/o/r/pull/12\n"
-	assert _run_guard(tmp_path, answer=answer) == answer
+	assert "Q1: ESCALATE" in _run_guard(tmp_path, answer=answer)
+	evidence = tmp_path / "issue_body.txt"
+	evidence.write_text("PR: https://github.com/o/r/pull/12", encoding="utf-8")
+	assert _run_guard(tmp_path, answer=answer, evidence_files=(evidence,)) == answer
 
 
 def test_question_example_is_not_evidence(tmp_path: Path) -> None:
@@ -97,7 +100,7 @@ def test_nonweakening_fallback_still_avoids_loop(tmp_path: Path, fallback: str) 
 	"Proceed without verification", "Verification is optional", "Make the check advisory",
 	"Best effort verification", "Relax the security gate", "Do not verify the PR head",
 	"Don't verify the PR head", "Never check the PR head", "No verification needed",
-	"Refuse to validate the PR head", "Skip this verification, but provide the deployment URL",
+	"Refuse to validate the PR head", "The test is optional", "Skip this verification, but provide the deployment URL",
 	"Leave the PR head unverified", "Proceed with the unchecked PR", "Do not enforce the security check",
 ])
 def test_weakening_fallbacks_are_rejected(tmp_path: Path, fallback: str) -> None:
@@ -123,8 +126,26 @@ def test_branch_without_reliable_detector_is_not_accepted(tmp_path: Path) -> Non
 
 def test_no_fallback_preserves_original_decision(tmp_path: Path) -> None:
 	questions = "Q1: Which path?\n- A — Provide the PR URL\n- B — Supply the commit SHA\n"
-	answer = ANSWER + "\nEXECUTION PLAN:\nPR: https://github.com/o/r/pull/12\n"
+	evidence = tmp_path / "issue_body.txt"
+	evidence.write_text("PR: https://github.com/o/r/pull/12", encoding="utf-8")
+	assert _run_guard(tmp_path, questions=questions, evidence_files=(evidence,)) == ANSWER
+
+
+@pytest.mark.parametrize("option", [
+	"Do not skip verification", "Never bypass security checks", "Do not disable the audit",
+	"Check whether the feature flag is disabled", "Validate optional fields against schema",
+	"Test optional parameters", "Verify the debug toggle is disabled",
+])
+def test_control_preserving_and_diagnostic_options_remain_available(tmp_path: Path, option: str) -> None:
+	questions = f"Q1: Which path?\n- A — Provide the PR URL\n- B — {option}\n"
+	answer = ANSWER.replace("Q1: A", "Q1: B")
 	assert _run_guard(tmp_path, questions=questions, answer=answer) == answer
+	assert "Q1: B" in _run_guard(tmp_path, questions=questions)
+
+
+def test_negation_does_not_mask_a_later_bypass(tmp_path: Path) -> None:
+	questions = "Q1: Which path?\n- A — Do not skip verification, but disable the security scan\n"
+	assert "Q1: ESCALATE" in _run_guard(tmp_path, questions=questions)
 
 
 def test_no_fallback_escalates_without_required_data(tmp_path: Path) -> None:
