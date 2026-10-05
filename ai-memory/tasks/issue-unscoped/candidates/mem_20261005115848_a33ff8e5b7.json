@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:205-209 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus]\n  PROBLEM: The 404 tolerance depends on stderr containing the exact substring `HTTP 404`, so changes to `gh` error formatting can cause a concurrent label removal to fail the approval flow.\n  WHY: A real 404 could set `ops_failed=\"true\"` and block follow-up approval actions; both reviewers rated this NIT.\n- scripts/unblock_actions.py:362 | severity=low | confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The \u201cRe-issue: see the newest issue that links this one\u201d comment is posted on project-child security issues, but no replacement issue is created for project children.\n  WHY: An operator may look for a linked replacement issue that does not exist and be confused about where the fix is tracked; the reviewer rated this NIT.\n- scripts/unblock_actions.py:338 | severity=low | confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The PR branch hardcodes `\"labels\": []` instead of using the `labels` variable computed on line 334.\n  WHY: There is no current runtime failure because `_is_security_issue` checks `kind == \"issue\"`, so `security_issue` is always False for PRs and `labels` is always `[]`; the reviewer rated this NIT.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/unblock_judge.sh:205-206 | severity=low | confidence=[2]\n  PROBLEM: The tolerance for a concurrently-removed label depends on stderr containing the exact substring `HTTP 404`. If `gh` changes its error format (e.g. future versions emit a numeric status code only, or a different human-readable string), a real 404 triggers `ops_failed=\"true\"` and blocks the approval flow.\n  WHY: A concurrent label removal could hard-fail instead of being tolerated, leaving the item stuck in its blocked state without the follow-up approval actions that should have run.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/unblock_actions.py:362 | severity=low | confidence=[4]\n  PROBLEM: The comment text \"Re-issue: see the newest issue that links this one\" is posted on project-child security issues, but no replacement issue is created for project children \u2014 the reissue posts a fix-up request on the tracking issue instead.\n  WHY: An operator reading the comment on a project-child security finding would look for a linked replacement issue that does not exist, causing confusion about where the fix is tracked.\n- scripts/unblock_actions.py:338 | severity=low | confidence=[4]\n  PROBLEM: The PR branch hardcodes `\"labels\": []` instead of using the `labels` variable computed on line 334. Currently equivalent because `_is_security_issue` returns False for PRs, but the unused `labels` variable is confusing.\n  WHY: No current runtime failure \u2014 `_is_security_issue` checks `kind == \"issue\"`, so `security_issue` is always False in the PR branch and `labels` is always `[]`. Using `labels` instead of `[]` would make the code more consistent and future-proof.\n- scripts/unblock_judge.sh:205-209 (remove_label handler, from LAST RUN DIFF) | severity=low | confidence=[3]\n  PROBLEM: The 404 tolerance keys off the substring `HTTP 404` in stderr, which is fragile to changes in `gh` output format.\n  WHY: If `gh` changes its error message format, a real 404 (concurrent label removal) would set `ops_failed=\"true\"` and block the approval flow. The test fake always emits the expected format, so the real output format is never exercised.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "238f8ef23794fec99aa1bd2333fc3c8575bf5417bf1571e9df67a81770b711b3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6285,
+    "run_id": "37301281944",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37301281944",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005115848_a33ff8e5b7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6285,
+    "run_id": "37301281944"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T11:58:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
