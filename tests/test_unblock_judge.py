@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import urllib.parse
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -212,13 +213,75 @@ def test_issue_only_verdicts_are_not_offered_for_prs_or_projects() -> None:
 def test_destructive_override_refuses_canonical_sources_everywhere() -> None:
 	decision = _decide("destructive-blocked", "issue")
 	verdict = {"verdict": "override_guard", "reason": "the deletions are the task", "paths": ["docs/old.md", "src/a.py"]}
-	normalised = ledger.validate(verdict, decision, "acme/app")
+	rejected = {"run_id": 101, "reason": "bulk-delete", "paths": ["docs/old.md", "src/a.py"]}
+	normalised = ledger.validate(verdict, decision, "acme/app", rejected)
 	assert normalised["override"] == "bulk_delete"
+	assert normalised["rejected_run"] == 101
+	with pytest.raises(ledger.UsageError, match="verified rejected-deletion snapshot"):
+		ledger.validate(verdict, decision, "acme/app")
+	with pytest.raises(ledger.UsageError, match="not rejected"):
+		ledger.validate(dict(verdict, paths=["src/other.py"]), decision, "acme/app", rejected)
+	with pytest.raises(ledger.UsageError, match="verified rejected-deletion snapshot"):
+		ledger.validate(verdict, decision, "acme/app", dict(rejected, reason="canonical-source"))
 	for path in ("prompts/mode-x.txt", "agents.md", ".github/ai/x.json"):
 		with pytest.raises(ledger.UsageError):
 			ledger.validate(dict(verdict, paths=[path]), decision, "acme/app")
 	scope = ledger.validate(dict(verdict, paths=["src/a.py"]), _decide("scope-blocked", "issue"), "acme/app")
 	assert "override" not in scope
+
+
+def _rejection_fixture(tmp_path: Path) -> tuple[dict, dict, Path]:
+	run = {"id": 101, "run_attempt": 1, "repository": {"full_name": "acme/app"},
+		"head_repository": {"full_name": "acme/app"}, "path": ".github/workflows/implement.yml",
+		"status": "completed", "conclusion": "failure"}
+	artifact = {"id": 202, "name": "destructive-rejection-issue-7", "expired": False,
+		"workflow_run": {"id": 101}, "size_in_bytes": 400}
+	zip_path = tmp_path / "rejection.zip"
+	with zipfile.ZipFile(zip_path, "w") as archive:
+		archive.writestr("destructive_rejection.json", json.dumps({"schema": "destructive_rejection.v1", "issue": 7,
+			"run_id": 101, "run_attempt": 1, "reason": "bulk-delete", "paths": ["src/a.py", "docs/old.md"]}))
+	return run, artifact, zip_path
+
+
+def test_rejection_snapshot_provenance_and_subset(tmp_path: Path) -> None:
+	run, artifact, zip_path = _rejection_fixture(tmp_path)
+	assert ledger.rejection_snapshot(run, artifact, str(zip_path), 7, "acme/app", ["src/a.py"])["run_id"] == 101
+	(tmp_path / "run.json").write_text(json.dumps(run), encoding="utf-8")
+	(tmp_path / "artifact.json").write_text(json.dumps(artifact), encoding="utf-8")
+	rc, verified = _cli("rejection-snapshot", "--run-file", str(tmp_path / "run.json"),
+		"--artifact-file", str(tmp_path / "artifact.json"), "--zip-file", str(zip_path),
+		"--item", "7", "--repo", "acme/app", "--approved-json", '["src/a.py"]')
+	assert rc == 0 and verified["paths"] == ["src/a.py", "docs/old.md"]
+	for invalid_run in (dict(run, repository={"full_name": "other/app"}),
+	                    dict(run, head_repository={"full_name": "other/app"}),
+	                    dict(run, path=".github/workflows/other.yml"),
+	                    dict(run, conclusion="success"), dict(run, run_attempt=2)):
+		with pytest.raises(ledger.UsageError):
+			ledger.rejection_snapshot(invalid_run, artifact, str(zip_path), 7, "acme/app")
+	for invalid_artifact in (dict(artifact, expired=True), dict(artifact, size_in_bytes=1048577),
+	                         dict(artifact, workflow_run={"id": 999}), dict(artifact, name="other")):
+		with pytest.raises(ledger.UsageError):
+			ledger.rejection_snapshot(run, invalid_artifact, str(zip_path), 7, "acme/app")
+	with pytest.raises(ledger.UsageError, match="approved_paths_not_rejected"):
+		ledger.rejection_snapshot(run, artifact, str(zip_path), 7, "acme/app", ["src/other.py"])
+	with pytest.raises(ledger.UsageError):
+		ledger.rejection_snapshot(run, artifact, str(zip_path), 8, "acme/app")
+	with zipfile.ZipFile(zip_path, "w") as archive:
+		archive.writestr("destructive_rejection.json", json.dumps({"schema": "destructive_rejection.v1", "issue": 7,
+			"run_id": 101, "run_attempt": 1, "reason": "canonical-source", "paths": ["src/a.py"]}))
+	with pytest.raises(ledger.UsageError):
+		ledger.rejection_snapshot(run, artifact, str(zip_path), 7, "acme/app")
+	with zipfile.ZipFile(zip_path, "a") as archive:
+		archive.writestr("extra", "bad")
+	with pytest.raises(ledger.UsageError):
+		ledger.rejection_snapshot(run, artifact, str(zip_path), 7, "acme/app")
+	zip_path.write_bytes(b"not a zip")
+	with pytest.raises(ledger.UsageError):
+		ledger.rejection_snapshot(run, artifact, str(zip_path), 7, "acme/app")
+	with zipfile.ZipFile(zip_path, "w") as archive:
+		archive.writestr("destructive_rejection.json", "x" * (1048576 + 1))
+	with pytest.raises(ledger.UsageError):
+		ledger.rejection_snapshot(run, artifact, str(zip_path), 7, "acme/app")
 
 
 @pytest.mark.parametrize("path", [
@@ -462,7 +525,7 @@ def test_followup_posts_the_reset_for_the_stop() -> None:
 
 JUDGE = ROOT / "scripts" / "unblock_judge.sh"
 FAKE_GH = r'''#!/usr/bin/env python3
-import json, os, sys
+import base64, json, os, sys
 state_path = os.environ["FAKE_GH_STATE"]
 state = json.load(open(state_path))
 args = sys.argv[1:]
@@ -491,6 +554,12 @@ endpoint = next((a for a in args[1:] if a == "user" or a.startswith("repos/")), 
 jq = args[args.index("--jq") + 1] if "--jq" in args else ""
 if endpoint == "user":
 	done("pipeline-bot")
+if endpoint.startswith("repos/o/r/actions/artifacts?"):
+	done(os.environ.get("FAKE_GH_ARTIFACTS", '{"artifacts": []}'))
+if endpoint == "repos/o/r/actions/artifacts/202/zip" and os.environ.get("FAKE_GH_ZIP"):
+	json.dump(state, open(state_path, "w"))
+	sys.stdout.buffer.write(base64.b64decode(os.environ["FAKE_GH_ZIP"]))
+	sys.exit(0)
 if endpoint.startswith("repos/o/r/actions/runs/"):
 	run_id = endpoint.rsplit("/", 1)[1]
 	runs = json.loads(os.environ.get("FAKE_GH_RUNS", "{}"))
@@ -971,6 +1040,27 @@ def test_judge_refuses_a_verdict_outside_the_menu(tmp_path: Path) -> None:
 	assert "reason=invalid_verdict" in result.stdout
 	assert len(state["comments"]) == 1 and "ai:unblock-wait:v1 item=7 reason=invalid_verdict" in state["comments"][0]["body"]
 	assert state["labels_removed"] == [] and state["created"] == []
+
+
+def test_destructive_override_judge_requires_actual_rejection_artifact(tmp_path: Path) -> None:
+	item = dict(ISSUE, labels=[{"name": "ai:destructive-blocked"}])
+	verdict = {"verdict": "override_guard", "reason": "audited", "paths": ["src/a.py"]}
+	run, artifact, zip_path = _rejection_fixture(tmp_path)
+	run["repository"] = {"full_name": "o/r"}
+	run["head_repository"] = {"full_name": "o/r"}
+	result, state = _judge(tmp_path, item, verdict=verdict,
+		FAKE_GH_ARTIFACTS=json.dumps({"artifacts": [artifact]}), FAKE_GH_RUNS=json.dumps({"101": run}),
+		FAKE_GH_ZIP=base64.b64encode(zip_path.read_bytes()).decode("ascii"))
+	assert "verdict=override_guard" in result.stdout, result.stderr
+	assert "Approved deletions: [\"src/a.py\"]" in state["comments"][0]["body"]
+	assert "Rejected run: 101" in state["comments"][0]["body"]
+	# A missing artifact cannot be replaced by an authored comment.
+	other = tmp_path / "no_artifact"
+	other.mkdir()
+	result, state = _judge(other, item, verdict=verdict)
+	assert "op=rejection_snapshot outcome=failed" in result.stdout
+	assert "reason=invalid_verdict" in result.stdout
+	assert len(state["comments"]) == 1 and "ai:unblock-wait" in state["comments"][0]["body"]
 
 
 def test_comment_fetch_failure_does_not_reset_the_ledger(tmp_path: Path) -> None:

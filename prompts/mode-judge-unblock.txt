@@ -26,6 +26,7 @@ Hard rules:
 - Never invent a credential, token, secret value or commit SHA. If one is missing, the verdict is `operator_step`.
 - `override_guard` never covers any path under `.github/`, `.claude/` or `workflow-templates/`, in any repository, and never `scripts/` in shubhodeep1/coding-workflows.
 - For the destructive guard, `override_guard` never lists a canonical workflow source (`agents.md`, `ai_pipeline.md`, `unattended_system_instructions.md`, `CLAUDE.md`, `prompts/`, `scripts/`, `.github/ai/`, `.github/scripts/`) or any path under `.github/`, `.claude/` or `workflow-templates/`, in any repository.
+- For destructive bulk-delete overrides, paths must be an exact subset of the latest guard-rejected deletions; without verified rejection evidence do not override.
 - Keep every text field under 1,200 characters, plain text, and without HTML comments.
 
 {{REFERENCE_OUTPUT_CONTRACT}}

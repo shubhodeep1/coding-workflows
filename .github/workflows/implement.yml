@@ -1024,7 +1024,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh security_dependency.py auto_decisions.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh unblock_ledger.py targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh security_dependency.py auto_decisions.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -1894,6 +1894,51 @@ jobs:
           ' "${ISSUE_COMMENTS_FILE}" 2>/dev/null || true)"
           if [ -z "${approved_deletions}" ]; then
             echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=approved_paths_unavailable"
+            exit 0
+          fi
+          rejection_run_id="$(jq -r --argjson id "${override_comment_id}" '
+            .[] | select(.id == $id) | (.body // "")
+            | capture("(?m)^Rejected run: (?<run>[1-9][0-9]*)\\r?$").run
+          ' "${ISSUE_COMMENTS_FILE}" 2>/dev/null || true)"
+          if ! [[ "${rejection_run_id}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=rejection_run_unbound"
+            exit 0
+          fi
+          # The issue/comments read above cannot prove a rejection happened.
+          # Fetch Actions provenance only for an unspent bulk-delete verdict.
+          rejection_artifacts="$(gh api "repos/${{ github.repository }}/actions/artifacts?name=destructive-rejection-issue-${ISSUE_NUMBER}&per_page=100" 2>/dev/null)" || {
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=rejection_snapshot_unverified"
+            exit 0
+          }
+          rejection_artifact="$(jq -ce --argjson run "${rejection_run_id}" --argjson id "${override_comment_id}" --arg name "destructive-rejection-issue-${ISSUE_NUMBER}" \
+            --slurpfile comments "${ISSUE_COMMENTS_FILE}" '
+            ($comments[0][] | select(.id == $id) | .created_at) as $approved_at
+            | [.artifacts[]? | select(.workflow_run.id == $run and .expired == false
+              and .name == $name and (.created_at | type == "string") and .created_at <= $approved_at)]
+            | sort_by(.created_at) | last // empty
+          ' <<< "${rejection_artifacts}" 2>/dev/null || true)"
+          rejection_artifact_id="$(jq -r '.id // empty' <<< "${rejection_artifact}" 2>/dev/null || true)"
+          if ! [[ "${rejection_artifact_id}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=rejection_snapshot_unverified"
+            exit 0
+          fi
+          rejection_dir="${RUNTIME_DIR}/destructive_rejection_spend"
+          mkdir -p "${rejection_dir}"
+          printf '%s\n' "${rejection_artifact}" > "${rejection_dir}/artifact.json"
+          if ! gh api "repos/${{ github.repository }}/actions/runs/${rejection_run_id}" > "${rejection_dir}/run.json" \
+            || ! gh api "repos/${{ github.repository }}/actions/artifacts/${rejection_artifact_id}/zip" > "${rejection_dir}/snapshot.zip"; then
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=rejection_snapshot_unverified"
+            exit 0
+          fi
+          if ! PYTHONDONTWRITEBYTECODE=1 python3 scripts/unblock_ledger.py rejection-snapshot \
+              --run-file "${rejection_dir}/run.json" --artifact-file "${rejection_dir}/artifact.json" \
+              --zip-file "${rejection_dir}/snapshot.zip" --item "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+              --approved-json "${approved_deletions}" > "${rejection_dir}/verified.json"; then
+            if jq -e '.error == "approved_paths_not_rejected"' "${rejection_dir}/verified.json" >/dev/null 2>&1; then
+              echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=approved_paths_not_rejected"
+            else
+              echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=rejection_snapshot_unverified"
+            fi
             exit 0
           fi
           if ! gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
@@ -4262,6 +4307,7 @@ jobs:
         # scope and staged-support branches are mutually exclusive — each guard
         # exits on the first tripped condition — so at most one fires per run.
         if: env.SKIP_IMPLEMENT != 'true' && (failure() || cancelled()) && (steps.preflight_destructive_guard.outputs.destructive_commit_blocked != '' || steps.commit_changes.outputs.destructive_commit_blocked != '' || steps.preflight_destructive_guard.outputs.scope_violation_blocked != '' || steps.commit_changes.outputs.scope_violation_blocked != '' || steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict != '' || steps.commit_changes.outputs.staged_support_rebase_conflict != '')
+        id: handle_guard_block
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
@@ -4281,6 +4327,16 @@ jobs:
         run: |
           set -euo pipefail
           bash "${RUNTIME_DIR}/implement_handle_guard_block.sh"
+
+      - name: Upload destructive-rejection snapshot
+        if: always() && steps.handle_guard_block.outputs.rejection_snapshot == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: destructive-rejection-issue-${{ env.ISSUE_NUMBER }}
+          path: ${{ env.RUNTIME_DIR }}/destructive_rejection/destructive_rejection.json
+          retention-days: 30
+          if-no-files-found: ignore
+        continue-on-error: true
 
       - name: Handle no-op implementation
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'false' && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == ''
