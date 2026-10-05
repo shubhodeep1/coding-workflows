@@ -1216,9 +1216,9 @@ the way to a fix PR without human action.
   `triage-workflow-run`). GitHub sends no `check_run` event for a check that
   GitHub Actions created ("to prevent recursive workflows"), so before this
   job the triage never ran for Actions CI. This repo's wrapper listens to the
-  `CI` workflow; the consumer wrapper listens to every workflow (`"*"`) and
-  skips the pipeline's own `AI …` workflows, so each finished workflow also
-  leaves a skipped wrapper run in the Actions tab. Each failed run is evaluated,
+  `CI` workflow; the consumer wrapper omits the workflow-name filter to listen
+  to every workflow and skips the pipeline's own `AI …` workflows, so each
+  finished workflow also leaves a skipped wrapper run in the Actions tab. Each failed run is evaluated,
   but an existing open triage issue for the same PR and workflow suppresses a
   duplicate; the diagnosis reads every failing check on the PR head. The
   original `check_run: completed` job stays for checks reported by apps other
@@ -1932,7 +1932,7 @@ attempts of that role in the same job.
 | `scripts/ai_engine.sh` | Sourced by call sites. `ai_engine_for_role <ROLE>` prints `codex` or `claude` and logs `AI_ENGINE_SELECTED role= engine= model= effort= source=`. `claude_run <ROLE> <prompt> <out> <workdir> [session_id]` runs the CLI and writes the final answer to `<out>`, the file the codex path writes. |
 | `scripts/claude_engine.py` | Every decision: role resolution, the P5 settings, transcript extraction and classification (`success`, `auth_failed`, `usage_limit`, `crashed`, `timeout`), probe parsing, account order. No API calls. |
 | `scripts/claude_settings.json.tmpl` | P5 permission policy, rendered per run: denies `gh pr merge`, `gh api … DELETE`, force pushes and remote branch deletes, and edits to the checkout's `.github/workflows/**` (unless `ALLOW_WORKFLOW_EDITS=true`) and `.claude/**`; runs `gh_api_write_guard.py` on every Bash call (a headless "ask" is a denial); its `env` block carries no credential. |
-| `scripts/claude_anthropic_relay.py` | Host relay for the sandboxed roles (clarify, review editor): the container gets `ANTHROPIC_BASE_URL=http://127.0.0.1:8765` and a placeholder token; the host side swaps in the real OAuth token and forwards only `POST /v1/messages` to `api.anthropic.com`. |
+| `scripts/claude_anthropic_relay.py` | Host relay for the sandboxed roles (clarify, review editor): the container gets `ANTHROPIC_BASE_URL=http://127.0.0.1:8765` and a placeholder token; the host side swaps in the real OAuth token and forwards only `POST /v1/messages` to `api.anthropic.com`. Incomplete POST bodies time out after 60 seconds with HTTP 400; the synchronous relay then accepts the next request. |
 | `.github/actions/install-claude` | Installs and verifies the pinned `@anthropic-ai/claude-code` on Node 22. |
 | `.github/workflows/claude-engine-smoke.yml` | Dispatch-only self-test per tool profile: offline checks, then the context gate, P5 denials and relay gate when a credential is available, or the codex fallback when it is not. |
 

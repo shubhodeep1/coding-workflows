@@ -32,6 +32,7 @@ import sys
 import time
 
 MAX_BODY = 32 * 1024 * 1024
+BODY_READ_TIMEOUT = 60
 UPSTREAM_HOST = "api.anthropic.com"
 PLACEHOLDER = "isolated-placeholder"
 PATH_RE = re.compile(r"^/v1/messages(?:/count_tokens)?(?:\?beta=true)?$")
@@ -150,10 +151,26 @@ class Relay(http.server.BaseHTTPRequestHandler):
 		headers = forwarded_request_headers(self.headers)
 		if headers is None:
 			return self._reject(400)
-		body = self.rfile.read(int(length))
-		self._request_body_consumed = True
-		if len(body) != int(length):
+		previous_timeout = self.connection.gettimeout()
+		deadline = time.monotonic() + BODY_READ_TIMEOUT
+		body_parts = []
+		body_remaining = int(length)
+		try:
+			while body_remaining and (seconds_left := deadline - time.monotonic()) > 0:
+				self.connection.settimeout(seconds_left)
+				chunk = self.rfile.read1(min(65536, body_remaining))
+				if not chunk:
+					break
+				body_parts.append(chunk)
+				body_remaining -= len(chunk)
+		except OSError:
+			pass
+		finally:
+			self.connection.settimeout(previous_timeout)
+		self._request_body_consumed = body_remaining == 0
+		if body_remaining:
 			return self._reject(400)
+		body = b"".join(body_parts)
 		if mode == "broker":
 			try:
 				request = json.loads(body)

@@ -197,6 +197,21 @@ def test_rejection_does_not_wait_indefinitely_for_a_missing_body(chain) -> None:
 	connection.close()
 
 
+@pytest.mark.parametrize("sent_body", (b"", b"{"))
+def test_valid_headers_with_incomplete_body_release_the_relay(chain, monkeypatch: pytest.MonkeyPatch, sent_body: bytes) -> None:
+	monkeypatch.setattr(relay, "BODY_READ_TIMEOUT", 0.1)
+	connection = http.client.HTTPConnection("127.0.0.1", chain["bridge_port"], timeout=3)
+	connection.putrequest("POST", "/v1/messages")
+	connection.putheader("Authorization", "Bearer isolated-placeholder")
+	connection.putheader("Content-Type", "application/json")
+	connection.putheader("Content-Length", "5")
+	connection.endheaders(sent_body)
+	assert connection.getresponse().status == 400
+	connection.close()
+	assert _Upstream.seen == []
+	assert _post(chain["bridge_port"])[0] == 200
+
+
 def test_rejection_handles_an_oversized_length_header(chain) -> None:
 	connection = relay.UnixHTTPConnection(chain["socket"])
 	connection.putrequest("POST", "/v1/messages")

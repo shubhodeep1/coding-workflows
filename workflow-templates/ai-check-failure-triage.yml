@@ -11,11 +11,10 @@ name: AI Check Failure Triage
 on:
   check_run:
     types: [completed]
-  # GitHub Actions CI (see the triage-workflow-run job). Every workflow can
-  # trigger it; the job skips the pipeline's own `AI …` workflows and anything
-  # that is not a failed pull-request run.
+  # GitHub Actions CI (see the triage-workflow-run job). Omitting the workflow
+  # name allowlist listens to every workflow; the job skips the pipeline's own
+  # `AI …` workflows and anything that is not a failed pull-request run.
   workflow_run:
-    workflows: ["*"]
     types: [completed]
 permissions:
   contents: read
