@@ -43,7 +43,7 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 	[[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid review OpenCode version' >&2; exit 1; }
 	# `prepare claude` (scripts/ai_engine.sh) adds the pinned Claude Code CLI
 	# to the same image; plain `prepare` builds the OpenCode image unchanged.
-	if { [ "${2:-codex}" = claude ] || [ "${action}" = prepare-ephemeral ]; } && [ -f "${support}/ai_engine.sh" ] && [ -f "${support}/claude_engine.py" ]; then
+	if { [ "${2:-}" = claude ] || { [ "${action}" = prepare-ephemeral ] && [ -z "${2:-}" ]; }; } && [ -f "${support}/ai_engine.sh" ] && [ -f "${support}/claude_engine.py" ]; then
 		# shellcheck source=ai_engine.sh
 		source "${support}/ai_engine.sh"
 		claude_cli_version="$(ai_engine_cli_version)"
@@ -51,7 +51,7 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 		image="$(timeout --signal=TERM --kill-after=10s 900s env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker build -q --build-arg "OPENCODE_VERSION=${version}" --build-arg "CLAUDE_CLI_VERSION=${claude_cli_version}" -f "${support}/review_sandbox/Dockerfile" "${support}/review_sandbox")"
 		printf 'claude\n' > "${root}/engine"
 	else
-		[ "${action}" != prepare-ephemeral ] || { echo '::error::Review Claude support missing' >&2; exit 1; }
+		[ "${action}" != prepare-ephemeral ] || [ "${2:-}" = codex ] || { echo '::error::Review Claude support missing' >&2; exit 1; }
 		image="$(env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker build -q --build-arg "OPENCODE_VERSION=${version}" -f "${support}/review_sandbox/Dockerfile" "${support}/review_sandbox")"
 	fi
 	[ -n "${image}" ] || exit 1

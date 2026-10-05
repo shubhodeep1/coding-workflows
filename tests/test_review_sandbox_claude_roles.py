@@ -110,10 +110,46 @@ def test_check_paths(tmp_path, name, accepted):
 
 def test_resolver_path_check_precedes_sandbox_and_does_not_pass_host_git_index():
 	text = (ROOT / "scripts/review_conflict_resolve.sh").read_text(encoding="utf-8")
-	branch = text[text.index('resolver_claude_rc=75'):text.index('if [ "${resolver_claude_rc}" -ne 75 ]; then')]
-	assert branch.index('check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}"') < branch.index('prepare-ephemeral')
+	guard = text[text.index('# Reject unsupported conflict paths for both engines'):text.index('attempt=1\nwhile ')]
+	branch = text[text.index('resolver_claude_rc=75'):text.index('resolver_clean_output="${tmp_output}.ansi-clean"')]
+	assert 'check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}"' in guard
+	assert guard.index('check-paths') < guard.index('prepare-ephemeral codex')
 	assert branch.index('prepare-ephemeral') < branch.index('/dev/null claude CONFLICT_RESOLVER write') < branch.index('cleanup')
 	assert 'GIT_INDEX_FILE=' not in branch
+	assert 'GIT_INDEX_FILE=' not in guard
+
+
+def test_prepare_ephemeral_codex_works_without_optional_claude_support(tmp_path):
+	workspace = tmp_path / "checkout"
+	workspace.mkdir()
+	subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+	(workspace / "app.py").write_text("value = 1\n")
+	support = tmp_path / "support"
+	support.mkdir()
+	for name in ("review_untrusted_workspace.py", "clarify_openrouter_broker.py"):
+		(support / name).symlink_to(ROOT / "scripts" / name)
+	(support / "review_sandbox").symlink_to(ROOT / "scripts/review_sandbox", target_is_directory=True)
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	docker = bin_dir / "docker"
+	docker.write_text('#!/bin/bash\nprintf "sha256:%064d\\n" 0\n')
+	docker.chmod(0o755)
+	env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", RUNNER_TEMP=str(tmp_path),
+		GITHUB_WORKSPACE=str(workspace), SUPPORT_SCRIPTS_DIR=str(support))
+	for inherited in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+		env.pop(inherited, None)
+	without_arg = subprocess.run(["bash", str(SANDBOX), "prepare-ephemeral"], cwd=workspace,
+		env=env, capture_output=True, text=True)
+	assert without_arg.returncode == 1
+	assert "Review Claude support missing" in without_arg.stderr
+	with_codex = subprocess.run(["bash", str(SANDBOX), "prepare-ephemeral", "codex"], cwd=workspace,
+		env=env, capture_output=True, text=True)
+	assert with_codex.returncode == 0, with_codex.stderr
+	root = Path(with_codex.stdout.strip())
+	assert (root / "image").exists()
+	assert not (root / "engine").exists()
+	assert subprocess.run(["bash", str(SANDBOX), "cleanup"], env=dict(env, REVIEW_SANDBOX_ROOT=str(root)),
+		capture_output=True).returncode == 0
 
 
 def test_progress_monitor_stops_without_waiting_for_its_sleep(tmp_path):

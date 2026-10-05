@@ -492,8 +492,8 @@ REVIEW_SITES = {
 	),
 	"review_conflict_resolve.sh": (
 		'/dev/null claude CONFLICT_RESOLVER write \\',
-		'elif [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then',
-		'        -- "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" \\',
+		'if [ "${resolver_claude_rc}" -eq 75 ]; then',
+		'      _resolver_sandbox_opencode_attempt',
 	),
 	"review_rb_judge.sh": (
 		'review_rb_claude_run read "${RB_JUDGE_PROMPT}" "${RB_JUDGE_OUTPUT}" "${JUDGE_STDERR_FILE}" "${level}" || rb_judge_claude_rc=$?',
