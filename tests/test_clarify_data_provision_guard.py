@@ -74,7 +74,9 @@ def test_nonweakening_fallback_still_avoids_loop(tmp_path: Path, fallback: str) 
 @pytest.mark.parametrize("fallback", [
 	"Skip this verification", "Disable signature check", "Bypass the approval gate",
 	"Proceed without verification", "Verification is optional", "Make the check advisory",
-	"Best effort verification", "Relax the security gate",
+	"Best effort verification", "Relax the security gate", "Do not verify the PR head",
+	"Don't verify the PR head", "Never check the PR head", "No verification needed",
+	"Refuse to validate the PR head", "Skip this verification, but provide the deployment URL",
 ])
 def test_weakening_fallbacks_are_rejected(tmp_path: Path, fallback: str) -> None:
 	questions = f"Q1: Which path?\n- A — Provide the PR URL for verification\n- B — {fallback}\n"
@@ -93,7 +95,21 @@ def test_branch_without_reliable_detector_is_not_accepted(tmp_path: Path) -> Non
 
 def test_no_fallback_preserves_original_decision(tmp_path: Path) -> None:
 	questions = "Q1: Which path?\n- A — Provide the PR URL\n- B — Supply the commit SHA\n"
-	assert _run_guard(tmp_path, questions=questions) == ANSWER
+	answer = ANSWER + "\nEXECUTION PLAN:\nPR: https://github.com/o/r/pull/12\n"
+	assert _run_guard(tmp_path, questions=questions, answer=answer) == answer
+
+
+def test_no_fallback_escalates_without_required_data(tmp_path: Path) -> None:
+	questions = "Q1: Which path?\n- A — Provide the PR URL\n- B — Supply the commit SHA\n"
+	result = _run_guard(tmp_path, questions=questions)
+	assert "Q1: ESCALATE" in result
+	assert "no safe fallback available" in result
+	assert auto_decisions.from_answers(questions, result)["answers"] == "Q1: ESCALATE\n"
+
+
+def test_fallback_requiring_other_unavailable_data_escalates(tmp_path: Path) -> None:
+	questions = "Q1: Which path?\n- A — Provide the PR URL\n- B — Use default PR URL for verification\n"
+	assert "Q1: ESCALATE" in _run_guard(tmp_path, questions=questions)
 
 
 def test_cli_ignores_missing_evidence_and_fails_open_on_error(tmp_path: Path) -> None:
@@ -109,4 +125,9 @@ def test_cli_ignores_missing_evidence_and_fails_open_on_error(tmp_path: Path) ->
 	present = subprocess.run(command + [str(evidence)], capture_output=True, text=True, check=True)
 	assert present.stdout.rstrip("\n") == ANSWER.rstrip("\n")
 	broken = subprocess.run(command + [str(tmp_path)], capture_output=True, text=True, check=True)
-	assert broken.stdout.rstrip("\n") == ANSWER.rstrip("\n") and "fail-open" in broken.stderr
+	assert "Q1: ESCALATE" in broken.stdout
+	fault = subprocess.run(
+		[sys.executable, str(GUARD_PATH), "--clarification-file", str(tmp_path), "--answers-file", str(answers)],
+		capture_output=True, text=True, check=True,
+	)
+	assert fault.stdout.rstrip("\n") == ANSWER.rstrip("\n") and "fail-open" in fault.stderr

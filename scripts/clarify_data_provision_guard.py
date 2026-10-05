@@ -4,8 +4,8 @@
 Detects when the auto-responder selected a lettered option that requires
 providing concrete external data (PR URLs, commit SHAs, branch names,
 deployment URLs, etc.) that the auto-responder does not have.  When such
-an option is detected, the guard overrides the answer with the most
-conservative fallback option from the same question.
+an option is detected, the guard selects a safe fallback from the same
+question or escalates when none is available.
 
 Exit codes:
   0 — answers are OK or were patched (patched answers on stdout)
@@ -35,7 +35,7 @@ _DATA_PROVISION_PATTERNS = [
 	re.compile(
 		r"(?:URL|PR\s+link|commit\s+SHA|branch\s+name|deployment\s+URL)\b"
 		r".{0,40}"
-		r"(?:for|of|from|to|containing|with)",
+		r"\b(?:for|of|from|to|containing|with)\b",
 		re.IGNORECASE,
 	),
 ]
@@ -56,6 +56,10 @@ _WEAKENS_CONTROL_PATTERNS = [
 	re.compile(
 		r"\b(?:verif|validat|check|signature|auth|security|review|approv|audit|scan|test|gate|guard|control)\w*\b"
 		r".{0,40}?\b(?:skipped|disabled|bypassed|omitted|waived|optional|not\s+required|advisory|best\s+effort|relax\w*)\b",
+		re.IGNORECASE,
+	),
+	re.compile(
+		r"\b(?:do\s+not|don't|never|no|refuse\s+to|stop)\s+(?:\w+\s+){0,2}(?:verif\w*|validat\w*|check\w*|auth\w*|review\w*|approv\w*|audit\w*|scan\w*|test\w*|guard\w*)\b",
 		re.IGNORECASE,
 	),
 ]
@@ -153,10 +157,9 @@ def _find_fallback(options: dict[str, str], exclude_letters: set[str]) -> tuple[
 		if letter in exclude_letters:
 			continue
 		if _option_weakens_control(text):
-			if not _option_requires_data(text):
-				rejected_weakening = letter
+			rejected_weakening = letter
 			continue
-		if _FALLBACK_PATTERNS.search(text):
+		if _FALLBACK_PATTERNS.search(text) and not _option_requires_data(text):
 			candidates.append(letter)
 
 	if candidates:
@@ -190,7 +193,7 @@ def run_guard(clarification_file: Path, answers_file: Path, evidence_files: tupl
 	# only the respondent's rationale/plan and supplied context can count.
 	evidence_text = "\n".join(line for line in answers_text.splitlines() if not _LETTER_DECISION_RE.fullmatch(line.strip()))
 	for evidence_file in evidence_files:
-		if evidence_file.exists():
+		if evidence_file.is_file():
 			evidence_text += "\n" + evidence_file.read_text(encoding="utf-8", errors="replace")
 
 	overrides: dict[str, str] = {}
@@ -225,6 +228,17 @@ def run_guard(clarification_file: Path, answers_file: Path, evidence_files: tupl
 					f"{qid}: Missing data required by option(s) {', '.join(sorted(data_requiring_letters))}: "
 					f"{'; '.join(q_options[letter] for letter in sorted(data_requiring_letters))}. "
 					f"Cannot use {rejected_weakening}: {q_options[rejected_weakening]} (weakens a control)."
+				)
+			else:
+				overrides[qid] = "ESCALATE"
+				override_reasons.append(
+					f"{qid}: escalated {'+'.join(sorted(data_requiring_letters))} "
+					"(option requires unavailable external data; no safe fallback available)"
+				)
+				escalations.append(
+					f"{qid}: Missing data required by option(s) {', '.join(sorted(data_requiring_letters))}: "
+					f"{'; '.join(q_options[letter] for letter in sorted(data_requiring_letters))}. "
+					"No fallback without unavailable data or weakened controls is available."
 				)
 
 	if not overrides:
