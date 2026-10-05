@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/editor_git_credentials.sh:Entire script | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The script dynamically modifies the repository's local Git configuration (`remote.origin.url` and `http.*.extraheader`) at runtime.\n  WHY: If the `hide` operation succeeds but the subsequent step (the editor process) or the `restore` operation fails (due to runner cancellation, node failure, or unexpected repository state), the repository may be left in a corrupted or unauthenticated state, causing all subsequent Git operations in the workflow to fail.\n- scripts/workflow_failure_heal_evidence.py:_ARTIFACT_ENV_ASSIGNMENT_RES regex definitions | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The redaction logic relies on a predefined set of regexes to drop environment variable assignments from artifact files.\n  WHY: If an environment variable or secret is exported using an unconventional format not covered by these regexes, it will be included in the diagnostic output, potentially leaking secrets into the evidence folder and subsequently into LLM agent prompts.\n- .github/workflows/clarify.yml:864-877 | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The \"Collect workflow-heal evidence\" step uses `continue-on-error: true`.\n  WHY: If the `collect` process fails, the pipeline logs a warning and proceeds, resulting in an incomplete evidence folder and downstream diagnosis attempts without the expected diagnostic data.\n- scripts/workflow_failure_heal_evidence.py:purge-legacy-cache call in Gate workflow-heal evidence step | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The script attempts to purge legacy caches using the same repository/run logic as the collection step.\n  WHY: If multiple workflow instances (e.g., clarify, plan, implement) are running for the same issue, they may race to purge the legacy cache folder, potentially leaving inconsistent state.\n- scripts/workflow_failure_heal_intake.sh:247-255 | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: If a raw job log fails to fetch or is empty, the loop handling job logs still leaves the corresponding entry in the summaries JSON referencing `FILTERED_LOG` and an empty `SLICED_LOG`.\n  WHY: Downstream steps expecting diagnostic output in the logs/sliced logs will encounter empty files, which might be incorrectly interpreted as \"no errors occurred\" or \"no log available,\" leading to incorrect diagnosis proposals.\n- scripts/run_plan_codex.sh:Lines 295\u2013308 | severity=critical | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The editor can replace `scripts/editor_git_credentials.sh` before the workflow invokes it for credential restoration.\n  WHY: The editor runs with repository access, while the parent plan step retains `GH_TOKEN` (`.github/workflows/plan.yml:1240\u20131245`). A modified restore script runs in that privileged environment and can exfiltrate the token before the later plan write guard runs.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/editor_git_credentials.sh:Entire script | confidence=4\n  PROBLEM: The script dynamically modifies the repository's local Git configuration (`remote.origin.url` and `http.*.extraheader`) at runtime.\n  WHY: If the `hide` operation succeeds but the subsequent step (the editor process) or the `restore` operation fails (due to runner cancellation, node failure, or unexpected repository state), the repository may be left in a corrupted or unauthenticated state, causing all subsequent Git operations in the workflow to fail.\n- scripts/workflow_failure_heal_evidence.py:_ARTIFACT_ENV_ASSIGNMENT_RES regex definitions | confidence=3\n  PROBLEM: The redaction logic relies on a predefined set of regexes to drop environment variable assignments from artifact files.\n  WHY: If an environment variable or secret is exported using an unconventional format not covered by these regexes, it will be included in the diagnostic output, potentially leaking secrets into the evidence folder and subsequently into LLM agent prompts.\n- .github/workflows/clarify.yml:864-877 | confidence=4\n  PROBLEM: The step uses `continue-on-error: true`.\n  WHY: If the `collect` process fails, the pipeline logs a warning and proceeds. While this prevents a pipeline stall, it results in an incomplete evidence folder (missing logs or artifacts), and the downstream diagnosis prompt will not receive the expected diagnostic data, leading to blind diagnosis attempts or incomplete failure analysis.\n- scripts/workflow_failure_heal_evidence.py:purge-legacy-cache call in Gate workflow-heal evidence step | confidence=3\n  PROBLEM: The script attempts to purge legacy caches using the same repository/run logic as the collection step.\n  WHY: If multiple workflow instances (e.g., clarify, plan, implement) are running for the same issue, they may race to purge the legacy cache folder. The best-effort purge might be interrupted or fail, potentially leaving inconsistent state. While fail-open is the intent, it's a source of flakiness.\n- scripts/workflow_failure_heal_intake.sh:247-255 | confidence=3\n  PROBLEM: If a raw job log fails to fetch or is empty, the script logs a warning, but the corresponding entry in the summaries JSON still references `FILTERED_LOG` and an empty `SLICED_LOG`.\n  WHY: Downstream steps expecting diagnostic output in the logs/sliced logs will encounter empty files, which might be incorrectly interpreted as \"no errors occurred\" or \"no log available,\" leading to incorrect diagnosis proposals.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/run_plan_codex.sh:Lines 295\u2013308 | severity=BLOCKER | confidence=5\n  PROBLEM: The editor can replace `scripts/editor_git_credentials.sh` before the workflow invokes it for credential restoration.\n  WHY: The editor runs with repository access, while the parent plan step retains `GH_TOKEN` (`.github/workflows/plan.yml:1240\u20131245`). A modified restore script runs in that privileged environment and can exfiltrate the token before the later plan write guard runs.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "cb39e3bdd3c303ab9ac45f6fe10af13420ecc5631e5a1ce6e023a29746ecf0fe",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6178,
+    "run_id": "37387112300",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37387112300",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005234501_20c07c59b9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6178,
+    "run_id": "37387112300"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-05T23:45:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
