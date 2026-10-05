@@ -243,7 +243,9 @@ _ai_engine_git_mask_configs()
 	local run_dir="$1" directory gitdir common config config_real mount_dir key count=0 keys_file
 	AI_ENGINE_ISOLATION_MASKS=()
 	local -a seen=()
-	for directory in "${AI_ENGINE_ISOLATION_WORKDIR}" "${AI_ENGINE_ISOLATION_PATHS[@]}"; do
+	for directory in "${AI_ENGINE_ISOLATION_WORKDIR}" "${AI_ENGINE_ISOLATION_PATHS[@]}" \
+			"${AI_ENGINE_ISOLATION_WORKDIR}/.codex-workflow-src" \
+			"${AI_ENGINE_ISOLATION_WORKDIR}/.codex-workflow-src-main"; do
 		if ! gitdir="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR git -C "${directory}" rev-parse --absolute-git-dir 2>/dev/null)"; then
 			# A malformed checkout must not bypass masking just because git cannot parse it.
 			[ ! -e "${directory}/.git" ] && [ ! -L "${directory}/.git" ] || return 1

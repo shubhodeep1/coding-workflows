@@ -2011,6 +2011,8 @@ writes (`CLAUDE_ENGINE_POOL_DIR`, default `$RUNNER_TEMP/claude-pool`: an
 `tokens/`). A usage-limited or rejected account moves the run to the next one.
 Read-profile calls run in a `--network none` container with a placeholder
 token; the host `scripts/claude_anthropic_relay.py` alone reads the pool token.
+The container masks credential-bearing Git configuration in the checkout and
+its nested `.codex-workflow-src` / `.codex-workflow-src-main` support checkouts.
 If isolation cannot start, `AI_ENGINE_FALLBACK reason=isolation_*` returns 75.
 For read-profile session reuse, an unavailable session directory reports
 `reason=isolation_session_dir_unavailable` before any container starts.
