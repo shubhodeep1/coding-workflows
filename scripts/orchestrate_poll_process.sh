@@ -15679,6 +15679,14 @@ _pr_json_is_issue_implementation_pr() {
   return 1
 }
 
+# Issue #6325: a fork can give its head the name of a branch in this repo.
+# Never use a PR's head ref as a write target without verifying its owner.
+_pr_json_head_is_same_repo() {
+  local _pr_head_repo
+  _pr_head_repo="$(printf '%s' "$1" | jq -er '.head.repo.full_name | select(type == "string" and length > 0)' 2>/dev/null)" || return 1
+  [ -n "${GITHUB_REPOSITORY:-}" ] && [ "${_pr_head_repo,,}" = "${GITHUB_REPOSITORY,,}" ]
+}
+
 # A branch name alone does not identify the repository that owns a PR head.
 # Reuse the already-fetched pulls/N payload before preparing a writable branch.
 _pr_json_head_repo_is_origin() {
@@ -21223,6 +21231,9 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
       RB_TARGET_MERGED="false"
       HEAD_REF=""
       BASE_REF=""
+      RB_FIX_TARGET_OK="false"
+      RB_FIX_TARGET_REASON="head_repo_unknown"
+      RB_FIX_TARGET_HEAD_SHA=""
       FOLLOWUP_BRANCH=""
       ORCH_FOLLOWUP_OWNED="false"
       ORCH_FOLLOWUP_TRACKING_NUM=""
@@ -21253,8 +21264,10 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
         # with RB_PR_STATE/RB_PR_MERGED regardless of which path we take.
         _rb_prev_pr_state="${RB_PR_STATE:-}"
         _rb_prev_pr_merged="${RB_PR_MERGED:-false}"
+        _rb_fix_refreshed="false"
         _rb_pr_json_refetched="$(_fetch_pr_json "${RB_PR}")"
         if printf '%s' "${_rb_pr_json_refetched}" | jq -e 'type == "object" and ((.state // "") | IN("open","closed","merged"))' >/dev/null 2>&1; then
+          _rb_fix_refreshed="true"
           _rb_pr_json="${_rb_pr_json_refetched}"
           RB_PR_STATE="$(_jq_field "${_rb_pr_json}" '.state' 'open|closed|merged')"
           RB_PR_MERGED="$(_jq_field "${_rb_pr_json}" '.merged_at != null' 'true|false')"
@@ -21271,23 +21284,50 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
         fi
         unset _rb_prev_pr_state _rb_prev_pr_merged _rb_pr_json_refetched
 
-        _rb_api_head_repo="$(printf '%s' "${_rb_pr_json}" | jq -r '.head.repo.full_name // empty | strings' 2>/dev/null || true)"
-        _rb_api_head_ref="$(printf '%s' "${_rb_pr_json}" | jq -r '.head.ref // empty | strings' 2>/dev/null || true)"
-        _rb_api_head_sha="$(printf '%s' "${_rb_pr_json}" | jq -r '.head.sha // empty | strings' 2>/dev/null || true)"
-        if [ -z "${_rb_api_head_repo}" ]; then
-          _rb_identity_reason="head_repo_unavailable"
-        elif ! _pr_json_head_repo_is_origin "${_rb_pr_json}"; then
-          _rb_identity_reason="cross_repository"
-        elif [ -z "${HEAD_REF}" ] || [ "${_rb_api_head_ref}" != "${HEAD_REF}" ]; then
-          _rb_identity_reason="head_ref_mismatch"
+        # The refresh is mandatory for a write target, even if an earlier
+        # snapshot is still good enough for the judge's read-only context.
+        if [ "${_rb_fix_refreshed}" != "true" ]; then
+          RB_FIX_TARGET_REASON="head_repo_unknown"
+        elif ! _pr_json_head_is_same_repo "${_rb_pr_json}"; then
+          _rb_head_repo="$(printf '%s' "${_rb_pr_json}" | jq -r '.head.repo.full_name // empty' 2>/dev/null || true)"
+          if [ -n "${_rb_head_repo}" ]; then
+            RB_FIX_TARGET_REASON="head_repo_mismatch"
+          else
+            RB_FIX_TARGET_REASON="head_repo_unknown"
+          fi
+        elif ! _pr_json_is_issue_implementation_pr "${rb_issue}" "${_rb_pr_json}"; then
+          RB_FIX_TARGET_REASON="not_implementation_pr"
         else
-          _rb_identity_reason=""
+          _rb_refreshed_head_ref="$(printf '%s' "${_rb_pr_json}" | jq -r '.head.ref // empty' 2>/dev/null || true)"
+          RB_FIX_TARGET_HEAD_SHA="$(printf '%s' "${_rb_pr_json}" | jq -r '.head.sha // empty' 2>/dev/null || true)"
+          if [ "${HEAD_REF}" != "${_rb_refreshed_head_ref}" ] || [ -z "${HEAD_REF}" ] || [ "${HEAD_REF}" = "null" ]; then
+            RB_FIX_TARGET_REASON="head_ref_changed"
+          elif [ "${RB_PR_MERGED}" != "true" ] && ! [[ "${RB_FIX_TARGET_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            RB_FIX_TARGET_REASON="head_sha_missing"
+          else
+            RB_FIX_TARGET_OK="true"
+            # Merged follow-ups do not need the old SHA, but never print an
+            # unvalidated value from a PR payload into the Actions log.
+            _rb_log_head_sha="unknown"
+            if [[ "${RB_FIX_TARGET_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+              _rb_log_head_sha="${RB_FIX_TARGET_HEAD_SHA}"
+            fi
+            echo "REVIEW_BLOCKED_FIX_TARGET_VERIFIED issue=${rb_issue} pr=${RB_PR} head_sha=${_rb_log_head_sha}"
+            unset _rb_log_head_sha
+          fi
         fi
-        if [ -n "${_rb_identity_reason}" ]; then
-          # PR metadata is untrusted: only print a bounded, single-line repo name.
-          _rb_safe_head_repo="$(printf '%s' "${_rb_api_head_repo:-none}" | LC_ALL=C tr -c '[:alnum:]/_.-' '?' | cut -c1-100)"
-          echo "::warning::Review-blocked PR #${RB_PR} head identity rejected (${_rb_identity_reason}); combined-mode branch prep skipped."
-          echo "REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=${rb_issue} pr=${RB_PR} reason=${_rb_identity_reason} head_repo=${_rb_safe_head_repo}"
+        unset _rb_fix_refreshed _rb_head_repo _rb_refreshed_head_ref
+        if [ "${RB_FIX_TARGET_OK}" != "true" ]; then
+          echo "REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=${rb_issue} pr=${RB_PR} reason=${RB_FIX_TARGET_REASON}"
+          tg_notify "Review-blocked fix target rejected for issue #${rb_issue} (PR #${RB_PR}): ${RB_FIX_TARGET_REASON}." "WARNING"
+          case "${RB_FIX_TARGET_REASON}" in
+            head_ref_changed) _rb_identity_reason="head_ref_mismatch" ;;
+            head_sha_missing) _rb_identity_reason="head_sha_unavailable" ;;
+            *) _rb_identity_reason="" ;;
+          esac
+          if [ -n "${_rb_identity_reason}" ]; then
+            echo "REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=${rb_issue} pr=${RB_PR} reason=${_rb_identity_reason}"
+          fi
           rm -f -- "${RB_JUDGE_SEMBLE_QUERY_FILE}"
           continue
         elif [ "${RB_PR_MERGED}" = "true" ]; then
@@ -21383,31 +21423,28 @@ ${FOLLOWUP_BLOCK_REASON}"
             unset _rb_co_src _rb_co_src_desc
           fi
         elif [ -n "${HEAD_REF}" ] && [ "${HEAD_REF}" != "null" ]; then
-          _rb_verified_head_sha=""
+          # Never fall back to local HEAD: it is not the verified PR head and
+          # could create or overwrite an unrelated branch on push.
           if ! git fetch --no-tags origin "+refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF}" 2>/dev/null; then
-            _rb_identity_reason="fetch_failed"
+            RB_FIX_TARGET_REASON="fetch_failed"
           else
-            _rb_verified_head_sha="$(git rev-parse --verify "refs/remotes/origin/${HEAD_REF}^{commit}" 2>/dev/null || true)"
-            if ! [[ "${_rb_api_head_sha}" =~ ^[0-9a-fA-F]{40}$ ]] || [ -z "${_rb_verified_head_sha}" ]; then
-              _rb_identity_reason="head_sha_unavailable"
-            elif [ "${_rb_api_head_sha,,}" != "${_rb_verified_head_sha,,}" ]; then
-              _rb_identity_reason="head_sha_mismatch"
+            _rb_fetched_head_sha="$(git rev-parse --verify "refs/remotes/origin/${HEAD_REF}^{commit}" 2>/dev/null || true)"
+            if [ "${_rb_fetched_head_sha}" != "${RB_FIX_TARGET_HEAD_SHA}" ]; then
+              RB_FIX_TARGET_REASON="head_sha_mismatch"
+            elif git worktree add --force -B "${HEAD_REF}" "${RB_COMBINED_WORKDIR}" "${RB_FIX_TARGET_HEAD_SHA}" >/dev/null 2>&1; then
+              RB_COMBINED_MODE="true"
+              RB_COMBINED_BRANCH_INFO="You are now on the PR branch (${HEAD_REF})."
+            else
+              RB_FIX_TARGET_REASON="fetch_failed"
             fi
           fi
-          if [ -n "${_rb_identity_reason}" ]; then
-            _rb_log_api_head_sha="none"
-            _rb_log_fetched_head_sha="none"
-            [[ "${_rb_api_head_sha}" =~ ^[0-9a-fA-F]{40}$ ]] && _rb_log_api_head_sha="${_rb_api_head_sha}"
-            [[ "${_rb_verified_head_sha}" =~ ^[0-9a-fA-F]{40}$ ]] && _rb_log_fetched_head_sha="${_rb_verified_head_sha}"
-            echo "::warning::Review-blocked PR #${RB_PR} head SHA could not be verified (${_rb_identity_reason}); combined-mode branch prep skipped."
-            echo "REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=${rb_issue} pr=${RB_PR} reason=${_rb_identity_reason} expected_sha=${_rb_log_api_head_sha} fetched_sha=${_rb_log_fetched_head_sha}"
+          unset _rb_fetched_head_sha
+          if [ "${RB_COMBINED_MODE}" != "true" ]; then
+            echo "REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=${rb_issue} pr=${RB_PR} reason=${RB_FIX_TARGET_REASON}"
+            tg_notify "Review-blocked fix target rejected for issue #${rb_issue} (PR #${RB_PR}): ${RB_FIX_TARGET_REASON}." "WARNING"
+            echo "REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=${rb_issue} pr=${RB_PR} reason=${RB_FIX_TARGET_REASON}"
             rm -f -- "${RB_JUDGE_SEMBLE_QUERY_FILE}"
             continue
-          elif git worktree add --force -B "${HEAD_REF}" "${RB_COMBINED_WORKDIR}" "${_rb_verified_head_sha}" >/dev/null 2>&1; then
-            RB_COMBINED_MODE="true"
-            RB_COMBINED_BRANCH_INFO="You are now on the PR branch (${HEAD_REF}) at verified head ${_rb_verified_head_sha}."
-          else
-            echo "::warning::Could not check out PR branch ${HEAD_REF} for issue #${rb_issue}; combined-mode fix not possible."
           fi
         else
           echo "::warning::Cannot determine PR head branch for #${RB_PR}; combined-mode fix not possible."
@@ -21850,6 +21887,21 @@ sys.exit(1)
                   STATE_FOLLOWUP_INTEGRATION_BRANCH_EXISTS="true"
                 fi
               fi
+            else
+              # This is the same pulls/N read used by the merge-race check;
+              # an absent or moved head cannot authorize a write to HEAD_REF.
+              _rb_recheck_target_reason=""
+              if ! _pr_json_head_is_same_repo "${_rb_recheck_json}"; then
+                _rb_recheck_target_reason="head_repo_mismatch"
+              else
+                _rb_recheck_head_ref="$(printf '%s' "${_rb_recheck_json}" | jq -r '.head.ref // empty' 2>/dev/null || true)"
+                _rb_recheck_head_sha="$(printf '%s' "${_rb_recheck_json}" | jq -r '.head.sha // empty' 2>/dev/null || true)"
+                if [ "${_rb_recheck_head_ref}" != "${HEAD_REF}" ]; then
+                  _rb_recheck_target_reason="head_ref_changed"
+                elif [ "${_rb_recheck_head_sha}" != "${RB_FIX_TARGET_HEAD_SHA}" ]; then
+                  _rb_recheck_target_reason="head_moved"
+                fi
+              fi
             fi
             if [ "${RB_COMBINED_MODE}" = "true" ] \
                && [ "${RB_TARGET_MERGED}" != "true" ] \
@@ -21858,6 +21910,12 @@ sys.exit(1)
               rb_cleanup_combined_workspace
               REVIEW_BLOCKED_STATE_CHANGED=true
               RB_SKIP_RETRY_INCREMENT="true"
+            elif [ "${RB_COMBINED_MODE}" = "true" ] && [ "${RB_TARGET_MERGED}" != "true" ] \
+              && [ -n "${_rb_recheck_target_reason}" ]; then
+              echo "REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=${rb_issue} pr=${RB_PR} reason=${_rb_recheck_target_reason}"
+              rb_cleanup_combined_workspace
+              RB_SKIP_RETRY_INCREMENT="true"
+              REVIEW_BLOCKED_STATE_CHANGED=true
             elif [ "${RB_COMBINED_MODE}" != "true" ]; then
               echo "::warning::Combined-mode branch prep did not succeed for PR #${RB_PR}; cannot apply judge fixes this tick."
               rb_cleanup_combined_workspace

@@ -19,6 +19,8 @@ import time
 import unittest
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
@@ -955,10 +957,13 @@ def _run_poller(
 		]
 		pr_api_sequence = {
 			pr_number: [
-				{**pr, **({"headSha": _resolve_sandbox_sha_alias(str(pr["headSha"]))} if "headSha" in pr else {})}
-				for pr in sequence
+				{
+					**snapshot,
+					**({"headSha": _resolve_sandbox_sha_alias(str(snapshot["headSha"]))} if "headSha" in snapshot else {}),
+				}
+				for snapshot in snapshots
 			]
-			for pr_number, sequence in pr_api_sequence.items()
+			for pr_number, snapshots in pr_api_sequence.items()
 		}
 		resolved_pull_ref_shas = {
 			str(pr_number): _resolve_sandbox_sha_alias(raw_sha)
@@ -2346,8 +2351,10 @@ if args[0] == 'api':
 				'head': {
 					'sha': pr.get('headSha', f'mocksha{pr_num}'),
 					'ref': pr.get('headRefFromApi', pr.get('headRefName', '')),
-					'repo': ({'full_name': pr.get('headRepoFullName', os.environ.get('GITHUB_REPOSITORY', 'owner/repo'))}
-					         if pr.get('headRepoFullName', True) is not None else None),
+					'repo': (
+						None if pr.get('headRepoFullName', os.environ.get('GITHUB_REPOSITORY', 'owner/repo')) is None
+						else {'full_name': pr.get('headRepoFullName', os.environ.get('GITHUB_REPOSITORY', 'owner/repo'))}
+					),
 				},
 			}))
 		sys.exit(0)
@@ -9704,7 +9711,9 @@ def _review_blocked_fix_scope_case(
 	pr_changed_file_count: int | None = None,
 	env_overrides: dict[str, str] | None = None,
 	sandbox_origin_url: str | None = None,
-	head_repo: str | None = "owner/repo", head_sha: str = "@sandbox_head",
+	pr_overrides: dict | None = None,
+	pr_api_sequence: dict[int, list[dict]] | None = None,
+	head_repo: str | None = "owner/repo", head_sha: str = "__default_head__",
 	head_ref_from_api: str = "ai/issue-10",
 	missing_git_branch_fetches: list[str] | None = None,
 	refetched_head_ref: str | None = None, codex_action: str = "fix",
@@ -9726,10 +9735,12 @@ def _review_blocked_fix_scope_case(
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:review-blocked"]},
 		issue_linked_prs={10: 901},
-		prs=[pr_details],
-		pr_api_sequence={901: [dict(pr_details) for _ in range(4)] + [
-			{**pr_details, "headRefFromApi": refetched_head_ref},
-		]} if refetched_head_ref is not None else None,
+		prs=[{**pr_details, **(pr_overrides or {})}],
+		pr_api_sequence=pr_api_sequence if pr_api_sequence is not None else (
+			{901: [dict(pr_details) for _ in range(4)] + [
+				{**pr_details, "headRefFromApi": refetched_head_ref},
+			]} if refetched_head_ref is not None else None
+		),
 		codex_json={
 			"action": codex_action, "justification": "apply fixes",
 			"fix_description": description,
@@ -9748,13 +9759,126 @@ def _review_blocked_fix_scope_case(
 
 def test_review_blocked_fix_scope_accepts_pr_file():
 	result = _review_blocked_fix_scope_case(touch="sandbox_fix.txt", files=["sandbox_fix.txt"])
+	assert "REVIEW_BLOCKED_FIX_TARGET_VERIFIED issue=10 pr=901 head_sha=" in result["stdout"]
 	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
 	assert result.get("git_push_calls", [])
+	assert any("HEAD:ai/issue-10" in call for call in result["git_push_calls"])
 	assert "ai:review-blocked" not in result["issues"]["10"]["labels"]
 	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
 	assert "LOG_PREFIX.name=REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED" in agents_text
 	assert "LOG_PREFIX.name=REVIEW_BLOCKED_FIX_SCOPE_REJECTED" in agents_text
+	assert "LOG_PREFIX.name=REVIEW_BLOCKED_FIX_TARGET_VERIFIED" in agents_text
+	assert "LOG_PREFIX.name=REVIEW_BLOCKED_FIX_TARGET_REJECTED" in agents_text
 	assert "LOG_PREFIX.name=REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED" in agents_text
+
+
+def test_review_blocked_fix_target_rejects_untrusted_pr():
+	for pr_overrides, reason in (
+		({"headRepoFullName": "attacker/repo", "headRefName": "main", "headRefFromApi": "main", "body": "Refs #10"}, "cross_repository"),
+		({"headRepoFullName": None}, "head_repo_unavailable"),
+		({"headRefName": "feature/x", "headRefFromApi": "feature/x", "body": "Refs #10"}, "not_implementation_pr"),
+		({"headSha": "not-a-sha"}, "head_sha_missing"),
+	):
+		result = _review_blocked_fix_scope_case(
+			touch="sandbox_fix.txt", files=["sandbox_fix.txt"], pr_overrides=pr_overrides,
+		)
+		assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
+		assert result.get("git_push_calls", []) == []
+		assert result.get("review_blocked_fix_commit_calls", []) == []
+		assert "Judge decision for #10" not in result["stdout"]
+
+
+def test_review_blocked_fix_target_rejects_failed_fetch_without_local_fallback():
+	result = _review_blocked_fix_scope_case(
+		touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
+		missing_git_branch_fetches=["ai/issue-10"],
+	)
+	assert "REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=fetch_failed" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+
+
+def test_review_blocked_fix_target_rejects_fetched_tip_mismatch():
+	result = _review_blocked_fix_scope_case(
+		touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
+		pr_overrides={"headSha": "f" * 40},
+	)
+	assert "REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=head_sha_mismatch" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+
+
+def test_review_blocked_fix_target_rejects_ref_change_before_checkout():
+	open_pr = {
+		"number": 901, "state": "open", "merged": False,
+		"headRefName": "ai/issue-10", "headRefFromApi": "ai/issue-10",
+		"headSha": "__default_head__", "baseRefName": "main",
+		"body": "Closes #10", "mergeable": True, "mergeable_state": "clean",
+	}
+	result = _review_blocked_fix_scope_case(
+		touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
+		pr_api_sequence={901: [dict(open_pr) for _ in range(5)] + [{**open_pr, "headRefFromApi": "feature/other"}]},
+	)
+	assert "REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=head_ref_changed" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+
+
+def test_review_blocked_fix_target_rejects_head_move_during_judge():
+	for changed_pr, reason in (
+		({"headSha": "__integration_head__"}, "head_moved"),
+		({"headRepoFullName": "attacker/repo"}, "head_repo_mismatch"),
+		({"headRefFromApi": "feature/other"}, "head_ref_changed"),
+	):
+		open_pr = {
+			"number": 901, "state": "open", "merged": False,
+			"baseRefName": "main", "headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10", "headSha": "__default_head__",
+			"mergeable": True, "mergeable_state": "clean", "body": "Body",
+		}
+		result = _review_blocked_fix_scope_case(
+			touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
+			# Reconciliation and branch prep consume six pulls/901 reads; the
+			# subsequent re-check must see the changed SHA.
+			pr_api_sequence={901: [dict(open_pr) for _ in range(6)] + [{**open_pr, **changed_pr}]},
+		)
+		assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
+		assert result.get("git_push_calls", []) == []
+		assert result.get("review_blocked_fix_commit_calls", []) == []
+		assert result["latest_state"]["review_blocked_retries"].get("10", 0) == 0
+
+
+def test_review_blocked_merged_fix_target_rejects_unrelated_followup():
+	for merged_overrides, reason in (
+		({"headRepoFullName": "attacker/repo"}, "head_repo_mismatch"),
+		({"headRefName": "feature/x", "headRefFromApi": "feature/x", "body": "Refs #10"}, "not_implementation_pr"),
+	):
+		state = _base_state(status="in_progress")
+		state["integration_branch"] = "orchestrator/project-192"
+		state["waves"][0]["issues"][0]["status"] = "review-blocked"
+		open_pr = {
+			"number": 901, "state": "open", "merged": False,
+			"headRefName": "ai/issue-10", "headRefFromApi": "ai/issue-10",
+			"baseRefName": "main", "body": "Closes #10",
+			"mergeable": True, "mergeable_state": "clean",
+		}
+		merged_pr = {
+			**open_pr, "state": "closed", "merged": True,
+			"merged_at": "2026-04-15T00:00:00Z", **merged_overrides,
+		}
+		result = _run_poller(
+			state=state, enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:review-blocked"]}, issue_linked_prs={10: 901},
+			pr_api_sequence={901: [dict(open_pr) for _ in range(4)] + [dict(merged_pr)]},
+			prs=[{**merged_pr, "files": ["sandbox_fix.txt"]}],
+			existing_branches=["main", "orchestrator/project-192"],
+			codex_json={"action": "fix", "justification": "apply fixes", "fix_description": "patched"},
+			codex_touch_file="sandbox_fix.txt", mock_git_push_success=True,
+		)
+		assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
+		assert result.get("git_push_calls", []) == []
+		assert result.get("review_blocked_fix_commit_calls", []) == []
+		assert len(result["prs"]) == 1
 
 
 def test_review_blocked_rejects_unverified_open_pr_head():
@@ -9807,7 +9931,7 @@ def test_review_blocked_rejects_fork_before_any_judge_action():
 
 def test_review_blocked_open_pr_head_identity_contract():
 	text = POLLER_SCRIPT.read_text(encoding="utf-8")
-	assert '"${RB_COMBINED_WORKDIR}" "${_rb_verified_head_sha}"' in text
+	assert '"${RB_COMBINED_WORKDIR}" "${RB_FIX_TARGET_HEAD_SHA}"' in text
 	assert "reusing local HEAD as PR branch base" not in text
 	judge_section = text.split("# Guard: check PR state before invoking the judge", 1)[1]
 	assert judge_section.index('if ! _pr_json_head_repo_is_origin "${_rb_pr_json}"; then') < judge_section.index("# Run the judge")
@@ -9955,6 +10079,65 @@ def test_review_blocked_fix_scope_protected_reason_wins_for_mixed_rejections():
 	)
 	assert "reason=protected_not_in_pr rejected=2 paths=docs/new.md,scripts/evil.sh" in result["stdout"]
 	assert result.get("git_push_calls", []) == []
+
+
+def test_review_blocked_fix_scope_rejects_uncited_unrelated_workflow():
+	result = _review_blocked_fix_scope_case(
+		touch=".github/workflows/unrelated.yml", files=["sandbox_fix.txt"],
+		env_overrides={"ALLOW_WORKFLOW_EDITS": "true"},
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_not_in_pr rejected=1 paths=.github/workflows/unrelated.yml" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
+
+
+def test_review_blocked_fix_scope_rejects_uncited_unrelated_script():
+	result = _review_blocked_fix_scope_case(
+		touch="scripts/unrelated.sh", files=["sandbox_fix.txt"],
+		env_overrides={"ALLOW_WORKFLOW_EDITS": "true"},
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_not_in_pr rejected=1 paths=scripts/unrelated.sh" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
+
+
+def test_review_blocked_fix_scope_rejects_unrelated_action_and_claude_hook():
+	result = _review_blocked_fix_scope_case(
+		touch=".github/actions/x/action.yml", files=["sandbox_fix.txt"],
+		env_overrides={
+			"ALLOW_WORKFLOW_EDITS": "true",
+			"MOCK_CODEX_TOUCH_FILE": ".github/actions/x/action.yml\n.claude/hooks/x.py",
+		},
+	)
+	assert "reason=protected_not_in_pr rejected=2" in result["stdout"]
+	assert any(
+		".github/actions/x/action.yml" in line and ".claude/hooks/x.py" in line
+		for line in result["stdout"].splitlines() if "REVIEW_BLOCKED_FIX_SCOPE_REJECTED" in line
+	)
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+
+
+def test_review_blocked_fix_scope_rejects_mixed_in_scope_and_unrelated_workflow():
+	result = _review_blocked_fix_scope_case(
+		touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
+		remaining=[{"file": ".github/workflows/unrelated.yml"}],
+		description="Updated `.github/workflows/unrelated.yml`",
+		env_overrides={
+			"ALLOW_WORKFLOW_EDITS": "true",
+			"MOCK_CODEX_TOUCH_FILE": "sandbox_fix.txt\n.github/workflows/unrelated.yml",
+		},
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_not_in_pr rejected=1 paths=.github/workflows/unrelated.yml" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
 
 
 def test_review_blocked_fix_scope_accepts_protected_pr_file():
@@ -22565,6 +22748,21 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 		) == 0
 	assert '"event":"heartbeat"' not in pass_output.getvalue()
 	assert '"event":"slowest"' not in pass_output.getvalue()
+
+
+def test_custom_runner_tests_need_no_pytest_arguments():
+	import inspect
+
+	# CI discovers these functions by name and invokes each with func().
+	required_arguments = []
+	for name, func in globals().items():
+		if not name.startswith("test_") or not callable(func):
+			continue
+		try:
+			inspect.signature(func).bind()
+		except TypeError:
+			required_arguments.append(name)
+	assert not required_arguments, required_arguments
 
 
 def _extract_bash_function(script: str, signature: str) -> str:
