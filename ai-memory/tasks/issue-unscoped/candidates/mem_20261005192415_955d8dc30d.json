@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_single_issue_security_pass.sh:299-310 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The `awaiting_followups` branch holds instead of dispatching the additional audit cycle when a verified extension raises `effective_max` above `cycles_used`.\n  WHY: With five findings markers at HEAD and one verified extension, the gate returns `outcome=hold reason=awaiting_followups cycle=5` instead of dispatching cycle 6, leaving the extension-granted audit cycle unused.\n- tests/test_single_issue_security_pass.py:322-340 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: The `test_shallow_existing_extension_unshallows_before_exhaustion` fixture places findings at the current HEAD, triggering `awaiting_followups` while expecting dispatch of cycle 6.\n  WHY: The gate holds when findings are recorded for the current head and the cycle budget remains; these reviewers identify the fixture as inconsistent with the expected dispatch scenario.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_single_issue_security_pass.sh:299 | severity=critical | confidence=5\n  PROBLEM: The `awaiting_followups` gate check fires when extensions have been verified (`extensions > 0`), blocking the dispatch those extensions were granted to enable.\n  WHY: With five findings markers at the current head and one verified extension marker, the gate holds at cycle 5 instead of dispatching cycle 6.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_single_issue_security_pass.py:326-340 | severity=critical | confidence=5\n  PROBLEM: The test fixture in `test_shallow_existing_extension_unshallows_before_exhaustion` sets the findings marker at HEAD, triggering the gate's `awaiting_followups` logic instead of dispatching the expected next cycle.\n  WHY: The gate holds auditing the current head because it has findings, violating the test's assertion that it should immediately dispatch cycle 6.\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_single_issue_security_pass.sh:299 | severity=critical | confidence=5\n  PROBLEM: The `awaiting_followups` hold fires when findings exist at the current head and a verified extension raises `effective_max` above `cycles_used`.\n  WHY: The extension's fix is already on the branch, but the gate holds at cycle 5 rather than dispatching cycle 6, leaving the PR stuck.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_single_issue_security_pass.py:332 | severity=critical | confidence=5\n  PROBLEM: The fixture puts a cycle-5 findings marker on the current HEAD but expects the gate to dispatch cycle 6.\n  WHY: The gate intentionally holds when findings are recorded for the current head and the cycle budget remains, returning `awaiting_followups` at `scripts/review_single_issue_security_pass.sh:299-305`.\n\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_single_issue_security_pass.sh:300-310 | severity=critical | confidence=5\n  PROBLEM: The `awaiting_followups` branch holds the gate when `cycles_used < effective_max`, including when a verified extension grants one more audit cycle.\n  WHY: With five findings markers at HEAD and one trusted extension marker, the gate holds at cycle 5 and never dispatches cycle 6.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_single_issue_security_pass.py:322 | severity=critical | confidence=5\n  PROBLEM: The test fixture places the findings marker at HEAD, triggering `awaiting_followups` rather than the expected dispatch.\n  WHY: The review identifies this as an impossible production state and says the findings marker should be at a SHA different from HEAD to match the passing counterpart test.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "87bc5e2d21f63b17046af924b8b15fce348f8072218acd2046cfd3a8dcbd9402",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6377,
+    "run_id": "37352955393",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37352955393",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005192415_955d8dc30d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6377,
+    "run_id": "37352955393"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T19:24:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
