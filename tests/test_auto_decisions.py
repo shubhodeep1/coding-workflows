@@ -173,3 +173,49 @@ def test_implement_appends_the_section_before_the_lint() -> None:
 	assert "security_dependency.py auto_decisions.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do" in text
 	section = text.index("auto_decisions.py\" pr-section")
 	assert text.index('printf \'Refs #%s\\n\' "${TRACKING_ISSUE_NUMBER}"') < section < text.index('printf \'%s\\n\\n\' "${PR_TITLE}" > "${PR_LINT_FILE}"')
+
+
+def _run_clarify_tg_alert(tmp_path: Path, answered: str, orchestrator_managed: str = "false") -> str:
+	"""Run the Telegram clarification step with a stub sender; return what it sent."""
+	step = _steps(CLARIFY, _job(CLARIFY))["Telegram clarification notification"]
+	script = step["run"]
+	for expression, value in {
+		"${{ github.server_url }}": "https://github.com",
+		"${{ github.repository }}": "owner/repo",
+		"${{ github.run_id }}": "1",
+		"${{ steps.clarify_route.outputs.is_orchestrator_managed }}": orchestrator_managed,
+		"${{ steps.clarify_route.outputs.is_forced_reclarify }}": "false",
+	}.items():
+		script = script.replace(expression, value)
+	assert "${{" not in script
+	sent = tmp_path / "sent.txt"
+	(tmp_path / "scripts").mkdir(exist_ok=True)
+	(tmp_path / "scripts" / "tg_helpers.sh").write_text(
+		f'tg_send_phase_tracked() {{ printf "%s|%s\\n" "$4" "$3" >> "{sent}"; }}\n', encoding="utf-8"
+	)
+	env = {
+		"PATH": "/usr/bin:/bin",
+		"ISSUE_NUMBER": "6262",
+		"ISSUE_TITLE": "title",
+		"ISSUE_URL": "https://github.com/owner/repo/issues/6262",
+		"CLARIFY_AUTO_DECIDE_ANSWERED": answered,
+	}
+	result = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	return (sent.read_text(encoding="utf-8") if sent.exists() else "") + result.stdout
+
+
+def test_clarify_tg_alert_skips_auto_answered_questions(tmp_path: Path) -> None:
+	# Issue #6262: the alert fired after the auto-decide step had already answered.
+	steps = _steps(CLARIFY, _job(CLARIFY))
+	assert steps["Standalone auto-decide"]["id"] == "standalone_auto_decide"
+	assert 'echo "answered=true" >> "$GITHUB_OUTPUT"' in steps["Standalone auto-decide"]["run"]
+	run = steps["Standalone auto-decide"]["run"]
+	assert run.index('grep -q "^Posted auto-answer on issue #${ISSUE_NUMBER}$"') < run.index('echo "answered=true"')
+	env = steps["Telegram clarification notification"]["env"]
+	assert env["CLARIFY_AUTO_DECIDE_ANSWERED"] == "${{ steps.standalone_auto_decide.outputs.answered || 'false' }}"
+	skipped = _run_clarify_tg_alert(tmp_path, "true")
+	assert "CRITICAL" not in skipped
+	assert "AI_PHASE_GATE_V1 phase=clarify gate=tg_alert reason=auto_answered outcome=skip issue=6262" in skipped
+	paged = _run_clarify_tg_alert(tmp_path, "false")
+	assert "CRITICAL|Clarification required for #6262: title" in paged
