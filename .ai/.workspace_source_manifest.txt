@@ -124,7 +124,6 @@ ai_pipeline.md
 analysis/last_collection_timestamp.txt
 analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
-analysis/workflow-optimization-2026-09-03.md
 analysis/workflow-optimization-2026-09-06.md
 analysis/workflow-optimization-2026-09-07.md
 analysis/workflow-optimization-2026-09-08.md
@@ -205,6 +204,7 @@ changelog.d/6118-phase-8a-single-issue-security-pass.md
 changelog.d/6118-phase-8b-standalone-auto-decide.md
 changelog.d/6118-phase-8c-activation-verification.md
 changelog.d/6118-phase-8d-retarget-merged-base.md
+changelog.d/6133-pr-merge-guard-live-copy-sync.md
 changelog.d/6181-review-transfer-failure-evidence.md
 changelog.d/6193-claude-write-role-tool-list.md
 changelog.d/6202-claude-md-25-scheduled-status-checks.md

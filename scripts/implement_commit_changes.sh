@@ -52,6 +52,18 @@ trap on_step_exit EXIT
 exec 3>&2
 exec 2> >(tee "${STEP_STDERR_FILE}" >&3)
 
+_implement_output_multiline() {
+  local key="$1" value="$2" severity="${3:-error}" hex delim collision_rc=0
+  hex="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')" || hex=""
+  delim="IMPLEMENT_ENVFILE_${hex}"
+  grep -Fxq -- "${delim}" <<< "${value}" || collision_rc=$?
+  if ! [[ "${hex}" =~ ^[0-9a-f]{32}$ ]] || [ "${collision_rc}" -ne 1 ]; then
+    echo "::${severity}::Unable to safely write multiline output for ${key}."
+    return 1
+  fi
+  printf '%s<<%s\n%s\n%s\n' "${key}" "${delim}" "${value}" "${delim}" >> "$GITHUB_OUTPUT"
+}
+
 # Remove workflow-generated/fetched artifacts BEFORE checking for
 # changes so they don't cause false-positive "file changes" detection.
 # Restore pre_assembled_static.txt from HEAD when the consumer tracks it;
@@ -87,10 +99,8 @@ if [ -n "${fetched_manifest_path}" ] && [ -f "${fetched_manifest_path}" ]; then
     {
       echo "destructive_commit_blocked=unsafe-fetched-manifest"
       echo "destructive_commit_count=${unsafe_fetched_count}"
-      echo 'destructive_commit_deletions<<__DCD_EOF__'
-      printf '%s\n' "${unsafe_fetched_paths}"
-      echo '__DCD_EOF__'
     } >> "$GITHUB_OUTPUT"
+    _implement_output_multiline destructive_commit_deletions "${unsafe_fetched_paths}"
     exit 1
   fi
   if [ "${#safe_fetched_paths[@]}" -gt 0 ]; then
@@ -442,10 +452,8 @@ if [ -n "${deleted_staged}" ]; then
     {
       echo "destructive_commit_blocked=canonical-source"
       echo "destructive_commit_count=${total_deletions}"
-      echo 'destructive_commit_deletions<<__DCD_EOF__'
-      printf '%s\n' "${deleted_staged}"
-      echo '__DCD_EOF__'
     } >> "$GITHUB_OUTPUT"
+    _implement_output_multiline destructive_commit_deletions "${deleted_staged}"
     exit 1
   fi
 
@@ -458,10 +466,8 @@ if [ -n "${deleted_staged}" ]; then
       echo "destructive_commit_count=${total_deletions}"
       echo "destructive_commit_threshold_label=${threshold_label}"
       echo "destructive_commit_effective_threshold=${effective_threshold}"
-      echo 'destructive_commit_deletions<<__DCD_EOF__'
-      printf '%s\n' "${deleted_staged}"
-      echo '__DCD_EOF__'
     } >> "$GITHUB_OUTPUT"
+    _implement_output_multiline destructive_commit_deletions "${deleted_staged}"
     exit 1
   fi
 fi
@@ -516,13 +522,9 @@ else
           {
             echo "scope_violation_blocked=out-of-scope"
             echo "scope_violation_count=${scope_count}"
-            echo 'scope_violation_files<<__SVF_EOF__'
-            printf '%s\n' "${scope_violations}" | sed '/^$/d'
-            echo '__SVF_EOF__'
-            echo 'scope_violation_allowlist<<__SVA_EOF__'
-            printf '%s\n' "${scope_allowlist}" | sed '/^$/d'
-            echo '__SVA_EOF__'
           } >> "$GITHUB_OUTPUT"
+          _implement_output_multiline scope_violation_files "$(printf '%s\n' "${scope_violations}" | sed '/^$/d')"
+          _implement_output_multiline scope_violation_allowlist "$(printf '%s\n' "${scope_allowlist}" | sed '/^$/d')"
           rm -f "${scope_allowlist_file}"
           exit 1
         fi
@@ -594,11 +596,7 @@ if [ -z "$(git diff --cached --name-only)" ]; then
     echo "${remaining_changes}" | sed 's/^/  /'
     echo "If these are legitimate consumer-repo files, the pathspec exclusions in the commit step may be too broad."
     # Pass to Handle no-op step for inclusion in the issue comment
-    {
-      echo "remaining_changes<<__RC_EOF__"
-      echo "${remaining_changes}"
-      echo "__RC_EOF__"
-    } >> "$GITHUB_OUTPUT"
+    _implement_output_multiline remaining_changes "${remaining_changes}"
   fi
   echo "did_commit=false" >> "$GITHUB_OUTPUT"
   exit 0
@@ -649,13 +647,9 @@ if [ "${SCOPE_LOCK_LABEL_ENABLED:-false}" = "true" ] && [ -n "${ISSUE_SCOPE_LOCK
         {
           echo "scope_violation_blocked=scope-lock-label"
           echo "scope_violation_count=${scope_count}"
-          echo 'scope_violation_files<<__SVF_EOF__'
-          printf '%s\n' "${scope_violations}" | sed '/^$/d'
-          echo '__SVF_EOF__'
-          echo 'scope_violation_allowlist<<__SVA_EOF__'
-          printf '%s\n' "${scope_allowlist}" | sed '/^$/d'
-          echo '__SVA_EOF__'
         } >> "$GITHUB_OUTPUT"
+        _implement_output_multiline scope_violation_files "$(printf '%s\n' "${scope_violations}" | sed '/^$/d')"
+        _implement_output_multiline scope_violation_allowlist "$(printf '%s\n' "${scope_allowlist}" | sed '/^$/d')"
         rm -f "${scope_allowlist_file}"
         git reset --hard HEAD^ >/dev/null 2>&1
         exit 1
