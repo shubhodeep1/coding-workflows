@@ -663,8 +663,6 @@ def deps_filter(lines, project_name="", max_entries=MAX_DEPS_REQUIREMENTS):
 							reason = "unsafe_direct_reference"
 					elif "@" in line or "/" in line or "\\" in line or "${" in line:
 						reason = "unsafe_requirement"
-					elif any(token.startswith("--") and not DEPS_HASH_RE.fullmatch(token) for token in parts[1:]):
-						reason = "per_requirement_option"
 		if reason:
 			# Requirement text may contain tokens or URL credentials: never log it.
 			log(f"stage-deps dropped requirement index={index} reason={reason}")
@@ -729,7 +727,8 @@ def stage_deps(work, stage):
 			remaining -= len(filtered)
 			(meta / filename).write_text("\n".join(filtered) + "\n", encoding="utf-8")
 		python_mode = "both" if python_mode == "requirements" else "pyproject"
-	if python_mode in ("pyproject", "both") or (python_mode == "requirements" and deps_manifest(work, "setup.py") is not None):
+	if (python_mode in ("pyproject", "both") and ("project" in project or "build-system" in project)
+		or python_mode != "none" and deps_manifest(work, "setup.py") is not None):
 		(meta / "source-install").touch()
 	(meta / "python").write_text(python_mode + "\n", encoding="ascii")
 	if (any(deps_manifest(work, name) is not None for name in ("pytest.ini", "conftest.py", "tests/conftest.py"))

@@ -478,6 +478,23 @@ def test_stage_deps_bad_pyproject_degrades_without_install(tmp_path):
 	assert not (stage / ".codex-deps" / "source-install").exists()
 
 
+@pytest.mark.parametrize("with_requirements", [False, True])
+def test_stage_deps_config_only_pyproject_skips_source_install(tmp_path, with_requirements):
+	work = tmp_path / "work"
+	work.mkdir()
+	(work / "pyproject.toml").write_text('[tool.ruff]\nline-length = 100\n')
+	if with_requirements:
+		(work / "requirements.txt").write_text("requests==2\n")
+	stage = tmp_path / "stage"
+	run("stage-deps", work, stage)
+	meta = stage / ".codex-deps"
+	assert (meta / "python").read_text().strip() == ("both" if with_requirements else "pyproject")
+	assert not (meta / "source-install").exists()
+	assert (meta / "base.txt").read_text() == "\n"
+	if with_requirements:
+		assert (meta / "requirements.txt").read_text().splitlines() == ["requests==2"]
+
+
 def test_stage_deps_never_follows_nested_symlinks_for_pytest_marker(tmp_path):
 	work = tmp_path / "work"
 	work.mkdir()
