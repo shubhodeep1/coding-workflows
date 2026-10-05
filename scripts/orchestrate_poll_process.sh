@@ -8786,6 +8786,9 @@ import sys
 import tempfile
 
 wt, baseline_dir, final_pr = sys.argv[1:]
+git_env = os.environ.copy()
+for git_var_name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
+    git_env.pop(git_var_name, None)
 
 def log(outcome, reason, paths=()):
     print(f"INTEGRATION_JUDGE_SCOPE pr={final_pr} outcome={outcome} reason={reason} paths={len(paths)}", file=sys.stderr)
@@ -8793,7 +8796,7 @@ def log(outcome, reason, paths=()):
         print(f"  path={ascii(os.fsdecode(path))}", file=sys.stderr)
 
 def git(*args, index=None):
-    env = os.environ.copy()
+    env = git_env.copy()
     if index is not None:
         env["GIT_INDEX_FILE"] = index
     return subprocess.run(("git", "-C", wt, *args), env=env, check=True, stdout=subprocess.PIPE).stdout
@@ -8815,7 +8818,7 @@ try:
         shutil.copyfile(index_path, post_index)
         subprocess.run(("git", "-C", wt, "update-index", "-z", "--force-remove", "--stdin"),
                        input=b"\0".join(conflicts) + (b"\0" if conflicts else b""),
-                       env={**os.environ, "GIT_INDEX_FILE": post_index}, check=True, stdout=subprocess.PIPE)
+                       env={**git_env, "GIT_INDEX_FILE": post_index}, check=True, stdout=subprocess.PIPE)
         post_tree = git("write-tree", index=post_index).strip()
     changed = [path for path in git("diff-tree", "-r", "-z", "--no-renames", "--name-only",
                                    baseline_tree.decode(), post_tree.decode()).split(b"\0") if path]
@@ -8855,11 +8858,22 @@ try:
         if mode not in {side[0] for side in sides.values() if side}:
             raise ValueError("changed protected mode")
         allowed = set()
+        side_lines = []
         for side_stage in (b"2", b"3"):
             if side_stage in sides:
-                allowed.update(git("cat-file", "blob", sides[side_stage][1].decode()).splitlines())
-        if not set(git("cat-file", "blob", blob.decode()).splitlines()) <= allowed:
+                side_lines.append(git("cat-file", "blob", sides[side_stage][1].decode()).splitlines(keepends=True))
+                allowed.update(side_lines[-1])
+        resolved_lines = git("cat-file", "blob", blob.decode()).splitlines(keepends=True)
+        if not set(resolved_lines) <= allowed:
             raise ValueError("invented protected line")
+        if resolved_lines not in side_lines:
+            # Project onto each side to preserve its order and bound repeated lines.
+            for source_lines in side_lines:
+                source_values = set(source_lines)
+                ordered_source = iter(source_lines)
+                if not all(any(candidate == line for candidate in ordered_source)
+                           for line in resolved_lines if line in source_values):
+                    raise ValueError("reordered or duplicated protected line")
     validated_tree = git("write-tree").strip()
     if not re.fullmatch(rb"[0-9a-f]{40,64}", validated_tree):
         raise ValueError("invalid staged tree")

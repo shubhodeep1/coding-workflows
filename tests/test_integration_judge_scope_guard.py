@@ -107,17 +107,32 @@ def test_out_of_scope_changes_do_not_push(judge_repo, change):
 
 
 @pytest.mark.parametrize("judge_repo", [True], indirect=True)
-@pytest.mark.parametrize("change", ["invented", "mode"])
+@pytest.mark.parametrize("change", ["invented", "mode", "duplicate", "reorder"])
 def test_protected_conflict_rejects_invented_content_or_mode(judge_repo, change):
 	wt, baseline, remote, before, conflict_path, run = judge_repo
 	conflicted = wt / conflict_path
-	conflicted.write_text("first\nours\ntheirs\nrun: invented\nlast\n" if change == "invented" else "first\nours\ntheirs\nlast\n")
+	content = {
+		"invented": "first\nours\ntheirs\nrun: invented\nlast\n",
+		"duplicate": "first\nours\nours\ntheirs\nlast\n",
+		"reorder": "last\nours\ntheirs\nfirst\n",
+	}.get(change, "first\nours\ntheirs\nlast\n")
+	conflicted.write_text(content)
 	if change == "mode":
 		conflicted.chmod(0o755)
 	result = run(f'_integration_judge_commit_and_push "{wt}" 42 integration main "{baseline}" 1')
 	assert result.returncode != 0
 	assert "reason=protected_path_provenance" in result.stderr
 	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() == before
+
+
+@pytest.mark.parametrize("judge_repo", [True], indirect=True)
+def test_scope_verifier_uses_worktree_index_despite_ambient_git_overrides(judge_repo):
+	wt, baseline, remote, before, conflict_path, run = judge_repo
+	(wt / conflict_path).write_text("first\nours\ntheirs\nlast\n")
+	git(wt, "add", conflict_path)
+	result = run(f'GIT_DIR="{remote}" GIT_INDEX_FILE="{baseline / "index"}" _integration_judge_verify_scope "{wt}" "{baseline}" 42')
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert result.stdout.strip() == git(wt, "write-tree").stdout.strip()
 
 
 @pytest.mark.parametrize("judge_repo", [False], indirect=True)

@@ -567,7 +567,8 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   `RUNTIME_DIR`; the poller (not the agent) fetches, merges, checks
   conflict markers and the merged sub-issue fingerprints, commits and pushes.
   Before that push, it rejects judge changes outside the conflicted paths;
-  conflicted workflows/actions files may contain only lines from either side.
+  conflicted workflows/actions files may contain only lines from either side,
+  retaining each side's line order and duplicate counts when combining them.
   Its push uses a one-shot credential helper instead of storing `GH_TOKEN` in
   the shared Git config of the judge worktree.
   A failed publication logs a warning but counts as a completed judge
