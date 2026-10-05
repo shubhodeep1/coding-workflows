@@ -932,6 +932,11 @@ def test_push_parser_guards_real_destination(merged_branch_repo, monkeypatch, co
 	("2", "git push origin 2 > /tmp/out"),
 	("2", "git push origin 2&>/tmp/out"),
 	("12", "git push origin 12&>>/tmp/out"),
+	("2", "git push origin ''2>/dev/null"),
+	("2", 'git push origin ""2>/dev/null'),
+	("12", "git push origin ''12>/tmp/out"),
+	("2", "git push origin ''2&>/tmp/out"),
+	("123", 'git push origin ""123>>/dev/null'),
 	("2", "git push origin '2'>/tmp/out"),
 	("2", "git push origin \\2>/tmp/out"),
 	("12", "git push origin \\12>/tmp/out"),
@@ -956,6 +961,18 @@ def test_numeric_push_refspec_before_redirect_is_checked(merged_branch_repo, mon
 		"tool_input": {"command": command}})
 	assert code == 2, message
 	assert lookups == [refspec]
+
+
+def test_empty_quoted_numeric_refspec_is_not_an_fd() -> None:
+	quoted = guard._guarded_git_invocations("git push origin ''2>/dev/null", "/repo")
+	assert len(quoted) == 1
+	assert quoted[0].arguments == ["origin", "2"]
+	bare = guard._guarded_git_invocations("git push origin 2>/dev/null", "/repo")
+	assert len(bare) == 1
+	assert bare[0].arguments == ["origin"]
+	assert guard._shell_segments_with_operators("git status;2>/dev/null") == [
+		("", ["git", "status"]),
+	]
 
 
 @pytest.mark.parametrize("command", [
