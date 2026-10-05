@@ -218,6 +218,7 @@ def test_pre_review_python_invocations_are_safe_path_scoped() -> None:
 	pre_review = workflow.split("      - name: Checkout repo", 1)[1].split("      - name: Run reviewer models", 1)[0]
 	guard = pre_review.index("      - name: Require safe-path Python before PR-tree helpers")
 	assert guard < pre_review.index("      - name: Initialize runtime workspace")
+	assert 'install -d -m 0700 "${RUNTIME_DIR}" "${PREVIOUS_REVIEWS_DIR}" "${RUNTIME_CONTEXT_DIR}"' in pre_review
 	assert "sys.flags.safe_path" in pre_review
 	assert "PYTHONSAFEPATH=1 python3 -c" in pre_review
 	for match in re.finditer(r"\bpython3\s+(?:-c|-m|-)\s", pre_review):

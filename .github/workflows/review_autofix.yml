@@ -2863,7 +2863,7 @@ jobs:
           codex_run_budget_total_secs="$(( review_soft_deadline_minutes * 60 ))"
           codex_run_budget_soft_deadline_epoch="$(( job_start_epoch + codex_run_budget_total_secs ))"
 
-          mkdir -p "${PREVIOUS_REVIEWS_DIR}" "${RUNTIME_CONTEXT_DIR}"
+          install -d -m 0700 "${RUNTIME_DIR}" "${PREVIOUS_REVIEWS_DIR}" "${RUNTIME_CONTEXT_DIR}"
 
           {
             echo "JOB_START_EPOCH=${job_start_epoch}"
