@@ -169,6 +169,8 @@ CUTOVER_ROLES = {"CLARIFY", "CLARIFY_RESPOND", "PLAN"}  # Phase 5a
 CUTOVER_ROLES |= {"IMPLEMENT", "IMPLEMENT_REPAIR", "IMPLEMENT_DIAGNOSE"}  # Phase 5b
 CUTOVER_ROLES |= {"ORCHESTRATE", "WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE", "REVIEW_EDITOR", "REVIEW_CONSOLIDATOR", "CONFLICT_RESOLVER", "RB_JUDGE"}  # Phase 5c
 CUTOVER_ROLES |= {"VALIDATE", "VALIDATE_SELF_HEAL", "VALIDATION_REFRESH", "SECURITY_AUDIT", "CHECK_TRIAGE", "WORKFLOW_HEAL", "LOG_ANALYSIS", "LOG_AUDIT", "RETRO", "SUMMARISER", "BEHAVIOURAL_SMOKE"}  # Phase 5d
+CUTOVER_ROLES |= {"MATERIALITY"}  # Phase 5d, Q42: the Claude materiality check
+CUTOVER_ROLES |= {"LOG_SUMMARY"}  # Phase 5d, Q41: the unselected-run summaries
 
 
 def test_checked_in_config_is_valid_and_inert() -> None:
@@ -401,6 +403,58 @@ def test_resolve_cli_prints_one_field_and_warns() -> None:
 def test_resolve_cli_rejects_unknown_role() -> None:
 	result = _run("resolve", "--role", "NOPE")
 	assert result.returncode == 2
+
+
+# --- read-profile Bash guard ---------------------------------------------------
+
+
+def test_read_profile_settings_have_a_bash_guard_without_changing_write_settings() -> None:
+	template = (REPO_ROOT / "scripts" / "claude_settings.json.tmpl").read_text(encoding="utf-8")
+	write = ce.render_settings(template, "/w", "/trusted/gh_guard.py")
+	assert write["permissions"]["deny"] == json.loads(template.replace("__CHECKOUT__", "w").replace("__GUARD_HOOK__", "/trusted/gh_guard.py"))["permissions"]["deny"]
+	assert len(write["hooks"]["PreToolUse"]) == 1
+	read = ce.render_settings(template, "/w", "/trusted/gh_guard.py", profile="read", read_guard_hook="/trusted/claude_engine.py")
+	assert set(ce.READ_PROFILE_DENY) <= set(read["permissions"]["deny"])
+	assert read["hooks"]["PreToolUse"][1] == {
+		"matcher": "Bash", "hooks": [{"type": "command", "command": 'python3 "/trusted/claude_engine.py" read-guard', "timeout": 30}],
+	}
+	for path in ("", "relative.py", '/bad"path', "/bad\npath"):
+		with pytest.raises(ce.EngineError):
+			ce.render_settings(template, "/w", "/trusted/gh_guard.py", profile="read", read_guard_hook=path)
+
+
+@pytest.mark.parametrize("command", [
+	"git log --oneline -5", "git show HEAD:scripts/x.sh", "git diff --stat a..b -- 'p q'",
+	"git diff --text", "git diff --no-ext-diff", "git grep -n foo",
+	"gh api repos/o/r --jq '.a | .b'", "gh pr view 3",
+])
+def test_read_guard_allows_safe_reads(command: str) -> None:
+	assert ce.read_profile_bash_decision(command) == (None, "")
+
+
+@pytest.mark.parametrize("command", [
+	"git show --no-patch --format=%B --output=../scripts/review_single_issue_security_pass.sh HEAD",
+	"git log --outp=x", "git log --output x", "git grep -O vim x", "git grep -Ovim x",
+	"git grep -nOless x", "git grep --op x", "git grep --open-files-in-pager vim x",
+	"git diff --ext-diff", "git diff --textconv", "git log > ../x", "git log; id",
+	"git log $(id)", 'git log "$(id)"', "git log `id`", "git -c core.pager=sh log",
+	"git push", "cat x", "git log 'unterminated", "git log\nid", "git log $GITHUB_ENV",
+	"git log *", "git log --format={x,y}",
+])
+def test_read_guard_denies_write_primitives_and_shell_control(command: str) -> None:
+	decision, reason = ce.read_profile_bash_decision(command)
+	assert decision == "deny" and reason
+
+
+def test_read_guard_cli_fails_closed_on_invalid_input() -> None:
+	for payload in ("invalid", "[]", "{}", json.dumps({"tool_name": "Bash", "tool_input": {"command": "git show --output=/tmp/x HEAD"}})):
+		result = _run("read-guard", stdin=payload)
+		assert result.returncode == 0
+		response = json.loads(result.stdout)["hookSpecificOutput"]
+		assert response["hookEventName"] == "PreToolUse"
+		assert response["permissionDecision"] == "deny"
+		assert response["permissionDecisionReason"].startswith("claude_engine read-guard:")
+	assert _run("read-guard", stdin=json.dumps({"tool_name": "Read", "tool_input": {}})).stdout == ""
 
 
 # --- transcripts ---------------------------------------------------------------

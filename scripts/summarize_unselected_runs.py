@@ -11,6 +11,15 @@ GitHub, and asks gpt-6-luna for a terse per-run summary that preserves the
 signals the downstream analyzer Codex pass looks for (outcome, failure step,
 warnings, token/API hot-spots, AI_MEMORY_TELEMETRY lines, retries).
 
+Claude engine (replace-claude-sessions plan Phase 5d, Q41): when the job
+resolved `AI_ENGINE_RESOLVED_LOG_SUMMARY=claude`, each summary runs through
+`claude_run_selected LOG_SUMMARY` (scripts/ai_engine.sh) with the read-only
+tool profile. Exit 75 (Claude unavailable) switches the rest of the batch to
+the OpenRouter call; so does the end of `WORKFLOW_LOG_SUMMARY_TIME_BUDGET_SECS`
+(default 900), which keeps the Claude calls inside the job's 60-minute cap.
+Without `OPENROUTER_API_KEY` the Claude path still runs and there is no
+fallback.
+
 The summary is written into the run row as `log_summary` plus a
 `log_summary_meta` field. The script is fail-open: missing creds, archive
 fetch errors, or model errors skip the affected run with a warning instead of
@@ -23,7 +32,10 @@ import argparse
 import importlib.util
 import json
 import os
+import signal
+import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -57,6 +69,9 @@ DEFAULT_OUTPUT_TOKENS = 500
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 60
 DEFAULT_PER_STEP_HEAD_CHARS = 1_000
 DEFAULT_PER_STEP_TAIL_CHARS = 4_000
+DEFAULT_CLAUDE_TIME_BUDGET_SECONDS = 900
+CLAUDE_CALL_TIMEOUT_SECONDS = 300
+CLAUDE_ENGINE_ROLE = "LOG_SUMMARY"
 
 SUMMARIZER_TELEMETRY_OP = "summarize_unselected_runs"
 
@@ -438,6 +453,89 @@ class OpenRouterSummarizer:
 		return content, tokens_used
 
 
+class ClaudeUnavailable(RuntimeError):
+	"""claude_run_selected returned 75: the role is not on Claude or Claude cannot start."""
+
+
+class ClaudeSummarizer:
+	"""Summarize one run with the LOG_SUMMARY role on the Claude engine.
+
+	Each call is one `claude_run_selected LOG_SUMMARY` with the read-only tool
+	profile, in an empty working directory, with GitHub and OpenRouter
+	credentials removed from its environment: the logs are untrusted text.
+	Raises ClaudeUnavailable on exit 75 and RuntimeError on any other failure.
+	"""
+
+	def __init__(self, engine_sh: Path, *, model: str, max_output_tokens: int) -> None:
+		self.engine_sh = engine_sh
+		self.model = model
+		self.max_output_tokens = max_output_tokens
+
+	def summarize(self, run: dict[str, Any], logs_text: str, *, timeout_seconds: float) -> tuple[str, int]:
+		prompt = f"{SYSTEM_PROMPT}\n{_format_user_message(run, logs_text)}\n"
+		env = {key: value for key, value in os.environ.items() if key not in {"GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "OPENROUTER_API_KEY"}}
+		env["AI_ENGINE_READ_ONLY"] = "true"
+		with tempfile.TemporaryDirectory(prefix="log-summary-claude-") as td:
+			workdir = Path(td) / "work"
+			workdir.mkdir()
+			prompt_file = Path(td) / "prompt.txt"
+			out_file = Path(td) / "summary.md"
+			prompt_file.write_text(prompt, encoding="utf-8")
+			proc = subprocess.Popen(
+				["bash", "-c", 'source "$1" && claude_run_selected "$2" "$3" "$4" "$5"', "_", str(self.engine_sh), CLAUDE_ENGINE_ROLE, str(prompt_file), str(out_file), str(workdir)],
+				env=env,
+				# The CLI's diagnostics go to the job log (inherited fd 2); its answer is out_file.
+				stdout=subprocess.DEVNULL,
+				start_new_session=True,
+			)
+			try:
+				rc = proc.wait(timeout=max(timeout_seconds, 1))
+			except subprocess.TimeoutExpired:
+				try:
+					os.killpg(proc.pid, signal.SIGKILL)
+				except ProcessLookupError:
+					pass
+				proc.wait()
+				raise RuntimeError(f"claude timed out after {int(timeout_seconds)}s") from None
+			if rc == 75:
+				raise ClaudeUnavailable("claude_run_selected exit 75")
+			if rc != 0:
+				raise RuntimeError(f"claude exit {rc}")
+			content = out_file.read_text(encoding="utf-8", errors="replace").strip() if out_file.is_file() else ""
+		if not content:
+			raise RuntimeError("claude empty content")
+		return content, _extract_tokens_used(None, input_chars=len(logs_text), max_output_tokens=self.max_output_tokens)
+
+
+def _claude_engine_script() -> Path | None:
+	"""The engine script when the job resolved LOG_SUMMARY to Claude, else None."""
+	if str(os.getenv("AI_ENGINE_RESOLVED_LOG_SUMMARY") or "codex").strip() != "claude":
+		return None
+	engine_sh = SCRIPTS_DIR / "ai_engine.sh"
+	return engine_sh if engine_sh.is_file() else None
+
+
+def _claude_model_name() -> str:
+	try:
+		config = json.loads((REPO_ROOT / ".github" / "ai" / "claude_engine.json").read_text(encoding="utf-8"))
+		model = config["role_defaults"][CLAUDE_ENGINE_ROLE]["claude_model"]
+		if isinstance(model, str) and model.strip():
+			return model.strip()
+	except (OSError, ValueError, KeyError, TypeError):
+		pass
+	return "claude"
+
+
+def _claude_time_budget_seconds() -> int:
+	raw = str(os.getenv("WORKFLOW_LOG_SUMMARY_TIME_BUDGET_SECS") or "").strip()
+	if not raw:
+		return DEFAULT_CLAUDE_TIME_BUDGET_SECONDS
+	if raw.isdigit():
+		return int(raw)
+	_warn(f"invalid WORKFLOW_LOG_SUMMARY_TIME_BUDGET_SECS={raw!r}; using {DEFAULT_CLAUDE_TIME_BUDGET_SECONDS}")
+	return DEFAULT_CLAUDE_TIME_BUDGET_SECONDS
+
+
 def _write_json_atomic(path: Path, payload: Any) -> None:
 	path.parent.mkdir(parents=True, exist_ok=True)
 	tmp_path = path.with_suffix(path.suffix + ".tmp")
@@ -541,12 +639,16 @@ def main(argv: list[str] | None = None) -> int:
 		"skipped_summary_error": 0,
 		"skipped_budget_exhausted": 0,
 		"skipped_disabled": 0,
+		"skipped_no_engine": 0,
 		"tokens_used": 0,
 		"model": model,
+		"claude_summarized": 0,
+		"claude_fallback_reason": "",
 		"started_at": datetime.now(timezone.utc).isoformat(),
 	}
 
-	if not api_key:
+	claude_engine_sh = _claude_engine_script()
+	if not api_key and claude_engine_sh is None:
 		_warn("OPENROUTER_API_KEY not set; skipping summarization (fail-open)")
 		stats["skipped_disabled"] = 1
 		_emit_telemetry(stats)
@@ -592,7 +694,15 @@ def main(argv: list[str] | None = None) -> int:
 		base_url=args.base_url,
 		timeout_seconds=args.timeout_seconds,
 		max_output_tokens=args.max_output_tokens,
-	)
+	) if api_key else None
+	claude_summarizer: ClaudeSummarizer | None = None
+	claude_model = ""
+	claude_deadline = 0.0
+	if claude_engine_sh is not None:
+		claude_model = _claude_model_name()
+		stats["claude_model"] = claude_model
+		claude_summarizer = ClaudeSummarizer(claude_engine_sh, model=claude_model, max_output_tokens=args.max_output_tokens)
+		claude_deadline = time.monotonic() + _claude_time_budget_seconds()
 	# No archive cache: this script visits each (repo, run_id) at most once,
 	# so the collector's payload-bytes cache (collect_workflow_logs.py:777-779)
 	# would only retain hundreds of MB of log archives for no benefit. A
@@ -600,6 +710,14 @@ def main(argv: list[str] | None = None) -> int:
 	# archive at a time.
 
 	for index, run in enumerate(targets):
+		if claude_summarizer is not None and time.monotonic() >= claude_deadline:
+			_warn(f"Claude time budget spent; {len(targets) - index} remaining run(s) go over OpenRouter" if summarizer is not None else f"Claude time budget spent; {len(targets) - index} remaining run(s) stay unsummarized")
+			stats["claude_fallback_reason"] = "time_budget"
+			claude_summarizer = None
+		if claude_summarizer is None and summarizer is None:
+			# Claude stopped (exit 75 or time budget) and there is no OpenRouter key.
+			stats["skipped_no_engine"] += len(targets) - index
+			break
 		if stats["tokens_used"] >= args.token_budget:
 			# Account for the current run plus everything after it in one shot,
 			# then bail — no point fetching log archives we won't summarize.
@@ -636,17 +754,45 @@ def main(argv: list[str] | None = None) -> int:
 		if stats["tokens_used"] + estimated_tokens > args.token_budget:
 			stats["skipped_budget_exhausted"] += len(targets) - index
 			break
-		try:
-			summary, tokens_used = summarizer.summarize(run, logs_text)
-		except Exception as exc:  # noqa: BLE001 — fail-open per run
-			_warn(f"mini summary failed for {repository}#{run_id}: {exc}")
-			stats["skipped_summary_error"] += 1
-			# Tiny pause so a flaky upstream doesn't burn the budget instantly.
-			time.sleep(0.25)
-			continue
+		summary_engine = "openrouter"
+		summary_model = model
+		summary = ""
+		tokens_used = 0
+		if claude_summarizer is not None and time.monotonic() >= claude_deadline:
+			_warn("Claude time budget spent during log fetch; remaining runs go over OpenRouter" if summarizer is not None else "Claude time budget spent during log fetch; remaining runs stay unsummarized")
+			stats["claude_fallback_reason"] = "time_budget"
+			claude_summarizer = None
+		if claude_summarizer is not None:
+			try:
+				summary, tokens_used = claude_summarizer.summarize(run, logs_text, timeout_seconds=min(CLAUDE_CALL_TIMEOUT_SECONDS, claude_deadline - time.monotonic()))
+				summary_engine = "claude"
+				summary_model = claude_model
+			except ClaudeUnavailable:
+				_warn("Claude unavailable for LOG_SUMMARY; remaining runs go over OpenRouter" if summarizer is not None else "Claude unavailable for LOG_SUMMARY and OPENROUTER_API_KEY not set; remaining runs stay unsummarized")
+				stats["claude_fallback_reason"] = "unavailable"
+				claude_summarizer = None
+			except Exception as exc:  # noqa: BLE001 — fail-open per run
+				_warn(f"Claude summary failed for {repository}#{run_id}: {exc}")
+				stats["skipped_summary_error"] += 1
+				continue
+		if not summary:
+			if summarizer is None:
+				stats["skipped_no_engine"] += len(targets) - index
+				break
+			try:
+				summary, tokens_used = summarizer.summarize(run, logs_text)
+			except Exception as exc:  # noqa: BLE001 — fail-open per run
+				_warn(f"mini summary failed for {repository}#{run_id}: {exc}")
+				stats["skipped_summary_error"] += 1
+				# Tiny pause so a flaky upstream doesn't burn the budget instantly.
+				time.sleep(0.25)
+				continue
+		if summary_engine == "claude":
+			stats["claude_summarized"] += 1
 		run["log_summary"] = summary
 		run["log_summary_meta"] = {
-			"model": model,
+			"engine": summary_engine,
+			"model": summary_model,
 			"tokens_used": tokens_used,
 			"input_chars": len(logs_text),
 			"created_at": datetime.now(timezone.utc).isoformat(),

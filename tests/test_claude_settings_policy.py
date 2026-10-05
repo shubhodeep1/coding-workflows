@@ -83,7 +83,7 @@ def test_guard_hook_runs_on_every_bash_call() -> None:
 	hooks = _render()["hooks"]["PreToolUse"]
 	assert hooks[0]["matcher"] == "Bash"
 	assert hooks[0]["hooks"][0]["command"] == 'python3 "/support/.claude/hooks/gh_api_write_guard.py"'
-	assert _render(profile="read")["hooks"]["PreToolUse"][0]["hooks"][0]["command"] == (
+	assert _render(profile="read", read_guard_hook="/support/scripts/claude_engine.py")["hooks"]["PreToolUse"][0]["hooks"][0]["command"] == (
 		'python3 "/support/.claude/hooks/gh_api_write_guard.py" --read-only'
 	)
 	read_hooks = _render(profile="read")["hooks"]["PreToolUse"]
@@ -96,7 +96,7 @@ def test_read_profile_requires_guard_command() -> None:
 	settings = json.loads(TEMPLATE.read_text(encoding="utf-8"))
 	settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"] = "echo missing"
 	with pytest.raises(ce.EngineError, match="read profile requires the gh api guard hook"):
-		ce.render_settings(json.dumps(settings), "/work/repo", "/support/.claude/hooks/gh_api_write_guard.py", profile="read")
+		ce.render_settings(json.dumps(settings), "/work/repo", "/support/.claude/hooks/gh_api_write_guard.py", profile="read", read_guard_hook="/support/scripts/claude_engine.py")
 
 
 def test_env_block_carries_no_credentials() -> None:
@@ -113,7 +113,7 @@ def test_renderer_refuses_credentials_in_env() -> None:
 
 def test_profiles() -> None:
 	assert _render(profile="write")["permissions"]["allow"] == []
-	allow = _render(profile="read")["permissions"]["allow"]
+	allow = _render(profile="read", read_guard_hook="/support/scripts/claude_engine.py")["permissions"]["allow"]
 	assert {"Read", "Grep", "Glob"} <= set(allow)
 	assert "Bash(gh api *)" not in allow
 	assert "Bash(git grep*)" not in allow

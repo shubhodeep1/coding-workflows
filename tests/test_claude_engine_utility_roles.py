@@ -45,7 +45,7 @@ SITES = {
 	),
 	"security_audit.sh": (
 		"SECURITY_AUDIT",
-		"bash -c 'source \"$1\" && claude_run_selected SECURITY_AUDIT \"$2\" \"$3\" \"$4\"'",
+		'claude_run_selected SECURITY_AUDIT "$2" "$3" "$4" || audit_claude_call_rc=$?',
 		'elif codex --ask-for-approval never \\',
 		'\t\t--sandbox read-only < "${RENDERED_PROMPT_FILE}" \\\n\t\t> "${CODEX_OUTPUT_FILE}" 2> "${CODEX_ERROR_FILE}"; then',
 	),
@@ -98,12 +98,15 @@ def test_read_only_utility_roles_narrow_the_tool_profile() -> None:
 
 
 def test_credential_stripping_covers_the_claude_call() -> None:
-	for script in ("workflow_failure_heal_intake.sh", "check_failure_triage.sh"):
+	for script in ("workflow_failure_heal_intake.sh", "check_failure_triage.sh", "security_audit.sh"):
 		text = _read(SCRIPTS / script)
-		claude_at = text.index("bash -c 'source \"$1\" && claude_run_selected")
+		claude_at = text.index('claude_run_selected SECURITY_AUDIT') if script == "security_audit.sh" else text.index("bash -c 'source \"$1\" && claude_run_selected")
 		env_line = text.rindex("env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET", 0, claude_at)
-		assert claude_at - env_line < 400, script
+		assert claude_at - env_line < 700, script
 		assert "-u OPENROUTER_API_KEY" in text[env_line:claude_at], script
+		if script == "security_audit.sh":
+			assert "-u GH_PAT" in text[env_line:claude_at]
+			assert "-u GITHUB_ENV -u GITHUB_PATH" in text[env_line:claude_at]
 
 
 def test_untrusted_checkouts_use_the_staged_engine_root_only() -> None:
@@ -285,7 +288,7 @@ WORKFLOW_JOBS = {
 	"validation-refresh.yml": [("refresh", ["VALIDATION_REFRESH"], "./.github/actions/")],
 	"workflow-log-analysis.yml": [
 		("weekly-retro", ["RETRO"], "./.github/actions/"),
-		("analyze-commit-notify", ["LOG_ANALYSIS"], "./.github/actions/"),
+		("analyze-commit-notify", ["LOG_ANALYSIS", "LOG_SUMMARY"], "./.github/actions/"),
 		("deep-audit", ["LOG_AUDIT"], "./.github/actions/"),
 		("api-redundancy", ["LOG_ANALYSIS"], "./.github/actions/"),
 	],
@@ -343,4 +346,183 @@ def test_poll_job_resolves_the_security_pass_audit() -> None:
 def test_review_job_resolves_the_utility_roles() -> None:
 	steps = yaml.safe_load(_read(WORKFLOWS / "review_autofix.yml"))["jobs"]["codex-agent"]["steps"]
 	resolve = next(step for step in steps if step.get("name") == "Resolve AI engine")
-	assert "for role in REVIEW_EDITOR REVIEW_CONSOLIDATOR CONFLICT_RESOLVER RB_JUDGE SUMMARISER BEHAVIOURAL_SMOKE; do" in resolve["run"]
+	assert "for role in REVIEW_EDITOR REVIEW_CONSOLIDATOR CONFLICT_RESOLVER RB_JUDGE SUMMARISER BEHAVIOURAL_SMOKE MATERIALITY; do" in resolve["run"]
+
+
+# ---- implement issue summary (Q43: SUMMARISER) ----
+
+def _implement_job_steps() -> list[dict]:
+	jobs = yaml.safe_load(_read(WORKFLOWS / "implement.yml"))["jobs"]
+	return next(spec["steps"] for spec in jobs.values() if any(step.get("name") == "Generate AI issue summary for PR comment" for step in spec.get("steps", [])))
+
+
+def test_implement_job_resolves_the_summariser() -> None:
+	steps = _implement_job_steps()
+	resolve = next(step for step in steps if step.get("name") == "Resolve AI engine")
+	assert "for role in IMPLEMENT IMPLEMENT_REPAIR IMPLEMENT_DIAGNOSE SUMMARISER; do" in resolve["run"]
+	assert resolve["env"]["AI_ENGINE_SUMMARISER"] == "${{ vars.AI_ENGINE_SUMMARISER || '' }}"
+
+
+def _run_issue_summary(tmp_path: Path, *, resolved: str, mode: str) -> tuple[subprocess.CompletedProcess[str], str, str]:
+	run = next(step for step in _implement_job_steps() if step.get("name") == "Generate AI issue summary for PR comment")["run"]
+	support = tmp_path / "support"
+	support.mkdir()
+	(support / "ai_engine.sh").write_text(FAKE_ENGINE, encoding="utf-8")
+	(support / "workspace_safety_check.sh").write_text("exit 0\n", encoding="utf-8")
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	codex = bin_dir / "codex"
+	codex.write_text('#!/usr/bin/env bash\necho "codex $*" >> "${CALLS}.codex"\nprintf "### AI Issue Summary\\n- codex\\n"\n', encoding="utf-8")
+	codex.chmod(0o755)
+	sleep = bin_dir / "sleep"
+	sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+	sleep.chmod(0o755)
+	(tmp_path / "issue.json").write_text('{"title": "T", "html_url": "u", "body": "B", "labels": []}', encoding="utf-8")
+	(tmp_path / "plan.md").write_text("plan\n", encoding="utf-8")
+	calls = tmp_path / "calls"
+	base_env = {key: value for key, value in os.environ.items() if key not in {"GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "OPENROUTER_API_KEY"}}
+	env = dict(
+		base_env,
+		CALLS=str(calls),
+		MODE=mode,
+		CLAUDE_ANSWER="### AI Issue Summary\n- claude",
+		AI_ENGINE_RESOLVED_SUMMARISER=resolved,
+		IMPLEMENT_STAGED_SUPPORT_RUN_DIR=str(support),
+		ISSUE_SUMMARY_PROMPT_FILE=str(tmp_path / "summary_prompt.txt"),
+		ISSUE_SUMMARY_FILE=str(tmp_path / "summary.md"),
+		ISSUE_META_FILE=str(tmp_path / "issue.json"),
+		PLAN_FILE=str(tmp_path / "plan.md"),
+		RUNTIME_DIR=str(tmp_path),
+		MODEL_EDITOR="gpt-test",
+		PATH=f"{bin_dir}:{os.environ['PATH']}",
+	)
+	proc = subprocess.run(["bash", "-c", run], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60, check=False)
+	return proc, (calls.read_text(encoding="utf-8") if calls.exists() else ""), (Path(f"{calls}.codex").read_text(encoding="utf-8") if Path(f"{calls}.codex").exists() else "")
+
+
+def test_issue_summary_on_claude_runs_read_only_and_never_codex(tmp_path: Path) -> None:
+	proc, calls, codex_calls = _run_issue_summary(tmp_path, resolved="claude", mode="success")
+	assert proc.returncode == 0, proc.stderr
+	assert calls.splitlines() == [f"SUMMARISER|issue_summary_combined_prompt.txt|summary.md|{tmp_path}|claude|true|unset"]
+	assert codex_calls == ""
+	assert (tmp_path / "summary.md").read_text(encoding="utf-8") == "### AI Issue Summary\n- claude\n"
+	assert "Summary generated on attempt 1." in proc.stdout
+
+
+def test_issue_summary_on_codex_or_unavailable_runs_the_unchanged_codex_call(tmp_path: Path) -> None:
+	for index, (resolved, mode) in enumerate((("codex", "success"), ("claude", "unavailable"))):
+		work = tmp_path / str(index)
+		work.mkdir()
+		proc, _calls, codex_calls = _run_issue_summary(work, resolved=resolved, mode=mode)
+		assert proc.returncode == 0, proc.stderr
+		assert codex_calls.splitlines() == ["codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model gpt-test --sandbox danger-full-access"]
+		assert (work / "summary.md").read_text(encoding="utf-8") == "### AI Issue Summary\n- codex\n"
+
+
+def test_issue_summary_claude_crash_retries_without_codex(tmp_path: Path) -> None:
+	proc, calls, codex_calls = _run_issue_summary(tmp_path, resolved="claude", mode="crash")
+	assert proc.returncode == 0, proc.stderr
+	assert len(calls.splitlines()) == 3
+	assert codex_calls == ""
+	assert proc.stdout.count("::warning::Summary generation attempt") == 3
+
+
+# ---- AGENTS.md materiality on Claude (Q42) ----
+
+MATERIALITY_SCRIPT = SCRIPTS / "review_agents_md_materiality.sh"
+
+
+def _run_materiality(tmp_path: Path, *, paths: list[str], resolved: str = "claude", mode: str = "success", answer: str = "", flag: str = "1", agents_md_changed: bool = False) -> tuple[dict, str, str]:
+	support = tmp_path / "support"
+	support.mkdir()
+	(support / "ai_engine.sh").write_text(FAKE_ENGINE, encoding="utf-8")
+	workspace = tmp_path / "workspace"
+	workspace.mkdir()
+	(workspace / "agents.md").write_text("# agents\n", encoding="utf-8")
+	if agents_md_changed:
+		paths = [*paths, "agents.md"]
+	diff = "".join(f"diff --git a/{p} b/{p}\n--- a/{p}\n+++ b/{p}\n@@ -1 +1 @@\n-old\n+new\n" for p in paths)
+	(tmp_path / "pr.diff").write_text(diff, encoding="utf-8")
+	(tmp_path / "changed.txt").write_text("\n".join(paths) + "\n", encoding="utf-8")
+	calls = tmp_path / "calls"
+	base_env = {key: value for key, value in os.environ.items() if key not in {"GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "OPENROUTER_API_KEY"}}
+	env = dict(
+		base_env,
+		CALLS=str(calls),
+		MODE=mode,
+		CLAUDE_ANSWER=answer,
+		AI_ENGINE_RESOLVED_MATERIALITY=resolved,
+		SUPPORT_SCRIPTS_DIR=str(support),
+		AGENTS_MD_MATERIALITY_ENABLED="1",
+		AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED=flag,
+		AGENTS_MD_MATERIALITY_RESULT_FILE=str(tmp_path / "result.json"),
+		AGENTS_MD_MATERIALITY_COMMENT_FILE=str(tmp_path / "comment.md"),
+		PR_CHANGED_FILES_FILE=str(tmp_path / "changed.txt"),
+		PR_DIFF_FILE=str(tmp_path / "pr.diff"),
+		GITHUB_WORKSPACE=str(workspace),
+		REPOSITORY="octo/example",
+		PR_NUMBER="7",
+		GITHUB_RUN_ID="9",
+		BASE_BRANCH="",
+	)
+	proc = subprocess.run(["bash", str(MATERIALITY_SCRIPT)], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60, check=True)
+	import json as _json
+	result = _json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+	comment = (tmp_path / "comment.md").read_text(encoding="utf-8") if (tmp_path / "comment.md").exists() else ""
+	return result, comment, (calls.read_text(encoding="utf-8") if calls.exists() else "") + proc.stdout
+
+
+def test_materiality_claude_raises_a_low_rating(tmp_path: Path) -> None:
+	result, comment, log = _run_materiality(tmp_path, paths=["src/app.py"], answer='{"materiality": "high", "reason": "Adds env var FOO_TIMEOUT, ping @someone <!-- x -->"}')
+	assert f"MATERIALITY|prompt.txt|verdict.txt|{tmp_path / 'workspace'}|claude|true|unset" in log
+	assert (result["materiality"], result["advisory_required"], result["llm_fallback_used"], result["llm_fallback_status"]) == ("high", True, True, "ok")
+	assert "after a Claude review of the diff" in comment
+	assert "- Claude: Adds env var FOO_TIMEOUT, ping someone  x" in comment
+	assert "@someone" not in comment and "<!-- x" not in comment
+
+
+def test_materiality_claude_low_or_unavailable_keeps_the_rules_result(tmp_path: Path) -> None:
+	for index, (mode, answer, status) in enumerate((("success", '{"materiality": "low", "reason": "tests only"}', "ok"), ("unavailable", "", "unavailable"), ("crash", "", "failed_rc_1"), ("success", "not json", "unparseable"))):
+		work = tmp_path / str(index)
+		work.mkdir()
+		result, comment, _log = _run_materiality(work, paths=["src/app.py"], mode=mode, answer=answer)
+		assert (result["materiality"], result["advisory_required"], result["llm_fallback_used"], result["llm_fallback_status"]) == ("low", False, False, status), status
+		assert comment == ""
+
+
+def test_materiality_claude_runs_only_when_needed(tmp_path: Path) -> None:
+	cases = {
+		"flag_off": {"flag": "0"},
+		"role_on_codex": {"resolved": "codex"},
+		"agents_md_changed": {"agents_md_changed": True},
+		"rules_already_high": {"paths": ["package.json"]},
+	}
+	for name, kwargs in cases.items():
+		work = tmp_path / name
+		work.mkdir()
+		params = {"paths": ["src/app.py"], "answer": '{"materiality": "high", "reason": "x"}', **kwargs}
+		result, _comment, log = _run_materiality(work, **params)
+		assert "MATERIALITY|" not in log, name
+		assert result["llm_fallback_used"] is False, name
+		if name == "role_on_codex":
+			assert result["llm_fallback_status"] == "not_selected"
+		else:
+			assert "llm_fallback_status" not in result, name
+
+
+def test_review_job_resolves_materiality_and_defaults_the_check_on() -> None:
+	text = _read(WORKFLOWS / "review_autofix.yml")
+	assert "for role in REVIEW_EDITOR REVIEW_CONSOLIDATOR CONFLICT_RESOLVER RB_JUDGE SUMMARISER BEHAVIOURAL_SMOKE MATERIALITY; do" in text
+	assert "AI_ENGINE_MATERIALITY: ${{ vars.AI_ENGINE_MATERIALITY || '' }}" in text
+	assert text.count("AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '1' }}") == 2
+
+
+def test_log_summary_engine_is_resolved_before_the_summary_step() -> None:
+	steps = _job_steps("workflow-log-analysis.yml", "analyze-commit-notify")
+	names = [step.get("name") for step in steps]
+	summary_at = names.index("Summarize unselected runs (gpt-6-luna)")
+	for name in ("Resolve AI engine", "Install Claude Code CLI", "Resolve Claude credential"):
+		assert names.index(name) < summary_at, name
+	env = steps[summary_at]["env"]
+	assert env["WORKFLOW_LOG_SUMMARY_TIME_BUDGET_SECS"] == "${{ vars.WORKFLOW_LOG_SUMMARY_TIME_BUDGET_SECS || '900' }}"
+	assert env["OPENROUTER_API_KEY"] == "${{ secrets.OPENROUTER_API_KEY }}"

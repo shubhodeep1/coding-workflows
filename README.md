@@ -1691,8 +1691,9 @@ through `clarify → plan → implement → review`.
 | `REVIEWER_HEALTH_OPEN_THRESHOLD` | `3` | Consecutive retryable failures required to mark a reviewer slot `open` in the health cache. |
 | `REVIEWER_HEALTH_OPEN_TTL_SECS` | `1800` | Seconds an `open` reviewer-health entry suppresses dispatch before automatic expiry. |
 | `AGENTS_MD_MATERIALITY_ENABLED` | `1` | Post the deterministic, non-blocking `AGENTS.md` materiality advisory comment when a material change omits an `agents.md` update (on by default; set `0` to disable). |
-| `AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED` | `0` | Reserved only; deterministic v1 still makes no materiality model call when this flag is on. |
-| `AGENTS_MD_MATERIALITY_MODEL` | `openai/gpt-6-luna` | Reserved future materiality fallback model slug. |
+| `AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED` | `1` | Claude review of PRs the path rules rate `low` (role `MATERIALITY`, Sonnet 5.5, read-only tool profile). It can only raise the rating to `medium` or `high`, which posts the advisory with Claude's one-line reason; a Claude failure, timeout, unparseable answer or `AI_ENGINE_MATERIALITY=codex` keeps the path-rule result (there is no codex path). Skipped when `agents.md` changed. `0` turns it off. |
+| `AGENTS_MD_MATERIALITY_LLM_TIMEOUT_SECS` | `300` | Per-PR timeout for the Claude materiality review (30 to 1800; other values fall back to `300` with a `::warning::`). The CLI's process group is killed at the deadline. |
+| `AGENTS_MD_MATERIALITY_MODEL` | `openai/gpt-6-luna` | Recorded in the result JSON only; the Claude review's model comes from the `MATERIALITY` role in `.github/ai/claude_engine.json`. |
 | `AGENTS_MD_MATERIALITY_REASONING` | `medium` | Reserved future materiality fallback reasoning effort. |
 | `CONTEXT_BUDGET_WARN_RATIO` | `0.7` | Per-model context-window ratio above which review surfaces emit `CONTEXT_BUDGET_WARN`. |
 | `MAX_PROMPT_TOKENS_FOR_PHASE` | _(empty)_ | Absolute prompt-token override that takes precedence over `CONTEXT_BUDGET_WARN_RATIO`; phase-specific `MAX_PROMPT_TOKENS_FOR_<PHASE>` overrides remain supported. |
@@ -1888,10 +1889,17 @@ poller's security pass), `CHECK_TRIAGE` (`check_failure_triage.yml`),
 `WORKFLOW_HEAL` (`workflow-failure-heal-intake.yml`), `LOG_ANALYSIS`,
 `LOG_AUDIT` and `RETRO` (`workflow-log-analysis.yml` and
 `scripts/workflow_retro_fanout.sh`), and the review utility roles
-`SUMMARISER` and `BEHAVIOURAL_SMOKE` (read-only tool profile). Still on
-`codex`: `LOG_SUMMARY` (an OpenRouter HTTP call, not a CLI call) and
-`MATERIALITY` (no model call today), plus `ACTIVATION_VERIFY` and
-`UNBLOCK_JUDGE`, which their own phases wire.
+`SUMMARISER` and `BEHAVIOURAL_SMOKE` (read-only tool profile; `SUMMARISER`
+also writes `implement.yml`'s AI issue summary PR comment), and
+`MATERIALITY` (the Claude review in `scripts/review_agents_md_materiality.sh`,
+read-only), and `LOG_SUMMARY` (`scripts/summarize_unselected_runs.py`, one
+read-only Claude call per unselected run). `LOG_SUMMARY` falls back to its
+OpenRouter HTTP call: on exit 75 for the rest of the batch, and when
+`WORKFLOW_LOG_SUMMARY_TIME_BUDGET_SECS` (default `900`) runs out, which keeps
+the Claude calls inside the `analyze-commit-notify` job's 60-minute cap. It
+runs without `OPENROUTER_API_KEY`, and then runs left over stay
+unsummarized. Still on `codex`: `ACTIVATION_VERIFY` and `UNBLOCK_JUDGE`,
+which their own phases wire.
 
 These sites call `claude_run_selected <ROLE>` (`scripts/ai_engine.sh`),
 which runs `claude_run` only when the job's "Resolve AI engine" step
@@ -1929,6 +1937,8 @@ account gated: exit `75`, logged
 `AI_ENGINE_FALLBACK`), the same attempt runs the unchanged codex call.
 For `SECURITY_AUDIT`, the Codex config and binary are checked only when that
 fallback is needed; missing prerequisites still fail with `codex-preflight`.
+On a non-fallback Claude failure, the audit classifies provider errors from
+private CLI stderr and publishes only a bounded, sanitized diagnostic tail.
 `AI_ENGINE_<ROLE>=codex` (or `ai:codex` on
 the issue) puts a role back on codex without a code change.
 Implementation attempts on Claude honor the same `CODEX_THREAD_REUSE_TIMEOUT_SECS`
@@ -2009,6 +2019,15 @@ in `claude-engine-smoke.yml`.
 writes (`CLAUDE_ENGINE_POOL_DIR`, default `$RUNNER_TEMP/claude-pool`: an
 `order` file, best account first, and one `0600` file per account under
 `tokens/`). A usage-limited or rejected account moves the run to the next one.
+Read-profile calls run in a `--network none` container with a placeholder
+token; the host `scripts/claude_anthropic_relay.py` alone reads the pool token.
+The container masks credential-bearing Git configuration in the checkout and
+its nested `.codex-workflow-src` / `.codex-workflow-src-main` support checkouts.
+If isolation cannot start, `AI_ENGINE_FALLBACK reason=isolation_*` returns 75.
+For read-profile session reuse, an unavailable session directory reports
+`reason=isolation_session_dir_unavailable` before any container starts.
+If the pool directory disappears after isolation preflight, the fallback is
+`reason=isolation_pool_unavailable`, not a session-directory error.
 When no CLI, policy, instructions file or account is usable, it logs
 `AI_ENGINE_FALLBACK role= reason=`, sends at most one Telegram note per job,
 and returns `75`; the caller then runs its codex path unchanged. A crash
@@ -2017,15 +2036,23 @@ returns `124`. Runs are wrapped by `codex_stall_guard.sh --engine claude`,
 which only adds `engine=claude` to its log lines, and every success prints the
 stream-json `result` usage line that `scripts/cost_audit.py` totals under
 "Claude engine usage".
+When session reuse is requested, a pool directory that overlaps the mounted
+session directory falls back with `reason=isolation_pool_overlap` before the
+container starts.
+The read-profile container still mounts the full checkout and any configured
+extra read directories; do not place credentials or other secrets in those
+paths. There is no per-file read allowlist yet.
 
 **Context gate.** `--bare` is not used because it never reads OAuth
 credentials. The smoke run checks that a no-op run starts below 25,000 input
 tokens and that a marker placed only in the checkout's `CLAUDE.md` is not
 visible. If it is, set `hide_claude_md: true` in `claude_engine.json`:
-`claude_run` then moves `CLAUDE.md` out of the checkout for the call and puts
+For write profiles, `claude_run` then moves `CLAUDE.md` out of the checkout for the call and puts
 it back afterwards. If the run creates a new `CLAUDE.md`, it keeps the new
 file, saves the original as `CLAUDE.md.original.<unique suffix>` beside it,
 and reports that path instead of overwriting the new content.
+For read profiles it overlays an empty file only inside the container, leaving
+the host checkout untouched.
 
 **Token broker.** The account tokens never live in coding-workflows or in a
 consumer repo. They are `CLAUDE_POOL_TOKEN_<NAME>` secrets in

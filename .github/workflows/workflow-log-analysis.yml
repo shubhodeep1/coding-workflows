@@ -883,6 +883,49 @@ jobs:
           name: workflow-log-output
           path: ${{ runner.temp }}/workflow-log-output
 
+      # Claude engine (replace-claude-sessions plan Phase 5d): the log analysis and
+      # (Q41) the unselected-run summaries run on Claude unless AI_ENGINE_<ROLE> or
+      # AI_ENGINE say codex; exit 75 runs the unchanged codex / OpenRouter call (plan D1).
+      # Resolved before the summary step, which needs the result.
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_LOG_ANALYSIS: ${{ vars.AI_ENGINE_LOG_ANALYSIS || '' }}
+          AI_ENGINE_LOG_SUMMARY: ${{ vars.AI_ENGINE_LOG_SUMMARY || '' }}
+        run: |
+          set -euo pipefail
+          any_claude=false
+          engine_loaded=false
+          if [ -f "scripts/ai_engine.sh" ]; then
+            # shellcheck disable=SC1091
+            source "scripts/ai_engine.sh" && engine_loaded=true
+          fi
+          for role in LOG_ANALYSIS LOG_SUMMARY; do
+            engine="codex"
+            if [ "${engine_loaded}" = "true" ]; then
+              engine="$(ai_engine_for_role "${role}" || echo codex)"
+            fi
+            [ "${engine}" = "claude" ] || engine="codex"
+            [ "${engine}" = "codex" ] || any_claude=true
+            echo "AI_ENGINE_RESOLVED_${role}=${engine}" >> "$GITHUB_ENV"
+          done
+          echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
+
       - name: Summarize unselected runs (gpt-6-luna)
         id: summarize_unselected
         # Fail-open contract: this step widens analyzer coverage by adding
@@ -895,6 +938,7 @@ jobs:
           WORKFLOW_LOG_SUMMARY_MODEL: ${{ vars.WORKFLOW_LOG_SUMMARY_MODEL || 'openai/gpt-6-luna' }}
           WORKFLOW_LOG_SUMMARY_MAX_RUNS: ${{ vars.WORKFLOW_LOG_SUMMARY_MAX_RUNS || '100' }}
           WORKFLOW_LOG_SUMMARY_TOKEN_BUDGET: ${{ vars.WORKFLOW_LOG_SUMMARY_TOKEN_BUDGET || '1500000' }}
+          WORKFLOW_LOG_SUMMARY_TIME_BUDGET_SECS: ${{ vars.WORKFLOW_LOG_SUMMARY_TIME_BUDGET_SECS || '900' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
@@ -926,47 +970,6 @@ jobs:
             --report workflow_log_report.json \
             --max-summaries "${max_summaries}" \
             --token-budget "${token_budget}"
-
-      # Claude engine (replace-claude-sessions plan Phase 5d): the log analysis runs on
-      # Claude unless AI_ENGINE_LOG_ANALYSIS or AI_ENGINE say codex; exit 75 runs the
-      # unchanged codex call (plan D1).
-      - name: Resolve AI engine
-        id: ai_engine
-        env:
-          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
-          AI_ENGINE_LOG_ANALYSIS: ${{ vars.AI_ENGINE_LOG_ANALYSIS || '' }}
-        run: |
-          set -euo pipefail
-          any_claude=false
-          engine_loaded=false
-          if [ -f "scripts/ai_engine.sh" ]; then
-            # shellcheck disable=SC1091
-            source "scripts/ai_engine.sh" && engine_loaded=true
-          fi
-          for role in LOG_ANALYSIS; do
-            engine="codex"
-            if [ "${engine_loaded}" = "true" ]; then
-              engine="$(ai_engine_for_role "${role}" || echo codex)"
-            fi
-            [ "${engine}" = "claude" ] || engine="codex"
-            [ "${engine}" = "codex" ] || any_claude=true
-            echo "AI_ENGINE_RESOLVED_${role}=${engine}" >> "$GITHUB_ENV"
-          done
-          echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
-
-      - name: Install Claude Code CLI
-        if: steps.ai_engine.outputs.any_claude == 'true'
-        continue-on-error: true
-        uses: ./.github/actions/install-claude
-        with:
-          config_path: .github/ai/claude_engine.json
-
-      - name: Resolve Claude credential
-        if: steps.ai_engine.outputs.any_claude == 'true'
-        continue-on-error: true
-        uses: ./.github/actions/claude-pool-token
-        with:
-          config_path: .github/ai/claude_engine.json
 
       - name: Run workflow log analysis
         id: analyze

@@ -1285,9 +1285,26 @@ security_audit_claude_rc=75
 security_audit_engine_sh="${SECURITY_AUDIT_SUPPORT_DIR}/scripts/ai_engine.sh"
 if [ -f "${security_audit_engine_sh}" ]; then
 	security_audit_claude_rc=0
+	# #6217: isolate the read-profile model from write-capable credentials and
+	# runner command files. Its prompt is repository-local; gh reads unavailable
+	# without GH_TOKEN are not needed. The parent retains these for reporting.
 	# shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
-	AI_ENGINE_MODEL_HINT="${WORKFLOW_EDITOR_MODEL:-}" AI_ENGINE_EFFORT_HINT="xhigh" \
-		bash -c 'source "$1" && claude_run_selected SECURITY_AUDIT "$2" "$3" "$4"' _ \
+	env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID -u OPENROUTER_API_KEY -u GH_PAT \
+		-u GITHUB_ENV -u GITHUB_PATH -u GITHUB_OUTPUT -u GITHUB_STATE -u GITHUB_STEP_SUMMARY \
+		AI_ENGINE_MODEL_HINT="${WORKFLOW_EDITOR_MODEL:-}" AI_ENGINE_EFFORT_HINT="xhigh" \
+		bash -c 'source "$1" && {
+			unset AI_ENGINE_LAST_RUN_DIR
+			audit_claude_call_rc=0
+			claude_run_selected SECURITY_AUDIT "$2" "$3" "$4" || audit_claude_call_rc=$?
+			if [ "$audit_claude_call_rc" -ne 0 ] && [ "$audit_claude_call_rc" -ne 75 ] && [ -n "${AI_ENGINE_LAST_RUN_DIR:-}" ]; then
+				for audit_claude_stderr_file in "${AI_ENGINE_LAST_RUN_DIR}"/stderr-*.txt; do
+					[ -f "$audit_claude_stderr_file" ] || continue
+					# Keep one extra byte so the sanitizer detects a cut first line.
+					tail -c 65538 -- "$audit_claude_stderr_file" >&2
+				done
+			fi
+			exit "$audit_claude_call_rc"
+		}' _ \
 		"${security_audit_engine_sh}" "${RENDERED_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${PWD}" \
 		2> "${CODEX_ERROR_FILE}" || security_audit_claude_rc=$?
 fi
