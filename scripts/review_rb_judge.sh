@@ -1774,8 +1774,8 @@ RB_JUDGE_COMMENT_FILE="${RUNTIME_DIR}/rb_judge_comment.md"
   echo "${JUDGE_COMMENT}"
   echo
   echo "**Decision:** ${RB_ACTION}"
-  if [ -n "${RB_SECURITY_ORIGINAL_ACTION}" ]; then
-    echo "**Converted:** judge chose ${RB_SECURITY_ORIGINAL_ACTION}; ${RB_SECURITY_BLOCKING_COUNT} open high/critical/unrated findings block the merge (${RB_SECURITY_BLOCKING_ISSUES})"
+  if [ -n "${RB_SECURITY_ORIGINAL_ACTION:-}" ]; then
+    echo "**Converted:** judge chose ${RB_SECURITY_ORIGINAL_ACTION:-}; ${RB_SECURITY_BLOCKING_COUNT:-0} open high/critical/unrated findings block the merge (${RB_SECURITY_BLOCKING_ISSUES:-})"
   fi
   if [ -n "${RB_LOGICAL_REVIEW_STATE}" ]; then
     echo "**Logical review state:** ${RB_LOGICAL_REVIEW_STATE}"
