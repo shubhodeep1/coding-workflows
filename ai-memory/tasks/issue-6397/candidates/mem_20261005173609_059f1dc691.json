@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which resolver paths must stop running the host OpenCode writer?\nChoices:\nA. Only the fallbacks taken when the Claude engine is selected (`sandbox_prepare_failed`, `sandbox_path_unsupported`, `sandbox_helper_outdated`, Claude exit 75). They retry OpenCode in a fresh sandbox, or defer. The default path (codex engine, or `CLAUDE_FIXER_ENABLED=false`) keeps its current host OpenCode run.\nB. All resolver model runs, including the default codex-engine path, run in the `review_untrusted_sandbox.sh` sandbox and hand results back through validated transfer. The host OpenCode writer never runs for the resolver. This matches how the editor and judges are already isolated. (RECOMMENDED)\nC. Remove only the `sandbox_path_unsupported` fallback and leave every other path as it is.\nQ2: What should happen when a conflicted path is outside the sandbox's admitted set (for example `.svg`, binary files, or extensions not in `SUFFIXES`)?\nChoices:\nA. Refuse it: don't run any model, and end the attempt through the existing resolver-failure path (`conflict_resolver_failed`, retry state, and eventually `ai:resolver-escalated`). (RECOMMENDED)\nB. Add more text extensions (for example `.svg` and `.xml`) to the sandbox's admitted set, and refuse only the paths still outside it, as in A.\nC. Refuse it as in A, and also label the PR `ai:needs-human` straight away instead of waiting for the resolver escalation threshold.",
+  "fingerprint": "60f5d3df49b7a4b387b5ccd107f759e7da1346ee90e276faefe01fecbbb29e4a",
+  "lineage": {
+    "issue_number": 6397,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37348583808",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37348583808",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261005173609_059f1dc691",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6397,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37348583808"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6397 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-05T17:36:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
