@@ -3395,6 +3395,10 @@ sys.exit(proc.returncode)
 				"BRANCH_REBUILD_COOLDOWN_HOURS": branch_rebuild_cooldown_hours,
 				"GH_MOCK_STORE": str(store_file),
 				"GH_RETRY_MAX_ATTEMPTS": "1",
+				# The poller installs Semble from PyPI and indexes the sandbox on
+				# the first judge query when enabled; keep the harness hermetic
+				# unless a test opts in through env_overrides.
+				"SEMBLE_ENABLED": "false",
 				"REAL_GIT_BIN": real_git,
 				"REAL_JQ_BIN": real_jq,
 				"REAL_PYTHON_BIN": real_python,
