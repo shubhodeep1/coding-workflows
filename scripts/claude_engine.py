@@ -1271,7 +1271,7 @@ def build_read_snapshot(source: Path, dest: Path, omit_claude_md: bool = False, 
 		if (not parts or Path(entry).is_absolute() or ".." in parts or
 			any(part.lower() in (".git", ".claude", ".ssh") or part.lower().startswith((".codex-workflow-src", ".env"))
 				or part.lower() in ("secrets", "credentials") for part in parts) or
-			parts[-1].lower() in (".git-credentials", ".netrc", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa") or
+			parts[-1].lower() in (".git-credentials", ".netrc", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", "id_ed25519_sk", "id_ecdsa_sk", "id_xmss") or
 			Path(entry).suffix.lower() in (".pem", ".key", ".p12", ".pfx", ".keystore") or
 			(omit_claude_md and parts[-1] == "CLAUDE.md")):
 			continue

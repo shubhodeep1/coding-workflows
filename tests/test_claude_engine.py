@@ -520,7 +520,7 @@ def test_read_snapshot_excludes_credentials_and_rebuilds_git(tmp_path: Path, mon
 	(source / "id.key").write_text("private", encoding="utf-8")
 	(source / "skip.pem").write_text("private", encoding="utf-8")
 	(source / "keys").mkdir()
-	for key_name in ("id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"):
+	for key_name in ("id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", "id_ed25519_sk", "id_ecdsa_sk", "id_xmss"):
 		(source / "keys" / key_name).write_text("private", encoding="utf-8")
 	(source / ".claude").mkdir()
 	(source / ".claude" / ".credentials.json").write_text("private", encoding="utf-8")
