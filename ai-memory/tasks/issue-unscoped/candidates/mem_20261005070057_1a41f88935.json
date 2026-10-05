@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/hopeful-fermat-9pb74t-guard-redirect-parsing.md:filename | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The changelog fragment filename uses a branch-style slug instead of the issue-or-PR number prefix required by CLAUDE.md \u00a720.B.\n  WHY: The assembler still includes the fragment, but its filename does not identify the owning PR as the documented traceability convention requires.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- changelog.d/hopeful-fermat-9pb74t-guard-redirect-parsing.md:filename | severity=low | confidence=5\n  PROBLEM: The changelog fragment filename uses the branch-style slug prefix `hopeful-fermat-9pb74t` instead of the issue-or-PR number prefix required by CLAUDE.md \u00a720.B.\n  WHY: The assembler `scripts/assemble_changelog.py` discovers and includes the fragment regardless of filename, so there is no runtime failure, but the filename does not identify its owning PR as the convention requires.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/hopeful-fermat-9pb74t-guard-redirect-parsing.md:filename (line 1) | severity=low | confidence=5\n  PROBLEM: The changelog fragment filename uses a branch-style slug prefix instead of the issue-or-PR number required by CLAUDE.md \u00a720.B.\n  WHY: The assembler still discovers and folds the fragment into `CHANGELOG.md`, but the filename does not provide the required issue-or-PR traceability.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/hopeful-fermat-9pb74t-guard-redirect-parsing.md:Filename; fragment content begins at line 1. | severity=low | confidence=5\n  PROBLEM: The fragment filename does not use the required `changelog.d/<issue-or-pr>-<slug>.md` format from `CLAUDE.md` \u00a720.B.\n  WHY: Changelog assembly still includes the fragment, but the filename does not meet the required issue-or-PR traceability convention.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/hopeful-fermat-9pb74t-guard-redirect-parsing.md:filename | severity=low | confidence=5\n  PROBLEM: The changelog fragment filename uses a branch-style slug instead of the issue-or-PR-number prefix required by CLAUDE.md \u00a720.B.\n  WHY: The assembler still includes the fragment, but the filename does not identify its owning PR as the documented naming convention requires.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- changelog.d/hopeful-fermat-9pb74t-guard-redirect-parsing.md:filename (line 1 of file listing) | severity=low | confidence=5\n  PROBLEM: The changelog fragment filename uses a GitHub-generated branch slug instead of the issue-or-PR-number prefix required by CLAUDE.md \u00a720.B.\n  WHY: The assembler discovers and folds any `.md` file in `changelog.d/` regardless of filename, but the filename cannot be traced to its owning PR as the convention requires.\n- Requirement: The PR description names this as a \"docs: plan for Semble overflow-path shutdown, lazy bootstrap and telemetry\" \u2014 a plan-only PR whose four implementation phases are each explicitly deferred to separate future PRs (\"Each phase is one PR, independently mergeable in any order\"). The bundled merged-PR guard redirect-parsing fix is covered by the changelog fragment and the hook/parser/test changes in the diff.\n  Expected change site: N/A \u2014 the Semble implementation phases are explicitly out of scope for this PR (the plan states \"Each phase is one PR, independently mergeable\"), and the guard fix is fully implemented (both hook copies, regression tests, changelog fragment).\n  ISSUE_CONFIDENCE: 5\n  Evidence of absence: No task gap. The plan document `docs/plans/semble-overflow-off-lazy-bootstrap-plan.md` is present and complete. The guard fix is implemented across both `.claude/hooks/pr_merge_status_guard.py` and `workflow-templates/.claude/hooks/pr_merge_status_guard.py` (byte-identical, verified by `test_template_copies_are_identical`), with regression tests in `tests/test_pr_merge_status_guard.py` and a changelog fragment. The plan doc edit in the last run correctly clarifies that the bundled guard fix ships behavior and has its own fragment.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "17f157580b24b6c82fa0473af1beeee2bccf8b9a6d0d2a5782bba2db932c89d9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6271,
+    "run_id": "37270707520",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37270707520",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005070057_1a41f88935",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6271,
+    "run_id": "37270707520"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T07:00:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
