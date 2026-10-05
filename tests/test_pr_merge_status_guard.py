@@ -1071,6 +1071,7 @@ def test_push_parser_guards_real_destination(merged_branch_repo, monkeypatch, co
 	"git push --repo=other",
 	"git push --repo other",
 	"git push --rep=other",
+	"git push --repo=origin other HEAD:feature/x",
 ])
 def test_push_looks_up_destination_repo(merged_branch_repo, monkeypatch, command: str) -> None:
 	repo, _ = merged_branch_repo
@@ -1132,11 +1133,6 @@ def test_quoted_numeric_push_refspec_cannot_match_later_redirect(merged_branch_r
 
 @pytest.mark.parametrize("command", [
 	"git push origin HEAD:$DEST",
-	"git push --repo=origin HEAD:$DEST",
-	"git push --repo origin HEAD:feature/x",
-	"git push --repo=origin HEAD:feature/x",
-	"git push --repo=upstream mirror HEAD:feature/x",
-	"git push --repo=upstream ../mirror HEAD:feature/x",
 	"git push --repo=upstream https://github.com/o/r.git HEAD:feature/x",
 	"git push --unknown origin 12",
 ])
@@ -1158,7 +1154,7 @@ def test_positional_remote_probe_failure_requires_confirmation(merged_branch_rep
 			return 124, "", "timed out"
 		return actual_run(argv, cwd, timeout)
 	monkeypatch.setattr(guard, "_run", timed_out_config)
-	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("destination unknown"))
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: (_ for _ in ()).throw(guard.LookupUnavailable("offline")))
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
 		"tool_input": {"command": "git push --repo=upstream origin"}})
 	assert (code, message) == (0, "")
@@ -1171,10 +1167,8 @@ def test_unconfigured_positional_repository_does_not_become_a_branch(merged_bran
 	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("destination unknown"))
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
 		"tool_input": {"command": "git push --repo=upstream mirror"}})
-	assert (code, message) == (0, "")
-	output = json.loads(capsys.readouterr().out)
-	assert output["hookSpecificOutput"]["permissionDecision"] == "ask"
-	assert "could not resolve git push positional repository" in output["systemMessage"]
+	assert code == 2 and "could not verify the push destination `mirror`" in message
+	assert capsys.readouterr().out == ""
 
 
 @pytest.mark.parametrize("command", [
@@ -1310,8 +1304,11 @@ def test_default_push_remote_precedence(merged_branch_repo, monkeypatch) -> None
 	"git push nosuch HEAD:feature/x",
 	"git push git@gitlab.com:o/r HEAD:x",
 	"git push https://evilgithub.com/o/r HEAD:x",
+	"git push --repo=origin HEAD:$DEST",
 	"git push --repo=origin HEAD:feature/x",
 	"git push --repo origin HEAD:feature/x",
+	"git push --repo=upstream mirror HEAD:feature/x",
+	"git push --repo=upstream ../mirror HEAD:feature/x",
 ])
 def test_unmappable_push_destination_blocks_without_lookup(merged_branch_repo, monkeypatch, command: str) -> None:
 	repo, _ = merged_branch_repo
@@ -1320,6 +1317,15 @@ def test_unmappable_push_destination_blocks_without_lookup(merged_branch_repo, m
 		"tool_input": {"command": command}})
 	assert code == 2
 	assert "could not verify the push destination" in message
+
+
+def test_unmappable_push_destination_blocks_from_detached_head(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "checkout", "--detach", "HEAD")
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("no PR lookup expected"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push --repo=origin HEAD:feature/x"}})
+	assert code == 2 and "could not verify the push destination" in message
 
 
 @pytest.mark.parametrize("include_github_url", [False, True])

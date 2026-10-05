@@ -513,15 +513,8 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 	# Git treats the first positional as the repository even when --repo was set.
 	push_repository = positionals[0] if positionals else option_repository
 	refspecs = positionals[1:]
-	if option_repository and positionals:
-		with _git_environment(invocation.environment):
-			code, _, _ = _run(
-				["git", "config", "--get", f"remote.{positionals[0]}.url"],
-				invocation.cwd, _GIT_TIMEOUT_SECONDS,
-			)
-		if code != 0:
-			return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
-				"could not resolve git push positional repository; destination branch is unknown")]
+	# Let destination resolution reject an unmappable positional repository,
+	# rather than skipping its empty-branch warning before that check runs.
 	if not refspecs and tags and not bulk:
 		return []
 	if not refspecs:
@@ -1462,9 +1455,6 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 					target = target._replace(tip=resolved_source_sha.strip())
 			with _git_environment(target.environment):
 				branch = target.branch or current_branch(target.cwd)
-				if not branch:
-					# Detached HEAD without a literal branch destination.
-					continue
 				if target.reaches_remote:
 					destination = _resolve_push_destination(target.cwd, target.push_repository)
 					if destination.failure:
@@ -1488,6 +1478,9 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 					base = default_branch(target.cwd)
 					slugs = ()
 					remote = "origin"
+				if not branch:
+					# Detached HEAD without a literal branch destination.
+					continue
 				if base and branch == base:
 					continue
 				if not target.reaches_remote:
