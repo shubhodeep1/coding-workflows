@@ -562,9 +562,11 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   synthetic `.git` whose `HEAD` contains only allowed blobs from the host's
   `HEAD`, so filtered tracked files cannot be retrieved with `git show`.
 - **Dependencies.** `codex_isolated_exec.sh prepare --deps` (implement) installs
-  dependencies once per job in a credential-free container that does have
-  network (`npm ci --ignore-scripts`, `pip install` into `/opt/codex-venv`).
-  Their output stays in the sandbox ("prep roots") and is never copied back.
+  dependencies once per job. The networked, credential-free container sees
+  only staged Node manifests and filtered third-party Python requirements,
+  never the source tree. An editable source install runs separately with
+  `--network none`; `prep-finalize` restores source files and keeps dependency
+  output in the sandbox ("prep roots"), never copying it back.
   The agent itself has no network: it marks validators it cannot run
   UNVERIFIED instead of installing them.
 - **Trusted copies.** The helper reads its support files from its own

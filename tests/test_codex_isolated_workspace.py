@@ -255,6 +255,128 @@ def snapshot_ws(repo, tmp_path):
 	return dest, manifest
 
 
+@pytest.mark.parametrize("lock,mode", [
+	("package-lock.json", "npm-ci"), ("yarn.lock", "yarn"),
+	("pnpm-lock.yaml", "pnpm"), (None, "npm-install"),
+])
+def test_stage_deps_allowlists_node_manifests(repo, tmp_path, lock, mode):
+	work = tmp_path / "work"
+	work.mkdir()
+	(work / "package.json").write_text('{"name":"example"}')
+	for name in ("package-lock.json", "yarn.lock", "pnpm-lock.yaml", ".yarnrc", ".yarnrc.yml", ".pnpmfile.cjs", "pnpm-workspace.yaml", "app.py"):
+		(work / name).write_text("not source for the networked container\n")
+	if lock:
+		for name in ("package-lock.json", "yarn.lock", "pnpm-lock.yaml"):
+			if name != lock:
+				(work / name).unlink()
+	else:
+		for name in ("package-lock.json", "yarn.lock", "pnpm-lock.yaml"):
+			(work / name).unlink()
+	stage = tmp_path / "stage"
+	run("stage-deps", work, stage)
+	assert (stage / ".codex-deps" / "node").read_text().strip() == mode
+	assert (stage / ".codex-deps" / "python").read_text().strip() == "none"
+	assert tree(stage) == sorted([".codex-deps/node", ".codex-deps/python", "package.json"] + ([lock] if lock else []))
+	(work / "node_modules").mkdir()
+	other_stage = tmp_path / "other-stage"
+	run("stage-deps", work, other_stage)
+	assert (other_stage / ".codex-deps" / "node").read_text().strip() == "present"
+	assert "package.json" not in tree(other_stage)
+
+
+@pytest.mark.parametrize("bad_kind", ["symlink", "oversized"])
+def test_stage_deps_skips_unsafe_manifests(repo, tmp_path, bad_kind):
+	work = tmp_path / "work"
+	work.mkdir()
+	if bad_kind == "symlink":
+		(work / "package.json").symlink_to(repo / "src" / "app.py")
+	else:
+		(work / "package.json").write_bytes(b"x" * (64 * 1024 * 1024 + 1))
+	stage = tmp_path / "stage"
+	proc = run("stage-deps", work, stage)
+	assert "skipped=package.json" in proc.stderr
+	assert (stage / ".codex-deps" / "node").read_text().strip() == "none"
+	assert not (stage / "package.json").exists()
+
+
+def test_stage_deps_filters_requirements_and_preserves_precedence(tmp_path):
+	work = tmp_path / "work"
+	work.mkdir()
+	(work / "requirements.txt").write_text("\n".join([
+		"requests==2.31", 'foo[bar]>=1; python_version>"3.8"',
+		"x @ https://example.org/x.whl", "valid==1 --hash=sha256:abc123",
+		"-e .", "-r extras.txt", "-c constraints.txt", "-i https://evil.invalid",
+		"--extra-index-url https://evil.invalid", "-f /tmp", "file:/tmp/pkg",
+		"./pkg", "/abs", "../x", "my-pkg[test]>=1",
+		"other @ file:///tmp/other", "other @ http://evil.invalid/pkg",
+		"other --index-url=https://evil.invalid", "other @ https://user:pass@evil.invalid/pkg",
+	]) + "\n")
+	(work / "pyproject.toml").write_text('[project]\nname = "my.pkg"\ndependencies = ["ignored"]\n')
+	(work / "pytest.ini").write_text("[pytest]\n")
+	stage = tmp_path / "stage"
+	run("stage-deps", work, stage)
+	meta = stage / ".codex-deps"
+	assert (meta / "python").read_text().strip() == "requirements"
+	assert (meta / "requirements.txt").read_text().splitlines() == [
+		"requests==2.31", 'foo[bar]>=1; python_version>"3.8"',
+		"x @ https://example.org/x.whl", "valid==1 --hash=sha256:abc123",
+	]
+	assert not (meta / "source-install").exists()
+	assert (meta / "want-pytest").exists()
+	assert "evil.invalid" not in (meta / "requirements.txt").read_text()
+
+
+def test_stage_deps_pyproject_build_and_offline_marker(tmp_path):
+	work = tmp_path / "work"
+	work.mkdir()
+	(work / "pyproject.toml").write_text('''[project]
+name = "my_pkg"
+dependencies = ["requests>=2", "my.pkg[test]", "local @ file:///tmp/local"]
+[project.optional-dependencies]
+dev = ["pytest>=7", "my-pkg[dev]"]
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+[tool.pytest.ini_options]
+addopts = "-q"
+''')
+	stage = tmp_path / "stage"
+	run("stage-deps", work, stage)
+	meta = stage / ".codex-deps"
+	assert (meta / "python").read_text().strip() == "pyproject"
+	assert (meta / "base.txt").read_text().splitlines() == ["requests>=2"]
+	assert (meta / "dev.txt").read_text().splitlines() == ["pytest>=7"]
+	assert (meta / "build.txt").read_text().splitlines() == ["setuptools>=68", "wheel"]
+	assert (meta / "source-install").exists() and (meta / "want-pytest").exists()
+	(work / "package.json").write_text("{}")
+	stage2 = tmp_path / "stage2"
+	run("stage-deps", work, stage2)
+	assert (stage2 / ".codex-deps" / "python").read_text().strip() == "none"
+
+
+def test_stage_deps_bad_pyproject_degrades_without_install(tmp_path):
+	work = tmp_path / "work"
+	work.mkdir()
+	(work / "pyproject.toml").write_text("[project\n")
+	stage = tmp_path / "stage"
+	proc = run("stage-deps", work, stage)
+	assert proc.returncode == 0 and "parse_failed" in proc.stderr
+	assert (stage / ".codex-deps" / "python").read_text().strip() == "none"
+	assert not (stage / ".codex-deps" / "source-install").exists()
+
+
+def test_stage_deps_never_follows_nested_symlinks_for_pytest_marker(tmp_path):
+	work = tmp_path / "work"
+	work.mkdir()
+	outside = tmp_path / "outside"
+	outside.mkdir()
+	(outside / "conftest.py").write_text("private\n")
+	(work / "tests").symlink_to(outside, target_is_directory=True)
+	stage = tmp_path / "stage"
+	run("stage-deps", work, stage)
+	assert not (stage / ".codex-deps" / "want-pytest").exists()
+	assert not list(stage.rglob("conftest.py"))
+
+
 def test_workspace_snapshot_excludes_git_and_keeps_symlinks(repo, tmp_path):
 	dest, manifest = snapshot_ws(repo, tmp_path)
 	assert not (dest / ".git").exists()

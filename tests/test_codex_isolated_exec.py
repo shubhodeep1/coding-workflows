@@ -283,6 +283,74 @@ def test_persistent_root_is_reused_and_cleaned_up(sandbox):
 	assert not Path(root).exists()
 
 
+def test_prepare_deps_networked_container_sees_no_source(sandbox):
+	(sandbox["repo"] / "package.json").write_text('{"name":"test"}\n')
+	(sandbox["repo"] / "package-lock.json").write_text("{}\n")
+	(sandbox["repo"] / ".yarnrc.yml").write_text("yarnPath: ./evil.cjs\n")
+	prep = run_helper(sandbox, "prepare", "--deps")
+	assert prep.returncode == 0, prep.stderr
+	root = Path(prep.stdout.strip())
+	try:
+		(runner,) = docker_runs(sandbox["docker_log"])
+		argv = runner["argv"]
+		assert "--network" not in argv
+		assert argv[argv.index("--workdir") + 1] == "/codex-deps"
+		mounts = mounts_of(runner)
+		assert len(mounts) == 2
+		assert any(f"src={root}/deps-stage,dst=/codex-deps" in m for m in mounts)
+		assert not any(f"src={root}/work" in m or f"dst={sandbox['repo']}" in m for m in mounts)
+		assert "src/app.py" not in json.dumps(runner)
+		assert not (root / "deps-stage").exists()
+	finally:
+		assert run_helper(sandbox, "cleanup", "--root", str(root)).returncode == 0
+
+
+def test_prepare_deps_pyproject_source_install_is_offline(sandbox):
+	(sandbox["repo"] / "pyproject.toml").write_text('[project]\nname = "sample"\ndependencies = ["requests"]\n')
+	prep = run_helper(sandbox, "prepare", "--deps")
+	assert prep.returncode == 0, prep.stderr
+	root = Path(prep.stdout.strip())
+	try:
+		networked, offline = docker_runs(sandbox["docker_log"])
+		assert "--network" not in networked["argv"]
+		assert "--network" in offline["argv"]
+		assert offline["argv"][offline["argv"].index("--network") + 1] == "none"
+		assert "--read-only" in offline["argv"] and "--tmpfs" in offline["argv"]
+		assert any(f"src={root}/work,dst={sandbox['repo']}" in m for m in mounts_of(offline))
+		assert not any(f"src={root}/work" in m for m in mounts_of(networked))
+	finally:
+		assert run_helper(sandbox, "cleanup", "--root", str(root)).returncode == 0
+
+
+def test_prepare_deps_node_modules_remain_in_prep_root(sandbox):
+	(sandbox["repo"] / "package.json").write_text("{}\n")
+	install_fake_docker(sandbox["bin"], sandbox["docker_log"], {"FAKE_DEPS_CREATE_NODE_MODULES": "1"})
+	prep = run_helper(sandbox, "prepare", "--deps")
+	assert prep.returncode == 0, prep.stderr
+	root = Path(prep.stdout.strip())
+	try:
+		assert (root / "work" / "node_modules" / "marker").read_text() == "installed\n"
+		assert not (sandbox["repo"] / "node_modules").exists()
+		assert "node_modules" in json.loads((root / "manifest.json").read_text())["prep_roots"]
+		write_fake_codex(sandbox, action="edit")
+		result = run_helper(sandbox, "run", "--mode", "workspace", "--root", str(root), *CODEX_ARGS)
+		assert result.returncode == 0, result.stderr
+		assert not (sandbox["repo"] / "node_modules").exists()
+		assert (sandbox["repo"] / "new_file.py").exists()
+	finally:
+		assert run_helper(sandbox, "cleanup", "--root", str(root)).returncode == 0
+
+
+def test_prepare_deps_failure_remains_unverified_warning(sandbox):
+	install_fake_docker(sandbox["bin"], sandbox["docker_log"], {"FAKE_DEPS_FAIL": "1"})
+	prep = run_helper(sandbox, "prepare", "--deps")
+	assert prep.returncode == 0, prep.stderr
+	assert "agent runs without preinstalled dependencies" in prep.stderr
+	root = Path(prep.stdout.strip())
+	assert (root / "manifest.json").exists()
+	assert run_helper(sandbox, "cleanup", "--root", str(root)).returncode == 0
+
+
 def test_foreign_root_is_rejected(sandbox, tmp_path):
 	write_fake_codex(sandbox)
 	foreign = sandbox["runner_temp"] / "not-ours"
