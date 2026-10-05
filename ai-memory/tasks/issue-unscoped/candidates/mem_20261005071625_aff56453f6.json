@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:5957 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_8-flash, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The break-glass scan runs Python in the PR checkout without `PYTHONSAFEPATH=1`, allowing PR-controlled modules such as `json.py` or `re.py` to be imported.\n  WHY: A malicious module could execute during the credential-bearing scan; qwen rated this MAJOR while the other reviewers did not state a severity.\n- scripts/review_conflict_prepare.sh:685 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_8-flash, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The conflict resolver prompt template expansion runs Python in the PR checkout without `PYTHONSAFEPATH=1`, allowing PR-controlled modules to be imported.\n  WHY: A malicious module could execute during conflict preparation; qwen rated this MAJOR while the other reviewers did not state a severity.\n- scripts/review_conflict_resolve.sh:1267 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_8-flash, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The resolver retry prompt prelude runs Python in the repository root without `PYTHONSAFEPATH=1`, allowing PR-controlled modules to be imported.\n  WHY: A malicious module could execute during conflict retries; qwen rated this MAJOR while the other reviewers did not state a severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_8-flash ===\n- .github/workflows/review_autofix.yml:5957\n  PROBLEM: The review-blocked break-glass override detection step executes an inline python3 script via stdin in the PR checkout root without PYTHONSAFEPATH=1. If REVIEW_BREAK_GLASS_ENABLED is enabled, a PR tree providing top-level modules like json.py or re.py could be imported during the scan.\n  WHY: Suggested minimal fix: Add PYTHONSAFEPATH=1 to the execution line: PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' >> \"$GITHUB_ENV\"\n- scripts/review_conflict_prepare.sh:685\n  PROBLEM: The conflict resolver prompt template expansion executes python3 -c in the PR workspace root without PYTHONSAFEPATH=1, which could import an untrusted os.py from the checkout if merge conflict preparation runs on an untrusted branch.\n  WHY: Suggested minimal fix: Prefix the command with PYTHONSAFEPATH=1 python3 -c\n- scripts/review_conflict_resolve.sh:1267\n  PROBLEM: The resolver retry prompt prelude template expansion executes python3 -c in the repository root without PYTHONSAFEPATH=1, risking import of an untrusted os.py or re.py from the checkout.\n  WHY: Suggested minimal fix: Prefix the invocation with PYTHONSAFEPATH=1 python3 -c\n=== END FINDINGS FROM google_gemini-3_8-flash ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/review_autofix.yml:5957 | severity=high | confidence=4\n  PROBLEM: The review-blocked break-glass override detection executes `python3 -` with imports (json, os, re, pathlib) in the PR checkout without PYTHONSAFEPATH=1. A malicious PR could provide top-level modules like json.py or re.py that would be imported instead of the standard library.\n  WHY: When this step runs after max_iterations_reached, it scans PR comments for break-glass markers. If the PR checkout contains a malicious json.py at the root, Python would import it instead of the standard library json module, executing attacker code with the review job's GH_PAT and API credentials.\n- scripts/review_conflict_prepare.sh:685 | severity=high | confidence=4\n  PROBLEM: The conflict resolver prompt template expansion executes `python3 -c \"import os,sys; ...\"` in the PR checkout without PYTHONSAFEPATH=1. This runs during merge conflict resolution with GH_PAT available.\n  WHY: When preparing the resolver prompt, this Python one-liner imports os and sys. If the PR checkout contains malicious os.py or sys.py modules at the root, they would be imported instead of the standard library, executing attacker code before the resolver sandbox starts.\n- scripts/review_conflict_resolve.sh:1267 | severity=high | confidence=4\n  PROBLEM: The resolver retry prompt prelude expansion executes `python3 -c \"import os,re,sys; ...\"` in the PR checkout without PYTHONSAFEPATH=1. This runs during conflict resolution retry attempts with credentials available.\n  WHY: When building retry prompts after resolver failures, this Python one-liner imports os, re, and sys. If the PR checkout contains malicious modules at the root, they would be imported instead of the standard library, executing attacker code in the host environment.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/review_autofix.yml:5957\n  PROBLEM: The break-glass scan runs `PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'` in the PR checkout without `PYTHONSAFEPATH=1`. A PR-controlled top-level `json.py` or `re.py` could be imported during the scan. This step runs post-editor (not pre-isolation), so it falls outside the AD-1 scope of this PR, but it is a credential-bearing Python call in the PR checkout with the same import-exposure shape the PR is closing.\n  WHY: Suggested minimal fix: Add `PYTHONSAFEPATH=1` to the invocation: `PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' >> \"$GITHUB_ENV\"`\n- scripts/review_conflict_prepare.sh:685\n  PROBLEM: The conflict-resolver prompt template expansion runs `python3 -c` in the PR workspace without `PYTHONSAFEPATH=1`. This file is not touched by this PR and the conflict resolver runs during the editor phase, not pre-isolation, so it is out of scope for this PR's task. Flagging as a follow-up hardening candidate only.\n  WHY: Suggested minimal fix: Prefix the invocation with `PYTHONSAFEPATH=1 python3 -c`\n- scripts/review_conflict_resolve.sh:1267\n  PROBLEM: The resolver retry prompt prelude template expansion runs `python3 -c` in the repository root without `PYTHONSAFEPATH=1`. Same out-of-scope rationale as above.\n  WHY: Suggested minimal fix: Prefix the invocation with `PYTHONSAFEPATH=1 python3 -c`\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4c9c3a2f61601cc17cbd330ccc63dbeaa78fe77a0fdc1af4662520c1ad9d95f2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6259,
+    "run_id": "37271070039",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37271070039",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261005071625_aff56453f6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6259,
+    "run_id": "37271070039"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-05T07:16:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
