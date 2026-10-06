@@ -15,15 +15,19 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 POLLER = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 POLL_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
 
-# A stand-in for scripts/ai_engine.sh: the engine comes from FAKE_ENGINE, and
+# A stand-in for scripts/ai_engine.sh: the engine comes from FAKE_ENGINE unless
+# the labels select ai:codex, and
 # claude_run records its role, files, labels and hints, then plays
 # FAKE_CLAUDE_MODE (success writes "claude verdict", unavailable returns 75,
 # crash returns 1).
 FAKE_AI_ENGINE = r"""
 ai_engine_for_role() {
+  local selected_engine
   printf '%s|%s\n' "$1" "${AI_ENGINE_LABELS-unset}" >> "${CALLS}.resolve"
-  echo "AI_ENGINE_SELECTED role=$1 engine=${FAKE_ENGINE}" >&2
-  printf '%s\n' "${FAKE_ENGINE}"
+  selected_engine="${FAKE_ENGINE}"
+  case "${AI_ENGINE_LABELS:-}" in *ai:codex*) selected_engine=codex ;; esac
+  echo "AI_ENGINE_SELECTED role=$1 engine=${selected_engine}" >&2
+  printf '%s\n' "${selected_engine}"
 }
 ai_engine_fallback() {
   printf 'AI_ENGINE_FALLBACK role=%s reason=%s\n' "$1" "$2" >&2
@@ -43,7 +47,7 @@ def _helper_source() -> str:
 	text = POLLER.read_text(encoding="utf-8")
 	return "\n".join(
 		re.search(rf"^{name}\(\)\n\{{\n.*?^\}}\n", text, re.MULTILINE | re.DOTALL).group(0)
-		for name in ("poller_claude_judge", "_poller_rb_judge_sandbox_attempt", "poller_judge_isolated", "poller_rb_judge_isolated")
+		for name in ("poller_claude_judge", "_poller_rb_judge_sandbox_attempt", "poller_judge_engine_labels_json", "poller_judge_isolated", "poller_rb_judge_isolated")
 	)
 
 
@@ -58,6 +62,8 @@ def _run_helper(
 	role: str = "WAVE_JUDGE",
 	combined_mode: str = "false",
 	log_file: str = "judge_log.txt",
+	issue_labels: str | None = None,
+	issue_scope: str = "standalone",
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
 	scripts = tmp_path / "scripts"
 	scripts.mkdir(parents=True, exist_ok=True)
@@ -70,11 +76,18 @@ def _run_helper(
 	prompt.write_text("judge this\n", encoding="utf-8")
 	calls = tmp_path / "calls"
 	labels_line = f"TRACKING_LABELS='{tracking_labels}'\n" if tracking_labels is not None else "unset TRACKING_LABELS\n"
+	issue_labels_line = ""
+	if issue_labels is not None:
+		issue_labels_line = (
+			f"POLLER_JUDGE_ENGINE_LABELS=$(poller_judge_engine_labels_json {issue_scope} "
+			f"'{issue_labels}') || POLLER_JUDGE_ENGINE_LABELS=unavailable\n"
+		)
 	script = (
 		"set -euo pipefail\n"
 		f"_POLLER_AI_ENGINE_SH={scripts / 'ai_engine.sh'}\n"
 		+ _helper_source()
 		+ labels_line
+		+ issue_labels_line
 		+ f"MODEL_EDITOR=openai/gpt-6-sol\nMODEL_REASONING_EFFORT_JUDGE=xhigh\nRB_COMBINED_MODE={combined_mode}\n"
 		+ "rc=0\n"
 		+ f'poller_claude_judge {role} prompt.txt out.txt {log_file} ' + extra + ' || rc=$?\n'
@@ -139,6 +152,57 @@ def test_no_tracking_labels_means_an_explicit_empty_list(tmp_path: Path) -> None
 	_stage_rb_support(tmp_path)
 	_proc, calls = _run_helper(tmp_path, engine="codex", tracking_labels=None)
 	assert _read(Path(f"{calls}.resolve")).splitlines() == ["WAVE_JUDGE|[]"]
+
+
+@pytest.mark.parametrize("scope, role, issue_labels, tracking_labels, expected, selected_engine", [
+	("standalone", "STALL_JUDGE", '["ai:clarification","ai:codex"]', '["ai:engine-claude"]', ["ai:clarification", "ai:codex"], "codex"),
+	("managed", "STALL_JUDGE", '["ai:orchestrator-managed","ai:codex"]', '["ai:engine-claude"]', ["ai:codex", "ai:engine-claude", "ai:orchestrator-managed"], "codex"),
+	("managed", "RB_JUDGE", '["ai:orchestrator-managed","ai:codex"]', '["ai:engine-claude"]', ["ai:codex", "ai:engine-claude", "ai:orchestrator-managed"], "codex"),
+	("managed", "RB_JUDGE", '["ai:orchestrator-managed","ai:done"]', '[{"name":"ai:engine-claude"}]', ["ai:done", "ai:engine-claude", "ai:orchestrator-managed"], "claude"),
+])
+def test_issue_judges_resolve_from_verified_labels(
+	tmp_path: Path, scope: str, role: str, issue_labels: str, tracking_labels: str, expected: list[str], selected_engine: str,
+) -> None:
+	_stage_rb_support(tmp_path)
+	proc, calls = _run_helper(tmp_path, engine="claude", role=role, issue_scope=scope,
+		issue_labels=issue_labels, tracking_labels=tracking_labels)
+	assert "rc=0" in proc.stdout, proc.stderr
+	selected_role, labels_json = _read(Path(f"{calls}.resolve")).strip().split("|", 1)
+	assert selected_role == role
+	assert json.loads(labels_json) == expected
+	if scope == "standalone":
+		assert "ai:engine-claude" not in labels_json
+	assert _read(Path(f"{calls}.sandbox")).splitlines()[1].startswith(f"{selected_engine}|{role}|")
+
+
+@pytest.mark.parametrize("scope, issue_labels", [
+	("standalone", "[]"), ("standalone", "null"), ("standalone", "not-json"),
+	("managed", "[]"), ("managed", '["ai:done"]'), ("managed", "null"),
+	("managed", '["ai:orchestrator-managed",42]'),
+])
+@pytest.mark.parametrize("role", ("STALL_JUDGE", "RB_JUDGE"))
+def test_unavailable_issue_labels_force_codex_without_engine_resolution(
+	tmp_path: Path, scope: str, issue_labels: str, role: str,
+) -> None:
+	_stage_rb_support(tmp_path)
+	proc, calls = _run_helper(tmp_path, engine="claude", role=role, issue_scope=scope,
+		issue_labels=issue_labels, tracking_labels='["ai:engine-claude"]')
+	assert "rc=0" in proc.stdout, proc.stderr
+	assert _read(Path(f"{calls}.resolve")) == ""
+	assert f"JUDGE_ENGINE_LABELS role={role} outcome=forced_codex reason=issue_labels_unavailable" in proc.stderr
+	assert _read(Path(f"{calls}.sandbox")).splitlines()[1].startswith(f"codex|{role}|")
+
+
+def test_issue_engine_labels_are_wired_to_stall_and_rb_judges_only() -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	assert 'STALL_JUDGE_LABELS="${labels_json}" STALL_JUDGE_ISSUE_LABELS="${labels_json}" invoke_stall_judge' in text
+	assert 'STALL_JUDGE_ISSUE_LABELS="$(printf \'%s\' "${LABELS_JSON:-}" | jq -c --arg n "${issue_num}"' in text
+	assert 'poller_judge_engine_labels_json "${stall_judge_engine_scope}" "${STALL_JUDGE_ISSUE_LABELS-}"' in text
+	assert 'POLLER_JUDGE_ENGINE_LABELS="${stall_judge_engine_labels_json}" poller_claude_judge STALL_JUDGE' in text
+	assert 'poller_judge_engine_labels_json managed "$(printf \'%s\' "${LABELS_JSON:-}" | jq -c --arg n "${rb_issue}"' in text
+	assert 'POLLER_JUDGE_ENGINE_LABELS="${RB_JUDGE_ENGINE_LABELS_JSON}" poller_claude_judge RB_JUDGE' in text
+	for role in ("WAVE_JUDGE", "SECURITY_JUDGE", "INTEGRATION_JUDGE"):
+		assert re.search(rf"^\s+poller_claude_judge {role} ", text, re.MULTILINE)
 
 
 def test_model_hint_argument_overrides_model_editor(tmp_path: Path) -> None:
@@ -514,7 +578,7 @@ def test_each_judge_uses_sandbox_without_host_fallback() -> None:
 		assert 'if [ "${' + role.lower() + '_rc}" -eq 75 ]; then' not in text[start:start + 700]
 	assert 'poller_judge_isolated "${role}"' in text
 	assert 'claude_run "${role}"' not in text
-	assert len(re.findall(r"^\s+poller_claude_judge [A-Z_]+ ", text, re.MULTILINE)) == len(SITES) + 1
+	assert len(re.findall(r"^\s+(?:POLLER_JUDGE_ENGINE_LABELS=\"[^\"]+\" )?poller_claude_judge [A-Z_]+ ", text, re.MULTILINE)) == len(SITES) + 1
 	rb_block = text[text.index('      # Run the judge\n      RB_JUDGE_SUCCESS=false'):text.index('      # Parse judge output')]
 	assert 'poller_claude_judge RB_JUDGE "${RB_JUDGE_PROMPT_FILE}" "${RB_JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/rb_judge_${rb_issue}.log"' in rb_block
 	assert 'if [ "${RB_JUDGE_ENGINE_RC}" -eq 77 ] || [ "${RB_JUDGE_ENGINE_RC}" -eq 75 ]; then\n            RB_JUDGE_ISOLATION_FAILED=true\n            break\n          fi' in rb_block

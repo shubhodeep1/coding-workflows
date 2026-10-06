@@ -161,7 +161,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
    credential-free review sandboxes on both engines. Isolation failure
    defers (never host fallback) and escalates per role after
    `JUDGE_ISOLATION_MAX_FAILURES`; only deterministic poller code writes to
-   GitHub. Integration verdicts re-dispatch the isolated conflict resolver.
+   GitHub. The standalone stall judge uses verified issue labels; managed
+   stall and review-blocked judges combine issue and tracking labels
+   (`ai:codex` wins), falling back to codex when issue labels cannot be
+   verified. Project-level judges keep tracking labels. Integration verdicts
+   re-dispatch the isolated conflict resolver.
 10. **judge** (`mode-judge.txt`, `mode-orchestrate-poll-judge.txt`,
     `mode-judge-review-blocked.txt`, `mode-judge-stall-recovery.txt`) —
     JSON-emitting evaluation of wave state.
@@ -1573,6 +1577,7 @@ and shipped:
 - `RB_JUDGE_ISOLATION`
 - `CONSOLIDATOR_ISOLATION`
 - `JUDGE_ISOLATION`
+- `JUDGE_ENGINE_LABELS` (`scripts/orchestrate_poll_process.sh`: `role= outcome=forced_codex reason=issue_labels_unavailable` when a per-issue label snapshot cannot be verified).
 - `SECURITY_AUDIT_TARGET`
 - `WORKFLOW_OVERLAY_SOURCE`
 - `WORKFLOW_OVERLAY_REPLACE_REJECTED`
@@ -1780,6 +1785,7 @@ LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
 LOG_PREFIX.name=RB_JUDGE_ISOLATION
 LOG_PREFIX.name=CONSOLIDATOR_ISOLATION
 LOG_PREFIX.name=JUDGE_ISOLATION
+LOG_PREFIX.name=JUDGE_ENGINE_LABELS
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
 LOG_PREFIX.name=WORKFLOW_OVERLAY_SOURCE
 LOG_PREFIX.name=WORKFLOW_OVERLAY_REPLACE_REJECTED

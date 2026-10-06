@@ -70,8 +70,8 @@ _POLLER_AI_ENGINE_SH="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && p
 
 # poller_claude_judge <ROLE> <prompt_file> <output_file> <log_file> [model_hint]
 # All five poller judges run in the credential-free review sandbox. Engine
-# selection uses cached TRACKING_LABELS; 77 means isolation unavailable,
-# never a signal to run a credentialed host fallback.
+# selection uses cached tracking labels for project judges and verified issue
+# labels for per-issue judges; 77 never permits a credentialed host fallback.
 poller_claude_judge()
 {
   local role="$1" prompt_file="$2" output_file="$3" log_file="$4" model_hint="${5:-${MODEL_EDITOR:-}}"
@@ -193,22 +193,48 @@ _poller_rb_judge_sandbox_attempt()
     return "${judge_rc}"
 }
 
+poller_judge_engine_labels_json()
+{
+  local scope="$1" issue_labels_json="${2:-}"
+  printf '%s' "${issue_labels_json}" | jq -ec --arg scope "${scope}" --arg tracking "${TRACKING_LABELS:-[]}" '
+    def names: map(if type == "object" then .name else . end);
+    select(type == "array" and all(.[]; type == "string" or (type == "object" and (.name | type) == "string")))
+    | names
+    | select(if $scope == "standalone" then length > 0
+             elif $scope == "managed" then index("ai:orchestrator-managed") != null
+             else false end)
+    | if $scope == "managed" then
+        . + (try ($tracking | fromjson | if type == "array" then names | map(select(type == "string")) else [] end) catch []) | unique
+      else . end
+  ' 2>/dev/null
+}
+
 poller_judge_isolated()
 {
   local judge_role="$1" prompt_file="$2" output_file="$3" log_file="$4" model_hint="${5:-${MODEL_EDITOR:-}}"
   local rb_support_dir="${GITHUB_WORKSPACE:-$PWD}/.codex-workflow-src/scripts" judge_reason_file="${RUNTIME_DIR:?}/judge_isolation_reason"
-  local rb_engine=codex rb_rc=0
+  local rb_engine=codex rb_rc=0 judge_engine_labels="${TRACKING_LABELS:-[]}"
   [ "${judge_role}" != RB_JUDGE ] || judge_reason_file="${RUNTIME_DIR}/rb_judge_isolation_reason"
   : > "${judge_reason_file}"
   : > "${output_file}"
-  if [ -f "${_POLLER_AI_ENGINE_SH}" ]; then
+  if [ "${POLLER_JUDGE_ENGINE_LABELS+set}" = set ]; then
+    judge_engine_labels="${POLLER_JUDGE_ENGINE_LABELS}"
+  fi
+  if [ "${POLLER_JUDGE_ENGINE_LABELS+set}" = set ] &&
+     ! printf '%s' "${judge_engine_labels}" | jq -e 'type == "array" and all(.[]; type == "string")' >/dev/null 2>&1; then
+    if [ "${log_file}" = /dev/null ]; then
+      echo "JUDGE_ENGINE_LABELS role=${judge_role} outcome=forced_codex reason=issue_labels_unavailable" >&2
+    else
+      echo "JUDGE_ENGINE_LABELS role=${judge_role} outcome=forced_codex reason=issue_labels_unavailable" | tee -a "${log_file}" >&2
+    fi
+  elif [ -f "${_POLLER_AI_ENGINE_SH}" ]; then
     # shellcheck source=ai_engine.sh
     if source "${_POLLER_AI_ENGINE_SH}"; then
       if [ "${log_file}" = /dev/null ]; then
-        rb_engine="$(AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
+        rb_engine="$(AI_ENGINE_LABELS="${judge_engine_labels}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
           ai_engine_for_role "${judge_role}" 2>/dev/null || echo codex)"
       else
-        rb_engine="$(AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
+        rb_engine="$(AI_ENGINE_LABELS="${judge_engine_labels}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
           ai_engine_for_role "${judge_role}" 2> >(tee -a "${log_file}" >&2) || echo codex)"
       fi
     fi
@@ -15039,7 +15065,10 @@ invoke_stall_judge() {
           rm -f "${stall_judge_semble_query_file}"
           return 1
         fi
-        poller_claude_judge STALL_JUDGE "${stall_judge_prompt_file}" "${stall_judge_output_file}" "${RUNTIME_DIR}/stall_judge.log" || stall_judge_rc=$?
+        local stall_judge_engine_scope=standalone stall_judge_engine_labels_json=unavailable
+        if [ -n "${local_id}" ]; then stall_judge_engine_scope=managed; fi
+        stall_judge_engine_labels_json="$(poller_judge_engine_labels_json "${stall_judge_engine_scope}" "${STALL_JUDGE_ISSUE_LABELS-}")" || stall_judge_engine_labels_json=unavailable
+        POLLER_JUDGE_ENGINE_LABELS="${stall_judge_engine_labels_json}" poller_claude_judge STALL_JUDGE "${stall_judge_prompt_file}" "${stall_judge_output_file}" "${RUNTIME_DIR}/stall_judge.log" || stall_judge_rc=$?
         if [ "${stall_judge_rc}" -eq 77 ]; then
           _record_judge_isolation_failure STALL_JUDGE "${_judge_state_file}" "${stall_escalate_issue}" "${stall_isolation_labels}" || true
           echo "::warning::Stall judge isolation unavailable for issue #${issue_num}; deferring recovery." >&2
@@ -16911,7 +16940,7 @@ PY
           echo "::warning::[standalone-stall] could not seed standalone judge state file for issue #${issue_num}; judge streak persistence may be skipped this cycle." >&2
         fi
         STALL_JUDGE_STATE_FILE_OVERRIDE="${_std_judge_state_file}"
-        if STALL_JUDGE_LABELS="${labels_json}" invoke_stall_judge "${issue_num}" "${phase}" "${recovery_count}" "${elapsed_minutes}" ""; then
+        if STALL_JUDGE_LABELS="${labels_json}" STALL_JUDGE_ISSUE_LABELS="${labels_json}" invoke_stall_judge "${issue_num}" "${phase}" "${recovery_count}" "${elapsed_minutes}" ""; then
           took_action="true"
           action="${STALL_RECOVERY_EFFECTIVE_ACTION:-run_stall_judge}"
         fi
@@ -17870,7 +17899,7 @@ recover_stalled_issue() {
   fi
 
   if [ "${action}" = "run_stall_judge" ]; then
-    STALL_JUDGE_LABELS="${TRACKING_LABELS:-}" invoke_stall_judge "${issue_num}" "${phase}" "${recovery_count}" "${stall_minutes}" "${local_id}"
+    STALL_JUDGE_LABELS="${TRACKING_LABELS:-}" STALL_JUDGE_ISSUE_LABELS="$(printf '%s' "${LABELS_JSON:-}" | jq -c --arg n "${issue_num}" '.[$n] // empty' 2>/dev/null || true)" invoke_stall_judge "${issue_num}" "${phase}" "${recovery_count}" "${stall_minutes}" "${local_id}"
     return $?
   fi
   execute_stall_recovery_action "${issue_num}" "${phase}" "${action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
@@ -21542,10 +21571,11 @@ ${FOLLOWUP_BLOCK_REASON}"
       if [ "${RB_JUDGE_PROMPT_CHARS}" -gt 1048576 ]; then
         echo "::error::Review-blocked judge prompt for issue #${rb_issue} exceeds codex's 1048576-character stdin cap; skipping 2 attempts that would fail before the model runs."
       else
+        RB_JUDGE_ENGINE_LABELS_JSON="$(poller_judge_engine_labels_json managed "$(printf '%s' "${LABELS_JSON:-}" | jq -c --arg n "${rb_issue}" '.[$n] // empty' 2>/dev/null || true)")" || RB_JUDGE_ENGINE_LABELS_JSON=unavailable
         for attempt in 1 2; do
           echo "  Review-blocked judge attempt ${attempt}/2..."
           RB_JUDGE_ENGINE_RC=0
-          poller_claude_judge RB_JUDGE "${RB_JUDGE_PROMPT_FILE}" "${RB_JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/rb_judge_${rb_issue}.log" || RB_JUDGE_ENGINE_RC=$?
+          POLLER_JUDGE_ENGINE_LABELS="${RB_JUDGE_ENGINE_LABELS_JSON}" poller_claude_judge RB_JUDGE "${RB_JUDGE_PROMPT_FILE}" "${RB_JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/rb_judge_${rb_issue}.log" || RB_JUDGE_ENGINE_RC=$?
           if [ "${RB_JUDGE_ENGINE_RC}" -eq 77 ] || [ "${RB_JUDGE_ENGINE_RC}" -eq 75 ]; then
             RB_JUDGE_ISOLATION_FAILED=true
             break
