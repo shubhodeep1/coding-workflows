@@ -6203,7 +6203,7 @@ def test_security_pass_exhaustion_judge_keep_fixing_creates_consolidated_fix_iss
 
 
 def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_advisories() -> None:
-	"""Past MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS (default 2), keep_fixing becomes accept_with_followup.
+	"""Past the cap, medium/low keep_fixing becomes accept_with_followup.
 
 	Regression for #3965: the judge was consulted twice on a 5-cycle budget
 	and granted "one more" consolidated cycle both times (cycles 6 and 7),
@@ -6211,14 +6211,14 @@ def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_advisories()
 	keep_fixing decision to a deferred advisory so the project completes
 	without a human; `fail` verdicts are unaffected.
 	"""
+	medium_finding = _security_pass_test_finding()
+	medium_finding["severity"] = "medium"
 	result = _run_poller(
 		state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
 		enable_validation="false",
 		max_validate_cycles="3",
 		enable_security_pass="true",
-		security_audit_payload=_security_audit_findings_payload(
-			[_security_pass_test_finding(), _security_pass_second_test_finding()]
-		),
+		security_audit_payload=_security_audit_findings_payload([medium_finding, _security_pass_second_test_finding()]),
 		issue_labels={10: ["ai:merged"]},
 		existing_branches=["main", "orchestrator/project-192"],
 		env_overrides={
@@ -6245,7 +6245,7 @@ def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_advisories()
 	created = result.get("created_issues", [])
 	assert sorted(issue["labels"] for issue in created) == [["ai:security"], ["ai:security"]]
 	assert {issue["title"] for issue in created} == {
-		"[security-pass] Advisory: SEC-TEST-1 (high, scripts/example.py:1)",
+		"[security-pass] Advisory: SEC-TEST-1 (medium, scripts/example.py:1)",
 		"[security-pass] Advisory: SEC-TEST-2 (medium, scripts/example.py:1)",
 	}
 	assert "ai:security-pass-failed" not in result["tracking_labels"]
@@ -6272,7 +6272,20 @@ def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_advisories()
 		"1 of them were `keep_fixing` decisions converted to advisories because the keep_fixing round budget (`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=2`) is spent."
 		in judge_comments[0]
 	)
-	assert "| SEC-TEST-1 | high | scripts/example.py:1 | accept_with_followup | [keep_fixing capped after 2 judge round(s); converted to advisory follow-up]" in judge_comments[0]
+	assert "| SEC-TEST-1 | medium | scripts/example.py:1 | accept_with_followup | [keep_fixing capped after 2 judge round(s); converted to advisory follow-up]" in judge_comments[0]
+
+
+def test_security_pass_cap_never_waives_a_high_finding() -> None:
+	result = _run_poller(
+		state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
+		enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing")))},
+	)
+	assert result["latest_state"]["status"] == "security-pass-fixing"
+	assert result["latest_state"]["security_pass_waived_findings"] == []
+	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED" not in result["stdout"] + result["stderr"]
 
 
 def test_security_pass_exhaustion_judge_keep_fixing_allowed_within_cap() -> None:
@@ -6679,6 +6692,8 @@ def test_security_pass_waived_findings_reach_engine_and_suppress_re_reports() ->
 				"file": "scripts/example.py",
 				"line": 30,
 				"owasp_or_stride_category": "a04:2021-insecure design / stride: denial of service",
+				"severity": "medium",
+				"exploit_scenario": _security_pass_second_test_finding()["exploit_scenario"],
 				"source": "operator",
 			},
 		],
@@ -6714,6 +6729,22 @@ def test_security_pass_waived_findings_reach_engine_and_suppress_re_reports() ->
 	assert "| SURVIVOR |" in fix_body
 	assert "| SEC-TEST-1 |" not in fix_body
 	assert "| NEW-DOS-ID |" not in fix_body
+
+
+def test_security_pass_waiver_does_not_suppress_a_nearby_new_exploit() -> None:
+	state = _security_pass_exhausted_state(security_pass_cycle=0, security_pass_waived_findings=[{
+		"finding_id": "OLD-DOS", "file": "scripts/example.py", "line": 1,
+		"owasp_or_stride_category": "A04:2021-Insecure Design / STRIDE: Denial of Service",
+		"severity": "medium", "exploit_scenario": "An authenticated caller can grow a bounded ledger.",
+	}])
+	nearby = _security_pass_second_test_finding()
+	nearby["finding_id"] = "NEW-DOS"
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([nearby]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert [row["finding_id"] for row in result["latest_state"]["security_pass_reported_findings"]] == ["NEW-DOS"]
 
 
 def _security_pass_waive_failed_state() -> dict:

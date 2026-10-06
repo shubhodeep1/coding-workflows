@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -31,6 +32,7 @@ ai_engine_fallback() {
 }
 claude_run() {
   printf '%s|%s|%s|%s|%s|%s|%s\n' "$1" "$(basename "$2")" "$(basename "$3")" "$4" "${AI_ENGINE_LABELS-unset}" "${AI_ENGINE_MODEL_HINT-}" "${AI_ENGINE_EFFORT_HINT-}" >> "${CALLS}.claude"
+  printf '%s\n' "${GH_TOKEN-unset}|${OPENROUTER_API_KEY-unset}" >> "${CALLS}.secrets"
   case "${FAKE_CLAUDE_MODE}" in
     success) printf 'claude verdict\n' > "$3"; return 0 ;;
     unavailable) echo "AI_ENGINE_FALLBACK role=$1 reason=no_credential" >&2; return 75 ;;
@@ -59,6 +61,8 @@ def _run_helper(
 	role: str = "WAVE_JUDGE",
 	combined_mode: str = "false",
 	log_file: str = "judge_log.txt",
+	stall_labels: str | None = None,
+	rb_labels: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
 	scripts = tmp_path / "scripts"
 	scripts.mkdir(parents=True, exist_ok=True)
@@ -71,6 +75,10 @@ def _run_helper(
 	prompt.write_text("judge this\n", encoding="utf-8")
 	calls = tmp_path / "calls"
 	labels_line = f"TRACKING_LABELS='{tracking_labels}'\n" if tracking_labels is not None else "unset TRACKING_LABELS\n"
+	if stall_labels is not None:
+		labels_line += f"STALL_JUDGE_LABELS='{stall_labels}'\n"
+	if rb_labels is not None:
+		labels_line += f"RB_JUDGE_LABELS='{rb_labels}'\n"
 	script = (
 		"set -euo pipefail\n"
 		f"_POLLER_AI_ENGINE_SH={scripts / 'ai_engine.sh'}\n"
@@ -140,6 +148,22 @@ def test_no_tracking_labels_means_an_explicit_empty_list(tmp_path: Path) -> None
 	_stage_rb_support(tmp_path)
 	_proc, calls = _run_helper(tmp_path, engine="codex", tracking_labels=None)
 	assert _read(Path(f"{calls}.resolve")).splitlines() == ["WAVE_JUDGE|[]"]
+
+
+def test_stall_judge_resolves_target_issue_labels_not_tracking_labels(tmp_path: Path) -> None:
+	_stage_rb_support(tmp_path)
+	proc, calls = _run_helper(tmp_path, engine="codex", role="STALL_JUDGE",
+		tracking_labels='["ai:engine-claude"]', stall_labels='["ai:codex"]')
+	assert "rc=0" in proc.stdout, proc.stderr
+	assert _read(Path(f"{calls}.resolve")).splitlines() == ['STALL_JUDGE|["ai:codex"]']
+
+
+def test_review_blocked_judge_resolves_linked_pr_labels(tmp_path: Path) -> None:
+	_stage_rb_support(tmp_path)
+	proc, calls = _run_helper(tmp_path, engine="codex", role="RB_JUDGE",
+		tracking_labels='["ai:engine-claude"]', rb_labels='["ai:codex"]')
+	assert "rc=0" in proc.stdout, proc.stderr
+	assert _read(Path(f"{calls}.resolve")).splitlines() == ['RB_JUDGE|["ai:codex"]']
 
 
 def test_model_hint_argument_overrides_model_editor(tmp_path: Path) -> None:
@@ -799,7 +823,7 @@ def test_poll_preflight_fails_open_when_engine_helper_cannot_be_sourced(tmp_path
 ORCHESTRATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "orchestrate.yml"
 DECOMPOSER_CODEX = (
 	'timeout --signal=TERM --kill-after=30s -- "${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}" \\\n'
-	'       codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || decomposer_rc=$?'
+	'       bash scripts/codex_isolated_exec.sh run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || decomposer_rc=$?'
 )
 
 
@@ -809,16 +833,17 @@ def _orchestrate_steps() -> dict[str, dict]:
 
 
 def _decomposer_engine_block() -> str:
-	run = _orchestrate_steps()["Run Codex (decomposer)"]["run"]
-	start = run.index("  decomposer_rc=75\n")
-	end = run.index('  if [ "${decomposer_rc}" -eq 0 ]; then\n')
-	return run[start:end]
+	workflow = ORCHESTRATE_WORKFLOW.read_text(encoding="utf-8")
+	start = workflow.index("            decomposer_rc=75\n")
+	end = workflow.index('            if [ "${decomposer_rc}" -eq 0 ]; then\n', start)
+	return textwrap.dedent(workflow[start:end])
 
 
 def _run_decomposer_block(tmp_path: Path, engine: str, claude_mode: str) -> tuple[subprocess.CompletedProcess[str], Path]:
 	scripts = tmp_path / "scripts"
 	scripts.mkdir(parents=True, exist_ok=True)
 	(scripts / "ai_engine.sh").write_text(FAKE_AI_ENGINE, encoding="utf-8")
+	(scripts / "codex_isolated_exec.sh").write_text('#!/usr/bin/env bash\nexec codex "$@"\n', encoding="utf-8")
 	bin_dir = tmp_path / "bin"
 	bin_dir.mkdir()
 	codex = bin_dir / "codex"
@@ -834,7 +859,8 @@ def _run_decomposer_block(tmp_path: Path, engine: str, claude_mode: str) -> tupl
 		+ _decomposer_engine_block()
 		+ 'echo "rc=${decomposer_rc} engine=${ORCHESTRATE_ENGINE}"\n'
 	)
-	env = dict(os.environ, CALLS=str(calls), FAKE_ENGINE="claude", FAKE_CLAUDE_MODE=claude_mode, PATH=f"{bin_dir}:{os.environ['PATH']}")
+	env = dict(os.environ, CALLS=str(calls), FAKE_ENGINE="claude", FAKE_CLAUDE_MODE=claude_mode, PATH=f"{bin_dir}:{os.environ['PATH']}",
+		GH_TOKEN="test-gh-token", OPENROUTER_API_KEY="test-openrouter-key")
 	for inherited in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
 		env.pop(inherited, None)
 	proc = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60, check=False)
@@ -847,6 +873,7 @@ def test_decomposer_on_claude_runs_claude_run_only(tmp_path: Path) -> None:
 	assert _read(tmp_path / "out.txt") == "claude verdict\n"
 	assert _read(Path(f"{calls}.claude")).split("|")[:3] == ["ORCHESTRATE", "prompt.txt", "out.txt"]
 	assert _read(Path(f"{calls}.codex")) == ""
+	assert _read(Path(f"{calls}.secrets")) == "unset|unset\n"
 
 
 def test_decomposer_falls_back_to_codex_and_stays_there(tmp_path: Path) -> None:
