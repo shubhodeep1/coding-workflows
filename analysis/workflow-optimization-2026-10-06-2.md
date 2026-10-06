@@ -114,3 +114,76 @@ The merge-train release examined 38 queued candidates and released none in run `
 | Merge-train release | Run `37513128493`: 38 examined, 0 released; ~50-second step | Pages, unique fetches, and deferred reasons—not an inferred API-call count |
 
 The next collection should preserve full resolver attempt and fingerprint-cap markers for the six PRs, then attach bounded API, memory, model-usage, and per-target MCP summaries to the same run IDs.
+
+## Deep Audit — Workflows & Scripts (2026-10-06)
+
+### Section 1: Bug & Correctness Sweep
+
+Read-only inspection covered 54 workflow files and 178 top-level shell/Python scripts. Shell scripts passed `bash -n`. The local Python 3.11 parser could not parse `scripts/workflow_retro.py:794`, but its workflow sets up Python 3.12 before invoking it; this is not counted as a pipeline failure. No repository script or test was executed.
+
+- **BUG-001** — **File:** `scripts/review_rb_judge.sh:913-979`. **Severity:** High. **Category:** `bug`. **Description:** `_resilient_phase_swap` uses additive mutations for non-terminal labels but computes a terminal label set from an earlier GET and replaces *all* labels with `PUT` at lines 971–975. **Inference:** a concurrent label added after that GET—including `ai:merged`—can be erased during `ai:closed` propagation. **Recommended fix:** add the terminal target without replacing the full label set, remove only previously observed phase labels, and reconcile terminal precedence; extend the existing phase-swap tests for a label added between reads.
+
+- **BUG-002** — **File:** `scripts/unblock_judge.sh:815-848`. **Severity:** Medium. **Category:** `bug`. **Description:** `unblock_select_run_log` suppresses failure from `gh run view ... --log-failed` with `|| true`, then unconditionally logs `outcome=attached` and stops searching. A failed or empty download therefore appears to supply evidence to the judge. **Recommended fix:** capture the command status and require a nonempty result before logging `attached`; otherwise record `omitted` and try the next bounded candidate.
+
+- **SEC-001** — **File:** `.github/workflows/update_workflows.yml:68-80`. **Severity:** Medium. **Category:** `security`. **Description:** The clone command places `GH_TOKEN` in the Git remote URL. That makes the credential part of the clone command’s arguments and stored remote configuration; whether another process or diagnostic exposes it is unverified. **[NEEDS VERIFICATION]** **Recommended fix:** authenticate a credential-free URL through a scoped askpass or checkout mechanism, disable persisted credentials where possible, and clean up the temporary clone on exit.
+
+- **SEC-002** — **Files:** `scripts/gh_helpers.sh:649-659`; `scripts/orchestrate_poll_process.sh:19431-19445`. **Severity:** High. **Category:** `security`. **Description:** Both failure paths print the first 50 lines of a raw API response. A malformed response can contain issue or comment text; no actual credential exposure was established. **[NEEDS VERIFICATION]** **Recommended fix:** log bounded response size, parse status, and a diagnostic hash instead of response bodies; retain the current failure and retry decisions.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+- **API-001** — **File:** `scripts/gh_helpers.sh:636-688`. **Severity:** Medium. **Category:** `api-redundancy`. **Description:** Unlike `gh_retry_to_file` at lines 548–558, `gh_api_json_to_file` does not apply `_is_gh_permanent_failure`. A confirmed 404 or 422 can therefore consume its default **five calls instead of one**, with backoff. **Recommended fix:** reuse `_is_gh_permanent_failure` on failed requests, while retaining rate-limit handling and JSON-validation retries. **Calls:** 5 → 1 per permanent failure; extend the existing `gh_helpers.sh` classifier, not a new batching helper.
+
+- **API-002** — **Files:** `scripts/orchestrate_poll_process.sh:19431-19450`, `scripts/orchestrate_poll_process.sh:17272-17282`, and `scripts/orchestrate_poll_process.sh:25481-25485`. **Severity:** Medium. **Category:** `api-redundancy`. **Description:** The tracking-issue loop reads each issue’s paginated comments; the later standalone-stall pass reads those comments again. Writes between passes can make the second read necessary. **[NEEDS VERIFICATION]** **Recommended fix:** retain a validated per-tick comments snapshot and invalidate it when this tick posts to that tracking issue; keep a fresh read on invalidation or uncertainty. **Calls:** for *N* unchanged tracking issues, 2N → N comment-list requests, excluding pagination; extend the poller’s cycle-local cache pattern.
+
+- **BATCH-001** — **File:** `scripts/orchestrate_poll_process.sh:17301-17325`. **Severity:** Medium. **Category:** `api-batching`. **Description:** The standalone recovery inventory issues one `gh issue list` for each of seven labels before passing the union to an existing GraphQL details batch. **Recommended fix:** add seven aliased, paginated-as-needed GraphQL searches using `_fetch_standalone_marker_issues_graphql` as the pattern; retain the current lists as a fallback whenever any alias is incomplete. **Calls:** at least 7 → 1 inventory call when each alias fits one page; larger result sets require further pages or fallback. The achievable reduction depends on label cardinality. **[NEEDS VERIFICATION]**
+
+- **BATCH-002** — **File:** `scripts/orchestrate_poll_process.sh:17129-17167` and `scripts/orchestrate_poll_process.sh:17201-17218`. **Severity:** Medium. **Category:** `api-batching`. **Description:** An eligible staged-support latch incurs comment and event reads inside the issue loop, then two fresh revalidation reads before mutation: **four reads per eligible issue**, excluding pagination. **Recommended fix:** batch the *initial* comment/event evidence with aliased GraphQL following `_fetch_candidate_issue_details_graphql`; fall back per issue on incomplete history and preserve both fresh pre-mutation reads. **Calls:** for *N* eligible issues with complete batch histories, approximately 4N → 2N + ceil(N/50); actual schema and history completeness require verification. **[NEEDS VERIFICATION]**
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **DUP-001** — **Files:** `.github/workflows/mark-stable.yml:691-839` and `.github/workflows/test-and-mark-stable.yml:6095-6243`. **Severity:** Medium. **Category:** `duplication`. **Description:** Both workflows contain the same tag-publication block, including remote verification and immutable-versus-moving tag behavior. **Recommended fix:** put `publish_stable_tags <version> <source_branch>` and its `publish_tag_with_remote_verification <tag_ref> <mode>` helper in a new `scripts/stable_tag_helpers.sh`; update both steps while preserving their gates and environment.
+
+- **DUP-002** — **Files:** `.github/workflows/clarify.yml:61-129`, `.github/workflows/plan.yml:124-153`, `.github/workflows/implement.yml:450-476`, `.github/workflows/validate.yml:108-137`, and `.github/workflows/orchestrate_clarify_respond.yml:161-229`. **Severity:** Medium. **Category:** `duplication`. **Description:** Five integration-ref steps repeat the support-ref clone, authentication-header construction, fallback, and cleanup bootstrap; the latter two cited ranges continue beyond the displayed common setup. **Recommended fix:** stage a trusted new `scripts/resolve_integration_ref_bootstrap.sh` before the target checkout, with interface `resolve_integration_ref_bootstrap <repo> <issue> <support-ref>`. Update all five callers, passing expressions through `env:` and preserving each step’s `if:` and fallback behavior.
+
+- **DUP-003** — **File:** `.github/workflows/review_autofix.yml:5072-5100` and `.github/workflows/review_autofix.yml:6458-6486`. **Severity:** Low. **Category:** `duplication`. **Description:** The ordinary and partial-finalize ledger stage-out bodies are identical apart from their step context. **Recommended fix:** move the body to a trusted staged `scripts/review_ledger_cache_helpers.sh` function, `stage_review_ledger_cache <workspace-root> <staging-root> <ledger-rel>`, and call it from both steps without changing their distinct gates.
+
+No whole-workflow pair was established as more than 70% identical; the release workflows share substantial steps but have different overall scopes.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+Counts below are **dedented `run:` scalar characters with expression placeholders still present**, not measured runtime-expanded values. Runtime expansion depends on workflow inputs and variables. Of 831 inspected run blocks, 234 contain `${{ }}`; non-interpolated blocks were excluded.
+
+- **EXPR-001** — **File:** `.github/workflows/implement.yml:1003-1393`. **Severity:** High. **Category:** `expression-limit`. **Description:** The support-staging `run:` body measures approximately **19,132 characters**, leaving **1,868** against the stated 21,000-character limit before runtime expansion. It contains three expressions. **[NEEDS VERIFICATION]** **Recommended fix:** extract the body to a trusted staged `scripts/implement_stage_support.sh`, pass expression values through step `env:`, and preserve `GITHUB_ENV` outputs and the required-support registry.
+
+- **EXPR-002** — **File:** `.github/workflows/implement.yml:3509-3829`. **Severity:** Medium. **Category:** `expression-limit`. **Description:** The destructive-commit preflight body measures approximately **15,517 characters**, leaving **5,483** before expansion; one repository expression makes the otherwise inline block subject to this assessment. **[NEEDS VERIFICATION]** **Recommended fix:** extract it to a trusted `scripts/implement_preflight_destructive_guard.sh`, passing the repository value through `env:` and retaining the temporary-index cleanup trap and step outputs.
+
+The largest measured `if:` scalar was 935 characters. No workflow exceeds the requested 800 KB warning threshold or 1 MB limit. Separately, `review_autofix.yml` is **452,265 bytes**, leaving **27,735 bytes** before this repository’s stricter 480,000-byte CI guard.
+
+### Section 5: Cross-Cutting Concerns
+
+- **CONSIST-001** — **File:** `scripts/unblock_judge.sh:83-91` and `scripts/unblock_judge.sh:468-490`. **Severity:** Medium. **Category:** `consistency`. **Description:** Required identity, item, and comment reads use raw `gh api`, whereas other audited read paths use the repository’s rate-limit-aware `gh_retry`. A transient read failure makes this judge skip the item without the helper’s bounded retry. **Recommended fix:** source `scripts/gh_helpers.sh` from trusted support and use `gh_retry` for these read-only calls; leave non-idempotent verdict writes on their current reconciliation path.
+
+- **CONSIST-002** — **File:** `scripts/review_rb_judge.sh:860-897`. **Severity:** Low. **Category:** `consistency`. **Description:** If the shared label helper cannot be loaded, the inline fallback creates labels other than `ai:ready-to-merge` and `ai:closed` with generic color `1d76db`. That disagrees with `.github/ai/label_contract.v1.json:4-6,152-154` for labels this script can create, including `ai:clarification` and `ai:orchestrator-managed`. **Recommended fix:** make the trusted helper a required staged dependency, or make the fallback use the same color and description mappings as `scripts/label_helpers.sh`.
+
+No provably unused function or actionable TODO/FIXME/HACK marker was established in the scoped files. `shellcheck` was unavailable locally; passing `bash -n` does not establish shellcheck compliance.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 3 | BUG-001, SEC-002, EXPR-001 |
+| Medium | 10 | BUG-002, SEC-001, API-001, API-002, BATCH-001, BATCH-002, DUP-001, DUP-002, EXPR-002, CONSIST-001 |
+| Low | 2 | DUP-003, CONSIST-002 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | ~3 existing scripts | Medium |
+| API call optimization | ~2 scripts | Large |
+| Code modularization | ~8 workflows and 3–4 shared/support scripts | Large |
+| Expression size reduction | `implement.yml`, 2 new scripts, support registry/tests | Medium |
+| Medium/Low fixes | ~4 existing workflows/scripts, with overlap above | Medium |
