@@ -2531,7 +2531,11 @@ def main() -> int:
 	for func in test_funcs:
 		name = func.__name__
 		try:
-			func()
+			if func is test_pat_budget_daily_main_collects_wrapper_runs_without_duplicate_archives:
+				with tempfile.TemporaryDirectory() as test_dir:
+					func(Path(test_dir))
+			else:
+				func()
 			print(f"  PASS  {name}")
 			passed += 1
 		except Exception as exc:  # noqa: BLE001
