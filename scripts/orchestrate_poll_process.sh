@@ -8688,6 +8688,8 @@ invoke_judge_for_integration_conflict() {
     echo '.claude/, scripts/, prompts/, workflow-templates/, validation/,'
     echo 'ai-memory/, db/contracts/, agent-instruction files, and build,'
     echo 'dependency, config and script files.'
+    echo 'In conflicted protected paths, keep every line both merge sides contain'
+    echo 'at least as many times as the side with fewer copies; dropping one rejects the resolution.'
     echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
@@ -8880,7 +8882,9 @@ try:
         sides = stages[path]
         indexed = git("ls-files", "-s", "-z", "--", ":(literal)" + os.fsdecode(path))
         if not indexed:
-            raise ValueError("deleted protected conflict")
+            if b"2" in sides and b"3" in sides:
+                raise ValueError("deleted protected conflict")
+            continue
         entries = [item for item in indexed.split(b"\0") if item]
         if len(entries) != 1:
             raise ValueError("invalid staged entry")
@@ -8901,14 +8905,16 @@ try:
         resolved_lines = git("cat-file", "blob", blob.decode()).splitlines(keepends=True)
         if not set(resolved_lines) <= allowed:
             raise ValueError("invented protected line")
+        resolved_counts = Counter(resolved_lines)
         if len(side_counts) == 2:
-            resolved_counts = Counter(resolved_lines)
+            # integration-judge-can-delete-shared-security-controls: no deletion override;
+            # fail closed even when both sides added the same line independently.
             for shared_line, shared_count in (side_counts[0] & side_counts[1]).items():
                 if resolved_counts[shared_line] < shared_count:
                     raise ValueError("removed shared protected line")
         base_counts = (Counter(git("cat-file", "blob", sides[b"1"][1].decode()).splitlines(keepends=True))
                        if b"1" in sides else Counter())
-        for resolved_line, resolved_count in Counter(resolved_lines).items():
+        for resolved_line, resolved_count in resolved_counts.items():
             base_count = base_counts[resolved_line]
             if resolved_count > base_count + sum(max(0, counts[resolved_line] - base_count) for counts in side_counts):
                 raise ValueError("duplicated unchanged protected line")
