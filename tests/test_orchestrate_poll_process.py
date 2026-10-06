@@ -9835,7 +9835,7 @@ def test_review_blocked_fix_target_rejects_head_move_during_judge():
 	failures = []
 	for changed_pr, reason in (
 		({"headSha": "__integration_head__"}, "head_moved"),
-		({"headRepoFullName": "attacker/repo"}, "head_repo_mismatch"),
+		({"headRepoFullName": "attacker/repo"}, "cross_repository"),
 		({"headRefFromApi": "feature/other"}, "head_ref_changed"),
 	):
 		open_pr = {
@@ -9863,7 +9863,7 @@ def test_review_blocked_fix_target_rejects_head_move_during_judge():
 def test_review_blocked_merged_fix_target_rejects_unrelated_followup():
 	failures = []
 	for merged_overrides, reason in (
-		({"headRepoFullName": "attacker/repo"}, "head_repo_mismatch"),
+		({"headRepoFullName": "attacker/repo"}, "cross_repository"),
 		({"headRefName": "feature/x", "headRefFromApi": "feature/x", "body": "Refs #10"}, "not_implementation_pr"),
 	):
 		state = _base_state(status="in_progress")
