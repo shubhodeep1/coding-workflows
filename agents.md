@@ -750,9 +750,11 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   `GIT_CONFIG_*` or `GIT_CONFIG` assignments, or an `env` wrapper, ask too:
   those per-command settings can affect the push destination, so the guard
   does not trust its stored URL or PR history for that push. Wrapped commits
-  are checked in the directory selected by `env -C` or `GIT_DIR`; a commit
-  from an ambiguous directory and an unparseable `env -S` command ask for
-  confirmation. A push from an unresolved directory (including an appended
+  are checked in the directory selected by `env -C` or `GIT_DIR`; an env-wrapped
+  commit whose directory cannot be resolved asks instead of querying the
+  session checkout. Other ambiguous commit directories warn and check the
+  checkout; an unparseable `env -S` command asks for confirmation. A push
+  from an unresolved directory (including an appended
   `GIT_DIR+=` / `GIT_WORK_TREE+=`, whose value is never applied) is checked
   against the session checkout, which can still block, and otherwise asks.
   Leading redirections, including those after environment assignments, do
