@@ -560,6 +560,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_pool_token.py
 
+      - name: Install Claude CLI action tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_install_claude_action.py
+
       - name: Set up Node 22 for the claude-pool-broker Worker tests
         uses: actions/setup-node@v6
         with:
@@ -601,6 +606,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_audit_plans_command.py
+
+      - name: /deploy-activate command contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_deploy_activate_command.py
 
       - name: Orchestrate lib unit tests
         run: |

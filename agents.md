@@ -16,6 +16,9 @@ words, shell negation (`!`), and simple `case` arms. Since their effective
 directory is uncertain, pushes check the session checkout and request
 confirmation unless blocked; commits in that context remain warning-only
 when not blocked.
+An env-wrapped commit whose directory cannot be resolved instead asks for
+confirmation without querying PRs for the session checkout, which may be a
+different repository.
 
 ---
 
@@ -752,7 +755,9 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   does not trust its stored URL or PR history for that push. Wrapped commits
   are checked in the directory selected by `env -C` or `GIT_DIR`; a commit
   from an ambiguous directory and an unparseable `env -S` command ask for
-  confirmation. A push from an unresolved directory (including an appended
+  confirmation. When `env -C` cannot resolve its directory, the commit guard
+  asks without querying the session checkout's PR history. A push from an
+  unresolved directory (including an appended
   `GIT_DIR+=` / `GIT_WORK_TREE+=`, whose value is never applied) is checked
   against the session checkout, which can still block, and otherwise asks.
   Leading redirections, including those after environment assignments, do
