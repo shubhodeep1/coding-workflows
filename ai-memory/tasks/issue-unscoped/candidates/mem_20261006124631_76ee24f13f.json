@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/6118-phase-8a-single-issue-security-pass.md:Line 10 | severity=high | confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The older changelog fragment still documents the default as `true`, contradicting this PR's change to `false`.\n  WHY: Both fragments will be folded into `CHANGELOG.md`, leaving operators with conflicting information about the current default.\n- changelog.d/claude-busy-ride-2ezayb-single-issue-security-pass-default-off.md:filename | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The fragment filename uses a branch-derived slug instead of the documented `<issue-or-pr>-<slug>.md` format.\n  WHY: The assembler consumes the fragment, so runtime behavior is unaffected, but the filename does not provide the required issue or PR association.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- changelog.d/claude-busy-ride-2ezayb-single-issue-security-pass-default-off.md:filename | severity=low | confidence=5\n  PROBLEM: The file name uses the branch slug `claude-busy-ride-2ezayb` as the prefix, not a numeric issue or PR identifier. CLAUDE.md \u00a720.B requires `changelog.d/<issue-or-pr>-<slug>.md`.\n  WHY: It does not fail at runtime \u2014 `scripts/assemble_changelog.py` globs all `*.md` files regardless of prefix format. The fragment folds into CHANGELOG.md correctly (the editor confirmed 26 test passes). This is convention drift only.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/claude-busy-ride-2ezayb-single-issue-security-pass-default-off.md:filename (entire path) | severity=low | confidence=4\n  PROBLEM: The fragment filename uses a branch-derived Claude session slug (\"claude-busy-ride-2ezayb\") instead of the documented `<issue-or-pr>-<slug>.md` convention with a numeric identifier.\n  WHY: The assembler (`scripts/assemble_changelog.py`) only globs `changelog.d/*.md` and sorts by filename, so the fragment still folds into CHANGELOG.md and runtime behavior is unaffected. The defect is convention drift.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/claude-busy-ride-2ezayb-single-issue-security-pass-default-off.md:filename; CLAUDE.md:743-746 | severity=low | confidence=4\n  PROBLEM: The fragment filename uses a branch-derived slug instead of the required `<issue-or-pr>-<slug>.md` format.\n  WHY: The changelog assembler still consumes the fragment, so there is no runtime failure. The filename does not provide the required issue or PR association for the fragment.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/6118-phase-8a-single-issue-security-pass.md:Line 10: `| New repository variable | \\`SINGLE_ISSUE_SECURITY_PASS_ENABLED\\`, default \\`true\\` |` | severity=high | confidence=5\n  PROBLEM: The older changelog fragment still documents the default as `true`, but this PR changes the default to `false`.\n  WHY: The fragments will be folded together, leaving contradictory information for operators; the older fragment should be updated to `default false` or deleted if the new fragment fully supersedes it.\n- changelog.d/claude-busy-ride-2ezayb-single-issue-security-pass-default-off.md:Filename | severity=low | confidence=4\n  PROBLEM: The fragment filename uses a branch-derived prefix (`claude-busy-ride-2ezayb`) instead of the documented `<issue-or-pr>-<slug>.md` convention (CLAUDE.md \u00a720.B, agents.md \"CHANGELOG Entries\"). The PR description states \"No linked issues found\", so no issue number exists, but the PR number is known at PR creation time and should be used.\n  WHY: The assembler still folds the fragment correctly (it globs all `changelog.d/*.md`), so this is convention drift rather than a runtime defect. However, it makes the per-PR association in the changelog history harder to recognize by eye, and the editor's summary explicitly acknowledged the violation (\"GitHub lookup tools are unavailable, so its unique branch slug is retained\").\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "0e6da7b06bf77baddd7c945a0b2cdbfeedda2da34392219a55b8de6cbbf1a867",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6562,
+    "run_id": "37461900262",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37461900262",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006124631_76ee24f13f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6562,
+    "run_id": "37461900262"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T12:46:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
