@@ -2078,12 +2078,12 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
           set -euo pipefail
+          if [ ! -f "${ISSUE_BODY_FILE:-}" ]; then
+            echo "::error::ISSUE_BODY_FILE is not a regular file." >&2
+            exit 1
+          fi
           {
             echo "ISSUE DESCRIPTION"
-            if [ ! -f "${ISSUE_BODY_FILE:-}" ]; then
-              echo "::error::ISSUE_BODY_FILE is not a regular file."
-              exit 1
-            fi
             cat "${ISSUE_BODY_FILE}"
             echo
             echo "CLARIFICATION ANSWERS"

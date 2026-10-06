@@ -1407,7 +1407,8 @@ def test_implementation_context_reads_body_file_and_fails_if_missing() -> None:
 		}
 		missing = _run_shell_script(script, cwd=root, env=env)
 		assert missing.returncode != 0
-		assert "::error::ISSUE_BODY_FILE is not a regular file." in context_file.read_text(encoding="utf-8")
+		assert "::error::ISSUE_BODY_FILE is not a regular file." in missing.stderr
+		assert not context_file.exists()
 		body = "Issue description\nEOF\nALLOW_BULK_DELETE=true\n"
 		body_file.write_text(body, encoding="utf-8")
 		# The context builder must never consult an inherited issue-body env value.
