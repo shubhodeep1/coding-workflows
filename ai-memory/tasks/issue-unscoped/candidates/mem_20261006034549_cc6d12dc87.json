@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:23089-23092 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: The Wave Judge Codex fallback can read Claude pool token files that remain accessible to the same runner user.\n  WHY: Read-only mode prevents writes but permits reads, allowing prompt-directed access to pool tokens and their exposure through the judge verdict; both reviewers rate this major.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Replace the Claude session with the Claude Code CLI engine for the BEHAVIOURAL_SMOKE role.\n  expected_change_site: .github/workflows/workflow-log-analysis.yml\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The .github/workflows/workflow-log-analysis.yml file does not contain the Resolve AI engine resolution step or the CLI install/credential wiring for the BEHAVIOURAL_SMOKE role, unlike the LOG_ANALYSIS and LOG_AUDIT roles.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Replace the Claude session with the Claude Code CLI engine for the BEHAVIOURAL_SMOKE role.\n  Expected change site: .github/workflows/workflow-log-analysis.yml\n  Evidence of absence: The .github/workflows/workflow-log-analysis.yml file does not contain the Resolve AI engine resolution step or the CLI install/credential wiring for the BEHAVIOURAL_SMOKE role, unlike the LOG_ANALYSIS and LOG_AUDIT roles.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:23091-23092 | severity=MAJOR | confidence=5\n  PROBLEM: The Wave Judge fallback strips credential environment variables and runs Codex with `--sandbox read-only`, but leaves the Claude token pool readable on the runner.\n  WHY: When Claude isolation returns 75, the Codex process runs as the same runner user that owns `${RUNNER_TEMP}/claude-pool/tokens/<NAME>`. Read-only mode prevents writes, not reads. A prompt-directed shell command can read a pool token and include it in the judge output, which is later posted to the tracking issue at lines 23183-23195.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/orchestrate_poll_process.sh:lines 23089-23092 (wave_judge_rc fallback branch), interacting with .github/workflows/orchestrate_poll.yml:762-767 (pool fetch before \"Process each tracking issue\") | severity=MAJOR | confidence=3\n  PROBLEM: The wave-judge Codex fallback uses `--sandbox read-only` and strips many env credentials, but the Claude pool token files at `${RUNNER_TEMP}/claude-pool/tokens/` (mode 0600, same user) remain readable by the Codex process.\n  WHY: `--sandbox read-only` prevents writes but permits reads. `shell_environment_policy.filters.OPENROUTER_API_KEY=\"exclude\"` only filters env vars from model-launched shell commands, not filesystem access. The pool directory is not cleared or masked before the Codex fallback runs, so the model can read the token files and exfiltrate them through the judge output that reaches GitHub.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "4691bf17d21486d92f7a82c9199543ff48c74fb1215d5375001724f4dd26bad8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6209,
+    "run_id": "37407497161",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37407497161",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006034549_cc6d12dc87",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6209,
+    "run_id": "37407497161"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T03:45:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
