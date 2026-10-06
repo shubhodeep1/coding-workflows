@@ -1443,6 +1443,7 @@ def test_env_wrapped_commit_checks_selected_repo(merged_branch_repo, monkeypatch
 	"env --chdir=/does-not-exist git commit -m x",
 	"env GIT_DIR=/does-not-exist git commit -m x",
 	"git -C /does-not-exist commit -m x",
+	'env -C "$OTHER_REPO" git commit -m x',
 	"GIT_DIR=/does-not-exist git commit -m x",
 	"GIT_DIR+=/does-not-exist git commit -m x",
 	"GIT_WORK_TREE+=/does-not-exist git commit -m x",

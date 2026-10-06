@@ -16,8 +16,8 @@ words, shell negation (`!`), and simple `case` arms. Since their effective
 directory is uncertain, pushes check the session checkout and request
 confirmation unless blocked; commits following unresolved directory-changing
 commands also ask, while control-flow-only commits remain warning-only when
-not blocked.
-An env-wrapped commit whose directory cannot be resolved instead asks for
+not blocked. An unresolvable explicit directory override, including an
+env-wrapped commit whose directory cannot be resolved, instead asks for
 confirmation without querying PRs for the session checkout, which may be a
 different repository.
 
@@ -39,6 +39,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
    They stage the helper and Dockerfile from the support ref (main fallback);
    isolation failures never fall back to host Codex. GitHub-side fetching,
    memory, retry, and comment handling remain on the runner.
+    Host Python uses isolated imports; `CLARIFY_SOURCE_ROOT` selects the snapshot
+    input directory (default `$PWD`), which is read only as data.
+    Clarify and clarify-respond retain agent instruction files in their snapshots
+    by default; triage alone opts out with `CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS=true`.
     The unblock judge also runs both engines through this isolation boundary;
     Claude's OAuth token stays in the host-side relay.
     Standalone clarify-respond skips semantic-cache lookup and storage (including
@@ -194,7 +198,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
 13. **check failure triage** (`check_failure_triage.yml`,
     `internal-check-failure-triage.yml`, `scripts/check_failure_triage.sh`,
     `prompts/mode-check-failure-triage.txt`) — triggers on `check_run:
-    completed` failures on a PR; the diagnosis model analyses the failing
+    completed` for non-Actions checks or failed `workflow_run: completed`
+    pull-request runs of Actions CI; the diagnosis model analyses the failing
     check's logs and opens a GitHub issue (label `ai:check-triage`) describing
     the root cause + suggested fix, which the clarify→…→review pipeline then
     picks up. On by default; disable per repo via
@@ -202,6 +207,32 @@ Phases of the unattended pipeline (each is a separate workflow file under
     in-flight triage per repo+PR+check and caps the
     auto-fix lineage at `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH` generations
     (escalates with `ai:check-triage-escalated` + Telegram at the cap).
+    The PR-head checkout does not persist credentials; collection uses a
+    GitHub token before Codex runs from a trusted support directory in a
+    separate, GitHub-token-free step. Missing trusted support fails closed.
+    Both wrappers pass only the four declared secrets, and diagnosis runs in
+    the credential-free, read-only clarify container with a host-side broker;
+    missing isolation falls back to a raw-context issue, never host Codex.
+    The helper runs from trusted support with `CLARIFY_SOURCE_ROOT` set to the
+    PR checkout, so host Python and the broker never execute PR-head modules.
+    Triage omits agent instruction files at any depth from the sandbox snapshot;
+    the opt-in filter leaves other clarify callers' snapshots unchanged.
+    PR-head `agents.md` / `AGENTS.md` enters the prompt through a bounded,
+    credential-free regular-file read that never follows symlinks.
+    Untrusted check/workflow names are single-lined, length-capped, and have
+    backticks and markers escaped before display, including a direct Telegram
+    failure alert when trusted support staging fails (never sourcing PR-head
+    helpers; suppressed without credentials or at `ALERT_MSG_LEVEL=SILENT`);
+    logs and model diagnosis
+    text are neutralised before issue posting
+    so they cannot spoof downstream routing metadata or triage markers.
+    Check metadata is flattened for display while raw names remain in dedup keys;
+    the complete redacted issue body is checked for routing keys and forged markers
+    before either the posting step or a direct caller may create the issue.
+    Issue posting is separate and requires the `CHECK_TRIAGE_ISSUES_TOKEN`
+    fine-grained PAT so `issues: opened` still fires without exposing `GH_PAT`.
+    Fix PRs linked to triage issues run the single-issue security pass at their
+    current head; the triage label and fingerprint do not exempt them.
 14. **workflow failure heal** (`workflow_failure_heal.yml`,
     `internal-workflow-failure-heal.yml`, `workflow-failure-heal-intake.yml`,
     `scripts/workflow_failure_heal_report.sh`,
@@ -212,7 +243,7 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `ai:scope-blocked`, `ai:harness-broken`, `ai:resolver-escalated`,
     `ai:security-pass-failed`) in a consumer or in this repo, and on
     `workflow_run: completed` failures of the five release / promotion
-    workflows. The reporter links the failed runs and the wrapper release pin
+    workflows and of `CI` on pushes to the default branch. The reporter links the failed runs and the wrapper release pin
     and sends a `repository_dispatch` (`workflow-failure-heal`) to this repo;
     the intake fetches the failed job logs, diagnoses against the source at
     that SHA, classifies (`workflow-defect` / `inconclusive` → issue here with
@@ -236,7 +267,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED=false`, routes as
     `workflow-defect`). The prompt carries the branch progress since the
     failing SHA (one REST compare call + a branch-tip worktree) and the earlier
-    heal issues of the same fingerprint / lineage. It de-dupes by fingerprint
+    heal issues of the same fingerprint / lineage. Failure evidence and model
+    diagnosis are neutralised before issue posting, and the finished heal body
+    is checked for forged routing metadata and markers before creation. It
+    de-dupes by fingerprint
     (label `ai:workflow-heal`; the promote cycle's `[cycle:<id>]` run-name
     suffix is ignored, and the error signature comes from the steps'
     `##[error]` output, not the echoed step script; for an `autofix_failure`
@@ -249,8 +283,18 @@ Phases of the unattended pipeline (each is a separate workflow file under
     fixes, continue the lineage), caps the lineage at
     `WORKFLOW_HEAL_MAX_LINEAGE_DEPTH` (escalates with
     `ai:workflow-heal-escalated` + Telegram), and bounds the volume with
-    `WORKFLOW_HEAL_MAX_OPEN_ISSUES` / `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY`. A
-    third reporter lives in the failure path of `review_autofix.yml`
+     `WORKFLOW_HEAL_MAX_OPEN_ISSUES` / `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY`.
+     Comment run links only prioritize failed runs verified in the recent
+     run listing with a matching issue title; source generation markers are
+     inherited only from heal-labeled issues with a canonical marker header
+     and a bot or owner/member/collaborator author. The
+     composed issue neutralizes untrusted routing keys in evidence and diagnosis
+     and rejects any remaining routing directives or extra markers before filing,
+     so only intake-owned branch metadata can select the fix target.
+     Fix PRs linked to `ai:workflow-heal` issues run the single-issue security
+    pass at their current head; the heal label and `fp` marker do not exempt
+    them (finding `ci-heal-skips-security-pass`). A third reporter lives
+    in the failure path of `review_autofix.yml`
     (`scripts/workflow_failure_heal_autofix_report.sh`, payload kind
     `autofix_failure`): it reports a failed review/autofix run on a pull
     request once `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` (default 1, so every
@@ -860,11 +904,12 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   `GIT_CONFIG_*` or `GIT_CONFIG` assignments, or an `env` wrapper, ask too:
   those per-command settings can affect the push destination, so the guard
   does not trust its stored URL or PR history for that push. Wrapped commits
-  are checked in the directory selected by `env -C` or `GIT_DIR`; an env-wrapped
-  commit whose directory cannot be resolved asks instead of querying the
-  session checkout. Other ambiguous commit directories warn and check the
-  checkout; an unparseable `env -S` command asks for confirmation. A push
-  from an unresolved directory (including an appended
+  are checked in the directory selected by `env -C` or `GIT_DIR`; an explicit
+  commit directory override that cannot be resolved (including `env -C`)
+  asks for confirmation without querying the session checkout's PR history.
+  Other ambiguous commit directories warn and check the checkout; an
+  unparseable `env -S` command also asks for confirmation. A push from an
+  unresolved directory (including an appended
   `GIT_DIR+=` / `GIT_WORK_TREE+=`, whose value is never applied) is checked
   against the session checkout, which can still block, and otherwise asks.
   Leading redirections, including those after environment assignments, do
@@ -2257,9 +2302,9 @@ depend on it.
 | `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` | `true` | Enable the consolidator-side companion `AGENTS.md` materiality finding. Unlike `AGENTS_MD_MATERIALITY_ENABLED`, which controls the separate advisory comment helper, this flag only controls whether `review_consolidate.sh` passes the helper JSON into Lens 7 (`NAMING / BACKWARD COMPATIBILITY`). |
 | `ENABLE_SECURITY_PASS` | `true` | Enable the scheduled poller's mandatory current-integration-head security gate before validation or finalization. Set to `false` for the immediate operator kill switch and legacy completion behavior. |
 | `MAX_SECURITY_PASS_CYCLES` | `5` | Maximum completed consolidated security-fix cycles before persistent findings terminalize as `ai:security-pass-failed`. Resets to `0` when an advancing integration head invalidates a recorded clean pass. Re-audits after a merged fix are delta audits, so the budget bounds persisting findings rather than fresh samples of unchanged code. For standalone PRs, a completed current-head audit is required to enter judge exhaustion mode. |
-| `SINGLE_ISSUE_SECURITY_PASS_ENABLED` | `false` | Off by default (opt in with `true`); orchestrator projects keep their own pass under `ENABLE_SECURITY_PASS`. When enabled, hold eligible standalone PRs into the default branch until a security audit of the current head is clean. At the cycle cap an unaudited head gets bounded retries, then remains held without judge exhaustion mode; a completed findings audit for the same head still qualifies if a later attempt fails. A missing or unwritable `GITHUB_OUTPUT` fails the gate step closed; dispatch failure at any cycle holds the merge for a later review retry. With the flag off (the default) the pre-pass review-gate and deterministic-skip merge behavior applies. Only a sole verified automation follow-up is exempt; see `README.md` for dispatch and failure modes. |
+| `SINGLE_ISSUE_SECURITY_PASS_ENABLED` | `false` | Off by default (opt in with `true`); orchestrator projects keep their own pass under `ENABLE_SECURITY_PASS`. When enabled, hold eligible standalone PRs into the default branch until a security audit of the current head is clean. At the cycle cap an unaudited head gets bounded retries, then remains held without judge exhaustion mode; a completed findings audit for the same head still qualifies if a later attempt fails. A missing or unwritable `GITHUB_OUTPUT` fails the gate step closed; dispatch failure at any cycle holds the merge for a later review retry. With the flag off (the default) the pre-pass review-gate and deterministic-skip merge behavior applies. Only a sole verified `ai:security` follow-up is exempt; see `README.md` for dispatch and failure modes. |
 | `SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS` | `2` | Maximum trusted pending audit attempts per head with a cycle number above the standalone pass's cycle cap. Pre-cap pending markers do not consume these extra attempts. Invalid or non-positive values fall back to `2`; a failed exhausted retry dispatch holds the merge. |
-| `SECURITY_PASS_PENDING_STALE_HOURS` | `6` | A pending single-issue audit holds auto-merge until its marker is this many hours old; the next review run re-dispatches. Invalid or non-positive values fall back to `6`. Only a sole verified automation-linked issue skips the pass; multiple linked issues are audited. When `GH_PAT` is absent, both gate and reporter trust only `github-actions[bot]` markers. |
+| `SECURITY_PASS_PENDING_STALE_HOURS` | `6` | A pending single-issue audit holds auto-merge until its marker is this many hours old; the next review run re-dispatches. Invalid or non-positive values fall back to `6`. Only a sole verified `ai:security` issue skips the pass; multiple linked issues are audited. When `GH_PAT` is absent, both gate and reporter trust only `github-actions[bot]` markers. |
 | `MAX_SECURITY_PASS_FIX_REISSUES` | `2` | Maximum re-issues of one `ai:implementation-failed` consolidated security-fix issue per fix cycle before the pass terminalizes as `ai:security-pass-failed`. |
 | `SECURITY_PASS_CONFIDENCE_GATE` | `8` | Minimum 1-10 confidence score for findings that block the project security pass. |
 

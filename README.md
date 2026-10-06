@@ -58,6 +58,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | Secret | Required | Used By | Description |
 |---|---|---|---|
 | `GH_PAT` | **Yes** | All workflows | GitHub Personal Access Token with `repo` scope |
+| `CHECK_TRIAGE_ISSUES_TOKEN` | **Yes** | check_failure_triage | Fine-grained PAT scoped to this repository with Issues: write and Metadata: read, used only to post a triage issue. `GITHUB_TOKEN` cannot trigger the downstream `issues: opened` workflow, and the broader `GH_PAT` is never exposed to the posting step. |
 | `OPENROUTER_API_KEY` | **Yes** | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, issue_pr_status, memory_maintenance, security-audit (source repo only) | [OpenRouter](https://openrouter.ai) API key for LLM access and AI memory keyword extraction |
 | `TG_BOT_SECRET` | No | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, issue_pr_status | Telegram bot token for notifications and message cleanup |
 | `DIGITALOCEAN_ACCESS_TOKEN` | No | Interactive Claude Code sessions only (CLAUDE.md §22) — no Actions workflow reads it | DigitalOcean API token. Set as an env var in the Claude Code session environment (not required as an Actions secret). Lets interactive sessions pull DigitalOcean data (app specs, deployed env vars, logs, deployment status) self-serve for verification and debugging; provisioning or mutating resources always requires asking the user first. Resource IDs per repo live in the `## DigitalOcean resources` section of `agents.md`/`AGENTS.md`. |
@@ -1425,9 +1426,22 @@ implement → review`, which is the "safest possible" route. With
 `AUTO_IMPLEMENT_ON_CLEAR_PLAN=true` (the default) the opened issue can flow all
 the way to a fix PR without human action.
 
-- **Trigger:** `check_run: completed` with a `failure` or `timed_out`
-  conclusion, on a check associated with an open PR. The workflow file lives
-  on the default branch (required for `check_run` events).
+- **Trigger:** a failed (`failure` or `timed_out`) pull-request run of a
+  GitHub Actions workflow, through `workflow_run: completed` (job
+  `triage-workflow-run`). GitHub sends no `check_run` event for a check that
+  GitHub Actions created ("to prevent recursive workflows"), so before this
+  job the triage never ran for Actions CI. This repo's wrapper listens to the
+  `CI` workflow; the consumer wrapper uses `workflows: ["*"]` to listen to
+  every workflow and skips the shipped pipeline wrapper paths using the
+  workflow definition's path, not the run path (which may include a ref suffix).
+  Custom workflows sharing a pipeline name, regardless of casing, remain
+  eligible. Each finished workflow also leaves a skipped wrapper run in the
+  Actions tab. Each failed run is evaluated,
+  but an existing open triage issue for the same PR and workflow suppresses a
+  duplicate; the diagnosis reads every failing check on the PR head. The
+  original `check_run: completed` job stays for checks reported by apps other
+  than GitHub Actions. Both events need the
+  workflow file on the default branch.
 - **On by default:** runs unless the repo variable `CHECK_FAILURE_TRIAGE_ENABLED`
   is set to `false`. While disabled the wrapper job is skipped immediately (no
   checkout / no model call).
@@ -1438,13 +1452,27 @@ the way to a fix PR without human action.
   supported conclusions, and SHA shape, then confirms the PR head repository
   with read-only pull-request permission. Untrusted check names and URLs remain
   environment data, and log or Telegram display values are single-line and
-  bounded before the secret-bearing triage job starts.
+  bounded before the secret-bearing triage job starts. If triage itself fails,
+  its alert also flattens Unicode separators and escapes check-name markup.
+  If trusted support staging fails, the failure step sends the alert directly
+  without sourcing the PR checkout; it skips delivery when Telegram credentials
+  are absent or `ALERT_MSG_LEVEL=SILENT`, and ignores Telegram API failures.
 - **Diagnosis:** for same-repo PRs, the repo is checked out at the failing head
-  SHA; the diagnosis model (`WORKFLOW_CHECK_TRIAGE_MODEL`, default
-  `openai/gpt-6-sol`, `high`) reads the failing check's logs (via
+  SHA without persisted checkout credentials. The workflow collects PR metadata
+  and logs with `GH_PAT` from a separate trusted support directory (so PR-head
+  Python files cannot shadow the collector's imports), then runs Codex there
+  with no GitHub token in the diagnosis step. Missing trusted instructions stop
+  triage rather than falling back to PR-head instructions. The diagnosis model
+  (`WORKFLOW_CHECK_TRIAGE_MODEL`, default `openai/gpt-6-sol`, `high`) reads the failing check's logs (via
   `collect_pr_check_runs_context.py`) and the branch code, then writes the
   issue body (summary, evidence, root cause, suggested fix, affected files)
-  per `prompts/mode-check-failure-triage.txt`.
+  per `prompts/mode-check-failure-triage.txt`. The separate posting step uses
+  the required `CHECK_TRIAGE_ISSUES_TOKEN` (a fine-grained PAT scoped to this
+  repo with Issues: write and Metadata: read). The broader `GH_PAT` is limited
+  to context collection and is never exposed to diagnosis or posting. The
+  automatic `GITHUB_TOKEN` is not used to post: issues it creates would not
+  trigger the downstream `issues: opened` clarification workflow. Token values
+  are redacted before posting; a missing body or redaction failure stops the run.
 - **De-duplication:** a per-`repo+PR+check` concurrency group keeps one triage
   in flight; an HTML-comment fingerprint marker
   (`<!-- check-failure-triage:fp=… -->`) means no second issue is opened for a
@@ -1457,10 +1485,13 @@ the way to a fix PR without human action.
   `ai:check-triage-escalated` and sends a Telegram CRITICAL for human
   attention. The triage workflow also skips its own check-run by name to
   prevent self-triggering.
-- **Failure modes:** the workflow fails open. Missing logs → the issue is filed
+- **Failure modes:** missing logs → the issue is filed
   with raw context; an empty model response → a fallback body is filed; a
   failed `gh issue create` or a triage-workflow crash → a Telegram CRITICAL is
-  sent and the run fails (no partial state is left). Stable log lines are
+  sent and the run fails (no partial state is left). If trusted support staging
+  fails before it can export its directory, the run fails without loading
+  PR-head notification helpers, so inspect the workflow log for the failure.
+  Missing trusted support or context prevents issue creation. Stable log lines are
   prefixed `CHECK_TRIAGE`.
 
 ### Workflow Failure Heal
@@ -1615,13 +1646,25 @@ through `clarify → plan → implement → review`.
   or `timed_out` on `Test & Mark Stable Release`, `Mark Stable Release`,
   `Promote main to stable`, `Auto release stable`, and
   `Forward-merge stable to main`, handled directly by
-  `workflow-failure-heal-intake.yml` in coding-workflows. A promote or
+  `workflow-failure-heal-intake.yml` in coding-workflows.
+- **Trigger (CI on main):** the same `workflow_run` path for a failed `CI` run
+  on a push to the default branch (`MAIN_CI_WORKFLOW_NAMES` in
+  `scripts/workflow_failure_heal.py`). A red `main` fails every PR's CI, so the
+  heal issue targets `main`, the failed run's branch. Pull-request CI failures
+  are skipped here; check-failure triage takes them. Fix PRs for all
+  `ai:workflow-heal` issues into the default branch require a head-bound
+  security audit, including release-workflow heal issues. A promote or
   auto-release run that failed only because the smoke gate failed is skipped
   (`skip reason=downstream_gate_failure`) because the gate run reports itself.
 - **Report (consumer side):** the reporter reads the escalated issue / PR, its
-  comments, and the repository's recent runs, links the failed runs (run URLs in
-  the pipeline's failure comments plus failed runs whose display title equals
-  the issue title, at most 3), records the coding-workflows release SHA the
+  comments, and the repository's recent runs. It links at most 3 listed failed
+  runs whose display title matches the issue title; run URLs in comments can
+  prioritize those runs but cannot introduce an unverified run ID. A run absent
+  from the recent listing is omitted. Lineage markers in the source issue are
+  inherited only from an `ai:workflow-heal` issue with a canonical header
+  authored by a bot or an owner/member/collaborator;
+  forged markers on other issues do not consume the heal generation budget.
+  The reporter records the coding-workflows release SHA the
   wrappers are pinned to, and sends one `repository_dispatch` (event type
   `workflow-failure-heal`) to coding-workflows. It skips closed issues and the
   `[E2E Smoke Test` fixtures the release gate creates. Stable log lines are
@@ -1711,6 +1754,12 @@ through `clarify → plan → implement → review`.
   `WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED=false`, is logged as
   `classification_remapped … to=workflow-defect reason=…` and takes the
   `workflow-defect` route above.
+  Before filing a heal issue, the intake neutralizes routing keys and issue
+  markers in the untrusted diagnosis, failure evidence, and run summaries.
+  Only the intake's own header can set `Target branch:`, `Integration branch:`,
+  or `Tracking issue:`; quoted evidence remains readable but cannot retarget
+  the fix. After composition, unexpected routing directives or issue markers
+  stop issue creation rather than silently retargeting the fix.
 - **Heal PR reconcile:** a heal PR filed on a source PR's head branch is
   stacked on that PR. When a pull request in coding-workflows closes, the
   `heal-pr-reconcile` job in `internal-cancel-on-pr-close.yml` runs
@@ -2253,7 +2302,7 @@ attempts of that role in the same job.
 | `scripts/ai_engine.sh` | Sourced by call sites. `ai_engine_for_role <ROLE>` prints `codex` or `claude` and logs `AI_ENGINE_SELECTED role= engine= model= effort= source=`. `claude_run <ROLE> <prompt> <out> <workdir> [session_id]` runs the CLI and writes the final answer to `<out>`, the file the codex path writes. |
 | `scripts/claude_engine.py` | Every decision: role resolution, the P5 settings, transcript extraction and classification (`success`, `auth_failed`, `usage_limit`, `crashed`, `timeout`), probe parsing, account order. No API calls. |
 | `scripts/claude_settings.json.tmpl` | P5 permission policy, rendered per run: denies `gh pr merge`, `gh api … DELETE`, force pushes and remote branch deletes, and edits to the checkout's `.github/workflows/**` (unless `ALLOW_WORKFLOW_EDITS=true`) and `.claude/**`; runs `gh_api_write_guard.py` on every Bash call (a headless "ask" is a denial); its `env` block carries no credential. |
-| `scripts/claude_anthropic_relay.py` | Host relay for the sandboxed roles (clarify, review editor): the container gets `ANTHROPIC_BASE_URL=http://127.0.0.1:8765` and a placeholder token; the host side swaps in the real OAuth token and forwards only `POST /v1/messages` to `api.anthropic.com`. Rejected requests with a valid bounded `Content-Length` drain the body for at most one second before returning 400, so incomplete uploads do not hold a relay connection indefinitely. Peer disconnects while sending the rejection are ignored rather than logged as server errors. |
+| `scripts/claude_anthropic_relay.py` | Host relay for the sandboxed roles (clarify, review editor): the container gets `ANTHROPIC_BASE_URL=http://127.0.0.1:8765` and a placeholder token; the host side swaps in the real OAuth token and forwards only `POST /v1/messages` to `api.anthropic.com`. Incomplete POST bodies time out after 60 seconds with HTTP 400; rejected requests with a valid bounded `Content-Length` drain the body for at most one second before returning 400. The synchronous relay then accepts the next request. Peer disconnects while sending the rejection are ignored rather than logged as server errors. |
 | `.github/actions/install-claude` | Installs and verifies the pinned `@anthropic-ai/claude-code` on Node 22. A relative `config_path` is read from `GITHUB_WORKSPACE`, not the step's cwd, so the CLI still installs after implement's `BASH_ENV` moves bash steps into `WORKSPACE_PATH`. |
 | `.github/workflows/claude-engine-smoke.yml` | Dispatch-only self-test per tool profile: offline checks, then the context gate, P5 denials and relay gate when a credential is available, or the codex fallback when it is not. |
 
