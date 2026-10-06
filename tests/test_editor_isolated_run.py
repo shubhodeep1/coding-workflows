@@ -1,0 +1,82 @@
+"""No model process may start on the credentialed host checkout."""
+
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+
+import pytest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+HELPER = ROOT / "scripts/editor_isolated_run.sh"
+
+
+def test_prepare_reap_finish_and_argv_guard(tmp_path: Path, request: pytest.FixtureRequest) -> None:
+	short_root = tempfile.TemporaryDirectory(prefix="ei-", dir="/tmp")
+	request.addfinalizer(short_root.cleanup)
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	log = tmp_path / "docker.log"
+	docker = bin_dir / "docker"
+	docker.write_text('''#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "''' + str(log) + '''"
+case "$1" in
+build) printf 'sha256:%064d\\n' 0 ;;
+ps) [ -f "''' + str(tmp_path / "survivor") + '''" ] && echo container123 || true ;;
+esac
+''')
+	docker.chmod(0o755)
+	env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", RUNNER_TEMP=short_root.name,
+		EDITOR_ISOLATION_SUPPORT_DIR=str(ROOT / "scripts"),
+		GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="1", GH_TOKEN="forbidden", OPENROUTER_API_KEY="fake-key")
+	env.pop("WORKSPACE_PATH", None)
+	def invoke(*args: str, input_text: str = "") -> subprocess.CompletedProcess[str]:
+		return subprocess.run(["bash", str(HELPER), *args], cwd=ROOT, env=env, text=True, input=input_text, capture_output=True)
+	prepared = invoke("prepare", "read", "codex")
+	assert prepared.returncode == 0, prepared.stderr
+	isolation_root = prepared.stdout.strip()
+	assert (Path(isolation_root) / "bin/codex").stat().st_mode & 0o111
+	bad = invoke("codex-exec", isolation_root, "--model", "untrusted")
+	assert bad.returncode == 2
+	assert "run --rm" not in log.read_text()
+	model_call = invoke("codex-exec", isolation_root, "--ask-for-approval", "never", "-c", "model_verbosity=low", "-c", "include_apply_patch_tool=true", "exec", "--skip-git-repo-check", "--model", "openai/gpt-6-sol", "--sandbox", "danger-full-access", input_text="plan prompt")
+	assert model_call.returncode == 0, model_call.stderr
+	second_call = invoke("codex-exec", isolation_root, "--ask-for-approval", "never", "-c", "model_verbosity=low", "-c", "include_apply_patch_tool=true", "exec", "--skip-git-repo-check", "--model", "openai/gpt-5.6-sol", "--sandbox", "read-only", input_text="retry prompt")
+	assert second_call.returncode == 0, second_call.stderr
+	run_args = next(line for line in log.read_text().splitlines() if line.startswith("run --rm"))
+	for flag in ("--network none", "--read-only", "--cap-drop ALL", "--security-opt no-new-privileges", "coding-workflows.editor-isolation.root=", "/source,readonly"):
+		assert flag in run_args
+	for sensitive in ("forbidden", "fake-key", str(ROOT / ".git"), "--env GH_TOKEN", "--env OPENROUTER_API_KEY"):
+		assert sensitive not in run_args
+	# A failed removal is not a successful finish; it may never authorize restore.
+	(tmp_path / "survivor").touch()
+	assert invoke("finish", isolation_root).returncode != 0
+	(tmp_path / "survivor").unlink()
+	assert invoke("finish", isolation_root).returncode == 0
+	assert invoke("cleanup", isolation_root).returncode == 0
+	assert not Path(isolation_root).exists()
+
+
+def test_launch_contracts_are_isolated_and_reaped_before_restore() -> None:
+	implement = (ROOT / ".github/workflows/implement.yml").read_text()
+	plan = (ROOT / "scripts/run_plan_codex.sh").read_text()
+	helper = HELPER.read_text()
+	for block in (implement.split("      - name: Run Codex implementation\n", 1)[1].split("      - name: ", 1)[0],
+		implement.split("      - name: Attempt post-Codex syntax repair\n", 1)[1].split("      - name: ", 1)[0]):
+		assert 'editor_isolated_run.sh" snapshot' in block
+		assert 'editor_isolated_run.sh" finish' in block
+		assert block.index('editor_isolated_run.sh" finish') < block.rindex('editor_git_credentials.sh" restore')
+		assert 'CODEX_THREAD_REUSE_REAL_CODEX="${EDITOR_ISOLATION_ROOT}/bin/codex"' in block
+		assert 'bash "${EDITOR_ISOLATION_SUPPORT_DIR}/codex_thread_reuse.sh" direct-run' in block
+	assert 'claude_run PLAN' not in plan
+	assert '"${EDITOR_ISOLATION_ROOT}/bin/codex" --ask-for-approval never' in plan
+	assert 'editor_isolated_run.sh" finish' in plan
+	assert '--network none --read-only --cap-drop ALL --security-opt no-new-privileges' in helper
+	assert '--label "coding-workflows.editor-isolation.root=' in helper
+	assert 'env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker' in helper
+	assert '--mount "type=bind,src=${root}/source,dst=/source' not in helper  # profile chooses mode
+	assert '--env GH_TOKEN=' not in helper and '--env OPENROUTER_API_KEY=' not in helper
+	assert '--env CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder' in helper
+	assert 'config --key hide_claude_md' in helper
+	assert '--mount "type=bind,src=${root}/empty-claude-md,dst=/source/CLAUDE.md,readonly"' in helper

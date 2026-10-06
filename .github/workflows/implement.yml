@@ -17,6 +17,7 @@ env:
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
   UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+  CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
   # Capacity-fallback editor model. On the final implement attempt the retry
   # loop points CODEX_THREAD_REUSE_MODEL at this slug, which sits in a
   # different OpenRouter/OpenAI per-model TPM bucket than the primary, so a
@@ -1000,6 +1001,22 @@ jobs:
           FETCHED_MANIFEST="${RUNTIME_DIR}/fetched_files.txt"
           : > "${FETCHED_MANIFEST}"
           echo "FETCHED_MANIFEST=${FETCHED_MANIFEST}" >> "$GITHUB_ENV"
+
+          # Immutable, out-of-tree runtime code: the editor can change scripts/
+          # in its snapshot without changing what the next host attempt executes.
+          EDITOR_ISOLATION_SUPPORT_DIR="${RUNTIME_DIR}/editor_isolation_support"
+          mkdir -p "${EDITOR_ISOLATION_SUPPORT_DIR}/review_sandbox"
+          for f in editor_isolated_run.sh review_untrusted_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py claude_settings.json.tmpl ai_engine.sh claude_engine.py codex_thread_reuse.sh codex_stall_guard.sh write_codex_config.sh codex_model_catalog.json workspace_safety_check.sh editor_git_credentials.sh; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ]; then src=".codex-workflow-src-main/scripts/${f}"; fi
+            [ -f "${src}" ] || { echo "::error::Missing editor isolation support ${f}"; exit 1; }
+            install -m 0755 "${src}" "${EDITOR_ISOLATION_SUPPORT_DIR}/${f}"
+          done
+          src=".codex-workflow-src/scripts/review_sandbox/Dockerfile"
+          if [ ! -f "${src}" ]; then src=".codex-workflow-src-main/scripts/review_sandbox/Dockerfile"; fi
+          [ -f "${src}" ] || { echo '::error::Missing editor isolation Dockerfile'; exit 1; }
+          install -m 0644 "${src}" "${EDITOR_ISOLATION_SUPPORT_DIR}/review_sandbox/Dockerfile"
+          echo "EDITOR_ISOLATION_SUPPORT_DIR=${EDITOR_ISOLATION_SUPPORT_DIR}" >> "$GITHUB_ENV"
 
           is_self_repo="false"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
@@ -2219,7 +2236,7 @@ jobs:
           # shellcheck source=/dev/null
           source "${WATCHDOG_HELPERS}"
 
-          CODEX_STALL_GUARD_HELPER="scripts/codex_stall_guard.sh"
+          CODEX_STALL_GUARD_HELPER="${EDITOR_ISOLATION_SUPPORT_DIR}/codex_stall_guard.sh"
           if [ ! -x "${CODEX_STALL_GUARD_HELPER}" ]; then
             echo "::error::Missing required support script ${CODEX_STALL_GUARD_HELPER}"
             exit 1
@@ -2366,6 +2383,8 @@ jobs:
           else
             echo "::notice::${STAGED_SUPPORT_WORKSPACE_HELPER} is unavailable on ${SCRIPT_REF:-this ref}; the editor sees the staged support copies."
           fi
+
+          EDITOR_ISOLATION_ROOT="$(bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" prepare write "${AI_ENGINE_RESOLVED_IMPLEMENT:-codex}")" || exit 1
 
           # Pre-load files named in the plan's "Files likely to change"
           # section so the editor's first turn is a write rather than a
@@ -2712,9 +2731,9 @@ jobs:
           }
 
             # shellcheck source=/dev/null
-            source scripts/codex_thread_reuse.sh
+            source "${EDITOR_ISOLATION_SUPPORT_DIR}/codex_thread_reuse.sh"
 
-            trap 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" restore' EXIT
+            trap 'bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" reap "${EDITOR_ISOLATION_ROOT}" && bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_git_credentials.sh" restore && bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" cleanup "${EDITOR_ISOLATION_ROOT}"' EXIT
 
             for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex implement attempt ${attempt}/${max_attempts}..."
@@ -2831,7 +2850,7 @@ jobs:
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${PROMPT_FILE_TO_USE}"
             fi
-            bash scripts/workspace_safety_check.sh
+            bash "${EDITOR_ISOLATION_SUPPORT_DIR}/workspace_safety_check.sh"
             emit_implement_substate "implement" "implement" "LaunchingAgentProcess" "${attempt}" "${attempt_log_file}"
             emit_implement_substate "implement" "implement" "InitializingSession" "${attempt}" "${attempt_log_file}"
             emit_implement_substate "implement" "implement" "StreamingTurn" "${attempt}" "${attempt_log_file}"
@@ -2862,10 +2881,14 @@ jobs:
             # unsynced integration branch checks out an older conftest.py, so
             # the workflow side has to hold on its own.
             # heal-evidence-privileged-prompt-injection: scrub child credentials.
-            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" hide
+            bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" snapshot "${EDITOR_ISOLATION_ROOT}"
+            bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_git_credentials.sh" hide
             CODEX_THREAD_REUSE_STATE_KEY="implement" \
               CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT:-codex}" \
               CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT" \
+              CODEX_THREAD_REUSE_REAL_CODEX="${EDITOR_ISOLATION_ROOT}/bin/codex" \
+              EDITOR_ISOLATION_ROOT="${EDITOR_ISOLATION_ROOT}" \
+              EDITOR_ISOLATION_REASONING="${MODEL_REASONING_EFFORT:-high}" \
               CODEX_THREAD_REUSE_PROMPT_FILE="${PROMPT_FILE_TO_USE}" \
               CODEX_THREAD_REUSE_OUTPUT_FILE="${CODEX_OUTPUT_FILE}" \
               CODEX_THREAD_REUSE_PHASE="implement" \
@@ -2878,9 +2901,10 @@ jobs:
               CODEX_THREAD_REUSE_TIMEOUT_SECS="${attempt_wall}" \
               env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_CHAT_ID -u TG_ADMIN_CHAT_ID -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH \
               env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \
-              bash scripts/codex_thread_reuse.sh direct-run || cmd_rc=$?
+              bash "${EDITOR_ISOLATION_SUPPORT_DIR}/codex_thread_reuse.sh" direct-run || cmd_rc=$?
 
-            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" restore
+            bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" finish "${EDITOR_ISOLATION_ROOT}"
+            bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_git_credentials.sh" restore
 
             emit_implement_substate "implement" "implement" "Finishing" "${attempt}" "${attempt_log_file}"
 
@@ -3190,6 +3214,8 @@ jobs:
 
           # Put SCRIPT_REF's copies back for every support path the editor
           # left untouched; edited paths stay as the editor's plain edits.
+          bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" cleanup "${EDITOR_ISOLATION_ROOT}"
+          trap - EXIT
           if [ -f "${STAGED_SUPPORT_WORKSPACE_HELPER}" ]; then
             bash "${STAGED_SUPPORT_WORKSPACE_HELPER}" reinstall
           fi
@@ -4053,6 +4079,10 @@ jobs:
             bash "${STAGED_SUPPORT_WORKSPACE_HELPER}" restore
           fi
 
+          EDITOR_ISOLATION_ROOT="$(bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" prepare write "${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex}")" || exit 1
+          echo "EDITOR_ISOLATION_ROOT=${EDITOR_ISOLATION_ROOT}" >> "$GITHUB_ENV"
+          trap 'bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" reap "${EDITOR_ISOLATION_ROOT}" && bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_git_credentials.sh" restore && bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" cleanup "${EDITOR_ISOLATION_ROOT}"' EXIT
+
           repair_succeeded=false
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Post-Codex syntax repair attempt ${attempt}/${max_attempts}"
@@ -4128,16 +4158,20 @@ jobs:
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${REPAIR_PROMPT_FILE}"
             fi
-            bash scripts/workspace_safety_check.sh
+            bash "${EDITOR_ISOLATION_SUPPORT_DIR}/workspace_safety_check.sh"
             emit_implement_substate "implement_repair" "implement_repair" "LaunchingAgentProcess" "${attempt}" "${REPAIR_LOG_FILE}"
             emit_implement_substate "implement_repair" "implement_repair" "InitializingSession" "${attempt}" "${REPAIR_LOG_FILE}"
             emit_implement_substate "implement_repair" "implement_repair" "StreamingTurn" "${attempt}" "${REPAIR_LOG_FILE}"
             # Same ledger scrub as the implementation launch above.
-            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" hide
+            bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" snapshot "${EDITOR_ISOLATION_ROOT}"
+            bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_git_credentials.sh" hide
             if ! CODEX_THREAD_REUSE_STATE_KEY="implement-repair" \
               CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex}" \
               CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT_REPAIR" \
               AI_ENGINE_EFFORT_HINT="${REPAIR_REASONING}" \
+              CODEX_THREAD_REUSE_REAL_CODEX="${EDITOR_ISOLATION_ROOT}/bin/codex" \
+              EDITOR_ISOLATION_ROOT="${EDITOR_ISOLATION_ROOT}" \
+              EDITOR_ISOLATION_REASONING="${REPAIR_REASONING}" \
               CODEX_THREAD_REUSE_PROMPT_FILE="${REPAIR_PROMPT_FILE}" \
               CODEX_THREAD_REUSE_OUTPUT_FILE="${REPAIR_OUTPUT_FILE}" \
               CODEX_THREAD_REUSE_PHASE="implement_repair" \
@@ -4149,14 +4183,16 @@ jobs:
               CODEX_THREAD_REUSE_MARKER_START="=== CAPTURED SYNTAX DIAGNOSTICS (FULL) ===" \
               env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_CHAT_ID -u TG_ADMIN_CHAT_ID -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH \
               env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \
-              bash scripts/codex_thread_reuse.sh direct-run; then
-              bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" restore
+              bash "${EDITOR_ISOLATION_SUPPORT_DIR}/codex_thread_reuse.sh" direct-run; then
+              bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" finish "${EDITOR_ISOLATION_ROOT}"
+              bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_git_credentials.sh" restore
               emit_implement_substate "implement_repair" "implement_repair" "Finishing" "${attempt}" "${REPAIR_LOG_FILE}"
               echo "::warning::Post-Codex repair attempt ${attempt} failed while invoking Codex."
               emit_implement_substate "implement_repair" "implement_repair" "Failed" "${attempt}" "${REPAIR_LOG_FILE}"
               continue
             fi
-            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" restore
+            bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" finish "${EDITOR_ISOLATION_ROOT}"
+            bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_git_credentials.sh" restore
             emit_implement_substate "implement_repair" "implement_repair" "Finishing" "${attempt}" "${REPAIR_LOG_FILE}"
 
             tracked_strays=()
@@ -4242,6 +4278,9 @@ jobs:
             exit 1
           fi
 
+          bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" cleanup "${EDITOR_ISOLATION_ROOT}"
+          trap - EXIT
+
           rm -f "${CAPTURE_FILE}"
           echo "repaired=true" >> "$GITHUB_OUTPUT"
 
@@ -4249,7 +4288,8 @@ jobs:
         if: always() && env.SKIP_IMPLEMENT != 'true' && steps.post_codex_syntax_repair.outcome != 'skipped'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" restore
+        run: |
+          bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" reap && bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_git_credentials.sh" restore
 
       - name: Protect workflow files from implementation edits
         if: env.SKIP_IMPLEMENT != 'true'

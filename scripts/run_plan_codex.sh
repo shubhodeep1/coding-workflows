@@ -275,7 +275,9 @@ if [ "${PLAN_ENGINE}" = "claude" ]; then
 fi
 
 max_attempts=3
-trap 'bash scripts/editor_git_credentials.sh restore' EXIT
+EDITOR_ISOLATION_ROOT="$(bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_isolated_run.sh" prepare read "${PLAN_ENGINE}")" || exit 1
+trap 'bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_isolated_run.sh" reap "${EDITOR_ISOLATION_ROOT}" && bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_git_credentials.sh" restore && bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_isolated_run.sh" cleanup "${EDITOR_ISOLATION_ROOT}"' EXIT
+bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_isolated_run.sh" snapshot "${EDITOR_ISOLATION_ROOT}"
 for attempt in $(seq 1 "${max_attempts}"); do
   echo "Codex planning attempt ${attempt}/${max_attempts} (engine ${PLAN_ENGINE})..."
   # Capacity-fallback: on the final attempt switch the editor model
@@ -292,20 +294,21 @@ for attempt in $(seq 1 "${max_attempts}"); do
     echo "Final attempt: switching editor model to fallback ${attempt_model} (primary ${MODEL_EDITOR} capacity-limited)."
   fi
   plan_rc=0
-  bash scripts/editor_git_credentials.sh hide
+  bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_git_credentials.sh" hide
   if [ "${PLAN_ENGINE}" = "claude" ]; then
     ( unset GH_TOKEN GH_PAT GITHUB_TOKEN TG_BOT_SECRET TG_CHAT_ID TG_ADMIN_CHAT_ID ACTIONS_RUNTIME_TOKEN ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL HEAL_EVIDENCE_DIR GITHUB_ENV GITHUB_PATH
       AI_ENGINE_MODEL_HINT="${MODEL_EDITOR}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT:-}" \
-        claude_run PLAN "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${PWD}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) ) || plan_rc=$?
+        bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_isolated_run.sh" claude-exec "${EDITOR_ISOLATION_ROOT}" PLAN "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) ) || plan_rc=$?
     if [ "${plan_rc}" -eq 75 ]; then
       PLAN_ENGINE="codex"
       plan_rc=0
     fi
   fi
   if [ "${PLAN_ENGINE}" != "claude" ]; then
-    env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_CHAT_ID -u TG_ADMIN_CHAT_ID -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${attempt_model}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || plan_rc=$?
+    env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_CHAT_ID -u TG_ADMIN_CHAT_ID -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH "${EDITOR_ISOLATION_ROOT}/bin/codex" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${attempt_model}" --sandbox read-only < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || plan_rc=$?
   fi
-  bash scripts/editor_git_credentials.sh restore
+  bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_isolated_run.sh" finish "${EDITOR_ISOLATION_ROOT}"
+  bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_git_credentials.sh" restore
   if [ "${plan_rc}" -eq 0 ]; then
     if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
       PLAN_LINES="$(wc -l < "${CODEX_OUTPUT_FILE}")"

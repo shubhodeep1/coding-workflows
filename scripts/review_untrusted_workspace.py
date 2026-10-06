@@ -50,6 +50,35 @@ def allowed(name, host=None, commands=None):
 	return name in ROOT_FILES or PurePosixPath(name).suffix.lower() in SUFFIXES or parts[-1] == "Dockerfile"
 
 
+def allowed_editor(name, host=None, commands=None):
+	parts = PurePosixPath(name).parts
+	if not parts or name.startswith("/") or ".." in parts or "\\" in name or "\n" in name or "\r" in name:
+		return False
+	if any(part.lower() in (".netrc", ".npmrc", ".pypirc") for part in parts):
+		return False
+	if name.startswith((".claude/", ".github/ai/")):
+		return allowed(name, host, commands)
+	if any(part.lower() in EXCLUDED - {"dist", "build", "coverage"} or part.lower().startswith((".env", ".codex")) or "secret" in part.lower() or "credential" in part.lower() or part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore", ".egg-info", ".dist-info")) for part in parts):
+		return name == "scripts/editor_git_credentials.sh"
+	if parts[0].startswith(".") and len(parts) > 1 and parts[:2] not in ((".github", "workflows"), (".github", "actions")):
+		return False
+	return True
+
+
+def profile_path(manifest):
+	return manifest.with_name(manifest.name + ".profile")
+
+
+def profile_for(manifest):
+	try:
+		value = profile_path(manifest).read_text(encoding="ascii").strip()
+	except OSError:
+		raise ValueError("profile missing") from None
+	if value not in ("review", "editor"):
+		raise ValueError("profile missing")
+	return value
+
+
 def checked_path(root, name):
 	path = root
 	for part in PurePosixPath(name).parts:
@@ -108,41 +137,55 @@ def fingerprint(path):
 	return [hashlib.sha256(data).hexdigest(), mode]
 
 
-def enumerate_workspace(root, host=None, commands=None):
+def enumerate_workspace(root, host=None, commands=None, profile="review"):
+	admit = allowed_editor if profile == "editor" else allowed
+	max_files = int(os.environ.get("EDITOR_ISOLATION_MAX_FILES", "20000")) if profile == "editor" else MAX_FILES
+	max_total = int(os.environ.get("EDITOR_ISOLATION_MAX_TOTAL_BYTES", "268435456")) if profile == "editor" else MAX_TOTAL
+	if max_files < 1 or max_total < 1:
+		raise ValueError("invalid limits")
 	count = 0
 	total = 0
 	entries = 0
+	dropped = 0
 	for directory, dirs, files in os.walk(root, followlinks=False):
 		rel = Path(directory).relative_to(root)
 		for child in dirs[:]:
 			entries += 1
-			if entries > 10000:
+			if entries > (max_files * 4 if profile == "editor" else 10000):
 				raise ValueError("workspace entry limit exceeded")
 			name = (rel / child).as_posix()
-			if child in EXCLUDED or child.endswith((".egg-info", ".dist-info")) or (rel == Path(".") and child.startswith(".") and child not in (".github", ".claude")):
+			if child in (EXCLUDED - {"dist", "build", "coverage"} if profile == "editor" else EXCLUDED) or child.endswith((".egg-info", ".dist-info")) or (rel == Path(".") and child.startswith(".") and child not in ((".github", ".claude") if profile == "review" else (".github", ".claude"))):
 				dirs.remove(child)
 				continue
-			if (name not in (".github", ".github/ai", ".claude", ".claude/hooks", ".claude/commands") and not allowed(name + "/placeholder.py")) or (Path(directory) / child).is_symlink():
+			if (name not in (".github", ".github/ai", ".claude", ".claude/hooks", ".claude/commands") and not admit(name + "/placeholder.py")) or (Path(directory) / child).is_symlink():
 				raise ValueError("unsafe workspace directory")
 		for child in files:
 			entries += 1
-			if entries > 10000:
+			if entries > (max_files * 4 if profile == "editor" else 10000):
 				raise ValueError("workspace entry limit exceeded")
 			name = (rel / child).as_posix()
-			if not allowed(name, commands=commands):
+			if not admit(name, commands=commands):
 				# Build products and cached dependencies are not editor output.
 				if name in ROOT_FILES or rel == Path("."):
 					raise ValueError("unsafe workspace result path")
+				dropped += 1
 				continue
 			data, mode = read_regular(checked_path(root, name))
 			count += 1
 			total += len(data)
-			if count > MAX_FILES or total > MAX_TOTAL:
+			if count > max_files or total > max_total:
 				raise ValueError("workspace size limit exceeded")
 			yield name, data, mode
+	if profile == "editor":
+		print(f"EDITOR_ISOLATION action=scan dropped={dropped}", file=sys.stderr)
 
 
-def snapshot(host, workspace, manifest, host_git_dir=None):
+def snapshot(host, workspace, manifest, host_git_dir=None, profile="review"):
+	admit = allowed_editor if profile == "editor" else allowed
+	max_files = int(os.environ.get("EDITOR_ISOLATION_MAX_FILES", "20000")) if profile == "editor" else MAX_FILES
+	max_total = int(os.environ.get("EDITOR_ISOLATION_MAX_TOTAL_BYTES", "268435456")) if profile == "editor" else MAX_TOTAL
+	if max_files < 1 or max_total < 1:
+		raise ValueError("invalid limits")
 	paths = set()
 	env = git_env(manifest)
 	# A per-PR workspace has no .git of its own: list it through the checkout's
@@ -161,17 +204,23 @@ def snapshot(host, workspace, manifest, host_git_dir=None):
 		template_command_inventory(host)) if trusted_checkout else frozenset()
 	baseline = {}
 	total = 0
+	dropped = 0
 	for name in sorted(paths):
-		if not allowed(name, commands=commands):
+		if not admit(name, commands=commands):
+			if profile == "editor":
+				dropped += 1
 			continue
 		if (host / name).is_symlink():
 			continue  # Existing tracked symlinks are not in the editor snapshot.
 		path = checked_path(host, name)
 		if not path.exists():
 			continue
+		if profile == "editor" and path.stat().st_size > MAX_FILE:
+			dropped += 1
+			continue
 		data, mode = read_regular(path)
 		total += len(data)
-		if len(baseline) >= MAX_FILES or total > MAX_TOTAL:
+		if len(baseline) >= max_files or total > max_total:
 			raise ValueError("snapshot size limit exceeded")
 		target = checked_path(workspace, name)
 		target.parent.mkdir(parents=True, exist_ok=True)
@@ -181,6 +230,9 @@ def snapshot(host, workspace, manifest, host_git_dir=None):
 		baseline[name] = [hashlib.sha256(data).hexdigest(), mode]
 	admitted_commands_path(manifest).write_text(json.dumps(sorted(commands)), encoding="utf-8")
 	manifest.write_text(json.dumps(baseline), encoding="utf-8")
+	profile_path(manifest).write_text(profile + "\n", encoding="ascii")
+	if profile == "editor":
+		print(f"EDITOR_ISOLATION action=snapshot dropped={dropped}", file=sys.stderr)
 	# A local, unauthenticated Git database supports editor diff commands.
 	# It is synthetic, and is never copied back to the host.
 	subprocess.run(["git", "init", "-q"], cwd=workspace, check=True, env=env)
@@ -190,9 +242,11 @@ def snapshot(host, workspace, manifest, host_git_dir=None):
 
 
 def transfer(host, workspace, manifest):
+	profile = profile_for(manifest)
+	admit = allowed_editor if profile == "editor" else allowed
 	commands = load_admitted_commands(manifest)
 	baseline = json.loads(manifest.read_text(encoding="utf-8"))
-	results = {name: (data, mode) for name, data, mode in enumerate_workspace(workspace, None, commands)}
+	results = {name: (data, mode) for name, data, mode in enumerate_workspace(workspace, None, commands, profile)}
 	changes = []
 	# Even an untouched result must not conceal a host-side update made since
 	# the snapshot (including a write by another workflow process).
@@ -205,7 +259,7 @@ def transfer(host, workspace, manifest):
 		new = results.get(name)
 		if new is not None and old == [hashlib.sha256(new[0]).hexdigest(), new[1]]:
 			continue
-		if not allowed(name, None, commands):
+		if not admit(name, None, commands):
 			raise ValueError("unsafe result path")
 		host_file = checked_path(host, name)
 		if old is None and (host_file.exists() or host_file.is_symlink()):
@@ -233,9 +287,10 @@ def transfer(host, workspace, manifest):
 
 def refresh(host, workspace, manifest):
 	"""Discard PR build-backend source writes before giving the writer access."""
+	profile = profile_for(manifest)
 	commands = load_admitted_commands(manifest)
 	baseline = json.loads(manifest.read_text(encoding="utf-8"))
-	results = {name: (data, mode) for name, data, mode in enumerate_workspace(workspace, None, commands)}
+	results = {name: (data, mode) for name, data, mode in enumerate_workspace(workspace, None, commands, profile)}
 	for name, old in baseline.items():
 		host_file = checked_path(host, name)
 		if not host_file.exists() or fingerprint(host_file) != old:
@@ -262,15 +317,29 @@ def refresh(host, workspace, manifest):
 
 def main():
 	# snapshot alone takes an optional fifth argument: the host Git dir.
-	if sys.argv[1:2] not in (["snapshot"], ["refresh"], ["transfer"]) or not (len(sys.argv) == 5 or (len(sys.argv) == 6 and sys.argv[1] == "snapshot")):
+	if sys.argv[1:2] not in (["snapshot"], ["refresh"], ["transfer"]) or not (len(sys.argv) == 5 or (len(sys.argv) in (6, 7, 8) and sys.argv[1] == "snapshot") or (len(sys.argv) == 7 and sys.argv[1] in ("transfer", "refresh"))):
 		raise SystemExit(2)
 	host, workspace, manifest = map(Path, sys.argv[2:5])
 	try:
 		if sys.argv[1] == "snapshot":
-			snapshot(host, workspace, manifest, Path(sys.argv[5]) if len(sys.argv) == 6 else None)
+			options = sys.argv[5:]
+			profile = "review"
+			if "--profile" in options:
+				index = options.index("--profile")
+				if index + 1 >= len(options):
+					raise ValueError("profile missing")
+				profile = options[index + 1]
+				options = options[:index] + options[index + 2:]
+			if profile not in ("review", "editor") or len(options) > 1:
+				raise ValueError("profile missing")
+			snapshot(host, workspace, manifest, Path(options[0]) if options else None, profile)
 		elif sys.argv[1] == "refresh":
+			if len(sys.argv) == 7 and (sys.argv[5:7] != ["--profile", "editor"] or profile_for(manifest) != "editor"):
+				raise ValueError("profile missing")
 			refresh(host, workspace, manifest)
 		else:
+			if len(sys.argv) == 7 and (sys.argv[5:7] != ["--profile", "editor"] or profile_for(manifest) != "editor"):
+				raise ValueError("profile missing")
 			transfer(host, workspace, manifest)
 	except (OSError, ValueError, UnicodeError, subprocess.CalledProcessError) as exc:
 		# Only fixed, path-free transfer reasons may cross into workflow logs.

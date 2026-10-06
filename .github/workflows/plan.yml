@@ -281,6 +281,19 @@ jobs:
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
+          EDITOR_ISOLATION_SUPPORT_DIR="${RUNTIME_DIR}/editor_isolation_support"
+          mkdir -p "${EDITOR_ISOLATION_SUPPORT_DIR}/review_sandbox"
+          for f in editor_isolated_run.sh review_untrusted_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py claude_settings.json.tmpl ai_engine.sh claude_engine.py codex_thread_reuse.sh codex_stall_guard.sh write_codex_config.sh codex_model_catalog.json workspace_safety_check.sh editor_git_credentials.sh; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ]; then src=".codex-workflow-src-main/scripts/${f}"; fi
+            [ -f "${src}" ] || { echo "::error::Missing editor isolation support ${f}"; exit 1; }
+            install -m 0755 "${src}" "${EDITOR_ISOLATION_SUPPORT_DIR}/${f}"
+          done
+          src=".codex-workflow-src/scripts/review_sandbox/Dockerfile"
+          if [ ! -f "${src}" ]; then src=".codex-workflow-src-main/scripts/review_sandbox/Dockerfile"; fi
+          [ -f "${src}" ] || { echo '::error::Missing editor isolation Dockerfile'; exit 1; }
+          install -m 0644 "${src}" "${EDITOR_ISOLATION_SUPPORT_DIR}/review_sandbox/Dockerfile"
+          echo "EDITOR_ISOLATION_SUPPORT_DIR=${EDITOR_ISOLATION_SUPPORT_DIR}" >> "$GITHUB_ENV"
           mkdir -p scripts
           _fetched_scripts=()
           for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py workflow_failure_heal.py workflow_failure_heal_evidence.py editor_git_credentials.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh ai_engine.sh claude_engine.py; do

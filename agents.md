@@ -33,9 +33,12 @@ Phases of the unattended pipeline (each is a separate workflow file under
    absent from the cache key. Orchestrator mode keeps the existing cache path.
 3. **plan** (`plan.yml`, `internal-plan.yml`) — read the clarified issue and
    emit a structured implementation plan with files-to-change and a
-   per-issue ≤60-minute time budget.
+   per-issue ≤60-minute time budget. The model runs against a read-only
+   disposable snapshot through `scripts/editor_isolated_run.sh`.
 4. **implement** (`implement.yml`, `internal-implement.yml`) — execute the
-   plan with codex-cli; write the actual files.
+   plan with codex-cli; write the actual files. Both editor launch sites run
+   in a tokenless container against a checked snapshot; the host verifies
+   container removal before transferring edits and restoring Git credentials.
 5. **implement-diagnose** (`scripts/implement_diagnose_post_codex_failure.sh`,
    driven by `MODEL_DIAGNOSE`) — analyse a post-Codex validation failure and
    emit JSON fix-up issue proposals.
@@ -454,7 +457,10 @@ a new value, add it to the appropriate overrides file with a
   `IMPLEMENT_STAGED_SUPPORT_REBASE_FAILED`, `IMPLEMENT_STAGED_SUPPORT_RESTORE`.
 - Both codex editor launches in `implement.yml` (the "Run Codex implementation"
   attempt loop and the "Attempt post-Codex syntax repair" loop) run
-  `bash scripts/codex_thread_reuse.sh direct-run` through
+  the trusted `${EDITOR_ISOLATION_SUPPORT_DIR}/codex_thread_reuse.sh direct-run`
+  with its Codex binary pointed at `scripts/editor_isolated_run.sh`; the latter
+  runs only in a network-isolated Docker container and reaps it before transfer.
+  The launch still passes through
   `env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR`.
   A preceding env scrub drops GH_TOKEN, GH_PAT, GITHUB_TOKEN, Telegram and
   Actions runtime credentials; `scripts/editor_git_credentials.sh` hides git
@@ -1503,6 +1509,7 @@ and shipped:
 - `WORKFLOW_HEAL_EVIDENCE`
 - `HEAL_EVIDENCE_SCOPE_LOCK`
 - `EDITOR_GIT_CREDENTIALS`
+- `EDITOR_ISOLATION`
 - `AUTOFIX_FINGERPRINT`
 - `AUTOFIX_FINGERPRINT_CAP_TRIPPED`
 - `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`
@@ -1708,6 +1715,7 @@ LOG_PREFIX.name=WORKFLOW_HEAL
 LOG_PREFIX.name=WORKFLOW_HEAL_EVIDENCE
 LOG_PREFIX.name=HEAL_EVIDENCE_SCOPE_LOCK
 LOG_PREFIX.name=EDITOR_GIT_CREDENTIALS
+LOG_PREFIX.name=EDITOR_ISOLATION
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_TRIPPED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED

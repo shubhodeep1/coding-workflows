@@ -270,9 +270,15 @@ codex_thread_reuse_record_session_from_marker()
 	local state_key="${1:?state key required}"
 	local marker_file="${2:?marker file required}"
 	local session_root="${CODEX_THREAD_REUSE_SESSION_ROOT:-${HOME:-}/.codex/sessions}"
+	local expected_cwd="$(pwd)"
 	local session_id=""
+	if [ -n "${EDITOR_ISOLATION_ROOT:-}" ]; then
+		[[ "${EDITOR_ISOLATION_ROOT}" == "${RUNNER_TEMP:-/tmp}/editor-isolated-"* ]] || return 1
+		session_root="${EDITOR_ISOLATION_ROOT}/home/.codex/sessions"
+		expected_cwd='/source'
+	fi
 
-	session_id="$(python3 - "${marker_file}" "${session_root}" "$(pwd)" <<'PY'
+	session_id="$(python3 - "${marker_file}" "${session_root}" "${expected_cwd}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -617,7 +623,12 @@ codex_thread_reuse_claude_direct_run()
 		claude_session_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 		printf '%s\n' "${claude_session_id}" > "${id_file}"
 	fi
-	if [ -n "${continuation_file}" ] && compgen -G "${HOME}/.claude/projects/*/${claude_session_id}.jsonl" >/dev/null; then
+	local claude_projects_home="${HOME}"
+	if [ -n "${EDITOR_ISOLATION_ROOT:-}" ]; then
+		[[ "${EDITOR_ISOLATION_ROOT}" == "${RUNNER_TEMP:-/tmp}/editor-isolated-"* ]] || return 1
+		claude_projects_home="${EDITOR_ISOLATION_ROOT}/home"
+	fi
+	if [ -n "${continuation_file}" ] && compgen -G "${claude_projects_home}/.claude/projects/*/${claude_session_id}.jsonl" >/dev/null; then
 		claude_prompt="$(mktemp /tmp/codex_thread_reuse_claude_prompt.XXXXXX)"
 		if codex_thread_reuse_transform_prompt \
 			"${transform_mode}" \
@@ -632,7 +643,11 @@ codex_thread_reuse_claude_direct_run()
 
 	[ -n "${log_file}" ] && tee_targets+=("${log_file}")
 	[ -n "${cumulative_log_file}" ] && tee_targets+=("${cumulative_log_file}")
-	claude_cmd=(bash -c 'source "$1"; shift; claude_run "$@"' _ "${engine_dir}/ai_engine.sh")
+	if [ -n "${EDITOR_ISOLATION_ROOT:-}" ]; then
+		claude_cmd=(bash "${EDITOR_ISOLATION_SUPPORT_DIR:-${engine_dir}}/editor_isolated_run.sh" claude-exec "${EDITOR_ISOLATION_ROOT}")
+	else
+		claude_cmd=(bash -c 'source "$1"; shift; claude_run "$@"' _ "${engine_dir}/ai_engine.sh")
+	fi
 	if [ -n "${timeout_secs}" ]; then
 		if command -v timeout >/dev/null 2>&1; then
 			claude_cmd=(timeout --signal=TERM --kill-after=5s "${timeout_secs}s" "${claude_cmd[@]}")
@@ -641,10 +656,10 @@ codex_thread_reuse_claude_direct_run()
 		fi
 	fi
 	if [ "${#tee_targets[@]}" -gt 0 ]; then
-		"${claude_cmd[@]}" "${role}" "${effective_prompt}" "${output_file}" "${PWD}" "${claude_session_id}" \
+		"${claude_cmd[@]}" "${role}" "${effective_prompt}" "${output_file}" "$(/bin/pwd -P)" "${claude_session_id}" \
 			2> >(tee -a "${tee_targets[@]}" >&2) || claude_rc=$?
 	else
-		"${claude_cmd[@]}" "${role}" "${effective_prompt}" "${output_file}" "${PWD}" "${claude_session_id}" || claude_rc=$?
+		"${claude_cmd[@]}" "${role}" "${effective_prompt}" "${output_file}" "$(/bin/pwd -P)" "${claude_session_id}" || claude_rc=$?
 	fi
 	if [ -n "${claude_prompt}" ]; then
 		rm -f "${claude_prompt}"

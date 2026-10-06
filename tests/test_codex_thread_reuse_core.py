@@ -24,6 +24,8 @@ VALIDATE_PROCESS = REPO_ROOT / "scripts" / "validate_process.sh"
 def _base_env() -> dict[str, str]:
 	env = os.environ.copy()
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	for name in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
+		env.pop(name, None)
 	return env
 
 
@@ -538,7 +540,7 @@ def test_implement_workflow_contains_thread_reuse_wiring() -> None:
 	assert "mode-implement-repair-continuation.txt mode-implement-diagnose-continuation.txt mode-validate-self-heal-continuation.txt" in text
 	assert "mode-implement-repair-continuation.yml mode-implement-diagnose-continuation.yml mode-validate-self-heal-continuation.yml" in text
 	assert "name: Probe Codex thread-reuse support" in text
-	assert "bash scripts/codex_thread_reuse.sh direct-run || cmd_rc=$?" in text
+	assert 'bash "${EDITOR_ISOLATION_SUPPORT_DIR}/codex_thread_reuse.sh" direct-run || cmd_rc=$?' in text
 	assert 'CODEX_THREAD_REUSE_MARKER_START="=== CAPTURED SYNTAX DIAGNOSTICS (FULL) ==="' in text
 	assert "codex_thread_reuse_install_wrapper" in text
 	assert "=== IMPLEMENT FAILURE DIAGNOSIS TASK ===" in text

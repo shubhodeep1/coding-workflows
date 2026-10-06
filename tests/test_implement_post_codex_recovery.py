@@ -1960,7 +1960,7 @@ def test_implement_workflow_wires_staged_support_workspace_helper() -> None:
 	assert implement_run.index(restore_call) < implement_run.index("python3 scripts/targeted_file_context.py")
 	assert implement_run.index(restore_call) < implement_run.index('CODEX_PRE_BASELINE="${RUNTIME_DIR}/codex_pre_baseline.txt"')
 	assert implement_run.index(restore_call) < implement_run.index('for attempt in $(seq 1 "${max_attempts}"); do')
-	assert implement_run.rindex("bash scripts/codex_thread_reuse.sh direct-run") < implement_run.index(reinstall_call)
+	assert implement_run.rindex('bash "${EDITOR_ISOLATION_SUPPORT_DIR}/codex_thread_reuse.sh" direct-run') < implement_run.index(reinstall_call)
 	assert implement_run.index(reinstall_call) < implement_run.index('if [ "${implement_succeeded}" = "true" ]; then')
 	repair_run = _extract_run_script("Attempt post-Codex syntax repair")
 	assert repair_run.count(restore_call) == 1
@@ -1995,8 +1995,8 @@ def test_editor_launches_drop_staged_support_ledger_env() -> None:
 	conftest.py, so the launch line has to scrub them itself.
 	"""
 	for step_name, launch_line in (
-		("Run Codex implementation", "bash scripts/codex_thread_reuse.sh direct-run || cmd_rc=$?"),
-		("Attempt post-Codex syntax repair", "bash scripts/codex_thread_reuse.sh direct-run; then"),
+		("Run Codex implementation", 'bash "${EDITOR_ISOLATION_SUPPORT_DIR}/codex_thread_reuse.sh" direct-run || cmd_rc=$?'),
+		("Attempt post-Codex syntax repair", 'bash "${EDITOR_ISOLATION_SUPPORT_DIR}/codex_thread_reuse.sh" direct-run; then'),
 	):
 		script_lines = _extract_run_script(step_name).splitlines()
 		launch_indexes = [idx for idx, line in enumerate(script_lines) if line.strip() == launch_line]

@@ -1782,6 +1782,11 @@ through `clarify → plan → implement → review`.
 | `ORCHESTRATE_SHORTCIRCUIT_MAX_CHARS` | `1200` | _(deprecated — no longer consumed; short-circuit paths removed in #1163)_ |
 | `ORCHESTRATE_POLL_CALLER_WORKFLOW` | `ai-orchestrate-poll.yml` | _(deprecated no-op — self-retrigger removed; value is ignored, retained for backward compatibility)_ |
 | `EDITOR_IDLE_TIMEOUT` | `1200` | Editor watchdog idle timeout (seconds); killed if no output and no active network connections |
+| `EDITOR_ISOLATION_MAX_FILES` | `20000` | Maximum files in a plan/implement editor snapshot or result; exceeding it fails closed. |
+| `EDITOR_ISOLATION_MAX_TOTAL_BYTES` | `268435456` | Maximum total bytes in a plan/implement editor snapshot or result; exceeding it fails closed. |
+| `EDITOR_ISOLATION_REASONING` | `MODEL_REASONING_EFFORT` (then `high`) | Validated reasoning effort inside the isolated Codex editor. Repair passes override this with their own reasoning level. |
+| `EDITOR_ISOLATION_SUPPORT_DIR` | Staged trusted support directory | Pre-editor copy of isolation helpers, never executed from an editor-modified source tree. |
+| `EDITOR_ISOLATION_ROOT` | Prepared per-step temporary directory | Private run-scoped container home, broker socket and snapshot; no host checkout or credentials are mounted. |
 | `EDITOR_MAX_WALL` | `7800` (implement); `3300` (review_autofix script default) | Max wall-clock seconds per editor attempt (~130 min implement, 55 min review_autofix); auto-capped to remaining job budget |
 | `EDITOR_MIN_ATTEMPT_SECS` | `300` | Minimum job budget (seconds) required to start an editor attempt |
 | `EDITOR_DRAIN_GRACE_SECS` | `60` | Upper bound (seconds) on draining the editor stderr-FIFO heartbeat reader after codex exits; on timeout, processes still holding the FIFO are reaped so the drain can't hang until the ~4h job ceiling |
