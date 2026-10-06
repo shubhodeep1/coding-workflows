@@ -251,7 +251,7 @@ def test_build_issue_payload_validates_and_carries_lineage() -> None:
 		repo=CONSUMER_REPO,
 		kind="issue",
 		label="ai:needs-human",
-		issue=_issue(body=body),
+		issue=_issue(body=body, labels=[heal.HEAL_LABEL, "ai:needs-human"]),
 		comments=comments,
 		runs=runs,
 		wrapper_sha=SHA_A.upper(),
@@ -265,6 +265,12 @@ def test_build_issue_payload_validates_and_carries_lineage() -> None:
 	assert normalized["label"] == "ai:needs-human"
 	assert normalized["issue_number"] == 42
 	assert len(json.dumps(payload).encode("utf-8")) < heal.MAX_PAYLOAD_BYTES
+	ordinary = heal.build_issue_payload(
+		repo=CONSUMER_REPO, kind="issue", label="ai:needs-human",
+		issue=_issue(body=body, labels=["ai:needs-human"]), comments=[], runs=[],
+		wrapper_sha=None, reporter_run_url=None,
+	)
+	assert ordinary["source_gen"] is None and ordinary["source_root"] is None
 
 
 def test_build_issue_payload_prioritizes_recent_diagnostics_and_compacts_state() -> None:
@@ -561,7 +567,7 @@ def test_budget_decision_matrix() -> None:
 	now = datetime(2026, 9, 20, 12, tzinfo=timezone.utc)
 	fp = "1" * 64
 	other = "2" * 64
-	assert heal.budget_decision([], fp=fp, now=now) == {"action": "open", "gen": 1, "root": fp, "open_count": 0, "today_count": 0}
+	assert heal.budget_decision([], fp=fp, now=now) == {"action": "open", "gen": 1, "root": fp, "open_count": 0, "today_count": 0, "lineage_source": "none"}
 
 	dup = heal.budget_decision([_heal_issue(10, state="open", fp=fp), _heal_issue(11, state="open", fp=fp, gen=2)], fp=fp, now=now)
 	assert dup["action"] == "duplicate" and dup["existing_issue"] == 11
@@ -578,7 +584,7 @@ def test_budget_decision_matrix() -> None:
 	assert cross_repo_dup["existing_repo"] == CONSUMER_REPO
 
 	lineage = heal.budget_decision([_heal_issue(5, state="closed", fp=fp, gen=1), _heal_issue(6, state="closed", fp=fp, gen=2, root=other)], fp=fp, now=now)
-	assert lineage == {"action": "open", "gen": 3, "root": other, "open_count": 0, "today_count": 0}
+	assert lineage == {"action": "open", "gen": 3, "root": other, "open_count": 0, "today_count": 0, "lineage_source": "fingerprint"}
 	cross_repo_lineage = heal.budget_decision(
 		[
 			dict(_heal_issue(500, state="closed", fp=fp, gen=1), repository=SELF_REPO),
@@ -594,8 +600,12 @@ def test_budget_decision_matrix() -> None:
 	capped = heal.budget_decision([_heal_issue(6, state="closed", fp=fp, gen=3)], fp=fp, now=now)
 	assert capped["action"] == "escalate" and capped["gen"] == 4 and capped["prior_issue"] == 6
 
-	inherited = heal.budget_decision([], fp=fp, source_gen=3, source_root=other, now=now)
+	trusted_source = dict(_heal_issue(42, state="closed", fp=other, gen=3, root=other), repository=SELF_REPO, author="workflow-bot")
+	inherited = heal.budget_decision([trusted_source], fp=fp, source_gen=3, source_root=other,
+		source_issue=f"{SELF_REPO}#42", trusted_author="workflow-bot", now=now)
 	assert inherited["action"] == "escalate" and inherited["root"] == other
+	assert inherited["lineage_source"] == "verified_source_issue"
+	assert inherited["prior_issue"] == 42 and inherited["prior_repo"] == SELF_REPO
 
 	many_open = [_heal_issue(100 + i, state="open", fp=f"{i:064x}") for i in range(10)]
 	assert heal.budget_decision(many_open, fp=fp, now=now)["action"] == "budget_exhausted"
@@ -651,7 +661,7 @@ def test_budget_decision_keys_review_failures_on_source_pr() -> None:
 	# Q3: a closed heal issue from the same PR continues its lineage.
 	closed_same_pr = _sourced_heal_issue(4392, state="closed", fp=other, source=key, gen=2, root=root, repository=SELF_REPO)
 	again = heal.budget_decision([closed_same_pr], fp=fp, source_key=key, now=now)
-	assert again == {"action": "open", "gen": 3, "root": root, "open_count": 0, "today_count": 0}
+	assert again == {"action": "open", "gen": 3, "root": root, "open_count": 0, "today_count": 0, "lineage_source": "source"}
 	capped = heal.budget_decision([dict(closed_same_pr, body=closed_same_pr["body"].replace("gen=2", "gen=3"))], fp=fp, source_key=key, now=now)
 	assert capped["action"] == "escalate" and capped["gen"] == 4 and capped["prior_issue"] == 4392 and capped["prior_repo"] == SELF_REPO
 
@@ -673,8 +683,54 @@ def test_budget_decision_keys_review_failures_on_source_pr() -> None:
 		_sourced_heal_issue(11, state="closed", fp=other, source=key, gen=2, root=root, repository=SELF_REPO),
 	]
 	assert heal.budget_decision(mixed, fp=fp, source_key=key, now=now)["gen"] == 3
-	# An inherited source generation (issue reports) still takes precedence.
-	assert heal.budget_decision(mixed, fp=fp, source_key=key, source_gen=1, source_root=other, now=now)["gen"] == 2
+	# A verified source issue's generation (issue reports) takes precedence.
+	verified = dict(_heal_issue(42, state="closed", fp=other, gen=1, root=other), repository=SELF_REPO, author="workflow-bot")
+	assert heal.budget_decision([*mixed, verified], fp=fp, source_key=key, source_gen=1, source_root=other,
+		source_issue=f"{SELF_REPO}#42", trusted_author="workflow-bot", now=now)["gen"] == 2
+
+
+def test_budget_ignores_unverified_source_lineage() -> None:
+	fp, other = "1" * 64, "2" * 64
+	key = f"{SELF_REPO}#42"
+	valid_record = dict(_heal_issue(42, state="closed", fp=other, gen=3, root=other), repository=SELF_REPO, user={"login": "workflow-bot"})
+	for record, source_issue, trusted_author, source_gen, source_root, reason in (
+		([], None, "workflow-bot", 3, other, "no_source_issue"),
+		([], key, "workflow-bot", 3, other, "not_heal_issue"),
+		([valid_record], key, None, 3, other, "no_trusted_author"),
+		([dict(valid_record, user={"login": "stranger"})], key, "workflow-bot", 3, other, "untrusted_author"),
+		([valid_record], key, "workflow-bot", 2, other, "gen_mismatch"),
+		([valid_record], key, "workflow-bot", 0, other, "gen_mismatch"),
+		([valid_record], key, "workflow-bot", 3, fp, "root_mismatch"),
+		([dict(valid_record, repository=CONSUMER_REPO)], key, "workflow-bot", 3, other, "not_heal_issue"),
+		([dict(valid_record, repository="")], key, "workflow-bot", 3, other, "not_heal_issue"),
+		([dict(valid_record, pull_request=True)], key, "workflow-bot", 3, other, "not_heal_issue"),
+	):
+		decision = heal.budget_decision(record, fp=fp, source_gen=source_gen, source_root=source_root,
+			source_issue=source_issue, trusted_author=trusted_author)
+		assert decision["action"] == "open" and decision["gen"] == 1
+		assert decision["lineage_source"] == "source_marker_ignored"
+		assert decision["lineage_ignored_reason"] == reason
+	# An ignored payload marker must not suppress independently recorded lineage.
+	previous = _heal_issue(10, state="closed", fp=fp, gen=2)
+	decision = heal.budget_decision([previous], fp=fp, source_gen=3, source_root=other,
+		source_issue=key, trusted_author="workflow-bot")
+	assert decision["gen"] == 3 and decision["lineage_source"] == "source_marker_ignored"
+	assert decision["root"] == fp
+	assert heal.budget_decision([dict(valid_record, repository="")], fp=fp, source_gen=3, source_root=other,
+		source_issue=key, preferred_repo=SELF_REPO, trusted_author="workflow-bot")["lineage_source"] == "verified_source_issue"
+
+
+def test_budget_cli_verifies_reported_source_issue(tmp_path: Path) -> None:
+	issues_json = tmp_path / "issues.json"
+	issues_json.write_text(json.dumps([dict(_heal_issue(42, state="closed", fp="2" * 64, gen=2),
+		repository=SELF_REPO, author="workflow-bot")]), encoding="utf-8")
+	completed = subprocess.run(
+		[sys.executable, str(LIB_PATH), "budget", "--issues-json", str(issues_json),
+		 "--fingerprint", "1" * 64, "--preferred-repo", SELF_REPO, "--source-gen", "2",
+		 "--source-issue", f"{SELF_REPO}#42", "--trusted-author", "workflow-bot"],
+		capture_output=True, text=True, check=True,
+	)
+	assert json.loads(completed.stdout)["lineage_source"] == "verified_source_issue"
 
 
 def test_parse_classification_variants() -> None:
@@ -3696,6 +3752,8 @@ def test_build_phase_failure_payload_validates_and_carries_lineage() -> None:
 	assert payload["failure_reason"] == "plan_failed" and payload["failure_streak"] == 2
 	assert [ref["run_id"] for ref in payload["run_refs"]] == ["500", "499"]
 	assert payload["source_gen"] == 1 and payload["source_root"] == FP_HEX
+	ordinary = _phase_payload(issue=_issue(body=body, labels=["ai:clarification"]))
+	assert ordinary["source_gen"] is None and ordinary["source_root"] is None
 	assert payload["wrapper_sha"] == SHA_A and payload["workflow_name"] == "AI Plan" and payload["conclusion"] == "failure"
 	assert payload["failure_evidence"] == "" and payload["failure_fingerprint"] is None
 	assert heal.compose_issue_title(payload, workflow_name="Internal: AI Plan") == f"Workflow heal: Internal: AI Plan failed 2x for {CONSUMER_REPO}#42 (plan_failed)"
@@ -3852,6 +3910,37 @@ def test_intake_phase_failure_accepts_consumer_pipeline_account() -> None:
 	assert "phase_report_verified" in result.stdout
 	assert after["issues_created"][0]["repo"] == SELF_REPO
 	assert not any(call[:2] == ["api", "--method"] and "user" in call for call in after["calls"])
+
+
+def test_intake_phase_failure_rejects_spoofed_lineage() -> None:
+	body = f"<!-- {heal.MARKER_PREFIX}gen=3 -->\n<!-- {heal.MARKER_PREFIX}root={FP_HEX} -->"
+	# An older pinned reporter may still forward markers from a regular issue.
+	payload = _phase_payload(issue=_issue(body=body, labels=["ai:clarification"]))
+	payload.update(source_gen=3, source_root=FP_HEX)
+	for state in (_plan_intake_state(), _plan_intake_state(identity_read_fail=True)):
+		result, after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "lineage source=source_marker_ignored reason=" in result.stdout
+		assert "gen=1" in result.stdout
+		assert "issues_created" in after and "issue_edits" not in after
+		assert f"{heal.MARKER_PREFIX}gen=1" in after["issues_created"][0]["body"]
+		assert sum("user" in call for call in after["calls"] if call[:1] == ["api"]) == 1
+		if state.get("identity_read_fail"):
+			assert "warn heal_identity_unavailable" in result.stdout
+		else:
+			assert "reason=not_heal_issue" in result.stdout
+
+
+def test_intake_phase_failure_inherits_verified_heal_issue_lineage() -> None:
+	body = f"<!-- {heal.MARKER_PREFIX}gen=2 -->\n<!-- {heal.MARKER_PREFIX}root={FP_HEX} -->"
+	payload = _phase_payload(issue=_issue(body=body, labels=[heal.HEAL_LABEL]))
+	listed = dict(_heal_issue(42, state="closed", fp="9" * 64, gen=2, root=FP_HEX), user={"login": "workflow-bot"})
+	state = _plan_intake_state(heal_issues_by_repo={SELF_REPO: [], CONSUMER_REPO: [listed]})
+	result, after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "lineage source=verified_source_issue reason=none source_gen=2 gen=3" in result.stdout
+	assert f"{heal.MARKER_PREFIX}gen=3" in after["issues_created"][0]["body"]
+	assert sum("user" in call for call in after["calls"] if call[:1] == ["api"]) == 1
 
 
 @pytest.mark.parametrize("case,reason", [

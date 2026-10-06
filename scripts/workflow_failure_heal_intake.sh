@@ -445,7 +445,7 @@ SELF_ISSUES_FILE="${RUNTIME_DIR}/heal_issues_self.json"
 SOURCE_ISSUES_FILE="${RUNTIME_DIR}/heal_issues_source.json"
 ISSUES_FILE="${RUNTIME_DIR}/heal_issues.json"
 if ! gh_retry gh api --method GET --paginate "repos/${SELF_REPO}/issues" -F state=all -F labels="${HEAL_LABEL}" -F per_page=100 \
-	--jq '.[] | {number, state, state_reason, title, body: (.body // ""), created_at, closed_at, html_url, pull_request: (.pull_request != null)}' 2>/dev/null \
+	--jq '.[] | {number, state, state_reason, title, body: (.body // ""), author: (.user.login // ""), created_at, closed_at, html_url, pull_request: (.pull_request != null)}' 2>/dev/null \
 	| jq -s --arg repository "${SELF_REPO}" 'map(. + {repository: $repository})' > "${SELF_ISSUES_FILE}" 2>/dev/null; then
 	log "error heal_issue_list_failed"
 	tg_send_msg "Workflow failure heal intake could not list ${HEAL_LABEL} issues; report from ${SOURCE_LABEL} not processed."$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
@@ -456,7 +456,7 @@ fi
 # repositories that can own the issue produced by this intake.
 if [ "${SOURCE_REPO}" != "${SELF_REPO}" ]; then
 	if ! gh_retry gh api --method GET --paginate "repos/${SOURCE_REPO}/issues" -F state=all -F labels="${HEAL_LABEL}" -F per_page=100 \
-		--jq '.[] | {number, state, state_reason, title, body: (.body // ""), created_at, closed_at, html_url, pull_request: (.pull_request != null)}' 2>/dev/null \
+		--jq '.[] | {number, state, state_reason, title, body: (.body // ""), author: (.user.login // ""), created_at, closed_at, html_url, pull_request: (.pull_request != null)}' 2>/dev/null \
 		| jq -s --arg repository "${SOURCE_REPO}" 'map(. + {repository: $repository})' > "${SOURCE_ISSUES_FILE}" 2>/dev/null; then
 		log "error heal_issue_list_failed repo=${SOURCE_REPO}"
 		tg_send_msg "Workflow failure heal intake could not list ${HEAL_LABEL} issues in ${SOURCE_REPO}; report from ${SOURCE_LABEL} not processed."$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
@@ -468,9 +468,24 @@ fi
 jq -s 'add // []' "${SELF_ISSUES_FILE}" "${SOURCE_ISSUES_FILE}" > "${ISSUES_FILE}"
 jq -e 'type == "array"' "${ISSUES_FILE}" >/dev/null 2>&1 || printf '[]' > "${ISSUES_FILE}"
 
+HEAL_TRUSTED_AUTHOR=""
+if [[ "${SOURCE_GEN}" =~ ^[0-9]+$ ]]; then
+	HEAL_TRUSTED_AUTHOR="${PHASE_COMMENT_AUTHOR:-}"
+	if [ -z "${HEAL_TRUSTED_AUTHOR}" ]; then
+		# §14 audit: heal issue lists identify issue authors, not the token's
+		# account; the only other /user read is for self-repo phase reports.
+		HEAL_TRUSTED_AUTHOR="$(gh_retry gh api --method GET user --jq '.login // empty' 2>/dev/null || true)"
+	fi
+	if [ -z "${HEAL_TRUSTED_AUTHOR}" ]; then
+		log "warn heal_identity_unavailable source=${SOURCE_LABEL}"
+	fi
+fi
 BUDGET_ARGS=(--issues-json "${ISSUES_FILE}" --fingerprint "${FP}" --preferred-repo "${SOURCE_REPO}" --max-depth "${MAX_DEPTH}" --max-open "${MAX_OPEN}" --max-per-day "${MAX_PER_DAY}")
 if [[ "${SOURCE_GEN}" =~ ^[0-9]+$ ]]; then
 	BUDGET_ARGS+=(--source-gen "${SOURCE_GEN}" --source-root "${SOURCE_ROOT}")
+	if [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
+		BUDGET_ARGS+=(--source-issue "${SOURCE_REPO}#${ISSUE_NUMBER}" --trusted-author "${HEAL_TRUSTED_AUTHOR}")
+	fi
 fi
 # A review/autofix report is keyed on its pull request as well as its
 # fingerprint: the evidence (and so the fingerprint) differs run to run, which
@@ -489,6 +504,13 @@ ACTION="$(jq -r '.action' "${DECISION_FILE}")"
 GEN="$(jq -r '.gen // 1' "${DECISION_FILE}")"
 ROOT="$(jq -r '.root // ""' "${DECISION_FILE}")"
 [ -n "${ROOT}" ] || ROOT="${FP}"
+LINEAGE_IGNORED_REASON="$(jq -r '.lineage_ignored_reason // "none"' "${DECISION_FILE}")"
+log "lineage source=$(jq -r '.lineage_source // "none"' "${DECISION_FILE}") reason=${LINEAGE_IGNORED_REASON} source_gen=${SOURCE_GEN:-none} gen=${GEN}"
+case "${LINEAGE_IGNORED_REASON}" in
+	untrusted_author|not_heal_issue|gen_mismatch|root_mismatch)
+		tg_send_msg "Workflow failure heal ignored an unverified lineage marker from ${SOURCE_LABEL} (${LINEAGE_IGNORED_REASON}). Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		;;
+esac
 
 ensure_label_exists "${HEAL_LABEL}" "${SELF_REPO}" || true
 ensure_label_exists "${ESCALATED_LABEL}" "${SELF_REPO}" || true
