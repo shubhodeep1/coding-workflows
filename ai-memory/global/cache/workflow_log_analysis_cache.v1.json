@@ -9,7 +9,7 @@
         203,
         204
       ],
-      "last_updated": "2026-10-05T19:15:39Z",
+      "last_updated": "2026-10-06T01:03:37Z",
       "logs_seen_set": [
         201,
         202
@@ -32,18 +32,11 @@
             "or_total_tokens": 0,
             "or_usage_available_calls": 0,
             "or_usage_unavailable_calls": 0,
-            "semble_bootstrap_ms_total": 0,
-            "semble_bootstraps": 0,
-            "semble_bootstraps_failed": 0,
-            "semble_bootstraps_unused": 0,
             "semble_contract_test_fallbacks": 0,
-            "semble_echo_lines_dropped": 0,
             "semble_fallbacks": 0,
             "semble_query_bytes": 0,
             "semble_query_calls": 0,
             "semble_runtime_fallbacks": 0,
-            "semble_sources_total": 0,
-            "semble_static_dup_bytes_total": 0,
             "serena_fallbacks": 0,
             "serena_probe_failed": 0,
             "serena_probe_ok": 0,
@@ -100,18 +93,11 @@
             "or_total_tokens": 0,
             "or_usage_available_calls": 0,
             "or_usage_unavailable_calls": 0,
-            "semble_bootstrap_ms_total": 0,
-            "semble_bootstraps": 0,
-            "semble_bootstraps_failed": 0,
-            "semble_bootstraps_unused": 0,
             "semble_contract_test_fallbacks": 0,
-            "semble_echo_lines_dropped": 0,
             "semble_fallbacks": 0,
             "semble_query_bytes": 0,
             "semble_query_calls": 0,
             "semble_runtime_fallbacks": 0,
-            "semble_sources_total": 0,
-            "semble_static_dup_bytes_total": 0,
             "serena_fallbacks": 0,
             "serena_probe_failed": 0,
             "serena_probe_ok": 0,
@@ -251,7 +237,7 @@
           "updated_at": "2026-04-10T11:05:00Z"
         }
       ],
-      "runs_window_start": "2026-09-28T19:15:20Z"
+      "runs_window_start": "2026-09-29T01:03:11Z"
     },
     "shubhodeep1/atlas-bridge.gd": {
       "cancelled_failure_point_version": 1,
