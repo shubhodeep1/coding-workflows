@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:5184-5196 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The Mistral overflow fallback calls `run_reviewer` for `openai/gpt-6-luna` without checking whether the reviewer circuit breaker has marked that reviewer `skip_open`.\n  WHY: When the circuit breaker is enabled and GPT is in the open state, the fallback may still send a request and spend another attempt; this is disputed by z-ai_glm-5_2, which says `run_reviewer` handles circuit-breaker checks internally.\n- scripts/review_run_reviewers.sh:5178-5196 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The retry checks whether `openai/gpt-6-luna` is in `REVIEWER_MODELS`, rather than a per-tier active roster.\n  WHY: The reviewer says the lite tier's `pass_models` is drawn from the panel, so this matches the documented live-roster contract and does not fail at runtime.\n- scripts/review_run_reviewers.sh:5178-5196 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: A watchdog kill of the fallback reviewer between the status write and the `pass_successful=1` write could leave a success status file for a reviewer call that exited non-zero.\n  WHY: The reviewer says the worst outcome is a missed retry, not a false-positive success, so correctness is preserved.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The test suite should exercise the failure path when the fallback model is missing from the active roster.\"\n  expected_change_site: tests/test_review_autofix_review_pipeline_contract.py\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The test `test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer` is said to cover the success case and the path where Mistral fails alone, but not the path where `openai/gpt-6-luna` is missing from the active models list; other reviewers report that the fourth test tuple already exercises this case.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_run_reviewers.sh: 5184-5196 | confidence=4\n  PROBLEM: The Mistral context-overflow retry logic directly calls `run_reviewer` for `openai/gpt-6-luna` without checking the model's health via the reviewer circuit breaker.\n  WHY: If `openai/gpt-6-luna` is already marked as skip_open due to persistent failures, the retry mechanism bypasses this guard and attempts to dispatch it anyway, leading to potential resource waste or additional runtime failures in the pipeline.\n- TASK_GAP\n  Requirement: \"The test suite should exercise the failure path when the fallback model is missing from the active roster.\"\n  Expected change site: tests/test_review_autofix_review_pipeline_contract.py\n  Evidence of absence: The test `test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer` covers the success case and the path where Mistral fails alone, but it does not exercise the specific code path that handles `openai/gpt-6-luna` being missing from the active models list (i.e., verifying the logic correctly handles an unavailable fallback).\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_run_reviewers.sh: 5178-5196 | severity=NIT | confidence=2\n  PROBLEM: The retry fires when `openai/gpt-6-luna` is present in `REVIEWER_MODELS` (the workflow-level env var / panel), not in any per-tier \"active roster\" that could differ.\n  WHY: It does not fail. For the lite tier this is the same value in practice because the lite tier's `pass_models` is drawn from the panel, so this matches the documented contract (\"when that model is in the live roster\").\n- scripts/review_run_reviewers.sh: 5184 | severity=NIT | confidence=3\n  PROBLEM: The fallback bypasses the reviewer circuit-breaker guard that the normal `run_reviewer_pass` flow consults.\n  WHY: With `REVIEWER_CIRCUIT_BREAKER_ENABLED=true` and `openai/gpt-6-luna` in `skip_open` state, the one-shot retry runs anyway; the retry can also overwrite `REVIEWER_ACTIVE_MODELS_FILE` to GPT on success, which masks the skip_open signal in the consensus ledger. Default is off (`REVIEWER_CIRCUIT_BREAKER_ENABLED=0`), and the retry is a narrow context-overflow escape hatch, so the runtime blast radius is small but real for the opt-in path.\n- scripts/review_run_reviewers.sh: 5178-5196 | severity=NIT | confidence=2\n  PROBLEM: A watchdog kill of the fallback `run_reviewer` between the status write and the `pass_successful=1` write could leave a `success` file on disk for a slot whose `run_reviewer` exit was non-zero.\n  WHY: It does not fail in a way that breaks correctness; the worst outcome is a missed retry, not a false-positive success. The PR-closed sentinel covers the common abort path.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_run_reviewers.sh: 5186-5187; normal reviewer dispatch checks the circuit breaker at 5114-5127. | severity=NIT | confidence=4\n  PROBLEM: The Mistral overflow retry calls `run_reviewer` for `openai/gpt-6-luna` without checking whether the circuit breaker has marked that reviewer `skip_open`.\n  WHY: When `REVIEWER_CIRCUIT_BREAKER_ENABLED` is active and GPT is in the open state, normal dispatch skips it, but this fallback still sends the request. That bypasses the configured suppression and can spend another attempt on a reviewer the circuit breaker has marked unhealthy.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_run_reviewers.sh: 5186-5191 (retry block), 5114-5128 (circuit breaker check in normal dispatch) | severity=NIT | confidence=4\n  PROBLEM: The Mistral overflow fallback calls run_reviewer for openai/gpt-6-luna without checking whether the reviewer circuit breaker has marked that model skip_open.\n  WHY: When REVIEWER_CIRCUIT_BREAKER_ENABLED is enabled and GPT-6-luna is in the open state (recent retryable failures), the fallback still sends it a request instead of honoring the circuit breaker. This can spend another attempt on a model the configured guard is suppressing.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "5aafc5417ea228ef52e4f8f9183fc6995ecfcb152f44a9a224e40b7a0eb1f324",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6438,
+    "run_id": "37408286801",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37408286801",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006040843_792313e729",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6438,
+    "run_id": "37408286801"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T04:08:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
