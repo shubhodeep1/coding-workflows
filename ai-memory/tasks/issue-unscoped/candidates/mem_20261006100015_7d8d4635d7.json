@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_test_and_mark_stable_no_git_config_value_dump.py:17-48 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The regression check can miss `git config` commands that expose configuration values because its scan does not cover `--get-regexp` commands or multiline shell continuations.\n  WHY: If `--name-only` is removed or a config-list command is split across lines, the check may not catch credentials being printed to diagnostic logs.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add a CI regression check to prevent workflow diagnostics from logging configuration values.\"\n  expected_change_site: `.github/workflows/ci.yml` plus a new test under `tests/`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Present at `.github/workflows/ci.yml:1155-1160` (new step that runs `tests/test_test_and_mark_stable_no_git_config_value_dump.py`) and `tests/test_test_and_mark_stable_no_git_config_value_dump.py:1-102`.\n- requirement: \"Remove the config dump and its release-job invocation\"\n  expected_change_site: `.github/workflows/test-and-mark-stable.yml` release job.\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Present at `.github/workflows/test-and-mark-stable.yml:6354-6359` (the `*git-checkout-diag` invocation is removed from the release job).\n- requirement: \"if diagnostics remain, print configuration keys only and exclude credential-bearing values\"\n  expected_change_site: `.github/workflows/test-and-mark-stable.yml` `&git-checkout-diag` anchor.\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Present at `.github/workflows/test-and-mark-stable.yml:317-319` (`git config --list --name-only --show-origin`) and line 326 (`git config --local --name-only --get-regexp ...`).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_test_and_mark_stable_no_git_config_value_dump.py, line 17, `CONFIG_LIST = re.compile(r\"\\bgit\\s+config\\b[^\\n]*(?:--list\\b|(?<!\\S)-l\\b)\")` | severity=low | confidence=3\n  PROBLEM: The regex catches `git config ... --list` and `git config ... -l` but not other `git config` invocations that print values, notably `git config --get-regexp ...` (line 326 of the workflow).\n  WHY: A future change to line 326 (`EXTRAHEADER_KEYS_STDOUT=$(git config --local --name-only --get-regexp ...`) removing `--name-only` would print `AUTHORIZATION: basic <base64-credential>` to the diagnostic log. The `--list`/`-l` scanner would not flag the regression because `--get-regexp` is not in its pattern.\n- Requirement: \"Add a CI regression check to prevent workflow diagnostics from logging configuration values.\"\n  Expected change site: `.github/workflows/ci.yml` plus a new test under `tests/`.\n  Evidence of absence: Present at `.github/workflows/ci.yml:1155-1160` (new step that runs `tests/test_test_and_mark_stable_no_git_config_value_dump.py`) and `tests/test_test_and_mark_stable_no_git_config_value_dump.py:1-102`.\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Remove the config dump and its release-job invocation\"\n  Expected change site: `.github/workflows/test-and-mark-stable.yml` release job.\n  Evidence of absence: Present at `.github/workflows/test-and-mark-stable.yml:6354-6359` (the `*git-checkout-diag` invocation is removed from the release job).\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"if diagnostics remain, print configuration keys only and exclude credential-bearing values\"\n  Expected change site: `.github/workflows/test-and-mark-stable.yml` `&git-checkout-diag` anchor.\n  Evidence of absence: Present at `.github/workflows/test-and-mark-stable.yml:317-319` (`git config --list --name-only --show-origin`) and line 326 (`git config --local --name-only --get-regexp ...`).\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_test_and_mark_stable_no_git_config_value_dump.py, lines 17, 45-48\n  PROBLEM: The workflow scan matches `git config` and `--list` only on the same line. A valid multiline shell command such as `git config \\` followed by `--list --show-origin` would evade this regression check.\n  WHY: Normalize shell backslash-newline continuations before scanning workflow text, then preserve the existing assertion that config-list commands include `--name-only`.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "22029c7986e185c93b3c816c2d394817f9b6e00985dc1f7ecac3e0d14944f543",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6537,
+    "run_id": "37442604855",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37442604855",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006100015_7d8d4635d7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6537,
+    "run_id": "37442604855"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T10:00:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
