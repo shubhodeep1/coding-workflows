@@ -283,6 +283,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Codex version baked into the isolated audit agent's image (scripts/codex_isolated_exec.sh).
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
           PYTHONDONTWRITEBYTECODE: "1"
           SECURITY_AUDIT_ENABLED: ${{ vars.SECURITY_AUDIT_ENABLED || 'true' }}
           SECURITY_AUDIT_CONFIDENCE_GATE: ${{ vars.SECURITY_AUDIT_CONFIDENCE_GATE || '8' }}
