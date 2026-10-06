@@ -9,8 +9,9 @@ A prompt audit found several commands that contradicted the repository. `/implem
 | Template copies changed | `workflow-templates/.claude/commands/{apply-analysis,apply-url,audit-plans,deploy-activate,implement-plan-ai,verify-activation,write-plan}.md` |
 | `CLAUDE.md` sections edited | PRE-TASK, §0, §12, §12.G, §19, §27 (numbering unchanged) |
 | Cloudflare credentials | `FUNTOKEN_IO_CF` (funtoken.io), `FT_GAMES_CF` (ft.games, 5m.fun) |
+| Additional template copies corrected | `validate-consumer-issue`, `implement-issue-claude` |
 
-What this means for consumer repos: the next `@stable` sync delivers the updated `CLAUDE.md` and template commands. Section numbers are unchanged, and no rule was loosened. With a Cloudflare credential present, `/deploy-activate` runs Cloudflare reads directly and runs Worker deploys after you approve each step. You still set Worker secret values yourself, and §24.D operations still need a Q/A approval first.
+What this means for consumer repos: the next `@stable` sync delivers the updated `CLAUDE.md` and template commands. Section numbers are unchanged, and no rule was loosened. `/validate-consumer-issue` now searches only relevant context, and `/implement-issue-claude` makes clear that the Claude label does not switch review off OpenCode. With a Cloudflare credential present, `/deploy-activate` runs Cloudflare reads directly and runs Worker deploys after you approve each step. You still set Worker secret values yourself, and §24.D operations still need a Q/A approval first.
 
 ### For contributors
 

@@ -37,7 +37,7 @@ def test_command_context_reads_follow_claude_md():
 	targets = [
 		live / f"{name}.md"
 		for name in ("apply-analysis", "apply-url", "audit-plans", "implement-plan-ai", "validate-consumer-issue", "write-plan")
-	] + [template / f"{name}.md" for name in ("apply-analysis", "apply-url", "audit-plans", "implement-plan-ai", "write-plan")]
+	] + [template / f"{name}.md" for name in ("apply-analysis", "apply-url", "audit-plans", "implement-plan-ai", "validate-consumer-issue", "write-plan")]
 	for path in targets:
 		command_text = path.read_text(encoding="utf-8")
 		assert "search `README.md` and `agents.md`" in command_text, path
@@ -45,6 +45,13 @@ def test_command_context_reads_follow_claude_md():
 		assert "`CLAUDE.md` is already loaded" in command_text or "CLAUDE.md (already loaded)" in command_text, path
 		assert "and `CLAUDE.md` at the repo root" not in command_text, path
 		assert "read `README.md`, `agents.md`, and `CLAUDE.md`" not in command_text, path
+
+
+def test_implement_issue_claude_describes_role_specific_engine():
+	for path in (ROOT / ".claude/commands/implement-issue-claude.md", ROOT / "workflow-templates/.claude/commands/implement-issue-claude.md"):
+		command_text = path.read_text(encoding="utf-8")
+		assert "review still runs on OpenCode" in command_text, path
+		assert "Engine label: ai:engine-claude added (Claude for cut-over roles; review on OpenCode)" in command_text, path
 
 
 def test_gate_enumerates_orchestrator_projects(step6):
