@@ -119,9 +119,9 @@ def test_standalone_snapshot_batches_clean_prs_and_skips_draft_claude_reads() ->
 	assert 'gh_retry gh api graphql -f query=' in conflict
 	assert 'hasPreviousPage == false' in conflict
 	assert conflict.index('if [[ "${S_HEAD}" == claude/* ]] && [ "${S_DRAFT}" = "true" ]') < conflict.index('S_PR_JSON="$(gh_retry _safe_gh_jq')
-	assert conflict.index('if [ "${_STANDALONE_CLEAN_PRS["${S_PR}"]:-}"') < conflict.index('S_PR_JSON="$(gh_retry _safe_gh_jq')
+	assert conflict.index('if [[ "${S_HEAD_OID}" =~ ^[0-9a-f]{40}$ ]] && [ "${_STANDALONE_CLEAN_PRS["${S_PR}"]:-}" = "${S_HEAD_OID}" ]') < conflict.index('S_PR_JSON="$(gh_retry _safe_gh_jq')
 	assert noop.index('if [[ "${N_HEAD}" == claude/* ]] && [ "${N_DRAFT}" = "true" ]') < noop.index('N_COMMENTS_JSON="$(gh_retry _safe_gh_jq')
-	assert noop.index('if [ "${_STANDALONE_NOOP_CLEAR_PRS["${N_PR}"]:-}"') < noop.index('N_COMMENTS_JSON="$(gh_retry _safe_gh_jq')
+	assert noop.index('if [[ "${N_HEAD_OID}" =~ ^[0-9a-f]{40}$ ]] && [ "${_STANDALONE_NOOP_CLEAR_PRS["${N_PR}"]:-}" = "${N_HEAD_OID}" ]') < noop.index('N_COMMENTS_JSON="$(gh_retry _safe_gh_jq')
 
 
 def test_standalone_batch_accepts_matching_sha_and_falls_back_on_uncertainty() -> None:

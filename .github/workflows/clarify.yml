@@ -1611,10 +1611,17 @@ jobs:
           case "${SOURCE_ASSOCIATION}" in OWNER|MEMBER|COLLABORATOR) ;; *) exit 1 ;; esac
           gh api -X POST "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
             -f body="<!-- ai:reclarify-requeue:v1 source=${SOURCE_COMMENT_ID} -->" >/dev/null
-          # Never leave a queued label without the source marker the poller
-          # requires to authorize replay. Label failure stays visible in CI.
-          gh api -X POST "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/labels" \
-            -f 'labels[]=ai:reclarify-requeue' >/dev/null
+          # The marker alone is undiscoverable by the poller. Retry transient
+          # label failures with the independent job token before failing visibly.
+          for requeue_label_attempt in 1 2 3; do
+            if gh api -X POST "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/labels" \
+              -f 'labels[]=ai:reclarify-requeue' >/dev/null; then
+              exit 0
+            fi
+            [ "${requeue_label_attempt}" -eq 3 ] || sleep 2
+          done
+          echo '::error::Failed to label reclarify request for poller replay.'
+          exit 1
 
       - name: Telegram failure notification
         if: failure() || cancelled()

@@ -218,6 +218,8 @@ def test_reclarify_failure_marker_and_idle_poller_permissions() -> None:
 	assert "failure()" in marker["if"] and "steps.post_clear.outcome != 'success'" in marker["if"]
 	assert "SOURCE_COMMENT_ID" in marker["run"] and "ai:reclarify-requeue" in marker["run"]
 	assert marker["run"].index('issues/${ISSUE_NUMBER}/comments') < marker["run"].index('issues/${ISSUE_NUMBER}/labels')
+	assert 'for requeue_label_attempt in 1 2 3; do' in marker["run"]
+	assert 'Failed to label reclarify request for poller replay' in marker["run"]
 	for path in (".github/workflows/internal-clarify.yml", "workflow-templates/ai-clarify.yml"):
 		assert yaml.safe_load((REPO_ROOT / path).read_text())["permissions"]["issues"] == "write"
 	poller = yaml.safe_load((REPO_ROOT / ".github/workflows/orchestrate_poll.yml").read_text())["jobs"]["poll"]
