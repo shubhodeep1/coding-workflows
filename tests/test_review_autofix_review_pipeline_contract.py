@@ -7323,6 +7323,8 @@ def main() -> int:
 	test_review_isolation_wiring_and_model_relay()
 	test_review_isolation_workspace_transfer_and_hostile_paths()
 	test_review_isolation_traverses_only_allowed_github_directories()
+	test_review_isolation_unsafe_directory_reports_path_free_category()
+	test_review_isolation_rejection_line_drops_unknown_tokens()
 	test_review_relay_accepts_only_configured_chat_model()
 	test_review_relay_main_preserves_invoked_mode()
 	print("OK: review_autofix review-pipeline plumbing contract holds")
@@ -7456,12 +7458,17 @@ def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:
 		# A later retry has an updated baseline; a concurrent host edit does not.
 		(host / "scripts/app.py").write_text("host changed\n")
 		(source / "scripts/app.py").write_text("isolated changed\n")
-		assert run("transfer").returncode != 0
+		concurrent = run("transfer")
+		assert concurrent.returncode != 0
+		assert "(ValueError) reason=host_baseline_changed" in concurrent.stderr
+		assert "category=" not in concurrent.stderr
 		assert (host / "scripts/app.py").read_text() == "host changed\n"
 		(host / "scripts/app.py").write_text("after\n")
 		(source / "scripts/new.py").unlink()
 		(source / "scripts/new.py").symlink_to("/etc/passwd")
-		assert run("transfer").returncode != 0
+		symlinked_file = run("transfer")
+		assert symlinked_file.returncode != 0
+		assert "reason=symlink_in_path" in symlinked_file.stderr
 		assert (host / "scripts/new.py").read_text() == "new\n"
 
 
@@ -7490,7 +7497,9 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		assert (host / ".github/workflows/example.yml").read_text() == "after\n"
 		(source / ".github/ai").mkdir()
 		(source / ".github/ai/untrusted.yml").write_text("untrusted\n")
-		assert run("transfer").returncode != 0
+		rejected = run("transfer")
+		assert rejected.returncode != 0
+		assert "reason=unsafe_directory category=dot_github_subtree depth=2" in rejected.stderr
 		assert not (host / ".github/ai/untrusted.yml").exists()
 
 
@@ -7545,24 +7554,25 @@ def test_review_isolation_transfer_rejection_names_path_and_rule() -> None:
 		(source / "Makefile").write_text("all:\n")
 
 	cases = [
-		(make_dir(".github/ai"), "reason=unsafe_directory rule=dot_subdir path=.github/ai"),
-		(make_dir("Build"), "reason=unsafe_directory rule=excluded_case_variant path=Build"),
-		(make_dir("scripts/my_secret"), "reason=unsafe_directory rule=secret_name path=scripts/<redacted>"),
-		(make_dir("scripts/.envx"), "reason=unsafe_directory rule=env_name path=scripts/<redacted>"),
-		(make_symlink, "reason=unsafe_directory rule=symlink path=scripts/link"),
-		(make_root_file, "reason=unsafe_result_path rule=disallowed_suffix path=Makefile"),
-		(make_dir("scripts/bad\nname::add-mask::%0A"), "reason=unsafe_directory rule=invalid_name path=scripts/bad?name??add-mask???0A"),
+		(make_dir(".github/ai"), "reason=unsafe_directory category=dot_github_subtree depth=2"),
+		(make_dir("Build"), "reason=unsafe_directory category=excluded_name_variant depth=1"),
+		(make_dir("scripts/my_secret"), "reason=unsafe_directory category=sensitive_name depth=2"),
+		(make_dir("scripts/.envx"), "reason=unsafe_directory category=env_like depth=2"),
+		(make_symlink, "reason=unsafe_directory category=symlink depth=2"),
+		(make_root_file, "reason=unsafe_result_path"),
+		(make_dir("scripts/bad\nname::add-mask::%0A"), "reason=unsafe_directory category=invalid_name depth=2"),
 	]
 	for mutate, expected in cases:
 		result, reason, host_before, host_after, leftovers = _review_isolation_transfer_case(mutate)
 		assert result.returncode == 1, (expected, result.stderr)
 		assert result.stderr == f"::error::Review isolation snapshot or transfer rejected (ValueError) {expected}\n", result.stderr
-		# Only the leading ::error:: marker; a hostile name cannot add a command.
+		# Only fixed tokens reach the log or reason file; a hostile name cannot add a command.
 		assert result.stderr.count("::") == 2 and result.stderr.count("\n") == 1
 		assert reason == expected + "\n"
 		assert host_after == host_before
 		assert leftovers == ["review_sandbox_transfer_reason"]
 		assert "my_secret" not in result.stderr and ".envx" not in result.stderr
+		assert "path=" not in result.stderr and "path=" not in reason
 
 
 def test_review_isolation_transfer_still_prunes_root_dot_and_build_dirs() -> None:
@@ -7588,7 +7598,7 @@ def test_review_isolation_transfer_plain_rejection_reports_fixed_detail() -> Non
 	def noop(_source: Path, _root: Path) -> None:
 		return None
 
-	expected = "reason=other rule=ValueError detail=host?baseline?changed"
+	expected = "reason=host_baseline_changed"
 	result, reason, _before, _after, _leftovers = _review_isolation_transfer_case(noop, host_mutate=host_mutate)
 	assert result.returncode == 1
 	assert result.stderr == f"::error::Review isolation snapshot or transfer rejected (ValueError) {expected}\n"
@@ -7610,6 +7620,82 @@ def test_review_sandbox_transfer_reason_is_reported_and_archived() -> None:
 	assert 'cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err"' in block
 	assert "::error::Review sandbox result transfer was incomplete; refusing editor fallback. ${_sandbox_transfer_reason}" in block
 	assert "including .claude/, are not present. Do not create or recreate them." in apply_fixes
+
+
+def test_review_isolation_unsafe_directory_reports_path_free_category() -> None:
+	"""Issue #6424: an unsafe_directory rejection names its rule, never its path.
+
+	The rejection itself is unchanged: the whole transfer still fails before
+	the first host write, including the legitimate edit beside the directory.
+	"""
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	cases = (
+		(".github/ai_SENTINEL", "dot_github_subtree", "2"),
+		("scripts/secret_store_SENTINEL", "sensitive_name", "2"),
+		("scripts/.envdir_SENTINEL", "env_like", "2"),
+		("scripts/Build", "excluded_name_variant", "2"),
+		("scripts/nested/Coverage", "excluded_name_variant", "3+"),
+		("scripts/certs_SENTINEL.pem", "key_material_suffix", "2"),
+		("scripts/back\\slash_SENTINEL", "invalid_name", "2"),
+		("scripts/linkdir_SENTINEL", "symlink", "2"),
+		("Build", "excluded_name_variant", "1"),
+	)
+	for rel, category, depth in cases:
+		with tempfile.TemporaryDirectory() as td:
+			root = Path(td)
+			host = root / "host"
+			source = root / "isolated" / "source"
+			source.mkdir(parents=True)
+			(host / "scripts/nested").mkdir(parents=True)
+			(host / ".github/workflows").mkdir(parents=True)
+			(host / "scripts/app.py").write_text("before\n")
+			(host / "scripts/nested/keep.py").write_text("keep\n")
+			(host / ".github/workflows/example.yml").write_text("before\n")
+			subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+			subprocess.run(["git", "add", "scripts", ".github"], cwd=host, env=_git_clean_env(), check=True)
+			manifest = root / "isolated" / "baseline.json"
+			def run(action: str) -> subprocess.CompletedProcess[str]:
+				return subprocess.run(
+					[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest)],
+					capture_output=True, text=True, check=False,
+				)
+			assert run("snapshot").returncode == 0
+			assert run("refresh").returncode == 0
+			(source / "scripts/app.py").write_text("after\n")
+			offending = source / rel
+			if category == "symlink":
+				outside = root / "outside"
+				outside.mkdir()
+				(outside / "inner.py").write_text("outside\n")
+				offending.symlink_to(outside, target_is_directory=True)
+			else:
+				offending.mkdir(parents=True)
+				(offending / "inner.py").write_text("untrusted\n")
+			result = run("transfer")
+			assert result.returncode != 0, rel
+			assert f"(ValueError) reason=unsafe_directory category={category} depth={depth}" in result.stderr, (rel, result.stderr)
+			assert "SENTINEL" not in result.stderr, rel
+			assert (host / "scripts/app.py").read_text() == "before\n", rel
+			assert not (host / rel / "inner.py").exists(), rel
+
+
+def test_review_isolation_rejection_line_drops_unknown_tokens() -> None:
+	spec = importlib.util.spec_from_file_location("review_untrusted_workspace", REPO_ROOT / "scripts/review_untrusted_workspace.py")
+	assert spec and spec.loader
+	workspace_module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(workspace_module)
+	legacy = "::error::Review isolation snapshot or transfer rejected (ValueError)"
+	# Unannotated exceptions keep the pre-#6424 line byte-for-byte.
+	assert workspace_module._rejection_line(ValueError("x")) == legacy
+	assert workspace_module._rejection_line(OSError("x")) == "::error::Review isolation snapshot or transfer rejected (OSError)"
+	forged = workspace_module._rejection("x", "x::error::y", "scripts/evil", "../../etc")
+	assert workspace_module._rejection_line(forged) == legacy
+	unknown_category = workspace_module._rejection("x", "unsafe_directory", "x\n::error::y", "9")
+	assert workspace_module._rejection_line(unknown_category) == legacy + " reason=unsafe_directory"
+	known = workspace_module._rejection("x", "unsafe_directory", "symlink", "3+")
+	assert workspace_module._rejection_line(known) == legacy + " reason=unsafe_directory category=symlink depth=3+"
+	assert isinstance(known, ValueError) and str(known) == "x"
+	assert workspace_module._directory_category(".hidden/path", False) == "other"
 
 
 def test_review_relay_accepts_only_configured_chat_model() -> None:

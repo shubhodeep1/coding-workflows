@@ -251,6 +251,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
 
       - name: Fetch workflow support files
+        id: support_staging
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           VALIDATE_AUTHORIZED_TARGET_SHA: ${{ steps.authorized_target.outputs.sha }}
@@ -748,14 +749,29 @@ jobs:
 
       - name: Install Python dependencies for validation renderer
         id: renderer_dependencies
+        # "Run validation process" runs under always(), so this preparation must
+        # too, or an unrelated earlier failure skips it and validation fails
+        # with a misleading "runtime unavailable" (#6521). It still requires the
+        # trusted runtime and the trusted support staging, which only succeeds
+        # after checkout authorization, and gates on the preceding after_create hook.
+        if: always() && steps.runtime.outcome == 'success' && steps.support_staging.outcome == 'success' && steps.workspace_after_create_hook.outcome != 'failure'
         env:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
+          WORKSPACE_PATH: ${{ steps.workspace_state.outputs.workspace_path }}
           # Do not source the workspace-directed shell startup file in this host-side step.
           BASH_ENV: ''
         run: |
           set -euo pipefail
 
-          if [ -f "scripts/render_validation_templates.py" ]; then
+          # Check the renderer in the tree validate_process.sh runs it from: the
+          # workspace shell context cd's into WORKSPACE_PATH only when it is a
+          # directory, and BASH_ENV is cleared here, so resolve it explicitly.
+          renderer_root="${WORKSPACE_PATH:-}"
+          if [ -z "${renderer_root}" ] || [ ! -d "${renderer_root}" ]; then
+            renderer_root="${GITHUB_WORKSPACE}"
+          fi
+          renderer_path="${renderer_root}/scripts/render_validation_templates.py"
+          if [ -f "${renderer_path}" ]; then
             : "${RUNTIME_DIR:?Trusted validation runtime is unavailable}"
             mkdir -m 700 "${RUNTIME_DIR}/renderer-empty"
             cd "${RUNTIME_DIR}/renderer-empty"
@@ -780,8 +796,11 @@ jobs:
                   raise SystemExit("Renderer dependency search path is not in the isolated environment: " + name)
           import yaml, jsonschema, jinja2
           ' "${RUNTIME_DIR}/renderer-venv"
+            echo "renderer_state=prepared" >> "$GITHUB_OUTPUT"
           else
-            echo "::warning::scripts/render_validation_templates.py is unavailable; skipping renderer dependency installation."
+            echo "renderer_state=absent" >> "$GITHUB_OUTPUT"
+            echo "::error::Template renderer is unavailable at ${renderer_path}; dependency installation cannot proceed." >&2
+            exit 1
           fi
 
       - name: Determine Semble bootstrap state
@@ -939,7 +958,8 @@ jobs:
           MODEL_REASONING_EFFORT: ${{ env.MODEL_REASONING_EFFORT }}
           MAX_SELF_HEAL_ATTEMPTS: ${{ vars.MAX_SELF_HEAL_ATTEMPTS || '2' }}
           VALIDATION_USE_TEMPLATES: ${{ vars.VALIDATION_USE_TEMPLATES || 'true' }}
-          VALIDATION_RENDERER_DEPENDENCIES_READY: ${{ steps.renderer_dependencies.outcome == 'success' }}
+          VALIDATION_RENDERER_DEPENDENCIES_READY: ${{ steps.renderer_dependencies.outcome == 'success' && steps.renderer_dependencies.outputs.renderer_state == 'prepared' }}
+          VALIDATION_RENDERER_DEPENDENCIES_OUTCOME: ${{ steps.renderer_dependencies.outcome }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           ALERT_MSG_LEVEL: ${{ inputs.alert_msg_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
