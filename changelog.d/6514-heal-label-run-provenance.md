@@ -7,7 +7,7 @@ The intake now reads each referenced run from GitHub before collecting jobs, and
 
 - it is in the escalated issue's repository and has the claimed id;
 - it completed with `failure`, `timed_out` or `cancelled`;
-- it is tied to the escalated issue or PR: a comment from an OWNER, MEMBER, COLLABORATOR or `github-actions[bot]` links it (in this repository, only the pipeline account counts), its display title equals the issue title, or, for a pull request, it belongs to that pull request (`pull_requests` or a `[pr:<N>]` dispatch name).
+- it is tied to the escalated issue or PR: a comment from an OWNER, MEMBER, COLLABORATOR or `github-actions[bot]` links it (in this repository, only the pipeline account counts), or, for a pull request, it belongs to that pull request (`pull_requests` or a `[pr:<N>]` dispatch name). A matching title alone cannot identify the escalated item.
 
 Runs that fail a check are dropped and logged. The escalation itself still proceeds, without those logs. The reporter now lets only links from the issue's trusted author or a trusted comment reorder its title-matched runs.
 
@@ -17,7 +17,7 @@ Runs that fail a check are dropped and logged. The escalation itself still proce
 | New log lines | `WORKFLOW_HEAL provenance_rejected ... kind=issue\|pull_request ... reason=<r>` and `provenance_verified ... runs=<n>` (existing formats) |
 | Rejection reasons | `run_lookup_failed`, `repo_mismatch`, `run_id_mismatch`, `not_failed`, `not_linked_to_issue` |
 
-What this means for consumer repos: nothing to change. The check runs in this repository's intake. A failed run of a different issue with an identical title still matches by title.
+What this means for consumer repos: nothing to change. The check runs in this repository's intake. If a label escalation has no trusted run link or PR association, the report still proceeds, but without those runs' logs.
 
 ### For contributors
 

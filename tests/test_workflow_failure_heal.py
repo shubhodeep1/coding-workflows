@@ -1536,7 +1536,7 @@ def _intake_state(**overrides) -> dict:
 		"user_login": "workflow-bot",
 		"comments": {
 			f"repos/{repo}/issues/42/comments": [
-				{**_plan_failed_comment(repo, run_id), "user": {"login": "workflow-bot"}} for run_id in (499, 500)
+				{**_plan_failed_comment(repo, run_id), "user": {"login": "workflow-bot"}, "author_association": "OWNER"} for run_id in (499, 500)
 			] for repo in (SELF_REPO, CONSUMER_REPO)
 		},
 		"jobs": {
@@ -4101,11 +4101,14 @@ def test_verify_run_provenance_label_escalations() -> None:
 	unrelated = _provenance_run(display_title="unrelated issue")
 	for kind in ("issue", "pull_request"):
 		payload = _label_payload(kind)
-		# Title-matched failed run (the reporter's own selection) is kept.
-		kept = check(payload, {"500": _provenance_run(display_title=title)})
+		# A trusted comment establishes the association for a failed run.
+		kept = check(payload, {"500": _provenance_run(display_title=title)}, [link(CONSUMER_REPO, 500, "maintainer", "MEMBER")])
 		assert kept["status"] == "ok" and [ref["run_id"] for ref in kept["run_refs"]] == ["500"] and kept["reason"] == ""
-		# A cancelled title-matched run is kept (select_failed_runs picks it too).
-		assert check(payload, {"500": _provenance_run(conclusion="cancelled", display_title=title)})["run_refs"]
+		# A cancelled linked run is kept (select_failed_runs picks it too).
+		assert check(payload, {"500": _provenance_run(conclusion="cancelled", display_title=title)}, [link(CONSUMER_REPO, 500, "maintainer", "MEMBER")])["run_refs"]
+		# A title collision does not prove that a run belongs to this issue / PR.
+		assert check(payload, {"500": _provenance_run(display_title=title)})["rejections"] == [{"run_id": "500", "reason": "not_linked_to_issue"}]
+		assert check(payload, {"500": _provenance_run(display_title=title)}, [link(CONSUMER_REPO, 500, "attacker")])["run_refs"] == []
 		# An unrelated failed run linked only by an untrusted commenter is dropped.
 		dropped = check(payload, {"500": unrelated}, [link(CONSUMER_REPO, 500, "attacker")])
 		assert dropped["status"] == "ok" and dropped["run_refs"] == [] and dropped["reason"] == "no_verified_runs"
@@ -4113,8 +4116,8 @@ def test_verify_run_provenance_label_escalations() -> None:
 		# Consumer: a MEMBER or the Actions bot can vouch for the link.
 		assert check(payload, {"500": unrelated}, [link(CONSUMER_REPO, 500, "maintainer", "MEMBER")])["run_refs"]
 		assert check(payload, {"500": unrelated}, [link(CONSUMER_REPO, 500, "github-actions[bot]")])["run_refs"]
-		# Comments unavailable: only the comment criterion is disabled.
-		assert check(payload, {"500": _provenance_run(display_title=title)}, None)["run_refs"]
+		# Comments unavailable: title alone cannot authorize a log read.
+		assert check(payload, {"500": _provenance_run(display_title=title)}, None)["rejections"][0]["reason"] == "not_linked_to_issue"
 		assert check(payload, {"500": unrelated}, None)["rejections"][0]["reason"] == "not_linked_to_issue"
 		# Successful, in-progress, other-repo, wrong-id and missing runs are dropped.
 		for run, reason in (
@@ -4134,7 +4137,7 @@ def test_verify_run_provenance_label_escalations() -> None:
 		assert not check(self_payload, {"500": self_run}, [link(SELF_REPO, 500, "someone", "OWNER")], login="workflow-bot")["run_refs"]
 		assert not check(self_payload, {"500": self_run}, [link(SELF_REPO, 500, "workflow-bot", "OWNER")], login="")["run_refs"]
 		# Mixed refs: the verified subset is kept in order.
-		mixed = check(_label_payload(kind, run_ids=(500, 501)), {"500": _provenance_run(display_title=title), "501": _provenance_run(501, display_title="other")})
+		mixed = check(_label_payload(kind, run_ids=(500, 501)), {"500": _provenance_run(display_title=title), "501": _provenance_run(501, display_title="other")}, [link(CONSUMER_REPO, 500, "maintainer", "MEMBER")])
 		assert [ref["run_id"] for ref in mixed["run_refs"]] == ["500"] and mixed["rejections"] == [{"run_id": "501", "reason": "not_linked_to_issue"}]
 	# Pull request association applies to pull_request reports only.
 	pr_run = _provenance_run(display_title="unrelated", pull_requests=[{"number": 42}])
@@ -4181,7 +4184,8 @@ def test_intake_verifies_label_escalation_run_refs_before_reading_logs() -> None
 	assert "author_association: (.author_association" in report_text and "user: {login: (.user.login" in report_text
 	payload = _consumer_payload()
 	run_path = f"repos/{CONSUMER_REPO}/actions/runs/500"
-	state = _intake_state(run_details={run_path: {**_provenance_run(path="ai-implement.yml"), "display_title": "unrelated issue"}})
+	state = _intake_state(run_details={run_path: {**_provenance_run(path="ai-implement.yml"), "display_title": payload["issue_title"]}},
+		comments={f"repos/{CONSUMER_REPO}/issues/42/comments": [{"body": f"Run: https://github.com/{CONSUMER_REPO}/actions/runs/500", "user": {"login": "attacker"}, "author_association": "NONE"}]})
 	result, after, prompt = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert "provenance_rejected" in result.stdout and "kind=issue" in result.stdout and "reason=not_linked_to_issue" in result.stdout

@@ -1594,11 +1594,12 @@ through `clarify → plan → implement → review`.
   `failure`, `timed_out` or `cancelled`, and tied to the escalated issue or PR
   (a link in a comment from an OWNER, MEMBER, COLLABORATOR or
   `github-actions[bot]`, which in this repository must be the pipeline account;
-  a run display title equal to the issue title; or, for a PR, the run's pull
-  request or `[pr:<N>]` dispatch name). Dropped references log
+  or, for a PR, the run's pull request or `[pr:<N>]` dispatch name). A
+  matching display title alone does not establish association. If the comment
+  history is unavailable and no PR association can be verified, the report
+  continues without that run's logs. Dropped references log
   `WORKFLOW_HEAL provenance_rejected`, and the escalation proceeds without
-  their logs. A failed run of another issue with an identical title still
-  matches. The shared `GH_PAT` retains access to all registered consumer
+  their logs. The shared `GH_PAT` retains access to all registered consumer
   repositories.
   The intake fingerprints
   verified reports from the current failed run's job log (earlier streak logs

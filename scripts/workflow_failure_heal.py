@@ -1788,9 +1788,9 @@ def _verify_label_run_refs(
 	A reference is kept only when the GitHub-read run is in the source
 	repository, has the claimed id, completed with a reportable conclusion,
 	and is associated with the escalated issue / PR: a trusted comment links
-	it, its display title equals the issue title, or (pull requests only) it
-	belongs to the pull request. Missing comments or identity only disable the
-	comment criterion; the report itself is never rejected.
+	it or (pull requests only) it belongs to the pull request. A matching
+	display title alone cannot identify an issue. Missing comments or identity
+	only disable the comment criterion; the report itself is never rejected.
 	"""
 	kind = payload.get("source_kind")
 	refs = payload.get("run_refs") or []
@@ -1801,7 +1801,6 @@ def _verify_label_run_refs(
 		for comment in comments:
 			if _trusted_run_link_comment(comment, repo=repo, self_repo=self_repo, trusted_login=trusted_login):
 				linked_ids.update(item["run_id"] for item in extract_run_refs([sanitize_text(comment.get("body"))], repo, limit=1000))
-	issue_title = single_line(payload.get("issue_title"), 300)
 	issue_number = payload.get("issue_number")
 	for ref in refs:
 		run_id = str(ref.get("run_id") if isinstance(ref, dict) else "")
@@ -1817,8 +1816,6 @@ def _verify_label_run_refs(
 			reason = "not_failed"
 		else:
 			linked = run_id in linked_ids
-			if not linked and issue_title:
-				linked = single_line(run.get("display_title"), 300) == issue_title
 			if not linked and kind == "pull_request" and _positive_int(issue_number) is not None:
 				if isinstance(run.get("pull_requests"), list):
 					linked = any(isinstance(pr, dict) and pr.get("number") == issue_number for pr in run["pull_requests"])
