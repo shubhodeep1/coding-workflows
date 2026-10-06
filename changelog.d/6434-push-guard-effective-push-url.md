@@ -5,5 +5,6 @@ Named remotes and literal GitHub URLs that rewrite to non-GitHub destinations ar
 The guard also checks inline overrides when `env` or `git` is invoked by an absolute path.
 Literal non-GitHub URLs rewritten to GitHub are checked against the effective GitHub repository too.
 Rejection messages show remote names, not literal push URLs that may carry credentials in query strings.
+Git history fallback does not fetch through a non-GitHub network mirror when its configured push URL resolves to GitHub.
 
 What this means for operators: a local mirror configured through `insteadOf` blocks pushes unless a `pushInsteadOf` rule keeps the effective push on GitHub. Use the guard override only for an intentional non-GitHub push.

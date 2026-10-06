@@ -2002,6 +2002,25 @@ def test_non_github_raw_remote_rewritten_to_github(merged_branch_repo, monkeypat
 	assert guard._resolve_push_destination(str(repo), "origin").history_remote == ""
 
 
+@pytest.mark.parametrize("repository", ["origin", "https://github.com/o/r.git"])
+def test_safe_push_does_not_probe_rewritten_foreign_fetch_remote(merged_branch_repo, monkeypatch, capsys, repository: str) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "config", "url.https://mirror.example/.insteadOf", "https://github.com/o/")
+	_git(repo, "config", "url.https://github.com/o/.pushInsteadOf", "https://github.com/o/")
+	assert guard._resolve_push_destination(str(repo), repository).history_remote == ""
+	monkeypatch.setattr(guard, "default_branch", lambda cwd, remote="origin":
+		pytest.fail("foreign fetch remote must not be probed") if remote else "")
+	monkeypatch.setattr(guard, "_read_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: [OPEN_PR])
+	code, message = guard.evaluate(_bash_payload(f"git push {repository} HEAD:feature/x") | {"cwd": str(repo)})
+	assert (code, message) == (0, "")
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: (_ for _ in ()).throw(guard.LookupUnavailable("offline")))
+	code, message = guard.evaluate(_bash_payload(f"git push {repository} HEAD:feature/x") | {"cwd": str(repo)})
+	assert (code, message) == (0, "")
+	assert json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
 def test_literal_non_github_url_rewritten_to_github(merged_branch_repo, monkeypatch) -> None:
 	repo, _ = merged_branch_repo
 	_git(repo, "config", "url.https://github.com/o/.pushInsteadOf", "https://mirror.example/o/")

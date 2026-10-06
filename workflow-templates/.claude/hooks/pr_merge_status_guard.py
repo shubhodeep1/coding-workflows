@@ -1132,7 +1132,11 @@ def _resolve_push_destination(
 				return _PushDestination(label, (), "", "a url.*.insteadOf/pushInsteadOf rewrite sends the push to a non-GitHub destination")
 			# Inline config is never used for the hook's fetch or ls-remote.
 			code, out, _ = _run(["git", "--no-pager", *config_args, "config", "--get", f"remote.{token}.url"], cwd, _GIT_TIMEOUT_SECONDS)
-			history_remote = token if not config_args and not config_environment and code == 0 and slugs == (extract_repo_slug(out),) else ""
+			history_remote = ""
+			if not config_args and not config_environment and code == 0 and slugs == (extract_repo_slug(out),):
+				fetch_code, fetch_url, _ = _run(["git", "--no-pager", "remote", "get-url", token], cwd, _GIT_TIMEOUT_SECONDS)
+				if fetch_code == 0 and (extract_repo_slug(fetch_url) == slugs[0] or fetch_url.startswith("/")):
+					history_remote = token
 			return _PushDestination(label, slugs, history_remote, "")
 		rules = _url_rewrite_rules(cwd, config_args)
 		if rules is None:
@@ -1151,8 +1155,10 @@ def _resolve_push_destination(
 					key, _, url = line.partition(" ")
 					name = key[len("remote."):-len(".url")]
 					if _REMOTE_NAME_RE.fullmatch(name) and ".." not in name and extract_repo_slug(url) == effective_slug:
-						history_remote = name
-						break
+						fetch_code, fetch_url, _ = _run(["git", "--no-pager", "remote", "get-url", name], cwd, _GIT_TIMEOUT_SECONDS)
+						if fetch_code == 0 and (extract_repo_slug(fetch_url) == effective_slug or fetch_url.startswith("/")):
+							history_remote = name
+							break
 		return _PushDestination(label, (effective_slug,), history_remote, "")
 
 
@@ -1801,12 +1807,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 							"CLAUDE_PR_MERGE_GUARD=off for this session if this destination is intended."
 						)
 						continue
-					base = default_branch(
-						target.cwd, destination.history_remote or (
-							target.push_repository if not _remote_push_urls(target.push_repository, target.cwd)
-							else ""
-						),
-					)
+					base = default_branch(target.cwd, destination.history_remote)
 					slugs = destination.slugs
 					remote = destination.history_remote
 				else:
