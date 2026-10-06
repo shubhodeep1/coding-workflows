@@ -1287,6 +1287,10 @@ _init_prompt_budget "${RB_JUDGE_CONTEXT_BUDGET_BYTES}"
     cat ./pre_assembled_static.txt
   fi
   echo
+  if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/static_readme_trimmed.txt" ]; then
+    emit_review_rb_untrusted_file 'PR README.MD (trimmed)' "${RUNTIME_DIR}/static_readme_trimmed.txt"
+    echo
+  fi
   echo "=== REVIEW-BLOCKED JUDGE TASK ==="
   echo
   if [ -f "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" ]; then
