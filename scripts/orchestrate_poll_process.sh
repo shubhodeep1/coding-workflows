@@ -8682,12 +8682,12 @@ invoke_judge_for_integration_conflict() {
     echo "Conflicted files:"
     printf '%s\n' "${judge_conflicts}"
     echo
-    echo 'Edit only the conflicted files listed above. Changes to other paths,'
-    echo 'or lines in conflicted protected paths that come from neither merge side,'
-    echo 'reject the resolution without a push. Protected paths include .github/,'
-    echo '.claude/, scripts/, prompts/, workflow-templates/, validation/,'
-    echo 'ai-memory/, db/contracts/, agent-instruction files, and build,'
-    echo 'dependency, config and script files.'
+    echo 'Edit only the conflicted files listed above. Every conflicted file'
+    echo 'may contain only lines taken from either merge side. Keep each side'
+    echo 'in order, retain lines shared by both sides, and do not duplicate'
+    echo 'lines inherited unchanged from the common base. Changes to other'
+    echo 'paths or lines from neither side reject the resolution without a push.'
+    echo 'Do not delete a conflicted file or change its file mode.'
     echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
@@ -8801,6 +8801,8 @@ for git_var_name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_D
 
 # Keep these four pattern groups in sync with PROTECTED_SKIP_SUPPRESSED in
 # review_autofix.yml; tests/test_integration_judge_scope_guard.py pins parity.
+# Security finding integration-judge-unverified-source-resolution: provenance
+# applies to every conflicted path, not just paths matching these patterns.
 PROTECTED_BASENAMES = (
     "agents.md|claude.md|unattended_system_instructions.md"
 ).split("|")
@@ -8875,8 +8877,6 @@ try:
     work = 0
     for path in conflicts:
         current_path = path
-        if not is_protected_conflict_path(path):
-            continue
         sides = stages[path]
         indexed = git("ls-files", "-s", "-z", "--", ":(literal)" + os.fsdecode(path))
         if not indexed:
@@ -8950,6 +8950,7 @@ try:
     if not re.fullmatch(rb"[0-9a-f]{40,64}", validated_tree):
         raise ValueError("invalid staged tree")
 except (OSError, ValueError, subprocess.CalledProcessError, UnicodeError):
+    # Keep this reason token for consumers of existing INTEGRATION_JUDGE_SCOPE logs.
     log("rejected", "protected_path_provenance", [current_path] if current_path else [])
     sys.exit(1)
 log("accepted", "none", conflicts)

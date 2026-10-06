@@ -84,7 +84,7 @@ def judge_repo(tmp_path: Path, request: pytest.FixtureRequest):
 	return wt, baseline, remote, before, conflict_path, run
 
 
-@pytest.mark.parametrize("judge_repo", [False, True, "newline"], indirect=True)
+@pytest.mark.parametrize("judge_repo", [False, True, "newline", ("path", "src/app.py")], indirect=True)
 def test_conflict_only_resolution_pushes(judge_repo):
 	wt, baseline, remote, before, conflict_path, run = judge_repo
 	(wt / conflict_path).write_text("first\nours\ntheirs\nlast\n")
@@ -114,7 +114,7 @@ def test_out_of_scope_changes_do_not_push(judge_repo, change):
 	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() == before
 
 
-@pytest.mark.parametrize("judge_repo", [True], indirect=True)
+@pytest.mark.parametrize("judge_repo", [True, False, ("path", "src/app.py")], indirect=True)
 @pytest.mark.parametrize("change", ["invented", "mode", "duplicate", "reorder"])
 def test_protected_conflict_rejects_invented_content_or_mode(judge_repo, change):
 	wt, baseline, remote, before, conflict_path, run = judge_repo
@@ -190,12 +190,23 @@ def test_protected_resolution_retains_shared_duplicate_counts(judge_repo):
 
 
 @pytest.mark.parametrize("judge_repo", [("path", "src/app.py")], indirect=True)
-def test_unprotected_source_can_synthesize_lines(judge_repo):
+def test_unprotected_source_rejects_invented_lines(judge_repo):
 	wt, baseline, remote, before, conflict_path, run = judge_repo
 	(wt / conflict_path).write_text("first\nours\ntheirs\nnew line\nlast\n")
 	result = run(f'_integration_judge_commit_and_push "{wt}" 42 integration main "{baseline}" 1')
-	assert result.returncode == 0, result.stderr + result.stdout
-	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() != before
+	assert result.returncode != 0
+	assert "reason=protected_path_provenance" in result.stderr
+	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() == before
+
+
+@pytest.mark.parametrize("judge_repo", [("path", "src/app.py")], indirect=True)
+def test_unprotected_conflict_deletion_rejected(judge_repo):
+	wt, baseline, remote, before, conflict_path, run = judge_repo
+	(wt / conflict_path).unlink()
+	result = run(f'_integration_judge_commit_and_push "{wt}" 42 integration main "{baseline}" 1')
+	assert result.returncode != 0
+	assert "reason=protected_path_provenance" in result.stderr
+	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() == before
 
 
 def test_protected_path_patterns_match_review_skip_gate():
@@ -212,7 +223,8 @@ def test_protected_path_patterns_match_review_skip_gate():
 		match = re.search(rf'^{constant} = \(\n    "([^"]+)"\n\)\.split\("\|"\)', verifier, flags=re.MULTILINE)
 		assert match, constant
 		assert match.group(1) == gate_pattern.strip(), constant
-	assert "if not is_protected_conflict_path(path):" in verifier
+	assert "if not is_protected_conflict_path(path):" not in verifier
+	assert "def is_protected_conflict_path(path):" in verifier
 
 
 @pytest.mark.parametrize("judge_repo", [True], indirect=True)
