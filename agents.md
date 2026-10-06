@@ -118,10 +118,13 @@ Phases of the unattended pipeline (each is a separate workflow file under
    The in-workflow judge's OpenCode verdict and fix passes also use fresh
    credential-free sandboxes; missing isolation defers with
    `judge_skip_reason=isolation_unavailable`, never a host writer. For the poller's judge,
-   missing isolation defers and escalates after three failures on the same
-   head (configurable with `RB_JUDGE_ISOLATION_MAX_FAILURES`); unavailable
-   Claude retries OpenCode in a fresh sandbox, never host Codex. Failed transfer discards the
-   verdict and removes only newly untracked files. Cleanup/inventory failures
+    missing isolation defers and escalates after three failures on the same
+    head (configurable with `RB_JUDGE_ISOLATION_MAX_FAILURES`); unavailable
+    Claude retries OpenCode in a fresh sandbox, never host Codex. Failed transfer discards the
+    verdict and removes only newly untracked files. Ephemeral OpenCode attempts
+    build the OpenCode-only image independently of Claude support files or CLI
+    installation; a failed OpenCode image build still defers without host fallback.
+    Cleanup/inventory failures
    stop the tick so another issue cannot stage a partial transfer. Lost comment
    responses are reconciled from trusted history; uncleared human latches
    block the judge even on a new head. The

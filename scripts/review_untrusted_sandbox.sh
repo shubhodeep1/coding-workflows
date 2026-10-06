@@ -7,6 +7,11 @@ support="${SUPPORT_SCRIPTS_DIR:-scripts}"
 root="${REVIEW_SANDBOX_ROOT:-}"
 workspace="${GITHUB_WORKSPACE:-$PWD}"
 case "${action}" in prepare|prepare-ephemeral|run|cleanup) ;; *) exit 2 ;; esac
+prepare_engine="${2:-codex}"
+if [ "${action}" = prepare-ephemeral ]; then
+	prepare_engine="${2:-claude}"
+	case "${prepare_engine}" in claude|codex) ;; *) exit 2 ;; esac
+fi
 command -v docker >/dev/null && command -v python3 >/dev/null || { echo '::error::Review isolation requires Docker and Python' >&2; exit 1; }
 [ -f "${support}/review_untrusted_workspace.py" ] && [ -f "${support}/clarify_openrouter_broker.py" ] && [ -f "${support}/review_sandbox/Dockerfile" ] || { echo '::error::Review isolation support missing' >&2; exit 1; }
 
@@ -41,9 +46,9 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 	PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" snapshot "${workspace}" "${root}/source" "${root}/baseline.json" "${snapshot_git_dir[@]}"
 	version="${OPENCODE_VERSION:-1.18.23}"
 	[[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid review OpenCode version' >&2; exit 1; }
-	# `prepare claude` (scripts/ai_engine.sh) adds the pinned Claude Code CLI
-	# to the same image; plain `prepare` builds the OpenCode image unchanged.
-	if { [ "${2:-codex}" = claude ] || [ "${action}" = prepare-ephemeral ]; } && [ -f "${support}/ai_engine.sh" ] && [ -f "${support}/claude_engine.py" ]; then
+	# Ephemeral OpenCode retries must not require the Claude CLI or engine files.
+	if [ "${prepare_engine}" = claude ]; then
+		[ -f "${support}/ai_engine.sh" ] && [ -f "${support}/claude_engine.py" ] || { echo '::error::Review Claude support missing' >&2; exit 1; }
 		# shellcheck source=ai_engine.sh
 		source "${support}/ai_engine.sh"
 		claude_cli_version="$(ai_engine_cli_version)"
@@ -51,7 +56,6 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 		image="$(timeout --signal=TERM --kill-after=10s 900s env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker build -q --build-arg "OPENCODE_VERSION=${version}" --build-arg "CLAUDE_CLI_VERSION=${claude_cli_version}" -f "${support}/review_sandbox/Dockerfile" "${support}/review_sandbox")"
 		printf 'claude\n' > "${root}/engine"
 	else
-		[ "${action}" != prepare-ephemeral ] || { echo '::error::Review Claude support missing' >&2; exit 1; }
 		image="$(env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker build -q --build-arg "OPENCODE_VERSION=${version}" -f "${support}/review_sandbox/Dockerfile" "${support}/review_sandbox")"
 	fi
 	[ -n "${image}" ] || exit 1

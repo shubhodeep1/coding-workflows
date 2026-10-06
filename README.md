@@ -2001,6 +2001,11 @@ agent and escalates after `RB_JUDGE_ISOLATION_MAX_FAILURES` failures on one head
 The in-workflow review-blocked judge likewise runs OpenCode verdicts and fixes
 in fresh sandboxes when Claude is disabled or unavailable; isolation failure
 defers with `judge_skip_reason=isolation_unavailable` instead of running on the host.
+Ephemeral OpenCode judge and conflict-resolver attempts build an OpenCode-only
+image, independent of Claude engine files and CLI installation. This applies
+to explicit OpenCode selection and to an OpenCode retry after Claude returns
+exit 75; a failed Claude sandbox preparation in the poller still defers.
+An unavailable OpenCode image never triggers a credentialed-host fallback.
 The poller's wave, stall, integration and security-pass judges run read-only in
 that sandbox on both engines. Missing isolation defers the judge without
 consuming a recovery budget and escalates after `JUDGE_ISOLATION_MAX_FAILURES`

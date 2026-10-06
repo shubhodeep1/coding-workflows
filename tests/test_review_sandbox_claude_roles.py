@@ -67,7 +67,8 @@ def test_read_role_cannot_write_snapshot_or_transfer():
 	assert '--agent "${OPENCODE_AGENT}"' in opencode
 
 
-def test_prepare_ephemeral_skips_dependency_container(tmp_path):
+@pytest.mark.parametrize("engine", ("claude", "codex"))
+def test_prepare_ephemeral_skips_dependency_container(tmp_path, engine):
 	workspace = tmp_path / "checkout"
 	workspace.mkdir()
 	for args in (("init", "-q"),):
@@ -77,32 +78,58 @@ def test_prepare_ephemeral_skips_dependency_container(tmp_path):
 	bin_dir.mkdir()
 	log = tmp_path / "docker-calls"
 	fake_docker = bin_dir / "docker"
-	fake_docker.write_text(f'#!/bin/bash\nprintf "%s\\n" "$*" >> "{log}"\nprintf "sha256:%064d\\n" 0\n')
+	fake_docker.write_text(f'#!/bin/bash\nprintf "%s\\n" "$*" >> "{log}"\n'
+		f'if [[ "$*" == *CLAUDE_CLI_VERSION=* && -e "{tmp_path}/reject-claude" ]]; then exit 25; fi\n'
+		'printf "sha256:%064d\\n" 0\n')
 	fake_docker.chmod(0o755)
 	env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", RUNNER_TEMP=str(tmp_path),
 		GITHUB_WORKSPACE=str(workspace), SUPPORT_SCRIPTS_DIR=str(ROOT / "scripts"))
+	if engine == "codex":
+		# An OpenCode retry must work even without engine files, and must not
+		# attempt the Claude CLI build that this Docker stand-in rejects.
+		(tmp_path / "reject-claude").touch()
+		support = tmp_path / "support"
+		(support / "review_sandbox").mkdir(parents=True)
+		for name in ("review_untrusted_workspace.py", "clarify_openrouter_broker.py"):
+			(support / name).symlink_to(ROOT / "scripts" / name)
+		(support / "review_sandbox" / "Dockerfile").symlink_to(ROOT / "scripts" / "review_sandbox" / "Dockerfile")
+		env["SUPPORT_SCRIPTS_DIR"] = str(support)
 	for inherited in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
 		env.pop(inherited, None)
-	proc = subprocess.run(["bash", str(SANDBOX), "prepare-ephemeral"], cwd=workspace,
+	proc = subprocess.run(["bash", str(SANDBOX), "prepare-ephemeral", engine], cwd=workspace,
 		env=env, capture_output=True, text=True)
 	assert proc.returncode == 0, proc.stderr
 	sandbox_root = Path(proc.stdout.strip())
 	assert sandbox_root.parent == tmp_path
-	assert (sandbox_root / "engine").read_text() == "claude\n"
+	assert (sandbox_root / "engine").exists() is (engine == "claude")
 	assert (sandbox_root / "workspace").read_text().strip() == str(workspace)
 	assert (sandbox_root / "source" / "app.py").read_text() == "value = 1\n"
 	assert "build " in log.read_text()
+	assert ("CLAUDE_CLI_VERSION=" in log.read_text()) is (engine == "claude")
 	assert "run " not in log.read_text()
 	assert not (tmp_path / "github_env").exists()
 	clean = subprocess.run(["bash", str(SANDBOX), "cleanup"], env=dict(env, REVIEW_SANDBOX_ROOT=str(sandbox_root)),
 		capture_output=True, text=True)
 	assert clean.returncode == 0, clean.stderr
 	assert not sandbox_root.exists()
-	mismatch = subprocess.run(["bash", str(SANDBOX), "prepare-ephemeral"], cwd=tmp_path,
+	mismatch = subprocess.run(["bash", str(SANDBOX), "prepare-ephemeral", engine], cwd=tmp_path,
 		env=env, capture_output=True, text=True)
 	assert mismatch.returncode == 1
 	assert "workspace mismatch" in mismatch.stderr
 	assert "run " not in log.read_text()
+	invalid = subprocess.run(["bash", str(SANDBOX), "prepare-ephemeral", "invalid"], cwd=workspace,
+		env=env, capture_output=True, text=True)
+	assert invalid.returncode == 2
+
+
+def test_ephemeral_callers_prepare_their_selected_engine():
+	poller = (ROOT / "scripts/orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	resolver = (ROOT / "scripts/review_conflict_resolve.sh").read_text(encoding="utf-8")
+	judge = (ROOT / "scripts/review_rb_judge.sh").read_text(encoding="utf-8")
+	assert 'prepare-ephemeral "${rb_engine}"' in poller
+	assert 'prepare-ephemeral "${sandbox_attempt_engine}"' in resolver
+	assert 'prepare-ephemeral claude' in judge
+	assert 'prepare-ephemeral codex' in judge
 
 
 @pytest.mark.parametrize("name,accepted", [("scripts/a.py", True), (".ai/x.txt", False), ("scripts/../a.py", False), ("scripts/a.py\r", False)])

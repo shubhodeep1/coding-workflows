@@ -3,6 +3,8 @@
 
 `orchestrate.yml` decomposes projects with Claude Opus 5.5 (ORCHESTRATE). The poller's wave, stall, integration, security-pass and review-blocked judges in `scripts/orchestrate_poll_process.sh` also run on Claude, and each judge reads its project's `ai:engine-claude` / `ai:codex` label from the cached tracking-issue labels without an API call. The poller's review-blocked judge runs in the credential-free review sandbox, read-only for verdicts or with validated transfer for combined fixes. In `review_autofix.yml`, the editor runs the Claude Code CLI inside the same network-isolated sandbox, and the consolidator, conflict resolver and review-blocked judge also use the isolated review runner. When Claude cannot start, each call runs its unchanged codex or OpenCode command in the same attempt. A review editor whose Claude sandbox image fails to build uses the OpenCode image instead of failing the job.
 
+Ephemeral OpenCode judge and conflict-resolver sandboxes build without the Claude CLI or engine support files. A missing Claude dependency cannot prevent an explicitly OpenCode-selected attempt or a fresh isolated OpenCode retry after Claude is unavailable; failed OpenCode isolation still never falls back to a credentialed host agent.
+
 | The numbers that matter | Value |
 | --- | --- |
 | Roles moved to Claude | `ORCHESTRATE`, `WAVE_JUDGE`, `STALL_JUDGE`, `INTEGRATION_JUDGE`, `SECURITY_JUDGE`, `REVIEW_EDITOR`, `REVIEW_CONSOLIDATOR`, `CONFLICT_RESOLVER`, `RB_JUDGE` |
