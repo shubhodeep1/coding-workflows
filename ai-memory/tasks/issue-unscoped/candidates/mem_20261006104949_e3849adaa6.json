@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_merge_train.sh:336 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The bot-suffix rejection check allegedly mishandles `*'[bot]'`, rejecting ordinary collaborator logins while allowing `[bot]`-suffixed accounts through.\n  WHY: The reviewers reporting the issue say ordinary actors may be rejected before permission lookup and bot accounts may reach it; severity is highest, critical, and reviewers deepseek_deepseek-v4-pro, openai_gpt-6-luna, qwen_qwen3_7-plus, and z-ai_glm-5_2 explicitly disagree, identifying the finding as incorrect.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"If the marker or removal cannot be verified, keep the PR queued rather than allowing the bypass. Forged marker comments must not be trusted or edited by gate and release paths.\"\n  expected_change_site: `scripts/review_merge_train.sh` (`_mt_bypass_authorized`) and `tests/test_review_merge_train.py`\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: `scripts/review_merge_train.sh` around line 336 is claimed to reject ordinary collaborators before permission lookup and allow `[bot]`-suffixed accounts through; `tests/test_review_merge_train.py` fixtures/expectations are claimed to exercise the broken path without catching the regression.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_merge_train.sh:336 | severity=critical | confidence=5\n  PROBLEM: The bot-login rejection check allegedly uses incorrect shell glob syntax and mixes regex and glob semantics, blocking legitimate collaborators while potentially allowing bot-authored bypasses.\n  WHY: The review says legitimate collaborators may be blocked as `actor_unknown` before permission lookup, while malicious actors might forge comments that bypass merge train queue protection.\n- TASK_GAP\n  Requirement: \"If the marker or removal cannot be verified, keep the PR queued rather than allowing the bypass. Forged marker comments must not be trusted or edited by gate and release paths.\"\n  Expected change site: `scripts/review_merge_train.sh` (`_mt_bypass_authorized`)\n  Evidence of absence: The implementation allegedly fails to identify trusted actors before permission lookup, making the intended authorization path unreachable; the regression tests in `tests/test_review_merge_train.py` must be updated to verify that path.\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_merge_train.sh:336 | severity=critical | confidence=5\n  PROBLEM: The glob `*'[bot]'` allegedly rejects ordinary logins and accepts real `[bot]`-suffixed accounts.\n  WHY: The review says ordinary collaborators such as `maint` are rejected before permission lookup, while bot accounts such as `dependabot[bot]`, `github-actions[bot]`, and `renovate[bot]` may reach it; the default test actor is `_label_event` default `actor=\"maint\"` at tests/test_review_merge_train.py:208.\n- scripts/review_merge_train.sh:336 | severity=critical | confidence=5\n  PROBLEM: The same alleged glob defect short-circuits bypass tests with `actor_unknown` before permission lookup or marker PATCH.\n  WHY: The review says these tests would fail: tests/test_review_merge_train.py:446 `test_gate_consumes_prior_queue_marker_as_one_shot_bypass`; tests/test_review_merge_train.py:476 `test_gate_matches_automation_author_case_insensitively`; tests/test_review_merge_train.py:546 `test_gate_uses_newest_trusted_queue_marker`; tests/test_review_merge_train.py:525 `test_gate_allows_owner_pat_account_to_remove_queue_label`; and four parameterizations of `test_gate_rejects_unverified_bypass`.\n- TASK_GAP\n  Requirement: \"Authorize a bypass only after verifying an automation-authored queue marker and a subsequent authorized queue-label removal event; otherwise keep the PR queued.\" (from the linked issue #6507, paraphrasing the Recommendation block.)\n  Expected change site: scripts/review_merge_train.sh around line 336, the bot-suffix rejection check, plus the matching fixture/expectation lines in tests/test_review_merge_train.py.\n  Evidence of absence: The review says the glob rejects ordinary collaborators while letting real `[bot]`-suffixed accounts through; the regression tests exercise the broken path but do not run them in the editor sandbox (PyYAML and `jq` missing).\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "95b8fb7c3860f5df99afac32ce1d68170a69243a4f367f843064cc1bdd72c8a7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6516,
+    "run_id": "37446332463",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37446332463",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006104949_e3849adaa6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6516,
+    "run_id": "37446332463"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T10:49:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
