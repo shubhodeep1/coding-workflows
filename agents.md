@@ -772,6 +772,12 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   redirection (`2 >out`, `'2'>out`) is a push refspec with the normal check;
   only digits glued to it (`2>&1`) are a file descriptor. An
   unresolved push source asks rather than checking the session checkout's HEAD.
+  Shell `-c` scripts (`bash`, `sh`, `zsh`, `dash`, also by absolute path),
+  `eval` arguments and `$(...)` / backtick / `<(...)` bodies are parsed up to
+  three levels deep and get the same check; wrapped text that cannot be read
+  (an expansion in command position, an unterminated body or heredoc, deeper
+  nesting) asks when it could run a Git write. Prefix wrappers such as `sudo`
+  or `xargs` and `... | bash` are still not inspected.
 - **No MCP tools inside.** Serena (and any other MCP server) is not configured
   in the container, so isolated prompts carry no Serena hints. Semble results
   are rendered into prompts on the host and are unaffected.
