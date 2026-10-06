@@ -161,7 +161,8 @@ def test_renderer_dependency_step_isolates_workspace_imports_and_shell_startup()
 	assert step_match is not None
 	step = step_match.group("body")
 	assert "          BASH_ENV: ''\n" in step
-	assert 'if [ -f "scripts/render_validation_templates.py" ]; then' in step
+	assert 'renderer_path="${renderer_root}/scripts/render_validation_templates.py"' in step
+	assert 'if [ -f "${renderer_path}" ]; then' in step
 	assert 'cd "${RUNTIME_DIR}/renderer-empty"' in step
 	script = textwrap.dedent(step.split("        run: |\n", 1)[1])
 	with tempfile.TemporaryDirectory() as tmpdir:
@@ -221,7 +222,9 @@ def test_renderer_dependency_step_isolates_workspace_imports_and_shell_startup()
 			"PYTHONPATH": str(workspace),
 			"REAL_PYTHON3": sys.executable,
 			"RUNTIME_DIR": str(runtime_dir),
+			"GITHUB_OUTPUT": str(root / "github_output"),
 		})
+		env.pop("WORKSPACE_PATH", None)
 		result = subprocess.run(
 			["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script],
 			cwd=workspace, env=env, capture_output=True, text=True, timeout=30,
@@ -389,6 +392,144 @@ def test_renderer_isolated_imports_ignore_workspace_shadows_and_reject_external_
 		assert not leak_marker.exists()
 
 
+def _renderer_dependency_step_script() -> str:
+	step_match = re.search(
+		r"      - name: Install Python dependencies for validation renderer\n(?P<body>.*?)(?=      - name: |\Z)",
+		_workflow_text(), re.DOTALL,
+	)
+	assert step_match is not None
+	return textwrap.dedent(step_match.group("body").split("        run: |\n", 1)[1])
+
+
+def _validate_step_blocks() -> list[str]:
+	# Text slicing (no PyYAML dependency): one block per top-level job step.
+	steps_text = _workflow_text().split("\n    steps:\n", 1)[1]
+	return [block for block in re.split(r"\n(?=      - name: )", steps_text) if "      - name: " in block]
+
+
+def _step_block(step_id: str) -> str:
+	matches = [block for block in _validate_step_blocks() if f"\n        id: {step_id}\n" in block + "\n"]
+	assert len(matches) == 1, step_id
+	return matches[0]
+
+
+def test_renderer_dependency_step_runs_after_unrelated_earlier_failure() -> None:
+	# Regression for #6521: without an always() gate, any unrelated earlier
+	# failure skipped renderer preparation while validation still ran.
+	prep = _step_block("renderer_dependencies")
+	condition_match = re.search(r"\n        if: (?P<cond>.+)\n", prep)
+	assert condition_match is not None
+	condition = condition_match.group("cond")
+	assert condition.startswith("always()")
+	assert "steps.runtime.outcome == 'success'" in condition
+	assert "steps.support_staging.outcome == 'success'" in condition
+	assert "steps.workspace_after_create_hook.outcome != 'failure'" in condition
+	assert "      - name: Fetch workflow support files\n        id: support_staging\n" in _step_block("support_staging")
+	assert "          WORKSPACE_PATH: ${{ steps.workspace_state.outputs.workspace_path }}\n" in prep
+	assert "          BASH_ENV: ''\n" in prep
+	run_step = _step_block("validate_run")
+	assert "          VALIDATION_RENDERER_DEPENDENCIES_OUTCOME: ${{ steps.renderer_dependencies.outcome }}\n" in run_step
+	assert "          VALIDATION_RENDERER_DEPENDENCIES_READY: ${{ steps.renderer_dependencies.outcome == 'success' }}\n" in run_step
+	ids = [m.group(1) for block in _validate_step_blocks() for m in [re.search(r"\n        id: (\S+)", block)] if m]
+	assert ids.index("support_staging") < ids.index("workspace_after_create_hook") < ids.index("renderer_dependencies") < ids.index("validate_run")
+
+
+def test_renderer_dependency_step_checks_renderer_in_workspace_path() -> None:
+	# Regression for #6521: the presence check ran relative to GITHUB_WORKSPACE
+	# while validate_process.sh runs the renderer from WORKSPACE_PATH.
+	script = _renderer_dependency_step_script()
+	for renderer_in_workspace_path in (True, False):
+		with tempfile.TemporaryDirectory() as tmpdir:
+			root = Path(tmpdir)
+			github_workspace = root / "checkout"
+			workspace_path = root / "workspace"
+			runtime_dir = root / "runtime"
+			bin_dir = root / "bin"
+			for directory in (github_workspace, workspace_path / "scripts", runtime_dir, bin_dir):
+				directory.mkdir(parents=True)
+			if renderer_in_workspace_path:
+				(workspace_path / "scripts" / "render_validation_templates.py").touch()
+			python_shim = bin_dir / "python3"
+			python_shim.write_text(
+				"#!/bin/sh\n"
+				"[ \"$1\" = -I ] || exit 11\n"
+				"case \"$2\" in\n"
+				"  -m) case \"$3\" in\n"
+				"      venv) mkdir -p \"$4/bin\" && cp \"$0\" \"$4/bin/python\" && exit 0;;\n"
+				"      pip) exit 0;;\n"
+				"    esac; exit 12;;\n"
+				"  -c) exit 0;;\n"
+				"esac\n"
+				"exit 14\n",
+				encoding="utf-8",
+			)
+			python_shim.chmod(0o755)
+			github_output = root / "github_output"
+			env = os.environ.copy()
+			env.update({
+				"BASH_ENV": "",
+				"GITHUB_WORKSPACE": str(github_workspace),
+				"WORKSPACE_PATH": str(workspace_path),
+				"GITHUB_OUTPUT": str(github_output),
+				"PATH": f"{bin_dir}:{os.environ['PATH']}",
+				"RUNTIME_DIR": str(runtime_dir),
+			})
+			result = subprocess.run(
+				["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script],
+				cwd=github_workspace, env=env, capture_output=True, text=True, timeout=30,
+			)
+			assert result.returncode == 0, result.stdout + result.stderr
+			outputs = github_output.read_text(encoding="utf-8") if github_output.exists() else ""
+			if renderer_in_workspace_path:
+				assert (runtime_dir / "renderer-empty").is_dir()
+				assert (runtime_dir / "renderer-venv" / "bin" / "python").exists()
+				assert "renderer_state=prepared" in outputs
+			else:
+				assert not (runtime_dir / "renderer-empty").exists()
+				assert "renderer_state=absent" in outputs
+				assert str(workspace_path / "scripts" / "render_validation_templates.py") in result.stdout
+
+
+def test_skipped_renderer_preparation_surfaces_dependency_failure() -> None:
+	# Regression for #6521: a skipped preparation step was reported as
+	# "Trusted renderer runtime is unavailable", hiding the real cause.
+	process_text = VALIDATE_PROCESS.read_text(encoding="utf-8")
+	function_text = process_text.split("run_template_validation_harness_renderer()\n{", 1)[1].split("\n}\n", 1)[0]
+	function_text = "run_template_validation_harness_renderer()\n{" + function_text + "\n}\n"
+	with tempfile.TemporaryDirectory() as tmpdir:
+		root = Path(tmpdir)
+		runtime_dir = root / "runtime"
+		runtime_dir.mkdir()
+		for asset in (
+			".ai/validate.yml",
+			"scripts/render_validation_templates.py",
+			"scripts/templates/slot_manifest.schema.json",
+			"workflow-templates/validation-harness/_shared/_lib/tap_helpers.sh.j2",
+			"workflow-templates/validation-harness/_shared/tests/00_canary.sh.j2",
+			"workflow-templates/validation-harness/_shared/tests/90_tap_report.sh.j2",
+		):
+			asset_path = root / asset
+			asset_path.parent.mkdir(parents=True, exist_ok=True)
+			asset_path.touch()
+		env = os.environ.copy()
+		env.update({
+			"RUNTIME_DIR": str(runtime_dir),
+			"GENERATE_LOG_FILE": str(root / "renderer.log"),
+			"VALIDATION_RENDERER_DEPENDENCIES_READY": "false",
+			"VALIDATION_RENDERER_DEPENDENCIES_OUTCOME": "skipped",
+		})
+		env.pop("BASH_ENV", None)
+		result = subprocess.run(
+			["bash", "-c", function_text + "\nrun_template_validation_harness_renderer"],
+			cwd=root, env=env, capture_output=True, text=True, timeout=30,
+		)
+		assert result.returncode == 14, result.stdout + result.stderr
+		log_text = (root / "renderer.log").read_text(encoding="utf-8")
+		assert "dependency setup did not succeed (step outcome: skipped)" in log_text
+		assert "Trusted renderer runtime is unavailable" not in log_text
+		assert "::error::Template renderer dependency setup did not succeed (step outcome: skipped)" in result.stderr
+
+
 def test_validate_workflow_bootstraps_revalidate_lifecycle_ai_memory_schemas() -> None:
 	wf = _workflow_text()
 	assert "validation_history.v1.json" in wf
@@ -495,6 +636,9 @@ def main() -> int:
 	test_validate_workflow_passes_template_default_env()
 	test_renderer_dependency_step_isolates_workspace_imports_and_shell_startup()
 	test_renderer_dependency_preflight_blocks_rendering()
+	test_renderer_dependency_step_runs_after_unrelated_earlier_failure()
+	test_renderer_dependency_step_checks_renderer_in_workspace_path()
+	test_skipped_renderer_preparation_surfaces_dependency_failure()
 	test_validate_workflow_bootstraps_revalidate_lifecycle_ai_memory_schemas()
 	test_validate_workflow_bootstraps_codex_heartbeat_support()
 	test_codex_heartbeat_helper_contract()

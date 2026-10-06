@@ -2037,6 +2037,18 @@ run_template_validation_harness_renderer()
 		return 15
 	fi
 
+	# Report a skipped or failed renderer-preparation step before checking the
+	# runtime directory it creates; otherwise a skipped preparation surfaces as
+	# the misleading "runtime unavailable" message (#6521). Pure env check: no
+	# Python runs here. VALIDATION_RENDERER_DEPENDENCIES_OUTCOME defaults inside
+	# this helper because older workflow YAML does not export it.
+	if [ "${VALIDATION_RENDERER_DEPENDENCIES_READY:-true}" != "true" ]; then
+		local renderer_dependencies_message
+		renderer_dependencies_message="Template renderer dependency setup did not succeed (step outcome: ${VALIDATION_RENDERER_DEPENDENCIES_OUTCOME:-unknown}); renderer not invoked."
+		printf '%s\n' "${renderer_dependencies_message}" >> "${GENERATE_LOG_FILE}"
+		printf '::error::%s\n' "${renderer_dependencies_message}" >&2
+		return 14
+	fi
 	# Do not run even diagnostic Python probes from the credentialed workspace.
 	if [ -z "${RUNTIME_DIR:-}" ] || [ ! -d "${renderer_empty_dir}" ]; then
 		printf '%s\n' 'Trusted renderer runtime is unavailable; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
@@ -2058,10 +2070,6 @@ run_template_validation_harness_renderer()
 	if ! (cd "${renderer_empty_dir}" && "${renderer_python}" -I -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)') >/dev/null 2>&1; then
 		printf '%s\n' "Template renderer requires python3 >= 3.9 (detected: $(cd "${renderer_empty_dir}" && "${renderer_python}" -I -V 2>&1 || echo unknown))." >> "${GENERATE_LOG_FILE}"
 		return 17
-	fi
-	if [ "${VALIDATION_RENDERER_DEPENDENCIES_READY:-true}" != "true" ]; then
-		printf '%s\n' 'Template renderer dependency setup did not succeed; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
-		return 14
 	fi
 	renderer_workspace="$(pwd -P)"
 	# Resolve all paths before leaving the workspace. -I removes both the script
