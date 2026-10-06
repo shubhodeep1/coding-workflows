@@ -37,13 +37,16 @@ def judge_repo(tmp_path: Path, request: pytest.FixtureRequest):
 	git(root, "config", "user.email", "test@example.invalid")
 	if isinstance(request.param, tuple):
 		conflict_path = request.param[1]
+	elif request.param == "disjoint":
+		conflict_path = "src/app.py"
 	elif request.param == "newline":
 		conflict_path = "lines\nbreak.txt"
 	else:
 		conflict_path = ".github/workflows/ci.yml" if request.param else "conflict.txt"
 	conflicted = root / conflict_path
 	conflicted.parent.mkdir(parents=True, exist_ok=True)
-	conflicted.write_text("first\nshared\nbase\nlast\n" if request.param == "base-shared" else "first\nbase\nlast\n")
+	conflicted.write_text("base\n" if request.param == "disjoint" else
+	                      "first\nshared\nbase\nlast\n" if request.param == "base-shared" else "first\nbase\nlast\n")
 	(root / "untouched.txt").write_text("untouched\n")
 	git(root, "add", ".")
 	git(root, "commit", "-m", "base")
@@ -53,7 +56,8 @@ def judge_repo(tmp_path: Path, request: pytest.FixtureRequest):
 	if request.param == "deleted-ours":
 		conflicted.unlink()
 	else:
-		conflicted.write_text("first\n" + "\n" * 2000 + "ours\nlast\n" if request.param == "repeated" else
+		conflicted.write_text("ours\n" if request.param == "disjoint" else
+		                      "first\n" + "\n" * 2000 + "ours\nlast\n" if request.param == "repeated" else
 		                      "first\nshared\nours\nlast\n" if request.param == "base-shared" else
 		                      "first\n\nours\nlast\n" if request.param == "shared" else "first\nours\nlast\n")
 	git(root, "commit", "-am", "ours")
@@ -63,7 +67,8 @@ def judge_repo(tmp_path: Path, request: pytest.FixtureRequest):
 	if request.param == "deleted-theirs":
 		conflicted.unlink()
 	else:
-		conflicted.write_text("first\n" + "\n" * 2000 + "theirs\nlast\n" if request.param == "repeated" else
+		conflicted.write_text("theirs\n" if request.param == "disjoint" else
+		                      "first\n" + "\n" * 2000 + "theirs\nlast\n" if request.param == "repeated" else
 		                      "first\nshared\ntheirs\nlast\n" if request.param == "base-shared" else
 		                      "first\n\ntheirs\nlast\n" if request.param == "shared" else "first\ntheirs\nlast\n")
 	git(root, "commit", "-am", "theirs")
@@ -211,6 +216,7 @@ def test_protected_resolution_retains_shared_duplicate_counts(judge_repo):
 @pytest.mark.parametrize("judge_repo,content", [
 	(True, ""),
 	(("path", "scripts/helper.sh"), ""),
+	(("path", "src/app.py"), ""),
 	("base-shared", "first\nours\ntheirs\nlast\n"),
 	(True, "first\nours\ntheirs\n"),
 	("shared", "first\nours\ntheirs\nlast\n"),
@@ -237,7 +243,7 @@ def test_protected_conflict_accepts_either_whole_side(judge_repo, content):
 	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() == before
 
 
-@pytest.mark.parametrize("judge_repo", [("path", "src/app.py")], indirect=True)
+@pytest.mark.parametrize("judge_repo", ["disjoint"], indirect=True)
 def test_unprotected_conflict_accepts_empty_resolution(judge_repo):
 	wt, baseline, remote, before, conflict_path, run = judge_repo
 	(wt / conflict_path).write_text("")
@@ -249,8 +255,8 @@ def test_unprotected_conflict_accepts_empty_resolution(judge_repo):
 
 
 def test_integration_judge_prompt_requires_shared_line_retention():
-	assert "keep every line both merge sides contain" in POLL_SCRIPT
-	assert "at least as many times as the side with fewer copies" in POLL_SCRIPT
+	assert "keep every line both merge sides contain at least as" in POLL_SCRIPT
+	assert "many times as the side with fewer copies" in POLL_SCRIPT
 
 
 @pytest.mark.parametrize("judge_repo", [("path", "src/app.py")], indirect=True)
