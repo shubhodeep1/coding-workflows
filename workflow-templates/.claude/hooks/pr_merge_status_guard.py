@@ -481,7 +481,8 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				invocations.append(_GitInvocation(checkout, {}, "push", [], "unparsed env wrapper", True))
 			continue
 		env_cwd = working_directory
-		if index != env_index:
+		env_wrapped = index != env_index
+		if env_wrapped:
 			config_override = True
 			for position in range(env_index + 1, index):
 				word = tokens[position]
@@ -539,7 +540,11 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			checkout if uncertain else git_cwd or checkout,
 			{} if uncertain else environment,
 			tokens[index], tokens[index + 1:],
-			"could not resolve git command directory; checking the session checkout instead" if uncertain else "",
+			(
+				"could not resolve env command directory; checking the session checkout instead"
+				if uncertain and env_cwd is None and env_wrapped else
+				"could not resolve git command directory; checking the session checkout instead" if uncertain else ""
+			),
 			config_override,
 		))
 	return invocations
@@ -1488,6 +1493,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	bulk_reasons: list[str] = []
 	unverified_destinations: set[str] = set()
 	uncertain_push_reasons: list[str] = []
+	uncertain_commit_reasons: list[str] = []
 	unknown_destination_reasons: list[str] = []
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
@@ -1514,6 +1520,9 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 				bulk_reasons.append(target.bulk)
 			if target.warning.startswith("could not resolve git push"):
 				unknown_destination_reasons.append(target.warning)
+				continue
+			if target.warning.startswith("could not resolve env command directory") and invocation.subcommand != "push":
+				uncertain_commit_reasons.append(target.warning)
 				continue
 			if target.warning:
 				_warn(target.warning)  # Unresolved directory: the session checkout is checked.
@@ -1601,6 +1610,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	if blocks:
 		return 2, "\n\n".join(blocks)
 	confirmation_reasons: list[str] = []
+	confirmation_reasons.extend(uncertain_commit_reasons)
 	if uncertain_push_reasons:
 		confirmation_reasons.append(
 			"could not resolve git push repository; the session checkout may not be the pushed repository. "
