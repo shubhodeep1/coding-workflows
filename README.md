@@ -1500,7 +1500,8 @@ through `clarify → plan → implement → review`.
   Free-form step names and error signatures are represented only by SHA-256
   fingerprints. Their editor processes drop GitHub/Telegram credentials and the
   raw-evidence directory pointer, and temporarily hide git
-  checkout credentials; network access for the model remains available. The
+  checkout credentials (including a split `WORKSPACE_PATH` checkout); network
+  access for the model remains available. The
   credential helper rejects failed hides/restores and restores auth only when
   the origin still names the workflow's original repository (or its trusted
   support checkout) and its push URL agrees, not an editor-changed GitHub destination;

@@ -473,7 +473,8 @@ a new value, add it to the appropriate overrides file with a
   fallback use the same container. Missing isolation fails closed.
   A preceding env scrub drops GH_TOKEN, GH_PAT, GITHUB_TOKEN, Telegram and
   Actions runtime credentials; `scripts/editor_git_credentials.sh` hides git
-  origin/extraheader auth for the editor and restores it after each launch.
+  origin/extraheader auth for the editor and restores it after each launch,
+  including a split `WORKSPACE_PATH` checkout alongside `GITHUB_WORKSPACE`.
   Both launches and the later syntax-repair restore execute only bytes matching
   the pre-editor stage output's SHA-256, loaded into shell memory; an unmatched
   helper fails closed rather than restoring auth from an editor-writable file.

@@ -54,6 +54,26 @@ def test_git_credentials_hidden_and_restored_without_marker_secrets(tmp_path: Pa
 	assert "newsecret" not in (repo / ".git" / "config").read_text()
 
 
+def test_split_workspace_credentials_are_hidden_and_checked(tmp_path: Path) -> None:
+	host = tmp_path / "host"
+	workspace = tmp_path / "workspace"
+	for checkout in (host, workspace):
+		checkout.mkdir()
+		_git(checkout, "init", "-q")
+		_git(checkout, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(host),
+		WORKSPACE_PATH=str(workspace), GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	subprocess.run(["bash", str(HELPER), "hide"], cwd=workspace, env=env, check=True, capture_output=True)
+	for checkout in (host, workspace):
+		assert "oldsecret" not in (checkout / ".git" / "config").read_text()
+	_git(workspace, "config", "--local", "filter.evil.clean", "sh -c true")
+	result = subprocess.run(["bash", str(HELPER), "restore"], cwd=workspace, env=env, capture_output=True, text=True)
+	assert result.returncode != 0 and "reason=config_hazard" in result.stderr
+	for checkout in (host, workspace):
+		assert "newsecret" not in (checkout / ".git" / "config").read_text()
+	assert subprocess.run(["bash", str(HELPER), "check"], cwd=workspace, env=env, capture_output=True).returncode != 0
+
+
 def test_restore_does_not_send_token_to_an_editor_changed_origin(tmp_path: Path) -> None:
 	repo = tmp_path / "repo"
 	repo.mkdir()
