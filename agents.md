@@ -239,6 +239,15 @@ Phases of the unattended pipeline (each is a separate workflow file under
     git auth. Post-editor implementation commits and pushes disable Git hooks.
     Hiding/restoring git auth fails the editor step on error; restoration
     verifies the workflow repository identity, not merely the GitHub host.
+    Plan and implement pin the staged credential helper's hash before the editor,
+    then run matching bytes from shell memory; plan also runs its editor runner
+    from memory so in-place changes cannot alter its post-editor restore.
+    Pinned helper Bash processes drop `BASH_ENV`/`ENV`, and the syntax-repair
+    and post-repair restore steps start with `BASH_ENV` unset; an editor-written
+    workspace startup file cannot run before those credentialed steps. The
+    implementation step likewise starts with `BASH_ENV` empty and enters the
+    workspace explicitly; each editor attempt replaces the startup file before
+    later steps source it, clearing the inherited setting first on failure.
     Heal-evidence implement runs pin the issue/plan scope allowlist before the
     editor; preflight and commit ignore scope bypass variables and block empty
     allowlists. This is not a same-uid process isolation boundary.
@@ -459,6 +468,9 @@ a new value, add it to the appropriate overrides file with a
   A preceding env scrub drops GH_TOKEN, GH_PAT, GITHUB_TOKEN, Telegram and
   Actions runtime credentials; `scripts/editor_git_credentials.sh` hides git
   origin/extraheader auth for the editor and restores it after each launch.
+  Both launches and the later syntax-repair restore execute only bytes matching
+  the pre-editor stage output's SHA-256, loaded into shell memory; an unmatched
+  helper fails closed rather than restoring auth from an editor-writable file.
   It fails closed (exit 1, log prefix `EDITOR_GIT_CREDENTIALS … reason=…`):
   hide refuses before the editor starts, and restore refuses before any token
   is injected, when a checkout's origin is not its trusted repository or was

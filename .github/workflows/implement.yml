@@ -992,6 +992,7 @@ jobs:
           fetch-depth: 1
 
       - name: Stage workflow support files
+        id: stage_support
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
           set -euo pipefail
@@ -1039,6 +1040,13 @@ jobs:
             # Intentionally NOT adding scripts/${f} to FETCHED_MANIFEST —
             # see the persistence note above the loop.
           done
+
+          editor_git_credentials_sha256="$(printf '%s\n' "$(cat -- scripts/editor_git_credentials.sh)" | sha256sum | awk '{print $1}')"
+          if [[ ! "${editor_git_credentials_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo '::error::Unable to pin staged git credentials helper'
+            exit 1
+          fi
+          echo "editor_git_credentials_sha256=${editor_git_credentials_sha256}" >> "$GITHUB_OUTPUT"
 
           src=".codex-workflow-src/scripts/claude_settings.json.tmpl"
           if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/claude_settings.json.tmpl" ]; then
@@ -2165,6 +2173,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         id: implement_run
         env:
+          BASH_ENV: ''
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_IMPLEMENT || '50' }}
           # Legacy idle-time knob retained for backward compatibility; when a
@@ -2194,8 +2203,10 @@ jobs:
           # is always false and the per-attempt failure diagnostics
           # never reach the source issue.
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          EDITOR_GIT_CREDENTIALS_SHA256: ${{ steps.stage_support.outputs.editor_git_credentials_sha256 }}
         run: |
           set -euo pipefail
+          cd "${WORKSPACE_PATH}"
 
           # Source sanitize_codex_prompt_file (best-effort). Codex
           # CLI's stdin reader strictly validates UTF-8; any invalid
@@ -2714,7 +2725,28 @@ jobs:
             # shellcheck source=/dev/null
             source scripts/codex_thread_reuse.sh
 
-            trap 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" restore' EXIT
+            # The editor can rewrite both the checkout and runtime copies.
+            # Hash the exact bytes executed against the pre-editor step output.
+            _egc_pin="${EDITOR_GIT_CREDENTIALS_SHA256:-}"
+            _egc_src=""
+            if [[ "${_egc_pin}" =~ ^[0-9a-f]{64}$ ]]; then
+              for _egc_cand in "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" scripts/editor_git_credentials.sh .codex-workflow-src/scripts/editor_git_credentials.sh .codex-workflow-src-main/scripts/editor_git_credentials.sh; do
+                [ -f "${_egc_cand}" ] || continue
+                _egc_body="$(cat -- "${_egc_cand}")" || continue
+                if [ "$(printf '%s\n' "${_egc_body}" | sha256sum | awk '{print $1}')" = "${_egc_pin}" ]; then
+                  _egc_src="${_egc_body}"
+                  break
+                fi
+              done
+            fi
+            if [ -z "${_egc_src}" ]; then
+              echo 'EDITOR_GIT_CREDENTIALS action=load outcome=refused reason=pinned_helper_unavailable' >&2
+              exit 1
+            fi
+            EDITOR_GIT_CREDENTIALS_SCRIPT="${_egc_src}"
+            editor_git_credentials() { env -u BASH_ENV -u ENV bash -c "${EDITOR_GIT_CREDENTIALS_SCRIPT}" editor_git_credentials.sh "$@"; }
+
+            trap 'editor_git_credentials restore' EXIT
 
             for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex implement attempt ${attempt}/${max_attempts}..."
@@ -2862,7 +2894,7 @@ jobs:
             # unsynced integration branch checks out an older conftest.py, so
             # the workflow side has to hold on its own.
             # heal-evidence-privileged-prompt-injection: scrub child credentials.
-            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" hide
+            editor_git_credentials hide
             CODEX_THREAD_REUSE_STATE_KEY="implement" \
               CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT:-codex}" \
               CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT" \
@@ -2880,7 +2912,18 @@ jobs:
               env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \
               bash scripts/codex_thread_reuse.sh direct-run || cmd_rc=$?
 
-            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" restore
+            # The editor can replace the job's workspace-shell.env. Keep the
+            # next step clear of it until a fresh startup file is installed.
+            echo 'BASH_ENV=' >> "$GITHUB_ENV"
+            workspace_shell_env_clean="$(mktemp "${RUNTIME_DIR}/workspace-shell.XXXXXX")"
+            printf '%s\n' \
+              'if [ -n "${WORKSPACE_PATH:-}" ] && [ -d "${WORKSPACE_PATH}" ]; then' \
+              '  cd "${WORKSPACE_PATH}"' \
+              'fi' > "${workspace_shell_env_clean}"
+            mv -fT -- "${workspace_shell_env_clean}" "${RUNTIME_DIR}/workspace-shell.env"
+            echo "BASH_ENV=${RUNTIME_DIR}/workspace-shell.env" >> "$GITHUB_ENV"
+
+            editor_git_credentials restore
 
             emit_implement_substate "implement" "implement" "Finishing" "${attempt}" "${attempt_log_file}"
 
@@ -3743,10 +3786,31 @@ jobs:
         id: post_codex_syntax_repair
         continue-on-error: true
         env:
+          BASH_ENV: ''
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          EDITOR_GIT_CREDENTIALS_SHA256: ${{ steps.stage_support.outputs.editor_git_credentials_sha256 }}
         run: |
           set -euo pipefail
+          cd "${WORKSPACE_PATH}"
+          _egc_pin="${EDITOR_GIT_CREDENTIALS_SHA256:-}"
+          _egc_src=""
+          if [[ "${_egc_pin}" =~ ^[0-9a-f]{64}$ ]]; then
+            for _egc_cand in "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" scripts/editor_git_credentials.sh .codex-workflow-src/scripts/editor_git_credentials.sh .codex-workflow-src-main/scripts/editor_git_credentials.sh; do
+              [ -f "${_egc_cand}" ] || continue
+              _egc_body="$(cat -- "${_egc_cand}")" || continue
+              if [ "$(printf '%s\n' "${_egc_body}" | sha256sum | awk '{print $1}')" = "${_egc_pin}" ]; then
+                _egc_src="${_egc_body}"
+                break
+              fi
+            done
+          fi
+          if [ -z "${_egc_src}" ]; then
+            echo 'EDITOR_GIT_CREDENTIALS action=load outcome=refused reason=pinned_helper_unavailable' >&2
+            exit 1
+          fi
+          EDITOR_GIT_CREDENTIALS_SCRIPT="${_egc_src}"
+          editor_git_credentials() { env -u BASH_ENV -u ENV bash -c "${EDITOR_GIT_CREDENTIALS_SCRIPT}" editor_git_credentials.sh "$@"; }
           echo "repaired=false" >> "$GITHUB_OUTPUT"
 
           # Source sanitize_codex_prompt_file (best-effort) so the
@@ -4133,7 +4197,7 @@ jobs:
             emit_implement_substate "implement_repair" "implement_repair" "InitializingSession" "${attempt}" "${REPAIR_LOG_FILE}"
             emit_implement_substate "implement_repair" "implement_repair" "StreamingTurn" "${attempt}" "${REPAIR_LOG_FILE}"
             # Same ledger scrub as the implementation launch above.
-            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" hide
+            editor_git_credentials hide
             if ! CODEX_THREAD_REUSE_STATE_KEY="implement-repair" \
               CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex}" \
               CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT_REPAIR" \
@@ -4150,13 +4214,29 @@ jobs:
               env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_CHAT_ID -u TG_ADMIN_CHAT_ID -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH \
               env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \
               bash scripts/codex_thread_reuse.sh direct-run; then
-              bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" restore
+              echo 'BASH_ENV=' >> "$GITHUB_ENV"
+              workspace_shell_env_clean="$(mktemp "${RUNTIME_DIR}/workspace-shell.XXXXXX")"
+              printf '%s\n' \
+                'if [ -n "${WORKSPACE_PATH:-}" ] && [ -d "${WORKSPACE_PATH}" ]; then' \
+                '  cd "${WORKSPACE_PATH}"' \
+                'fi' > "${workspace_shell_env_clean}"
+              mv -fT -- "${workspace_shell_env_clean}" "${RUNTIME_DIR}/workspace-shell.env"
+              echo "BASH_ENV=${RUNTIME_DIR}/workspace-shell.env" >> "$GITHUB_ENV"
+              editor_git_credentials restore
               emit_implement_substate "implement_repair" "implement_repair" "Finishing" "${attempt}" "${REPAIR_LOG_FILE}"
               echo "::warning::Post-Codex repair attempt ${attempt} failed while invoking Codex."
               emit_implement_substate "implement_repair" "implement_repair" "Failed" "${attempt}" "${REPAIR_LOG_FILE}"
               continue
             fi
-            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" restore
+            echo 'BASH_ENV=' >> "$GITHUB_ENV"
+            workspace_shell_env_clean="$(mktemp "${RUNTIME_DIR}/workspace-shell.XXXXXX")"
+            printf '%s\n' \
+              'if [ -n "${WORKSPACE_PATH:-}" ] && [ -d "${WORKSPACE_PATH}" ]; then' \
+              '  cd "${WORKSPACE_PATH}"' \
+              'fi' > "${workspace_shell_env_clean}"
+            mv -fT -- "${workspace_shell_env_clean}" "${RUNTIME_DIR}/workspace-shell.env"
+            echo "BASH_ENV=${RUNTIME_DIR}/workspace-shell.env" >> "$GITHUB_ENV"
+            editor_git_credentials restore
             emit_implement_substate "implement_repair" "implement_repair" "Finishing" "${attempt}" "${REPAIR_LOG_FILE}"
 
             tracked_strays=()
@@ -4248,8 +4328,31 @@ jobs:
       - name: Restore git credentials after syntax repair
         if: always() && env.SKIP_IMPLEMENT != 'true' && steps.post_codex_syntax_repair.outcome != 'skipped'
         env:
+          BASH_ENV: ''
           GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" restore
+          EDITOR_GIT_CREDENTIALS_SHA256: ${{ steps.stage_support.outputs.editor_git_credentials_sha256 }}
+        run: |
+          set -euo pipefail
+          cd "${WORKSPACE_PATH}"
+          _egc_pin="${EDITOR_GIT_CREDENTIALS_SHA256:-}"
+          _egc_src=""
+          if [[ "${_egc_pin}" =~ ^[0-9a-f]{64}$ ]]; then
+            for _egc_cand in "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" scripts/editor_git_credentials.sh .codex-workflow-src/scripts/editor_git_credentials.sh .codex-workflow-src-main/scripts/editor_git_credentials.sh; do
+              [ -f "${_egc_cand}" ] || continue
+              _egc_body="$(cat -- "${_egc_cand}")" || continue
+              if [ "$(printf '%s\n' "${_egc_body}" | sha256sum | awk '{print $1}')" = "${_egc_pin}" ]; then
+                _egc_src="${_egc_body}"
+                break
+              fi
+            done
+          fi
+          if [ -z "${_egc_src}" ]; then
+            echo 'EDITOR_GIT_CREDENTIALS action=load outcome=refused reason=pinned_helper_unavailable' >&2
+            exit 1
+          fi
+          EDITOR_GIT_CREDENTIALS_SCRIPT="${_egc_src}"
+          editor_git_credentials() { env -u BASH_ENV -u ENV bash -c "${EDITOR_GIT_CREDENTIALS_SCRIPT}" editor_git_credentials.sh "$@"; }
+          editor_git_credentials restore
 
       - name: Protect workflow files from implementation edits
         if: env.SKIP_IMPLEMENT != 'true'
