@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The skip comes from one line, `if not is_protected_conflict_path(path): continue` in `scripts/orchestrate_poll_process.sh:8875`. Any conflicted file outside the protected globs at lines 8801\u20138812 therefore gets no provenance check. That includes `src/app.py`, because `.py` is only protected at the repo root as `noxfile.py`. Removing the skip applies the checks that already exist (no invented lines, no removed shared lines, side order kept, no added duplicates, work limit) to every conflicted path. A failed check is rejected without a push, and the existing retry, lifetime-cap and escalation path already handles it. Option B relies on a list of extensions, which fails open for any extension not on the list (templates, `.html` with embedded scripts, `.sql`, `.vue`, shebang scripts with no extension). Option C adds a branch for humans to review, which goes against \u00a720 automation bias.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/orchestrate_poll_process.sh lines 8799\u20138820: `PROTECTED_*` globs and `is_protected_conflict_path`.\n    - scripts/orchestrate_poll_process.sh lines 8873\u20138950: the provenance loop. It contains the skip at 8875, raises errors such as \"deleted protected conflict\", \"invented protected line\" and \"reordered or duplicated protected line\", and logs `log(\"rejected\", \"protected_path_provenance\", ...)`.\n    - scripts/orchestrate_poll_process.sh lines 8682\u20138687: the judge prompt text (\"lines in conflicted protected paths that come from neither merge side \u2026 Protected paths include \u2026\"). The issue's \"Rule 4\" wording refers to this prompt text, which is embedded in the script and not stored in `prompts/`.\n    - tests/test_orchestrate_poll_process.py: the integration-judge scope and provenance tests. Per the finding, these tests currently show an invented line in a non-protected file such as `src/app.py` being accepted and pushed.\n    - agents.md \"Trusted copies\" paragraph (\"conflicted protected paths (...) may contain only lines from either side ...\").\n  steps:\n    - Delete the `if not is_protected_conflict_path(path): continue` skip so the provenance loop runs for every path in `conflicts`. Keep `is_protected_conflict_path` and the `PROTECTED_*` constants (\u00a710). The comment at line 8799 says they stay in sync with `PROTECTED_SKIP_SUPPRESSED`.\n    - Keep the stable log prefix and reason token `INTEGRATION_JUDGE_SCOPE \u2026 reason=protected_path_provenance` unchanged for log compatibility. Keep the existing ValueError messages, or add new messages alongside them without renaming any reason token.\n    - The checks now also apply to deleting a conflicted non-protected file and to a mode change on one, so both are rejected. This is intended and fails closed.\n    - Rewrite the judge prompt text at lines 8682\u20138687 to say that every conflicted file may contain only lines taken from either merge side, keeping each side's order and shared lines, and that any new line rejects the resolution without a push. Drop the \"Protected paths include \u2026\" list, or keep it only as a note on mode and deletion handling.\n    - In tests/test_orchestrate_poll_process.py, change the test that currently accepts invented lines in a non-protected source file (such as `src/app.py`) so it expects `outcome=rejected` and no push. Add a test that a non-protected file resolved purely from the two sides' lines is still accepted and pushed.\n    - Update the agents.md \"Trusted copies\" paragraph to say the provenance checks apply to all conflicted paths. Add a `changelog.d/<issue>-integration-judge-provenance-all-paths.md` fragment.\n    - Target the PR at integration branch `claude/lucid-ptolemy-f20vwu`. It exists at 576024b52870 according to GITHUB FACTS. In the PR body, link to tracker #3576 with `Refs #3576` only; #3576 is the open security-audit tracker and must not be auto-closed.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: This applies the finding's recommendation (\"Apply deterministic parent-blob provenance checks to executable source conflicts too\") with the widest scope that cannot fail open. A judge that only recombines the two sides' lines cannot add executable content that nobody reviewed. A resolution that really needs a new line goes to the existing escalation path and is never pushed.\n  reversibility: Putting the one-line skip back restores the old behaviour exactly. A narrower list like option B could be added later as an allowlist without changing the rest of the code.",
+  "fingerprint": "df3ec2a7604fc405b9968c3a19ada60a2ca3cbd455ebb69ec63a35d9fe58bd14",
+  "lineage": {
+    "issue_number": 6477,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37410585136",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37410585136",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6477"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261006035508_334f96facb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6477,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37410585136"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6477",
+  "timestamps": {
+    "created_at": "2026-10-06T03:55:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
