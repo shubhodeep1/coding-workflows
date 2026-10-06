@@ -422,14 +422,15 @@ jobs:
             exit 1
           fi
           # test-and-mark-stable.yml hard-rejects any dispatch ref
-          # other than `stable`, so we MUST pass `--ref stable` here.
+          # other than refs/heads/stable, so we MUST pass the fully
+          # qualified branch ref here (`stable` is also a tag).
           # The release job tags the just-fast-forwarded commit on
           # stable and `gh release create` targets the stable branch.
           # Passing `version_tag` explicitly overrides
           # test-and-mark-stable.yml's auto-bump (which would patch-
           # bump) — promote runs are minor/major by definition.
           gh workflow run test-and-mark-stable.yml \
-            --ref stable \
+            --ref refs/heads/stable \
             -f version_tag="${RESOLVED_VERSION}" \
             -f test_repo="${TEST_REPO_INPUT}" \
             -f skip_e2e="${SKIP_E2E_INPUT}" \
