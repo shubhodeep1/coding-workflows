@@ -660,6 +660,9 @@ def test_self_resolving_security_hold_sends_no_alert(tmp_path: Path, hold_reason
 	"skip_reason, shown",
 	[
 		("security_hold_dispatch_failed", "dispatch_failed"),
+		("security_hold_followups_missing", "followups_missing"),
+		("security_hold_followups_unverifiable", "followups_unverifiable"),
+		("security_hold_followups_stalled", "followups_stalled"),
 		("security_hold_exhausted_without_completed_audit", "exhausted_without_completed_audit"),
 		("security_hold_gate_failed", "gate_failed"),
 		("security_hold_markers_unverifiable", "markers_unverifiable"),

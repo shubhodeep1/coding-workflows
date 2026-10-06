@@ -35,9 +35,11 @@
 #           A dispatch that fails (for example a consumer wrapper without the
 #           `pr_number` input) holds the merge for a later retry.
 #           Every hold=true also writes `hold_reason=<reason>`: audit_dispatched,
-#           audit_pending or awaiting_followups when the pipeline resolves the
-#           hold by itself; markers_unverifiable, extensions_unverifiable,
-#           label_write_failed, pending_marker_failed, cycles_exhausted,
+#           audit_pending or awaiting_followups when matching open follow-ups
+#           are younger than the limit; followups_missing,
+#           followups_unverifiable, followups_stalled, markers_unverifiable,
+#           extensions_unverifiable, label_write_failed, pending_marker_failed,
+#           cycles_exhausted,
 #           exhausted_without_completed_audit or dispatch_failed otherwise.
 #           review_rb_judge.sh passes it on so a judge merge held here alerts
 #           only when a human is needed.
@@ -64,8 +66,9 @@
 # API budget (CLAUDE.md §15). gate: none for an ineligible PR; for an eligible
 # one, reuses the PR payload and comments the review job already fetched, plus
 # at most 3 GETs for the skip check and one /user identity read (the gate
-# job's /user result is not exported), then one dispatch and up to
-# SECURITY_PASS_PENDING_MARKER_ATTEMPTS pending-marker POSTs (default 3,
+# job's /user result is not exported), plus one paginated open ai:security
+# issue listing only for current-head findings in gate mode, then one dispatch
+# and up to SECURITY_PASS_PENDING_MARKER_ATTEMPTS pending-marker POSTs (default 3,
 # valid range 1-10; backoff base defaults to 5s, range 0-30s), or one label
 # write. report: one PR read to bind the audit inputs, one /user
 # identity read, one paginated comments read, one comment and at most one dispatch.
@@ -254,16 +257,63 @@ single_pass_review_workflow()
 	fi
 }
 
+# Input: PR head ref. Output: integer matching open follow-up count. The PR
+# payload and cached PR comments lack issue state, and LINKED_ISSUES_JSON lists
+# issues the PR closes, not audit follow-ups. Only gate-mode current-head
+# findings call this: one paginated issues listing (one API call per page).
+# An incomplete or malformed listing returns 1 so the gate holds and pages.
+single_pass_open_followups()
+{
+	local followup_ref="$1" followup_file followup_total
+	followup_file="$(mktemp)" || return 1
+	if ! { if type gh_retry >/dev/null 2>&1; then
+		gh_retry gh api --paginate --slurp "repos/${REPOSITORY}/issues?labels=ai:security&state=open&per_page=100"
+	else
+		gh api --paginate --slurp "repos/${REPOSITORY}/issues?labels=ai:security&state=open&per_page=100"
+	fi; } > "${followup_file}" 2>/dev/null \
+		|| [ ! -s "${followup_file}" ] \
+		|| ! jq -e 'type == "array" and all(.[]; type == "array")' "${followup_file}" >/dev/null 2>&1; then
+		rm -f "${followup_file}"
+		return 1
+	fi
+	if ! followup_total="$(jq -r --arg ref "${followup_ref}" --arg author "${SECURITY_PASS_AUTHOR_LOGIN}" '
+		[.[][] | select(type == "object" and .pull_request == null and .user.login == $author and .state == "open")
+		| select((.body | type) == "string")
+		| select(.body | split("\n") | any(.[];
+			gsub("^\\s+|\\s+$"; "") | sub("^-\\s*"; "")
+			| if startswith("Integration branch:") then ltrimstr("Integration branch:")
+			  elif startswith("**Integration branch:**") then ltrimstr("**Integration branch:**")
+			  else "" end
+			| gsub("^\\s+|\\s+$"; "") | sub("^`"; "") | sub("`$"; "")
+			| gsub("^\\s+|\\s+$"; "") | . == $ref))] | length
+	' "${followup_file}" 2>/dev/null)"; then
+		rm -f "${followup_file}"
+		return 1
+	fi
+	rm -f "${followup_file}"
+	printf '%s\n' "${followup_total}"
+}
+
+single_pass_marker_age_hours()
+{
+	local created_at="$1" marker_hours
+	marker_hours="$(python3 -c 'import datetime,sys; t=datetime.datetime.fromisoformat(sys.argv[1].replace("Z","+00:00")); assert t.tzinfo is not None; print(int((datetime.datetime.now(datetime.timezone.utc)-t).total_seconds()//3600))' "${created_at}" 2>/dev/null)" || marker_hours=""
+	# A missing or invalid date cannot justify silencing a security hold.
+	printf '%s\n' "${marker_hours:-999999}"
+}
+
 single_pass_gate()
 {
 	local pr_json="${PR_PAYLOAD_FILE:-}" comments="${PR_ISSUE_COMMENTS_FILE:-}" default_branch="${DEFAULT_BRANCH:-}"
 	local max_cycles="${MAX_SECURITY_PASS_CYCLES:-5}" stale_hours="${SECURITY_PASS_PENDING_STALE_HOURS:-6}"
+	local followup_stale_hours="${SECURITY_PASS_FOLLOWUP_STALE_HOURS:-24}" followup_count followup_age
 	local exhausted_head_limit="${SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS:-2}" exhausted_retry="false" head_attempts=0
 	local pattern="${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}"
 	local state base head_ref head_sha head_repo labels linked skip_json markers latest latest_status latest_head latest_created
 	local cycles_used next_cycle age_hours workflow body extensions effective_max completed_findings
 	[[ "${max_cycles}" =~ ^[1-9][0-9]*$ ]] || max_cycles=5
 	[[ "${stale_hours}" =~ ^[1-9][0-9]*$ ]] || stale_hours=6
+	[[ "${followup_stale_hours}" =~ ^[1-9][0-9]*$ ]] || followup_stale_hours=24
 	[[ "${exhausted_head_limit}" =~ ^[1-9][0-9]*$ ]] || exhausted_head_limit=2
 	if [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-true}" = "false" ]; then
 		single_pass_log "mode=gate pr=${PR_NUMBER:-} outcome=skip reason=disabled"
@@ -355,6 +405,24 @@ single_pass_gate()
 	if [ "${latest_status}" = "findings" ] && [ "${latest_head}" = "${head_sha}" ] && [ "${cycles_used}" -lt "${effective_max}" ]; then
 		# The follow-up fixes merge into this branch and change the head; the
 		# next cycle audits that head.
+		if [ "${SINGLE_PASS_STATUS_ONLY}" != "true" ]; then
+			if ! followup_count="$(single_pass_open_followups "${head_ref}")"; then
+				single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=followups_unverifiable cycle=${cycles_used}"
+				single_pass_output true followups_unverifiable
+				return 0
+			fi
+			if [ "${followup_count}" -eq 0 ]; then
+				single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=followups_missing cycle=${cycles_used}"
+				single_pass_output true followups_missing
+				return 0
+			fi
+			followup_age="$(single_pass_marker_age_hours "${latest_created}")"
+			if [ "${followup_age}" = "999999" ] || [ "${followup_age}" -ge "${followup_stale_hours}" ]; then
+				single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=followups_stalled cycle=${cycles_used} followups=${followup_count} age_hours=${followup_age}"
+				single_pass_output true followups_stalled
+				return 0
+			fi
+		fi
 		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=awaiting_followups cycle=${cycles_used}"
 		single_pass_state findings
 		single_pass_output true awaiting_followups

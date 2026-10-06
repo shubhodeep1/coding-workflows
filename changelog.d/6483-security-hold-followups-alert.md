@@ -1,0 +1,2 @@
+<!-- changelog: security -->
+- **Alert on missing or stalled single-issue security follow-ups.** A findings hold only suppresses the review-blocked judge's CRITICAL alert while a pipeline-created follow-up remains open for the PR branch and the findings marker is less than 24 hours old. Missing, unverifiable or stalled follow-ups keep auto-merge held and page a human instead of waiting silently. `SECURITY_PASS_FOLLOWUP_STALE_HOURS` adjusts the 24-hour limit.

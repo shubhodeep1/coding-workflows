@@ -42,6 +42,11 @@ if args[:2] == ["api", "repos/o/r/pulls/42"]:
 	sys.exit(0)
 if args[:2] == ["api", "repos/o/r/issues/42/labels"] and "label" in fail:
 	sys.exit(1)
+if "repos/o/r/issues?labels=ai:security&state=open&per_page=100" in args:
+	if "followups" in fail:
+		sys.exit(1)
+	print(open(os.environ["FAKE_GH_SECURITY_ISSUES"]).read(), end="")
+	sys.exit(0)
 if args[:2] == ["api", "repos/o/r/issues/42/comments"]:
 	if "comment_write" in fail and (fail != "comment_write_once" or sum(
 		json.loads(line)[:2] == args[:2] for line in open(os.environ["FAKE_GH_LOG"])
@@ -113,7 +118,7 @@ def _pr(base: str = "main", head_ref: str = "ai/issue-7", head_repo: str = "o/r"
 	}
 
 
-def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | None = None, env: dict | None = None, skip: bool = False):
+def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | None = None, env: dict | None = None, skip: bool = False, security_issues: list | str | None = None):
 	bin_dir = tmp_path / "bin"
 	bin_dir.mkdir(exist_ok=True)
 	gh = bin_dir / "gh"
@@ -129,6 +134,9 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 	)
 	(tmp_path / "pr.json").write_text(json.dumps(pr or _pr()), encoding="utf-8")
 	(tmp_path / "comments.json").write_text(json.dumps(comments or []), encoding="utf-8")
+	if security_issues is None:
+		security_issues = [[{"state": "open", "body": "- Integration branch: `ai/issue-7`", "user": {"login": login}} for login in ("owner", "github-actions[bot]")]]
+	(tmp_path / "security_issues.json").write_text(security_issues if isinstance(security_issues, str) else json.dumps(security_issues), encoding="utf-8")
 	log = tmp_path / "calls.log"
 	log.write_text("", encoding="utf-8")
 	output = tmp_path / "output"
@@ -138,6 +146,7 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 		PATH=f"{bin_dir}:{os.environ['PATH']}",
 		FAKE_GH_LOG=str(log),
 		FAKE_GH_COMMENTS=str(tmp_path / "comments.json"),
+		FAKE_GH_SECURITY_ISSUES=str(tmp_path / "security_issues.json"),
 		FAKE_GH_PR=str(tmp_path / "pr.json"),
 		FAKE_GIT_HEAD=HEAD,
 		GITHUB_OUTPUT=str(output),
@@ -151,7 +160,7 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 		SUPPORT_SCRIPTS_DIR=str(support),
 		GITHUB_WORKSPACE=str(tmp_path),
 	)
-	for name in ("SINGLE_ISSUE_SECURITY_PASS_ENABLED", "MAX_SECURITY_PASS_CYCLES", "ORCH_INTEGRATION_BRANCH_PATTERN", "SECURITY_PASS_PENDING_STALE_HOURS", "SECURITY_PASS_PENDING_MARKER_ATTEMPTS", "SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS", "SECURITY_PASS_AUTHOR_LOGIN_FALLBACK", "FAKE_GIT_ANCESTORS", "FAKE_GIT_SHALLOW", "FAKE_GIT_FETCH_FAIL", "FAKE_GIT_UNSHALLOW_MARKER", "FAKE_GIT_INCOMPLETE_ANCESTRY"):
+	for name in ("SINGLE_ISSUE_SECURITY_PASS_ENABLED", "MAX_SECURITY_PASS_CYCLES", "ORCH_INTEGRATION_BRANCH_PATTERN", "SECURITY_PASS_PENDING_STALE_HOURS", "SECURITY_PASS_FOLLOWUP_STALE_HOURS", "SECURITY_PASS_PENDING_MARKER_ATTEMPTS", "SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS", "SECURITY_PASS_AUTHOR_LOGIN_FALLBACK", "FAKE_GIT_ANCESTORS", "FAKE_GIT_SHALLOW", "FAKE_GIT_FETCH_FAIL", "FAKE_GIT_UNSHALLOW_MARKER", "FAKE_GIT_INCOMPLETE_ANCESTRY"):
 		run_env.pop(name, None)
 	run_env["SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS"] = "0"
 	run_env.update(env or {})
@@ -217,7 +226,7 @@ def test_installation_token_accepts_only_its_bot_marker(tmp_path: Path) -> None:
 		"FAKE_GH_FAIL": "identity", "SECURITY_PASS_AUTHOR_LOGIN_FALLBACK": "github-actions[bot]",
 	})
 	assert output == "hold=true\nhold_reason=awaiting_followups\n" and "reason=awaiting_followups" in result.stdout
-	assert calls == [["api", "user", "--jq", '.login // ""']]
+	assert calls == [["api", "user", "--jq", '.login // ""'], ["api", "--paginate", "--slurp", "repos/o/r/issues?labels=ai:security&state=open&per_page=100"]]
 
 
 def test_mixed_linked_issues_cannot_skip_security_audit(tmp_path: Path) -> None:
@@ -268,7 +277,86 @@ def test_pending_marker_attempts_is_validated(tmp_path: Path, attempts: str, exp
 @pytest.mark.parametrize("status", ["pending", "findings"])
 def test_a_running_audit_or_open_followups_hold_without_a_new_dispatch(tmp_path: Path, status: str) -> None:
 	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker(status, HEAD, 1))])
-	assert output == f"hold=true\nhold_reason={'audit_pending' if status == 'pending' else 'awaiting_followups'}\n" and calls == [["api", "user", "--jq", '.login // ""']]
+	assert output == f"hold=true\nhold_reason={'audit_pending' if status == 'pending' else 'awaiting_followups'}\n"
+	assert calls == [["api", "user", "--jq", '.login // ""']] + (
+		[["api", "--paginate", "--slurp", "repos/o/r/issues?labels=ai:security&state=open&per_page=100"]] if status == "findings" else []
+	)
+
+
+@pytest.mark.parametrize("issues", [
+	[[]],
+	[[{"state": "closed", "body": "- Integration branch: `ai/issue-7`", "user": {"login": "owner"}}]],
+	[[{"state": "open", "body": "- Integration branch: `other`", "user": {"login": "owner"}}]],
+	[[{"state": "open", "body": "- Integration branch: `ai/issue-7`", "user": {"login": "owner"}, "pull_request": {"url": "pr"}}]],
+	[[{"state": "open", "body": "- Integration branch: `ai/issue-7`", "user": {"login": "other"}}]],
+])
+def test_missing_pipeline_followups_page_without_mutating(tmp_path: Path, issues: list) -> None:
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("findings", HEAD, 1))], security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=followups_missing\n"
+	assert "outcome=hold reason=followups_missing" in result.stdout
+	assert len([call for call in calls if "repos/o/r/issues?labels=ai:security&state=open&per_page=100" in call]) == 1
+	assert not any(call[:2] in (["workflow", "run"], ["api", "repos/o/r/issues/42/comments"], ["api", "repos/o/r/issues/42/labels"]) for call in calls)
+
+
+@pytest.mark.parametrize("line", [
+	"- Integration branch: ai/issue-7", "- Integration branch: `ai/issue-7`",
+	"Integration branch: ai/issue-7", "- **Integration branch:** `ai/issue-7`",
+])
+def test_matching_open_pipeline_followups_keep_waiting(tmp_path: Path, line: str) -> None:
+	issues = [[{"state": "open", "body": "Other text\n" + line, "user": {"login": "owner"}}]]
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("findings", HEAD, 1))], security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=awaiting_followups\n"
+	assert len([call for call in calls if "repos/o/r/issues?labels=ai:security&state=open&per_page=100" in call]) == 1
+
+
+def test_followups_across_paginated_pages(tmp_path: Path) -> None:
+	issues = [[], [{"state": "open", "body": "- Integration branch: `ai/issue-7`", "user": {"login": "owner"}}]]
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("findings", HEAD, 1))], security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=awaiting_followups\n"
+	assert len([call for call in calls if "repos/o/r/issues?labels=ai:security&state=open&per_page=100" in call]) == 1
+
+
+@pytest.mark.parametrize("issues, fail", [("{}", ""), ("[{}]", ""), ("", ""), ("[[]]", "followups")])
+def test_followup_listing_failure_or_bad_shape_pages(tmp_path: Path, issues: str, fail: str) -> None:
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("findings", HEAD, 1))], security_issues=issues, env={"FAKE_GH_FAIL": fail})
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=followups_unverifiable\n"
+	assert "outcome=hold reason=followups_unverifiable" in result.stdout
+	assert len([call for call in calls if "repos/o/r/issues?labels=ai:security&state=open&per_page=100" in call]) == 1
+
+
+@pytest.mark.parametrize("age_hours, override, reason", [
+	(23, "", "awaiting_followups"), (25, "", "followups_stalled"),
+	(3, "2", "followups_stalled"), (3, "0", "awaiting_followups"),
+	(25, "abc", "followups_stalled"),
+])
+def test_followup_stale_limit(tmp_path: Path, age_hours: int, override: str, reason: str) -> None:
+	result, _, output = _run(tmp_path, "gate", comments=[_comment(_marker("findings", HEAD, 1), age_hours=age_hours)], env={"SECURITY_PASS_FOLLOWUP_STALE_HOURS": override})
+	assert result.returncode == 0 and output == f"hold=true\nhold_reason={reason}\n"
+
+
+def test_bad_findings_timestamp_pages(tmp_path: Path) -> None:
+	comment = _comment(_marker("findings", HEAD, 1))
+	comment["created_at"] = "bad-time"
+	result, _, output = _run(tmp_path, "gate", comments=[comment])
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=followups_stalled\n"
+
+
+def test_status_findings_never_lists_followups(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "status", comments=[_comment(_marker("findings", HEAD, 1))], env={"FAKE_GH_FAIL": "followups"})
+	assert result.returncode == 0 and output == ""
+	assert "SINGLE_ISSUE_SECURITY_PASS_STATE=findings" in result.stdout
+	assert not any("repos/o/r/issues?labels=ai:security&state=open&per_page=100" in call for call in calls)
+
+
+def test_branch_name_is_matched_literally(tmp_path: Path) -> None:
+	branch_ref = "ai/issue-7.x+"
+	issues = [[{"state": "open", "body": "- Integration branch: `ai/issue-7axxx`", "user": {"login": "owner"}}]]
+	comments = [_comment(_marker("findings", HEAD, 1))]
+	result, _, output = _run(tmp_path, "gate", pr=_pr(head_ref=branch_ref), comments=comments, security_issues=issues)
+	assert output == "hold=true\nhold_reason=followups_missing\n"
+	issues[0][0]["body"] = f"- Integration branch: `{branch_ref}`"
+	result, _, output = _run(tmp_path, "gate", pr=_pr(head_ref=branch_ref), comments=comments, security_issues=issues)
+	assert output == "hold=true\nhold_reason=awaiting_followups\n"
 
 
 def test_a_stale_pending_audit_is_dispatched_again(tmp_path: Path) -> None:
@@ -705,7 +793,9 @@ def test_review_wiring() -> None:
 	assert gate["id"] == "single_issue_security_pass"
 	assert gate["env"]["SECURITY_PASS_PENDING_STALE_HOURS"] == "${{ vars.SECURITY_PASS_PENDING_STALE_HOURS || '6' }}"
 	assert gate["env"]["SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS"] == "${{ vars.SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS || '2' }}"
+	assert gate["env"]["SECURITY_PASS_FOLLOWUP_STALE_HOURS"] == "${{ vars.SECURITY_PASS_FOLLOWUP_STALE_HOURS || '24' }}"
 	assert _steps(REVIEW, "codex-agent")["Review-blocked judge decision"]["env"]["SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS"] == gate["env"]["SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS"]
+	assert _steps(REVIEW, "codex-agent")["Review-blocked judge decision"]["env"]["SECURITY_PASS_FOLLOWUP_STALE_HOURS"] == gate["env"]["SECURITY_PASS_FOLLOWUP_STALE_HOURS"]
 	assert gate["env"]["SECURITY_PASS_AUTHOR_LOGIN_FALLBACK"] == "${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}"
 	assert gate["if"] == steps["Enable auto-merge on PR"]["if"].replace(" && steps.single_issue_security_pass.outputs.hold != 'true'", "")
 	for name in ("Enable auto-merge on PR", "Mark linked issues ready to merge"):
