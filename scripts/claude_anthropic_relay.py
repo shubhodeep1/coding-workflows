@@ -129,6 +129,7 @@ class Relay(http.server.BaseHTTPRequestHandler):
 		# or (on the broker) any client authorization cross the boundary.
 		mode = self.server.mode
 		length = self.headers.get("Content-Length", "")
+		headers = forwarded_request_headers(self.headers)
 		if (
 			not PATH_RE.match(self.path)
 			or self.headers.get("Transfer-Encoding")
@@ -145,6 +146,7 @@ class Relay(http.server.BaseHTTPRequestHandler):
 			or not length.isdecimal()
 			or len(length) > 10
 			or not 0 < int(length) <= MAX_BODY
+			or headers is None
 		):
 			return self._reject(400, drain_body=True)
 		headers = forwarded_request_headers(self.headers)
