@@ -134,11 +134,14 @@ def _outputs(path: Path) -> dict[str, str]:
 # --- Gate -----------------------------------------------------------------
 
 
-def _run_gate(tmp_path: Path, comment: str, body: str = "Fix it.", state: str = "open", labels: list[str] | None = None, title: str = "[security-audit] finding", user_type: str = "User", author_association: str | None = "OWNER", **flags: str) -> tuple[dict[str, str], str, str]:
+def _run_gate(tmp_path: Path, comment: str, body: str = "Fix it.", state: str = "open", labels: list[str] | None = None, title: str = "[security-audit] finding", user_type: str = "User", author_association: str | None = "OWNER", tracking_payload: dict | None = None, **flags: str) -> tuple[dict[str, str], str, str]:
 	payload = {"number": 6262, "title": title, "body": body, "state": state, "labels": [{"name": name} for name in (labels or [])], "user": {"type": user_type}}
 	if author_association is not None:
 		payload["author_association"] = author_association
-	_stub_gh(tmp_path / "bin", tmp_path / "gh.log", {"repos/owner/repo/issues/6262": json.dumps(payload)})
+	responses = {"repos/owner/repo/issues/6262": json.dumps(payload)}
+	if tracking_payload is not None:
+		responses["repos/owner/repo/issues/123"] = json.dumps(tracking_payload)
+	_stub_gh(tmp_path / "bin", tmp_path / "gh.log", responses)
 	env = _env(
 		tmp_path,
 		CLARIFY_RESPOND_COMMENT_BODY=comment,
@@ -188,6 +191,28 @@ def test_gate_silences_release_gate_fixtures(tmp_path: Path) -> None:
 ])
 def test_gate_keeps_alerts_for_unverified_fixture_authors(tmp_path: Path, user_type: str, author_association: str | None) -> None:
 	_, env, stdout = _run_gate(tmp_path, QUESTIONS, title="[E2E Clarify Negative Test] untrusted", user_type=user_type, author_association=author_association)
+	assert "ALERT_MSG_LEVEL=SILENT" not in env
+	assert "gate=smoke_alert_silence reason=unverified_fixture_provenance" in stdout
+
+
+@pytest.mark.parametrize("child_labels, child_association, parent_labels, parent_association, silent", [
+	(["ai:orchestrator-managed"], "OWNER", ["ai:orchestrator-tracking"], "MEMBER", True),
+	([], "OWNER", ["ai:orchestrator-tracking"], "OWNER", False),
+	(["ai:orchestrator-managed"], "NONE", ["ai:orchestrator-tracking"], "OWNER", False),
+	(["ai:orchestrator-managed"], "OWNER", [], "OWNER", False),
+	(["ai:orchestrator-managed"], "OWNER", ["ai:orchestrator-tracking"], "NONE", False),
+])
+def test_parent_fixture_silencing_requires_both_verified_issues(tmp_path: Path, child_labels: list[str], child_association: str, parent_labels: list[str], parent_association: str, silent: bool) -> None:
+	parent = {"title": "[Orchestrator] E2E Smoke Test", "user": {"type": "User"}, "author_association": parent_association, "labels": [{"name": name} for name in parent_labels]}
+	_, env, stdout = _run_gate(tmp_path, QUESTIONS, body="Tracking issue: #123\nManaged by: AI Orchestrator", labels=child_labels, author_association=child_association, tracking_payload=parent)
+	assert ("ALERT_MSG_LEVEL=SILENT" in env) is silent
+	if not silent:
+		assert "gate=smoke_alert_silence reason=unverified_fixture_provenance" in stdout
+
+
+def test_standalone_issue_cannot_borrow_a_fixture_parent(tmp_path: Path) -> None:
+	parent = {"title": "[Orchestrator] E2E Smoke Test", "user": {"type": "User"}, "author_association": "OWNER", "labels": [{"name": "ai:orchestrator-tracking"}]}
+	_, env, stdout = _run_gate(tmp_path, QUESTIONS, body="Tracking issue: #123", author_association="NONE", tracking_payload=parent)
 	assert "ALERT_MSG_LEVEL=SILENT" not in env
 	assert "gate=smoke_alert_silence reason=unverified_fixture_provenance" in stdout
 

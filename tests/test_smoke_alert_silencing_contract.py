@@ -67,9 +67,9 @@ EXPECTED_STEP_DECLARATIONS = {
 	],
 	"orchestrate.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 1,
 	"orchestrate_poll.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 2,
-	# 3 = "Standalone RECOMMENDED fallback" (pages when the standalone worker
-	# fails with no fallback), "Parse and post answer", the failure alert.
-	"orchestrate_clarify_respond.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 3,
+	# 4 = "Standalone RECOMMENDED fallback", "Answer completeness guard",
+	# "Parse and post answer", and the failure alert.
+	"orchestrate_clarify_respond.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 4,
 }
 
 STEP_DECL_RE = re.compile(r"^\s+ALERT_MSG_LEVEL:\s*(\$\{\{.*\}\})\s*$")
