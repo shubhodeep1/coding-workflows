@@ -340,7 +340,7 @@ def test_project_close_retry_allows_its_own_abandoned_state_write(tmp_path: Path
 
 def _run_fixup_hook(tmp_path: Path, item: int, members: list[int], pr: dict | None = None, state: dict | None = None,
 	trusted_members: list[int] | None = None, include_trusted_state_comment: bool = True,
-	trusted_integration_branch: str | None = None) -> tuple[subprocess.CompletedProcess[str], dict, list[str], list[str]]:
+	trusted_integration_branch: str | None = None, request_body: str | None = None) -> tuple[subprocess.CompletedProcess[str], dict, list[str], list[str]]:
 	text = POLLER.read_text(encoding="utf-8")
 	start = text.index("handle_unblock_judge_project_hooks() {")
 	hook = text[start:text.index("\n}\n", start) + 3]
@@ -354,7 +354,7 @@ def _run_fixup_hook(tmp_path: Path, item: int, members: list[int], pr: dict | No
 		integration_branch=trusted_integration_branch or current["integration_branch"])
 	payload = json.dumps(trusted_state).encode("utf-8")
 	manifest = hashlib.sha256(payload).hexdigest()
-	comments = [{"user": {"login": BOT}, "body": f"<!-- ai:unblock-fixup-request:v1 item={item} id=unblock-{item}-r1 -->\n### Narrow the fix\nOnly this part."}]
+	comments = [{"id": 10, "user": {"login": BOT}, "body": request_body if request_body is not None else f"<!-- ai:unblock-fixup-request:v1 item={item} id=unblock-{item}-r1 -->\n### Narrow the fix\nOnly this part."}]
 	if include_trusted_state_comment:
 		comments.insert(0, {"user": {"login": BOT}, "body": f"<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest={manifest} -->\n{base64.b64encode(payload).decode('ascii')}\nORCHESTRATOR_STATE_V2 -->"})
 	if trusted_members is not None:
@@ -390,6 +390,14 @@ def test_fixup_hook_accepts_project_members_without_pr_read(tmp_path: Path, item
 	assert result.returncode == 0, result.stderr
 	assert calls == [] and creates == ["create"]
 	assert state["issue_number_map"][f"unblock-{item}-r1"] == 901
+
+
+def test_fixup_hook_reports_malformed_trusted_request(tmp_path: Path) -> None:
+	result, state, calls, creates = _run_fixup_hook(tmp_path, 5, [5],
+		request_body="<!-- ai:unblock-fixup-request:v1 item=5 id=bad -->\n### Narrow the fix")
+	assert result.returncode == 0, result.stderr
+	assert "action=fixup comment=10 outcome=invalid_request" in result.stdout
+	assert calls == creates == [] and "unblock-5-r1" not in state["issue_number_map"]
 
 
 def test_fixup_hook_accepts_verified_same_repo_pr(tmp_path: Path) -> None:

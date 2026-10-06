@@ -2900,6 +2900,9 @@ and resolver chains, a failed project) now goes to the unblock judge
   `operator_step` file a fix-up issue (for a project's item, the poller files
   it into the current wave and resumes a failed project); once the fix-up
   is closed with `ai:merged`, the next judge run posts the resume command.
+  A malformed pipeline-authored project fix-up request is skipped with
+  `UNBLOCK_PROJECT action=fixup comment=<id> outcome=invalid_request` in the
+  poll log; a failed request-list parse logs `outcome=request_parse_failed`.
   A failed fix-up lookup or resume write leaves the wait marker pending for
   another run; closing a fix-up without a merge does not resume its parent.
   A failed review dispatch leaves the PR's block label in place for the next

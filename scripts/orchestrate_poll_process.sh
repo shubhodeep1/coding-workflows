@@ -16214,14 +16214,17 @@ handle_unblock_judge_project_hooks() {
   unblock_trusted_login >/dev/null
   login="${UNBLOCK_TRUSTED_LOGIN}"
   [ -n "${login}" ] || return 0
-  requests="$(printf '%s' "${COMMENTS}" | jq -c --arg login "${login}" '
-    [.[]? | select((.user.login // "") == $login)
-      | (.body // "") as $b
-      | ($b | split("\n") | map(rtrimstr("\r"))) as $lines
-      | ($lines[0] | capture("^<!-- ai:unblock-fixup-request:v1 item=(?<item>[1-9][0-9]*) id=(?<id>unblock-[0-9]+-r[0-9]+) -->$")?) as $m
-      | {item: $m.item, id: $m.id,
+  if ! requests="$(printf '%s' "${COMMENTS}" | jq -c --arg login "${login}" '
+    [.[]? | select((.user.login // "") == $login) | . as $comment
+      | (.body // "" | split("\n") | map(rtrimstr("\r"))) as $lines
+      | select(($lines[0] // "") | startswith("<!-- ai:unblock-fixup-request:v1 "))
+      | (($lines[0] | capture("^<!-- ai:unblock-fixup-request:v1 item=(?<item>[1-9][0-9]*) id=(?<id>unblock-[0-9]+-r[0-9]+) -->$")?) // {}) as $m
+      | {comment_id: $comment.id, item: $m.item, id: $m.id,
          title: (($lines[1] // "") | sub("^###\\s*"; "")),
-         body: ($lines[2:] | join("\n"))}]' 2>/dev/null || echo '[]')"
+         body: ($lines[2:] | join("\n"))}]' 2>/dev/null)"; then
+    echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup outcome=request_parse_failed"
+    return 0
+  fi
   count="$(printf '%s' "${requests}" | jq 'length' 2>/dev/null || echo 0)"
   for ((idx = 0; idx < count; idx++)); do
     request="$(printf '%s' "${requests}" | jq -c ".[${idx}]" 2>/dev/null || true)"
@@ -16229,7 +16232,10 @@ handle_unblock_judge_project_hooks() {
     req_id="$(jq -r '.id // ""' <<< "${request}" 2>/dev/null || true)"
     req_title="$(jq -r '.title // ""' <<< "${request}" 2>/dev/null || true)"
     req_body="$(jq -r '.body // ""' <<< "${request}" 2>/dev/null || true)"
-    [[ "${req_item}" =~ ^[0-9]+$ ]] && [ -n "${req_id}" ] || continue
+    if [[ ! "${req_item}" =~ ^[1-9][0-9]*$ ]] || [ -z "${req_id}" ]; then
+      echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup comment=$(jq -r 'if (.comment_id | type) == "number" then .comment_id else "unknown" end' <<< "${request}") outcome=invalid_request"
+      continue
+    fi
     if [ -n "$(jq -r --arg id "${req_id}" '.issue_number_map[$id] // empty' "${STATE_FILE}" 2>/dev/null || echo unreadable)" ]; then
       continue
     fi
