@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\nQ3: A\n\nRATIONALE:\nQ1: The open audit findings (#6440, #6441, #6442, #6456, #6458) all point at code from closed PR #6178, which never merged, so ordinary issues keep their current behavior on the base branch. This issue asks for the boundary around the heal evidence flow. Moving every plan and implement run (B) would broaden scope and add risk. C would leave plan reading untrusted evidence on the host, next to the PAT.\nQ2: The allowlist has to be fixed before any untrusted evidence is read, by trusted code, from validated fields only. A meets that, and the automatic `tests/**` and `changelog.d/*.md` entries are needed because deterministic heals must ship a regression test and a changelog fragment. B is too broad for a security boundary (it covers all of `scripts/` and `.github/workflows/`). C would make deterministic heals impossible to satisfy.\nQ3: Refuse and set `ai:needs-human`, which pauses stall recovery, unlike C, whose `ai:implementation-failed` would just lead to close-and-reissue loops. Correction to the recommendation's reasoning: `ai:needs-human` does re-trigger the heal reporter. It is on the trigger list in `scripts/workflow_failure_heal_report.sh:100` and `.github/workflows/workflow_failure_heal.yml:52`, and `skip_reason` in `scripts/workflow_failure_heal.py:946` has no heal-issue exemption. So A needs one small, explicit reporter skip, described in the plan below. It is still preferred over B because a missing or untrusted scope is an integrity failure, not an out-of-scope path.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/clarify_isolated_run.sh (existing read-only, network-isolated container with a host-side model broker)\n    - review editor disposable Docker workspace and validated transfer pattern (agents.md, review autofix section)\n    - .github/workflows/plan.yml, .github/workflows/implement.yml, scripts/run_plan_codex.sh, scripts/implement_commit_changes.sh\n  steps:\n    - Choose the path only for issues labelled `ai:workflow-heal`. Every other issue keeps today's code path byte-for-byte.\n    - On the trusted host, collect authenticated evidence and build the bounded, redacted diagnostics before the editor starts.\n    - Run the plan and implement editors in a container with no GH_PAT, no Docker socket, no runner home and no host `.git`, working on a copy of the files. Kill the container's whole process tree when the step ends, so no editor child outlives it.\n    - Move results back to the host through a validated transfer: allowlisted paths only, no symlinks, no `.git` or `.github/ai` paths, no mode changes outside policy.\n    - Commit and push on the host with tooling taken from the immutable runtime directory. Disable hooks (`core.hooksPath=/dev/null`) and use a git config that ignores filters and helpers the editor wrote. Never source any editor-writable script while the PAT is present.\n    - Do not reintroduce same-UID credential hide/restore or `editor_git_credentials.sh`.\n  replaces_acceptance_criterion: none\n  equivalence_argument: Every acceptance criterion concerns heal evidence. Ordinary runs never see that evidence, so the boundary applies exactly where the untrusted input enters.\n  reversibility: Widening to all issues later only means changing the route predicate; the container path is shared.\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/workflow_failure_heal_intake.sh, scripts/workflow_failure_heal.py (ownership classification, `crash_file`, `changed_files`)\n    - scripts/files_touched_scope_guard.py\n  steps:\n    - When the intake creates a heal issue, it writes exactly one `<!-- ai:workflow-heal-scope:v1 paths=... -->` marker.\n    - The marker's paths come only from the validated `crash_file`, the failing workflow file path and ownership-classified `changed_files` that exist at the support ref, plus `tests/**` and `changelog.d/*.md`.\n    - Implement trusts the marker only when all of these hold: the issue carries `ai:workflow-heal`, its author is the account authenticated by GH_PAT (resolved via `/user`), GraphQL `lastEditedAt` is null, and the marker appears exactly once.\n    - The enforced allowlist is that marker only. `files_touched:` lines found in the evidence or in the plan are ignored for heal issues.\n    - Reissue paths (stall poller, review-blocked judge) may copy a verified parent marker byte-for-byte from trusted code. They strip any marker string out of model-generated prose.\n    - Add tests that inject `files_touched:` into the evidence and into a generated plan and assert the enforced scope does not change.\n  replaces_acceptance_criterion: none\n  equivalence_argument: The scope is fixed by trusted code before any evidence or plan is processed, which is what the BLOCKER criterion requires.\n  reversibility: Additional directories can be added to the marker generator later without changing the trust rules.\nQ3:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/workflow_failure_heal_report.sh:100,176\n    - scripts/workflow_failure_heal.py:946 (`skip_reason`)\n  steps:\n    - When a heal issue has a missing, edited, duplicated or untrusted scope marker, implement refuses before the editor launches.\n    - It labels the issue `ai:needs-human` and posts a comment that names the reason and carries `<!-- ai:workflow-heal-scope-unverified:v1 -->`.\n    - Extend the reporter's comment fetch to include the comment author. Add the stable skip reason `heal_scope_unverified`, returned when the escalated issue carries `ai:workflow-heal`, the label is `ai:needs-human`, and that marker comment was authored by the pipeline account.\n    - Add tests for the refusal, the reporter skip, and the unchanged behavior for non-heal issues that declare no scope.\n  replaces_acceptance_criterion: none\n  equivalence_argument: The refusal stays closed and stops at the human gate without starting another heal generation.\n  reversibility: Dropping the skip reason restores lineage-capped re-heal.",
+  "fingerprint": "81fb4ec819961319599e5071ff1bcb73b1b376d21a952ac2c2d6d9a5077469e5",
+  "lineage": {
+    "issue_number": 6463,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37406120973",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37406120973",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6463"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261006030008_b9e49aec93",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6463,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37406120973"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6463",
+  "timestamps": {
+    "created_at": "2026-10-06T03:00:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
