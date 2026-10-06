@@ -335,6 +335,7 @@ if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] && [ -n "${SECURITY_AUDIT_PROJ
 fi
 
 SECURITY_AUDIT_FINDINGS_OUT="${SECURITY_AUDIT_FINDINGS_OUT:-}"
+SECURITY_AUDIT_FINDINGS_RECORD_OUT="${SECURITY_AUDIT_FINDINGS_RECORD_OUT:-}"
 SECURITY_AUDIT_DIFF_BASE="${SECURITY_AUDIT_DIFF_BASE:-}"
 SECURITY_AUDIT_DIFF_HEAD="${SECURITY_AUDIT_DIFF_HEAD:-}"
 if { [ -n "${SECURITY_AUDIT_DIFF_BASE}" ] && [ -z "${SECURITY_AUDIT_DIFF_HEAD}" ]; } \
@@ -1710,6 +1711,41 @@ PY
 	exit 0
 fi
 
+# Publish the same surviving findings used by the tracker before any issue
+# writes. An incomplete audit must not leave a usable record for the reporter.
+if [ -n "${SECURITY_AUDIT_FINDINGS_RECORD_OUT}" ]; then
+	if ! python3 - "${FILTERED_FINDINGS_FILE}" "${SECURITY_AUDIT_FINDINGS_RECORD_OUT}" <<'PY'
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+source = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+findings = json.loads(source.read_text(encoding="utf-8"))
+if not isinstance(findings, list):
+	raise SystemExit("filtered findings must be an array")
+record = [{key: finding[key] for key in ("finding_id", "severity", "file", "line")} for finding in findings]
+temporary = None
+try:
+	with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=destination.parent, prefix=".security-findings-", delete=False) as output:
+		temporary = Path(output.name)
+		json.dump(record, output, ensure_ascii=True)
+		output.write("\n")
+		output.flush()
+		os.fsync(output.fileno())
+	os.replace(temporary, destination)
+except OSError:
+	if temporary is not None:
+		temporary.unlink(missing_ok=True)
+	raise SystemExit("could not publish security findings record")
+PY
+	then
+		exit 1
+	fi
+fi
+
 # Standalone workflow: no cycle-local issue cache exists here. Fetch every
 # existing `ai:security` issue once (open and closed) and reuse the result for
 # the finding-marker dedupe. This replaces the former `gh issue list --limit
@@ -1804,6 +1840,12 @@ for issue in existing_followup_issues:
 	if not isinstance(issue, dict) or issue.get("pull_request"):
 		continue
 	body = str(issue.get("body") or "")
+	if target_ref:
+		# Mirror the judge's Integration branch field parser. A closed or
+		# other-branch ticket cannot satisfy a new branch audit.
+		branch_match = re.search(r"(?m)^\s*-?\s*(?:\*\*)?Integration branch:(?:\*\*)?\s*`?([^`\n]*?)`?\s*$", body)
+		if str(issue.get("state") or "").lower() != "open" or branch_match is None or branch_match.group(1) != target_ref:
+			continue
 	match = marker_regex.search(body)
 	if match is None:
 		continue

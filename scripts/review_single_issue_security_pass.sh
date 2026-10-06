@@ -40,6 +40,8 @@
 #           SINGLE_ISSUE_SECURITY_PASS_STATE=<skip|unverifiable|clean|pending|
 #           findings|exhausted|exhausted_unaudited|needs_audit>. An exhausted
 #           head also emits SINGLE_ISSUE_SECURITY_PASS_AUDITED_HEAD=<sha>.
+#           For findings it emits the validated, trusted head-bound findings
+#           JSON or SINGLE_ISSUE_SECURITY_PASS_FINDINGS_RECORD_STATUS.
 #           review_rb_judge.sh uses it to enter security-exhaustion mode.
 #   report  Run by security-audit.yml after an audit dispatched with
 #           `pr_number`. Posts the `status=clean|findings|failed` marker for
@@ -51,6 +53,8 @@
 # Marker (last non-empty line of a comment by the pipeline account; any other
 # author is ignored):
 #   <!-- ai:single-issue-security-pass:v1 status=<s> head=<40 hex> cycle=<n> -->
+# Immediately before a findings marker, in the same trusted comment:
+#   <!-- ai:single-issue-security-pass-findings:v1 head=<40 hex> cycle=<n> count=<n> record=<base64 JSON> -->
 # Extension marker, same trust rule, posted by review_rb_judge.sh:
 #   <!-- ai:single-issue-security-pass-extension:v1 head=<40 hex> -->
 #
@@ -60,6 +64,7 @@
 # job's /user result is not exported), then one dispatch and one comment (or
 # one label write). report: one PR read to bind the audit inputs, one /user
 # identity read, one paginated comments read, one comment and at most one dispatch.
+# status reuses the gate's comments and identity reads; the record adds no API calls.
 #
 # Log: SINGLE_ISSUE_SECURITY_PASS mode= pr= head= outcome= reason= cycle=
 set -uo pipefail
@@ -113,6 +118,65 @@ single_pass_state()
 single_pass_marker()
 {
 	printf '<!-- ai:single-issue-security-pass:v1 status=%s head=%s cycle=%s -->' "$1" "$2" "$3"
+}
+
+# Validate the untrusted audit JSON for both publishing and reading. Emit
+# canonical compact JSON so the comment is bounded and never contains text
+# that can break out of its HTML marker.
+single_pass_findings_record_validate()
+{
+	jq -sce --argjson expected "$1" '
+		length == 1 and (.[0] |
+		type == "array" and length == $expected and length <= 100 and
+		all(.[]; type == "object" and
+			(.finding_id | type == "string" and length > 0 and length <= 200 and (test("[\u0000-\u001f\u007f]") | not)) and
+			(.severity == "critical" or .severity == "high" or .severity == "medium" or .severity == "low") and
+			(.file | type == "string" and length > 0 and length <= 512 and (test("[\u0000-\u001f\u007f]") | not)) and
+			(.line | type == "number" and . > 0 and . == floor)))
+	' >/dev/null || return 1
+}
+
+single_pass_findings_record_line()
+{
+	local record_file="${SECURITY_PASS_FINDINGS_RECORD_FILE:-}" expected="$1" head="$2" cycle="$3" encoded
+	[ -n "${record_file}" ] && [ -f "${record_file}" ] && [ -r "${record_file}" ] || return 1
+	if ! single_pass_findings_record_validate "${expected}" < "${record_file}"; then
+		return 1
+	fi
+	encoded="$(jq -sc '.[0]' "${record_file}" | tr -d '\n' | base64 -w 0)" || return 1
+	printf '<!-- ai:single-issue-security-pass-findings:v1 head=%s cycle=%s count=%s record=%s -->' "${head}" "${cycle}" "${expected}" "${encoded}"
+}
+
+# Read only the comment identified by the authenticated findings marker.
+# A malformed/duplicated record in that comment is invalid, not a reason to
+# fall back to an older comment or to a ticket-only merge decision.
+single_pass_findings_record_read()
+{
+	local comments_file="$1" marker_row="$2" marker_id marker_cycle marker_head marker_author body record_line encoded record_count decoded
+	marker_id="$(printf '%s' "${marker_row}" | cut -f2)"
+	marker_head="$(printf '%s' "${marker_row}" | cut -f4)"
+	marker_cycle="$(printf '%s' "${marker_row}" | cut -f5)"
+	marker_author="${SECURITY_PASS_AUTHOR_LOGIN:-}"
+	[ -n "${marker_author}" ] || return 2
+	if ! body="$(jq -er --arg id "${marker_id}" --arg author "${marker_author}" '
+		[.[] | select((.id | tostring) == $id and .user.login == $author) | .body] | if length == 1 and (.[0] | type == "string") then .[0] else error("comment missing") end
+	' "${comments_file}" 2>/dev/null)"; then
+		return 2
+	fi
+	record_line="$(printf '%s\n' "${body}" | grep -E '^<!-- ai:single-issue-security-pass-findings:v1 ' || true)"
+	[ -n "${record_line}" ] || return 1
+	if [[ ! "${record_line}" =~ ^\<\!\-\-\ ai:single-issue-security-pass-findings:v1\ head=([0-9a-f]{40})\ cycle=([1-9][0-9]*)\ count=([0-9]+)\ record=([A-Za-z0-9+/=]+)\ \-\-\>$ ]]; then
+		return 2
+	fi
+	[ "${BASH_REMATCH[1]}" = "${marker_head}" ] && [ "${BASH_REMATCH[2]}" = "${marker_cycle}" ] || return 2
+	record_count="${BASH_REMATCH[3]}"
+	encoded="${BASH_REMATCH[4]}"
+	[ "${record_count}" -le 100 ] 2>/dev/null && [ "${#encoded}" -le 100000 ] || return 2
+	decoded="$(printf '%s' "${encoded}" | base64 -d 2>/dev/null)" || return 2
+	if ! single_pass_findings_record_validate "${record_count}" <<< "${decoded}"; then
+		return 2
+	fi
+	jq -sc '.[0]' <<< "${decoded}" 2>/dev/null
 }
 
 # Prints the pipeline's markers as TSV: created_at, id, status, head, cycle.
@@ -219,7 +283,7 @@ single_pass_gate()
 	local exhausted_head_limit="${SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS:-2}" exhausted_retry="false" head_attempts=0
 	local pattern="${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}"
 	local state base head_ref head_sha head_repo labels linked skip_json markers latest latest_status latest_head latest_created
-	local cycles_used next_cycle age_hours workflow body extensions effective_max completed_findings
+	local cycles_used next_cycle age_hours workflow body extensions effective_max completed_findings record_value record_rc
 	[[ "${max_cycles}" =~ ^[1-9][0-9]*$ ]] || max_cycles=5
 	[[ "${stale_hours}" =~ ^[1-9][0-9]*$ ]] || stale_hours=6
 	[[ "${exhausted_head_limit}" =~ ^[1-9][0-9]*$ ]] || exhausted_head_limit=2
@@ -331,6 +395,17 @@ single_pass_gate()
 					single_pass_log "mode=status pr=${PR_NUMBER} head=${head_sha} outcome=exhausted cycle=${cycles_used} max=${effective_max}"
 					single_pass_state exhausted
 					echo "SINGLE_ISSUE_SECURITY_PASS_AUDITED_HEAD=${head_sha}"
+					record_rc=0
+					record_value="$(single_pass_findings_record_read "${comments}" "${completed_findings}")" || record_rc=$?
+					if [ "${record_rc}" -eq 0 ]; then
+						echo "SINGLE_ISSUE_SECURITY_PASS_FINDINGS_RECORD=${record_value}"
+					else
+						if [ "${record_rc}" -eq 1 ]; then
+							echo "SINGLE_ISSUE_SECURITY_PASS_FINDINGS_RECORD_STATUS=missing"
+						else
+							echo "SINGLE_ISSUE_SECURITY_PASS_FINDINGS_RECORD_STATUS=invalid"
+						fi
+					fi
 				else
 					single_pass_state exhausted_unaudited
 				fi
@@ -405,7 +480,7 @@ single_pass_report()
 {
 	local pr_number="${SECURITY_PASS_PR_NUMBER:-}" head_sha="${SECURITY_PASS_HEAD_SHA:-}" outcome="${SECURITY_PASS_AUDIT_OUTCOME:-}"
 	local findings="${SECURITY_PASS_FINDINGS:-}" default_branch="${DEFAULT_BRANCH:-}" comments_file status cycle body review_workflow pr_head
-	local extensions=0
+	local extensions=0 record_line="" record_status="valid"
 	local max_cycles="${MAX_SECURITY_PASS_CYCLES:-5}"
 	[[ "${max_cycles}" =~ ^[1-9][0-9]*$ ]] || max_cycles=5
 	if ! [[ "${pr_number}" =~ ^[0-9]+$ ]] || ! [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
@@ -488,6 +563,12 @@ The audit of \`${head_sha}\` filed follow-up issues against this branch. Their m
 
 The audit of \`${head_sha}\` did not finish. The review re-runs and starts the next cycle." ;;
 	esac
+	if [ "${status}" = "findings" ]; then
+		record_line="$(single_pass_findings_record_line "${findings}" "${head_sha}" "${cycle}")" || record_status="missing"
+		if [ -n "${record_line}" ]; then
+			body+=$'\n\n'"${record_line}"
+		fi
+	fi
 	body+=$'\n\n'"$(single_pass_marker "${status}" "${head_sha}" "${cycle}")"
 	if ! gh api "repos/${REPOSITORY}/issues/${pr_number}/comments" -f body="${body}" >/dev/null 2>&1; then
 		echo "::warning::Could not post the security-pass result on PR #${pr_number}."
@@ -499,7 +580,7 @@ The audit of \`${head_sha}\` did not finish. The review re-runs and starts the n
 		gh workflow run "${review_workflow}" -R "${REPOSITORY}" --ref "${default_branch}" -f pr_number="${pr_number}" >/dev/null 2>&1 \
 			|| echo "::warning::Could not re-dispatch ${review_workflow} for PR #${pr_number}; the next review event picks the result up."
 	fi
-	single_pass_log "mode=report pr=${pr_number} head=${head_sha} outcome=${status} cycle=${cycle} findings=${findings:-unknown}"
+	single_pass_log "mode=report pr=${pr_number} head=${head_sha} outcome=${status} cycle=${cycle} findings=${findings:-unknown} record=${record_status}"
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then

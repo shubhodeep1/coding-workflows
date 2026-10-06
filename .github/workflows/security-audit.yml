@@ -288,6 +288,7 @@ jobs:
           SECURITY_AUDIT_CONFIDENCE_GATE: ${{ vars.SECURITY_AUDIT_CONFIDENCE_GATE || '8' }}
           SECURITY_AUDIT_SKIP_IF_UNCHANGED: ${{ vars.SECURITY_AUDIT_SKIP_IF_UNCHANGED || 'true' }}
           SECURITY_AUDIT_INCREMENTAL: ${{ vars.SECURITY_AUDIT_INCREMENTAL || 'true' }}
+          SECURITY_AUDIT_FINDINGS_RECORD_OUT: ${{ runner.temp }}/security_audit_findings_record.json
         run: |
           set -euo pipefail
           # The single-issue security pass reads the summary line from this log.
@@ -309,6 +310,7 @@ jobs:
           SECURITY_PASS_AUDIT_BRANCH: ${{ env.AUDIT_BRANCH }}
           SECURITY_PASS_AUTHOR_LOGIN_FALLBACK: ${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
+          SECURITY_PASS_FINDINGS_RECORD_FILE: ${{ runner.temp }}/security_audit_findings_record.json
         run: |
           set -uo pipefail
           SECURITY_PASS_HEAD_SHA="${AUDIT_DATA_SHA}"
