@@ -116,6 +116,26 @@ def test_non_zero_path_still_snapshots_both_review_workflows() -> None:
 	)
 
 
+def test_budget_steps_tolerate_older_support_without_helper(tmp_path: Path) -> None:
+	"""An older checkout must not fail a job solely because budget logging is new."""
+	(tmp_path / "scripts").mkdir()
+	(tmp_path / "scripts/gh_helpers.sh").write_text("# Older support without gh_pat_budget\n")
+	for workflow_name, job_name, phases in (
+		("clarify.yml", "clarify", ("end",)),
+		("orchestrate_poll.yml", "poll", ("end",)),
+		("review_autofix_sweep.yml", "sweep", ("start", "end")),
+	):
+		workflow = yaml.safe_load((REPO_ROOT / ".github/workflows" / workflow_name).read_text())
+		for phase in phases:
+			step = next(item for item in workflow["jobs"][job_name]["steps"]
+				if item["name"] == f"Record GH_PAT budget at {job_name} {phase}")
+			result = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=tmp_path,
+				env={**os.environ, "GH_PAT_BUDGET_FILE": str(tmp_path / "budget")},
+				capture_output=True, text=True)
+			assert result.returncode == 0, (workflow_name, phase, result.stderr)
+			assert f"GH_PAT_BUDGET phase={phase} workflow={workflow_name.removesuffix('.yml')} job={job_name} remaining=unknown" in result.stdout
+
+
 def test_pat_budget_steps_bracket_every_active_job() -> None:
 	workflows = {
 		"clarify.yml": ("clarify",),
@@ -249,6 +269,8 @@ if __name__ == "__main__":
 	test_zero_candidate_guard_precedes_active_run_snapshot()
 	test_zero_candidate_guard_preserves_summary_log_before_exit()
 	test_non_zero_path_still_snapshots_both_review_workflows()
+	with tempfile.TemporaryDirectory() as test_dir:
+		test_budget_steps_tolerate_older_support_without_helper(Path(test_dir))
 	test_pat_budget_steps_bracket_every_active_job()
 	with tempfile.TemporaryDirectory() as test_dir:
 		test_heal_intake_budget_end_with_older_helper(Path(test_dir))

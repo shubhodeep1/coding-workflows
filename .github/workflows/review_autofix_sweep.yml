@@ -111,8 +111,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_sweep
         run: |
-          source scripts/gh_helpers.sh
-          gh_pat_budget start review_autofix_sweep sweep "${GH_PAT_BUDGET_FILE}"
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget start review_autofix_sweep sweep "${GH_PAT_BUDGET_FILE}"
+          else
+            echo 'GH_PAT_BUDGET phase=start workflow=review_autofix_sweep job=sweep remaining=unknown reset=unknown used_in_job=unknown'
+          fi
 
       - name: Enumerate open PRs and dispatch internal-review.yml
         env:
@@ -384,7 +388,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_sweep
         run: |
-          if [ -f scripts/gh_helpers.sh ]; then
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
             source scripts/gh_helpers.sh
             gh_pat_budget end review_autofix_sweep sweep "${GH_PAT_BUDGET_FILE}"
           else

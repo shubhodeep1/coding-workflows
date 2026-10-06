@@ -1652,7 +1652,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_clarify
         run: |
-          if [ -f scripts/gh_helpers.sh ]; then
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
             source scripts/gh_helpers.sh
             gh_pat_budget end clarify clarify "${GH_PAT_BUDGET_FILE}"
           else
