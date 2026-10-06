@@ -29,6 +29,7 @@
 #
 # Failure modes:
 #   - Exits 1 if merge replay fails for non-conflict reasons, or template missing.
+#   - Exits 1 if integration-sync state author identity cannot be verified.
 #   - Exits 0 + clears MERGE_CONFLICT when merge replay produces no unmerged paths.
 
 set -euo pipefail
@@ -459,10 +460,8 @@ fi
 
 # Pull the orchestrator state comment for this tracking issue so we
 # can render merged sub-issue intent + fingerprints into the prompt.
-# Fail-open: any failure here just leaves the integration variables
-# blank and still renders the integration template (the resolver
-# will see a placeholder note and behave like the generic resolver
-# for those slots).
+# Fail-open on missing state; an unverifiable pipeline identity instead
+# stops preparation before the resolver can run without trusted context.
 if [ "${IS_INTEGRATION_SYNC}" = "true" ] && [[ "${INTEGRATION_TRACKING_NUM}" =~ ^[0-9]+$ ]]; then
   _ti_json="$(gh_retry gh api -H 'Accept: application/vnd.github+json' \
     "repos/${GITHUB_REPOSITORY}/issues/${INTEGRATION_TRACKING_NUM}" 2>/dev/null || echo '{}')"
@@ -470,38 +469,51 @@ if [ "${IS_INTEGRATION_SYNC}" = "true" ] && [[ "${INTEGRATION_TRACKING_NUM}" =~ 
   INTEGRATION_TRACKING_BODY="$(printf '%s' "${_ti_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
   unset _ti_json
 
-  _ti_comments_raw="$(mktemp)"
-  if gh_retry gh api --paginate \
-    "repos/${GITHUB_REPOSITORY}/issues/${INTEGRATION_TRACKING_NUM}/comments?per_page=100" \
-    > "${_ti_comments_raw}" 2>/dev/null; then
-    _state_payload="$(jq -s '
-      ([.[][] | select(.body | contains("ORCHESTRATOR_STATE_V1"))] // [])
-      | last // {}
-      | .body // ""
-      | capture("ORCHESTRATOR_STATE_V1\\n(?<json>(.|\\n)*)\\nORCHESTRATOR_STATE_V1")
-      | .json // ""
-    ' "${_ti_comments_raw}" 2>/dev/null || echo '""')"
-    _state_json="$(printf '%s' "${_state_payload}" | jq -r '.' 2>/dev/null || echo "")"
-    if [ -n "${_state_json}" ]; then
-      # Build the merged sub-issues list (id : github_issue : status)
-      INTEGRATION_MERGED_SUB_ISSUES_LIST="$(printf '%s' "${_state_json}" | jq -r '
-        [
-          .waves[]?.issues[]?
-          | select(.status == "merged")
-          | "          - " + (.id // "?") + " (issue #" + ((.github_issue // 0) | tostring) + ")"
-        ] | join("\n")
-      ' 2>/dev/null || echo "")"
-      INTEGRATION_MERGED_SUB_ISSUE_COUNT="$(printf '%s' "${_state_json}" | jq -r '
-        [.waves[]?.issues[]? | select(.status == "merged")] | length
-      ' 2>/dev/null || echo "0")"
-      INTEGRATION_FINGERPRINTS_JSON="$(printf '%s' "${_state_json}" | jq -c '
-        .merged_issue_fingerprints // {}
-      ' 2>/dev/null || echo "{}")"
-    fi
-    unset _state_payload _state_json
+  # GH_TOKEN comes from GH_PAT; do not resolve integration conflicts when
+  # the author of state comments cannot be verified.
+  if command -v _safe_gh_jq >/dev/null 2>&1; then
+    _conflict_state_login="$(gh_retry _safe_gh_jq "user" --jq '.login // ""' 2>/dev/null || true)"
+  else
+    _conflict_state_login="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null || true)"
   fi
-  rm -f "${_ti_comments_raw}"
-  unset _ti_comments_raw
+  if [[ "${_conflict_state_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+    _ti_comments_raw="$(mktemp)"
+    if gh_retry gh api --paginate \
+      "repos/${GITHUB_REPOSITORY}/issues/${INTEGRATION_TRACKING_NUM}/comments?per_page=100" \
+      > "${_ti_comments_raw}" 2>/dev/null; then
+      _state_payload="$(jq -s --arg login "${_conflict_state_login}" '
+        ([.[][] | select((.user.login // "") == $login) | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] // [])
+        | last // {}
+        | .body // ""
+        | capture("ORCHESTRATOR_STATE_V1\\n(?<json>(.|\\n)*)\\nORCHESTRATOR_STATE_V1")
+        | .json // ""
+      ' "${_ti_comments_raw}" 2>/dev/null || echo '""')"
+      _state_json="$(printf '%s' "${_state_payload}" | jq -r '.' 2>/dev/null || echo "")"
+      if [ -n "${_state_json}" ]; then
+        # Build the merged sub-issues list (id : github_issue : status)
+        INTEGRATION_MERGED_SUB_ISSUES_LIST="$(printf '%s' "${_state_json}" | jq -r '
+          [
+            .waves[]?.issues[]?
+            | select(.status == "merged")
+            | "          - " + (.id // "?") + " (issue #" + ((.github_issue // 0) | tostring) + ")"
+          ] | join("\n")
+        ' 2>/dev/null || echo "")"
+        INTEGRATION_MERGED_SUB_ISSUE_COUNT="$(printf '%s' "${_state_json}" | jq -r '
+          [.waves[]?.issues[]? | select(.status == "merged")] | length
+        ' 2>/dev/null || echo "0")"
+        INTEGRATION_FINGERPRINTS_JSON="$(printf '%s' "${_state_json}" | jq -c '
+          .merged_issue_fingerprints // {}
+        ' 2>/dev/null || echo "{}")"
+      fi
+      unset _state_payload _state_json
+    fi
+    rm -f "${_ti_comments_raw}"
+    unset _ti_comments_raw
+  else
+    echo "::error::review_conflict_prepare: pipeline identity unavailable; refusing integration-sync resolution without trusted state"
+    exit 1
+  fi
+  unset _conflict_state_login
 
   if [ -z "${INTEGRATION_MERGED_SUB_ISSUES_LIST}" ]; then
     INTEGRATION_MERGED_SUB_ISSUES_LIST="          (no merged sub-issues recorded in tracking-issue state — this typically means the integration branch is empty or state is not yet seeded)"
@@ -682,7 +694,7 @@ PROMPT_TPL="${PROMPT_TPL}" \
   MERGED_SUB_ISSUE_COUNT="${INTEGRATION_MERGED_SUB_ISSUE_COUNT}" \
   SERENA_TOOL_HINTS_RESOLVER="${RESOLVER_SERENA_TOOL_HINTS:-}" \
   INTEGRATION_FINGERPRINTS_FILE="${INTEGRATION_FINGERPRINTS_FILE:-}" \
-  python3 -c "import os,sys; tpl=open(os.environ['PROMPT_TPL'],encoding='utf-8').read(); keys=['CONFLICTED_FILES_COUNT','CONFLICTED_FILES_LIST','INTEGRATION_BRANCH','TRACKING_ISSUE_NUMBER','TRACKING_ISSUE_TITLE','TRACKING_ISSUE_BODY','MERGED_SUB_ISSUES_LIST','MERGED_SUB_ISSUE_COUNT','SERENA_TOOL_HINTS_RESOLVER']; [tpl := tpl.replace('{{'+k+'}}', os.environ.get(k,'')) for k in keys]; p=os.environ.get('INTEGRATION_FINGERPRINTS_FILE',''); fp=(open(p,encoding='utf-8',errors='replace').read() if (p and os.path.isfile(p) and os.access(p, os.R_OK)) else '{}'); tpl=tpl.replace('{{INTENT_FINGERPRINTS_JSON}}', fp); sys.stdout.write(tpl)" \
+  PYTHONSAFEPATH=1 python3 -c "import os,sys; tpl=open(os.environ['PROMPT_TPL'],encoding='utf-8').read(); keys=['CONFLICTED_FILES_COUNT','CONFLICTED_FILES_LIST','INTEGRATION_BRANCH','TRACKING_ISSUE_NUMBER','TRACKING_ISSUE_TITLE','TRACKING_ISSUE_BODY','MERGED_SUB_ISSUES_LIST','MERGED_SUB_ISSUE_COUNT','SERENA_TOOL_HINTS_RESOLVER']; [tpl := tpl.replace('{{'+k+'}}', os.environ.get(k,'')) for k in keys]; p=os.environ.get('INTEGRATION_FINGERPRINTS_FILE',''); fp=(open(p,encoding='utf-8',errors='replace').read() if (p and os.path.isfile(p) and os.access(p, os.R_OK)) else '{}'); tpl=tpl.replace('{{INTENT_FINGERPRINTS_JSON}}', fp); sys.stdout.write(tpl)" \
   > "${CONFLICT_RESOLVER_PROMPT_FILE}"
 
 # ── Smoke-test override gate ──────────────────────────────────────

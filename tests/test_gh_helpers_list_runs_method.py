@@ -44,6 +44,8 @@ GH_HELPERS = REPO_ROOT / "scripts" / "gh_helpers.sh"
 PROBES = (
 	"autofix_retrigger_has_inflight_peer",
 	"autofix_changes_lost_head_retry_consumed",
+	# The PR-named lookup both probes call since issue #4898.
+	"_autofix_pr_named_review_runs",
 )
 
 HEAD = "789e2f8a036f2236a5f10dcffab31019d328d77c"
@@ -66,7 +68,7 @@ def _list_runs_call(body: str, fn: str) -> str:
 		line for line in body.splitlines()
 		if not line.lstrip().startswith("#")
 	)
-	m = re.search(r"gh_retry gh api \\\n(?P<call>.*?\n\s+2>/dev/null)", uncommented_body, re.DOTALL)
+	m = re.search(r"gh_retry gh api(?P<call>(?:(?!gh_retry gh api).)*?/actions/(?:workflows/[^\s]+/)?runs.*?2>(?:/dev/null|\"\$\{review_error_file\}\"))", uncommented_body, re.DOTALL)
 	assert m, "Failed to locate %s list-runs gh api call" % fn
 	return m.group("call")
 
@@ -76,10 +78,10 @@ def test_list_runs_probes_pin_the_get_method() -> None:
 	for fn in PROBES:
 		body = _probe_body(text, fn)
 		list_runs_call = _list_runs_call(body, fn)
-		assert "/actions/runs" in list_runs_call, fn
+		assert re.search(r"/actions/(?:workflows/[^\s]+/)?runs", list_runs_call), fn
 		# gh api infers POST from the -f parameters unless the method is
 		# pinned on the actual command; POST /actions/runs is not a route and 404s.
-		assert re.search(r"^\s+(?:-X GET|--method GET)\s*\\$", list_runs_call, re.MULTILINE), (
+		assert re.search(r"(?:-X GET|--method GET)(?:\s*\\|\s)", list_runs_call), (
 			"%s must pin GET on the list-runs call — without it `gh api` "
 			"POSTs and the probe 404s" % fn
 		)
@@ -91,7 +93,7 @@ def test_list_runs_probes_pin_the_get_method() -> None:
 
 _RUNNER = r"""
 extract_fn() {
-	awk -v fn="__FN__" '
+	awk -v fn="$1" '
 		BEGIN { in_fn=0 }
 		$0 ~ "^"fn"\\(\\)" { in_fn=1 }
 		in_fn { print }
@@ -108,6 +110,13 @@ emit_event() { :; }
 gh() {
 	[ "${1:-}" = "api" ] || return 1
 	shift
+	case " $* " in
+		*" repos/owner/repo --jq .default_branch "*) printf 'main\n'; return 0 ;;
+		*" /repos/owner/repo/actions/workflows/"*)
+			printf '{"total_count":0,"workflow_runs":[]}\n'
+			return 0
+			;;
+	esac
 	method=""
 	has_field=0
 	for arg in "$@"; do
@@ -133,7 +142,8 @@ gh() {
 	cat "${RUNS_FIXTURE}"
 }
 
-eval "$(extract_fn)"
+eval "$(extract_fn _autofix_pr_named_review_runs)"
+eval "$(extract_fn __FN__)"
 __FN__ "$@"
 """
 
@@ -161,7 +171,9 @@ def _runs(*entries: dict) -> str:
 def test_budget_probe_reaches_the_api_and_reports_budget_available() -> None:
 	# A head SHA no prior run has reviewed: the budget is available, so
 	# the caller may dispatch exactly one automated retry. This is the
-	# real #3763 shape — head 789e2f8a appears on no other run.
+	# real #3763 shape — head 789e2f8a appears on no other completed run;
+	# its push left only the cancelled pull_request twin, whose created_at
+	# is the push-time bound (issue #5523).
 	proc = _run_probe(
 		"autofix_changes_lost_head_retry_consumed",
 		_runs(
@@ -171,12 +183,24 @@ def test_budget_probe_reaches_the_api_and_reports_budget_available() -> None:
 				"conclusion": "success",
 				"head_sha": "549d94dd0f80955e0cf28e55be2152378e5e2937",
 				"path": ".github/workflows/ai-review.yml",
-			}
+				"created_at": "2026-09-20T11:00:00Z",
+			},
+			{
+				"id": 32720851045,
+				"status": "completed",
+				"conclusion": "cancelled",
+				"head_sha": HEAD,
+				"path": ".github/workflows/ai-review.yml",
+				"created_at": "2026-09-20T12:00:00Z",
+			},
 		),
 		"3764",
 		BRANCH,
 		CURRENT_RUN,
 		HEAD,
+		# Head commit time, which the step passes since issue #4898 and the
+		# helper ignores since issue #5523.
+		"1790000000",
 	)
 	assert "reason=api_error" not in proc.stderr, proc.stderr
 	assert "prior_completed=0" in proc.stdout, proc.stdout

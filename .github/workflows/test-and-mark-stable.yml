@@ -1119,6 +1119,53 @@ jobs:
           # was skipped (plan auto-approved directly to ai:implementing).
           IMPL_CREATED_AFTER="${{ steps.approve.outputs.approved_at || steps.create-issue.outputs.created_after }}"
 
+          # The first-page metrics below are only progress signals. A terminal
+          # decision needs every page of this issue's runs (not other issues'
+          # Implement runs). A full tenth page or an unreadable page is unknown.
+          SCOPED_IMPL_ACTIVE_ID=""
+          SCOPED_IMPL_CAPPED=0
+          SCOPED_IMPL_NEXT_WALK=0
+          scoped_implement_runs_complete() {
+            local scoped_impl_page=1
+            local scoped_impl_json=""
+            local scoped_impl_summary=""
+            local scoped_impl_count=0
+            local scoped_impl_matches=0
+            SCOPED_IMPL_RUN_ID=""
+            SCOPED_IMPL_RUN_CONCLUSION=""
+            SCOPED_IMPL_RUN_TOTAL=0
+            SCOPED_IMPL_ACTIVE_ID=""
+            while [ "$scoped_impl_page" -le "$SCOPED_RUN_LOOKUP_MAX_PAGES" ]; do
+              scoped_impl_json=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs?per_page=100&page=${scoped_impl_page}&created=>${IMPL_CREATED_AFTER}") || return 1
+              scoped_impl_summary=$(printf '%s' "$scoped_impl_json" | jq -sce --arg title "$ISSUE_TITLE" '
+                if length != 1 or (.[0].workflow_runs | type) != "array" or (.[0].workflow_runs | length) > 100 then error("invalid runs page") else .[0].workflow_runs end
+                | {count: length, matches: [.[] | select((.name | type) == "string" and (.name | test("Implement"; "i"))) | select(.display_title == $title) | select(.conclusion != "skipped")]}
+                | if all(.matches[]; (.id | type == "number" and . > 0 and floor == .) and
+                    (.status | type == "string" and IN("queued", "in_progress", "completed", "requested", "waiting", "pending")) and
+                    (if .status == "completed" then (.conclusion | IN("success", "failure", "cancelled", "timed_out", "action_required", "neutral", "stale", "startup_failure")) else .conclusion == null end))
+                  then . else error("invalid matching Implement run") end
+              ' 2>/dev/null) || return 1
+              scoped_impl_count=$(printf '%s' "$scoped_impl_summary" | jq -r '.count')
+              scoped_impl_matches=$(printf '%s' "$scoped_impl_summary" | jq -r '.matches | length')
+              SCOPED_IMPL_RUN_TOTAL=$((SCOPED_IMPL_RUN_TOTAL + scoped_impl_matches))
+              if [ -z "$SCOPED_IMPL_RUN_ID" ] && [ "$scoped_impl_matches" -gt 0 ]; then
+                SCOPED_IMPL_RUN_ID=$(printf '%s' "$scoped_impl_summary" | jq -r '.matches[0].id')
+                SCOPED_IMPL_RUN_CONCLUSION=$(printf '%s' "$scoped_impl_summary" | jq -r '.matches[0].conclusion // "unknown"')
+              fi
+              SCOPED_IMPL_ACTIVE_ID=$(printf '%s' "$scoped_impl_summary" | jq -r '[.matches[] | select(.status != "completed")] | first | .id // empty')
+              if [ -n "$SCOPED_IMPL_ACTIVE_ID" ]; then
+                return 2
+              fi
+              if [ "$scoped_impl_count" -lt 100 ]; then
+                [ "$SCOPED_IMPL_RUN_TOTAL" -gt 0 ] || return 1
+                return 0
+              fi
+              scoped_impl_page=$((scoped_impl_page + 1))
+            done
+            SCOPED_IMPL_CAPPED=1
+            return 1
+          }
+
           # Same rules as wait-plan's latest_scoped_run_field (issue #4723): only
           # runs whose display_title is OUR issue title count, so a parallel smoke
           # job's Implement run is never taken, and the lookup walks pages of the
@@ -1229,23 +1276,55 @@ jobs:
               PREV_STATE="$CUR_STATE"
             fi
 
-            # Detect implement workflow failure — only if ALL runs have completed
+            # Detect implement workflow failure — only if THIS issue's runs have completed
             # AND enough time has elapsed for the real implement workflow to start.
             # Without the grace period, stale completed runs (e.g. from
             # AUTO_IMPLEMENT_ON_CLEAR_PLAN auto-approval during the plan phase)
             # cause a false failure before the /approved-triggered run starts.
             ELAPSED_SECS=$((NOW - PHASE_START))
             if [ "$IMPL_RUN_TOTAL" -gt 0 ] && [ "$IMPL_RUN_IN_PROGRESS" -eq 0 ] && [ "$ELAPSED_SECS" -ge "$MIN_GRACE_SECONDS" ]; then
-              # All implement runs finished but no PR appeared — give one more cycle
-              sleep "$POLL_INTERVAL"
-              PR_RECHECK=$(gh api "repos/${TEST_REPO}/pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=1" \
-                --jq '.[0].number // empty' 2>/dev/null || echo "")
-              if [ -n "$PR_RECHECK" ]; then
-                continue
+              # A known active run is cheaper to check by ID than walking the
+              # repository-wide run list again. On completion, scan for peers.
+              if [ -n "$SCOPED_IMPL_ACTIVE_ID" ] && [ "$NOW" -ge "$SCOPED_IMPL_NEXT_WALK" ]; then
+                SCOPED_IMPL_ACTIVE_JSON=$(gh_api_safe_print "repos/${TEST_REPO}/actions/runs/${SCOPED_IMPL_ACTIVE_ID}") || SCOPED_IMPL_ACTIVE_JSON=""
+                if printf '%s' "$SCOPED_IMPL_ACTIVE_JSON" | jq -se --arg title "$ISSUE_TITLE" --argjson id "$SCOPED_IMPL_ACTIVE_ID" '
+                  length == 1 and (.[0].id == $id) and (.[0].display_title == $title) and
+                  (.[0].name | type == "string" and test("Implement"; "i")) and
+                  (.[0].status | IN("queued", "in_progress", "requested", "waiting", "pending"))
+                ' >/dev/null 2>&1; then
+                  SCOPED_IMPL_NEXT_WALK=0
+                elif printf '%s' "$SCOPED_IMPL_ACTIVE_JSON" | jq -se --argjson id "$SCOPED_IMPL_ACTIVE_ID" 'length == 1 and .[0].id == $id and .[0].status == "completed"' >/dev/null 2>&1; then
+                  SCOPED_IMPL_ACTIVE_ID=""
+                  SCOPED_IMPL_NEXT_WALK=0
+                else
+                  # An unreadable or malformed by-ID response is not proof of completion.
+                  SCOPED_IMPL_ACTIVE_ID=""
+                  SCOPED_IMPL_NEXT_WALK=$((NOW + 120))
+                fi
               fi
-              echo "::error::All ${IMPL_RUN_TOTAL} implement workflow run(s) completed but no PR was created"
-              echo "status=implement_failed" >> "$GITHUB_OUTPUT"
-              exit 1
+              if [ -z "$SCOPED_IMPL_ACTIVE_ID" ] && [ "$SCOPED_IMPL_CAPPED" -eq 0 ] && [ "$NOW" -ge "$SCOPED_IMPL_NEXT_WALK" ]; then
+                SCOPED_IMPL_NEXT_WALK=$((NOW + 120))
+                if scoped_implement_runs_complete; then
+                  # Keep the existing PR recheck and confirm the run list again
+                  # after it: a newly indexed active run must not be missed.
+                  sleep "$POLL_INTERVAL"
+                  PR_RECHECK=$(gh api "repos/${TEST_REPO}/pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=1" \
+                    --jq '.[0].number // empty' 2>/dev/null || echo "")
+                  if [ -n "$PR_RECHECK" ]; then
+                    continue
+                  fi
+                  if scoped_implement_runs_complete; then
+                    echo "::error::All ${SCOPED_IMPL_RUN_TOTAL} implement workflow run(s) completed but no PR was created (issue run_id=${SCOPED_IMPL_RUN_ID} conclusion=${SCOPED_IMPL_RUN_CONCLUSION})"
+                    echo "status=implement_failed" >> "$GITHUB_OUTPUT"
+                    exit 1
+                  fi
+                  if [ -n "$SCOPED_IMPL_ACTIVE_ID" ]; then
+                    SCOPED_IMPL_NEXT_WALK=0
+                  fi
+                elif [ -n "$SCOPED_IMPL_ACTIVE_ID" ]; then
+                  SCOPED_IMPL_NEXT_WALK=0
+                fi
+              fi
             elif [ "$IMPL_RUN_TOTAL" -gt 0 ] && [ "$IMPL_RUN_IN_PROGRESS" -eq 0 ] && [ "$ELAPSED_SECS" -lt "$MIN_GRACE_SECONDS" ]; then
               echo "  ⏳ All ${IMPL_RUN_TOTAL} implement run(s) completed but grace period active (${ELAPSED_SECS}s/${MIN_GRACE_SECONDS}s) — waiting for /approved-triggered run to start"
             fi
@@ -1537,6 +1616,10 @@ jobs:
           # itself, per the early checkout at line 316) instead of the
           # repo we just pushed the bait commit to, leaving Phase 4
           # still vulnerable to no_review_triggered.
+          # Exposure: BRANCH is the smoke issue's bait branch in TEST_REPO,
+          # not a protected default branch. Dispatching its workflow copy
+          # with inherited secrets is unsafe if another writer can change
+          # that branch; this E2E path needs its own default-ref migration.
           if gh workflow run "${REVIEW_WORKFLOW_FILE}" \
               --repo "${TEST_REPO}" \
               --ref "${BRANCH}" \
@@ -2308,34 +2391,91 @@ jobs:
           # gh api wrapper with a small retry budget so a transient
           # 429/5xx doesn't bypass the editor-flake retry budget. Used
           # by every gh api call in this step (fetch helpers + poll
-          # loop) so any single API blip gets up to 3 attempts with
-          # 2s/4s backoff before being treated as terminal. On final
+          # loop) so ordinary blips get up to 3 attempts with 2s/4s
+          # backoff. A known rate limit instead returns 75 immediately;
+          # the poll loop can then wait within its own deadline. On final
           # failure ALL attempts' stderr is surfaced (not just the
           # last) so triage can spot patterns like "first 2 were
           # rate-limited then 3rd was 5xx".
+          source scripts/gh_helpers.sh
+          GH_API_RATE_LIMIT_RESET_FILE=$(mktemp)
+          GH_API_RATE_LIMIT_PROBED=0
           gh_api_with_retry() {
             local out
             local rc=0
             local err_file
+            local response_file
+            local attempt_err
             err_file="$(mktemp)"
+            response_file="$(mktemp)"
+            : > "${GH_API_RATE_LIMIT_RESET_FILE}"
             for try in 1 2 3; do
               # Tag each attempt's stderr so they're distinguishable
               # in the final warning and append (>>) — overwriting
               # would lose earlier diagnostics.
               echo "--- attempt ${try} stderr ---" >> "${err_file}"
-              out=$(gh api "$@" 2>>"${err_file}") && {
-                rm -f "${err_file}"
+              : > "${response_file}"
+              if gh api -i "$@" > "${response_file}" 2>>"${err_file}"; then
+                # -i supplies headers on both success and failure. Never
+                # hand headers (or a failed response body) to a caller.
+                out=$(sed '1,/^\r\{0,1\}$/d' "${response_file}")
+                rm -f "${err_file}" "${response_file}"
                 printf '%s' "${out}"
                 return 0
-              }
-              rc=$?
+              else
+                rc=$?
+              fi
+              attempt_err=$(cat "${err_file}")
+              if _is_gh_rate_limit "${attempt_err} $(cat "${response_file}")"; then
+                # _parse_reset_header uses arithmetic on Retry-After. Do
+                # not feed it an unbounded/untrusted numeric header.
+                local retry_after
+                retry_after=$(grep -im1 '^retry-after:' "${response_file}" | tr -d '\r' | cut -d: -f2- | tr -d '[:space:]' || true)
+                if [[ "${retry_after}" =~ ^[0-9]{1,9}$ ]]; then
+                  _parse_reset_header "${response_file}" > "${GH_API_RATE_LIMIT_RESET_FILE}"
+                else
+                  grep -im1 '^x-ratelimit-reset:' "${response_file}" | cut -d: -f2- | tr -d '[:space:]\r' > "${GH_API_RATE_LIMIT_RESET_FILE}" || true
+                fi
+                echo "::warning::gh api rate limited; deferring retry to the bounded wait" >&2
+                rm -f "${err_file}" "${response_file}"
+                return 75
+              fi
               [ "${try}" -lt 3 ] && sleep $((try * 2))
             done
             if [ -s "${err_file}" ]; then
               echo "::warning::gh api failed after 3 attempts (rc=${rc}): $(tr '\n' ' ' < "${err_file}" | head -c 1000)" >&2
             fi
-            rm -f "${err_file}"
+            rm -f "${err_file}" "${response_file}"
             return "${rc}"
+          }
+
+          wait_for_gh_rate_limit() {
+            local limit_deadline="$1"
+            local reset_epoch
+            local now
+            local wait_secs
+            reset_epoch=$(cat "${GH_API_RATE_LIMIT_RESET_FILE}")
+            # Only probe once per step, and only when the failed response
+            # provided neither usable Retry-After nor reset epoch.
+            if ! [[ "${reset_epoch}" =~ ^[0-9]{1,12}$ ]] && [ "${GH_API_RATE_LIMIT_PROBED}" -eq 0 ]; then
+              GH_API_RATE_LIMIT_PROBED=1
+              reset_epoch=$(gh api /rate_limit --jq '.resources.core.reset // empty' 2>/dev/null) || reset_epoch=""
+            fi
+            now=$(date +%s)
+            if [ "${now}" -ge "${limit_deadline}" ]; then
+              return 1
+            fi
+            wait_secs=60  # Secondary limit with no usable reset: pause before retrying.
+            if [[ "${reset_epoch}" =~ ^[0-9]{1,12}$ ]]; then
+              wait_secs=$((10#${reset_epoch} - now + 1))
+              [ "${wait_secs}" -lt 1 ] && wait_secs=1
+            fi
+            if [ "${wait_secs}" -gt $((limit_deadline - now)) ]; then
+              wait_secs=$((limit_deadline - now))
+            fi
+            echo "::warning::GitHub rate limit; waiting ${wait_secs}s within retry deadline" >&2
+            sleep "${wait_secs}"
+            [ "$(date +%s)" -lt "${limit_deadline}" ]
           }
 
           fetch_canary_to_tmp() {
@@ -2389,17 +2529,26 @@ jobs:
             return 0
           }
 
-          # Returns the PR's state ("open" / "closed") or "unknown" on
-          # API failure. Used by the retry poll loop to bail out if
+          # Returns "open", "closed", "unknown", or "rate_limited".
+          # Used by the retry poll loop to bail out if
           # the PR is closed/merged mid-wait — no point polling for a
           # review run that won't fire on a closed PR.
           fetch_pr_state() {
             local state
+            local rc
             state=$(gh_api_with_retry "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.state // "unknown"') || {
+              rc=$?
+              if [ "${rc}" -eq 75 ]; then
+                echo "rate_limited"
+                return 0
+              fi
               echo "unknown"
               return 0
             }
-            echo "${state:-unknown}"
+            case "${state}" in
+              open|closed) echo "${state}" ;;
+              *) echo "unknown" ;;
+            esac
           }
 
           run_pytest() {
@@ -2578,6 +2727,8 @@ jobs:
             fi
             echo "✓ Adopting active review run #${RETRY_RUN_ID} instead of dispatching duplicate work"
           else
+            # Same exposure as the Bug B fallback above: this retry still
+            # executes TEST_REPO's bait-branch workflow, not its default copy.
             if ! gh workflow run "${REVIEW_WORKFLOW_FILE}" \
                 --repo "${TEST_REPO}" \
                 --ref "${BRANCH}" \
@@ -2606,12 +2757,44 @@ jobs:
           # 25-min retry window during a GitHub outage.
           PR_STATE_FAILURES=0
           PR_STATE_FAILURE_LIMIT=4  # ~60s of consecutive unknowns
+          SKIP_POLL_SLEEP=0
           while [ "$(date +%s)" -lt "${DEADLINE}" ]; do
-            sleep 15
+            if [ "${SKIP_POLL_SLEEP}" -eq 0 ]; then
+              sleep 15
+            fi
+            SKIP_POLL_SLEEP=0
+            if [ "$(date +%s)" -ge "${DEADLINE}" ]; then
+              break
+            fi
+            if [ -z "${RETRY_RUN_ID}" ] && [ "$(date +%s)" -ge "${RETRY_REGISTRATION_DEADLINE}" ]; then
+              echo "::error::Retry dispatch did not register a matching review run within 90 seconds"
+              echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
             # Bail out if the PR closed/merged during the wait — no
             # point polling for a review run that won't fire on a
             # closed PR.
             PR_STATE=$(fetch_pr_state)
+            if [ "${PR_STATE}" = "rate_limited" ]; then
+              RATE_LIMIT_DEADLINE="${DEADLINE}"
+              if [ -z "${RETRY_RUN_ID}" ] && [ "${RETRY_REGISTRATION_DEADLINE}" -lt "${RATE_LIMIT_DEADLINE}" ]; then
+                RATE_LIMIT_DEADLINE="${RETRY_REGISTRATION_DEADLINE}"
+              fi
+              if ! wait_for_gh_rate_limit "${RATE_LIMIT_DEADLINE}"; then
+                if [ -z "${RETRY_RUN_ID}" ]; then
+                  echo "::error::Retry dispatch did not register a matching review run within 90 seconds"
+                  echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+                else
+                  echo "::error::Retry review run did not complete within ${EDITOR_RETRY_BUDGET_MINUTES} minutes"
+                  echo "status=retry_timeout" >> "$GITHUB_OUTPUT"
+                fi
+                exit 1
+              fi
+              # A PR can close while we wait. Read it again immediately,
+              # before any run-list/run poll or another fixed sleep.
+              SKIP_POLL_SLEEP=1
+              continue
+            fi
             if [ "${PR_STATE}" = "closed" ]; then
               echo "::error::PR #${PR_NUMBER} closed during retry wait — abandoning retry"
               echo "status=pr_closed_during_retry" >> "$GITHUB_OUTPUT"
@@ -2629,13 +2812,29 @@ jobs:
               # *consecutive* failures, not cumulative.
               PR_STATE_FAILURES=0
             fi
+            # A completed run never establishes that a PR is still open.
+            if [ "${PR_STATE}" != "open" ]; then
+              continue
+            fi
             if [ -z "${RETRY_RUN_ID}" ]; then
               if [ "$(date +%s)" -ge "${RETRY_REGISTRATION_DEADLINE}" ]; then
                 echo "::error::Retry dispatch did not register a matching review run within 90 seconds"
                 echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
                 exit 1
               fi
-              if ! RETRY_RUNS_JSON=$(gh_api_with_retry "${RETRY_RUNS_QUERY}"); then
+              if RETRY_RUNS_JSON=$(gh_api_with_retry "${RETRY_RUNS_QUERY}"); then
+                :
+              else
+                RATE_LIMIT_RC=$?
+                if [ "${RATE_LIMIT_RC}" -eq 75 ]; then
+                  if ! wait_for_gh_rate_limit "${RETRY_REGISTRATION_DEADLINE}"; then
+                    echo "::error::Retry dispatch did not register a matching review run within 90 seconds"
+                    echo "status=retry_dispatch_failed" >> "$GITHUB_OUTPUT"
+                    exit 1
+                  fi
+                  SKIP_POLL_SLEEP=1
+                  continue
+                fi
                 echo "::warning::Could not list post-dispatch review runs; retrying within the registration window"
                 continue
               fi
@@ -2672,7 +2871,17 @@ jobs:
               echo "✓ Registered retry review run #${RETRY_RUN_ID}; polling that exact run"
             fi
 
-            if ! RETRY_RUN_JSON=$(gh_api_with_retry "repos/${TEST_REPO}/actions/runs/${RETRY_RUN_ID}"); then
+            if RETRY_RUN_JSON=$(gh_api_with_retry "repos/${TEST_REPO}/actions/runs/${RETRY_RUN_ID}"); then
+              :
+            else
+              RATE_LIMIT_RC=$?
+              if [ "${RATE_LIMIT_RC}" -eq 75 ]; then
+                if ! wait_for_gh_rate_limit "${DEADLINE}"; then
+                  break
+                fi
+                SKIP_POLL_SLEEP=1
+                continue
+              fi
               echo "::warning::Could not read retry review run #${RETRY_RUN_ID}; retrying within the retry window"
               continue
             fi
@@ -2691,7 +2900,7 @@ jobs:
             fi
           done
 
-          if [ -z "${RETRY_RUN_ID}" ] || [ "${RETRY_STATUS:-}" != "completed" ]; then
+          if [ "$(date +%s)" -ge "${DEADLINE}" ] || [ -z "${RETRY_RUN_ID}" ] || [ "${RETRY_STATUS:-}" != "completed" ]; then
             echo "::error::Retry review run did not complete within ${EDITOR_RETRY_BUDGET_MINUTES} minutes"
             echo "status=retry_timeout" >> "$GITHUB_OUTPUT"
             exit 1
@@ -4448,30 +4657,23 @@ jobs:
       # workflow-templates/.claude/ (hooks, scripts, commands, settings.json)
       # to every consumer together with the workflow wrappers, so the release
       # gate runs the same Claude asset suites CI runs on every PR.
+      # Parity runs on the committed tree without PR-time dry-run preparation;
+      # a template waiting for a live-copy sync PR blocks the release.
       - name: Claude asset tests (CLAUDE.md, .claude hooks, scripts, commands)
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_claude_template_live_parity.py \
             tests/test_pr_merge_status_guard.py \
             tests/test_pr_watch_guard.py \
             tests/test_gh_api_write_guard.py \
-            tests/test_pr_check_in_reminder.py \
-            tests/test_check_in_status.py \
-            tests/test_stale_routines.py \
-            tests/test_dispatch_workflow.py \
-            tests/test_edit_comment.py \
-            tests/test_permission_prompts.py \
-            tests/test_check_in_status_hand_back.py \
-            tests/test_claude_pr_sweep.py \
-            tests/test_check_in_session_targeting.py \
-            tests/test_implement_plan_claude_command.py \
-            tests/test_session_titles.py \
-            tests/test_claude_issue_route.py \
-            tests/test_implement_issue_claude_command.py \
+            tests/test_no_session_automation.py \
+            tests/test_ai_labels_retired.py \
+            tests/test_update_workflows_retired_files.py \
             tests/test_security_pass_skip.py \
             tests/test_claude_md_section_numbers.py \
             tests/test_audit_plans_command.py \
-            tests/test_ingest_implement_plan_lessons.py
+            tests/test_deploy_activate_command.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_session_start_extract_repo_slug.py
 
       - name: Prompt files integrity

@@ -269,9 +269,10 @@ codex_thread_reuse_record_session_from_marker()
 {
 	local state_key="${1:?state key required}"
 	local marker_file="${2:?marker file required}"
-	local session_root="${CODEX_THREAD_REUSE_SESSION_ROOT:-${HOME:-}/.codex/sessions}"
+	local session_root=""
 	local session_id=""
 
+	session_root="$(codex_thread_reuse_session_root)"
 	session_id="$(python3 - "${marker_file}" "${session_root}" "$(pwd)" <<'PY'
 from __future__ import annotations
 
@@ -459,6 +460,46 @@ EOF
 	printf '%s\n' "${wrapper_dir}"
 }
 
+# Launcher for one `codex` exec/resume. When CODEX_ISOLATED_EXEC names the
+# trusted copy of scripts/codex_isolated_exec.sh, Codex runs in the
+# credential-free, network-isolated container (CODEX_ISOLATED_MODE:
+# read-only | workspace, default read-only; CODEX_ISOLATED_ROOT: optional
+# persistent sandbox root from `codex_isolated_exec.sh prepare`). Sessions
+# then live in a host directory mounted as the container's CODEX_HOME, so
+# thread reuse keeps working. Without CODEX_ISOLATED_EXEC the host binary
+# runs, as before.
+codex_thread_reuse_isolated_home()
+{
+	printf '%s/isolated-codex-home\n' "$(codex_thread_reuse_ensure_runtime_root)"
+}
+
+codex_thread_reuse_launcher()
+{
+	local real_codex="${1:?real codex required}"
+
+	CODEX_THREAD_REUSE_LAUNCHER=()
+	if [ -z "${CODEX_ISOLATED_EXEC:-}" ]; then
+		CODEX_THREAD_REUSE_LAUNCHER=("${real_codex}")
+		return 0
+	fi
+	CODEX_THREAD_REUSE_LAUNCHER=(bash "${CODEX_ISOLATED_EXEC}" run --mode "${CODEX_ISOLATED_MODE:-read-only}")
+	if [ -n "${CODEX_ISOLATED_ROOT:-}" ]; then
+		CODEX_THREAD_REUSE_LAUNCHER+=(--root "${CODEX_ISOLATED_ROOT}")
+	fi
+	CODEX_THREAD_REUSE_LAUNCHER+=(--codex-home "$(codex_thread_reuse_isolated_home)" --)
+}
+
+codex_thread_reuse_session_root()
+{
+	if [ -n "${CODEX_THREAD_REUSE_SESSION_ROOT:-}" ]; then
+		printf '%s\n' "${CODEX_THREAD_REUSE_SESSION_ROOT}"
+	elif [ -n "${CODEX_ISOLATED_EXEC:-}" ]; then
+		printf '%s/sessions\n' "$(codex_thread_reuse_isolated_home)"
+	else
+		printf '%s/.codex/sessions\n' "${HOME:-}"
+	fi
+}
+
 codex_thread_reuse_run_once()
 {
 	local real_codex="${1:?real codex required}"
@@ -491,7 +532,8 @@ codex_thread_reuse_run_once()
 	local -a runner=()
 	local -a cmd=()
 
-	cmd=("${real_codex}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true)
+	codex_thread_reuse_launcher "${real_codex}"
+	cmd=("${CODEX_THREAD_REUSE_LAUNCHER[@]}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true)
 	if [ "${mode}" = 'resume' ]; then
 		cmd+=(exec resume)
 	else
@@ -569,6 +611,98 @@ codex_thread_reuse_run_once()
 	return "${rc}"
 }
 
+# Claude engine branch of direct-run (replace-claude-sessions plan Phase 5b).
+# Runs the role named by CODEX_THREAD_REUSE_ENGINE_ROLE through claude_run
+# (scripts/ai_engine.sh next to this file) in the current directory. One
+# Claude session per state key carries the job's retries: the first attempt
+# starts it with --session-id, later attempts resume it (claude_run picks
+# --resume once the session exists) and, like the codex resume path, get the
+# continuation prompt when one is configured. A crashed attempt drops the
+# session so the next attempt starts fresh, as a failed codex resume does.
+# Returns claude_run's status: 75 means Claude is unavailable and the caller
+# runs the codex path instead (plan D1).
+codex_thread_reuse_claude_direct_run()
+{
+	local state_key="${1:?state key required}"
+	local prompt_file="${2:?prompt file required}"
+	local output_file="${3:?output file required}"
+	local log_file="${4:-}"
+	local cumulative_log_file="${5:-}"
+	local continuation_file="${6:-}"
+	local transform_mode="${7:-none}"
+	local marker_start="${8:-}"
+	local marker_end="${9:-}"
+	local timeout_secs="${CODEX_THREAD_REUSE_TIMEOUT_SECS:-}"
+	local role="${CODEX_THREAD_REUSE_ENGINE_ROLE:-}"
+	local engine_dir=""
+	local root=""
+	local id_file=""
+	local claude_session_id=""
+	local effective_prompt="${prompt_file}"
+	local claude_prompt=""
+	local claude_rc=0
+	local -a claude_cmd=()
+	local -a tee_targets=()
+
+	engine_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	if ! [[ "${role}" =~ ^[A-Z][A-Z_]{0,39}$ ]] || [ ! -f "${engine_dir}/ai_engine.sh" ]; then
+		echo "AI_ENGINE_FALLBACK role=${role:-unknown} reason=support_missing" >&2
+		return 75
+	fi
+	# shellcheck source=ai_engine.sh
+	source "${engine_dir}/ai_engine.sh"
+
+	root="$(codex_thread_reuse_ensure_runtime_root)"
+	id_file="${root}/states/claude-$(codex_thread_reuse_safe_key "${state_key}").session"
+	claude_session_id="$(cat "${id_file}" 2>/dev/null || true)"
+	if ! [[ "${claude_session_id}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+		claude_session_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"
+		printf '%s\n' "${claude_session_id}" > "${id_file}"
+	fi
+	# claude_run keeps the isolated CLI's sessions outside the container
+	# (ai_engine_claude_home); a resumable session gets the continuation prompt.
+	local claude_session_store="${HOME}/.claude"
+	if declare -F ai_engine_claude_home >/dev/null 2>&1; then
+		claude_session_store="$(ai_engine_claude_home)"
+	fi
+	if [ -n "${continuation_file}" ] && compgen -G "${claude_session_store}/projects/*/${claude_session_id}.jsonl" >/dev/null; then
+		claude_prompt="$(mktemp /tmp/codex_thread_reuse_claude_prompt.XXXXXX)"
+		if codex_thread_reuse_transform_prompt \
+			"${transform_mode}" \
+			"${prompt_file}" \
+			"${continuation_file}" \
+			"${claude_prompt}" \
+			"${marker_start}" \
+			"${marker_end}"; then
+			effective_prompt="${claude_prompt}"
+		fi
+	fi
+
+	[ -n "${log_file}" ] && tee_targets+=("${log_file}")
+	[ -n "${cumulative_log_file}" ] && tee_targets+=("${cumulative_log_file}")
+	claude_cmd=(bash -c 'source "$1"; shift; claude_run "$@"' _ "${engine_dir}/ai_engine.sh")
+	if [ -n "${timeout_secs}" ]; then
+		if command -v timeout >/dev/null 2>&1; then
+			claude_cmd=(timeout --signal=TERM --kill-after=5s "${timeout_secs}s" "${claude_cmd[@]}")
+		else
+			echo "::warning::timeout unavailable; ${role} will rely on the enclosing job timeout." >&2
+		fi
+	fi
+	if [ "${#tee_targets[@]}" -gt 0 ]; then
+		"${claude_cmd[@]}" "${role}" "${effective_prompt}" "${output_file}" "${PWD}" "${claude_session_id}" \
+			2> >(tee -a "${tee_targets[@]}" >&2) || claude_rc=$?
+	else
+		"${claude_cmd[@]}" "${role}" "${effective_prompt}" "${output_file}" "${PWD}" "${claude_session_id}" || claude_rc=$?
+	fi
+	if [ -n "${claude_prompt}" ]; then
+		rm -f "${claude_prompt}"
+	fi
+	if [ "${claude_rc}" -ne 0 ]; then
+		rm -f "${id_file}"
+	fi
+	return "${claude_rc}"
+}
+
 codex_thread_reuse_direct_run()
 {
 	local state_key="${CODEX_THREAD_REUSE_STATE_KEY:?CODEX_THREAD_REUSE_STATE_KEY is required}"
@@ -598,6 +732,34 @@ codex_thread_reuse_direct_run()
 	local resume_session_id=""
 	local resume_allowed='false'
 	local rc=0
+	local engine_rc=0
+	local claude_unavailable_file=""
+
+	# Claude engine (plan Phase 5b): CODEX_THREAD_REUSE_ENGINE=claude runs the
+	# role on Claude first; only exit 75 (Claude unavailable) continues to the
+	# codex path below, which is unchanged.
+	if [ "${CODEX_THREAD_REUSE_ENGINE:-codex}" = 'claude' ]; then
+		claude_unavailable_file="$(codex_thread_reuse_ensure_runtime_root)/states/claude-$(codex_thread_reuse_safe_key "${state_key}").unavailable"
+		if [ ! -f "${claude_unavailable_file}" ]; then
+			AI_ENGINE_MODEL_HINT="${model}" \
+				AI_ENGINE_EFFORT_HINT="${AI_ENGINE_EFFORT_HINT:-${MODEL_REASONING_EFFORT:-}}" \
+				codex_thread_reuse_claude_direct_run \
+				"${state_key}" \
+				"${prompt_file}" \
+				"${output_file}" \
+				"${log_file}" \
+				"${cumulative_log_file}" \
+				"${continuation_file}" \
+				"${transform_mode}" \
+				"${marker_start}" \
+				"${marker_end}" || engine_rc=$?
+			if [ "${engine_rc}" -ne 75 ]; then
+				return "${engine_rc}"
+			fi
+			: > "${claude_unavailable_file}"
+		fi
+		echo "Claude unavailable for ${state_key}; running the codex path (plan D1)." >&2
+	fi
 
 	real_codex="$(codex_thread_reuse_real_codex)"
 
@@ -745,8 +907,9 @@ codex_thread_reuse_wrapper_main()
 	if [ "${saw_exec}" != 'true' ]; then
 		exec "${real_codex}" "${prefix[@]}"
 	fi
+	codex_thread_reuse_launcher "${real_codex}"
 	if [ "${#suffix[@]}" -gt 0 ] && [ "${suffix[0]}" = 'resume' ]; then
-		exec "${real_codex}" "${prefix[@]}" exec "${suffix[@]}"
+		exec "${CODEX_THREAD_REUSE_LAUNCHER[@]}" "${prefix[@]}" exec "${suffix[@]}"
 	fi
 
 	prompt_file="$(mktemp /tmp/codex_thread_reuse_wrapper_prompt.XXXXXX)"
@@ -771,7 +934,7 @@ codex_thread_reuse_wrapper_main()
 			"${marker_end}"; then
 			capture_marker="$(codex_thread_reuse_begin_capture "${state_key}")"
 			set +e
-			"${real_codex}" "${prefix[@]}" exec resume "${suffix[@]}" "${resume_session_id}" - < "${transformed_prompt}"
+			"${CODEX_THREAD_REUSE_LAUNCHER[@]}" "${prefix[@]}" exec resume "${suffix[@]}" "${resume_session_id}" - < "${transformed_prompt}"
 			rc=$?
 			set -e
 			if [ "${rc}" -eq 0 ]; then
@@ -790,7 +953,7 @@ codex_thread_reuse_wrapper_main()
 		capture_marker="$(codex_thread_reuse_begin_capture "${state_key}")"
 	fi
 	set +e
-	"${real_codex}" "${prefix[@]}" exec "${suffix[@]}" < "${prompt_file}"
+	"${CODEX_THREAD_REUSE_LAUNCHER[@]}" "${prefix[@]}" exec "${suffix[@]}" < "${prompt_file}"
 	rc=$?
 	set -e
 	if [ "${reuse_available}" = 'true' ] && [ -n "${capture_marker}" ]; then

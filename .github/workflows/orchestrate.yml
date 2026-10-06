@@ -28,6 +28,16 @@ name: AI Orchestrate (Reusable)
         required: false
         type: string
         default: ""
+      engine:
+        description: >
+          Optional engine label for the project: `claude` labels the tracking
+          issue and each child issue `ai:engine-claude`, `codex` labels them
+          `ai:codex`. Empty (the default) adds no label. The poller and the
+          implement PR copy the label to later work; role selection honors it
+          after the separate Phase 5 role cutovers.
+        required: false
+        type: string
+        default: ""
     secrets:
       GH_PAT:
         required: true
@@ -42,6 +52,8 @@ env:
   # Defaults to high to match the repo-wide gpt-6-sol reasoning-level
   # policy. Override per-repo via vars.THINKING_LEVEL_ORCHESTRATE.
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_ORCHESTRATE || 'high' }}
+  # Codex version baked into the isolated agent image (scripts/codex_isolated_exec.sh).
+  CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
   # gpt-6-sol paths default to low verbosity per agents.md model table.
   # Output is structured JSON (`orchestrate_decomposition.v1` schema), which
   # is not verbosity-sensitive — the schema controls shape regardless. Low
@@ -76,7 +88,12 @@ jobs:
       - name: Log trigger context
         env:
           PROJECT_DESCRIPTION: ${{ inputs.project_description }}
+          ENGINE_INPUT: ${{ inputs.engine }}
         run: |
+          case "$(printf '%s' "${ENGINE_INPUT:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+            ''|claude|codex) ;;
+            *) echo "::error::engine must be empty, claude or codex (got '${ENGINE_INPUT}')"; exit 1 ;;
+          esac
           echo "Orchestrate workflow triggered"
           echo "Run ID: ${{ github.run_id }}"
           echo "Model: ${MODEL_EDITOR}"
@@ -360,7 +377,7 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh label_helpers.sh git_ref_health_check.sh orchestrate_lib.py render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh; do
+          for f in gh_helpers.sh label_helpers.sh git_ref_health_check.sh orchestrate_lib.py render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_isolated_exec.sh codex_isolated_workspace.py clarify_openrouter_broker.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -536,6 +553,16 @@ jobs:
         run: |
           set -euo pipefail
 
+          if [ -L unattended_system_instructions.md ] || [ -L ai_pipeline.md ]; then
+            echo "::error::Required static context input is a symbolic link; refusing to assemble the prompt." >&2
+            exit 1
+          fi
+          if [ -L ./pre_assembled_static.txt ] || { [ -e ./pre_assembled_static.txt ] && [ ! -f ./pre_assembled_static.txt ]; }; then
+            echo "::error::Checkout contains a non-regular pre_assembled_static.txt; refusing to assemble static context." >&2
+            exit 1
+          fi
+          orchestrate_readme_context="$(mktemp "${RUNNER_TEMP}/orchestrate-readme.XXXXXX")"
+          bash scripts/build_static_context.sh readme "${orchestrate_readme_context}"
           {
             echo "=== SYSTEM INSTRUCTIONS ==="
             cat unattended_system_instructions.md
@@ -543,22 +570,23 @@ jobs:
             echo "=== AI PIPELINE ==="
             cat ai_pipeline.md
             echo
-            if [ -f agents.md ]; then
+            if [ -f agents.md ] && [ ! -L agents.md ]; then
               echo "=== AGENTS.MD ==="
               cat agents.md
               echo
+            elif [ -L agents.md ]; then
+              echo "::warning::agents.md is a symbolic link; omitted from the static context." >&2
             fi
-            if [ -f README.md ]; then
-              echo "=== README.MD ==="
-              cat README.md
-              echo
-            fi
-            if [ -f probably_unnecessary_but_read_if_stuck.md ]; then
+            cat "${orchestrate_readme_context}"
+            if [ -f probably_unnecessary_but_read_if_stuck.md ] && [ ! -L probably_unnecessary_but_read_if_stuck.md ]; then
               echo "=== OVERFLOW REFERENCE ==="
               echo "If you cannot make progress without operator-runbook details (env var reference, autofix retrigger/dedup internals, orchestrator integration-sync auto-heal, validation self-healing, workflow log analysis pipeline, semantic cache scope, wrapper pin policy), read ./probably_unnecessary_but_read_if_stuck.md from the working tree before bailing."
               echo
+            elif [ -L probably_unnecessary_but_read_if_stuck.md ]; then
+              echo "::warning::probably_unnecessary_but_read_if_stuck.md is a symbolic link; omitted from the static context." >&2
             fi
           } > ./pre_assembled_static.txt
+          rm -f "${orchestrate_readme_context}"
 
           STATIC_LINES="$(wc -l < ./pre_assembled_static.txt)"
           STATIC_BYTES="$(wc -c < ./pre_assembled_static.txt)"
@@ -736,8 +764,11 @@ jobs:
             # redirection replaces the prior `cat ... | codex` so the
             # `timeout` wrapper governs codex directly — wrapping a
             # pipeline would only time out `cat`, not the model call.
+            # The decomposer reads the tracking issue (untrusted), so Codex
+            # runs in the credential-free, network-isolated container
+            # (scripts/codex_isolated_exec.sh, read-only snapshot).
             if timeout --signal=TERM --kill-after=30s -- "${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}" \
-                 codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
+                 bash scripts/codex_isolated_exec.sh run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
               if ! grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
                 echo "::warning::Codex returned empty output on attempt ${attempt}."
                 last_status="empty output"
@@ -981,9 +1012,26 @@ jobs:
       - name: Ensure orchestrator labels exist
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          ENGINE_INPUT: ${{ inputs.engine }}
         run: |
           set -euo pipefail
           source scripts/label_helpers.sh
+          # Engine label (plan Phase 6, D2): applied atomically at creation
+          # so the first clarify run already sees it.
+          case "$(printf '%s' "${ENGINE_INPUT:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+            "") PROJECT_ENGINE_LABEL="" ;;
+            claude) PROJECT_ENGINE_LABEL="ai:engine-claude" ;;
+            codex) PROJECT_ENGINE_LABEL="ai:codex" ;;
+            *)
+              echo "::error::engine must be empty, claude or codex (got '${ENGINE_INPUT}')"
+              exit 1
+              ;;
+          esac
+          if [ -n "${PROJECT_ENGINE_LABEL}" ]; then
+            ensure_label_exists "${PROJECT_ENGINE_LABEL}" "${{ github.repository }}"
+          fi
+          echo "PROJECT_ENGINE_LABEL=${PROJECT_ENGINE_LABEL}" >> "$GITHUB_ENV"
+          echo "AI_ENGINE_PROJECT_LABEL label=${PROJECT_ENGINE_LABEL:-none}"
           ensure_label_exists "ai:orchestrator-tracking" "${{ github.repository }}"
           ensure_label_exists "ai:clarification" "${{ github.repository }}"
           ensure_label_exists "ai:orchestrator-managed" "${{ github.repository }}"
@@ -1007,11 +1055,15 @@ jobs:
 
           PROJECT_TITLE="$(jq -r '.project_title' "${DECOMPOSITION_FILE}")"
 
+          tracking_create_args=(--label "ai:orchestrator-tracking")
+          if [ -n "${PROJECT_ENGINE_LABEL:-}" ]; then
+            tracking_create_args+=(--label "${PROJECT_ENGINE_LABEL}")
+          fi
           TRACKING_ISSUE_URL="$(gh_retry gh issue create \
             --repo "${{ github.repository }}" \
             --title "[Orchestrator] ${PROJECT_TITLE}" \
             --body-file "${TRACKING_BODY_FILE}" \
-            --label "ai:orchestrator-tracking")"
+            "${tracking_create_args[@]}")"
 
           TRACKING_ISSUE_NUMBER="$(echo "${TRACKING_ISSUE_URL}" | grep -oE '[0-9]+$')"
 
@@ -1183,12 +1235,15 @@ jobs:
           EOF
           )"
 
+            child_create_args=(--label "ai:clarification" --label "ai:orchestrator-managed")
+            if [ -n "${PROJECT_ENGINE_LABEL:-}" ]; then
+              child_create_args+=(--label "${PROJECT_ENGINE_LABEL}")
+            fi
             ISSUE_URL="$(gh_retry gh issue create \
               --repo "${{ github.repository }}" \
               --title "${TITLE}" \
               --body "${FULL_BODY}" \
-              --label "ai:clarification" \
-              --label "ai:orchestrator-managed")"
+              "${child_create_args[@]}")"
 
             ISSUE_NUM="$(echo "${ISSUE_URL}" | grep -oE '[0-9]+$')"
             ISSUE_MAP["${LOCAL_ID}"]="${ISSUE_NUM}"

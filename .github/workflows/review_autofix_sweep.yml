@@ -58,15 +58,13 @@ name: "Internal: AI Review Autofix Sweep"
 # Cost guard:
 #   - 30 min cadence matches the existing orchestrator poll cadence and is
 #     a conscious trade-off (CLAUDE.md §1: Speed is the lowest priority).
-#   - `[skip ai]` in PR title/body is the only opt-out honoured here; per
+#   - `[skip ai]` in the PR title, or alone on a PR body line, is the only
+#     opt-out honoured here (same rule as the review gate); per
 #     Q2=A the sweep otherwise targets every open non-draft PR.
 
 on:
   schedule:
     - cron: '*/30 * * * *'
-    # Hourly CLAUDE.md §26.H catch-all (job `claude-pr-catch-all` below);
-    # the review-dispatch `sweep` job skips this tick.
-    - cron: '17 * * * *'
   workflow_dispatch:
     inputs:
       head_ref_filter:
@@ -95,7 +93,6 @@ concurrency:
 
 jobs:
   sweep:
-    if: github.event.schedule != '17 * * * *'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -145,6 +142,8 @@ jobs:
               body: (.body // "")
             })')"
 
+          printf '%s\n' "${prs_json}" > "${RUNNER_TEMP}/ci-cancelled-pr-snapshot.json"
+
           total="$(printf '%s' "${prs_json}" | jq 'length')"
           echo "AUTOFIX_SWEEP_START repo=${REPOSITORY} candidates=${total} head_ref_filter=${HEAD_REF_FILTER:-<none>} dry_run=${DRY_RUN}"
 
@@ -153,6 +152,12 @@ jobs:
           skipped_filter=0
           skipped_skip_ai=0
           failures=0
+          # Identical to the gate's copy in review_autofix.yml (issue #4985):
+          # only a body line holding nothing but the marker, outside a fenced
+          # block, counts. A fence closes only on a matching fence (same
+          # character, at least as long, up to 3 spaces, issue #5377).
+          # tests/test_skip_ai_marker_rule.py runs both copies.
+          SKIP_AI_BODY_AWK='{ sub(/\r$/, "") } fl > 0 { if ($0 ~ /^ ? ? ?(```+|~~~+)[ \t]*$/) { r = $0; sub(/^ */, "", r); sub(/[ \t]*$/, "", r); if (substr(r, 1, 1) == fc && length(r) >= fl) fl = 0 } next } match($0, /^[ \t]*(```+|~~~+)/) { r = substr($0, RSTART, RLENGTH); sub(/^[ \t]*/, "", r); fc = substr(r, 1, 1); fl = length(r); next } /^ ? ? ?\[skip ai\][ \t]*$/ { found = 1 } END { exit found ? 0 : 1 }'
 
           if [ "${total}" -eq 0 ]; then
             echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} failures=${failures} candidates=${total}"
@@ -232,10 +237,15 @@ jobs:
                   def dedupe_key:
                     dispatch_pr as $pr
                     | if $pr != "" then "pr:\($pr)" else .head_branch end;
+                  # A run needs a key to count. GitHub can report a null
+                  # head_branch on a workflow_dispatch run (issue #4928), so a
+                  # run named for its PR is kept by its pr:<N> key; dropping
+                  # it let the next tick dispatch that PR again and replace
+                  # the pending review. A run with neither key is dropped.
                   [
                     .[]
                     | .workflow_runs[]?
-                    | select((.head_branch // "") != "")
+                    | select((.head_branch // "") != "" or dispatch_pr != "")
                   ]
                   # A run can transition between the sequential status fetches;
                   # retain its in_progress snapshot so it is never discounted.
@@ -352,9 +362,11 @@ jobs:
             fi
 
             # Honour the existing `[skip ai]` opt-out marker (parity with
-            # review_autofix.yml gate behaviour). This is the only PR-author
-            # escape hatch on the sweep path.
-            if printf '%s %s' "${pr_title}" "${pr_body}" | grep -Fq '[skip ai]'; then
+            # review_autofix.yml gate behaviour: the title, or a body line
+            # holding only the marker; a quoted mention does not count). This
+            # is the only PR-author escape hatch on the sweep path.
+            if [[ "${pr_title}" == *"[skip ai]"* ]] \
+              || printf '%s\n' "${pr_body}" | awk "${SKIP_AI_BODY_AWK}"; then
               echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=skip_ai_marker head_ref=${head_ref}"
               skipped_skip_ai=$((skipped_skip_ai + 1))
               continue
@@ -434,99 +446,23 @@ jobs:
             echo 'GH_PAT_BUDGET phase=end workflow=review_autofix_sweep job=sweep remaining=unknown reset=unknown used_in_job=unknown'
           fi
 
-  # CLAUDE.md §26.H catch-all. Every PR-backed claude/* head runs in
-  # Claude-fixer mode, so its conflicts, failed checks, review hand-offs and
-  # blocks wait for a Claude session. The §26 checker hands them to the
-  # session that pushed the PR; this job queues one fresh Opus 5.5 fixer
-  # (an ai:claude-issue-queue item with a claude_pr_fix.v1 payload, started
-  # by the Claude issue pickup session) for any such PR, here or in a
-  # registered consumer repo, whose fix has been due for
-  # CLAUDE_PR_SWEEP_MIN_AGE_HOURS with no live claim. Queue items are
-  # opened with this job's GITHUB_TOKEN, the only author the pickup trusts.
-  # Decision, API budget and fail-open rules: scripts/claude_pr_sweep.py.
-  claude-pr-catch-all:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 * * * *'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      issues: write
-    steps:
-      - name: Check out the sweep scripts and the consumer registry
+      # Use the 30-minute sweep rather than the hourly Claude catch-all: it
+      # already snapshots every open non-draft PR, including non-Claude PRs.
+      # The sweep itself needs no checkout. Fetch only the default-branch
+      # helper: a PR head must never supply code for an Actions write.
+      - name: Check out trusted CI recovery helper
         uses: actions/checkout@v5
         with:
-          fetch-depth: 1
+          ref: ${{ github.event.repository.default_branch || github.ref_name }}
+          path: .ci-rerun-support
           persist-credentials: false
 
-      - name: Record GH_PAT budget at catch-all start
+      - name: Re-run cancelled CI failed jobs once
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_claude-pr-catch-all
-        run: |
-          source scripts/gh_helpers.sh
-          gh_pat_budget start review_autofix_sweep claude-pr-catch-all "${GH_PAT_BUDGET_FILE}"
-
-      - name: Restore bounded catch-all negative cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ runner.temp }}/claude-pr-sweep-negative.json
-          key: claude-pr-sweep-negative-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: claude-pr-sweep-negative-${{ github.repository_id }}-
-
-      - name: Start Claude fixers for unhandled claude/* PRs
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          # The queue lives in this repo; GITHUB_TOKEN writes do not start workflows.
-          CLAUDE_PR_SWEEP_QUEUE_TOKEN: ${{ github.token }}
-          CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN: ${{ vars.CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN || '' }}
-          CLAUDE_FIXER_VERDICT_BOT_LOGIN: ${{ vars.CLAUDE_FIXER_VERDICT_BOT_LOGIN || '' }}
-          CLAUDE_PR_SWEEP_MIN_AGE_HOURS: ${{ vars.CLAUDE_PR_SWEEP_MIN_AGE_HOURS || '2' }}
-          CLAUDE_FIX_CLAIM_LEASE_HOURS: ${{ vars.CLAUDE_FIX_CLAIM_LEASE_HOURS || '3' }}
-          CLAUDE_FIX_HAND_BACK_CAP: ${{ vars.CLAUDE_FIX_HAND_BACK_CAP || '3' }}
-          CLAUDE_PR_SWEEP_DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
-          CLAUDE_PR_SWEEP_STATE_FILE: ${{ runner.temp }}/claude-pr-sweep-negative.json
-          # Every queue item this run opens is recorded here and uploaded
-          # below; the pickup starts nothing the artifact does not list (#4621).
-          CLAUDE_PR_SWEEP_QUEUE_BINDING_FILE: ${{ runner.temp }}/claude-issue-queue-binding/claude_issue_queue_binding.json
-        run: |
-          set -euo pipefail
-          # The review workflow posts hand-offs with GH_PAT, so its account is
-          # the only author whose hand-off markers count (check_in_status.py).
-          if [ -z "${CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN}" ]; then
-            CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN="$(gh api user --jq .login 2>/dev/null || true)"
-            export CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN
-          fi
-          echo "CLAUDE_PR_SWEEP handoff_author=${CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN:-<unset: hand-offs ignored>}"
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_pr_sweep.py
-
-      - name: Save bounded catch-all negative cache
-        if: always()
-        continue-on-error: true
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ runner.temp }}/claude-pr-sweep-negative.json
-          key: claude-pr-sweep-negative-${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}
-
-      # Runs even when the sweep step failed, so a queue item it opened is
-      # never left without its binding (issue #4621).
-      - name: Upload the queue binding for the Claude issue pickup
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: claude-issue-queue-binding
-          path: ${{ runner.temp }}/claude-issue-queue-binding/claude_issue_queue_binding.json
-          if-no-files-found: ignore
-          retention-days: 30
-
-      - name: Record GH_PAT budget at catch-all end
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_claude-pr-catch-all
-        run: |
-          if [ -f scripts/gh_helpers.sh ]; then
-            source scripts/gh_helpers.sh
-            gh_pat_budget end review_autofix_sweep claude-pr-catch-all "${GH_PAT_BUDGET_FILE}"
-          else
-            echo 'GH_PAT_BUDGET phase=end workflow=review_autofix_sweep job=claude-pr-catch-all remaining=unknown reset=unknown used_in_job=unknown'
-          fi
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          CI_CANCELLED_AUTO_RERUN_ENABLED: ${{ vars.CI_CANCELLED_AUTO_RERUN_ENABLED || 'true' }}
+          HEAD_REF_FILTER: ${{ inputs.head_ref_filter }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          CI_CANCELLED_PR_SNAPSHOT: ${{ runner.temp }}/ci-cancelled-pr-snapshot.json
+        run: PYTHONDONTWRITEBYTECODE=1 python3 .ci-rerun-support/scripts/ci_cancelled_rerun.py

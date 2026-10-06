@@ -33,8 +33,13 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -44,10 +49,17 @@ GH_HELPERS = REPO_ROOT / "scripts" / "gh_helpers.sh"
 HEAD = "8390b53323a827f77494ef8665cc5e7ea7159e9f"
 OTHER_HEAD = "964ef81e5d8cf12bc8793f2906b7a8b63e6885a1"
 CURRENT_RUN = "32659591000"
+# Head commit time the step passes as the fifth argument (issue #4898). The
+# helper ignores it since issue #5523; the bound is the head's first run.
+HEAD_COMMIT_EPOCH = "1790000000"
+# created_at of every fixture run: the REST API always returns it.
+RUN_CREATED_AT = "2026-09-20T12:00:00Z"
 
 
 def _workflow_text() -> str:
-	return WORKFLOW.read_text(encoding="utf-8")
+	# The re-dispatch body lives in scripts/review_autofix_step_changes_lost_redispatch.sh
+	# (issue #4898); read the workflow with moved step bodies inlined again.
+	return expanded_review_autofix_text()
 
 
 def _redispatch_step(text: str) -> str:
@@ -103,7 +115,7 @@ def test_telegram_step_treats_budget_unavailable_or_exhausted_as_terminal_commen
 
 _RUNNER = r"""
 extract_fn() {
-	awk -v fn="autofix_changes_lost_head_retry_consumed" '
+	awk -v fn="$1" '
 		BEGIN { in_fn=0 }
 		$0 ~ "^"fn"\\(\\)" { in_fn=1 }
 		in_fn { print }
@@ -119,7 +131,11 @@ gh() {
 	cat "${RUNS_FIXTURE}"
 }
 
-eval "$(extract_fn)"
+eval "$(extract_fn _autofix_pr_named_review_runs)"
+eval "$(extract_fn autofix_changes_lost_head_retry_consumed)"
+# These legacy cases exercise the branch-head budget; the PR-named listing
+# is covered separately by test_retrigger_default_branch_dispatch.py.
+_autofix_pr_named_review_runs() { printf '[]\n'; }
 autofix_changes_lost_head_retry_consumed "$@"
 """
 
@@ -153,6 +169,7 @@ def _run(run_id: int, head_sha: str, status: str, conclusion: str | None, path: 
 		"status": status,
 		"conclusion": conclusion,
 		"path": path,
+		"created_at": RUN_CREATED_AT,
 	}
 
 
@@ -166,7 +183,7 @@ def test_budget_available_when_only_cancelled_twin_exists_on_head() -> None:
 			_run(int(CURRENT_RUN), HEAD, "in_progress", None, ".github/workflows/ai-review.yml"),
 		]
 	)
-	proc = _run_helper(payload, "3757", "ai/issue-3755", CURRENT_RUN, HEAD)
+	proc = _run_helper(payload, "3757", "ai/issue-3755", CURRENT_RUN, HEAD, HEAD_COMMIT_EPOCH)
 	assert proc.returncode == 1, (proc.stdout, proc.stderr)
 	assert "prior_completed=0" in proc.stdout, proc.stdout
 
@@ -179,21 +196,23 @@ def test_budget_consumed_by_prior_completed_run_on_same_head() -> None:
 			_run(int(CURRENT_RUN), HEAD, "in_progress", None, ".github/workflows/ai-review.yml"),
 		]
 	)
-	proc = _run_helper(payload, "3757", "ai/issue-3755", CURRENT_RUN, HEAD)
+	proc = _run_helper(payload, "3757", "ai/issue-3755", CURRENT_RUN, HEAD, HEAD_COMMIT_EPOCH)
 	assert proc.returncode == 0, (proc.stdout, proc.stderr)
 	assert "prior_completed=1" in proc.stdout, proc.stdout
 
 
 def test_budget_ignores_completed_runs_on_other_heads() -> None:
 	# Earlier iterations that pushed commits ran on earlier head SHAs;
-	# they must not consume the current head's budget.
+	# they must not consume the current head's budget. The head's own push
+	# left its cancelled pull_request twin, which bounds the PR-named count.
 	payload = _runs_payload(
 		[
 			_run(1, OTHER_HEAD, "completed", "success", ".github/workflows/ai-review.yml"),
 			_run(2, OTHER_HEAD, "completed", "success", ".github/workflows/internal-review.yml"),
+			_run(3, HEAD, "completed", "cancelled", ".github/workflows/ai-review.yml"),
 		]
 	)
-	proc = _run_helper(payload, "3757", "ai/issue-3755", CURRENT_RUN, HEAD)
+	proc = _run_helper(payload, "3757", "ai/issue-3755", CURRENT_RUN, HEAD, HEAD_COMMIT_EPOCH)
 	assert proc.returncode == 1, (proc.stdout, proc.stderr)
 
 
@@ -203,7 +222,7 @@ def test_budget_ignores_unrelated_workflows_on_same_head() -> None:
 			_run(1, HEAD, "completed", "success", ".github/workflows/ci.yml"),
 		]
 	)
-	proc = _run_helper(payload, "3757", "ai/issue-3755", CURRENT_RUN, HEAD)
+	proc = _run_helper(payload, "3757", "ai/issue-3755", CURRENT_RUN, HEAD, HEAD_COMMIT_EPOCH)
 	assert proc.returncode == 1, (proc.stdout, proc.stderr)
 
 
@@ -213,7 +232,7 @@ def test_budget_excludes_the_current_run_itself() -> None:
 			_run(int(CURRENT_RUN), HEAD, "completed", "success", ".github/workflows/ai-review.yml"),
 		]
 	)
-	proc = _run_helper(payload, "3757", "ai/issue-3755", CURRENT_RUN, HEAD)
+	proc = _run_helper(payload, "3757", "ai/issue-3755", CURRENT_RUN, HEAD, HEAD_COMMIT_EPOCH)
 	assert proc.returncode == 1, (proc.stdout, proc.stderr)
 
 

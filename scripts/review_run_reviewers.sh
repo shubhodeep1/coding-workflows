@@ -59,6 +59,10 @@ if [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
   opencode_emit_failure_alert review_run_reviewers reviewer "${reviewer_helpers_alert_model}" 1 config_writer_missing || true
   exit 1
 fi
+if [[ "${SUPPORT_ROOT_DIR:-}" != /* || "${SUPPORT_SCRIPTS_DIR:-}" != /* ]]; then
+  echo '::error::Reviewer Python requires absolute trusted support paths.' >&2
+  exit 1
+fi
 
 WATCHDOG_HELPERS="${SUPPORT_SCRIPTS_DIR:-scripts}/watchdog_helpers.sh"
 if [ -f "${WATCHDOG_HELPERS}" ]; then
@@ -85,8 +89,8 @@ emit_context_budget_warn_for_prompt() {
 
   warn_line="$({
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}" \
-    python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
+    PYTHONPATH="${SUPPORT_SCRIPTS_DIR}" \
+    PYTHONSAFEPATH=1 python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
 import sys
 
 try:
@@ -168,7 +172,7 @@ reviewer_tool_repeat_detected() {
   [ -s "${structured_file}" ] || return 1
   grep -E '"type"[[:space:]]*:[[:space:]]*"tool_use"' "${structured_file}" 2>/dev/null \
     | tail -n "$((repeat_limit * 2))" \
-    | PYTHONDONTWRITEBYTECODE=1 python3 -c '
+    | PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 -c '
 import json
 import sys
 
@@ -475,7 +479,7 @@ normalize_openrouter_usage() {
   local phase_label="$2"
   local call_label="$3"
   local model_name="$4"
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - "$log_file" "$phase_label" "$call_label" "$model_name" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_SCRIPTS_DIR}" python3 - "$log_file" "$phase_label" "$call_label" "$model_name" <<'PY'
 import json
 import os
 import sys
@@ -795,7 +799,7 @@ reviewer_materialize_opencode_json_text() {
   local structured_output_file="$1"
   local reviewer_text_file="$2"
 
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${structured_output_file}" "${reviewer_text_file}" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${structured_output_file}" "${reviewer_text_file}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -872,7 +876,7 @@ filter_reviewer_paths_file_against_skips() {
   local output_file="$2"
   local skipped_file="$3"
 
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR}:${SUPPORT_SCRIPTS_DIR}" python3 - \
     "$input_file" "$output_file" "$skipped_file" <<'PY'
 from pathlib import Path
 import sys
@@ -906,7 +910,7 @@ filter_reviewer_stat_file_against_skips() {
   local output_file="$2"
   local skipped_file="$3"
 
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR}:${SUPPORT_SCRIPTS_DIR}" python3 - \
     "$input_file" "$output_file" "$skipped_file" <<'PY'
 from pathlib import Path
 import sys
@@ -1005,7 +1009,7 @@ emit_reviewer_filter_skip_logs() {
   local pr_skipped_file="$1"
   local last_run_skipped_file="$2"
 
-  PYTHONDONTWRITEBYTECODE=1 python3 - "$pr_skipped_file" "$last_run_skipped_file" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "$pr_skipped_file" "$last_run_skipped_file" <<'PY'
 from pathlib import Path
 import sys
 
@@ -1164,7 +1168,7 @@ reviewer_count_diff_loc() {
 reviewer_count_paths_file() {
   local paths_file="$1"
 
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR}:${SUPPORT_SCRIPTS_DIR}" python3 - \
     "$paths_file" <<'PY'
 from pathlib import Path
 import sys
@@ -1187,7 +1191,7 @@ reviewer_any_path_matches_regex() {
   local paths_file="$1"
   local pattern="$2"
 
-  PYTHONDONTWRITEBYTECODE=1 python3 - "$paths_file" "$pattern" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "$paths_file" "$pattern" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -1434,7 +1438,7 @@ reviewer_collect_review_tier_path_metadata() {
   local paths_file="$1"
   local diff_file="${2:-}"
 
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR}:${SUPPORT_SCRIPTS_DIR}" python3 - \
     "$paths_file" "$diff_file" <<'PY'
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -1943,7 +1947,7 @@ build_reviewer_iteration_scope_artifacts() {
   local output_paths_file="$3"
   local output_summary_file="$4"
 
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR}:${SUPPORT_SCRIPTS_DIR}" python3 - \
     "$changed_files_file" "$ledger_status_file" "$output_paths_file" "$output_summary_file" <<'PY'
 from pathlib import Path
 import sys
@@ -2560,8 +2564,8 @@ fi
 # codex-cli's `turn/start` imposes a hard 1,048,576-character stdin cap on
 # the WHOLE prompt.  The assembled reviewer prompt (see
 # assemble_reviewer_prompt) is `pre_assembled_static.txt` (unattended
-# system instructions + agents.md + trimmed README — ~190KB today and
-# growing) PLUS this reviewer template, the checklist, and memory/semble
+# system instructions + agents.md) plus a separately framed README,
+# this reviewer template, the checklist, and memory/semble
 # context, all wrapped OUTSIDE the _embed_input_file budget, PLUS the
 # budgeted body.  The historical flat 800KB embed budget was sized against
 # a stale "static prefix ~10k tokens (~40KB)" assumption; once the static
@@ -2591,9 +2595,13 @@ fi
 if [ "${reviewer_static_prefix_bytes}" -le 0 ]; then
   reviewer_static_prefix_bytes=200000
 fi
-reviewer_embed_budget_bytes=$(( REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES - reviewer_static_prefix_bytes - REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES ))
+reviewer_readme_context_bytes=0
+if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/static_readme_trimmed.txt" ]; then
+  reviewer_readme_context_bytes=$(( $(wc -c < "${RUNTIME_DIR}/static_readme_trimmed.txt") + 16 * $(wc -l < "${RUNTIME_DIR}/static_readme_trimmed.txt") + 200 ))
+fi
+reviewer_embed_budget_bytes=$(( REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES - reviewer_static_prefix_bytes - reviewer_readme_context_bytes - REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES ))
 if [ "${reviewer_embed_budget_bytes}" -lt 0 ]; then
-  echo "::warning::Reviewer prompt static prefix (${reviewer_static_prefix_bytes}) plus scaffold reserve (${REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES}) leaves negative embed headroom (${reviewer_embed_budget_bytes}) under codex stdin cap ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}; forcing embed budget to 0." >&2
+  echo "::warning::Reviewer prompt static prefix (${reviewer_static_prefix_bytes}) plus framed README (${reviewer_readme_context_bytes}) and scaffold reserve (${REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES}) leaves negative embed headroom (${reviewer_embed_budget_bytes}) under codex stdin cap ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}; forcing embed budget to 0." >&2
   reviewer_embed_budget_bytes=0
 elif [ "${reviewer_embed_budget_bytes}" -lt "${REVIEWER_PROMPT_EMBED_BUDGET_FLOOR_BYTES}" ]; then
   echo "::warning::Reviewer embed budget floor ${REVIEWER_PROMPT_EMBED_BUDGET_FLOOR_BYTES} exceeds cap-safe headroom ${reviewer_embed_budget_bytes}; continuing with reduced embed budget to stay under codex stdin cap." >&2
@@ -2601,7 +2609,7 @@ fi
 if [ "${reviewer_embed_budget_bytes}" -gt "${_PROMPT_BUDGET_TOTAL_BYTES}" ]; then
   reviewer_embed_budget_bytes="${_PROMPT_BUDGET_TOTAL_BYTES}"
 fi
-echo "Reviewer prompt embed budget: ${reviewer_embed_budget_bytes} bytes (codex stdin cap ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}, measured static prefix ${reviewer_static_prefix_bytes}, scaffold reserve ${REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES})."
+echo "Reviewer prompt embed budget: ${reviewer_embed_budget_bytes} bytes (codex stdin cap ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}, measured static prefix ${reviewer_static_prefix_bytes}, framed README ${reviewer_readme_context_bytes}, scaffold reserve ${REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES})."
 _init_prompt_budget "${reviewer_embed_budget_bytes}"
 {
   cat <<__REVIEWER_PROMPT__
@@ -3158,6 +3166,14 @@ assemble_reviewer_prompt() {
   {
     cat ./pre_assembled_static.txt
     echo
+    if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/static_readme_trimmed.txt" ]; then
+      echo "=== BEGIN UNTRUSTED PR README.MD (trimmed) ==="
+      while IFS= read -r review_readme_line || [ -n "${review_readme_line}" ]; do
+        printf 'UNTRUSTED_DATA: %s\n' "${review_readme_line}"
+      done < "${RUNTIME_DIR}/static_readme_trimmed.txt"
+      echo "=== END UNTRUSTED PR README.MD (trimmed) ==="
+      echo
+    fi
     if [ -n "${TOOL_CALL_BUDGET_JUDGE:-}" ]; then
       echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
       echo
@@ -3273,7 +3289,7 @@ reviewer_slot_backoff_cap_secs() {
 
 reviewer_slot_backoff_budget_ratio() {
   local raw="${REVIEWER_SLOT_BACKOFF_BUDGET_RATIO:-0.05}"
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${raw}" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${raw}" <<'PY'
 import re
 import sys
 
@@ -3307,7 +3323,7 @@ reviewer_slot_backoff_budget_secs() {
   local total_secs="${1:-0}"
   local ratio=""
   ratio="$(reviewer_slot_backoff_budget_ratio)"
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${total_secs}" "${ratio}" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${total_secs}" "${ratio}" <<'PY'
 import math
 import sys
 
@@ -3375,7 +3391,7 @@ reviewer_random_int_upto() {
 
 reviewer_cache_status_for_model() {
   local model_name="$1"
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - "${model_name}" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_SCRIPTS_DIR}" python3 - "${model_name}" <<'PY'
 import sys
 
 try:
@@ -3451,7 +3467,7 @@ reviewer_catalog_declares_model() {
   if [ ! -s "${REVIEWER_MODEL_CATALOG_FILE}" ]; then
     return 0
   fi
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${REVIEWER_MODEL_CATALOG_FILE}" "${model}" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${REVIEWER_MODEL_CATALOG_FILE}" "${model}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -3491,7 +3507,7 @@ reviewer_failback_target_for_model() {
       printf '%s\n' "${candidate}"
       return 0
     fi
-  done < <(PYTHONDONTWRITEBYTECODE=1 python3 - "${REVIEWER_FAILBACK_CHAINS_FILE}" "${model}" <<'PY'
+  done < <(PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${REVIEWER_FAILBACK_CHAINS_FILE}" "${model}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -3527,7 +3543,7 @@ reviewer_health_state_action() {
   shift || true
   [ -n "${REVIEWER_HEALTH_STATE_FILE:-}" ] || return 0
 
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${action}" "${REVIEWER_HEALTH_STATE_FILE}" "$@" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${action}" "${REVIEWER_HEALTH_STATE_FILE}" "$@" <<'PY'
 import json
 import os
 import sys

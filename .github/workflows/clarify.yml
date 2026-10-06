@@ -17,7 +17,7 @@ env:
 jobs:
   clarify:
     if: >-
-      ((github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro')) && ((github.event.issue.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) || (github.event.issue.user.type == 'Bot' && github.event.issue.user.login == 'github-actions[bot]'))) ||
+      ((github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro') && !contains(toJson(github.event.issue.labels.*.name), 'ai:operator-step')) && ((github.event.issue.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association)) || (github.event.issue.user.type == 'Bot' && github.event.issue.user.login == 'github-actions[bot]'))) ||
       (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, '/reclarify'))
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -235,7 +235,7 @@ jobs:
           mkdir -p scripts
 
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py claude_issue_route.py claude_issue_handoff.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_stall_guard.sh codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -386,6 +386,7 @@ jobs:
             echo "RUNTIME_DIR=${RUNTIME_DIR}"
             echo "ISSUE_META_FILE=${RUNTIME_DIR}/issue_meta.json"
             echo "ISSUE_COMMENTS_FILE=${RUNTIME_DIR}/issue_comments.json"
+            echo "ISSUE_ALL_COMMENTS_FILE=${RUNTIME_DIR}/issue_all_comments.json"
             echo "ISSUE_CONTEXT_FILE=${RUNTIME_DIR}/issue_context.txt"
             echo "THREAD_HISTORY_FILE=${RUNTIME_DIR}/thread_history.txt"
             echo "CODEX_PROMPT_FILE=${RUNTIME_DIR}/codex_prompt.txt"
@@ -422,16 +423,11 @@ jobs:
       - name: Decide clarify route
         id: clarify_route
         env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
           EVENT_NAME: ${{ github.event_name }}
           EVENT_ACTION: ${{ github.event.action }}
           COMMENT_BODY: ${{ github.event.comment.body || '' }}
           RUN_ID: ${{ github.run_id }}
-          # Standalone issues default to the Claude issue implementer; set the
-          # repo variable to `codex` to keep the Codex clarify → plan →
-          # implement pipeline. Per-issue `ai:codex` / `ai:claude` labels win.
-          # Unset stays "" so claude_issue_route.py applies the default and
-          # reports reason `default` (not `repo_var`).
-          AI_ISSUE_IMPLEMENTER: ${{ vars.AI_ISSUE_IMPLEMENTER || '' }}
         run: |
           set -euo pipefail
           LABELS_CSV="$(jq -r '[(.labels // [])[]?.name] | join(",")' "${ISSUE_META_FILE}")"
@@ -480,40 +476,24 @@ jobs:
             echo "AI_PHASE_GATE_V1 phase=clarify gate=route reason=orchestrator_fast_path outcome=defer issue=${ISSUE_NUMBER}"
           fi
 
-          # Implementer routing (scripts/claude_issue_route.py). Only an issue
-          # that would otherwise run Codex clarify is routed: closed,
-          # untrusted, and orchestrator fast-path issues keep the gates above.
-          # A routing error falls back to the Codex pipeline (pre-routing
-          # behaviour) with a warning, so issues are never dropped.
-          ISSUE_IMPLEMENTER="codex"
-          ISSUE_IMPLEMENTER_REASON="not_routed"
-          SKIP_SECURITY_PASS="false"
-          if [ "${SKIP_CODEX}" != "true" ]; then
-            if ROUTE_JSON="$(python3 scripts/claude_issue_route.py route --issue-json "${ISSUE_META_FILE}" --implementer-var "${AI_ISSUE_IMPLEMENTER}")"; then
-              ISSUE_IMPLEMENTER="$(printf '%s' "${ROUTE_JSON}" | jq -r '.implementer')"
-              ISSUE_IMPLEMENTER_REASON="$(printf '%s' "${ROUTE_JSON}" | jq -r '.reason')"
-              SKIP_SECURITY_PASS="$(printf '%s' "${ROUTE_JSON}" | jq -r '.skip_security_pass')"
-            else
-              ISSUE_IMPLEMENTER="codex"
-              ISSUE_IMPLEMENTER_REASON="route_error"
-              echo "::warning::claude_issue_route.py failed for issue #${ISSUE_NUMBER}; falling back to the Codex pipeline"
-            fi
-            if [ "${ISSUE_IMPLEMENTER_REASON}" = "invalid_repo_var_default" ]; then
-              echo "::warning::AI_ISSUE_IMPLEMENTER='${AI_ISSUE_IMPLEMENTER}' is not 'claude' or 'codex'; using the default (claude)"
-            fi
-            if [ "${ISSUE_IMPLEMENTER}" = "claude" ]; then
-              SKIP_CODEX="true"
-              echo "AI_PHASE_GATE_V1 phase=clarify gate=route reason=claude_routed outcome=handoff issue=${ISSUE_NUMBER} route_reason=${ISSUE_IMPLEMENTER_REASON}"
+          # Hold a generated security follow-up before any label or automatic
+          # /answer write until the issue it depends on has merged (issue
+          # #4934). The target is already fetched; only a dependent issue
+          # costs one additional issue read (scripts/security_dependency.py).
+          DEPENDENCY_VERDICT="$(python3 scripts/security_dependency.py security-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held","reason":"dependency check failed"}')"
+          if [ "$(printf '%s' "${DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" = "held" ]; then
+            SKIP_CODEX="true"
+            echo "AI_PHASE_GATE_V1 phase=clarify gate=security_dependency reason=held outcome=skip issue=${ISSUE_NUMBER}"
+            # Retain the issue in the scheduled standalone poller's existing
+            # candidate set; it releases this label once the fix merges.
+            source scripts/gh_helpers.sh
+            if ! gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f 'labels[]=ai:clarification' >/dev/null; then
+              echo "::error::Could not mark security follow-up #${ISSUE_NUMBER} as waiting"
+              exit 1
             fi
           fi
-          RELEASE_CLAUDE_CLAIM="false"
-          if [ "${ISSUE_IMPLEMENTER}" = "codex" ] && [ "${ISSUE_IMPLEMENTER_REASON}" != "not_routed" ] && [ "${IS_CLOSED}" != "true" ] && \
-            jq -e '[(.labels // [])[]?.name] | index("ai:claude") != null' "${ISSUE_META_FILE}" >/dev/null; then
-            RELEASE_CLAUDE_CLAIM="true"
-          fi
-
           # Only a verified orchestrator fast path may post its automatic /answer.
-          if [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_CLOSED}" != "true" ] && \
+          if [ "${IS_ORCHESTRATOR_MANAGED}" = "true" ] && [ "${IS_CLOSED}" != "true" ] && [ "$(printf '%s' "${DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" != "held" ] && \
             { [ "${EVENT_NAME}" != "issues" ] || [ "${EVENT_ACTION}" != "opened" ] || [ "${ISSUE_AUTHOR_TRUSTED}" = "true" ]; }; then
             echo "orchestrator_fast_path=true" >> "$GITHUB_OUTPUT"
           else
@@ -524,46 +504,8 @@ jobs:
           echo "is_forced_reclarify=${IS_FORCED_RECLARIFY}" >> "$GITHUB_OUTPUT"
           echo "is_closed=${IS_CLOSED}" >> "$GITHUB_OUTPUT"
           echo "skip_codex=${SKIP_CODEX}" >> "$GITHUB_OUTPUT"
-          echo "issue_implementer=${ISSUE_IMPLEMENTER}" >> "$GITHUB_OUTPUT"
-          echo "issue_implementer_reason=${ISSUE_IMPLEMENTER_REASON}" >> "$GITHUB_OUTPUT"
-          echo "skip_security_pass=${SKIP_SECURITY_PASS}" >> "$GITHUB_OUTPUT"
-          echo "release_claude_claim=${RELEASE_CLAUDE_CLAIM}" >> "$GITHUB_OUTPUT"
 
-          echo "::notice::clarify_route issue=${ISSUE_NUMBER} run_id=${RUN_ID} labels=${LABELS_CSV:-none} orchestrator_managed=${IS_ORCHESTRATOR_MANAGED} forced_reclarify=${IS_FORCED_RECLARIFY} is_closed=${IS_CLOSED} skip_codex=${SKIP_CODEX} issue_implementer=${ISSUE_IMPLEMENTER} implementer_reason=${ISSUE_IMPLEMENTER_REASON}"
-
-      - name: Release Claude claim on switch to Codex
-        if: steps.clarify_route.outputs.release_claude_claim == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          set -euo pipefail
-          # A Codex route on an issue that still carries the ai:claude claim
-          # (the user added `ai:codex` and commented /reclarify) hands it back
-          # to Codex: drop the claim so plan / implement / stall recovery act
-          # on it again.
-          gh api -X DELETE "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels/ai%3Aclaude" >/dev/null 2>&1 || true
-          echo "CLAUDE_ISSUE_HANDOFF released issue=${ISSUE_NUMBER} reason=${{ steps.clarify_route.outputs.issue_implementer_reason }}"
-
-      - name: Claude issue handoff
-        id: claude_handoff
-        if: steps.clarify_route.outputs.issue_implementer == 'claude' && steps.clarify_route.outputs.is_closed != 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
-          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
-          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
-          # Threshold for the success-only "Claude issue handoff dispatched"
-          # DEBUG ping; SILENT by default, set vars.CLAUDE_ISSUE_ROUTED_ALERT_LEVEL=DEBUG
-          # to get it back. The handoff-failed ERROR keeps ALERT_MSG_LEVEL.
-          CLAUDE_ISSUE_ROUTED_ALERT_LEVEL: ${{ vars.CLAUDE_ISSUE_ROUTED_ALERT_LEVEL || 'SILENT' }}
-          CLAUDE_ISSUE_TRIGGER: ${{ github.event_name == 'issue_comment' && 'reclarify' || 'opened' }}
-          CLAUDE_ISSUE_ROUTE_REASON: ${{ steps.clarify_route.outputs.issue_implementer_reason }}
-          CLAUDE_ISSUE_SKIP_SECURITY_PASS: ${{ steps.clarify_route.outputs.skip_security_pass }}
-          CLAUDE_ISSUE_UPSTREAM_REPO: ${{ vars.CLAUDE_ISSUE_UPSTREAM_REPO || 'shubhodeep1/coding-workflows' }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          bash scripts/claude_issue_handoff.sh
+          echo "::notice::clarify_route issue=${ISSUE_NUMBER} run_id=${RUN_ID} labels=${LABELS_CSV:-none} orchestrator_managed=${IS_ORCHESTRATOR_MANAGED} forced_reclarify=${IS_FORCED_RECLARIFY} is_closed=${IS_CLOSED} skip_codex=${SKIP_CODEX}"
 
       - name: Detect smoke test and tune LLM settings
         run: |
@@ -598,13 +540,17 @@ jobs:
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-          # Keep clarify prompt context bounded to preserve historical behavior.
-          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=50" > "${ISSUE_COMMENTS_FILE}"
+          # Reuse the full comment snapshot for auto-decisions and the backup
+          # loop guard; only the first 50 enter the clarify prompt.
+          gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100" > "${RUNTIME_DIR}/issue_comment_pages.json"
+          jq -e 'if type == "array" and all(.[]; type == "array") then add // [] else error("invalid comment pages") end' \
+            "${RUNTIME_DIR}/issue_comment_pages.json" > "${ISSUE_ALL_COMMENTS_FILE}"
+          jq '.[0:50]' "${ISSUE_ALL_COMMENTS_FILE}" > "${ISSUE_COMMENTS_FILE}"
 
           # Build full thread history only when semantic cache is enabled.
           if [ "${SEMANTIC_CACHE_BACKEND}" != "none" ]; then
-            if ! gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100" \
-              | jq -r 'add // [] | .[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' > "${THREAD_HISTORY_FILE}"; then
+            if ! jq -r '.[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' \
+              "${ISSUE_ALL_COMMENTS_FILE}" > "${THREAD_HISTORY_FILE}"; then
               echo "::warning::Semantic cache thread-history fetch failed; forcing cache bypass for this run (fail-open)"
               MAX_CHARS="${SEMANTIC_CACHE_MAX_CANONICAL_CHARS}"
               if [[ "${MAX_CHARS}" =~ ^[0-9]+$ ]]; then
@@ -888,6 +834,46 @@ jobs:
           sed -i -E "s/^model_reasoning_effort = \".*\"/model_reasoning_effort = \"${THINKING_LEVEL_CLARIFY_ORCHESTRATOR}\"/" ~/.codex/config.toml
           echo "MODEL_REASONING_EFFORT=${THINKING_LEVEL_CLARIFY_ORCHESTRATOR}" >> "$GITHUB_ENV"
 
+      # Claude engine (replace-claude-sessions plan Phase 5a): the CLARIFY
+      # role runs on Claude unless the issue's labels, AI_ENGINE_CLARIFY or
+      # AI_ENGINE say codex. The CLI and the pool credential are fetched only
+      # when it resolves to Claude; any Claude failure to start falls back to
+      # the unchanged codex call below (exit 75, plan D1).
+      - name: Resolve AI engine
+        id: ai_engine
+        if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_CLARIFY: ${{ vars.AI_ENGINE_CLARIFY || '' }}
+          AI_ENGINE_MODEL_HINT: ${{ env.MODEL_EDITOR }}
+          AI_ENGINE_EFFORT_HINT: ${{ env.MODEL_REASONING_EFFORT }}
+        run: |
+          set -euo pipefail
+          engine="codex"
+          if [ -f scripts/ai_engine.sh ]; then
+            # shellcheck disable=SC1091
+            source scripts/ai_engine.sh
+            AI_ENGINE_LABELS="$(jq -c '[.labels[]?.name]' "${ISSUE_META_FILE}")"
+            export AI_ENGINE_LABELS
+            engine="$(ai_engine_for_role CLARIFY || echo codex)"
+          fi
+          [ "${engine}" = "claude" ] || engine="codex"
+          echo "engine=${engine}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/install-claude
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/claude-pool-token
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
       - name: Run Codex
         id: run_codex
         if: steps.clarify_route.outputs.skip_codex != 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
@@ -895,6 +881,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_CLARIFY || '15' }}
           CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          CLARIFY_ENGINE: ${{ steps.ai_engine.outputs.engine || 'codex' }}
         run: |
           set -euo pipefail
 
@@ -977,7 +964,7 @@ jobs:
           - DO ask about:
             * Ambiguous scope (which pages/components are affected)
             * Conflicting information (e.g., names that don't match between issue and code)
-            * Missing critical information (credentials, endpoints, target behavior)
+            * Missing critical information (endpoints, target behavior)
             * Decisions with significant user-facing impact
 
           Your job:
@@ -999,10 +986,14 @@ jobs:
              (e.g., a name in the issue doesn't match the name in the code).
           7. Do NOT write code.
           8. Do NOT propose implementation solutions.
-          9. If a required input is a specific scalar value the model cannot derive or
-             look up — a private credential, a not-yet-existing commit SHA, a branch
-             name not yet decided, or an auth-walled/private URL whose contents are not
-             public — emit exactly `BLOCKED: <short reason>` instead of Q/Choices.
+          9. Credentials and setup never block: carry them forward as an
+             UPPER_SNAKE_CASE secret or variable placeholder, without a default;
+             skip or fail closed while it is unset. Do not ask for its value.
+             Choose undecided branch names from repository conventions and refer
+             to future commits symbolically rather than blocking on their SHA.
+             Only when the task depends on the content of an auth-walled or
+             private URL absent from the issue and repository, emit exactly
+             `BLOCKED: <short reason>` instead of Q/Choices.
              Public 3rd-party documentation is NOT a BLOCKED trigger: fetch it with the
              web tool and proceed with `STATUS: CLEAR` (or Q-IDs if other genuine
              ambiguities remain) only when the relevant public docs are found; if they
@@ -1079,15 +1070,27 @@ jobs:
           # Pass prompt via stdin to avoid ARG_MAX limits with large context files
           max_attempts=3
           for attempt in $(seq 1 "${max_attempts}"); do
-            echo "Codex clarify attempt ${attempt}/${max_attempts}..."
-            if bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"; then
+            echo "Codex clarify attempt ${attempt}/${max_attempts} (engine ${CLARIFY_ENGINE})..."
+            rc=0
+            if [ "${CLARIFY_ENGINE}" = "claude" ]; then
+              bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" claude CLARIFY || rc=$?
+              if [ "${rc}" -eq 75 ]; then
+                # Claude unavailable (logged as AI_ENGINE_FALLBACK): this
+                # attempt and the rest run the codex path (plan D1).
+                CLARIFY_ENGINE="codex"
+                rc=0
+              fi
+            fi
+            if [ "${CLARIFY_ENGINE}" != "claude" ]; then
+              bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" || rc=$?
+            fi
+            if [ "${rc}" -eq 0 ]; then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
                 echo "Codex clarify succeeded on attempt ${attempt}."
                 break
               fi
               echo "::warning::Codex returned empty output on attempt ${attempt}."
             else
-              rc=$?
               echo "::warning::Codex exited with code $rc on attempt ${attempt}."
             fi
             if [ "${attempt}" -lt "${max_attempts}" ]; then
@@ -1284,11 +1287,14 @@ jobs:
         if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          CLARIFY_HUMAN_ANSWER_REQUESTED: ${{ steps.clarify_route.outputs.is_forced_reclarify }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           # Labels already set by "Set clarification phase label" step above.
+          # After a human /reclarify the human answers: the trailing marker
+          # keeps orchestrate_clarify_respond.yml's standalone worker away.
           {
             echo "<!-- ai:clarification-questions -->"
             echo "Clarification required"
@@ -1297,10 +1303,120 @@ jobs:
             echo
             echo "Reply with:"
             echo "/answer"
+            if [ "${CLARIFY_HUMAN_ANSWER_REQUESTED}" = "true" ]; then
+              echo
+              echo "<!-- ai:clarification-human-answer -->"
+            fi
           } > "${RUNTIME_DIR}/clarification_comment.md"
 
-          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
-            -f body="$(cat "${RUNTIME_DIR}/clarification_comment.md")"
+          CLARIFICATION_POST_RESPONSE="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="$(cat "${RUNTIME_DIR}/clarification_comment.md")")"
+          printf '%s\n' "${CLARIFICATION_POST_RESPONSE}"
+          # The standalone auto-decide step below answers this comment.
+          cp "${RUNTIME_DIR}/clarification_comment.md" "${RUNTIME_DIR}/clarification_comment.txt"
+          echo "comment_id=$(printf '%s' "${CLARIFICATION_POST_RESPONSE}" | jq -r '.id // 0' 2>/dev/null || echo 0)" >> "$GITHUB_OUTPUT"
+
+      - name: Standalone auto-decide
+        # Port P3 (docs/plans/replace-claude-sessions-with-cli-engine-plan.md,
+        # Phase 8b): a standalone issue's questions are answered at once with
+        # each question's RECOMMENDED option, through the orchestrator's answer
+        # poster (scripts/orchestrate_parse_and_post_answer.sh, which keeps its
+        # clarify loop guard and ai:blocked escalation), and every pick is
+        # recorded as an AD-<n> entry in one <!-- ai:auto-decisions:v1 -->
+        # comment that implement.yml repeats in the PR body. Skipped for
+        # orchestrator-managed issues (their fast path answers), for a human
+        # /reclarify (the human asked to answer), when any question has no
+        # RECOMMENDED option, and when STANDALONE_AUTO_DECIDE_ENABLED=false.
+        # The 60-minute stall-ladder auto-answer stays as the backstop. Never
+        # fails the run. Outputs answered=true once the /answer is posted, so
+        # the Telegram step below does not page a human about questions the
+        # pipeline already answered.
+        # With STANDALONE_CLARIFY_RESPOND_ENABLED (default true) the step only
+        # delegates (delegated=true): orchestrate_clarify_respond.yml, which
+        # the questions comment triggers, answers with the Claude
+        # clarify-respond worker and falls back to these RECOMMENDED picks
+        # itself (issue #6262 follow-up).
+        id: standalone_auto_decide
+        if: steps.post_questions.outcome == 'success' && steps.clarify_route.outputs.is_orchestrator_managed != 'true' && steps.clarify_route.outputs.is_forced_reclarify != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+          STANDALONE_AUTO_DECIDE_ENABLED: ${{ vars.STANDALONE_AUTO_DECIDE_ENABLED || 'true' }}
+          STANDALONE_CLARIFY_RESPOND_ENABLED: ${{ vars.STANDALONE_CLARIFY_RESPOND_ENABLED || 'true' }}
+          ORCHESTRATOR_MAX_CLARIFY_CYCLES: ${{ vars.ORCHESTRATOR_MAX_CLARIFY_CYCLES || '3' }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          AUTO_DECIDE_CLARIFICATION_COMMENT_ID: ${{ steps.post_questions.outputs.comment_id }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          if [ "${STANDALONE_AUTO_DECIDE_ENABLED}" = "false" ]; then
+            echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=skip reason=disabled"
+            exit 0
+          fi
+          if ! [[ "${AUTO_DECIDE_CLARIFICATION_COMMENT_ID}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=skip reason=no_question_comment_id"
+            exit 0
+          fi
+          if [ "${STANDALONE_CLARIFY_RESPOND_ENABLED}" != "false" ]; then
+            echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=skip reason=delegated_to_clarify_respond"
+            echo "delegated=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          AUTO_DECIDE_FILE="${RUNTIME_DIR}/auto_decisions.json"
+          if ! python3 scripts/auto_decisions.py parse --questions-file "${QUESTIONS_FILE}" > "${AUTO_DECIDE_FILE}"; then
+            echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=skip reason=parse_failed"
+            exit 0
+          fi
+          AUTO_DECIDE_COUNT="$(jq -r '.decisions | length' "${AUTO_DECIDE_FILE}")"
+          AUTO_DECIDE_UNDECIDED="$(jq -r '.undecided | join(",")' "${AUTO_DECIDE_FILE}")"
+          if [ "${AUTO_DECIDE_COUNT}" -eq 0 ] || [ -n "${AUTO_DECIDE_UNDECIDED}" ]; then
+            echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=skip reason=undecided_questions decisions=${AUTO_DECIDE_COUNT} undecided=${AUTO_DECIDE_UNDECIDED:-none}"
+            exit 0
+          fi
+          AUTO_DECIDE_ANSWERS_FILE="${RUNTIME_DIR}/auto_decide_answers.txt"
+          jq -r '.answers' "${AUTO_DECIDE_FILE}" > "${AUTO_DECIDE_ANSWERS_FILE}"
+          AUTO_DECIDE_THREAD_HISTORY_FILE="${RUNTIME_DIR}/auto_decide_thread_history.txt"
+          if ! jq -r '.[] | select((.body // "") | startswith("/answer [auto-answered-by-orchestrator]")) | .body' \
+            "${ISSUE_ALL_COMMENTS_FILE}" > "${AUTO_DECIDE_THREAD_HISTORY_FILE}"; then
+            echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=skip reason=comment_history_unavailable"
+            exit 0
+          fi
+          AUTO_DECIDE_POST_LOG="${RUNTIME_DIR}/auto_decide_post.log"
+          if ! CODEX_OUTPUT_FILE="${AUTO_DECIDE_ANSWERS_FILE}" \
+            CLARIFICATION_COMMENT_ID="${AUTO_DECIDE_CLARIFICATION_COMMENT_ID}" \
+            THREAD_HISTORY_FILE="${AUTO_DECIDE_THREAD_HISTORY_FILE}" \
+            ISSUE_TITLE="${ISSUE_TITLE:-}" \
+            bash scripts/orchestrate_parse_and_post_answer.sh 2>&1 | tee "${AUTO_DECIDE_POST_LOG}"; then
+            echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=failed reason=answer_poster_failed"
+            exit 0
+          fi
+          if ! grep -q "^Posted auto-answer on issue #${ISSUE_NUMBER}$" "${AUTO_DECIDE_POST_LOG}"; then
+            echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=skip reason=answer_not_posted decisions=${AUTO_DECIDE_COUNT}"
+            exit 0
+          fi
+          echo "answered=true" >> "$GITHUB_OUTPUT"
+          AUTO_DECIDE_RENDER_FILE="${RUNTIME_DIR}/auto_decisions_comment.json"
+          if ! python3 scripts/auto_decisions.py render --comments-file "${ISSUE_ALL_COMMENTS_FILE}" \
+            --decisions-file "${AUTO_DECIDE_FILE}" \
+            --source "clarify comment ${AUTO_DECIDE_CLARIFICATION_COMMENT_ID}" > "${AUTO_DECIDE_RENDER_FILE}"; then
+            echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=answered reason=ad_render_failed decisions=${AUTO_DECIDE_COUNT}"
+            exit 0
+          fi
+          AUTO_DECIDE_EXISTING_ID="$(jq -r '.comment_id // empty' "${AUTO_DECIDE_RENDER_FILE}")"
+          if [[ "${AUTO_DECIDE_EXISTING_ID}" =~ ^[1-9][0-9]*$ ]]; then
+            gh_retry gh api -X PATCH "repos/${{ github.repository }}/issues/comments/${AUTO_DECIDE_EXISTING_ID}" \
+              -f body="$(jq -r '.body' "${AUTO_DECIDE_RENDER_FILE}")" >/dev/null \
+              || echo "::warning::Could not update the auto-decisions comment ${AUTO_DECIDE_EXISTING_ID} on issue #${ISSUE_NUMBER}"
+          else
+            gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+              -f body="$(jq -r '.body' "${AUTO_DECIDE_RENDER_FILE}")" >/dev/null \
+              || echo "::warning::Could not post the auto-decisions comment on issue #${ISSUE_NUMBER}"
+          fi
+          echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=answered decisions=${AUTO_DECIDE_COUNT} ad_total=$(jq -r '.total' "${AUTO_DECIDE_RENDER_FILE}")"
 
       - name: Record clarification candidate (needs clarification)
         if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification == 'true'
@@ -1371,9 +1487,26 @@ jobs:
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          CLARIFY_AUTO_DECIDE_ANSWERED: ${{ steps.standalone_auto_decide.outputs.answered || 'false' }}
+          CLARIFY_AUTO_DECIDE_DELEGATED: ${{ steps.standalone_auto_decide.outputs.delegated || 'false' }}
         run: |
           set -euo pipefail
           source scripts/tg_helpers.sh
+
+          # Questions the standalone auto-decide step already answered need
+          # no human: paging for them was the issue #6262 false alarm.
+          if [ "${CLARIFY_AUTO_DECIDE_ANSWERED}" = "true" ]; then
+            echo "AI_PHASE_GATE_V1 phase=clarify gate=tg_alert reason=auto_answered outcome=skip issue=${ISSUE_NUMBER}"
+            exit 0
+          fi
+          # Delegated questions are answered by orchestrate_clarify_respond.yml,
+          # which pages only when it cannot answer: an ESCALATE or loop-guard
+          # block (WARNING) or a failed worker with no RECOMMENDED fallback
+          # (CRITICAL).
+          if [ "${CLARIFY_AUTO_DECIDE_DELEGATED}" = "true" ]; then
+            echo "AI_PHASE_GATE_V1 phase=clarify gate=tg_alert reason=delegated_to_clarify_respond outcome=skip issue=${ISSUE_NUMBER}"
+            exit 0
+          fi
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           MSG="Clarification required for #${ISSUE_NUMBER}: ${ISSUE_TITLE}"
@@ -1518,3 +1651,59 @@ jobs:
           else
             echo 'GH_PAT_BUDGET phase=end workflow=clarify job=clarify remaining=unknown reset=unknown used_in_job=unknown'
           fi
+  heal-report:
+    # Workflow failure heal (README "Workflow Failure Heal"): report a failed
+    # clarify run to coding-workflows' heal intake, which diagnoses it and opens
+    # an ai:workflow-heal issue for the pipeline to fix. A separate job, so the
+    # clarify job has finished and the intake reads its complete log. Only a
+    # `failure` result is reported: a cancelled run was superseded or timed
+    # out. `permissions: {}` keeps the job inside any caller's grant;
+    # GH_PAT does the work. The reporter always exits 0.
+    needs: clarify
+    if: >-
+      always() && needs.clarify.result == 'failure' &&
+      !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+      WORKFLOW_HEAL_PHASE_FAILURE_STREAK: ${{ vars.WORKFLOW_HEAL_PHASE_FAILURE_STREAK || '1' }}
+      WORKFLOW_HEAL_PHASE: clarify
+      WORKFLOW_HEAL_ISSUE_NUMBER: ${{ github.event.issue.number }}
+      REPORT_WORKFLOW_NAME: ${{ github.workflow }}
+    steps:
+      - name: Resolve workflow support ref
+        run: |
+          set -euo pipefail
+          wf_source="shubhodeep1/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+          else
+            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+          fi
+
+      - name: Checkout workflow support source
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ env.SCRIPT_REF }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: scripts
+
+      - name: Report the failed run to workflow failure heal
+        run: |
+          set -euo pipefail
+          reporter=".codex-workflow-src/scripts/workflow_failure_heal_phase_report.sh"
+          if [ ! -f "${reporter}" ]; then
+            echo "WORKFLOW_HEAL_PHASE_REPORT skip reason=reporter_missing ref=${SCRIPT_REF}"
+            exit 0
+          fi
+          REPORT_WRAPPER_SHA="$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" \
+            RUNTIME_DIR="${RUNNER_TEMP}/workflow-heal-phase-report" \
+            bash "${reporter}"

@@ -101,6 +101,7 @@ def _marker(head_sha: str, *, resume_state: str, resume_round: int, should_conti
 		edits_withheld_for_safety=false
 		withheld_reason=none
 		head_sha={head_sha}
+		base_ref=main
 		resume_round={resume_round}
 		resume_round_limit={limit}
 		resume_state={resume_state}
@@ -115,6 +116,7 @@ def _run_parser(comments: list[dict[str, object]], head_sha: str) -> dict[str, s
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	env["PARTIAL_MARKER_COMMENTS_JSON"] = json.dumps([{"author_login": MARKER_AUTHOR_LOGIN, **comment} for comment in comments])
 	env["GATE_HEAD_SHA"] = head_sha
+	env["GATE_BASE_REF"] = "main"
 	env["GATE_BOT_LOGIN"] = BOT_LOGIN
 	env["GATE_MARKER_AUTHOR_LOGIN"] = MARKER_AUTHOR_LOGIN
 	result = subprocess.run(
@@ -153,8 +155,11 @@ def test_gate_declares_terminal_same_head_env_with_defaults() -> None:
 
 def test_gate_head_sha_rides_on_existing_pulls_fetch() -> None:
 	gate = _gate_block()
-	# §15: no second /pulls call — head_sha is added to the existing jq projection.
-	assert gate.count('gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"') == 1
+	# The terminal skip reuses the initial projection. A second read occurs
+	# only before posting a head-bound intentional-skip notice: that head may
+	# have moved since the original gate fetch (issue #4985).
+	assert gate.count('gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"') == 2
+	assert 'skip_notice_live_head="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq' in gate
 	assert 'head_sha: (.head.sha // "")' in gate
 	assert """pr_head_sha_gate="$(printf '%s' "${_pr_gate}" | jq -r '.head_sha // ""' 2>/dev/null || echo "")\"""" in gate
 	assert 'pr_head_sha_gate=""' in gate
@@ -225,6 +230,17 @@ def test_parser_marks_newest_terminal_marker_for_current_head() -> None:
 	assert decision["resume_round_limit"] == "3"
 	assert decision["marker_comment_id"] == "2"
 	assert decision["untrusted_markers"] == "0"
+
+
+def test_parser_does_not_skip_current_head_for_legacy_or_other_base_markers() -> None:
+	bound_marker = _marker(HEAD, resume_state="no_progress", resume_round=3, should_continue=False)
+	comments = [
+		{"id": 1, "body": bound_marker.replace("base_ref=main\n", "")},
+		{"id": 2, "body": bound_marker.replace("base_ref=main", "base_ref=stack/a")},
+	]
+	decision = _run_parser(comments, HEAD)
+	assert decision["terminal"] == "false"
+	assert decision["matching_markers"] == "0"
 
 
 def test_parser_ignores_markers_for_other_heads() -> None:
