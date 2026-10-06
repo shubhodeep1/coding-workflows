@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_merge_train.sh:774-784 | severity=critical | confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The release path proceeds when no valid marker from the automation account is found, removing the queue label and dispatching review for a PR with forged markers or no marker.\n  WHY: The empty marker ID skips marker replacement but does not stop release; DeepSeek and OpenAI reviewers concluded this was not a security gap, while Qwen rated it BLOCKER.\n- tests/test_review_merge_train.py:738-758, specifically line 753 | severity=critical | confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The test asserts that PR #4077 is released even though it has no valid marker from \"automation-bot\", validating the behavior that should keep it queued.\n  WHY: With the proposed fail-closed behavior, PR #4077 should remain queued, so the expected released count should be 1 rather than 2.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Authenticate the marker's author and require a verified, authorized queue-state transition before bypassing; otherwise keep the PR queued.\"\n  expected_change_site: scripts/review_merge_train.sh \u2014 the `_mt_release` path around lines 774-784\n  confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: The PR diff contains no changes to scripts/review_merge_train.sh; the release path at lines 774-784 still proceeds to delete the queue label when `release_queue_comment_id` is empty, while the gate path at lines 444-463 uses `queue_state_verified`.\n- requirement: \"The train now recognizes queue markers only from the account authenticated for the run.\"\n  expected_change_site: scripts/review_merge_train.sh \u2014 both gate and release paths\n  confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  EVIDENCE: No changes to scripts/review_merge_train.sh in the PR diff; `_mt_find_marker_comment` at line 290-296 filters by automation login, but the release path does not handle empty output when no matching marker is found.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_merge_train.sh:774-784 | severity=BLOCKER | confidence=5\n  PROBLEM: The release path does not fail closed when no valid queue marker exists; it still deletes the queue label when `_mt_find_marker_comment_id` returns empty output.\n  WHY: A PR with forged markers or no markers from non-automation accounts will have its queue label removed and review dispatched, bypassing the merge train.\n- tests/test_review_merge_train.py:738-758, specifically line 753 | severity=BLOCKER | confidence=5\n  PROBLEM: The test `test_release_ignores_forged_marker_and_resolves_identity_once` asserts `released=2` even though PR #4077 has only attacker-authored markers and no valid marker from \"automation-bot\".\n  WHY: With a correct implementation, PR #4077 should remain queued, so the assertion should be `released=1`; the test validates the bug, not the fix.\n- scripts/review_merge_train.sh:774-784 | severity=BLOCKER | confidence=5\n  PROBLEM: The release path lacks a fail-closed guard for empty `release_queue_comment_id`.\n  WHY: When no marker exists from the automation account, the script proceeds to delete the label and dispatch review; the warning on line 776 is only triggered when the function returns non-zero, not when it returns empty output.\n- TASK_GAP\n  Requirement: \"Authenticate the marker's author and require a verified, authorized queue-state transition before bypassing; otherwise keep the PR queued.\"\n  Expected change site: scripts/review_merge_train.sh \u2014 the `_mt_release` path around lines 774-784 must fail closed when no valid marker from the automation account exists, not just when the lookup call itself exits non-zero.\n  Evidence of absence: The PR diff contains no changes to scripts/review_merge_train.sh. The release path at lines 774-784 still proceeds to delete the queue label even when `release_queue_comment_id` is empty (no valid marker found). The gate path (lines 444-463) correctly implements the authentication check using `queue_state_verified`, but the release path has no equivalent guard.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"The train now recognizes queue markers only from the account authenticated for the run.\"\n  Expected change site: scripts/review_merge_train.sh \u2014 both gate and release paths must verify marker authorship against `MT_AUTOMATION_LOGIN` before allowing bypass or release.\n  Evidence of absence: No changes to scripts/review_merge_train.sh in the PR diff. The `_mt_find_marker_comment` function (line 290-296) already filters by automation login, but the release path does not properly handle the case when no matching marker is found (empty output with exit code 0).\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "b6f42a776e85e5246d70ae8bfd7600362cadd620a7da9ff74d6393563b26a42e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6527,
+    "run_id": "37462616546",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37462616546",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006125004_437242815d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6527,
+    "run_id": "37462616546"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T12:50:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
