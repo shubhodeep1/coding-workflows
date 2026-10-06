@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6570,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6570\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6574\",\"pr_number\":6574,\"branch\":\"ai/issue-6570\",\"run_id\":\"37484366742\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37484366742\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/cancel_on_pr_close.yml\",\".github/workflows/orchestrate_poll.yml\",\".github/workflows/review_autofix.yml\",\"README.md\",\"agents.md\",\"changelog.d/6570-merge-train-conflict-aware.md\",\"scripts/review_merge_train.sh\",\"tests/test_review_merge_train.py\"]}",
+  "fingerprint": "ca9ba7401c667451b31345a55193f5b55949ab38378f1ef1c7afaabbf75738fa",
+  "lineage": {
+    "issue_number": 6570,
+    "parent_ids": [],
+    "pr_number": 6574,
+    "run_id": "37484366742",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37484366742",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6574"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261006154751_9c5dd2f0dc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6570,
+    "level": "run",
+    "pr_number": 6574,
+    "run_id": "37484366742"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6570: https://github.com/shubhodeep1/coding-workflows/pull/6574",
+  "timestamps": {
+    "created_at": "2026-10-06T15:47:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
