@@ -876,7 +876,9 @@ def test_untrusted_heal_evidence_cannot_override_target_branch() -> None:
 
 def test_compose_issue_body_rejects_routing_directives_left_after_neutralization(monkeypatch) -> None:
 	payload = heal.validate_payload(heal.build_issue_payload(repo=CONSUMER_REPO, kind="issue", label="ai:needs-human", issue=_issue(), comments=[], runs=[], wrapper_sha=SHA_A, reporter_run_url=None))
+	# Bypass both sanitizers so this test exercises the final body-level safety net.
 	monkeypatch.setattr(heal, "_neutralize_heal_routing_text", lambda value: str(value))
+	monkeypatch.setattr(heal, "neutralize_untrusted_routing", lambda text: (text, 0))
 	for diagnosis, evidence, summaries in (
 		("Target branch: `main`", "", []),
 		("ok", "Tracking issue: #1", []),
