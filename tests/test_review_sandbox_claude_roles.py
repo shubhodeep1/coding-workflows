@@ -147,11 +147,55 @@ def test_check_paths(tmp_path, name, accepted):
 
 def test_resolver_path_check_precedes_sandbox_and_does_not_pass_host_git_index():
 	text = (ROOT / "scripts/review_conflict_resolve.sh").read_text(encoding="utf-8")
+	guard = text[text.index('# Reject unsupported conflict paths for both engines'):text.index('attempt=1\nwhile ')]
+	branch = text[text.index('resolver_claude_rc=75'):text.index('resolver_clean_output="${tmp_output}.ansi-clean"')]
+	assert 'check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}"' in guard
+	assert guard.index('check-paths') < guard.index('prepare-ephemeral codex')
+	assert branch.index('_resolver_sandbox_attempt claude') < branch.index('_resolver_sandbox_attempt codex')
+	assert 'GIT_INDEX_FILE=' not in branch
+	assert 'GIT_INDEX_FILE=' not in guard
+
+
+def test_prepare_ephemeral_codex_works_without_optional_claude_support(tmp_path):
+	workspace = tmp_path / "checkout"
+	workspace.mkdir()
+	subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+	(workspace / "app.py").write_text("value = 1\n")
+	support = tmp_path / "support"
+	support.mkdir()
+	for name in ("review_untrusted_workspace.py", "clarify_openrouter_broker.py"):
+		(support / name).symlink_to(ROOT / "scripts" / name)
+	(support / "review_sandbox").symlink_to(ROOT / "scripts/review_sandbox", target_is_directory=True)
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	docker = bin_dir / "docker"
+	docker.write_text('#!/bin/bash\nprintf "sha256:%064d\\n" 0\n')
+	docker.chmod(0o755)
+	env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", RUNNER_TEMP=str(tmp_path),
+		GITHUB_WORKSPACE=str(workspace), SUPPORT_SCRIPTS_DIR=str(support))
+	for inherited in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+		env.pop(inherited, None)
+	without_arg = subprocess.run(["bash", str(SANDBOX), "prepare-ephemeral"], cwd=workspace,
+		env=env, capture_output=True, text=True)
+	assert without_arg.returncode == 1
+	assert "Review Claude support missing" in without_arg.stderr
+	with_codex = subprocess.run(["bash", str(SANDBOX), "prepare-ephemeral", "codex"], cwd=workspace,
+		env=env, capture_output=True, text=True)
+	assert with_codex.returncode == 0, with_codex.stderr
+	root = Path(with_codex.stdout.strip())
+	assert (root / "image").exists()
+	assert not (root / "engine").exists()
+	assert subprocess.run(["bash", str(SANDBOX), "cleanup"], env=dict(env, REVIEW_SANDBOX_ROOT=str(root)),
+		capture_output=True).returncode == 0
+
+
+def test_claude_resolver_sandbox_attempt_and_path_gate():
+	text = (ROOT / "scripts/review_conflict_resolve.sh").read_text(encoding="utf-8")
 	helper = SANDBOX.read_text(encoding="utf-8")
 	assert 'prepare|prepare-ephemeral|run|cleanup' in helper
 	assert '[ "$#" -ge 6 ] && [ "$#" -le 9 ]' in helper
 	attempt = text[text.index('_resolver_sandbox_attempt()'):text.index('# Source-repo only: the final touched-set gate')]
-	branch = text[text.index('resolver_claude_rc=75'):text.index('if [ "${resolver_claude_rc}" -ne 75 ]; then')]
+	branch = text[text.index('resolver_claude_rc=75'):text.index('resolver_clean_output="${tmp_output}.ansi-clean"')]
 	assert branch.index('check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}"') < branch.index('_resolver_sandbox_attempt claude')
 	assert attempt.index('prepare-ephemeral') < attempt.index('run "${_effective_prompt_file}"') < attempt.index('if ! REVIEW_SANDBOX_ROOT=')
 	assert 'GIT_INDEX_FILE=' not in attempt + branch
@@ -163,7 +207,7 @@ def test_claude_resolver_isolation_failures_do_not_select_host_writer():
 	assert 'action=fail_closed' in closed
 	assert 'RESOLVER_ISOLATION_FAILURE_REASON="$1" _persist_resolver_retry_state_from_current_failure' in closed
 	assert closed.rstrip().endswith('exit 1\n}')
-	branch = text[text.index('resolver_claude_rc=75'):text.index('if [ "${resolver_claude_rc}" -ne 75 ]; then')]
+	branch = text[text.index('resolver_claude_rc=75'):text.index('resolver_clean_output="${tmp_output}.ansi-clean"')]
 	assert branch.count('AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER') == 1
 	assert 'reason=claude_unavailable action=sandbox_opencode' in branch
 	for reason in ('sandbox_prepare_failed', 'sandbox_path_unsupported', 'sandbox_opencode_unavailable'):

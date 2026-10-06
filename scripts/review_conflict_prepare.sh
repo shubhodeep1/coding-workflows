@@ -639,14 +639,8 @@ append_semble_query_section() {
 } > "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE}"
 echo "CONFLICT_RESOLVER_SEMBLE_QUERY_FILE=${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE}" >> "$GITHUB_ENV"
 
-RESOLVER_SERENA_TOOL_HINTS="$({
-  if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
-    printf '%s\n' \
-      'Resolver Serena hints:' \
-      '- Serena MCP is available in this run. Prefer Serena read/navigation tools when they materially reduce shell reads while resolving a conflict (for example: activate_project, get_symbols_overview, find_symbol, find_referencing_symbols, search_for_pattern).' \
-      '- Use Serena for lookup/navigation only; keep repository writes in the normal apply_patch/shell paths rather than a broad symbol-write workflow.'
-  fi
-}; )"
+# The resolver runs in a sandbox with no MCP access, including its first prompt.
+RESOLVER_SERENA_TOOL_HINTS=""
 
 # Render the prompt template with substitutions. We pass placeholder
 # names + their values via env so the python one-liner stays under

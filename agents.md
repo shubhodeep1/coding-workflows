@@ -102,11 +102,14 @@ Phases of the unattended pipeline (each is a separate workflow file under
    read-only snapshot, and the judge and resolver prepare fresh snapshots
    without installing dependencies. The relay suppresses peer disconnects and
    timeouts on rejection, but other write errors reach the server error handler.
-   Host `claude_run` refuses all four review
-   roles. A Claude-selected resolver retries OpenCode only in a fresh isolated
-   sandbox when Claude is unavailable; unsupported paths or missing isolation
-   fail closed, never reaching host OpenCode. An explicitly selected codex
-   resolver still uses the existing host OpenCode path.
+    Host `claude_run` refuses all four review roles. The resolver checks its
+    conflicted paths against sandbox admission before either engine runs; an
+    unsupported path is refused and, for integration-sync PRs, counted toward
+    the existing resolver retry-state escalation. Its OpenCode runs (including
+    Claude fallback)
+    use fresh isolated snapshots and validated transfer, never the host writer.
+    A Claude-selected resolver retries OpenCode in a fresh sandbox only when
+    Claude is unavailable; isolation or transfer failure fails closed.
    The judge verdict uses read access; its fix and the resolver use write access
    with validated transfer back to the workspace. The poller's review-blocked
    judge uses the same sandbox from the verified workflow support checkout,
@@ -1883,14 +1886,13 @@ depend on it.
   a bounded scope-feedback retry only after the pre-attempt state is restored
   and verified; an unsafe restore fails closed. Consumer repos retain the
   previous path, and the final `check_resolver_diff.sh` commit gate is unchanged.
-  The model itself runs on a private copy of the captured merge index
-  (`GIT_INDEX_FILE=${RUNTIME_DIR}/resolver_model_index`, refreshed before every
-  attempt by `_resolver_model_index_prepare`), so a `git add` of the file it
-  resolved no longer changes the real index that both scope guards require to
-  stay unchanged (#5627). The script stages the accepted resolution itself; a
-  model that bypasses the copy still fails closed. Because OpenCode's snapshot
-  tracking runs git with the inherited environment, the resolver's own OpenCode
-  config sets `snapshot: false`. Both changes apply to the source repo only.
+  Both engines now run inside fresh review sandboxes; the model's Git snapshot
+  is separate from the host merge index, and only admitted edits pass validated
+  transfer. The script still stages accepted resolutions itself, and a change
+  to the host index fails the source-repo scope check. The private-index helper
+  (`_resolver_model_index_prepare`, #5627) remains for compatibility but is no
+  longer called by the resolver loop. The source-repo OpenCode config still
+  disables snapshots.
 
 - `scripts/verify_integration_fingerprints.py` supports `--baseline-fingerprints-state <out>` / `--compare-against-baseline <in>` alongside `--ref`; capture mode records ref-accurate `head_sha` metadata, compare mode emits `PRE_EXISTING_FINGERPRINT_DRIFT_V1` markers for pre-existing drift that should not block the resolver commit, and the verifier-side false-positive defenses emit `FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1` (capture-side multi-occurrence partial removal), `FINGERPRINT_POST_CAPTURE_EVOLUTION_FALSE_POSITIVE_V1` (a `must_contain` line modified after capture by a non-`[ai-merge-resolve]` commit), and `FINGERPRINT_POST_CAPTURE_REINTRODUCTION_FALSE_POSITIVE_V1` (a `must_not_contain` line re-added after capture by a non-`[ai-merge-resolve]` commit — e.g. a back-merge of the default branch keeping its still-present copy) when the ref-mode wave-dispatch gate suppresses a non-resolver false positive. The two post-capture defenses share one direction-agnostic pickaxe primitive and both fail closed in working-tree mode, so the resolver's own pre-commit self-check stays strict and still cannot silently revert merged intent.
 - `.github/workflows/review_autofix.yml` stages required and main-primary helpers from the verified reusable-workflow SHA; PR-head copies are review data, not runtime code. `render_prompt.py`, `review_conflict_resolve.sh` and their dependencies ship with that same workflow commit. Embedded PR-diff template syntax is still handled by `render_prompt.sh` with `RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1` after assembly, while static templates retain strict validation. Optional support missing from that commit skips the feature; required support fails closed. The model catalog comes from the same commit as the reviewer roster, never from a PR branch or a separately resolved main snapshot.

@@ -321,14 +321,8 @@ PRE_RESOLVER_STATE_FILE="${RUNTIME_DIR}/pre_resolver_state.tsv"
 CONFLICTED_PATHS_FILE="${RUNTIME_DIR}/conflicted_paths.txt"
 RESOLVER_ALLOWLIST_FILE="${RUNTIME_DIR}/resolver_unmerged_allowlist.txt"
 CONFLICT_RESOLVER_SEMBLE_QUERY_FILE="${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-${RUNTIME_DIR}/conflict_resolver_semble_query.txt}"
-RESOLVER_SERENA_TOOL_HINTS="$({
-  if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
-    printf '%s\n' \
-      'Resolver Serena hints:' \
-      '- Serena MCP is available in this run. Prefer Serena read/navigation tools when they materially reduce shell reads while resolving a conflict (for example: activate_project, get_symbols_overview, find_symbol, find_referencing_symbols, search_for_pattern).' \
-      '- Use Serena for lookup/navigation only; keep repository writes in the normal apply_patch/shell paths rather than a broad symbol-write workflow.'
-  fi
-}; )"
+# The isolated resolver has no MCP access; never advertise host Serena tools.
+RESOLVER_SERENA_TOOL_HINTS=""
 
 _RESOLVER_DISPATCH_FIRED=0
 _dispatch_integration_judge_now() {
@@ -474,9 +468,6 @@ _apply_resolver_reasoning_effort "${_current_reasoning_effort}"
 RESOLVER_OPENCODE_CONFIG="${RUNTIME_DIR}/resolver_opencode.json"
 RESOLVER_OPENCODE_WORKSPACE="$(pwd)"
 resolver_opencode_serena="off"
-if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
-  resolver_opencode_serena="on"
-fi
 if ! bash "${OPENCODE_CONFIG_WRITER_PATH}" \
   --role writer \
   --model "${MODEL_EDITOR}" \
@@ -487,11 +478,8 @@ if ! bash "${OPENCODE_CONFIG_WRITER_PATH}" \
   exit 1
 fi
 
-# Source-repo only (#5627): the model runs on a private copy of the merge index
-# (see _resolver_model_index_prepare). OpenCode's snapshot tracking runs git
-# with the inherited environment, so it would write its own index into that
-# copy and hide the unmerged entries from the model. The resolver never reads
-# OpenCode snapshots; turn them off in this resolver-only config.
+# Retain the source-repo private-index compatibility helper (#5627). The
+# model now uses the sandbox's Git snapshot, not the host's merge index.
 _resolver_disable_opencode_snapshot()
 {
   PYTHONDONTWRITEBYTECODE=1 python3 - "${1:-${RESOLVER_OPENCODE_CONFIG}}" <<'PY'
@@ -576,8 +564,9 @@ _resolver_fail_closed()
   if type _persist_resolver_retry_state_from_current_failure >/dev/null 2>&1; then
     RESOLVER_ISOLATION_FAILURE_REASON="$1" _persist_resolver_retry_state_from_current_failure || true
   fi
-  emit_conflict_resolver_substate "Failed" "${attempt}"
-  rm -f -- "${tmp_output}" "${_stall_status_file}"
+  emit_conflict_resolver_substate "Failed" "${attempt:-0}"
+  if [ -n "${tmp_output:-}" ]; then rm -f -- "${tmp_output}"; fi
+  if [ -n "${_stall_status_file:-}" ]; then rm -f -- "${_stall_status_file}"; fi
   exit 1
 }
 
@@ -2247,6 +2236,71 @@ if [ "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" -gt "${CONFLICT_RESOLVER_PE
   CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS="${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}"
 fi
 
+# Reject unsupported conflict paths for both engines before starting any model.
+resolver_sandbox_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_sandbox.sh"
+resolver_workspace_py="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_workspace.py"
+if [ ! -f "${resolver_sandbox_sh}" ] || [ ! -f "${resolver_workspace_py}" ]; then
+  _resolver_fail_closed sandbox_support_missing
+fi
+if ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}" >/dev/null 2>&1; then
+  _resolver_fail_closed sandbox_path_unsupported
+fi
+
+_resolver_sandbox_opencode_attempt()
+{
+  local resolver_opencode_root="" resolver_transfer_reason="" resolver_transfer_reason_file="${RUNTIME_DIR}/review_sandbox_transfer_reason_${tmp_output##*/}"
+  if ! resolver_opencode_root="$(bash "${resolver_sandbox_sh}" prepare-ephemeral codex)" || [ -z "${resolver_opencode_root}" ]; then
+    echo '::warning::Conflict resolver sandbox preparation failed (reason=sandbox_prepare_failed); refusing host fallback.' >&2
+    _resolver_fail_closed sandbox_prepare_failed
+  fi
+  resolver_opencode_cmd=(env "REVIEW_SANDBOX_ROOT=${resolver_opencode_root}" bash "${resolver_sandbox_sh}" run
+    "${_effective_prompt_file}" "${tmp_output}" "${MODEL_EDITOR}" "${_current_reasoning_effort}"
+    "${RESOLVER_OPENCODE_CONFIG}" codex CONFLICT_RESOLVER write)
+  rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed" "${resolver_transfer_reason_file}"
+  if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+    timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+      "${CODEX_STALL_GUARD_HELPER}" \
+      --phase review_conflict_resolve \
+      --stdout-file "${tmp_output}" \
+      --status-file "${_stall_status_file}" \
+      -- "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" \
+      || _codex_exit=$?
+  elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+    timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+      "${CODEX_HEARTBEAT_HELPER}" \
+      --phase review_conflict_resolve \
+      --stdout-file "${tmp_output}" \
+      -- "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" \
+      || _codex_exit=$?
+  else
+    timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+      "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" > "${tmp_output}" \
+      || _codex_exit=$?
+  fi
+  if ! REVIEW_SANDBOX_ROOT="${resolver_opencode_root}" bash "${resolver_sandbox_sh}" cleanup; then
+    echo '::error::Conflict resolver sandbox cleanup failed; refusing to retry or commit.' >&2
+    _resolver_fail_closed sandbox_cleanup_failed
+  fi
+  if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then
+    if [ -f "${resolver_transfer_reason_file}" ] && [ ! -L "${resolver_transfer_reason_file}" ] &&
+       [ "$(wc -c < "${resolver_transfer_reason_file}")" -le 240 ] &&
+       [[ "$(< "${resolver_transfer_reason_file}")" =~ ^::error::Review\ isolation\ snapshot\ or\ transfer\ rejected\ \(ValueError\)\ reason=(admitted_inventory_missing|symlink_path|unsafe_file|file_changed|entry_limit|unsafe_directory(\ dir=[A-Za-z0-9._/-]{1,64})?|unsafe_result_path|workspace_size_limit|host_baseline_changed|host_path_conflict|transfer_rollback_failed)$ ]]; then
+      resolver_transfer_reason=" reason=${BASH_REMATCH[1]%% *}"
+    fi
+    echo "::error::Conflict resolver sandbox transfer failed; refusing to accept output.${resolver_transfer_reason}" >&2
+    rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
+    # Any transfer failure may leave partial host edits; never retry or commit.
+    if [ "${resolver_transfer_reason}" = " reason=transfer_rollback_failed" ]; then
+      _resolver_fail_closed transfer_rollback_failed
+    fi
+    _resolver_fail_closed sandbox_transfer_failed
+  fi
+  if [ "${_codex_exit}" -eq 2 ]; then
+    echo '::warning::Conflict resolver sandbox helper outdated (reason=sandbox_helper_outdated); refusing host fallback.' >&2
+    _resolver_fail_closed sandbox_helper_outdated
+  fi
+}
+
 attempt=1
 while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   emit_conflict_resolver_substate "PreparingWorkspace" "${attempt}"
@@ -2388,25 +2442,6 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
     sanitize_codex_prompt_file "${_effective_prompt_file}"
   fi
-  resolver_opencode_cmd=(
-    bash -c
-    # shellcheck disable=SC2016
-    'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
-    opencode-conflict-resolver
-    "${OPENCODE_HELPERS_PATH}"
-    writer
-    "${MODEL_EDITOR}"
-    "${_current_reasoning_effort}"
-    "${RESOLVER_OPENCODE_CONFIG}"
-    "${RESOLVER_OPENCODE_WORKSPACE}"
-  )
-  if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
-    if ! _resolver_model_index_prepare; then
-      echo "::error::Cannot prepare the resolver model's private Git index; refusing to invoke model."
-      exit 1
-    fi
-    resolver_opencode_cmd=(env "GIT_INDEX_FILE=${RESOLVER_MODEL_INDEX_FILE}" "${resolver_opencode_cmd[@]}")
-  fi
   _run_codex=true
   if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
     if ! bash "${WORKSPACE_SAFETY_CHECK_HELPER}"; then
@@ -2420,8 +2455,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     emit_conflict_resolver_substate "StreamingTurn" "${attempt}"
     # Claude engine (replace-claude-sessions plan Phase 5c): the workflow
     # exports AI_ENGINE_RESOLVED_CONFLICT_RESOLVER (CLAUDE_FIXER_ENABLED=false
-    # keeps it on codex). Claude runs in a fresh isolated snapshot per attempt;
-    # the host's private Git index remains exclusive to the OpenCode path.
+    # keeps it on codex). Both engines use fresh isolated snapshots.
     resolver_claude_rc=75
     resolver_sandbox_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_sandbox.sh"
     resolver_workspace_py="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_workspace.py"
@@ -2431,10 +2465,12 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
       elif ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}"; then
         _resolver_fail_closed sandbox_path_unsupported
       fi
+      rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
       resolver_claude_rc=0
       _resolver_sandbox_attempt claude || resolver_claude_rc=$?
       if [ "${resolver_claude_rc}" -eq 75 ]; then
         echo 'AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=claude_unavailable action=sandbox_opencode' >&2
+        rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
         resolver_claude_rc=0
         _resolver_sandbox_attempt codex || resolver_claude_rc=$?
       fi
@@ -2446,27 +2482,8 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
       _codex_exit="${resolver_claude_rc}"
       resolver_claude_rc=0
     fi
-    if [ "${resolver_claude_rc}" -ne 75 ]; then
-      :
-    elif [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
-      timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-        "${CODEX_STALL_GUARD_HELPER}" \
-        --phase review_conflict_resolve \
-        --stdout-file "${tmp_output}" \
-        --status-file "${_stall_status_file}" \
-        -- "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" \
-        || _codex_exit=$?
-    elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-      timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-        "${CODEX_HEARTBEAT_HELPER}" \
-        --phase review_conflict_resolve \
-        --stdout-file "${tmp_output}" \
-        -- "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" \
-        || _codex_exit=$?
-    else
-      timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-        "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" > "${tmp_output}" \
-        || _codex_exit=$?
+    if [ "${resolver_claude_rc}" -eq 75 ]; then
+      _resolver_sandbox_opencode_attempt
     fi
   fi
   resolver_clean_output="${tmp_output}.ansi-clean"

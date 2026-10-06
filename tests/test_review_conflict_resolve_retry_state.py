@@ -423,8 +423,10 @@ def test_review_autofix_wires_escape_threshold_and_failure_comment_suppression()
 	)
 	assert "Install Codex CLI" not in body
 	assert "Create Codex config" not in body
-	assert 'opencode_run_cmd "$@"' in resolve_body
-	assert 'writer\n    "${MODEL_EDITOR}"' in resolve_body
+	assert 'codex CONFLICT_RESOLVER write)' in resolve_body
+	assert 'prepare-ephemeral codex' in resolve_body
+	assert '--role writer \\' in resolve_body
+	assert '"${MODEL_EDITOR}" "${_current_reasoning_effort}"' in resolve_body
 	assert '"${_current_reasoning_effort}"' in resolve_body
 	assert "CODEX_THREAD_REUSE_ENABLED requested; OpenCode conflict resolver uses the fresh full-prompt path." in resolve_body
 	terminal_branch = resolve_body.index('if [ "${attempt}" -eq "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; then')
