@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:test_security_pass_unrated_audit_output_fails_closed_before_judge | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The test expects `SECURITY_PASS_FAILED reason=engine_unavailable`, but the described unrated-finding cap path emits `reason=blocking_findings_after_cap`.\n  WHY: The expected log line is not emitted by the described code path, so the assertion fails when the test runs.\n- tests/test_orchestrate_poll_process.py:line `assert result[\"latest_state\"][\"security_pass_status\"] == \"failed\"` | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The unrated-finding test checks `security_pass_status`, unlike the sibling high/critical test, which checks the project-level `status`.\n  WHY: The source identifies this as an inconsistency between tests exercising the same documented cap path; one assertion may fail if that path updates only one of the fields.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:95-103 | severity=MAJOR | confidence=3\n  PROBLEM: The function does not sanitize input arguments `prompt_file` and `output_file` before passing them to the isolation wrapper.\n  WHY: While the caller is currently trusted, this function acts as an interface to the isolation sandbox; an untrusted path could enable directory traversal or unauthorized file access within the sandbox context.\n- scripts/orchestrate_poll_process.sh:95-103 | severity=MAJOR | confidence=3\n  PROBLEM: When isolation preparation fails (exit 77), the function returns but does not explicitly clean up the workspace sandbox that might have been partially initialized.\n  WHY: Partially initialized sandbox resources could accumulate across poll ticks, leading to storage exhaustion or resource leaks on the runner.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrate_poll_process.py:test_security_pass_unrated_audit_output_fails_closed_before_judge | severity=MAJOR | confidence=4\n  PROBLEM: The new test asserts on a `SECURITY_PASS_FAILED reason=engine_unavailable` log line that the orchestrator does not appear to emit.\n  WHY: The described cap-conversion path for unrated findings emits `SECURITY_PASS_FAILED reason=blocking_findings_after_cap`, so the substring assertion fails; the test setup also provides `MOCK_SECURITY_PASS_JUDGE_JSON`, contradicting its claim that failure occurs before the judge.\n- tests/test_orchestrate_poll_process.py:line `assert result[\"latest_state\"][\"security_pass_status\"] == \"failed\"` | severity=NIT | confidence=3\n  PROBLEM: This assertion checks `security_pass_status`, while the sibling high/critical test checks the project-level `result[\"latest_state\"][\"status\"]`.\n  WHY: The source describes the tests as sharing an otherwise-identical setup and exercising the same documented cap path, making their differing state-field assertions inconsistent.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "96003ef8b669576c25863fcb9e62982ef4ae1acfc18f9ab4fdb68959e4a34b50",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6208,
+    "run_id": "37460990536",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37460990536",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006123616_0308eeeb5f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6208,
+    "run_id": "37460990536"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T12:36:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
