@@ -14,7 +14,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
-CONFIG_LIST = re.compile(r"\bgit\s+config\b[^\n]*(?:--list\b|(?<!\S)-l\b)")
+CONFIG_LIST = re.compile(r"(?:^|\$\()\s*git\s+config\b[^\n]*(?:--(?:list|get(?:-[a-z-]+)?)\b|(?<!\S)-l\b)")
+
+
+def _config_list_lines(text: str) -> list[str]:
+	return re.sub(r"\\\r?\n[ \t]*", " ", text).splitlines()
 
 
 def _job_block(text: str, job_id: str) -> str:
@@ -43,20 +47,31 @@ def test_no_workflow_dumps_git_config_values() -> None:
 	])
 	assert files, "No workflows to check"
 	for path in files:
-		for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+		for line_number, line in enumerate(_config_list_lines(path.read_text(encoding="utf-8")), 1):
 			if CONFIG_LIST.search(line):
 				assert "--name-only" in line, f"{path.relative_to(REPO_ROOT)}:{line_number} dumps Git config values"
+
+
+def test_config_list_matches_shell_continuation() -> None:
+	continued_command = "git config \\\n    --list --show-origin"
+	assert any(CONFIG_LIST.search(line) and "--name-only" not in line for line in _config_list_lines(continued_command))
+
+
+def test_config_get_regexp_requires_name_only() -> None:
+	unsafe_command = "EXTRAHEADER_KEYS_STDOUT=$(git config --local --get-regexp 'http\\..*\\.extraheader')"
+	assert CONFIG_LIST.search(unsafe_command) and "--name-only" not in unsafe_command
+	assert not CONFIG_LIST.search('echo "git config --get-regexp failed"')
 
 
 def test_release_job_does_not_run_checkout_diagnostic() -> None:
 	block = _job_block(WORKFLOW.read_text(encoding="utf-8"), "release")
 	assert "*git-checkout-diag" not in block
-	assert not CONFIG_LIST.search(block)
+	assert not any(CONFIG_LIST.search(line) for line in _config_list_lines(block))
 
 
 def test_diag_anchor_prints_keys_only() -> None:
 	body = _diag_run_body(WORKFLOW.read_text(encoding="utf-8"))
-	list_lines = [line for line in body.splitlines() if CONFIG_LIST.search(line)]
+	list_lines = [line for line in _config_list_lines(body) if CONFIG_LIST.search(line)]
 	assert list_lines and all("--name-only" in line for line in list_lines)
 
 
