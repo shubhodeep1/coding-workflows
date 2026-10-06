@@ -784,6 +784,82 @@ sync: `.claude/commands/` is not part of the synced surface, and the
 template copies under `workflow-templates/.claude/commands/` have never
 carried frontmatter.
 
+### Live `.claude/` copies and their templates
+
+This repo runs its own `.claude/` copy of the files it ships to consumers
+under `workflow-templates/.claude/`. The pipeline's editors cannot edit
+`.claude/**`, so an AI fix that changes only the template leaves the live copy
+behind; #6133 (the merged-PR guard hook) and #6176 (four command files) broke
+`main` that way. Three pieces keep the pairs in step:
+
+- `tests/test_claude_template_live_parity.py` (own `ci.yml` step) fails when a
+  template and its live copy differ in content or executable bits, unless the
+  file is listed in `.github/ai/claude_template_divergence.json` with a reason.
+  Six command files are listed today; both copies of those are edited by hand.
+- `scripts/sync_claude_live_copies.py` runs from
+  `.github/workflows/sync-claude-live-copies.yml` on every push to `main` that
+  touches `workflow-templates/.claude/**`. When the push changed a template
+  but not its live copy, it copies the template over, pushes
+  `ai/sync-claude-live-copies` and opens a PR (or refreshes the open one). It
+  also carries forward still-drifted live copies from the existing sync branch
+  only when that branch's copy matches the current template; a live copy
+  changed on `main` since the earlier sync is left for the parity test.
+  The auto-merge-eligible branch accepts a path only when every template
+  commit since the last live-copy edit is associated with a merged PR from a
+  non-`ai/*`, non-`orchestrator/*`, non-`auto/*` branch targeting the sync base
+  from a same-repository head, authored by an OWNER/MEMBER/COLLABORATOR
+  non-bot account, and neither its subject nor any PR commit subject carries
+  a pipeline marker or a squash `(#N)` suffix. A trusted collaborator's
+  account or session can still submit AI-written content.
+  Unverifiable paths instead go to `ai/sync-claude-live-copies-held` as a draft
+  PR for human review, with a Telegram WARNING listing their source commits.
+  Malformed merge timestamps also fail authorization and hold the path.
+  A ready held PR is converted back to draft before a refresh pushes content.
+  Logs add `CLAUDE_LIVE_SYNC authorized`, `held`, and `converted_to_draft`;
+  the history cap defaults to 30 distinct commits per run
+  (`CLAUDE_LIVE_SYNC_MAX_PROVENANCE_COMMITS`).
+  Branch replacement is lease-checked; push or PR API failures fail the job
+  with a structured `CLAUDE_LIVE_SYNC error` line, leaving the branch for a
+  later sync attempt.
+  Its existing-PR lookup accepts only an open PR from this repository's sync
+  branch into the configured base branch, even when other PRs are returned.
+  It fails open on an unusable `before` commit: no sync is attempted, and
+  the parity test still reports the drift. Provenance and open-PR reads use
+  GraphQL: one aliased association lookup covers up to 30 distinct template
+  commits, followed by 1-3 pages per distinct merged PR and one sync-PR lookup
+  per nonempty group.
+  Only PR creation uses REST, at most once for each of the authorized and held
+  groups (two REST calls total). `GH_PAT` remains broad to trigger CI/review;
+  branch names and commit subjects are not proof of human authorship, and
+  marking a held PR ready between conversion and push is a residual race. Log
+  prefix `CLAUDE_LIVE_SYNC`.
+- A push that changed only the live copy is left to the parity test.
+
+For PRs targeting `main`, the `tests-hooks-and-orchestrator` CI job runs
+`sync_claude_live_copies.py sync --dry-run` in its disposable checkout,
+using the PR base SHA and full git history. This prepares only eligible
+template-only command changes for the tests without committing or pushing live
+files. Security hooks under `.claude/hooks/**` and `.claude/settings.json` are
+never prepared: their committed live copies must match the templates for CI
+to pass, even when the editor cannot write the live file.
+Changes to both halves that still differ remain test failures. Push CI and
+PRs targeting `stable` check the committed tree without preparation, so drift
+on `main` is still reported while the post-merge sync PR is pending.
+Both release gates' `validate-scripts` jobs also run
+`tests/test_claude_template_live_parity.py` on the committed tree: drift,
+including a pending or held sync PR, blocks the `stable` release until both
+copies match or the file is allowlisted.
+
+New templates without a live copy are also treated as drift and copied into
+`.claude/` (including new subdirectories) with their executable permissions.
+Template symlinks (including directory links) and symlinks anywhere in a live
+destination path fail the sync/parity check rather than being followed; the
+workflow must not copy checkout-local credential files into a PR.
+A later template push recovers an earlier failed or superseded sync only if
+the template's most recent change is newer than the live file's; an equal or
+newer live edit is left untouched.
+An unusable `before` commit still skips the sync, so CI reports any drift.
+
 ---
 
 ## Repo-specific batching helpers
@@ -1896,6 +1972,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/review_autofix_sweep.yml
 .github/workflows/review_rb_judge_dispatch.yml
 .github/workflows/security-audit.yml
+.github/workflows/sync-claude-live-copies.yml
 .github/workflows/sync_ai_labels.yml
 .github/workflows/test-and-mark-stable.yml
 .github/workflows/update_workflows.yml

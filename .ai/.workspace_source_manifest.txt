@@ -35,6 +35,7 @@
 .github/actions/setup-runtime/action.yml
 .github/ai/WORKFLOW.md
 .github/ai/claude_engine.json
+.github/ai/claude_template_divergence.json
 .github/ai/concurrency_caps.yml
 .github/ai/consumer_repos.json
 .github/ai/hot_files.json
@@ -82,6 +83,7 @@
 .github/workflows/review_autofix_sweep.yml
 .github/workflows/review_rb_judge_dispatch.yml
 .github/workflows/security-audit.yml
+.github/workflows/sync-claude-live-copies.yml
 .github/workflows/sync_ai_labels.yml
 .github/workflows/test-and-mark-stable.yml
 .github/workflows/update_workflows.yml
@@ -194,6 +196,7 @@ changelog.d/5964-reviewer-infra-nonblocking.md
 changelog.d/5999-restore-scoped-smoke-run-lookups.md
 changelog.d/6055-review-editor-edits-reach-work-tree.md
 changelog.d/6118-ci-failure-triage-workflow-run.md
+changelog.d/6118-main-ci-green-claude-template-sync.md
 changelog.d/6118-phase-0-standalone-issues-default-to-codex.md
 changelog.d/6118-phase-2-retire-claude-session-automation.md
 changelog.d/6118-phase-3-claude-engine-plumbing.md
@@ -220,12 +223,15 @@ changelog.d/6322-pr-merge-guard-single-json-output.md
 changelog.d/6323-check-triage-isolated-diagnosis.md
 changelog.d/6364-triage-routing-metadata-neutralize.md
 changelog.d/6365-check-triage-runs-security-pass.md
+changelog.d/6375-claude-live-sync-provenance-hold.md
 changelog.d/6380-triage-agents-md-nofollow.md
 changelog.d/6381-check-triage-metadata-routing.md
+changelog.d/6391-sync-pr-lookup-verifies-base.md
 changelog.d/6400-rb-judge-security-severity-block.md
 changelog.d/6401-single-issue-security-pass-completed-audit.md
 changelog.d/6402-triage-host-python-isolation.md
 changelog.d/6403-triage-check-name-neutralize.md
+changelog.d/6404-claude-live-sync-pr-provenance.md
 changelog.d/autofix-cap-and-security-exhaustion-judge.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/release-smoke-run-lookup.md
@@ -599,6 +605,7 @@ scripts/slop_scan_local.py
 scripts/stage_workflow_support.sh
 scripts/summarize_reviewer_consensus.sh
 scripts/summarize_unselected_runs.py
+scripts/sync_claude_live_copies.py
 scripts/targeted_file_context.py
 scripts/task_state.py
 scripts/templates/serena_project.yml.j2
@@ -774,6 +781,7 @@ tests/test_claude_engine.py
 tests/test_claude_md_section_numbers.py
 tests/test_claude_pool_token.py
 tests/test_claude_settings_policy.py
+tests/test_claude_template_live_parity.py
 tests/test_codex_heartbeat.py
 tests/test_codex_skip_git_repo_check_contract.py
 tests/test_codex_stall_guard_poller.py
