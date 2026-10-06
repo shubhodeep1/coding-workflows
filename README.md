@@ -19,6 +19,8 @@ This repository contains reusable `workflow_call` workflows that power the full 
 
 For the issue → PR pipeline state machine and the full command vocabulary, see [`docs/how-it-works.md`](docs/how-it-works.md).
 
+Clarification alert silencing for `[E2E ...]` issue titles requires a trusted human issue author. For orchestrator children, `orchestrate_clarify_respond.yml` also requires a trusted human author and the `ai:orchestrator-managed` label on the child, plus a trusted human author and the `ai:orchestrator-tracking` label on the referenced `[Orchestrator] E2E ...` parent. Missing or unverified provenance leaves Telegram alerts enabled; title-based low-reasoning selection is unchanged.
+
 ### Memory System
 
 All active pipeline phases (clarify, plan, implement, review, orchestrate, validate) now integrate with the AI memory subsystem.  Workflows persist decisions, implementation plans, review findings, and validation results as candidate records to a dedicated `ai-memory` git branch.  Before constructing each LLM prompt, relevant prior context is retrieved from memory and injected between the static prompt prefix and the dynamic issue/PR content — preserving provider-side prompt-prefix caching while giving the model awareness of previous runs.

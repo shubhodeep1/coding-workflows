@@ -124,10 +124,14 @@ jobs:
               echo "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=standalone reason=clarify_questions outcome=run issue=${ISSUE_NUMBER}"
               echo "mode=standalone" >> "$GITHUB_OUTPUT"
               echo "respond=true" >> "$GITHUB_OUTPUT"
-              # Same release-gate fixture silencing as clarify.yml: the gate
-              # sends one combined notification at the end.
+              # Issue #6341: a title alone cannot prove release-fixture origin;
+              # only trusted human issue authors may silence alerts.
               if printf '%s' "${ISSUE_TITLE}" | grep -qiE '^\[E2E '; then
-                echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"
+                if printf '%s' "${ISSUE_PAYLOAD}" | jq -e '.user.type == "User" and ((.author_association // "") | IN("OWNER","MEMBER","COLLABORATOR"))' >/dev/null 2>&1; then
+                  echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"
+                else
+                  echo "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=smoke_alert_silence reason=unverified_fixture_provenance outcome=skip issue=${ISSUE_NUMBER}"
+                fi
               fi
             fi
           fi
@@ -148,8 +152,13 @@ jobs:
               TRACKING_TITLE=""
             fi
             if printf '%s' "${TRACKING_TITLE}" | grep -qiE '^\[Orchestrator\] E2E '; then
-              echo "🔬 Smoke orchestrator parent (#${TRACKING_NUM}) — suppressing per-phase Telegram alerts"
-              echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"
+              if printf '%s' "${ISSUE_PAYLOAD}" | jq -e '.user.type == "User" and ((.author_association // "") | IN("OWNER","MEMBER","COLLABORATOR")) and ([(.labels // [])[]?.name] | index("ai:orchestrator-managed") != null)' >/dev/null 2>&1 &&
+                 printf '%s' "${TRACKING_PAYLOAD:-}" | jq -e '.user.type == "User" and ((.author_association // "") | IN("OWNER","MEMBER","COLLABORATOR")) and ([(.labels // [])[]?.name] | index("ai:orchestrator-tracking") != null)' >/dev/null 2>&1; then
+                echo "🔬 Smoke orchestrator parent (#${TRACKING_NUM}) — suppressing per-phase Telegram alerts"
+                echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"
+              else
+                echo "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=smoke_alert_silence reason=unverified_fixture_provenance outcome=skip issue=${ISSUE_NUMBER}"
+              fi
             fi
           fi
 

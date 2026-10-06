@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **Fixture-like issue titles no longer silence clarification alerts from untrusted authors.** Clarify and standalone clarify-respond require a trusted human issue author before suppressing Telegram alerts for `[E2E ...]` titles. Orchestrator children also require trusted human authors and the expected managed/tracking labels on both the child and its E2E parent. Unverified authors or missing labels keep normal alerts; the title-based low-reasoning setting remains unchanged.

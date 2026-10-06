@@ -67,9 +67,9 @@ EXPECTED_STEP_DECLARATIONS = {
 	],
 	"orchestrate.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 1,
 	"orchestrate_poll.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 2,
-	# 3 = "Standalone RECOMMENDED fallback" (pages when the standalone worker
-	# fails with no fallback), "Parse and post answer", the failure alert.
-	"orchestrate_clarify_respond.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 3,
+	# 4 = "Standalone RECOMMENDED fallback", "Answer completeness guard",
+	# "Parse and post answer", and the failure alert.
+	"orchestrate_clarify_respond.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 4,
 }
 
 STEP_DECL_RE = re.compile(r"^\s+ALERT_MSG_LEVEL:\s*(\$\{\{.*\}\})\s*$")
@@ -360,6 +360,27 @@ def test_plan_falls_back_to_orchestrator_parent_title() -> None:
 	# bounded to orchestrator-managed plan runs (CLAUDE.md §15).
 	assert 'if [ "${IS_SMOKE_PLAN}" = "false" ]; then' in block
 	assert 'echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"' in block
+
+
+def test_issue_title_silencing_requires_trusted_author() -> None:
+	"""A fixture-like title alone must not suppress clarification alerts."""
+	predicate = '.user.type == "User" and ((.author_association // "") | IN("OWNER","MEMBER","COLLABORATOR"))'
+	for workflow_name, step_name, next_step in (
+		("clarify.yml", "Detect smoke test and tune LLM settings", "Fetch issue comments"),
+		("orchestrate_clarify_respond.yml", "Check orchestrator metadata", "Resolve integration ref"),
+	):
+		workflow = _read(workflow_name)
+		block = workflow.split(f"- name: {step_name}\n", 1)[1].split(f"- name: {next_step}\n", 1)[0]
+		fixture_check = block.index("grep -qiE '^\\[E2E '")
+		provenance_check = block.index(predicate, fixture_check)
+		silence = block.index('echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"', provenance_check)
+		assert fixture_check < provenance_check < silence
+		assert "gate=smoke_alert_silence reason=unverified_fixture_provenance" in block[silence:]
+		if workflow_name == "clarify.yml":
+			assert block.index('echo "MODEL_REASONING_EFFORT=low" >> "$GITHUB_ENV"') < provenance_check
+			assert '[ -s "${ISSUE_META_FILE:-}" ] && jq -e' in block
+		else:
+			assert "printf '%s' \"${ISSUE_PAYLOAD}\" | jq -e" in block
 
 
 def _run() -> None:

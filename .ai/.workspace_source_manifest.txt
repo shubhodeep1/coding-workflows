@@ -216,6 +216,7 @@ changelog.d/6304-pr-merge-guard-spaced-numeric-refspec.md
 changelog.d/6322-pr-merge-guard-single-json-output.md
 changelog.d/6338-data-provision-guard-no-security-skip.md
 changelog.d/6339-clarify-respond-answer-completeness.md
+changelog.d/6340-clarify-respond-answer-freshness.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/release-smoke-run-lookup.md
 changelog.d/review-tier-random-reviewers.md
@@ -463,6 +464,8 @@ scripts/claude_pool_token.sh
 scripts/claude_settings.json.tmpl
 scripts/codex_heartbeat.sh
 scripts/codex_helpers.sh
+scripts/codex_isolated_exec.sh
+scripts/codex_isolated_workspace.py
 scripts/codex_model_catalog.json
 scripts/codex_model_catalog_overrides.yaml
 scripts/codex_stall_guard.sh
@@ -473,6 +476,7 @@ scripts/compare_issue_timeline_parity.sh
 scripts/comprehensive_test_and_release_gh_api.sh
 scripts/consolidate_soft_error_reports.py
 scripts/cost_audit.py
+scripts/dependency_registry_proxy.py
 scripts/detect_editor_changes_lost.sh
 scripts/dev/replay_review_pipeline.sh
 scripts/dev/test_codex_helpers.sh
