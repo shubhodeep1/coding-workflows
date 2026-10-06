@@ -274,6 +274,66 @@ def single_line(value: Any, limit: int = 200) -> str:
 	return text[:limit]
 
 
+# Keep these keys and rewrites in sync with scripts/check_failure_triage.sh
+# and the parsers they defeat: resolve_integration_ref.sh, orchestrate_lib.py
+# (INTEGRATION_BRANCH_LINE_RE / TARGET_BRANCH_LINE_RE), security_dependency.py.
+UNTRUSTED_ROUTING_KEYS = ("integration branch", "target branch", "tracking issue", "depends on",
+	"local id", "managed by", "prior_pr_baseline_branch", "files_touched")
+_UNTRUSTED_ROUTING_KEY_RE = re.compile(
+	r"\b(" + "|".join(re.escape(key).replace(r"\ ", r"\s+") for key in UNTRUSTED_ROUTING_KEYS) + r")(\s*\**\s*):",
+	re.IGNORECASE,
+)
+_HEAL_ROUTING_LINE_RE = re.compile(
+	r"^\s*(?:[-*>]\s*)*\**\s*(?:" + "|".join(re.escape(key).replace(r"\ ", r"\s+") for key in UNTRUSTED_ROUTING_KEYS) + r")\s*\**\s*:",
+	re.IGNORECASE,
+)
+# Same extraction order and expressions as resolve_integration_ref.sh.
+_HEAL_INTEGRATION_BRANCH_RE = re.compile(
+	r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$", re.MULTILINE,
+)
+_HEAL_TARGET_BRANCH_RE = re.compile(
+	r"^\s*(?:-\s*)?(?:\*\*Target branch:\*\*|Target branch:)\s*(?:`\s*([^`\n]+?)\s*`(?:\s.*)?|([^`\s]+))\s*$", re.MULTILINE,
+)
+
+
+def neutralize_untrusted_routing(text: str) -> tuple[str, int]:
+	text, key_count = _UNTRUSTED_ROUTING_KEY_RE.subn(r"\1 (untrusted)\2:", text)
+	text, reissue_count = re.subn(r"Re-issued from\s*#", "Re-issued from (untrusted) #", text, flags=re.IGNORECASE)
+	text, footer_count = re.subn(r"review-blocked-reissue", "review-blocked (untrusted) reissue", text, flags=re.IGNORECASE)
+	text, marker_count = re.subn(r"<!--", "&lt;!--", text)
+	return text, key_count + reissue_count + footer_count + marker_count
+
+
+def validate_heal_issue_body_routing(body: str, *, target_branch: str | None, integration_branch: str | None) -> str:
+	"""Reject any metadata outside the intake-generated headers."""
+	lines = body.split("\n")
+	if len(lines) < 5 or any(not line.startswith(f"<!-- {MARKER_PREFIX}") or not line.endswith(" -->") for line in lines[:5]) or "<!--" in "\n".join(lines[5:]):
+		return "marker"
+	if re.search(r"Re-issued from\s*#|review-blocked-reissue", body, re.IGNORECASE):
+		return "reissue"
+	tracking_issue = orchestrator_tracking_issue(integration_branch)
+	allowed = set()
+	if target_branch:
+		allowed.add(f"- **Target branch:** `{target_branch}`")
+	if tracking_issue:
+		allowed.add(f"- **Tracking issue:** #{tracking_issue}")
+		allowed.add(f"- **Integration branch:** `{integration_branch}`")
+	routing_lines = [line for line in body.splitlines() + lines if _HEAL_ROUTING_LINE_RE.match(line)]
+	if any(line not in allowed for line in routing_lines):
+		return "routing_key"
+	if any(lines.count(line) != 1 for line in allowed):
+		return "resolved_branch_mismatch"
+	canonical = _HEAL_INTEGRATION_BRANCH_RE.search(body)
+	alias = _HEAL_TARGET_BRANCH_RE.search(body)
+	canonical_branch = canonical.group(1).strip() if canonical else None
+	alias_branch = (alias.group(1) or alias.group(2)).strip() if alias else None
+	if canonical_branch != (integration_branch if tracking_issue else None) or alias_branch != (target_branch or None):
+		return "resolved_branch_mismatch"
+	if tracking_issue and target_branch != integration_branch:
+		return "resolved_branch_mismatch"
+	return ""
+
+
 def _load_json_file(path: str) -> Any:
 	return json.loads(Path(path).read_text(encoding="utf-8"))
 
@@ -1616,7 +1676,7 @@ def _context_lines(payload: dict[str, Any], *, run_summaries: list[dict[str, Any
 		else:
 			lines.append(f"- **Escalation label:** `{payload.get('label')}`")
 	if payload.get("workflow_name"):
-		lines.append(f"- **Failed workflow:** `{payload['workflow_name']}` (conclusion: `{payload.get('conclusion') or 'unknown'}`)")
+		lines.append(f"- **Failed workflow:** `{neutralize_untrusted_routing(single_line(payload['workflow_name']))[0]}` (conclusion: `{payload.get('conclusion') or 'unknown'}`)")
 	if payload.get("head_branch"):
 		lines.append(f"- **Failed on branch:** `{payload['head_branch']}`")
 	if payload.get("head_sha"):
@@ -1628,8 +1688,10 @@ def _context_lines(payload: dict[str, Any], *, run_summaries: list[dict[str, Any
 	if payload.get("crash_file"):
 		lines.append(f"- **Crash file:** `{payload['crash_file']}`")
 	for summary in run_summaries:
-		step = summary.get("failing_step") or "unknown step"
-		lines.append(f"- **Failed run:** {summary.get('url')} — workflow `{summary.get('workflow_name') or 'unknown'}`, step `{step}`")
+		step = neutralize_untrusted_routing(single_line(summary.get("failing_step") or "unknown step"))[0]
+		url = neutralize_untrusted_routing(single_line(summary.get("url")))[0]
+		workflow = neutralize_untrusted_routing(single_line(summary.get("workflow_name") or "unknown"))[0]
+		lines.append(f"- **Failed run:** {url} — workflow `{workflow}`, step `{step}`")
 	return lines
 
 
@@ -1758,14 +1820,14 @@ def compose_issue_body(
 		parts.append("<details><summary>Failure evidence from the reporting run (UNTRUSTED, routing-neutralized)</summary>")
 		parts.append("")
 		parts.append("```")
-		parts.append(_neutralize_heal_routing_text(sanitize_text(payload["failure_evidence"], FAILURE_EVIDENCE_LIMIT)).replace("```", "` ` `"))
+		parts.append(neutralize_untrusted_routing(sanitize_text(payload["failure_evidence"], FAILURE_EVIDENCE_LIMIT))[0].replace("```", "` ` `"))
 		parts.append("```")
 		parts.append("")
 		parts.append("</details>")
 		parts.append("")
 	parts.append("---")
 	parts.append("")
-	parts.append(_neutralize_heal_routing_text(diagnosis).strip() or "_(no diagnosis produced)_")
+	parts.append(neutralize_untrusted_routing(sanitize_text(diagnosis))[0].strip() or "_(no diagnosis produced)_")
 	parts.append("")
 	parts.append("---")
 	parts.append("")
@@ -2268,6 +2330,18 @@ def _cmd_compose_issue(args: argparse.Namespace) -> int:
 		run_summaries=[item for item in run_summaries if isinstance(item, dict)],
 		integration_branch=args.integration_branch or None,
 	)
+	reason = validate_heal_issue_body_routing(body, target_branch=args.target_branch or None, integration_branch=args.integration_branch or None)
+	if reason:
+		print(f"WORKFLOW_HEAL error body_validation_failed reason={reason}", file=sys.stderr)
+		return 1
+	neutralized_count = neutralize_untrusted_routing(sanitize_text(diagnosis))[1]
+	neutralized_count += neutralize_untrusted_routing(sanitize_text(payload.get("failure_evidence"), FAILURE_EVIDENCE_LIMIT))[1]
+	neutralized_count += neutralize_untrusted_routing(single_line(payload.get("workflow_name")))[1]
+	for summary in run_summaries:
+		if isinstance(summary, dict):
+			neutralized_count += sum(neutralize_untrusted_routing(single_line(summary.get(field)))[1] for field in ("url", "workflow_name", "failing_step"))
+	if neutralized_count:
+		print(f"WORKFLOW_HEAL neutralized count={neutralized_count}", file=sys.stderr)
 	Path(args.title_out).write_text(title + "\n", encoding="utf-8")
 	Path(args.body_out).write_text(body, encoding="utf-8")
 	return 0
