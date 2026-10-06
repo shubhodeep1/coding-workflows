@@ -1688,6 +1688,19 @@ jobs:
       WORKFLOW_HEAL_ISSUE_NUMBER: ${{ github.event.issue.number }}
       REPORT_WORKFLOW_NAME: ${{ github.workflow }}
     steps:
+      - name: Record GH_PAT budget at heal-report start
+        env:
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_heal_report
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=clarify job=heal-report remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       - name: Resolve workflow support ref
         run: |
           set -euo pipefail
@@ -1721,3 +1734,21 @@ jobs:
           REPORT_WRAPPER_SHA="$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" \
             RUNTIME_DIR="${RUNNER_TEMP}/workflow-heal-phase-report" \
             bash "${reporter}"
+
+      - name: Record GH_PAT budget at heal-report end
+        if: always()
+        env:
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_heal_report
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          remaining=unknown; reset=unknown; used=unknown
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r remaining reset <<< "${reading}"
+            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
+              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
+              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
+                used=$((initial - remaining))
+              fi
+            fi
+          fi
+          echo "GH_PAT_BUDGET phase=end workflow=clarify job=heal-report remaining=${remaining} reset=${reset} used_in_job=${used}"

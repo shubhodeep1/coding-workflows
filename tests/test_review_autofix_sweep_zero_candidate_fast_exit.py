@@ -138,7 +138,7 @@ def test_budget_steps_tolerate_older_support_without_helper(tmp_path: Path) -> N
 
 def test_pat_budget_steps_bracket_every_active_job() -> None:
 	workflows = {
-		"clarify.yml": ("clarify",),
+		"clarify.yml": ("clarify", "heal-report"),
 		"orchestrate_poll.yml": ("poll",),
 		"review_autofix_sweep.yml": ("sweep",),
 		"workflow-failure-heal-intake.yml": ("intake",),
