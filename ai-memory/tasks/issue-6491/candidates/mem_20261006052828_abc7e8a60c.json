@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6491,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6491\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6497\",\"pr_number\":6497,\"branch\":\"ai/issue-6491\",\"run_id\":\"37417142480\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37417142480\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"agents.md\",\"changelog.d/6491-poller-judge-issue-engine-labels.md\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_orchestrator_judges_claude_engine.py\"]}",
+  "fingerprint": "54436915a18dbc9362b3023006e948393be0abcba88e77fa75ac2399a19c5eeb",
+  "lineage": {
+    "issue_number": 6491,
+    "parent_ids": [],
+    "pr_number": 6497,
+    "run_id": "37417142480",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37417142480",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6497"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261006052828_abc7e8a60c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6491,
+    "level": "run",
+    "pr_number": 6497,
+    "run_id": "37417142480"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6491: https://github.com/shubhodeep1/coding-workflows/pull/6497",
+  "timestamps": {
+    "created_at": "2026-10-06T05:28:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
