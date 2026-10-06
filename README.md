@@ -66,6 +66,22 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `FT_GAMES_CF` | No | Interactive Claude Code sessions only (CLAUDE.md §24) — no Actions workflow reads it | Cloudflare credentials for the **ft.games** and **5m.fun** websites, same `<account_id>:<api_token>` format and same rules as `FUNTOKEN_IO_CF`. The two vars are different Cloudflare accounts and are not interchangeable — pick the one covering the site the work targets (CLAUDE.md §24.A). |
 | `OR_MGMT_KEY` | No | Interactive Claude Code sessions only (CLAUDE.md §29) — no Actions workflow reads it | OpenRouter **management** key (not the `OPENROUTER_API_KEY` inference key). Set as an env var in the Claude Code session environment (not an Actions secret). Lets interactive sessions pull OpenRouter spend self-serve: per-model daily cost and tokens for the last 30 days (`/api/v1/activity`), per-key spend totals (`/api/v1/keys`), and account credit (`/api/v1/credits`). Creating, deleting, or limiting keys and any billing change always require asking the user first. |
 
+Cloudflare Worker uploads under CLAUDE.md §24.C, including `/deploy-activate`,
+require a verified, clean commit on the protected default branch. Pre-deploy
+checks run without session credentials in a no-egress sandbox, or use the
+pinned commit's GitHub check-runs when isolation is unavailable; failing or
+pending checks block deployment. When Wrangler and a safe sandbox are available,
+`/deploy-activate` also requires a successful dry run before the Worker deploy;
+a failed dry run blocks deployment. Only the matching site's Cloudflare credential
+is passed to the deploy process in an allowlisted environment; other session
+credentials are not inherited by Wrangler build hooks. The provided tokens
+are account-owned, not Worker-scoped; obtaining a narrower token requires
+operator provisioning. If protection, pinning, worktree verification or
+pre-deploy checks cannot be confirmed, `/deploy-activate` blocks the Worker
+step rather than supplying manual deploy instructions. A missing or rejected
+Cloudflare session credential also blocks that step; it is not a manual
+deployment fallback.
+
 #### Variables
 
 > **Head-bound merge authorization:** review/autofix applies `ai:review-skipped`
