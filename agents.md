@@ -681,9 +681,15 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   An unavailable or incomplete PR file list and any out-of-scope edit reject the whole fix,
   warn via Telegram, and consume a review-blocked retry without a push. Empty
   staged sets also reject; listing failures report the unverified staged paths.
-  When `ALLOW_WORKFLOW_EDITS=false`, staged edits to `scripts/`, `prompts/`,
-  `.github/`, `workflow-templates/`, or `.claude/` reject through that same path
-  even if present in the PR's file list; `.github/prompts/` and
+  Staged edits to `scripts/`, `prompts/`, `.github/`, `workflow-templates/`,
+  or `.claude/` always reject through that same path, before the PR file list
+  is read and even if present in it (#6478): the judge is driven by untrusted
+  PR comments and a filename check cannot vouch for content. The reason is
+  `workflow_edits_disabled` when `ALLOW_WORKFLOW_EDITS=false`, otherwise
+  `protected_path_forbidden`; the judge prompt carries a
+  `Protected-path fixes: unavailable` line so it picks `merge_with_followup`
+  or `close_and_reissue` for such findings. The standalone
+  `scripts/review_rb_judge.sh` fix path is unchanged. `.github/prompts/` and
   `.github/scripts/` remain excluded from staging and forbidden when pre-staged.
   The review-blocked poller rejects a selected PR whose head repository is
   not the origin before its diff reaches the judge. For open PRs, branch
