@@ -165,13 +165,17 @@ run_consumer_retro() {
 
 	local attempt codex_exit sleep_secs retro_engine_rc
 	codex_exit=0
+	# The retro agent reads log excerpts, PR and issue titles from every
+	# consumer repository, so it runs in the credential-free,
+	# network-isolated container (scripts/codex_isolated_exec.sh): it never
+	# holds the cross-repo GH_PAT, the OpenRouter key or a checkout's .git.
 	for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
 		if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
 			sanitize_codex_prompt_file "${prompt_file}"
 		fi
 		set +e
 		# Claude engine (replace-claude-sessions plan Phase 5d): the RETRO role
-		# runs through claude_run_selected; exit 75 runs the unchanged codex call.
+		# runs through claude_run_selected; exit 75 runs isolated codex.
 		retro_engine_rc=75
 		if [ -f "${SCRIPT_DIR}/ai_engine.sh" ]; then
 			# shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
@@ -184,7 +188,8 @@ run_consumer_retro() {
 			bash "${SCRIPT_DIR}/codex_heartbeat.sh" \
 				--phase workflow_weekly_retro \
 				--stdout-file "${body_file}" \
-				-- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_RETRO_MODEL}" --sandbox danger-full-access < "${prompt_file}"
+				-- bash "${SCRIPT_DIR}/codex_isolated_exec.sh" run --mode read-only --workdir "${REPO_ROOT}" \
+				-- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_RETRO_MODEL}" --sandbox danger-full-access < "${prompt_file}"
 			codex_exit=$?
 		else
 			codex_exit="${retro_engine_rc}"

@@ -261,6 +261,10 @@ security_audit_append_prompt_context() {
 			echo "Audit scope: repository checkout at default-branch HEAD." || return 1
 		fi
 	fi
+	if [ -s "${OVERSIZED_PROMPT_FILE}" ]; then
+		echo || return 1
+		cat "${OVERSIZED_PROMPT_FILE}" || return 1
+	fi
 	if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 		echo || return 1
 		echo "Project-pass security and money-handling lens:" || return 1
@@ -414,6 +418,16 @@ if ! [[ "${SECURITY_AUDIT_FIX_DIFF_MAX_BYTES}" =~ ^[0-9]+$ ]]; then
 	echo "::warning::security-audit: SECURITY_AUDIT_FIX_DIFF_MAX_BYTES must be a non-negative integer; defaulting to 96000"
 	SECURITY_AUDIT_FIX_DIFF_MAX_BYTES="96000"
 fi
+SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES="${SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES:-16777216}"
+if ! [[ "${SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES}" =~ ^[0-9]+$ ]] || [ "${SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES}" -eq 0 ]; then
+	echo "::warning::security-audit: SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES must be a positive integer; defaulting to 16777216"
+	SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES=16777216
+fi
+SECURITY_AUDIT_OVERSIZED_TOTAL_MAX_BYTES="${SECURITY_AUDIT_OVERSIZED_TOTAL_MAX_BYTES:-67108864}"
+if ! [[ "${SECURITY_AUDIT_OVERSIZED_TOTAL_MAX_BYTES}" =~ ^[0-9]+$ ]] || [ "${SECURITY_AUDIT_OVERSIZED_TOTAL_MAX_BYTES}" -eq 0 ]; then
+	echo "::warning::security-audit: SECURITY_AUDIT_OVERSIZED_TOTAL_MAX_BYTES must be a positive integer; defaulting to 67108864"
+	SECURITY_AUDIT_OVERSIZED_TOTAL_MAX_BYTES=67108864
+fi
 
 # Optional non-default branch the audit targets (issues mode only), set by the
 # workflow's `ref` dispatch input for /implement-plan-claude project branches.
@@ -559,6 +573,10 @@ WAIVED_FINDINGS_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/waived-findings-error.
 FIX_CYCLE_DIFFS_SCOPE_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/fix-cycle-diffs-scope.txt"
 FIX_CYCLE_DIFFS_PROMPT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/fix-cycle-diffs-prompt.txt"
 FIX_CYCLE_DIFFS_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/fix-cycle-diffs-error.txt"
+OVERSIZED_EXPORT_DIR="${SECURITY_AUDIT_RUNTIME_DIR}/oversized-chunks"
+OVERSIZED_SCOPE_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/oversized-scope.txt"
+OVERSIZED_PROMPT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/oversized-prompt.txt"
+OVERSIZED_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/oversized-error.txt"
 
 if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 	if [ -z "${SECURITY_AUDIT_FINDINGS_OUT}" ]; then
@@ -1229,6 +1247,61 @@ PY
 	echo "security-audit: waived-findings=${WAIVED_FINDINGS_COUNT} (line window ${SECURITY_AUDIT_WAIVER_LINE_WINDOW})"
 fi
 
+# Full scans export every eligible oversized tracked file; listed prior-finding
+# and fix-cycle paths still get the strict explicit-scope checks.
+: > "${OVERSIZED_SCOPE_FILE}"
+OVERSIZED_EXPORT_SCOPE_MODE="explicit"
+if [ "${AUDIT_SCOPE_MODE}" = "incremental" ]; then
+	cp "${CHANGED_FILES_FILE}" "${OVERSIZED_SCOPE_FILE}"
+else
+	OVERSIZED_EXPORT_SCOPE_MODE="all"
+fi
+cat "${PRIOR_FINDINGS_SCOPE_FILE}" "${FIX_CYCLE_DIFFS_SCOPE_FILE}" >> "${OVERSIZED_SCOPE_FILE}"
+if ! PYTHONDONTWRITEBYTECODE=1 python3 "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/codex_isolated_workspace.py" export-oversized \
+	"${REPO_ROOT}" "${OVERSIZED_SCOPE_FILE}" "${OVERSIZED_EXPORT_DIR}" \
+	"${SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES}" "${SECURITY_AUDIT_OVERSIZED_TOTAL_MAX_BYTES}" \
+	"${OVERSIZED_EXPORT_SCOPE_MODE}" 2> "${OVERSIZED_ERROR_FILE}"; then
+	security_audit_emit_path_diagnostic "${OVERSIZED_ERROR_FILE}"
+	security_audit_emit_failure "oversized-scope" "${REPO_ROOT}" "$(head -n1 "${OVERSIZED_ERROR_FILE}" 2>/dev/null || echo 'oversized export failed')"
+	exit 1
+fi
+if ! OVERSIZED_COUNTS="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${OVERSIZED_EXPORT_DIR}/manifest.json" "${OVERSIZED_EXPORT_DIR}" "${OVERSIZED_PROMPT_FILE}" 2> "${OVERSIZED_ERROR_FILE}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+scoped = manifest["scoped"]
+unscoped = manifest["unscoped_oversized_count"]
+if manifest["schema_version"] != "oversized_readonly_export.v1" or not isinstance(scoped, list) or not isinstance(unscoped, int) or unscoped < 0:
+	raise ValueError("invalid oversized manifest")
+if manifest.get("scope_mode", "explicit") not in ("explicit", "all"):
+	raise ValueError("invalid oversized manifest scope mode")
+lines = []
+if scoped:
+	lines.extend([
+		"These scoped files exceed the 2 MiB snapshot limit and are absent from the workspace copy and git show. Their full contents are in these read-only chunks:",
+	])
+	for item in scoped:
+		chunks = ", ".join(f"{sys.argv[2]}/{chunk['file']} lines {chunk['start_line']}-{chunk['end_line']}" for chunk in item["chunks"])
+		lines.append(f"- {item['path']} ({item['size']} bytes): {chunks}")
+	lines.extend([
+		"Read EVERY chunk of EVERY listed file before concluding it is clean.",
+		"Cite the original repository path and line numbers (chunk start_line + offset - 1), never the chunk path.",
+	])
+if unscoped:
+	lines.append(f"Coverage note: {unscoped} tracked files over 2 MiB were not inspected (outside the explicit scope, binary, or over the export caps).")
+Path(sys.argv[3]).write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+print(len(scoped), unscoped)
+PY
+)" || ! [[ "${OVERSIZED_COUNTS}" =~ ^[0-9]+\ [0-9]+$ ]]; then
+	security_audit_emit_path_diagnostic "${OVERSIZED_ERROR_FILE}"
+	security_audit_emit_failure "oversized-scope" "${REPO_ROOT}" "oversized manifest could not be processed"
+	exit 1
+fi
+read -r OVERSIZED_SCOPED_COUNT OVERSIZED_UNSCOPED_COUNT <<< "${OVERSIZED_COUNTS}"
+echo "security-audit: oversized scoped=${OVERSIZED_SCOPED_COUNT} unscoped=${OVERSIZED_UNSCOPED_COUNT}"
+
 SECURITY_AUDIT_RENDER_HELPER="${SECURITY_AUDIT_SUPPORT_DIR}/scripts/render_prompt.sh"
 SECURITY_AUDIT_PROMPT_PATH="${SECURITY_AUDIT_SUPPORT_DIR}/prompts/mode-security-audit.txt"
 security_audit_require_file "prompt-preflight" "${SECURITY_AUDIT_RENDER_HELPER}"
@@ -1280,9 +1353,13 @@ security_audit_require_writable_destination "codex-preflight" "${CODEX_ERROR_FIL
 # Claude engine (replace-claude-sessions plan Phase 5d): the SECURITY_AUDIT
 # role (read-only profile) runs through claude_run_selected when the job's
 # "Resolve AI engine" step put it on Claude. Exit 75 (role on codex, Claude
-# unavailable, or no engine) runs the unchanged codex call below.
+# unavailable, or no engine) runs the isolated codex call below.
 security_audit_claude_rc=75
 security_audit_engine_sh="${SECURITY_AUDIT_SUPPORT_DIR}/scripts/ai_engine.sh"
+audit_claude_extra_dir=""
+if [ "${OVERSIZED_SCOPED_COUNT}" -gt 0 ]; then
+	audit_claude_extra_dir="${OVERSIZED_EXPORT_DIR}"
+fi
 if [ -f "${security_audit_engine_sh}" ]; then
 	security_audit_claude_rc=0
 	# #6217: isolate the read-profile model from write-capable credentials and
@@ -1291,6 +1368,7 @@ if [ -f "${security_audit_engine_sh}" ]; then
 	# shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
 	env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID -u OPENROUTER_API_KEY -u GH_PAT \
 		-u GITHUB_ENV -u GITHUB_PATH -u GITHUB_OUTPUT -u GITHUB_STATE -u GITHUB_STEP_SUMMARY \
+		AI_ENGINE_READ_EXTRA_DIRS="${audit_claude_extra_dir}" \
 		AI_ENGINE_MODEL_HINT="${WORKFLOW_EDITOR_MODEL:-}" AI_ENGINE_EFFORT_HINT="xhigh" \
 		bash -c 'source "$1" && {
 			unset AI_ENGINE_LAST_RUN_DIR
@@ -1322,6 +1400,12 @@ if [ "${security_audit_claude_rc}" -eq 75 ] && ! command -v codex >/dev/null 2>&
 	exit 1
 fi
 
+# The audited code is untrusted input, so the Codex fallback runs in a
+# credential-free, network-isolated read-only snapshot of the checkout.
+audit_isolated_args=()
+if [ "${OVERSIZED_SCOPED_COUNT}" -gt 0 ]; then
+	audit_isolated_args=(--include "${OVERSIZED_EXPORT_DIR}")
+fi
 if [ "${security_audit_claude_rc}" -ne 75 ]; then
 	if [ "${security_audit_claude_rc}" -ne 0 ]; then
 		CODEX_TAIL_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/codex-stderr-tail.txt"
@@ -1330,7 +1414,8 @@ if [ "${security_audit_claude_rc}" -ne 75 ]; then
 		security_audit_emit_failure "claude-execution" "claude" "Claude exited nonzero" "${CODEX_PROVIDER_CLASS}"
 		exit "${security_audit_claude_rc}"
 	fi
-elif codex --ask-for-approval never \
+elif bash "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/codex_isolated_exec.sh" run --mode read-only ${audit_isolated_args[@]+"${audit_isolated_args[@]}"} -- \
+		--ask-for-approval never \
 		-c model_verbosity=low \
 		-c include_apply_patch_tool=true \
 		exec \
@@ -1676,7 +1761,8 @@ if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 	if python3 - \
 		"${FILTERED_FINDINGS_FILE}" \
 		"${FILTER_SUMMARY_FILE}" \
-		"${SECURITY_AUDIT_FINDINGS_OUT}" 2> "${FINDINGS_PACKAGE_ERROR_FILE}" <<'PY'
+		"${SECURITY_AUDIT_FINDINGS_OUT}" \
+		"${OVERSIZED_EXPORT_DIR}/manifest.json" 2> "${FINDINGS_PACKAGE_ERROR_FILE}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -1688,6 +1774,7 @@ from pathlib import Path
 findings_path = Path(sys.argv[1])
 summary_path = Path(sys.argv[2])
 output_path = Path(sys.argv[3])
+oversized_manifest_path = Path(sys.argv[4])
 count_keys = (
 	"kept",
 	"suppressed_excluded",
@@ -1723,6 +1810,13 @@ payload = {
 	"schema_version": "security_audit_findings.v1",
 	"findings": findings,
 	"counts": counts,
+}
+oversized_manifest = load_json(oversized_manifest_path, label="oversized manifest")
+payload["coverage"] = {
+	"oversized_threshold_bytes": oversized_manifest["threshold_bytes"],
+	"scoped_oversized_chunked": [item["path"] for item in oversized_manifest["scoped"]],
+	"unscoped_oversized_skipped": [item["path"] for item in oversized_manifest["unscoped_oversized"]],
+	"unscoped_oversized_skipped_count": oversized_manifest["unscoped_oversized_count"],
 }
 
 temporary_path: Path | None = None
@@ -1789,7 +1883,8 @@ python3 - \
 	"${AUDIT_SCOPE_MODE}" \
 	"${AUDIT_SCOPE_HEAD_SHA}" \
 	"${AUDIT_SCOPE_BASE_SHA}" \
-	"${SECURITY_AUDIT_TARGET_REF}" <<'PY'
+	"${SECURITY_AUDIT_TARGET_REF}" \
+	"${OVERSIZED_EXPORT_DIR}/manifest.json" <<'PY'
 from __future__ import annotations
 
 import hashlib
@@ -1815,6 +1910,7 @@ audit_scope_mode = sys.argv[12]
 head_sha = sys.argv[13].strip()
 last_audited_sha = sys.argv[14].strip()
 target_ref = sys.argv[15].strip()
+oversized_manifest = json.loads(Path(sys.argv[16]).read_text(encoding="utf-8"))
 
 
 def load_json(path: Path, *, label: str):
@@ -1890,6 +1986,8 @@ comment_lines = [
 	"",
 	scope_line,
 	f"- Audited commit: `{head_sha or 'n/a'}`",
+	*([f"- Oversized scoped files read in chunks: {len(oversized_manifest['scoped'])}"] if oversized_manifest["scoped"] else []),
+	*([f"- Coverage note: {oversized_manifest['unscoped_oversized_count']} tracked files over 2 MiB were not inspected (outside the explicit scope, binary, or over the export caps): " + ", ".join(f"`{item['path']}`" for item in oversized_manifest["unscoped_oversized"]) + (f" (+{oversized_manifest['unscoped_oversized_count'] - len(oversized_manifest['unscoped_oversized'])} more)" if oversized_manifest['unscoped_oversized_count'] > len(oversized_manifest['unscoped_oversized']) else "")] if oversized_manifest["unscoped_oversized_count"] else []),
 	f"- Confidence gate: `>= {confidence_gate}`",
 	f"- Exclusion catalog: `{exclusions_path}`",
 	f"- Findings surfaced: {len(findings)}",
