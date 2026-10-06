@@ -202,7 +202,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED=false`, routes as
     `workflow-defect`). The prompt carries the branch progress since the
     failing SHA (one REST compare call + a branch-tip worktree) and the earlier
-    heal issues of the same fingerprint / lineage. It de-dupes by fingerprint
+    heal issues of the same fingerprint / lineage. Failure evidence and model
+    diagnosis are neutralised before issue posting, and the finished heal body
+    is checked for forged routing metadata and markers before creation. It
+    de-dupes by fingerprint
     (label `ai:workflow-heal`; the promote cycle's `[cycle:<id>]` run-name
     suffix is ignored, and the error signature comes from the steps'
     `##[error]` output, not the echoed step script; for an `autofix_failure`

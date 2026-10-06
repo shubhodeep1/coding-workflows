@@ -246,6 +246,7 @@ changelog.d/6380-triage-agents-md-nofollow.md
 changelog.d/6381-check-triage-metadata-routing.md
 changelog.d/6388-review-blocked-pr-head-identity.md
 changelog.d/6389-review-blocked-fix-scope-pr-files-only.md
+changelog.d/6390-review-blocked-workflow-opt-out-paths.md
 changelog.d/6391-sync-pr-lookup-verifies-base.md
 changelog.d/6400-rb-judge-security-severity-block.md
 changelog.d/6401-single-issue-security-pass-completed-audit.md
@@ -254,6 +255,8 @@ changelog.d/6403-triage-check-name-neutralize.md
 changelog.d/6404-claude-live-sync-pr-provenance.md
 changelog.d/6420-release-gate-claude-parity.md
 changelog.d/6436-triage-omit-pr-agent-instructions.md
+changelog.d/6455-rb-fix-sandbox-workspace.md
+changelog.d/6486-workflow-heal-security-pass.md
 changelog.d/autofix-cap-and-security-exhaustion-judge.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/release-smoke-run-lookup.md
