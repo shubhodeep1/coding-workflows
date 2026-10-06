@@ -738,6 +738,36 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} outcome=skip reason=marker_failed"
 		return 0
 	fi
+	if [ "${verdict_name}" = "close" ]; then
+		# Issue #6557: the decision and the model run can be minutes old, so a
+		# close is recorded and acted on only against a fresh, verified block
+		# state: the item must still be open and still carry the same stop.
+		# Comment text never decides this. Any read failure fails closed.
+		local recheck_stop_json recheck_stop
+		if ! gh api "repos/${REPOSITORY}/issues/${ITEM}" > "${RUNTIME_DIR}/item_recheck.json" 2>/dev/null \
+			|| ! jq -e '.number' "${RUNTIME_DIR}/item_recheck.json" >/dev/null 2>&1; then
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} outcome=skip reason=block_state_recheck_unavailable"
+			return 0
+		fi
+		if [ "$(jq -r '.state' "${RUNTIME_DIR}/item_recheck.json")" != "open" ]; then
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} outcome=skip reason=block_state_changed detail=closed"
+			return 0
+		fi
+		if [ "${project_failed_substituted}" != "true" ]; then
+			# A failed project without a block label is re-checked against its
+			# trusted state just below instead.
+			if ! recheck_stop_json="$(unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" stop \
+				--labels-json "$(jq -c '[.labels[]?.name]' "${RUNTIME_DIR}/item_recheck.json")" 2>/dev/null)"; then
+				unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} outcome=skip reason=block_state_changed detail=unblocked"
+				return 0
+			fi
+			recheck_stop="$(jq -r '.stop // ""' <<< "${recheck_stop_json}" 2>/dev/null || true)"
+			if [ "${recheck_stop}" != "${ITEM_STOP}" ]; then
+				unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} outcome=skip reason=block_state_changed detail=stop_changed"
+				return 0
+			fi
+		fi
+	fi
 	if [ "${project_failed_substituted}" = "true" ]; then
 		# The model can take minutes; never record or act on a stale verdict.
 		if ! unblock_fetch_comments "${ITEM}" "${RUNTIME_DIR}/item_comments_recheck.json"; then
