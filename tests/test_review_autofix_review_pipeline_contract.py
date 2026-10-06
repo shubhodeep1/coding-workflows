@@ -8396,6 +8396,14 @@ def test_review_isolation_transfers_into_active_work_tree() -> None:
 			capture_output=True, text=True, timeout=120,
 		)
 		assert rejected.returncode != 0 and "Review workspace path rejected" in rejected.stderr
+		# The per-PR tree has no .git, so GITHUB_WORKSPACE must stay the
+		# checkout; review_rb_judge.sh once replaced it with its cwd (#6455).
+		github_env.write_text("")
+		overridden = subprocess.run(
+			["bash", sandbox, "prepare"], cwd=work_tree, env={**env, "GITHUB_WORKSPACE": str(work_tree)},
+			capture_output=True, text=True, timeout=120,
+		)
+		assert overridden.returncode != 0 and "Review workspace path rejected" in overridden.stderr
 		github_env.write_text("")
 		prepared = subprocess.run(["bash", sandbox, "prepare"], cwd=work_tree, env=env, capture_output=True, text=True, timeout=120)
 		assert prepared.returncode == 0, prepared.stdout + prepared.stderr

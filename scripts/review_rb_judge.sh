@@ -2018,6 +2018,8 @@ __EDIT_DISCIPLINE__
       # (review_untrusted_sandbox.sh): no GH_PAT, no OpenRouter key, no host
       # checkout or .git inside; validated edits are copied back afterwards.
       # Serena runs only on the host, so the writer gets no MCP server.
+      # GITHUB_WORKSPACE stays the checkout: prepare validates its .git and
+      # takes the per-PR tree from WORKSPACE_PATH, which has no .git (#6455).
       rb_fix_serena_mode="off"
       rb_fix_opencode_ready=true
       if ! review_rb_prepare_opencode_config writer review_rb_fix "${RB_FIX_OPENCODE_CONFIG}" "${rb_fix_serena_mode}"; then
@@ -2025,7 +2027,7 @@ __EDIT_DISCIPLINE__
         exit 1
       fi
       rb_fix_sandbox_env="$(mktemp /tmp/rb_fix_sandbox_env.XXXXXX)"
-      if ! GITHUB_ENV="${rb_fix_sandbox_env}" GITHUB_WORKSPACE="${RB_OPENCODE_WORKSPACE}" bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare; then
+      if ! GITHUB_ENV="${rb_fix_sandbox_env}" bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare; then
         echo "::error::Review-blocked fix sandbox could not be prepared; the fix writer never runs on the host."
         rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}" "${rb_fix_sandbox_env}"
         exit 1
@@ -2033,7 +2035,7 @@ __EDIT_DISCIPLINE__
       rb_fix_sandbox_root="$(sed -n 's/^REVIEW_SANDBOX_ROOT=//p' "${rb_fix_sandbox_env}" | tail -n 1)"
       rm -f "${rb_fix_sandbox_env}"
       rb_fix_opencode_cmd=(
-        env "REVIEW_SANDBOX_ROOT=${rb_fix_sandbox_root}" "GITHUB_WORKSPACE=${RB_OPENCODE_WORKSPACE}"
+        env "REVIEW_SANDBOX_ROOT=${rb_fix_sandbox_root}"
         bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run
         "${RB_FIX_PROMPT}"
         "${RB_FIX_OUTPUT}"
@@ -2064,7 +2066,7 @@ __EDIT_DISCIPLINE__
       if rb_fix_stall_state="$(read_codex_stall_guard_state_with_warning "${rb_fix_stall_status_file}" "Review-blocked fix OpenCode" )"; then
         :
       fi
-      REVIEW_SANDBOX_ROOT="${rb_fix_sandbox_root}" GITHUB_WORKSPACE="${RB_OPENCODE_WORKSPACE}" bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup || true
+      REVIEW_SANDBOX_ROOT="${rb_fix_sandbox_root}" bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup || true
       review_rb_strip_opencode_output_file "${RB_FIX_OUTPUT}"
       review_rb_strip_opencode_output_file "${RB_FIX_STDERR}"
       emit_review_rb_substate "review_rb_fix" "judge_fix" "Finishing" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
