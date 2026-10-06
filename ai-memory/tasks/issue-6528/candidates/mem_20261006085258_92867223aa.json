@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\n\nRATIONALE:\nQ1: B fixes the actual hole without needing new access. The squash auto-merge at `.github/workflows/review_autofix.yml:2031` is pinned with `--match-head-commit`, but the README says GitHub can keep an enabled auto-merge across later pushes while checks are pending. So a new head can merge before its own review finishes. Turning auto-merge off on `synchronize` (A) stops that for normal pushes. A status check tied to the head SHA also stops it for pushes made with `GITHUB_TOKEN`, which fire no `synchronize` event and so slip past A. C is rejected for three reasons: it needs an admin-scoped token, it changes branch protection in consumer repos without review, and the setting it automates is a one-time repo choice that doesn't need to run on a schedule. The code for turning off auto-merge already exists in `scripts/review_rb_judge_security_pass.sh`, where the judge withdraws auto-merge when blocking findings remain. That path should be extended rather than written a second time.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1: (letter decision; these notes tell the planner where B goes in the code)\n  inputs:\n    - .github/workflows/review_autofix.yml (gate job; the auto-merge steps around lines 2013 and 2031)\n    - scripts/review_rb_judge_security_pass.sh (existing helper that turns off auto-merge)\n    - scripts/review_single_issue_security_pass.sh (security-pass gate, outcomes clean/hold/\u2026)\n    - scripts/stage_workflow_support.sh (`REQUIRED_BOOTSTRAP_SCRIPTS`, used if a new helper script is added)\n  steps:\n    - On `pull_request.synchronize`, the gate turns off any enabled auto-merge on the PR. It reuses or moves out the existing helper, uses the `GH_PAT` the gate already holds, and logs a stable prefix with an outcome (for example disabled, not_enabled or failed). If the API call fails, the run fails closed: it does not merge, and the review run that follows decides.\n    - When the gate sees a new head, it posts a commit status with the fixed context `ai-review/head-gate` and state `pending` on that SHA.\n    - It sets `success` on that same SHA only when review/autofix has passed and the single-issue security pass is clean (or legitimately skipped or disabled) for exactly that SHA. It does this just before or with the head-bound `gh pr merge --match-head-commit` call. Hold, failed and stale outcomes leave the status at pending, or set failure.\n    - The deterministic-skip merge path and the review-blocked judge merge path set the same status, bound to the head SHA they evaluated.\n    - Any new variable (for example an enable switch or the context name) gets a default inside the helper script.\n    - Add contract tests that pin these behaviours: auto-merge is turned off on synchronize, the status context name is fixed, success is posted only after the gates pass for the matching SHA, and a failure to turn off auto-merge fails closed.\n    - Update README, agents.md and a `changelog.d/` fragment with how to add `ai-review/head-gate` as a required check in branch protection. Nothing changes branch protection automatically.\n    - Check the size of `review_autofix.yml` with `wc -c` against the 480,000-byte guard. If it is over, move the large new step bodies into `scripts/review_autofix_step_<slug>.sh`.\n  reversibility: Turning off auto-merge on synchronize can't strand a PR, because the next review turns it back on for a head that passes. The status has no effect until a repo makes it required, and an enable switch with a default can turn the feature off.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- None: no new credentials are needed. Posting statuses and turning off auto-merge use the `GH_PAT` the gate already holds (repo scope). Repos that want the status enforced must add `ai-review/head-gate` as a required check in their own branch protection. Until they do, the status is advisory only and turning off auto-merge on `synchronize` is the only protection.",
+  "fingerprint": "839471e45ddb93d8f475601cd438947f4a19f05216c6255684a2837349dcc405",
+  "lineage": {
+    "issue_number": 6528,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37438096655",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37438096655",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6528"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261006085258_92867223aa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6528,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37438096655"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6528",
+  "timestamps": {
+    "created_at": "2026-10-06T08:52:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
