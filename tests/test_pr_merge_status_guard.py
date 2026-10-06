@@ -1458,6 +1458,10 @@ def test_env_unresolved_commit_directory_asks_instead_of_checking_checkout(merge
 	assert code == 0 and message == ""
 	decision = json.loads(capsys.readouterr().out.splitlines()[-1])
 	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "checking the session checkout instead" not in json.dumps(decision)
+	if command.startswith("env -C"):
+		assert "no checkout was checked" in decision["hookSpecificOutput"]["permissionDecisionReason"]
+		assert "merged-PR guard needs confirmation" in decision["systemMessage"]
 
 
 def test_env_chdir_does_not_change_subsequent_command_directory(merged_branch_repo, monkeypatch) -> None:

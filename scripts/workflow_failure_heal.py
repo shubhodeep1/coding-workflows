@@ -10,6 +10,10 @@ Two shell drivers use this module through its CLI:
     failure path of ``review_autofix.yml`` (in consumers and in this repo). It
     counts how many review runs in a row failed on the pull request and, past
     the streak threshold, reports the failure with the run's own evidence.
+  * ``scripts/workflow_failure_heal_phase_report.sh`` runs in the ``heal-report``
+    job of ``clarify.yml``, ``plan.yml`` and ``implement.yml`` after the phase
+    job failed. It counts the phase's failed runs in a row on the issue and,
+    at the streak threshold, reports the failed run.
   * ``scripts/workflow_failure_heal_intake.sh`` runs in coding-workflows. It
     validates the payload, fingerprints the failure, applies the dedup / lineage
     / budget gates, and composes the heal issue body.
@@ -67,7 +71,7 @@ RELEASE_WORKFLOW_NAMES: tuple[str, ...] = (
 # go to check-failure triage instead.
 MAIN_CI_WORKFLOW_NAMES: tuple[str, ...] = ("CI",)
 
-SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure")
+SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure")
 REPORTABLE_CONCLUSIONS = ("failure", "timed_out")
 
 # `already-fixed` opens no issue, but only when check_heal_already_fixed_claim
@@ -99,7 +103,7 @@ DEFAULT_MAX_LINEAGE_DEPTH = 3
 DEFAULT_MAX_OPEN_ISSUES = 10
 DEFAULT_MAX_ISSUES_PER_DAY = 20
 DEFAULT_TARGET_BRANCH = "stable"
-DEFAULT_AUTOFIX_FAILURE_STREAK = 2
+DEFAULT_AUTOFIX_FAILURE_STREAK = 1
 FAILURE_EVIDENCE_LIMIT = 4000  # same bound as ISSUE_EXCERPT_LIMIT (defined below)
 
 # PR comment markers the review/autofix workflow posts. The streak counter reads
@@ -120,6 +124,39 @@ AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS: tuple[str, ...] = (
 	"Editor changes lost",
 	"Editor no-op suspicious",
 )
+
+# Pipeline phases whose failed runs report themselves (the `heal-report` job of
+# clarify.yml, plan.yml and implement.yml). Each phase's failure path posts one
+# of these comments on the issue; keep them in sync with the "Comment on issue
+# failure" steps (tests pin the parity). The streak counter reads them newest
+# first; a success, cancellation or another phase's failure ends it.
+PHASE_FAILURE_COMMENT_PREFIXES: dict[str, tuple[str, ...]] = {
+	"clarify": ("AI clarification workflow failed for ",),
+	"plan": ("AI planning workflow failed.",),
+	"implement": ("AI implementation workflow failed for ",),
+}
+PHASE_WRAPPER_WORKFLOW_FILES: dict[str, tuple[str, ...]] = {
+	"clarify": ("ai-clarify.yml", "internal-clarify.yml"),
+	"plan": ("ai-plan.yml", "internal-plan.yml"),
+	"implement": ("ai-implement.yml", "internal-implement.yml"),
+}
+REVIEW_WRAPPER_WORKFLOW_FILES = ("ai-review.yml", "internal-review.yml", "review_autofix.yml", "review_rb_judge_dispatch.yml")
+RELEASE_WORKFLOW_FILES = ("test-and-mark-stable.yml", "mark-stable.yml", "promote-main-to-stable.yml", "auto-release-stable.yml", "forward-merge-stable-to-main.yml")
+PROVENANCE_KINDS = ("phase_failure", "autofix_failure", "workflow_run")
+PHASE_SUCCESS_COMMENT_PREFIXES: tuple[str, ...] = (
+	"<!-- ai:clarification-questions",
+	"Clarification required",
+	"The task appears clear.",
+	"Implementation Plan\n",
+	"<!-- ai:implementation-completed -->",
+)
+# failure_reason of a phase_failure report: `<phase>_failed`.
+PHASE_FAILURE_REASONS: tuple[str, ...] = tuple(f"{phase}_failed" for phase in PHASE_FAILURE_COMMENT_PREFIXES)
+DEFAULT_PHASE_FAILURE_STREAK = 1
+PHASE_REPORT_RUN_EVENTS = ("issues", "issue_comment")
+PHASE_REPORT_TRUSTED_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
+PHASE_REPORT_TRUSTED_BOT_LOGINS = ("github-actions[bot]",)
+PHASE_REPORT_REPORTER_JOB = "heal-report"
 
 # Identical-failure fingerprint cap (review_autofix.yml gate). Every failure
 # comment the review workflow posts ends with a failure marker; the gate counts
@@ -162,6 +199,7 @@ _FAILURE_REASON_RE = re.compile(r"^[a-z][a-z0-9_:-]{0,79}$")
 _RUN_URL_RE = re.compile(
 	r"https://github\.com/(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/actions/runs/(?P<run_id>[0-9]+)"
 )
+_PR_RUN_NAME_RE = re.compile(r"\[pr:(?P<n>[0-9]+)\]\s*$")
 _SMOKE_TITLE_RE = re.compile(r"\[E2E Smoke Test\b", re.IGNORECASE)
 _SMOKE_LABELS = frozenset({"e2e-smoke-test"})
 _MARKER_RE = re.compile(r"<!--\s*" + re.escape(MARKER_PREFIX) + r"(?P<key>[a-z_]+)=(?P<value>[^\s>]+)\s*-->")
@@ -387,6 +425,72 @@ def extract_run_refs(texts: Iterable[str], repo: str, limit: int = MAX_RUN_REFS)
 			seen[run_id] = {"repo": repo, "run_id": run_id, "url": match.group(0)}
 	refs = list(seen.values())
 	return refs[-limit:]
+
+
+def phase_report_workflow_paths(phase: str, *, source_repo: str, self_repo: str) -> tuple[str, ...]:
+	if phase not in PHASE_FAILURE_COMMENT_PREFIXES:
+		raise ValueError(f"unknown phase {phase!r}")
+	paths = (f".github/workflows/ai-{phase}.yml",)
+	if source_repo.casefold() == self_repo.casefold():
+		paths += (f".github/workflows/internal-{phase}.yml",)
+	return paths
+
+
+def verify_phase_report_provenance(payload: Any, *, run: Any, jobs: Any, comments: Any, self_repo: str, trusted_author: str | None) -> dict[str, Any]:
+	"""Check GitHub-read evidence before acting on an untrusted phase report."""
+	refs = payload.get("run_refs") if isinstance(payload, dict) else None
+	reason = payload.get("failure_reason") if isinstance(payload, dict) else None
+	run_id = refs[0].get("run_id") if isinstance(refs, list) and refs and isinstance(refs[0], dict) else None
+	run_id = str(run_id) if _positive_int(run_id) is not None else ""
+	def decision(verified: bool, why: str) -> dict[str, Any]:
+		return {"verified": verified, "reason": why, "run_id": run_id}
+
+	if not isinstance(payload, dict) or payload.get("source_kind") != "phase_failure" or reason not in PHASE_FAILURE_REASONS or not run_id:
+		return decision(False, "not_phase_report")
+	if not isinstance(run, dict):
+		return decision(False, "run_unavailable")
+	if str(run.get("id")) != run_id:
+		return decision(False, "run_id_mismatch")
+	source_repo = payload.get("source_repo")
+	repository = run.get("repository")
+	if not isinstance(source_repo, str) or not isinstance(repository, dict) or not isinstance(repository.get("full_name"), str) or repository["full_name"].casefold() != source_repo.casefold():
+		return decision(False, "repo_mismatch")
+	if run.get("event") not in PHASE_REPORT_RUN_EVENTS:
+		return decision(False, "event_mismatch")
+	phase = reason.removesuffix("_failed")
+	path = run.get("path")
+	if not isinstance(path, str) or path.split("@", 1)[0] not in phase_report_workflow_paths(phase, source_repo=source_repo, self_repo=self_repo):
+		return decision(False, "workflow_path_mismatch")
+	if run.get("status") == "completed" and run.get("conclusion") not in ("failure", "timed_out"):
+		return decision(False, "run_not_failed")
+	if not isinstance(jobs, dict) or not isinstance(jobs.get("jobs"), list):
+		return decision(False, "jobs_unavailable")
+	if not any(
+		isinstance(job, dict) and job.get("conclusion") in ("failure", "timed_out")
+		and isinstance(job.get("name"), str) and job["name"] != PHASE_REPORT_REPORTER_JOB
+		and not job["name"].endswith("/ " + PHASE_REPORT_REPORTER_JOB)
+		for job in jobs["jobs"]
+	):
+		return decision(False, "no_failed_phase_job")
+	if not isinstance(comments, list):
+		return decision(False, "comments_unavailable")
+	linked = [comment for comment in comments if isinstance(comment, dict) and isinstance(comment.get("body"), str)
+		and comment["body"].lstrip().startswith(PHASE_FAILURE_COMMENT_PREFIXES[phase])
+		and any(ref["run_id"] == run_id for ref in extract_run_refs([comment["body"]], source_repo))]
+	if not linked:
+		return decision(False, "no_linking_comment")
+	if source_repo.casefold() == self_repo.casefold() and not trusted_author:
+		return decision(False, "comment_author_unavailable")
+	if not any(
+		isinstance(comment.get("user"), dict)
+		and isinstance(comment["user"].get("login"), str) and bool(comment["user"]["login"])
+		and (comment["user"].get("login") in PHASE_REPORT_TRUSTED_BOT_LOGINS
+			or comment.get("author_association") in PHASE_REPORT_TRUSTED_ASSOCIATIONS)
+		and (source_repo.casefold() != self_repo.casefold() or comment["user"].get("login") == trusted_author)
+		for comment in linked
+	):
+		return decision(False, "untrusted_comment_author")
+	return decision(True, "ok")
 
 
 def select_failed_runs(runs: Iterable[dict[str, Any]], *, title: str, limit: int = MAX_RUN_REFS, since: datetime | None = None) -> list[dict[str, Any]]:
@@ -702,6 +806,120 @@ def _autofix_failure_run_refs(
 	return refs[:MAX_RUN_REFS]
 
 
+def phase_failure_streak(comments: Iterable[dict[str, Any]], *, phase: str, repo: str, run_id: Any, trusted_author: str | None = None) -> dict[str, Any]:
+	"""Count the trailing failed runs of one pipeline phase on an issue.
+
+	``comments`` is the issue-comment list, oldest first. Scanning from the
+	newest comment by ``trusted_author``, each distinct linked run of ``phase``
+	adds one (unlinked failure comments count individually); a success,
+	cancellation or another phase's failure ends the streak;
+	anything else (stall-recovery ``/answer`` comments,
+	markers) is skipped. The reporting run posted its own failure comment
+	before the report ran; when no counted comment links ``run_id`` (the
+	comment step failed) the run is added on top.
+
+	Returns ``{"streak": N, "run_ids": [...]}``: the runs the counted comments
+	link, newest first, without ``run_id``.
+	"""
+	own = PHASE_FAILURE_COMMENT_PREFIXES.get(phase)
+	if not own:
+		raise ValueError(f"unknown phase {phase!r}")
+	others = tuple(prefix for name, prefixes in PHASE_FAILURE_COMMENT_PREFIXES.items() if name != phase for prefix in prefixes)
+	current = str(_positive_int(run_id) or "")
+	streak = 0
+	current_seen = False
+	run_ids: list[str] = []
+	for comment in reversed(list(comments)):
+		if not isinstance(comment, dict):
+			continue
+		if trusted_author is not None and (comment.get("user") or {}).get("login") != trusted_author:
+			continue
+		body = sanitize_text(comment.get("body")).lstrip()
+		if (body.startswith("AI planning workflow failed.") and "<!-- ai:plan-cancelled -->" in body) or body.startswith((
+			"AI clarification workflow was cancelled/timed out for ",
+			"AI implementation workflow was cancelled/timed out for ",
+		)):
+			break
+		if body.startswith(own):
+			for ref in extract_run_refs([body], repo, limit=1):
+				if ref["run_id"] == current:
+					if current_seen:
+						break
+					current_seen = True
+				elif ref["run_id"] in run_ids:
+					break
+				else:
+					run_ids.append(ref["run_id"])
+			else:
+				streak += 1
+			continue
+		if body.startswith(PHASE_SUCCESS_COMMENT_PREFIXES) or body.startswith(others):
+			break
+	if current and not current_seen:
+		streak += 1
+	return {"streak": max(1, streak), "run_ids": run_ids}
+
+
+def build_phase_failure_payload(
+	*,
+	repo: str,
+	phase: str,
+	issue: dict[str, Any],
+	comments: list[dict[str, Any]],
+	workflow_name: str,
+	run_id: str,
+	wrapper_sha: str | None,
+	reporter_run_url: str | None,
+	now: datetime | None = None,
+	trusted_author: str | None = None,
+) -> dict[str, Any]:
+	"""Build the dispatch payload for a failed clarify / plan / implement run on an issue.
+
+	``run_refs`` lists the failed run first, then the earlier failed runs of
+	the same streak (newest first). The issue body's heal markers carry over as
+	``source_gen`` / ``source_root``, so a heal issue whose own pipeline run
+	fails continues its lineage up to the cap.
+	"""
+	now = now or _utc_now()
+	run_number = _positive_int(run_id)
+	if run_number is None:
+		raise ValueError("run_id must be a positive integer")
+	body = sanitize_text(issue.get("body"))
+	markers = parse_heal_markers(body)
+	# The intake re-verifies lineage even for labelled reports: consumers may
+	# still run older pinned reporters that emit markers from ordinary issues.
+	is_heal_issue = HEAL_LABEL in _labels_of(issue)
+	comment_texts = [sanitize_text(comment.get("body")) for comment in comments if isinstance(comment, dict)]
+	streak = phase_failure_streak(comments, phase=phase, repo=repo, run_id=run_number, trusted_author=trusted_author)
+	run_refs = [{"repo": repo, "run_id": str(run_number), "url": f"https://github.com/{repo}/actions/runs/{run_number}"}]
+	for earlier in streak["run_ids"][: MAX_RUN_REFS - 1]:
+		run_refs.append({"repo": repo, "run_id": earlier, "url": f"https://github.com/{repo}/actions/runs/{earlier}"})
+	return {
+		"schema_version": SCHEMA_VERSION,
+		"source_repo": repo,
+		"source_kind": "phase_failure",
+		"issue_number": _positive_int(issue.get("number")),
+		"issue_title": single_line(issue.get("title"), 300),
+		"issue_url": sanitize_text(issue.get("html_url"), 300),
+		"label": None,
+		"labels": _labels_of(issue)[:50],
+		"run_refs": run_refs,
+		"wrapper_sha": wrapper_sha if is_valid_sha(wrapper_sha) else None,
+		"source_gen": _positive_int(markers.get("gen")) if is_heal_issue else None,
+		"source_root": markers.get("root") if is_heal_issue and re.fullmatch(r"[0-9a-f]{64}", markers.get("root") or "") else None,
+		"issue_excerpt": sanitize_text(body, ISSUE_EXCERPT_LIMIT),
+		"comments_excerpt": _build_recent_comments_excerpt(comment_texts),
+		"workflow_name": single_line(workflow_name, 200),
+		"head_branch": None,
+		"head_sha": None,
+		"conclusion": "failure",
+		"failure_reason": f"{phase}_failed",
+		"failure_streak": streak["streak"],
+		"reporter_run_url": sanitize_text(reporter_run_url, 300) or None,
+		"reported_at": _iso(now),
+	}
+
+
 def _normalize_script_ref(value: Any) -> str | None:
 	"""``script_ref`` is the coding-workflows ref the run staged: a SHA or ``stable``."""
 	ref = str(value or "").strip()
@@ -907,6 +1125,13 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		if failure_reason is None:
 			raise ValueError("failure_reason is missing or malformed for autofix_failure reports")
 		failure_streak = failure_streak or 1
+	elif kind == "phase_failure":
+		if issue_number is None:
+			raise ValueError("issue_number is required for phase_failure reports")
+		if failure_reason not in PHASE_FAILURE_REASONS:
+			raise ValueError("failure_reason must be one of " + ", ".join(PHASE_FAILURE_REASONS) + " for phase_failure reports")
+		failure_streak = failure_streak or 1
+		failure_fingerprint = None
 	else:
 		failure_reason = None
 		failure_streak = None
@@ -930,6 +1155,8 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 	head_sha = head_sha.lower() if isinstance(head_sha, str) and is_valid_sha(head_sha.lower()) else None
 	head_branch = payload.get("head_branch")
 	head_branch = head_branch if is_valid_branch(head_branch) else None
+	if kind == "phase_failure" and not run_refs:
+		raise ValueError("phase_failure reports need the failed run reference")
 	if kind == "workflow_run":
 		if not run_refs:
 			raise ValueError("workflow_run reports need the failed run reference")
@@ -1389,6 +1616,117 @@ def _comment_author(comment: dict[str, Any]) -> str:
 	return str(login or "").strip().lower()
 
 
+def _run_workflow_file(run: dict[str, Any]) -> str | None:
+	path = run.get("path")
+	if not isinstance(path, str):
+		return None
+	path = path.split("@", 1)[0]
+	prefix = ".github/workflows/"
+	if not path.startswith(prefix) or "/" in path[len(prefix):] or ".." in path:
+		return None
+	return path[len(prefix):]
+
+
+def verify_run_provenance(
+	payload: dict[str, Any], *, runs: dict[str, Any], comments: list[dict[str, Any]] | None,
+	trusted_login: str, self_repo: str,
+) -> dict[str, Any]:
+	"""Keep only run references corroborated by GitHub, before reading job logs."""
+	kind = payload.get("source_kind")
+	refs = payload.get("run_refs") or []
+	result: dict[str, Any] = {"status": "not_applicable", "reason": "", "run_refs": refs, "rejections": [], "pending_current_run": ""}
+	if kind not in PROVENANCE_KINDS:
+		# Label-escalation reports are outside this gate's approved scope.
+		return result
+	result["status"] = "rejected"
+	repo = payload.get("source_repo", "")
+	if kind == "workflow_run" and repo.lower() != self_repo.lower():
+		result["reason"] = "source_not_self"
+		return result
+	if (kind == "autofix_failure" or (kind == "phase_failure" and repo.lower() == self_repo.lower())) and not trusted_login.strip():
+		result["reason"] = "identity_unavailable"
+		return result
+	if kind != "workflow_run" and not isinstance(comments, list):
+		result["reason"] = "comments_unavailable"
+		return result
+	result["run_refs"] = []
+	phase = str(payload.get("failure_reason") or "").removesuffix("_failed")
+	allowed = (PHASE_WRAPPER_WORKFLOW_FILES.get(phase, ()) if repo.lower() == self_repo.lower()
+		else PHASE_WRAPPER_WORKFLOW_FILES.get(phase, ())[:1]) if kind == "phase_failure" else (
+		REVIEW_WRAPPER_WORKFLOW_FILES if kind == "autofix_failure" else RELEASE_WORKFLOW_FILES)
+	reporter_match = _RUN_URL_RE.fullmatch(str(payload.get("reporter_run_url") or ""))
+	reporter_id = reporter_match.group("run_id") if reporter_match and reporter_match.group("repo").lower() == repo.lower() else ""
+	for position, ref in enumerate(refs):
+		run_id = str(ref["run_id"])
+		run = runs.get(run_id) if isinstance(runs, dict) else None
+		reason = ""
+		pending = False
+		if not isinstance(run, dict):
+			reason = "run_lookup_failed"
+		elif not isinstance(run.get("repository"), dict) or str(run["repository"].get("full_name") or "").lower() != repo.lower():
+			reason = "repo_mismatch"
+		elif str(run.get("id")) != run_id:
+			reason = "run_id_mismatch"
+		elif run.get("status") == "completed":
+			if run.get("conclusion") not in REPORTABLE_CONCLUSIONS:
+				reason = "not_failed"
+		else:
+			pending = (kind == "phase_failure" and position == 0) or (kind == "autofix_failure" and run_id == reporter_id)
+			if not pending or run.get("status") not in ("in_progress", "queued", "pending") or run.get("conclusion") is not None:
+				reason = "not_failed"
+		if not reason and kind == "phase_failure" and run.get("event") not in PHASE_REPORT_RUN_EVENTS:
+			reason = "unexpected_run_event"
+		if not reason and _run_workflow_file(run) not in allowed:
+			reason = "unexpected_workflow_path"
+		if not reason and kind == "phase_failure":
+			linked = any(
+				isinstance(comment, dict) and bool(_comment_author(comment))
+				and (_comment_author(comment) in PHASE_REPORT_TRUSTED_BOT_LOGINS
+					or comment.get("author_association") in PHASE_REPORT_TRUSTED_ASSOCIATIONS)
+				and (repo.lower() != self_repo.lower() or _comment_author(comment) == trusted_login.strip().lower())
+				and sanitize_text(comment.get("body")).strip().startswith(PHASE_FAILURE_COMMENT_PREFIXES.get(phase, ()))
+				and any(item["run_id"] == run_id for item in extract_run_refs([sanitize_text(comment.get("body"))], repo))
+				for comment in comments or []
+			)
+			if not linked:
+				reason = "not_linked_to_issue"
+		if not reason and kind == "autofix_failure":
+			linked = False
+			for comment in comments or []:
+				if not isinstance(comment, dict) or _comment_author(comment) != trusted_login.strip().lower():
+					continue
+				body = sanitize_text(comment.get("body"))
+				if any(_marker_fields(pattern.search(body)).get("run") == run_id for pattern in (_FAILURE_MARKER_RE, _FAILURE_CAP_MARKER_RE)):
+					linked = True
+					break
+				if body.strip().startswith(AUTOFIX_FAILURE_COMMENT_MARKERS) and any(item["run_id"] == run_id for item in extract_run_refs([body], repo)):
+					linked = True
+					break
+			pr_number = payload.get("issue_number")
+			if not linked and isinstance(run.get("pull_requests"), list):
+				linked = any(isinstance(pr, dict) and pr.get("number") == pr_number for pr in run["pull_requests"])
+			if not linked and run.get("event") == "workflow_dispatch":
+				title_match = _PR_RUN_NAME_RE.search(str(run.get("display_title") or ""))
+				linked = bool(title_match and str(pr_number) == title_match.group("n"))
+			if not linked:
+				reason = "not_linked_to_pr"
+		if reason:
+			result["rejections"].append({"run_id": run_id, "reason": reason})
+			if position == 0 and kind in ("phase_failure", "workflow_run"):
+				result["reason"] = f"current_run_rejected:{reason}"
+		else:
+			result["run_refs"].append(ref)
+			if pending:
+				result["pending_current_run"] = run_id
+	if result["reason"]:
+		return result
+	if not result["run_refs"]:
+		result["reason"] = "no_verified_runs"
+		return result
+	result["status"] = "ok"
+	return result
+
+
 def parse_failure_markers(comments: Iterable[dict[str, Any]], *, head_sha: str, author_login: str) -> list[dict[str, Any]]:
 	"""Return the trusted failure markers for ``head_sha``, oldest first.
 
@@ -1494,6 +1832,8 @@ def budget_decision(
 	now: datetime | None = None,
 	source_key: str | None = None,
 	linked_heal_issue: int | None = None,
+	source_issue: str | None = None,
+	trusted_author: str | None = None,
 ) -> dict[str, Any]:
 	"""Decide what to do with a fingerprinted failure given the heal issue list.
 
@@ -1512,8 +1852,9 @@ def budget_decision(
 	``heal_fix_branch_issue``), looked up in ``source_key``'s repository in
 	any state; the report continues that issue's lineage, so a heal fix PR
 	whose own review keeps failing reaches the lineage cap instead of opening
-	a fresh generation-1 heal issue each round. Neither changes the decision
-	when ``source_gen`` is given.
+	a fresh generation-1 heal issue each round. A reported ``source_gen`` /
+	``source_root`` takes precedence only when ``source_issue`` identifies a
+	listed heal issue authored by ``trusted_author`` with matching markers.
 	"""
 	now = now or _utc_now()
 	day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1527,6 +1868,9 @@ def budget_decision(
 	source_key_match = _SOURCE_KEY_RE.match(str(source_key or ""))
 	source_key = source_key if source_key_match else None
 	linked_heal_repo = source_key_match.group("repo") if source_key_match else ""
+	source_issue_match = _SOURCE_KEY_RE.fullmatch(str(source_issue or ""))
+	source_issue_number = _positive_int(str(source_issue).rsplit("#", 1)[-1]) if source_issue_match else None
+	verified_source_record: dict[str, Any] | None = None
 	if not source_key:
 		linked_heal_issue = None
 
@@ -1549,8 +1893,13 @@ def budget_decision(
 		number = _positive_int(issue.get("number"))
 		if number is None:
 			continue
-		markers = parse_heal_markers(issue.get("body"))
 		issue_repository = issue.get("repository") if is_valid_repo_slug(issue.get("repository")) else ""
+		if source_issue_number == number and source_issue_match and (
+			issue_repository == source_issue_match.group("repo")
+			or (not issue_repository and source_issue_match.group("repo") == preferred_repo)
+		):
+			verified_source_record = issue
+		markers = parse_heal_markers(issue.get("body"))
 		state = str(issue.get("state") or "").lower()
 		created = _parse_iso(issue.get("created_at"))
 		if created is not None and created >= day_start:
@@ -1592,14 +1941,44 @@ def budget_decision(
 	root = fp
 	prior_issue: int | None = None
 	prior_repo = ""
+	lineage_source = "none"
+	lineage_ignored_reason: str | None = None
 	if source_gen is not None:
-		gen = source_gen + 1
-		root = source_root or fp
-	elif prior_same_fp or prior_source_lineage:
+		if source_issue_number is None:
+			lineage_ignored_reason = "no_source_issue"
+		elif not trusted_author:
+			lineage_ignored_reason = "no_trusted_author"
+		elif verified_source_record is None:
+			lineage_ignored_reason = "not_heal_issue"
+		else:
+			recorded_user = verified_source_record.get("user")
+			recorded_author = verified_source_record.get("author") or (recorded_user.get("login") if isinstance(recorded_user, dict) else None)
+			recorded_markers = parse_heal_markers(verified_source_record.get("body"))
+			recorded_gen = _positive_int(recorded_markers.get("gen"))
+			if recorded_author != trusted_author:
+				lineage_ignored_reason = "untrusted_author"
+			elif recorded_gen is None or recorded_gen != _positive_int(source_gen):
+				lineage_ignored_reason = "gen_mismatch"
+			elif source_root and recorded_markers.get("root") != source_root:
+				lineage_ignored_reason = "root_mismatch"
+			else:
+				gen = recorded_gen + 1
+				root = recorded_markers.get("root") or fp
+				lineage_source = "verified_source_issue"
+				prior_issue = source_issue_number
+				prior_repo = source_issue_match.group("repo")
+		if lineage_ignored_reason:
+			lineage_source = "source_marker_ignored"
+	if lineage_source != "verified_source_issue" and (prior_same_fp or prior_source_lineage):
 		prior_lineage = sorted(prior_same_fp + prior_source_lineage)
 		prior_gen, prior_issue, prior_root, prior_repo = prior_lineage[-1]
 		gen = prior_gen + 1
 		root = prior_root
+		if not lineage_ignored_reason:
+			lineage_source = "fingerprint" if prior_lineage[-1] in prior_same_fp else "source"
+	lineage_metadata = {"lineage_source": lineage_source}
+	if lineage_ignored_reason:
+		lineage_metadata["lineage_ignored_reason"] = lineage_ignored_reason
 	if gen > max_depth:
 		return {
 			"action": "escalate",
@@ -1610,12 +1989,13 @@ def budget_decision(
 			"prior_repo": prior_repo,
 			"open_count": len(open_issues),
 			"today_count": created_today,
+			**lineage_metadata,
 		}
 	if len(open_issues) >= max_open:
-		return {"action": "budget_exhausted", "reason": "max_open_issues", "gen": gen, "root": root, "open_count": len(open_issues), "today_count": created_today}
+		return {"action": "budget_exhausted", "reason": "max_open_issues", "gen": gen, "root": root, "open_count": len(open_issues), "today_count": created_today, **lineage_metadata}
 	if created_today >= max_per_day:
-		return {"action": "budget_exhausted", "reason": "max_issues_per_day", "gen": gen, "root": root, "open_count": len(open_issues), "today_count": created_today}
-	return {"action": "open", "gen": gen, "root": root, "open_count": len(open_issues), "today_count": created_today}
+		return {"action": "budget_exhausted", "reason": "max_issues_per_day", "gen": gen, "root": root, "open_count": len(open_issues), "today_count": created_today, **lineage_metadata}
+	return {"action": "open", "gen": gen, "root": root, "open_count": len(open_issues), "today_count": created_today, **lineage_metadata}
 
 
 # ---------------------------------------------------------------------------
@@ -1673,6 +2053,10 @@ def _context_lines(payload: dict[str, Any], *, run_summaries: list[dict[str, Any
 		if kind == "autofix_failure":
 			lines.append(f"- **Failure reason:** `{payload.get('failure_reason')}`")
 			lines.append(f"- **Consecutive failed review runs on this PR:** {payload.get('failure_streak') or 1}")
+		elif kind == "phase_failure":
+			phase = str(payload.get("failure_reason") or "").removesuffix("_failed") or "pipeline"
+			lines.append(f"- **Failure reason:** `{payload.get('failure_reason')}`")
+			lines.append(f"- **Consecutive failed {phase} runs on this issue:** {payload.get('failure_streak') or 1}")
 		else:
 			lines.append(f"- **Escalation label:** `{payload.get('label')}`")
 	if payload.get("workflow_name"):
@@ -1703,6 +2087,10 @@ def compose_issue_title(payload: dict[str, Any], *, workflow_name: str | None) -
 		target = f"{payload['source_repo']}#{payload.get('issue_number')}"
 		streak = payload.get("failure_streak") or 1
 		return f"Workflow heal: {name or 'review/autofix'} failed {streak}x for {target} ({payload.get('failure_reason')})"
+	if payload.get("source_kind") == "phase_failure":
+		target = f"{payload['source_repo']}#{payload.get('issue_number')}"
+		streak = payload.get("failure_streak") or 1
+		return f"Workflow heal: {name or 'pipeline phase'} failed {streak}x for {target} ({payload.get('failure_reason')})"
 	label = payload.get("label") or "escalation"
 	target = f"{payload['source_repo']}#{payload.get('issue_number')}"
 	if name:
@@ -1791,6 +2179,12 @@ def compose_issue_body(
 				"source, so this issue was filed automatically for the clarify -> plan -> implement -> "
 				"review pipeline to fix it here."
 			)
+		elif payload.get("source_kind") == "phase_failure":
+			intro = (
+				"A clarify / plan / implement run failed on an issue. The diagnosis below attributes it to "
+				"the shared workflow source, so this issue was filed automatically for the clarify -> plan -> "
+				"implement -> review pipeline to fix it here."
+			)
 		else:
 			intro = (
 				"A pipeline failure in a consumer of these workflows was escalated for human attention. "
@@ -1850,8 +2244,8 @@ def compose_issue_body(
 	parts.append(
 		f"_Filed by the workflow failure heal intake. Lineage generation {gen} (cap {max_depth}); "
 		"the chain escalates to a human at the cap. Re-reports with the same fingerprint (or, for a "
-		"review/autofix failure, from the same pull request) are recorded as occurrence comments on "
-		"this issue while it stays open._"
+		"review/autofix or clarify / plan / implement failure, from the same pull request or issue) are "
+		"recorded as occurrence comments on this issue while it stays open._"
 	)
 	body = "\n".join(parts) + "\n"
 	body_lines = body.splitlines()
@@ -2109,6 +2503,31 @@ def _cmd_build_autofix_payload(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _cmd_build_phase_payload(args: argparse.Namespace) -> int:
+	issue = _load_json_file(args.issue_json)
+	try:
+		comments = _load_json_file(args.comments_json) if args.comments_json else []
+	except (OSError, json.JSONDecodeError):
+		comments = []
+	payload = build_phase_failure_payload(
+		repo=args.repo,
+		phase=args.phase,
+		issue=issue if isinstance(issue, dict) else {},
+		comments=comments if isinstance(comments, list) else [],
+		workflow_name=args.workflow_name,
+		run_id=args.run_id,
+		wrapper_sha=args.wrapper_sha or None,
+		reporter_run_url=args.reporter_run_url or None,
+		trusted_author=args.comment_author,
+	)
+	validate_payload(payload)
+	if len(json.dumps(payload).encode("utf-8")) > MAX_PAYLOAD_BYTES:
+		payload["comments_excerpt"] = sanitize_text(payload["comments_excerpt"], 1500)
+		payload["issue_excerpt"] = sanitize_text(payload["issue_excerpt"], 1500)
+	_write_json(payload)
+	return 0
+
+
 def _read_path_list(path: str | None) -> list[str]:
 	"""One repo-relative path per line; a missing or unreadable file is an empty list."""
 	if not path:
@@ -2228,6 +2647,19 @@ def _cmd_validate_payload(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _cmd_verify_run_provenance(args: argparse.Namespace) -> int:
+	try:
+		runs = _load_json_file(args.runs_json)
+	except (OSError, ValueError):
+		runs = {}
+	try:
+		comments = _load_json_file(args.comments_json) if args.comments_json else None
+	except (OSError, ValueError):
+		comments = None
+	_write_json(verify_run_provenance(_load_json_file(args.payload_json), runs=runs, comments=comments, trusted_login=args.trusted_login, self_repo=args.self_repo))
+	return 0
+
+
 def _cmd_skip_reason(args: argparse.Namespace) -> int:
 	payload = _load_json_file(args.payload_json)
 	registered: list[str] = []
@@ -2238,6 +2670,19 @@ def _cmd_skip_reason(args: argparse.Namespace) -> int:
 			loaded = []
 		registered = [item for item in loaded if isinstance(item, str)] if isinstance(loaded, list) else []
 	sys.stdout.write(skip_reason(payload, registered_repos=registered, self_repo=args.self_repo) + "\n")
+	return 0
+
+
+def _cmd_verify_phase_provenance(args: argparse.Namespace) -> int:
+	def read_optional(path: str) -> Any:
+		try:
+			return _load_json_file(path)
+		except (OSError, ValueError):
+			return None
+
+	_write_json(verify_phase_report_provenance(read_optional(args.payload_json), run=read_optional(args.run_json),
+		jobs=read_optional(args.jobs_json), comments=read_optional(args.comments_json), self_repo=args.self_repo,
+		trusted_author=args.comment_author))
 	return 0
 
 
@@ -2286,6 +2731,8 @@ def _cmd_budget(args: argparse.Namespace) -> int:
 		max_per_day=args.max_per_day,
 		source_key=args.source_key or None,
 		linked_heal_issue=heal_fix_branch_issue(args.source_head_branch),
+		source_issue=args.source_issue or None,
+		trusted_author=args.trusted_author or None,
 	)
 	_write_json(decision)
 	return 0
@@ -2420,6 +2867,18 @@ def build_parser() -> argparse.ArgumentParser:
 	)
 	p.set_defaults(func=_cmd_build_autofix_payload)
 
+	p = sub.add_parser("build-phase-payload", help="Build the payload for a failed clarify / plan / implement run on an issue")
+	p.add_argument("--repo", required=True)
+	p.add_argument("--phase", required=True, choices=tuple(PHASE_FAILURE_COMMENT_PREFIXES))
+	p.add_argument("--issue-json", required=True)
+	p.add_argument("--comments-json")
+	p.add_argument("--workflow-name", required=True)
+	p.add_argument("--run-id", required=True)
+	p.add_argument("--wrapper-sha", default="")
+	p.add_argument("--reporter-run-url", default="")
+	p.add_argument("--comment-author", required=True)
+	p.set_defaults(func=_cmd_build_phase_payload)
+
 	p = sub.add_parser("classify-crash-ownership", help="Print pr / base / none: who changed the file a review/autofix run crashed in")
 	p.add_argument("--payload-json", required=True)
 	p.add_argument("--base-changed-files", default="")
@@ -2461,11 +2920,28 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--payload-json", required=True)
 	p.set_defaults(func=_cmd_validate_payload)
 
+	p = sub.add_parser("verify-run-provenance", help="Verify run references before reading their job logs")
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--runs-json", required=True)
+	p.add_argument("--comments-json", default="")
+	p.add_argument("--trusted-login", default="")
+	p.add_argument("--self-repo", required=True)
+	p.set_defaults(func=_cmd_verify_run_provenance)
+
 	p = sub.add_parser("skip-reason", help="Print a skip reason (empty when the payload should be healed)")
 	p.add_argument("--payload-json", required=True)
 	p.add_argument("--registry-json", default="")
 	p.add_argument("--self-repo", required=True)
 	p.set_defaults(func=_cmd_skip_reason)
+
+	p = sub.add_parser("verify-phase-provenance", help="Verify a phase failure report against GitHub-read run, job and comment evidence")
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--run-json", required=True)
+	p.add_argument("--jobs-json", required=True)
+	p.add_argument("--comments-json", required=True)
+	p.add_argument("--self-repo", required=True)
+	p.add_argument("--comment-author", required=True)
+	p.set_defaults(func=_cmd_verify_phase_provenance)
 
 	p = sub.add_parser("wrap-dispatch", help="Print the repository_dispatch body with the report enveloped under client_payload.report")
 	p.add_argument("--payload-json", required=True)
@@ -2498,6 +2974,8 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--preferred-repo", default="")
 	p.add_argument("--source-gen", type=int)
 	p.add_argument("--source-root", default="")
+	p.add_argument("--source-issue", default="", help="owner/repo#N of the issue carrying the reported lineage")
+	p.add_argument("--trusted-author", default="", help="authenticated intake account that created heal issues")
 	p.add_argument("--max-depth", type=int, default=DEFAULT_MAX_LINEAGE_DEPTH)
 	p.add_argument("--max-open", type=int, default=DEFAULT_MAX_OPEN_ISSUES)
 	p.add_argument("--max-per-day", type=int, default=DEFAULT_MAX_ISSUES_PER_DAY)
