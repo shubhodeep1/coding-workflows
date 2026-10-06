@@ -59,7 +59,7 @@ rb_security_mode_detect()
 		rb_security_log "mode=detect pr=${PR_NUMBER:-} outcome=exhausted reason=gate_output"
 		return 0
 	fi
-	if [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-true}" = "false" ]; then
+	if [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-false}" = "false" ]; then
 		rb_security_log "mode=detect pr=${PR_NUMBER:-} outcome=normal reason=disabled"
 		return 0
 	fi
