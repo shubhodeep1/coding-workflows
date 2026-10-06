@@ -128,6 +128,7 @@ class Relay(http.server.BaseHTTPRequestHandler):
 			or self.headers.get("Content-Type", "").split(";")[0].strip().lower() != "application/json"
 			or not length.isascii()
 			or not length.isdecimal()
+			or len(length) > 10
 			or not 0 < int(length) <= MAX_BODY
 			or headers is None
 		):

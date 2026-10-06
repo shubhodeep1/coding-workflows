@@ -1925,7 +1925,7 @@ sanitize_codex_prompt_file()
 		: > "${_tmp}" 2>/dev/null || { rm -f "${_tmp}"; return 0; }
 	fi
 	if command -v python3 >/dev/null 2>&1; then
-		if python3 - "${_path}" "${_tmp}" <<'PY' 2>/dev/null
+		if PYTHONSAFEPATH=1 python3 - "${_path}" "${_tmp}" <<'PY' 2>/dev/null
 from pathlib import Path
 import sys
 

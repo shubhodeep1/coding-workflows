@@ -10,6 +10,13 @@ Consumer repos define their own `agents.md` with their own architectural
 facts. The unattended pipeline loads this file as `agents_canonical.md` and
 the consumer's `agents.md` separately; both are inlined into the prompt.
 
+The interactive merged-PR hook (`.claude/hooks/pr_merge_status_guard.py` and
+its consumer template) recognizes guarded git commands after nested control
+words, shell negation (`!`), and simple `case` arms. Since their effective
+directory is uncertain, pushes check the session checkout and request
+confirmation unless blocked; commits in that context remain warning-only
+when not blocked.
+
 ---
 
 ## Workflow architecture
@@ -33,9 +40,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
    absent from the cache key. Orchestrator mode keeps the existing cache path.
 3. **plan** (`plan.yml`, `internal-plan.yml`) — read the clarified issue and
    emit a structured implementation plan with files-to-change and a
-   per-issue ≤60-minute time budget.
+   per-issue ≤60-minute time budget. Codex runs in the isolated container
+   (see "Isolated Codex agents").
 4. **implement** (`implement.yml`, `internal-implement.yml`) — execute the
-   plan with codex-cli; write the actual files.
+   plan with codex-cli; write the actual files. Codex runs in the isolated
+   container and edits a copy of the workspace (see "Isolated Codex agents").
 5. **implement-diagnose** (`scripts/implement_diagnose_post_codex_failure.sh`,
    driven by `MODEL_DIAGNOSE`) — analyse a post-Codex validation failure and
    emit JSON fix-up issue proposals.
@@ -84,9 +93,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
    and `.claude/` files remain excluded from
    snapshot and transfer. An editor write to an excluded file in an
    admitted directory is dropped; a new directory outside the admitted ones
-   fails the transfer (`reason=unsafe_directory`) and the editor step with it. Its
-   isolation helpers must already exist in the verified workflow support
-   commit; a PR's own copies are review data,
+   fails the transfer (`reason=unsafe_directory`) and the editor step with it.
+   The command contract test `tests/test_audit_plans_command.py` is omitted
+   from the sandbox; host CI still runs it. Its isolation helpers must already
+   exist in the verified workflow support commit; a PR's own copies are review data,
    not executable support, so review fails closed until that commit lands.
    PR-backed `claude/*` heads take the normal review path like every other
    PR: the GPT editor, conflict resolver, review-blocked judge and auto-merge
@@ -381,8 +391,10 @@ a new value, add it to the appropriate overrides file with a
   `STAGED_SUPPORT_LEDGER` (`${RUNTIME_DIR}/staged_support_overwrites.txt`) with the
   installed content under `STAGED_SUPPORT_BASE_DIR`; it also records support
   paths recreated over branch-side deletions. Executable support-ref copies live
-  under `IMPLEMENT_STAGED_SUPPORT_RUN_DIR`. All three paths are exported through
-  `GITHUB_ENV` and only exist when `github.repository` is this repository.
+  under `IMPLEMENT_STAGED_SUPPORT_RUN_DIR`. The ledger and base paths are
+  exported through `GITHUB_ENV` and only exist when `github.repository` is this
+  repository; `IMPLEMENT_STAGED_SUPPORT_RUN_DIR` exists in every repository (see
+  "Isolated Codex agents").
 - `scripts/implement_commit_changes.sh` consumes the ledger before `git add`:
   restore-to-HEAD for untouched copies, 3-way `git merge-file` re-base for
   editor-edited copies, preserve editor-selected modes and branch/editor deletions, remove untouched
@@ -484,6 +496,58 @@ a new value, add it to the appropriate overrides file with a
   failure-path reporter skips when support staging did not complete or its
   optional Python helper is absent; neither case executes `scripts/` from
   the PR worktree.
+- The review `codex-agent` sets `PYTHONSAFEPATH=1` so host Python invoked
+  with `-`, `-c`, or `-m` cannot import PR-controlled modules from its working
+  directory (also after switching to `WORKSPACE_PATH`). Keep sibling imports
+  anchored to the trusted support directory; `workspace_init.sh` uses `-I -B`
+  independently of job env. Python older than 3.11 ignores `PYTHONSAFEPATH`.
+- Host-side static-context reads of checkout-controlled `README.md` and
+  `agents.md` skip symbolic links rather than following them into prompt text.
+  Required `unattended_system_instructions.md` and `ai_pipeline.md` symlinks
+  instead fail prompt assembly before any content is written; review checkout
+  credential persistence is unchanged.
+- Static prompts omit the optional overflow-runbook pointer when
+  `probably_unnecessary_but_read_if_stuck.md` is a symlink; regular runbooks
+  still receive the pointer. A symlink emits a warning without directing the
+  model to read its target from the credential-bearing checkout.
+- The review gate's existing PR read validates the same-repository head and
+  exports `review_checkout_sha` only for a 40-hex SHA. `Checkout repo` uses
+  that SHA for every PR event, so reviewer and other `GITHUB_WORKSPACE` file
+  reads see the verified PR head rather than the dispatching branch or a stale
+  pull-request event payload; the no-PR push route still uses `github.sha`.
+  Fork, missing-repo and invalid-head PRs skip both review and deterministic
+  auto-merge. Before OpenCode setup, the job
+  refuses project OpenCode configuration/plugins in the source checkout; it
+  also requires an existing split workspace and checks its configuration
+  before reviewer launch. An unreadable fetched git head fails the job; a
+  source/workspace/PR-metadata SHA mismatch, or a branch that advances during
+  fetch, sets `AUTOFIX_STALE_BASE_SKIP` so no reviewer, editor or merge acts
+  on stale files.
+- Before host-side pre-review helpers run against the PR tree, `review_autofix.yml`
+  requires a Python that honors `PYTHONSAFEPATH`. The Semble and Serena
+  bootstrap import probes run from private neutral directories; Serena's
+  trusted absolute-path handshake probe retains the project cwd for
+  `--project-from-cwd` while clearing `PYTHONPATH` and using safe-path for
+  the probe only. Its installed server keeps script-directory imports.
+  Serena requires an absolute `HOME` for Codex config writes; a relative or
+  missing `HOME` leaves the tool unavailable rather than writing under the PR tree.
+  Other pre-review `python3 -c`, `-m` and stdin calls set `PYTHONSAFEPATH=1`
+  per call, including consolidator, reviewer and host-side editor helpers;
+  reviewer Python imports require absolute trusted support directories rather
+  than falling back to the PR checkout. The host-side partial-finalize timeout
+  extractor also uses safe-path when reading the workflow YAML. Script-file
+  imports and the checkout's Git auth are unchanged.
+- `orchestrate.yml` and `orchestrate_clarify_respond.yml` also assemble static
+  context on the host. They reject symlinked required instructions and pipeline
+  files before writing prompt output, and omit symlinked local agents files,
+  `README.md`, and the optional overflow-runbook pointer with warnings. Regular
+  files retain their existing content and local agents-file precedence in the
+  clarify-respond workflow. Checkout credential handling is unchanged.
+- Review's optional break-glass scan and conflict-resolution prompt rendering
+  also use safe-path Python in the credential-bearing checkout. The conflict
+  preparation path can run before reviewers when pre-review conflict resolution
+  is enabled; resolver retries remain host-side but no longer import checkout
+  modules through Python's implicit current-directory entry.
 - `internal-review.yml` itself must not forward a `with:` input that
   `review_autofix.yml` on `main` does not define yet: GitHub validates the
   call against `main`'s file, so every review run on the PR adding the input
@@ -518,6 +582,194 @@ a new value, add it to the appropriate overrides file with a
   in that script must also be listed in `review_apply_fixes_preflight()`
   (contract-tested), and the variable must already be set when the preflight
   step runs.
+
+## Isolated Codex agents
+
+Every Codex agent that reads untrusted text (issue bodies, comments, PR diffs,
+CI and workflow logs, audited code) runs through
+`scripts/codex_isolated_exec.sh`, never as a host `codex` process. Prompt
+injection in that text therefore cannot read `GH_PAT` (`GH_TOKEN`), the
+OpenRouter key, the Telegram secrets, or the checkout's `.git` (whose config
+carries the `GH_PAT` remote URL and the checkout extraheader).
+
+- **Container.** A Docker container built from a fixed, generated build
+  context (Node 22 + Python 3 + git + build-essential + ripgrep + the
+  `CODEX_VERSION` Codex CLI), run with `--network none --read-only --cap-drop
+  ALL --security-opt no-new-privileges --init`, the runner's UID, and no
+  environment from the runner. Nothing from the host is mounted except a
+  disposable copy of the working directory (at its own absolute path), the
+  broker socket, the helper's own support files, and the runtime files a call
+  site names with `--include` (read-only).
+- **Model traffic.** `scripts/clarify_openrouter_broker.py` runs on the host
+  with the key (`broker` mode, Unix socket) and in the container as a loopback
+  bridge (`bridge` mode). It forwards only `POST /api/v1/responses` for the one
+  model the call names. The provider-hosted `web_search` tool keeps working.
+- **Modes.** `read-only`: a copy of the tracked regular files (all top-level
+  directories; symlinks, `.git`, `.env*`, `secrets`, `credentials`, `.ssh`,
+  `.npmrc`, `.netrc`, `.config`, credential-store filenames (including `.conf`,
+  `.cfg`, `.properties`, `.xml`, and dot-separated names such as
+  `oauth.secret.properties`) and key files
+  skipped; source modules such as `secret_manager.py` remain visible;
+  files over 2 MiB skipped and logged; 50,000 files / 512 MiB cap) mounted
+  read-only. Security audits supply explicitly scoped oversized files, and in
+  full scans every other eligible oversized text file, through capped read-only
+  chunks. An explicitly scoped file past a cap stops the audit before the model
+  runs; other binaries and files past the caps go to the coverage note.
+  `workspace`: a copy of the directory excluding the same
+  credential paths (allowed symlinks kept as symlinks); afterwards every
+  changed regular file is written back with
+  mode 0644/0755 and removed files are deleted
+  (also after a failed or interrupted attempt). A new or changed symlink, a
+  special file, or a host path that changed since the snapshot rejects the
+  whole transfer before the first host write. Replacements and backups are
+  staged first and a write failure rolls back changed paths
+  (`scripts/codex_isolated_workspace.py`). Both modes get a credential-free
+  synthetic `.git` whose `HEAD` contains only allowed blobs from the host's
+  `HEAD`, so filtered tracked files cannot be retrieved with `git show`.
+- **Dependencies.** `codex_isolated_exec.sh prepare --deps` (implement) installs
+  dependencies once per job. The network-isolated, credential-free container sees
+  only staged Node manifests and filtered third-party Python requirements
+  from both `requirements.txt` and `pyproject.toml` when present,
+  never the source tree. A host-side
+  `scripts/dependency_registry_proxy.py` accepts only HTTPS CONNECT tunnels to
+  allowlisted public registry hosts, vets all resolved IPs and connects by IP.
+  The review dependency container uses the same proxy; the default allowlist is
+  PyPI and npm/Yarn registries, replaceable via `DEPENDENCY_PROXY_ALLOWED_HOSTS`.
+  A missing proxy skips dependency installation without restoring direct
+  container network access; review preparation continues, but validations
+  needing those dependencies may be unverified.
+  An editable source install runs separately with `--network none` for
+  parsed `pyproject.toml` projects or requirements with a regular `setup.py`,
+  including Node/Python hybrids. Requirements-only projects without an
+  installable source skip that step; a failed dev dependency install warns
+  even when retrying base dependencies succeeds.
+  `prep-finalize` restores source files and keeps dependency output in the
+  sandbox ("prep roots"), never copying it back.
+  The agent itself has no network: it marks validators it cannot run
+  UNVERIFIED instead of installing them.
+- **Trusted copies.** The helper reads its support files from its own
+  directory. Callers run it from a copy no agent can write: implement runs the
+  helper, `codex_thread_reuse.sh` and every script its Codex, repair and later
+  steps execute from `IMPLEMENT_STAGED_SUPPORT_RUN_DIR` (now staged in every
+  repository), and runs `after_run` workspace hooks from a copy taken before
+  the editor. In the orchestrator poller, the review-blocked fix and the
+  integration-conflict judge work in separate git worktrees under
+  `RUNTIME_DIR`; the poller (not the agent) fetches, merges, checks
+  conflict markers and the merged sub-issue fingerprints, commits and pushes.
+  Before that push, it rejects judge changes outside the conflicted paths;
+  conflicted protected paths (`.github/`, `.claude/`, `scripts/`, `prompts/`,
+  `workflow-templates/`, `validation/`, `ai-memory/`, `db/contracts/`,
+  agent-instruction files, and build, dependency, config and script files)
+  may contain only lines from either side, retaining each side's line order
+  and duplicate counts when combining them.
+  Lines shared by both sides must also remain at their minimum shared count;
+  deleting a conflicted protected file is rejected. Lines inherited unchanged
+  from the common base cannot be duplicated; a provenance check that exceeds
+  its fixed work limit rejects the resolution without pushing.
+  Its push uses a one-shot credential helper instead of storing `GH_TOKEN` in
+  the shared Git config of the judge worktree.
+  A failed publication logs a warning but counts as a completed judge
+  invocation; the next poll tick rechecks mergeability rather than terminalizing
+  the project. An already-up-to-date merge creates no empty commit.
+  The poller's review-blocked `fix` path prepares a fix only for the issue's
+  implementation PR with a same-repo head, verifies the fetched branch tip
+  against the PR head SHA, and rechecks the head before pushing; failed
+  provenance checks skip the fix. It checks every staged path before commit:
+  every path must occur in the PR's complete paginated changed-file list
+  (including rename source paths); judge citations cannot authorize writes.
+  An unavailable or incomplete PR file list and any out-of-scope edit reject the whole fix,
+  warn via Telegram, and consume a review-blocked retry without a push. Empty
+  staged sets also reject; listing failures report the unverified staged paths.
+  When `ALLOW_WORKFLOW_EDITS=false`, staged edits to `scripts/`, `prompts/`,
+  `.github/`, `workflow-templates/`, or `.claude/` reject through that same path
+  even if present in the PR's file list; `.github/prompts/` and
+  `.github/scripts/` remain excluded from staging and forbidden when pre-staged.
+  The review-blocked poller rejects a selected PR whose head repository is
+  not the origin before its diff reaches the judge. For open PRs, branch
+  preparation also requires the fetched origin tip to match the PR head SHA;
+  identity, ref, or fetch failures defer the judge without consuming a fix
+  retry, so the next poll tick can check again.
+  The review-blocked judge's OpenCode fix writer runs in
+  `scripts/review_untrusted_sandbox.sh`. The sandbox keeps `GITHUB_WORKSPACE`
+  pointed at the checkout containing `.git` and snapshots/transfers the
+  separately validated per-PR `WORKSPACE_PATH`; invalid paths fail before the
+  writer runs.
+- **Sites.** plan, implement (attempts, post-Codex repair, diagnose, PR issue
+  summary), validate discover / diagnose / self-heal, the validation discovery
+  bootstrap, the orchestrate decomposer, the poller's wave / stall /
+  security-pass / review-blocked / integration-conflict judges, the four
+  workflow-log-analysis passes and the consumer retro fan-out, check-failure
+  triage, the security audit, the workflow failure heal intake, and the
+  activation verifier (`scripts/activation_verify.sh`).
+  `tests/test_codex_agent_isolation_contract.py` fails when a direct `codex`
+  launch appears anywhere else (clarify keeps its own
+  `scripts/clarify_isolated_run.sh`).
+- **Claude engine.** `claude_run` (`scripts/ai_engine.sh`) never starts the
+  Claude Code CLI on the runner: each account attempt runs
+  `codex_isolated_exec.sh run --engine claude` in the same container, with
+  the pinned CLI (`cli_version` in `.github/ai/claude_engine.json`) added to
+  the image. `scripts/claude_anthropic_relay.py` is the host broker: it reads
+  the account's `0600` token file (`--claude-token-file`, never mounted or
+  passed in the environment), swaps it into each request and allows only
+  `--claude-models` (the role's model and the probe model); the container
+  holds `CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder` and
+  `ANTHROPIC_BASE_URL=http://127.0.0.1:8765`. A `read` profile runs in
+  `read-only` mode, write profiles in `workspace` mode. The rendered settings,
+  the `gh_api_write_guard.py` hook and the instructions are copied to
+  `/support/settings.json`, `/support/guard.py` and `/support/instructions.md`.
+  `$RUNNER_TEMP/claude-isolated-home` (`ai_engine_claude_home`) is mounted as
+  `~/.claude` so `--resume` finds the session; `codex_thread_reuse.sh` looks
+  there for a resumable session before sending the continuation prompt. A
+  write role in a job that prepared a workspace sandbox (implement:
+  `CODEX_ISOLATED_ROOT` with `CODEX_ISOLATED_MODE=workspace`) runs in it, so
+  Claude implement attempts get the preinstalled dependencies too. `hide_claude_md` sets
+  `CODEX_ISOLATED_HIDE=CLAUDE.md`: the top-level `CLAUDE.md` is left out of
+  the copy and the synthetic `.git`, and the write-back never creates or
+  changes it (`CODEX_ISOLATION transfer ignored=CLAUDE.md reason=hidden`).
+  Helper exit `75` (`CODEX_ISOLATION unavailable engine=claude reason=`
+  `docker_missing` / `support_missing` / `image_build_failed`) makes
+  `claude_run` log `CLAUDE_POOL … outcome=unavailable` and return `75` with
+  `AI_ENGINE_FALLBACK … reason=isolation_unavailable`, so the role runs codex.
+  Exit `73` (`CODEX_ISOLATION relay_unavailable engine=claude`, for example a
+  token file that is not `0600`) moves to the next account. A root runner
+  passes `IS_SANDBOX=1`, which the CLI needs for `bypassPermissions` as root.
+  `tests/test_codex_agent_isolation_contract.py` fails when `claude -p` is
+  started outside a container entrypoint; the token step's fixed-prompt usage
+  probe (`scripts/claude_pool_token.sh`) is the one listed exception.
+- **Merged-PR guard.** Both `.claude/hooks/pr_merge_status_guard.py` and its
+  `workflow-templates/` copy check origin PR history only for pushes to origin.
+  An explicit `--repo` or positional remote naming a different or unverified
+  destination requests human confirmation instead of silently checking the
+  checkout's origin. A positional repository overrides `--repo` when both
+  are supplied; without a positional repository, `--repo` is the fallback.
+  Explicit URL destinations request confirmation even when their slug matches
+  origin, since Git's `url.*.insteadOf` or `pushInsteadOf` can rewrite the URL.
+  Deletion-only and tag-only pushes to such URLs follow the same rule.
+  Remote URLs are never printed in the prompt (they may
+  contain credentials). Pushes with `git -c`, `--config-env`, or inline
+  `GIT_CONFIG_*` or `GIT_CONFIG` assignments, or an `env` wrapper, ask too:
+  those per-command settings can affect the push destination, so the guard
+  does not trust its stored URL or PR history for that push. Wrapped commits
+  are checked in the directory selected by `env -C` or `GIT_DIR`; a commit
+  from an ambiguous directory and an unparseable `env -S` command ask for
+  confirmation. A push from an unresolved directory (including an appended
+  `GIT_DIR+=` / `GIT_WORK_TREE+=`, whose value is never applied) is checked
+  against the session checkout, which can still block, and otherwise asks.
+  Leading redirections, including those after environment assignments, do
+  not bypass commit/push detection. A spaced, quoted or escaped digit before a
+  redirection (`2 >out`, `'2'>out`) is a push refspec with the normal check;
+  only digits glued to it (`2>&1`) are a file descriptor. An
+  unresolved push source asks rather than checking the session checkout's HEAD.
+- **No MCP tools inside.** Serena (and any other MCP server) is not configured
+  in the container, so isolated prompts carry no Serena hints. Semble results
+  are rendered into prompts on the host and are unaffected.
+- **Failure modes.** Missing Docker, an image build, broker or snapshot failure
+  exits 1 with `::error::CODEX_ISOLATION …`; Codex never falls back to the
+  host, and there is no switch that turns isolation off. A stall-guard
+  `SIGKILL` can leave a container behind; the next run on the same sandbox
+  root removes it by label, and an orphan without its broker has no model
+  access. Implement's final cleanup removes its persistent sandbox root;
+  a failed cleanup warns. Log prefix: `CODEX_ISOLATION`.
 
 ## Workflow file size limit
 
@@ -893,6 +1145,14 @@ committing the corresponding file:
   append/replace entries only. This repository ships a no-op overlay
   (`schema_version` only, no `prompt_overrides`), so `WORKFLOW_OVERLAY_ENABLED`
   is `true` but no rendered prompt is altered until override entries are added.
+  Review/autofix and validate stage it and its fragments from one fetched,
+  pinned default-branch commit, not from the PR/integration checkout; a fetch
+  failure disables the overlay instead of falling back to the checkout.
+  Missing or non-regular trusted fragments fail staging; unreadable trusted
+  blobs and Git call timeouts (60 seconds per call, no credential prompts)
+  disable the overlay.
+  `replace_path` is ignored with a warning for `mode-judge`, `mode-judge-*`
+  and `mode-orchestrate-poll-judge`; `append_path` remains supported.
 - `.github/ai/concurrency_caps.yml` — parsed by
   `scripts/orchestrate_lib.py::load_concurrency_caps`. Missing or empty files
   disable the cap layer and restore legacy uncapped dispatch.
@@ -1279,6 +1539,8 @@ Workflow-log-analysis and API-hygiene reporting depend on these stable log
 prefixes. Renames are breaking unless an alongside-old shim is documented
 and shipped:
 
+- `CODEX_ISOLATION`
+- `DEPENDENCY_PROXY`
 - `LABEL_REPAIR`
 - `LABEL_REPAIR_DIFF`
 - `LABEL_SYNC_CREATED`
@@ -1323,6 +1585,11 @@ and shipped:
 - `REISSUE_MODE`
 - `REISSUE_FILES_TOUCHED_UNION`
 - `REISSUE_FILES_TOUCHED_NEW_OUTPUTS`
+- `REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED`
+- `REVIEW_BLOCKED_FIX_SCOPE_REJECTED`
+- `REVIEW_BLOCKED_FIX_TARGET_VERIFIED`
+- `REVIEW_BLOCKED_FIX_TARGET_REJECTED`
+- `REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED`
 - `REISSUE_ORCHESTRATOR_METADATA_CARRIED`
 - `REISSUE_ORCHESTRATOR_METADATA_ABSENT`
 - `FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1`
@@ -1460,6 +1727,9 @@ and shipped:
 - `MODEL_CATALOG_BACKFILL`
 - `CLAUDE_FIXER_AUTO_MERGE`
 - `SECURITY_AUDIT_TARGET`
+- `INTEGRATION_JUDGE_SCOPE`
+- `WORKFLOW_OVERLAY_SOURCE`
+- `WORKFLOW_OVERLAY_REPLACE_REJECTED`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -1483,6 +1753,8 @@ caller continues without injection and the helper emits only
 `NAG_REMINDER_LOAD_FAIL` when the prompt fragment is missing, unreadable, or
 missing the requested phase key.
 
+LOG_PREFIX.name=CODEX_ISOLATION
+LOG_PREFIX.name=DEPENDENCY_PROXY
 LOG_PREFIX.name=LABEL_REPAIR
 LOG_PREFIX.name=LABEL_REPAIR_DIFF
 LOG_PREFIX.name=LABEL_SYNC_CREATED
@@ -1526,6 +1798,11 @@ LOG_PREFIX.name=REISSUE_BASELINE_DISCARDED
 LOG_PREFIX.name=REISSUE_MODE
 LOG_PREFIX.name=REISSUE_FILES_TOUCHED_UNION
 LOG_PREFIX.name=REISSUE_FILES_TOUCHED_NEW_OUTPUTS
+LOG_PREFIX.name=REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED
+LOG_PREFIX.name=REVIEW_BLOCKED_FIX_SCOPE_REJECTED
+LOG_PREFIX.name=REVIEW_BLOCKED_FIX_TARGET_VERIFIED
+LOG_PREFIX.name=REVIEW_BLOCKED_FIX_TARGET_REJECTED
+LOG_PREFIX.name=REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED
 LOG_PREFIX.name=REISSUE_ORCHESTRATOR_METADATA_CARRIED
 LOG_PREFIX.name=REISSUE_ORCHESTRATOR_METADATA_ABSENT
 LOG_PREFIX.name=FINGERPRINT_PARTIAL_REMOVAL_FALSE_POSITIVE_V1
@@ -1662,6 +1939,9 @@ LOG_PREFIX.name=MODEL_CATALOG_BACKFILL
 LOG_PREFIX.name=AUTOFIX_FAILURE_HEADLINE
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
+LOG_PREFIX.name=INTEGRATION_JUDGE_SCOPE
+LOG_PREFIX.name=WORKFLOW_OVERLAY_SOURCE
+LOG_PREFIX.name=WORKFLOW_OVERLAY_REPLACE_REJECTED
 
 ---
 
@@ -1711,7 +1991,7 @@ Operator runbooks (env var reference, autofix retrigger/dedup internals,
 orchestrator integration-sync auto-heal, validation self-healing, workflow
 log analysis pipeline, semantic cache scope, wrapper pin policy) live in
 `./probably_unnecessary_but_read_if_stuck.md`. Read it only when needed —
-it is intentionally large.
+and only if it is a regular file, not a symlink — it is intentionally large.
 
 `CHANGELOG.md` is never edited directly. Write one fragment per PR at
 `changelog.d/<issue-or-pr>-<slug>.md`; `scripts/assemble_changelog.py` folds
@@ -1728,6 +2008,8 @@ depend on it.
 
 ## Review pipeline consolidator + ledger contract
 
+- The review workflow's "Pre-assemble static context" step reads PR-head `README.md` only through `review_untrusted_workspace.py readme-trimmed`: its no-follow, regular-file, size-bounded reader omits rejected READMEs with `REVIEW_STATIC_CONTEXT_README` diagnostics (a reader failure stops review). Only trusted instructions enter `pre_assembled_static.txt`; the trimmed README is stored under the owner-only `RUNTIME_DIR` and embedded as `UNTRUSTED_DATA:` lines in reviewer, consolidator, editor, interim-judge, review-blocked-judge, and smoke-synthesis prompts. A README whose prefixed lines exceed 200,000 bytes is omitted with `reason=prompt_size`; reviewer budget accounting includes the framed bytes. The step also refuses symlink/non-regular `pre_assembled_static.txt` output paths before assembling the prompt.
+- Every other host-side prompt assembler routes `README.md` through `scripts/build_static_context.sh readme`. The shared reader uses `lstat` plus `O_NOFOLLOW`, rejects non-regular, set-ID, larger-than-2-MiB, or over-200,000-prefixed-byte files, and emits accepted content only as `UNTRUSTED_DATA:` lines; rejected files log `STATIC_CONTEXT_README` and are omitted, while read failures stop assembly. The `readme` phase requires only `README.md`; the clarify/plan helper and both orchestrate workflow assemblers refuse a symlink or non-regular output path before writing static context.
 - Review-pipeline helper stages are fail-open by contract. Floor rules, consolidator, parser, and ledger failures degrade to empty/advisory local artifacts and do not block the editor or reviewer loop.
 - `reviewer_bundle.txt` is the authoritative findings source. `review_issues.txt` and `ledger_status.txt` are advisory only and may not suppress valid raw-bundle findings.
 - `floor_tags.txt` is the only non-skippable advisory channel: findings promoted there must be fixed or explicitly rejected with reason.
@@ -1863,6 +2145,7 @@ depend on it.
 - **Standalone issues answered by the clarify-respond worker (issue #6262 follow-up).** With `STANDALONE_CLARIFY_RESPOND_ENABLED` (default `true`), `clarify.yml`'s auto-decide step only delegates (`delegated=true`) and its "Clarification required" Telegram alert is skipped (`AI_PHASE_GATE_V1 phase=clarify gate=tg_alert reason=delegated_to_clarify_respond`; `reason=auto_answered` after a RECOMMENDED-only answer). `orchestrate_clarify_respond.yml`, which the questions comment already triggers, decides its mode in "Check orchestrator metadata" (outputs `mode=orchestrator|standalone|skip`, `respond`, and the unchanged `is_orchestrator`): standalone needs clarify's questions comment (first line `<!-- ai:clarification-questions -->`, so plan-stage questions are not answered here), an open issue without `ai:orchestrator-managed`, no `<!-- ai:clarification-human-answer -->` (clarify appends it after a human `/reclarify`) and neither `STANDALONE_AUTO_DECIDE_ENABLED` nor `STANDALONE_CLARIFY_RESPOND_ENABLED` set to `false`. Every later step runs on `respond == 'true'`. Standalone mode reads the full comment thread once (needed by the poster's backup loop guard and the AD comment; a failed read fails the run before the model), and both modes get a host-side GITHUB FACTS block from `scripts/clarify_github_facts.py` (one aliased GraphQL call for referenced issues, PRs and branches, plus at most 5 run reads; fail-open), because the model runs network-isolated without a GitHub credential. The model step is `continue-on-error` in standalone mode only: when it fails, "Standalone RECOMMENDED fallback" posts the RECOMMENDED options, or pages `CRITICAL` when a question has none. After the poster answers, "Record standalone auto-decisions" runs `scripts/auto_decisions.py from-answers` and `render`, so each decision becomes an `AD-<n>` entry naming its decider (`clarify-respond on claude|codex`, `clarify-respond, semantic cache`, `RECOMMENDED fallback`), and each `SETUP REQUIRED:` bullet from the worker becomes a deduplicated `SETUP-<n>` item under "Setup required", which `pr-section` repeats in the PR body. Prompt contract (`prompts/mode-clarify-respond.txt`): credentials and setup never ESCALATE; the worker decides with an UPPER_SNAKE_CASE placeholder secret or variable read with no default (skip, or fail closed when skipping weakens a security control) and lists it under `SETUP REQUIRED:`; an issue with no stated intent (the release gate's `[E2E Clarify Negative Test]` body "Make it better.") has every what-to-do question escalated. `prompts/mode-clarify.txt` no longer emits `BLOCKED:` for credentials, undecided branch names or future commits; `BLOCKED:` remains for auth-walled content the task depends on. `orchestrate_clarify_respond.yml` now also stages `clarify_data_provision_guard.py`, which consumer repositories never had, so the data-provision guard was silently skipped there. Tests: `tests/test_clarify_respond_standalone.py`, `tests/test_clarify_github_facts.py`, `tests/test_auto_decisions.py`.
 - **Activation verification (port P4) and operator steps (Q33).** After a merge into the default branch (`issue_pr_status.yml` job `activation-verify`) and at project completion (poller `run_project_activation_verify`, after every `emit_orchestrator_completion_lessons`), `scripts/activation_verify.sh` grades the work LIVE or DORMANT. The poller also retries completed projects with trusted partial verdict comments while fewer than three exist and until 30 minutes after the first partial comment; a failed follow-up write may be retried within that window, but failures without an initial partial comment are not retried after completion. PR mode gets the merged file list from the paginated PR-files API, falling back to the merge diff only for a merge commit or a known single-commit PR; project mode reads the final PR's file list or the state's planned file hints when no final PR exists. Missing/incomplete scope skips verification rather than grading only part of a rebase. Project verification waits for a complete tracking-comment fetch before deduplicating, trims trailing whitespace from verdict comments, and uses a unique worktree and runtime directory that are cleaned up after the run. The model's OpenRouter key is redacted from normalized text before posting it to GitHub. Markers: `<!-- ai:activation:v1 verdict=<V> source=<pr-N|project-N> -->` on a complete verdict comment (the poller trusts only a terminal marker by a repository-associated author), `<!-- ai:activation:v1 partial=true source=<pr-N|project-N> -->` on an incomplete verdict, `<!-- ai:activation-fix:v1 source=... -->` as the first line of the code-gap issue (a merge that closes such an issue is not verified again), and the `ai:operator-step` issue (`<!-- ai:operator-step:v1 -->`, one `<!-- ai:operator-step:entry key=<key> -->` section per source, replaced in place) written only by `scripts/operator_step_issue.py`. A failed fix-issue lookup does not create another issue or finalize the verdict; operator steps and a non-terminal comment still surface the failure (PR mode needs a rerun after recovery). The operator-step writer reconciles observed duplicates and reads its just-created issue directly if the label list lags, with bounded retry backoff. Whole-body GitHub PATCHes are not atomic across independent writers: concurrent upserts can still lose an entry. `ai:operator-step` is excluded from issue-opened clarification. Kill switch `ACTIVATION_VERIFY_ENABLED` (default `true`).
 - `scripts/security_audit.sh` exposes `SECURITY_AUDIT_OUTPUT_MODE=findings-json` for the default-on orchestrator project security pass. It accepts an optional project-spec file, supports a fail-closed explicit `SECURITY_AUDIT_DIFF_BASE`/`SECURITY_AUDIT_DIFF_HEAD` range, optionally narrows that range with `SECURITY_AUDIT_DIFF_SINCE` (only range files changed since that commit stay in scope; fails closed on an unresolvable or non-ancestor commit) and re-verifies `SECURITY_AUDIT_PRIOR_FINDINGS` (a JSON array of earlier findings whose files stay in scope and which the prompt asks the model to re-emit under the same ID if they persist, alongside every remaining instance of the same class; fails closed on malformed input), applies the existing validation/exclusion/confidence/scope filters, and atomically publishes `security_audit_findings.v1` to `SECURITY_AUDIT_FINDINGS_OUT`. This mode performs no GitHub tracker, label, follow-up, last-SHA, or notification side effects; the default `issues` path remains the production weekly mode.
+- The security audit chunks explicitly scoped changed/prior-finding/fix-cycle files over 2 MiB, and in full scans every other filter-eligible oversized text file. Explicitly scoped files take the cap budget first and fail closed above the per-file or total cap, or when filtered as a credential/hidden path. Other oversized files that are binary (a NUL byte in the first 8 KiB) or would pass a cap, and in incremental scans every unscoped oversized file, are listed as a coverage note (`unscoped_oversized`, each with a `reason`).
 - On a Codex execution failure, `scripts/security_audit.sh` emits only a sanitized stderr tail (at most 40 lines and 4,096 rendered bytes) between `security-audit: codex-stderr-tail begin/end` markers and adds `provider=402|401|429|5xx|unknown` to the existing failure line; successful runs emit no tail.
 - `.github/workflows/workflow-log-analysis.yml` now also has a source-repo-only weekly retro path (cron `0 9 * * 1`, gated by `WORKFLOW_RETRO_ENABLED`, default `true`). `WORKFLOW_RETRO_CRON` defaults to the same cron string and must stay in sync with the trigger because GitHub does not interpolate vars into `on.schedule`. The workflow builds retro context with `scripts/workflow_retro.py`, renders the narrative through `prompts/mode-workflow-analysis.txt` in retro mode using `WORKFLOW_RETRO_MODEL` / `WORKFLOW_RETRO_REASONING` (defaults `openai/gpt-6-luna` / `medium`), and posts into the stable `AI Workflow Weekly Retro` tracker issue (`ai:retro`, marker `<!-- ai:retro-tracker:v1 -->`). Zero-activity windows (no workflow runs and no merged PRs; `has_activity: false` in the `workflow_retro.v1` JSON) skip the LLM pass and the tracker comment when `WORKFLOW_RETRO_SKIP_IF_NO_ACTIVITY=true` (default), leaving only a `WORKFLOW_RETRO_SKIP_V1:` line in the run log and no Telegram alert. After the source-repo retro, the `Consumer retro fan-out` step (gated by `WORKFLOW_RETRO_CONSUMER_FANOUT_ENABLED`, default `true`) runs `scripts/workflow_retro_fanout.sh`: for each repo in `.github/ai/consumer_repos.json` (source repo excluded) it builds a per-repo retro from the same collect-logs artifact, honors the consumer's own `WORKFLOW_RETRO_ENABLED` repo var (one fail-open `gh api` GET per consumer per week), applies the same no-activity skip, and upserts the week-marked comment on that consumer's `AI Workflow Weekly Retro` tracker via `GH_PAT` (§14 repo scope). Per-repo outcomes are logged as `WORKFLOW_RETRO_FANOUT_V1: repo=… status=posted|refreshed|up_to_date|skipped_no_activity|skipped_disabled|failed`; individual failures fail open and the step errors only when every attempted consumer fails. Both `.github/workflows/internal-clarify.yml` (source repo) and the consumer-facing gate in `.github/workflows/clarify.yml` skip `ai:retro` / `ai:security-audit` issues so tracker upkeep never recurses into the clarify/plan pipeline.
 - `scripts/orchestrate_poll_process.sh` gates last-resort `orchestrator/project-*` branch rebuilds behind `BRANCH_REBUILD_ENABLED`, `BRANCH_REBUILD_THRESHOLD_HOURS`, and `BRANCH_REBUILD_COOLDOWN_HOURS`. Audit snapshots are persisted as `BranchRebuildAuditV1` in `ai-memory/schemas/branch_rebuild_audit.v1.json` (this shipped artifact supersedes the old plan placeholder name `BRANCH_REBUILD_AUDIT_V1`; there is no literal runtime marker with that string).
