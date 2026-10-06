@@ -111,6 +111,7 @@ env:
   # the same base that edit the same files (scripts/review_merge_train.sh).
   MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
   MERGE_TRAIN_MAX_OLDER_PRS: ${{ vars.MERGE_TRAIN_MAX_OLDER_PRS || '20' }}
+  MERGE_TRAIN_IGNORE_PATHS: ${{ vars.MERGE_TRAIN_IGNORE_PATHS || '.ai/.workspace_source_manifest.txt' }}
   OPENCODE_VERSION: ${{ vars.OPENCODE_VERSION || '1.18.23' }}
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
   UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}
@@ -3750,9 +3751,10 @@ jobs:
             # modifications in the worktree, mirroring the `reset --hard`
             # in the sibling branch above. The "Initialize/Finalize
             # workspace contents" steps materialize the source tree into
-            # this worktree and regenerate the gitignored-but-tracked
-            # runtime artifact .ai/.workspace_source_manifest.txt. Without
-            # -f, a plain `git checkout -B` aborts with "Your local changes
+            # this worktree and regenerate the gitignored runtime artifact
+            # .ai/.workspace_source_manifest.txt (still tracked on older
+            # branches). Without -f, a plain `git checkout -B` can abort on
+            # older branches with "Your local changes
             # to the following files would be overwritten by checkout"
             # whenever the target branch's committed copy of that manifest
             # differs from the index's (e.g. a cross-base PR whose base is
@@ -5437,9 +5439,9 @@ jobs:
         if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          # Kill switch for the deterministic union-merge of the generated
-          # .ai/.workspace_source_manifest.txt (see the "Deterministic
-          # union-merge" block in scripts/review_conflict_prepare.sh).
+          # Kill switch for deterministic resolution of conflicts on the generated
+          # .ai/.workspace_source_manifest.txt (union-merge or deletion in
+          # scripts/review_conflict_prepare.sh).
           # Default true; set the repo var to 'false' to route manifest
           # conflicts back through the Codex resolver.
           CONFLICT_MANIFEST_UNION_ENABLED: ${{ vars.CONFLICT_MANIFEST_UNION_ENABLED || 'true' }}

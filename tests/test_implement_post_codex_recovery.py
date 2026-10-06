@@ -38,6 +38,52 @@ def _implement_commit_script_text() -> str:
 	return IMPLEMENT_COMMIT_SCRIPT.read_text(encoding="utf-8")
 
 
+def test_generated_manifest_staging_excludes_modifications_but_accepts_deletion(tmp_path: Path) -> None:
+	text = _implement_commit_script_text()
+	preflight = _extract_run_script("Preflight destructive-commit guard")
+	path = ".ai/.workspace_source_manifest.txt"
+	# The real commit and its temporary-index preflight project the same paths.
+	start = "add_u_excludes=(':!node_modules'"
+	end = 'git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}"'
+	commit_stage = text[text.index(start):text.index(end, text.index(start))]
+	preflight_stage = preflight[preflight.index(start):preflight.index('while IFS= read -r -d \'\' untracked_candidate', preflight.index(start))]
+	for stage in (commit_stage, preflight_stage):
+		assert stage.count(f"':!{path}'") == 2
+		assert f'git add -u -- "${{add_u_excludes[@]}}"' in stage
+		assert f'git rm --cached --quiet -- {path}' in stage
+		assert f'IMPLEMENT_GENERATED_MANIFEST_UNTRACKED path={path}' in stage
+
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_bootstrap_git_repo(repo)
+	manifest = repo / path
+	manifest.parent.mkdir()
+	manifest.write_text("original\n", encoding="utf-8")
+	_git(["git", "add", "-f", "--", path], cwd=repo)
+	_git(["git", "commit", "-qm", "manifest"], cwd=repo)
+	# Exercise the shipped block, not a reconstructed staging command.
+	stage = "set -euo pipefail\nis_self_repo=true\n" + commit_stage + "\n"
+	for deleted in (False, True):
+		if deleted:
+			manifest.unlink()
+		else:
+			manifest.write_text("regenerated\n", encoding="utf-8")
+		result = subprocess.run(["bash", "-c", stage], cwd=repo, env=_isolated_test_env({"GITHUB_REPOSITORY": "shubhodeep1/coding-workflows"}, cwd=repo), capture_output=True, text=True)
+		assert result.returncode == 0, (result.stdout, result.stderr)
+		staged = subprocess.run(["git", "diff", "--cached", "--name-status"], cwd=repo, env=_isolated_test_env(cwd=repo), check=True, capture_output=True, text=True).stdout
+		assert staged == (f"D\t{path}\n" if deleted else "")
+		assert ("IMPLEMENT_GENERATED_MANIFEST_UNTRACKED" in result.stdout) == deleted
+
+
+def test_review_commit_paths_exclude_generated_manifest() -> None:
+	pathspec = "':!.ai/.workspace_source_manifest.txt'"
+	review = (REPO_ROOT / "scripts" / "review_commit_changes.sh").read_text(encoding="utf-8")
+	judge = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
+	assert all(pathspec in line for line in review.splitlines() if "git add -u --" in line or "git ls-files --others --exclude-standard -z -- ':!node_modules'" in line)
+	assert "node_modules/*|.ai/.workspace_source_manifest.txt) continue" in review
+	assert all(pathspec in line for line in judge.splitlines() if "git add -u --" in line)
+
+
 def _implement_guard_handler_text() -> str:
 	return IMPLEMENT_GUARD_HANDLER.read_text(encoding="utf-8")
 

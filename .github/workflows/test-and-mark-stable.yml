@@ -3882,8 +3882,9 @@ jobs:
           # fails `no_run` although the cancel wrapper is healthy. Run
           # 35672590166 hit exactly that: the forward-merge of stable into
           # main landed 75 s before the close and rewrote the same hunk of
-          # .ai/.workspace_source_manifest.txt that the smoke PR's workspace
-          # init had regenerated. The scheduled cleanup sweep (#4258) is the
+          # then-tracked .ai/.workspace_source_manifest.txt that the smoke PR's
+          # workspace init had regenerated. New smoke PRs no longer commit it.
+          # The scheduled cleanup sweep (#4258) is the
           # production backstop for such closures, not a substitute for the
           # close trigger, and its observed cadence (median ~12 min) exceeds
           # PHASE7_WAIT_BUDGET_MINUTES, so a conflicted PR would still fail.

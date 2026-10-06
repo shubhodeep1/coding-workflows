@@ -2163,9 +2163,9 @@ __EDIT_DISCIPLINE__
         unset _rb_origin_url
 
         if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
-          git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/openrouter_prompt_cache.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
+          git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/openrouter_prompt_cache.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts' ':!.ai/.workspace_source_manifest.txt'
         else
-          git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
+          git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts' ':!.ai/.workspace_source_manifest.txt'
         fi
         echo "Staged files before commit:"
         STAGED_FILES="$(git diff --cached --name-only || true)"

@@ -54,7 +54,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
    model reviewer + consolidator + editor loop on PR changes. Two pre-review
    gates run first: the merge train (`scripts/review_merge_train.sh gate`,
    `MERGE_TRAIN_ENABLED`) queues an `ai/issue-*` PR behind older open
-   `ai/issue-*` PRs on the same base that edit the same files (label
+   `ai/issue-*` PRs on the same base that edit the same non-ignored files
+   (`MERGE_TRAIN_IGNORE_PATHS` defaults to the generated manifest; label
    `ai:merge-queued`; released by `cancel_on_pr_close.yml` on close and by
    `orchestrate_poll.yml` every tick; managed/standalone conflict and stall
    recovery treat the label as an intentional wait), and the merge-topology gate hands a
@@ -2068,7 +2069,8 @@ depend on it.
 | `REVIEW_APPROVAL_RUBRIC_ENABLED` | `false` | Enable logical review-state output from the review-blocked judge and outbound PR-review mapping through `post_review_comment.sh --review-state`. |
 | `REVIEW_BREAK_GLASS_ENABLED` | `false` | Enable the anchored `@codex break-glass` override scan; when active it downgrades only the outbound `REQUEST_CHANGES` event to comment-only. |
 | `CI_POLL_TEST_SHARDS` | `4` | Parallel local shards for the orchestrate-poll module in each group of CI's `orchestrate-poll` matrix and in the release gates' `validate-scripts` job. `1` is sequential; invalid values warn and fall back to `1`. |
-| `CONFLICT_MANIFEST_UNION_ENABLED` | `true` | Deterministically resolve two-sided `.ai/.workspace_source_manifest.txt` content conflicts before the model resolver; manifest-only conflicts are committed as `[ai-merge-resolve]` and skip the model. Integration-sync branches and delete/modify conflicts remain model-resolved. |
+| `CONFLICT_MANIFEST_UNION_ENABLED` | `true` | Deterministically resolve two-sided `.ai/.workspace_source_manifest.txt` content conflicts by set union, or modify/delete conflicts as deletions, before the model resolver; manifest-only conflicts are committed as `[ai-merge-resolve]` and skip the model. Integration-sync branches remain model-resolved. |
+| `MERGE_TRAIN_IGNORE_PATHS` | `.ai/.workspace_source_manifest.txt` | Exact repo-relative paths excluded from merge-train overlap checks in gate and release. Comma/newline-separated; `none` (or an empty helper env value) restores legacy behavior. Glob entries are rejected. |
 | `REVIEW_RESOLVE_THREADS_ENABLED` | `true` | Resolve PR review threads the editor audited in its `PR comment audit:` section. Keyed on comment id, so two comments at one path cannot resolve each other; `ignored` entries get the editor's reason as a reply before resolving. |
 | `REVIEW_RESOLVE_THREADS_MAX` | `50` | Per-run cap on resolved review threads; anything above it is warned about and left open. |
 | `SWEEP_STALE_QUEUED_MINUTES` | `120` | Age past which a still-`queued` review run stops suppressing a sweep dispatch (wedged-run recovery). `in_progress` runs are never discounted; `0` disables the cutoff. |

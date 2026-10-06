@@ -101,7 +101,7 @@ def test_prepare_preserves_separate_resolver_path_classes() -> None:
 	fingerprint_snapshot = 'RESOLVER_FINGERPRINT_ONLY_PATHS_FILE="${RUNTIME_DIR}/resolver_fingerprint_only_paths.txt"'
 	assert initial_snapshot in text
 	assert fingerprint_snapshot in text
-	assert text.index(initial_snapshot) < text.index("# Deterministic union-merge")
+	assert text.index(initial_snapshot) < text.index("# Deterministic resolution for the generated workspace manifest")
 	assert 'cp "${_fp_new_tmp}" "${RESOLVER_FINGERPRINT_ONLY_PATHS_FILE}"' in text
 	assert initial_snapshot in resolve_text
 	assert fingerprint_snapshot in resolve_text
@@ -138,9 +138,10 @@ def test_prepare_excludes_integration_sync_branches() -> None:
 def test_prepare_requires_two_sided_content_conflict() -> None:
 	block = _union_block(_prepare_text())
 	assert "git ls-files -u --" in block and "*' 2 '*' 3 '*" in block, (
-		"union-merge must require index stages 2 AND 3 (two-sided content conflict); "
-		"delete/modify shapes fall through to the Codex resolver"
+		"union-merge must require index stages 2 AND 3 (two-sided content conflict)"
 	)
+	assert "' 1 2 '|' 1 3 ')" in block
+	assert 'git rm --cached --quiet -- "${MANIFEST_UNION_PATH}"' in block
 
 
 def test_prepare_early_commit_branch_contract() -> None:
@@ -365,6 +366,60 @@ def test_union_merge_pipeline_functional() -> None:
 			f"union-merge must keep both sides' additions and honour theirs-side "
 			f"deletion of m.py; got: {got!r}"
 		)
+
+
+def test_manifest_modify_delete_resolution_commits_deletion() -> None:
+	block = _union_block(_prepare_text())
+	with tempfile.TemporaryDirectory() as tmp:
+		repo = Path(tmp) / "repo"
+		repo.mkdir()
+		env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_") and key != "BASH_ENV"}
+		manifest = repo / MANIFEST_PATH
+		manifest.parent.mkdir()
+		(repo / ".gitignore").write_text(f"{MANIFEST_PATH}\n", encoding="utf-8")
+		manifest.write_text("original\n", encoding="utf-8")
+
+		def git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+			return subprocess.run(["git", *args], cwd=repo, env=env, check=check, capture_output=True, text=True)
+
+		git("init", "-q", "-b", "main")
+		git("config", "user.name", "t")
+		git("config", "user.email", "t@t")
+		git("add", "-f", "--", MANIFEST_PATH)
+		git("add", ".gitignore")
+		git("commit", "-qm", "base")
+		git("checkout", "-q", "-b", "modified")
+		manifest.write_text("modified\n", encoding="utf-8")
+		git("commit", "-qam", "modified")
+		git("checkout", "-q", "main")
+		git("rm", "-q", MANIFEST_PATH)
+		git("commit", "-qm", "untrack")
+		merge = git("merge", "--no-commit", "--no-ff", "modified", check=False)
+		assert merge.returncode != 0
+		assert git("diff", "--name-only", "--diff-filter=U").stdout.strip() == MANIFEST_PATH
+		runtime = Path(tmp) / "runtime"
+		runtime.mkdir()
+		env_file = Path(tmp) / "github.env"
+		stage = f'''set -euo pipefail
+RUNTIME_DIR={runtime}
+GITHUB_ENV={env_file}
+RESOLVE_STASH={runtime}/stash
+_merge_stderr_file={runtime}/merge.stderr
+IS_WORKFLOW_SOURCE_REPO=true
+TARGET_BRANCH=ai/issue-6508
+RESOLVER_ALLOWLIST_FILE={runtime}/allowlist
+_resolver_allowlist_count=1
+printf '%s\\n' '{MANIFEST_PATH}' > "$RESOLVER_ALLOWLIST_FILE"
+{block}
+'''
+		result = subprocess.run(["bash", "-c", stage], cwd=repo, env=env, capture_output=True, text=True)
+		assert result.returncode == 0, (result.stdout, result.stderr)
+		assert "Manifest delete/modify: resolved" in result.stdout
+		assert git("log", "-1", "--format=%s").stdout.strip() == MERGE_RESOLVE_COMMIT_MESSAGE
+		assert len(git("rev-list", "--parents", "-n", "1", "HEAD").stdout.split()) == 3
+		assert git("ls-files", "--", MANIFEST_PATH).stdout == ""
+		assert manifest.read_text(encoding="utf-8") == "modified\n"
+		assert env_file.read_text(encoding="utf-8") == "CONFLICT_RESOLVED=true\n"
 
 
 def main() -> int:

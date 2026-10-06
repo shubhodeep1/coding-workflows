@@ -199,11 +199,11 @@ if [ "${_resolver_allowlist_count}" -gt 0 ]; then
   sed 's/^/ - /' "${RESOLVER_ALLOWLIST_FILE}" || true
 fi
 
-# Deterministic union-merge for the generated workspace manifest.
+# Deterministic resolution for the generated workspace manifest.
 # .ai/.workspace_source_manifest.txt is a sorted, unique-line file
 # inventory written by workspace_init.sh's materialize_source_tree();
-# every AI PR that adds files appends lines to it, so any two
-# concurrently-open sibling PRs merging into a shared base conflict on
+# older branches may still track it, so two
+# concurrently-open sibling PRs merging into a shared base could conflict on
 # adjacent insertions with near-certainty (observed on PR #3909: three
 # resolver invocations in one day, each with the manifest as the ONLY
 # conflicted path).  For a sorted set-of-lines file the exact 3-way
@@ -214,7 +214,8 @@ fi
 # check: when it was the only conflicted path the merge is committed
 # below without any model invocation, and when other conflicts remain
 # the manifest is already staged in the merge index and drops out of
-# the resolver prompt/allowlist/snapshot naturally.
+# the resolver prompt/allowlist/snapshot naturally. When only one side
+# tracks it, remove it from the index but keep its generated worktree copy.
 #
 # Guards:
 #   - CONFLICT_MANIFEST_UNION_ENABLED (default true) is the kill
@@ -227,7 +228,8 @@ fi
 #   - Only a two-sided content conflict (index stages 2 AND 3 both
 #     present) is handled; base stage 1 absent is the add/add case,
 #     where the set algebra degenerates to plain union.  Delete/modify
-#     shapes fall through to the Codex resolver untouched.
+#     conflicts are resolved as deletions when one side has removed the
+#     tracked artifact; other conflict shapes go to the model.
 # LC_ALL=C for sort/comm matches Python's str sort in
 # materialize_source_tree() (bytewise over UTF-8 == code-point order),
 # so the merged file satisfies the manifest-sorting contract.
@@ -241,6 +243,7 @@ if [ "${CONFLICT_MANIFEST_UNION_ENABLED:-true}" = "true" ] \
       ;;
     *)
       _mu_stages="$(git ls-files -u -- "${MANIFEST_UNION_PATH}" | awk '{print $3}' | sort -u | tr '\n' ' ')"
+      _mu_resolved="false"
       case " ${_mu_stages}" in
         *' 2 '*' 3 '*)
           _mu_dir="$(mktemp -d)"
@@ -261,6 +264,23 @@ if [ "${CONFLICT_MANIFEST_UNION_ENABLED:-true}" = "true" ] \
           git diff --name-only --diff-filter=U | sort -u > "${RESOLVER_ALLOWLIST_FILE}" || true
           _resolver_allowlist_count="$(wc -l < "${RESOLVER_ALLOWLIST_FILE}" | tr -d '[:space:]')"
           echo "Manifest union-merge: resolved ${MANIFEST_UNION_PATH} deterministically (set-merge of base/ours/theirs); ${_resolver_allowlist_count} unmerged path(s) remain."
+          _mu_resolved="true"
+          ;;
+        ' 1 2 '|' 1 3 ')
+          if git rm --cached --quiet -- "${MANIFEST_UNION_PATH}"; then
+            git diff --name-only --diff-filter=U | sort -u > "${RESOLVER_ALLOWLIST_FILE}" || true
+            _resolver_allowlist_count="$(wc -l < "${RESOLVER_ALLOWLIST_FILE}" | tr -d '[:space:]')"
+            echo "Manifest delete/modify: resolved ${MANIFEST_UNION_PATH} as deletion (generated, gitignored runtime artifact); ${_resolver_allowlist_count} unmerged path(s) remain."
+            _mu_resolved="true"
+          else
+            echo "Manifest delete/modify: could not stage deletion; leaving ${MANIFEST_UNION_PATH} to the resolver."
+          fi
+          ;;
+        *)
+          echo "Manifest union-merge: ${MANIFEST_UNION_PATH} conflict is not a supported manifest conflict (index stages: ${_mu_stages:-none}); leaving it to the Codex resolver."
+          ;;
+      esac
+      if [ "${_mu_resolved}" = "true" ]; then
           if [ "${_resolver_allowlist_count}" -eq 0 ]; then
             # The manifest was the only conflict.  Commit the merge NOW,
             # while MERGE_HEAD is still in place, so this is a real
@@ -293,11 +313,7 @@ if [ "${CONFLICT_MANIFEST_UNION_ENABLED:-true}" = "true" ] \
             echo "Manifest union-merge: no other unmerged paths — committed deterministic merge resolution (push deferred); Codex resolver will be skipped."
             exit 0
           fi
-          ;;
-        *)
-          echo "Manifest union-merge: ${MANIFEST_UNION_PATH} conflict is not a two-sided content conflict (index stages: ${_mu_stages:-none}); leaving it to the Codex resolver."
-          ;;
-      esac
+      fi
       ;;
   esac
 fi

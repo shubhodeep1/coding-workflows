@@ -88,7 +88,7 @@ verify_resolver_index_complete_or_fail() {
 # Deterministic-resolution short-circuit: review_conflict_prepare.sh
 # commits the [ai-merge-resolve] merge itself when every unmerged path
 # was deterministically resolvable (currently: the
-# .ai/.workspace_source_manifest.txt union-merge) and signals that by
+# .ai/.workspace_source_manifest.txt union-merge or modify/delete resolution) and signals that by
 # writing CONFLICT_RESOLVED=true to $GITHUB_ENV.  The workflow step
 # gating (MERGE_CONFLICT == 'true') is deliberately unchanged, so this
 # second half still runs — exit before any model invocation.  Running
