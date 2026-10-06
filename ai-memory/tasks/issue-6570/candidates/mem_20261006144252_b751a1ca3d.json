@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should this 14-gap activation-fix issue be delivered?\nChoices:\nA) Convert it to an orchestrator project: decompose into one sub-issue per gap (P1, P2a/P2b, P3 \u2026 P11a, P11b, P12, P13 Phase A, P13 Phase B), each implementing its plan section exactly, with this issue as the tracking reference (RECOMMENDED)\nB) Keep it standalone and implement everything in one PR\nC) Keep it standalone, implement only one gap here (see Q2), and file the remaining gaps as separate standalone issues\n**Note:** B is very likely to exceed the implement time budget and the scope guard. It would also contradict the plan's own per-phase PR split.\nQ2: If gaps must be ordered or only one is done here (Q1:C), which goes first?\nChoices:\nA) Follow the plan's numbered order (P1 merge train first, then P2a/P2b, P3, \u2026) (RECOMMENDED)\nB) Stuck-state breakers first (P3, P6, P7, P8), then the rest in plan order\nC) Low-risk, self-contained items first (P9, P11a, P11b, P10), then the rest in plan order\n**Note:** under Q1:A, ordering only sets wave/dependency sequencing; any choice works with A.",
+  "fingerprint": "00b270283bfe85df4d880326fe69ce3b0639c6a081033765cae340cd59bfb012",
+  "lineage": {
+    "issue_number": 6570,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37480648567",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37480648567",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261006144252_b751a1ca3d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6570,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37480648567"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6570 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-06T14:42:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
