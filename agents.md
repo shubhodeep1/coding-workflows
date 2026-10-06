@@ -15,7 +15,8 @@ its consumer template) recognizes guarded git commands after nested control
 words, shell negation (`!`), and simple `case` arms. Since their effective
 directory is uncertain, pushes check the session checkout and request
 confirmation unless blocked; commits in that context remain warning-only
-when not blocked.
+when not blocked. An unresolvable explicit directory override instead asks
+for confirmation without checking the wrong checkout's PR history.
 
 ---
 
@@ -785,11 +786,12 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   `GIT_CONFIG_*` or `GIT_CONFIG` assignments, or an `env` wrapper, ask too:
   those per-command settings can affect the push destination, so the guard
   does not trust its stored URL or PR history for that push. Wrapped commits
-  are checked in the directory selected by `env -C` or `GIT_DIR`; a commit
-  from an ambiguous directory and an unparseable `env -S` command ask for
-  confirmation. A push from an unresolved directory (including an appended
-  `GIT_DIR+=` / `GIT_WORK_TREE+=`, whose value is never applied) is checked
-  against the session checkout, which can still block, and otherwise asks.
+  are checked in the directory selected by `env -C` or `GIT_DIR`; an explicit
+  commit directory override that cannot be resolved and an unparseable
+  `env -S` command ask for confirmation. A push from an unresolved directory
+  (including an appended `GIT_DIR+=` / `GIT_WORK_TREE+=`, whose value is never
+  applied) is checked against the session checkout, which can still block,
+  and otherwise asks.
   Leading redirections, including those after environment assignments, do
   not bypass commit/push detection. A spaced, quoted or escaped digit before a
   redirection (`2 >out`, `'2'>out`) is a push refspec with the normal check;
