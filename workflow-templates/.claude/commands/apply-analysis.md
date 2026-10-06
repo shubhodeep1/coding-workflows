@@ -4,7 +4,7 @@ $ARGUMENTS
 
 ## Procedure
 
-1. **Read project context.** Read `README.md`, `agents.md`, and `CLAUDE.md` at the repo root for naming/context needed to compose an accurate hand-off. This command makes no code changes, so `/db/contracts/*` reads are only needed if you must understand a collection name referenced in the docs.
+1. **Read project context.** Read the relevant sections of `README.md` and `agents.md` at the repo root (`CLAUDE.md` is already loaded) for naming/context needed to compose an accurate hand-off. This command makes no code changes, so `/db/contracts/*` reads are only needed if you must understand a collection name referenced in the docs.
 
 2. **Enumerate the analysis docs.** List the recommendation / analysis markdown docs under `analysis/` (e.g. `analysis/workflow-optimization-*.md`). Honor any `$ARGUMENTS` filter (a specific doc, a date, or a glob). **Exclude** non-recommendation files: state files (`last_collection_timestamp.txt`, `validation-selftest-status.json`) and prior reports (`recommendation-processing-report*.md`). Read each selected doc in full so the hand-off describes the work accurately and you can derive a good tracking-issue title. If the filter matches nothing — or `analysis/` holds no recommendation docs — **stop and report** that there is nothing to hand off; do **not** dispatch an empty run.
 
