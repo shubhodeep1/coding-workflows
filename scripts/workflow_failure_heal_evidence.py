@@ -1659,6 +1659,7 @@ def _cmd_scope_allowlist(args: argparse.Namespace) -> int:
 		if result["allowlist"]:
 			result["source"] = "plan"
 	except (ImportError, OSError, ValueError):
+		log("scope_allowlist source=none kept=0 rejected=0 reason=exception")
 		result = {"source": "none", "allowlist": []}
 	log(f"scope_allowlist source={result['source']} kept={len(result['allowlist'])} rejected={sum(reasons.values())} reasons={','.join(f'{key}:{reasons[key]}' for key in sorted(reasons))}")
 	print(json.dumps(result))

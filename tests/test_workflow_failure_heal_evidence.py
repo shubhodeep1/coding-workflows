@@ -715,7 +715,9 @@ def test_scope_allowlist_ignores_issue_body_and_requires_plan(tmp_path: Path, ca
 	assert json.loads(capsys.readouterr().out) == {"source": "plan", "allowlist": ["scripts/plan.py"]}
 	plan.unlink()
 	ev._cmd_scope_allowlist(args)
-	assert json.loads(capsys.readouterr().out) == {"source": "none", "allowlist": []}
+	output = capsys.readouterr()
+	assert json.loads(output.out) == {"source": "none", "allowlist": []}
+	assert "scope_allowlist source=none kept=0 rejected=0 reason=exception" in output.err
 	plan.write_text("no plan paths")
 	ev._cmd_scope_allowlist(args)
 	assert json.loads(capsys.readouterr().out) == {"source": "none", "allowlist": []}
