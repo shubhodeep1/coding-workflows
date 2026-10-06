@@ -1,0 +1,19 @@
+{
+  "entries": [
+    {
+      "context": "## \u26a0\ufe0f Runtime validation harness generation failed Template renderer preflight or subprocess (`scripts/render_validation_templates.py`) failed (exit 14). Common causes: failed dependency setup, de",
+      "cycle": 1,
+      "outcome": "failed",
+      "raw_conclusion": "failure",
+      "raw_status": "harness_error",
+      "recorded_at": "2026-10-06T07:44:24Z",
+      "run_attempt": 1,
+      "run_id": 37430977754,
+      "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37430977754",
+      "source": "orchestrate_poll.mark_validation_failed"
+    }
+  ],
+  "integration_sha": "c05a25c7dcec4539973a9c0dedb3b39a7ccb0f8b",
+  "repository": "shubhodeep1/coding-workflows",
+  "schema_version": "v1"
+}
