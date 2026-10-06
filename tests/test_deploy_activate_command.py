@@ -18,6 +18,7 @@ def test_cloudflare_preflight_and_deploy_boundaries(command: Path):
 	cloudflare = text.split("## Cloudflare Steps", 1)[1].split("## Output Format", 1)[0]
 	assert not raw_text.startswith("---")
 	assert "run the project's checks and `wrangler deploy --dry-run` (where available) first" not in cloudflare
+	assert "Optional local checks, including `--dry-run`" not in cloudflare
 	for required in (
 		"DEPLOY_SHA",
 		"defaultBranchRef",
@@ -37,6 +38,9 @@ def test_cloudflare_preflight_and_deploy_boundaries(command: Path):
 		assert required in cloudflare, (command, required)
 	assert "Never execute unmerged code with credentials" in text.split("## Rules", 1)[1]
 	assert "verified default-branch commit" in text.split("## Tool Access", 1)[1]
+	assert "When Wrangler and a safe sandbox are available, require a successful `wrangler deploy --dry-run`" in cloudflare
+	assert "a failed dry run blocks deployment" in cloudflare
+	assert "If no such isolation is available, skip local checks and rely on the check-runs" in cloudflare
 
 
 def test_shared_cloudflare_deploy_boundary():

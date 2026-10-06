@@ -11,7 +11,7 @@ A prompt audit found several commands that contradicted the repository. `/implem
 | Cloudflare credentials | `FUNTOKEN_IO_CF` (funtoken.io), `FT_GAMES_CF` (ft.games, 5m.fun) |
 | Additional template copies corrected | `validate-consumer-issue`, `implement-issue-claude` |
 
-What this means for consumer repos: the next `@stable` sync delivers the updated `CLAUDE.md` and template commands. Section numbers are unchanged, and no rule was loosened. `/validate-consumer-issue` now searches only relevant context, and `/implement-issue-claude` makes clear that the Claude label does not switch review off OpenCode. With a Cloudflare credential present, `/deploy-activate` runs Cloudflare reads directly and runs Worker deploys after you approve each step. You still set Worker secret values yourself, and §24.D operations still need a Q/A approval first.
+What this means for consumer repos: the next `@stable` sync delivers the updated `CLAUDE.md` and template commands. Section numbers are unchanged, and no rule was loosened. `/validate-consumer-issue` now searches only relevant context, and `/implement-issue-claude` makes clear that the Claude label does not switch review off OpenCode. With a Cloudflare credential present, `/deploy-activate` runs Cloudflare reads directly and runs Worker deploys after you approve each step. When Wrangler and a safe sandbox are available, a failed dry run blocks the deploy; without isolation, the command relies on GitHub check-runs. You still set Worker secret values yourself, and §24.D operations still need a Q/A approval first.
 
 ### For contributors
 

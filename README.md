@@ -69,7 +69,9 @@ Cloudflare Worker uploads under CLAUDE.md §24.C, including `/deploy-activate`,
 require a verified, clean commit on the protected default branch. Pre-deploy
 checks run without session credentials in a no-egress sandbox, or use the
 pinned commit's GitHub check-runs when isolation is unavailable; failing or
-pending checks block deployment. Only the matching site's Cloudflare credential
+pending checks block deployment. When Wrangler and a safe sandbox are available,
+`/deploy-activate` also requires a successful dry run before the Worker deploy;
+a failed dry run blocks deployment. Only the matching site's Cloudflare credential
 is passed to the deploy process. The provided tokens are account-owned, not
 Worker-scoped; obtaining a narrower token requires operator provisioning.
 
