@@ -581,9 +581,13 @@ def _heal_issue(number: int, *, state: str, fp: str, gen: int = 1, root: str | N
 	return {
 		"number": number,
 		"state": state,
-		"body": f"<!-- {heal.MARKER_PREFIX}fp={fp} -->\n<!-- {heal.MARKER_PREFIX}gen={gen} -->\n<!-- {heal.MARKER_PREFIX}root={root or fp} -->",
+		"body": (f"<!-- {heal.MARKER_PREFIX}fp={fp} -->\n<!-- {heal.MARKER_PREFIX}gen={gen} -->\n"
+			f"<!-- {heal.MARKER_PREFIX}root={root or fp} -->\n<!-- {heal.MARKER_PREFIX}source={SELF_REPO}#{number} -->\n"
+			f"<!-- {heal.MARKER_PREFIX}classification=workflow-defect -->\nbody"),
 		"created_at": created.strftime("%Y-%m-%dT%H:%M:%SZ"),
 		"html_url": f"https://github.com/{SELF_REPO}/issues/{number}",
+		"repository": SELF_REPO,
+		"author_association": "OWNER",
 		"pull_request": False,
 	}
 
@@ -594,7 +598,8 @@ def test_budget_decision_matrix() -> None:
 	other = "2" * 64
 	assert heal.budget_decision([], fp=fp, now=now) == {"action": "open", "gen": 1, "root": fp, "open_count": 0, "today_count": 0, "source_lineage": "none"}
 
-	dup = heal.budget_decision([_heal_issue(10, state="open", fp=fp), _heal_issue(11, state="open", fp=fp, gen=2)], fp=fp, now=now)
+	dup = heal.budget_decision([_heal_issue(10, state="open", fp=fp, created=now - timedelta(days=3)),
+		_heal_issue(11, state="open", fp=fp, gen=2, created=now - timedelta(days=2))], fp=fp, now=now)
 	assert dup["action"] == "duplicate" and dup["existing_issue"] == 11
 	cross_repo_dup = heal.budget_decision(
 		[
@@ -608,12 +613,16 @@ def test_budget_decision_matrix() -> None:
 	assert cross_repo_dup["existing_issue"] == 5
 	assert cross_repo_dup["existing_repo"] == CONSUMER_REPO
 
-	lineage = heal.budget_decision([_heal_issue(5, state="closed", fp=fp, gen=1), _heal_issue(6, state="closed", fp=fp, gen=2, root=other)], fp=fp, now=now)
+	lineage = heal.budget_decision([_heal_issue(4, state="closed", fp=other, created=now - timedelta(days=4)),
+		_heal_issue(5, state="closed", fp=fp, gen=1),
+		_heal_issue(6, state="closed", fp=fp, gen=2, root=other, created=now - timedelta(days=2))], fp=fp, now=now)
 	assert lineage == {"action": "open", "gen": 3, "root": other, "open_count": 0, "today_count": 0, "source_lineage": "none"}
 	cross_repo_lineage = heal.budget_decision(
 		[
+			_heal_issue(1, state="closed", fp=other, created=now - timedelta(days=4)),
+			_heal_issue(2, state="closed", fp=fp, gen=2, root=other, created=now - timedelta(days=3)),
 			dict(_heal_issue(500, state="closed", fp=fp, gen=1), repository=SELF_REPO),
-			dict(_heal_issue(5, state="closed", fp=fp, gen=3, root=other), repository=CONSUMER_REPO),
+			dict(_heal_issue(5, state="closed", fp=fp, gen=3, root=other, created=now - timedelta(days=2)), repository=CONSUMER_REPO),
 		],
 		fp=fp,
 		now=now,
@@ -622,7 +631,9 @@ def test_budget_decision_matrix() -> None:
 	assert cross_repo_lineage["prior_issue"] == 5
 	assert cross_repo_lineage["prior_repo"] == CONSUMER_REPO
 
-	capped = heal.budget_decision([_heal_issue(6, state="closed", fp=fp, gen=3)], fp=fp, now=now)
+	capped = heal.budget_decision([_heal_issue(4, state="closed", fp=fp, created=now - timedelta(days=4)),
+		_heal_issue(5, state="closed", fp=fp, gen=2, created=now - timedelta(days=3)),
+		_heal_issue(6, state="closed", fp=fp, gen=3, created=now - timedelta(days=2))], fp=fp, now=now)
 	assert capped["action"] == "escalate" and capped["gen"] == 4 and capped["prior_issue"] == 6
 
 	# An inherited generation without a verifiable source issue is ignored
@@ -647,7 +658,7 @@ def test_budget_decision_matrix() -> None:
 
 def _sourced_heal_issue(number: int, *, state: str, fp: str, source: str, gen: int = 1, root: str | None = None, repository: str | None = None) -> dict:
 	issue = _heal_issue(number, state=state, fp=fp, gen=gen, root=root)
-	issue["body"] += f"\n<!-- {heal.MARKER_PREFIX}source={source} -->"
+	issue["body"] = issue["body"].replace(f"source={SELF_REPO}#{number}", f"source={source}")
 	if repository:
 		issue["repository"] = repository
 	return issue
@@ -683,20 +694,24 @@ def test_budget_decision_keys_review_failures_on_source_pr() -> None:
 	assert heal.budget_decision([open_same_pr], fp=fp, source_key="not a key", now=now)["action"] == "open"
 
 	# Q3: a closed heal issue from the same PR continues its lineage.
+	root_issue = _heal_issue(4300, state="closed", fp=root, created=now - timedelta(days=4))
 	closed_same_pr = _sourced_heal_issue(4392, state="closed", fp=other, source=key, gen=2, root=root, repository=SELF_REPO)
-	again = heal.budget_decision([closed_same_pr], fp=fp, source_key=key, now=now)
+	closed_same_pr["created_at"] = (now - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+	again = heal.budget_decision([root_issue, closed_same_pr], fp=fp, source_key=key, now=now)
 	assert again == {"action": "open", "gen": 3, "root": root, "open_count": 0, "today_count": 0, "source_lineage": "none"}
-	capped = heal.budget_decision([dict(closed_same_pr, body=closed_same_pr["body"].replace("gen=2", "gen=3"))], fp=fp, source_key=key, now=now)
+	second_issue = _heal_issue(4301, state="closed", fp=other, gen=2, root=root, created=now - timedelta(days=3))
+	capped = heal.budget_decision([root_issue, second_issue, dict(closed_same_pr, body=closed_same_pr["body"].replace("gen=2", "gen=3"))], fp=fp, source_key=key, now=now)
 	assert capped["action"] == "escalate" and capped["gen"] == 4 and capped["prior_issue"] == 4392 and capped["prior_repo"] == SELF_REPO
 
 	# Q2: a failure on the fix PR of heal issue #4338 (branch ai/issue-4338)
 	# continues #4338's lineage, open or closed.
 	for state in ("open", "closed"):
 		healed = _sourced_heal_issue(4338, state=state, fp=other, source=f"{SELF_REPO}#4323", gen=2, root=root, repository=SELF_REPO)
-		linked = heal.budget_decision([healed], fp=fp, source_key=key, linked_heal_issue=4338, now=now)
+		healed["created_at"] = (now - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+		linked = heal.budget_decision([root_issue, healed], fp=fp, source_key=key, linked_heal_issue=4338, now=now)
 		assert linked["action"] == "open" and linked["gen"] == 3 and linked["root"] == root
 		deeper = dict(healed, body=healed["body"].replace("gen=2", "gen=3"))
-		escalated = heal.budget_decision([deeper], fp=fp, source_key=key, linked_heal_issue=4338, now=now)
+		escalated = heal.budget_decision([root_issue, second_issue, deeper], fp=fp, source_key=key, linked_heal_issue=4338, now=now)
 		assert escalated["action"] == "escalate" and escalated["prior_issue"] == 4338
 	# The linked issue must live in the PR's repository.
 	elsewhere = _sourced_heal_issue(4338, state="closed", fp=other, source="x/y#1", gen=3, repository=CONSUMER_REPO)
@@ -704,7 +719,8 @@ def test_budget_decision_keys_review_failures_on_source_pr() -> None:
 	# The deepest candidate across fingerprint, source and link decides.
 	mixed = [
 		_heal_issue(10, state="closed", fp=fp, gen=1),
-		_sourced_heal_issue(11, state="closed", fp=other, source=key, gen=2, root=root, repository=SELF_REPO),
+		root_issue,
+		closed_same_pr,
 	]
 	assert heal.budget_decision(mixed, fp=fp, source_key=key, now=now)["gen"] == 3
 	# A verified inherited source generation (issue reports) still takes precedence.
@@ -802,12 +818,34 @@ def test_budget_decision_verifies_inherited_lineage() -> None:
 	third_source = f"{CONSUMER_REPO}#43"
 	assert decide([root_issue, third], 3, source_issue=third_source)["source_lineage_reason"] == "lineage_gap"
 	assert decide([root_issue, listed, third], 3, source_issue=third_source)["source_lineage"] == "verified"
+	# Two generation-2 candidates can arrive in either repository order; use
+	# the latest one before the source so the generation-1 issue can back it.
+	stale_second = _lineage_issue(8, fp="6" * 64, gen=2, root=root, repository=SELF_REPO, created=now - timedelta(days=4))
+	assert decide([stale_second, root_issue, listed, third], 3, source_issue=third_source)["source_lineage"] == "verified"
 	# Real caps still apply to a verified lineage.
 	assert decide([root_issue, listed], 2, max_depth=2)["action"] == "escalate"
 	# A gen-1 source issue verifies on its own; a Bot author (flat user_type) is trusted.
 	bot_root = _lineage_issue(42, fp=root, gen=1, root=root, repository=CONSUMER_REPO, author_association="NONE", user_type="Bot")
 	single = decide([bot_root], 1)
 	assert single["source_lineage"] == "verified" and single["gen"] == 2
+
+
+def test_budget_fingerprint_fallback_rejects_unverified_issue_markers() -> None:
+	now = datetime(2026, 9, 20, 12, tzinfo=timezone.utc)
+	fp = "1" * 64
+	root = "3" * 64
+	for forged in (
+		_lineage_issue(42, fp=fp, gen=999, root=root, repository=SELF_REPO),
+		_lineage_issue(42, fp=fp, gen=999, root=root, repository=SELF_REPO, author_association="NONE"),
+		_lineage_issue(42, fp=fp, gen=999, root=root, repository=SELF_REPO, body_prefix="User text\n"),
+	):
+		fallback = heal.budget_decision([forged], fp=fp, now=now)
+		assert fallback["action"] == "open" and fallback["gen"] == 1 and fallback["root"] == fp
+		assert heal.budget_decision([dict(forged, state="open")], fp=fp, now=now)["action"] == "open"
+	root_issue = _lineage_issue(7, fp=root, gen=1, root=root, repository=SELF_REPO, created=now - timedelta(days=3))
+	second_issue = _lineage_issue(42, fp=fp, gen=2, root=root, repository=SELF_REPO, created=now - timedelta(days=1))
+	fallback = heal.budget_decision([root_issue, second_issue], fp=fp, now=now)
+	assert fallback["action"] == "open" and fallback["gen"] == 3 and fallback["root"] == root
 
 
 def test_validate_payload_keeps_lineage_only_for_issue_reports() -> None:
@@ -1569,8 +1607,10 @@ def test_intake_deduplicates_and_escalates_consumer_owned_heal_issues() -> None:
 	assert "issues_created" not in state_after
 	assert any(comment["path"] == f"repos/{CONSUMER_REPO}/issues/31/comments" for comment in state_after["comments_posted"])
 
-	consumer_capped = _heal_issue(32, state="closed", fp=fp, gen=3)
-	state = _intake_state(heal_issues_by_repo={SELF_REPO: [], CONSUMER_REPO: [consumer_capped]})
+	consumer_capped = _heal_issue(32, state="closed", fp=fp, gen=3, created=datetime(2026, 9, 3, tzinfo=timezone.utc))
+	consumer_chain = [_heal_issue(30, state="closed", fp=fp),
+		_heal_issue(31, state="closed", fp=fp, gen=2, created=datetime(2026, 9, 2, tzinfo=timezone.utc))]
+	state = _intake_state(heal_issues_by_repo={SELF_REPO: [], CONSUMER_REPO: [*consumer_chain, consumer_capped]})
 	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert f"prior_repo={CONSUMER_REPO}" in result.stdout
@@ -1606,7 +1646,9 @@ def test_intake_duplicate_records_occurrence() -> None:
 def test_intake_lineage_cap_escalates_prior_issue() -> None:
 	signature = heal.error_signature(heal.filter_log(JOB_LOG))
 	fp = heal.fingerprint("AI Implement", "Run codex", signature)
-	state = _intake_state(heal_issues=[_heal_issue(31, state="closed", fp=fp, gen=3)])
+	state = _intake_state(heal_issues=[_heal_issue(29, state="closed", fp=fp),
+		_heal_issue(30, state="closed", fp=fp, gen=2, created=datetime(2026, 9, 2, tzinfo=timezone.utc)),
+		_heal_issue(31, state="closed", fp=fp, gen=3, created=datetime(2026, 9, 3, tzinfo=timezone.utc))])
 	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert "WORKFLOW_HEAL escalate reason=lineage_cap gen=4 max=3" in result.stdout
@@ -1995,14 +2037,18 @@ def test_intake_autofix_failure_on_heal_fix_pr_continues_lineage() -> None:
 	job_logs = {"9001": "2026-09-21T01:49:26.000Z ##[error]Process completed with exit code 1.\n"}
 	root = "8" * 64
 	healed = _sourced_heal_issue(4173, state="closed", fp="9" * 64, source=f"{CONSUMER_REPO}#4100", gen=2, root=root)
-	state = _intake_state(jobs=jobs, job_logs=job_logs, heal_issues_by_repo={SELF_REPO: [], CONSUMER_REPO: [healed]})
+	healed["created_at"] = "2026-09-03T00:00:00Z"
+	first = _heal_issue(4100, state="closed", fp=root)
+	state = _intake_state(jobs=jobs, job_logs=job_logs, heal_issues_by_repo={SELF_REPO: [first], CONSUMER_REPO: [healed]})
 	result, state_after, _ = _run_intake(_autofix_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
 	assert result.returncode == 0, result.stderr + result.stdout
 	created = state_after["issues_created"][0]
 	assert f"{heal.MARKER_PREFIX}gen=3" in created["body"] and f"{heal.MARKER_PREFIX}root={root}" in created["body"]
 
 	capped = dict(healed, body=healed["body"].replace("gen=2", "gen=3"))
-	state = _intake_state(jobs=jobs, job_logs=job_logs, heal_issues_by_repo={SELF_REPO: [], CONSUMER_REPO: [capped]})
+	second = _heal_issue(4101, state="closed", fp="9" * 64, gen=2, root=root,
+		created=datetime(2026, 9, 2, tzinfo=timezone.utc))
+	state = _intake_state(jobs=jobs, job_logs=job_logs, heal_issues_by_repo={SELF_REPO: [first, second], CONSUMER_REPO: [capped]})
 	result, state_after, _ = _run_intake(_autofix_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert "WORKFLOW_HEAL escalate reason=lineage_cap gen=4 max=3" in result.stdout

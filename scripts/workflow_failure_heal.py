@@ -570,6 +570,7 @@ def verify_source_lineage(
 	expected_gen = listed_gen - 1
 	while expected_gen:
 		predecessor = None
+		predecessor_created = None
 		for candidate in listed:
 			if candidate is entry or not _trusted_heal_author(candidate):
 				continue
@@ -583,11 +584,12 @@ def verify_source_lineage(
 				continue
 			if expected_gen == 1 and candidate_markers.get("fp") != listed_root:
 				continue
-			predecessor = candidate
-			source_created = candidate_created
-			break
+			if predecessor_created is None or candidate_created > predecessor_created:
+				predecessor = candidate
+				predecessor_created = candidate_created
 		if predecessor is None:
 			return _reject("lineage_gap")
+		source_created = predecessor_created
 		expected_gen -= 1
 	return {"verified": True, "reason": "", "gen": listed_gen, "root": listed_root}
 
@@ -1691,14 +1693,21 @@ def budget_decision(
 		number = _positive_int(issue.get("number"))
 		if number is None:
 			continue
-		markers = parse_heal_markers(issue.get("body"))
 		issue_repository = issue.get("repository") if is_valid_repo_slug(issue.get("repository")) else ""
+		markers = _canonical_heal_markers(issue.get("body")) if _trusted_heal_author(issue) else None
 		state = str(issue.get("state") or "").lower()
 		created = _parse_iso(issue.get("created_at"))
 		if created is not None and created >= day_start:
 			created_today += 1
-		same_source = bool(source_key) and markers.get("source") == source_key
+		same_source = bool(source_key) and markers is not None and markers.get("source") == source_key
 		is_linked_heal_issue = linked_heal_issue is not None and number == linked_heal_issue and issue_repository in (linked_heal_repo, "")
+		if markers and (markers.get("fp") == fp or same_source or is_linked_heal_issue) and not verify_source_lineage(
+			issues, source_issue=f"{issue_repository}#{number}",
+			source_gen=_positive_int(markers.get("gen")), source_root=markers.get("root"),
+		)["verified"]:
+			markers = None
+		markers = markers or {}
+		same_source = bool(source_key) and markers.get("source") == source_key
 		if state == "open":
 			open_issues.append(issue)
 			if markers.get("fp") == fp:
@@ -1722,14 +1731,15 @@ def budget_decision(
 		duplicate = source_duplicate
 		duplicate_match = "source"
 	if duplicate is not None:
+		duplicate_markers = _canonical_heal_markers(duplicate.get("body")) or {}
 		return {
 			"action": "duplicate",
 			"match": duplicate_match,
 			"existing_issue": _positive_int(duplicate.get("number")),
 			"existing_url": sanitize_text(duplicate.get("html_url"), 300),
 			"existing_repo": duplicate.get("repository") if is_valid_repo_slug(duplicate.get("repository")) else "",
-			"gen": _positive_int(parse_heal_markers(duplicate.get("body")).get("gen")) or 1,
-			"root": parse_heal_markers(duplicate.get("body")).get("root") or fp,
+			"gen": _positive_int(duplicate_markers.get("gen")) or 1,
+			"root": duplicate_markers.get("root") or fp,
 			"open_count": len(open_issues),
 			"today_count": created_today,
 			**lineage_fields,

@@ -10,7 +10,7 @@ An escalated heal issue carries `<!-- workflow-failure-heal:gen=… -->` / `root
 - its body starts with the canonical five-line marker header, and that header's `gen` / `root` equal the payload;
 - every earlier generation has a trusted heal issue of the same lineage, filed before its successor. A generation-1 issue must be its own root.
 
-When any check fails, the claim is ignored and lineage comes from other issues with the same fingerprint, not the rejected source's own markers. The open-issue and per-day caps still apply. The payload validator now drops `source_gen` / `source_root` from non-issue reports and when only one of the two is present.
+When any check fails, the claim is ignored and lineage comes from other trusted heal issues with the same fingerprint and a complete chronological chain, not the rejected source's own markers. Untrusted or non-canonical markers cannot determine a generation, including through the duplicate path. The open-issue and per-day caps still apply. The payload validator now drops `source_gen` / `source_root` from non-issue reports and when only one of the two is present.
 
 | The numbers that matter | Value |
 | --- | --- |
