@@ -7577,11 +7577,11 @@ def test_review_isolation_transfer_rejection_names_path_and_rule() -> None:
 
 
 def test_review_isolation_transfer_prunes_root_dot_and_case_variant_build_dirs() -> None:
-	# Root .claude/ and excluded build/cache names are pruned, not rejected.
+	# Root .claude/ and exact excluded names are pruned; case variants fail closed.
 	def mutate(source: Path, _root: Path) -> None:
 		(source / ".claude/commands").mkdir(parents=True)
 		(source / ".claude/commands/audit-plans.md").write_text("x\n")
-		for rel in ("build", "Build", "scripts/Dist", "scripts/nested/Coverage"):
+		for rel in ("build", "scripts/dist", "scripts/nested/coverage"):
 			(source / rel).mkdir(parents=True)
 			(source / rel / "x.py").write_text("x\n")
 
@@ -7591,6 +7591,14 @@ def test_review_isolation_transfer_prunes_root_dot_and_case_variant_build_dirs()
 	assert host_after == host_before
 	assert ".claude/commands/audit-plans.md" not in host_after
 	assert not any(path.endswith("/x.py") for path in host_after)
+	for variant, depth in (("Build", "1"), ("scripts/Dist", "2"), ("scripts/nested/Coverage", "3+")):
+		result, reason, host_before, host_after, _leftovers = _review_isolation_transfer_case(
+			lambda source, _root: (source / variant).mkdir(parents=True),
+		)
+		assert result.returncode == 1
+		assert f"reason=unsafe_directory category=excluded_name_variant depth={depth}" in result.stderr
+		assert reason == result.stderr.partition(") ")[2]
+		assert host_before == host_after
 
 
 def test_review_isolation_transfer_plain_rejection_reports_fixed_detail() -> None:
@@ -7636,9 +7644,11 @@ def test_review_isolation_unsafe_directory_reports_path_free_category() -> None:
 		(".github/ai_SENTINEL", "dot_github_subtree", "2"),
 		("scripts/secret_store_SENTINEL", "sensitive_name", "2"),
 		("scripts/.envdir_SENTINEL", "env_like", "2"),
+		("scripts/Build", "excluded_name_variant", "2"),
+		("scripts/nested/Coverage", "excluded_name_variant", "3+"),
 		("scripts/certs_SENTINEL.pem", "key_material_suffix", "2"),
 		("scripts/back\\slash_SENTINEL", "invalid_name", "2"),
-		("scripts/Build", "symlink", "2"),
+		("scripts/linkdir_SENTINEL", "symlink", "2"),
 	)
 	for rel, category, depth in cases:
 		with tempfile.TemporaryDirectory() as td:

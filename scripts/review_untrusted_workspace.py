@@ -174,7 +174,7 @@ def enumerate_workspace(root):
 			child_is_symlink = (Path(directory) / child).is_symlink()
 			if child_is_symlink:
 				raise _rejection("unsafe workspace directory", "unsafe_directory", _directory_category(name, True), _directory_depth(name))
-			if (child.lower() in EXCLUDED and child.lower() not in ("secrets", "credentials")) or child.lower().endswith((".egg-info", ".dist-info")) or (rel == Path(".") and child.startswith(".") and child != ".github"):
+			if (child in EXCLUDED and child not in ("secrets", "credentials")) or child.endswith((".egg-info", ".dist-info")) or (rel == Path(".") and child.startswith(".") and child != ".github"):
 				dirs.remove(child)
 				continue
 			if name != ".github" and not allowed(name + "/placeholder.py"):

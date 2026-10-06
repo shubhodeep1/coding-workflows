@@ -1407,7 +1407,7 @@ If additional context is required beyond what is inlined, you may read:
 - the original bug report file located under ${PREVIOUS_REVIEWS_DIR}
 - do not use .github/workflows/previous_reviews/ because that path is invalid in this workflow
 - The editor workspace contains only admitted source paths. Root dot-directories other than .github/workflows/ and .github/actions/, including .claude/, are not present. Do not create or recreate them. If a finding needs an edit there, list it under Ignored suggestions with reason "outside editor workspace".
-- Creating a directory symlink, a directory under .github/ other than workflows/ or actions/, or a directory with a secret-like name aborts the whole transfer of your edits. Excluded build and cache directory names are omitted case-insensitively.
+- Creating a directory symlink, a directory under .github/ other than workflows/ or actions/, a directory with a secret-like name, or a case variant of an excluded build/cache directory aborts the whole transfer of your edits. Exact excluded build/cache names are omitted.
 The bug report may contain important context about the problem being fixed.
 
 EDITOR ROLE
