@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:16124 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: A transient GitHub API failure in `unblock_trusted_login` returns an empty string and silently pauses orchestrator project scanning for the entire tick.\n  WHY: A temporary network error or API limit delays unblock-related recovery until the next cron execution.\n- scripts/orchestrate_poll_process.sh:15950-15974 | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: Malformed fix-up request comments can be silently skipped without logging, stalling the orchestrator phase machine.\n  WHY: The reported jq parsing and field-validation paths can yield no usable request and no diagnostic; severity disagreement: google_gemini-3_1-flash-lite rated this MAJOR, while minimax_minimax-m3 rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Bulk-delete overrides may approve a non-empty subset of its rejected paths only when the failed implement run's matching Actions artifact verifies the same issue, run and attempt; the next implement run rechecks the artifact before spending the one-shot override. Missing or expired evidence keeps the guard in force.\"\n  expected_change_site: tests/test_unblock_judge.py\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: minimax_minimax-m3 reports that the cited new test names and hunks do not exercise rejection-snapshot binding; qwen_qwen3_7-plus cites `tests/test_unblock_judge.py:1748` and `tests/test_unblock_judge.py:341` as coverage, and z-ai_glm-5_2 cites `tests/test_unblock_judge.py:1748` as coverage.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:16124 | severity=MAJOR | confidence=4\n  PROBLEM: The unblock_trusted_login probe fails open by returning an empty string upon any transient failure of the GitHub API, leading to the immediate, silent pausing of orchestrator project scanning for the entire tick.\n  WHY: A transient network error or temporary GitHub API limit causes the orchestrator to unnecessarily pause all unblock-related functionality for the duration of the tick, requiring the next cron execution to recover, rather than treating transient errors as a retryable state or retrying the identity probe.\n- scripts/orchestrate_poll_process.sh:15950-15974 | severity=MAJOR | confidence=3\n  PROBLEM: The logic to parse fix-up request comments uses jq without explicitly verifying that the input is fully parsed or handling potential partial-comment scenarios caused by malformed JSON structures or partial output due to truncation.\n  WHY: If a fix-up request comment is partially malformed, jq might return a partial or empty list without error, leading the scan to silently skip valid fix-up requests without logging the error, resulting in stalled orchestrator items.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:~15950-15974 (handle_unblock_judge_project_hooks, fix-up request jq expression) | severity=NIT | confidence=3\n  PROBLEM: The fix-up request parsing uses a `jq` expression whose `capture` returns `null` when the comment's first line does not match the expected `<!-- ai:unblock-fixup-request:v1 ... -->` pattern. The resulting object still gets emitted with null `item`/`id` fields, and the for-loop's `[[ \"${req_item}\" =~ ^[0-9]+$ ]] && [ -n \"${req_id}\" ] || continue` silently drops it without logging.\n  WHY: A judge-side regression that produces a comment with the correct pipeline login but a malformed marker line would silently stall the orchestrator phase machine, with no log line explaining why the request was ignored.\n- TASK_GAP\n  Requirement: \"Bulk-delete overrides may approve a non-empty subset of its rejected paths only when the failed implement run's matching Actions artifact verifies the same issue, run and attempt; the next implement run rechecks the artifact before spending the one-shot override. Missing or expired evidence keeps the guard in force.\"\n  Expected change site: `tests/test_unblock_judge.py` \u2014 a test that exercises `unblock_rejection_snapshot` (or its caller `unblock_run_ops`) and asserts the artifact-to-item binding rejects mismatches on issue number, run id, or attempt, and that a missing or expired artifact keeps the guard in force.\n  Evidence of absence: The diff adds `scripts/unblock_judge.sh:unblock_rejection_snapshot` (~lines 480-510) and the corresponding spend step in `.github/workflows/implement.yml:1894-1999` plus the consume path in `scripts/implement_commit_changes.sh:453-472`. The accompanying test file `tests/test_unblock_judge.py` grew by ~2000 lines, but the new test functions visible in the symbol-level diff summary (e.g. `test_dormant_verdict_posts_marker_opens_fix_issue_and_records_operator_step`, `test_live_verdict_only_posts_the_marker`, `test_project_mode_posts_verdict_to_tracking_issue`, `test_writer_reconciles_duplicate_trackers_without_losing_entries`, `test_writer_upserts_against_crlf_tracker_body`, `test_writer_does_not_recreate_when_label_listing_lags_create`) and the `test_implement_post_codex_recovery.py` test names listed in the symbol diff (`test_fetch_issue_metadata_reuses_matching_cache_without_api_call`, `test_preflight_destructive_guard_fails_without_touching_the_real_index`, `test_guard_handler_executes_all_rejection_modes_after_support_cleanup`, `test_scope_lock_workflow_wiring_contracts_present`) all target adjacent behaviors (operator-step writer, scope-lock wiring, guard handler modes). None of these names or hunks exercises the rejection-snapshot binding path: verifying that `unblock_ledger.py rejection-snapshot` accepts a matching artifact and rejects one with a wrong run id, wrong issue, wrong attempt, expired artifact, or missing zip.\n  ISSUE_CONFIDENCE: 4\n  SEVERITY: MAJOR\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "749e6a563d4a34459899f742c08f1dcc680de9d49e6d12b9a382b1f7de069851",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6204,
+    "run_id": "37431237295",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37431237295",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006083143_b98cf2fb12",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6204,
+    "run_id": "37431237295"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T08:31:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
