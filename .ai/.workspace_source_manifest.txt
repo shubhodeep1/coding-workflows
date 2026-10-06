@@ -126,7 +126,6 @@ ai_pipeline.md
 analysis/last_collection_timestamp.txt
 analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
-analysis/workflow-optimization-2026-09-03.md
 analysis/workflow-optimization-2026-09-06.md
 analysis/workflow-optimization-2026-09-07.md
 analysis/workflow-optimization-2026-09-08.md
@@ -162,6 +161,7 @@ analysis/workflow-optimization-2026-10-01.md
 analysis/workflow-optimization-2026-10-02.md
 analysis/workflow-optimization-2026-10-03-2.md
 analysis/workflow-optimization-2026-10-03.md
+analysis/workflow-optimization-2026-10-06.md
 changelog.d/.gitkeep
 changelog.d/3965-validation-run-attribution.md
 changelog.d/4618-sweep-dispatch-default-branch.md
@@ -224,6 +224,7 @@ changelog.d/6391-sync-pr-lookup-verifies-base.md
 changelog.d/6400-rb-judge-security-severity-block.md
 changelog.d/6401-single-issue-security-pass-completed-audit.md
 changelog.d/6404-claude-live-sync-pr-provenance.md
+changelog.d/6420-release-gate-claude-parity.md
 changelog.d/autofix-cap-and-security-exhaustion-judge.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/release-smoke-run-lookup.md

@@ -1960,7 +1960,7 @@ def test_implement_workflow_wires_staged_support_workspace_helper() -> None:
 	assert implement_run.index(restore_call) < implement_run.index("python3 scripts/targeted_file_context.py")
 	assert implement_run.index(restore_call) < implement_run.index('CODEX_PRE_BASELINE="${RUNTIME_DIR}/codex_pre_baseline.txt"')
 	assert implement_run.index(restore_call) < implement_run.index('for attempt in $(seq 1 "${max_attempts}"); do')
-	assert implement_run.rindex("bash scripts/codex_thread_reuse.sh direct-run") < implement_run.index(reinstall_call)
+	assert implement_run.rindex('bash "${IMPLEMENT_SANDBOX_SUPPORT_DIR}/scripts/codex_thread_reuse.sh" direct-run') < implement_run.index(reinstall_call)
 	assert implement_run.index(reinstall_call) < implement_run.index('if [ "${implement_succeeded}" = "true" ]; then')
 	repair_run = _extract_run_script("Attempt post-Codex syntax repair")
 	assert repair_run.count(restore_call) == 1
@@ -1995,8 +1995,8 @@ def test_editor_launches_drop_staged_support_ledger_env() -> None:
 	conftest.py, so the launch line has to scrub them itself.
 	"""
 	for step_name, launch_line in (
-		("Run Codex implementation", "bash scripts/codex_thread_reuse.sh direct-run || cmd_rc=$?"),
-		("Attempt post-Codex syntax repair", "bash scripts/codex_thread_reuse.sh direct-run; then"),
+		("Run Codex implementation", 'bash "${IMPLEMENT_SANDBOX_SUPPORT_DIR}/scripts/codex_thread_reuse.sh" direct-run || cmd_rc=$?'),
+		("Attempt post-Codex syntax repair", 'bash "${IMPLEMENT_SANDBOX_SUPPORT_DIR}/scripts/codex_thread_reuse.sh" direct-run; then'),
 	):
 		script_lines = _extract_run_script(step_name).splitlines()
 		launch_indexes = [idx for idx, line in enumerate(script_lines) if line.strip() == launch_line]
@@ -2267,7 +2267,7 @@ def test_heal_evidence_preflight_blocks_missing_allowlist() -> None:
 def test_validate_step_uses_reusable_validator_with_continue_on_error() -> None:
 	validate_block = _step_block_text("Validate syntax of changed files")
 	assert "continue-on-error: true" in validate_block
-	assert "bash scripts/validate_changed_files_syntax.sh" in validate_block
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/validate_changed_files_syntax.sh"' in validate_block
 
 
 def test_post_codex_syntax_repair_step_contract() -> None:
@@ -2277,14 +2277,14 @@ def test_post_codex_syntax_repair_step_contract() -> None:
 	repair_block = _step_block_text("Attempt post-Codex syntax repair")
 	assert "steps.validate_syntax_changed_files.outcome == 'failure'" in repair_block
 	assert "prompts/mode-implement-repair.txt" in repair_block
-	assert "scripts/validate_changed_files_syntax.sh" in repair_block
+	assert '"${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/validate_changed_files_syntax.sh"' in repair_block
 	assert "MAX_POST_CODEX_REPAIR_ATTEMPTS" in repair_block
 	assert "[ \"${max_attempts_raw}\" -lt 0 ]" in repair_block
 	assert "if [ \"${max_attempts}\" -eq 0 ]; then" in repair_block
 	assert "BASELINE_COMMIT=\"$(git stash create" in repair_block
 	assert "PRE_UNTRACKED_FILE=\"${RUNTIME_DIR}/post_codex_pre_untracked_attempt_" in repair_block
 	assert "Required repair artifacts are missing from repair-prompt-and-validator-split dependency." in repair_block
-	assert 'SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "${REPAIR_PROMPT_TEMPLATE}"' in repair_block
+	assert 'SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/render_prompt.sh" "${REPAIR_PROMPT_TEMPLATE}"' in repair_block
 	assert 'Failed to render repair prompt template ${REPAIR_PROMPT_TEMPLATE}; using raw prompt.' in repair_block
 	assert "Keep apply_patch as the primary write path for repository edits" in repair_block
 

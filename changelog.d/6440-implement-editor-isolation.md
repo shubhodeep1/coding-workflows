@@ -1,0 +1,2 @@
+<!-- changelog: security -->
+- **Isolate implement editors.** Both implementation and syntax-repair model CLIs run in a network-disabled container without runner credentials; only validated edits return to the host. Isolation failures stop the job instead of falling back to a host editor. Editor dependency installs happen before the isolated run; large workspaces and unsupported file types may now fail the bounded snapshot.

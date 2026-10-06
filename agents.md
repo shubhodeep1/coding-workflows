@@ -464,8 +464,13 @@ a new value, add it to the appropriate overrides file with a
   `IMPLEMENT_STAGED_SUPPORT_REBASE_FAILED`, `IMPLEMENT_STAGED_SUPPORT_RESTORE`.
 - Both codex editor launches in `implement.yml` (the "Run Codex implementation"
   attempt loop and the "Attempt post-Codex syntax repair" loop) run
-  `bash scripts/codex_thread_reuse.sh direct-run` through
+  the immutable `IMPLEMENT_SANDBOX_SUPPORT_DIR` copy of `codex_thread_reuse.sh`
+  through
   `env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR`.
+  The model CLIs run in a credential-free, network-disabled Docker container
+  through `implement_untrusted_sandbox.sh`; the host brokers hold credentials
+  and only validated edits are transferred back. Both Claude and the Codex
+  fallback use the same container. Missing isolation fails closed.
   A preceding env scrub drops GH_TOKEN, GH_PAT, GITHUB_TOKEN, Telegram and
   Actions runtime credentials; `scripts/editor_git_credentials.sh` hides git
   origin/extraheader auth for the editor and restores it after each launch.
@@ -1516,6 +1521,7 @@ and shipped:
 - `WORKFLOW_HEAL_EVIDENCE`
 - `HEAL_EVIDENCE_SCOPE_LOCK`
 - `EDITOR_GIT_CREDENTIALS`
+- `IMPLEMENT_ISOLATION`
 - `AUTOFIX_FINGERPRINT`
 - `AUTOFIX_FINGERPRINT_CAP_TRIPPED`
 - `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`
@@ -1721,6 +1727,7 @@ LOG_PREFIX.name=WORKFLOW_HEAL
 LOG_PREFIX.name=WORKFLOW_HEAL_EVIDENCE
 LOG_PREFIX.name=HEAL_EVIDENCE_SCOPE_LOCK
 LOG_PREFIX.name=EDITOR_GIT_CREDENTIALS
+LOG_PREFIX.name=IMPLEMENT_ISOLATION
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_TRIPPED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED
