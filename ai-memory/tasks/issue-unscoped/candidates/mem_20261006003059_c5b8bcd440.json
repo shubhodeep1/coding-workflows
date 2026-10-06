@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_conflict_resolve_sandbox_only.py:60 | severity=critical | confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The extracted launch block used by `test_attempts_never_run_host_writer` omits required resolver helper definitions, causing the `(\"ok\", \"claude\", 0)` case to exit with status 127 instead of exercising the sandbox path.\n  WHY: The test fails before reaching its sandbox assertions because the Claude path calls undefined resolver functions.\n- .github/workflows/orchestrate_poll.yml:718 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: The Claude CLI install gate can pass vacuously for an issue with no labels, causing an unnecessary Claude CLI install when no issue will use Claude.\n  WHY: `all(.labels[]?; .name != \"ai:codex\")` is true for an empty labels array; z-ai_glm-5_2 disputes this, noting unlabeled issues may select Claude through global engine settings.\n- scripts/review_conflict_resolve.sh:2244-2248 | severity=low | confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Suppressing the path-check command's output can hide environmental errors that cause the check to fail.\n  WHY: An error such as a missing Python dependency is not surfaced, reducing operational clarity.\n- scripts/review_conflict_resolve.sh:2262 | severity=low | confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Cleanup after the timeout command may be skipped in some scenarios if the timeout command itself fails.\n  WHY: The review suggests using a trap to guarantee cleanup, while acknowledging cleanup is currently called after the command returns.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cRefuse [unsupported paths] as in A\u201d and \u201cend the attempt through the existing resolver-failure path (`conflict_resolver_failed`, retry state, and eventually `ai:resolver-escalated`).\u201d\n  expected_change_site: scripts/review_conflict_resolve.sh, unsupported-path refusal at lines 2246-2249\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The guard exits directly after detecting an unsupported path without recording `RESOLVER_ISOLATION_FAILURE_REASON` or calling `_persist_resolver_retry_state_from_current_failure`; the unsupported-path test verifies refusal and no model launch but not retry-state persistence or escalation.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- orchestrate_poll.yml:718 | severity=low\n  PROBLEM: The second condition may install Claude CLI when no Claude-managed issue uses it.\n  WHY: The condition passes vacuously for an issue with no labels, making the guard slightly permissive; the engine resolution loop keeps `any_claude` false when Claude is not genuinely needed, so only `ai_engine.sh` sourcing is slightly wider than necessary.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_conflict_resolve.sh:2244-2248 | severity=low | confidence=2\n  PROBLEM: The path check uses python3 check-paths and suppresses stdout/stderr, making debugging potentially difficult if the check itself fails due to environment issues rather than path validation errors.\n  WHY: If the script fails due to an environmental issue (like missing dependencies), the error message is lost. While this meets the \"refuse\" requirement, surfacing the specific underlying error (e.g. \"python3 not found\") before failing closed is safer for operational clarity.\n- scripts/review_conflict_resolve.sh:2262 | severity=low | confidence=2\n  PROBLEM: The `_resolver_sandbox_opencode_attempt` uses `timeout --signal=TERM --kill-after=30s`.\n  WHY: If the process is killed due to timeout, the cleanup might not run correctly if the cleanup itself depends on the process state. While `cleanup` is called after the timeout command returns, if `timeout` itself fails, the cleanup might be skipped in some scenarios. The logic seems robust as `cleanup` is called regardless of `timeout` success/failure, but consider if `cleanup` should be inside a `trap` to guarantee execution.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/orchestrate_poll.yml:718 | severity=low | confidence=2\n  PROBLEM: The Claude CLI install gate is more permissive than the `any_claude` dispatch gate above it.\n  WHY: An issue with no labels vacuously satisfies `all(.labels[]?; .name != \"ai:codex\")`, so the install proceeds even when no issue will use Claude; this is an extra-install inefficiency rather than a runtime correctness defect.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cRefuse [unsupported paths] as in A\u201d and \u201cend the attempt through the existing resolver-failure path (`conflict_resolver_failed`, retry state, and eventually `ai:resolver-escalated`).\u201d\n  Expected change site: `scripts/review_conflict_resolve.sh`, the unsupported-path refusal at lines 2246-2249.\n  Evidence of absence: The guard exits directly after detecting an unsupported path. It does not record `RESOLVER_ISOLATION_FAILURE_REASON` or call `_persist_resolver_retry_state_from_current_failure`. That persistence is what increments the retry count and applies `ai:resolver-escalated` at the threshold. The unsupported-path test verifies refusal and no model launch, but not retry-state persistence or escalation.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_review_conflict_resolve_sandbox_only.py:test_attempts_never_run_host_writer, parametrize includes (\"ok\", \"claude\", 0) | severity=critical | confidence=5\n  PROBLEM: The test program does not define `_resolver_sandbox_attempt`; when `engine==\"claude\"`, the launch block calls it and Bash returns exit 127, so `_resolver_sandbox_opencode_attempt` never runs and the sandbox assertions fail.\n  WHY: The test needs `_resolver_sandbox_attempt` stubbed to return 75 so the codex fallback path is exercised.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_review_conflict_resolve_sandbox_only.py:60 | severity=high | confidence=4\n  PROBLEM: The extracted launch block omits `_resolver_fail_closed` and `_resolver_sandbox_attempt`; with `engine=claude`, the missing workspace-file check calls undefined `_resolver_fail_closed sandbox_support_missing`, exiting with status 127.\n  WHY: `_stub` creates `review_untrusted_sandbox.sh` but not `review_untrusted_workspace.py`, so with `set -euo pipefail` the subprocess exits before printing the expected exit status.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "8e6d5b4c334d22c236a890498ce7a53570f1bd15d1ef9bcead315e1a63a8cd72",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6411,
+    "run_id": "37392413494",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37392413494",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006003059_c5b8bcd440",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6411,
+    "run_id": "37392413494"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T00:30:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
