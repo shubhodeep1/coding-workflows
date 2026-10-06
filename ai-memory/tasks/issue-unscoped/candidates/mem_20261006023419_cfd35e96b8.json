@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_actions.py:221-228 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: `_approve` posts `/approved` before removing the guard label, so the implement workflow can see the guard label and refuse implementation; if label removal fails, the issue remains in a half-state with no automatic retry.\n  WHY: The implement workflow rejects issues that still carry either guard label, and removing the label after the comment does not trigger another run. Severity disagreement: the highest reported severity was BLOCKER, while other reviewers reported MAJOR; z-ai_glm-5_2 disputed that the timing creates a practical runtime defect.\n- scripts/unblock_actions.py:322-339 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The same phase-transition condition is duplicated to gate `add_labels` and `remove_label`, risking inconsistent label operations if the transition logic changes.\n  WHY: Updating only one copy of the condition could leave the issue with inconsistent labels.\n- scripts/unblock_actions.py:241-244 | severity=high | confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: In the project-kind branch of `reset_ops`, `/judge_resume --reset-recovery` is posted before the block label is removed.\n  WHY: If the poller's `/judge_resume` handler checks for the block label, it may reject the command while the label is still present.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/unblock_actions.py:221-228 (`_approve` function) | severity=MAJOR | confidence=[4]\n  PROBLEM: `_approve` posts the `/approved` comment before removing the `ai:scope-blocked` or `ai:destructive-blocked` guard label.\n  WHY: The implement workflow checks for guard labels when the comment triggers it; if the label is still present, it skips implementation. Removing the label afterward does not trigger another run, leaving the issue stuck at `ai:awaiting-approval`.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_actions.py:221-227 | severity=BLOCKER | confidence=[4]\n  PROBLEM: `_approve` posts `/approved` before removing the `ai:scope-blocked` or `ai:destructive-blocked` label.\n  WHY: The implement workflow rejects implementation while either guard label remains. If it checks the issue before the subsequent label removal finishes, the run fails or skips and is not automatically retriggered.\n- scripts/unblock_actions.py:322-339 | severity=NIT | confidence=[4]\n  PROBLEM: The condition `\"ai:clarification\" not in ctx[\"labels\"] and \"ai:planning\" not in ctx[\"labels\"]` is evaluated twice to gate `add_labels` and `remove_label`.\n  WHY: If phase-transition logic changes, updating only one copy risks inconsistent label state.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/unblock_actions.py:221-228 in the post-fix code, current file | severity=MAJOR | confidence=[4]\n  PROBLEM: `_approve` orders operations as `[add_labels(ai:awaiting-approval), comment(/approved), (if drop) remove_label(guard)]`, posting `/approved` before removing the guard label.\n  WHY: The `/approved` comment triggers implement.yml, which refuses issues that still carry either guard label. If the workflow reads the labels before removal, it skips implementation and no fresh `/approved` event triggers another run. The same regression applies to the `override_guard` path on `scope-blocked`/`destructive-blocked` stops with `has_plan=True`.\n- scripts/unblock_actions.py:221-228 in the post-fix code, current file | severity=MAJOR | confidence=[3]\n  PROBLEM: If the destructive-override path's label-remove call returns a non-404 error, the new order posts `/approved` and adds the approval label even though the guard label remains.\n  WHY: implement.yml will refuse the issue, and the unblock scan will not retry as it did under the OLD order. The issue is left in a half-state with `/approved` posted, `ai:awaiting-approval` added, and the guard label still present.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/unblock_actions.py:221-227 (`_approve`) | severity=MAJOR | confidence=[4]\n  PROBLEM: `_approve` posts `/approved` before removing the guard label.\n  WHY: Posting `/approved` triggers implement.yml. If it checks the issue while `ai:scope-blocked` or `ai:destructive-blocked` remains, it sets `SKIP_IMPLEMENT=true`; removing the label afterward does not trigger another run. The new test asserts this ordering at `tests/test_unblock_judge.py` lines 531-534.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/unblock_actions.py:221-228 (`_approve` function) | severity=BLOCKER | confidence=[5]\n  PROBLEM: `_approve` posts `/approved` before removing the `ai:scope-blocked` or `ai:destructive-blocked` guard label.\n  WHY: The implement workflow triggers on the comment and refuses to run if it sees either guard label; removing the label afterward does not trigger a fresh `/approved` event. The correct order must be: add_labels \u2192 remove_label \u2192 comment `/approved`.\n- scripts/unblock_actions.py:241-244 (`reset_ops` function, project kind branch) | severity=MAJOR | confidence=[4]\n  PROBLEM: For project items, `/judge_resume --reset-recovery` is posted before removing the block label.\n  WHY: If the poller's `/judge_resume` handler checks for `ai:blocked` or `ai:needs-human`, it may reject the command while the label is present. The correct order is: remove_label \u2192 comment `/judge_resume`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "fb8e0929a941f1ec8bca6cd16cbfbf1d6b8b01379267dd06cce26d7aa1165584",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6204,
+    "run_id": "37401075163",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37401075163",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006023419_cfd35e96b8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6204,
+    "run_id": "37401075163"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T02:34:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
