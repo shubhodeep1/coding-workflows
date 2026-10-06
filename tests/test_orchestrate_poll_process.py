@@ -1094,6 +1094,8 @@ def _run_poller(
 				user_entry = {"login": str(user) if user else "octocat"}
 			user_entry.setdefault("login", "octocat")
 			entry["user"] = user_entry
+			if user_entry["login"] == "octocat":
+				entry.setdefault("author_association", "OWNER")
 			entry.setdefault(
 				"html_url",
 				f"https://github.com/owner/repo/issues/{issue_num}#issuecomment-{entry['id']}",
@@ -1832,7 +1834,7 @@ if args[0] == 'api':
 		save()
 		if store.get('fail_user_lookup'):
 			sys.exit(1)
-		login = store.get('authenticated_login', 'github-actions[bot]')
+		login = store.get('authenticated_login', os.environ.get('MOCK_GH_USER_LOGIN', 'github-actions[bot]'))
 		print(login if jq else json.dumps({'login': login}))
 		sys.exit(0)
 
@@ -16797,6 +16799,36 @@ def test_revalidate_not_triggered_for_non_validation_failure():
 # ---------------------------------------------------------------------------
 
 
+def test_missing_pipeline_login_alerts_once_per_tick():
+	poller_source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	login_function = poller_source.split("unblock_trusted_login() {", 1)[1].split("\n}", 1)[0]
+	script = (
+		"set -euo pipefail\nUNBLOCK_TRUSTED_LOGIN=''\nUNBLOCK_TRUSTED_LOGIN_STATE=unset\n"
+		"GITHUB_REPOSITORY=owner/repo\nGITHUB_RUN_ID=123\nalert_count=0\n"
+		"gh_retry() { return 1; }\n_gh_url() { printf 'https://github.test/run'; }\n"
+		"tg_send_msg() { alert_count=$((alert_count + 1)); }\n"
+		f"unblock_trusted_login() {{{login_function}\n}}\n"
+		"unblock_trusted_login >/dev/null\nunblock_trusted_login >/dev/null\n"
+		"printf '%s %s' \"${UNBLOCK_TRUSTED_LOGIN_STATE}\" \"${alert_count}\"\n"
+	)
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+	assert result.returncode == 0 and result.stdout == "failed 1", result.stderr
+
+
+def test_project_state_and_reset_commands_require_authenticated_commenters():
+	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'unblock_trusted_login >/dev/null\n  if [ -z "${UNBLOCK_TRUSTED_LOGIN}" ]; then' in poller
+	assert 'extract_latest_valid_orchestrator_state "${TRUSTED_STATE_COMMENTS}"' in poller
+	assert 'select((.user.login // "") == $login)' in poller
+	for command in ("RE_SECURITY_PASS_COMMENT_JSON", "REVALIDATE_COMMENT_JSON", "JUDGE_RESUME_BODY"):
+		start = poller.index(f'{command}="$(echo "${{COMMENTS}}" | jq')
+		end = poller.index("')\"", start)
+		filter_text = poller[start:end]
+		assert '--arg login "${UNBLOCK_TRUSTED_LOGIN}"' in filter_text
+		assert 'IN("OWNER", "MEMBER", "COLLABORATOR")' in filter_text
+		assert '((.value.user.login // "") == $login)' in filter_text
+
+
 def test_judge_resume_plain_preserves_counters():
 	state = _base_state(status="failed")
 	state["judge_stall_cycles"] = 7
@@ -16818,6 +16850,50 @@ def test_judge_resume_plain_preserves_counters():
 		"Counter handling: judge_stall_cycles: preserved (7); recovery_count: preserved (3)" in body
 		for body in tracking_comments
 	)
+
+
+def test_untrusted_state_comments_cannot_replace_pipeline_state():
+	state = _base_state(status="in_progress")
+	for forged_comments in (
+		[_state_comment({**state, "status": "failed"})],
+		_build_v2_state_comment_chain(json.dumps({**state, "status": "failed"}), chunk_size=100),
+	):
+		result = _run_poller(
+			state=state, enable_validation="false", max_validate_cycles="3",
+			tracking_comments=forged_comments, issue_labels={10: ["ai:implementing"]},
+		)
+		assert result["latest_state"]["status"] == "in_progress"
+
+
+def test_untrusted_judge_resume_cannot_reset_project_counters():
+	state = _base_state(status="failed")
+	state.update(judge_stall_cycles=8, recovery_count=4)
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		tracking_comments=[{"body": "/judge_resume --force", "user": {"login": "outsider"}, "author_association": "NONE"}],
+	)
+	assert result["latest_state"]["status"] == "failed"
+	assert result["latest_state"]["judge_stall_cycles"] == 8
+	assert result["latest_state"]["recovery_count"] == 4
+
+
+def test_untrusted_revalidation_cannot_reset_failed_project():
+	state = _base_state(status="failed")
+	result = _run_poller(
+		state=state, enable_validation="true", max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed"],
+		tracking_comments=[{"body": "/revalidate", "user": {"login": "outsider"}, "author_association": "NONE"}],
+	)
+	assert result["latest_state"]["status"] == "failed"
+	assert result["validation_dispatches"] == []
+
+
+def test_untrusted_security_pass_reset_cannot_clear_findings():
+	state = _security_pass_failed_state_for_auto_reset("a" * 40)
+	result = _run_failed_project_tick(state, {"SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE": "false"},
+		tracking_comments=[{"body": "/re-security-pass", "user": {"login": "outsider"}, "author_association": "NONE"}])
+	assert result["latest_state"]["status"] == "failed"
+	assert result["latest_state"]["security_pass_reported_findings"] == state["security_pass_reported_findings"]
 
 
 def test_judge_resume_not_blocked_by_prose_marker_comment_after_command():

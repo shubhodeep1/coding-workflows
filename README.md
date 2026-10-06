@@ -2103,7 +2103,7 @@ attempts of that role in the same job.
 | `scripts/claude_engine.py` | Every decision: role resolution, the P5 settings, transcript extraction and classification (`success`, `auth_failed`, `usage_limit`, `crashed`, `timeout`), probe parsing, account order. No API calls. |
 | `scripts/claude_settings.json.tmpl` | P5 permission policy, rendered per run: denies `gh pr merge`, `gh api … DELETE`, force pushes and remote branch deletes, and edits to the checkout's `.github/workflows/**` (unless `ALLOW_WORKFLOW_EDITS=true`) and `.claude/**`; runs `gh_api_write_guard.py` on every Bash call (a headless "ask" is a denial); its `env` block carries no credential. |
 | `scripts/claude_anthropic_relay.py` | Host relay for the sandboxed roles (clarify, review editor): the container gets `ANTHROPIC_BASE_URL=http://127.0.0.1:8765` and a placeholder token; the host side swaps in the real OAuth token and forwards only `POST /v1/messages` to `api.anthropic.com`. |
-| `.github/actions/install-claude` | Installs and verifies the pinned `@anthropic-ai/claude-code` on Node 22. |
+| `.github/actions/install-claude` | Installs and verifies the pinned `@anthropic-ai/claude-code` on Node 22. A relative `config_path` is read from `GITHUB_WORKSPACE`, not the step's cwd, so the CLI still installs after implement's `BASH_ENV` moves bash steps into `WORKSPACE_PATH`. |
 | `.github/workflows/claude-engine-smoke.yml` | Dispatch-only self-test per tool profile: offline checks, then the context gate, P5 denials and relay gate when a credential is available, or the codex fallback when it is not. |
 
 For a POST rejected during initial request or forwarded-header validation,
@@ -2879,6 +2879,14 @@ and resolver chains, a failed project) now goes to the unblock judge
   fall back to an older `failed` state for this decision. A failed read or late
   resume withholds the label, though a resume after verdict recording can leave
   an unacted-on verdict.
+  The poller accepts V1/V2 project state only from comments by its authenticated
+  `GH_PAT` login. It ignores state-shaped comments from other authors and skips
+  a tracking issue for that tick if the login cannot be resolved. A
+  `/judge_resume`, `/revalidate` or `/re-security-pass` reset requires either
+  that login or a human `OWNER`, `MEMBER` or `COLLABORATOR`; outside commenters
+  and other bots cannot clear project failure counters.
+  An unavailable identity also sends one CRITICAL Telegram alert per poll tick
+  when Telegram is configured; no unauthenticated state is acted on.
   Scope overrides must match the trusted guard rejection exactly. Bulk-delete
   overrides may approve a non-empty subset of its rejected paths only when the
   failed implement run's matching Actions artifact verifies the same issue,
@@ -2892,6 +2900,9 @@ and resolver chains, a failed project) now goes to the unblock judge
   `operator_step` file a fix-up issue (for a project's item, the poller files
   it into the current wave and resumes a failed project); once the fix-up
   is closed with `ai:merged`, the next judge run posts the resume command.
+  A malformed pipeline-authored project fix-up request is skipped with
+  `UNBLOCK_PROJECT action=fixup comment=<id> outcome=invalid_request` in the
+  poll log; a failed request-list parse logs `outcome=request_parse_failed`.
   A failed fix-up lookup or resume write leaves the wait marker pending for
   another run; closing a fix-up without a merge does not resume its parent.
   A failed review dispatch leaves the PR's block label in place for the next

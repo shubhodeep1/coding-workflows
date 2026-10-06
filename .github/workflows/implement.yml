@@ -1639,23 +1639,35 @@ jobs:
 
           printf '%s\n' "${ISSUE_BODY}" > "${ISSUE_BODY_FILE}"
 
-          # TRUST BOUNDARY: ISSUE_BODY is user-controlled content from the GitHub
-          # issue. It is passed via heredoc (not shell expansion) to prevent injection
-          # into shell commands. Downstream consumers must treat it as untrusted input.
+          # TRUST BOUNDARY (#6504): issue text can close a fixed GITHUB_ENV
+          # delimiter and inject guard settings. Keep the body only in its data
+          # file; frame title and scope label with checked random delimiters.
+          write_untrusted_multiline_env() {
+            local key="$1" value="$2" delim hex
+            if ! hex="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"; then
+              echo "::error::Unable to create GITHUB_ENV delimiter for ${key}."
+              exit 1
+            fi
+            if [[ ! "${hex}" =~ ^[0-9a-f]{32}$ ]]; then
+              echo "::error::Unable to create GITHUB_ENV delimiter for ${key}."
+              exit 1
+            fi
+            delim="ghadelimiter_${hex}"
+            case "${value}" in
+              *"${delim}"*)
+                echo "::error::GITHUB_ENV delimiter collision for ${key}."
+                exit 1
+                ;;
+            esac
+            printf '%s<<%s\n%s\n%s\n' "${key}" "${delim}" "${value}" "${delim}" >> "$GITHUB_ENV"
+          }
           {
             echo "ISSUE_NUMBER=${ISSUE_NUMBER_JSON}"
             echo "ISSUE_URL=${ISSUE_URL_JSON}"
             echo "PR_BASE_BRANCH=${PR_BASE_BRANCH}"
-            echo 'ISSUE_SCOPE_LOCK_GLOB<<EOF'
-            echo "${ISSUE_SCOPE_LOCK_GLOB}"
-            echo 'EOF'
-            echo 'ISSUE_TITLE<<EOF'
-            echo "${ISSUE_TITLE}"
-            echo 'EOF'
-            echo 'ISSUE_BODY<<EOF'
-            echo "${ISSUE_BODY}"
-            echo 'EOF'
           } >> "$GITHUB_ENV"
+          write_untrusted_multiline_env ISSUE_SCOPE_LOCK_GLOB "${ISSUE_SCOPE_LOCK_GLOB}"
+          write_untrusted_multiline_env ISSUE_TITLE "${ISSUE_TITLE}"
 
       - name: Detect smoke test and silence Telegram alerts
         if: env.SKIP_IMPLEMENT != 'true'
@@ -1731,7 +1743,7 @@ jobs:
             # falls back to the workflow-level default MODEL_EDITOR
             # rather than failing the implement.
             if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test alt-model\]'; then
-              alt_model="$(printf '%s' "${ISSUE_BODY}" | grep -oE 'this run uses `[A-Za-z0-9_./-]+` as the editor model override' | head -1 | sed -E 's/.*`([^`]+)`.*/\1/' || true)"
+              alt_model="$(grep -oE 'this run uses `[A-Za-z0-9_./-]+` as the editor model override' "${ISSUE_BODY_FILE:-/dev/null}" 2>/dev/null | head -1 | sed -E 's/.*`([^`]+)`.*/\1/' || true)"
               if [ -n "${alt_model:-}" ] \
                   && [ "${#alt_model}" -le 128 ] \
                   && printf '%s' "${alt_model}" | grep -qE '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; then
@@ -2066,9 +2078,14 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
           set -euo pipefail
+          if [ ! -f "${ISSUE_BODY_FILE:-}" ]; then
+            echo "::error::ISSUE_BODY_FILE is not a regular file." >&2
+            exit 1
+          fi
           {
             echo "ISSUE DESCRIPTION"
-            printf '%s\n\n' "${ISSUE_BODY}"
+            cat "${ISSUE_BODY_FILE}"
+            echo
             echo "CLARIFICATION ANSWERS"
             cat "${CLARIFICATION_ANSWERS_FILE}"
             echo
@@ -3475,6 +3492,16 @@ jobs:
         # cleanup/exclusion rules, without mutating the real index/worktree.
         if: env.SKIP_IMPLEMENT != 'true'
         id: preflight_destructive_guard
+        # Step env overrides GITHUB_ENV so injected job values cannot weaken guards (#6504).
+        env:
+          ALLOW_BULK_DELETE: ${{ vars.ALLOW_BULK_DELETE || 'false' }}
+          BULK_DELETE_THRESHOLD: ${{ vars.BULK_DELETE_THRESHOLD || '3' }}
+          BULK_DELETE_THRESHOLD_MD: ${{ vars.BULK_DELETE_THRESHOLD_MD || '100' }}
+          ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
+          ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
+          SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}
         run: |
           set -euo pipefail
 
@@ -4332,6 +4359,15 @@ jobs:
       - name: Protect workflow files from implementation edits
         if: env.SKIP_IMPLEMENT != 'true'
         id: protect_workflow_files
+        env:
+          ALLOW_BULK_DELETE: ${{ vars.ALLOW_BULK_DELETE || 'false' }}
+          BULK_DELETE_THRESHOLD: ${{ vars.BULK_DELETE_THRESHOLD || '3' }}
+          BULK_DELETE_THRESHOLD_MD: ${{ vars.BULK_DELETE_THRESHOLD_MD || '100' }}
+          ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
+          ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
+          SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}
         run: |
           set -euo pipefail
 
@@ -4416,6 +4452,15 @@ jobs:
       - name: Commit changes
         if: env.SKIP_IMPLEMENT != 'true'
         id: commit_changes
+        env:
+          ALLOW_BULK_DELETE: ${{ vars.ALLOW_BULK_DELETE || 'false' }}
+          BULK_DELETE_THRESHOLD: ${{ vars.BULK_DELETE_THRESHOLD || '3' }}
+          BULK_DELETE_THRESHOLD_MD: ${{ vars.BULK_DELETE_THRESHOLD_MD || '100' }}
+          ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
+          ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
+          SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}
         run: |
           set -euo pipefail
           bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"
@@ -4443,6 +4488,14 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true' && (failure() || cancelled()) && (steps.preflight_destructive_guard.outputs.destructive_commit_blocked != '' || steps.commit_changes.outputs.destructive_commit_blocked != '' || steps.preflight_destructive_guard.outputs.scope_violation_blocked != '' || steps.commit_changes.outputs.scope_violation_blocked != '' || steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict != '' || steps.commit_changes.outputs.staged_support_rebase_conflict != '')
         id: handle_guard_block
         env:
+          ALLOW_BULK_DELETE: ${{ vars.ALLOW_BULK_DELETE || 'false' }}
+          BULK_DELETE_THRESHOLD: ${{ vars.BULK_DELETE_THRESHOLD || '3' }}
+          BULK_DELETE_THRESHOLD_MD: ${{ vars.BULK_DELETE_THRESHOLD_MD || '100' }}
+          ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
+          ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
+          SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}

@@ -16244,14 +16244,17 @@ handle_unblock_judge_project_hooks() {
   unblock_trusted_login >/dev/null
   login="${UNBLOCK_TRUSTED_LOGIN}"
   [ -n "${login}" ] || return 0
-  requests="$(printf '%s' "${COMMENTS}" | jq -c --arg login "${login}" '
-    [.[]? | select((.user.login // "") == $login)
-      | (.body // "") as $b
-      | ($b | split("\n") | map(rtrimstr("\r"))) as $lines
-      | ($lines[0] | capture("^<!-- ai:unblock-fixup-request:v1 item=(?<item>[1-9][0-9]*) id=(?<id>unblock-[0-9]+-r[0-9]+) -->$")?) as $m
-      | {item: $m.item, id: $m.id,
+  if ! requests="$(printf '%s' "${COMMENTS}" | jq -c --arg login "${login}" '
+    [.[]? | select((.user.login // "") == $login) | . as $comment
+      | (.body // "" | split("\n") | map(rtrimstr("\r"))) as $lines
+      | select(($lines[0] // "") | startswith("<!-- ai:unblock-fixup-request:v1 "))
+      | (($lines[0] | capture("^<!-- ai:unblock-fixup-request:v1 item=(?<item>[1-9][0-9]*) id=(?<id>unblock-[0-9]+-r[0-9]+) -->$")?) // {}) as $m
+      | {comment_id: $comment.id, item: $m.item, id: $m.id,
          title: (($lines[1] // "") | sub("^###\\s*"; "")),
-         body: ($lines[2:] | join("\n"))}]' 2>/dev/null || echo '[]')"
+         body: ($lines[2:] | join("\n"))}]' 2>/dev/null)"; then
+    echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup outcome=request_parse_failed"
+    return 0
+  fi
   count="$(printf '%s' "${requests}" | jq 'length' 2>/dev/null || echo 0)"
   for ((idx = 0; idx < count; idx++)); do
     request="$(printf '%s' "${requests}" | jq -c ".[${idx}]" 2>/dev/null || true)"
@@ -16259,7 +16262,10 @@ handle_unblock_judge_project_hooks() {
     req_id="$(jq -r '.id // ""' <<< "${request}" 2>/dev/null || true)"
     req_title="$(jq -r '.title // ""' <<< "${request}" 2>/dev/null || true)"
     req_body="$(jq -r '.body // ""' <<< "${request}" 2>/dev/null || true)"
-    [[ "${req_item}" =~ ^[0-9]+$ ]] && [ -n "${req_id}" ] || continue
+    if [[ ! "${req_item}" =~ ^[1-9][0-9]*$ ]] || [ -z "${req_id}" ]; then
+      echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup comment=$(jq -r 'if (.comment_id | type) == "number" then .comment_id else "unknown" end' <<< "${request}") outcome=invalid_request"
+      continue
+    fi
     if [ -n "$(jq -r --arg id "${req_id}" '.issue_number_map[$id] // empty' "${STATE_FILE}" 2>/dev/null || echo unreadable)" ]; then
       continue
     fi
@@ -18954,10 +18960,21 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   fi
   rm -f "${_comments_raw}"
 
+  # State is executable pipeline control data, not issue discussion. Reuse
+  # the same authenticated GH_PAT identity as the unblock ledger/scan.
+  unblock_trusted_login >/dev/null
+  if [ -z "${UNBLOCK_TRUSTED_LOGIN}" ]; then
+    echo "::warning::Cannot verify state comment author for tracking issue #${TRACKING_NUM}; skipping this tick."
+    continue
+  fi
+  TRUSTED_STATE_COMMENTS="$(printf '%s' "${COMMENTS}" | jq -c --arg login "${UNBLOCK_TRUSTED_LOGIN}" '[.[] | select((.user.login // "") == $login)]' 2>/dev/null)" || {
+    echo "::warning::Cannot filter state comments for tracking issue #${TRACKING_NUM}; skipping this tick."
+    continue
+  }
   STATE_JSON=""
   STATE_COMMENT_COUNT=0
   STATE_FALLBACK_USED="false"
-  if extract_latest_valid_orchestrator_state "${COMMENTS}"; then
+  if extract_latest_valid_orchestrator_state "${TRUSTED_STATE_COMMENTS}"; then
     STATE_JSON="${EXTRACTED_STATE_JSON}"
     STATE_COMMENT_COUNT="${EXTRACTED_STATE_COMMENT_COUNT}"
     STATE_FALLBACK_USED="${EXTRACTED_STATE_FALLBACK_USED}"
@@ -20013,17 +20030,20 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
   # /re-security-pass — manual reset from security-pass exhaustion
   # ---------------------------------------------------------------
   if [ "${PROJECT_STATUS}" = "failed" ] && has_label "${TRACKING_LABELS}" "ai:security-pass-failed"; then
-    RE_SECURITY_PASS_COMMENT_JSON="$(echo "${COMMENTS}" | jq -c '
-      (to_entries
-        | map(select((.value.body // "") | (
-            startswith("<!-- ORCHESTRATOR_STATE_V1")
-            or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->")
-            or startswith("<!-- re-security-pass-dedup:")
-        )))
+    RE_SECURITY_PASS_COMMENT_JSON="$(echo "${COMMENTS}" | jq -c --arg login "${UNBLOCK_TRUSTED_LOGIN}" '
+       (to_entries
+        | map(select((.value.user.login // "") == $login and ((.value.body // "") | (
+             startswith("<!-- ORCHESTRATOR_STATE_V1")
+             or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->")
+             or startswith("<!-- re-security-pass-dedup:")
+        ))))
         | last
         | .key // -1) as $last_security_pass_boundary_idx |
       [to_entries[]
-        | select(.key > $last_security_pass_boundary_idx and ((.value.body // "") | test("^\\s*/re-security-pass(\\s|$)"; "m")))
+        | select(.key > $last_security_pass_boundary_idx and ((.value.body // "") | test("^\\s*/re-security-pass(\\s|$)"; "m"))
+          and (((.value.user.login // "") == $login) or
+            (((.value.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+              and ((.value.user.type // "") != "Bot") and (((.value.user.login // "") | endswith("[bot]")) | not))))
         | .value
       ]
       | last // empty
@@ -20147,17 +20167,20 @@ The security pass that parked this project ran on workflow engine \`${SP_AUTO_RE
   # the latest state comment resets counters and re-dispatches validation.
   if [ "${PROJECT_STATUS}" = "failed" ] \
     && (has_label "${TRACKING_LABELS}" "ai:validation-failed" || has_label "${TRACKING_LABELS}" "ai:validate-failed"); then
-    REVALIDATE_COMMENT_JSON="$(echo "${COMMENTS}" | jq -c '
-      (to_entries
-        | map(select((.value.body // "") | (
-            startswith("<!-- ORCHESTRATOR_STATE_V1")
-            or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->")
-            or startswith("<!-- revalidate-dedup:")
-        )))
+    REVALIDATE_COMMENT_JSON="$(echo "${COMMENTS}" | jq -c --arg login "${UNBLOCK_TRUSTED_LOGIN}" '
+       (to_entries
+        | map(select((.value.user.login // "") == $login and ((.value.body // "") | (
+             startswith("<!-- ORCHESTRATOR_STATE_V1")
+             or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->")
+             or startswith("<!-- revalidate-dedup:")
+        ))))
         | last
         | .key // -1) as $last_revalidate_boundary_idx |
       [to_entries[]
-        | select(.key > $last_revalidate_boundary_idx and ((.value.body // "") | test("^\\s*/revalidate(\\s|$)"; "m")))
+        | select(.key > $last_revalidate_boundary_idx and ((.value.body // "") | test("^\\s*/revalidate(\\s|$)"; "m"))
+          and (((.value.user.login // "") == $login) or
+            (((.value.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+              and ((.value.user.type // "") != "Bot") and (((.value.user.login // "") | endswith("[bot]")) | not))))
         | .value
       ]
       | last // empty
@@ -20329,10 +20352,13 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
   if [ "${PROJECT_STATUS}" = "failed" ] \
     && ! has_label "${TRACKING_LABELS}" "ai:validation-failed" \
     && ! has_label "${TRACKING_LABELS}" "ai:validate-failed"; then
-    JUDGE_RESUME_BODY="$(echo "${COMMENTS}" | jq -r '
-      (to_entries | map(select((.value.body // "") | (startswith("<!-- ORCHESTRATOR_STATE_V1") or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->")))) | last | .key // -1) as $last_state_idx |
+    JUDGE_RESUME_BODY="$(echo "${COMMENTS}" | jq -r --arg login "${UNBLOCK_TRUSTED_LOGIN}" '
+      (to_entries | map(select((.value.user.login // "") == $login and ((.value.body // "") | (startswith("<!-- ORCHESTRATOR_STATE_V1") or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->"))))) | last | .key // -1) as $last_state_idx |
       [to_entries[]
-        | select(.key > $last_state_idx and (.value.body | test("^\\s*/judge_resume(\\s|$)"; "m")))
+        | select(.key > $last_state_idx and ((.value.body // "") | test("^\\s*/judge_resume(\\s|$)"; "m"))
+          and (((.value.user.login // "") == $login) or
+            (((.value.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+              and ((.value.user.type // "") != "Bot") and (((.value.user.login // "") | endswith("[bot]")) | not))))
       ]
       | last
       | .value.body // ""
