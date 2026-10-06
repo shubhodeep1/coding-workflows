@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6457,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6457\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6471\",\"pr_number\":6471,\"branch\":\"ai/issue-6457\",\"run_id\":\"37406436708\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37406436708\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/implement.yml\",\"README.md\",\"agents.md\",\"changelog.d/6457-heal-scope-from-intake-marker.md\",\"prompts/_templates/mode-workflow-failure-heal.txt\",\"prompts/mode-workflow-failure-heal.txt\",\"scripts/files_touched_scope_guard.py\",\"scripts/implement_commit_changes.sh\",\"scripts/implement_handle_guard_block.sh\",\"scripts/workflow_failure_heal.py\",\"scripts/workflow_failure_heal_evidence.py\",\"scripts/workflow_failure_heal_intake.sh\",\"tests/test_files_touched_scope_guard.py\",\"tests/test_heal_evidence_editor_isolation.py\",\"tests/test_implement_post_codex_recovery.py\",\"tests/test_workflow_failure_heal.py\",\"tests/test_workflow_failure_heal_evidence.py\"]}",
+  "fingerprint": "bc47daee9df6ba7287cfc2c5b2474175a52d64390d24102b5c7501a7f3128350",
+  "lineage": {
+    "issue_number": 6457,
+    "parent_ids": [],
+    "pr_number": 6471,
+    "run_id": "37406436708",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37406436708",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6471"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261006031450_80af5e7058",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6457,
+    "level": "run",
+    "pr_number": 6471,
+    "run_id": "37406436708"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6457: https://github.com/shubhodeep1/coding-workflows/pull/6471",
+  "timestamps": {
+    "created_at": "2026-10-06T03:14:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
