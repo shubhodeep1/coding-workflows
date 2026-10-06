@@ -1,0 +1,17 @@
+{
+  "entries": [
+    {
+      "actor": "shubhodeep1",
+      "prior_context": "## \u26a0\ufe0f Runtime validation harness generation failed\n\nTemplate renderer preflight or subprocess (`scripts/render_validation_templates.py`) failed (exit 14). Common causes: failed dependency setup, dependencies (`pyyaml`, `jsonschema`, `jinja2`) not importable, invalid `.ai/validate.yml`, schema-validation failure, or template-collection error.\n\nLast 40 lines of renderer log (`/tmp/codex-validate-37430977754-1/validate_generate.log`):\n\n~~~\nTrusted renderer runtime is unavailable; renderer not invoked.\n~~~\n\nTemplate mode is enabled and does not fall back to freehand generation.",
+      "prior_outcome": "harness_error",
+      "reason": "unblock judge: Confirm the #6521 renderer-preparation fix is available to the workflow ref used for project #6031, then run /revalidate. Verify the trusted renderer runtime is prepared, the renderer runs, and the generated validation tests pass. If preparation still skips or fails, use that run\u2019s preparation-step",
+      "source_comment_id": 6020175945,
+      "source_comment_url": "https://github.com/shubhodeep1/coding-workflows/issues/6031#issuecomment-6020175945",
+      "timestamp_utc": "2026-10-06T15:57:53Z"
+    }
+  ],
+  "integration_sha": "c05a25c7dcec4539973a9c0dedb3b39a7ccb0f8b",
+  "repository": "shubhodeep1/coding-workflows",
+  "schema_version": "v1",
+  "tracking_issue_number": 6031
+}
