@@ -2957,7 +2957,7 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'missing=opencode_config_writer failopen=1 output_bytes=0' in consolidate
 	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true' in consolidate
 	assert 'reviewer\n    "${MODEL_EDITOR}"' in rb_judge
-	assert 'writer\n        "${MODEL_EDITOR}"' in rb_judge
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run\n        "${RB_FIX_PROMPT}"\n        "${RB_FIX_OUTPUT}"\n        "${MODEL_EDITOR}"' in rb_judge
 	assert 'OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh}"' in rb_judge
 	assert 'opencode_emit_failure_alert review_rb_judge reviewer' in rb_judge
 	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in rb_judge
@@ -5242,10 +5242,10 @@ def test_gate_protects_executable_configuration_from_both_skip_routes() -> None:
 	# Run the real gate body with the existing mocked /pulls/{n}/files
 	# harness. The doc-only branch needs a large change under docs/; the
 	# small-diff branch also accepts root and nested paths outside docs/.
-	from test_workflow_failure_heal import SHA_A, _run_gate
+	from test_workflow_failure_heal import SELF_REPO, SHA_A, _run_gate
 
 	base_pr = {
-		"state": "open", "merged": False, "head": {"ref": "ai/issue-4454", "sha": SHA_A},
+		"state": "open", "merged": False, "head": {"ref": "ai/issue-4454", "sha": SHA_A, "repo": {"full_name": SELF_REPO}},
 		"labels": [], "additions": 1, "deletions": 1, "changed_files": 1,
 		"mergeable": True, "mergeable_state": "clean", "title": "test", "body": "",
 	}
@@ -8836,8 +8836,10 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		assert admission_module.allowed(".claude/commands/audit-plans.md", commands={".claude/commands/audit-plans.md"})
 		(host / "scripts").mkdir()
 		(host / "scripts/claude_settings.json.tmpl").write_text("before\n")
+		(host / "tests").mkdir()
+		(host / "tests/test_audit_plans_command.py").write_text("operator command contract\n")
 		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
-		subprocess.run(["git", "add", ".github", ".claude", "workflow-templates", "scripts"], cwd=host, env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", ".github", ".claude", "workflow-templates", "scripts", "tests"], cwd=host, env=_git_clean_env(), check=True)
 		manifest = root / "isolated" / "baseline.json"
 		def run(action: str) -> subprocess.CompletedProcess[str]:
 			return subprocess.run(
@@ -8860,6 +8862,7 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		assert (source / ".claude/commands/apply-url.md").exists()
 		assert not (source / ".claude/commands/other.md").exists()
 		assert (source / "scripts/claude_settings.json.tmpl").exists()
+		assert not (source / "tests/test_audit_plans_command.py").exists()
 		assert run("refresh").returncode == 0
 		(source / ".github/workflows/example.yml").write_text("after\n")
 		(source / ".github/ai/claude_engine.json").write_text("after\n")
@@ -8874,6 +8877,7 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		assert (host / ".claude/commands/audit-plans.md").read_text() == "after\n"
 		assert (host / ".claude/commands/apply-url.md").read_text() == "after\n"
 		assert (host / "scripts/claude_settings.json.tmpl").read_text() == "after\n"
+		assert (host / "tests/test_audit_plans_command.py").read_text() == "operator command contract\n"
 		# A command without a host template twin stays out: the write is dropped.
 		(source / ".claude/commands/other.md").write_text("untrusted\n")
 		assert run("transfer").returncode == 0
@@ -9014,6 +9018,14 @@ def test_review_isolation_transfers_into_active_work_tree() -> None:
 			capture_output=True, text=True, timeout=120,
 		)
 		assert rejected.returncode != 0 and "Review workspace path rejected" in rejected.stderr
+		# The per-PR tree has no .git, so GITHUB_WORKSPACE must stay the
+		# checkout; review_rb_judge.sh once replaced it with its cwd (#6455).
+		github_env.write_text("")
+		overridden = subprocess.run(
+			["bash", sandbox, "prepare"], cwd=work_tree, env={**env, "GITHUB_WORKSPACE": str(work_tree)},
+			capture_output=True, text=True, timeout=120,
+		)
+		assert overridden.returncode != 0 and "Review workspace path rejected" in overridden.stderr
 		github_env.write_text("")
 		prepared = subprocess.run(["bash", sandbox, "prepare"], cwd=work_tree, env=env, capture_output=True, text=True, timeout=120)
 		assert prepared.returncode == 0, prepared.stdout + prepared.stderr
@@ -9039,6 +9051,110 @@ def test_review_isolation_transfers_into_active_work_tree() -> None:
 			capture_output=True, text=True, check=True,
 		)
 		assert changed.stdout.split() == ["scripts/app.py"]
+
+
+def test_review_blocked_fix_sandbox_prepare_accepts_per_pr_workspace() -> None:
+	"""The judge selects the sandbox target without replacing the checkout's .git."""
+	judge = RB_JUDGE.read_text(encoding="utf-8")
+	assert 'GITHUB_WORKSPACE="${RB_OPENCODE_WORKSPACE}"' not in judge
+	assert '"GITHUB_WORKSPACE=${RB_OPENCODE_WORKSPACE}"' not in judge
+	selection = judge.split('      rb_fix_checkout_real=', 1)[1].split('      if ! env "${rb_fix_sandbox_workspace_env[@]}"', 1)[0]
+	prepare_line = judge.split('      if ! env "${rb_fix_sandbox_workspace_env[@]}"', 1)[1].splitlines()[0]
+	prepare_command = 'env "${rb_fix_sandbox_workspace_env[@]}"' + prepare_line.removesuffix('; then')
+	judge_prepare = 'RB_OPENCODE_WORKSPACE="$(pwd)"\nrb_fix_checkout_real=' + selection + prepare_command
+
+	with tempfile.TemporaryDirectory(prefix="rb-fix-iso-") as td:
+		root = Path(td)
+		checkout = root / "checkout"
+		work_tree = root / "workspaces" / "run"
+		stub_bin = root / "bin"
+		for path in (checkout / "scripts", work_tree / "scripts", stub_bin, root / "runtime"):
+			path.mkdir(parents=True)
+		(checkout / "scripts/app.py").write_text("before\n")
+		(work_tree / "scripts/app.py").write_text("before\n")
+		subprocess.run(["git", "init", "-q", str(checkout)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", "scripts"], cwd=checkout, env=_git_clean_env(), check=True)
+		subprocess.run(
+			["git", "-c", "user.name=t", "-c", "user.email=t@invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "base"],
+			cwd=checkout, env=_git_clean_env(), check=True,
+		)
+		docker_stub = stub_bin / "docker"
+		docker_stub.write_text(textwrap.dedent("""\
+			#!/usr/bin/env bash
+			case "$1" in
+				build) echo "sha256:$(printf '0%.0s' $(seq 1 64))"; exit 0 ;;
+				rm) exit 0 ;;
+				esac
+				source_dir=""
+				editor=false
+				for arg in "$@"; do
+					case "$arg" in
+						type=bind,src=*,dst=/source) source_dir="${arg#type=bind,src=}"; source_dir="${source_dir%,dst=/source}" ;;
+						review-editor-*) editor=true ;;
+					 esac
+				done
+				if [ "$editor" = true ]; then printf 'after\\n' > "${source_dir}/scripts/app.py"; fi
+				"""))
+		docker_stub.chmod(0o755)
+		github_env = root / "github_env"
+		github_env.write_text("")
+		env = _git_clean_env({
+			"PATH": f"{stub_bin}:{os.environ['PATH']}",
+			"GIT_DIR": str(checkout / ".git"),
+			"GIT_WORK_TREE": str(work_tree),
+			"WORKSPACE_PATH": str(work_tree),
+			"GITHUB_WORKSPACE": str(checkout),
+			"rb_fix_sandbox_env": str(github_env),
+			"RUNNER_TEMP": str(root),
+			"RUNTIME_DIR": str(root / "runtime"),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"OPENROUTER_API_KEY": "test-only-key",
+			"PYTHONDONTWRITEBYTECODE": "1",
+		})
+		sandbox = str(REPO_ROOT / "scripts/review_untrusted_sandbox.sh")
+		old_call = subprocess.run(
+			["bash", sandbox, "prepare"], cwd=work_tree,
+			env={**env, "GITHUB_WORKSPACE": str(work_tree), "GITHUB_ENV": str(github_env)},
+			capture_output=True, text=True, timeout=120,
+		)
+		assert old_call.returncode != 0 and "Review workspace path rejected" in old_call.stderr
+		prepared = subprocess.run(
+			["bash", "-c", judge_prepare], cwd=work_tree, env=env,
+			capture_output=True, text=True, timeout=120,
+		)
+		assert prepared.returncode == 0, prepared.stdout + prepared.stderr
+		sandbox_root = github_env.read_text().split("REVIEW_SANDBOX_ROOT=", 1)[1].strip()
+		assert (Path(sandbox_root) / "workspace").read_text().strip() == str(work_tree)
+		prompt = root / "prompt.txt"
+		prompt.write_text("fix it\n")
+		config = root / "config.json"
+		config.write_text(json.dumps({
+			"model": "openrouter/openai/gpt-6-sol",
+			"provider": {"openrouter": {"options": {"baseURL": "https://openrouter.ai/api/v1"}}},
+		}))
+		ran = subprocess.run(
+			["bash", sandbox, "run", str(prompt), str(root / "editor_output.txt"), "openai/gpt-6-sol", "high", str(config)],
+			cwd=work_tree, env={**env, "REVIEW_SANDBOX_ROOT": sandbox_root},
+			capture_output=True, text=True, timeout=120,
+		)
+		assert ran.returncode == 0, ran.stdout + ran.stderr
+		assert (work_tree / "scripts/app.py").read_text() == "after\n"
+		assert (checkout / "scripts/app.py").read_text() == "before\n"
+
+		# The checkout layout must ignore a stale inherited per-PR target.
+		github_env.write_text("")
+		legacy = subprocess.run(
+			["bash", "-c", judge_prepare], cwd=checkout, env=env,
+			capture_output=True, text=True, timeout=120,
+		)
+		assert legacy.returncode == 0, legacy.stdout + legacy.stderr
+		legacy_root = github_env.read_text().split("REVIEW_SANDBOX_ROOT=", 1)[1].strip()
+		assert (Path(legacy_root) / "workspace").read_text().strip() == str(checkout)
+		for sandbox_root_to_clean in (sandbox_root, legacy_root):
+			subprocess.run(
+				["bash", sandbox, "cleanup"], env={**env, "REVIEW_SANDBOX_ROOT": sandbox_root_to_clean},
+				check=True, capture_output=True, text=True, timeout=120,
+			)
 
 
 def test_review_relay_accepts_only_configured_chat_model() -> None:

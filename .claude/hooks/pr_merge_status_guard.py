@@ -18,6 +18,9 @@ when the source is a detached HEAD. Unknown directories warn and fall back to
 the session checkout check; unresolvable explicit push targets require
 confirmation. Repeated targets share a PR snapshot
 per repository and branch, while different source tips are checked separately.
+A `cd` or `exit` with a redirect that might fail (anything but a plain
+`/dev/null` target) makes the directory unknown. After checking the session
+checkout, a push in an unknown directory asks for confirmation.
 
 Detection rule — all three conditions must hold before the command is blocked:
 
@@ -115,11 +118,14 @@ VERDICT_UNAVAILABLE = "unavailable"
 # `--opt=value`. Needed so `git -C /repo commit` resolves to `commit` rather
 # than to the path.
 GIT_GLOBAL_OPTS_WITH_VALUE = frozenset(
-	{"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--exec-path"}
+	{"-C", "-c", "--config-env", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--exec-path"}
 )
 
 # Shell punctuation we treat as command separators when tokenizing a Bash line.
 _SHELL_PUNCTUATION_CHARS = ";&|\n<>"
+_FD_PREFIX_REDIRECT_OPERATORS = frozenset({"<", ">", ">>", ">|", "<>", ">&", "<&", "<<", "<<<"})
+_SHELL_CONTROL_PREFIXES = frozenset({"if", "then", "elif", "else", "do", "while", "until", "{", "(", "!"})
+_SHELL_WORD_DELIMITERS = frozenset(" \t\r" + _SHELL_PUNCTUATION_CHARS)
 
 _API_WRITE_METHODS = frozenset({"PUT", "POST", "PATCH"})
 _API_WRITE_URL_PREFIXES = (
@@ -184,6 +190,7 @@ class _GitInvocation(NamedTuple):
 	subcommand: str
 	arguments: list[str]
 	warning: str = ""
+	config_override: bool = False
 
 
 class _GuardTarget(NamedTuple):
@@ -194,6 +201,7 @@ class _GuardTarget(NamedTuple):
 	reaches_remote: bool
 	warning: str = ""
 	bulk: str = ""
+	remote: str = ""
 
 
 class LookupUnavailable(Exception):
@@ -251,15 +259,8 @@ def _shell_segments(command: str) -> list[list[str]]:
 	return segments
 
 
-def _is_unquoted_fd_prefix(command: str, digits: str, operator: str) -> bool:
-	"""Only recognize a literal descriptor immediately before a redirect."""
-	return re.search(
-		r"(?:^|[\s;&|()])" + re.escape(digits) + re.escape(operator[0]) + r"$", command
-	) is not None
-
-
-def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
-	"""Return simple commands and the operator preceding each one.
+def _shell_segments_with_redirects(command: str) -> list[tuple[str, list[str], bool]]:
+	"""Return simple commands, their preceding operator and redirect uncertainty.
 
 	This is not a Bash interpreter. Unsupported control flow is marked unknown
 	by the caller, never executed to infer an authorization decision.
@@ -268,45 +269,86 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	lexer.commenters = ""
 	lexer.whitespace = " \t\r"
 	lexer.whitespace_split = True
-	result: list[tuple[str, list[str]]] = []
+	# shlex groups adjacent punctuation (e.g. `>;`), but Bash still sees
+	# a redirect without a target followed by a command separator.
+	tokens: list[tuple[str, int]] = []
+	for raw_token in lexer:
+		if raw_token and set(raw_token) <= set(_SHELL_PUNCTUATION_CHARS):
+			part_end = lexer.instream.tell() - len(raw_token)
+			for part in re.findall(r"&>>|&>|&&|\|\||>>|>\||>&|<&|<<<|<<|<>|[;<>&|\n]", raw_token):
+				part_end += len(part)
+				tokens.append((part, part_end))
+		else:
+			tokens.append((raw_token, lexer.instream.tell()))
+	result: list[tuple[str, list[str], bool]] = []
 	segment: list[str] = []
+	segment_word_end = -1
 	operator = ""
-	redirect_target = False
-	last_word_span: tuple[int, int] | None = None
-	while True:
-		start = lexer.instream.tell()
-		token = lexer.get_token()
-		end = lexer.instream.tell()
-		if token == lexer.eof:
-			break
-		if redirect_target:
-			redirect_target = False
+	redirect_target: str | None = None
+	redirect_may_fail = False
+	for token, token_end in tokens:
+		if redirect_target is not None and not (token and set(token) <= set(_SHELL_PUNCTUATION_CHARS)):
+			if redirect_target not in (">", ">>", ">|", "&>", "&>>", "<") or token != "/dev/null":
+				redirect_may_fail = True
+			redirect_target = None
 			continue
-		if token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token):
-			# Bash treats only adjacent, unquoted digits as an IO_NUMBER.
-			# Keep all other words as arguments so their push refspec is checked.
-			if (
-				segment and last_word_span is not None
-				and last_word_span[1] > last_word_span[0]
-				and command[last_word_span[1] - 1] in "<>"
-				and re.fullmatch(r"[0-9]+", command[last_word_span[0]:last_word_span[1] - 1].lstrip(" \t\r"))
-			):
-				segment.pop()
-			redirect_target = True
-			last_word_span = None
+		if redirect_target is not None:
+			redirect_may_fail = True
+			redirect_target = None
+		if token == ">|" or (token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token)):
+			# Bash &> and &>> take no fd prefix (#6249); keep adjacent digits as
+			# arguments for these and unknown redirects so push refspecs are checked.
+			if token in _FD_PREFIX_REDIRECT_OPERATORS and segment and segment[-1].isascii() and segment[-1].isdigit():
+				# Only an unquoted digit immediately attached to a redirect is an fd.
+				redirect_start = token_end - len(token)
+				if command[redirect_start:redirect_start + len(token)] != token:
+					redirect_start -= 1  # shlex may read one character ahead.
+				fd_start = redirect_start - len(segment[-1])
+				if fd_start >= 0 and segment_word_end == redirect_start and command[fd_start:redirect_start] == segment[-1] and (fd_start == 0 or command[fd_start - 1] in _SHELL_WORD_DELIMITERS):
+					segment.pop()
+					segment_word_end = -1
+			redirect_target = token
 			continue
 		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
 			if segment:
-				result.append((operator, segment))
+				result.append((operator, segment, redirect_may_fail))
 				segment = []
+				segment_word_end = -1
+				redirect_may_fail = False
 			operator = token
-			last_word_span = None
 		else:
 			segment.append(token)
-			last_word_span = (start, end)
+			# shlex reads one delimiter ahead of a word, so use its raw end.
+			segment_word_end = token_end - (token_end > 0 and command[token_end - 1] in _SHELL_WORD_DELIMITERS)
+	if redirect_target is not None:
+		redirect_may_fail = True
 	if segment:
-		result.append((operator, segment))
+		result.append((operator, segment, redirect_may_fail))
 	return result
+
+
+def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
+	"""Return simple commands and the operator preceding each one."""
+	return [(operator, tokens) for operator, tokens, _ in _shell_segments_with_redirects(command)]
+
+
+def _command_after_control_prefix(tokens: list[str]) -> tuple[list[str], bool]:
+	"""Expose a command behind shell control words without trusting its cwd."""
+	control_prefix_seen = False
+	while tokens:
+		if tokens[0] in _SHELL_CONTROL_PREFIXES or tokens[0].endswith(")"):
+			tokens = tokens[1:]
+		elif tokens[0] == "case":
+			for position, word in enumerate(tokens[3:], start=3):
+				if word.endswith(")"):
+					tokens = tokens[position + 1:]
+					break
+			else:
+				break
+		else:
+			break
+		control_prefix_seen = True
+	return tokens, control_prefix_seen
 
 
 @contextmanager
@@ -344,17 +386,58 @@ def _literal_guard_path(
 	return None
 
 
+def _env_wrapped_git_index(tokens: list[str], index: int) -> int:
+	"""Skip a simple `env` prefix; return -1 when its command is ambiguous."""
+	if index >= len(tokens) or (tokens[index] != "env" and not tokens[index].endswith("/env")):
+		return index
+	index += 1
+	while index < len(tokens):
+		word = tokens[index]
+		if re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", word) or word in ("-", "-i", "--ignore-environment", "--"):
+			index += 1
+		elif word in ("-u", "--unset", "-C", "--chdir") and index + 1 < len(tokens):
+			index += 2
+		elif word.startswith(("--unset=", "--chdir=")) or (word.startswith(("-u", "-C")) and len(word) > 2):
+			index += 1
+		elif word in ("-S", "--split-string") or word.startswith(("-S", "--split-string=")):
+			inline = word not in ("-S", "--split-string")
+			if not inline and index + 1 >= len(tokens):
+				return -1
+			value = word.split("=", 1)[1] if word.startswith("--split-string=") else word[2:] if inline else tokens[index + 1]
+			# GNU env expands backslashes and ${VAR} itself; shlex cannot safely
+			# predict the resulting command in those cases.
+			if "$" in value or "\\" in value:
+				return -1
+			try:
+				split_words = shlex.split(value)
+			except ValueError:
+				return -1
+			if not split_words:
+				return -1
+			tokens[index:index + (1 if inline else 2)] = split_words
+		else:
+			return -1 if word.startswith("-") else index
+	return index
+
+
 def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation]:
 	try:
-		segments = _shell_segments_with_operators(command)
+		segments = _shell_segments_with_redirects(command)
 	except ValueError:
 		return []
 	working_directory: str | None = checkout
 	conditional_cd = False
 	invocations: list[_GitInvocation] = []
-	for operator, tokens in segments:
-		if operator == "||" and tokens[0] == "exit" and working_directory is not None:
+	for operator, tokens, redirect_may_fail in segments:
+		tokens, control_prefix = _command_after_control_prefix(tokens)
+		if control_prefix:
+			working_directory = None
+		if not tokens:
+			continue
+		if operator == "||" and tokens[0] == "exit" and working_directory is not None and not redirect_may_fail:
 			# If this exit runs the following git cannot; otherwise cd succeeded.
+			# A failed builtin redirect means exit did not run (#6289).
+			conditional_cd = False
 			continue
 		if operator not in ("", "&&") and conditional_cd:
 			working_directory = None
@@ -366,9 +449,10 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			operand = tokens[1:]
 			if operand[:1] == ["--"]:
 				operand = operand[1:]
+			# A failed builtin redirect means cd did not run (#6289).
 			working_directory = (
 				_literal_guard_path(operand[0], working_directory, shell_cd=True)
-				if len(operand) == 1 and working_directory is not None else None
+				if len(operand) == 1 and working_directory is not None and not redirect_may_fail else None
 			)
 			conditional_cd = operator == "&&" or conditional_cd
 			continue
@@ -376,6 +460,8 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			working_directory = None
 		index = 0
 		environment: dict[str, str] = {}
+		config_override = False
+		# Bash append assignments are prefixes too; keep the following git visible.
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
 			name, value = tokens[index].split("=", 1)
 			if name.endswith("+"):
@@ -385,11 +471,32 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 					working_directory = None
 			elif name in ("GIT_DIR", "GIT_WORK_TREE"):
 				environment[name] = value
+			if name == "GIT_CONFIG" or name.startswith("GIT_CONFIG_"):
+				config_override = True
 			index += 1
+		env_index = index
+		index = _env_wrapped_git_index(tokens, index)
+		if index == -1:
+			if any("git" in word or "$" in word for word in tokens[env_index + 1:]):
+				invocations.append(_GitInvocation(checkout, {}, "push", [], "unparsed env wrapper", True))
+			continue
+		env_cwd = working_directory
+		if index != env_index:
+			config_override = True
+			for position in range(env_index + 1, index):
+				word = tokens[position]
+				if word in ("-C", "--chdir") or word.startswith(("-C", "--chdir=")):
+					env_word_value = (tokens[position + 1] if word in ("-C", "--chdir") else
+						word.split("=", 1)[1] if word.startswith("--chdir=") else word[2:])
+					env_cwd = _literal_guard_path(env_word_value, env_cwd) if env_cwd else None
+				elif re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", word):
+					env_name, env_word_value = word.split("=", 1)
+					if env_name in ("GIT_DIR", "GIT_WORK_TREE"):
+						environment[env_name] = env_word_value
 		if index >= len(tokens) or (tokens[index] != "git" and not tokens[index].endswith("/git")):
 			continue
 		index += 1
-		git_cwd = working_directory
+		git_cwd = env_cwd
 		uncertain = git_cwd is None
 		while index < len(tokens) and tokens[index].startswith("-"):
 			option = tokens[index]
@@ -402,8 +509,13 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				index += 1
 			elif option.startswith("-C") and option != "-C":
 				value = option[2:]
+			elif option.startswith("-c") and option != "-c":
+				value = option[2:]
 			elif option.startswith(("--git-dir=", "--work-tree=")):
 				value = option.split("=", 1)[1]
+			if option in ("-c", "--config-env") or option.startswith(("-c", "--config-env=")):
+				# Git configuration can rewrite the push destination without changing origin's stored URL.
+				config_override = True
 			if value is not None:
 				if option.startswith("-C"):
 					git_cwd = _literal_guard_path(value, git_cwd) if git_cwd else None
@@ -428,6 +540,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			{} if uncertain else environment,
 			tokens[index], tokens[index + 1:],
 			"could not resolve git command directory; checking the session checkout instead" if uncertain else "",
+			config_override,
 		))
 	return invocations
 
@@ -448,12 +561,18 @@ def _branch_ref(ref: str) -> str | None:
 	return ref
 
 
+def _push_repository_is_location(word: str) -> bool:
+	"""True for a URL, scp-style address or path; those are checked by slug."""
+	return "://" in word or ":" in word or word.startswith(("/", ".", "~"))
+
+
 def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarget]:
 	"""Identify the destination branches and source tips of a git push."""
 	if invocation.warning:
 		return [_GuardTarget(invocation.cwd, {}, "", "HEAD", True, invocation.warning)]
 	positionals: list[str] = []
 	remote_provided = False
+	remote_value = ""
 	bulk = ""
 	delete = False
 	tags = False
@@ -481,23 +600,28 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 			index += 1
 			if index >= len(arguments):
 				uncertain = True
+			elif remote_provided and word in ("--repo", "--rep"):
+				remote_value = arguments[index]
 		elif re.fullmatch(r"-[ufnqv]*d[ufnqv]*", word):
 			delete = True
 		elif word.startswith(("--push-option=", "--push-o=", "--pu=", "--repo=", "--rep=", "--receive-pack=", "--rece=", "--exec=", "--e=", "--force-with-lease=")) or (word.startswith("-o") and word != "-o"):
 			if word.startswith(("--repo=", "--rep=")):
 				remote_provided = True
+				remote_value = word.split("=", 1)[1]
 		elif word.startswith("-"):
 			if word not in _PUSH_BOOLEAN_OPTIONS and not re.fullmatch(r"-[ufnqv]+", word):
 				uncertain = True
 		else:
 			positionals.append(word)
 		index += 1
-	if delete and not uncertain:
-		return []  # Deletes do not strand new commits on a branch.
+	if remote_provided and not remote_value:
+		uncertain = True
 	if uncertain:
 		return [_GuardTarget(checkout, {}, "", "HEAD", True,
-			"could not resolve git push options; destination branch is unknown")]
-	if remote_provided and positionals:
+			"could not resolve git push options; destination branch is unknown", remote=remote_value)]
+	if remote_provided and positionals and not _push_repository_is_location(positionals[0]):
+		# Git uses the positional repository over --repo; an unconfigured
+		# name is a repository the guard cannot verify, not a branch.
 		with _git_environment(invocation.environment):
 			code, _, _ = _run(
 				["git", "config", "--get", f"remote.{positionals[0]}.url"],
@@ -506,13 +630,17 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 		if code != 0:
 			return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
 				"could not resolve git push positional repository; destination branch is unknown")]
-		refspecs = positionals[1:]
-	else:
-		refspecs = positionals[1:]
+	# A positional repository overrides --repo; only later positionals are refspecs.
+	if positionals:
+		remote_value = positionals[0]
+	if delete:
+		# No merged-PR check for deletions, but a foreign destination still asks.
+		return [_GuardTarget(invocation.cwd, invocation.environment, "", "", True, remote=remote_value)] if remote_value and remote_value != "origin" else []
+	refspecs = positionals[1:]
 	if not refspecs and tags and not bulk:
-		return []
+		return [_GuardTarget(invocation.cwd, invocation.environment, "", "", True, remote=remote_value)] if remote_value and remote_value != "origin" else []
 	if not refspecs:
-		return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True, bulk=bulk)]
+		return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True, bulk=bulk, remote=remote_value)]
 	targets: list[_GuardTarget] = []
 	for refspec in refspecs:
 		refspec = refspec.removeprefix("+")
@@ -533,11 +661,14 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 		if branch == "":
 			continue
 		if branch is None:
-			targets.append(_GuardTarget(invocation.cwd, invocation.environment, None, source, True))
+			targets.append(_GuardTarget(invocation.cwd, invocation.environment, None, source, True, remote=remote_value))
 			continue
-		targets.append(_GuardTarget(invocation.cwd, invocation.environment, branch, source, True))
+		targets.append(_GuardTarget(invocation.cwd, invocation.environment, branch, source, True, remote=remote_value))
 	if bulk:
-		targets.append(_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True, bulk=bulk))
+		targets.append(_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True, bulk=bulk, remote=remote_value))
+	if not targets and remote_value and remote_value != "origin":
+		# Every refspec was a branch deletion; only the remote needs checking.
+		targets.append(_GuardTarget(invocation.cwd, invocation.environment, "", "", True, remote=remote_value))
 	return targets
 
 
@@ -666,23 +797,32 @@ def _api_write_requires_confirmation(command: str) -> bool:
 def git_subcommands(command: str) -> set[str]:
 	"""Return the set of git subcommands invoked by a shell command string.
 
-	Only counts `git` when it is the first real token of a shell segment, after
-	any leading `VAR=value` assignments. That keeps `man git commit` and
+	Only counts `git` when it is the first real token of a shell segment after
+	control words, leading `VAR=value` assignments, or a simple `env` wrapper.
+	That keeps `man git commit` and
 	`echo "git commit"` from tripping the guard, at the cost of missing
 	wrapper-prefixed invocations like `sudo git commit` — an acceptable trade,
 	since a false block is more disruptive than a missed check on a rare form.
 	"""
 	found: set[str] = set()
 	try:
-		segments = _shell_segments(command)
+		segments = _shell_segments_with_operators(command)
 	except ValueError:
 		# Unbalanced quotes — the command is not something we can read.
 		return found
-	for tokens in segments:
-		# Drop leading environment assignments (`GIT_DIR=... git commit`).
+	for _separator, tokens in segments:
+		tokens, _ = _command_after_control_prefix(tokens)
+		# Drop leading environment assignments (`GIT_DIR=... git commit`),
+		# including append assignments such as `COUNT+=1 git push`.
 		index = 0
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
 			index += 1
+		env_index = index
+		index = _env_wrapped_git_index(tokens, index)
+		if index == -1:
+			if any("git" in word or "$" in word for word in tokens[env_index + 1:]):
+				found.add("push")  # Unparseable env commands must request confirmation.
+			continue
 		if index >= len(tokens):
 			continue
 
@@ -1331,6 +1471,12 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	if _guard_disabled():
 		return 0, ""
 	if not guarded_git_subcommands:
+		# Bash may execute earlier lines before a later unmatched quote. Raw-text
+		# searches miss quoted/escaped spellings of git and its subcommands.
+		try:
+			_shell_segments_with_operators(command)
+		except ValueError:
+			_request_confirmation("Cannot parse the Bash command; an earlier git commit/push may still execute.")
 		return 0, ""
 
 	checkout = _payload_cwd(payload)
@@ -1340,15 +1486,20 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	pr_snapshots: dict[tuple[str, str], tuple[list[dict] | None, bool, str]] = {}
 	blocks: list[str] = []
 	bulk_reasons: list[str] = []
+	unverified_destinations: set[str] = set()
+	uncertain_push_reasons: list[str] = []
 	unknown_destination_reasons: list[str] = []
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
+		if invocation.subcommand == "push" and invocation.warning == "unparsed env wrapper":
+			unverified_destinations.add("unparsed env-wrapped Git command")
+			continue
 		if invocation.subcommand == "push" and invocation.warning:
-			_warn(invocation.warning)
-			unresolved_push_sources.append(
-				"could not resolve git push repository; the session checkout may not be the pushed repository."
-			)
+			uncertain_push_reasons.append(invocation.warning)
+		if invocation.subcommand == "push" and invocation.config_override:
+			unverified_destinations.add("per-command Git configuration may redirect the push")
+			continue  # Origin's PR history cannot authorize a push with overridden configuration.
 		targets = (
 			_push_targets(invocation, checkout) if invocation.subcommand == "push" else
 			[_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", False, invocation.warning)]
@@ -1365,7 +1516,22 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 				unknown_destination_reasons.append(target.warning)
 				continue
 			if target.warning:
-				_warn(target.warning)
+				_warn(target.warning)  # Unresolved directory: the session checkout is checked.
+			if target.remote and target.remote != "origin":
+				# Even a matching explicit URL may be rewritten by url.*.insteadOf.
+				if "://" in target.remote or target.remote.startswith("git@"):
+					unverified_destinations.add("explicit push URL may be rewritten by Git configuration")
+					continue
+				with _git_environment(target.environment):
+					checkout_slug = repo_slug(target.cwd)
+				push_slug = extract_repo_slug(target.remote)
+				if not checkout_slug or push_slug != checkout_slug:
+					# Git may push to a different repository; its PR history and
+					# default branch cannot be inferred from this checkout's origin.
+					unverified_destinations.add(push_slug or "an unverified remote")
+					continue
+			if not target.tip:
+				continue  # A deletion or tag-only push cannot strand a branch commit.
 			if target.tip != "HEAD":
 				with _git_environment(target.environment):
 					code, resolved_source_sha, _ = _run(
@@ -1434,14 +1600,28 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 					blocks.append(_block_message(offender, branch, base, tip_label=tip))
 	if blocks:
 		return 2, "\n\n".join(blocks)
-	unresolved_push_sources.extend(unresolved_push_destinations)
+	confirmation_reasons: list[str] = []
+	if uncertain_push_reasons:
+		confirmation_reasons.append(
+			"could not resolve git push repository; the session checkout may not be the pushed repository. "
+			"could not determine the directory `git push` runs in (shell control flow or redirection); "
+			"checked the session checkout instead"
+		)
+	confirmation_reasons.extend(unresolved_push_sources)
+	confirmation_reasons.extend(unresolved_push_destinations)
+	confirmation_reasons.extend(unknown_destination_reasons)
 	if bulk_reasons:
-		unknown_destination_reasons.append(
+		confirmation_reasons.append(
 			"Bulk git push may write more branches than the current branch: "
 			+ ", ".join(sorted(set(bulk_reasons)))
 		)
-	if unknown_destination_reasons or unresolved_push_sources:
-		_request_confirmation("; ".join(sorted(set(unknown_destination_reasons + unresolved_push_sources))))
+	if unverified_destinations:
+		confirmation_reasons.append(
+			"Git write may target an unverified repository or branch: "
+			+ ", ".join(sorted(unverified_destinations))
+		)
+	if confirmation_reasons:
+		_request_confirmation("; ".join(confirmation_reasons))
 	return 0, ""
 
 

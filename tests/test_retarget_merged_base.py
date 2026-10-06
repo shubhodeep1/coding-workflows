@@ -181,7 +181,7 @@ def test_retargeted_gate_never_skips_on_stale_mergeability_or_terminal_marker(tm
 	fixture_file = tmp_path / "fixture.json"
 	gate_fixture = {
 		"merged": {"stack/a": _merged(7, "main", SHA_A)}, "tips": {"stack/a": SHA_A},
-		"pr": {"state": "open", "merged": False, "head": {"ref": "ai/issue-42", "sha": SHA_B},
+		"pr": {"state": "open", "merged": False, "head": {"ref": "ai/issue-42", "sha": SHA_B, "repo": {"full_name": "o/r"}},
 			"base": {"ref": "stack/a"}, "updated_at": "2026-09-22T08:00:00Z", "labels": [],
 			"additions": 1, "deletions": 1, "changed_files": 1, "mergeable": True,
 			"mergeable_state": "clean", "title": "Test", "body": ""},

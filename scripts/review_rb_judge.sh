@@ -38,6 +38,36 @@ for _ledger_candidate in \
   fi
 done
 source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+# Security-exhaustion mode and the judge-merge security gate
+# (scripts/review_rb_judge_security_pass.sh). An older staged bundle without
+# the helper keeps the pre-helper behaviour: normal judge mode, merges
+# without the single-issue security pass.
+# shellcheck source=/dev/null
+if [ -f "${SUPPORT_SCRIPTS_DIR}/review_rb_judge_security_pass.sh" ]; then
+  source "${SUPPORT_SCRIPTS_DIR}/review_rb_judge_security_pass.sh" || true
+fi
+if ! type rb_security_merge_gate >/dev/null 2>&1; then
+  echo "::warning::review_rb_judge_security_pass.sh is not staged; the judge runs without security-pass handling."
+  rb_security_mode_detect() { RB_SECURITY_MODE="false"; }
+  rb_security_findings_render() { : > "$2"; }
+  rb_security_prompt_section() { :; }
+  rb_security_merge_gate() { return 0; }
+  rb_security_post_extension() { :; }
+fi
+RB_SECURITY_BLOCKING_COUNT=0
+RB_SECURITY_BLOCKING_ISSUES=""
+if ! type rb_security_severity_block >/dev/null 2>&1; then
+  # An older partial bundle may still detect exhaustion; never let it merge
+  # without the severity classifier and hold implementation.
+  rb_security_severity_block() {
+    if [ "${RB_SECURITY_MODE:-false}" = "true" ]; then echo hold; else echo allow; fi
+  }
+  rb_security_block_hold() { return 1; }
+  rb_security_block_already_reported() { return 1; }
+fi
+if ! type rb_security_disable_auto_merge >/dev/null 2>&1; then
+  rb_security_disable_auto_merge() { return 1; }
+fi
 OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh}"
 OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR}/write_opencode_config.sh}"
 # shellcheck source=/dev/null
@@ -1028,6 +1058,30 @@ else
   echo "Judge retry ${RETRY_COUNT}/${MAX_REVIEW_BLOCKED_RETRIES}."
 fi
 
+# Security-exhaustion mode: the single-issue security pass used every audit
+# cycle, so the judge decides with the open findings in its prompt.
+RB_SECURITY_MODE="false"
+RB_SECURITY_FINDINGS_FILE="${RUNTIME_DIR}/rb_judge_security_findings.txt"
+rb_security_mode_detect
+if [ "${RB_SECURITY_MODE:-false}" = "true" ]; then
+  if ! rb_security_findings_render "${TARGET_BRANCH:-$(jq -r '.head.ref // ""' "${PR_PAYLOAD_FILE:-/dev/null}" 2>/dev/null || true)}" "${RB_SECURITY_FINDINGS_FILE}"; then
+    # Unknown findings cannot justify leaving an earlier auto-merge active.
+    if [ "${PR_ALREADY_MERGED:-false}" != "true" ] && ! rb_security_disable_auto_merge "$(git rev-parse HEAD 2>/dev/null || true)"; then
+      echo "::error::Could not verify or disable auto-merge after the findings lookup failed."
+    fi
+    echo "::error::Security-pass findings are incomplete; refusing a judge decision without them."
+    exit 1
+  fi
+  echo "Security pass exhausted for PR #${PR_NUMBER}; the judge decides with the open findings."
+  if [ "${RB_SECURITY_BLOCKING_COUNT:-0}" -gt 0 ] && [ "${PR_ALREADY_MERGED:-false}" != "true" ]; then
+    RB_SECURITY_EARLY_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
+    if ! rb_security_disable_auto_merge "${RB_SECURITY_EARLY_HEAD_SHA}"; then
+      echo "::error::Could not withdraw or verify auto-merge before judging blocking security findings."
+      exit 1
+    fi
+  fi
+fi
+
 # -----------------------------------------------------------
 # Collect PR context for judge
 # -----------------------------------------------------------
@@ -1124,6 +1178,18 @@ fi
 # The checked-out commit is the code snapshot the judge can inspect. Live PR
 # metadata may advance after checkout, so it is not merge authorization.
 RB_JUDGED_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"
+if [ "${RB_SECURITY_MODE:-false}" = "true" ] && [ "${PR_ALREADY_MERGED:-false}" != "true" ] && [ "${IS_FINAL}" = "true" ] \
+  && { ! [[ "${RB_SECURITY_BLOCKING_COUNT:-0}" =~ ^[0-9]+$ ]] || [ "${RB_SECURITY_BLOCKING_COUNT}" -gt 0 ]; } \
+  && rb_security_block_already_reported "${RB_JUDGED_HEAD_SHA}"; then
+  if ! rb_security_disable_auto_merge "${RB_JUDGED_HEAD_SHA}"; then
+    echo "::error::Could not verify or disable auto-merge for blocked PR #${PR_NUMBER}."
+    exit 1
+  fi
+  echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+  echo "judge_action=security_blocked_pending" >> "$GITHUB_OUTPUT"
+  echo "RB_JUDGE_SECURITY_PASS mode=severity_block pr=${PR_NUMBER} outcome=hold reason=already_reported"
+  exit 0
+fi
 RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE="${RUNTIME_DIR}/rb_judge_prior_round_decisions.txt"
 if command -v render_review_rb_prior_round_decisions_file >/dev/null 2>&1; then
   render_review_rb_prior_round_decisions_file "${REVIEW_LEDGER_PATH}" "${RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE}"
@@ -1198,6 +1264,10 @@ _init_prompt_budget "${RB_JUDGE_CONTEXT_BUDGET_BYTES}"
     cat ./pre_assembled_static.txt
   fi
   echo
+  if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/static_readme_trimmed.txt" ]; then
+    emit_review_rb_untrusted_file 'PR README.MD (trimmed)' "${RUNTIME_DIR}/static_readme_trimmed.txt"
+    echo
+  fi
   echo "=== REVIEW-BLOCKED JUDGE TASK ==="
   echo
   if [ -f "${SUPPORT_PROMPTS_DIR}/mode-judge-review-blocked.txt" ]; then
@@ -1303,6 +1373,10 @@ _init_prompt_budget "${RB_JUDGE_CONTEXT_BUDGET_BYTES}"
     echo "are preserved instead of discarded."
     echo "close_and_reissue only if the approach is fundamentally wrong and"
     echo "the PR's work should be discarded."
+  fi
+  if [ "${RB_SECURITY_MODE:-false}" = "true" ]; then
+    echo
+    rb_security_prompt_section "${RB_SECURITY_FINDINGS_FILE}" "${IS_FINAL}" "${RB_SECURITY_BLOCKING_COUNT:-0}"
   fi
 } > "${RB_JUDGE_PROMPT}"
 _cleanup_prompt_budget
@@ -1673,6 +1747,28 @@ Leaving the linked issue in ai:review-blocked for operator review. Rerun the jud
   exit 0
 fi
 
+RB_SECURITY_ORIGINAL_ACTION=""
+RB_SECURITY_FORCED_FIX="false"
+RB_SECURITY_SEVERITY_DECISION="$(rb_security_severity_block "${RB_ACTION}" "${IS_FINAL}")"
+case "${RB_SECURITY_SEVERITY_DECISION}" in
+  allow) ;;
+  convert_fix)
+    RB_SECURITY_ORIGINAL_ACTION="${RB_ACTION}"
+    RB_ACTION="fix"
+    RB_SECURITY_FORCED_FIX="true"
+    RB_FIX_DESC="${RB_FIX_DESC:-Fix open high/critical security-audit findings: ${RB_SECURITY_BLOCKING_ISSUES}}"
+    ;;
+  *)
+    if ! [[ "${RB_JUDGED_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "judge_action=skip" >> "$GITHUB_OUTPUT"
+      echo "judge_skip_reason=unresolved_head_sha" >> "$GITHUB_OUTPUT"
+      exit 0
+    fi
+    rb_security_block_hold "${RB_JUDGED_HEAD_SHA}" "${ISSUE_NUMBERS}" final_round || exit 1
+    exit 0
+    ;;
+esac
+
 # -----------------------------------------------------------
 # Post judge assessment to PR
 # -----------------------------------------------------------
@@ -1682,6 +1778,9 @@ RB_JUDGE_COMMENT_FILE="${RUNTIME_DIR}/rb_judge_comment.md"
   echo "${JUDGE_COMMENT}"
   echo
   echo "**Decision:** ${RB_ACTION}"
+  if [ -n "${RB_SECURITY_ORIGINAL_ACTION:-}" ]; then
+    echo "**Converted:** judge chose ${RB_SECURITY_ORIGINAL_ACTION:-}; ${RB_SECURITY_BLOCKING_COUNT:-0} open high/critical/unrated findings block the merge (${RB_SECURITY_BLOCKING_ISSUES:-})"
+  fi
   if [ -n "${RB_LOGICAL_REVIEW_STATE}" ]; then
     echo "**Logical review state:** ${RB_LOGICAL_REVIEW_STATE}"
   fi
@@ -1689,6 +1788,9 @@ RB_JUDGE_COMMENT_FILE="${RUNTIME_DIR}/rb_judge_comment.md"
     echo "**Posted review state:** ${RB_OUTBOUND_REVIEW_STATE} (break-glass override)"
   fi
   echo "**Retry:** $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}"
+  if [ "${RB_SECURITY_MODE:-false}" = "true" ]; then
+    echo "**Mode:** single-issue security pass exhausted; open findings stay open as issues"
+  fi
   echo "**Justification:** ${RB_JUSTIFICATION}"
   echo
   echo "**Remaining issues:** ${RB_REMAINING}"
@@ -1703,6 +1805,31 @@ post_review_blocked_assessment \
 # -----------------------------------------------------------
 # Execute judge action
 # -----------------------------------------------------------
+# Judge merges go through the single-issue security gate (outside
+# security-exhaustion mode): a clean audit of the head merges; otherwise the
+# gate dispatches or waits for the audit and the merge is held. The audit's
+# report re-runs the review, and the still-capped review brings the judge
+# back. `fix` on the final attempt is treated as a merge without a fix commit.
+RB_MERGE_ACTION="false"
+case "${RB_ACTION}" in
+  merge|merge_with_followup) RB_MERGE_ACTION="true" ;;
+  fix) [ "${IS_FINAL}" = "true" ] && RB_MERGE_ACTION="true" ;;
+esac
+if [ "${RB_MERGE_ACTION}" = "true" ] && [ "${PR_ALREADY_MERGED:-false}" != "true" ] && ! rb_security_merge_gate; then
+  RB_SECURITY_FINAL_FIX_NOTE=""
+  if [ "${RB_ACTION}" = "fix" ]; then
+    RB_SECURITY_FINAL_FIX_NOTE="The final-attempt fix is treated as a merge because judge fix retries are exhausted; no fix commit was created. "
+  fi
+  echo "Judge chose ${RB_ACTION} for PR #${PR_NUMBER}; ${RB_SECURITY_FINAL_FIX_NOTE}the single-issue security pass holds the merge."
+  gh_retry gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
+    -f body="## Review-Blocked Judge — merge held for the security pass
+
+The judge chose **${RB_ACTION}**. ${RB_SECURITY_FINAL_FIX_NOTE}This PR's single-issue security audit has not passed for its current head, so the merge waits. The audit result re-runs the review, and the judge decides again then." >/dev/null 2>&1 || true
+  echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+  echo "judge_action=security_hold" >> "$GITHUB_OUTPUT"
+  exit 0
+fi
+
 case "${RB_ACTION}" in
   merge)
     echo "Judge says merge PR #${PR_NUMBER} as-is."
@@ -1848,13 +1975,16 @@ case "${RB_ACTION}" in
         echo "You are on the PR branch (${TARGET_BRANCH})."
         echo "Apply the fixes you identified directly to the repository files."
         echo "Focus only on the issues that blocked the review."
+        if [ "${RB_SECURITY_FORCED_FIX}" = "true" ]; then
+          echo "The judge chose a merge, but the open security-audit findings marked [BLOCKS MERGE] above prevent it. Fix those findings now."
+        fi
         echo "Do not create new files unless absolutely required."
         echo "After applying fixes, output the same JSON with action='fix' and"
         echo "fix_description describing what you changed."
         echo
         # Edit-discipline guidance is scoped to THIS step (the fix
-        # step runs with --sandbox danger-full-access and is expected
-        # to write files). The read-only judge step intentionally
+        # step is an OpenCode writer in review_untrusted_sandbox.sh and is
+        # expected to write files). The read-only judge step intentionally
         # omits this block — its sandbox would silently reject any
         # write, and including it there encouraged the model to
         # re-explore in pursuit of a write it could never land.
@@ -1886,26 +2016,45 @@ __EDIT_DISCIPLINE__
       rb_fix_stall_status_file="$(mktemp /tmp/rb_fix_stall_status.XXXXXX)"
       rb_fix_stall_state=""
       rb_fix_rc=0
+      # The fix writer edits files with a full tool surface while reading
+      # untrusted PR content, so it runs in the review editor's
+      # credential-free, network-isolated sandbox
+      # (review_untrusted_sandbox.sh): no GH_PAT, no OpenRouter key, no host
+      # checkout or .git inside; validated edits are copied back afterwards.
+      # Serena runs only on the host, so the writer gets no MCP server.
+      # GITHUB_WORKSPACE stays the checkout: prepare validates its .git and
+      # takes the per-PR tree from WORKSPACE_PATH, which has no .git (#6455).
       rb_fix_serena_mode="off"
-      if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
-        rb_fix_serena_mode="on"
-      fi
       rb_fix_opencode_ready=true
       if ! review_rb_prepare_opencode_config writer review_rb_fix "${RB_FIX_OPENCODE_CONFIG}" "${rb_fix_serena_mode}"; then
         rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}"
         exit 1
       fi
+      rb_fix_sandbox_env="$(mktemp /tmp/rb_fix_sandbox_env.XXXXXX)"
+      # Keep GITHUB_WORKSPACE on the checkout with .git; pass the per-PR tree
+      # through the sandbox's validated WORKSPACE_PATH (issues #4580, #6055, #6455).
+      rb_fix_checkout_real="$(realpath -e -- "${GITHUB_WORKSPACE:-}" 2>/dev/null || true)"
+      rb_fix_workdir_real="$(realpath -e -- "${RB_OPENCODE_WORKSPACE}" 2>/dev/null || true)"
+      if [ -n "${rb_fix_checkout_real}" ] && [ "${rb_fix_checkout_real}" = "${rb_fix_workdir_real}" ]; then
+        rb_fix_sandbox_workspace_env=(-u WORKSPACE_PATH)
+      else
+        rb_fix_sandbox_workspace_env=("WORKSPACE_PATH=${RB_OPENCODE_WORKSPACE}")
+      fi
+      if ! env "${rb_fix_sandbox_workspace_env[@]}" GITHUB_ENV="${rb_fix_sandbox_env}" bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare; then
+        echo "::error::Review-blocked fix sandbox could not be prepared; the fix writer never runs on the host."
+        rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}" "${rb_fix_sandbox_env}"
+        exit 1
+      fi
+      rb_fix_sandbox_root="$(sed -n 's/^REVIEW_SANDBOX_ROOT=//p' "${rb_fix_sandbox_env}" | tail -n 1)"
+      rm -f "${rb_fix_sandbox_env}"
       rb_fix_opencode_cmd=(
-        bash -c
-        # shellcheck disable=SC2016
-        'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
-        opencode-rb-fix
-        "${OPENCODE_HELPERS_PATH}"
-        writer
+        env "REVIEW_SANDBOX_ROOT=${rb_fix_sandbox_root}"
+        bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run
+        "${RB_FIX_PROMPT}"
+        "${RB_FIX_OUTPUT}"
         "${MODEL_EDITOR}"
         "${JUDGE_EFFECTIVE_REASONING_EFFORT}"
         "${RB_FIX_OPENCODE_CONFIG}"
-        "${RB_OPENCODE_WORKSPACE}"
       )
       emit_review_rb_substate "review_rb_fix" "judge_fix" "LaunchingAgentProcess" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
       emit_review_rb_substate "review_rb_fix" "judge_fix" "InitializingSession" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
@@ -1930,6 +2079,7 @@ __EDIT_DISCIPLINE__
       if rb_fix_stall_state="$(read_codex_stall_guard_state_with_warning "${rb_fix_stall_status_file}" "Review-blocked fix OpenCode" )"; then
         :
       fi
+      REVIEW_SANDBOX_ROOT="${rb_fix_sandbox_root}" bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup || true
       review_rb_strip_opencode_output_file "${RB_FIX_OUTPUT}"
       review_rb_strip_opencode_output_file "${RB_FIX_STDERR}"
       emit_review_rb_substate "review_rb_fix" "judge_fix" "Finishing" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
@@ -2035,6 +2185,15 @@ Review-blocked judge applied fixes to unblock the review pipeline.
 Retry $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}.
 
 ${RB_FIX_DESC}"
+          if [ "${RB_SECURITY_MODE:-false}" = "true" ]; then
+            # A failed marker write must leave this fix unpushed: the next
+            # security-exhaustion judge would otherwise bypass its audit.
+            if ! rb_security_post_extension "$(git rev-parse HEAD 2>/dev/null || true)"; then
+              # The workflow must not degrade this error to success: its
+              # deferred push would publish this local commit without a marker.
+              exit 42
+            fi
+          fi
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}"
           if git push origin "HEAD:${TARGET_BRANCH}"; then
             echo "Pushed [judge-fix] commit to ${TARGET_BRANCH}."
@@ -2042,9 +2201,19 @@ ${RB_FIX_DESC}"
             echo "judge_action=fix" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::Failed to push judge fix — falling back to manual intervention."
+            exit 1
           fi
         else
+          if [ "${RB_SECURITY_MODE:-false}" = "true" ] && { ! [[ "${RB_SECURITY_BLOCKING_COUNT:-0}" =~ ^[0-9]+$ ]] || [ "${RB_SECURITY_BLOCKING_COUNT}" -gt 0 ]; }; then
+            rb_security_block_hold "${RB_JUDGED_HEAD_SHA}" "${ISSUE_NUMBERS}" fix_no_changes || exit 1
+            exit 0
+          fi
           echo "Judge staged no effective changes. Treating as merge."
+          if [ "${PR_ALREADY_MERGED:-false}" != "true" ] && ! rb_security_merge_gate; then
+            echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+            echo "judge_action=security_hold" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
@@ -2055,7 +2224,16 @@ ${RB_FIX_DESC}"
           echo "judge_action=merge" >> "$GITHUB_OUTPUT"
         fi
       else
+        if [ "${RB_SECURITY_MODE:-false}" = "true" ] && { ! [[ "${RB_SECURITY_BLOCKING_COUNT:-0}" =~ ^[0-9]+$ ]] || [ "${RB_SECURITY_BLOCKING_COUNT}" -gt 0 ]; }; then
+          rb_security_block_hold "${RB_JUDGED_HEAD_SHA}" "${ISSUE_NUMBERS}" fix_no_changes || exit 1
+          exit 0
+        fi
         echo "Judge produced no file changes. Treating as merge."
+        if [ "${PR_ALREADY_MERGED:-false}" != "true" ] && ! rb_security_merge_gate; then
+          echo "judge_handled=true" >> "$GITHUB_OUTPUT"
+          echo "judge_action=security_hold" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
         ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
         while IFS= read -r issue_number; do
           [ -n "${issue_number}" ] || continue

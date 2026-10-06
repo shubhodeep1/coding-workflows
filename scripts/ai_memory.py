@@ -14,7 +14,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ai_memory_lib import (
+# PYTHONSAFEPATH keeps the PR work tree off sys.path; restore only this trusted
+# script's directory for the staged sibling modules used by memory operations.
+_memory_script_dir = str(Path(__file__).resolve().parent)
+if _memory_script_dir not in sys.path:
+	sys.path.insert(0, _memory_script_dir)
+
+from ai_memory_lib import (  # noqa: E402 - sibling path must be set first
     MEMORY_RECORD_SCHEMA_VERSION,
     MemoryGitError,
     MemoryValidationError,
