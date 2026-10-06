@@ -123,6 +123,7 @@ _INLINE_GIT_CONFIG_ENV_RE = re.compile(
 
 # Shell punctuation we treat as command separators when tokenizing a Bash line.
 _SHELL_PUNCTUATION_CHARS = ";&|\n<>"
+_SHELL_WORD_DELIMITERS = frozenset(" \t\r" + _SHELL_PUNCTUATION_CHARS)
 
 _API_WRITE_METHODS = frozenset({"PUT", "POST", "PATCH"})
 _API_WRITE_URL_PREFIXES = (
@@ -287,38 +288,35 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	segment: list[str] = []
 	operator = ""
 	redirect_target = False
-	last_word_span: tuple[int, int] | None = None
-	while True:
-		start = lexer.instream.tell()
-		token = lexer.get_token()
-		end = lexer.instream.tell()
-		if token == lexer.eof:
-			break
+	retained_word_end = -1
+	for token in lexer:
+		token_end = lexer.instream.tell()
 		if redirect_target:
 			redirect_target = False
+			retained_word_end = -1
 			continue
 		if token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token):
-			# Bash treats only adjacent, unquoted digits as an IO_NUMBER.
-			# Keep all other words as arguments so their push refspec is checked.
-			if (
-				segment and last_word_span is not None
-				and last_word_span[1] > last_word_span[0]
-				and command[last_word_span[1] - 1] in "<>"
-				and re.fullmatch(r"[0-9]+", command[last_word_span[0]:last_word_span[1] - 1].lstrip(" \t\r"))
-			):
-				segment.pop()
+			# shlex reads one character past a word. Pop only when the whole raw
+			# word is unquoted ASCII digits adjacent to the redirect; any quote
+			# or escape in the word keeps it as an argument.
+			if (not token.startswith("&") and segment and segment[-1].isascii() and segment[-1].isdigit()
+				and retained_word_end == token_end - len(token)):
+				raw_start = retained_word_end - len(segment[-1]) - 1
+				if (raw_start >= 0 and command[raw_start:retained_word_end - 1] == segment[-1]
+					and (raw_start == 0 or command[raw_start - 1] in _SHELL_WORD_DELIMITERS)):
+					segment.pop()
 			redirect_target = True
-			last_word_span = None
+			retained_word_end = -1
 			continue
 		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
 			if segment:
 				result.append((operator, segment))
 				segment = []
 			operator = token
-			last_word_span = None
+			retained_word_end = -1
 		else:
 			segment.append(token)
-			last_word_span = (start, end)
+			retained_word_end = token_end
 	if segment:
 		result.append((operator, segment))
 	return result
@@ -372,6 +370,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 	for operator, tokens in segments:
 		if operator == "||" and tokens[0] == "exit" and working_directory is not None:
 			# If this exit runs the following git cannot; otherwise cd succeeded.
+			conditional_cd = False
 			continue
 		if operator not in ("", "&&") and conditional_cd:
 			working_directory = None
@@ -596,9 +595,15 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 		with _git_environment(invocation.environment, invocation.config):
 			code, _, _ = _run(["git", "config", "--get", f"remote.{positionals[0]}.url"],
 				invocation.cwd, _GIT_TIMEOUT_SECONDS)
-		if code != 0 and not (code == 1 and extract_repo_slug(positionals[0])):
+		if code == 0:
+			refspecs = positionals[1:]
+			selected_remote = positionals[0]
+		elif code == 1 and ":" in positionals[0]:
+			refspecs = positionals
+		else:
 			return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
 				"inline git config: positional push repository cannot be resolved", config=invocation.config)]
+	elif positionals and not remote_provided:
 		refspecs = positionals[1:]
 		selected_remote = positionals[0]
 	elif remote_provided and positionals:

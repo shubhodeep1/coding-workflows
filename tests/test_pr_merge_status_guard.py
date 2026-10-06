@@ -103,6 +103,12 @@ def test_unbalanced_quotes_do_not_raise() -> None:
 	("git push origin 2>/dev/null", ["git", "push", "origin"]),
 	("git push origin 123>x", ["git", "push", "origin"]),
 	("git push origin ² > x", ["git", "push", "origin", "²"]),
+	("git push origin 2 2>&2>/dev/null", ["git", "push", "origin", "2"]),
+	("git push origin 3 2>&3>/dev/null", ["git", "push", "origin", "3"]),
+	("git push origin 2 >&2>f", ["git", "push", "origin", "2"]),
+	("git push origin 12 2>12>x", ["git", "push", "origin", "12"]),
+	("git push origin 2 2<&2<in", ["git", "push", "origin", "2"]),
+	("git push origin 2 2>&2 >/dev/null", ["git", "push", "origin", "2"]),
 ])
 def test_numeric_push_target_before_redirect(command: str, expected: list[str]) -> None:
 	assert guard._shell_segments_with_operators(command)[0] == ("", expected)
@@ -969,6 +975,9 @@ def test_conditional_cd_outside_its_list_warns_and_uses_checkout(merged_branch_r
 	"git push origin HEAD",
 	"COUNT+=1 git push origin HEAD:feature/x",
 	"git push --repo=origin",
+	"git push --repo origin HEAD:feature/x",
+	"git push --repo=origin HEAD:feature/x",
+	"git push --rep=origin HEAD:feature/x",
 	"git push --repo=upstream origin",
 	"git push origin --repo=upstream",
 	"git push origin HEAD:feature/x --repo=upstream",
@@ -1311,11 +1320,105 @@ def test_numeric_push_refspec_guards_merged_branch(merged_branch_repo, monkeypat
 	assert lookups == ["123"]
 
 
+@pytest.mark.parametrize("refspec,command", [
+	("2", "git push origin 2 > /tmp/out"),
+	("2", "git push origin 2 3>/tmp/out"),
+	("2", "git push origin 2&>/tmp/out"),
+	("12", "git push origin 12&>>/tmp/out"),
+	("2", "git push origin ''2>/dev/null"),
+	("2", 'git push origin ""2>/dev/null'),
+	("12", "git push origin ''12>/tmp/out"),
+	("2", "git push origin ''2&>/tmp/out"),
+	("123", 'git push origin ""123>>/dev/null'),
+	("2", "git push origin '2'>/tmp/out"),
+	("12", "git push origin ''12>/dev/null"),
+	("2", "git push origin ''2>&1"),
+	("2", "git push origin \\2>/tmp/out"),
+	("12", "git push origin \\12>/tmp/out"),
+	("12", "git push origin '1'2>/tmp/out"),
+	("123", "git push origin 123 > /dev/null"),
+	("123", 'git push origin "123">/dev/null'),
+])
+def test_numeric_push_refspec_before_redirect_is_checked(merged_branch_repo, monkeypatch,
+	refspec: str, command: str) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "branch", refspec)
+	_git(repo, "checkout", "main")
+	merged_sha = _git(repo, "rev-parse", refspec)
+	lookups: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		lookups.append(branch)
+		return [dict(MERGED_PR, headRefOid=merged_sha)] if branch == refspec else []
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": command}})
+	assert code == 2, message
+	assert lookups == [refspec]
+
+
+def test_empty_quoted_numeric_refspec_is_not_an_fd() -> None:
+	quoted = guard._guarded_git_invocations("git push origin ''2>/dev/null", "/repo")
+	assert len(quoted) == 1
+	assert quoted[0].arguments == ["origin", "2"]
+	bare = guard._guarded_git_invocations("git push origin 2>/dev/null", "/repo")
+	assert len(bare) == 1
+	assert bare[0].arguments == ["origin"]
+	assert guard._shell_segments_with_operators("git status;2>/dev/null") == [
+		("", ["git", "status"]),
+	]
+
+
+@pytest.mark.parametrize("command", [
+	"git push origin ''2>/dev/null",
+	'git push origin ""2>/dev/null',
+])
+def test_empty_quoted_numeric_word_is_kept_as_refspec(command: str) -> None:
+	invocations = guard._guarded_git_invocations(command, "/repo")
+	assert len(invocations) == 1
+	assert invocations[0].arguments == ["origin", "2"]
+
+
+@pytest.mark.parametrize("command", [
+	"git push origin HEAD:feature/open 2>/dev/null",
+	"git push origin HEAD:feature/open 2>&1",
+	"git push origin HEAD:feature/open 12>/dev/null",
+	"git push origin HEAD:feature/open 2>out 2>&1",
+	"git push origin HEAD:feature/open\t2>/dev/null",
+])
+def test_adjacent_fd_redirect_does_not_create_numeric_refspec(command: str) -> None:
+	invocations = guard._guarded_git_invocations(command, "/repo")
+	assert len(invocations) == 1
+	assert invocations[0].arguments == ["origin", "HEAD:feature/open"]
+
+
+@pytest.mark.parametrize("command", [
+	"git push --repo=origin feature/x:feature/x",
+	"git push --repo origin feature/x:feature/x",
+	"git push --rep=origin feature/x:feature/x",
+])
+def test_push_with_repo_option_checks_destination_from_main(merged_branch_repo, monkeypatch, command: str) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "checkout", "main")
+	lookups: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		lookups.append(branch)
+		return [dict(MERGED_PR, headRefOid=merged_sha)] if branch == "feature/x" else []
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": command}})
+	assert code == 2, message
+	assert lookups == ["feature/x"]
+
+
 def test_quoted_numeric_push_refspec_cannot_match_later_redirect(merged_branch_repo, monkeypatch) -> None:
 	repo, _ = merged_branch_repo
 	merged_sha = _git(repo, "rev-parse", "HEAD")
 	_git(repo, "branch", "12", merged_sha)
-	_git(repo, "checkout", "main")
 	lookups: list[str] = []
 	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
 	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
@@ -1332,8 +1435,6 @@ def test_quoted_numeric_push_refspec_cannot_match_later_redirect(merged_branch_r
 @pytest.mark.parametrize("command", [
 	"git push origin HEAD:$DEST",
 	"git push --repo=origin HEAD:$DEST",
-	"git push --repo origin HEAD:feature/x",
-	"git push --repo=origin HEAD:feature/x",
 	"git push --repo=upstream mirror HEAD:feature/x",
 	"git push --repo=upstream ../mirror HEAD:feature/x",
 	"git push --repo=upstream https://github.com/o/r.git HEAD:feature/x",
@@ -1443,6 +1544,8 @@ def test_unknown_push_target_does_not_prompt_before_merged_branch_block(merged_b
 	"git push origin 2  >/dev/null",
 	'git push origin "2">/dev/null',
 	"git push origin feature/open 2 >&1",
+	"git push origin 2 2>&2>/dev/null",
+	"git push origin 2 >&2>f",
 ])
 def test_numeric_refspec_before_redirect_is_guarded(merged_branch_repo, monkeypatch, command: str) -> None:
 	repo, _ = merged_branch_repo
@@ -1467,6 +1570,8 @@ def test_numeric_refspec_before_redirect_is_guarded(merged_branch_repo, monkeypa
 	("git push origin 2 > /dev/null", ["git", "push", "origin", "2"]),
 	("x 12<in", ["x"]),
 	("x '2'>f", ["x", "2"]),
+	("x 2>a 3>b", ["x"]),
+	("x 2>&2 >f", ["x"]),
 ])
 def test_numeric_word_before_redirect_tokenization(command: str, expected: list[str]) -> None:
 	assert guard._shell_segments_with_operators(command) == [("", expected)]
@@ -1547,6 +1652,24 @@ def test_cd_or_exit_preserves_worktree_for_push(merged_branch_repo, monkeypatch)
 		"tool_input": {"command": f"cd {worktree} || exit 1 && git push origin HEAD:feature/open"}})
 	assert code == 0, message
 	assert lookups == ["feature/open", "feature/open"]
+
+
+def test_conditional_cd_or_exit_keeps_worktree_after_semicolon(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	_git(repo, "checkout", "main")
+	worktree = repo.parent / "merged"
+	_git(repo, "worktree", "add", str(worktree), "feature/x")
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, branch, cwd: [dict(MERGED_PR, headRefOid=merged_sha)])
+	command = f"true && cd {worktree} || exit 1; git push origin HEAD:feature/x"
+	invocations = guard._guarded_git_invocations(command, str(repo))
+	assert len(invocations) == 1
+	assert invocations[0].cwd == str(worktree)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": command}})
+	assert code == 2, message
+	assert "Branch `feature/x`" in message
 
 
 # ──────────────────────────────────────────────────────────────────

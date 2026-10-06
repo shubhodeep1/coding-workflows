@@ -36,7 +36,7 @@ jobs:
         minimax/minimax-m3
         z-ai/glm-5.2
         deepseek/deepseek-v4-pro
-        google/gemini-3.8-flash
+        google/gemini-3.1-flash-lite
         qwen/qwen3.7-plus
         openai/gpt-6-luna
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

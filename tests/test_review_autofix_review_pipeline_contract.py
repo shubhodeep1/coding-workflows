@@ -4508,9 +4508,9 @@ def test_review_tier_random_pick_is_seeded_by_pr_number_and_pinned_by_variables(
 
 
 def test_review_tier_lite_draws_from_standard_list_and_defaults_skip_expensive_models() -> None:
-	"""Reduced tiers leave out the two most expensive panel models by default."""
+	"""Reduced tiers leave out the two full-panel-only models by default."""
 	reviewer_models = _workflow_reviewer_models()
-	expensive = {"google/gemini-3.8-flash", "z-ai/glm-5.2"}
+	expensive = {"google/gemini-3.1-flash-lite", "z-ai/glm-5.2"}
 	default_standard = ["minimax/minimax-m3", "deepseek/deepseek-v4-pro", "qwen/qwen3.7-plus", "openai/gpt-6-luna"]
 	assert expensive <= set(reviewer_models)
 	assert set(default_standard) <= set(reviewer_models)
@@ -4937,7 +4937,7 @@ def test_reviewer_failback_mapping_covers_live_reviewer_roster() -> None:
 
 	assert sorted(mapped) == [
 		"deepseek/deepseek-v4-pro",
-		"google/gemini-3.8-flash",
+		"google/gemini-3.1-flash-lite",
 		"minimax/minimax-m3",
 		"openai/gpt-6-luna",
 		"qwen/qwen3.7-plus",
@@ -4945,6 +4945,7 @@ def test_reviewer_failback_mapping_covers_live_reviewer_roster() -> None:
 	]
 	assert sorted(unmapped) == []
 	assert chains["deepseek/deepseek-v4-pro"] == ["deepseek/deepseek-v3.2"]
+	assert chains["google/gemini-3.1-flash-lite"] == ["google/gemini-3-flash-preview"]
 	assert chains["google/gemini-3.8-flash"] == ["google/gemini-3.1-flash-lite"]
 	assert chains["minimax/minimax-m3"] == ["minimax/minimax-m2.5"]
 	assert chains["openai/gpt-6-luna"] == ["openai/gpt-5.6-luna"]
