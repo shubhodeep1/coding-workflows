@@ -696,12 +696,12 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 	# rather than skipping its empty-branch warning before that check runs.
 	remote_value = push_repository
 	if delete:
-		# No merged-PR check for deletions, but a foreign destination still asks.
+		# No merged-PR check for deletions, but validate the push URL first.
 		return [_GuardTarget(invocation.cwd, invocation.environment, "", "", True,
-			remote=remote_value, **config_fields)] if remote_value and remote_value != "origin" else []
+			push_repository=push_repository, remote=remote_value, **config_fields)]
 	if not refspecs and tags and not bulk:
 		return [_GuardTarget(invocation.cwd, invocation.environment, "", "", True,
-			remote=remote_value, **config_fields)] if remote_value and remote_value != "origin" else []
+			push_repository=push_repository, remote=remote_value, **config_fields)]
 	if not refspecs:
 		return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
 			bulk=bulk, push_repository=push_repository, **config_fields)]
@@ -726,17 +726,17 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 			continue
 		if branch is None:
 			targets.append(_GuardTarget(invocation.cwd, invocation.environment, None, source, True,
-				**config_fields))
+				push_repository=push_repository, **config_fields))
 			continue
 		targets.append(_GuardTarget(invocation.cwd, invocation.environment, branch, source, True,
 			push_repository=push_repository, **config_fields))
 	if bulk:
 		targets.append(_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
 			bulk=bulk, push_repository=push_repository, **config_fields))
-	if not targets and remote_value and remote_value != "origin":
-		# Every refspec was a branch deletion; only the remote needs checking.
+	if not targets:
+		# Every refspec was a deletion or a tag; only the URL needs checking.
 		targets.append(_GuardTarget(invocation.cwd, invocation.environment, "", "", True,
-			remote=remote_value, **config_fields))
+			push_repository=push_repository, remote=remote_value, **config_fields))
 	return targets
 
 
@@ -1751,6 +1751,21 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			if target.config_uncertain:
 				unknown_destination_reasons.append(target.config_uncertain)
 				continue
+			with _git_environment(target.environment):
+				branch = target.branch or current_branch(target.cwd)
+				if target.reaches_remote and not target.warning.startswith("could not resolve git push"):
+					destination = _resolve_push_destination(
+						target.cwd, target.push_repository, target.config_args, target.config_environment,
+					)
+					if destination.failure:
+						blocks.append(
+							f"BLOCKED: could not verify the push destination `{destination.label}` "
+							f"as a GitHub <owner>/<repo> ({destination.failure}). The PR-merge guard "
+							f"(CLAUDE.md §21) must check that repository's PR status for `{branch}` "
+							"before the push. Push to a GitHub remote, or set "
+							"CLAUDE_PR_MERGE_GUARD=off for this session if this destination is intended."
+						)
+						continue
 			if target.branch is None:
 				unresolved_push_destinations.append(
 					"could not resolve git push destination; shell expansion may change the pushed branch."
@@ -1763,6 +1778,11 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 				continue
 			if target.warning:
 				_warn(target.warning)  # Unresolved directory: the session checkout is checked.
+			if not target.tip:
+				with _git_environment(target.environment):
+					if destination.slugs != (repo_slug(target.cwd),):
+						unverified_destinations.add("push destination differs from checkout repository")
+						continue
 			if target.remote and target.remote != "origin":
 				# Even a matching explicit URL may be rewritten by url.*.insteadOf.
 				if "://" in target.remote or target.remote.startswith("git@"):
@@ -1777,7 +1797,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 					unverified_destinations.add(push_slug or "an unverified remote")
 					continue
 			if not target.tip:
-				continue  # A deletion or tag-only push cannot strand a branch commit.
+				continue  # URL checked; a deletion or tag cannot strand a branch commit.
 			if target.tip != "HEAD":
 				with _git_environment(target.environment):
 					code, resolved_source_sha, _ = _run(
@@ -1793,20 +1813,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 				else:
 					target = target._replace(tip=resolved_source_sha.strip())
 			with _git_environment(target.environment):
-				branch = target.branch or current_branch(target.cwd)
 				if target.reaches_remote:
-					destination = _resolve_push_destination(
-						target.cwd, target.push_repository, target.config_args, target.config_environment,
-					)
-					if destination.failure:
-						blocks.append(
-							f"BLOCKED: could not verify the push destination `{destination.label}` "
-							f"as a GitHub <owner>/<repo> ({destination.failure}). The PR-merge guard "
-							f"(CLAUDE.md §21) must check that repository's PR status for `{branch}` "
-							"before the push. Push to a GitHub remote, or set "
-							"CLAUDE_PR_MERGE_GUARD=off for this session if this destination is intended."
-						)
-						continue
 					base = default_branch(target.cwd, destination.history_remote)
 					slugs = destination.slugs
 					remote = destination.history_remote

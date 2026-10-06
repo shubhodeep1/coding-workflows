@@ -284,6 +284,7 @@ transcript directory.
 The merged-PR push guard preserves whitespace-separated numeric refspecs before
 output redirects; only attached numeric file-descriptor prefixes are removed.
 For pushes it checks Git's effective push URL (including URL rewrites and inline config) before looking up the destination PR; non-GitHub raw remotes rewritten to GitHub are accepted. Unresolvable config, including `env -S` / `--split-string` commands, asks for confirmation.
+Deletion and tag-only pushes validate the effective destination too, but do not query PR history for a branch commit.
 The Bash guard also recognizes absolute `env` and `git` executable paths when resolving these inline overrides.
 Literal non-GitHub URLs rewritten to GitHub are also checked against the effective GitHub repository; a literal URL without a GitHub rewrite remains blocked.
 Guard rejection messages show configured remote names but never literal push URLs, which may carry credentials in query strings.

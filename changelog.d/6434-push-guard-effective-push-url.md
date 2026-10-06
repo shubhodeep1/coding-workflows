@@ -2,6 +2,7 @@
 - **Merged-PR push checks validate Git's effective destination.** The guard now checks URL rewrites and inline Git configuration before looking up PR status. Refs #6434; related to #3576.
 
 Named remotes and literal GitHub URLs that rewrite to non-GitHub destinations are blocked before the push; raw non-GitHub remotes rewritten to GitHub are checked against that GitHub repository. Commands that change configuration earlier in the same call or use `env -S` ask for confirmation.
+The effective destination is checked for branch deletions and tag-only pushes as well, without a PR-history lookup for those operations.
 The guard also checks inline overrides when `env` or `git` is invoked by an absolute path.
 Literal non-GitHub URLs rewritten to GitHub are checked against the effective GitHub repository too.
 Rejection messages show remote names, not literal push URLs that may carry credentials in query strings.

