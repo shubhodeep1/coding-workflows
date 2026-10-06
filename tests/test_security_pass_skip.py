@@ -102,10 +102,10 @@ def test_github_actions_bot_is_automation():
 
 @pytest.mark.parametrize("conclusion", ["failure", "timed_out"])
 def test_ci_workflow_heal_does_not_skip_security_pass(conclusion):
-	body = MARKERS["ai:workflow-heal"] + f"\n- **Failed workflow:** `CI` (conclusion: `{conclusion}`)\n"
+	body = MARKERS["ai:security"] + MARKERS["ai:workflow-heal"] + f"\n- **Failed workflow:** `CI` (conclusion: `{conclusion}`)\n"
 	issue = _issue("ai:workflow-heal", body=body, labels=["ai:workflow-heal", "ai:security"])
 	result = _decide(issue, [_labeled("ai:workflow-heal"), _labeled("ai:security")], _tracker())
-	assert result == {"skip": False, "label": None, "reason": "ai:security: body has no ai:security automation marker"}
+	assert result == {"skip": False, "label": None, "reason": "CI workflow heal requires security pass"}
 
 
 def test_release_workflow_heal_requires_security_pass():
@@ -320,6 +320,14 @@ def test_cli_ci_workflow_heal_costs_one_call(monkeypatch, capsys):
 	calls = _stub_gh(monkeypatch, {"repos/o/r/issues/4623": _issue("ai:workflow-heal", body=body)})
 	assert skip.main(["--repo", REPO, "--issue", "4623"]) == 0
 	assert json.loads(capsys.readouterr().out) == {"skip": False, "label": None, "reason": "no skip label"}
+	assert calls == ["repos/o/r/issues/4623"]
+
+
+def test_cli_ci_workflow_heal_with_security_label_costs_one_call(monkeypatch, capsys):
+	body = MARKERS["ai:security"] + MARKERS["ai:workflow-heal"] + "\n- **Failed workflow:** `CI` (conclusion: `failure`)\n"
+	calls = _stub_gh(monkeypatch, {"repos/o/r/issues/4623": _issue("ai:workflow-heal", body=body, labels=["ai:workflow-heal", "ai:security"])})
+	assert skip.main(["--repo", REPO, "--issue", "4623"]) == 0
+	assert json.loads(capsys.readouterr().out) == {"skip": False, "label": None, "reason": "CI workflow heal requires security pass"}
 	assert calls == ["repos/o/r/issues/4623"]
 
 

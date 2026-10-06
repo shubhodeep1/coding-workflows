@@ -190,7 +190,7 @@ def decide_security_pass_skip(
 	# The intake writes this header from the failed run, before the untrusted
 	# diagnosis. CI logs can be influenced by PRs, so an owner-filed heal issue
 	# is not sufficient proof that its fix can bypass the security audit.
-	if "ai:workflow-heal" in candidates and CI_HEAL_CONTEXT_RE.search(issue.get("body") or ""):
+	if "ai:workflow-heal" in labels and CI_HEAL_CONTEXT_RE.search(issue.get("body") or ""):
 		return {"skip": False, "label": None, "reason": "CI workflow heal requires security pass"}
 	if "pull_request" in issue:
 		return {"skip": False, "label": None, "reason": "not an issue"}
