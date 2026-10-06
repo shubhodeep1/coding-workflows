@@ -248,7 +248,7 @@ if [ "${CONFLICT_MANIFEST_UNION_ENABLED:-true}" = "true" ] \
       _mu_stages="$(git ls-files -u -- "${MANIFEST_UNION_PATH}" | awk '{print $3}' | sort -u | tr '\n' ' ')"
       _mu_resolution=""
       case " ${_mu_stages}" in
-        *' 2 '*' 3 '*)
+        *' 2 3 '*)
           _mu_dir="$(mktemp -d)"
           git show ":1:${MANIFEST_UNION_PATH}" > "${_mu_dir}/base" 2>/dev/null || : > "${_mu_dir}/base"
           git show ":2:${MANIFEST_UNION_PATH}" > "${_mu_dir}/ours"

@@ -138,7 +138,7 @@ def test_prepare_excludes_integration_sync_branches() -> None:
 
 def test_prepare_requires_two_sided_content_conflict() -> None:
 	block = _union_block(_prepare_text())
-	assert "git ls-files -u --" in block and "*' 2 '*' 3 '*" in block, (
+	assert "git ls-files -u --" in block and "*' 2 3 '*" in block, (
 		"union-merge must set-merge only when index stages 2 AND 3 are both present "
 		"(two-sided content conflict); delete/modify shapes keep the surviving side"
 	)
@@ -146,7 +146,7 @@ def test_prepare_requires_two_sided_content_conflict() -> None:
 
 def test_prepare_delete_modify_arm_placement() -> None:
 	block = _union_block(_prepare_text())
-	two_sided = block.index("*' 2 '*' 3 '*)")
+	two_sided = block.index("*' 2 3 '*)")
 	delete_modify = block.index("*' 2 '*|*' 3 '*)")
 	assert block.index("orchestrator/project-*)") < two_sided < delete_modify, (
 		"the delete/modify arm must follow the integration-sync exclusion and the "
@@ -286,6 +286,42 @@ def test_manifest_delete_modify_respects_kill_switch() -> None:
 		assert MANIFEST_PATH in allowlist.read_text(encoding="utf-8").splitlines()
 
 
+def test_manifest_add_add_keeps_both_sides() -> None:
+	with tempfile.TemporaryDirectory() as raw_tmp:
+		tmp = Path(raw_tmp)
+		repo = tmp / "repo"
+		repo.mkdir()
+		_git(repo, "init", "-q", "-b", "main")
+		_git(repo, "config", "user.name", "t")
+		_git(repo, "config", "user.email", "t@t")
+		(repo / "src").mkdir()
+		(repo / "src" / "app.py").write_text("base\n", encoding="utf-8")
+		_git(repo, "add", "-A")
+		_git(repo, "commit", "-qm", "base")
+		_git(repo, "checkout", "-q", "-b", "ours")
+		manifest = repo / MANIFEST_PATH
+		manifest.parent.mkdir(parents=True)
+		manifest.write_text("a.py\nc.py\n", encoding="utf-8")
+		(repo / "src" / "app.py").write_text("ours\n", encoding="utf-8")
+		_git(repo, "add", "-A")
+		_git(repo, "commit", "-qm", "ours")
+		_git(repo, "checkout", "-q", "main")
+		_git(repo, "checkout", "-q", "-b", "theirs")
+		manifest.parent.mkdir(parents=True, exist_ok=True)
+		manifest.write_text("a.py\nb.py\n", encoding="utf-8")
+		(repo / "src" / "app.py").write_text("theirs\n", encoding="utf-8")
+		_git(repo, "add", "-A")
+		_git(repo, "commit", "-qm", "theirs")
+		_git(repo, "checkout", "-q", "ours")
+		assert _git(repo, "merge", "--no-commit", "--no-ff", "theirs", check=False).returncode != 0
+		result, allowlist, _github_env = _run_union_block(repo, tmp, _union_block(_prepare_text()))
+		assert result.returncode == 0, result.stderr
+		assert manifest.read_text(encoding="utf-8") == "a.py\nb.py\nc.py\n"
+		assert _git(repo, "ls-files", "-u", "--", MANIFEST_PATH).stdout == ""
+		assert allowlist.read_text(encoding="utf-8").splitlines() == ["src/app.py"]
+		assert "set-merge of base/ours/theirs" in result.stdout
+
+
 def _workspace_module():
 	spec = importlib.util.spec_from_file_location(
 		"review_untrusted_workspace_under_test", REPO_ROOT / "scripts" / "review_untrusted_workspace.py"
@@ -325,8 +361,9 @@ def test_report_rejections_names_refused_path_without_contents() -> None:
 		(host / "src").mkdir()
 		(host / ".ai" / "other.txt").write_text("SECRET-CONTENT\n", encoding="utf-8")
 		(host / "src" / "ok.py").write_text("print(1)\n", encoding="utf-8")
+		(host / "src" / "link.py").symlink_to("ok.py")
 		paths = tmp / "paths.txt"
-		paths.write_text(".ai/other.txt\nsrc/ok.py\n", encoding="utf-8")
+		paths.write_text(".ai/other.txt\nsrc/link.py\nsrc/ok.py\n", encoding="utf-8")
 		result = subprocess.run(
 			["python3", str(REPO_ROOT / "scripts" / "review_untrusted_workspace.py"),
 			 "report-rejections", str(host), str(paths)],
@@ -334,7 +371,10 @@ def test_report_rejections_names_refused_path_without_contents() -> None:
 		)
 		assert result.returncode == 3, result.stderr
 		lines = [line for line in result.stderr.splitlines() if line.startswith("REVIEW_UNTRUSTED_PATH_REJECTED")]
-		assert lines == ["REVIEW_UNTRUSTED_PATH_REJECTED path=.ai/other.txt rule=excluded_dir"]
+		assert lines == [
+			"REVIEW_UNTRUSTED_PATH_REJECTED path=.ai/other.txt rule=excluded_dir",
+			"REVIEW_UNTRUSTED_PATH_REJECTED path=src/link.py rule=symlink",
+		]
 		assert "SECRET-CONTENT" not in result.stderr + result.stdout
 		many = tmp / "many.txt"
 		many.write_text("".join(f".ai/f{i}.txt\n" for i in range(12)), encoding="utf-8")
@@ -347,6 +387,35 @@ def test_report_rejections_names_refused_path_without_contents() -> None:
 		capped_lines = capped.stderr.splitlines()
 		assert len([line for line in capped_lines if line.startswith("REVIEW_UNTRUSTED_PATH_REJECTED path=")]) == 10
 		assert "REVIEW_UNTRUSTED_PATH_REJECTED_TRUNCATED omitted=2" in capped_lines
+
+
+def test_resolver_reports_final_rejections_and_stops_before_model() -> None:
+	text = RESOLVE.read_text(encoding="utf-8")
+	start = text.index('if [ -s "${CONFLICTED_PATHS_FILE}" ]; then', text.index('RESOLVER_ALLOWLIST_FILE="${RUNTIME_DIR}/resolver_unmerged_allowlist.txt"'))
+	end = text.index('# ----------------------------------------------------------------------', start)
+	assert start < text.index('emit_conflict_resolver_substate "LaunchingAgentProcess"', end)
+	with tempfile.TemporaryDirectory() as raw_tmp:
+		tmp = Path(raw_tmp)
+		host = tmp / "host"
+		host.mkdir()
+		paths = tmp / "conflicted_paths.txt"
+		paths.write_text(".ai/.workspace_source_manifest.txt\n", encoding="utf-8")
+		env = {**_scratch_env(), "PYTHONDONTWRITEBYTECODE": "1", "CONFLICTED_PATHS_FILE": str(paths),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"), "WORKSPACE_PATH": str(host)}
+		result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + text[start:end]],
+			env=env, text=True, capture_output=True)
+		assert result.returncode == 1
+		assert "path=.ai/.workspace_source_manifest.txt rule=excluded_dir" in result.stderr
+		paths.write_text("src/ok.py\n", encoding="utf-8")
+		assert subprocess.run(["bash", "-c", "set -euo pipefail\n" + text[start:end]],
+			env=env, capture_output=True).returncode == 0
+
+
+def test_resolver_rejection_preserves_integration_judge_escalation() -> None:
+	text = RESOLVE.read_text(encoding="utf-8")
+	assert text.index('trap _resolver_exit_trap EXIT') < text.index('report-rejections "${WORKSPACE_PATH:-'), (
+		"an unsupported resolver path must still trigger the integration-judge EXIT trap"
+	)
 
 
 def test_prepare_early_commit_branch_contract() -> None:
