@@ -641,7 +641,8 @@ def test_target_workflows_stage_schema_and_invoke_loader() -> None:
 	assert 'stage_workflow_support.sh requires CURRENT_REPOSITORY or GITHUB_REPOSITORY for trusted overlay staging.' in stage_helper_text
 	assert 'WORKFLOW_SUPPORT_REF="${support_sha}" bash "${helper_stage_dir}/scripts/stage_workflow_support.sh" validate --manifest "${manifest_path}"' in (REPO_ROOT / ".github" / "workflows" / "validate.yml").read_text(encoding="utf-8")
 	for snippet in (
-		"python3 scripts/load_workflow_overlay.py",
+		'python3 "${overlay_loader_path}"',
+		'overlay_loader_path="${STAGE_SUPPORT_HELPER_DIR}/load_workflow_overlay.py"',
 		'--repo-root "${REPO_ROOT}"',
 		'--trusted-source-repo "${GITHUB_REPOSITORY}"',
 		'--trusted-root "${RUNNER_TEMP}/workflow-overlay-trusted-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',

@@ -6,7 +6,7 @@ $ARGUMENTS
 
 1. **Parse `$ARGUMENTS`.** Extract every `https?://...` token as a source URL; treat all remaining (non-URL) text as the user's free-form focus. Save the focus verbatim — it shapes prioritisation in steps 5–6 (which sections to weight, what the repo cares about) but never invents applicability that the repo + source don't support. If `$ARGUMENTS` contains **zero URLs**, stop and ask the user for at least one URL (§0/§2) — this command is seed-URL-driven, not open-ended research (for that, use `/deep-research`; for a GitHub issue/PR/run reference, use `/investigate-issue`).
 
-2. **Load repo context first — this is the "linked to the repo" half.** Read `README.md`, `agents.md`, and `CLAUDE.md` at the repo root, plus any `/db/contracts/*.yml` relevant if the source touches data/collections (§10). Build a working model of **what this repo actually is**: its purpose, stack, conventions, and the capabilities it already has. Without this you cannot say what is applicable — a recommendation that is not anchored to something this repo does (or could plausibly do) is noise. Do this **before** mapping, so every later finding lands against real code, not a guess.
+2. **Load repo context first — this is the "linked to the repo" half.** `CLAUDE.md` is already loaded; search `README.md` and `agents.md` at the repo root for the relevant sections and read those instead of both files end to end, plus any `/db/contracts/*.yml` relevant if the source touches data/collections (§10). Build a working model of **what this repo actually is**: its purpose, stack, conventions, and the capabilities it already has. Without this you cannot say what is applicable — a recommendation that is not anchored to something this repo does (or could plausibly do) is noise. Do this **before** mapping, so every later finding lands against real code, not a guess.
 
 3. **Fetch the seed URL(s).** Pick the tool by page type (§17 Preferred Tools):
    - **Public, text-ish pages** → `WebFetch` (free, text-only) — the default.
@@ -57,7 +57,7 @@ Already present (skip):
 Not applicable:
 - <idea> — <one-line why: wrong stack / out of scope / conflicts with convention>
 
-Next step: <e.g. "/write-plan on rec #1 to turn it into a plan", then "/implement-plan-claude" to ship it>
+Next step: <e.g. "/write-plan on rec #1 to turn it into a plan", then "/implement-plan-claude" to hand it to the orchestrator>
 ```
 
 ## Tool Access
