@@ -401,6 +401,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 		if operator == "||" and tokens[0] == "exit" and working_directory is not None and not redirect_may_fail:
 			# If this exit runs the following git cannot; otherwise cd succeeded.
 			# A failed builtin redirect means exit did not run (#6289).
+			conditional_cd = False
 			continue
 		if operator not in ("", "&&") and conditional_cd:
 			working_directory = None
