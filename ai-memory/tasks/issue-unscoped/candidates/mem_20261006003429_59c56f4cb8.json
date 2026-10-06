@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/check_failure_triage.yml:434 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: The credential-handling Python heredoc runs without `-I` import isolation, allowing modules in the working directory to shadow standard-library imports.\n  WHY: A shadowing module could access credentials in the step environment; reviewers rated this finding MAJOR.\n- .github/workflows/check_failure_triage.yml:352 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The Python heredoc in the \"Post check-failure triage issue\" step is missing `-I` and `-B` isolation flags.\n  WHY: Without import isolation, modules in the current working directory could be loaded while the step handles `GH_TOKEN`; the reviewer rated this BLOCKER.\n- .github/workflows/check_failure_triage.yml:478 | severity=critical | confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The Python heredoc in the \"Post check-failure triage issue\" step is missing `-I` and `-B` isolation flags.\n  WHY: A shadowing module could intercept credentials in the environment; the reviewer rated this BLOCKER.\n- .github/workflows/check_failure_triage.yml:493 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: The Python inline invocation uses `-I` but omits `-B`.\n  WHY: Reviewers agree this is a NIT; they disagree on whether `.pyc` files may be written, with one noting `PYTHONDONTWRITEBYTECODE=1` suppresses bytecode writing.\n- .github/workflows/check_failure_triage.yml:511 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The Python inline invocation is missing the `-B` flag.\n  WHY: The reviewers describe this as a NIT because it is inconsistent with the `-I -B` pattern and may allow unnecessary `.pyc` files.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/check_failure_triage.yml:434 | severity=MAJOR | confidence=5\n  PROBLEM: The Python heredoc in the \"Post check-failure triage issue\" step runs without `-I -B` import isolation flags.\n  WHY: A shadowing module in the working directory could replace standard-library imports while the heredoc handles credential-bearing environment variables.\n- .github/workflows/check_failure_triage.yml:493 | severity=NIT | confidence=3\n  PROBLEM: The Python inline script uses `-I` but is missing `-B`.\n  WHY: Python may write `.pyc` files to `__pycache__` on self-hosted runners.\n\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/check_failure_triage.yml:352 | severity=BLOCKER | confidence=5\n  PROBLEM: Python heredoc script is missing `-I` and `-B` isolation flags.\n  WHY: Running Python without import isolation allows searching for modules in the current working directory, which might contain compromised files and expose `GH_TOKEN`.\n- .github/workflows/check_failure_triage.yml:511 | severity=NIT | confidence=4\n  PROBLEM: Python inline script is missing the `-B` isolation flag.\n  WHY: This is inconsistent with using `-I -B` across the repository and may create unnecessary `.pyc` files in runner `__pycache__` directories.\n\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/check_failure_triage.yml:434 | severity=MAJOR | confidence=4\n  PROBLEM: The heredoc Python invocation lacks the `-I -B` isolation flags.\n  WHY: A shadowing module in the working tree or trusted-support scripts directory could intercept imports while the script reads credential-bearing environment variables.\n- .github/workflows/check_failure_triage.yml:493 | severity=NIT | confidence=4\n  PROBLEM: The Python invocation has `-I` but is missing `-B`.\n  WHY: The invocation may write `.pyc` bytecode to `__pycache__`, unlike the other inline invocations changed to use `-I -B`.\n\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/check_failure_triage.yml:478 | severity=BLOCKER | confidence=5\n  PROBLEM: Python heredoc missing `-I -B` isolation flags.\n  WHY: A shadowing module could exfiltrate credentials in the environment; the reviewer also notes that `-B` prevents unnecessary `.pyc` bytecode writes.\n- .github/workflows/check_failure_triage.yml:511 | severity=NIT | confidence=4\n  PROBLEM: The Python inline script has `-I` but is missing `-B`.\n  WHY: The invocation may write `.pyc` bytecode files and is inconsistent with other Python invocations that use both flags.\n\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/check_failure_triage.yml:434 | severity=MAJOR | confidence=4\n  PROBLEM: The redaction heredoc runs Python without `-I` import isolation while `GH_TOKEN` and `TG_BOT_SECRET` are in the step environment.\n  WHY: A shadowing module in the trusted support directory could intercept credentials from the process environment.\n- .github/workflows/check_failure_triage.yml:493 | severity=NIT | confidence=4\n  PROBLEM: The Python inline invocation uses `-I` but not `-B`.\n  WHY: `PYTHONDONTWRITEBYTECODE=1` suppresses bytecode writing today, but the missing flag is inconsistent with the established pattern.\n\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "392c950662e03eaef3f99baf706f78d1e6a24c4a6f51f389f5a7d11dcdef065d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6273,
+    "run_id": "37390934511",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37390934511",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006003429_59c56f4cb8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6273,
+    "run_id": "37390934511"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T00:34:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
