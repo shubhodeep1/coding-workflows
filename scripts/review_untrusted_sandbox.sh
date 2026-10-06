@@ -176,8 +176,11 @@ env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run --rm --name "${container}"
 	if [ "${rc}" -eq 0 ]; then
 		# The marker survives a killed/incomplete transfer. The editor wrapper
 		# fails the step instead of treating a partial host edit as a retry.
+		# The reason file names the rejected path and rule (#6413); remove a
+		# stale one first so the wrapper never reports an earlier attempt.
+		rm -f "${RUNTIME_DIR:?}/review_sandbox_transfer_reason"
 		: > "${RUNTIME_DIR:?}/review_sandbox_transfer_failed"
-		if PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" transfer "${workspace}" "${root}/source" "${root}/baseline.json"; then
+		if REVIEW_SANDBOX_TRANSFER_REASON_FILE="${RUNTIME_DIR}/review_sandbox_transfer_reason" PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" transfer "${workspace}" "${root}/source" "${root}/baseline.json"; then
 			rm -f "${RUNTIME_DIR}/review_sandbox_transfer_failed"
 		else
 			rc=1
