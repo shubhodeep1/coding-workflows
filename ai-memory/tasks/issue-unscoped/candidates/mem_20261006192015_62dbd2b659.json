@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "The review pipeline has dedicated handling for unsafe directories, sandbox-transfer diagnostics, conflict-manifest behavior, and cleanup after commits. When changing this pipeline, preserve its safety boundaries and test them through the review workflow contract, not only through individual helpers.",
+  "fingerprint": "089eb3d007ae3e14c5836e15f304f8a9faa9c07a39825e68581a8394e87aa0b7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37517242542",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37517242542",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6413",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6456",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6457",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6513",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6575",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6470",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6471",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6553",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6560",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6577"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261006192015_62dbd2b659",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Review autofix treats proposed changes as untrusted until they pass sandbox and workspace checks.",
+  "timestamps": {
+    "created_at": "2026-10-06T19:20:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
