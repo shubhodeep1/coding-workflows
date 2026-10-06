@@ -25,6 +25,7 @@ ALLOWLIST_EXCEPTIONS = {
 	"ci.yml": "PR CI validation has no orchestrator issue metadata.",
 	"integration-pr-readiness.yml": "Integration-PR readiness check runs on pull_request refs and posts commit status metadata, not orchestrator issue-phase checkout.",
 	"issue_pr_status.yml": "Issue/PR status utility workflow does not execute orchestrator issue phases.",
+	"unblock_judge.yml": "Unblock judge checks out the default branch read-only for the model; it acts through the API on one blocked item, not on an issue-phase integration ref.",
 	"lint-plan-archival.yml": "Plan-archival lint validates pull_request body/diff state rather than orchestrator issue-phase integration refs.",
 	"lint-pr-body-auto-close.yml": "PR-body auto-close lint validates pull_request metadata rather than orchestrator issue-phase checkout.",
 	"mark-stable.yml": "Release promotion workflow operates on repo refs, not tracking-issue metadata.",
