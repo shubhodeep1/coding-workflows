@@ -77,13 +77,13 @@ omitted = 0
 def copy(path):
     global count, total, omitted
     parts = pathlib.PurePosixPath(path).parts
-    if omit_agent_instructions and parts and parts[-1].lower() in agent_instruction_names:
-        omitted += 1
-        return
     if (not parts or any(part.lower() in bad_parts or part.lower().startswith(".env") for part in parts)
             or any(part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore")) for part in parts)
             or (path not in root_files and parts[0] not in roots and parts[:2] not in ((".github", "workflows"), (".github", "actions")))
             or (path not in root_files and pathlib.PurePosixPath(path).suffix.lower() not in suffixes and parts[-1] != "Dockerfile")):
+        return
+    if omit_agent_instructions and parts[-1].lower() in agent_instruction_names:
+        omitted += 1
         return
     node = root
     for part in parts:

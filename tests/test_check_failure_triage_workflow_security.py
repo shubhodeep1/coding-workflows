@@ -256,12 +256,12 @@ esac
 			checkout = root / "checkout"
 			_stage_clarify_support(trusted)
 			_stage_clarify_support(checkout)
-			for name in ("AGENTS.md", "agents.md", "docs/AGENTS.override.md", "scripts/CLAUDE.md", "src/Claude.local.md", "src/app.py"):
+			for name in ("AGENTS.md", "agents.md", "docs/AGENTS.override.md", "scripts/CLAUDE.md", "src/Claude.local.md", "src/app.py", "assets/AGENTS.md"):
 				path = checkout / name
 				path.parent.mkdir(parents=True, exist_ok=True)
 				path.write_text("PR-authored content\n", encoding="utf-8")
 			subprocess.run(["git", "init", "-q", str(checkout)], check=True)
-			subprocess.run(["git", "add", "AGENTS.md", "agents.md", "docs", "scripts/CLAUDE.md", "src"], cwd=checkout, check=True)
+			subprocess.run(["git", "add", "AGENTS.md", "agents.md", "docs", "scripts/CLAUDE.md", "src", "assets"], cwd=checkout, check=True)
 			bin_dir = root / "bin"
 			bin_dir.mkdir()
 			_write_executable(bin_dir / "docker", '''#!/usr/bin/env bash
@@ -314,6 +314,7 @@ esac
 						self.assertIn("CLARIFY_SNAPSHOT_AGENT_INSTRUCTIONS_OMITTED count=5", proc.stderr)
 					else:
 						self.assertTrue({"AGENTS.md", "agents.md", "docs/AGENTS.override.md", "scripts/CLAUDE.md", "src/Claude.local.md"} <= files)
+						self.assertNotIn("assets/AGENTS.md", files)
 						self.assertNotIn("CLARIFY_SNAPSHOT_AGENT_INSTRUCTIONS_OMITTED", proc.stderr)
 
 	def test_triage_snapshot_option_contract(self) -> None:
