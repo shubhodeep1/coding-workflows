@@ -65,6 +65,12 @@ B) **fix** — You can see specific, concrete fixes for the remaining issues.
    `fix_description`, applies the changes, commits, and pushes. That push
    re-triggers the review with a reset autofix counter. Keep the described
    changes minimal and focused — only the issues that blocked the review.
+   If the ORCHESTRATOR CONTEXT says `Protected-path fixes: unavailable`, do
+   not choose `fix` when any remaining blocking issue needs a change under
+   `.github/`, `scripts/`, `prompts/`, `.claude/` or `workflow-templates/`:
+   the orchestrator rejects such fixes. Choose `merge_with_followup` if the
+   PR is shippable, otherwise `close_and_reissue`. `fix` stays valid for
+   issues limited to other paths.
 
 C) **close_and_reissue** — The PR is fundamentally broken (wrong approach,
    missing critical functionality, build-breaking errors you cannot fix).

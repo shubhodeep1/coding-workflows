@@ -21473,7 +21473,9 @@ ${FOLLOWUP_BLOCK_REASON}"
       }
 
       _rb_fix_scope_is_protected() {
-        # Refs #6390: shared protected-path and ALLOW_WORKFLOW_EDITS opt-out set.
+        # Refs #6390: shared protected-path set. Refs #6478: rb_fix_scope_check
+        # rejects these paths unconditionally; ALLOW_WORKFLOW_EDITS only selects
+        # the reported reason (workflow_edits_disabled vs protected_path_forbidden).
         # .github/actions/* contains workflow-executed composite actions.
         # .claude/* contains Claude Code hooks and settings.
         # workflow-templates/* syncs workflows and .claude hooks to consumers.
@@ -21513,8 +21515,19 @@ ${FOLLOWUP_BLOCK_REASON}"
               RB_FIX_SCOPE_REJECTED_PATHS+=("${path}")
               ;;
             *)
-              if [ "${ALLOW_WORKFLOW_EDITS:-true}" != "true" ] && _rb_fix_scope_is_protected "${path}"; then
-                [ "${RB_FIX_SCOPE_REASON}" = forbidden_artifact ] || RB_FIX_SCOPE_REASON=workflow_edits_disabled
+              # Refs #6478: protected automation paths are never writable by this
+              # judge (untrusted PR comments drive it; filename-only scope checks
+              # cannot vouch for content). Protected repairs go through
+              # merge_with_followup / close_and_reissue and the normal
+              # implement -> review pipeline.
+              if _rb_fix_scope_is_protected "${path}"; then
+                if [ "${RB_FIX_SCOPE_REASON}" != forbidden_artifact ]; then
+                  if [ "${ALLOW_WORKFLOW_EDITS:-true}" != "true" ]; then
+                    RB_FIX_SCOPE_REASON=workflow_edits_disabled
+                  else
+                    RB_FIX_SCOPE_REASON=protected_path_forbidden
+                  fi
+                fi
                 RB_FIX_SCOPE_REJECTED_PATHS+=("${path}")
               fi
               ;;
@@ -21548,6 +21561,7 @@ ${FOLLOWUP_BLOCK_REASON}"
 
         for path in "${staged_paths[@]}"; do
           if [ -z "${pr_set["${path}"]:-}" ]; then
+            # Defence in depth: protected paths are already rejected above.
             if _rb_fix_scope_is_protected "${path}"; then
               RB_FIX_SCOPE_REASON=protected_not_in_pr
             else
@@ -21599,6 +21613,7 @@ ${FOLLOWUP_BLOCK_REASON}"
         echo "=== ORCHESTRATOR CONTEXT ==="
         echo "Review-blocked retry: $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}"
         echo "Retries exhausted: ${IS_FINAL}"
+        echo "Protected-path fixes: unavailable (the orchestrator rejects any fix that stages a path under .github/, scripts/, prompts/, .claude/ or workflow-templates/)"
         if [ "${IS_FINAL}" = "true" ]; then
           echo
           echo "IMPORTANT: This is the FINAL attempt. You MUST choose 'merge',"
@@ -21623,6 +21638,10 @@ ${FOLLOWUP_BLOCK_REASON}"
           echo "  that blocked the review. Do not create new files unless absolutely required."
           echo "  After applying fixes, emit the JSON with action=\"fix\" and fix_description"
           echo "  describing what you changed."
+          echo "- Do not modify files under .github/, scripts/, prompts/, .claude/ or"
+          echo "  workflow-templates/: the orchestrator rejects any fix that stages them. If a"
+          echo "  blocking issue needs such a change, choose action=\"merge_with_followup\""
+          echo "  (when the PR is shippable) or action=\"close_and_reissue\" instead."
           echo "- If you choose action=\"merge\", action=\"merge_with_followup\", or"
           echo "  action=\"close_and_reissue\": DO NOT modify any files. Emit the JSON with"
           echo "  the chosen action and an empty fix_description. For merge_with_followup,"

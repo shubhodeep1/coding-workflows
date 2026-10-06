@@ -10066,19 +10066,24 @@ def test_review_blocked_fix_scope_rejects_mixed_workflow_edit_opt_out():
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
 
 
-def test_review_blocked_fix_scope_accepts_template_pr_file_by_default():
+def test_review_blocked_fix_scope_rejects_template_pr_file_by_default():
+	# Refs #6478: protected paths are rejected even when listed in the PR.
 	result = _review_blocked_fix_scope_case(
 		touch="workflow-templates/ai-review.yml", files=["workflow-templates/ai-review.yml"],
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
-	assert any("HEAD:ai/issue-10" in call for call in result.get("git_push_calls", []))
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=workflow-templates/ai-review.yml" in result["stdout"]
+	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED" not in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
 
 
 def test_review_blocked_fix_scope_rejects_template_outside_pr():
 	result = _review_blocked_fix_scope_case(
 		touch="workflow-templates/ai-review.yml", files=["sandbox_fix.txt"],
 	)
-	assert "reason=protected_not_in_pr rejected=1 paths=workflow-templates/ai-review.yml" in result["stdout"]
+	assert "reason=protected_path_forbidden rejected=1 paths=workflow-templates/ai-review.yml" in result["stdout"]
 	assert result.get("git_push_calls", []) == []
 
 
@@ -10087,7 +10092,37 @@ def test_review_blocked_fix_scope_uses_shared_protected_predicate():
 	predicate = text.split("      _rb_fix_scope_is_protected() {", 1)[1].split("      rb_fix_scope_check() {", 1)[0]
 	check = text.split("      rb_fix_scope_check() {", 1)[1].split("      # Build the judge prompt", 1)[0]
 	assert "|workflow-templates/*) return 0 ;;" in predicate
-	assert 'if [ "${ALLOW_WORKFLOW_EDITS:-true}" != "true" ] && _rb_fix_scope_is_protected "${path}"; then' in check
+	# Refs #6478: the protected-path rejection no longer depends on ALLOW_WORKFLOW_EDITS.
+	assert '              if _rb_fix_scope_is_protected "${path}"; then' in check
+	assert '"${ALLOW_WORKFLOW_EDITS:-true}" != "true" ] && _rb_fix_scope_is_protected' not in check
+	assert "RB_FIX_SCOPE_REASON=workflow_edits_disabled" in check
+	assert "RB_FIX_SCOPE_REASON=protected_path_forbidden" in check
+	# The rejection happens before the paginated PR-files listing call.
+	assert check.index("RB_FIX_SCOPE_REASON=protected_path_forbidden") < check.index("pulls/${pr}/files")
+
+
+def test_review_blocked_fix_scope_rejects_protected_pr_file_with_default_env():
+	result = _review_blocked_fix_scope_case(
+		touch=".github/workflows/ci.yml", files=[".github/workflows/ci.yml"],
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=.github/workflows/ci.yml" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert not any("pulls/901/files" in path for path in result.get("api_calls", []))
+
+
+def test_review_blocked_judge_prompt_flags_protected_path_fixes_unavailable():
+	text = POLLER_SCRIPT.read_text(encoding="utf-8")
+	block = text.split('echo "=== ORCHESTRATOR CONTEXT ==="', 1)[1].split('} > "${RB_JUDGE_PROMPT_FILE}"', 1)[0]
+	assert 'echo "Protected-path fixes: unavailable (the orchestrator rejects any fix that stages a path under .github/, scripts/, prompts/, .claude/ or workflow-templates/)"' in block
+	assert block.index("Protected-path fixes: unavailable") < block.index('if [ "${IS_FINAL}" = "true" ]; then')
+	combined = block.split("=== COMBINED DECIDE + APPLY INSTRUCTIONS ===", 1)[1]
+	assert "Do not modify files under .github/, scripts/, prompts/, .claude/ or" in combined
+	rule = "If the ORCHESTRATOR CONTEXT says `Protected-path fixes: unavailable`, do"
+	for prompt in ("prompts/mode-judge-review-blocked.txt", "prompts/_templates/mode-judge-review-blocked.txt"):
+		assert rule in (REPO_ROOT / prompt).read_text(encoding="utf-8"), prompt
+	# The standalone judge never emits the flag, so its fix path is unchanged.
+	assert "Protected-path fixes: unavailable" not in (REPO_ROOT / "scripts/review_rb_judge.sh").read_text(encoding="utf-8")
 
 
 def test_review_blocked_fix_scope_reports_all_workflow_edit_opt_out_paths():
@@ -10160,7 +10195,7 @@ def test_review_blocked_fix_scope_rejects_protected_judge_citation():
 		touch="scripts/evil.sh", files=["other.txt"],
 		remaining=[{"file": "scripts/evil.sh"}],
 	)
-	assert "reason=protected_not_in_pr" in result["stdout"]
+	assert "reason=protected_path_forbidden" in result["stdout"]
 	assert result.get("git_push_calls", []) == []
 
 
@@ -10169,7 +10204,7 @@ def test_review_blocked_fix_scope_protected_reason_wins_for_mixed_rejections():
 		touch="docs/new.md", files=["other.txt"],
 		env_overrides={"MOCK_CODEX_TOUCH_FILE": "docs/new.md\nscripts/evil.sh"},
 	)
-	assert "reason=protected_not_in_pr rejected=2 paths=docs/new.md,scripts/evil.sh" in result["stdout"]
+	assert "reason=protected_path_forbidden rejected=1 paths=scripts/evil.sh" in result["stdout"]
 	assert result.get("git_push_calls", []) == []
 
 
@@ -10178,7 +10213,7 @@ def test_review_blocked_fix_scope_rejects_uncited_unrelated_workflow():
 		touch=".github/workflows/unrelated.yml", files=["sandbox_fix.txt"],
 		env_overrides={"ALLOW_WORKFLOW_EDITS": "true"},
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_not_in_pr rejected=1 paths=.github/workflows/unrelated.yml" in result["stdout"]
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=.github/workflows/unrelated.yml" in result["stdout"]
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
@@ -10191,7 +10226,7 @@ def test_review_blocked_fix_scope_rejects_uncited_unrelated_script():
 		touch="scripts/unrelated.sh", files=["sandbox_fix.txt"],
 		env_overrides={"ALLOW_WORKFLOW_EDITS": "true"},
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_not_in_pr rejected=1 paths=scripts/unrelated.sh" in result["stdout"]
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=scripts/unrelated.sh" in result["stdout"]
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
@@ -10207,7 +10242,7 @@ def test_review_blocked_fix_scope_rejects_unrelated_action_and_claude_hook():
 			"MOCK_CODEX_TOUCH_FILE": ".github/actions/x/action.yml\n.claude/hooks/x.py",
 		},
 	)
-	assert "reason=protected_not_in_pr rejected=2" in result["stdout"]
+	assert "reason=protected_path_forbidden rejected=2" in result["stdout"]
 	assert any(
 		".github/actions/x/action.yml" in line and ".claude/hooks/x.py" in line
 		for line in result["stdout"].splitlines() if "REVIEW_BLOCKED_FIX_SCOPE_REJECTED" in line
@@ -10226,25 +10261,37 @@ def test_review_blocked_fix_scope_rejects_mixed_in_scope_and_unrelated_workflow(
 			"MOCK_CODEX_TOUCH_FILE": "sandbox_fix.txt\n.github/workflows/unrelated.yml",
 		},
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_not_in_pr rejected=1 paths=.github/workflows/unrelated.yml" in result["stdout"]
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=.github/workflows/unrelated.yml" in result["stdout"]
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
 
 
-def test_review_blocked_fix_scope_accepts_protected_pr_file():
+def test_review_blocked_fix_scope_rejects_protected_pr_file():
 	result = _review_blocked_fix_scope_case(touch="scripts/foo.sh", files=["scripts/foo.sh"])
-	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
-	assert result.get("git_push_calls", [])
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=scripts/foo.sh" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
 
 
 def test_review_blocked_fix_scope_accepts_renamed_pr_source():
 	result = _review_blocked_fix_scope_case(
-		touch="scripts/old.sh",
-		files=[{"filename": "scripts/new.sh", "previous_filename": "scripts/old.sh"}],
+		touch="docs/old.md",
+		files=[{"filename": "docs/new.md", "previous_filename": "docs/old.md"}],
 	)
 	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
 	assert result.get("git_push_calls", [])
+
+
+def test_review_blocked_fix_scope_rejects_renamed_protected_pr_source():
+	result = _review_blocked_fix_scope_case(
+		touch="scripts/old.sh",
+		files=[{"filename": "scripts/new.sh", "previous_filename": "scripts/old.sh"}],
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=scripts/old.sh" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
 
 
 def test_review_blocked_fix_scope_rejects_capped_pr_listing():
