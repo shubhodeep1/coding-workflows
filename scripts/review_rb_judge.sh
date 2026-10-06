@@ -2031,7 +2031,16 @@ __EDIT_DISCIPLINE__
         exit 1
       fi
       rb_fix_sandbox_env="$(mktemp /tmp/rb_fix_sandbox_env.XXXXXX)"
-      if ! GITHUB_ENV="${rb_fix_sandbox_env}" bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare; then
+      # Keep GITHUB_WORKSPACE on the checkout with .git; pass the per-PR tree
+      # through the sandbox's validated WORKSPACE_PATH (issues #4580, #6055, #6455).
+      rb_fix_checkout_real="$(realpath -e -- "${GITHUB_WORKSPACE:-}" 2>/dev/null || true)"
+      rb_fix_workdir_real="$(realpath -e -- "${RB_OPENCODE_WORKSPACE}" 2>/dev/null || true)"
+      if [ -n "${rb_fix_checkout_real}" ] && [ "${rb_fix_checkout_real}" = "${rb_fix_workdir_real}" ]; then
+        rb_fix_sandbox_workspace_env=(-u WORKSPACE_PATH)
+      else
+        rb_fix_sandbox_workspace_env=("WORKSPACE_PATH=${RB_OPENCODE_WORKSPACE}")
+      fi
+      if ! env "${rb_fix_sandbox_workspace_env[@]}" GITHUB_ENV="${rb_fix_sandbox_env}" bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare; then
         echo "::error::Review-blocked fix sandbox could not be prepared; the fix writer never runs on the host."
         rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}" "${rb_fix_sandbox_env}"
         exit 1
