@@ -58,7 +58,17 @@ def test_cross_repository_branches_are_listed_not_read() -> None:
 	]
 
 
+def test_explicit_foreign_dotted_branch_is_listed_without_reading() -> None:
+	refs = _refs("Check `release/1.2` in other/repo; `release/1.2` in owner/repo.")
+	assert refs["branches"] == []
+	assert refs["cross_repo"] == [("branch", "other/repo", "release/1.2")]
+	runner = _Runner((0, "{}"))
+	assert facts.collect(refs, REPO, runner)[0] == ["- Branch `release/1.2` in other/repo: not read (cross-repository)"]
+	assert runner.calls == []
+
+
 def test_explicit_consumer_branch_is_read_from_its_own_repo() -> None:
+	# Historical name: extraction accepts the allowlist, but API queries stay local.
 	refs = _refs("Check if `feature/x` exists in other/repo; `feature/x` in owner/repo. "
 		"Integration branch: `ai/issue-9` in other/repo. Skip `secret/x` in private/repo.",
 		{REPO, "other/repo"})
@@ -66,18 +76,12 @@ def test_explicit_consumer_branch_is_read_from_its_own_repo() -> None:
 		("other/repo", "ai/issue-9"), ("other/repo", "feature/x"), (REPO, "feature/x"),
 	]
 	query, aliases = facts.build_query(REPO, refs["issues"], refs["branches"])
-	assert query.count("repository(") == 2
-	assert 'r0: repository(owner: "other", name: "repo")' in query
-	assert 'r1: repository(owner: "owner", name: "repo")' in query
-	assert aliases[("r0", "b0")] == ("branch", "other/repo", "ai/issue-9")
-	assert aliases[("r0", "b1")] == ("branch", "other/repo", "feature/x")
-	assert aliases[("r1", "b2")] == ("branch", REPO, "feature/x")
-	runner = _Runner((0, json.dumps({"data": {
-		"r0": {"b0": {"target": {"oid": "1234567890123456"}}, "b1": {"target": {"oid": "abcdefabcdef1234"}}},
-		"r1": {"b2": None},
-	}})))
+	assert query.count("repository(") == 1
+	assert 'repository(owner: "other"' not in query
+	assert aliases == {("r0", "b0"): ("branch", REPO, "feature/x")}
+	runner = _Runner((0, json.dumps({"data": {"r0": {"b0": None}}})))
 	lines, stats = facts.collect(refs, REPO, runner)
-	assert "- Branch `feature/x` in other/repo: exists at abcdefabcdef" in lines
+	assert not any("in other/repo: exists" in line for line in lines)
 	assert "- Branch `feature/x` in owner/repo: does not exist" in lines
 	assert "- Branch `secret/x` in private/repo: not read (cross-repository)" in lines
 	assert stats == {"graphql_calls": 1, "rest_calls": 0, "errors": 0}
@@ -89,14 +93,13 @@ def test_consumer_branch_is_not_filtered_by_source_checkout_paths(tmp_path: Path
 		{REPO, "other/repo"}, 6262, tmp_path)
 	assert refs["branches"] == [("other/repo", "feature/x")]
 	query, _ = facts.build_query(REPO, refs["issues"], refs["branches"])
-	assert 'repository(owner: "other", name: "repo")' in query
-	assert 'ref(qualifiedName: "refs/heads/feature/x")' in query
+	assert query == ""
 
 
 def test_unreadable_consumer_repo_does_not_report_branch_as_missing() -> None:
 	refs = _refs("`feature/x` in other/repo", {REPO, "other/repo"})
 	lines, _ = facts.collect(refs, REPO, _Runner((1, json.dumps({"data": {"r0": None}}))))
-	assert lines == ["- Branch `feature/x` in other/repo: not readable"]
+	assert lines == []
 
 
 def test_extracts_singular_and_plural_pr_urls() -> None:
@@ -221,7 +224,7 @@ def test_main_ignores_consumer_repos_file(tmp_path: Path, capsys) -> None:
 
 
 def test_query_and_collect_never_read_foreign_repositories() -> None:
-	refs = {"issues": [("other/repo", 5), (REPO, 12)], "branches": [], "runs": [("other/repo", 9)], "cross_repo": []}
+	refs = {"issues": [("other/repo", 5), (REPO, 12)], "branches": [("other/repo", "feature/x")], "runs": [("other/repo", 9)], "cross_repo": []}
 	query, aliases = facts.build_query(REPO, refs["issues"], refs["branches"])
 	assert query.count("repository(") == 1
 	assert 'repository(owner: "other"' not in query

@@ -90,6 +90,9 @@ def _title(value: object) -> str:
 def _is_branch(token: str, checkout: Path, check_checkout_paths: bool = True) -> bool:
 	if not BRANCH_RE.match(token) or ".." in token or token.endswith((".lock", "/")):
 		return False
+	# A foreign branch is explicitly qualified; local filename heuristics do not apply.
+	if not check_checkout_paths:
+		return True
 	if check_checkout_paths and ((checkout / token).exists() or (checkout / token.split("/", 1)[0]).exists()):
 		return False
 	last = token.rsplit("/", 1)[-1]
@@ -151,6 +154,7 @@ def extract_refs(text: str, repo: str, allowed: set[str], issue_number: int, che
 def build_query(repo: str, issues: list[tuple[str, int]], branches: list[tuple[str, str]]) -> tuple[str, dict]:
 	"""One aliased GraphQL query, and the alias map used to read it back."""
 	issues = [(slug, number) for slug, number in issues if slug == repo.lower()]
+	branches = [local_branch_ref for local_branch_ref in branches if local_branch_ref[0] == repo.lower()]
 	slugs = sorted({slug for slug, _ in issues} | {slug for slug, _ in branches})
 	aliases: dict = {}
 	parts = []
