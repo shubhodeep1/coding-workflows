@@ -201,8 +201,55 @@ def test_issue_engine_labels_are_wired_to_stall_and_rb_judges_only() -> None:
 	assert 'POLLER_JUDGE_ENGINE_LABELS="${stall_judge_engine_labels_json}" poller_claude_judge STALL_JUDGE' in text
 	assert 'poller_judge_engine_labels_json managed "$(printf \'%s\' "${LABELS_JSON:-}" | jq -c --arg n "${rb_issue}"' in text
 	assert 'POLLER_JUDGE_ENGINE_LABELS="${RB_JUDGE_ENGINE_LABELS_JSON}" poller_claude_judge RB_JUDGE' in text
-	for role in ("WAVE_JUDGE", "SECURITY_JUDGE", "INTEGRATION_JUDGE"):
+	for role in ("WAVE_JUDGE", "SECURITY_JUDGE"):
 		assert re.search(rf"^\s+poller_claude_judge {role} ", text, re.MULTILINE)
+	assert 'bash "${ORCH_CODEX_ISOLATED_EXEC}" run --mode workspace --workdir "${judge_wt}"' in text
+
+
+@pytest.mark.parametrize("issue_labels, expected_engine", [
+	('"ai:orchestrator-managed","ai:engine-claude"', "claude"),
+	('"ai:orchestrator-managed","ai:codex"', "codex"),
+	('"ai:done"', "codex"),
+])
+def test_combined_rb_judge_uses_verified_engine_and_its_worktree(
+	tmp_path: Path, issue_labels: str, expected_engine: str,
+) -> None:
+	_stage_rb_support(tmp_path)
+	worktree = tmp_path / "rb-worktree"
+	worktree.mkdir()
+	subprocess.run(["git", "init", "-q"], cwd=worktree, check=True)
+	(tmp_path / "prompt.txt").write_text("judge this\n", encoding="utf-8")
+	engine_dir = tmp_path / "scripts"
+	engine_dir.mkdir()
+	(engine_dir / "ai_engine.sh").write_text(FAKE_AI_ENGINE, encoding="utf-8")
+	codex_runner = engine_dir / "fake_codex.sh"
+	codex_runner.write_text('#!/bin/bash\nprintf "%s|%s\\n" "$PWD" "$*" >> "${CALLS}.codex"\nprintf "codex verdict\\n"\n', encoding="utf-8")
+	text = POLLER.read_text(encoding="utf-8")
+	branch = text.split('        RB_JUDGE_ENGINE_LABELS_JSON=', 1)[1].split('          if [ "${RB_JUDGE_ENGINE_RC}" -eq 77 ]', 1)[0]
+	script = (
+		'set -euo pipefail\n' + _helper_source() + '\n'
+		f'_POLLER_AI_ENGINE_SH="{engine_dir / "ai_engine.sh"}"\n'
+		f'ORCH_CODEX_ISOLATED_EXEC="{codex_runner}"\nRB_COMBINED_WORKDIR="{worktree}"\n'
+		f'RUNTIME_DIR="{tmp_path}"\nGITHUB_WORKSPACE="{tmp_path}"\n'
+		f'RB_JUDGE_PROMPT_FILE="{tmp_path / "prompt.txt"}"\nRB_JUDGE_OUTPUT_FILE="{tmp_path / "verdict.txt"}"\n'
+		'MODEL_EDITOR=openai/gpt-6-sol\nRB_COMBINED_MODE=true\nrb_issue=10\n'
+		f'LABELS_JSON=\'{{"10":[{issue_labels}]}}\'\nTRACKING_LABELS=\'["ai:engine-claude"]\'\n'
+		'RB_JUDGE_ENGINE_LABELS_JSON=' + branch + 'done\n'
+	)
+	# The test runs only the attempt, not the outer poller success/retry loop.
+	proc = subprocess.run(["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True,
+		env={**os.environ, "FAKE_ENGINE": "claude", "FAKE_CLAUDE_MODE": "success", "CALLS": str(tmp_path / "calls"),
+			"FAKE_SANDBOX_ROOT": str(tmp_path / "sandbox-root"), "WORKSPACE_PATH": str(tmp_path / "wrong-workspace")}, check=False)
+	assert proc.returncode == 0, proc.stderr
+	if expected_engine == "claude":
+		assert _read(tmp_path / "verdict.txt") == "claude verdict\n", (proc.stdout, proc.stderr)
+		assert _read(tmp_path / "calls.codex") == ""
+		assert "claude|RB_JUDGE|write|/dev/null" in _read(tmp_path / "calls.sandbox")
+		assert f"workspace={worktree} cwd={worktree} workpath=" in _read(tmp_path / "calls.sandbox_workspace")
+	else:
+		assert _read(tmp_path / "verdict.txt") == "codex verdict\n"
+		assert _read(tmp_path / "calls.sandbox") == ""
+		assert f"--workdir {worktree}" in _read(tmp_path / "calls.codex")
 
 
 def test_model_hint_argument_overrides_model_editor(tmp_path: Path) -> None:
@@ -238,6 +285,7 @@ case "$1" in
   prepare-ephemeral)
     [ "$FAKE_CLAUDE_MODE" != prepare_failed ] || exit 1
     printf 'prepare\n' >> "${CALLS}.sandbox"
+    printf 'workspace=%s cwd=%s workpath=%s\n' "$GITHUB_WORKSPACE" "$PWD" "${WORKSPACE_PATH:-}" >> "${CALLS}.sandbox_workspace"
     printf '%s\n' "$FAKE_SANDBOX_ROOT" ;;
   run)
     rc=0; claude_access="${9:-write}"
@@ -558,9 +606,6 @@ SITES = {
 	"SECURITY_JUDGE": (
 		'poller_claude_judge SECURITY_JUDGE "${prompt_file}" "${output_file}" "${error_file}" "${effective_judge_model}" || security_judge_rc=$?',
 	),
-	"INTEGRATION_JUDGE": (
-		'poller_claude_judge INTEGRATION_JUDGE "${prompt_file}" "${output_file}" "${RUNTIME_DIR}/integration_judge.log" "${MODEL_EDITOR:-openai/gpt-6-sol}" || integration_judge_rc=$?',
-	),
 	"STALL_JUDGE": (
 		'poller_claude_judge STALL_JUDGE "${stall_judge_prompt_file}" "${stall_judge_output_file}" "${RUNTIME_DIR}/stall_judge.log" || stall_judge_rc=$?',
 	),
@@ -583,7 +628,8 @@ def test_each_judge_uses_sandbox_without_host_fallback() -> None:
 	assert 'poller_claude_judge RB_JUDGE "${RB_JUDGE_PROMPT_FILE}" "${RB_JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/rb_judge_${rb_issue}.log"' in rb_block
 	assert 'if [ "${RB_JUDGE_ENGINE_RC}" -eq 77 ] || [ "${RB_JUDGE_ENGINE_RC}" -eq 75 ]; then\n            RB_JUDGE_ISOLATION_FAILED=true\n            break\n          fi' in rb_block
 	assert 'if [ "${RB_JUDGE_ENGINE_RC}" -eq 76 ]; then\n            break\n          fi' in rb_block
-	assert 'danger-full-access' not in rb_block and not re.search(r'\bcodex\s+.*\bexec\b', rb_block)
+	assert 'bash "${ORCH_CODEX_ISOLATED_EXEC}" run --mode workspace --workdir "${RB_COMBINED_WORKDIR}"' in rb_block
+	assert not re.search(r'(^|\s)codex\s+.*\bexec\b', rb_block)
 	assert '.review_blocked_isolation_state' in rb_block
 	assert 'ai:rb-judge-isolation-escalated' in text
 	assert text.index('outcome=skip reason=escalated') < text.index('RB_COMBINED_MODE="false"', text.index('Detected review-blocked issues'))

@@ -107,7 +107,7 @@ _poller_rb_judge_sandbox_attempt()
 {
     local rb_engine="$1" prompt_file="$2" output_file="$3" log_file="$4" rb_support_dir="$5"
     local judge_role="${6:-RB_JUDGE}" rb_access="${7:-}" judge_reason_file="${RUNTIME_DIR:?}/judge_isolation_reason"
-    local judge_workspace_override="${GITHUB_WORKSPACE:-$PWD}"
+    local judge_workspace_override="${POLLER_JUDGE_WORKSPACE_OVERRIDE:-${GITHUB_WORKSPACE:-$PWD}}"
     local rb_config=/dev/null rb_effort="${MODEL_REASONING_EFFORT_JUDGE:-high}" judge_rc=0
     # PR diffs and comments are untrusted. This role may not run with host
     # credentials; use the verified support checkout's isolated review runner.
@@ -236,21 +236,22 @@ poller_judge_isolated()
 {
   local judge_role="$1" prompt_file="$2" output_file="$3" log_file="$4" model_hint="${5:-${MODEL_EDITOR:-}}"
   local rb_support_dir="${GITHUB_WORKSPACE:-$PWD}/.codex-workflow-src/scripts" judge_reason_file="${RUNTIME_DIR:?}/judge_isolation_reason"
-  local rb_engine=codex rb_rc=0 judge_engine_labels="${TRACKING_LABELS:-[]}"
+  local rb_engine=codex rb_rc=0 judge_engine_labels="${TRACKING_LABELS:-[]}" judge_engine_labels_valid=true
   [ "${judge_role}" != RB_JUDGE ] || judge_reason_file="${RUNTIME_DIR}/rb_judge_isolation_reason"
   : > "${judge_reason_file}"
   : > "${output_file}"
   if [ "${POLLER_JUDGE_ENGINE_LABELS+set}" = set ]; then
     judge_engine_labels="${POLLER_JUDGE_ENGINE_LABELS}"
-  fi
-  if [ "${POLLER_JUDGE_ENGINE_LABELS+set}" = set ] &&
-     ! printf '%s' "${judge_engine_labels}" | jq -e 'type == "array" and all(.[]; type == "string")' >/dev/null 2>&1; then
-    if [ "${log_file}" = /dev/null ]; then
-      echo "JUDGE_ENGINE_LABELS role=${judge_role} outcome=forced_codex reason=issue_labels_unavailable" >&2
-    else
-      echo "JUDGE_ENGINE_LABELS role=${judge_role} outcome=forced_codex reason=issue_labels_unavailable" | tee -a "${log_file}" >&2
+    if ! printf '%s' "${judge_engine_labels}" | jq -e 'type == "array" and all(.[]; type == "string")' >/dev/null 2>&1; then
+      judge_engine_labels_valid=false
+      if [ "${log_file}" = /dev/null ]; then
+        echo "JUDGE_ENGINE_LABELS role=${judge_role} outcome=forced_codex reason=issue_labels_unavailable" >&2
+      else
+        echo "JUDGE_ENGINE_LABELS role=${judge_role} outcome=forced_codex reason=issue_labels_unavailable" | tee -a "${log_file}" >&2
+      fi
     fi
-  elif [ -f "${_POLLER_AI_ENGINE_SH}" ]; then
+  fi
+  if [ "${judge_engine_labels_valid}" = true ] && [ -f "${_POLLER_AI_ENGINE_SH}" ]; then
     # shellcheck source=ai_engine.sh
     if source "${_POLLER_AI_ENGINE_SH}"; then
       if [ "${log_file}" = /dev/null ]; then
@@ -22085,10 +22086,21 @@ ${FOLLOWUP_BLOCK_REASON}"
         echo "::error::Review-blocked judge prompt for issue #${rb_issue} exceeds codex's 1048576-character stdin cap; skipping 2 attempts that would fail before the model runs."
       else
         RB_JUDGE_ENGINE_LABELS_JSON="$(poller_judge_engine_labels_json managed "$(printf '%s' "${LABELS_JSON:-}" | jq -c --arg n "${rb_issue}" '.[$n] // empty' 2>/dev/null || true)")" || RB_JUDGE_ENGINE_LABELS_JSON=unavailable
+        RB_COMBINED_ENGINE=codex
+        if [ "${RB_COMBINED_MODE}" = "true" ]; then
+          if ! printf '%s' "${RB_JUDGE_ENGINE_LABELS_JSON}" | jq -e 'type == "array" and all(.[]; type == "string")' >/dev/null 2>&1; then
+            echo "JUDGE_ENGINE_LABELS role=RB_JUDGE outcome=forced_codex reason=issue_labels_unavailable" >&2
+          elif [ -f "${_POLLER_AI_ENGINE_SH}" ] && source "${_POLLER_AI_ENGINE_SH}"; then
+            RB_COMBINED_ENGINE="$(AI_ENGINE_LABELS="${RB_JUDGE_ENGINE_LABELS_JSON}" AI_ENGINE_MODEL_HINT="${MODEL_EDITOR}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" ai_engine_for_role RB_JUDGE 2>>"${RUNTIME_DIR}/rb_judge_${rb_issue}.log" || echo codex)"
+            [ "${RB_COMBINED_ENGINE}" = claude ] || RB_COMBINED_ENGINE=codex
+          fi
+        fi
         for attempt in 1 2; do
           echo "  Review-blocked judge attempt ${attempt}/2..."
           RB_JUDGE_ENGINE_RC=0
-          if [ "${RB_COMBINED_MODE}" = "true" ]; then
+          if [ "${RB_COMBINED_MODE}" = "true" ] && [ "${RB_COMBINED_ENGINE}" = claude ]; then
+            (cd "${RB_COMBINED_WORKDIR}" && WORKSPACE_PATH= POLLER_JUDGE_WORKSPACE_OVERRIDE="${RB_COMBINED_WORKDIR}" POLLER_JUDGE_ENGINE_LABELS="${RB_JUDGE_ENGINE_LABELS_JSON}" poller_claude_judge RB_JUDGE "${RB_JUDGE_PROMPT_FILE}" "${RB_JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/rb_judge_${rb_issue}.log") || RB_JUDGE_ENGINE_RC=$?
+          elif [ "${RB_COMBINED_MODE}" = "true" ]; then
             bash "${ORCH_CODEX_ISOLATED_EXEC}" run --mode workspace --workdir "${RB_COMBINED_WORKDIR}" -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${RB_JUDGE_PROMPT_FILE}" > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || RB_JUDGE_ENGINE_RC=$?
           else
             POLLER_JUDGE_ENGINE_LABELS="${RB_JUDGE_ENGINE_LABELS_JSON}" poller_claude_judge RB_JUDGE "${RB_JUDGE_PROMPT_FILE}" "${RB_JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/rb_judge_${rb_issue}.log" || RB_JUDGE_ENGINE_RC=$?
