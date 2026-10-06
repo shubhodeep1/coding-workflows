@@ -159,10 +159,11 @@ def _install_fake_gh(tmp_path: Path) -> tuple[Path, Path, Path]:
 	return bin_dir, fixtures, log
 
 
-def _pr(number: int, head: str, base: str = "main", labels: list[str] | None = None, draft: bool = False) -> dict:
+def _pr(number: int, head: str, base: str = "main", labels: list[str] | None = None, draft: bool = False,
+		head_repo: str | None = "acme/consumer") -> dict:
 	return {
 		"number": number,
-		"head": {"ref": head},
+		"head": {"ref": head, "repo": {"full_name": head_repo} if head_repo is not None else None},
 		"base": {"ref": base},
 		"draft": draft,
 		"labels": [{"name": name} for name in (labels or [])],
@@ -330,6 +331,65 @@ def test_gate_continues_when_older_pr_is_disjoint_or_younger(tmp_path: Path) -> 
 	assert "pulls/4080/files" not in log_text, "non ai/issue-* PRs must not be examined"
 
 
+@pytest.mark.parametrize("head_repo", ["evil/consumer", None])
+def test_gate_ignores_older_fork_pr_with_ai_issue_head(tmp_path: Path, head_repo: str | None) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063", head_repo=head_repo),
+		_pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4075, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064",
+	)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_FOREIGN_HEAD_SKIPPED pr=4077 older=4075" in result.stdout
+	assert "result=unblocked action=continue" in result.stdout
+	assert "AUTOFIX_MERGE_QUEUED" not in env_out
+	assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
+	assert "pulls/4075/files" not in log_text
+
+
+def test_gate_counts_case_insensitive_same_repo_head(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063", head_repo="Acme/Consumer"),
+		_pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4075, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, _log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064",
+	)
+	assert result.returncode == 0, result.stderr
+	assert "result=queued blockers=#4075" in result.stdout
+	assert env_out.get("AUTOFIX_MERGE_QUEUED") == "true"
+
+
+def test_gate_foreign_heads_do_not_use_older_pr_cap(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4073, "ai/issue-4062", head_repo="evil/consumer"),
+		_pr(4075, "ai/issue-4063"),
+		_pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	for number in (4073, 4075, 4077):
+		_write_files(fixtures, number, ["backend/promo_email_sender.py"])
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064",
+		MERGE_TRAIN_MAX_OLDER_PRS="1",
+	)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_FOREIGN_HEAD_SKIPPED pr=4077 older=4073" in result.stdout
+	assert "result=queued blockers=#4075" in result.stdout
+	assert env_out.get("AUTOFIX_MERGE_QUEUED_BLOCKERS") == "#4075"
+	assert "pulls/4073/files" not in log_text
+
+
 def test_gate_releases_stale_label_when_unblocked(tmp_path: Path) -> None:
 	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
 	(fixtures / "pulls.json").write_text(json.dumps([
@@ -494,6 +554,23 @@ def test_release_dispatches_only_unblocked_queued_prs(tmp_path: Path) -> None:
 	assert "DELETE repos/acme/consumer/issues/4077/labels/ai%3Amerge-queued" in log_text
 	assert "issues/4081/labels/ai%3Amerge-queued" not in log_text
 	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=2 released=1 base_filter=main" in result.stdout
+
+
+def test_release_ignores_fork_blocker_and_dispatches(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063", head_repo="evil/consumer"),
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4075, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, BASE_BRANCH="main")
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_FOREIGN_HEAD_SKIPPED pr=4077 older=4075" in result.stdout
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+	assert "pulls/4075/files" not in log_text
+	assert "DELETE repos/acme/consumer/issues/4077/labels/ai%3Amerge-queued" in log_text
+	assert "gh workflow run ai-review.yml --repo acme/consumer -f pr_number=4077" in log_text
 
 
 def test_release_fetches_each_pr_file_list_once_per_run(tmp_path: Path) -> None:
