@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should the intake prove a reported run belongs to the claimed issue?\nChoices:\nA) Require all of these: the run is in `SOURCE_REPO`, its event is `issues` or `issue_comment`, its workflow path is that repo's clarify/plan/implement wrapper matching the `<phase>_failed` reason, its conclusion is `failure`, and the claimed issue has a phase-failure comment from the workflow account that links that exact run URL. The comment is the same evidence `phase_failure_streak` already counts. (RECOMMENDED)\nB) Check repository, workflow path, event and conclusion only. Skip the issue link, so a forged report could still point at a real failed run that belongs to another issue.\nC) Same as B, plus require the run's `display_title` to match the issue title. This is weaker than A because titles are not unique and can be edited.\nQ2: What should happen when verification fails or the GitHub API can't answer (the run is unreadable, comments can't be fetched, or there is a mismatch)?\nChoices:\nA) Fail closed: drop the report with a stable `WORKFLOW_HEAL ... outcome=skip reason=phase_report_unverified` log line and a Telegram WARNING. No heal issue is filed and no lineage is escalated. (RECOMMENDED)\nB) Fail closed only on a confirmed mismatch. If the API is unavailable, process the report as today.\nC) Process the report but tag the heal issue \"unverified provenance\" and never escalate it on that report.\nQ3: How should \"bind each reporter credential to its authorized source repository\" be handled? A `repository_dispatch` only exposes `sender`, and consumers typically dispatch with the same owner's `GH_PAT`.\nChoices:\nA) Use the Q1 checks as the binding. The intake reads the run, issue and comments in the claimed `SOURCE_REPO` with its own token, so a forged report can't reference evidence outside that repo. Leave per-credential binding out of scope and say so in the PR. (RECOMMENDED)\nB) Also add an optional per-repo allowed-`sender` list next to `.github/ai/consumer_repos.json`, in a new file so the existing array format stays unchanged. Reports from a repo with a configured list must match it.\nC) Change `.github/ai/consumer_repos.json` entries to objects with an allowed sender. **Note:** this changes the format of a file the release dispatch reads, which is a breaking change.\nQ4: Which report kinds should get the new provenance check?\nChoices:\nA) `phase_failure` only, as the finding cites. (RECOMMENDED)\nB) `phase_failure` plus `autofix_failure`, which also builds run references from reporter-supplied run IDs. This also needs a check that the run belongs to the PR.\nC) Every kind that carries `run_refs`, including `workflow_run`.",
+  "fingerprint": "a2b75e539ceabbb04957bf59cad82ad8381a9db21d0801f3b720206be5a64d51",
+  "lineage": {
+    "issue_number": 6467,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37406749322",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37406749322",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261006030428_123a3329c8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6467,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37406749322"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6467 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-06T03:04:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
