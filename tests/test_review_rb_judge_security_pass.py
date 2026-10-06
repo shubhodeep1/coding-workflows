@@ -430,7 +430,10 @@ def test_prompt_blocks_merge_with_high_severity(tmp_path: Path, final: str) -> N
 		("hold=true\\nhold_reason=dispatch_failed\\n", 0, False, "audit_or_findings", "dispatch_failed"),
 		("hold=true\\nhold_reason=$(id)\\n", 0, False, "audit_or_findings", "unknown"),
 		("hold=true\\nhold_reason=cycles_exhausted\\nexhausted=true\\n", 0, False, "exhausted", "cycles_exhausted"),
-		("hold=true\\nhold_reason=label_write_failed\\n", 1, False, "gate_failed", "gate_failed"),
+		("hold=true\\nhold_reason=label_write_failed\\n", 1, False, "gate_failed", "label_write_failed"),
+		("hold=true\\nhold_reason=audit_dispatched\\n", 1, False, "gate_failed", "gate_failed"),
+		("hold=true\\nhold_reason=$(id)\\n", 1, False, "gate_failed", "gate_failed"),
+		("hold_reason=label_write_failed\\n", 1, False, "gate_failed", "gate_failed"),
 		("", 0, False, "gate_failed", "gate_failed"),
 	],
 )

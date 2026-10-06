@@ -330,8 +330,11 @@ rb_security_merge_gate()
 	rm -f "${gate_out}"
 	if [ "${gate_rc}" -ne 0 ] || [ -z "${hold}" ]; then
 		echo "::warning::Single-issue security gate failed (exit ${gate_rc}); holding the judge's merge."
-		rb_security_log "mode=merge_gate pr=${PR_NUMBER:-} outcome=hold reason=gate_failed rc=${gate_rc}"
 		RB_SECURITY_HOLD_REASON="gate_failed"
+		if [ "${hold}" = "true" ] && [ "${hold_reason}" = "label_write_failed" ]; then
+			RB_SECURITY_HOLD_REASON="label_write_failed"
+		fi
+		rb_security_log "mode=merge_gate pr=${PR_NUMBER:-} outcome=hold reason=gate_failed rc=${gate_rc} hold_reason=${RB_SECURITY_HOLD_REASON}"
 		return 1
 	fi
 	if [ "${hold}" = "false" ]; then
