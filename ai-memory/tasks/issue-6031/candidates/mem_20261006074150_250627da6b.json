@@ -1,0 +1,37 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "status=error; raw_status=harness_error; summary=Validation harness generation failed; failure_summary=Template renderer preflight or subprocess (`scripts/render_validation_templates.py`) failed (exit 14). Common causes: failed dependency setup, dependencies (`pyyaml`, `jsonschema`, `jinja2`) not importable, invalid `.ai/validate.yml`, schema-validation failure, or template-collection error.",
+  "fingerprint": "74de705ace6f3515b6c53f4833cb8eaa0dc4e141287bb1a6a8cc4c3fd4f94282",
+  "lineage": {
+    "issue_number": 6031,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37430977754",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37430977754",
+    "source_refs": [],
+    "workflow": "validate"
+  },
+  "record_id": "mem_20261006074150_250627da6b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6031,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37430977754"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation harness generation failed",
+  "timestamps": {
+    "created_at": "2026-10-06T07:41:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
