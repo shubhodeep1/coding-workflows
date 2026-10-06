@@ -860,7 +860,7 @@ def _env_split_string_has_guarded_git(command: str, depth: int = 0) -> bool:
 		return bool(re.search(r"(?:^|[/\s])git\s+(?:commit|push)\b", command))
 	for tokens in segments:
 		for index, token in enumerate(tokens):
-			if token not in ("env", "/usr/bin/env"):
+			if token != "env" and not token.endswith("/env"):
 				continue
 			option_index = index + 1
 			while option_index < len(tokens):

