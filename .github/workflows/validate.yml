@@ -753,7 +753,7 @@ jobs:
         # too, or an unrelated earlier failure skips it and validation fails
         # with a misleading "runtime unavailable" (#6521). It still requires the
         # trusted runtime and the trusted support staging, which only succeeds
-        # after checkout authorization, and mirrors validate_run's hook gate.
+        # after checkout authorization, and gates on the preceding after_create hook.
         if: always() && steps.runtime.outcome == 'success' && steps.support_staging.outcome == 'success' && steps.workspace_after_create_hook.outcome != 'failure'
         env:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
