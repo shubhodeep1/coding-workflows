@@ -22131,15 +22131,6 @@ ${FOLLOWUP_BLOCK_REASON}"
         echo "::error::Review-blocked judge prompt for issue #${rb_issue} exceeds codex's 1048576-character stdin cap; skipping 2 attempts that would fail before the model runs."
       else
         RB_JUDGE_ENGINE_LABELS_JSON="$(poller_judge_engine_labels_json managed "$(printf '%s' "${LABELS_JSON:-}" | jq -c --arg n "${rb_issue}" '.[$n] // empty' 2>/dev/null || true)")" || RB_JUDGE_ENGINE_LABELS_JSON=unavailable
-        RB_COMBINED_ENGINE=codex
-        if [ "${RB_COMBINED_MODE}" = "true" ]; then
-          if ! printf '%s' "${RB_JUDGE_ENGINE_LABELS_JSON}" | jq -e 'type == "array" and all(.[]; type == "string")' >/dev/null 2>&1; then
-            echo "JUDGE_ENGINE_LABELS role=RB_JUDGE outcome=forced_codex reason=issue_labels_unavailable" >&2
-          elif [ -f "${_POLLER_AI_ENGINE_SH}" ] && source "${_POLLER_AI_ENGINE_SH}"; then
-            RB_COMBINED_ENGINE="$(AI_ENGINE_LABELS="${RB_JUDGE_ENGINE_LABELS_JSON}" AI_ENGINE_MODEL_HINT="${MODEL_EDITOR}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" ai_engine_for_role RB_JUDGE 2>>"${RUNTIME_DIR}/rb_judge_${rb_issue}.log" || echo codex)"
-            [ "${RB_COMBINED_ENGINE}" = claude ] || RB_COMBINED_ENGINE=codex
-          fi
-        fi
         for attempt in 1 2; do
           echo "  Review-blocked judge attempt ${attempt}/2..."
           RB_JUDGE_ENGINE_RC=0

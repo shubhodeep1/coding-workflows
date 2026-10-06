@@ -201,9 +201,8 @@ def test_issue_engine_labels_are_wired_to_stall_and_rb_judges_only() -> None:
 	assert 'POLLER_JUDGE_ENGINE_LABELS="${stall_judge_engine_labels_json}" poller_claude_judge STALL_JUDGE' in text
 	assert 'poller_judge_engine_labels_json managed "$(printf \'%s\' "${LABELS_JSON:-}" | jq -c --arg n "${rb_issue}"' in text
 	assert 'POLLER_JUDGE_ENGINE_LABELS="${RB_JUDGE_ENGINE_LABELS_JSON}" poller_claude_judge RB_JUDGE' in text
-	for role in ("WAVE_JUDGE", "SECURITY_JUDGE"):
+	for role in ("WAVE_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE"):
 		assert re.search(rf"^\s+poller_claude_judge {role} ", text, re.MULTILINE)
-	assert 'bash "${ORCH_CODEX_ISOLATED_EXEC}" run --mode workspace --workdir "${judge_wt}"' in text
 
 
 @pytest.mark.parametrize("issue_labels, expected_engine", [
@@ -222,14 +221,12 @@ def test_combined_rb_judge_uses_verified_engine_and_its_worktree(
 	engine_dir = tmp_path / "scripts"
 	engine_dir.mkdir()
 	(engine_dir / "ai_engine.sh").write_text(FAKE_AI_ENGINE, encoding="utf-8")
-	codex_runner = engine_dir / "fake_codex.sh"
-	codex_runner.write_text('#!/bin/bash\nprintf "%s|%s\\n" "$PWD" "$*" >> "${CALLS}.codex"\nprintf "codex verdict\\n"\n', encoding="utf-8")
 	text = POLLER.read_text(encoding="utf-8")
 	branch = text.split('        RB_JUDGE_ENGINE_LABELS_JSON=', 1)[1].split('          if [ "${RB_JUDGE_ENGINE_RC}" -eq 77 ]', 1)[0]
 	script = (
 		'set -euo pipefail\n' + _helper_source() + '\n'
 		f'_POLLER_AI_ENGINE_SH="{engine_dir / "ai_engine.sh"}"\n'
-		f'ORCH_CODEX_ISOLATED_EXEC="{codex_runner}"\nRB_COMBINED_WORKDIR="{worktree}"\n'
+		f'RB_COMBINED_WORKDIR="{worktree}"\n'
 		f'RUNTIME_DIR="{tmp_path}"\nGITHUB_WORKSPACE="{tmp_path}"\n'
 		f'RB_JUDGE_PROMPT_FILE="{tmp_path / "prompt.txt"}"\nRB_JUDGE_OUTPUT_FILE="{tmp_path / "verdict.txt"}"\n'
 		'MODEL_EDITOR=openai/gpt-6-sol\nRB_COMBINED_MODE=true\nrb_issue=10\n'
@@ -241,15 +238,16 @@ def test_combined_rb_judge_uses_verified_engine_and_its_worktree(
 		env={**os.environ, "FAKE_ENGINE": "claude", "FAKE_CLAUDE_MODE": "success", "CALLS": str(tmp_path / "calls"),
 			"FAKE_SANDBOX_ROOT": str(tmp_path / "sandbox-root"), "WORKSPACE_PATH": str(tmp_path / "wrong-workspace")}, check=False)
 	assert proc.returncode == 0, proc.stderr
+	assert len(_read(tmp_path / "calls.resolve").splitlines()) == (0 if issue_labels == '"ai:done"' else 1)
+	assert proc.stderr.count("JUDGE_ENGINE_LABELS role=RB_JUDGE outcome=forced_codex") == (1 if issue_labels == '"ai:done"' else 0)
+	assert f"workspace={worktree} cwd={worktree} workpath=" in _read(tmp_path / "calls.sandbox_workspace")
 	if expected_engine == "claude":
 		assert _read(tmp_path / "verdict.txt") == "claude verdict\n", (proc.stdout, proc.stderr)
-		assert _read(tmp_path / "calls.codex") == ""
 		assert "claude|RB_JUDGE|write|/dev/null" in _read(tmp_path / "calls.sandbox")
-		assert f"workspace={worktree} cwd={worktree} workpath=" in _read(tmp_path / "calls.sandbox_workspace")
 	else:
-		assert _read(tmp_path / "verdict.txt") == "codex verdict\n"
-		assert _read(tmp_path / "calls.sandbox") == ""
-		assert f"--workdir {worktree}" in _read(tmp_path / "calls.codex")
+		assert _read(tmp_path / "verdict.txt") == "opencode verdict\n"
+		assert "codex|RB_JUDGE|write|" in _read(tmp_path / "calls.sandbox")
+		assert "--role writer --model openai/gpt-6-sol" in _read(tmp_path / "calls.config")
 
 
 def test_model_hint_argument_overrides_model_editor(tmp_path: Path) -> None:
