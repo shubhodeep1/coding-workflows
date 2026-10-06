@@ -774,6 +774,10 @@ stage_self_repo_validation_template_entry()
 		[[ "${inspected_template_path}" == */* ]] || break
 		inspected_template_path="${inspected_template_path%/*}"
 	done
+	if [ -e "${repo_path}" ] && [ ! -f "${repo_path}" ]; then
+		echo "::error::Refusing non-file validation-harness template path '${repo_path}'." >&2
+		exit 1
+	fi
 	if [ -e "${repo_path}" ] && ! cmp -s "${repo_path}" "${trusted_path}"; then
 		echo "VALIDATE_TRUSTED_TEMPLATE_OVERRIDE path=${repo_path} ref=${ORIGINAL_SCRIPT_REF}"
 	fi

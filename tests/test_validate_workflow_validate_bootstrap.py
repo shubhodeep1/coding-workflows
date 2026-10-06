@@ -683,6 +683,7 @@ def _run_validate_staging(
 	support_ref: str | None = None,
 	helper: Path = STAGE_WORKFLOW_SUPPORT,
 	workspace_template_symlink: Path | None = None,
+	workspace_template_directory: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
 	overlay_files = {
 		"scripts/load_workflow_overlay.py": (REPO_ROOT / "scripts" / "load_workflow_overlay.py").read_text(encoding="utf-8"),
@@ -696,6 +697,9 @@ def _run_validate_staging(
 	if workspace_template_symlink is not None:
 		(workspace / _TEMPLATE_REL).unlink()
 		(workspace / _TEMPLATE_REL).symlink_to(workspace_template_symlink)
+	if workspace_template_directory:
+		(workspace / _TEMPLATE_REL).unlink()
+		(workspace / _TEMPLATE_REL).mkdir()
 	bin_dir = tmp / "bin"
 	bin_dir.mkdir()
 	if not shutil.which("jq"):
@@ -818,6 +822,20 @@ def test_self_repo_validation_templates_reject_symlinked_destination() -> None:
 		assert outside_file.read_text(encoding="utf-8") == "untouched\n"
 
 
+def test_self_repo_validation_templates_reject_directory_destination() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		result, workspace = _run_validate_staging(
+			Path(tmpdir),
+			source_files={_TEMPLATE_REL: _TRUSTED_CONTAINER_TEMPLATE},
+			manifest_paths=[_TEMPLATE_REL],
+			workspace_template_directory=True,
+		)
+		assert result.returncode != 0, result.stdout + result.stderr
+		assert "::error::Refusing non-file validation-harness template path" in result.stderr
+		assert (workspace / _TEMPLATE_REL).is_dir()
+		assert list((workspace / _TEMPLATE_REL).iterdir()) == []
+
+
 def test_consumer_validation_templates_keep_existing_copy_path() -> None:
 	with tempfile.TemporaryDirectory() as tmpdir:
 		result, workspace = _run_validate_staging(
@@ -853,6 +871,7 @@ def main() -> int:
 	test_self_repo_validation_templates_fail_closed_without_trusted_commit()
 	test_self_repo_validation_templates_fail_closed_on_missing_trusted_asset()
 	test_self_repo_validation_templates_reject_symlinked_destination()
+	test_self_repo_validation_templates_reject_directory_destination()
 	test_consumer_validation_templates_keep_existing_copy_path()
 	test_stage_workflow_support_helper_routes_self_repo_templates_to_trusted_commit()
 	test_validate_workflow_bootstraps_revalidate_lifecycle_ai_memory_schemas()
