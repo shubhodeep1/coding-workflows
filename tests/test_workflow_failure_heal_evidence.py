@@ -700,24 +700,70 @@ def test_structured_legacy_cached_job_and_missing_data(tmp_path: Path) -> None:
 	assert "Diagnostics: unavailable" in ev.render_structured_prompt_section(str(out))
 
 
-def test_scope_allowlist_issue_first_plan_fallback_and_broad_globs(tmp_path: Path, capsys) -> None:
+def test_scope_allowlist_ignores_issue_body_and_requires_plan(tmp_path: Path, capsys) -> None:
 	issue = tmp_path / "issue.txt"
 	plan = tmp_path / "plan.txt"
 	plan.write_text("## Files likely to change\n- `scripts/plan.py`\n")
-	issue.write_text("files_touched:\n  - scripts/issue.py\n  - **\n  - ../escape.py\n")
+	issue.write_text("```\nfiles_touched:\n  - scripts/\n```\nfiles_touched:\n  - scripts/issue.py\n")
 	args = type("Args", (), {"issue_body_file": str(issue), "plan_file": str(plan)})()
 	ev._cmd_scope_allowlist(args)
-	assert json.loads(capsys.readouterr().out) == {"source": "issue", "allowlist": ["scripts/issue.py"]}
-	plan.unlink()
-	ev._cmd_scope_allowlist(args)
-	assert json.loads(capsys.readouterr().out) == {"source": "issue", "allowlist": ["scripts/issue.py"]}
-	plan.write_text("## Files likely to change\n- `scripts/plan.py`\n")
-	issue.write_text("no allowlist")
+	output = capsys.readouterr()
+	assert json.loads(output.out) == {"source": "plan", "allowlist": ["scripts/plan.py"]}
+	assert "scope_allowlist source=plan kept=1 rejected=0" in output.err
+	issue.unlink()
 	ev._cmd_scope_allowlist(args)
 	assert json.loads(capsys.readouterr().out) == {"source": "plan", "allowlist": ["scripts/plan.py"]}
+	plan.unlink()
+	ev._cmd_scope_allowlist(args)
+	output = capsys.readouterr()
+	assert json.loads(output.out) == {"source": "none", "allowlist": []}
+	assert "scope_allowlist source=none kept=0 rejected=0 reason=exception" in output.err
 	plan.write_text("no plan paths")
 	ev._cmd_scope_allowlist(args)
 	assert json.loads(capsys.readouterr().out) == {"source": "none", "allowlist": []}
+
+
+def test_scope_allowlist_only_concrete_unprotected_plan_files(tmp_path: Path, capsys) -> None:
+	plan = tmp_path / "plan.txt"
+	paths = [
+		"scripts/", "scripts", ".github/workflows/", "scripts/*.py",
+		"scripts/files_touched_scope_guard.py", "Scripts/Workflow_Failure_Heal_Evidence.py",
+		"./scripts/implement_commit_changes.sh", "scripts/implement_commit_changes.sh", ".github/ai/claude_engine.json",
+		".CLAUDE/hooks/gh_api_write_guard.py", "docs/.GIT/config.txt",
+		"scripts/fix.py", ".github/workflows/ci.yml", "prompts/fix.txt",
+		"tests/test_x.py", "scripts/fix.py",
+	]
+	plan.write_text("## Files likely to change\n" + "".join(f"- `{path}`\n" for path in paths))
+	args = type("Args", (), {"issue_body_file": str(tmp_path / "missing"), "plan_file": str(plan)})()
+	ev._cmd_scope_allowlist(args)
+	output = capsys.readouterr()
+	assert json.loads(output.out) == {
+		"source": "plan",
+		"allowlist": ["scripts/fix.py", ".github/workflows/ci.yml", "prompts/fix.txt", "tests/test_x.py"],
+	}
+	assert "scope_allowlist source=plan kept=4 rejected=" in output.err
+	assert "scripts/files_touched_scope_guard.py" not in output.err
+	assert ".github/ai/claude_engine.json" not in output.err
+	plan.write_text("## Files likely to change\n- `scripts/files_touched_scope_guard.py`\n")
+	ev._cmd_scope_allowlist(args)
+	assert json.loads(capsys.readouterr().out) == {"source": "none", "allowlist": []}
+
+
+def test_scope_allowlist_rejects_all_unsafe_entries(tmp_path: Path, capsys) -> None:
+	plan = tmp_path / "plan.txt"
+	plan.write_text("## Files likely to change\n" + "".join(
+		f"- `{path}`\n" for path in ("scripts/*.py", "docs/.GIT/config.txt", "../escape.py", "scripts/./a.py", "scripts/a\u2028b.py", "scripts/")
+	))
+	args = type("Args", (), {"issue_body_file": str(tmp_path / "missing"), "plan_file": str(plan)})()
+	ev._cmd_scope_allowlist(args)
+	assert json.loads(capsys.readouterr().out) == {"source": "none", "allowlist": []}
+	for path in (" scripts/fix.py", "scripts/fix.py ", "scripts/a\u2028b.py"):
+		assert ev._heal_scope_entry_reject_reason(path) == "whitespace"
+	for path in ("scripts/./a.py", "../escape.py", "docs/.GIT/config.txt", "scripts//a.py", "/tmp/a.py", "scripts\\a.py"):
+		assert ev._heal_scope_entry_reject_reason(path) == "invalid_path"
+	assert ev._heal_scope_entry_reject_reason("scripts/") == "directory"
+	assert ev._heal_scope_entry_reject_reason("scripts/*.py") == "glob"
+	assert ev._heal_scope_entry_reject_reason("Makefile") == "no_extension"
 
 
 def test_lineage_excludes_current_issue_when_its_number_is_a_string(tmp_path: Path) -> None:
