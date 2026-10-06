@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/clarify_isolated_run.sh:30 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The opt-in coercion accepts only the literal lowercase string \"true\", so other truthy values silently leave agent instruction files included in the sandbox snapshot.\n  WHY: An unknown value fails open toward the prompt-injection surface this change is intended to exclude.\n- scripts/clarify_isolated_run.sh:80 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The omit short-circuit increments the global `omitted` counter before the bad_parts, suffix, and root_files guards decide whether `copy()` would emit the file.\n  WHY: The reported count can include paths that were never going to be copied, misleading operators checking whether the mitigation is working; the security-relevant snapshot outcome is unchanged.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/clarify_isolated_run.sh:30 | severity=high | confidence=[4]\n  PROBLEM: The opt-in coercion accepts only the literal lowercase string \"true\". Any other truthy value (TRUE, True, 1, yes, on) silently falls through to omit=false.\n  WHY: A caller typo or future alias can silently re-include PR-authored agent instruction files in the sandbox snapshot, with no error, warning, or log line, exposing the prompt-injection surface this PR is fixing.\n- scripts/clarify_isolated_run.sh:80 | severity=low | confidence=[3]\n  PROBLEM: The omit short-circuit runs before the bad_parts / suffix / root_files guards that decide whether `copy()` would actually emit the file.\n  WHY: The log count may include paths that were never going to be copied, misleading operators checking the mitigation; the security-relevant snapshot outcome is unchanged.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "06f04ae72d6385a830c147d8a76ab3672fb34f9ec0abc4164ccfd6f3e84e458c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6446,
+    "run_id": "37401565595",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37401565595",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006023707_b896a2d381",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6446,
+    "run_id": "37401565595"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T02:37:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
