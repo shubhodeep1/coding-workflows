@@ -1526,7 +1526,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		if invocation.subcommand == "commit" and invocation.warning and invocation.env_wrapped:
 			_request_confirmation("could not resolve env-wrapped git commit directory; the session checkout may not be the commit target")
 			continue
-		if invocation.subcommand == "commit" and invocation.warning and (invocation.config_override or invocation.explicit_git_directory):
+		if invocation.subcommand == "commit" and invocation.warning and invocation.explicit_git_directory:
 			_request_confirmation("could not resolve git commit directory; PR status cannot be checked for the intended checkout")
 			continue
 		if invocation.subcommand == "push" and invocation.warning:
