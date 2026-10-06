@@ -242,7 +242,10 @@ while IFS=$'\t' read -r run_id run_url; do
 		# even when stdout is a file, and every job read as "(job log
 		# unavailable)": no error signature, no downstream-gate dedup.
 		if gh_retry gh api --allow-escape-sequences "repos/${SOURCE_REPO}/actions/jobs/${job_id}/logs" > "${RAW_LOG}" 2>/dev/null && [ -s "${RAW_LOG}" ]; then
-			python3 "${HEAL_PY}" filter-log --log-file "${RAW_LOG}" --max-lines "${LOG_TAIL_LINES}" --max-bytes "${MAX_LOG_BYTES}" > "${FILTERED_LOG}" || : > "${FILTERED_LOG}"
+			if ! python3 "${HEAL_PY}" filter-log --log-file "${RAW_LOG}" --max-lines "${LOG_TAIL_LINES}" --max-bytes "${MAX_LOG_BYTES}" > "${FILTERED_LOG}"; then
+				log "warn job_log_filter_failed source=${SOURCE_REPO} run=${run_id} job=${job_id}"
+				: > "${FILTERED_LOG}"
+			fi
 			rm -f "${RAW_LOG}"
 			if [ "${SOURCE_KIND}" = "phase_failure" ] && [ -s "${FILTERED_LOG}" ]; then
 				LOG_FILES+=("${FILTERED_LOG}")
@@ -390,7 +393,7 @@ case "${ACTION}" in
 		else
 			log "warn duplicate_comment_failed existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP}"
 		fi
-		if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${EXISTING}" = "${ISSUE_NUMBER}" ] && [ "${EXISTING_REPO}" = "${SOURCE_REPO}" ]; then
+		if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${DUPLICATE_MATCH}" = "fingerprint" ] && [ "${EXISTING}" = "${ISSUE_NUMBER}" ] && [ "${EXISTING_REPO}" = "${SOURCE_REPO}" ]; then
 			# The heal issue's own clarify / plan / implement run failed the way
 			# the issue was filed for: the pipeline cannot run the fix, and every
 			# retry would only add another occurrence here. Hand it to a human.

@@ -196,7 +196,7 @@ def test_prompt_declares_classification_tokens() -> None:
 
 def test_stable_log_prefixes_are_registered() -> None:
 	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
-	for prefix in ("WORKFLOW_HEAL_REPORT", "WORKFLOW_HEAL_AUTOFIX_REPORT", "WORKFLOW_HEAL_PR_RECONCILE", "WORKFLOW_HEAL"):
+	for prefix in ("WORKFLOW_HEAL_REPORT", "WORKFLOW_HEAL_AUTOFIX_REPORT", "WORKFLOW_HEAL_PHASE_REPORT", "WORKFLOW_HEAL_PR_RECONCILE", "WORKFLOW_HEAL"):
 		assert f"- `{prefix}`" in agents_text
 		assert f"LOG_PREFIX.name={prefix}" in agents_text
 
@@ -3672,6 +3672,14 @@ def test_intake_escalates_a_heal_issue_that_fails_its_own_run() -> None:
 	assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
 	assert "issues_created" not in state_after
 	assert any(c["path"] == f"repos/{SELF_REPO}/issues/42/comments" for c in state_after["comments_posted"])
+	# A source-key duplicate with a different fingerprint is only an occurrence,
+	# not evidence that the heal issue cannot progress through its own pipeline.
+	self_sourced = _sourced_heal_issue(42, state="open", fp="9" * 64, source=f"{SELF_REPO}#42")
+	result, state_after, _ = _run_intake(payload, _plan_intake_state(heal_issues=[self_sourced]), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL duplicate existing_issue=42" in result.stdout and "match=source" in result.stdout
+	assert "reason=heal_issue_failed_itself" not in result.stdout
+	assert "issue_edits" not in state_after
 
 
 def test_phase_workflows_wire_the_heal_report_job() -> None:
