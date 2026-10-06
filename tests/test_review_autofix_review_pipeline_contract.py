@@ -2871,8 +2871,9 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert '[ "${rb_oc_phase}" != review_rb_judge ] || rb_oc_role=reviewer' in rb_judge
 	assert 'if ! review_rb_prepare_opencode_config "${rb_oc_role}" "${rb_oc_phase}" "${rb_oc_config_path}" "${rb_oc_serena_mode}"; then' in rb_judge
 	assert 'review_rb_opencode_sandbox_finish "${rb_fix_rc}" "${RB_FIX_OUTPUT}" "${RB_FIX_STDERR}" || rb_fix_rc=$?' in rb_judge
-	assert 'opencode_run_cmd "$@"' in resolver
-	assert 'writer\n    "${MODEL_EDITOR}"' in resolver
+	assert 'opencode_run_cmd "$@"' not in resolver
+	assert 'resolver_opencode_cmd=(env "REVIEW_SANDBOX_ROOT=${resolver_opencode_root}" bash "${resolver_sandbox_sh}" run' in resolver
+	assert '--role writer --model "${MODEL_EDITOR}"' in resolver
 	assert '"${_current_reasoning_effort}"' in resolver
 	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in resolver
 	assert 'opencode_emit_failure_alert review_conflict_resolve writer "${MODEL_EDITOR:-unknown}" 1 config_writer_missing' in resolver
