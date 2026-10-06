@@ -23084,7 +23084,7 @@ ${PR_DIFF}
     wave_judge_rc=0
     poller_claude_judge WAVE_JUDGE "${judge_effective_prompt_file}" "${JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/judge_log.txt" || wave_judge_rc=$?
     if [ "${wave_judge_rc}" -eq 75 ]; then
-      cat "${judge_effective_prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
+      cat "${judge_effective_prompt_file}" | env -u GH_PAT -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET codex --ask-for-approval never -c model_verbosity=low exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox read-only > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
     fi
     rm -f "${judge_attempt_prompt_file}"
     judge_json_candidate="$(extract_judge_json_with_status "${JUDGE_OUTPUT_FILE}")"

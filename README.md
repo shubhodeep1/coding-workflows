@@ -2122,8 +2122,9 @@ the effort, with `none` / `minimal` mapped to `low`. Codex model variables are
 never rewritten.
 
 **Tool profiles.** Read-profile roles (`CLARIFY`, `CLARIFY_RESPOND`,
-`SECURITY_JUDGE`, `SECURITY_AUDIT`, `WORKFLOW_HEAL`, `CHECK_TRIAGE`) run with
-`Read`, `Grep`, `Glob` and a fixed list of read-only `git` / `gh` commands in
+`WAVE_JUDGE`, `SECURITY_JUDGE`, `SECURITY_AUDIT`, `WORKFLOW_HEAL`,
+`CHECK_TRIAGE`) run with `Read`, `Grep`, `Glob` and a fixed list of read-only
+`git` / `gh` commands in
 `dontAsk` mode (no `git grep` shell allowance). Their model processes receive
 no GitHub, Telegram, OpenRouter or Actions OIDC/runtime credentials; `gh api`
 is permitted only when the hook explicitly approves a GET request to a relative

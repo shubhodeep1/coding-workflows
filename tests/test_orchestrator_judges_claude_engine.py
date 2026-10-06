@@ -3,7 +3,7 @@
 scripts/orchestrate_poll_process.sh runs the wave, stall, integration,
 security-pass and review-blocked judges through ``poller_claude_judge``. On
 Claude the judge goes through ``claude_run``; when the role is on codex or
-Claude is unavailable (exit 75) the unchanged codex command runs (plan D1).
+Claude is unavailable (exit 75) the codex fallback runs (plan D1).
 These tests run the helper against a stand-in ai_engine.sh and pin each call
 site's codex command (G4).
 """
@@ -189,8 +189,7 @@ def test_model_hint_argument_overrides_model_editor(tmp_path: Path) -> None:
 	assert _read(Path(f"{calls}.claude")).split("|")[5] == "claude-sonnet-5-5"
 
 
-# Each judge call site: the role, then the unchanged codex command that runs
-# only on exit 75.
+# Each judge call site: the role, then the codex command that runs only on exit 75.
 SITES = {
 	"SECURITY_JUDGE": (
 		'poller_claude_judge SECURITY_JUDGE "${prompt_file}" "${output_file}" "${error_file}" "${effective_judge_model}" || security_judge_rc=$?',
@@ -215,7 +214,7 @@ SITES = {
 	"WAVE_JUDGE": (
 		'poller_claude_judge WAVE_JUDGE "${judge_effective_prompt_file}" "${JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/judge_log.txt" || wave_judge_rc=$?',
 		'if [ "${wave_judge_rc}" -eq 75 ]; then',
-		'cat "${judge_effective_prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true',
+		'cat "${judge_effective_prompt_file}" | env -u GH_PAT -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET codex --ask-for-approval never -c model_verbosity=low exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox read-only > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true',
 	),
 }
 
@@ -229,6 +228,49 @@ def test_each_judge_tries_claude_then_runs_the_unchanged_codex_command() -> None
 		assert text.index(codex_call, start) > text.index(gate, start), role
 		assert text.count(codex_call) == 1, role
 	assert len(re.findall(r"^\s+poller_claude_judge [A-Z_]+ ", text, re.M)) == len(SITES)
+
+
+def test_wave_judge_fallback_is_read_only_and_strips_credentials() -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	call, gate, _fallback = SITES["WAVE_JUDGE"]
+	block = text[text.index(gate, text.index(call)):].split('    fi\n', 1)[0]
+	assert "--sandbox read-only" in block
+	assert "env -u GH_PAT -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET codex" in block
+	assert "danger-full-access" not in block
+	assert "include_apply_patch_tool" not in block
+
+
+def test_wave_judge_fallback_codex_process_has_no_write_tokens(tmp_path: Path) -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	call, gate, _fallback = SITES["WAVE_JUDGE"]
+	fallback_line = text[text.index(gate, text.index(call)):].splitlines()[1].strip()
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	codex = bin_dir / "codex"
+	codex.write_text(
+		'#!/usr/bin/env bash\n'
+		'printf "%s\\n" "${GH_PAT-unset}" "${GH_TOKEN-unset}" "${GITHUB_TOKEN-unset}" '
+		'"${TG_BOT_SECRET-unset}" "${OPENROUTER_API_KEY-unset}" "$*" > "${CALLS}"\n'
+		'printf "{}\\n"\n', encoding="utf-8"
+	)
+	codex.chmod(0o755)
+	(tmp_path / "prompt.txt").write_text("judge this\n", encoding="utf-8")
+	calls = tmp_path / "calls"
+	env = dict(os.environ, CALLS=str(calls), PATH=f"{bin_dir}:{os.environ['PATH']}",
+		GH_PAT="dummy", GH_TOKEN="dummy", GITHUB_TOKEN="dummy", TG_BOT_SECRET="dummy",
+		OPENROUTER_API_KEY="model-key")
+	for key in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
+		env.pop(key, None)
+	script = (
+		"set -euo pipefail\n"
+		"judge_effective_prompt_file=prompt.txt\nJUDGE_OUTPUT_FILE=out.txt\nRUNTIME_DIR=.\n"
+		"MODEL_EDITOR=openai/gpt-6-sol\n" + fallback_line + "\n"
+	)
+	proc = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60, check=False)
+	assert proc.returncode == 0, proc.stderr
+	assert _read(calls).splitlines()[:5] == ["unset"] * 4 + ["model-key"]
+	assert "--sandbox read-only" in _read(calls).splitlines()[5]
+	assert _read(tmp_path / "out.txt") == "{}\n"
 
 
 def _poll_steps() -> list[dict]:

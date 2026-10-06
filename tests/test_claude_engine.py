@@ -409,6 +409,12 @@ def test_read_roles_get_the_read_profile() -> None:
 		assert _resolve(role, {})["profile"] == expected, role
 
 
+def test_wave_judge_uses_the_read_profile() -> None:
+	assert "WAVE_JUDGE" in ce.READ_ROLES
+	assert _resolve("WAVE_JUDGE", {})["profile"] == "read"
+	assert ce.load_config(CONFIG)[0]["role_defaults"]["WAVE_JUDGE"]["profile"] == "read"
+
+
 def test_unknown_role_is_rejected() -> None:
 	with pytest.raises(ce.EngineError):
 		_resolve("NOT_A_ROLE", {})
