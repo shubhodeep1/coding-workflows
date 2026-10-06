@@ -2251,8 +2251,7 @@ _resolver_sandbox_opencode_attempt()
   local resolver_opencode_root="" resolver_transfer_reason="" resolver_transfer_reason_file="${RUNTIME_DIR}/review_sandbox_transfer_reason_${tmp_output##*/}"
   if ! resolver_opencode_root="$(bash "${resolver_sandbox_sh}" prepare-ephemeral codex)" || [ -z "${resolver_opencode_root}" ]; then
     echo '::warning::Conflict resolver sandbox preparation failed (reason=sandbox_prepare_failed); refusing host fallback.' >&2
-    _codex_exit=1
-    return 0
+    _resolver_fail_closed sandbox_prepare_failed
   fi
   resolver_opencode_cmd=(env "REVIEW_SANDBOX_ROOT=${resolver_opencode_root}" bash "${resolver_sandbox_sh}" run
     "${_effective_prompt_file}" "${tmp_output}" "${MODEL_EDITOR}" "${_current_reasoning_effort}"
@@ -2290,15 +2289,15 @@ _resolver_sandbox_opencode_attempt()
     fi
     echo "::error::Conflict resolver sandbox transfer failed; refusing to accept output.${resolver_transfer_reason}" >&2
     rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
-    # A failed rollback can leave partial host edits; no retry may commit them.
+    # Any transfer failure may leave partial host edits; never retry or commit.
     if [ "${resolver_transfer_reason}" = " reason=transfer_rollback_failed" ]; then
       _resolver_fail_closed transfer_rollback_failed
     fi
-    _codex_exit=1
+    _resolver_fail_closed sandbox_transfer_failed
   fi
   if [ "${_codex_exit}" -eq 2 ]; then
     echo '::warning::Conflict resolver sandbox helper outdated (reason=sandbox_helper_outdated); refusing host fallback.' >&2
-    _codex_exit=1
+    _resolver_fail_closed sandbox_helper_outdated
   fi
 }
 

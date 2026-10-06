@@ -50,10 +50,12 @@ case "$1" in
     [ "${MODE:-}" != prepare_failed ] || exit 1
     if [ "${2:-}" = codex ]; then echo "$FAKE_ROOT/codex"; else echo "$FAKE_ROOT/claude"; fi ;;
   run)
-    if [ "${MODE:-}" = transfer_failed ] || [ "${MODE:-}" = rollback_failed ]; then
+    if [ "${MODE:-}" = transfer_failed ] || [ "${MODE:-}" = transfer_unknown ] || [ "${MODE:-}" = rollback_failed ]; then
       touch "$RUNTIME_DIR/review_sandbox_transfer_failed"
       if [ "${MODE:-}" = rollback_failed ]; then
         echo '::error::Review isolation snapshot or transfer rejected (ValueError) reason=transfer_rollback_failed' > "$RUNTIME_DIR/review_sandbox_transfer_reason_${3##*/}"
+      elif [ "${MODE:-}" = transfer_unknown ]; then
+        echo 'unexpected transfer error' > "$RUNTIME_DIR/review_sandbox_transfer_reason_${3##*/}"
       else
         echo '::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_file' > "$RUNTIME_DIR/review_sandbox_transfer_reason_${3##*/}"
       fi
@@ -80,13 +82,14 @@ def test_attempts_never_run_host_writer(tmp_path, mode, engine, expected_rc):
 	paths.write_text("scripts/example.py\n", encoding="utf-8")
 	program = """set -euo pipefail
 emit_conflict_resolver_substate() { :; }
+_persist_resolver_retry_state_from_current_failure() { :; }
 _resolver_sandbox_attempt() {
   printf 'sandbox-attempt %s\\n' "$1" >> "$CALLS"
   if [ "$1" = claude ]; then return 75; fi
   _resolver_sandbox_opencode_attempt
   return "${_codex_exit}"
 }
-""" + _helper() + "\n" + _launch() + '\nprintf "exit=%s\\n" "${_codex_exit}"\n'
+	""" + _failure_helper() + "\n" + _helper() + "\n" + _launch() + '\nprintf "exit=%s\\n" "${_codex_exit}"\n'
 	prompt = tmp_path / "prompt.txt"
 	prompt.write_text("resolve conflict\n", encoding="utf-8")
 	output = tmp_path / "output.txt"
@@ -112,8 +115,9 @@ _run_codex=true
 attempt=1
 '''
 	result = subprocess.run(["bash", "-c", setup + program], env=env, capture_output=True, text=True)
-	assert result.returncode == 0, result.stderr
-	assert f"exit={expected_rc}" in result.stdout
+	assert result.returncode == (0 if expected_rc == 0 else 1), result.stderr
+	if expected_rc == 0:
+		assert "exit=0" in result.stdout
 	logged = calls.read_text(encoding="utf-8")
 	assert "opencode_run_cmd" not in logged
 	if mode == "prepare_failed":
@@ -134,7 +138,7 @@ attempt=1
 		assert "reason=sandbox_helper_outdated" in result.stderr
 
 
-@pytest.mark.parametrize("mode", ["cleanup_failed", "rollback_failed"])
+@pytest.mark.parametrize("mode", ["prepare_failed", "outdated", "transfer_failed", "transfer_unknown", "cleanup_failed", "rollback_failed"])
 def test_unsafe_failure_stops_instead_of_retrying(tmp_path, mode):
 	sandbox, calls = _stub(tmp_path)
 	src = _helper()
@@ -162,10 +166,17 @@ _resolver_sandbox_opencode_attempt
 echo unexpected
 '''], env=env, capture_output=True, text=True)
 	assert result.returncode == 1 and "unexpected" not in result.stdout
-	expected_error = "sandbox cleanup failed" if mode == "cleanup_failed" else "reason=transfer_rollback_failed"
+	expected_error = {
+		"prepare_failed": "reason=sandbox_prepare_failed",
+		"outdated": "reason=sandbox_helper_outdated",
+		"transfer_failed": "reason=sandbox_transfer_failed",
+		"transfer_unknown": "reason=sandbox_transfer_failed",
+		"cleanup_failed": "sandbox cleanup failed",
+		"rollback_failed": "reason=transfer_rollback_failed",
+	}[mode]
 	assert expected_error in result.stderr
 	assert (tmp_path / "persisted_reason").read_text().strip() == (
-		"sandbox_cleanup_failed" if mode == "cleanup_failed" else "transfer_rollback_failed"
+		"sandbox_cleanup_failed" if mode == "cleanup_failed" else expected_error.removeprefix("reason=")
 	)
 
 
