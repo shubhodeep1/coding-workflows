@@ -2319,8 +2319,12 @@ jobs:
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           FAILED_STEP_HINT="Check the AI Plan run logs and inspect the first failed step."
+          PLAN_CANCELLED_SUFFIX=""
+          if [ "${{ job.status }}" = "cancelled" ]; then
+            PLAN_CANCELLED_SUFFIX=$'\n<!-- ai:plan-cancelled -->'
+          fi
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
-            -f body=$'AI planning workflow failed.\n\nWorkflow: AI Plan\nIssue: #'"${ISSUE_NUMBER}"$'\nIssue URL: '"${ISSUE_URL}"$'\nContext: '"${PLAN_FAILURE_CONTEXT}"$'\nHint: '"${FAILED_STEP_HINT}"$'\nRun: '"${RUN_URL}"
+            -f body=$'AI planning workflow failed.\n\nWorkflow: AI Plan\nIssue: #'"${ISSUE_NUMBER}"$'\nIssue URL: '"${ISSUE_URL}"$'\nContext: '"${PLAN_FAILURE_CONTEXT}"$'\nHint: '"${FAILED_STEP_HINT}"$'\nRun: '"${RUN_URL}${PLAN_CANCELLED_SUFFIX}"
 
       - name: Telegram failure notification
         if: failure() || cancelled()

@@ -244,11 +244,16 @@ while IFS=$'\t' read -r run_id run_url; do
 		if gh_retry gh api --allow-escape-sequences "repos/${SOURCE_REPO}/actions/jobs/${job_id}/logs" > "${RAW_LOG}" 2>/dev/null && [ -s "${RAW_LOG}" ]; then
 			python3 "${HEAL_PY}" filter-log --log-file "${RAW_LOG}" --max-lines "${LOG_TAIL_LINES}" --max-bytes "${MAX_LOG_BYTES}" > "${FILTERED_LOG}" || : > "${FILTERED_LOG}"
 			rm -f "${RAW_LOG}"
+			if [ "${SOURCE_KIND}" = "phase_failure" ] && [ -s "${FILTERED_LOG}" ]; then
+				LOG_FILES+=("${FILTERED_LOG}")
+			fi
 		else
 			log "warn job_log_fetch_failed source=${SOURCE_REPO} run=${run_id} job=${job_id}"
 			printf '(job log unavailable)\n' > "${FILTERED_LOG}"
 		fi
-		LOG_FILES+=("${FILTERED_LOG}")
+		if [ "${SOURCE_KIND}" != "phase_failure" ]; then
+			LOG_FILES+=("${FILTERED_LOG}")
+		fi
 		jq --arg run_id "${run_id}" --arg url "${run_url}" --arg job_id "${job_id}" --arg job_name "${job_name}" \
 			--arg workflow_name "${workflow_name}" --arg failing_step "${failing_step}" --arg log_file "${FILTERED_LOG}" \
 			'. + [{run_id: $run_id, url: $url, job_id: $job_id, job_name: $job_name, workflow_name: $workflow_name, failing_step: $failing_step, log_file: $log_file}]' \

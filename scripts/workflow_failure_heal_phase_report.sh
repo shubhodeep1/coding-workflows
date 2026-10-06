@@ -20,11 +20,11 @@
 #      the failure, de-duplicates (one open heal issue per source issue) and
 #      opens the heal issue.
 #
-# API calls (CLAUDE.md §15): one issue read, one paginated comment read, one
-# dispatch. The phase job's own issue snapshot and comment reads live in
-# another job and predate its failure comment, so neither can be reused; the
-# event payload's issue copy is not used because a long body can push a step's
-# environment past the kernel's per-variable limit.
+# API calls (CLAUDE.md §15): one issue read, one identity read, one paginated
+# comment read, one dispatch. The phase job's own issue snapshot and comment
+# reads live in another job and predate its failure comment, so neither can be
+# reused; the event payload's issue copy is not used because a long body can
+# push a step's environment past the kernel's per-variable limit.
 #
 # The reporter never fails the job: every exit is 0 and every outcome is a
 # stable log line prefixed WORKFLOW_HEAL_PHASE_REPORT.
@@ -120,12 +120,20 @@ if [ "${ISSUE_STATE}" != "open" ]; then
 fi
 
 COMMENTS_JSON_FILE="${REPORT_DIR}/comments.json"
-if ! gh_retry gh api --method GET --paginate "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" -F per_page=100 \
-	--jq '.[] | {body: (.body // ""), created_at: (.created_at // "")}' 2>/dev/null \
+# The issue GET above does not identify the GH_PAT account that posted phase
+# comments; resolve it once so user-authored comment bodies cannot alter the streak.
+COMMENT_AUTHOR="$(gh_retry gh api --method GET user --jq .login 2>/dev/null || true)"
+if [ -z "${COMMENT_AUTHOR}" ]; then
+	log "warn comment_author_unavailable issue=${ISSUE_NUMBER}; reporting this run without a streak"
+	printf '[]' > "${COMMENTS_JSON_FILE}"
+	STREAK_THRESHOLD=1
+elif ! gh_retry gh api --method GET --paginate "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" -F per_page=100 \
+	--jq '.[] | {body: (.body // ""), user: (.user // {})}' 2>/dev/null \
 	| jq -s '.' > "${COMMENTS_JSON_FILE}" 2>/dev/null \
 	|| ! jq -e 'type == "array"' "${COMMENTS_JSON_FILE}" >/dev/null 2>&1; then
-	log "warn comments_fetch_failed issue=${ISSUE_NUMBER}; counting this run only"
+	log "warn comments_fetch_failed issue=${ISSUE_NUMBER}; reporting this run without a streak"
 	printf '[]' > "${COMMENTS_JSON_FILE}"
+	STREAK_THRESHOLD=1
 fi
 
 # --- Build, gate, validate, dispatch --------------------------------------------
@@ -134,7 +142,7 @@ PAYLOAD_FILE="${REPORT_DIR}/payload.json"
 BUILD_ERROR_FILE="${REPORT_DIR}/build_error.txt"
 if ! python3 "${HEAL_PY}" build-phase-payload --repo "${REPO}" --phase "${PHASE}" --issue-json "${ISSUE_JSON_FILE}" \
 	--comments-json "${COMMENTS_JSON_FILE}" --workflow-name "${WORKFLOW_NAME}" --run-id "${RUN_ID}" \
-	--wrapper-sha "${WRAPPER_SHA}" --reporter-run-url "${REPORTER_RUN_URL}" > "${PAYLOAD_FILE}" 2> "${BUILD_ERROR_FILE}"; then
+	--wrapper-sha "${WRAPPER_SHA}" --reporter-run-url "${REPORTER_RUN_URL}" --comment-author "${COMMENT_AUTHOR}" > "${PAYLOAD_FILE}" 2> "${BUILD_ERROR_FILE}"; then
 	log "skip reason=payload_build_failed issue=${ISSUE_NUMBER} phase=${PHASE} detail=$(head -c 200 "${BUILD_ERROR_FILE}" | tr '\n' ' ')"
 	exit 0
 fi
