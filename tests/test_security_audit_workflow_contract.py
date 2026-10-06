@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,6 +17,8 @@ CLARIFY_PATH = REPO_ROOT / ".github" / "workflows" / "clarify.yml"
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "security-audit.yml"
 INTERNAL_CLARIFY_PATH = REPO_ROOT / ".github" / "workflows" / "internal-clarify.yml"
 SCRIPT_PATH = REPO_ROOT / "scripts" / "security_audit.sh"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 _SANITIZED_GIT_ENV_KEYS = ("BASH_ENV", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX")
 
 
@@ -85,6 +88,10 @@ if args[:2] == ["issue", "create"]:
 	state["next_issue_number"] = next_issue_number + 1
 	save()
 	print(f"https://github.com/{repo}/issues/{next_issue_number}")
+	if state.get("fail_create_once") and not state.get("failed_create"):
+		state["failed_create"] = True
+		save()
+		sys.exit(1)
 	sys.exit(0)
 
 if args[:2] == ["issue", "comment"]:
@@ -126,8 +133,11 @@ state_path = Path(os.environ["MOCK_GH_STATE_FILE"])
 state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
 state.setdefault("codex_calls", []).append(sys.argv[1:])
 state.setdefault("codex_stdin", []).append(sys.stdin.read())
+state.setdefault("codex_mounts", []).append(json.loads(os.environ.get("FAKE_CONTAINER_MOUNTS", "[]")))
 state_path.write_text(json.dumps(state), encoding="utf-8")
 sys.stdout.write(os.environ.get("MOCK_CODEX_OUTPUT", "[]"))
+if os.environ.get("MOCK_CODEX_ECHO_PROMPT") == "1":
+	sys.stderr.write(state["codex_stdin"][-1])
 sys.stderr.write(os.environ.get("MOCK_CODEX_STDERR", ""))
 sys.exit(int(os.environ.get("MOCK_CODEX_EXIT_CODE", "0")))
 '''
@@ -214,6 +224,10 @@ def _run_security_audit(
 				_install_security_audit_support_tree(tmp_path, failure_mode=support_failure_mode)
 			)
 		env.update(extra_env or {})
+		# The audit agent runs through scripts/codex_isolated_exec.sh from the
+		# support tree; the fake docker runs the mock codex in the fake container.
+		support_scripts = Path(env["SECURITY_AUDIT_SUPPORT_DIR"]) / "scripts" if env.get("SECURITY_AUDIT_SUPPORT_DIR") else REPO_ROOT / "scripts"
+		env = enable_fake_isolation(bin_dir, support_scripts, env)
 		proc = subprocess.run(
 			["bash", "--noprofile", "--norc", str(SCRIPT_PATH), *script_args],
 			cwd=run_cwd,
@@ -264,6 +278,20 @@ def _git_fixture_repo(base_dir: Path) -> tuple[Path, str, str]:
 	_git("commit", "-q", "-m", "second commit")
 	head_sha = _git("rev-parse", "HEAD")
 	return repo_dir, first_sha, head_sha
+
+
+def _oversized_fixture_repo(base_dir: Path) -> tuple[Path, str, str]:
+	repo_dir, _first_sha, base_sha = _git_fixture_repo(base_dir)
+	(repo_dir / "large.py").write_bytes(b"x = 1\n" * 400000)
+	git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+	git_env.update({
+		"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+		"GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
+	})
+	subprocess.run(["git", "add", "large.py"], cwd=repo_dir, env=git_env, check=True)
+	subprocess.run(["git", "commit", "-qm", "large file"], cwd=repo_dir, env=git_env, check=True)
+	head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_dir, env=git_env, text=True).strip()
+	return repo_dir, base_sha, head_sha
 
 
 def _iso_utc_for_current_week(*, day_offset: int) -> str:
@@ -797,11 +825,12 @@ def test_internal_clarify_skips_source_repo_tracker_issues() -> None:
 	assert "!contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking')" in content
 	assert "!contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit')" in content
 	assert "!contains(toJson(github.event.issue.labels.*.name), 'ai:retro')" in content
+	assert "!contains(toJson(github.event.issue.labels.*.name), 'ai:operator-step')" in content
 
 
 def test_clarify_skips_consumer_tracker_issues() -> None:
 	content = CLARIFY_PATH.read_text(encoding="utf-8")
-	assert "(github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro'))" in content
+	assert "(github.event_name == 'issues' && github.event.action == 'opened' && !contains(toJson(github.event.issue.labels.*.name), 'ai:orchestrator-tracking') && !contains(toJson(github.event.issue.labels.*.name), 'ai:security-audit') && !contains(toJson(github.event.issue.labels.*.name), 'ai:retro') && !contains(toJson(github.event.issue.labels.*.name), 'ai:operator-step'))" in content
 
 
 def test_security_audit_gate_disabled_skips_without_side_effects() -> None:
@@ -970,9 +999,12 @@ def test_security_audit_codex_failure_preserves_status_and_reports_context() -> 
 		extra_env={
 			"MOCK_CODEX_EXIT_CODE": "29",
 			"MOCK_CODEX_STDERR": (
-				"test-openrouter-key Chief Security Officer\n"
+				"test-openrouter-key sk-example-secret-value ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890 "
+				"Bearer fake-bearer-secret personal-access-secret " + "a" * 64 + "\n"
 				"Error: No such file or directory (os error 2)\n"
+				"HTTP Error 402: Payment Required\n"
 			),
+			"GH_PAT": "personal-access-secret",
 		},
 	)
 	_assert_security_audit_failure_context(
@@ -983,8 +1015,99 @@ def test_security_audit_codex_failure_preserves_status_and_reports_context() -> 
 	assert proc.returncode == 29
 	assert "captured_path_error=" in proc.stderr
 	assert "os\\ error\\ 2" in proc.stderr
+	assert "codex-stderr-tail begin" in proc.stderr
+	assert "codex-stderr-tail end" in proc.stderr
+	assert "provider=402" in proc.stderr
+	assert "Payment\\ Required" in proc.stderr
+	for secret in ("test-openrouter-key", "sk-example-secret-value", "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890", "fake-bearer-secret", "personal-access-secret", "a" * 64):
+		assert secret not in proc.stderr
 	assert len(final_state.get("codex_calls", [])) == 1
 	assert final_state.get("issue_comment_args", []) == []
+
+
+def test_security_audit_codex_tail_classes_and_status_context() -> None:
+	for diagnostic, provider in (
+		("HTTP Error 401: Unauthorized", "401"),
+		("HTTP 429 Too Many Requests", "429"),
+		("rate limit exceeded", "429"),
+		("status=503: unavailable", "5xx"),
+		("encode402 ValueError 500", "unknown"),
+		("", "unknown"),
+		("HTTP 401\nInsufficient credits", "402"),
+		("Payment Required\nstatus=429", "429"),
+	):
+		proc, state = _run_security_audit(
+			_security_audit_tracker_state(),
+			extra_env={"MOCK_CODEX_EXIT_CODE": "29", "MOCK_CODEX_STDERR": diagnostic},
+		)
+		assert proc.returncode == 29
+		assert f"provider={provider}" in proc.stderr
+		assert "codex-stderr-tail begin" in proc.stderr
+		assert "codex-stderr-tail end" in proc.stderr
+		assert not state.get("issue_comment_args")
+
+
+def test_security_audit_codex_tail_is_bounded_and_drops_prompt_echoes() -> None:
+	secret_value = "private-short-secret"
+	large_stderr = "\n".join(f"status=503 line {idx} " + "noise " * 35 for idx in range(200))
+	proc, state = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={
+			"MOCK_CODEX_EXIT_CODE": "29",
+			"MOCK_CODEX_STDERR": large_stderr + "\n" + secret_value + " HTTP Error 402: Payment Required\n",
+			"AUDIT_TEST_SECRET": secret_value,
+		},
+	)
+	assert proc.returncode == 29
+	tail = proc.stderr.split("security-audit: codex-stderr-tail begin\n", 1)[1].split(
+		"security-audit: codex-stderr-tail end", 1
+	)[0]
+	assert len(tail.encode("utf-8")) <= 4096
+	assert 3000 < len(tail.encode("utf-8"))
+	assert len(tail.splitlines()) < 40
+	assert secret_value not in proc.stderr
+	assert "provider=402" in proc.stderr
+	assert not state.get("issue_comment_args")
+	proc, _ = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={
+			"MOCK_CODEX_EXIT_CODE": "29",
+			"MOCK_CODEX_STDERR": "\n".join(f"diagnostic {idx}" for idx in range(70)),
+		},
+	)
+	tail = proc.stderr.split("security-audit: codex-stderr-tail begin\n", 1)[1].split(
+		"security-audit: codex-stderr-tail end", 1
+	)[0]
+	assert len(tail.splitlines()) == 40
+	assert "diagnostic\\ 30" in tail and "diagnostic\\ 29" not in tail
+	proc, _ = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={
+			"MOCK_CODEX_EXIT_CODE": "29",
+			"MOCK_CODEX_STDERR": "oversized " + "small " * 1200 + "\nHTTP 429\n",
+		},
+	)
+	tail = proc.stderr.split("security-audit: codex-stderr-tail begin\n", 1)[1].split(
+		"security-audit: codex-stderr-tail end", 1
+	)[0]
+	assert "oversized" not in tail
+	assert "HTTP\\ 429" in tail and "provider=429" in proc.stderr
+
+	# The fake Codex can echo its entire input; no rendered prompt or config
+	# lines may enter the public diagnostic even when they carry status text.
+	proc, state = _run_security_audit(
+		_security_audit_tracker_state(),
+		extra_env={
+			"MOCK_CODEX_EXIT_CODE": "29",
+			"MOCK_CODEX_ECHO_PROMPT": "1",
+			"MOCK_CODEX_STDERR": "model_verbosity = high\nHTTP Error 402: Payment Required\n",
+		},
+	)
+	assert proc.returncode == 29
+	assert "model_verbosity" not in proc.stderr
+	assert "Current UTC date:" not in proc.stderr
+	assert "provider=402" in proc.stderr
+	assert not state.get("issue_comment_args")
 
 
 def test_security_audit_missing_codex_reports_sanitized_context() -> None:
@@ -1030,6 +1153,7 @@ def test_security_audit_success_path_retains_codex_and_tracker_behavior() -> Non
 
 	assert proc.returncode == 0, proc.stderr
 	assert proc.stderr == ""
+	assert "codex-stderr-tail" not in proc.stdout
 	assert "tracker=#9000 findings=0 followups_created=0" in proc.stdout
 	assert len(final_state.get("codex_calls", [])) == 1
 	assert "Audit scope: repository checkout at default-branch HEAD." in final_state["codex_stdin"][0]
@@ -1903,6 +2027,115 @@ def test_security_audit_findings_json_empty_explicit_range_stays_narrow() -> Non
 	assert payload["counts"]["suppressed_out_of_scope"] == 1
 
 
+def test_security_audit_chunks_scoped_oversized_file_and_reports_coverage() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-oversized-") as td:
+		tmp_path = Path(td)
+		repo_dir, base_sha, head_sha = _oversized_fixture_repo(tmp_path)
+		output_path = tmp_path / "findings.json"
+		proc, state = _run_security_audit({}, cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+			"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+			"SECURITY_AUDIT_DIFF_BASE": base_sha,
+			"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+		})
+		assert proc.returncode == 0, proc.stderr
+		assert "Read EVERY chunk of EVERY listed file" in state["codex_stdin"][0]
+		assert "large.py (" in state["codex_stdin"][0]
+		assert "Cite the original repository path" in state["codex_stdin"][0]
+		assert any(mount.get("dst", "").endswith("/oversized-chunks") for mount in state["codex_mounts"][0])
+		payload = json.loads(state["security_audit_findings_output"])
+		assert payload["schema_version"] == "security_audit_findings.v1"
+		assert payload["findings"] == [] and payload["counts"]["kept"] == 0
+		assert payload["coverage"]["scoped_oversized_chunked"] == ["large.py"]
+
+
+def test_security_audit_oversized_cap_fails_before_codex() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-oversized-cap-") as td:
+		tmp_path = Path(td)
+		repo_dir, base_sha, head_sha = _oversized_fixture_repo(tmp_path)
+		output_path = tmp_path / "findings.json"
+		proc, state = _run_security_audit({}, cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+			"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+			"SECURITY_AUDIT_DIFF_BASE": base_sha,
+			"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+			"SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES": "1048576",
+		})
+		assert proc.returncode != 0
+		assert "phase=oversized-scope" in proc.stderr
+		assert not state.get("codex_calls") and not output_path.exists()
+
+
+def test_security_audit_full_scan_chunks_explicit_prior_and_fix_cycle_files() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-oversized-prior-") as td:
+		tmp_path = Path(td)
+		repo_dir, base_sha, head_sha = _oversized_fixture_repo(tmp_path)
+		for scope_var, entries in (
+			("SECURITY_AUDIT_PRIOR_FINDINGS", [{"finding_id": "prior", "file": "large.py"}]),
+			("SECURITY_AUDIT_FIX_CYCLE_DIFFS", [{"cycle": 1, "since_sha": base_sha, "head_sha": head_sha, "files": ["large.py"]}]),
+		):
+			scope_path = tmp_path / f"{scope_var}.json"
+			scope_path.write_text(json.dumps(entries), encoding="utf-8")
+			proc, result = _run_security_audit({}, cwd=repo_dir, extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / f"{scope_var}.out.json"),
+				scope_var: str(scope_path),
+			})
+			assert proc.returncode == 0, proc.stderr
+			assert "large.py (" in result["codex_stdin"][0]
+			assert json.loads(result["security_audit_findings_output"])["coverage"]["scoped_oversized_chunked"] == ["large.py"]
+
+
+def test_security_audit_full_scan_chunks_oversized_file() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-oversized-full-") as td:
+		repo_dir, _base_sha, head_sha = _oversized_fixture_repo(Path(td))
+		state = _security_audit_tracker_state()
+		state["api_responses"] = [[[]]]
+		proc, result = _run_security_audit(state, cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+		})
+		assert proc.returncode == 0, proc.stderr
+		assert "Oversized scoped files read in chunks: 1" in result["issue_comment_bodies"][0]
+		assert "Coverage note:" not in result["issue_comment_bodies"][0]
+		assert "large.py (" in result["codex_stdin"][0]
+		assert any(mount.get("dst", "").endswith("/oversized-chunks") for mount in result["codex_mounts"][0])
+		assert any(head_sha in body for body in result["issue_edit_bodies"])
+
+
+def test_security_audit_full_scan_oversized_cap_reports_coverage_note() -> None:
+	# Q24: in a full scan an unscoped file past the cap is listed as not
+	# inspected; it does not fail the audit.
+	with tempfile.TemporaryDirectory(prefix="security-audit-oversized-full-cap-") as td:
+		repo_dir, _base_sha, _head_sha = _oversized_fixture_repo(Path(td))
+		state = _security_audit_tracker_state()
+		state["api_responses"] = [[[]]]
+		proc, result = _run_security_audit(state, cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES": "1048576",
+		})
+		assert proc.returncode == 0, proc.stderr
+		assert "phase=oversized-scope" not in proc.stderr
+		assert result.get("codex_calls")
+		comment = result["issue_comment_bodies"][0]
+		assert "Coverage note: 1 tracked files over 2 MiB were not inspected" in comment and "`large.py`" in comment
+
+
+def test_security_audit_no_oversized_file_has_no_tracker_coverage_lines() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-no-oversized-") as td:
+		repo_dir, _first_sha, _head_sha = _git_fixture_repo(Path(td))
+		state = _security_audit_tracker_state()
+		state["api_responses"] = [[[]]]
+		proc, result = _run_security_audit(state, cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+		})
+		assert proc.returncode == 0, proc.stderr
+		assert "Coverage note:" not in result["issue_comment_bodies"][0]
+		assert "Oversized scoped files" not in result["issue_comment_bodies"][0]
+
+
 def test_security_audit_findings_json_preflight_failures_are_side_effect_free() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-preflight-") as td:
 		tmp_path = Path(td)
@@ -2040,6 +2273,47 @@ def test_security_audit_default_branch_followups_carry_no_integration_branch() -
 	assert followup_bodies and "default-finding" in followup_bodies[-1]
 	# Only a branch audit (SECURITY_AUDIT_TARGET_REF) routes follow-ups elsewhere.
 	assert not any("Integration branch:" in body for body in followup_bodies)
+
+
+def test_security_audit_chains_only_same_file_followups_and_recovers_predecessor() -> None:
+	findings = [
+		_finding_payload("first"),
+		_finding_payload("second"),
+		_finding_payload("third"),
+		_finding_payload("other", file_path="scripts/security_audit_fp_exclusions.json"),
+	]
+	state = _security_audit_tracker_state()
+	state["api_responses"] = [[[]]]
+	state["next_issue_number"] = 9100
+	proc, finished = _run_security_audit(state, codex_output=json.dumps(findings))
+	assert proc.returncode == 0, proc.stderr
+	bodies = finished["issue_create_bodies"]
+	assert len(bodies) == 4
+	assert "Depends on:" not in bodies[0]
+	assert "- Depends on: #9100" in bodies[1]
+	assert "- Depends on: #9101" in bodies[2]
+	assert "Depends on:" not in bodies[3]
+
+	# A retry after a partial create reuses the marker from the existing
+	# paginated listing, rather than starting a new, unchained first issue.
+	retry = _security_audit_tracker_state()
+	retry["api_responses"] = [[[{
+		"number": 9100, "body": "<!-- ai:security-finding:first -->",
+		"state": "open",
+	}]]]
+	retry["next_issue_number"] = 9101
+	proc, finished = _run_security_audit(retry, codex_output=json.dumps(findings[:3]))
+	assert proc.returncode == 0, proc.stderr
+	assert len(finished["issue_create_bodies"]) == 2
+	assert "- Depends on: #9100" in finished["issue_create_bodies"][0]
+	assert "- Depends on: #9101" in finished["issue_create_bodies"][1]
+
+	ambiguous = _security_audit_tracker_state()
+	ambiguous.update({"api_responses": [[[]]], "fail_create_once": True, "next_issue_number": 9100})
+	proc, finished = _run_security_audit(ambiguous, codex_output=json.dumps(findings[:2]))
+	assert proc.returncode != 0
+	assert len(finished["issue_create_bodies"]) == 1
+	assert not finished.get("issue_edit_bodies"), "ambiguous creation must not advance the audited HEAD marker"
 
 
 def test_security_audit_target_ref_routes_followups_and_keeps_tracker_marker() -> None:

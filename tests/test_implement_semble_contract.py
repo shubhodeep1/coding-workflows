@@ -100,7 +100,7 @@ def test_transcript_archive_helper_is_opt_in_and_wired_for_implement() -> None:
 	codex_block = _step_run_text("Run Codex implementation")
 	assert "UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}" in workflow
 	assert "for f in transcript_archive.sh; do" in stage_block
-	assert 'source scripts/transcript_archive.sh 2>/dev/null || true' in codex_block
+	assert 'source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/transcript_archive.sh" 2>/dev/null || true' in codex_block
 	assert 'archive_transcript "${GITHUB_RUN_ID:-local-run}" "implement" "${CODEX_OUTPUT_FILE}"' in codex_block
 
 
@@ -194,7 +194,7 @@ def test_semble_bootstrap_steps_are_gated_and_fail_open() -> None:
 
 def test_targeted_file_context_receives_semble_inputs() -> None:
 	codex_block = _step_run_text("Run Codex implementation")
-	assert "python3 scripts/targeted_file_context.py" in codex_block
+	assert 'python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/targeted_file_context.py"' in codex_block
 	assert '--semble-bin "$(command -v semble 2>/dev/null || true)"' in codex_block
 	assert '--semble-index "${SEMBLE_INDEX_PATH}"' in codex_block
 	assert '--semble-max-chunks "6"' in codex_block
@@ -203,15 +203,16 @@ def test_targeted_file_context_receives_semble_inputs() -> None:
 
 def test_repair_prompt_appends_bounded_semble_context() -> None:
 	repair_block = _step_run_text("Attempt post-Codex syntax repair")
-	assert "source scripts/semble_helpers.sh" in repair_block
+	assert 'source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/semble_helpers.sh"' in repair_block
 	assert 'python3 - "${CAPTURE_FILE}" "${ALLOW_LIST_FILE}" "${CAPTURED_FILES_FILE}" "${output_file}"' in repair_block
 	assert '::warning::Failed to build repair Semble query' in repair_block
 	assert 'REPAIR_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/post_codex_repair_semble_query.txt"' in repair_block
 	assert 'build_repair_semble_query "${REPAIR_SEMBLE_QUERY_FILE}"' in repair_block
 	assert 'semble_query_block "$(cat "${REPAIR_SEMBLE_QUERY_FILE}")" 6 "Implement Repair Context" || true' in repair_block
-	assert 'SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "${REPAIR_PROMPT_TEMPLATE}"' in repair_block
+	assert 'SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/render_prompt.sh" "${REPAIR_PROMPT_TEMPLATE}"' in repair_block
 	assert 'Failed to render repair prompt template ${REPAIR_PROMPT_TEMPLATE}; using raw prompt.' in repair_block
-	assert 'Keep apply_patch as the primary write path' in repair_block
+	# The repair agent runs isolated (no MCP server), so it gets no Serena hints.
+	assert 'Serena MCP is available in this run' not in repair_block
 
 
 def test_diagnose_prompt_appends_bounded_semble_context() -> None:

@@ -57,18 +57,22 @@ def cutoff_epoch(minutes_ago: int) -> int:
 	return int((datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).timestamp())
 
 
+def run_sweep_reduce(runs: list[dict], cutoff: int) -> dict:
+	payload = json.dumps({"workflow_runs": runs})
+	result = subprocess.run(
+		["jq", "-c", "-s", "--argjson", "cutoff", str(cutoff), extract_jq_program()],
+		input=payload,
+		capture_output=True,
+		text=True,
+		check=True,
+	)
+	return json.loads(result.stdout)
+
+
 @unittest.skipUnless(shutil.which("jq"), "jq is required")
 class SweepStaleQueuedGuardTest(unittest.TestCase):
 	def run_reduce(self, runs: list[dict], cutoff: int) -> dict:
-		payload = json.dumps({"workflow_runs": runs})
-		result = subprocess.run(
-			["jq", "-c", "-s", "--argjson", "cutoff", str(cutoff), extract_jq_program()],
-			input=payload,
-			capture_output=True,
-			text=True,
-			check=True,
-		)
-		return json.loads(result.stdout)
+		return run_sweep_reduce(runs, cutoff)
 
 	def test_wedged_queued_run_stops_suppressing_dispatch(self) -> None:
 		"""The PR #3841 case: queued 11 hours, zero jobs, uncancellable."""
@@ -144,6 +148,118 @@ class SweepStaleQueuedGuardTest(unittest.TestCase):
 			cutoff_epoch(120),
 		)
 		self.assertEqual(out["active"], {})
+
+
+@unittest.skipUnless(shutil.which("jq"), "jq is required")
+class SweepPrKeyedDispatchTest(unittest.TestCase):
+	"""Issue #4618: the sweep dispatches from the default branch, so a
+	dispatched run is keyed by the PR its run name carries, not its head."""
+
+	def run_reduce(self, runs: list[dict], cutoff: int) -> dict:
+		return run_sweep_reduce(runs, cutoff)
+
+	def dispatch_run(self, run_id: int, pr: str, **extra: object) -> dict:
+		run = {
+			"id": run_id,
+			"head_branch": "main",
+			"event": "workflow_dispatch",
+			"display_title": f"Internal: AI Review & Autofix [pr:{pr}]",
+			"status": "in_progress",
+			"created_at": iso(-5),
+		}
+		run.update(extra)
+		return run
+
+	def test_named_dispatch_run_is_keyed_by_pr(self) -> None:
+		out = self.run_reduce([self.dispatch_run(1, "4618")], cutoff_epoch(120))
+		self.assertEqual(out["active"], {"pr:4618": 1})
+
+	def test_named_dispatch_runs_do_not_mark_the_default_branch_active(self) -> None:
+		"""A main-headed PR (promote/forward-merge) is not suppressed by sweep runs."""
+		out = self.run_reduce(
+			[self.dispatch_run(1, "10"), self.dispatch_run(2, "11")],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {"pr:10": 1, "pr:11": 1})
+		self.assertNotIn("main", out["active"])
+
+	def test_marker_on_a_pull_request_run_stays_branch_keyed(self) -> None:
+		"""A PR titled like the marker cannot claim another PR's key."""
+		out = self.run_reduce(
+			[self.dispatch_run(3, "7", event="pull_request", head_branch="feature/x")],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {"feature/x": 1})
+
+	def test_unnamed_or_malformed_dispatch_run_stays_branch_keyed(self) -> None:
+		out = self.run_reduce(
+			[
+				{"id": 4, "head_branch": "claude/y", "event": "workflow_dispatch", "display_title": "Internal: AI Review & Autofix", "status": "queued", "created_at": iso(-5)},
+				self.dispatch_run(5, "0", head_branch="claude/z"),
+				self.dispatch_run(6, "12x", head_branch="claude/w"),
+				{"id": 7, "head_branch": "claude/v", "event": "workflow_dispatch", "status": "pending"},
+			],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {"claude/y": 1, "claude/z": 1, "claude/w": 1, "claude/v": 1})
+
+	def test_wedged_named_dispatch_run_is_logged_under_its_pr(self) -> None:
+		out = self.run_reduce(
+			[self.dispatch_run(8, "4618", status="queued", created_at=iso(-660))],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {})
+		stale_key, stale_run_id, _ = out["stale"][0].split("\t")
+		self.assertEqual(stale_key, "pr:4618")
+		self.assertEqual(stale_run_id, "8")
+
+	def test_branch_and_pr_keys_count_side_by_side(self) -> None:
+		out = self.run_reduce(
+			[
+				self.dispatch_run(9, "5"),
+				self.dispatch_run(10, "5", status="pending"),
+				{"id": 11, "head_branch": "claude/x", "event": "pull_request", "display_title": "Some PR", "status": "in_progress", "created_at": iso(-5)},
+			],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {"pr:5": 2, "claude/x": 1})
+
+	def test_named_dispatch_run_without_a_head_branch_is_keyed_by_pr(self) -> None:
+		"""Issue #4928: GitHub can report head_branch=null on a
+		workflow_dispatch run. The PR key still identifies it, so it must
+		keep suppressing a duplicate dispatch for that PR."""
+		null_head = self.dispatch_run(12, "4928", head_branch=None)
+		missing_head = self.dispatch_run(13, "4929", status="queued")
+		del missing_head["head_branch"]
+		empty_head = self.dispatch_run(14, "4930", status="pending", head_branch="")
+		out = self.run_reduce([null_head, missing_head, empty_head], cutoff_epoch(120))
+		self.assertEqual(out["active"], {"pr:4928": 1, "pr:4929": 1, "pr:4930": 1})
+		self.assertEqual(out["stale"], [])
+
+	def test_wedged_named_dispatch_run_without_a_head_branch_is_logged_under_its_pr(self) -> None:
+		out = self.run_reduce(
+			[self.dispatch_run(15, "4928", head_branch=None, status="queued", created_at=iso(-660))],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {})
+		stale_key, stale_run_id, _ = out["stale"][0].split("\t")
+		self.assertEqual(stale_key, "pr:4928")
+		self.assertEqual(stale_run_id, "15")
+
+	def test_run_without_a_head_branch_or_pr_key_is_still_dropped(self) -> None:
+		"""Only a verified PR key rescues a run with no head branch."""
+		out = self.run_reduce(
+			[
+				{"id": 16, "head_branch": None, "event": "workflow_dispatch", "display_title": "Internal: AI Review & Autofix", "status": "queued", "created_at": iso(-5)},
+				self.dispatch_run(17, "0", head_branch=None),
+				self.dispatch_run(18, "12x", head_branch=None),
+				self.dispatch_run(19, "7", head_branch=None, event="pull_request"),
+				{"id": 20, "head_branch": None, "event": "workflow_dispatch", "status": "pending"},
+			],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {})
+		self.assertEqual(out["stale"], [])
 
 
 class SweepWorkflowContractTest(unittest.TestCase):

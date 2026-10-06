@@ -49,8 +49,14 @@
 #            call whenever blockers exist, plus conditional label/comment writes
 #            when queue state changes. Gate-side release adds one comments-list
 #            call, up to one marker PATCH, and one label DELETE.
-#   release: 1 list call (open PRs, all bases, 100 per page) + 1 recent-runs
-#            call that prevents dispatch beside an active review + files calls
+#   release: 1 list call (open PRs, all bases, 100 per page) + the active-run
+#            listing that prevents dispatch beside an active review (one
+#            `actions/runs?status=<s>` call per 100 runs for each of
+#            requested, pending, queued, waiting, in_progress, then all five
+#            again, follow-ups bounded by created_at,
+#            at most 10 each — normally 10 calls — read once,
+#            only when a queued PR passes the base filter; see
+#            _mt_inflight_review_branches) + files calls
 #            as above, cached per PR for the run; each unblocked queued PR adds
 #            1 comments-list call and up to 1 marker PATCH before its label-
 #            removal claim. A release adds 1 workflow dispatch and a best-effort
@@ -62,7 +68,10 @@
 #
 # Fail-open contract: any API failure, missing input or unexpected shape logs
 # a ::warning:: and exits 0 WITHOUT queuing (gate) or WITHOUT releasing
-# (release). The train only ever delays a review run; it never blocks a
+# (release). An incomplete active-run listing counts as such a failure:
+# release then leaves every queued PR queued (MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE)
+# rather than dispatch beside a review it could not see. The train only ever
+# delays a review run; it never blocks a
 # merge, and a PR that is wrongly left queued is picked up by the next
 # release tick once its blockers are gone.
 set -euo pipefail
@@ -406,19 +415,213 @@ Set the repository variable \`MERGE_TRAIN_ENABLED=false\` to disable the train, 
 # ---------------------------------------------------------------------------
 # The open-PR list cannot report active workflow runs. One cycle-local Actions
 # lookup covers every queued PR and avoids a per-PR API call inside the loop.
+# Each active review run prints its head branch. A review run dispatched from
+# the default branch (issues #4618, #4701) has the default branch as its
+# head, so a workflow_dispatch run prints "pr:<N>" from the name the wrappers
+# give it ("Internal: AI Review & Autofix [pr:<N>]" / "AI Review [pr:<N>]")
+# and never its head branch. Git refs cannot contain ":", so the two kinds of
+# key never collide, and _mt_release checks both.
+#
+# Listing (security, issue #5443): every run in each active status is read,
+# page by page. The previous single page of the newest 100 runs of every
+# workflow covered well under the 250-minute review budget in coding-workflows
+# (153 internal-review.yml dispatches in 5 hours, 2026-09-29), and a failed
+# lookup released anyway, so the train could dispatch a second review beside
+# a pending one. A run's `path` can also end in an "@<ref>" suffix
+# (".github/workflows/ai-review.yml@refs/heads/main" for a workflow defined
+# outside the repository's own workflow directory); the suffix is stripped
+# before the workflow-file match.
+#
+# Input:     none (MT_REPO).
+# Output:    one key per line on stdout, sorted and unique: the head branch
+#            of each active review run that is not a workflow_dispatch run,
+#            and "pr:<N>" for a workflow_dispatch run named for PR <N>.
+#            Every run an active-status query returned counts as active,
+#            whatever its own status field says.
+# Returns:   0 = the listing is complete: a PR with no key has no active run.
+#            1 = the listing is incomplete. Stdout carries nothing; the caller
+#            must not release on it, and the next invocation retries.
+# API calls: one `GET actions/runs?status=<s>&per_page=100&page=1` for each
+#            non-terminal status, requested, pending, queued, waiting,
+#            in_progress (PR #5451 review round 3: `requested` is a new run's
+#            state before it is queued; `waiting` is only reached through a
+#            deployment environment, which the review workflows do not use,
+#            and is read so a wrapper that adds one is still covered), then
+#            all five once more. The repo's other
+#            active-run guards count the same five statuses
+#            (scripts/apply_analysis_on_main.sh, scripts/auto_release_stable.sh).
+#            Order (PR #5451 review round 4, and the review of head fd3ad67):
+#            the queries run one after another, so a run that leaves a status
+#            after that status was read and enters one that was read before
+#            it is in neither result. Each pass reads the statuses in
+#            lifecycle order, so a run whose status only moves forward during
+#            a pass is returned by that pass however often it moves: it never
+#            falls behind the status being read. The backward moves,
+#            `in_progress` to `waiting` (a later job reaching a deployment
+#            environment) and `waiting` to `queued` (an approved job), only
+#            happen through a deployment environment, which the review
+#            workflows do not use. A run is missed only when it moves
+#            backward during both passes, within the seconds the listing
+#            takes.
+#            A status is complete when one response holds
+#            every run its query matched (workflow_runs reaches total_count).
+#            Otherwise the next query adds `&created=<=<oldest created_at
+#            read>` and asks again, at most 10 queries ("pages") per status.
+#            A created_at with fractional seconds is rounded up to the next
+#            whole second, so the inclusive bound still covers that run.
+#            Normally 10 calls, one per status query. REST only (CLAUDE.md §15).
+# Keyset:    the listing is filtered by status and sorted by created_at,
+#            newest first (checked live on 2026-09-30), so offset pages
+#            (`page=2`, …) skip a run whenever runs above it leave the status
+#            and others enter below it between two reads, even when
+#            total_count stays the same. Each follow-up query instead starts
+#            at the oldest created_at already read (inclusive, so runs
+#            created in the same second are read again and deduplicated by
+#            id): every run that stays in the status while the listing is
+#            read is returned by some query, wherever other runs come and go.
+#            A run created after the first query was issued is outside the
+#            listing, as it is for any single snapshot.
+# Incomplete: a page that failed after gh_retry, a malformed page (including
+#            a total_count that is not a whole number, a workflow_runs that
+#            is missing, null, or not an array, which the projection passes
+#            through for the type check to reject (PR #5451 review round 5),
+#            a workflow_runs entry that is not an object, which the projection
+#            also passes through (PR #5451, review of head 73e97f5),
+#            a run with no numeric id, no non-empty path, no non-empty
+#            status, or no non-empty event (the event decides whether a run is
+#            keyed by its PR-named title or its head_branch, AD-17), which the
+#            listing can neither deduplicate nor classify,
+#            and a missing or malformed created_at on a page that needs a
+#            next query), a short page
+#            before its total_count (the listing shifted while it was read),
+#            more runs than 10 queries read or a query that adds no new run
+#            (more than 100 runs created in one second), a review run that
+#            yields no key (a non-dispatch run with no non-empty head_branch,
+#            or a workflow_dispatch run with no PR-named title, whatever its
+#            head_branch, so it could belong to any queued PR; PR #5451,
+#            review of head fd3ad67 and review round 2), or a failed key
+#            filter. Each is logged once on stderr
+#            (CLAUDE.md §8):
+#            MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=<page_failed|malformed_page|listing_shifted|truncated|unattributed_run|filter_failed> status=<s> page=<p> read=<n> total=<n>
 _mt_inflight_review_branches()
 {
-	gh_retry gh api -X GET "repos/${MT_REPO}/actions/runs?per_page=100" \
-		--jq '.workflow_runs[]? | select(.status == "queued" or .status == "pending" or .status == "in_progress") | select((.path // "") | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$")) | .head_branch // empty' 2>/dev/null | sort -u
+	local __mt_runs_max_pages=10 __mt_runs_status="" __mt_runs_page=0 __mt_runs_reason=""
+	local __mt_runs_page_json="" __mt_runs_page_len=0 __mt_runs_total=0 __mt_runs_read=0 __mt_runs_read_before=0
+	local __mt_runs_query="" __mt_runs_created_bound=""
+	local __mt_runs_status_runs='[]' __mt_runs_all='[]' __mt_runs_keys="" __mt_runs_keyed='[]'
+	for __mt_runs_status in requested pending queued waiting in_progress requested pending queued waiting in_progress; do
+		__mt_runs_page=1
+		__mt_runs_total=0
+		__mt_runs_read=0
+		__mt_runs_created_bound=""
+		__mt_runs_status_runs='[]'
+		while :; do
+			__mt_runs_query="repos/${MT_REPO}/actions/runs?status=${__mt_runs_status}&per_page=100&page=1"
+			if [ -n "${__mt_runs_created_bound}" ]; then
+				__mt_runs_query="${__mt_runs_query}&created=%3C%3D${__mt_runs_created_bound}"
+			fi
+			if ! __mt_runs_page_json="$(gh_retry gh api -X GET "${__mt_runs_query}" \
+				--jq '{total_count: .total_count, workflow_runs: (.workflow_runs | if type == "array" then [.[] | if type == "object" then {id: .id, status: .status, event: .event, head_branch: .head_branch, display_title: .display_title, path: .path, created_at: .created_at} else . end] else . end)}' \
+				2>/dev/null)"; then
+				__mt_runs_reason="page_failed"
+				break 2
+			fi
+			if ! printf '%s' "${__mt_runs_page_json}" \
+				| jq -e '(.total_count | type == "number" and . >= 0 and . == floor) and (.workflow_runs | type == "array") and all(.workflow_runs[]; type == "object" and (.id | type == "number") and (.path | type == "string" and length > 0) and (.status | type == "string" and length > 0) and (.event | type == "string" and length > 0))' >/dev/null 2>&1; then
+				__mt_runs_reason="malformed_page"
+				break 2
+			fi
+			__mt_runs_read_before="${__mt_runs_read}"
+			# Accumulate through stdin, never --argjson: 1,000 runs can exceed
+			# the kernel's single-argument limit (MAX_ARG_STRLEN, 128 KiB).
+			if ! __mt_runs_total="$(printf '%s' "${__mt_runs_page_json}" | jq -r '.total_count | floor' 2>/dev/null)" \
+				|| ! __mt_runs_page_len="$(printf '%s' "${__mt_runs_page_json}" | jq -r '.workflow_runs | length' 2>/dev/null)" \
+				|| ! __mt_runs_status_runs="$(printf '%s\n%s\n' "${__mt_runs_status_runs}" "${__mt_runs_page_json}" \
+					| jq -cs '(.[0] + .[1].workflow_runs) | unique_by(.id)' 2>/dev/null)" \
+				|| ! __mt_runs_read="$(printf '%s' "${__mt_runs_status_runs}" | jq -r 'length' 2>/dev/null)" \
+				|| ! [[ "${__mt_runs_total}" =~ ^[0-9]+$ && "${__mt_runs_page_len}" =~ ^[0-9]+$ && "${__mt_runs_read}" =~ ^[0-9]+$ ]]; then
+				__mt_runs_reason="malformed_page"
+				break 2
+			fi
+			# One response is a consistent snapshot of its own query, so the
+			# status is complete once a response holds everything it matched.
+			# total_count belongs to this query alone (each follow-up query has
+			# its own created bound), so it is never compared with the runs
+			# accumulated across queries.
+			if [ "${__mt_runs_page_len}" -ge "${__mt_runs_total}" ]; then
+				break
+			fi
+			if [ "${__mt_runs_page_len}" -lt 100 ]; then
+				__mt_runs_reason="listing_shifted"
+				break 2
+			fi
+			if [ "${__mt_runs_read}" -le "${__mt_runs_read_before}" ]; then
+				# The bound is inclusive, so more than 100 runs created in one
+				# second return the same page forever.
+				__mt_runs_reason="truncated"
+				break 2
+			fi
+			if [ "${__mt_runs_page}" -ge "${__mt_runs_max_pages}" ]; then
+				__mt_runs_reason="truncated"
+				break 2
+			fi
+			# GitHub reports whole seconds today; a fractional created_at is
+			# rounded up so the inclusive bound never drops the oldest second.
+			if ! __mt_runs_created_bound="$(printf '%s' "${__mt_runs_page_json}" | jq -r '[.workflow_runs[].created_at | if type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$") then ((sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) + (if test("\\.[0-9]*[1-9][0-9]*Z$") then 1 else 0 end)) else error("malformed created_at") end] | min | todateiso8601' 2>/dev/null)" \
+				|| ! [[ "${__mt_runs_created_bound}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+				__mt_runs_reason="malformed_page"
+				break 2
+			fi
+			__mt_runs_page=$((__mt_runs_page + 1))
+		done
+		if ! __mt_runs_all="$(printf '%s\n%s\n' "${__mt_runs_all}" "${__mt_runs_status_runs}" | jq -cs '.[0] + .[1]' 2>/dev/null)"; then
+			__mt_runs_reason="filter_failed"
+			break
+		fi
+	done
+	if [ -z "${__mt_runs_reason}" ]; then
+		# One array of keys per review run. A review run with no key at all (no
+		# non-empty head_branch and no PR-named dispatch title) could belong to
+		# any queued PR, so the listing is incomplete (PR #5451, review of head fd3ad67).
+		# A workflow_dispatch run is keyed only by its PR-named title: its
+		# head_branch is the ref the workflow ran from (the default branch since
+		# issue #4701), never the PR it reviews, so a dispatch without a
+		# PR-named title (review_autofix.yml has no run-name and re-dispatches
+		# itself) is unattributed (PR #5451 review round 2, AD-16).
+		if ! __mt_runs_keyed="$(printf '%s' "${__mt_runs_all}" | jq -c '[.[]? | select((.path // "") | sub("@.*$"; "") | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$")) | if (.event // "") == "workflow_dispatch" then [(.display_title // "") | capture("^(Internal: AI Review & Autofix|AI Review) \\[pr:(?<pr>[1-9][0-9]*)\\]$")? | "pr:\(.pr)"] else [.head_branch | select(type == "string" and length > 0)] end]' 2>/dev/null)"; then
+			__mt_runs_reason="filter_failed"
+		elif ! printf '%s' "${__mt_runs_keyed}" | jq -e 'all(.[]; length > 0)' >/dev/null 2>&1; then
+			__mt_runs_reason="unattributed_run"
+		elif ! __mt_runs_keys="$(printf '%s' "${__mt_runs_keyed}" | jq -r '.[][]' 2>/dev/null)"; then
+			__mt_runs_reason="filter_failed"
+		fi
+	fi
+	if [ -n "${__mt_runs_reason}" ]; then
+		echo "MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=${__mt_runs_reason} status=${__mt_runs_status} page=${__mt_runs_page} read=${__mt_runs_read} total=${__mt_runs_total}" >&2
+		return 1
+	fi
+	printf '%s\n' "${__mt_runs_keys}" | sed '/^$/d' | sort -u
 }
 
+# Dispatch ref (security, issue #4701): the dispatch always runs the default
+# branch's workflow file and passes only a validated PR number. Dispatching
+# `--ref <PR head branch>` ran that branch's unmerged copy of the review
+# workflow with `secrets: inherit` and write permissions (the finding issue
+# #4618 fixed in review_autofix_sweep.yml). review_autofix.yml checks out the
+# PR head from the PR's metadata either way. The review wrappers name the
+# dispatched run for its PR, which _mt_inflight_review_branches keys as
+# "pr:<N>". MERGE_TRAIN_DISPATCHED keeps its ref= field, now "default".
 _mt_dispatch_review() {
 	local pr="$1" head="$2" wf
 	local allow_edits="${MERGE_TRAIN_ALLOW_WORKFLOW_EDITS:-true}"
+	if ! [[ "${pr}" =~ ^[1-9][0-9]*$ ]]; then
+		_mt_warn "merge-train release: invalid PR number '${pr}' for head ${head}; not dispatching."
+		return 1
+	fi
 	for wf in ${MERGE_TRAIN_DISPATCH_WORKFLOWS:-ai-review.yml internal-review.yml review_autofix.yml}; do
-		if gh_retry gh workflow run "${wf}" --repo "${MT_REPO}" --ref "${head}" \
+		if gh_retry gh workflow run "${wf}" --repo "${MT_REPO}" \
 			-f pr_number="${pr}" -f allow_workflow_edits="${allow_edits}" >/dev/null 2>&1; then
-			_mt_log "MERGE_TRAIN_DISPATCHED pr=${pr} workflow=${wf} ref=${head}"
+			_mt_log "MERGE_TRAIN_DISPATCHED pr=${pr} workflow=${wf} ref=default head=${head}"
 			return 0
 		fi
 	done
@@ -428,13 +631,15 @@ _mt_dispatch_review() {
 _mt_release() {
 	local base_filter="${BASE_BRANCH:-}" prs_json line num head base labels files blockers inflight_review_branches="" released=0 examined=0
 	local release_queue_comment_id release_comment_body release_label_restored
+	# The active-run listing is read once, lazily, the first time a queued PR
+	# passes the base filter (issue #5443): "" = not read yet, "complete", or
+	# "incomplete". An incomplete listing proves nothing about active reviews,
+	# so every queued PR stays queued this invocation and the next close event
+	# or poll tick retries.
+	local release_runs_listing_state=""
 	if ! prs_json="$(_mt_list_open_prs "")"; then
 		_mt_warn "merge-train release: could not list open PRs; fail-open (nothing released)."
 		return 0
-	fi
-	if ! inflight_review_branches="$(_mt_inflight_review_branches)"; then
-		_mt_warn "merge-train release: could not list active review runs; continuing without the dispatch-dedup guard."
-		inflight_review_branches=""
 	fi
 	while IFS= read -r line; do
 		[ -n "${line}" ] || continue
@@ -448,7 +653,22 @@ _mt_release() {
 			continue
 		fi
 		examined=$((examined + 1))
-		if [ -n "${inflight_review_branches}" ] && printf '%s\n' "${inflight_review_branches}" | grep -Fxq -- "${head}"; then
+		if [ -z "${release_runs_listing_state}" ]; then
+			if inflight_review_branches="$(_mt_inflight_review_branches)"; then
+				release_runs_listing_state="complete"
+			else
+				release_runs_listing_state="incomplete"
+				inflight_review_branches=""
+				_mt_warn "merge-train release: could not list every active review run; leaving queued PRs queued for the next close event or poll tick."
+			fi
+		fi
+		if [ "${release_runs_listing_state}" != "complete" ]; then
+			_mt_log "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=${num} head=${head} action=leave_queued"
+			continue
+		fi
+		# An empty head is never a pattern: grep -Fx with "" matches a blank
+		# line, and a run whose head_branch is "" prints one.
+		if [ -n "${inflight_review_branches}" ] && printf '%s\n' "${inflight_review_branches}" | grep -Fxq -e "pr:${num}" ${head:+-e "${head}"}; then
 			_mt_log "MERGE_TRAIN_RELEASE_ACTIVE pr=${num} head=${head} action=leave_queued"
 			continue
 		fi
@@ -486,7 +706,7 @@ _mt_release() {
 		fi
 		if _mt_dispatch_review "${num}" "${head}"; then
 			release_comment_body="${MT_RELEASED_MARKER}
-**Merge train released.** Every older PR that edited the same files has merged or closed; the review/autofix run was re-dispatched on \`${head}\`."
+**Merge train released.** Every older PR that edited the same files has merged or closed; the review/autofix run was re-dispatched for \`${head}\`."
 			_mt_upsert_comment "${num}" "${MT_RELEASED_MARKER}" "${release_comment_body}" \
 				|| _mt_warn "merge-train release: could not upsert the released comment for PR #${num}; continuing."
 			released=$((released + 1))

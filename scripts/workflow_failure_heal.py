@@ -213,6 +213,8 @@ _STEP_SCRIPT_LINE_PREFIX = "\x1b[36;1m"
 # scripts/promote_main_cycle.sh matches on). The id is unique per cycle, so it
 # must not reach the dedup fingerprint.
 _CYCLE_RUN_NAME_SUFFIX_RE = re.compile(r"\s*\[cycle:[0-9]+\]\s*$", re.IGNORECASE)
+# The review/autofix reporter's evidence header (strip_autofix_evidence_header).
+_AUTOFIX_EVIDENCE_HEADER_RE = re.compile(r"^(?:failure_reason=|finalize_reason=|consecutive_failed_runs=|flags: )")
 _SOFT_LOG_PATTERNS = re.compile(
 	r"::error::|::warning::|\bERROR\b|\bFAIL(?:ED|URE)?\b|\bfatal\b|\bTraceback\b|"
 	r"\b[A-Z][A-Z0-9_]*_(?:FAILED|SKIPPED|ESCALATE|BLOCKED)\b|\bexit code\b|\btimed?[ -]?out\b|\brate.?limit",
@@ -1037,6 +1039,24 @@ def error_signature(text: str) -> str:
 	return "no-error-lines"
 
 
+def strip_autofix_evidence_header(text: str) -> str:
+	"""Drop the fixed header lines the review/autofix reporter opens its evidence with.
+
+	``workflow_failure_heal_autofix_report.sh`` starts every evidence file with
+	``failure_reason=`` / ``finalize_reason=`` / ``consecutive_failed_runs=`` /
+	``flags: AUTOFIX_REVIEWERS_FAILED=...``. The ``flags:`` line matches the
+	``*_FAILED`` signature pattern whatever the flags hold, so it became the
+	signature of every report without an ``::error::`` line: unrelated failures
+	shared one fingerprint and one lineage, and PR #5892's first report
+	escalated at generation 4. Only the leading run of header lines is removed.
+	"""
+	lines = text.split("\n")
+	index = 0
+	while index < len(lines) and _AUTOFIX_EVIDENCE_HEADER_RE.match(lines[index]):
+		index += 1
+	return "\n".join(lines[index:])
+
+
 def fingerprint(workflow_name: str, failing_step: str, signature: str) -> str:
 	# The per-cycle `[cycle:<id>]` run-name suffix is dropped so every promote
 	# cycle that fails the same way shares one fingerprint (and one lineage).
@@ -1112,6 +1132,14 @@ def derive_autofix_failure_reason(flags: dict[str, str], finalize_reason: str = 
 
 _REVIEWER_SLOT_EXIT_RE = re.compile(r"Reviewer slot (?P<slot>\S+) .*execution failed on attempt [0-9]+ \(exit=(?P<rc>[0-9]{1,3})\)")
 _SUMMARISER_EXIT_RE = re.compile(r"summariser \([^)]*\): (?:attempt [0-9]+ exited rc=(?P<rc>[0-9]{1,3})\.|all [0-9]+ attempts failed \(last rc=(?P<last_rc>[0-9]{1,3})\))")
+# summarize_reviewer_consensus.sh logs an attempt that exited 0 with no final
+# message this way (issue #4653: all 10 pass-1 attempts on PR #4607).
+# The prefix is copied verbatim into the evidence, and the same log carries
+# the model's stderr tail, so the class stays bounded instead of `[^)]*`:
+# no spaces or free text reach the fingerprint or the heal report. The script
+# only accepts `--prefix pass1|review`; a test pins every accepted prefix to
+# this class, so widening that list without widening the class fails CI.
+_SUMMARISER_EMPTY_STDOUT_RE = re.compile(r"summariser \((?P<prefix>[A-Za-z0-9_.-]{1,40})\): attempt [0-9]+ produced empty stdout\b")
 # A support script that names itself at the start of its error line, e.g.
 # `untrusted_process_sandbox: …` or `write_opencode_config.sh: …`.
 _SELF_NAMED_SCRIPT_LINE_RE = re.compile(r"^(?:::error::|##\[error\])?\s*(?P<name>[a-z][a-z0-9]*_[a-z0-9_]*(?:\.(?:sh|py))?): (?P<rest>\S.*)$")
@@ -1123,15 +1151,18 @@ def reviewer_failure_evidence(log_texts: Iterable[str]) -> str:
 	"""Summarise why the reviewer step failed, from the per-slot and summariser logs.
 
 	Emits one ``reviewer_slot_exit`` line per failed slot (its last recorded
-	exit code), the summariser's last exit code, the most common exit code
-	across them (``dominant_rc``), and up to REVIEWER_FAILURE_HELPER_LINES_MAX
-	distinct error lines a support script prefixed with its own name (a slot's
-	stderr is indented ``  | `` in its log). The text feeds the failure
-	fingerprint and the heal report, so it keeps only stable fields: no
-	timestamps, attempt counts or run ids.
+	exit code), the summariser's last exit code, one
+	``summariser_empty_stdout`` line per summariser prefix whose attempt
+	exited 0 with no final message (its exit code counts as 0), the most
+	common exit code across them (``dominant_rc``), and up to
+	REVIEWER_FAILURE_HELPER_LINES_MAX distinct error lines a support script
+	prefixed with its own name (a slot's stderr is indented ``  | `` in its
+	log). The text feeds the failure fingerprint and the heal report, so it
+	keeps only stable fields: no timestamps, attempt counts or run ids.
 	"""
 	slot_codes: dict[str, str] = {}
 	summariser_code = ""
+	summariser_empty_stdout_prefixes: set[str] = set()
 	helper_lines: list[str] = []
 	for text in log_texts:
 		for raw_line in sanitize_text(text).split("\n"):
@@ -1146,6 +1177,11 @@ def reviewer_failure_evidence(log_texts: Iterable[str]) -> str:
 			if summariser_match:
 				summariser_code = summariser_match.group("rc") or summariser_match.group("last_rc") or summariser_code
 				continue
+			empty_stdout_match = _SUMMARISER_EMPTY_STDOUT_RE.search(line)
+			if empty_stdout_match:
+				summariser_code = "0"
+				summariser_empty_stdout_prefixes.add(empty_stdout_match.group("prefix"))
+				continue
 			helper_match = _SELF_NAMED_SCRIPT_LINE_RE.match(line)
 			if helper_match and (_CRASH_ERROR_LINE_RE.match(line) or _SELF_NAMED_SCRIPT_FAILURE_RE.search(helper_match.group("rest"))) and len(helper_lines) < REVIEWER_FAILURE_HELPER_LINES_MAX:
 				helper_line = single_line(line, 300)
@@ -1156,6 +1192,7 @@ def reviewer_failure_evidence(log_texts: Iterable[str]) -> str:
 	lines.extend(f"reviewer_slot_exit slot={slot} exit={code}" for slot, code in sorted(slot_codes.items()))
 	if summariser_code:
 		lines.append(f"summariser_exit rc={summariser_code}")
+	lines.extend(f"summariser_empty_stdout prefix={prefix}" for prefix in sorted(summariser_empty_stdout_prefixes))
 	if codes:
 		counts: dict[str, int] = {}
 		for code in codes:
@@ -2124,6 +2161,8 @@ def _cmd_filter_log(args: argparse.Namespace) -> int:
 
 def _cmd_error_signature(args: argparse.Namespace) -> int:
 	chunks = [Path(path).read_text(encoding="utf-8", errors="replace") for path in args.log_file]
+	if args.strip_autofix_header:
+		chunks = [strip_autofix_evidence_header(chunk) for chunk in chunks]
 	sys.stdout.write(error_signature("\n".join(chunks)) + "\n")
 	return 0
 
@@ -2331,6 +2370,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 	p = sub.add_parser("error-signature", help="Derive the normalised error signature of one or more logs")
 	p.add_argument("--log-file", action="append", required=True)
+	p.add_argument("--strip-autofix-header", action="store_true", help="Ignore the review/autofix reporter's evidence header lines")
 	p.set_defaults(func=_cmd_error_signature)
 
 	p = sub.add_parser("fingerprint", help="Compute the dedup fingerprint")

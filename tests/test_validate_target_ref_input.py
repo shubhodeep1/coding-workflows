@@ -1,8 +1,8 @@
 """Contract for the optional `target_ref` validate input.
 
-/implement-plan-claude validates its project branch before the branch merges
-into the default branch, so the reusable workflow and both dispatch wrappers
-accept an explicit branch. Empty keeps the tracking-issue / default-branch
+An explicit branch whose single open PR goes into the default branch can be
+validated before it merges, so the reusable workflow and both dispatch
+wrappers accept it. Empty keeps the tracking-issue / default-branch
 resolution unchanged.
 """
 
@@ -52,34 +52,86 @@ def test_checkout_prefers_target_ref_then_integration_ref_then_default():
 	assert "VALIDATE_RESOLVED_REF: " + expression in REUSABLE.read_text(encoding="utf-8")
 
 
-def test_explicit_target_authorization_cases(tmp_path: Path):
-	step = next(step for step in _load(REUSABLE)["jobs"]["validate"]["steps"] if step["name"] == "Authorize explicit validation target")
-	bin_dir = tmp_path / "bin"
-	bin_dir.mkdir()
+def _authorize_step() -> dict:
+	return next(step for step in _load(REUSABLE)["jobs"]["validate"]["steps"] if step["name"] == "Authorize explicit validation target")
+
+
+def _gh_stub(bin_dir: Path) -> None:
+	"""Stub `gh` that answers by request and logs one line per call.
+
+	The target listing (head=<owner>:$VALIDATE_TARGET_REF) prints PULLS_JSON,
+	any other pull listing prints PARENT_JSON, an issue-events read prints
+	EVENTS_JSON (the slurped pages), and an issue read prints ISSUE_JSON. FAIL_API=yes fails every
+	call; FAIL_SECOND=yes fails every call after the first; FAIL_THIRD=yes
+	fails every call after the second.
+	"""
+	bin_dir.mkdir(exist_ok=True)
 	gh = bin_dir / "gh"
-	gh.write_text("#!/usr/bin/env bash\n[ \"${FAIL_API:-}\" != yes ] || exit 1\nprintf '%s' \"${PULLS_JSON}\"\n", encoding="utf-8")
+	gh.write_text(
+		"#!/usr/bin/env bash\n"
+		"printf '%s\\n' \"$*\" >> \"${GH_CALLS}\"\n"
+		"[ \"${FAIL_API:-}\" != yes ] || exit 1\n"
+		"calls=\"$(wc -l < \"${GH_CALLS}\")\"\n"
+		"[ \"${FAIL_SECOND:-}\" != yes ] || [ \"${calls}\" -le 1 ] || exit 1\n"
+		"[ \"${FAIL_THIRD:-}\" != yes ] || [ \"${calls}\" -le 2 ] || exit 1\n"
+		"case \" $* \" in\n"
+		"  *\" repos/${GITHUB_REPOSITORY}/issues/\"*\"/events \"*) printf '%s' \"${EVENTS_JSON}\" ;;\n"
+		"  *\" repos/${GITHUB_REPOSITORY}/issues/\"*) printf '%s' \"${ISSUE_JSON}\" ;;\n"
+		"  *\" head=${GITHUB_REPOSITORY%%/*}:${VALIDATE_TARGET_REF} \"*) printf '%s' \"${PULLS_JSON}\" ;;\n"
+		"  *) printf '%s' \"${PARENT_JSON}\" ;;\n"
+		"esac\n",
+		encoding="utf-8",
+	)
 	gh.chmod(0o755)
-	branch = "claude/implement-plan-example"
-	sha = "a" * 40
-	pr = {
+
+
+def _pr(head: str, base: str, sha: str = "a" * 40) -> dict:
+	return {
 		"state": "open",
 		"author_association": "OWNER",
-		"head": {"ref": branch, "sha": sha, "repo": {"full_name": "owner/repo"}},
-		"base": {"ref": "main", "repo": {"full_name": "owner/repo"}},
+		"user": {"login": "owner", "type": "User"},
+		"head": {"ref": head, "sha": sha, "repo": {"full_name": "owner/repo"}},
+		"base": {"ref": base, "repo": {"full_name": "owner/repo"}},
 	}
 
-	def invoke(pulls, target=branch, api_failure=False):
+
+def _make_invoke(tmp_path: Path):
+	step = _authorize_step()
+	bin_dir = tmp_path / "bin"
+	_gh_stub(bin_dir)
+
+	def invoke(pulls, target="claude/implement-plan-example", api_failure=False, parent=None, issue=None, second_failure=False, events=None, third_failure=False, event_pages=None):
 		output = tmp_path / "output"
 		output.write_text("", encoding="utf-8")
+		calls = tmp_path / "calls"
+		calls.write_text("", encoding="utf-8")
 		env = os.environ.copy()
 		env.update({
 			"PATH": f"{bin_dir}:{env['PATH']}", "GITHUB_REPOSITORY": "owner/repo",
-			"GITHUB_OUTPUT": str(output), "GH_TOKEN": "placeholder",
+			"GITHUB_OUTPUT": str(output), "GH_TOKEN": "placeholder", "GH_CALLS": str(calls),
 			"VALIDATE_DEFAULT_BRANCH": "main", "VALIDATE_TARGET_REF": target,
 			"PULLS_JSON": json.dumps([pulls]), "FAIL_API": "yes" if api_failure else "no",
+			"PARENT_JSON": json.dumps([parent if parent is not None else []]),
+			"ISSUE_JSON": json.dumps(issue if issue is not None else {}),
+			"FAIL_SECOND": "yes" if second_failure else "no",
+			"EVENTS_JSON": json.dumps(event_pages if event_pages is not None else [events if events is not None else []]),
+			"FAIL_THIRD": "yes" if third_failure else "no",
 		})
 		result = subprocess.run(["bash", "-c", step["run"]], env=env, capture_output=True, text=True)
+		invoke.calls = [line for line in calls.read_text(encoding="utf-8").splitlines() if line]
+		invoke.stdout = result.stdout
 		return result.returncode, output.read_text(encoding="utf-8")
+
+	invoke.calls = []
+	invoke.stdout = ""
+	return invoke
+
+
+def test_explicit_target_authorization_cases(tmp_path: Path):
+	invoke = _make_invoke(tmp_path)
+	branch = "claude/implement-plan-example"
+	sha = "a" * 40
+	pr = _pr(branch, "main", sha)
 
 	assert invoke([pr]) == (0, f"sha={sha}\n")
 	assert invoke([], target="") == (0, "")
@@ -95,6 +147,35 @@ def test_explicit_target_authorization_cases(tmp_path: Path):
 		{"author_association": "CONTRIBUTOR"},
 	):
 		assert invoke([{**pr, **edit}])[0] != 0
+
+
+def test_target_listing_has_no_base_filter(tmp_path: Path):
+	invoke = _make_invoke(tmp_path)
+	pr = _pr("claude/implement-plan-example", "main")
+	assert invoke([pr])[0] == 0
+	assert len(invoke.calls) == 1
+	assert "head=owner:claude/implement-plan-example" in invoke.calls[0]
+	assert "base=" not in invoke.calls[0]
+	assert "-f base=" not in _authorize_step()["run"]
+
+
+def test_stacked_and_stable_bases_are_refused(tmp_path: Path):
+	"""The project-branch and stable bases (#4734 / #4791) were removed with
+	the retired /implement-plan-claude chain: only a PR into the default
+	branch authorizes an explicit target, with one listing call."""
+	invoke = _make_invoke(tmp_path)
+	branch = "claude/implement-plan-issue-4665-reissue-new-output-paths"
+	for base in ("claude/implement-plan-issue-4586-hold-reason", "stable"):
+		assert invoke([_pr(branch, base)], target=branch) == (1, ""), base
+		assert len(invoke.calls) == 1, base
+
+
+def test_other_bases_are_refused(tmp_path: Path):
+	invoke = _make_invoke(tmp_path)
+	branch = "claude/implement-plan-example"
+	for base in ("develop", "claude/other-branch", "release/1.0"):
+		assert invoke([_pr(branch, base)], target=branch) == (1, ""), base
+		assert len(invoke.calls) == 1, base
 
 
 def test_validation_hooks_use_verified_helper():

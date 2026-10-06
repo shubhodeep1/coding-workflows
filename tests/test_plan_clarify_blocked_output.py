@@ -13,6 +13,8 @@ import http.server
 import threading
 from unittest import mock
 
+import yaml
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLAN_WF = REPO_ROOT / ".github" / "workflows" / "plan.yml"
@@ -244,7 +246,7 @@ def test_clarify_agent_runs_only_in_isolated_container() -> None:
 	wf = _read(CLARIFY_WF)
 	runner = _read(REPO_ROOT / "scripts" / "clarify_isolated_run.sh")
 	assert 'bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"' in wf
-	assert "codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py claude_issue_route.py claude_issue_handoff.sh; do" in wf
+	assert "codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl; do" in wf
 	assert 'install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile' in wf
 	assert "--network none --read-only --cap-drop ALL --security-opt no-new-privileges" in runner
 	assert "--sandbox read-only" in runner
@@ -505,6 +507,104 @@ def test_unterminated_fence_does_not_hide_structured_clarification_block() -> No
 	assert _has_structured_clarification_block(parsed_output) is True
 	assert _needs_clarification(parsed_output, self_check_gate_enabled=True) is True
 
+# --- Phase 5a: the clarify, clarify-respond and plan roles on Claude -------------
+
+
+ENGINE_WORKFLOWS = (
+	("clarify.yml", "CLARIFY", "Run Codex"),
+	("orchestrate_clarify_respond.yml", "CLARIFY_RESPOND", "Build prompt and run Codex"),
+	("plan.yml", "PLAN", "Run Codex planning"),
+)
+
+
+def _steps(workflow: str) -> list[dict]:
+	data = yaml.safe_load(_read(REPO_ROOT / ".github" / "workflows" / workflow))
+	(job,) = data["jobs"].values()
+	return job["steps"]
+
+
+def test_engine_steps_resolve_the_role_and_guard_the_credential() -> None:
+	for workflow, role, model_step in ENGINE_WORKFLOWS:
+		steps = _steps(workflow)
+		names = [step.get("name") for step in steps]
+		resolve = names.index("Resolve AI engine")
+		install = names.index("Install Claude Code CLI")
+		credential = names.index("Resolve Claude credential")
+		assert resolve < install < credential < names.index(model_step), workflow
+		run = steps[resolve]["run"]
+		assert f'engine="$(ai_engine_for_role {role} || echo codex)"' in run, workflow
+		metadata_file = "ISSUE_PAYLOAD_FILE" if role == "CLARIFY_RESPOND" else "ISSUE_META_FILE"
+		assert f'AI_ENGINE_LABELS="$(jq -c \'[.labels[]?.name]\' "${{{metadata_file}}}")"' in run, workflow
+		assert "export AI_ENGINE_LABELS" in run, workflow
+		assert steps[resolve]["env"][f"AI_ENGINE_{role}"] == f"${{{{ vars.AI_ENGINE_{role} || '' }}}}", workflow
+		for index in (install, credential):
+			assert "steps.ai_engine.outputs.engine == 'claude'" in steps[index]["if"], workflow
+			assert steps[index]["continue-on-error"] is True, workflow
+		assert steps[credential]["uses"] == "./.codex-workflow-src/.github/actions/claude-pool-token"
+
+
+def test_clarify_runs_claude_then_the_unchanged_codex_call() -> None:
+	wf = _read(REPO_ROOT / ".github" / "workflows" / "clarify.yml")
+	args = '"${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"'
+	assert wf.count("bash scripts/clarify_isolated_run.sh ") == 2
+	assert f"bash scripts/clarify_isolated_run.sh {args} claude CLARIFY || rc=$?" in wf
+	assert f"bash scripts/clarify_isolated_run.sh {args} || rc=$?" in wf
+	assert 'if [ "${rc}" -eq 75 ]; then' in wf
+	assert "CLARIFY_ENGINE: ${{ steps.ai_engine.outputs.engine || 'codex' }}" in wf
+
+
+def test_checked_in_defaults_put_the_5a_roles_on_claude() -> None:
+	import json
+
+	config = json.loads(_read(REPO_ROOT / ".github" / "ai" / "claude_engine.json"))
+	for _, role, _ in ENGINE_WORKFLOWS:
+		assert config["role_defaults"][role]["engine"] == "claude", role
+
+
+def _clarify_loop() -> str:
+	(step,) = [step for step in _steps("clarify.yml") if step.get("name") == "Run Codex"]
+	run = step["run"]
+	start = run.index("max_attempts=3")
+	end = run.index("done", start) + len("done")
+	return run[start:end]
+
+
+def _run_clarify_loop(tmp: Path, engine: str, claude_rc: int) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+	(tmp / "scripts").mkdir()
+	(tmp / "scripts" / "clarify_isolated_run.sh").write_text(
+		f"""printf '%s\\n' "$*" >> "{tmp}/calls.log"
+if [ "${{4:-}}" = claude ]; then
+  [ {claude_rc} -eq 0 ] && printf 'claude questions\\n' > "$2"
+  exit {claude_rc}
+fi
+printf 'codex questions\\n' > "$2"
+""",
+		encoding="utf-8",
+	)
+	script = "set -euo pipefail\nsleep() { :; }\n" + _clarify_loop()
+	env = {"PATH": "/usr/bin:/bin", "CLARIFY_ENGINE": engine, "CODEX_PROMPT_FILE": str(tmp / "p.txt"), "CODEX_OUTPUT_FILE": str(tmp / "o.txt"), "RUNTIME_DIR": str(tmp)}
+	result = subprocess.run(["bash", "-c", script], cwd=tmp, env=env, capture_output=True, text=True, check=False)
+	return result, _read(tmp / "calls.log").splitlines()
+
+
+def test_clarify_loop_falls_back_to_codex_in_the_same_attempt() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		result, calls = _run_clarify_loop(Path(tmp), "claude", 75)
+		assert result.returncode == 0, result.stderr
+		assert [call.split()[3:] for call in calls] == [["claude", "CLARIFY"], []]
+		assert _read(Path(tmp) / "o.txt") == "codex questions\n"
+		assert "succeeded on attempt 1" in result.stdout
+
+
+def test_clarify_loop_on_claude_never_calls_codex() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		result, calls = _run_clarify_loop(Path(tmp), "claude", 0)
+		assert result.returncode == 0, result.stderr
+		assert calls == [f"{tmp}/p.txt {tmp}/o.txt {tmp}/codex_log.txt claude CLARIFY"]
+		assert _read(Path(tmp) / "o.txt") == "claude questions\n"
+	with tempfile.TemporaryDirectory() as tmp:
+		result, calls = _run_clarify_loop(Path(tmp), "codex", 0)
+		assert calls == [f"{tmp}/p.txt {tmp}/o.txt {tmp}/codex_log.txt"]
 
 def main() -> int:
 	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

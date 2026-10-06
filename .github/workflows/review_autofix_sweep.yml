@@ -13,13 +13,28 @@ name: "Internal: AI Review Autofix Sweep"
 #     still gets a verification rerun every cycle.
 #   - Mirrors `_dispatch_review_for_conflicts` in
 #     `scripts/orchestrate_poll_process.sh:7830` so the new sweep behaves
-#     consistently with the orchestrator's existing dispatch path.
+#     consistently with the orchestrator's existing dispatch path, except for
+#     the ref (below).
+#
+# Dispatch ref (security, issue #4618):
+#   - The sweep always dispatches from the default branch and passes only a
+#     validated PR number as data. Dispatching `--ref <PR head branch>` ran the
+#     unmerged branch's copy of internal-review.yml with `secrets: inherit`
+#     and write permissions, so anyone who could push a same-repo branch could
+#     have the scheduled sweep run workflow code no review had approved.
+#     review_autofix.yml checks out the PR head from the PR's metadata either
+#     way, and both concurrency groups are keyed by PR number, not by ref.
+#   - Because a default-branch run's head_branch no longer names the PR,
+#     internal-review.yml names every dispatched run
+#     `Internal: AI Review & Autofix [pr:<N>]`, and the snapshot below keys
+#     those runs by `pr:<N>` (see dedupe_key) instead of by head branch.
 #
 # Concurrency safety:
 #   - Per-PR preflight reuses the `_has_active_autofix_run` pattern
 #     (orchestrate_poll_process.sh:7792-7814): if any in_progress, queued, or
 #     pending run already exists on `internal-review.yml` / `review_autofix.yml`
-#     for the PR's head ref, skip the dispatch. In-progress and pending runs
+#     for the PR's head ref, or a dispatched run is named for the PR, skip the
+#     dispatch. In-progress and pending runs
 #     are never age-discounted; only queued runs may expire. This collapses the
 #     dispatch-vs-synchronize parallel-write window from "indefinite" to
 #     "GitHub API visibility delay" (~few seconds).
@@ -43,15 +58,13 @@ name: "Internal: AI Review Autofix Sweep"
 # Cost guard:
 #   - 30 min cadence matches the existing orchestrator poll cadence and is
 #     a conscious trade-off (CLAUDE.md §1: Speed is the lowest priority).
-#   - `[skip ai]` in PR title/body is the only opt-out honoured here; per
+#   - `[skip ai]` in the PR title, or alone on a PR body line, is the only
+#     opt-out honoured here (same rule as the review gate); per
 #     Q2=A the sweep otherwise targets every open non-draft PR.
 
 on:
   schedule:
     - cron: '*/30 * * * *'
-    # Hourly CLAUDE.md §26.H catch-all (job `claude-pr-catch-all` below);
-    # the review-dispatch `sweep` job skips this tick.
-    - cron: '17 * * * *'
   workflow_dispatch:
     inputs:
       head_ref_filter:
@@ -80,7 +93,6 @@ concurrency:
 
 jobs:
   sweep:
-    if: github.event.schedule != '17 * * * *'
     runs-on: ubuntu-24.04
     steps:
       - name: Enumerate open PRs and dispatch internal-review.yml
@@ -105,10 +117,12 @@ jobs:
             | jq -s '(add // []) | map(select(.draft == false) | {
               number,
               head_ref: .head.ref,
-              head_repo: (.head.repo.full_name // ""),
+              head_sha: .head.sha,
               title: (.title // ""),
               body: (.body // "")
             })')"
+
+          printf '%s\n' "${prs_json}" > "${RUNNER_TEMP}/ci-cancelled-pr-snapshot.json"
 
           total="$(printf '%s' "${prs_json}" | jq 'length')"
           echo "AUTOFIX_SWEEP_START repo=${REPOSITORY} candidates=${total} head_ref_filter=${HEAD_REF_FILTER:-<none>} dry_run=${DRY_RUN}"
@@ -118,6 +132,12 @@ jobs:
           skipped_filter=0
           skipped_skip_ai=0
           failures=0
+          # Identical to the gate's copy in review_autofix.yml (issue #4985):
+          # only a body line holding nothing but the marker, outside a fenced
+          # block, counts. A fence closes only on a matching fence (same
+          # character, at least as long, up to 3 spaces, issue #5377).
+          # tests/test_skip_ai_marker_rule.py runs both copies.
+          SKIP_AI_BODY_AWK='{ sub(/\r$/, "") } fl > 0 { if ($0 ~ /^ ? ? ?(```+|~~~+)[ \t]*$/) { r = $0; sub(/^ */, "", r); sub(/[ \t]*$/, "", r); if (substr(r, 1, 1) == fc && length(r) >= fl) fl = 0 } next } match($0, /^[ \t]*(```+|~~~+)/) { r = substr($0, RSTART, RLENGTH); sub(/^[ \t]*/, "", r); fc = substr(r, 1, 1); fl = length(r); next } /^ ? ? ?\[skip ai\][ \t]*$/ { found = 1 } END { exit found ? 0 : 1 }'
 
           if [ "${total}" -eq 0 ]; then
             echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} failures=${failures} candidates=${total}"
@@ -180,10 +200,32 @@ jobs:
                     and (.status // "") == "queued"
                     and (created_epoch != null)
                     and (created_epoch <= $cutoff);
+                  # A dispatched run is keyed by the PR its run name carries
+                  # (internal-review.yml run-name, issue #4618): the sweep
+                  # dispatches from the default branch, so head_branch would
+                  # name the default branch, not the PR. Only
+                  # workflow_dispatch runs qualify, so a PR titled like the
+                  # marker cannot claim another PR key. Git refs cannot
+                  # contain ":", so a "pr:<N>" key never collides with a
+                  # branch key. Everything else stays keyed by head branch.
+                  def dispatch_pr:
+                    if (.event // "") == "workflow_dispatch" then
+                      ((.display_title // "")
+                        | [match("^Internal: AI Review & Autofix \\[pr:([1-9][0-9]*)\\]$").captures[0].string]
+                        | first // "")
+                    else "" end;
+                  def dedupe_key:
+                    dispatch_pr as $pr
+                    | if $pr != "" then "pr:\($pr)" else .head_branch end;
+                  # A run needs a key to count. GitHub can report a null
+                  # head_branch on a workflow_dispatch run (issue #4928), so a
+                  # run named for its PR is kept by its pr:<N> key; dropping
+                  # it let the next tick dispatch that PR again and replace
+                  # the pending review. A run with neither key is dropped.
                   [
                     .[]
                     | .workflow_runs[]?
-                    | select((.head_branch // "") != "")
+                    | select((.head_branch // "") != "" or dispatch_pr != "")
                   ]
                   # A run can transition between the sequential status fetches;
                   # retain its in_progress snapshot so it is never discounted.
@@ -191,12 +233,12 @@ jobs:
                   | map(max_by(if (.status // "") == "in_progress" then 1 else 0 end))
                   | {
                       active: (
-                        reduce (.[] | select(is_stale_queued | not) | .head_branch) as $head_ref ({};
+                        reduce (.[] | select(is_stale_queued | not) | dedupe_key) as $head_ref ({};
                           .[$head_ref] = ((.[$head_ref] // 0) + 1)
                         )
                       ),
                       stale: (
-                        reduce (.[] | select(is_stale_queued) | "\(.head_branch)\t\(.id)\t\(created_epoch)") as $entry ([];
+                        reduce (.[] | select(is_stale_queued) | "\(dedupe_key)\t\(.id)\t\(created_epoch)") as $entry ([];
                           . + [$entry]
                         )
                       )
@@ -233,9 +275,16 @@ jobs:
           for row in "${rows[@]}"; do
             pr_number="$(printf '%s' "${row}" | jq -r '.number')"
             head_ref="$(printf '%s' "${row}" | jq -r '.head_ref')"
-            head_repo="$(printf '%s' "${row}" | jq -r '.head_repo')"
             pr_title="$(printf '%s' "${row}" | jq -r '.title')"
             pr_body="$(printf '%s' "${row}" | jq -r '.body')"
+
+            # The PR number is the only PR data the dispatch carries
+            # (issue #4618), so accept nothing but a positive integer.
+            if ! [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::warning::AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=invalid_pr_number head_ref=${head_ref}"
+              failures=$((failures + 1))
+              continue
+            fi
 
             if [ -n "${HEAD_REF_FILTER}" ] && ! printf '%s' "${head_ref}" | grep -qF "${HEAD_REF_FILTER}"; then
               skipped_filter=$((skipped_filter + 1))
@@ -243,9 +292,11 @@ jobs:
             fi
 
             # Honour the existing `[skip ai]` opt-out marker (parity with
-            # review_autofix.yml gate behaviour). This is the only PR-author
-            # escape hatch on the sweep path.
-            if printf '%s %s' "${pr_title}" "${pr_body}" | grep -Fq '[skip ai]'; then
+            # review_autofix.yml gate behaviour: the title, or a body line
+            # holding only the marker; a quoted mention does not count). This
+            # is the only PR-author escape hatch on the sweep path.
+            if [[ "${pr_title}" == *"[skip ai]"* ]] \
+              || printf '%s\n' "${pr_body}" | awk "${SKIP_AI_BODY_AWK}"; then
               echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=skip_ai_marker head_ref=${head_ref}"
               skipped_skip_ai=$((skipped_skip_ai + 1))
               continue
@@ -253,16 +304,19 @@ jobs:
 
             # Preflight (mirrors scripts/orchestrate_poll_process.sh:7792-7814).
             # Skip when a review run is already in_progress, queued, or pending
-            # for this branch on either workflow. In-progress and pending runs
-            # always suppress dispatch; only queued runs can age out.
+            # for this branch on either workflow, or a dispatched run is named
+            # for this PR (the `pr:<N>` key, issue #4618). In-progress and
+            # pending runs always suppress dispatch; only queued runs can age out.
             active=0
             for wf in internal-review.yml review_autofix.yml; do
-              count="${active_review_runs["${wf}:${head_ref}"]:-0}"
-              if [ "${count:-0}" -gt 0 ]; then
-                echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=active_run workflow=${wf} count=${count} head_ref=${head_ref}"
-                active=1
-                break
-              fi
+              for dedupe_ref in "${head_ref}" "pr:${pr_number}"; do
+                count="${active_review_runs["${wf}:${dedupe_ref}"]:-0}"
+                if [ "${count:-0}" -gt 0 ]; then
+                  echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=active_run workflow=${wf} count=${count} head_ref=${head_ref}"
+                  active=1
+                  break 2
+                fi
+              done
             done
             if [ "${active}" -eq 1 ]; then
               skipped_active=$((skipped_active + 1))
@@ -281,23 +335,18 @@ jobs:
             # `ALLOW_WORKFLOW_EDITS` repo variable matches
             # `_dispatch_review_for_conflicts`
             # (orchestrate_poll_process.sh:7862-7868).
-            # Dispatch on the PR's head branch for same-repo PRs so the
-            # resulting run is keyed to that branch. Head-branch keying is
-            # what makes the run visible to the active-run guards (this
-            # sweep's snapshot and the orchestrator poller's
-            # _has_active_autofix_run both look runs up by head branch) —
-            # a default-branch-keyed run is invisible to them and gets
-            # duplicate-dispatched, as in the PR #3895 incident. It also
-            # matches _dispatch_review_for_conflicts, which already
-            # dispatches --ref <head_ref>. Fork PRs keep the default-branch
-            # dispatch: their head ref does not exist in this repo, so
-            # --ref would fail outright.
+            # Always dispatch from the default branch (no --ref), so the run
+            # executes the reviewed internal-review.yml, never a copy an
+            # unmerged branch carries (issue #4618; the same-repo head-ref
+            # dispatch this replaces let any pushable branch run its own
+            # workflow code with the sweep's secrets). The run is still
+            # visible to the active-run guards: internal-review.yml names it
+            # `Internal: AI Review & Autofix [pr:<N>]`, which this sweep's
+            # snapshot and the poller's _has_active_autofix_run match by PR,
+            # so the PR #3895 duplicate-dispatch loop stays closed.
             dispatch_args=(--repo "${REPOSITORY}"
               -f "pr_number=${pr_number}"
               -f "allow_workflow_edits=${ALLOW_WORKFLOW_EDITS}")
-            if [ "${head_repo}" = "${REPOSITORY}" ] && [ -n "${head_ref}" ]; then
-              dispatch_args+=(--ref "${head_ref}")
-            fi
             if gh workflow run internal-review.yml "${dispatch_args[@]}" >/dev/null 2>&1; then
               echo "AUTOFIX_SWEEP_DISPATCH pr=#${pr_number} head_ref=${head_ref}"
               dispatched=$((dispatched + 1))
@@ -309,62 +358,23 @@ jobs:
 
           echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} failures=${failures} candidates=${total}"
 
-  # CLAUDE.md §26.H catch-all. Every PR-backed claude/* head runs in
-  # Claude-fixer mode, so its conflicts, failed checks, review hand-offs and
-  # blocks wait for a Claude session. The §26 checker hands them to the
-  # session that pushed the PR; this job queues one fresh Opus 5.5 fixer
-  # (an ai:claude-issue-queue item with a claude_pr_fix.v1 payload, started
-  # by the Claude issue pickup session) for any such PR, here or in a
-  # registered consumer repo, whose fix has been due for
-  # CLAUDE_PR_SWEEP_MIN_AGE_HOURS with no live claim. Queue items are
-  # opened with this job's GITHUB_TOKEN, the only author the pickup trusts.
-  # Decision, API budget and fail-open rules: scripts/claude_pr_sweep.py.
-  claude-pr-catch-all:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '17 * * * *'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      issues: write
-    steps:
-      - name: Check out the sweep scripts and the consumer registry
+      # Use the 30-minute sweep rather than the hourly Claude catch-all: it
+      # already snapshots every open non-draft PR, including non-Claude PRs.
+      # The sweep itself needs no checkout. Fetch only the default-branch
+      # helper: a PR head must never supply code for an Actions write.
+      - name: Check out trusted CI recovery helper
         uses: actions/checkout@v5
         with:
-          fetch-depth: 1
+          ref: ${{ github.event.repository.default_branch || github.ref_name }}
+          path: .ci-rerun-support
           persist-credentials: false
 
-      - name: Start Claude fixers for unhandled claude/* PRs
+      - name: Re-run cancelled CI failed jobs once
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          # The queue lives in this repo; GITHUB_TOKEN writes do not start workflows.
-          CLAUDE_PR_SWEEP_QUEUE_TOKEN: ${{ github.token }}
-          CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN: ${{ vars.CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN || '' }}
-          CLAUDE_FIXER_VERDICT_BOT_LOGIN: ${{ vars.CLAUDE_FIXER_VERDICT_BOT_LOGIN || '' }}
-          CLAUDE_PR_SWEEP_MIN_AGE_HOURS: ${{ vars.CLAUDE_PR_SWEEP_MIN_AGE_HOURS || '2' }}
-          CLAUDE_FIX_CLAIM_LEASE_HOURS: ${{ vars.CLAUDE_FIX_CLAIM_LEASE_HOURS || '3' }}
-          CLAUDE_FIX_HAND_BACK_CAP: ${{ vars.CLAUDE_FIX_HAND_BACK_CAP || '3' }}
-          CLAUDE_PR_SWEEP_DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
-          # Every queue item this run opens is recorded here and uploaded
-          # below; the pickup starts nothing the artifact does not list (#4621).
-          CLAUDE_PR_SWEEP_QUEUE_BINDING_FILE: ${{ runner.temp }}/claude-issue-queue-binding/claude_issue_queue_binding.json
-        run: |
-          set -euo pipefail
-          # The review workflow posts hand-offs with GH_PAT, so its account is
-          # the only author whose hand-off markers count (check_in_status.py).
-          if [ -z "${CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN}" ]; then
-            CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN="$(gh api user --jq .login 2>/dev/null || true)"
-            export CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN
-          fi
-          echo "CLAUDE_PR_SWEEP handoff_author=${CLAUDE_FIXER_HANDOFF_AUTHOR_LOGIN:-<unset: hand-offs ignored>}"
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/claude_pr_sweep.py
-
-      # Runs even when the sweep step failed, so a queue item it opened is
-      # never left without its binding (issue #4621).
-      - name: Upload the queue binding for the Claude issue pickup
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: claude-issue-queue-binding
-          path: ${{ runner.temp }}/claude-issue-queue-binding/claude_issue_queue_binding.json
-          if-no-files-found: ignore
-          retention-days: 30
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          CI_CANCELLED_AUTO_RERUN_ENABLED: ${{ vars.CI_CANCELLED_AUTO_RERUN_ENABLED || 'true' }}
+          HEAD_REF_FILTER: ${{ inputs.head_ref_filter }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          CI_CANCELLED_PR_SNAPSHOT: ${{ runner.temp }}/ci-cancelled-pr-snapshot.json
+        run: PYTHONDONTWRITEBYTECODE=1 python3 .ci-rerun-support/scripts/ci_cancelled_rerun.py

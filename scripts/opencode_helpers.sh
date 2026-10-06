@@ -21,7 +21,7 @@ _opencode_alert_field()
 
 opencode_strip_ansi()
 {
-	python3 -c 'import re, sys; data = sys.stdin.buffer.read(); pattern = rb"\x1b(?:\][^\x07]*(?:\x07|\x1b\\)|[P^_].*?\x1b\\|\[[0-?]*[ -/]*[@-~]|[ -/]*[0-~])"; sys.stdout.buffer.write(re.sub(pattern, b"", data, flags=re.DOTALL))'
+	PYTHONSAFEPATH=1 python3 -c 'import re, sys; data = sys.stdin.buffer.read(); pattern = rb"\x1b(?:\][^\x07]*(?:\x07|\x1b\\)|[P^_].*?\x1b\\|\[[0-?]*[ -/]*[@-~]|[ -/]*[0-~])"; sys.stdout.buffer.write(re.sub(pattern, b"", data, flags=re.DOTALL))'
 }
 
 opencode_run_cmd()
@@ -161,7 +161,7 @@ opencode_require_bootstrap()
 	if [ ! -r "${config_path}" ] || [ ! -s "${config_path}" ]; then
 		opencode_emit_failure_alert "${phase}" "${role}" "${model_slug}" 1 config_unreadable || return $?
 	fi
-	if ! python3 -m json.tool "${config_path}" >/dev/null 2>&1; then
+	if ! PYTHONSAFEPATH=1 python3 -m json.tool "${config_path}" >/dev/null 2>&1; then
 		opencode_emit_failure_alert "${phase}" "${role}" "${model_slug}" 1 config_invalid || return $?
 	fi
 

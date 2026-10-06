@@ -17,6 +17,9 @@ aggregates token usage per workflow. Four patterns are recognised:
   4. Serena / generic MCP telemetry (`SERENA_QUERY`, `SERENA_FALLBACK`,
      `SERENA_PROBE`, plus `<NAME>_QUERY|FALLBACK|PROBE` for other MCP
      servers).
+  5. Claude Code CLI stream-json `result` events (`{"type":"result", ...,
+     "total_cost_usd": N, "usage": {...}, "modelUsage": {...}}`) — the usage
+     line `scripts/ai_engine.sh` `claude_run` prints for each Claude run.
 
 Output: stdout markdown table + per-run JSON file.
 
@@ -81,6 +84,52 @@ OPENROUTER_RE = re.compile(
     r"(?:\s+usage_available=(?P<available>true|false))?",
     re.IGNORECASE,
 )
+
+# Claude Code CLI stream-json `result` event (pattern 5). The JSON object
+# starts at the first `{` of the line, after the Actions timestamp.
+CLAUDE_RESULT_MARKER_RE = re.compile(r'"type"\s*:\s*"result"')
+CLAUDE_USAGE_FIELDS = (
+    ("input_tokens", "claude_input_tokens"),
+    ("output_tokens", "claude_output_tokens"),
+    ("cache_creation_input_tokens", "claude_cache_write_tokens"),
+    ("cache_read_input_tokens", "claude_cache_read_tokens"),
+)
+CLAUDE_COUNT_KEYS = (
+    "claude_calls",
+    "claude_input_tokens",
+    "claude_output_tokens",
+    "claude_cache_write_tokens",
+    "claude_cache_read_tokens",
+)
+
+
+def parse_claude_result_line(line: str) -> Optional[dict[str, Any]]:
+    """The stream-json `result` event on one log line, or None.
+
+    Only a JSON object whose `type` is `result` and that carries a `usage`
+    object counts; any other JSON (or text) on the line is ignored.
+    """
+    if not CLAUDE_RESULT_MARKER_RE.search(line):
+        return None
+    start = line.find("{")
+    if start < 0:
+        return None
+    try:
+        event = json.loads(line[start:])
+    except ValueError:
+        return None
+    if not isinstance(event, dict) or event.get("type") != "result":
+        return None
+    if not isinstance(event.get("usage"), dict):
+        return None
+    return event
+
+
+def _claude_cost(value: Any) -> float:
+    """A non-negative, finite USD cost; anything else counts as 0."""
+    cost = _to_float(value, 0.0)
+    return cost if cost == cost and 0.0 <= cost < float("inf") else 0.0
+
 
 SEMBLE_QUERY_RE = re.compile(r"(?:^|\s)SEMBLE_QUERY(?:\s|$)")
 SEMBLE_FALLBACK_RE = re.compile(r"(?:^|\s)SEMBLE_FALLBACK(?:\s|$)")
@@ -568,6 +617,13 @@ def parse_log(log: str, *, fallback_wall_clock_ms: int | None = None) -> dict:
     out = {
         "codex_tokens_used": 0,
         "codex_calls": 0,
+        "claude_calls": 0,
+        "claude_input_tokens": 0,
+        "claude_output_tokens": 0,
+        "claude_cache_write_tokens": 0,
+        "claude_cache_read_tokens": 0,
+        "claude_cost_usd": 0.0,
+        "claude_models": defaultdict(lambda: defaultdict(float)),
         "or_prompt_tokens": 0,
         "or_completion_tokens": 0,
         "or_total_tokens": 0,
@@ -637,6 +693,27 @@ def parse_log(log: str, *, fallback_wall_clock_ms: int | None = None) -> dict:
         out["or_phases"][phase]["calls"] += 1
 
     for line in log.splitlines():
+        claude_event = parse_claude_result_line(line)
+        if claude_event is not None:
+            usage = claude_event["usage"]
+            out["claude_calls"] += 1
+            for field, key in CLAUDE_USAGE_FIELDS:
+                out[key] += _to_int(usage.get(field), 0)
+            out["claude_cost_usd"] += _claude_cost(claude_event.get("total_cost_usd"))
+            model_usage = claude_event.get("modelUsage")
+            if isinstance(model_usage, dict):
+                for model, vals in model_usage.items():
+                    if not isinstance(vals, dict):
+                        continue
+                    bucket = out["claude_models"][str(model)]
+                    bucket["calls"] += 1
+                    bucket["input_tokens"] += _to_int(vals.get("inputTokens"), 0)
+                    bucket["output_tokens"] += _to_int(vals.get("outputTokens"), 0)
+                    bucket["cache_read_tokens"] += _to_int(vals.get("cacheReadInputTokens"), 0)
+                    bucket["cache_write_tokens"] += _to_int(vals.get("cacheCreationInputTokens"), 0)
+                    bucket["cost_usd"] += _claude_cost(vals.get("costUSD"))
+            continue
+
         if BREAK_GLASS_RE.search(line):
             out["break_glass_count"] += 1
 
@@ -717,6 +794,8 @@ def parse_log(log: str, *, fallback_wall_clock_ms: int | None = None) -> dict:
     out["wall_clock_p99_ms"] = _percentile_int(wall_clock_samples_ms, 99)
 
     out["or_phases"] = {p: dict(v) for p, v in out["or_phases"].items()}
+    out["claude_cost_usd"] = round(out["claude_cost_usd"], 6)
+    out["claude_models"] = {m: dict(v) for m, v in out["claude_models"].items()}
     out["semble_targets"] = {p: dict(v) for p, v in out["semble_targets"].items()}
     out["serena_targets"] = {p: dict(v) for p, v in out["serena_targets"].items()}
     out["serena_tools"] = {p: dict(v) for p, v in out["serena_tools"].items()}
@@ -773,6 +852,13 @@ def main() -> int:
             "runs_with_data": 0,
             "codex_tokens_used": 0,
             "codex_calls": 0,
+            "claude_calls": 0,
+            "claude_input_tokens": 0,
+            "claude_output_tokens": 0,
+            "claude_cache_write_tokens": 0,
+            "claude_cache_read_tokens": 0,
+            "claude_cost_usd": 0.0,
+            "claude_models": defaultdict(lambda: defaultdict(float)),
             "or_prompt_tokens": 0,
             "or_completion_tokens": 0,
             "or_total_tokens": 0,
@@ -822,6 +908,7 @@ def main() -> int:
             parsed = parse_log(log, fallback_wall_clock_ms=fallback_wall_clock_ms)
             if (
                 parsed["codex_tokens_used"]
+                or parsed["claude_calls"]
                 or parsed["or_calls"]
                 or parsed["semble_query_calls"]
                 or parsed["semble_fallbacks"]
@@ -850,6 +937,12 @@ def main() -> int:
                       "serena_probe_failed", "serena_probe_skipped",
                       "break_glass_count", "context_budget_warn_count"):
                 agg[k] += parsed[k]
+            for k in CLAUDE_COUNT_KEYS:
+                agg[k] += parsed[k]
+            agg["claude_cost_usd"] += parsed["claude_cost_usd"]
+            for model, vals in parsed["claude_models"].items():
+                for k, v in vals.items():
+                    agg["claude_models"][model][k] += v
             for phase, vals in parsed["or_phases"].items():
                 for k, v in vals.items():
                     agg["or_phases"][phase][k] += v
@@ -887,6 +980,9 @@ def main() -> int:
                     "break_glass_count", "context_budget_warn_count",
                     "cache_hit_rate", "wall_clock_p50_ms", "wall_clock_p99_ms",
                 )},
+                **{k: parsed[k] for k in CLAUDE_COUNT_KEYS},
+                "claude_cost_usd": parsed["claude_cost_usd"],
+                "claude_models": parsed["claude_models"],
                 "semble_targets": parsed["semble_targets"],
                 "serena_targets": parsed["serena_targets"],
                 "serena_tools": parsed["serena_tools"],
@@ -914,6 +1010,8 @@ def main() -> int:
         agg["wall_clock_p99_ms"] = _percentile_int(agg["wall_clock_samples_ms"], 99)
         agg.pop("wall_clock_samples_ms", None)
         agg["or_phases"] = {p: dict(v) for p, v in agg["or_phases"].items()}
+        agg["claude_cost_usd"] = round(agg["claude_cost_usd"], 6)
+        agg["claude_models"] = {m: dict(v) for m, v in agg["claude_models"].items()}
         agg["semble_targets"] = {p: dict(v) for p, v in agg["semble_targets"].items()}
         agg["serena_targets"] = {p: dict(v) for p, v in agg["serena_targets"].items()}
         agg["serena_tools"] = {p: dict(v) for p, v in agg["serena_tools"].items()}
@@ -944,6 +1042,20 @@ def main() -> int:
             f"{fmt_ms(a['wall_clock_p99_ms'])} | {fmt(a['break_glass_count'])} | "
             f"{fmt(a['context_budget_warn_count'])} |"
         )
+
+    claude_workflows = [wf for wf, a in per_wf.items() if a["claude_calls"]]
+    if claude_workflows:
+        print("\n## Claude engine usage\n")
+        print("| Workflow | claude_calls | input | output | cache_write | cache_read | cost_usd |")
+        print("|---|---:|---:|---:|---:|---:|---:|")
+        for wf in claude_workflows:
+            a = per_wf[wf]
+            print(
+                f"| {wf} | {fmt(a['claude_calls'])} | {fmt(a['claude_input_tokens'])} | "
+                f"{fmt(a['claude_output_tokens'])} | {fmt(a['claude_cache_write_tokens'])} | "
+                f"{fmt(a['claude_cache_read_tokens'])} | {a['claude_cost_usd']:.4f} |"
+            )
+        print()
 
     # OpenRouter phase breakdown (review_autofix only emits phases)
     or_workflows = [wf for wf, a in per_wf.items() if a["or_phases"]]

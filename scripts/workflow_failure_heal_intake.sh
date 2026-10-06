@@ -180,6 +180,7 @@ SOURCE_GEN="$(_pf '.source_gen // ""')"
 SOURCE_ROOT="$(_pf '.source_root // ""')"
 FAILURE_REASON="$(_pf '.failure_reason // ""')"
 FAILURE_STREAK="$(_pf '.failure_streak // ""')"
+PAYLOAD_FAILURE_FINGERPRINT="$(_pf '.failure_fingerprint // ""')"
 FAILURE_EVIDENCE_FILE="${RUNTIME_DIR}/failure_evidence.txt"
 _pf '.failure_evidence // ""' > "${FAILURE_EVIDENCE_FILE}"
 PAYLOAD_BASE_BRANCH="$(_pf '.base_branch // ""')"
@@ -283,8 +284,17 @@ if [ "${SOURCE_KIND}" = "autofix_failure" ]; then
 	# evidence identify the failure; the job logs still go to the model below.
 	[ -n "${PAYLOAD_WORKFLOW_NAME}" ] && FIRST_WORKFLOW_NAME="${PAYLOAD_WORKFLOW_NAME}"
 	FIRST_FAILING_STEP="autofix:${FAILURE_REASON:-unknown}"
-	if [ -s "${FAILURE_EVIDENCE_FILE}" ]; then
-		SIGNATURE="$(python3 "${HEAL_PY}" error-signature --log-file "${FAILURE_EVIDENCE_FILE}" 2>/dev/null || echo "no-error-lines")"
+	# The reporter's own header lines are not evidence: its `flags:` line
+	# matched the signature patterns on every report, so unrelated failures
+	# shared one fingerprint and lineage (PR #5892 escalated at generation 4).
+	# An identical_failure_cap report's evidence is the gate's marker data,
+	# which matches no signature pattern, so every cap report would share
+	# `no-error-lines`; its validated failure_fingerprint (the repeated
+	# failure's review-side fp) names the failure instead.
+	if [ "${FAILURE_REASON}" = "identical_failure_cap" ] && [[ "${PAYLOAD_FAILURE_FINGERPRINT}" =~ ^[0-9a-f]{64}$ ]]; then
+		SIGNATURE="autofix-fp:${PAYLOAD_FAILURE_FINGERPRINT}"
+	elif [ -s "${FAILURE_EVIDENCE_FILE}" ]; then
+		SIGNATURE="$(python3 "${HEAL_PY}" error-signature --strip-autofix-header --log-file "${FAILURE_EVIDENCE_FILE}" 2>/dev/null || echo "no-error-lines")"
 	else
 		SIGNATURE="autofix:${FAILURE_REASON:-unknown}"
 	fi
@@ -375,6 +385,12 @@ case "${ACTION}" in
 		if [[ "${PRIOR_ISSUE}" =~ ^[0-9]+$ ]]; then
 			ensure_label_exists "${ESCALATED_LABEL}" "${PRIOR_REPO}" || true
 			gh_retry gh issue edit "${PRIOR_ISSUE}" --repo "${PRIOR_REPO}" --add-label "${ESCALATED_LABEL}" >/dev/null 2>&1 || log "warn escalation_label_failed issue=${PRIOR_ISSUE} repo=${PRIOR_REPO}"
+		elif [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]] && [ -n "${SOURCE_REPO}" ]; then
+			# No prior heal issue to mark: label the failure report itself so
+			# the unblock scan (replace-claude-sessions plan Phase 7) picks the
+			# stopped chain up instead of it ending in a Telegram alert only.
+			ensure_label_exists "${ESCALATED_LABEL}" "${SOURCE_REPO}" || true
+			gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${SOURCE_REPO}" --add-label "${ESCALATED_LABEL}" >/dev/null 2>&1 || log "warn escalation_label_failed issue=${ISSUE_NUMBER} repo=${SOURCE_REPO}"
 		fi
 		log "escalate reason=lineage_cap gen=${GEN} max=${MAX_DEPTH} root=${ROOT} fp=${FP} source=${SOURCE_LABEL} prior_issue=${PRIOR_ISSUE:-none} prior_repo=${PRIOR_REPO}"
 		tg_send_msg "Workflow failure heal hit the lineage cap (generation ${GEN} > ${MAX_DEPTH}) for ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}'). The auto-heal chain has been stopped; a human should look at this."$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}"$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
@@ -667,9 +683,21 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 	fi
 } > "${PROMPT_FILE}"
 
+# The failed-run logs, issue and comment excerpts are untrusted, so the
+# agent runs in the credential-free, network-isolated container
+# (scripts/codex_isolated_exec.sh, read-only): beyond the env -u below it
+# never holds the OpenRouter key or a checkout's .git. The two source
+# worktrees the prompt names are mounted read-only at their own paths.
+heal_isolated_args=(run --mode read-only)
+for heal_include_dir in "${HEAL_SOURCE_DIR}" "${HEAL_BRANCH_TIP_DIR}"; do
+	if [ -d "${heal_include_dir}" ]; then
+		heal_isolated_args+=(--include "${heal_include_dir}")
+	fi
+done
 if command -v codex >/dev/null 2>&1; then
 	if env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID \
-		codex --ask-for-approval never \
+		bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex_isolated_exec.sh" "${heal_isolated_args[@]}" -- \
+		--ask-for-approval never \
 		-c model_verbosity="${MODEL_VERBOSITY:-low}" \
 		-c include_apply_patch_tool=false \
 		-c 'shell_environment_policy.ignore_default_excludes=false' \

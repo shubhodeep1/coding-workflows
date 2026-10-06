@@ -253,15 +253,16 @@ jobs:
           }
 
           BRANCH="auto/forward-merge-stable-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          # Exported for the "Dispatch AI review for the fallback PR" step:
-          # dispatching internal-review.yml on this branch (instead of the
-          # default branch) keys the resolver run to the PR's head branch,
-          # which is how the orchestrator poller's _has_active_autofix_run
-          # and review_autofix_sweep.yml's snapshot detect an active run.
-          # A default-branch-keyed resolver run is invisible to both, so
-          # they duplicate-dispatch against it every cycle (PR #3895
-          # incident: 10 duplicate dispatches and 6+ duplicate Telegram
-          # conflict warnings while the real resolver ran on main's ref).
+          # Exported for the "Dispatch AI review for the fallback PR" step,
+          # which logs it. That step dispatches from the default branch
+          # (issue #4701), and internal-review.yml names the run
+          # "Internal: AI Review & Autofix [pr:<N>]", which is how the
+          # orchestrator poller's _has_active_autofix_run and
+          # review_autofix_sweep.yml's snapshot detect it. Before run names,
+          # a default-branch resolver run was invisible to both, and they
+          # duplicate-dispatched against it every cycle (PR #3895 incident:
+          # 10 duplicate dispatches and 6+ duplicate Telegram conflict
+          # warnings while the real resolver ran on main's ref).
           echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
 
           # The merge-strategy warning is identical on both paths and
@@ -415,20 +416,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Dispatch on the fallback PR's head branch so the resolver run
-          # is keyed to that branch and visible to the poller/sweep
-          # active-run guards (see the branch output note in the fallback
-          # step). The branch always exists here — the fallback step just
-          # pushed it — and internal-review.yml exists on it because the
-          # branch is cut from stable. Fall back to the default branch if
-          # the output is somehow empty, matching the old behaviour.
+          # Dispatch from the default branch, never from the fallback
+          # branch (security, issue #4701). The branch is cut by this
+          # workflow from stable and main, but any writer can push to it
+          # between the fallback push and this dispatch, and a dispatch at
+          # that branch would run its copy of internal-review.yml
+          # with secrets: inherit (the finding issue #4618 fixed in the
+          # sweep). review_autofix.yml checks out the PR head from the PR's
+          # metadata, and the default branch's internal-review.yml names
+          # the run for its PR, so the poller and sweep active-run guards
+          # still see it. Only a validated PR number is passed.
+          if ! [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::warning::Invalid fallback PR number '${PR_NUMBER}'; not dispatching internal-review.yml. The orchestrator poller will pick the PR up on its next cycle."
+            exit 0
+          fi
           dispatch_args=(-f "pr_number=${PR_NUMBER}"
             -f "allow_workflow_edits=${ALLOW_WORKFLOW_EDITS}")
-          if [ -n "${HEAD_BRANCH:-}" ]; then
-            dispatch_args+=(--ref "${HEAD_BRANCH}")
-          fi
           if gh workflow run internal-review.yml "${dispatch_args[@]}"; then
-            echo "Dispatched internal-review.yml for PR #${PR_NUMBER} (ref=${HEAD_BRANCH:-<default branch>})"
+            echo "Dispatched internal-review.yml for PR #${PR_NUMBER} from the default branch (head=${HEAD_BRANCH:-<unknown>})"
           else
             echo "::warning::Failed to dispatch internal-review.yml for PR #${PR_NUMBER}; the orchestrator poller will pick the PR up on its next cycle."
           fi

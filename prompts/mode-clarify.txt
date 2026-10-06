@@ -18,11 +18,20 @@ Rules:
 - Do not ask style/preference questions when a safe default can be inferred.
 - Batch all blocking questions in one pass. Soft cap: 20 questions
   (highest-impact first).
-- If a required input is a specific scalar value the model cannot derive or
-  look up — a private credential, a not-yet-existing commit SHA, a branch
-  name not yet decided, or an auth-walled/private URL whose contents are
-  not public — emit exactly `BLOCKED: <short reason>` instead of `Q<ID>`
-  choices. Public 3rd-party documentation is NOT a BLOCKED trigger.
+- Credentials and setup never block. A private credential, token, account,
+  identity or other operator-provisioned resource is carried forward as a
+  placeholder: an UPPER_SNAKE_CASE secret or variable the code reads with
+  no default, skipping or failing closed while it is unset. Do not ask for
+  its value and do not emit BLOCKED for it; when how to use the
+  placeholder is a real design choice, ask that and mark the option that
+  ships the placeholder (RECOMMENDED). Likewise choose a not-yet-decided
+  branch name from the repository's naming conventions, and refer to a
+  commit that does not exist yet symbolically (for example "the merge
+  commit of the dependency PR") instead of blocking on it.
+- If a required input is the content of an auth-walled or private URL the
+  task depends on, and that content is not in the repository or the issue,
+  emit exactly `BLOCKED: <short reason>` instead of `Q<ID>` choices. Public
+  3rd-party documentation is NOT a BLOCKED trigger.
 - Web search IS available (the `web_search` tool is enabled by the codex
   config — `scripts/write_codex_config.sh` defaults `--web-search live`).
   If external APIs/services are involved, fetch their official public docs
@@ -31,11 +40,13 @@ Rules:
   signature scheme, and payload shapes. Only ask (rather than fetch) when
   the docs are private/auth-walled or genuinely unavailable.
 - Do not write code or propose solutions.
-- The responder is an autonomous LLM with repo access only — no database,
-  no external APIs, no production systems. Do not ask questions whose only
-  valid answer is data from outside the repo (production user IDs, runtime
-  metrics, operator credentials, external service responses). The responder
-  can derive and synthesize from code.
+- The responder is an autonomous LLM with repo access plus the GitHub state
+  of the PRs, issues, branches and runs the issue references — no database,
+  no other external APIs, no production systems. Do not ask questions whose
+  only valid answer is data from outside the repo (production user IDs,
+  runtime metrics, operator credentials, external service responses). The
+  responder can derive and synthesize from code, and check whether a
+  referenced PR merged or a referenced run passed.
 - If a task requires broader external data that is not one of the explicit
   `BLOCKED:` scalar cases above and cannot be derived from the repo (for
   example production user IDs, runtime metrics, or external service

@@ -1,0 +1,36 @@
+name: Claude pool token
+description: |
+  Fetch the Claude account pool for this job from the claude-pool-broker
+  Worker with the job's GitHub OIDC token, probe each account's usage, and
+  write the accounts (least used under the gate first) to
+  $RUNNER_TEMP/claude-pool for scripts/ai_engine.sh. Never fails the job:
+  any problem is available=false with a reason, and the roles run codex
+  (plan D1). The job needs `permissions: id-token: write`, and the Claude
+  Code CLI on PATH (.github/actions/install-claude) unless probe is false.
+  The post step deletes every token file.
+
+inputs:
+  config_path:
+    description: claude_engine.json to read. Empty uses the copy shipped with this action.
+    required: false
+    default: ""
+  probe:
+    description: "`false` skips the Haiku probes and keeps the broker's order."
+    required: false
+    default: "true"
+
+outputs:
+  available:
+    description: "`true` when at least one account is usable."
+  reason:
+    description: Why (selected, probe_skipped, broker_not_configured, oidc_unavailable, broker_refused_<code>, all_gated, …).
+  accounts:
+    description: Number of usable accounts.
+  pool_dir:
+    description: The pool directory (order, token, tokens/<NAME>).
+
+runs:
+  using: node24
+  main: main.js
+  post: post.js
+  post-if: always()

@@ -26,6 +26,9 @@ env:
   # primary slug (or clear it) to disable the switch.
   MODEL_EDITOR_FALLBACK: ${{ vars.WORKFLOW_EDITOR_FALLBACK_MODEL || 'openai/gpt-5.6-sol' }}
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_IMPLEMENT || 'high' }}
+  # Codex version baked into the isolated agent image
+  # (scripts/codex_isolated_exec.sh); matches the host install below.
+  CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
   REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
   SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
@@ -183,11 +186,6 @@ jobs:
           if [ "${ISSUE_STATE}" = "closed" ]; then
             echo "Issue #${ISSUE_NUMBER} is closed. Skipping implementation steps."
             echo "AI_PHASE_GATE_V1 phase=implement gate=phase_precheck reason=issue_closed outcome=skip issue=${ISSUE_NUMBER}"
-            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
-          elif printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:claude") != null and index("ai:codex") == null' >/dev/null; then
-            # Claimed by the Claude issue implementer (scripts/claude_issue_route.py).
-            echo "Issue #${ISSUE_NUMBER} is claimed by the Claude issue implementer (ai:claude). Skipping implementation steps."
-            echo "AI_PHASE_GATE_V1 phase=implement gate=phase_precheck reason=claude_routed outcome=skip issue=${ISSUE_NUMBER}"
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
           elif printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementing") != null' >/dev/null; then
             echo "Issue #${ISSUE_NUMBER} already has ai:implementing label. Another implement run is in progress. Skipping."
@@ -442,6 +440,9 @@ jobs:
         id: refctx
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          RETARGET_MERGED_BASE_ENABLED: ${{ vars.RETARGET_MERGED_BASE_ENABLED || 'true' }}
+          RETARGET_MERGED_BASE_MAX_HOPS: ${{ vars.RETARGET_MERGED_BASE_MAX_HOPS || '3' }}
+          RETARGET_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           issue_number="${ISSUE_NUMBER:-}"
@@ -506,6 +507,18 @@ jobs:
             GH_TOKEN="${GH_TOKEN}" \
             bash "${resolver_script}"
           })"; then
+            # Port P6 (replace-claude-sessions plan, Phase 8d): an integration
+            # branch whose own PR already merged (and whose tip is still that
+            # PR's head) is finished, so new work targets that PR's base.
+            # The helper ships next to the resolver; an older staged source
+            # without it keeps the branch unchanged. Fail-open by design.
+            retarget_helper="$(dirname "${resolver_script}")/retarget_merged_base.sh"
+            if [ -n "${integration_branch}" ] && [ -n "${RETARGET_DEFAULT_BRANCH}" ] && [ -f "${retarget_helper}" ]; then
+              retarget_branch="$(GH_TOKEN="${GH_TOKEN}" bash "${retarget_helper}" resolve "${{ github.repository }}" "${integration_branch}" "${RETARGET_DEFAULT_BRANCH}")" || retarget_branch=""
+              if [ -n "${retarget_branch}" ]; then
+                integration_branch="${retarget_branch}"
+              fi
+            fi
             echo "ref=${integration_branch}" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::Canonical integration resolver failed; falling back to default branch."
@@ -1014,7 +1027,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh lint_pr_body_auto_close.py implement_staged_support_workspace.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh unblock_ledger.py targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh codex_isolated_exec.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py claude_anthropic_relay.py security_dependency.py auto_decisions.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -1029,6 +1042,18 @@ jobs:
             # Intentionally NOT adding scripts/${f} to FETCHED_MANIFEST —
             # see the persistence note above the loop.
           done
+
+          src=".codex-workflow-src/scripts/claude_settings.json.tmpl"
+          if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/claude_settings.json.tmpl" ]; then
+            src=".codex-workflow-src-main/scripts/claude_settings.json.tmpl"
+          fi
+          if [ ! -f "${src}" ]; then
+            echo "::error::Missing required Claude settings template in ${wf_source}@${SCRIPT_REF}"
+            exit 1
+          fi
+          install -m 0644 "${src}" scripts/claude_settings.json.tmpl
+          _fetched_scripts+=(claude_settings.json.tmpl)
+          _staged_support_installed_paths+=(scripts/claude_settings.json.tmpl)
 
           # The guard rejection handler runs after implement_commit_changes.sh,
           # whose fetched-manifest cleanup can remove repository support files.
@@ -1319,15 +1344,6 @@ jobs:
               printf '%s\n' "${_staged_support_path}" >> "${STAGED_SUPPORT_LEDGER}"
               _staged_support_count=$((_staged_support_count + 1))
             done
-            IMPLEMENT_STAGED_SUPPORT_RUN_DIR="${RUNTIME_DIR}/staged_support_run/scripts"
-            rm -rf -- "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"
-            mkdir -p -- "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"
-            for _staged_support_runtime_script in "${_fetched_scripts[@]}"; do
-              install -m 0755 "scripts/${_staged_support_runtime_script}" "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/${_staged_support_runtime_script}"
-            done
-            if [ -f scripts/codex_model_catalog.json ]; then
-              install -m 0644 scripts/codex_model_catalog.json "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/codex_model_catalog.json"
-            fi
             echo "IMPLEMENT_STAGED_SUPPORT_LEDGER ref=${SCRIPT_REF} overwritten_tracked_files=${_staged_support_count} ledger=${STAGED_SUPPORT_LEDGER}"
             if [ "${_staged_support_count}" -gt 0 ]; then
               sed 's/^/  staged over: /' "${STAGED_SUPPORT_LEDGER}"
@@ -1336,9 +1352,40 @@ jobs:
               echo "STAGED_SUPPORT_LEDGER=${STAGED_SUPPORT_LEDGER}"
               echo "STAGED_SUPPORT_BASE_DIR=${STAGED_SUPPORT_BASE_DIR}"
               echo "STAGED_SUPPORT_EDITOR_HEAD_LEDGER=${RUNTIME_DIR}/staged_support_editor_head.txt"
-              echo "IMPLEMENT_STAGED_SUPPORT_RUN_DIR=${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"
             } >> "$GITHUB_ENV"
           fi
+
+          # Trusted run copy of every staged support script, in every repo
+          # (not only this one). It lives under RUNTIME_DIR, outside the
+          # workspace and outside every isolated-agent mount, so files the
+          # Codex agent writes into the workspace (copied back by
+          # scripts/codex_isolated_exec.sh) are never executed by this job's
+          # privileged code: the Codex step, the repair step and the steps
+          # after them run their helpers from here.
+          IMPLEMENT_STAGED_SUPPORT_RUN_DIR="${RUNTIME_DIR}/staged_support_run/scripts"
+          rm -rf -- "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"
+          mkdir -p -- "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"
+          for _staged_support_runtime_script in "${_fetched_scripts[@]}"; do
+            install -m 0755 "scripts/${_staged_support_runtime_script}" "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/${_staged_support_runtime_script}"
+          done
+          if [ -f scripts/codex_model_catalog.json ]; then
+            install -m 0644 scripts/codex_model_catalog.json "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/codex_model_catalog.json"
+          fi
+          # Workspace hooks that run after the editor (after_run) come from
+          # this pre-editor copy: run_workspace_hook.sh resolves implement
+          # hooks next to its own directory, so running it from the trusted
+          # run dir never executes a hook file the agent changed. Regular
+          # files only; a symlink could point back into the workspace.
+          _staged_support_hooks_src=".github/ai/workspace_hooks/implement"
+          _staged_support_hooks_dest="${RUNTIME_DIR}/staged_support_run/.github/ai/workspace_hooks/implement"
+          rm -rf -- "${RUNTIME_DIR}/staged_support_run/.github"
+          if [ -d "${_staged_support_hooks_src}" ] && [ ! -L "${_staged_support_hooks_src}" ]; then
+            while IFS= read -r -d '' _staged_support_hook_file; do
+              _staged_support_hook_file="${_staged_support_hook_file#./}"
+              install -D -m 0755 "${_staged_support_hooks_src}/${_staged_support_hook_file}" "${_staged_support_hooks_dest}/${_staged_support_hook_file}"
+            done < <(cd "${_staged_support_hooks_src}" && find . -type f -print0)
+          fi
+          echo "IMPLEMENT_STAGED_SUPPORT_RUN_DIR=${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}" >> "$GITHUB_ENV"
 
       - name: Probe Codex thread-reuse support
         if: env.SKIP_IMPLEMENT != 'true'
@@ -1592,23 +1639,35 @@ jobs:
 
           printf '%s\n' "${ISSUE_BODY}" > "${ISSUE_BODY_FILE}"
 
-          # TRUST BOUNDARY: ISSUE_BODY is user-controlled content from the GitHub
-          # issue. It is passed via heredoc (not shell expansion) to prevent injection
-          # into shell commands. Downstream consumers must treat it as untrusted input.
+          # TRUST BOUNDARY (#6504): issue text can close a fixed GITHUB_ENV
+          # delimiter and inject guard settings. Keep the body only in its data
+          # file; frame title and scope label with checked random delimiters.
+          write_untrusted_multiline_env() {
+            local key="$1" value="$2" delim hex
+            if ! hex="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"; then
+              echo "::error::Unable to create GITHUB_ENV delimiter for ${key}."
+              exit 1
+            fi
+            if [[ ! "${hex}" =~ ^[0-9a-f]{32}$ ]]; then
+              echo "::error::Unable to create GITHUB_ENV delimiter for ${key}."
+              exit 1
+            fi
+            delim="ghadelimiter_${hex}"
+            case "${value}" in
+              *"${delim}"*)
+                echo "::error::GITHUB_ENV delimiter collision for ${key}."
+                exit 1
+                ;;
+            esac
+            printf '%s<<%s\n%s\n%s\n' "${key}" "${delim}" "${value}" "${delim}" >> "$GITHUB_ENV"
+          }
           {
             echo "ISSUE_NUMBER=${ISSUE_NUMBER_JSON}"
             echo "ISSUE_URL=${ISSUE_URL_JSON}"
             echo "PR_BASE_BRANCH=${PR_BASE_BRANCH}"
-            echo 'ISSUE_SCOPE_LOCK_GLOB<<EOF'
-            echo "${ISSUE_SCOPE_LOCK_GLOB}"
-            echo 'EOF'
-            echo 'ISSUE_TITLE<<EOF'
-            echo "${ISSUE_TITLE}"
-            echo 'EOF'
-            echo 'ISSUE_BODY<<EOF'
-            echo "${ISSUE_BODY}"
-            echo 'EOF'
           } >> "$GITHUB_ENV"
+          write_untrusted_multiline_env ISSUE_SCOPE_LOCK_GLOB "${ISSUE_SCOPE_LOCK_GLOB}"
+          write_untrusted_multiline_env ISSUE_TITLE "${ISSUE_TITLE}"
 
       - name: Detect smoke test and silence Telegram alerts
         if: env.SKIP_IMPLEMENT != 'true'
@@ -1684,7 +1743,7 @@ jobs:
             # falls back to the workflow-level default MODEL_EDITOR
             # rather than failing the implement.
             if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test alt-model\]'; then
-              alt_model="$(printf '%s' "${ISSUE_BODY}" | grep -oE 'this run uses `[A-Za-z0-9_./-]+` as the editor model override' | head -1 | sed -E 's/.*`([^`]+)`.*/\1/' || true)"
+              alt_model="$(grep -oE 'this run uses `[A-Za-z0-9_./-]+` as the editor model override' "${ISSUE_BODY_FILE:-/dev/null}" 2>/dev/null | head -1 | sed -E 's/.*`([^`]+)`.*/\1/' || true)"
               if [ -n "${alt_model:-}" ] \
                   && [ "${#alt_model}" -le 128 ] \
                   && printf '%s' "${alt_model}" | grep -qE '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; then
@@ -1730,6 +1789,21 @@ jobs:
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
           source scripts/label_helpers.sh
+          # Recheck just before advancing the phase. /approved must not
+          # bypass a still-open security prerequisite or a failed API read.
+          DEPENDENCY_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" 2>/dev/null || true)"
+          if [ -z "${DEPENDENCY_META}" ]; then
+            echo "AI_PHASE_GATE_V1 phase=implement gate=security_dependency reason=metadata_unavailable outcome=skip issue=${ISSUE_NUMBER}"
+            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          printf '%s\n' "${DEPENDENCY_META}" > "${ISSUE_META_FILE}"
+          DEPENDENCY_VERDICT="$(python3 scripts/security_dependency.py security-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held"}')"
+          if [ "$(printf '%s' "${DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" = "held" ]; then
+            echo "AI_PHASE_GATE_V1 phase=implement gate=security_dependency reason=held outcome=skip issue=${ISSUE_NUMBER}"
+            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
           # Reuse the issue snapshot fetched in "Fetch issue metadata"
           # rather than re-hitting the API.  Falls back to a fresh API
           # call when the file is missing OR jq fails to parse it
@@ -1827,6 +1901,106 @@ jobs:
             exit 0
           fi
 
+      - name: Unblock judge bulk-delete override
+        # Q12 of docs/plans/replace-claude-sessions-with-cli-engine-plan.md:
+        # an `override_guard` verdict on ai:destructive-blocked leaves
+        # `<!-- ai:unblock:v1 ... verdict=override_guard ... override=bulk_delete -->`
+        # on the issue, posted by the pipeline's own login. The newest such
+        # marker that no `<!-- ai:unblock-override-used:v1 comment=<id> -->`
+        # has spent lifts the bulk-delete threshold for this run only (never
+        # for canonical workflow sources); it is spent right here, so it can
+        # never apply twice. Two API calls only when a marker is present.
+        if: env.SKIP_IMPLEMENT != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          if ! jq -e 'any(.[]?; (.body // "") | contains("override=bulk_delete -->"))' "${ISSUE_COMMENTS_FILE}" >/dev/null 2>&1; then
+            exit 0
+          fi
+          pipeline_login="$(gh api user --jq '.login' 2>/dev/null || true)"
+          if [ -z "${pipeline_login}" ]; then
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=login_unavailable"
+            exit 0
+          fi
+          override_comment_id="$(jq -r --arg login "${pipeline_login}" --arg issue "${ISSUE_NUMBER}" '
+            [.[] | select((.user.login // "") == $login)] as $mine
+            | ([$mine[] | (.body // "") | scan("<!-- ai:unblock-override-used:v1 comment=([0-9]+) -->") | .[0]]) as $used
+            | [$mine[]
+                | select(((.body // "") | split("\n") | map(select(test("\\S"))) | last // "" | rtrimstr("\r"))
+                    | test("^<!-- ai:unblock:v1 item=" + $issue + " stop=destructive-blocked fingerprint=[0-9a-f]{12} verdict=override_guard round=[1-9][0-9]* override=bulk_delete -->$"))
+                | select((.id | tostring) as $id | ($used | index($id)) == null)]
+            | last | .id // empty
+          ' "${ISSUE_COMMENTS_FILE}")"
+          if ! [[ "${override_comment_id}" =~ ^[0-9]+$ ]]; then
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=no_unspent_marker"
+            exit 0
+          fi
+          approved_deletions="$(jq -c --argjson id "${override_comment_id}" '
+            .[] | select(.id == $id) | (.body // "")
+            | capture("(?m)^Approved deletions: (?<paths>\\[[^\\r\\n]*\\])\\r?$").paths | fromjson
+            | select(type == "array" and length > 0 and all(.[]; type == "string"))
+          ' "${ISSUE_COMMENTS_FILE}" 2>/dev/null || true)"
+          if [ -z "${approved_deletions}" ]; then
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=approved_paths_unavailable"
+            exit 0
+          fi
+          rejection_run_id="$(jq -r --argjson id "${override_comment_id}" '
+            .[] | select(.id == $id) | (.body // "")
+            | capture("(?m)^Rejected run: (?<run>[1-9][0-9]*)\\r?$").run
+          ' "${ISSUE_COMMENTS_FILE}" 2>/dev/null || true)"
+          if ! [[ "${rejection_run_id}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=rejection_run_unbound"
+            exit 0
+          fi
+          # The issue/comments read above cannot prove a rejection happened.
+          # Fetch Actions provenance only for an unspent bulk-delete verdict.
+          rejection_artifacts="$(gh api "repos/${{ github.repository }}/actions/runs/${rejection_run_id}/artifacts?per_page=100" 2>/dev/null)" || {
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=rejection_snapshot_unverified"
+            exit 0
+          }
+          rejection_artifact="$(jq -ce --argjson run "${rejection_run_id}" --argjson id "${override_comment_id}" --arg name "destructive-rejection-issue-${ISSUE_NUMBER}" \
+            --slurpfile comments "${ISSUE_COMMENTS_FILE}" '
+            ($comments[0][] | select(.id == $id) | .created_at) as $approved_at
+            | [.artifacts[]? | select(.workflow_run.id == $run and .expired == false
+              and .name == $name and (.created_at | type == "string") and .created_at <= $approved_at)]
+            | sort_by(.created_at) | last // empty
+          ' <<< "${rejection_artifacts}" 2>/dev/null || true)"
+          rejection_artifact_id="$(jq -r '.id // empty' <<< "${rejection_artifact}" 2>/dev/null || true)"
+          if ! [[ "${rejection_artifact_id}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=rejection_snapshot_unverified"
+            exit 0
+          fi
+          rejection_dir="${RUNTIME_DIR}/destructive_rejection_spend"
+          mkdir -p "${rejection_dir}"
+          printf '%s\n' "${rejection_artifact}" > "${rejection_dir}/artifact.json"
+          if ! gh api "repos/${{ github.repository }}/actions/runs/${rejection_run_id}" > "${rejection_dir}/run.json" \
+            || ! gh api "repos/${{ github.repository }}/actions/artifacts/${rejection_artifact_id}/zip" > "${rejection_dir}/snapshot.zip"; then
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=rejection_snapshot_unverified"
+            exit 0
+          fi
+          if ! PYTHONDONTWRITEBYTECODE=1 python3 scripts/unblock_ledger.py rejection-snapshot \
+              --run-file "${rejection_dir}/run.json" --artifact-file "${rejection_dir}/artifact.json" \
+              --zip-file "${rejection_dir}/snapshot.zip" --item "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+              --approved-json "${approved_deletions}" > "${rejection_dir}/verified.json"; then
+            if jq -e '.error == "approved_paths_not_rejected"' "${rejection_dir}/verified.json" >/dev/null 2>&1; then
+              echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=approved_paths_not_rejected"
+            else
+              echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=rejection_snapshot_unverified"
+            fi
+            exit 0
+          fi
+          if ! gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="This run uses the unblock judge's bulk-delete override once.
+
+          <!-- ai:unblock-override-used:v1 comment=${override_comment_id} -->" >/dev/null; then
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=spend_failed"
+            exit 0
+          fi
+          echo "UNBLOCK_BULK_DELETE_OVERRIDE=true" >> "$GITHUB_ENV"
+          echo "UNBLOCK_BULK_DELETE_PATHS=${approved_deletions}" >> "$GITHUB_ENV"
+          echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=enabled marker=${override_comment_id}"
+
       - name: Record implementation run start event
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
@@ -1904,9 +2078,14 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
           set -euo pipefail
+          if [ ! -f "${ISSUE_BODY_FILE:-}" ]; then
+            echo "::error::ISSUE_BODY_FILE is not a regular file." >&2
+            exit 1
+          fi
           {
             echo "ISSUE DESCRIPTION"
-            printf '%s\n\n' "${ISSUE_BODY}"
+            cat "${ISSUE_BODY_FILE}"
+            echo
             echo "CLARIFICATION ANSWERS"
             cat "${CLARIFICATION_ANSWERS_FILE}"
             echo
@@ -1990,6 +2169,24 @@ jobs:
             --issue-title "${ISSUE_TITLE_JSON}" \
             --issue-body-file "${ISSUE_BODY_FILE}"
 
+      - name: Recheck security dependency before edits
+        if: env.SKIP_IMPLEMENT != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh
+          if ! gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"; then
+            echo "AI_PHASE_GATE_V1 phase=implement gate=security_dependency reason=metadata_unavailable outcome=skip issue=${ISSUE_NUMBER}"
+            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          verdict="$(python3 scripts/security_dependency.py security-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held"}')"
+          if [ "$(printf '%s' "${verdict}" | jq -r '.status // "held"' 2>/dev/null)" = "held" ]; then
+            echo "AI_PHASE_GATE_V1 phase=implement gate=security_dependency reason=held_before_edits outcome=skip issue=${ISSUE_NUMBER}"
+            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+          fi
+
       - name: Run workspace before_run hook
         if: env.SKIP_IMPLEMENT != 'true'
         id: workspace_before_run_hook
@@ -1997,11 +2194,58 @@ jobs:
           set -euo pipefail
           bash scripts/run_workspace_hook.sh implement before_run
 
+      # Claude engine (replace-claude-sessions plan Phase 5b): IMPLEMENT,
+      # IMPLEMENT_REPAIR and IMPLEMENT_DIAGNOSE each resolve their engine from
+      # the issue's labels, AI_ENGINE_<ROLE> and AI_ENGINE, exported to the
+      # job as AI_ENGINE_RESOLVED_<ROLE>. The CLI and the pool credential are
+      # fetched only when one of them is Claude; a role that cannot start on
+      # Claude falls back to its unchanged codex call (exit 75, plan D1).
+      - name: Resolve AI engine
+        if: env.SKIP_IMPLEMENT != 'true'
+        id: ai_engine
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_IMPLEMENT: ${{ vars.AI_ENGINE_IMPLEMENT || '' }}
+          AI_ENGINE_IMPLEMENT_REPAIR: ${{ vars.AI_ENGINE_IMPLEMENT_REPAIR || '' }}
+          AI_ENGINE_IMPLEMENT_DIAGNOSE: ${{ vars.AI_ENGINE_IMPLEMENT_DIAGNOSE || '' }}
+          AI_ENGINE_MODEL_HINT: ${{ env.MODEL_EDITOR }}
+          AI_ENGINE_EFFORT_HINT: ${{ env.MODEL_REASONING_EFFORT }}
+        run: |
+          set -euo pipefail
+          any_claude="false"
+          for role in IMPLEMENT IMPLEMENT_REPAIR IMPLEMENT_DIAGNOSE; do
+            engine="codex"
+            if [ -f scripts/ai_engine.sh ]; then
+              # shellcheck disable=SC1091
+              source scripts/ai_engine.sh
+              engine="$(ai_engine_for_role "${role}" || echo codex)"
+            fi
+            [ "${engine}" = "claude" ] || engine="codex"
+            [ "${engine}" = "claude" ] && any_claude="true"
+            echo "AI_ENGINE_RESOLVED_${role}=${engine}" >> "$GITHUB_ENV"
+          done
+          echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: env.SKIP_IMPLEMENT != 'true' && steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/install-claude
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: env.SKIP_IMPLEMENT != 'true' && steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/claude-pool-token
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
       - name: Run Codex implementation
         if: env.SKIP_IMPLEMENT != 'true'
         id: implement_run
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          DEPENDENCY_PROXY_ALLOWED_HOSTS: ${{ vars.DEPENDENCY_PROXY_ALLOWED_HOSTS || '' }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_IMPLEMENT || '50' }}
           # Legacy idle-time knob retained for backward compatibility; when a
           # repo still only sets EDITOR_IDLE_TIMEOUT, the shared stall guard
@@ -2039,15 +2283,15 @@ jobs:
           # implementer immediately. Stripping invalid bytes before
           # piping is the cheapest insurance.
           # shellcheck source=/dev/null
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
 
           # shellcheck source=/dev/null
-          source scripts/transcript_archive.sh 2>/dev/null || true
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/transcript_archive.sh" 2>/dev/null || true
           if ! type archive_transcript >/dev/null 2>&1; then
             archive_transcript() { return 0; }
           fi
 
-          WATCHDOG_HELPERS="scripts/watchdog_helpers.sh"
+          WATCHDOG_HELPERS="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/watchdog_helpers.sh"
           if [ ! -f "${WATCHDOG_HELPERS}" ]; then
             echo "::error::Missing required support script ${WATCHDOG_HELPERS}"
             exit 1
@@ -2055,12 +2299,12 @@ jobs:
           # shellcheck source=/dev/null
           source "${WATCHDOG_HELPERS}"
 
-          CODEX_STALL_GUARD_HELPER="scripts/codex_stall_guard.sh"
+          CODEX_STALL_GUARD_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_stall_guard.sh"
           if [ ! -x "${CODEX_STALL_GUARD_HELPER}" ]; then
             echo "::error::Missing required support script ${CODEX_STALL_GUARD_HELPER}"
             exit 1
           fi
-          LEDGER_SUBSTATE_HELPER="scripts/ledger_emit_substate.sh"
+          LEDGER_SUBSTATE_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/ledger_emit_substate.sh"
 
           emit_implement_substate() {
             local phase_name="$1"
@@ -2167,7 +2411,11 @@ jobs:
           {{REFERENCE_SECURITY_MONEY_LENS}}
 
           Test verification:
-          - If `pytest` is not installed, install it via `pip install pytest`.
+          - You run without network access. The project's dependencies (and
+            pytest, when the repository configures it) were installed before
+            this run where possible. Do not try to install anything; if a test
+            runner or validator is unavailable, mark that validation
+            UNVERIFIED in your summary.
           - For `npm test`, treat "Missing script" errors as a pass; treat any
             other test failure as a real error.
 
@@ -2215,7 +2463,7 @@ jobs:
           TARGETED_FILES_CONTEXT_FILE="${RUNTIME_DIR}/targeted_files_context.txt"
           : > "${TARGETED_FILES_CONTEXT_FILE}"
           if [ -s "${PLAN_FILE}" ]; then
-            python3 scripts/targeted_file_context.py \
+            python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/targeted_file_context.py" \
               --plan-file "${PLAN_FILE}" \
               --repo-root "${WORKSPACE_PATH:-${GITHUB_WORKSPACE}}" \
               --semble-bin "$(command -v semble 2>/dev/null || true)" \
@@ -2227,13 +2475,12 @@ jobs:
               echo "::warning::targeted_file_context.py failed; continuing without targeted-context block"
           fi
 
+          # No Serena hints: the agent runs in the isolated container
+          # (scripts/codex_isolated_exec.sh), where no MCP server is
+          # configured, so a hint would only send it to tools that are not
+          # there. Semble results are unaffected: they are rendered into the
+          # prompt on the host.
           IMPLEMENT_SERENA_TOOL_HINTS=""
-          if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
-            IMPLEMENT_SERENA_TOOL_HINTS="$(printf '%s\n' \
-              'Serena hints:' \
-              '- Serena MCP is available in this run. Prefer Serena symbol lookup/navigation tools for discovery when they materially reduce shell reads (for example: activate_project, find_symbol, find_referencing_symbols, search_for_pattern).' \
-              '- Keep apply_patch as the primary write path for repository edits; use Serena for discovery/navigation, not as a replacement for minimal patches.')"
-          fi
 
           # Build prompt: static context + instructions + targeted file context +
           # dynamic implementation context, all inlined so the model doesn't
@@ -2246,7 +2493,7 @@ jobs:
             # Inject the configurable tool call budget before the static heredoc
             echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
             echo
-            SERENA_TOOL_HINTS="${IMPLEMENT_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
+            SERENA_TOOL_HINTS="${IMPLEMENT_SERENA_TOOL_HINTS}" bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/render_prompt.sh" "${PROMPT_TEMPLATE_FILE}"
             echo
             if [ -s "${TARGETED_FILES_CONTEXT_FILE}" ]; then
               cat "${TARGETED_FILES_CONTEXT_FILE}"
@@ -2544,7 +2791,30 @@ jobs:
           }
 
             # shellcheck source=/dev/null
-            source scripts/codex_thread_reuse.sh
+            source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh"
+
+            # Every attempt runs Codex in the credential-free, network-isolated
+            # container (scripts/codex_isolated_exec.sh): the agent never holds
+            # GH_PAT, the OpenRouter key or this checkout's .git, and model
+            # traffic goes through the host-side broker. Dependencies are
+            # installed once in a credential-free container with --network none
+            # through an allowlisted registry proxy. The helper and
+            # every script this step runs after the first attempt come from the
+            # trusted IMPLEMENT_STAGED_SUPPORT_RUN_DIR copy, never from the
+            # workspace the agent writes. Isolation failures fail the step;
+            # Codex is never run on the host.
+            CODEX_ISOLATED_EXEC="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}/codex_isolated_exec.sh"
+            if [ -z "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}" ] || [ ! -f "${CODEX_ISOLATED_EXEC}" ]; then
+              echo "::error::CODEX_ISOLATION trusted support copy missing (IMPLEMENT_STAGED_SUPPORT_RUN_DIR=${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-<unset>}); Codex is never run on the host."
+              exit 1
+            fi
+            if ! CODEX_ISOLATED_ROOT="$(bash "${CODEX_ISOLATED_EXEC}" prepare --workdir "$(pwd)" --deps)"; then
+              echo "::error::CODEX_ISOLATION sandbox preparation failed; Codex is never run on the host."
+              exit 1
+            fi
+            CODEX_ISOLATED_MODE="workspace"
+            export CODEX_ISOLATED_EXEC CODEX_ISOLATED_ROOT CODEX_ISOLATED_MODE
+            echo "CODEX_ISOLATED_IMPLEMENT_ROOT=${CODEX_ISOLATED_ROOT}" >> "$GITHUB_ENV"
 
             for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex implement attempt ${attempt}/${max_attempts}..."
@@ -2661,7 +2931,7 @@ jobs:
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${PROMPT_FILE_TO_USE}"
             fi
-            bash scripts/workspace_safety_check.sh
+            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/workspace_safety_check.sh"
             emit_implement_substate "implement" "implement" "LaunchingAgentProcess" "${attempt}" "${attempt_log_file}"
             emit_implement_substate "implement" "implement" "InitializingSession" "${attempt}" "${attempt_log_file}"
             emit_implement_substate "implement" "implement" "StreamingTurn" "${attempt}" "${attempt_log_file}"
@@ -2692,6 +2962,8 @@ jobs:
             # unsynced integration branch checks out an older conftest.py, so
             # the workflow side has to hold on its own.
             CODEX_THREAD_REUSE_STATE_KEY="implement" \
+              CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT:-codex}" \
+              CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT" \
               CODEX_THREAD_REUSE_PROMPT_FILE="${PROMPT_FILE_TO_USE}" \
               CODEX_THREAD_REUSE_OUTPUT_FILE="${CODEX_OUTPUT_FILE}" \
               CODEX_THREAD_REUSE_PHASE="implement" \
@@ -2703,7 +2975,7 @@ jobs:
               CODEX_THREAD_REUSE_STALL_GUARD_HELPER="${CODEX_STALL_GUARD_HELPER}" \
               CODEX_THREAD_REUSE_TIMEOUT_SECS="${attempt_wall}" \
               env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \
-              bash scripts/codex_thread_reuse.sh direct-run || cmd_rc=$?
+              bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run || cmd_rc=$?
 
             emit_implement_substate "implement" "implement" "Finishing" "${attempt}" "${attempt_log_file}"
 
@@ -3165,7 +3437,7 @@ jobs:
         if: always() && env.SKIP_IMPLEMENT != 'true' && steps.implement_run.outcome != 'skipped'
         run: |
           set -euo pipefail
-          bash scripts/run_workspace_hook.sh implement after_run
+          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/run_workspace_hook.sh" implement after_run
 
       - name: Write run summary
         if: env.SKIP_IMPLEMENT != 'true' && always()
@@ -3220,6 +3492,16 @@ jobs:
         # cleanup/exclusion rules, without mutating the real index/worktree.
         if: env.SKIP_IMPLEMENT != 'true'
         id: preflight_destructive_guard
+        # Step env overrides GITHUB_ENV so injected job values cannot weaken guards (#6504).
+        env:
+          ALLOW_BULK_DELETE: ${{ vars.ALLOW_BULK_DELETE || 'false' }}
+          BULK_DELETE_THRESHOLD: ${{ vars.BULK_DELETE_THRESHOLD || '3' }}
+          BULK_DELETE_THRESHOLD_MD: ${{ vars.BULK_DELETE_THRESHOLD_MD || '100' }}
+          ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
+          ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
+          SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}
         run: |
           set -euo pipefail
 
@@ -3345,6 +3627,7 @@ jobs:
             canonical_deletions="$(printf '%s\n' "${deleted_staged}" \
               | grep -E '^(agents\.md|ai_pipeline\.md|unattended_system_instructions\.md|CLAUDE\.md|prompts/|scripts/|\.github/ai/|\.github/scripts/)' \
               || true)"
+            unblock_protected_deletions="$(printf '%s\n' "${deleted_staged}" | grep -iE '^(\.github|\.claude|workflow-templates)(/|$)' || true)"
             total_deletions="$(printf '%s\n' "${deleted_staged}" | sed '/^$/d' | wc -l | tr -d ' ')"
             # Count non-.md deletions to decide whether the lenient
             # markdown-only threshold applies. Case-insensitive match so
@@ -3387,7 +3670,20 @@ jobs:
               exit 1
             fi
 
-            if [ "${total_deletions}" -gt "${effective_threshold}" ] && [ "${ALLOW_BULK_DELETE:-false}" != "true" ]; then
+            # The unblock judge's one-shot override (plan Phase 7, Q12) lifts the
+            # bulk-delete threshold for this run only, and never when a canonical
+            # workflow source or protected automation path is among the deletions.
+            unblock_bulk_override_applies="false"
+            if [ "${UNBLOCK_BULK_DELETE_OVERRIDE:-false}" = "true" ] && [ -z "${canonical_deletions}" ] &&
+              [ -z "${unblock_protected_deletions}" ] &&
+              printf '%s\n' "${deleted_staged}" | jq -R -s -e --argjson paths "${UNBLOCK_BULK_DELETE_PATHS:-null}" 'all(split("\n")[] | select(length > 0); . as $path | $paths | index($path) != null)' >/dev/null 2>&1; then
+              unblock_bulk_override_applies="true"
+              echo "UNBLOCK_BULK_DELETE_OVERRIDE applied deletions=${total_deletions}"
+            fi
+            if [ "${UNBLOCK_BULK_DELETE_OVERRIDE:-false}" = "true" ] && [ -n "${unblock_protected_deletions}" ]; then
+              echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=protected_automation_paths"
+            fi
+            if [ "${total_deletions}" -gt "${effective_threshold}" ] && [ "${ALLOW_BULK_DELETE:-false}" != "true" ] && [ "${unblock_bulk_override_applies}" != "true" ]; then
               echo "::error::Refusing to commit: ${total_deletions} staged deletions exceeds ${threshold_label}=${effective_threshold} (non-md deletions=${non_md_count}) and ALLOW_BULK_DELETE is not 'true'."
               echo "Deletions blocked by bulk-delete threshold:"
               printf '%s\n' "${deleted_staged}" | sed 's/^/  - /'
@@ -3537,7 +3833,7 @@ jobs:
           if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ] && [ -w "${RUNTIME_DIR}" ]; then
             CAPTURE_FILE="${RUNTIME_DIR}/post_codex_validation_errors.txt"
           fi
-          CAPTURE_FILE="${CAPTURE_FILE}" RUNTIME_DIR="${RUNTIME_DIR}" bash scripts/validate_changed_files_syntax.sh
+          CAPTURE_FILE="${CAPTURE_FILE}" RUNTIME_DIR="${RUNTIME_DIR}" bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/validate_changed_files_syntax.sh"
 
       - name: Attempt post-Codex syntax repair
         if: env.SKIP_IMPLEMENT != 'true' && steps.validate_syntax_changed_files.outcome == 'failure'
@@ -3545,6 +3841,7 @@ jobs:
         continue-on-error: true
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          DEPENDENCY_PROXY_ALLOWED_HOSTS: ${{ vars.DEPENDENCY_PROXY_ALLOWED_HOSTS || '' }}
         run: |
           set -euo pipefail
           echo "repaired=false" >> "$GITHUB_OUTPUT"
@@ -3552,11 +3849,30 @@ jobs:
           # Source sanitize_codex_prompt_file (best-effort) so the
           # repair-prompt pipe to codex strips invalid UTF-8 first.
           # shellcheck source=/dev/null
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
 
           REPAIR_PROMPT_TEMPLATE="prompts/mode-implement-repair.txt"
-          REPAIR_VALIDATOR_SCRIPT="scripts/validate_changed_files_syntax.sh"
-          LEDGER_SUBSTATE_HELPER="scripts/ledger_emit_substate.sh"
+          REPAIR_VALIDATOR_SCRIPT="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/validate_changed_files_syntax.sh"
+          LEDGER_SUBSTATE_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/ledger_emit_substate.sh"
+
+          # The repair agent runs in the same credential-free, network-isolated
+          # container as the implementation attempts (scripts/codex_isolated_exec.sh
+          # from the trusted IMPLEMENT_STAGED_SUPPORT_RUN_DIR copy), reusing the
+          # sandbox the implementation step prepared when it is still there.
+          CODEX_ISOLATED_EXEC="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}/codex_isolated_exec.sh"
+          if [ -z "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}" ] || [ ! -f "${CODEX_ISOLATED_EXEC}" ]; then
+            echo "::error::CODEX_ISOLATION trusted support copy missing (IMPLEMENT_STAGED_SUPPORT_RUN_DIR=${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-<unset>}); Codex is never run on the host."
+            exit 1
+          fi
+          CODEX_ISOLATED_ROOT="${CODEX_ISOLATED_IMPLEMENT_ROOT:-}"
+          if [ -z "${CODEX_ISOLATED_ROOT}" ] || [ ! -d "${CODEX_ISOLATED_ROOT}" ]; then
+            if ! CODEX_ISOLATED_ROOT="$(bash "${CODEX_ISOLATED_EXEC}" prepare --workdir "$(pwd)" --deps)"; then
+              echo "::error::CODEX_ISOLATION sandbox preparation failed; Codex is never run on the host."
+              exit 1
+            fi
+          fi
+          CODEX_ISOLATED_MODE="workspace"
+          export CODEX_ISOLATED_EXEC CODEX_ISOLATED_ROOT CODEX_ISOLATED_MODE
           emit_implement_substate() {
             local phase_name="$1"
             local mode_name="$2"
@@ -3687,15 +4003,14 @@ jobs:
             echo "Patched ~/.codex/config.toml: model_reasoning_effort=${REPAIR_REASONING} for repair phase."
           fi
 
+          # No Serena hints: the agent runs in the isolated container
+          # (scripts/codex_isolated_exec.sh), where no MCP server is
+          # configured, so a hint would only send it to tools that are not
+          # there. Semble results are unaffected: they are rendered into the
+          # prompt on the host.
           REPAIR_SERENA_TOOL_HINTS=""
-          if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
-            REPAIR_SERENA_TOOL_HINTS="$(printf '%s\n' \
-              'Serena hints:' \
-              '- Serena MCP is available in this run. Prefer Serena symbol lookup/navigation tools for discovery when they materially reduce shell reads (for example: activate_project, find_symbol, find_referencing_symbols, search_for_pattern).' \
-              '- Keep apply_patch as the primary write path for repository edits; use Serena for discovery/navigation, not as a replacement for minimal patches.')"
-          fi
           REPAIR_RENDERED_PROMPT_TEMPLATE="${RUNTIME_DIR}/mode-implement-repair.rendered.txt"
-          if SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "${REPAIR_PROMPT_TEMPLATE}" > "${REPAIR_RENDERED_PROMPT_TEMPLATE}"; then
+          if SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/render_prompt.sh" "${REPAIR_PROMPT_TEMPLATE}" > "${REPAIR_RENDERED_PROMPT_TEMPLATE}"; then
             REPAIR_PROMPT_TEMPLATE="${REPAIR_RENDERED_PROMPT_TEMPLATE}"
           else
             echo "::warning::Failed to render repair prompt template ${REPAIR_PROMPT_TEMPLATE}; using raw prompt."
@@ -3703,7 +4018,7 @@ jobs:
           REPAIR_CONTINUATION_PROMPT=""
           if [ -s "prompts/mode-implement-repair-continuation.txt" ]; then
             REPAIR_CONTINUATION_PROMPT="${RUNTIME_DIR}/mode-implement-repair-continuation.rendered.txt"
-            if ! SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "prompts/mode-implement-repair-continuation.txt" > "${REPAIR_CONTINUATION_PROMPT}"; then
+            if ! SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/render_prompt.sh" "prompts/mode-implement-repair-continuation.txt" > "${REPAIR_CONTINUATION_PROMPT}"; then
               echo "::warning::Failed to render repair continuation prompt; later repair attempts will fall back to the full prompt path."
               REPAIR_CONTINUATION_PROMPT=""
             fi
@@ -3741,9 +4056,9 @@ jobs:
             grep -Fqx -- "${p}" "${ALLOW_LIST_FILE}" 2>/dev/null
           }
 
-          if [ -f scripts/semble_helpers.sh ]; then
+          if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/semble_helpers.sh" ]; then
             # shellcheck source=/dev/null
-            source scripts/semble_helpers.sh 2>/dev/null || true
+            source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/semble_helpers.sh" 2>/dev/null || true
           fi
 
             build_repair_semble_query() {
@@ -3928,12 +4243,15 @@ jobs:
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${REPAIR_PROMPT_FILE}"
             fi
-            bash scripts/workspace_safety_check.sh
+            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/workspace_safety_check.sh"
             emit_implement_substate "implement_repair" "implement_repair" "LaunchingAgentProcess" "${attempt}" "${REPAIR_LOG_FILE}"
             emit_implement_substate "implement_repair" "implement_repair" "InitializingSession" "${attempt}" "${REPAIR_LOG_FILE}"
             emit_implement_substate "implement_repair" "implement_repair" "StreamingTurn" "${attempt}" "${REPAIR_LOG_FILE}"
             # Same ledger scrub as the implementation launch above.
             if ! CODEX_THREAD_REUSE_STATE_KEY="implement-repair" \
+              CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex}" \
+              CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT_REPAIR" \
+              AI_ENGINE_EFFORT_HINT="${REPAIR_REASONING}" \
               CODEX_THREAD_REUSE_PROMPT_FILE="${REPAIR_PROMPT_FILE}" \
               CODEX_THREAD_REUSE_OUTPUT_FILE="${REPAIR_OUTPUT_FILE}" \
               CODEX_THREAD_REUSE_PHASE="implement_repair" \
@@ -3944,7 +4262,7 @@ jobs:
               CODEX_THREAD_REUSE_TRANSFORM_MODE="replace-prefix" \
               CODEX_THREAD_REUSE_MARKER_START="=== CAPTURED SYNTAX DIAGNOSTICS (FULL) ===" \
               env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \
-              bash scripts/codex_thread_reuse.sh direct-run; then
+              bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run; then
               emit_implement_substate "implement_repair" "implement_repair" "Finishing" "${attempt}" "${REPAIR_LOG_FILE}"
               echo "::warning::Post-Codex repair attempt ${attempt} failed while invoking Codex."
               emit_implement_substate "implement_repair" "implement_repair" "Failed" "${attempt}" "${REPAIR_LOG_FILE}"
@@ -4041,6 +4359,15 @@ jobs:
       - name: Protect workflow files from implementation edits
         if: env.SKIP_IMPLEMENT != 'true'
         id: protect_workflow_files
+        env:
+          ALLOW_BULK_DELETE: ${{ vars.ALLOW_BULK_DELETE || 'false' }}
+          BULK_DELETE_THRESHOLD: ${{ vars.BULK_DELETE_THRESHOLD || '3' }}
+          BULK_DELETE_THRESHOLD_MD: ${{ vars.BULK_DELETE_THRESHOLD_MD || '100' }}
+          ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
+          ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
+          SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}
         run: |
           set -euo pipefail
 
@@ -4101,7 +4428,7 @@ jobs:
           fi
 
           # shellcheck source=/dev/null
-          source scripts/write_guard.sh
+          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/write_guard.sh"
           IMPLEMENT_WRITE_GUARD_FILE="$(mktemp)"
           {
             git diff --name-only --diff-filter=ACMRD HEAD || true
@@ -4125,6 +4452,15 @@ jobs:
       - name: Commit changes
         if: env.SKIP_IMPLEMENT != 'true'
         id: commit_changes
+        env:
+          ALLOW_BULK_DELETE: ${{ vars.ALLOW_BULK_DELETE || 'false' }}
+          BULK_DELETE_THRESHOLD: ${{ vars.BULK_DELETE_THRESHOLD || '3' }}
+          BULK_DELETE_THRESHOLD_MD: ${{ vars.BULK_DELETE_THRESHOLD_MD || '100' }}
+          ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
+          ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
+          SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}
         run: |
           set -euo pipefail
           bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"
@@ -4150,7 +4486,16 @@ jobs:
         # scope and staged-support branches are mutually exclusive — each guard
         # exits on the first tripped condition — so at most one fires per run.
         if: env.SKIP_IMPLEMENT != 'true' && (failure() || cancelled()) && (steps.preflight_destructive_guard.outputs.destructive_commit_blocked != '' || steps.commit_changes.outputs.destructive_commit_blocked != '' || steps.preflight_destructive_guard.outputs.scope_violation_blocked != '' || steps.commit_changes.outputs.scope_violation_blocked != '' || steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict != '' || steps.commit_changes.outputs.staged_support_rebase_conflict != '')
+        id: handle_guard_block
         env:
+          ALLOW_BULK_DELETE: ${{ vars.ALLOW_BULK_DELETE || 'false' }}
+          BULK_DELETE_THRESHOLD: ${{ vars.BULK_DELETE_THRESHOLD || '3' }}
+          BULK_DELETE_THRESHOLD_MD: ${{ vars.BULK_DELETE_THRESHOLD_MD || '100' }}
+          ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
+          ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
+          SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
@@ -4169,6 +4514,16 @@ jobs:
         run: |
           set -euo pipefail
           bash "${RUNTIME_DIR}/implement_handle_guard_block.sh"
+
+      - name: Upload destructive-rejection snapshot
+        if: always() && steps.handle_guard_block.outputs.rejection_snapshot == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: destructive-rejection-issue-${{ env.ISSUE_NUMBER }}
+          path: ${{ env.RUNTIME_DIR }}/destructive_rejection/destructive_rejection.json
+          retention-days: 30
+          if-no-files-found: ignore
+        continue-on-error: true
 
       - name: Handle no-op implementation
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'false' && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == ''
@@ -4683,6 +5038,20 @@ jobs:
           if [ -n "${TRACKING_ISSUE_NUMBER}" ]; then
             printf 'Refs #%s\n' "${TRACKING_ISSUE_NUMBER}" >> "${PR_BODY_FILE}"
           fi
+          # Port P3 (replace-claude-sessions plan, Phase 8b): repeat the
+          # issue's <!-- ai:auto-decisions:v1 --> entries in the PR body, from
+          # the comments "Fetch issue comments" already read (no API call).
+          # The renderer breaks up #<digits>, so the section can never
+          # reference or auto-close an issue; a failure only warns.
+          AUTO_DECISIONS_SECTION_FILE="${RUNTIME_DIR}/pr-body-lint/auto-decisions.md"
+          if [ -s "${ISSUE_COMMENTS_FILE:-}" ]; then
+            if PYTHONDONTWRITEBYTECODE=1 python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/auto_decisions.py" pr-section \
+              --comments-file "${ISSUE_COMMENTS_FILE}" > "${AUTO_DECISIONS_SECTION_FILE}" 2>/dev/null; then
+              cat "${AUTO_DECISIONS_SECTION_FILE}" >> "${PR_BODY_FILE}"
+            else
+              echo "::warning::Could not render the auto-decisions section for issue #${ISSUE_NUMBER}; the PR body omits it."
+            fi
+          fi
           printf '%s\n\n' "${PR_TITLE}" > "${PR_LINT_FILE}"
           cat "${PR_BODY_FILE}" >> "${PR_LINT_FILE}"
           PYTHONDONTWRITEBYTECODE=1 python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/lint_pr_body_auto_close.py" \
@@ -4730,6 +5099,16 @@ jobs:
           )
           if [ "${IS_SMOKE_TEST:-false}" = "true" ]; then
             PR_CREATE_ARGS+=(--label "force-review" --label "e2e-smoke-test")
+          fi
+          # Engine label (plan Phase 6, D2): the PR's review roles follow the
+          # issue's engine. Read from the issue metadata already fetched for
+          # this run (no extra API call); ai:codex wins over ai:engine-claude.
+          if [ -n "${ISSUE_META_FILE:-}" ] && [ -s "${ISSUE_META_FILE}" ]; then
+            PR_ENGINE_LABEL="$(jq -r '[.labels[]?.name] | if index("ai:codex") then "ai:codex" elif index("ai:engine-claude") then "ai:engine-claude" else "" end' "${ISSUE_META_FILE}" 2>/dev/null || true)"
+            if [ -n "${PR_ENGINE_LABEL}" ]; then
+              PR_CREATE_ARGS+=(--label "${PR_ENGINE_LABEL}")
+              echo "AI_ENGINE_PR_LABEL issue=${ISSUE_NUMBER:-unknown} label=${PR_ENGINE_LABEL}"
+            fi
           fi
 
           if ! gh pr create "${PR_CREATE_ARGS[@]}" > "${RUNTIME_DIR}/created_pr_url.txt" 2> "${RUNTIME_DIR}/created_pr_url.err"; then
@@ -4794,6 +5173,11 @@ jobs:
             fi
             if [ -n "${EXISTING_PR}" ]; then
               echo "Found existing PR: ${EXISTING_PR}"
+              if [ -n "${PR_ENGINE_LABEL:-}" ] && ! gh_retry gh pr edit "${EXISTING_PR}" \
+                  --repo "${{ github.repository }}" --add-label "${PR_ENGINE_LABEL}"; then
+                echo "::error::Could not copy the issue's engine label to existing PR ${EXISTING_PR}"
+                exit 1
+              fi
               echo "pr_url=${EXISTING_PR}" >> "$GITHUB_OUTPUT"
               exit 0
             fi
@@ -5060,7 +5444,11 @@ jobs:
               sanitize_codex_prompt_file "${_summary_combined_prompt}"
             fi
             bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/workspace_safety_check.sh"
-            codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_summary_combined_prompt}" > "${ISSUE_SUMMARY_FILE}" || true
+            # Credential-free, network-isolated agent (read-only snapshot),
+            # run from the trusted support copy, never from the workspace.
+            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:?trusted support copy missing}/codex_isolated_exec.sh" run --mode read-only \
+              --include "${RUNTIME_DIR}/issue_context_for_summary.txt" \
+              -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${_summary_combined_prompt}" > "${ISSUE_SUMMARY_FILE}" || true
             if [ -s "${ISSUE_SUMMARY_FILE}" ] && grep -q '^### AI Issue Summary' "${ISSUE_SUMMARY_FILE}"; then
               echo "Summary generated on attempt ${_summary_attempt}."
               break
@@ -5546,6 +5934,9 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
+          if [ -n "${CODEX_ISOLATED_IMPLEMENT_ROOT:-}" ]; then
+            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:?trusted support copy missing}/codex_isolated_exec.sh" cleanup --root "${CODEX_ISOLATED_IMPLEMENT_ROOT}" || echo "::warning::CODEX_ISOLATION sandbox cleanup failed"
+          fi
           rm -rf "${GITHUB_WORKSPACE}/.codex-workflow-src-main"
           if [[ "${RUNTIME_DIR:-}" =~ ^/tmp/codex-implement-[0-9]+$ ]]; then
             rm -rf "${RUNTIME_DIR}"
