@@ -2018,6 +2018,8 @@ __EDIT_DISCIPLINE__
       # (review_untrusted_sandbox.sh): no GH_PAT, no OpenRouter key, no host
       # checkout or .git inside; validated edits are copied back afterwards.
       # Serena runs only on the host, so the writer gets no MCP server.
+      # GITHUB_WORKSPACE stays the checkout: prepare validates its .git and
+      # takes the per-PR tree from WORKSPACE_PATH, which has no .git (#6455).
       rb_fix_serena_mode="off"
       rb_fix_opencode_ready=true
       if ! review_rb_prepare_opencode_config writer review_rb_fix "${RB_FIX_OPENCODE_CONFIG}" "${rb_fix_serena_mode}"; then
