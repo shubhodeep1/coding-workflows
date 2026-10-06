@@ -3622,7 +3622,7 @@ jobs:
               continue
             fi
             GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null add -- "${untracked_candidate}"
-          done < <(git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}")
+          done < <(GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}")
           if [ "${is_self_repo}" = "false" ] && [ -f scripts/.gitignore ]; then
             while IFS= read -r fetched_script; do
               case "${fetched_script}" in ''|'#'*|'.gitignore') continue ;; esac
@@ -5124,6 +5124,7 @@ jobs:
         id: create_pr
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          REVIEW_DISPATCH_REF: ${{ github.event.repository.default_branch || '' }}
         run: |
           set -euo pipefail
           source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
@@ -5237,6 +5238,28 @@ jobs:
               if [ -n "${PR_ENGINE_LABEL:-}" ] && ! gh_retry gh pr edit "${EXISTING_PR}" \
                   --repo "${{ github.repository }}" --add-label "${PR_ENGINE_LABEL}"; then
                 echo "::error::Could not copy the issue's engine label to existing PR ${EXISTING_PR}"
+                exit 1
+              fi
+              # The implementation push uses github.token, which does not emit
+              # pull_request:synchronize. A reused PR needs an explicit review.
+              recovery_review_pr_number="${EXISTING_PR##*/}"
+              if ! [[ "${recovery_review_pr_number}" =~ ^[0-9]+$ ]]; then
+                echo "::error::Cannot dispatch review for invalid existing PR URL"
+                exit 1
+              fi
+              recovery_review_workflow="ai-review.yml"
+              if [ "${GITHUB_REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then
+                recovery_review_workflow="internal-review.yml"
+              fi
+              if [ -z "${REVIEW_DISPATCH_REF}" ]; then
+                echo "::error::Cannot dispatch review without the repository default branch"
+                exit 1
+              fi
+              if ! gh_retry gh workflow run "${recovery_review_workflow}" \
+                  --repo "${GITHUB_REPOSITORY}" --ref "${REVIEW_DISPATCH_REF}" \
+                  -f "pr_number=${recovery_review_pr_number}" \
+                  -f "allow_workflow_edits=${ALLOW_WORKFLOW_EDITS:-true}"; then
+                echo "::error::Could not dispatch review for existing PR #${recovery_review_pr_number}"
                 exit 1
               fi
               echo "pr_url=${EXISTING_PR}" >> "$GITHUB_OUTPUT"

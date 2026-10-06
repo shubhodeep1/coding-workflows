@@ -1511,7 +1511,11 @@ through `clarify → plan → implement → review`.
   command-override hooks, fsmonitor and global attributes. Push repeats the
   check, keeps global Git config disabled, and uses the same repository-scoped
   token; later GitHub API and PR operations continue to use `GH_PAT` where
-  cross-workflow event delivery requires it.
+  cross-workflow event delivery requires it. Because pushes authenticated with
+  the workflow token do not trigger `pull_request:synchronize`, the existing-PR
+  recovery path dispatches the review wrapper from the default branch with
+  the reused PR number. A failed dispatch stops implementation rather than
+  treating the PR as reviewed; new PRs still review on `pull_request:opened`.
   Plan and implement pin the staged helper's SHA-256 before the editor, execute
   matching bytes from shell memory and fail closed if none remain. Helper Bash
   processes ignore `BASH_ENV`/`ENV`; implementation's post-editor repair and

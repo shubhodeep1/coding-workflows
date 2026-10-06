@@ -483,14 +483,17 @@ a new value, add it to the appropriate overrides file with a
   changed, or a pushurl, URL rewrite, proxy, credential helper or include
   directive sits in an editor-writable git config scope. It also refuses
   command-running Git keys (filter/diff/merge drivers, `core.attributesFile`,
-  `core.hooksPath`, `core.editor`, signing programs, `lfs.*`) in those scopes
+  `core.hooksPath`, `core.editor`, `core.pager`, signing programs, `lfs.*`) in those scopes
   and driver assignments in `.git/info/attributes` or global attributes. Both
   preflight and commit-time staging call its tokenless `check` action immediately
   before `git add`, ignore
   editor-writable global Git config, and command-override hooks, fsmonitor and
   global attributes. Credential restore and push use the repository-scoped
   workflow token rather than `GH_PAT`; push repeats the check and ignores global
-  Git config before writing authenticated origin state.
+  Git config before writing authenticated origin state. Since the workflow
+  token does not trigger `pull_request:synchronize`, the existing-PR recovery
+  path explicitly dispatches `internal-review.yml` (or `ai-review.yml` in a
+  consumer) from the default branch; a failed dispatch fails the step.
   The editor never reads those paths; only the restore / reinstall / commit
   steps of the job do. A `pytest` the editor starts to validate its own change
   therefore cannot write fixture paths into the live run's ledgers even when

@@ -312,7 +312,7 @@ def test_restore_rejects_editor_written_token_exfiltration_settings(tmp_path: Pa
 	"filter.evil.clean", "filter.evil.process", "filter.evil.smudge",
 	"diff.evil.textconv", "diff.evil.command", "diff.external",
 	"merge.evil.driver", "core.attributesFile", "core.alternateRefsCommand",
-	"core.hooksPath", "core.editor",
+	"core.hooksPath", "core.editor", "core.pager",
 	"gpg.program", "gpg.ssh.program", "lfs.customtransfer.x.path",
 	"remote.origin.uploadpack", "remote.origin.receivepack", "uploadpack.packObjectsHook",
 ))
@@ -369,6 +369,13 @@ def test_restore_refuses_untracked_driver_attributes(tmp_path: Path, location: s
 	result = subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True, text=True)
 	assert result.returncode != 0 and "reason=attributes_hazard" in result.stderr
 	assert "newsecret" not in (repo / ".git" / "config").read_text()
+
+
+def test_attributes_check_has_no_root_fallback_without_a_config_home() -> None:
+	helper = HELPER.read_text()
+	assert 'global_path=""' in helper
+	assert 'elif [ -n "${HOME:-}" ]; then' in helper
+	assert '${HOME:-}/.config/git/attributes' not in helper
 
 
 def test_restore_refuses_symlinked_attributes(tmp_path: Path) -> None:
@@ -448,6 +455,7 @@ def test_commit_checks_hazards_before_staging_and_disables_fsmonitor() -> None:
 	assert commit.rindex('editor_git_credentials.sh" check') < commit.index(stage)
 	assert stage in commit
 	assert "xargs -0 -r env GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null add --" in commit
+	assert "GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null ls-files --others" in commit
 	assert "GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null commit" in commit
 
 
@@ -514,7 +522,7 @@ def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
 		assert "EDITOR_GIT_CREDENTIALS_SHA256: ${{ steps.stage_support.outputs.editor_git_credentials_sha256 }}" in workflow
 	assert 'bash -c "${plan_runner_src}" run_plan_codex.sh' in plan
 	assert 'bash scripts/editor_git_credentials.sh' not in plan
-	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh"' not in implement
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" restore' not in implement
 	for step_name in ("Run Codex implementation", "Attempt post-Codex syntax repair", "Restore git credentials after syntax repair"):
 		step = implement.split(f"      - name: {step_name}\n", 1)[1].split("      - name: ", 1)[0]
 		assert "EDITOR_GIT_CREDENTIALS_SHA256: ${{ steps.stage_support.outputs.editor_git_credentials_sha256 }}" in step
@@ -546,6 +554,7 @@ def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
 	assert implement.count('git -c core.hooksPath=/dev/null push') == 2
 	preflight = implement.split("      - name: Preflight destructive-commit guard\n", 1)[1].split("      - name: ", 1)[0]
 	assert preflight.index('editor_git_credentials.sh" check') < preflight.index("GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null")
+	assert 'GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null ls-files --others' in preflight
 	push = implement.split("      - name: Push branch\n", 1)[1].split("      - name: ", 1)[0]
 	assert "GH_TOKEN: ${{ github.token }}" in push
 	assert 'editor_git_credentials.sh" check' in push
@@ -554,6 +563,13 @@ def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
 	assert "secrets.GH_PAT" not in push
 	assert implement.count('git -c core.hooksPath=/dev/null fetch') == 2
 	assert 'git -c core.hooksPath=/dev/null rebase' in implement
+	create_pr = implement.split("      - name: Create Pull Request\n", 1)[1].split("      - name: ", 1)[0]
+	assert 'gh workflow run "${recovery_review_workflow}"' in create_pr
+	assert 'recovery_review_workflow="internal-review.yml"' in create_pr
+	assert 'recovery_review_workflow="ai-review.yml"' in create_pr
+	assert "REVIEW_DISPATCH_REF: ${{ github.event.repository.default_branch || '' }}" in create_pr
+	assert '--ref "${REVIEW_DISPATCH_REF}"' in create_pr
+	assert create_pr.index('gh workflow run "${recovery_review_workflow}"') < create_pr.index('echo "pr_url=${EXISTING_PR}"')
 
 
 def test_stage_pin_and_in_memory_loader_hash_the_same_bytes() -> None:
