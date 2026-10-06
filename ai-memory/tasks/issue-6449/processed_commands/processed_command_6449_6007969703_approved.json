@@ -5,13 +5,32 @@
   "entry_id": "processed_command_6449_6007969703_approved",
   "issue_number": 6449,
   "metadata": {
+    "branch": "ai/issue-6449",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/ai/claude_engine.json",
+      "README.md",
+      "agents.md",
+      "changelog.d/6449-wave-judge-read-profile.md",
+      "prompts/_templates/mode-orchestrate-poll-judge.txt",
+      "prompts/mode-orchestrate-poll-judge.txt",
+      "scripts/claude_engine.py",
+      "scripts/orchestrate_poll_process.sh",
+      "tests/test_claude_engine.py",
+      "tests/test_orchestrator_judges_claude_engine.py"
+    ],
+    "issue_number": 6449,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6449",
+    "pr_number": 6460,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6460",
+    "run_attempt": "1",
+    "run_id": "37403344845",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37403344845"
   },
   "run_attempt": 1,
   "run_id": "37403344845",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-06T02:19:58Z",
+  "status": "completed",
+  "timestamp": "2026-10-06T02:35:54Z",
   "workflow": "implement"
 }
