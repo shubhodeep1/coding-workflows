@@ -102,7 +102,7 @@ class Relay(http.server.BaseHTTPRequestHandler):
 		pass
 
 	def _reject(self, status):
-		if self.command == "POST" and not self._request_body_consumed:
+		if getattr(self, "command", None) == "POST" and not self._request_body_consumed:
 			length = self.headers.get("Content-Length", "")
 			if length.isascii() and length.isdecimal() and len(length) <= len(str(MAX_BODY)) and 0 < int(length) <= MAX_BODY:
 				# Let a sending client finish without letting an incomplete body stall the relay.
