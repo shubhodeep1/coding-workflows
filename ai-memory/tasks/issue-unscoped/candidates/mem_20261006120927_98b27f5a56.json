@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Add exactly one changelog fragment when a PR changes observable behavior, including a default an operator or consumer would notice.\n  expected_change_site: `changelog.d/<issue-or-pr>-single-issue-security-pass-default-off.md` (new fragment file)\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: The PR changes `SINGLE_ISSUE_SECURITY_PASS_ENABLED` from default `true` to `false`, but the PR diff contains no changelog fragment; the existing `changelog.d/6118-phase-8a-single-issue-security-pass.md` still documents the original `true` default and must not be edited in place.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- TASK_GAP\n  Requirement: \"Add exactly one fragment when the PR changes observable behaviour\" \u2014 \"new or changed ... repo vars\" and \"behaviour changes an operator or consumer repo would notice, including defaults\" (CLAUDE.md \u00a720.A). The PR changes the default of `SINGLE_ISSUE_SECURITY_PASS_ENABLED` from `true` to `false`, which affects every consumer on the next `@stable`. The PR description calls this out: \"in every consumer on the next @stable.\"\n  Expected change site: `changelog.d/<this-pr-or-issue>-single-issue-security-pass-default-off.md` (new file)\n  Evidence of absence: `git diff --stat` shows 7 files changed, none under `changelog.d/`. The existing fragments (`6118-phase-8a-single-issue-security-pass.md`, `6401-single-issue-security-pass-completed-audit.md`) document the original introduction and a different fix \u2014 neither covers this default flip. Fragment #6118 at line 10 still states `default true`.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: Per agents.md \"CHANGELOG Entries (MANDATORY)\" (and CLAUDE.md \u00a720.A), \"Add exactly one fragment when the PR changes observable behaviour: new or changed CLI flags, env vars, repo vars, workflow inputs/outputs\" and \"behaviour changes an operator or consumer repo would notice, including defaults\". The PR DESCRIPTION explicitly states the change is consumer-visible: \"Standalone PRs merge after a clean review without a per-PR security audit\" and PRs currently held \"auto-merge on their next review\".\n  Expected change site: A new file `changelog.d/<issue-or-pr>-single-issue-security-pass-default-off.md` (one fragment; never edit `CHANGELOG.md` directly and never reuse another PR's filename).\n  Evidence of absence: `git diff --stat` from the PR shows exactly 7 files changed: `.github/workflows/review_autofix.yml`, `README.md`, `agents.md`, `scripts/review_rb_judge_security_pass.sh`, `scripts/review_single_issue_security_pass.sh`, `tests/test_review_rb_judge_security_pass.py`, `tests/test_single_issue_security_pass.py`. No file under `changelog.d/` is created or modified. The PR description \"Changes\" section also does not list a changelog fragment. The default of the `SINGLE_ISSUE_SECURITY_PASS_ENABLED` repo var flips from `true` to `false` across 6 sites (4 in `review_autofix.yml`, 1 in each of the two security-pass scripts), and the README/agents.md docs are updated to reflect the new default \u2014 that is the textbook trigger for \u00a720.A. The companion `changelog.d/6118-phase-8a-single-issue-security-pass.md` fragment at line 10 still advertises \"default true\" and cannot be edited in place (\u00a720.B: \"the unique path is the whole point\"; \"Never reuse another PR's filename\"); the corrective fragment must be a new file.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: Add exactly one changelog fragment when a PR changes observable behavior, including a default an operator or consumer would notice (CLAUDE.md \u00a720, lines 724-733).\n  Expected change site: A new PR-specific fragment under `changelog.d/`.\n  Evidence of absence: The PR changes `SINGLE_ISSUE_SECURITY_PASS_ENABLED` from default `true` to `false`, but the PR diff contains no changelog fragment. The existing `changelog.d/6118-phase-8a-single-issue-security-pass.md` still documents the original `true` default.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"Add exactly one fragment when the PR changes observable behaviour\" including \"new or changed CLI flags, env vars, repo vars, workflow inputs/outputs\" and \"behaviour changes an operator or consumer repo would notice, including defaults, thresholds, retries, and failure modes\" (CLAUDE.md section 20.A, also agents.md \"CHANGELOG Entries (MANDATORY)\").\n  Expected change site: `changelog.d/<issue-or-pr>-single-issue-security-pass-default-off.md` (new fragment file)\n  Evidence of absence: The PR diff touches exactly 7 files (`.github/workflows/review_autofix.yml`, `README.md`, `agents.md`, `scripts/review_rb_judge_security_pass.sh`, `scripts/review_single_issue_security_pass.sh`, `tests/test_review_rb_judge_security_pass.py`, `tests/test_single_issue_security_pass.py`). No `changelog.d/` file is added or modified. The existing fragment `changelog.d/6118-phase-8a-single-issue-security-pass.md` line 10 still advertises `default true` \u2014 that is a historical record of the feature's introduction and must not be edited. The default flip from `true` to `false` is an observable behavior change for every operator and consumer repo on the next `@stable` sync: standalone PRs that were held for per-PR security audits now auto-merge after clean review. A new fragment is required.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "7b360337023ab49ba458b6b9a957e022bbb08437cf361deece23763735e46a27",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6562,
+    "run_id": "37456379310",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37456379310",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006120927_98b27f5a56",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6562,
+    "run_id": "37456379310"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T12:09:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
