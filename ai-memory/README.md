@@ -76,6 +76,9 @@ Processed command CLI:
 - `processed-command-claim`
 - `processed-command-complete`
 
+`processed-command-claim --retry-on-status <status>` atomically reclaims an
+existing entry only when its workflow and status both match the caller.
+
 ## Environment variables
 
 - `AI_MEMORY_ENABLED` (default `true`)

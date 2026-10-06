@@ -45,12 +45,15 @@ answer_freshness_recheck() {
 			| ($trigger | tonumber) as $trigger_id
 			| if any(.[]; .id == $trigger_id) | not then "clarification_comment_missing"
 			  elif any(.[]; .id > $trigger_id and
-				((.user.login // "" | endswith("[bot]")) or
-				 (.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR")) and
+				(((.user.type == "Bot" and .user.login == "github-actions[bot]") and
+				  (.body | (contains("[auto-answered-by-clarify]") or contains("[auto-answered-by-orchestrator]")))) or
+				 (.user.type == "User" and
+				  (.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR"))) and
 				(.body | test("^\\s*/answer\\b"; "i"))) then "newer_answer"
 			  elif any(.[]; .id > $trigger_id and
-				((.user.login // "" | endswith("[bot]")) or
-				 (.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR")) and
+				((.user.type == "Bot" and .user.login == "github-actions[bot]") or
+				 (.user.type == "User" and
+				  (.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR"))) and
 				(.body | test("<!-- ai:clarification-questions -->|^Clarification required"))) then "newer_clarification"
 			  else "fresh" end
 		' <<< "${comment_pages}" 2>/dev/null)"; then
@@ -61,17 +64,21 @@ answer_freshness_recheck() {
 }
 
 enforce_answer_freshness() {
+	local freshness_status="superseded"
 	FRESHNESS_REASON="$(answer_freshness_recheck)"
 	if [ "${FRESHNESS_REASON}" = "fresh" ]; then
 		return
 	fi
 	echo "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=answer_freshness reason=${FRESHNESS_REASON} outcome=skip issue=${ISSUE_NUMBER} comment_id=${CLARIFICATION_COMMENT_ID}"
+	if [ "${FRESHNESS_REASON}" = "recheck_unavailable" ]; then
+		freshness_status="recheck_unavailable"
+	fi
 	if [ "${MEMORY_HELPERS_AVAILABLE}" = "true" ] && [ "${CLAIMED}" = "true" ]; then
 		memory_processed_command_complete \
 			--issue-number "${ISSUE_NUMBER}" \
 			--comment-id "${CLARIFICATION_COMMENT_ID}" \
 			--command "answer" \
-			--status "superseded" \
+			--status "${freshness_status}" \
 			--metadata-json "$(jq -cn --arg clarify_comment_id "${CLARIFICATION_COMMENT_ID}" --arg superseded_reason "${FRESHNESS_REASON}" '{clarify_comment_id: $clarify_comment_id, superseded_reason: $superseded_reason}')" >/dev/null || echo "::warning::Failed to record superseded completion in processed-command ledger (fail-open)."
 	fi
 	{
@@ -140,7 +147,7 @@ if [ -f "${SCRIPT_DIR}/memory_helpers.sh" ]; then
 		--comment-id "${CLARIFICATION_COMMENT_ID}" \
 		--command "answer")"
 	CHECK_EXISTS="$(printf '%s' "${CHECK_RESULT}" | jq -r '.exists // false' 2>/dev/null || echo "false")"
-	if [ "${CHECK_EXISTS}" = "true" ]; then
+	if [ "${CHECK_EXISTS}" = "true" ] && [ "$(printf '%s' "${CHECK_RESULT}" | jq -r '.entry.status // ""' 2>/dev/null)" != "recheck_unavailable" ]; then
 		echo "::notice::Clarification comment ${CLARIFICATION_COMMENT_ID} was already processed; skipping duplicate auto-answer."
 		echo "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=command_claim reason=already_processed outcome=skip issue=${ISSUE_NUMBER} comment_id=${CLARIFICATION_COMMENT_ID}"
 		SKIP_AUTO_ANSWER="true"
@@ -153,6 +160,7 @@ if [ -f "${SCRIPT_DIR}/memory_helpers.sh" ]; then
 			--actor "${GITHUB_ACTOR}" \
 			--run-id "${GITHUB_RUN_ID}" \
 			--run-attempt "${GITHUB_RUN_ATTEMPT}" \
+			--retry-on-status "recheck_unavailable" \
 			--metadata-json "$(jq -cn --arg issue_url "${ISSUE_URL}" --arg run_url "${RUN_URL}" --arg clarify_comment_id "${CLARIFICATION_COMMENT_ID}" '{issue_url: $issue_url, run_url: $run_url, clarify_comment_id: ($clarify_comment_id|tonumber)}')" || true)"
 		if [ -z "${CLAIM_RESULT}" ]; then
 			echo "::warning::memory_processed_command_claim failed; continuing without claim gate (fail-open)."

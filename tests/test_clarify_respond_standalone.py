@@ -451,6 +451,7 @@ def _run_poster(
 	tmp_path: Path, comments: list[dict] | None = None, *,
 	issue_response: str = '{"state":"open"}', comments_response: str | None = None,
 	comments_fail: bool = False, answer: str = "Q1: B\nQ2: A\n", comment_id: str = "1",
+	poster_memory_status: str = "",
 ) -> tuple[subprocess.CompletedProcess[str], list[list[str]], str]:
 	bin_dir = tmp_path / "bin"
 	bin_dir.mkdir(exist_ok=True)
@@ -480,9 +481,10 @@ def _run_poster(
 		CLARIFICATION_COMMENT_ID=comment_id, POSTER_GH_LOG=str(log),
 		POSTER_ISSUE_RESPONSE=issue_response,
 		POSTER_COMMENTS_RESPONSE=comments_response if comments_response is not None else json.dumps([comments if comments is not None else [
-			{"id": 1, "body": QUESTIONS, "author_association": "OWNER", "user": {"login": "owner"}},
+			{"id": 1, "body": QUESTIONS, "author_association": "OWNER", "user": {"login": "owner", "type": "User"}},
 		]]),
 		POSTER_COMMENTS_FAIL="true" if comments_fail else "false",
+		POSTER_MEMORY_STATUS=poster_memory_status,
 	)
 	Path(env["CODEX_OUTPUT_FILE"]).write_text(answer, encoding="utf-8")
 	result = subprocess.run(
@@ -493,8 +495,8 @@ def _run_poster(
 	return result, calls, (tmp_path / "env").read_text(encoding="utf-8")
 
 
-def _poster_comment(comment_id: int, body: str, association: str = "OWNER", login: str = "owner") -> dict:
-	return {"id": comment_id, "body": body, "author_association": association, "user": {"login": login}}
+def _poster_comment(comment_id: int, body: str, association: str = "OWNER", login: str = "owner", commenter_type: str = "User") -> dict:
+	return {"id": comment_id, "body": body, "author_association": association, "user": {"login": login, "type": commenter_type}}
 
 
 def test_fresh_poster_posts_once(tmp_path: Path) -> None:
@@ -510,9 +512,9 @@ def test_fresh_poster_posts_once(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("extra, reason", [
 	(_poster_comment(2, "  /AnSwEr Q1: A"), "newer_answer"),
-	(_poster_comment(2, "/answer Q1: B", "NONE", "actions[bot]"), "newer_answer"),
+	(_poster_comment(2, "/answer [auto-answered-by-orchestrator]\nQ1: B", "NONE", "github-actions[bot]", "Bot"), "newer_answer"),
 	(_poster_comment(2, "<!-- ai:clarification-questions -->\nQ1: ..."), "newer_clarification"),
-	(_poster_comment(2, "Clarification required\nQ1: ...", login="actions[bot]"), "newer_clarification"),
+	(_poster_comment(2, "Clarification required\nQ1: ...", "NONE", "github-actions[bot]", "Bot"), "newer_clarification"),
 ])
 def test_poster_skips_superseded_thread(tmp_path: Path, extra: dict, reason: str) -> None:
 	result, calls, env = _run_poster(tmp_path, [_poster_comment(1, QUESTIONS), extra])
@@ -522,8 +524,15 @@ def test_poster_skips_superseded_thread(tmp_path: Path, extra: dict, reason: str
 	assert all(call[:2] != ["api", "repos/owner/repo/issues/6262/comments"] for call in calls)
 
 
-def test_untrusted_answer_cannot_suppress_poster(tmp_path: Path) -> None:
-	result, calls, env = _run_poster(tmp_path, [_poster_comment(1, QUESTIONS), _poster_comment(2, "/answer", "NONE", "outsider"), _poster_comment(3, QUESTIONS, "NONE", "outsider")])
+@pytest.mark.parametrize("extra", [
+	_poster_comment(2, "/answer", "NONE", "outsider"),
+	_poster_comment(2, "/answer [auto-answered-by-orchestrator]", "NONE", "other[bot]", "Bot"),
+	_poster_comment(2, "/answer", "NONE", "github-actions[bot]", "Bot"),
+	_poster_comment(2, "/answer", "OWNER", "other[bot]", "Bot"),
+	_poster_comment(2, "<!-- ai:clarification-questions -->\nClarification required", "NONE", "other[bot]", "Bot"),
+])
+def test_untrusted_answer_cannot_suppress_poster(tmp_path: Path, extra: dict) -> None:
+	result, calls, env = _run_poster(tmp_path, [_poster_comment(1, QUESTIONS), extra])
 	assert result.returncode == 0 and "SKIP_AUTO_ANSWER=false" in env, result.stderr
 	assert any(call[:2] == ["api", "repos/owner/repo/issues/6262/comments"] for call in calls)
 
@@ -534,6 +543,36 @@ def test_poster_reads_all_comment_pages(tmp_path: Path) -> None:
 	assert result.returncode == 0 and "reason=newer_answer" in result.stdout
 	assert "SKIP_AUTO_ANSWER=true" in env
 	assert all(call[:2] != ["api", "repos/owner/repo/issues/6262/comments"] for call in calls)
+
+
+def test_failed_recheck_marks_only_that_claim_retryable(tmp_path: Path) -> None:
+	scripts = tmp_path / "scripts"
+	scripts.mkdir()
+	(scripts / "memory_helpers.sh").write_text(
+		'memory_ensure_branch() { :; }\n'
+		'memory_processed_command_check() {\n'
+		'  if [ -f "${POSTER_MEMORY_STATUS}" ]; then\n'
+		'    printf \'{"exists":true,"entry":{"status":"%s"}}\\n\' "$(< "${POSTER_MEMORY_STATUS}")"\n'
+		'  else printf \'{"exists":false}\\n\'; fi\n'
+		'}\n'
+		'memory_processed_command_claim() { printf "%s\\n" "$*" >> "${POSTER_MEMORY_STATUS}.log"; printf claimed > "${POSTER_MEMORY_STATUS}"; printf \'{"claimed":true}\\n\'; }\n'
+		'memory_clarify_loop_guard() { printf \'{"result":{"blocked":false}}\\n\'; }\n'
+		'memory_processed_command_complete() {\n'
+		'  while [ "$#" -gt 0 ]; do\n'
+		'    if [ "$1" = "--status" ]; then printf "%s" "$2" > "${POSTER_MEMORY_STATUS}"; break; fi\n'
+		'    shift\n'
+		'  done\n'
+		'}\n', encoding="utf-8",
+	)
+	status_file = tmp_path / "poster_memory_status"
+	failed, calls, _ = _run_poster(tmp_path, comments_fail=True, poster_memory_status=str(status_file))
+	assert failed.returncode == 1 and status_file.read_text() == "recheck_unavailable"
+	assert not any(call[:2] == ["api", "repos/owner/repo/issues/6262/comments"] for call in calls)
+	retried, calls, _ = _run_poster(tmp_path, poster_memory_status=str(status_file))
+	assert retried.returncode == 0 and "Posted auto-answer" in retried.stdout
+	assert status_file.read_text() == "answered"
+	assert len((tmp_path / "poster_memory_status.log").read_text().splitlines()) == 2
+	assert "--retry-on-status recheck_unavailable" in (tmp_path / "poster_memory_status.log").read_text()
 
 
 @pytest.mark.parametrize("kwargs, reason, code", [

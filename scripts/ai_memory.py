@@ -2229,6 +2229,7 @@ def cmd_processed_command_claim(args: argparse.Namespace) -> int:
             run_id=_require_nonempty(args.run_id, "run_id"),
             run_attempt=_require_positive_int(args.run_attempt, "run_attempt"),
             metadata=_json_or_empty(args.metadata_json),
+            retry_on_status=args.retry_on_status,
         )
         return {
             "claimed": claimed,
@@ -2600,6 +2601,7 @@ def build_parser() -> argparse.ArgumentParser:
     processed_claim.add_argument("--run-id", required=True)
     processed_claim.add_argument("--run-attempt", default="1")
     processed_claim.add_argument("--metadata-json", default="{}")
+    processed_claim.add_argument("--retry-on-status", default=None)
     processed_claim.set_defaults(func=cmd_processed_command_claim)
 
     processed_complete = subparsers.add_parser("processed-command-complete", help="Complete processed command entry")

@@ -391,6 +391,36 @@ def test_processed_command_entry_rejects_malformed_clarify_hash() -> None:
 	assert False, "Expected schema validation failure for malformed clarify_hash"
 
 
+def test_failed_freshness_claim_can_be_retried_once_via_cli() -> None:
+	with _stub_ai_memory_cli_branch() as store_root:
+		claim_args = [
+			"processed-command-claim", "--issue-number", "42", "--comment-id", "123456789",
+			"--command", "answer", "--workflow", "orchestrate_clarify_respond",
+			"--actor", "github-actions[bot]", "--run-id", "987654321", "--retry-on-status", "recheck_unavailable",
+		]
+		code, output, _ = _run_ai_memory_cli(claim_args)
+		assert code == 0 and json.loads(output)["operation_result"]["claimed"] is True
+		code, output, _ = _run_ai_memory_cli([
+			"processed-command-complete", "--issue-number", "42", "--comment-id", "123456789",
+			"--command", "answer", "--status", "recheck_unavailable",
+		])
+		assert code == 0, output
+		code, output, _ = _run_ai_memory_cli(claim_args[:-2])
+		assert code == 0 and json.loads(output)["operation_result"]["claimed"] is False
+		other_workflow_args = claim_args[:]
+		other_workflow_args[other_workflow_args.index("--workflow") + 1] = "clarify"
+		code, output, _ = _run_ai_memory_cli(other_workflow_args)
+		assert code == 0 and json.loads(output)["operation_result"]["claimed"] is False
+		code, output, _ = _run_ai_memory_cli(claim_args[:])
+		assert code == 0 and json.loads(output)["operation_result"]["claimed"] is True
+		code, output, _ = _run_ai_memory_cli(claim_args)
+		assert code == 0 and json.loads(output)["operation_result"]["claimed"] is False
+		entry = ai_memory_lib.get_processed_command_entry(
+			store_root / "ai-memory", issue_number=42, comment_id=123456789, command="answer",
+		)
+		assert entry is not None and entry["status"] == "claimed"
+
+
 def test_actions_runs_cache_payload_validates() -> None:
 	memory_root = _memory_root_with_actions_schema()
 	payload = {

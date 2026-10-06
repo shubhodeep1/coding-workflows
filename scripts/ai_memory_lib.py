@@ -1632,6 +1632,7 @@ def claim_processed_command(
     run_id: str,
     run_attempt: int,
     metadata: dict[str, Any] | None = None,
+    retry_on_status: str | None = None,
 ) -> tuple[dict[str, Any], bool]:
     ensure_memory_layout(memory_root)
     entry_id = make_processed_command_entry_id(issue_number, comment_id, command)
@@ -1640,6 +1641,14 @@ def claim_processed_command(
         if entry_path.exists():
             payload = _load_json(entry_path)
             validate_processed_command_entry(payload, memory_root)
+            if retry_on_status and payload["status"] == retry_on_status and payload["workflow"] == workflow:
+                payload.update(
+                    status="claimed", actor=actor, run_id=sanitize_segment(run_id, "run-unknown"),
+                    run_attempt=int(run_attempt), timestamp=utc_now_iso(), metadata=metadata or {},
+                )
+                validate_processed_command_entry(payload, memory_root)
+                _atomic_write_json(entry_path, payload)
+                return payload, True
             return payload, False
 
         entry = {
