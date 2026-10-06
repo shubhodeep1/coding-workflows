@@ -516,6 +516,8 @@ bootstrap_support_roots()
 {
 	SUPPORT_PRIMARY_ROOT=""
 	SUPPORT_MAIN_ROOT=""
+	SELF_REPO_TRUSTED_TEMPLATE_ROOT=""
+	SELF_REPO_TRUSTED_TEMPLATE_STAGED_COUNT=0
 
 	if [ "${IS_SELF_REPO}" = "true" ] && [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ]; then
 		SUPPORT_PRIMARY_ROOT="${REPO_ROOT}"
@@ -718,6 +720,59 @@ stage_optional_copy_entry()
 	copy_from_ref_or_local "${repo_path}" "${repo_path}" "false" "true" || true
 }
 
+# Issue #6578: in this repository the validation checkout (an integration
+# branch) is the primary support root, so copy_from_ref_or_local left its
+# possibly stale validation-harness templates in place. Runs 37315007990 and
+# 37492941663 rendered an older 20_import_audit.sh.j2 that ran the import audit
+# with the runner's Python (ModuleNotFoundError: yaml) instead of the app
+# container's. Templates become host-executed tests, so stage them from the
+# verified support commit and fail closed when that commit is unavailable.
+ensure_self_repo_trusted_template_root()
+{
+	if [ -n "${SELF_REPO_TRUSTED_TEMPLATE_ROOT:-}" ] && [ -d "${SELF_REPO_TRUSTED_TEMPLATE_ROOT}" ]; then
+		return 0
+	fi
+	if [ -n "${ORIGINAL_SCRIPT_REF}" ] &&
+	   checkout_support_ref "${ORIGINAL_SCRIPT_REF}" "${SUPPORT_STAGE_ROOT}/trusted-templates"; then
+		SELF_REPO_TRUSTED_TEMPLATE_ROOT="${SUPPORT_STAGE_ROOT}/trusted-templates"
+		return 0
+	fi
+	echo "::error::Trusted validation-harness templates are unavailable from ${WORKFLOW_SOURCE_REPO}@${ORIGINAL_SCRIPT_REF}; refusing to render templates from the validation checkout." >&2
+	exit 1
+}
+
+stage_self_repo_validation_template_entry()
+{
+	local repo_path="$1"
+	local trusted_path
+
+	case "${repo_path}" in
+		/*|..|../*|*/..|*/../*)
+			echo "::error::Refusing unsafe validation-harness template path '${repo_path}'." >&2
+			exit 1
+			;;
+		workflow-templates/validation-harness/*)
+			;;
+		*)
+			echo "::error::Path '${repo_path}' is not a validation-harness template." >&2
+			exit 1
+			;;
+	esac
+
+	ensure_self_repo_trusted_template_root
+	trusted_path="${SELF_REPO_TRUSTED_TEMPLATE_ROOT}/${repo_path}"
+	if [ ! -f "${trusted_path}" ]; then
+		echo "::error::Required trusted validation-harness template ${repo_path} is missing from ${ORIGINAL_SCRIPT_REF}." >&2
+		exit 1
+	fi
+	if [ -e "${repo_path}" ] && ! cmp -s "${repo_path}" "${trusted_path}"; then
+		echo "VALIDATE_TRUSTED_TEMPLATE_OVERRIDE path=${repo_path} ref=${ORIGINAL_SCRIPT_REF}"
+	fi
+	mkdir -p "$(dirname -- "${repo_path}")"
+	cp -- "${trusted_path}" "${repo_path}"
+	SELF_REPO_TRUSTED_TEMPLATE_STAGED_COUNT=$((SELF_REPO_TRUSTED_TEMPLATE_STAGED_COUNT + 1))
+}
+
 stage_copy_if_missing_silent_entry()
 {
 	local repo_path="$1"
@@ -850,10 +905,21 @@ stage_validate_support()
 		stage_optional_preserve_entry "${repo_path}" "false" "" "true"
 	done < <(json_array_lines "optional_preserve_files_before_templates")
 
+	# Self-repo runs without an explicit target take validation-harness
+	# templates from the verified support commit (issue #6578); consumers and
+	# explicit targets keep the existing path.
 	while IFS= read -r repo_path; do
 		[ -n "${repo_path}" ] || continue
-		stage_optional_copy_entry "${repo_path}"
+		if [ "${IS_SELF_REPO}" = "true" ] && [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ] &&
+		   [[ "${repo_path}" == workflow-templates/validation-harness/* ]]; then
+			stage_self_repo_validation_template_entry "${repo_path}"
+		else
+			stage_optional_copy_entry "${repo_path}"
+		fi
 	done < <(json_array_lines "optional_copy_files")
+	if [ "${SELF_REPO_TRUSTED_TEMPLATE_STAGED_COUNT}" -gt 0 ]; then
+		echo "VALIDATE_TRUSTED_TEMPLATES staged=${SELF_REPO_TRUSTED_TEMPLATE_STAGED_COUNT} ref=${ORIGINAL_SCRIPT_REF} source=${WORKFLOW_SOURCE_REPO}"
+	fi
 
 	while IFS= read -r repo_path; do
 		[ -n "${repo_path}" ] || continue
