@@ -299,7 +299,7 @@ security_audit_append_prompt_context() {
 			cat "${WAIVED_FINDINGS_PROMPT_FILE}" || return 1
 			echo "=== END UNTRUSTED ACCEPTED FINDINGS ===" || return 1
 			echo "Rules for accepted findings:" || return 1
-			echo "- Never report an accepted finding again, neither under its finding_id nor under a new one, for the same location or the same defect at that location." || return 1
+			echo "- Never re-report the same accepted exploit under any finding_id. Report a different exploit even when its file, category and line are near an accepted finding; an acceptance covers only its documented scenario." || return 1
 			echo "- An acceptance covers one location. Other locations in the scoped files remain in scope." || return 1
 		fi
 		if [ -n "${SECURITY_AUDIT_PROJECT_SPEC_PATH}" ]; then
@@ -373,7 +373,7 @@ fi
 # for the audited project (findings-json mode only).  They are appended to the
 # prompt as accepted findings the model must not report again, and the
 # post-filter drops any re-report deterministically: an exact `finding_id`
-# match, or the same file and category within
+# match, or the same file, category, severity and exploit scenario within
 # SECURITY_AUDIT_WAIVER_LINE_WINDOW lines of the waived line (model-generated
 # ids drift between runs and fix commits move lines).  Counted as
 # `suppressed_waived`.  Malformed input fails closed like prior findings.
@@ -1229,12 +1229,15 @@ for index, finding in enumerate(waived_findings):
 	if isinstance(line_value, int) and not isinstance(line_value, bool) and line_value > 0:
 		line_number = line_value
 	category = text_field(finding, "owasp_or_stride_category")
+	waived_finding = finding.get("finding")
 	normalized.append(
 		{
 			"finding_id": finding_id,
 			"file": relative_file,
 			"line": line_number,
 			"owasp_or_stride_category": category,
+			"severity": text_field(finding, "severity"),
+			"exploit_scenario": text_field(finding, "exploit_scenario") or (text_field(waived_finding, "exploit_scenario") if isinstance(waived_finding, dict) else ""),
 		}
 	)
 	location = relative_file or "(location not recorded)"
@@ -1242,11 +1245,13 @@ for index, finding in enumerate(waived_findings):
 		location = f"{relative_file}:{line_number}"
 	prompt_lines.append(
 		"- `{id}` | {category} | {severity} | {location}\n"
+		"  Accepted exploit: {scenario}\n"
 		"  Accepted because: {reason}".format(
 			id=finding_id,
 			category=category or "uncategorised",
 			severity=text_field(finding, "severity") or "unknown",
 			location=location,
+			scenario=text_field(finding, "exploit_scenario") or (text_field(waived_finding, "exploit_scenario") if isinstance(waived_finding, dict) else "(not recorded)"),
 			reason=text_field(finding, "justification") or "(not recorded)",
 		)
 	)
@@ -1655,14 +1660,23 @@ def matching_waiver(finding: dict[str, object]) -> str | None:
 		if not isinstance(waiver, dict):
 			continue
 		waived_id = str(waiver.get("finding_id") or "")
-		if waived_id and waived_id == finding_id:
-			return waived_id
 		waived_file = str(waiver.get("file") or "")
 		waived_category = " ".join(str(waiver.get("owasp_or_stride_category") or "").lower().split())
+		waived_severity = str(waiver.get("severity") or "").strip().lower()
+		waived_scenario = " ".join(str(waiver.get("exploit_scenario") or "").lower().split())
+		finding_scenario = " ".join(str(finding.get("exploit_scenario") or "").lower().split())
+		if (waived_id and waived_id == finding_id
+			and (not waived_category or waived_category == finding_category)
+			and (not waived_severity or waived_severity == str(finding.get("severity") or "").strip().lower())
+			and (not waived_scenario or waived_scenario == finding_scenario)):
+			return waived_id
 		waived_line = waiver.get("line")
 		if not waived_file or not waived_category or not isinstance(waived_line, int) or isinstance(waived_line, bool) or waived_line < 1:
 			continue
-		if waived_file == finding_file and waived_category == finding_category and abs(waived_line - finding_line) <= waiver_line_window:
+		if (waived_file == finding_file and waived_category == finding_category
+			and waived_severity == str(finding.get("severity") or "").strip().lower()
+			and waived_scenario and waived_scenario == finding_scenario
+			and abs(waived_line - finding_line) <= waiver_line_window):
 			return waived_id or "(unnamed waiver)"
 	return None
 

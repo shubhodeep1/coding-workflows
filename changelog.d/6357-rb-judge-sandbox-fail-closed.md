@@ -1,0 +1,2 @@
+<!-- changelog: security -->
+- **The poller's review-blocked judge no longer falls back to host Codex when sandbox preparation fails.** A PR can cause preparation to fail with its checkout contents; the judge now refuses the privileged fallback, leaves the issue review-blocked, and retries on the next poll tick. Missing verified sandbox support also defers the judge; an operator-selected Codex engine uses isolated OpenCode.
