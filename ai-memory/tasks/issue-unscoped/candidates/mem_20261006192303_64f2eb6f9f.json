@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "Healing behavior spans intake, evidence handling, and recovery, with tests covering editor isolation and lineage verification. When changing the heal flow, keep provenance checks and evidence isolation intact across the full recovery path.",
+  "fingerprint": "2bc28d94e47d88863a6080069e6352fbbba661fa0b5b2ab057e2918ab7a35fe3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37517242542",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37517242542",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6413",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6456",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6457",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6513",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6575",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6470",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6471",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6553",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6560",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6577"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261006192303_64f2eb6f9f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow failure healing depends on preserving evidence and verifying run lineage.",
+  "timestamps": {
+    "created_at": "2026-10-06T19:23:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
