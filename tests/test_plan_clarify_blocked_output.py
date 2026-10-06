@@ -327,7 +327,7 @@ def test_orchestrate_relay_start_failure_only_when_no_account_relay_starts(tmp_p
 			'engine_role=ORCHESTRATE\nclaude_accounts=(' + accounts + ')\n'
 			'claude_model=claude-opus-5-5\nclaude_effort=high\nprobe_model=claude-haiku-4-5-20251001\n'
 			'image=dummy\ncontainer_name=dummy\nprompt_file=/dev/null\nlog_file=/dev/null\noutput_file=/dev/null\n'
-			'engine_dir=/dev/null\ninstructions=/dev/null\nguard_hook=/dev/null\n'
+			'engine_dir=/dev/null\ninstructions=/dev/null\nguard_hook=/dev/null\nisolation_timeout=\n'
 			'ai_engine_pool_dir() { printf "%s" "$RUN_ROOT"; }\n'
 			'ai_engine_fallback() { printf "fallback:%s\\n" "$2" >&2; }\n'
 			'_ai_engine_py() { printf \'{"outcome":"usage_limit","reason":"limit"}\\n\'; }\n'
