@@ -126,10 +126,12 @@ def test_ephemeral_callers_prepare_their_selected_engine():
 	poller = (ROOT / "scripts/orchestrate_poll_process.sh").read_text(encoding="utf-8")
 	resolver = (ROOT / "scripts/review_conflict_resolve.sh").read_text(encoding="utf-8")
 	judge = (ROOT / "scripts/review_rb_judge.sh").read_text(encoding="utf-8")
+	ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 	assert 'prepare-ephemeral "${rb_engine}"' in poller
 	assert 'prepare-ephemeral "${sandbox_attempt_engine}"' in resolver
 	assert 'prepare-ephemeral claude' in judge
 	assert 'prepare-ephemeral codex' in judge
+	assert "tests/test_review_sandbox_claude_roles.py" in ci
 
 
 @pytest.mark.parametrize("name,accepted", [("scripts/a.py", True), (".ai/x.txt", False), ("scripts/../a.py", False), ("scripts/a.py\r", False)])

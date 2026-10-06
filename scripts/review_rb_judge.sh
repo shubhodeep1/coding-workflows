@@ -138,7 +138,7 @@ review_rb_claude_run()
   if [ "${AI_ENGINE_RESOLVED_RB_JUDGE:-codex}" != "claude" ]; then
     return 75
   fi
-  if [ ! -f "${rb_sandbox_sh}" ] || ! rb_sandbox_root="$(cd "${RB_OPENCODE_WORKSPACE}" && bash "${rb_sandbox_sh}" prepare-ephemeral 2>>"${stderr_file}")" || [ -z "${rb_sandbox_root}" ]; then
+  if [ ! -f "${rb_sandbox_sh}" ] || ! rb_sandbox_root="$(cd "${RB_OPENCODE_WORKSPACE}" && bash "${rb_sandbox_sh}" prepare-ephemeral claude 2>>"${stderr_file}")" || [ -z "${rb_sandbox_root}" ]; then
     echo 'AI_ENGINE_FALLBACK role=RB_JUDGE reason=sandbox_prepare_failed' >&2
     return 75
   fi
@@ -189,7 +189,7 @@ review_rb_opencode_sandbox_prepare()
   if [ ! -f "${rb_oc_sandbox_sh}" ]; then
     RB_OC_ISOLATION_REASON=support_missing
     echo 'AI_ENGINE_FALLBACK role=RB_JUDGE reason=support_missing' >&2
-  elif ! RB_OC_SANDBOX_ROOT="$(cd "${RB_OPENCODE_WORKSPACE}" && bash "${rb_oc_sandbox_sh}" prepare-ephemeral 2>>"${rb_oc_stderr_file}")" || [ -z "${RB_OC_SANDBOX_ROOT}" ]; then
+  elif ! RB_OC_SANDBOX_ROOT="$(cd "${RB_OPENCODE_WORKSPACE}" && bash "${rb_oc_sandbox_sh}" prepare-ephemeral codex 2>>"${rb_oc_stderr_file}")" || [ -z "${RB_OC_SANDBOX_ROOT}" ]; then
     RB_OC_ISOLATION_REASON=sandbox_prepare_failed
     echo '::warning::Review-blocked judge sandbox preparation failed (reason=sandbox_prepare_failed); refusing host fallback.' >&2
   else
