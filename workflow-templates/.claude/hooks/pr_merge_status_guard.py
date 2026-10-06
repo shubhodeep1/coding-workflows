@@ -1516,10 +1516,10 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 				unknown_destination_reasons.append(target.warning)
 				continue
 			if target.warning:
-				_warn(target.warning)
 				if invocation.subcommand != "push" and invocation.config_override:
-					unverified_destinations.add(target.warning)
+					unverified_destinations.add("could not resolve git command directory; no checkout was checked")
 					continue  # An env-wrapped commit may use a different checkout.
+				_warn(target.warning)
 			if target.remote and target.remote != "origin":
 				# Even a matching explicit URL may be rewritten by url.*.insteadOf.
 				if "://" in target.remote or target.remote.startswith("git@"):
