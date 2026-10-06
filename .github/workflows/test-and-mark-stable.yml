@@ -4669,7 +4669,8 @@ jobs:
             tests/test_update_workflows_retired_files.py \
             tests/test_security_pass_skip.py \
             tests/test_claude_md_section_numbers.py \
-            tests/test_audit_plans_command.py
+            tests/test_audit_plans_command.py \
+            tests/test_deploy_activate_command.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_session_start_extract_repo_slug.py
 
       - name: Prompt files integrity
