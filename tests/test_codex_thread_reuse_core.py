@@ -538,7 +538,7 @@ def test_implement_workflow_contains_thread_reuse_wiring() -> None:
 	assert "mode-implement-repair-continuation.txt mode-implement-diagnose-continuation.txt mode-validate-self-heal-continuation.txt" in text
 	assert "mode-implement-repair-continuation.yml mode-implement-diagnose-continuation.yml mode-validate-self-heal-continuation.yml" in text
 	assert "name: Probe Codex thread-reuse support" in text
-	assert "bash scripts/codex_thread_reuse.sh direct-run || cmd_rc=$?" in text
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run || cmd_rc=$?' in text
 	assert 'CODEX_THREAD_REUSE_MARKER_START="=== CAPTURED SYNTAX DIAGNOSTICS (FULL) ==="' in text
 	assert "codex_thread_reuse_install_wrapper" in text
 	assert "=== IMPLEMENT FAILURE DIAGNOSIS TASK ===" in text
@@ -573,7 +573,13 @@ def test_validate_workflow_contains_thread_reuse_bootstrap() -> None:
 
 # --- Phase 5b: the Claude engine branch of direct-run ---------------------------
 
-FAKE_AI_ENGINE = r'''claude_run()
+FAKE_AI_ENGINE = r'''if [ -n "${FAKE_CLAUDE_HOME:-}" ]; then
+	ai_engine_claude_home()
+	{
+		printf '%s\n' "${FAKE_CLAUDE_HOME}"
+	}
+fi
+claude_run()
 {
 	local role="$1" prompt="$2" out="$3" workdir="$4" sid="$5"
 	python3 - "$role" "$prompt" "$workdir" "$sid" <<'PY' >> "${FAKE_CLAUDE_LOG}"
@@ -583,8 +589,8 @@ print(json.dumps({"role": role, "prompt": open(prompt, encoding="utf-8").read(),
 PY
 	case "${FAKE_CLAUDE_SCENARIO}" in
 		success)
-			mkdir -p "${HOME}/.claude/projects/x"
-			: > "${HOME}/.claude/projects/x/${sid}.jsonl"
+			mkdir -p "${FAKE_CLAUDE_HOME:-${HOME}/.claude}/projects/x"
+			: > "${FAKE_CLAUDE_HOME:-${HOME}/.claude}/projects/x/${sid}.jsonl"
 			printf 'claude output\n' > "${out}"
 			;;
 		unavailable)
@@ -672,6 +678,28 @@ def test_claude_engine_runs_claude_and_resumes_its_session() -> None:
 		assert calls[1]["prompt"].startswith("CONTINUE: fix the remaining errors")
 		assert "err 2" in calls[1]["prompt"]
 		assert _read_fake_codex_log(env) == []
+
+
+def test_claude_resume_reads_the_isolated_session_store() -> None:
+	# claude_run keeps the isolated CLI's sessions in ai_engine_claude_home
+	# ($RUNNER_TEMP/claude-isolated-home), not in the runner's ~/.claude.
+	with tempfile.TemporaryDirectory(prefix="codex_thread_claude_") as td:
+		tmp_path = Path(td)
+		env, helper = _claude_env(tmp_path, "success")
+		env["FAKE_CLAUDE_HOME"] = str(tmp_path / "claude-isolated-home")
+		continuation = tmp_path / "continuation.txt"
+		continuation.write_text("CONTINUE: fix the remaining errors\n", encoding="utf-8")
+		extra = {
+			"CODEX_THREAD_REUSE_CONTINUATION_FILE": str(continuation),
+			"CODEX_THREAD_REUSE_TRANSFORM_MODE": "replace-prefix",
+			"CODEX_THREAD_REUSE_MARKER_START": "=== DIAG ===",
+		}
+		for text in ("full prompt\n=== DIAG ===\nerr 1\n", "full prompt\n=== DIAG ===\nerr 2\n"):
+			proc, _ = _run_claude_direct(env, helper, prompt_text=text, extra=extra)
+			assert proc.returncode == 0, proc.stderr
+		calls = _claude_calls(env)
+		assert calls[1]["prompt"].startswith("CONTINUE: fix the remaining errors")
+		assert not (tmp_path / "home" / ".claude").exists()
 
 
 def test_claude_unavailable_runs_the_unchanged_codex_path() -> None:
