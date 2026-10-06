@@ -5,13 +5,26 @@
   "entry_id": "processed_command_6390_6007347009_approved",
   "issue_number": 6390,
   "metadata": {
+    "branch": "ai/issue-6390",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      "agents.md",
+      "changelog.d/6390-review-blocked-workflow-opt-out-paths.md",
+      "scripts/orchestrate_poll_process.sh",
+      "tests/test_orchestrate_poll_process.py"
+    ],
+    "issue_number": 6390,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6390",
+    "pr_number": 6445,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6445",
+    "run_attempt": "1",
+    "run_id": "37398576673",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37398576673"
   },
   "run_attempt": 1,
   "run_id": "37398576673",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-06T01:22:24Z",
+  "status": "completed",
+  "timestamp": "2026-10-06T01:45:05Z",
   "workflow": "implement"
 }
