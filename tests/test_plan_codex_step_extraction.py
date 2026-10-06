@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from runpy import run_path
@@ -14,6 +15,8 @@ from runpy import run_path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLAN_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "plan.yml"
 PLAN_RUNNER = REPO_ROOT / "scripts" / "run_plan_codex.sh"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 PRE_EXTRACTION_PROMPT_SHA256 = (
 	"e485baf382cf22d27a9d0e14778cfad7a9a39470871b3fde550b79c237aa6d68"
 )
@@ -240,6 +243,9 @@ esac
 		environment["PLAN_ENGINE"] = engine
 	for key in ("BASH_ENV", "ENV"):
 		environment.pop(key, None)
+	# The planner runs through scripts/codex_isolated_exec.sh; the fake docker
+	# runs the mock codex in the fake container.
+	environment = enable_fake_isolation(mock_bin_dir, scripts_dir, environment)
 
 	result = subprocess.run(
 		["bash", "scripts/run_plan_codex.sh"],
@@ -390,9 +396,10 @@ def test_codex_engine_runs_the_unchanged_codex_call() -> None:
 	assert _read_lines(runtime_dir / "codex-args.log") == [CODEX_ARGS]
 	assert not (runtime_dir / "claude-run.log").exists()
 	runner = PLAN_RUNNER.read_text(encoding="utf-8")
+	# The codex arguments are unchanged; the call runs in the isolated container.
 	assert (
-		'cat "${CODEX_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true '
-		'exec --skip-git-repo-check --model "${attempt_model}" --sandbox danger-full-access > "${CODEX_OUTPUT_FILE}" '
+		'bash "${CODEX_ISOLATED_EXEC}" run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true '
+		'exec --skip-git-repo-check --model "${attempt_model}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" '
 		'2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || plan_rc=$?'
 	) in runner
 

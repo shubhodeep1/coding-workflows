@@ -24,20 +24,23 @@
 #       Telegram note per job (plan D1). The caller then runs codex.
 #   ai_engine_pool_dir
 #       The account pool directory (CLAUDE_ENGINE_POOL_DIR below).
+#   ai_engine_claude_home
+#       The isolated CLI's session store ($RUNNER_TEMP/claude-isolated-home),
+#       where a resumable session's <id>.jsonl lives.
 #   ai_engine_accounts
 #       The usable account names, best first: each line of `order` that is a
 #       valid name and has a regular, non-empty `tokens/<NAME>` file.
 #   claude_run_selected <role> <prompt_file> <out_file> <workdir> [session_id]
 #       claude_run when AI_ENGINE_RESOLVED_<ROLE>=claude, else 75 at once.
 #   claude_run <role> <prompt_file> <out_file> <workdir> [session_id]
-#       Runs `claude -p` for the role in <workdir> and writes the final
-#       result text to <out_file>, the file the codex path writes.
-#       Returns 0 on success; 75 when Claude is unavailable (no CLI, no
-#       credential, no policy, or every account hit its usage limit or was
-#       rejected), after logging AI_ENGINE_FALLBACK, so the caller runs the
-#       codex path (D1); 124 on a timeout; any other non-zero status on a
-#       crash, which follows the role's existing retry rules; 86 if trusted
-#       support was changed (terminal: never fall back to codex).
+#       Runs `claude -p` for the role in a credential-free, network-isolated
+#       container and writes the final result text to <out_file>. Read
+#       profiles use a bounded source snapshot and trusted-support lock;
+#       write profiles use codex_isolated_exec.sh (`run --engine claude`)
+#       to copy validated changes back. Returns 0 on success; 75 when
+#       Claude is unavailable (caller runs codex); 124 on timeout; 86 if
+#       trusted read-profile support changed (terminal); otherwise nonzero
+#       on a crash, following the role's existing retry rules.
 #       AI_ENGINE_LAST_RUN_DIR names the run directory afterwards; it holds
 #       transcript-<NAME>.jsonl and stderr-<NAME>.txt for each account tried.
 #       Read-profile calls use a network-isolated container and a bounded,
@@ -63,9 +66,10 @@
 #                                   and heal_branch_tip under RUNTIME_DIR; filtered snapshots,
 #                                   never raw host mounts. Other paths fall back.
 #
-# Write-profile calls pass the OAuth token to the host CLI in a subshell.
-# Read-profile calls instead run in a networkless container with a placeholder
-# token; only the host relay reads the pool. Isolation failures return 75.
+# The OAuth token never reaches the CLI: scripts/claude_anthropic_relay.py
+# reads it from the pool file on the host and swaps it into each request; the
+# container holds a placeholder. It never appears in argv, a log line, the
+# environment or a file outside the pool directory.
 
 if [ "${_AI_ENGINE_LOADED:-}" = "true" ]; then
 	return 0 2>/dev/null || true
@@ -146,6 +150,13 @@ ai_engine_fallback()
 		fi
 	) 2>/dev/null || true
 	return 0
+}
+
+ai_engine_claude_home()
+{
+	# The isolated CLI's ~/.claude (session store), kept across claude_run
+	# calls in a job; callers that look for a resumable session use it.
+	printf '%s\n' "${RUNNER_TEMP:-/tmp}/claude-isolated-home"
 }
 
 ai_engine_pool_dir()
@@ -582,7 +593,7 @@ claude_run()
 		echo "::error::claude_run: session_id must be a lower-case UUID" >&2
 		return 2
 	fi
-	local resolved model effort profile hide_claude_md instructions
+	local resolved model effort profile hide_claude_md instructions guard_hook cli_version probe_model
 	if ! resolved="$(_ai_engine_py resolve --role "${role}" --model-hint "${AI_ENGINE_MODEL_HINT:-}" --effort-hint "${AI_ENGINE_EFFORT_HINT:-}")"; then
 		ai_engine_fallback "${role}" resolve_failed
 		return "${_AI_ENGINE_EXIT_FALLBACK}"
@@ -595,12 +606,20 @@ claude_run()
 	if [ "${AI_ENGINE_READ_ONLY:-false}" = "true" ]; then
 		profile="read"
 	fi
-	if [ "${profile}" != read ] && ! command -v claude >/dev/null 2>&1; then
-		ai_engine_fallback "${role}" cli_missing
-		return "${_AI_ENGINE_EXIT_FALLBACK}"
-	fi
 	hide_claude_md="$(_ai_engine_py config --key hide_claude_md 2>/dev/null || echo false)"
 	if ! instructions="$(_ai_engine_instructions_file)"; then
+		ai_engine_fallback "${role}" instructions_missing
+		return "${_AI_ENGINE_EXIT_FALLBACK}"
+	fi
+	if ! guard_hook="$(_ai_engine_py support-file --name guard-hook)" \
+		|| ! cli_version="$(ai_engine_cli_version)" \
+		|| ! probe_model="$(_ai_engine_py config --key probe_model)"; then
+		ai_engine_fallback "${role}" policy_unavailable
+		return "${_AI_ENGINE_EXIT_FALLBACK}"
+	fi
+	# The helper accepts only an absolute, regular file (it copies it into
+	# the container as /support/instructions.md).
+	if ! instructions="$(realpath -e -- "${instructions}")" || [ ! -f "${instructions}" ]; then
 		ai_engine_fallback "${role}" instructions_missing
 		return "${_AI_ENGINE_EXIT_FALLBACK}"
 	fi
@@ -644,56 +663,55 @@ claude_run()
 		[ -z "${old_term_trap}" ] || eval "${old_term_trap}"
 		return "${rc}"
 	fi
-	local -a settings_args=(settings --checkout "${workdir}" --out "${run_dir}/claude-settings.json" --profile "${profile}")
+	# Write profiles use the isolated workspace helper, never a host CLI.
+	local isolated_exec="${_AI_ENGINE_DIR}/codex_isolated_exec.sh"
+	if [ ! -f "${isolated_exec}" ] || [ -L "${isolated_exec}" ]; then
+		ai_engine_fallback "${role}" support_missing
+		return "${_AI_ENGINE_EXIT_FALLBACK}"
+	fi
+	# The workdir copy is mounted at the same absolute path, so the policy's
+	# checkout paths match; the guard hook is copied to /support/guard.py.
+	local -a settings_args=(settings --checkout "${workdir}" --out "${run_dir}/claude-settings.json" --profile "${profile}" --guard-hook /support/guard.py)
 	[ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ] && settings_args+=(--allow-workflow-edits)
 	if ! _ai_engine_py "${settings_args[@]}"; then
 		ai_engine_fallback "${role}" policy_unavailable
 		return "${_AI_ENGINE_EXIT_FALLBACK}"
 	fi
-	# Spike S10: the CLI ignores the allow list of an untrusted workspace.
-	_ai_engine_py trust --workdir "${workdir}" || echo "::warning::claude_run: could not mark ${workdir} trusted" >&2
-	local tools mode
+	local tools mode isolation_mode
 	case "${profile}" in
-		read) tools="Read,Grep,Glob,Bash"; mode="dontAsk" ;;
+		read) tools="Read,Grep,Glob,Bash"; mode="dontAsk"; isolation_mode="read-only" ;;
 		# An explicit list, not "default": the default set loads ~35 tools whose
 		# descriptions push a no-op start-up past the 25,000-token context gate.
 		# Keep in sync with PROFILE_TOOLS["write"] in claude_engine.py.
-		*) tools="Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch"; mode="bypassPermissions" ;;
+		*) tools="Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch"; mode="bypassPermissions"; isolation_mode="workspace" ;;
 	esac
+	# The CLI's session store (~/.claude) lives outside the container so a
+	# later claude_run in the same job can resume the session (answer Q18 A).
+	local claude_home
+	claude_home="$(ai_engine_claude_home)"
+	local -a isolation_args=(run --engine claude --mode "${isolation_mode}" --workdir "${workdir}"
+		--claude-models "${model},${probe_model}" --claude-cli-version "${cli_version}"
+		--claude-settings "${run_dir}/claude-settings.json" --claude-guard-hook "${guard_hook}"
+		--claude-instructions "${instructions}" --claude-home "${claude_home}")
+	# The container copy leaves CLAUDE.md out and never writes one back; the
+	# host file is never moved (answer Q19 A).
+	[ "${hide_claude_md}" = "true" ] && isolation_args+=(--hide-claude-md)
+	# Implement prepares one workspace sandbox per job with the project's
+	# dependencies preinstalled (codex_isolated_exec.sh prepare --deps); a
+	# write role in that job reuses it, as the codex attempts do.
+	if [ "${isolation_mode}" = "workspace" ] && [ -n "${CODEX_ISOLATED_ROOT:-}" ] && [ "${CODEX_ISOLATED_MODE:-}" = "workspace" ]; then
+		isolation_args+=(--root "${CODEX_ISOLATED_ROOT}")
+	fi
 
 	(
 		trap 'exit 130' INT
 		trap 'exit 143' TERM
-		unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BASE_URL CLAUDE_CODE_OAUTH_TOKEN
-		hidden=""
-		if [ "${hide_claude_md}" = "true" ] && [ -f "${workdir}/CLAUDE.md" ] && [ ! -L "${workdir}/CLAUDE.md" ]; then
-			hidden="${run_dir}/CLAUDE.md.hidden"
-			mv -- "${workdir}/CLAUDE.md" "${hidden}" || exit 1
-			trap 'if [ -e "${workdir}/CLAUDE.md" ] || [ -L "${workdir}/CLAUDE.md" ]; then
-				if original_backup_path="$(mktemp "${workdir}/CLAUDE.md.original.XXXXXXXX")" && mv -- "${hidden}" "${original_backup_path}"; then
-					echo "::warning::claude_run: CLAUDE.md created while hidden; original preserved at ${original_backup_path}" >&2
-				else
-					echo "::error::claude_run: could not restore original CLAUDE.md; preserved at ${hidden}" >&2
-				fi
-			else mv -- "${hidden}" "${workdir}/CLAUDE.md"; fi' EXIT
-		fi
 		cd "${workdir}" || exit 1
-		credential_prefix=()
-		if [ "${profile}" = "read" ]; then
-			# An inherited gh login or host override must not replace the stripped job token.
-			mkdir -m 0700 -- "${run_dir}/gh-read-config" || exit 1
-			# Keep the runner/stall guard environment intact; only the model and
-			# its child tools lose credentials. The Claude OAuth token is retained.
-			credential_prefix=(env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN -u GH_HOST
-				-u GH_PAT -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID -u OPENROUTER_API_KEY
-				-u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_RUNTIME_TOKEN
-				GH_CONFIG_DIR="${run_dir}/gh-read-config")
-		fi
 		for name in "${accounts[@]}"; do
 			token_file="${pool_dir}/tokens/${name}"
 			session_args=()
 			if [ -n "${session_id}" ]; then
-				if compgen -G "${HOME}/.claude/projects/*/${session_id}.jsonl" >/dev/null; then
+				if compgen -G "${claude_home}/projects/*/${session_id}.jsonl" >/dev/null; then
 					session_args=(--resume "${session_id}")
 				else
 					session_args=(--session-id "${session_id}")
@@ -701,15 +719,15 @@ claude_run()
 			fi
 			transcript="${run_dir}/transcript-${name}.jsonl"
 			stderr_file="${run_dir}/stderr-${name}.txt"
-			cmd=("${credential_prefix[@]}" claude -p --model "${model}" --effort "${effort}"
-				--system-prompt-file "${instructions}"
-				--setting-sources "" --settings "${run_dir}/claude-settings.json"
+			# The token file is read only by the host relay the helper starts.
+			cmd=(bash "${isolated_exec}" "${isolation_args[@]}" --claude-token-file "${token_file}" --
+				-p --model "${model}" --effort "${effort}"
+				--system-prompt-file /support/instructions.md
+				--setting-sources "" --settings /support/settings.json
 				--strict-mcp-config --disable-slash-commands
 				--exclude-dynamic-system-prompt-sections
 				--tools "${tools}" --permission-mode "${mode}"
 				--output-format stream-json --verbose "${session_args[@]}")
-			CLAUDE_CODE_OAUTH_TOKEN="$(tr -d '[:space:]' < "${token_file}")"
-			export CLAUDE_CODE_OAUTH_TOKEN
 			attempt_rc=0
 			if [ -f "${_AI_ENGINE_DIR}/codex_stall_guard.sh" ]; then
 				bash "${_AI_ENGINE_DIR}/codex_stall_guard.sh" --phase "${role,,}" --engine claude \
@@ -717,7 +735,19 @@ claude_run()
 			else
 				"${cmd[@]}" < "${prompt_file}" > "${transcript}" 2> "${stderr_file}" || attempt_rc=$?
 			fi
-			unset CLAUDE_CODE_OAUTH_TOKEN
+			case "${attempt_rc}" in
+				75)
+					# No Docker or no image: no account can run (answer Q20 A).
+					# The helper's reason (and any image build output) goes to the job log.
+					tail -n 30 "${stderr_file}" >&2 2>/dev/null || true
+					echo "CLAUDE_POOL run role=${role} account=${name} outcome=unavailable reason=isolation_unavailable exit_code=${attempt_rc}" >&2
+					exit 76
+					;;
+				73)
+					echo "CLAUDE_POOL run role=${role} account=${name} outcome=crashed reason=relay_unavailable exit_code=${attempt_rc}" >&2
+					continue
+					;;
+			esac
 			verdict="$(_ai_engine_py classify --transcript "${transcript}" --exit-code "${attempt_rc}")" || verdict='{"outcome":"crashed","reason":"classify_failed"}'
 			outcome="$(_ai_engine_json_field "${verdict}" outcome)"
 			reason="$(_ai_engine_json_field "${verdict}" reason)"
@@ -743,6 +773,10 @@ claude_run()
 		done
 		exit "${_AI_ENGINE_EXIT_FALLBACK}"
 	) || rc=$?
+	if [ "${rc}" -eq 76 ]; then
+		ai_engine_fallback "${role}" isolation_unavailable
+		return "${_AI_ENGINE_EXIT_FALLBACK}"
+	fi
 	if [ "${rc}" -eq "${_AI_ENGINE_EXIT_FALLBACK}" ]; then
 		ai_engine_fallback "${role}" all_accounts_failed
 	fi

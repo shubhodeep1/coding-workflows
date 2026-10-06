@@ -324,7 +324,7 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 # workflow staged (SUPPORT_ROOT_DIR), with the same credentials stripped.
 # The current directory is the PR checkout, so its scripts/ is never used.
 # Exit 75 (role on codex, Claude unavailable, or no engine) runs the
-# unchanged codex call below.
+# isolated codex call below.
 triage_claude_rc=75
 triage_engine_sh="${SUPPORT_ROOT_DIR:-}/scripts/ai_engine.sh"
 if [ -n "${SUPPORT_ROOT_DIR:-}" ] && [ -f "${triage_engine_sh}" ]; then
@@ -348,8 +348,13 @@ if [ "${triage_claude_rc}" -ne 75 ]; then
 		: > "${DIAG_FILE}"
 	fi
 elif command -v codex >/dev/null 2>&1; then
+	# The PR description and check logs are untrusted, so the agent runs in
+	# the credential-free, network-isolated container
+	# (scripts/codex_isolated_exec.sh, read-only snapshot): beyond the
+	# env -u below, it never holds the OpenRouter key or the checkout's .git.
 	if env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID \
-		codex --ask-for-approval never \
+		bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex_isolated_exec.sh" run --mode read-only -- \
+		--ask-for-approval never \
 		-c model_verbosity="${MODEL_VERBOSITY:-low}" \
 		-c include_apply_patch_tool=true \
 		exec --skip-git-repo-check \

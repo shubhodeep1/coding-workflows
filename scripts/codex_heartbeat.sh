@@ -115,7 +115,7 @@ export CODEX_HEARTBEAT_STDERR_FILE="${stderr_file}"
 export CODEX_HEARTBEAT_ACTIVITY_FILE="${activity_file}"
 export CODEX_HEARTBEAT_INTERVAL_SECS_EFFECTIVE="${heartbeat_interval_raw}"
 
-exec python3 -c "$(cat <<'PY'
+exec env PYTHONSAFEPATH=1 python3 -c "$(cat <<'PY'
 from __future__ import annotations
 
 import os

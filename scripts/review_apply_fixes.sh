@@ -289,11 +289,12 @@ emit_context_budget_warn_for_prompt() {
   if ! command -v python3 >/dev/null 2>&1; then
     return 0
   fi
+  [[ "${SUPPORT_SCRIPTS_DIR:-}" == /* ]] || return 0
 
   warn_line="$({
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}" \
-    python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
+    PYTHONPATH="${SUPPORT_SCRIPTS_DIR}" \
+    PYTHONSAFEPATH=1 python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
 import sys
 
 try:
@@ -346,14 +347,15 @@ emit_lessons_learned_for_out_of_plan_fix() {
   if [ ! -s "${PR_CHANGED_FILES_FILE:-}" ] || ! command -v python3 >/dev/null 2>&1; then
     return 0
   fi
+  [[ "${SUPPORT_SCRIPTS_DIR:-}" == /* ]] || return 0
 
   current_diff_paths="$(git diff --name-only HEAD 2>/dev/null || true)"
   [ -n "${current_diff_paths}" ] || return 0
 
   telemetry_json="$(printf '%s\n' "${current_diff_paths}" | {
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}" \
-    python3 - "${PWD}" "${PR_CHANGED_FILES_FILE}" <<'PY'
+    PYTHONPATH="${SUPPORT_SCRIPTS_DIR}" \
+    PYTHONSAFEPATH=1 python3 - "${PWD}" "${PR_CHANGED_FILES_FILE}" <<'PY'
 import json
 import os
 import sys
@@ -575,7 +577,7 @@ prepare_judge_interim_priors()
 		return 0
 	fi
 
-	merged_count="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${prior_json}" "${JUDGE_INTERIM_PRIORS_FILE}" <<'PY'
+	merged_count="$(PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${prior_json}" "${JUDGE_INTERIM_PRIORS_FILE}" <<'PY'
 import json
 import re
 import sys
@@ -1768,6 +1770,14 @@ prompt_tmp="$(mktemp)"
 {
   cat ./pre_assembled_static.txt
   echo
+  if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/static_readme_trimmed.txt" ]; then
+    echo "=== BEGIN UNTRUSTED PR README.MD (trimmed) ==="
+    while IFS= read -r review_readme_line || [ -n "${review_readme_line}" ]; do
+      printf 'UNTRUSTED_DATA: %s\n' "${review_readme_line}"
+    done < "${RUNTIME_DIR}/static_readme_trimmed.txt"
+    echo "=== END UNTRUSTED PR README.MD (trimmed) ==="
+    echo
+  fi
   if [ -n "${TOOL_CALL_BUDGET_JUDGE:-}" ]; then
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo

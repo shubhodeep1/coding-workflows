@@ -721,7 +721,10 @@ build_validate_serena_tool_hints()
 {
   local phase="${1:-general}"
 
-  if [ "${SERENA_AVAILABLE:-false}" != "true" ]; then
+  # The validate agents run in the isolated container
+  # (scripts/codex_isolated_exec.sh), where no MCP server is configured, so
+  # a Serena hint would only send them to tools that are not there.
+  if [ -n "${CODEX_ISOLATED_EXEC:-}" ] || [ "${SERENA_AVAILABLE:-false}" != "true" ]; then
     return 0
   fi
 
@@ -2848,6 +2851,15 @@ trap cleanup_runtime_containers EXIT
 # still picks up the catalog shipped next to validate_process.sh.
 CODEX_HEARTBEAT_HELPER="${_validate_script_dir}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${_validate_script_dir}/codex_stall_guard.sh"
+# Every validate agent (discover, diagnose, self-heal) reads the tracking
+# issue, harness and container logs, so it runs in the credential-free,
+# network-isolated container with a read-only snapshot of the checkout.
+# Exported so codex_thread_reuse.sh (direct-run and the PATH wrapper) and
+# self_heal_validation.sh launch through the same helper.
+CODEX_ISOLATED_EXEC="${_validate_script_dir}/codex_isolated_exec.sh"
+CODEX_ISOLATED_MODE="read-only"
+export CODEX_ISOLATED_EXEC CODEX_ISOLATED_MODE
+unset CODEX_ISOLATED_ROOT
 WORKSPACE_SAFETY_CHECK_HELPER=""
 for _workspace_safety_candidate in \
   "${_validate_script_dir}/workspace_safety_check.sh" \
@@ -3003,7 +3015,7 @@ run_validate_codex_attempt() {
       --phase "${phase_name}" \
       --stdout-file "${output_file}" \
       --status-file "${status_file}" \
-      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" 2> >(tee -a "${log_file}" >&2)
+      -- bash "${CODEX_ISOLATED_EXEC}" run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" 2> >(tee -a "${log_file}" >&2)
     return $?
   fi
 
@@ -3011,11 +3023,11 @@ run_validate_codex_attempt() {
     "${CODEX_HEARTBEAT_HELPER}" \
       --phase "${phase_name}" \
       --stdout-file "${output_file}" \
-      -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" 2> >(tee -a "${log_file}" >&2)
+      -- bash "${CODEX_ISOLATED_EXEC}" run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" 2> >(tee -a "${log_file}" >&2)
     return $?
   fi
 
-  codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" > "${output_file}" 2> >(tee -a "${log_file}" >&2)
+  bash "${CODEX_ISOLATED_EXEC}" run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" > "${output_file}" 2> >(tee -a "${log_file}" >&2)
 }
 
 export PATH="${HOME}/.local/bin:${PATH}"
@@ -3033,6 +3045,12 @@ fi
 INTEGRATION_BRANCH=""
 if is_tracking_run; then
   INTEGRATION_BRANCH="$(sed -n 's/^\*\*Integration branch:\*\* `\([^`]*\)`$/\1/p' "${PROJECT_SPEC_FILE}" | head -n1 | tr -d '\r')"
+fi
+
+VALIDATE_README_CONTEXT="$(mktemp "${RUNTIME_DIR:-/tmp}/validate-readme.XXXXXX")"
+if ! bash scripts/build_static_context.sh readme "${VALIDATE_README_CONTEXT}"; then
+  rm -f "${VALIDATE_README_CONTEXT}"
+  exit 1
 fi
 
 {
@@ -3055,17 +3073,14 @@ fi
     cat agents.md
     echo
   fi
-  if [ -f README.md ]; then
-    echo "=== README.MD ==="
-    cat README.md
-    echo
-  fi
+  cat "${VALIDATE_README_CONTEXT}"
   if [ -f probably_unnecessary_but_read_if_stuck.md ]; then
     echo "=== OVERFLOW REFERENCE ==="
     echo "If you cannot make progress without operator-runbook details (env var reference, autofix retrigger/dedup internals, orchestrator integration-sync auto-heal, validation self-healing, workflow log analysis pipeline, semantic cache scope, wrapper pin policy), read ./probably_unnecessary_but_read_if_stuck.md from the working tree before bailing."
     echo
   fi
 } > "${STATIC_CONTEXT_FILE}"
+rm -f "${VALIDATE_README_CONTEXT}"
 
 
 # ---------------------------------------------------------------

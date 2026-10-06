@@ -15,11 +15,14 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+import sys
 import tempfile
 import textwrap
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 IMPLEMENT_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
 IMPLEMENT_STAGED_SUPPORT_WORKSPACE_SCRIPT = REPO_ROOT / "scripts" / "implement_staged_support_workspace.sh"
@@ -599,6 +602,9 @@ def _run_diagnose_step(
 	if extra_env:
 		env.update(extra_env)
 
+	# The diagnose agent now runs through scripts/codex_isolated_exec.sh; the
+	# fake docker runs the mock codex inside the fake container.
+	env = enable_fake_isolation(bin_dir, repo_dir / "scripts", env)
 	proc = _run_shell_script(script, cwd=repo_dir, env=env)
 	state = _read_gh_state(gh_state_file)
 	paths = {
@@ -1945,7 +1951,11 @@ def test_staged_support_workspace_fails_closed_on_unsafe_path_or_missing_base() 
 
 def test_implement_workflow_wires_staged_support_workspace_helper() -> None:
 	stage_block = _step_block_text("Stage workflow support files")
-	assert "lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py claude_read_isolated_run.sh claude_read_snapshot.py claude_anthropic_relay.py review_untrusted_workspace.py; do" in stage_block
+	assert "lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py" in stage_block
+	assert (
+		"claude_read_isolated_run.sh claude_read_snapshot.py claude_anthropic_relay.py review_untrusted_workspace.py; do" in stage_block
+		or "codex_thread_reuse.sh codex_isolated_exec.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py" in stage_block
+	)
 	assert 'echo "STAGED_SUPPORT_EDITOR_HEAD_LEDGER=${RUNTIME_DIR}/staged_support_editor_head.txt"' in stage_block
 	implement_run = _extract_run_script("Run Codex implementation")
 	helper_line = 'STAGED_SUPPORT_WORKSPACE_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_staged_support_workspace.sh"'
@@ -1957,10 +1967,10 @@ def test_implement_workflow_wires_staged_support_workspace_helper() -> None:
 	assert '--repo-root "${WORKSPACE_PATH:-${GITHUB_WORKSPACE}}"' in implement_run
 	# restore precedes the pre-Codex baseline capture and the attempt loop;
 	# reinstall follows the loop and precedes the transcript archive.
-	assert implement_run.index(restore_call) < implement_run.index("python3 scripts/targeted_file_context.py")
+	assert implement_run.index(restore_call) < implement_run.index('python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/targeted_file_context.py"')
 	assert implement_run.index(restore_call) < implement_run.index('CODEX_PRE_BASELINE="${RUNTIME_DIR}/codex_pre_baseline.txt"')
 	assert implement_run.index(restore_call) < implement_run.index('for attempt in $(seq 1 "${max_attempts}"); do')
-	assert implement_run.rindex("bash scripts/codex_thread_reuse.sh direct-run") < implement_run.index(reinstall_call)
+	assert implement_run.rindex('bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run') < implement_run.index(reinstall_call)
 	assert implement_run.index(reinstall_call) < implement_run.index('if [ "${implement_succeeded}" = "true" ]; then')
 	repair_run = _extract_run_script("Attempt post-Codex syntax repair")
 	assert repair_run.count(restore_call) == 1
@@ -1990,8 +2000,8 @@ def test_editor_launches_drop_staged_support_ledger_env() -> None:
 	conftest.py, so the launch line has to scrub them itself.
 	"""
 	for step_name, launch_line in (
-		("Run Codex implementation", "bash scripts/codex_thread_reuse.sh direct-run || cmd_rc=$?"),
-		("Attempt post-Codex syntax repair", "bash scripts/codex_thread_reuse.sh direct-run; then"),
+		("Run Codex implementation", 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run || cmd_rc=$?'),
+		("Attempt post-Codex syntax repair", 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run; then'),
 	):
 		script_lines = _extract_run_script(step_name).splitlines()
 		launch_indexes = [idx for idx, line in enumerate(script_lines) if line.strip() == launch_line]
@@ -2212,7 +2222,7 @@ def test_preflight_scope_guard_projects_only_untouched_staged_support_files() ->
 def test_validate_step_uses_reusable_validator_with_continue_on_error() -> None:
 	validate_block = _step_block_text("Validate syntax of changed files")
 	assert "continue-on-error: true" in validate_block
-	assert "bash scripts/validate_changed_files_syntax.sh" in validate_block
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/validate_changed_files_syntax.sh"' in validate_block
 
 
 def test_post_codex_syntax_repair_step_contract() -> None:
@@ -2222,16 +2232,17 @@ def test_post_codex_syntax_repair_step_contract() -> None:
 	repair_block = _step_block_text("Attempt post-Codex syntax repair")
 	assert "steps.validate_syntax_changed_files.outcome == 'failure'" in repair_block
 	assert "prompts/mode-implement-repair.txt" in repair_block
-	assert "scripts/validate_changed_files_syntax.sh" in repair_block
+	assert "/validate_changed_files_syntax.sh\"" in repair_block
 	assert "MAX_POST_CODEX_REPAIR_ATTEMPTS" in repair_block
 	assert "[ \"${max_attempts_raw}\" -lt 0 ]" in repair_block
 	assert "if [ \"${max_attempts}\" -eq 0 ]; then" in repair_block
 	assert "BASELINE_COMMIT=\"$(git stash create" in repair_block
 	assert "PRE_UNTRACKED_FILE=\"${RUNTIME_DIR}/post_codex_pre_untracked_attempt_" in repair_block
 	assert "Required repair artifacts are missing from repair-prompt-and-validator-split dependency." in repair_block
-	assert 'SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "${REPAIR_PROMPT_TEMPLATE}"' in repair_block
+	assert 'SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/render_prompt.sh" "${REPAIR_PROMPT_TEMPLATE}"' in repair_block
 	assert 'Failed to render repair prompt template ${REPAIR_PROMPT_TEMPLATE}; using raw prompt.' in repair_block
-	assert "Keep apply_patch as the primary write path for repository edits" in repair_block
+	# The repair agent runs isolated (no MCP server), so the step renders no Serena hints.
+	assert "Serena MCP is available in this run" not in repair_block
 
 
 def test_syntax_failure_requires_successful_repair_before_commit_path() -> None:
@@ -3988,7 +3999,7 @@ def test_codex_blocked_verdict_bail_and_flag() -> None:
 	)
 	# The reason must be logged so the workflow log names WHY the loop
 	# stopped without the operator opening codex_output.txt.
-	escape_helper_source_idx = codex_block.find("source scripts/gh_helpers.sh")
+	escape_helper_source_idx = codex_block.find('source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh"')
 	assert 0 <= escape_helper_source_idx < blocked_idx, (
 		"the GitHub Actions annotation escaper must be sourced before the BLOCKED bail"
 	)
@@ -5456,7 +5467,7 @@ def test_diagnose_on_codex_never_touches_claude() -> None:
 def test_diagnose_codex_command_is_unchanged() -> None:
 	diagnose = (REPO_ROOT / "scripts" / "implement_diagnose_post_codex_failure.sh").read_text(encoding="utf-8")
 	assert (
-		'timeout "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s codex --ask-for-approval never -c model_verbosity=low '
+		'timeout "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s "${diagnose_codex_cmd[@]}" --ask-for-approval never -c model_verbosity=low '
 		'-c include_apply_patch_tool=true exec --skip-git-repo-check --model "${DIAGNOSE_MODEL}" --sandbox danger-full-access'
 	) in diagnose
 

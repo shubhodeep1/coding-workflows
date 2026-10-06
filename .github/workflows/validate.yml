@@ -73,6 +73,8 @@ env:
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_VALIDATE || 'high' }}
   MODEL_VERBOSITY: ${{ vars.VERBOSITY_VALIDATE || 'low' }}
   CODEX_THREAD_REUSE_ENABLED: ${{ vars.CODEX_THREAD_REUSE_ENABLED || 'false' }}
+  # Codex version baked into the isolated agent image (scripts/codex_isolated_exec.sh).
+  CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
   VALIDATION_INCLUDE_SYNTHESISED: ${{ vars.VALIDATION_INCLUDE_SYNTHESISED || 'true' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   MEMORY_INJECTION_SCAN_ENABLED: ${{ vars.MEMORY_INJECTION_SCAN_ENABLED || 'true' }}
@@ -324,6 +326,7 @@ jobs:
               "scripts/ai_memory_lib.py",
               "scripts/memory_injection_patterns.py",
               "scripts/openrouter_prompt_cache.py",
+              "scripts/build_static_context.sh",
               "scripts/write_codex_config.sh",
               "scripts/codex_helpers.sh",
               "scripts/orchestrate_force_tick.sh",
@@ -331,7 +334,10 @@ jobs:
               "scripts/write_guard.sh",
               "scripts/workspace_init.sh",
               "scripts/workspace_safety_check.sh",
-              "scripts/run_workspace_hook.sh"
+              "scripts/run_workspace_hook.sh",
+              "scripts/codex_isolated_exec.sh",
+              "scripts/codex_isolated_workspace.py",
+              "scripts/clarify_openrouter_broker.py"
             ],
             "optional_preserve_scripts_before_templates": [
               "scripts/render_prompt.py",

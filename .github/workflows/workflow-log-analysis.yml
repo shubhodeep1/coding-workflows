@@ -437,7 +437,7 @@ jobs:
             fi
             set +e
             # Claude engine (replace-claude-sessions plan Phase 5d): RETRO runs
-            # through claude_run_selected; exit 75 runs the unchanged codex call.
+            # through claude_run_selected; exit 75 runs isolated Codex.
             RETRO_EXIT_ENGINE_RC=75
             if [ -f scripts/ai_engine.sh ]; then
               # shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
@@ -447,10 +447,11 @@ jobs:
               RETRO_EXIT_ENGINE_RC=$?
             fi
             if [ "${RETRO_EXIT_ENGINE_RC}" -eq 75 ]; then
+              # Workflow logs are untrusted; keep Codex credential-free and network-isolated.
               bash scripts/codex_heartbeat.sh \
                 --phase workflow_weekly_retro \
                 --stdout-file "${RETRO_BODY_FILE}" \
-                -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_RETRO_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-weekly-retro-codex.log >&2)
+                -- bash scripts/codex_isolated_exec.sh run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_RETRO_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-weekly-retro-codex.log >&2)
               RETRO_EXIT=$?
             else
               RETRO_EXIT="${RETRO_EXIT_ENGINE_RC}"
@@ -1209,7 +1210,7 @@ jobs:
             fi
             set +e
             # Claude engine (replace-claude-sessions plan Phase 5d): LOG_ANALYSIS runs
-            # through claude_run_selected; exit 75 runs the unchanged codex call.
+            # through claude_run_selected; exit 75 runs isolated Codex.
             ANALYZE_EXIT_ENGINE_RC=75
             if [ -f scripts/ai_engine.sh ]; then
               # shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
@@ -1219,10 +1220,12 @@ jobs:
               ANALYZE_EXIT_ENGINE_RC=$?
             fi
             if [ "${ANALYZE_EXIT_ENGINE_RC}" -eq 75 ]; then
+              # Include the downloaded logs so the isolated agent can inspect
+              # the directory referenced by the prompt when it is available.
               bash scripts/codex_heartbeat.sh \
                 --phase workflow_log_analysis \
                 --stdout-file "${REPORT_FILE}" \
-                -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-analysis-codex.log >&2)
+                -- bash scripts/codex_isolated_exec.sh run --mode read-only --include "${RUN_LOGS_DIR}" -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-analysis-codex.log >&2)
               ANALYZE_EXIT=$?
             else
               ANALYZE_EXIT="${ANALYZE_EXIT_ENGINE_RC}"
@@ -1843,7 +1846,7 @@ jobs:
             fi
             set +e
             # Claude engine (replace-claude-sessions plan Phase 5d): LOG_AUDIT runs
-            # through claude_run_selected; exit 75 runs the unchanged codex call.
+            # through claude_run_selected; exit 75 runs isolated Codex.
             AUDIT_EXIT_ENGINE_RC=75
             if [ -f scripts/ai_engine.sh ]; then
               # shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
@@ -1853,10 +1856,11 @@ jobs:
               AUDIT_EXIT_ENGINE_RC=$?
             fi
             if [ "${AUDIT_EXIT_ENGINE_RC}" -eq 75 ]; then
+              # Workflow logs are untrusted; keep Codex credential-free and network-isolated.
               bash scripts/codex_heartbeat.sh \
                 --phase workflow_deep_audit \
                 --stdout-file "${SECTION_FILE}" \
-                -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-audit-codex.log >&2)
+                -- bash scripts/codex_isolated_exec.sh run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-audit-codex.log >&2)
               AUDIT_EXIT=$?
             else
               AUDIT_EXIT="${AUDIT_EXIT_ENGINE_RC}"
@@ -2402,7 +2406,7 @@ jobs:
             fi
             set +e
             # Claude engine (replace-claude-sessions plan Phase 5d): LOG_ANALYSIS runs
-            # through claude_run_selected; exit 75 runs the unchanged codex call.
+            # through claude_run_selected; exit 75 runs isolated Codex.
             API_EXIT_ENGINE_RC=75
             if [ -f scripts/ai_engine.sh ]; then
               # shellcheck disable=SC2016 # $1..$4 expand in the inner bash.
@@ -2412,10 +2416,11 @@ jobs:
               API_EXIT_ENGINE_RC=$?
             fi
             if [ "${API_EXIT_ENGINE_RC}" -eq 75 ]; then
+              # Workflow logs are untrusted; keep Codex credential-free and network-isolated.
               bash scripts/codex_heartbeat.sh \
                 --phase workflow_api_redundancy \
                 --stdout-file "${SECTION_FILE}" \
-                -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-api-redundancy-codex.log >&2)
+                -- bash scripts/codex_isolated_exec.sh run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-api-redundancy-codex.log >&2)
               API_EXIT=$?
             else
               API_EXIT="${API_EXIT_ENGINE_RC}"

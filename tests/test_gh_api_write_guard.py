@@ -187,6 +187,12 @@ def test_simple_read_or_routine_call_is_allowed(command):
 	assert _decide(command) == guard.DECISION_ALLOW
 
 
+def test_append_assignment_before_gh_api_preserves_call_classification():
+	assert guard.gh_api_invocations(guard.shell_segments("COUNT+=1 gh api repos/a/b")) == [["repos/a/b"]]
+	assert _decide("COUNT+=1 gh api repos/a/b") is None  # Prefix assignments are not on the whole-call allow list.
+	assert _decide("COUNT+=1 gh api -X DELETE repos/a/b/git/refs/heads/x") == guard.DECISION_ASK
+
+
 # ──────────────────────────────────────────────────────────────────
 # Non-routine writes and unreadable calls: ask
 # ──────────────────────────────────────────────────────────────────

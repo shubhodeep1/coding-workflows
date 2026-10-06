@@ -25,6 +25,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
+from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
@@ -1164,6 +1165,9 @@ def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[s
 			}
 		)
 		env.update(extra_env or {})
+		# The diagnosis agent runs through scripts/codex_isolated_exec.sh; the
+		# fake docker runs the mock codex in the fake container.
+		env = enable_fake_isolation(tmp / "bin", work / "scripts", env)
 		result = _run(INTAKE_SCRIPT, work, env)
 		prompt = prompt_out.read_text(encoding="utf-8") if prompt_out.exists() else ""
 		return result, _state(state_file), prompt
@@ -2356,6 +2360,9 @@ def _run_gate(tmp: Path, *, comments: list[dict], event_name: str = "workflow_di
 		"pr": {"state": "open", "merged": False, "head": {"ref": "ai/issue-4255", "sha": SHA_A}, "labels": [], "additions": 400, "deletions": 50, "changed_files": 1, "mergeable": True, "mergeable_state": "clean", "title": "AI implementation for issue #4255", "body": "Fixes #4255"},
 	}
 	state.update(state_overrides or {})
+	# The authenticated PR response always identifies the head repository;
+	# gate tests overriding the PR body inherit the same-repo default.
+	state["pr"]["head"].setdefault("repo", {"full_name": SELF_REPO})
 	state_file.write_text(json.dumps(state), encoding="utf-8")
 	output_file = tmp / "github_output.txt"
 	output_file.write_text("", encoding="utf-8")

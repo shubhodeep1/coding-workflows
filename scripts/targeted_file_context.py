@@ -566,7 +566,22 @@ def emit_context(
 	repo_root_resolved = repo_root.resolve()
 
 	for rel in paths:
-		abs_path = (repo_root / rel).resolve()
+		if any(part.lower() == ".git" for part in Path(rel).parts):
+			output.extend([f"--- FILE: {rel} (.git path; not inlined) ---", ""])
+			included += 1
+			continue
+		candidate_path = repo_root
+		symlinked_component = False
+		for part in Path(rel).parts:
+			candidate_path = candidate_path / part
+			if candidate_path.is_symlink():
+				output.extend([f"--- FILE: {rel} (symbolic link; not inlined) ---", ""])
+				included += 1
+				symlinked_component = True
+				break
+		if symlinked_component:
+			continue
+		abs_path = candidate_path.resolve()
 		try:
 			abs_path.relative_to(repo_root_resolved)
 		except ValueError:
