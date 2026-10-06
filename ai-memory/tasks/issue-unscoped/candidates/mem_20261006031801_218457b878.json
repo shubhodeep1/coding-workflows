@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_single_issue_security_pass.sh:86-104 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: `single_pass_output` can emit `hold=true` without `hold_reason` when called without a reason.\n  WHY: Current call sites pass a reason, but a future omission would cause the merge gate to normalize it to `unknown` and page CRITICAL.\n- .github/workflows/review_autofix.yml:6642-6648 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: The alert path can display a raw or incomplete `JUDGE_SKIP_REASON` when it does not have the expected `security_hold_` prefix and suffix.\n  WHY: Current judge exits emit the prefix, but malformed or future upstream values would be shown instead of `unknown`; reviewers characterize this as defensive or cosmetic.\n- scripts/review_rb_judge_security_pass.sh:342 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The hold-reason validation regex rejects reasons containing digits and normalizes them to `unknown`.\n  WHY: Current reasons pass, but a future reason containing digits would be hidden from operators and could hinder triage; reviewers describe this as fail-closed.\n- scripts/review_rb_judge_security_pass.sh:331-335 | severity=low | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: A nonzero gate exit overwrites a valid hold reason with `gate_failed`.\n  WHY: If the exhaustion-label write fails, the alert reports `gate_failed` instead of the specific `label_write_failed` reason, contrary to the stated behavior of naming the reason for non-self-resolving holds.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_single_issue_security_pass.sh:97 | severity=low | confidence=[2]\n  PROBLEM: All current call sites pass `hold_reason`, but `single_pass_output` accepts `hold=true` with no reason.\n  WHY: The merge gate normalizes a missing reason to `unknown` and alerts CRITICAL, though the reviewer says this is deliberate defensive design and does not fail at runtime.\n- .github/workflows/review_autofix.yml:6647 | severity=low | confidence=[2]\n  PROBLEM: `HOLD_REASON=\"${JUDGE_SKIP_REASON#security_hold_}\"` does not add its own fallback when the prefix is absent.\n  WHY: The reviewer says current code does not fail at runtime, and an unprefixed value would be cosmetic because the alert still fires and operators would see the raw reason.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_rb_judge_security_pass.sh:342 | PROBLEM: The `[[ \"${hold_reason}\" =~ ^[a-z_]+$ ]]` regex rejects future gate reasons containing digits.\n  WHY: A reason such as `cycle_3_exhausted` would be normalized to `unknown`, which is fail-closed but over-restrictive.\n- .github/workflows/review_autofix.yml:6642-6648 | PROBLEM: If `JUDGE_SKIP_REASON` does not start with `security_hold_`, prefix stripping yields the raw value rather than `unknown`.\n  WHY: A malformed upstream output such as `JUDGE_SKIP_REASON=foo` would make the message print `(foo)`, which the reviewer describes as defensive hardening.\n- scripts/review_single_issue_security_pass.sh:86-104 | PROBLEM: When `single_pass_output` is called with `$1=\"true\"` and an unset `$2`, it emits `hold=true` without `hold_reason=`.\n  WHY: Current call sites pass a reason, but a future omission would be normalized to `unknown` and alert CRITICAL; the upstream merging gate does not warn.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_rb_judge_security_pass.sh:331-335 | severity=low | confidence=[5]\n  PROBLEM: A nonzero gate exit overwrites a valid hold reason with `gate_failed`.\n  WHY: On an exhaustion-label write failure, `single_pass_gate` writes `hold=true` and `hold_reason=label_write_failed` before returning 1, but the branch sets `RB_SECURITY_HOLD_REASON=gate_failed`, so the alert loses the specific reason.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_rb_judge_security_pass.sh:342 | severity=low | confidence=[3]\n  PROBLEM: The validation regex rejects hold reasons containing digits.\n  WHY: A reason such as `attempt_2_failed` or `timeout_30s` would be normalized to `unknown`, which is fail-closed but could hinder triage.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_rb_judge_security_pass.sh:342 | PROBLEM: The validation regex rejects hold reasons containing digits.\n  WHY: A future reason such as `cycle3_exhausted` would be reported as `unknown`, which is fail-closed but could confuse triage.\n- .github/workflows/review_autofix.yml:6647 | PROBLEM: If `JUDGE_SKIP_REASON` is exactly `security_hold` without a trailing suffix, prefix stripping yields `security_hold` instead of `unknown`.\n  WHY: The judge emits `security_hold_<reason>` today, but an older or malformed output would be displayed verbatim in the CRITICAL alert.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0f830a67833fbb3ae0941ebee9eac48ca117507e234431147e474aac2cb64e9f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6462,
+    "run_id": "37405410419",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37405410419",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006031801_218457b878",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6462,
+    "run_id": "37405410419"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T03:18:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
