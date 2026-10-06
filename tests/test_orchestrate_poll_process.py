@@ -18664,11 +18664,33 @@ def test_state_author_filter_covers_all_extraction_callers():
 	assert extractor.index("unblock_trusted_login >/dev/null") < extractor.index("orchestrate_state_v2.py extract")
 	assert 'printf \'%s\' "${trusted_comments_json}" > "${_v2_comments_file}"' in extractor
 	assert 'printf \'%s\' "${trusted_comments_json}" | jq -c' in extractor
+	assert 'extract_latest_valid_orchestrator_state "${COMMENTS}"' in script
 	main = script.split('if [ -z "${STATE_JSON}" ] || [ "${STATE_JSON}" = "null" ]; then', 1)[1]
 	assert main.index('"${EXTRACTED_STATE_IDENTITY_UNAVAILABLE}"') < main.index('"${STATE_COMMENT_COUNT}"')
 	assert 'RESOLVED_ORCHESTRATOR_STATE_IDENTITY_UNAVAILABLE="true"' in script
 	assert 'FOLLOWUP_PR_BLOCKED="true"' in script.split('if [ "${RESOLVED_ORCHESTRATOR_STATE_IDENTITY_UNAVAILABLE}" = "true" ]; then', 1)[1]
 	assert 'skipping standalone stall recovery this tick' in script
+
+
+def test_state_identity_failure_alerts_once_without_tracking_issues():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	identity_helper = script.split('UNBLOCK_TRUSTED_LOGIN=""\nUNBLOCK_TRUSTED_LOGIN_STATE="unset"', 1)[1].split('\nextract_latest_valid_orchestrator_state() {', 1)[0]
+	harness = '''set -euo pipefail
+gh_retry() { return 1; }
+_gh_url() { printf 'https://example.test/run'; }
+alerts=0
+tg_send_msg() { [ "$2" = CRITICAL ]; alerts=$((alerts + 1)); }
+GITHUB_REPOSITORY=owner/repo
+UNBLOCK_TRUSTED_LOGIN=""
+UNBLOCK_TRUSTED_LOGIN_STATE="unset"
+''' + identity_helper + '''
+unblock_trusted_login >/dev/null
+unblock_trusted_login >/dev/null
+[ "$alerts" -eq 1 ]
+[ "$UNBLOCK_TRUSTED_LOGIN_STATE" = failed ]
+'''
+	result = subprocess.run(["bash", "-c", harness], capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
 
 
 def test_malformed_latest_state_falls_back_to_older_valid_and_posts_healed_state():

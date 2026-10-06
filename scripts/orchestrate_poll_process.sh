@@ -2884,6 +2884,10 @@ unblock_trusted_login() {
     else
       UNBLOCK_TRUSTED_LOGIN=""
       UNBLOCK_TRUSTED_LOGIN_STATE="failed"
+      if [ "${ORCH_STATE_IDENTITY_ALERT_SENT}" != "true" ]; then
+        tg_send_msg "Orchestrator cannot verify its GitHub identity for ${GITHUB_REPOSITORY}; tracking projects are paused. Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID:-unknown}")" "CRITICAL" >/dev/null 2>&1 || true
+        ORCH_STATE_IDENTITY_ALERT_SENT="true"
+      fi
     fi
   fi
   printf '%s' "${UNBLOCK_TRUSTED_LOGIN}"
@@ -2919,10 +2923,10 @@ extract_latest_valid_orchestrator_state() {
     echo "::warning::ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=${TRACKING_NUM:-?} outcome=identity_unavailable reason=filter_failed" >&2
     return 1
   fi
-  ignored_count="$(printf '%s' "${comments_json}" | jq -r --arg login "${UNBLOCK_TRUSTED_LOGIN}" '[.[]? | select((.user.login // "") != $login and ((.body // "") | (contains("ORCHESTRATOR_STATE_V1") or contains("ORCHESTRATOR_STATE_V2")))] | length' 2>/dev/null)" || ignored_count=0
+  ignored_count="$(printf '%s' "${comments_json}" | jq -r --arg login "${UNBLOCK_TRUSTED_LOGIN}" '[.[]? | select((.user.login // "") != $login and ((.body // "") | (contains("ORCHESTRATOR_STATE_V1") or contains("ORCHESTRATOR_STATE_V2"))))] | length' 2>/dev/null)" || ignored_count=0
   EXTRACTED_STATE_UNTRUSTED_IGNORED="${ignored_count}"
-  if [ "${ignored_count}" -gt 0 ]; then
-    echo "::warning::ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=${TRACKING_NUM:-?} outcome=filtered ignored=${ignored_count}" >&2
+  if [ "${EXTRACTED_STATE_UNTRUSTED_IGNORED}" -gt 0 ]; then
+    echo "::warning::ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=${TRACKING_NUM:-?} outcome=filtered ignored=${EXTRACTED_STATE_UNTRUSTED_IGNORED}" >&2
   fi
 
   # Try the V2 chunked-chain reader first.  If a complete V2 chain is
@@ -18960,21 +18964,12 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   fi
   rm -f "${_comments_raw}"
 
-  # State is executable pipeline control data, not issue discussion. Reuse
-  # the same authenticated GH_PAT identity as the unblock ledger/scan.
-  unblock_trusted_login >/dev/null
-  if [ -z "${UNBLOCK_TRUSTED_LOGIN}" ]; then
-    echo "::warning::Cannot verify state comment author for tracking issue #${TRACKING_NUM}; skipping this tick."
-    continue
-  fi
-  TRUSTED_STATE_COMMENTS="$(printf '%s' "${COMMENTS}" | jq -c --arg login "${UNBLOCK_TRUSTED_LOGIN}" '[.[] | select((.user.login // "") == $login)]' 2>/dev/null)" || {
-    echo "::warning::Cannot filter state comments for tracking issue #${TRACKING_NUM}; skipping this tick."
-    continue
-  }
+  # State is executable pipeline control data; the extractor verifies every
+  # comment's author before either V1 or V2 parsing.
   STATE_JSON=""
   STATE_COMMENT_COUNT=0
   STATE_FALLBACK_USED="false"
-  if extract_latest_valid_orchestrator_state "${TRUSTED_STATE_COMMENTS}"; then
+  if extract_latest_valid_orchestrator_state "${COMMENTS}"; then
     STATE_JSON="${EXTRACTED_STATE_JSON}"
     STATE_COMMENT_COUNT="${EXTRACTED_STATE_COMMENT_COUNT}"
     STATE_FALLBACK_USED="${EXTRACTED_STATE_FALLBACK_USED}"
@@ -19012,10 +19007,6 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     fi
     if [ "${EXTRACTED_STATE_IDENTITY_UNAVAILABLE}" = "true" ]; then
       echo "::warning::Pipeline identity unavailable; cannot verify state-comment authors for #${TRACKING_NUM}; skipping this tracking issue and state reconstruction this cycle."
-      if [ "${ORCH_STATE_IDENTITY_ALERT_SENT}" != "true" ]; then
-        tg_notify "Pipeline identity unavailable: orchestrator state-comment authors cannot be verified; skipping projects until the next poll." "WARNING"
-        ORCH_STATE_IDENTITY_ALERT_SENT="true"
-      fi
       continue
     fi
     if [ "${STATE_COMMENT_COUNT}" -gt 0 ]; then
