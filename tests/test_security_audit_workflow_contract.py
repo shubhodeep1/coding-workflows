@@ -748,6 +748,10 @@ def test_security_audit_workflow_keeps_executable_support_outside_data_checkout(
 	assert "${{" not in steps("Resolve trusted security audit exclusions")["run"]
 	assert steps("Run security audit")["working-directory"] == "./audit-data"
 	assert steps("Run security audit")["env"]["SECURITY_AUDIT_SUPPORT_DIR"] == "${{ github.workspace }}"
+	assert workflow["on"]["workflow_call"]["secrets"]["TG_BOT_SECRET"]["required"] is False
+	assert steps("Run security audit")["env"]["TG_BOT_SECRET"] == "${{ secrets.TG_BOT_SECRET }}"
+	assert steps("Run security audit")["env"]["TG_ADMIN_CHAT_ID"] == "${{ vars.TG_ADMIN_CHAT_ID || '' }}"
+	assert steps("Run security audit")["env"]["ALERT_MSG_LEVEL"] == "${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}"
 
 
 def test_security_audit_consumer_template_calls_stable_reusable_workflow() -> None:
@@ -2048,6 +2052,7 @@ def test_security_audit_chunks_scoped_oversized_file_and_reports_coverage() -> N
 		assert payload["schema_version"] == "security_audit_findings.v1"
 		assert payload["findings"] == [] and payload["counts"]["kept"] == 0
 		assert payload["coverage"]["scoped_oversized_chunked"] == ["large.py"]
+		assert payload["coverage"]["unscoped_text_capped_count"] == 0
 
 
 def test_security_audit_oversized_cap_fails_before_codex() -> None:
@@ -2103,13 +2108,40 @@ def test_security_audit_full_scan_chunks_oversized_file() -> None:
 		assert "large.py (" in result["codex_stdin"][0]
 		assert any(mount.get("dst", "").endswith("/oversized-chunks") for mount in result["codex_mounts"][0])
 		assert any(head_sha in body for body in result["issue_edit_bodies"])
+		assert "Coverage: partial" not in result["issue_comment_bodies"][0]
 
 
 def test_security_audit_full_scan_oversized_cap_reports_coverage_note() -> None:
 	# Q24: in a full scan an unscoped file past the cap is listed as not
-	# inspected; it does not fail the audit.
+	# inspected; findings still post, but the audited marker does not move.
 	with tempfile.TemporaryDirectory(prefix="security-audit-oversized-full-cap-") as td:
 		repo_dir, _base_sha, _head_sha = _oversized_fixture_repo(Path(td))
+		state = _security_audit_tracker_state()
+		state["api_responses"] = [[[]]]
+		proc, result = _run_security_audit(state, codex_output=json.dumps([_finding_payload("over-cap", file_path="file_a.py")]), cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES": "1048576",
+		})
+		assert proc.returncode == 0, proc.stderr
+		assert "phase=oversized-scope" not in proc.stderr
+		assert result.get("codex_calls")
+		assert result.get("issue_create_bodies")
+		comment = result["issue_comment_bodies"][0]
+		assert "Coverage note: 1 tracked files over 2 MiB were not inspected" in comment and "`large.py`" in comment
+		assert "Coverage: partial — 1 tracked text files over the export caps were not inspected" in comment
+		assert "`large.py` (2400000 bytes, over_file_cap)" in comment
+		assert "the last-audited-commit marker was not moved" in comment
+		assert "coverage=partial skipped_text=1" in proc.stdout
+		assert not any("ai:security-audit-last-sha:" in body for body in result.get("issue_edit_bodies", []))
+
+
+def test_security_audit_full_scan_binary_over_cap_still_advances_marker() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-oversized-binary-") as td:
+		repo_dir, _base_sha, _head_sha = _git_fixture_repo(Path(td))
+		(repo_dir / "photo.jpg").write_bytes(b"\x00" + b"x" * (3 * 1024 * 1024))
+		subprocess.run(["git", "add", "photo.jpg"], cwd=repo_dir, check=True)
+		subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "binary"], cwd=repo_dir, check=True)
+		head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_dir, text=True).strip()
 		state = _security_audit_tracker_state()
 		state["api_responses"] = [[[]]]
 		proc, result = _run_security_audit(state, cwd=repo_dir, extra_env={
@@ -2117,10 +2149,10 @@ def test_security_audit_full_scan_oversized_cap_reports_coverage_note() -> None:
 			"SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES": "1048576",
 		})
 		assert proc.returncode == 0, proc.stderr
-		assert "phase=oversized-scope" not in proc.stderr
-		assert result.get("codex_calls")
-		comment = result["issue_comment_bodies"][0]
-		assert "Coverage note: 1 tracked files over 2 MiB were not inspected" in comment and "`large.py`" in comment
+		assert "Coverage note: 1 tracked files over 2 MiB" in result["issue_comment_bodies"][0]
+		assert "Coverage: partial" not in result["issue_comment_bodies"][0]
+		assert "coverage=partial" not in proc.stdout
+		assert any(f"ai:security-audit-last-sha:{head_sha}" in body for body in result["issue_edit_bodies"])
 
 
 def test_security_audit_no_oversized_file_has_no_tracker_coverage_lines() -> None:

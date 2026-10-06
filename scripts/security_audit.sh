@@ -528,6 +528,15 @@ if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ]; then
 		# shellcheck disable=SC1091
 		source "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/gh_helpers.sh"
 	fi
+	if [ -f "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/tg_helpers.sh" ]; then
+		# tg_helpers.sh sources gh_helpers.sh relative to cwd. Never let the
+		# audited checkout supply executable support to the trusted runner.
+		if pushd "${SECURITY_AUDIT_SUPPORT_DIR}" >/dev/null; then
+			# shellcheck disable=SC1091
+			source scripts/tg_helpers.sh || true
+			popd >/dev/null
+		fi
+	fi
 
 	ensure_label_exists "ai:security-audit" "${GITHUB_REPOSITORY}"
 	ensure_label_exists "ai:security" "${GITHUB_REPOSITORY}"
@@ -1275,6 +1284,9 @@ scoped = manifest["scoped"]
 unscoped = manifest["unscoped_oversized_count"]
 if manifest["schema_version"] != "oversized_readonly_export.v1" or not isinstance(scoped, list) or not isinstance(unscoped, int) or unscoped < 0:
 	raise ValueError("invalid oversized manifest")
+text_capped = manifest.get("unscoped_text_capped_count", unscoped)
+if type(text_capped) is not int or not 0 <= text_capped <= unscoped:
+	raise ValueError("invalid oversized text coverage count")
 if manifest.get("scope_mode", "explicit") not in ("explicit", "all"):
 	raise ValueError("invalid oversized manifest scope mode")
 lines = []
@@ -1292,14 +1304,14 @@ if scoped:
 if unscoped:
 	lines.append(f"Coverage note: {unscoped} tracked files over 2 MiB were not inspected (outside the explicit scope, binary, or over the export caps).")
 Path(sys.argv[3]).write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-print(len(scoped), unscoped)
+print(len(scoped), unscoped, text_capped)
 PY
-)" || ! [[ "${OVERSIZED_COUNTS}" =~ ^[0-9]+\ [0-9]+$ ]]; then
+)" || ! [[ "${OVERSIZED_COUNTS}" =~ ^[0-9]+\ [0-9]+\ [0-9]+$ ]]; then
 	security_audit_emit_path_diagnostic "${OVERSIZED_ERROR_FILE}"
 	security_audit_emit_failure "oversized-scope" "${REPO_ROOT}" "oversized manifest could not be processed"
 	exit 1
 fi
-read -r OVERSIZED_SCOPED_COUNT OVERSIZED_UNSCOPED_COUNT <<< "${OVERSIZED_COUNTS}"
+read -r OVERSIZED_SCOPED_COUNT OVERSIZED_UNSCOPED_COUNT OVERSIZED_TEXT_CAPPED_COUNT <<< "${OVERSIZED_COUNTS}"
 echo "security-audit: oversized scoped=${OVERSIZED_SCOPED_COUNT} unscoped=${OVERSIZED_UNSCOPED_COUNT}"
 
 SECURITY_AUDIT_RENDER_HELPER="${SECURITY_AUDIT_SUPPORT_DIR}/scripts/render_prompt.sh"
@@ -1762,6 +1774,7 @@ payload["coverage"] = {
 	"scoped_oversized_chunked": [item["path"] for item in oversized_manifest["scoped"]],
 	"unscoped_oversized_skipped": [item["path"] for item in oversized_manifest["unscoped_oversized"]],
 	"unscoped_oversized_skipped_count": oversized_manifest["unscoped_oversized_count"],
+	"unscoped_text_capped_count": oversized_manifest.get("unscoped_text_capped_count", oversized_manifest["unscoped_oversized_count"]),
 }
 
 temporary_path: Path | None = None
@@ -1926,12 +1939,27 @@ elif audit_scope_mode == "incremental" and last_audited_sha:
 else:
 	scope_line = "- Audit scope: full default-branch checkout"
 
+text_capped_count = oversized_manifest.get("unscoped_text_capped_count", oversized_manifest["unscoped_oversized_count"])
+text_capped_files = oversized_manifest.get("unscoped_text_capped", [])
+partial_coverage_line = ""
+if text_capped_count:
+	partial_coverage_line = f"- Coverage: partial — {text_capped_count} tracked text files over the export caps were not inspected"
+	if text_capped_files:
+		partial_coverage_line += ": " + ", ".join(
+			f"`{item['path']}` ({item['size']} bytes, {item['reason']})" for item in text_capped_files
+		)
+	if text_capped_count > len(text_capped_files):
+		partial_coverage_line += f" (+{text_capped_count - len(text_capped_files)} more)"
+	if not target_ref:
+		partial_coverage_line += "; the last-audited-commit marker was not moved, so the next run audits the full repository"
+
 comment_lines = [
 	f"## {now_utc.date().isoformat()} Security audit",
 	"",
 	scope_line,
 	f"- Audited commit: `{head_sha or 'n/a'}`",
 	*([f"- Oversized scoped files read in chunks: {len(oversized_manifest['scoped'])}"] if oversized_manifest["scoped"] else []),
+	*([partial_coverage_line] if partial_coverage_line else []),
 	*([f"- Coverage note: {oversized_manifest['unscoped_oversized_count']} tracked files over 2 MiB were not inspected (outside the explicit scope, binary, or over the export caps): " + ", ".join(f"`{item['path']}`" for item in oversized_manifest["unscoped_oversized"]) + (f" (+{oversized_manifest['unscoped_oversized_count'] - len(oversized_manifest['unscoped_oversized'])} more)" if oversized_manifest['unscoped_oversized_count'] > len(oversized_manifest['unscoped_oversized']) else "")] if oversized_manifest["unscoped_oversized_count"] else []),
 	f"- Confidence gate: `>= {confidence_gate}`",
 	f"- Exclusion catalog: `{exclusions_path}`",
@@ -2057,6 +2085,12 @@ if [ -n "${SECURITY_AUDIT_TARGET_REF}" ]; then
 	# A branch audit covers a range that is not on the default branch; the
 	# marker records default-branch progress only, so leave it untouched.
 	echo "security-audit: target_ref=${SECURITY_AUDIT_TARGET_REF}; leaving the tracker's last-audited-commit marker unchanged."
+elif [ "${OVERSIZED_TEXT_CAPPED_COUNT:-0}" -gt 0 ]; then
+	echo "security-audit: coverage=partial skipped_text=${OVERSIZED_TEXT_CAPPED_COUNT}; leaving the last-audited-commit marker unchanged."
+	echo "::warning::Security audit coverage is partial: ${OVERSIZED_TEXT_CAPPED_COUNT} tracked text files over export caps were not inspected; last-audited-commit marker unchanged."
+	if declare -F tg_send_msg >/dev/null; then
+		tg_send_msg "${GITHUB_REPOSITORY}: security audit coverage partial — ${OVERSIZED_TEXT_CAPPED_COUNT} text files over export caps not inspected; marker unchanged (tracker #${TRACKER_NUMBER})" WARNING >/dev/null 2>&1 || true
+	fi
 elif [ -n "${HEAD_SHA}" ]; then
 	# Persist the audited HEAD SHA on the tracker body so the next run can
 	# skip when unchanged or diff-scope against it. One extra `gh issue edit`
