@@ -95,7 +95,7 @@ def test_thread_reuse_launches_through_the_isolated_launcher():
 		("scripts/validation_discovery_bootstrap.py", 'CODEX_ISOLATED_EXEC = Path(__file__).resolve().parent / "codex_isolated_exec.sh"'),
 		("scripts/orchestrate_poll_process.sh", 'ORCH_CODEX_ISOLATED_EXEC="${ORCH_SCRIPTS_ROOT}/codex_isolated_exec.sh"'),
 		(".github/workflows/orchestrate.yml", "bash scripts/codex_isolated_exec.sh run --mode read-only --"),
-		(".github/workflows/workflow-log-analysis.yml", "bash scripts/codex_isolated_exec.sh run --mode read-only --"),
+		(".github/workflows/workflow-log-analysis.yml", 'bash scripts/codex_isolated_exec.sh run --mode read-only ${wla_run_logs_include_args[@]+"${wla_run_logs_include_args[@]}"} --'),
 		(".github/workflows/implement.yml", 'codex_isolated_exec.sh" run --mode read-only \\'),
 	],
 )

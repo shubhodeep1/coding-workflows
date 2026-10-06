@@ -1064,6 +1064,39 @@ jobs:
             RUN_LOGS_DIR=""
           fi
 
+          wla_run_logs_include_args=()
+          wla_run_logs_note=""
+          if [ -n "${RUN_LOGS_DIR}" ]; then
+            if ! RUN_LOGS_DIR="$(realpath -e -- "${RUN_LOGS_DIR}" 2>/dev/null)"; then
+              echo "::warning::workflow-log-output path could not be resolved; using analysis_context.json only."
+              RUN_LOGS_DIR=""
+            elif ! [[ "${RUN_LOGS_DIR}" =~ ^/[A-Za-z0-9._@+/-]+$ ]] || [[ "${RUN_LOGS_DIR}" == *,* ]] || [[ "${RUN_LOGS_DIR}" == *"/../"* ]] || [[ "${RUN_LOGS_DIR}" == *"/.." ]]; then
+              echo "::warning::workflow-log-output path is unsafe for the sandbox mount; using analysis_context.json only."
+              RUN_LOGS_DIR=""
+            else
+              # Keep a bounded copy below the isolation helper's 256 MiB include limit.
+              if wla_run_logs_result="$(python3 -I -B scripts/stage_workflow_log_bundle.py "${RUN_LOGS_DIR}" "${RUNNER_TEMP}/workflow-log-output-bounded" "$((200*1024*1024))")" \
+                && wla_run_logs_path="$(printf '%s' "${wla_run_logs_result}" | jq -er '.path | select(type == "string")')" \
+                && wla_run_logs_mode="$(printf '%s' "${wla_run_logs_result}" | jq -er '.mode | select(. == "full" or . == "bounded")')"; then
+                if [[ "${wla_run_logs_path}" =~ ^/[A-Za-z0-9._@+/-]+$ ]] && [[ "${wla_run_logs_path}" != *,* ]] \
+                  && [[ "${wla_run_logs_path}" != *"/../"* ]] && [[ "${wla_run_logs_path}" != *"/.." ]] && [ -d "${wla_run_logs_path}" ]; then
+                  RUN_LOGS_DIR="${wla_run_logs_path}"
+                  wla_run_logs_include_args=(--include "${RUN_LOGS_DIR}")
+                  if [ "${wla_run_logs_mode}" = "bounded" ]; then
+                    echo "::warning::workflow-log-output exceeded 200 MiB; mounting a bounded subset."
+                    wla_run_logs_note="This is a bounded subset; read ${RUN_LOGS_DIR}/BOUNDED_SUBSET.txt for omitted runs."
+                  fi
+                else
+                  echo "::warning::workflow-log-output staged path is unsafe; using analysis_context.json only."
+                  RUN_LOGS_DIR=""
+                fi
+              else
+                echo "::warning::workflow-log-output staging failed; using analysis_context.json only."
+                RUN_LOGS_DIR=""
+              fi
+            fi
+          fi
+
           # Build Semble prefetch (best-effort, fail-soft). Skipped silently
           # when SEMBLE_ENABLED=false, install failed, or the index build
           # failed — render_prompt.sh treats an empty SEMBLE_PREFETCH as a
@@ -1093,8 +1126,12 @@ jobs:
               echo
               echo "=== FULL RUN LOGS DIRECTORY ==="
               echo "Run-logs directory: ${RUN_LOGS_DIR}"
+              echo "Mounted read-only in the sandbox at this path."
               echo "Layout: summary.json (top-level metrics), errors/ (full logs of failed runs), slow/ (full logs of longest runs by repo+family), recent/ (full logs of most recent runs)."
               echo "Each run subdirectory contains metadata.json plus untruncated step-NNN-<step>.log files. Read summary.json first, then drill into errors/, slow/, recent/ for evidence."
+              if [ -n "${wla_run_logs_note}" ]; then
+                echo "${wla_run_logs_note}"
+              fi
             fi
           } > "${CODEX_PROMPT_FILE}"
 
@@ -1116,7 +1153,7 @@ jobs:
             bash scripts/codex_heartbeat.sh \
               --phase workflow_log_analysis \
               --stdout-file "${REPORT_FILE}" \
-              -- bash scripts/codex_isolated_exec.sh run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-analysis-codex.log >&2)
+              -- bash scripts/codex_isolated_exec.sh run --mode read-only ${wla_run_logs_include_args[@]+"${wla_run_logs_include_args[@]}"} -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-analysis-codex.log >&2)
             ANALYZE_EXIT=$?
             set -e
             if [ "${ANALYZE_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${REPORT_FILE}"; then
