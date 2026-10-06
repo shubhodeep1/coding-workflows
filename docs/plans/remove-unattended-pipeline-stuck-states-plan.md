@@ -8,7 +8,7 @@ Remove the stuck states found in the 2026-10-06 pipeline audit. When work stalls
 
 | Question | Answer |
 |---|---|
-| New script / extended script / code-only? | One new script, `scripts/dependency_wait_resume.py` (Phase 8). It is the script `docs/plans/confine-human-steps-to-activation-plan.md` already designs. Every other phase extends existing scripts, workflows and prompts. |
+| New script / extended script / code-only? | `scripts/dependency_wait_resume.py` (Phase 8), designed in `docs/plans/confine-human-steps-to-activation-plan.md`, and the step helpers listed in P4/P9/P11b when needed. Every other phase extends existing scripts, workflows and prompts. |
 | Scheduler / PR-push entry points | Poller tick: `.github/workflows/orchestrate_poll.yml` (cron) → `scripts/orchestrate_poll_process.sh`. Phases 3, 6, 7, 8 and 10 wire in there. Daily promote cycle: `.github/workflows/promote-main-to-stable.yml` → `scripts/promote_main_cycle.sh` (Phase 4). Review runs: `.github/workflows/review_autofix.yml` → `scripts/review_merge_train.sh` and `scripts/review_single_issue_security_pass.sh` (Phases 1, 5). Release gate: `.github/workflows/test-and-mark-stable.yml` (Phase 4). Sweep cron: `.github/workflows/review_autofix_sweep.yml` (Phase 11b). Label sync: `.github/workflows/sync_ai_labels.yml`, newly called on a schedule from this repo (Phase 11a). |
 | New long-running supervisor (§18.C)? | No. Everything rides the existing poller, sweep, promote and review crons. |
 | DB work (§18.D)? | None. No MongoDB collections, indexes or contracts are touched (§10 N/A). |
@@ -18,18 +18,18 @@ Remove the stuck states found in the 2026-10-06 pipeline audit. When work stalls
 
 On 2026-10-06 the audit covered 112 open items. 15 were stuck and needed a person, 43 were waiting behind a single bottleneck, and 16 were obsolete. Root causes, with evidence:
 
-1. **Merge train serializes everything.** `.ai/.workspace_source_manifest.txt` is gitignored (`.gitignore:27`) but tracked, and `git add -u` (`scripts/implement_commit_changes.sh:315-316`) commits it in every PR. The train's overlap test is a raw path intersection (`_mt_intersect`, `scripts/review_merge_train.sh:186-188`) with no notion of "git can auto-merge this", no head-age limit and no priority lane (`_mt_blockers_for_into`, `:222-236`). 18 PRs on `main` waited behind #6135, which was queued for 32.5 h and then cycled for about 36 h. #6464, the fix for the failing release gate, was queued 18th solely on that file. The manifest itself is fixed by #6508 (PR #6515, adds `MERGE_TRAIN_IGNORE_PATHS`); the rest is not.
+1. **Merge train serializes everything.** `.ai/.workspace_source_manifest.txt` is gitignored (`.gitignore:27`) but tracked, and `git add -u` (`scripts/implement_commit_changes.sh:344`) commits it in every PR. The train's overlap test is a raw path intersection (`_mt_intersect`, `scripts/review_merge_train.sh:185-188`) with no notion of "git can auto-merge this", no head-age limit and no priority lane (`_mt_blockers_for_into`, `scripts/review_merge_train.sh:212-244`). 18 PRs on `main` waited behind #6135, which was queued for 32.5 h and then cycled for about 36 h. #6464, the fix for the failing release gate, was queued 18th solely on that file. The manifest itself is fixed by #6508 (PR #6515, adds `MERGE_TRAIN_IGNORE_PATHS`); the rest is not.
 2. **Workflow YAML and helper scripts come from different refs.**
    - `plan.yml` runs from `main`. Its "Stage workflow support files" step (`plan.yml:280-300`) copies a hand-kept list of scripts from `.codex-workflow-src` (SCRIPT_REF) into the checkout of the target branch. Every unlisted script comes from the target branch.
-   - Heal issues target `stable`. Main's `ai_engine.sh:284-285` passes `--engine` to `stable`'s `codex_stall_guard.sh`, which predates the flag (added in #6179).
+   - Heal issues target `stable`. Main's `scripts/ai_engine.sh:321-323` passes `--engine` to `stable`'s `codex_stall_guard.sh`, which predates the flag (added in #6179).
    - Every heal plan therefore crashes (`codex_stall_guard.sh: unknown option: --engine`, run 37406961564).
-   - The same copy-list pattern is in `clarify.yml:224`, `implement.yml:1027` and `orchestrate_clarify_respond.yml:333`.
-   - `review_autofix.yml` already avoids this. It stages the whole support tree with `scripts/stage_workflow_support.sh` into `${SUPPORT_SCRIPTS_DIR}` (`review_autofix.yml:2603-2620`, 137 call sites) and never runs helpers from the target tree.
+   - The same copy-list pattern is in `clarify.yml:224`, `implement.yml:1030` and `orchestrate_clarify_respond.yml:333`.
+   - `review_autofix.yml` already avoids this. It stages a verified support bundle with `scripts/stage_workflow_support.sh` into `${SUPPORT_SCRIPTS_DIR}` (`review_autofix.yml:2653+`) and runs its helpers from there.
    - PR #6433 adds the one missing file to the lists, which fixes this instance only.
 3. **Stall recovery never escalates a deterministic failure.**
-   - The standalone poller zeroes `stall_recovery_count` on every phase change (`orchestrate_poll_process.sh:16186-16190`).
+   - The standalone poller zeroes `stall_recovery_count` on every phase change (`scripts/orchestrate_poll_process.sh:16572-16576`).
    - A failing plan flips the issue from `ai:planning` back to `ai:clarification` (`plan.yml:~2300-2323`) with no failure signature. The counter therefore never reaches `STALL_JUDGE_TRIGGER_COUNT`.
-   - At `MAX_STALL_RECOVERIES_PER_ISSUE` the `skip` action closes the issue as `ai:closed` (`:16990-16996`) instead of diagnosing it.
+   - At `MAX_STALL_RECOVERIES_PER_ISSUE` the standalone `skip` action closes the issue as `ai:closed` (`scripts/orchestrate_poll_process.sh:17376-17384`) instead of diagnosing it.
    - `escalate_human` is downgraded when `ENABLE_STALL_HUMAN_TERMINALIZATION=false` (`orchestrate_lib.py:2221-2224`).
 4. **`stable` froze for 3+ days, unnoticed.**
    - 8 of the last 15 `test-and-mark-stable` gates failed, almost all in `e2e-smoke-test`. Phase 4b (`test-and-mark-stable.yml:2273+`) is the most common failure: its 25-minute retry budget runs while the adopted review run is still `queued` (`:2788`, `:2904`).
@@ -46,7 +46,7 @@ On 2026-10-06 the audit covered 112 open items. 15 were stuck and needed a perso
      - Re-running validation after a `harness-broken` project's heal fix merges (#6031).
      - The scope guard rejecting a required `changelog.d/` fragment and test fixtures (#4664; `files_touched_scope_guard.py:191-198` auto-allows only lockfiles).
      - Generic "Depends on: #N" waits (#6038).
-     - Security-dependency holds that wait forever when the predecessor stalls or closes unmerged (`orchestrate_poll_process.sh:16011-16100`, `security_dependency.py:75-91`).
+     - Security-dependency holds that wait forever when the predecessor stalls or closes unmerged (`scripts/orchestrate_poll_process.sh:16437-16482`, `scripts/security_dependency.py:75-91`).
 7. **Clarify blocks on a defect in its own read-only snapshot.** `scripts/clarify_isolated_run.sh:57` keeps only 18 file suffixes and omits `.j2`, `.patch`, `.tmpl`, `.sol` and `.jsonl`. The agent never saw `workflow-templates/validation-harness/**`, wrote `BLOCKED:` (#6194), and `clarify.yml:1152-1270` parked the issue in `ai:blocked` with no retry.
 8. **Operator steps for automated work.**
    - `prompts/mode-activation-verify.txt:25` classifies "tag a release" as an `operator` step, so #6211 accumulated "release and sync" steps that the daily promote cycle performs anyway.
@@ -67,7 +67,7 @@ On 2026-10-06 the audit covered 112 open items. 15 were stuck and needed a perso
 - G5. The per-PR security pass audits only what changed since the last audited head and carries prior findings forward. Each cycle files at most one consolidated follow-up issue. High and critical findings on lines the PR wrote still block.
 - G6. Every human-only stop gets `UNBLOCK_MAX_ROUNDS_PER_ITEM` (default 3) distinct LLM rounds. After that, the item stays open, gets one entry in the needs-human digest, and sends one CRITICAL Telegram alert.
 - G7. When a heal issue for a `harness-broken` project merges, the project is re-validated automatically. Required `changelog.d/` fragments and `tests/fixtures/` paths never trip the scope guard.
-- G8. "Depends on: #N" waits resume automatically for every issue, and escalate after `DEPENDENCY_WAIT_ESCALATE_DAYS`.
+- G8. Same-repo "Depends on: #N" waits resume automatically for every issue, and escalate after `DEPENDENCY_WAIT_ESCALATE_DAYS`.
 - G9. Clarify's snapshot contains every tracked text file. A `BLOCKED:` that cites a path present in git is retried, not parked.
 - G10. Activation verify never emits an operator step for work automation performs. Operator steps whose condition is met are ticked automatically, and the issue closes when none remain.
 - G11. Retiring a label closes the open items that carry it. Runs queued longer than `ZOMBIE_RUN_MAX_QUEUED_HOURS` are force-cancelled.
@@ -94,8 +94,8 @@ On 2026-10-06 the audit covered 112 open items. 15 were stuck and needed a perso
 - **§14:** reusable workflows and scripts reach consumers through the normal `@stable` sync. Phase 11a adds a home-repo caller only; consumers already receive `workflow-templates/ai-sync-labels.yml`. No change to `.github/ai/consumer_repos.json`.
 - **§15:**
   - Each phase states its API budget in its steps.
-  - New per-item reads must come from existing per-tick prefetches (`_candidate_details_json`, `ACTIVE_WORKFLOW_ISSUES`) or be one batched REST call per tick.
-  - GraphQL is not added (the web proxy rejects it).
+  - New per-item reads must come from existing per-tick prefetches (`_candidate_details_json`, `ACTIVE_WORKFLOW_ISSUES`) or a bounded batched query per tick.
+  - The existing Actions-side GraphQL batch in the referenced dependency-wait design may be extended for issue targets; no per-issue GraphQL calls are added. The interactive web proxy limitation does not apply to Actions.
 - **§19:** no PR body may use auto-close keywords against `ai:orchestrator-tracking` issues.
 - **§20:** each phase ships exactly one `changelog.d/<issue>-<slug>.md` fragment.
 - **§27:** `review_autofix.yml` is 439,318 bytes and `test-and-mark-stable.yml` 376,514 bytes (limit 480,000). Phases touching them must move any new run body over about 40 lines into `scripts/` and check `wc -c`.
@@ -151,7 +151,7 @@ Every phase is one PR to `main` and is independently mergeable. No phase assumes
      - A head older than the cap stops blocking.
      - A priority-labelled PR is never queued behind non-priority PRs.
      - All three switches off reproduce today's behaviour.
-   - Rollback: revert, or set `MERGE_TRAIN_CONFLICT_CHECK_ENABLED=false`, `MERGE_TRAIN_HEAD_MAX_AGE_HOURS=0` and `MERGE_TRAIN_PRIORITY_LABELS=''`.
+   - Rollback: revert, or set `MERGE_TRAIN_CONFLICT_CHECK_ENABLED=false`, `MERGE_TRAIN_HEAD_MAX_AGE_HOURS=0` (explicitly disables the age cap) and `MERGE_TRAIN_PRIORITY_LABELS=''`.
 2. **P2a — Single support-script source: clarify, plan, orchestrate-clarify-respond.**
    - Files: `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/orchestrate_clarify_respond.yml`, `scripts/ai_engine.sh` (resolve sibling helpers via `${SUPPORT_SCRIPTS_DIR}` when set), `tests/test_support_script_single_source.py` [new], changelog.
    - Done when a heal-issue plan targeting a `stable`-like fixture branch that lacks `--engine` support runs the support tree's guard, and the contract test passes.
@@ -197,10 +197,12 @@ Every phase is one PR to `main` and is independently mergeable. No phase assumes
      - `changelog.d/*.md` and `tests/fixtures/**` pass the scope guard.
      - `.github/**`, `.claude/**`, `scripts/**` and `workflow-templates/**` never match the allowance.
 9. **P8 — Dependency waits (implements `confine-human-steps-to-activation-plan.md` Phases 4a/4b, plus security holds).**
-   - Files: as listed in that plan for 4a/4b, plus `scripts/security_dependency.py` and the hold branch at `orchestrate_poll_process.sh:16058-16100`.
+   - Files: as listed in that plan for 4a/4b, plus `scripts/security_dependency.py` and the hold branch at `scripts/orchestrate_poll_process.sh:16437-16482`.
    - Done when that plan's 4a/4b done conditions hold. Additionally:
      - A security hold older than `DEPENDENCY_WAIT_ESCALATE_DAYS` is labelled `ai:needs-human` for the unblock judge.
      - A predecessor closed without `ai:merged` releases the hold with a `/reclarify`. The follow-up must then re-establish whether its finding still applies.
+     - A generic same-repo issue-number prerequisite (not only a PR or release) is resumed when the issue closes with `ai:merged`, or re-clarified if it closes unmerged; an open dependency is rechecked on the poller schedule and escalated after the configured wait.
+     - `DEPENDENCY_WAIT_RESUME_ENABLED=false` restores the pre-phase waiting behavior for both generic and security dependencies.
 10. **P9 — Clarify snapshot completeness and BLOCKED verification.**
     - Files: `scripts/clarify_isolated_run.sh`, `.github/workflows/clarify.yml` (BLOCKED branch `:1227-1270`, body moved to `scripts/clarify_blocked_verify.sh` [new helper] if it grows), `tests/test_clarify_isolated_run.py`, `tests/test_clarify_blocked_verify.py` [new], changelog.
     - Done when the tests show:
@@ -227,32 +229,31 @@ Every phase is one PR to `main` and is independently mergeable. No phase assumes
 ### P1 — Merge train
 1. `scripts/review_merge_train.sh`: add `MERGE_TRAIN_CONFLICT_CHECK_ENABLED` (default `true`).
    - When a path overlap exists with a blocker, fetch both heads (`git fetch --depth=200 origin <blocker_head> <pr_head>`).
-   - Run `git merge-tree --write-tree --name-only <pr_head> <blocker_head>`.
+   - Run `git merge-tree --write-tree <pr_head> <blocker_head>` and discard its stdout after recording diagnostics; `git merge-tree` has no `--name-only` option.
    - Queue only on exit status 1, a real conflict. Log `MERGE_TRAIN_GATE ... overlap=paths conflict=none` and continue for clean merges.
    - On any git error, fall back to today's path rule (fail-closed to queueing, `conflict=unknown`).
    - API cost: zero new REST calls.
-2. Add `MERGE_TRAIN_HEAD_MAX_AGE_HOURS` (default `24`). In `_mt_blockers_for_into` (`:222-236`), a blocker PR is "stale" when all of the following hold:
+2. Add `MERGE_TRAIN_HEAD_MAX_AGE_HOURS` (default `24`; `0` disables age-based bypass). In `_mt_blockers_for_into` (`scripts/review_merge_train.sh:212-244`), a blocker PR is "stale" when both conditions hold, regardless of other labels:
    - It is not itself queued (no `ai:merge-queued` label, so it is the one under review).
-   - It carries `ai:security-pass-failed` or a label in the unblock judge's `BLOCK_LABELS`.
-   - It has been under review longer than the cap. Review start is the last time `ai:merge-queued` was removed, read from one `GET issues/<n>/events?per_page=100`; it falls back to `created_at` when the PR was never queued.
+   - It has been under review longer than the cap. Review start is the last time `ai:merge-queued` was removed; for a PR never queued, use its `created_at`. Extend the existing `_mt_list_open_prs` response with `created_at` and prefetch queue-label history for older-than-cap candidates in one aliased GraphQL batch (up to `MERGE_TRAIN_MAX_OLDER_PRS`, default 20), rather than reading events once per blocker. If history is incomplete or the PR identity is unverified, keep the blocker.
 
    Stale blockers are skipped. Log `MERGE_TRAIN_GATE ... skipped_stale_head=<n>`.
-   - The events read happens only for blockers that already carry such a label, so usually 0–1 per gate run. Labels come from the open-PR listing the gate already fetched (§15).
+   - API cost: zero when no overlapping blocker is old; at most one batch history call per 20 older-than-cap blockers per gate run, reusing the open-PR listing. No per-blocker REST event reads. Tests cover an old unlabelled head, a recently released old PR, missing history, and `0` rollback.
    - Followers still get the existing feature-sweep `update-branch`.
 3. Add `MERGE_TRAIN_PRIORITY_LABELS` (default `ai:workflow-heal,ai:security`; release-blocker reports arrive as `ai:workflow-heal` issues through the heal intake). A PR carrying any of these labels on its linked issue is never queued behind PRs without them. Among priority PRs, lowest number first.
-   - Read issue labels from the PR body's `Closes #N` link already parsed by `review_collect_pr_metadata.sh`. If not available, use one `GET issues/<n>` per gate run.
+   - Reuse the linked issue number from the existing PR metadata and blocker PR labels from `_mt_list_open_prs`. If the current linked issue's labels are absent from that metadata, batch the needed issue-label lookups for this gate run rather than making a read per older PR. Missing or ambiguous linkage does not grant priority; do not treat arbitrary PR-body text as a verified link.
 4. Tests in `tests/test_review_merge_train.py` for each rule, plus the all-off parity test.
 5. README "Merge train" table, env var table, `agents.md`, changelog `changelog.d/<issue>-merge-train-conflict-aware.md`.
 
 ### P2a / P2b — Single support-script source
-1. In each of `clarify.yml`, `plan.yml` and `orchestrate_clarify_respond.yml` (P2a) and `implement.yml` (P2b), replace the "Stage workflow support files" copy loop with the `review_autofix.yml:2603-2620` pattern:
+1. In each of `clarify.yml`, `plan.yml` and `orchestrate_clarify_respond.yml` (P2a) and `implement.yml` (P2b), replace the "Stage workflow support files" copy loop with the `review_autofix.yml:2653+` pattern:
    - Verify `.codex-workflow-src` HEAD equals `SCRIPT_REF`.
    - Run `.codex-workflow-src/scripts/stage_workflow_support.sh`.
    - Export `SUPPORT_ROOT_DIR` / `SUPPORT_SCRIPTS_DIR` / `SUPPORT_PROMPTS_DIR` to `$GITHUB_ENV`.
 2. Rewrite each `scripts/<helper>` invocation in those workflows to `"${SUPPORT_SCRIPTS_DIR}/<helper>"`.
    - Keep the original copy loop behind `SUPPORT_SCRIPTS_UNIFIED_ENABLED != 'true'` (default `true`) so the kill switch restores it.
    - If the workflow grows past §27 headroom, move the conditional into `scripts/stage_support_for_phase.sh` [new helper].
-3. `scripts/ai_engine.sh`: resolve `codex_stall_guard.sh`, `claude_engine.py` and other sibling helpers relative to its own directory (`$(dirname "${BASH_SOURCE[0]}")`), not `scripts/`. Do the same for any other support script that calls a sibling by `scripts/` path (grep `scripts/` inside `scripts/*.sh` called from these four workflows).
+3. `scripts/ai_engine.sh` already resolves `codex_stall_guard.sh` via `${_AI_ENGINE_DIR}` (`:321-323`); preserve that behavior. Audit other support scripts called from these four workflows for bare `scripts/` sibling calls and resolve each against its verified support directory.
 4. `tests/test_support_script_single_source.py` [new]:
    - Parse each of the four workflows and fail on any `for f in ... ; do ... install ... scripts/` copy list or bare `bash scripts/<support helper>` call outside the kill-switch branch.
    - Execute a fixture where the target tree's `codex_stall_guard.sh` rejects `--engine` and assert the support copy is used.
@@ -263,11 +264,12 @@ Every phase is one PR to `main` and is independently mergeable. No phase assumes
 1. `plan.yml` and `clarify.yml` failure handlers (`plan.yml:~2300-2341`):
    - Compute `fingerprint = sha256(phase + failed_step_name + first ::error:: line normalized)[:12]`.
    - Append `<!-- AI_FAILURE_FINGERPRINT_V1 phase=<p> fp=<fp> run=<id> -->` to the existing failure comment (no new comment).
-2. `orchestrate_poll_process.sh` standalone loop (`:16180-16195`) and managed loop:
-   - Track `failure_fingerprints` (last 5) in the existing `AI_STANDALONE_STALL_STATE_V1` state. They are not reset on phase change.
+2. `scripts/orchestrate_poll_process.sh` standalone loop (`:16401+`) and managed loop:
+   - Track `failure_fingerprints` (last 5) in the existing `AI_STANDALONE_STALL_STATE_V1` state for standalone issues and the existing per-issue wave state for managed issues. They are not reset on phase change.
    - When the same fingerprint appears `STALL_FINGERPRINT_REPEAT_MAX` (default `2`) times consecutively, apply the phase's existing failure label (`ai:plan-failed` for plan, `ai:clarify-failed` for clarify, `ai:needs-human` for any other phase) and stop re-triggering. All three are in the unblock judge's `BLOCK_LABELS` (`unblock_ledger.py:88-108` on #6204).
-   - Read the fingerprints from the comments already in `_candidate_details_json`. No new API calls.
-3. Replace the `skip` exhaustion action (`:16990-16996`) when `STALL_FINGERPRINT_BREAKER_ENABLED=true`. It applies `ai:needs-human` with the recovery history in the comment instead of closing, and `tg_notify_issue` stays.
+   - Accept only marker comments by the verified workflow account (resolve the active `GH_PAT` login, or `github-actions[bot]` with `GITHUB_TOKEN`), not a claimed association or marker text alone. Require distinct run IDs and ordered comments on this issue. If identity, comment history, or marker validation is unavailable, do not infer a repeat; use the legacy retry path. Reuse the cached comments in `_candidate_details_json` only when complete; otherwise fetch paginated history once per affected issue, not once per marker. Test forged, malformed, duplicate-run and incomplete-history markers.
+   - API cost: one account identity lookup cached per tick (reuse an existing identity read where available), zero comment reads with a complete candidate cache; one paginated comments read per affected issue only on cache miss.
+3. Replace the standalone `skip` exhaustion action (`scripts/orchestrate_poll_process.sh:17376-17384`) when `STALL_FINGERPRINT_BREAKER_ENABLED=true`. It applies `ai:needs-human` with the recovery history in the comment instead of closing, and `tg_notify_issue` stays. Check the separate managed `skip)` arm (`:14599`) for the same close-on-exhaustion behavior.
 4. Tests:
    - Planning↔clarification flapping with the same fingerprint escalates on the 2nd repeat.
    - Different fingerprints keep retrying.
@@ -275,17 +277,17 @@ Every phase is one PR to `main` and is independently mergeable. No phase assumes
 5. README stall section, `agents.md`, changelog.
 
 ### P4 — Release health
-1. Phase 4b (`test-and-mark-stable.yml:2273+`):
+1. Phase 4b (`test-and-mark-stable.yml:2745+`, `E2E_PHASE4B_QUEUED_GRACE_ENABLED`, default `true`):
    - Move the retry body into `scripts/e2e_phase4b_retry.sh`.
    - Start `EDITOR_RETRY_BUDGET_MINUTES` when the adopted or dispatched run reports `run_started_at`, not at adoption.
    - Add `E2E_RETRY_QUEUED_GRACE_MINUTES` (default `30`), a separate cap for queued time that fails with a distinct reason `retry_queued_timeout`.
    - Reuse the run GET the poll loop already issues.
-2. `scripts/promote_main_cycle.sh:302-306`: add `PROMOTE_CYCLE_HOLD_MAX_HOURS` (default `24`).
+2. `scripts/promote_main_cycle.sh:302-306`: add `PROMOTE_CYCLE_HOLD_RELEASE_ENABLED` (default `true`) and `PROMOTE_CYCLE_HOLD_MAX_HOURS` (default `24`). When disabled, keep the current in-flight guard.
    - A held tracking issue counts as holding only if it carries no human-latch label (`ai:harness-broken`, `ai:validation-failed`, `ai:security-pass-failed`, `ai:blocked`, `ai:needs-human`) or its latch is younger than the cap.
    - An over-cap held issue logs `PROMOTE_CYCLE_HOLD_RELEASED tracking_issue=<n> reason=<label>`, sends a WARNING, and the cycle proceeds.
-   - Use the labels already in the issue listing; the latch age needs one `GET issues/<n>/events` per held issue (0–1 issues in practice).
+   - Extend the projection of the existing issue listing (`:302-306`, which currently retains only numbers) to retain labels. Batch latch-label event histories for held candidates in one aliased GraphQL read. A missing or incomplete history keeps the hold (fail closed); never infer latch age from issue creation. API cost: zero new reads without a human-latched candidate, one batched history read when candidates exist.
 3. Staleness is not re-designed here. The `stable_release_stale` reporter (`RELEASE_BLOCKER_STABLE_STALE_SECS`, in `auto_release_stable.sh`) and the `cycle_stale` reporter (`RELEASE_BLOCKER_CYCLE_STALE_SECS`, in `promote_main_cycle.sh`) from `release-blocker-heal-reports-plan.md` Phase 2 cover it, so do not add a competing setting (§5).
-4. Implement `release-blocker-heal-reports-plan.md` Phases 1–3 as written. Those phases already carry their own files, done conditions and rollback.
+4. Implement `release-blocker-heal-reports-plan.md` Phases 1–3 as written. Those phases already carry their own files, done conditions and rollback; their default-on `RELEASE_BLOCKER_HEAL_ENABLED` is the reporter kill switch (do not create a competing one).
 5. Tests, README, `agents.md`, changelog per PR.
 
 ### P5 — Per-PR security pass convergence
@@ -309,12 +311,13 @@ Every phase is one PR to `main` and is independently mergeable. No phase assumes
 1. `scripts/unblock_ledger.py`: replace the constant `MAX_ROUNDS_PER_ITEM = 2` with `UNBLOCK_MAX_ROUNDS_PER_ITEM` env (default `3`, min 1, max 5). Keep the existing "never repeat a verdict for the same stop + fingerprint" rule so each round is distinct.
 2. `scripts/unblock_actions.py` terminal `close` path, when `NEEDS_HUMAN_DIGEST_ENABLED=true` (default):
    - Do not close.
-   - Apply `ai:needs-human` and record `parked=true` with the parking time in the item's existing ledger entry. `ai:needs-human` is itself in `BLOCK_LABELS`, so the scan must skip items whose ledger says `parked`.
+   - Apply `ai:needs-human` and record the terminal decision and parking time in the item's existing ledger entry. Do not mark digest/alert delivery complete yet. `ai:needs-human` is itself in `BLOCK_LABELS`: skip new judge rounds for parked items, but retry any undelivered notice on every poll tick.
    - A parked item becomes eligible again only on a new trigger: a comment from a trusted human, a label change by a human, or a new head SHA. That trigger resets the item's round count to 0.
    - Call `scripts/operator_step_issue.py upsert` with key `needs-human-<kind>-<n>` and a one-paragraph summary of the rounds tried.
-   - Send one CRITICAL Telegram.
+   - After the digest upsert is confirmed, send one CRITICAL Telegram and persist separate `digest_confirmed` and `alert_confirmed` receipts in the ledger. The key is stable across retries; check whether the entry already exists before retrying an ambiguous upsert. Retry known failures on the next tick without another LLM round or a duplicate confirmed send; a missing token/configuration keeps the notice pending and emits a warning. Do not mark a failed send confirmed.
    - Security items already stay open; they get the digest entry too.
-3. `operator_step_issue.py`: add entry kind `needs-human`, rendered under a `## Needs human` heading in the same standing issue, plus a `remove` subcommand. The poller calls `remove` when the item closes or loses `ai:needs-human`, using the existing per-tick candidate listing.
+3. `operator_step_issue.py`: add entry kind `needs-human`, rendered under a `## Needs human` heading in the same standing issue, plus a `remove` subcommand. The poller calls `remove` when the item closes or loses `ai:needs-human`, using the existing per-tick candidate listing. A failed removal retries; it never suppresses notice delivery for another item.
+   - API budget per item/tick: no new listing for an item already in the poller's candidate cache; at most the existing `operator_step_issue.py` bounded upsert reconciliation (3 attempts, each 2 list reads plus 1 write; one extra direct read on create/list lag), 1 label write, and 1 Telegram send on a known undelivered notice. Batch/cap pending items per tick; defer the rest to the next tick. A successful receipt costs zero further writes.
 4. Tests, README, `agents.md`, changelog.
 
 ### P7 — Latch gaps
@@ -328,13 +331,14 @@ Every phase is one PR to `main` and is independently mergeable. No phase assumes
 3. Tests, README, `agents.md`, changelog.
 
 ### P8 — Dependency waits
-1. Implement `confine-human-steps-to-activation-plan.md` Phase 4a and 4b steps verbatim (identifiers as listed in that plan's §6 inventory).
-2. Extend the security-dependency hold branch (`orchestrate_poll_process.sh:16058-16100`):
+1. Implement `confine-human-steps-to-activation-plan.md` Phase 4a and 4b (identifiers as listed in that plan's §6 inventory), gated by `DEPENDENCY_WAIT_RESUME_ENABLED` (default `true`). When off, the workflows retain the existing `BLOCKED:` path for new sequencing waits and the poller does not resume/escalate them; it moves any previously labelled `ai:waiting-on-dependency` issues to `ai:blocked` with a human-facing note, so disabling the switch does not strand them. The referenced plan's no-flag rollout is overridden here by Q16. Its `compare/<sha>...stable` release check must use `ahead` or `identical`, not `behind` (see P10).
+2. Extend `WAITING:` parsing and the existing `scripts/dependency_wait_resume.py` design to accept same-repo `issue=<owner>/<repo>#<N>` for generic `Depends on: #N` declarations. Clarify/plan emit that target when the declared issue is the sole sequencing blocker; for already blocked issues with that explicit declaration, the poller seeds the durable wait marker once from its existing candidate snapshot, without overriding another human-needed latch. Validate one positive, non-self issue number and verify the target is an issue in the same repository; do not treat a missing/unreadable target as satisfied. Batch distinct prerequisite issue states/labels with the existing Phase 4b target prefetch, cache them for the tick, and honor its durable resume marker and 7-day timer. On `closed` with `ai:merged` post `/answer`; on `closed` without that label post `/reclarify` so the issue's premise is rechecked. An open dependency remains held and escalates after `DEPENDENCY_WAIT_ESCALATE_DAYS`. These checks run on the poller cron even without an active project. API cost: extend the existing aliased target batch, no per-issue reads; at most one idempotent comment write per resolved dependent, with bounded paginated reads on incomplete comment history.
+3. Extend the security-dependency hold branch (`scripts/orchestrate_poll_process.sh:16437-16482`):
    - Record `held_since` in the issue's existing stall state.
    - At `DEPENDENCY_WAIT_ESCALATE_DAYS` (that plan's default), apply `ai:needs-human` with the dependency chain in the comment.
    - When the verdict reason is `dependency closed without ai:merged`, post a trusted `/reclarify` with marker `AI_SECURITY_DEPENDENCY_RELEASED_V1 reason=predecessor_unmerged` so clarify re-checks whether the finding still applies.
-   - Cost: none beyond the existing verdict read.
-3. Tests, README, `agents.md`, changelog. Add a note to `confine-human-steps-to-activation-plan.md` that its Phases 4a/4b were delivered by this plan.
+   - Cost: none beyond the existing verdict read, plus one deduplicated `/reclarify` write on unmerged closure. Failed/unverifiable reads leave the hold in place; avoid posting on each tick using a trusted durable marker.
+4. Tests cover generic issue open/merged/closed-unmerged/invalid, switch-off parity and `ahead`/`identical` release containment; README, `agents.md`, changelog. Add a note to `confine-human-steps-to-activation-plan.md` when its Phases 4a/4b are delivered by this plan.
 
 ### P9 — Clarify snapshot and BLOCKED verification
 1. `scripts/clarify_isolated_run.sh:46-100` (`CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED`, default `true`):
@@ -350,7 +354,7 @@ Every phase is one PR to `main` and is independently mergeable. No phase assumes
 ### P10 — Operator steps
 1. Prompt: in `prompts/mode-activation-verify.txt:25` and its template mirror, state that promotion to `stable` and consumer wrapper sync are automated (`promote-main-to-stable.yml`, `update_workflows.yml`) and must be emitted as `code` with `dormant_until: "@stable contains <sha>"`, never as `operator`. Secrets, repo settings and external accounts remain `operator`.
 2. `operator_step_issue.py resolve` (`OPERATOR_STEP_AUTO_RESOLVE_ENABLED`, default `true`):
-   - For each unticked entry `pr-<n>` whose recorded condition is a release condition, check `GET compare/<merge_sha>...stable`; `status` `behind` or `identical` means contained.
+   - For each unticked entry `pr-<n>` whose recorded condition is a release condition, check `GET compare/<merge_sha>...stable`; only `status` `ahead` or `identical` proves containment. Treat `behind`, `diverged` and API errors as not contained. Test each status.
    - Tick it, and close the issue when no unticked boxes remain.
    - Called once per poller tick only when an open `ai:operator-step` issue exists. Cost: 1 compare per unticked release entry, capped at 10 per tick.
 3. Tests, README, `agents.md`, changelog.
@@ -358,7 +362,8 @@ Every phase is one PR to `main` and is independently mergeable. No phase assumes
 ### P11a — Retired-label drain
 1. `scripts/ai_labels.py` (`:672-740` retire path, `RETIRED_LABEL_DRAIN_ENABLED`, default `true`), before deleting a retired label:
    - List open issues and PRs with it (`GET issues?labels=<l>&state=open`, paged).
-   - Comment once on each, close it as `not_planned`, then delete the label.
+   - Comment once on each using a durable marker, close issues as `not_planned` and PRs as `closed` (PRs have no `not_planned` state reason), then delete the label only after a complete listing confirms no open items remain. Do not delete on an incomplete listing or any failed comment/close; retry next scheduled run, checking the marker before writing another comment.
+   - API budget: read up to two 100-item pages per retired label, process at most 10 items total per run (up to one marker-history GET, one comment POST and one close PATCH each), and use a final paginated read before any label DELETE. If more items remain, retain the label and continue next week; a dry run only reads. The label listing cannot stand in for the issue/PR listing because it contains metadata, not attached items.
 2. `.github/workflows/internal-sync-ai-labels.yml` [new]: weekly cron plus `workflow_dispatch`, calling `sync_ai_labels.yml` for this repo.
 3. Tests and changelog.
 
@@ -421,6 +426,7 @@ None (§10 N/A).
   - The final exhausted-head audit stays a full `merge-base..head` audit (`SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS` path unchanged).
   - High/critical findings still block.
 - **P6 parks items open forever.** The digest is a single standing issue with one line per item and a CRITICAL alert at entry. ACCEPTED: the operator chose open-and-digest over close (Q8: A).
+- **P6 notice delivery is not atomic across GitHub and Telegram.** A confirmed digest entry and a separate alert receipt keep known failures retryable without re-judging; an ambiguous Telegram response may have delivered even though the ledger records no confirmation, so retry can produce a second alert. Keep that case visible in logs instead of falsely marking an unconfirmed send as successful.
 - **P7 scope auto-allow becomes a bypass vector.** The allowance is limited to two globs with a hard-deny prefix list. Fixtures are data, not executed by pipeline code paths with credentials.
 - **P8 duplicates the confine plan if someone implements it separately.** P8 adds a "delivered by" note to that plan.
 - **P11b force-cancel on a run that is merely slow to start.** The 24 h cap is far above any legitimate queue time observed (max ~2 h).
@@ -435,10 +441,10 @@ None (§10 N/A).
   - `MERGE_TRAIN_CONFLICT_CHECK_ENABLED`, `MERGE_TRAIN_HEAD_MAX_AGE_HOURS`, `MERGE_TRAIN_PRIORITY_LABELS`
   - `SUPPORT_SCRIPTS_UNIFIED_ENABLED`
   - `STALL_FINGERPRINT_BREAKER_ENABLED`, `STALL_FINGERPRINT_REPEAT_MAX`
-  - `E2E_RETRY_QUEUED_GRACE_MINUTES`, `PROMOTE_CYCLE_HOLD_MAX_HOURS`
+  - `E2E_PHASE4B_QUEUED_GRACE_ENABLED`, `E2E_RETRY_QUEUED_GRACE_MINUTES`, `PROMOTE_CYCLE_HOLD_RELEASE_ENABLED`, `PROMOTE_CYCLE_HOLD_MAX_HOURS` (reporters reuse `RELEASE_BLOCKER_HEAL_ENABLED`)
   - `SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED`, `SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED`
   - `UNBLOCK_MAX_ROUNDS_PER_ITEM`, `NEEDS_HUMAN_DIGEST_ENABLED`
-  - `HARNESS_HEAL_AUTO_REVALIDATE_ENABLED`, `SCOPE_GUARD_AUTO_ALLOW_PATHS`
+  - `HARNESS_HEAL_AUTO_REVALIDATE_ENABLED`, `SCOPE_GUARD_AUTO_ALLOW_PATHS`, `DEPENDENCY_WAIT_RESUME_ENABLED`
   - `CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED`, `CLARIFY_BLOCKED_VERIFY_ENABLED`
   - `OPERATOR_STEP_AUTO_RESOLVE_ENABLED`
   - `RETIRED_LABEL_DRAIN_ENABLED`, `ZOMBIE_RUN_REAPER_ENABLED`, `ZOMBIE_RUN_MAX_QUEUED_HOURS`
