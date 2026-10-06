@@ -13,6 +13,9 @@ from typing import Callable
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+# Discovery launches Codex through the credential-free, network-isolated
+# helper (scripts/codex_isolated_exec.sh, read-only snapshot of the clone).
+ISOLATED_CODEX_PREFIX = ("bash", str(REPO_ROOT / "scripts" / "codex_isolated_exec.sh"), "run", "--mode", "read-only")
 MODULE_PATH = REPO_ROOT / "scripts" / "validation_discovery_bootstrap.py"
 
 spec = importlib.util.spec_from_file_location("validation_discovery_bootstrap", MODULE_PATH)
@@ -211,7 +214,7 @@ def test_discover_manifest_via_codex_success_first_attempt() -> None:
 		executor = FakeExecutor(
 			[
 				PlannedRun(
-					("codex",),
+					ISOLATED_CODEX_PREFIX,
 					stdout=VALID_NODE_RUNTIME_MANIFEST,
 					callback=on_codex,
 				),
@@ -239,8 +242,8 @@ def test_discover_manifest_via_codex_retries_validator_rejection() -> None:
 		clone_dir = Path(td)
 		executor = FakeExecutor(
 			[
-				PlannedRun(("codex",), stdout="error: cannot infer\n"),  # rejected
-				PlannedRun(("codex",), stdout=VALID_NODE_RUNTIME_MANIFEST),  # accepted
+				PlannedRun(ISOLATED_CODEX_PREFIX, stdout="error: cannot infer\n"),  # rejected
+				PlannedRun(ISOLATED_CODEX_PREFIX, stdout=VALID_NODE_RUNTIME_MANIFEST),  # accepted
 			]
 		)
 		result = discovery.discover_manifest_via_codex(
@@ -263,9 +266,9 @@ def test_discover_manifest_via_codex_exhausted_attempts_returns_failure() -> Non
 		clone_dir = Path(td)
 		executor = FakeExecutor(
 			[
-				PlannedRun(("codex",), stdout="error: nope\n"),
-				PlannedRun(("codex",), stdout="error: still nope\n"),
-				PlannedRun(("codex",), stdout="error: never\n"),
+				PlannedRun(ISOLATED_CODEX_PREFIX, stdout="error: nope\n"),
+				PlannedRun(ISOLATED_CODEX_PREFIX, stdout="error: still nope\n"),
+				PlannedRun(ISOLATED_CODEX_PREFIX, stdout="error: never\n"),
 			]
 		)
 		result = discovery.discover_manifest_via_codex(
