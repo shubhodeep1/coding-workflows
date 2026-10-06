@@ -239,9 +239,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
     git auth. Post-editor implementation commits and pushes disable Git hooks.
     Hiding/restoring git auth fails the editor step on error; restoration
     verifies the workflow repository identity, not merely the GitHub host.
-    Heal-evidence implement runs pin the issue/plan scope allowlist before the
-    editor; preflight and commit ignore scope bypass variables and block empty
-    allowlists. This is not a same-uid process isolation boundary.
+    Heal-evidence implement runs pin a plan-only, concrete-file scope allowlist
+    before the editor, excluding scope-guard files and paths under `.github/ai/`
+    and `.claude/hooks/`; preflight and commit ignore scope bypass variables and
+    block empty allowlists. This is not a same-uid process isolation boundary.
     Stable log prefixes:
     `WORKFLOW_HEAL_REPORT`, `WORKFLOW_HEAL_AUTOFIX_REPORT`,
     `WORKFLOW_HEAL_PR_RECONCILE`, `WORKFLOW_HEAL`, `WORKFLOW_HEAL_EVIDENCE`.

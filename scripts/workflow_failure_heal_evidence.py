@@ -89,6 +89,12 @@ MAX_ARTIFACT_MEMBERS = 40
 MAX_PROVENANCE_COMMENTS = 20
 _NODE_ID_RE = re.compile(r"^[A-Za-z0-9_=-]{1,100}$")
 LEGACY_CACHE_KEY_RE = re.compile(r"heal-evidence-[0-9]+-[0-9]+-[0-9]+")
+HEAL_SCOPE_GUARD_FILES = (
+	"scripts/files_touched_scope_guard.py",
+	"scripts/workflow_failure_heal_evidence.py",
+	"scripts/implement_commit_changes.sh",
+)
+HEAL_SCOPE_GUARD_PREFIXES = (".github/ai/", ".claude/hooks/")
 
 # The review workflow's job is "codex-agent" (consumer wrapper) or
 # "review / codex-agent" (internal). A review/autofix failure usually ends
@@ -1614,27 +1620,47 @@ def _cmd_prompt_section(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _heal_scope_entry_reject_reason(entry: str) -> str | None:
+	"""Reject non-concrete plan paths and paths that can change the scope lock."""
+	if entry != entry.strip() or not entry.isascii() or not entry.isprintable():
+		return "whitespace"
+	if not entry or entry.startswith("/") or "\\" in entry or "//" in entry:
+		return "invalid_path"
+	if entry.endswith("/"):
+		return "directory"
+	if any(char in entry for char in ("*", "?", "[")):
+		return "glob"
+	if any(piece in ("", ".", "..", ".git") for piece in entry.lower().split("/")):
+		return "invalid_path"
+	basename = entry.rsplit("/", 1)[-1]
+	if "." not in basename[1:-1]:
+		return "no_extension"
+	lower_entry = entry.lower()
+	if lower_entry in HEAL_SCOPE_GUARD_FILES or any(lower_entry.startswith(prefix) for prefix in HEAL_SCOPE_GUARD_PREFIXES):
+		return "guard_file"
+	return None
+
+
 def _cmd_scope_allowlist(args: argparse.Namespace) -> int:
 	result: dict[str, Any] = {"source": "none", "allowlist": []}
+	reasons: dict[str, int] = {}
 	try:
-		from files_touched_scope_guard import extract_files_touched, normalize_allowlist
+		from files_touched_scope_guard import normalize_allowlist
 		from targeted_file_context import extract_paths_from_plan
-		issue_text = Path(args.issue_body_file).read_text(encoding="utf-8")
-		entries = extract_files_touched(issue_text)
-		if entries:
-			result["source"] = "issue"
-		else:
-			plan_text = Path(args.plan_file).read_text(encoding="utf-8")
-			entries = extract_paths_from_plan(plan_text)
-			if entries:
-				result["source"] = "plan"
-		for entry in normalize_allowlist(entries or []):
-			part = entry.rstrip("/")
-			if part in ("", ".", "*", "**", "**/*") or entry.startswith("/") or any(piece == ".." for piece in entry.split("/")) or "\\" in entry or "\n" in entry:
+		# Heal issue bodies embed untrusted failure evidence and diagnosis text;
+		# a files_touched: block inside them must not widen the lock (#6443).
+		entries = extract_paths_from_plan(Path(args.plan_file).read_text(encoding="utf-8"))
+		for entry in normalize_allowlist(entries):
+			reason = _heal_scope_entry_reject_reason(entry)
+			if reason:
+				reasons[reason] = reasons.get(reason, 0) + 1
 				continue
 			result["allowlist"].append(entry)
+		if result["allowlist"]:
+			result["source"] = "plan"
 	except (ImportError, OSError, ValueError):
 		result = {"source": "none", "allowlist": []}
+	log(f"scope_allowlist source={result['source']} kept={len(result['allowlist'])} rejected={sum(reasons.values())} reasons={','.join(f'{key}:{reasons[key]}' for key in sorted(reasons))}")
 	print(json.dumps(result))
 	return 0
 
@@ -1709,8 +1735,8 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--format", choices=("index", "structured"), default="index")
 	p.set_defaults(func=_cmd_prompt_section)
 
-	p = sub.add_parser("scope-allowlist", help="derive a pre-editor scope allowlist")
-	p.add_argument("--issue-body-file", required=True)
+	p = sub.add_parser("scope-allowlist", help="derive a pre-editor scope allowlist from the plan")
+	p.add_argument("--issue-body-file", required=True, help="accepted for caller compatibility; not read")
 	p.add_argument("--plan-file", required=True)
 	p.set_defaults(func=_cmd_scope_allowlist)
 
