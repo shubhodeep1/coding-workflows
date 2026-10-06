@@ -326,7 +326,7 @@ def complete_answers(questions_text: str, answers_text: str) -> dict:
 		invalid_by_qid = {row["qid"]: row for row in invalid}
 		for qid in filled:
 			reason = invalid_by_qid.get(qid)
-			detail = "missing" if reason is None else f"invalid: {ISSUE_REF_RE.sub('#⁠\\1', reason['pick'])}"
+			detail = "missing" if reason is None else "invalid: " + ISSUE_REF_RE.sub('#⁠\\1', reason['pick'])
 			canonical.append(
 				f"{qid}: RECOMMENDED option {recommended_picks[qid]} used; "
 				f"the worker answer gave no permitted decision ({detail})."

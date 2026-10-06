@@ -445,6 +445,27 @@ def test_complete_answer_is_byte_identical_and_strategies_are_permitted() -> Non
 	assert auto.complete_answers(QUESTIONS, emphasized)["answers"] == emphasized
 
 
+@pytest.mark.parametrize("decision", ["Q1: ESCALATE", "**Q1**: **ESCALATE**"])
+def test_complete_escalation_never_posts_an_answer(tmp_path: Path, decision: str) -> None:
+	answer = f"DECISIONS:\n{decision}\nQ2: A\n"
+	assert auto.complete_answers(QUESTIONS, answer)["answers"] == answer
+	scripts = tmp_path / "scripts"
+	scripts.mkdir()
+	shutil.copy(ROOT / "scripts" / "orchestrate_parse_and_post_answer.sh", scripts)
+	_stub_gh(tmp_path / "bin", tmp_path / "gh.log", {"repos/owner/repo/issues/6262/comments": '{"id": 1}'})
+	env = _env(tmp_path, GITHUB_REPOSITORY="owner/repo", GITHUB_ACTOR="bot", CLARIFICATION_COMMENT_ID="1")
+	Path(env["CODEX_OUTPUT_FILE"]).write_text(answer, encoding="utf-8")
+	result = subprocess.run(
+		["bash", str(scripts / "orchestrate_parse_and_post_answer.sh")], cwd=tmp_path,
+		env=env, capture_output=True, text=True, check=False,
+	)
+	assert result.returncode == 0, result.stderr
+	calls = [json.loads(line) for line in (tmp_path / "gh.log").read_text(encoding="utf-8").splitlines()]
+	assert all("/answer" not in arg for call in calls for arg in call)
+	assert "SKIP_AUTO_ANSWER=true" in (tmp_path / "env").read_text(encoding="utf-8")
+	assert "reason=escalate_requested" in result.stdout
+
+
 def test_incomplete_answer_keeps_valid_pick_and_removes_stale_rationale() -> None:
 	answer = "DECISIONS:\nQ1: C\n\nRATIONALE:\nQ1: keep this\nQ2: stale\n  continuation\n\nSETUP REQUIRED:\n- TOKEN is needed\n"
 	result = auto.complete_answers(QUESTIONS, answer)

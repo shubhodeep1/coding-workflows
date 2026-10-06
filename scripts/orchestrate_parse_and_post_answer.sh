@@ -58,7 +58,7 @@ fi
 
 # Detect ESCALATE decisions — treat same as loop-guard block
 HAS_ESCALATE="false"
-if printf '%s' "${ANSWERS_BODY}" | grep -qE '^Q[0-9]+:\s*ESCALATE'; then
+if grep -Eq '^[[:space:]]*\*{0,2}Q[1-9][0-9]*\*{0,2}[[:space:]]*:[[:space:]]*\*{0,2}ESCALATE\*{0,2}[[:space:]]*$' <<< "${ANSWERS_BODY}"; then
 	HAS_ESCALATE="true"
 fi
 
