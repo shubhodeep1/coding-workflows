@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Fail closed if identity cannot be established.\"\n  expected_change_site: scripts/review_conflict_prepare.sh, integration state read block (lines 470-519)\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  EVIDENCE: scripts/review_conflict_prepare.sh, integration state read block (around the `else` arm at lines 513-520 where `_conflict_state_login` fails the regex check); lines 513-519 only log a warning and substitute the \u201cno merged sub-issues recorded\u201d placeholder; lines 470-519; lines 513-516; review_autofix.yml proceeds to \u201cRun Codex resolver\u201d under `success()` (lines 5446-5448, 5450-5453); review_autofix.yml proceeds to its resolver step; the added test `test_integration_resolver_state_context_requires_authenticated_author` with `identity_available=False` explicitly asserts the degradation behavior (`FINGERPRINTS={}`, `no merged sub-issues recorded`)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"Fail closed if identity cannot be established.\" \u2014 explicitly stated in the linked issue recommendation; the issue also explicitly requires the same fail-closed posture for the conflict-preparation state read (\"Apply the same author restriction to conflict-preparation state reads\").\n  Expected change site: scripts/review_conflict_prepare.sh, integration state read block (around the `else` arm at lines 513-520 where `_conflict_state_login` fails the regex check).\n  Evidence of absence: The PR (original + last autofix) only adds a `::warning::review_conflict_prepare: pipeline identity unavailable; orchestrator state not read` log line, then falls through to the placeholder `INTEGRATION_MERGED_SUB_ISSUES_LIST=\"          (no merged sub-issues recorded in tracking-issue state \u2014 this typically means the integration branch is empty or state is not yet seeded)\"` at lines 518-520, with `INTEGRATION_FINGERPRINTS_JSON` left at the initial `\"{}\"`. The script exits 0 and `IS_INTEGRATION_SYNC=true` is still exported at lines 530-534, so the downstream resolver (`review_conflict_resolve.sh`, gated on `IS_INTEGRATION_SYNC=true` at lines 1316, 1876, 2633) still receives `MERGED_SUB_ISSUES_LIST` (line 693) and `INTEGRATION_FINGERPRINTS_FILE` (line 525) as if the read had succeeded, with an attacker-poisonable merged-sub-issues section and an empty fingerprints map. By contrast, the poller-side fix in this same PR (`extract_latest_valid_orchestrator_state`) correctly sets `EXTRACTED_STATE_IDENTITY_UNAVAILABLE=true` and the main loop `continue`s; the equivalent fail-closed gate is missing here. An attacker who can both poison state and observe the placeholder warning has a path that the poller-side fix does not have.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: \u201cFail closed if identity cannot be established.\u201d\n  Expected change site: `scripts/review_conflict_prepare.sh`, integration-sync state-read path.\n  Evidence of absence: When identity lookup fails, lines 513-519 only log a warning and substitute the \u201cno merged sub-issues recorded\u201d placeholder. The prepare step then succeeds, and `.github/workflows/review_autofix.yml` proceeds from that step to \u201cRun Codex resolver\u201d under `success()` (lines 5446-5448, 5450-5453). Thus the resolver still runs without the trusted merged-sub-issue state and fingerprints.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: \"Fail closed if identity cannot be established.\"\n  Expected change site: `scripts/review_conflict_prepare.sh`, integration state read block (lines 470-519)\n  Evidence of absence: When identity lookup fails (lines 513-516), the script logs a warning but continues execution. The `if [[ \"${_conflict_state_login}\" =~ ... ]]` check fails, the else branch emits `::warning::review_conflict_prepare: pipeline identity unavailable; orchestrator state not read`, then the script unsets variables and proceeds. `INTEGRATION_MERGED_SUB_ISSUES_LIST` remains empty, triggering the fallback placeholder at lines 521-522 (\"no merged sub-issues recorded\"). The prepare step exits 0, and `review_autofix.yml` proceeds to its resolver step. The resolver then runs without trusted merged-sub-issue state or fingerprints \u2014 exactly the fail-open behavior the linked issue forbids. The poller path (`orchestrate_poll_process.sh`) correctly fails closed by returning 1 from the extractor and skipping processing, but the conflict-preparation path does not mirror this behavior.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- Requirement: \"Before V1 or V2 extraction, accept state comments only from the verified pipeline identity; require every V2 chunk to meet that check and fail closed if identity cannot be established.\"\n  Expected change site: scripts/review_conflict_prepare.sh, integration state read block (lines 470-519)\n  Evidence of absence: When pipeline identity cannot be verified, the script only logs `::warning::review_conflict_prepare: pipeline identity unavailable; orchestrator state not read` and falls through to the placeholder path (`INTEGRATION_MERGED_SUB_ISSUES_LIST` set to the \"no merged sub-issues recorded\" string, `INTEGRATION_FINGERPRINTS_JSON` left as `{}`). The script exits successfully and `review_autofix.yml` proceeds to the resolver step with degraded context. The issue explicitly says \"fail closed if identity cannot be established\" \u2014 this path degrades instead. The added test `test_integration_resolver_state_context_requires_authenticated_author` with `identity_available=False` explicitly asserts the degradation behavior (`FINGERPRINTS={}`, `no merged sub-issues recorded`), confirming fail-closed was not implemented. The poller path in `orchestrate_poll_process.sh` correctly fails closed (skips the tick); the conflict-prepare path does not.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3c268257cd699999155d1bd5a14f53bcc14d53bb780485a7c932440348770968",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6511,
+    "run_id": "37463781941",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37463781941",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006131136_0227919dad",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6511,
+    "run_id": "37463781941"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T13:11:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
