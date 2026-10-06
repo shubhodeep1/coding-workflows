@@ -1,4 +1,4 @@
-Hand **one standalone GitHub issue** to the Actions pipeline **on the Claude engine**: label it `ai:engine-claude` and restart its clarify → plan → implement → review flow with `/reclarify`, so every role of that issue's work runs `claude -p` with Claude Opus 5.5 at `high` effort. This command does **not** implement the issue in this session and opens no PR. `$ARGUMENTS` names the issue: a URL (`https://github.com/<owner>/<repo>/issues/<N>`), `<owner>/<repo>#<N>`, or `#<N>` for this repo.
+Hand **one standalone GitHub issue** to the Actions pipeline **on the Claude engine**: label it `ai:engine-claude` and restart its clarify → plan → implement → review flow with `/reclarify`. This command does **not** implement the issue in this session and opens no PR. `$ARGUMENTS` names the issue: a URL (`https://github.com/<owner>/<repo>/issues/<N>`), `<owner>/<repo>#<N>`, or `#<N>` for this repo.
 
 The session-driven issue implementer (queue, pickup, dispatcher routine, issue-mode chain) was retired on 2026-10-03 (`docs/plans/replace-claude-sessions-with-cli-engine-plan.md`). Standalone issues run through the Actions pipeline; this label only chooses the engine.
 
@@ -25,5 +25,5 @@ Note: the Actions pipeline implements the issue; this session opened no PR.
 ## Rules
 
 - **Hand off — do not implement.** No code edits, no branches, no PRs, no other sessions.
-- **Until the engine-label plumbing lands** (Phase 6 of the plan above) the label is recorded but inert: the issue runs on each role's configured engine.
+- **Role cutovers are separate.** The label is propagated by Phase 6, but roles still use their existing engines until their Phase 5 call sites are cut over. A missing Claude credential falls back to codex (D1).
 - **§19.** Never reference an `ai:orchestrator-tracking` issue with `Fixes/Closes/Resolves`.
