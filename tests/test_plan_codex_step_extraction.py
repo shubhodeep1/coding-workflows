@@ -53,7 +53,13 @@ def test_workflow_stages_and_invokes_extracted_runner() -> None:
 	assert "TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_PLAN || '40' }}" in step
 	assert 'TOOL_CALL_BUDGET="${TOOL_CALL_BUDGET:-40}"' in PLAN_RUNNER.read_text(encoding="utf-8")
 	assert step.split("        run: |\n", 1)[1] == (
-		"          bash scripts/run_plan_codex.sh\n"
+		"          set -euo pipefail\n"
+		"          plan_runner_src=\"$(cat -- scripts/run_plan_codex.sh)\"\n"
+		"          if [ -z \"${plan_runner_src}\" ] || [ \"${#plan_runner_src}\" -gt 120000 ]; then\n"
+		"            echo '::error::run_plan_codex.sh empty or too large'\n"
+		"            exit 1\n"
+		"          fi\n"
+		"          env -u BASH_ENV -u ENV bash -c \"${plan_runner_src}\" run_plan_codex.sh\n"
 	)
 	assert len(step.encode("utf-8")) < 2_000
 
@@ -94,6 +100,8 @@ def _run_runner(
 	scenario: str,
 	engine: str = "",
 	claude_scenario: str = "",
+	pin: str | None = None,
+	bash_env_attack: bool = False,
 ) -> tuple[
 	subprocess.CompletedProcess[str], Path, tempfile.TemporaryDirectory[str]
 ]:
@@ -112,6 +120,9 @@ def _run_runner(
 	(scripts_dir / "editor_git_credentials.sh").write_text(
 		(REPO_ROOT / "scripts" / "editor_git_credentials.sh").read_text(encoding="utf-8"), encoding="utf-8"
 	)
+	helper_body = (scripts_dir / "editor_git_credentials.sh").read_text(encoding="utf-8").rstrip("\n")
+	if pin is None:
+		pin = hashlib.sha256((helper_body + "\n").encode("utf-8")).hexdigest()
 	_write_executable(
 		scripts_dir / "render_prompt.sh",
 		"""#!/usr/bin/env bash
@@ -161,6 +172,14 @@ printf '%s\n' "$*" >> "${MOCK_LOG_DIR}/codex-args.log"
 cat > "${MOCK_LOG_DIR}/prompt-${attempt}.txt"
 case "${MOCK_CODEX_SCENARIO}" in
   success)
+    printf 'primary plan output\n'
+    ;;
+  tamper)
+    printf 'echo PWNED >&2\nexit 0\n' > scripts/editor_git_credentials.sh
+    printf 'echo PWNED >&2\n' >> scripts/run_plan_codex.sh
+    if [ -n "${BASH_ENV:-}" ]; then
+      printf 'echo PLAN_STARTUP_WITH_TOKEN >&2\n' > "${BASH_ENV}"
+    fi
     printf 'primary plan output\n'
     ;;
   retry_then_fallback)
@@ -236,6 +255,7 @@ esac
 			"RUNTIME_DIR": str(runtime_dir),
 			"TOOL_CALL_BUDGET": "40",
 			"MODEL_REASONING_EFFORT": "high",
+			"EDITOR_GIT_CREDENTIALS_SHA256": pin,
 			"MOCK_CLAUDE_SCENARIO": claude_scenario,
 		}
 	)
@@ -244,9 +264,13 @@ esac
 		environment["PLAN_ENGINE"] = engine
 	for key in ("BASH_ENV", "ENV"):
 		environment.pop(key, None)
+	if bash_env_attack:
+		startup_file = runtime_dir / "workspace-shell.env"
+		startup_file.write_text("", encoding="utf-8")
+		environment["BASH_ENV"] = str(startup_file)
 
 	result = subprocess.run(
-		["bash", "scripts/run_plan_codex.sh"],
+		["bash", "-c", (scripts_dir / "run_plan_codex.sh").read_text(encoding="utf-8"), "run_plan_codex.sh"],
 		cwd=root,
 		env=environment,
 		text=True,
@@ -338,6 +362,29 @@ def test_retry_exhaustion_preserves_failure_exit() -> None:
 	assert _read_lines(runtime_dir / "sleep.log") == ["10", "20"]
 	assert len(_read_lines(runtime_dir / "codex-args.log")) == 3
 	assert (runtime_dir / "codex_output.txt").read_text(encoding="utf-8") == ""
+
+
+def test_missing_or_invalid_pin_fails_before_editor_launch() -> None:
+	for pin in ("", "0" * 64, "not-a-digest"):
+		result, root, temporary_directory = _run_runner("success", pin=pin)
+		try:
+			assert result.returncode != 0
+			assert "reason=pinned_helper_unavailable" in result.stderr
+			assert not (root / "runtime" / "codex-args.log").exists()
+		finally:
+			temporary_directory.cleanup()
+
+
+def test_editor_cannot_change_running_runner_or_pinned_restore() -> None:
+	result, root, temporary_directory = _run_runner("tamper", bash_env_attack=True)
+	try:
+		assert result.returncode == 0, result.stderr
+		assert "PWNED" not in result.stdout + result.stderr
+		assert "PLAN_STARTUP_WITH_TOKEN" not in result.stderr
+		assert "action=restore" in result.stderr
+		assert (root / "runtime" / "codex_output.txt").read_text() == "primary plan output\n"
+	finally:
+		temporary_directory.cleanup()
 
 
 CODEX_ARGS = (

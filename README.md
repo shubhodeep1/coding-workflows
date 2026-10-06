@@ -1500,11 +1500,36 @@ through `clarify → plan → implement → review`.
   Free-form step names and error signatures are represented only by SHA-256
   fingerprints. Their editor processes drop GitHub/Telegram credentials and the
   raw-evidence directory pointer, and temporarily hide git
-  checkout credentials; network access for the model remains available. The
+  checkout credentials (including a split `WORKSPACE_PATH` checkout); network
+  access for the model remains available. The
   credential helper rejects failed hides/restores and restores auth only when
   the origin still names the workflow's original repository (or its trusted
   support checkout) and its push URL agrees, not an editor-changed GitHub destination;
   generic GitHub extraheaders are restored scoped to the verified origin only.
+  Implement restores the repository-scoped workflow token rather than `GH_PAT`.
+  Its preflight and commit-time staging paths recheck editor-writable Git config
+  and attributes (including new or changed per-directory `.gitattributes` driver bindings)
+  immediately before `git add`, ignore global Git config, and
+  command-override hooks, fsmonitor and global attributes. Push repeats the
+  check, keeps global Git config disabled, and uses the same repository-scoped
+  token; later GitHub API and PR operations continue to use `GH_PAT` where
+  cross-workflow event delivery requires it. Because pushes authenticated with
+  the workflow token do not trigger `pull_request:synchronize`, the existing-PR
+  recovery path dispatches the review wrapper from the default branch with
+  the reused PR number only when its head matches the pushed branch. A failed
+  dispatch stops implementation rather than treating the PR as reviewed; new
+  PRs still review on `pull_request:opened`.
+  Plan and implement pin the staged helper's SHA-256 before the editor, execute
+  matching bytes from shell memory and fail closed if none remain. Helper Bash
+  processes ignore `BASH_ENV`/`ENV`; implementation's post-editor repair and
+  restore steps also start without `BASH_ENV`, so an editor-written workspace
+  startup file cannot execute before these steps handle credentials. Planning
+  runs its editor runner from memory to prevent in-place edits from changing
+  its post-editor restore path. The credentialed implementation step also
+  starts without `BASH_ENV` and enters the workspace explicitly; after each
+  implementation or repair editor launch, it replaces the writable startup
+  file before later steps can source it, clearing the next step's `BASH_ENV`
+  first so a failed replacement cannot source the poisoned file.
   Implement runs with heal evidence also pin the issue/plan file allowlist
   before the editor and block out-of-scope commits even when the normal guard
   or per-run override is disabled. This is not a process isolation boundary:

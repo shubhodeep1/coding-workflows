@@ -239,6 +239,15 @@ Phases of the unattended pipeline (each is a separate workflow file under
     git auth. Post-editor implementation commits and pushes disable Git hooks.
     Hiding/restoring git auth fails the editor step on error; restoration
     verifies the workflow repository identity, not merely the GitHub host.
+    Plan and implement pin the staged credential helper's hash before the editor,
+    then run matching bytes from shell memory; plan also runs its editor runner
+    from memory so in-place changes cannot alter its post-editor restore.
+    Pinned helper Bash processes drop `BASH_ENV`/`ENV`, and the syntax-repair
+    and post-repair restore steps start with `BASH_ENV` unset; an editor-written
+    workspace startup file cannot run before those credentialed steps. The
+    implementation step likewise starts with `BASH_ENV` empty and enters the
+    workspace explicitly; each editor attempt replaces the startup file before
+    later steps source it, clearing the inherited setting first on failure.
     Heal-evidence implement runs pin the intake-verified leading scope marker
     (exact files in the intake diagnosis for the issue's repository) before the
     editor; preflight and commit ignore scope bypass variables, block empty
@@ -457,16 +466,40 @@ a new value, add it to the appropriate overrides file with a
   `IMPLEMENT_STAGED_SUPPORT_REBASE_FAILED`, `IMPLEMENT_STAGED_SUPPORT_RESTORE`.
 - Both codex editor launches in `implement.yml` (the "Run Codex implementation"
   attempt loop and the "Attempt post-Codex syntax repair" loop) run
-  `bash scripts/codex_thread_reuse.sh direct-run` through
+  the immutable `IMPLEMENT_SANDBOX_SUPPORT_DIR` copy of `codex_thread_reuse.sh`
+  through
   `env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR`.
+  The model CLIs run in a credential-free, network-disabled Docker container
+  through `implement_untrusted_sandbox.sh`; the host brokers hold credentials
+  and only validated edits are transferred back. Both Claude and the Codex
+  fallback use the same container. Missing isolation fails closed.
   A preceding env scrub drops GH_TOKEN, GH_PAT, GITHUB_TOKEN, Telegram and
   Actions runtime credentials; `scripts/editor_git_credentials.sh` hides git
-  origin/extraheader auth for the editor and restores it after each launch.
+  origin/extraheader auth for the editor and restores it after each launch,
+  including a split `WORKSPACE_PATH` checkout alongside `GITHUB_WORKSPACE`.
+  Both launches and the later syntax-repair restore execute only bytes matching
+  the pre-editor stage output's SHA-256, loaded into shell memory; an unmatched
+  helper fails closed rather than restoring auth from an editor-writable file.
   It fails closed (exit 1, log prefix `EDITOR_GIT_CREDENTIALS … reason=…`):
   hide refuses before the editor starts, and restore refuses before any token
   is injected, when a checkout's origin is not its trusted repository or was
   changed, or a pushurl, URL rewrite, proxy, credential helper or include
-  directive sits in an editor-writable git config scope.
+  directive sits in an editor-writable git config scope. It also refuses
+  command-running Git keys (filter/diff/merge drivers, `core.attributesFile`,
+  `core.hooksPath`, `core.editor`, `core.pager`, signing programs, `lfs.*`) in those scopes
+  and driver assignments in `.git/info/attributes`, global attributes, or
+  new or modified working-tree `.gitattributes` files (unchanged tracked
+  bindings remain usable). Both
+  preflight and commit-time staging call its tokenless `check` action immediately
+  before `git add`, ignore
+  editor-writable global Git config, and command-override hooks, fsmonitor and
+  global attributes. Credential restore and push use the repository-scoped
+  workflow token rather than `GH_PAT`; push repeats the check and ignores global
+  Git config before writing authenticated origin state. Since the workflow
+  token does not trigger `pull_request:synchronize`, the existing-PR recovery
+  path explicitly dispatches `internal-review.yml` (or `ai-review.yml` in a
+  consumer) from the default branch only for the pushed head branch; a failed
+  dispatch fails the step.
   The editor never reads those paths; only the restore / reinstall / commit
   steps of the job do. A `pytest` the editor starts to validate its own change
   therefore cannot write fixture paths into the live run's ledgers even when
@@ -1506,6 +1539,7 @@ and shipped:
 - `WORKFLOW_HEAL_EVIDENCE`
 - `HEAL_EVIDENCE_SCOPE_LOCK`
 - `EDITOR_GIT_CREDENTIALS`
+- `IMPLEMENT_ISOLATION`
 - `AUTOFIX_FINGERPRINT`
 - `AUTOFIX_FINGERPRINT_CAP_TRIPPED`
 - `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`
@@ -1711,6 +1745,7 @@ LOG_PREFIX.name=WORKFLOW_HEAL
 LOG_PREFIX.name=WORKFLOW_HEAL_EVIDENCE
 LOG_PREFIX.name=HEAL_EVIDENCE_SCOPE_LOCK
 LOG_PREFIX.name=EDITOR_GIT_CREDENTIALS
+LOG_PREFIX.name=IMPLEMENT_ISOLATION
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_TRIPPED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED

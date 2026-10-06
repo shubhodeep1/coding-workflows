@@ -22,6 +22,7 @@ import textwrap
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 IMPLEMENT_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
+EDITOR_GIT_CREDENTIALS_SCRIPT = REPO_ROOT / "scripts" / "editor_git_credentials.sh"
 IMPLEMENT_STAGED_SUPPORT_WORKSPACE_SCRIPT = REPO_ROOT / "scripts" / "implement_staged_support_workspace.sh"
 IMPLEMENT_GUARD_HANDLER = REPO_ROOT / "scripts" / "implement_handle_guard_block.sh"
 FILES_TOUCHED_SCOPE_GUARD = REPO_ROOT / "scripts" / "files_touched_scope_guard.py"
@@ -1360,6 +1361,7 @@ def test_commit_helper_fails_closed_on_unsafe_fetched_manifest_paths() -> None:
 		_bootstrap_git_repo(repo_dir)
 		(repo_dir / "scripts").mkdir()
 		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+		shutil.copy2(EDITOR_GIT_CREDENTIALS_SCRIPT, repo_dir / "scripts" / "editor_git_credentials.sh")
 		outside_path.write_text("keep\n", encoding="utf-8")
 		github_output = repo_dir / "github_output.txt"
 		github_output.write_text("", encoding="utf-8")
@@ -1398,7 +1400,8 @@ def test_commit_helper_treats_unset_fetched_manifest_as_empty() -> None:
 		_bootstrap_git_repo(repo_dir)
 		(repo_dir / "scripts").mkdir()
 		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
-		_git(["git", "add", "scripts/implement_commit_changes.sh"], cwd=repo_dir)
+		shutil.copy2(EDITOR_GIT_CREDENTIALS_SCRIPT, repo_dir / "scripts" / "editor_git_credentials.sh")
+		_git(["git", "add", "scripts/implement_commit_changes.sh", "scripts/editor_git_credentials.sh"], cwd=repo_dir)
 		_git(["git", "commit", "-m", "add helper"], cwd=repo_dir)
 		github_output = tmp_path / "github_output.txt"
 		github_output.write_text("", encoding="utf-8")
@@ -1437,8 +1440,9 @@ def test_commit_helper_rolls_back_post_commit_scope_lock_violation() -> None:
 		_bootstrap_git_repo(repo_dir)
 		(repo_dir / "scripts").mkdir()
 		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+		shutil.copy2(EDITOR_GIT_CREDENTIALS_SCRIPT, repo_dir / "scripts" / "editor_git_credentials.sh")
 		shutil.copy2(FILES_TOUCHED_SCOPE_GUARD, repo_dir / "scripts" / "files_touched_scope_guard.py")
-		_git(["git", "add", "scripts/implement_commit_changes.sh", "scripts/files_touched_scope_guard.py"], cwd=repo_dir)
+		_git(["git", "add", "scripts/implement_commit_changes.sh", "scripts/editor_git_credentials.sh", "scripts/files_touched_scope_guard.py"], cwd=repo_dir)
 		_git(["git", "commit", "-m", "add scope helpers"], cwd=repo_dir)
 		baseline_head = subprocess.run(
 			["git", "rev-parse", "HEAD"],
@@ -1545,6 +1549,7 @@ def _staged_support_fixture(tmp_path: Path, worktree_helper: str | None) -> tupl
 	support_run_dir = runtime_dir / "staged_support_run" / "scripts"
 	support_run_dir.mkdir(parents=True)
 	shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, support_run_dir / "implement_commit_changes.sh")
+	shutil.copy2(EDITOR_GIT_CREDENTIALS_SCRIPT, support_run_dir / "editor_git_credentials.sh")
 	base_dir = runtime_dir / "staged_support_base"
 	(base_dir / "scripts").mkdir(parents=True)
 	(base_dir / "scripts" / "helper.sh").write_text(_STAGED_HELPER_MAIN, encoding="utf-8")
@@ -1960,7 +1965,7 @@ def test_implement_workflow_wires_staged_support_workspace_helper() -> None:
 	assert implement_run.index(restore_call) < implement_run.index("python3 scripts/targeted_file_context.py")
 	assert implement_run.index(restore_call) < implement_run.index('CODEX_PRE_BASELINE="${RUNTIME_DIR}/codex_pre_baseline.txt"')
 	assert implement_run.index(restore_call) < implement_run.index('for attempt in $(seq 1 "${max_attempts}"); do')
-	assert implement_run.rindex("bash scripts/codex_thread_reuse.sh direct-run") < implement_run.index(reinstall_call)
+	assert implement_run.rindex('bash "${IMPLEMENT_SANDBOX_SUPPORT_DIR}/scripts/codex_thread_reuse.sh" direct-run') < implement_run.index(reinstall_call)
 	assert implement_run.index(reinstall_call) < implement_run.index('if [ "${implement_succeeded}" = "true" ]; then')
 	repair_run = _extract_run_script("Attempt post-Codex syntax repair")
 	assert repair_run.count(restore_call) == 1
@@ -1995,8 +2000,8 @@ def test_editor_launches_drop_staged_support_ledger_env() -> None:
 	conftest.py, so the launch line has to scrub them itself.
 	"""
 	for step_name, launch_line in (
-		("Run Codex implementation", "bash scripts/codex_thread_reuse.sh direct-run || cmd_rc=$?"),
-		("Attempt post-Codex syntax repair", "bash scripts/codex_thread_reuse.sh direct-run; then"),
+		("Run Codex implementation", 'bash "${IMPLEMENT_SANDBOX_SUPPORT_DIR}/scripts/codex_thread_reuse.sh" direct-run || cmd_rc=$?'),
+		("Attempt post-Codex syntax repair", 'bash "${IMPLEMENT_SANDBOX_SUPPORT_DIR}/scripts/codex_thread_reuse.sh" direct-run; then'),
 	):
 		script_lines = _extract_run_script(step_name).splitlines()
 		launch_indexes = [idx for idx, line in enumerate(script_lines) if line.strip() == launch_line]
@@ -2145,7 +2150,7 @@ def test_stage_workflow_support_step_records_self_repo_staged_support_ledger() -
 	):
 		assert marker in script_text, marker
 	# The restore runs before anything is staged.
-	assert script_text.index("IMPLEMENT_STAGED_SUPPORT_RESTORE ") < script_text.index('git add -u -- "${add_u_excludes[@]}"')
+	assert script_text.index("IMPLEMENT_STAGED_SUPPORT_RESTORE ") < script_text.index('GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null add -u -- "${add_u_excludes[@]}"')
 	commit_block = _step_block_text("Commit changes")
 	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"' in commit_block
 	assert 'source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh"' in _step_block_text("Push branch")
@@ -2327,7 +2332,7 @@ def test_heal_evidence_allowlist_step_uses_verified_evidence() -> None:
 def test_validate_step_uses_reusable_validator_with_continue_on_error() -> None:
 	validate_block = _step_block_text("Validate syntax of changed files")
 	assert "continue-on-error: true" in validate_block
-	assert "bash scripts/validate_changed_files_syntax.sh" in validate_block
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/validate_changed_files_syntax.sh"' in validate_block
 
 
 def test_post_codex_syntax_repair_step_contract() -> None:
@@ -2337,14 +2342,14 @@ def test_post_codex_syntax_repair_step_contract() -> None:
 	repair_block = _step_block_text("Attempt post-Codex syntax repair")
 	assert "steps.validate_syntax_changed_files.outcome == 'failure'" in repair_block
 	assert "prompts/mode-implement-repair.txt" in repair_block
-	assert "scripts/validate_changed_files_syntax.sh" in repair_block
+	assert '"${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/validate_changed_files_syntax.sh"' in repair_block
 	assert "MAX_POST_CODEX_REPAIR_ATTEMPTS" in repair_block
 	assert "[ \"${max_attempts_raw}\" -lt 0 ]" in repair_block
 	assert "if [ \"${max_attempts}\" -eq 0 ]; then" in repair_block
 	assert "BASELINE_COMMIT=\"$(git stash create" in repair_block
 	assert "PRE_UNTRACKED_FILE=\"${RUNTIME_DIR}/post_codex_pre_untracked_attempt_" in repair_block
 	assert "Required repair artifacts are missing from repair-prompt-and-validator-split dependency." in repair_block
-	assert 'SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "${REPAIR_PROMPT_TEMPLATE}"' in repair_block
+	assert 'SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/render_prompt.sh" "${REPAIR_PROMPT_TEMPLATE}"' in repair_block
 	assert 'Failed to render repair prompt template ${REPAIR_PROMPT_TEMPLATE}; using raw prompt.' in repair_block
 	assert "Keep apply_patch as the primary write path for repository edits" in repair_block
 
