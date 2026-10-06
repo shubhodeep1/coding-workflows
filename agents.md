@@ -212,8 +212,12 @@ Phases of the unattended pipeline (each is a separate workflow file under
     fixes, continue the lineage), caps the lineage at
     `WORKFLOW_HEAL_MAX_LINEAGE_DEPTH` (escalates with
     `ai:workflow-heal-escalated` + Telegram), and bounds the volume with
-    `WORKFLOW_HEAL_MAX_OPEN_ISSUES` / `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY`. A
-    third reporter lives in the failure path of `review_autofix.yml`
+    `WORKFLOW_HEAL_MAX_OPEN_ISSUES` / `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY`.
+    CI-derived heal issues carry an intake-generated `Failed workflow: CI`
+    context line; `scripts/security_pass_skip.py` requires a security audit
+    for their fix PRs despite a verified `ai:workflow-heal` label. Release
+    heal issues retain their existing skip behavior. A third reporter lives
+    in the failure path of `review_autofix.yml`
     (`scripts/workflow_failure_heal_autofix_report.sh`, payload kind
     `autofix_failure`): it reports a failed review/autofix run on a pull
     request once `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` (default 2) runs in a

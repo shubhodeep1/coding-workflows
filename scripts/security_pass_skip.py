@@ -25,8 +25,8 @@ when, for one skip label the issue carries:
      `<!-- ai:security-audit-tracker:v1 -->` and whose author is the
      follow-up's author.
 
-Triage-linked PRs always run the security pass. Anything else, including a
-read failure, means the security pass runs.
+Triage-linked PRs and fixes for CI-derived workflow-heal issues always run the
+security pass. Anything else, including a read failure, means the pass runs.
 
 Usage:
 
@@ -65,6 +65,7 @@ SKIP_LABEL_MARKERS: dict[str, re.Pattern[str]] = {
 	"ai:security": re.compile(r"(?m)^<!-- ai:security-finding:\S+ -->[ \t]*$"),
 	"ai:workflow-heal": re.compile(r"(?m)^<!-- workflow-failure-heal:fp=\S+ -->[ \t]*$"),
 }
+CI_HEAL_CONTEXT_RE = re.compile(r"(?m)^- \*\*Failed workflow:\*\* `CI` \(conclusion: `(failure|timed_out)`\)[ \t]*$")
 SECURITY_LABEL = "ai:security"
 TRACKER_LABEL = "ai:security-audit"
 TRACKER_MARKER = "<!-- ai:security-audit-tracker:v1 -->"
@@ -186,6 +187,11 @@ def decide_security_pass_skip(
 	candidates = [label for label in SKIP_LABEL_MARKERS if label in labels]
 	if not candidates:
 		return {"skip": False, "label": None, "reason": "no skip label"}
+	# The intake writes this header from the failed run, before the untrusted
+	# diagnosis. CI logs can be influenced by PRs, so an owner-filed heal issue
+	# is not sufficient proof that its fix can bypass the security audit.
+	if "ai:workflow-heal" in candidates and CI_HEAL_CONTEXT_RE.search(issue.get("body") or ""):
+		return {"skip": False, "label": None, "reason": "CI workflow heal requires security pass"}
 	if "pull_request" in issue:
 		return {"skip": False, "label": None, "reason": "not an issue"}
 	if not _is_automation_author(issue):
@@ -228,7 +234,10 @@ def check_issue(repo: str, number: int) -> dict[str, Any]:
 	issue = _gh_get_json(f"repos/{repo}/issues/{number}")
 	if not isinstance(issue, dict):
 		raise ReadError(f"issue #{number} returned non-object JSON")
-	if not any(label in SKIP_LABEL_MARKERS for label in _label_names(issue)) or "pull_request" in issue or not _is_automation_author(issue):
+	issue_labels = _label_names(issue)
+	if (not any(label in SKIP_LABEL_MARKERS for label in issue_labels) or "pull_request" in issue
+			or not _is_automation_author(issue) or
+			("ai:workflow-heal" in issue_labels and CI_HEAL_CONTEXT_RE.search(issue.get("body") or ""))):
 		# Decided from the issue alone; the events and tracker are never read.
 		return decide_security_pass_skip(issue, [], lambda _number: None)
 	events = _gh_get_json(f"repos/{repo}/issues/{number}/events?per_page={EVENTS_PAGE_SIZE}")

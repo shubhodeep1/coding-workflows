@@ -1473,7 +1473,11 @@ through `clarify → plan → implement → review`.
   on a push to the default branch (`MAIN_CI_WORKFLOW_NAMES` in
   `scripts/workflow_failure_heal.py`). A red `main` fails every PR's CI, so the
   heal issue targets `main`, the failed run's branch. Pull-request CI failures
-  are skipped here; check-failure triage takes them. A promote or
+  are skipped here; check-failure triage takes them. Fix PRs for CI-derived
+  `ai:workflow-heal` issues do not inherit the usual verified heal-issue
+  security-pass exemption: the intake-generated `Failed workflow: CI` context
+  makes `scripts/security_pass_skip.py` require a head-bound security audit.
+  Release-workflow heal issues keep their existing exemption. A promote or
   auto-release run that failed only because the smoke gate failed is skipped
   (`skip reason=downstream_gate_failure`) because the gate run reports itself.
 - **Report (consumer side):** the reporter reads the escalated issue / PR, its

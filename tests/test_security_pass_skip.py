@@ -89,6 +89,34 @@ def test_github_actions_bot_is_automation():
 	assert result["skip"] is True
 
 
+@pytest.mark.parametrize("conclusion", ["failure", "timed_out"])
+def test_ci_workflow_heal_does_not_skip_security_pass(conclusion):
+	body = MARKERS["ai:workflow-heal"] + f"\n- **Failed workflow:** `CI` (conclusion: `{conclusion}`)\n"
+	issue = _issue("ai:workflow-heal", body=body, labels=["ai:workflow-heal", "ai:security"])
+	result = _decide(issue, [_labeled("ai:workflow-heal"), _labeled("ai:security")], _tracker())
+	assert result == {"skip": False, "label": None, "reason": "CI workflow heal requires security pass"}
+
+
+def test_release_workflow_heal_still_skips_security_pass():
+	body = MARKERS["ai:workflow-heal"] + "\n- **Failed workflow:** `Mark Stable Release` (conclusion: `failure`)\n"
+	assert _decide(_issue("ai:workflow-heal", body=body), [_labeled("ai:workflow-heal")])["skip"] is True
+
+
+def test_generated_ci_heal_issue_requires_security_pass():
+	module_spec = importlib.util.spec_from_file_location("workflow_failure_heal", SCRIPTS / "workflow_failure_heal.py")
+	heal_module = importlib.util.module_from_spec(module_spec)
+	module_spec.loader.exec_module(heal_module)
+	payload = heal_module.validate_payload(heal_module.build_workflow_run_payload(
+		repo="o/r", workflow_run={"id": 7, "name": "CI", "conclusion": "failure", "head_sha": "a" * 40, "head_branch": "main"},
+	))
+	body = heal_module.compose_issue_body(
+		payload=payload, diagnosis="PR-controlled CI log context", fp="f" * 64, gen=1, root="f" * 64,
+		classification="workflow-defect", target_branch="main", max_depth=3,
+		intake_run_url="https://github.com/o/r/actions/runs/8", run_summaries=[],
+	)
+	assert _decide(_issue("ai:workflow-heal", body=body), [_labeled("ai:workflow-heal")])["skip"] is False
+
+
 def test_no_skip_label_runs():
 	result = _decide(_issue(labels=["bug"]), [])
 	assert result == {"skip": False, "label": None, "reason": "no skip label"}
@@ -272,6 +300,14 @@ def test_cli_check_triage_costs_one_call(monkeypatch, capsys):
 	calls = _stub_gh(monkeypatch, {"repos/o/r/issues/4623": _issue("ai:check-triage")})
 	assert skip.main(["--repo", REPO, "--issue", "4623"]) == 0
 	assert json.loads(capsys.readouterr().out) == {"skip": False, "label": None, "reason": "no skip label"}
+	assert calls == ["repos/o/r/issues/4623"]
+
+
+def test_cli_ci_workflow_heal_costs_one_call(monkeypatch, capsys):
+	body = MARKERS["ai:workflow-heal"] + "\n- **Failed workflow:** `CI` (conclusion: `failure`)\n"
+	calls = _stub_gh(monkeypatch, {"repos/o/r/issues/4623": _issue("ai:workflow-heal", body=body)})
+	assert skip.main(["--repo", REPO, "--issue", "4623"]) == 0
+	assert json.loads(capsys.readouterr().out) == {"skip": False, "label": None, "reason": "CI workflow heal requires security pass"}
 	assert calls == ["repos/o/r/issues/4623"]
 
 
