@@ -217,7 +217,7 @@ SITES = {
 	"WAVE_JUDGE": (
 		'poller_claude_judge WAVE_JUDGE "${judge_effective_prompt_file}" "${JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/judge_log.txt" || wave_judge_rc=$?',
 		'if [ "${wave_judge_rc}" -eq 75 ]; then',
-		'bash scripts/clarify_isolated_run.sh "${judge_effective_prompt_file}" "${JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/judge_log.txt" codex WAVE_JUDGE || true',
+		'bash scripts/clarify_isolated_run.sh "${judge_effective_prompt_file}" "${JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/judge_log.txt" codex WAVE_JUDGE || {',
 	),
 }
 
@@ -261,6 +261,7 @@ def test_wave_judge_fallback_never_starts_host_codex(tmp_path: Path) -> None:
 			"codex() { echo 'UNSAFE HOST CODEX' > host-codex.txt; }\n"
 			"MODEL_REASONING_EFFORT_JUDGE=xhigh\n"
 			"MODEL_EDITOR=openai/gpt-6-sol\n"
+			"TRACKING_NUM=42\n"
 			"RUNTIME_DIR=.\n"
 			"judge_effective_prompt_file=prompt.txt\n"
 			"JUDGE_OUTPUT_FILE=verdict.txt\n"
@@ -272,6 +273,7 @@ def test_wave_judge_fallback_never_starts_host_codex(tmp_path: Path) -> None:
 		assert (tmp_path / "verdict.txt").read_text(encoding="utf-8") == ""
 		if available:
 			assert (tmp_path / "call.txt").read_text(encoding="utf-8").strip() == "scripts/clarify_isolated_run.sh|codex|WAVE_JUDGE|xhigh"
+			assert "Isolated wave-judge fallback failed for tracking issue #42" in proc.stderr
 		else:
 			assert "refusing host Codex" in proc.stderr
 

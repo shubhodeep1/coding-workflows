@@ -23098,7 +23098,9 @@ ${PR_DIFF}
       # filtered checkout and a placeholder provider key to the fallback.
       if [ -f scripts/clarify_isolated_run.sh ]; then
         MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
-          bash scripts/clarify_isolated_run.sh "${judge_effective_prompt_file}" "${JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/judge_log.txt" codex WAVE_JUDGE || true
+          bash scripts/clarify_isolated_run.sh "${judge_effective_prompt_file}" "${JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/judge_log.txt" codex WAVE_JUDGE || {
+            echo "::warning::Isolated wave-judge fallback failed for tracking issue #${TRACKING_NUM}; retrying if attempts remain." >&2
+          }
       else
         echo "::error::Isolated wave-judge fallback unavailable; refusing host Codex." >&2
       fi
