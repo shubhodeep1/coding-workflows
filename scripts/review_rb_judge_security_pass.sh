@@ -26,6 +26,9 @@
 # makes one paginated listing (one call per page) of open `ai:security`
 # issues, filtered locally by their `Integration branch:` line. A failed or
 # malformed page stops the judge before it decides. Blocking findings also
+# include unticketed high/critical findings from the trusted head-bound audit
+# record; missing records count as blockers. Detect reuses the status reader's
+# existing PR comments and token-identity reads, even on the gate shortcut.
 # require a live PR GET at pre-judge and hold time, plus a disable-auto write
 # only when an earlier auto-merge enrollment is present. rb_security_merge_gate
 # costs what the gate costs (see review_single_issue_security_pass.sh).
@@ -52,27 +55,35 @@ rb_security_pass_script()
 # step's gate output) short-circuits the lookup.
 rb_security_mode_detect()
 {
-	local script state_out state
+	local script state_out state record_marker_status
 	RB_SECURITY_MODE="false"
-	if [ "${SECURITY_PASS_EXHAUSTED:-}" = "true" ]; then
-		RB_SECURITY_MODE="true"
-		rb_security_log "mode=detect pr=${PR_NUMBER:-} outcome=exhausted reason=gate_output"
-		return 0
-	fi
+	RB_SECURITY_FINDINGS_RECORD=""
+	RB_SECURITY_FINDINGS_RECORD_STATUS="missing"
+	RB_SECURITY_RECORD_HEAD=""
 	if [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-true}" = "false" ]; then
 		rb_security_log "mode=detect pr=${PR_NUMBER:-} outcome=normal reason=disabled"
 		return 0
 	fi
+	if [ "${SECURITY_PASS_EXHAUSTED:-}" = "true" ]; then
+		RB_SECURITY_MODE="true"
+	fi
 	script="$(rb_security_pass_script)"
 	if [ ! -f "${script}" ]; then
-		echo "::warning::$(basename "${script}") is not staged; the judge runs without security-pass context."
-		rb_security_log "mode=detect pr=${PR_NUMBER:-} outcome=normal reason=script_missing"
+		echo "::warning::$(basename "${script}") is not staged; the judge cannot verify the findings record."
+		rb_security_log "mode=detect pr=${PR_NUMBER:-} outcome=$([ "${RB_SECURITY_MODE}" = "true" ] && echo exhausted || echo normal) reason=script_missing"
 		return 0
 	fi
-	state_out="$(GITHUB_OUTPUT="" bash "${script}" status 2>/dev/null || true)"
+	state_out="$(GITHUB_OUTPUT="" bash "${script}" status 2>/dev/null)" || state_out=""
 	state="$(printf '%s\n' "${state_out}" | sed -n 's/^SINGLE_ISSUE_SECURITY_PASS_STATE=//p' | tail -n 1)"
 	if [ "${state}" = "exhausted" ]; then
 		RB_SECURITY_MODE="true"
+		RB_SECURITY_RECORD_HEAD="$(printf '%s\n' "${state_out}" | sed -n 's/^SINGLE_ISSUE_SECURITY_PASS_AUDITED_HEAD=//p' | tail -n 1)"
+		RB_SECURITY_FINDINGS_RECORD="$(printf '%s\n' "${state_out}" | sed -n 's/^SINGLE_ISSUE_SECURITY_PASS_FINDINGS_RECORD=//p' | tail -n 1)"
+		record_marker_status="$(printf '%s\n' "${state_out}" | sed -n 's/^SINGLE_ISSUE_SECURITY_PASS_FINDINGS_RECORD_STATUS=//p' | tail -n 1)"
+		RB_SECURITY_FINDINGS_RECORD_STATUS="${record_marker_status:-missing}"
+		if [ -n "${RB_SECURITY_FINDINGS_RECORD}" ] && [ -z "${record_marker_status}" ]; then
+			RB_SECURITY_FINDINGS_RECORD_STATUS="valid"
+		fi
 	fi
 	rb_security_log "mode=detect pr=${PR_NUMBER:-} outcome=$([ "${RB_SECURITY_MODE}" = "true" ] && echo exhausted || echo normal) state=${state:-unknown}"
 	return 0
@@ -84,7 +95,7 @@ rb_security_mode_detect()
 # ask the judge to decide without complete findings.
 rb_security_findings_render()
 {
-	local head_ref="$1" out_file="$2" issues_json rendered
+	local head_ref="$1" out_file="$2" issues_json rendered record_status="${RB_SECURITY_FINDINGS_RECORD_STATUS:-missing}" record_json="${RB_SECURITY_FINDINGS_RECORD:-}"
 	RB_SECURITY_BLOCKING_COUNT=0
 	RB_SECURITY_BLOCKING_ISSUES=""
 	# The judge's existing PR/linked-issue reads do not include the open
@@ -111,6 +122,7 @@ rb_security_findings_render()
 		| if any(.[]; (.number | type != "number") or .number <= 0 or (.title | type != "string")) then error("invalid issue number or title") else . end
 		| {count: ([.[] | select(blocking)] | length),
 		   issues: [.[] | select(blocking) | .number | select(type == "number" and . > 0) | "#\(.)"],
+		   ids: [.[] | select(blocking) | ((.body // "") | capture("(?m)^<!-- ai:security-finding:(?<v>[^>\\n]+) -->$")? | .v) // empty],
 		   text: (if length == 0 then "(No open security-audit finding issues target this branch.)"
 		     else map("- \(if blocking then "[BLOCKS MERGE] " else "" end)#\(.number) \(.title | gsub("[\\r\\n]"; " "))\n  Severity: \(field("Severity") | if . == "" then "unknown" else . end); Location: \(field("Location") | if . == "" then "unknown" else . end)") | join("\n") end)}
 	' 2>/dev/null)"; then
@@ -124,6 +136,41 @@ rb_security_findings_render()
 		RB_SECURITY_BLOCKING_COUNT=0
 		RB_SECURITY_BLOCKING_ISSUES=""
 		rb_security_log "mode=findings pr=${PR_NUMBER:-} outcome=parse_failed"
+		return 1
+	fi
+	if [ "${record_status}" = "valid" ] && [ -z "${record_json}" ]; then
+		record_status="invalid"
+	fi
+	if [ "${record_status}" = "valid" ]; then
+		# The status helper already validated the record. Still parse defensively:
+		# never let a malformed cache value turn an unticketed finding into a merge.
+		if ! rendered="$(jq -cn --argjson tickets "${rendered}" --argjson record "${record_json}" --arg head "${RB_SECURITY_RECORD_HEAD:-}" '
+			def safe: gsub("[\u0000-\u001f\u007f]"; " ") | .[:120];
+			if ($record | type) != "array" or ($record | length) > 100 then error("bad record") else
+			  [$record[] | select(.severity != "low" and .severity != "medium")
+			    | select(.finding_id as $id | ($tickets.ids | index($id)) == null)] as $unmatched
+			  | {count: ($tickets.count + ($unmatched | length)),
+			     issues: ($tickets.issues + [$unmatched[] | "finding:\(.finding_id | safe)"]),
+			     text: ($tickets.text + (if ($unmatched | length) == 0 then "" else "\n" + ([$unmatched[] |
+			       "- [BLOCKS MERGE] finding \(.finding_id | safe) (reported by the audit of \($head[:12]); no open ticket for this branch)\n  Severity: \(.severity | safe); Location: \(.file | safe):\(.line)"
+			     ] | join("\n")) end))} end
+		' 2>/dev/null)"; then
+			record_status="invalid"
+		fi
+	fi
+	if [ "${record_status}" != "valid" ]; then
+		case "${record_status}" in missing|invalid) ;; *) record_status="invalid" ;; esac
+		if ! rendered="$(jq -cn --argjson tickets "${rendered}" '
+			{count: ($tickets.count + 1), issues: ($tickets.issues + ["audit-record"]),
+			 text: ($tickets.text + "\n- [BLOCKS MERGE] audit findings record for the audited head is unavailable; findings cannot be reconciled")}
+		' 2>/dev/null)"; then
+			return 1
+		fi
+		rb_security_log "mode=findings pr=${PR_NUMBER:-} outcome=record_unreconciled reason=${record_status}"
+	fi
+	if ! RB_SECURITY_BLOCKING_COUNT="$(jq -er '.count' <<< "${rendered}")" \
+		|| ! RB_SECURITY_BLOCKING_ISSUES="$(jq -er '.issues | join(" ")' <<< "${rendered}")" \
+		|| ! jq -er '.text' <<< "${rendered}" > "${out_file}"; then
 		return 1
 	fi
 	return 0
@@ -290,7 +337,7 @@ Open high/critical/unrated security findings (${RB_SECURITY_BLOCKING_ISSUES:-unk
 # Returns 0 when a judge merge may proceed, 1 when the security gate holds it.
 rb_security_merge_gate()
 {
-	local script gate_out gate_rc hold exhausted state audited_head
+	local script gate_out gate_rc hold exhausted state audited_head verified_record
 	if [ "${RB_SECURITY_MODE:-false}" = "true" ]; then
 		script="$(rb_security_pass_script)"
 		if [ ! -f "${script}" ]; then
@@ -300,8 +347,12 @@ rb_security_merge_gate()
 		gate_out="$(GITHUB_OUTPUT="" bash "${script}" status 2>/dev/null)" || gate_out=""
 		state="$(printf '%s\n' "${gate_out}" | sed -n 's/^SINGLE_ISSUE_SECURITY_PASS_STATE=//p' | tail -n 1)"
 		audited_head="$(printf '%s\n' "${gate_out}" | sed -n 's/^SINGLE_ISSUE_SECURITY_PASS_AUDITED_HEAD=//p' | tail -n 1)"
+		verified_record="$(printf '%s\n' "${gate_out}" | sed -n 's/^SINGLE_ISSUE_SECURITY_PASS_FINDINGS_RECORD=//p' | tail -n 1)"
 		if [ "${state}" = "exhausted" ] && [[ "${audited_head}" =~ ^[0-9a-f]{40}$ ]] \
-			&& [ "${audited_head}" = "${RB_JUDGED_HEAD_SHA:-}" ]; then
+			&& [ "${audited_head}" = "${RB_JUDGED_HEAD_SHA:-}" ] \
+			&& [ "${RB_SECURITY_FINDINGS_RECORD_STATUS:-}" = "valid" ] \
+			&& [ -n "${verified_record}" ] && [ "${verified_record}" = "${RB_SECURITY_FINDINGS_RECORD:-}" ] \
+			&& [ "${RB_SECURITY_BLOCKING_COUNT:-1}" = "0" ]; then
 			rb_security_log "mode=merge_gate pr=${PR_NUMBER:-} outcome=allow reason=security_mode_audited_head"
 			return 0
 		fi

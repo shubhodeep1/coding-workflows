@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import base64
 import json
 import os
 import subprocess
@@ -542,6 +543,75 @@ def test_report_posts_the_result_and_reruns_the_review(tmp_path: Path, outcome: 
 	assert posted[-1][-1].endswith(_marker(status, HEAD, 3))
 	review = ["workflow", "run", "ai-review.yml", "-R", "o/r", "--ref", "main", "-f", "pr_number=42"]
 	assert (review in calls) is redispatch
+
+
+def _findings_body(record: list[dict], *, head: str = HEAD, cycle: int = 5) -> str:
+	encoded = base64.b64encode(json.dumps(record, separators=(",", ":")).encode()).decode()
+	return (f"<!-- ai:single-issue-security-pass-findings:v1 head={head} cycle={cycle} "
+		f"count={len(record)} record={encoded} -->\n" + _marker("findings", HEAD, 5))
+
+
+def test_report_embeds_validated_record_before_last_marker(tmp_path: Path) -> None:
+	record = [{"finding_id": "security-id", "severity": "high", "file": "file.py", "line": 1}]
+	record_file = tmp_path / "record.json"
+	record_file.write_text(json.dumps(record), encoding="utf-8")
+	result, calls, _ = _run(tmp_path, "report", comments=[_comment(_marker("pending", HEAD, 5))], env={
+		"SECURITY_PASS_PR_NUMBER": "42", "SECURITY_PASS_HEAD_SHA": HEAD,
+		"SECURITY_PASS_AUDIT_OUTCOME": "success", "SECURITY_PASS_FINDINGS": "1",
+		"SECURITY_PASS_FINDINGS_RECORD_FILE": str(record_file),
+	})
+	posted = [call[-1] for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]][-1]
+	assert result.returncode == 0 and "record=valid" in result.stdout
+	assert posted.endswith(_marker("findings", HEAD, 5))
+	assert _findings_body(record).splitlines()[0] in posted
+
+
+@pytest.mark.parametrize("payload, count", [([], "1"), ([{"finding_id": "id", "severity": "bad", "file": "a", "line": 1}], "1"),
+	([{"finding_id": "id\nnew line", "severity": "high", "file": "a", "line": 1}], "1"),
+	([{"finding_id": "x" * 201, "severity": "high", "file": "a", "line": 1}], "1"),
+	([{"finding_id": "id", "severity": "high", "file": "a", "line": 1}] * 101, "101")])
+def test_report_rejects_invalid_or_oversized_record(tmp_path: Path, payload: list, count: str) -> None:
+	record_file = tmp_path / "record.json"
+	record_file.write_text(json.dumps(payload), encoding="utf-8")
+	result, calls, _ = _run(tmp_path, "report", comments=[_comment(_marker("pending", HEAD, 5))], env={
+		"SECURITY_PASS_PR_NUMBER": "42", "SECURITY_PASS_HEAD_SHA": HEAD,
+		"SECURITY_PASS_AUDIT_OUTCOME": "success", "SECURITY_PASS_FINDINGS": count,
+		"SECURITY_PASS_FINDINGS_RECORD_FILE": str(record_file),
+	})
+	posted = [call[-1] for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]][-1]
+	assert result.returncode == 0 and "record=missing" in result.stdout
+	assert "security-pass-findings:v1" not in posted
+
+
+@pytest.mark.parametrize("head, cycle, login, malformed, accepted", [
+	(HEAD, 5, "owner", False, True), (OLD, 5, "owner", False, False),
+	(HEAD, 4, "owner", False, False), (HEAD, 5, "owner", True, False),
+	(HEAD, 5, "other", False, False),
+])
+def test_status_reads_only_the_same_trusted_head_cycle_record(tmp_path: Path, head: str, cycle: int, login: str, malformed: bool, accepted: bool) -> None:
+	record = [{"finding_id": "security-id", "severity": "critical", "file": "a.py", "line": 1}]
+	body = _findings_body(record, head=head, cycle=cycle)
+	if malformed:
+		body = body.replace("record=", "record=%%%")
+	comments = [_comment(body, comment_id=7)]
+	if login != "owner":
+		comments = [_comment(_findings_body(record), login=login, comment_id=8), _comment(_marker("findings", HEAD, 5), comment_id=9)]
+	result, _, _ = _run(tmp_path, "status", comments=comments)
+	assert result.returncode == 0
+	assert ("SINGLE_ISSUE_SECURITY_PASS_FINDINGS_RECORD=" in result.stdout) is accepted
+	if accepted:
+		assert json.loads(result.stdout.split("SINGLE_ISSUE_SECURITY_PASS_FINDINGS_RECORD=", 1)[1].splitlines()[0]) == record
+	else:
+		assert f"SINGLE_ISSUE_SECURITY_PASS_FINDINGS_RECORD_STATUS={'missing' if login != 'owner' else 'invalid'}" in result.stdout
+
+
+def test_status_rejects_a_record_count_mismatch(tmp_path: Path) -> None:
+	record = [{"finding_id": "id", "severity": "high", "file": "a.py", "line": 1}]
+	body = _findings_body(record).replace("count=1", "count=2")
+	result, _, _ = _run(tmp_path, "status", comments=[_comment(body)])
+	assert result.returncode == 0
+	assert "SINGLE_ISSUE_SECURITY_PASS_FINDINGS_RECORD_STATUS=invalid" in result.stdout
+	assert "SINGLE_ISSUE_SECURITY_PASS_FINDINGS_RECORD=" not in result.stdout
 
 
 def test_report_does_not_rerun_review_without_a_persisted_result(tmp_path: Path) -> None:

@@ -354,6 +354,8 @@ def test_security_audit_workflow_has_required_triggers_and_checkout_contract() -
 
 def test_security_audit_workflow_wires_codex_and_audit_env() -> None:
 	content = WORKFLOW_PATH.read_text(encoding="utf-8")
+	assert "SECURITY_AUDIT_FINDINGS_RECORD_OUT: ${{ runner.temp }}/security_audit_findings_record.json" in content
+	assert "SECURITY_PASS_FINDINGS_RECORD_FILE: ${{ runner.temp }}/security_audit_findings_record.json" in content
 	# The local action must come from verified support, never the audit branch.
 	assert 'uses: ./.github/actions/install-codex' in content
 	assert 'uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable' not in content
@@ -2231,6 +2233,44 @@ def test_security_audit_target_ref_routes_followups_and_keeps_tracker_marker() -
 	assert f"branch `claude/implement-plan-demo` changes since its merge-base with the default branch (`{first_sha}`..`{head_sha}`)" in comment
 	# No tracker body edit carries the branch head as the default-branch marker.
 	assert not any(head_sha in body for body in final_state.get("issue_edit_bodies", []))
+
+
+def test_branch_audit_dedup_requires_open_same_branch_issue_and_publishes_all_findings() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-dedup-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, first_sha, head_sha = _git_fixture_repo(tmp_path)
+		findings_record = tmp_path / "record.json"
+		findings = [_finding_payload(f"finding-{index}", file_path="file_b.py") for index in range(3)]
+		state = _security_audit_tracker_state()
+		state["api_responses"] = [[[{
+			"number": 100 + index, "state": state_value,
+			"body": f"<!-- ai:security-finding:finding-{index} -->\n- Integration branch: `{branch}`",
+		} for index, state_value, branch in (
+			(0, "closed", "branch"), (1, "open", "other"), (2, "open", "branch"),
+		)]]]
+		proc, final_state = _run_security_audit(state, codex_output=json.dumps(findings), cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_TARGET_REF": "branch",
+			"SECURITY_AUDIT_DIFF_BASE": first_sha,
+			"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+			"SECURITY_AUDIT_FINDINGS_RECORD_OUT": str(findings_record),
+		})
+		assert proc.returncode == 0, proc.stderr
+		assert [json.loads(findings_record.read_text())[index]["finding_id"] for index in range(3)] == [f"finding-{index}" for index in range(3)]
+		assert json.loads(findings_record.read_text())[0] == {
+			"finding_id": "finding-0", "severity": "high", "file": "file_b.py", "line": 1,
+		}
+		assert len(final_state["issue_create_bodies"]) == 2
+		assert "finding-0" in final_state["issue_create_bodies"][0]
+		assert "finding-1" in final_state["issue_create_bodies"][1]
+		assert "Depends on:" not in final_state["issue_create_bodies"][0]
+		assert "- Depends on: #9100" in final_state["issue_create_bodies"][1]
+
+		weekly = _security_audit_tracker_state()
+		weekly["api_responses"] = [state["api_responses"][0]]
+		proc, final_state = _run_security_audit(weekly, codex_output=json.dumps([_finding_payload("finding-0")]))
+		assert proc.returncode == 0, proc.stderr
+		assert not final_state.get("issue_create_bodies")
 
 
 def test_security_audit_target_ref_routes_through_the_integration_ref_resolver() -> None:
