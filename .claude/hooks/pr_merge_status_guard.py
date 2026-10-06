@@ -14,9 +14,11 @@ Each guarded Bash git invocation is checked in its own effective repository:
 a preceding resolvable cd, git -C, and git-directory/work-tree overrides are
 applied without executing the Bash text. Pushes with explicit branch refspecs
 are checked against the destination branch and the source commit, including
-when the source is a detached HEAD. Unknown directories warn and fall back to
-the session checkout check; unresolvable explicit push targets require
-confirmation. Repeated targets share a PR snapshot
+when the source is a detached HEAD. Unresolved env-wrapped commit directories
+require confirmation rather than checking the wrong repository. Other unknown
+directories warn and check the session checkout; pushes then require
+confirmation. Unresolvable explicit push targets also require confirmation.
+Repeated targets share a PR snapshot
 per repository and branch, while different source tips are checked separately.
 A `cd` or `exit` with a redirect that might fail (anything but a plain
 `/dev/null` target) makes the directory unknown. After checking the session
@@ -1494,6 +1496,9 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	for invocation in _guarded_git_invocations(command, checkout):
 		if invocation.subcommand == "push" and invocation.warning == "unparsed env wrapper":
 			unverified_destinations.add("unparsed env-wrapped Git command")
+			continue
+		if invocation.subcommand == "commit" and invocation.warning and invocation.config_override:
+			_request_confirmation(invocation.warning)
 			continue
 		if invocation.subcommand == "push" and invocation.warning:
 			uncertain_push_reasons.append(invocation.warning)
