@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_untrusted_workspace.py:21-232 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `allowed_editor()` admits nested `.ssh` paths, allowing tracked SSH credentials to be copied into the editor snapshot.\n  WHY: The editor can read and expose those credentials to its model provider.\n- .github/workflows/implement.yml:2801 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The EXIT trap's `&&` chain skips isolation-directory cleanup if credential restoration fails.\n  WHY: On that failure path, temporary files remain in `/tmp`.\n- .github/workflows/implement.yml:2827 | severity=low | confidence=[4]\n  flagged_by: [openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The EXIT trap's `&&` chain skips isolation-directory cleanup if credential restoration fails.\n  WHY: The per-run isolation directory, including snapshot and session data, remains in `RUNNER_TEMP` on that failure path.\n- .github/workflows/implement.yml:4239-4241 | severity=low | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The EXIT trap's `&&` chain skips isolation-directory cleanup if credential restoration fails.\n  WHY: The isolation root temporary directory remains when the chain short-circuits.\n- scripts/run_plan_codex.sh:299 | severity=low | confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The EXIT trap's `&&` chain skips isolation-directory cleanup if reaping or credential restoration fails.\n  WHY: The plan runner's isolation root is leaked when either earlier command fails.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_untrusted_workspace.py: allowed_editor(), lines 63-64 | severity=high | confidence=4\n  PROBLEM: The `allowed_editor()` function does not reject `.ssh` or `.gnupg` directory entries.\n  WHY: Tracked credential files in those directories can be admitted into the model-accessible container.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_untrusted_workspace.py: 59-67 (allowed_editor function) | confidence=4\n  PROBLEM: Nested `.ssh` directories are not excluded from the editor workspace.\n  WHY: A tracked private key in a nested `.ssh` directory can be included in the editor snapshot and exposed to the model and provider.\n- .github/workflows/implement.yml: 2801, 4239 (trap locations) | severity=low | confidence=3\n  PROBLEM: Cleanup of the isolation directory is skipped if credential restoration fails.\n  WHY: The `&&` chain skips cleanup, leaving orphaned temporary files in `/tmp`.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_untrusted_workspace.py: allowed_editor(), lines 59\u201367; snapshot(), lines 210\u2013232 | severity=high | confidence=4\n  PROBLEM: Nested `.ssh` paths are not excluded and are copied into the editor snapshot.\n  WHY: A tracked private key at such a path is exposed to the editor and its model provider.\n- .github/workflows/implement.yml: lines 2827 and 4241 | severity=low | confidence=5\n  PROBLEM: The exit traps chain credential restoration and isolation-root cleanup with `&&`.\n  WHY: If restoration fails after reaping succeeds, the isolation directory, including the snapshot and session data, remains in `RUNNER_TEMP`.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_untrusted_workspace.py: allowed_editor(), lines 55-67; EXCLUDED set at line 21 | severity=high | confidence=5\n  PROBLEM: `allowed_editor()` does not reject `.ssh` directories.\n  WHY: A tracked SSH private key can pass admission, be copied into the editor container, and be accepted by `transfer()` on the return path.\n- .github/workflows/implement.yml: line 2827 (main editor loop EXIT trap), line 4241 (repair loop EXIT trap) | severity=low | confidence=4\n  PROBLEM: Both EXIT traps use a strict `&&` chain, so cleanup is skipped if reaping or credential restoration fails.\n  WHY: The isolation root temporary directory is leaked when either predecessor fails.\n- scripts/run_plan_codex.sh: line 299 | severity=low | confidence=4\n  PROBLEM: The EXIT trap's `&&` chain skips cleanup if reaping or credential restoration fails.\n  WHY: The plan runner's isolation root is leaked on either failure.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/review_untrusted_workspace.py: allowed_editor(), lines 55-67; snapshot() calls it at line 210 onward | severity=high | confidence=4\n  PROBLEM: `allowed_editor()` admits nested `.ssh` directories.\n  WHY: A tracked SSH private key can be copied into the tokenless container snapshot, where the model can read and exfiltrate it through the model relay broker.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "3a707b2db10cde8c2c65d8e13023c233094f8def651b668f615362ee35c97401",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6475,
+    "run_id": "37523906630",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37523906630",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006205446_9ef3b0dfbe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6475,
+    "run_id": "37523906630"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T20:54:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
