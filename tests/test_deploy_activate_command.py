@@ -103,7 +103,7 @@ def test_worker_secrets_remain_operator_only(cloudflare_steps: str) -> None:
 	assert "never set it yourself from a value seen in the conversation" in cloudflare_steps
 
 
-def test_credential_failure_falls_back_without_token_leak(cloudflare_steps: str) -> None:
+def test_credential_failure_blocks_without_token_leak(cloudflare_steps: str) -> None:
 	assert "If the matching credential is unset" in cloudflare_steps
 	assert "`workers/scripts` list) returns 401/403" in cloudflare_steps
 	assert "mark the Cloudflare step BLOCKED in the activation log" in cloudflare_steps
