@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Changes to review-blocked polling emphasize both limiting fix scope to files in the relevant PR and tracking why the target was selected. When modifying orchestration or retry behavior, preserve these boundaries so a fix cannot silently expand to unrelated files or lose target provenance.",
+  "fingerprint": "7919d51b6a1dc4ec50336d474716638d085ce1fc056b75d3b8bed44ed33d7a31",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37397616861",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37397616861",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6342",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6389",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6398",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6420",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6423",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6351",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6406",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6418",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6421",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6425"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261006011504_895f1f557f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Keep review fixes bounded to the intended PR files and preserve provenance for the chosen target.",
+  "timestamps": {
+    "created_at": "2026-10-06T01:15:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
