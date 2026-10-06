@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:8879-8880 | severity=low | confidence=[3]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: Conflict resolution unconditionally rejects deleting a protected file, including delete/modify conflicts where deletion is the correct outcome.\n  WHY: The rejection uses reason=protected_path_provenance and stalls integration for a legitimate resolution; the reviewer notes this behavior is documented and tested as intentional.\n- scripts/orchestrate_poll_process.sh:8901-8905 | severity=low | confidence=[3]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The shared-line retention check rejects resolutions that reduce duplicated shared lines below the minimum shared count, including legitimate deduplication.\n  WHY: Such a resolution is rejected with reason=protected_path_provenance; the reviewer notes this behavior is documented and tested as intentional.\n- scripts/orchestrate_poll_process.sh:21471, 21500-21510 | severity=low | confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: Widening the protected path pattern to `.github/*` rejects edits to non-workflow `.github/` files when `ALLOW_WORKFLOW_EDITS=false`.\n  WHY: The reviewer says this can consume a review-blocked retry without a push; the stricter behavior is documented and tested.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Issue #6455 \u2014 keep GITHUB_WORKSPACE on the real checkout, pass the per-PR tree through the sandbox's validated WORKSPACE_PATH\n  expected_change_site: scripts/review_rb_judge.sh around the `bash \"${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh\" prepare` invocation\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Present at scripts/review_rb_judge.sh:2027-2042; covered by tests/test_review_agent_isolation_contract.py:247-257 and tests/test_review_autofix_review_pipeline_contract.py:8431-8540\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: Issue #6455 \u2014 keep GITHUB_WORKSPACE on the real checkout, pass the per-PR tree through the sandbox's validated WORKSPACE_PATH\n  Expected change site: scripts/review_rb_judge.sh around the `bash \"${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh\" prepare` invocation\n  Evidence of absence: Present at scripts/review_rb_judge.sh:2027-2042; covered by tests/test_review_agent_isolation_contract.py:247-257 and tests/test_review_autofix_review_pipeline_contract.py:8431-8540\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:8879-8880 (`if not indexed: raise ValueError(\"deleted protected conflict\")`) | severity=NIT | confidence=3\n  PROBLEM: The integration judge now unconditionally rejects any conflict resolution that deletes a protected file, including delete/modify conflicts where one side deleted the file and the other retained it. The previous code skipped validation when only one side was present (`if b\"2\" in sides and b\"3\" in sides: raise ... ; continue`).\n  WHY: A legitimate protected-file conflict resolution where the correct outcome is deletion (one side added, other deleted) is rejected with `reason=protected_path_provenance`, stalling the integration until the next poll tick retries. This is documented as intentional in agents.md and verified by `test_protected_resolution_cannot_remove_shared_controls`, but it narrows the resolver's valid output space for delete/modify conflicts on protected paths.\n- scripts/orchestrate_poll_process.sh:8901-8905 (shared-line retention check via `side_counts[0] & side_counts[1]`) | severity=NIT | confidence=3\n  PROBLEM: The new shared-line retention check rejects any resolution that reduces the count of a line present on both merge sides below the minimum shared count. This blocks resolutions that legitimately deduplicate content (e.g., both sides independently added the same import, and the correct resolution keeps only one copy).\n  WHY: A conflict where both sides contain duplicated shared lines and the correct resolution removes the duplication is rejected with `reason=protected_path_provenance`. Documented as intentional in agents.md and verified by `test_protected_resolution_retains_shared_duplicate_counts`, but it narrows the resolver's valid output space for deduplication on protected paths.\n- scripts/orchestrate_poll_process.sh:21471 (`_rb_fix_scope_is_protected` case pattern `.github/*|workflow-templates/*|scripts/*|prompts/*|.claude/*`) | severity=NIT | confidence=4\n  PROBLEM: The protected path pattern was widened from `.github/workflows/*|.github/actions/*|.github/ai/*` to `.github/*`, so every file under `.github/` (including `CODEOWNERS`, `dependabot.yml`, `ISSUE_TEMPLATE/*`, `FUNDING.yml`, and similar non-workflow configuration) is now rejected when `ALLOW_WORKFLOW_EDITS=false`. The same widening appears at lines 21500-21510 in `rb_fix_scope_check`.\n  WHY: When a PR changes a non-workflow `.github/` file and the reviewer flags an issue, the fix writer stages the edit, `rb_fix_scope_check` rejects it as a protected path, and the fix consumes a review-blocked retry without a push. The operator can set `ALLOW_WORKFLOW_EDITS=true` to allow these edits, but the default behavior is now stricter than before. Documented in agents.md and verified by `test_review_blocked_fix_scope_rejects_synced_automation_with_opt_out`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "2e3a77aa427a8f25e7208c6a7c89abc1500cc4db17c52e2c585a5b0a04dd0f01",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6465,
+    "run_id": "37408962373",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37408962373",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006035736_ae1ec8704b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6465,
+    "run_id": "37408962373"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T03:57:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
