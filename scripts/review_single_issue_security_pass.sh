@@ -64,8 +64,10 @@
 # API budget (CLAUDE.md §15). gate: none for an ineligible PR; for an eligible
 # one, reuses the PR payload and comments the review job already fetched, plus
 # at most 3 GETs for the skip check and one /user identity read (the gate
-# job's /user result is not exported), then one dispatch and up to three
-# pending-marker POSTs (one on success), or one label write. report: one PR read to bind the audit inputs, one /user
+# job's /user result is not exported), then one dispatch and up to
+# SECURITY_PASS_PENDING_MARKER_ATTEMPTS pending-marker POSTs (default 3,
+# valid range 1-10; backoff base defaults to 5s, range 0-30s), or one label
+# write. report: one PR read to bind the audit inputs, one /user
 # identity read, one paginated comments read, one comment and at most one dispatch.
 #
 # Log: SINGLE_ISSUE_SECURITY_PASS mode= pr= head= outcome= reason= cycle=
@@ -136,7 +138,7 @@ single_pass_post_pending_marker()
 	local delay="${SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS:-5}" attempt response
 	[[ "${attempts}" =~ ^[1-9][0-9]*$ ]] || attempts=3
 	[[ "${delay}" =~ ^[0-9]+$ ]] || delay=5
-	# Bound even syntactically valid overrides to prevent unbounded retries/sleeps.
+	# Invalid or out-of-range attempts (1-10) and delay (0-30s) use defaults.
 	if [ "${#attempts}" -gt 2 ]; then attempts=3; else attempts=$((10#${attempts})); fi
 	if [ "${#delay}" -gt 2 ]; then delay=5; else delay=$((10#${delay})); fi
 	if [ "${attempts}" -gt 10 ]; then attempts=3; fi
