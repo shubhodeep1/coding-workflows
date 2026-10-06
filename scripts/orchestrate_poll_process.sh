@@ -9088,7 +9088,7 @@ invoke_judge_for_integration_conflict() {
     }
   else
     local integration_judge_rc=0 integration_judge_verdict integration_diagnosis integration_guidance integration_dispatch_rc=0
-    local integration_guidance_marker=""
+    local integration_guidance_marker="" guidance_head_sha="" guidance_base_sha=""
     if ! pushd "${judge_wt}" >/dev/null; then
       rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
       _integration_judge_remove_worktree "${judge_wt}"
@@ -9115,9 +9115,18 @@ invoke_judge_for_integration_conflict() {
     integration_diagnosis="$(printf '%s' "${integration_judge_verdict}" | jq -r '.diagnosis | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;")')"
     integration_guidance="$(printf '%s' "${integration_judge_verdict}" | jq -r '.resolution_guidance | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;")')"
     if [ "$(printf '%s' "${integration_judge_verdict}" | jq -r '.action')" = redispatch_resolver ]; then
+      if ! guidance_head_sha="$(git -C "${judge_wt}" rev-parse --verify HEAD 2>/dev/null)" ||
+         ! guidance_base_sha="$(git -C "${judge_wt}" rev-parse --verify "refs/remotes/origin/${default_branch}" 2>/dev/null)" ||
+         ! [[ "${guidance_head_sha}" =~ ^[0-9a-f]{40}$ && "${guidance_base_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "::warning::Integration judge guidance refs unavailable for PR #${final_pr}; deferring resolver dispatch." >&2
+        rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+        _integration_judge_remove_worktree "${judge_wt}"
+        rm -rf -- "${baseline_dir}"
+        return 4
+      fi
       integration_guidance_marker="
 
-<!-- ai:integration-judge-guidance:v1 pr=${final_pr} head=$(git -C "${judge_wt}" rev-parse HEAD) base=$(git -C "${judge_wt}" rev-parse "refs/remotes/origin/${default_branch}") -->"
+<!-- ai:integration-judge-guidance:v1 pr=${final_pr} head=${guidance_head_sha} base=${guidance_base_sha} -->"
     fi
     local integration_comment_body="## Integration conflict diagnosis
 

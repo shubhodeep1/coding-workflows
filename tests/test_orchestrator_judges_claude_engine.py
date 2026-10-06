@@ -755,6 +755,23 @@ def test_unpublished_integration_guidance_defers_resolver_dispatch() -> None:
 	assert caller.index('if [ "${integration_judge_result}" -eq 4 ]; then') < caller.index('total_dispatches=$((total_dispatches + 1))')
 
 
+def test_integration_guidance_missing_ref_defers_before_comment() -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	invocation = text.split("invoke_judge_for_integration_conflict() {", 1)[1].split("\n}\n", 1)[0]
+	guard = invocation.split('      if ! guidance_head_sha=', 1)[1].split('      integration_guidance_marker="', 1)[0]
+	program = ('set -euo pipefail\n'
+		+ 'git() { return 1; }\nrm() { :; }\n_integration_judge_remove_worktree() { :; }\n'
+		+ 'check_refs() {\nlocal judge_wt=/missing default_branch=main final_pr=77\n'
+		+ 'local prompt_file=/dev/null output_file=/dev/null judge_static_file=/dev/null judge_semble_query_file=/dev/null baseline_dir=/missing\n'
+		+ 'if ! guidance_head_sha=' + guard + 'printf "comment-would-be-posted\\n"\n}\n'
+		+ 'check_refs\n')
+	result = subprocess.run(["bash", "-c", program], capture_output=True, text=True, check=False)
+	assert result.returncode == 4
+	assert "guidance refs unavailable" in result.stderr
+	assert "comment-would-be-posted" not in result.stdout
+	assert invocation.index('guidance refs unavailable') < invocation.index('post_issue_comment_json "${TRACKING_NUM}"')
+
+
 def test_integration_guidance_is_head_and_base_bound_and_untrusted(tmp_path: Path) -> None:
 	prepare = (REPO_ROOT / "scripts" / "review_conflict_prepare.sh").read_text(encoding="utf-8")
 	resolver_prompt = (REPO_ROOT / "prompts" / "integration-sync-conflict-resolver.txt").read_text(encoding="utf-8")
@@ -764,7 +781,7 @@ def test_integration_guidance_is_head_and_base_bound_and_untrusted(tmp_path: Pat
 	assert "tpl=tpl.replace('{{JUDGE_GUIDANCE}}', os.environ.get('JUDGE_GUIDANCE',''))" in prepare
 	assert 'INTEGRATION_JUDGE_GUIDANCE="$(jq -sr ' in prepare
 	judge = POLLER.read_text(encoding="utf-8")
-	assert 'integration-judge-guidance:v1 pr=${final_pr} head=$(git -C "${judge_wt}" rev-parse HEAD) base=$(git -C "${judge_wt}" rev-parse "refs/remotes/origin/${default_branch}")' in judge
+	assert 'integration-judge-guidance:v1 pr=${final_pr} head=${guidance_head_sha} base=${guidance_base_sha}' in judge
 	if shutil.which("jq") is None:
 		pytest.skip("jq required to exercise the workflow's comment selector")
 
@@ -1044,7 +1061,7 @@ def test_orchestrate_job_resolves_the_engine_from_the_engine_input() -> None:
 	for name in ("Install Claude Code CLI", "Resolve Claude credential"):
 		assert steps[name]["if"] == "steps.ai_engine.outputs.engine == 'claude'"
 		assert names.index("Resolve AI engine") < names.index(name) < names.index("Run Codex (decomposer)")
-	assert "write_codex_config.sh ai_engine.sh claude_engine.py claude_settings.json.tmpl; do" in steps["Stage workflow support files"]["run"]
+	assert "claude_settings.json.tmpl codex_stall_guard.sh codex_isolated_exec.sh" in steps["Stage workflow support files"]["run"]
 
 
 def test_decomposer_preflight_fails_open_when_engine_helper_cannot_be_sourced(tmp_path: Path) -> None:

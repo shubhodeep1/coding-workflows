@@ -1501,7 +1501,8 @@ Waivers travel to the engine as `SECURITY_AUDIT_WAIVED_FINDINGS`
 and `security_pass_apply_waivers_to_findings` re-applies them to the result
 (exact id, or same file, category, severity and exploit scenario within
 `SECURITY_AUDIT_WAIVER_LINE_WINDOW`, default 40 lines; legacy waivers with no
-scenario match by id only). `/security-pass-waive <finding_id> ...` (human
+scenario match by id only when any recorded category and severity also match).
+`/security-pass-waive <finding_id> ...` (human
 OWNER/MEMBER/COLLABORATOR only, dedup marker
 `<!-- security-pass-waive-dedup:<comment-id> -->`) records operator waivers; in
 the failed state it then resets the loop like `/re-security-pass`, in
