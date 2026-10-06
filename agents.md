@@ -273,7 +273,8 @@ Git metadata is omitted. Session reuse mounts only the selected session ID's
 transcript directory.
 The merged-PR push guard preserves whitespace-separated numeric refspecs before
 output redirects; only attached numeric file-descriptor prefixes are removed.
-For pushes it checks Git's effective push URL (including URL rewrites and inline config) before looking up the destination PR; unresolvable config asks for confirmation.
+For pushes it checks Git's effective push URL (including URL rewrites and inline config) before looking up the destination PR; non-GitHub raw remotes rewritten to GitHub are accepted. Unresolvable config, including `env -S` / `--split-string` commands, asks for confirmation.
+Literal non-GitHub URLs rewritten to GitHub are also checked against the effective GitHub repository; a literal URL without a GitHub rewrite remains blocked.
 
 Integration-ref trust boundary: `scripts/resolve_integration_ref.sh` can return
 any existing valid Git branch name declared by issue metadata. Workflows may

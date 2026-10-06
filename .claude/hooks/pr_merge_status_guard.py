@@ -802,6 +802,39 @@ def git_subcommands(command: str) -> set[str]:
 	return found
 
 
+def _env_split_string_has_guarded_git(command: str, depth: int = 0) -> bool:
+	"""Return whether GNU env split-string input can launch guarded Git."""
+	if depth >= 4:
+		return True
+	try:
+		segments = _shell_segments(command)
+	except ValueError:
+		return bool(re.search(r"(?:^|[/\s])git\s+(?:commit|push)\b", command))
+	for tokens in segments:
+		for index, token in enumerate(tokens):
+			if token not in ("env", "/usr/bin/env"):
+				continue
+			option_index = index + 1
+			while option_index < len(tokens):
+				option = tokens[option_index]
+				split_value = ""
+				if option in ("-S", "--split-string"):
+					option_index += 1
+					if option_index < len(tokens):
+						split_value = tokens[option_index]
+				elif option.startswith("--split-string="):
+					split_value = option.split("=", 1)[1]
+				elif option.startswith("-S") and option != "-S":
+					split_value = option[2:]
+				if split_value and (
+					git_subcommands(split_value) & GUARDED_SUBCOMMANDS
+					or _env_split_string_has_guarded_git(split_value, depth + 1)
+				):
+					return True
+				option_index += 1
+	return False
+
+
 def extract_repo_slug(url: str) -> str:
 	"""Derive `<owner>/<repo>` from a git remote URL, or "" when it is not
 	derivable.
@@ -971,9 +1004,6 @@ def _resolve_push_destination(
 	with _inline_git_config(config_args, config_environment):
 		urls = _remote_push_urls(token, cwd, config_args)
 		if urls:
-			raw_slugs = tuple(dict.fromkeys(extract_repo_slug(url) for url in urls))
-			if "" in raw_slugs:
-				return _PushDestination(label, (), token, "one or more push URLs are not GitHub repositories")
 			effective_urls = _effective_remote_push_urls(token, cwd, config_args)
 			if effective_urls is None:
 				return _PushDestination(label, (), "", "could not resolve the effective push URL")
@@ -984,9 +1014,6 @@ def _resolve_push_destination(
 			code, out, _ = _run(["git", "--no-pager", *config_args, "config", "--get", f"remote.{token}.url"], cwd, _GIT_TIMEOUT_SECONDS)
 			history_remote = token if not config_args and not config_environment and code == 0 and slugs == (extract_repo_slug(out),) else ""
 			return _PushDestination(label, slugs, history_remote, "")
-		slug = extract_repo_slug(token)
-		if not slug:
-			return _PushDestination(label, (), "", "not a configured GitHub remote or URL")
 		rules = _url_rewrite_rules(cwd, config_args)
 		if rules is None:
 			return _PushDestination(label, (), "", "could not resolve the effective push URL")
@@ -1557,6 +1584,11 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		return 0, ""
 
 	if _guard_disabled():
+		return 0, ""
+	# GNU env splits this argument into a command after the shell has parsed it.
+	# Its embedded git options/assignments cannot be resolved from shell tokens.
+	if _env_split_string_has_guarded_git(command):
+		_request_confirmation("env --split-string may execute git commit/push with an unknown destination")
 		return 0, ""
 	if not guarded_git_subcommands:
 		return 0, ""

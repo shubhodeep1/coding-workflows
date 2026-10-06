@@ -1542,6 +1542,44 @@ def test_rewritten_github_destination_uses_effective_slug(merged_branch_repo, mo
 	)).history_remote == ""
 
 
+def test_non_github_raw_remote_rewritten_to_github(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "config", "remote.origin.url", "https://mirror.example/o/r.git")
+	_git(repo, "config", "url.https://github.com/o/.pushInsteadOf", "https://mirror.example/o/")
+	seen: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, branch, cwd: seen.append(slug) or [OPEN_PR])
+	code, message = guard.evaluate(_bash_payload("git push origin HEAD:feature/x") | {"cwd": str(repo)})
+	assert code == 0, message
+	assert seen == ["o/r"]
+	assert guard._resolve_push_destination(str(repo), "origin").history_remote == ""
+
+
+def test_literal_non_github_url_rewritten_to_github(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "config", "url.https://github.com/o/.pushInsteadOf", "https://mirror.example/o/")
+	seen: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, branch, cwd: seen.append(slug) or [OPEN_PR])
+	code, message = guard.evaluate(_bash_payload("git push https://mirror.example/o/r.git HEAD:feature/x") | {"cwd": str(repo)})
+	assert code == 0, message
+	assert seen == ["o/r"]
+	assert "mirror.example" not in message
+
+
+def test_explicit_non_github_pushurl_is_not_rewritten(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "config", "remote.origin.pushurl", "https://mirror.example/o/r.git")
+	_git(repo, "config", "url.https://github.com/o/.pushInsteadOf", "https://mirror.example/o/")
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("no PR lookup expected"))
+	code, message = guard.evaluate(_bash_payload("git push origin HEAD:feature/x") | {"cwd": str(repo)})
+	assert code == 2
+	assert "could not verify the push destination" in message
+	assert "mirror.example" not in message
+
+
 @pytest.mark.parametrize("command", [
 	"git --config-env=url.x.pushInsteadOf=RULE push origin HEAD:feature/x",
 	'git -c "url.$X.pushInsteadOf=https://github.com/o/" push origin HEAD:feature/x',
@@ -1551,6 +1589,11 @@ def test_rewritten_github_destination_uses_effective_slug(merged_branch_repo, mo
 	"git remote set-url origin https://evil.example/o/r.git && git push origin HEAD:feature/x",
 	"env -i git push origin HEAD:feature/x",
 	"env -u GIT_CONFIG_COUNT git push origin HEAD:feature/x",
+	"env -S 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=url.https://evil.example/.pushInsteadOf GIT_CONFIG_VALUE_0=https://github.com/o/ git push origin HEAD:feature/x'",
+	"env --split-string='git push origin HEAD:feature/x'",
+	"env -i -S 'git push origin HEAD:feature/x'",
+	"/usr/bin/env -S 'git push origin HEAD:feature/x'",
+	"env -i /usr/bin/env -S 'git push origin HEAD:feature/x'",
 ])
 def test_unresolvable_inline_config_asks(merged_branch_repo, monkeypatch, capsys, command: str) -> None:
 	repo, _ = merged_branch_repo
@@ -1558,6 +1601,12 @@ def test_unresolvable_inline_config_asks(merged_branch_repo, monkeypatch, capsys
 	assert guard.evaluate(_bash_payload(command) | {"cwd": str(repo)}) == (0, "")
 	response = json.loads(capsys.readouterr().out)
 	assert response["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_non_git_env_split_string_is_ignored(merged_branch_repo, capsys) -> None:
+	repo, _ = merged_branch_repo
+	assert guard.evaluate(_bash_payload("env -S 'printf hello'") | {"cwd": str(repo)}) == (0, "")
+	assert capsys.readouterr().out == ""
 
 
 def test_env_wrapper_keeps_git_directory_separate_from_config(merged_branch_repo) -> None:
