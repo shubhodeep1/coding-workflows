@@ -484,7 +484,9 @@ a new value, add it to the appropriate overrides file with a
   directive sits in an editor-writable git config scope. It also refuses
   command-running Git keys (filter/diff/merge drivers, `core.attributesFile`,
   `core.hooksPath`, `core.editor`, `core.pager`, signing programs, `lfs.*`) in those scopes
-  and driver assignments in `.git/info/attributes` or global attributes. Both
+  and driver assignments in `.git/info/attributes`, global attributes, or
+  new or modified working-tree `.gitattributes` files (unchanged tracked
+  bindings remain usable). Both
   preflight and commit-time staging call its tokenless `check` action immediately
   before `git add`, ignore
   editor-writable global Git config, and command-override hooks, fsmonitor and
@@ -493,7 +495,8 @@ a new value, add it to the appropriate overrides file with a
   Git config before writing authenticated origin state. Since the workflow
   token does not trigger `pull_request:synchronize`, the existing-PR recovery
   path explicitly dispatches `internal-review.yml` (or `ai-review.yml` in a
-  consumer) from the default branch; a failed dispatch fails the step.
+  consumer) from the default branch only for the pushed head branch; a failed
+  dispatch fails the step.
   The editor never reads those paths; only the restore / reinstall / commit
   steps of the job do. A `pytest` the editor starts to validate its own change
   therefore cannot write fixture paths into the live run's ledgers even when

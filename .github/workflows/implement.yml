@@ -5182,7 +5182,8 @@ jobs:
             # above: only the issue's own implementation PR is reusable.
             # Prefer the exact head branch because that is the race this
             # recovery handles; otherwise accept only a cross-referenced PR
-            # whose body closes the issue. Mention-only PRs are ignored.
+            # on that same head whose body closes the issue. Mention-only PRs
+            # and PRs on other branches are ignored.
             # §15: one open-PR inventory supplies heads and bodies; the
             # timeline is queried only when the exact-head lookup misses.
             # Leave stderr unredirected so gh/jq diagnostics surface in
@@ -5221,7 +5222,9 @@ jobs:
                 [ -n "${recovery_candidate_num}" ] || continue
                 recovery_candidate_body_b64=""
                 while IFS=$'\t' read -r recovery_inventory_pr_num recovery_inventory_pr_url recovery_inventory_head_ref recovery_inventory_head_owner recovery_inventory_body_b64; do
-                  if [ "${recovery_inventory_pr_num}" = "${recovery_candidate_num}" ]; then
+                  if [ "${recovery_inventory_pr_num}" = "${recovery_candidate_num}" ] &&
+                     [ "${recovery_inventory_head_ref}" = "${TARGET_BRANCH}" ] &&
+                     [ "${recovery_inventory_head_owner,,}" = "${recovery_repo_owner,,}" ]; then
                     recovery_candidate_body_b64="${recovery_inventory_body_b64}"
                     break
                   fi

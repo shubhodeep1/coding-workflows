@@ -371,6 +371,42 @@ def test_restore_refuses_untracked_driver_attributes(tmp_path: Path, location: s
 	assert "newsecret" not in (repo / ".git" / "config").read_text()
 
 
+def test_restore_refuses_worktree_driver_attributes(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo),
+		GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	subprocess.run(["bash", str(HELPER), "hide"], env=env, check=True, capture_output=True)
+	attrs = repo / "nested" / ".gitattributes"
+	attrs.parent.mkdir()
+	attrs.write_text("* filter=lfs\n")
+	result = subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True, text=True)
+	assert result.returncode != 0 and "reason=attributes_hazard" in result.stderr
+	assert "newsecret" not in (repo / ".git" / "config").read_text()
+	assert subprocess.run(["bash", str(HELPER), "check"], env=env, capture_output=True).returncode != 0
+
+
+def test_restore_allows_unchanged_tracked_attributes_with_trusted_filter(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	(repo / ".gitattributes").write_text("*.bin filter=lfs\n")
+	_git(repo, "add", ".gitattributes")
+	_git(repo, "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "baseline")
+	system_config = tmp_path / "system.gitconfig"
+	system_config.write_text("[filter \"lfs\"]\n\tclean = git-lfs clean -- %f\n")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo),
+		GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret", GIT_CONFIG_SYSTEM=str(system_config))
+	subprocess.run(["bash", str(HELPER), "hide"], env=env, check=True, capture_output=True)
+	subprocess.run(["bash", str(HELPER), "restore"], env=env, check=True, capture_output=True)
+	assert "newsecret" in (repo / ".git" / "config").read_text()
+	(repo / ".gitattributes").write_text("* filter=lfs\n")
+	assert subprocess.run(["bash", str(HELPER), "check"], env=env, capture_output=True).returncode != 0
+
+
 def test_attributes_check_has_no_root_fallback_without_a_config_home() -> None:
 	helper = HELPER.read_text()
 	assert 'global_path=""' in helper
@@ -569,6 +605,10 @@ def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
 	assert 'recovery_review_workflow="ai-review.yml"' in create_pr
 	assert "REVIEW_DISPATCH_REF: ${{ github.event.repository.default_branch || '' }}" in create_pr
 	assert '--ref "${REVIEW_DISPATCH_REF}"' in create_pr
+	assert "ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}" in implement
+	assert '-f "allow_workflow_edits=${ALLOW_WORKFLOW_EDITS:-true}"' in create_pr
+	assert '[ "${recovery_inventory_head_ref}" = "${TARGET_BRANCH}" ]' in create_pr
+	assert '[ "${recovery_inventory_head_owner,,}" = "${recovery_repo_owner,,}" ]' in create_pr
 	assert create_pr.index('gh workflow run "${recovery_review_workflow}"') < create_pr.index('echo "pr_url=${EXISTING_PR}"')
 
 
