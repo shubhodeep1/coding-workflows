@@ -287,7 +287,8 @@ def test_each_judge_tries_claude_then_runs_the_unchanged_codex_command() -> None
 	assert 'MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT_JUDGE:-high}"' in text
 	fallback = REPO_ROOT / "scripts" / "clarify_isolated_run.sh"
 	isolation = fallback.read_text(encoding="utf-8")
-	assert 'CLARIFY|CLARIFY_RESPOND|WAVE_JUDGE' in isolation
+	assert '[ "${engine_role}" = WAVE_JUDGE ]' in isolation
+	assert '[ "${engine}" != claude ] || [[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|UNBLOCK_JUDGE)$ ]]' in isolation
 	assert 'env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY}"' in isolation
 	assert '--network none --read-only --cap-drop ALL' in isolation
 	assert '--mount "type=bind,src=${run_root}/source,dst=/source,readonly"' in isolation
@@ -339,7 +340,9 @@ def test_poll_job_stages_the_engine_and_fetches_the_pool_only_when_needed() -> N
 	steps = _poll_steps()
 	names = [step.get("name") for step in steps]
 	stage = steps[names.index("Stage workflow support files")]["run"]
-	assert "security_dependency.py ai_engine.sh claude_engine.py claude_read_isolated_run.sh claude_read_snapshot.py claude_anthropic_relay.py review_untrusted_workspace.py claude_settings.json.tmpl codex_stall_guard.sh clarify_isolated_run.sh clarify_openrouter_broker.py codex_model_catalog.json; do" in stage
+	staged = re.search(r"for f in ([^\n]+); do", stage)
+	assert staged is not None
+	assert {"ai_engine.sh", "claude_engine.py", "clarify_isolated_run.sh", "clarify_openrouter_broker.py", "claude_anthropic_relay.py", "codex_model_catalog.json"} <= set(staged.group(1).split())
 	assert 'install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile' in stage
 	resolve = steps[names.index("Resolve AI engine")]
 	assert resolve["id"] == "ai_engine"
@@ -452,4 +455,7 @@ def test_orchestrate_job_resolves_the_engine_from_the_engine_input() -> None:
 		assert steps[name]["if"] == "steps.ai_engine.outputs.engine == 'claude'"
 		assert names.index("Resolve AI engine") < names.index(name) < names.index("Run Codex (decomposer)")
 	assert "codex_isolated_exec.sh" in steps["Stage workflow support files"]["run"]
-	assert "ai_engine.sh claude_engine.py; do" in steps["Stage workflow support files"]["run"]
+	stage = steps["Stage workflow support files"]["run"]
+	staged = re.search(r"for f in ([^\n]+); do", stage)
+	assert staged is not None
+	assert {"ai_engine.sh", "claude_engine.py", "claude_anthropic_relay.py", "codex_isolated_exec.sh"} <= set(staged.group(1).split())

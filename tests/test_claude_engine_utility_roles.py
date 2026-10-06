@@ -410,6 +410,9 @@ def test_triage_and_validate_stage_a_trusted_engine_root() -> None:
 	assert 'mkdir -p "${engine_root}/scripts/clarify_sandbox"' in triage
 	assert 'scripts/claude_anthropic_relay.py scripts/clarify_sandbox/Dockerfile' in triage
 	assert '.codex-workflow-src/${engine_file}' in triage
+	validate = "\n".join(step.get("run", "") for step in _job_steps("validate.yml", "validate"))
+	for helper in ("codex_isolated_exec.sh", "codex_isolated_workspace.py", "claude_anthropic_relay.py"):
+		assert f"scripts/{helper}" in validate.split("for engine_file in ", 1)[1].split("; do", 1)[0]
 	assert '"profile": "read"' in _read(WORKFLOWS.parent / "ai" / "claude_engine.json").split('"CHECK_TRIAGE":', 1)[1].split('"WORKFLOW_HEAL":', 1)[0]
 
 

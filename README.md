@@ -2203,6 +2203,9 @@ the unchanged codex or OpenCode command runs. The triage and validate jobs
 run in a checkout they do not trust, so they stage the engine, its policy
 and `claude_engine.json` from the verified support source into
 `${RUNNER_TEMP}/claude-engine-support` and point `SUPPORT_ROOT_DIR` at it.
+Validation also stages the isolated workspace launcher, snapshot helper and
+Anthropic relay there; if those are unavailable, Claude returns `75` and the
+existing Codex validation path runs instead.
 The Claude check-failure triage call also drops the job's OpenRouter key;
 only its codex fallback needs that key for model access.
 `validate.yml` has no support checkout in its workspace, so its install
@@ -2396,7 +2399,8 @@ mounted. Repositories using git object alternates, sharing worktrees, retaining
 unreachable objects, or with filtered paths in reachable history retain
 working-tree files but omit git history (`git=omitted`,
 `reason=alternates|filtered_history` in the isolation log). Non-git
-workdirs copy only regular files, excluding secret filenames and key extensions
+workdirs copy only regular files, excluding secret filenames (including SSH
+key names with an added extension such as `id_ed25519_sk.txt`) and key extensions
 even when followed by another extension (for example `client.pem.txt`). Such
 paths also prevent Git history from entering the snapshot. The host-side
 Anthropic relay keeps the OAuth token

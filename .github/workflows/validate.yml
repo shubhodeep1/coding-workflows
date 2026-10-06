@@ -486,7 +486,7 @@ jobs:
           # reads the target ref's copies.
           engine_root="${RUNNER_TEMP}/claude-engine-support"
           mkdir -p "${engine_root}/scripts" "${engine_root}/.github/ai" "${engine_root}/.claude/hooks"
-          for engine_file in scripts/ai_engine.sh scripts/claude_engine.py scripts/claude_settings.json.tmpl scripts/codex_stall_guard.sh .github/ai/claude_engine.json .claude/hooks/gh_api_write_guard.py unattended_system_instructions.md; do
+          for engine_file in scripts/ai_engine.sh scripts/claude_engine.py scripts/claude_settings.json.tmpl scripts/codex_stall_guard.sh scripts/codex_isolated_exec.sh scripts/codex_isolated_workspace.py scripts/claude_anthropic_relay.py .github/ai/claude_engine.json .claude/hooks/gh_api_write_guard.py unattended_system_instructions.md; do
             if [ -f "${helper_stage_dir}/${engine_file}" ]; then
               install -m 0644 "${helper_stage_dir}/${engine_file}" "${engine_root}/${engine_file}"
             fi

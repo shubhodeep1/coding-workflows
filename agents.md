@@ -320,8 +320,8 @@ worktrees under `RUNTIME_DIR` for `WORKFLOW_HEAL`; each is filtered through the
 same read-snapshot builder and shares its file/byte budget. All other extra
 paths fall back instead of mounting arbitrary host directories.
 Git commands inside the read snapshot see filtered files (excluding standard
-extensionless SSH private-key names even outside `.ssh` and key extensions such
-as `.pem` followed by another suffix). Source history is
+SSH private-key names even with an added extension outside `.ssh`, and key
+extensions such as `.pem` followed by another suffix). Source history is
 copied only when it contains no filtered paths or unreachable objects; otherwise
 Git metadata is omitted. Session reuse mounts only the selected session ID's
 transcript directory.

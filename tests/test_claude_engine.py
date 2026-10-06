@@ -597,20 +597,21 @@ def test_read_snapshot_omits_credentials_removed_from_current_tree(tmp_path: Pat
 	assert not (dest / ".git").exists()
 
 
-def test_read_snapshot_omits_double_extension_credential_and_history(tmp_path: Path) -> None:
+@pytest.mark.parametrize("secret_name", ("client.pem.txt", "id_ed25519_sk.txt", "id_rsa.bak"))
+def test_read_snapshot_omits_double_extension_credential_and_history(tmp_path: Path, secret_name: str) -> None:
 	repo = tmp_path / "repo"
 	repo.mkdir()
 	subprocess.run(["git", "init", "-q", str(repo)], check=True)
-	(repo / "client.pem.txt").write_text("credential\n", encoding="utf-8")
-	subprocess.run(["git", "-C", str(repo), "add", "client.pem.txt"], check=True)
+	(repo / secret_name).write_text("credential\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(repo), "add", secret_name], check=True)
 	subprocess.run(["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "credential"], check=True)
 	current_dest = tmp_path / "current-snapshot"
 	current_result = _run("read-snapshot", "--workdir", str(repo), "--dest", str(current_dest))
 	assert current_result.returncode == 0, current_result.stderr
-	assert not (current_dest / "client.pem.txt").exists()
+	assert not (current_dest / secret_name).exists()
 	assert json.loads(current_result.stdout)["reason"] == "filtered_history"
 	assert not (current_dest / ".git").exists()
-	subprocess.run(["git", "-C", str(repo), "rm", "-q", "client.pem.txt"], check=True)
+	subprocess.run(["git", "-C", str(repo), "rm", "-q", secret_name], check=True)
 	subprocess.run(["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "remove credential"], check=True)
 	history_dest = tmp_path / "history-snapshot"
 	history_result = _run("read-snapshot", "--workdir", str(repo), "--dest", str(history_dest))
@@ -815,21 +816,26 @@ def test_read_snapshot_caps_and_alternates(tmp_path: Path, monkeypatch: pytest.M
 	assert not (dest / ".git" / "objects" / "info" / "alternates").exists()
 
 
-def test_read_snapshot_does_not_expose_prior_committed_credentials(tmp_path: Path) -> None:
+@pytest.mark.parametrize("secret_name", (".env", "id_ed25519_sk.txt", "id_rsa.bak"))
+def test_read_snapshot_does_not_expose_prior_committed_credentials(tmp_path: Path, secret_name: str) -> None:
 	source, dest = tmp_path / "source", tmp_path / "snapshot"
 	source.mkdir()
-	dest.mkdir()
 	subprocess.run(["git", "-C", str(source), "init", "-q"], check=True)
-	(source / ".env").write_text("HISTORICAL_TOKEN=private\n", encoding="utf-8")
-	subprocess.run(["git", "-C", str(source), "add", ".env"], check=True)
+	(source / secret_name).write_text("HISTORICAL_TOKEN=private\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(source), "add", secret_name], check=True)
 	subprocess.run(["git", "-C", str(source), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "secret"], check=True)
-	secret = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD:.env"], text=True).strip()
-	(source / ".env").unlink()
+	current_dest = tmp_path / "current-snapshot"
+	current_dest.mkdir()
+	assert ce.build_read_snapshot(source, current_dest)["git_objects"] == ""
+	assert not (current_dest / secret_name).exists()
+	secret = subprocess.check_output(["git", "-C", str(source), "rev-parse", f"HEAD:{secret_name}"], text=True).strip()
+	(source / secret_name).unlink()
 	subprocess.run(["git", "-C", str(source), "add", "-u"], check=True)
 	subprocess.run(["git", "-C", str(source), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "delete secret"], check=True)
+	dest.mkdir()
 	assert ce.build_read_snapshot(source, dest)["git_objects"] == ""
-	assert not (dest / ".env").exists()
-	for spec in ("HEAD~1:.env", secret):
+	assert not (dest / secret_name).exists()
+	for spec in (f"HEAD~1:{secret_name}", secret):
 		assert subprocess.run(["git", "-C", str(dest), "show", spec], capture_output=True).returncode != 0
 
 

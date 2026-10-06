@@ -1244,7 +1244,7 @@ def _snapshot_copy(source_root: Path, target_root: Path, relative: Path, limits:
 	parts = relative.parts
 	if not parts or any(part in (".", "..", "") for part in parts) or relative.is_absolute():
 		raise EngineError("unsafe snapshot path")
-	if any(part.lower() in _SNAPSHOT_BAD_PARTS or part.lower().startswith(".env") or _snapshot_bad_suffix(part) for part in parts):
+	if any(part.lower() in _SNAPSHOT_BAD_PARTS or part.lower().split(".", 1)[0] in _SNAPSHOT_BAD_PARTS or part.lower().startswith(".env") or _snapshot_bad_suffix(part) for part in parts):
 		return
 	node = source_root
 	for index, part in enumerate(parts):
@@ -1337,7 +1337,7 @@ def _snapshot_metadata(workdir: Path, dest: Path, omit_root_claude_md: bool = Fa
 			for history_path in history_paths:
 				history_relative = Path(os.fsdecode(history_path.lstrip(b"\n")))
 				parts = history_relative.parts
-				if omit_root_claude_md and history_relative == Path("CLAUDE.md") or any(part.lower() in _SNAPSHOT_BAD_PARTS or part.lower().startswith(".env") or _snapshot_bad_suffix(part) for part in parts):
+				if omit_root_claude_md and history_relative == Path("CLAUDE.md") or any(part.lower() in _SNAPSHOT_BAD_PARTS or part.lower().split(".", 1)[0] in _SNAPSHOT_BAD_PARTS or part.lower().startswith(".env") or _snapshot_bad_suffix(part) for part in parts):
 					history_process.terminate()
 					return "omitted", "filtered_history"
 		if history_pending or history_process.wait() != 0:
@@ -1500,7 +1500,7 @@ def build_read_snapshot(source: Path, dest: Path, omit_claude_md: bool = False, 
 		if (not parts or Path(entry).is_absolute() or ".." in parts or
 			any(part.lower() in (".git", ".claude", ".ssh") or part.lower().startswith((".codex-workflow-src", ".env"))
 				or part.lower() in ("secrets", "credentials") for part in parts) or
-			parts[-1].lower() in (".git-credentials", ".netrc", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", "id_ed25519_sk", "id_ecdsa_sk", "id_xmss") or
+			any(part.lower().split(".", 1)[0] in _SNAPSHOT_BAD_PARTS for part in parts) or
 			any(_snapshot_bad_suffix(part) for part in parts) or
 			(omit_claude_md and parts[-1] == "CLAUDE.md")):
 			continue
