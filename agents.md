@@ -941,8 +941,8 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
 
 The **Engine · Claude role** column names today's engine and the role name
 `scripts/ai_engine.sh` resolves for that row (README "Claude engine").
-Host read-profile Claude runs (including SECURITY_AUDIT, SECURITY_JUDGE and
-WORKFLOW_HEAL) use an exact-command PreToolUse Bash guard and temporarily
+Host read-profile Claude runs (including WAVE_JUDGE, SECURITY_AUDIT, SECURITY_JUDGE
+and WORKFLOW_HEAL) use an exact-command PreToolUse Bash guard and temporarily
 remove write bits from trusted support while recording hashes and directory
 entries. Verification precedes unlock; lock failures and mismatches return 86
 without a codex fallback. The security-audit report, heal intake and poller
