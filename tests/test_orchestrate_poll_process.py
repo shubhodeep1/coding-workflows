@@ -16803,7 +16803,7 @@ def test_missing_pipeline_login_alerts_once_per_tick():
 	poller_source = POLLER_SCRIPT.read_text(encoding="utf-8")
 	login_function = poller_source.split("unblock_trusted_login() {", 1)[1].split("\n}", 1)[0]
 	script = (
-		"set -euo pipefail\nUNBLOCK_TRUSTED_LOGIN=''\nUNBLOCK_TRUSTED_LOGIN_STATE=unset\n"
+		"set -euo pipefail\nUNBLOCK_TRUSTED_LOGIN=''\nUNBLOCK_TRUSTED_LOGIN_STATE=unset\nORCH_STATE_IDENTITY_ALERT_SENT=false\n"
 		"GITHUB_REPOSITORY=owner/repo\nGITHUB_RUN_ID=123\nalert_count=0\n"
 		"gh_retry() { return 1; }\n_gh_url() { printf 'https://github.test/run'; }\n"
 		"tg_send_msg() { alert_count=$((alert_count + 1)); }\n"
@@ -16818,7 +16818,7 @@ def test_missing_pipeline_login_alerts_once_per_tick():
 def test_project_state_and_reset_commands_require_authenticated_commenters():
 	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
 	assert 'unblock_trusted_login >/dev/null\n  if [ -z "${UNBLOCK_TRUSTED_LOGIN}" ]; then' in poller
-	assert 'extract_latest_valid_orchestrator_state "${TRUSTED_STATE_COMMENTS}"' in poller
+	assert 'extract_latest_valid_orchestrator_state "${COMMENTS}"' in poller
 	assert 'select((.user.login // "") == $login)' in poller
 	for command in ("RE_SECURITY_PASS_COMMENT_JSON", "REVALIDATE_COMMENT_JSON", "JUDGE_RESUME_BODY"):
 		start = poller.index(f'{command}="$(echo "${{COMMENTS}}" | jq')

@@ -252,8 +252,9 @@ def test_real_claude_container_hides_credentials_and_network(claude_e2e, mode):
 	cli_version = json.loads((REPO_ROOT / ".github" / "ai" / "claude_engine.json").read_text())["cli_version"]
 	env = dict(os.environ)
 	env.update({"GH_TOKEN": TOKEN, "GITHUB_TOKEN": TOKEN, "OPENROUTER_API_KEY": KEY, "RUNNER_TEMP": str(runner_temp), "PYTHONDONTWRITEBYTECODE": "1"})
-	tools = "Read,Grep,Glob,Bash" if mode == "read-only" else "Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch"
-	# This test is about the container, not the P5 policy: let the probe run.
+	tools = "Read,Grep,Glob,Bash" if mode == "read-only" else "Read,Grep,Glob,Bash,Edit,Write"
+	assert "WebFetch" not in tools and "WebSearch" not in tools
+	# Bypass permissions so the sandbox probe runs with the production tool list.
 	permission = "bypassPermissions"
 	proc = subprocess.run(
 		["bash", str(support / "codex_isolated_exec.sh"), "run", "--engine", "claude", "--mode", mode,

@@ -492,11 +492,13 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				invocations.append(_GitInvocation(checkout, {}, "push", [], "unparsed env wrapper", True))
 			continue
 		env_cwd = working_directory
+		env_chdir_seen = False
 		if index != env_index:
 			config_override = True
 			for position in range(env_index + 1, index):
 				word = tokens[position]
 				if word in ("-C", "--chdir") or word.startswith(("-C", "--chdir=")):
+					env_chdir_seen = True
 					env_word_value = (tokens[position + 1] if word in ("-C", "--chdir") else
 						word.split("=", 1)[1] if word.startswith("--chdir=") else word[2:])
 					env_cwd = _literal_guard_path(env_word_value, env_cwd) if env_cwd else None
@@ -552,7 +554,9 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			checkout if uncertain else git_cwd or checkout,
 			{} if uncertain else environment,
 			tokens[index], tokens[index + 1:],
-			"could not resolve git command directory; checking the session checkout instead" if uncertain else "",
+			("could not resolve git command directory (env -C/--chdir); cannot check checkout PR history"
+				if env_chdir_seen and env_cwd is None else
+				"could not resolve git command directory; checking the session checkout instead") if uncertain else "",
 			config_override,
 			explicit_git_directory,
 		))
@@ -1506,6 +1510,11 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
+		if invocation.subcommand == "commit" and invocation.warning == (
+			"could not resolve git command directory (env -C/--chdir); cannot check checkout PR history"
+		):
+			unknown_destination_reasons.append("could not resolve git commit directory; no checkout was checked; cannot verify its PR history")
+			continue
 		if invocation.subcommand == "push" and invocation.warning == "unparsed env wrapper":
 			unverified_destinations.add("unparsed env-wrapped Git command")
 			continue
@@ -1517,6 +1526,9 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		if invocation.subcommand == "push" and invocation.config_override:
 			unverified_destinations.add("per-command Git configuration may redirect the push")
 			continue  # Origin's PR history cannot authorize a push with overridden configuration.
+		if invocation.subcommand == "commit" and invocation.warning and invocation.config_override:
+			_request_confirmation("could not resolve env-wrapped git commit directory; session checkout PR status cannot authorize it")
+			continue
 		targets = (
 			_push_targets(invocation, checkout) if invocation.subcommand == "push" else
 			[_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", False, invocation.warning)]
@@ -1533,7 +1545,10 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 				unknown_destination_reasons.append(target.warning)
 				continue
 			if target.warning:
-				_warn(target.warning)  # Unresolved directory: the session checkout is checked.
+				if invocation.subcommand != "push" and invocation.config_override:
+					unverified_destinations.add("could not resolve git command directory; no checkout was checked")
+					continue  # An env-wrapped commit may use a different checkout.
+				_warn(target.warning)
 			if target.remote and target.remote != "origin":
 				# Even a matching explicit URL may be rewritten by url.*.insteadOf.
 				if "://" in target.remote or target.remote.startswith("git@"):

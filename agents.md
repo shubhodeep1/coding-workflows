@@ -193,9 +193,34 @@ Phases of the unattended pipeline (each is a separate workflow file under
     third reporter lives in the failure path of `review_autofix.yml`
     (`scripts/workflow_failure_heal_autofix_report.sh`, payload kind
     `autofix_failure`): it reports a failed review/autofix run on a pull
-    request once `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` (default 2) runs in a
-    row failed on that PR, counted from the workflow's own failure comments,
-    so the stall poller's single retry is not pre-empted. A failed
+    request once `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` (default 1, so every
+    failed run) runs in a row failed on that PR, counted from the workflow's
+    own failure comments. A fourth reporter is the `heal-report` job of
+    `clarify.yml`, `plan.yml` and `implement.yml`
+    (`scripts/workflow_failure_heal_phase_report.sh`, payload kind
+    `phase_failure`): after the phase job ends in `failure` it reports the run
+    once `WORKFLOW_HEAL_PHASE_FAILURE_STREAK` (default 1) runs of that phase in
+    a row failed on the issue; duplicate comments for one run count once. The
+    intake fingerprints only the current run's log, uses earlier streak logs
+    for diagnosis context, and keys the report on the issue's `source=`
+    marker, and a heal issue whose own run fails with its own fingerprint is
+    escalated (`reason=heal_issue_failed_itself`). Implement skips guard
+    blocks, diagnosed fix-up failures and `BLOCKED` verdicts through the job
+    output `heal_report`. Before fingerprinting or mutation, the intake verifies
+    phase reports against the GitHub-read run, failed phase job and a linking
+    comment from a GitHub-reported trusted source-issue author (OWNER, MEMBER,
+    COLLABORATOR or `github-actions[bot]`); self-repo reports also require the
+    intake's authenticated account. Mismatches, self-repo identity failures and
+    read failures skip
+    with `WORKFLOW_HEAL skip reason=phase_report_unverified` and a WARNING.
+    Payload `source_gen` / `source_root` lineage is honoured only when the
+    listed `ai:workflow-heal` source issue was authored by the intake's current
+    authenticated account and its markers match; an account rotation makes
+    older heal issues' payload markers unverified (fingerprint lineage remains).
+    Its comment streak trusts only the authenticated
+    workflow account; cancellations and successful implementation break the
+    streak, and unavailable identity or comment history reports the current
+    failure without applying a higher threshold. A failed
     `Run reviewer models` step (the editor never ran) is reported as
     `reviewers_failed` with per-slot / summariser exit codes
     (`reviewers_failure_evidence.txt`, `AUTOFIX_REVIEWERS_FAILED=true`) rather
@@ -216,8 +241,21 @@ Phases of the unattended pipeline (each is a separate workflow file under
     the first 300 characters of the API error. On by
     default; disable per repo via `WORKFLOW_HEAL_ENABLED=false`; never pushes
     code itself. Stable log prefixes: `WORKFLOW_HEAL_REPORT`,
-    `WORKFLOW_HEAL_AUTOFIX_REPORT`, `WORKFLOW_HEAL_PR_RECONCILE`,
-    `WORKFLOW_HEAL`.
+    `WORKFLOW_HEAL_AUTOFIX_REPORT`, `WORKFLOW_HEAL_PHASE_REPORT`,
+    `WORKFLOW_HEAL_PR_RECONCILE`, `WORKFLOW_HEAL`.
+    Before reading logs for phase, autofix or release reports, the intake
+    checks referenced runs' repository, failure status and workflow path;
+    phase and autofix runs must also be linked to the issue or PR. Self-repo
+    phase failure comments must come from the intake token's account; consumer
+    phase comments require a trusted GitHub-reported author association or
+    `github-actions[bot]`, and phase run events are checked before job reads.
+    Rejections log `WORKFLOW_HEAL provenance_rejected` and fail closed, so a
+    missing phase failure comment prevents intake. A holder of the shared
+    `GH_PAT` can still read registered repositories' logs directly or report a genuinely
+    linked failed run. Label-escalation `issue` and `pull_request` reports are
+    outside this gate even when their issue/comment-derived `run_refs` are
+    present; those reports can still fetch unverified job logs with the shared
+    `GH_PAT`.
     A report whose failure reason is `identical_failure_cap`, or a generation
     > 1 of its lineage, is deterministic (`is_deterministic_failure`): the
     intake never files it as `transient` (remaps to `inconclusive`,
@@ -764,7 +802,9 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   does not trust its stored URL or PR history for that push. Wrapped commits
   are checked in the directory selected by `env -C` or `GIT_DIR`; a commit
   from an ambiguous directory and an unparseable `env -S` command ask for
-  confirmation. A push from an unresolved directory (including an appended
+  confirmation. When `env -C` cannot resolve its directory, the commit guard
+  asks without querying the session checkout's PR history. A push from an
+  unresolved directory (including an appended
   `GIT_DIR+=` / `GIT_WORK_TREE+=`, whose value is never applied) is checked
   against the session checkout, which can still block, and otherwise asks.
   Leading redirections, including those after environment assignments, do
@@ -924,6 +964,12 @@ engine switch. When Claude is unavailable (`claude_run` exit 75,
 `AI_ENGINE_FALLBACK`), the run uses the codex/OpenCode path unchanged. The
 pinned CLI is `@anthropic-ai/claude-code` `cli_version` from the same file,
 installed by `.github/actions/install-claude`.
+The write profile has no `WebFetch`/`WebSearch`, and the host relay
+(`scripts/claude_anthropic_relay.py`) accepts only untyped or `custom`
+client tools, rejecting unknown provider-side tool types as well as known
+web, code-execution and MCP-connector tools. A missing
+`codex_isolated_exec.sh` makes `claude_run` fall back to codex rather than
+running Claude with host credentials.
 
 OpenCode version `1.18.23` is installed by the dispatch-only
 `.github/workflows/opencode-live-smoke.yml` rollout gate and by production
@@ -1722,6 +1768,7 @@ and shipped:
 - `CHECK_TRIAGE`
 - `WORKFLOW_HEAL_REPORT`
 - `WORKFLOW_HEAL_AUTOFIX_REPORT`
+- `WORKFLOW_HEAL_PHASE_REPORT`
 - `WORKFLOW_HEAL_PR_RECONCILE`
 - `WORKFLOW_HEAL`
 - `AUTOFIX_FINGERPRINT`
@@ -1940,6 +1987,7 @@ LOG_PREFIX.name=drift-audit:
 LOG_PREFIX.name=CHECK_TRIAGE
 LOG_PREFIX.name=WORKFLOW_HEAL_REPORT
 LOG_PREFIX.name=WORKFLOW_HEAL_AUTOFIX_REPORT
+LOG_PREFIX.name=WORKFLOW_HEAL_PHASE_REPORT
 LOG_PREFIX.name=WORKFLOW_HEAL_PR_RECONCILE
 LOG_PREFIX.name=WORKFLOW_HEAL
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT
@@ -2133,7 +2181,7 @@ depend on it.
 | `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` | `true` | Enable the consolidator-side companion `AGENTS.md` materiality finding. Unlike `AGENTS_MD_MATERIALITY_ENABLED`, which controls the separate advisory comment helper, this flag only controls whether `review_consolidate.sh` passes the helper JSON into Lens 7 (`NAMING / BACKWARD COMPATIBILITY`). |
 | `ENABLE_SECURITY_PASS` | `true` | Enable the scheduled poller's mandatory current-integration-head security gate before validation or finalization. Set to `false` for the immediate operator kill switch and legacy completion behavior. |
 | `MAX_SECURITY_PASS_CYCLES` | `5` | Maximum completed consolidated security-fix cycles before persistent findings terminalize as `ai:security-pass-failed`. Resets to `0` when an advancing integration head invalidates a recorded clean pass. Re-audits after a merged fix are delta audits, so the budget bounds persisting findings rather than fresh samples of unchanged code. For standalone PRs, a completed current-head audit is required to enter judge exhaustion mode. |
-| `SINGLE_ISSUE_SECURITY_PASS_ENABLED` | `true` | When enabled, hold eligible standalone PRs into the default branch until a security audit of the current head is clean. At the cycle cap an unaudited head gets bounded retries, then remains held without judge exhaustion mode; a completed findings audit for the same head still qualifies if a later attempt fails. A missing or unwritable `GITHUB_OUTPUT` fails the gate step closed; dispatch failure at any cycle holds the merge for a later review retry. Disabling the flag restores the pre-pass review-gate and deterministic-skip merge behavior. Only a sole verified automation follow-up is exempt; see `README.md` for dispatch and failure modes. |
+| `SINGLE_ISSUE_SECURITY_PASS_ENABLED` | `false` | Off by default (opt in with `true`); orchestrator projects keep their own pass under `ENABLE_SECURITY_PASS`. When enabled, hold eligible standalone PRs into the default branch until a security audit of the current head is clean. At the cycle cap an unaudited head gets bounded retries, then remains held without judge exhaustion mode; a completed findings audit for the same head still qualifies if a later attempt fails. A missing or unwritable `GITHUB_OUTPUT` fails the gate step closed; dispatch failure at any cycle holds the merge for a later review retry. With the flag off (the default) the pre-pass review-gate and deterministic-skip merge behavior applies. Only a sole verified automation follow-up is exempt; see `README.md` for dispatch and failure modes. |
 | `SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS` | `2` | Maximum trusted pending audit attempts per head with a cycle number above the standalone pass's cycle cap. Pre-cap pending markers do not consume these extra attempts. Invalid or non-positive values fall back to `2`; a failed exhausted retry dispatch holds the merge. |
 | `SECURITY_PASS_PENDING_STALE_HOURS` | `6` | A pending single-issue audit holds auto-merge until its marker is this many hours old; the next review run re-dispatches. Invalid or non-positive values fall back to `6`. Only a sole verified automation-linked issue skips the pass; multiple linked issues are audited. When `GH_PAT` is absent, both gate and reporter trust only `github-actions[bot]` markers. |
 | `MAX_SECURITY_PASS_FIX_REISSUES` | `2` | Maximum re-issues of one `ai:implementation-failed` consolidated security-fix issue per fix cycle before the pass terminalizes as `ai:security-pass-failed`. |
