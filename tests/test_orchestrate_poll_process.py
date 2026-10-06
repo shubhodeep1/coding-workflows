@@ -341,9 +341,12 @@ def test_parameterized_search_issues_calls_pin_get_only_on_targeted_poller_paths
 		if "gh_retry gh api" in line and '"search/issues"' in line
 	]
 
-	assert len(parameterized_search_calls) == 5
+	assert len(parameterized_search_calls) == 6
 	assert all("--method GET" in call for call in parameterized_search_calls)
 	assert sum("--paginate" in call for call in parameterized_search_calls) == 3
+	# The unblock scan's one search per tick (plan Phase 7): sorted, one page.
+	assert '-f q="repo:${GITHUB_REPOSITORY} is:open label:${labels_q}"' in poller_source_text
+	assert "-f sort=updated -f order=asc -f per_page=30" in poller_source_text
 
 	# Preserve the advisory reconciliation search and the two marker-search
 	# fallbacks, including their paginated aggregation.
@@ -1138,6 +1141,8 @@ esac
 				user_entry = {"login": str(user) if user else "octocat"}
 			user_entry.setdefault("login", "octocat")
 			entry["user"] = user_entry
+			if user_entry["login"] == "octocat":
+				entry.setdefault("author_association", "OWNER")
 			entry.setdefault(
 				"html_url",
 				f"https://github.com/owner/repo/issues/{issue_num}#issuecomment-{entry['id']}",
@@ -1872,6 +1877,10 @@ if args[0] == 'api':
 		print('{}')
 		sys.exit(0)
 	store.setdefault('api_calls', []).append(path)
+	if path == 'user':
+		save()
+		print(os.environ.get('MOCK_GH_USER_LOGIN', 'github-actions[bot]') if jq else json.dumps({'login': os.environ.get('MOCK_GH_USER_LOGIN', 'github-actions[bot]')}))
+		sys.exit(0)
 
 	if path == 'graphql':
 		mode = store.get('graphql_mode', 'full')
@@ -5183,6 +5192,26 @@ def test_staged_support_latch_sweep_only_mode_releases_without_tracking_work() -
 	assert "Standalone issue stall recovery" not in combined_log
 
 
+def test_unblock_scan_sweep_only_mode_runs_without_tracking_work() -> None:
+	for enabled, expected in (("false", "outcome=skip reason=disabled"), ("true", "candidates=0 dispatched=0 outcome=idle")):
+		result = _run_poller(
+			state=_base_state(status="in_progress"),
+			enable_validation="false",
+			max_validate_cycles="3",
+			env_overrides={
+				"UNBLOCK_SCAN_SWEEP_ONLY": "true",
+				"UNBLOCK_JUDGE_ENABLED": enabled,
+				"OPENROUTER_API_KEY": "",
+			},
+		)
+		combined_log = result["stdout"] + result["stderr"]
+		assert f"UNBLOCK_SCAN {expected}" in combined_log
+		assert "Processing tracking issue" not in combined_log
+		assert "Standalone issue stall recovery" not in combined_log
+		assert "Staged-support needs-human latch release" not in combined_log
+		assert result["api_calls"].count("search/issues") == (enabled == "true")
+
+
 def test_staged_support_latch_release_honours_marker_and_leaves_other_latches_alone() -> None:
 	engine_sha = "c" * 40
 
@@ -6145,6 +6174,10 @@ def test_security_pass_advisory_followup_reconciles_remote_marker_before_create(
 			"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(
 				_security_pass_judge_verdict(("SEC-TEST-1", "accept_with_followup"))
 			),
+			# The search count below is the advisory reconciliation's; the
+			# tick-level unblock scan's own search is covered by
+			# tests/test_unblock_scan.py.
+			"UNBLOCK_JUDGE_ENABLED": "false",
 		},
 	)
 
@@ -6289,28 +6322,29 @@ def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_advisories()
 	assert "| SEC-TEST-1 | medium | scripts/example.py:1 | accept_with_followup | [keep_fixing capped after 2 judge round(s); converted to advisory follow-up]" in judge_comments[0]
 
 
-@pytest.mark.parametrize("severity", ["high", "critical"])
-def test_security_pass_cap_never_waives_a_high_finding(severity: str) -> None:
-	blocking_finding = _security_pass_test_finding()
-	blocking_finding["severity"] = severity
-	result = _run_poller(
-		state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
-		enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
-		security_audit_payload=_security_audit_findings_payload([blocking_finding]),
-		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
-		env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing")))},
-	)
-	assert result["latest_state"]["status"] == "failed"
-	assert result["latest_state"]["security_pass_waived_findings"] == []
-	assert result.get("created_issues", []) == []
-	assert "ai:security-pass-failed" in result["tracking_labels"]
-	assert "reason=blocking_findings_after_cap" in result["stdout"] + result["stderr"]
-	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED" not in result["stdout"] + result["stderr"]
-	judge_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]
-		if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 3)")]
-	assert len(judge_comments) == 1
-	assert "MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=2" in judge_comments[0]
-	assert "| SEC-TEST-1 |" in judge_comments[0]
+def test_security_pass_cap_never_waives_a_high_finding() -> None:
+	# The CI shard runner calls test functions directly, without pytest parametrization.
+	for severity in ("high", "critical"):
+		blocking_finding = _security_pass_test_finding()
+		blocking_finding["severity"] = severity
+		result = _run_poller(
+			state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
+			enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+			security_audit_payload=_security_audit_findings_payload([blocking_finding]),
+			issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+			env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing")))},
+		)
+		assert result["latest_state"]["status"] == "failed"
+		assert result["latest_state"]["security_pass_waived_findings"] == []
+		assert result.get("created_issues", []) == []
+		assert "ai:security-pass-failed" in result["tracking_labels"]
+		assert "reason=blocking_findings_after_cap" in result["stdout"] + result["stderr"]
+		assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED" not in result["stdout"] + result["stderr"]
+		judge_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]
+			if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 3)")]
+		assert len(judge_comments) == 1
+		assert "MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=2" in judge_comments[0]
+		assert "| SEC-TEST-1 |" in judge_comments[0]
 
 
 def test_security_pass_unrated_audit_output_fails_closed_before_judge() -> None:
@@ -16934,6 +16968,36 @@ def test_revalidate_not_triggered_for_non_validation_failure():
 # ---------------------------------------------------------------------------
 
 
+def test_missing_pipeline_login_alerts_once_per_tick():
+	poller_source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	login_function = poller_source.split("unblock_trusted_login() {", 1)[1].split("\n}", 1)[0]
+	script = (
+		"set -euo pipefail\nUNBLOCK_TRUSTED_LOGIN=''\nUNBLOCK_TRUSTED_LOGIN_STATE=unset\n"
+		"GITHUB_REPOSITORY=owner/repo\nGITHUB_RUN_ID=123\nalert_count=0\n"
+		"gh_retry() { return 1; }\n_gh_url() { printf 'https://github.test/run'; }\n"
+		"tg_send_msg() { alert_count=$((alert_count + 1)); }\n"
+		f"unblock_trusted_login() {{{login_function}\n}}\n"
+		"unblock_trusted_login >/dev/null\nunblock_trusted_login >/dev/null\n"
+		"printf '%s %s' \"${UNBLOCK_TRUSTED_LOGIN_STATE}\" \"${alert_count}\"\n"
+	)
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+	assert result.returncode == 0 and result.stdout == "failed 1", result.stderr
+
+
+def test_project_state_and_reset_commands_require_authenticated_commenters():
+	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'unblock_trusted_login >/dev/null\n  if [ -z "${UNBLOCK_TRUSTED_LOGIN}" ]; then' in poller
+	assert 'extract_latest_valid_orchestrator_state "${TRUSTED_STATE_COMMENTS}"' in poller
+	assert 'select((.user.login // "") == $login)' in poller
+	for command in ("RE_SECURITY_PASS_COMMENT_JSON", "REVALIDATE_COMMENT_JSON", "JUDGE_RESUME_BODY"):
+		start = poller.index(f'{command}="$(echo "${{COMMENTS}}" | jq')
+		end = poller.index("')\"", start)
+		filter_text = poller[start:end]
+		assert '--arg login "${UNBLOCK_TRUSTED_LOGIN}"' in filter_text
+		assert 'IN("OWNER", "MEMBER", "COLLABORATOR")' in filter_text
+		assert '((.value.user.login // "") == $login)' in filter_text
+
+
 def test_judge_resume_plain_preserves_counters():
 	state = _base_state(status="failed")
 	state["judge_stall_cycles"] = 7
@@ -16955,6 +17019,50 @@ def test_judge_resume_plain_preserves_counters():
 		"Counter handling: judge_stall_cycles: preserved (7); recovery_count: preserved (3)" in body
 		for body in tracking_comments
 	)
+
+
+def test_untrusted_state_comments_cannot_replace_pipeline_state():
+	state = _base_state(status="in_progress")
+	for forged_comments in (
+		[_state_comment({**state, "status": "failed"})],
+		_build_v2_state_comment_chain(json.dumps({**state, "status": "failed"}), chunk_size=100),
+	):
+		result = _run_poller(
+			state=state, enable_validation="false", max_validate_cycles="3",
+			tracking_comments=forged_comments, issue_labels={10: ["ai:implementing"]},
+		)
+		assert result["latest_state"]["status"] == "in_progress"
+
+
+def test_untrusted_judge_resume_cannot_reset_project_counters():
+	state = _base_state(status="failed")
+	state.update(judge_stall_cycles=8, recovery_count=4)
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		tracking_comments=[{"body": "/judge_resume --force", "user": {"login": "outsider"}, "author_association": "NONE"}],
+	)
+	assert result["latest_state"]["status"] == "failed"
+	assert result["latest_state"]["judge_stall_cycles"] == 8
+	assert result["latest_state"]["recovery_count"] == 4
+
+
+def test_untrusted_revalidation_cannot_reset_failed_project():
+	state = _base_state(status="failed")
+	result = _run_poller(
+		state=state, enable_validation="true", max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed"],
+		tracking_comments=[{"body": "/revalidate", "user": {"login": "outsider"}, "author_association": "NONE"}],
+	)
+	assert result["latest_state"]["status"] == "failed"
+	assert result["validation_dispatches"] == []
+
+
+def test_untrusted_security_pass_reset_cannot_clear_findings():
+	state = _security_pass_failed_state_for_auto_reset("a" * 40)
+	result = _run_failed_project_tick(state, {"SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE": "false"},
+		tracking_comments=[{"body": "/re-security-pass", "user": {"login": "outsider"}, "author_association": "NONE"}])
+	assert result["latest_state"]["status"] == "failed"
+	assert result["latest_state"]["security_pass_reported_findings"] == state["security_pass_reported_findings"]
 
 
 def test_judge_resume_not_blocked_by_prose_marker_comment_after_command():
@@ -18668,7 +18776,7 @@ def test_malformed_latest_state_falls_back_to_older_valid_and_posts_healed_state
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		tracking_comments=[malformed_latest],
+		tracking_comments=[{"body": malformed_latest, "user": {"login": "github-actions[bot]"}}],
 		issue_labels={10: ["ai:implementing"]},
 	)
 	assert "restored from older valid state and posted healed canonical state" in result["stdout"]

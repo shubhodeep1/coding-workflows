@@ -96,7 +96,7 @@ ROLES: tuple[str, ...] = (
 UTILITY_ROLES: tuple[str, ...] = ("LOG_SUMMARY", "RETRO", "MATERIALITY", "SUMMARISER", "BEHAVIOURAL_SMOKE")
 # Roles whose codex call runs `--sandbox read-only` today keep a read-only
 # tool set on Claude; every other role edits its checkout.
-READ_ROLES: tuple[str, ...] = ("CLARIFY", "CLARIFY_RESPOND", "SECURITY_JUDGE", "SECURITY_AUDIT", "WORKFLOW_HEAL")
+READ_ROLES: tuple[str, ...] = ("CLARIFY", "CLARIFY_RESPOND", "SECURITY_JUDGE", "SECURITY_AUDIT", "WORKFLOW_HEAL", "UNBLOCK_JUDGE")
 
 LABEL_CODEX = "ai:codex"
 LABEL_ENGINE_CLAUDE = "ai:engine-claude"
@@ -159,7 +159,7 @@ READ_PROFILE_ALLOW: tuple[str, ...] = (
 	"Glob",
 )
 PROFILE_TOOLS: dict[str, str] = {
-	"write": "Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch",
+	"write": "Read,Grep,Glob,Bash,Edit,Write",
 	"read": "Read,Grep,Glob",
 }
 PROFILE_MODES: dict[str, str] = {

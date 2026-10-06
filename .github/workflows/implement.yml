@@ -1027,7 +1027,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh codex_isolated_exec.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py claude_anthropic_relay.py security_dependency.py auto_decisions.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh unblock_ledger.py targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh codex_isolated_exec.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py claude_anthropic_relay.py security_dependency.py auto_decisions.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -1639,23 +1639,35 @@ jobs:
 
           printf '%s\n' "${ISSUE_BODY}" > "${ISSUE_BODY_FILE}"
 
-          # TRUST BOUNDARY: ISSUE_BODY is user-controlled content from the GitHub
-          # issue. It is passed via heredoc (not shell expansion) to prevent injection
-          # into shell commands. Downstream consumers must treat it as untrusted input.
+          # TRUST BOUNDARY (#6504): issue text can close a fixed GITHUB_ENV
+          # delimiter and inject guard settings. Keep the body only in its data
+          # file; frame title and scope label with checked random delimiters.
+          write_untrusted_multiline_env() {
+            local key="$1" value="$2" delim hex
+            if ! hex="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"; then
+              echo "::error::Unable to create GITHUB_ENV delimiter for ${key}."
+              exit 1
+            fi
+            if [[ ! "${hex}" =~ ^[0-9a-f]{32}$ ]]; then
+              echo "::error::Unable to create GITHUB_ENV delimiter for ${key}."
+              exit 1
+            fi
+            delim="ghadelimiter_${hex}"
+            case "${value}" in
+              *"${delim}"*)
+                echo "::error::GITHUB_ENV delimiter collision for ${key}."
+                exit 1
+                ;;
+            esac
+            printf '%s<<%s\n%s\n%s\n' "${key}" "${delim}" "${value}" "${delim}" >> "$GITHUB_ENV"
+          }
           {
             echo "ISSUE_NUMBER=${ISSUE_NUMBER_JSON}"
             echo "ISSUE_URL=${ISSUE_URL_JSON}"
             echo "PR_BASE_BRANCH=${PR_BASE_BRANCH}"
-            echo 'ISSUE_SCOPE_LOCK_GLOB<<EOF'
-            echo "${ISSUE_SCOPE_LOCK_GLOB}"
-            echo 'EOF'
-            echo 'ISSUE_TITLE<<EOF'
-            echo "${ISSUE_TITLE}"
-            echo 'EOF'
-            echo 'ISSUE_BODY<<EOF'
-            echo "${ISSUE_BODY}"
-            echo 'EOF'
           } >> "$GITHUB_ENV"
+          write_untrusted_multiline_env ISSUE_SCOPE_LOCK_GLOB "${ISSUE_SCOPE_LOCK_GLOB}"
+          write_untrusted_multiline_env ISSUE_TITLE "${ISSUE_TITLE}"
 
       - name: Detect smoke test and silence Telegram alerts
         if: env.SKIP_IMPLEMENT != 'true'
@@ -1731,7 +1743,7 @@ jobs:
             # falls back to the workflow-level default MODEL_EDITOR
             # rather than failing the implement.
             if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test alt-model\]'; then
-              alt_model="$(printf '%s' "${ISSUE_BODY}" | grep -oE 'this run uses `[A-Za-z0-9_./-]+` as the editor model override' | head -1 | sed -E 's/.*`([^`]+)`.*/\1/' || true)"
+              alt_model="$(grep -oE 'this run uses `[A-Za-z0-9_./-]+` as the editor model override' "${ISSUE_BODY_FILE:-/dev/null}" 2>/dev/null | head -1 | sed -E 's/.*`([^`]+)`.*/\1/' || true)"
               if [ -n "${alt_model:-}" ] \
                   && [ "${#alt_model}" -le 128 ] \
                   && printf '%s' "${alt_model}" | grep -qE '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; then
@@ -1889,6 +1901,106 @@ jobs:
             exit 0
           fi
 
+      - name: Unblock judge bulk-delete override
+        # Q12 of docs/plans/replace-claude-sessions-with-cli-engine-plan.md:
+        # an `override_guard` verdict on ai:destructive-blocked leaves
+        # `<!-- ai:unblock:v1 ... verdict=override_guard ... override=bulk_delete -->`
+        # on the issue, posted by the pipeline's own login. The newest such
+        # marker that no `<!-- ai:unblock-override-used:v1 comment=<id> -->`
+        # has spent lifts the bulk-delete threshold for this run only (never
+        # for canonical workflow sources); it is spent right here, so it can
+        # never apply twice. Two API calls only when a marker is present.
+        if: env.SKIP_IMPLEMENT != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          if ! jq -e 'any(.[]?; (.body // "") | contains("override=bulk_delete -->"))' "${ISSUE_COMMENTS_FILE}" >/dev/null 2>&1; then
+            exit 0
+          fi
+          pipeline_login="$(gh api user --jq '.login' 2>/dev/null || true)"
+          if [ -z "${pipeline_login}" ]; then
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=login_unavailable"
+            exit 0
+          fi
+          override_comment_id="$(jq -r --arg login "${pipeline_login}" --arg issue "${ISSUE_NUMBER}" '
+            [.[] | select((.user.login // "") == $login)] as $mine
+            | ([$mine[] | (.body // "") | scan("<!-- ai:unblock-override-used:v1 comment=([0-9]+) -->") | .[0]]) as $used
+            | [$mine[]
+                | select(((.body // "") | split("\n") | map(select(test("\\S"))) | last // "" | rtrimstr("\r"))
+                    | test("^<!-- ai:unblock:v1 item=" + $issue + " stop=destructive-blocked fingerprint=[0-9a-f]{12} verdict=override_guard round=[1-9][0-9]* override=bulk_delete -->$"))
+                | select((.id | tostring) as $id | ($used | index($id)) == null)]
+            | last | .id // empty
+          ' "${ISSUE_COMMENTS_FILE}")"
+          if ! [[ "${override_comment_id}" =~ ^[0-9]+$ ]]; then
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=no_unspent_marker"
+            exit 0
+          fi
+          approved_deletions="$(jq -c --argjson id "${override_comment_id}" '
+            .[] | select(.id == $id) | (.body // "")
+            | capture("(?m)^Approved deletions: (?<paths>\\[[^\\r\\n]*\\])\\r?$").paths | fromjson
+            | select(type == "array" and length > 0 and all(.[]; type == "string"))
+          ' "${ISSUE_COMMENTS_FILE}" 2>/dev/null || true)"
+          if [ -z "${approved_deletions}" ]; then
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=approved_paths_unavailable"
+            exit 0
+          fi
+          rejection_run_id="$(jq -r --argjson id "${override_comment_id}" '
+            .[] | select(.id == $id) | (.body // "")
+            | capture("(?m)^Rejected run: (?<run>[1-9][0-9]*)\\r?$").run
+          ' "${ISSUE_COMMENTS_FILE}" 2>/dev/null || true)"
+          if ! [[ "${rejection_run_id}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=rejection_run_unbound"
+            exit 0
+          fi
+          # The issue/comments read above cannot prove a rejection happened.
+          # Fetch Actions provenance only for an unspent bulk-delete verdict.
+          rejection_artifacts="$(gh api "repos/${{ github.repository }}/actions/runs/${rejection_run_id}/artifacts?per_page=100" 2>/dev/null)" || {
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=rejection_snapshot_unverified"
+            exit 0
+          }
+          rejection_artifact="$(jq -ce --argjson run "${rejection_run_id}" --argjson id "${override_comment_id}" --arg name "destructive-rejection-issue-${ISSUE_NUMBER}" \
+            --slurpfile comments "${ISSUE_COMMENTS_FILE}" '
+            ($comments[0][] | select(.id == $id) | .created_at) as $approved_at
+            | [.artifacts[]? | select(.workflow_run.id == $run and .expired == false
+              and .name == $name and (.created_at | type == "string") and .created_at <= $approved_at)]
+            | sort_by(.created_at) | last // empty
+          ' <<< "${rejection_artifacts}" 2>/dev/null || true)"
+          rejection_artifact_id="$(jq -r '.id // empty' <<< "${rejection_artifact}" 2>/dev/null || true)"
+          if ! [[ "${rejection_artifact_id}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=rejection_snapshot_unverified"
+            exit 0
+          fi
+          rejection_dir="${RUNTIME_DIR}/destructive_rejection_spend"
+          mkdir -p "${rejection_dir}"
+          printf '%s\n' "${rejection_artifact}" > "${rejection_dir}/artifact.json"
+          if ! gh api "repos/${{ github.repository }}/actions/runs/${rejection_run_id}" > "${rejection_dir}/run.json" \
+            || ! gh api "repos/${{ github.repository }}/actions/artifacts/${rejection_artifact_id}/zip" > "${rejection_dir}/snapshot.zip"; then
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=rejection_snapshot_unverified"
+            exit 0
+          fi
+          if ! PYTHONDONTWRITEBYTECODE=1 python3 scripts/unblock_ledger.py rejection-snapshot \
+              --run-file "${rejection_dir}/run.json" --artifact-file "${rejection_dir}/artifact.json" \
+              --zip-file "${rejection_dir}/snapshot.zip" --item "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
+              --approved-json "${approved_deletions}" > "${rejection_dir}/verified.json"; then
+            if jq -e '.error == "approved_paths_not_rejected"' "${rejection_dir}/verified.json" >/dev/null 2>&1; then
+              echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=approved_paths_not_rejected"
+            else
+              echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=rejection_snapshot_unverified"
+            fi
+            exit 0
+          fi
+          if ! gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="This run uses the unblock judge's bulk-delete override once.
+
+          <!-- ai:unblock-override-used:v1 comment=${override_comment_id} -->" >/dev/null; then
+            echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=spend_failed"
+            exit 0
+          fi
+          echo "UNBLOCK_BULK_DELETE_OVERRIDE=true" >> "$GITHUB_ENV"
+          echo "UNBLOCK_BULK_DELETE_PATHS=${approved_deletions}" >> "$GITHUB_ENV"
+          echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=enabled marker=${override_comment_id}"
+
       - name: Record implementation run start event
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
@@ -1966,9 +2078,14 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
           set -euo pipefail
+          if [ ! -f "${ISSUE_BODY_FILE:-}" ]; then
+            echo "::error::ISSUE_BODY_FILE is not a regular file." >&2
+            exit 1
+          fi
           {
             echo "ISSUE DESCRIPTION"
-            printf '%s\n\n' "${ISSUE_BODY}"
+            cat "${ISSUE_BODY_FILE}"
+            echo
             echo "CLARIFICATION ANSWERS"
             cat "${CLARIFICATION_ANSWERS_FILE}"
             echo
@@ -3375,6 +3492,16 @@ jobs:
         # cleanup/exclusion rules, without mutating the real index/worktree.
         if: env.SKIP_IMPLEMENT != 'true'
         id: preflight_destructive_guard
+        # Step env overrides GITHUB_ENV so injected job values cannot weaken guards (#6504).
+        env:
+          ALLOW_BULK_DELETE: ${{ vars.ALLOW_BULK_DELETE || 'false' }}
+          BULK_DELETE_THRESHOLD: ${{ vars.BULK_DELETE_THRESHOLD || '3' }}
+          BULK_DELETE_THRESHOLD_MD: ${{ vars.BULK_DELETE_THRESHOLD_MD || '100' }}
+          ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
+          ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
+          SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}
         run: |
           set -euo pipefail
 
@@ -3500,6 +3627,7 @@ jobs:
             canonical_deletions="$(printf '%s\n' "${deleted_staged}" \
               | grep -E '^(agents\.md|ai_pipeline\.md|unattended_system_instructions\.md|CLAUDE\.md|prompts/|scripts/|\.github/ai/|\.github/scripts/)' \
               || true)"
+            unblock_protected_deletions="$(printf '%s\n' "${deleted_staged}" | grep -iE '^(\.github|\.claude|workflow-templates)(/|$)' || true)"
             total_deletions="$(printf '%s\n' "${deleted_staged}" | sed '/^$/d' | wc -l | tr -d ' ')"
             # Count non-.md deletions to decide whether the lenient
             # markdown-only threshold applies. Case-insensitive match so
@@ -3542,7 +3670,20 @@ jobs:
               exit 1
             fi
 
-            if [ "${total_deletions}" -gt "${effective_threshold}" ] && [ "${ALLOW_BULK_DELETE:-false}" != "true" ]; then
+            # The unblock judge's one-shot override (plan Phase 7, Q12) lifts the
+            # bulk-delete threshold for this run only, and never when a canonical
+            # workflow source or protected automation path is among the deletions.
+            unblock_bulk_override_applies="false"
+            if [ "${UNBLOCK_BULK_DELETE_OVERRIDE:-false}" = "true" ] && [ -z "${canonical_deletions}" ] &&
+              [ -z "${unblock_protected_deletions}" ] &&
+              printf '%s\n' "${deleted_staged}" | jq -R -s -e --argjson paths "${UNBLOCK_BULK_DELETE_PATHS:-null}" 'all(split("\n")[] | select(length > 0); . as $path | $paths | index($path) != null)' >/dev/null 2>&1; then
+              unblock_bulk_override_applies="true"
+              echo "UNBLOCK_BULK_DELETE_OVERRIDE applied deletions=${total_deletions}"
+            fi
+            if [ "${UNBLOCK_BULK_DELETE_OVERRIDE:-false}" = "true" ] && [ -n "${unblock_protected_deletions}" ]; then
+              echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=protected_automation_paths"
+            fi
+            if [ "${total_deletions}" -gt "${effective_threshold}" ] && [ "${ALLOW_BULK_DELETE:-false}" != "true" ] && [ "${unblock_bulk_override_applies}" != "true" ]; then
               echo "::error::Refusing to commit: ${total_deletions} staged deletions exceeds ${threshold_label}=${effective_threshold} (non-md deletions=${non_md_count}) and ALLOW_BULK_DELETE is not 'true'."
               echo "Deletions blocked by bulk-delete threshold:"
               printf '%s\n' "${deleted_staged}" | sed 's/^/  - /'
@@ -4218,6 +4359,15 @@ jobs:
       - name: Protect workflow files from implementation edits
         if: env.SKIP_IMPLEMENT != 'true'
         id: protect_workflow_files
+        env:
+          ALLOW_BULK_DELETE: ${{ vars.ALLOW_BULK_DELETE || 'false' }}
+          BULK_DELETE_THRESHOLD: ${{ vars.BULK_DELETE_THRESHOLD || '3' }}
+          BULK_DELETE_THRESHOLD_MD: ${{ vars.BULK_DELETE_THRESHOLD_MD || '100' }}
+          ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
+          ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
+          SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}
         run: |
           set -euo pipefail
 
@@ -4302,6 +4452,15 @@ jobs:
       - name: Commit changes
         if: env.SKIP_IMPLEMENT != 'true'
         id: commit_changes
+        env:
+          ALLOW_BULK_DELETE: ${{ vars.ALLOW_BULK_DELETE || 'false' }}
+          BULK_DELETE_THRESHOLD: ${{ vars.BULK_DELETE_THRESHOLD || '3' }}
+          BULK_DELETE_THRESHOLD_MD: ${{ vars.BULK_DELETE_THRESHOLD_MD || '100' }}
+          ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
+          ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
+          SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}
         run: |
           set -euo pipefail
           bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"
@@ -4327,7 +4486,16 @@ jobs:
         # scope and staged-support branches are mutually exclusive — each guard
         # exits on the first tripped condition — so at most one fires per run.
         if: env.SKIP_IMPLEMENT != 'true' && (failure() || cancelled()) && (steps.preflight_destructive_guard.outputs.destructive_commit_blocked != '' || steps.commit_changes.outputs.destructive_commit_blocked != '' || steps.preflight_destructive_guard.outputs.scope_violation_blocked != '' || steps.commit_changes.outputs.scope_violation_blocked != '' || steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict != '' || steps.commit_changes.outputs.staged_support_rebase_conflict != '')
+        id: handle_guard_block
         env:
+          ALLOW_BULK_DELETE: ${{ vars.ALLOW_BULK_DELETE || 'false' }}
+          BULK_DELETE_THRESHOLD: ${{ vars.BULK_DELETE_THRESHOLD || '3' }}
+          BULK_DELETE_THRESHOLD_MD: ${{ vars.BULK_DELETE_THRESHOLD_MD || '100' }}
+          ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
+          ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
+          SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
@@ -4346,6 +4514,16 @@ jobs:
         run: |
           set -euo pipefail
           bash "${RUNTIME_DIR}/implement_handle_guard_block.sh"
+
+      - name: Upload destructive-rejection snapshot
+        if: always() && steps.handle_guard_block.outputs.rejection_snapshot == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: destructive-rejection-issue-${{ env.ISSUE_NUMBER }}
+          path: ${{ env.RUNTIME_DIR }}/destructive_rejection/destructive_rejection.json
+          retention-days: 30
+          if-no-files-found: ignore
+        continue-on-error: true
 
       - name: Handle no-op implementation
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'false' && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == ''
