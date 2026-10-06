@@ -1338,9 +1338,10 @@ the same retry path, even when the PR previously changed that path. The
 review-blocked fix sandbox keeps `GITHUB_WORKSPACE` pointed at the checkout's
 Git database and selects the validated per-PR `WORKSPACE_PATH`; an invalid
 workspace fails preparation before the writer starts. Integration-judge
-resolutions of protected files cannot delete the file or remove lines shared
-by both merge sides, including repeated lines. Such resolutions are rejected
-without a push and retried on the next poll tick.
+resolutions of protected files cannot delete a file present on both merge
+sides or remove lines shared by both sides, including repeated lines. A
+one-sided delete/modify conflict may still resolve to deletion. Invalid
+resolutions are rejected without a push and retried on the next poll tick.
 If the integration judge cannot publish a resolution, the poller warns and
 rechecks mergeability on the next tick instead of failing the project immediately.
 The merged-PR push guard checks `origin` as before. A push selecting a different

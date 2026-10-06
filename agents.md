@@ -664,9 +664,10 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   and duplicate counts when combining them.
   Lines shared by both sides must also remain at their minimum shared count;
   there is no automated deletion override, including for lines both sides added.
-  Deleting a conflicted protected file is rejected. Lines inherited unchanged
-  from the common base cannot be duplicated; a provenance check that exceeds
-  its fixed work limit rejects the resolution without pushing.
+  Deleting a conflicted protected file present on both sides is rejected;
+  one-sided delete/modify conflicts may still resolve to deletion. Lines
+  inherited unchanged from the common base cannot be duplicated; a provenance
+  check that exceeds its fixed work limit rejects the resolution without pushing.
   Its push uses a one-shot credential helper instead of storing `GH_TOKEN` in
   the shared Git config of the judge worktree.
   A failed publication logs a warning but counts as a completed judge

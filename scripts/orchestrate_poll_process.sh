@@ -8882,7 +8882,9 @@ try:
         sides = stages[path]
         indexed = git("ls-files", "-s", "-z", "--", ":(literal)" + os.fsdecode(path))
         if not indexed:
-            raise ValueError("deleted protected conflict")
+            if b"2" in sides and b"3" in sides:
+                raise ValueError("deleted protected conflict")
+            continue
         entries = [item for item in indexed.split(b"\0") if item]
         if len(entries) != 1:
             raise ValueError("invalid staged entry")

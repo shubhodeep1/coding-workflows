@@ -50,16 +50,22 @@ def judge_repo(tmp_path: Path, request: pytest.FixtureRequest):
 	git(root, "remote", "add", "origin", str(remote))
 	git(root, "push", "origin", "main")
 	git(root, "checkout", "-b", "integration")
-	conflicted.write_text("first\n" + "\n" * 2000 + "ours\nlast\n" if request.param == "repeated" else
-	                      "first\nshared\nours\nlast\n" if request.param == "base-shared" else
-	                      "first\n\nours\nlast\n" if request.param == "shared" else "first\nours\nlast\n")
+	if request.param == "deleted-ours":
+		conflicted.unlink()
+	else:
+		conflicted.write_text("first\n" + "\n" * 2000 + "ours\nlast\n" if request.param == "repeated" else
+		                      "first\nshared\nours\nlast\n" if request.param == "base-shared" else
+		                      "first\n\nours\nlast\n" if request.param == "shared" else "first\nours\nlast\n")
 	git(root, "commit", "-am", "ours")
 	git(root, "push", "origin", "integration")
 	before = git(remote, "rev-parse", "refs/heads/integration").stdout.strip()
 	git(root, "checkout", "main")
-	conflicted.write_text("first\n" + "\n" * 2000 + "theirs\nlast\n" if request.param == "repeated" else
-	                      "first\nshared\ntheirs\nlast\n" if request.param == "base-shared" else
-	                      "first\n\ntheirs\nlast\n" if request.param == "shared" else "first\ntheirs\nlast\n")
+	if request.param == "deleted-theirs":
+		conflicted.unlink()
+	else:
+		conflicted.write_text("first\n" + "\n" * 2000 + "theirs\nlast\n" if request.param == "repeated" else
+		                      "first\nshared\ntheirs\nlast\n" if request.param == "base-shared" else
+		                      "first\n\ntheirs\nlast\n" if request.param == "shared" else "first\ntheirs\nlast\n")
 	git(root, "commit", "-am", "theirs")
 	git(root, "push", "origin", "main")
 	wt = tmp_path / "judge"
@@ -176,6 +182,19 @@ def test_protected_resolution_cannot_remove_shared_controls(judge_repo, change):
 	result = run(f'_integration_judge_commit_and_push "{wt}" 42 integration main "{baseline}" 1')
 	assert result.returncode != 0
 	assert "reason=protected_path_provenance" in result.stderr
+	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() == before
+
+
+@pytest.mark.parametrize("judge_repo", ["deleted-ours", "deleted-theirs"], indirect=True)
+def test_protected_one_sided_conflict_can_choose_deletion(judge_repo):
+	wt, baseline, remote, before, conflict_path, run = judge_repo
+	(wt / conflict_path).unlink()
+	git(wt, "add", "-A", "--", conflict_path)
+	result = run(f'_integration_judge_verify_scope "{wt}" "{baseline}" 42')
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "outcome=accepted" in result.stderr
+	assert result.stdout.strip() == git(wt, "write-tree").stdout.strip()
+	assert git(wt, "ls-files", "--", conflict_path).stdout == ""
 	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() == before
 
 
