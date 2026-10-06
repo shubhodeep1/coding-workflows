@@ -144,6 +144,18 @@ def test_python_repo_checks_invariants_regression_guards() -> None:
 		assert "sys.executable" in import_audit_text
 		assert "importlib.import_module" in import_audit_text
 
+		# The audited modules (yaml, jinja2) are installed only in the app
+		# image, so the audit must run inside the app container, not on the
+		# host runner (#6031 validation run 37315007990).
+		import_audit_shell = (output_root / "tests" / "20_import_audit.sh").read_text(encoding="utf-8")
+		assert 'COMPOSE_FILE="${COMPOSE_FILE:-out/docker-compose.test.yml}"' in import_audit_shell
+		assert 'APP_SERVICE="${APP_SERVICE:-app}"' in import_audit_shell
+		assert 'CONTAINER_IMPORT_AUDIT="${CONTAINER_IMPORT_AUDIT:-/workspace/out/tests/_lib/import_audit.py}"' in import_audit_shell
+		assert 'docker compose -f "${COMPOSE_FILE}" exec -T "${APP_SERVICE}" python3 "${CONTAINER_IMPORT_AUDIT}"' in import_audit_shell
+		assert "/bin/sh -c" not in import_audit_shell
+		assert "printf '%s\\n' \"${audit_output}\" | sed 's/^/# /'" in import_audit_shell
+		assert 'python3 "${SCRIPT_DIR}/_lib/import_audit.py"' not in import_audit_shell
+
 		tap_text = (output_root / "tests" / "90_tap_report.sh").read_text(encoding="utf-8")
 		assert "echo \"1..${TAP_PLAN}\"" in tap_text
 		assert "tap_report family=python-repo-checks stable_summary=1" in tap_text
