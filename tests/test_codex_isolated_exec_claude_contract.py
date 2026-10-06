@@ -16,6 +16,7 @@ def test_claude_never_runs_on_the_host_without_the_isolation_helper() -> None:
 	assert 'cmd=(bash "${isolated_exec}"' in source
 	assert 'CLAUDE_CODE_OAUTH_TOKEN="$(tr' not in source
 	assert 'unset CLAUDE_CODE_OAUTH_TOKEN' not in source
+	assert 'CLAUDE_CODE_OAUTH_TOKEN=' not in source
 	assert '--claude-token-file "${token_file}"' in source
 	assert '--claude-home "${claude_home}"' in source
 	assert '--engine claude --mode "${isolation_mode}"' in source

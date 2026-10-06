@@ -73,6 +73,7 @@ record = {
 	"claude_md_visible": os.path.exists("CLAUDE.md"),
 	"api_key_env": "ANTHROPIC_API_KEY" in os.environ,
 	"gh_token_env": "GH_TOKEN" in os.environ,
+	"secret_env_names": sorted(name for name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "TG_BOT_SECRET") if name in os.environ),
 	"settings": settings_text,
 }
 with open(log, "a", encoding="utf-8") as handle:
@@ -379,6 +380,7 @@ def test_write_role_command_line(sandbox: dict) -> None:
 	assert call["base_url"] == "http://127.0.0.1:8765"
 	assert call["api_key_env"] is False
 	assert call["gh_token_env"] is False
+	assert call["secret_env_names"] == []
 	assert call["stdin"] == "do the thing\n"
 	# A write role edits a copy of the workdir, never the checkout itself.
 	assert call["cwd"] != str(sandbox["work"].resolve())
@@ -389,6 +391,8 @@ def test_write_role_command_line(sandbox: dict) -> None:
 	assert "--network" in run["argv"] and run["argv"][run["argv"].index("--network") + 1] == "none"
 	assert "TOK_OK" not in json.dumps(run)
 	assert "ghp_" not in json.dumps(run["argv"]) and "GH_TOKEN" not in run["env"]
+	token_file = sandbox["pool"] / "tokens" / "A"
+	assert not any(token_file.is_relative_to(Path(arg.split(",", 2)[1][4:])) for arg in run["argv"] if arg.startswith("type=bind,src="))
 	assert any(arg.endswith(",readonly") is False and f"dst={sandbox['work'].resolve()}" in arg for arg in run["argv"])
 
 
