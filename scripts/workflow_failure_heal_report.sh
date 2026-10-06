@@ -123,7 +123,7 @@ fi
 
 COMMENTS_JSON_FILE="${RUNTIME_DIR}/comments.json"
 if ! gh_retry gh api --method GET --paginate "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" -F per_page=100 \
-	--jq '.[] | {body: (.body // ""), created_at: (.created_at // "")}' 2>/dev/null \
+	--jq '.[] | {body: (.body // ""), created_at: (.created_at // ""), user: {login: (.user.login // "")}, author_association: (.author_association // "")}' 2>/dev/null \
 	| jq -s '.' > "${COMMENTS_JSON_FILE}" 2>/dev/null; then
 	log "warn comments_fetch_failed issue=${ISSUE_NUMBER}; continuing without comments"
 	printf '[]' > "${COMMENTS_JSON_FILE}"

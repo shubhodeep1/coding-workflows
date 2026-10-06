@@ -364,10 +364,16 @@ Phases of the unattended pipeline (each is a separate workflow file under
     Rejections log `WORKFLOW_HEAL provenance_rejected` and fail closed, so a
     missing phase failure comment prevents intake. A holder of the shared
     `GH_PAT` can still read registered repositories' logs directly or report a genuinely
-    linked failed run. Label-escalation `issue` and `pull_request` reports are
-    outside this gate even when their issue/comment-derived `run_refs` are
-    present; those reports can still fetch unverified job logs with the shared
-    `GH_PAT`.
+    linked failed run. Label-escalation `issue` and `pull_request` reports keep
+    only the `run_refs` GitHub ties to them before any log read: the run is in
+    the source repository, completed `failure` / `timed_out` / `cancelled`, and
+    is linked by a trusted comment (OWNER/MEMBER/COLLABORATOR or
+    `github-actions[bot]`; the pipeline account in this repo), has a display
+    title equal to the issue title, or (PRs) belongs to the pull request.
+    Dropped refs log `provenance_rejected`; the escalation itself still
+    proceeds. The reporter lets only trusted authors' run links reorder its
+    title-matched runs. A failed run of another issue with an identical title
+    still matches.
     A report whose failure reason is `identical_failure_cap`, or a generation
     > 1 of its lineage, is deterministic (`is_deterministic_failure`): the
     intake never files it as `transient` (remaps to `inconclusive`,

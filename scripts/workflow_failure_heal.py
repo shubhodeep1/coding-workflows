@@ -143,6 +143,13 @@ PHASE_WRAPPER_WORKFLOW_FILES: dict[str, tuple[str, ...]] = {
 REVIEW_WRAPPER_WORKFLOW_FILES = ("ai-review.yml", "internal-review.yml", "review_autofix.yml", "review_rb_judge_dispatch.yml")
 RELEASE_WORKFLOW_FILES = ("test-and-mark-stable.yml", "mark-stable.yml", "promote-main-to-stable.yml", "auto-release-stable.yml", "forward-merge-stable-to-main.yml")
 PROVENANCE_KINDS = ("phase_failure", "autofix_failure", "workflow_run")
+# Label-escalation reports (issue #6514): their run references are checked per
+# reference before any job log is read, but the report itself is never
+# rejected, because the escalation label is valid without a linked run.
+LABEL_PROVENANCE_KINDS = ("issue", "pull_request")
+# Same conclusions select_failed_runs picks, so the intake keeps what the
+# reporter selected.
+LABEL_REPORTABLE_CONCLUSIONS = ("failure", "timed_out", "cancelled")
 PHASE_SUCCESS_COMMENT_PREFIXES: tuple[str, ...] = (
 	"<!-- ai:clarification-questions",
 	"Clarification required",
@@ -715,8 +722,18 @@ def build_issue_payload(
 	body = sanitize_text(issue.get("body"))
 	comment_texts = [sanitize_text(comment.get("body")) for comment in comments if isinstance(comment, dict)]
 	matching_runs = select_failed_runs(runs, title=str(issue.get("title") or ""))
-	commented_run_ids = {ref["run_id"] for ref in extract_run_refs([body, *comment_texts], repo)}
-	# A URL in a contributor-authored comment is a hint, never proof of a failed run.
+	# Only links from the issue's trusted author or a trusted automation comment
+	# reorder the title-matched runs; any other commenter's link is ignored.
+	# This is a priority hint only (the intake re-verifies every run reference
+	# before it reads logs), so it uses association / bot trust without the
+	# pipeline login, which the reporter does not know.
+	priority_texts = [body] if _trusted_heal_author(issue) else []
+	priority_texts += [
+		sanitize_text(comment.get("body")) for comment in comments
+		if isinstance(comment, dict) and _trusted_run_link_comment(comment, repo=repo, self_repo="", trusted_login="")
+	]
+	commented_run_ids = {ref["run_id"] for ref in extract_run_refs(priority_texts, repo)}
+	# A URL in a comment is a hint, never proof of a failed run.
 	matching_runs.sort(key=lambda run: run["run_id"] not in commented_run_ids)
 	run_refs = [{"repo": repo, "run_id": run["run_id"], "url": run["url"]} for run in matching_runs]
 	markers = _canonical_heal_markers(body) or {}
@@ -1741,6 +1758,84 @@ def _comment_author(comment: dict[str, Any]) -> str:
 	return str(login or "").strip().lower()
 
 
+def _trusted_run_link_comment(comment: Any, *, repo: str, self_repo: str, trusted_login: str) -> bool:
+	"""True when ``comment`` may vouch for a run link on an escalated issue / PR.
+
+	The author must have a login and be a trusted bot or have an OWNER /
+	MEMBER / COLLABORATOR association. In the workflow source repository
+	(``repo == self_repo``) the author must also be the pipeline account
+	``trusted_login``; an empty ``trusted_login`` then trusts no comment.
+	"""
+	if not isinstance(comment, dict):
+		return False
+	author = _comment_author(comment)
+	if not author:
+		return False
+	if author not in PHASE_REPORT_TRUSTED_BOT_LOGINS and comment.get("author_association") not in PHASE_REPORT_TRUSTED_ASSOCIATIONS:
+		return False
+	if self_repo and str(repo or "").lower() == self_repo.lower():
+		login = str(trusted_login or "").strip().lower()
+		return bool(login) and author == login
+	return True
+
+
+def _verify_label_run_refs(
+	payload: dict[str, Any], *, runs: Any, comments: list[dict[str, Any]] | None,
+	trusted_login: str, self_repo: str,
+) -> dict[str, Any]:
+	"""Filter a label escalation's run references to runs GitHub ties to it.
+
+	A reference is kept only when the GitHub-read run is in the source
+	repository, has the claimed id, completed with a reportable conclusion,
+	and is associated with the escalated issue / PR: a trusted comment links
+	it, its display title equals the issue title, or (pull requests only) it
+	belongs to the pull request. Missing comments or identity only disable the
+	comment criterion; the report itself is never rejected.
+	"""
+	kind = payload.get("source_kind")
+	refs = payload.get("run_refs") or []
+	repo = str(payload.get("source_repo") or "")
+	result: dict[str, Any] = {"status": "ok", "reason": "", "run_refs": [], "rejections": [], "pending_current_run": ""}
+	linked_ids: set[str] = set()
+	if isinstance(comments, list):
+		for comment in comments:
+			if _trusted_run_link_comment(comment, repo=repo, self_repo=self_repo, trusted_login=trusted_login):
+				linked_ids.update(item["run_id"] for item in extract_run_refs([sanitize_text(comment.get("body"))], repo, limit=1000))
+	issue_title = single_line(payload.get("issue_title"), 300)
+	issue_number = payload.get("issue_number")
+	for ref in refs:
+		run_id = str(ref.get("run_id") if isinstance(ref, dict) else "")
+		run = runs.get(run_id) if isinstance(runs, dict) else None
+		reason = ""
+		if not isinstance(run, dict):
+			reason = "run_lookup_failed"
+		elif not isinstance(run.get("repository"), dict) or str(run["repository"].get("full_name") or "").lower() != repo.lower():
+			reason = "repo_mismatch"
+		elif str(run.get("id")) != run_id:
+			reason = "run_id_mismatch"
+		elif run.get("status") != "completed" or run.get("conclusion") not in LABEL_REPORTABLE_CONCLUSIONS:
+			reason = "not_failed"
+		else:
+			linked = run_id in linked_ids
+			if not linked and issue_title:
+				linked = single_line(run.get("display_title"), 300) == issue_title
+			if not linked and kind == "pull_request" and _positive_int(issue_number) is not None:
+				if isinstance(run.get("pull_requests"), list):
+					linked = any(isinstance(pr, dict) and pr.get("number") == issue_number for pr in run["pull_requests"])
+				if not linked and run.get("event") == "workflow_dispatch":
+					title_match = _PR_RUN_NAME_RE.search(str(run.get("display_title") or ""))
+					linked = bool(title_match and str(issue_number) == title_match.group("n"))
+			if not linked:
+				reason = "not_linked_to_issue"
+		if reason:
+			result["rejections"].append({"run_id": run_id, "reason": reason})
+		else:
+			result["run_refs"].append(ref)
+	if not result["run_refs"]:
+		result["reason"] = "no_verified_runs"
+	return result
+
+
 def _run_workflow_file(run: dict[str, Any]) -> str | None:
 	path = run.get("path")
 	if not isinstance(path, str):
@@ -1760,8 +1855,9 @@ def verify_run_provenance(
 	kind = payload.get("source_kind")
 	refs = payload.get("run_refs") or []
 	result: dict[str, Any] = {"status": "not_applicable", "reason": "", "run_refs": refs, "rejections": [], "pending_current_run": ""}
+	if kind in LABEL_PROVENANCE_KINDS:
+		return _verify_label_run_refs(payload, runs=runs, comments=comments, trusted_login=trusted_login, self_repo=self_repo)
 	if kind not in PROVENANCE_KINDS:
-		# Label-escalation reports are outside this gate's approved scope.
 		return result
 	result["status"] = "rejected"
 	repo = payload.get("source_repo", "")
