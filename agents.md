@@ -266,6 +266,7 @@ pass that output to action inputs or through step-local environment variables,
 but must never interpolate it directly into `run:` script source.
 `tests/test_workflow_checkout_integration_ref_audit.py` pins the env-bound log
 contract for every resolver-consuming workflow.
+In `implement.yml`, issue title and body text must never use a fixed `GITHUB_ENV` delimiter; the body travels to later steps only through `ISSUE_BODY_FILE`.
 
 Plan prompt note: `PLAN_DIAGRAMS_OPTIONAL` defaults to `true`, so plan outputs
 may include `Data flow:`, `State machines:`, and `Failure modes:` only when
