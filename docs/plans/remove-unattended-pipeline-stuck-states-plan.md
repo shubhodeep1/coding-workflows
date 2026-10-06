@@ -2,7 +2,7 @@
 
 ## Summary
 
-Remove the stuck states found in the 2026-10-06 pipeline audit. When work stalls, the pipeline must retry with an LLM, change approach, and only then hand off to a person. A person is needed only when an LLM has failed three distinct times. In that case the item stays open, gets one line in a single standing "needs human" issue, and triggers one Telegram alert.
+Remove the stuck states found in the 2026-10-06 pipeline audit. When work stalls, the pipeline must retry with an LLM, change approach, and only then hand off to a person. A person is needed only when an LLM has failed three distinct times. In that case the item stays open, gets one line in a single standing "needs human" issue, and triggers one CRITICAL Telegram alert.
 
 ## Automation wiring (§18.E)
 
@@ -65,7 +65,7 @@ On 2026-10-06 the audit covered 112 open items. 15 were stuck and needed a perso
 - G3. Two consecutive identical failure signatures in the same issue route to the unblock judge, regardless of phase flips. Stall recovery never closes an issue on exhaustion.
 - G4. `stable` older than `RELEASE_BLOCKER_STABLE_STALE_SECS` (default 86400, as designed in `release-blocker-heal-reports-plan.md`) produces one Telegram alert and one heal issue per 24 h throttle window. A tracking issue parked on a human-latch label cannot hold the promote cycle longer than `PROMOTE_CYCLE_HOLD_MAX_HOURS`. Phase 4b's retry budget starts only when the adopted review run starts.
 - G5. The per-PR security pass audits only what changed since the last audited head and carries prior findings forward. Each cycle files at most one consolidated follow-up issue. High and critical findings on lines the PR wrote still block.
-- G6. Every human-only stop gets `UNBLOCK_MAX_ROUNDS_PER_ITEM` (default 3) distinct LLM rounds. After that, the item stays open, gets one entry in the needs-human digest, and sends one CRITICAL Telegram alert.
+- G6. Every human-only stop gets `UNBLOCK_MAX_ROUNDS_PER_ITEM` (default 3) distinct LLM rounds. After that, the item stays open, gets one entry in the needs-human digest, and makes one persisted CRITICAL Telegram send attempt.
 - G7. When a heal issue for a `harness-broken` project merges, the project is re-validated automatically. Required `changelog.d/` fragments and `tests/fixtures/` paths never trip the scope guard.
 - G8. Same-repo "Depends on: #N" waits resume automatically for every issue, and escalate after `DEPENDENCY_WAIT_ESCALATE_DAYS`.
 - G9. Clarify's snapshot contains every tracked text file. A `BLOCKED:` that cites a path present in git is retried, not parked.
@@ -311,14 +311,14 @@ Every phase is one PR to `main` and is independently mergeable. No phase assumes
 1. `scripts/unblock_ledger.py`: replace the constant `MAX_ROUNDS_PER_ITEM = 2` with `UNBLOCK_MAX_ROUNDS_PER_ITEM` env (default `3`, min 1, max 5). Keep the existing "never repeat a verdict for the same stop + fingerprint" rule so each round is distinct.
 2. `scripts/unblock_actions.py` terminal `close` path, when `NEEDS_HUMAN_DIGEST_ENABLED=true` (default):
    - Do not close.
-   - Apply `ai:needs-human` and record the terminal decision and parking time in the item's existing ledger entry. Do not mark digest/alert delivery complete yet. `ai:needs-human` is itself in `BLOCK_LABELS`: skip new judge rounds for parked items, but retry any undelivered notice on every poll tick.
+   - Apply `ai:needs-human` and record the terminal decision and parking time in the item's existing ledger entry. Do not mark digest delivery or the alert attempt complete yet. `ai:needs-human` is itself in `BLOCK_LABELS`: skip new judge rounds for parked items, but retry an undelivered digest or a not-yet-attempted alert on every poll tick.
    - A parked item becomes eligible again only on a new trigger after parking: a comment or label change by a trusted human, or a new PR head SHA. Ignore the poller's own writes and older events. On a trigger, remove `ai:needs-human` before clearing the parked state and resetting the round count to 0; if label removal fails, retain the parked state and retry the trigger next tick. The digest removal in step 3 follows the label loss.
    - Call `scripts/operator_step_issue.py upsert` with key `needs-human-<kind>-<n>` and a one-paragraph summary of the rounds tried.
-   - After the digest upsert is confirmed, send one CRITICAL Telegram and persist separate `digest_confirmed` and `alert_confirmed` receipts in the ledger. The key is stable across retries; check whether the entry already exists before retrying an ambiguous upsert. Retry known failures on the next tick without another LLM round or a duplicate confirmed send; a missing token/configuration keeps the notice pending and emits a warning. Do not mark a failed send confirmed.
+   - After the digest upsert is confirmed, validate Telegram configuration before recording an attempt. Persist `alert_attempted_at` in the ledger before calling Telegram; if that state write fails, do not send. Once the marker exists, never call Telegram for that item again, regardless of whether the response is success, explicit failure or ambiguous. Persist `alert_confirmed` and the returned message ID only on confirmed success. Missing configuration leaves the attempt unset for the next tick; a failed or ambiguous attempted send remains visible in the digest and logs but is not retried, preserving the one-alert invariant.
    - Security items already stay open; they get the digest entry too.
 3. `operator_step_issue.py`: add entry kind `needs-human`, rendered under a `## Needs human` heading in the same standing issue, plus a `remove` subcommand. The poller calls `remove` when the item closes or loses `ai:needs-human`, using the existing per-tick candidate listing. A failed removal retries; it never suppresses notice delivery for another item.
-   - API budget per item/tick: no new listing for an item already in the poller's candidate cache; at most the existing `operator_step_issue.py` bounded upsert reconciliation (3 attempts, each 2 list reads plus 1 write; one extra direct read on create/list lag), 1 label write, and 1 Telegram send on a known undelivered notice. Batch/cap pending items per tick; defer the rest to the next tick. A successful receipt costs zero further writes.
-4. Tests, README, `agents.md`, changelog.
+   - API budget per item/tick: no new listing for an item already in the poller's candidate cache; at most the existing `operator_step_issue.py` bounded upsert reconciliation (3 attempts, each 2 list reads plus 1 write; one extra direct read on create/list lag), 1 label write, and 1 Telegram send when `alert_attempted_at` is absent. Batch/cap pending items per tick; defer the rest to the next tick. An attempted alert costs zero further sends.
+4. Tests cover missing configuration (no attempt), attempt-state write failure (no send), confirmed delivery (no resend), explicit send failure (no resend), and ambiguous delivery (no resend); README, `agents.md`, changelog.
 
 ### P7 — Latch gaps
 1. Harness auto-revalidate (`HARNESS_HEAL_AUTO_REVALIDATE_ENABLED`, default `true`):
@@ -426,7 +426,7 @@ None (§10 N/A).
   - The final exhausted-head audit stays a full `merge-base..head` audit (`SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS` path unchanged).
   - High/critical findings still block.
 - **P6 parks items open forever.** The digest is a single standing issue with one line per item and a CRITICAL alert at entry. ACCEPTED: the operator chose open-and-digest over close (Q8: A).
-- **P6 notice delivery is not atomic across GitHub and Telegram.** A confirmed digest entry and a separate alert receipt keep known failures retryable without re-judging; an ambiguous Telegram response may have delivered even though the ledger records no confirmation, so retry can produce a second alert. Keep that case visible in logs instead of falsely marking an unconfirmed send as successful.
+- **P6 may lose an alert after recording the attempt.** The ledger write must precede the Telegram request to guarantee at most one send. A process crash after that write, or an explicit/ambiguous Telegram failure, leaves the digest entry as the durable fallback and does not retry the alert. ACCEPTED: avoiding duplicate alerts takes precedence over at-least-once Telegram delivery.
 - **P7 scope auto-allow becomes a bypass vector.** The allowance is limited to two globs with a hard-deny prefix list. Fixtures are data, not executed by pipeline code paths with credentials.
 - **P8 duplicates the confine plan if someone implements it separately.** P8 adds a "delivered by" note to that plan.
 - **P11b force-cancel on a run that is merely slow to start.** The 24 h cap is far above any legitimate queue time observed (max ~2 h).
