@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6436,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6436\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6446\",\"pr_number\":6446,\"branch\":\"ai/issue-6436\",\"run_id\":\"37399107184\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37399107184\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"agents.md\",\"changelog.d/6436-triage-omit-pr-agent-instructions.md\",\"prompts/_templates/mode-check-failure-triage.txt\",\"prompts/mode-check-failure-triage.txt\",\"scripts/check_failure_triage.sh\",\"scripts/clarify_isolated_run.sh\",\"tests/test_check_failure_triage_workflow_security.py\"]}",
+  "fingerprint": "a97d9f20b979582fdc2efba2a9a81faf5e335efb3a892575b9283c8e8a9c3794",
+  "lineage": {
+    "issue_number": 6436,
+    "parent_ids": [],
+    "pr_number": 6446,
+    "run_id": "37399107184",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37399107184",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6446"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261006014406_7d666361d1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6436,
+    "level": "run",
+    "pr_number": 6446,
+    "run_id": "37399107184"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6436: https://github.com/shubhodeep1/coding-workflows/pull/6446",
+  "timestamps": {
+    "created_at": "2026-10-06T01:44:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
