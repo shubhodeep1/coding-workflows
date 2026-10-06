@@ -16,6 +16,9 @@ words, shell negation (`!`), and simple `case` arms. Since their effective
 directory is uncertain, pushes check the session checkout and request
 confirmation unless blocked; commits in that context remain warning-only
 when not blocked.
+An env-wrapped commit whose directory cannot be resolved instead asks for
+confirmation without querying PRs for the session checkout, which may be a
+different repository.
 
 ---
 
@@ -57,7 +60,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
    same-repository `ai/issue-*` PRs on the same base that edit the same files (the queued marker is verified against the `GH_PAT` account before it can authorize a bypass; label
    `ai:merge-queued`; released by `cancel_on_pr_close.yml` on close and by
    `orchestrate_poll.yml` every tick; managed/standalone conflict and stall
-   recovery treat the label as an intentional wait), and the merge-topology gate hands a
+   recovery treat the label as an intentional wait). The one-shot bypass
+   requires an automation-authored queued marker and a later authorized label
+   removal. The merge-topology gate hands a
    content conflict to the resolver tail *before* the reviewer/editor spend
    (`PRE_REVIEW_CONFLICT_RESOLVE_ENABLED`, sets `AUTOFIX_PRE_REVIEW_RESOLVE`).
    The `gate` job also runs an identical-failure fingerprint cap: every
@@ -750,9 +755,11 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   `GIT_CONFIG_*` or `GIT_CONFIG` assignments, or an `env` wrapper, ask too:
   those per-command settings can affect the push destination, so the guard
   does not trust its stored URL or PR history for that push. Wrapped commits
-  are checked in the directory selected by `env -C` or `GIT_DIR`; a commit
-  from an ambiguous directory and an unparseable `env -S` command ask for
-  confirmation. A push from an unresolved directory (including an appended
+  are checked in the directory selected by `env -C` or `GIT_DIR`; an env-wrapped
+  commit whose directory cannot be resolved asks instead of querying the
+  session checkout. Other ambiguous commit directories warn and check the
+  checkout; an unparseable `env -S` command asks for confirmation. A push
+  from an unresolved directory (including an appended
   `GIT_DIR+=` / `GIT_WORK_TREE+=`, whose value is never applied) is checked
   against the session checkout, which can still block, and otherwise asks.
   Leading redirections, including those after environment assignments, do
