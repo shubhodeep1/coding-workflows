@@ -294,7 +294,8 @@ append_self_heal_semble_context()
 
 build_self_heal_serena_tool_hints()
 {
-	if [ "${SERENA_AVAILABLE:-false}" != "true" ]; then
+	# Isolated agents (scripts/codex_isolated_exec.sh) have no MCP server.
+	if [ -n "${CODEX_ISOLATED_EXEC:-}" ] || [ "${SERENA_AVAILABLE:-false}" != "true" ]; then
 		return 0
 	fi
 
@@ -303,6 +304,21 @@ build_self_heal_serena_tool_hints()
 		'- Serena MCP is available in this run. Prefer Serena symbol/navigation tools when they materially reduce shell reads while tracing which validation prompt instruction likely caused the failure.' \
 		'- Use Serena for evidence and focused navigation only; keep any proposed patch additive, prompt-only, and limited to the four allow-listed validation prompts.'
 }
+
+# The self-heal agent reads harness and container logs, so it runs in the
+# credential-free, network-isolated container (read-only snapshot). The
+# helper is the copy next to this script; the thread-reuse wrapper, when it
+# is first on PATH, routes through the same helper via the exported
+# CODEX_ISOLATED_* values.
+CODEX_ISOLATED_EXEC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex_isolated_exec.sh"
+CODEX_ISOLATED_MODE="read-only"
+export CODEX_ISOLATED_EXEC CODEX_ISOLATED_MODE
+unset CODEX_ISOLATED_ROOT
+self_heal_codex_cmd=(bash "${CODEX_ISOLATED_EXEC}" run --mode read-only --)
+self_heal_codex_path="$(command -v codex 2>/dev/null || true)"
+if [ -n "${self_heal_codex_path}" ] && head -c 4096 "${self_heal_codex_path}" 2>/dev/null | grep -q 'codex_thread_reuse.sh.* wrapper-main'; then
+	self_heal_codex_cmd=(codex)
+fi
 
 run_self_heal_codex()
 {
@@ -318,7 +334,7 @@ run_self_heal_codex()
 			--phase validate_self_heal \
 			--stdout-file "${SELF_HEAL_OUTPUT_FILE}" \
 			--status-file "${stall_status_file}" \
-			-- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}" 2> "${stderr_tmp}"
+			-- "${self_heal_codex_cmd[@]}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}" 2> "${stderr_tmp}"
 		rc=$?
 		set -e
 		if SELF_HEAL_STALL_STATE="$(read_codex_stall_guard_state "${stall_status_file}" 2>/dev/null)"; then
@@ -333,9 +349,9 @@ run_self_heal_codex()
 			--phase validate_self_heal \
 			--stdout-file "${SELF_HEAL_OUTPUT_FILE}" \
 			--stderr-file "${stderr_tmp}" \
-			-- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}"
+			-- "${self_heal_codex_cmd[@]}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}"
 	else
-		codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}" > "${SELF_HEAL_OUTPUT_FILE}" 2> "${stderr_tmp}"
+		"${self_heal_codex_cmd[@]}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}" > "${SELF_HEAL_OUTPUT_FILE}" 2> "${stderr_tmp}"
 	fi
 }
 

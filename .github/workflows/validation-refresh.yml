@@ -98,6 +98,9 @@ jobs:
           # daily refresh silently degrades to drift-monitoring only. Same secret
           # the rest of the codex pipeline (plan/implement/validate/...) uses.
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Codex version baked into the isolated discovery agent's image
+          # (scripts/codex_isolated_exec.sh).
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
           VALIDATION_DISCOVERY_ENABLED: ${{ github.event.inputs.discovery_enabled || vars.VALIDATION_DISCOVERY_ENABLED || 'true' }}
           VALIDATION_DISCOVERY_DRY_RUN: ${{ github.event.inputs.discovery_dry_run || vars.VALIDATION_DISCOVERY_DRY_RUN || 'false' }}
           VALIDATION_DISCOVERY_DEDUP_DAYS: ${{ vars.VALIDATION_DISCOVERY_DEDUP_DAYS || '7' }}
