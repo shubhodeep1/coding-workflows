@@ -903,7 +903,11 @@ case "$1" in
     case "${8:-}" in WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE) [ "$claude_access" = read ] || exit 2 ;; esac
     printf '%s\\n' "$MOCK_CODEX_JSON" > "$3"
     if [ "${9:-write}" = write ] && [ -n "${MOCK_CODEX_TOUCH_FILE:-}" ]; then
-      printf 'mock change\\n' >> "$MOCK_CODEX_TOUCH_FILE"
+      while IFS= read -r mock_touch_path; do
+        [ -n "${mock_touch_path}" ] || continue
+        mkdir -p -- "$(dirname -- "${mock_touch_path}")"
+        printf 'mock change\\n' >> "${mock_touch_path}"
+      done <<< "${MOCK_CODEX_TOUCH_FILE}"
     fi ;;
   *) exit 2 ;;
 esac

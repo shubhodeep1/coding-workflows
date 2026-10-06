@@ -8838,7 +8838,8 @@ EOF
 #
 # Usage: invoke_judge_for_integration_conflict <final_pr> <integration_branch> <default_branch>
 # Returns: 0 on successful resolver dispatch, 1 on failure, 2 on isolation deferral,
-#          3 when an existing resolver run already owns this PR.
+#          3 when an existing resolver run already owns this PR,
+#          4 when guidance could not be published for the resolver.
 invoke_judge_for_integration_conflict() {
   local final_pr="$1"
   local integration_branch="$2"
@@ -9039,6 +9040,7 @@ invoke_judge_for_integration_conflict() {
     }
   else
     local integration_judge_rc=0 integration_judge_verdict integration_diagnosis integration_guidance integration_dispatch_rc=0
+    local integration_guidance_marker=""
     if ! pushd "${judge_wt}" >/dev/null; then
       rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
       _integration_judge_remove_worktree "${judge_wt}"
@@ -9064,11 +9066,29 @@ invoke_judge_for_integration_conflict() {
     _clear_judge_isolation_state INTEGRATION_JUDGE "${STATE_FILE}" verdict "${TRACKING_NUM}" || true
     integration_diagnosis="$(printf '%s' "${integration_judge_verdict}" | jq -r '.diagnosis | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;")')"
     integration_guidance="$(printf '%s' "${integration_judge_verdict}" | jq -r '.resolution_guidance | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;")')"
-    post_tracking_comment "## Integration conflict diagnosis
+    if [ "$(printf '%s' "${integration_judge_verdict}" | jq -r '.action')" = redispatch_resolver ]; then
+      integration_guidance_marker="
+
+<!-- ai:integration-judge-guidance:v1 pr=${final_pr} head=$(git -C "${judge_wt}" rev-parse HEAD) base=$(git -C "${judge_wt}" rev-parse "refs/remotes/origin/${default_branch}") -->"
+    fi
+    local integration_comment_body="## Integration conflict diagnosis
 
 Final PR #${final_pr}: ${integration_diagnosis}
 
-Resolver guidance: ${integration_guidance}" || true
+Resolver guidance: ${integration_guidance}${integration_guidance_marker}"
+    if [ -n "${integration_guidance_marker}" ]; then
+      local integration_comment_result=""
+      integration_comment_result="$(post_issue_comment_json "${TRACKING_NUM}" "${integration_comment_body}")" || true
+      if ! printf '%s' "${integration_comment_result}" | jq -e '.id | type == "number"' >/dev/null 2>&1; then
+        echo "::warning::Integration judge guidance could not be published for PR #${final_pr}; deferring resolver dispatch." >&2
+        rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+        _integration_judge_remove_worktree "${judge_wt}"
+        rm -rf -- "${baseline_dir}"
+        return 4
+      fi
+    else
+      post_tracking_comment "${integration_comment_body}" || true
+    fi
     if [ "$(printf '%s' "${integration_judge_verdict}" | jq -r '.action')" != redispatch_resolver ]; then
       rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
       _integration_judge_remove_worktree "${judge_wt}"
@@ -10852,9 +10872,20 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
   # dispatching one more resolver run.
   if [ "${unresolved_ticks}" -ge "${effective_max_retries}" ]; then
     local integration_judge_result=0
+    # A resolver can span several ticks. Check before spending a judge call;
+    # the dispatch helper checks again afterward to cover a concurrent start.
+    if grep -qx "${final_pr}" "${_CONFLICT_DISPATCH_TRACKER}" 2>/dev/null || \
+       _has_active_autofix_run "${final_pr}" "${integration_branch}"; then
+      echo '  [integration-heal] Resolver already in flight; deferring judge dispatch accounting.'
+      return 0
+    fi
     invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" || integration_judge_result=$?
     if [ "${integration_judge_result}" -eq 3 ]; then
       echo '  [integration-heal] Resolver already in flight; deferring judge dispatch accounting.'
+      return 0
+    fi
+    if [ "${integration_judge_result}" -eq 4 ]; then
+      echo '::warning::Integration judge guidance unavailable; deferring without consuming conflict dispatch budget.' >&2
       return 0
     fi
     if [ "${integration_judge_result}" -eq 2 ]; then
