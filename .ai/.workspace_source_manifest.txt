@@ -197,6 +197,7 @@ changelog.d/5889-release-gates-claude-assets.md
 changelog.d/5892-heal-autofix-fingerprint-header.md
 changelog.d/5964-reviewer-infra-nonblocking.md
 changelog.d/5999-restore-scoped-smoke-run-lookups.md
+changelog.d/6031-repo-checks-import-audit-in-container.md
 changelog.d/6055-review-editor-edits-reach-work-tree.md
 changelog.d/6118-ci-failure-triage-workflow-run.md
 changelog.d/6118-implement-claude-cli-config-path.md
@@ -207,6 +208,7 @@ changelog.d/6118-phase-3-claude-engine-plumbing.md
 changelog.d/6118-phase-4-claude-pool-broker.md
 changelog.d/6118-phase-5a-clarify-plan-on-claude.md
 changelog.d/6118-phase-5b-implement-on-claude.md
+changelog.d/6118-phase-5c-judges-and-review-on-claude.md
 changelog.d/6118-phase-6-engine-label.md
 changelog.d/6118-phase-7-unblock-judge.md
 changelog.d/6118-phase-8a-single-issue-security-pass.md
@@ -228,9 +230,12 @@ changelog.d/6231-integration-judge-scope-guard.md
 changelog.d/6232-unblock-judge-claude-isolation.md
 changelog.d/6233-scope-override-protected-paths.md
 changelog.d/6234-unblock-pr-project-binding.md
+changelog.d/6237-isolate-claude-review-roles.md
+changelog.d/6238-claude-read-profile-no-shell.md
 changelog.d/6248-static-context-symlink-guard.md
 changelog.d/6249-merge-guard-ampersand-redirect.md
 changelog.d/6254-pr-tree-python-safe-path.md
+changelog.d/6255-review-sandbox-transfer-diagnostics.md
 changelog.d/6262-clarify-respond-standalone.md
 changelog.d/6268-unblock-override-bound-to-rejection.md
 changelog.d/6269-unblock-untrusted-pr-fail-closed.md
@@ -254,8 +259,12 @@ changelog.d/6322-pr-merge-guard-single-json-output.md
 changelog.d/6323-check-triage-isolated-diagnosis.md
 changelog.d/6324-review-blocked-fix-scope-guard.md
 changelog.d/6325-review-blocked-fix-target-provenance.md
+changelog.d/6337-rb-judge-no-host-fallback.md
 changelog.d/6347-security-audit-full-scan-oversized-chunks.md
 changelog.d/6348-dependency-registry-proxy.md
+changelog.d/6357-rb-judge-sandbox-fail-closed.md
+changelog.d/6358-poller-judges-isolated-sandbox.md
+changelog.d/6359-rb-judge-atomic-transfer.md
 changelog.d/6360-integration-judge-protected-provenance.md
 changelog.d/6362-deps-network-without-source.md
 changelog.d/6364-triage-routing-metadata-neutralize.md
@@ -267,6 +276,9 @@ changelog.d/6388-review-blocked-pr-head-identity.md
 changelog.d/6389-review-blocked-fix-scope-pr-files-only.md
 changelog.d/6390-review-blocked-workflow-opt-out-paths.md
 changelog.d/6391-sync-pr-lookup-verifies-base.md
+changelog.d/6397-conflict-resolver-sandbox-only.md
+changelog.d/6398-rb-judge-no-host-opencode-fallback.md
+changelog.d/6399-judge-isolation-latch-label-fetch.md
 changelog.d/6400-rb-judge-security-severity-block.md
 changelog.d/6401-single-issue-security-pass-completed-audit.md
 changelog.d/6402-triage-host-python-isolation.md
@@ -277,11 +289,14 @@ changelog.d/6420-release-gate-claude-parity.md
 changelog.d/6435-prompt-audit-claude-config.md
 changelog.d/6436-triage-omit-pr-agent-instructions.md
 changelog.d/6455-rb-fix-sandbox-workspace.md
+changelog.d/6461-consolidator-opencode-sandbox.md
 changelog.d/6467-phase-report-provenance.md
 changelog.d/6486-workflow-heal-security-pass.md
+changelog.d/6500-merge-train-fork-blockers.md
 changelog.d/6512-heal-evidence-routing-neutralize.md
 changelog.d/autofix-cap-and-security-exhaustion-judge.md
 changelog.d/claude-branch-push-pr-grace-window.md
+changelog.d/conflict-resolver-sandbox-fail-closed.md
 changelog.d/release-smoke-run-lookup.md
 changelog.d/review-tier-random-reviewers.md
 changelog.d/reviewer-panel-gemini-3-1-flash-lite.md
@@ -919,6 +934,7 @@ tests/test_orchestrate_poll_stages_readiness_script.py
 tests/test_orchestrate_poll_workflow_contract.py
 tests/test_orchestrator_completion_lessons.py
 tests/test_orchestrator_concurrency_caps.py
+tests/test_orchestrator_judges_claude_engine.py
 tests/test_overlap_validation_fallback.py
 tests/test_phase_prompt_untrusted_context_contract.py
 tests/test_phase_skip_gate_telemetry_contract.py
@@ -976,6 +992,7 @@ tests/test_review_commit_new_files_preserved.py
 tests/test_review_conflict_resolve_reasoning_step_down.py
 tests/test_review_conflict_resolve_retry_prelude_render.py
 tests/test_review_conflict_resolve_retry_state.py
+tests/test_review_conflict_resolve_sandbox_only.py
 tests/test_review_conflict_resolve_smoke_deterministic.py
 tests/test_review_dispatch_default_branch.py
 tests/test_review_editor_fifo_drain.py
@@ -997,6 +1014,7 @@ tests/test_review_reject_verify.py
 tests/test_review_rereview_and_approval_rubric.py
 tests/test_review_resolve_review_threads.py
 tests/test_review_reviewer_attempt_prompt_isolation.py
+tests/test_review_sandbox_claude_roles.py
 tests/test_review_semble_contract.py
 tests/test_review_static_context_readme.py
 tests/test_review_surface_prompt_hardening.py

@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -16,6 +17,8 @@ FLOOR_SCRIPT = REPO_ROOT / "scripts" / "review_floor_rules.sh"
 CONSOLIDATE_SCRIPT = REPO_ROOT / "scripts" / "review_consolidate.sh"
 PARSER_SCRIPT = REPO_ROOT / "scripts" / "review_parse_consolidator.sh"
 LEDGER_SCRIPT = REPO_ROOT / "scripts" / "review_issue_ledger.sh"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from test_review_autofix_claude_fixer_mode import install_consolidator_mock_support  # noqa: E402
 
 
 def _isolated_test_env(extra_env: dict[str, str] | None = None, *, cwd: Path | None = None) -> dict[str, str]:
@@ -108,11 +111,14 @@ def _run_stage_chain(
 	mock_bin_dir: Path | None,
 	consolidator_enabled: str,
 ) -> dict[str, subprocess.CompletedProcess[str]]:
+	support_dir = install_consolidator_mock_support(workspace_dir)
 	env = _isolated_test_env(
 		{
 			"PYTHONDONTWRITEBYTECODE": "1",
 			"RUNTIME_DIR": str(runtime_dir),
-			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"SUPPORT_SCRIPTS_DIR": str(support_dir),
+			"MOCK_CONSOLIDATOR_ROOT": str(workspace_dir / "isolated"),
+			"MOCK_CONSOLIDATOR_CALLS": str(workspace_dir / "calls"),
 			"SUPPORT_PROMPTS_DIR": str(REPO_ROOT / "prompts"),
 			"PR_NUMBER": "4242",
 			"AUTOFIX_ITERATION": "1",

@@ -136,7 +136,7 @@ class CheckFailureTriageWorkflowSecurityTests(unittest.TestCase):
 		self.assertIn('CLARIFY_SOURCE_ROOT="${SOURCE_ROOT}"', triage)
 		self.assertNotIn('cd "${SOURCE_ROOT}"', triage)
 		self.assertIn('python3 -I -B - "${source_root}" "${run_root}/source"', helper)
-		self.assertIn('python3 -I -B scripts/clarify_openrouter_broker.py broker', helper)
+		self.assertIn('python3 -I -B "${support}/clarify_openrouter_broker.py" broker', helper)
 		self.assertIn('python3 -I -B "${engine_dir}/claude_anthropic_relay.py" broker', helper)
 		self.assertIn('python3 -I -B "${_AI_ENGINE_DIR}/claude_engine.py"', engine)
 		for script in (triage, engine):

@@ -47,27 +47,27 @@
       "profile": "write"
     },
     "ORCHESTRATE": {
-      "engine": "codex",
+      "engine": "claude",
       "claude_model": "claude-opus-5-5",
       "profile": "write"
     },
     "WAVE_JUDGE": {
-      "engine": "codex",
+      "engine": "claude",
       "claude_model": "claude-opus-5-5",
       "profile": "write"
     },
     "STALL_JUDGE": {
-      "engine": "codex",
+      "engine": "claude",
       "claude_model": "claude-opus-5-5",
       "profile": "write"
     },
     "INTEGRATION_JUDGE": {
-      "engine": "codex",
+      "engine": "claude",
       "claude_model": "claude-opus-5-5",
       "profile": "write"
     },
     "SECURITY_JUDGE": {
-      "engine": "codex",
+      "engine": "claude",
       "claude_model": "claude-opus-5-5",
       "profile": "read"
     },
@@ -77,22 +77,22 @@
       "profile": "read"
     },
     "REVIEW_EDITOR": {
-      "engine": "codex",
+      "engine": "claude",
       "claude_model": "claude-opus-5-5",
       "profile": "write"
     },
     "REVIEW_CONSOLIDATOR": {
-      "engine": "codex",
+      "engine": "claude",
       "claude_model": "claude-opus-5-5",
       "profile": "write"
     },
     "CONFLICT_RESOLVER": {
-      "engine": "codex",
+      "engine": "claude",
       "claude_model": "claude-opus-5-5",
       "profile": "write"
     },
     "RB_JUDGE": {
-      "engine": "codex",
+      "engine": "claude",
       "claude_model": "claude-opus-5-5",
       "profile": "write"
     },

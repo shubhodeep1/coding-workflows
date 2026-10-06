@@ -391,6 +391,100 @@ def test_bridge_rejects_an_oversized_length_with_valid_other_headers(chain) -> N
 	connection.endheaders()
 	assert connection.getresponse().status == 400
 	connection.close()
+
+
+def test_broker_rejection_does_not_wait_for_an_unfinished_body(chain, monkeypatch: pytest.MonkeyPatch) -> None:
+	rejected_timeouts = []
+	original_reject = relay.Relay._reject
+
+	def record_rejection(handler, status):
+		rejected_timeouts.append(handler.connection.gettimeout())
+		return original_reject(handler, status)
+
+	monkeypatch.setattr(relay.Relay, "_reject", record_rejection)
+	connection = relay.UnixHTTPConnection(chain["socket"])
+	connection.putrequest("POST", "/v1/messages")
+	connection.putheader("Content-Type", "application/json")
+	connection.putheader("Authorization", "Bearer mine")
+	connection.putheader("Content-Length", "1048576")
+	connection.endheaders()
+	connection.sock.settimeout(3)
+	response = connection.getresponse()
+	assert response.status == 400
+	response.read()
+	connection.close()
+	assert rejected_timeouts == [1]
+	assert _Upstream.seen == []
+
+
+def test_broker_rejection_ignores_peer_reset_during_response(chain, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+	def reset_on_write(_handler, _status, _message):
+		raise ConnectionResetError("peer disconnected")
+
+	monkeypatch.setattr(relay.Relay, "send_error", reset_on_write)
+	connection = relay.UnixHTTPConnection(chain["socket"])
+	connection.request("POST", "/v1/messages", b"{}", {"Content-Type": "application/json", "Authorization": "Bearer mine"})
+	with pytest.raises(http.client.RemoteDisconnected):
+		connection.getresponse()
+	connection.close()
+	assert "Traceback" not in capsys.readouterr().err
+	assert _Upstream.seen == []
+
+
+def test_broker_rejection_ignores_peer_abort_during_response(chain, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+	def abort_on_write(_handler, _status, _message):
+		raise ConnectionAbortedError("peer disconnected")
+
+	monkeypatch.setattr(relay.Relay, "send_error", abort_on_write)
+	connection = relay.UnixHTTPConnection(chain["socket"])
+	connection.request("POST", "/v1/messages", b"{}", {"Content-Type": "application/json", "Authorization": "Bearer mine"})
+	with pytest.raises(http.client.RemoteDisconnected):
+		connection.getresponse()
+	connection.close()
+	assert "Traceback" not in capsys.readouterr().err
+	assert _Upstream.seen == []
+
+
+def test_broker_rejection_reports_unexpected_write_error(chain, monkeypatch: pytest.MonkeyPatch) -> None:
+	def unexpected_write_error(_handler, _status, _message):
+		raise OSError("rejection write failed")
+
+	reported_write_error = threading.Event()
+	def record_error(_server, _request, _client_address):
+		reported_write_error.set()
+
+	monkeypatch.setattr(relay.Relay, "send_error", unexpected_write_error)
+	monkeypatch.setattr(relay.UnixHTTPServer, "handle_error", record_error)
+	connection = relay.UnixHTTPConnection(chain["socket"])
+	connection.request("POST", "/v1/messages", b"{}", {"Content-Type": "application/json", "Authorization": "Bearer mine"})
+	with pytest.raises(http.client.RemoteDisconnected):
+		connection.getresponse()
+	connection.close()
+	assert reported_write_error.wait(2)
+	assert _Upstream.seen == []
+
+
+@pytest.mark.parametrize("payload, extra_length", [
+	(b"not-json", 0),
+	(b'{"model":"claude-other-9"}', 0),
+	(b'{"model":"claude-opus-5-5"}', 10),
+])
+def test_broker_late_rejections_ignore_peer_disconnect(chain, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, payload: bytes, extra_length: int) -> None:
+	def abort_on_write(_handler, _status, _message):
+		raise ConnectionAbortedError("peer disconnected")
+
+	monkeypatch.setattr(relay.Relay, "send_error", abort_on_write)
+	connection = relay.UnixHTTPConnection(chain["socket"])
+	connection.putrequest("POST", "/v1/messages")
+	connection.putheader("Content-Type", "application/json")
+	connection.putheader("Content-Length", str(len(payload) + extra_length))
+	connection.endheaders()
+	connection.send(payload)
+	connection.sock.shutdown(socket.SHUT_WR)
+	with pytest.raises(http.client.RemoteDisconnected):
+		connection.getresponse()
+	connection.close()
+	assert "Traceback" not in capsys.readouterr().err
 	assert _Upstream.seen == []
 
 
@@ -488,11 +582,17 @@ def test_rejected_body_drain_resets_timeout_after_read_error(monkeypatch) -> Non
 	assert connection.settimeout.call_count == 2
 
 
-def test_upstream_failure_is_a_bare_502(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("peer_error_type", [None, TimeoutError, ConnectionRefusedError])
+def test_upstream_failure_is_a_bare_502(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, peer_error_type: type[OSError] | None) -> None:
 	def refused(host, timeout=None, context=None):
 		return http.client.HTTPConnection("127.0.0.1", 9, timeout=2)
 
 	monkeypatch.setattr(http.client, "HTTPSConnection", refused)
+	if peer_error_type is not None:
+		def fail_on_write(_handler, _status, _message):
+			raise peer_error_type("peer stopped reading")
+
+		monkeypatch.setattr(relay.Relay, "send_error", fail_on_write)
 	sock = str(tmp_path / "s.sock")
 	broker = relay.UnixHTTPServer(sock, relay.Relay)
 	broker.mode = "broker"
@@ -502,10 +602,16 @@ def test_upstream_failure_is_a_bare_502(tmp_path: Path, monkeypatch: pytest.Monk
 	try:
 		connection = relay.UnixHTTPConnection(sock)
 		connection.request("POST", "/v1/messages", json.dumps({"model": MODEL}).encode(), {"Content-Type": "application/json"})
-		response = connection.getresponse()
-		body = response.read()
-		assert response.status == 502
-		assert REAL_TOKEN.encode() not in body
+		if peer_error_type is not None:
+			with pytest.raises(http.client.RemoteDisconnected):
+				connection.getresponse()
+			assert "Traceback" not in capsys.readouterr().err
+		else:
+			response = connection.getresponse()
+			body = response.read()
+			assert response.status == 502
+			assert REAL_TOKEN.encode() not in body
+		connection.close()
 	finally:
 		broker.shutdown()
 		broker.server_close()
