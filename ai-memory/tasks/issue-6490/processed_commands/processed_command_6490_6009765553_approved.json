@@ -5,13 +5,28 @@
   "entry_id": "processed_command_6490_6009765553_approved",
   "issue_number": 6490,
   "metadata": {
+    "branch": "ai/issue-6490",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/orchestrate.yml",
+      "agents.md",
+      "changelog.d/6490-orchestrate-decomposer-isolation.md",
+      "scripts/clarify_isolated_run.sh",
+      "tests/test_orchestrator_judges_claude_engine.py",
+      "tests/test_plan_clarify_blocked_output.py"
+    ],
+    "issue_number": 6490,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6490",
+    "pr_number": 6498,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6498",
+    "run_attempt": "1",
+    "run_id": "37417159309",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37417159309"
   },
   "run_attempt": 1,
   "run_id": "37417159309",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-06T05:14:34Z",
+  "status": "completed",
+  "timestamp": "2026-10-06T05:32:34Z",
   "workflow": "implement"
 }
