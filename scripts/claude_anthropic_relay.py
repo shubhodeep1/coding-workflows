@@ -155,7 +155,10 @@ class Relay(http.server.BaseHTTPRequestHandler):
 			self.connection.settimeout(1)
 		except OSError:
 			pass
-		self.send_error(status, "Request rejected")
+		try:
+			self.send_error(status, "Request rejected")
+		except (ConnectionError, TimeoutError):
+			pass  # The rejection is terminal even when its response cannot be delivered.
 		self.close_connection = True
 
 	def do_POST(self):
@@ -259,10 +262,7 @@ class Relay(http.server.BaseHTTPRequestHandler):
 		except (OSError, http.client.HTTPException):
 			# Do not echo upstream diagnostics: they can include provider data.
 			if not headers_sent and not self.wfile.closed:
-				try:
-					self._reject(502)
-				except OSError:
-					pass
+				self._reject(502)
 		finally:
 			if connection is not None:
 				connection.close()
