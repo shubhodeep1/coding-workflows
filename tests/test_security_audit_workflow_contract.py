@@ -2131,8 +2131,69 @@ def test_security_audit_full_scan_oversized_cap_reports_coverage_note() -> None:
 		assert "Coverage: partial — 1 tracked text files over the export caps were not inspected" in comment
 		assert "`large.py` (2400000 bytes, over_file_cap)" in comment
 		assert "the last-audited-commit marker was not moved" in comment
+		assert "oversized scoped=0 unscoped=1 text_capped=1" in proc.stdout
 		assert "coverage=partial skipped_text=1" in proc.stdout
-		assert not any("ai:security-audit-last-sha:" in body for body in result.get("issue_edit_bodies", []))
+		assert any("ai:security-audit-partial-coverage:v1" in body for body in result["issue_edit_bodies"])
+		assert not any("ai:security-audit-last-sha:" in body for body in result["issue_edit_bodies"])
+
+
+def test_security_audit_partial_full_scan_forces_full_scope_until_complete() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-partial-repeat-") as td:
+		repo_dir, _base_sha, last_audited_sha = _oversized_fixture_repo(Path(td))
+		(repo_dir / "small.py").write_text("new = 1\n", encoding="utf-8")
+		subprocess.run(["git", "add", "small.py"], cwd=repo_dir, check=True)
+		subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "small"], cwd=repo_dir, check=True)
+		state = _security_audit_tracker_state()
+		state["issue_list_responses"][0][0]["body"] += f"<!-- ai:security-audit-last-sha:{last_audited_sha} -->\n"
+		state["api_responses"] = [[[]]]
+		audit_env = {
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES": "1048576",
+		}
+		first_run, first_result = _run_security_audit(state, cwd=repo_dir, extra_env={
+			**audit_env, "SECURITY_AUDIT_INCREMENTAL": "false",
+		})
+		assert first_run.returncode == 0, first_run.stderr
+		partial_body = first_result["issue_edit_bodies"][0]
+		assert f"<!-- ai:security-audit-last-sha:{last_audited_sha} -->" in partial_body
+		assert "<!-- ai:security-audit-partial-coverage:v1 -->" in partial_body
+
+		state = _security_audit_tracker_state()
+		state["issue_list_responses"][0][0]["body"] = partial_body
+		state["api_responses"] = [[[]]]
+		second_run, second_result = _run_security_audit(state, cwd=repo_dir, extra_env=audit_env)
+		assert second_run.returncode == 0, second_run.stderr
+		assert "scope=full (previous default-branch full scan skipped over-cap text" in second_run.stdout
+		assert "Coverage: partial" in second_result["issue_comment_bodies"][0]
+		assert f"<!-- ai:security-audit-last-sha:{last_audited_sha} -->" in second_result["issue_edit_bodies"][0]
+
+		subprocess.run(["git", "rm", "large.py"], cwd=repo_dir, check=True, capture_output=True)
+		subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "remove large"], cwd=repo_dir, check=True)
+		new_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_dir, text=True).strip()
+		state = _security_audit_tracker_state()
+		state["issue_list_responses"][0][0]["body"] = second_result["issue_edit_bodies"][0]
+		state["api_responses"] = [[[]]]
+		third_run, third_result = _run_security_audit(state, cwd=repo_dir, extra_env=audit_env)
+		assert third_run.returncode == 0, third_run.stderr
+		assert "scope=full (previous default-branch full scan skipped over-cap text" in third_run.stdout
+		assert f"<!-- ai:security-audit-last-sha:{new_sha} -->" in third_result["issue_edit_bodies"][0]
+		assert "ai:security-audit-partial-coverage:v1" not in third_result["issue_edit_bodies"][0]
+
+
+def test_security_audit_partial_state_persists_before_codex_failure() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-partial-codex-failure-") as td:
+		repo_dir, _base_sha, _head_sha = _oversized_fixture_repo(Path(td))
+		state = _security_audit_tracker_state()
+		state["api_responses"] = [[[]]]
+		proc, result = _run_security_audit(state, cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES": "1048576",
+			"MOCK_CODEX_EXIT_CODE": "1",
+		})
+		assert proc.returncode != 0
+		assert result.get("codex_calls")
+		assert any("ai:security-audit-partial-coverage:v1" in body for body in result["issue_edit_bodies"])
+		assert result.get("issue_comment_bodies", []) == []
 
 
 def test_security_audit_full_scan_binary_over_cap_still_advances_marker() -> None:

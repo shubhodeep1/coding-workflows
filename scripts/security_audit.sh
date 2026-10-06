@@ -546,6 +546,7 @@ TRACKER_TITLE="AI Security Audit Tracker"
 TRACKER_MARKER="<!-- ai:security-audit-tracker:v1 -->"
 FOLLOWUP_MARKER_PREFIX="<!-- ai:security-finding:"
 LAST_SHA_MARKER_PREFIX="<!-- ai:security-audit-last-sha:"
+PARTIAL_COVERAGE_MARKER="<!-- ai:security-audit-partial-coverage:v1 -->"
 # Past this many changed files an incremental diff stops being cheaper than a
 # full audit, so the scope resolver falls back to the full default-branch scope.
 SECURITY_AUDIT_INCREMENTAL_MAX_FILES="200"
@@ -611,6 +612,7 @@ if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 fi
 
 LAST_AUDITED_SHA=""
+TRACKER_PARTIAL_COVERAGE="false"
 TRACKER_NUMBER=""
 TRACKER_STATE=""
 
@@ -634,7 +636,7 @@ gh_retry gh issue list \
 	--limit 50 \
 		--json number,title,body,state,url > "${TRACKER_CANDIDATES_JSON}"
 
-python3 - "${TRACKER_CANDIDATES_JSON}" "${TRACKER_MARKER}" "${LAST_SHA_MARKER_PREFIX}" > "${TRACKER_SELECTION_ENV}" <<'PY'
+python3 - "${TRACKER_CANDIDATES_JSON}" "${TRACKER_MARKER}" "${LAST_SHA_MARKER_PREFIX}" "${PARTIAL_COVERAGE_MARKER}" > "${TRACKER_SELECTION_ENV}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -646,6 +648,7 @@ from pathlib import Path
 candidates_path = Path(sys.argv[1])
 marker = sys.argv[2]
 last_sha_marker_prefix = sys.argv[3]
+partial_coverage_marker = sys.argv[4]
 
 try:
 	candidates = json.loads(candidates_path.read_text(encoding="utf-8"))
@@ -666,6 +669,7 @@ for candidate in candidates:
 number = ""
 state = ""
 last_audited_sha = ""
+partial_coverage = False
 if isinstance(selected, dict):
 	number = str(selected.get("number") or "").strip()
 	state = str(selected.get("state") or "").strip()
@@ -677,10 +681,12 @@ if isinstance(selected, dict):
 	)
 	if last_sha_match is not None:
 		last_audited_sha = last_sha_match.group(1).strip().lower()
+	partial_coverage = partial_coverage_marker in str(selected.get("body") or "")
 
 print(f"TRACKER_NUMBER={shlex.quote(number)}")
 print(f"TRACKER_STATE={shlex.quote(state)}")
 print(f"LAST_AUDITED_SHA={shlex.quote(last_audited_sha)}")
+print(f"TRACKER_PARTIAL_COVERAGE={'true' if partial_coverage else 'false'}")
 PY
 
 # shellcheck disable=SC1090
@@ -772,6 +778,8 @@ if [ -n "${SECURITY_AUDIT_DIFF_BASE}" ]; then
 	fi
 elif [ -z "${HEAD_SHA}" ]; then
 	AUDIT_SCOPE_REASON="checkout is not a git repository; scope gates fail open to a full audit"
+elif [ "${TRACKER_PARTIAL_COVERAGE}" = "true" ]; then
+	AUDIT_SCOPE_REASON="previous default-branch full scan skipped over-cap text; repeating the full audit"
 elif [ -n "${LAST_AUDITED_SHA}" ]; then
 	if [ "${LAST_AUDITED_SHA}" = "${HEAD_SHA}" ]; then
 		if security_audit_flag_enabled "${SECURITY_AUDIT_SKIP_IF_UNCHANGED}"; then
@@ -1312,7 +1320,27 @@ PY
 	exit 1
 fi
 read -r OVERSIZED_SCOPED_COUNT OVERSIZED_UNSCOPED_COUNT OVERSIZED_TEXT_CAPPED_COUNT <<< "${OVERSIZED_COUNTS}"
-echo "security-audit: oversized scoped=${OVERSIZED_SCOPED_COUNT} unscoped=${OVERSIZED_UNSCOPED_COUNT}"
+echo "security-audit: oversized scoped=${OVERSIZED_SCOPED_COUNT} unscoped=${OVERSIZED_UNSCOPED_COUNT} text_capped=${OVERSIZED_TEXT_CAPPED_COUNT}"
+
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] \
+		&& [ -z "${SECURITY_AUDIT_TARGET_REF}" ] \
+		&& [ "${OVERSIZED_TEXT_CAPPED_COUNT}" -gt 0 ]; then
+	# Persist incomplete coverage before invoking the model or publishing
+	# findings, so any later failure still forces the next default-branch run
+	# back through the full repository.
+	{
+		cat "${TRACKER_BODY_FILE}"
+		echo
+		if [ -n "${LAST_AUDITED_SHA}" ]; then
+			echo "Last audited commit (managed automatically; do not edit):"
+			echo "${LAST_SHA_MARKER_PREFIX}${LAST_AUDITED_SHA} -->"
+		fi
+		echo "${PARTIAL_COVERAGE_MARKER}"
+	} > "${TRACKER_BODY_WITH_SHA_FILE}"
+	gh_retry gh issue edit "${TRACKER_NUMBER}" \
+		--repo "${GITHUB_REPOSITORY}" \
+		--body-file "${TRACKER_BODY_WITH_SHA_FILE}"
+fi
 
 SECURITY_AUDIT_RENDER_HELPER="${SECURITY_AUDIT_SUPPORT_DIR}/scripts/render_prompt.sh"
 SECURITY_AUDIT_PROMPT_PATH="${SECURITY_AUDIT_SUPPORT_DIR}/prompts/mode-security-audit.txt"
