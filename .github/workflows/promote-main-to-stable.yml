@@ -67,7 +67,10 @@ name: Promote main to stable
       test_repo:
         description: >
           Forwarded to test-and-mark-stable.yml. Repository to run
-          E2E smoke test on (owner/repo). Defaults to this repo.
+          E2E smoke test on (owner/repo). Defaults to this repo. Any
+          other repository must be listed in
+          .github/ai/smoke_test_repos.json on the default branch, or
+          the release gate rejects the run.
         required: false
         type: string
         default: ""
