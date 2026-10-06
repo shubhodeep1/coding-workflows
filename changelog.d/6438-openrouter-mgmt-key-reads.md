@@ -9,4 +9,4 @@ When a task needs OpenRouter data, the session calls the management API directly
 | `/activity` granularity | day × model × provider endpoint, account-wide |
 | `/keys` `usage_monthly` | current calendar month, not a rolling 30 days |
 
-What this means for operators: add `OR_MGMT_KEY` to the Claude Code session environment to enable this. Without it, sessions say so once and carry on. OpenRouter can only split spend by model, so cost is pinned to a pipeline role only when that role is the sole user of a model slug. No pipeline request sets `HTTP-Referer`, `X-Title`, or `user`, so per-workflow and per-repo splits are not available.
+What this means for operators: add `OR_MGMT_KEY` to the Claude Code session environment to enable this. Without it, sessions say so once and carry on. The management API's account-wide totals do not provide per-workflow or per-repo splits; cost is pinned to a pipeline role only when that role is the sole user of a model slug. Some direct requests set `HTTP-Referer` or `X-Title` (`scripts/analyze_soft_errors.py`, `scripts/summarize_unselected_runs.py`), but those headers do not add a workflow or repo breakdown to the management totals.
