@@ -38,6 +38,7 @@ archive_transcript()
 	fi
 
 	if ! GITHUB_WORKSPACE="${GITHUB_WORKSPACE:-$PWD}" \
+		PYTHONSAFEPATH=1 \
 		PYTHONDONTWRITEBYTECODE=1 \
 		python3 - "${run_id}" "${phase}" "${source_path}" <<'PY'
 from __future__ import annotations

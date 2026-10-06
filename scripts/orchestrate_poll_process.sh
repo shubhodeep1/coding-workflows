@@ -788,6 +788,7 @@ write_state_snapshot_tracker_export() {
 assemble_judge_static_context() {
   local out_file="$1"
   local missing=""
+  local judge_readme_context=""
 
   if [ ! -s unattended_system_instructions.md ]; then
     missing="unattended_system_instructions.md"
@@ -797,6 +798,11 @@ assemble_judge_static_context() {
   fi
   if [ -n "${missing}" ]; then
     echo "::error::Required file(s) missing or empty: ${missing}" >&2
+    return 1
+  fi
+  judge_readme_context="$(mktemp "${RUNTIME_DIR:-/tmp}/judge-readme.XXXXXX")"
+  if ! bash scripts/build_static_context.sh readme "${judge_readme_context}"; then
+    rm -f "${judge_readme_context}"
     return 1
   fi
 
@@ -816,17 +822,14 @@ assemble_judge_static_context() {
       cat agents.md
       echo
     fi
-    if [ -f README.md ]; then
-      echo "=== README.MD ==="
-      cat README.md
-      echo
-    fi
+    cat "${judge_readme_context}"
     if [ -f probably_unnecessary_but_read_if_stuck.md ]; then
       echo "=== OVERFLOW REFERENCE ==="
       echo "If you cannot make progress without operator-runbook details (env var reference, autofix retrigger/dedup internals, orchestrator integration-sync auto-heal, validation self-healing, workflow log analysis pipeline, semantic cache scope, wrapper pin policy), read ./probably_unnecessary_but_read_if_stuck.md from the working tree before bailing."
       echo
     fi
   } > "${out_file}"
+  rm -f "${judge_readme_context}"
 }
 
 # ---------------------------------------------------------------

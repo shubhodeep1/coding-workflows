@@ -17,8 +17,25 @@ case "${BASH_SOURCE[0]}" in
 		;;
 esac
 WORKSPACE_ROOT="${GITHUB_WORKSPACE:-$(pwd)}"
+case "${WORKSPACE_ROOT}" in
+	/*) ;;
+	*) WORKSPACE_ROOT="${PWD}/${WORKSPACE_ROOT}" ;;
+esac
 SERENA_TEMPLATE_PATH="${SCRIPT_DIR}/templates/serena_project.yml.j2"
 SERENA_PROJECT_PATH="${WORKSPACE_ROOT}/.serena/project.yml"
+serena_neutral_dir=""
+
+serena_python()
+(
+	cd -- "${serena_neutral_dir}" || return 1
+	PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 "${SERENA_UV_PYTHON_BIN}" "$@"
+)
+
+serena_uv()
+(
+	cd -- "${serena_neutral_dir}" || return 1
+	UV_NO_CONFIG=1 uv "$@"
+)
 if [ -f "${SCRIPT_DIR}/emit_event.sh" ]; then
 	# shellcheck disable=SC1091
 	source "${SCRIPT_DIR}/emit_event.sh" 2>/dev/null || true
@@ -134,8 +151,8 @@ export_serena_available()
 uv_tool_bin_dir()
 {
 	if command -v uv >/dev/null 2>&1; then
-		if uv tool dir --bin >/dev/null 2>&1; then
-			uv tool dir --bin 2>/dev/null
+		if serena_uv tool dir --bin >/dev/null 2>&1; then
+			serena_uv tool dir --bin 2>/dev/null
 			return 0
 		fi
 	fi
@@ -154,7 +171,7 @@ current_serena_version()
 	if [ -z "${serena_bin}" ]; then
 		return 1
 	fi
-	"${serena_bin}" --version 2>/dev/null || return 1
+	(cd -- "${serena_neutral_dir}" && "${serena_bin}" --version) 2>/dev/null || return 1
 }
 
 binary_matches_pin()
@@ -172,7 +189,7 @@ binary_matches_pin()
 
 clear_serena_codex_config()
 {
-	if [ -z "${HOME:-}" ]; then
+	if [[ "${HOME:-}" != /* ]]; then
 		log 'HOME is unavailable; cannot clear ~/.codex/config.toml.'
 		return 1
 	fi
@@ -180,8 +197,7 @@ clear_serena_codex_config()
 	SERENA_CONFIG_PATH="${HOME}/.codex/config.toml" \
 	SERENA_BLOCK_COMMAND="" \
 	SERENA_STARTUP_TIMEOUT_SEC="${SERENA_STARTUP_TIMEOUT_SEC}" \
-	PYTHONDONTWRITEBYTECODE=1 \
-	"${SERENA_UV_PYTHON_BIN}" - <<'PY'
+	serena_python - <<'PY'
 from __future__ import annotations
 
 import json
@@ -266,7 +282,7 @@ write_serena_codex_config()
 {
 	local serena_bin="${1:?write_serena_codex_config: serena binary path required}"
 
-	if [ -z "${HOME:-}" ]; then
+	if [[ "${HOME:-}" != /* ]]; then
 		log 'HOME is unavailable; cannot write ~/.codex/config.toml.'
 		return 1
 	fi
@@ -274,8 +290,7 @@ write_serena_codex_config()
 	SERENA_CONFIG_PATH="${HOME}/.codex/config.toml" \
 	SERENA_BLOCK_COMMAND="${serena_bin}" \
 	SERENA_STARTUP_TIMEOUT_SEC="${SERENA_STARTUP_TIMEOUT_SEC}" \
-	PYTHONDONTWRITEBYTECODE=1 \
-	"${SERENA_UV_PYTHON_BIN}" - <<'PY'
+	serena_python - <<'PY'
 from __future__ import annotations
 
 import json
@@ -384,12 +399,12 @@ attempt_uv_install()
 		return 1
 	fi
 
-	if uv tool install --quiet --force -p "${SERENA_UV_PYTHON_BIN}" "${SERENA_SPEC}" >"${install_log}" 2>&1; then
+	if serena_uv tool install --quiet --force -p "${SERENA_UV_PYTHON_BIN}" "${SERENA_SPEC}" >"${install_log}" 2>&1; then
 		rm -f "${install_log}"
 		return 0
 	fi
 
-	if uv tool install --quiet --force "${SERENA_SPEC}" >"${install_log}" 2>&1; then
+	if serena_uv tool install --quiet --force "${SERENA_SPEC}" >"${install_log}" 2>&1; then
 		rm -f "${install_log}"
 		return 0
 	fi
@@ -403,11 +418,14 @@ probe_mcp_handshake()
 {
 	local serena_bin="${1:?probe_mcp_handshake: serena binary path required}"
 
+	# Keep the project cwd for --project-from-cwd. Isolate the trusted probe,
+	# but let the installed server import sibling modules from its script dir.
 	MCP_HANDSHAKE_PROBE_TIMEOUT="${MCP_HANDSHAKE_PROBE_TIMEOUT:-${SERENA_STARTUP_TIMEOUT_SEC}}" \
 	PYTHONDONTWRITEBYTECODE=1 \
-	"${SERENA_UV_PYTHON_BIN}" "${SCRIPT_DIR}/mcp_handshake_probe.py" \
+	env -u PYTHONPATH PYTHONSAFEPATH=1 \
+		"${SERENA_UV_PYTHON_BIN}" "${SCRIPT_DIR}/mcp_handshake_probe.py" \
 		--name "serena" \
-		-- "${serena_bin}" start-mcp-server --context=codex --project-from-cwd --transport stdio
+		-- /usr/bin/env -u PYTHONSAFEPATH "${serena_bin}" start-mcp-server --context=codex --project-from-cwd --transport stdio
 }
 
 main()
@@ -415,6 +433,15 @@ main()
 	local uv_bin=""
 	local existing_version=""
 	local serena_bin=""
+
+	serena_neutral_dir="$(mktemp -d 2>/dev/null || /usr/bin/mktemp -d 2>/dev/null || true)"
+	if [ -z "${serena_neutral_dir}" ]; then
+		log 'neutral cwd unavailable; skipping Serena bootstrap.'
+		emit_serena_fallback "setup-failure"
+		export_serena_available "false"
+		return 0
+	fi
+	trap '/bin/rm -rf -- "${serena_neutral_dir}"' EXIT
 
 	uv_bin="$(uv_tool_bin_dir || true)"
 	append_github_path "${uv_bin}"
