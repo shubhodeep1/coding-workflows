@@ -5,13 +5,27 @@
   "entry_id": "processed_command_6468_6011583180_approved",
   "issue_number": 6468,
   "metadata": {
+    "branch": "ai/issue-6468",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      "agents.md",
+      "changelog.d/6468-heal-lineage-source-marker-trust.md",
+      "scripts/workflow_failure_heal.py",
+      "scripts/workflow_failure_heal_intake.sh",
+      "tests/test_workflow_failure_heal.py"
+    ],
+    "issue_number": 6468,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6468",
+    "pr_number": 6520,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6520",
+    "run_attempt": "1",
+    "run_id": "37430323186",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37430323186"
   },
   "run_attempt": 1,
   "run_id": "37430323186",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-06T07:37:48Z",
+  "status": "completed",
+  "timestamp": "2026-10-06T07:53:53Z",
   "workflow": "implement"
 }
