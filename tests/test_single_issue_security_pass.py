@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import datetime as dt
 import json
 import os
@@ -100,8 +101,16 @@ sys.exit(1)
 '''
 
 
-def _marker(status: str, head: str, cycle: int) -> str:
-	return f"<!-- ai:single-issue-security-pass:v1 status={status} head={head} cycle={cycle} -->"
+def _marker(status: str, head: str, cycle: int, finding_ids: tuple[str, ...] = ("F-1",)) -> str:
+	marker = f"<!-- ai:single-issue-security-pass:v1 status={status} head={head} cycle={cycle} -->"
+	if status == "findings" and finding_ids:
+		encoded_ids = base64.b64encode(json.dumps(list(finding_ids)).encode("ascii")).decode("ascii")
+		return f"Finding IDs (base64 JSON): {encoded_ids}\n\n{marker}"
+	return marker
+
+
+def _followup_body(branch: str = "ai/issue-7", finding_id: str = "F-1") -> str:
+	return f"<!-- ai:security-finding:{finding_id} -->\n- Integration branch: `{branch}`"
 
 
 def _comment(body: str, association: str = "OWNER", login: str = "owner", age_hours: float = 0.1, comment_id: int = 1) -> dict:
@@ -135,7 +144,7 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 	(tmp_path / "pr.json").write_text(json.dumps(pr or _pr()), encoding="utf-8")
 	(tmp_path / "comments.json").write_text(json.dumps(comments or []), encoding="utf-8")
 	if security_issues is None:
-		security_issues = [[{"state": "open", "body": "- Integration branch: `ai/issue-7`", "user": {"login": login}} for login in ("owner", "github-actions[bot]")]]
+		security_issues = [[{"state": "open", "body": _followup_body(), "user": {"login": login}} for login in ("owner", "github-actions[bot]")]]
 	(tmp_path / "security_issues.json").write_text(security_issues if isinstance(security_issues, str) else json.dumps(security_issues), encoding="utf-8")
 	log = tmp_path / "calls.log"
 	log.write_text("", encoding="utf-8")
@@ -295,6 +304,7 @@ def test_a_running_audit_or_open_followups_hold_without_a_new_dispatch(tmp_path:
 	[[{"state": "open", "body": "- Integration branch: `other`", "user": {"login": "owner"}}]],
 	[[{"state": "open", "body": "- Integration branch: `ai/issue-7`", "user": {"login": "owner"}, "pull_request": {"url": "pr"}}]],
 	[[{"state": "open", "body": "- Integration branch: `ai/issue-7`", "user": {"login": "other"}}]],
+	[[{"state": "open", "body": "- Integration branch: `ai/issue-7`", "user": {"login": "owner"}}]],
 ])
 def test_missing_pipeline_followups_page_without_mutating(tmp_path: Path, issues: list) -> None:
 	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("findings", HEAD, 1))], security_issues=issues)
@@ -309,14 +319,54 @@ def test_missing_pipeline_followups_page_without_mutating(tmp_path: Path, issues
 	"Integration branch: ai/issue-7", "- **Integration branch:** `ai/issue-7`",
 ])
 def test_matching_open_pipeline_followups_keep_waiting(tmp_path: Path, line: str) -> None:
-	issues = [[{"state": "open", "body": "Other text\n" + line, "user": {"login": "owner"}}]]
+	issues = [[{"state": "open", "body": "<!-- ai:security-finding:F-1 -->\nOther text\n" + line, "user": {"login": "owner"}}]]
 	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("findings", HEAD, 1))], security_issues=issues)
 	assert result.returncode == 0 and output == "hold=true\nhold_reason=awaiting_followups\n"
 	assert len([call for call in calls if "repos/o/r/issues?labels=ai:security&state=open&per_page=100" in call]) == 1
 
 
+def test_old_branch_followup_does_not_silence_new_findings(tmp_path: Path) -> None:
+	issues = [[{"state": "open", "body": _followup_body(finding_id="F-old"), "user": {"login": "owner"}}]]
+	result, _, output = _run(tmp_path, "gate", comments=[_comment(_marker("findings", HEAD, 2))], security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=followups_missing\n"
+
+
+def test_latest_trusted_result_controls_followup_ids(tmp_path: Path) -> None:
+	issues = [[{"state": "open", "body": _followup_body(finding_id="F-old"), "user": {"login": "owner"}}]]
+	comments = [
+		_comment(_marker("findings", HEAD, 1, ("F-old",)), comment_id=1, age_hours=1),
+		_comment(_marker("findings", HEAD, 2), comment_id=2),
+		_comment(_marker("findings", HEAD, 2, ("F-old",)), comment_id=3, login="other"),
+	]
+	result, _, output = _run(tmp_path, "gate", comments=comments, security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=followups_missing\n"
+
+
+def test_every_current_finding_needs_a_matching_open_followup(tmp_path: Path) -> None:
+	issues = [[{"state": "open", "body": _followup_body(finding_id="F-1"), "user": {"login": "owner"}}]]
+	comments = [_comment(_marker("findings", HEAD, 2, ("F-1", "F-2")))]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=followups_missing\n"
+	issues.append([{"state": "open", "body": _followup_body(finding_id="F-2"), "user": {"login": "owner"}}])
+	result, calls, output = _run(tmp_path, "gate", comments=comments, security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=awaiting_followups\n"
+	assert len([call for call in calls if "repos/o/r/issues?labels=ai:security&state=open&per_page=100" in call]) == 1
+
+
+@pytest.mark.parametrize("body", [
+	_marker("findings", HEAD, 1, ()),
+	"Finding IDs (base64 JSON): invalid!\n\n" + _marker("findings", HEAD, 1, ()),
+	"Finding IDs (base64 JSON): W10=\n\n" + _marker("findings", HEAD, 1, ()),
+	_marker("findings", HEAD, 1, ("F-1\nspoof",)),
+])
+def test_legacy_or_invalid_findings_ids_page_instead_of_silencing(tmp_path: Path, body: str) -> None:
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(body)])
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=followups_unverifiable\n"
+	assert not any("repos/o/r/issues?labels=ai:security&state=open&per_page=100" in call for call in calls)
+
+
 def test_followups_across_paginated_pages(tmp_path: Path) -> None:
-	issues = [[], [{"state": "open", "body": "- Integration branch: `ai/issue-7`", "user": {"login": "owner"}}]]
+	issues = [[], [{"state": "open", "body": _followup_body(), "user": {"login": "owner"}}]]
 	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("findings", HEAD, 1))], security_issues=issues)
 	assert result.returncode == 0 and output == "hold=true\nhold_reason=awaiting_followups\n"
 	assert len([call for call in calls if "repos/o/r/issues?labels=ai:security&state=open&per_page=100" in call]) == 1
@@ -356,11 +406,11 @@ def test_status_findings_never_lists_followups(tmp_path: Path) -> None:
 
 def test_branch_name_is_matched_literally(tmp_path: Path) -> None:
 	branch_ref = "ai/issue-7.x+"
-	issues = [[{"state": "open", "body": "- Integration branch: `ai/issue-7axxx`", "user": {"login": "owner"}}]]
+	issues = [[{"state": "open", "body": _followup_body("ai/issue-7axxx"), "user": {"login": "owner"}}]]
 	comments = [_comment(_marker("findings", HEAD, 1))]
 	result, _, output = _run(tmp_path, "gate", pr=_pr(head_ref=branch_ref), comments=comments, security_issues=issues)
 	assert output == "hold=true\nhold_reason=followups_missing\n"
-	issues[0][0]["body"] = f"- Integration branch: `{branch_ref}`"
+	issues[0][0]["body"] = _followup_body(branch_ref)
 	result, _, output = _run(tmp_path, "gate", pr=_pr(head_ref=branch_ref), comments=comments, security_issues=issues)
 	assert output == "hold=true\nhold_reason=awaiting_followups\n"
 
@@ -670,11 +720,13 @@ def test_failed_dispatch_holds_unaudited_head(tmp_path: Path, comments: list) ->
 
 
 def _report(tmp_path: Path, outcome: str, findings: str, cycle: int = 3, extra_comments: list | None = None):
+	encoded_ids = base64.b64encode(json.dumps([f"F-{n}" for n in range(1, int(findings or 0) + 1)]).encode("ascii")).decode("ascii")
 	env = {
 		"SECURITY_PASS_PR_NUMBER": "42",
 		"SECURITY_PASS_HEAD_SHA": HEAD,
 		"SECURITY_PASS_AUDIT_OUTCOME": outcome,
 		"SECURITY_PASS_FINDINGS": findings,
+		"SECURITY_PASS_FINDING_IDS_B64": encoded_ids,
 	}
 	comments = [_comment(_marker("pending", HEAD, cycle))] + list(extra_comments or [])
 	return _run(tmp_path, "report", comments=comments, env=env)
@@ -687,9 +739,22 @@ def _report(tmp_path: Path, outcome: str, findings: str, cycle: int = 3, extra_c
 def test_report_posts_the_result_and_reruns_the_review(tmp_path: Path, outcome: str, findings: str, status: str, redispatch: bool) -> None:
 	result, calls, _ = _report(tmp_path, outcome, findings)
 	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
-	assert posted[-1][-1].endswith(_marker(status, HEAD, 3))
+	assert posted[-1][-1].endswith(_marker(status, HEAD, 3, tuple(f"F-{n}" for n in range(1, int(findings or 0) + 1))))
 	review = ["workflow", "run", "ai-review.yml", "-R", "o/r", "--ref", "main", "-f", "pr_number=42"]
 	assert (review in calls) is redispatch
+
+
+def test_report_without_matching_ids_keeps_findings_alertable(tmp_path: Path) -> None:
+	result, calls, _ = _run(tmp_path, "report", comments=[_comment(_marker("pending", HEAD, 3))], env={
+		"SECURITY_PASS_PR_NUMBER": "42", "SECURITY_PASS_HEAD_SHA": HEAD,
+		"SECURITY_PASS_AUDIT_OUTCOME": "success", "SECURITY_PASS_FINDINGS": "2",
+		"SECURITY_PASS_FINDING_IDS_B64": base64.b64encode(b'["F-1"]').decode("ascii"),
+	})
+	assert result.returncode == 0
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert posted[-1][-1].endswith(_marker("findings", HEAD, 3, ()))
+	assert "Finding IDs (base64 JSON):" not in posted[-1][-1]
+	assert ["workflow", "run", "ai-review.yml", "-R", "o/r", "--ref", "main", "-f", "pr_number=42"] in calls
 
 
 def test_report_does_not_rerun_review_without_a_persisted_result(tmp_path: Path) -> None:
@@ -833,6 +898,10 @@ def test_audit_wiring() -> None:
 	assert report["env"]["DEFAULT_BRANCH"] == "${{ env.AUDIT_DEFAULT_BRANCH }}"
 	assert report["env"]["SECURITY_PASS_AUDIT_BRANCH"] == "${{ env.AUDIT_BRANCH }}"
 	assert report["env"]["SECURITY_PASS_AUTHOR_LOGIN_FALLBACK"] == "${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}"
+	assert "SECURITY_PASS_FINDING_IDS_B64=" in report["run"]
+	assert "finding_ids_b64=" in report["run"]
+	assert "export SECURITY_PASS_HEAD_SHA SECURITY_PASS_FINDINGS SECURITY_PASS_FINDING_IDS_B64" in report["run"]
+	assert "finding_ids_b64=${SURVIVING_FINDING_IDS_B64}" in (ROOT / "scripts" / "security_audit.sh").read_text(encoding="utf-8")
 	assert workflow["permissions"]["actions"] == "write"
 	assert workflow["permissions"]["pull-requests"] == "read"
 	template = AUDIT_TEMPLATE.read_text(encoding="utf-8")

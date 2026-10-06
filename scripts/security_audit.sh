@@ -1832,6 +1832,7 @@ python3 - \
 	"${OVERSIZED_EXPORT_DIR}/manifest.json" <<'PY'
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import re
@@ -2001,10 +2002,14 @@ for idx, finding in enumerate(findings):
 	index_lines.append(f"{body_path}\t{title}\t{file_key}\t0\n")
 
 followup_index_path.write_text("".join(index_lines), encoding="utf-8")
+finding_ids_b64 = base64.b64encode(
+	json.dumps([finding["finding_id"] for finding in findings], ensure_ascii=True).encode("ascii")
+).decode("ascii")
 followup_summary_env_path.write_text(
 	"\n".join(
 		[
 			f"SURVIVING_FINDINGS_COUNT={shlex.quote(str(len(findings)))}",
+			f"SURVIVING_FINDING_IDS_B64={shlex.quote(finding_ids_b64)}",
 			f"FOLLOWUP_CREATE_COUNT={shlex.quote(str(len(planned_followups)))}",
 		]
 	)
@@ -2078,4 +2083,4 @@ fi
 # shellcheck disable=SC1090
 source "${FOLLOWUP_SUMMARY_ENV}"
 
-echo "security-audit: tracker=#${TRACKER_NUMBER} findings=${SURVIVING_FINDINGS_COUNT} followups_created=${FOLLOWUP_CREATE_COUNT}"
+echo "security-audit: tracker=#${TRACKER_NUMBER} findings=${SURVIVING_FINDINGS_COUNT} followups_created=${FOLLOWUP_CREATE_COUNT} finding_ids_b64=${SURVIVING_FINDING_IDS_B64}"

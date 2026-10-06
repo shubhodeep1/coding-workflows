@@ -1953,7 +1953,7 @@ through `clarify → plan → implement → review`.
 | `MAX_SECURITY_PASS_CYCLES` | `5` | Maximum completed consolidated security-fix cycles before terminal `ai:security-pass-failed`. |
 | `SINGLE_ISSUE_SECURITY_PASS_ENABLED` | `false` | Opt-in: hold a clean standalone PR's auto-merge until a security audit of its head is clean (see the repository variables table) |
 | `SECURITY_PASS_PENDING_STALE_HOURS` | `6` | Hours before a pending single-issue audit is considered stale and retried on the next review run. |
-| `SECURITY_PASS_FOLLOWUP_STALE_HOURS` | `24` | Hours before open single-issue security follow-ups stop silencing a findings hold. |
+| `SECURITY_PASS_FOLLOWUP_STALE_HOURS` | `24` | Hours before open single-issue security follow-ups stop silencing a findings hold. The trusted findings comment lists the current audit's finding IDs as base64 JSON above the unchanged status marker. Silence requires an open pipeline-authored `ai:security` issue on that branch for **every** ID; older comments without IDs, malformed IDs or incomplete issue listings page instead. |
 | `MAX_SECURITY_PASS_FIX_REISSUES` | `2` | Maximum re-issues of one `ai:implementation-failed` security-fix issue per fix cycle before terminal `ai:security-pass-failed`. |
 | `SECURITY_PASS_CONFIDENCE_GATE` | `8` | Minimum 1-10 confidence score for findings that block the project security pass. |
 | `SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED` | `true` | Consult the security-pass exhaustion judge when the fix-cycle budget is spent instead of terminalizing; `false` restores terminal `ai:security-pass-failed` on exhaustion. |
