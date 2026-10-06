@@ -164,6 +164,31 @@ def test_protected_script_accepts_interleaved_side_lines(judge_repo):
 	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() != before
 
 
+@pytest.mark.parametrize("judge_repo", [True], indirect=True)
+@pytest.mark.parametrize("change", ["empty", "remove_shared", "delete"])
+def test_protected_resolution_cannot_remove_shared_controls(judge_repo, change):
+	wt, baseline, remote, before, conflict_path, run = judge_repo
+	conflicted = wt / conflict_path
+	if change == "delete":
+		conflicted.unlink()
+	else:
+		conflicted.write_text("" if change == "empty" else "first\nours\ntheirs\n")
+	result = run(f'_integration_judge_commit_and_push "{wt}" 42 integration main "{baseline}" 1')
+	assert result.returncode != 0
+	assert "reason=protected_path_provenance" in result.stderr
+	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() == before
+
+
+@pytest.mark.parametrize("judge_repo", ["repeated"], indirect=True)
+def test_protected_resolution_retains_shared_duplicate_counts(judge_repo):
+	wt, baseline, remote, before, conflict_path, run = judge_repo
+	(wt / conflict_path).write_text("first\n\nours\ntheirs\nlast\n")
+	result = run(f'_integration_judge_commit_and_push "{wt}" 42 integration main "{baseline}" 1')
+	assert result.returncode != 0
+	assert "reason=protected_path_provenance" in result.stderr
+	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() == before
+
+
 @pytest.mark.parametrize("judge_repo", [("path", "src/app.py")], indirect=True)
 def test_unprotected_source_can_synthesize_lines(judge_repo):
 	wt, baseline, remote, before, conflict_path, run = judge_repo
