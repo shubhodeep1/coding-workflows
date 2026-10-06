@@ -411,14 +411,25 @@ def refresh(host, workspace, manifest):
 			os.chmod(target, mode)
 
 
-def _refusal_reason(name, paths_set, commands):
+def paired_safety_hook(paths_set, initial_unmerged_file):
+	if initial_unmerged_file is None or SAFETY_HOOK_LIVE not in paths_set or SAFETY_HOOK_TEMPLATE not in paths_set:
+		return False
+	try:
+		with initial_unmerged_file.open(encoding="utf-8", newline="") as handle:
+			initial_unmerged = set(handle.read().split("\n"))
+	except (OSError, UnicodeError):
+		return False
+	return SAFETY_HOOK_LIVE in initial_unmerged and SAFETY_HOOK_TEMPLATE in initial_unmerged
+
+
+def _refusal_reason(name, paths_set, commands, paired_hook):
 	"""Return None when the conflict path is admissible, else a fixed reason code."""
 	parts = PurePosixPath(name).parts
 	if not parts or name.startswith("/") or ".." in parts or "\\" in name or "\n" in name or "\r" in name:
 		return "invalid_path"
 	if name == SAFETY_HOOK_LIVE:
 		# Never admitted into a sandbox: the host mirrors the resolved template.
-		return None if SAFETY_HOOK_TEMPLATE in paths_set else "safety_hook"
+		return None if paired_hook else "safety_hook"
 	if allowed(name, commands=commands):
 		return None
 	if name == "tests/test_audit_plans_command.py" or any(part.lower() in EXCLUDED or part.lower().startswith(".env") or "secret" in part.lower() or "credential" in part.lower() or part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore", ".egg-info", ".dist-info")) for part in parts):
@@ -430,17 +441,18 @@ def _refusal_reason(name, paths_set, commands):
 	return "unsupported_suffix"
 
 
-def check_paths(host, paths_file, trusted_checkout=None):
+def check_paths(host, paths_file, trusted_checkout=None, initial_unmerged_file=None):
 	with paths_file.open(encoding="utf-8", newline="") as handle:
 		path_lines = handle.read().split("\n")
 	names = [name for name in path_lines if name]
 	paths_set = set(names)
+	paired_hook = paired_safety_hook(paths_set, initial_unmerged_file)
 	commands = frozenset()
 	if any(name.startswith(".claude/commands/") for name in names):
 		commands = trusted_command_inventory(host, trusted_checkout)
 	refused = []
 	for name in names:
-		reason = _refusal_reason(name, paths_set, commands)
+		reason = _refusal_reason(name, paths_set, commands, paired_hook)
 		if reason is None:
 			try:
 				checked_path(host, name)
@@ -461,7 +473,7 @@ def check_paths(host, paths_file, trusted_checkout=None):
 	raise SystemExit(1)
 
 
-def mirror_safety_hook(host, paths_file):
+def mirror_safety_hook(host, paths_file, initial_unmerged_file=None):
 	"""Copy the resolved hook template onto the conflicted live hook.
 
 	Returns 0 when not applicable or mirrored, 3 when the template still has
@@ -472,7 +484,7 @@ def mirror_safety_hook(host, paths_file):
 		names = {name for name in handle.read().split("\n") if name}
 	if SAFETY_HOOK_LIVE not in names:
 		return 0
-	if SAFETY_HOOK_TEMPLATE not in names:
+	if not paired_safety_hook(names, initial_unmerged_file):
 		raise ValueError("unpaired safety hook conflict")
 	template = checked_path(host, SAFETY_HOOK_TEMPLATE)
 	live = checked_path(host, SAFETY_HOOK_LIVE)
@@ -525,20 +537,21 @@ def main():
 			raise SystemExit(1) from None
 		return
 	if sys.argv[1:2] == ["mirror-safety-hook"]:
-		if len(sys.argv) != 4:
+		if len(sys.argv) not in (4, 5):
 			raise SystemExit(2)
 		try:
-			mirror_rc = mirror_safety_hook(Path(sys.argv[2]), Path(sys.argv[3]))
+			mirror_rc = mirror_safety_hook(Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4]) if len(sys.argv) == 5 else None)
 		except (OSError, ValueError, UnicodeError):
 			print("::error::Safety hook mirror refused an unsafe template or destination", file=sys.stderr)
 			raise SystemExit(1) from None
 		raise SystemExit(mirror_rc)
-	# check-paths takes an optional trusted checkout root (GITHUB_WORKSPACE);
+	# check-paths takes an optional trusted checkout root (GITHUB_WORKSPACE)
+	# and initial unmerged snapshot for paired live-hook conflicts;
 	# an empty value admits no commands. snapshot alone takes an optional
 	# fifth argument: the host Git dir.
-	if sys.argv[1:2] == ["check-paths"] and len(sys.argv) in (4, 5):
+	if sys.argv[1:2] == ["check-paths"] and len(sys.argv) in (4, 5, 6):
 		try:
-			check_paths(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4] if len(sys.argv) == 5 else None)
+			check_paths(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4] if len(sys.argv) >= 5 else None, Path(sys.argv[5]) if len(sys.argv) == 6 else None)
 		except (OSError, UnicodeError):
 			print("unsupported path", file=sys.stderr)
 			raise SystemExit(1) from None

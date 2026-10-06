@@ -128,7 +128,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
     the existing resolver retry-state escalation. A conflicted
     `.claude/commands/<name>.md` is admitted under the same trusted-twin rule
     as the editor snapshot; the live merged-PR safety hook is admitted only
-    when its `workflow-templates/` twin is also conflicted, and the host then
+    when both it and its `workflow-templates/` twin were unmerged in the
+    prepare step's initial Git index (fingerprint-only paths do not qualify), and the host then
     mirrors the resolved template onto it (the hook itself never enters a
     sandbox) and checks both are staged identical before committing. Its OpenCode runs (including
     Claude fallback)

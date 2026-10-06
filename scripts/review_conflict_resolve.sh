@@ -2267,7 +2267,7 @@ fi
 # .claude/commands/ conflicts (empty admits none). Refused paths are logged
 # as bounded, redacted REVIEW_SANDBOX_PATH_REFUSED lines (#6596).
 resolver_check_paths_stderr="${RUNTIME_DIR}/resolver_check_paths_stderr.txt"
-if ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}" "${GITHUB_WORKSPACE:-}" >/dev/null 2>"${resolver_check_paths_stderr}"; then
+if ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}" "${GITHUB_WORKSPACE:-}" "${RESOLVER_INITIAL_UNMERGED_PATHS_FILE}" >/dev/null 2>"${resolver_check_paths_stderr}"; then
   grep -E '^REVIEW_SANDBOX_PATH_REFUSED ' "${resolver_check_paths_stderr}" >&2 || true
   _resolver_fail_closed sandbox_path_unsupported
 fi
@@ -2488,7 +2488,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     if [ "${AI_ENGINE_RESOLVED_CONFLICT_RESOLVER:-codex}" = "claude" ]; then
       if [ ! -f "${resolver_sandbox_sh}" ] || [ ! -f "${resolver_workspace_py}" ]; then
         _resolver_fail_closed sandbox_prepare_failed
-      elif ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}" "${GITHUB_WORKSPACE:-}" >/dev/null 2>"${RUNTIME_DIR}/resolver_check_paths_stderr.txt"; then
+      elif ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}" "${GITHUB_WORKSPACE:-}" "${RESOLVER_INITIAL_UNMERGED_PATHS_FILE}" >/dev/null 2>"${RUNTIME_DIR}/resolver_check_paths_stderr.txt"; then
         grep -E '^REVIEW_SANDBOX_PATH_REFUSED ' "${RUNTIME_DIR}/resolver_check_paths_stderr.txt" >&2 || true
         _resolver_fail_closed sandbox_path_unsupported
       fi
@@ -2739,7 +2739,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   # template onto it (after the scope checks, so it is not model drift).
   # rc 3 = template still has markers; the scan below counts them.
   _mirror_rc=0
-  PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py:-${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_workspace.py}" mirror-safety-hook "$(pwd)" "${CONFLICTED_PATHS_FILE}" || _mirror_rc=$?
+  PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py:-${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_workspace.py}" mirror-safety-hook "$(pwd)" "${CONFLICTED_PATHS_FILE}" "${RESOLVER_INITIAL_UNMERGED_PATHS_FILE}" || _mirror_rc=$?
   if [ "${_mirror_rc}" -ne 0 ] && [ "${_mirror_rc}" -ne 3 ]; then
     _resolver_fail_closed safety_hook_mirror_failed
   fi
