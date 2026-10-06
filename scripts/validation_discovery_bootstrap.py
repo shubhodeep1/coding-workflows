@@ -258,6 +258,10 @@ def validate_discovered_manifest_yaml(
 	return True, parsed, None
 
 
+# Trusted helper next to this module; never resolved from the clone.
+CODEX_ISOLATED_EXEC = Path(__file__).resolve().parent / "codex_isolated_exec.sh"
+
+
 def discover_manifest_via_codex(
 	*,
 	clone_dir: Path,
@@ -299,8 +303,19 @@ def discover_manifest_via_codex(
 
 	last_failure: str | None = None
 	for attempt in range(1, attempts + 1):
+		# The agent reads a consumer repository (untrusted prose), so it runs
+		# in the credential-free, network-isolated container
+		# (scripts/codex_isolated_exec.sh, read-only snapshot of the clone):
+		# it never holds GH_PAT, the OpenRouter key or the clone's .git.
 		command = [
-			"codex",
+			"bash",
+			str(CODEX_ISOLATED_EXEC),
+			"run",
+			"--mode",
+			"read-only",
+			"--reasoning",
+			reasoning_effort,
+			"--",
 			"--ask-for-approval",
 			"never",
 			"-c",
