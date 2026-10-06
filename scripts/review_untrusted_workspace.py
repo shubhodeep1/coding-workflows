@@ -56,7 +56,7 @@ def allowed_editor(name, host=None, commands=None):
 	parts = PurePosixPath(name).parts
 	if not parts or name.startswith("/") or ".." in parts or "\\" in name or "\n" in name or "\r" in name:
 		return False
-	if any(part.lower() in (".netrc", ".npmrc", ".pypirc") for part in parts):
+	if any(part.lower() in (".netrc", ".npmrc", ".pypirc", ".ssh", ".aws", ".gnupg") for part in parts):
 		return False
 	if name.startswith((".claude/", ".github/ai/")):
 		return allowed(name, host, commands)

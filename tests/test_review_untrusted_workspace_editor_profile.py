@@ -14,7 +14,7 @@ def test_editor_profile_and_checked_transfer(tmp_path: Path, monkeypatch: pytest
 	host = tmp_path / "host"
 	host.mkdir()
 	subprocess.run(["git", "init", "-q", str(host)], check=True)
-	for name in ("Makefile", ".gitignore", "src/example.vue", "src/example.rb", ".env", "secrets/password", ".codex-workflow-src/file", ".claude/settings.json"):
+	for name in ("Makefile", ".gitignore", "src/example.vue", "src/example.rb", ".env", "secrets/password", ".codex-workflow-src/file", ".claude/settings.json", "src/.ssh/id_ed25519", "src/.aws/config", "src/.gnupg/private-keys-v1.d/key"):
 		path = host / name
 		path.parent.mkdir(parents=True, exist_ok=True)
 		path.write_text("initial\n")
@@ -26,7 +26,7 @@ def test_editor_profile_and_checked_transfer(tmp_path: Path, monkeypatch: pytest
 	workspace.snapshot(host, source, manifest, profile="editor")
 	for name in ("Makefile", ".gitignore", "src/example.vue", "src/example.rb"):
 		assert (source / name).is_file()
-	for name in (".env", "secrets/password", ".codex-workflow-src/file", ".claude/settings.json", "src/big.vue"):
+	for name in (".env", "secrets/password", ".codex-workflow-src/file", ".claude/settings.json", "src/.ssh/id_ed25519", "src/.aws/config", "src/.gnupg/private-keys-v1.d/key", "src/big.vue"):
 		assert not (source / name).exists()
 	(source / "src/example.vue").write_text("edited\n")
 	workspace.transfer(host, source, manifest)
@@ -46,3 +46,5 @@ def test_review_profile_keeps_suffix_filter() -> None:
 	assert not workspace.allowed("src/example.vue")
 	assert workspace.allowed_editor("src/example.vue")
 	assert not workspace.allowed_editor("nested/.npmrc")
+	for name in ("src/.ssh/id_ed25519", "src/.aws/config", "src/.gnupg/private-keys-v1.d/key"):
+		assert not workspace.allowed_editor(name)

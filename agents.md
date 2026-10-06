@@ -37,8 +37,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
    disposable snapshot through `scripts/editor_isolated_run.sh`.
 4. **implement** (`implement.yml`, `internal-implement.yml`) — execute the
    plan with codex-cli; write the actual files. Both editor launch sites run
-   in a tokenless container against a checked snapshot; the host verifies
+   in a tokenless container against a checked snapshot (including exclusion
+   of nested `.ssh`, `.aws` and `.gnupg` directories); the host verifies
    container removal before transferring edits and restoring Git credentials.
+   Exit cleanup is still attempted if credential restoration fails.
 5. **implement-diagnose** (`scripts/implement_diagnose_post_codex_failure.sh`,
    driven by `MODEL_DIAGNOSE`) — analyse a post-Codex validation failure and
    emit JSON fix-up issue proposals.

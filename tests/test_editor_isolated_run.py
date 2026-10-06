@@ -69,6 +69,7 @@ def test_launch_contracts_are_isolated_and_reaped_before_restore() -> None:
 		assert block.index('editor_isolated_run.sh" snapshot') < block.index('editor_git_credentials hide')
 		assert block.index('editor_isolated_run.sh" finish') < block.index('editor_git_credentials restore', block.index('editor_isolated_run.sh" finish'))
 		assert 'editor_isolated_run.sh" reap "${EDITOR_ISOLATION_ROOT}" && editor_git_credentials restore' in block
+		assert 'editor_git_credentials restore || isolation_exit_rc=1; bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" cleanup "${EDITOR_ISOLATION_ROOT}" || isolation_exit_rc=1' in block
 		assert 'CODEX_THREAD_REUSE_REAL_CODEX="${EDITOR_ISOLATION_ROOT}/bin/codex"' in block
 		assert block.count('CODEX_THREAD_REUSE_REAL_CODEX=') == 1
 		assert 'CODEX_THREAD_REUSE_CLAUDE_RUNNER=' not in block
@@ -76,6 +77,7 @@ def test_launch_contracts_are_isolated_and_reaped_before_restore() -> None:
 	assert 'claude_run PLAN' not in plan
 	assert '"${EDITOR_ISOLATION_ROOT}/bin/codex" --ask-for-approval never' in plan
 	assert 'editor_isolated_run.sh" finish' in plan
+	assert 'editor_git_credentials restore || isolation_exit_rc=1; bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_isolated_run.sh" cleanup "${EDITOR_ISOLATION_ROOT}" || isolation_exit_rc=1' in plan
 	assert '--network none --read-only --cap-drop ALL --security-opt no-new-privileges' in helper
 	assert '--label "coding-workflows.editor-isolation.root=' in helper
 	assert 'env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker' in helper
@@ -84,3 +86,31 @@ def test_launch_contracts_are_isolated_and_reaped_before_restore() -> None:
 	assert '--env CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder' in helper
 	assert 'config --key hide_claude_md' in helper
 	assert '--mount "type=bind,src=${root}/empty-claude-md,dst=/source/CLAUDE.md,readonly"' in helper
+
+
+def test_exit_traps_cleanup_after_restore_failure_but_never_restore_before_reap(tmp_path: Path) -> None:
+	implement = (ROOT / ".github/workflows/implement.yml").read_text()
+	plan = (ROOT / "scripts/run_plan_codex.sh").read_text()
+	stub = tmp_path / "editor_isolated_run.sh"
+	stub.write_text('''printf '%s\\n' "$1" >> "${ISOLATION_LOG}"
+if [ "$1" = reap ] && [ "${REAP_FAIL:-0}" = 1 ]; then exit 1; fi
+''')
+	for text in (implement, plan):
+		traps = [line.strip() for line in text.splitlines() if line.strip().startswith("trap 'isolation_exit_rc=")]
+		assert len(traps) == (2 if text == implement else 1)
+		for trap_line in traps:
+			for reap_fails, restore_fails, original_rc, expected_calls, expected_rc in (
+				("0", "1", "0", ["reap", "restore", "cleanup"], 1),
+				("1", "0", "0", ["reap", "cleanup"], 1),
+				("0", "0", "2", ["reap", "restore", "cleanup"], 2),
+			):
+				log = tmp_path / "isolation.log"
+				log.unlink(missing_ok=True)
+				env = dict(os.environ, EDITOR_ISOLATION_SUPPORT_DIR=str(tmp_path), EDITOR_ISOLATION_ROOT="unused",
+					ISOLATION_LOG=str(log), REAP_FAIL=reap_fails, RESTORE_FAIL=restore_fails)
+				command = ("set -euo pipefail\n"
+					"editor_git_credentials() { printf '%s\\n' restore >> \"${ISOLATION_LOG}\"; [ \"${RESTORE_FAIL}\" = 0 ]; }\n"
+					f"{trap_line}\nexit {original_rc}\n")
+				proc = subprocess.run(["bash", "-c", command], env=env, capture_output=True, text=True)
+				assert proc.returncode == expected_rc, proc.stderr
+				assert log.read_text().splitlines() == expected_calls

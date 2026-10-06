@@ -296,7 +296,7 @@ editor_git_credentials() { env -u BASH_ENV -u ENV bash -c "${EDITOR_GIT_CREDENTI
 
 max_attempts=3
 EDITOR_ISOLATION_ROOT="$(bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_isolated_run.sh" prepare read "${PLAN_ENGINE}")" || exit 1
-trap 'bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_isolated_run.sh" reap "${EDITOR_ISOLATION_ROOT}" && editor_git_credentials restore && bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_isolated_run.sh" cleanup "${EDITOR_ISOLATION_ROOT}"' EXIT
+trap 'isolation_exit_rc=$?; bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_isolated_run.sh" reap "${EDITOR_ISOLATION_ROOT}" && editor_git_credentials restore || isolation_exit_rc=1; bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_isolated_run.sh" cleanup "${EDITOR_ISOLATION_ROOT}" || isolation_exit_rc=1; exit "${isolation_exit_rc}"' EXIT
 bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_isolated_run.sh" snapshot "${EDITOR_ISOLATION_ROOT}"
 for attempt in $(seq 1 "${max_attempts}"); do
   echo "Codex planning attempt ${attempt}/${max_attempts} (engine ${PLAN_ENGINE})..."
