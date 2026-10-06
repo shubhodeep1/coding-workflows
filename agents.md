@@ -603,7 +603,8 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   may contain only lines from either side, retaining each side's line order
   and duplicate counts when combining them.
   Lines shared by both sides must also remain at their minimum shared count;
-  deleting a conflicted protected file is rejected. Lines inherited unchanged
+  there is no automated deletion override, including for lines both sides added.
+  Deleting a conflicted protected file is rejected. Lines inherited unchanged
   from the common base cannot be duplicated; a provenance check that exceeds
   its fixed work limit rejects the resolution without pushing.
   Its push uses a one-shot credential helper instead of storing `GH_TOKEN` in

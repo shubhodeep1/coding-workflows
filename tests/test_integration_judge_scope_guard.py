@@ -189,6 +189,51 @@ def test_protected_resolution_retains_shared_duplicate_counts(judge_repo):
 	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() == before
 
 
+@pytest.mark.parametrize("judge_repo,content", [
+	(True, ""),
+	(("path", "scripts/helper.sh"), ""),
+	("base-shared", "first\nours\ntheirs\nlast\n"),
+	(True, "first\nours\ntheirs\n"),
+	("shared", "first\nours\ntheirs\nlast\n"),
+], indirect=["judge_repo"])
+def test_protected_conflict_rejects_removed_shared_line_before_push(judge_repo, content):
+	wt, baseline, remote, before, conflict_path, run = judge_repo
+	(wt / conflict_path).write_text(content)
+	result = run(f'_integration_judge_commit_and_push "{wt}" 42 integration main "{baseline}" 1')
+	assert result.returncode != 0
+	assert "reason=protected_path_provenance" in result.stderr
+	assert f"path='{conflict_path}'" in result.stderr
+	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() == before
+
+
+@pytest.mark.parametrize("judge_repo", [True], indirect=True)
+@pytest.mark.parametrize("content", ["first\nours\nlast\n", "first\ntheirs\nlast\n"])
+def test_protected_conflict_accepts_either_whole_side(judge_repo, content):
+	wt, baseline, remote, before, conflict_path, run = judge_repo
+	(wt / conflict_path).write_text(content)
+	git(wt, "add", conflict_path)
+	result = run(f'_integration_judge_verify_scope "{wt}" "{baseline}" 42')
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert result.stdout.strip() == git(wt, "write-tree").stdout.strip()
+	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() == before
+
+
+@pytest.mark.parametrize("judge_repo", [("path", "src/app.py")], indirect=True)
+def test_unprotected_conflict_accepts_empty_resolution(judge_repo):
+	wt, baseline, remote, before, conflict_path, run = judge_repo
+	(wt / conflict_path).write_text("")
+	git(wt, "add", conflict_path)
+	result = run(f'_integration_judge_verify_scope "{wt}" "{baseline}" 42')
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert result.stdout.strip() == git(wt, "write-tree").stdout.strip()
+	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() == before
+
+
+def test_integration_judge_prompt_requires_shared_line_retention():
+	assert "keep every line both merge sides contain" in POLL_SCRIPT
+	assert "at least as many times as the side with fewer copies" in POLL_SCRIPT
+
+
 @pytest.mark.parametrize("judge_repo", [("path", "src/app.py")], indirect=True)
 def test_unprotected_source_can_synthesize_lines(judge_repo):
 	wt, baseline, remote, before, conflict_path, run = judge_repo
