@@ -1441,6 +1441,7 @@ def test_env_wrapped_commit_checks_selected_repo(merged_branch_repo, monkeypatch
 	"env -C /does-not-exist git commit -m x",
 	"env -C/does-not-exist git commit -m x",
 	"env --chdir=/does-not-exist git commit -m x",
+	"env GIT_DIR=/does-not-exist git commit -m x",
 	"git -C /does-not-exist commit -m x",
 	"GIT_DIR=/does-not-exist git commit -m x",
 	"GIT_DIR+=/does-not-exist git commit -m x",
@@ -1459,10 +1460,25 @@ def test_env_unresolved_commit_directory_asks_instead_of_checking_checkout(merge
 	assert code == 0 and message == ""
 	decision = json.loads(capsys.readouterr().out.splitlines()[-1])
 	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+	if "GIT_DIR=" in command:
+		assert "could not resolve git commit directory" in decision["hookSpecificOutput"]["permissionDecisionReason"]
 	assert "checking the session checkout instead" not in json.dumps(decision)
 	if command.startswith("env -C"):
 		assert "no checkout was checked" in decision["hookSpecificOutput"]["permissionDecisionReason"]
 		assert "merged-PR guard needs confirmation" in decision["systemMessage"]
+
+
+def test_env_chdir_commit_still_asks_when_warning_text_changes(merged_branch_repo, monkeypatch, capsys) -> None:
+	repo, _ = merged_branch_repo
+	original = guard._guarded_git_invocations
+	monkeypatch.setattr(guard, "_guarded_git_invocations", lambda command, checkout: [
+		invocation._replace(warning="different wording") for invocation in original(command, checkout)
+	])
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("must not check the wrong checkout"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "env -C /does-not-exist git commit -m x"}})
+	assert code == 0 and message == ""
+	assert json.loads(capsys.readouterr().out.splitlines()[-1])["hookSpecificOutput"]["permissionDecision"] == "ask"
 
 
 def test_env_chdir_does_not_change_subsequent_command_directory(merged_branch_repo, monkeypatch) -> None:

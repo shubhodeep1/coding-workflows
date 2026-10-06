@@ -13534,8 +13534,11 @@ prime_phase_concurrency_snapshot() {
 # the rare recovery-push path (the PR-named lookup below adds its own paged
 # calls only when $2 is given and the branch listing matched nothing).
 #
-# Args: $1 = head branch.  Echoes the databaseId of the freshest matching
-# in_progress/queued/pending review run younger than REVIEW_RUN_MAX_RUNTIME_MINUTES,
+# Args: $1 = head branch, $2 = optional PR number. Echoes the databaseId of
+# the freshest matching branch run or PR-named dispatch run; an unavailable
+# listing with a PR number returns "listing-incomplete" to defer the push.
+# Without a PR number the original branch-only, fail-open behavior remains.
+# Matches in_progress/queued/pending review runs younger than REVIEW_RUN_MAX_RUNTIME_MINUTES,
 # else nothing.  Freshness mirrors build_active_issue_set's review-run window
 # so a review still legitimately editing past STALL_THRESHOLD_MINUTES is not
 # clobbered, while a genuinely hung run older than the review budget does not
@@ -13603,6 +13606,9 @@ _direct_inflight_review_run_on_branch()
 	if [ "${_di_rc}" -ne 0 ] || [ -z "${_di_runs_json}" ] \
 		|| ! printf '%s' "${_di_runs_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
 		echo "STALL_INFLIGHT_DIRECT_CHECK branch=${_di_branch} rc=${_di_rc} runs=${_di_runs_total} live=${_di_runs_live} matched=0 outcome=listing_unavailable" >&2
+		if [[ "${_di_pr}" =~ ^[1-9][0-9]*$ ]]; then
+			printf '%s\n' "listing-incomplete"
+		fi
 		return 0
 	fi
 	_di_runs_total="$(printf '%s' "${_di_runs_json}" | jq -r 'length' 2>/dev/null || echo "invalid")"
@@ -14776,16 +14782,22 @@ STALL_EOF
               _rtr_wf_conclusion="${_rtr_wf_row}"
               _rtr_wf_created_at=""
             fi
-            if [ -n "${_rtr_wf_created_at}" ] && [[ "${_rtr_wf_created_at}" > "${_rtr_newest_completed_at}" ]]; then
+            # A tied failure must not be lost because the workflows were listed
+            # in a different order; completed run timestamps have second precision.
+            if [ -n "${_rtr_wf_created_at}" ] && { [[ "${_rtr_wf_created_at}" > "${_rtr_newest_completed_at}" ]] ||
+                 { [ "${_rtr_wf_created_at}" = "${_rtr_newest_completed_at}" ] &&
+                   [ -z "${_rtr_failed_conclusion}" ] &&
+                   [[ "${_rtr_wf_conclusion}" =~ ^(failure|cancelled|timed_out)$ ]]; }; }; then
               _rtr_newest_completed_at="${_rtr_wf_created_at}"
-            fi
-            case "${_rtr_wf_conclusion}" in
-              failure|cancelled|timed_out)
+              _rtr_failed_conclusion=""
+              _rtr_failed_wf=""
+              case "${_rtr_wf_conclusion}" in
+                failure|cancelled|timed_out)
                 _rtr_failed_conclusion="${_rtr_wf_conclusion}"
                 _rtr_failed_wf="${wf_candidate}"
-                break
                 ;;
-            esac
+              esac
+            fi
           done
           # Default-branch dispatches (issue #4701): a review run that
           # _dispatch_review_for_conflicts or the sweep dispatched is named
@@ -14793,10 +14805,10 @@ STALL_EOF
           # branch lookups above never see it. When they found no failed
           # run, look at the newest PR-named dispatch run (one paged lookup,
           # §15; see _pr_named_review_dispatch_runs for its call budget):
-          # it counts when it completed with a failure and is newer than
-          # every completed head-branch run seen. A missing createdAt counts
-          # as older, so this path only adds a redispatch when the failure
-          # is definitely the newest run.
+          # it counts when it completed with a failure and is no older than
+          # every completed head-branch run seen (ties prefer failure). A missing
+          # createdAt counts as older, so this path only adds a redispatch when
+          # the failure is newest or tied for newest.
           # An incomplete listing (issue #4927) can neither show the newest
           # PR-named run nor rule out a live one, so this cycle neither
           # redispatches nor pushes; the next poll cycle retries.
@@ -14826,7 +14838,7 @@ STALL_EOF
               _rtr_pr_named_created_at="${_rtr_pr_named_row#*$'\t'}"
               case "${_rtr_pr_named_conclusion}" in
                 failure|cancelled|timed_out)
-                  if [ -n "${_rtr_pr_named_created_at}" ] && [[ "${_rtr_pr_named_created_at}" > "${_rtr_newest_completed_at}" ]]; then
+                  if [ -n "${_rtr_pr_named_created_at}" ] && [[ "${_rtr_pr_named_created_at}" > "${_rtr_newest_completed_at}" || "${_rtr_pr_named_created_at}" = "${_rtr_newest_completed_at}" ]]; then
                     _rtr_failed_conclusion="${_rtr_pr_named_conclusion}"
                     _rtr_failed_wf="review run dispatched for PR #${pr_num}"
                   fi
@@ -14909,15 +14921,17 @@ STALL_EOF
               --argjson now "${_rtr_now_epoch}" \
               --argjson threshold "${_rtr_stall_secs}" '
               [.workflow_runs[]?
-               | select((.status // "") == "in_progress" or (.status // "") == "queued")
+               | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
                | select(
                    ((.head_branch // "") == $br)
                    or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
-                   # A default-branch dispatch (issues #4618, #4701) is named
-                   # for its PR; its head_branch is the default branch.
-                   or ($pr != "" and (.event // "") == "workflow_dispatch"
-                       and ((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
-                            or (.display_title // "") == ("AI Review [pr:" + $pr + "]")))
+                    # A default-branch dispatch (issues #4618, #4701) is named
+                    # for its PR; its head_branch is the default branch.
+                    or ($pr != "" and (.event // "") == "workflow_dispatch"
+                        and (((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+                              and ((.path // "") | test("(^|/)internal-review\\.yml(@.*)?$")))
+                             or ((.display_title // "") == ("AI Review [pr:" + $pr + "]")
+                              and ((.path // "") | test("(^|/)ai-review\\.yml(@.*)?$")))))
                  )
                | select(
                    (.name // "") == "AI Review"
@@ -14925,9 +14939,7 @@ STALL_EOF
                    or (.name // "") == "Review Autofix"
                    or (.name // "") == "Internal: AI Review & Autofix"
                    or (.name // "") == "Codex PR Self-Healing Semantic Agent"
-                   or ((.path // "") | endswith("ai-review.yml"))
-                   or ((.path // "") | endswith("internal-review.yml"))
-                   or ((.path // "") | endswith("review_autofix.yml"))
+                   or ((.path // "") | test("(^|/)(ai-review|internal-review|review_autofix)\\.yml(@.*)?$"))
                  )
                | ([.run_started_at, .created_at]
                   | map(select(type == "string" and . != ""))[0] // "") as $ts
@@ -15367,14 +15379,14 @@ invoke_stall_judge() {
                or (.name // "") == "Review Autofix"
                or (.name // "") == "Internal: AI Review & Autofix"
                or (.name // "") == "Codex PR Self-Healing Semantic Agent"
-               or (.path // "" | endswith("ai-review.yml"))
-               or (.path // "" | endswith("internal-review.yml"))
-               or (.path // "" | endswith("review_autofix.yml")))
-      | select(($head_ref != "" and (.head_branch // "") == $head_ref) or ($head_sha != "" and (.head_sha // "") == $head_sha)
-               or ($pr != ""
-                   and (.event // "") == "workflow_dispatch"
-                   and ((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
-                        or (.display_title // "") == ("AI Review [pr:" + $pr + "]"))))
+               or (.path // "" | test("(^|/)(ai-review|internal-review|review_autofix)\\.yml(@.*)?$")))
+       | select(($head_ref != "" and (.head_branch // "") == $head_ref) or ($head_sha != "" and (.head_sha // "") == $head_sha)
+                or ($pr != ""
+                    and (.event // "") == "workflow_dispatch"
+                    and (((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+                          and ((.path // "") | test("(^|/)internal-review\\.yml(@.*)?$")))
+                         or ((.display_title // "") == ("AI Review [pr:" + $pr + "]")
+                          and ((.path // "") | test("(^|/)ai-review\\.yml(@.*)?$"))))))
       | {id: .id, workflow: (.name // ""), conclusion: (.conclusion // ""), status: (.status // ""), head_branch: (.head_branch // ""), created_at: (.created_at // "")}
     ]
     | sort_by(.created_at)
@@ -18078,15 +18090,17 @@ STALL_EOF
                 --argjson now "${_std_rtr_now_epoch}" \
                 --argjson threshold "${_std_rtr_stall_secs}" '
                 [.workflow_runs[]?
-                 | select((.status // "") == "in_progress" or (.status // "") == "queued")
+                 | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
                  | select(
                      ((.head_branch // "") == $br)
                      or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
-                     # A default-branch dispatch (issues #4618, #4701) is named
-                     # for its PR; its head_branch is the default branch.
-                     or ($pr != "" and (.event // "") == "workflow_dispatch"
-                         and ((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
-                              or (.display_title // "") == ("AI Review [pr:" + $pr + "]")))
+                      # A default-branch dispatch (issues #4618, #4701) is named
+                      # for its PR; its head_branch is the default branch.
+                      or ($pr != "" and (.event // "") == "workflow_dispatch"
+                          and (((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+                                and ((.path // "") | test("(^|/)internal-review\\.yml(@.*)?$")))
+                               or ((.display_title // "") == ("AI Review [pr:" + $pr + "]")
+                                and ((.path // "") | test("(^|/)ai-review\\.yml(@.*)?$")))))
                    )
                  | select(
                      (.name // "") == "AI Review"
@@ -18094,9 +18108,7 @@ STALL_EOF
                      or (.name // "") == "Review Autofix"
                      or (.name // "") == "Internal: AI Review & Autofix"
                      or (.name // "") == "Codex PR Self-Healing Semantic Agent"
-                     or ((.path // "") | endswith("ai-review.yml"))
-                     or ((.path // "") | endswith("internal-review.yml"))
-                     or ((.path // "") | endswith("review_autofix.yml"))
+                     or ((.path // "") | test("(^|/)(ai-review|internal-review|review_autofix)\\.yml(@.*)?$"))
                    )
                  | ([.run_started_at, .created_at]
                     | map(select(type == "string" and . != ""))[0] // "") as $ts

@@ -1585,6 +1585,9 @@ if args[0] == 'run' and len(args) >= 2 and args[1] == 'list':
 			event = args[i + 1]
 		if arg == '--jq' and i + 1 < len(args):
 			jq_query = args[i + 1]
+	if event == 'workflow_dispatch' and store.get('pr_named_listing_fail'):
+		print('dispatch run listing unavailable', file=sys.stderr)
+		sys.exit(1)
 	runs = []
 	for run in store.get('active_autofix_runs', []):
 		if workflow and run.get('workflow') != workflow:
@@ -1599,6 +1602,9 @@ if args[0] == 'run' and len(args) >= 2 and args[1] == 'list':
 		entry = {
 			'status': run.get('status', 'queued'),
 			'conclusion': run.get('conclusion', ''),
+			'createdAt': run.get('createdAt', '2999-01-01T00:00:00Z'),
+			'startedAt': run.get('startedAt', '2999-01-01T00:00:00Z'),
+			'databaseId': run.get('databaseId', 99),
 		}
 		for key in ('event', 'displayTitle', 'createdAt', 'startedAt', 'databaseId'):
 			if key in run:
@@ -12899,9 +12905,26 @@ def test_standalone_conflict_sweep_handles_non_ai_branch_conflicts():
 	assert result["update_branch_calls"] == [411]
 	assert len(result["review_dispatches"]) == 1
 	assert result["review_dispatches"][0]["pr_number"] == 411
-	# Issue #4701: the conflict dispatch runs the default branch's workflow
-	# file (no --ref), never the PR head branch's own copy.
+	# The conflict dispatch executes the default-branch workflow, not the PR head.
 	assert result["review_dispatches"][0]["ref"] is None
+
+
+def test_standalone_conflict_sweep_sees_named_pending_dispatch():
+	state = _base_state(status="complete")
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		prs=[{"number": 411, "state": "open", "baseRefName": "main",
+		      "headRefName": "claude/issue-10", "headSha": "sha411",
+		      "mergeable": False, "mergeable_state": "dirty"}],
+		update_branch_fail_for_prs=[411],
+		active_autofix_runs=[{
+			"workflow": "internal-review.yml", "workflowName": "Internal: AI Review & Autofix",
+			"branch": "main", "event": "workflow_dispatch",
+			"displayTitle": "Internal: AI Review & Autofix [pr:411]", "status": "pending",
+		}],
+	)
+	assert result["review_dispatches"] == []
+	assert "Active autofix run found" in result["stdout"]
 
 
 def test_standalone_conflict_sweep_keeps_ai_issue_branch_behavior():
@@ -13211,6 +13234,33 @@ def test_standalone_retrigger_review_skips_empty_commit_when_review_run_has_blan
 		f"expected no standalone empty-commit push when a blank-head_branch run matches "
 		f"the PR head_sha; got push calls {result.get('git_push_calls', [])}"
 	)
+
+
+def test_standalone_retrigger_review_sees_pr_named_pending_run():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({"schema_version": 1, "last_seen_phase": "ai:done", "status_since_ts": 1, "stall_recovery_count": 0})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]}, issue_linked_prs={501: 416},
+		mock_gh_issue_list_label_filter=True,
+		prs=[{"number": 416, "body": "Closes #501", "state": "open", "baseRefName": "main",
+		      "headRefName": "claude/issue-501", "headRefFromApi": "claude/issue-501",
+		      "headSha": "a" * 40, "mergeable": True, "mergeable_state": "clean"}],
+		actions_runs_workflow_runs=[{
+			"id": 26088864017, "name": "Internal: AI Review & Autofix",
+			"path": ".github/workflows/internal-review.yml@main", "event": "workflow_dispatch",
+			"display_title": "Internal: AI Review & Autofix [pr:416]",
+			"status": "pending", "head_branch": "main", "head_sha": "c" * 40,
+			"created_at": "2999-01-01T00:00:00Z",
+		}], mock_git_push_success=True,
+	)
+	assert result.get("git_push_calls", []) == []
+	assert _extract_latest_standalone_state(result["issues"]["501"]["comments"])["stall_recovery_count"] == 0
 
 
 def test_standalone_retrigger_review_skips_empty_commit_for_review_run_past_stall_threshold_but_within_budget():
@@ -17456,6 +17506,24 @@ def test_retrigger_review_redispatches_when_last_autofix_concluded_failure():
 	)
 
 
+def test_retrigger_review_redispatches_on_tied_head_branch_failure():
+	state, prs = _retrigger_review_pr_state(77, "claude/retrigger-review-tied-failure")
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 77}, prs=prs,
+		active_autofix_runs=[
+			{"workflow": "ai-review.yml", "branch": "claude/retrigger-review-tied-failure",
+			 "status": "completed", "conclusion": "success", "createdAt": "2026-09-28T01:00:00Z"},
+			{"workflow": "internal-review.yml", "branch": "claude/retrigger-review-tied-failure",
+			 "status": "completed", "conclusion": "failure", "createdAt": "2026-09-28T01:00:00Z"},
+		],
+		mock_git_push_success=True,
+	)
+	assert any(d.get("pr_number") == 77 for d in result["review_dispatches"]), result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert "last internal-review.yml run concluded 'failure'" in result["stdout"]
+
+
 def test_retrigger_review_skips_merge_train_queued_pr_without_consuming_stall_budget():
 	state = _base_state(status="in_progress")
 	issue = state["waves"][0]["issues"][0]
@@ -18047,6 +18115,26 @@ def test_retrigger_review_ignores_pr_named_failure_superseded_by_newer_head_bran
 	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "93"]
 	assert dispatches_for_pr == [], dispatches_for_pr
 	assert result.get("git_push_calls", []), "expected the empty-commit push path"
+
+
+def test_retrigger_review_redispatches_pr_named_failure_tied_with_head_branch_success():
+	state, prs = _retrigger_review_pr_state(93, "claude/retrigger-review-pr-named-tied")
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 93}, prs=prs,
+		active_autofix_runs=[
+			{"workflow": "internal-review.yml", "branch": "claude/retrigger-review-pr-named-tied",
+			 "event": "pull_request", "status": "completed", "conclusion": "success",
+			 "createdAt": "2026-09-28T01:00:00Z"},
+			{"workflow": "internal-review.yml", "branch": "main", "event": "workflow_dispatch",
+			 "displayTitle": "Internal: AI Review & Autofix [pr:93]",
+			 "status": "completed", "conclusion": "failure", "createdAt": "2026-09-28T01:00:00Z"},
+		],
+		mock_git_push_success=True,
+	)
+	assert any(d.get("pr_number") == 93 for d in result["review_dispatches"]), result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert "review run dispatched for PR #93" in result["stdout"]
 
 
 def test_retrigger_review_skips_push_and_redispatch_when_pr_named_listing_is_incomplete():
