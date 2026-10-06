@@ -1500,6 +1500,11 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		if invocation.subcommand == "push" and invocation.config_override:
 			unverified_destinations.add("per-command Git configuration may redirect the push")
 			continue  # Origin's PR history cannot authorize a push with overridden configuration.
+		if invocation.subcommand == "commit" and invocation.warning and invocation.config_override:
+			# An env wrapper (or per-command configuration) selected a directory
+			# the guard cannot resolve; other unresolved commits only warn.
+			unverified_destinations.add("could not resolve the git commit directory")
+			continue
 		targets = (
 			_push_targets(invocation, checkout) if invocation.subcommand == "push" else
 			[_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", False, invocation.warning)]
