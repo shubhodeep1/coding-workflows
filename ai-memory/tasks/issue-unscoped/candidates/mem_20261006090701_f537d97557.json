@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:491, 538-543 | severity=critical | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: An unresolved `env -C` directory falls back to checking the session checkout instead of requesting confirmation.\n  WHY: `env -C /does-not-exist git commit -m x` makes `_literal_guard_path` return `None`, but the invocation is assigned the session checkout as its working directory; CI reproduces this in `test_env_unresolved_commit_directory_asks_instead_of_checking_checkout`, causing `tests-hooks-and-orchestrator` and the aggregate `lint` check to fail.\n- .claude/hooks/pr_merge_status_guard.py:1566 | severity=critical | confidence=5\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: When `env -C /does-not-exist git commit -m x` uses a non-existent directory, the guard resolves the branch from the session checkout instead of requesting confirmation.\n  WHY: The test monkeypatches `query_pull_requests` to fail if called, and the guard calls it with the wrong checkout context; this causes `tests-hooks-and-orchestrator` to fail and blocks the aggregate `lint` job.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/pr_merge_status_guard.py:491, 538-543 | severity=BLOCKER | confidence=5\n  PROBLEM: An unresolved `env -C` directory falls back to checking the session checkout.\n  WHY: `env -C /does-not-exist git commit -m x` makes `_literal_guard_path` return `None`, but the invocation is then assigned the session checkout as its working directory. The guard queries PR state for that checkout instead of requesting confirmation. CI reproduces this in `test_env_unresolved_commit_directory_asks_instead_of_checking_checkout`; `tests-hooks-and-orchestrator` fails with 1 failed and 413 passed, causing the aggregate `lint` check to fail.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/hooks/pr_merge_status_guard.py:1566 | severity=BLOCKER | confidence=5\n  PROBLEM: When `env -C /does-not-exist git commit -m x` uses a non-existent directory, the guard resolves the branch from the session checkout instead of requesting confirmation.\n  WHY: The test monkeypatches `query_pull_requests` to fail if called, and the guard calls it with the wrong checkout context. This causes `tests-hooks-and-orchestrator` to fail (1 failed, 413 passed), which blocks the aggregate `lint` job and prevents the PR from merging.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e01043cfd59cff68f2e393a77d2af39a50b96ad04e41458cb8f1f0768bb26235",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6462,
+    "run_id": "37432806426",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37432806426",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006090701_f537d97557",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6462,
+    "run_id": "37432806426"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T09:07:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
