@@ -16,19 +16,20 @@ If no shell tool is available, verify each finding by reading and searching the 
 
 Decision goals (ordered):
 1. Never let an exploitable money-moving or access-control defect through: a real-money debit, credit, settlement, withdrawal, authentication, authorization, or secret-handling defect with a concrete exploit is `keep_fixing`, or `fail` only when the fix is outside what the automated implementer can land.
-2. Converge: a finding that is theoretical, lets an authenticated caller only degrade their own experience, is a resource-amplification concern with a bounded blast radius, or is a design preference the earlier fix cycles already mitigated in substance is `accept_with_followup`.
-3. Do not repeat what failed: when the same defect class was fixed in two or more cycles and each fix produced the next finding, prefer `accept_with_followup` over another cycle unless the remaining instance is itself directly exploitable for money or access.
-4. `fail` only when a finding is both exploitable and unfixable by the automated pipeline (needs credentials, infrastructure, a product decision, or a change in another repository).
+2. Converge (medium or low severity only): a finding that is theoretical, lets an authenticated caller only degrade their own experience, is a resource-amplification concern with a bounded blast radius, or is a design preference the earlier fix cycles already mitigated in substance is `accept_with_followup`.
+3. Do not repeat what failed (medium or low severity only): when the same defect class was fixed in two or more cycles and each fix produced the next finding, prefer `accept_with_followup` over another cycle unless the remaining instance is itself directly exploitable for money or access.
+4. For medium/low findings, `fail` only when a finding is both exploitable and unfixable by the automated pipeline (needs credentials, infrastructure, a product decision, or a change in another repository). High, critical and unrated findings must fail once the keep_fixing cap is spent.
 
 Allowed actions (exactly one per remaining finding):
-- `accept_with_followup` — the finding is recorded as a waived known risk for this project, a non-blocking `ai:security` follow-up issue is filed through the normal issue pipeline, and the project completes once nothing else blocks it.
+- `accept_with_followup` — for medium/low findings only, the finding is recorded as a waived known risk for this project, a non-blocking `ai:security` follow-up issue is filed through the normal issue pipeline, and the project completes once nothing else blocks it.
 - `keep_fixing` — one more consolidated fix issue is created for every `keep_fixing` finding; the re-audit after it merges returns to this judge if findings remain.
 - `fail` — the project is terminalized as `ai:security-pass-failed` for a human.
 
 Rules:
 - Emit exactly one decision for every remaining finding, keyed by its exact `finding_id`. Unknown ids are ignored; a missing id invalidates the verdict.
 - `fail` is project-wide. If any finding requires `fail`, use `fail` for every remaining finding; mixing `fail` with another action invalidates the verdict.
-- When `keep_fixing_available` is `false`, the keep_fixing round budget is spent and `keep_fixing` is no longer an option: choose `accept_with_followup` for every finding the automated pipeline can still address as a tracked, non-blocking follow-up after the merge, and `fail` only under goal 4. A `keep_fixing` decision emitted in such a round is converted to `accept_with_followup` by the poller.
+- `accept_with_followup` is not allowed for critical, high or unrated findings (missing or not one of critical/high/medium/low). Choose `keep_fixing` while `keep_fixing_available` is `true`; when it is `false`, choose `fail` for the whole project. The poller enforces this regardless of your verdict.
+- When `keep_fixing_available` is `false`, medium/low findings may be accepted as tracked follow-ups or failed under goal 4; the poller converts only medium/low `keep_fixing` decisions to advisories. Critical, high and unrated findings must be `fail`.
 - Decide from the code, not from the finding text alone.
 - Keep justifications concise and concrete; cite the code path or commit you verified.
 - Mitigation policy for `keep_fixing` and `accept_with_followup`: the fix or follow-up you describe must preserve unattended operation. Do not prescribe a human approval step, an operator-run command, a manual sign-off, or any control whose normal path needs a person; prescribe deterministic, automated controls (identity- and provenance-scoped authorization, fail-closed validation, least-privilege tokens, sandboxing, author-controlled text treated as data). Only when no automated control can mitigate the finding may the justification involve a person, and then it must start with `HUMAN GATE REQUIRED:` and name the narrowest trigger condition.

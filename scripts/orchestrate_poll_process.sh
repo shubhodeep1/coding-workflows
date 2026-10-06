@@ -6691,6 +6691,7 @@ security_pass_exhaustion_judge() {
   local accepted_count fixing_count failed_count decisions_table waivers_json fixing_findings_file
   local followup_issue followup_issues finding_json finding_id justification summary
   local keep_fixing_capped keep_fixing_converted capped_suffix
+  local sp_blocking_severity_jq_def severity_counts severity_to_keep_fixing severity_to_fail severity_blocked_suffix
 
   SECURITY_PASS_JUDGE_OUTCOME=""
   if [ "${SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED}" != "true" ]; then
@@ -6858,18 +6859,60 @@ security_pass_exhaustion_judge() {
   ' > "${verdict_file}" 2>/dev/null || { echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=verdict_normalize_failed"; return 1; }
   jq --argjson round "${judge_round}" '.security_pass_judge_rounds = $round' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
-  # Convergence backstop for medium/low findings only. High or unknown
-  # severity must stay blocking even when the judge's fix budget is spent.
+  # Only medium/low findings may be auto-waived. Treat every other severity,
+  # including missing or malformed values, as blocking at this trust boundary.
+  sp_blocking_severity_jq_def='def sp_blocking_severity: (((.finding.severity // "") | tostring | ascii_downcase) as $s | ($s | IN("medium", "low")) | not);'
+  if ! severity_counts="$(jq -r --argjson capped "${keep_fixing_capped}" "${sp_blocking_severity_jq_def}"'
+    . as $verdict
+    | ([$verdict.decisions[] | select(sp_blocking_severity and .action == "accept_with_followup")] | length) as $accepts
+    | if $capped then "0\t\(if $accepts > 0 or any($verdict.decisions[]; sp_blocking_severity and .action == "keep_fixing") then ($verdict.decisions | length) else 0 end)"
+      else "\($accepts)\t0" end
+  ' "${verdict_file}")"; then
+    echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=severity_rewrite_failed round=${judge_round}"
+    return 1
+  fi
+  IFS=$'\t' read -r severity_to_keep_fixing severity_to_fail <<< "${severity_counts}"
+  severity_blocked_suffix=""
+  if [ "${severity_to_keep_fixing}" -gt 0 ] || [ "${severity_to_fail}" -gt 0 ]; then
+    if ! jq --argjson capped "${keep_fixing_capped}" \
+      --arg kf_note '[high/critical/unrated finding cannot be auto-waived; converted to keep_fixing] ' \
+      --arg fail_note "[high/critical/unrated finding cannot be auto-waived after ${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS} keep_fixing judge round(s); converted to fail] " \
+      --arg project_fail_note '[fail is project-wide; converted to fail] ' "${sp_blocking_severity_jq_def}"'
+      .decisions |= map(
+        if sp_blocking_severity and $capped and .action != "fail" then
+          .action = "fail" | .justification = ($fail_note + .justification)
+        elif sp_blocking_severity and ($capped | not) and .action == "accept_with_followup" then
+          .action = "keep_fixing" | .justification = ($kf_note + .justification)
+        else . end
+      )
+      | if any(.decisions[]; .action == "fail") then
+          .decisions |= map(if .action != "fail" then .action = "fail" | .justification = ($project_fail_note + .justification) else . end)
+        else . end
+    ' "${verdict_file}" > "${verdict_file}.tmp" || ! mv "${verdict_file}.tmp" "${verdict_file}"; then
+      rm -f "${verdict_file}.tmp"
+      echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=severity_rewrite_failed round=${judge_round}"
+      return 1
+    fi
+    echo "SECURITY_PASS_JUDGE_SEVERITY_BLOCKED tracking_issue=${TRACKING_NUM} round=${judge_round} to_keep_fixing=${severity_to_keep_fixing} to_fail=${severity_to_fail}"
+    if [ "${severity_to_fail}" -gt 0 ]; then
+      severity_blocked_suffix=" ${severity_to_fail} finding(s) were converted to \`fail\` because high, critical or unrated findings cannot be accepted as advisories after the keep_fixing round budget (\`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}\`) is spent; recover with \`/re-security-pass\` or \`/security-pass-waive <finding_id>\`."
+    else
+      severity_blocked_suffix=" ${severity_to_keep_fixing} high, critical or unrated finding(s) were converted from \`accept_with_followup\` to \`keep_fixing\` because they cannot be auto-waived."
+    fi
+  fi
+
+  # Convergence backstop for medium/low findings only. High, critical and
+  # unrated findings were already converted to project-wide fail at the cap.
   keep_fixing_converted=0
   capped_suffix=""
   if [ "${keep_fixing_capped}" = "true" ]; then
-    keep_fixing_converted="$(jq -r '[.decisions[] | select(.action == "keep_fixing" and ((.finding.severity // "" | ascii_downcase) == "medium" or (.finding.severity // "" | ascii_downcase) == "low"))] | length' "${verdict_file}")"
+    keep_fixing_converted="$(jq -r "${sp_blocking_severity_jq_def}"'[.decisions[] | select(.action == "keep_fixing" and (sp_blocking_severity | not))] | length' "${verdict_file}")"
     [[ "${keep_fixing_converted}" =~ ^[0-9]+$ ]] || keep_fixing_converted=0
     if [ "${keep_fixing_converted}" -gt 0 ]; then
-      if ! jq --arg note "[keep_fixing capped after ${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS} judge round(s); converted to advisory follow-up] " '
+      if ! jq --arg note "[keep_fixing capped after ${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS} judge round(s); converted to advisory follow-up] " "${sp_blocking_severity_jq_def}"'
         .decisions = [
           .decisions[]
-          | if .action == "keep_fixing" and ((.finding.severity // "" | ascii_downcase) == "medium" or (.finding.severity // "" | ascii_downcase) == "low") then (.action = "accept_with_followup" | .justification = ($note + .justification)) else . end
+          | if .action == "keep_fixing" and (sp_blocking_severity | not) then (.action = "accept_with_followup" | .justification = ($note + .justification)) else . end
         ]
       ' "${verdict_file}" > "${verdict_file}.tmp" || ! mv "${verdict_file}.tmp" "${verdict_file}"; then
         rm -f "${verdict_file}.tmp"
@@ -6891,7 +6934,7 @@ security_pass_exhaustion_judge() {
     decisions_table="$(render_security_pass_judge_decisions_table "${verdict_file}" 2>/dev/null || true)"
     post_tracking_comment "## ⚖️ Security-pass exhaustion judge (round ${judge_round})
 
-The consolidated fix-cycle budget (${completed_cycles}/${MAX_SECURITY_PASS_CYCLES}) is spent and ${finding_count} blocking finding(s) remain at integration head \`${head_sha}\`. The judge decided that ${failed_count} finding(s) need a human, so the project is terminalized as \`ai:security-pass-failed\`.
+The consolidated fix-cycle budget (${completed_cycles}/${MAX_SECURITY_PASS_CYCLES}) is spent and ${finding_count} blocking finding(s) remain at integration head \`${head_sha}\`. The judge decided that ${failed_count} finding(s) need a human, so the project is terminalized as \`ai:security-pass-failed\`.${severity_blocked_suffix}
 
 **Summary:** $(security_pass_prose "${summary}")
 ${decisions_table:+
@@ -6955,7 +6998,7 @@ ${decisions_table}}"
   if [ "${fixing_count}" -gt 0 ]; then
     post_tracking_comment "## ⚖️ Security-pass exhaustion judge (round ${judge_round})
 
-The consolidated fix-cycle budget (${completed_cycles}/${MAX_SECURITY_PASS_CYCLES}) is spent and ${finding_count} blocking finding(s) remain at integration head \`${head_sha}\`. The judge accepted ${accepted_count} finding(s) as known risks${followup_suffix} and granted one more consolidated fix cycle for ${fixing_count} finding(s). The re-audit after that fix merges returns to the judge if findings remain.
+The consolidated fix-cycle budget (${completed_cycles}/${MAX_SECURITY_PASS_CYCLES}) is spent and ${finding_count} blocking finding(s) remain at integration head \`${head_sha}\`. The judge accepted ${accepted_count} finding(s) as known risks${followup_suffix} and granted one more consolidated fix cycle for ${fixing_count} finding(s). The re-audit after that fix merges returns to the judge if findings remain.${severity_blocked_suffix}
 
 **Summary:** $(security_pass_prose "${summary}")
 ${decisions_table:+

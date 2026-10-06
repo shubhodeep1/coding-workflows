@@ -473,11 +473,11 @@ def _security_audit_findings_payload(findings: list[dict] | None = None) -> dict
 	}
 
 
-def _security_pass_test_finding() -> dict:
+def _security_pass_test_finding(*, severity: str = "high") -> dict:
 	return {
 		"finding_id": "SEC-TEST-1",
 		"owasp_or_stride_category": "A01: Broken Access Control",
-		"severity": "high",
+		"severity": severity,
 		"confidence": 9,
 		"file": "scripts/example.py",
 		"line": 1,
@@ -5833,7 +5833,7 @@ def test_security_pass_exhaustion_judge_accepts_all_findings_and_passes() -> Non
 	exhaustion judge now records each accepted finding as a waiver, files a
 	non-blocking ai:security follow-up, and lets completion continue.
 	"""
-	remaining = _security_pass_test_finding()
+	remaining = _security_pass_test_finding(severity="medium")
 	remaining["exploit_scenario"] = "Notify @security-team about issue #123."
 	result = _run_poller(
 		state=_security_pass_exhausted_state(
@@ -5878,7 +5878,7 @@ def test_security_pass_exhaustion_judge_accepts_all_findings_and_passes() -> Non
 	created = result.get("created_issues", [])
 	assert len(created) == 1
 	assert created[0]["labels"] == ["ai:security"]
-	assert created[0]["title"] == "[security-pass] Advisory: SEC-TEST-1 (high, scripts/example.py:1)"
+	assert created[0]["title"] == "[security-pass] Advisory: SEC-TEST-1 (medium, scripts/example.py:1)"
 	advisory_body = result["issues"][str(created[0]["number"])]["body"]
 	assert "<!-- ai:security-finding:SEC-TEST-1 -->" in advisory_body
 	assert "<!-- security-pass-advisory:192:SEC-TEST-1 -->" in advisory_body
@@ -5923,7 +5923,7 @@ def test_security_pass_exhaustion_judge_accepts_all_findings_and_passes() -> Non
 	]
 	assert len(filed_comments) == 1
 	assert f"- `SEC-TEST-1` → #{created[0]['number']}" in filed_comments[0]
-	assert "| SEC-TEST-1 | high | scripts/example.py:1 | accept_with_followup |" in judge_comments[0]
+	assert "| SEC-TEST-1 | medium | scripts/example.py:1 | accept_with_followup |" in judge_comments[0]
 	assert "Ping @​security about #​55." in judge_comments[0]
 	assert not any("Project security pass exhausted" in comment["body"] for comment in result["issues"]["192"]["comments"])
 	assert any(
@@ -6117,7 +6117,7 @@ def test_security_pass_advisory_followup_reconciles_remote_marker_before_create(
 		enable_validation="false",
 		max_validate_cycles="3",
 		enable_security_pass="true",
-		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding(severity="medium")]),
 		issue_labels={10: ["ai:merged"]},
 		existing_branches=["main", "orchestrator/project-192"],
 		search_issue_items=[
@@ -6211,8 +6211,7 @@ def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_advisories()
 	keep_fixing decision to a deferred advisory so the project completes
 	without a human; `fail` verdicts are unaffected.
 	"""
-	medium_finding = _security_pass_test_finding()
-	medium_finding["severity"] = "medium"
+	medium_finding = _security_pass_test_finding(severity="medium")
 	result = _run_poller(
 		state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
 		enable_validation="false",
@@ -6252,6 +6251,7 @@ def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_advisories()
 	assert "ai:security-pass-fixing" not in result["tracking_labels"]
 	combined_log = result["stdout"] + result["stderr"]
 	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=192 round=3 cap=2 converted=1" in combined_log
+	assert "SECURITY_PASS_JUDGE_SEVERITY_BLOCKED" not in combined_log
 	assert "SECURITY_PASS_JUDGE_DECIDED tracking_issue=192 round=3" in combined_log
 	assert "accepted=2 keep_fixing=0 failed=0" in combined_log
 	assert "SECURITY_PASS_CLEAN tracking_issue=192" in combined_log
@@ -6276,16 +6276,81 @@ def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_advisories()
 
 
 def test_security_pass_cap_never_waives_a_high_finding() -> None:
+	"""A high finding at the cap fails the whole verdict, including a medium acceptance."""
 	result = _run_poller(
 		state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
 		enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding(), _security_pass_second_test_finding()]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing"), ("SEC-TEST-2", "accept_with_followup")))},
+	)
+	assert result["latest_state"]["status"] == "failed"
+	assert result["tracking_labels"] == ["ai:security-pass-failed"]
+	assert result["latest_state"]["security_pass_waived_findings"] == []
+	assert result.get("created_issues", []) == []
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_JUDGE_SEVERITY_BLOCKED tracking_issue=192 round=3 to_keep_fixing=0 to_fail=2" in combined_log
+	assert "accepted=0 keep_fixing=0 failed=2" in combined_log
+	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED" not in combined_log
+	judge_comments = [comment["body"] for comment in result["issues"]["192"]["comments"] if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 3)")]
+	assert len(judge_comments) == 1
+	assert "cannot be accepted as advisories after the keep_fixing round budget" in judge_comments[0]
+	assert "| SEC-TEST-2 | medium | scripts/example.py:1 | fail | [fail is project-wide; converted to fail]" in judge_comments[0]
+
+
+def test_security_pass_uncapped_high_acceptance_opens_fix_issue() -> None:
+	result = _run_poller(
+		state=_security_pass_exhausted_state(), enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
 		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
 		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
-		env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing")))},
+		env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "accept_with_followup")))},
 	)
 	assert result["latest_state"]["status"] == "security-pass-fixing"
+	assert len(result["latest_state"]["security_pass_active_fix_issues"]) == 1
 	assert result["latest_state"]["security_pass_waived_findings"] == []
-	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED" not in result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_JUDGE_SEVERITY_BLOCKED tracking_issue=192 round=1 to_keep_fixing=1 to_fail=0" in result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_FIX_ISSUE_CREATED tracking_issue=192" in result["stdout"] + result["stderr"]
+	judge_comments = [comment["body"] for comment in result["issues"]["192"]["comments"] if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 1)")]
+	assert len(judge_comments) == 1
+	assert "cannot be auto-waived" in judge_comments[0]
+
+
+def test_security_pass_unrated_findings_remain_blocking() -> None:
+	missing_finding = _security_pass_test_finding()
+	missing_finding.pop("severity")
+	unknown_finding = _security_pass_second_test_finding()
+	unknown_finding["severity"] = "severe"
+	for prior_rounds, expected_status, expected_count in ((0, "security-pass-fixing", "to_keep_fixing=2 to_fail=0"), (2, "failed", "to_keep_fixing=0 to_fail=2")):
+		result = _run_poller(
+			state=_security_pass_exhausted_state(security_pass_judge_rounds=prior_rounds),
+			enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+			security_audit_payload=_security_audit_findings_payload([missing_finding, unknown_finding]),
+			issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+			env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "accept_with_followup"), ("SEC-TEST-2", "accept_with_followup")))},
+		)
+		assert result["latest_state"]["status"] == expected_status
+		assert result["latest_state"]["security_pass_waived_findings"] == []
+		assert expected_count in result["stdout"] + result["stderr"]
+
+
+def test_security_pass_capped_critical_acceptance_fails() -> None:
+	result = _run_poller(
+		state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
+		enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding(severity="critical")]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "accept_with_followup")))},
+	)
+	assert result["latest_state"]["status"] == "failed"
+	assert result["tracking_labels"] == ["ai:security-pass-failed"]
+	assert result["latest_state"]["security_pass_waived_findings"] == []
+	assert "to_keep_fixing=0 to_fail=1" in result["stdout"] + result["stderr"]
+
+
+def test_security_pass_severity_log_prefix_is_registered() -> None:
+	agents_text = (Path(__file__).resolve().parent.parent / "agents.md").read_text(encoding="utf-8")
+	assert "- `SECURITY_PASS_JUDGE_SEVERITY_BLOCKED`" in agents_text
+	assert "LOG_PREFIX.name=SECURITY_PASS_JUDGE_SEVERITY_BLOCKED" in agents_text
 
 
 def test_security_pass_exhaustion_judge_keep_fixing_allowed_within_cap() -> None:

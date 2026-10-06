@@ -1484,8 +1484,8 @@ diagnostics, and after verdict normalization the poller rewrites low/medium
 prefixed `[keep_fixing capped after <c> judge round(s); converted to advisory
 follow-up]` (`SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=<N>
 round=<r> cap=<c> converted=<n>`), so the accept-all path runs and the project
-completes with deferred advisories only if no high, critical, or unrated finding remains. Those findings stay blocking and may receive another fix cycle; `fail` verdicts are untouched; unlike
-`MAX_SECURITY_PASS_JUDGE_ROUNDS` this cap never terminalizes. Project #3965
+completes with deferred advisories only if no high, critical, or unrated finding remains. The poller converts an attempted acceptance of a high, critical or unrated finding to `keep_fixing` before the cap, and converts any non-fail verdict for one to project-wide `fail` after the cap (`SECURITY_PASS_JUDGE_SEVERITY_BLOCKED`). An explicit all-`fail` verdict remains unchanged. Unlike
+`MAX_SECURITY_PASS_JUDGE_ROUNDS` this cap terminalizes only blocking-severity findings. Project #3965
 ran fix cycles 6 and 7 on a 5-cycle budget because rounds 1 and 2 each chose
 `keep_fixing` and nothing bounded the sequence.
 Waivers travel to the engine as `SECURITY_AUDIT_WAIVED_FINDINGS`
@@ -1738,6 +1738,7 @@ and shipped:
 - `ORCHESTRATOR_ENGINE_SHA`
 - `SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED`
 - `SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED`
+- `SECURITY_PASS_JUDGE_SEVERITY_BLOCKED`
 - `VALIDATION_RUN_ATTRIBUTION`
 - `CI_CANCELLED_RERUN`
 
@@ -1954,6 +1955,7 @@ LOG_PREFIX.name=STAGED_SUPPORT_LATCH_RELEASE_SKIPPED
 LOG_PREFIX.name=ORCHESTRATOR_ENGINE_SHA
 LOG_PREFIX.name=SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED
 LOG_PREFIX.name=SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED
+LOG_PREFIX.name=SECURITY_PASS_JUDGE_SEVERITY_BLOCKED
 LOG_PREFIX.name=VALIDATION_RUN_ATTRIBUTION
 LOG_PREFIX.name=CI_CANCELLED_RERUN
 LOG_PREFIX.name=SEMBLE_QUERY
