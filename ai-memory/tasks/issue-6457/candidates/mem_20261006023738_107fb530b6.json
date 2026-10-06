@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where should the heal-evidence scope lock get its allowlist from?\nChoices:\nA) Add a new machine-readable marker to the heal issue body, for example `<!-- ai:workflow-heal-scope:v1 ... -->`, written by the intake. It holds exact repo paths from the diagnosis that pass `is_valid_repo_path`, with a cap on the count. `scope-allowlist` trusts it only when the existing intake-account authorship and edit-history checks pass. Drop the prose and plan fallbacks. A missing or untrusted marker fails closed (`heal-evidence-no-allowlist`), which includes heal issues filed before this change. (RECOMMENDED)\nB) Same as A, but heal issues filed before the marker existed fall back to the hardened prose parsing in C. Issues filed after it must have the marker.\nC) Keep the issue-body and plan sources, but harden parsing: ignore `files_touched:` blocks inside fenced code and inside the copied evidence or `UNTRUSTED` sections, and reject broad globs (Q2).\n   **Note:** C keeps model output (the plan) as a scope source, which the finding explicitly rejects.\nQ2: Which allowlist entries should the heal-evidence scope lock reject?\nChoices:\nA) Allow exact file paths only. Reject any entry containing `*`, `?` or `[`, and any entry that ends in `/` or names a directory. (RECOMMENDED)\nB) Reject only match-everything patterns: entries made entirely of wildcard segments (`**/**`, `*/**`, `**/*/**`, \u2026), plus the empty string and `.`.\nC) Allow globs only after at least one literal directory segment (for example `scripts/foo/**` is allowed, `**/x.py` is rejected), plus everything B rejects.\nQ3: Which protected-path exclusions should the commit guard enforce on heal-evidence runs, whatever the allowlist says?\nChoices:\nA) Block `.git/**`, `.github/ai/**`, `.claude/**`, `workflow-templates/.claude/**` and the root `CLAUDE.md`, `agents.md` and `unattended_system_instructions.md`, enforced in the commit guard in `.github/workflows/implement.yml` and `scripts/implement_commit_changes.sh`. Keep `scripts/**` and `.github/workflows/**` allowed, because workflow-defect heal fixes target them. (RECOMMENDED)\nB) Same as A, and also block `.github/workflows/**`.\n   **Note:** most `workflow-defect` heal fixes would then be blocked and need a human.\nC) No separate protected list; rely only on the Q1/Q2 hardening.",
+  "fingerprint": "ce61b912cb061d90208ff54a22a1fc0a065e773fd62e11d7bf7c30f60f1e860d",
+  "lineage": {
+    "issue_number": 6457,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37404578346",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37404578346",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261006023738_107fb530b6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6457,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37404578346"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6457 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-06T02:37:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
