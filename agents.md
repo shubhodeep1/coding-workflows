@@ -33,9 +33,16 @@ Phases of the unattended pipeline (each is a separate workflow file under
    absent from the cache key. Orchestrator mode keeps the existing cache path.
 3. **plan** (`plan.yml`, `internal-plan.yml`) — read the clarified issue and
    emit a structured implementation plan with files-to-change and a
-   per-issue ≤60-minute time budget.
+   per-issue ≤60-minute time budget. The model runs against a read-only
+   disposable snapshot through `scripts/editor_isolated_run.sh`.
 4. **implement** (`implement.yml`, `internal-implement.yml`) — execute the
-   plan with codex-cli; write the actual files.
+   plan with codex-cli; write the actual files. Both editor launch sites run
+   in a tokenless container against a checked snapshot (including exclusion
+   of nested `.ssh`, `.aws` and `.gnupg` directories); the host verifies
+   container removal before transferring edits and restoring Git credentials.
+   Exit cleanup is still attempted if credential restoration fails. A failed
+   reap retains the root so the later credential-restore step retries container
+   removal rather than restoring credentials without verification.
 5. **implement-diagnose** (`scripts/implement_diagnose_post_codex_failure.sh`,
    driven by `MODEL_DIAGNOSE`) — analyse a post-Codex validation failure and
    emit JSON fix-up issue proposals.
@@ -251,10 +258,14 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `BASH_ENV` empty and enters the
     workspace explicitly; each editor attempt replaces the startup file before
     later steps source it, clearing the inherited setting first on failure.
-    Heal-evidence implement runs pin a plan-only, concrete-file scope allowlist
-    before the editor, excluding scope-guard files and paths under `.github/ai/`
-    and `.claude/hooks/`; preflight and commit ignore scope bypass variables and
-    block empty allowlists. This is not a same-uid process isolation boundary.
+    Heal-evidence implement runs pin the intake-verified leading scope marker
+    (exact files from validated autofix reporter facts, never diagnosis prose) before the
+    editor; preflight and commit ignore scope bypass variables, block empty
+    allowlists and reject protected paths (including root `ai_pipeline.md`) even
+    when listed. Named files match exactly, including extensionless files; only
+    the issue-number-bound changelog fragment uses a pattern. Reports without a
+    validated crash file or GitHub-derived pipeline-file list get no marker and
+    fail closed. This is not a same-uid process isolation boundary.
     Stable log prefixes:
     `WORKFLOW_HEAL_REPORT`, `WORKFLOW_HEAL_AUTOFIX_REPORT`,
     `WORKFLOW_HEAL_PR_RECONCILE`, `WORKFLOW_HEAL`, `WORKFLOW_HEAL_EVIDENCE`.
@@ -476,7 +487,8 @@ a new value, add it to the appropriate overrides file with a
   fallback use the same container. Missing isolation fails closed.
   A preceding env scrub drops GH_TOKEN, GH_PAT, GITHUB_TOKEN, Telegram and
   Actions runtime credentials; `scripts/editor_git_credentials.sh` hides git
-  origin/extraheader auth for the editor and restores it after each launch.
+  origin/extraheader auth for the editor and restores it after each launch,
+  including a split `WORKSPACE_PATH` checkout alongside `GITHUB_WORKSPACE`.
   Both launches and the later syntax-repair restore execute only bytes matching
   the pre-editor stage output's SHA-256, loaded into shell memory; an unmatched
   helper fails closed rather than restoring auth from an editor-writable file.
@@ -484,7 +496,22 @@ a new value, add it to the appropriate overrides file with a
   hide refuses before the editor starts, and restore refuses before any token
   is injected, when a checkout's origin is not its trusted repository or was
   changed, or a pushurl, URL rewrite, proxy, credential helper or include
-  directive sits in an editor-writable git config scope.
+  directive sits in an editor-writable git config scope. It also refuses
+  command-running Git keys (filter/diff/merge drivers, `core.attributesFile`,
+  `core.hooksPath`, `core.editor`, `core.pager`, signing programs, `lfs.*`) in those scopes
+  and driver assignments in `.git/info/attributes`, global attributes, or
+  new or modified working-tree `.gitattributes` files (unchanged tracked
+  bindings remain usable). Both
+  preflight and commit-time staging call its tokenless `check` action immediately
+  before `git add`, ignore
+  editor-writable global Git config, and command-override hooks, fsmonitor and
+  global attributes. Credential restore and push use the repository-scoped
+  workflow token rather than `GH_PAT`; push repeats the check and ignores global
+  Git config before writing authenticated origin state. Since the workflow
+  token does not trigger `pull_request:synchronize`, the existing-PR recovery
+  path explicitly dispatches `internal-review.yml` (or `ai-review.yml` in a
+  consumer) from the default branch only for the pushed head branch; a failed
+  dispatch fails the step.
   The editor never reads those paths; only the restore / reinstall / commit
   steps of the job do. A `pytest` the editor starts to validate its own change
   therefore cannot write fixture paths into the live run's ledgers even when
@@ -1524,6 +1551,7 @@ and shipped:
 - `WORKFLOW_HEAL_EVIDENCE`
 - `HEAL_EVIDENCE_SCOPE_LOCK`
 - `EDITOR_GIT_CREDENTIALS`
+- `EDITOR_ISOLATION`
 - `IMPLEMENT_ISOLATION`
 - `AUTOFIX_FINGERPRINT`
 - `AUTOFIX_FINGERPRINT_CAP_TRIPPED`
@@ -1730,6 +1758,7 @@ LOG_PREFIX.name=WORKFLOW_HEAL
 LOG_PREFIX.name=WORKFLOW_HEAL_EVIDENCE
 LOG_PREFIX.name=HEAL_EVIDENCE_SCOPE_LOCK
 LOG_PREFIX.name=EDITOR_GIT_CREDENTIALS
+LOG_PREFIX.name=EDITOR_ISOLATION
 LOG_PREFIX.name=IMPLEMENT_ISOLATION
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_TRIPPED

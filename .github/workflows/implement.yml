@@ -17,6 +17,7 @@ env:
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
   UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}
   MODEL_EDITOR: ${{ vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+  CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
   # Capacity-fallback editor model. On the final implement attempt the retry
   # loop points CODEX_THREAD_REUSE_MODEL at this slug, which sits in a
   # different OpenRouter/OpenAI per-model TPM bucket than the primary, so a
@@ -1001,6 +1002,22 @@ jobs:
           FETCHED_MANIFEST="${RUNTIME_DIR}/fetched_files.txt"
           : > "${FETCHED_MANIFEST}"
           echo "FETCHED_MANIFEST=${FETCHED_MANIFEST}" >> "$GITHUB_ENV"
+
+          # Immutable, out-of-tree runtime code: the editor can change scripts/
+          # in its snapshot without changing what the next host attempt executes.
+          EDITOR_ISOLATION_SUPPORT_DIR="${RUNTIME_DIR}/editor_isolation_support"
+          mkdir -p "${EDITOR_ISOLATION_SUPPORT_DIR}/review_sandbox"
+          for f in editor_isolated_run.sh review_untrusted_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py claude_settings.json.tmpl ai_engine.sh claude_engine.py codex_thread_reuse.sh codex_stall_guard.sh write_codex_config.sh codex_model_catalog.json workspace_safety_check.sh editor_git_credentials.sh; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ]; then src=".codex-workflow-src-main/scripts/${f}"; fi
+            [ -f "${src}" ] || { echo "::error::Missing editor isolation support ${f}"; exit 1; }
+            install -m 0755 "${src}" "${EDITOR_ISOLATION_SUPPORT_DIR}/${f}"
+          done
+          src=".codex-workflow-src/scripts/review_sandbox/Dockerfile"
+          if [ ! -f "${src}" ]; then src=".codex-workflow-src-main/scripts/review_sandbox/Dockerfile"; fi
+          [ -f "${src}" ] || { echo '::error::Missing editor isolation Dockerfile'; exit 1; }
+          install -m 0644 "${src}" "${EDITOR_ISOLATION_SUPPORT_DIR}/review_sandbox/Dockerfile"
+          echo "EDITOR_ISOLATION_SUPPORT_DIR=${EDITOR_ISOLATION_SUPPORT_DIR}" >> "$GITHUB_ENV"
 
           is_self_repo="false"
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
@@ -2159,7 +2176,8 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          result="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/workflow_failure_heal_evidence.py scope-allowlist --issue-body-file "${ISSUE_BODY_FILE}" --plan-file "${PLAN_FILE}" || echo '{}')"
+          result="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/workflow_failure_heal_evidence.py scope-allowlist --evidence-dir "${HEAL_EVIDENCE_DIR:-}" --issue-number "${ISSUE_NUMBER:-}" || echo '{}')"
+          echo "HEAL_EVIDENCE_SCOPE_LOCK source=$(printf '%s' "${result}" | jq -r '.source // "none"' || echo none) reason=$(printf '%s' "${result}" | jq -r '.reason // "unavailable"' || echo unavailable) entries=$(printf '%s' "${result}" | jq -r '.allowlist | length' || echo 0)"
           delimiter="HEAL_SCOPE_$(date +%s%N)"
           {
             echo "allowlist<<${delimiter}"
@@ -2258,7 +2276,9 @@ jobs:
           # this, `[ -n "${GH_TOKEN:-}" ]` at the gh-issue-comment guard
           # is always false and the per-attempt failure diagnostics
           # never reach the source issue.
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          # The caller's repository-scoped workflow token can post diagnostics
+          # and is the only credential restored into Git after editor attempts.
+          GH_TOKEN: ${{ github.token }}
           EDITOR_GIT_CREDENTIALS_SHA256: ${{ steps.stage_support.outputs.editor_git_credentials_sha256 }}
         run: |
           set -euo pipefail
@@ -2433,6 +2453,8 @@ jobs:
           else
             echo "::notice::${STAGED_SUPPORT_WORKSPACE_HELPER} is unavailable on ${SCRIPT_REF:-this ref}; the editor sees the staged support copies."
           fi
+
+          EDITOR_ISOLATION_ROOT="$(bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" prepare write "${AI_ENGINE_RESOLVED_IMPLEMENT:-codex}")" || exit 1
 
           # Pre-load files named in the plan's "Files likely to change"
           # section so the editor's first turn is a write rather than a
@@ -2779,7 +2801,7 @@ jobs:
           }
 
             # shellcheck source=/dev/null
-            source scripts/codex_thread_reuse.sh
+            source "${EDITOR_ISOLATION_SUPPORT_DIR}/codex_thread_reuse.sh"
 
             # The editor can rewrite both the checkout and runtime copies.
             # Hash the exact bytes executed against the pre-editor step output.
@@ -2802,7 +2824,7 @@ jobs:
             EDITOR_GIT_CREDENTIALS_SCRIPT="${_egc_src}"
             editor_git_credentials() { env -u BASH_ENV -u ENV bash -c "${EDITOR_GIT_CREDENTIALS_SCRIPT}" editor_git_credentials.sh "$@"; }
 
-            trap 'editor_git_credentials restore' EXIT
+            trap 'isolation_exit_rc=$?; bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" reap "${EDITOR_ISOLATION_ROOT}" && editor_git_credentials restore || isolation_exit_rc=1; bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" cleanup "${EDITOR_ISOLATION_ROOT}" || isolation_exit_rc=1; exit "${isolation_exit_rc}"' EXIT
 
             for attempt in $(seq 1 "${max_attempts}"); do
             echo "Codex implement attempt ${attempt}/${max_attempts}..."
@@ -2950,11 +2972,15 @@ jobs:
             # unsynced integration branch checks out an older conftest.py, so
             # the workflow side has to hold on its own.
             # heal-evidence-privileged-prompt-injection: scrub child credentials.
+            bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" snapshot "${EDITOR_ISOLATION_ROOT}"
             editor_git_credentials hide
             rm -f "${RUNTIME_DIR}/implement_sandbox_failed" "${RUNTIME_DIR}/implement_sandbox_transfer_failed"
             CODEX_THREAD_REUSE_STATE_KEY="implement" \
               CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT:-codex}" \
               CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT" \
+              CODEX_THREAD_REUSE_REAL_CODEX="${EDITOR_ISOLATION_ROOT}/bin/codex" \
+              EDITOR_ISOLATION_ROOT="${EDITOR_ISOLATION_ROOT}" \
+              EDITOR_ISOLATION_REASONING="${MODEL_REASONING_EFFORT:-high}" \
               CODEX_THREAD_REUSE_PROMPT_FILE="${PROMPT_FILE_TO_USE}" \
               CODEX_THREAD_REUSE_OUTPUT_FILE="${CODEX_OUTPUT_FILE}" \
               CODEX_THREAD_REUSE_PHASE="implement" \
@@ -2965,14 +2991,12 @@ jobs:
               CODEX_THREAD_REUSE_STATUS_FILE="${attempt_stall_status_file}" \
               CODEX_THREAD_REUSE_STALL_GUARD_HELPER="${CODEX_STALL_GUARD_HELPER}" \
               CODEX_THREAD_REUSE_TIMEOUT_SECS="${attempt_wall}" \
-              CODEX_THREAD_REUSE_REAL_CODEX="${IMPLEMENT_SANDBOX_ROOT}/bin/codex" \
-              CODEX_THREAD_REUSE_SESSION_ROOT="${IMPLEMENT_SANDBOX_ROOT}/home/.codex/sessions" \
               CODEX_THREAD_REUSE_SESSION_CWD="/source" \
-              CODEX_THREAD_REUSE_CLAUDE_RUNNER="${IMPLEMENT_SANDBOX_SUPPORT_DIR}/scripts/implement_untrusted_sandbox.sh" \
-              CODEX_THREAD_REUSE_CLAUDE_HOME="${IMPLEMENT_SANDBOX_ROOT}/home" \
               env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_CHAT_ID -u TG_ADMIN_CHAT_ID -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH \
               env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \
-              bash "${IMPLEMENT_SANDBOX_SUPPORT_DIR}/scripts/codex_thread_reuse.sh" direct-run || cmd_rc=$?
+              bash "${EDITOR_ISOLATION_SUPPORT_DIR}/codex_thread_reuse.sh" direct-run || cmd_rc=$?
+
+            bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" finish "${EDITOR_ISOLATION_ROOT}"
 
             # The editor can replace the job's workspace-shell.env. Keep the
             # next step clear of it until a fresh startup file is installed.
@@ -3299,6 +3323,8 @@ jobs:
 
           # Put SCRIPT_REF's copies back for every support path the editor
           # left untouched; edited paths stay as the editor's plain edits.
+          bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" cleanup "${EDITOR_ISOLATION_ROOT}"
+          trap - EXIT
           if [ -f "${STAGED_SUPPORT_WORKSPACE_HELPER}" ]; then
             bash "${STAGED_SUPPORT_WORKSPACE_HELPER}" reinstall
           fi
@@ -3507,10 +3533,15 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         id: preflight_destructive_guard
         env:
-          HEAL_EVIDENCE_SCOPE_LOCK: ${{ steps.collect_heal_evidence.outputs.present == 'true' && 'true' || 'false' }}
+          HEAL_EVIDENCE_SCOPE_LOCK: ${{ steps.heal_evidence_gate.outputs.enabled == 'true' && 'true' || 'false' }}
           HEAL_EVIDENCE_SCOPE_ALLOWLIST: ${{ steps.heal_evidence_scope.outputs.allowlist }}
         run: |
           set -euo pipefail
+
+          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" check || {
+            echo "::error::Editor-writable git config or attributes would run a command during preflight staging; refusing to continue."
+            exit 1
+          }
 
           TEMP_INDEX_FILE="$(mktemp "${TMPDIR:-/tmp}/implement-preflight-index.XXXXXX")"
           VIRTUAL_CLEANUP_FILE="$(mktemp "${TMPDIR:-/tmp}/implement-preflight-cleanup.XXXXXX")"
@@ -3608,14 +3639,14 @@ jobs:
             add_u_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
             add_o_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
           fi
-          git add -u -- "${add_u_excludes[@]}"
+          GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null add -u -- "${add_u_excludes[@]}"
           while IFS= read -r -d '' untracked_candidate; do
             [ -n "${untracked_candidate}" ] || continue
             if is_virtual_cleanup_path "${untracked_candidate}"; then
               continue
             fi
-            git add -- "${untracked_candidate}"
-          done < <(git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}")
+            GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null add -- "${untracked_candidate}"
+          done < <(GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}")
           if [ "${is_self_repo}" = "false" ] && [ -f scripts/.gitignore ]; then
             while IFS= read -r fetched_script; do
               case "${fetched_script}" in ''|'#'*|'.gitignore') continue ;; esac
@@ -3758,7 +3789,11 @@ jobs:
           if [ "${HEAL_EVIDENCE_SCOPE_LOCK:-false}" != "true" ] && [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ]; then
             echo "::notice::files_touched scope guard disabled (ENFORCE_FILES_TOUCHED='${ENFORCE_FILES_TOUCHED:-true}')."
           else
-            scope_staged="$(git diff --cached --name-only --diff-filter=ACMRD || true)"
+            if [ "${HEAL_EVIDENCE_SCOPE_LOCK:-false}" = "true" ]; then
+              scope_staged="$(git diff --cached --name-only --no-renames --diff-filter=ACMRTD)"
+            else
+              scope_staged="$(git diff --cached --name-only --diff-filter=ACMRD || true)"
+            fi
             if [ -n "${scope_staged}" ]; then
               scope_staged_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-staged.XXXXXX")"
               scope_allowlist_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-allowlist.XXXXXX")"
@@ -3767,7 +3802,7 @@ jobs:
               if [ "${HEAL_EVIDENCE_SCOPE_LOCK:-false}" = "true" ]; then
                 scope_input_file="$(mktemp "${TMPDIR:-/tmp}/implement-heal-scope.XXXXXX")"
                 printf '%s\n' "${HEAL_EVIDENCE_SCOPE_ALLOWLIST:-}" > "${scope_input_file}"
-                scope_input_args=(--allowlist-file "${scope_input_file}")
+                scope_input_args=(--allowlist-file "${scope_input_file}" --heal-protected)
                 echo "HEAL_EVIDENCE_SCOPE_LOCK lock=true entries=$(printf '%s\n' "${HEAL_EVIDENCE_SCOPE_ALLOWLIST:-}" | sed '/^$/d' | wc -l | tr -d ' ')"
               fi
               scope_violations=""
@@ -3819,6 +3854,24 @@ jobs:
                     rm -f "${scope_allowlist_file}"
                     exit 1
                   fi
+                  ;;
+                30)
+                  scope_count="$(printf '%s\n' "${scope_violations}" | sed '/^$/d' | wc -l | tr -d ' ')"
+                  scope_allowlist="$(sed '/^$/d' "${scope_allowlist_file}" 2>/dev/null || true)"
+                  echo "::error::Heal-evidence scope lock refused ${scope_count} protected staged path(s)."
+                  echo "HEAL_EVIDENCE_SCOPE_LOCK protected_paths=${scope_count}"
+                  {
+                    echo 'scope_violation_blocked=heal-evidence-protected-path'
+                    echo "scope_violation_count=${scope_count}"
+                    echo 'scope_violation_files<<__SVF_EOF__'
+                    printf '%s\n' "${scope_violations}" | sed '/^$/d'
+                    echo '__SVF_EOF__'
+                    echo 'scope_violation_allowlist<<__SVA_EOF__'
+                    printf '%s\n' "${scope_allowlist}" | sed '/^$/d'
+                    echo '__SVA_EOF__'
+                  } >> "$GITHUB_OUTPUT"
+                  rm -f "${scope_allowlist_file}"
+                  exit 1
                   ;;
                 *)
                   if [ "${HEAL_EVIDENCE_SCOPE_LOCK:-false}" = "true" ]; then
@@ -4190,6 +4243,10 @@ jobs:
             bash "${STAGED_SUPPORT_WORKSPACE_HELPER}" restore
           fi
 
+          EDITOR_ISOLATION_ROOT="$(bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" prepare write "${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex}")" || exit 1
+          echo "EDITOR_ISOLATION_ROOT=${EDITOR_ISOLATION_ROOT}" >> "$GITHUB_ENV"
+          trap 'isolation_exit_rc=$?; bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" reap "${EDITOR_ISOLATION_ROOT}" && editor_git_credentials restore || isolation_exit_rc=1; bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" cleanup "${EDITOR_ISOLATION_ROOT}" || isolation_exit_rc=1; exit "${isolation_exit_rc}"' EXIT
+
           repair_succeeded=false
           for attempt in $(seq 1 "${max_attempts}"); do
             echo "Post-Codex syntax repair attempt ${attempt}/${max_attempts}"
@@ -4274,6 +4331,9 @@ jobs:
               CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex}" \
               CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT_REPAIR" \
               AI_ENGINE_EFFORT_HINT="${REPAIR_REASONING}" \
+              CODEX_THREAD_REUSE_REAL_CODEX="${EDITOR_ISOLATION_ROOT}/bin/codex" \
+              EDITOR_ISOLATION_ROOT="${EDITOR_ISOLATION_ROOT}" \
+              EDITOR_ISOLATION_REASONING="${REPAIR_REASONING}" \
               CODEX_THREAD_REUSE_PROMPT_FILE="${REPAIR_PROMPT_FILE}" \
               CODEX_THREAD_REUSE_OUTPUT_FILE="${REPAIR_OUTPUT_FILE}" \
               CODEX_THREAD_REUSE_PHASE="implement_repair" \
@@ -4283,14 +4343,11 @@ jobs:
               CODEX_THREAD_REUSE_CONTINUATION_FILE="${repair_thread_reuse_continuation_file}" \
               CODEX_THREAD_REUSE_TRANSFORM_MODE="replace-prefix" \
               CODEX_THREAD_REUSE_MARKER_START="=== CAPTURED SYNTAX DIAGNOSTICS (FULL) ===" \
-              CODEX_THREAD_REUSE_REAL_CODEX="${IMPLEMENT_SANDBOX_ROOT}/bin/codex" \
-              CODEX_THREAD_REUSE_SESSION_ROOT="${IMPLEMENT_SANDBOX_ROOT}/home/.codex/sessions" \
               CODEX_THREAD_REUSE_SESSION_CWD="/source" \
-              CODEX_THREAD_REUSE_CLAUDE_RUNNER="${IMPLEMENT_SANDBOX_SUPPORT_DIR}/scripts/implement_untrusted_sandbox.sh" \
-              CODEX_THREAD_REUSE_CLAUDE_HOME="${IMPLEMENT_SANDBOX_ROOT}/home" \
               env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_CHAT_ID -u TG_ADMIN_CHAT_ID -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH \
               env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \
-              bash "${IMPLEMENT_SANDBOX_SUPPORT_DIR}/scripts/codex_thread_reuse.sh" direct-run; then
+              bash "${EDITOR_ISOLATION_SUPPORT_DIR}/codex_thread_reuse.sh" direct-run; then
+              bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" finish "${EDITOR_ISOLATION_ROOT}"
               echo 'BASH_ENV=' >> "$GITHUB_ENV"
               workspace_shell_env_clean="$(mktemp "${RUNTIME_DIR}/workspace-shell.XXXXXX")"
               printf '%s\n' \
@@ -4308,6 +4365,7 @@ jobs:
               emit_implement_substate "implement_repair" "implement_repair" "Failed" "${attempt}" "${REPAIR_LOG_FILE}"
               continue
             fi
+            bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" finish "${EDITOR_ISOLATION_ROOT}"
             echo 'BASH_ENV=' >> "$GITHUB_ENV"
             workspace_shell_env_clean="$(mktemp "${RUNTIME_DIR}/workspace-shell.XXXXXX")"
             printf '%s\n' \
@@ -4405,6 +4463,9 @@ jobs:
             exit 1
           fi
 
+          bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" cleanup "${EDITOR_ISOLATION_ROOT}"
+          trap - EXIT
+
           rm -f "${CAPTURE_FILE}"
           echo "repaired=true" >> "$GITHUB_OUTPUT"
 
@@ -4412,7 +4473,7 @@ jobs:
         if: always() && env.SKIP_IMPLEMENT != 'true' && steps.post_codex_syntax_repair.outcome != 'skipped'
         env:
           BASH_ENV: ''
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ github.token }}
           EDITOR_GIT_CREDENTIALS_SHA256: ${{ steps.stage_support.outputs.editor_git_credentials_sha256 }}
         run: |
           set -euo pipefail
@@ -4435,6 +4496,12 @@ jobs:
           fi
           EDITOR_GIT_CREDENTIALS_SCRIPT="${_egc_src}"
           editor_git_credentials() { env -u BASH_ENV -u ENV bash -c "${EDITOR_GIT_CREDENTIALS_SCRIPT}" editor_git_credentials.sh "$@"; }
+          if [ -n "${EDITOR_ISOLATION_ROOT:-}" ] && [ -d "${EDITOR_ISOLATION_ROOT}" ]; then
+            bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" cleanup "${EDITOR_ISOLATION_ROOT}" || {
+              echo '::error::Editor isolation cleanup failed; refusing to restore Git credentials'
+              exit 1
+            }
+          fi
           editor_git_credentials restore
 
       - name: Clean up implement editor isolation
@@ -4530,7 +4597,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         id: commit_changes
         env:
-          HEAL_EVIDENCE_SCOPE_LOCK: ${{ steps.collect_heal_evidence.outputs.present == 'true' && 'true' || 'false' }}
+          HEAL_EVIDENCE_SCOPE_LOCK: ${{ steps.heal_evidence_gate.outputs.enabled == 'true' && 'true' || 'false' }}
           HEAL_EVIDENCE_SCOPE_ALLOWLIST: ${{ steps.heal_evidence_scope.outputs.allowlist }}
         run: |
           set -euo pipefail
@@ -4817,7 +4884,7 @@ jobs:
       - name: Push branch
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
@@ -4826,7 +4893,12 @@ jobs:
           support_checkout_root="${GITHUB_WORKSPACE}/.codex-workflow-src"
           support_checkout_main_root="${GITHUB_WORKSPACE}/.codex-workflow-src-main"
 
-          git remote set-url origin "https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}"
+          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" check || {
+            echo "::error::Editor-writable git config or attributes changed before push; refusing to continue."
+            exit 1
+          }
+          export GIT_CONFIG_GLOBAL=/dev/null
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}"
 
           # Stage git_ref_health_check.sh from the already-checked-out support
           # source into a path OUTSIDE the working tree.  H1 (issue #1059)
@@ -5115,6 +5187,7 @@ jobs:
         id: create_pr
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          REVIEW_DISPATCH_REF: ${{ github.event.repository.default_branch || '' }}
         run: |
           set -euo pipefail
           source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
@@ -5172,7 +5245,8 @@ jobs:
             # above: only the issue's own implementation PR is reusable.
             # Prefer the exact head branch because that is the race this
             # recovery handles; otherwise accept only a cross-referenced PR
-            # whose body closes the issue. Mention-only PRs are ignored.
+            # on that same head whose body closes the issue. Mention-only PRs
+            # and PRs on other branches are ignored.
             # §15: one open-PR inventory supplies heads and bodies; the
             # timeline is queried only when the exact-head lookup misses.
             # Leave stderr unredirected so gh/jq diagnostics surface in
@@ -5211,7 +5285,9 @@ jobs:
                 [ -n "${recovery_candidate_num}" ] || continue
                 recovery_candidate_body_b64=""
                 while IFS=$'\t' read -r recovery_inventory_pr_num recovery_inventory_pr_url recovery_inventory_head_ref recovery_inventory_head_owner recovery_inventory_body_b64; do
-                  if [ "${recovery_inventory_pr_num}" = "${recovery_candidate_num}" ]; then
+                  if [ "${recovery_inventory_pr_num}" = "${recovery_candidate_num}" ] &&
+                     [ "${recovery_inventory_head_ref}" = "${TARGET_BRANCH}" ] &&
+                     [ "${recovery_inventory_head_owner,,}" = "${recovery_repo_owner,,}" ]; then
                     recovery_candidate_body_b64="${recovery_inventory_body_b64}"
                     break
                   fi
@@ -5228,6 +5304,28 @@ jobs:
               if [ -n "${PR_ENGINE_LABEL:-}" ] && ! gh_retry gh pr edit "${EXISTING_PR}" \
                   --repo "${{ github.repository }}" --add-label "${PR_ENGINE_LABEL}"; then
                 echo "::error::Could not copy the issue's engine label to existing PR ${EXISTING_PR}"
+                exit 1
+              fi
+              # The implementation push uses github.token, which does not emit
+              # pull_request:synchronize. A reused PR needs an explicit review.
+              recovery_review_pr_number="${EXISTING_PR##*/}"
+              if ! [[ "${recovery_review_pr_number}" =~ ^[0-9]+$ ]]; then
+                echo "::error::Cannot dispatch review for invalid existing PR URL"
+                exit 1
+              fi
+              recovery_review_workflow="ai-review.yml"
+              if [ "${GITHUB_REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then
+                recovery_review_workflow="internal-review.yml"
+              fi
+              if [ -z "${REVIEW_DISPATCH_REF}" ]; then
+                echo "::error::Cannot dispatch review without the repository default branch"
+                exit 1
+              fi
+              if ! gh_retry gh workflow run "${recovery_review_workflow}" \
+                  --repo "${GITHUB_REPOSITORY}" --ref "${REVIEW_DISPATCH_REF}" \
+                  -f "pr_number=${recovery_review_pr_number}" \
+                  -f "allow_workflow_edits=${ALLOW_WORKFLOW_EDITS:-true}"; then
+                echo "::error::Could not dispatch review for existing PR #${recovery_review_pr_number}"
                 exit 1
               fi
               echo "pr_url=${EXISTING_PR}" >> "$GITHUB_OUTPUT"

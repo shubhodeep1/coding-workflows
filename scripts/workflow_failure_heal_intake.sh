@@ -868,6 +868,7 @@ _open_issue()
 		--classification "${CLASSIFICATION}" \
 		--target-branch "${target_branch}" \
 		--integration-branch "${integration_branch}" \
+		--issue-repo "${repo}" \
 		--max-depth "${MAX_DEPTH}" \
 		--intake-run-url "${RUN_URL}" \
 		--title-out "${title_file}" \

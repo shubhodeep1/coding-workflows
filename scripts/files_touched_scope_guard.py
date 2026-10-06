@@ -63,10 +63,14 @@ import sys
 EXIT_IN_SCOPE = 0
 EXIT_SKIP_NO_ALLOWLIST = 10
 EXIT_OUT_OF_SCOPE = 20
+EXIT_HEAL_PROTECTED = 30
 
 STATUS_IN_SCOPE = "in-scope"
 STATUS_SKIP_NO_ALLOWLIST = "skip-no-allowlist"
 STATUS_OUT_OF_SCOPE = "out-of-scope"
+STATUS_HEAL_PROTECTED = "heal-protected"
+HEAL_PROTECTED_PREFIXES = (".github/ai", ".claude", "workflow-templates/.claude")
+HEAL_PROTECTED_ROOT_FILES = frozenset({"claude.md", "agents.md", "ai_pipeline.md", "unattended_system_instructions.md"})
 
 # Dependency lockfiles the implement prompt (prompts/mode-implement.txt,
 # "Dependency / lockfile discipline") instructs the editor to regenerate in the
@@ -130,6 +134,15 @@ def normalize_path(path: str) -> str:
 	while value.startswith("./"):
 		value = value[2:]
 	return value
+
+
+def is_heal_protected_path(path: str) -> bool:
+	value = normalize_path(path).casefold()
+	return (
+		".git" in value.split("/")
+		or any(value == prefix or value.startswith(prefix + "/") for prefix in HEAL_PROTECTED_PREFIXES)
+		or ("/" not in value and value in HEAL_PROTECTED_ROOT_FILES)
+	)
 
 
 def normalize_allowlist(entries: list[str]) -> list[str]:
@@ -259,6 +272,7 @@ def main(argv: list[str] | None = None) -> int:
 	parser.add_argument("--allowlist-file", default="")
 	parser.add_argument("--staged-file", default="")
 	parser.add_argument("--allowlist-out", default="")
+	parser.add_argument("--heal-protected", action="store_true")
 	args = parser.parse_args(argv)
 
 	issue_body = _read_text_file(args.issue_body_file) if args.issue_body_file else ""
@@ -266,6 +280,20 @@ def main(argv: list[str] | None = None) -> int:
 	allowlist_entries = _read_allowlist(args.allowlist_file) if args.allowlist_file else None
 
 	status, allowlist, out_of_scope = evaluate(issue_body, staged_paths, allowlist_entries=allowlist_entries)
+	if args.heal_protected and allowlist:
+		# The normal matcher also admits directory prefixes and lockfiles; heal scope is file-exact.
+		out_of_scope = [
+			path for path in staged_paths
+			if not any(
+				path == entry or (
+					re.fullmatch(r"changelog\.d/[1-9][0-9]*-\*\.md", entry)
+					and path.count("/") == 1
+					and fnmatch.fnmatchcase(path, entry)
+				)
+				for entry in allowlist
+			)
+		]
+		status = STATUS_OUT_OF_SCOPE if out_of_scope else STATUS_IN_SCOPE
 
 	if args.allowlist_out:
 		try:
@@ -276,6 +304,12 @@ def main(argv: list[str] | None = None) -> int:
 			# The allowlist dump is advisory (used only to enrich the alert);
 			# never fail the guard because it could not be written.
 			pass
+
+	if args.heal_protected:
+		protected_paths = [path for path in staged_paths if is_heal_protected_path(path)]
+		if protected_paths:
+			sys.stdout.write("\n".join(protected_paths) + "\n")
+			return EXIT_HEAL_PROTECTED
 
 	if status == STATUS_SKIP_NO_ALLOWLIST:
 		return EXIT_SKIP_NO_ALLOWLIST
