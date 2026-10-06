@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How far should the fix go to close the editor-survives-restore gap?\nChoices:\nA) Run each editor launch in a tokenless, network-isolated, read-only-root Docker container, following `scripts/review_untrusted_sandbox.sh` (host snapshot \u2192 container with the host-side model broker \u2192 checked transfer back). Support both the Claude and codex engines. When the container exits, every editor process ends with it, so credentials are never restored while any editor process is alive. Credentialed commit and push stay on the host checkout, which the editor never touches. (RECOMMENDED)\nB) Keep the editor on the host, but start it in its own PID namespace or process group. Before `restore`, kill that whole group and fail closed if any of its processes is still running. This is smaller, but while the editor runs it can still read other same-user processes' `/proc/<pid>/environ` (for example the step shell's `GH_TOKEN`).\nC) Option B, plus run commit and push from a separate credentialed clone so the PAT is never written into the editor's checkout.\n**Note:** B and C close only the restore race named in the finding, not same-UID credential access during the run.\nQ2: Which editor launch sites should this change cover?\nChoices:\nA) Every site that uses `editor_git_credentials.sh hide/restore`: both `implement.yml` launches (the main implementation loop and the post-Codex syntax-repair loop) and `scripts/run_plan_codex.sh`. (RECOMMENDED)\nB) Both `implement.yml` launches only. Plan gets a separate follow-up issue.\nC) Only the main implementation launch cited in the finding (`implement.yml:2883`).",
+  "fingerprint": "0cca0024ef7c4de48d51adca37bb06f336c6566c0f5044afd8680fa401dc5f18",
+  "lineage": {
+    "issue_number": 6458,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37404580423",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37404580423",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261006024021_4b128c0b54",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6458,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37404580423"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6458 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-06T02:40:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
