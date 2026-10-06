@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6595,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6595\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6597\",\"pr_number\":6597,\"branch\":\"ai/issue-6595\",\"run_id\":\"37531804863\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37531804863\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"agents.md\",\"changelog.d/6595-resolver-paired-live-hook.md\",\"scripts/review_conflict_resolve.sh\",\"scripts/review_untrusted_workspace.py\",\"tests/test_review_conflict_resolve_sandbox_only.py\",\"tests/test_review_sandbox_claude_roles.py\"]}",
+  "fingerprint": "ea5998d1f1b3e772606e2327ab5c4a5244344fc64a7774fdf5ebb8f93437e9f9",
+  "lineage": {
+    "issue_number": 6595,
+    "parent_ids": [],
+    "pr_number": 6597,
+    "run_id": "37531804863",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37531804863",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6597"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261006213423_a82adcc944",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6595,
+    "level": "run",
+    "pr_number": 6597,
+    "run_id": "37531804863"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6595: https://github.com/shubhodeep1/coding-workflows/pull/6597",
+  "timestamps": {
+    "created_at": "2026-10-06T21:34:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
