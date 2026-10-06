@@ -81,14 +81,19 @@ _POLLER_AI_ENGINE_SH="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && p
 poller_claude_judge()
 {
   local role="$1" prompt_file="$2" output_file="$3" log_file="$4" model_hint="${5:-${MODEL_EDITOR:-}}"
-  local judge_engine="codex" judge_rc=0
+  local judge_engine="codex" judge_rc=0 judge_read_only=false
   [ -f "${_POLLER_AI_ENGINE_SH}" ] || return 75
   # shellcheck source=ai_engine.sh
   source "${_POLLER_AI_ENGINE_SH}" || return 75
   judge_engine="$(AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
     ai_engine_for_role "${role}" 2> >(tee -a "${log_file}" >&2) || echo codex)"
   [ "${judge_engine}" = "claude" ] || return 75
-  AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
+  # Wave verdicts consume untrusted PR diffs but need no tool-side writes.
+  if [ "${role}" = WAVE_JUDGE ]; then
+    judge_read_only=true
+  fi
+  AI_ENGINE_READ_ONLY="${judge_read_only}" \
+    AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
     claude_run "${role}" "${prompt_file}" "${output_file}" "${PWD}" 2> >(tee -a "${log_file}" >&2) || judge_rc=$?
   if [ "${judge_rc}" -eq 86 ]; then
     echo "::error::Trusted support changed during the read-only judge run." >&2
@@ -23084,7 +23089,7 @@ ${PR_DIFF}
     wave_judge_rc=0
     poller_claude_judge WAVE_JUDGE "${judge_effective_prompt_file}" "${JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/judge_log.txt" || wave_judge_rc=$?
     if [ "${wave_judge_rc}" -eq 75 ]; then
-      cat "${judge_effective_prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
+      cat "${judge_effective_prompt_file}" | env -u GH_TOKEN -u GITHUB_TOKEN -u GH_PAT -u TG_BOT_SECRET codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
     fi
     rm -f "${judge_attempt_prompt_file}"
     judge_json_candidate="$(extract_judge_json_with_status "${JUDGE_OUTPUT_FILE}")"

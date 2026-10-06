@@ -117,7 +117,7 @@ VERDICT_UNAVAILABLE = "unavailable"
 # `--opt=value`. Needed so `git -C /repo commit` resolves to `commit` rather
 # than to the path.
 GIT_GLOBAL_OPTS_WITH_VALUE = frozenset(
-	{"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--exec-path"}
+	{"-C", "-c", "--config-env", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--exec-path"}
 )
 
 # Shell punctuation we treat as command separators when tokenizing a Bash line.
@@ -1604,6 +1604,8 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
+		if invocation.subcommand == "push" and invocation.warning == "could not verify git push configuration overrides":
+			return 2, "BLOCKED: git push configuration overrides may rewrite the destination URL. Use a configured GitHub remote without inline Git configuration."
 		if invocation.subcommand == "push" and invocation.warning:
 			_warn(invocation.warning)
 			unresolved_push_sources.append(

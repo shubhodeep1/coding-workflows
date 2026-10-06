@@ -33,6 +33,7 @@ ai_engine_for_role() {
 }
 claude_run() {
   printf '%s|%s|%s|%s|%s|%s|%s\n' "$1" "$(basename "$2")" "$(basename "$3")" "$4" "${AI_ENGINE_LABELS-unset}" "${AI_ENGINE_MODEL_HINT-}" "${AI_ENGINE_EFFORT_HINT-}" >> "${CALLS}.claude"
+  printf '%s\n' "${AI_ENGINE_READ_ONLY-unset}" >> "${CALLS}.profile"
   case "${FAKE_CLAUDE_MODE}" in
     success) printf 'claude verdict\n' > "$3"; return 0 ;;
     unavailable) echo "AI_ENGINE_FALLBACK role=$1 reason=no_credential" >&2; return 75 ;;
@@ -96,6 +97,7 @@ def test_judge_on_claude_runs_claude_run_with_the_tracking_labels(tmp_path: Path
 		f'WAVE_JUDGE|prompt.txt|out.txt|{tmp_path}|["bug","ai:engine-claude"]|openai/gpt-6-sol|xhigh',
 	]
 	assert _read(Path(f"{calls}.resolve")).splitlines() == ['WAVE_JUDGE|["bug","ai:engine-claude"]']
+	assert _read(Path(f"{calls}.profile")).splitlines() == ["true"]
 	assert "AI_ENGINE_SELECTED role=WAVE_JUDGE engine=claude" in _read(tmp_path / "judge_log.txt")
 
 
@@ -160,7 +162,8 @@ def test_security_pass_codex_config_failure_only_blocks_codex_selected_audit(tmp
 		('["ai:engine-claude"]', "codex", "codex", 1),
 	):
 		proc = subprocess.run(["bash", "-c", script], cwd=tmp_path,
-			env={**os.environ, "TRACKING_LABELS": labels, "AI_ENGINE_SECURITY_AUDIT": override,
+			env={**{key: value for key, value in os.environ.items() if key not in {"BASH_ENV", "ENV", "WORKSPACE_PATH"}},
+				"TRACKING_LABELS": labels, "AI_ENGINE_SECURITY_AUDIT": override,
 				"AI_ENGINE_RESOLVED_SECURITY_AUDIT": "claude"},
 			capture_output=True, text=True, check=False)
 		assert proc.returncode == expected_rc, proc.stderr
@@ -215,7 +218,7 @@ SITES = {
 	"WAVE_JUDGE": (
 		'poller_claude_judge WAVE_JUDGE "${judge_effective_prompt_file}" "${JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/judge_log.txt" || wave_judge_rc=$?',
 		'if [ "${wave_judge_rc}" -eq 75 ]; then',
-		'cat "${judge_effective_prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true',
+		'cat "${judge_effective_prompt_file}" | env -u GH_TOKEN -u GITHUB_TOKEN -u GH_PAT -u TG_BOT_SECRET codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true',
 	),
 }
 

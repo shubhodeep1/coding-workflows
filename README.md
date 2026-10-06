@@ -1121,6 +1121,10 @@ not delete wrappers that are already present in `.github/workflows/`.
 > remote or URL (including an unconfigured path or non-GitHub URL), the guard
 > blocks the push instead of treating it as a refspec. A GitHub URL is checked
 > against its destination repository; an unavailable PR lookup asks for confirmation.
+> Push URLs are resolved by Git after configured `insteadOf`/`pushInsteadOf`
+> rewrites. Non-GitHub effective URLs and pushes with inline configuration
+> overrides are blocked. Literal URLs are blocked when push-only rewrites are
+> configured, because Git's URL-only lookup cannot verify their push target.
 
 > The merged-PR guard checks numeric push refspecs before a separate output
 > redirect (`git push origin 123 > /dev/null`). When an explicit push refspec
@@ -2011,6 +2015,11 @@ only its codex fallback needs that key for model access.
 `validate.yml` has no support checkout in its workspace, so its install
 and credential steps use the released `@stable` action refs, like its
 `setup-runtime@stable` step.
+The poller's `WAVE_JUDGE` is a read-only exception: Claude evaluates untrusted
+PR diffs in the network-isolated snapshot, and its Codex fallback drops the
+poller's GitHub and Telegram tokens. Trusted poller code parses the verdict
+and performs the state transitions; if Claude isolation cannot start, exit
+`75` selects the token-stripped Codex fallback.
 
 **Claude-fixer mode** (Phase 5c, Q19/Q35) is the review write roles on
 Claude. `CLAUDE_FIXER_ENABLED=false` keeps `REVIEW_EDITOR`,

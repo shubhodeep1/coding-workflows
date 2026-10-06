@@ -722,6 +722,10 @@ applies; an unavailable checkout is not included. A failed Codex-config setup
 does not stop a Claude-selected orchestrator security audit, but the Codex
 fallback still fails preflight if its configuration is unavailable.
 Missing isolation returns exit 75, never host Claude.
+The poller's `WAVE_JUDGE` verdict uses `AI_ENGINE_READ_ONLY=true` so untrusted
+PR diffs are evaluated in the isolated container, not by a host write-profile
+model with the poller's GitHub token. Its Codex fallback drops GitHub and
+Telegram tokens; trusted poller code still applies the validated verdict.
 
 OpenCode version `1.18.23` is installed by the dispatch-only
 `.github/workflows/opencode-live-smoke.yml` rollout gate and by production

