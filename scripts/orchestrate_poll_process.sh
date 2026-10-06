@@ -116,7 +116,10 @@ _poller_rb_judge_sandbox_attempt()
     if [ "${judge_role}" = RB_JUDGE ]; then
       judge_reason_file="${RUNTIME_DIR}/rb_judge_isolation_reason"
       rb_access="read"
-      [ "${RB_COMBINED_MODE:-false}" != true ] || rb_access="write"
+      if [ "${RB_COMBINED_MODE:-false}" = true ]; then
+        rb_access="write"
+        judge_workspace_override="$(pwd -P)"
+      fi
     else
       rb_access="read"
       judge_workspace_override="$(pwd -P)"
@@ -135,7 +138,7 @@ _poller_rb_judge_sandbox_attempt()
         exit 1
       fi
     fi
-    if ! rb_sandbox_root="$(GITHUB_WORKSPACE="${judge_workspace_override}" SUPPORT_SCRIPTS_DIR="${rb_support_dir}" bash "${rb_support_dir}/review_untrusted_sandbox.sh" prepare-ephemeral "${rb_engine}" 2>>"${log_file}")" || [ -z "${rb_sandbox_root}" ]; then
+    if ! rb_sandbox_root="$(WORKSPACE_PATH="" GITHUB_WORKSPACE="${judge_workspace_override}" SUPPORT_SCRIPTS_DIR="${rb_support_dir}" bash "${rb_support_dir}/review_untrusted_sandbox.sh" prepare-ephemeral "${rb_engine}" 2>>"${log_file}")" || [ -z "${rb_sandbox_root}" ]; then
       [ -z "${rb_untracked_before_file}" ] || rm -f -- "${rb_untracked_before_file}"
       [ -z "${rb_untracked_hash_file}" ] || rm -f -- "${rb_untracked_hash_file}"
       : > "${output_file}"
@@ -167,7 +170,7 @@ _poller_rb_judge_sandbox_attempt()
     fi
     [ "${rb_effort}" != minimal ] || rb_effort=low
     : > "${output_file}"
-    GITHUB_WORKSPACE="${judge_workspace_override}" SUPPORT_SCRIPTS_DIR="${rb_support_dir}" REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" \
+    WORKSPACE_PATH="" GITHUB_WORKSPACE="${judge_workspace_override}" SUPPORT_SCRIPTS_DIR="${rb_support_dir}" REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" \
       bash "${rb_support_dir}/review_untrusted_sandbox.sh" run "${prompt_file}" "${output_file}" \
         "${POLLER_JUDGE_MODEL_HINT:-${MODEL_EDITOR}}" "${rb_effort}" "${rb_config}" "${rb_engine}" "${judge_role}" "${rb_access}" 2>>"${log_file}" || judge_rc=$?
     SUPPORT_SCRIPTS_DIR="${rb_support_dir}" REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" \
@@ -8827,15 +8830,15 @@ EOF
 	return 0
 }
 
-# Build a prompt for the judge and run codex exec to resolve a
+# Build a prompt for the judge to diagnose a
 # final-merge conflict that has survived INTEGRATION_CONFLICT_MAX_RETRIES
 # automated dispatches. Mirrors the codex setup used by the
 # review-blocked judge block (~L3700-3720) but is PR-scoped rather
 # than issue-scoped.
 #
 # Usage: invoke_judge_for_integration_conflict <final_pr> <integration_branch> <default_branch>
-# Returns: 0 on successful invocation (not necessarily successful resolution),
-#          1 on setup/dispatch failure.
+# Returns: 0 on successful resolver dispatch, 1 on failure, 2 on isolation deferral,
+#          3 when an existing resolver run already owns this PR.
 invoke_judge_for_integration_conflict() {
   local final_pr="$1"
   local integration_branch="$2"
@@ -8858,10 +8861,9 @@ invoke_judge_for_integration_conflict() {
 
   # The poller, not the agent, fetches both branches and starts the merge
   # in a separate worktree (never this checkout, whose scripts the poller
-  # keeps running). The agent only resolves the conflicted files, in the
-  # credential-free, network-isolated container; the poller then verifies
-  # the resolution against the intent fingerprints, commits it and pushes
-  # it (_integration_judge_commit_and_push).
+  # keeps running). The judge diagnoses conflicts in a read-only snapshot;
+  # the existing review workflow performs the isolated resolution. A clean
+  # local merge can still be published by _integration_judge_commit_and_push.
   local judge_wt="${RUNTIME_DIR:-/tmp}/integration-judge-wt-${final_pr}"
   local judge_conflicts=""
   local baseline_dir=""
@@ -8966,23 +8968,19 @@ invoke_judge_for_integration_conflict() {
     echo "mergeable state. Final PR #${final_pr} (${integration_branch} -> ${default_branch})"
     echo "is currently unmergeable."
     echo
-    echo "Your working directory is a checkout of \`${integration_branch}\`"
-    echo "with \`${default_branch}\` merged in (\`git merge --no-commit\`);"
-    echo "the conflicted files below contain conflict markers. Your task:"
-    echo "resolve every conflict in the working tree in a way that preserves"
-    echo "the intent of every sub-issue already merged into"
-    echo "${integration_branch}. Do NOT run git commit, git push or any"
-    echo "network command: you have no network access and no credentials."
-    echo "The poller verifies your resolution, commits it and pushes it to"
-    echo "${integration_branch}; it merges the PR once GitHub reports it"
-    echo "mergeable."
+    echo "Your working directory is a read-only snapshot of \`${integration_branch}\`"
+    echo "with \`${default_branch}\` merged without committing. Inspect the"
+    echo "conflicted files; do not edit files or run git commands. Diagnose"
+    echo "how the isolated resolver should preserve merged sub-issue intent."
+    echo 'Return only JSON: {"action":"redispatch_resolver","diagnosis":"...","resolution_guidance":"..."}.'
+    echo 'Use action "fail" or "unknown" if a safe resolution cannot be identified.'
     echo
     echo "Conflicted files:"
     printf '%s\n' "${judge_conflicts}"
     echo
-    echo 'Edit only the conflicted files listed above. Changes to other paths,'
-    echo 'or lines in conflicted protected paths that come from neither merge side,'
-    echo 'reject the resolution without a push. Protected paths include .github/,'
+    echo 'The resolver may edit only the conflicted files listed above. Changes'
+    echo 'to other paths or invented lines in protected paths will be rejected.'
+    echo 'Protected paths include .github/,'
     echo '.claude/, scripts/, prompts/, workflow-templates/, validation/,'
     echo 'ai-memory/, db/contracts/, agent-instruction files, and build,'
     echo 'dependency, config and script files.'
@@ -9008,47 +9006,91 @@ invoke_judge_for_integration_conflict() {
     echo "Each entry is keyed by GitHub issue number; \`must_contain\`"
     echo "patterns are regexes that MUST match in the post-resolve tree,"
     echo "\`must_not_contain\` patterns are regexes that MUST NOT match."
-    echo "After you finish, \`scripts/verify_integration_fingerprints.py\`"
-    echo "is run against this exact JSON — every violation is a hard"
-    echo "rejection (nothing is pushed) that returns the project to this"
-    echo "judge cycle.  Use"
-    echo "this as the authoritative spec when reconciling conflicts;"
+    echo "The resolver checks this JSON — every violation is a hard"
+    echo "rejection. Use it as the authoritative spec in your guidance;"
     echo "the truncated PR diff above is context, the fingerprints are"
     echo "the test."
     echo '```json'
     printf '%s\n' "${intent_fingerprints}"
     echo '```'
     echo
-    echo "Rules:"
-    echo "1. Preserve all intent from merged sub-issues — every"
+    echo "Guidance must preserve all intent from merged sub-issues — every"
     echo "   \`must_contain\` regex must still match the post-resolve"
     echo "   working tree, every \`must_not_contain\` regex must not."
-    echo "2. Do not rewrite history of ${default_branch}."
-    echo "3. Prefer merge commits over rebase for the integration branch."
-    echo "4. When a hunk has both ${default_branch} content and merged"
+    echo "Do not rewrite history of ${default_branch}."
+    echo "When a hunk has both ${default_branch} content and merged"
     echo "   sub-issue content, synthesize rather than pick a side —"
     echo "   wholesale reverts to \`${default_branch}\`'s version are"
     echo "   the dominant failure mode the fingerprint contract is"
     echo "   designed to catch."
-    echo "5. If conflicts are semantic, explain them in resolution_guidance."
+    echo "If conflicts are semantic, explain them in resolution_guidance."
   } > "${prompt_file}"
 
   sanitize_codex_prompt_file "${prompt_file}"
   if [ -z "${judge_conflicts}" ]; then
     echo "  [integration-heal] ${default_branch} merges into ${integration_branch} without conflicts locally; skipping the judge agent for PR #${final_pr}."
-  elif ! bash "${ORCH_CODEX_ISOLATED_EXEC}" run --mode workspace --workdir "${judge_wt}" \
-      -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-6-sol}" --sandbox danger-full-access \
-      < "${prompt_file}" > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log"; then
-    echo "::warning::Judge exec failed for integration conflict on PR #${final_pr}."
-    rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
-    _integration_judge_remove_worktree "${judge_wt}"
-    rm -rf -- "${baseline_dir}"
-    return 1
+    local expected_conflict_count
+    expected_conflict_count="$(tr -cd '\000' < "${baseline_dir}/conflicted.z" | wc -c)"
+    _integration_judge_commit_and_push "${judge_wt}" "${final_pr}" "${integration_branch}" "${default_branch}" "${baseline_dir}" "${expected_conflict_count}" || {
+      rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+      _integration_judge_remove_worktree "${judge_wt}"
+      rm -rf -- "${baseline_dir}"
+      return 1
+    }
+  else
+    local integration_judge_rc=0 integration_judge_verdict integration_diagnosis integration_guidance integration_dispatch_rc=0
+    if ! pushd "${judge_wt}" >/dev/null; then
+      rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+      _integration_judge_remove_worktree "${judge_wt}"
+      rm -rf -- "${baseline_dir}"
+      return 1
+    fi
+    poller_claude_judge INTEGRATION_JUDGE "${prompt_file}" "${output_file}" "${RUNTIME_DIR}/integration_judge.log" "${MODEL_EDITOR:-openai/gpt-6-sol}" || integration_judge_rc=$?
+    popd >/dev/null
+    if [ "${integration_judge_rc}" -eq 77 ]; then
+      rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+      _integration_judge_remove_worktree "${judge_wt}"
+      rm -rf -- "${baseline_dir}"
+      return 2
+    fi
+    if [ "${integration_judge_rc}" -ne 0 ] || ! integration_judge_verdict="$(_robust_parse_json_file "${output_file}")" ||
+       ! printf '%s' "${integration_judge_verdict}" | jq -e 'type == "object" and (.action | IN("redispatch_resolver", "fail", "unknown")) and (.diagnosis | type == "string" and length <= 2000) and (.resolution_guidance | type == "string" and length <= 2000)' >/dev/null 2>&1; then
+      echo "::warning::Integration judge did not return a valid diagnosis for PR #${final_pr}." >&2
+      rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+      _integration_judge_remove_worktree "${judge_wt}"
+      rm -rf -- "${baseline_dir}"
+      return 1
+    fi
+    _clear_judge_isolation_state INTEGRATION_JUDGE "${STATE_FILE}" verdict "${TRACKING_NUM}" || true
+    integration_diagnosis="$(printf '%s' "${integration_judge_verdict}" | jq -r '.diagnosis | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;")')"
+    integration_guidance="$(printf '%s' "${integration_judge_verdict}" | jq -r '.resolution_guidance | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;")')"
+    post_tracking_comment "## Integration conflict diagnosis
+
+Final PR #${final_pr}: ${integration_diagnosis}
+
+Resolver guidance: ${integration_guidance}" || true
+    if [ "$(printf '%s' "${integration_judge_verdict}" | jq -r '.action')" != redispatch_resolver ]; then
+      rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+      _integration_judge_remove_worktree "${judge_wt}"
+      rm -rf -- "${baseline_dir}"
+      return 1
+    fi
+    _dispatch_review_for_conflicts "${final_pr}" "${integration_branch}" || integration_dispatch_rc=$?
+    if [ "${integration_dispatch_rc}" -eq 2 ]; then
+      rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+      _integration_judge_remove_worktree "${judge_wt}"
+      rm -rf -- "${baseline_dir}"
+      return 3
+    fi
+    if [ "${integration_dispatch_rc}" -ne 0 ]; then
+      echo "::warning::Integration resolver redispatch failed for PR #${final_pr}." >&2
+      rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+      _integration_judge_remove_worktree "${judge_wt}"
+      rm -rf -- "${baseline_dir}"
+      return 1
+    fi
   fi
-  echo "  [integration-heal] Judge exec completed for PR #${final_pr}."
-  local expected_conflict_count
-  expected_conflict_count="$(tr -cd '\000' < "${baseline_dir}/conflicted.z" | wc -c)"
-  _integration_judge_commit_and_push "${judge_wt}" "${final_pr}" "${integration_branch}" "${default_branch}" "${baseline_dir}" "${expected_conflict_count}" || true
+  echo "  [integration-heal] Judge diagnosis/dispatch completed for PR #${final_pr}."
   rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
   _integration_judge_remove_worktree "${judge_wt}"
   rm -rf -- "${baseline_dir}"
@@ -9256,8 +9298,7 @@ PY
 
 # _integration_judge_commit_and_push <worktree> <final_pr> <integration_branch> <default_branch> <baseline_dir> <expected_conflict_count>
 #
-# Trusted half of the integration-conflict judge: the agent edited files in
-# <worktree> (through scripts/codex_isolated_exec.sh); this stages them,
+# Trusted half of a clean integration merge: this stages the worktree,
 # refuses to push while unmerged paths or conflict markers remain or while
 # the merged sub-issue intent fingerprints are violated, then commits the
 # merge and pushes it to <integration_branch>. Returns 0 after a push, 1
@@ -10812,6 +10853,10 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
   if [ "${unresolved_ticks}" -ge "${effective_max_retries}" ]; then
     local integration_judge_result=0
     invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" || integration_judge_result=$?
+    if [ "${integration_judge_result}" -eq 3 ]; then
+      echo '  [integration-heal] Resolver already in flight; deferring judge dispatch accounting.'
+      return 0
+    fi
     if [ "${integration_judge_result}" -eq 2 ]; then
       if [ -s "${RUNTIME_DIR}/judge_isolation_reason" ]; then
         _record_judge_isolation_failure INTEGRATION_JUDGE "${STATE_FILE}" "${TRACKING_NUM}" "${TRACKING_LABELS:-}" || true
@@ -10821,7 +10866,7 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
     fi
     if [ "${integration_judge_result}" -eq 0 ]; then
       # Reset unresolved ticks so the resolver loop can resume after
-      # the judge's push. Keep dispatch_count as audit trail.
+      # the judge's dispatch. Keep dispatch_count as audit trail.
       # integration_conflict_total_dispatches counts judge invocations
       # too — they share the lifetime cap with resolver dispatches.
       total_dispatches=$((total_dispatches + 1))
@@ -10834,7 +10879,7 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
       post_state_comment || true
       post_tracking_comment "## 🛠️ Integration judge invoked
 
-Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) did not become mergeable after ${effective_max_retries} automated resolver attempts. The judge diagnosed the conflict and re-dispatched the isolated resolver. The poller will retry merge on the next tick."
+Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) did not become mergeable after ${effective_max_retries} automated resolver attempts. The judge diagnosed the conflict and requested isolated resolver review. The poller will retry merge on the next tick."
       return 0
     fi
     jq --arg err "judge escalation failed: ${error_msg}" \
@@ -22059,7 +22104,9 @@ ${FOLLOWUP_BLOCK_REASON}"
           echo "  Review-blocked judge attempt ${attempt}/2..."
           RB_JUDGE_ENGINE_RC=0
           if [ "${RB_COMBINED_MODE}" = "true" ]; then
-            bash "${ORCH_CODEX_ISOLATED_EXEC}" run --mode workspace --workdir "${RB_COMBINED_WORKDIR}" -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${RB_JUDGE_PROMPT_FILE}" > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || RB_JUDGE_ENGINE_RC=$?
+            pushd "${RB_COMBINED_WORKDIR}" >/dev/null || { echo '::error::Review-blocked judge worktree unavailable; stopping the poller.' >&2; exit 1; }
+            poller_claude_judge RB_JUDGE "${RB_JUDGE_PROMPT_FILE}" "${RB_JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/rb_judge_${rb_issue}.log" || RB_JUDGE_ENGINE_RC=$?
+            popd >/dev/null || exit 1
           else
             poller_claude_judge RB_JUDGE "${RB_JUDGE_PROMPT_FILE}" "${RB_JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/rb_judge_${rb_issue}.log" || RB_JUDGE_ENGINE_RC=$?
           fi

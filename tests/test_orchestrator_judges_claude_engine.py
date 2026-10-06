@@ -514,9 +514,12 @@ def test_each_judge_uses_sandbox_without_host_fallback() -> None:
 		assert 'if [ "${' + role.lower() + '_rc}" -eq 75 ]; then' not in text[start:start + 700]
 	assert 'poller_judge_isolated "${role}"' in text
 	assert 'claude_run "${role}"' not in text
-	assert len(re.findall(r"^\s+poller_claude_judge [A-Z_]+ ", text, re.MULTILINE)) == len(SITES) + 1
+	assert len(re.findall(r"poller_claude_judge (?:SECURITY_JUDGE|INTEGRATION_JUDGE|STALL_JUDGE|WAVE_JUDGE|RB_JUDGE) ", text)) == len(SITES) + 2
 	rb_block = text[text.index('      # Run the judge\n      RB_JUDGE_SUCCESS=false'):text.index('      # Parse judge output')]
 	assert 'poller_claude_judge RB_JUDGE "${RB_JUDGE_PROMPT_FILE}" "${RB_JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/rb_judge_${rb_issue}.log"' in rb_block
+	assert 'pushd "${RB_COMBINED_WORKDIR}" >/dev/null ||' in rb_block
+	assert 'poller_claude_judge RB_JUDGE ' in rb_block.split('pushd "${RB_COMBINED_WORKDIR}"', 1)[1].split('popd >/dev/null', 1)[0]
+	assert 'pushd "${judge_wt}" >/dev/null;' in text
 	assert 'if [ "${RB_JUDGE_ENGINE_RC}" -eq 77 ] || [ "${RB_JUDGE_ENGINE_RC}" -eq 75 ]; then\n            RB_JUDGE_ISOLATION_FAILED=true\n            break\n          fi' in rb_block
 	assert 'if [ "${RB_JUDGE_ENGINE_RC}" -eq 76 ]; then\n            break\n          fi' in rb_block
 	assert 'danger-full-access' not in rb_block and not re.search(r'\bcodex\s+.*\bexec\b', rb_block)
@@ -530,6 +533,25 @@ def test_each_judge_uses_sandbox_without_host_fallback() -> None:
 	assert '_record_judge_isolation_failure STALL_JUDGE "${_judge_state_file}"' in text
 	assert '_record_judge_isolation_failure INTEGRATION_JUDGE "${STATE_FILE}"' in text
 	assert '_record_judge_isolation_failure SECURITY_JUDGE "${STATE_FILE}"' in text
+
+
+def test_integration_judge_does_not_charge_an_already_active_resolver() -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	invocation = text.split("invoke_judge_for_integration_conflict() {", 1)[1].split("\n}\n", 1)[0]
+	caller = text.split('invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" || integration_judge_result=$?', 1)[1]
+	assert 'if [ "${integration_dispatch_rc}" -eq 2 ]; then' in invocation
+	assert 'return 3' in invocation.split('if [ "${integration_dispatch_rc}" -eq 2 ]; then', 1)[1].split("\n    fi", 1)[0]
+	assert caller.index('if [ "${integration_judge_result}" -eq 3 ]; then') < caller.index('total_dispatches=$((total_dispatches + 1))')
+	deferral = caller.split('    if [ "${integration_judge_result}" -eq 2 ]; then', 1)[0]
+	program = ('set -euo pipefail\n'
+		'invoke_judge_for_integration_conflict() { return 3; }\n'
+		'check_deferral() {\nlocal final_pr=77 integration_branch=integration default_branch=main integration_judge_result=0\n'
+		'invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" || integration_judge_result=$?\n'
+		+ deferral + '\nprintf "unexpected accounting\\n"\n}\ncheck_deferral\n')
+	result = subprocess.run(["bash", "-c", program], capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert "Resolver already in flight" in result.stdout
+	assert "unexpected accounting" not in result.stdout
 
 
 def test_judge_isolation_defers_escalates_once_and_resets_on_label_removal(tmp_path: Path) -> None:

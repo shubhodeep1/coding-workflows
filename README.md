@@ -2109,7 +2109,9 @@ The poller's wave, stall, integration and security-pass judges run read-only in
 that sandbox on both engines. Missing isolation defers the judge without
 consuming a recovery budget and escalates after `JUDGE_ISOLATION_MAX_FAILURES`
 failures. The integration judge returns a bounded diagnosis; deterministic
-poller code re-dispatches the existing isolated conflict resolver. The
+poller code re-dispatches the existing isolated conflict resolver. If one is
+already in flight, the judge defers without charging another dispatch against
+the integration branch's lifetime budget. The
 ORCHESTRATE decomposer remains a host process and is outside this change.
 An OpenCode installation failure does not stop other poller work; the isolated
 judge defers if its configuration or sandbox cannot be prepared.

@@ -481,6 +481,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				invocations.append(_GitInvocation(checkout, {}, "push", [], "unparsed env wrapper", True))
 			continue
 		env_cwd = working_directory
+		env_chdir_unresolved = False
 		if index != env_index:
 			config_override = True
 			for position in range(env_index + 1, index):
@@ -489,6 +490,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 					env_word_value = (tokens[position + 1] if word in ("-C", "--chdir") else
 						word.split("=", 1)[1] if word.startswith("--chdir=") else word[2:])
 					env_cwd = _literal_guard_path(env_word_value, env_cwd) if env_cwd else None
+					env_chdir_unresolved = env_cwd is None
 				elif re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", word):
 					env_name, env_word_value = word.split("=", 1)
 					if env_name in ("GIT_DIR", "GIT_WORK_TREE"):
@@ -539,7 +541,8 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			checkout if uncertain else git_cwd or checkout,
 			{} if uncertain else environment,
 			tokens[index], tokens[index + 1:],
-			"could not resolve git command directory; checking the session checkout instead" if uncertain else "",
+			("could not resolve env --chdir directory" if env_chdir_unresolved else
+			 "could not resolve git command directory; checking the session checkout instead") if uncertain else "",
 			config_override,
 		))
 	return invocations
@@ -1492,6 +1495,9 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
+		if invocation.subcommand == "commit" and invocation.warning == "could not resolve env --chdir directory":
+			_request_confirmation("Could not resolve the directory of git commit; refusing to check the session checkout instead.")
+			continue
 		if invocation.subcommand == "push" and invocation.warning == "unparsed env wrapper":
 			unverified_destinations.add("unparsed env-wrapped Git command")
 			continue
