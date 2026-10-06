@@ -1407,7 +1407,7 @@ If additional context is required beyond what is inlined, you may read:
 - the original bug report file located under ${PREVIOUS_REVIEWS_DIR}
 - do not use .github/workflows/previous_reviews/ because that path is invalid in this workflow
 - The editor workspace contains only admitted source paths. Root dot-directories other than .github/workflows/ and .github/actions/, including .claude/, are not present. Do not create or recreate them. If a finding needs an edit there, list it under Ignored suggestions with reason "outside editor workspace".
-- Creating a directory symlink, a directory under .github/ other than workflows/ or actions/, or a directory whose name is an excluded build, cache or secret name in any letter case (for example Build/) aborts the whole transfer of your edits.
+- Creating a directory symlink, a directory under .github/ other than workflows/ or actions/, or a directory with a secret-like name aborts the whole transfer of your edits. Excluded build and cache directory names are omitted case-insensitively.
 The bug report may contain important context about the problem being fixed.
 
 EDITOR ROLE
@@ -2150,11 +2150,11 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   kill "${wd_pid}" 2>/dev/null || true; wait "${wd_pid}" 2>/dev/null || true
   rm -f "${hb_file}" "${hb_file}.tmp" "${codex_pid_file}"
   if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then
-    # Name the rejected path and rule, and archive this attempt's stderr
+    # Report the fixed rejection tokens, and archive this attempt's stderr
     # (which carries the helper's own ::error:: line) before exiting (#6413).
     _sandbox_transfer_reason="unknown"
     if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_reason" ]; then
-      _sandbox_transfer_reason="$(head -c 512 "${RUNTIME_DIR}/review_sandbox_transfer_reason" 2>/dev/null | head -n 1 | tr -cd 'A-Za-z0-9._/+@=<>?: -' || true)"
+      _sandbox_transfer_reason="$(head -c 512 "${RUNTIME_DIR}/review_sandbox_transfer_reason" 2>/dev/null | head -n 1 | tr -cd 'A-Za-z0-9._/+@=<>? -' || true)"
       [ -n "${_sandbox_transfer_reason}" ] || _sandbox_transfer_reason="unknown"
       cp "${RUNTIME_DIR}/review_sandbox_transfer_reason" "${PREVIOUS_REVIEWS_DIR}/review_sandbox_transfer_reason_${attempt}.txt" 2>/dev/null || true
     fi

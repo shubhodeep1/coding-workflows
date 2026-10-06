@@ -171,12 +171,14 @@ def enumerate_workspace(root):
 			if entries > 10000:
 				raise _rejection("workspace entry limit exceeded", "entry_limit")
 			name = (rel / child).as_posix()
-			if child in EXCLUDED or child.endswith((".egg-info", ".dist-info")) or (rel == Path(".") and child.startswith(".") and child != ".github"):
+			child_is_symlink = (Path(directory) / child).is_symlink()
+			if child_is_symlink:
+				raise _rejection("unsafe workspace directory", "unsafe_directory", _directory_category(name, True), _directory_depth(name))
+			if (child.lower() in EXCLUDED and child.lower() not in ("secrets", "credentials")) or child.lower().endswith((".egg-info", ".dist-info")) or (rel == Path(".") and child.startswith(".") and child != ".github"):
 				dirs.remove(child)
 				continue
-			child_is_symlink = (Path(directory) / child).is_symlink()
-			if (name != ".github" and not allowed(name + "/placeholder.py")) or child_is_symlink:
-				raise _rejection("unsafe workspace directory", "unsafe_directory", _directory_category(name, child_is_symlink), _directory_depth(name))
+			if name != ".github" and not allowed(name + "/placeholder.py"):
+				raise _rejection("unsafe workspace directory", "unsafe_directory", _directory_category(name, False), _directory_depth(name))
 		for child in files:
 			entries += 1
 			if entries > 10000:

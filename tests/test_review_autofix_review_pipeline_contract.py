@@ -7555,8 +7555,9 @@ def test_review_isolation_transfer_rejection_names_path_and_rule() -> None:
 
 	cases = [
 		(make_dir(".github/ai"), "reason=unsafe_directory category=dot_github_subtree depth=2"),
-		(make_dir("Build"), "reason=unsafe_directory category=excluded_name_variant depth=1"),
 		(make_dir("scripts/my_secret"), "reason=unsafe_directory category=sensitive_name depth=2"),
+		(make_dir("scripts/secrets"), "reason=unsafe_directory category=sensitive_name depth=2"),
+		(make_dir("scripts/Credentials"), "reason=unsafe_directory category=sensitive_name depth=2"),
 		(make_dir("scripts/.envx"), "reason=unsafe_directory category=env_like depth=2"),
 		(make_symlink, "reason=unsafe_directory category=symlink depth=2"),
 		(make_root_file, "reason=unsafe_result_path"),
@@ -7575,20 +7576,21 @@ def test_review_isolation_transfer_rejection_names_path_and_rule() -> None:
 		assert "path=" not in result.stderr and "path=" not in reason
 
 
-def test_review_isolation_transfer_still_prunes_root_dot_and_build_dirs() -> None:
-	# Root .claude/ and lowercase build/ are pruned, not rejected: a recreated
-	# .claude/commands cannot cause unsafe_directory, nor reach the host.
+def test_review_isolation_transfer_prunes_root_dot_and_case_variant_build_dirs() -> None:
+	# Root .claude/ and excluded build/cache names are pruned, not rejected.
 	def mutate(source: Path, _root: Path) -> None:
 		(source / ".claude/commands").mkdir(parents=True)
 		(source / ".claude/commands/audit-plans.md").write_text("x\n")
-		(source / "build").mkdir()
-		(source / "build/x.py").write_text("x\n")
+		for rel in ("build", "Build", "scripts/Dist", "scripts/nested/Coverage"):
+			(source / rel).mkdir(parents=True)
+			(source / rel / "x.py").write_text("x\n")
 
 	result, reason, host_before, host_after, _leftovers = _review_isolation_transfer_case(mutate)
 	assert result.returncode == 0, result.stderr
 	assert reason is None
 	assert host_after == host_before
-	assert ".claude/commands/audit-plans.md" not in host_after and "build/x.py" not in host_after
+	assert ".claude/commands/audit-plans.md" not in host_after
+	assert not any(path.endswith("/x.py") for path in host_after)
 
 
 def test_review_isolation_transfer_plain_rejection_reports_fixed_detail() -> None:
@@ -7619,6 +7621,7 @@ def test_review_sandbox_transfer_reason_is_reported_and_archived() -> None:
 	assert '"${PREVIOUS_REVIEWS_DIR}/review_sandbox_transfer_reason_${attempt}.txt"' in block
 	assert 'cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err"' in block
 	assert "::error::Review sandbox result transfer was incomplete; refusing editor fallback. ${_sandbox_transfer_reason}" in block
+	assert "tr -cd 'A-Za-z0-9._/+@=<>? -'" in block
 	assert "including .claude/, are not present. Do not create or recreate them." in apply_fixes
 
 
@@ -7633,12 +7636,9 @@ def test_review_isolation_unsafe_directory_reports_path_free_category() -> None:
 		(".github/ai_SENTINEL", "dot_github_subtree", "2"),
 		("scripts/secret_store_SENTINEL", "sensitive_name", "2"),
 		("scripts/.envdir_SENTINEL", "env_like", "2"),
-		("scripts/Build", "excluded_name_variant", "2"),
-		("scripts/nested/Coverage", "excluded_name_variant", "3+"),
 		("scripts/certs_SENTINEL.pem", "key_material_suffix", "2"),
 		("scripts/back\\slash_SENTINEL", "invalid_name", "2"),
-		("scripts/linkdir_SENTINEL", "symlink", "2"),
-		("Build", "excluded_name_variant", "1"),
+		("scripts/Build", "symlink", "2"),
 	)
 	for rel, category, depth in cases:
 		with tempfile.TemporaryDirectory() as td:

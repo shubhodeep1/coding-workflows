@@ -176,7 +176,7 @@ env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run --rm --name "${container}"
 	if [ "${rc}" -eq 0 ]; then
 		# The marker survives a killed/incomplete transfer. The editor wrapper
 		# fails the step instead of treating a partial host edit as a retry.
-		# The reason file names the rejected path and rule (#6413); remove a
+		# The reason file carries fixed rejection tokens (#6413); remove a
 		# stale one first so the wrapper never reports an earlier attempt.
 		rm -f "${RUNTIME_DIR:?}/review_sandbox_transfer_reason"
 		: > "${RUNTIME_DIR:?}/review_sandbox_transfer_failed"
