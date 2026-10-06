@@ -741,7 +741,7 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 
 
 def _contains_shell_substitution(command: str) -> bool:
-	"""Return whether Bash would expand command substitution in the string."""
+	"""Return whether Bash would expand command or process substitution."""
 	single_quoted = False
 	double_quoted = False
 	escaped = False
@@ -758,7 +758,7 @@ def _contains_shell_substitution(command: str) -> bool:
 		if character == '"' and not single_quoted:
 			double_quoted = not double_quoted
 			continue
-		if not single_quoted and (character == "`" or command.startswith("$(", index)):
+		if not single_quoted and (character == "`" or command.startswith(("$(", "<(", ">("), index)):
 			return True
 	return False
 
@@ -1710,6 +1710,13 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		return 0, ""
 
 	if _guard_disabled():
+		return 0, ""
+	# shlex discards process substitutions as redirects, including those in
+	# GIT_CONFIG_GLOBAL=<(...) assignments. Do not trust a parsed destination.
+	if ("<(" in command or ">(" in command) and _contains_shell_substitution(command) and (
+		guarded_git_subcommands or (re.search(r"\bgit\b", command) and re.search(r"\b(?:commit|push)\b", command))
+	):
+		_request_confirmation("process substitution may change the git commit/push destination")
 		return 0, ""
 	# GNU env splits this argument into a command after the shell has parsed it.
 	# Its embedded git options/assignments cannot be resolved from shell tokens.
