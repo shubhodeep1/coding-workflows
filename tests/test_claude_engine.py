@@ -58,6 +58,7 @@ def _jsonl(*events: dict) -> str:
 # Roles whose checked-in default is Claude, by cutover phase.
 CUTOVER_ROLES = {"CLARIFY", "CLARIFY_RESPOND", "PLAN"}  # Phase 5a
 CUTOVER_ROLES |= {"IMPLEMENT", "IMPLEMENT_REPAIR", "IMPLEMENT_DIAGNOSE"}  # Phase 5b
+CUTOVER_ROLES |= {"ORCHESTRATE", "WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE", "REVIEW_EDITOR", "REVIEW_CONSOLIDATOR", "CONFLICT_RESOLVER", "RB_JUDGE"}  # Phase 5c
 
 
 def test_checked_in_config_is_valid_and_inert() -> None:
@@ -205,6 +206,27 @@ def test_engine_claude_label_beats_variables_and_forces_opus_high() -> None:
 def test_codex_label_wins_over_engine_claude_label() -> None:
 	resolved = _resolve("PLAN", {"AI_ENGINE_LABELS": '[{"name": "ai:engine-claude"}, {"name": "ai:codex"}]', "AI_ENGINE": "claude"})
 	assert (resolved["engine"], resolved["source"]) == ("codex", "label:ai:codex")
+
+
+@pytest.mark.parametrize("role", ["REVIEW_EDITOR", "REVIEW_CONSOLIDATOR", "CONFLICT_RESOLVER", "RB_JUDGE"])
+def test_claude_fixer_disabled_keeps_review_write_roles_on_codex(role: str) -> None:
+	config, _ = ce.normalize_config({"role_defaults": {role: {"engine": "claude"}}})
+	env = {"CLAUDE_FIXER_ENABLED": " False ", "AI_ENGINE_LABELS": "ai:engine-claude", "AI_ENGINE": "claude", f"AI_ENGINE_{role}": "claude"}
+	resolved = _resolve(role, env, config)
+	assert (resolved["engine"], resolved["source"]) == ("codex", "var:CLAUDE_FIXER_ENABLED")
+
+
+@pytest.mark.parametrize("value", ["true", "", "0", "no"])
+def test_claude_fixer_switch_only_acts_on_false(value: str) -> None:
+	config, _ = ce.normalize_config({"role_defaults": {"REVIEW_EDITOR": {"engine": "claude"}}})
+	resolved = _resolve("REVIEW_EDITOR", {"CLAUDE_FIXER_ENABLED": value}, config)
+	assert (resolved["engine"], resolved["source"]) == ("claude", "default")
+
+
+def test_claude_fixer_switch_leaves_other_roles_alone() -> None:
+	config, _ = ce.normalize_config({"role_defaults": {"WAVE_JUDGE": {"engine": "claude"}}})
+	resolved = _resolve("WAVE_JUDGE", {"CLAUDE_FIXER_ENABLED": "false"}, config)
+	assert resolved["engine"] == "claude"
 
 
 def test_labels_are_case_insensitive_and_accept_newlines() -> None:
