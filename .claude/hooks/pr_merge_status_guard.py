@@ -758,7 +758,9 @@ def _contains_shell_substitution(command: str) -> bool:
 		if character == '"' and not single_quoted:
 			double_quoted = not double_quoted
 			continue
-		if not single_quoted and (character == "`" or command.startswith(("$(", "<(", ">("), index)):
+		if not single_quoted and (character == "`" or command.startswith("$(", index)):
+			return True
+		if not single_quoted and not double_quoted and command.startswith(("<(", ">("), index):
 			return True
 	return False
 

@@ -2175,6 +2175,21 @@ def test_quoted_process_substitution_is_data(merged_branch_repo, capsys) -> None
 	assert capsys.readouterr().out == ""
 
 
+@pytest.mark.parametrize("literal", ["<(command)", ">(command)"])
+def test_double_quoted_process_substitution_is_data(merged_branch_repo, monkeypatch, capsys, literal: str) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "_read_cache", lambda *args: [OPEN_PR])
+	command = f'git commit -m "document {literal} syntax"'
+	assert not guard._contains_shell_substitution(command)
+	assert guard.evaluate(_bash_payload(command) | {"cwd": str(repo)}) == (0, "")
+	assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("substitution", ["$(true)", "`true`"])
+def test_double_quoted_command_substitution_remains_active(substitution: str) -> None:
+	assert guard._contains_shell_substitution(f'git commit -m "{substitution}"')
+
+
 def test_non_git_env_split_string_is_ignored(merged_branch_repo, capsys) -> None:
 	repo, _ = merged_branch_repo
 	assert guard.evaluate(_bash_payload("env -S 'printf hello'") | {"cwd": str(repo)}) == (0, "")
