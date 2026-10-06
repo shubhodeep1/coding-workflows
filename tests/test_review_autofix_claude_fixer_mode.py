@@ -566,7 +566,7 @@ case "$1" in
     printf 'run|%s|%s|%s|%s\n' "$7" "$8" "$9" "${REVIEW_SANDBOX_ROOT}" >> "${MOCK_CONSOLIDATOR_CALLS}"
     if [ "$7" = claude ]; then
       [ "${MOCK_CLAUDE_RC:-0}" -eq 0 ] || exit "${MOCK_CLAUDE_RC}"
-    elif [ "${MOCK_SANDBOX_MODE:-}" = run_outdated ]; then
+    elif [ "${MOCK_SANDBOX_MODE:-}" = run_outdated ] || [ "${MOCK_SANDBOX_MODE:-}" = run_outdated_cleanup_failed ]; then
       exit 2
     fi
     [ -z "${MOCK_CONSOLIDATOR_PROMPT_CAPTURE:-}" ] || cp "$2" "${MOCK_CONSOLIDATOR_PROMPT_CAPTURE}"
@@ -575,7 +575,7 @@ case "$1" in
     ;;
   cleanup)
     printf 'cleanup\n' >> "${MOCK_CONSOLIDATOR_CALLS}"
-    [ "${MOCK_SANDBOX_MODE:-}" != cleanup_failed ] || exit 1
+    case "${MOCK_SANDBOX_MODE:-}" in cleanup_failed|run_outdated_cleanup_failed) exit 1 ;; esac
     ;;
   *) exit 2 ;;
 esac
@@ -640,6 +640,7 @@ def test_consolidator_isolation_failures_skip_without_host_writer(tmp_path):
 	for index, (mode, sandbox, reason) in enumerate((
 		("prepare_failed", True, "sandbox_prepare_failed"),
 		("run_outdated", True, "sandbox_helper_outdated"),
+		("run_outdated_cleanup_failed", True, "sandbox_helper_outdated"),
 		("success", False, "sandbox_support_missing"),
 		("cleanup_failed", True, "sandbox_cleanup_failed"),
 	)):
@@ -650,8 +651,11 @@ def test_consolidator_isolation_failures_skip_without_host_writer(tmp_path):
 		assert output.read_text(encoding="utf-8") == ""
 		assert f"CONSOLIDATOR_ISOLATION outcome=skipped reason={reason}" in proc.stderr
 		assert not (work / "host_writer").exists()
-		if mode in ("run_outdated", "cleanup_failed"):
+		if mode in ("run_outdated", "run_outdated_cleanup_failed", "cleanup_failed"):
 			assert "cleanup" in calls
+		if mode == "run_outdated_cleanup_failed":
+			assert "::warning::Consolidator sandbox cleanup failed" in proc.stderr
+			assert "CONSOLIDATOR_ISOLATION outcome=skipped reason=sandbox_cleanup_failed" not in proc.stderr
 
 
 def _resolver_claude_sections() -> str:

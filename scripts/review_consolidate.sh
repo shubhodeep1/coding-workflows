@@ -659,7 +659,7 @@ fi
 		fi
 		if ! REVIEW_SANDBOX_ROOT="${consolidator_sandbox_root}" timeout --signal=TERM --kill-after=10s -- 30s bash "${consolidator_sandbox_sh}" cleanup 2>>"${tmp_err}"; then
 			printf '%s\n' '::warning::Consolidator sandbox cleanup failed' >&2
-			consolidator_isolation_reason=sandbox_cleanup_failed
+			[ -n "${consolidator_isolation_reason}" ] || consolidator_isolation_reason=sandbox_cleanup_failed
 		else
 			consolidator_sandbox_root=""
 		fi
