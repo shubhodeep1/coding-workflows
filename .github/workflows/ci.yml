@@ -526,6 +526,15 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ai_engine.py
 
+      - name: Isolated agent container tests (codex_isolated_exec.sh)
+        # The real-Docker e2e file skips itself unless CODEX_ISOLATION_DOCKER_E2E=1.
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_codex_agent_isolation_contract.py tests/test_codex_isolated_exec.py tests/test_dependency_registry_proxy.py \
+            tests/test_codex_isolated_workspace.py tests/test_codex_isolated_exec_docker_e2e.py \
+            tests/test_integration_judge_scope_guard.py
+
       - name: Claude engine decision tests
         run: |
           set -euo pipefail
@@ -560,6 +569,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_pool_token.py
+
+      - name: Install Claude CLI action tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_install_claude_action.py
 
       - name: Set up Node 22 for the claude-pool-broker Worker tests
         uses: actions/setup-node@v6

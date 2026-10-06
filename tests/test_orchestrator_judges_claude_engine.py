@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -15,21 +17,26 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 POLLER = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
 POLL_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
 
-# A stand-in for scripts/ai_engine.sh: the engine comes from FAKE_ENGINE, and
+# A stand-in for scripts/ai_engine.sh: the engine comes from FAKE_ENGINE unless
+# the labels select ai:codex, and
 # claude_run records its role, files, labels and hints, then plays
 # FAKE_CLAUDE_MODE (success writes "claude verdict", unavailable returns 75,
 # crash returns 1).
 FAKE_AI_ENGINE = r"""
 ai_engine_for_role() {
+  local selected_engine
   printf '%s|%s\n' "$1" "${AI_ENGINE_LABELS-unset}" >> "${CALLS}.resolve"
-  echo "AI_ENGINE_SELECTED role=$1 engine=${FAKE_ENGINE}" >&2
-  printf '%s\n' "${FAKE_ENGINE}"
+  selected_engine="${FAKE_ENGINE}"
+  case "${AI_ENGINE_LABELS:-}" in *ai:codex*) selected_engine=codex ;; esac
+  echo "AI_ENGINE_SELECTED role=$1 engine=${selected_engine}" >&2
+  printf '%s\n' "${selected_engine}"
 }
 ai_engine_fallback() {
   printf 'AI_ENGINE_FALLBACK role=%s reason=%s\n' "$1" "$2" >&2
 }
 claude_run() {
   printf '%s|%s|%s|%s|%s|%s|%s\n' "$1" "$(basename "$2")" "$(basename "$3")" "$4" "${AI_ENGINE_LABELS-unset}" "${AI_ENGINE_MODEL_HINT-}" "${AI_ENGINE_EFFORT_HINT-}" >> "${CALLS}.claude"
+  printf '%s\n' "${GH_TOKEN-unset}|${OPENROUTER_API_KEY-unset}" >> "${CALLS}.secrets"
   case "${FAKE_CLAUDE_MODE}" in
     success) printf 'claude verdict\n' > "$3"; return 0 ;;
     unavailable) echo "AI_ENGINE_FALLBACK role=$1 reason=no_credential" >&2; return 75 ;;
@@ -43,7 +50,7 @@ def _helper_source() -> str:
 	text = POLLER.read_text(encoding="utf-8")
 	return "\n".join(
 		re.search(rf"^{name}\(\)\n\{{\n.*?^\}}\n", text, re.MULTILINE | re.DOTALL).group(0)
-		for name in ("poller_claude_judge", "_poller_rb_judge_sandbox_attempt", "poller_judge_isolated", "poller_rb_judge_isolated")
+		for name in ("poller_claude_judge", "_poller_rb_judge_sandbox_attempt", "poller_judge_engine_labels_json", "poller_judge_isolated", "poller_rb_judge_isolated")
 	)
 
 
@@ -58,6 +65,8 @@ def _run_helper(
 	role: str = "WAVE_JUDGE",
 	combined_mode: str = "false",
 	log_file: str = "judge_log.txt",
+	issue_labels: str | None = None,
+	issue_scope: str = "standalone",
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
 	scripts = tmp_path / "scripts"
 	scripts.mkdir(parents=True, exist_ok=True)
@@ -70,11 +79,18 @@ def _run_helper(
 	prompt.write_text("judge this\n", encoding="utf-8")
 	calls = tmp_path / "calls"
 	labels_line = f"TRACKING_LABELS='{tracking_labels}'\n" if tracking_labels is not None else "unset TRACKING_LABELS\n"
+	issue_labels_line = ""
+	if issue_labels is not None:
+		issue_labels_line = (
+			f"POLLER_JUDGE_ENGINE_LABELS=$(poller_judge_engine_labels_json {issue_scope} "
+			f"'{issue_labels}') || POLLER_JUDGE_ENGINE_LABELS=unavailable\n"
+		)
 	script = (
 		"set -euo pipefail\n"
 		f"_POLLER_AI_ENGINE_SH={scripts / 'ai_engine.sh'}\n"
 		+ _helper_source()
 		+ labels_line
+		+ issue_labels_line
 		+ f"MODEL_EDITOR=openai/gpt-6-sol\nMODEL_REASONING_EFFORT_JUDGE=xhigh\nRB_COMBINED_MODE={combined_mode}\n"
 		+ "rc=0\n"
 		+ f'poller_claude_judge {role} prompt.txt out.txt {log_file} ' + extra + ' || rc=$?\n'
@@ -141,6 +157,145 @@ def test_no_tracking_labels_means_an_explicit_empty_list(tmp_path: Path) -> None
 	assert _read(Path(f"{calls}.resolve")).splitlines() == ["WAVE_JUDGE|[]"]
 
 
+@pytest.mark.parametrize("scope, role, issue_labels, tracking_labels, expected, selected_engine", [
+	("standalone", "STALL_JUDGE", '["ai:clarification","ai:codex"]', '["ai:engine-claude"]', ["ai:clarification", "ai:codex"], "codex"),
+	("standalone", "STALL_JUDGE", '[]', '["ai:engine-claude"]', [], "claude"),
+	("managed", "STALL_JUDGE", '["ai:orchestrator-managed","ai:codex"]', '["ai:engine-claude"]', ["ai:codex", "ai:engine-claude", "ai:orchestrator-managed"], "codex"),
+	("managed", "RB_JUDGE", '["ai:orchestrator-managed","ai:codex"]', '["ai:engine-claude"]', ["ai:codex", "ai:engine-claude", "ai:orchestrator-managed"], "codex"),
+	("managed", "RB_JUDGE", '["ai:orchestrator-managed","ai:done"]', '[{"name":"ai:engine-claude"}]', ["ai:done", "ai:engine-claude", "ai:orchestrator-managed"], "claude"),
+])
+def test_issue_judges_resolve_from_verified_labels(
+	tmp_path: Path, scope: str, role: str, issue_labels: str, tracking_labels: str, expected: list[str], selected_engine: str,
+) -> None:
+	_stage_rb_support(tmp_path)
+	proc, calls = _run_helper(tmp_path, engine="claude", role=role, issue_scope=scope,
+		issue_labels=issue_labels, tracking_labels=tracking_labels)
+	assert "rc=0" in proc.stdout, proc.stderr
+	selected_role, labels_json = _read(Path(f"{calls}.resolve")).strip().split("|", 1)
+	assert selected_role == role
+	assert json.loads(labels_json) == expected
+	if scope == "standalone":
+		assert "ai:engine-claude" not in labels_json
+	assert _read(Path(f"{calls}.sandbox")).splitlines()[1].startswith(f"{selected_engine}|{role}|")
+
+
+@pytest.mark.parametrize("scope, issue_labels", [
+	("standalone", "null"), ("standalone", "not-json"),
+	("managed", "[]"), ("managed", '["ai:done"]'), ("managed", "null"),
+	("managed", '["ai:orchestrator-managed",42]'),
+])
+@pytest.mark.parametrize("role", ("STALL_JUDGE", "RB_JUDGE"))
+def test_unavailable_issue_labels_force_codex_without_engine_resolution(
+	tmp_path: Path, scope: str, issue_labels: str, role: str,
+) -> None:
+	_stage_rb_support(tmp_path)
+	proc, calls = _run_helper(tmp_path, engine="claude", role=role, issue_scope=scope,
+		issue_labels=issue_labels, tracking_labels='["ai:engine-claude"]')
+	assert "rc=0" in proc.stdout, proc.stderr
+	assert _read(Path(f"{calls}.resolve")) == ""
+	assert f"JUDGE_ENGINE_LABELS role={role} outcome=forced_codex reason=issue_labels_unavailable" in proc.stderr
+	assert _read(Path(f"{calls}.sandbox")).splitlines()[1].startswith(f"codex|{role}|")
+
+
+def test_issue_engine_labels_are_wired_to_stall_and_rb_judges_only() -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	assert 'STALL_JUDGE_ISSUE_LABELS="$(printf \'%s\' "${_candidate_details_json}" | jq -ec --arg n "${issue_num}"' in text
+	assert 'STALL_JUDGE_ISSUE_LABELS="$(printf \'%s\' "${_current_wave_details_json:-}" | jq -ec --arg n "${issue_num}"' in text
+	assert 'poller_judge_engine_labels_json "${stall_judge_engine_scope}" "${STALL_JUDGE_ISSUE_LABELS-}"' in text
+	assert 'POLLER_JUDGE_ENGINE_LABELS="${stall_judge_engine_labels_json}" poller_claude_judge STALL_JUDGE' in text
+	assert 'poller_judge_engine_labels_json managed "$(printf \'%s\' "${_current_wave_details_json:-}" | jq -ec --arg n "${rb_issue}"' in text
+	assert 'POLLER_JUDGE_ENGINE_LABELS="${RB_JUDGE_ENGINE_LABELS_JSON}" poller_claude_judge RB_JUDGE' in text
+	for role in ("WAVE_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE"):
+		assert re.search(rf"^\s+poller_claude_judge {role} ", text, re.MULTILINE)
+
+
+@pytest.mark.parametrize("issue_labels, expected_engine", [
+	('"ai:orchestrator-managed","ai:engine-claude"', "claude"),
+	('"ai:orchestrator-managed","ai:codex"', "codex"),
+	('"ai:done"', "codex"),
+])
+def test_combined_rb_judge_uses_verified_engine_and_its_worktree(
+	tmp_path: Path, issue_labels: str, expected_engine: str,
+) -> None:
+	_stage_rb_support(tmp_path)
+	worktree = tmp_path / "rb-worktree"
+	worktree.mkdir()
+	subprocess.run(["git", "init", "-q"], cwd=worktree, check=True)
+	(tmp_path / "prompt.txt").write_text("judge this\n", encoding="utf-8")
+	engine_dir = tmp_path / "scripts"
+	engine_dir.mkdir()
+	(engine_dir / "ai_engine.sh").write_text(FAKE_AI_ENGINE, encoding="utf-8")
+	text = POLLER.read_text(encoding="utf-8")
+	branch = text.split('        RB_JUDGE_ENGINE_LABELS_JSON=', 1)[1].split('          if [ "${RB_JUDGE_ENGINE_RC}" -eq 77 ]', 1)[0]
+	script = (
+		'set -euo pipefail\n' + _helper_source() + '\n'
+		f'_POLLER_AI_ENGINE_SH="{engine_dir / "ai_engine.sh"}"\n'
+		f'RB_COMBINED_WORKDIR="{worktree}"\n'
+		f'RUNTIME_DIR="{tmp_path}"\nGITHUB_WORKSPACE="{tmp_path}"\n'
+		f'RB_JUDGE_PROMPT_FILE="{tmp_path / "prompt.txt"}"\nRB_JUDGE_OUTPUT_FILE="{tmp_path / "verdict.txt"}"\n'
+		'MODEL_EDITOR=openai/gpt-6-sol\nRB_COMBINED_MODE=true\nrb_issue=10\n'
+		f'_current_wave_details_json=\'{{"10":{{"labels":[{issue_labels}],"labels_complete":true}}}}\'\nTRACKING_LABELS=\'["ai:engine-claude"]\'\n'
+		'RB_JUDGE_ENGINE_LABELS_JSON=' + branch + 'done\n'
+	)
+	# The test runs only the attempt, not the outer poller success/retry loop.
+	proc = subprocess.run(["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True,
+		env={**os.environ, "FAKE_ENGINE": "claude", "FAKE_CLAUDE_MODE": "success", "CALLS": str(tmp_path / "calls"),
+			"FAKE_SANDBOX_ROOT": str(tmp_path / "sandbox-root"), "WORKSPACE_PATH": str(tmp_path / "wrong-workspace")}, check=False)
+	assert proc.returncode == 0, proc.stderr
+	assert len(_read(tmp_path / "calls.resolve").splitlines()) == (0 if issue_labels == '"ai:done"' else 1)
+	assert proc.stderr.count("JUDGE_ENGINE_LABELS role=RB_JUDGE outcome=forced_codex") == (1 if issue_labels == '"ai:done"' else 0)
+	assert f"workspace={worktree} cwd={worktree} workpath=" in _read(tmp_path / "calls.sandbox_workspace")
+	if expected_engine == "claude":
+		assert _read(tmp_path / "verdict.txt") == "claude verdict\n", (proc.stdout, proc.stderr)
+		assert "claude|RB_JUDGE|write|/dev/null" in _read(tmp_path / "calls.sandbox")
+	else:
+		assert _read(tmp_path / "verdict.txt") == "opencode verdict\n"
+		assert "codex|RB_JUDGE|write|" in _read(tmp_path / "calls.sandbox")
+		assert "--role writer --model openai/gpt-6-sol" in _read(tmp_path / "calls.config")
+
+
+@pytest.mark.parametrize("helper_name", ("_fetch_issue_labels_batch_graphql", "_fetch_candidate_issue_details_graphql"))
+@pytest.mark.parametrize("has_next_page", (False, True))
+def test_judge_label_batches_detect_incomplete_pages(tmp_path: Path, helper_name: str, has_next_page: bool) -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	helper = re.search(rf"^{helper_name}\(\) \{{\n.*?^\}}\n", text, re.MULTILINE | re.DOTALL).group(0)
+	assert "labels(first: 100) { nodes { name } pageInfo { hasNextPage } }" in helper
+	if shutil.which("jq") is None:
+		pytest.skip("jq required for the poller label cache")
+	first_page = ["ai:orchestrator-managed", "ai:engine-claude", *[f"other-{index}" for index in range(98)]]
+	response = json.dumps({"data": {"repository": {"i0": {
+		"number": 10, "state": "OPEN", "labels": {
+			"nodes": [{"name": name} for name in first_page],
+			"pageInfo": {"hasNextPage": has_next_page},
+		},
+	}}}})
+	script = (
+		"set -euo pipefail\n" + helper
+		+ f"GITHUB_REPOSITORY=owner/repo\nRESPONSE='{response}'\n"
+		+ 'gh_retry() { printf "%s\\n" "$RESPONSE"; }\n'
+		+ f"{helper_name} '[10]'\n"
+	)
+	proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(proc.stdout)
+	if helper_name == "_fetch_issue_labels_batch_graphql":
+		assert payload == ({} if has_next_page else {"10": first_page})
+	else:
+		assert payload["10"]["labels_complete"] is not has_next_page
+		selection = subprocess.run(
+			["jq", "-ec", "--arg", "n", "10", 'select(.[$n].labels_complete == true) | .[$n].labels'],
+			input=json.dumps(payload), capture_output=True, text=True, check=False,
+		)
+		issue_labels = selection.stdout.strip() if selection.returncode == 0 else "null"
+		_stage_rb_support(tmp_path)
+		for judge_role, judge_scope in (("RB_JUDGE", "managed"), ("STALL_JUDGE", "standalone")):
+			judge_result, calls = _run_helper(tmp_path, engine="claude", role=judge_role,
+				issue_scope=judge_scope, issue_labels=issue_labels)
+			assert "rc=0" in judge_result.stdout, judge_result.stderr
+			assert _read(Path(f"{calls}.sandbox")).splitlines()[-2].startswith(
+				f"{'codex' if has_next_page else 'claude'}|{judge_role}|")
+
+
 def test_model_hint_argument_overrides_model_editor(tmp_path: Path) -> None:
 	_stage_rb_support(tmp_path)
 	_proc, calls = _run_helper(tmp_path, engine="claude", extra="claude-sonnet-5-5")
@@ -174,6 +329,7 @@ case "$1" in
   prepare-ephemeral)
     [ "$FAKE_CLAUDE_MODE" != prepare_failed ] || exit 1
     printf 'prepare\n' >> "${CALLS}.sandbox"
+    printf 'workspace=%s cwd=%s workpath=%s\n' "$GITHUB_WORKSPACE" "$PWD" "${WORKSPACE_PATH:-}" >> "${CALLS}.sandbox_workspace"
     printf '%s\n' "$FAKE_SANDBOX_ROOT" ;;
   run)
     rc=0; claude_access="${9:-write}"
@@ -494,9 +650,6 @@ SITES = {
 	"SECURITY_JUDGE": (
 		'poller_claude_judge SECURITY_JUDGE "${prompt_file}" "${output_file}" "${error_file}" "${effective_judge_model}" || security_judge_rc=$?',
 	),
-	"INTEGRATION_JUDGE": (
-		'poller_claude_judge INTEGRATION_JUDGE "${prompt_file}" "${output_file}" "${RUNTIME_DIR}/integration_judge.log" "${MODEL_EDITOR:-openai/gpt-6-sol}" || integration_judge_rc=$?',
-	),
 	"STALL_JUDGE": (
 		'poller_claude_judge STALL_JUDGE "${stall_judge_prompt_file}" "${stall_judge_output_file}" "${RUNTIME_DIR}/stall_judge.log" || stall_judge_rc=$?',
 	),
@@ -514,12 +667,16 @@ def test_each_judge_uses_sandbox_without_host_fallback() -> None:
 		assert 'if [ "${' + role.lower() + '_rc}" -eq 75 ]; then' not in text[start:start + 700]
 	assert 'poller_judge_isolated "${role}"' in text
 	assert 'claude_run "${role}"' not in text
-	assert len(re.findall(r"^\s+poller_claude_judge [A-Z_]+ ", text, re.MULTILINE)) == len(SITES) + 1
+	assert len(re.findall(r"poller_claude_judge (?:SECURITY_JUDGE|INTEGRATION_JUDGE|STALL_JUDGE|WAVE_JUDGE|RB_JUDGE) ", text)) == len(SITES) + 3
 	rb_block = text[text.index('      # Run the judge\n      RB_JUDGE_SUCCESS=false'):text.index('      # Parse judge output')]
 	assert 'poller_claude_judge RB_JUDGE "${RB_JUDGE_PROMPT_FILE}" "${RB_JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/rb_judge_${rb_issue}.log"' in rb_block
+	assert 'pushd "${RB_COMBINED_WORKDIR}" >/dev/null ||' in rb_block
+	assert 'poller_claude_judge RB_JUDGE ' in rb_block.split('pushd "${RB_COMBINED_WORKDIR}"', 1)[1].split('popd >/dev/null', 1)[0]
+	assert 'pushd "${judge_wt}" >/dev/null;' in text
 	assert 'if [ "${RB_JUDGE_ENGINE_RC}" -eq 77 ] || [ "${RB_JUDGE_ENGINE_RC}" -eq 75 ]; then\n            RB_JUDGE_ISOLATION_FAILED=true\n            break\n          fi' in rb_block
 	assert 'if [ "${RB_JUDGE_ENGINE_RC}" -eq 76 ]; then\n            break\n          fi' in rb_block
-	assert 'danger-full-access' not in rb_block and not re.search(r'\bcodex\s+.*\bexec\b', rb_block)
+	assert 'bash "${ORCH_CODEX_ISOLATED_EXEC}"' not in rb_block
+	assert 'danger-full-access' not in rb_block and not re.search(r'(^|\s)codex\s+.*\bexec\b', rb_block)
 	assert '.review_blocked_isolation_state' in rb_block
 	assert 'ai:rb-judge-isolation-escalated' in text
 	assert text.index('outcome=skip reason=escalated') < text.index('RB_COMBINED_MODE="false"', text.index('Detected review-blocked issues'))
@@ -530,6 +687,106 @@ def test_each_judge_uses_sandbox_without_host_fallback() -> None:
 	assert '_record_judge_isolation_failure STALL_JUDGE "${_judge_state_file}"' in text
 	assert '_record_judge_isolation_failure INTEGRATION_JUDGE "${STATE_FILE}"' in text
 	assert '_record_judge_isolation_failure SECURITY_JUDGE "${STATE_FILE}"' in text
+
+
+def test_integration_judge_does_not_charge_an_already_active_resolver() -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	invocation = text.split("invoke_judge_for_integration_conflict() {", 1)[1].split("\n}\n", 1)[0]
+	caller = text.split('invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" || integration_judge_result=$?', 1)[1]
+	assert 'if [ "${integration_dispatch_rc}" -eq 2 ]; then' in invocation
+	assert 'return 3' in invocation.split('if [ "${integration_dispatch_rc}" -eq 2 ]; then', 1)[1].split("\n    fi", 1)[0]
+	assert caller.index('if [ "${integration_judge_result}" -eq 3 ]; then') < caller.index('total_dispatches=$((total_dispatches + 1))')
+	deferral = caller.split('    if [ "${integration_judge_result}" -eq 2 ]; then', 1)[0]
+	program = ('set -euo pipefail\n'
+		'invoke_judge_for_integration_conflict() { return 3; }\n'
+		'check_deferral() {\nlocal final_pr=77 integration_branch=integration default_branch=main integration_judge_result=0\n'
+		'invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" || integration_judge_result=$?\n'
+		+ deferral + '\nprintf "unexpected accounting\\n"\n}\ncheck_deferral\n')
+	result = subprocess.run(["bash", "-c", program], capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert "Resolver already in flight" in result.stdout
+	assert "unexpected accounting" not in result.stdout
+
+
+def test_active_resolver_skips_integration_judge_before_model_call() -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	gate = text.split('  if [ "${unresolved_ticks}" -ge "${effective_max_retries}" ]; then', 1)[1].split(
+		'    invoke_judge_for_integration_conflict "${final_pr}"', 1,
+	)[0]
+	program = ('set -euo pipefail\n'
+		+ '_CONFLICT_DISPATCH_TRACKER=/dev/null\n'
+		+ '_has_active_autofix_run() { printf "active\\n"; return 0; }\n'
+		+ 'check_gate() {\nlocal unresolved_ticks=3 effective_max_retries=1 final_pr=77 integration_branch=integration\n'
+		+ 'if [ "${unresolved_ticks}" -ge "${effective_max_retries}" ]; then\n'
+		+ gate + 'printf "judge-called\\n"\nfi\n}\ncheck_gate\n')
+	result = subprocess.run(["bash", "-c", program], capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert "active" in result.stdout
+	assert "judge-called" not in result.stdout
+	assert gate.index('_has_active_autofix_run "${final_pr}"') < len(gate)
+
+
+def test_cycle_local_dispatch_skips_integration_judge_before_run_is_visible(tmp_path: Path) -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	gate = text.split('  if [ "${unresolved_ticks}" -ge "${effective_max_retries}" ]; then', 1)[1].split(
+		'    invoke_judge_for_integration_conflict "${final_pr}"', 1,
+	)[0]
+	tracker = tmp_path / "dispatches"
+	tracker.write_text("77\n", encoding="utf-8")
+	program = ('set -euo pipefail\n'
+		+ f'_CONFLICT_DISPATCH_TRACKER={tracker}\n'
+		+ '_has_active_autofix_run() { printf "API queried\\n"; return 1; }\n'
+		+ 'check_gate() {\nlocal unresolved_ticks=3 effective_max_retries=1 final_pr=77 integration_branch=integration\n'
+		+ 'if [ "${unresolved_ticks}" -ge "${effective_max_retries}" ]; then\n'
+		+ gate + 'printf "judge-called\\n"\nfi\n}\ncheck_gate\n')
+	result = subprocess.run(["bash", "-c", program], capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert "judge-called" not in result.stdout
+	assert "API queried" not in result.stdout
+
+
+def test_unpublished_integration_guidance_defers_resolver_dispatch() -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	invocation = text.split("invoke_judge_for_integration_conflict() {", 1)[1].split("\n}\n", 1)[0]
+	assert 'post_issue_comment_json "${TRACKING_NUM}" "${integration_comment_body}"' in invocation
+	assert 'if ! printf \'%s\' "${integration_comment_result}" | jq -e' in invocation
+	assert invocation.index('return 4') < invocation.index('_dispatch_review_for_conflicts "${final_pr}"')
+	caller = text.split('invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" || integration_judge_result=$?', 1)[1]
+	assert caller.index('if [ "${integration_judge_result}" -eq 4 ]; then') < caller.index('total_dispatches=$((total_dispatches + 1))')
+
+
+def test_integration_guidance_is_head_and_base_bound_and_untrusted(tmp_path: Path) -> None:
+	prepare = (REPO_ROOT / "scripts" / "review_conflict_prepare.sh").read_text(encoding="utf-8")
+	resolver_prompt = (REPO_ROOT / "prompts" / "integration-sync-conflict-resolver.txt").read_text(encoding="utf-8")
+	assert '{{JUDGE_GUIDANCE}}' in resolver_prompt
+	assert 'UNTRUSTED INTEGRATION JUDGE GUIDANCE' in prepare
+	assert 'INTEGRATION_JUDGE_GUIDANCE=""' in prepare
+	assert "tpl=tpl.replace('{{JUDGE_GUIDANCE}}', os.environ.get('JUDGE_GUIDANCE',''))" in prepare
+	assert 'INTEGRATION_JUDGE_GUIDANCE="$(jq -sr ' in prepare
+	judge = POLLER.read_text(encoding="utf-8")
+	assert 'integration-judge-guidance:v1 pr=${final_pr} head=$(git -C "${judge_wt}" rev-parse HEAD) base=$(git -C "${judge_wt}" rev-parse "refs/remotes/origin/${default_branch}")' in judge
+	if shutil.which("jq") is None:
+		pytest.skip("jq required to exercise the workflow's comment selector")
+
+	git_env = {key: value for key, value in os.environ.items() if key not in ("GIT_DIR", "GIT_WORK_TREE", "BASH_ENV", "ENV")}
+	subprocess.run(["git", "init", "-q", str(tmp_path)], env=git_env, check=True)
+	subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+		"commit", "--allow-empty", "-qm", "initial"], env=git_env, check=True)
+	head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, env=git_env, text=True).strip()
+	subprocess.run(["git", "update-ref", "refs/remotes/origin/main", head_sha], cwd=tmp_path, env=git_env, check=True)
+	selector = 'INTEGRATION_JUDGE_GUIDANCE="$(jq -sr ' + prepare.split('INTEGRATION_JUDGE_GUIDANCE="$(jq -sr ', 1)[1].split('    _state_payload=', 1)[0]
+	marker = f"<!-- ai:integration-judge-guidance:v1 pr=77 head={head_sha} base={head_sha} -->"
+	comment = "## Integration conflict diagnosis\n\nFinal PR #77: conflict\n\nResolver guidance: preserve both changes\n\n"
+	for suffix, expected in ((marker, True), (marker.replace("pr=77", "pr=78"), False),
+		(marker.replace(f"head={head_sha}", "head=" + "a" * 40), False),
+		(marker.replace(f"base={head_sha}", "base=" + "b" * 40), False)):
+		comments_file = tmp_path / "comments.json"
+		comments_file.write_text(json.dumps([{"body": comment + suffix}]), encoding="utf-8")
+		env = {**git_env, "PR_NUMBER": "77", "BASE_BRANCH": "main", "_ti_comments_raw": str(comments_file)}
+		result = subprocess.run(["bash", "-c", 'set -euo pipefail\n' + selector + 'printf "%s" "$INTEGRATION_JUDGE_GUIDANCE"'],
+			cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+		assert result.returncode == 0, result.stderr
+		assert ("preserve both changes" in result.stdout) is expected
 
 
 def test_judge_isolation_defers_escalates_once_and_resets_on_label_removal(tmp_path: Path) -> None:
@@ -701,10 +958,10 @@ def _orchestrate_steps() -> dict[str, dict]:
 
 
 def _decomposer_engine_block() -> str:
-	run = _orchestrate_steps()["Run Codex (decomposer)"]["run"]
-	start = run.index("  decomposer_rc=75\n")
-	end = run.index('  if [ "${decomposer_rc}" -eq 0 ]; then\n')
-	return run[start:end]
+	workflow = ORCHESTRATE_WORKFLOW.read_text(encoding="utf-8")
+	start = workflow.index("            decomposer_rc=75\n")
+	end = workflow.index('            if [ "${decomposer_rc}" -eq 0 ]; then\n', start)
+	return textwrap.dedent(workflow[start:end])
 
 
 def _run_decomposer_block(tmp_path: Path, engine: str, claude_mode: str, codex_mode: str = "success") -> tuple[subprocess.CompletedProcess[str], Path]:

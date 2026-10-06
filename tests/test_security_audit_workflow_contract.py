@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,6 +17,8 @@ CLARIFY_PATH = REPO_ROOT / ".github" / "workflows" / "clarify.yml"
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "security-audit.yml"
 INTERNAL_CLARIFY_PATH = REPO_ROOT / ".github" / "workflows" / "internal-clarify.yml"
 SCRIPT_PATH = REPO_ROOT / "scripts" / "security_audit.sh"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 _SANITIZED_GIT_ENV_KEYS = ("BASH_ENV", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX")
 
 
@@ -130,6 +133,7 @@ state_path = Path(os.environ["MOCK_GH_STATE_FILE"])
 state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
 state.setdefault("codex_calls", []).append(sys.argv[1:])
 state.setdefault("codex_stdin", []).append(sys.stdin.read())
+state.setdefault("codex_mounts", []).append(json.loads(os.environ.get("FAKE_CONTAINER_MOUNTS", "[]")))
 state_path.write_text(json.dumps(state), encoding="utf-8")
 sys.stdout.write(os.environ.get("MOCK_CODEX_OUTPUT", "[]"))
 if os.environ.get("MOCK_CODEX_ECHO_PROMPT") == "1":
@@ -220,6 +224,10 @@ def _run_security_audit(
 				_install_security_audit_support_tree(tmp_path, failure_mode=support_failure_mode)
 			)
 		env.update(extra_env or {})
+		# The audit agent runs through scripts/codex_isolated_exec.sh from the
+		# support tree; the fake docker runs the mock codex in the fake container.
+		support_scripts = Path(env["SECURITY_AUDIT_SUPPORT_DIR"]) / "scripts" if env.get("SECURITY_AUDIT_SUPPORT_DIR") else REPO_ROOT / "scripts"
+		env = enable_fake_isolation(bin_dir, support_scripts, env)
 		proc = subprocess.run(
 			["bash", "--noprofile", "--norc", str(SCRIPT_PATH), *script_args],
 			cwd=run_cwd,
@@ -270,6 +278,20 @@ def _git_fixture_repo(base_dir: Path) -> tuple[Path, str, str]:
 	_git("commit", "-q", "-m", "second commit")
 	head_sha = _git("rev-parse", "HEAD")
 	return repo_dir, first_sha, head_sha
+
+
+def _oversized_fixture_repo(base_dir: Path) -> tuple[Path, str, str]:
+	repo_dir, _first_sha, base_sha = _git_fixture_repo(base_dir)
+	(repo_dir / "large.py").write_bytes(b"x = 1\n" * 400000)
+	git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+	git_env.update({
+		"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+		"GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
+	})
+	subprocess.run(["git", "add", "large.py"], cwd=repo_dir, env=git_env, check=True)
+	subprocess.run(["git", "commit", "-qm", "large file"], cwd=repo_dir, env=git_env, check=True)
+	head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_dir, env=git_env, text=True).strip()
+	return repo_dir, base_sha, head_sha
 
 
 def _iso_utc_for_current_week(*, day_offset: int) -> str:
@@ -1748,12 +1770,12 @@ def test_security_audit_fix_cycle_diffs_fail_open() -> None:
 
 
 def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() -> None:
-	"""Accepted findings reach the prompt as accepted and never reach the output.
+	"""Accepted findings reach the prompt and only the same exploit is suppressed.
 
 	The orchestrator's security-pass exhaustion judge and the operator's
 	`/security-pass-waive` command persist waivers; the engine must drop a
-	re-report by exact id and by location (same file and category within the
-	line window), because the auditor mints a new id every run and fix commits
+	re-report by exact id and by location (same file, category, severity and
+	exploit within the line window), because the auditor mints a new id every run and fix commits
 	move the cited line.
 	"""
 	with tempfile.TemporaryDirectory(prefix="security-audit-waived-") as fixture_td:
@@ -1778,6 +1800,8 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 						"owasp_or_stride_category": "A04:2021-Insecure Design / STRIDE: Denial of Service",
 						"file": "./file_c.py",
 						"line": 1,
+						"severity": "high",
+						"exploit_scenario": "A concrete trust-boundary weakness can be exploited.",
 					},
 					{"finding_id": "waived-id-only"},
 				]
@@ -1785,12 +1809,15 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 			encoding="utf-8",
 		)
 		findings = [
-			_finding_payload("waived-exact", file_path="file_b.py", category="A01: Broken Access Control"),
+			_finding_payload("waived-exact", file_path="file_b.py", category="A04:2021-Insecure Design", severity="medium"),
 			_finding_payload(
 				"fresh-id-same-spot",
 				file_path="file_c.py",
 				category="a04:2021-insecure design / STRIDE: denial of service",
 			),
+			_finding_payload("new-exploit-same-category", file_path="file_c.py",
+				category="a04:2021-insecure design / STRIDE: denial of service",
+				exploit_scenario="A different credential leak is exploitable."),
 			_finding_payload("different-category-same-spot", file_path="file_c.py", category="A01: Broken Access Control"),
 			_finding_payload("waived-id-only", file_path="file_c.py"),
 		]
@@ -1810,8 +1837,8 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 
 	assert proc.returncode == 0, proc.stderr
 	payload = json.loads(final_state["security_audit_findings_output"])
-	assert [finding["finding_id"] for finding in payload["findings"]] == ["different-category-same-spot"]
-	assert payload["counts"]["kept"] == 1
+	assert [finding["finding_id"] for finding in payload["findings"]] == ["different-category-same-spot", "new-exploit-same-category"]
+	assert payload["counts"]["kept"] == 2
 	assert payload["counts"]["suppressed_waived"] == 3
 	assert "waived-findings=3 (line window 40)" in proc.stdout
 	prompt = final_state["codex_stdin"][0]
@@ -1822,11 +1849,37 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 	)[0]
 	assert "- `waived-exact` | A04:2021-Insecure Design | medium | file_b.py:1" in accepted_block
 	assert "Accepted because: Bounded blast radius; tracked [untrusted marker removed] [untrusted marker removed]" in accepted_block
-	assert "- `waived-by-location` | A04:2021-Insecure Design / STRIDE: Denial of Service | unknown | file_c.py:1" in accepted_block
+	assert "- `waived-by-location` | A04:2021-Insecure Design / STRIDE: Denial of Service | high | file_c.py:1" in accepted_block
 	assert "- `waived-id-only` | uncategorised | unknown | (location not recorded)" in accepted_block
 	assert "Rules for accepted findings:" not in accepted_block
-	assert "Never report an accepted finding again" in prompt
+	assert "Never re-report the same accepted exploit" in prompt
+	assert "Report a different exploit even when its file, category and line are near an accepted finding" in prompt
+	assert "Accepted exploit: A concrete trust-boundary weakness can be exploited." in accepted_block
 	assert "An acceptance covers one location." in prompt
+
+
+def test_security_audit_reused_waiver_id_cannot_hide_new_exploit() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-waived-id-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, first_sha, _, head_sha = _git_fixture_repo_three_commits(tmp_path)
+		waived_findings_path = tmp_path / "waived-findings.json"
+		waived_findings_path.write_text(json.dumps([{
+			"finding_id": "waived-exact", "owasp_or_stride_category": "A04:2021-Insecure Design",
+			"severity": "medium", "file": "file_b.py", "line": 1,
+			"exploit_scenario": "The original weakness is bounded.",
+		}]), encoding="utf-8")
+		changed = _finding_payload("waived-exact", file_path="file_b.py", category="A01: Broken Access Control",
+			exploit_scenario="A different exploit.")
+		result, state = _run_security_audit(
+			{}, codex_output=json.dumps([changed]), cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT), "SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"), "SECURITY_AUDIT_DIFF_BASE": first_sha,
+				"SECURITY_AUDIT_DIFF_HEAD": head_sha, "SECURITY_AUDIT_WAIVED_FINDINGS": str(waived_findings_path),
+			},
+		)
+		assert result.returncode == 0, result.stderr
+		assert [row["finding_id"] for row in json.loads(state["security_audit_findings_output"])["findings"]] == ["waived-exact"]
 
 
 def test_security_audit_waived_findings_fail_closed_on_malformed_input() -> None:
@@ -2003,6 +2056,115 @@ def test_security_audit_findings_json_empty_explicit_range_stays_narrow() -> Non
 	payload = json.loads(final_state["security_audit_findings_output"])
 	assert payload["findings"] == []
 	assert payload["counts"]["suppressed_out_of_scope"] == 1
+
+
+def test_security_audit_chunks_scoped_oversized_file_and_reports_coverage() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-oversized-") as td:
+		tmp_path = Path(td)
+		repo_dir, base_sha, head_sha = _oversized_fixture_repo(tmp_path)
+		output_path = tmp_path / "findings.json"
+		proc, state = _run_security_audit({}, cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+			"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+			"SECURITY_AUDIT_DIFF_BASE": base_sha,
+			"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+		})
+		assert proc.returncode == 0, proc.stderr
+		assert "Read EVERY chunk of EVERY listed file" in state["codex_stdin"][0]
+		assert "large.py (" in state["codex_stdin"][0]
+		assert "Cite the original repository path" in state["codex_stdin"][0]
+		assert any(mount.get("dst", "").endswith("/oversized-chunks") for mount in state["codex_mounts"][0])
+		payload = json.loads(state["security_audit_findings_output"])
+		assert payload["schema_version"] == "security_audit_findings.v1"
+		assert payload["findings"] == [] and payload["counts"]["kept"] == 0
+		assert payload["coverage"]["scoped_oversized_chunked"] == ["large.py"]
+
+
+def test_security_audit_oversized_cap_fails_before_codex() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-oversized-cap-") as td:
+		tmp_path = Path(td)
+		repo_dir, base_sha, head_sha = _oversized_fixture_repo(tmp_path)
+		output_path = tmp_path / "findings.json"
+		proc, state = _run_security_audit({}, cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+			"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+			"SECURITY_AUDIT_DIFF_BASE": base_sha,
+			"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+			"SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES": "1048576",
+		})
+		assert proc.returncode != 0
+		assert "phase=oversized-scope" in proc.stderr
+		assert not state.get("codex_calls") and not output_path.exists()
+
+
+def test_security_audit_full_scan_chunks_explicit_prior_and_fix_cycle_files() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-oversized-prior-") as td:
+		tmp_path = Path(td)
+		repo_dir, base_sha, head_sha = _oversized_fixture_repo(tmp_path)
+		for scope_var, entries in (
+			("SECURITY_AUDIT_PRIOR_FINDINGS", [{"finding_id": "prior", "file": "large.py"}]),
+			("SECURITY_AUDIT_FIX_CYCLE_DIFFS", [{"cycle": 1, "since_sha": base_sha, "head_sha": head_sha, "files": ["large.py"]}]),
+		):
+			scope_path = tmp_path / f"{scope_var}.json"
+			scope_path.write_text(json.dumps(entries), encoding="utf-8")
+			proc, result = _run_security_audit({}, cwd=repo_dir, extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+				"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / f"{scope_var}.out.json"),
+				scope_var: str(scope_path),
+			})
+			assert proc.returncode == 0, proc.stderr
+			assert "large.py (" in result["codex_stdin"][0]
+			assert json.loads(result["security_audit_findings_output"])["coverage"]["scoped_oversized_chunked"] == ["large.py"]
+
+
+def test_security_audit_full_scan_chunks_oversized_file() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-oversized-full-") as td:
+		repo_dir, _base_sha, head_sha = _oversized_fixture_repo(Path(td))
+		state = _security_audit_tracker_state()
+		state["api_responses"] = [[[]]]
+		proc, result = _run_security_audit(state, cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+		})
+		assert proc.returncode == 0, proc.stderr
+		assert "Oversized scoped files read in chunks: 1" in result["issue_comment_bodies"][0]
+		assert "Coverage note:" not in result["issue_comment_bodies"][0]
+		assert "large.py (" in result["codex_stdin"][0]
+		assert any(mount.get("dst", "").endswith("/oversized-chunks") for mount in result["codex_mounts"][0])
+		assert any(head_sha in body for body in result["issue_edit_bodies"])
+
+
+def test_security_audit_full_scan_oversized_cap_reports_coverage_note() -> None:
+	# Q24: in a full scan an unscoped file past the cap is listed as not
+	# inspected; it does not fail the audit.
+	with tempfile.TemporaryDirectory(prefix="security-audit-oversized-full-cap-") as td:
+		repo_dir, _base_sha, _head_sha = _oversized_fixture_repo(Path(td))
+		state = _security_audit_tracker_state()
+		state["api_responses"] = [[[]]]
+		proc, result = _run_security_audit(state, cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES": "1048576",
+		})
+		assert proc.returncode == 0, proc.stderr
+		assert "phase=oversized-scope" not in proc.stderr
+		assert result.get("codex_calls")
+		comment = result["issue_comment_bodies"][0]
+		assert "Coverage note: 1 tracked files over 2 MiB were not inspected" in comment and "`large.py`" in comment
+
+
+def test_security_audit_no_oversized_file_has_no_tracker_coverage_lines() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-no-oversized-") as td:
+		repo_dir, _first_sha, _head_sha = _git_fixture_repo(Path(td))
+		state = _security_audit_tracker_state()
+		state["api_responses"] = [[[]]]
+		proc, result = _run_security_audit(state, cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+		})
+		assert proc.returncode == 0, proc.stderr
+		assert "Coverage note:" not in result["issue_comment_bodies"][0]
+		assert "Oversized scoped files" not in result["issue_comment_bodies"][0]
 
 
 def test_security_audit_findings_json_preflight_failures_are_side_effect_free() -> None:

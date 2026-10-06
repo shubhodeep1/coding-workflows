@@ -52,6 +52,8 @@ env:
   # Defaults to high to match the repo-wide gpt-6-sol reasoning-level
   # policy. Override per-repo via vars.THINKING_LEVEL_ORCHESTRATE.
   MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_ORCHESTRATE || 'high' }}
+  # Codex version baked into the isolated agent image (scripts/codex_isolated_exec.sh).
+  CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
   # gpt-6-sol paths default to low verbosity per agents.md model table.
   # Output is structured JSON (`orchestrate_decomposition.v1` schema), which
   # is not verbosity-sensitive — the schema controls shape regardless. Low

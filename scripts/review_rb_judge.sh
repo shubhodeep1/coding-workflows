@@ -2097,8 +2097,8 @@ case "${RB_ACTION}" in
         echo "fix_description describing what you changed."
         echo
         # Edit-discipline guidance is scoped to THIS step (the fix
-        # step runs with --sandbox danger-full-access and is expected
-        # to write files). The read-only judge step intentionally
+        # step is an OpenCode writer in review_untrusted_sandbox.sh and is
+        # expected to write files). The read-only judge step intentionally
         # omits this block — its sandbox would silently reject any
         # write, and including it there encouraged the model to
         # re-explore in pursuit of a write it could never land.
@@ -2130,9 +2130,21 @@ __EDIT_DISCIPLINE__
       rb_fix_stall_status_file="$(mktemp /tmp/rb_fix_stall_status.XXXXXX)"
       rb_fix_stall_state=""
       rb_fix_rc=0
+      # The fix writer edits files with a full tool surface while reading
+      # untrusted PR content, so it runs in the review editor's
+      # credential-free, network-isolated sandbox
+      # (review_untrusted_sandbox.sh): no GH_PAT, no OpenRouter key, no host
+      # checkout or .git inside; validated edits are copied back afterwards.
+      # Serena runs only on the host, so the writer gets no MCP server.
+      # GITHUB_WORKSPACE stays the checkout: prepare validates its .git and
+      # takes the per-PR tree from WORKSPACE_PATH, which has no .git (#6455).
       rb_fix_serena_mode="off"
-      if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
-        rb_fix_serena_mode="on"
+      rb_fix_checkout_real="$(realpath -e -- "${GITHUB_WORKSPACE:-}" 2>/dev/null || true)"
+      rb_fix_workdir_real="$(realpath -e -- "${RB_OPENCODE_WORKSPACE}" 2>/dev/null || true)"
+      if [ -n "${rb_fix_checkout_real}" ] && [ "${rb_fix_checkout_real}" = "${rb_fix_workdir_real}" ]; then
+        rb_fix_workspace_path=""
+      else
+        rb_fix_workspace_path="${RB_OPENCODE_WORKSPACE}"
       fi
       rb_fix_isolation_deferred=false
       emit_review_rb_substate "review_rb_fix" "judge_fix" "LaunchingAgentProcess" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
@@ -2143,7 +2155,7 @@ __EDIT_DISCIPLINE__
       review_rb_claude_run write "${RB_FIX_PROMPT}" "${RB_FIX_OUTPUT}" "${RB_FIX_STDERR}" "${JUDGE_EFFECTIVE_REASONING_EFFORT}" || rb_fix_claude_rc=$?
       if [ "${rb_fix_claude_rc}" -ne 75 ]; then
         rb_fix_rc="${rb_fix_claude_rc}"
-      elif ! review_rb_opencode_sandbox_prepare "${RB_FIX_OPENCODE_CONFIG}" review_rb_fix "${RB_FIX_STDERR}" "${rb_fix_serena_mode}"; then
+      elif ! WORKSPACE_PATH="${rb_fix_workspace_path}" review_rb_opencode_sandbox_prepare "${RB_FIX_OPENCODE_CONFIG}" review_rb_fix "${RB_FIX_STDERR}" "${rb_fix_serena_mode}"; then
         rb_fix_rc=77
         rb_fix_isolation_deferred=true
       else
