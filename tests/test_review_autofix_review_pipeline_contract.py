@@ -4619,6 +4619,7 @@ def test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer(
 		}
 		emit_run_budget_gate_note() { :; }
 		codex_run_budget_phase_may_start() { return 0; }
+		reviewer_request_partial_finalize() { printf '%s\\n' "$1" > "$PARTIAL_REQUEST_FILE"; }
 		normalize_reviewer_model_list() { printf '%s\\n' "$1" | tr ',' '\\n'; }
 		run_reviewer() {
 		  printf '%s\\n' "$1" >> "$CALLS_FILE"
@@ -4647,9 +4648,13 @@ def test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer(
 		("HTTP 429 rate limit", "mistralai/mistral-small-2603", "success", 1, "", "skipped_unmapped", "", 0),
 		("", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 1, "run", "failed", "skip_open", 1),
 		("", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 0, "skip_open", "failed", "skip_open", 0),
+		("", "mistralai/mistral-small-2603,openai/gpt-6-luna", "skipped_budget", 2, "", "skipped_unmapped", "", 0),
+		("", "mistralai/mistral-small-2603,openai/gpt-6-luna", "skipped_budget", 1, "run", "failed", "skip_open", 0),
+		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "skipped_budget", 2, "", "failed", "", 0),
 	):
 		with tempfile.TemporaryDirectory(prefix="lite-mistral-overflow-") as temp_dir:
 			root = Path(temp_dir)
+			partial_request_file = root / "partial.txt"
 			active_file = root / "active.txt"
 			active_file.write_text("mistralai/mistral-small-2603\n", encoding="utf-8")
 			prompt_file = root / "prompt.txt"
@@ -4662,6 +4667,7 @@ def test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer(
 					"REVIEWER_ACTIVE_MODELS_FILE": str(active_file),
 					"PROMPT_FILE": str(prompt_file),
 					"CALLS_FILE": str(root / "calls.txt"),
+					"PARTIAL_REQUEST_FILE": str(partial_request_file),
 					"MISTRAL_ERROR": error,
 					"MISTRAL_STATUS": mistral_status,
 					"TEST_MISTRAL_HEALTH_DECISION": mistral_health_decision,
@@ -4675,8 +4681,11 @@ def test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer(
 				text=True,
 				check=True,
 			)
-			assert (len((root / "calls.txt").read_text(encoding="utf-8").splitlines()) if (root / "calls.txt").exists() else 0) == expected_count
+			assert (len((root / "calls.txt").read_text(encoding="utf-8").splitlines()) if (root / "calls.txt").exists() else 0) == expected_count, (mistral_status, mistral_health_decision, fallback_status, proc.stdout, proc.stderr)
 			assert f"RESULT={expected_success}" in proc.stdout
+			assert partial_request_file.exists() == (fallback_status == "skipped_budget" and (mistral_status in ("skipped_unmapped", "skipped_open") or mistral_health_decision == "skip_open"))
+			if partial_request_file.exists():
+				assert partial_request_file.read_text(encoding="utf-8") == "soft_deadline\n"
 			if expected_success:
 				assert "ACTIVE=openai/gpt-6-luna" in proc.stdout
 			else:
