@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Keep review fixes bounded to the intended PR files and preserve provenance for the chosen target.",
   "timestamps": {
     "created_at": "2026-10-06T01:15:04Z",
