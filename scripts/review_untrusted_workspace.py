@@ -90,6 +90,14 @@ def _rejection_line(exc):
 		line += f" depth={depth}"
 	return line
 COMMAND_TWIN_DIR = "workflow-templates/.claude/commands"
+# Live copies the resolver may sync from their workflow-templates twin
+# (issue #6595). The live path stays excluded from allowed(), snapshot and
+# transfer: only the runner writes it, byte-identical to the resolved template.
+PAIRED_LIVE_COPIES = {
+	".claude/hooks/pr_merge_status_guard.py": "workflow-templates/.claude/hooks/pr_merge_status_guard.py",
+}
+_UNMERGED_MODE_RE = re.compile(r"[0-7]{6}")
+_UNMERGED_SHA_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 
 
 class UnsafeWorkspaceDirectory(ValueError):
@@ -467,19 +475,147 @@ def refresh(host, workspace, manifest):
 			os.chmod(target, mode)
 
 
+def _log_safe_path(name):
+	"""Return a rejected path only when it cannot inject log or workflow text."""
+	if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9._-][A-Za-z0-9._/-]{0,127}", name):
+		return "redacted"
+	parts = name.split("/")
+	if any(not part or part in (".", "..") or "secret" in part.lower() or "credential" in part.lower() or part.lower().startswith(".env") for part in parts):
+		return "redacted"
+	return name
+
+
+def _path_rejection_reason(name):
+	"""Name, as a fixed token, the allowed() rule that refused a path."""
+	parts = PurePosixPath(name).parts
+	if not parts or name.startswith("/") or ".." in parts or "\\" in name or "\n" in name or "\r" in name:
+		return "unsafe_name"
+	if name == "tests/test_audit_plans_command.py":
+		return "operator_input"
+	if any(part.lower() in EXCLUDED or part.lower().startswith(".env") or "secret" in part.lower() or "credential" in part.lower() or part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore", ".egg-info", ".dist-info")) for part in parts):
+		return "excluded_component"
+	if name in PAIRED_LIVE_COPIES:
+		return "live_safety_hook"
+	if parts[0].startswith("."):
+		return "dot_directory"
+	return "unsupported_type"
+
+
 def check_paths(host, paths_file):
 	with paths_file.open(encoding="utf-8", newline="") as handle:
 		path_lines = handle.read().split("\n")
 	for name in path_lines:
 		if not name:
 			continue
+		reason = "unsafe_file"
 		try:
 			if not allowed(name):
+				reason = _path_rejection_reason(name)
 				raise ValueError("unsupported path")
 			checked_path(host, name)
 		except (ValueError, OSError):
+			# Fixed reason token plus a charset-limited path (or "redacted"):
+			# the name is PR-controlled and must never reach logs verbatim.
+			print(f"REVIEW_RESOLVER_PATH_REJECTED reason={reason} path={_log_safe_path(name)}", file=sys.stderr)
 			print("unsupported path", file=sys.stderr)
 			raise SystemExit(1) from None
+
+
+def _read_conflicted_paths(paths_file):
+	with paths_file.open(encoding="utf-8", newline="") as handle:
+		names = [name for name in handle.read().split("\n") if name]
+	return list(dict.fromkeys(names))
+
+
+def _parse_unmerged_index(unmerged_file):
+	"""Parse `git ls-files -u -z` output into {path: {stage: (mode, sha)}}."""
+	data = unmerged_file.read_bytes()
+	entries = {}
+	if not data:
+		return entries
+	if not data.endswith(b"\0"):
+		raise ValueError("malformed unmerged record")
+	for record in data[:-1].split(b"\0"):
+		meta, sep, raw_name = record.partition(b"\t")
+		fields = meta.split(b" ")
+		if not sep or not raw_name or len(fields) != 3:
+			raise ValueError("malformed unmerged record")
+		mode, sha, stage = (field.decode("ascii") for field in fields)
+		if not _UNMERGED_MODE_RE.fullmatch(mode) or not _UNMERGED_SHA_RE.fullmatch(sha) or stage not in ("1", "2", "3"):
+			raise ValueError("malformed unmerged record")
+		stages = entries.setdefault(raw_name.decode("utf-8"), {})
+		if stage in stages:
+			raise ValueError("malformed unmerged record")
+		stages[stage] = (mode, sha)
+	return entries
+
+
+def paired_live_copies(host, paths_file, unmerged_file, pairs_out, model_paths_out):
+	"""Split conflicted paths into runner-synced live copies and model paths.
+
+	A live copy is paired only when it and its template conflict with exactly
+	the same base/ours/theirs index entries, so the resolved template is the
+	resolved live file. Any other shape stays in the model paths, where
+	check-paths still refuses the live hook (fail closed).
+	"""
+	conflicted = _read_conflicted_paths(paths_file)
+	unmerged = _parse_unmerged_index(unmerged_file)
+	conflicted_set = set(conflicted)
+	pairs = []
+	for live, template in sorted(PAIRED_LIVE_COPIES.items()):
+		if live not in conflicted_set or template not in conflicted_set:
+			continue
+		live_stages = unmerged.get(live)
+		template_stages = unmerged.get(template)
+		if not live_stages or live_stages != template_stages or "2" not in live_stages or "3" not in live_stages:
+			continue
+		if not allowed(template):
+			continue
+		try:
+			checked_path(host, live)
+			checked_path(host, template)
+		except (ValueError, OSError):
+			continue
+		pairs.append((live, template))
+	paired_live = {live for live, _ in pairs}
+	pairs_out.write_text("".join(f"{live}\t{template}\n" for live, template in pairs), encoding="utf-8")
+	model_paths_out.write_text("".join(f"{name}\n" for name in conflicted if name not in paired_live), encoding="utf-8")
+
+
+def _has_conflict_markers(data):
+	return any(line.startswith((b"<<<<<<< ", b">>>>>>> ")) for line in data.split(b"\n"))
+
+
+def mirror_live_copies(host, pairs_file):
+	"""Copy each resolved template byte-for-byte over its live copy."""
+	pairs = []
+	for line in pairs_file.read_text(encoding="utf-8").split("\n"):
+		if not line:
+			continue
+		live, sep, template = line.partition("\t")
+		# Never trust the file for the mapping itself: only known pairs.
+		if not sep or PAIRED_LIVE_COPIES.get(live) != template:
+			raise ValueError("unknown paired live copy")
+		data, mode = read_regular(checked_path(host, template))
+		if _has_conflict_markers(data):
+			raise ValueError("template still has conflict markers")
+		live_path = checked_path(host, live)
+		if not stat.S_ISREG(live_path.lstat().st_mode):
+			raise ValueError("live copy is not a regular file")
+		pairs.append((live, live_path, data, mode))
+	for live, live_path, data, mode in pairs:
+		fd, tmp_name = tempfile.mkstemp(dir=live_path.parent, prefix=".review-live-copy-")
+		try:
+			with os.fdopen(fd, "wb") as out:
+				out.write(data)
+			os.chmod(tmp_name, mode)
+			# Do not follow a path that changed since validation.
+			if not stat.S_ISREG(checked_path(host, live).lstat().st_mode):
+				raise ValueError("live copy is not a regular file")
+			os.replace(tmp_name, live_path)
+		finally:
+			if os.path.exists(tmp_name):
+				os.unlink(tmp_name)
 
 
 def main():
@@ -504,6 +640,24 @@ def main():
 			sys.stdout.buffer.write(readme_data)
 		except Exception:
 			print("::error::Review static README output failed", file=sys.stderr)
+			raise SystemExit(1) from None
+		return
+	if sys.argv[1:2] == ["paired-live-copies"]:
+		if len(sys.argv) != 7:
+			raise SystemExit(2)
+		try:
+			paired_live_copies(*map(Path, sys.argv[2:7]))
+		except Exception:  # noqa: BLE001 - any failure must fail closed without detail
+			print("paired live copy check failed", file=sys.stderr)
+			raise SystemExit(1) from None
+		return
+	if sys.argv[1:2] == ["mirror-live-copies"]:
+		if len(sys.argv) != 4:
+			raise SystemExit(2)
+		try:
+			mirror_live_copies(Path(sys.argv[2]), Path(sys.argv[3]))
+		except Exception:  # noqa: BLE001 - never print file content or paths
+			print("paired live copy mirror failed", file=sys.stderr)
 			raise SystemExit(1) from None
 		return
 	# snapshot alone takes an optional fifth argument: the host Git dir.

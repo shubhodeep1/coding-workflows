@@ -33,6 +33,17 @@ def _persistence_helper() -> str:
 	return match.group()
 
 
+def _report_helper() -> str:
+	match = re.search(r"^_resolver_report_rejected_path\(\)\n\{\n.*?\n\}\n", _source(), re.M | re.S)
+	assert match is not None
+	return match.group()
+
+
+def _guard() -> str:
+	src = _source()
+	return src[src.index('# Reject unsupported conflict paths for both engines'):src.index('_resolver_sandbox_opencode_attempt()')]
+
+
 def _launch() -> str:
 	src = _source()
 	return src[src.index('  if [ "${_run_codex}" = "true" ]; then\n'):src.index('  resolver_clean_output="${tmp_output}.ansi-clean"')]
@@ -89,7 +100,7 @@ _resolver_sandbox_attempt() {
   _resolver_sandbox_opencode_attempt
   return "${_codex_exit}"
 }
-	""" + _failure_helper() + "\n" + _helper() + "\n" + _launch() + '\nprintf "exit=%s\\n" "${_codex_exit}"\n'
+	""" + _failure_helper() + "\n" + _report_helper() + "\n" + _helper() + "\n" + _launch() + '\nprintf "exit=%s\\n" "${_codex_exit}"\n'
 	prompt = tmp_path / "prompt.txt"
 	prompt.write_text("resolve conflict\n", encoding="utf-8")
 	output = tmp_path / "output.txt"
@@ -101,6 +112,8 @@ _resolver_sandbox_attempt() {
 	env.pop("ENV", None)
 	setup = f'''resolver_sandbox_sh={str(sandbox)!r}
 CONFLICTED_PATHS_FILE={str(paths)!r}
+RESOLVER_MODEL_PATHS_FILE={str(paths)!r}
+RESOLVER_CHECK_PATHS_STDERR_FILE={str(tmp_path / "check_paths_stderr")!r}
 _effective_prompt_file={str(prompt)!r}
 tmp_output={str(output)!r}
 _stall_status_file={str(tmp_path / "status")!r}
@@ -180,26 +193,73 @@ echo unexpected
 	)
 
 
-def test_unsupported_path_refuses_before_any_model(tmp_path):
+REJECTED_LINE = re.compile(r"^REVIEW_RESOLVER_PATH_REJECTED reason=[a-z_]{1,32} path=(redacted|[A-Za-z0-9._/-]{1,128})$", re.M)
+
+
+def _run_guard(tmp_path, model_paths):
 	sandbox, calls = _stub(tmp_path)
-	paths = tmp_path / "paths"
-	paths.write_text("assets/x.svg\n")
-	src = _source()
-	guard = src[src.index('# Reject unsupported conflict paths for both engines'):src.index('_resolver_sandbox_opencode_attempt()')]
 	result = subprocess.run(["bash", "-c", f'''set -euo pipefail
 RUNTIME_DIR={str(tmp_path)!r}
 SUPPORT_SCRIPTS_DIR={str(SCRIPT.parent)!r}
-CONFLICTED_PATHS_FILE={str(paths)!r}
+CONFLICTED_PATHS_FILE={str(tmp_path / "all_conflicted")!r}
+RESOLVER_MODEL_PATHS_FILE={str(model_paths)!r}
+RESOLVER_CHECK_PATHS_STDERR_FILE={str(tmp_path / "check_paths_stderr")!r}
 emit_conflict_resolver_substate() {{ :; }}
 _persist_resolver_retry_state_from_current_failure() {{ printf '%s\\n' "$RESOLVER_ISOLATION_FAILURE_REASON" > "$RUNTIME_DIR/persisted_reason"; }}
 {_failure_helper()}
-{guard}
+{_report_helper()}
+{_guard()}
+echo guard-passed
 '''], cwd=tmp_path, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, capture_output=True, text=True)
+	return result, calls
+
+
+@pytest.mark.parametrize("path,reason,shown", [
+	("assets/x.svg", "unsupported_type", "assets/x.svg"),
+	(".ai/x.txt", "excluded_component", ".ai/x.txt"),
+	(".claude/settings.json", "dot_directory", ".claude/settings.json"),
+	(".claude/hooks/pr_merge_status_guard.py", "live_safety_hook", ".claude/hooks/pr_merge_status_guard.py"),
+	("assets/\x1b[31m::set-output.svg", "unsupported_type", "redacted"),
+])
+def test_unsupported_path_refuses_before_any_model(tmp_path, path, reason, shown):
+	paths = tmp_path / "paths"
+	paths.write_text(path + "\n", encoding="utf-8")
+	result, calls = _run_guard(tmp_path, paths)
 	assert result.returncode == 1
-	assert "reason=sandbox_path_unsupported" in result.stderr
-	assert "assets/x.svg" not in result.stderr
+	assert "guard-passed" not in result.stdout
+	# The existing fail-closed lines stay byte-identical.
+	assert "AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=sandbox_path_unsupported action=fail_closed\n" in result.stderr
+	assert "::error::Conflict resolver isolation unavailable (reason=sandbox_path_unsupported); refusing host fallback.\n" in result.stderr
+	rejected = REJECTED_LINE.findall(result.stderr)
+	assert len(rejected) == 1
+	assert f"REVIEW_RESOLVER_PATH_REJECTED reason={reason} path={shown}\n" in result.stderr
+	assert "\x1b" not in result.stderr and "::set-output" not in result.stderr
 	assert (tmp_path / "persisted_reason").read_text().strip() == "sandbox_path_unsupported"
 	assert not calls.exists()
+
+
+def test_paired_model_paths_pass_guard(tmp_path):
+	# The paired live hook is removed from the model paths; the template passes.
+	paths = tmp_path / "model_paths"
+	paths.write_text("workflow-templates/.claude/hooks/pr_merge_status_guard.py\n", encoding="utf-8")
+	result, calls = _run_guard(tmp_path, paths)
+	assert result.returncode == 0, result.stderr
+	assert "guard-passed" in result.stdout
+	assert "REVIEW_RESOLVER_PATH_REJECTED" not in result.stderr
+	assert not calls.exists()
+
+
+def test_paired_live_copy_source_contract():
+	src = _source()
+	assert 'check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}"' not in src
+	assert src.count('check-paths "$(pwd)" "${RESOLVER_MODEL_PATHS_FILE}"') == 2
+	assert src.index('paired-live-copies "$(pwd)"') < src.index('# Reject unsupported conflict paths for both engines')
+	assert src.index("  _resolver_mirror_paired_live_copies\n  _scan_residual_markers\n") > 0
+	tail = src[src.index("  if ! _resolver_verify_paired_live_index; then"):]
+	assert tail.index("_resolver_verify_paired_live_index") < tail.index("verify_resolver_index_complete_or_fail")
+	assert '--paths-file "${RESOLVER_TARGETED_PATHS_FILE}"' in src
+	workspace = (SCRIPT.parent / "review_untrusted_workspace.py").read_text(encoding="utf-8")
+	assert 'if name == ".claude/hooks/pr_merge_status_guard.py":\n\t\treturn False' in workspace
 
 
 def test_missing_sandbox_support_refuses_before_any_model(tmp_path):

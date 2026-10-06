@@ -149,7 +149,7 @@ def test_resolver_path_check_precedes_sandbox_and_does_not_pass_host_git_index()
 	text = (ROOT / "scripts/review_conflict_resolve.sh").read_text(encoding="utf-8")
 	guard = text[text.index('# Reject unsupported conflict paths for both engines'):text.index('attempt=1\nwhile ')]
 	branch = text[text.index('resolver_claude_rc=75'):text.index('resolver_clean_output="${tmp_output}.ansi-clean"')]
-	assert 'check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}"' in guard
+	assert 'check-paths "$(pwd)" "${RESOLVER_MODEL_PATHS_FILE}"' in guard
 	assert guard.index('check-paths') < guard.index('prepare-ephemeral codex')
 	assert branch.index('_resolver_sandbox_attempt claude') < branch.index('_resolver_sandbox_attempt codex')
 	assert 'GIT_INDEX_FILE=' not in branch
@@ -196,7 +196,7 @@ def test_claude_resolver_sandbox_attempt_and_path_gate():
 	assert '[ "$#" -ge 6 ] && [ "$#" -le 9 ]' in helper
 	attempt = text[text.index('_resolver_sandbox_attempt()'):text.index('# Source-repo only: the final touched-set gate')]
 	branch = text[text.index('resolver_claude_rc=75'):text.index('resolver_clean_output="${tmp_output}.ansi-clean"')]
-	assert branch.index('check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}"') < branch.index('_resolver_sandbox_attempt claude')
+	assert branch.index('check-paths "$(pwd)" "${RESOLVER_MODEL_PATHS_FILE}"') < branch.index('_resolver_sandbox_attempt claude')
 	assert attempt.index('prepare-ephemeral') < attempt.index('run "${_effective_prompt_file}"') < attempt.index('if ! REVIEW_SANDBOX_ROOT=')
 	assert 'GIT_INDEX_FILE=' not in attempt + branch
 
@@ -224,3 +224,211 @@ def test_progress_monitor_stops_without_waiting_for_its_sleep(tmp_path):
 		capture_output=True, text=True, timeout=3, check=False,
 	)
 	assert process.returncode == 0, process.stderr
+
+
+# Issue #6595: a PR that conflicts on both the live merged-PR guard hook and
+# its workflow-templates twin must be resolvable without admitting the live
+# hook to the sandbox, and a rejected path must be named safely in the log.
+LIVE_HOOK = ".claude/hooks/pr_merge_status_guard.py"
+TEMPLATE_HOOK = "workflow-templates/.claude/hooks/pr_merge_status_guard.py"
+RESOLVE_SCRIPT = ROOT / "scripts/review_conflict_resolve.sh"
+
+
+def _git(repo, *args):
+	env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+	env.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@invalid", GIT_COMMITTER_NAME="t",
+		GIT_COMMITTER_EMAIL="t@invalid", GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+	return subprocess.run(["git", *args], cwd=repo, env=env, capture_output=True, check=False)
+
+
+def _write(repo, name, text, mode=0o644):
+	path = repo / name
+	path.parent.mkdir(parents=True, exist_ok=True)
+	path.write_text(text, encoding="utf-8")
+	path.chmod(mode)
+
+
+def _paired_conflict_repo(tmp_path, template_theirs="value = 2\n", extra=False):
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q", "-b", "main")
+	for name in (LIVE_HOOK, TEMPLATE_HOOK):
+		_write(repo, name, "value = 0\n", 0o755)
+	if extra:
+		_write(repo, ".ai/x.txt", "0\n")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-qm", "base")
+	_git(repo, "checkout", "-qb", "feature")
+	_write(repo, LIVE_HOOK, "value = 2\n", 0o755)
+	_write(repo, TEMPLATE_HOOK, template_theirs, 0o755)
+	if extra:
+		_write(repo, ".ai/x.txt", "2\n")
+	_git(repo, "commit", "-qam", "feature")
+	_git(repo, "checkout", "-q", "main")
+	for name in (LIVE_HOOK, TEMPLATE_HOOK):
+		_write(repo, name, "value = 1\n", 0o755)
+	if extra:
+		_write(repo, ".ai/x.txt", "1\n")
+	_git(repo, "commit", "-qam", "main")
+	assert _git(repo, "merge", "-q", "feature").returncode != 0
+	conflicted = [LIVE_HOOK, TEMPLATE_HOOK] + ([".ai/x.txt"] if extra else [])
+	(tmp_path / "conflicted").write_text("".join(f"{n}\n" for n in conflicted), encoding="utf-8")
+	(tmp_path / "unmerged.z").write_bytes(_git(repo, "ls-files", "-u", "-z").stdout)
+	return repo
+
+
+def _workspace(*args):
+	return subprocess.run([sys.executable, str(WORKSPACE), *map(str, args)],
+		env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"), capture_output=True, text=True)
+
+
+def _pair(tmp_path, repo):
+	return _workspace("paired-live-copies", repo, tmp_path / "conflicted", tmp_path / "unmerged.z",
+		tmp_path / "pairs", tmp_path / "model_paths")
+
+
+def test_paired_conflict_moves_live_hook_out_of_model_paths(tmp_path):
+	repo = _paired_conflict_repo(tmp_path)
+	proc = _pair(tmp_path, repo)
+	assert proc.returncode == 0, proc.stderr
+	assert (tmp_path / "pairs").read_text() == f"{LIVE_HOOK}\t{TEMPLATE_HOOK}\n"
+	assert (tmp_path / "model_paths").read_text() == f"{TEMPLATE_HOOK}\n"
+	assert _workspace("check-paths", repo, tmp_path / "model_paths").returncode == 0
+
+
+def test_divergent_template_conflict_stays_fail_closed(tmp_path):
+	repo = _paired_conflict_repo(tmp_path, template_theirs="value = 9\n")
+	proc = _pair(tmp_path, repo)
+	assert proc.returncode == 0, proc.stderr
+	assert (tmp_path / "pairs").read_text() == ""
+	assert LIVE_HOOK in (tmp_path / "model_paths").read_text().splitlines()
+	check = _workspace("check-paths", repo, tmp_path / "model_paths")
+	assert check.returncode == 1
+	assert f"REVIEW_RESOLVER_PATH_REJECTED reason=live_safety_hook path={LIVE_HOOK}\n" in check.stderr
+	assert "unsupported path" in check.stderr
+
+
+def test_paired_conflict_with_unrelated_excluded_path_is_still_refused(tmp_path):
+	repo = _paired_conflict_repo(tmp_path, extra=True)
+	assert _pair(tmp_path, repo).returncode == 0
+	assert (tmp_path / "pairs").read_text() == f"{LIVE_HOOK}\t{TEMPLATE_HOOK}\n"
+	assert (tmp_path / "model_paths").read_text() == f"{TEMPLATE_HOOK}\n.ai/x.txt\n"
+	check = _workspace("check-paths", repo, tmp_path / "model_paths")
+	assert check.returncode == 1
+	assert "REVIEW_RESOLVER_PATH_REJECTED reason=excluded_component path=.ai/x.txt\n" in check.stderr
+
+
+def test_malformed_unmerged_dump_fails_closed(tmp_path):
+	repo = _paired_conflict_repo(tmp_path)
+	(tmp_path / "unmerged.z").write_bytes(b"100644 nothex 2\t" + LIVE_HOOK.encode() + b"\0")
+	proc = _pair(tmp_path, repo)
+	assert proc.returncode == 1
+	assert proc.stderr.strip() == "paired live copy check failed"
+
+
+def test_mirror_live_copy_is_byte_identical(tmp_path):
+	repo = _paired_conflict_repo(tmp_path)
+	assert _pair(tmp_path, repo).returncode == 0
+	_write(repo, TEMPLATE_HOOK, "value = 3\n", 0o755)
+	proc = _workspace("mirror-live-copies", repo, tmp_path / "pairs")
+	assert proc.returncode == 0, proc.stderr
+	live = repo / LIVE_HOOK
+	assert live.read_bytes() == (repo / TEMPLATE_HOOK).read_bytes()
+	assert live.stat().st_mode & 0o777 == 0o755
+	assert not [p for p in live.parent.iterdir() if p.name.startswith(".review-live-copy-")]
+
+
+@pytest.mark.parametrize("case", ["markers", "live_symlink", "parent_symlink", "unknown_pair"])
+def test_mirror_refuses_unsafe_states_and_leaves_live_unchanged(tmp_path, case):
+	repo = _paired_conflict_repo(tmp_path)
+	assert _pair(tmp_path, repo).returncode == 0
+	_write(repo, TEMPLATE_HOOK, "value = 3\n", 0o755)
+	live = repo / LIVE_HOOK
+	pairs = tmp_path / "pairs"
+	if case == "markers":
+		_write(repo, TEMPLATE_HOOK, "<<<<<<< HEAD\nvalue = 1\n=======\nvalue = 2\n>>>>>>> feature\n", 0o755)
+	elif case == "live_symlink":
+		target = tmp_path / "outside.py"
+		target.write_text("outside\n")
+		live.unlink()
+		live.symlink_to(target)
+	elif case == "parent_symlink":
+		outside = tmp_path / "outside_hooks"
+		(repo / ".claude/hooks").rename(outside)
+		(repo / ".claude/hooks").symlink_to(outside, target_is_directory=True)
+		live = outside / "pr_merge_status_guard.py"
+	else:
+		pairs.write_text(f".claude/settings.json\t{TEMPLATE_HOOK}\n")
+	before = live.read_bytes()
+	proc = _workspace("mirror-live-copies", repo, pairs)
+	assert proc.returncode == 1
+	assert proc.stderr.strip() == "paired live copy mirror failed"
+	assert live.read_bytes() == before
+	if case == "live_symlink":
+		assert (tmp_path / "outside.py").read_text() == "outside\n"
+
+
+@pytest.mark.parametrize("name,reason,shown", [
+	(".ai/x.txt", "excluded_component", ".ai/x.txt"),
+	("scripts/../a.py", "unsafe_name", "redacted"),
+	(".claude/settings.json", "dot_directory", ".claude/settings.json"),
+	("tests/test_audit_plans_command.py", "operator_input", "tests/test_audit_plans_command.py"),
+	("assets/a\x1b]0;::error::x.svg", "unsupported_type", "redacted"),
+	("config/secrets.svg", "excluded_component", "redacted"),
+])
+def test_check_paths_rejection_diagnostic_is_fixed_and_control_safe(tmp_path, name, reason, shown):
+	paths = tmp_path / "paths.txt"
+	paths.write_text(name + "\n")
+	proc = _workspace("check-paths", tmp_path, paths)
+	assert proc.returncode == 1
+	lines = proc.stderr.splitlines()
+	assert lines == [f"REVIEW_RESOLVER_PATH_REJECTED reason={reason} path={shown}", "unsupported path"]
+
+
+def test_resolver_pairing_mirror_and_index_parity(tmp_path):
+	repo = _paired_conflict_repo(tmp_path)
+	src = RESOLVE_SCRIPT.read_text(encoding="utf-8")
+	pairing = src[src.index("# Paired live/template copies (issue #6595)"):src.index("# Pre-load the conflicted files into the resolver prompt")]
+	allowlist = tmp_path / "allowlist"
+	allowlist.write_text((tmp_path / "conflicted").read_text())
+	github_env = tmp_path / "github_env"
+	program = f'''set -euo pipefail
+RUNTIME_DIR={str(tmp_path)!r}
+SUPPORT_SCRIPTS_DIR={str(ROOT / "scripts")!r}
+CONFLICTED_PATHS_FILE={str(tmp_path / "conflicted")!r}
+RESOLVER_ALLOWLIST_FILE={str(allowlist)!r}
+GITHUB_ENV={str(github_env)!r}
+_resolver_fail_closed() {{ echo "fail_closed=$1"; exit 1; }}
+{pairing}
+cat "${{RESOLVER_TARGETED_PATHS_FILE}}"
+_resolver_mirror_paired_live_copies
+printf 'value = 3\\n' > {TEMPLATE_HOOK}
+_resolver_mirror_paired_live_copies
+if [ "${{PARITY_CASE}}" = diverge ]; then printf 'value = 4\\n' > {LIVE_HOOK}; fi
+git add -- {LIVE_HOOK} {TEMPLATE_HOOK}
+_resolver_verify_paired_live_index && echo parity-ok
+'''
+	env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k not in ("BASH_ENV", "ENV")}
+	env.update(PYTHONDONTWRITEBYTECODE="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+	ok = subprocess.run(["bash", "-c", program], cwd=repo, env=dict(env, PARITY_CASE="same"), capture_output=True, text=True)
+	assert ok.returncode == 0, ok.stdout + ok.stderr
+	assert f"REVIEW_RESOLVER_PAIRED_LIVE live={LIVE_HOOK} template={TEMPLATE_HOOK} outcome=paired" in ok.stdout
+	# Targeted context (and so the model prompt) omits the runner-synced live copy.
+	assert (tmp_path / "resolver_targeted_paths.txt").read_text() == f"{TEMPLATE_HOOK}\n"
+	assert "REVIEW_RESOLVER_PAIRED_LIVE outcome=skipped reason=template_markers" in ok.stdout
+	assert "REVIEW_RESOLVER_PAIRED_LIVE outcome=mirrored" in ok.stdout
+	assert "parity-ok" in ok.stdout
+	assert (tmp_path / "resolver_model_paths.txt").read_text() == f"{TEMPLATE_HOOK}\n"
+	assert (repo / LIVE_HOOK).read_bytes() == (repo / TEMPLATE_HOOK).read_bytes() == b"value = 3\n"
+	assert _git(repo, "diff", "--name-only", "--diff-filter=U").stdout == b""
+	bad = subprocess.run(["bash", "-c", program], cwd=_reset_repo(repo), env=dict(env, PARITY_CASE="diverge"), capture_output=True, text=True)
+	assert bad.returncode == 1
+	assert "parity-ok" not in bad.stdout
+	assert "::error::Paired live copy is not byte-identical to its template in the index" in bad.stdout
+	assert "CONFLICT_RESOLVED=false" in github_env.read_text()
+
+
+def _reset_repo(repo):
+	_git(repo, "merge", "--abort")
+	assert _git(repo, "merge", "-q", "feature").returncode != 0
+	return repo
