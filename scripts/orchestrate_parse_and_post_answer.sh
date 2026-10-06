@@ -245,6 +245,11 @@ if [ -f "${SCRIPT_DIR}/ai_memory_lib.py" ]; then
 	fi
 fi
 
+if [ "${SKIP_AUTO_ANSWER}" = "true" ]; then
+	echo "SKIP_AUTO_ANSWER=true" >> "$GITHUB_ENV"
+	exit 0
+fi
+
 if [ "${LOOP_BLOCKED}" = "true" ] || [ "${HAS_ESCALATE}" = "true" ]; then
 	if [ "${HAS_ESCALATE}" = "true" ] && [ "${LOOP_BLOCKED}" != "true" ]; then
 		echo "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=auto_answer reason=escalate_requested outcome=defer issue=${ISSUE_NUMBER} comment_id=${CLARIFICATION_COMMENT_ID} cycle=${CYCLE} max_cycles=${MAX_CYCLES}"
@@ -343,11 +348,6 @@ if [ "${LOOP_BLOCKED}" = "true" ] || [ "${HAS_ESCALATE}" = "true" ]; then
 		echo "LOOP_BLOCKED=true"
 	} >> "$GITHUB_ENV"
 	echo "Loop guard blocked auto-answer and escalated issue #${ISSUE_NUMBER}."
-	exit 0
-fi
-
-if [ "${SKIP_AUTO_ANSWER}" = "true" ]; then
-	echo "SKIP_AUTO_ANSWER=true" >> "$GITHUB_ENV"
 	exit 0
 fi
 

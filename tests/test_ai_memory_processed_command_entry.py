@@ -421,6 +421,26 @@ def test_failed_freshness_claim_can_be_retried_once_via_cli() -> None:
 		assert entry is not None and entry["status"] == "claimed"
 
 
+def test_retry_claim_preserves_existing_metadata() -> None:
+	memory_root = _memory_root_with_repo_schemas()
+	claim_args = {
+		"issue_number": 42, "comment_id": 123456789, "command": "answer",
+		"workflow": "orchestrate_clarify_respond", "actor": "github-actions[bot]",
+		"run_id": "1", "run_attempt": 1,
+	}
+	ai_memory_lib.claim_processed_command(memory_root, **claim_args, metadata={"source": "original", "run_url": "first"})
+	ai_memory_lib.complete_processed_command(
+		memory_root, issue_number=42, comment_id=123456789, command="answer",
+		status="recheck_unavailable", metadata={"clarify_comment_id": 123456789},
+	)
+	entry, claimed = ai_memory_lib.claim_processed_command(
+		memory_root, **claim_args, retry_on_status="recheck_unavailable",
+		metadata={"run_url": "second"},
+	)
+	assert claimed is True
+	assert entry["metadata"] == {"source": "original", "run_url": "second", "clarify_comment_id": 123456789}
+
+
 def test_actions_runs_cache_payload_validates() -> None:
 	memory_root = _memory_root_with_actions_schema()
 	payload = {

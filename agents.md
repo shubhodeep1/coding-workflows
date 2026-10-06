@@ -1790,7 +1790,7 @@ depend on it.
 ## Operational lessons learned (categorised)
 
 **Clarify-respond**
-- `scripts/orchestrate_parse_and_post_answer.sh` rechecks issue and comment freshness immediately before either comment POST. Only authorized human `/answer` comments or marked `github-actions[bot]` answers supersede a reply; other bots cannot. On escalation it applies `ai:blocked` only after posting; a stale or unavailable check changes neither the comment nor the labels. Unavailable reads record `recheck_unavailable` instead of `superseded`, allowing a subsequent run to reclaim that specific processed command and retry the read without making other claims retryable.
+- `scripts/orchestrate_parse_and_post_answer.sh` rechecks issue and comment freshness immediately before either comment POST. Only authorized human `/answer` comments or marked `github-actions[bot]` answers supersede a reply; other bots cannot. The processed-command duplicate guard prevents both answer and escalation posts. On escalation it applies `ai:blocked` only after posting; a stale or unavailable check changes neither the comment nor the labels. Unavailable reads record `recheck_unavailable` instead of `superseded`, allowing a subsequent run to reclaim that specific processed command when the memory write succeeds; if it fails, the claim remains `claimed` and cannot safely be reclaimed while another run might still post. A retry claim preserves prior metadata, with new values taking precedence.
 
 **General / Tooling**
 - Treat the `openai/codex#11151` no-edit regression as closed only with function-style patch tooling; keep `apply_patch_tool_type = "function"` as the settled baseline. Pointers: `scripts/codex_model_catalog.json`, `scripts/write_codex_config.sh`.

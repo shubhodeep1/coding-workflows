@@ -600,6 +600,21 @@ def test_escalation_cannot_override_newer_human_answer(tmp_path: Path) -> None:
 	assert not any(call[0] == "issue" or call[:2] == ["api", "repos/owner/repo/issues/6262/comments"] for call in calls)
 
 
+def test_already_processed_escalation_does_not_post_or_block(tmp_path: Path) -> None:
+	scripts = tmp_path / "scripts"
+	scripts.mkdir()
+	(scripts / "memory_helpers.sh").write_text(
+		'memory_ensure_branch() { :; }\n'
+		'memory_processed_command_check() { printf \'{"exists":true,"entry":{"status":"answered"}}\\n\'; }\n',
+		encoding="utf-8",
+	)
+	result, calls, env = _run_poster(tmp_path, answer="Q1: ESCALATE\n")
+	assert result.returncode == 0, result.stderr
+	assert "reason=already_processed" in result.stdout
+	assert "SKIP_AUTO_ANSWER=true" in env
+	assert calls == []
+
+
 def test_escalation_rechecks_immediately_before_comment_and_then_edits_labels(tmp_path: Path) -> None:
 	result, calls, env = _run_poster(tmp_path, answer="Q1: ESCALATE\n")
 	assert result.returncode == 0 and "SKIP_AUTO_ANSWER=true" in env, result.stderr
