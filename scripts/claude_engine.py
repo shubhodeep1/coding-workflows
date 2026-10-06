@@ -159,7 +159,7 @@ READ_PROFILE_ALLOW: tuple[str, ...] = (
 	"Glob",
 )
 PROFILE_TOOLS: dict[str, str] = {
-	"write": "Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch",
+	"write": "Read,Grep,Glob,Bash,Edit,Write",
 	"read": "Read,Grep,Glob",
 }
 PROFILE_MODES: dict[str, str] = {

@@ -228,7 +228,7 @@ if [ "${engine}" = claude ]; then
 	mapfile -t claude_accounts < <(ai_engine_accounts)
 	[ "${#claude_accounts[@]}" -gt 0 ] || { ai_engine_fallback "${claude_role}" no_credential; exit 75; }
 	claude_home="${root}/home"
-	claude_tools='Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch'
+	claude_tools='Read,Grep,Glob,Bash,Edit,Write'
 	claude_permissions=bypassPermissions
 	claude_source_mount="type=bind,src=${root}/source,dst=/source"
 	if [ "${claude_access}" = read ]; then
