@@ -1322,8 +1322,14 @@ the whole fix, warns operators, and consumes a review-blocked retry without a pu
 An empty staged set is rejected too. Listing failures report the staged paths in
 the rejection log and alert to make the attempted fix diagnosable.
 With `ALLOW_WORKFLOW_EDITS=false`, edits to `scripts/`, `prompts/`,
-`.github/ai/`, or `.github/workflows/` reject the entire fix through the same
-retry path, even when the PR previously changed that path.
+`.github/`, `workflow-templates/`, or `.claude/` reject the entire fix through
+the same retry path, even when the PR previously changed that path. The
+review-blocked fix sandbox keeps `GITHUB_WORKSPACE` pointed at the checkout's
+Git database and selects the validated per-PR `WORKSPACE_PATH`; an invalid
+workspace fails preparation before the writer starts. Integration-judge
+resolutions of protected files cannot delete the file or remove lines shared
+by both merge sides, including repeated lines. Such resolutions are rejected
+without a push and retried on the next poll tick.
 If the integration judge cannot publish a resolution, the poller warns and
 rechecks mergeability on the next tick instead of failing the project immediately.
 The merged-PR push guard checks `origin` as before. A push selecting a different

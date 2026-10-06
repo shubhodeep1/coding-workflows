@@ -10031,6 +10031,16 @@ def test_review_blocked_fix_scope_rejects_workflow_edit_opt_out():
 	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
 
 
+def test_review_blocked_fix_scope_rejects_synced_automation_with_opt_out():
+	for path in ("workflow-templates/ai-review.yml", ".github/actions/example/action.yml", ".claude/hooks/guard.py"):
+		result = _review_blocked_fix_scope_case(
+			touch=path, files=[path], env_overrides={"ALLOW_WORKFLOW_EDITS": "false"},
+		)
+		assert f"reason=workflow_edits_disabled rejected=1 paths={path}" in result["stdout"]
+		assert result.get("git_push_calls", []) == []
+		assert result.get("review_blocked_fix_commit_calls", []) == []
+
+
 def test_review_blocked_fix_scope_reports_all_workflow_edit_opt_out_paths():
 	result = _review_blocked_fix_scope_case(
 		touch="scripts/a.sh", files=["scripts/a.sh", "scripts/b.sh"],
