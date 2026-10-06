@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Once the keep_fixing round cap (`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS`) is spent, what should happen to a remaining `keep_fixing` decision instead of becoming `accept_with_followup`?\nChoices:\nA) Turn every capped `keep_fixing` into `fail`. The project goes through the existing terminal path, `security_pass_terminal_failure` \u2192 `ai:security-pass-failed`, and can be recovered later by the unblock judge, `/re-security-pass`, `/security-pass-waive`, or the engine-change auto-reset. No finding is ever accepted by the cap. (RECOMMENDED)\nB) Decide by severity. Capped `keep_fixing` on high, critical or unrated findings becomes `fail` (terminal as in A). On medium or low findings it still becomes `accept_with_followup` with a deferred advisory, as today. This matches the single-issue pass's high/critical/unrated rule. **Note:** this partly keeps the conversion the issue says to remove (\"never convert\").\nC) Remove the cap's rewrite completely. `keep_fixing` keeps opening fix cycles, bounded only by `MAX_SECURITY_PASS_JUDGE_ROUNDS` (default `0` = unbounded). **Note:** this brings back the #3965 runaway fix-cycle behaviour the cap was added to stop.\nQ2: Should this change also stop the exhaustion judge from choosing `accept_with_followup` itself for high or critical findings, or only remove the poller's forced conversion at the cap?\nChoices:\nA) Only remove the forced conversion at the cap (`scripts/orchestrate_poll_process.sh:6576`). The judge's own per-finding `accept_with_followup` decision stays as it is: it is a finding-specific assessment, which is the kind of check the issue's recommendation allows. (RECOMMENDED)\nB) Also reject any judge `accept_with_followup` for high, critical or unrated findings and treat it as `fail`, so only medium or low findings can ever be waived automatically.",
+  "fingerprint": "06eb67c9014ccfd0f4ac74f869db6d538019672bb3e700e26e949d57ad051757",
+  "lineage": {
+    "issue_number": 6539,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37443436216",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37443436216",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261006093616_723cfef1df",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6539,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37443436216"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6539 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-06T09:36:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
