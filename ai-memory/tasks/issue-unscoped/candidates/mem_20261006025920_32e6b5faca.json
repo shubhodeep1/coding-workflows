@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_review_pipeline_contract.py:2874-2875 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The test contains stale assertions for the removed host-OpenCode resolver layout, so line 2874 fails and line 2875 will also fail once the first assertion is corrected.\n  WHY: The resolver now uses sandbox-based execution, so the old command strings and array layout are absent; the failing contract test keeps the `tests-promote-stall-and-review` CI check red.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_review_autofix_review_pipeline_contract.py:2874 | severity=critical | confidence=5\n  PROBLEM: The test `test_opencode_full_review_cutover_removes_codex_runtime` asserts `'opencode_run_cmd \"$@\"' in resolver`, but the PR replaced that host-OpenCode resolver runner with sandbox-based execution through `_resolver_sandbox_attempt` and `_resolver_sandbox_opencode_attempt`.\n  WHY: The CI job `tests-promote-stall-and-review` fails the assertion at line 2874 with `AssertionError`.\n- tests/test_review_autofix_review_pipeline_contract.py:2875 | severity=critical | confidence=5\n  PROBLEM: The assertion `assert 'writer\\n    \"${MODEL_EDITOR}\"' in resolver` refers to the removed multi-line array layout.\n  WHY: Once line 2874 is repaired, this assertion will fail because the resolver now writes the config with a single-line `--role writer --model \"${MODEL_EDITOR}\"` call to `bash \"${OPENCODE_CONFIG_WRITER_PATH}\"`.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_autofix_review_pipeline_contract.py:2874 | severity=critical | confidence=5\n  PROBLEM: Stale test assertion `assert 'opencode_run_cmd \"$@\"' in resolver` checks for a pattern that no longer exists in `scripts/review_conflict_resolve.sh`.\n  WHY: The `tests-promote-stall-and-review` CI job fails with an `AssertionError` at this line, blocking PR merge.\n- tests/test_review_autofix_review_pipeline_contract.py:2875 | severity=critical | confidence=5\n  PROBLEM: Stale assertion `assert 'writer\\n    \"${MODEL_EDITOR}\"' in resolver` checks for a pattern that no longer exists in `scripts/review_conflict_resolve.sh`.\n  WHY: This assertion is next in the same test sequence and relies on the same deleted resolver array structure as the failure at line 2874.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_autofix_review_pipeline_contract.py:line 2874, inside `test_opencode_full_review_cutover_removes_codex_runtime` (also flagged: line 2875) | severity=critical | confidence=5\n  PROBLEM: The assertion `assert 'opencode_run_cmd \"$@\"' in resolver` checks for a pattern removed from `scripts/review_conflict_resolve.sh`; the next assertion at line 2875 (`'writer\\n    \"${MODEL_EDITOR}\"' in resolver`) also references the deleted multi-line array shape.\n  WHY: CI job `tests-promote-stall-and-review` already fails at line 2874, and once corrected, line 2875 will fail for the same reason.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_review_autofix_review_pipeline_contract.py:2874-2875, in test_opencode_full_review_cutover_removes_codex_runtime | severity=critical | confidence=5\n  PROBLEM: The test asserts the resolver contains the old host-OpenCode command strings, but the resolver now invokes OpenCode through the isolated sandbox in scripts/review_conflict_resolve.sh.\n  WHY: Running this contract test fails at line 2874 because `opencode_run_cmd \"$@\"` is absent; if that assertion is updated alone, line 2875 also checks the removed command-array layout.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_review_autofix_review_pipeline_contract.py:2874-2875 | severity=critical | confidence=5\n  PROBLEM: Two stale assertions reference the old host-OpenCode resolver layout that this PR removed: line 2874 asserts `'opencode_run_cmd \"$@\"' in resolver`, and line 2875 asserts `'writer\\n    \"${MODEL_EDITOR}\"' in resolver`.\n  WHY: The `tests-promote-stall-and-review` CI job fails at line 2874 with `AssertionError`; once corrected, line 2875 will also fail, blocking merge.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_review_autofix_review_pipeline_contract.py:2874-2875 (test_opencode_full_review_cutover_removes_codex_runtime) | severity=critical | confidence=5\n  PROBLEM: Two assertions reference the resolver's removed host-OpenCode layout: line 2874 asserts `'opencode_run_cmd \"$@\"' in resolver`, and line 2875 asserts `'writer\\n    \"${MODEL_EDITOR}\"' in resolver`.\n  WHY: The `tests-promote-stall-and-review` CI job fails at line 2874 with `AssertionError`; once corrected, line 2875 will fail next for the same reason.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "8b9a3c0511d2b47307785bcd19f27faf3cce6a0a6d7b2d16ee4ed7f86530e51d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6208,
+    "run_id": "37405016399",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37405016399",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006025920_32e6b5faca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6208,
+    "run_id": "37405016399"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T02:59:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
