@@ -233,11 +233,10 @@ def test_rejection_still_attempts_reply_when_timeout_reset_fails(monkeypatch) ->
 
 def test_early_rejection_does_not_wait_indefinitely_for_missing_body(chain) -> None:
 	connection = relay.UnixHTTPConnection(chain["socket"])
-	connection.putrequest("POST", "/v1/messages")
-	connection.putheader("Content-Type", "application/json")
-	connection.putheader("Authorization", "Bearer mine")
-	connection.putheader("Content-Length", "100000")
-	connection.endheaders()
+	# The broker rejects from headers without reading the body; sending a
+	# body races its connection close and can raise BrokenPipeError instead.
+	connection.request("POST", "/v1/messages", None, {"Content-Type": "application/json", "Content-Length": "1", "Authorization": "Bearer mine"})
+	connection.sock.settimeout(5)
 	assert connection.getresponse().status == 400
 	connection.close()
 	assert _Upstream.seen == []
