@@ -123,8 +123,14 @@ Phases of the unattended pipeline (each is a separate workflow file under
    agent; isolation failure skips consolidation with empty output.
     Host `claude_run` refuses all four review roles. The resolver checks its
     conflicted paths against sandbox admission before either engine runs; an
-    unsupported path is refused and, for integration-sync PRs, counted toward
-    the existing resolver retry-state escalation. Its OpenCode runs (including
+    unsupported path is refused (each logged as `REVIEW_SANDBOX_PATH_REFUSED`)
+    and, for integration-sync PRs, counted toward
+    the existing resolver retry-state escalation. A conflicted
+    `.claude/commands/<name>.md` is admitted under the same trusted-twin rule
+    as the editor snapshot; the live merged-PR safety hook is admitted only
+    when its `workflow-templates/` twin is also conflicted, and the host then
+    mirrors the resolved template onto it (the hook itself never enters a
+    sandbox) and checks both are staged identical before committing. Its OpenCode runs (including
     Claude fallback)
     use fresh isolated snapshots and validated transfer, never the host writer.
     A Claude-selected resolver retries OpenCode in a fresh sandbox only when
@@ -1819,6 +1825,7 @@ and shipped:
 - `JUDGE_ISOLATION`
 - `JUDGE_ENGINE_LABELS` (`scripts/orchestrate_poll_process.sh`: `role= outcome=forced_codex reason=issue_labels_unavailable` when a per-issue label snapshot cannot be verified).
 - `SECURITY_AUDIT_TARGET`
+- `REVIEW_SANDBOX_PATH_REFUSED` (`scripts/review_untrusted_workspace.py check-paths`: `path=<bounded, redacted> reason=excluded_dir|hidden_dir|safety_hook|command_not_admitted|unsupported_suffix|symlink|invalid_path`, at most 20 lines plus `truncated=<n>`; echoed by `scripts/review_conflict_resolve.sh` before the unchanged `sandbox_path_unsupported` fail-closed line)
 - `INTEGRATION_JUDGE_SCOPE`
 - `WORKFLOW_OVERLAY_SOURCE`
 - `WORKFLOW_OVERLAY_REPLACE_REJECTED`
@@ -2040,6 +2047,7 @@ LOG_PREFIX.name=CONSOLIDATOR_ISOLATION
 LOG_PREFIX.name=JUDGE_ISOLATION
 LOG_PREFIX.name=JUDGE_ENGINE_LABELS
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
+LOG_PREFIX.name=REVIEW_SANDBOX_PATH_REFUSED
 LOG_PREFIX.name=INTEGRATION_JUDGE_SCOPE
 LOG_PREFIX.name=WORKFLOW_OVERLAY_SOURCE
 LOG_PREFIX.name=WORKFLOW_OVERLAY_REPLACE_REJECTED

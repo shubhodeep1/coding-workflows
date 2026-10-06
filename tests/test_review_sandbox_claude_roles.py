@@ -134,8 +134,13 @@ def test_ephemeral_callers_prepare_their_selected_engine():
 	assert "tests/test_review_sandbox_claude_roles.py" in ci
 
 
-@pytest.mark.parametrize("name,accepted", [("scripts/a.py", True), (".ai/x.txt", False), ("scripts/../a.py", False), ("scripts/a.py\r", False)])
-def test_check_paths(tmp_path, name, accepted):
+@pytest.mark.parametrize("name,accepted,reason", [
+	("scripts/a.py", True, None), (".ai/x.txt", False, "excluded_dir"),
+	("scripts/../a.py", False, "invalid_path"), ("scripts/a.py\r", False, "invalid_path"),
+	(".claude/settings.json", False, "hidden_dir"), (".claude/commands/x.md", False, "command_not_admitted"),
+	(".claude/hooks/pr_merge_status_guard.py", False, "safety_hook"), ("assets/x.svg", False, "unsupported_suffix"),
+])
+def test_check_paths(tmp_path, name, accepted, reason):
 	paths = tmp_path / "paths.txt"
 	paths.write_text(name + "\n")
 	proc = subprocess.run([sys.executable, str(WORKSPACE), "check-paths", str(tmp_path), str(paths)],
@@ -143,6 +148,8 @@ def test_check_paths(tmp_path, name, accepted):
 	assert (proc.returncode == 0) is accepted
 	if not accepted:
 		assert "unsupported path" in proc.stderr
+		assert f" reason={reason}" in proc.stderr
+		assert "REVIEW_SANDBOX_PATH_REFUSED path=" in proc.stderr
 
 
 def test_resolver_path_check_precedes_sandbox_and_does_not_pass_host_git_index():

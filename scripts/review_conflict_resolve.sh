@@ -85,6 +85,27 @@ verify_resolver_index_complete_or_fail() {
   return 1
 }
 
+# When the live merged-PR safety hook was conflicted, the host mirrored its
+# resolved template onto it; the staged blobs and modes must be identical.
+verify_resolver_safety_hook_parity_or_fail() {
+  local resolver_hook_live=".claude/hooks/pr_merge_status_guard.py"
+  local resolver_hook_template="workflow-templates/.claude/hooks/pr_merge_status_guard.py"
+  local resolver_hook_live_entry="" resolver_hook_template_entry=""
+
+  if [ -z "${CONFLICTED_PATHS_FILE:-}" ] || [ ! -f "${CONFLICTED_PATHS_FILE}" ] || ! grep -qxF -- "${resolver_hook_live}" "${CONFLICTED_PATHS_FILE}"; then
+    return 0
+  fi
+  resolver_hook_live_entry="$(git ls-files -s -- "${resolver_hook_live}" | awk '{print $1, $2, $3}')" || resolver_hook_live_entry=""
+  resolver_hook_template_entry="$(git ls-files -s -- "${resolver_hook_template}" | awk '{print $1, $2, $3}')" || resolver_hook_template_entry=""
+  if [ -n "${resolver_hook_live_entry}" ] && [ "${resolver_hook_live_entry}" = "${resolver_hook_template_entry}" ] \
+    && [ "$(printf '%s\n' "${resolver_hook_live_entry}" | wc -l | tr -d '[:space:]')" = "1" ]; then
+    return 0
+  fi
+  echo "::error::Mirrored safety hook is not staged identical to its template; refusing to create [ai-merge-resolve] commit."
+  echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+  return 1
+}
+
 # Deterministic-resolution short-circuit: review_conflict_prepare.sh
 # commits the [ai-merge-resolve] merge itself when every unmerged path
 # was deterministically resolvable (currently: the
@@ -2242,7 +2263,12 @@ resolver_workspace_py="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_workspac
 if [ ! -f "${resolver_sandbox_sh}" ] || [ ! -f "${resolver_workspace_py}" ]; then
   _resolver_fail_closed sandbox_support_missing
 fi
-if ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}" >/dev/null 2>&1; then
+# GITHUB_WORKSPACE names the verified support checkout that authorizes
+# .claude/commands/ conflicts (empty admits none). Refused paths are logged
+# as bounded, redacted REVIEW_SANDBOX_PATH_REFUSED lines (#6596).
+resolver_check_paths_stderr="${RUNTIME_DIR}/resolver_check_paths_stderr.txt"
+if ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}" "${GITHUB_WORKSPACE:-}" >/dev/null 2>"${resolver_check_paths_stderr}"; then
+  grep -E '^REVIEW_SANDBOX_PATH_REFUSED ' "${resolver_check_paths_stderr}" >&2 || true
   _resolver_fail_closed sandbox_path_unsupported
 fi
 
@@ -2462,7 +2488,8 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     if [ "${AI_ENGINE_RESOLVED_CONFLICT_RESOLVER:-codex}" = "claude" ]; then
       if [ ! -f "${resolver_sandbox_sh}" ] || [ ! -f "${resolver_workspace_py}" ]; then
         _resolver_fail_closed sandbox_prepare_failed
-      elif ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}"; then
+      elif ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}" "${GITHUB_WORKSPACE:-}" >/dev/null 2>"${RUNTIME_DIR}/resolver_check_paths_stderr.txt"; then
+        grep -E '^REVIEW_SANDBOX_PATH_REFUSED ' "${RUNTIME_DIR}/resolver_check_paths_stderr.txt" >&2 || true
         _resolver_fail_closed sandbox_path_unsupported
       fi
       rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
@@ -2706,6 +2733,16 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   # from the post-merge state — retry is strictly better than
   # abort here.  Cheap (single grep per in-scope file), runs
   # before the Python-heavy fingerprint verifier.
+  #
+  # The live merged-PR safety hook never enters the sandbox; when it is
+  # conflicted together with its template, mirror the model's resolved
+  # template onto it (after the scope checks, so it is not model drift).
+  # rc 3 = template still has markers; the scan below counts them.
+  _mirror_rc=0
+  PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py:-${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_workspace.py}" mirror-safety-hook "$(pwd)" "${CONFLICTED_PATHS_FILE}" || _mirror_rc=$?
+  if [ "${_mirror_rc}" -ne 0 ] && [ "${_mirror_rc}" -ne 3 ]; then
+    _resolver_fail_closed safety_hook_mirror_failed
+  fi
   _scan_residual_markers
   _marker_count="$(wc -l < "${RESOLVER_MARKER_VIOLATIONS_FILE}" 2>/dev/null | tr -d '[:space:]')"
 
@@ -3141,6 +3178,9 @@ if [ -n "$(git status --porcelain)" ]; then
     printf '%s\n' "${STAGED_FILES}" | sed '/^$/d; s/^/ - /' || true
   fi
   if ! verify_resolver_index_complete_or_fail; then
+    exit 1
+  fi
+  if ! verify_resolver_safety_hook_parity_or_fail; then
     exit 1
   fi
   if git diff --cached --quiet; then
