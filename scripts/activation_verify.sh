@@ -46,6 +46,8 @@
 # in `project` mode, one final-PR-files lookup when that PR is recorded;
 # when code gaps exist, one source-key search before creating the fix issue;
 # one comment, at most one fix-issue create, and the operator-step writer's calls.
+# The tracked-symlink listing (activation_tracked_symlinks_json) is local git
+# only and makes no GitHub API call.
 # POSTs are single-attempt: retrying after a lost response can duplicate writes.
 # Log: ACTIVATION_VERIFY mode= item= verdict= code_gaps= operator_gaps= outcome= reason=
 set -uo pipefail
@@ -108,9 +110,90 @@ print(json.dumps({
 PY
 }
 
+# Lists the symbolic links HEAD of $1 tracks, read from git objects on the
+# host (never following a link). The read-only model sandbox leaves symlinks
+# out of both its file snapshot and its synthetic git tree, so without this
+# list the verifier reports a tracked link as missing.
+# Prints {"tracked_symlinks": [{path, target}], "tracked_symlinks_truncated": bool};
+# on any git or parse failure prints an empty list and one ::warning:: line.
+activation_tracked_symlinks_json()
+{
+	local activation_symlinks_out activation_symlinks_rc=0 activation_symlinks_reason
+	activation_symlinks_out="$(python3 -I -B - "$1" <<'PY'
+import json, subprocess, sys
+MAX_ENTRIES = 200
+MAX_FIELD_BYTES = 1024
+target = sys.argv[1]
+try:
+	listing = subprocess.run(["git", "-C", target, "ls-tree", "-r", "-z", "--full-tree", "HEAD"],
+		capture_output=True, check=True, timeout=60).stdout
+except Exception:
+	sys.exit(2)
+links = []
+try:
+	for record in listing.split(b"\0"):
+		if not record:
+			continue
+		meta, sep, path = record.partition(b"\t")
+		mode, _otype, oid = meta.split(b" ")
+		if not sep:
+			raise ValueError("missing path")
+		if mode == b"120000":
+			links.append((path, oid.decode("ascii")))
+except ValueError:
+	sys.exit(3)
+blobs = {}
+if links:
+	try:
+		batch = subprocess.run(["git", "-C", target, "cat-file", "--batch"],
+			input=b"".join(oid.encode("ascii") + b"\n" for _path, oid in links),
+			capture_output=True, check=True, timeout=60).stdout
+	except Exception:
+		sys.exit(2)
+	try:
+		pos = 0
+		for _path, oid in links:
+			newline = batch.index(b"\n", pos)
+			header = batch[pos:newline].split(b" ")
+			if len(header) != 3 or header[0].decode("ascii") != oid or header[1] != b"blob":
+				raise ValueError("unexpected cat-file header")
+			size = int(header[2])
+			blobs[oid] = batch[newline + 1:newline + 1 + size]
+			pos = newline + 1 + size + 1
+	except (ValueError, IndexError, UnicodeDecodeError):
+		sys.exit(3)
+def clean(raw):
+	if len(raw) > MAX_FIELD_BYTES:
+		return None
+	try:
+		text = raw.decode("utf-8")
+	except UnicodeDecodeError:
+		return None
+	if any(ord(ch) < 32 or ord(ch) == 127 for ch in text):
+		return None
+	return text
+entries = []
+for path, oid in links:
+	path_text, target_text = clean(path), clean(blobs.get(oid, b""))
+	if path_text and target_text:
+		entries.append({"path": path_text, "target": target_text})
+entries.sort(key=lambda entry: entry["path"])
+print(json.dumps({"tracked_symlinks": entries[:MAX_ENTRIES], "tracked_symlinks_truncated": len(entries) > MAX_ENTRIES}))
+PY
+)" || activation_symlinks_rc=$?
+	if [ "${activation_symlinks_rc}" -ne 0 ] || [ -z "${activation_symlinks_out}" ]; then
+		activation_symlinks_reason="git_failed"
+		[ "${activation_symlinks_rc}" -eq 3 ] && activation_symlinks_reason="parse_failed"
+		echo "::warning::ACTIVATION_VERIFY tracked_symlinks unavailable reason=${activation_symlinks_reason}" >&2
+		activation_symlinks_out='{"tracked_symlinks": [], "tracked_symlinks_truncated": false}'
+	fi
+	printf '%s\n' "${activation_symlinks_out}"
+}
+
 activation_main()
 {
 	local mode="${1:-}" key item target_issue context_file prompt_file output_file verdict_file
+	local activation_symlinks_context activation_context_tmp
 	local verdict code_gaps operator_gaps model reasoning comment_body fix_body steps_file tg_level item_label
 	local activation_files_json activation_files_response activation_existing_fix activation_fix_lookup_ok
 	if [ "${ACTIVATION_VERIFY_ENABLED:-true}" = "false" ]; then
@@ -208,6 +291,15 @@ activation_main()
 			return 0
 			;;
 	esac
+
+	# Fail open: a failed merge leaves the context as it was.
+	activation_symlinks_context="$(activation_tracked_symlinks_json "${TARGET_DIR}")"
+	activation_context_tmp="${context_file}.tmp"
+	if jq --argjson extra "${activation_symlinks_context}" '. + $extra' "${context_file}" > "${activation_context_tmp}" 2>/dev/null; then
+		mv -f "${activation_context_tmp}" "${context_file}"
+	else
+		rm -f "${activation_context_tmp}"
+	fi
 
 	prompt_file="${RUNTIME_DIR}/activation_prompt.txt"
 	output_file="${RUNTIME_DIR}/activation_output.txt"

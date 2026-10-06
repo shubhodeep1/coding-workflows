@@ -446,3 +446,66 @@ def test_model_text_never_starts_a_comment_line(tmp_path: Path) -> None:
 	_, state = _verify(tmp_path, injected)
 	body = state["comments"][-1]["body"]
 	assert not any(line.lstrip().startswith("/") for line in body.splitlines()), body
+
+
+LIVE = {"verdict": "LIVE", "trigger": "push", "summary": "Runs on push.", "gaps": []}
+
+
+def _git_commit_all(target: Path) -> None:
+	subprocess.run(["git", "init", str(target)], check=True, capture_output=True)
+	subprocess.run(["git", "-C", str(target), "add", "-A"], check=True, capture_output=True)
+	subprocess.run(["git", "-C", str(target), "-c", "user.name=test", "-c", "user.email=test@example.invalid",
+		"commit", "-m", "links"], check=True, capture_output=True)
+
+
+def _context(tmp_path: Path) -> dict:
+	return json.loads((tmp_path / "rt" / "activation_context.json").read_text(encoding="utf-8"))
+
+
+def test_tracked_symlinks_reach_model_context(tmp_path: Path) -> None:
+	# The read-only model sandbox omits symlinks, so the host lists them.
+	target = tmp_path / "target"
+	(target / "workflow-templates").mkdir(parents=True)
+	(target / "CLAUDE.md").write_text("rules\n", encoding="utf-8")
+	os.symlink("../CLAUDE.md", target / "workflow-templates" / "CLAUDE.md")
+	_git_commit_all(target)
+	result, state = _verify(tmp_path, LIVE)
+	assert "outcome=posted" in result.stdout
+	context = _context(tmp_path)
+	assert context["tracked_symlinks"] == [{"path": "workflow-templates/CLAUDE.md", "target": "../CLAUDE.md"}]
+	assert context["tracked_symlinks_truncated"] is False
+	assert context["changed_files"] == ["README.md"]
+	assert state["comments"]
+
+
+def test_tracked_symlinks_fail_open_without_git(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, LIVE)
+	assert "outcome=posted" in result.stdout
+	assert "ACTIVATION_VERIFY tracked_symlinks unavailable reason=git_failed" in result.stderr
+	context = _context(tmp_path)
+	assert context["tracked_symlinks"] == [] and context["tracked_symlinks_truncated"] is False
+	assert state["comments"][-1]["body"].endswith("<!-- ai:activation:v1 verdict=LIVE source=pr-42 -->")
+
+
+def test_tracked_symlinks_cap_and_filters(tmp_path: Path) -> None:
+	target = tmp_path / "target"
+	target.mkdir()
+	(target / "CLAUDE.md").write_text("rules\n", encoding="utf-8")
+	os.symlink("bad\ntarget", target / "aa-bad")
+	for n in range(201):
+		os.symlink("CLAUDE.md", target / f"link-{n:03d}")
+	_git_commit_all(target)
+	_verify(tmp_path, LIVE)
+	context = _context(tmp_path)
+	links = context["tracked_symlinks"]
+	assert len(links) == 200 and context["tracked_symlinks_truncated"] is True
+	assert links[0] == {"path": "link-000", "target": "CLAUDE.md"}
+	assert all("\n" not in link["target"] and link["path"] != "aa-bad" for link in links)
+
+
+def test_prompt_tells_model_snapshot_omits_symlinks() -> None:
+	runtime = (ROOT / "prompts" / "mode-activation-verify.txt").read_text(encoding="utf-8")
+	template = (ROOT / "prompts" / "_templates" / "mode-activation-verify.txt").read_text(encoding="utf-8")
+	for text in (runtime, template):
+		assert "tracked_symlinks" in text and "Never report a listed path" in text
+	assert runtime.split("</compaction-rules>\n", 1)[1] == template.split("\n", 1)[1]
