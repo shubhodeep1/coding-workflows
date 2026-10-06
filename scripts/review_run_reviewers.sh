@@ -1659,10 +1659,10 @@ resolve_review_tier_active_models() {
   # names (validated below).
   if [ -z "$(normalize_reviewer_model_list "${selected_raw}")" ]; then
     # Pool for the random pick: the whole live panel, except that an unpinned
-    # lite tier draws from the standard tier's reviewer list when that list is
-    # set and every slug in it is on the panel. With the defaults, lite then
-    # never picks a model the standard tier leaves out (the most expensive
-    # ones). A standard list naming an unknown slug falls back to the panel.
+    # lite tier draws from the standard tier's reviewer list when a repo sets
+    # that list and every slug in it is on the panel. The default list is
+    # empty, so both tiers draw from the whole panel. A standard list naming
+    # an unknown slug falls back to the panel.
     pick_pool_models=("${live_models[@]}")
     if [ "${tier}" = "lite" ] && [ -n "$(normalize_reviewer_model_list "${REVIEW_TIER_STANDARD_REVIEWER_SLUGS:-}")" ]; then
       while IFS= read -r pool_model; do
