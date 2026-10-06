@@ -100,27 +100,11 @@ class Relay(http.server.BaseHTTPRequestHandler):
 	def log_message(self, *_args):
 		pass
 
-	def _reject(self, status, drain_body=False):
-		if drain_body:
-			length = self.headers.get("Content-Length", "")
-			if (not self.headers.get("Transfer-Encoding") and length.isascii() and length.isdecimal()
-				and len(length) <= 10 and 0 < int(length) <= MAX_BODY):
-				remaining = int(length)
-				deadline = time.monotonic() + 1
-				try:
-					while remaining > 0 and time.monotonic() < deadline:
-						self.connection.settimeout(max(0.01, deadline - time.monotonic()))
-						chunk = self.rfile.read(min(remaining, 65536))
-						if not chunk:
-							break
-						remaining -= len(chunk)
-				except OSError:
-					pass  # Malformed/slow clients still get a bounded rejection.
-				finally:
-					try:
-						self.connection.settimeout(5)
-					except OSError:
-						pass  # The peer may have closed during the drain.
+	def _reject(self, status):
+		try:
+			self.connection.settimeout(1)
+		except OSError:
+			pass
 		self.send_error(status, "Request rejected")
 		self.close_connection = True
 
@@ -148,10 +132,26 @@ class Relay(http.server.BaseHTTPRequestHandler):
 			or not 0 < int(length) <= MAX_BODY
 			or headers is None
 		):
-			return self._reject(400, drain_body=True)
-		headers = forwarded_request_headers(self.headers)
-		if headers is None:
-			return self._reject(400, drain_body=True)
+			# Consume a bounded, declared body before closing so a rejected
+			# client still sending it can receive the 400 instead of EPIPE.
+			if len(length) <= 8 and length.isascii() and length.isdecimal() and 0 < int(length) <= MAX_BODY:
+				drain_deadline = time.monotonic() + 1
+				drain_remaining = int(length)
+				try:
+					while drain_remaining and (drain_wait := drain_deadline - time.monotonic()) > 0:
+						self.connection.settimeout(drain_wait)
+						drain_chunk = self.rfile.read1(min(drain_remaining, 65536))
+						if not drain_chunk:
+							break
+						drain_remaining -= len(drain_chunk)
+				except OSError:
+					pass
+				# Give the rejection write its own bounded timeout even if draining failed.
+				try:
+					self.connection.settimeout(1)
+				except OSError:
+					pass
+			return self._reject(400)
 		body = self.rfile.read(int(length))
 		if len(body) != int(length):
 			return self._reject(400)

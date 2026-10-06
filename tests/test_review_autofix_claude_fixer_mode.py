@@ -173,7 +173,7 @@ def _run_gate(tmp: Path, *, head_ref: str, comments: list[dict], event_name: str
 			{"id": i, "user": {"login": c["author_login"], "type": c["author_type"]}, "author_association": c["author_association"], "created_at": "2026-09-25T00:00:00Z", "body": c["body"]}
 			for i, c in enumerate(comments, 1)
 		],
-		"pr": {"state": "open", "merged": False, "head": {"ref": head_ref, "sha": HEAD}, "labels": [], "additions": 400, "deletions": 50, "mergeable": True, "mergeable_state": "clean", "title": "Demo — phase 1/2: x", "body": "Refs #1", **(pr_overrides or {})},
+		"pr": {"state": "open", "merged": False, "head": {"ref": head_ref, "sha": HEAD, "repo": {"full_name": "o/r"}}, "labels": [], "additions": 400, "deletions": 50, "mergeable": True, "mergeable_state": "clean", "title": "Demo — phase 1/2: x", "body": "Refs #1", **(pr_overrides or {})},
 		"files": files,
 		"comments_fail": comments_fail,
 	}), encoding="utf-8")
@@ -264,6 +264,20 @@ def test_small_diff_claude_pr_takes_the_deterministic_skip():
 			pr_overrides={"changed_files": 1, "additions": 3, "deletions": 2})
 	assert proc.returncode == 0, proc.stderr
 	assert out["deterministic_skip"] == "true" and out["det_skip_reason"] == "small_diff"
+
+
+def test_unverified_pr_head_never_enters_deterministic_merge():
+	assert WORKFLOW["jobs"]["codex-agent"]["if"] == "${{ needs.gate.outputs.should_run == 'true' }}"
+	assert WORKFLOW["jobs"]["deterministic-skip-merge"]["if"] == "${{ needs.gate.outputs.deterministic_skip == 'true' }}"
+	for head_repo, head_sha in (("other/repo", HEAD), ("", HEAD), ("o/r", "bad-sha")):
+		with tempfile.TemporaryDirectory() as td:
+			proc, out = _run_gate(Path(td), head_ref=CLAUDE_REF, comments=[],
+				files=DOCS_FILES, pr_overrides={"changed_files": 2,
+					"head": {"ref": CLAUDE_REF, "sha": head_sha, "repo": {"full_name": head_repo}}})
+		assert proc.returncode == 0, proc.stderr
+		assert out["should_run"] == "false" and out["deterministic_skip"] == "false"
+		assert out["skip_reason"] == "review_checkout_unverified"
+		assert out["review_checkout_sha"] == ""
 
 
 def test_claude_pr_skip_keeps_the_protected_path_and_size_guards():

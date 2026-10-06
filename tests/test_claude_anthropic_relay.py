@@ -222,7 +222,7 @@ def test_rejection_restores_socket_timeout_before_reply(chain, monkeypatch) -> N
 	connection.request("POST", "/v1/messages", body, {"Content-Type": "application/json", "Authorization": "Bearer mine"})
 	assert connection.getresponse().status == 400
 	connection.close()
-	assert observed_timeouts == [5]
+	assert observed_timeouts == [1]
 
 
 def test_rejection_still_attempts_reply_when_timeout_reset_fails(monkeypatch) -> None:
@@ -230,17 +230,11 @@ def test_rejection_still_attempts_reply_when_timeout_reset_fails(monkeypatch) ->
 		def settimeout(self, _timeout):
 			raise OSError("peer closed")
 
-	class Body:
-		def read(self, _length):
-			return b"x"
-
 	handler = object.__new__(relay.Relay)
-	handler.headers = {"Content-Length": "1"}
 	handler.connection = BrokenSocket()
-	handler.rfile = Body()
 	replies = []
 	monkeypatch.setattr(handler, "send_error", lambda status, _message: replies.append(status))
-	handler._reject(400, drain_body=True)
+	handler._reject(400)
 	assert replies == [400] and handler.close_connection is True
 
 

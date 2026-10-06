@@ -202,3 +202,43 @@ Shellcheck also reported indirectly assigned poller threshold variables at `scri
 | Code modularization | At least 7 existing files plus shared helpers | Large |
 | Expression size reduction | `implement.yml` plus 1 extracted script | Medium |
 | Medium/Low fixes | At least 6 workflow/script files, overlapping rows above | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-10-06)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is ready to implement without further review; `NEEDS_VERIFICATION` requires the stated checks first; `RISKY_SKIP` must not be auto-implemented because it touches a protected API-call pattern or safety guard.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — RISKY_SKIP.** **Calls:** `scripts/review_enable_auto_merge.sh:102-115` and `scripts/review_enable_auto_merge.sh:153-190`; the early-exit head read is at `scripts/review_enable_auto_merge.sh:39-56`. **Current → proposed:** 2 → 1 logical GET on a path where the PR response can *provably* supply the complete label set; otherwise remain at 2. **Endpoints:** `GET /repos/{repo}/issues/{pr}/labels` and `GET /repos/{repo}/pulls/{pr}`. **Evidence:** the first call checks `e2e-smoke-test`; the later PR response supplies head metadata. The early-exit branch makes a separate head-freshness read because that later response is unreachable. **Proposed fix:** Only after proving label completeness, move the full PR read ahead of the label decision and use its labels and `.head.sha`; retain the paginated labels read whenever completeness is uncertain, along with both fail-closed exits. **Safety rationale:** the labels call uses `--paginate` specifically to catch a label beyond the first page, so replacing it with an unverified PR-embedded label list risks enabling auto-merge on an e2e PR. **Downstream signal:** Do not auto-implement; manually verify PR-response label completeness for large label sets and test second-page e2e labels, either read failing, and a moving head before changing the guard.
+
+### Redundant Re-Fetch (REUSE-###)
+
+No findings.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: RISKY_SKIP — Changing `gh_api_json_to_file` and `curl_gh_api` retry classification requires manual review of permanent-error and rate-limit behavior.
+- API-002: RISKY_SKIP — The existing comment listing is paginated; manual review must preserve complete results and the release-claim freshness boundary.
+- BATCH-001: RISKY_SKIP — The change is inside `orchestrate_poll_process.sh`; manually validate cycle-cache completeness and per-item fallbacks.
+- BATCH-002: RISKY_SKIP — Replacing paginated PR-file reads requires manual verification of connection completeness and page-boundary fallback.
+- BATCH-003: NEEDS_VERIFICATION — Resolve BUG-004’s `first: 50` limit, then verify label IDs, partial mutation errors, and individual-write fallback.
+
+### Summary Counts
+
+Counts cover **net-new findings**, not cross-references.
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 0 | — |
+| RISKY_SKIP | 1 | MERGE-001 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.

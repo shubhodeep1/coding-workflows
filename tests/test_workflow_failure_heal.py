@@ -2325,6 +2325,9 @@ def _run_gate(tmp: Path, *, comments: list[dict], event_name: str = "workflow_di
 		"pr": {"state": "open", "merged": False, "head": {"ref": "ai/issue-4255", "sha": SHA_A}, "labels": [], "additions": 400, "deletions": 50, "changed_files": 1, "mergeable": True, "mergeable_state": "clean", "title": "AI implementation for issue #4255", "body": "Fixes #4255"},
 	}
 	state.update(state_overrides or {})
+	# The authenticated PR response always identifies the head repository;
+	# gate tests overriding the PR body inherit the same-repo default.
+	state["pr"]["head"].setdefault("repo", {"full_name": SELF_REPO})
 	state_file.write_text(json.dumps(state), encoding="utf-8")
 	output_file = tmp / "github_output.txt"
 	output_file.write_text("", encoding="utf-8")
