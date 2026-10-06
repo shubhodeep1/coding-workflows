@@ -71,6 +71,7 @@ write_guard_check()
 	local write_guard_config_rel=".github/ai/write_guards.v1.json"
 	local write_guard_config_path=""
 	local write_guard_config_log_path="${write_guard_config_rel}"
+	local write_guard_head_config_file=""
 	local write_guard_result_file=""
 	local write_guard_stderr_file=""
 	local write_guard_rc=0
@@ -101,13 +102,31 @@ write_guard_check()
 	fi
 
 	write_guard_root_dir="$(write_guard_repo_root)"
-	if ! write_guard_config_path="$(write_guard_resolve_config_path "${write_guard_root_dir}")"; then
+	write_guard_config_path="$(write_guard_resolve_config_path "${write_guard_root_dir}")" || true
+	# Judge against the last committed policy, not edits made by this run.
+	if git -C "${write_guard_root_dir}" cat-file -e "HEAD:${write_guard_config_rel}" 2>/dev/null; then
+		write_guard_head_config_file="$(mktemp "${TMPDIR:-/tmp}/write-guard-policy.XXXXXX")"
+		if git -C "${write_guard_root_dir}" show "HEAD:${write_guard_config_rel}" > "${write_guard_head_config_file}" 2>/dev/null; then
+			if [ ! -f "${write_guard_root_dir}/${write_guard_config_rel}" ]; then
+				echo "WRITE_GUARD_POLICY_HEAD: phase=${write_guard_phase} config=${write_guard_config_rel} reason=worktree_missing"
+			elif ! cmp -s "${write_guard_root_dir}/${write_guard_config_rel}" "${write_guard_head_config_file}"; then
+				echo "WRITE_GUARD_POLICY_HEAD: phase=${write_guard_phase} config=${write_guard_config_rel} reason=worktree_differs"
+			fi
+			write_guard_config_path="${write_guard_head_config_file}"
+		else
+			rm -f "${write_guard_head_config_file}"
+			write_guard_head_config_file=""
+		fi
+	fi
+	if [ -z "${write_guard_config_path}" ]; then
 		echo "WRITE_GUARD_CONFIG_ERROR: phase=${write_guard_phase} config=$(write_guard_sanitize_log_value "${write_guard_config_log_path}") detail=missing"
 		return 0
 	fi
-	write_guard_config_log_path="${write_guard_config_path}"
-	if [ -n "${write_guard_root_dir}" ] && [ "${write_guard_config_log_path#${write_guard_root_dir}/}" != "${write_guard_config_log_path}" ]; then
-		write_guard_config_log_path="${write_guard_config_log_path#${write_guard_root_dir}/}"
+	if [ -z "${write_guard_head_config_file}" ]; then
+		write_guard_config_log_path="${write_guard_config_path}"
+		if [ -n "${write_guard_root_dir}" ] && [ "${write_guard_config_log_path#${write_guard_root_dir}/}" != "${write_guard_config_log_path}" ]; then
+			write_guard_config_log_path="${write_guard_config_log_path#${write_guard_root_dir}/}"
+		fi
 	fi
 
 	write_guard_result_file="$(mktemp "${TMPDIR:-/tmp}/write-guard-result.XXXXXX")"
@@ -228,7 +247,7 @@ PY
 					echo "WRITE_GUARD_BLOCK: phase=${write_guard_phase} path=${write_guard_safe_path} reason=${write_guard_reason} pattern=${write_guard_safe_pattern}"
 				fi
 			done < "${write_guard_result_file}"
-			rm -f "${write_guard_result_file}" "${write_guard_stderr_file}"
+			rm -f "${write_guard_result_file}" "${write_guard_stderr_file}" "${write_guard_head_config_file:-}"
 			echo "::error::Write guard blocked ${write_guard_block_count} path(s) for phase '${write_guard_phase}'."
 			return 1
 			;;
@@ -237,13 +256,13 @@ PY
 			if [ -z "${write_guard_detail}" ]; then
 				write_guard_detail="unknown"
 			fi
-			rm -f "${write_guard_result_file}" "${write_guard_stderr_file}"
+			rm -f "${write_guard_result_file}" "${write_guard_stderr_file}" "${write_guard_head_config_file:-}"
 			echo "WRITE_GUARD_CONFIG_ERROR: phase=${write_guard_phase} config=$(write_guard_sanitize_log_value "${write_guard_config_log_path}") detail=${write_guard_detail}"
 			return 0
 			;;
 	esac
 
-	rm -f "${write_guard_result_file}" "${write_guard_stderr_file}"
+	rm -f "${write_guard_result_file}" "${write_guard_stderr_file}" "${write_guard_head_config_file:-}"
 	return 0
 }
 

@@ -29,16 +29,72 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # No other call in this workflow resolves the stable tag; use the
+      # read-only job token before any checkout of the pushed commit.
+      - name: Resolve trusted sync support
+        id: resolve_support
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if ! tag_json="$(gh api "repos/${REPO}/git/ref/tags/stable")"; then
+            echo "::error::Stable sync support tag is unavailable."
+            exit 1
+          fi
+          support_type="$(jq -r '.object.type // empty' <<< "${tag_json}")"
+          support_sha="$(jq -r '.object.sha // empty' <<< "${tag_json}")"
+          if [ "${support_type}" = tag ] && [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            if ! tag_json="$(gh api "repos/${REPO}/git/tags/${support_sha}")"; then
+              echo "::error::Stable sync support annotated tag is unavailable."
+              exit 1
+            fi
+            support_type="$(jq -r '.object.type // empty' <<< "${tag_json}")"
+            support_sha="$(jq -r '.object.sha // empty' <<< "${tag_json}")"
+          fi
+          if [ "${support_type}" != commit ] || [[ ! "${support_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Stable tag did not resolve to a commit SHA."
+            exit 1
+          fi
+          echo "support_sha=${support_sha}" >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout trusted sync support
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.resolve_support.outputs.support_sha }}
+          path: .codex-workflow-src
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify trusted sync support
+        id: verify_support
+        env:
+          SUPPORT_SHA: ${{ steps.resolve_support.outputs.support_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$(git -C .codex-workflow-src rev-parse HEAD)" != "${SUPPORT_SHA}" ]; then
+            echo "::error::Trusted sync support checkout does not match stable."
+            exit 1
+          fi
+          if [ ! -f .codex-workflow-src/scripts/sync_claude_live_copies.py ]; then
+            echo "::warning::CLAUDE_LIVE_SYNC skipped reason=support_script_missing support_sha=${SUPPORT_SHA}"
+            echo "available=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "available=true" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
+          path: target
           fetch-depth: 0
-          # GH_PAT remains broad so sync PRs trigger CI/review; provenance is
-          # checked before the auto-merge-eligible branch receives a push.
-          token: ${{ secrets.GH_PAT }}
+          # Only the verified support-copy sync step receives GH_PAT.
+          persist-credentials: false
 
       - name: Sync template-only .claude changes to the live copy
         id: sync
+        if: steps.verify_support.outputs.available == 'true'
+        working-directory: target
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           PUSH_BEFORE: ${{ github.event.before }}
@@ -46,7 +102,14 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          python3 scripts/sync_claude_live_copies.py sync --before "${PUSH_BEFORE}" --after "${PUSH_AFTER}"
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error::GH_PAT is required for live-copy sync."
+            exit 1
+          fi
+          sync_basic="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)"
+          echo "::add-mask::${sync_basic}"
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${sync_basic}"
+          python3 "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/sync_claude_live_copies.py" --root "${GITHUB_WORKSPACE}/target" sync --before "${PUSH_BEFORE}" --after "${PUSH_AFTER}"
 
       - name: Alert on held .claude live-copy sync
         if: always() && steps.sync.outputs.held == 'true'
@@ -60,5 +123,5 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           REPO_NAME: ${{ github.repository }}
         run: |
-          source scripts/tg_helpers.sh
+          source "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/tg_helpers.sh"
           tg_send_msg "${REPO_NAME}: .claude live-copy sync held for human merge (draft PR #${HELD_PR}). ${HELD_SUMMARY} ${RUN_URL}" "WARNING" >/dev/null || true

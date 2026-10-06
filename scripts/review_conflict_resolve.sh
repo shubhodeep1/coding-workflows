@@ -313,6 +313,15 @@ if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh" ]; then
   source "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh"
 fi
 
+# Refuse agent-authored changes to protected sync infrastructure. This
+# helper is part of the verified workflow support bundle, not the PR tree.
+if [ ! -r "${SUPPORT_SCRIPTS_DIR:-scripts}/write_guard.sh" ] \
+   || ! source "${SUPPORT_SCRIPTS_DIR:-scripts}/write_guard.sh" \
+   || ! declare -F write_guard_check >/dev/null; then
+  echo "::error::Conflict resolver write guard is unavailable; refusing to run."
+  exit 1
+fi
+
 # Re-derive runtime paths set in the prepare step. Shell variables
 # do not cross step boundaries; RUNTIME_DIR itself is in
 # $GITHUB_ENV so it survives, and both paths are deterministic
@@ -724,6 +733,11 @@ PY
 # tree and silently violate the "retry starts from post-merge-replay
 # state" contract.
 : > "${RESOLVER_ATTEMPT_BASE_MISSING_FILE}"
+
+if ! write_guard_check conflict_resolver "${RESOLVER_ALLOWLIST_FILE}"; then
+  echo "::error::Conflict resolver refuses to author write-guarded paths; human resolution required."
+  exit 1
+fi
 
 # ── Smoke-fixture deterministic pre-resolution ────────────────────
 # PR #2095 added a smoke-only override block to the resolver prompt
@@ -2871,6 +2885,11 @@ if [ -n "$(git status --porcelain)" ]; then
       fi
     else
       echo "::warning::Resolver allowlist file missing; skipping hallucination guard. Falling through to existing commit-gate protections."
+    fi
+
+    if ! write_guard_check conflict_resolver "${RESOLVER_TOUCHED_FILE}"; then
+      echo "::error::Conflict resolver refuses to author write-guarded paths; human resolution required."
+      exit 1
     fi
 
     # Hard guardrail against hallucinated merge resolutions.
