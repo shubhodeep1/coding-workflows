@@ -348,7 +348,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `WORKFLOW_HEAL_AUTOFIX_REPORT`, `WORKFLOW_HEAL_PHASE_REPORT`,
     `WORKFLOW_HEAL_PR_RECONCILE`, `WORKFLOW_HEAL`.
     Before reading logs for phase, autofix or release reports, the intake
-    checks referenced runs' repository, failure status and workflow path;
+    checks referenced runs' repository, failure status and workflow path
+    (a `ci.yml` run only as a `push` run on the default branch, which comes
+    from `WORKFLOW_HEAL_DEFAULT_BRANCH` or the intake event's
+    `repository.default_branch`, else `ci_not_default_branch_push`);
     phase and autofix runs must also be linked to the issue or PR. Self-repo
     phase failure comments must come from the intake token's account; consumer
     phase comments require a trusted GitHub-reported author association or

@@ -142,6 +142,10 @@ PHASE_WRAPPER_WORKFLOW_FILES: dict[str, tuple[str, ...]] = {
 }
 REVIEW_WRAPPER_WORKFLOW_FILES = ("ai-review.yml", "internal-review.yml", "review_autofix.yml", "review_rb_judge_dispatch.yml")
 RELEASE_WORKFLOW_FILES = ("test-and-mark-stable.yml", "mark-stable.yml", "promote-main-to-stable.yml", "auto-release-stable.yml", "forward-merge-stable-to-main.yml")
+# CI workflow files a `workflow_run` report may cite. Accepted only for push
+# runs on the repository's default branch (checked against the run GitHub
+# returns, not the payload), matching the intake job's `if:` predicate.
+CI_WORKFLOW_FILES = ("ci.yml",)
 PROVENANCE_KINDS = ("phase_failure", "autofix_failure", "workflow_run")
 PHASE_SUCCESS_COMMENT_PREFIXES: tuple[str, ...] = (
 	"<!-- ai:clarification-questions",
@@ -1629,9 +1633,14 @@ def _run_workflow_file(run: dict[str, Any]) -> str | None:
 
 def verify_run_provenance(
 	payload: dict[str, Any], *, runs: dict[str, Any], comments: list[dict[str, Any]] | None,
-	trusted_login: str, self_repo: str,
+	trusted_login: str, self_repo: str, default_branch: str = "",
 ) -> dict[str, Any]:
-	"""Keep only run references corroborated by GitHub, before reading job logs."""
+	"""Keep only run references corroborated by GitHub, before reading job logs.
+
+	A ``workflow_run`` report may cite a CI run (``CI_WORKFLOW_FILES``) only
+	when GitHub reports it as a ``push`` run on ``default_branch``; an empty or
+	invalid ``default_branch`` rejects every CI run (fail closed).
+	"""
 	kind = payload.get("source_kind")
 	refs = payload.get("run_refs") or []
 	result: dict[str, Any] = {"status": "not_applicable", "reason": "", "run_refs": refs, "rejections": [], "pending_current_run": ""}
@@ -1653,7 +1662,7 @@ def verify_run_provenance(
 	phase = str(payload.get("failure_reason") or "").removesuffix("_failed")
 	allowed = (PHASE_WRAPPER_WORKFLOW_FILES.get(phase, ()) if repo.lower() == self_repo.lower()
 		else PHASE_WRAPPER_WORKFLOW_FILES.get(phase, ())[:1]) if kind == "phase_failure" else (
-		REVIEW_WRAPPER_WORKFLOW_FILES if kind == "autofix_failure" else RELEASE_WORKFLOW_FILES)
+		REVIEW_WRAPPER_WORKFLOW_FILES if kind == "autofix_failure" else RELEASE_WORKFLOW_FILES + CI_WORKFLOW_FILES)
 	reporter_match = _RUN_URL_RE.fullmatch(str(payload.get("reporter_run_url") or ""))
 	reporter_id = reporter_match.group("run_id") if reporter_match and reporter_match.group("repo").lower() == repo.lower() else ""
 	for position, ref in enumerate(refs):
@@ -1678,6 +1687,12 @@ def verify_run_provenance(
 			reason = "unexpected_run_event"
 		if not reason and _run_workflow_file(run) not in allowed:
 			reason = "unexpected_workflow_path"
+		if not reason and kind == "workflow_run" and _run_workflow_file(run) in CI_WORKFLOW_FILES and not (
+			run.get("event") == "push"
+			and is_valid_branch(default_branch)
+			and str(run.get("head_branch") or "") == default_branch
+		):
+			reason = "ci_not_default_branch_push"
 		if not reason and kind == "phase_failure":
 			linked = any(
 				isinstance(comment, dict) and bool(_comment_author(comment))
@@ -2656,7 +2671,7 @@ def _cmd_verify_run_provenance(args: argparse.Namespace) -> int:
 		comments = _load_json_file(args.comments_json) if args.comments_json else None
 	except (OSError, ValueError):
 		comments = None
-	_write_json(verify_run_provenance(_load_json_file(args.payload_json), runs=runs, comments=comments, trusted_login=args.trusted_login, self_repo=args.self_repo))
+	_write_json(verify_run_provenance(_load_json_file(args.payload_json), runs=runs, comments=comments, trusted_login=args.trusted_login, self_repo=args.self_repo, default_branch=args.default_branch))
 	return 0
 
 
@@ -2926,6 +2941,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--comments-json", default="")
 	p.add_argument("--trusted-login", default="")
 	p.add_argument("--self-repo", required=True)
+	p.add_argument("--default-branch", default="")
 	p.set_defaults(func=_cmd_verify_run_provenance)
 
 	p = sub.add_parser("skip-reason", help="Print a skip reason (empty when the payload should be healed)")

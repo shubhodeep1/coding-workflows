@@ -3949,6 +3949,102 @@ def test_verify_run_provenance_cli_missing_comments_fails_closed(tmp_path) -> No
 	assert json.loads(result.stdout)["reason"] == "comments_unavailable"
 
 
+def _ci_run_payload(head_branch: str = "main") -> dict:
+	return heal.build_workflow_run_payload(
+		repo=SELF_REPO,
+		workflow_run={"id": 500, "name": "CI", "conclusion": "failure", "head_sha": SHA_A, "head_branch": head_branch, "html_url": f"https://github.com/{SELF_REPO}/actions/runs/500", "display_title": "CI"},
+	)
+
+
+def test_verify_run_provenance_accepts_ci_push_on_default_branch() -> None:
+	payload = heal.validate_payload(_ci_run_payload())
+	def check(run, default_branch="main", self_repo=SELF_REPO, use_payload=payload):
+		return heal.verify_run_provenance(use_payload, runs={"500": run}, comments=None, trusted_login="", self_repo=self_repo, default_branch=default_branch)
+	ci_push = _provenance_run(repo=SELF_REPO, path="ci.yml", event="push", head_branch="main")
+	verdict = check(ci_push)
+	assert verdict["status"] == "ok" and [ref["run_id"] for ref in verdict["run_refs"]] == ["500"]
+	for run, default_branch in (
+		({**ci_push, "event": "pull_request"}, "main"),
+		({**ci_push, "event": "workflow_dispatch"}, "main"),
+		({**ci_push, "head_branch": "feature/x"}, "main"),
+		({**ci_push, "head_branch": None}, "main"),
+		(ci_push, ""),
+		(ci_push, "bad..branch"),
+		({**ci_push, "head_branch": "bad..branch"}, "bad..branch"),
+	):
+		verdict = check(run, default_branch)
+		assert verdict["status"] == "rejected"
+		assert verdict["reason"] == "current_run_rejected:ci_not_default_branch_push"
+		assert {"run_id": "500", "reason": "ci_not_default_branch_push"} in verdict["rejections"]
+	# The payload's head_branch is not trusted: GitHub's run data decides.
+	assert check({**ci_push, "head_branch": "feature/x"})["reason"] == "current_run_rejected:ci_not_default_branch_push"
+	# A non-default-branch payload still passes when GitHub reports a default-branch push.
+	assert check(ci_push, use_payload=heal.validate_payload(_ci_run_payload("feature/x")))["status"] == "ok"
+	# CI runs are only accepted from this repository.
+	assert check(ci_push, self_repo=CONSUMER_REPO)["reason"] == "source_not_self"
+	# A failed CI run must still have failed.
+	assert check({**ci_push, "conclusion": "success"})["reason"] == "current_run_rejected:not_failed"
+	# Release runs keep their behaviour without a default branch.
+	release_payload = heal.validate_payload(_gate_run_payload())
+	assert heal.verify_run_provenance(release_payload, runs={"500": _provenance_run(repo=SELF_REPO, path="test-and-mark-stable.yml")}, comments=None, trusted_login="", self_repo=SELF_REPO)["status"] == "ok"
+	# ci.yml is not accepted for other report kinds.
+	pr_payload = heal.validate_payload(_autofix_payload())
+	assert heal.verify_run_provenance(pr_payload, runs={"500": {**_provenance_run(path="ci.yml", event="push", head_branch="main"), "pull_requests": [{"number": 4174}]}}, comments=[], trusted_login="workflow-bot", self_repo=SELF_REPO, default_branch="main")["reason"] == "no_verified_runs"
+
+
+def test_verify_run_provenance_cli_default_branch_for_ci_run(tmp_path) -> None:
+	payload_file = tmp_path / "payload.json"
+	runs_file = tmp_path / "runs.json"
+	payload_file.write_text(json.dumps(heal.validate_payload(_ci_run_payload())), encoding="utf-8")
+	runs_file.write_text(json.dumps({"500": _provenance_run(repo=SELF_REPO, path="ci.yml", event="push", head_branch="main")}), encoding="utf-8")
+	base = [sys.executable, str(LIB_PATH), "verify-run-provenance", "--payload-json", str(payload_file), "--runs-json", str(runs_file), "--self-repo", SELF_REPO]
+	accepted = subprocess.run(base + ["--default-branch", "main"], capture_output=True, text=True, check=True)
+	assert json.loads(accepted.stdout)["status"] == "ok"
+	rejected = subprocess.run(base, capture_output=True, text=True, check=True)
+	assert json.loads(rejected.stdout)["reason"] == "current_run_rejected:ci_not_default_branch_push"
+
+
+def _ci_intake_state(event: str = "push", head_branch: str = "main") -> dict:
+	ci_log = "2026-10-06T00:00:00.000Z ##[error]tests/test_example.py::test_x FAILED\n"
+	return _intake_state(
+		jobs={"500": [{"id": 9001, "name": "static-checks", "workflow_name": "CI", "conclusion": "failure", "steps": [{"name": "Run ruff", "conclusion": "failure"}]}]},
+		job_logs={"9001": ci_log},
+		branches=["stable", "main"],
+		run_details={"500": {"id": 500, "repository": {"full_name": SELF_REPO}, "status": "completed", "conclusion": "failure",
+			"path": ".github/workflows/ci.yml", "event": event, "head_branch": head_branch}},
+	)
+
+
+def test_intake_files_heal_issue_for_failed_ci_push_on_default_branch(tmp_path) -> None:
+	event_file = tmp_path / "event.json"
+	event_file.write_text(json.dumps({"repository": {"full_name": SELF_REPO, "default_branch": "main"}}), encoding="utf-8")
+	for extra_env in ({"WORKFLOW_HEAL_DEFAULT_BRANCH": "main"}, {"WORKFLOW_HEAL_DEFAULT_BRANCH": "", "GITHUB_EVENT_PATH": str(event_file)}):
+		result, state_after, prompt = _run_intake(_ci_run_payload(), _ci_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=extra_env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "provenance_rejected" not in result.stdout
+		assert "provenance_verified" in result.stdout
+		created = state_after["issues_created"][0]
+		assert created["repo"] == SELF_REPO
+		match = TARGET_BRANCH_RE.search(created["body"])
+		assert match and (match.group(1) or match.group(2)) == "main"
+		assert "Failed workflow: CI" in prompt
+
+
+def test_intake_rejects_ci_run_that_is_not_a_default_branch_push(tmp_path) -> None:
+	event_file = tmp_path / "event.json"
+	event_file.write_text(json.dumps({"repository": {"full_name": SELF_REPO, "default_branch": "main"}}), encoding="utf-8")
+	for state, extra_env in (
+		(_ci_intake_state(event="pull_request"), {"WORKFLOW_HEAL_DEFAULT_BRANCH": "main"}),
+		(_ci_intake_state(head_branch="feature/x"), {"WORKFLOW_HEAL_DEFAULT_BRANCH": "", "GITHUB_EVENT_PATH": str(event_file)}),
+		(_ci_intake_state(), {"WORKFLOW_HEAL_DEFAULT_BRANCH": "", "GITHUB_EVENT_PATH": str(tmp_path / "missing.json")}),
+	):
+		result, state_after, _ = _run_intake(_ci_run_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=extra_env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "run_id=500 reason=ci_not_default_branch_push" in result.stdout
+		assert "skip reason=provenance_rejected" in result.stdout
+		assert "issues_created" not in state_after
+
+
 def test_build_phase_failure_payload_validates_and_carries_lineage() -> None:
 	body = f"<!-- {heal.MARKER_PREFIX}fp={FP_HEX} -->\n<!-- {heal.MARKER_PREFIX}gen=1 -->\n<!-- {heal.MARKER_PREFIX}root={FP_HEX} -->\nheal body"
 	payload = heal.validate_payload(_phase_payload(issue=_issue(body=body, labels=["ai:clarification", "ai:workflow-heal"])))
