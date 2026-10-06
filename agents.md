@@ -244,7 +244,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
     Rejections log `WORKFLOW_HEAL provenance_rejected` and fail closed, so a
     missing phase failure comment prevents intake. A holder of the shared
     `GH_PAT` can still read registered repositories' logs directly or report a genuinely
-    linked failed run.
+    linked failed run. Label-escalation `issue` and `pull_request` reports are
+    outside this gate even when their issue/comment-derived `run_refs` are
+    present; those reports can still fetch unverified job logs with the shared
+    `GH_PAT`.
     A report whose failure reason is `identical_failure_cap`, or a generation
     > 1 of its lineage, is deterministic (`is_deterministic_failure`): the
     intake never files it as `transient` (remaps to `inconclusive`,

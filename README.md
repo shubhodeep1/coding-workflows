@@ -1526,6 +1526,10 @@ through `clarify → plan → implement → review`.
   A missing failure comment, or unavailable pipeline-account identity for a
   self-repo report, also skips (even for a real failed run). Failed evidence
   fetches are logged; per-credential sender binding is outside this check.
+  Label-escalation `issue` and `pull_request` reports remain outside the
+  provenance gate: their issue/comment-derived run references can still cause
+  job logs to be read without these checks. The shared `GH_PAT` retains access
+  to all registered consumer repositories.
   The intake fingerprints
   verified reports from the current failed run's job log (earlier streak logs
   are diagnosis context only; `phase:<phase>_failed` when the current log cannot

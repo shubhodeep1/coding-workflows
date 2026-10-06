@@ -11,7 +11,8 @@
 # failed clarify / plan / implement run (`phase_failure`), a failed release /
 # promotion `workflow_run`, or a manual `workflow_dispatch` re-run. It:
 #
-#   1. Validates the payload and verifies run provenance before any log read
+#   1. Validates the payload and verifies phase, autofix and release run
+#      provenance before reading their logs (label escalations are excluded)
 #      (the body, comments, and logs stay untrusted data for the model; an
 #      `autofix_failure` report carries its own evidence text), then applies the skip gates:
 #      kill switch, unregistered source repo, smoke-test fixture, self run,
@@ -279,10 +280,20 @@ while IFS=$'\t' read -r run_id run_url; do
 	JOBS_FILE="${LOG_DIR}/run-${run_id}-jobs.json"
 	if ! gh_api_json_to_file "${JOBS_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${run_id}/jobs" -F per_page=100; then
 		log "warn jobs_fetch_failed source=${SOURCE_REPO} run=${run_id}"
+		if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${RUN_COUNT}" -eq 1 ]; then
+			log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${run_id} reason=current_run_jobs_unavailable"
+			log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=current_run_jobs_unavailable"
+			exit 0
+		fi
 		continue
 	fi
 	if ! jq -e '.jobs | type == "array"' "${JOBS_FILE}" >/dev/null 2>&1; then
 		log "warn jobs_fetch_invalid source=${SOURCE_REPO} run=${run_id}"
+		if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${RUN_COUNT}" -eq 1 ]; then
+			log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${run_id} reason=current_run_jobs_unavailable"
+			log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=current_run_jobs_unavailable"
+			exit 0
+		fi
 		continue
 	fi
 	if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${RUN_COUNT}" -eq 1 ] \
@@ -332,12 +343,6 @@ while IFS=$'\t' read -r run_id run_url; do
 		| map(gsub("[\\t\\n\\r]"; " ")) | @tsv' "${JOBS_FILE}")
 done < <(jq -r '.run_refs[] | [.run_id, .url] | @tsv' "${PAYLOAD_FILE}")
 
-if [ "${SOURCE_KIND}" = "phase_failure" ] && [ -n "${PENDING_CURRENT_RUN}" ] \
-	&& ! jq -e '.jobs | type == "array"' "${LOG_DIR}/run-${PENDING_CURRENT_RUN}-jobs.json" >/dev/null 2>&1; then
-	log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${PENDING_CURRENT_RUN} reason=current_run_jobs_unavailable"
-	log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=current_run_jobs_unavailable"
-	exit 0
-fi
 if [ "${SOURCE_KIND}" = "phase_failure" ] && [ -n "${PENDING_CURRENT_RUN}" ] \
 	&& ! jq -e --arg run_id "${PENDING_CURRENT_RUN}" 'any(.[]; .run_id == $run_id)' "${SUMMARIES_FILE}" >/dev/null 2>&1; then
 	log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${PENDING_CURRENT_RUN} reason=current_run_no_failed_job"

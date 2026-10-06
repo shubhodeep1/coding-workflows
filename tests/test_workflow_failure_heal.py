@@ -3939,6 +3939,25 @@ def test_intake_phase_provenance_filters_earlier_refs_and_checks_pending_job() -
 	assert not any("/actions/jobs/" in part for call in after["calls"] for part in call)
 
 
+def test_intake_phase_current_jobs_failure_does_not_fetch_older_logs() -> None:
+	payload = _phase_payload()
+	current = f"repos/{CONSUMER_REPO}/actions/runs/500"
+	previous = f"repos/{CONSUMER_REPO}/actions/runs/499"
+	for jobs in ({"499": [{"id": 9102, "name": "plan / plan", "conclusion": "failure"}]},
+		{"500": "invalid", "499": [{"id": 9102, "name": "plan / plan", "conclusion": "failure"}]}):
+		state = _plan_intake_state(
+			jobs=jobs,
+			run_details={current: _provenance_run(status="in_progress", conclusion=None), previous: _provenance_run(499)},
+			comments={f"repos/{CONSUMER_REPO}/issues/42/comments": [_trusted_plan_link(CONSUMER_REPO, 500), _trusted_plan_link(CONSUMER_REPO, 499)]},
+			job_logs={"9102": PLAN_JOB_LOG},
+		)
+		result, after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "detail=current_run_jobs_unavailable" in result.stdout
+		assert not any("/runs/499/jobs" in part or "/actions/jobs/" in part for call in after["calls"] for part in call)
+		assert not after.get("issues_created")
+
+
 def test_intake_phase_failure_deduplicates_on_source_issue_and_falls_back_without_logs() -> None:
 	state = _plan_intake_state()
 	state["heal_issues"] = [_sourced_heal_issue(31, state="open", fp="9" * 64, source=f"{CONSUMER_REPO}#42")]
