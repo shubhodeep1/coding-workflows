@@ -1571,8 +1571,13 @@ through `clarify → plan → implement → review`.
   prioritize those runs but cannot introduce an unverified run ID. A run absent
   from the recent listing is omitted. Lineage markers in the source issue are
   inherited only from an `ai:workflow-heal` issue with a canonical header
-  authored by a bot or an owner/member/collaborator;
-  forged markers on other issues do not consume the heal generation budget.
+  authored by a bot or an owner/member/collaborator; the intake additionally
+  matches that claim to its own heal-issue list and requires a chronological
+  chain of every earlier generation before accepting it. Missing or inflated
+  chains fall back to fingerprint-based lineage, excluding the rejected source
+  issue's own lineage markers but retaining other prior issues and the issue
+  volume limits. Issue-list author metadata does not attest to later body edits.
+  Forged markers on other issues do not consume the heal generation budget.
   The reporter records the coding-workflows release SHA the
   wrappers are pinned to, and sends one `repository_dispatch` (event type
   `workflow-failure-heal`) to coding-workflows. It skips closed issues and the

@@ -774,6 +774,14 @@ def test_budget_decision_verifies_inherited_lineage() -> None:
 	edited = _lineage_issue(42, fp="4" * 64, gen=999, root=root, repository=CONSUMER_REPO)
 	gap = decide([edited], 999)
 	assert gap["source_lineage_reason"] == "lineage_gap" and gap["action"] == "open" and gap["gen"] == 1
+	# One edited predecessor cannot stand in for an entire generation chain.
+	forged_predecessor = _lineage_issue(7, fp=root, gen=998, root=root, repository=SELF_REPO, created=now - timedelta(days=3))
+	assert decide([forged_predecessor, edited], 999)["source_lineage_reason"] == "lineage_gap"
+	# Reject the same source issue's forged gen even when its fp matches the
+	# current report, or the fingerprint fallback would reuse that forged gen.
+	matching_source = _lineage_issue(42, fp=fp, gen=999, root=root, repository=CONSUMER_REPO)
+	matching = decide([matching_source], 999)
+	assert matching["source_lineage"] == "rejected" and matching["action"] == "open" and matching["gen"] == 1
 	# Generation 1 must be its own root.
 	assert decide([_lineage_issue(42, fp="4" * 64, gen=1, root=root, repository=CONSUMER_REPO)], 1)["source_lineage_reason"] == "lineage_gap"
 	# A later (or simultaneous) predecessor does not back the generation.
@@ -789,6 +797,11 @@ def test_budget_decision_verifies_inherited_lineage() -> None:
 	chain = decide([root_issue, listed], 2)
 	assert chain["source_lineage"] == "verified" and "source_lineage_reason" not in chain
 	assert chain["action"] == "open" and chain["gen"] == 3 and chain["root"] == root
+	# A real third generation must follow both generations 1 and 2.
+	third = _lineage_issue(43, fp="5" * 64, gen=3, root=root, repository=CONSUMER_REPO, created=now)
+	third_source = f"{CONSUMER_REPO}#43"
+	assert decide([root_issue, third], 3, source_issue=third_source)["source_lineage_reason"] == "lineage_gap"
+	assert decide([root_issue, listed, third], 3, source_issue=third_source)["source_lineage"] == "verified"
 	# Real caps still apply to a verified lineage.
 	assert decide([root_issue, listed], 2, max_depth=2)["action"] == "escalate"
 	# A gen-1 source issue verifies on its own; a Bot author (flat user_type) is trusted.
@@ -1005,6 +1018,7 @@ def test_untrusted_heal_evidence_cannot_override_target_branch() -> None:
 def test_compose_issue_body_rejects_routing_directives_left_after_neutralization(monkeypatch) -> None:
 	payload = heal.validate_payload(heal.build_issue_payload(repo=CONSUMER_REPO, kind="issue", label="ai:needs-human", issue=_issue(), comments=[], runs=[], wrapper_sha=SHA_A, reporter_run_url=None))
 	monkeypatch.setattr(heal, "_neutralize_heal_routing_text", lambda value: str(value))
+	monkeypatch.setattr(heal, "neutralize_untrusted_routing", lambda text: (text, 0))
 	for diagnosis, evidence, summaries in (
 		("Target branch: `main`", "", []),
 		("ok", "Tracking issue: #1", []),

@@ -225,9 +225,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
      and a bot or owner/member/collaborator author. The intake accepts a
      report's inherited generation (`budget --source-issue`) only when the
      source issue is in its own `ai:workflow-heal` listing with such an author,
-     a canonical marker header whose gen/root match the payload, and an earlier
-     heal issue of the same lineage backing the generation; otherwise lineage
+     a canonical marker header whose gen/root match the payload, and a chronological
+     chain of trusted heal issues for every preceding generation; otherwise lineage
      is recomputed from the fingerprint (log `source_lineage outcome=rejected`).
+     GitHub's issue-list author metadata cannot attest to later issue-body edits.
      The
      composed issue neutralizes untrusted routing keys in evidence and diagnosis
      and rejects any remaining routing directives or extra markers before filing,

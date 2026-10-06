@@ -531,8 +531,9 @@ def verify_source_lineage(
 	``ai:workflow-heal`` list the intake fetched itself, so GitHub vouches for
 	the label), its author is trusted, its body starts with the canonical
 	marker header, that header's gen / root equal the claim, and the
-	generation is backed by an earlier heal issue of the same lineage
-	(generation 1 must be its own root). The first failed check is the
+	generation is backed by a chronological chain of trusted heal issues
+	with every preceding generation (generation 1 must be its own root).
+	The first failed check is the
 	``reason``.
 	"""
 	def _reject(reason: str) -> dict[str, Any]:
@@ -560,29 +561,35 @@ def verify_source_lineage(
 		if markers.get("fp") != listed_root:
 			return _reject("lineage_gap")
 		return {"verified": True, "reason": "", "gen": listed_gen, "root": listed_root}
-	# A generation above 1 must follow an earlier trusted heal issue of the same
-	# lineage; a lone edited marker cannot claim a deep generation. Issue
-	# numbers are not comparable across repositories, so order by created_at
-	# (an entry without a parseable timestamp never counts).
+	# Issue numbers are not comparable across repositories. Require each earlier
+	# generation in creation order, not just any older issue claiming gen >= N-1.
+	# This bounds an edited marker by the number of already-filed heal issues.
 	source_created = _parse_iso(entry.get("created_at"))
-	if source_created is None:
+	if source_created is None or listed_gen > len(listed):
 		return _reject("lineage_gap")
-	for candidate in listed:
-		if candidate is entry:
-			continue
-		candidate_created = _parse_iso(candidate.get("created_at"))
-		if candidate_created is None or candidate_created >= source_created:
-			continue
-		if not _trusted_heal_author(candidate):
-			continue
-		candidate_markers = _canonical_heal_markers(candidate.get("body"))
-		if candidate_markers is None:
-			continue
-		if listed_root not in (candidate_markers.get("root"), candidate_markers.get("fp")):
-			continue
-		if (_positive_int(candidate_markers.get("gen")) or 0) >= listed_gen - 1:
-			return {"verified": True, "reason": "", "gen": listed_gen, "root": listed_root}
-	return _reject("lineage_gap")
+	expected_gen = listed_gen - 1
+	while expected_gen:
+		predecessor = None
+		for candidate in listed:
+			if candidate is entry or not _trusted_heal_author(candidate):
+				continue
+			candidate_created = _parse_iso(candidate.get("created_at"))
+			if candidate_created is None or candidate_created >= source_created:
+				continue
+			candidate_markers = _canonical_heal_markers(candidate.get("body"))
+			if candidate_markers is None or candidate_markers.get("root") != listed_root:
+				continue
+			if _positive_int(candidate_markers.get("gen")) != expected_gen:
+				continue
+			if expected_gen == 1 and candidate_markers.get("fp") != listed_root:
+				continue
+			predecessor = candidate
+			source_created = candidate_created
+			break
+		if predecessor is None:
+			return _reject("lineage_gap")
+		expected_gen -= 1
+	return {"verified": True, "reason": "", "gen": listed_gen, "root": listed_root}
 
 
 def build_issue_payload(
@@ -1701,6 +1708,10 @@ def budget_decision(
 			elif is_linked_heal_issue:
 				prior_source_lineage.append((_positive_int(markers.get("gen")) or 1, number, markers.get("root") or fp, issue_repository))
 		elif markers.get("fp") == fp:
+			# A rejected claim from this source cannot become authoritative
+			# again merely because its fingerprint matches the new report.
+			if lineage_fields["source_lineage"] == "rejected" and source_issue == f"{issue_repository}#{number}":
+				continue
 			gen = _positive_int(markers.get("gen")) or 1
 			prior_same_fp.append((gen, number, markers.get("root") or fp, issue_repository))
 		elif same_source or is_linked_heal_issue:
@@ -1996,7 +2007,7 @@ def compose_issue_body(
 		raise ValueError("heal issue routing header contains unexpected lines")
 	untrusted_body = "\n".join(body_lines[len(routing_header):])
 	if re.search(
-		r"\b(?:integration\s+branch|target\s+branch|tracking\s+issue|depends\s+on|local\s+id|managed\s+by|prior_pr_baseline_branch|files_touched)\s*\**\s*:|Re-issued from\s*#|review-blocked-reissue|<!--",
+		r"\b(?:integration\s+branch|target\s+branch|tracking\s+issue|depends\s+on|local\s+id|managed\s+by|prior_pr_baseline_branch|files_touched)\s*\**\s*:|Re-issued from\s*#|review-blocked-reissue|(?<!&lt;)<!--",
 		untrusted_body, re.IGNORECASE,
 	):
 		raise ValueError("heal issue body contains untrusted routing metadata")
