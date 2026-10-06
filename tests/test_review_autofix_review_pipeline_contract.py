@@ -81,6 +81,12 @@ def test_head_gate_is_verified_and_binds_merge_status_to_evaluated_head() -> Non
 		if 'if gh pr merge "${PR_NUMBER}"' in merge_line and ('--match-head-commit "${RB_JUDGED_HEAD_SHA}"' in merge_line or '"${_match_head_arg[@]}"' in merge_line):
 			assert 'review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success' in judge_lines[index - 1]
 	assert judge.index('rb_security_merge_gate; then') < judge.index('review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success')
+	manual_status = 'review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"'
+	assert f'else\n        {manual_status}\n        RB_MERGE_READY_LABEL_ALLOWED="true"' in judge
+	assert f'elif [ "${{ENABLE_AUTO_MERGE}}" != "true" ]; then\n        if [ "${{PR_STATE}}" = "open" ]; then\n          {manual_status}\n        fi\n        RB_MERGE_READY_LABEL_ALLOWED="true"' in judge
+	assert f'          else\n            {manual_status}\n            echo "::warning::PR #${{PR_NUMBER}} is mergeable but ENABLE_AUTO_MERGE=false' in judge
+	assert f'          {manual_status}\n          ensure_label_exists "ai:ready-to-merge"' in judge
+	assert f'        {manual_status}\n        ensure_label_exists "ai:ready-to-merge"' in judge
 
 
 def _stage_helper_text() -> str:

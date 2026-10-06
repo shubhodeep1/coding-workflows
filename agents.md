@@ -88,7 +88,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
    commit-status context `ai-review/head-gate`. Deterministic skips and clean
    review/security tails post `success` on the evaluated head before their
    head-bound merge; the review-blocked judge does likewise after its security
-   gate. `REVIEW_HEAD_GATE_STATUS_ENABLED` and
+   gate, including when auto-merge is disabled and an approved merge needs a
+   manual action. `REVIEW_HEAD_GATE_STATUS_ENABLED` and
    `REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED` default to `true`. GitHub does not
    enforce this status until the default branch's required checks include it;
    this workflow does not edit branch protection. Logs: `REVIEW_HEAD_GATE`.

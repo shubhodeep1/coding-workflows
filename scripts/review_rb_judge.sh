@@ -1912,6 +1912,7 @@ case "${RB_ACTION}" in
           echo "::warning::Review-blocked judge merge failed for evaluated head ${RB_JUDGED_HEAD_SHA}; withholding ai:ready-to-merge from linked issues."
         fi
       else
+        review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
         RB_MERGE_READY_LABEL_ALLOWED="true"
       fi
     elif [ "${PR_ALREADY_MERGED:-false}" = "true" ]; then
@@ -1961,6 +1962,9 @@ case "${RB_ACTION}" in
           echo "::warning::Review-blocked judge terminal merge failed for evaluated head ${RB_JUDGED_HEAD_SHA}; withholding ai:ready-to-merge from linked issues."
         fi
       elif [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
+        if [ "${PR_STATE}" = "open" ]; then
+          review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
+        fi
         RB_MERGE_READY_LABEL_ALLOWED="true"
       fi
 
@@ -2226,6 +2230,7 @@ ${RB_FIX_DESC}"
             echo "judge_action=security_hold" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
           ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
@@ -2246,6 +2251,7 @@ ${RB_FIX_DESC}"
           echo "judge_action=security_hold" >> "$GITHUB_OUTPUT"
           exit 0
         fi
+        review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
         ensure_label_exists "ai:ready-to-merge" "${REPOSITORY}"
         while IFS= read -r issue_number; do
           [ -n "${issue_number}" ] || continue
@@ -2459,6 +2465,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
               echo "judge_skip_reason=sync_merge_failed" >> "$GITHUB_OUTPUT"
             fi
           else
+            review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
             echo "::warning::PR #${PR_NUMBER} is mergeable but ENABLE_AUTO_MERGE=false — manual merge required. Leaving linked issues in ai:review-blocked so the follow-up is not opened against unmerged code; operator should merge manually and the judge can run again to create the follow-up."
             echo "judge_skip_reason=auto_merge_disabled" >> "$GITHUB_OUTPUT"
           fi
