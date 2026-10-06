@@ -1609,9 +1609,8 @@ jobs:
           # Propagate head ref so downstream jobs (deterministic-skip-merge)
           # can apply the same head-ref-keyed auto-merge suppressors without
           # repeating the /pulls/{n} fetch above (§15 API hygiene). May be
-          # empty on the invalid-PR-number branch; consumers must treat an
-          # empty value as "unknown" and fall through (the empty string
-          # never matches any suppressor regex, so auto-merge runs as before).
+          # empty on the invalid-PR-number branch; deterministic-skip-merge
+          # refuses merge authorization when the head ref is unavailable.
           echo "head_ref=${pr_head_ref}" >> "${GITHUB_OUTPUT}"
           # Bind downstream deterministic-skip merge authorization to the
           # exact head evaluated by this gate. Consumers fail closed when the
@@ -1886,6 +1885,7 @@ jobs:
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
       DET_SKIP_REASON: ${{ needs.gate.outputs.det_skip_reason }}
       ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
+      ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
       # When 'true' (default), forward-merge fallback PRs (head ref
       # `^auto/forward-merge-stable-`) auto-merge via a real merge commit
       # (`gh pr merge --merge --auto`) instead of being left for a manual
@@ -1893,10 +1893,8 @@ jobs:
       # manual-merge-commit behaviour. See the auto-merge step below.
       FORWARD_MERGE_FALLBACK_AUTO_MERGE: ${{ vars.FORWARD_MERGE_FALLBACK_AUTO_MERGE || 'true' }}
       # Reused from the gate job's existing /pulls/{n} fetch (§15 API hygiene) —
-      # consumed by the forward-merge-fallback suppressor in the auto-merge
-      # step below. May be empty when the gate could not resolve the PR
-      # (invalid PR number); the suppressor treats empty as "unknown" and
-      # falls through to the regular auto-merge call.
+      # consumed by the integration and forward-merge suppressors below.
+      # An empty head ref refuses merge authorization.
       PR_HEAD_REF: ${{ needs.gate.outputs.head_ref }}
       # Exact PR head whose diff authorized this deterministic skip. Every
       # merge-capable path below is bound to it and refuses an empty value.
@@ -1981,12 +1979,38 @@ jobs:
             return 0
           }
 
+          deterministic_skip_head_ref_is_integration_pr()
+          {
+            local deterministic_skip_pattern_match_rc
+            if [ -n "${ORCH_INTEGRATION_BRANCH_PATTERN}" ]; then
+              if printf '%s\n' "${PR_HEAD_REF}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN}"; then
+                return 0
+              else
+                deterministic_skip_pattern_match_rc=$?
+                if [ "${deterministic_skip_pattern_match_rc}" -gt 1 ]; then
+                  echo "::warning::ORCH_INTEGRATION_BRANCH_PATTERN is not a valid POSIX ERE (grep exit ${deterministic_skip_pattern_match_rc}); falling back to canonical '^orchestrator/project-([0-9]+)$' auto-merge suppressor for this run."
+                fi
+              fi
+            else
+              echo "::warning::ORCH_INTEGRATION_BRANCH_PATTERN is empty; falling back to canonical '^orchestrator/project-([0-9]+)$' auto-merge suppressor for this run."
+            fi
+            [[ "${PR_HEAD_REF}" =~ ^orchestrator/project-([0-9]+)$ ]]
+          }
+
           # 1) Authorize auto-merge for the exact head evaluated by the gate.
           # Merge-authorization labels are applied only after this succeeds, so
           # a concurrent push cannot leave ai:ready-to-merge on an unreviewed head.
           auto_merge_ready_labels_allowed="false"
           auto_merge_summary="disabled by ENABLE_AUTO_MERGE"
-          if [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
+          if [ -z "${PR_HEAD_REF}" ]; then
+            auto_merge_summary="REFUSED (gate-observed head ref unavailable)"
+            echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA:-unknown} action=refuse reason=head_ref_unavailable"
+            echo "::warning::Gate-observed head ref is unavailable for PR #${PR_NUMBER}; refusing deterministic-skip merge authorization."
+          elif deterministic_skip_head_ref_is_integration_pr; then
+            auto_merge_summary="SUPPRESSED (orchestrator integration PR head ref '${PR_HEAD_REF}'; orchestrator finalizes the merge)"
+            echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA:-unknown} action=refuse reason=orchestrator_integration_pr"
+            echo "PR #${PR_NUMBER} is an orchestrator integration PR — auto-merge suppressed on the deterministic-skip path. finalize_integration_merge_if_needed owns the final merge after project completion."
+          elif [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
             if deterministic_skip_head_is_current; then
               auto_merge_ready_labels_allowed="true"
             fi
@@ -7310,9 +7334,10 @@ jobs:
         # failure alerts, hand a repeated review/autofix failure on this PR to
         # coding-workflows' heal intake so it is diagnosed and fixed through
         # the normal pipeline. The reporter counts consecutive failed runs from
-        # the PR comments fetched at run start and reports only past
-        # WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK (default 2); a single retryable
-        # failure stays with the stall poller. Resolver escalations are already
+        # the PR comments fetched at run start and reports once the streak
+        # reaches WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK (default 1, so every
+        # failed run is reported; the intake keys reports on the PR, so one PR
+        # keeps one open heal issue). Resolver escalations are already
         # reported through the ai:resolver-escalated label path. Fail-open by
         # construction: the script always exits 0 and the step never blocks
         # cleanup.
@@ -7321,7 +7346,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
-          WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK: ${{ vars.WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK || '2' }}
+          WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK: ${{ vars.WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK || '1' }}
           REPORT_WORKFLOW_NAME: ${{ github.workflow }}
           REPORT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           REPORT_WRAPPER_SHA: ${{ env.SCRIPT_REF }}
