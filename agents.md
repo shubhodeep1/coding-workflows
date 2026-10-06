@@ -1477,15 +1477,16 @@ pending waiver rows or unchecked follow-ups remain. The row shape of
 `security_pass_followup_issues` is unchanged. This is what un-parks advisories
 filed before the merge (#4090 / #4091) without a human.
 `MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS` (default `2`, `0` = unbounded) bounds
-how many judge rounds may end in `keep_fixing` for low/medium findings: `judge_round` beyond the cap
+how many judge rounds can grant another fix cycle: `judge_round` beyond the cap
 puts `keep_fixing_available: false` and `max_keep_fixing_rounds` in the
 diagnostics, and after verdict normalization the poller rewrites low/medium
 `keep_fixing` decisions to `accept_with_followup` with the justification
 prefixed `[keep_fixing capped after <c> judge round(s); converted to advisory
 follow-up]` (`SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=<N>
 round=<r> cap=<c> converted=<n>`), so the accept-all path runs and the project
-completes with deferred advisories only if no high, critical, or unrated finding remains. Those findings stay blocking and may receive another fix cycle; `fail` verdicts are untouched; unlike
-`MAX_SECURITY_PASS_JUDGE_ROUNDS` this cap never terminalizes. Project #3965
+completes with deferred advisories only if no high, critical, or unrated
+`keep_fixing` finding remains. A remaining blocking `keep_fixing` verdict
+terminalizes without waiving it or creating another fix issue. Project #3965
 ran fix cycles 6 and 7 on a 5-cycle budget because rounds 1 and 2 each chose
 `keep_fixing` and nothing bounded the sequence.
 Waivers travel to the engine as `SECURITY_AUDIT_WAIVED_FINDINGS`

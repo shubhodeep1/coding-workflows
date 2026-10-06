@@ -1942,15 +1942,10 @@ if ! [[ "${MAX_SECURITY_PASS_JUDGE_ROUNDS}" =~ ^[0-9]+$ ]]; then
   echo "::warning::MAX_SECURITY_PASS_JUDGE_ROUNDS must be a non-negative integer; defaulting to 0 (unbounded)"
   MAX_SECURITY_PASS_JUDGE_ROUNDS="0"
 fi
-# MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS bounds how many judge rounds per project
-# may end in `keep_fixing`.  From the next round on, every keep_fixing
-# decision is converted to accept_with_followup (the finding becomes a
-# tracked, non-blocking advisory filed after the merge) so the loop converges
-# without a human; `fail` is untouched.  Project #3965 ran 7 fix cycles on a
-# 5-cycle budget because rounds 1 and 2 each granted "one more" cycle and
-# nothing bounded the sequence.  Unlike MAX_SECURITY_PASS_JUDGE_ROUNDS, which
-# terminalizes for a human, this cap keeps the project unattended.  0 =
-# unbounded (legacy behaviour).
+# MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS bounds additional judge-granted fix
+# cycles. After the cap, low/medium keep_fixing becomes a tracked advisory;
+# high/critical/unrated keep_fixing terminalizes instead of granting another
+# cycle or waiving a blocking finding. 0 = unbounded (legacy behaviour).
 MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS="${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS:-2}"
 if ! [[ "${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}" =~ ^[0-9]+$ ]]; then
   echo "::warning::MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS must be a non-negative integer; defaulting to 2"
@@ -6884,6 +6879,10 @@ security_pass_exhaustion_judge() {
   accepted_count="$(jq -r '[.decisions[] | select(.action == "accept_with_followup")] | length' "${verdict_file}")"
   fixing_count="$(jq -r '[.decisions[] | select(.action == "keep_fixing")] | length' "${verdict_file}")"
   failed_count="$(jq -r '[.decisions[] | select(.action == "fail")] | length' "${verdict_file}")"
+  if [ "${keep_fixing_capped}" = "true" ] && [ "${fixing_count}" -gt 0 ]; then
+    echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=blocking_findings_after_cap round=${judge_round}"
+    return 1
+  fi
   summary="$(jq -r '.summary' "${verdict_file}")"
   echo "SECURITY_PASS_JUDGE_DECIDED tracking_issue=${TRACKING_NUM} round=${judge_round} head_sha=${head_sha} accepted=${accepted_count} keep_fixing=${fixing_count} failed=${failed_count}"
 
