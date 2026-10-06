@@ -2202,6 +2202,8 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then
     transfer_reason=unknown
     transfer_reason_dir=
+    transfer_reason_category=
+    transfer_reason_depth=
     transfer_reason_file="${RUNTIME_DIR}/review_sandbox_transfer_reason_${tmp_output##*/}"
     if [ -f "${transfer_reason_file}" ] && [ ! -L "${transfer_reason_file}" ] &&
        [ "$(wc -c < "${transfer_reason_file}")" -le 240 ] &&
@@ -2211,8 +2213,14 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
         '::error::Review isolation snapshot or transfer rejected (ValueError) reason='*)
           transfer_reason_tail="${transfer_reason_line#'::error::Review isolation snapshot or transfer rejected (ValueError) reason='}"
           case "${transfer_reason_tail}" in
-            admitted_inventory_missing|symlink_path|unsafe_file|file_changed|entry_limit|unsafe_directory|unsafe_result_path|workspace_size_limit|host_baseline_changed|host_path_conflict|transfer_rollback_failed)
+            admitted_inventory_missing|symlink_path|symlink_in_path|unsafe_file|file_changed|entry_limit|unsafe_directory|unsafe_result_path|workspace_size_limit|size_limit|host_baseline_changed|host_path_conflict|result_conflicts_host|transfer_rollback_failed)
               transfer_reason="${transfer_reason_tail}" ;;
+            'unsafe_directory category='*)
+              if [[ "${transfer_reason_tail}" =~ ^unsafe_directory\ category=(symlink|invalid_name|dot_github_subtree|env_like|sensitive_name|key_material_suffix|excluded_name_variant|other)\ depth=(1|2|3[+])$ ]]; then
+                transfer_reason=unsafe_directory
+                transfer_reason_category="${BASH_REMATCH[1]}"
+                transfer_reason_depth="${BASH_REMATCH[2]}"
+              fi ;;
             'unsafe_directory dir='*)
               transfer_reason_dir="${transfer_reason_tail#'unsafe_directory dir='}"
               if [[ "${transfer_reason_dir}" =~ ^[A-Za-z0-9._-][A-Za-z0-9._/-]{0,63}$ ]] &&
@@ -2227,7 +2235,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
           esac ;;
       esac
     fi
-    echo "::error::Review sandbox result transfer was incomplete; refusing editor fallback. reason=${transfer_reason}${transfer_reason_dir:+ dir=${transfer_reason_dir}}" | tee -a "${tmp_err}" >&2
+    echo "::error::Review sandbox result transfer was incomplete; refusing editor fallback. reason=${transfer_reason}${transfer_reason_dir:+ dir=${transfer_reason_dir}}${transfer_reason_category:+ category=${transfer_reason_category} depth=${transfer_reason_depth}}" | tee -a "${tmp_err}" >&2
     cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
     exit 1
   fi
