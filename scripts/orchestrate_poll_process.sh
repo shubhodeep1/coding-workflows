@@ -21460,8 +21460,12 @@ ${FOLLOWUP_BLOCK_REASON}"
       }
 
       _rb_fix_scope_is_protected() {
+        # Refs #6390: shared protected-path and ALLOW_WORKFLOW_EDITS opt-out set.
+        # .github/actions/* contains workflow-executed composite actions.
+        # .claude/* contains Claude Code hooks and settings.
+        # workflow-templates/* syncs workflows and .claude hooks to consumers.
         case "$1" in
-          .github/workflows/*|.github/actions/*|.github/ai/*|scripts/*|prompts/*|.claude/*) return 0 ;;
+          .github/workflows/*|.github/actions/*|.github/ai/*|scripts/*|prompts/*|.claude/*|workflow-templates/*) return 0 ;;
         esac
         return 1
       }
@@ -21495,8 +21499,8 @@ ${FOLLOWUP_BLOCK_REASON}"
               RB_FIX_SCOPE_REASON=forbidden_artifact
               RB_FIX_SCOPE_REJECTED_PATHS+=("${path}")
               ;;
-            scripts/*|prompts/*|.github/ai/*|.github/workflows/*)
-              if [ "${ALLOW_WORKFLOW_EDITS:-true}" != "true" ]; then
+            *)
+              if [ "${ALLOW_WORKFLOW_EDITS:-true}" != "true" ] && _rb_fix_scope_is_protected "${path}"; then
                 [ "${RB_FIX_SCOPE_REASON}" = forbidden_artifact ] || RB_FIX_SCOPE_REASON=workflow_edits_disabled
                 RB_FIX_SCOPE_REJECTED_PATHS+=("${path}")
               fi

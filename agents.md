@@ -619,9 +619,10 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   warn via Telegram, and consume a review-blocked retry without a push. Empty
   staged sets also reject; listing failures report the unverified staged paths.
   When `ALLOW_WORKFLOW_EDITS=false`, staged edits to `scripts/`, `prompts/`,
-  `.github/ai/`, or `.github/workflows/` reject through that same path even
-  if present in the PR's file list; `.github/prompts/` and `.github/scripts/`
-  remain excluded from staging and forbidden when pre-staged.
+  `.github/ai/`, `.github/workflows/`, `.github/actions/`, `.claude/`, or
+  `workflow-templates/` reject through that same path even if present in the
+  PR's file list; `.github/prompts/` and `.github/scripts/` remain excluded
+  from staging and forbidden when pre-staged.
   The review-blocked poller rejects a selected PR whose head repository is
   not the origin before its diff reaches the judge. For open PRs, branch
   preparation also requires the fetched origin tip to match the PR head SHA;

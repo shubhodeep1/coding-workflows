@@ -10015,6 +10015,65 @@ def test_review_blocked_fix_scope_rejects_workflow_edit_opt_out():
 	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
 
 
+def test_review_blocked_fix_scope_rejects_workflow_edit_opt_out_automation_assets():
+	failures = []
+	for path in (
+		"workflow-templates/ai-review.yml",
+		"workflow-templates/.claude/hooks/x.py",
+		".github/actions/x/action.yml",
+		".claude/hooks/x.py",
+	):
+		result = _review_blocked_fix_scope_case(
+			touch=path, files=[path], env_overrides={"ALLOW_WORKFLOW_EDITS": "false"},
+		)
+		try:
+			assert f"reason=workflow_edits_disabled rejected=1 paths={path}" in result["stdout"]
+			assert result.get("git_push_calls", []) == []
+			assert result.get("review_blocked_fix_commit_calls", []) == []
+			assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+		except AssertionError as exc:
+			failures.append((path, str(exc)))
+	assert not failures, failures
+
+
+def test_review_blocked_fix_scope_rejects_mixed_workflow_edit_opt_out():
+	result = _review_blocked_fix_scope_case(
+		touch="sandbox_fix.txt", files=["sandbox_fix.txt", "workflow-templates/ai-plan.yml"],
+		env_overrides={
+			"ALLOW_WORKFLOW_EDITS": "false",
+			"MOCK_CODEX_TOUCH_FILE": "sandbox_fix.txt\nworkflow-templates/ai-plan.yml",
+		},
+	)
+	assert "reason=workflow_edits_disabled rejected=1 paths=workflow-templates/ai-plan.yml" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+
+
+def test_review_blocked_fix_scope_accepts_template_pr_file_by_default():
+	result = _review_blocked_fix_scope_case(
+		touch="workflow-templates/ai-review.yml", files=["workflow-templates/ai-review.yml"],
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
+	assert any("HEAD:ai/issue-10" in call for call in result.get("git_push_calls", []))
+
+
+def test_review_blocked_fix_scope_rejects_template_outside_pr():
+	result = _review_blocked_fix_scope_case(
+		touch="workflow-templates/ai-review.yml", files=["sandbox_fix.txt"],
+	)
+	assert "reason=protected_not_in_pr rejected=1 paths=workflow-templates/ai-review.yml" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+
+
+def test_review_blocked_fix_scope_uses_shared_protected_predicate():
+	text = POLLER_SCRIPT.read_text(encoding="utf-8")
+	predicate = text.split("      _rb_fix_scope_is_protected() {", 1)[1].split("      rb_fix_scope_check() {", 1)[0]
+	check = text.split("      rb_fix_scope_check() {", 1)[1].split("      # Build the judge prompt", 1)[0]
+	assert "|workflow-templates/*) return 0 ;;" in predicate
+	assert 'if [ "${ALLOW_WORKFLOW_EDITS:-true}" != "true" ] && _rb_fix_scope_is_protected "${path}"; then' in check
+
+
 def test_review_blocked_fix_scope_reports_all_workflow_edit_opt_out_paths():
 	result = _review_blocked_fix_scope_case(
 		touch="scripts/a.sh", files=["scripts/a.sh", "scripts/b.sh"],
