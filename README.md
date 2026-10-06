@@ -1120,14 +1120,15 @@ not delete wrappers that are already present in `.github/workflows/`.
 > prefixes) no longer hide a nested `git push`: the guard checks the session
 > checkout and, if it does not block, asks for confirmation because the
 > effective directory is uncertain. A `git commit` in the same uncertain
-> context remains warning-only.
+> context remains warning-only, except an `env -C` commit with an unresolved
+> directory: that asks rather than consulting the session checkout's PRs.
 > When a `git push` source cannot be resolved locally (for example,
 > a shell-expanded source), the merged-PR guard asks for confirmation rather
 > than using the session checkout as a substitute for the pushed commit.
 > A push with a destination that cannot be resolved locally (such as
 > `git push origin HEAD:$DEST`) also asks instead of checking the checkout branch.
-> If `--repo` and a positional remote are both supplied, the guard checks the
-> refspecs after that remote, not the remote name as a branch. If the local
+> If `--repo` and a positional repository are both supplied, Git uses the
+> positional repository; the guard checks refspecs after it. If the local
 > remote-config lookup cannot identify the positional repository as a GitHub
 > remote or URL (including an unconfigured path or non-GitHub URL), the guard
 > blocks the push instead of treating it as a refspec. A GitHub URL is checked

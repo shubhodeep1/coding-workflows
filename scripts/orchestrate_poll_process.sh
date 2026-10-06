@@ -91,7 +91,7 @@ unset _OPP_LIB_DIR
 _POLLER_AI_ENGINE_SH="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo scripts)/ai_engine.sh"
 [ -f "${_POLLER_AI_ENGINE_SH}" ] || _POLLER_AI_ENGINE_SH="scripts/ai_engine.sh"
 
-# poller_claude_judge <ROLE> <prompt_file> <output_file> <log_file> [model_hint]
+# poller_claude_judge <ROLE> <prompt_file> <output_file> <log_file> [model_hint] [workdir]
 # Runs one judge call on Claude when <ROLE> resolves to `claude` for the
 # current tracking issue: labels come from the cached TRACKING_LABELS (plan
 # D2; no API call; one tick spans many projects, so the job's event payload
@@ -103,7 +103,7 @@ _POLLER_AI_ENGINE_SH="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && p
 # otherwise claude_run's status (0 success, 124 timeout, other = crash).
 poller_claude_judge()
 {
-  local role="$1" prompt_file="$2" output_file="$3" log_file="$4" model_hint="${5:-${MODEL_EDITOR:-}}"
+  local role="$1" prompt_file="$2" output_file="$3" log_file="$4" model_hint="${5:-${MODEL_EDITOR:-}}" judge_workdir="${6:-${PWD}}"
   local judge_engine="codex" judge_rc=0 judge_read_only=false
   [ -f "${_POLLER_AI_ENGINE_SH}" ] || return 75
   # shellcheck source=ai_engine.sh
@@ -117,7 +117,7 @@ poller_claude_judge()
   fi
   AI_ENGINE_READ_ONLY="${judge_read_only}" \
     AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
-    claude_run "${role}" "${prompt_file}" "${output_file}" "${PWD}" 2> >(tee -a "${log_file}" >&2) || judge_rc=$?
+    claude_run "${role}" "${prompt_file}" "${output_file}" "${judge_workdir}" 2> >(tee -a "${log_file}" >&2) || judge_rc=$?
   if [ "${judge_rc}" -eq 86 ]; then
     echo "::error::Trusted support changed during the read-only judge run." >&2
     exit 86
@@ -8807,14 +8807,22 @@ invoke_judge_for_integration_conflict() {
   sanitize_codex_prompt_file "${prompt_file}"
   if [ -z "${judge_conflicts}" ]; then
     echo "  [integration-heal] ${default_branch} merges into ${integration_branch} without conflicts locally; skipping the judge agent for PR #${final_pr}."
-  elif ! bash "${ORCH_CODEX_ISOLATED_EXEC}" run --mode workspace --workdir "${judge_wt}" \
-      -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-6-sol}" --sandbox danger-full-access \
-      < "${prompt_file}" > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log"; then
-    echo "::warning::Judge exec failed for integration conflict on PR #${final_pr}."
-    rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
-    _integration_judge_remove_worktree "${judge_wt}"
-    rm -rf -- "${baseline_dir}"
-    return 1
+  else
+    local integration_judge_rc=0
+    poller_claude_judge INTEGRATION_JUDGE "${prompt_file}" "${output_file}" "${RUNTIME_DIR}/integration_judge.log" "${MODEL_EDITOR:-openai/gpt-6-sol}" "${judge_wt}" || integration_judge_rc=$?
+    if [ "${integration_judge_rc}" -eq 75 ]; then
+      integration_judge_rc=0
+      bash "${ORCH_CODEX_ISOLATED_EXEC}" run --mode workspace --workdir "${judge_wt}" \
+        -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-6-sol}" --sandbox danger-full-access \
+        < "${prompt_file}" > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log" || integration_judge_rc=$?
+    fi
+    if [ "${integration_judge_rc}" -ne 0 ]; then
+      echo "::warning::Judge exec failed for integration conflict on PR #${final_pr}."
+      rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+      _integration_judge_remove_worktree "${judge_wt}"
+      rm -rf -- "${baseline_dir}"
+      return 1
+    fi
   fi
   echo "  [integration-heal] Judge exec completed for PR #${final_pr}."
   local expected_conflict_count
@@ -23656,7 +23664,14 @@ ${PR_DIFF}
     poller_claude_judge WAVE_JUDGE "${judge_effective_prompt_file}" "${JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/judge_log.txt" || wave_judge_rc=$?
     if [ "${wave_judge_rc}" -eq 75 ]; then
       : > "${JUDGE_OUTPUT_FILE}"
-      bash "${ORCH_CODEX_ISOLATED_EXEC}" run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${judge_effective_prompt_file}" > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
+      if [ -f scripts/clarify_isolated_run.sh ]; then
+        MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
+          bash scripts/clarify_isolated_run.sh "${judge_effective_prompt_file}" "${JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/judge_log.txt" codex WAVE_JUDGE || {
+            echo "::warning::Isolated wave-judge fallback failed for tracking issue #${TRACKING_NUM}; retrying if attempts remain." >&2
+          }
+      else
+        echo "::error::Isolated wave-judge fallback unavailable; refusing host Codex." >&2
+      fi
     fi
     rm -f "${judge_attempt_prompt_file}"
     judge_json_candidate="$(extract_judge_json_with_status "${JUDGE_OUTPUT_FILE}")"
