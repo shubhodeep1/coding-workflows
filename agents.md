@@ -367,13 +367,14 @@ Phases of the unattended pipeline (each is a separate workflow file under
     linked failed run. Label-escalation `issue` and `pull_request` reports keep
     only the `run_refs` GitHub ties to them before any log read: the run is in
     the source repository, completed `failure` / `timed_out` / `cancelled`, and
-    is linked by a trusted comment (OWNER/MEMBER/COLLABORATOR or
-    `github-actions[bot]`; the pipeline account in this repo), or (PRs)
-    belongs to the pull request. A display-title match alone never authorizes
+    is linked by a recognized failure comment from `github-actions[bot]`
+    (the authenticated pipeline account in this repo), or (PRs) belongs to
+    the pull request. Human collaborator comments and issue bodies do not
+    vouch for label-report runs. A display-title match alone never authorizes
     reading logs; if comments are unavailable, unassociated runs are dropped.
     Dropped refs log `provenance_rejected`; the escalation itself still
-    proceeds. The reporter lets only trusted authors' run links reorder its
-    title-matched runs.
+    proceeds. The reporter lets only recognized automation failure links
+    reorder its title-matched runs.
     A report whose failure reason is `identical_failure_cap`, or a generation
     > 1 of its lineage, is deterministic (`is_deterministic_failure`): the
     intake never files it as `transient` (remaps to `inconclusive`,

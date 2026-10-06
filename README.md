@@ -1592,9 +1592,10 @@ through `clarify → plan → implement → review`.
   reference instead: before any job log is read, the intake keeps a reference
   only when GitHub reports the run in the source repository, completed with
   `failure`, `timed_out` or `cancelled`, and tied to the escalated issue or PR
-  (a link in a comment from an OWNER, MEMBER, COLLABORATOR or
-  `github-actions[bot]`, which in this repository must be the pipeline account;
-  or, for a PR, the run's pull request or `[pr:<N>]` dispatch name). A
+  (a link in a recognized pipeline failure comment from `github-actions[bot]`
+  in consumer repositories or the authenticated pipeline account here; or,
+  for a PR, the run's pull request or `[pr:<N>]` dispatch name). Human
+  collaborator comments and issue bodies do not vouch for label-report runs. A
   matching display title alone does not establish association. If the comment
   history is unavailable and no PR association can be verified, the report
   continues without that run's logs. Dropped references log

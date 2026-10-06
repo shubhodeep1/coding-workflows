@@ -722,13 +722,9 @@ def build_issue_payload(
 	body = sanitize_text(issue.get("body"))
 	comment_texts = [sanitize_text(comment.get("body")) for comment in comments if isinstance(comment, dict)]
 	matching_runs = select_failed_runs(runs, title=str(issue.get("title") or ""))
-	# Only links from the issue's trusted author or a trusted automation comment
-	# reorder the title-matched runs; any other commenter's link is ignored.
-	# This is a priority hint only (the intake re-verifies every run reference
-	# before it reads logs), so it uses association / bot trust without the
-	# pipeline login, which the reporter does not know.
-	priority_texts = [body] if _trusted_heal_author(issue) else []
-	priority_texts += [
+	# Only recognized automation failure comments can prioritize candidate runs;
+	# the reporter cannot authenticate a consumer's pipeline PAT login.
+	priority_texts = [
 		sanitize_text(comment.get("body")) for comment in comments
 		if isinstance(comment, dict) and _trusted_run_link_comment(comment, repo=repo, self_repo="", trusted_login="")
 	]
@@ -1759,12 +1755,12 @@ def _comment_author(comment: dict[str, Any]) -> str:
 
 
 def _trusted_run_link_comment(comment: Any, *, repo: str, self_repo: str, trusted_login: str) -> bool:
-	"""True when ``comment`` may vouch for a run link on an escalated issue / PR.
+	"""True for a recognizable automation failure comment on an issue / PR.
 
-	The author must have a login and be a trusted bot or have an OWNER /
-	MEMBER / COLLABORATOR association. In the workflow source repository
-	(``repo == self_repo``) the author must also be the pipeline account
-	``trusted_login``; an empty ``trusted_login`` then trusts no comment.
+	Consumer label reports trust only the GitHub Actions bot, not a human
+	commenter's association. This repository also requires the authenticated
+	pipeline login (which may be a human account). Neither trusts arbitrary
+	comments, even from that account, as a run-to-issue link.
 	"""
 	if not isinstance(comment, dict):
 		return False
@@ -1773,10 +1769,13 @@ def _trusted_run_link_comment(comment: Any, *, repo: str, self_repo: str, truste
 		return False
 	if author not in PHASE_REPORT_TRUSTED_BOT_LOGINS and comment.get("author_association") not in PHASE_REPORT_TRUSTED_ASSOCIATIONS:
 		return False
+	body = sanitize_text(comment.get("body")).lstrip()
+	if not body.startswith(AUTOFIX_FAILURE_COMMENT_MARKERS) and not any(body.startswith(prefixes) for prefixes in PHASE_FAILURE_COMMENT_PREFIXES.values()):
+		return False
 	if self_repo and str(repo or "").lower() == self_repo.lower():
 		login = str(trusted_login or "").strip().lower()
 		return bool(login) and author == login
-	return True
+	return author in PHASE_REPORT_TRUSTED_BOT_LOGINS
 
 
 def _verify_label_run_refs(
@@ -1787,10 +1786,11 @@ def _verify_label_run_refs(
 
 	A reference is kept only when the GitHub-read run is in the source
 	repository, has the claimed id, completed with a reportable conclusion,
-	and is associated with the escalated issue / PR: a trusted comment links
-	it or (pull requests only) it belongs to the pull request. A matching
-	display title alone cannot identify an issue. Missing comments or identity
-	only disable the comment criterion; the report itself is never rejected.
+	and is associated with the escalated issue / PR: a verified automation
+	failure comment links it or (pull requests only) it belongs to the pull
+	request. A matching display title alone cannot identify an issue. Missing
+	comments or identity only disable the comment criterion; the report itself
+	is never rejected.
 	"""
 	kind = payload.get("source_kind")
 	refs = payload.get("run_refs") or []
