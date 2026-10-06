@@ -92,7 +92,7 @@ if [ "${hide}" = true ] && [ -f CLAUDE.md ]; then
 fi
 env -i PATH="${PATH}" HOME="${HOME}" FAKE_CLAUDE_LOG="${FAKE_CLAUDE_LOG}" \
 	FAKE_UPSTREAM_ACCOUNT="${account}" CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder \
-	ANTHROPIC_BASE_URL=http://127.0.0.1:8765 "$@"
+	ANTHROPIC_BASE_URL=http://127.0.0.1:8765 python3 "${FAKE_CLAUDE_BIN}" "${@:2}"
 '''
 
 
@@ -136,6 +136,7 @@ def sandbox(tmp_path: Path):
 			"CLAUDE_ENGINE_POOL_DIR": str(pool),
 			"SUPPORT_INSTRUCTIONS_FILE": str(INSTRUCTIONS),
 			"FAKE_CLAUDE_LOG": str(tmp_path / "calls.jsonl"),
+			"FAKE_CLAUDE_BIN": str(fake),
 			"FAKE_HELPER_LOG": str(tmp_path / "helper-args"),
 			"FAKE_HELPER_BACKUP": str(tmp_path / "claude-md-backup"),
 			"PYTHONDONTWRITEBYTECODE": "1",

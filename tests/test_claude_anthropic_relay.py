@@ -146,7 +146,11 @@ def test_count_tokens_path_is_allowed(chain) -> None:
 	assert status == 200
 
 
-@pytest.mark.parametrize("tool_type", ("web_search_20250305", "web_fetch_20250910", "code_execution_20250522", "mcp_toolset"))
+@pytest.mark.parametrize("tool_type", (
+	"web_search_20250305", "web_fetch_20250910", "code_execution_20250522", "mcp_toolset",
+	"bash_code_execution_20250825", "text_editor_code_execution_20250728",
+	"computer_20250124", "future_provider_tool_20270101",
+))
 @pytest.mark.parametrize("path", ("/v1/messages", "/v1/messages/count_tokens"))
 def test_provider_egress_tool_is_rejected_by_host_broker(chain, tool_type: str, path: str) -> None:
 	status, _, _ = _post(chain["bridge_port"], path=path, body={"model": MODEL, "tools": [{"type": tool_type}]})
@@ -178,6 +182,8 @@ def test_client_executed_tool_is_forwarded(chain, tool: dict) -> None:
 
 def test_provider_egress_predicate() -> None:
 	assert relay.request_has_provider_egress({"tools": [{"type": "web_search_20250305"}]})
+	assert relay.request_has_provider_egress({"tools": [{"type": "bash_code_execution_20250825"}]})
+	assert relay.request_has_provider_egress({"tools": [{"type": "future_provider_tool_20270101"}]})
 	assert relay.request_has_provider_egress({"mcp_servers": []})
 	assert relay.request_has_provider_egress({"tools": [{"type": None}]})
 	assert not relay.request_has_provider_egress({"tools": [{"name": "Bash"}, {"type": "custom"}]})

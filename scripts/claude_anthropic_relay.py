@@ -100,7 +100,13 @@ def request_has_provider_egress(request: dict) -> bool:
 			return True
 		if "type" in tool:
 			tool_type = tool["type"]
-			if not isinstance(tool_type, str) or tool_type.startswith(PROVIDER_EGRESS_TOOL_PREFIXES) or tool_type in PROVIDER_EGRESS_TOOL_TYPES:
+			# Unknown typed tools may execute on the provider; only custom tools run in the client.
+			if (
+				not isinstance(tool_type, str)
+				or tool_type.startswith(PROVIDER_EGRESS_TOOL_PREFIXES)
+				or tool_type in PROVIDER_EGRESS_TOOL_TYPES
+				or tool_type != "custom"
+			):
 				return True
 	return False
 
