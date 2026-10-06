@@ -502,8 +502,10 @@ def test_fresh_poster_posts_once(tmp_path: Path) -> None:
 	assert result.returncode == 0, result.stderr
 	assert "Posted auto-answer on issue #6262" in result.stdout
 	assert "SKIP_AUTO_ANSWER=false" in env
+	assert calls[0][:2] == ["api", "repos/owner/repo/issues/6262"]
+	assert "--slurp" in calls[1]
 	assert len([call for call in calls if call[:2] == ["api", "repos/owner/repo/issues/6262/comments"]]) == 1
-	assert any("--slurp" in call for call in calls)
+	assert calls[2][:2] == ["api", "repos/owner/repo/issues/6262/comments"]
 
 
 @pytest.mark.parametrize("extra, reason", [
@@ -557,6 +559,25 @@ def test_escalation_cannot_override_newer_human_answer(tmp_path: Path) -> None:
 	assert result.returncode == 0 and "reason=newer_answer" in result.stdout
 	assert "SKIP_AUTO_ANSWER=true" in env
 	assert not any(call[0] == "issue" or call[:2] == ["api", "repos/owner/repo/issues/6262/comments"] for call in calls)
+
+
+def test_escalation_rechecks_immediately_before_comment_and_then_edits_labels(tmp_path: Path) -> None:
+	result, calls, env = _run_poster(tmp_path, answer="Q1: ESCALATE\n")
+	assert result.returncode == 0 and "SKIP_AUTO_ANSWER=true" in env, result.stderr
+	assert len(calls) == 4
+	assert calls[0][:2] == ["api", "repos/owner/repo/issues/6262"]
+	assert "--slurp" in calls[1]
+	assert calls[2][:2] == ["api", "repos/owner/repo/issues/6262/comments"]
+	assert any(arg.startswith("body=Autonomous resolution") for arg in calls[2])
+	assert calls[3][:3] == ["issue", "edit", "6262"]
+
+
+@pytest.mark.parametrize("kwargs", [{"comments_fail": True}, {"issue_response": '{"state":"closed"}'}])
+def test_escalation_recheck_blocks_both_post_and_label_edit(tmp_path: Path, kwargs: dict) -> None:
+	result, calls, env = _run_poster(tmp_path, answer="Q1: ESCALATE\n", **kwargs)
+	assert "SKIP_AUTO_ANSWER=true" in env
+	assert all(call[0] != "issue" and call[:2] != ["api", "repos/owner/repo/issues/6262/comments"] for call in calls)
+	assert result.returncode == (1 if kwargs.get("comments_fail") else 0)
 
 
 @pytest.mark.parametrize("decision", ["Q1: ESCALATE", "**Q1**: **ESCALATE**", "Q0: ESCALATE"])

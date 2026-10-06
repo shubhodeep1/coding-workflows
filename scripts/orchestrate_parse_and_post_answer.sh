@@ -60,6 +60,31 @@ answer_freshness_recheck() {
 	printf '%s\n' "${decision}"
 }
 
+enforce_answer_freshness() {
+	FRESHNESS_REASON="$(answer_freshness_recheck)"
+	if [ "${FRESHNESS_REASON}" = "fresh" ]; then
+		return
+	fi
+	echo "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=answer_freshness reason=${FRESHNESS_REASON} outcome=skip issue=${ISSUE_NUMBER} comment_id=${CLARIFICATION_COMMENT_ID}"
+	if [ "${MEMORY_HELPERS_AVAILABLE}" = "true" ] && [ "${CLAIMED}" = "true" ]; then
+		memory_processed_command_complete \
+			--issue-number "${ISSUE_NUMBER}" \
+			--comment-id "${CLARIFICATION_COMMENT_ID}" \
+			--command "answer" \
+			--status "superseded" \
+			--metadata-json "$(jq -cn --arg clarify_comment_id "${CLARIFICATION_COMMENT_ID}" --arg superseded_reason "${FRESHNESS_REASON}" '{clarify_comment_id: $clarify_comment_id, superseded_reason: $superseded_reason}')" >/dev/null || echo "::warning::Failed to record superseded completion in processed-command ledger (fail-open)."
+	fi
+	{
+		echo "SKIP_AUTO_ANSWER=true"
+		echo "LOOP_BLOCKED=false"
+	} >> "$GITHUB_ENV"
+	if [ "${FRESHNESS_REASON}" = "recheck_unavailable" ]; then
+		echo "::error::Answer freshness could not be verified for issue #${ISSUE_NUMBER}."
+		exit 1
+	fi
+	exit 0
+}
+
 for required_env in GITHUB_REPOSITORY GITHUB_ENV GITHUB_ACTOR GITHUB_RUN_ID GITHUB_RUN_ATTEMPT ISSUE_NUMBER ISSUE_URL CLARIFICATION_COMMENT_ID RUNTIME_DIR CODEX_OUTPUT_FILE; do
 	require_env "${required_env}"
 done
@@ -212,45 +237,12 @@ if [ -f "${SCRIPT_DIR}/ai_memory_lib.py" ]; then
 	fi
 fi
 
-if [ "${SKIP_AUTO_ANSWER}" != "true" ] || [ "${LOOP_BLOCKED}" = "true" ] || [ "${HAS_ESCALATE}" = "true" ]; then
-	FRESHNESS_REASON="$(answer_freshness_recheck)"
-	if [ "${FRESHNESS_REASON}" != "fresh" ]; then
-		echo "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=answer_freshness reason=${FRESHNESS_REASON} outcome=skip issue=${ISSUE_NUMBER} comment_id=${CLARIFICATION_COMMENT_ID}"
-		if [ "${MEMORY_HELPERS_AVAILABLE}" = "true" ] && [ "${CLAIMED}" = "true" ]; then
-			memory_processed_command_complete \
-				--issue-number "${ISSUE_NUMBER}" \
-				--comment-id "${CLARIFICATION_COMMENT_ID}" \
-				--command "answer" \
-				--status "superseded" \
-				--metadata-json "$(jq -cn --arg clarify_comment_id "${CLARIFICATION_COMMENT_ID}" --arg superseded_reason "${FRESHNESS_REASON}" '{clarify_comment_id: $clarify_comment_id, superseded_reason: $superseded_reason}')" >/dev/null || echo "::warning::Failed to record superseded completion in processed-command ledger (fail-open)."
-		fi
-		{
-			echo "SKIP_AUTO_ANSWER=true"
-			echo "LOOP_BLOCKED=false"
-		} >> "$GITHUB_ENV"
-		if [ "${FRESHNESS_REASON}" = "recheck_unavailable" ]; then
-			echo "::error::Answer freshness could not be verified for issue #${ISSUE_NUMBER}."
-			exit 1
-		fi
-		exit 0
-	fi
-fi
-
 if [ "${LOOP_BLOCKED}" = "true" ] || [ "${HAS_ESCALATE}" = "true" ]; then
 	if [ "${HAS_ESCALATE}" = "true" ] && [ "${LOOP_BLOCKED}" != "true" ]; then
 		echo "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=auto_answer reason=escalate_requested outcome=defer issue=${ISSUE_NUMBER} comment_id=${CLARIFICATION_COMMENT_ID} cycle=${CYCLE} max_cycles=${MAX_CYCLES}"
 	else
 		echo "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=auto_answer reason=loop_guard_blocked outcome=defer issue=${ISSUE_NUMBER} comment_id=${CLARIFICATION_COMMENT_ID} loop_reason=${LOOP_REASON} cycle=${CYCLE} max_cycles=${MAX_CYCLES}"
 	fi
-	if [ -f "${SCRIPT_DIR}/label_helpers.sh" ]; then
-		# shellcheck source=/dev/null
-		source "${SCRIPT_DIR}/label_helpers.sh"
-		ensure_label_exists "ai:blocked" "${REPOSITORY}"
-	fi
-
-	gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPOSITORY}" \
-		--add-label 'ai:blocked' --remove-label 'ai:planning' --remove-label 'ai:clarification' >/dev/null 2>&1 || true
-
 	# Build escalation comment — ESCALATE-triggered vs loop-guard-triggered
 	if [ "${HAS_ESCALATE}" = "true" ] && [ "${LOOP_BLOCKED}" != "true" ]; then
 		ESCALATION_SECTION="$(printf '%s' "${ANSWERS_BODY}" | sed -n '/^ESCALATION/,$ p')"
@@ -278,12 +270,20 @@ if [ "${LOOP_BLOCKED}" = "true" ] || [ "${HAS_ESCALATE}" = "true" ]; then
 		} > "${RUNTIME_DIR}/loop_break_comment.md"
 	fi
 
+	enforce_answer_freshness
 	LOOP_BREAK_RESPONSE="$(gh_retry gh api "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
 		-f body="$(cat "${RUNTIME_DIR}/loop_break_comment.md")" || true)"
 	LOOP_BREAK_COMMENT_ID="$(printf '%s' "${LOOP_BREAK_RESPONSE}" | jq -r '.id // 0' 2>/dev/null || echo "0")"
 	if [ "${LOOP_BREAK_COMMENT_ID}" = "0" ]; then
 		echo "::warning::Failed to post or parse loop-break comment for issue #${ISSUE_NUMBER}; continuing with comment ID 0."
 	fi
+	if [ -f "${SCRIPT_DIR}/label_helpers.sh" ]; then
+		# shellcheck source=/dev/null
+		source "${SCRIPT_DIR}/label_helpers.sh"
+		ensure_label_exists "ai:blocked" "${REPOSITORY}"
+	fi
+	gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${REPOSITORY}" \
+		--add-label 'ai:blocked' --remove-label 'ai:planning' --remove-label 'ai:clarification' >/dev/null 2>&1 || true
 
 	if [ -f "${SCRIPT_DIR}/tg_helpers.sh" ]; then
 		# shellcheck source=/dev/null
@@ -352,6 +352,7 @@ fi
 	echo "${ANSWERS_BODY}"
 } > "${RUNTIME_DIR}/answer_comment.md"
 
+enforce_answer_freshness
 ANSWER_RESPONSE="$(gh_retry gh api "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
 	-f body="$(cat "${RUNTIME_DIR}/answer_comment.md")")"
 ANSWER_COMMENT_ID="$(printf '%s' "${ANSWER_RESPONSE}" | jq -r '.id // 0')"

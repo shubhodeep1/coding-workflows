@@ -1789,6 +1789,9 @@ depend on it.
 
 ## Operational lessons learned (categorised)
 
+**Clarify-respond**
+- `scripts/orchestrate_parse_and_post_answer.sh` rechecks issue and comment freshness immediately before either comment POST. On escalation it applies `ai:blocked` only after posting; a stale or unavailable check changes neither the comment nor the labels.
+
 **General / Tooling**
 - Treat the `openai/codex#11151` no-edit regression as closed only with function-style patch tooling; keep `apply_patch_tool_type = "function"` as the settled baseline. Pointers: `scripts/codex_model_catalog.json`, `scripts/write_codex_config.sh`.
 - Keep `low` as the default gpt-6-sol verbosity across workflow entrypoints unless a specific phase re-proves the old announce-without-emit failure. Pointers: `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/implement.yml`, `.github/workflows/orchestrate.yml`.
