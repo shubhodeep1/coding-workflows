@@ -20,6 +20,9 @@ block the push. Unknown directories fall back to the session checkout with a
 warning; unresolved push sources or destinations request confirmation.
 Repeated targets share a PR snapshot
 per repository and branch, while different source tips are checked separately.
+A `cd` or `exit` with a redirect that might fail (anything but a plain
+`/dev/null` target) makes the directory unknown. After checking the session
+checkout, a push in an unknown directory asks for confirmation.
 
 Detection rule — all three conditions must hold before the command is blocked:
 
@@ -122,6 +125,8 @@ GIT_GLOBAL_OPTS_WITH_VALUE = frozenset(
 
 # Shell punctuation we treat as command separators when tokenizing a Bash line.
 _SHELL_PUNCTUATION_CHARS = ";&|\n<>"
+_FD_PREFIX_REDIRECT_OPERATORS = frozenset({"<", ">", ">>", ">|", "<>", ">&", "<&", "<<", "<<<"})
+_SHELL_CONTROL_PREFIXES = frozenset({"if", "then", "elif", "else", "do", "while", "until", "{", "(", "!"})
 _SHELL_WORD_DELIMITERS = frozenset(" \t\r" + _SHELL_PUNCTUATION_CHARS)
 
 _API_WRITE_METHODS = frozenset({"PUT", "POST", "PATCH"})
@@ -273,15 +278,8 @@ def _shell_segments(command: str) -> list[list[str]]:
 	return segments
 
 
-def _is_unquoted_fd_prefix(command: str, digits: str, operator: str) -> bool:
-	"""Only recognize a literal descriptor immediately before a redirect."""
-	return re.search(
-		r"(?:^|[\s;&|()])" + re.escape(digits) + re.escape(operator[0]) + r"$", command
-	) is not None
-
-
-def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
-	"""Return simple commands and the operator preceding each one.
+def _shell_segments_with_redirects(command: str) -> list[tuple[str, list[str], bool]]:
+	"""Return simple commands, their preceding operator and redirect uncertainty.
 
 	This is not a Bash interpreter. Unsupported control flow is marked unknown
 	by the caller, never executed to infer an authorization decision.
@@ -290,44 +288,86 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	lexer.commenters = ""
 	lexer.whitespace = " \t\r"
 	lexer.whitespace_split = True
-	result: list[tuple[str, list[str]]] = []
+	# shlex groups adjacent punctuation (e.g. `>;`), but Bash still sees
+	# a redirect without a target followed by a command separator.
+	tokens: list[tuple[str, int]] = []
+	for raw_token in lexer:
+		if raw_token and set(raw_token) <= set(_SHELL_PUNCTUATION_CHARS):
+			part_end = lexer.instream.tell() - len(raw_token)
+			for part in re.findall(r"&>>|&>|&&|\|\||>>|>\||>&|<&|<<<|<<|<>|[;<>&|\n]", raw_token):
+				part_end += len(part)
+				tokens.append((part, part_end))
+		else:
+			tokens.append((raw_token, lexer.instream.tell()))
+	result: list[tuple[str, list[str], bool]] = []
 	segment: list[str] = []
+	segment_word_end = -1
 	operator = ""
-	redirect_target = False
-	retained_word_end = -1
-	for token in lexer:
-		token_end = lexer.instream.tell()
-		if redirect_target:
-			if token == "&":
-				continue  # The next token is the redirected file descriptor.
-			redirect_target = False
-			retained_word_end = -1
+	redirect_target: str | None = None
+	redirect_may_fail = False
+	for token, token_end in tokens:
+		if redirect_target is not None and not (token and set(token) <= set(_SHELL_PUNCTUATION_CHARS)):
+			if redirect_target not in (">", ">>", ">|", "&>", "&>>", "<") or token != "/dev/null":
+				redirect_may_fail = True
+			redirect_target = None
 			continue
-		if token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token):
-			# shlex reads one character past a word. Pop only when the whole raw
-			# word is unquoted ASCII digits adjacent to the redirect; any quote
-			# or escape in the word keeps it as an argument.
-			if (not token.startswith("&") and segment and segment[-1].isascii() and segment[-1].isdigit()
-				and retained_word_end == token_end - len(token)):
-				raw_start = retained_word_end - len(segment[-1]) - 1
-				if (raw_start >= 0 and command[raw_start:retained_word_end - 1] == segment[-1]
-					and (raw_start == 0 or command[raw_start - 1] in _SHELL_WORD_DELIMITERS)):
+		if redirect_target is not None:
+			redirect_may_fail = True
+			redirect_target = None
+		if token == ">|" or (token and set(token) <= set("<>") | {"&"} and ("<" in token or ">" in token)):
+			# Bash &> and &>> take no fd prefix (#6249); keep adjacent digits as
+			# arguments for these and unknown redirects so push refspecs are checked.
+			if token in _FD_PREFIX_REDIRECT_OPERATORS and segment and segment[-1].isascii() and segment[-1].isdigit():
+				# Only an unquoted digit immediately attached to a redirect is an fd.
+				redirect_start = token_end - len(token)
+				if command[redirect_start:redirect_start + len(token)] != token:
+					redirect_start -= 1  # shlex may read one character ahead.
+				fd_start = redirect_start - len(segment[-1])
+				if fd_start >= 0 and segment_word_end == redirect_start and command[fd_start:redirect_start] == segment[-1] and (fd_start == 0 or command[fd_start - 1] in _SHELL_WORD_DELIMITERS):
 					segment.pop()
-			redirect_target = True
-			retained_word_end = -1
+					segment_word_end = -1
+			redirect_target = token
 			continue
 		if token and set(token) <= set(_SHELL_PUNCTUATION_CHARS):
 			if segment:
-				result.append((operator, segment))
+				result.append((operator, segment, redirect_may_fail))
 				segment = []
+				segment_word_end = -1
+				redirect_may_fail = False
 			operator = token
-			retained_word_end = -1
 		else:
 			segment.append(token)
-			retained_word_end = token_end
+			# shlex reads one delimiter ahead of a word, so use its raw end.
+			segment_word_end = token_end - (token_end > 0 and command[token_end - 1] in _SHELL_WORD_DELIMITERS)
+	if redirect_target is not None:
+		redirect_may_fail = True
 	if segment:
-		result.append((operator, segment))
+		result.append((operator, segment, redirect_may_fail))
 	return result
+
+
+def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
+	"""Return simple commands and the operator preceding each one."""
+	return [(operator, tokens) for operator, tokens, _ in _shell_segments_with_redirects(command)]
+
+
+def _command_after_control_prefix(tokens: list[str]) -> tuple[list[str], bool]:
+	"""Expose a command behind shell control words without trusting its cwd."""
+	control_prefix_seen = False
+	while tokens:
+		if tokens[0] in _SHELL_CONTROL_PREFIXES or tokens[0].endswith(")"):
+			tokens = tokens[1:]
+		elif tokens[0] == "case":
+			for position, word in enumerate(tokens[3:], start=3):
+				if word.endswith(")"):
+					tokens = tokens[position + 1:]
+					break
+			else:
+				break
+		else:
+			break
+		control_prefix_seen = True
+	return tokens, control_prefix_seen
 
 
 @contextmanager
@@ -375,16 +415,22 @@ def _literal_guard_path(
 
 def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation]:
 	try:
-		segments = _shell_segments_with_operators(command)
+		segments = _shell_segments_with_redirects(command)
 	except ValueError:
 		return []
 	working_directory: str | None = checkout
 	conditional_cd = False
 	invocations: list[_GitInvocation] = []
 	config_mutated = False
-	for operator, tokens in segments:
-		if operator == "||" and tokens[0] == "exit" and working_directory is not None:
+	for operator, tokens, redirect_may_fail in segments:
+		tokens, control_prefix = _command_after_control_prefix(tokens)
+		if control_prefix:
+			working_directory = None
+		if not tokens:
+			continue
+		if operator == "||" and tokens[0] == "exit" and working_directory is not None and not redirect_may_fail:
 			# If this exit runs the following git cannot; otherwise cd succeeded.
+			# A failed builtin redirect means exit did not run (#6289).
 			conditional_cd = False
 			continue
 		if operator not in ("", "&&") and conditional_cd:
@@ -397,9 +443,10 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			operand = tokens[1:]
 			if operand[:1] == ["--"]:
 				operand = operand[1:]
+			# A failed builtin redirect means cd did not run (#6289).
 			working_directory = (
 				_literal_guard_path(operand[0], working_directory, shell_cd=True)
-				if len(operand) == 1 and working_directory is not None else None
+				if len(operand) == 1 and working_directory is not None and not redirect_may_fail else None
 			)
 			conditional_cd = operator == "&&" or conditional_cd
 			continue
@@ -750,8 +797,8 @@ def _api_write_requires_confirmation(command: str) -> bool:
 def git_subcommands(command: str) -> set[str]:
 	"""Return the set of git subcommands invoked by a shell command string.
 
-	Only counts `git` after leading `VAR=value` assignments or an `env`
-	wrapper with assignments. That keeps `man git commit` and
+	Only counts `git` after control words, leading `VAR=value` assignments,
+	or an `env` wrapper with assignments. That keeps `man git commit` and
 	`echo "git commit"` from tripping the guard, at the cost of missing
 	wrapper-prefixed invocations like `sudo git commit` — an acceptable trade,
 	since a false block is more disruptive than a missed check on a rare form.
@@ -763,6 +810,7 @@ def git_subcommands(command: str) -> set[str]:
 		# Unbalanced quotes — the command is not something we can read.
 		return found
 	for tokens in segments:
+		tokens, _ = _command_after_control_prefix(tokens)
 		# Drop leading environment assignments (`GIT_DIR=... git commit`).
 		index = 0
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
@@ -1593,6 +1641,12 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		_request_confirmation("env --split-string may execute git commit/push with an unknown destination")
 		return 0, ""
 	if not guarded_git_subcommands:
+		# Bash may execute earlier lines before a later unmatched quote. Raw-text
+		# searches miss quoted/escaped spellings of git and its subcommands.
+		try:
+			_shell_segments_with_operators(command)
+		except ValueError:
+			_request_confirmation("Cannot parse the Bash command; an earlier git commit/push may still execute.")
 		return 0, ""
 
 	checkout = _payload_cwd(payload)
@@ -1602,15 +1656,13 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	pr_snapshots: dict[tuple[str, str], tuple[list[dict] | None, bool, str]] = {}
 	blocks: list[str] = []
 	bulk_reasons: list[str] = []
+	uncertain_push_reasons: list[str] = []
 	unknown_destination_reasons: list[str] = []
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
 		if invocation.subcommand == "push" and invocation.warning:
-			_warn(invocation.warning)
-			unresolved_push_sources.append(
-				"could not resolve git push repository; the session checkout may not be the pushed repository."
-			)
+			uncertain_push_reasons.append(invocation.warning)
 		targets = (
 			_push_targets(invocation, checkout) if invocation.subcommand == "push" else
 			[_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", False, invocation.warning)]
@@ -1728,14 +1780,23 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 						blocks.append(_block_message(offender, branch, base, tip_label=tip, remote=remote))
 	if blocks:
 		return 2, "\n\n".join(blocks)
-	unresolved_push_sources.extend(unresolved_push_destinations)
+	confirmation_reasons: list[str] = []
+	if uncertain_push_reasons:
+		confirmation_reasons.append(
+			"could not resolve git push repository; the session checkout may not be the pushed repository. "
+			"could not determine the directory `git push` runs in (shell control flow or redirection); "
+			"checked the session checkout instead"
+		)
+	confirmation_reasons.extend(unresolved_push_sources)
+	confirmation_reasons.extend(unresolved_push_destinations)
+	confirmation_reasons.extend(unknown_destination_reasons)
 	if bulk_reasons:
-		unknown_destination_reasons.append(
+		confirmation_reasons.append(
 			"Bulk git push may write more branches than the current branch: "
 			+ ", ".join(sorted(set(bulk_reasons)))
 		)
-	if unknown_destination_reasons or unresolved_push_sources:
-		_request_confirmation("; ".join(sorted(set(unknown_destination_reasons + unresolved_push_sources))))
+	if confirmation_reasons:
+		_request_confirmation("; ".join(confirmation_reasons))
 	return 0, ""
 
 

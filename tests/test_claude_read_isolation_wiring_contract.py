@@ -11,7 +11,7 @@ def test_relay_staged_for_read_profiles() -> None:
 	stager = (ROOT / "scripts/stage_workflow_support.sh").read_text(encoding="utf-8")
 	assert "ai_engine.sh claude_engine.py claude_read_isolated_run.sh claude_read_snapshot.py claude_anthropic_relay.py review_untrusted_workspace.py; do" in implement
 	assert 'for _staged_support_runtime_script in "${_fetched_scripts[@]}"; do' in implement
-	assert "ai_engine.sh claude_engine.py claude_read_isolated_run.sh claude_read_snapshot.py claude_anthropic_relay.py review_untrusted_workspace.py claude_settings.json.tmpl codex_stall_guard.sh; do" in poller
+	assert "ai_engine.sh claude_engine.py claude_read_isolated_run.sh claude_read_snapshot.py claude_anthropic_relay.py review_untrusted_workspace.py claude_settings.json.tmpl codex_stall_guard.sh clarify_isolated_run.sh clarify_openrouter_broker.py codex_model_catalog.json; do" in poller
 	assert "OPTIONAL_BOOTSTRAP_SCRIPTS=" in stager
 	assert "claude_engine.py claude_anthropic_relay.py" in stager
 

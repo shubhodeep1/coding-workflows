@@ -833,6 +833,7 @@ write_state_snapshot_tracker_export() {
 assemble_judge_static_context() {
   local out_file="$1"
   local missing=""
+  local judge_readme_context=""
 
   if [ ! -s unattended_system_instructions.md ]; then
     missing="unattended_system_instructions.md"
@@ -842,6 +843,11 @@ assemble_judge_static_context() {
   fi
   if [ -n "${missing}" ]; then
     echo "::error::Required file(s) missing or empty: ${missing}" >&2
+    return 1
+  fi
+  judge_readme_context="$(mktemp "${RUNTIME_DIR:-/tmp}/judge-readme.XXXXXX")"
+  if ! bash scripts/build_static_context.sh readme "${judge_readme_context}"; then
+    rm -f "${judge_readme_context}"
     return 1
   fi
 
@@ -861,17 +867,14 @@ assemble_judge_static_context() {
       cat agents.md
       echo
     fi
-    if [ -f README.md ]; then
-      echo "=== README.MD ==="
-      cat README.md
-      echo
-    fi
+    cat "${judge_readme_context}"
     if [ -f probably_unnecessary_but_read_if_stuck.md ]; then
       echo "=== OVERFLOW REFERENCE ==="
       echo "If you cannot make progress without operator-runbook details (env var reference, autofix retrigger/dedup internals, orchestrator integration-sync auto-heal, validation self-healing, workflow log analysis pipeline, semantic cache scope, wrapper pin policy), read ./probably_unnecessary_but_read_if_stuck.md from the working tree before bailing."
       echo
     fi
   } > "${out_file}"
+  rm -f "${judge_readme_context}"
 }
 
 # ---------------------------------------------------------------
@@ -23089,7 +23092,16 @@ ${PR_DIFF}
     wave_judge_rc=0
     poller_claude_judge WAVE_JUDGE "${judge_effective_prompt_file}" "${JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/judge_log.txt" || wave_judge_rc=$?
     if [ "${wave_judge_rc}" -eq 75 ]; then
-      cat "${judge_effective_prompt_file}" | env -u GH_TOKEN -u GITHUB_TOKEN -u GH_PAT -u TG_BOT_SECRET codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
+      : > "${JUDGE_OUTPUT_FILE}"
+      # The runner also owns the Claude pool files: read-only Codex on the
+      # host can read them. The existing broker/container path exposes only a
+      # filtered checkout and a placeholder provider key to the fallback.
+      if [ -f scripts/clarify_isolated_run.sh ]; then
+        MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
+          bash scripts/clarify_isolated_run.sh "${judge_effective_prompt_file}" "${JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/judge_log.txt" codex WAVE_JUDGE || true
+      else
+        echo "::error::Isolated wave-judge fallback unavailable; refusing host Codex." >&2
+      fi
     fi
     rm -f "${judge_attempt_prompt_file}"
     judge_json_candidate="$(extract_judge_json_with_status "${JUDGE_OUTPUT_FILE}")"
