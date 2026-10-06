@@ -388,6 +388,20 @@ def test_restore_refuses_worktree_driver_attributes(tmp_path: Path) -> None:
 	assert subprocess.run(["bash", str(HELPER), "check"], env=env, capture_output=True).returncode != 0
 
 
+def test_restore_refuses_symlinked_worktree_attributes(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q")
+	_git(repo, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	env = dict(os.environ, RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(repo),
+		GITHUB_REPOSITORY="owner/repo", GH_TOKEN="newsecret")
+	subprocess.run(["bash", str(HELPER), "hide"], env=env, check=True, capture_output=True)
+	(repo / ".gitattributes").symlink_to(tmp_path / "missing")
+	result = subprocess.run(["bash", str(HELPER), "restore"], env=env, capture_output=True, text=True)
+	assert result.returncode != 0 and "reason=attributes_hazard" in result.stderr
+	assert "newsecret" not in (repo / ".git" / "config").read_text()
+
+
 def test_restore_allows_unchanged_tracked_attributes_with_trusted_filter(tmp_path: Path) -> None:
 	repo = tmp_path / "repo"
 	repo.mkdir()
