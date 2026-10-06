@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:13974 | severity=high | confidence=5\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna]\n  PROBLEM: The PR-named failure lookup ignores a failed run when its timestamp ties the newest completed head-branch run.\n  WHY: The strict timestamp comparison falls through to the empty-commit path, which deepseek_deepseek-v4-pro and openai_gpt-6-luna say does not trigger `pull_request.synchronize`; z-ai_glm-5_2 disputes this, saying the fallback triggers a fresh review.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Dispatch review runs for the forward-merge fallback from the default branch.\n  expected_change_site: .github/workflows/forward-merge-stable-to-main.yml\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  EVIDENCE: The change in forward-merge-stable-to-main.yml to remove --ref and pass only a validated positive PR number is missing from the PR diff; The forward-merge-stable-to-main.yml file is not in the PR changed files list.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:13974 | severity=high | confidence=4\n  PROBLEM: The PR-named dispatch run comparison uses a strict `>` timestamp check without the tie-break used for head-branch runs.\n  WHY: If a PR-named failure and a head-branch success share a timestamp, the failure is silently lost and recovery falls through to the empty-commit push, which does not trigger `pull_request.synchronize`.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:around line 7448 and 7563 | severity=critical | confidence=5\n  PROBLEM: The Python heredoc blocks have indentation errors.\n  WHY: The shell script will fail to parse and execute the Python code, blocking the orchestrator functionality that relies on these Python helpers.\n- Requirement: Dispatch review runs for the forward-merge fallback from the default branch.\n  Expected change site: forward-merge-stable-to-main.yml\n  Evidence of absence: The change in forward-merge-stable-to-main.yml to remove --ref and pass only a validated positive PR number is missing from the PR diff.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:13974 | severity=high | confidence=5\n  PROBLEM: The PR-named failure lookup requires its timestamp to be strictly newer than the newest completed head-branch run.\n  WHY: If a successful head-branch run and a failed PR-named dispatch share a timestamp, the failed run is ignored; recovery falls through to the empty-commit path, which does not trigger `pull_request.synchronize`.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: \"All three now dispatch without --ref and pass only a PR number they have checked is a positive integer\" (from the linked issue, referring to _dispatch_review_for_conflicts in scripts/orchestrate_poll_process.sh, _mt_dispatch_review in scripts/review_merge_train.sh, and the fallback-PR dispatch in forward-merge-stable-to-main.yml)\n  Expected change site: scripts/orchestrate_poll_process.sh (around _dispatch_review_for_conflicts), scripts/review_merge_train.sh (around _mt_dispatch_review), and .github/workflows/forward-merge-stable-to-main.yml (fallback-PR step)\n  Evidence of absence: The PR diff for scripts/orchestrate_poll_process.sh shows changes to _direct_inflight_review_run_on_branch, jq query filters, and timestamp tie-break logic (lines 12667-16783), but no hunk removes --ref from a gh workflow run call. The PR diff for scripts/review_merge_train.sh shows only a regex tightening from ^[0-9]+$ to ^[1-9][0-9]*$ at line 650, not a --ref removal. The forward-merge-stable-to-main.yml file is not in the PR changed files list.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "7fa0cd61d59a76b106b7fa7e3123ff0b5a38e7c2f9199869c432bc3227ad6054",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6136,
+    "run_id": "37416112704",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37416112704",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006055757_a6aff1ec4b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6136,
+    "run_id": "37416112704"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T05:57:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
