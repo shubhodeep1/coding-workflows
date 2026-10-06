@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 from unittest import mock
 
+import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -8051,6 +8052,12 @@ def main() -> int:
 	test_stage_step_backfills_missing_model_catalog_rows_from_main()
 	test_stage_step_model_catalog_backfill_fails_open()
 	test_review_isolation_wiring_and_model_relay()
+	test_review_sandbox_cleanup_runs_after_commit_and_before_publication()
+	test_review_sandbox_cleanup_failure_preserves_commit_but_blocks_publication()
+	if os.geteuid() != 0:
+		test_review_sandbox_cleanup_removes_unwritable_directories()
+		test_review_sandbox_cleanup_fails_closed_with_safe_diagnostic()
+	test_review_sandbox_cleanup_rejects_symlink_root()
 	test_review_isolation_workspace_transfer_and_hostile_paths()
 	test_review_isolation_transfer_failure_evidence()
 	test_review_isolation_traverses_only_allowed_github_directories()
@@ -8148,6 +8155,249 @@ def test_review_isolation_wiring_and_model_relay() -> None:
 	assert 'REVIEW_PATH = "/api/v1/chat/completions"' in broker
 	assert '"review-broker"' in broker and '"review-bridge"' in broker
 	assert 'self.server.model' in broker
+
+
+def test_review_sandbox_cleanup_runs_after_commit_and_before_publication() -> None:
+	workflow = _workflow_text()
+	assert workflow.index("- name: Apply fixes with editor model") < workflow.index("- name: Commit changes")
+	assert workflow.index("- name: Commit changes") < workflow.index("- name: Clean up isolated review workspace")
+	assert workflow.index("- name: Clean up isolated review workspace") < workflow.index("- name: Run interim judge")
+	assert workflow.index("- name: Clean up isolated review workspace") < workflow.index("- name: Enable auto-merge on PR")
+	assert workflow.index("- name: Clean up isolated review workspace") < workflow.index("- name: Push all pending commits")
+	assert workflow.index("- name: Remove slop-scan runtime artifact") < workflow.index("- name: Commit changes")
+	assert 'review_untrusted_sandbox.sh" cleanup' not in workflow[
+		workflow.index("- name: Apply fixes with editor model"):workflow.index("- name: Commit changes")
+	]
+	assert "if: always() && env.REVIEW_SANDBOX_ROOT != ''" in _step_block("Clean up isolated review workspace")
+	assert 'run: bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup' in _step_block("Clean up isolated review workspace")
+	assert "success()" not in next(line for line in _step_block("Commit changes").splitlines() if line.strip().startswith("if:"))
+	assert 'if: "success() &&' in _step_block("Enable auto-merge on PR")
+	assert "if: success() &&" in _step_block("Push all pending commits")
+
+
+def test_review_sandbox_cleanup_failure_preserves_commit_but_blocks_publication() -> None:
+	steps = yaml.safe_load(_workflow_text())["jobs"]["codex-agent"]["steps"]
+	steps_by_name = {step.get("name"): step for step in steps if isinstance(step, dict)}
+	commit_step = steps_by_name["Commit changes"]
+	cleanup_step = steps_by_name["Clean up isolated review workspace"]
+	detector_step = steps_by_name["Detect editor-claimed-but-uncommitted changes"]
+	push_step = steps_by_name["Push all pending commits"]
+	merge_step = steps_by_name["Enable auto-merge on PR"]
+	assert steps.index(commit_step) < steps.index(push_step)
+	assert steps.index(cleanup_step) < steps.index(merge_step)
+	assert steps.index(cleanup_step) < steps.index(push_step)
+	assert "success()" not in commit_step["if"]  # GitHub implicitly gates this step on success.
+	assert "always()" in cleanup_step["if"]
+	assert "!cancelled()" in detector_step["if"]
+	assert "steps.commit_changes.outputs.did_commit != 'true'" in detector_step["if"]
+	assert "success()" in push_step["if"] and "success()" in merge_step["if"]
+
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		repo = tmp / "repo"
+		repo.mkdir()
+		git_env = _git_clean_env()
+		def git(*args: str) -> str:
+			return subprocess.run(["git", *args], cwd=repo, env=git_env, check=True,
+				capture_output=True, text=True).stdout.strip()
+		git("init", "-q")
+		git("config", "user.name", "test")
+		git("config", "user.email", "test@example.invalid")
+		git("remote", "add", "origin", "https://github.com/example/review.git")
+		(repo / "edited.txt").write_text("before\n", encoding="utf-8")
+		git("add", "edited.txt")
+		git("commit", "-qm", "base")
+		base = git("rev-parse", "HEAD")
+		(repo / "edited.txt").write_text("after\n", encoding="utf-8")
+		(tmp / "last_diff.patch").write_text("", encoding="utf-8")
+		(tmp / "editor_summary.txt").write_text(
+			"Changes made:\n- edited edited.txt\nChange status:\n- edited\n", encoding="utf-8")
+		github_env = tmp / "github_env"
+		github_output = tmp / "github_output"
+		commit_env = _git_clean_env({
+			"GITHUB_ENV": str(github_env), "GITHUB_OUTPUT": str(github_output),
+			"COMMITTED_FILES_FILE": str(tmp / "committed_files.txt"),
+			"RUNTIME_DIR": str(tmp), "CAN_PUSH": "true", "IS_WORKFLOW_SOURCE_REPO": "true",
+			"WRITE_GUARDS_ENABLED": "false", "GH_PAT": "test-token",
+			"GITHUB_REPOSITORY": "example/review", "LAST_RUN_DIFF_FILE": str(tmp / "last_diff.patch"),
+			"EDITOR_SUMMARY_FILE": str(tmp / "editor_summary.txt"),
+			"PYTHONDONTWRITEBYTECODE": "1",
+		})
+		sandbox = tmp / "review-isolated-test"
+		sandbox.mkdir()
+		(sandbox / "image").touch()
+		(sandbox / "baseline.json").touch()
+		# Force a removal failure even as root; the real cleanup and commit helpers run.
+		support = tmp / "support"
+		(support / "review_sandbox").mkdir(parents=True)
+		for name in ("review_untrusted_workspace.py", "clarify_openrouter_broker.py"):
+			(support / name).touch()
+		(support / "review_sandbox" / "Dockerfile").touch()
+		bin_dir = tmp / "bin"
+		bin_dir.mkdir()
+		(bin_dir / "docker").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+		(bin_dir / "docker").chmod(0o755)
+		bash_env = tmp / "cleanup_bash_env"
+		bash_env.write_text('rm() { if [ "$1" = "-rf" ]; then return 1; fi; command rm "$@"; }\n',
+			encoding="utf-8")
+		cleanup_env = _git_clean_env({
+			"PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", "/usr/bin:/bin"),
+			"RUNNER_TEMP": str(tmp), "REVIEW_SANDBOX_ROOT": str(sandbox),
+			"SUPPORT_SCRIPTS_DIR": str(support), "BASH_ENV": str(bash_env),
+		})
+		commit = None
+		cleanup = None
+		failed = False
+		for step in sorted((commit_step, cleanup_step), key=steps.index):
+			if step is commit_step and not failed:  # Implicit success() on the commit step.
+				commit = subprocess.run(["bash", str(REPO_ROOT / "scripts/review_commit_changes.sh")],
+					cwd=repo, env=commit_env, capture_output=True, text=True, check=False)
+				assert commit.returncode == 0, commit.stdout + commit.stderr
+			elif step is cleanup_step:  # Explicit always() runs even after a failure.
+				cleanup = subprocess.run(["bash", str(REPO_ROOT / "scripts/review_untrusted_sandbox.sh"), "cleanup"],
+					env=cleanup_env, capture_output=True, text=True, check=False)
+				failed = cleanup.returncode != 0
+		assert cleanup is not None
+		assert cleanup.returncode == 1, (cleanup.stdout, cleanup.stderr)
+		assert "reason=remove_failed" in cleanup.stderr
+		assert commit is not None, "cleanup failure skipped the editor commit"
+		assert "did_commit=true" in github_output.read_text(encoding="utf-8")
+		assert "LEDGER_ONLY_COMMIT_STRICT=false" in github_env.read_text(encoding="utf-8")
+		# !cancelled() still reaches the detector, but did_commit=true suppresses
+		# its lost-changes claim; a failed step makes both publication gates false.
+		detector_should_run = (
+			"did_commit=true" not in github_output.read_text(encoding="utf-8")
+			or "LEDGER_ONLY_COMMIT_STRICT=true" in github_env.read_text(encoding="utf-8")
+		)
+		assert not detector_should_run
+		assert "EDITOR_CHANGES_LOST=" not in github_env.read_text(encoding="utf-8")
+		assert git("rev-parse", "HEAD") != base
+		assert git("show", "HEAD:edited.txt") == "after"
+		assert "DID_COMMIT=true" in github_env.read_text(encoding="utf-8")
+		assert failed  # success()-gated push/merge cannot publish this commit.
+		# Negative control: the old cleanup-before-commit order skips a real edit
+		# after cleanup fails, making the lost-changes detector eligible instead.
+		(repo / "edited.txt").write_text("old-order\n", encoding="utf-8")
+		legacy_head = git("rev-parse", "HEAD")
+		legacy_cleanup_result = None
+		legacy_commit_result = None
+		legacy_failed = False
+		legacy_steps = (cleanup_step, commit_step)
+		assert legacy_steps.index(cleanup_step) < legacy_steps.index(commit_step)
+		for step in legacy_steps:
+			if step is commit_step and not legacy_failed:  # Implicit success() skips this after cleanup fails.
+				legacy_commit_result = subprocess.run(
+					["bash", str(REPO_ROOT / "scripts/review_commit_changes.sh")],
+					cwd=repo, env=commit_env, capture_output=True, text=True, check=False)
+			elif step is cleanup_step:
+				legacy_cleanup_result = subprocess.run(
+					["bash", str(REPO_ROOT / "scripts/review_untrusted_sandbox.sh"), "cleanup"],
+					env=cleanup_env, capture_output=True, text=True, check=False)
+				legacy_failed = legacy_cleanup_result.returncode != 0
+		assert legacy_cleanup_result is not None
+		assert legacy_cleanup_result.returncode == 1
+		assert "reason=remove_failed" in legacy_cleanup_result.stderr
+		assert legacy_commit_result is None, "old cleanup-before-commit order unexpectedly ran the commit"
+		assert git("rev-parse", "HEAD") == legacy_head
+		assert git("show", "HEAD:edited.txt") == "after"
+		assert (repo / "edited.txt").read_text(encoding="utf-8") == "old-order\n"
+		assert "steps.commit_changes.outputs.did_commit != 'true'" in detector_step["if"]
+		legacy_detector_env = _git_clean_env({
+			"GITHUB_ENV": str(tmp / "legacy_github_env"), "CAN_PUSH": "true",
+			"EDITOR_SUMMARY_FILE": str(tmp / "editor_summary.txt"),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+		})
+		legacy_detector_result = subprocess.run(
+			["bash", str(REPO_ROOT / "scripts/review_autofix_step_editor_uncommitted_changes.sh")],
+			cwd=repo, env=legacy_detector_env, capture_output=True, text=True, check=False)
+		assert legacy_detector_result.returncode == 0, legacy_detector_result.stderr
+		assert "Editor claimed changes but no commit was produced" in legacy_detector_result.stdout
+		assert "EDITOR_CHANGES_LOST=true" in (tmp / "legacy_github_env").read_text(encoding="utf-8")
+
+
+def _run_review_sandbox_cleanup(tmp: Path, root: Path) -> subprocess.CompletedProcess[str]:
+	support = tmp / "support"
+	(support / "review_sandbox").mkdir(parents=True)
+	for name in ("review_untrusted_workspace.py", "clarify_openrouter_broker.py"):
+		(support / name).touch()
+	(support / "review_sandbox" / "Dockerfile").touch()
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	(bin_dir / "docker").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+	(bin_dir / "docker").chmod(0o755)
+	env = {
+		"PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", "/usr/bin:/bin"),
+		"RUNNER_TEMP": str(root.parent),
+		"REVIEW_SANDBOX_ROOT": str(root),
+		"SUPPORT_SCRIPTS_DIR": str(support),
+	}
+	return subprocess.run(["bash", str(REPO_ROOT / "scripts/review_untrusted_sandbox.sh"), "cleanup"],
+		env=env, capture_output=True, text=True, check=False)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses directory permissions")
+def test_review_sandbox_cleanup_removes_unwritable_directories() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		root = tmp / "review-isolated-test"
+		cache = root / "source/cache"
+		pkg = cache / "pkg"
+		pkg.mkdir(parents=True)
+		(root / "image").touch()
+		(root / "baseline.json").touch()
+		(pkg / "file").touch()
+		pkg.chmod(0o555)
+		cache.chmod(0o555)
+		try:
+			result = _run_review_sandbox_cleanup(tmp, root)
+			assert result.returncode == 0, result.stderr
+			assert not root.exists()
+			assert "::notice::Review sandbox cleanup restored directory permissions before removal (dirs_fixed=2)" in result.stdout
+		finally:
+			if cache.exists():
+				cache.chmod(0o755)
+			if pkg.exists():
+				pkg.chmod(0o755)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses directory permissions")
+def test_review_sandbox_cleanup_fails_closed_with_safe_diagnostic() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		parent = tmp / "readonly"
+		parent.mkdir()
+		root = parent / "review-isolated-test"
+		root.mkdir()
+		(root / "image").touch()
+		(root / "baseline.json").touch()
+		hostile_name = "\n::error::x"
+		(root / hostile_name).touch()
+		# The sandbox's parent cannot be modified, so removal must stay fatal.
+		parent.chmod(0o555)
+		try:
+			result = _run_review_sandbox_cleanup(tmp, root)
+			assert result.returncode == 1
+			assert "reason=remove_failed residual_entries=" in result.stderr
+			assert "foreign_owned=" in result.stderr and "unwritable_dirs=" in result.stderr
+			assert hostile_name not in result.stderr
+			assert not any(line.startswith("::error::x") for line in result.stderr.splitlines())
+		finally:
+			parent.chmod(0o700)
+
+
+def test_review_sandbox_cleanup_rejects_symlink_root() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		target = tmp / "review-isolated-target"
+		target.mkdir()
+		(target / "image").touch()
+		(target / "baseline.json").touch()
+		root = tmp / "review-isolated-link"
+		root.symlink_to(target, target_is_directory=True)
+		result = _run_review_sandbox_cleanup(tmp, root)
+		assert result.returncode == 1
+		assert "reason=root_symlink" in result.stderr
+		assert root.is_symlink() and target.is_dir()
 
 
 def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:

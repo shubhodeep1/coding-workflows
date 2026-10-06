@@ -4957,10 +4957,6 @@ jobs:
             fi
           fi
 
-      - name: Clean up isolated review workspace
-        if: always() && env.REVIEW_SANDBOX_ROOT != ''
-        run: bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup
-
       - name: Remove slop-scan runtime artifact
         if: always()
         run: |
@@ -5044,6 +5040,13 @@ jobs:
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_commit_changes.sh"
+
+      # Cleanup must follow the commit: a failure before it triggers implicit
+      # success() gating and misreports the editor's diff as editor_changes_lost
+      # (PR #6209, run 37431425681). It still blocks push and auto-merge.
+      - name: Clean up isolated review workspace
+        if: always() && env.REVIEW_SANDBOX_ROOT != ''
+        run: bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup
 
       - name: Run interim judge
         if: env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
