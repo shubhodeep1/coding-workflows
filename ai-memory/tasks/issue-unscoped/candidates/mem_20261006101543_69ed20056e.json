@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:247-251 | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The jq filter requires managed judges to contain the \"ai:orchestrator-managed\" label before combining tracking labels.\n  WHY: If an orchestrator-managed issue is missing this label due to a configuration or sync error, the snapshot is rejected and falls back to Codex even when the issue is otherwise correctly managed.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"default to codex when that label snapshot is unavailable\"\n  expected_change_site: poller_judge_isolated in scripts/orchestrate_poll_process.sh\n  confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: scripts/orchestrate_poll_process.sh uses a \"forced_codex\" outcome logging path, but poller_judge_isolated relies on judge_engine_labels_valid rather than explicitly handling the \"unavailable\" string.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:247-251 | confidence=3\n  PROBLEM: The jq filter forces managed judges to contain the \"ai:orchestrator-managed\" label before combining tracking labels.\n  WHY: If an orchestrator-managed issue is missing this label due to a configuration or sync error, the entire label snapshot is rejected as invalid, forcing a fallback to Codex even when the issue is otherwise correctly managed.\n- Requirement: \"default to codex when that label snapshot is unavailable\"\n  Expected change site: scripts/orchestrate_poll_process.sh\n  Evidence of absence: The implementation uses a \"forced_codex\" outcome logging path for unavailable labels, but the logic in `poller_judge_isolated` specifically checks `judge_engine_labels_valid`. While it seems to correctly force Codex in practice, explicit handling of the `\"unavailable\"` string in the shell logic, rather than relying on the side-effect of `judge_engine_labels_valid`, would make the fallback intent more robust.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "fdf2e4ef239260c3928033807ff1df7b9c39f420bd91f842252e9e8d74b9fd3f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6497,
+    "run_id": "37442010864",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37442010864",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006101543_69ed20056e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6497,
+    "run_id": "37442010864"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T10:15:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
