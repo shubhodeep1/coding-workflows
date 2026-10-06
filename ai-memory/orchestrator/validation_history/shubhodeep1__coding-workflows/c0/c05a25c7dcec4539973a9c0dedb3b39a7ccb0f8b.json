@@ -11,6 +11,18 @@
       "run_id": 37430977754,
       "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37430977754",
       "source": "orchestrate_poll.mark_validation_failed"
+    },
+    {
+      "context": "## \u274c Runtime validation harness error The failure is in the generated validation harness, not the September 3 project plan or application changes. validation/logs/20_import_audit.sh reports ModuleNo",
+      "cycle": 1,
+      "outcome": "failed",
+      "raw_conclusion": "failure",
+      "raw_status": "harness_error",
+      "recorded_at": "2026-10-06T16:37:22Z",
+      "run_attempt": 1,
+      "run_id": 37492941663,
+      "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37492941663",
+      "source": "orchestrate_poll.mark_validation_failed"
     }
   ],
   "integration_sha": "c05a25c7dcec4539973a9c0dedb3b39a7ccb0f8b",
