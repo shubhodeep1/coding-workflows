@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_run_reviewers.sh:5186 | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The context-overflow regex misses some provider error phrasings, including \u201cmaximum context length is X tokens, however you requested Y tokens\u201d.\n  WHY: When the regex misses a genuine overflow, the Mistral retry is skipped and the lite-tier review can fail despite the available GPT fallback.\n- scripts/review_run_reviewers.sh:5186 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Scanning the entire log for the overflow regex can trigger a GPT retry because of a historical or unrelated context-overflow mention.\n  WHY: A non-overflow failure can therefore trigger the fallback, and if that retry fails, the round ends failed.\n- scripts/review_run_reviewers.sh:5192 | confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The retry-result check may attribute a prior status-file success to the current retry.\n  WHY: If status files are shared or stale across review passes, the check could incorrectly treat an earlier success as the retry result.\n- scripts/review_run_reviewers.sh:4903-4910 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The fallback can count a stale GPT success as the result of its retry when `run_reviewer` exits at the budget check without updating the GPT status file.\n  WHY: The caller may select GPT although no GPT review ran, allowing subsequent summarization to use prior output.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_run_reviewers.sh:5186 | confidence=[3]\n  PROBLEM: The regex used to detect context overflows may miss variations in error messages from the model provider, such as \"model context window exceeded\".\n  WHY: If the error message does not match the regex, the lite reviewer can fail without triggering the GPT fallback, leading to unreviewed PRs despite a suitable reviewer being available.\n  Suggested minimal fix: Expand regex to cover common variations like \"window exceeded\" or \"context window full\".\n- scripts/review_run_reviewers.sh:5192 | confidence=[2]\n  PROBLEM: The logic to verify the retry result relies on the existence and content of a status file that might be shared or stale across multiple review passes.\n  WHY: While the code currently executes only for the lite tier, if reviewer logic evolves to allow multiple lite reviewers or multiple passes, this check could incorrectly attribute a successful result from a previous run to the retry attempt.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_run_reviewers.sh:5186 | severity=high | confidence=[3]\n  PROBLEM: The context-overflow regex misses OpenRouter's \"maximum context length is X tokens, however you requested Y tokens\" wording.\n  WHY: The retry is skipped, the lite-tier pass exits failed, and a PR that draws Mistral as its sole lite reviewer can be stranded despite the available larger-window GPT fallback.\n- scripts/review_run_reviewers.sh:5186 | severity=low | confidence=[2]\n  PROBLEM: The grep scans the whole log file, so a historical or unrelated \"context... exceed\" mention can trigger the retry when the current failure was something else.\n  WHY: A non-context failure on the sole lite Mistral reviewer still attempts the GPT-6-luna retry; if it fails, the round ends failed.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_run_reviewers.sh:4903-4910 | severity=high | confidence=[4]\n  PROBLEM: The fallback can count a stale GPT success as the result of its retry when `run_reviewer` returns at the budget check without updating that status file.\n  WHY: If a prior GPT success remains in reused review artifacts, the caller can count the retry as successful and select GPT although no GPT review ran; subsequent summarization can use the prior output.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0243ffc81eaf55fa3951b9aa4526282aeebbe7fb3c58dccb8e09ab7d94c25363",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6438,
+    "run_id": "37408306009",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37408306009",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006044612_38803f91ca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6438,
+    "run_id": "37408306009"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T04:46:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
