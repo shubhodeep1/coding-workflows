@@ -1505,6 +1505,13 @@ through `clarify → plan → implement → review`.
   the origin still names the workflow's original repository (or its trusted
   support checkout) and its push URL agrees, not an editor-changed GitHub destination;
   generic GitHub extraheaders are restored scoped to the verified origin only.
+  Implement restores the repository-scoped workflow token rather than `GH_PAT`.
+  Its preflight and commit-time staging paths recheck editor-writable Git config
+  and attributes immediately before `git add`, ignore global Git config, and
+  command-override hooks, fsmonitor and global attributes. Push repeats the
+  check, keeps global Git config disabled, and uses the same repository-scoped
+  token; later GitHub API and PR operations continue to use `GH_PAT` where
+  cross-workflow event delivery requires it.
   Implement runs with heal evidence also pin the issue/plan file allowlist
   before the editor and block out-of-scope commits even when the normal guard
   or per-run override is disabled. This is not a process isolation boundary:

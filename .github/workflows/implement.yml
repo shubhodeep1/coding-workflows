@@ -2193,7 +2193,9 @@ jobs:
           # this, `[ -n "${GH_TOKEN:-}" ]` at the gh-issue-comment guard
           # is always false and the per-attempt failure diagnostics
           # never reach the source issue.
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          # The caller's repository-scoped workflow token can post diagnostics
+          # and is the only credential restored into Git after editor attempts.
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -3403,6 +3405,11 @@ jobs:
         run: |
           set -euo pipefail
 
+          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" check || {
+            echo "::error::Editor-writable git config or attributes would run a command during preflight staging; refusing to continue."
+            exit 1
+          }
+
           TEMP_INDEX_FILE="$(mktemp "${TMPDIR:-/tmp}/implement-preflight-index.XXXXXX")"
           VIRTUAL_CLEANUP_FILE="$(mktemp "${TMPDIR:-/tmp}/implement-preflight-cleanup.XXXXXX")"
           cleanup() {
@@ -3499,13 +3506,13 @@ jobs:
             add_u_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
             add_o_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
           fi
-          git add -u -- "${add_u_excludes[@]}"
+          GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null add -u -- "${add_u_excludes[@]}"
           while IFS= read -r -d '' untracked_candidate; do
             [ -n "${untracked_candidate}" ] || continue
             if is_virtual_cleanup_path "${untracked_candidate}"; then
               continue
             fi
-            git add -- "${untracked_candidate}"
+            GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null add -- "${untracked_candidate}"
           done < <(git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}")
           if [ "${is_self_repo}" = "false" ] && [ -f scripts/.gitignore ]; then
             while IFS= read -r fetched_script; do
@@ -3744,7 +3751,7 @@ jobs:
         continue-on-error: true
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           echo "repaired=false" >> "$GITHUB_OUTPUT"
@@ -4248,7 +4255,7 @@ jobs:
       - name: Restore git credentials after syntax repair
         if: always() && env.SKIP_IMPLEMENT != 'true' && steps.post_codex_syntax_repair.outcome != 'skipped'
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ github.token }}
         run: bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" restore
 
       - name: Protect workflow files from implementation edits
@@ -4626,7 +4633,7 @@ jobs:
       - name: Push branch
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
@@ -4635,7 +4642,12 @@ jobs:
           support_checkout_root="${GITHUB_WORKSPACE}/.codex-workflow-src"
           support_checkout_main_root="${GITHUB_WORKSPACE}/.codex-workflow-src-main"
 
-          git remote set-url origin "https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository }}"
+          bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" check || {
+            echo "::error::Editor-writable git config or attributes changed before push; refusing to continue."
+            exit 1
+          }
+          export GIT_CONFIG_GLOBAL=/dev/null
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}"
 
           # Stage git_ref_health_check.sh from the already-checked-out support
           # source into a path OUTSIDE the working tree.  H1 (issue #1059)

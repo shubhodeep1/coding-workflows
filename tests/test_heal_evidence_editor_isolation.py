@@ -310,6 +310,7 @@ def test_restore_rejects_editor_written_token_exfiltration_settings(tmp_path: Pa
 	"filter.evil.clean", "filter.evil.process", "filter.evil.smudge",
 	"diff.evil.textconv", "diff.evil.command", "diff.external",
 	"merge.evil.driver", "core.attributesFile", "core.alternateRefsCommand",
+	"core.hooksPath", "core.editor",
 	"gpg.program", "gpg.ssh.program", "lfs.customtransfer.x.path",
 	"remote.origin.uploadpack", "remote.origin.receivepack", "uploadpack.packObjectsHook",
 ))
@@ -441,9 +442,11 @@ def test_check_catches_driver_planted_after_restore(tmp_path: Path) -> None:
 
 def test_commit_checks_hazards_before_staging_and_disables_fsmonitor() -> None:
 	commit = (ROOT / "scripts" / "implement_commit_changes.sh").read_text()
-	assert commit.index('editor_git_credentials.sh" check') < commit.index("git -c core.fsmonitor=false add -u")
-	assert 'git -c core.fsmonitor=false add -u' in commit
-	assert 'xargs -0 -r git -c core.fsmonitor=false add --' in commit
+	stage = "GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null add -u"
+	assert commit.rindex('editor_git_credentials.sh" check') < commit.index(stage)
+	assert stage in commit
+	assert "xargs -0 -r env GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null add --" in commit
+	assert "GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null commit" in commit
 
 
 def test_commit_refuses_missing_credential_guard_before_git(tmp_path: Path) -> None:
@@ -505,8 +508,10 @@ def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
 	assert "--format structured" in implement
 	assert "--format structured" in (ROOT / "scripts" / "run_plan_codex.sh").read_text()
 	assert "--format structured" not in (WORKFLOWS / "clarify.yml").read_text()
+	implementation = implement.split("      - name: Run Codex implementation\n", 1)[1].split("      - name: ", 1)[0]
+	assert "GH_TOKEN: ${{ github.token }}" in implementation
 	repair = implement.split("      - name: Attempt post-Codex syntax repair\n", 1)[1].split("      - name: ", 1)[0]
-	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in repair
+	assert "GH_TOKEN: ${{ github.token }}" in repair
 	assert repair.count('editor_git_credentials.sh" restore') == 2
 	assert repair.index('editor_git_credentials.sh" restore') < repair.index('echo "::warning::Post-Codex repair attempt')
 	assert implement.count('env -u GH_TOKEN -u GH_PAT') == 2
@@ -514,8 +519,16 @@ def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
 	plan_runner = (ROOT / "scripts" / "run_plan_codex.sh").read_text()
 	assert 'ACTIONS_ID_TOKEN_REQUEST_URL HEAL_EVIDENCE_DIR GITHUB_ENV GITHUB_PATH' in plan_runner
 	assert '-u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH codex' in plan_runner
-	assert 'git -c core.hooksPath=/dev/null commit' in (ROOT / "scripts" / "implement_commit_changes.sh").read_text()
+	assert "GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null commit" in (ROOT / "scripts" / "implement_commit_changes.sh").read_text()
 	assert implement.count('git -c core.hooksPath=/dev/null push') == 2
+	preflight = implement.split("      - name: Preflight destructive-commit guard\n", 1)[1].split("      - name: ", 1)[0]
+	assert preflight.index('editor_git_credentials.sh" check') < preflight.index("GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null")
+	push = implement.split("      - name: Push branch\n", 1)[1].split("      - name: ", 1)[0]
+	assert "GH_TOKEN: ${{ github.token }}" in push
+	assert 'editor_git_credentials.sh" check' in push
+	assert "export GIT_CONFIG_GLOBAL=/dev/null" in push
+	assert 'https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}' in push
+	assert "secrets.GH_PAT" not in push
 	assert implement.count('git -c core.hooksPath=/dev/null fetch') == 2
 	assert 'git -c core.hooksPath=/dev/null rebase' in implement
 

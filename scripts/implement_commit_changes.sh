@@ -303,6 +303,13 @@ echo "Worktree changes before staging (post artifact-cleanup):"
 # shellcheck disable=SC2001
 echo "${porcelain_status}" | sed 's/^/  /'
 
+# Recheck immediately before staging; cleanup and staged-support reconciliation
+# above may run long enough for a leftover editor process to alter Git state.
+bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" check || {
+  echo "::error::Editor-writable git config or attributes changed before staging; refusing to commit."
+  exit 1
+}
+
 git config user.name "codex-bot"
 git config user.email "codex@users.noreply.github.com"
 git rm -r --cached node_modules 2>/dev/null || true
@@ -348,8 +355,8 @@ if [ "${is_self_repo}" = "false" ]; then
   add_u_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
   add_o_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
 fi
-git -c core.fsmonitor=false add -u -- "${add_u_excludes[@]}"
-git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}" | xargs -0 -r git -c core.fsmonitor=false add --
+GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null add -u -- "${add_u_excludes[@]}"
+git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}" | xargs -0 -r env GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null add --
 if [ "${is_self_repo}" = "false" ] && [ -f scripts/.gitignore ]; then
   while IFS= read -r fetched_script; do
     case "${fetched_script}" in ''|'#'*|'.gitignore') continue ;; esac
@@ -629,7 +636,7 @@ if [ -z "$(git diff --cached --name-only)" ]; then
   echo "did_commit=false" >> "$GITHUB_OUTPUT"
   exit 0
 fi
-git -c core.hooksPath=/dev/null commit -m "AI implementation for issue #${ISSUE_NUMBER}"
+GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null commit -m "AI implementation for issue #${ISSUE_NUMBER}"
 
 # >>> ai:scope label post-commit verifier >>>
 # Optional defense-in-depth for per-issue scope-lock labels. When enabled and

@@ -2150,7 +2150,7 @@ def test_stage_workflow_support_step_records_self_repo_staged_support_ledger() -
 	):
 		assert marker in script_text, marker
 	# The restore runs before anything is staged.
-	assert script_text.index("IMPLEMENT_STAGED_SUPPORT_RESTORE ") < script_text.index('git -c core.fsmonitor=false add -u -- "${add_u_excludes[@]}"')
+	assert script_text.index("IMPLEMENT_STAGED_SUPPORT_RESTORE ") < script_text.index('GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null add -u -- "${add_u_excludes[@]}"')
 	commit_block = _step_block_text("Commit changes")
 	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"' in commit_block
 	assert 'source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh"' in _step_block_text("Push branch")

@@ -465,10 +465,14 @@ a new value, add it to the appropriate overrides file with a
   changed, or a pushurl, URL rewrite, proxy, credential helper or include
   directive sits in an editor-writable git config scope. It also refuses
   command-running Git keys (filter/diff/merge drivers, `core.attributesFile`,
-  signing programs, `lfs.*`) in those scopes and driver assignments in
-  `.git/info/attributes` or global attributes. `implement_commit_changes.sh`
-  calls its tokenless `check` action before staging to revalidate the effective
-  Git configuration and attributes after the editor exits.
+  `core.hooksPath`, `core.editor`, signing programs, `lfs.*`) in those scopes
+  and driver assignments in `.git/info/attributes` or global attributes. Both
+  preflight and commit-time staging call its tokenless `check` action immediately
+  before `git add`, ignore
+  editor-writable global Git config, and command-override hooks, fsmonitor and
+  global attributes. Credential restore and push use the repository-scoped
+  workflow token rather than `GH_PAT`; push repeats the check and ignores global
+  Git config before writing authenticated origin state.
   The editor never reads those paths; only the restore / reinstall / commit
   steps of the job do. A `pytest` the editor starts to validate its own change
   therefore cannot write fixture paths into the live run's ledgers even when
