@@ -1366,8 +1366,16 @@ through `clarify → plan → implement → review`.
   `ai:destructive-blocked` / `ai:scope-blocked` label reports through the label
   path), a failure the diagnose step turned into fix-up issues, or a `BLOCKED`
   verdict (the `Gate workflow failure heal report` step sets the job output
-  `heal_report`). The intake fingerprints the report from the failed job's log
-  (`phase:<phase>_failed` when no log can be read), keys it on the source issue
+  `heal_report`). Before dedup, escalation or issue creation, the intake checks
+  the GitHub-read run's repository, event, matching phase wrapper and outcome,
+  a failed non-reporter job, and a trusted failure comment on the source issue
+  linking that run. A completed run must have failed; an in-progress run is
+  accepted once its phase job failed. API failures or mismatches skip with
+  `WORKFLOW_HEAL skip reason=phase_report_unverified` and a Telegram WARNING.
+  A missing phase failure comment also skips (even for a real failed run);
+  per-credential sender binding is outside this check. The intake fingerprints
+  verified reports from the failed job's log (`phase:<phase>_failed` when jobs
+  were listed but no log could be read), keys it on the source issue
   like a review/autofix report on its PR, and continues a heal issue's lineage
   when the failing issue is itself a heal issue. When a heal issue's own run
   fails with the fingerprint the issue was filed for, the pipeline cannot run

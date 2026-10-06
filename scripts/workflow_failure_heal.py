@@ -140,6 +140,10 @@ PHASE_SUCCESS_COMMENT_PREFIXES: tuple[str, ...] = (
 # failure_reason of a phase_failure report: `<phase>_failed`.
 PHASE_FAILURE_REASONS: tuple[str, ...] = tuple(f"{phase}_failed" for phase in PHASE_FAILURE_COMMENT_PREFIXES)
 DEFAULT_PHASE_FAILURE_STREAK = 1
+PHASE_REPORT_RUN_EVENTS = ("issues", "issue_comment")
+PHASE_REPORT_TRUSTED_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
+PHASE_REPORT_TRUSTED_BOT_LOGINS = ("github-actions[bot]",)
+PHASE_REPORT_REPORTER_JOB = "heal-report"
 
 # Identical-failure fingerprint cap (review_autofix.yml gate). Every failure
 # comment the review workflow posts ends with a failure marker; the gate counts
@@ -347,6 +351,67 @@ def extract_run_refs(texts: Iterable[str], repo: str, limit: int = MAX_RUN_REFS)
 			seen[run_id] = {"repo": repo, "run_id": run_id, "url": match.group(0)}
 	refs = list(seen.values())
 	return refs[-limit:]
+
+
+def phase_report_workflow_paths(phase: str, *, source_repo: str, self_repo: str) -> tuple[str, ...]:
+	if phase not in PHASE_FAILURE_COMMENT_PREFIXES:
+		raise ValueError(f"unknown phase {phase!r}")
+	paths = (f".github/workflows/ai-{phase}.yml",)
+	if source_repo.casefold() == self_repo.casefold():
+		paths += (f".github/workflows/internal-{phase}.yml",)
+	return paths
+
+
+def verify_phase_report_provenance(payload: Any, *, run: Any, jobs: Any, comments: Any, self_repo: str) -> dict[str, Any]:
+	"""Check GitHub-read evidence before acting on an untrusted phase report."""
+	refs = payload.get("run_refs") if isinstance(payload, dict) else None
+	reason = payload.get("failure_reason") if isinstance(payload, dict) else None
+	run_id = refs[0].get("run_id") if isinstance(refs, list) and refs and isinstance(refs[0], dict) else None
+	run_id = str(run_id) if _positive_int(run_id) is not None else ""
+	def decision(verified: bool, why: str) -> dict[str, Any]:
+		return {"verified": verified, "reason": why, "run_id": run_id}
+
+	if not isinstance(payload, dict) or payload.get("source_kind") != "phase_failure" or reason not in PHASE_FAILURE_REASONS or not run_id:
+		return decision(False, "not_phase_report")
+	if not isinstance(run, dict):
+		return decision(False, "run_unavailable")
+	if str(run.get("id")) != run_id:
+		return decision(False, "run_id_mismatch")
+	source_repo = payload.get("source_repo")
+	repository = run.get("repository")
+	if not isinstance(source_repo, str) or not isinstance(repository, dict) or not isinstance(repository.get("full_name"), str) or repository["full_name"].casefold() != source_repo.casefold():
+		return decision(False, "repo_mismatch")
+	if run.get("event") not in PHASE_REPORT_RUN_EVENTS:
+		return decision(False, "event_mismatch")
+	phase = reason.removesuffix("_failed")
+	path = run.get("path")
+	if not isinstance(path, str) or path.split("@", 1)[0] not in phase_report_workflow_paths(phase, source_repo=source_repo, self_repo=self_repo):
+		return decision(False, "workflow_path_mismatch")
+	if run.get("status") == "completed" and run.get("conclusion") not in ("failure", "timed_out"):
+		return decision(False, "run_not_failed")
+	if not isinstance(jobs, dict) or not isinstance(jobs.get("jobs"), list):
+		return decision(False, "jobs_unavailable")
+	if not any(
+		isinstance(job, dict) and job.get("conclusion") in ("failure", "timed_out")
+		and isinstance(job.get("name"), str) and job["name"] != PHASE_REPORT_REPORTER_JOB
+		and not job["name"].endswith("/ " + PHASE_REPORT_REPORTER_JOB)
+		for job in jobs["jobs"]
+	):
+		return decision(False, "no_failed_phase_job")
+	if not isinstance(comments, list):
+		return decision(False, "comments_unavailable")
+	linked = [comment for comment in comments if isinstance(comment, dict) and isinstance(comment.get("body"), str)
+		and comment["body"].lstrip().startswith(PHASE_FAILURE_COMMENT_PREFIXES[phase])
+		and any(ref["run_id"] == run_id for ref in extract_run_refs([comment["body"]], source_repo))]
+	if not linked:
+		return decision(False, "no_linking_comment")
+	if not any(
+		(isinstance(comment.get("user"), dict) and comment["user"].get("login") in PHASE_REPORT_TRUSTED_BOT_LOGINS)
+		or comment.get("author_association") in PHASE_REPORT_TRUSTED_ASSOCIATIONS
+		for comment in linked
+	):
+		return decision(False, "untrusted_comment_author")
+	return decision(True, "ok")
 
 
 def select_failed_runs(runs: Iterable[dict[str, Any]], *, title: str, limit: int = MAX_RUN_REFS, since: datetime | None = None) -> list[dict[str, Any]]:
@@ -2318,6 +2383,18 @@ def _cmd_skip_reason(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _cmd_verify_phase_provenance(args: argparse.Namespace) -> int:
+	def read_optional(path: str) -> Any:
+		try:
+			return _load_json_file(path)
+		except (OSError, ValueError):
+			return None
+
+	_write_json(verify_phase_report_provenance(read_optional(args.payload_json), run=read_optional(args.run_json),
+		jobs=read_optional(args.jobs_json), comments=read_optional(args.comments_json), self_repo=args.self_repo))
+	return 0
+
+
 def _cmd_wrap_dispatch(args: argparse.Namespace) -> int:
 	payload = _load_json_file(args.payload_json)
 	if not isinstance(payload, dict):
@@ -2543,6 +2620,14 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--registry-json", default="")
 	p.add_argument("--self-repo", required=True)
 	p.set_defaults(func=_cmd_skip_reason)
+
+	p = sub.add_parser("verify-phase-provenance", help="Verify a phase failure report against GitHub-read run, job and comment evidence")
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--run-json", required=True)
+	p.add_argument("--jobs-json", required=True)
+	p.add_argument("--comments-json", required=True)
+	p.add_argument("--self-repo", required=True)
+	p.set_defaults(func=_cmd_verify_phase_provenance)
 
 	p = sub.add_parser("wrap-dispatch", help="Print the repository_dispatch body with the report enveloped under client_payload.report")
 	p.add_argument("--payload-json", required=True)

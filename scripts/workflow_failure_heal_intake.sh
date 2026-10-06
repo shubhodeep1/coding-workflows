@@ -11,8 +11,10 @@
 # failed clarify / plan / implement run (`phase_failure`), a failed release /
 # promotion `workflow_run`, or a manual `workflow_dispatch` re-run. It:
 #
-#   1. Validates the payload (every field is re-checked; the body, comments, and
-#      logs stay untrusted data for the model; an `autofix_failure` report from
+#   1. Validates the payload (every field is re-checked; phase_failure reports
+#      also require GitHub-read run, job and issue-comment provenance before
+#      dedup or escalation; the body, comments, and logs stay untrusted data
+#      for the model; an `autofix_failure` report from
 #      the review/autofix workflow carries its own evidence text) and applies the skip gates:
 #      kill switch, unregistered source repo, smoke-test fixture, self run,
 #      downstream release-gate failure already reported by the gate itself.
@@ -272,6 +274,41 @@ FIRST_FAILING_STEP="$(jq -r 'map(select(.failing_step != "")) | first | .failing
 [ -n "${FIRST_WORKFLOW_NAME}" ] || FIRST_WORKFLOW_NAME="${PAYLOAD_WORKFLOW_NAME}"
 if [ -z "${FIRST_WORKFLOW_NAME}" ]; then
 	FIRST_WORKFLOW_NAME="label:${LABEL:-unknown}"
+fi
+
+if [ "${SOURCE_KIND}" = "phase_failure" ]; then
+	PHASE_RUN_ID="$(_pf '.run_refs[0].run_id // ""')"
+	PHASE_RUN_FILE="${RUNTIME_DIR}/phase_run.json"
+	PHASE_JOBS_FILE="${LOG_DIR}/run-${PHASE_RUN_ID}-jobs.json"
+	PHASE_COMMENTS_FILE="${RUNTIME_DIR}/phase_issue_comments.json"
+	PHASE_PROVENANCE_FILE="${RUNTIME_DIR}/phase_provenance.json"
+	# §14 audit: the existing jobs list has no run event, path, repository or
+	# status; job logs, heal-issue lists and branch reads have no run metadata.
+	# This is one read of the claimed run in the registered source repository.
+	if ! gh_api_json_to_file "${PHASE_RUN_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${PHASE_RUN_ID}"; then
+		rm -f "${PHASE_RUN_FILE}"
+	fi
+	# §14 audit: the intake only POSTs to source-issue comments; the reporter's
+	# comment snapshot in the payload is untrusted. No existing read can prove
+	# the issue/run link. This is one paginated read of a single foreign issue.
+	if ! gh_retry gh api --method GET --paginate "repos/${SOURCE_REPO}/issues/${ISSUE_NUMBER}/comments" -F per_page=100 \
+		--jq '.[] | {user: {login: (.user.login // "")}, author_association: (.author_association // ""), body: (.body // "")}' \
+		| jq -s '.' > "${PHASE_COMMENTS_FILE}"; then
+		rm -f "${PHASE_COMMENTS_FILE}"
+	fi
+	if ! python3 "${HEAL_PY}" verify-phase-provenance --payload-json "${PAYLOAD_FILE}" \
+		--run-json "${PHASE_RUN_FILE}" --jobs-json "${PHASE_JOBS_FILE}" \
+		--comments-json "${PHASE_COMMENTS_FILE}" --self-repo "${SELF_REPO}" > "${PHASE_PROVENANCE_FILE}" \
+		|| ! jq -e 'type == "object" and (.verified | type == "boolean") and (.reason | type == "string")' "${PHASE_PROVENANCE_FILE}" >/dev/null 2>&1; then
+		printf '{"verified":false,"reason":"verifier_error"}\n' > "${PHASE_PROVENANCE_FILE}"
+	fi
+	if ! jq -e '.verified == true and .reason == "ok"' "${PHASE_PROVENANCE_FILE}" >/dev/null 2>&1; then
+		PHASE_PROVENANCE_REASON="$(jq -r '.reason' "${PHASE_PROVENANCE_FILE}")"
+		log "skip reason=phase_report_unverified detail=${PHASE_PROVENANCE_REASON} outcome=skip source=${SOURCE_REPO} issue=${ISSUE_NUMBER} run=${PHASE_RUN_ID}"
+		tg_send_msg "Workflow failure heal intake dropped a phase_failure report for ${SOURCE_REPO}#${ISSUE_NUMBER}: run ${PHASE_RUN_ID} could not be verified (${PHASE_PROVENANCE_REASON})."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		exit 0
+	fi
+	log "phase_report_verified source=${SOURCE_REPO} issue=${ISSUE_NUMBER} run=${PHASE_RUN_ID}"
 fi
 
 # A failed promote / auto-release run whose only failure is "the smoke gate
