@@ -166,6 +166,7 @@ def test_rejection_requires_latest_trusted_unused_item_marker() -> None:
 	(_rejection_marker(["src/a.py"], truncated=True), "scope-blocked", "truncated"),
 	(_rejection_marker(["src/a.py"], count=2), "scope-blocked", "malformed"),
 	(_rejection_marker(["src/a.py"], guard="scope-lock", reason="scope-lock-label"), "scope-blocked", "guard_mismatch"),
+	(_rejection_marker(["scripts/a.sh"], guard="automation-path", reason="automation-path"), "scope-blocked", "malformed"),
 	(_rejection_marker(["docs/x.md"], guard="destructive", reason="canonical-source"), "destructive-blocked", "reason_not_overridable"),
 	(_rejection_marker(["../escape"]), "scope-blocked", "malformed"),
 	(_rejection_marker(["src/a.py", "src/a.py"]), "scope-blocked", "malformed"),
