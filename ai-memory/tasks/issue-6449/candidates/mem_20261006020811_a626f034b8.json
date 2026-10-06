@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The Codex fallback at `scripts/orchestrate_poll_process.sh:23087` runs `codex ... --sandbox danger-full-access` and inherits `GH_PAT`. Fixing only the Claude path would leave the same attack open whenever Claude returns 75 (no CLI, no credential, isolation failure). Any attacker who can make Claude unavailable could still exploit it. Option C would stop the wave judge on every Claude outage, which works against the pipeline's goal of running without a human. Option A copies a pattern the repo already uses: `SECURITY_JUDGE` is in `READ_ROLES` (`scripts/claude_engine.py:99`), and its fallback uses `--sandbox read-only` (`orchestrate_poll_process.sh:6519-6520`).\nQ2: The finding and its title name only `WAVE_JUDGE`. Under the minimal-change rule, `STALL_JUDGE` and `INTEGRATION_JUDGE` get their own audit or follow-up issue. Those judges' callers may depend on write behaviour (for example the integration judge's conflict-resolution path), and that has not been checked here.\n\nEXECUTION PLAN (required for any non-letter decision):\nImplementation notes for the letter picks:\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/claude_engine.py:99 (`READ_ROLES`)\n    - scripts/orchestrate_poll_process.sh:23084-23088 (WAVE_JUDGE Claude call and Codex fallback)\n    - scripts/orchestrate_poll_process.sh:6511-6521 (SECURITY_JUDGE reference pattern)\n  steps:\n    - Add \"WAVE_JUDGE\" to the `READ_ROLES` tuple in `scripts/claude_engine.py`, so `claude_run` uses the networkless, credential-free read-profile container with the host relay.\n    - At line 23087, change `--sandbox danger-full-access` to `--sandbox read-only`. Drop `-c include_apply_patch_tool=true`, since the judge only emits JSON.\n    - Run that codex command through `env -u GH_PAT -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET`. Keep the model-provider key Codex needs.\n    - Leave every GitHub write in trusted poller code, driven by the validated output of `extract_judge_json_with_status`. Do not change the shape of the verdict JSON.\n    - Add contract tests that check: `WAVE_JUDGE` is in `READ_ROLES` (profile \"read\"); the wave-judge fallback line contains `--sandbox read-only` and does not contain `danger-full-access`; the fallback environment strips `GH_PAT`/`GH_TOKEN`.\n    - Add a changelog fragment under `changelog.d/`.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: Both engine paths for `WAVE_JUDGE` lose network access and GitHub credentials, which closes the exploit in the finding. The verdict contract is unchanged.\n  reversibility: Each change is one line (the tuple entry and the sandbox flag). `AI_ENGINE_WAVE_JUDGE=codex` still picks an engine without a code change.\n\nSETUP REQUIRED: none.",
+  "fingerprint": "1eb7c8a436495fd71a66c00e600057ff8aac80a71e43d72f0b534fa6212ee9cb",
+  "lineage": {
+    "issue_number": 6449,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37401965813",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37401965813",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6449"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261006020811_a626f034b8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6449,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37401965813"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6449",
+  "timestamps": {
+    "created_at": "2026-10-06T02:08:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
