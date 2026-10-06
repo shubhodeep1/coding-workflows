@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:2080-2086 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The `::error::` annotation for a missing `ISSUE_BODY_FILE` is emitted inside the context-file redirection, so it is not shown in the job log.\n  WHY: The step fails closed, but the diagnostic is lost in a non-uploaded file; severity was rated MAJOR by google_gemini-3_1-flash-lite and NIT by the other reviewers, so the highest severity is used.\n- tests/test_pr_merge_status_guard.py:1870-1875 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The test name says commits warn, but its parametrized expectation now verifies that commits ask for confirmation.\n  WHY: The test passes and pins the intended behavior, but its stale name may mislead maintainers.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/implement.yml:2081-2086 | severity=low | confidence=5\n  PROBLEM: The `::error::` annotation is emitted inside the context-file redirection, so the job log shows no specific error when `ISSUE_BODY_FILE` is missing.\n  WHY: The step exits 1, but the diagnostic is lost because the context file is in `RUNTIME_DIR` and is not uploaded.\n- tests/test_pr_merge_status_guard.py:1870-1875 | severity=low | confidence=5\n  PROBLEM: The test name `test_unknown_directory_push_asks_but_commit_warns` no longer matches its parametrized expectation that commits ask for confirmation.\n  WHY: The test passes and pins the intended behavior, but the stale name may mislead maintainers.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/implement.yml:2083-2086 | severity=high | confidence=5\n  PROBLEM: The error annotation indicating `ISSUE_BODY_FILE` is missing is echoed directly into `${IMPLEMENTATION_CONTEXT_FILE}` instead of being sent to standard error.\n  WHY: The Actions UI will not display the annotation, making the failure significantly more difficult to diagnose.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/implement.yml:2080-2086 | severity=low | confidence=4\n  PROBLEM: The `::error::` annotation is emitted inside the context-file redirection, so it does not appear in the job log.\n  WHY: The step exits 1, but the diagnostic is lost in a context file that is not uploaded.\n- tests/test_pr_merge_status_guard.py:1872-1875 | severity=low | confidence=5\n  PROBLEM: The test function name says `commit_warns`, but the parametrized expectation now verifies that commits ask for confirmation.\n  WHY: The test passes and correctly validates the new behavior, but the name misleads future maintainers.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- .github/workflows/implement.yml:2081-2086 | severity=low | confidence=5\n  PROBLEM: The `::error::` annotation executes inside the context-file redirection instead of appearing in the job log.\n  WHY: The step exits 1, but the specific diagnostic is buried in a non-uploaded file.\n- tests/test_pr_merge_status_guard.py:1872-1875 | severity=low | confidence=5\n  PROBLEM: The test name says `commit_warns`, but its parametrized entry pins `asks=True` for the commit subcommand.\n  WHY: The test passes with no runtime impact, but the name misleads maintainers about the commit path.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "bd267c0384b4278cbe0fcb9ddccadb4e7e0e6eab12e46a3af8529431f6eafc89",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6510,
+    "run_id": "37439972236",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37439972236",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006095525_e48baadc1f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6510,
+    "run_id": "37439972236"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T09:55:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
