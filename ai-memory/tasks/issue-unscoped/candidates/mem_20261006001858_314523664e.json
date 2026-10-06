@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add .github/ai/claude_template_divergence.json\"\n  expected_change_site: .github/ai/claude_template_divergence.json\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The file is present in the PR diff as a new file at lines 22-32 of `original_pr_diff.patch` and listed in the symbol_diff_summary (lines 1-11, 11 lines added) and `pr_changed_files.txt`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"Add .github/ai/claude_template_divergence.json\"\n  Expected change site: .github/ai/claude_template_divergence.json\n  Evidence of absence: The file is present in the PR diff as a new file at lines 22-32 of `original_pr_diff.patch` and listed in the symbol_diff_summary (lines 1-11, 11 lines added) and `pr_changed_files.txt`. The gemini TASK_GAP is incorrect \u2014 the file is included in the PR.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1cfb6c8c490c14164679bf23f44dbff87aa7a8235a8d35fa6333fbd7b611bd36",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6288,
+    "run_id": "37387443320",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37387443320",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006001858_314523664e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6288,
+    "run_id": "37387443320"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T00:18:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
