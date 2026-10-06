@@ -5191,19 +5191,22 @@ run_reviewer_pass() {
     esac
   done
 
-  # A context overflow on the sole lite reviewer must not strand a PR whose
-  # larger-window reviewer is available. Keep other failures fail-closed.
+  # A skipped sole lite Mistral slot or a context overflow needs a successful
+  # larger-window reviewer before the PR can continue.
   if [ "${REVIEW_TIER:-}" = "lite" ] && [ "${#pass_models[@]}" -eq 1 ] \
     && [ "${pass_models[0]}" = "mistralai/mistral-small-2603" ] && [ "${pass_successful}" -eq 0 ] \
-    && [ -f "${pass_status_files[0]}" ] && [ "$(cat "${pass_status_files[0]}")" = "failed" ] \
-    && grep -Eiq 'context.{0,50}(exceed|overflow|too long|length is [0-9]+ tokens|window full)|exceed.{0,50}context|too many (input )?tokens|prompt (is )?too long' "${pass_log_files[0]}" \
+    && [ -f "${pass_status_files[0]}" ] \
+    && { [ "${sf_status}" = "skipped_unmapped" ] || [ "${sf_status}" = "skipped_open" ] || {
+      [ "${sf_status}" = "failed" ] \
+        && grep -Eiq 'context.{0,50}(exceed|overflow|too long|length is [0-9]+ tokens|window full)|exceed.{0,50}context|too many (input )?tokens|prompt (is )?too long' "${pass_log_files[0]}"
+    }; } \
     && normalize_reviewer_model_list "${REVIEWER_MODELS}" | grep -Fxq 'openai/gpt-6-luna' \
     && [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
     if ! reviewer_circuit_breaker_enabled || {
       reviewer_health_dispatch_prepare "openai/gpt-6-luna"
       [ "${REVIEWER_HEALTH_DISPATCH_DECISION}" != "skip_open" ]
     }; then
-      echo "::warning::Lite reviewer Mistral exceeded its context window; retrying with live openai/gpt-6-luna." >&2
+      echo "::warning::Lite reviewer Mistral was skipped or exceeded its context window; retrying with live openai/gpt-6-luna." >&2
       run_reviewer "openai/gpt-6-luna" "openai_gpt-6-luna" "${pass_prefix}" "${pass_prompt}" "${pass_reasoning}" >&2
       if [ "$(cat "${PREVIOUS_REVIEWS_DIR}/status_${pass_prefix}_openai_gpt-6-luna.txt" 2>/dev/null || true)" = "success" ]; then
         pass_successful=1
@@ -5437,7 +5440,7 @@ if [ "${reviewers_successful}" -eq 0 ]; then
         ;;
     esac
   done
-  if [ "${review_skip_only_statuses}" -gt 0 ] && [ "${review_hard_failures}" -eq 0 ]; then
+  if [ "${REVIEW_TIER:-}" != "lite" ] && [ "${review_skip_only_statuses}" -gt 0 ] && [ "${review_hard_failures}" -eq 0 ]; then
     echo "::warning::Reviewer pass produced no successful findings; all review slots were skipped fail-open (cached-open or unmapped). Continuing with REVIEWERS_SUCCESSFUL=0."
     echo "REVIEWERS_SUCCESSFUL=0" >> "$GITHUB_ENV"
     exit 0

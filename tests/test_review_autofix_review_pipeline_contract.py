@@ -2373,7 +2373,7 @@ def _run_reviewer_health_dispatch_logging_harness() -> dict[str, str]:
 		}
 
 
-def _run_reviewer_zero_success_guard_harness(*, statuses: list[str]) -> dict[str, object]:
+def _run_reviewer_zero_success_guard_harness(*, statuses: list[str], review_tier: str = "standard") -> dict[str, object]:
 	guard_block = _reviewer_zero_success_guard_block()
 	with tempfile.TemporaryDirectory(prefix="reviewer-zero-success-") as td:
 		tmp = Path(td)
@@ -2398,6 +2398,7 @@ def _run_reviewer_zero_success_guard_harness(*, statuses: list[str]) -> dict[str
 				**os.environ,
 				"PREVIOUS_REVIEWS_DIR": str(reviews),
 				"PR_NUMBER": "123",
+				"REVIEW_TIER": review_tier,
 				"GITHUB_ENV": str(github_env_file),
 			},
 			capture_output=True,
@@ -4610,7 +4611,9 @@ def test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer(
 		reviewer_circuit_breaker_enabled() { [ -n "${TEST_HEALTH_DECISION:-}" ]; }
 		reviewer_health_dispatch_prepare() {
 		  REVIEWER_HEALTH_DISPATCH_DECISION=run
-		  if [ "$1" = 'openai/gpt-6-luna' ]; then
+		  if [ "$1" = 'mistralai/mistral-small-2603' ]; then
+		    REVIEWER_HEALTH_DISPATCH_DECISION="$TEST_MISTRAL_HEALTH_DECISION"
+		  elif [ "$1" = 'openai/gpt-6-luna' ]; then
 		    REVIEWER_HEALTH_DISPATCH_DECISION="$TEST_HEALTH_DECISION"
 		  fi
 		}
@@ -4621,7 +4624,7 @@ def test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer(
 		  printf '%s\\n' "$1" >> "$CALLS_FILE"
 		  model_safe="$2"
 		  if [ "$1" = 'mistralai/mistral-small-2603' ]; then
-		    printf 'failed\\n' > "$PREVIOUS_REVIEWS_DIR/status_$3_$model_safe.txt"
+		    printf '%s\\n' "$MISTRAL_STATUS" > "$PREVIOUS_REVIEWS_DIR/status_$3_$model_safe.txt"
 		    printf '%s\\n' "$MISTRAL_ERROR" > "$PREVIOUS_REVIEWS_DIR/$3_$model_safe.log"
 		  else
 		    printf '%s\\n' "$FALLBACK_STATUS" > "$PREVIOUS_REVIEWS_DIR/status_$3_$model_safe.txt"
@@ -4630,15 +4633,20 @@ def test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer(
 		result="$(run_reviewer_pass review "$PROMPT_FILE" high)"
 		printf 'RESULT=%s\\nACTIVE=%s\\n' "$result" "$(cat "$REVIEWER_ACTIVE_MODELS_FILE")"
 		""")
-	for error, roster, fallback_status, expected_count, health_decision in (
-		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2, ""),
-		("maximum context length is 262144 tokens, however you requested 300000 tokens", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2, ""),
-		("model context window full", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2, ""),
-		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "failed", 2, ""),
-		("HTTP 401 unauthorized", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 1, ""),
-		("maximum context length exceeded", "mistralai/mistral-small-2603", "success", 1, ""),
-		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 1, "skip_open"),
-		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2, "run"),
+	for error, roster, fallback_status, expected_count, health_decision, mistral_status, mistral_health_decision, expected_success in (
+		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2, "", "failed", "", 1),
+		("maximum context length is 262144 tokens, however you requested 300000 tokens", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2, "", "failed", "", 1),
+		("model context window full", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2, "", "failed", "", 1),
+		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "failed", 2, "", "failed", "", 0),
+		("HTTP 401 unauthorized", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 1, "", "failed", "", 0),
+		("maximum context length exceeded", "mistralai/mistral-small-2603", "success", 1, "", "failed", "", 0),
+		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 1, "skip_open", "failed", "", 0),
+		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2, "run", "failed", "", 1),
+		("HTTP 429 rate limit", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2, "", "skipped_unmapped", "", 1),
+		("HTTP 429 rate limit", "mistralai/mistral-small-2603,openai/gpt-6-luna", "failed", 2, "", "skipped_unmapped", "", 0),
+		("HTTP 429 rate limit", "mistralai/mistral-small-2603", "success", 1, "", "skipped_unmapped", "", 0),
+		("", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 1, "run", "failed", "skip_open", 1),
+		("", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 0, "skip_open", "failed", "skip_open", 0),
 	):
 		with tempfile.TemporaryDirectory(prefix="lite-mistral-overflow-") as temp_dir:
 			root = Path(temp_dir)
@@ -4655,6 +4663,8 @@ def test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer(
 					"PROMPT_FILE": str(prompt_file),
 					"CALLS_FILE": str(root / "calls.txt"),
 					"MISTRAL_ERROR": error,
+					"MISTRAL_STATUS": mistral_status,
+					"TEST_MISTRAL_HEALTH_DECISION": mistral_health_decision,
 					"REVIEWER_MODELS": roster,
 					"FALLBACK_STATUS": fallback_status,
 					"TEST_HEALTH_DECISION": health_decision,
@@ -4665,9 +4675,9 @@ def test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer(
 				text=True,
 				check=True,
 			)
-			assert len((root / "calls.txt").read_text(encoding="utf-8").splitlines()) == expected_count
-			assert f"RESULT={1 if expected_count == 2 and fallback_status == 'success' else 0}" in proc.stdout
-			if fallback_status == "success" and expected_count == 2:
+			assert (len((root / "calls.txt").read_text(encoding="utf-8").splitlines()) if (root / "calls.txt").exists() else 0) == expected_count
+			assert f"RESULT={expected_success}" in proc.stdout
+			if expected_success:
 				assert "ACTIVE=openai/gpt-6-luna" in proc.stdout
 			else:
 				assert "ACTIVE=mistralai/mistral-small-2603" in proc.stdout
@@ -5327,6 +5337,14 @@ def test_reviewer_zero_success_guard_fails_open_when_every_review_slot_was_skipp
 	assert result["returncode"] == 0
 	assert "REVIEWERS_SUCCESSFUL=0\n" == result["github_env"]
 	assert "all review slots were skipped fail-open" in result["stdout"]
+
+
+def test_reviewer_zero_success_guard_fails_closed_for_lite_without_a_successful_reviewer() -> None:
+	for status in ("skipped_open", "skipped_unmapped", "failed"):
+		result = _run_reviewer_zero_success_guard_harness(statuses=[status], review_tier="lite")
+		assert result["returncode"] == 1
+		assert result["github_env"] == ""
+		assert "All reviewers failed." in result["stdout"]
 
 
 def test_reviewer_filter_harness_strips_low_signal_paths_and_preserves_exemptions() -> None:
@@ -7992,6 +8010,7 @@ def main() -> int:
 	test_reviewer_soft_deadline_fallback_requests_partial_finalize_and_exits_green()
 	test_reviewer_health_dispatch_logs_to_stderr_only()
 	test_reviewer_zero_success_guard_fails_open_when_every_review_slot_was_skipped()
+	test_reviewer_zero_success_guard_fails_closed_for_lite_without_a_successful_reviewer()
 	test_reviewer_filter_harness_strips_low_signal_paths_and_preserves_exemptions()
 	test_reviewer_filter_script_preserves_nested_exempt_paths()
 	test_reviewer_filter_script_preserves_root_level_migration_exempt_paths()
