@@ -130,6 +130,14 @@ PHASE_FAILURE_COMMENT_PREFIXES: dict[str, tuple[str, ...]] = {
 	"plan": ("AI planning workflow failed.",),
 	"implement": ("AI implementation workflow failed for ",),
 }
+PHASE_WRAPPER_WORKFLOW_FILES: dict[str, tuple[str, ...]] = {
+	"clarify": ("ai-clarify.yml", "internal-clarify.yml"),
+	"plan": ("ai-plan.yml", "internal-plan.yml"),
+	"implement": ("ai-implement.yml", "internal-implement.yml"),
+}
+REVIEW_WRAPPER_WORKFLOW_FILES = ("ai-review.yml", "internal-review.yml", "review_autofix.yml", "review_rb_judge_dispatch.yml")
+RELEASE_WORKFLOW_FILES = ("test-and-mark-stable.yml", "mark-stable.yml", "promote-main-to-stable.yml", "auto-release-stable.yml", "forward-merge-stable-to-main.yml")
+PROVENANCE_KINDS = ("phase_failure", "autofix_failure", "workflow_run")
 PHASE_SUCCESS_COMMENT_PREFIXES: tuple[str, ...] = (
 	"<!-- ai:clarification-questions",
 	"Clarification required",
@@ -182,6 +190,7 @@ _FAILURE_REASON_RE = re.compile(r"^[a-z][a-z0-9_:-]{0,79}$")
 _RUN_URL_RE = re.compile(
 	r"https://github\.com/(?P<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/actions/runs/(?P<run_id>[0-9]+)"
 )
+_PR_RUN_NAME_RE = re.compile(r"\[pr:(?P<n>[0-9]+)\]\s*$")
 _SMOKE_TITLE_RE = re.compile(r"\[E2E Smoke Test\b", re.IGNORECASE)
 _SMOKE_LABELS = frozenset({"e2e-smoke-test"})
 _MARKER_RE = re.compile(r"<!--\s*" + re.escape(MARKER_PREFIX) + r"(?P<key>[a-z_]+)=(?P<value>[^\s>]+)\s*-->")
@@ -1462,6 +1471,111 @@ def _comment_author(comment: dict[str, Any]) -> str:
 	return str(login or "").strip().lower()
 
 
+def _run_workflow_file(run: dict[str, Any]) -> str | None:
+	path = run.get("path")
+	if not isinstance(path, str):
+		return None
+	path = path.split("@", 1)[0]
+	prefix = ".github/workflows/"
+	if not path.startswith(prefix) or "/" in path[len(prefix):] or ".." in path:
+		return None
+	return path[len(prefix):]
+
+
+def verify_run_provenance(
+	payload: dict[str, Any], *, runs: dict[str, Any], comments: list[dict[str, Any]] | None,
+	trusted_login: str, self_repo: str,
+) -> dict[str, Any]:
+	"""Keep only run references corroborated by GitHub, before reading job logs."""
+	kind = payload.get("source_kind")
+	refs = payload.get("run_refs") or []
+	result: dict[str, Any] = {"status": "not_applicable", "reason": "", "run_refs": refs, "rejections": [], "pending_current_run": ""}
+	if kind not in PROVENANCE_KINDS:
+		# Label-escalation reports are outside this gate's approved scope.
+		return result
+	result["status"] = "rejected"
+	repo = payload.get("source_repo", "")
+	if kind == "workflow_run" and repo.lower() != self_repo.lower():
+		result["reason"] = "source_not_self"
+		return result
+	if kind != "workflow_run" and not trusted_login.strip():
+		result["reason"] = "identity_unavailable"
+		return result
+	if kind != "workflow_run" and not isinstance(comments, list):
+		result["reason"] = "comments_unavailable"
+		return result
+	result["run_refs"] = []
+	phase = str(payload.get("failure_reason") or "").removesuffix("_failed")
+	allowed = (PHASE_WRAPPER_WORKFLOW_FILES.get(phase, ()) if kind == "phase_failure"
+		else REVIEW_WRAPPER_WORKFLOW_FILES if kind == "autofix_failure" else RELEASE_WORKFLOW_FILES)
+	reporter_match = _RUN_URL_RE.fullmatch(str(payload.get("reporter_run_url") or ""))
+	reporter_id = reporter_match.group("run_id") if reporter_match and reporter_match.group("repo").lower() == repo.lower() else ""
+	for position, ref in enumerate(refs):
+		run_id = str(ref["run_id"])
+		run = runs.get(run_id) if isinstance(runs, dict) else None
+		reason = ""
+		pending = False
+		if not isinstance(run, dict):
+			reason = "run_lookup_failed"
+		elif not isinstance(run.get("repository"), dict) or str(run["repository"].get("full_name") or "").lower() != repo.lower():
+			reason = "repo_mismatch"
+		elif str(run.get("id")) != run_id:
+			reason = "run_id_mismatch"
+		elif run.get("status") == "completed":
+			if run.get("conclusion") not in REPORTABLE_CONCLUSIONS:
+				reason = "not_failed"
+		else:
+			pending = (kind == "phase_failure" and position == 0) or (kind == "autofix_failure" and run_id == reporter_id)
+			if not pending or run.get("status") not in ("in_progress", "queued", "pending") or run.get("conclusion") is not None:
+				reason = "not_failed"
+		if not reason and _run_workflow_file(run) not in allowed:
+			reason = "unexpected_workflow_path"
+		if not reason and kind == "phase_failure":
+			linked = any(
+				isinstance(comment, dict) and _comment_author(comment) == trusted_login.strip().lower()
+				and sanitize_text(comment.get("body")).strip().startswith(PHASE_FAILURE_COMMENT_PREFIXES.get(phase, ()))
+				and any(item["run_id"] == run_id for item in extract_run_refs([sanitize_text(comment.get("body"))], repo))
+				for comment in comments or []
+			)
+			if not linked:
+				reason = "not_linked_to_issue"
+		if not reason and kind == "autofix_failure":
+			linked = False
+			for comment in comments or []:
+				if not isinstance(comment, dict) or _comment_author(comment) != trusted_login.strip().lower():
+					continue
+				body = sanitize_text(comment.get("body"))
+				if any(_marker_fields(pattern.search(body)).get("run") == run_id for pattern in (_FAILURE_MARKER_RE, _FAILURE_CAP_MARKER_RE)):
+					linked = True
+					break
+				if body.strip().startswith(AUTOFIX_FAILURE_COMMENT_MARKERS) and any(item["run_id"] == run_id for item in extract_run_refs([body], repo)):
+					linked = True
+					break
+			pr_number = payload.get("issue_number")
+			if not linked and isinstance(run.get("pull_requests"), list):
+				linked = any(isinstance(pr, dict) and pr.get("number") == pr_number for pr in run["pull_requests"])
+			if not linked and run.get("event") == "workflow_dispatch":
+				title_match = _PR_RUN_NAME_RE.search(str(run.get("display_title") or ""))
+				linked = bool(title_match and str(pr_number) == title_match.group("n"))
+			if not linked:
+				reason = "not_linked_to_pr"
+		if reason:
+			result["rejections"].append({"run_id": run_id, "reason": reason})
+			if position == 0 and kind in ("phase_failure", "workflow_run"):
+				result["reason"] = f"current_run_rejected:{reason}"
+		else:
+			result["run_refs"].append(ref)
+			if pending:
+				result["pending_current_run"] = run_id
+	if result["reason"]:
+		return result
+	if not result["run_refs"]:
+		result["reason"] = "no_verified_runs"
+		return result
+	result["status"] = "ok"
+	return result
+
+
 def parse_failure_markers(comments: Iterable[dict[str, Any]], *, head_sha: str, author_login: str) -> list[dict[str, Any]]:
 	"""Return the trusted failure markers for ``head_sha``, oldest first.
 
@@ -2311,6 +2425,19 @@ def _cmd_validate_payload(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _cmd_verify_run_provenance(args: argparse.Namespace) -> int:
+	try:
+		runs = _load_json_file(args.runs_json)
+	except (OSError, ValueError):
+		runs = {}
+	try:
+		comments = _load_json_file(args.comments_json) if args.comments_json else None
+	except (OSError, ValueError):
+		comments = None
+	_write_json(verify_run_provenance(_load_json_file(args.payload_json), runs=runs, comments=comments, trusted_login=args.trusted_login, self_repo=args.self_repo))
+	return 0
+
+
 def _cmd_skip_reason(args: argparse.Namespace) -> int:
 	payload = _load_json_file(args.payload_json)
 	registered: list[str] = []
@@ -2543,6 +2670,14 @@ def build_parser() -> argparse.ArgumentParser:
 	p = sub.add_parser("validate-payload", help="Validate + normalise an incoming payload")
 	p.add_argument("--payload-json", required=True)
 	p.set_defaults(func=_cmd_validate_payload)
+
+	p = sub.add_parser("verify-run-provenance", help="Verify run references before reading their job logs")
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--runs-json", required=True)
+	p.add_argument("--comments-json", default="")
+	p.add_argument("--trusted-login", default="")
+	p.add_argument("--self-repo", required=True)
+	p.set_defaults(func=_cmd_verify_run_provenance)
 
 	p = sub.add_parser("skip-reason", help="Print a skip reason (empty when the payload should be healed)")
 	p.add_argument("--payload-json", required=True)

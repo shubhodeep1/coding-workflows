@@ -11,9 +11,9 @@
 # failed clarify / plan / implement run (`phase_failure`), a failed release /
 # promotion `workflow_run`, or a manual `workflow_dispatch` re-run. It:
 #
-#   1. Validates the payload (every field is re-checked; the body, comments, and
-#      logs stay untrusted data for the model; an `autofix_failure` report from
-#      the review/autofix workflow carries its own evidence text) and applies the skip gates:
+#   1. Validates the payload and verifies run provenance before any log read
+#      (the body, comments, and logs stay untrusted data for the model; an
+#      `autofix_failure` report carries its own evidence text), then applies the skip gates:
 #      kill switch, unregistered source repo, smoke-test fixture, self run,
 #      downstream release-gate failure already reported by the gate itself.
 #   2. Fetches the failed jobs + a filtered tail of their logs for the linked
@@ -202,6 +202,62 @@ fi
 SOURCE_LABEL="${SOURCE_REPO}#${ISSUE_NUMBER:-run}"
 log "received source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} label=${LABEL:-none} workflow=${PAYLOAD_WORKFLOW_NAME:-none}"
 
+# --- Provenance (before any log read) --------------------------------------
+
+PENDING_CURRENT_RUN=""
+if [[ "${SOURCE_KIND}" == "phase_failure" || "${SOURCE_KIND}" == "autofix_failure" || "${SOURCE_KIND}" == "workflow_run" ]]; then
+	PROVENANCE_DIR="${RUNTIME_DIR}/provenance"
+	mkdir -p "${PROVENANCE_DIR}"
+	PROVENANCE_RUNS="${PROVENANCE_DIR}/runs.json"
+	PROVENANCE_COMMENTS=""
+	PROVENANCE_RESULT="${PROVENANCE_DIR}/result.json"
+	PROVENANCE_LOGIN=""
+	printf '{}\n' > "${PROVENANCE_RUNS}"
+	# §14 API audit: the existing actions/runs/{id}/jobs call returns no run
+	# repository, workflow path, conclusion or PR association, and no issue/PR
+	# comments were read here before. At most one /user read, three run GETs,
+	# and one paginated comment read; failures reject rather than bypass this gate.
+	if [ "${SOURCE_KIND}" != "workflow_run" ]; then
+		PROVENANCE_LOGIN="$(gh_retry gh api --method GET user --jq .login 2>/dev/null || true)"
+		PROVENANCE_COMMENTS="${PROVENANCE_DIR}/comments.json"
+		if ! gh_retry gh api --method GET --paginate "repos/${SOURCE_REPO}/issues/${ISSUE_NUMBER}/comments" -F per_page=100 \
+			--jq '.[] | {id, body: (.body // ""), user: (.user // {})}' 2>/dev/null \
+			| jq -s '.' > "${PROVENANCE_COMMENTS}" 2>/dev/null \
+			|| ! jq -e 'type == "array"' "${PROVENANCE_COMMENTS}" >/dev/null 2>&1; then
+			PROVENANCE_COMMENTS=""
+		fi
+	fi
+	while IFS= read -r provenance_run_id; do
+		PROVENANCE_RUN_FILE="${PROVENANCE_DIR}/run-${provenance_run_id}.json"
+		if gh_api_json_to_file "${PROVENANCE_RUN_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${provenance_run_id}" 2>/dev/null \
+			&& jq -e 'type == "object"' "${PROVENANCE_RUN_FILE}" >/dev/null 2>&1; then
+			jq --arg id "${provenance_run_id}" --slurpfile run "${PROVENANCE_RUN_FILE}" '. + {($id): $run[0]}' "${PROVENANCE_RUNS}" > "${PROVENANCE_RUNS}.tmp" \
+				&& mv "${PROVENANCE_RUNS}.tmp" "${PROVENANCE_RUNS}"
+		fi
+	done < <(jq -r '.run_refs[].run_id' "${PAYLOAD_FILE}")
+	if ! python3 "${HEAL_PY}" verify-run-provenance --payload-json "${PAYLOAD_FILE}" --runs-json "${PROVENANCE_RUNS}" \
+		--comments-json "${PROVENANCE_COMMENTS}" --trusted-login "${PROVENANCE_LOGIN}" --self-repo "${SELF_REPO}" > "${PROVENANCE_RESULT}" 2>/dev/null \
+		|| ! jq -e 'type == "object" and (.status == "ok" or .status == "rejected") and (.run_refs | type == "array") and (.rejections | type == "array")' "${PROVENANCE_RESULT}" >/dev/null 2>&1; then
+		printf '{"status":"rejected","reason":"verifier_error","rejections":[]}\n' > "${PROVENANCE_RESULT}"
+	fi
+	while IFS=$'\t' read -r provenance_run_id provenance_reason; do
+		log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${provenance_run_id} reason=${provenance_reason}"
+	done < <(jq -r '.rejections[] | [.run_id, .reason] | @tsv' "${PROVENANCE_RESULT}")
+	if [ "$(jq -r '.status' "${PROVENANCE_RESULT}")" != "ok" ]; then
+		PROVENANCE_REASON="$(jq -r '.reason // "verifier_error"' "${PROVENANCE_RESULT}")"
+		log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=${PROVENANCE_REASON}"
+		tg_send_msg "Workflow failure heal rejected run provenance for ${SOURCE_REPO} (${SOURCE_KIND}, issue ${ISSUE_NUMBER:-none}, reason ${PROVENANCE_REASON})."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		exit 0
+	fi
+	PENDING_CURRENT_RUN="$(jq -r '.pending_current_run // ""' "${PROVENANCE_RESULT}")"
+	if ! jq --slurpfile result "${PROVENANCE_RESULT}" '.run_refs = $result[0].run_refs' "${PAYLOAD_FILE}" > "${PAYLOAD_FILE}.tmp" \
+		|| ! mv "${PAYLOAD_FILE}.tmp" "${PAYLOAD_FILE}"; then
+		log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=verifier_error"
+		exit 0
+	fi
+	log "provenance_verified source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} runs=$(jq '.run_refs | length' "${PAYLOAD_FILE}")"
+fi
+
 # --- Collect failed jobs + logs --------------------------------------------
 
 LOG_DIR="${RUNTIME_DIR}/logs"
@@ -265,6 +321,14 @@ while IFS=$'\t' read -r run_id run_url; do
 		| [(.id|tostring), (.name // ""), (.workflow_name // ""), ((.steps // []) | map(select((.conclusion // "") | IN("failure","timed_out","cancelled"))) | first | .name // "")]
 		| map(gsub("[\\t\\n\\r]"; " ")) | @tsv' "${JOBS_FILE}")
 done < <(jq -r '.run_refs[] | [.run_id, .url] | @tsv' "${PAYLOAD_FILE}")
+
+if [ "${SOURCE_KIND}" = "phase_failure" ] && [ -n "${PENDING_CURRENT_RUN}" ] \
+	&& { ! jq -e --arg run_id "${PENDING_CURRENT_RUN}" 'any(.[]; .run_id == $run_id)' "${SUMMARIES_FILE}" >/dev/null 2>&1 \
+		|| ! jq -e 'any(.jobs[]; .conclusion == "failure" or .conclusion == "timed_out")' "${LOG_DIR}/run-${PENDING_CURRENT_RUN}-jobs.json" >/dev/null 2>&1; }; then
+	log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${PENDING_CURRENT_RUN} reason=current_run_no_failed_job"
+	log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=current_run_no_failed_job"
+	exit 0
+fi
 
 SUMMARY_COUNT="$(jq 'length' "${SUMMARIES_FILE}")"
 FIRST_WORKFLOW_NAME="$(jq -r 'map(select(.workflow_name != "")) | first | .workflow_name // ""' "${SUMMARIES_FILE}")"
