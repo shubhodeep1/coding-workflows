@@ -37,3 +37,26 @@ def test_cloudflare_preflight_and_deploy_boundaries(command: Path):
 		assert required in cloudflare, (command, required)
 	assert "Never execute unmerged code with credentials" in text.split("## Rules", 1)[1]
 	assert "verified default-branch commit" in text.split("## Tool Access", 1)[1]
+
+
+def test_shared_cloudflare_deploy_boundary():
+	shared_document = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+	shared_rule = " ".join((
+		shared_document.split("### C) Worker Deploys & Edits", 1)[1]
+		.split("### D) Destructive", 1)[0]
+	).split())
+	for required in (
+		"Never execute unmerged code with credentials",
+		"default branch to be protected",
+		"clean detached worktree pinned",
+		"recheck the API branch tip and protection",
+		"GitHub check-runs for the pinned",
+		"failing or pending",
+		"credential-free, no-egress sandbox",
+		"unrelated session credentials stripped",
+		"provisioning a narrower token is an operator task",
+	):
+		assert required.lower() in shared_rule.lower(), required
+	assert "do not add an extra approval round" in shared_rule
+	assert "do not self-deploy" in shared_rule
+	assert "### D) Destructive & Account-Level Writes" in shared_document

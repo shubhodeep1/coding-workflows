@@ -1397,9 +1397,30 @@ Constraints that ride along:
 
 - **Only for the covered domains.** A credential is scoped to its account;
   never use it to touch Workers or zones unrelated to the task.
-- **Validate before deploy.** Run the project's checks (typecheck, tests,
-  `wrangler deploy --dry-run` where available) before uploading; a deploy
-  is user-visible on a live site the moment it lands.
+- **Never execute unmerged code with credentials.** Project checks, package
+  install lifecycle scripts, builds, and `wrangler deploy --dry-run` can
+  execute repository code. Never run them from an unmerged PR or branch in
+  a shell holding session credentials, even before deploy approval.
+- **Deploy only a verified default-branch commit.** Require the target
+  repository's default branch to be protected. Resolve its commit SHA via
+  the GitHub API, fetch it, and deploy from a clean detached worktree pinned
+  to that SHA, not a PR checkout or moving ref. Verify the worktree HEAD and
+  cleanliness and recheck the API branch tip and protection immediately
+  before deploying. If any check fails, do not self-deploy.
+- **Validate without credentials.** Prefer GitHub check-runs for the pinned
+  SHA; do not deploy while checks are failing or pending. Run local checks
+  (typecheck, tests, `wrangler deploy --dry-run` where available) only in a
+  credential-free, no-egress sandbox with an isolated home and no host
+  credentials or Docker socket mounted. If isolation is unavailable, skip
+  local checks and rely on check-runs; never run them in the credential-
+  bearing session shell.
+- **Limit deploy credential exposure.** Deploy only from the verified
+  worktree, matching the target Worker against the repo's §24.F registry.
+  Give the deploy process only the matching site's Cloudflare account ID and
+  API token, with a clean home and unrelated session credentials stripped.
+  These account-owned credentials are not Worker-scoped; provisioning a
+  narrower token is an operator task, not a reason to expose additional
+  credentials during deployment.
 - **Preserve rollback.** Prefer versioned uploads/gradual rollouts where
   the account supports them; never delete the previous version as part of
   a deploy.
