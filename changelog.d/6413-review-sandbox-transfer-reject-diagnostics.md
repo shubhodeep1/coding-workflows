@@ -3,7 +3,7 @@
 
   | Item | Value |
   |---|---|
-  | `reason=` (transfer) | `admitted_inventory_missing`, `symlink_path`, `unsafe_file`, `file_changed`, `entry_limit`, `unsafe_directory`, `unsafe_result_path`, `workspace_size_limit`, `host_baseline_changed`, `host_path_conflict`, `transfer_rollback_failed`; unclassified errors use `unknown` |
+  | `reason=` (transfer) | `admitted_inventory_missing`, `symlink_path`, `unsafe_file`, `file_changed`, `entry_limit`, `unsafe_directory`, `unsafe_result_path`, `size_limit`, `host_baseline_changed`, `result_conflicts_host`, `transfer_rollback_failed`; unclassified errors use `unknown` |
   | `category=` (unsafe directories only) | `symlink`, `invalid_name`, `dot_github_subtree`, `env_like`, `sensitive_name`, `key_material_suffix`, `excluded_name_variant`, `other` |
   | `depth=` (unsafe directories only) | `1`, `2`, `3+` |
   | Runtime file | `${RUNTIME_DIR}/review_sandbox_transfer_reason_<output-basename>` (per editor attempt) |
