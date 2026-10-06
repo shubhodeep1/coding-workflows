@@ -798,11 +798,12 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   those per-command settings can affect the push destination, so the guard
   does not trust its stored URL or PR history for that push. Wrapped commits
   are checked in the directory selected by `env -C` or `GIT_DIR`; an explicit
-  commit directory override that cannot be resolved and an unparseable
-  `env -S` command ask for confirmation. A push from an unresolved directory
-  (including an appended `GIT_DIR+=` / `GIT_WORK_TREE+=`, whose value is never
-  applied) is checked against the session checkout, which can still block,
-  and otherwise asks.
+  commit directory override that cannot be resolved (including `env -C`)
+  asks for confirmation without querying the session checkout's PR history.
+  An unparseable `env -S` command also asks for confirmation. A push from an
+  unresolved directory (including an appended
+  `GIT_DIR+=` / `GIT_WORK_TREE+=`, whose value is never applied) is checked
+  against the session checkout, which can still block, and otherwise asks.
   Leading redirections, including those after environment assignments, do
   not bypass commit/push detection. A spaced, quoted or escaped digit before a
   redirection (`2 >out`, `'2'>out`) is a push refspec with the normal check;
