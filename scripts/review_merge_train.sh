@@ -13,7 +13,22 @@
 # Policy (Q2 = "lowest PR number wins"): a PR whose changed files overlap an
 # OLDER open same-repository ai/issue-* PR on the same base is queued — labelled
 # ai:merge-queued and its review run soft-exits — until every older
-# overlapping PR is merged or closed. Fork heads are never blockers. The queue
+# overlapping PR is merged or closed. Fork heads are never blockers.
+# Issue #6570 (plan P1, docs/plans/remove-unattended-pipeline-stuck-states-plan.md)
+# narrows "overlap" with three default-on rules, applied in this order to each
+# path-overlapping older PR by _mt_blockers_for_into (so gate and release
+# always decide the same way):
+#   1. Priority lane (MERGE_TRAIN_PRIORITY_LABELS): a PR whose verified linked
+#      issue carries a priority label never waits behind a verified
+#      non-priority PR. Two priority PRs keep lowest-number-first.
+#   2. Bounded head (MERGE_TRAIN_HEAD_MAX_AGE_HOURS): an older PR that is not
+#      itself queued and has been under review longer than the cap stops
+#      blocking. Incomplete history or an unverified PR keeps the blocker.
+#   3. Real conflicts (MERGE_TRAIN_CONFLICT_CHECK_ENABLED): an older PR whose
+#      head `git merge-tree --write-tree` merges cleanly with this PR's head
+#      stops blocking. Any git error keeps the blocker (conflict=unknown).
+# Every rule can only remove a blocker; any failure keeps today's behaviour.
+# The queue
 # is released by the `release` subcommand, run from cancel_on_pr_close.yml whenever a PR closes
 # (event path, immediate) and from orchestrate_poll.yml on every tick
 # (backstop; runs even when the repo has no active orchestrator project).
@@ -29,6 +44,12 @@
 #   MERGE_TRAIN_LABEL                      default ai:merge-queued
 #   MERGE_TRAIN_HEAD_REF_PREFIX            default ai/issue-
 #   MERGE_TRAIN_ALLOW_WORKFLOW_EDITS       default true; forwarded on dispatch
+#   MERGE_TRAIN_CONFLICT_CHECK_ENABLED     default true (true/1/yes/on); other = off
+#   MERGE_TRAIN_HEAD_MAX_AGE_HOURS         default 24; 0 disables the age bypass;
+#                                          a non-integer warns and falls back to 24
+#   MERGE_TRAIN_PRIORITY_LABELS            default ai:workflow-heal,ai:security
+#                                          (comma-separated); empty, none or off
+#                                          disables the priority lane
 # Env (gate):
 #   PR_NUMBER, BASE_BRANCH, TARGET_BRANCH  required (TARGET_BRANCH = PR head ref)
 #   IS_SMOKE_TEST                         only literal true bypasses overlap checks
@@ -47,7 +68,13 @@
 #            and fall back to one `pulls/PR/files` call when the diff is empty,
 #            unparseable, or uses Git C-quoted paths; +1 paginated comments-list
 #            call whenever blockers exist, plus conditional label/comment writes
-#            when queue state changes. Gate-side release adds one comments-list
+#            when queue state changes. When at least one older PR overlaps
+#            and the priority lane is on (or an overlapping blocker is older
+#            than MERGE_TRAIN_HEAD_MAX_AGE_HOURS), +1 aliased GraphQL call
+#            (_mt_pr_meta_prefetch) covers this PR and every overlapping
+#            blocker. The conflict check uses git only (a `git fetch` by SHA of
+#            missing heads plus `git merge-tree`), no API calls.
+#            Gate-side release adds one comments-list
 #            call, up to one marker PATCH, and one label DELETE. A marker lookup
 #            adds one cached /user read; a bypass candidate adds a paginated
 #            issues/N/events read and one collaborator-permission read.
@@ -59,7 +86,9 @@
 #            at most 10 each — normally 10 calls — read once,
 #            only when a queued PR passes the base filter; see
 #            _mt_inflight_review_branches) + files calls
-#            as above, cached per PR for the run; one /user read on the first
+#            as above, cached per PR for the run; at most 1 GraphQL call per
+#            evaluated queued PR with overlapping blockers, covering only PR
+#            numbers not already cached this run; one /user read on the first
 #            marker lookup; each unblocked queued PR adds
 #            1 comments-list call and up to 1 marker PATCH before its label-
 #            removal claim. A release adds 1 workflow dispatch and a best-effort
@@ -117,6 +146,35 @@ if [ -z "${MT_REPO}" ]; then
 	_mt_warn "review_merge_train.sh: GITHUB_REPOSITORY unset; fail-open (no-op)."
 	exit 0
 fi
+
+# Issue #6570 settings. Every one defaults inside the script (§8) so a caller
+# that does not export them gets the default-on behaviour.
+case "$(printf '%s' "${MERGE_TRAIN_CONFLICT_CHECK_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+	true|1|yes|on) MT_CONFLICT_CHECK="true" ;;
+	*) MT_CONFLICT_CHECK="false" ;;
+esac
+MT_HEAD_MAX_AGE_HOURS="${MERGE_TRAIN_HEAD_MAX_AGE_HOURS:-24}"
+if ! [[ "${MT_HEAD_MAX_AGE_HOURS}" =~ ^[0-9]{1,6}$ ]]; then
+	_mt_warn "review_merge_train.sh: MERGE_TRAIN_HEAD_MAX_AGE_HOURS='${MT_HEAD_MAX_AGE_HOURS}' is not a whole number of hours; using 24."
+	MT_HEAD_MAX_AGE_HOURS=24
+fi
+MT_HEAD_MAX_AGE_HOURS=$((10#${MT_HEAD_MAX_AGE_HOURS}))
+# Unset means the default; an explicitly empty value disables the lane. A repo
+# variable cannot pass an empty string through `vars.X || 'default'`, so
+# `none` / `off` also disable it.
+MT_PRIORITY_LABELS_RAW="${MERGE_TRAIN_PRIORITY_LABELS-ai:workflow-heal,ai:security}"
+case "$(printf '%s' "${MT_PRIORITY_LABELS_RAW}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+	''|none|off) MT_PRIORITY_LABELS_JSON='[]' ;;
+	*)
+		if ! MT_PRIORITY_LABELS_JSON="$(printf '%s' "${MT_PRIORITY_LABELS_RAW}" | jq -Rsc 'split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)) | unique' 2>/dev/null)" \
+			|| ! [[ "${MT_PRIORITY_LABELS_JSON}" == \[* ]]; then
+			_mt_warn "review_merge_train.sh: could not parse MERGE_TRAIN_PRIORITY_LABELS; priority lane disabled for this run."
+			MT_PRIORITY_LABELS_JSON='[]'
+		fi
+		;;
+esac
+# Which subcommand is evaluating blockers; appears in the per-blocker log lines.
+MT_EVAL_SOURCE=""
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -193,7 +251,9 @@ _mt_intersect() {
 }
 
 # Open PRs, oldest first, one compact JSON object per line:
-# {number, head, head_repo, base, draft, labels[]}. `tojson` matters: `gh api --jq`
+# {number, head, head_repo, head_sha, created_at, base, draft, labels[]}.
+# head_sha and created_at (issue #6570) feed the conflict check and the head
+# age cap; older consumers ignore them. `tojson` matters: `gh api --jq`
 # pretty-prints object results across several lines, and the callers read
 # this output line by line. $1 = base branch filter (empty = all bases).
 _mt_list_open_prs() {
@@ -203,7 +263,7 @@ _mt_list_open_prs() {
 		endpoint="${endpoint}&base=${base}"
 	fi
 	gh_retry gh api --paginate "${endpoint}" \
-		--jq '.[] | {number: .number, head: .head.ref, head_repo: (.head.repo.full_name // ""), base: .base.ref, draft: .draft, labels: [.labels[].name]} | tojson' 2>/dev/null
+		--jq '.[] | {number: .number, head: .head.ref, head_repo: (.head.repo.full_name // ""), head_sha: (.head.sha // ""), created_at: (.created_at // ""), base: .base.ref, draft: .draft, labels: [.labels[].name]} | tojson' 2>/dev/null
 }
 
 # Older open same-repository ai/issue-* PRs (same base, lower number, not
@@ -214,9 +274,15 @@ _mt_list_open_prs() {
 # `$(...)` subshell, so the file lists it pulls through _mt_pr_files_into stay
 # cached for the next queued PR the release loop evaluates. `_mt_blockers_for`
 # is the printing form kept for compatibility.
+#
+# Two phases (issue #6570). Phase A collects the path-overlapping older PRs
+# exactly as before (same filters, same MT_MAX_OLDER cap). Phase B drops a
+# candidate only on positive evidence: the priority lane, a stale head, or a
+# clean `git merge-tree`; anything unverifiable keeps it.
 _mt_blockers_for_into() {
 	local __mt_blockers_dest="$1" pr="$2" base="$3" own_files="$4" prs_json="$5"
 	local examined=0 line num head head_repo draft labels files common __mt_blockers_acc=""
+	local -a __mt_cand_num=() __mt_cand_head=() __mt_cand_sha=() __mt_cand_created=() __mt_cand_labels=() __mt_cand_common=()
 	while IFS= read -r line; do
 		[ -n "${line}" ] || continue
 		num="$(printf '%s' "${line}" | jq -r '.number')"
@@ -245,17 +311,344 @@ _mt_blockers_for_into() {
 		fi
 		common="$(_mt_intersect "${own_files}" "${files}")"
 		if [ -n "${common}" ]; then
-			__mt_blockers_acc+="$(printf '#%s:%s' "${num}" "$(printf '%s\n' "${common}" | paste -sd, -)")"$'\n'
+			__mt_cand_num+=("${num}")
+			__mt_cand_head+=("${head}")
+			__mt_cand_sha+=("$(printf '%s' "${line}" | jq -r '.head_sha // ""')")
+			__mt_cand_created+=("$(printf '%s' "${line}" | jq -r '.created_at // ""')")
+			__mt_cand_labels+=("${labels}")
+			__mt_cand_common+=("$(printf '%s\n' "${common}" | paste -sd, -)")
 		fi
 	done < <(printf '%s\n' "${prs_json}" | jq -c 'select(.base == $b)' --arg b "${base}")
+
+	if [ "${#__mt_cand_num[@]}" -eq 0 ]; then
+		printf -v "${__mt_blockers_dest}" '%s' ""
+		return 0
+	fi
+
+	# Phase B. This PR's own head (for priority and the conflict probe) comes
+	# from its own row in the listing both callers already hold.
+	local own_line own_head="" own_sha="" idx age_needed="false" meta_args=() now_epoch created_epoch
+	local own_priority="off" own_priority_rc=1 cand_priority_rc cand_priority stale_state conflict_state action shown
+	local skipped_stale=0 skipped_priority=0 skipped_clean=0 source_name="${MT_EVAL_SOURCE:-unknown}"
+	own_line="$(printf '%s\n' "${prs_json}" | jq -c --argjson n "${pr}" 'select(.number == $n)' 2>/dev/null | head -n 1 || true)"
+	if [ -n "${own_line}" ]; then
+		own_head="$(printf '%s' "${own_line}" | jq -r '.head // ""')"
+		own_sha="$(printf '%s' "${own_line}" | jq -r '.head_sha // ""')"
+	fi
+	now_epoch="$(date -u +%s)"
+	if [ "${MT_HEAD_MAX_AGE_HOURS}" -gt 0 ]; then
+		for idx in "${!__mt_cand_num[@]}"; do
+			_mt_has_label "${__mt_cand_labels[$idx]}" && continue
+			created_epoch="$(_mt_iso_epoch "${__mt_cand_created[$idx]}")" || continue
+			if [ $((now_epoch - created_epoch)) -gt $((MT_HEAD_MAX_AGE_HOURS * 3600)) ]; then
+				meta_args+=("${__mt_cand_num[$idx]}+timeline")
+				age_needed="true"
+			fi
+		done
+	fi
+	if [ "${MT_PRIORITY_LABELS_JSON}" != "[]" ]; then
+		meta_args+=("${pr}")
+		for idx in "${!__mt_cand_num[@]}"; do
+			meta_args+=("${__mt_cand_num[$idx]}")
+		done
+	fi
+	if [ "${#meta_args[@]}" -gt 0 ]; then
+		_mt_pr_meta_prefetch "${meta_args[@]}"
+	fi
+	if [ "${MT_PRIORITY_LABELS_JSON}" != "[]" ]; then
+		own_priority_rc=0
+		_mt_pr_is_priority "${pr}" "${own_head}" || own_priority_rc=$?
+		case "${own_priority_rc}" in
+			0) own_priority="yes" ;;
+			1) own_priority="no" ;;
+			*) own_priority="unknown" ;;
+		esac
+	fi
+
+	for idx in "${!__mt_cand_num[@]}"; do
+		num="${__mt_cand_num[$idx]}"
+		cand_priority="n/a"
+		stale_state="unchecked"
+		[ "${MT_HEAD_MAX_AGE_HOURS}" -gt 0 ] || stale_state="off"
+		conflict_state="unchecked"
+		action="block"
+		shown="${__mt_cand_common[$idx]}"
+		# 1. Priority lane: only a verified priority PR passes a verified
+		# non-priority blocker; an unknown blocker is kept.
+		if [ "${own_priority}" = "yes" ]; then
+			cand_priority_rc=0
+			_mt_pr_is_priority "${num}" "${__mt_cand_head[$idx]}" || cand_priority_rc=$?
+			case "${cand_priority_rc}" in
+				0) cand_priority="yes" ;;
+				1) cand_priority="no" ;;
+				*) cand_priority="unknown" ;;
+			esac
+			if [ "${cand_priority}" = "no" ]; then
+				action="skip"
+				skipped_priority=$((skipped_priority + 1))
+			fi
+		fi
+		# 2. Bounded head.
+		if [ "${action}" = "block" ] && [ "${MT_HEAD_MAX_AGE_HOURS}" -gt 0 ]; then
+			stale_state="no"
+			if [ "${age_needed}" = "true" ] && _mt_blocker_is_stale "${num}" "${__mt_cand_head[$idx]}" "${__mt_cand_labels[$idx]}" "${now_epoch}"; then
+				stale_state="yes"
+				action="skip"
+				skipped_stale=$((skipped_stale + 1))
+			fi
+		fi
+		# 3. Real conflict.
+		if [ "${action}" = "block" ] && [ "${MT_CONFLICT_CHECK}" = "true" ]; then
+			_mt_conflict_probe "${own_sha}" "${__mt_cand_sha[$idx]}"
+			conflict_state="${_MT_PROBE_RESULT}"
+			case "${conflict_state}" in
+				none)
+					action="skip"
+					skipped_clean=$((skipped_clean + 1))
+					;;
+				conflict)
+					if [ -n "${_MT_PROBE_PATHS}" ]; then
+						shown="$(printf '%s\n' "${_MT_PROBE_PATHS}" | sed '/^$/d' | paste -sd, -)"
+					fi
+					;;
+			esac
+		fi
+		_mt_log "MERGE_TRAIN_GATE pr=${pr} source=${source_name} older=${num} overlap=paths conflict=${conflict_state} priority=${own_priority}:${cand_priority} stale=${stale_state} action=${action}"
+		if [ "${action}" = "block" ]; then
+			__mt_blockers_acc+="#${num}:${shown}"$'\n'
+		fi
+	done
+	_mt_log "MERGE_TRAIN_GATE pr=${pr} source=${source_name} skipped_stale_head=${skipped_stale} skipped_priority=${skipped_priority} skipped_clean=${skipped_clean}"
 	# Match what the former `$(...)` capture produced: no trailing newline.
 	printf -v "${__mt_blockers_dest}" '%s' "${__mt_blockers_acc%$'\n'}"
 	return 0
 }
 
+# Epoch seconds for a GitHub UTC timestamp (YYYY-MM-DDTHH:MM:SSZ, optional
+# fractional seconds). Returns 1 for anything else, so callers keep blockers.
+_mt_iso_epoch()
+{
+	local ts="$1"
+	[[ "${ts}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]] || return 1
+	date -u -d "${ts}" +%s 2>/dev/null
+}
+
+# Batched PR metadata for the priority lane and the head-age cap (issue #6570).
+#
+# Input:     PR numbers; "N+timeline" also requests N's queue-label history.
+# Output:    _MT_META_CACHE[N] = compact JSON
+#            {head_ref, created_at, closing:[{number, labels[]}],
+#             timeline: null | {complete, events:[{type, created_at}]}}
+#            (events are the MT_LABEL label/unlabel events only). A number the
+#            call could not verify gets _MT_META_FAILED[N]=1 and no cache entry.
+# API calls: one aliased GraphQL query for every number not already cached
+#            (or cached without the history it now needs); 0 when all are
+#            cached. Audit (§14): the REST pulls listing carries neither label
+#            history nor the linked issues' labels, and the existing
+#            issues/N/events read in _mt_bypass_authorized is one REST call
+#            per PR. A single aliased query is the only shape that covers N
+#            blockers in one call.
+# Fail-open: a failed or malformed call caches nothing and marks the numbers
+#            failed (no retry this run); callers then keep every blocker and
+#            grant no priority.
+declare -A _MT_META_CACHE=()
+declare -A _MT_META_FAILED=()
+_mt_pr_meta_prefetch()
+{
+	local arg meta_num want_timeline query="" response="" owner name parsed
+	local -a fetch_nums=()
+	local -A fetch_timeline=()
+	owner="${MT_REPO%%/*}"
+	name="${MT_REPO#*/}"
+	if ! [[ "${owner}" =~ ^[A-Za-z0-9_.-]+$ && "${name}" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+		_mt_warn "merge-train: metadata lookup skipped; repository '${MT_REPO}' is not owner/name."
+		return 0
+	fi
+	for arg in "$@"; do
+		meta_num="${arg%+timeline}"
+		want_timeline="false"
+		[ "${arg}" != "${meta_num}" ] && want_timeline="true"
+		[[ "${meta_num}" =~ ^[1-9][0-9]*$ ]] || continue
+		[ -z "${_MT_META_FAILED[${meta_num}]+x}" ] || continue
+		if [ -n "${_MT_META_CACHE[${meta_num}]+x}" ]; then
+			if [ "${want_timeline}" != "true" ] || printf '%s' "${_MT_META_CACHE[${meta_num}]}" | jq -e '.timeline != null' >/dev/null 2>&1; then
+				continue
+			fi
+		fi
+		if [ -z "${fetch_timeline[${meta_num}]+x}" ]; then
+			fetch_nums+=("${meta_num}")
+			fetch_timeline[${meta_num}]="${want_timeline}"
+		elif [ "${want_timeline}" = "true" ]; then
+			fetch_timeline[${meta_num}]="true"
+		fi
+	done
+	[ "${#fetch_nums[@]}" -gt 0 ] || return 0
+	query='query($owner:String!,$name:String!){repository(owner:$owner,name:$name){'
+	for meta_num in "${fetch_nums[@]}"; do
+		query+="p${meta_num}:pullRequest(number:${meta_num}){number headRefName createdAt closingIssuesReferences(first:10){nodes{number labels(first:50){nodes{name}}}}"
+		if [ "${fetch_timeline[${meta_num}]}" = "true" ]; then
+			query+=' timelineItems(itemTypes:[LABELED_EVENT,UNLABELED_EVENT],last:100){pageInfo{hasPreviousPage} nodes{__typename ... on LabeledEvent{createdAt label{name}} ... on UnlabeledEvent{createdAt label{name}}}}'
+		fi
+		query+='}'
+	done
+	query+='}}'
+	if ! response="$(gh_retry gh api graphql -f query="${query}" -f owner="${owner}" -f name="${name}" 2>/dev/null)" \
+		|| ! printf '%s' "${response}" | jq -e '.data.repository | type == "object"' >/dev/null 2>&1; then
+		_mt_warn "merge-train: metadata lookup failed for PR(s) ${fetch_nums[*]}; keeping their blockers and granting no priority."
+		for meta_num in "${fetch_nums[@]}"; do
+			_MT_META_FAILED[${meta_num}]=1
+		done
+		return 0
+	fi
+	for meta_num in "${fetch_nums[@]}"; do
+		if parsed="$(printf '%s' "${response}" | jq -ce --arg k "p${meta_num}" --argjson n "${meta_num}" --arg label "${MT_LABEL}" '
+			.data.repository[$k] as $p
+			| if ($p | type) != "object" or $p.number != $n then error("unverified") else
+				{head_ref: ($p.headRefName // ""),
+				 created_at: ($p.createdAt // ""),
+				 closing: [($p.closingIssuesReferences.nodes // [])[] | select(type == "object") | {number: .number, labels: [(.labels.nodes // [])[] | .name? // empty]}],
+				 timeline: (if ($p.timelineItems | type) == "object" then
+					{complete: ($p.timelineItems.pageInfo.hasPreviousPage == false),
+					 events: [($p.timelineItems.nodes // [])[] | select(type == "object" and (.label.name? // "") == $label) | {type: .__typename, created_at: (.createdAt // "")}]}
+					else null end)}
+			end' 2>/dev/null)"; then
+			_MT_META_CACHE[${meta_num}]="${parsed}"
+		else
+			_mt_warn "merge-train: metadata for PR #${meta_num} missing or unverified; keeping it as a blocker."
+			_MT_META_FAILED[${meta_num}]=1
+		fi
+	done
+	return 0
+}
+
+# Priority lane membership (issue #6570). `_mt_pr_is_priority <pr> <head_ref>`
+# returns 0 = priority, 1 = not priority, 2 = unknown. Priority needs every
+# one of: head ref `${MT_PREFIX}<M>`, GitHub's headRefName equal to it, M among
+# GitHub's closingIssuesReferences, and issue M carrying a label from
+# MERGE_TRAIN_PRIORITY_LABELS. PR body text never grants priority.
+_mt_pr_is_priority()
+{
+	local pr="$1" head_ref="$2" issue_ref meta
+	issue_ref="${head_ref#"${MT_PREFIX}"}"
+	if [ -z "${head_ref}" ] || [ "${issue_ref}" = "${head_ref}" ] || ! [[ "${issue_ref}" =~ ^[1-9][0-9]*$ ]]; then
+		return 1
+	fi
+	[ -n "${_MT_META_CACHE[${pr}]+x}" ] || return 2
+	meta="${_MT_META_CACHE[${pr}]}"
+	if ! printf '%s' "${meta}" | jq -e --arg h "${head_ref}" '.head_ref == $h' >/dev/null 2>&1; then
+		return 2
+	fi
+	if printf '%s' "${meta}" | jq -e --argjson m "${issue_ref}" --argjson wanted "${MT_PRIORITY_LABELS_JSON}" \
+		'any(.closing[]; .number == $m and any(.labels[]; . as $l | any($wanted[]; . == $l)))' >/dev/null 2>&1; then
+		return 0
+	fi
+	return 1
+}
+
+# Head-age cap (issue #6570). `_mt_blocker_is_stale <num> <head> <labels_csv>
+# <now_epoch>` returns 0 only when the blocker is not itself queued, its
+# metadata matches the listed head, and its review started more than
+# MERGE_TRAIN_HEAD_MAX_AGE_HOURS ago. Review start is the newest queue-label
+# removal; a PR never queued (no queue-label event in a complete history)
+# starts at its creation. A newest event that is a label add, an incomplete
+# history without a removal, a malformed timestamp or a same-second tie keeps
+# the blocker (the tie rule of _mt_bypass_authorized).
+_mt_blocker_is_stale()
+{
+	local num="$1" head="$2" labels="$3" now_epoch="$4" meta start start_epoch
+	[ "${MT_HEAD_MAX_AGE_HOURS}" -gt 0 ] || return 1
+	_mt_has_label "${labels}" && return 1
+	[ -n "${_MT_META_CACHE[${num}]+x}" ] || return 1
+	meta="${_MT_META_CACHE[${num}]}"
+	if ! start="$(printf '%s' "${meta}" | jq -er --arg h "${head}" '
+		def ts_ok: type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$");
+		if .head_ref != $h or .timeline == null then error("keep")
+		elif (.timeline.events | length) == 0 then
+			(if .timeline.complete == true and (.created_at | ts_ok) then .created_at else error("keep") end)
+		elif any(.timeline.events[]; (.created_at | ts_ok) | not) then error("keep")
+		else
+			(.timeline.events | max_by(.created_at) | .created_at) as $newest
+			| [.timeline.events[] | select(.created_at == $newest)] as $top
+			| if ($top | length) != 1 or $top[0].type != "UnlabeledEvent" then error("keep") else $newest end
+		end' 2>/dev/null)"; then
+		return 1
+	fi
+	start_epoch="$(_mt_iso_epoch "${start}")" || return 1
+	[ $((now_epoch - start_epoch)) -gt $((MT_HEAD_MAX_AGE_HOURS * 3600)) ]
+}
+
+# Conflict probe (issue #6570). `_mt_conflict_probe <own_sha> <blocker_sha>`
+# sets _MT_PROBE_RESULT to none (the heads merge cleanly), conflict (git
+# reports a content conflict; _MT_PROBE_PATHS lists the paths) or unknown (any
+# other outcome). Runs in the caller's shell so its caches persist.
+# Missing heads are fetched by SHA with --no-write-fetch-head (FETCH_HEAD for
+# later steps is untouched) and --depth=200 only in an already-shallow clone,
+# so a full clone is never made shallow. merge-tree writes only objects; it
+# runs no hooks and no PR-supplied merge driver. No API calls.
+declare -A _MT_FETCHED_SHA=()
+_MT_GIT_PROBE_OK=""
+_MT_PROBE_RESULT="unknown"
+_MT_PROBE_PATHS=""
+_mt_conflict_probe()
+{
+	local own_sha="$1" other_sha="$2" probe_sha probe_out="" probe_rc=0
+	local -a probe_missing=() probe_depth=()
+	_MT_PROBE_RESULT="unknown"
+	_MT_PROBE_PATHS=""
+	if ! [[ "${own_sha}" =~ ^[0-9a-f]{40}$ && "${other_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+		return 0
+	fi
+	if [ -z "${_MT_GIT_PROBE_OK}" ]; then
+		if git merge-tree --write-tree --name-only --no-messages HEAD HEAD >/dev/null 2>&1; then
+			_MT_GIT_PROBE_OK="yes"
+		else
+			_MT_GIT_PROBE_OK="no"
+		fi
+	fi
+	[ "${_MT_GIT_PROBE_OK}" = "yes" ] || return 0
+	for probe_sha in "${own_sha}" "${other_sha}"; do
+		if ! git cat-file -e "${probe_sha}^{commit}" 2>/dev/null; then
+			[ "${_MT_FETCHED_SHA[${probe_sha}]:-}" = "failed" ] && return 0
+			probe_missing+=("${probe_sha}")
+		fi
+	done
+	if [ "${#probe_missing[@]}" -gt 0 ]; then
+		if [ "$(git rev-parse --is-shallow-repository 2>/dev/null || true)" = "true" ]; then
+			probe_depth=(--depth=200)
+		fi
+		if ! GIT_TERMINAL_PROMPT=0 timeout 120 git fetch --no-tags --quiet --no-write-fetch-head \
+			${probe_depth[@]+"${probe_depth[@]}"} origin "${probe_missing[@]}" >/dev/null 2>&1; then
+			for probe_sha in "${probe_missing[@]}"; do
+				_MT_FETCHED_SHA[${probe_sha}]="failed"
+			done
+			return 0
+		fi
+		for probe_sha in "${probe_missing[@]}"; do
+			if git cat-file -e "${probe_sha}^{commit}" 2>/dev/null; then
+				_MT_FETCHED_SHA[${probe_sha}]="ok"
+			else
+				_MT_FETCHED_SHA[${probe_sha}]="failed"
+				return 0
+			fi
+		done
+	fi
+	probe_out="$(git merge-tree --write-tree --name-only --no-messages "${own_sha}" "${other_sha}" 2>/dev/null)" || probe_rc=$?
+	case "${probe_rc}" in
+		0) _MT_PROBE_RESULT="none" ;;
+		1)
+			_MT_PROBE_RESULT="conflict"
+			_MT_PROBE_PATHS="$(printf '%s\n' "${probe_out}" | sed '1d' | sed '/^$/d' | sort -u)"
+			;;
+		*) _MT_PROBE_RESULT="unknown" ;;
+	esac
+	return 0
+}
+
 _mt_blockers_for() {
 	local __mt_blockers_printed=""
-	_mt_blockers_for_into __mt_blockers_printed "$@" || return 1
+	# The per-blocker log lines (issue #6570) go to stderr so stdout keeps
+	# carrying only the blocker list, as before.
+	_mt_blockers_for_into __mt_blockers_printed "$@" >&2 || return 1
 	printf '%s' "${__mt_blockers_printed}"
 }
 
@@ -389,6 +782,7 @@ _mt_has_label() {
 # ---------------------------------------------------------------------------
 _mt_gate() {
 	local pr="${PR_NUMBER:-}" base="${BASE_BRANCH:-}" head="${TARGET_BRANCH:-}"
+	MT_EVAL_SOURCE="gate"
 	if ! [[ "${pr}" =~ ^[0-9]+$ ]] || [ -z "${base}" ] || [ -z "${head}" ]; then
 		_mt_warn "merge-train gate: invalid inputs PR_NUMBER='${pr}' BASE_BRANCH='${base}' TARGET_BRANCH='${head}'; fail-open (not queued)."
 		return 0
@@ -478,7 +872,7 @@ _mt_gate() {
 	fi
 	if [ "${queue_label_persisted}" = "true" ] && [ "${queue_state_verified}" = "true" ]; then
 		_mt_upsert_comment "${pr}" "${MT_MARKER}" "${MT_MARKER}
-**Review queued (merge train).** This PR edits files that older open PRs on \`${base}\` also change, so its review/autofix run waits until they merge or close. Lowest PR number goes first; the queue is released automatically when a blocker closes (and re-checked on every orchestrator poll tick).
+**Review queued (merge train).** This PR edits files that older open PRs on \`${base}\` also change and would conflict with them (or the conflict could not be checked), so its review/autofix run waits until they merge or close. Lowest PR number goes first; the queue is released automatically when a blocker closes (and re-checked on every orchestrator poll tick).
 
 Blocked by:
 ${blocker_lines}
@@ -722,6 +1116,7 @@ _mt_release() {
 	# so every queued PR stays queued this invocation and the next close event
 	# or poll tick retries.
 	local release_runs_listing_state=""
+	MT_EVAL_SOURCE="release"
 	if ! prs_json="$(_mt_list_open_prs "")"; then
 		_mt_warn "merge-train release: could not list open PRs; fail-open (nothing released)."
 		return 0

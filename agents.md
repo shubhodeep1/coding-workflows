@@ -60,7 +60,12 @@ Phases of the unattended pipeline (each is a separate workflow file under
    model reviewer + consolidator + editor loop on PR changes. Two pre-review
    gates run first: the merge train (`scripts/review_merge_train.sh gate`,
    `MERGE_TRAIN_ENABLED`) queues an `ai/issue-*` PR behind older open
-   same-repository `ai/issue-*` PRs on the same base that edit the same files (the queued marker is verified against the `GH_PAT` account before it can authorize a bypass; label
+   same-repository `ai/issue-*` PRs on the same base that edit the same files; since #6570 a shared path blocks only
+   when `git merge-tree --write-tree` of the two heads conflicts (`MERGE_TRAIN_CONFLICT_CHECK_ENABLED`, git errors
+   keep the path rule), a blocker under review past `MERGE_TRAIN_HEAD_MAX_AGE_HOURS` (default 24) that is not
+   itself queued stops blocking, and a PR whose verified `ai/issue-<M>` closing issue carries a
+   `MERGE_TRAIN_PRIORITY_LABELS` label passes verified non-priority PRs; the last two share one aliased
+   GraphQL read, and gate and release apply the same rules (the queued marker is verified against the `GH_PAT` account before it can authorize a bypass; label
    `ai:merge-queued`; released by `cancel_on_pr_close.yml` on close and by
    `orchestrate_poll.yml` every tick; managed/standalone conflict and stall
    recovery treat the label as an intentional wait). The one-shot bypass
