@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 from unittest import mock
 
+import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -2854,24 +2855,35 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in apply_fixes
 	assert 'failure_class=config_writer_missing' in apply_fixes
 	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true' in apply_fixes
-	assert 'opencode_run_cmd "$@"' in consolidate
-	assert '\twriter\n\t"${REVIEW_CONSOLIDATOR_MODEL}"' in consolidate
-	assert 'opencode_emit_failure_alert review_consolidate writer' in consolidate
+	assert 'opencode_run_cmd' not in consolidate
+	assert 'prepare-ephemeral codex' in consolidate
+	assert 'codex REVIEW_CONSOLIDATOR read' in consolidate
+	assert '--role reviewer' in consolidate
+	assert 'opencode_emit_failure_alert review_consolidate reviewer' in consolidate
+	assert 'CONSOLIDATOR_ISOLATION outcome=skipped reason=%s' in consolidate
+	sandbox = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert '"RB_JUDGE", "REVIEW_CONSOLIDATOR"' in sandbox
+	assert 'RB_JUDGE|REVIEW_CONSOLIDATOR)' in sandbox
+	assert 'opencode_source_mount+=\',readonly\'' in sandbox
+	assert 'opencode_agent=reviewer' in sandbox
+	assert 'LOG_PREFIX.name=CONSOLIDATOR_ISOLATION' in (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
 	assert 'opencode_helpers_loaded=false' in consolidate
 	assert 'if source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in consolidate
 	assert 'missing=opencode_config_writer failopen=1 output_bytes=0' in consolidate
 	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true' in consolidate
-	assert 'reviewer\n    "${MODEL_EDITOR}"' in rb_judge
-	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run\n        "${RB_FIX_PROMPT}"\n        "${RB_FIX_OUTPUT}"\n        "${MODEL_EDITOR}"' in rb_judge
+	assert 'review_rb_opencode_sandbox_prepare "${RB_JUDGE_SANDBOX_OPENCODE_CONFIG}" review_rb_judge "${JUDGE_STDERR_FILE}" off' in rb_judge
+	assert 'review_rb_opencode_sandbox_prepare "${RB_FIX_OPENCODE_CONFIG}" review_rb_fix "${RB_FIX_STDERR}" "${rb_fix_serena_mode}"' in rb_judge
 	assert 'OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh}"' in rb_judge
 	assert 'opencode_emit_failure_alert review_rb_judge reviewer' in rb_judge
 	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in rb_judge
 	assert 'opencode_emit_failure_alert review_rb_judge reviewer "${MODEL_EDITOR:-unknown}" 1 config_writer_missing' in rb_judge
 	assert 'source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" 2>/dev/null || true' in rb_judge
-	assert 'if ! review_rb_prepare_opencode_config reviewer review_rb_judge "${RB_JUDGE_OPENCODE_CONFIG}" off; then\n  exit 1\nfi' in rb_judge
-	assert 'if ! review_rb_prepare_opencode_config writer review_rb_fix "${RB_FIX_OPENCODE_CONFIG}" "${rb_fix_serena_mode}"; then\n        rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}"\n        exit 1\n      fi' in rb_judge
-	assert 'opencode_run_cmd "$@"' in resolver
-	assert 'writer\n    "${MODEL_EDITOR}"' in resolver
+	assert '[ "${rb_oc_phase}" != review_rb_judge ] || rb_oc_role=reviewer' in rb_judge
+	assert 'if ! review_rb_prepare_opencode_config "${rb_oc_role}" "${rb_oc_phase}" "${rb_oc_config_path}" "${rb_oc_serena_mode}"; then' in rb_judge
+	assert 'review_rb_opencode_sandbox_finish "${rb_fix_rc}" "${RB_FIX_OUTPUT}" "${RB_FIX_STDERR}" || rb_fix_rc=$?' in rb_judge
+	assert 'opencode_run_cmd "$@"' not in resolver
+	assert 'resolver_opencode_cmd=(env "REVIEW_SANDBOX_ROOT=${resolver_opencode_root}" bash "${resolver_sandbox_sh}" run' in resolver
+	assert '--role writer --model "${MODEL_EDITOR}"' in resolver
 	assert '"${_current_reasoning_effort}"' in resolver
 	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in resolver
 	assert 'opencode_emit_failure_alert review_conflict_resolve writer "${MODEL_EDITOR:-unknown}" 1 config_writer_missing' in resolver
@@ -8248,7 +8260,8 @@ def test_review_isolation_wiring_and_model_relay() -> None:
 	assert "pip install" not in step and "npm ci" not in step
 	assert "--network none --read-only --cap-drop ALL" in helper
 	assert 'env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run' in helper
-	assert '--mount "type=bind,src=${root}/source,dst=/source"' in helper
+	assert 'opencode_source_mount="type=bind,src=${root}/source,dst=/source"' in helper
+	assert '--mount "${opencode_source_mount}"' in helper
 	assert '--mount "type=bind,src=${workspace}' not in helper
 	assert '--env OPENROUTER_API_KEY=isolated-placeholder' in helper
 	assert 'review_untrusted_workspace.py" transfer' in helper
@@ -8323,6 +8336,142 @@ def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:
 		assert (host / "scripts/new.py").read_text() == "new\n"
 
 
+def _review_transfer_fixture(root: Path, files: dict[str, bytes]) -> tuple[Path, Path, Path]:
+	host = root / "host"
+	source = root / "isolated" / "source"
+	source.mkdir(parents=True)
+	for name, data in files.items():
+		path = host / name
+		path.parent.mkdir(parents=True, exist_ok=True)
+		path.write_bytes(data)
+		if name == "a.py":
+			path.chmod(0o755)
+	subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+	subprocess.run(["git", "add", "--all"], cwd=host, env=_git_clean_env(), check=True)
+	manifest = root / "isolated" / "baseline.json"
+	result = subprocess.run([sys.executable, str(REPO_ROOT / "scripts/review_untrusted_workspace.py"),
+		"snapshot", str(host), str(source), str(manifest)], capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	return host, source, manifest
+
+
+def test_review_transfer_rejects_extensionless_parent_before_writes(tmp_path):
+	for parent_name in ("zblocked", "scripts/zblocked"):
+		root = tmp_path / parent_name.replace("/", "-")
+		host, source, manifest = _review_transfer_fixture(root, {"a.py": b"before", parent_name: b"file"})
+		before = manifest.read_bytes()
+		(source / "a.py").write_bytes(b"after")
+		(source / parent_name / "next.py").parent.mkdir(parents=True)
+		(source / parent_name / "next.py").write_bytes(b"new")
+		result = subprocess.run([sys.executable, str(REPO_ROOT / "scripts/review_untrusted_workspace.py"),
+			"transfer", str(host), str(source), str(manifest)], capture_output=True, text=True)
+		assert result.returncode == 1
+		assert result.stderr.strip().endswith("reason=host_path_conflict")
+		assert (host / "a.py").read_bytes() == b"before"
+		assert manifest.read_bytes() == before
+		assert not list(host.glob(".review-isolated-*"))
+
+
+def test_review_transfer_rolls_back_after_mid_apply_failure(tmp_path):
+	host, source, manifest = _review_transfer_fixture(tmp_path, {"a.py": b"before", "c.py": b"delete"})
+	manifest_before = manifest.read_bytes()
+	(source / "a.py").write_bytes(b"after")
+	(source / "b").mkdir()
+	(source / "b/new.py").write_bytes(b"created")
+	(source / "c.py").unlink()
+	(source / "z.py").write_bytes(b"late")
+	spec = importlib.util.spec_from_file_location("review_transfer_atomic_test", REPO_ROOT / "scripts/review_untrusted_workspace.py")
+	assert spec and spec.loader
+	workspace_module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(workspace_module)
+	original_link = workspace_module.os.link
+	def fail_late(source_path, target_path, **kwargs):
+		if Path(target_path).name == "z.py":
+			raise OSError("injected apply failure")
+		return original_link(source_path, target_path, **kwargs)
+	with mock.patch.object(workspace_module.os, "link", side_effect=fail_late):
+		with pytest.raises(OSError, match="injected apply failure"):
+			workspace_module.transfer(host, source, manifest)
+	assert (host / "a.py").read_bytes() == b"before"
+	assert (host / "a.py").stat().st_mode & 0o777 == 0o755
+	assert (host / "c.py").read_bytes() == b"delete"
+	assert not (host / "b").exists() and not (host / "z.py").exists()
+	assert not list(host.glob(".review-isolated-*"))
+	assert manifest.read_bytes() == manifest_before
+
+
+def test_review_transfer_replaces_deleted_file_with_directory(tmp_path):
+	host, source, manifest = _review_transfer_fixture(tmp_path, {"d.py": b"old"})
+	(source / "d.py").unlink()
+	(source / "d.py").mkdir()
+	(source / "d.py/x.py").write_bytes(b"new")
+	result = subprocess.run([sys.executable, str(REPO_ROOT / "scripts/review_untrusted_workspace.py"),
+		"transfer", str(host), str(source), str(manifest)], capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	assert (host / "d.py/x.py").read_bytes() == b"new"
+	assert "d.py/x.py" in json.loads(manifest.read_text())
+	assert "d.py" not in json.loads(manifest.read_text())
+
+
+def test_review_isolation_unsafe_directory_names_bounded_dir() -> None:
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host = root / "host"
+		source = root / "isolated" / "source"
+		source.mkdir(parents=True)
+		(host / "scripts").mkdir(parents=True)
+		(host / "scripts/app.py").write_text("before\n")
+		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", "scripts"], cwd=host, env=_git_clean_env(), check=True)
+		manifest = root / "isolated" / "baseline.json"
+		def run(action: str) -> subprocess.CompletedProcess[str]:
+			return subprocess.run(
+				[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest)],
+				capture_output=True, text=True, check=False,
+			)
+		assert run("snapshot").returncode == 0
+		for directory, expected in (
+			(".claude/commands", ".claude/commands"),
+			(".github/ai/::set-output name=x::y", "redacted"),
+			(".github/ai/" + "a" * 100, "redacted"),
+			(".github/ai/secrets_backup", "redacted"),
+		):
+			bad_dir = source / directory
+			bad_dir.mkdir(parents=True)
+			(bad_dir / "audit-plans.md").write_text("untrusted\n")
+			rejection = run("transfer")
+			assert rejection.returncode == 1
+			assert rejection.stderr == f"::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir={expected}\n"
+			assert (host / "scripts/app.py").read_text() == "before\n"
+			assert not (host / directory).exists()
+			(bad_dir / "audit-plans.md").unlink()
+			bad_dir.rmdir()
+		(source / "scripts/link").symlink_to(host, target_is_directory=True)
+		rejection = run("transfer")
+		assert rejection.returncode == 1
+		assert rejection.stderr == "::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=scripts/link\n"
+		assert not (host / "scripts/link").exists()
+		assert run("refresh").stderr == "::error::Review isolation snapshot or transfer rejected (ValueError) reason=unknown\n"
+
+
+def test_review_editor_prompt_explains_sandbox_limits() -> None:
+	apply_fixes = _apply_fixes_text()
+	block = apply_fixes.split("SANDBOX WORKSPACE LIMITS", 1)[1].split("=== BEGIN UNTRUSTED", 1)[0]
+	assert ".claude/commands/" in block
+	assert "sandbox-excluded path" in block
+	assert "`" not in block and "$" not in block and "\\" not in block
+	spec = importlib.util.spec_from_file_location("review_untrusted_workspace_test", REPO_ROOT / "scripts/review_untrusted_workspace.py")
+	assert spec is not None and spec.loader is not None
+	workspace_module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(workspace_module)
+	assert not workspace_module.allowed(".claude/commands/audit-plans.md")
+	assert not workspace_module.allowed(".github/ai/other.json")
+	assert not workspace_module.allowed(".claude/hooks/pr_merge_status_guard.py")
+	assert workspace_module.allowed(".github/workflows/x.yml")
+	assert workspace_module.allowed(".claude/hooks/gh_api_write_guard.py")
+
+
 def test_review_isolation_transfer_failure_evidence() -> None:
 	apply_fixes = _apply_fixes_text()
 	start = '  if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then'
@@ -8343,6 +8492,16 @@ def test_review_isolation_transfer_failure_evidence() -> None:
 		valid_reason = "::error::Review isolation snapshot or transfer rejected (ValueError) reason=host_baseline_changed\n"
 		for diagnostic, expected in (
 			(valid_reason, "host_baseline_changed"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=transfer_rollback_failed\n", "transfer_rollback_failed"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=.claude/commands\n", "unsafe_directory dir=.claude/commands"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=redacted\n", "unsafe_directory dir=redacted"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=../x\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=a b\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=a//b\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=scripts/\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=.env-private\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=secrets_backup\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=host_baseline_changed dir=x\n", "unknown"),
 			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=admitted_inventory_missing\n", "admitted_inventory_missing"),
 			(None, "unknown"),
 			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=forged\n", "unknown"),
@@ -8384,6 +8543,7 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		(host / ".github/ai/WORKFLOW.md").write_text("operator config\n")
 		(host / ".claude/hooks").mkdir(parents=True)
 		(host / ".claude/hooks/gh_api_write_guard.py").write_text("before\n")
+		(host / ".claude/hooks/pr_merge_status_guard.py").write_text("before\n")
 		(host / ".claude/hooks/other.py").write_text("operator hook\n")
 		(host / ".claude/commands").mkdir(parents=True)
 		(host / ".claude/commands/audit-plans.md").write_text("before\n")
@@ -8427,6 +8587,7 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		(source / ".claude/commands/pr-new.md").unlink()
 		assert not (source / ".github/ai/WORKFLOW.md").exists()
 		assert (source / ".claude/hooks/gh_api_write_guard.py").exists()
+		assert not (source / ".claude/hooks/pr_merge_status_guard.py").exists()
 		assert not (source / ".claude/hooks/other.py").exists()
 		assert (source / ".claude/commands/audit-plans.md").exists()
 		assert (source / ".claude/commands/apply-url.md").exists()
@@ -8437,6 +8598,7 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		(source / ".github/workflows/example.yml").write_text("after\n")
 		(source / ".github/ai/claude_engine.json").write_text("after\n")
 		(source / ".claude/hooks/gh_api_write_guard.py").write_text("after\n")
+		(source / ".claude/hooks/pr_merge_status_guard.py").write_text("untrusted\n")
 		(source / ".claude/commands/audit-plans.md").write_text("after\n")
 		(source / ".claude/commands/apply-url.md").write_text("after\n")
 		(source / "scripts/claude_settings.json.tmpl").write_text("after\n")
@@ -8444,6 +8606,7 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		assert (host / ".github/workflows/example.yml").read_text() == "after\n"
 		assert (host / ".github/ai/claude_engine.json").read_text() == "after\n"
 		assert (host / ".claude/hooks/gh_api_write_guard.py").read_text() == "after\n"
+		assert (host / ".claude/hooks/pr_merge_status_guard.py").read_text() == "before\n"
 		assert (host / ".claude/commands/audit-plans.md").read_text() == "after\n"
 		assert (host / ".claude/commands/apply-url.md").read_text() == "after\n"
 		assert (host / "scripts/claude_settings.json.tmpl").read_text() == "after\n"

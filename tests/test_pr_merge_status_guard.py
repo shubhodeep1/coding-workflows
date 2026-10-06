@@ -1441,6 +1441,8 @@ def test_env_wrapped_commit_checks_selected_repo(merged_branch_repo, monkeypatch
 	"env -C /does-not-exist git commit -m x",
 	"env GIT_DIR=$REPO git commit -m x",
 	"env -C . git -C $REPO commit -m x",
+	"env -C/does-not-exist git commit -m x",
+	"env --chdir=/does-not-exist git commit -m x",
 	"env GIT_DIR=/does-not-exist git commit -m x",
 	"git -C /does-not-exist commit -m x",
 	"GIT_DIR=/does-not-exist git commit -m x",
@@ -2031,13 +2033,14 @@ def test_template_copies_are_identical() -> None:
 
 
 def test_review_editor_can_transfer_guard_without_opening_other_claude_hooks() -> None:
+	# Historical test name kept for discovery; safety hook transfer is now denied.
 	spec = importlib.util.spec_from_file_location(
 		"review_untrusted_workspace", REPO_ROOT / "scripts" / "review_untrusted_workspace.py"
 	)
 	assert spec is not None and spec.loader is not None
 	workspace_guard = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(workspace_guard)
-	assert workspace_guard.allowed(".claude/hooks/pr_merge_status_guard.py")
+	assert not workspace_guard.allowed(".claude/hooks/pr_merge_status_guard.py")
 	assert not workspace_guard.allowed(".claude/hooks/unrelated.py")
 
 

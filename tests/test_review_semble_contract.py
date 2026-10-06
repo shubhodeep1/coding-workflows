@@ -204,7 +204,8 @@ def test_workflow_bootstrap_and_runtime_defaults_wire_semble_and_serena() -> Non
 	# skips the report step.
 	assert (
 		'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh '
-		'workflow_failure_heal.py workflow_failure_heal_autofix_report.sh"'
+		'workflow_failure_heal.py workflow_failure_heal_autofix_report.sh '
+		'ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl"'
 	) in stage_helper
 	assert (
 		"REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS: >-\n"
@@ -598,15 +599,14 @@ def test_conflict_prepare_and_resolve_wire_semble_query_and_prompt_append() -> N
 	assert "{{SERENA_TOOL_HINTS_RESOLVER}}" in conflict_prompt
 	assert "{{SERENA_TOOL_HINTS_RESOLVER}}" in integration_prompt
 	assert "{{SERENA_TOOL_HINTS_RESOLVER}}" in retry_prelude
-	assert 'RESOLVER_SERENA_TOOL_HINTS="$({' in prepare
-	assert '[ "${SERENA_AVAILABLE:-false}" = "true" ]' in prepare
+	assert 'RESOLVER_SERENA_TOOL_HINTS=""' in prepare
 	assert 'SERENA_TOOL_HINTS_RESOLVER="${RESOLVER_SERENA_TOOL_HINTS:-}"' in prepare
-	assert 'Resolver Serena hints:' in prepare
+	assert 'Resolver Serena hints:' not in prepare
 	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/semble_helpers.sh"' in resolve
-	assert 'RESOLVER_SERENA_TOOL_HINTS="$({' in resolve
-	assert '[ "${SERENA_AVAILABLE:-false}" = "true" ]' in resolve
+	assert 'RESOLVER_SERENA_TOOL_HINTS=""' in resolve
+	assert 'resolver_opencode_serena="off"' in resolve
 	assert 'SERENA_TOOL_HINTS_RESOLVER="${RESOLVER_SERENA_TOOL_HINTS:-}"' in resolve
-	assert 'Resolver Serena hints:' in resolve
+	assert 'Resolver Serena hints:' not in resolve
 	assert 'TARGETED_FILE_CONTEXT_SCRIPT="${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_context.py"' in resolve
 	assert '--semble-query-from "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE}"' in resolve
 	assert 'semble_query_block \\\n    "$(cat "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE}")"' in resolve
