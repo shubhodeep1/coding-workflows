@@ -159,6 +159,7 @@ def test_no_tracking_labels_means_an_explicit_empty_list(tmp_path: Path) -> None
 
 @pytest.mark.parametrize("scope, role, issue_labels, tracking_labels, expected, selected_engine", [
 	("standalone", "STALL_JUDGE", '["ai:clarification","ai:codex"]', '["ai:engine-claude"]', ["ai:clarification", "ai:codex"], "codex"),
+	("standalone", "STALL_JUDGE", '[]', '["ai:engine-claude"]', [], "claude"),
 	("managed", "STALL_JUDGE", '["ai:orchestrator-managed","ai:codex"]', '["ai:engine-claude"]', ["ai:codex", "ai:engine-claude", "ai:orchestrator-managed"], "codex"),
 	("managed", "RB_JUDGE", '["ai:orchestrator-managed","ai:codex"]', '["ai:engine-claude"]', ["ai:codex", "ai:engine-claude", "ai:orchestrator-managed"], "codex"),
 	("managed", "RB_JUDGE", '["ai:orchestrator-managed","ai:done"]', '[{"name":"ai:engine-claude"}]', ["ai:done", "ai:engine-claude", "ai:orchestrator-managed"], "claude"),
@@ -179,7 +180,7 @@ def test_issue_judges_resolve_from_verified_labels(
 
 
 @pytest.mark.parametrize("scope, issue_labels", [
-	("standalone", "[]"), ("standalone", "null"), ("standalone", "not-json"),
+	("standalone", "null"), ("standalone", "not-json"),
 	("managed", "[]"), ("managed", '["ai:done"]'), ("managed", "null"),
 	("managed", '["ai:orchestrator-managed",42]'),
 ])

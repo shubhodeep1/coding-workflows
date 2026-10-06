@@ -226,7 +226,7 @@ poller_judge_engine_labels_json()
     def names: map(if type == "object" then .name else . end);
     select(type == "array" and all(.[]; type == "string" or (type == "object" and (.name | type) == "string")))
     | names
-    | select(if $scope == "standalone" then length > 0
+    | select(if $scope == "standalone" then true
              elif $scope == "managed" then index("ai:orchestrator-managed") != null
              else false end)
     | if $scope == "managed" then
