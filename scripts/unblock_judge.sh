@@ -217,6 +217,8 @@ unblock_run_ops()
 					if ! grep -q 'HTTP 404' "${RUNTIME_DIR}/remove_label_error.txt"; then
 						ops_failed="true"
 						unblock_log "item=${ITEM} op=remove_label issue=${issue} label=${label} outcome=failed"
+					else
+						unblock_removed_guard="${label}"
 					fi
 				fi
 				;;

@@ -2721,7 +2721,8 @@ and resolver chains, a failed project) now goes to the unblock judge
   A failed review dispatch leaves the PR's block label in place for the next
   scan. For `/approved`, the judge adds `ai:awaiting-approval`, removes the
   block label, then posts the command so the implementation gate sees no
-  guard label. If posting fails, it restores the removed block label;
+  guard label. If posting fails, it restores the block label even when the
+  deletion returned 404 because another actor had already removed it;
   a failed restoration sends a CRITICAL alert. Other issue and project resume
   paths keep their old block label until the required phase label and command
   are posted. If a standalone fix-up's wait marker cannot be posted, the judge

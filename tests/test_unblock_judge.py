@@ -1792,15 +1792,16 @@ def test_label_removed_concurrently_does_not_block_approval(tmp_path: Path, dele
 		assert state["labels_removed"] == []
 
 
-def test_failed_approval_post_restores_removed_guard(tmp_path: Path) -> None:
+@pytest.mark.parametrize("delete_status", ["", "404"])
+def test_failed_approval_post_restores_removed_guard(tmp_path: Path, delete_status: str) -> None:
 	blocked = dict(ISSUE, labels=[{"name": "ai:scope-blocked"}])
 	plan = _comment("Implementation plan")
 	plan["author_association"] = "OWNER"
 	result, state = _judge(tmp_path, blocked, comments=[plan],
 		verdict={"verdict": "retry_budget", "reason": "retry safely", "instructions": "try once more"},
-		FAKE_GH_FAIL_RESUME="1")
+		FAKE_GH_FAIL_RESUME="1", FAKE_GH_FAIL_DELETE=delete_status)
 	assert "reason=actuation_failed" in result.stdout
-	assert state["labels_removed"] == ["repos/o/r/issues/7/labels/ai%3Ascope-blocked"]
+	assert state["labels_removed"] == ([] if delete_status else ["repos/o/r/issues/7/labels/ai%3Ascope-blocked"])
 	assert [label for _, label in state["labels_added"]] == ["ai:awaiting-approval", "ai:scope-blocked"]
 	assert not any(comment["body"] == "/approved" for comment in state["comments"])
 
