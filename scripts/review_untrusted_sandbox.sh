@@ -299,7 +299,7 @@ fi
 [ -n "${OPENROUTER_API_KEY:-}" ] && [ -s "${prompt}" ] || { echo '::error::Review relay preflight failed' >&2; exit 1; }
 
 # Never mount a host-generated config with other providers or host paths.
-if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${config}" "${root}/config.json" "${model}" <<'PY'
+if ! PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${config}" "${root}/config.json" "${model}" <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as handle:

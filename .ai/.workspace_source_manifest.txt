@@ -189,6 +189,7 @@ changelog.d/5558-gh-api-guard-expansion-heredoc.md
 changelog.d/5558-gh-api-guard-literal-loop-counter.md
 changelog.d/5627-resolver-private-model-index.md
 changelog.d/5785-security-audit-codex-stderr-tail.md
+changelog.d/5824-dispatched-review-pr-head.md
 changelog.d/5880-check-run-collector-output.md
 changelog.d/5889-release-gates-claude-assets.md
 changelog.d/5892-heal-autofix-fingerprint-header.md
@@ -213,8 +214,11 @@ changelog.d/6187-isolated-codex-agents.md
 changelog.d/6193-claude-write-role-tool-list.md
 changelog.d/6202-claude-md-25-scheduled-status-checks.md
 changelog.d/6204-review-sandbox-audit-plans-parity.md
+changelog.d/6222-review-command-isolation.md
 changelog.d/6230-security-audit-oversized-scoped-files.md
 changelog.d/6231-integration-judge-scope-guard.md
+changelog.d/6248-static-context-symlink-guard.md
+changelog.d/6249-merge-guard-ampersand-redirect.md
 changelog.d/6262-clarify-respond-standalone.md
 changelog.d/6286-pr-merge-guard-appended-git-dir.md
 changelog.d/6293-numeric-push-refspec-redirect.md
@@ -962,6 +966,7 @@ tests/test_stall_freshness_branch_fallback.py
 tests/test_stall_loop_and_churn_fixes.py
 tests/test_stall_recovery_pr_lookup.py
 tests/test_state_snapshot.py
+tests/test_static_context_symlink_guard.py
 tests/test_subissue_closing_pr.py
 tests/test_summarize_reviewer_consensus_prompt.py
 tests/test_summarize_reviewer_consensus_sandbox_pin.py

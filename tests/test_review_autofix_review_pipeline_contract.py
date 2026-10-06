@@ -4812,10 +4812,10 @@ def test_gate_protects_executable_configuration_from_both_skip_routes() -> None:
 	# Run the real gate body with the existing mocked /pulls/{n}/files
 	# harness. The doc-only branch needs a large change under docs/; the
 	# small-diff branch also accepts root and nested paths outside docs/.
-	from test_workflow_failure_heal import SHA_A, _run_gate
+	from test_workflow_failure_heal import SELF_REPO, SHA_A, _run_gate
 
 	base_pr = {
-		"state": "open", "merged": False, "head": {"ref": "ai/issue-4454", "sha": SHA_A},
+		"state": "open", "merged": False, "head": {"ref": "ai/issue-4454", "sha": SHA_A, "repo": {"full_name": SELF_REPO}},
 		"labels": [], "additions": 1, "deletions": 1, "changed_files": 1,
 		"mergeable": True, "mergeable_state": "clean", "title": "test", "body": "",
 	}
@@ -8218,8 +8218,10 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		assert admission_module.allowed(".claude/commands/audit-plans.md", commands={".claude/commands/audit-plans.md"})
 		(host / "scripts").mkdir()
 		(host / "scripts/claude_settings.json.tmpl").write_text("before\n")
+		(host / "tests").mkdir()
+		(host / "tests/test_audit_plans_command.py").write_text("operator command contract\n")
 		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
-		subprocess.run(["git", "add", ".github", ".claude", "workflow-templates", "scripts"], cwd=host, env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", ".github", ".claude", "workflow-templates", "scripts", "tests"], cwd=host, env=_git_clean_env(), check=True)
 		manifest = root / "isolated" / "baseline.json"
 		def run(action: str) -> subprocess.CompletedProcess[str]:
 			return subprocess.run(
@@ -8242,6 +8244,7 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		assert (source / ".claude/commands/apply-url.md").exists()
 		assert not (source / ".claude/commands/other.md").exists()
 		assert (source / "scripts/claude_settings.json.tmpl").exists()
+		assert not (source / "tests/test_audit_plans_command.py").exists()
 		assert run("refresh").returncode == 0
 		(source / ".github/workflows/example.yml").write_text("after\n")
 		(source / ".github/ai/claude_engine.json").write_text("after\n")
@@ -8256,6 +8259,7 @@ def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 		assert (host / ".claude/commands/audit-plans.md").read_text() == "after\n"
 		assert (host / ".claude/commands/apply-url.md").read_text() == "after\n"
 		assert (host / "scripts/claude_settings.json.tmpl").read_text() == "after\n"
+		assert (host / "tests/test_audit_plans_command.py").read_text() == "operator command contract\n"
 		# A command without a host template twin stays out: the write is dropped.
 		(source / ".claude/commands/other.md").write_text("untrusted\n")
 		assert run("transfer").returncode == 0
