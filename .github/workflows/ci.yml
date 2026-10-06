@@ -933,6 +933,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_phantom_review_run_filter.py
 
+      - name: Test-and-mark-stable hot-poller guard dependency contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_hot_poller_guard_deps.py
+
       - name: Mark-stable release-tag refspec contract test
         run: |
           set -euo pipefail

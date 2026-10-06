@@ -516,6 +516,37 @@ jobs:
           gh api "repos/${TEST_REPO}" --jq '.full_name' \
             || { echo "::error::Cannot access ${TEST_REPO}. Check GH_PAT permissions."; exit 1; }
 
+      # The hot guard below runs `main`'s tests/test_orchestrate_poll_process.py,
+      # which imports pytest. Before this step the job's only pytest install
+      # was in Phase 4b, so the guard died with
+      # `ModuleNotFoundError: No module named 'pytest'` before it tested the
+      # poller (run 37513567927, issue #6591). Install pytest into the same
+      # system `python3` that every later step uses, with Phase 4b's
+      # pip-then-apt pattern. `actions/setup-python` is deliberately not used
+      # here: it would switch `python3` for the rest of this job, whose later
+      # steps rely on the system interpreter's preinstalled packages. Fails
+      # closed: if pytest is still not importable the guard is skipped and
+      # the summary reports it as FAILED (not_run).
+      - name: "Phase 0a: Install hot orchestrate-poll guard dependencies"
+        id: hot-poller-guard-deps
+        run: |
+          set -euo pipefail
+          HOT_POLLER_DEPS_LOG="${RUNNER_TEMP:-/tmp}/hot_poller_guard_deps.log"
+          : > "${HOT_POLLER_DEPS_LOG}"
+          python3 -m pip install --quiet pytest >>"${HOT_POLLER_DEPS_LOG}" 2>&1 || {
+            echo "::warning::pip install pytest failed; trying apt fallback"
+            sudo apt-get update -qq >>"${HOT_POLLER_DEPS_LOG}" 2>&1 || true
+            sudo apt-get install -y --no-install-recommends python3-pytest >>"${HOT_POLLER_DEPS_LOG}" 2>&1 || true
+          }
+          if ! python3 -c "import pytest" 2>/dev/null; then
+            echo "::error::pytest is not importable after pip + apt install attempts; the hot orchestrate-poll guard cannot run"
+            echo "::group::pytest install diagnostics"
+            cat "${HOT_POLLER_DEPS_LOG}" || true
+            echo "::endgroup::"
+            exit 1
+          fi
+          echo "pytest is importable: $(python3 -c 'import pytest; print(pytest.__version__)')"
+
       # Fast-fail the hottest orchestrate-poll regression before the
       # workflow creates live smoke-test resources or waits on long
       # downstream phases.
