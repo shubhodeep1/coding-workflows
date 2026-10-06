@@ -1503,6 +1503,9 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		if invocation.subcommand == "push" and invocation.config_override:
 			unverified_destinations.add("per-command Git configuration may redirect the push")
 			continue  # Origin's PR history cannot authorize a push with overridden configuration.
+		if invocation.subcommand == "commit" and invocation.warning and invocation.config_override:
+			_request_confirmation("could not resolve env-wrapped git commit directory; session checkout PR status cannot authorize it")
+			continue
 		targets = (
 			_push_targets(invocation, checkout) if invocation.subcommand == "push" else
 			[_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", False, invocation.warning)]
