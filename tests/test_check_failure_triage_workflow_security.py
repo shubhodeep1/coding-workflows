@@ -249,6 +249,80 @@ esac
 			self.assertIn("run", capture.read_text().splitlines())
 			self.assertFalse(sentinel.exists())
 
+	def test_triage_snapshot_omits_agent_instructions_only_when_opted_in(self) -> None:
+		with tempfile.TemporaryDirectory(prefix="clarify-agent-snapshot-") as temp_dir:
+			root = Path(temp_dir)
+			trusted = root / "trusted"
+			checkout = root / "checkout"
+			_stage_clarify_support(trusted)
+			_stage_clarify_support(checkout)
+			for name in ("AGENTS.md", "agents.md", "docs/AGENTS.override.md", "scripts/CLAUDE.md", "src/Claude.local.md", "src/app.py", "assets/AGENTS.md"):
+				path = checkout / name
+				path.parent.mkdir(parents=True, exist_ok=True)
+				path.write_text("PR-authored content\n", encoding="utf-8")
+			subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+			subprocess.run(["git", "add", "AGENTS.md", "agents.md", "docs", "scripts/CLAUDE.md", "src", "assets"], cwd=checkout, check=True)
+			bin_dir = root / "bin"
+			bin_dir.mkdir()
+			_write_executable(bin_dir / "docker", '''#!/usr/bin/env bash
+case "$1" in
+  build) printf 'test-image\n' ;;
+  run)
+    for arg in "$@"; do
+      case "$arg" in
+        type=bind,src=*,dst=/source,readonly)
+          source_path="${arg#type=bind,src=}"
+          source_path="${source_path%,dst=/source,readonly}"
+          cp -a "$source_path/." "$MOCK_SNAPSHOT_CAPTURE/"
+          exit 1 ;;
+      esac
+    done
+    exit 2 ;;
+  rm) exit 0 ;;
+esac
+''')
+			prompt = root / "prompt"
+			prompt.write_text("diagnose\n", encoding="utf-8")
+			env = os.environ.copy()
+			for name in ("BASH_ENV", "ENV", "CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS"):
+				env.pop(name, None)
+			env.update({
+				"CLARIFY_SOURCE_ROOT": str(checkout),
+				"MODEL_EDITOR": "openai/gpt-6-sol", "MODEL_REASONING_EFFORT": "high",
+				"OPENROUTER_API_KEY": "test-key",
+				"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+			})
+			for setting in ("true", None, "TRUE"):
+				with self.subTest(setting=setting):
+					capture = root / f"snapshot-{setting}"
+					capture.mkdir()
+					env["MOCK_SNAPSHOT_CAPTURE"] = str(capture)
+					if setting is None:
+						env.pop("CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS", None)
+					else:
+						env["CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS"] = setting
+					proc = subprocess.run(
+						["bash", str(ISOLATED_HELPER_PATH), str(prompt), str(root / "out"), str(root / "log")],
+						cwd=trusted, env=env, capture_output=True, text=True, timeout=20,
+					)
+					self.assertNotEqual(proc.returncode, 0)
+					files = {str(path.relative_to(capture)) for path in capture.rglob("*") if path.is_file()}
+					if setting == "true":
+						self.assertEqual(files, {
+							"src/app.py", "scripts/write_codex_config.sh", "scripts/codex_model_catalog.json",
+						})
+						self.assertIn("CLARIFY_SNAPSHOT_AGENT_INSTRUCTIONS_OMITTED count=5", proc.stderr)
+					else:
+						self.assertTrue({"AGENTS.md", "agents.md", "docs/AGENTS.override.md", "scripts/CLAUDE.md", "src/Claude.local.md"} <= files)
+						self.assertNotIn("assets/AGENTS.md", files)
+						self.assertNotIn("CLARIFY_SNAPSHOT_AGENT_INSTRUCTIONS_OMITTED", proc.stderr)
+
+	def test_triage_snapshot_option_contract(self) -> None:
+		triage = TRIAGE_SCRIPT_PATH.read_text(encoding="utf-8")
+		helper = ISOLATED_HELPER_PATH.read_text(encoding="utf-8")
+		self.assertRegex(triage, r'env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID CLARIFY_SOURCE_ROOT="\$\{SOURCE_ROOT\}" CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS=true')
+		self.assertIn('CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS:-false', helper)
+
 	def test_triage_checkouts_do_not_persist_credentials(self) -> None:
 		triage_job = _workflow()["jobs"]["triage"]
 		checkouts = [step for step in triage_job["steps"] if step.get("uses", "").startswith("actions/checkout@")]
@@ -366,6 +440,7 @@ esac
 			_write_executable(trusted / "scripts" / "clarify_isolated_run.sh", '''#!/usr/bin/env bash
 pwd > "$CAPTURE_CWD"
 printf '%s' "$CLARIFY_SOURCE_ROOT" > "$CAPTURE_SOURCE_ROOT"
+printf '%s' "$CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS" > "$CAPTURE_SNAPSHOT_OPTION"
 printf '%s' "${GH_TOKEN-unset}" > "$CAPTURE_MODEL_GH_TOKEN"
 printf '%s' "${TG_BOT_SECRET-unset}" > "$CAPTURE_MODEL_TG_TOKEN"
 printf '%s\\n' "$@" > "$CAPTURE_ARGS"
@@ -401,6 +476,7 @@ esac
 			env.update({
 				"CAPTURE_ARGS": str(root / "args"), "CAPTURE_PROMPT": str(root / "prompt"),
 				"CAPTURE_CWD": str(root / "cwd"), "CAPTURE_SOURCE_ROOT": str(root / "source-root"),
+				"CAPTURE_SNAPSHOT_OPTION": str(root / "snapshot-option"),
 				"CAPTURE_MODEL_GH_TOKEN": str(root / "model-gh-token"),
 				"CAPTURE_MODEL_TG_TOKEN": str(root / "model-tg-token"),
 				"CAPTURE_HOST_CODEX": str(root / "host-codex"),
@@ -430,6 +506,7 @@ esac
 			self.assertIn("PR checkout (read-only diagnostic data, mounted at /source inside the sandbox)", prompt_text)
 			self.assertEqual((root / "cwd").read_text().strip(), str(trusted))
 			self.assertEqual((root / "source-root").read_text(), str(workspace))
+			self.assertEqual((root / "snapshot-option").read_text(), "true")
 			self.assertEqual((root / "model-gh-token").read_text(), "unset")
 			self.assertEqual((root / "model-tg-token").read_text(), "unset")
 			args = (root / "args").read_text().splitlines()
