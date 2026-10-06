@@ -119,7 +119,7 @@ case "${method}" in
     if [ -f "${FAKE_GH_DIR}/fail_get" ]; then exit 1; fi
     case "${path}" in
       user)
-        if [ -f "${FAKE_GH_DIR}/fail_user" ]; then exit 1; fi
+        if [ -f "${FAKE_GH_DIR}/fail_user" ] || [ -f "${FAKE_GH_DIR}/fail_user_get" ]; then exit 1; fi
         fixture="${FAKE_GH_DIR}/user.json"
         if [ ! -f "${fixture}" ]; then
           printf '%s\n' '{"login":"automation-bot"}' | jq -r "${jqf}"
@@ -144,7 +144,9 @@ case "${method}" in
       exit 1
     fi
     if [ ! -f "${fixture}" ]; then
-      echo '[]'
+      if [ "${path}" = "user" ]; then
+        if [ -n "${jqf}" ]; then printf '%s\n' '{"login":"merge-train-bot"}' | jq -r "${jqf}"; else echo '{"login":"merge-train-bot"}'; fi
+      else echo '[]'; fi
       exit 0
     fi
     if [ -n "${jqf}" ]; then jq -r "${jqf}" "${fixture}"; else cat "${fixture}"; fi
@@ -731,6 +733,43 @@ def test_release_dispatches_only_unblocked_queued_prs(tmp_path: Path) -> None:
 	assert "DELETE repos/acme/consumer/issues/4077/labels/ai%3Amerge-queued" in log_text
 	assert "issues/4081/labels/ai%3Amerge-queued" not in log_text
 	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=2 released=1 base_filter=main" in result.stdout
+
+
+def test_release_ignores_forged_marker_and_resolves_identity_once(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+		_pr(4085, "ai/issue-4069", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/a.py"])
+	_write_files(fixtures, 4085, ["backend/b.py"])
+	(fixtures / "comments_4077.json").write_text(json.dumps([
+		{"id": 97, "user": {"login": "attacker"}, "body": "<!-- merge-train:queued -->"},
+		{"id": 100, "user": {"login": "attacker"}, "body": "<!-- merge-train:released -->"},
+	]), encoding="utf-8")
+	(fixtures / "comments_4085.json").write_text(json.dumps([_marker_comment(98)]), encoding="utf-8")
+	result, log_text, _env_out = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=2 released=2" in result.stdout
+	assert "PATCH repos/acme/consumer/issues/comments/97" not in log_text
+	assert "PATCH repos/acme/consumer/issues/comments/100" not in log_text
+	assert "POST repos/acme/consumer/issues/4077/comments" in log_text
+	assert "PATCH repos/acme/consumer/issues/comments/98" in log_text
+	assert log_text.count("gh api user") == 1
+
+
+def test_release_keeps_queue_when_identity_unavailable(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/a.py"])
+	(fixtures / "fail_user_get").touch()
+	result, log_text, _env_out = _run("release", tmp_path, bin_dir, fixtures, log, GH_RETRY_MAX_ATTEMPTS="1")
+	assert result.returncode == 0, result.stderr
+	assert "could not inspect the queue marker" in result.stdout
+	assert "DELETE repos/acme/consumer/issues/4077/labels" not in log_text
+	assert "gh workflow run" not in log_text
 
 
 def test_release_ignores_fork_blocker_and_dispatches(tmp_path: Path) -> None:
