@@ -5,13 +5,29 @@
   "entry_id": "processed_command_6514_6021709366_approved",
   "issue_number": 6514,
   "metadata": {
+    "branch": "ai/issue-6514",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      "README.md",
+      "agents.md",
+      "changelog.d/6514-heal-label-run-provenance.md",
+      "scripts/workflow_failure_heal.py",
+      "scripts/workflow_failure_heal_intake.sh",
+      "scripts/workflow_failure_heal_report.sh",
+      "tests/test_workflow_failure_heal.py"
+    ],
+    "issue_number": 6514,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6514",
+    "pr_number": 6582,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6582",
+    "run_attempt": "1",
+    "run_id": "37503457453",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37503457453"
   },
   "run_attempt": 1,
   "run_id": "37503457453",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-06T17:28:34Z",
+  "status": "completed",
+  "timestamp": "2026-10-06T17:48:08Z",
   "workflow": "implement"
 }
