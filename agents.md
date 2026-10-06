@@ -222,7 +222,13 @@ Phases of the unattended pipeline (each is a separate workflow file under
      Comment run links only prioritize failed runs verified in the recent
      run listing with a matching issue title; source generation markers are
      inherited only from heal-labeled issues with a canonical marker header
-     and a bot or owner/member/collaborator author. The
+     and a bot or owner/member/collaborator author. The intake accepts a
+     report's inherited generation (`budget --source-issue`) only when the
+     source issue is in its own `ai:workflow-heal` listing with such an author,
+     a canonical marker header whose gen/root match the payload, and an earlier
+     heal issue of the same lineage backing the generation; otherwise lineage
+     is recomputed from the fingerprint (log `source_lineage outcome=rejected`).
+     The
      composed issue neutralizes untrusted routing keys in evidence and diagnosis
      and rejects any remaining routing directives or extra markers before filing,
      so only intake-owned branch metadata can select the fix target.

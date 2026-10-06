@@ -592,7 +592,7 @@ def test_budget_decision_matrix() -> None:
 	now = datetime(2026, 9, 20, 12, tzinfo=timezone.utc)
 	fp = "1" * 64
 	other = "2" * 64
-	assert heal.budget_decision([], fp=fp, now=now) == {"action": "open", "gen": 1, "root": fp, "open_count": 0, "today_count": 0}
+	assert heal.budget_decision([], fp=fp, now=now) == {"action": "open", "gen": 1, "root": fp, "open_count": 0, "today_count": 0, "source_lineage": "none"}
 
 	dup = heal.budget_decision([_heal_issue(10, state="open", fp=fp), _heal_issue(11, state="open", fp=fp, gen=2)], fp=fp, now=now)
 	assert dup["action"] == "duplicate" and dup["existing_issue"] == 11
@@ -609,7 +609,7 @@ def test_budget_decision_matrix() -> None:
 	assert cross_repo_dup["existing_repo"] == CONSUMER_REPO
 
 	lineage = heal.budget_decision([_heal_issue(5, state="closed", fp=fp, gen=1), _heal_issue(6, state="closed", fp=fp, gen=2, root=other)], fp=fp, now=now)
-	assert lineage == {"action": "open", "gen": 3, "root": other, "open_count": 0, "today_count": 0}
+	assert lineage == {"action": "open", "gen": 3, "root": other, "open_count": 0, "today_count": 0, "source_lineage": "none"}
 	cross_repo_lineage = heal.budget_decision(
 		[
 			dict(_heal_issue(500, state="closed", fp=fp, gen=1), repository=SELF_REPO),
@@ -625,8 +625,11 @@ def test_budget_decision_matrix() -> None:
 	capped = heal.budget_decision([_heal_issue(6, state="closed", fp=fp, gen=3)], fp=fp, now=now)
 	assert capped["action"] == "escalate" and capped["gen"] == 4 and capped["prior_issue"] == 6
 
+	# An inherited generation without a verifiable source issue is ignored
+	# (issue #6513); see test_budget_decision_verifies_inherited_lineage.
 	inherited = heal.budget_decision([], fp=fp, source_gen=3, source_root=other, now=now)
-	assert inherited["action"] == "escalate" and inherited["root"] == other
+	assert inherited["action"] == "open" and inherited["gen"] == 1 and inherited["root"] == fp
+	assert inherited["source_lineage"] == "rejected" and inherited["source_lineage_reason"] == "source_issue_missing"
 
 	many_open = [_heal_issue(100 + i, state="open", fp=f"{i:064x}") for i in range(10)]
 	assert heal.budget_decision(many_open, fp=fp, now=now)["action"] == "budget_exhausted"
@@ -682,7 +685,7 @@ def test_budget_decision_keys_review_failures_on_source_pr() -> None:
 	# Q3: a closed heal issue from the same PR continues its lineage.
 	closed_same_pr = _sourced_heal_issue(4392, state="closed", fp=other, source=key, gen=2, root=root, repository=SELF_REPO)
 	again = heal.budget_decision([closed_same_pr], fp=fp, source_key=key, now=now)
-	assert again == {"action": "open", "gen": 3, "root": root, "open_count": 0, "today_count": 0}
+	assert again == {"action": "open", "gen": 3, "root": root, "open_count": 0, "today_count": 0, "source_lineage": "none"}
 	capped = heal.budget_decision([dict(closed_same_pr, body=closed_same_pr["body"].replace("gen=2", "gen=3"))], fp=fp, source_key=key, now=now)
 	assert capped["action"] == "escalate" and capped["gen"] == 4 and capped["prior_issue"] == 4392 and capped["prior_repo"] == SELF_REPO
 
@@ -704,8 +707,133 @@ def test_budget_decision_keys_review_failures_on_source_pr() -> None:
 		_sourced_heal_issue(11, state="closed", fp=other, source=key, gen=2, root=root, repository=SELF_REPO),
 	]
 	assert heal.budget_decision(mixed, fp=fp, source_key=key, now=now)["gen"] == 3
-	# An inherited source generation (issue reports) still takes precedence.
-	assert heal.budget_decision(mixed, fp=fp, source_key=key, source_gen=1, source_root=other, now=now)["gen"] == 2
+	# A verified inherited source generation (issue reports) still takes precedence.
+	verified_source = _lineage_issue(7, fp=other, gen=1, root=other, repository=CONSUMER_REPO)
+	inherited = heal.budget_decision([*mixed, verified_source], fp=fp, source_key=key, source_gen=1, source_root=other,
+		source_issue=f"{CONSUMER_REPO}#7", now=now)
+	assert inherited["gen"] == 2 and inherited["source_lineage"] == "verified"
+	# An unverified one is ignored and the fingerprint / source lineage decides.
+	unverified = heal.budget_decision(mixed, fp=fp, source_key=key, source_gen=1, source_root=other, now=now)
+	assert unverified["gen"] == 3 and unverified["source_lineage"] == "rejected"
+
+
+def _lineage_issue(number: int, *, fp: str, gen: int, root: str, repository: str, created: datetime | None = None,
+	author_association: str = "OWNER", user_type: str = "User", body_prefix: str = "", state: str = "closed") -> dict:
+	"""A heal issue as the intake lists it: canonical header plus author fields."""
+	created = created or datetime(2026, 9, 1, tzinfo=timezone.utc)
+	body = (f"{body_prefix}<!-- {heal.MARKER_PREFIX}fp={fp} -->\n<!-- {heal.MARKER_PREFIX}gen={gen} -->\n"
+		f"<!-- {heal.MARKER_PREFIX}root={root} -->\n<!-- {heal.MARKER_PREFIX}source={repository}#{number} -->\n"
+		f"<!-- {heal.MARKER_PREFIX}classification=workflow-defect -->\nbody")
+	return {
+		"number": number,
+		"state": state,
+		"body": body,
+		"created_at": created.strftime("%Y-%m-%dT%H:%M:%SZ"),
+		"html_url": f"https://github.com/{repository}/issues/{number}",
+		"pull_request": False,
+		"repository": repository,
+		"author_association": author_association,
+		"user_type": user_type,
+		"user_login": "heal-bot",
+	}
+
+
+def test_budget_decision_verifies_inherited_lineage() -> None:
+	# Issue #6513: an inherited generation is a claim carried by the dispatch
+	# payload; a forged gen=999 must not trip the lineage cap and suppress the
+	# repair issue.
+	now = datetime(2026, 9, 20, 12, tzinfo=timezone.utc)
+	fp = "1" * 64
+	root = "3" * 64
+	source = f"{CONSUMER_REPO}#42"
+
+	def decide(issues: list, gen: int, *, source_root: str = root, source_issue: str | None = source, **kwargs) -> dict:
+		return heal.budget_decision(issues, fp=fp, source_gen=gen, source_root=source_root, source_issue=source_issue, now=now, **kwargs)
+
+	# Source issue not in the heal listing.
+	forged = decide([], 999)
+	assert forged["source_lineage"] == "rejected" and forged["source_lineage_reason"] == "source_issue_not_listed"
+	assert forged["action"] == "open" and forged["gen"] == 1 and forged["root"] == fp
+	# No source issue at all.
+	missing = decide([], 999, source_issue=None)
+	assert missing["source_lineage_reason"] == "source_issue_missing" and missing["action"] == "open"
+	assert decide([], 999, source_issue="not a key")["source_lineage_reason"] == "source_issue_missing"
+	# Listed, but by an outside author.
+	outsider = _lineage_issue(42, fp="4" * 64, gen=999, root=root, repository=CONSUMER_REPO, author_association="NONE")
+	assert decide([outsider], 999)["source_lineage_reason"] == "untrusted_author"
+	# Same number in another repository does not count.
+	assert decide([_lineage_issue(42, fp=root, gen=1, root=root, repository=SELF_REPO)], 1)["source_lineage_reason"] == "source_issue_not_listed"
+	# Markers that are not the leading header.
+	buried = _lineage_issue(42, fp="4" * 64, gen=2, root=root, repository=CONSUMER_REPO, body_prefix="User text\n")
+	assert decide([buried], 2)["source_lineage_reason"] == "non_canonical_markers"
+	# Listed and trusted, but the payload claims another generation or root.
+	listed = _lineage_issue(42, fp="4" * 64, gen=2, root=root, repository=CONSUMER_REPO, created=now - timedelta(days=1))
+	assert decide([listed], 999)["source_lineage_reason"] == "payload_mismatch"
+	assert decide([listed], 2, source_root="5" * 64)["source_lineage_reason"] == "payload_mismatch"
+	# A trusted, canonical gen=999 with no earlier lineage issue does not escalate.
+	edited = _lineage_issue(42, fp="4" * 64, gen=999, root=root, repository=CONSUMER_REPO)
+	gap = decide([edited], 999)
+	assert gap["source_lineage_reason"] == "lineage_gap" and gap["action"] == "open" and gap["gen"] == 1
+	# Generation 1 must be its own root.
+	assert decide([_lineage_issue(42, fp="4" * 64, gen=1, root=root, repository=CONSUMER_REPO)], 1)["source_lineage_reason"] == "lineage_gap"
+	# A later (or simultaneous) predecessor does not back the generation.
+	late_root = _lineage_issue(7, fp=root, gen=1, root=root, repository=SELF_REPO, created=now)
+	assert decide([late_root, listed], 2)["source_lineage_reason"] == "lineage_gap"
+	# An untrusted predecessor does not back it either.
+	untrusted_root = _lineage_issue(7, fp=root, gen=1, root=root, repository=SELF_REPO, created=now - timedelta(days=3), author_association="NONE")
+	assert decide([untrusted_root, listed], 2)["source_lineage_reason"] == "lineage_gap"
+
+	# A real chain across repositories: root issue (gen 1, fp == root) in the
+	# self repo, then the escalated gen-2 issue in the consumer repo.
+	root_issue = _lineage_issue(7, fp=root, gen=1, root=root, repository=SELF_REPO, created=now - timedelta(days=3))
+	chain = decide([root_issue, listed], 2)
+	assert chain["source_lineage"] == "verified" and "source_lineage_reason" not in chain
+	assert chain["action"] == "open" and chain["gen"] == 3 and chain["root"] == root
+	# Real caps still apply to a verified lineage.
+	assert decide([root_issue, listed], 2, max_depth=2)["action"] == "escalate"
+	# A gen-1 source issue verifies on its own; a Bot author (flat user_type) is trusted.
+	bot_root = _lineage_issue(42, fp=root, gen=1, root=root, repository=CONSUMER_REPO, author_association="NONE", user_type="Bot")
+	single = decide([bot_root], 1)
+	assert single["source_lineage"] == "verified" and single["gen"] == 2
+
+
+def test_validate_payload_keeps_lineage_only_for_issue_reports() -> None:
+	root = "3" * 64
+	issue_payload = heal.validate_payload({"schema_version": heal.SCHEMA_VERSION, "source_repo": CONSUMER_REPO, "source_kind": "issue",
+		"issue_number": 42, "label": "ai:needs-human", "source_gen": 2, "source_root": root})
+	assert issue_payload["source_gen"] == 2 and issue_payload["source_root"] == root
+	# A generation without a valid root is dropped with it.
+	no_root = heal.validate_payload({"schema_version": heal.SCHEMA_VERSION, "source_repo": CONSUMER_REPO, "source_kind": "issue",
+		"issue_number": 42, "label": "ai:needs-human", "source_gen": 2, "source_root": "nope"})
+	assert no_root["source_gen"] is None and no_root["source_root"] is None
+	run_payload = heal.validate_payload({"schema_version": heal.SCHEMA_VERSION, "source_repo": CONSUMER_REPO, "source_kind": "workflow_run",
+		"run_refs": [{"repo": CONSUMER_REPO, "run_id": "5"}], "conclusion": "failure", "source_gen": 999, "source_root": root})
+	assert run_payload["source_gen"] is None and run_payload["source_root"] is None
+	autofix_payload = heal.validate_payload({"schema_version": heal.SCHEMA_VERSION, "source_repo": CONSUMER_REPO, "source_kind": "autofix_failure",
+		"issue_number": 7, "failure_reason": "editor_empty_noop", "source_gen": 999, "source_root": root})
+	assert autofix_payload["source_gen"] is None and autofix_payload["source_root"] is None
+
+
+def test_budget_cli_passes_source_issue(tmp_path: Path, capsys) -> None:
+	root = "3" * 64
+	issues_file = tmp_path / "issues.json"
+	issues_file.write_text(json.dumps([_lineage_issue(42, fp=root, gen=1, root=root, repository=CONSUMER_REPO)]), encoding="utf-8")
+	args = ["budget", "--issues-json", str(issues_file), "--fingerprint", "1" * 64, "--source-gen", "1", "--source-root", root]
+	assert heal.main([*args, "--source-issue", f"{CONSUMER_REPO}#42"]) == 0
+	verified = json.loads(capsys.readouterr().out)
+	assert verified["source_lineage"] == "verified" and verified["gen"] == 2
+	assert heal.main(args) == 0
+	rejected = json.loads(capsys.readouterr().out)
+	assert rejected["source_lineage"] == "rejected" and rejected["source_lineage_reason"] == "source_issue_missing" and rejected["gen"] == 1
+
+
+def test_intake_verifies_source_lineage_from_its_own_heal_list() -> None:
+	intake = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	assert intake.count("author_association, user_type: (.user.type // \"\"), user_login: (.user.login // \"\")") == 2
+	gen_block = intake.split('if [[ "${SOURCE_GEN}" =~ ^[0-9]+$ ]]; then', 1)[1].split("\nfi\n", 1)[0]
+	assert 'if [ "${SOURCE_KIND}" = "issue" ]' in gen_block and '--source-issue "${SOURCE_REPO}#${ISSUE_NUMBER}"' in gen_block
+	assert intake.count("--source-issue") == 1
+	assert "source_lineage outcome=rejected" in intake
 
 
 def test_parse_classification_variants() -> None:

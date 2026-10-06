@@ -316,7 +316,7 @@ SELF_ISSUES_FILE="${RUNTIME_DIR}/heal_issues_self.json"
 SOURCE_ISSUES_FILE="${RUNTIME_DIR}/heal_issues_source.json"
 ISSUES_FILE="${RUNTIME_DIR}/heal_issues.json"
 if ! gh_retry gh api --method GET --paginate "repos/${SELF_REPO}/issues" -F state=all -F labels="${HEAL_LABEL}" -F per_page=100 \
-	--jq '.[] | {number, state, state_reason, title, body: (.body // ""), created_at, closed_at, html_url, pull_request: (.pull_request != null)}' 2>/dev/null \
+	--jq '.[] | {number, state, state_reason, title, body: (.body // ""), created_at, closed_at, html_url, pull_request: (.pull_request != null), author_association, user_type: (.user.type // ""), user_login: (.user.login // "")}' 2>/dev/null \
 	| jq -s --arg repository "${SELF_REPO}" 'map(. + {repository: $repository})' > "${SELF_ISSUES_FILE}" 2>/dev/null; then
 	log "error heal_issue_list_failed"
 	tg_send_msg "Workflow failure heal intake could not list ${HEAL_LABEL} issues; report from ${SOURCE_LABEL} not processed."$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
@@ -327,7 +327,7 @@ fi
 # repositories that can own the issue produced by this intake.
 if [ "${SOURCE_REPO}" != "${SELF_REPO}" ]; then
 	if ! gh_retry gh api --method GET --paginate "repos/${SOURCE_REPO}/issues" -F state=all -F labels="${HEAL_LABEL}" -F per_page=100 \
-		--jq '.[] | {number, state, state_reason, title, body: (.body // ""), created_at, closed_at, html_url, pull_request: (.pull_request != null)}' 2>/dev/null \
+		--jq '.[] | {number, state, state_reason, title, body: (.body // ""), created_at, closed_at, html_url, pull_request: (.pull_request != null), author_association, user_type: (.user.type // ""), user_login: (.user.login // "")}' 2>/dev/null \
 		| jq -s --arg repository "${SOURCE_REPO}" 'map(. + {repository: $repository})' > "${SOURCE_ISSUES_FILE}" 2>/dev/null; then
 		log "error heal_issue_list_failed repo=${SOURCE_REPO}"
 		tg_send_msg "Workflow failure heal intake could not list ${HEAL_LABEL} issues in ${SOURCE_REPO}; report from ${SOURCE_LABEL} not processed."$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
@@ -340,8 +340,17 @@ jq -s 'add // []' "${SELF_ISSUES_FILE}" "${SOURCE_ISSUES_FILE}" > "${ISSUES_FILE
 jq -e 'type == "array"' "${ISSUES_FILE}" >/dev/null 2>&1 || printf '[]' > "${ISSUES_FILE}"
 
 BUDGET_ARGS=(--issues-json "${ISSUES_FILE}" --fingerprint "${FP}" --preferred-repo "${SOURCE_REPO}" --max-depth "${MAX_DEPTH}" --max-open "${MAX_OPEN}" --max-per-day "${MAX_PER_DAY}")
+# The payload's inherited generation is a claim made by the reporter, not
+# proof: `budget` accepts it only when the source issue appears in the heal
+# list above (author_association / user_type come from the same calls) with a
+# trusted author, a canonical marker header whose gen/root match the claim,
+# and an earlier heal issue of the same lineage. Otherwise lineage falls back
+# to the fingerprint (issue #6513: a forged gen=999 suppressed the repair).
 if [[ "${SOURCE_GEN}" =~ ^[0-9]+$ ]]; then
 	BUDGET_ARGS+=(--source-gen "${SOURCE_GEN}" --source-root "${SOURCE_ROOT}")
+	if [ "${SOURCE_KIND}" = "issue" ] && [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
+		BUDGET_ARGS+=(--source-issue "${SOURCE_REPO}#${ISSUE_NUMBER}")
+	fi
 fi
 # A review/autofix report is keyed on its pull request as well as its
 # fingerprint: the evidence (and so the fingerprint) differs run to run, which
@@ -357,6 +366,9 @@ ACTION="$(jq -r '.action' "${DECISION_FILE}")"
 GEN="$(jq -r '.gen // 1' "${DECISION_FILE}")"
 ROOT="$(jq -r '.root // ""' "${DECISION_FILE}")"
 [ -n "${ROOT}" ] || ROOT="${FP}"
+if [ "$(jq -r '.source_lineage // "none"' "${DECISION_FILE}")" = "rejected" ]; then
+	log "source_lineage outcome=rejected reason=$(jq -r '.source_lineage_reason // "unknown"' "${DECISION_FILE}") claimed_gen=${SOURCE_GEN} source=${SOURCE_LABEL} fp=${FP}"
+fi
 
 ensure_label_exists "${HEAL_LABEL}" "${SELF_REPO}" || true
 ensure_label_exists "${ESCALATED_LABEL}" "${SELF_REPO}" || true

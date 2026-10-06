@@ -257,6 +257,7 @@ changelog.d/6420-release-gate-claude-parity.md
 changelog.d/6436-triage-omit-pr-agent-instructions.md
 changelog.d/6455-rb-fix-sandbox-workspace.md
 changelog.d/6486-workflow-heal-security-pass.md
+changelog.d/6512-heal-evidence-routing-neutralize.md
 changelog.d/autofix-cap-and-security-exhaustion-judge.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/release-smoke-run-lookup.md
