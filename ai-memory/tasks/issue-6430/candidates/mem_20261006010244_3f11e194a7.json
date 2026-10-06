@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue: rewrite the second line of `tests/e2e_smoke_canary.txt` (orchestrator project #6429, local ID `canary-a`)\n\nPlanning ref: `orchestrator/project-6429` at `0b50ffe4aad0fbdc0f545941b19aca2fc050b06c`. This matches the issue's integration branch, so there is no mismatch.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue asks for exactly two lines in one existing file and forbids touching any other file or reflowing unrelated content. Nothing needs a helper, pattern or new structure, so the plan edits that file in place and changes nothing else.\n\n1. Files likely to change\n- `tests/e2e_smoke_canary.txt` (edit only; no other file changes)\n\nCurrent contents, with LF line endings and a trailing newline:\n```\nstatus: ok\nrun_id: 26151428977\nupdated-by: ai-pipeline\n```\n\n2. Functions/modules to implement\n- None. This is a data edit:\n  - Line 1 is already exactly `status: ok`. Keep it unchanged.\n  - Replace line 2, `run_id: 26151428977`, with `decompose-run: 37395952357`.\n  - Keep line 3, `updated-by: ai-pipeline`, unchanged. It is unrelated content and the issue says not to reflow it.\n  - Keep the LF line endings and the trailing newline.\n\nExpected result:\n```\nstatus: ok\ndecompose-run: 37395952357\nupdated-by: ai-pipeline\n```\n\n3. Data structures affected\n- None.\n\n4. API/interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Keep the third line\n- Chosen: Replace only line 2 and leave `updated-by: ai-pipeline` in place.\n- Alternatives considered: Shorten the file to the two lines the issue names.\n- Why: The issue specifies only line 1 and line 2 and says \"do not reflow unrelated content\". Deleting line 3 would change scope.\n\n## Security considerations\n- This edit crosses no trust boundary and adds no endpoint, external input, secret or money surface.\n- The only abuse case is an accidental edit to another file. The files_touched scope guard and a review of `git diff --stat` cover it.\n\n5. Risks and edge cases\n- The trailing newline or LF line endings could change by accident. Check the result with `cat -A`.\n- A smoke check might match line 2 exactly. The value must be exactly `decompose-run: 37395952357` with no trailing whitespace.\n\n6. Testing considerations\n- `sed -n '1p;2p' tests/e2e_smoke_canary.txt` should print the two expected lines.\n- `git diff --stat` should show only this file, with 1 line inserted and 1 deleted.\n\n7. Pre-execution self-check\n- The plan targets the file named in the issue, changes only line 2, leaves every other file untouched, and the issue has no dependencies.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "5e7d0181b8c0aa4da783936dcdac9891795f470b258c55ff7ce7c31dddd01711",
+  "lineage": {
+    "issue_number": 6430,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37396533562",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37396533562",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6430"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261006010244_3f11e194a7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6430,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37396533562"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6430",
+  "timestamps": {
+    "created_at": "2026-10-06T01:02:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
