@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_parse_and_post_answer.sh:82 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `clarify_comment_id` is encoded as a JSON string instead of an integer, causing schema validation to reject the completion metadata.\n  WHY: The rejected update leaves the entry `claimed`, so subsequent runs skip it and the `recheck_unavailable` retry path cannot recover; severity is set to the highest reported (BLOCKER), although google_gemini-3_1-flash-lite, minimax_minimax-m3, and openai_gpt-6-luna reported MAJOR.\n- scripts/orchestrate_parse_and_post_answer.sh:73-83 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The fail-open completion wrapper suppresses the caller's warning, hiding the schema-validation cause from operators.\n  WHY: Operators see only a generic fail-open warning while the retry state remains unwritten and the issue stays stuck.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_parse_and_post_answer.sh:82 | severity=BLOCKER | confidence=5\n  PROBLEM: `clarify_comment_id` is passed as a string although the schema requires an integer.\n  WHY: Schema validation rejects the completion update, leaving the entry `claimed`; subsequent runs skip it and the retry path cannot match `recheck_unavailable`.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_parse_and_post_answer.sh:82 | severity=MAJOR | confidence=5\n  PROBLEM: The `clarify_comment_id` metadata value is written as a string instead of an integer.\n  WHY: Schema validation prevents `recheck_unavailable` from being persisted, leaving the issue stuck and the retry mechanism ineffective.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_parse_and_post_answer.sh:73-83 | severity=BLOCKER | confidence=5\n  PROBLEM: `clarify_comment_id` is encoded as a JSON string instead of an integer, so schema validation rejects the completion metadata.\n  WHY: The entry remains `claimed`, subsequent runs skip it, and the retry mechanism never fires.\n- scripts/orchestrate_parse_and_post_answer.sh:73-83 | severity=MAJOR | confidence=4\n  PROBLEM: The fail-open completion wrapper suppresses the caller's warning and hides the schema-validation cause from operators.\n  WHY: Operators see only a generic fail-open warning while the retry state remains unwritten and the issue stays stuck.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_parse_and_post_answer.sh:82 | severity=MAJOR | confidence=5\n  PROBLEM: `clarify_comment_id` is encoded as a string although the processed-command schema requires an integer.\n  WHY: Validation rejects the update, leaving the entry `claimed`; subsequent runs skip it so the command cannot retry.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_parse_and_post_answer.sh:82 | severity=BLOCKER | confidence=5\n  PROBLEM: `clarify_comment_id` is passed as a string although the schema requires an integer.\n  WHY: The completion update is rejected and the entry remains `claimed`, causing subsequent runs to skip it and leaving no auto-recovery path.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/orchestrate_parse_and_post_answer.sh: line 82 | severity=BLOCKER | confidence=5\n  PROBLEM: `clarify_comment_id` is encoded as a JSON string although the schema requires an integer.\n  WHY: Validation rejects the completion update, so `recheck_unavailable` is never persisted and subsequent runs skip the issue.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ec6eeb67e2a74ef7b887aa9571138d4bd1adcea14b034e7252bdb69c8bcb39c4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6487,
+    "run_id": "37423589855",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37423589855",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006065006_6ccfbd4e21",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6487,
+    "run_id": "37423589855"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T06:50:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
