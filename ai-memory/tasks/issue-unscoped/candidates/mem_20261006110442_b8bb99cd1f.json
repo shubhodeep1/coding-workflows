@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:1500-1502 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The confirmation condition uses the broad `config_override` flag to identify unresolved env-wrapped commits, so uncertain commits using `git -c` or `GIT_CONFIG*` can trigger confirmation and be mislabeled as env-wrapped.\n  WHY: Non-env-wrapped ambiguous commits receive unnecessary confirmation instead of remaining warning-only as documented; severity ratings disagreed (MAJOR from deepseek_deepseek-v4-pro and minimax_minimax-m3, NIT from openai_gpt-6-luna and qwen_qwen3_7-plus).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/hooks/pr_merge_status_guard.py\nLine or code reference: 1500-1502\nProblem: The condition `invocation.subcommand == \"commit\" and invocation.warning and invocation.config_override` identifies env-wrapped commits, but `config_override` is set for any `git -c` or `--config-env` usage (lines 518-520), not only for env-wrapping.\nWhy it fails at runtime: A session that issues `git -c` commits inside shell-control wrappers will be prompted for confirmation unnecessarily. The prompt itself does not block the commit (confirmation accepts it), but the behavioral contract the agents.md doc and the docstring establish is violated. The narrow intent from the PR description is to catch unresolved `env -C` / `env GIT_DIR=` commit directories, not any commit with git config overrides.\nseverity=high | confidence=4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/hooks/pr_merge_status_guard.py\nLine or code reference: 1500-1502\nProblem: The use of `config_override` as a signal for \"unresolved env-wrapped commit\" is too broad. It also triggers for standard commands like `git -c user.name=bot commit`, which do not inherently imply directory uncertainty or environment wrapping.\nWhy it fails at runtime: Legitimate git commits using `git -c` will trigger unnecessary confirmation prompts, causing friction for operators.\nseverity=low | confidence=4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/pr_merge_status_guard.py\nLine or code reference: 1500-1502 (and the supporting `config_override` assignments at 477, 487, 520)\nProblem: The new check fires `invocation.subcommand == \"commit\" and invocation.warning and invocation.config_override`. The `config_override` flag is set by three unrelated sources: env wrapping (line 487), `GIT_CONFIG` / `GIT_CONFIG_*` env-var prefixes (line 477), and `git -c` / `git --config-env` (line 520).\nWhy it fails at runtime: The agents.md and the prompt deliberately distinguish \"env-wrapped commit whose directory cannot be resolved\" from \"other ambiguous commits remain warning-only when not blocked\". A shell-control-word commit with `git -c` is not env-wrapped, yet it now routes through the same confirmation path, producing a needless approval prompt on every such commit.\nseverity=high | confidence=4\n- .claude/hooks/pr_merge_status_guard.py\nLine or code reference: 1500\nProblem: The confirmation message is hard-coded: `could not resolve env-wrapped git commit directory; the session checkout may not be the commit target`. Once the condition is correctly narrowed, callers that pass a real env wrapper still see this string. The string is fine for the intended env-wrapped path, but if the overreach above is left in place, it would be mis-reported as \"env-wrapped\" for `git -c` / `GIT_CONFIG*` invocations, which is misleading to the operator and hides the real cause.\nWhy it fails at runtime: A human reviewing the permission prompt has no signal that the actual cause was a `git -c` flag plus a control word, not an `env` invocation. If a follow-up investigation needs the underlying reason, this string is the only breadcrumb the hook leaves.\nseverity=low | confidence=3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/pr_merge_status_guard.py\nLine or code reference: Lines 1500-1502; `config_override` is also set for Git `-c` options at lines 518-520.\nProblem: The new condition treats any uncertain commit with a Git configuration override as an env-wrapped commit. For example, `if true; then git -c user.name=bot commit -m next; fi` has an uncertain directory and sets `config_override`, despite not using an `env` wrapper.\nWhy it fails at runtime: This command requests confirmation, although the documented behavior says ambiguous commits that are not env-wrapped remain warning-only. The added condition therefore prompts on commands outside the intended case.\nseverity=low | confidence=4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/hooks/pr_merge_status_guard.py\nLine or code reference: 1500-1502\nProblem: The confirmation condition uses `config_override` to identify commits needing confirmation, but that flag is set for any Git `-c` configuration option (line 518-520), not just environment variable wrapping. A command like `if true; then git -c user.name=bot commit -m next; fi` has both `warning` (uncertain directory from shell control) and `config_override` (from `-c`), triggering confirmation even though it's not \"env-wrapped\" in the traditional sense.\nWhy it fails at runtime: The user-facing message at line 1501 says \"could not resolve env-wrapped git commit directory\" but the condition triggers for any config override in an uncertain directory. This contradicts the documented behavior in agents.md that \"other ambiguous commits remain warning-only when not blocked\" \u2014 a `git -c` command in a shell control structure requests confirmation instead of remaining warning-only. The behavior is safe (more conservative), but the documentation and message are misleading.\nseverity=low | confidence=4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "ebfdc09f40c7611d51f6fd29dd41c9d72611bee39b4b3b4e286e0a08cf1b8462",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6462,
+    "run_id": "37446124083",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37446124083",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006110442_b8bb99cd1f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6462,
+    "run_id": "37446124083"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T11:04:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
