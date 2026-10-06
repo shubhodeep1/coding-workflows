@@ -8183,7 +8183,7 @@ def test_review_isolation_transfer_failure_evidence() -> None:
 def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
 	helper_text = workspace_helper.read_text()
-	assert helper_text.count("commands = load_admitted_commands(manifest)") == 2
+	assert helper_text.count("commands = load_admitted_commands(manifest)") == 3
 	assert "allowed(name, host)" not in helper_text.split("def transfer(", 1)[1].split("def refresh(", 1)[0]
 	with tempfile.TemporaryDirectory() as td:
 		root = Path(td)

@@ -114,6 +114,10 @@ codex_thread_reuse_real_codex()
 		printf '%s\n' "${CODEX_THREAD_REUSE_REAL_CODEX}"
 		return 0
 	fi
+	# An explicitly selected isolation shim must never fall back to host codex.
+	if [ -n "${CODEX_THREAD_REUSE_REAL_CODEX:-}" ]; then
+		return 1
+	fi
 
 	if [ -n "${CODEX_THREAD_REUSE_WRAPPER_DIR:-}" ]; then
 		wrapper_path="${CODEX_THREAD_REUSE_WRAPPER_DIR}/codex"
@@ -272,13 +276,13 @@ codex_thread_reuse_record_session_from_marker()
 	local session_root="${CODEX_THREAD_REUSE_SESSION_ROOT:-${HOME:-}/.codex/sessions}"
 	local expected_cwd="$(pwd)"
 	local session_id=""
-	if [ -n "${EDITOR_ISOLATION_ROOT:-}" ]; then
+	if [ -n "${EDITOR_ISOLATION_ROOT:-}" ] && [ -z "${CODEX_THREAD_REUSE_SESSION_ROOT:-}" ]; then
 		[[ "${EDITOR_ISOLATION_ROOT}" == "${RUNNER_TEMP:-/tmp}/editor-isolated-"* ]] || return 1
 		session_root="${EDITOR_ISOLATION_ROOT}/home/.codex/sessions"
 		expected_cwd='/source'
 	fi
 
-	session_id="$(python3 - "${marker_file}" "${session_root}" "${expected_cwd}" <<'PY'
+	session_id="$(python3 - "${marker_file}" "${session_root}" "${CODEX_THREAD_REUSE_SESSION_CWD:-${expected_cwd}}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -624,11 +628,11 @@ codex_thread_reuse_claude_direct_run()
 		printf '%s\n' "${claude_session_id}" > "${id_file}"
 	fi
 	local claude_projects_home="${HOME}"
-	if [ -n "${EDITOR_ISOLATION_ROOT:-}" ]; then
+	if [ -n "${EDITOR_ISOLATION_ROOT:-}" ] && [ -z "${CODEX_THREAD_REUSE_CLAUDE_HOME:-}" ]; then
 		[[ "${EDITOR_ISOLATION_ROOT}" == "${RUNNER_TEMP:-/tmp}/editor-isolated-"* ]] || return 1
 		claude_projects_home="${EDITOR_ISOLATION_ROOT}/home"
 	fi
-	if [ -n "${continuation_file}" ] && compgen -G "${claude_projects_home}/.claude/projects/*/${claude_session_id}.jsonl" >/dev/null; then
+	if [ -n "${continuation_file}" ] && compgen -G "${CODEX_THREAD_REUSE_CLAUDE_HOME:-${claude_projects_home}}/.claude/projects/*/${claude_session_id}.jsonl" >/dev/null; then
 		claude_prompt="$(mktemp /tmp/codex_thread_reuse_claude_prompt.XXXXXX)"
 		if codex_thread_reuse_transform_prompt \
 			"${transform_mode}" \
@@ -643,10 +647,15 @@ codex_thread_reuse_claude_direct_run()
 
 	[ -n "${log_file}" ] && tee_targets+=("${log_file}")
 	[ -n "${cumulative_log_file}" ] && tee_targets+=("${cumulative_log_file}")
-	if [ -n "${EDITOR_ISOLATION_ROOT:-}" ]; then
+	claude_cmd=(bash -c 'source "$1"; shift; claude_run "$@"' _ "${engine_dir}/ai_engine.sh")
+	if [ -n "${CODEX_THREAD_REUSE_CLAUDE_RUNNER:-}" ]; then
+		if [[ "${CODEX_THREAD_REUSE_CLAUDE_RUNNER}" != /* ]] || [ ! -x "${CODEX_THREAD_REUSE_CLAUDE_RUNNER}" ]; then
+			echo "::error::Invalid Claude isolation runner" >&2
+			return 1
+		fi
+		claude_cmd=(bash "${CODEX_THREAD_REUSE_CLAUDE_RUNNER}" claude)
+	elif [ -n "${EDITOR_ISOLATION_ROOT:-}" ]; then
 		claude_cmd=(bash "${EDITOR_ISOLATION_SUPPORT_DIR:-${engine_dir}}/editor_isolated_run.sh" claude-exec "${EDITOR_ISOLATION_ROOT}")
-	else
-		claude_cmd=(bash -c 'source "$1"; shift; claude_run "$@"' _ "${engine_dir}/ai_engine.sh")
 	fi
 	if [ -n "${timeout_secs}" ]; then
 		if command -v timeout >/dev/null 2>&1; then

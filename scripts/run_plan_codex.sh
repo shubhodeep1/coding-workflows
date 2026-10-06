@@ -274,9 +274,29 @@ if [ "${PLAN_ENGINE}" = "claude" ]; then
   fi
 fi
 
+# An absent pin fails closed: never restore a token with unverified editor-writable code.
+_egc_pin="${EDITOR_GIT_CREDENTIALS_SHA256:-}"
+_egc_src=""
+if [[ "${_egc_pin}" =~ ^[0-9a-f]{64}$ ]]; then
+  for _egc_cand in scripts/editor_git_credentials.sh .codex-workflow-src/scripts/editor_git_credentials.sh .codex-workflow-src-main/scripts/editor_git_credentials.sh; do
+    [ -f "${_egc_cand}" ] || continue
+    _egc_body="$(cat -- "${_egc_cand}")" || continue
+    if [ "$(printf '%s\n' "${_egc_body}" | sha256sum | awk '{print $1}')" = "${_egc_pin}" ]; then
+      _egc_src="${_egc_body}"
+      break
+    fi
+  done
+fi
+if [ -z "${_egc_src}" ]; then
+  echo 'EDITOR_GIT_CREDENTIALS action=load outcome=refused reason=pinned_helper_unavailable' >&2
+  exit 1
+fi
+EDITOR_GIT_CREDENTIALS_SCRIPT="${_egc_src}"
+editor_git_credentials() { env -u BASH_ENV -u ENV bash -c "${EDITOR_GIT_CREDENTIALS_SCRIPT}" editor_git_credentials.sh "$@"; }
+
 max_attempts=3
 EDITOR_ISOLATION_ROOT="$(bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_isolated_run.sh" prepare read "${PLAN_ENGINE}")" || exit 1
-trap 'bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_isolated_run.sh" reap "${EDITOR_ISOLATION_ROOT}" && bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_git_credentials.sh" restore && bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_isolated_run.sh" cleanup "${EDITOR_ISOLATION_ROOT}"' EXIT
+trap 'bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_isolated_run.sh" reap "${EDITOR_ISOLATION_ROOT}" && editor_git_credentials restore && bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_isolated_run.sh" cleanup "${EDITOR_ISOLATION_ROOT}"' EXIT
 bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_isolated_run.sh" snapshot "${EDITOR_ISOLATION_ROOT}"
 for attempt in $(seq 1 "${max_attempts}"); do
   echo "Codex planning attempt ${attempt}/${max_attempts} (engine ${PLAN_ENGINE})..."
@@ -294,7 +314,7 @@ for attempt in $(seq 1 "${max_attempts}"); do
     echo "Final attempt: switching editor model to fallback ${attempt_model} (primary ${MODEL_EDITOR} capacity-limited)."
   fi
   plan_rc=0
-  bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_git_credentials.sh" hide
+  editor_git_credentials hide
   if [ "${PLAN_ENGINE}" = "claude" ]; then
     ( unset GH_TOKEN GH_PAT GITHUB_TOKEN TG_BOT_SECRET TG_CHAT_ID TG_ADMIN_CHAT_ID ACTIONS_RUNTIME_TOKEN ACTIONS_ID_TOKEN_REQUEST_TOKEN ACTIONS_ID_TOKEN_REQUEST_URL HEAL_EVIDENCE_DIR GITHUB_ENV GITHUB_PATH
       AI_ENGINE_MODEL_HINT="${MODEL_EDITOR}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT:-}" \
@@ -308,7 +328,7 @@ for attempt in $(seq 1 "${max_attempts}"); do
     env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_CHAT_ID -u TG_ADMIN_CHAT_ID -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH "${EDITOR_ISOLATION_ROOT}/bin/codex" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${attempt_model}" --sandbox read-only < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || plan_rc=$?
   fi
   bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_isolated_run.sh" finish "${EDITOR_ISOLATION_ROOT}"
-  bash "${EDITOR_ISOLATION_SUPPORT_DIR:-scripts}/editor_git_credentials.sh" restore
+  editor_git_credentials restore
   if [ "${plan_rc}" -eq 0 ]; then
     if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
       PLAN_LINES="$(wc -l < "${CODEX_OUTPUT_FILE}")"
