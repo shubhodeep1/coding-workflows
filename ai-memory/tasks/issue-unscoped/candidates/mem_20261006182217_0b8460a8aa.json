@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:1819-1821 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: A run whose display title exactly matches the escalated issue title can pass provenance verification without an issue-specific association, allowing an unrelated run\u2019s jobs and logs to enter the diagnosis flow.\n  WHY: The reviewers rated this BLOCKER/critical and MAJOR/high; deepseek_deepseek-v4-pro disagreed, describing the title comparison as a verification check after reporter-side title filtering and noting that identical-title matches are documented as accepted behavior.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- File: scripts/workflow_failure_heal.py\n  Line or code reference: 1820-1821 (in _verify_label_run_refs)\n  severity=BLOCKER | confidence=5\n  PROBLEM: The logic accepts a run based solely on a display title match, without requiring an issue-specific association.\n  WHY: An attacker can create a workflow run with the same title as an escalated issue in the same repository. The provenance verification will accept this run as legitimate because it passes the title match check, allowing the intake to fetch its jobs and logs, potentially reproducing an attacker-controlled failure in the heal issue.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- File: scripts/workflow_failure_heal.py\n  Line or code reference: 1819-1821, `_verify_label_run_refs`\n  severity=MAJOR | confidence=5\n  PROBLEM: An exact match between a run\u2019s `display_title` and the escalated issue title is accepted as proof that the run belongs to that issue, without an issue-specific association.\n  WHY: A failed run from a different issue or PR with the same title passes this check. The intake retains its reference and proceeds to fetch its jobs and logs, so the provenance check does not establish that the run is associated with the escalated item.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- File: scripts/workflow_failure_heal.py\n  Line or code reference: _verify_label_run_refs function, title matching logic (falls back to display_title equality when no trusted comment links the run)\n  severity=MAJOR | confidence=4\n  PROBLEM: An exact match between a run's display title and the escalated issue title is accepted as proof of association, without checking an issue-specific association.\n  WHY: An unrelated failed run in the same repository with the same display title passes provenance verification. The intake then keeps its run reference and proceeds to fetch its jobs and logs. Reusing an issue title on another PR or run is sufficient to reach this path. The logs from the unrelated run then enter the diagnosis prompt and could be reproduced in the heal issue.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- File: scripts/workflow_failure_heal.py\n  Line or code reference: _verify_label_run_refs, lines 1820-1821 (`if not linked and issue_title: linked = single_line(run.get(\"display_title\"), 300) == issue_title`)\n  severity=MAJOR | confidence=3\n  PROBLEM: A run whose display_title exactly matches the escalated issue title is accepted as proof of association without an issue-specific link.\n  WHY: Two issues in the same repository with identical titles would cause a failed run from one issue to pass provenance verification for the other, allowing the intake to fetch its jobs and logs. The title-match criterion is a fallback when no trusted comment links the run and (for PRs) no PR association exists; its logs can enter the diagnosis prompt.\n- HARDENING_SUGGESTIONS: File: scripts/workflow_failure_heal.py; Location: _verify_label_run_refs, title-match fallback (lines 1820-1821). Suggested minimal fix: Restrict the title-match to runs whose created_at is on or after the issue's creation timestamp, available in the payload as issue_created_at; this narrows the window without changing the criterion's shape.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d05266698ebf53666aa668ad750cfc3ba082e581fea61ef1f4b476a2fc0ec1d0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6582,
+    "run_id": "37506008368",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37506008368",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006182217_0b8460a8aa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6582,
+    "run_id": "37506008368"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T18:22:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
