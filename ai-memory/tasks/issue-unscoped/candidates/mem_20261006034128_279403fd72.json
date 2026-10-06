@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/6221-heal-evidence-editor-isolation.md:lines 1-6 | severity=low | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The changelog fragment includes an unrelated paragraph claiming a consumer merged-PR guard change that is not implemented in this PR.\n  WHY: Changelog assembly will publish an unsupported claim and mislead readers about what this PR delivered.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR's own changelog fragment must describe only what ships in this PR (CLAUDE.md \u00a720 / \u00a720.A).\n  expected_change_site: changelog.d/6221-heal-evidence-editor-isolation.md\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The PR diff does not modify .github/workflows/clarify.yml / plan.yml / implement.yml to redact free-form step names and error signatures to SHA-256 fingerprints, pin an issue/plan scope list into both commit guards for the heal-evidence flow, or scope the editor to structured diagnostic fields only; no merged-PR guard fix for `git push --repo=origin` appears in any file in this PR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- changelog.d/6221-heal-evidence-editor-isolation.md:line 6 | severity=low | confidence=5\n  PROBLEM: The fragment ends with a paragraph describing a consumer merged-PR guard bugfix that is not part of this PR's credential-pinning changes.\n  WHY: The changelog assembler will publish claims about an unrelated merged-PR guard fix unsupported by this PR's diff.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/6221-heal-evidence-editor-isolation.md:lines 1-6 | severity=low | confidence=5\n  PROBLEM: The changelog fragment includes an unrelated paragraph describing merged-PR guard changes that are not implemented in this PR.\n  WHY: This is documentation error that will incorrectly describe the changes in the release changelog.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: The PR's own changelog fragment must describe only what ships in this PR (CLAUDE.md \u00a720 / \u00a720.A \u2014 \"Add exactly one fragment when the PR changes observable behaviour\" \u2014 and the cross-pollination consensus: \"The fragment includes unrelated editor-isolation and consumer merged-PR guard changes that are not implemented in this PR's diff\").\n  Expected change site: changelog.d/6221-heal-evidence-editor-isolation.md (the new file the PR adds, distinct from changelog.d/6442-editor-credential-restore-pinned.md which is correct).\n  Evidence of absence: The PR diff does not modify .github/workflows/clarify.yml / plan.yml / implement.yml in any way that redacts free-form step names and error signatures to SHA-256 fingerprints, that pins an issue/plan scope list into both commit guards for the heal-evidence flow, or that scopes the editor to structured diagnostic fields only \u2014 i.e. none of the first paragraph's claims are reflected in the workflow, scripts, or tests in this PR. The third paragraph claims a consumer merged-PR guard fix (`git push --repo=origin` bare-branch handling); no such change appears in any file in this PR (the only matching context, scripts/lint_pr_body_auto_close.py / pr_merge_status_guard.py, is untouched). The fragment therefore announces three observable behaviours the PR does not ship. It was \"restored\" by the autofix, but a fragment must describe its own PR's delivery \u2014 keeping it will publish unsupported claims on the next release, and per the consensus finding the unrelated merged-PR guard paragraph is the more glaring example.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/6221-heal-evidence-editor-isolation.md:Line 6 | severity=low | confidence=5\n  PROBLEM: The changelog fragment claims the consumer merged-PR guard now checks bare branches supplied after `git push --repo=origin`. That behavior is unrelated to issue #6442 and is not implemented in this PR diff.\n  WHY: Changelog assembly publishes the unsupported claim as part of this release, misleading consumers about what changed.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- changelog.d/6221-heal-evidence-editor-isolation.md:Lines 5-6 (final paragraph) | severity=low | confidence=5\n  PROBLEM: The restored fragment ends with a paragraph about a consumer merged-PR guard change that is not implemented anywhere in this PR's diff.\n  WHY: The changelog assembler will publish this fragment at release time, attributing a merged-PR guard behavior change to this PR when no such change exists in the diff.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- changelog.d/6221-heal-evidence-editor-isolation.md\n  Location: Lines 1-6 (the third paragraph beginning \"The consumer merged-PR guard now checks bare branches...\")\n  Issue: The restored fragment announces an unrelated merged-PR-guard change (`git push --repo=origin` handling) that is not present in this PR's diff. Per CLAUDE.md \u00a720 a changelog fragment must describe what ships in its own PR; the assembler will publish an unsupported claim at release.\n  Suggested minimal fix: Remove the third paragraph (\"The consumer merged-PR guard now checks bare branches supplied after `git push --repo=origin` without misreading a positional configured remote, which overrides `--repo` even when a local branch has the same name.\") from the 6221 fragment, or move it into its own fragment for the PR that actually ships that change.\n  Estimated lines changed: 2 (delete one paragraph)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e13eeedac82bd927b2f3ccfb2dfd25eaac9cfa9a64310f927c5e1d0e2f4fb326",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6450,
+    "run_id": "37406743620",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37406743620",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006034128_279403fd72",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6450,
+    "run_id": "37406743620"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T03:41:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
