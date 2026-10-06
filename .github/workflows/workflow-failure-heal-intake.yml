@@ -192,7 +192,7 @@ jobs:
         env:
           GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_workflow_heal_intake
         run: |
-          if [ -f scripts/gh_helpers.sh ]; then
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
             source scripts/gh_helpers.sh
             gh_pat_budget end workflow-failure-heal-intake intake "${GH_PAT_BUDGET_FILE}"
           else

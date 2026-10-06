@@ -157,6 +157,18 @@ fi
 					assert " reset=" in result.stdout and " used_in_job=" in result.stdout
 
 
+def test_heal_intake_budget_end_with_older_helper(tmp_path: Path) -> None:
+	workflow = yaml.safe_load((REPO_ROOT / ".github/workflows/workflow-failure-heal-intake.yml").read_text())
+	step = next(item for item in workflow["jobs"]["intake"]["steps"]
+		if item["name"] == "Record GH_PAT budget at intake end")
+	(tmp_path / "scripts").mkdir()
+	(tmp_path / "scripts/gh_helpers.sh").write_text("# Older support without gh_pat_budget\n")
+	result = subprocess.run(["bash", "-e", "-c", step["run"]], cwd=tmp_path,
+		env={**os.environ, "GH_PAT_BUDGET_FILE": str(tmp_path / "budget")}, capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	assert "GH_PAT_BUDGET phase=end workflow=workflow-failure-heal-intake job=intake remaining=unknown" in result.stdout
+
+
 def test_sweep_batches_only_verified_current_head_handoffs() -> None:
 	"""Retired Claude hand-offs must not add GraphQL reads or suppress the sweep."""
 	workflow = yaml.safe_load(REVIEW_AUTOFIX_SWEEP.read_text())
@@ -238,6 +250,8 @@ if __name__ == "__main__":
 	test_zero_candidate_guard_preserves_summary_log_before_exit()
 	test_non_zero_path_still_snapshots_both_review_workflows()
 	test_pat_budget_steps_bracket_every_active_job()
+	with tempfile.TemporaryDirectory() as test_dir:
+		test_heal_intake_budget_end_with_older_helper(Path(test_dir))
 	test_sweep_batches_only_verified_current_head_handoffs()
 	with tempfile.TemporaryDirectory() as test_dir:
 		test_sweep_handoff_skips_only_complete_trusted_same_head(Path(test_dir))
