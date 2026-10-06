@@ -4495,7 +4495,10 @@ jobs:
           EDITOR_GIT_CREDENTIALS_SCRIPT="${_egc_src}"
           editor_git_credentials() { env -u BASH_ENV -u ENV bash -c "${EDITOR_GIT_CREDENTIALS_SCRIPT}" editor_git_credentials.sh "$@"; }
           if [ -n "${EDITOR_ISOLATION_ROOT:-}" ] && [ -d "${EDITOR_ISOLATION_ROOT}" ]; then
-            bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" reap "${EDITOR_ISOLATION_ROOT}"
+            bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" cleanup "${EDITOR_ISOLATION_ROOT}" || {
+              echo '::error::Editor isolation cleanup failed; refusing to restore Git credentials'
+              exit 1
+            }
           fi
           editor_git_credentials restore
 

@@ -93,7 +93,31 @@ def test_launch_contracts_are_isolated_and_reaped_before_restore() -> None:
 	assert '--env CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder' in helper
 	assert 'config --key hide_claude_md' in helper
 	assert '--mount "type=bind,src=${root}/empty-claude-md,dst=/source/CLAUDE.md,readonly"' in helper
-	assert 'if [ -n "${EDITOR_ISOLATION_ROOT:-}" ] && [ -d "${EDITOR_ISOLATION_ROOT}" ]; then\n            bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" reap "${EDITOR_ISOLATION_ROOT}"\n          fi\n          editor_git_credentials restore' in implement
+	assert 'if [ -n "${EDITOR_ISOLATION_ROOT:-}" ] && [ -d "${EDITOR_ISOLATION_ROOT}" ]; then\n            bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" cleanup "${EDITOR_ISOLATION_ROOT}" || {\n              echo \'::error::Editor isolation cleanup failed; refusing to restore Git credentials\'\n              exit 1\n            }\n          fi\n          editor_git_credentials restore' in implement
+
+
+def test_final_restore_cleans_retained_root_and_blocks_failed_cleanup(tmp_path: Path) -> None:
+	implement = (ROOT / ".github/workflows/implement.yml").read_text()
+	restore_step = implement.split("      - name: Restore git credentials after syntax repair\n", 1)[1].split("      - name: ", 1)[0]
+	assert "set -euo pipefail" in restore_step
+	restore_guard = restore_step[restore_step.index('          if [ -n "${EDITOR_ISOLATION_ROOT:-}" ]'):restore_step.index('          editor_git_credentials restore')]
+	isolation_stub = tmp_path / "editor_isolated_run.sh"
+	isolation_stub.write_text('printf "%s\\n" "$1" >> "$RESTORE_LOG"\n'
+		'if [ "$CLEANUP_FAIL" = 0 ]; then rmdir -- "$2"; else exit 1; fi\n')
+	test_root = tmp_path / "editor-isolated-test"
+	test_root.mkdir()
+	restore_log = tmp_path / "restore.log"
+	command = ('set -euo pipefail\n'
+		'editor_git_credentials() { printf "%s\\n" restore >> "$RESTORE_LOG"; }\n'
+		+ restore_guard + 'editor_git_credentials restore\n')
+	for cleanup_fails, expected_calls in (("1", ["cleanup"]), ("0", ["cleanup", "restore"])):
+		restore_log.unlink(missing_ok=True)
+		env = dict(os.environ, EDITOR_ISOLATION_ROOT=str(test_root), EDITOR_ISOLATION_SUPPORT_DIR=str(tmp_path),
+			RESTORE_LOG=str(restore_log), CLEANUP_FAIL=cleanup_fails)
+		proc = subprocess.run(["bash", "-c", command], env=env, text=True, capture_output=True)
+		assert (proc.returncode == 0) == (cleanup_fails == "0"), proc.stderr
+		assert restore_log.read_text().splitlines() == expected_calls
+		assert test_root.exists() == (cleanup_fails == "1")
 
 
 def test_exit_traps_cleanup_after_restore_failure_but_never_restore_before_reap(tmp_path: Path) -> None:
