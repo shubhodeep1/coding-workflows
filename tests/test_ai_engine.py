@@ -29,6 +29,11 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from codex_isolation_fakes import docker_runs, enable_fake_isolation, install_fake_docker, short_temp_dir  # noqa: E402
+# CI enumerates this module; collect the launch contract tests here as well.
+from test_codex_isolated_exec_claude_contract import (  # noqa: E402
+	test_claude_never_runs_on_the_host_without_the_isolation_helper,  # noqa: F401
+	test_implement_prompt_marks_user_comments_as_untrusted,  # noqa: F401
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 AI_ENGINE = REPO_ROOT / "scripts" / "ai_engine.sh"

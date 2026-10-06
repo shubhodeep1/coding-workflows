@@ -9,10 +9,11 @@ IMPLEMENT = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 
 def test_claude_never_runs_on_the_host_without_the_isolation_helper() -> None:
 	source = ENGINE.read_text(encoding="utf-8")
-	assert '[ ! -f "${_AI_ENGINE_DIR}/codex_isolated_exec.sh" ]' in source
-	assert '[ -L "${_AI_ENGINE_DIR}/codex_isolated_exec.sh" ]' in source
+	assert 'local isolated_exec="${_AI_ENGINE_DIR}/codex_isolated_exec.sh"' in source
+	assert '[ ! -f "${isolated_exec}" ]' in source
+	assert '[ -L "${isolated_exec}" ]' in source
 	assert 'ai_engine_fallback "${role}" support_missing' in source
-	assert 'bash "${_AI_ENGINE_DIR}/codex_isolated_exec.sh"' in source
+	assert 'cmd=(bash "${isolated_exec}"' in source
 	assert 'CLAUDE_CODE_OAUTH_TOKEN="$(tr' not in source
 	assert 'unset CLAUDE_CODE_OAUTH_TOKEN' not in source
 	assert '--claude-token-file "${token_file}"' in source
