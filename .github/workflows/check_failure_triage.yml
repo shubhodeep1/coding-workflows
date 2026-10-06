@@ -190,6 +190,8 @@ jobs:
       MODEL_EDITOR: ${{ vars.WORKFLOW_CHECK_TRIAGE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
       MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CHECK_TRIAGE || 'high' }}
       MODEL_VERBOSITY: ${{ vars.VERBOSITY_CHECK_TRIAGE || 'low' }}
+      # Codex version baked into the isolated triage agent's image (scripts/codex_isolated_exec.sh).
+      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
       CHECK_FAILURE_TRIAGE_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_ENABLED || 'true' }}
       CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH: ${{ vars.CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH || '3' }}

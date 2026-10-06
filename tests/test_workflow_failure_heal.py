@@ -25,6 +25,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
+from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = REPO_ROOT / "scripts"
@@ -1186,6 +1187,9 @@ def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[s
 			}
 		)
 		env.update(extra_env or {})
+		# The diagnosis agent runs through scripts/codex_isolated_exec.sh; the
+		# fake docker runs the mock codex in the fake container.
+		env = enable_fake_isolation(tmp / "bin", work / "scripts", env)
 		result = _run(INTAKE_SCRIPT, work, env)
 		prompt = prompt_out.read_text(encoding="utf-8") if prompt_out.exists() else ""
 		return result, _state(state_file), prompt
