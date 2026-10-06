@@ -52,14 +52,17 @@ esac
 	# A failed removal is not a successful finish; it may never authorize restore.
 	(tmp_path / "survivor").touch()
 	assert invoke("finish", isolation_root).returncode != 0
-	assert invoke("cleanup", isolation_root).returncode != 0
-	assert not Path(isolation_root).exists()
+	failed_cleanup = invoke("cleanup", isolation_root)
+	assert failed_cleanup.returncode != 0
+	assert "EDITOR_ISOLATION action=cleanup outcome=reap_failed" in failed_cleanup.stderr
+	assert Path(isolation_root).is_dir()  # The next credential-restore step must recheck it.
+	assert invoke("reap", isolation_root).returncode != 0
 	(tmp_path / "survivor").unlink()
-	prepared_again = invoke("prepare", "read", "codex")
-	assert prepared_again.returncode == 0, prepared_again.stderr
-	second_isolation_root = prepared_again.stdout.strip()
-	assert invoke("cleanup", second_isolation_root).returncode == 0
-	assert not Path(second_isolation_root).exists()
+	assert invoke("reap", isolation_root).returncode == 0
+	successful_cleanup = invoke("cleanup", isolation_root)
+	assert successful_cleanup.returncode == 0
+	assert "EDITOR_ISOLATION action=cleanup outcome=removed" in successful_cleanup.stderr
+	assert not Path(isolation_root).exists()
 
 
 def test_launch_contracts_are_isolated_and_reaped_before_restore() -> None:
@@ -90,6 +93,7 @@ def test_launch_contracts_are_isolated_and_reaped_before_restore() -> None:
 	assert '--env CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder' in helper
 	assert 'config --key hide_claude_md' in helper
 	assert '--mount "type=bind,src=${root}/empty-claude-md,dst=/source/CLAUDE.md,readonly"' in helper
+	assert 'if [ -n "${EDITOR_ISOLATION_ROOT:-}" ] && [ -d "${EDITOR_ISOLATION_ROOT}" ]; then\n            bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" reap "${EDITOR_ISOLATION_ROOT}"\n          fi\n          editor_git_credentials restore' in implement
 
 
 def test_exit_traps_cleanup_after_restore_failure_but_never_restore_before_reap(tmp_path: Path) -> None:

@@ -40,7 +40,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
    in a tokenless container against a checked snapshot (including exclusion
    of nested `.ssh`, `.aws` and `.gnupg` directories); the host verifies
    container removal before transferring edits and restoring Git credentials.
-   Exit cleanup is still attempted if credential restoration fails.
+   Exit cleanup is still attempted if credential restoration fails. A failed
+   reap retains the root so the later credential-restore step retries container
+   removal rather than restoring credentials without verification.
 5. **implement-diagnose** (`scripts/implement_diagnose_post_codex_failure.sh`,
    driven by `MODEL_DIAGNOSE`) — analyse a post-Codex validation failure and
    emit JSON fix-up issue proposals.

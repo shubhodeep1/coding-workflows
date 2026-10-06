@@ -105,7 +105,12 @@ cleanup)
 	root="${1:-}"; valid_root "${root}"
 	cleanup_reap_rc=0
 	(reap "${root}") || cleanup_reap_rc=$?
+	if [ "${cleanup_reap_rc}" -ne 0 ]; then
+		echo 'EDITOR_ISOLATION action=cleanup outcome=reap_failed reason=container_unverified' >&2
+		exit "${cleanup_reap_rc}"
+	fi
 	rm -rf -- "${root}"
+	echo 'EDITOR_ISOLATION action=cleanup outcome=removed reason=none' >&2
 	exit "${cleanup_reap_rc}"
 	;;
 codex-exec)
