@@ -188,9 +188,9 @@ def entry_matches(entry: str, path: str) -> bool:
 	return path == entry or path.startswith(entry + "/")
 
 
-def path_in_scope(path: str, allowlist: list[str]) -> bool:
+def path_in_scope(path: str, allowlist: list[str], *, allow_lockfiles: bool = True) -> bool:
 	"""True when a staged path is auto-allowed or covered by any allowlist entry."""
-	if is_lockfile(path):
+	if allow_lockfiles and is_lockfile(path):
 		return True
 	for entry in allowlist:
 		if entry_matches(entry, path):
@@ -198,7 +198,7 @@ def path_in_scope(path: str, allowlist: list[str]) -> bool:
 	return False
 
 
-def evaluate_allowlist(allowlist_entries: list[str] | None, staged_paths: list[str]) -> tuple[str, list[str], list[str]]:
+def evaluate_allowlist(allowlist_entries: list[str] | None, staged_paths: list[str], *, allow_lockfiles: bool = True) -> tuple[str, list[str], list[str]]:
 	"""Classify staged paths against an explicit allowlist using the shared matcher.
 
 	Returns (status, allowlist, out_of_scope) where status is one of
@@ -213,7 +213,7 @@ def evaluate_allowlist(allowlist_entries: list[str] | None, staged_paths: list[s
 		path = normalize_path(raw)
 		if not path:
 			continue
-		if not path_in_scope(path, allowlist):
+		if not path_in_scope(path, allowlist, allow_lockfiles=allow_lockfiles):
 			out_of_scope.append(path)
 
 	if out_of_scope:
@@ -221,16 +221,16 @@ def evaluate_allowlist(allowlist_entries: list[str] | None, staged_paths: list[s
 	return STATUS_IN_SCOPE, allowlist, []
 
 
-def evaluate(issue_body: str, staged_paths: list[str], *, allowlist_entries: list[str] | None = None) -> tuple[str, list[str], list[str]]:
+def evaluate(issue_body: str, staged_paths: list[str], *, allowlist_entries: list[str] | None = None, allow_lockfiles: bool = True) -> tuple[str, list[str], list[str]]:
 	"""Classify the staged change set against issue-body or explicit allowlists.
 
 	Returns (status, allowlist, out_of_scope) where status is one of
 	STATUS_IN_SCOPE / STATUS_SKIP_NO_ALLOWLIST / STATUS_OUT_OF_SCOPE.
 	"""
 	if allowlist_entries is not None:
-		return evaluate_allowlist(allowlist_entries, staged_paths)
+		return evaluate_allowlist(allowlist_entries, staged_paths, allow_lockfiles=allow_lockfiles)
 	raw_allowlist = extract_files_touched(issue_body or "")
-	return evaluate_allowlist(raw_allowlist or [], staged_paths)
+	return evaluate_allowlist(raw_allowlist or [], staged_paths, allow_lockfiles=allow_lockfiles)
 
 
 def _read_text_file(path: str) -> str:
@@ -257,6 +257,7 @@ def main(argv: list[str] | None = None) -> int:
 	parser = argparse.ArgumentParser(description="files_touched scope-enforcement guard")
 	parser.add_argument("--issue-body-file", default="")
 	parser.add_argument("--allowlist-file", default="")
+	parser.add_argument("--strict-allowlist", action="store_true", help="Do not auto-allow lockfiles outside the explicit scope")
 	parser.add_argument("--staged-file", default="")
 	parser.add_argument("--allowlist-out", default="")
 	args = parser.parse_args(argv)
@@ -265,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
 	staged_paths = _read_staged(args.staged_file or None)
 	allowlist_entries = _read_allowlist(args.allowlist_file) if args.allowlist_file else None
 
-	status, allowlist, out_of_scope = evaluate(issue_body, staged_paths, allowlist_entries=allowlist_entries)
+	status, allowlist, out_of_scope = evaluate(issue_body, staged_paths, allowlist_entries=allowlist_entries, allow_lockfiles=not args.strict_allowlist)
 
 	if args.allowlist_out:
 		try:

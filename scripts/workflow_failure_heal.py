@@ -26,6 +26,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -943,8 +944,10 @@ def unwrap_dispatch(client_payload: Any) -> Any:
 	return client_payload
 
 
-def skip_reason(payload: dict[str, Any], *, registered_repos: Iterable[str], self_repo: str) -> str:
+def skip_reason(payload: dict[str, Any], *, registered_repos: Iterable[str], self_repo: str, heal_scope_unverified: bool = False) -> str:
 	"""Return a stable skip reason when a validated payload must not be healed."""
+	if heal_scope_unverified and payload.get("label") == "ai:needs-human" and "ai:workflow-heal" in (payload.get("labels") or []):
+		return "heal_scope_unverified"
 	repo = payload.get("source_repo")
 	if repo != self_repo and repo not in set(registered_repos):
 		return "unregistered_source_repo"
@@ -993,7 +996,7 @@ def filter_log(text: str, *, max_lines: int = 400, max_bytes: int = 60_000) -> s
 	are stripped), so the tail and the high-signal matches cover what the
 	steps printed rather than their source.
 	"""
-	lines = sanitize_text(_drop_step_script_lines(text)).split("\n")
+	lines = redact_secrets(sanitize_text(_drop_step_script_lines(text))).split("\n")
 	kept: list[str] = []
 	seen: set[int] = set()
 	tail_start = max(0, len(lines) - max_lines)
@@ -1207,7 +1210,9 @@ _ERROR_LINE_RE = re.compile(r"^\s*(?:::error(?: [^:]*)?::|##\[error\])\s*(?P<msg
 _GENERIC_ERROR_RE = re.compile(r"^(?:Process completed with exit code [0-9]+\.?|.*\bAborting\.?)$", re.IGNORECASE)
 _SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 	(re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@"), r"\1[redacted]@"),
-	(re.compile(r"([Aa]uthorization:\s*)(?:(?:[Bb]earer|[Bb]asic|[Tt]oken)\s+)?\S+"), r"\1[redacted]"),
+	(re.compile(r"(authorization\s*:\s*)(?:(?:bearer|basic|token)\s+)?\S+", re.IGNORECASE), r"\1[redacted]"),
+	(re.compile(r"(extraheader\s*[=:]\s*)\S+(?:\s+\S+)?", re.IGNORECASE), r"\1[redacted]"),
+	(re.compile(r"(basic\s+)[A-Za-z0-9+/=_-]{8,}", re.IGNORECASE), r"\1[redacted]"),
 	(re.compile(r"([Bb]earer\s+)\S+"), r"\1[redacted]"),
 	(re.compile(r"(github_pat_|gh[pousr]_)[A-Za-z0-9_]+"), r"\1[redacted]"),
 	(re.compile(r"(sk-(?:or|ant)-)[A-Za-z0-9_-]+"), r"\1[redacted]"),
@@ -1225,7 +1230,110 @@ def redact_secrets(text: str) -> str:
 	"""
 	for pattern, replacement in _SECRET_PATTERNS:
 		text = pattern.sub(replacement, text)
+	# Encoded x-access-token credentials are not necessarily preceded by a
+	# Basic header (for example when a failed command prints its config).
+	text = re.sub(r"[A-Za-z0-9+/_-]{24,}={0,2}", _redact_encoded_credential, text)
 	return text
+
+
+def _redact_encoded_credential(match: re.Match[str]) -> str:
+	import base64
+
+	value = match.group()
+	for offset in range(4):
+		try:
+			decoded = base64.b64decode(value[offset:] + "=" * (-len(value[offset:]) % 4), altchars=b"-_", validate=True)
+		except (ValueError, base64.binascii.Error):
+			continue
+		if b"x-access-token:" in decoded.lower() or re.search(rb":.{36,}", decoded):
+			return "[redacted]"
+	return value
+
+
+def redact_known_secrets(text: str, values: Iterable[str]) -> str:
+	import base64
+
+	for value in values:
+		if not value:
+			continue
+		# Short mock/placeholder values must not erase ordinary prose ("codex").
+		if len(value) < 8:
+			text = re.sub(r"(?<![A-Za-z0-9_])" + re.escape(value) + r"(?![A-Za-z0-9_])", "[redacted]", text)
+			continue
+		text = text.replace(value, "[redacted]")
+		for raw in (value, "x-access-token:" + value):
+			for altchars in (None, b"-_"):
+				encoded = base64.b64encode(raw.encode()) if altchars is None else base64.b64encode(raw.encode(), altchars=altchars)
+				# Match the stable interior for all three possible base64 alignments.
+				for offset in range(3):
+					fragment = encoded.decode()[offset + 4:-(4 if encoded.endswith(b"=") else 0) or None]
+					if len(fragment) >= 12:
+						text = text.replace(fragment, "[redacted]")
+				text = text.replace(encoded.decode(), "[redacted]")
+	return redact_secrets(text)
+
+
+HEAL_SCOPE_RE = re.compile(r"<!-- ai:workflow-heal-scope:v1 paths=([^\s<>]+) runs=([^\s<>]+) -->")
+HEAL_FP_RE = re.compile(r"<!-- workflow-failure-heal:fp=[0-9a-f]{64} -->")
+
+
+def is_heal_route(issue: dict[str, Any]) -> bool:
+	return "ai:workflow-heal" in [label.get("name") if isinstance(label, dict) else label for label in issue.get("labels", [])] or bool(HEAL_FP_RE.search(issue.get("body") or ""))
+
+
+def _safe_heal_path(path: str) -> bool:
+	return (is_valid_repo_path(path) and path.isascii() and not any(c in path for c in ",*?[]\\ \t\r\n")
+		and not any(part.lower() in (".git", ".gitattributes", ".gitmodules") for part in path.split("/"))
+		and not path.lower().startswith((".github/ai/", ".claude/")))
+
+
+def render_heal_scope_marker(*, crash_file: str | None, workflow_paths: Iterable[str], changed_files: Iterable[str], exists: Any, runs: Iterable[str] = ()) -> str:
+	paths = []
+	for path in [crash_file, *workflow_paths, *changed_files]:
+		if isinstance(path, str) and _safe_heal_path(path) and path not in paths and exists(path):
+			paths.append(path)
+		if len(paths) >= 20:
+			break
+	if not paths:
+		return ""
+	refs = list(runs)
+	if not refs or any(not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+:[1-9][0-9]*", ref) for ref in refs):
+		return ""
+	return f"<!-- ai:workflow-heal-scope:v1 paths={','.join(paths + ['tests/**', 'changelog.d/*.md'])} runs={','.join(refs)} -->"
+
+
+def strip_heal_scope_markers(text: str) -> str:
+	return re.sub(r"(?im)^.*ai(?::|&#0*58;|&colon;|&amp;:)workflow-heal-scope.*\n?", "", text)
+
+
+def verify_heal_scope(*, body: str, author_login: str, last_edited_at: str | None, labels: Iterable[str], pipeline_login: str) -> dict[str, Any]:
+	markers = HEAL_SCOPE_RE.findall(body)
+	count = len(re.findall(r"ai:workflow-heal-scope", body, re.IGNORECASE))
+	status = "verified"
+	if count == 0:
+		status = "missing"
+	elif count != 1:
+		status = "duplicated"
+	elif not markers:
+		status = "malformed"
+	elif not pipeline_login or author_login.casefold() != pipeline_login.casefold() or "ai:workflow-heal" not in labels:
+		status = "untrusted_author"
+	elif last_edited_at is not None:
+		status = "edited"
+	paths = markers[0][0].split(",") if markers else []
+	runs = markers[0][1].split(",") if markers else []
+	if status == "verified" and (len(paths) < 3 or len(paths) > 22 or len(set(paths)) != len(paths)
+		or paths[-2:] != ["tests/**", "changelog.d/*.md"]
+		or any(not _safe_heal_path(path) for path in paths[:-2])
+		or not runs or len(runs) > 3 or len(set(runs)) != len(runs)
+		or any(not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+:[1-9][0-9]*", ref) for ref in runs)):
+		status = "malformed"
+	return {"status": status, "paths": paths if status == "verified" else [], "runs": runs if status == "verified" else [], "marker": HEAL_SCOPE_RE.search(body).group() if status == "verified" else ""}
+
+
+def carry_heal_scope(*, child_body: str, parent_verification: dict[str, Any]) -> str:
+	clean = strip_heal_scope_markers(child_body).rstrip()
+	return clean + ("\n\n" + parent_verification["marker"] if parent_verification.get("status") == "verified" else "") + "\n"
 
 
 def failure_headline(texts: Iterable[str], limit: int = FAILURE_HEADLINE_LIMIT) -> str:
@@ -2136,7 +2244,95 @@ def _cmd_skip_reason(args: argparse.Namespace) -> int:
 		except (OSError, json.JSONDecodeError):
 			loaded = []
 		registered = [item for item in loaded if isinstance(item, str)] if isinstance(loaded, list) else []
-	sys.stdout.write(skip_reason(payload, registered_repos=registered, self_repo=args.self_repo) + "\n")
+	sys.stdout.write(skip_reason(payload, registered_repos=registered, self_repo=args.self_repo, heal_scope_unverified=args.heal_scope_unverified) + "\n")
+	return 0
+
+
+def _cmd_redact_stream(args: argparse.Namespace) -> int:
+	values = [os.environ.get(name, "") for name in args.secret_env.split(",")]
+	for line in sys.stdin:
+		sys.stdout.write(redact_known_secrets(line, values))
+	return 0
+
+
+def select_evidence_jobs(jobs: dict[str, Any], *, kind: str, limit: int) -> list[dict[str, Any]]:
+	items = jobs.get("jobs", []) if isinstance(jobs, dict) else []
+	if not isinstance(items, list):
+		return []
+	failed = [dict(job, selection="failed") for job in items if isinstance(job, dict) and job.get("conclusion") in ("failure", "timed_out", "cancelled") and isinstance(job.get("id"), int) and job["id"] > 0]
+	if failed:
+		return failed[:limit]
+	if kind == "autofix_failure":
+		return [dict(job, selection="review_fallback") for job in items if isinstance(job, dict) and isinstance(job.get("id"), int) and job["id"] > 0 and job.get("conclusion") == "success" and re.search(r"review|codex-agent", job.get("name") or "", re.I)][:1]
+	return []
+
+
+def verify_run(run_json: dict[str, Any], *, repo: str, kind: str, head_sha: str = "", target_repo: str = "") -> dict[str, Any]:
+	if not isinstance(run_json, dict) or (run_json.get("repository") or {}).get("full_name") != repo or not isinstance(run_json.get("id"), int) or run_json["id"] < 1:
+		raise ValueError("run identity mismatch")
+	if run_json.get("conclusion") not in (("failure", "timed_out", "cancelled", "success") if kind == "autofix_failure" else ("failure", "timed_out", "cancelled")):
+		raise ValueError("run not completed with expected conclusion")
+	if head_sha and run_json.get("head_sha") != head_sha:
+		raise ValueError("run head mismatch")
+	path = run_json.get("path") or ""
+	paths = [path] if isinstance(path, str) and _safe_heal_path(path) else []
+	for ref in run_json.get("referenced_workflows") or []:
+		if isinstance(ref, dict) and isinstance(ref.get("path"), str) and ref["path"].startswith((target_repo or repo) + "/"):
+			candidate = ref["path"][len(target_repo or repo) + 1:].split("@", 1)[0]
+			if _safe_heal_path(candidate):
+				paths.append(candidate)
+	return {"run_id": run_json["id"], "url": run_json.get("html_url") or "", "path": path, "referenced_paths": paths}
+
+
+def _cmd_select_evidence_jobs(args: argparse.Namespace) -> int:
+	_write_json(select_evidence_jobs(_load_json_file(args.jobs_json), kind=args.kind, limit=args.limit))
+	return 0
+
+
+def _cmd_verify_run(args: argparse.Namespace) -> int:
+	_write_json(verify_run(_load_json_file(args.run_json), repo=args.repo, kind=args.kind, head_sha=args.head_sha, target_repo=args.target_repo))
+	return 0
+
+
+def _heal_regular_file_at_ref(checkout: str, ref: str, path: str) -> bool:
+	result = subprocess.run(["git", "ls-tree", "-z", ref, "--", path], cwd=checkout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+	return (result.returncode == 0 and result.stdout.endswith(b"\t" + path.encode("ascii") + b"\0")
+		and result.stdout.startswith((b"100644 blob ", b"100755 blob ")) and result.stdout.count(b"\0") == 1)
+
+
+def _cmd_heal_scope(args: argparse.Namespace) -> int:
+	if args.operation == "strip":
+		sys.stdout.write(strip_heal_scope_markers(Path(args.body_file).read_text()))
+	elif args.operation == "render":
+		data = _load_json_file(args.input_json)
+		marker = render_heal_scope_marker(crash_file=data.get("crash_file"), workflow_paths=data.get("workflow_paths", []), changed_files=data.get("changed_files", []), runs=data.get("runs", []), exists=lambda path: _heal_regular_file_at_ref(args.checkout, args.ref, path) if args.ref else Path(args.checkout).joinpath(path).is_file() and not Path(args.checkout).joinpath(path).is_symlink())
+		sys.stdout.write(marker + "\n")
+	elif args.operation == "verify":
+		data = _load_json_file(args.input_json)
+		_write_json(verify_heal_scope(body=data.get("body") or "", author_login=data.get("author_login") or "", last_edited_at=data.get("last_edited_at"), labels=data.get("labels") or [], pipeline_login=data.get("pipeline_login") or ""))
+	else:
+		if args.parent_issue:
+			if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.parent_repo) or not re.fullmatch(r"[1-9][0-9]*", args.parent_issue):
+				raise ValueError("invalid parent")
+			owner, repository = args.parent_repo.split("/")
+			query = "query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){body lastEditedAt author{login} labels(first:100){nodes{name}}}}}"
+			try:
+				# The reissuers' existing issue REST reads supply body/labels, but
+				# neither lastEditedAt nor the authenticated token's login. One
+				# GraphQL read replaces a second body lookup; failures strip markers.
+				identity = args.pipeline_login or json.loads(subprocess.check_output(["gh", "api", "user"], stderr=subprocess.DEVNULL))["login"]
+				parent = json.loads(subprocess.check_output(["gh", "api", "graphql", "-f", "query=" + query, "-f", "owner=" + owner, "-f", "repo=" + repository, "-F", "number=" + args.parent_issue], stderr=subprocess.DEVNULL))["data"]["repository"]["issue"]
+				data = verify_heal_scope(body=parent["body"] or "", author_login=parent["author"]["login"], last_edited_at=parent["lastEditedAt"], labels=[node["name"] for node in parent["labels"]["nodes"]], pipeline_login=identity)
+			except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError):
+				data = {"status": "unverified"}
+		else:
+			data = _load_json_file(args.input_json)
+		sys.stdout.write(carry_heal_scope(child_body=Path(args.body_file).read_text(), parent_verification=data))
+	return 0
+
+
+def _cmd_heal_route(args: argparse.Namespace) -> int:
+	sys.stdout.write("true\n" if is_heal_route(_load_json_file(args.issue_json)) else "false\n")
 	return 0
 
 
@@ -2206,7 +2402,7 @@ def _cmd_parse_classification(args: argparse.Namespace) -> int:
 
 def _cmd_compose_issue(args: argparse.Namespace) -> int:
 	payload = validate_payload(_load_json_file(args.payload_json))
-	diagnosis = Path(args.diagnosis_file).read_text(encoding="utf-8", errors="replace")
+	diagnosis = strip_heal_scope_markers(Path(args.diagnosis_file).read_text(encoding="utf-8", errors="replace"))
 	run_summaries = _load_json_file(args.run_summaries_json) if args.run_summaries_json else []
 	if not isinstance(run_summaries, list):
 		run_summaries = []
@@ -2229,6 +2425,10 @@ def _cmd_compose_issue(args: argparse.Namespace) -> int:
 		run_summaries=[item for item in run_summaries if isinstance(item, dict)],
 		integration_branch=args.integration_branch or None,
 	)
+	if args.scope_marker_file:
+		marker = Path(args.scope_marker_file).read_text(encoding="utf-8").strip()
+		if marker and HEAL_SCOPE_RE.fullmatch(marker):
+			body = body.rstrip() + "\n\n" + marker + "\n"
 	Path(args.title_out).write_text(title + "\n", encoding="utf-8")
 	Path(args.body_out).write_text(body, encoding="utf-8")
 	return 0
@@ -2352,7 +2552,41 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--payload-json", required=True)
 	p.add_argument("--registry-json", default="")
 	p.add_argument("--self-repo", required=True)
+	p.add_argument("--heal-scope-unverified", action="store_true")
 	p.set_defaults(func=_cmd_skip_reason)
+
+	p = sub.add_parser("redact-stream")
+	p.add_argument("--secret-env", default="GH_PAT,GH_TOKEN,GITHUB_TOKEN,OPENROUTER_API_KEY")
+	p.set_defaults(func=_cmd_redact_stream)
+
+	p = sub.add_parser("select-evidence-jobs")
+	p.add_argument("--jobs-json", required=True)
+	p.add_argument("--kind", default="issue")
+	p.add_argument("--limit", type=int, default=3)
+	p.set_defaults(func=_cmd_select_evidence_jobs)
+
+	p = sub.add_parser("verify-run")
+	p.add_argument("--run-json", required=True)
+	p.add_argument("--repo", required=True)
+	p.add_argument("--target-repo", default="")
+	p.add_argument("--kind", default="issue")
+	p.add_argument("--head-sha", default="")
+	p.set_defaults(func=_cmd_verify_run)
+
+	p = sub.add_parser("heal-route")
+	p.add_argument("--issue-json", required=True)
+	p.set_defaults(func=_cmd_heal_route)
+
+	p = sub.add_parser("heal-scope")
+	p.add_argument("operation", choices=("render", "verify", "carry", "strip"))
+	p.add_argument("--input-json", default="")
+	p.add_argument("--body-file", default="")
+	p.add_argument("--checkout", default=".")
+	p.add_argument("--ref", default="")
+	p.add_argument("--parent-repo", default="")
+	p.add_argument("--parent-issue", default="")
+	p.add_argument("--pipeline-login", default="")
+	p.set_defaults(func=_cmd_heal_scope)
 
 	p = sub.add_parser("wrap-dispatch", help="Print the repository_dispatch body with the report enveloped under client_payload.report")
 	p.add_argument("--payload-json", required=True)
@@ -2415,6 +2649,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--classification", required=True, choices=CLASSIFICATIONS)
 	p.add_argument("--target-branch", default="")
 	p.add_argument("--integration-branch", default="")
+	p.add_argument("--scope-marker-file", default="")
 	p.add_argument("--max-depth", type=int, default=DEFAULT_MAX_LINEAGE_DEPTH)
 	p.add_argument("--intake-run-url", required=True)
 	p.add_argument("--title-out", required=True)

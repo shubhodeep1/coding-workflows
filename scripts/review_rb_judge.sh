@@ -3044,6 +3044,11 @@ $(printf '  - %s\n' "${RB_REISSUE_FILES[@]}")"
       # (non-orchestrator) reissues do NOT inherit this label so their
       # human-driven clarify semantics are preserved.
       RB_PROPAGATE_LABELS=()
+      if printf '%s' "${FIRST_ISSUE_BODY}" | grep -q 'workflow-failure-heal:fp=' || printf '%s' "${FIRST_ISSUE_LABELS_JSON}" | jq -e 'index("ai:workflow-heal") != null' >/dev/null 2>&1; then
+        FULL_NEW_BODY="$(printf '%s' "${FULL_NEW_BODY}" | PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/workflow_failure_heal.py" heal-scope carry --body-file /dev/stdin --parent-repo "${REPOSITORY}" --parent-issue "${FIRST_ISSUE}")" || exit 1
+        ensure_label_exists "ai:workflow-heal" "${REPOSITORY}"
+        RB_PROPAGATE_LABELS+=("--label" "ai:workflow-heal")
+      fi
       if printf '%s' "${FIRST_ISSUE_LABELS_JSON}" | jq -e 'index("ai:orchestrator-managed")' >/dev/null 2>&1; then
         ensure_label_exists "ai:orchestrator-managed" "${REPOSITORY}"
         RB_PROPAGATE_LABELS+=("--label" "ai:orchestrator-managed")

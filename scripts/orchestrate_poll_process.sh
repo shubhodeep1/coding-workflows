@@ -54,6 +54,7 @@ fi
 # _pr_checks_completed undefined, so every gate call fails closed (no
 # merge) — the safe direction.
 _OPP_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "scripts")"
+HEAL_SUPPORT_HELPER="${_OPP_LIB_DIR}/workflow_failure_heal.py"
 if [ -f "${_OPP_LIB_DIR}/pr_checks_lib.sh" ]; then
   # shellcheck disable=SC1091
   source "${_OPP_LIB_DIR}/pr_checks_lib.sh"
@@ -5560,7 +5561,9 @@ security_pass_handle_failed_fix_issue() {
     # The body carries the durable "- Tracking issue" / "- Local ID" markers
     # that create_security_pass_fix_issue dedups on; copy it verbatim so the
     # successor stays discoverable, and refuse to re-issue without it.
-    issue_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_number}" --jq '{title: (.title // ""), body: (.body // "")}' || echo "")"
+    issue_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_number}" --jq '{title: (.title // ""), body: (.body // ""), heal: ([.labels[]?.name] | index("ai:workflow-heal") != null)}' || echo "")"
+    local issue_is_heal
+    issue_is_heal="$(printf '%s' "${issue_body}" | jq -r '.heal // false' 2>/dev/null || echo false)"
     issue_title="$(printf '%s' "${issue_body}" | jq -r '.title // ""' 2>/dev/null || echo "")"
     issue_body="$(printf '%s' "${issue_body}" | jq -r '.body // ""' 2>/dev/null || echo "")"
     if [ -z "${issue_body}" ] || [ "${issue_body}" = "null" ]; then
@@ -5607,6 +5610,13 @@ REISSUE_EOF
 )"
     fi
 
+    if [ "${issue_is_heal}" = true ] || printf '%s' "${issue_body}" | grep -q 'workflow-failure-heal:fp='; then
+      # The existing issue read cannot attest lastEditedAt or author. The
+      # helper re-reads both with GraphQL and authenticates the PAT account;
+      # no model-provided marker may be copied without that check.
+      new_body="$(printf '%s' "${new_body}" | PYTHONDONTWRITEBYTECODE=1 python3 "${HEAL_SUPPORT_HELPER}" heal-scope carry --body-file /dev/stdin --parent-repo "${GITHUB_REPOSITORY}" --parent-issue "${issue_number}" --pipeline-login "${NOOP_CAP_TRUSTED_LOGIN:-}")" || return 1
+      ensure_label_exists 'ai:workflow-heal'
+    fi
     # Create the successor before closing the failed issue: a create failure
     # then leaves state untouched for a retry, whereas closing first would
     # hand the next poll a closed issue without merged-PR evidence and fail
@@ -5614,6 +5624,9 @@ REISSUE_EOF
     ensure_label_exists "ai:clarification"
     ensure_label_exists "ai:orchestrator-managed"
     mapfile -t _engine_label_args < <(engine_label_create_args)
+    if [ "${issue_is_heal}" = true ] || printf '%s' "${issue_body}" | grep -q 'workflow-failure-heal:fp='; then
+      _engine_label_args+=(--label 'ai:workflow-heal')
+    fi
     new_issue_url="$(gh_retry gh issue create "${_engine_label_args[@]}" --repo "${GITHUB_REPOSITORY}" \
       --title "${issue_title}" \
       --body "${new_body}" \
@@ -14172,9 +14185,11 @@ STALL_EOF
       close_linked_pr "${issue_num}" \
         "Closed by orchestrator stall recovery — issue #${issue_num} was stuck in '${phase}' for ${stall_minutes}m. A replacement issue will be created."
 
-      local orig_title orig_body
-      orig_title="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title // ""' || echo "")"
-      orig_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body // ""' || echo "")"
+      local orig_title orig_body orig_issue_json orig_issue_is_heal
+      orig_issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '{title: (.title // ""), body: (.body // ""), heal: ([.labels[]?.name] | index("ai:workflow-heal") != null)}' || echo "")"
+      orig_title="$(printf '%s' "${orig_issue_json}" | jq -r '.title // ""' 2>/dev/null || echo "")"
+      orig_body="$(printf '%s' "${orig_issue_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+      orig_issue_is_heal="$(printf '%s' "${orig_issue_json}" | jq -r '.heal // false' 2>/dev/null || echo false)"
 
       ensure_label_exists "ai:closed"
       gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
@@ -14205,6 +14220,11 @@ REISSUE_EOF
       ensure_label_exists "ai:clarification"
       ensure_label_exists "ai:orchestrator-managed"
       mapfile -t _engine_label_args < <(engine_label_create_args)
+      if [ "${orig_issue_is_heal}" = true ] || printf '%s' "${orig_body}" | grep -q 'workflow-failure-heal:fp='; then
+        new_body="$(printf '%s' "${new_body}" | PYTHONDONTWRITEBYTECODE=1 python3 "${HEAL_SUPPORT_HELPER}" heal-scope carry --body-file /dev/stdin --parent-repo "${GITHUB_REPOSITORY}" --parent-issue "${issue_num}" --pipeline-login "${NOOP_CAP_TRUSTED_LOGIN:-}")" || return 1
+        ensure_label_exists 'ai:workflow-heal'
+        _engine_label_args+=(--label 'ai:workflow-heal')
+      fi
       new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" --repo "${GITHUB_REPOSITORY}" \
         --title "${orig_title}" \
         --body "${new_body}" \
@@ -16928,13 +16948,17 @@ STALL_EOF
 
         local orig_title
         local orig_body
+        local orig_issue_json
+        local orig_issue_is_heal
         local new_body
         local new_url
         local new_url_clean
         local bt='`'
         local new_num
-        orig_title="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.title' || echo "")"
-        orig_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '.body // ""' || echo "")"
+        orig_issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '{title: (.title // ""), body: (.body // ""), heal: ([.labels[]?.name] | index("ai:workflow-heal") != null)}' || echo "")"
+        orig_title="$(printf '%s' "${orig_issue_json}" | jq -r '.title // ""' 2>/dev/null || echo "")"
+        orig_body="$(printf '%s' "${orig_issue_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+        orig_issue_is_heal="$(printf '%s' "${orig_issue_json}" | jq -r '.heal // false' 2>/dev/null || echo false)"
 
         new_body="$(cat <<REISSUE_EOF
 ${orig_body}
@@ -16951,6 +16975,11 @@ REISSUE_EOF
 )"
         ensure_label_exists "ai:clarification"
         mapfile -t _engine_label_args < <(engine_label_create_args "${labels_json:-[]}")
+        if [ "${orig_issue_is_heal}" = true ] || printf '%s' "${orig_body}" | grep -q 'workflow-failure-heal:fp=' || printf '%s' "${labels_json:-[]}" | jq -e 'index("ai:workflow-heal") != null' >/dev/null 2>&1; then
+          new_body="$(printf '%s' "${new_body}" | PYTHONDONTWRITEBYTECODE=1 python3 "${HEAL_SUPPORT_HELPER}" heal-scope carry --body-file /dev/stdin --parent-repo "${GITHUB_REPOSITORY}" --parent-issue "${issue_num}" --pipeline-login "${NOOP_CAP_TRUSTED_LOGIN:-}")" || return 1
+          ensure_label_exists 'ai:workflow-heal'
+          _engine_label_args+=(--label 'ai:workflow-heal')
+        fi
         new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" --repo "${GITHUB_REPOSITORY}" --title "${orig_title}" --body "${new_body}" --label "ai:clarification" 2>/dev/null || echo "")"
         new_url_clean="$(printf '%s\n' "${new_url}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
         new_num="$(basename "${new_url_clean%%[?#]*}")"

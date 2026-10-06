@@ -242,6 +242,11 @@ EOF
   cat "${PLANNING_CONTEXT_FILE}"
 } > "${CODEX_PROMPT_FILE}"
 
+if [ "${HEAL_ROUTE:-false}" = true ]; then
+	[ -s "${HEAL_EVIDENCE_FILE:-${RUNTIME_DIR}/heal_evidence.md}" ] || { echo '::error::Heal evidence bundle missing' >&2; exit 1; }
+	cat "${HEAL_EVIDENCE_FILE:-${RUNTIME_DIR}/heal_evidence.md}" >> "${CODEX_PROMPT_FILE}"
+fi
+
 # Update progress comment to signal model invocation is starting
 if [ -n "${PLAN_PROGRESS_COMMENT_ID:-}" ]; then
   gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${PLAN_PROGRESS_COMMENT_ID}" \
@@ -286,7 +291,13 @@ for attempt in $(seq 1 "${max_attempts}"); do
     echo "Final attempt: switching editor model to fallback ${attempt_model} (primary ${MODEL_EDITOR} capacity-limited)."
   fi
   plan_rc=0
-  if [ "${PLAN_ENGINE}" = "claude" ]; then
+  if [ "${HEAL_ROUTE:-false}" = true ]; then
+    MODEL_EDITOR="${attempt_model}" bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" "${PLAN_ENGINE}" PLAN || plan_rc=$?
+    if [ "${plan_rc}" -eq 75 ]; then
+      PLAN_ENGINE=codex
+      MODEL_EDITOR="${attempt_model}" bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" codex PLAN || plan_rc=$?
+    fi
+  elif [ "${PLAN_ENGINE}" = "claude" ]; then
     AI_ENGINE_MODEL_HINT="${MODEL_EDITOR}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT:-}" \
       claude_run PLAN "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${PWD}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || plan_rc=$?
     if [ "${plan_rc}" -eq 75 ]; then
@@ -294,7 +305,7 @@ for attempt in $(seq 1 "${max_attempts}"); do
       plan_rc=0
     fi
   fi
-  if [ "${PLAN_ENGINE}" != "claude" ]; then
+  if [ "${HEAL_ROUTE:-false}" != true ] && [ "${PLAN_ENGINE}" != "claude" ]; then
     cat "${CODEX_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${attempt_model}" --sandbox danger-full-access > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || plan_rc=$?
   fi
   if [ "${plan_rc}" -eq 0 ]; then

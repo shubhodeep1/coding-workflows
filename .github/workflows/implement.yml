@@ -1024,7 +1024,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh security_dependency.py auto_decisions.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh security_dependency.py auto_decisions.py workflow_failure_heal.py workflow_failure_heal_evidence.sh implement_heal_preflight.sh heal_isolated_implement.sh review_untrusted_workspace.py clarify_openrouter_broker.py files_touched_scope_guard.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -1743,6 +1743,13 @@ jobs:
             exit 1
           fi
 
+      - name: Heal route preflight
+        if: env.SKIP_IMPLEMENT != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          bash scripts/implement_heal_preflight.sh
+
       - name: Validate approval phase label
         if: env.SKIP_IMPLEMENT != 'true'
         env:
@@ -2046,7 +2053,7 @@ jobs:
           fi
 
       - name: Run workspace before_run hook
-        if: env.SKIP_IMPLEMENT != 'true'
+        if: env.SKIP_IMPLEMENT != 'true' && env.HEAL_ROUTE != 'true'
         id: workspace_before_run_hook
         run: |
           set -euo pipefail
@@ -2140,10 +2147,10 @@ jobs:
           # implementer immediately. Stripping invalid bytes before
           # piping is the cheapest insurance.
           # shellcheck source=/dev/null
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${HEAL_TRUSTED_SUPPORT_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
 
           # shellcheck source=/dev/null
-          source scripts/transcript_archive.sh 2>/dev/null || true
+          source "${HEAL_TRUSTED_SUPPORT_DIR:-scripts}/transcript_archive.sh" 2>/dev/null || true
           if ! type archive_transcript >/dev/null 2>&1; then
             archive_transcript() { return 0; }
           fi
@@ -2347,7 +2354,7 @@ jobs:
             # Inject the configurable tool call budget before the static heredoc
             echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
             echo
-            SERENA_TOOL_HINTS="${IMPLEMENT_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "${PROMPT_TEMPLATE_FILE}"
+            SERENA_TOOL_HINTS="${IMPLEMENT_SERENA_TOOL_HINTS}" bash "${HEAL_TRUSTED_SUPPORT_DIR:-scripts}/render_prompt.sh" "${PROMPT_TEMPLATE_FILE}"
             echo
             if [ -s "${TARGETED_FILES_CONTEXT_FILE}" ]; then
               cat "${TARGETED_FILES_CONTEXT_FILE}"
@@ -2359,6 +2366,9 @@ jobs:
             echo "=== IMPLEMENTATION CONTEXT ==="
             cat "${IMPLEMENTATION_CONTEXT_FILE}"
           } > "${CODEX_PROMPT_FILE}"
+          if [ "${HEAL_ROUTE:-false}" = true ]; then
+            cat "${RUNTIME_DIR}/heal_evidence.md" >> "${CODEX_PROMPT_FILE}"
+          fi
 
           # Safety net: codex-cli hard-caps `turn/start` stdin at 1,048,576
           # characters. Overshooting fails EVERY attempt before the editor
@@ -2792,6 +2802,13 @@ jobs:
             # variables on main, but a review-blocked baseline branch or an
             # unsynced integration branch checks out an older conftest.py, so
             # the workflow side has to hold on its own.
+            if [ "${HEAL_ROUTE:-false}" = true ]; then
+              bash "${HEAL_TRUSTED_SUPPORT_DIR:-${GITHUB_WORKSPACE}/.codex-workflow-src/scripts}/heal_isolated_implement.sh" "${PROMPT_FILE_TO_USE}" "${CODEX_OUTPUT_FILE}" || cmd_rc=$?
+              if [ "${cmd_rc}" -eq 42 ]; then
+                bash "${HEAL_TRUSTED_SUPPORT_DIR:-${GITHUB_WORKSPACE}/.codex-workflow-src/scripts}/implement_heal_preflight.sh" refuse out_of_heal_scope
+                exit 0
+              fi
+            else
             CODEX_THREAD_REUSE_STATE_KEY="implement" \
               CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT:-codex}" \
               CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT" \
@@ -2807,6 +2824,7 @@ jobs:
               CODEX_THREAD_REUSE_TIMEOUT_SECS="${attempt_wall}" \
               env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \
               bash scripts/codex_thread_reuse.sh direct-run || cmd_rc=$?
+            fi
 
             emit_implement_substate "implement" "implement" "Finishing" "${attempt}" "${attempt_log_file}"
 
@@ -3265,7 +3283,7 @@ jobs:
           fi
 
       - name: Run workspace after_run hook
-        if: always() && env.SKIP_IMPLEMENT != 'true' && steps.implement_run.outcome != 'skipped'
+        if: always() && env.SKIP_IMPLEMENT != 'true' && env.HEAL_ROUTE != 'true' && steps.implement_run.outcome != 'skipped'
         run: |
           set -euo pipefail
           bash scripts/run_workspace_hook.sh implement after_run
@@ -3569,7 +3587,7 @@ jobs:
           # is still the temp index here). Fails OPEN — no allowlist, master
           # toggle off, or a missing helper all log-and-allow, matching the
           # missing-allowlist posture used elsewhere in this workflow.
-          if [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ]; then
+          if [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ] && [ "${HEAL_ROUTE:-false}" != true ]; then
             echo "::notice::files_touched scope guard disabled (ENFORCE_FILES_TOUCHED='${ENFORCE_FILES_TOUCHED:-true}')."
           else
             scope_staged="$(git diff --cached --name-only --diff-filter=ACMRD || true)"
@@ -3579,10 +3597,16 @@ jobs:
               printf '%s\n' "${scope_staged}" > "${scope_staged_file}"
               scope_violations=""
               scope_rc=0
+              scope_guard_extra_args=()
+              if [ "${HEAL_ROUTE:-false}" = true ]; then
+                scope_guard_extra_args+=(--strict-allowlist)
+              fi
               if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
                 set +e
                 scope_violations="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
-                  --issue-body-file "${ISSUE_BODY_FILE:-}" \
+                  "$(if [ "${HEAL_ROUTE:-false}" = true ]; then printf '%s' '--allowlist-file'; else printf '%s' '--issue-body-file'; fi)" \
+                  "$(if [ "${HEAL_ROUTE:-false}" = true ]; then printf '%s' "${HEAL_SCOPE_FILE:?}"; else printf '%s' "${ISSUE_BODY_FILE:-}"; fi)" \
+                  "${scope_guard_extra_args[@]}" \
                   --staged-file "${scope_staged_file}" \
                   --allowlist-out "${scope_allowlist_file}")"
                 scope_rc=$?
@@ -3596,12 +3620,16 @@ jobs:
                   echo "files_touched scope guard: all staged paths fall within the issue allowlist."
                   ;;
                 10)
+                  if [ "${HEAL_ROUTE:-false}" = true ]; then
+                    echo '::error::Verified heal scope is empty; refusing scope check.' >&2
+                    exit 1
+                  fi
                   echo "::notice::files_touched scope guard skipped: issue declares no files_touched allowlist."
                   ;;
                 20)
                   scope_count="$(printf '%s\n' "${scope_violations}" | sed '/^$/d' | wc -l | tr -d ' ')"
                   scope_allowlist="$(sed '/^$/d' "${scope_allowlist_file}" 2>/dev/null || true)"
-                  if [ "${ALLOW_OUT_OF_SCOPE_FILES:-false}" = "true" ]; then
+                  if [ "${ALLOW_OUT_OF_SCOPE_FILES:-false}" = "true" ] && [ "${HEAL_ROUTE:-false}" != true ]; then
                     echo "::warning::files_touched scope guard: ${scope_count} staged path(s) outside the allowlist, but ALLOW_OUT_OF_SCOPE_FILES=true — allowing."
                     printf '%s\n' "${scope_violations}" | sed '/^$/d;s/^/  - /'
                   else
@@ -3622,6 +3650,10 @@ jobs:
                   fi
                   ;;
                 *)
+                  if [ "${HEAL_ROUTE:-false}" = true ]; then
+                    echo "::error::Heal scope guard failed with exit ${scope_rc}; refusing scope check." >&2
+                    exit 1
+                  fi
                   echo "::warning::files_touched scope guard failed open (helper exit ${scope_rc}); staged change set not scope-checked this run."
                   ;;
               esac
@@ -3631,7 +3663,7 @@ jobs:
           # <<< files_touched scope-enforcement guard (preflight) <<<
 
       - name: Validate syntax of changed files
-        if: env.SKIP_IMPLEMENT != 'true'
+        if: env.SKIP_IMPLEMENT != 'true' && env.HEAL_ROUTE != 'true'
         id: validate_syntax_changed_files
         continue-on-error: true
         run: |
@@ -3643,7 +3675,7 @@ jobs:
           CAPTURE_FILE="${CAPTURE_FILE}" RUNTIME_DIR="${RUNTIME_DIR}" bash scripts/validate_changed_files_syntax.sh
 
       - name: Attempt post-Codex syntax repair
-        if: env.SKIP_IMPLEMENT != 'true' && steps.validate_syntax_changed_files.outcome == 'failure'
+        if: env.SKIP_IMPLEMENT != 'true' && env.HEAL_ROUTE != 'true' && steps.validate_syntax_changed_files.outcome == 'failure'
         id: post_codex_syntax_repair
         continue-on-error: true
         env:
@@ -4207,7 +4239,7 @@ jobs:
           fi
 
           # shellcheck source=/dev/null
-          source scripts/write_guard.sh
+          source "${HEAL_TRUSTED_SUPPORT_DIR:-scripts}/write_guard.sh"
           IMPLEMENT_WRITE_GUARD_FILE="$(mktemp)"
           {
             git diff --name-only --diff-filter=ACMRD HEAD || true
