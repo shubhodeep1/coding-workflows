@@ -278,6 +278,7 @@ jobs:
           fetch-depth: 1
 
       - name: Stage workflow support files
+        id: stage_support
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
@@ -295,6 +296,13 @@ jobs:
             install -m 0755 "${src}" "scripts/${f}"
             _fetched_scripts+=("${f}")
           done
+
+          editor_git_credentials_sha256="$(printf '%s\n' "$(cat -- scripts/editor_git_credentials.sh)" | sha256sum | awk '{print $1}')"
+          if [[ ! "${editor_git_credentials_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+            echo '::error::Unable to pin staged git credentials helper'
+            exit 1
+          fi
+          echo "editor_git_credentials_sha256=${editor_git_credentials_sha256}" >> "$GITHUB_OUTPUT"
 
           src=".codex-workflow-src/scripts/claude_settings.json.tmpl"
           if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/claude_settings.json.tmpl" ]; then
@@ -1241,8 +1249,15 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_PLAN || '40' }}
           PLAN_ENGINE: ${{ steps.ai_engine.outputs.engine || 'codex' }}
+          EDITOR_GIT_CREDENTIALS_SHA256: ${{ steps.stage_support.outputs.editor_git_credentials_sha256 }}
         run: |
-          bash scripts/run_plan_codex.sh
+          set -euo pipefail
+          plan_runner_src="$(cat -- scripts/run_plan_codex.sh)"
+          if [ -z "${plan_runner_src}" ] || [ "${#plan_runner_src}" -gt 120000 ]; then
+            echo '::error::run_plan_codex.sh empty or too large'
+            exit 1
+          fi
+          bash -c "${plan_runner_src}" run_plan_codex.sh
 
       - name: Enforce plan write guard
         if: env.SKIP_PLAN != 'true'
