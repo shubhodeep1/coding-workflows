@@ -2307,7 +2307,8 @@ feature-sweep `update-branch` fast-forward still applies, so a
 released PR is usually already up to date. Everything is
 fail-open for general gate lookups: an API failure, a missing script on an older
 `SCRIPT_REF`, or a non-numeric input logs a `::warning::` and continues to the
-reviewer path without queuing. Bypass verification instead keeps the PR queued:
+reviewer path without queuing. Failed queue-history verification or a failed
+update consuming the one-shot bypass marker instead keeps the PR queued:
 remove the label and re-run review only after a trusted queue marker exists.
 Audit lines: `MERGE_TRAIN_GATE pr=<n> base=<b> result=queued|unblocked|...`,
 `MERGE_TRAIN_STILL_QUEUED`, `MERGE_TRAIN_RELEASED pr=<n> source=gate|release`,

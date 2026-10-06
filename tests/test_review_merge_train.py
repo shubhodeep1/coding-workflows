@@ -128,7 +128,9 @@ case "${method}" in
         ;;
       repos/*/pulls) fixture="${FAKE_GH_DIR}/pulls.json" ;;
       repos/*/pulls/*/files) n="${path#*/pulls/}"; n="${n%%/*}"; fixture="${FAKE_GH_DIR}/files_${n}.json" ;;
-      repos/*/issues/*/comments) n="${path#*/issues/}"; n="${n%%/*}"; fixture="${FAKE_GH_DIR}/comments_${n}.json" ;;
+      repos/*/issues/*/comments)
+        if [ -f "${FAKE_GH_DIR}/fail_comments" ]; then exit 1; fi
+        n="${path#*/issues/}"; n="${n%%/*}"; fixture="${FAKE_GH_DIR}/comments_${n}.json" ;;
       repos/*/issues/*/events)
         if [ -f "${FAKE_GH_DIR}/fail_events" ]; then exit 1; fi
         n="${path#*/issues/}"; n="${n%%/*}"; fixture="${FAKE_GH_DIR}/events_${n}.json" ;;
@@ -153,6 +155,10 @@ case "${method}" in
     ;;
   POST)
     if [[ "${path}" == repos/*/issues/*/labels ]] && [ -f "${FAKE_GH_DIR}/label_post_fail" ]; then exit 1; fi
+    exit 0
+    ;;
+  PATCH)
+    if [[ "${path}" == repos/*/issues/comments/* ]] && [ -f "${FAKE_GH_DIR}/comment_patch_fail" ]; then exit 1; fi
     exit 0
     ;;
   *) exit 0 ;;
@@ -492,11 +498,12 @@ def test_gate_rejects_unverified_bypass(tmp_path: Path, author: str, events: lis
 		assert "issues/comments/99" not in log_text
 
 
-def test_gate_identity_failure_does_not_trust_or_patch_marker(tmp_path: Path) -> None:
+@pytest.mark.parametrize("failure", ["fail_user", "fail_comments"])
+def test_gate_identity_failure_does_not_trust_or_patch_marker(tmp_path: Path, failure: str) -> None:
 	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
 	(fixtures / "pulls.json").write_text(json.dumps([_pr(4075, "ai/issue-4063"), _pr(4077, "ai/issue-4064")]), encoding="utf-8")
 	(fixtures / "comments_4077.json").write_text(json.dumps([_marker_comment(99)]), encoding="utf-8")
-	(fixtures / "fail_user").touch()
+	(fixtures / failure).touch()
 	_write_files(fixtures, 4075, ["backend/promo_email_sender.py"])
 	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
 	result, log_text, env_out = _run("gate", tmp_path, bin_dir, fixtures, log, PR_NUMBER="4077",
@@ -504,9 +511,30 @@ def test_gate_identity_failure_does_not_trust_or_patch_marker(tmp_path: Path) ->
 	assert result.returncode == 0, result.stderr
 	assert "::warning::" in result.stdout
 	assert "result=bypassed" not in result.stdout
-	assert "POST repos/acme/consumer/issues/4077/labels" not in log_text
+	assert "result=queued blockers=#4075 action=soft_exit" in result.stdout
+	assert "POST repos/acme/consumer/issues/4077/labels" in log_text
+	assert "POST repos/acme/consumer/issues/4077/comments" not in log_text
 	assert "PATCH repos/acme/consumer/issues/comments/99" not in log_text
-	assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
+	assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
+
+
+def test_gate_failed_bypass_marker_update_keeps_pr_queued(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([_pr(4075, "ai/issue-4063"), _pr(4077, "ai/issue-4064")]), encoding="utf-8")
+	(fixtures / "comments_4077.json").write_text(json.dumps([_marker_comment(99)]), encoding="utf-8")
+	(fixtures / "events_4077.json").write_text(json.dumps([_label_event("unlabeled")]), encoding="utf-8")
+	(fixtures / "permission_maint.json").write_text('{"role_name":"write"}', encoding="utf-8")
+	(fixtures / "comment_patch_fail").touch()
+	_write_files(fixtures, 4075, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, env_out = _run("gate", tmp_path, bin_dir, fixtures, log, PR_NUMBER="4077",
+		BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064", GH_RETRY_MAX_ATTEMPTS="1")
+	assert result.returncode == 0, result.stderr
+	assert "result=bypass_rejected reason=marker_update_failed action=queue" in result.stdout
+	assert "result=bypassed" not in result.stdout
+	assert "PATCH repos/acme/consumer/issues/comments/99" in log_text
+	assert "POST repos/acme/consumer/issues/4077/labels" in log_text
+	assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
 
 
 def test_gate_matches_automation_author_case_insensitively(tmp_path: Path) -> None:

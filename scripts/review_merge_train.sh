@@ -69,15 +69,15 @@
 #            logged and the PR stays unlabelled until its next review-triggering
 #            event (push, re-run, or orchestrator stall recovery).
 #
-# Fail-open contract: any API failure, missing input or unexpected shape logs
-# a ::warning:: and exits 0 WITHOUT queuing (gate) or WITHOUT releasing
+# Fail-open contract: general lookup failures, missing input or unexpected shape log
+# a ::warning:: and exit 0 WITHOUT queuing (gate) or WITHOUT releasing
 # (release). An incomplete active-run listing counts as such a failure:
 # release then leaves every queued PR queued (MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE)
 # rather than dispatch beside a review it could not see. The train only ever
 # delays a review run; it never blocks a
 # merge, and a PR that is wrongly left queued is picked up by the next
-# release tick once its blockers are gone. An unverifiable *bypass* is not
-# authorized: it keeps the PR queued.
+# release tick once its blockers are gone. After blockers are known, an
+# unverifiable or unconsumed *bypass* keeps the PR queued.
 set -euo pipefail
 
 _mt_log() { printf '%s\n' "$*"; }
@@ -413,7 +413,7 @@ _mt_gate() {
 			return 0
 		fi
 	fi
-	local own_labels queued_comment_id queued_comment_created queued_comment bypass_reason queue_label_persisted
+	local own_labels queued_comment_id queued_comment_created queued_comment bypass_reason queue_label_persisted queue_state_verified
 	own_labels="$(printf '%s\n' "${prs_json}" | jq -r --argjson n "${pr}" 'select(.number == $n) | .labels | join(",")' 2>/dev/null | head -n 1 || true)"
 	if [ -z "${blockers}" ]; then
 		_mt_log "MERGE_TRAIN_GATE pr=${pr} base=${base} result=unblocked action=continue"
@@ -436,20 +436,24 @@ _mt_gate() {
 		fi
 		return 0
 	fi
+	queue_state_verified="true"
 	if ! _mt_resolve_automation_login || ! queued_comment="$(_mt_find_marker_comment "${pr}" "${MT_MARKER}")"; then
-		_mt_warn "merge-train gate: could not inspect prior queue state for PR #${pr}; fail-open (not queued)."
-		return 0
+		_mt_warn "merge-train gate: could not inspect prior queue state for PR #${pr}; keeping it queued."
+		queue_state_verified="false"
+		queued_comment=""
 	fi
 	queued_comment_id="${queued_comment%% *}"
 	queued_comment_created="${queued_comment#* }"
 	if ! _mt_has_label "${own_labels}" && [[ "${queued_comment_id}" =~ ^[0-9]+$ ]]; then
 		if bypass_reason="$(_mt_bypass_authorized "${pr}" "${queued_comment_created}")"; then
-			gh_retry gh api -X PATCH "repos/${MT_REPO}/issues/comments/${queued_comment_id}" \
+			if gh_retry gh api -X PATCH "repos/${MT_REPO}/issues/comments/${queued_comment_id}" \
 				-f body="${MT_BYPASSED_MARKER}
-**Merge train bypassed once.** The queue label was removed while older overlapping PRs remain open, so this review run is proceeding. A later run will evaluate the train normally." >/dev/null 2>&1 \
-				|| _mt_warn "merge-train gate: could not persist the one-shot bypass marker for PR #${pr}; this run still proceeds."
-			_mt_log "MERGE_TRAIN_GATE pr=${pr} base=${base} result=bypassed blockers=$(printf '%s\n' "${blockers}" | sed 's/:.*//' | paste -sd, -) action=continue"
-			return 0
+**Merge train bypassed once.** The queue label was removed while older overlapping PRs remain open, so this review run is proceeding. A later run will evaluate the train normally." >/dev/null 2>&1; then
+				_mt_log "MERGE_TRAIN_GATE pr=${pr} base=${base} result=bypassed blockers=$(printf '%s\n' "${blockers}" | sed 's/:.*//' | paste -sd, -) action=continue"
+				return 0
+			fi
+			_mt_warn "merge-train gate: could not persist the one-shot bypass marker for PR #${pr}; keeping it queued."
+			bypass_reason="marker_update_failed"
 		fi
 		_mt_log "MERGE_TRAIN_GATE pr=${pr} base=${base} result=bypass_rejected reason=${bypass_reason} action=queue"
 	fi
@@ -467,7 +471,7 @@ _mt_gate() {
 			_mt_warn "merge-train gate: could not add ${MT_LABEL} to PR #${pr}; the run still soft-exits and no bypass marker will be armed."
 		fi
 	fi
-	if [ "${queue_label_persisted}" = "true" ]; then
+	if [ "${queue_label_persisted}" = "true" ] && [ "${queue_state_verified}" = "true" ]; then
 		_mt_upsert_comment "${pr}" "${MT_MARKER}" "${MT_MARKER}
 **Review queued (merge train).** This PR edits files that older open PRs on \`${base}\` also change, so its review/autofix run waits until they merge or close. Lowest PR number goes first; the queue is released automatically when a blocker closes (and re-checked on every orchestrator poll tick).
 
