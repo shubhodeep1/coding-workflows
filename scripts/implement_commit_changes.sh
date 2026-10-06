@@ -52,6 +52,13 @@ trap on_step_exit EXIT
 exec 3>&2
 exec 2> >(tee "${STEP_STDERR_FILE}" >&3)
 
+# The editor may have left a background writer behind after credentials were
+# restored. Refuse any command-running Git configuration before staging.
+bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh" check || {
+  echo "::error::Editor-writable git config or attributes would run a command during staging; refusing to commit."
+  exit 1
+}
+
 # Remove workflow-generated/fetched artifacts BEFORE checking for
 # changes so they don't cause false-positive "file changes" detection.
 # Restore pre_assembled_static.txt from HEAD when the consumer tracks it;
@@ -341,8 +348,8 @@ if [ "${is_self_repo}" = "false" ]; then
   add_u_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
   add_o_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
 fi
-git add -u -- "${add_u_excludes[@]}"
-git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}" | xargs -0 -r git add --
+git -c core.fsmonitor=false add -u -- "${add_u_excludes[@]}"
+git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}" | xargs -0 -r git -c core.fsmonitor=false add --
 if [ "${is_self_repo}" = "false" ] && [ -f scripts/.gitignore ]; then
   while IFS= read -r fetched_script; do
     case "${fetched_script}" in ''|'#'*|'.gitignore') continue ;; esac

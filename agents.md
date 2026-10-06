@@ -463,7 +463,12 @@ a new value, add it to the appropriate overrides file with a
   hide refuses before the editor starts, and restore refuses before any token
   is injected, when a checkout's origin is not its trusted repository or was
   changed, or a pushurl, URL rewrite, proxy, credential helper or include
-  directive sits in an editor-writable git config scope.
+  directive sits in an editor-writable git config scope. It also refuses
+  command-running Git keys (filter/diff/merge drivers, `core.attributesFile`,
+  signing programs, `lfs.*`) in those scopes and driver assignments in
+  `.git/info/attributes` or global attributes. `implement_commit_changes.sh`
+  calls its tokenless `check` action before staging to revalidate the effective
+  Git configuration and attributes after the editor exits.
   The editor never reads those paths; only the restore / reinstall / commit
   steps of the job do. A `pytest` the editor starts to validate its own change
   therefore cannot write fixture paths into the live run's ledgers even when
