@@ -148,7 +148,7 @@ def test_validate_workflow_passes_template_default_env() -> None:
 	assert '"${RUNTIME_DIR}/renderer-venv/bin/python" -I -c' in wf
 	assert 'if pathlib.Path(sys.prefix).resolve() != environment:' in wf
 	assert 'pathlib.Path(spec.origin).resolve().is_relative_to(root)' in wf
-	assert "VALIDATION_RENDERER_DEPENDENCIES_READY: ${{ steps.renderer_dependencies.outcome == 'success' }}" in wf
+	assert "VALIDATION_RENDERER_DEPENDENCIES_READY: ${{ steps.renderer_dependencies.outcome == 'success' && steps.renderer_dependencies.outputs.renderer_state == 'prepared' }}" in wf
 	assert "if: always() && steps.workspace_after_create_hook.outcome != 'failure' && steps.workspace_before_run_hook.outcome != 'failure'" in wf
 
 
@@ -429,7 +429,7 @@ def test_renderer_dependency_step_runs_after_unrelated_earlier_failure() -> None
 	assert "          BASH_ENV: ''\n" in prep
 	run_step = _step_block("validate_run")
 	assert "          VALIDATION_RENDERER_DEPENDENCIES_OUTCOME: ${{ steps.renderer_dependencies.outcome }}\n" in run_step
-	assert "          VALIDATION_RENDERER_DEPENDENCIES_READY: ${{ steps.renderer_dependencies.outcome == 'success' }}\n" in run_step
+	assert "          VALIDATION_RENDERER_DEPENDENCIES_READY: ${{ steps.renderer_dependencies.outcome == 'success' && steps.renderer_dependencies.outputs.renderer_state == 'prepared' }}\n" in run_step
 	ids = [m.group(1) for block in _validate_step_blocks() for m in [re.search(r"\n        id: (\S+)", block)] if m]
 	assert ids.index("support_staging") < ids.index("workspace_after_create_hook") < ids.index("renderer_dependencies") < ids.index("validate_run")
 
@@ -478,16 +478,18 @@ def test_renderer_dependency_step_checks_renderer_in_workspace_path() -> None:
 				["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", script],
 				cwd=github_workspace, env=env, capture_output=True, text=True, timeout=30,
 			)
-			assert result.returncode == 0, result.stdout + result.stderr
 			outputs = github_output.read_text(encoding="utf-8") if github_output.exists() else ""
 			if renderer_in_workspace_path:
+				assert result.returncode == 0, result.stdout + result.stderr
 				assert (runtime_dir / "renderer-empty").is_dir()
 				assert (runtime_dir / "renderer-venv" / "bin" / "python").exists()
 				assert "renderer_state=prepared" in outputs
 			else:
+				assert result.returncode != 0, result.stdout + result.stderr
 				assert not (runtime_dir / "renderer-empty").exists()
 				assert "renderer_state=absent" in outputs
-				assert str(workspace_path / "scripts" / "render_validation_templates.py") in result.stdout
+				assert "::error::" in result.stderr
+				assert str(workspace_path / "scripts" / "render_validation_templates.py") in result.stderr
 
 
 def test_skipped_renderer_preparation_surfaces_dependency_failure() -> None:
