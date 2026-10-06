@@ -827,7 +827,9 @@ def _env_split_string_has_guarded_git(command: str, depth: int = 0) -> bool:
 				elif option.startswith("-S") and option != "-S":
 					split_value = option[2:]
 				if split_value and (
-					git_subcommands(split_value) & GUARDED_SUBCOMMANDS
+					# Shell or env expansion may supply the executable and its arguments.
+					"$" in split_value or "`" in split_value
+					or git_subcommands(split_value) & GUARDED_SUBCOMMANDS
 					or _env_split_string_has_guarded_git(split_value, depth + 1)
 				):
 					return True
@@ -999,8 +1001,8 @@ def _resolve_push_destination(
 ) -> _PushDestination:
 	with _inline_git_config(config_args, config_environment):
 		token = push_repository or _default_push_remote(cwd, config_args, config_environment)
-	# A remote name is safe to show. Strip URL userinfo before printing a URL.
-	label = re.sub(r"[^/@]*@", "", token) if "@" in token else token
+	# Literal URLs may carry credentials outside userinfo (e.g. query strings).
+	label = token if _REMOTE_NAME_RE.fullmatch(token) and ".." not in token else "<explicit URL>"
 	with _inline_git_config(config_args, config_environment):
 		urls = _remote_push_urls(token, cwd, config_args)
 		if urls:
@@ -1604,8 +1606,6 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
-		if invocation.subcommand == "push" and invocation.warning == "could not verify git push configuration overrides":
-			return 2, "BLOCKED: git push configuration overrides may rewrite the destination URL. Use a configured GitHub remote without inline Git configuration."
 		if invocation.subcommand == "push" and invocation.warning:
 			_warn(invocation.warning)
 			unresolved_push_sources.append(
