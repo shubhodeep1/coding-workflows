@@ -638,7 +638,7 @@ _memory_force_tick_collision_wrapper()
 	local incoming_file="${2:?incoming file required}"
 	local cooldown_seconds="${3:-30}"
 
-	python3 - <<'PY' "${current_file}" "${incoming_file}" "${cooldown_seconds}"
+	PYTHONSAFEPATH=1 python3 - <<'PY' "${current_file}" "${incoming_file}" "${cooldown_seconds}"
 import datetime as dt
 import json
 import pathlib
@@ -784,7 +784,7 @@ memory_force_tick_get()
 	fi
 
 	local record_wrapper=""
-	if ! record_wrapper="$(python3 - <<'PY' "${record_path}"
+	if ! record_wrapper="$(PYTHONSAFEPATH=1 python3 - <<'PY' "${record_path}"
 import json
 import pathlib
 import sys
@@ -930,7 +930,7 @@ memory_force_tick_put()
 	}
 
 	local stored_wrapper=""
-	if ! stored_wrapper="$(python3 - <<'PY' "${target_path}"
+	if ! stored_wrapper="$(PYTHONSAFEPATH=1 python3 - <<'PY' "${target_path}"
 import json
 import pathlib
 import sys
