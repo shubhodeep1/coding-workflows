@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:3623, 15768, 224-243 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The label snapshots are capped at 50 labels without pagination checks, so an incomplete but structurally valid snapshot can omit `ai:codex` and cause engine selection to choose Claude.\n  WHY: When the missing label is outside the fetched page, managed judge selection can send the issue content to Claude despite its `ai:codex` label.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Pass the judged issue's verified labels into engine selection; default to codex when that label snapshot is unavailable.\"\n  expected_change_site: scripts/orchestrate_poll_process.sh at the GraphQL label fetches (lines 3623 and 15768), or in `poller_judge_engine_labels_json` so it returns `unavailable` when `pageInfo.hasNextPage` is true\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Neither fetcher requests `labels { totalCount }` / `pageInfo { hasNextPage endCursor }`. `poller_judge_engine_labels_json` only inspects the array shape (jq `select(type == \"array\" and all(.[]; type == \"string\"))`), so a 50-element truncated snapshot is returned as a verified engine-selection input. No diff hunk in either the original PR or the last-run autofix adds pagination, totals, or a completeness probe.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:3623 (`_fetch_issue_labels_batch_graphql`), 15768 (`_fetch_candidate_issue_details_graphql`) | severity=high | confidence=4\n  PROBLEM: Both batched GraphQL label fetchers hard-code `labels(first: 50) { nodes { name } }` and never check `pageInfo { hasNextPage }`. The fix introduces a `judge_engine_labels_valid` gate that marks the snapshot \"verified\" simply because it parses as a JSON array of strings, but does not verify completeness. A label snapshot truncated at 50 entries is treated the same as a fully-fetched one.\n  WHY: When an AI pipeline issue accumulates more than 50 labels and `ai:codex` falls past position 50, the per-issue judge selector in `poller_judge_isolated` (line 247) sees no `ai:codex` and falls through to `ai:engine-claude` in `claude_engine.py:401-402`. For the managed judge path the truncated issue labels are then combined with `TRACKING_LABELS`, so an `ai:engine-claude` on the tracking issue selects Claude even though the judged issue carries `ai:codex`. The selector only logs `AI_ENGINE_SELECTED role=\u2026 engine=claude source=label:ai:engine-claude` and the issue content reaches the Claude sandbox \u2014 the exact disclosure the original fix is meant to prevent.\n\n- Requirement: \"Pass the judged issue's verified labels into engine selection; default to codex when that label snapshot is unavailable.\"\n  Expected change site: scripts/orchestrate_poll_process.sh at the GraphQL label fetches (lines 3623 and 15768), or in `poller_judge_engine_labels_json` so it returns `unavailable` when `pageInfo.hasNextPage` is true\n  Evidence of absence: Neither fetcher requests `labels { totalCount }` / `pageInfo { hasNextPage endCursor }`. `poller_judge_engine_labels_json` only inspects the array shape (jq `select(type == \"array\" and all(.[]; type == \"string\"))`), so a 50-element truncated snapshot is returned as a verified engine-selection input. No diff hunk in either the original PR or the last-run autofix adds pagination, totals, or a completeness probe.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:3623 and 15768 | severity=high | confidence=4\n  PROBLEM: A truncated label list is treated as a complete, verified snapshot.\n  WHY: If an issue has more than 50 labels and `ai:codex` is outside the returned page, the engine-label validator still accepts the array. A managed stall or review-blocked judge then combines that incomplete list with tracking labels; when those select Claude, the judge runs on Claude despite the issue\u2019s `ai:codex` label.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:3623 (labels query), 224-243 (poller_judge_engine_labels_json) | severity=high | confidence=4\n  PROBLEM: The label snapshot used for engine selection is capped at 50 labels per issue without pagination checks. If an issue has >50 labels and `ai:codex` falls outside the first 50, the managed judge will not see it and may select Claude instead.\n  WHY: `_fetch_issue_labels_batch_graphql` queries `labels(first: 50)` without checking `pageInfo.hasNextPage`. The new `poller_judge_engine_labels_json` validates the input structure but not completeness. When the snapshot is incomplete but structurally valid, engine selection proceeds with missing labels. A managed issue with `ai:codex` at position 51+ would have its content sent to Claude despite the Codex label.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "4bd7753a5aa7edf3964b67586c303ce424ebaee901ae682bb9c68a40071a6367",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6497,
+    "run_id": "37428876692",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37428876692",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006082007_9237f26764",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6497,
+    "run_id": "37428876692"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T08:20:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
