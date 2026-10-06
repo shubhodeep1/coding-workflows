@@ -29,6 +29,15 @@ def test_template_parity():
 	assert TEMPLATE_COMMAND.read_text(encoding="utf-8") == COMMAND.read_text(encoding="utf-8")
 
 
+def test_command_context_reads_follow_claude_md():
+	for name in ("audit-plans", "implement-plan-ai", "write-plan"):
+		for root in (ROOT / ".claude" / "commands", ROOT / "workflow-templates" / ".claude" / "commands"):
+			command_text = (root / f"{name}.md").read_text(encoding="utf-8")
+			assert "search `README.md` and `agents.md`" in command_text
+			assert "read those instead of both files end to end" in command_text
+			assert "read `README.md`, `agents.md`, and `CLAUDE.md`" not in command_text
+
+
 def test_gate_enumerates_orchestrator_projects(step6):
 	assert "label `ai:orchestrator-tracking`" in step6
 	assert "`^orchestrator/project-`" in step6
