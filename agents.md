@@ -145,8 +145,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
    responses are reconciled from trusted history; uncleared human latches
    block the judge even on a new head. The
    `claude-fixer-auto-merge` job id is kept but never runs.
-   The other four poller judge roles use that sandbox with read-only access
-   on both engines; a missing sandbox never starts a host judge.
+    The other four poller judge roles use that sandbox with read-only access
+    on both engines; a missing sandbox never starts a host judge.
+    The review-blocked judge selects its engine from the already fetched
+    linked PR labels (falling back to OpenCode if labels are unavailable);
+    a standalone stall judge selects from its target issue labels.
    `[claude-intervention]` and `[claude-merge-resolve]` commits on older PR
    heads still end the counted run, like `[judge-fix]` and
    `[ai-merge-resolve]`.
@@ -1479,21 +1482,22 @@ pending waiver rows or unchecked follow-ups remain. The row shape of
 `security_pass_followup_issues` is unchanged. This is what un-parks advisories
 filed before the merge (#4090 / #4091) without a human.
 `MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS` (default `2`, `0` = unbounded) bounds
-how many judge rounds may end in `keep_fixing`: `judge_round` beyond the cap
+how many judge rounds may end in `keep_fixing` for low/medium findings: `judge_round` beyond the cap
 puts `keep_fixing_available: false` and `max_keep_fixing_rounds` in the
-diagnostics, and after verdict normalization the poller rewrites every
-`keep_fixing` decision to `accept_with_followup` with the justification
+diagnostics, and after verdict normalization the poller rewrites low/medium
+`keep_fixing` decisions to `accept_with_followup` with the justification
 prefixed `[keep_fixing capped after <c> judge round(s); converted to advisory
 follow-up]` (`SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=<N>
 round=<r> cap=<c> converted=<n>`), so the accept-all path runs and the project
-completes with deferred advisories. `fail` verdicts are untouched; unlike
+completes with deferred advisories only if no high, critical, or unrated finding remains. Those findings stay blocking and may receive another fix cycle; `fail` verdicts are untouched; unlike
 `MAX_SECURITY_PASS_JUDGE_ROUNDS` this cap never terminalizes. Project #3965
 ran fix cycles 6 and 7 on a 5-cycle budget because rounds 1 and 2 each chose
 `keep_fixing` and nothing bounded the sequence.
 Waivers travel to the engine as `SECURITY_AUDIT_WAIVED_FINDINGS`
 and `security_pass_apply_waivers_to_findings` re-applies them to the result
-(exact id, or same file and category within `SECURITY_AUDIT_WAIVER_LINE_WINDOW`,
-default 40 lines). `/security-pass-waive <finding_id> ...` (human
+(exact id, or same file, category, severity and exploit scenario within
+`SECURITY_AUDIT_WAIVER_LINE_WINDOW`, default 40 lines; legacy waivers with no
+scenario match by id only). `/security-pass-waive <finding_id> ...` (human
 OWNER/MEMBER/COLLABORATOR only, dedup marker
 `<!-- security-pass-waive-dedup:<comment-id> -->`) records operator waivers; in
 the failed state it then resets the loop like `/re-security-pass`, in

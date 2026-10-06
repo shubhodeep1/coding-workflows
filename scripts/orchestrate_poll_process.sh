@@ -6214,8 +6214,9 @@ security_pass_findings_rows_json() {
 #
 # Poller-side enforcement of security_pass_waived_findings on an engine
 # result: drops re-reports of accepted findings (exact finding_id, or the
-# same file and category within SECURITY_AUDIT_WAIVER_LINE_WINDOW lines of
-# the waived line) and rewrites the findings file in place with the kept
+# same file, category, severity and exploit scenario within
+# SECURITY_AUDIT_WAIVER_LINE_WINDOW lines of the waived line) and rewrites the
+# findings file in place with the kept
 # rows and an updated counts.kept / counts.suppressed_waived.  The engine
 # applies the same rule when it receives SECURITY_AUDIT_WAIVED_FINDINGS; this
 # keeps an older staged engine honest.  Fail-open: any error leaves the file
@@ -6250,14 +6251,24 @@ def waiver_for(finding: dict) -> str | None:
 	finding_id = str(finding.get("finding_id") or "")
 	for waiver in waivers:
 		waived_id = str(waiver.get("finding_id") or "")
-		if waived_id and waived_id == finding_id:
+		waived_finding = waiver.get("finding")
+		waived_scenario = norm_category(waiver.get("exploit_scenario") or (waived_finding.get("exploit_scenario") if isinstance(waived_finding, dict) else ""))
+		waived_severity = norm_category(waiver.get("severity"))
+		waived_category = norm_category(waiver.get("owasp_or_stride_category"))
+		if (waived_id and waived_id == finding_id
+			and (not waived_scenario or waived_scenario == norm_category(finding.get("exploit_scenario")))
+			and (not waived_severity or waived_severity == norm_category(finding.get("severity")))
+			and (not waived_category or waived_category == norm_category(finding.get("owasp_or_stride_category")))):
 			return waived_id
 		waived_line = waiver.get("line")
 		if (
 			str(waiver.get("file") or "")
 			and str(waiver.get("file") or "") == str(finding.get("file") or "")
-			and norm_category(waiver.get("owasp_or_stride_category"))
-			and norm_category(waiver.get("owasp_or_stride_category")) == norm_category(finding.get("owasp_or_stride_category"))
+			and waived_category
+			and waived_category == norm_category(finding.get("owasp_or_stride_category"))
+			and waived_severity == norm_category(finding.get("severity"))
+			and waived_scenario
+			and waived_scenario == norm_category(finding.get("exploit_scenario"))
 			and isinstance(waived_line, int)
 			and not isinstance(waived_line, bool)
 			and abs(int(waived_line) - int(finding.get("line") or 0)) <= line_window
@@ -6725,8 +6736,8 @@ security_pass_exhaustion_judge() {
     return 1
   fi
   judge_round=$((judge_rounds + 1))
-  # keep_fixing is available for the first MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS
-  # rounds; later rounds convert it to accept_with_followup (see below).
+  # The cap applies to low/medium findings only; high/critical/unrated
+  # findings must not be converted into non-blocking waivers.
   keep_fixing_capped="false"
   if [ "${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}" -gt 0 ] && [ "${judge_round}" -gt "${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}" ]; then
     keep_fixing_capped="true"
@@ -6875,21 +6886,18 @@ security_pass_exhaustion_judge() {
   ' > "${verdict_file}" 2>/dev/null || { echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=verdict_normalize_failed"; return 1; }
   jq --argjson round "${judge_round}" '.security_pass_judge_rounds = $round' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
-  # Convergence backstop: once the judge has had MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS
-  # rounds that could grant another cycle, a keep_fixing decision is converted
-  # to accept_with_followup so the finding becomes a deferred advisory and the
-  # project completes unattended.  A project-wide `fail` verdict never reaches
-  # here with keep_fixing rows (mixed verdicts are rejected above).
+  # Convergence backstop for medium/low findings only. High or unknown
+  # severity must stay blocking even when the judge's fix budget is spent.
   keep_fixing_converted=0
   capped_suffix=""
   if [ "${keep_fixing_capped}" = "true" ]; then
-    keep_fixing_converted="$(jq -r '[.decisions[] | select(.action == "keep_fixing")] | length' "${verdict_file}")"
+    keep_fixing_converted="$(jq -r '[.decisions[] | select(.action == "keep_fixing" and ((.finding.severity // "" | ascii_downcase) == "medium" or (.finding.severity // "" | ascii_downcase) == "low"))] | length' "${verdict_file}")"
     [[ "${keep_fixing_converted}" =~ ^[0-9]+$ ]] || keep_fixing_converted=0
     if [ "${keep_fixing_converted}" -gt 0 ]; then
       if ! jq --arg note "[keep_fixing capped after ${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS} judge round(s); converted to advisory follow-up] " '
         .decisions = [
           .decisions[]
-          | if .action == "keep_fixing" then (.action = "accept_with_followup" | .justification = ($note + .justification)) else . end
+          | if .action == "keep_fixing" and ((.finding.severity // "" | ascii_downcase) == "medium" or (.finding.severity // "" | ascii_downcase) == "low") then (.action = "accept_with_followup" | .justification = ($note + .justification)) else . end
         ]
       ' "${verdict_file}" > "${verdict_file}.tmp" || ! mv "${verdict_file}.tmp" "${verdict_file}"; then
         rm -f "${verdict_file}.tmp"
@@ -6937,6 +6945,7 @@ ${decisions_table}}"
         line: .finding.line,
         owasp_or_stride_category: .finding.owasp_or_stride_category,
         severity: .finding.severity,
+        exploit_scenario: .finding.exploit_scenario,
         justification: .justification,
         source: "judge",
         waived_by: "security-pass-exhaustion-judge",
@@ -19148,6 +19157,7 @@ The \`/security-pass-waive\` comment by \`${SECURITY_PASS_WAIVE_AUTHOR}\` was no
                   line: ($known.line // 0),
                   owasp_or_stride_category: ($known.owasp_or_stride_category // ""),
                   severity: ($known.severity // ""),
+                  exploit_scenario: ($known.exploit_scenario // ""),
                   justification: ("Accepted as a known risk by " + $by + " via /security-pass-waive."),
                   source: "operator",
                   waived_by: $by,
@@ -22158,6 +22168,9 @@ ${FOLLOWUP_BLOCK_REASON}"
 
       # Run the judge
       RB_JUDGE_SUCCESS=false
+      # Reuse the selected PR's already fetched labels. A missing snapshot
+      # cannot turn an explicit ai:codex override into a Claude run.
+      RB_JUDGE_LABELS="$(printf '%s' "${_rb_pr_json}" | jq -ce 'if (.labels | type) == "array" then [.labels[] | .name | select(type == "string")] else error("labels unavailable") end' 2>/dev/null || printf '%s' '["ai:codex"]')"
       RB_JUDGE_ISOLATION_FAILED=false
       sanitize_codex_prompt_file "${RB_JUDGE_PROMPT_FILE}"
       RB_JUDGE_PROMPT_BYTES="$(wc -c < "${RB_JUDGE_PROMPT_FILE}" 2>/dev/null | tr -cd '0-9' || true)"

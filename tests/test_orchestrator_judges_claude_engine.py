@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -35,6 +36,7 @@ ai_engine_fallback() {
 }
 claude_run() {
   printf '%s|%s|%s|%s|%s|%s|%s\n' "$1" "$(basename "$2")" "$(basename "$3")" "$4" "${AI_ENGINE_LABELS-unset}" "${AI_ENGINE_MODEL_HINT-}" "${AI_ENGINE_EFFORT_HINT-}" >> "${CALLS}.claude"
+  printf '%s\n' "${GH_TOKEN-unset}|${OPENROUTER_API_KEY-unset}" >> "${CALLS}.secrets"
   case "${FAKE_CLAUDE_MODE}" in
     success) printf 'claude verdict\n' > "$3"; return 0 ;;
     unavailable) echo "AI_ENGINE_FALLBACK role=$1 reason=no_credential" >&2; return 75 ;;
@@ -949,7 +951,7 @@ def test_poll_preflight_fails_open_when_engine_helper_cannot_be_sourced(tmp_path
 ORCHESTRATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "orchestrate.yml"
 DECOMPOSER_CODEX = (
 	'timeout --signal=TERM --kill-after=30s -- "${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}" \\\n'
-	'       codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || decomposer_rc=$?'
+	'       bash scripts/codex_isolated_exec.sh run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || decomposer_rc=$?'
 )
 
 
@@ -959,16 +961,17 @@ def _orchestrate_steps() -> dict[str, dict]:
 
 
 def _decomposer_engine_block() -> str:
-	run = _orchestrate_steps()["Run Codex (decomposer)"]["run"]
-	start = run.index("  decomposer_rc=75\n")
-	end = run.index('  if [ "${decomposer_rc}" -eq 0 ]; then\n')
-	return run[start:end]
+	workflow = ORCHESTRATE_WORKFLOW.read_text(encoding="utf-8")
+	start = workflow.index("            decomposer_rc=75\n")
+	end = workflow.index('            if [ "${decomposer_rc}" -eq 0 ]; then\n', start)
+	return textwrap.dedent(workflow[start:end])
 
 
 def _run_decomposer_block(tmp_path: Path, engine: str, claude_mode: str) -> tuple[subprocess.CompletedProcess[str], Path]:
 	scripts = tmp_path / "scripts"
 	scripts.mkdir(parents=True, exist_ok=True)
 	(scripts / "ai_engine.sh").write_text(FAKE_AI_ENGINE, encoding="utf-8")
+	(scripts / "codex_isolated_exec.sh").write_text('#!/usr/bin/env bash\nexec codex "$@"\n', encoding="utf-8")
 	bin_dir = tmp_path / "bin"
 	bin_dir.mkdir()
 	codex = bin_dir / "codex"
@@ -984,7 +987,8 @@ def _run_decomposer_block(tmp_path: Path, engine: str, claude_mode: str) -> tupl
 		+ _decomposer_engine_block()
 		+ 'echo "rc=${decomposer_rc} engine=${ORCHESTRATE_ENGINE}"\n'
 	)
-	env = dict(os.environ, CALLS=str(calls), FAKE_ENGINE="claude", FAKE_CLAUDE_MODE=claude_mode, PATH=f"{bin_dir}:{os.environ['PATH']}")
+	env = dict(os.environ, CALLS=str(calls), FAKE_ENGINE="claude", FAKE_CLAUDE_MODE=claude_mode, PATH=f"{bin_dir}:{os.environ['PATH']}",
+		GH_TOKEN="test-gh-token", OPENROUTER_API_KEY="test-openrouter-key")
 	for inherited in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
 		env.pop(inherited, None)
 	proc = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60, check=False)
@@ -997,6 +1001,7 @@ def test_decomposer_on_claude_runs_claude_run_only(tmp_path: Path) -> None:
 	assert _read(tmp_path / "out.txt") == "claude verdict\n"
 	assert _read(Path(f"{calls}.claude")).split("|")[:3] == ["ORCHESTRATE", "prompt.txt", "out.txt"]
 	assert _read(Path(f"{calls}.codex")) == ""
+	assert _read(Path(f"{calls}.secrets")) == "unset|unset\n"
 
 
 def test_decomposer_falls_back_to_codex_and_stays_there(tmp_path: Path) -> None:
