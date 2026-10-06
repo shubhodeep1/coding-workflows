@@ -6714,6 +6714,74 @@ def test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_deterministic_
 		assert '--match-head-commit "${PR_HEAD_SHA}"' in merge_line, merge_line
 
 
+def test_deterministic_skip_merge_excludes_orchestrator_integration_prs() -> None:
+	job = _job_block("deterministic-skip-merge")
+	assert "ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}" in job
+	assert "PR_HEAD_REF: ${{ needs.gate.outputs.head_ref }}" in job
+	block = _step_block("Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge")
+	assert 'grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN}"' in block
+	assert '[[ "${PR_HEAD_REF}" =~ ^orchestrator/project-([0-9]+)$ ]]' in block
+	assert 'reason=head_ref_unavailable' in block
+	assert 'reason=orchestrator_integration_pr' in block
+	assert 'if [ "${auto_merge_ready_labels_allowed}" != "true" ]; then' in block
+	idx_guard = block.find('elif deterministic_skip_head_ref_is_integration_pr; then')
+	assert idx_guard > block.find('if [ -z "${PR_HEAD_REF}" ]; then')
+	assert idx_guard < block.find('elif [ "${ENABLE_AUTO_MERGE}" != "true" ]; then')
+	assert idx_guard < block.find('gh_retry gh pr merge')
+	assert idx_guard < block.find('ensure_label_exists "ai:review-skipped"')
+
+
+def test_deterministic_skip_merge_integration_pr_runs_no_merge_or_label_calls() -> None:
+	workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+	step = next(
+		step for step in workflow["jobs"]["deterministic-skip-merge"]["steps"]
+		if step["name"] == "Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge"
+	)
+	head_sha = "a" * 40
+	with tempfile.TemporaryDirectory() as tmp_str:
+		tmp = Path(tmp_str)
+		bin_dir = tmp / "bin"
+		bin_dir.mkdir()
+		fake_gh = bin_dir / "gh"
+		fake_gh.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$GH_CALLS"\n', encoding="utf-8")
+		fake_gh.chmod(0o755)
+		for index, (head_ref, pattern, expected_summary, expected_reason) in enumerate((
+			("orchestrator/project-7", "^orchestrator/project-", "SUPPRESSED (orchestrator integration PR", "orchestrator_integration_pr"),
+			("orchestrator/project-7", "(", "SUPPRESSED (orchestrator integration PR", "orchestrator_integration_pr"),
+			("orchestrator/project-7", "", "SUPPRESSED (orchestrator integration PR", "orchestrator_integration_pr"),
+			("custom/integration-7", "^custom/integration-", "SUPPRESSED (orchestrator integration PR", "orchestrator_integration_pr"),
+			("", "^orchestrator/project-", "REFUSED (gate-observed head ref unavailable)", "head_ref_unavailable"),
+			("ai/issue-5", "^orchestrator/project-", "ENABLED (squash)", ""),
+		)):
+			calls_path = tmp / f"calls-{index}.txt"
+			summary_path = tmp / f"summary-{index}.txt"
+			env = dict(os.environ)
+			env.update({
+				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+				"GH_CALLS": str(calls_path),
+				"GITHUB_STEP_SUMMARY": str(summary_path),
+				"REPOSITORY": "test-owner/test-repo",
+				"PR_NUMBER": "42",
+				"PR_HEAD_SHA": head_sha,
+				"PR_HEAD_REF": head_ref,
+				"ORCH_INTEGRATION_BRANCH_PATTERN": pattern,
+				"ENABLE_AUTO_MERGE": "true",
+				"FORWARD_MERGE_FALLBACK_AUTO_MERGE": "true",
+				"DET_SKIP_REASON": "doc_only",
+			})
+			result = subprocess.run(["bash", "-c", step["run"]], env=env, capture_output=True, text=True, check=False)
+			assert result.returncode == 0, result.stderr
+			assert expected_summary in summary_path.read_text(encoding="utf-8")
+			calls = calls_path.read_text(encoding="utf-8").splitlines() if calls_path.exists() else []
+			if expected_reason:
+				assert not calls, calls
+				assert f"action=refuse reason={expected_reason}" in result.stdout
+			else:
+				assert [call for call in calls if call.startswith("pr merge ")] == [
+					f"pr merge 42 --repo test-owner/test-repo --squash --auto --match-head-commit {head_sha}"
+				]
+
+
 def test_gate_emits_head_ref_output_for_forward_merge_suppressor_reuse() -> None:
 	# The deterministic-skip-merge suppressor sources head ref from the
 	# gate's /pulls/{n} fetch (§15: don't repeat an API call). Verify the
