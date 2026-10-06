@@ -52,6 +52,34 @@ if args[0] == "api" and "--paginate" in args:
 sys.exit(0)
 '''
 
+FAKE_GIT = r'''#!/usr/bin/env python3
+import os, sys
+args = sys.argv[1:]
+if len(args) >= 2 and args[0] == "-C":
+	args = args[2:]
+if args == ["rev-parse", "HEAD"]:
+	print(os.environ.get("FAKE_GIT_HEAD", "c" * 40))
+	sys.exit(0)
+if args == ["rev-parse", "--is-shallow-repository"]:
+	print("false" if os.path.exists(os.environ.get("FAKE_GIT_UNSHALLOW_MARKER", "")) else os.environ.get("FAKE_GIT_SHALLOW", "false"))
+	sys.exit(0)
+if args[:2] == ["cat-file", "-e"]:
+	sys.exit(0 if args[2].removesuffix("^{commit}") in os.environ.get("FAKE_GIT_ANCESTORS", "").split(",") else 1)
+if args[:2] == ["check-ref-format", "--branch"]:
+	sys.exit(0)
+if args[:3] == ["fetch", "--no-tags", "--unshallow"]:
+	if os.environ.get("FAKE_GIT_FETCH_FAIL") == "true":
+		sys.exit(1)
+	if os.environ.get("FAKE_GIT_UNSHALLOW_MARKER"):
+		open(os.environ["FAKE_GIT_UNSHALLOW_MARKER"], "w").close()
+	sys.exit(0)
+if args[:2] == ["merge-base", "--is-ancestor"]:
+	if os.environ.get("FAKE_GIT_INCOMPLETE_ANCESTRY") == "true" and not os.path.exists(os.environ.get("FAKE_GIT_UNSHALLOW_MARKER", "")):
+		sys.exit(1)
+	sys.exit(0 if args[2] in os.environ.get("FAKE_GIT_ANCESTORS", "").split(",") and args[3] == os.environ.get("FAKE_GIT_HEAD", "c" * 40) else 1)
+sys.exit(1)
+'''
+
 
 def _marker(status: str, head: str, cycle: int) -> str:
 	return f"<!-- ai:single-issue-security-pass:v1 status={status} head={head} cycle={cycle} -->"
@@ -77,6 +105,9 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 	gh = bin_dir / "gh"
 	gh.write_text(FAKE_GH, encoding="utf-8")
 	gh.chmod(0o755)
+	git = bin_dir / "git"
+	git.write_text(FAKE_GIT, encoding="utf-8")
+	git.chmod(0o755)
 	support = tmp_path / "support"
 	support.mkdir(exist_ok=True)
 	(support / "security_pass_skip.py").write_text(
@@ -94,6 +125,7 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 		FAKE_GH_LOG=str(log),
 		FAKE_GH_COMMENTS=str(tmp_path / "comments.json"),
 		FAKE_GH_PR=str(tmp_path / "pr.json"),
+		FAKE_GIT_HEAD=HEAD,
 		GITHUB_OUTPUT=str(output),
 		REPOSITORY="o/r",
 		PR_NUMBER="42",
@@ -103,8 +135,9 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 		DEFAULT_BRANCH="main",
 		SECURITY_PASS_AUDIT_BRANCH="ai/issue-7",
 		SUPPORT_SCRIPTS_DIR=str(support),
+		GITHUB_WORKSPACE=str(tmp_path),
 	)
-	for name in ("SINGLE_ISSUE_SECURITY_PASS_ENABLED", "MAX_SECURITY_PASS_CYCLES", "ORCH_INTEGRATION_BRANCH_PATTERN", "SECURITY_PASS_PENDING_STALE_HOURS", "SECURITY_PASS_AUTHOR_LOGIN_FALLBACK"):
+	for name in ("SINGLE_ISSUE_SECURITY_PASS_ENABLED", "MAX_SECURITY_PASS_CYCLES", "ORCH_INTEGRATION_BRANCH_PATTERN", "SECURITY_PASS_PENDING_STALE_HOURS", "SECURITY_PASS_AUTHOR_LOGIN_FALLBACK", "FAKE_GIT_ANCESTORS", "FAKE_GIT_SHALLOW", "FAKE_GIT_FETCH_FAIL", "FAKE_GIT_UNSHALLOW_MARKER", "FAKE_GIT_INCOMPLETE_ANCESTRY"):
 		run_env.pop(name, None)
 	run_env.update(env or {})
 	result = subprocess.run(["bash", str(SCRIPT), mode], capture_output=True, text=True, env=run_env, check=False)
@@ -205,9 +238,9 @@ def test_pending_timeout_uses_operator_override(tmp_path: Path) -> None:
 
 
 def test_cycles_exhausted_labels_the_pr_for_the_unblock_judge(tmp_path: Path) -> None:
-	comments = [_comment(_marker("findings", f"{n:040x}", n), comment_id=n) for n in range(1, 6)]
+	comments = [_comment(_marker("findings", HEAD if n == 5 else f"{n:040x}", n), comment_id=n) for n in range(1, 6)]
 	result, calls, output = _run(tmp_path, "gate", comments=comments)
-	assert output == "hold=true\n" and "reason=cycles_exhausted" in result.stdout
+	assert output == "hold=true\nexhausted=true\n" and "reason=cycles_exhausted" in result.stdout
 	assert ["api", "repos/o/r/issues/42/labels", "-f", "labels[]=ai:security-pass-failed"] in calls
 	assert not any(call[:2] == ["workflow", "run"] for call in calls)
 
@@ -215,7 +248,7 @@ def test_cycles_exhausted_labels_the_pr_for_the_unblock_judge(tmp_path: Path) ->
 def test_last_cycle_findings_escalate_on_the_same_head(tmp_path: Path) -> None:
 	comments = [_comment(_marker("findings", HEAD, 5))]
 	result, calls, output = _run(tmp_path, "gate", comments=comments)
-	assert output == "hold=true\n" and "reason=cycles_exhausted" in result.stdout
+	assert output == "hold=true\nexhausted=true\n" and "reason=cycles_exhausted" in result.stdout
 	assert any(call[:2] == ["api", "repos/o/r/issues/42/labels"] for call in calls)
 
 
@@ -229,23 +262,274 @@ def test_failed_exhaustion_label_fails_closed_for_workflow_recovery(tmp_path: Pa
 def test_two_digit_cycle_limit_is_counted_numerically(tmp_path: Path) -> None:
 	comments = [_comment(_marker("failed", OLD, 9), comment_id=1), _comment(_marker("failed", OLD, 10), comment_id=2)]
 	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"MAX_SECURITY_PASS_CYCLES": "10"})
-	assert output == "hold=true\n" and "reason=cycles_exhausted cycle=10" in result.stdout
+	assert output == "hold=true\n" and "outcome=dispatched cycle=11" in result.stdout
+	assert "reason=exhausted_retry" in result.stdout
+	assert any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+def test_failed_cycles_do_not_authorize_exhaustion_merge(tmp_path: Path) -> None:
+	comments = [
+		_comment(_marker(status, HEAD, n), comment_id=2 * n - (status == "pending"), age_hours=8 - n)
+		for n in range(1, 6) for status in ("pending", "failed")
+	]
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	assert output == "hold=true\n" and "reason=exhausted_retry" in result.stdout
+	assert any(call[:2] == ["workflow", "run"] for call in calls)
+	assert not any(call[:2] == ["api", "repos/o/r/issues/42/labels"] for call in calls)
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert "retry audit" in posted[-1][-1] and "cycle 6 of 5" not in posted[-1][-1]
+	assert posted[-1][-1].endswith(_marker("pending", HEAD, 6))
+
+
+def test_two_failed_head_audits_stop_without_judge_exhaustion(tmp_path: Path) -> None:
+	comments = [
+		_comment(_marker("failed", HEAD, 5), comment_id=1, age_hours=4),
+		_comment(_marker("pending", HEAD, 6), comment_id=2, age_hours=3),
+		_comment(_marker("failed", HEAD, 6), comment_id=3, age_hours=2),
+		_comment(_marker("pending", HEAD, 7), comment_id=4, age_hours=1),
+		_comment(_marker("failed", HEAD, 7), comment_id=5),
+	]
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	assert output == "hold=true\n" and "reason=exhausted_without_completed_audit cycle=7 head_attempts=2" in result.stdout
+	assert ["api", "repos/o/r/issues/42/labels", "-f", "labels[]=ai:security-pass-failed"] in calls
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert "No completed audit exists" in posted[-1][-1]
+
+
+def test_unaudited_exhaustion_label_already_present_does_not_recomment(tmp_path: Path) -> None:
+	comments = [_comment(_marker("pending", HEAD, 6), age_hours=7)]
+	result, calls, output = _run(
+		tmp_path, "gate", pr=_pr(labels=("ai:security-pass-failed",)), comments=comments,
+		env={"SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS": "1"},
+	)
+	assert output == "hold=true\n" and "reason=exhausted_without_completed_audit" in result.stdout
+	assert not any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
+
+
+def test_stale_pending_at_cap_does_not_consume_post_cap_budget(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("pending", HEAD, 5), age_hours=7)])
+	assert output == "hold=true\n" and "reason=exhausted_retry" in result.stdout
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert "head attempt 1 of 2" in posted[-1][-1]
+	assert any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+@pytest.mark.parametrize("limit, should_retry", [("1", False), ("not-a-number", True), ("0", True), ("3", True)])
+def test_exhausted_head_attempt_limit_is_validated(tmp_path: Path, limit: str, should_retry: bool) -> None:
+	comments = [_comment(_marker("failed", OLD, 5)), _comment(_marker("pending", HEAD, 6), comment_id=2, age_hours=7)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS": limit})
+	assert output == "hold=true\n" and ("reason=exhausted_retry" in result.stdout) is should_retry
+	assert any(call[:2] == ["workflow", "run"] for call in calls) is should_retry
+
+
+def test_findings_on_old_head_retry_after_head_moves(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("findings", OLD, 5))])
+	assert output == "hold=true\n" and "reason=exhausted_retry" in result.stdout
+	assert any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+def test_later_failed_audit_preserves_completed_findings_on_head(tmp_path: Path) -> None:
+	comments = [
+		_comment(_marker("findings", HEAD, 5), comment_id=1, age_hours=1),
+		_comment(_marker("failed", HEAD, 6), comment_id=2),
+	]
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	assert output == "hold=true\nexhausted=true\n" and "reason=cycles_exhausted" in result.stdout
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+	status, _, _ = _run(tmp_path, "status", comments=comments)
+	assert f"SINGLE_ISSUE_SECURITY_PASS_AUDITED_HEAD={HEAD}" in status.stdout
+
+
+def test_stale_pending_after_completed_findings_does_not_erase_audit(tmp_path: Path) -> None:
+	comments = [
+		_comment(_marker("findings", HEAD, 5), comment_id=1, age_hours=9),
+		_comment(_marker("pending", HEAD, 6), comment_id=2, age_hours=7),
+	]
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	assert output == "hold=true\nexhausted=true\n" and "reason=cycles_exhausted" in result.stdout
 	assert not any(call[:2] == ["workflow", "run"] for call in calls)
 
 
-def test_a_failed_dispatch_falls_back_to_merging(tmp_path: Path) -> None:
-	result, calls, output = _run(tmp_path, "gate", env={"FAKE_GH_FAIL": "dispatch"})
-	assert output == "hold=false\n" and "reason=dispatch_failed" in result.stdout
+def test_exhausted_retry_dispatch_failure_holds(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("failed", HEAD, 5))], env={"FAKE_GH_FAIL": "dispatch"})
+	assert output == "hold=true\n" and "reason=dispatch_failed_exhausted" in result.stdout
+	assert any(call[:2] == ["workflow", "run"] for call in calls)
 
 
-def _report(tmp_path: Path, outcome: str, findings: str, cycle: int = 3):
+def _extension(head: str) -> str:
+	return f"<!-- ai:single-issue-security-pass-extension:v1 head={head} -->"
+
+
+def test_judge_extension_marker_grants_one_more_audit_cycle(tmp_path: Path) -> None:
+	comments = [_comment(_marker("findings", f"{n:040x}", n), comment_id=n) for n in range(1, 6)]
+	comments.append(_comment("Judge pushed a fix.\n\n" + _extension(OLD), comment_id=9))
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GIT_ANCESTORS": OLD})
+	assert output == "hold=true\n" and "outcome=dispatched cycle=6" in result.stdout
+	assert not any(call[:2] == ["api", "repos/o/r/issues/42/labels"] for call in calls)
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert "(cycle 6 of 6)" in posted[-1][-1]
+
+
+def test_duplicate_extension_markers_grant_only_one_cycle(tmp_path: Path) -> None:
+	comments = [_comment(_marker("findings", f"{n:040x}", n), comment_id=n) for n in range(1, 6)]
+	comments.extend([_comment(_extension(OLD), comment_id=9), _comment(_extension(OLD), comment_id=10)])
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GIT_ANCESTORS": OLD})
+	assert output == "hold=true\n" and "outcome=dispatched cycle=6" in result.stdout
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert "(cycle 6 of 6)" in posted[-1][-1]
+
+
+def test_unpushed_extension_does_not_hold_exhausted_pass(tmp_path: Path) -> None:
+	comments = [_comment(_marker("findings", HEAD, 5)), _comment(_extension(OLD), comment_id=9)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	assert result.returncode == 0 and output == "hold=true\nexhausted=true\n"
+	assert "reason=cycles_exhausted" in result.stdout
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+def test_extension_checkout_mismatch_holds_without_granting_or_merging(tmp_path: Path) -> None:
+	comments = [_comment(_marker("findings", HEAD, 5)), _comment(_extension(OLD), comment_id=9)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GIT_HEAD": OLD, "FAKE_GIT_ANCESTORS": OLD})
+	assert result.returncode == 0 and output == "hold=true\n"
+	assert "reason=extensions_unverifiable" in result.stdout
+	assert not any(call[:2] in (["workflow", "run"], ["api", "repos/o/r/issues/42/labels"]) for call in calls)
+
+
+def test_missing_extension_in_shallow_checkout_holds_if_history_unavailable(tmp_path: Path) -> None:
+	comments = [_comment(_marker("findings", HEAD, 5)), _comment(_extension(OLD), comment_id=9)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GIT_SHALLOW": "true", "FAKE_GIT_FETCH_FAIL": "true"})
+	assert result.returncode == 0 and output == "hold=true\n"
+	assert "reason=extensions_unverifiable" in result.stdout
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+def test_status_does_not_fetch_missing_shallow_extension(tmp_path: Path) -> None:
+	# Keep the existing identifier; a failed history fetch still leaves status
+	# unverifiable without publishing an audit decision or judge merge.
+	comments = [_comment(_marker("findings", HEAD, 5)), _comment(_extension(OLD), comment_id=9)]
+	result, calls, output = _run(tmp_path, "status", comments=comments, env={"FAKE_GIT_SHALLOW": "true", "FAKE_GIT_FETCH_FAIL": "true"})
+	assert result.returncode == 0 and output == ""
+	assert "SINGLE_ISSUE_SECURITY_PASS_STATE=unverifiable" in result.stdout
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+def test_status_unshallows_before_classifying_exhaustion(tmp_path: Path) -> None:
+	comments = [_comment(_marker("findings", HEAD, 6)), _comment(_extension(OLD), comment_id=9)]
+	marker_file = tmp_path / "unshallowed"
+	result, calls, output = _run(tmp_path, "status", comments=comments, env={
+		"FAKE_GIT_SHALLOW": "true", "FAKE_GIT_ANCESTORS": OLD,
+		"FAKE_GIT_INCOMPLETE_ANCESTRY": "true", "FAKE_GIT_UNSHALLOW_MARKER": str(marker_file),
+	})
+	assert result.returncode == 0 and output == "" and marker_file.exists()
+	assert "SINGLE_ISSUE_SECURITY_PASS_STATE=exhausted" in result.stdout
+	assert not any(call[:2] in (["workflow", "run"], ["api", "repos/o/r/issues/42/labels"], ["api", "repos/o/r/issues/42/comments"]) for call in calls)
+
+
+def test_shallow_existing_extension_unshallows_before_exhaustion(tmp_path: Path) -> None:
+	# Cycle 5 audited the pre-fix head; the extension fix is on the new HEAD.
+	comments = [_comment(_marker("findings", f"{5:040x}", 5)), _comment(_extension(OLD), comment_id=9)]
+	marker_file = tmp_path / "unshallowed"
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={
+		"FAKE_GIT_SHALLOW": "true", "FAKE_GIT_ANCESTORS": OLD,
+		"FAKE_GIT_INCOMPLETE_ANCESTRY": "true", "FAKE_GIT_UNSHALLOW_MARKER": str(marker_file),
+	})
+	assert marker_file.exists() and output == "hold=true\n"
+	assert "outcome=dispatched cycle=6" in result.stdout
+	assert not any(call[:2] == ["api", "repos/o/r/issues/42/labels"] for call in calls)
+
+
+def test_extension_does_not_reaudit_head_with_findings(tmp_path: Path) -> None:
+	comments = [_comment(_marker("findings", HEAD, 5)), _comment(_extension(OLD), comment_id=9)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GIT_ANCESTORS": OLD})
+	assert output == "hold=true\n" and "reason=awaiting_followups" in result.stdout
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+@pytest.mark.parametrize("mode", ["gate", "status", "report"])
+def test_incomplete_shallow_extension_never_grants_or_denies_a_cycle(tmp_path: Path, mode: str) -> None:
+	comments = [_comment(_marker("pending" if mode == "report" else "findings", HEAD, 5)), _comment(_extension(OLD), comment_id=9)]
+	marker_file = tmp_path / "unshallowed"
+	env = {
+		"FAKE_GIT_SHALLOW": "true", "FAKE_GIT_ANCESTORS": OLD,
+		"FAKE_GIT_INCOMPLETE_ANCESTRY": "true", "FAKE_GIT_UNSHALLOW_MARKER": str(marker_file),
+		"FAKE_GIT_FETCH_FAIL": "true",
+		"SECURITY_PASS_PR_NUMBER": "42", "SECURITY_PASS_HEAD_SHA": HEAD,
+		"SECURITY_PASS_AUDIT_OUTCOME": "success", "SECURITY_PASS_FINDINGS": "0",
+	}
+	result, calls, output = _run(tmp_path, mode, comments=comments, env=env)
+	assert result.returncode == 0 and "reason=extensions_unverifiable" in result.stdout
+	assert not marker_file.exists() and "exhausted=true" not in output
+	assert not any(call[:2] in (["workflow", "run"], ["api", "repos/o/r/issues/42/labels"], ["api", "repos/o/r/issues/42/comments"]) for call in calls)
+	if mode == "status":
+		assert "SINGLE_ISSUE_SECURITY_PASS_STATE=unverifiable" in result.stdout
+		assert output == ""
+	else:
+		assert output == ("hold=true\n" if mode == "gate" else "")
+
+
+def test_extension_marker_from_another_author_is_ignored(tmp_path: Path) -> None:
+	comments = [_comment(_marker("findings", HEAD if n == 5 else f"{n:040x}", n), comment_id=n) for n in range(1, 6)]
+	comments.append(_comment(_extension(OLD), login="other[bot]", comment_id=9))
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	assert output == "hold=true\nexhausted=true\n"
+
+
+@pytest.mark.parametrize(
+	"comments, env, state",
+	[
+		([], {"SINGLE_ISSUE_SECURITY_PASS_ENABLED": "false"}, "skip"),
+		([_comment(_marker("clean", HEAD, 1))], {}, "clean"),
+		([_comment(_marker("pending", HEAD, 1))], {}, "pending"),
+		([_comment(_marker("findings", HEAD, 1))], {}, "findings"),
+		([], {}, "needs_audit"),
+		([_comment(_marker("findings", HEAD, 5))], {}, "exhausted"),
+	],
+)
+def test_status_mode_reports_state_without_side_effects(tmp_path: Path, comments: list, env: dict, state: str) -> None:
+	result, calls, output = _run(tmp_path, "status", comments=comments, env=env)
+	assert result.returncode == 0
+	assert f"SINGLE_ISSUE_SECURITY_PASS_STATE={state}" in result.stdout.splitlines()
+	assert output == ""
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+	assert not any(call[:2] in (["api", "repos/o/r/issues/42/labels"], ["api", "repos/o/r/issues/42/comments"]) for call in calls)
+
+
+def test_status_only_cannot_be_forced_on_the_gate_from_the_environment(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("pending", HEAD, 1))], env={"SINGLE_PASS_STATUS_ONLY": "true"})
+	assert output == "hold=true\n"
+	assert "SINGLE_ISSUE_SECURITY_PASS_STATE=" not in result.stdout
+
+
+def test_status_attests_only_completed_current_head(tmp_path: Path) -> None:
+	for comments, state, audited in (
+		([_comment(_marker("findings", HEAD, 5))], "exhausted", True),
+		([_comment(_marker("failed", HEAD, 5)), _comment(_marker("pending", HEAD, 4), comment_id=2, age_hours=7)], "needs_audit", False),
+		([_comment(_marker("pending", HEAD, 6), comment_id=1, age_hours=9), _comment(_marker("failed", HEAD, 6), comment_id=2, age_hours=8), _comment(_marker("pending", HEAD, 7), comment_id=3, age_hours=7)], "exhausted_unaudited", False),
+	):
+		result, calls, output = _run(tmp_path, "status", comments=comments)
+		assert result.returncode == 0 and output == ""
+		assert f"SINGLE_ISSUE_SECURITY_PASS_STATE={state}" in result.stdout.splitlines()
+		assert (f"SINGLE_ISSUE_SECURITY_PASS_AUDITED_HEAD={HEAD}" in result.stdout.splitlines()) is audited
+		assert not any(call[:2] in (["workflow", "run"], ["api", "repos/o/r/issues/42/labels"]) for call in calls)
+
+
+@pytest.mark.parametrize("comments", [[], [_comment(_marker("failed", HEAD, 1))]])
+def test_failed_dispatch_holds_unaudited_head(tmp_path: Path, comments: list) -> None:
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GH_FAIL": "dispatch"})
+	assert output == "hold=true\n" and "outcome=hold reason=dispatch_failed" in result.stdout
+	assert any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+def _report(tmp_path: Path, outcome: str, findings: str, cycle: int = 3, extra_comments: list | None = None):
 	env = {
 		"SECURITY_PASS_PR_NUMBER": "42",
 		"SECURITY_PASS_HEAD_SHA": HEAD,
 		"SECURITY_PASS_AUDIT_OUTCOME": outcome,
 		"SECURITY_PASS_FINDINGS": findings,
 	}
-	return _run(tmp_path, "report", comments=[_comment(_marker("pending", HEAD, cycle))], env=env)
+	comments = [_comment(_marker("pending", HEAD, cycle))] + list(extra_comments or [])
+	return _run(tmp_path, "report", comments=comments, env=env)
 
 
 @pytest.mark.parametrize(
@@ -316,6 +600,28 @@ def test_last_cycle_findings_redispatch_for_exhaustion(tmp_path: Path) -> None:
 	assert ["workflow", "run", "ai-review.yml", "-R", "o/r", "--ref", "main", "-f", "pr_number=42"] in calls
 
 
+def test_report_counts_judge_extensions_before_escalating(tmp_path: Path) -> None:
+	result, calls, _ = _run(tmp_path, "report", comments=[_comment(_marker("pending", HEAD, 5)), _comment(_extension(OLD), comment_id=99)], env={
+		"SECURITY_PASS_PR_NUMBER": "42", "SECURITY_PASS_HEAD_SHA": HEAD, "SECURITY_PASS_AUDIT_OUTCOME": "success", "SECURITY_PASS_FINDINGS": "2", "FAKE_GIT_ANCESTORS": OLD,
+	})
+	assert "outcome=findings cycle=5" in result.stdout
+	assert ["workflow", "run", "ai-review.yml", "-R", "o/r", "--ref", "main", "-f", "pr_number=42"] not in calls
+
+
+def test_report_ignores_unpushed_extension_when_escalating(tmp_path: Path) -> None:
+	result, calls, _ = _report(tmp_path, "success", "2", cycle=5, extra_comments=[_comment(_extension(OLD), comment_id=99)])
+	assert "outcome=findings cycle=5" in result.stdout
+	assert ["workflow", "run", "ai-review.yml", "-R", "o/r", "--ref", "main", "-f", "pr_number=42"] in calls
+
+
+def test_report_skips_publication_if_audit_checkout_does_not_match(tmp_path: Path) -> None:
+	result, calls, _ = _run(tmp_path, "report", comments=[_comment(_marker("pending", HEAD, 5))], env={
+		"SECURITY_PASS_PR_NUMBER": "42", "SECURITY_PASS_HEAD_SHA": HEAD, "SECURITY_PASS_AUDIT_OUTCOME": "success", "SECURITY_PASS_FINDINGS": "0", "FAKE_GIT_HEAD": OLD,
+	})
+	assert result.returncode == 0 and "reason=extensions_unverifiable" in result.stdout
+	assert not any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
+
+
 def test_summaryless_audit_never_reports_clean(tmp_path: Path) -> None:
 	result, calls, _ = _report(tmp_path, "success", "")
 	assert "outcome=failed" in result.stdout
@@ -344,6 +650,8 @@ def test_review_wiring() -> None:
 	gate = steps["Single-issue security pass"]
 	assert gate["id"] == "single_issue_security_pass"
 	assert gate["env"]["SECURITY_PASS_PENDING_STALE_HOURS"] == "${{ vars.SECURITY_PASS_PENDING_STALE_HOURS || '6' }}"
+	assert gate["env"]["SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS"] == "${{ vars.SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS || '2' }}"
+	assert _steps(REVIEW, "codex-agent")["Review-blocked judge decision"]["env"]["SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS"] == gate["env"]["SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS"]
 	assert gate["env"]["SECURITY_PASS_AUTHOR_LOGIN_FALLBACK"] == "${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}"
 	assert gate["if"] == steps["Enable auto-merge on PR"]["if"].replace(" && steps.single_issue_security_pass.outputs.hold != 'true'", "")
 	for name in ("Enable auto-merge on PR", "Mark linked issues ready to merge"):
