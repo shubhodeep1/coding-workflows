@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_pass_skip.py: CLI fast-path branch (around the `_stub_gh` `repos/o/r/issues/<n>` test surface) | flagged_by: [minimax_minimax-m3]\n  PROBLEM: For a single-labeled CI-derived `ai:workflow-heal` issue, the CLI fast path returns `{\"skip\": False, \"label\": None, \"reason\": \"no skip label\"}` instead of the pure decision path\u2019s `{\"skip\": False, \"label\": None, \"reason\": \"CI workflow heal requires security pass\"}`, so downstream log scrapers that key off the reason string miss those cases.\n  WHY: Both paths return `skip=False`, but the CLI fast path drops the CI-derived provenance carried in the issue body.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/security_pass_skip.py: CLI fast-path branch (around the `_stub_gh` `repos/o/r/issues/<n>` test surface); corresponding dual-label CLI test at tests/test_security_pass_skip.py:326-333\n  PROBLEM: The CLI fast-path returns `{\"skip\": False, \"label\": None, \"reason\": \"no skip label\"}` for a single-labeled CI-derived `ai:workflow-heal` issue, while the pure decision path returns `{\"skip\": False, \"label\": None, \"reason\": \"CI workflow heal requires security pass\"}` for the same input.\n  WHY: Both surface `skip=False`, so functionally the security pass still runs, but the reason text diverges between paths and the CLI fast path silently drops the CI-derived provenance that the issue body carries \u2014 downstream log scrapers that key off the reason string (`CI workflow heal requires security pass`) will not see those single-label cases.\n  Suggested minimal fix: in the CLI fast path, when no skip label matches, scan the body for `CI_HEAL_CONTEXT_RE` (the same regex already imported) before returning `no skip label`; if it matches, return `{\"skip\": False, \"label\": None, \"reason\": \"CI workflow heal requires security pass\"}` to mirror the pure decision path. Five to seven lines, uses the existing constant.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "5f27865c7fde6d2062adba26b11a0233d6abc5941e139ecf0f4a0531a5034c01",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6495,
+    "run_id": "37419360210",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37419360210",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006055650_589bede642",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6495,
+    "run_id": "37419360210"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T05:56:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
