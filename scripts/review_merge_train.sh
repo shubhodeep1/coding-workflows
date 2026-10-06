@@ -48,7 +48,9 @@
 #            unparseable, or uses Git C-quoted paths; +1 paginated comments-list
 #            call whenever blockers exist, plus conditional label/comment writes
 #            when queue state changes. Gate-side release adds one comments-list
-#            call, up to one marker PATCH, and one label DELETE.
+#            call, up to one marker PATCH, and one label DELETE. A marker lookup
+#            adds one cached /user read; a bypass candidate adds a paginated
+#            issues/N/events read and one collaborator-permission read.
 #   release: 1 list call (open PRs, all bases, 100 per page) + the active-run
 #            listing that prevents dispatch beside an active review (one
 #            `actions/runs?status=<s>` call per 100 runs for each of
@@ -57,7 +59,8 @@
 #            at most 10 each — normally 10 calls — read once,
 #            only when a queued PR passes the base filter; see
 #            _mt_inflight_review_branches) + files calls
-#            as above, cached per PR for the run; each unblocked queued PR adds
+#            as above, cached per PR for the run; one /user read on the first
+#            marker lookup; each unblocked queued PR adds
 #            1 comments-list call and up to 1 marker PATCH before its label-
 #            removal claim. A release adds 1 workflow dispatch and a best-effort
 #            released-comment upsert. A failed dispatch tries to restore the
@@ -73,7 +76,8 @@
 # rather than dispatch beside a review it could not see. The train only ever
 # delays a review run; it never blocks a
 # merge, and a PR that is wrongly left queued is picked up by the next
-# release tick once its blockers are gone.
+# release tick once its blockers are gone. An unverifiable *bypass* is not
+# authorized: it keeps the PR queued.
 set -euo pipefail
 
 _mt_log() { printf '%s\n' "$*"; }
@@ -98,6 +102,7 @@ MT_MARKER="<!-- merge-train:queued -->"
 MT_RELEASED_MARKER="<!-- merge-train:released -->"
 MT_BYPASSED_MARKER="<!-- merge-train:bypassed -->"
 MT_RETIRED_MARKER="<!-- merge-train:queue-retired -->"
+MT_AUTOMATION_LOGIN=""
 [[ "${MT_MAX_OLDER}" =~ ^[0-9]+$ ]] || MT_MAX_OLDER=20
 
 case "$(printf '%s' "${MT_ENABLED}" | tr '[:upper:]' '[:lower:]')" in
@@ -262,13 +267,74 @@ _mt_ensure_label() {
 	fi
 }
 
-# Find the latest comment carrying a marker. An empty result is a successful
-# "not found"; API failure returns non-zero so the gate can fail open.
-_mt_find_marker_comment_id()
+# The open-PR list contains current labels but neither comment authors nor
+# label-event history; the comments list supplies authors but not label events.
+# Resolve the authenticated account once, in the caller's shell (not $(...)).
+_mt_resolve_automation_login()
+{
+	local login=""
+	[ -z "${MT_AUTOMATION_LOGIN}" ] || return 0
+	login="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null)" || return 1
+	login="$(printf '%s' "${login}" | tr '[:upper:]' '[:lower:]')"
+	[[ "${login}" =~ ^[a-z0-9][a-z0-9-]*(\[bot\])?$ ]] || return 1
+	MT_AUTOMATION_LOGIN="${login}"
+}
+
+# Latest trusted marker as "id created_at"; empty means not found. The old
+# id-only helper remains for callers that do not need the creation time.
+_mt_find_marker_comment()
 {
 	local pr="$1" marker="$2"
+	[ -n "${MT_AUTOMATION_LOGIN}" ] || return 1
 	gh_retry gh api --paginate "repos/${MT_REPO}/issues/${pr}/comments?per_page=100" \
-		--jq ".[] | select(.body | startswith(\"${marker}\")) | .id" 2>/dev/null | tail -n 1
+		--jq ".[] | select((.user.login // \"\" | ascii_downcase) == \"${MT_AUTOMATION_LOGIN}\" and ((.body // \"\") | startswith(\"${marker}\"))) | \"\\(.id) \\(.created_at)\"" 2>/dev/null | tail -n 1
+}
+
+_mt_find_marker_comment_id()
+{
+	local comment=""
+	comment="$(_mt_find_marker_comment "$@")" || return 1
+	printf '%s' "${comment%% *}"
+}
+
+# The latest label event must be a later, human-authorized removal. A failed
+# verification returns a stable reason token; no comment body can satisfy it.
+_mt_bypass_authorized()
+{
+	local pr="$1" marker_created_at="$2" events="" last_event="" action="" event_label="" timestamp="" actor="" role=""
+	if ! [[ "${marker_created_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+		echo removal_not_after_marker
+		return 1
+	fi
+	# No existing listing includes label events; read them once, across all pages.
+	if ! events="$(gh_retry gh api --paginate "repos/${MT_REPO}/issues/${pr}/events?per_page=100" \
+		--jq '.[] | select(.event=="labeled" or .event=="unlabeled") | [.event, (.label.name // ""), .created_at, (.actor.login // "")] | @tsv' 2>/dev/null)"; then
+		echo events_unavailable
+		return 1
+	fi
+	last_event="$(printf '%s\n' "${events}" | awk -F '\t' -v l="${MT_LABEL}" '$2==l {last=$0} END {print last}')"
+	IFS=$'\t' read -r action event_label timestamp actor <<< "${last_event}"
+	if [ "${action}" != "unlabeled" ] || [ "${event_label}" != "${MT_LABEL}" ]; then
+		echo no_label_removal
+		return 1
+	fi
+	if ! [[ "${timestamp}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ && "${timestamp}" > "${marker_created_at}" ]]; then
+		echo removal_not_after_marker
+		return 1
+	fi
+	actor="$(printf '%s' "${actor}" | tr '[:upper:]' '[:lower:]')"
+	if ! [[ "${actor}" =~ ^[a-z0-9][a-z0-9-]*(\[bot\])?$ ]] || [[ "${actor}" == *'[bot]' || "${actor}" == "ghost" ]]; then
+		echo actor_unknown
+		return 1
+	fi
+	if ! role="$(gh_retry gh api "repos/${MT_REPO}/collaborators/${actor}/permission" --jq '.role_name // ""' 2>/dev/null)"; then
+		echo permission_unavailable
+		return 1
+	fi
+	case "${role}" in
+		admin|maintain|write|triage) return 0 ;;
+		*) echo actor_unauthorized; return 1 ;;
+	esac
 }
 
 _mt_replace_comment()
@@ -342,12 +408,12 @@ _mt_gate() {
 			return 0
 		fi
 	fi
-	local own_labels queued_comment_id queue_label_persisted
+	local own_labels queued_comment_id queued_comment_created queued_comment bypass_reason queue_label_persisted
 	own_labels="$(printf '%s\n' "${prs_json}" | jq -r --argjson n "${pr}" 'select(.number == $n) | .labels | join(",")' 2>/dev/null | head -n 1 || true)"
 	if [ -z "${blockers}" ]; then
 		_mt_log "MERGE_TRAIN_GATE pr=${pr} base=${base} result=unblocked action=continue"
 		if _mt_has_label "${own_labels}"; then
-			if ! queued_comment_id="$(_mt_find_marker_comment_id "${pr}" "${MT_MARKER}")"; then
+			if ! _mt_resolve_automation_login || ! queued_comment_id="$(_mt_find_marker_comment_id "${pr}" "${MT_MARKER}")"; then
 				_mt_warn "merge-train gate: could not inspect queue marker for unblocked PR #${pr}; retaining ${MT_LABEL} for the release backstop."
 				return 0
 			fi
@@ -365,17 +431,22 @@ _mt_gate() {
 		fi
 		return 0
 	fi
-	if ! queued_comment_id="$(_mt_find_marker_comment_id "${pr}" "${MT_MARKER}")"; then
+	if ! _mt_resolve_automation_login || ! queued_comment="$(_mt_find_marker_comment "${pr}" "${MT_MARKER}")"; then
 		_mt_warn "merge-train gate: could not inspect prior queue state for PR #${pr}; fail-open (not queued)."
 		return 0
 	fi
+	queued_comment_id="${queued_comment%% *}"
+	queued_comment_created="${queued_comment#* }"
 	if ! _mt_has_label "${own_labels}" && [[ "${queued_comment_id}" =~ ^[0-9]+$ ]]; then
-		gh_retry gh api -X PATCH "repos/${MT_REPO}/issues/comments/${queued_comment_id}" \
-			-f body="${MT_BYPASSED_MARKER}
+		if bypass_reason="$(_mt_bypass_authorized "${pr}" "${queued_comment_created}")"; then
+			gh_retry gh api -X PATCH "repos/${MT_REPO}/issues/comments/${queued_comment_id}" \
+				-f body="${MT_BYPASSED_MARKER}
 **Merge train bypassed once.** The queue label was removed while older overlapping PRs remain open, so this review run is proceeding. A later run will evaluate the train normally." >/dev/null 2>&1 \
-			|| _mt_warn "merge-train gate: could not persist the one-shot bypass marker for PR #${pr}; this run still proceeds."
-		_mt_log "MERGE_TRAIN_GATE pr=${pr} base=${base} result=bypassed blockers=$(printf '%s\n' "${blockers}" | sed 's/:.*//' | paste -sd, -) action=continue"
-		return 0
+				|| _mt_warn "merge-train gate: could not persist the one-shot bypass marker for PR #${pr}; this run still proceeds."
+			_mt_log "MERGE_TRAIN_GATE pr=${pr} base=${base} result=bypassed blockers=$(printf '%s\n' "${blockers}" | sed 's/:.*//' | paste -sd, -) action=continue"
+			return 0
+		fi
+		_mt_log "MERGE_TRAIN_GATE pr=${pr} base=${base} result=bypass_rejected reason=${bypass_reason} action=queue"
 	fi
 	local blocker_numbers blocker_lines
 	blocker_numbers="$(printf '%s\n' "${blockers}" | sed 's/:.*//' | paste -sd' ' -)"
@@ -687,7 +758,7 @@ _mt_release() {
 			continue
 		fi
 		release_queue_comment_id=""
-		if ! release_queue_comment_id="$(_mt_find_marker_comment_id "${num}" "${MT_MARKER}")"; then
+		if ! _mt_resolve_automation_login || ! release_queue_comment_id="$(_mt_find_marker_comment_id "${num}" "${MT_MARKER}")"; then
 			_mt_warn "merge-train release: could not inspect the queue marker for PR #${num}; leaving it queued to avoid arming a false bypass."
 			continue
 		fi

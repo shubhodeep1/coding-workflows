@@ -55,7 +55,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `ai/issue-*` PRs on the same base that edit the same files (label
    `ai:merge-queued`; released by `cancel_on_pr_close.yml` on close and by
    `orchestrate_poll.yml` every tick; managed/standalone conflict and stall
-   recovery treat the label as an intentional wait), and the merge-topology gate hands a
+   recovery treat the label as an intentional wait). The one-shot bypass
+   requires an automation-authored queued marker and a later authorized label
+   removal. The merge-topology gate hands a
    content conflict to the resolver tail *before* the reviewer/editor spend
    (`PRE_REVIEW_CONFLICT_RESOLVE_ENABLED`, sets `AUTOFIX_PRE_REVIEW_RESOLVE`).
    The `gate` job also runs an identical-failure fingerprint cap: every
