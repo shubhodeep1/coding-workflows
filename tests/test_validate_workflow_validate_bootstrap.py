@@ -41,6 +41,8 @@ def test_validate_workflow_bootstrap_uses_shared_helper_and_lists_template_asset
 		"scripts/validate_driver.sh",
 		"scripts/validate_process.sh",
 		"scripts/transcript_archive.sh",
+		"scripts/validation_harness_sandbox.sh",
+		"scripts/codex_isolated_workspace.py",
 		"workflow-templates/validation-harness/_shared/_lib/tap_helpers.sh.j2",
 		"workflow-templates/validation-harness/_shared/tests/00_canary.sh.j2",
 		"workflow-templates/validation-harness/_shared/tests/90_tap_report.sh.j2",

@@ -1189,6 +1189,29 @@ committing the corresponding file:
   pins and verifies that PR's SHA without persisting checkout credentials.
   Empty `target_ref` retains integration/default selection.
 
+## Validation harness isolation
+
+- `scripts/render_validation_templates.py::enforce_shell_safe_manifest` runs after schema validation and independently of `--schema`. It rejects:
+  - a shell-active `slots.project_name` (allowlist `^[A-Za-z0-9](?:[A-Za-z0-9 ._/@+:-]*[A-Za-z0-9._/@+:-])?$`, at most 128 characters);
+  - any `slots.canary_tools` entry outside `[A-Za-z0-9._+-]`;
+  - a non-integer `slots.tap_plan`;
+  - an out-of-range `port`.
+
+  Errors name only the JSON pointer. Canary entries are charset-gated rather than quoted because `validation_lint.py` and the `validate_process.sh` canary-scope preflight read the literal `CANARY_TOOLS="${CANARY_TOOLS:-…}"` line. Every other manifest value in a `*.sh.j2` template goes through the `shell_quote` filter into a `_default_*` local, never inside double quotes. `tests/test_render_validation_templates_shell_quoting.py` fails on an unquoted interpolation.
+- `scripts/validate_process.sh` Phase 3 never runs the harness itself. `scripts/validation_harness_sandbox.sh` handles it:
+  - `provision` creates the `VALIDATION_HARNESS_SANDBOX_USER` (default `ai-validation`, not in `docker`/`sudo`) and starts its rootless dockerd. It runs once per job; self-heal re-execs reuse it through `SANDBOX_PROVISIONED`.
+  - `selfcheck <pid>` runs as that user and verifies that `/proc/<pid>/environ`, the host Docker socket, `sudo`, credential env vars, git credential config and the runner's home/temp/workspace directories are all unreachable.
+  - `run <entry>` stages a screened copy: tracked files plus `validation/` and `.ai/validate.yml`, minus `codex_isolated_workspace.readonly_allowed` exclusions, with the trusted `validate_driver.sh` overlaid. It executes the copy under `env -i` with an allowlist, inside `setsid --wait`.
+  - After the run, only regular files under `validation/logs/` are copied back, within `VALIDATION_HARNESS_SANDBOX_MAX_COPYBACK_BYTES` / `_MAX_FILES`, all or nothing.
+  - `cleanup` kills the harness process group and removes its containers. Phase 3 also calls it after an idle kill.
+  - Any sandbox failure exits 3 and writes `fail <phase> <reason>` to `VALIDATION_HARNESS_SANDBOX_STATUS_FILE`. `fail_closed_validation_sandbox` then writes `harness_error`, labels `ai:validation-failed` and sends a Telegram ERROR. There is no host fallback.
+- `validate_driver.sh` and the runtime driver heredoc in `validate_process.sh` start every test through `run_test_without_credentials`. It unsets:
+  - GitHub, model and Telegram credentials;
+  - `*_TOKEN`, `*_SECRET`, `*_PAT` and `*_API_KEY`;
+  - `GIT_CONFIG_*`, `ACTIONS_*` and the runner command files.
+
+  It keeps the synthetic `TEST_*` fixtures and masks global/system git config. This is the only protection on `validation-refresh` and the nightly self-test, which still call the driver on the host. Log prefix: `VALIDATION_HARNESS_SANDBOX`.
+
 ## Workflow scenario traces
 
 - Flag: `WORKFLOW_LOG_SCENARIO_TRACE_ENABLED` (default `false`).
@@ -1751,6 +1774,7 @@ and shipped:
 - `INTEGRATION_JUDGE_SCOPE`
 - `WORKFLOW_OVERLAY_SOURCE`
 - `WORKFLOW_OVERLAY_REPLACE_REJECTED`
+- `VALIDATION_HARNESS_SANDBOX`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -1968,6 +1992,7 @@ LOG_PREFIX.name=SECURITY_AUDIT_TARGET
 LOG_PREFIX.name=INTEGRATION_JUDGE_SCOPE
 LOG_PREFIX.name=WORKFLOW_OVERLAY_SOURCE
 LOG_PREFIX.name=WORKFLOW_OVERLAY_REPLACE_REJECTED
+LOG_PREFIX.name=VALIDATION_HARNESS_SANDBOX
 
 ---
 

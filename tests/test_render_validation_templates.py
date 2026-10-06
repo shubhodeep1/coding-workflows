@@ -166,10 +166,14 @@ def test_renderer_canary_tools_escaped_for_shell_safety() -> None:
 		_write_yaml(manifest_path, payload)
 
 		result = _run_renderer(manifest_path, output_root)
-		assert result.returncode == 0, result.stderr
-		canary_text = (output_root / "tests" / "00_canary.sh").read_text(encoding="utf-8")
-		assert "'tool$(echo pwn)'" in canary_text
-		assert "'tool'\"'\"'quote'" in canary_text
+		# Shell-active canary tool names are rejected before rendering
+		# (enforce_shell_safe_manifest) rather than rendered quoted; the inline
+		# CANARY_TOOLS default in the node/python-mongo-repo-checks canaries
+		# must stay a literal word list for validation_lint.py.
+		assert result.returncode != 0
+		assert "Manifest safety check failed: /slots/canary_tools/0" in result.stderr
+		assert "pwn" not in result.stderr
+		assert not (output_root / "tests" / "00_canary.sh").exists()
 
 
 def test_renderer_rejects_invalid_string_port() -> None:

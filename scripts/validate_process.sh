@@ -1513,13 +1513,37 @@ if [ "$(basename "${test_scripts[0]}")" != "00_canary.sh" ]; then
   exit 1
 fi
 
+# Generated tests are untrusted: run each without the job's credentials
+# (mirrors run_test_without_credentials in scripts/validate_driver.sh).
+run_test_without_credentials()
+{
+  local -a scrub_args=()
+  local var_name
+  while IFS= read -r var_name; do
+    case "${var_name}" in
+      VALIDATION_TEST_USERNAME|VALIDATION_TEST_PASSWORD|VALIDATION_TEST_API_KEY|TEST_USERNAME|TEST_PASSWORD|TEST_API_KEY)
+        ;;
+      GH_TOKEN|GH_PAT|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN|GITHUB_ENTERPRISE_TOKEN|OPENROUTER_API_KEY|TG_BOT_SECRET|TG_ADMIN_CHAT_ID|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY \
+      |GIT_CONFIG_*|GIT_ASKPASS|SSH_ASKPASS|SSH_AUTH_SOCK|ACTIONS_*|GITHUB_ENV|GITHUB_PATH|GITHUB_OUTPUT|GITHUB_STATE|GITHUB_STEP_SUMMARY \
+      |*_TOKEN|*_SECRET|*_PAT|*_API_KEY)
+        scrub_args+=("-u" "${var_name}")
+        ;;
+    esac
+  done < <(compgen -e)
+  env "${scrub_args[@]}" \
+    GIT_CONFIG_NOSYSTEM=1 \
+    GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_TERMINAL_PROMPT=0 \
+    bash "$@"
+}
+
 for test_script in "${test_scripts[@]}"; do
   test_name="$(basename "${test_script}")"
   test_log="${LOG_DIR}/${test_name}.log"
 
   echo "=== RUN ${test_name} ==="
   set +e
-  bash "${test_script}" > "${test_log}" 2>&1
+  run_test_without_credentials "${test_script}" > "${test_log}" 2>&1
   test_rc=$?
   set -e
 
@@ -3637,22 +3661,63 @@ IDLE_TIMEOUT_SECS=$((VALIDATION_TIMEOUT * 60))
 VALIDATION_EXIT=0
 VALIDATION_IDLE_KILLED=0
 
+# Generated tests are untrusted. They never run in this credentialed
+# process: scripts/validation_harness_sandbox.sh runs the whole harness as a
+# separate unprivileged user with its own rootless Docker daemon, a screened
+# workspace copy and an allowlisted environment, after a self-check proves
+# GH_PAT/GH_TOKEN, checkout auth and the host Docker socket are out of reach.
+# Any sandbox failure is fail-closed (harness_error); there is no host fallback.
+VALIDATION_HARNESS_SANDBOX_SCRIPT="${VALIDATION_HARNESS_SANDBOX_SCRIPT:-${_validate_script_dir}/validation_harness_sandbox.sh}"
+VALIDATION_HARNESS_SANDBOX_STATUS_FILE="${VALIDATION_HARNESS_SANDBOX_STATUS_FILE:-${RUNTIME_DIR:-${TMPDIR:-/tmp}}/validation_harness_sandbox.status}"
+export VALIDATION_HARNESS_SANDBOX_STATUS_FILE
+
+fail_closed_validation_sandbox()
+{
+  local sandbox_reason="$1"
+  local sandbox_summary="Isolated validation harness unavailable; tests were not executed (fail-closed)."
+  [[ "${sandbox_reason}" =~ ^[a-z_0-9\ ]+$ ]] || sandbox_reason="sandbox_failed"
+  jq -n \
+    --arg diagnosis "${sandbox_summary}" \
+    --arg harness_fixes "Validation harness sandbox failure: ${sandbox_reason}. Fix runner provisioning (sudo, uidmap, docker-ce-rootless-extras, unprivileged user namespaces) or set ENABLE_VALIDATION=false; host execution is never used as a fallback." \
+    '{status: "harness_error", diagnosis: $diagnosis, fix_issues: [], harness_fixes: $harness_fixes}' > "${DIAGNOSE_RESULT_FILE}"
+  post_tracking_comment "## ❌ Runtime validation harness sandbox unavailable\n\n${sandbox_summary}\n\nReason: \`${sandbox_reason}\`"
+  set_tracking_phase_label "ai:validation-failed"
+  write_result_files "fail" "Validation failed: isolated harness unavailable" "${sandbox_summary} Reason: ${sandbox_reason}" "harness_error"
+  tg_notify "Validation harness sandbox unavailable for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} (${sandbox_reason}); tests were not executed." "ERROR"
+  exit 0
+}
+
+if [ ! -f "${VALIDATION_HARNESS_SANDBOX_SCRIPT}" ]; then
+  fail_closed_validation_sandbox "sandbox_helper_missing"
+fi
+if [ "${SANDBOX_PROVISIONED:-}" != "1" ]; then
+  if ! bash "${VALIDATION_HARNESS_SANDBOX_SCRIPT}" provision; then
+    fail_closed_validation_sandbox "$(sed -n 's/^fail //p' "${VALIDATION_HARNESS_SANDBOX_STATUS_FILE}" 2>/dev/null | head -n 1)"
+  fi
+  # Self-heal re-exec inherits this, so provisioning runs once per job.
+  SANDBOX_PROVISIONED=1
+  export SANDBOX_PROVISIONED
+fi
+if ! bash "${VALIDATION_HARNESS_SANDBOX_SCRIPT}" selfcheck "$$"; then
+  fail_closed_validation_sandbox "$(sed -n 's/^fail //p' "${VALIDATION_HARNESS_SANDBOX_STATUS_FILE}" 2>/dev/null | head -n 1)"
+fi
+
 set +e
-# Run validation in background, tee output to log file
+# Run validation in background, tee output to log file. The entry selection
+# is unchanged; only the launcher moved into the sandbox.
 if [ -f validation/validate.sh ]; then
   if grep -q 'scripts/validate_driver.sh' validation/validate.sh && [ ! -f scripts/validate_driver.sh ]; then
     ensure_runtime_validation_driver
     GENERATED_VALIDATE_SCRIPT_PATH="${VALIDATION_RUNNER_FILE}"
-    "${VALIDATION_RUNNER_FILE}" > "${VALIDATION_LOG_FILE}" 2>&1 &
   else
     GENERATED_VALIDATE_SCRIPT_PATH="validation/validate.sh"
-    bash validation/validate.sh > "${VALIDATION_LOG_FILE}" 2>&1 &
   fi
 else
   ensure_runtime_validation_driver
   GENERATED_VALIDATE_SCRIPT_PATH="${VALIDATION_RUNNER_FILE}"
-  "${VALIDATION_RUNNER_FILE}" > "${VALIDATION_LOG_FILE}" 2>&1 &
 fi
+: > "${VALIDATION_HARNESS_SANDBOX_STATUS_FILE}" 2>/dev/null || true
+bash "${VALIDATION_HARNESS_SANDBOX_SCRIPT}" run "${GENERATED_VALIDATE_SCRIPT_PATH}" > "${VALIDATION_LOG_FILE}" 2>&1 &
 VALIDATION_PID=$!
 
 # Monitor the log file for activity; kill if idle too long
@@ -3681,6 +3746,8 @@ while kill -0 "${VALIDATION_PID}" 2>/dev/null; do
       kill -9 "${VALIDATION_PID}" 2>/dev/null || true
     fi
     VALIDATION_IDLE_KILLED=1
+    # SIGKILL to the helper's sudo does not reach the sandbox user's processes.
+    bash "${VALIDATION_HARNESS_SANDBOX_SCRIPT}" cleanup >> "${VALIDATION_LOG_FILE}" 2>&1 || true
     break
   fi
 
@@ -3690,6 +3757,11 @@ done
 wait "${VALIDATION_PID}" 2>/dev/null
 VALIDATION_EXIT=$?
 set -e
+
+if [ "${VALIDATION_IDLE_KILLED}" -eq 0 ] && [ "${VALIDATION_EXIT}" -eq 3 ] \
+  && grep -q '^fail ' "${VALIDATION_HARNESS_SANDBOX_STATUS_FILE}" 2>/dev/null; then
+  fail_closed_validation_sandbox "$(sed -n 's/^fail //p' "${VALIDATION_HARNESS_SANDBOX_STATUS_FILE}" 2>/dev/null | head -n 1)"
+fi
 
 tail -n 200 "${VALIDATION_LOG_FILE}" > "${VALIDATION_LOG_TAIL_FILE}" 2>/dev/null || true
 

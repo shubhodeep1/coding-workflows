@@ -3,6 +3,8 @@ set -euo pipefail
 
 COMPOSE_FILE="${COMPOSE_FILE:-validation/docker-compose.test.yml}"
 APP_SERVICE="${APP_SERVICE:-app}"
+# canary_tools entries are restricted to [A-Za-z0-9._+-] by the renderer's
+# enforce_shell_safe_manifest gate, so this inline default is a literal word list.
 CANARY_TOOLS="${CANARY_TOOLS:-{{ slots.canary_tools | join(' ') }}}"
 
 read -r -a TOOL_LIST <<< "${CANARY_TOOLS}"

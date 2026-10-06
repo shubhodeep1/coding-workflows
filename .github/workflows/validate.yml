@@ -337,6 +337,7 @@ jobs:
               "scripts/run_workspace_hook.sh",
               "scripts/codex_isolated_exec.sh",
               "scripts/codex_isolated_workspace.py",
+              "scripts/validation_harness_sandbox.sh",
               "scripts/clarify_openrouter_broker.py"
             ],
             "optional_preserve_scripts_before_templates": [

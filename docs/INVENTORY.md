@@ -278,6 +278,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/unblock_scan.py` — Pick the blocked items the unblock judge looks at each poll tick (Phase 7).
 - `scripts/validate_changed_files_syntax.sh` — Shell helper for validate changed files syntax.
 - `scripts/validate_driver.sh` — Shell helper for validate driver.
+- `scripts/validation_harness_sandbox.sh` — Runs the generated validation harness as an unprivileged user with rootless Docker, an allowlisted environment and bounded log copy-back (invoked by `scripts/validate_process.sh` Phase 3).
 - `scripts/validate_editor_audit.sh` — when the helper exits non-zero (caller-side).
 - `scripts/validate_process.sh` — validate_process.sh — Generate and execute runtime validation harness.
 - `scripts/validation_discovery_bootstrap.py` — Codex-driven .ai/validate.yml discovery for consumer repositories.
