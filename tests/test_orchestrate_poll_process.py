@@ -2881,6 +2881,15 @@ exec "${REAL_JQ_BIN}" "$@"
 		)
 
 
+		# No poller test needs Docker. Semble's sandboxed install runs a real
+		# `docker build` and a 3 GiB `docker run` when Docker is reachable,
+		# so a Semble-enabled test would build images on CI runners (#6031:
+		# orchestrate-poll (3) runner shutdowns). Fail every docker call.
+		_write_exec(
+			bin_dir / "docker",
+			"#!/bin/sh\necho 'docker is stubbed out in poller tests' >&2\nexit 1\n",
+		)
+
 		_write_exec(
 			bin_dir / "codex",
 			"""#!/usr/bin/env python3
