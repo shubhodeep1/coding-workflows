@@ -278,6 +278,8 @@ changelog.d/6404-claude-live-sync-pr-provenance.md
 changelog.d/6413-phase-failure-heal-reports.md
 changelog.d/6420-release-gate-claude-parity.md
 changelog.d/6435-prompt-audit-claude-config.md
+changelog.d/6438-openrouter-mgmt-key-reads.md
+changelog.d/6438-reviewer-panel-random-tiers.md
 changelog.d/6455-rb-fix-sandbox-workspace.md
 changelog.d/6461-consolidator-opencode-sandbox.md
 changelog.d/6467-phase-report-provenance.md
