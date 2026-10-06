@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run one clarify attempt in a credential-free, network-isolated container.
 # Only this helper (not the agent) accesses Docker and the host-side broker.
+# Exits: 0 success, 1 agent failure, 75 Claude unavailable, 76 isolation setup failed.
 set -euo pipefail
 
 prompt_file="${1:?prompt file required}"
@@ -10,18 +11,18 @@ log_file="${3:?log file required}"
 engine="${4:-codex}"
 engine_role="${5:-CLARIFY}"
 case "${engine}" in codex|claude) ;; *) echo '::error::Invalid clarify engine' >&2; exit 1 ;; esac
-[[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND)$ ]] || { echo '::error::Invalid clarify engine role' >&2; exit 1; }
+[[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|ORCHESTRATE)$ ]] || { echo '::error::Invalid clarify engine role' >&2; exit 1; }
 version="${CLARIFY_CODEX_VERSION:-v0.114.0}"
 [[ "${version}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid Codex version' >&2; exit 1; }
 [[ "${MODEL_EDITOR:-}" =~ ^[a-zA-Z0-9/_.-]+$ ]] || { echo '::error::Invalid model slug' >&2; exit 1; }
 [[ "${MODEL_REASONING_EFFORT:-}" =~ ^(xhigh|high|medium|low|none)$ ]] || { echo '::error::Invalid reasoning level' >&2; exit 1; }
 if [ "${engine}" = codex ]; then
-	[ -n "${OPENROUTER_API_KEY:-}" ] && [ -s "${prompt_file}" ] || { echo '::error::Clarify isolation preflight failed' >&2; exit 1; }
+	[ -n "${OPENROUTER_API_KEY:-}" ] && [ -s "${prompt_file}" ] || { echo '::error::Clarify isolation preflight failed' >&2; exit 76; }
 else
-	[ -s "${prompt_file}" ] || { echo '::error::Clarify isolation preflight failed' >&2; exit 1; }
+	[ -s "${prompt_file}" ] || { echo '::error::Clarify isolation preflight failed' >&2; exit 76; }
 fi
-command -v docker >/dev/null && command -v python3 >/dev/null || { echo '::error::Clarify isolation prerequisites unavailable' >&2; exit 1; }
-[ -f scripts/clarify_sandbox/Dockerfile ] && [ -f scripts/clarify_openrouter_broker.py ] && [ -f scripts/write_codex_config.sh ] && [ -f scripts/codex_model_catalog.json ] || { echo '::error::Clarify isolation support missing' >&2; exit 1; }
+command -v docker >/dev/null && command -v python3 >/dev/null || { echo '::error::Clarify isolation prerequisites unavailable' >&2; exit 76; }
+[ -f scripts/clarify_sandbox/Dockerfile ] && [ -f scripts/clarify_openrouter_broker.py ] && [ -f scripts/write_codex_config.sh ] && [ -f scripts/codex_model_catalog.json ] || { echo '::error::Clarify isolation support missing' >&2; exit 76; }
 
 # The runner-owned temporary root contains no credentials. Its socket child is
 # traversable by the container's matching non-root UID, not by other users.
@@ -31,7 +32,7 @@ broker_pid=""
 cleanup()
 {
 	if [ -n "${broker_pid}" ]; then kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; fi
-	env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker rm -f "${container_name}" >/dev/null 2>&1 || true
+	env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN -u GH_PAT docker rm -f "${container_name}" >/dev/null 2>&1 || true
 	rm -rf -- "${run_root}"
 }
 trap cleanup EXIT
@@ -43,7 +44,7 @@ mkdir -m 0755 "${run_root}/source" "${run_root}/results"
 # Include only regular, tracked source files with safe path classes. Never
 # follow a symlink (including parent directories); do not include .git,
 # support checkouts, runner configuration, env files or private keys.
-PYTHONDONTWRITEBYTECODE=1 python3 - "${run_root}/source" <<'PY'
+PYTHONDONTWRITEBYTECODE=1 python3 - "${run_root}/source" <<'PY' || exit 76
 import os
 import pathlib
 import stat
@@ -130,7 +131,7 @@ if [ "${engine}" = claude ]; then
 	chmod 0644 "${run_root}/claude-settings.json"
 	mapfile -t claude_accounts < <(ai_engine_accounts)
 	[ "${#claude_accounts[@]}" -gt 0 ] || { ai_engine_fallback "${engine_role}" no_credential; exit 75; }
-	if ! image="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker build -q --build-arg "CODEX_VERSION=${version}" --build-arg "CLAUDE_CLI_VERSION=${claude_version}" -f scripts/clarify_sandbox/Dockerfile scripts/clarify_sandbox)"; then
+	if ! image="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN -u GH_PAT docker build -q --build-arg "CODEX_VERSION=${version}" --build-arg "CLAUDE_CLI_VERSION=${claude_version}" -f scripts/clarify_sandbox/Dockerfile scripts/clarify_sandbox)"; then
 		ai_engine_fallback "${engine_role}" image_build_failed
 		exit 75
 	fi
@@ -151,7 +152,7 @@ if [ "${engine}" = claude ]; then
 			continue
 		fi
 		run_rc=0
-		env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker run --rm \
+		env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN -u GH_PAT docker run --rm \
 			--name "${container_name}" --user "$(id -u):$(id -g)" \
 			--network none --read-only --cap-drop ALL --security-opt no-new-privileges \
 			--pids-limit 128 --memory 2g --cpus 2 \
@@ -209,19 +210,19 @@ fi
 
 # Nothing from the privileged checkout, HOME or runtime workspace is mounted.
 # The Docker build context contains only the pinned Dockerfile.
-image="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker build -q --build-arg "CODEX_VERSION=${version}" -f scripts/clarify_sandbox/Dockerfile scripts/clarify_sandbox)"
-[ -n "${image}" ] || { echo '::error::Clarify image build failed' >&2; exit 1; }
+image="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN -u GH_PAT docker build -q --build-arg "CODEX_VERSION=${version}" -f scripts/clarify_sandbox/Dockerfile scripts/clarify_sandbox)" || { echo '::error::Clarify image build failed' >&2; exit 76; }
+[ -n "${image}" ] || { echo '::error::Clarify image build failed' >&2; exit 76; }
 env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" CLARIFY_MODEL="${MODEL_EDITOR}" PYTHONDONTWRITEBYTECODE=1 \
 	python3 scripts/clarify_openrouter_broker.py broker "${run_root}/socket/provider.sock" &
 broker_pid=$!
 for _ in $(seq 1 50); do
 	[ -S "${run_root}/socket/provider.sock" ] && break
-	kill -0 "${broker_pid}" 2>/dev/null || { echo '::error::Clarify broker failed' >&2; exit 1; }
+	kill -0 "${broker_pid}" 2>/dev/null || { echo '::error::Clarify broker failed' >&2; exit 76; }
 	sleep 0.1
 done
-[ -S "${run_root}/socket/provider.sock" ] || { echo '::error::Clarify broker unavailable' >&2; exit 1; }
+[ -S "${run_root}/socket/provider.sock" ] || { echo '::error::Clarify broker unavailable' >&2; exit 76; }
 
-env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker run --rm \
+env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN -u GH_PAT docker run --rm \
 	--name "${container_name}" --user "$(id -u):$(id -g)" \
 	--network none --read-only --cap-drop ALL --security-opt no-new-privileges \
 	--pids-limit 128 --memory 2g --cpus 2 \

@@ -266,6 +266,35 @@ def test_clarify_agent_runs_only_in_isolated_container() -> None:
 	assert 'CODEX_OUTPUT_FILE' in wf and 'codex_log.txt' in wf
 
 
+def test_clarify_isolated_runner_accepts_orchestrate_role_and_fails_closed_without_docker() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		prompt = tmp_path / "prompt.txt"
+		prompt.write_text("Decompose the project", encoding="utf-8")
+		runner = REPO_ROOT / "scripts" / "clarify_isolated_run.sh"
+		env = {
+			"PATH": str(tmp_path),
+			"MODEL_EDITOR": "openai/gpt-6-sol",
+			"MODEL_REASONING_EFFORT": "high",
+			"OPENROUTER_API_KEY": "dummy",
+		}
+		for role, expected in (("ORCHESTRATE", 76), ("BOGUS", 1)):
+			result = subprocess.run(
+				["/bin/bash", str(runner), str(prompt), str(tmp_path / "out.txt"), str(tmp_path / "log.txt"), "codex", role],
+				cwd=REPO_ROOT, env=env, capture_output=True, text=True, check=False,
+			)
+			assert result.returncode == expected, result.stderr
+		assert not (tmp_path / "out.txt").exists()
+
+
+def test_clarify_isolated_docker_commands_strip_runner_secrets() -> None:
+	runner = _read(REPO_ROOT / "scripts" / "clarify_isolated_run.sh")
+	for line in runner.splitlines():
+		if re.search(r"\bdocker (?:build|run|rm)\b", line):
+			assert "env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN -u GH_PAT docker " in line
+	assert 'PYTHONDONTWRITEBYTECODE=1 python3 - "${run_root}/source" <<\'PY\' || exit 76' in runner
+
+
 def test_clarify_broker_rejects_other_routes_and_streams_without_leaking_key() -> None:
 	spec = importlib.util.spec_from_file_location("clarify_broker", REPO_ROOT / "scripts" / "clarify_openrouter_broker.py")
 	assert spec and spec.loader

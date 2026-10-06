@@ -693,10 +693,6 @@ def test_poll_preflight_fails_open_when_engine_helper_cannot_be_sourced(tmp_path
 
 
 ORCHESTRATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "orchestrate.yml"
-DECOMPOSER_CODEX = (
-	'timeout --signal=TERM --kill-after=30s -- "${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}" \\\n'
-	'       codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || decomposer_rc=$?'
-)
 
 
 def _orchestrate_steps() -> dict[str, dict]:
@@ -711,15 +707,26 @@ def _decomposer_engine_block() -> str:
 	return run[start:end]
 
 
-def _run_decomposer_block(tmp_path: Path, engine: str, claude_mode: str) -> tuple[subprocess.CompletedProcess[str], Path]:
+def _run_decomposer_block(tmp_path: Path, engine: str, claude_mode: str, codex_mode: str = "success") -> tuple[subprocess.CompletedProcess[str], Path]:
 	scripts = tmp_path / "scripts"
 	scripts.mkdir(parents=True, exist_ok=True)
-	(scripts / "ai_engine.sh").write_text(FAKE_AI_ENGINE, encoding="utf-8")
-	bin_dir = tmp_path / "bin"
-	bin_dir.mkdir()
-	codex = bin_dir / "codex"
-	codex.write_text('#!/usr/bin/env bash\nprintf "codex %s\\n" "$*" >> "${CALLS}.codex"\nprintf "codex plan\\n"\n', encoding="utf-8")
-	codex.chmod(0o755)
+	(scripts / "clarify_isolated_run.sh").write_text(
+		'''printf '%s|%s|%s|%s|%s\\n' "$1" "$2" "$3" "$4" "$5" >> "${CALLS}.isolated"
+if [ "$4" = claude ]; then
+  case "${FAKE_CLAUDE_MODE}" in
+    success) printf 'claude verdict\\n' > "$2"; exit 0 ;;
+    unavailable) exit 75 ;;
+    isolation) exit 76 ;;
+    *) exit 1 ;;
+  esac
+fi
+case "${FAKE_CODEX_MODE}" in
+  success) printf 'codex plan\\n' > "$2"; exit 0 ;;
+  isolation) exit 76 ;;
+  *) exit 1 ;;
+esac
+''', encoding="utf-8",
+	)
 	(tmp_path / "prompt.txt").write_text("decompose\n", encoding="utf-8")
 	calls = tmp_path / "calls"
 	script = (
@@ -730,44 +737,65 @@ def _run_decomposer_block(tmp_path: Path, engine: str, claude_mode: str) -> tupl
 		+ _decomposer_engine_block()
 		+ 'echo "rc=${decomposer_rc} engine=${ORCHESTRATE_ENGINE}"\n'
 	)
-	env = dict(os.environ, CALLS=str(calls), FAKE_ENGINE="claude", FAKE_CLAUDE_MODE=claude_mode, PATH=f"{bin_dir}:{os.environ['PATH']}")
+	env = dict(os.environ, CALLS=str(calls), FAKE_CLAUDE_MODE=claude_mode, FAKE_CODEX_MODE=codex_mode)
 	for inherited in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
 		env.pop(inherited, None)
 	proc = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60, check=False)
 	return proc, calls
 
 
-def test_decomposer_on_claude_runs_claude_run_only(tmp_path: Path) -> None:
+def test_decomposer_on_claude_runs_claude_in_isolation_only(tmp_path: Path) -> None:
 	proc, calls = _run_decomposer_block(tmp_path, "claude", "success")
 	assert "rc=0 engine=claude" in proc.stdout, proc.stderr
 	assert _read(tmp_path / "out.txt") == "claude verdict\n"
-	assert _read(Path(f"{calls}.claude")).split("|")[:3] == ["ORCHESTRATE", "prompt.txt", "out.txt"]
-	assert _read(Path(f"{calls}.codex")) == ""
+	assert _read(Path(f"{calls}.isolated")).splitlines() == ["prompt.txt|out.txt|./codex_log.txt|claude|ORCHESTRATE"]
 
 
 def test_decomposer_falls_back_to_codex_and_stays_there(tmp_path: Path) -> None:
 	proc, calls = _run_decomposer_block(tmp_path, "claude", "unavailable")
 	assert "rc=0 engine=codex" in proc.stdout, proc.stderr
 	assert _read(tmp_path / "out.txt") == "codex plan\n"
-	assert "exec --skip-git-repo-check --model openai/gpt-6-sol --sandbox danger-full-access" in _read(Path(f"{calls}.codex"))
+	assert _read(Path(f"{calls}.isolated")).splitlines() == [
+		"prompt.txt|out.txt|./codex_log.txt|claude|ORCHESTRATE",
+		"prompt.txt|out.txt|./codex_log.txt|codex|ORCHESTRATE",
+	]
 
 
 def test_decomposer_claude_crash_keeps_its_status(tmp_path: Path) -> None:
 	proc, calls = _run_decomposer_block(tmp_path, "claude", "crash")
 	assert "rc=1 engine=claude" in proc.stdout, proc.stderr
-	assert _read(Path(f"{calls}.codex")) == ""
+	assert len(_read(Path(f"{calls}.isolated")).splitlines()) == 1
 
 
 def test_decomposer_on_codex_never_touches_claude(tmp_path: Path) -> None:
 	proc, calls = _run_decomposer_block(tmp_path, "codex", "success")
 	assert "rc=0 engine=codex" in proc.stdout, proc.stderr
-	assert _read(Path(f"{calls}.claude")) == ""
+	assert _read(Path(f"{calls}.isolated")).splitlines() == ["prompt.txt|out.txt|./codex_log.txt|codex|ORCHESTRATE"]
 	assert _read(tmp_path / "out.txt") == "codex plan\n"
 
 
-def test_decomposer_codex_command_and_failure_status_are_kept() -> None:
+def test_decomposer_sandbox_setup_failure_does_not_fall_back_to_host(tmp_path: Path) -> None:
+	proc, calls = _run_decomposer_block(tmp_path, "codex", "success", codex_mode="isolation")
+	assert "rc=76 engine=codex" in proc.stdout, proc.stderr
+	assert len(_read(Path(f"{calls}.isolated")).splitlines()) == 1
 	run = _orchestrate_steps()["Run Codex (decomposer)"]["run"]
-	assert run.count(DECOMPOSER_CODEX) == 1
+	classification = run.split('if [ "$rc" = "76" ]; then', 1)[1].split('elif [ "$rc" = "124" ]; then', 1)[0]
+	result = subprocess.run(
+		["bash", "-c", 'set -euo pipefail; attempt=2; rc=76; if [ "$rc" = "76" ]; then' + classification + 'fi; echo "status=${last_status}"'],
+		capture_output=True, text=True, check=False,
+	)
+	assert result.returncode == 0, result.stderr
+	assert "isolation_unavailable); no host fallback." in result.stdout
+	assert "status=isolation_unavailable" in result.stdout
+
+
+def test_decomposer_calls_only_isolated_helper() -> None:
+	run = _orchestrate_steps()["Run Codex (decomposer)"]["run"]
+	args = 'bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"'
+	assert run.count(f"{args} claude ORCHESTRATE || decomposer_rc=$?") == 1
+	assert run.count(f"{args} codex ORCHESTRATE || decomposer_rc=$?") == 1
+	for forbidden in ("claude_run", "codex --ask-for-approval", "codex exec", "danger-full-access"):
+		assert forbidden not in run
 	assert 'rc="${decomposer_rc}"' in run
 	assert "    rc=$?\n" not in run
 
@@ -784,7 +812,10 @@ def test_orchestrate_job_resolves_the_engine_from_the_engine_input() -> None:
 	for name in ("Install Claude Code CLI", "Resolve Claude credential"):
 		assert steps[name]["if"] == "steps.ai_engine.outputs.engine == 'claude'"
 		assert names.index("Resolve AI engine") < names.index(name) < names.index("Run Codex (decomposer)")
-	assert "write_codex_config.sh ai_engine.sh claude_engine.py claude_settings.json.tmpl; do" in steps["Stage workflow support files"]["run"]
+	stage = steps["Stage workflow support files"]["run"]
+	assert "write_codex_config.sh ai_engine.sh claude_engine.py claude_settings.json.tmpl clarify_isolated_run.sh clarify_openrouter_broker.py claude_anthropic_relay.py; do" in stage
+	assert 'install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile' in stage
+	assert '"${_fetched_scripts[@]}" clarify_sandbox/ .gitignore' in stage
 
 
 def test_decomposer_preflight_fails_open_when_engine_helper_cannot_be_sourced(tmp_path: Path) -> None:

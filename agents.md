@@ -156,8 +156,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `Preserving repo-tracked path during artifact cleanup: <path>`.
 9. **orchestrate** (`orchestrate.yml`, `orchestrate_poll.yml`) — issue
    decomposition + judge polling, including the default-on, current-head
-   project security-pass gate before validation/finalization. The poller's
-   wave, stall, integration and security-pass judges use read-only,
+   project security-pass gate before validation/finalization. The decomposer
+   runs both engines through `scripts/clarify_isolated_run.sh` (role
+   `ORCHESTRATE`) with a read-only, credential-free snapshot; sandbox setup
+   failures record `last_status=isolation_unavailable` and never fall back to
+   the host. The poller's wave, stall, integration and security-pass judges use read-only,
    credential-free review sandboxes on both engines. Isolation failure
    defers (never host fallback) and escalates per role after
    `JUDGE_ISOLATION_MAX_FAILURES`; only deterministic poller code writes to
@@ -733,7 +736,7 @@ a new value, add it to the appropriate overrides file with a
 |---|---|---|---|---|
 | clarify, clarify-respond | `openai/gpt-6-sol` | `high` (smoke: `low` — `clarify.yml`'s "Detect smoke test" step sets `MODEL_REASONING_EFFORT=low`) | `low` | Claude (Opus 5.5; codex fallback) · `CLARIFY`, `CLARIFY_RESPOND` |
 | plan | `openai/gpt-6-sol` | `high` (smoke: `low` — `plan.yml`'s "Detect smoke test" step sets `MODEL_REASONING_EFFORT=low`) | `low` | Claude (Opus 5.5; codex fallback) · `PLAN` |
-| orchestrate (decompose), judge | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; codex fallback for `ORCHESTRATE`, isolated OpenCode fallback for poller judges) · `ORCHESTRATE`, `WAVE_JUDGE`, `STALL_JUDGE`, `INTEGRATION_JUDGE`, `SECURITY_JUDGE` |
+| orchestrate (decompose), judge | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; isolated codex fallback for `ORCHESTRATE`, isolated OpenCode fallback for poller judges) · `ORCHESTRATE`, `WAVE_JUDGE`, `STALL_JUDGE`, `INTEGRATION_JUDGE`, `SECURITY_JUDGE` |
 | implement (main editor) | `openai/gpt-6-sol` | `high` (smoke: no override — see `.github/workflows/implement.yml:597-606`) | `low` | Claude (Opus 5.5; codex fallback) · `IMPLEMENT` |
 | implement-repair, implement-repair-syntax | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; codex fallback) · `IMPLEMENT_REPAIR` |
 | implement-diagnose | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; codex fallback) · `IMPLEMENT_DIAGNOSE` |
