@@ -126,7 +126,6 @@ ai_pipeline.md
 analysis/last_collection_timestamp.txt
 analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
-analysis/workflow-optimization-2026-09-03.md
 analysis/workflow-optimization-2026-09-06.md
 analysis/workflow-optimization-2026-09-07.md
 analysis/workflow-optimization-2026-09-08.md
@@ -162,6 +161,7 @@ analysis/workflow-optimization-2026-10-01.md
 analysis/workflow-optimization-2026-10-02.md
 analysis/workflow-optimization-2026-10-03-2.md
 analysis/workflow-optimization-2026-10-03.md
+analysis/workflow-optimization-2026-10-06.md
 changelog.d/.gitkeep
 changelog.d/3965-validation-run-attribution.md
 changelog.d/4618-sweep-dispatch-default-branch.md
@@ -196,6 +196,7 @@ changelog.d/5892-heal-autofix-fingerprint-header.md
 changelog.d/5964-reviewer-infra-nonblocking.md
 changelog.d/5999-restore-scoped-smoke-run-lookups.md
 changelog.d/6055-review-editor-edits-reach-work-tree.md
+changelog.d/6118-implement-claude-cli-config-path.md
 changelog.d/6118-main-ci-green-claude-template-sync.md
 changelog.d/6118-phase-0-standalone-issues-default-to-codex.md
 changelog.d/6118-phase-2-retire-claude-session-automation.md
@@ -216,14 +217,23 @@ changelog.d/6204-review-sandbox-audit-plans-parity.md
 changelog.d/6222-review-command-isolation.md
 changelog.d/6248-static-context-symlink-guard.md
 changelog.d/6249-merge-guard-ampersand-redirect.md
+changelog.d/6254-pr-tree-python-safe-path.md
+changelog.d/6262-clarify-respond-standalone.md
+changelog.d/6272-review-static-readme-nofollow.md
 changelog.d/6286-pr-merge-guard-appended-git-dir.md
+changelog.d/6289-merge-guard-redirected-cd-exit.md
+changelog.d/6290-review-overlay-trusted-source.md
 changelog.d/6293-numeric-push-refspec-redirect.md
 changelog.d/6304-pr-merge-guard-spaced-numeric-refspec.md
+changelog.d/6308-review-host-python-safe-path.md
 changelog.d/6321-merge-guard-empty-quote-fd.md
 changelog.d/6322-pr-merge-guard-single-json-output.md
 changelog.d/6375-claude-live-sync-provenance-hold.md
 changelog.d/6391-sync-pr-lookup-verifies-base.md
+changelog.d/6400-rb-judge-security-severity-block.md
+changelog.d/6401-single-issue-security-pass-completed-audit.md
 changelog.d/6404-claude-live-sync-pr-provenance.md
+changelog.d/6420-release-gate-claude-parity.md
 changelog.d/autofix-cap-and-security-exhaustion-judge.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/release-smoke-run-lookup.md
@@ -462,6 +472,7 @@ scripts/check_resolver_diff.sh
 scripts/check_workflow_script_refs.py
 scripts/ci_cancelled_rerun.py
 scripts/clarify_data_provision_guard.py
+scripts/clarify_github_facts.py
 scripts/clarify_informal_detect.py
 scripts/clarify_isolated_run.sh
 scripts/clarify_openrouter_broker.py
@@ -472,6 +483,8 @@ scripts/claude_pool_token.sh
 scripts/claude_settings.json.tmpl
 scripts/codex_heartbeat.sh
 scripts/codex_helpers.sh
+scripts/codex_isolated_exec.sh
+scripts/codex_isolated_workspace.py
 scripts/codex_model_catalog.json
 scripts/codex_model_catalog_overrides.yaml
 scripts/codex_stall_guard.sh
@@ -482,6 +495,7 @@ scripts/compare_issue_timeline_parity.sh
 scripts/comprehensive_test_and_release_gh_api.sh
 scripts/consolidate_soft_error_reports.py
 scripts/cost_audit.py
+scripts/dependency_registry_proxy.py
 scripts/detect_editor_changes_lost.sh
 scripts/dev/replay_review_pipeline.sh
 scripts/dev/test_codex_helpers.sh
@@ -763,7 +777,9 @@ tests/test_ci_inventory_parity_order_contract.py
 tests/test_ci_job_split_contract.py
 tests/test_ci_poll_test_sharding.py
 tests/test_ci_shared_shell_block_guard.py
+tests/test_clarify_github_facts.py
 tests/test_clarify_informal_detect.py
+tests/test_clarify_respond_standalone.py
 tests/test_claude_anthropic_relay.py
 tests/test_claude_engine.py
 tests/test_claude_md_section_numbers.py
@@ -809,6 +825,7 @@ tests/test_implement_blocked_verdict_terminalizes.py
 tests/test_implement_post_codex_recovery.py
 tests/test_implement_pr_body_tracking_refs.py
 tests/test_implement_semble_contract.py
+tests/test_install_claude_action.py
 tests/test_internal_review_push_pr_grace.py
 tests/test_issue_pr_status_payload_fallback_contract.py
 tests/test_judge_semble_prefetch_contract.py
@@ -902,12 +919,14 @@ tests/test_review_conflict_resolve_smoke_deterministic.py
 tests/test_review_dispatch_default_branch.py
 tests/test_review_editor_fifo_drain.py
 tests/test_review_floor_rules.py
+tests/test_review_host_python_safe_path.py
 tests/test_review_issue_ledger.py
 tests/test_review_judge_interim_round_trip.py
 tests/test_review_ledger_cache_path_stability.py
 tests/test_review_merge_train.py
 tests/test_review_parse_consolidator.py
 tests/test_review_pipeline_integration.py
+tests/test_review_pr_tree_python_isolation.py
 tests/test_review_rb_judge_label_propagation.py
 tests/test_review_rb_judge_reference_staging.py
 tests/test_review_rb_judge_reissue_baseline.py
@@ -918,6 +937,7 @@ tests/test_review_rereview_and_approval_rubric.py
 tests/test_review_resolve_review_threads.py
 tests/test_review_reviewer_attempt_prompt_isolation.py
 tests/test_review_semble_contract.py
+tests/test_review_static_context_readme.py
 tests/test_review_surface_prompt_hardening.py
 tests/test_review_synthesise_smoke.py
 tests/test_run_substate_ledger.py

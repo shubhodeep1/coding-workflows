@@ -720,6 +720,11 @@ engine switch. When Claude is unavailable (`claude_run` exit 75,
 `AI_ENGINE_FALLBACK`), the run uses the codex/OpenCode path unchanged. The
 pinned CLI is `@anthropic-ai/claude-code` `cli_version` from the same file,
 installed by `.github/actions/install-claude`.
+The write profile has no `WebFetch`/`WebSearch`, and the host relay
+(`scripts/claude_anthropic_relay.py`) rejects requests that declare
+provider-side web, code-execution or MCP-connector tools. A missing
+`codex_isolated_exec.sh` makes `claude_run` fall back to codex rather than
+running Claude with host credentials.
 
 OpenCode version `1.18.23` is installed by the dispatch-only
 `.github/workflows/opencode-live-smoke.yml` rollout gate and by production

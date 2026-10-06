@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """scripts/ai_engine.sh: engine selection, D1 fallback and claude_run.
 
-claude_run is exercised against a fake `claude` executable that behaves
-according to the account token it receives (success, usage limit, rejected
-token, crash) and records its argv, stdin and environment. The real CLI is
-never called. Also covers the `--engine` log label of the codex wrappers.
+claude_run is exercised through a stub isolation helper and fake `claude`
+executable. The real CLI and Docker are never called. Also covers the
+`--engine` log label of the codex wrappers.
 """
 
 from __future__ import annotations
@@ -12,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import stat
 import subprocess
 from pathlib import Path
@@ -28,10 +28,12 @@ FAKE_CLAUDE = r'''#!/usr/bin/env python3
 import json, os, sys
 log = os.environ["FAKE_CLAUDE_LOG"]
 token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
+account = os.environ.get("FAKE_UPSTREAM_ACCOUNT", "")
 record = {
 	"argv": sys.argv[1:],
 	"stdin": sys.stdin.read(),
 	"token": token,
+	"environment": dict(os.environ),
 	"cwd": os.getcwd(),
 	"claude_md_visible": os.path.exists("CLAUDE.md"),
 	"api_key_env": "ANTHROPIC_API_KEY" in os.environ,
@@ -41,20 +43,56 @@ with open(log, "a", encoding="utf-8") as handle:
 def emit(event):
 	print(json.dumps(event), flush=True)
 emit({"type": "system", "subtype": "init"})
-if token.startswith("TOK_LIMIT"):
+if account == "limit":
 	emit({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}})
 	emit({"type": "result", "subtype": "error_during_execution", "is_error": True, "result": "API Error"})
 	sys.exit(1)
-if token.startswith("TOK_AUTH"):
+if account == "auth":
 	emit({"type": "result", "subtype": "success", "is_error": True, "result": "Failed to authenticate. API Error: 401 OAuth access token is invalid."})
 	sys.exit(1)
-if token.startswith("TOK_CRASH"):
+if account == "crash":
 	print("boom", file=sys.stderr)
 	sys.exit(3)
-if token.startswith("TOK_WRITE_MD"):
+if account == "write_md":
 	with open("CLAUDE.md", "w", encoding="utf-8") as handle:
 		handle.write("new instructions\n")
 emit({"type": "result", "subtype": "success", "is_error": False, "result": "done", "total_cost_usd": 0.01, "usage": {"input_tokens": 1, "output_tokens": 2}})
+'''
+
+STUB_ISOLATION = r'''#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\0' "$@" >> "${FAKE_HELPER_LOG}"
+[ "${FAKE_HELPER_UNAVAILABLE:-}" != true ] || exit 75
+token_file=""
+workdir=""
+hide=false
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--claude-token-file) token_file="$2"; shift 2 ;;
+		--workdir) workdir="$2"; shift 2 ;;
+		--hide-claude-md) hide=true; shift ;;
+		--) shift; break ;;
+		*) shift ;;
+	esac
+done
+[ -f "${token_file}" ] && [ ! -L "${token_file}" ] && [ "$(stat -c %a "${token_file}")" = 600 ] || exit 73
+case "$(< "${token_file}")" in
+	TOK_LIMIT*) account=limit ;;
+	TOK_AUTH*) account=auth ;;
+	TOK_CRASH*) account=crash ;;
+	TOK_WRITE_MD*) account=write_md ;;
+	*) account=ok ;;
+esac
+# Simulate the host broker: only the category crosses into the fake model.
+# The real helper passes neither the category nor the credential to Docker.
+cd "${workdir}"
+if [ "${hide}" = true ] && [ -f CLAUDE.md ]; then
+	mv CLAUDE.md "${FAKE_HELPER_BACKUP}"
+	trap 'if [ -e CLAUDE.md ]; then mv "${FAKE_HELPER_BACKUP}" CLAUDE.md.original.stub; else mv "${FAKE_HELPER_BACKUP}" CLAUDE.md; fi' EXIT
+fi
+env -i PATH="${PATH}" HOME="${HOME}" FAKE_CLAUDE_LOG="${FAKE_CLAUDE_LOG}" \
+	FAKE_UPSTREAM_ACCOUNT="${account}" CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder \
+	ANTHROPIC_BASE_URL=http://127.0.0.1:8765 "$@"
 '''
 
 
@@ -65,6 +103,15 @@ def sandbox(tmp_path: Path):
 	fake = fake_bin / "claude"
 	fake.write_text(FAKE_CLAUDE, encoding="utf-8")
 	fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+	support_scripts = tmp_path / "scripts"
+	support_scripts.mkdir()
+	for name in ("ai_engine.sh", "claude_engine.py", "claude_settings.json.tmpl"):
+		shutil.copyfile(REPO_ROOT / "scripts" / name, support_scripts / name)
+	shutil.copyfile(INSTRUCTIONS, tmp_path / "unattended_system_instructions.md")
+	(support_scripts / "codex_isolated_exec.sh").write_text(STUB_ISOLATION, encoding="utf-8")
+	hook = tmp_path / ".claude" / "hooks"
+	hook.mkdir(parents=True)
+	shutil.copyfile(REPO_ROOT / ".claude" / "hooks" / "gh_api_write_guard.py", hook / "gh_api_write_guard.py")
 	home = tmp_path / "home"
 	home.mkdir()
 	runner_temp = tmp_path / "rt"
@@ -89,12 +136,19 @@ def sandbox(tmp_path: Path):
 			"CLAUDE_ENGINE_POOL_DIR": str(pool),
 			"SUPPORT_INSTRUCTIONS_FILE": str(INSTRUCTIONS),
 			"FAKE_CLAUDE_LOG": str(tmp_path / "calls.jsonl"),
+			"FAKE_HELPER_LOG": str(tmp_path / "helper-args"),
+			"FAKE_HELPER_BACKUP": str(tmp_path / "claude-md-backup"),
 			"PYTHONDONTWRITEBYTECODE": "1",
 			"CODEX_HEARTBEAT_INTERVAL_SECS": "30",
 			"ANTHROPIC_API_KEY": "must-not-reach-the-cli",
+			"GH_TOKEN": "must-not-reach-the-cli",
+			"OPENROUTER_API_KEY": "must-not-reach-the-cli",
 		}
 	)
-	return {"tmp": tmp_path, "env": env, "pool": pool, "work": work, "prompt": prompt, "home": home, "bin": fake_bin}
+	return {
+		"tmp": tmp_path, "env": env, "pool": pool, "work": work, "prompt": prompt,
+		"home": home, "bin": fake_bin, "ai_engine": support_scripts / "ai_engine.sh",
+	}
 
 
 def _accounts(sandbox: dict, **tokens: str) -> None:
@@ -108,7 +162,7 @@ def _accounts(sandbox: dict, **tokens: str) -> None:
 def _bash(sandbox: dict, script: str, **extra_env: str) -> subprocess.CompletedProcess:
 	env = dict(sandbox["env"], **extra_env)
 	return subprocess.run(
-		["bash", "-c", f"set -euo pipefail; source {shlex.quote(str(AI_ENGINE))}; {script}"],
+		["bash", "-c", f"set -euo pipefail; source {shlex.quote(str(sandbox['ai_engine']))}; {script}"],
 		capture_output=True,
 		text=True,
 		env=env,
@@ -201,8 +255,30 @@ def test_missing_cli_falls_back(sandbox: dict) -> None:
 	(sandbox["bin"] / "claude").unlink()
 	env_path = ":".join(part for part in sandbox["env"]["PATH"].split(":") if not (Path(part) / "claude").exists())
 	result = _claude_run(sandbox, PATH=env_path)
+	# Claude is installed inside the image, not looked up on the runner.
+	assert _rc(result) != 75
+	assert "reason=cli_missing" not in result.stderr
+
+
+@pytest.mark.parametrize("symlink", (False, True))
+def test_missing_isolation_helper_falls_back(sandbox: dict, symlink: bool) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	helper = sandbox["ai_engine"].parent / "codex_isolated_exec.sh"
+	helper.unlink()
+	if symlink:
+		helper.symlink_to(REPO_ROOT / "scripts" / "claude_engine.py")
+	result = _claude_run(sandbox, "IMPLEMENT")
 	assert _rc(result) == 75
-	assert "AI_ENGINE_FALLBACK role=PLAN reason=cli_missing" in result.stderr
+	assert "AI_ENGINE_FALLBACK role=IMPLEMENT reason=support_missing" in result.stderr
+	assert _calls(sandbox) == []
+
+
+def test_isolation_unavailable_falls_back(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	result = _claude_run(sandbox, FAKE_HELPER_UNAVAILABLE="true")
+	assert _rc(result) == 75
+	assert "AI_ENGINE_FALLBACK role=PLAN reason=isolation_unavailable" in result.stderr
+	assert _calls(sandbox) == []
 
 
 def test_missing_instructions_falls_back(sandbox: dict) -> None:
@@ -224,7 +300,8 @@ def test_usage_limit_and_rejected_token_move_to_the_next_account(sandbox: dict) 
 	usage_lines = [line for line in result.stderr.splitlines() if line.startswith('{"duration_ms"') or '"type": "result"' in line]
 	assert usage_lines and json.loads(usage_lines[-1])["total_cost_usd"] == 0.01
 	calls = _calls(sandbox)
-	assert [call["token"] for call in calls] == ["TOK_LIMIT_a", "TOK_AUTH_b", "TOK_OK_c"]
+	assert [call["token"] for call in calls] == ["isolated-placeholder"] * 3
+	assert [call["environment"]["FAKE_UPSTREAM_ACCOUNT"] for call in calls] == ["limit", "auth", "ok"]
 	assert "AI_ENGINE_FALLBACK" not in result.stderr
 
 
@@ -264,9 +341,9 @@ def test_write_role_command_line(sandbox: dict) -> None:
 	expected_pairs = {
 		"--model": "claude-opus-5-5",
 		"--effort": "low",
-		"--system-prompt-file": str(INSTRUCTIONS),
+		"--system-prompt-file": "/support/instructions.md",
 		"--setting-sources": "",
-		"--tools": "Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch",
+		"--tools": "Read,Grep,Glob,Bash,Edit,Write",
 		"--permission-mode": "bypassPermissions",
 		"--output-format": "stream-json",
 	}
@@ -274,19 +351,21 @@ def test_write_role_command_line(sandbox: dict) -> None:
 		assert argv[argv.index(flag) + 1] == value, flag
 	for flag in ("--strict-mcp-config", "--disable-slash-commands", "--exclude-dynamic-system-prompt-sections", "--verbose"):
 		assert flag in argv
-	settings = Path(argv[argv.index("--settings") + 1])
+	settings = next((sandbox["tmp"] / "rt").glob("claude-run-*/claude-settings.json"))
 	policy = json.loads(settings.read_text(encoding="utf-8"))
 	anchor = str(sandbox["work"].resolve()).lstrip("/")
 	assert f"Edit(//{anchor}/.github/workflows/**)" in policy["permissions"]["deny"]
-	# The token reaches the CLI only through the environment.
+	# The real token never enters the CLI, Docker arguments or environment.
 	assert "TOK_OK" not in " ".join(argv)
-	assert call["token"] == "TOK_OK"
+	assert "TOK_OK" not in (sandbox["tmp"] / "helper-args").read_text(encoding="utf-8")
+	assert call["token"] == "isolated-placeholder"
 	assert call["api_key_env"] is False
+	for key in ("ANTHROPIC_API_KEY", "GH_TOKEN", "OPENROUTER_API_KEY"):
+		assert key not in call["environment"]
 	assert call["stdin"] == "do the thing\n"
 	assert call["cwd"] == str(sandbox["work"].resolve())
 	assert "TOK_OK" not in result.stderr + result.stdout
-	trusted = json.loads((sandbox["home"] / ".claude.json").read_text(encoding="utf-8"))
-	assert trusted["projects"][str(sandbox["work"].resolve())]["hasTrustDialogAccepted"] is True
+	assert "--claude-token-file" in (sandbox["tmp"] / "helper-args").read_text(encoding="utf-8")
 
 
 def test_read_role_command_line(sandbox: dict) -> None:
@@ -317,13 +396,14 @@ def test_profile_tool_lists_match_claude_engine() -> None:
 		assert "--tools default" not in src
 		assert 'tools="default"' not in src
 	assert module.PROFILE_TOOLS["write"] != "default"
+	assert "WebFetch" not in module.PROFILE_TOOLS["write"]
+	assert "WebSearch" not in module.PROFILE_TOOLS["write"]
 
 
 def test_allow_workflow_edits_reaches_the_policy(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_OK")
 	_claude_run(sandbox, ALLOW_WORKFLOW_EDITS="true")
-	argv = _calls(sandbox)[0]["argv"]
-	policy = json.loads(Path(argv[argv.index("--settings") + 1]).read_text(encoding="utf-8"))
+	policy = json.loads(next((sandbox["tmp"] / "rt").glob("claude-run-*/claude-settings.json")).read_text(encoding="utf-8"))
 	assert not any("/.github/workflows/" in rule for rule in policy["permissions"]["deny"])
 
 
@@ -331,7 +411,7 @@ def test_session_id_starts_then_resumes(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_OK")
 	session = "0123abcd-0000-4000-8000-00000000abcd"
 	_claude_run(sandbox, session=session)
-	project = sandbox["home"] / ".claude" / "projects" / "p"
+	project = sandbox["tmp"] / "rt" / "claude-isolated-home" / "projects" / "p"
 	project.mkdir(parents=True)
 	(project / f"{session}.jsonl").write_text("{}\n", encoding="utf-8")
 	_claude_run(sandbox, session=session)
@@ -376,7 +456,7 @@ def test_hide_claude_md_does_not_overwrite_new_file(sandbox: dict) -> None:
 	backup_paths = list(sandbox["work"].glob("CLAUDE.md.original.*"))
 	assert len(backup_paths) == 1
 	assert backup_paths[0].read_text(encoding="utf-8") == "checkout CLAUDE.md\n"
-	assert "original preserved at" in result.stderr
+	assert "--hide-claude-md" in (sandbox["tmp"] / "helper-args").read_text(encoding="utf-8")
 
 
 def test_claude_md_stays_by_default(sandbox: dict) -> None:

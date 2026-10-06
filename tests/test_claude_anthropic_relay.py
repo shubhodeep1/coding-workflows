@@ -146,6 +146,43 @@ def test_count_tokens_path_is_allowed(chain) -> None:
 	assert status == 200
 
 
+@pytest.mark.parametrize("tool_type", ("web_search_20250305", "web_fetch_20250910", "code_execution_20250522", "mcp_toolset"))
+@pytest.mark.parametrize("path", ("/v1/messages", "/v1/messages/count_tokens"))
+def test_provider_egress_tool_is_rejected_by_host_broker(chain, tool_type: str, path: str) -> None:
+	status, _, _ = _post(chain["bridge_port"], path=path, body={"model": MODEL, "tools": [{"type": tool_type}]})
+	assert status == 400
+	assert _Upstream.seen == []
+
+
+@pytest.mark.parametrize("extra", (
+	{"mcp_servers": [{"url": "https://example.invalid"}]},
+	{"container": "x"},
+	{"tools": "x"},
+	{"tools": [1]},
+	{"tools": [{"type": 5}]},
+))
+@pytest.mark.parametrize("path", ("/v1/messages", "/v1/messages/count_tokens"))
+def test_malformed_or_egress_request_is_rejected(chain, extra: dict, path: str) -> None:
+	status, _, _ = _post(chain["bridge_port"], path=path, body={"model": MODEL, **extra})
+	assert status == 400
+	assert _Upstream.seen == []
+
+
+@pytest.mark.parametrize("tool", ({"name": "Bash", "input_schema": {}}, {"type": "custom", "name": "Bash", "input_schema": {}}))
+def test_client_executed_tool_is_forwarded(chain, tool: dict) -> None:
+	status, _, _ = _post(chain["bridge_port"], body={"model": MODEL, "tools": [tool]})
+	assert status == 200
+	assert len(_Upstream.seen) == 1
+	assert _Upstream.seen[0]["headers"]["authorization"] == "Bearer " + REAL_TOKEN
+
+
+def test_provider_egress_predicate() -> None:
+	assert relay.request_has_provider_egress({"tools": [{"type": "web_search_20250305"}]})
+	assert relay.request_has_provider_egress({"mcp_servers": []})
+	assert relay.request_has_provider_egress({"tools": [{"type": None}]})
+	assert not relay.request_has_provider_egress({"tools": [{"name": "Bash"}, {"type": "custom"}]})
+
+
 @pytest.mark.parametrize(
 	"kwargs",
 	[

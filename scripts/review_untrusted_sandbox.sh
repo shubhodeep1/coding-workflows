@@ -222,7 +222,7 @@ if [ "${engine}" = claude ]; then
 					--setting-sources "" --settings /settings.json \
 					--strict-mcp-config --disable-slash-commands \
 					--exclude-dynamic-system-prompt-sections \
-					--tools Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch --permission-mode bypassPermissions \
+					--tools Read,Grep,Glob,Bash,Edit,Write --permission-mode bypassPermissions \
 					--output-format stream-json --verbose < /prompt
 			' > "${root}/transcript.jsonl" || run_rc=$?
 		kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; broker_pid=""

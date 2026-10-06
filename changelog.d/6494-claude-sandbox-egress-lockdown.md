@@ -1,0 +1,4 @@
+<!-- changelog: security -->
+- **Claude write roles can no longer start with web tools, and the host provider relay rejects server-side web, code-execution and MCP connectors.** Claude roles now require the isolated execution helper and fall back to Codex rather than reading pool credentials from a host-side CLI.
+
+Author-controlled issue context can reach the implement model. Previously the host Claude process could read pool tokens and Git credentials, and a container with `Bash` could still request provider-side egress via the relay. The CLI tool lists no longer include `WebFetch` or `WebSearch`; the relay rejects provider-egress requests before forwarding either Messages or token-count requests. If the isolation helper is not staged, the Claude run fails closed with `AI_ENGINE_FALLBACK reason=support_missing` and Codex runs instead.
