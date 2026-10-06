@@ -1618,6 +1618,13 @@ jobs:
               -f 'labels[]=ai:reclarify-requeue' >/dev/null; then
               exit 0
             fi
+            if [ "${requeue_label_attempt}" -eq 1 ]; then
+              # A newly deployed consumer may not have synced this label yet.
+              gh label create 'ai:reclarify-requeue' --repo "${REPOSITORY}" \
+                --color fbca04 \
+                --description 'Trusted /reclarify failed before routing; poller will retry after PAT budget recovers' \
+                >/dev/null 2>&1 || true
+            fi
             [ "${requeue_label_attempt}" -eq 3 ] || sleep 2
           done
           echo '::error::Failed to label reclarify request for poller replay.'

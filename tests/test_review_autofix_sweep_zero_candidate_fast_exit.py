@@ -265,6 +265,39 @@ def test_reclarify_failure_marker_and_idle_poller_permissions() -> None:
 	assert 'RECLARIFY_REQUEUE_SWEEP_ONLY: "true"' in (REPO_ROOT / ".github/workflows/orchestrate_poll.yml").read_text()
 
 
+def test_reclarify_creates_missing_discovery_label_after_marker(tmp_path: Path) -> None:
+	"""A missing label must not strand a marker-only request on a new install."""
+	clarify = yaml.safe_load((REPO_ROOT / ".github/workflows/clarify.yml").read_text())["jobs"]["clarify"]
+	marker = next(step for step in clarify["steps"] if step["name"] == "Queue failed reclarify for poller")
+	gh = tmp_path / "gh"
+	gh.write_text('''#!/usr/bin/env bash
+if [[ "$1:$2" == "api:-X" && "$*" == *"/comments"* ]]; then
+  printf 'marker\\n' >> "$CALL_LOG"
+elif [[ "$1:$2" == "api:-X" && "$*" == *"/labels"* ]]; then
+  if [ -f "$LABEL_CREATED" ]; then
+    printf 'add\\n' >> "$CALL_LOG"
+  else
+    printf 'missing\\n' >> "$CALL_LOG"
+    exit 1
+  fi
+elif [ "$1:$2" = "label:create" ]; then
+  printf 'create\\n' >> "$CALL_LOG"
+  touch "$LABEL_CREATED"
+else
+  exit 1
+fi
+''')
+	gh.chmod(0o755)
+	log = tmp_path / "calls"
+	env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "GH_TOKEN": "fake",
+		"ISSUE_NUMBER": "7", "SOURCE_COMMENT_ID": "11", "SOURCE_COMMENT_BODY": "/reclarify",
+		"SOURCE_ASSOCIATION": "OWNER", "REPOSITORY": "o/r", "CALL_LOG": str(log),
+		"LABEL_CREATED": str(tmp_path / "label-created")}
+	result = subprocess.run(["bash", "-e", "-c", marker["run"]], env=env, capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	assert log.read_text().splitlines() == ["marker", "missing", "create", "add"]
+
+
 if __name__ == "__main__":
 	test_zero_candidate_guard_precedes_active_run_snapshot()
 	test_zero_candidate_guard_preserves_summary_log_before_exit()
@@ -278,4 +311,6 @@ if __name__ == "__main__":
 	with tempfile.TemporaryDirectory() as test_dir:
 		test_sweep_handoff_skips_only_complete_trusted_same_head(Path(test_dir))
 	test_reclarify_failure_marker_and_idle_poller_permissions()
+	with tempfile.TemporaryDirectory() as test_dir:
+		test_reclarify_creates_missing_discovery_label_after_marker(Path(test_dir))
 	print("All review_autofix_sweep zero-candidate fast-exit contract tests passed.")

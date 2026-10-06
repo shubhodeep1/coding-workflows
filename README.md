@@ -388,7 +388,8 @@ but fires a skipped run for every other comment.
 
 If a trusted `/reclarify` run fails before posting questions or an answer, clarify posts a
 source-comment marker and retries adding `ai:reclarify-requeue` up to three times with
-`github.token`. The scheduled orchestrator poller replays marked, still-current requests
+`github.token`, creating the label on the first failed add if it has not been synced yet.
+The scheduled orchestrator poller replays marked, still-current requests
 after the PAT's core quota reaches 500 remaining. A persistent label-write failure leaves
 the marker undiscoverable by the poller and fails the clarify run visibly; it must not be
 treated as a successfully queued request.
