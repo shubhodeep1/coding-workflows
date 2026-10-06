@@ -160,6 +160,10 @@ _API_WRITE_INLINE_OPTION_PREFIXES = ("-H", "-d", "-F")
 _SLUG_RE = re.compile(r"^[A-Za-z0-9_-]+/[A-Za-z0-9._-]+$")
 _REMOTE_NAME_RE = re.compile(r"^[A-Za-z0-9._][A-Za-z0-9._/-]*$")
 _REMOTE_HEAD_BRANCH_RE = re.compile(r"^ref:\s+refs/heads/([^\s]+)\s+HEAD$", re.MULTILINE)
+_GIT_CONFIG_ENV_RE = re.compile(
+	r"^(?:GIT_CONFIG(?:_COUNT|_PARAMETERS|_GLOBAL|_SYSTEM|_NOSYSTEM|_KEY_[0-9]+|_VALUE_[0-9]+)?|HOME|XDG_CONFIG_HOME)$"
+)
+_RESOLVE_ENV = {"GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat", "GIT_OPTIONAL_LOCKS": "0"}
 
 _CACHE_TTL_SECONDS = 300
 _CACHE_DIR_NAME = "claude-pr-merge-guard"
@@ -193,7 +197,9 @@ class _GitInvocation(NamedTuple):
 	subcommand: str
 	arguments: list[str]
 	warning: str = ""
-	config_override: bool = False
+	config_args: tuple[str, ...] = ()
+	config_environment: tuple[tuple[str, str], ...] = ()
+	config_uncertain: str = ""
 
 
 class _GuardTarget(NamedTuple):
@@ -205,6 +211,9 @@ class _GuardTarget(NamedTuple):
 	warning: str = ""
 	bulk: str = ""
 	push_repository: str = ""
+	config_args: tuple[str, ...] = ()
+	config_environment: tuple[tuple[str, str], ...] = ()
+	config_uncertain: str = ""
 	remote: str = ""
 
 
@@ -371,6 +380,14 @@ def _git_environment(overrides: dict[str, str]):
 		_GIT_ENVIRONMENT.reset(state)
 
 
+@contextmanager
+def _inline_git_config(config_args: tuple[str, ...], config_environment: tuple[tuple[str, str], ...]):
+	# Only local config/remote resolution uses this context. Network calls must
+	# never inherit untrusted URL rewrites from the command being guarded.
+	with _git_environment({**(_GIT_ENVIRONMENT.get() or {}), **dict(config_environment), **_RESOLVE_ENV}):
+		yield
+
+
 def _literal_guard_path(
 	path: str, cwd: str, *, shell_cd: bool = False, git_file: bool = False
 ) -> str | None:
@@ -439,6 +456,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 	working_directory: str | None = checkout
 	conditional_cd = False
 	invocations: list[_GitInvocation] = []
+	config_mutated = False
 	for operator, tokens, redirect_may_fail in segments:
 		tokens, control_prefix = _command_after_control_prefix(tokens)
 		if control_prefix:
@@ -471,32 +489,43 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			working_directory = None
 		index = 0
 		environment: dict[str, str] = {}
-		config_uncertain = False
-		config_override = False
+		config_environment: dict[str, str] = {}
+		config_uncertain = "config may change earlier in this Bash command" if config_mutated else ""
+		assignment_only_config = False
+		if tokens[0] in ("export", "declare", "typeset", "readonly", "unset") and any(
+			_GIT_CONFIG_ENV_RE.fullmatch(word.split("=", 1)[0].removesuffix("+"))
+			for word in tokens[1:]
+		):
+			config_mutated = True
 		# Bash append assignments are prefixes too; keep the following git visible.
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
 			name, value = tokens[index].split("=", 1)
-			if name.startswith("GIT_CONFIG_"):
-				config_uncertain = True
 			if name.endswith("+"):
 				# Appending to an existing Git override depends on the shell state.
 				name = name[:-1]
 				if name in ("GIT_DIR", "GIT_WORK_TREE"):
 					working_directory = None
+				if _GIT_CONFIG_ENV_RE.fullmatch(name):
+					config_uncertain = "appended git config environment cannot be resolved"
+					assignment_only_config = True
 			elif name in ("GIT_DIR", "GIT_WORK_TREE"):
 				environment[name] = value
-			if name == "GIT_CONFIG" or name.startswith("GIT_CONFIG_"):
-				config_override = True
+			elif _GIT_CONFIG_ENV_RE.fullmatch(name):
+				config_environment[name] = value
+				assignment_only_config = True
+				if "$" in value or "`" in value:
+					config_uncertain = "shell-expanded git config environment cannot be resolved"
 			index += 1
+		if index == len(tokens) and assignment_only_config:
+			config_mutated = True
 		env_index = index
 		index = _env_wrapped_git_index(tokens, index)
 		if index == -1:
 			if any("git" in word or "$" in word for word in tokens[env_index + 1:]):
-				invocations.append(_GitInvocation(checkout, {}, "push", [], "unparsed env wrapper", True))
+				invocations.append(_GitInvocation(checkout, {}, "push", [], "unparsed env wrapper", config_uncertain="unparsed env wrapper"))
 			continue
 		env_cwd = working_directory
 		if index != env_index:
-			config_override = True
 			for position in range(env_index + 1, index):
 				word = tokens[position]
 				if word in ("-C", "--chdir") or word.startswith(("-C", "--chdir=")):
@@ -507,16 +536,21 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 					env_name, env_word_value = word.split("=", 1)
 					if env_name in ("GIT_DIR", "GIT_WORK_TREE"):
 						environment[env_name] = env_word_value
+					elif _GIT_CONFIG_ENV_RE.fullmatch(env_name):
+						config_environment[env_name] = env_word_value
+						if "$" in env_word_value or "`" in env_word_value:
+							config_uncertain = "shell-expanded git config environment cannot be resolved"
+				elif word not in ("-C", "--chdir") and not word.startswith(("-C", "--chdir=")):
+					config_uncertain = "env options may change git configuration"
 		if index >= len(tokens) or (tokens[index] != "git" and not tokens[index].endswith("/git")):
 			continue
 		index += 1
 		git_cwd = env_cwd
 		uncertain = git_cwd is None
+		config_args: list[str] = []
 		while index < len(tokens) and tokens[index].startswith("-"):
 			option = tokens[index]
 			value = None
-			if option in ("-c", "--config-env") or option.startswith(("-c", "--config-env=")):
-				config_uncertain = True
 			if option in GIT_GLOBAL_OPTS_WITH_VALUE:
 				if index + 1 >= len(tokens):
 					uncertain = True
@@ -529,9 +563,14 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				value = option[2:]
 			elif option.startswith(("--git-dir=", "--work-tree=")):
 				value = option.split("=", 1)[1]
-			if option in ("-c", "--config-env") or option.startswith(("-c", "--config-env=")):
-				# Git configuration can rewrite the push destination without changing origin's stored URL.
-				config_override = True
+			if option.startswith("--config-env"):
+				config_uncertain = "git --config-env reads a variable the guard cannot see"
+			elif option == "-c" or option.startswith("-c"):
+				if value is None:
+					value = option[2:]
+				if "$" in value or "`" in value:
+					config_uncertain = "shell-expanded git -c value cannot be resolved"
+				config_args.extend(("-c", value))
 			if value is not None:
 				if option.startswith("-C"):
 					git_cwd = _literal_guard_path(value, git_cwd) if git_cwd else None
@@ -541,6 +580,14 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				elif option.startswith("--work-tree"):
 					environment["GIT_WORK_TREE"] = value
 			index += 1
+		if index < len(tokens) and tokens[index] == "config" and not any(
+			arg.startswith(("--get", "--show-")) or arg in ("-l", "--list") for arg in tokens[index + 1:]
+		):
+			config_mutated = True
+		if index < len(tokens) and tokens[index] == "remote" and tokens[index + 1:index + 2] not in (
+			[], ["get-url"], ["show"], ["-v"]
+		):
+			config_mutated = True
 		if index >= len(tokens) or tokens[index] not in GUARDED_SUBCOMMANDS:
 			continue
 		if not uncertain and git_cwd is not None:
@@ -555,9 +602,8 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			checkout if uncertain else git_cwd or checkout,
 			{} if uncertain else environment,
 			tokens[index], tokens[index + 1:],
-			"could not verify git push configuration overrides" if config_uncertain and tokens[index] == "push" else
 			"could not resolve git command directory; checking the session checkout instead" if uncertain else "",
-			config_override,
+			tuple(config_args), tuple(config_environment.items()), config_uncertain,
 		))
 	return invocations
 
@@ -585,8 +631,13 @@ def _push_repository_is_location(word: str) -> bool:
 
 def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarget]:
 	"""Identify the destination branches and source tips of a git push."""
+	config_fields = {
+		"config_args": invocation.config_args,
+		"config_environment": invocation.config_environment,
+		"config_uncertain": invocation.config_uncertain,
+	}
 	if invocation.warning:
-		return [_GuardTarget(invocation.cwd, {}, "", "HEAD", True, invocation.warning)]
+		return [_GuardTarget(invocation.cwd, {}, "", "HEAD", True, invocation.warning, **config_fields)]
 	positionals: list[str] = []
 	option_repository = ""
 	remote_provided = False
@@ -637,7 +688,7 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 		uncertain = True
 	if uncertain:
 		return [_GuardTarget(checkout, {}, "", "HEAD", True,
-			"could not resolve git push options; destination branch is unknown")]
+			"could not resolve git push options; destination branch is unknown", **config_fields)]
 	# Git treats the first positional as the repository even when --repo was set.
 	push_repository = positionals[0] if positionals else option_repository
 	refspecs = positionals[1:]
@@ -645,13 +696,15 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 	# rather than skipping its empty-branch warning before that check runs.
 	remote_value = push_repository
 	if delete:
-		# No merged-PR check for deletions, but a foreign destination still asks.
-		return [_GuardTarget(invocation.cwd, invocation.environment, "", "", True, remote=remote_value)] if remote_value and remote_value != "origin" else []
+		# No merged-PR check for deletions, but validate the push URL first.
+		return [_GuardTarget(invocation.cwd, invocation.environment, "", "", True,
+			push_repository=push_repository, remote=remote_value, **config_fields)]
 	if not refspecs and tags and not bulk:
-		return [_GuardTarget(invocation.cwd, invocation.environment, "", "", True, remote=remote_value)] if remote_value and remote_value != "origin" else []
+		return [_GuardTarget(invocation.cwd, invocation.environment, "", "", True,
+			push_repository=push_repository, remote=remote_value, **config_fields)]
 	if not refspecs:
 		return [_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
-			bulk=bulk, push_repository=push_repository)]
+			bulk=bulk, push_repository=push_repository, **config_fields)]
 	targets: list[_GuardTarget] = []
 	for refspec in refspecs:
 		refspec = refspec.removeprefix("+")
@@ -672,21 +725,23 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 		if branch == "":
 			continue
 		if branch is None:
-			targets.append(_GuardTarget(invocation.cwd, invocation.environment, None, source, True, remote=remote_value))
+			targets.append(_GuardTarget(invocation.cwd, invocation.environment, None, source, True,
+				push_repository=push_repository, **config_fields))
 			continue
 		targets.append(_GuardTarget(invocation.cwd, invocation.environment, branch, source, True,
-			push_repository=push_repository))
+			push_repository=push_repository, **config_fields))
 	if bulk:
 		targets.append(_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", True,
-			bulk=bulk, push_repository=push_repository))
-	if not targets and remote_value and remote_value != "origin":
-		# Every refspec was a branch deletion; only the remote needs checking.
-		targets.append(_GuardTarget(invocation.cwd, invocation.environment, "", "", True, remote=remote_value))
+			bulk=bulk, push_repository=push_repository, **config_fields))
+	if not targets:
+		# Every refspec was a deletion or a tag; only the URL needs checking.
+		targets.append(_GuardTarget(invocation.cwd, invocation.environment, "", "", True,
+			push_repository=push_repository, remote=remote_value, **config_fields))
 	return targets
 
 
 def _contains_shell_substitution(command: str) -> bool:
-	"""Return whether Bash would expand command substitution in the string."""
+	"""Return whether Bash would expand command or process substitution."""
 	single_quoted = False
 	double_quoted = False
 	escaped = False
@@ -704,6 +759,8 @@ def _contains_shell_substitution(command: str) -> bool:
 			double_quoted = not double_quoted
 			continue
 		if not single_quoted and (character == "`" or command.startswith("$(", index)):
+			return True
+		if not single_quoted and not double_quoted and command.startswith(("<(", ">("), index):
 			return True
 	return False
 
@@ -857,6 +914,49 @@ def git_subcommands(command: str) -> set[str]:
 	return found
 
 
+def _env_split_string_has_guarded_git(command: str, depth: int = 0) -> bool:
+	"""Return whether GNU env split-string input can launch guarded Git."""
+	if depth >= 4:
+		return True
+	try:
+		segments = _shell_segments(command)
+	except ValueError:
+		return bool(re.search(r"(?:^|[/\s])git\s+(?:commit|push)\b", command))
+	for tokens in segments:
+		tokens, _ = _command_after_control_prefix(tokens)
+		index = 0
+		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
+			index += 1
+		while index < len(tokens) and (tokens[index] == "env" or tokens[index].endswith("/env")):
+			option_index = index + 1
+			while option_index < len(tokens):
+				option = tokens[option_index]
+				split_value = ""
+				if option in ("-S", "--split-string"):
+					option_index += 1
+					if option_index < len(tokens):
+						split_value = tokens[option_index]
+				elif option.startswith("--split-string="):
+					split_value = option.split("=", 1)[1]
+				elif option.startswith("-S") and option != "-S":
+					split_value = option[2:]
+				elif option in ("-u", "--unset", "-C", "--chdir"):
+					option_index += 2
+					continue
+				elif not (option.startswith("-") or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", option)):
+					break
+				if split_value and (
+					# Shell or env expansion may supply the executable and its arguments.
+					"$" in split_value or "`" in split_value
+					or git_subcommands(split_value) & GUARDED_SUBCOMMANDS
+					or _env_split_string_has_guarded_git(split_value, depth + 1)
+				):
+					return True
+				option_index += 1
+			index = option_index
+	return False
+
+
 def extract_repo_slug(url: str) -> str:
 	"""Derive `<owner>/<repo>` from a git remote URL, or "" when it is not
 	derivable.
@@ -940,76 +1040,128 @@ def repo_slug(cwd: str) -> str:
 	return extract_repo_slug(out)
 
 
-def _default_push_remote(cwd: str) -> str:
+def _default_push_remote(
+	cwd: str, config_args: tuple[str, ...] = (), config_environment: tuple[tuple[str, str], ...] = ()
+) -> str:
 	branch = current_branch(cwd)
 	keys = ([f"branch.{branch}.pushRemote"] if branch else []) + ["remote.pushDefault"]
 	if branch:
 		keys.append(f"branch.{branch}.remote")
-	for key in keys:
-		code, out, _ = _run(["git", "config", "--get", key], cwd, _GIT_TIMEOUT_SECONDS)
-		if code == 0 and out.strip():
-			return out.strip()
-	code, out, _ = _run(["git", "remote"], cwd, _GIT_TIMEOUT_SECONDS)
+	with _inline_git_config(config_args, config_environment):
+		for key in keys:
+			code, out, _ = _run(["git", "--no-pager", *config_args, "config", "--get", key], cwd, _GIT_TIMEOUT_SECONDS)
+			if code == 0 and out.strip():
+				return out.strip()
+		code, out, _ = _run(["git", "--no-pager", *config_args, "remote"], cwd, _GIT_TIMEOUT_SECONDS)
 	if code == 0 and len(out.splitlines()) == 1:
 		return out.strip()
 	return "origin"
 
 
-def _remote_push_urls(name: str, cwd: str) -> list[str]:
+def _remote_push_urls(name: str, cwd: str, config_args: tuple[str, ...] = ()) -> list[str]:
 	if not _REMOTE_NAME_RE.fullmatch(name) or ".." in name:
 		return []
-	code, configured, _ = _run(["git", "config", "--get-all", f"remote.{name}.pushurl"], cwd, _GIT_TIMEOUT_SECONDS)
-	if code not in (0, 1) or (code == 0 and any(not url for url in configured.splitlines())):
-		return []
-	# Git applies insteadOf/pushInsteadOf here, unlike a raw config lookup.
-	code, out, _ = _run(["git", "remote", "get-url", "--push", "--all", name], cwd, _GIT_TIMEOUT_SECONDS)
+	code, out, _ = _run(["git", "--no-pager", *config_args, "config", "--get-all", f"remote.{name}.pushurl"], cwd, _GIT_TIMEOUT_SECONDS)
+	if code == 0:
+		return out.splitlines()
+	code, out, _ = _run(["git", "--no-pager", *config_args, "config", "--get-all", f"remote.{name}.url"], cwd, _GIT_TIMEOUT_SECONDS)
 	return out.splitlines() if code == 0 else []
 
 
-def _resolve_push_destination(cwd: str, push_repository: str) -> _PushDestination:
-	token = push_repository or _default_push_remote(cwd)
-	# A remote name is safe to show. Strip URL userinfo before printing a URL.
-	label = re.sub(r"[^/@]*@", "", token) if "@" in token else token
-	urls = _remote_push_urls(token, cwd)
-	if urls:
-		slugs = tuple(dict.fromkeys(extract_repo_slug(url) for url in urls))
-		if "" in slugs:
-			return _PushDestination(label, (), token, "one or more push URLs are not GitHub repositories")
-		# Fetching a remote with a different pushurl would inspect the *fetch*
-		# repository's history, not the destination's. Degrade to confirmation.
-		code, out, _ = _run(["git", "remote", "get-url", token], cwd, _GIT_TIMEOUT_SECONDS)
-		history_remote = token if code == 0 and slugs == (extract_repo_slug(out),) else ""
-		return _PushDestination(label, slugs, history_remote, "")
-	# Push-only rewrites do not appear in ls-remote --get-url for literal URLs.
-	# Reject rather than trusting the raw spelling when one is configured.
-	if "://" in token or ("@" in token and ":" in token):
-		code, _, _ = _run(["git", "config", "--get-regexp", r"^url\..*\.pushinsteadof$"], cwd, _GIT_TIMEOUT_SECONDS)
-		if code != 1:
-			return _PushDestination(label, (), "", "cannot verify literal URL with push-only rewrites")
-		code, out, _ = _run(["git", "ls-remote", "--get-url", token], cwd, _GIT_TIMEOUT_SECONDS)
-		if code != 0 or not out.strip():
-			return _PushDestination(label, (), "", "cannot resolve the effective push URL")
-		literal_slugs = tuple(dict.fromkeys(extract_repo_slug(url) for url in out.splitlines()))
-		if "" in literal_slugs:
-			return _PushDestination(label, (), "", "effective push URL is not a GitHub repository")
-		return _PushDestination(label, literal_slugs, "", "")
-	slug = extract_repo_slug(token)
-	if not slug:
-		return _PushDestination(label, (), "", "not a configured GitHub remote or URL")
-	# A literal URL can reuse a configured remote's history only when that
-	# remote's fetch URL names the same repository.
-	history_remote = ""
+def _effective_remote_push_urls(name: str, cwd: str, config_args: tuple[str, ...]) -> list[str] | None:
 	code, out, _ = _run(
-		["git", "config", "--get-regexp", r"^remote\..*\.url$"], cwd, _GIT_TIMEOUT_SECONDS
+		["git", "--no-pager", *config_args, "remote", "get-url", "--push", "--all", name],
+		cwd, _GIT_TIMEOUT_SECONDS,
 	)
-	if code == 0:
-		for line in out.splitlines():
-			key, _, url = line.partition(" ")
-			name = key[len("remote."):-len(".url")]
-			if _REMOTE_NAME_RE.fullmatch(name) and ".." not in name and extract_repo_slug(url) == slug:
-				history_remote = name
-				break
-	return _PushDestination(label, (slug,), history_remote, "")
+	return out.splitlines() if code == 0 and out.strip() else None
+
+
+def _url_rewrite_rules(
+	cwd: str, config_args: tuple[str, ...]
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]] | None:
+	code, out, _ = _run(
+		["git", "--no-pager", *config_args, "config", "-z", "--get-regexp", r"^url\..*\.(pushinsteadof|insteadof)$"],
+		cwd, _GIT_TIMEOUT_SECONDS,
+	)
+	if code == 1 and not out:
+		return [], []
+	if code != 0 or (out and not out.endswith("\0")):
+		return None
+	push_rules: list[tuple[str, str]] = []
+	fetch_rules: list[tuple[str, str]] = []
+	for entry in out.split("\0")[:-1]:
+		key, separator, prefix = entry.partition("\n")
+		if not separator or not key.startswith("url.") or not prefix:
+			return None
+		base, dot, kind = key[4:].rpartition(".")
+		if not dot or not base or kind not in ("pushinsteadof", "insteadof"):
+			return None
+		(push_rules if kind == "pushinsteadof" else fetch_rules).append((prefix, base))
+	return push_rules, fetch_rules
+
+
+def _rewrite_push_url(
+	url: str, rules: tuple[list[tuple[str, str]], list[tuple[str, str]]]
+) -> str:
+	for candidates in rules:
+		longest = 0
+		rewritten = url
+		for prefix, base in candidates:
+			if len(prefix) > longest and url.startswith(prefix):
+				longest = len(prefix)
+				rewritten = base + url[len(prefix):]
+		if longest:
+			return rewritten
+	return url
+
+
+def _resolve_push_destination(
+	cwd: str, push_repository: str, config_args: tuple[str, ...] = (),
+	config_environment: tuple[tuple[str, str], ...] = (),
+) -> _PushDestination:
+	with _inline_git_config(config_args, config_environment):
+		token = push_repository or _default_push_remote(cwd, config_args, config_environment)
+	# Literal URLs may carry credentials outside userinfo (e.g. query strings).
+	label = token if _REMOTE_NAME_RE.fullmatch(token) and ".." not in token else "<explicit URL>"
+	with _inline_git_config(config_args, config_environment):
+		urls = _remote_push_urls(token, cwd, config_args)
+		if urls:
+			effective_urls = _effective_remote_push_urls(token, cwd, config_args)
+			if effective_urls is None:
+				return _PushDestination(label, (), "", "could not resolve the effective push URL")
+			slugs = tuple(dict.fromkeys(extract_repo_slug(url) for url in effective_urls))
+			if "" in slugs:
+				return _PushDestination(label, (), "", "a url.*.insteadOf/pushInsteadOf rewrite sends the push to a non-GitHub destination")
+			# Inline config is never used for the hook's fetch or ls-remote.
+			code, out, _ = _run(["git", "--no-pager", *config_args, "config", "--get", f"remote.{token}.url"], cwd, _GIT_TIMEOUT_SECONDS)
+			history_remote = ""
+			if not config_args and not config_environment and code == 0 and slugs == (extract_repo_slug(out),):
+				fetch_code, fetch_url, _ = _run(["git", "--no-pager", "remote", "get-url", token], cwd, _GIT_TIMEOUT_SECONDS)
+				if fetch_code == 0 and (extract_repo_slug(fetch_url) == slugs[0] or fetch_url.startswith("/")):
+					history_remote = token
+			return _PushDestination(label, slugs, history_remote, "")
+		rules = _url_rewrite_rules(cwd, config_args)
+		if rules is None:
+			return _PushDestination(label, (), "", "could not resolve the effective push URL")
+		effective_slug = extract_repo_slug(_rewrite_push_url(token, rules))
+		if not effective_slug:
+			return _PushDestination(label, (), "", "a url.*.insteadOf/pushInsteadOf rewrite sends the push to a non-GitHub destination")
+		# A literal URL can reuse a configured remote only without inline config.
+		history_remote = ""
+		if not config_args and not config_environment:
+			code, out, _ = _run(
+				["git", "--no-pager", "config", "--get-regexp", r"^remote\..*\.url$"], cwd, _GIT_TIMEOUT_SECONDS
+			)
+			if code == 0:
+				for line in out.splitlines():
+					key, _, url = line.partition(" ")
+					name = key[len("remote."):-len(".url")]
+					if _REMOTE_NAME_RE.fullmatch(name) and ".." not in name and extract_repo_slug(url) == effective_slug:
+						fetch_code, fetch_url, _ = _run(["git", "--no-pager", "remote", "get-url", name], cwd, _GIT_TIMEOUT_SECONDS)
+						if fetch_code == 0 and (extract_repo_slug(fetch_url) == effective_slug or fetch_url.startswith("/")):
+							history_remote = name
+							break
+		return _PushDestination(label, (effective_slug,), history_remote, "")
 
 
 def is_ancestor_of(sha: str, tip: str, cwd: str) -> bool:
@@ -1561,6 +1713,18 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 
 	if _guard_disabled():
 		return 0, ""
+	# shlex discards process substitutions as redirects, including those in
+	# GIT_CONFIG_GLOBAL=<(...) assignments. Do not trust a parsed destination.
+	if ("<(" in command or ">(" in command) and _contains_shell_substitution(command) and (
+		guarded_git_subcommands or (re.search(r"\bgit\b", command) and re.search(r"\b(?:commit|push)\b", command))
+	):
+		_request_confirmation("process substitution may change the git commit/push destination")
+		return 0, ""
+	# GNU env splits this argument into a command after the shell has parsed it.
+	# Its embedded git options/assignments cannot be resolved from shell tokens.
+	if _env_split_string_has_guarded_git(command):
+		_request_confirmation("env --split-string may execute git commit/push with an unknown destination")
+		return 0, ""
 	if not guarded_git_subcommands:
 		# Bash may execute earlier lines before a later unmatched quote. Raw-text
 		# searches miss quoted/escaped spellings of git and its subcommands.
@@ -1583,24 +1747,34 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
-		if invocation.subcommand == "push" and invocation.warning == "could not verify git push configuration overrides":
-			return 2, "BLOCKED: git push configuration overrides may rewrite the destination URL. Use a configured GitHub remote without inline Git configuration."
 		if invocation.subcommand == "push" and invocation.warning == "unparsed env wrapper":
 			unverified_destinations.add("unparsed env-wrapped Git command")
 			continue
 		if invocation.subcommand == "push" and invocation.warning:
 			uncertain_push_reasons.append(invocation.warning)
-		if invocation.subcommand == "commit" and invocation.config_override and invocation.warning.startswith("could not resolve git command directory"):
-			_request_confirmation(invocation.warning)
-			continue  # A different checkout may contain the commit; do not query this one.
-		if invocation.subcommand == "push" and invocation.config_override:
-			unverified_destinations.add("per-command Git configuration may redirect the push")
-			continue  # Origin's PR history cannot authorize a push with overridden configuration.
 		targets = (
 			_push_targets(invocation, checkout) if invocation.subcommand == "push" else
 			[_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", False, invocation.warning)]
 		)
 		for target in targets:
+			if target.config_uncertain:
+				unknown_destination_reasons.append(target.config_uncertain)
+				continue
+			with _git_environment(target.environment):
+				branch = target.branch or current_branch(target.cwd)
+				if target.reaches_remote and not target.warning.startswith("could not resolve git push"):
+					destination = _resolve_push_destination(
+						target.cwd, target.push_repository, target.config_args, target.config_environment,
+					)
+					if destination.failure:
+						blocks.append(
+							f"BLOCKED: could not verify the push destination `{destination.label}` "
+							f"as a GitHub <owner>/<repo> ({destination.failure}). The PR-merge guard "
+							f"(CLAUDE.md §21) must check that repository's PR status for `{branch}` "
+							"before the push. Push to a GitHub remote, or set "
+							"CLAUDE_PR_MERGE_GUARD=off for this session if this destination is intended."
+						)
+						continue
 			if target.branch is None:
 				unresolved_push_destinations.append(
 					"could not resolve git push destination; shell expansion may change the pushed branch."
@@ -1613,6 +1787,11 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 				continue
 			if target.warning:
 				_warn(target.warning)  # Unresolved directory: the session checkout is checked.
+			if not target.tip:
+				with _git_environment(target.environment):
+					if destination.slugs != (repo_slug(target.cwd),):
+						unverified_destinations.add("push destination differs from checkout repository")
+						continue
 			if target.remote and target.remote != "origin":
 				# Even a matching explicit URL may be rewritten by url.*.insteadOf.
 				if "://" in target.remote or target.remote.startswith("git@"):
@@ -1627,7 +1806,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 					unverified_destinations.add(push_slug or "an unverified remote")
 					continue
 			if not target.tip:
-				continue  # A deletion or tag-only push cannot strand a branch commit.
+				continue  # URL checked; a deletion or tag cannot strand a branch commit.
 			if target.tip != "HEAD":
 				with _git_environment(target.environment):
 					code, resolved_source_sha, _ = _run(
@@ -1643,24 +1822,8 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 				else:
 					target = target._replace(tip=resolved_source_sha.strip())
 			with _git_environment(target.environment):
-				branch = target.branch or current_branch(target.cwd)
 				if target.reaches_remote:
-					destination = _resolve_push_destination(target.cwd, target.push_repository)
-					if destination.failure:
-						blocks.append(
-							f"BLOCKED: could not verify the push destination `{destination.label}` "
-							f"as a GitHub <owner>/<repo> ({destination.failure}). The PR-merge guard "
-							f"(CLAUDE.md §21) must check that repository's PR status for `{branch}` "
-							"before the push. Push to a GitHub remote, or set "
-							"CLAUDE_PR_MERGE_GUARD=off for this session if this destination is intended."
-						)
-						continue
-					base = default_branch(
-						target.cwd, destination.history_remote or (
-							target.push_repository if not _remote_push_urls(target.push_repository, target.cwd)
-							else ""
-						),
-					)
+					base = default_branch(target.cwd, destination.history_remote)
 					slugs = destination.slugs
 					remote = destination.history_remote
 				else:

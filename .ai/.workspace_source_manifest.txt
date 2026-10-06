@@ -221,11 +221,17 @@ changelog.d/6217-read-profile-write-guard.md
 changelog.d/6222-review-command-isolation.md
 changelog.d/6230-security-audit-oversized-scoped-files.md
 changelog.d/6231-integration-judge-scope-guard.md
+changelog.d/6235-read-profile-support-lock.md
+changelog.d/6236-read-profile-claude-isolation.md
 changelog.d/6248-static-context-symlink-guard.md
 changelog.d/6249-merge-guard-ampersand-redirect.md
 changelog.d/6262-clarify-respond-standalone.md
+changelog.d/6262-read-profile-claude-isolation.md
+changelog.d/6263-push-guard-destination-repo.md
+changelog.d/6282-read-profile-claude-isolation.md
 changelog.d/6286-pr-merge-guard-appended-git-dir.md
 changelog.d/6293-numeric-push-refspec-redirect.md
+changelog.d/6298-claude-read-role-isolation.md
 changelog.d/6304-pr-merge-guard-spaced-numeric-refspec.md
 changelog.d/6321-merge-guard-empty-quote-fd.md
 changelog.d/6322-pr-merge-guard-single-json-output.md
@@ -489,6 +495,8 @@ scripts/clarify_sandbox/Dockerfile
 scripts/claude_anthropic_relay.py
 scripts/claude_engine.py
 scripts/claude_pool_token.sh
+scripts/claude_read_isolated_run.sh
+scripts/claude_read_snapshot.py
 scripts/claude_settings.json.tmpl
 scripts/codex_heartbeat.sh
 scripts/codex_helpers.sh
@@ -795,6 +803,8 @@ tests/test_claude_engine.py
 tests/test_claude_engine_utility_roles.py
 tests/test_claude_md_section_numbers.py
 tests/test_claude_pool_token.py
+tests/test_claude_read_isolated_run.py
+tests/test_claude_read_isolation_wiring_contract.py
 tests/test_claude_settings_policy.py
 tests/test_claude_template_live_parity.py
 tests/test_codex_agent_isolation_contract.py
