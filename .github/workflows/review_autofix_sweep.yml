@@ -98,7 +98,7 @@ jobs:
       contents: read
       pull-requests: read
       issues: read
-      actions: read
+      actions: write
     steps:
       - name: Check out budget helper
         uses: actions/checkout@v5

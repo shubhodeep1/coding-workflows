@@ -193,7 +193,9 @@ def test_sweep_batches_only_verified_current_head_handoffs() -> None:
 	"""Retired Claude hand-offs must not add GraphQL reads or suppress the sweep."""
 	workflow = yaml.safe_load(REVIEW_AUTOFIX_SWEEP.read_text())
 	job = workflow["jobs"]["sweep"]
-	assert job["permissions"]["pull-requests"] == "read" and job["permissions"]["actions"] == "read"
+	assert job["permissions"]["pull-requests"] == "read" and job["permissions"]["actions"] == "write"
+	rerun = next(item for item in job["steps"] if item["name"] == "Re-run cancelled CI failed jobs once")
+	assert rerun["env"]["GH_TOKEN"] == "${{ github.token }}"
 	step = next(item for item in job["steps"] if item["name"].startswith("Enumerate open PRs"))
 	assert step["env"]["READ_TOKEN"] == "${{ github.token }}"
 	assert step["env"]["GH_TOKEN"] == "${{ secrets.GH_PAT }}"
