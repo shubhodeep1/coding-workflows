@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: B\n\nRATIONALE:\nQ1: Option A fixes the root cause. Today `scripts/workflow_failure_heal_intake.sh:190` only checks that `source_repo` is in `.github/ai/consumer_repos.json`. A GitHub Actions OIDC token, signed by GitHub, binds the report to the repository that actually ran the reporting job. Every consumer reports through the reusable `workflow_failure_heal.yml@stable` (see `workflow-templates/ai-workflow-failure-heal.yml`), and in a reusable workflow the token's `repository` claim is the caller's repository. That claim is exactly what has to match `source_repo`. Option B adds a secret that every consumer must provision and rotate. Option C still lets a reporter cite another repository's real failure and send failure evidence that nobody has checked.\nQ2: Option B keeps heals working for consumers that have not yet synced the new `@stable` wrappers, so nothing breaks before the sync lands. It still tightens things right away: an unauthenticated report must pass every API binding check, and a report that carries a token is always verified. Option A would silently stop heals across the whole fleet until every consumer syncs. Option C's fail-closed default has the same effect unless an operator acts, which goes against the requirement that new variables default to keeping current behaviour.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/workflow_failure_heal_intake.sh (lines 157-197: payload validation, `SOURCE_REPO` extraction, `skip-reason` call at line 190)\n    - scripts/workflow_failure_heal.py (`validate-payload`, `skip-reason` subcommands)\n    - .github/workflows/workflow_failure_heal.yml (label reporter), scripts/workflow_failure_heal_report.sh, scripts/workflow_failure_heal_autofix_report.sh (the review/autofix reporter in review_autofix.yml)\n    - workflow-templates/ai-workflow-failure-heal.yml and workflow-templates/ai-review.yml (consumer wrappers; their `permissions:` must grant `id-token: write`)\n    - .github/workflows/internal-workflow-failure-heal.yml, .github/workflows/internal-review.yml (source-repo callers)\n  steps:\n    - In each reporter, request an OIDC token with audience `coding-workflows-heal-report` (from `ACTIONS_ID_TOKEN_REQUEST_URL` / `ACTIONS_ID_TOKEN_REQUEST_TOKEN`). Put it in a new top-level `client_payload` property, `report_identity`, next to `schema_version` and `report`; this stays under the 10-property cap. If no token can be obtained (the caller did not grant `id-token: write`), log `WORKFLOW_HEAL_REPORT identity=absent reason=...` and send without it. The token must never appear in logs.\n    - Add `id-token: write` to the `permissions:` of the consumer wrappers and the internal callers that invoke a reporter.\n    - In the intake, before the `skip-reason` call, verify the token in a new `workflow_failure_heal.py verify-report-identity` subcommand. Check the RS256 signature against the JWKS at `https://token.actions.githubusercontent.com/.well-known/jwks`. Require `iss` = `https://token.actions.githubusercontent.com`, `aud` = `coding-workflows-heal-report`, and `repository` == `source_repo`. Bound freshness with `iat` no older than `WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS` (default 3600) rather than `exp` alone, so a queued intake run is not rejected just because it started late. Any verification error rejects the report.\n    - After identity checks, bind the claims through the existing GitHub API paths. For a label report, the claimed issue or PR must exist in `source_repo` and carry the claimed label. Every claimed run ID must belong to `source_repo` (`repos/${SOURCE_REPO}/actions/runs/<id>`, already fetched per run at line 219) with conclusion failure. If a `head_sha` is given, it must match the run or PR head. Reject the report on any mismatch.\n    - Log `WORKFLOW_HEAL report_auth=verified|absent|rejected reason=<...> source=<repo>`. A rejection sends a Telegram WARNING and exits 0 without filing an issue.\n    - Add contract tests under tests/ covering: a forged `repository` claim, a wrong audience, a stale `iat`, a mismatch between the claimed run and the repository, and a label that is absent on the claimed issue.\n  replaces_acceptance_criterion: none\n  equivalence_argument: It implements the finding's recommendation, \"authenticate reports with a per-repository identity \u2026 then fetch and bind the claimed issue, label, and failed run\", using GitHub's own per-repository identity instead of a shared secret.\n  reversibility: The token is an additive payload field and verification sits behind the Q2 variable, so either can be backed out without changing the payload schema that older reporters send.\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/workflow_failure_heal_intake.sh\n    - new repository variable WORKFLOW_HEAL_REQUIRE_REPORT_AUTH (default `false` in both the intake script and workflow-failure-heal-intake.yml)\n  steps:\n    - Read `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH` with an in-script default of `false`. Accept only `true` or `false`; any other value logs a warning and falls back to `false`.\n    - If `report_identity` is present, always verify it, whatever the variable says, and reject on failure.\n    - If it is absent and the variable is `false`, run every API binding check. Proceed only if all pass, then log `report_auth=absent` and send a Telegram WARNING naming the unsynced source repository.\n    - If it is absent and the variable is `true`, skip the report with `reason=unauthenticated_report` and a WARNING.\n    - Document the variable in README.md's variable table and in agents.md's workflow failure heal entry.\n  replaces_acceptance_criterion: none\n  equivalence_argument: Reports that carry an identity get the full protection immediately. Reports without one still face stricter binding checks than today. Setting the variable to `true` closes the gap entirely once consumers have synced.\n  reversibility: Set the variable to either value to move between transition mode and enforcement. No code change is needed.",
+  "fingerprint": "a778a49d253bd29a4abfc464ebd96ac8730d23feec8920f0601f7289dba34065",
+  "lineage": {
+    "issue_number": 6559,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37454146683",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37454146683",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6559"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261006111637_99f0b2da80",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6559,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37454146683"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6559",
+  "timestamps": {
+    "created_at": "2026-10-06T11:16:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
