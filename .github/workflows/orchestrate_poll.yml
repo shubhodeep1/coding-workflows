@@ -712,6 +712,10 @@ jobs:
       # and the account pool are fetched only when a tick has work and at
       # least one judge role resolves to Claude, or an active project label
       # selects Claude. The per-project judge still resolves its own labels.
+      # A standalone stall judge (run_standalone_stall_recovery) resolves
+      # STALL_JUDGE from its own issue's labels, not the tracking labels, so
+      # when no tracking issue selected Claude the step also checks the
+      # STALL_JUDGE default and open non-tracking `ai:engine-claude` issues.
       - name: Resolve AI engine
         id: ai_engine
         if: steps.find_tracking.outputs.has_work == 'true'
@@ -724,6 +728,9 @@ jobs:
           AI_ENGINE_RB_JUDGE: ${{ vars.AI_ENGINE_RB_JUDGE || '' }}
           CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
           AI_ENGINE_LABELS: ""
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          ENABLE_STANDALONE_STALL_RECOVERY: ${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}
+          ENABLE_STALL_JUDGE: ${{ vars.ENABLE_STALL_JUDGE || 'true' }}
         run: |
           set -euo pipefail
           any_claude=false
@@ -742,6 +749,58 @@ jobs:
               echo "::warning::Failed to source scripts/ai_engine.sh; continuing with codex defaults." >&2
             fi
           fi
+          decided_by=none
+          if [ "${any_claude}" = "true" ]; then
+            decided_by=tracking
+          fi
+          # Standalone stall judges (same truthy test as is_truthy in
+          # scripts/orchestrate_poll_process.sh) pick their engine from the
+          # standalone issue's own labels.
+          standalone_flag_truthy() {
+            case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+              1|true|yes|on) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          if [ "${any_claude}" != "true" ] \
+            && standalone_flag_truthy "${ENABLE_STANDALONE_STALL_RECOVERY:-true}" \
+            && standalone_flag_truthy "${ENABLE_STALL_JUDGE:-true}"; then
+            if ! declare -F ai_engine_for_role >/dev/null 2>&1 && [ -f scripts/ai_engine.sh ]; then
+              # shellcheck source=/dev/null
+              source scripts/ai_engine.sh || echo "::warning::Failed to source scripts/ai_engine.sh for the standalone stall judge check." >&2
+            fi
+            if declare -F ai_engine_for_role >/dev/null 2>&1 \
+              && [ "$(AI_ENGINE_LABELS='[]' ai_engine_for_role STALL_JUDGE || echo codex)" = "claude" ]; then
+              any_claude=true
+              decided_by=standalone_default
+            else
+              # §14 audit: find_tracking's listing is AND-scoped to
+              # ai:orchestrator-tracking, and the poller's batched
+              # _fetch_candidate_issue_details_graphql / _candidate_details_json
+              # cache is built later inside "Process each tracking issue",
+              # after the pool must already exist. This read runs only when
+              # neither the tracking labels nor the STALL_JUDGE default chose
+              # Claude, so the default configuration makes no extra call.
+              # Fail open: a failed read keeps any_claude=false and the
+              # judge falls back to the sandboxed OpenCode path.
+              source scripts/gh_helpers.sh 2>/dev/null || true
+              type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+              standalone_claude_issues=""
+              if standalone_claude_issues="$(gh_retry gh issue list --repo "${GITHUB_REPOSITORY}" --label "ai:engine-claude" --state open --json number,labels --limit 100 2>/dev/null)"; then
+                if printf '%s' "${standalone_claude_issues}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+                  if printf '%s' "${standalone_claude_issues}" | jq -e 'any(.[]; any(.labels[]?; .name=="ai:engine-claude") and (any(.labels[]?; .name=="ai:codex")|not) and (any(.labels[]?; .name=="ai:orchestrator-tracking")|not))' >/dev/null 2>&1; then
+                    any_claude=true
+                    decided_by=standalone_label
+                  fi
+                else
+                  echo "::warning::Standalone ai:engine-claude issue listing was not a JSON array; skipping the Claude credential fetch for standalone stall judges." >&2
+                fi
+              else
+                echo "::warning::Could not list open ai:engine-claude issues; skipping the Claude credential fetch for standalone stall judges." >&2
+              fi
+            fi
+          fi
+          echo "Claude credential preflight: any_claude=${any_claude} decided_by=${decided_by}"
           echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
 
       - name: Install Claude Code CLI

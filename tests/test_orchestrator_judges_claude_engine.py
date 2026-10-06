@@ -927,7 +927,9 @@ def test_poll_preflight_installs_for_label_even_with_global_codex(tmp_path: Path
 	preflight = next(step["run"] for step in steps if step.get("name") == "Resolve AI engine")
 	issue_file = tmp_path / "tracking_issues.json"
 	output_file = tmp_path / "github_output"
-	env = {**os.environ, "RUNTIME_DIR": str(tmp_path), "GITHUB_OUTPUT": str(output_file), "AI_ENGINE": "codex", "AI_ENGINE_LABELS": ""}
+	# Tracking-only semantics: the standalone stall-judge check is covered below.
+	env = {**os.environ, "RUNTIME_DIR": str(tmp_path), "GITHUB_OUTPUT": str(output_file), "AI_ENGINE": "codex", "AI_ENGINE_LABELS": "",
+		"ENABLE_STANDALONE_STALL_RECOVERY": "false"}
 	for role in ("WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE", "RB_JUDGE"):
 		env[f"AI_ENGINE_{role}"] = ""
 	for engine, labels, expected in (
@@ -959,11 +961,113 @@ def test_poll_preflight_fails_open_when_engine_helper_cannot_be_sourced(tmp_path
 	(tmp_path / "scripts").mkdir()
 	(tmp_path / "scripts" / "ai_engine.sh").write_text("return 42\n", encoding="utf-8")
 	output_file = tmp_path / "github_output"
-	env = {**os.environ, "RUNTIME_DIR": str(tmp_path), "GITHUB_OUTPUT": str(output_file), "AI_ENGINE": "claude"}
+	env = {**os.environ, "RUNTIME_DIR": str(tmp_path), "GITHUB_OUTPUT": str(output_file), "AI_ENGINE": "claude",
+		"ENABLE_STANDALONE_STALL_RECOVERY": "false"}
 	result = subprocess.run(["bash", "-c", preflight], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
 	assert result.returncode == 0, result.stderr
 	assert output_file.read_text(encoding="utf-8").strip() == "any_claude=false"
 	assert "Failed to source scripts/ai_engine.sh; continuing with codex defaults." in result.stderr
+
+
+def test_poll_preflight_covers_standalone_stall_judge_contract() -> None:
+	resolve = next(step for step in _poll_steps() if step.get("name") == "Resolve AI engine")
+	assert resolve["env"]["GH_TOKEN"] == "${{ secrets.GH_PAT }}"
+	assert resolve["env"]["ENABLE_STANDALONE_STALL_RECOVERY"] == "${{ vars.ENABLE_STANDALONE_STALL_RECOVERY || 'true' }}"
+	assert resolve["env"]["ENABLE_STALL_JUDGE"] == "${{ vars.ENABLE_STALL_JUDGE || 'true' }}"
+	run = resolve["run"]
+	assert "AI_ENGINE_LABELS='[]' ai_engine_for_role STALL_JUDGE" in run
+	assert '--label "ai:engine-claude" --state open --json number,labels --limit 100' in run
+	assert (
+		'any(.[]; any(.labels[]?; .name=="ai:engine-claude") and (any(.labels[]?; .name=="ai:codex")|not)'
+		' and (any(.labels[]?; .name=="ai:orchestrator-tracking")|not))'
+	) in run
+
+
+def _run_standalone_preflight(
+	tmp_path: Path,
+	*,
+	engine: str,
+	gh_labels: list[str] | None = None,
+	gh_rc: int = 0,
+	standalone: str = "true",
+	stall_judge: str = "true",
+) -> tuple[subprocess.CompletedProcess[str], str, list[str]]:
+	preflight = next(step["run"] for step in _poll_steps() if step.get("name") == "Resolve AI engine")
+	work = tmp_path / f"work-{len(list(tmp_path.iterdir()))}"
+	(work / "scripts").mkdir(parents=True)
+	(work / "scripts" / "ai_engine.sh").write_text(FAKE_AI_ENGINE, encoding="utf-8")
+	(work / "tracking_issues.json").write_text(json.dumps([{"number": 1, "labels": [{"name": "ai:codex"}]}]), encoding="utf-8")
+	bin_dir = work / "bin"
+	bin_dir.mkdir()
+	gh_calls = work / "gh_calls"
+	listing = json.dumps([{"number": 7, "labels": [{"name": label} for label in (gh_labels or [])]}])
+	gh = bin_dir / "gh"
+	gh.write_text(
+		"#!/usr/bin/env bash\n"
+		f"printf '%s\\n' \"$*\" >> {str(gh_calls)!r}\n"
+		f"printf '%s' {listing!r}\n"
+		f"exit {gh_rc}\n",
+		encoding="utf-8",
+	)
+	gh.chmod(0o755)
+	output_file = work / "github_output"
+	output_file.write_text("", encoding="utf-8")
+	env = {
+		**os.environ,
+		"PATH": f"{bin_dir}:{os.environ['PATH']}",
+		"RUNTIME_DIR": str(work),
+		"GITHUB_OUTPUT": str(output_file),
+		"GITHUB_REPOSITORY": "owner/repo",
+		"CALLS": str(work / "calls"),
+		"FAKE_ENGINE": engine,
+		"AI_ENGINE_LABELS": "",
+		"ENABLE_STANDALONE_STALL_RECOVERY": standalone,
+		"ENABLE_STALL_JUDGE": stall_judge,
+	}
+	for inherited in ("GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "BASH_ENV", "ENV", "WORKSPACE_PATH"):
+		env.pop(inherited, None)
+	result = subprocess.run(["bash", "-c", preflight], cwd=work, env=env, capture_output=True, text=True, timeout=60, check=False)
+	calls = gh_calls.read_text(encoding="utf-8").splitlines() if gh_calls.exists() else []
+	return result, output_file.read_text(encoding="utf-8").strip(), calls
+
+
+@pytest.mark.parametrize(
+	("kwargs", "expected", "gh_called"),
+	(
+		({"engine": "claude"}, "true", False),
+		({"engine": "codex", "gh_labels": ["ai:engine-claude"]}, "true", True),
+		({"engine": "codex", "gh_labels": ["ai:engine-claude", "ai:codex"]}, "false", True),
+		({"engine": "codex", "gh_labels": ["ai:engine-claude", "ai:orchestrator-tracking"]}, "false", True),
+		({"engine": "claude", "standalone": "false"}, "false", False),
+		({"engine": "claude", "stall_judge": "FALSE"}, "false", False),
+		({"engine": "codex", "gh_labels": ["ai:engine-claude"], "gh_rc": 1}, "false", True),
+	),
+)
+def test_poll_preflight_fetches_pool_for_standalone_stall_judge(
+	tmp_path: Path, kwargs: dict, expected: str, gh_called: bool
+) -> None:
+	result, output, calls = _run_standalone_preflight(tmp_path, **kwargs)
+	assert result.returncode == 0, result.stderr
+	assert output == f"any_claude={expected}"
+	assert bool(calls) is gh_called
+	if gh_called:
+		assert all('--label ai:engine-claude --state open --json number,labels --limit 100' in call for call in calls)
+		assert all("--repo owner/repo" in call for call in calls)
+	if kwargs.get("gh_rc"):
+		assert "::warning::Could not list open ai:engine-claude issues" in result.stderr
+
+
+def test_orchestrate_stages_every_required_claude_support_file() -> None:
+	isolated_exec = (REPO_ROOT / "scripts" / "codex_isolated_exec.sh").read_text(encoding="utf-8")
+	match = re.search(r"required_support=\(([^)]*claude_anthropic_relay\.py[^)]*)\)", isolated_exec)
+	assert match, "codex_isolated_exec.sh no longer declares its Claude support files"
+	required = set(match.group(1).split()) | {"codex_isolated_exec.sh", "ai_engine.sh", "claude_engine.py"}
+	stage = _orchestrate_steps()["Stage workflow support files"]["run"]
+	loop = re.search(r"for f in ([^;]*); do\n\s*src=\"\.codex-workflow-src/scripts/\$\{f\}\"", stage)
+	assert loop, "Stage workflow support files loop not found"
+	staged = set(loop.group(1).split())
+	assert required <= staged, sorted(required - staged)
+	assert 'echo "::error::Missing required support script ${f} in ${wf_source}@${SCRIPT_REF}"' in stage
 
 
 ORCHESTRATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "orchestrate.yml"
