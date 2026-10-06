@@ -8,7 +8,7 @@
 | Implement runs sampled (2026-10-05 03:40Z to 2026-10-06 03:40Z) | 81 |
 | Runs that resolved `IMPLEMENT` to Claude and then fell back to codex | 78 (65 `cli_missing`, 13 `no_credential`) |
 | Runs whose `IMPLEMENT` ran on Claude | 0 |
-| Callers of `install-claude` covered by the fix | 4 (`clarify.yml`, `orchestrate_clarify_respond.yml`, `plan.yml`, `implement.yml`) |
+| Callers of `install-claude` covered by the fix | 5 (`clarify.yml`, `claude-engine-smoke.yml`, `implement.yml`, `orchestrate_clarify_respond.yml`, `plan.yml`) |
 
 What this means for operators: implement, implement-repair and implement-diagnose now use Claude Opus 5.5 from the account pool, which moves their editor calls off OpenRouter. The D1 fallback to codex is unchanged when the broker or every account is unavailable. Consumer repos get the fix with the next `@stable` promotion.
 
