@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_parse_and_post_answer.sh:215-282 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The escalation path checks freshness before its label/state updates, but does not recheck immediately before posting, so a newer trusted human answer can be followed by a stale escalation.\n  WHY: The intervening API work leaves a TOCTOU window before the escalation POST; severity ranged from MAJOR to NIT, and qwen_qwen3_7-plus disputed the race as theoretical.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Recheck the issue state and comments immediately before the responder writes an answer or escalation.\"\n  expected_change_site: scripts/orchestrate_parse_and_post_answer.sh near the gh_retry gh api post calls at lines 281 and 355\n  confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The freshness check at line 216 gates both paths before any decision processing, but there is no second recheck immediately before either actual POST; the escalation path has a label-edit API call (line 251-252) between the check and the post; the regular answer path has only string building.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_parse_and_post_answer.sh:215-338 | severity=high | confidence=4\n  PROBLEM: The freshness recheck at line 216 gates entry to the posting paths, but the escalation path (lines 239-338) executes a gh issue edit label-update API call at lines 251-252 before the actual escalation comment POST at line 281. A trusted user /answer arriving between the freshness check and the escalation post would not be detected, yet the script would still label the issue ai:blocked and post the escalation comment.\n  WHY: The window is real and measurable because the label edit is a live GitHub API call. A human operator who answers while this call is in-flight would find their answer immediately overwritten by a conflicting escalation comment and the issue re-labeled. The regular answer path has no intervening API call and is not affected.\n- TASK_GAP\n  Requirement: \"Recheck the issue state and comments immediately before the responder writes an answer or escalation.\"\n  Expected change site: scripts/orchestrate_parse_and_post_answer.sh near the gh_retry gh api post calls at lines 281 and 355\n  Evidence of absence: The freshness check at line 216 gates both paths before any decision processing, but there is no second recheck immediately before either actual POST. The escalation path has a label-edit API call (line 251-252) between the check and the post; the regular answer path has only string building. The requirement says \"immediately before\" posting, not \"before entering the decision block.\" The implementation is a single gate, not a per-POST recheck.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_parse_and_post_answer.sh:215-237, 281 | severity=low | confidence=3\n  PROBLEM: The freshness recheck runs once near the top of the answer/escalation posting block. The escalation path's actual `gh api` POST call sits ~40 lines further down, after the `LOOP_BLOCKED` / `HAS_ESCALATE` branch is entered and any label/state writes that branch performs. A trusted user who posts a `/answer` after the recheck returns `fresh` but before the script commits its escalation POST would be overwritten; the planner would still see the bot's comment as newer by ID ordering, which is exactly the finding the original recommendation was trying to prevent.\n  WHY: The bash recheck is not atomic with the POST. Any label-update or comment-lookup work the escalation branch does between line 237 and the POST widens the window, and the implementation never re-verifies once inside that branch.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_parse_and_post_answer.sh:215-237, 251-252, 281-282 | severity=high | confidence=4\n  PROBLEM: Freshness is checked before the escalation path updates issue labels, not immediately before it posts the escalation comment.\n  WHY: If a trusted human posts a newer answer after the check reports \u201cfresh\u201d but while `gh issue edit` is running, the script still adds `ai:blocked`, removes `ai:planning`, and posts the stale escalation. The newer answer is therefore not respected, and the issue can be left blocked.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "33976a6c102ffb8b2f346e1c64f3a7b5e3cbb8fb7e55263fd463d34de7c988a1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6487,
+    "run_id": "37413689302",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37413689302",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006044127_e72e52e8ab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6487,
+    "run_id": "37413689302"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T04:41:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
