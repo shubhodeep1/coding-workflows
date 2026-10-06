@@ -744,7 +744,7 @@ ensure_self_repo_trusted_template_root()
 stage_self_repo_validation_template_entry()
 {
 	local repo_path="$1"
-	local trusted_path
+	local trusted_path inspected_template_path
 
 	case "${repo_path}" in
 		/*|..|../*|*/..|*/../*)
@@ -765,11 +765,20 @@ stage_self_repo_validation_template_entry()
 		echo "::error::Required trusted validation-harness template ${repo_path} is missing from ${ORIGINAL_SCRIPT_REF}." >&2
 		exit 1
 	fi
+	inspected_template_path="${repo_path}"
+	while :; do
+		if [ -L "${inspected_template_path}" ]; then
+			echo "::error::Refusing symlinked validation-harness template path '${repo_path}'." >&2
+			exit 1
+		fi
+		[[ "${inspected_template_path}" == */* ]] || break
+		inspected_template_path="${inspected_template_path%/*}"
+	done
 	if [ -e "${repo_path}" ] && ! cmp -s "${repo_path}" "${trusted_path}"; then
 		echo "VALIDATE_TRUSTED_TEMPLATE_OVERRIDE path=${repo_path} ref=${ORIGINAL_SCRIPT_REF}"
 	fi
 	mkdir -p "$(dirname -- "${repo_path}")"
-	cp -- "${trusted_path}" "${repo_path}"
+	cp --remove-destination -- "${trusted_path}" "${repo_path}"
 	SELF_REPO_TRUSTED_TEMPLATE_STAGED_COUNT=$((SELF_REPO_TRUSTED_TEMPLATE_STAGED_COUNT + 1))
 }
 

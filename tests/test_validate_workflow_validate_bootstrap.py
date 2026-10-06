@@ -682,6 +682,7 @@ def _run_validate_staging(
 	repository: str = "shubhodeep1/coding-workflows",
 	support_ref: str | None = None,
 	helper: Path = STAGE_WORKFLOW_SUPPORT,
+	workspace_template_symlink: Path | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
 	overlay_files = {
 		"scripts/load_workflow_overlay.py": (REPO_ROOT / "scripts" / "load_workflow_overlay.py").read_text(encoding="utf-8"),
@@ -692,6 +693,9 @@ def _run_validate_staging(
 	_git(source, "config", "uploadpack.allowAnySHA1InWant", "true")
 	workspace = tmp / "workspace"
 	_init_repo(workspace, {**overlay_files, _TEMPLATE_REL: _STALE_HOST_TEMPLATE})
+	if workspace_template_symlink is not None:
+		(workspace / _TEMPLATE_REL).unlink()
+		(workspace / _TEMPLATE_REL).symlink_to(workspace_template_symlink)
 	bin_dir = tmp / "bin"
 	bin_dir.mkdir()
 	if not shutil.which("jq"):
@@ -734,19 +738,42 @@ def _run_validate_staging(
 
 def test_self_repo_validation_templates_come_from_verified_support_commit() -> None:
 	# Regression for #6578: an older integration-branch template ran the import
-	# audit with the runner's Python; it must be replaced by the trusted bytes.
+	# audit with the runner's Python; without the new copy path it still renders
+	# that host command, while the trusted copy renders the container command.
 	with tempfile.TemporaryDirectory() as tmpdir:
-		result, workspace = _run_validate_staging(
-			Path(tmpdir),
-			source_files={_TEMPLATE_REL: _TRUSTED_CONTAINER_TEMPLATE},
-			manifest_paths=[_TEMPLATE_REL],
-		)
-		assert result.returncode == 0, result.stdout + result.stderr
-		staged = (workspace / _TEMPLATE_REL).read_text(encoding="utf-8")
-		assert staged == _TRUSTED_CONTAINER_TEMPLATE
-		assert 'python3 "${SCRIPT_DIR}' not in staged
-		assert f"VALIDATE_TRUSTED_TEMPLATE_OVERRIDE path={_TEMPLATE_REL}" in result.stdout
-		assert "VALIDATE_TRUSTED_TEMPLATES staged=1" in result.stdout
+		for baseline in (True, False):
+			fixture_root = Path(tmpdir) / ("baseline" if baseline else "fixed")
+			result, workspace = _run_validate_staging(
+				fixture_root,
+				source_files={_TEMPLATE_REL: _TRUSTED_CONTAINER_TEMPLATE},
+				manifest_paths=[] if baseline else [_TEMPLATE_REL],
+			)
+			assert result.returncode == 0, result.stdout + result.stderr
+			(workspace / "workflow-templates/validation-harness/_shared").mkdir(parents=True)
+			validation_manifest = fixture_root / "validate.yml"
+			validation_manifest.write_text(
+				"type: python-repo-checks\nslots:\n  project_name: staging-regression\n  canary_tools: [python3]\n",
+				encoding="utf-8",
+			)
+			rendered_root = fixture_root / "rendered"
+			render_result = subprocess.run(
+				[sys.executable, str(REPO_ROOT / "scripts/render_validation_templates.py"),
+				 "--manifest", str(validation_manifest),
+				 "--schema", str(REPO_ROOT / "scripts/templates/slot_manifest.schema.json"),
+				 "--templates-root", str(workspace / "workflow-templates/validation-harness"),
+				 "--output-root", str(rendered_root)],
+				cwd=workspace, capture_output=True, text=True, timeout=30,
+			)
+			assert render_result.returncode == 0, render_result.stdout + render_result.stderr
+			audit_text = (rendered_root / "tests/20_import_audit.sh").read_text(encoding="utf-8")
+			if baseline:
+				assert 'python3 "${SCRIPT_DIR}/_lib/import_audit.py"' in audit_text
+				assert "docker compose" not in audit_text
+			else:
+				assert 'docker compose -f "${COMPOSE_FILE}" exec -T app python /tests/_lib/import_audit.py' in audit_text
+				assert 'python3 "${SCRIPT_DIR}' not in audit_text
+				assert f"VALIDATE_TRUSTED_TEMPLATE_OVERRIDE path={_TEMPLATE_REL}" in result.stdout
+				assert "VALIDATE_TRUSTED_TEMPLATES staged=1" in result.stdout
 
 
 def test_self_repo_validation_templates_fail_closed_without_trusted_commit() -> None:
@@ -772,6 +799,23 @@ def test_self_repo_validation_templates_fail_closed_on_missing_trusted_asset() -
 		)
 		assert result.returncode != 0, result.stdout + result.stderr
 		assert f"Required trusted validation-harness template {missing_rel} is missing from" in result.stderr
+
+
+def test_self_repo_validation_templates_reject_symlinked_destination() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		fixture_root = Path(tmpdir)
+		outside_file = fixture_root / "outside.sh"
+		outside_file.write_text("untouched\n", encoding="utf-8")
+		result, workspace = _run_validate_staging(
+			fixture_root,
+			source_files={_TEMPLATE_REL: _TRUSTED_CONTAINER_TEMPLATE},
+			manifest_paths=[_TEMPLATE_REL],
+			workspace_template_symlink=outside_file,
+		)
+		assert result.returncode != 0, result.stdout + result.stderr
+		assert "::error::Refusing symlinked validation-harness template path" in result.stderr
+		assert (workspace / _TEMPLATE_REL).is_symlink()
+		assert outside_file.read_text(encoding="utf-8") == "untouched\n"
 
 
 def test_consumer_validation_templates_keep_existing_copy_path() -> None:
@@ -808,6 +852,7 @@ def main() -> int:
 	test_self_repo_validation_templates_come_from_verified_support_commit()
 	test_self_repo_validation_templates_fail_closed_without_trusted_commit()
 	test_self_repo_validation_templates_fail_closed_on_missing_trusted_asset()
+	test_self_repo_validation_templates_reject_symlinked_destination()
 	test_consumer_validation_templates_keep_existing_copy_path()
 	test_stage_workflow_support_helper_routes_self_repo_templates_to_trusted_commit()
 	test_validate_workflow_bootstraps_revalidate_lifecycle_ai_memory_schemas()
