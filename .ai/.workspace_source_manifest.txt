@@ -365,6 +365,7 @@ prompts/review-consolidator.txt
 prompts/review-reviewer-checklist.txt
 pyproject.toml
 scripts/ai_context_utils.py
+scripts/ai_engine.sh
 scripts/ai_labels.py
 scripts/ai_memory.py
 scripts/ai_memory_lib.py
@@ -375,6 +376,7 @@ scripts/apply_audit_gate_assets.py
 scripts/assemble_changelog.py
 scripts/assemble_prompt.sh
 scripts/audit_consumer_drift.py
+scripts/auto_decisions.py
 scripts/auto_release_stable.sh
 scripts/blocker_check.py
 scripts/build_semble_wrapper.sh
@@ -390,13 +392,18 @@ scripts/clarify_informal_detect.py
 scripts/clarify_isolated_run.sh
 scripts/clarify_openrouter_broker.py
 scripts/clarify_sandbox/Dockerfile
+scripts/claude_anthropic_relay.py
+scripts/claude_engine.py
 scripts/claude_issue_handoff.sh
 scripts/claude_issue_intake.sh
 scripts/claude_issue_queue_watchdog.sh
 scripts/claude_issue_route.py
 scripts/claude_pr_sweep.py
+scripts/claude_settings.json.tmpl
 scripts/codex_heartbeat.sh
 scripts/codex_helpers.sh
+scripts/codex_isolated_exec.sh
+scripts/codex_isolated_workspace.py
 scripts/codex_model_catalog.json
 scripts/codex_model_catalog_overrides.yaml
 scripts/codex_stall_guard.sh
@@ -407,6 +414,7 @@ scripts/compare_issue_timeline_parity.sh
 scripts/comprehensive_test_and_release_gh_api.sh
 scripts/consolidate_soft_error_reports.py
 scripts/cost_audit.py
+scripts/dependency_registry_proxy.py
 scripts/detect_editor_changes_lost.sh
 scripts/dev/replay_review_pipeline.sh
 scripts/dev/test_codex_helpers.sh
@@ -505,6 +513,7 @@ scripts/run_validation_repo_checks.sh
 scripts/run_workspace_hook.sh
 scripts/security_audit.sh
 scripts/security_audit_fp_exclusions.json
+scripts/security_dependency.py
 scripts/self_heal_validation.sh
 scripts/semantic_cache.py
 scripts/semble_helpers.sh
