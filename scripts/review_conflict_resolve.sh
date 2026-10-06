@@ -3137,6 +3137,16 @@ if [ -n "$(git status --porcelain)" ]; then
         exit 1
       fi
     done < "${RESOLVER_TOUCHED_FILE}"
+    # The host, not the sandbox, mirrors this hook; it cannot appear in the
+    # editor-touched list. Only an initially paired conflict may stage it.
+    if [ -f "${RESOLVER_INITIAL_UNMERGED_PATHS_FILE}" ] \
+      && grep -qxF -- '.claude/hooks/pr_merge_status_guard.py' "${CONFLICTED_PATHS_FILE}" \
+      && grep -qxF -- '.claude/hooks/pr_merge_status_guard.py' "${RESOLVER_INITIAL_UNMERGED_PATHS_FILE}"; then
+      if ! stage_resolver_touched_path_or_fail '.claude/hooks/pr_merge_status_guard.py'; then
+        rm -f "${RESOLVER_TOUCHED_FILE}"
+        exit 1
+      fi
+    fi
     rm -f "${RESOLVER_TOUCHED_FILE}"
   else
     # Build per-file exclusions from scripts/.gitignore when present.

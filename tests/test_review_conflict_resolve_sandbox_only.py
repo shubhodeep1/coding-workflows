@@ -369,6 +369,31 @@ verify_resolver_safety_hook_parity_or_fail && echo parity-ok
 	assert "parity-ok" in parity.stdout, parity.stdout + parity.stderr
 
 
+def test_source_repo_staging_includes_host_mirrored_hook(tmp_path):
+	repo, paths = _conflict_repo(tmp_path, [HOOK_LIVE, HOOK_TEMPLATE])
+	(repo / HOOK_TEMPLATE).write_text("resolved = True\n", encoding="utf-8")
+	assert _helper_cmd("mirror-safety-hook", repo, paths).returncode == 0
+	touched = tmp_path / "resolver_touched.txt"
+	touched.write_text(HOOK_TEMPLATE + "\n", encoding="utf-8")
+	src = _source()
+	stage_start = src.index('    git rm -r --cached --ignore-unmatch -- node_modules 2>/dev/null || true')
+	stage = src[stage_start:src.index('  else\n    # Build per-file exclusions', stage_start)]
+	stage_helper = src[src.index('stage_resolver_touched_path_or_fail() {'):src.index('\nverify_resolver_index_complete_or_fail() {')]
+	result = subprocess.run(["bash", "-c", f'''set -euo pipefail
+RUNTIME_DIR={str(tmp_path)!r}
+GITHUB_ENV={str(tmp_path / "github_env")!r}
+RESOLVER_TOUCHED_FILE={str(touched)!r}
+CONFLICTED_PATHS_FILE={str(paths)!r}
+RESOLVER_INITIAL_UNMERGED_PATHS_FILE={str(tmp_path / "resolver_initial_unmerged_paths.txt")!r}
+{stage_helper}
+{stage}
+'''], cwd=repo, env=_clean_env(), capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	assert not _git(repo, "diff", "--name-only", "--diff-filter=U", "--"), "live hook remains unmerged"
+	staged = {line.split("\t")[1]: line.split()[:2] for line in _git(repo, "ls-files", "-s", "--", HOOK_LIVE, HOOK_TEMPLATE).splitlines()}
+	assert staged[HOOK_LIVE] == staged[HOOK_TEMPLATE]
+
+
 def test_parity_assertion_rejects_divergent_staged_hook(tmp_path):
 	repo, paths = _conflict_repo(tmp_path, [HOOK_LIVE, HOOK_TEMPLATE])
 	(repo / HOOK_TEMPLATE).write_text("resolved = True\n", encoding="utf-8")
