@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6468,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6468\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6520\",\"pr_number\":6520,\"branch\":\"ai/issue-6468\",\"run_id\":\"37430323186\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37430323186\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"agents.md\",\"changelog.d/6468-heal-lineage-source-marker-trust.md\",\"scripts/workflow_failure_heal.py\",\"scripts/workflow_failure_heal_intake.sh\",\"tests/test_workflow_failure_heal.py\"]}",
+  "fingerprint": "33f183c25ff1957eead9b605654096c145cc7d5bda5ee8323c9540aa2c668aea",
+  "lineage": {
+    "issue_number": 6468,
+    "parent_ids": [],
+    "pr_number": 6520,
+    "run_id": "37430323186",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37430323186",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6520"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261006075243_e544c3ba18",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6468,
+    "level": "run",
+    "pr_number": 6520,
+    "run_id": "37430323186"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6468: https://github.com/shubhodeep1/coding-workflows/pull/6520",
+  "timestamps": {
+    "created_at": "2026-10-06T07:52:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
