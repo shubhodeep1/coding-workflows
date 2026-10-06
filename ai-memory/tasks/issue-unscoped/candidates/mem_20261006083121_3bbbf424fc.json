@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrator_judges_claude_engine.py:213 | severity=high | confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The test does not exercise the status-75 isolated-workspace fallback because its parametrization excludes status 75.\n  WHY: A regression in that fallback path could pass the test without being detected.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"An `env -C` commit whose directory cannot be resolved requests confirmation instead of using an unrelated checkout's PR history.\"\n  expected_change_site: tests/test_pr_merge_status_guard.py\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  EVIDENCE: These reviewers report that no test exercises the new unresolved-directory path at `.claude/hooks/pr_merge_status_guard.py:1593-1595`; they note the existing valid-directory test does not trigger it. deepseek_deepseek-v4-pro disputes the gap, identifying `test_env_unresolved_commit_directory_asks_instead_of_checking_checkout` at line 1513 of `tests/test_pr_merge_status_guard.py` as exercising this path and covering `.claude/hooks/pr_merge_status_guard.py:1593-1595`. Severity was reported as MAJOR by google_gemini-3_1-flash-lite, minimax_minimax-m3, and qwen_qwen3_7-plus, and NIT by z-ai_glm-5_2.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- Requirement: \"An `env -C` commit whose directory cannot be resolved requests confirmation instead of using an unrelated checkout's PR history.\"\n  Expected change site: tests/test_pr_merge_status_guard.py\n  Evidence of absence: The PR introduces logic in `.claude/hooks/pr_merge_status_guard.py:1593-1595` to handle `commit` commands by requesting confirmation when the directory cannot be resolved, and documents this behavior in `README.md` and `agents.md`. However, no test in `tests/test_pr_merge_status_guard.py` explicitly exercises this new path for `env -C` commits.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: The PR description states \"An `env -C` commit whose directory cannot be resolved requests confirmation instead of using an unrelated checkout's PR history.\"\n  Expected change site: tests/test_pr_merge_status_guard.py \u2014 a new test exercising the env-C / unresolvable-directory commit path\n  Evidence of absence: The implementation is at .claude/hooks/pr_merge_status_guard.py:1593-1595 (the new `if invocation.subcommand == \"commit\" and invocation.config_override and invocation.warning.startswith(\"could not resolve git command directory\"): _request_confirmation(...)` block) and is documented in README.md:1123-1124, agents.md:18-19, and changelog.d/6263-push-guard-destination-repo.md:5-6. The existing test_per_command_config_commit_keeps_the_merged_pr_check (visible in the same file around the per_command_config_commit_keeps_the_merged_pr_check fixture) uses a valid directory (\"/other/dir\"), so the `warning.startswith(\"could not resolve git command directory\")` branch is never exercised; the LAST RUN DIFF adds no test for this new code path, so a future refactor that drops the leading string-match could regress the confirmation behavior without any test failure.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_orchestrator_judges_claude_engine.py:213 | severity=MAJOR | confidence=4\n  PROBLEM: The test is parametrized with `@pytest.mark.parametrize(\"claude_status\", (0, 1))` but the test body contains `if claude_status == 75:` logic that is never executed\n  WHY: A regression in the status-75 fallback invocation (the isolated workspace fallback path) could pass this test because the test never exercises that branch. The test name claims to verify \"fallback_uses_isolated_workspace\" but only tests the non-fallback paths (claude_status 0 and 1).\n- Requirement: The PR description states \"An `env -C` commit whose directory cannot be resolved requests confirmation instead of using an unrelated checkout's PR history.\"\n  Expected change site: tests/test_pr_merge_status_guard.py - test for `env -C` commit with unresolved directory\n  Evidence of absence: The implementation exists in `.claude/hooks/pr_merge_status_guard.py:1593-1595` and is documented in README.md:1123-1124, agents.md:18-19, and changelog.d/6263-push-guard-destination-repo.md:5-6. However, no test in `tests/test_pr_merge_status_guard.py` explicitly exercises this new code path. The existing test `test_per_command_config_commit_keeps_the_merged_pr_check` uses valid directories (`/other/dir`) that would not trigger the \"could not resolve git command directory\" warning, so the new confirmation behavior for unresolved directories is untested.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- Requirement: \"An `env -C` commit whose directory cannot be resolved requests confirmation instead of using an unrelated checkout's PR history.\"\n  Expected change site: tests/test_pr_merge_status_guard.py \u2014 a test exercising the `env -C` commit with an unresolved directory path\n  Evidence of absence: The last run diff adds the implementation at `.claude/hooks/pr_merge_status_guard.py:1593-1595` (the `if invocation.subcommand == \"commit\" and invocation.config_override and invocation.warning.startswith(\"could not resolve git command directory\")` branch) and documents it in README.md, agents.md, and changelog.d/6263-push-guard-destination-repo.md. However, no test in `tests/test_pr_merge_status_guard.py` exercises this new code path. The existing `test_per_command_config_commit_keeps_the_merged_pr_check` uses valid directories (e.g. `/other/dir`) that resolve successfully and never trigger the \"could not resolve git command directory\" warning, so the confirmation-request behavior for unresolved directories remains untested.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1cbee90bb858c2ee0b93647f54f436a3a3bcad1bb2e82ec311ba3b12779df250",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6209,
+    "run_id": "37431425681",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37431425681",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006083121_3bbbf424fc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6209,
+    "run_id": "37431425681"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T08:31:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
