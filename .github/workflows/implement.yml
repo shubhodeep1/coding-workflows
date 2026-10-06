@@ -3854,10 +3854,10 @@ jobs:
         env:
           BASH_ENV: ''
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          GH_TOKEN: ${{ secrets.GH_PAT }}
           EDITOR_GIT_CREDENTIALS_SHA256: ${{ steps.stage_support.outputs.editor_git_credentials_sha256 }}
         run: |
           set -euo pipefail
+          unset GH_TOKEN GH_PAT GITHUB_TOKEN 2>/dev/null || true
           cd "${WORKSPACE_PATH}"
           _egc_pin="${EDITOR_GIT_CREDENTIALS_SHA256:-}"
           _egc_src=""
@@ -3877,6 +3877,13 @@ jobs:
           fi
           EDITOR_GIT_CREDENTIALS_SCRIPT="${_egc_src}"
           editor_git_credentials() { env -u BASH_ENV -u ENV bash -c "${EDITOR_GIT_CREDENTIALS_SCRIPT}" editor_git_credentials.sh "$@"; }
+          # Hide checkout auth before sourcing any editor-writable repair helpers.
+          # The following clean post-repair step restores credentials once.
+          repair_credentials_hidden=false
+          if [ "${repair_credentials_hidden}" = false ]; then
+            editor_git_credentials hide
+            repair_credentials_hidden=true
+          fi
           echo "repaired=false" >> "$GITHUB_OUTPUT"
 
           # Source sanitize_codex_prompt_file (best-effort) so the
@@ -4262,8 +4269,6 @@ jobs:
             emit_implement_substate "implement_repair" "implement_repair" "LaunchingAgentProcess" "${attempt}" "${REPAIR_LOG_FILE}"
             emit_implement_substate "implement_repair" "implement_repair" "InitializingSession" "${attempt}" "${REPAIR_LOG_FILE}"
             emit_implement_substate "implement_repair" "implement_repair" "StreamingTurn" "${attempt}" "${REPAIR_LOG_FILE}"
-            # Same ledger scrub as the implementation launch above.
-            editor_git_credentials hide
             rm -f "${RUNTIME_DIR}/implement_sandbox_failed" "${RUNTIME_DIR}/implement_sandbox_transfer_failed"
             if ! CODEX_THREAD_REUSE_STATE_KEY="implement-repair" \
               CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex}" \
@@ -4294,7 +4299,6 @@ jobs:
                 'fi' > "${workspace_shell_env_clean}"
               mv -fT -- "${workspace_shell_env_clean}" "${RUNTIME_DIR}/workspace-shell.env"
               echo "BASH_ENV=${RUNTIME_DIR}/workspace-shell.env" >> "$GITHUB_ENV"
-              editor_git_credentials restore
               if [ -f "${RUNTIME_DIR}/implement_sandbox_failed" ] || [ -f "${RUNTIME_DIR}/implement_sandbox_transfer_failed" ]; then
                 echo '::error::Implement isolation failed reason=isolated_run_or_transfer' >&2
                 exit 1
@@ -4312,7 +4316,6 @@ jobs:
               'fi' > "${workspace_shell_env_clean}"
             mv -fT -- "${workspace_shell_env_clean}" "${RUNTIME_DIR}/workspace-shell.env"
             echo "BASH_ENV=${RUNTIME_DIR}/workspace-shell.env" >> "$GITHUB_ENV"
-            editor_git_credentials restore
             if [ -f "${RUNTIME_DIR}/implement_sandbox_failed" ] || [ -f "${RUNTIME_DIR}/implement_sandbox_transfer_failed" ]; then
               echo '::error::Implement isolation failed reason=isolated_run_or_transfer' >&2
               exit 1
