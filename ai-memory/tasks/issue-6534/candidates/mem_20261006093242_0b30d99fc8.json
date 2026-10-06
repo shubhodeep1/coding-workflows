@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6534,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6534\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6542\",\"pr_number\":6542,\"branch\":\"ai/issue-6534\",\"run_id\":\"37441326516\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37441326516\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/review_autofix.yml\",\"changelog.d/6534-review-sandbox-cleanup-after-commit.md\",\"scripts/review_untrusted_sandbox.sh\",\"tests/test_review_autofix_review_pipeline_contract.py\"]}",
+  "fingerprint": "a7ecef292f3f828f0e4f01198a4e4db89293eccc8e1d5053a38ea97b9e6fb79c",
+  "lineage": {
+    "issue_number": 6534,
+    "parent_ids": [],
+    "pr_number": 6542,
+    "run_id": "37441326516",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37441326516",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6542"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261006093242_0b30d99fc8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6534,
+    "level": "run",
+    "pr_number": 6542,
+    "run_id": "37441326516"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6534: https://github.com/shubhodeep1/coding-workflows/pull/6542",
+  "timestamps": {
+    "created_at": "2026-10-06T09:32:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
