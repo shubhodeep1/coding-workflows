@@ -10027,28 +10027,56 @@ def test_review_blocked_fix_scope_reports_all_workflow_edit_opt_out_paths():
 	assert any("scripts/a.sh,scripts/b.sh" in n.get("message", "") for n in result["telegram_notifications"])
 
 
-def test_review_blocked_fix_scope_accepts_non_protected_judge_citation():
+def test_review_blocked_fix_scope_rejects_non_protected_judge_citation():
 	result = _review_blocked_fix_scope_case(
 		touch="docs/new.md", files=["other.txt"],
 		remaining=[{"file": "docs/new.md"}],
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
-	assert result.get("git_push_calls", [])
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"]["10"] == 1
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
 
 
-def test_review_blocked_fix_scope_accepts_fix_description_citation():
+def test_review_blocked_fix_scope_rejects_fix_description_citation():
 	result = _review_blocked_fix_scope_case(
 		touch="docs/new.md", files=["other.txt"], description="Updated `docs/new.md`",
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
-	assert result.get("git_push_calls", [])
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"]["10"] == 1
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
 
 
-def test_review_blocked_fix_scope_accepts_extensionless_citation():
+def test_review_blocked_fix_scope_rejects_extensionless_citation():
 	result = _review_blocked_fix_scope_case(
 		touch="Makefile", files=["other.txt"], description="Updated `Makefile`",
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"]["10"] == 1
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+
+
+def test_review_blocked_fix_scope_rejects_injected_auth_citations():
+	result = _review_blocked_fix_scope_case(
+		touch="src/auth.py", files=["other.txt"],
+		remaining=[{"file": "src/auth.py"}], description="Updated `src/auth.py`",
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope rejected=1 paths=src/auth.py" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+
+
+def test_review_blocked_fix_scope_accepts_cited_pr_file_without_citation_authority():
+	result = _review_blocked_fix_scope_case(
+		touch="docs/new.md", files=["docs/new.md"],
+		remaining=[{"file": "docs/new.md"}],
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901 staged=1 pr_files=1 judge_cited=0" in result["stdout"]
 	assert result.get("git_push_calls", [])
 
 
@@ -10058,6 +10086,15 @@ def test_review_blocked_fix_scope_rejects_protected_judge_citation():
 		remaining=[{"file": "scripts/evil.sh"}],
 	)
 	assert "reason=protected_not_in_pr" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+
+
+def test_review_blocked_fix_scope_protected_reason_wins_for_mixed_rejections():
+	result = _review_blocked_fix_scope_case(
+		touch="docs/new.md", files=["other.txt"],
+		env_overrides={"MOCK_CODEX_TOUCH_FILE": "docs/new.md\nscripts/evil.sh"},
+	)
+	assert "reason=protected_not_in_pr rejected=2 paths=docs/new.md,scripts/evil.sh" in result["stdout"]
 	assert result.get("git_push_calls", []) == []
 
 

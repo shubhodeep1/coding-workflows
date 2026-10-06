@@ -1270,8 +1270,8 @@ trusted-copy rule for scripts the job runs after an agent wrote files, are in
 Review-blocked follow-up and existing-PR pushes use one-shot Git credentials;
 the poller does not write `GH_TOKEN` into shared worktree Git configuration.
 Before publishing a review-blocked `fix`, the poller checks staged paths against
-the complete PR file list and valid judge citations. Protected paths require an
-exact match in the PR file list; an incomplete list or out-of-scope path rejects
+the complete PR file list (including rename source paths). Judge citations do
+not authorize extra files; an incomplete list or out-of-scope path rejects
 the whole fix, warns operators, and consumes a review-blocked retry without a push.
 An empty staged set is rejected too. Listing failures report the staged paths in
 the rejection log and alert to make the attempted fix diagnosable.

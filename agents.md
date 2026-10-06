@@ -613,10 +613,9 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   implementation PR with a same-repo head, verifies the fetched branch tip
   against the PR head SHA, and rechecks the head before pushing; failed
   provenance checks skip the fix. It checks every staged path before commit:
-  protected paths (`.github/workflows/`, `.github/actions/`, `.github/ai/`,
-  `scripts/`, `prompts/`, `.claude/`) must occur in the PR's paginated changed-file
-  list; other paths may also come from validated judge citations. An unavailable
-  or incomplete PR file list and any out-of-scope edit reject the whole fix,
+  every path must occur in the PR's complete paginated changed-file list
+  (including rename source paths); judge citations cannot authorize writes.
+  An unavailable or incomplete PR file list and any out-of-scope edit reject the whole fix,
   warn via Telegram, and consume a review-blocked retry without a push. Empty
   staged sets also reject; listing failures report the unverified staged paths.
   When `ALLOW_WORKFLOW_EDITS=false`, staged edits to `scripts/`, `prompts/`,

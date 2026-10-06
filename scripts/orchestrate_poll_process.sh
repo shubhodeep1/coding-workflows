@@ -21459,18 +21459,6 @@ ${FOLLOWUP_BLOCK_REASON}"
         _integration_judge_remove_worktree "${RB_COMBINED_WORKDIR}"
       }
 
-      _rb_fix_scope_valid_path() {
-        local path="$1" LC_ALL=C
-        [ -n "${path}" ] && [ "${#path}" -le 512 ] || return 1
-        case "${path}" in
-          /*|./*|../*|*/./*|*/../*|*/..|.|..|*/|*'*'*|*'?'*|*'['*|*']'*|*'{'*|*'}'*) return 1 ;;
-        esac
-        [[ "${path}" =~ ^[[:print:]]+$ ]] || return 1
-        case "/${path,,}/" in
-          */.git/*) return 1 ;;
-        esac
-      }
-
       _rb_fix_scope_is_protected() {
         case "$1" in
           .github/workflows/*|.github/actions/*|.github/ai/*|scripts/*|prompts/*|.claude/*) return 0 ;;
@@ -21480,13 +21468,15 @@ ${FOLLOWUP_BLOCK_REASON}"
 
       rb_fix_scope_check() {
         local workdir="$1" pr="$2" judge_json="$3"
-        local staged_file pr_response pr_listing pr_changed_file_count path candidate description candidate_count
-        local -a staged_paths=() pr_paths=() cited_paths=() raw_candidates=()
-        local -A pr_set=() cited_set=()
+        # Refs #6389: judge_json remains an argument for call compatibility,
+        # but model output must never authorize writes outside the PR file list.
+        local staged_file pr_response pr_listing pr_changed_file_count path
+        local -a staged_paths=() pr_paths=()
+        local -A pr_set=()
         RB_FIX_SCOPE_REASON=accepted
         RB_FIX_SCOPE_REJECTED_PATHS=()
         RB_FIX_SCOPE_PR_COUNT=0
-        RB_FIX_SCOPE_CITED_COUNT=0
+        RB_FIX_SCOPE_CITED_COUNT=0 # Citations no longer count toward authorization.
         RB_FIX_SCOPE_STAGED_COUNT=0
 
         staged_file="$(mktemp "${RUNTIME_DIR}/rb_fix_scope_${pr}.XXXXXX")" || { RB_FIX_SCOPE_REASON=staging_unavailable; return 1; }
@@ -21539,39 +21529,13 @@ ${FOLLOWUP_BLOCK_REASON}"
         mapfile -d '' -t pr_paths < <(printf '%s' "${pr_listing}" | jq -j '.files[] | ., "\u0000"')
         for path in "${pr_paths[@]}"; do pr_set["${path}"]=1; done
 
-        # Model citations may expand the allowlist only for safe, non-protected files.
-        mapfile -d '' -t raw_candidates < <(printf '%s\n' "${judge_json}" | jq -j '
-          .remaining_issues | if type == "array" then .[:20][] | .file? | select(type == "string") | ., "\u0000" else empty end
-        ' 2>/dev/null)
-        description="$(printf '%s\n' "${judge_json}" | jq -r '.fix_description | if type == "string" then . else "" end' 2>/dev/null)"
-        candidate_count=0
-        for candidate in "${raw_candidates[@]}"; do
-          candidate_count=$((candidate_count + 1))
-          if _rb_fix_scope_valid_path "${candidate}" && ! _rb_fix_scope_is_protected "${candidate}"; then
-            cited_paths+=("${candidate}")
-          fi
-        done
-        while [ "${candidate_count}" -lt 20 ] && [[ "${description}" == *'`'* ]]; do
-          description="${description#*\`}"
-          [[ "${description}" == *'`'* ]] || break
-          candidate="${description%%\`*}"
-          description="${description#*\`}"
-          candidate_count=$((candidate_count + 1))
-          if _rb_fix_scope_valid_path "${candidate}" && ! _rb_fix_scope_is_protected "${candidate}"; then
-            cited_paths+=("${candidate}")
-          fi
-        done
-        for path in "${cited_paths[@]}"; do cited_set["${path}"]=1; done
-        RB_FIX_SCOPE_CITED_COUNT=${#cited_set[@]}
-
         for path in "${staged_paths[@]}"; do
-          if _rb_fix_scope_is_protected "${path}"; then
-            if [ -z "${pr_set["${path}"]:-}" ]; then
+          if [ -z "${pr_set["${path}"]:-}" ]; then
+            if _rb_fix_scope_is_protected "${path}"; then
               RB_FIX_SCOPE_REASON=protected_not_in_pr
-              RB_FIX_SCOPE_REJECTED_PATHS+=("${path}")
+            else
+              [ "${RB_FIX_SCOPE_REASON}" = protected_not_in_pr ] || RB_FIX_SCOPE_REASON=out_of_scope
             fi
-          elif [ -z "${pr_set["${path}"]:-}" ] && [ -z "${cited_set["${path}"]:-}" ]; then
-            [ "${RB_FIX_SCOPE_REASON}" = protected_not_in_pr ] || RB_FIX_SCOPE_REASON=out_of_scope
             RB_FIX_SCOPE_REJECTED_PATHS+=("${path}")
           fi
         done
