@@ -1439,6 +1439,7 @@ def test_env_wrapped_commit_checks_selected_repo(merged_branch_repo, monkeypatch
 
 @pytest.mark.parametrize("command", [
 	"env -C /does-not-exist git commit -m x",
+	"env GIT_DIR=/does-not-exist git commit -m x",
 	"git -C /does-not-exist commit -m x",
 	"GIT_DIR=/does-not-exist git commit -m x",
 	"GIT_DIR+=/does-not-exist git commit -m x",
@@ -1457,6 +1458,8 @@ def test_env_unresolved_commit_directory_asks_instead_of_checking_checkout(merge
 	assert code == 0 and message == ""
 	decision = json.loads(capsys.readouterr().out.splitlines()[-1])
 	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+	if "GIT_DIR=" in command:
+		assert "could not resolve git commit directory" in decision["hookSpecificOutput"]["permissionDecisionReason"]
 	assert "checking the session checkout instead" not in json.dumps(decision)
 	if command.startswith("env -C"):
 		assert "no checkout was checked" in decision["hookSpecificOutput"]["permissionDecisionReason"]
