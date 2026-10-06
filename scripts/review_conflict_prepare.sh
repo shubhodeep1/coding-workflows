@@ -29,6 +29,7 @@
 #
 # Failure modes:
 #   - Exits 1 if merge replay fails for non-conflict reasons, or template missing.
+#   - Exits 1 if integration-sync state author identity cannot be verified.
 #   - Exits 0 + clears MERGE_CONFLICT when merge replay produces no unmerged paths.
 
 set -euo pipefail
@@ -459,10 +460,8 @@ fi
 
 # Pull the orchestrator state comment for this tracking issue so we
 # can render merged sub-issue intent + fingerprints into the prompt.
-# Fail-open: any failure here just leaves the integration variables
-# blank and still renders the integration template (the resolver
-# will see a placeholder note and behave like the generic resolver
-# for those slots).
+# Fail-open on missing state; an unverifiable pipeline identity instead
+# stops preparation before the resolver can run without trusted context.
 if [ "${IS_INTEGRATION_SYNC}" = "true" ] && [[ "${INTEGRATION_TRACKING_NUM}" =~ ^[0-9]+$ ]]; then
   _ti_json="$(gh_retry gh api -H 'Accept: application/vnd.github+json' \
     "repos/${GITHUB_REPOSITORY}/issues/${INTEGRATION_TRACKING_NUM}" 2>/dev/null || echo '{}')"
@@ -470,8 +469,8 @@ if [ "${IS_INTEGRATION_SYNC}" = "true" ] && [[ "${INTEGRATION_TRACKING_NUM}" =~ 
   INTEGRATION_TRACKING_BODY="$(printf '%s' "${_ti_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
   unset _ti_json
 
-  # GH_TOKEN comes from GH_PAT; a different/unavailable identity degrades
-  # resolver context rather than accepting another commenter's state.
+  # GH_TOKEN comes from GH_PAT; do not resolve integration conflicts when
+  # the author of state comments cannot be verified.
   if command -v _safe_gh_jq >/dev/null 2>&1; then
     _conflict_state_login="$(gh_retry _safe_gh_jq "user" --jq '.login // ""' 2>/dev/null || true)"
   else
@@ -511,7 +510,8 @@ if [ "${IS_INTEGRATION_SYNC}" = "true" ] && [[ "${INTEGRATION_TRACKING_NUM}" =~ 
     rm -f "${_ti_comments_raw}"
     unset _ti_comments_raw
   else
-    echo "::warning::review_conflict_prepare: pipeline identity unavailable; orchestrator state not read"
+    echo "::error::review_conflict_prepare: pipeline identity unavailable; refusing integration-sync resolution without trusted state"
+    exit 1
   fi
   unset _conflict_state_login
 

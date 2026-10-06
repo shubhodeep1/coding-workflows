@@ -15,9 +15,10 @@ STATE_READ = SOURCE.split('if [ "${IS_INTEGRATION_SYNC}" = "true" ] &&', 1)[1]
 STATE_READ = 'if [ "${IS_INTEGRATION_SYNC}" = "true" ] &&' + STATE_READ.split('\nCONFLICT_RESOLVER_SEMBLE_QUERY_FILE=', 1)[0]
 
 
-@pytest.mark.skipif(shutil.which("jq") is None, reason="jq unavailable")
 @pytest.mark.parametrize("identity_available", [True, False])
 def test_integration_resolver_state_context_requires_authenticated_author(tmp_path: Path, identity_available: bool):
+	if identity_available and shutil.which("jq") is None:
+		pytest.skip("jq unavailable")
 	trusted = {
 		"waves": [{"issues": [{"id": "trusted", "github_issue": 42, "status": "merged"}]}],
 		"merged_issue_fingerprints": {"trusted": "yes"},
@@ -64,12 +65,14 @@ printf 'FINGERPRINTS=%s\\nLIST=%s\\n' "$INTEGRATION_FINGERPRINTS_JSON" "$INTEGRA
 		"TARGET_BRANCH": "orchestrator/project-192",
 	}
 	proc = subprocess.run(["bash", "-c", harness], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=30)
-	assert proc.returncode == 0, proc.stderr
 	if identity_available:
+		assert proc.returncode == 0, proc.stderr
 		assert 'FINGERPRINTS={"trusted":"yes"}' in proc.stdout
 		assert "trusted (issue #42)" in proc.stdout
 		assert "forged (issue #99)" not in proc.stdout
 	else:
-		assert "pipeline identity unavailable; orchestrator state not read" in proc.stdout
-		assert "FINGERPRINTS={}" in proc.stdout
-		assert "no merged sub-issues recorded" in proc.stdout
+		assert proc.returncode != 0
+		assert "pipeline identity unavailable; refusing integration-sync resolution" in proc.stdout
+		assert "FINGERPRINTS=" not in proc.stdout
+		assert not (tmp_path / "integration_fingerprints.json").exists()
+		assert not (tmp_path / "env").exists()
