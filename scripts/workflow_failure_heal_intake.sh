@@ -998,7 +998,8 @@ _open_issue()
 	local repo="$1" target_branch="$2" integration_branch="${3:-}"
 	local title_file="${RUNTIME_DIR}/issue_title.txt" body_file="${RUNTIME_DIR}/issue_body.md"
 	local label_args=(--label "${HEAL_LABEL}")
-	python3 "${HEAL_PY}" compose-issue \
+	rm -f "${title_file}" "${body_file}"
+	if ! python3 "${HEAL_PY}" compose-issue \
 		--payload-json "${PAYLOAD_FILE}" \
 		--diagnosis-file "${DIAG_FILE}" \
 		--run-summaries-json "${SUMMARIES_FILE}" \
@@ -1011,7 +1012,11 @@ _open_issue()
 		--max-depth "${MAX_DEPTH}" \
 		--intake-run-url "${RUN_URL}" \
 		--title-out "${title_file}" \
-		--body-out "${body_file}"
+		--body-out "${body_file}"; then
+		log "error issue_compose_failed repo=${repo} fp=${FP} source=${SOURCE_LABEL}"
+		tg_send_msg "Workflow failure heal FAILED to compose a safe issue in ${repo} for ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}')."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+		return 1
+	fi
 	local title
 	title="$(head -1 "${title_file}")"
 	if [ "${repo}" != "${SELF_REPO}" ]; then

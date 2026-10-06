@@ -493,6 +493,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				invocations.append(_GitInvocation(checkout, {}, "push", [], "unparsed env wrapper", True))
 			continue
 		env_cwd = working_directory
+		explicit_directory_unresolved = False
 		env_directory_unresolved = False
 		env_chdir_seen = False
 		if index != env_index:
@@ -504,6 +505,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 					env_word_value = (tokens[position + 1] if word in ("-C", "--chdir") else
 						word.split("=", 1)[1] if word.startswith("--chdir=") else word[2:])
 					env_cwd = _literal_guard_path(env_word_value, env_cwd) if env_cwd else None
+					explicit_directory_unresolved |= env_cwd is None
 					env_directory_unresolved |= env_cwd is None
 				elif re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", word):
 					env_name, env_word_value = word.split("=", 1)
@@ -538,6 +540,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				if option.startswith("-C"):
 					git_cwd = _literal_guard_path(value, git_cwd) if git_cwd else None
 					uncertain |= git_cwd is None
+					explicit_directory_unresolved |= git_cwd is None
 				elif option.startswith("--git-dir"):
 					environment["GIT_DIR"] = value
 				elif option.startswith("--work-tree"):
@@ -551,6 +554,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				path = _literal_guard_path(value, git_cwd, git_file=name == "GIT_DIR")
 				if path is None:
 					uncertain = True
+					explicit_directory_unresolved = True
 					break
 				environment[name] = path
 		invocations.append(_GitInvocation(
@@ -559,6 +563,8 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			tokens[index], tokens[index + 1:],
 			("could not resolve git command directory (env -C/--chdir); cannot check checkout PR history"
 				if env_chdir_seen and env_cwd is None else
+			 "could not resolve explicit git command directory"
+				if explicit_directory_unresolved and tokens[index] == "commit" else
 				"could not resolve git command directory; checking the session checkout instead") if uncertain else "",
 			config_override,
 			env_directory_unresolved,
@@ -1543,11 +1549,11 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			if target.warning.startswith("could not resolve git push"):
 				unknown_destination_reasons.append(target.warning)
 				continue
+			if target.warning.startswith("could not resolve explicit git command directory") and invocation.subcommand == "commit":
+				unverified_destinations.add("could not resolve git commit directory; the session checkout may differ")
+				continue
 			if target.warning:
-				if invocation.subcommand != "push" and invocation.config_override:
-					unverified_destinations.add("could not resolve git command directory; no checkout was checked")
-					continue  # An env-wrapped commit may use a different checkout.
-				_warn(target.warning)
+				_warn(target.warning)  # Implicit uncertainty: check the session checkout.
 			if target.remote and target.remote != "origin":
 				# Even a matching explicit URL may be rewritten by url.*.insteadOf.
 				if "://" in target.remote or target.remote.startswith("git@"):
