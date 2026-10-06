@@ -30,6 +30,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
    memory, retry, and comment handling remain on the runner.
    Host Python uses isolated imports; `CLARIFY_SOURCE_ROOT` selects the snapshot
    input directory (default `$PWD`), which is read only as data.
+   Clarify and clarify-respond retain agent instruction files in their snapshots
+   by default; triage alone opts out with `CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS=true`.
    Standalone clarify-respond skips semantic-cache lookup and storage (including
    SQLite restore/save) because live referenced PR, branch and run state is
    absent from the cache key. Orchestrator mode keeps the existing cache path.
@@ -137,6 +139,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
     missing isolation falls back to a raw-context issue, never host Codex.
     The helper runs from trusted support with `CLARIFY_SOURCE_ROOT` set to the
     PR checkout, so host Python and the broker never execute PR-head modules.
+    Triage omits agent instruction files at any depth from the sandbox snapshot;
+    the opt-in filter leaves other clarify callers' snapshots unchanged.
     PR-head `agents.md` / `AGENTS.md` enters the prompt through a bounded,
     credential-free regular-file read that never follows symlinks.
     Untrusted check/workflow names are single-lined, length-capped, and have

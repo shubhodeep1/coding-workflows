@@ -2,6 +2,7 @@
 # Run one clarify attempt in a credential-free, network-isolated container.
 # Only this helper (not the agent) accesses Docker and the host-side broker.
 # CLARIFY_SOURCE_ROOT optionally selects the source snapshot (default: $PWD).
+# CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS=true omits agent instructions (default: false).
 set -euo pipefail
 
 prompt_file="${1:?prompt file required}"
@@ -25,6 +26,8 @@ command -v docker >/dev/null && command -v python3 >/dev/null || { echo '::error
 [ -f scripts/clarify_sandbox/Dockerfile ] && [ -f scripts/clarify_openrouter_broker.py ] && [ -f scripts/write_codex_config.sh ] && [ -f scripts/codex_model_catalog.json ] || { echo '::error::Clarify isolation support missing' >&2; exit 1; }
 # The source root is read as data only; host Python never imports from it.
 source_root="${CLARIFY_SOURCE_ROOT:-${PWD}}"
+omit_agent_instructions="${CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS:-false}"
+case "${omit_agent_instructions}" in true) ;; *) omit_agent_instructions=false ;; esac
 if [ ! -d "${source_root}" ] || [ -L "${source_root}" ]; then
 	echo '::error::Clarify source root unavailable' >&2
 	exit 1
@@ -52,7 +55,7 @@ mkdir -m 0755 "${run_root}/source" "${run_root}/results"
 # follow a symlink (including parent directories); do not include .git,
 # support checkouts, runner configuration, env files or private keys.
 # triage-host-python-import-shadowing: -I excludes both cwd and the script directory.
-PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${source_root}" "${run_root}/source" <<'PY'
+PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${source_root}" "${run_root}/source" "${omit_agent_instructions}" <<'PY'
 import os
 import pathlib
 import stat
@@ -61,16 +64,22 @@ import sys
 
 root = pathlib.Path(sys.argv[1])
 dest = pathlib.Path(sys.argv[2])
+omit_agent_instructions = sys.argv[3] == "true"
 roots = {"src", "scripts", "tests", "prompts", "docs", "app", "lib", "workflow-templates", "validation", "db", "ai-memory", "changelog.d"}
 root_files = {"README.md", "agents.md", "AGENTS.md", "package.json", "pyproject.toml", "go.mod", "Cargo.toml"}
+agent_instruction_names = {"agents.md", "agents.override.md", "claude.md", "claude.local.md"}
 suffixes = {".py", ".sh", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".java", ".json", ".md", ".yml", ".yaml", ".toml", ".txt", ".css", ".html", ".sql"}
 bad_parts = {".git", ".ai", ".codex", ".codex-workflow-src", ".codex-workflow-src-main", ".env", "secrets", "credentials", "__pycache__"}
 count = 0
 total = 0
+omitted = 0
 
 def copy(path):
-    global count, total
+    global count, total, omitted
     parts = pathlib.PurePosixPath(path).parts
+    if omit_agent_instructions and parts and parts[-1].lower() in agent_instruction_names:
+        omitted += 1
+        return
     if (not parts or any(part.lower() in bad_parts or part.lower().startswith(".env") for part in parts)
             or any(part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore")) for part in parts)
             or (path not in root_files and parts[0] not in roots and parts[:2] not in ((".github", "workflows"), (".github", "actions")))
@@ -109,6 +118,8 @@ try:
     for entry in tracked:
         if entry:
             copy(entry.decode("utf-8"))
+    if omitted:
+        print(f"CLARIFY_SNAPSHOT_AGENT_INSTRUCTIONS_OMITTED count={omitted}", file=sys.stderr)
     # Consumer checkouts do not track the staged writer/catalog; these are
     # fixed support files, never read from the issue prompt or user input.
     for required in ("scripts/write_codex_config.sh", "scripts/codex_model_catalog.json"):
