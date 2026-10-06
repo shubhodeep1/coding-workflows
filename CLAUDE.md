@@ -10,16 +10,15 @@ read `unattended_system_instructions.md` instead and **never see this file**.
 That file deliberately omits the STOP-and-ASK rules below — those rollouts
 must be biased to action.
 
-These instructions are mandatory and must be followed before any action.
-
 ---
 
 ## PRE-TASK MANDATORY CONTEXT LOADING
 
 Before any task, read:
-- `README.md`
-- `agents.md` (or `AGENTS.md` — whichever casing the repo root has; same file,
-  read it every session)
+- the sections of `README.md` and `agents.md` (or `AGENTS.md` — whichever
+  casing the repo root has; same file) that cover what the task touches.
+  Both files can run to hundreds of kilobytes, so search them for the
+  relevant sections instead of reading them end to end.
 - all `/db/contracts/*.yml` (or `.json`) relevant to collections that may be touched
 
 If any are missing or unclear: **STOP and ask using the mandatory Q/A format.**
@@ -29,13 +28,10 @@ Never assume undocumented behavior.
 
 ## §0. Prime Directive (NON-NEGOTIABLE)
 
-If you are **not 100% certain** the outcome matches the user's expectations:
-**STOP. ASK. DO NOT PROCEED.** — even if the task looks trivial or the intent
-seems obvious.
-
-There is no exception: §28, which let unattended `/implement-plan-claude`
-sessions auto-decide, is retired. The unattended pipelines follow
-`unattended_system_instructions.md`.
+If you are not 100% certain the outcome matches the user's expectations,
+stop and ask before acting — even if the task looks trivial or the intent
+seems obvious. In an interactive session a question costs one round trip;
+a wrong guess costs a revert.
 
 ---
 
@@ -245,13 +241,9 @@ Scope: in PR review mode, applies only to new task lists in the current request.
 
 ## §12. PR Review Mode
 
-**This §12 fully supersedes the prior "Intent Preservation / Forbidden /
-Acceptance Criteria" version of §12 in this CLAUDE.md.** The parallel §12
-in `codex.md` (and any rules in `unattended_system_instructions.md`) is
-unaffected — unattended pipelines retain their own policies. Earlier
-guidance to "not introduce new scope, abstractions, or behaviors" no
-longer governs PR review work in interactive sessions; the proactive
-policy below applies instead.
+This §12 governs interactive sessions only. The parallel §12 in `codex.md`
+(and any rules in `unattended_system_instructions.md`) is unaffected —
+unattended pipelines retain their own policies.
 
 **Precedence in PR Review Mode.** While operating under §12, this section
 takes precedence over §0 (Prime Directive), §2 (Always-On Ask-First Mode —
@@ -262,10 +254,10 @@ decisions enumerated in §12.B. §0 and §2 still govern items routed to
 scope. §6 (naming immutability) and §10 (MongoDB contracts) remain hard
 rules even under proactive scope and are NOT superseded.
 
-When the user asks Claude to address PR review feedback — via `@codex change`
-in a PR, a direct chat request, or any equivalent trigger — apply fixes with
-a **wide proactive scope**. Default to action, not to asking. Only stop and
-ask on the genuinely ambiguous items enumerated in §12.D.
+When the user asks Claude, in the session, to address PR review feedback,
+apply fixes with a **wide proactive scope**. Default to action, not to
+asking. Only stop and ask on the genuinely ambiguous items enumerated in
+§12.D.
 
 A `subscribe_pr_activity` event is **not** a trigger for this mode. PR
 watching is disabled by §25, so no such event should ever reach an
@@ -375,59 +367,13 @@ After changes:
 
 ### G) Autofix CI / Address-Comments Mode Add-ons
 
-**INACTIVE — superseded by §25.** The autofix CI / address-comments mode
-this subsection describes was entered by a `subscribe_pr_activity` event
-(a failing required check or a new review comment waking the session).
-§25 disables PR watching entirely, so that mode is never entered and the
-add-ons below are never in force on their own. The text is retained
-unchanged so section references stay stable (§6) and so the categories
-can be re-activated by editing §25 in a reviewed change. When the user
-directly asks in the session to fix CI or address review comments on a
-PR, plain §12 (A–F) applies; the add-ons below do not.
-
-When Claude was invoked under the **autofix CI / address-comments mode** —
-i.e. an **interactive Claude Code session** driven by a
-`subscribe_pr_activity` event tied to a failing required check, an
-`@codex change` / "address the review comments" request on a PR, or any
-equivalent trigger that tasks the interactive session with making the
-branch green and the review thread satisfied — the following were
-first-class auto-apply categories on top of §12.B.
-
-This subsection governs **interactive sessions only**, consistent with
-the preface at the top of this file (lines 7–10): the unattended
-`review_autofix` pipeline reads `unattended_system_instructions.md` and
-keeps its own policy, so the rules below do not flow into that pipeline
-and must not be cited as if they did.
-
-- **Lint / formatter / static-analysis failures**, **including failures
-  whose offending line is outside the current PR's diff.** Owning a green
-  branch is part of this mode, so a lint, formatter, or static-analysis
-  violation surfaced by CI must be fixed even when the violation was
-  introduced by an earlier commit on this branch, lives in a file the
-  current PR did not otherwise touch, or is in code Claude has not
-  modified in this session. The "scope explosion" STOP condition in
-  §12.D does NOT apply to mechanical lint sweeps — bring the branch
-  green even if that touches many files. §6 (naming immutability)
-  still binds: if the only mechanical fix would rename a public
-  identifier flagged by a style rule, route to §12.D instead of
-  renaming.
-- **Merge conflicts with the base branch.** Resolve them automatically
-  so the PR is mergeable. Prefer the resolution that preserves both
-  sides' intent over the resolution that drops one side; never silently
-  discard either side's changes. When both sides genuinely conflict and
-  the correct resolution is non-obvious from the diff (semantic intent
-  unclear, both branches changed the same invariant in incompatible
-  ways, or the resolution would alter a documented contract per §12.D),
-  STOP and ask in Q/A format before committing the resolution. Record
-  the resolution in the merge commit message and call it out in the PR
-  description's "Proactive fixes included" subsection (§12.E).
-
-These add-ons inherit the rest of §12 unchanged: §12.A (one PR — lint
-sweeps and conflict fixes land in this PR, never a follow-up), §12.C
-(weigh reversibility, blast radius, and §6/§10 conflicts before acting),
-§12.E (commit hygiene — group the lint sweep into its own commit
-distinct from the in-scope review fixes; record the conflict resolution
-in its own commit), and §12.F (acceptance criteria).
+**INACTIVE — superseded by §25.** This subsection held add-ons for an
+autofix CI / address-comments mode entered by a `subscribe_pr_activity`
+event, which §25 disables. The heading stays so section references remain
+stable (§6); the retired text is in git history and can be restored by
+editing §25 in a reviewed change. When the user directly asks in the
+session to fix CI or address review comments on a PR, plain §12 (A–F)
+applies.
 
 ---
 
@@ -701,14 +647,8 @@ Rules:
   violation kills the orchestrator's state machine for the project it
   targets.
 
-Historical incident: PR #2760 used `Fixes #2734` in its body. `#2734`
-was an `ai:orchestrator-tracking` issue for the integration-sync
-resolver self-heal project. On merge, GitHub auto-closed `#2734` and
-the orchestrator stopped dispatching waves 2-7; the bulk of the
-project's planned phases never shipped (see
-`docs/completed/integration-sync-resolver-self-heal-plan.md` and the
-full forensic timeline in
-`docs/postmortems/2026-05-18-project-2734-stall.md`).
+The incident behind this rule is recorded in
+`docs/postmortems/2026-05-18-project-2734-stall.md`.
 
 ## §20. CHANGELOG Entries (MANDATORY)
 
@@ -1649,9 +1589,7 @@ receives this file via the `@stable` sync, and it is not superseded by §12.
 GitHub does not start runs for a workflow file over **512,000 bytes**
 (500 KiB), and it reports no error: every push instead gets a zero-job
 `failure` run named after the file path ("workflow file issue"), and a
-reusable workflow over the limit cannot be called. Incident: #4327 pushed
-`.github/workflows/review_autofix.yml` to 540,537 bytes and the phantom runs
-broke the stable release gate (run 35903885958).
+reusable workflow over the limit cannot be called.
 
 - **Split at 480,000 bytes.** When a change leaves any
   `.github/workflows/*.yml` at or above 480,000 bytes, move the largest
