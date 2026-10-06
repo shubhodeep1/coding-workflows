@@ -15,8 +15,10 @@ its consumer template) recognizes guarded git commands after nested control
 words, shell negation (`!`), and simple `case` arms. Since their effective
 directory is uncertain, pushes check the session checkout and request
 confirmation unless blocked; commits in that context remain warning-only
-when not blocked. An unresolvable explicit directory override instead asks
-for confirmation without checking the wrong checkout's PR history.
+when not blocked. An unresolvable explicit directory override, including an
+env-wrapped commit whose directory cannot be resolved, instead asks for
+confirmation without querying PRs for the session checkout, which may be a
+different repository.
 
 ---
 
