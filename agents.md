@@ -184,7 +184,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
     (`scripts/workflow_failure_heal_phase_report.sh`, payload kind
     `phase_failure`): after the phase job ends in `failure` it reports the run
     once `WORKFLOW_HEAL_PHASE_FAILURE_STREAK` (default 1) runs of that phase in
-    a row failed on the issue; the intake keys it on the issue's `source=`
+    a row failed on the issue; duplicate comments for one run count once. The
+    intake fingerprints only the current run's log, uses earlier streak logs
+    for diagnosis context, and keys the report on the issue's `source=`
     marker, and a heal issue whose own run fails with its own fingerprint is
     escalated (`reason=heal_issue_failed_itself`). Implement skips guard
     blocks, diagnosed fix-up failures and `BLOCKED` verdicts through the job

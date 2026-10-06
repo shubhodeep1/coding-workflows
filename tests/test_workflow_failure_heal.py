@@ -3426,6 +3426,17 @@ def test_phase_failure_streak_counts_the_trailing_failures_of_one_phase() -> Non
 	assert result == {"streak": 3, "run_ids": ["102", "101"]}
 	# Its comment step failed: the run is counted on top.
 	assert heal.phase_failure_streak(comments, phase="plan", repo=CONSUMER_REPO, run_id=103) == {"streak": 3, "run_ids": ["102", "101"]}
+	# A retry of the failure-comment write must not count the same run twice.
+	assert heal.phase_failure_streak([
+		_plan_failed_comment(CONSUMER_REPO, 101),
+		_plan_failed_comment(CONSUMER_REPO, 101),
+		_plan_failed_comment(CONSUMER_REPO, 102),
+		_plan_failed_comment(CONSUMER_REPO, 102),
+	], phase="plan", repo=CONSUMER_REPO, run_id=102) == {"streak": 2, "run_ids": ["101"]}
+	assert heal.phase_failure_streak([
+		_plan_failed_comment(CONSUMER_REPO, 101),
+		_plan_failed_comment(CONSUMER_REPO, 101),
+	], phase="plan", repo=CONSUMER_REPO, run_id=102) == {"streak": 2, "run_ids": ["101"]}
 	# A finished plan ends an implement streak; another phase's failure ends one too.
 	implement_failed = {"body": f"AI implementation workflow failed for https://github.com/{CONSUMER_REPO}/issues/42. Run: https://github.com/{CONSUMER_REPO}/actions/runs/201"}
 	trail = [*comments, {"body": "Implementation Plan\n\n## Steps"}, implement_failed]
@@ -3655,6 +3666,16 @@ def test_intake_phase_failure_deduplicates_on_source_issue_and_falls_back_withou
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert "warn job_log_fetch_failed" in result.stdout
 	assert f"fingerprint fp={heal.fingerprint('AI Plan', 'Run Codex planning', 'phase:plan_failed')} workflow=AI Plan step=Run Codex planning runs=1" in result.stdout
+	# Older streak logs must not supply the current run's signature or step.
+	previous = {"id": 9102, "name": "plan / plan", "workflow_name": "AI Plan", "conclusion": "failure", "steps": [{"name": "Old planning error", "conclusion": "failure"}]}
+	result, _state_after, prompt = _run_intake(
+		_phase_payload(),
+		_plan_intake_state(jobs={"499": [previous]}, job_logs={"9102": PLAN_JOB_LOG}),
+		diagnosis=DIAG_WORKFLOW_DEFECT,
+	)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"fingerprint fp={expected_fp} workflow=AI Plan step=none runs=1" in result.stdout
+	assert "codex planning failed after" in prompt.lower()
 
 
 def test_intake_escalates_a_heal_issue_that_fails_its_own_run() -> None:

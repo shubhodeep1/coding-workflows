@@ -1366,9 +1366,10 @@ through `clarify → plan → implement → review`.
   `ai:destructive-blocked` / `ai:scope-blocked` label reports through the label
   path), a failure the diagnose step turned into fix-up issues, or a `BLOCKED`
   verdict (the `Gate workflow failure heal report` step sets the job output
-  `heal_report`). The intake fingerprints the report from the failed job's log
-  (`phase:<phase>_failed` when no log can be read), keys it on the source issue
-  like a review/autofix report on its PR, and continues a heal issue's lineage
+  `heal_report`). The intake fingerprints the report from the current failed
+  run's job log (earlier streak logs are diagnosis context only;
+  `phase:<phase>_failed` when the current log cannot be read), keys it on the
+  source issue like a review/autofix report on its PR, and continues a heal issue's lineage
   when the failing issue is itself a heal issue. When a heal issue's own run
   fails with the fingerprint the issue was filed for, the pipeline cannot run
   its fix: the intake records the occurrence, labels the issue

@@ -659,8 +659,9 @@ def phase_failure_streak(comments: Iterable[dict[str, Any]], *, phase: str, repo
 	"""Count the trailing failed runs of one pipeline phase on an issue.
 
 	``comments`` is the issue-comment list, oldest first. Scanning from the
-	newest comment by ``trusted_author``, every failure comment of ``phase`` adds
-	one; a success, cancellation or another phase's failure ends the streak;
+	newest comment by ``trusted_author``, each distinct linked run of ``phase``
+	adds one (unlinked failure comments count individually); a success,
+	cancellation or another phase's failure ends the streak;
 	anything else (stall-recovery ``/answer`` comments,
 	markers) is skipped. The reporting run posted its own failure comment
 	before the report ran; when no counted comment links ``run_id`` (the
@@ -689,12 +690,17 @@ def phase_failure_streak(comments: Iterable[dict[str, Any]], *, phase: str, repo
 		)):
 			break
 		if body.startswith(own):
-			streak += 1
 			for ref in extract_run_refs([body], repo, limit=1):
 				if ref["run_id"] == current:
+					if current_seen:
+						break
 					current_seen = True
-				elif ref["run_id"] not in run_ids:
+				elif ref["run_id"] in run_ids:
+					break
+				else:
 					run_ids.append(ref["run_id"])
+			else:
+				streak += 1
 			continue
 		if body.startswith(PHASE_SUCCESS_COMMENT_PREFIXES) or body.startswith(others):
 			break
