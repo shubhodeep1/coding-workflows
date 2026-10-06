@@ -353,7 +353,7 @@ def test_clarify_isolated_docker_commands_strip_runner_secrets() -> None:
 	for line in runner.splitlines():
 		if re.search(r"\bdocker (?:build|run|rm)\b", line):
 			assert "env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN -u GH_PAT docker " in line
-	assert 'PYTHONDONTWRITEBYTECODE=1 python3 - "${run_root}/source" <<\'PY\' || exit 76' in runner
+	assert 'PYTHONDONTWRITEBYTECODE=1 python3 - "${run_root}/source" "${CLARIFY_ISOLATION_SUPPORT_DIR:-}" <<\'PY\' || exit 76' in runner
 
 
 def test_clarify_broker_rejects_other_routes_and_streams_without_leaking_key() -> None:
