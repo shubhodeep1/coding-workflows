@@ -16946,6 +16946,117 @@ def test_untrusted_security_pass_reset_cannot_clear_findings():
 	assert result["latest_state"]["security_pass_reported_findings"] == state["security_pass_reported_findings"]
 
 
+# Issue #6506 (security finding unauthorized-project-reset-comments): reset
+# comments must come from the pipeline login or a human OWNER / MEMBER /
+# COLLABORATOR. Missing provenance, bot identities and non-member associations
+# are rejected; forged boundary markers and later outsider commands cannot
+# suppress or escalate an authorized reset.
+@pytest.mark.parametrize(
+	"untrusted_comment",
+	[
+		pytest.param({"body": "/judge_resume --force", "user": {"login": "drive-by"}}, id="missing_author_association"),
+		pytest.param(
+			{"body": "/judge_resume --force", "user": {"login": "renovate[bot]", "type": "Bot"}, "author_association": "MEMBER"},
+			id="bot_with_member_association",
+		),
+		pytest.param(
+			{"body": "/judge_resume --force", "user": {"login": "past-contributor", "type": "User"}, "author_association": "CONTRIBUTOR"},
+			id="contributor_association",
+		),
+	],
+)
+def test_judge_resume_from_unauthorized_author_is_ignored(untrusted_comment):
+	state = _base_state(status="failed")
+	state.update(judge_stall_cycles=8, recovery_count=4)
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		tracking_comments=[untrusted_comment],
+	)
+	assert result["latest_state"]["status"] == "failed"
+	assert result["latest_state"]["judge_stall_cycles"] == 8
+	assert result["latest_state"]["recovery_count"] == 4
+
+
+@pytest.mark.parametrize(
+	"untrusted_comment",
+	[
+		pytest.param({"body": "/revalidate", "user": {"login": "drive-by"}}, id="missing_author_association"),
+		pytest.param(
+			{"body": "/revalidate", "user": {"login": "past-contributor", "type": "User"}, "author_association": "CONTRIBUTOR"},
+			id="contributor_association",
+		),
+	],
+)
+def test_revalidate_from_unauthorized_author_is_ignored(untrusted_comment):
+	state = _base_state(status="failed")
+	result = _run_poller(
+		state=state, enable_validation="true", max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed"],
+		tracking_comments=[untrusted_comment],
+	)
+	assert result["latest_state"]["status"] == "failed"
+	assert result["validation_dispatches"] == []
+
+
+def test_revalidate_from_collaborator_is_accepted():
+	state = _base_state(status="failed")
+	state["validation_cycle"] = 3
+	state["validation_recovery_count"] = 2
+	state["validation_failure_reason"] = "Exceeded MAX_VALIDATE_CYCLES"
+	result = _run_poller(
+		state=state, enable_validation="true", max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed"],
+		tracking_comments=[
+			{"body": "/revalidate", "user": {"login": "helper", "type": "User"}, "author_association": "COLLABORATOR"},
+		],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "validating"
+	assert ls["validation_cycle"] == 1
+	assert ls["validation_recovery_count"] == 0
+	assert "ai:validation-failed" not in result["tracking_labels"]
+	assert len(result["validation_dispatches"]) == 1
+
+
+def test_forged_re_security_pass_dedup_marker_does_not_suppress_trusted_command():
+	state = _security_pass_failed_state_for_auto_reset("a" * 40)
+	result = _run_failed_project_tick(
+		state,
+		{"SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE": "false"},
+		tracking_comments=[
+			"/re-security-pass retry after manual remediation",
+			{"body": "<!-- re-security-pass-dedup:1 -->", "user": {"login": "outsider"}, "author_association": "NONE"},
+		],
+	)
+	ls = result["latest_state"]
+	assert ls["security_pass_cycle"] == 0
+	assert ls["security_pass_reported_findings"] != state["security_pass_reported_findings"]
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	assert any(
+		"re-security-pass-dedup:" in comment.get("body", "")
+		and (comment.get("user") or {}).get("login") != "outsider"
+		for comment in result["issues"]["192"]["comments"]
+	), "expected a pipeline-authored re-security-pass-dedup marker"
+
+
+def test_untrusted_judge_resume_after_trusted_one_does_not_mask_it():
+	state = _base_state(status="failed")
+	state.update(judge_stall_cycles=8, recovery_count=2)
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		tracking_comments=[
+			"/judge_resume --reset-recovery",
+			{"body": "/judge_resume --force", "user": {"login": "outsider"}, "author_association": "NONE"},
+		],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "in_progress"
+	assert ls["recovery_count"] == 0
+	assert ls["judge_stall_cycles"] == 8
+
+
 def test_judge_resume_not_blocked_by_prose_marker_comment_after_command():
 	state = _base_state(status="failed")
 	state["judge_stall_cycles"] = 9
