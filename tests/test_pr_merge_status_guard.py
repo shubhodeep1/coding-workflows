@@ -1432,6 +1432,58 @@ def test_env_unresolved_commit_directory_asks_instead_of_checking_checkout(merge
 	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
 
 
+@pytest.mark.parametrize("command", [
+	"if true; then env FOO=bar git commit -m x; fi",
+	"if true; then git -c user.name=bot commit -m x; fi",
+	"if true; then GIT_CONFIG_COUNT=0 git commit -m x; fi",
+])
+def test_unrelated_override_does_not_prompt_for_shell_control_commit(merged_branch_repo, command: str) -> None:
+	repo, stub_bin = merged_branch_repo
+	_git(repo, "checkout", "main")
+	proc = _run_hook(repo, stub_bin, command)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "could not resolve git command directory" in proc.stdout
+	assert _ask_decision(proc) is None
+
+
+def test_unresolved_env_directory_inside_shell_control_still_asks(merged_branch_repo) -> None:
+	repo, stub_bin = merged_branch_repo
+	_git(repo, "checkout", "main")
+	proc = _run_hook(repo, stub_bin, "if true; then env -C /does-not-exist git commit -m x; fi")
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert _ask_decision(proc) is not None
+
+
+@pytest.mark.parametrize("command", [
+	"if true; then env GIT_DIR=/does-not-exist git commit -m x; fi",
+	"if true; then git -C /does-not-exist commit -m x; fi",
+	"if true; then git --config-env=core.worktree:UNSET_WORKTREE commit -m x; fi",
+])
+def test_unresolved_directory_selector_inside_shell_control_asks(merged_branch_repo, command: str) -> None:
+	repo, stub_bin = merged_branch_repo
+	_git(repo, "checkout", "main")
+	proc = _run_hook(repo, stub_bin, command)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert _ask_decision(proc) is not None
+
+
+@pytest.mark.parametrize("command", [
+	"if true; then env -C {repo} git commit -m x; fi",
+	"if true; then git -C {repo} commit -m x; fi",
+])
+def test_absolute_chdir_inside_shell_control_checks_selected_repo(merged_branch_repo, monkeypatch, command: str) -> None:
+	repo, _ = merged_branch_repo
+	other = repo.parent / "open-worktree"
+	_git(repo, "worktree", "add", "-b", "feature/open", str(other), "main")
+	merged_sha = _git(repo, "rev-parse", "feature/x")
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, branch, cwd: [dict(MERGED_PR, headRefOid=merged_sha)])
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(other),
+		"tool_input": {"command": command.format(repo=repo)}})
+	assert code == 2 and "Branch `feature/x`" in message
+
+
 def test_env_chdir_does_not_change_subsequent_command_directory(merged_branch_repo, monkeypatch) -> None:
 	repo, _ = merged_branch_repo
 	other = repo.parent / "open-worktree"
