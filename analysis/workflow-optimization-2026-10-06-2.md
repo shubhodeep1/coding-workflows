@@ -187,3 +187,40 @@ No provably unused function or actionable TODO/FIXME/HACK marker was established
 | Code modularization | ~8 workflows and 3–4 shared/support scripts | Large |
 | Expression size reduction | `implement.yml`, 2 new scripts, support registry/tests | Medium |
 | Medium/Low fixes | ~4 existing workflows/scripts, with overlap above | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-10-06)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is authorized for implementation; `NEEDS_VERIFICATION` requires specified checks first; `RISKY_SKIP` must not be auto-implemented because a protected retry, pagination, race, or similar contract is involved.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — RISKY_SKIP.** **Calls:** `scripts/orchestrate_poll_process.sh:11400-11401`, in `finalize_integration_merge_if_needed`. **Current → proposed:** 2 → 1 when the supplied PR snapshot does not match `final_pr`; otherwise 0 → 0. **Endpoint:** `GET /repos/{owner}/{repo}/pulls/{final_pr}`. **Evidence:** adjacent `_safe_gh_jq` reads extract `.state` and `.merged_at != null` from the same PR, with no intervening mutation. **Proposed fix:** fetch one PR object on the snapshot-mismatch path and extract both values locally, retaining the existing matched-snapshot path. **Safety rationale:** despite identical endpoint and filters, this is an explicitly race-defending poller finalization path; a combined read must preserve the current fail-closed behavior when either field or the request is unavailable. **Downstream signal:** Do not auto-implement; manually review concurrent-merge and failed-read cases, then test that finalization never accepts an unverified merge.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **REUSE-001 — RISKY_SKIP.** **Calls:** `scripts/review_merge_train.sh:290-295` (`_mt_find_marker_comment`) and `scripts/review_merge_train.sh:361-373` (`_mt_upsert_comment`). **Current → proposed:** 2 → 1 reads for an existing marker when the marker lookup precedes the upsert; other paths are unchanged. **Endpoints:** paginated `GET /repos/{owner}/{repo}/issues/{pr}/comments?per_page=100`; `GET /repos/{owner}/{repo}/issues/comments/{existing_id}`. **Evidence:** the paginated listing selects a matching comment but projects only its ID and creation time; `_mt_upsert_comment` then fetches that comment’s body to decide whether a PATCH is needed. **Proposed fix:** consider extending `_mt_find_marker_comment` to return the selected body alongside its ID and timestamp, and pass it to `_mt_upsert_comment`, retaining the single-comment GET when the body is missing or freshness is uncertain. **Safety rationale:** the first call is paginated, and the second may observe an edit made after the listing; replacing it unconditionally changes both page-boundary and freshness behavior. **Downstream signal:** Do not auto-implement; manually verify complete-page selection, concurrent comment edits, and identical upsert decisions and failure behavior.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: RISKY_SKIP — The proposed change alters a retry loop’s permanent-failure handling; review rate-limit classification and failure logs manually.
+- API-002: RISKY_SKIP — Both reads are paginated poller reads; intervening writes and external updates require cache-invalidation review.
+- BATCH-001: RISKY_SKIP — The seven inventory reads are in standalone stall recovery; verify label-result completeness and fallback before batching.
+- BATCH-002: RISKY_SKIP — The initial reads are paginated stall-recovery evidence; retain both fresh pre-mutation revalidation reads.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 0 | — |
+| RISKY_SKIP | 2 | MERGE-001, REUSE-001 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
