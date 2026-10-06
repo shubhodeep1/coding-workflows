@@ -83,6 +83,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/review_autofix_sweep.yml` — GitHub Actions workflow: Internal: AI Review Autofix Sweep.
 - `.github/workflows/review_rb_judge_dispatch.yml` — GitHub Actions workflow: Internal: Review-Blocked Judge Dispatch.
 - `.github/workflows/security-audit.yml` — GitHub Actions workflow: Security Audit.
+- `.github/workflows/sync-claude-live-copies.yml` — GitHub Actions workflow: Sync live .claude copies.
 - `.github/workflows/sync_ai_labels.yml` — GitHub Actions workflow: AI Sync Labels.
 - `.github/workflows/test-and-mark-stable.yml` — GitHub Actions workflow: Test & Mark Stable Release.
 - `.github/workflows/update_workflows.yml` — GitHub Actions workflow: Update Workflow Wrappers.
@@ -257,6 +258,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/stage_workflow_support.sh` — Shell helper for stage workflow support.
 - `scripts/summarize_reviewer_consensus.sh` — ledger via codex-cli (model: openai/gpt-6-luna, reasoning: medium).
 - `scripts/summarize_unselected_runs.py` — Summarize unselected workflow runs via gpt-6-luna to widen analysis coverage.
+- `scripts/sync_claude_live_copies.py` — Keep coding-workflows' live `.claude/` copies in step with their templates.
 - `scripts/targeted_file_context.py` — Inline likely-to-be-edited files into the Codex prompt as a reference block so the editor doesn't waste budget reading them.
 - `scripts/task_state.py` — Mirror orchestrator wave-issue state into per-task JSON files and unblock mirrored dependents.
 - `scripts/templates/serena_project.yml.j2` — Template asset for serena_project.yml.j2.
