@@ -152,7 +152,7 @@ def test_implement_workflow_delegates_stall_guard_launch_to_thread_reuse_helper(
 		'CODEX_THREAD_REUSE_STATUS_FILE="${attempt_stall_status_file}"',
 		'CODEX_THREAD_REUSE_TIMEOUT_SECS="${attempt_wall}"',
 		'CODEX_THREAD_REUSE_PHASE="implement"',
-		'bash "${IMPLEMENT_SANDBOX_SUPPORT_DIR}/scripts/codex_thread_reuse.sh" direct-run || cmd_rc=$?',
+		'bash "${EDITOR_ISOLATION_SUPPORT_DIR}/codex_thread_reuse.sh" direct-run || cmd_rc=$?',
 		"observed|killed)",
 		"[ \"${stall_state}\" = \"killed\" ]",
 	]:

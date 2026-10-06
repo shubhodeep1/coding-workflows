@@ -470,6 +470,19 @@ def test_codex_engine_runs_the_isolated_codex_call() -> None:
 	) in runner
 
 
+def test_implement_editor_attempts_use_isolated_snapshot_and_verified_transfer() -> None:
+	workflow_text = (REPO_ROOT / ".github/workflows/implement.yml").read_text(encoding="utf-8")
+	for step_name in ("Run Codex implementation", "Attempt post-Codex syntax repair"):
+		step = _workflow_step(workflow_text, step_name)
+		assert step.count('CODEX_THREAD_REUSE_REAL_CODEX=') == 1
+		assert 'CODEX_THREAD_REUSE_REAL_CODEX="${EDITOR_ISOLATION_ROOT}/bin/codex"' in step
+		assert 'CODEX_THREAD_REUSE_CLAUDE_RUNNER=' not in step
+		assert 'bash "${EDITOR_ISOLATION_SUPPORT_DIR}/codex_thread_reuse.sh" direct-run' in step
+		assert step.index('editor_isolated_run.sh" snapshot') < step.index('editor_git_credentials hide')
+		assert step.index('editor_isolated_run.sh" finish') < step.index('editor_git_credentials restore', step.index('editor_isolated_run.sh" finish'))
+		assert 'editor_isolated_run.sh" reap "${EDITOR_ISOLATION_ROOT}" && editor_git_credentials restore' in step
+
+
 def main() -> int:
 	tests = [value for name, value in sorted(globals().items()) if name.startswith("test_")]
 	for test in tests:

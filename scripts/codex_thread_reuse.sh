@@ -610,6 +610,7 @@ codex_thread_reuse_claude_direct_run()
 	local claude_prompt=""
 	local claude_rc=0
 	local -a claude_cmd=()
+	local -a claude_args=()
 	local -a tee_targets=()
 
 	engine_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -657,6 +658,11 @@ codex_thread_reuse_claude_direct_run()
 	elif [ -n "${EDITOR_ISOLATION_ROOT:-}" ]; then
 		claude_cmd=(bash "${EDITOR_ISOLATION_SUPPORT_DIR:-${engine_dir}}/editor_isolated_run.sh" claude-exec "${EDITOR_ISOLATION_ROOT}")
 	fi
+	claude_args=("${role}" "${effective_prompt}" "${output_file}")
+	if [ -z "${EDITOR_ISOLATION_ROOT:-}" ] || [ -n "${CODEX_THREAD_REUSE_CLAUDE_RUNNER:-}" ]; then
+		claude_args+=("$(/bin/pwd -P)")
+	fi
+	claude_args+=("${claude_session_id}")
 	if [ -n "${timeout_secs}" ]; then
 		if command -v timeout >/dev/null 2>&1; then
 			claude_cmd=(timeout --signal=TERM --kill-after=5s "${timeout_secs}s" "${claude_cmd[@]}")
@@ -665,10 +671,10 @@ codex_thread_reuse_claude_direct_run()
 		fi
 	fi
 	if [ "${#tee_targets[@]}" -gt 0 ]; then
-		"${claude_cmd[@]}" "${role}" "${effective_prompt}" "${output_file}" "$(/bin/pwd -P)" "${claude_session_id}" \
+		"${claude_cmd[@]}" "${claude_args[@]}" \
 			2> >(tee -a "${tee_targets[@]}" >&2) || claude_rc=$?
 	else
-		"${claude_cmd[@]}" "${role}" "${effective_prompt}" "${output_file}" "$(/bin/pwd -P)" "${claude_session_id}" || claude_rc=$?
+		"${claude_cmd[@]}" "${claude_args[@]}" || claude_rc=$?
 	fi
 	if [ -n "${claude_prompt}" ]; then
 		rm -f "${claude_prompt}"

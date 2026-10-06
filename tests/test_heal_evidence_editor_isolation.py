@@ -614,7 +614,7 @@ def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
 	assert "GH_TOKEN: ${{ github.token }}" in implementation
 	repair = implement.split("      - name: Attempt post-Codex syntax repair\n", 1)[1].split("      - name: ", 1)[0]
 	assert "GH_TOKEN: ${{ github.token }}" in repair
-	assert repair.count('editor_git_credentials restore') == 2
+	assert repair.count('editor_git_credentials restore') == 3  # Exit trap and both attempt outcomes.
 	assert repair.index('editor_git_credentials restore') < repair.index('echo "::warning::Post-Codex repair attempt')
 	assert implement.count('env -u GH_TOKEN -u GH_PAT') == 2
 	assert implement.count('-u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH \\') == 2

@@ -66,8 +66,12 @@ def test_launch_contracts_are_isolated_and_reaped_before_restore() -> None:
 		implement.split("      - name: Attempt post-Codex syntax repair\n", 1)[1].split("      - name: ", 1)[0]):
 		assert 'editor_isolated_run.sh" snapshot' in block
 		assert 'editor_isolated_run.sh" finish' in block
-		assert block.index('editor_isolated_run.sh" finish') < block.rindex('editor_git_credentials.sh" restore')
+		assert block.index('editor_isolated_run.sh" snapshot') < block.index('editor_git_credentials hide')
+		assert block.index('editor_isolated_run.sh" finish') < block.index('editor_git_credentials restore', block.index('editor_isolated_run.sh" finish'))
+		assert 'editor_isolated_run.sh" reap "${EDITOR_ISOLATION_ROOT}" && editor_git_credentials restore' in block
 		assert 'CODEX_THREAD_REUSE_REAL_CODEX="${EDITOR_ISOLATION_ROOT}/bin/codex"' in block
+		assert block.count('CODEX_THREAD_REUSE_REAL_CODEX=') == 1
+		assert 'CODEX_THREAD_REUSE_CLAUDE_RUNNER=' not in block
 		assert 'bash "${EDITOR_ISOLATION_SUPPORT_DIR}/codex_thread_reuse.sh" direct-run' in block
 	assert 'claude_run PLAN' not in plan
 	assert '"${EDITOR_ISOLATION_ROOT}/bin/codex" --ask-for-approval never' in plan
