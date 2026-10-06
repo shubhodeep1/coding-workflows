@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "Standalone clarify/respond changes pair workflow and helper logic with tests for GitHub facts and data provisioning; related prompt updates may need to stay consistent between the active prompt and its template. When changing this path, verify the guards and both prompt sources where applicable.",
+  "fingerprint": "1aa4489b01ba395e4112424fdb8c884c3e074b556ee90bfe6d441aeb80e958c5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37397616861",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37397616861",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6342",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6389",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6398",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6420",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6423",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6351",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6406",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6418",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6421",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6425"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261006012005_73f534a765",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "The clarify/respond standalone path needs explicit GitHub-facts and data-provision safeguards.",
+  "timestamps": {
+    "created_at": "2026-10-06T01:20:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
