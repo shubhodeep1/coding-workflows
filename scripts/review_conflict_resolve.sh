@@ -2280,7 +2280,7 @@ _resolver_sandbox_opencode_attempt()
   fi
   if ! REVIEW_SANDBOX_ROOT="${resolver_opencode_root}" bash "${resolver_sandbox_sh}" cleanup; then
     echo '::error::Conflict resolver sandbox cleanup failed; refusing to retry or commit.' >&2
-    exit 1
+    _resolver_fail_closed sandbox_cleanup_failed
   fi
   if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then
     if [ -f "${resolver_transfer_reason_file}" ] && [ ! -L "${resolver_transfer_reason_file}" ] &&
@@ -2292,7 +2292,7 @@ _resolver_sandbox_opencode_attempt()
     rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
     # A failed rollback can leave partial host edits; no retry may commit them.
     if [ "${resolver_transfer_reason}" = " reason=transfer_rollback_failed" ]; then
-      exit 1
+      _resolver_fail_closed transfer_rollback_failed
     fi
     _codex_exit=1
   fi

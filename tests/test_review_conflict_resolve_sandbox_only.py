@@ -138,6 +138,9 @@ def test_unsafe_failure_stops_instead_of_retrying(tmp_path, mode):
 	env = dict(os.environ, SUPPORT_SCRIPTS_DIR=str(sandbox.parent), CALLS=str(calls),
 		FAKE_ROOT=str(tmp_path), MODE=mode, RUNTIME_DIR=str(tmp_path))
 	result = subprocess.run(["bash", "-c", f'''set -euo pipefail
+emit_conflict_resolver_substate() {{ :; }}
+_persist_resolver_retry_state_from_current_failure() {{ printf '%s\\n' "$RESOLVER_ISOLATION_FAILURE_REASON" > "$RUNTIME_DIR/persisted_reason"; }}
+{_failure_helper()}
 {src}
 resolver_sandbox_sh={str(sandbox)!r}
 tmp_output={str(output)!r}
@@ -155,6 +158,9 @@ echo unexpected
 	assert result.returncode == 1 and "unexpected" not in result.stdout
 	expected_error = "sandbox cleanup failed" if mode == "cleanup_failed" else "reason=transfer_rollback_failed"
 	assert expected_error in result.stderr
+	assert (tmp_path / "persisted_reason").read_text().strip() == (
+		"sandbox_cleanup_failed" if mode == "cleanup_failed" else "transfer_rollback_failed"
+	)
 
 
 def test_unsupported_path_refuses_before_any_model(tmp_path):
