@@ -167,8 +167,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
    project security-pass gate before validation/finalization. The decomposer
    runs both engines through `scripts/clarify_isolated_run.sh` (role
    `ORCHESTRATE`) with a read-only, credential-free snapshot; sandbox setup
-   failures record `last_status=isolation_unavailable` and never fall back to
-   the host. The poller's wave, stall, integration and security-pass judges use read-only,
+   failures (including Claude image-build or relay-start failures) record
+   `last_status=isolation_unavailable` and retry without falling back to
+   Codex in the same attempt or to the host. The poller's wave, stall,
+   integration and security-pass judges use read-only,
    credential-free review sandboxes on both engines. Isolation failure
    defers (never host fallback) and escalates per role after
    `JUDGE_ISOLATION_MAX_FAILURES`; only deterministic poller code writes to

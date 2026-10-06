@@ -131,11 +131,16 @@ if [ "${engine}" = claude ]; then
 	chmod 0644 "${run_root}/claude-settings.json"
 	mapfile -t claude_accounts < <(ai_engine_accounts)
 	[ "${#claude_accounts[@]}" -gt 0 ] || { ai_engine_fallback "${engine_role}" no_credential; exit 75; }
-	if ! image="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN -u GH_PAT docker build -q --build-arg "CODEX_VERSION=${version}" --build-arg "CLAUDE_CLI_VERSION=${claude_version}" -f scripts/clarify_sandbox/Dockerfile scripts/clarify_sandbox)"; then
+	image="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN -u GH_PAT docker build -q --build-arg "CODEX_VERSION=${version}" --build-arg "CLAUDE_CLI_VERSION=${claude_version}" -f scripts/clarify_sandbox/Dockerfile scripts/clarify_sandbox)" || image=""
+	if [ -z "${image}" ]; then
+		if [ "${engine_role}" = ORCHESTRATE ]; then
+			echo '::error::Decomposer sandbox image build failed' >&2
+			exit 76
+		fi
 		ai_engine_fallback "${engine_role}" image_build_failed
 		exit 75
 	fi
-	[ -n "${image}" ] || { ai_engine_fallback "${engine_role}" image_build_failed; exit 75; }
+	relay_start_failed=false
 	for account in "${claude_accounts[@]}"; do
 		rm -f -- "${run_root}/results/transcript.jsonl" "${run_root}/results/stderr" "${run_root}/socket/provider.sock"
 		env -i PATH="${PATH}" PYTHONDONTWRITEBYTECODE=1 \
@@ -148,6 +153,7 @@ if [ "${engine}" = claude ]; then
 		done
 		if [ ! -S "${run_root}/socket/provider.sock" ]; then
 			echo "CLAUDE_POOL run role=${engine_role} account=${account} outcome=crashed reason=relay_unavailable" >&2
+			relay_start_failed=true
 			kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; broker_pid=""
 			continue
 		fi
@@ -204,6 +210,10 @@ if [ "${engine}" = claude ]; then
 				;;
 		esac
 	done
+	if [ "${engine_role}" = ORCHESTRATE ] && [ "${relay_start_failed}" = true ]; then
+		echo '::error::Decomposer sandbox relay could not start' >&2
+		exit 76
+	fi
 	ai_engine_fallback "${engine_role}" all_accounts_failed
 	exit 75
 fi

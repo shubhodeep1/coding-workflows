@@ -2115,8 +2115,11 @@ PR head and default-branch tip match the judge's comment; fingerprints and scope
 take precedence. If the guidance comment cannot be confirmed, dispatch waits
 for the next poll without consuming the conflict budget. If a resolver is
 already in flight, the poller skips the judge call and defers without charging another dispatch against the
-integration branch's lifetime budget. The
-ORCHESTRATE decomposer remains a host process and is outside this change.
+integration branch's lifetime budget. The ORCHESTRATE decomposer runs both
+Claude and Codex through `scripts/clarify_isolated_run.sh` in a read-only,
+credential-free sandbox. Docker, image-build and relay-start failures on the
+decomposer count as `isolation_unavailable` attempts; its existing retry loop
+and failure alerts still apply, with no host model fallback.
 An OpenCode installation failure does not stop other poller work; the isolated
 judge defers if its configuration or sandbox cannot be prepared.
 A lost escalation-comment response is reconciled against the issue's trusted
@@ -2134,6 +2137,9 @@ on Claude (`claude_run`, or the clarify sandbox's Claude branch). When Claude
 cannot start (no CLI, no credential, clarify image build failure or every
 account gated: exit `75`, logged
 `AI_ENGINE_FALLBACK`), the same attempt runs its codex/OpenCode fallback.
+For the ORCHESTRATE decomposer, image-build and relay-start failures instead
+exit `76`, retrying the failed attempt without starting Codex; only Claude
+unavailability takes the isolated Codex fallback.
 Poller judges retry OpenCode in a fresh isolated sandbox, never host Codex.
 If the decomposer cannot source `scripts/ai_engine.sh`, engine selection warns
 and continues on Codex instead of stopping the orchestration job.
@@ -2147,9 +2153,9 @@ labeled `ai:engine-claude` triggers CLI and credential setup even when the
 global engine variable selects codex, unless `ai:codex` is also present.
 The poller's review-blocked judge instead uses the selected PR's labels from
 its existing PR fetch (unavailable labels choose OpenCode); standalone stall
-judges use their target issue's labels. The decomposer's Claude launcher strips
-GitHub and OpenRouter token environment variables before sourcing its engine
-helper; the isolated model relay still reads only its dedicated pool token file.
+judges use their target issue's labels. The decomposer's isolated model
+receives only a source snapshot and placeholder credentials; the host relay
+alone reads its dedicated pool token file.
 Implementation attempts on Claude honor the same `CODEX_THREAD_REUSE_TIMEOUT_SECS`
 wall-clock bound as codex attempts; diagnosis is bounded to 300 seconds on
 either engine. An exit-75 implementation fallback remains on codex for later

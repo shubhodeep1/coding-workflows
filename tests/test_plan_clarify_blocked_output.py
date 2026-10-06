@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import tempfile
@@ -285,6 +286,33 @@ def test_clarify_isolated_runner_accepts_orchestrate_role_and_fails_closed_witho
 			)
 			assert result.returncode == expected, result.stderr
 		assert not (tmp_path / "out.txt").exists()
+
+
+def test_orchestrate_claude_image_build_failure_is_not_engine_unavailability(tmp_path: Path) -> None:
+	runner = _read(REPO_ROOT / "scripts" / "clarify_isolated_run.sh")
+	build = runner.split('\timage="$(env -u OPENROUTER_API_KEY', 1)[1].split('\tfor account in "${claude_accounts[@]}"; do', 1)[0]
+	build = '\timage="$(env -u OPENROUTER_API_KEY' + build
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	docker = bin_dir / "docker"
+	for docker_rc in (0, 1):
+		docker.write_text(f"#!/bin/sh\nexit {docker_rc}\n", encoding="utf-8")
+		docker.chmod(0o755)
+		for role, expected in (("ORCHESTRATE", 76), ("CLARIFY", 75)):
+			result = subprocess.run(
+				["bash", "-c", f'set -euo pipefail\nengine_role={role}\nversion=v0.114.0\nclaude_version=2.0.0\nai_engine_fallback() {{ :; }}\n{build}'],
+				env={"PATH": f"{bin_dir}:{os.environ['PATH']}"}, capture_output=True, text=True, check=False,
+			)
+			assert result.returncode == expected, result.stderr
+	assert 'relay_start_failed=true' in runner
+	relay = runner.split('\tif [ "${engine_role}" = ORCHESTRATE ] && [ "${relay_start_failed}" = true ]; then', 1)[1].split('\nfi\n', 1)[0]
+	relay = '\tif [ "${engine_role}" = ORCHESTRATE ] && [ "${relay_start_failed}" = true ]; then' + relay
+	for role, failed, expected in (("ORCHESTRATE", "true", 76), ("ORCHESTRATE", "false", 75), ("CLARIFY", "true", 75)):
+		result = subprocess.run(
+			["bash", "-c", f'set -euo pipefail\nengine_role={role}\nrelay_start_failed={failed}\nai_engine_fallback() {{ :; }}\n{relay}'],
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == expected, result.stderr
 
 
 def test_clarify_isolated_docker_commands_strip_runner_secrets() -> None:

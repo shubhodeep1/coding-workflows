@@ -1032,9 +1032,12 @@ def test_decomposer_on_codex_never_touches_claude(tmp_path: Path) -> None:
 
 
 def test_decomposer_sandbox_setup_failure_does_not_fall_back_to_host(tmp_path: Path) -> None:
-	proc, calls = _run_decomposer_block(tmp_path, "codex", "success", codex_mode="isolation")
-	assert "rc=76 engine=codex" in proc.stdout, proc.stderr
-	assert len(_read(Path(f"{calls}.isolated")).splitlines()) == 1
+	for engine in ("claude", "codex"):
+		work = tmp_path / engine
+		work.mkdir()
+		proc, calls = _run_decomposer_block(work, engine, "isolation", codex_mode="isolation")
+		assert f"rc=76 engine={engine}" in proc.stdout, proc.stderr
+		assert _read(Path(f"{calls}.isolated")).splitlines() == [f"prompt.txt|out.txt|./codex_log.txt|{engine}|ORCHESTRATE"]
 	run = _orchestrate_steps()["Run Codex (decomposer)"]["run"]
 	classification = run.split('if [ "$rc" = "76" ]; then', 1)[1].split('elif [ "$rc" = "124" ]; then', 1)[0]
 	result = subprocess.run(
