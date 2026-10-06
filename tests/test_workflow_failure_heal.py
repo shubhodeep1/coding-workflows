@@ -1232,10 +1232,10 @@ def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[s
 		# Default run GET fixtures; an explicit run_details map can model 404s
 		# or mismatched identities without a permissive mock API fallback.
 		if "run_details" not in state:
-			workflow = ("test-and-mark-stable.yml" if payload["source_kind"] == "workflow_run" else
-				"internal-plan.yml" if payload["source_kind"] == "phase_failure" and payload["source_repo"] == SELF_REPO else
-				"ai-plan.yml" if payload["source_kind"] == "phase_failure" else
-				"internal-review.yml" if payload["source_repo"] == SELF_REPO else "ai-review.yml")
+			workflow = ("test-and-mark-stable.yml" if payload.get("source_kind") == "workflow_run" else
+				"internal-plan.yml" if payload.get("source_kind") == "phase_failure" and payload.get("source_repo") == SELF_REPO else
+				"ai-plan.yml" if payload.get("source_kind") == "phase_failure" else
+				"internal-review.yml" if payload.get("source_repo") == SELF_REPO else "ai-review.yml")
 			state["run_details"] = {
 				f"repos/{ref['repo']}/actions/runs/{ref['run_id']}": {
 					"id": int(ref["run_id"]), "repository": {"full_name": ref["repo"]},

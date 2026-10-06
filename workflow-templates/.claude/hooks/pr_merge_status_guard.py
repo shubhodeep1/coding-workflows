@@ -1499,7 +1499,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		if invocation.subcommand == "commit" and invocation.warning == (
 			"could not resolve git command directory (env -C/--chdir); cannot check checkout PR history"
 		):
-			unknown_destination_reasons.append("could not resolve git commit directory; cannot verify its PR history")
+			unknown_destination_reasons.append("could not resolve git commit directory; no checkout was checked; cannot verify its PR history")
 			continue
 		if invocation.subcommand == "push" and invocation.warning == "unparsed env wrapper":
 			unverified_destinations.add("unparsed env-wrapped Git command")
