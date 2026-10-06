@@ -1568,7 +1568,7 @@ def verify_run_provenance(
 	if kind == "workflow_run" and repo.lower() != self_repo.lower():
 		result["reason"] = "source_not_self"
 		return result
-	if kind != "workflow_run" and not trusted_login.strip():
+	if (kind == "autofix_failure" or (kind == "phase_failure" and repo.lower() == self_repo.lower())) and not trusted_login.strip():
 		result["reason"] = "identity_unavailable"
 		return result
 	if kind != "workflow_run" and not isinstance(comments, list):
@@ -1576,8 +1576,9 @@ def verify_run_provenance(
 		return result
 	result["run_refs"] = []
 	phase = str(payload.get("failure_reason") or "").removesuffix("_failed")
-	allowed = (PHASE_WRAPPER_WORKFLOW_FILES.get(phase, ()) if kind == "phase_failure"
-		else REVIEW_WRAPPER_WORKFLOW_FILES if kind == "autofix_failure" else RELEASE_WORKFLOW_FILES)
+	allowed = (PHASE_WRAPPER_WORKFLOW_FILES.get(phase, ()) if repo.lower() == self_repo.lower()
+		else PHASE_WRAPPER_WORKFLOW_FILES.get(phase, ())[:1]) if kind == "phase_failure" else (
+		REVIEW_WRAPPER_WORKFLOW_FILES if kind == "autofix_failure" else RELEASE_WORKFLOW_FILES)
 	reporter_match = _RUN_URL_RE.fullmatch(str(payload.get("reporter_run_url") or ""))
 	reporter_id = reporter_match.group("run_id") if reporter_match and reporter_match.group("repo").lower() == repo.lower() else ""
 	for position, ref in enumerate(refs):
@@ -1598,11 +1599,16 @@ def verify_run_provenance(
 			pending = (kind == "phase_failure" and position == 0) or (kind == "autofix_failure" and run_id == reporter_id)
 			if not pending or run.get("status") not in ("in_progress", "queued", "pending") or run.get("conclusion") is not None:
 				reason = "not_failed"
+		if not reason and kind == "phase_failure" and run.get("event") not in PHASE_REPORT_RUN_EVENTS:
+			reason = "unexpected_run_event"
 		if not reason and _run_workflow_file(run) not in allowed:
 			reason = "unexpected_workflow_path"
 		if not reason and kind == "phase_failure":
 			linked = any(
-				isinstance(comment, dict) and _comment_author(comment) == trusted_login.strip().lower()
+				isinstance(comment, dict) and bool(_comment_author(comment))
+				and (_comment_author(comment) in PHASE_REPORT_TRUSTED_BOT_LOGINS
+					or comment.get("author_association") in PHASE_REPORT_TRUSTED_ASSOCIATIONS)
+				and (repo.lower() != self_repo.lower() or _comment_author(comment) == trusted_login.strip().lower())
 				and sanitize_text(comment.get("body")).strip().startswith(PHASE_FAILURE_COMMENT_PREFIXES.get(phase, ()))
 				and any(item["run_id"] == run_id for item in extract_run_refs([sanitize_text(comment.get("body"))], repo))
 				for comment in comments or []

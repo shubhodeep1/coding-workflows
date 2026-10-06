@@ -237,12 +237,13 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `WORKFLOW_HEAL_PR_RECONCILE`, `WORKFLOW_HEAL`.
     Before reading logs for phase, autofix or release reports, the intake
     checks referenced runs' repository, failure status and workflow path;
-    phase and autofix runs must also be linked to the issue or PR. Phase
-    failure comments must come from the intake token's account. Rejections
-    log `WORKFLOW_HEAL provenance_rejected` and fail closed, so a missing
-    phase failure comment prevents intake. Consumers must use the same
-    reporting account as the intake. A holder of the shared `GH_PAT` can
-    still read registered repositories' logs directly or report a genuinely
+    phase and autofix runs must also be linked to the issue or PR. Self-repo
+    phase failure comments must come from the intake token's account; consumer
+    phase comments require a trusted GitHub-reported author association or
+    `github-actions[bot]`, and phase run events are checked before job reads.
+    Rejections log `WORKFLOW_HEAL provenance_rejected` and fail closed, so a
+    missing phase failure comment prevents intake. A holder of the shared
+    `GH_PAT` can still read registered repositories' logs directly or report a genuinely
     linked failed run.
     A report whose failure reason is `identical_failure_cap`, or a generation
     > 1 of its lineage, is deterministic (`is_deterministic_failure`): the

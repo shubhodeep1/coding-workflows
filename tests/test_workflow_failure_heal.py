@@ -3621,12 +3621,12 @@ def _phase_payload(*, repo: str = CONSUMER_REPO, issue: dict | None = None, comm
 
 
 def _provenance_run(run_id: int = 500, *, repo: str = CONSUMER_REPO, path: str = "ai-plan.yml", status: str = "completed", conclusion: str | None = "failure", **extras) -> dict:
-	return {"id": run_id, "repository": {"full_name": repo}, "path": f".github/workflows/{path}", "status": status, "conclusion": conclusion, **extras}
+	return {"id": run_id, "repository": {"full_name": repo}, "path": f".github/workflows/{path}", "status": status, "conclusion": conclusion, "event": "issue_comment", **extras}
 
 
 def test_verify_run_provenance_phase_trust_and_fail_closed() -> None:
 	payload = heal.validate_payload(_phase_payload())
-	linked = [{**_plan_failed_comment(CONSUMER_REPO, 500), "user": {"login": "workflow-bot"}}]
+	linked = [{**_plan_failed_comment(CONSUMER_REPO, 500), "user": {"login": "workflow-bot"}, "author_association": "OWNER"}]
 	run = _provenance_run(status="in_progress", conclusion=None)
 	def check(run_details, comments=linked, login="workflow-bot"):
 		return heal.verify_run_provenance(payload, runs={"500": run_details}, comments=comments, trusted_login=login, self_repo=SELF_REPO)
@@ -3636,16 +3636,22 @@ def test_verify_run_provenance_phase_trust_and_fail_closed() -> None:
 		(None, "run_lookup_failed"),
 		(_provenance_run(path="evil.yml"), "unexpected_workflow_path"),
 		(_provenance_run(path="../ai-plan.yml"), "unexpected_workflow_path"),
+		(_provenance_run(path="internal-plan.yml"), "unexpected_workflow_path"),
+		(_provenance_run(event="push"), "unexpected_run_event"),
 		(_provenance_run(conclusion="success"), "not_failed"),
 	):
 		verdict = check(rejected_run)
 		assert verdict["reason"] == f"current_run_rejected:{reason}"
 		assert {"run_id": "500", "reason": reason} in verdict["rejections"]
 	assert check(run, [])["reason"] == "current_run_rejected:not_linked_to_issue"
-	assert check(run, [{**linked[0], "user": {"login": "attacker"}}])["reason"] == "current_run_rejected:not_linked_to_issue"
+	assert check(run, [{**linked[0], "user": {"login": "attacker"}, "author_association": "NONE"}])["reason"] == "current_run_rejected:not_linked_to_issue"
 	assert check(run, [{"body": "AI implementation workflow failed for x. " + linked[0]["body"], "user": {"login": "workflow-bot"}}])["reason"] == "current_run_rejected:not_linked_to_issue"
-	assert check(run, login="")["reason"] == "identity_unavailable"
+	assert check(run, login="")["status"] == "ok"
+	assert check(run, [{**linked[0], "user": {"login": "consumer-ci"}, "author_association": "MEMBER"}], login="")["status"] == "ok"
+	assert check(run, [{**linked[0], "user": {"login": ""}}])["reason"] == "current_run_rejected:not_linked_to_issue"
 	assert check(run, comments=None)["reason"] == "comments_unavailable"
+	assert heal.verify_run_provenance(heal.validate_payload(_phase_payload(repo=SELF_REPO)), runs={"500": _provenance_run(repo=SELF_REPO, path="internal-plan.yml")}, comments=[{**_plan_failed_comment(SELF_REPO, 500), "user": {"login": "workflow-bot"}}], trusted_login="", self_repo=SELF_REPO)["reason"] == "identity_unavailable"
+	assert heal.verify_run_provenance(heal.validate_payload(_phase_payload(repo=SELF_REPO)), runs={"500": _provenance_run(repo=SELF_REPO, path="internal-plan.yml")}, comments=[{**_plan_failed_comment(SELF_REPO, 500), "user": {"login": "workflow-bot"}, "author_association": "NONE"}], trusted_login="workflow-bot", self_repo=SELF_REPO)["reason"] == "current_run_rejected:not_linked_to_issue"
 	assert check(_provenance_run(id=499))["reason"] == "current_run_rejected:run_id_mismatch"
 	verdict = heal.verify_run_provenance(payload, runs={"500": _provenance_run()}, comments=linked, trusted_login="workflow-bot", self_repo=SELF_REPO)
 	assert verdict["status"] == "ok" and [ref["run_id"] for ref in verdict["run_refs"]] == ["500"]
@@ -3849,13 +3855,13 @@ def test_intake_phase_failure_accepts_consumer_pipeline_account() -> None:
 
 
 @pytest.mark.parametrize("case,reason", [
-	("run_missing", "run_unavailable"),
+	("run_missing", "run_lookup_failed"),
 	("other_repo", "repo_mismatch"),
-	("wrong_path", "workflow_path_mismatch"),
-	("success", "run_not_failed"),
-	("no_comment", "no_linking_comment"),
-	("untrusted_comment", "untrusted_comment_author"),
-	("self_identity_error", "comment_author_unavailable"),
+	("wrong_path", "unexpected_workflow_path"),
+	("success", "not_failed"),
+	("no_comment", "not_linked_to_issue"),
+	("untrusted_comment", "not_linked_to_issue"),
+	("self_identity_error", "identity_unavailable"),
 	("comments_error", "comments_unavailable"),
 ])
 def test_intake_phase_failure_unverified_reports_have_no_mutations(case: str, reason: str) -> None:
@@ -3880,9 +3886,9 @@ def test_intake_phase_failure_unverified_reports_have_no_mutations(case: str, re
 		state["comment_read_fail"] = True
 	result, after, _ = _run_intake(_phase_payload(repo=SELF_REPO if case == "self_identity_error" else CONSUMER_REPO), state, diagnosis=DIAG_WORKFLOW_DEFECT)
 	assert result.returncode == 0, result.stderr + result.stdout
-	assert f"WORKFLOW_HEAL skip reason=phase_report_unverified detail={reason} outcome=skip" in result.stdout
-	if case in ("run_missing", "comments_error", "self_identity_error"):
-		assert f"warn phase_provenance_fetch_failed evidence={'run' if case == 'run_missing' else 'comments' if case == 'comments_error' else 'identity'}" in result.stdout
+	expected_detail = reason if reason in ("identity_unavailable", "comments_unavailable") else f"current_run_rejected:{reason}"
+	assert "WORKFLOW_HEAL skip reason=provenance_rejected" in result.stdout and f"detail={expected_detail}" in result.stdout
+	assert not any("/jobs" in part or "/actions/jobs/" in part for call in after["calls"] for part in call)
 	assert "fingerprint fp=" not in result.stdout
 	assert not any(key in after for key in ("issues_created", "comments_posted", "issue_edits"))
 
@@ -3891,10 +3897,10 @@ def test_intake_rejects_unverified_phase_runs_before_fetching_jobs() -> None:
 	payload = _phase_payload()
 	cases = (
 		(_plan_intake_state(run_details={}), "run_lookup_failed"),
-		(_plan_intake_state(user_fetch_fail=True), "identity_unavailable"),
 		(_plan_intake_state(comments_fetch_fail=True), "comments_unavailable"),
 		(_plan_intake_state(run_details={f"repos/{CONSUMER_REPO}/actions/runs/500": _provenance_run(repo=SELF_REPO)}), "repo_mismatch"),
 		(_plan_intake_state(run_details={f"repos/{CONSUMER_REPO}/actions/runs/500": _provenance_run(path="evil.yml")}), "unexpected_workflow_path"),
+		(_plan_intake_state(run_details={f"repos/{CONSUMER_REPO}/actions/runs/500": _provenance_run(event="push")}), "unexpected_run_event"),
 		(_plan_intake_state(comments={}), "not_linked_to_issue"),
 		(_plan_intake_state(comments={f"repos/{CONSUMER_REPO}/issues/42/comments": [
 			{**_plan_failed_comment(CONSUMER_REPO, 500), "user": {"login": "attacker"}}
@@ -3919,8 +3925,17 @@ def test_intake_phase_provenance_filters_earlier_refs_and_checks_pending_job() -
 	assert not any("/runs/499/jobs" in part for call in after["calls"] for part in call)
 	state = _plan_intake_state(jobs={}, run_details={current: _provenance_run(status="in_progress", conclusion=None)})
 	result, after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0 and "reason=current_run_jobs_unavailable" in result.stdout
+	assert not after.get("issues_created")
+	assert not any("/actions/jobs/" in part for call in after["calls"] for part in call)
+	state = _plan_intake_state(jobs={"500": []}, run_details={current: _provenance_run(status="in_progress", conclusion=None)})
+	result, after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
 	assert result.returncode == 0 and "reason=current_run_no_failed_job" in result.stdout
 	assert not after.get("issues_created")
+	assert not any("/actions/jobs/" in part for call in after["calls"] for part in call)
+	state = _plan_intake_state(jobs={"500": [{"id": 9101, "name": "plan / heal-report", "conclusion": "failure"}]}, run_details={current: _provenance_run()})
+	result, after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0 and "reason=current_run_no_failed_job" in result.stdout
 	assert not any("/actions/jobs/" in part for call in after["calls"] for part in call)
 
 
@@ -3934,7 +3949,7 @@ def test_intake_phase_failure_deduplicates_on_source_issue_and_falls_back_withou
 	# Without a readable jobs list, the run's failure is unverified.
 	result, _state_after, _ = _run_intake(_phase_payload(), _plan_intake_state(jobs={}), diagnosis=DIAG_WORKFLOW_DEFECT)
 	assert result.returncode == 0, result.stderr + result.stdout
-	assert "skip reason=phase_report_unverified detail=jobs_unavailable" in result.stdout
+	assert "skip reason=provenance_rejected" in result.stdout and "detail=current_run_jobs_unavailable" in result.stdout
 	assert "issues_created" not in _state_after
 	# Jobs can be listed even when the job-log endpoint returns 404. Its
 	# placeholder should appear in the diagnosis, not in the fingerprint input.
@@ -3950,7 +3965,7 @@ def test_intake_phase_failure_deduplicates_on_source_issue_and_falls_back_withou
 		diagnosis=DIAG_WORKFLOW_DEFECT,
 	)
 	assert result.returncode == 0, result.stderr + result.stdout
-	assert "skip reason=phase_report_unverified detail=jobs_unavailable" in result.stdout
+	assert "skip reason=provenance_rejected" in result.stdout and "detail=current_run_jobs_unavailable" in result.stdout
 	assert "issues_created" not in _state_after
 
 
