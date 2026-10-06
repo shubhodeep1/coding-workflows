@@ -489,7 +489,7 @@ def test_renderer_dependency_step_runs_after_unrelated_earlier_failure() -> None
 	condition_match = re.search(r"\n        if: (?P<cond>.+)\n", prep)
 	assert condition_match is not None
 	condition = condition_match.group("cond")
-	assert condition.startswith("always()")
+	assert condition.startswith("always() && !cancelled()")
 	assert "steps.runtime.outcome == 'success'" in condition
 	assert "steps.support_staging.outcome == 'success'" in condition
 	assert "steps.workspace_after_create_hook.outcome != 'failure'" in condition

@@ -3142,6 +3142,7 @@ self-heal patches cannot be merged without explicit human action.
 ### Validation Harness Lifecycle
 
 - Validation renders a manifest-driven harness under `validation/` from `.ai/validate.yml` via `scripts/render_validation_templates.py` + `workflow-templates/validation-harness/`.
+- Renderer dependency preparation runs after unrelated earlier step failures when trusted setup succeeded, but does not start after cancellation. A skipped or failed preparation is reported as a dependency setup failure if validation reaches the renderer.
 - `VALIDATION_USE_TEMPLATES` now defaults to `true`; setting `VALIDATION_USE_TEMPLATES=false` is a terminal guard that returns `raw_status=harness_error` because freehand generation/fix paths were removed.
 - Renderer-supported template families are currently `python-mongo-flask`, `node-hardhat-solidity`, `node-runtime`, `python-repo-checks`, and `python-mongo-repo-checks`.
 - Use `node-runtime` for generic Node/npm repositories that should run repo-local checks inside a single app container; use `node-hardhat-solidity` only when validation needs Hardhat/Foundry/Anvil/RPC-specific probes and shutdown helpers.
