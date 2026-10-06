@@ -1467,6 +1467,24 @@ def test_unresolved_directory_selector_inside_shell_control_asks(merged_branch_r
 	assert _ask_decision(proc) is not None
 
 
+@pytest.mark.parametrize("selector,path", [
+	("GIT_DIR", ".git"),
+	("GIT_WORK_TREE", ""),
+])
+def test_appended_git_directory_selector_still_asks_after_resolved_chdir(
+	merged_branch_repo, monkeypatch, capsys, selector: str, path: str,
+) -> None:
+	repo, _ = merged_branch_repo
+	other = repo.parent / "open-worktree"
+	_git(repo, "worktree", "add", "-b", "feature/open", str(other), "main")
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("must not check the wrong checkout"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(other),
+		"tool_input": {"command": f"{selector}+={repo / path} git -C {other} commit -m x"}})
+	assert code == 0 and message == ""
+	decision = json.loads(capsys.readouterr().out.splitlines()[-1])
+	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
 @pytest.mark.parametrize("command", [
 	"if true; then env -C {repo} git commit -m x; fi",
 	"if true; then git -C {repo} commit -m x; fi",
