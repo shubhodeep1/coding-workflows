@@ -508,7 +508,7 @@ jobs:
           AUTOFIX_SKIP_SUPPRESS_ON_CONFLICT: ${{ vars.AUTOFIX_SKIP_SUPPRESS_ON_CONFLICT }}
           AUTOFIX_SKIP_MAX_ADDITIONS: ${{ vars.AUTOFIX_SKIP_MAX_ADDITIONS }}
           AUTOFIX_SKIP_MAX_DELETIONS: ${{ vars.AUTOFIX_SKIP_MAX_DELETIONS }}
-          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'true' }}
+          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
           # No-PR claude-branch-review path inputs (push-without-PR caller).
@@ -1498,7 +1498,7 @@ jobs:
               # single-issue pass. Keep eligible default-branch PRs on the
               # codex-agent path, including tiny and documentation-only diffs.
               SECURITY_PASS_SKIP_SUPPRESSED="false"
-              if [ "${candidate_skip}" = "true" ] && [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-true}" != "false" ] \
+              if [ "${candidate_skip}" = "true" ] && [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-false}" != "false" ] \
                 && [ -n "${DEFAULT_BRANCH:-}" ] && [ "${pr_base_ref}" = "${DEFAULT_BRANCH}" ] \
                 && [ "${pr_head_repo}" = "${REPOSITORY}" ] \
                 && ! [[ "${pr_head_ref}" =~ ${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-} ]] \
@@ -5685,7 +5685,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'true' }}
+          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS || '2' }}
           SECURITY_PASS_PENDING_STALE_HOURS: ${{ vars.SECURITY_PASS_PENDING_STALE_HOURS || '6' }}
@@ -5901,7 +5901,7 @@ jobs:
           # the security gate on judge merges.
           SECURITY_PASS_EXHAUSTED: ${{ steps.single_issue_security_pass.outputs.exhausted }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'true' }}
+          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS || '2' }}
           SECURITY_PASS_PENDING_STALE_HOURS: ${{ vars.SECURITY_PASS_PENDING_STALE_HOURS || '6' }}
