@@ -37,7 +37,7 @@ def test_command_context_reads_follow_claude_md():
 	targets = [
 		live / f"{name}.md"
 		for name in ("apply-analysis", "apply-url", "audit-plans", "implement-plan-ai", "validate-consumer-issue", "write-plan")
-	] + [template / f"{name}.md" for name in ("apply-analysis", "audit-plans", "implement-plan-ai", "write-plan")]
+	] + [template / f"{name}.md" for name in ("apply-analysis", "apply-url", "audit-plans", "implement-plan-ai", "write-plan")]
 	for path in targets:
 		command_text = path.read_text(encoding="utf-8")
 		assert "search `README.md` and `agents.md`" in command_text, path

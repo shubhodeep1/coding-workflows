@@ -6,7 +6,7 @@ A prompt audit found several commands that contradicted the repository. `/implem
 | The numbers that matter | Value |
 | --- | --- |
 | Commands changed | `analyze-log`, `apply-analysis`, `apply-url`, `audit-plans`, `deploy-activate`, `implement-issue-claude`, `implement-plan-ai`, `investigate-issue`, `validate-consumer-issue`, `verify-activation`, `write-plan` |
-| Template copies changed | `workflow-templates/.claude/commands/{apply-analysis,audit-plans,deploy-activate,implement-plan-ai,verify-activation,write-plan}.md` |
+| Template copies changed | `workflow-templates/.claude/commands/{apply-analysis,apply-url,audit-plans,deploy-activate,implement-plan-ai,verify-activation,write-plan}.md` |
 | `CLAUDE.md` sections edited | PRE-TASK, §0, §12, §12.G, §19, §27 (numbering unchanged) |
 | Cloudflare credentials | `FUNTOKEN_IO_CF` (funtoken.io), `FT_GAMES_CF` (ft.games, 5m.fun) |
 
