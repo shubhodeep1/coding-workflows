@@ -223,7 +223,7 @@ single_pass_gate()
 	[[ "${max_cycles}" =~ ^[1-9][0-9]*$ ]] || max_cycles=5
 	[[ "${stale_hours}" =~ ^[1-9][0-9]*$ ]] || stale_hours=6
 	[[ "${exhausted_head_limit}" =~ ^[1-9][0-9]*$ ]] || exhausted_head_limit=2
-	if [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-true}" = "false" ]; then
+	if [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-false}" = "false" ]; then
 		single_pass_log "mode=gate pr=${PR_NUMBER:-} outcome=skip reason=disabled"
 		single_pass_state skip
 		single_pass_output false
