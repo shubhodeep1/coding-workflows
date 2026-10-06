@@ -196,11 +196,11 @@ def test_unavailable_issue_labels_force_codex_without_engine_resolution(
 
 def test_issue_engine_labels_are_wired_to_stall_and_rb_judges_only() -> None:
 	text = POLLER.read_text(encoding="utf-8")
-	assert 'STALL_JUDGE_LABELS="${labels_json}" STALL_JUDGE_ISSUE_LABELS="${labels_json}" invoke_stall_judge' in text
-	assert 'STALL_JUDGE_ISSUE_LABELS="$(printf \'%s\' "${LABELS_JSON:-}" | jq -c --arg n "${issue_num}"' in text
+	assert 'STALL_JUDGE_ISSUE_LABELS="$(printf \'%s\' "${_candidate_details_json}" | jq -ec --arg n "${issue_num}"' in text
+	assert 'STALL_JUDGE_ISSUE_LABELS="$(printf \'%s\' "${_current_wave_details_json:-}" | jq -ec --arg n "${issue_num}"' in text
 	assert 'poller_judge_engine_labels_json "${stall_judge_engine_scope}" "${STALL_JUDGE_ISSUE_LABELS-}"' in text
 	assert 'POLLER_JUDGE_ENGINE_LABELS="${stall_judge_engine_labels_json}" poller_claude_judge STALL_JUDGE' in text
-	assert 'poller_judge_engine_labels_json managed "$(printf \'%s\' "${LABELS_JSON:-}" | jq -c --arg n "${rb_issue}"' in text
+	assert 'poller_judge_engine_labels_json managed "$(printf \'%s\' "${_current_wave_details_json:-}" | jq -ec --arg n "${rb_issue}"' in text
 	assert 'POLLER_JUDGE_ENGINE_LABELS="${RB_JUDGE_ENGINE_LABELS_JSON}" poller_claude_judge RB_JUDGE' in text
 	for role in ("WAVE_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE"):
 		assert re.search(rf"^\s+poller_claude_judge {role} ", text, re.MULTILINE)
@@ -231,7 +231,7 @@ def test_combined_rb_judge_uses_verified_engine_and_its_worktree(
 		f'RUNTIME_DIR="{tmp_path}"\nGITHUB_WORKSPACE="{tmp_path}"\n'
 		f'RB_JUDGE_PROMPT_FILE="{tmp_path / "prompt.txt"}"\nRB_JUDGE_OUTPUT_FILE="{tmp_path / "verdict.txt"}"\n'
 		'MODEL_EDITOR=openai/gpt-6-sol\nRB_COMBINED_MODE=true\nrb_issue=10\n'
-		f'LABELS_JSON=\'{{"10":[{issue_labels}]}}\'\nTRACKING_LABELS=\'["ai:engine-claude"]\'\n'
+		f'_current_wave_details_json=\'{{"10":{{"labels":[{issue_labels}],"labels_complete":true}}}}\'\nTRACKING_LABELS=\'["ai:engine-claude"]\'\n'
 		'RB_JUDGE_ENGINE_LABELS_JSON=' + branch + 'done\n'
 	)
 	# The test runs only the attempt, not the outer poller success/retry loop.
@@ -249,6 +249,48 @@ def test_combined_rb_judge_uses_verified_engine_and_its_worktree(
 		assert _read(tmp_path / "verdict.txt") == "opencode verdict\n"
 		assert "codex|RB_JUDGE|write|" in _read(tmp_path / "calls.sandbox")
 		assert "--role writer --model openai/gpt-6-sol" in _read(tmp_path / "calls.config")
+
+
+@pytest.mark.parametrize("helper_name", ("_fetch_issue_labels_batch_graphql", "_fetch_candidate_issue_details_graphql"))
+@pytest.mark.parametrize("has_next_page", (False, True))
+def test_judge_label_batches_detect_incomplete_pages(tmp_path: Path, helper_name: str, has_next_page: bool) -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	helper = re.search(rf"^{helper_name}\(\) \{{\n.*?^\}}\n", text, re.MULTILINE | re.DOTALL).group(0)
+	assert "labels(first: 100) { nodes { name } pageInfo { hasNextPage } }" in helper
+	if shutil.which("jq") is None:
+		pytest.skip("jq required for the poller label cache")
+	first_page = ["ai:orchestrator-managed", "ai:engine-claude", *[f"other-{index}" for index in range(98)]]
+	response = json.dumps({"data": {"repository": {"i0": {
+		"number": 10, "state": "OPEN", "labels": {
+			"nodes": [{"name": name} for name in first_page],
+			"pageInfo": {"hasNextPage": has_next_page},
+		},
+	}}}})
+	script = (
+		"set -euo pipefail\n" + helper
+		+ f"GITHUB_REPOSITORY=owner/repo\nRESPONSE='{response}'\n"
+		+ 'gh_retry() { printf "%s\\n" "$RESPONSE"; }\n'
+		+ f"{helper_name} '[10]'\n"
+	)
+	proc = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+	assert proc.returncode == 0, proc.stderr
+	payload = json.loads(proc.stdout)
+	if helper_name == "_fetch_issue_labels_batch_graphql":
+		assert payload == ({} if has_next_page else {"10": first_page})
+	else:
+		assert payload["10"]["labels_complete"] is not has_next_page
+		selection = subprocess.run(
+			["jq", "-ec", "--arg", "n", "10", 'select(.[$n].labels_complete == true) | .[$n].labels'],
+			input=json.dumps(payload), capture_output=True, text=True, check=False,
+		)
+		issue_labels = selection.stdout.strip() if selection.returncode == 0 else "null"
+		_stage_rb_support(tmp_path)
+		for judge_role, judge_scope in (("RB_JUDGE", "managed"), ("STALL_JUDGE", "standalone")):
+			judge_result, calls = _run_helper(tmp_path, engine="claude", role=judge_role,
+				issue_scope=judge_scope, issue_labels=issue_labels)
+			assert "rc=0" in judge_result.stdout, judge_result.stderr
+			assert _read(Path(f"{calls}.sandbox")).splitlines()[-2].startswith(
+				f"{'codex' if has_next_page else 'claude'}|{judge_role}|")
 
 
 def test_model_hint_argument_overrides_model_editor(tmp_path: Path) -> None:

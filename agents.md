@@ -165,8 +165,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `JUDGE_ISOLATION_MAX_FAILURES`; only deterministic poller code writes to
    GitHub. The standalone stall judge uses verified issue labels; managed
    stall and review-blocked judges combine issue and tracking labels
-   (`ai:codex` wins), falling back to codex when issue labels cannot be
-   verified. Project-level judges keep tracking labels. Integration verdicts
+   (`ai:codex` wins), falling back to codex when the issue's GraphQL label
+   page is missing, incomplete (more than 100 labels), or unverifiable.
+   Project-level judges keep tracking labels. Integration verdicts
    re-dispatch the isolated conflict resolver;
    the resolver reads the existing tracking-comment snapshot for guidance
    bound to its PR head and default-branch tip, fenced as untrusted advisory context.

@@ -3586,6 +3586,8 @@ PY
 #
 # Fail-open contract:
 # - Any failed batch is skipped (its issues are omitted from the cache).
+# - Incomplete label pages are omitted as well; a partial list cannot be
+#   used as evidence that an engine-override label is absent.
 # - Callers must treat missing keys as cache misses and fall back to the
 #   legacy per-issue REST labels lookup for those specific issues.
 _fetch_issue_labels_batch_graphql() {
@@ -3620,7 +3622,7 @@ _fetch_issue_labels_batch_graphql() {
       [[ "${n}" =~ ^[0-9]+$ ]] || continue
       fragment+=$'\n'"        i${i}: issue(number: ${n}) {
           number
-          labels(first: 50) { nodes { name } }
+          labels(first: 100) { nodes { name } pageInfo { hasNextPage } }
         }"
     done
 
@@ -3641,7 +3643,9 @@ _fetch_issue_labels_batch_graphql() {
 
     batch_transformed="$(printf '%s' "${batch_resp}" | jq -c '
       (.data.repository // {}) | to_entries | map(
-        select(.value != null and (.value.number? != null)) | {
+        select(.value != null and (.value.number? != null)
+          and .value.labels.pageInfo.hasNextPage == false
+          and (.value.labels.nodes | type) == "array") | {
           key: (.value.number | tostring),
           value: [(.value.labels.nodes // [])[]?.name]
         }
@@ -15711,6 +15715,8 @@ _fetch_standalone_marker_issues_graphql() {
 # Comment shape mirrors the REST response (.id / .body / .created_at)
 # so existing parsers (e.g. _extract_standalone_state_comment_id_from_comments)
 # keep working unchanged.
+# `labels_complete` is true only for a full issue-label page; the per-issue
+# judges must use it before accepting this cached snapshot for engine selection.
 #
 # `linked_pr` is derived from the most recent CrossReferencedEvent
 # whose source is a pull request AND whose `willCloseTarget` flag is
@@ -15765,7 +15771,7 @@ _fetch_candidate_issue_details_graphql() {
           number
           state
           body
-          labels(first: 50) { nodes { name } }
+          labels(first: 100) { nodes { name } pageInfo { hasNextPage } }
           comments(last: 100) { nodes { databaseId body createdAt authorAssociation author { login } } }
           timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
             nodes {
@@ -15818,6 +15824,7 @@ _fetch_candidate_issue_details_graphql() {
             state: (((.value.state // "OPEN") | ascii_downcase) | if . == "closed" then "closed" else "open" end),
             body: .value.body,
             labels: [(.value.labels.nodes // [])[]?.name],
+            labels_complete: ((.value.labels.pageInfo.hasNextPage == false) and ((.value.labels.nodes | type) == "array")),
             comments_available: ((.value.comments.nodes? | type) == "array"),
             comments: [(.value.comments.nodes // [])[]? | {
               id: .databaseId,
@@ -17370,7 +17377,7 @@ PY
           echo "::warning::[standalone-stall] could not seed standalone judge state file for issue #${issue_num}; judge streak persistence may be skipped this cycle." >&2
         fi
         STALL_JUDGE_STATE_FILE_OVERRIDE="${_std_judge_state_file}"
-        if STALL_JUDGE_LABELS="${labels_json}" STALL_JUDGE_ISSUE_LABELS="${labels_json}" invoke_stall_judge "${issue_num}" "${phase}" "${recovery_count}" "${elapsed_minutes}" ""; then
+        if STALL_JUDGE_LABELS="${labels_json}" STALL_JUDGE_ISSUE_LABELS="$(printf '%s' "${_candidate_details_json}" | jq -ec --arg n "${issue_num}" 'select(.[$n].labels_complete == true) | .[$n].labels' 2>/dev/null || true)" invoke_stall_judge "${issue_num}" "${phase}" "${recovery_count}" "${elapsed_minutes}" ""; then
           took_action="true"
           action="${STALL_RECOVERY_EFFECTIVE_ACTION:-run_stall_judge}"
         fi
@@ -18329,7 +18336,7 @@ recover_stalled_issue() {
   fi
 
   if [ "${action}" = "run_stall_judge" ]; then
-    STALL_JUDGE_LABELS="${TRACKING_LABELS:-}" STALL_JUDGE_ISSUE_LABELS="$(printf '%s' "${LABELS_JSON:-}" | jq -c --arg n "${issue_num}" '.[$n] // empty' 2>/dev/null || true)" invoke_stall_judge "${issue_num}" "${phase}" "${recovery_count}" "${stall_minutes}" "${local_id}"
+    STALL_JUDGE_LABELS="${TRACKING_LABELS:-}" STALL_JUDGE_ISSUE_LABELS="$(printf '%s' "${_current_wave_details_json:-}" | jq -ec --arg n "${issue_num}" 'select(.[$n].labels_complete == true) | .[$n].labels' 2>/dev/null || true)" invoke_stall_judge "${issue_num}" "${phase}" "${recovery_count}" "${stall_minutes}" "${local_id}"
     return $?
   fi
   execute_stall_recovery_action "${issue_num}" "${phase}" "${action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
@@ -22161,7 +22168,7 @@ ${FOLLOWUP_BLOCK_REASON}"
       if [ "${RB_JUDGE_PROMPT_CHARS}" -gt 1048576 ]; then
         echo "::error::Review-blocked judge prompt for issue #${rb_issue} exceeds codex's 1048576-character stdin cap; skipping 2 attempts that would fail before the model runs."
       else
-        RB_JUDGE_ENGINE_LABELS_JSON="$(poller_judge_engine_labels_json managed "$(printf '%s' "${LABELS_JSON:-}" | jq -c --arg n "${rb_issue}" '.[$n] // empty' 2>/dev/null || true)")" || RB_JUDGE_ENGINE_LABELS_JSON=unavailable
+        RB_JUDGE_ENGINE_LABELS_JSON="$(poller_judge_engine_labels_json managed "$(printf '%s' "${_current_wave_details_json:-}" | jq -ec --arg n "${rb_issue}" 'select(.[$n].labels_complete == true) | .[$n].labels' 2>/dev/null || true)")" || RB_JUDGE_ENGINE_LABELS_JSON=unavailable
         for attempt in 1 2; do
           echo "  Review-blocked judge attempt ${attempt}/2..."
           RB_JUDGE_ENGINE_RC=0
