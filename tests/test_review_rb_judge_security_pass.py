@@ -130,8 +130,12 @@ def _run(tmp_path: Path, script: str, env: dict | None = None, with_pass: bool =
 		"REPOSITORY": "o/r",
 		"PR_NUMBER": "42",
 		"GITHUB_OUTPUT": str(tmp_path / "judge_output"),
+		# The pass defaults to off; tests that exercise it opt in, and None unsets a name.
+		"SINGLE_ISSUE_SECURITY_PASS_ENABLED": "true",
 	}
 	run_env.update(env or {})
+	for name in [key for key, value in run_env.items() if value is None]:
+		run_env.pop(name)
 	result = subprocess.run(
 		["bash", "-c", f'set -euo pipefail; gh_retry() {{ "$@" || "$@"; }}; source "{HELPER}"; {script}'],
 		capture_output=True, text=True, env=run_env, check=False,
@@ -149,6 +153,7 @@ def _run(tmp_path: Path, script: str, env: dict | None = None, with_pass: bool =
 		({"FAKE_PASS_STATE": "clean"}, "false", True),
 		({"SECURITY_PASS_EXHAUSTED": "true"}, "true", False),
 		({"SINGLE_ISSUE_SECURITY_PASS_ENABLED": "false", "FAKE_PASS_STATE": "exhausted"}, "false", False),
+		({"SINGLE_ISSUE_SECURITY_PASS_ENABLED": None, "FAKE_PASS_STATE": "exhausted"}, "false", False),
 	],
 )
 def test_security_mode_detection(tmp_path: Path, env: dict, expected: str, status_called: bool) -> None:
