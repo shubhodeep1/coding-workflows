@@ -516,6 +516,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_activation_verify.py
 
+      - name: Unblock judge and scan tests (replace-claude-sessions Phase 7)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_unblock_judge.py tests/test_unblock_scan.py
+
       - name: gh api permission guard hook tests (CLAUDE.md §23.H)
         run: |
           set -euo pipefail
