@@ -15,6 +15,7 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -59,6 +60,8 @@ def _run_helper(
 	with_engine: bool = True,
 	extra: str = "",
 	tracking_labels: str | None = '["bug","ai:engine-claude"]',
+	judge_role: str = "WAVE_JUDGE",
+	judge_workspace: Path | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
 	scripts = tmp_path / "scripts"
 	scripts.mkdir(parents=True, exist_ok=True)
@@ -75,7 +78,8 @@ def _run_helper(
 		+ labels_line
 		+ "MODEL_EDITOR=openai/gpt-6-sol\nMODEL_REASONING_EFFORT_JUDGE=xhigh\n"
 		+ "rc=0\n"
-		+ 'poller_claude_judge WAVE_JUDGE prompt.txt out.txt judge_log.txt ' + extra + ' || rc=$?\n'
+		+ f'poller_claude_judge {judge_role} prompt.txt out.txt judge_log.txt ' + extra
+		+ (f' {judge_workspace}' if judge_workspace is not None else '') + ' || rc=$?\n'
 		+ 'echo "rc=${rc}"\n'
 	)
 	env = dict(os.environ, CALLS=str(calls), FAKE_ENGINE=engine, FAKE_CLAUDE_MODE=claude_mode)
@@ -192,27 +196,65 @@ def test_model_hint_argument_overrides_model_editor(tmp_path: Path) -> None:
 	assert _read(Path(f"{calls}.claude")).split("|")[5] == "claude-sonnet-5-5"
 
 
+def test_integration_judge_writes_to_its_isolated_worktree(tmp_path: Path) -> None:
+	judge_workspace = tmp_path / "integration-worktree"
+	judge_workspace.mkdir()
+	proc, calls = _run_helper(tmp_path, engine="claude", extra="openai/gpt-6-sol", judge_role="INTEGRATION_JUDGE",
+		judge_workspace=judge_workspace)
+	assert "rc=0" in proc.stdout, proc.stderr
+	assert _read(Path(f"{calls}.claude")).split("|")[3] == str(judge_workspace)
+	assert _read(Path(f"{calls}.profile")).splitlines() == ["false"]
+
+
+@pytest.mark.parametrize("claude_status", (0, 75, 1))
+def test_integration_judge_fallback_uses_isolated_workspace(tmp_path: Path, claude_status: int) -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	start = text.index("    local integration_judge_rc=0\n")
+	end = text.index('    if [ "${integration_judge_rc}" -ne 0 ]; then', start)
+	(tmp_path / "prompt.txt").write_text("judge\n", encoding="utf-8")
+	script = (
+		'set -euo pipefail\n'
+		'poller_claude_judge() { return "${MOCK_CLAUDE_RC}"; }\n'
+		'bash() { printf "%s|%s|%s|%s|%s|%s\\n" "$1" "$2" "$3" "$4" "$5" "$6" > fallback.txt; printf "codex verdict\\n"; }\n'
+		'ORCH_CODEX_ISOLATED_EXEC=scripts/codex_isolated_exec.sh\n'
+		'RUNTIME_DIR=.\nMODEL_EDITOR=openai/gpt-6-sol\n'
+		'prompt_file=prompt.txt\noutput_file=verdict.txt\njudge_wt=integration-worktree\n'
+		'run() {\n' + text[start:end] + '  printf "rc=%s\\n" "${integration_judge_rc}"\n}\nrun\n'
+	)
+	proc = subprocess.run(["bash", "-c", script], cwd=tmp_path,
+		env={**os.environ, "MOCK_CLAUDE_RC": str(claude_status)}, capture_output=True, text=True, check=False)
+	assert proc.returncode == 0, proc.stderr
+	assert f"rc={0 if claude_status == 75 else claude_status}" in proc.stdout
+	if claude_status == 75:
+		assert _read(tmp_path / "fallback.txt").strip() == (
+			"scripts/codex_isolated_exec.sh|run|--mode|workspace|--workdir|integration-worktree"
+		)
+		assert _read(tmp_path / "verdict.txt") == "codex verdict\n"
+	else:
+		assert not (tmp_path / "fallback.txt").exists()
+
+
 # Each judge call site: the role, then its Codex fallback that runs on exit 75.
 SITES = {
 	"SECURITY_JUDGE": (
 		'poller_claude_judge SECURITY_JUDGE "${prompt_file}" "${output_file}" "${error_file}" "${effective_judge_model}" || security_judge_rc=$?',
 		'if [ "${security_judge_rc}" -eq 75 ]; then',
-		'-- codex --ask-for-approval never -c model_verbosity=low exec --skip-git-repo-check \\\n            --model "${effective_judge_model}" --sandbox read-only < "${prompt_file}" || true',
+		'-- bash "${ORCH_CODEX_ISOLATED_EXEC}" run --mode read-only \\',
 	),
 	"INTEGRATION_JUDGE": (
-		'poller_claude_judge INTEGRATION_JUDGE "${prompt_file}" "${output_file}" "${RUNTIME_DIR}/integration_judge.log" "${MODEL_EDITOR:-openai/gpt-6-sol}" || integration_judge_rc=$?',
+		'poller_claude_judge INTEGRATION_JUDGE "${prompt_file}" "${output_file}" "${RUNTIME_DIR}/integration_judge.log" "${MODEL_EDITOR:-openai/gpt-6-sol}" "${judge_wt}" || integration_judge_rc=$?',
 		'if [ "${integration_judge_rc}" -eq 75 ]; then',
-		'cat "${prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-6-sol}" --sandbox danger-full-access > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log" || integration_judge_rc=$?',
+		'bash "${ORCH_CODEX_ISOLATED_EXEC}" run --mode workspace --workdir "${judge_wt}" \\',
 	),
 	"STALL_JUDGE": (
 		'poller_claude_judge STALL_JUDGE "${stall_judge_prompt_file}" "${stall_judge_output_file}" "${RUNTIME_DIR}/stall_judge.log" || stall_judge_rc=$?',
 		'if [ "${stall_judge_rc}" -eq 75 ]; then',
-		'codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${stall_judge_prompt_file}" > "${stall_judge_output_file}" 2>> "${RUNTIME_DIR}/stall_judge.log" || true',
+		'bash "${ORCH_CODEX_ISOLATED_EXEC}" run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${stall_judge_prompt_file}" > "${stall_judge_output_file}" 2>> "${RUNTIME_DIR}/stall_judge.log" || true',
 	),
 	"RB_JUDGE": (
 		'poller_claude_judge RB_JUDGE "${RB_JUDGE_PROMPT_FILE}" "${RB_JUDGE_OUTPUT_FILE}" /dev/null || RB_JUDGE_ENGINE_RC=$?',
 		'if [ "${RB_JUDGE_ENGINE_RC}" -eq 75 ]; then',
-		'cat "${RB_JUDGE_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || true',
+		'bash "${ORCH_CODEX_ISOLATED_EXEC}" run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${RB_JUDGE_PROMPT_FILE}" > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || true',
 	),
 	"WAVE_JUDGE": (
 		'poller_claude_judge WAVE_JUDGE "${judge_effective_prompt_file}" "${JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/judge_log.txt" || wave_judge_rc=$?',
@@ -230,7 +272,7 @@ def test_each_judge_tries_claude_then_runs_the_unchanged_codex_command() -> None
 		assert text.index(gate, start) > start, role
 		assert text.index(codex_call, start) > text.index(gate, start), role
 		assert text.count(codex_call) == 1, role
-	assert len(re.findall(r"^\s+poller_claude_judge [A-Z_]+ ", text, re.M)) == len(SITES)
+	assert len(re.findall(r"^\s+(?:AI_ENGINE_READ_ONLY=true )?poller_claude_judge [A-Z_]+ ", text, re.M)) == len(SITES)
 	assert "codex --ask-for-approval" not in SITES["WAVE_JUDGE"][2]
 	assert 'MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT_JUDGE:-high}"' in text
 	fallback = REPO_ROOT / "scripts" / "clarify_isolated_run.sh"
@@ -311,8 +353,9 @@ def test_poll_job_stages_the_engine_and_fetches_the_pool_only_when_needed() -> N
 
 ORCHESTRATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "orchestrate.yml"
 DECOMPOSER_CODEX = (
-	'timeout --signal=TERM --kill-after=30s -- "${ORCHESTRATE_DECOMPOSER_PER_ATTEMPT_TIMEOUT_SECS}" \\\n'
-	'       codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || decomposer_rc=$?'
+	'bash scripts/codex_isolated_exec.sh run --mode read-only -- --ask-for-approval never '
+	'-c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check '
+	'--model "${MODEL_EDITOR}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}"'
 )
 
 
@@ -332,11 +375,8 @@ def _run_decomposer_block(tmp_path: Path, engine: str, claude_mode: str) -> tupl
 	scripts = tmp_path / "scripts"
 	scripts.mkdir(parents=True, exist_ok=True)
 	(scripts / "ai_engine.sh").write_text(FAKE_AI_ENGINE, encoding="utf-8")
-	bin_dir = tmp_path / "bin"
-	bin_dir.mkdir()
-	codex = bin_dir / "codex"
-	codex.write_text('#!/usr/bin/env bash\nprintf "codex %s\\n" "$*" >> "${CALLS}.codex"\nprintf "codex plan\\n"\n', encoding="utf-8")
-	codex.chmod(0o755)
+	(scripts / "codex_isolated_exec.sh").write_text(
+		'printf "codex %s\\n" "$*" >> "${CALLS}.codex"\nprintf "codex plan\\n"\n', encoding="utf-8")
 	(tmp_path / "prompt.txt").write_text("decompose\n", encoding="utf-8")
 	calls = tmp_path / "calls"
 	script = (
@@ -347,7 +387,7 @@ def _run_decomposer_block(tmp_path: Path, engine: str, claude_mode: str) -> tupl
 		+ _decomposer_engine_block()
 		+ 'echo "rc=${decomposer_rc} engine=${ORCHESTRATE_ENGINE}"\n'
 	)
-	env = dict(os.environ, CALLS=str(calls), FAKE_ENGINE="claude", FAKE_CLAUDE_MODE=claude_mode, PATH=f"{bin_dir}:{os.environ['PATH']}")
+	env = dict(os.environ, CALLS=str(calls), FAKE_ENGINE="claude", FAKE_CLAUDE_MODE=claude_mode)
 	for key in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
 		env.pop(key, None)
 	proc = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60, check=False)
@@ -401,4 +441,5 @@ def test_orchestrate_job_resolves_the_engine_from_the_engine_input() -> None:
 	for name in ("Install Claude Code CLI", "Resolve Claude credential"):
 		assert steps[name]["if"] == "steps.ai_engine.outputs.engine == 'claude'"
 		assert names.index("Resolve AI engine") < names.index(name) < names.index("Run Codex (decomposer)")
-	assert "write_codex_config.sh ai_engine.sh claude_engine.py; do" in steps["Stage workflow support files"]["run"]
+	assert "codex_isolated_exec.sh" in steps["Stage workflow support files"]["run"]
+	assert "ai_engine.sh claude_engine.py; do" in steps["Stage workflow support files"]["run"]

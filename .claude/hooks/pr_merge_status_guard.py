@@ -1590,6 +1590,9 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			continue
 		if invocation.subcommand == "push" and invocation.warning:
 			uncertain_push_reasons.append(invocation.warning)
+		if invocation.subcommand == "commit" and invocation.config_override and invocation.warning.startswith("could not resolve git command directory"):
+			_request_confirmation(invocation.warning)
+			continue  # A different checkout may contain the commit; do not query this one.
 		if invocation.subcommand == "push" and invocation.config_override:
 			unverified_destinations.add("per-command Git configuration may redirect the push")
 			continue  # Origin's PR history cannot authorize a push with overridden configuration.

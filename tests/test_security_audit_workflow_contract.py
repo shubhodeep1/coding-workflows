@@ -1223,6 +1223,7 @@ def test_security_audit_codex_preflight_only_on_fallback() -> None:
 		for mode, config_available, expected_status in (("0", False, 0), ("75", False, 1), ("75", True, 1)):
 			proc = subprocess.run(["bash", "-c", script], cwd=tmp_path,
 				env={**os.environ, "AI_ENGINE_RESOLVED_SECURITY_AUDIT": "claude", "MOCK_CLAUDE_EXIT": mode,
+					"OVERSIZED_SCOPED_COUNT": "0",
 					"CODEX_HOME": str(codex_dir if config_available else tmp_path / "missing-codex-home")},
 				capture_output=True, text=True, check=False)
 			assert proc.returncode == expected_status, proc.stderr
@@ -1255,6 +1256,7 @@ def test_security_audit_claude_failure_only_reports_sanitized_stderr() -> None:
 		secret = "private-claude-provider-token"
 		proc = subprocess.run(["bash", "-c", script], cwd=work_dir,
 			env={**os.environ, "AI_ENGINE_RESOLVED_SECURITY_AUDIT": "claude", "AUDIT_TEST_SECRET": secret,
+				"OVERSIZED_SCOPED_COUNT": "0",
 				"MOCK_CLAUDE_STDERR": f"HTTP Error 429: rate limited {secret}"},
 			capture_output=True, text=True, check=False)
 		assert proc.returncode == 9, proc.stderr
@@ -1267,6 +1269,7 @@ def test_security_audit_claude_failure_only_reports_sanitized_stderr() -> None:
 		oversized_stderr = "prefix " + secret + "\n" + " " * 65510 + "\nHTTP Error 429\n"
 		proc = subprocess.run(["bash", "-c", script], cwd=work_dir,
 			env={**os.environ, "AI_ENGINE_RESOLVED_SECURITY_AUDIT": "claude", "AUDIT_TEST_SECRET": secret,
+				"OVERSIZED_SCOPED_COUNT": "0",
 				"MOCK_CLAUDE_STDERR": oversized_stderr},
 			capture_output=True, text=True, check=False)
 		assert proc.returncode == 9, proc.stderr
