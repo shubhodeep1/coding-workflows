@@ -315,6 +315,39 @@ def test_orchestrate_claude_image_build_failure_is_not_engine_unavailability(tmp
 		assert result.returncode == expected, result.stderr
 
 
+def test_orchestrate_relay_start_failure_only_when_no_account_relay_starts(tmp_path: Path) -> None:
+	runner = _read(REPO_ROOT / "scripts" / "clarify_isolated_run.sh")
+	loop = '\trelay_start_failed=' + runner.split('\trelay_start_failed=', 1)[1].split('\nfi\n', 1)[0]
+	for accounts, expected in (("broken", 76), ("broken ready", 75), ("ready broken", 75), ("ready", 75)):
+		run_root = tmp_path / accounts.replace(" ", "-")
+		(run_root / "socket").mkdir(parents=True)
+		(run_root / "results").mkdir()
+		script = (
+			'set -euo pipefail\n'
+			'engine_role=ORCHESTRATE\nclaude_accounts=(' + accounts + ')\n'
+			'claude_model=claude-opus-5-5\nclaude_effort=high\nprobe_model=claude-haiku-4-5-20251001\n'
+			'image=dummy\ncontainer_name=dummy\nprompt_file=/dev/null\nlog_file=/dev/null\noutput_file=/dev/null\n'
+			'engine_dir=/dev/null\ninstructions=/dev/null\nguard_hook=/dev/null\n'
+			'ai_engine_pool_dir() { printf "%s" "$RUN_ROOT"; }\n'
+			'ai_engine_fallback() { printf "fallback:%s\\n" "$2" >&2; }\n'
+			'_ai_engine_py() { printf \'{"outcome":"usage_limit","reason":"limit"}\\n\'; }\n'
+			'_ai_engine_json_field() { if [ "$2" = outcome ]; then printf usage_limit; else printf limit; fi; }\n'
+			'env() {\n'
+			'  if [ "$1" = -i ]; then\n'
+			'    case " $* " in *"/tokens/broken "*) return 1 ;; esac\n'
+			'    exec python3 -c \'import socket,sys,time; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(); time.sleep(10)\' "$RUN_ROOT/socket/provider.sock"\n'
+			'  fi\n'
+			'}\n'
+			'run_root="$RUN_ROOT"\n' + loop
+		)
+		result = subprocess.run(
+			["bash", "-c", script], env={**os.environ, "RUN_ROOT": str(run_root)},
+			cwd=REPO_ROOT, capture_output=True, text=True, timeout=30, check=False,
+		)
+		assert result.returncode == expected, (accounts, result.stdout, result.stderr)
+		assert ("fallback:all_accounts_failed" in result.stderr) is (expected == 75)
+
+
 def test_clarify_isolated_docker_commands_strip_runner_secrets() -> None:
 	runner = _read(REPO_ROOT / "scripts" / "clarify_isolated_run.sh")
 	for line in runner.splitlines():

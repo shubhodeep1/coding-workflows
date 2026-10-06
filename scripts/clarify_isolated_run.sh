@@ -140,7 +140,7 @@ if [ "${engine}" = claude ]; then
 		ai_engine_fallback "${engine_role}" image_build_failed
 		exit 75
 	fi
-	relay_start_failed=false
+	relay_start_failed=true
 	for account in "${claude_accounts[@]}"; do
 		rm -f -- "${run_root}/results/transcript.jsonl" "${run_root}/results/stderr" "${run_root}/socket/provider.sock"
 		env -i PATH="${PATH}" PYTHONDONTWRITEBYTECODE=1 \
@@ -153,10 +153,10 @@ if [ "${engine}" = claude ]; then
 		done
 		if [ ! -S "${run_root}/socket/provider.sock" ]; then
 			echo "CLAUDE_POOL run role=${engine_role} account=${account} outcome=crashed reason=relay_unavailable" >&2
-			relay_start_failed=true
 			kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; broker_pid=""
 			continue
 		fi
+		relay_start_failed=false
 		run_rc=0
 		env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN -u GH_PAT docker run --rm \
 			--name "${container_name}" --user "$(id -u):$(id -g)" \
@@ -193,6 +193,7 @@ if [ "${engine}" = claude ]; then
 			' || run_rc=$?
 		kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; broker_pid=""
 		[ ! -f "${run_root}/results/stderr" ] || tee -a "${log_file}" < "${run_root}/results/stderr" >&2
+		# Once the relay starts, a mid-run failure is classified with the Claude result.
 		verdict="$(_ai_engine_py classify --transcript "${run_root}/results/transcript.jsonl" --exit-code "${run_rc}")" || verdict='{"outcome":"crashed","reason":"classify_failed"}'
 		outcome="$(_ai_engine_json_field "${verdict}" outcome)"
 		echo "CLAUDE_POOL run role=${engine_role} account=${account} outcome=${outcome} reason=$(_ai_engine_json_field "${verdict}" reason) exit_code=${run_rc}" >&2
