@@ -139,6 +139,61 @@ def test_slice_without_errors_or_steps_still_returns_the_tail() -> None:
 	assert "## Error windows" not in sliced
 
 
+@pytest.mark.parametrize("line, secret", [
+	("Authorization: Basic dXNlcjpwYXNzd29yZA==", "dXNlcjpwYXNzd29yZA=="),
+	("http.https://github.com/.extraheader AUTHORIZATION: basic eC1hY2Nlc3MtdG9rZW46Z2hw", "eC1hY2Nlc3MtdG9rZW46Z2hw"),
+	("Proxy-Authorization: Basic abc=", "abc="),
+	('"Authorization": "Basic abcd"', "abcd"),
+	('Authorization: Digest username="u", response="deadbeef6459"', "deadbeef6459"),
+])
+def test_redaction_covers_basic_and_other_authorization_schemes(line: str, secret: str) -> None:
+	out = ev.redact_secrets(line)
+	assert secret not in out and "[REDACTED]" in out
+	assert ev.redact_secrets(out) == out
+	assert ev.redact_secrets("Authorization: Bearer abcdefghijklmnop") == "Authorization: Bearer [REDACTED]"
+
+
+def _env_log(*, closed: bool = True) -> str:
+	lines = [
+		f"{_ts(1)} ##[group]Run bash scripts/step.sh",
+		f"{_ts(1)} shell: /usr/bin/bash -e {{0}}",
+		f"{_ts(1)} env:",
+		f"{_ts(1)}   SECRET_HDR: Basic Zm9vOmJhcg==",
+		f"{_ts(1)}   API_TOKEN: abc123secret",
+		f"{_ts(1)}   MULTI: first-part",
+		f"{_ts(1)} continuation-secret-6459",
+		f"{_ts(1)}   GIT_WORK_TREE: /ok/path",
+		f"{_ts(1)}   GIT_DIR: relative",
+	]
+	if closed:
+		lines += [f"{_ts(1)} ##[endgroup]", f"{_ts(2)} ##[error]step failed"]
+	return "\n".join(lines) + "\n"
+
+
+@pytest.mark.parametrize("closed", [True, False])
+def test_slice_omits_step_env_values_everywhere(closed: bool) -> None:
+	sliced = ev.slice_job_log(_env_log(closed=closed))
+	for secret in ("Zm9vOmJhcg==", "abc123secret", "first-part", "continuation-secret-6459", "relative"):
+		assert secret not in sliced
+	assert "SECRET_HDR: [value omitted]" in sliced and "API_TOKEN: [value omitted]" in sliced
+	assert "[env line omitted]" in sliced
+	assert "GIT_WORK_TREE: /ok/path" in sliced and "GIT_DIR: [value omitted]" in sliced
+
+
+def test_slice_keeps_only_plain_absolute_git_path_values() -> None:
+	lines = ev._omit_step_env_values(["##[group]Run x", "env:", "  GIT_WORK_TREE: /x y", "  GIT_DIR: /tmp/x ghp_abc", "  GIT_WORK_TREE: /ok/path", "##[endgroup]", "  OUTPUT: kept"])
+	assert lines[2:5] == ["  GIT_WORK_TREE: [value omitted]", "  GIT_DIR: [value omitted]", "  GIT_WORK_TREE: /ok/path"]
+	assert lines[-1] == "  OUTPUT: kept"
+
+
+def test_slice_log_cli_omits_env_values(tmp_path: Path, capsys) -> None:
+	log_file = tmp_path / "job.log"
+	log_file.write_text(_env_log())
+	assert ev.main(["slice-log", "--log-file", str(log_file)]) == 0
+	out = capsys.readouterr().out
+	assert "abc123secret" not in out and "Zm9vOmJhcg==" not in out and "API_TOKEN: [value omitted]" in out
+
+
 # ---------------------------------------------------------------------------
 # Trust, eligibility, run references
 # ---------------------------------------------------------------------------
@@ -642,6 +697,37 @@ def test_low_rate_removes_stale_artifacts(tmp_path: Path) -> None:
 	_collector(tmp_path, fake).collect(_issue(), [], issue_repo=REPO)
 	assert not artifact_dir.exists()
 	assert f"repos/{REPO}/actions/artifacts/501/zip" not in fake.paths
+
+
+def _stale_log_cache(tmp_path: Path) -> tuple[Path, str]:
+	_collector(tmp_path, FakeGh()).collect(_issue(), [], issue_repo=REPO)
+	run_dir = tmp_path / "evidence" / f"runs/{REPO.replace('/', '__')}__111"
+	secret = "pre_fix_env_value_6459"
+	(run_dir / "job-11.txt").write_text(f"env:\n  API_TOKEN: {secret}\n")
+	meta_path = run_dir / "meta.json"
+	meta = json.loads(meta_path.read_text())
+	assert meta["log_slice_format"] == ev.LOG_SLICE_FORMAT
+	meta.pop("log_slice_format")
+	meta_path.write_text(json.dumps(meta))
+	return run_dir, secret
+
+
+def test_cached_logs_without_env_omission_are_recollected(tmp_path: Path) -> None:
+	run_dir, secret = _stale_log_cache(tmp_path)
+	fake = FakeGh()
+	_collector(tmp_path, fake).collect(_issue(), [], issue_repo=REPO)
+	assert f"repos/{REPO}/actions/jobs/11/logs" in fake.paths
+	assert all(secret not in path.read_text() for path in (tmp_path / "evidence").rglob("*") if path.is_file())
+	assert json.loads((run_dir / "meta.json").read_text())["log_slice_format"] == ev.LOG_SLICE_FORMAT
+
+
+def test_stale_cached_log_is_removed_when_refetch_fails(tmp_path: Path) -> None:
+	run_dir, secret = _stale_log_cache(tmp_path)
+	fake = FakeGh(missing={f"repos/{REPO}/actions/jobs/11/logs"})
+	manifest = _collector(tmp_path, fake).collect(_issue(), [], issue_repo=REPO)
+	assert not (run_dir / "job-11.txt").exists()
+	assert {"part": "job:11", "reason": "log_unavailable"} in manifest["skipped"]
+	assert all(secret not in path.read_text() for path in (tmp_path / "evidence").rglob("*") if path.is_file())
 
 
 def test_structured_diagnostics_are_bounded_and_revalidated(tmp_path: Path) -> None:

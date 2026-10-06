@@ -8,8 +8,9 @@ trusted workflow steps that have ``GH_PAT`` and writes the failing runs'
 evidence to a folder the agents read:
 
   * ``slice-log``: turns one raw job log into the parts a diagnosis needs: the
-    step table, a window of lines around each error, the env block of the step
-    that raised the first error, the known diagnostic groups (working-tree
+    step table, a window of lines around each error, the env variable names
+    (values omitted) of the step that raised the first error, the known
+    diagnostic groups (working-tree
     checkpoints, editor summaries, run summaries) and a short tail. The heal
     intake uses it for its diagnosis prompt. ``filter_log`` in
     ``workflow_failure_heal.py`` is unchanged: the failure fingerprint still
@@ -110,6 +111,9 @@ ARTIFACT_MEMBER_RES = {
 	"reviewer-logs": re.compile(r"(?:^|/)(?:status_[^/]*\.txt|[^/]*\.err)$"),
 }
 ARTIFACT_EXTRACT_FORMAT = "allowlist-fields.v2"
+# Sliced job logs omit step env values (#6459). Cached logs written before this
+# format lack the marker in meta.json and are fetched and sliced again.
+LOG_SLICE_FORMAT = "env-values-omitted.v1"
 MAX_ARTIFACT_KEPT_LINES = 200
 MAX_ARTIFACT_LINE_CHARS = 400
 _ARTIFACT_ERROR_WORD_RE = re.compile(
@@ -158,11 +162,26 @@ _SECRET_RES = (
 	re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}"),
 	re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
 	re.compile(r"(?i)\b(authorization:\s*(?:bearer|token)\s+)[^\s\"']{8,}"),
+	# Basic credentials, including the actions/checkout extraheader form
+	# ``AUTHORIZATION: basic <base64>`` and Proxy-Authorization (#6459).
+	re.compile(r"(?i)\b((?:proxy-)?authorization[\"']?[ \t]*[:=][ \t]*[\"']?basic[ \t]+)(?!\[REDACTED\])[^\s\"']+"),
+	# Fail closed: any other authorization value (Digest, Negotiate, a bare
+	# credential, a short Bearer token) loses the rest of its line. Values the
+	# patterns above already reduced are left alone so redaction is idempotent.
+	re.compile(r"(?i)\b((?:proxy-)?authorization[\"']?[ \t]*[:=][ \t]*)(?![ \t]*[\"']?[ \t]*(?:[a-z]+[ \t]+)?\[REDACTED\])[^\r\n]+"),
 )
 # Retained for compatibility; free-text run lines are not an authority for fetching logs.
 _HEAL_RUN_LINE_RE = re.compile(r"\*\*(?:Failed run|Failed runs?)\:\*\*\s*(?P<url>\S+)")
 _OCCURRENCE_MARKER = "<!-- " + heal.MARKER_PREFIX + "occurrence -->"
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+# Step env values never reach agent-readable evidence (#6459). Only these
+# path-valued git variables keep a value, and only when it is a plain absolute
+# path: #6055's cause was visible only through GIT_WORK_TREE.
+_ENV_VALUE_KEEP_NAMES = frozenset({"GIT_DIR", "GIT_WORK_TREE"})
+_ENV_KEEP_VALUE_RE = re.compile(r"^/[A-Za-z0-9_./-]{1,300}$")
+_ENV_HEADER_LINE_RE = re.compile(r"^env:\s*$")
+_ENV_ENTRY_RE = re.compile(r"^(?P<indent>[ \t]+)(?P<name>[A-Za-z_][A-Za-z0-9_]*):(?:[ \t](?P<value>.*))?$")
+_LOG_MARKER_RE = re.compile(r"^##\[")
 _BODY_FIELD_RE_TEMPLATE = r"\*\*{label}:\*\*\s*`(?P<value>[^`]+)`"
 
 
@@ -246,6 +265,49 @@ def _step_label(steps: list[dict[str, Any]], index: int) -> str:
 	return "step ?"
 
 
+def _omit_step_env_values(lines: list[str]) -> list[str]:
+	"""Replace the values of every ``env:`` entry in a step header.
+
+	Inside a ``##[group]Run`` header, every line after ``env:`` up to the next
+	``##[`` marker (normally ``##[endgroup]``) is reduced: ``  NAME: value``
+	becomes ``  NAME: [value omitted]`` and anything else (a multi-line value
+	continuation, indented or not) becomes ``    [env line omitted]``. A log
+	truncated inside an env block therefore has its remaining lines reduced
+	too (fail closed). Only ``_ENV_VALUE_KEEP_NAMES`` with a plain absolute
+	path value keep their value.
+	"""
+	out: list[str] = []
+	in_header = False
+	in_env = False
+	for line in lines:
+		if _LOG_MARKER_RE.match(line):
+			in_env = False
+			if _STEP_RUN_HEADER_RE.match(line):
+				in_header = True
+			elif _GROUP_CLOSE_RE.match(line) or _GROUP_OPEN_RE.match(line):
+				in_header = False
+			out.append(line)
+			continue
+		if in_env:
+			if not line.strip():
+				out.append("")
+				continue
+			entry = _ENV_ENTRY_RE.match(line)
+			if entry:
+				value = (entry.group("value") or "").strip()
+				if entry.group("name") in _ENV_VALUE_KEEP_NAMES and _ENV_KEEP_VALUE_RE.fullmatch(value):
+					out.append(f"{entry.group('indent')}{entry.group('name')}: {value}")
+				else:
+					out.append(f"{entry.group('indent')}{entry.group('name')}: [value omitted]")
+			else:
+				out.append("    [env line omitted]")
+			continue
+		if in_header and _ENV_HEADER_LINE_RE.match(line):
+			in_env = True
+		out.append(line)
+	return out
+
+
 def render_step_table(steps: list[dict[str, Any]]) -> str:
 	lines = ["## Steps", "", "| # | Step | Conclusion | Started | Completed |", "| --- | --- | --- | --- | --- |"]
 	for index, step in enumerate(steps):
@@ -272,14 +334,15 @@ def slice_job_log(
 
 	Sections, in order of priority when the byte budget is tight: step table,
 	error windows (``±context_lines`` around each ``##[error]``), the env
-	block of the step that raised the first error, diagnostic groups and
-	lines, and the log tail. The echoed step scripts are dropped first, as in
-	``filter_log``, so windows show what the steps printed.
+	variable names (values omitted, see ``_omit_step_env_values``) of the step
+	that raised the first error, diagnostic groups and lines, and the log
+	tail. The echoed step scripts are dropped first, as in ``filter_log``, so
+	windows show what the steps printed.
 	"""
 	steps = [step for step in (steps or []) if isinstance(step, dict)]
 	raw_lines = heal._drop_step_script_lines(text or "").split("\n")
 	parsed = [_split_line(line) for line in raw_lines]
-	content = [heal.sanitize_text(body) for _, body in parsed]
+	content = _omit_step_env_values([heal.sanitize_text(body) for _, body in parsed])
 	stamps = [stamp for stamp, _ in parsed]
 	sections: list[tuple[str, str]] = []
 
@@ -968,15 +1031,17 @@ class Collector:
 				self._clear_artifact_dirs(run_dir)
 				self._skip(f"run:{ref['repo']}:{ref['run_id']}", "unverified_run_not_failed")
 				return {"skipped": True}
-			if cached.get("artifact_format") == ARTIFACT_EXTRACT_FORMAT or cached.get("artifacts") == []:
+			if cached.get("log_slice_format") == LOG_SLICE_FORMAT and (cached.get("artifact_format") == ARTIFACT_EXTRACT_FORMAT or cached.get("artifacts") == []):
 				if cached.get("artifacts") == []:
 					self._clear_artifact_dirs(run_dir)
 				cached["reused"] = True
 				return cached
-		# Remove legacy raw artifact copies even when the re-fetch or rate-limit
-		# check fails; a later stage must not find them in the evidence folder.
+		# Remove legacy raw artifact copies and job logs sliced before env values
+		# were omitted (#6459) even when the re-fetch or rate-limit check fails;
+		# a later stage must not find them in the evidence folder.
 		self._clear_artifact_dirs(run_dir)
-		meta: dict[str, Any] = {"repo": ref["repo"], "run_id": ref["run_id"], "url": ref["url"], "dir": run_dir, "jobs": [], "artifacts": [], "complete": False}
+		self._clear_job_logs(run_dir)
+		meta: dict[str, Any] = {"repo": ref["repo"], "run_id": ref["run_id"], "url": ref["url"], "dir": run_dir, "jobs": [], "artifacts": [], "complete": False, "log_slice_format": LOG_SLICE_FORMAT}
 		jobs_data = self.gh.json(f"repos/{ref['repo']}/actions/runs/{ref['run_id']}/jobs?per_page=100")
 		jobs = jobs_data.get("jobs") if isinstance(jobs_data, dict) else None
 		if not isinstance(jobs, list):
@@ -1061,6 +1126,19 @@ class Collector:
 					path.rmdir() if path.is_dir() else path.unlink()
 				child.rmdir()
 			elif child.is_file():
+				child.unlink()
+
+	def _clear_job_logs(self, run_dir: str) -> None:
+		root = self.out.resolve()
+		run_path = self.out / run_dir
+		if run_path.is_symlink() or not run_path.resolve().is_relative_to(root):
+			raise ValueError("unsafe job log cache path")
+		if not run_path.is_dir():
+			return
+		for child in run_path.glob("job-*.txt"):
+			if child.is_symlink() or not child.resolve().is_relative_to(root):
+				raise ValueError("unsafe job log cache path")
+			if child.is_file():
 				child.unlink()
 
 	def _collect_artifacts(self, ref: dict[str, str], run_dir: str, meta: dict[str, Any]) -> bool:

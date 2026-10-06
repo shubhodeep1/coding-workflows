@@ -208,7 +208,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
     concludes success, and the diagnosis prompt
     gets step-sliced logs (`scripts/workflow_failure_heal_evidence.py
     slice-log`: step table, ±80 lines around each `##[error]`, the failing
-    step's env, the working-tree / summary groups); the fingerprint still uses
+    step's env variable names (values omitted except plain absolute
+    `GIT_DIR` / `GIT_WORK_TREE` paths; `Authorization` values redacted), the
+    working-tree / summary groups); the fingerprint still uses
     `filter_log`. Clarify, plan and implement add a **workflow-heal evidence
     folder** for a trusted `ai:workflow-heal` issue (`collect`: sliced job
     logs, fixed diagnostic labels and numeric exit codes from allowlisted artifact
