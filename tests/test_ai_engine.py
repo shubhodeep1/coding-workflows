@@ -756,7 +756,7 @@ def test_read_isolation_rejects_invalid_mounts(sandbox: dict, reason: str, env: 
 
 
 def test_read_isolation_rejects_session_mount_containing_pool(sandbox: dict) -> None:
-	sandbox["pool"] = sandbox["tmp"] / "rt"
+	sandbox["pool"] = sandbox["runner_temp"]
 	(sandbox["pool"] / "tokens").mkdir()
 	_accounts(sandbox, A="TOK_OK")
 	args = " ".join(shlex.quote(str(part)) for part in (
@@ -777,7 +777,7 @@ def test_read_isolation_rejects_session_mount_containing_pool(sandbox: dict) -> 
 def test_read_isolation_mounts_only_selected_session(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_OK")
 	session = "0123abcd-0000-4000-8000-00000000abcd"
-	sessions = sandbox["tmp"] / "rt" / "claude-read-sessions"
+	sessions = sandbox["runner_temp"] / "claude-read-sessions"
 	(sessions / "other-session" / "project").mkdir(parents=True)
 	(sessions / "other-session" / "project" / "private.jsonl").write_text("foreign transcript")
 	(sessions / session / "project").mkdir(parents=True)
@@ -794,7 +794,7 @@ def test_read_isolation_mounts_only_selected_session(sandbox: dict) -> None:
 def test_read_isolation_rejects_symlinked_session(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_OK")
 	session = "0123abcd-0000-4000-8000-00000000abcd"
-	sessions = sandbox["tmp"] / "rt" / "claude-read-sessions"
+	sessions = sandbox["runner_temp"] / "claude-read-sessions"
 	(sessions / "other-session").mkdir(parents=True)
 	(sessions / session).symlink_to(sessions / "other-session", target_is_directory=True)
 	result = _claude_run(sandbox, "SECURITY_AUDIT", session=session)
@@ -1011,7 +1011,7 @@ def test_read_isolation_fails_closed_if_git_config_cannot_be_masked(sandbox: dic
 
 def test_read_isolation_session_dir_failure_reports_its_cause(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_OK")
-	(sandbox["tmp"] / "rt" / "claude-read-sessions").write_text("not a directory")
+	(sandbox["runner_temp"] / "claude-read-sessions").write_text("not a directory")
 	args = " ".join(shlex.quote(str(part)) for part in (
 		"SECURITY_AUDIT", sandbox["prompt"], sandbox["tmp"] / "out.txt", sandbox["work"],
 		"0123abcd-0000-4000-8000-00000000abcd",
@@ -1091,7 +1091,7 @@ def test_read_isolation_reaps_container_on_parent_sigkill(sandbox: dict) -> None
 		except ProcessLookupError:
 			pass
 		process.wait(timeout=5)
-		for manifest in (sandbox["tmp"] / "rt").glob("claude-run-*/support-lock.json"):
+		for manifest in sandbox["runner_temp"].glob("claude-run-*/support-lock.json"):
 			subprocess.run(["python3", str(manifest.parent / "claude_engine.py"), "support-unlock", "--manifest", str(manifest)], check=True)
 
 
@@ -1113,9 +1113,9 @@ def test_read_profile_strips_credentials_from_claude_only(sandbox: dict, role: s
 	assert _rc(result) == 0, result.stderr
 	if role == "IMPLEMENT":
 		call = _calls(sandbox)[0]
-		assert call["credentials"] == dict.fromkeys(credential_names, True)
+		assert call["credentials"] == dict.fromkeys(credential_names, False)
 		assert call["token"] == "TOK_OK"
-		assert call["gh_config_dir"] == str(inherited_gh_config)
+		assert call["gh_config_dir"] == ""
 	else:
 		assert _calls(sandbox) == []
 		calls = _docker_calls(sandbox)
@@ -1125,8 +1125,8 @@ def test_read_profile_strips_credentials_from_claude_only(sandbox: dict, role: s
 
 @pytest.mark.parametrize("value, tools, mode", [
 	("true", "Read,Grep,Glob,Bash", "dontAsk"),
-	("false", "Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch", "bypassPermissions"),
-	("yes", "Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch", "bypassPermissions"),
+	("false", "Read,Grep,Glob,Bash,Edit,Write", "bypassPermissions"),
+	("yes", "Read,Grep,Glob,Bash,Edit,Write", "bypassPermissions"),
 ])
 def test_read_only_switch_narrows_a_write_role(sandbox: dict, value: str, tools: str, mode: str) -> None:
 	_accounts(sandbox, A="TOK_OK")
@@ -1349,7 +1349,7 @@ def test_write_role_reuses_the_prepared_implement_sandbox(sandbox: dict) -> None
 	# A read profile never reuses it.
 	result = _claude_run(sandbox, "SECURITY_AUDIT", CODEX_ISOLATED_ROOT=root, CODEX_ISOLATED_MODE="workspace")
 	assert _rc(result) == 0, result.stderr
-	run = docker_runs(sandbox["bin"].parent / "fake-docker.jsonl")[-1]
+	run = _docker_calls(sandbox)[-1]
 	assert f"coding-workflows.codex-isolated.root={root}" not in run["argv"]
 
 
