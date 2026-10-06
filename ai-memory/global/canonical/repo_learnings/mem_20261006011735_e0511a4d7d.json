@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Security-review flows should complete an audit and bind findings to the exact reviewed head.",
   "timestamps": {
     "created_at": "2026-10-06T01:17:35Z",
