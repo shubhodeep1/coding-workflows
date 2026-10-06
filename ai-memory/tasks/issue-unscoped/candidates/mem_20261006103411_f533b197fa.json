@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:755\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The documentation describes only the `env -C` case, while the guard can ask for confirmation on other commit forms with an unresolved working directory and a configuration override.\n  WHY: The condition at `.claude/hooks/pr_merge_status_guard.py:1503` is broader than the documented trigger.\n- tests/test_validate_workflow_validate_bootstrap.py:142-202\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The test does not assert that the no-sibling fallback fails because the target loader rejects the new flags.\n  WHY: A future change that swallows the target loader's exit status could still pass the test.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: agents.md\n  Location: line 755\n  Issue: The new documentation sentence describes only the `env -C` case (\"When `env -C` cannot resolve its directory, the commit guard asks...\"), but the actual code at `.claude/hooks/pr_merge_status_guard.py:1503` checks the broader condition `invocation.subcommand == \"commit\" and invocation.warning and invocation.config_override`. The `config_override` flag is set to `True` for any of: an `env` wrapper (line 485), a `GIT_CONFIG*` assignment (line 475), or a `-c`/`--config-env` git option (line 516-518). So the guard also fires for non-env-wrapped `git -c foo=bar commit` from an unresolvable working directory, not just `env -C /unresolvable/dir git commit -m x`. The narrower wording can mislead a future maintainer who tweaks the check or the test about its actual triggers. The changelog fragment `changelog.d/6031-validate-overlay-loader-helper-copy.md:18` carries the same narrower wording (\"when an `env`-wrapped commit has an unresolved directory\").\n  Suggested minimal fix: Tighten the agents.md sentence to describe the actual condition, e.g. \"When a commit has an unresolved working directory AND a configuration override (whether from an `env` wrapper, a `GIT_CONFIG*` assignment, or a `git -c`/`--config-env` option), the commit guard asks without querying the session checkout's PR history.\" Apply the matching tightening to the changelog fragment so the contributor-facing note matches the code.\n- File: tests/test_validate_workflow_validate_bootstrap.py\n  Location: lines 142-202 (new test `test_overlay_loader_runs_helper_copy_not_older_target_copy`)\n  Issue: The behavioural test exercises the two-path fallback (helper copy present vs. sibling removed) and verifies the helper copy's args include `--trusted-source-repo owner/repo`, but does not assert that the fallback path's exit status comes from the target copy's \"unrecognized arguments\" rejection (i.e. that the new flags actually reach the target loader when no sibling exists). A future refactor that changes the fallback to swallow the exit status would still pass the test as written, because the assertion only checks the returncode.\n  Suggested minimal fix: Add a substring assertion on the captured stderr for the no-sibling run, e.g. `assert \"--trusted-source-repo\" in result.stderr or \"unrecognized\" in result.stderr` (matching the old loader's `sys.exit(2 if '--trusted-source-repo' in sys.argv else 0)`). This pins the failure mode the PR is fixing.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- File: agents.md\n  Location: line 755\n  Issue: The documentation describes only the `env -C` case (\"When `env -C` cannot resolve its directory\"), but the code at `.claude/hooks/pr_merge_status_guard.py:1503` fires for any commit with `warning and config_override`. The test at `tests/test_pr_merge_status_guard.py:1420-1425` confirms this covers `env -C`, `env -S`, and `env -v` wrappers. The wording narrows the documented contract to one of several triggers.\n  Suggested minimal fix: Widen the documentation to match the code: \"When an env-wrapped commit has an unresolved working directory (from `env -C`, `env -S`, `env -v`, or similar), the commit guard asks without querying the session checkout's PR history.\"\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "b89cbbf836255c4314aae38631a79c9a2cfe862373a57870a810b863d3031844",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6522,
+    "run_id": "37437952840",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37437952840",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006103411_f533b197fa",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6522,
+    "run_id": "37437952840"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T10:34:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
