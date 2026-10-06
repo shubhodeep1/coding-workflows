@@ -14,3 +14,5 @@ What this means for operators: orchestrator projects whose branch predates a mai
 ### For contributors
 
 `STAGE_SUPPORT_HELPER_DIR` is the helper's own directory, resolved from `BASH_SOURCE` at load time. `run_overlay_loader` falls back to the relative `scripts/load_workflow_overlay.py` when no sibling copy exists. `tests/test_validate_workflow_validate_bootstrap.py` runs the function against an older target loader to cover both paths.
+
+The merged-PR guard also asks for confirmation instead of checking the session checkout when an `env`-wrapped commit has an unresolved directory. Its live and consumer-template copies are kept in sync.
