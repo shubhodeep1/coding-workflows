@@ -72,8 +72,10 @@ pinned commit's GitHub check-runs when isolation is unavailable; failing or
 pending checks block deployment. When Wrangler and a safe sandbox are available,
 `/deploy-activate` also requires a successful dry run before the Worker deploy;
 a failed dry run blocks deployment. Only the matching site's Cloudflare credential
-is passed to the deploy process. The provided tokens are account-owned, not
-Worker-scoped; obtaining a narrower token requires operator provisioning.
+is passed to the deploy process in an allowlisted environment; other session
+credentials are not inherited by Wrangler build hooks. The provided tokens
+are account-owned, not Worker-scoped; obtaining a narrower token requires
+operator provisioning.
 
 #### Variables
 

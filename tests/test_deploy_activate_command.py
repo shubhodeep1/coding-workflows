@@ -31,7 +31,7 @@ def test_cloudflare_preflight_and_deploy_boundaries(command: Path):
 		"env -i",
 		"--network none",
 		"check-runs",
-		"env -u FUNTOKEN_IO_CF -u FT_GAMES_CF -u DIGITALOCEAN_ACCESS_TOKEN -u GH_TOKEN -u GITHUB_TOKEN",
+		'env -i PATH="$PATH" HOME="$(mktemp -d)" CLOUDFLARE_ACCOUNT_ID="$CF_ACCOUNT_ID" CLOUDFLARE_API_TOKEN="$CF_API_TOKEN" wrangler deploy',
 		"Never run a Cloudflare mutation in the same turn that proposes it",
 		"Secret values never transit the chat",
 	):
@@ -41,6 +41,7 @@ def test_cloudflare_preflight_and_deploy_boundaries(command: Path):
 	assert "When Wrangler and a safe sandbox are available, require a successful `wrangler deploy --dry-run`" in cloudflare
 	assert "a failed dry run blocks deployment" in cloudflare
 	assert "If no such isolation is available, skip local checks and rely on the check-runs" in cloudflare
+	assert "env -u FUNTOKEN_IO_CF" not in cloudflare
 
 
 def test_shared_cloudflare_deploy_boundary():
