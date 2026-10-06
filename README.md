@@ -1309,15 +1309,17 @@ through `clarify → plan → implement → review`.
 - **Trigger (review/autofix failures):** the review/autofix workflow itself
   (`review_autofix.yml`, so consumers need no new wrapper) reports a failed
   run on a pull request from its failure path via
-  `scripts/workflow_failure_heal_autofix_report.sh`, but only once the same PR
-  has accumulated `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` (default 2)
-  consecutive failed review runs, counted from the failure comments the
-  workflow posts on the PR (`AI review/autofix produced no output`,
+  `scripts/workflow_failure_heal_autofix_report.sh`, once the same PR
+  has accumulated `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` (default 1, so every
+  failed run) consecutive failed review runs, counted from the failure
+  comments the workflow posts on the PR (`AI review/autofix produced no output`,
   `AI review/autofix failed`, `AI review/autofix encountered a post-editor
   failure`, `Editor changes lost`, or `Editor no-op suspicious`). An `AI
   autofix editor summary` ends the streak only when a newer failure comment
-  does not show that the same run failed after posting its summary. A single
-  retryable failure stays with the stall poller's retry. The report carries
+  does not show that the same run failed after posting its summary. Set the
+  variable to 2 or more to leave the first failures to the stall poller's
+  retry; the intake keys these reports on the PR, so one PR holds one open
+  heal issue either way. The report carries
   the run's `finalize_reason` (or the flag that fired: `reviewers_failed`,
   `editor_empty_noop`, `editor_changes_lost`, `editor_refusal`), the
   `REVIEW_AUTOFIX_RUN_SUMMARY_V1` line, and log tails as evidence; resolver
@@ -1339,6 +1341,36 @@ through `clarify → plan → implement → review`.
   resolve the release tag to a commit, while immutable consumer SHA pins use
   their pinned value. Each checkout must match the resolved SHA; a failed
   optional fingerprint-cap helper checkout only skips that cap.
+- **Trigger (clarify / plan / implement failures):** `clarify.yml`,
+  `plan.yml` and `implement.yml` each carry a `heal-report` job (consumers need
+  no new wrapper). It runs after the phase job of the same run ended in
+  `failure` (a cancelled run is not reported), checks out the workflow support
+  ref (`stable` in consumers, the run's commit here) and runs
+  `scripts/workflow_failure_heal_phase_report.sh`. Running as its own job means
+  the phase job has finished, so the intake reads its complete log. The reporter
+  reads the issue and its comments (one read each), counts the phase's failed
+  runs in a row from the failure comments the phase posts (`AI planning
+  workflow failed.`, `AI clarification workflow failed for …`, `AI
+  implementation workflow failed for …`; posted clarification questions, `The
+  task appears clear.`, a posted `Implementation Plan`, or another phase's
+  failure end the streak) and, at `WORKFLOW_HEAL_PHASE_FAILURE_STREAK`
+  (default 1), dispatches a `phase_failure` report: the failed run first in
+  `run_refs`, then the earlier runs of the streak. Implement does not report a
+  run that ended in a deliberate terminal state: a guard block (its
+  `ai:destructive-blocked` / `ai:scope-blocked` label reports through the label
+  path), a failure the diagnose step turned into fix-up issues, or a `BLOCKED`
+  verdict (the `Gate workflow failure heal report` step sets the job output
+  `heal_report`). The intake fingerprints the report from the failed job's log
+  (`phase:<phase>_failed` when no log can be read), keys it on the source issue
+  like a review/autofix report on its PR, and continues a heal issue's lineage
+  when the failing issue is itself a heal issue. When a heal issue's own run
+  fails with the fingerprint the issue was filed for, the pipeline cannot run
+  its fix: the intake records the occurrence, labels the issue
+  `ai:workflow-heal-escalated`, sends a CRITICAL Telegram alert and logs
+  `WORKFLOW_HEAL escalate reason=heal_issue_failed_itself`. The reporter never
+  fails the job; log lines are prefixed `WORKFLOW_HEAL_PHASE_REPORT`. Issues
+  #6413, #6373 and #6392 failed planning four times each on 2026-10-05 and
+  never reached heal, because only escalation labels did.
 - **Reviewer failures name the failing phase:** if the `Run reviewer models`
   step fails, the editor never runs. `Post editor summary comment` names the failure `reviewers_failed` instead
   of `editor_empty_noop` (failure marker, fingerprint, cap reason, heal report
@@ -1795,7 +1827,8 @@ through `clarify → plan → implement → review`.
 | `WORKFLOW_HEAL_TARGET_BRANCH` | `stable` | coding-workflows only. Branch a heal issue declares as `Target branch` so the fix PR is a hotfix on the stable line. A failed release run targets the branch it failed on instead, and a failed review/autofix run on a pull request in coding-workflows itself targets that PR's head branch (falling back to this value when the branch is gone). |
 | `WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED` | `true` | coding-workflows only. Lets the heal intake route review/autofix failures from this repository by who changed the crash file: `pr-self-inflicted` → diagnosis comment on the PR, no issue; `base-self-inflicted` → `ai:workflow-heal` issue targeting the PR's base branch (with orchestrator lineage for `orchestrator/project-<N>`). `false` skips the ownership check and routes both tokens as `workflow-defect` (the PR head branch target). See [Workflow Failure Heal](#workflow-failure-heal). |
 | `WORKFLOW_HEAL_PR_RECONCILE_ENABLED` | `true` | coding-workflows only. Lets the `heal-pr-reconcile` job in `internal-cancel-on-pr-close.yml` act when a pull request closes: close its heal PRs (and heal issues, as not planned) when it closed without merging, or move their heal commits onto its base and re-point them when it merged. `false` skips the job before checkout and leaves heal PRs as they are. See [Workflow Failure Heal](#workflow-failure-heal). |
-| `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` | `2` | Consecutive failed review/autofix runs on one pull request before `review_autofix.yml` reports the failure to the workflow failure heal intake. `1` reports every failure; a single failure below the threshold is left to the stall poller's retry. |
+| `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` | `1` | Consecutive failed review/autofix runs on one pull request before `review_autofix.yml` reports the failure to the workflow failure heal intake. The default `1` reports every failure; a failure below a higher threshold is left to the stall poller's retry. Empty, `0` or non-numeric values mean `1`. |
+| `WORKFLOW_HEAL_PHASE_FAILURE_STREAK` | `1` | Consecutive failed runs of one phase (clarify, plan or implement) on one issue before that workflow's `heal-report` job reports the failure to the workflow failure heal intake. The default `1` reports every failure; a failure below a higher threshold is left to the stall poller's retry. Empty, `0` or non-numeric values mean `1`. |
 | `REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED` | `true` | Identical-failure fingerprint cap in the `gate` job of `review_autofix.yml`. Every review/autofix failure comment ends with a `<!-- review-autofix-failure:v1 head=… reason=… fp=… degraded=… run=… -->` marker, where `fp` fingerprints the failure reason plus the normalised stderr of the editor and Collect PR metadata stages. When the trailing markers for the current head (authored by the `GH_PAT` account) share one fingerprint `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL` times, the gate logs `AUTOFIX_FINGERPRINT_CAP_TRIPPED`, skips the run (`skip_reason=fingerprint_cap`, no reviewer or editor call), and the `fingerprint-cap-block` job labels the linked issues `ai:review-blocked` (the PR itself when it has none), posts one `review-autofix-failure-cap:v1` comment, sends an `identical_failure_cap` heal report and a Telegram WARNING. Later dispatches on the same head log `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`, and the poller's noop-suspicious recovery sweep stops re-dispatching that head (it logs `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP` and sends no retry WARNING); a push resets the count; `force_rb_judge` dispatches bypass it; lookup failures log `AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED` and run normally. Set to `false` to stop evaluating the cap (the markers keep being written). |
 | `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL` | `3` | Identical failures on one head that trip the fingerprint cap above. Non-numeric or `0` falls back to `3`. |
 | `REVIEW_EDITOR_PREFLIGHT_ENABLED` | `true` | Editor preflight in the "Preflight: Verify required files before reviewer invocation" step of `review_autofix.yml`. After the file checks it runs `scripts/review_apply_fixes.sh --preflight`, which checks every `: "${VAR:?…}"` guard the editor script declares, the OpenCode helpers and config writer, the `opencode` binary and write access to `RUNTIME_DIR` without any model or network call, and logs `REVIEW_EDITOR_PREFLIGHT check=<name> result=<ok\|fail>` per check plus `REVIEW_EDITOR_PREFLIGHT result=<ok\|fail> checks=<n> failed=<m>`. A failure sets `EDITOR_PREFLIGHT_FAILED=true` and fails the run before the reviewers (heal `failure_reason=editor_preflight_failed`). Skipped with `REVIEW_EDITOR_PREFLIGHT skip reason=unsupported` when the staged script lacks the `# supports: --preflight` marker, and with `reason=editor_not_scheduled` in Claude-branch review mode or a terminal resume. Set to `false` to skip it (`reason=disabled`). |
@@ -2003,7 +2036,11 @@ When no CLI, policy, instructions file or account is usable, it logs
 and returns `75`; the caller then runs its codex path unchanged. A crash
 returns non-zero and follows the role's existing retry rules; a timeout
 returns `124`. Runs are wrapped by `codex_stall_guard.sh --engine claude`,
-which only adds `engine=claude` to its log lines, and every success prints the
+which only adds `engine=claude` to its log lines. Every workflow that stages
+`ai_engine.sh` from the support ref stages the guard beside it: a guard left
+to the job checkout comes from the issue's branch, and `stable`'s copy
+predated `--engine` (issues #6413, #6373 and #6392 crashed every Claude
+planning attempt with `unknown option: --engine`). Every success prints the
 stream-json `result` usage line that `scripts/cost_audit.py` totals under
 "Claude engine usage".
 

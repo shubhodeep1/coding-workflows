@@ -177,9 +177,18 @@ Phases of the unattended pipeline (each is a separate workflow file under
     third reporter lives in the failure path of `review_autofix.yml`
     (`scripts/workflow_failure_heal_autofix_report.sh`, payload kind
     `autofix_failure`): it reports a failed review/autofix run on a pull
-    request once `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` (default 2) runs in a
-    row failed on that PR, counted from the workflow's own failure comments,
-    so the stall poller's single retry is not pre-empted. A failed
+    request once `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` (default 1, so every
+    failed run) runs in a row failed on that PR, counted from the workflow's
+    own failure comments. A fourth reporter is the `heal-report` job of
+    `clarify.yml`, `plan.yml` and `implement.yml`
+    (`scripts/workflow_failure_heal_phase_report.sh`, payload kind
+    `phase_failure`): after the phase job ends in `failure` it reports the run
+    once `WORKFLOW_HEAL_PHASE_FAILURE_STREAK` (default 1) runs of that phase in
+    a row failed on the issue; the intake keys it on the issue's `source=`
+    marker, and a heal issue whose own run fails with its own fingerprint is
+    escalated (`reason=heal_issue_failed_itself`). Implement skips guard
+    blocks, diagnosed fix-up failures and `BLOCKED` verdicts through the job
+    output `heal_report`. A failed
     `Run reviewer models` step (the editor never ran) is reported as
     `reviewers_failed` with per-slot / summariser exit codes
     (`reviewers_failure_evidence.txt`, `AUTOFIX_REVIEWERS_FAILED=true`) rather
@@ -200,8 +209,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
     the first 300 characters of the API error. On by
     default; disable per repo via `WORKFLOW_HEAL_ENABLED=false`; never pushes
     code itself. Stable log prefixes: `WORKFLOW_HEAL_REPORT`,
-    `WORKFLOW_HEAL_AUTOFIX_REPORT`, `WORKFLOW_HEAL_PR_RECONCILE`,
-    `WORKFLOW_HEAL`.
+    `WORKFLOW_HEAL_AUTOFIX_REPORT`, `WORKFLOW_HEAL_PHASE_REPORT`,
+    `WORKFLOW_HEAL_PR_RECONCILE`, `WORKFLOW_HEAL`.
     A report whose failure reason is `identical_failure_cap`, or a generation
     > 1 of its lineage, is deterministic (`is_deterministic_failure`): the
     intake never files it as `transient` (remaps to `inconclusive`,
