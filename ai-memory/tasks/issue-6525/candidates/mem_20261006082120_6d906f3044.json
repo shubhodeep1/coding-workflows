@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which paths should require a trusted grant before the implement commit can include them?\nChoices:\nA. `.github/workflows/**` only (the path `ALLOW_WORKFLOW_EDITS` guards today).\nB. The full automation set the repo already treats as protected: `.github/`, `.claude/`, `scripts/`, `prompts/`, `workflow-templates/` (same set as the review-blocked fix's `ALLOW_WORKFLOW_EDITS=false` rule). (RECOMMENDED)\nC. Option B plus `validation/`, `ai-memory/`, `db/contracts/`, and agent-instruction files (the deterministic-skip protected list).\n**Note:** in this source repo almost every orchestrator sub-issue edits `scripts/`. B and C rely on Q2 treating pipeline-authored issues as trusted, or those issues will be blocked.\nQ2: What should count as the \"trusted workflow record\" that grants exact automation paths for an issue?\nChoices:\nA. A `files_touched:` allowlist in the issue body, honoured for automation paths only when the issue author is the pipeline's `GH_PAT` login (orchestrator / judge / heal-created issues) or has OWNER/MEMBER/COLLABORATOR association. Outsider-authored allowlists never grant automation paths. (RECOMMENDED)\nB. A separate marker comment (e.g. `<!-- ai:automation-path-grant:v1 paths=... -->`) posted by the pipeline login or an OWNER/MEMBER/COLLABORATOR, listing the exact paths. The issue body is never trusted.\nC. A label (e.g. `ai:allow-automation-edits`) applied by an OWNER/MEMBER/COLLABORATOR, verified through the label event's actor, combined with the issue's `files_touched` list for exact paths.\nQ3: What should happen to the existing `ALLOW_WORKFLOW_EDITS` variable (default `'true'`, documented and used by implement, review_autofix, update_workflows, orchestrate_poll)?\nChoices:\nA. Keep the name and its default for backward compatibility, but make it necessary-not-sufficient in `implement.yml`: automation paths also need the Q2 grant. `false` still blocks everything. Other workflows are unchanged. (RECOMMENDED)\nB. Flip the `implement.yml` default to `'false'`, so automation edits need both the variable set to `true` by the operator and the Q2 grant. This is a behaviour change for consumers that rely on the current default.\nQ4: When an issue has no `files_touched` block, or a malformed one, how should the scope guard behave?\nChoices:\nA. Fail closed only when the staged changes include a Q1 automation path. Issues that touch only ordinary source files keep today's skip behaviour. (RECOMMENDED)\nB. Fail closed for every implementation commit without a valid `files_touched` block, whatever paths it touches. This blocks most standalone human-filed issues.",
+  "fingerprint": "e45bfb03e3d2a7f8c39d49964caa0146921d53942d8829cbeda2c7facbf5ad64",
+  "lineage": {
+    "issue_number": 6525,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37434907473",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37434907473",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261006082120_6d906f3044",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6525,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37434907473"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6525 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-06T08:21:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
