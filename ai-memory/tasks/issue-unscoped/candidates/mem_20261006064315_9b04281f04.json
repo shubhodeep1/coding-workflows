@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:13974 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The PR-named failed-run check ignores a failure when its timestamp equals the newest completed head-branch run.\n  WHY: GitHub timestamps have second precision, so equal timestamps can cause recovery to take the empty-commit path instead of directly redispatching review.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:13920-13933 | PROBLEM: The LAST RUN DIFF includes scope-creep changes unrelated to issue #6500, including restructuring `changelog.d/4701-review-dispatch-default-branch.md` and a tied-failure logic fix; those changes belong in a different PR (issue #4701 follow-up), not a PR titled \"AI implementation for issue #6500\". WHY: This is a scope concern, not a runtime defect.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:13974 | severity=high | confidence=4\n  PROBLEM: The PR-named failed-run check requires its timestamp to be strictly newer than the newest completed head-branch run. It does not treat equal timestamps as a failure, unlike the tie handling added for head-branch runs at lines 13918-13923.\n  WHY: GitHub timestamps have second precision, so a failed PR-named review dispatch and a successful head-branch run can have the same `createdAt`. The failed dispatch is then ignored, and recovery proceeds to the empty-commit path instead of directly redispatching review.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "865cea93419e8a8fb7961d245bc5ac5c2d9a1c7ffb8dbbc973a0bfe36c5f02bd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6503,
+    "run_id": "37422007099",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37422007099",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006064315_9b04281f04",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6503,
+    "run_id": "37422007099"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T06:43:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
