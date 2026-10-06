@@ -13938,10 +13938,9 @@ STALL_EOF
           # branch lookups above never see it. When they found no failed
           # run, look at the newest PR-named dispatch run (one paged lookup,
           # §15; see _pr_named_review_dispatch_runs for its call budget):
-          # it counts when it completed with a failure and is newer than
-          # every completed head-branch run seen. A missing createdAt counts
-          # as older, so this path only adds a redispatch when the failure
-          # is definitely the newest run.
+          # it counts when it completed with a failure and is not older than
+          # every completed head-branch run seen (timestamp ties favor retry).
+          # A missing createdAt cannot establish that ordering.
           # An incomplete listing (issue #4927) can neither show the newest
           # PR-named run nor rule out a live one, so this cycle neither
           # redispatches nor pushes; the next poll cycle retries.
@@ -13971,7 +13970,7 @@ STALL_EOF
               _rtr_pr_named_created_at="${_rtr_pr_named_row#*$'\t'}"
               case "${_rtr_pr_named_conclusion}" in
                 failure|cancelled|timed_out)
-                  if [ -n "${_rtr_pr_named_created_at}" ] && [[ "${_rtr_pr_named_created_at}" > "${_rtr_newest_completed_at}" ]]; then
+                  if [ -n "${_rtr_pr_named_created_at}" ] && [[ "${_rtr_pr_named_created_at}" == "${_rtr_newest_completed_at}" || "${_rtr_pr_named_created_at}" > "${_rtr_newest_completed_at}" ]]; then
                     _rtr_failed_conclusion="${_rtr_pr_named_conclusion}"
                     _rtr_failed_wf="review run dispatched for PR #${pr_num}"
                   fi

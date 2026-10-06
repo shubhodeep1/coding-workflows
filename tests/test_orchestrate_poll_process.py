@@ -17161,6 +17161,25 @@ def test_retrigger_review_ignores_pr_named_failure_superseded_by_newer_head_bran
 	assert result.get("git_push_calls", []), "expected the empty-commit push path"
 
 
+def test_retrigger_review_redispatches_pr_named_failure_tied_with_head_branch_success():
+	state, prs = _retrigger_review_pr_state(97, "claude/retrigger-review-pr-named-tied")
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 97}, prs=prs,
+		active_autofix_runs=[
+			{"workflow": "ai-review.yml", "branch": "claude/retrigger-review-pr-named-tied",
+			 "status": "completed", "conclusion": "success", "createdAt": "2026-09-28T01:00:00Z"},
+			{"workflow": "internal-review.yml", "branch": "main", "event": "workflow_dispatch",
+			 "displayTitle": "Internal: AI Review & Autofix [pr:97]",
+			 "status": "completed", "conclusion": "failure", "createdAt": "2026-09-28T01:00:00Z"},
+		],
+		mock_git_push_success=True,
+	)
+	assert any(str(d.get("pr_number")) == "97" for d in result["review_dispatches"]), result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert "review run dispatched for PR #97" in result["stdout"]
+
+
 def test_retrigger_review_skips_push_and_redispatch_when_pr_named_listing_is_incomplete():
 	# Issue #4927: the wrapper dispatch-run listing failed, so the poller
 	# cannot rule out a live default-branch review run for the PR. It must
