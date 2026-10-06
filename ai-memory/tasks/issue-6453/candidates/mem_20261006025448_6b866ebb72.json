@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6453,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6453\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6464\",\"pr_number\":6464,\"branch\":\"ai/issue-6453\",\"run_id\":\"37404865063\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37404865063\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/test-and-mark-stable.yml\",\"changelog.d/6453-release-gate-bait-review-coverage.md\",\"tests/test_test_and_mark_stable_review_blocked_budget.py\"]}",
+  "fingerprint": "2114ea1cc3dfd387f4fbee634122d7ca4c90e0d37f6e0f1758bed2d7b38c2f43",
+  "lineage": {
+    "issue_number": 6453,
+    "parent_ids": [],
+    "pr_number": 6464,
+    "run_id": "37404865063",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37404865063",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6464"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261006025448_6b866ebb72",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6453,
+    "level": "run",
+    "pr_number": 6464,
+    "run_id": "37404865063"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6453: https://github.com/shubhodeep1/coding-workflows/pull/6464",
+  "timestamps": {
+    "created_at": "2026-10-06T02:54:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
