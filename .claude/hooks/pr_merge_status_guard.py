@@ -192,6 +192,7 @@ class _GitInvocation(NamedTuple):
 	arguments: list[str]
 	warning: str = ""
 	config_override: bool = False
+	env_directory_unresolved: bool = False
 	explicit_git_directory: bool = False
 
 
@@ -493,6 +494,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			continue
 		env_cwd = working_directory
 		explicit_directory_unresolved = False
+		env_directory_unresolved = False
 		env_chdir_seen = False
 		if index != env_index:
 			config_override = True
@@ -504,6 +506,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 						word.split("=", 1)[1] if word.startswith("--chdir=") else word[2:])
 					env_cwd = _literal_guard_path(env_word_value, env_cwd) if env_cwd else None
 					explicit_directory_unresolved |= env_cwd is None
+					env_directory_unresolved |= env_cwd is None
 				elif re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", word):
 					env_name, env_word_value = word.split("=", 1)
 					if env_name in ("GIT_DIR", "GIT_WORK_TREE"):
@@ -564,6 +567,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				if explicit_directory_unresolved and tokens[index] == "commit" else
 				"could not resolve git command directory; checking the session checkout instead") if uncertain else "",
 			config_override,
+			env_directory_unresolved,
 			explicit_git_directory,
 		))
 	return invocations
@@ -1516,9 +1520,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
-		if invocation.subcommand == "commit" and invocation.warning == (
-			"could not resolve git command directory (env -C/--chdir); cannot check checkout PR history"
-		):
+		if invocation.subcommand == "commit" and invocation.env_directory_unresolved:
 			unknown_destination_reasons.append("could not resolve git commit directory; no checkout was checked; cannot verify its PR history")
 			continue
 		if invocation.subcommand == "push" and invocation.warning == "unparsed env wrapper":
