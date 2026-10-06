@@ -1510,10 +1510,24 @@ through `clarify → plan → implement → review`.
   `ai:destructive-blocked` / `ai:scope-blocked` label reports through the label
   path), a failure the diagnose step turned into fix-up issues, or a `BLOCKED`
   verdict (the `Gate workflow failure heal report` step sets the job output
-  `heal_report`). The intake fingerprints the report from the current failed
-  run's job log (earlier streak logs are diagnosis context only;
-  `phase:<phase>_failed` when the current log cannot be read), keys it on the
-  source issue like a review/autofix report on its PR, and continues a heal issue's lineage
+  `heal_report`). Before dedup, escalation or issue creation, the intake checks
+  the GitHub-read run's repository, event, matching phase wrapper and outcome,
+  a failed non-reporter job, and a failure comment on the source issue linking
+  that run. Consumer comments must have a GitHub-reported OWNER, MEMBER or
+  COLLABORATOR association, or be from `github-actions[bot]`; consumer `GH_PAT`
+  accounts need not match the intake's. Self-repo reports additionally require
+  the comment author to match the intake's authenticated pipeline account.
+  A completed run must have failed; an in-progress run is accepted once its
+  phase job failed. API failures or mismatches skip with
+  `WORKFLOW_HEAL skip reason=phase_report_unverified` and a Telegram WARNING.
+  A missing failure comment, or unavailable pipeline-account identity for a
+  self-repo report, also skips (even for a real failed run). Failed evidence
+  fetches are logged; per-credential sender binding is outside this check.
+  The intake fingerprints
+  verified reports from the current failed run's job log (earlier streak logs
+  are diagnosis context only; `phase:<phase>_failed` when the current log cannot
+  be read), keys it on the source issue like a review/autofix report on its PR,
+  and continues a heal issue's lineage
   when the failing issue is itself a heal issue. When a heal issue's own run
   fails with the fingerprint the issue was filed for, the pipeline cannot run
   its fix: the intake records the occurrence, labels the issue
