@@ -30,6 +30,6 @@ Three give-up exits that used to end in a Telegram alert alone now hand over to 
 
 Activation verification uses the ACTIVATION_VERIFY role from `prompts/mode-activation-verify.txt`. A merge that closes an activation-fix issue is not verified again, preventing recursive fix issues. Operator-step updates append keyed comments rather than patching a shared issue body; the highest-id trusted comment for a key is current, and earlier comments and legacy body sections remain as history. If a new tracker's label listing stays stale, the writer stops instead of posting to an unverified duplicate; `tests/test_activation_verify.py` covers the verifier and operator-step writer.
 
-Issue and project resume commands are posted before their block label is removed; a failed phase-label or command write leaves the blocked item visible to the next unblock scan.
+Issue and project resume commands are posted before their block label is removed, except `/approved`: the block label is removed before posting that command so the implementation gate sees no guard label. If posting fails, the judge restores the block label for the next scan and alerts CRITICAL if restoration also fails.
 
 The merged-PR guard also keeps numeric push refspecs in its branch check when output is redirected, while still recognizing adjacent unquoted file descriptors.

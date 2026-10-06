@@ -221,10 +221,10 @@ def _is_security_issue(ctx: dict) -> bool:
 def _approve(issue: int, labels: list[str], drop: str) -> list[dict]:
 	ops: list[dict] = [
 		{"op": "add_labels", "issue": issue, "labels": ["ai:awaiting-approval"]},
-		{"op": "comment", "issue": issue, "body": "/approved"},
 	]
 	if drop:
 		ops.append({"op": "remove_label", "issue": issue, "label": drop})
+	ops.append({"op": "comment", "issue": issue, "body": "/approved"})
 	return ops
 
 

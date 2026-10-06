@@ -2719,10 +2719,12 @@ and resolver chains, a failed project) now goes to the unblock judge
   A failed fix-up lookup or resume write leaves the wait marker pending for
   another run; closing a fix-up without a merge does not resume its parent.
   A failed review dispatch leaves the PR's block label in place for the next
-  scan. Issue and project resume paths keep their old block label until the
-  required phase label and resume command are posted; a failed write leaves
-  the item discoverable after the scan cooldown. If a standalone fix-up's wait
-  marker cannot be posted, the judge
+  scan. For `/approved`, the judge adds `ai:awaiting-approval`, removes the
+  block label, then posts the command so the implementation gate sees no
+  guard label. If posting fails, it restores the removed block label;
+  a failed restoration sends a CRITICAL alert. Other issue and project resume
+  paths keep their old block label until the required phase label and command
+  are posted. If a standalone fix-up's wait marker cannot be posted, the judge
   closes the newly created fix-up instead of leaving an untracked open issue;
   a failed close is logged for recovery. A failed scope edit cannot be followed by `/approved`. A PR `reissue`
   creates a standalone replacement before closing the PR;

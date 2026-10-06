@@ -529,8 +529,8 @@ def test_project_retry_posts_the_existing_resume_command(stop: str, command: str
 
 def test_issue_retry_reapproves_when_a_plan_exists_else_reanswers() -> None:
 	with_plan = actions.plan(_verdict("retry_budget", instructions="x"), _ctx(has_plan=True))
-	assert [op["op"] for op in with_plan] == ["comment", "add_labels", "comment", "remove_label"]
-	assert with_plan[-1] == {"op": "remove_label", "issue": 7, "label": "ai:blocked"}
+	assert [op["op"] for op in with_plan] == ["comment", "add_labels", "remove_label", "comment"]
+	assert with_plan[-2] == {"op": "remove_label", "issue": 7, "label": "ai:blocked"}
 	assert _bodies(with_plan)[-1] == "/approved"
 	without = actions.plan(_verdict("retry_budget", instructions="use the cache"), _ctx())
 	assert _bodies(without)[-1] == "/answer use the cache"
@@ -694,7 +694,7 @@ def test_issue_issue_creating_verdicts_have_no_pr_provenance() -> None:
 def test_scope_override_extends_files_touched_and_reapproves() -> None:
 	ops = actions.plan(_verdict("override_guard", paths=["src/a.py"]), _ctx(stop="scope-blocked", has_plan=True))
 	assert ops[0] == {"op": "edit_files_touched", "issue": 7, "paths": ["src/a.py"]}
-	assert ops[-1] == {"op": "remove_label", "issue": 7, "label": "ai:scope-blocked"}
+	assert ops[-2] == {"op": "remove_label", "issue": 7, "label": "ai:scope-blocked"}
 	assert _bodies(ops)[-1] == "/approved"
 	destructive = actions.plan(_verdict("override_guard", paths=["a.md"], override="bulk_delete"), _ctx(stop="destructive-blocked", has_plan=True))
 	assert all(op["op"] != "edit_files_touched" for op in destructive)
@@ -1786,8 +1786,23 @@ def test_label_removed_concurrently_does_not_block_approval(tmp_path: Path, dele
 		verdict={"verdict": "retry_budget", "reason": "retry safely", "instructions": "try once more"},
 		FAKE_GH_FAIL_DELETE=delete_status)
 	assert ("reason=actuation_failed" not in result.stdout) == successful
-	assert any(comment["body"] == "/approved" for comment in state["comments"])
+	assert any(comment["body"] == "/approved" for comment in state["comments"]) == successful
 	assert any(label == "ai:awaiting-approval" for _, label in state["labels_added"])
+	if not successful:
+		assert state["labels_removed"] == []
+
+
+def test_failed_approval_post_restores_removed_guard(tmp_path: Path) -> None:
+	blocked = dict(ISSUE, labels=[{"name": "ai:scope-blocked"}])
+	plan = _comment("Implementation plan")
+	plan["author_association"] = "OWNER"
+	result, state = _judge(tmp_path, blocked, comments=[plan],
+		verdict={"verdict": "retry_budget", "reason": "retry safely", "instructions": "try once more"},
+		FAKE_GH_FAIL_RESUME="1")
+	assert "reason=actuation_failed" in result.stdout
+	assert state["labels_removed"] == ["repos/o/r/issues/7/labels/ai%3Ascope-blocked"]
+	assert [label for _, label in state["labels_added"]] == ["ai:awaiting-approval", "ai:scope-blocked"]
+	assert not any(comment["body"] == "/approved" for comment in state["comments"])
 
 
 @pytest.mark.parametrize("stop,has_plan,verdict", [
@@ -1803,7 +1818,11 @@ def test_failed_issue_resume_keeps_scan_visible_block(tmp_path: Path, stop: str,
 	response = {"verdict": verdict, "reason": "retry safely", "instructions": "try once more", "answer": "Q1: A"}
 	result, state = _judge(tmp_path, issue, comments=comments, verdict=response, FAKE_GH_FAIL_RESUME="1")
 	assert "reason=actuation_failed" in result.stdout
-	assert state["labels_removed"] == []
+	if stop == "scope-blocked":
+		assert state["labels_removed"] == ["repos/o/r/issues/7/labels/ai%3Ascope-blocked"]
+		assert any(label == "ai:scope-blocked" for _, label in state["labels_added"])
+	else:
+		assert state["labels_removed"] == []
 	assert not any(entry["body"].startswith(("/answer", "/approved", "/reclarify")) for entry in state["comments"])
 
 

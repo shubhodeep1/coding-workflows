@@ -157,7 +157,7 @@ PY
 # must not close an item, and a failed close must not add the terminal label.
 unblock_run_ops()
 {
-	local ops_file="$1" project_failed_guard="${2:-false}" count idx op issue number created body label close_failed="false" close_succeeded="false" ops_failed="false" terminal_project_status
+	local ops_file="$1" project_failed_guard="${2:-false}" count idx op issue number created body label close_failed="false" close_succeeded="false" ops_failed="false" terminal_project_status unblock_removed_guard=""
 	count="$(jq '.ops | length' "${ops_file}" 2>/dev/null || echo 0)"
 	for ((idx = 0; idx < count; idx++)); do
 		op="$(jq -r ".ops[${idx}].op" "${ops_file}")"
@@ -170,8 +170,17 @@ unblock_run_ops()
 		case "${op}" in
 			comment)
 				body="$(jq -r ".ops[${idx}].body" "${ops_file}")"
-				gh api "repos/${REPOSITORY}/issues/${issue}/comments" -f body="${body}" >/dev/null 2>&1 \
-					|| { ops_failed="true"; unblock_log "item=${ITEM} op=comment issue=${issue} outcome=failed"; }
+				if ! gh api "repos/${REPOSITORY}/issues/${issue}/comments" -f body="${body}" >/dev/null 2>&1; then
+					ops_failed="true"
+					unblock_log "item=${ITEM} op=comment issue=${issue} outcome=failed"
+					if [ "${body}" = "/approved" ] && [ -n "${unblock_removed_guard}" ]; then
+						# Keep a failed approval discoverable after its trigger label was cleared.
+						if ! gh api -X POST "repos/${REPOSITORY}/issues/${issue}/labels" -f "labels[]=${unblock_removed_guard}" >/dev/null 2>&1; then
+							unblock_log "item=${ITEM} op=restore_label issue=${issue} label=${unblock_removed_guard} outcome=failed"
+							unblock_tg "CRITICAL" "Unblock judge could not restore ${unblock_removed_guard} on #${issue} after /approved failed (${REPOSITORY})."
+						fi
+					fi
+				fi
 				;;
 			add_labels)
 				while IFS= read -r label; do
@@ -202,7 +211,9 @@ unblock_run_ops()
 				;;
 			remove_label)
 				label="$(jq -r ".ops[${idx}].label" "${ops_file}")"
-				if ! gh api -X DELETE "repos/${REPOSITORY}/issues/${issue}/labels/$(jq -rn --arg l "${label}" '$l | @uri')" >/dev/null 2> "${RUNTIME_DIR}/remove_label_error.txt"; then
+				if gh api -X DELETE "repos/${REPOSITORY}/issues/${issue}/labels/$(jq -rn --arg l "${label}" '$l | @uri')" >/dev/null 2> "${RUNTIME_DIR}/remove_label_error.txt"; then
+					unblock_removed_guard="${label}"
+				else
 					if ! grep -q 'HTTP 404' "${RUNTIME_DIR}/remove_label_error.txt"; then
 						ops_failed="true"
 						unblock_log "item=${ITEM} op=remove_label issue=${issue} label=${label} outcome=failed"
