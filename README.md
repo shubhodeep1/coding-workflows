@@ -2885,6 +2885,8 @@ and resolver chains, a failed project) now goes to the unblock judge
   `/judge_resume`, `/revalidate` or `/re-security-pass` reset requires either
   that login or a human `OWNER`, `MEMBER` or `COLLABORATOR`; outside commenters
   and other bots cannot clear project failure counters.
+  An unavailable identity also sends one CRITICAL Telegram alert per poll tick
+  when Telegram is configured; no unauthenticated state is acted on.
   Scope overrides must match the trusted guard rejection exactly. Bulk-delete
   overrides may approve a non-empty subset of its rejected paths only when the
   failed implement run's matching Actions artifact verifies the same issue,

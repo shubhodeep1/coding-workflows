@@ -16124,6 +16124,8 @@ unblock_trusted_login() {
     else
       UNBLOCK_TRUSTED_LOGIN=""
       UNBLOCK_TRUSTED_LOGIN_STATE="failed"
+      # A failed identity probe stops every project; alert once, not per issue.
+      tg_send_msg "Orchestrator cannot verify its GitHub identity for ${GITHUB_REPOSITORY}; tracking projects are paused. Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID:-unknown}")" "CRITICAL" >/dev/null 2>&1 || true
     fi
   fi
   printf '%s' "${UNBLOCK_TRUSTED_LOGIN}"

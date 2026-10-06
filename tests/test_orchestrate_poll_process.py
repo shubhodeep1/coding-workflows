@@ -16796,6 +16796,22 @@ def test_revalidate_not_triggered_for_non_validation_failure():
 # ---------------------------------------------------------------------------
 
 
+def test_missing_pipeline_login_alerts_once_per_tick():
+	poller_source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	login_function = poller_source.split("unblock_trusted_login() {", 1)[1].split("\n}", 1)[0]
+	script = (
+		"set -euo pipefail\nUNBLOCK_TRUSTED_LOGIN=''\nUNBLOCK_TRUSTED_LOGIN_STATE=unset\n"
+		"GITHUB_REPOSITORY=owner/repo\nGITHUB_RUN_ID=123\nalert_count=0\n"
+		"gh_retry() { return 1; }\n_gh_url() { printf 'https://github.test/run'; }\n"
+		"tg_send_msg() { alert_count=$((alert_count + 1)); }\n"
+		f"unblock_trusted_login() {{{login_function}\n}}\n"
+		"unblock_trusted_login >/dev/null\nunblock_trusted_login >/dev/null\n"
+		"printf '%s %s' \"${UNBLOCK_TRUSTED_LOGIN_STATE}\" \"${alert_count}\"\n"
+	)
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+	assert result.returncode == 0 and result.stdout == "failed 1", result.stderr
+
+
 def test_project_state_and_reset_commands_require_authenticated_commenters():
 	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
 	assert 'unblock_trusted_login >/dev/null\n  if [ -z "${UNBLOCK_TRUSTED_LOGIN}" ]; then' in poller
@@ -18588,7 +18604,7 @@ def test_malformed_latest_state_falls_back_to_older_valid_and_posts_healed_state
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		tracking_comments=[malformed_latest],
+		tracking_comments=[{"body": malformed_latest, "user": {"login": "github-actions[bot]"}}],
 		issue_labels={10: ["ai:implementing"]},
 	)
 	assert "restored from older valid state and posted healed canonical state" in result["stdout"]
