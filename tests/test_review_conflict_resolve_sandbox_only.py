@@ -5,6 +5,8 @@ from pathlib import Path
 import re
 import subprocess
 
+import sys
+
 import pytest
 
 
@@ -101,6 +103,7 @@ _resolver_sandbox_attempt() {
 	env.pop("ENV", None)
 	setup = f'''resolver_sandbox_sh={str(sandbox)!r}
 CONFLICTED_PATHS_FILE={str(paths)!r}
+RESOLVER_INITIAL_UNMERGED_PATHS_FILE={str(tmp_path / "resolver_initial_unmerged_paths.txt")!r}
 _effective_prompt_file={str(prompt)!r}
 tmp_output={str(output)!r}
 _stall_status_file={str(tmp_path / "status")!r}
@@ -190,6 +193,7 @@ def test_unsupported_path_refuses_before_any_model(tmp_path):
 RUNTIME_DIR={str(tmp_path)!r}
 SUPPORT_SCRIPTS_DIR={str(SCRIPT.parent)!r}
 CONFLICTED_PATHS_FILE={str(paths)!r}
+RESOLVER_INITIAL_UNMERGED_PATHS_FILE={str(tmp_path / "resolver_initial_unmerged_paths.txt")!r}
 emit_conflict_resolver_substate() {{ :; }}
 _persist_resolver_retry_state_from_current_failure() {{ printf '%s\\n' "$RESOLVER_ISOLATION_FAILURE_REASON" > "$RUNTIME_DIR/persisted_reason"; }}
 {_failure_helper()}
@@ -197,7 +201,8 @@ _persist_resolver_retry_state_from_current_failure() {{ printf '%s\\n' "$RESOLVE
 '''], cwd=tmp_path, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, capture_output=True, text=True)
 	assert result.returncode == 1
 	assert "reason=sandbox_path_unsupported" in result.stderr
-	assert "assets/x.svg" not in result.stderr
+	# Safe path names are logged so the refused path is identifiable (#6596).
+	assert "REVIEW_SANDBOX_PATH_REFUSED path=assets/x.svg reason=unsupported_suffix" in result.stderr
 	assert (tmp_path / "persisted_reason").read_text().strip() == "sandbox_path_unsupported"
 	assert not calls.exists()
 
@@ -257,3 +262,276 @@ def test_no_host_model_launch_or_private_host_index_in_launch():
 	assert "GIT_INDEX_FILE=" not in _launch()
 	assert "GIT_INDEX_FILE=" not in _helper()
 	assert 'codex CONFLICT_RESOLVER write)' in _helper()
+
+
+# --- #6596: paired safety-hook and trusted command conflicts --------------
+
+WORKSPACE_PY = SCRIPT.parent / "review_untrusted_workspace.py"
+HOOK_LIVE = ".claude/hooks/pr_merge_status_guard.py"
+HOOK_TEMPLATE = "workflow-templates/.claude/hooks/pr_merge_status_guard.py"
+
+
+def _clean_env(**extra):
+	env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+	for inherited in ("BASH_ENV", "ENV", "GITHUB_WORKSPACE"):
+		env.pop(inherited, None)
+	env.update(PYTHONDONTWRITEBYTECODE="1", GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@invalid",
+		GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@invalid", GIT_CONFIG_GLOBAL=os.devnull,
+		GIT_CONFIG_NOSYSTEM="1")
+	env.update(extra)
+	return env
+
+
+def _git(repo, *args):
+	return subprocess.run(["git", *args], cwd=repo, env=_clean_env(), check=True, capture_output=True, text=True).stdout
+
+
+def _conflict_repo(tmp_path, conflicted, base_extra=None):
+	"""Scratch merge with two-sided conflicts on ``conflicted``; returns (repo, paths_file)."""
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q", "-b", "main")
+	for name, content in {**{n: "base\n" for n in conflicted}, **(base_extra or {})}.items():
+		target = repo / name
+		target.parent.mkdir(parents=True, exist_ok=True)
+		target.write_text(content, encoding="utf-8")
+		if name.endswith(".py"):
+			target.chmod(0o755)
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-qm", "base")
+	_git(repo, "checkout", "-q", "-b", "other")
+	for name in conflicted:
+		(repo / name).write_text("theirs\n", encoding="utf-8")
+	_git(repo, "commit", "-qam", "theirs")
+	_git(repo, "checkout", "-q", "main")
+	for name in conflicted:
+		(repo / name).write_text("ours\n", encoding="utf-8")
+	_git(repo, "commit", "-qam", "ours")
+	merge = subprocess.run(["git", "merge", "-q", "other"], cwd=repo, env=_clean_env(), capture_output=True, text=True)
+	assert merge.returncode != 0
+	paths = tmp_path / "conflicted_paths.txt"
+	paths.write_text(_git(repo, "diff", "--name-only", "--diff-filter=U"), encoding="utf-8")
+	(tmp_path / "resolver_initial_unmerged_paths.txt").write_text(paths.read_text(encoding="utf-8"), encoding="utf-8")
+	assert sorted(paths.read_text().split()) == sorted(conflicted)
+	return repo, paths
+
+
+def _helper_cmd(cmd, repo, paths, *extra):
+	return subprocess.run([sys.executable, str(WORKSPACE_PY), cmd, str(repo), str(paths),
+		*([str(repo.parent / "resolver_initial_unmerged_paths.txt")] if cmd == "mirror-safety-hook" else []), *extra],
+		env=_clean_env(), capture_output=True, text=True)
+
+
+def _guard_slice(tmp_path, repo, paths, github_workspace=""):
+	src = _source()
+	guard = src[src.index('# Reject unsupported conflict paths for both engines'):src.index('_resolver_sandbox_opencode_attempt()')]
+	return subprocess.run(["bash", "-c", f'''set -euo pipefail
+RUNTIME_DIR={str(tmp_path)!r}
+SUPPORT_SCRIPTS_DIR={str(SCRIPT.parent)!r}
+CONFLICTED_PATHS_FILE={str(paths)!r}
+RESOLVER_INITIAL_UNMERGED_PATHS_FILE={str(tmp_path / "resolver_initial_unmerged_paths.txt")!r}
+emit_conflict_resolver_substate() {{ :; }}
+_persist_resolver_retry_state_from_current_failure() {{ :; }}
+{_failure_helper()}
+{guard}
+echo guard-passed
+'''], cwd=repo, env=_clean_env(GITHUB_WORKSPACE=github_workspace), capture_output=True, text=True)
+
+
+def _parity_helper() -> str:
+	import re as _re
+	match = _re.search(r"^verify_resolver_safety_hook_parity_or_fail\(\) \{\n.*?\n\}\n", _source(), _re.M | _re.S)
+	assert match is not None
+	return match.group()
+
+
+def test_paired_hook_conflict_is_admitted_mirrored_and_staged(tmp_path):
+	repo, paths = _conflict_repo(tmp_path, [HOOK_LIVE, HOOK_TEMPLATE])
+	guard = _guard_slice(tmp_path, repo, paths)
+	assert guard.returncode == 0, guard.stderr
+	assert "guard-passed" in guard.stdout
+	# The sandbox resolves only the template; simulate its validated transfer.
+	(repo / HOOK_TEMPLATE).write_text("resolved = True\n", encoding="utf-8")
+	(repo / HOOK_TEMPLATE).chmod(0o755)
+	mirror = _helper_cmd("mirror-safety-hook", repo, paths)
+	assert mirror.returncode == 0, mirror.stderr
+	assert (repo / HOOK_LIVE).read_bytes() == (repo / HOOK_TEMPLATE).read_bytes()
+	assert (repo / HOOK_LIVE).stat().st_mode & 0o111
+	_git(repo, "add", "--", HOOK_LIVE, HOOK_TEMPLATE)
+	staged = {line.split("\t")[1]: line.split()[:2] for line in _git(repo, "ls-files", "-s", "--", HOOK_LIVE, HOOK_TEMPLATE).splitlines()}
+	assert staged[HOOK_LIVE] == staged[HOOK_TEMPLATE]
+	parity = subprocess.run(["bash", "-c", f'''set -euo pipefail
+CONFLICTED_PATHS_FILE={str(paths)!r}
+GITHUB_ENV={str(tmp_path / "github_env")!r}
+{_parity_helper()}
+verify_resolver_safety_hook_parity_or_fail && echo parity-ok
+'''], cwd=repo, env=_clean_env(), capture_output=True, text=True)
+	assert "parity-ok" in parity.stdout, parity.stdout + parity.stderr
+
+
+def test_source_repo_staging_includes_host_mirrored_hook(tmp_path):
+	repo, paths = _conflict_repo(tmp_path, [HOOK_LIVE, HOOK_TEMPLATE])
+	(repo / HOOK_TEMPLATE).write_text("resolved = True\n", encoding="utf-8")
+	assert _helper_cmd("mirror-safety-hook", repo, paths).returncode == 0
+	touched = tmp_path / "resolver_touched.txt"
+	touched.write_text(HOOK_TEMPLATE + "\n", encoding="utf-8")
+	src = _source()
+	stage_start = src.index('    git rm -r --cached --ignore-unmatch -- node_modules 2>/dev/null || true')
+	stage = src[stage_start:src.index('  else\n    # Build per-file exclusions', stage_start)]
+	stage_helper = src[src.index('stage_resolver_touched_path_or_fail() {'):src.index('\nverify_resolver_index_complete_or_fail() {')]
+	result = subprocess.run(["bash", "-c", f'''set -euo pipefail
+RUNTIME_DIR={str(tmp_path)!r}
+GITHUB_ENV={str(tmp_path / "github_env")!r}
+RESOLVER_TOUCHED_FILE={str(touched)!r}
+CONFLICTED_PATHS_FILE={str(paths)!r}
+RESOLVER_INITIAL_UNMERGED_PATHS_FILE={str(tmp_path / "resolver_initial_unmerged_paths.txt")!r}
+{stage_helper}
+{stage}
+'''], cwd=repo, env=_clean_env(), capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	assert not _git(repo, "diff", "--name-only", "--diff-filter=U", "--"), "live hook remains unmerged"
+	staged = {line.split("\t")[1]: line.split()[:2] for line in _git(repo, "ls-files", "-s", "--", HOOK_LIVE, HOOK_TEMPLATE).splitlines()}
+	assert staged[HOOK_LIVE] == staged[HOOK_TEMPLATE]
+
+
+def test_parity_assertion_rejects_divergent_staged_hook(tmp_path):
+	repo, paths = _conflict_repo(tmp_path, [HOOK_LIVE, HOOK_TEMPLATE])
+	(repo / HOOK_TEMPLATE).write_text("resolved = True\n", encoding="utf-8")
+	(repo / HOOK_LIVE).write_text("divergent = True\n", encoding="utf-8")
+	_git(repo, "add", "--", HOOK_LIVE, HOOK_TEMPLATE)
+	parity = subprocess.run(["bash", "-c", f'''set -euo pipefail
+CONFLICTED_PATHS_FILE={str(paths)!r}
+GITHUB_ENV={str(tmp_path / "github_env")!r}
+{_parity_helper()}
+verify_resolver_safety_hook_parity_or_fail || echo parity-failed
+'''], cwd=repo, env=_clean_env(), capture_output=True, text=True)
+	assert "parity-failed" in parity.stdout
+	assert "CONFLICT_RESOLVED=false" in (tmp_path / "github_env").read_text()
+
+
+def test_live_hook_never_enters_sandbox_snapshot(tmp_path):
+	import importlib.util
+	repo, _ = _conflict_repo(tmp_path, [HOOK_LIVE, HOOK_TEMPLATE])
+	spec = importlib.util.spec_from_file_location("review_untrusted_workspace_6596", WORKSPACE_PY)
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	assert module.allowed(HOOK_LIVE) is False
+	workspace = tmp_path / "ws"
+	workspace.mkdir()
+	snap = subprocess.run([sys.executable, str(WORKSPACE_PY), "snapshot", str(repo), str(workspace), str(tmp_path / "manifest.json")],
+		env=_clean_env(), capture_output=True, text=True)
+	assert snap.returncode == 0, snap.stderr
+	assert (workspace / HOOK_TEMPLATE).exists()
+	assert not (workspace / HOOK_LIVE).exists()
+
+
+def test_command_with_trusted_twin_is_admitted(tmp_path):
+	command = ".claude/commands/x.md"
+	twin = "workflow-templates/.claude/commands/x.md"
+	repo, paths = _conflict_repo(tmp_path, [command], base_extra={twin: "twin\n"})
+	trusted = tmp_path / "gw"
+	(trusted / ".codex-workflow-src" / "workflow-templates/.claude/commands").mkdir(parents=True)
+	(trusted / ".codex-workflow-src" / twin).write_text("twin\n", encoding="utf-8")
+	result = _guard_slice(tmp_path, repo, paths, github_workspace=str(trusted))
+	assert result.returncode == 0, result.stderr
+	assert "guard-passed" in result.stdout
+
+
+def test_command_without_trusted_twin_is_refused(tmp_path):
+	command = ".claude/commands/x.md"
+	twin = "workflow-templates/.claude/commands/x.md"
+	repo, paths = _conflict_repo(tmp_path, [command], base_extra={twin: "twin\n"})
+	trusted = tmp_path / "gw"
+	(trusted / ".codex-workflow-src").mkdir(parents=True)
+	result = _guard_slice(tmp_path, repo, paths, github_workspace=str(trusted))
+	assert result.returncode == 1
+	assert "REVIEW_SANDBOX_PATH_REFUSED path=.claude/commands/x.md reason=command_not_admitted" in result.stderr
+	assert "AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=sandbox_path_unsupported action=fail_closed\n" in result.stderr
+	assert "::error::Conflict resolver isolation unavailable (reason=sandbox_path_unsupported); refusing host fallback.\n" in result.stderr
+	# Without any support checkout no command is admitted either.
+	no_support = _guard_slice(tmp_path, repo, paths)
+	assert no_support.returncode == 1
+	assert "reason=command_not_admitted" in no_support.stderr
+
+
+def test_unpaired_live_hook_conflict_is_refused(tmp_path):
+	repo, paths = _conflict_repo(tmp_path, [HOOK_LIVE])
+	result = _guard_slice(tmp_path, repo, paths)
+	assert result.returncode == 1
+	assert f"REVIEW_SANDBOX_PATH_REFUSED path={HOOK_LIVE} reason=safety_hook" in result.stderr
+	assert "reason=sandbox_path_unsupported" in result.stderr
+	mirror = _helper_cmd("mirror-safety-hook", repo, paths)
+	assert mirror.returncode == 1
+
+
+@pytest.mark.parametrize("conflicted,base_extra", [
+	([HOOK_TEMPLATE], {HOOK_LIVE: "unchanged\n"}),
+	(["scripts/other.py"], {HOOK_LIVE: "unchanged\n", HOOK_TEMPLATE: "unchanged\n"}),
+])
+def test_fingerprint_expansion_cannot_authorize_live_hook_mirror(tmp_path, conflicted, base_extra):
+	repo, paths = _conflict_repo(tmp_path, conflicted, base_extra=base_extra)
+	paths.write_text(paths.read_text(encoding="utf-8") + HOOK_LIVE + "\n" + HOOK_TEMPLATE + "\n", encoding="utf-8")
+	before = (repo / HOOK_LIVE).read_bytes()
+	guard = _guard_slice(tmp_path, repo, paths)
+	assert guard.returncode == 1
+	assert f"REVIEW_SANDBOX_PATH_REFUSED path={HOOK_LIVE} reason=safety_hook" in guard.stderr
+	assert "reason=sandbox_path_unsupported" in guard.stderr
+	mirror = _helper_cmd("mirror-safety-hook", repo, paths)
+	assert mirror.returncode == 1
+	assert (repo / HOOK_LIVE).read_bytes() == before
+
+
+def test_missing_initial_unmerged_snapshot_refuses_paired_hook(tmp_path):
+	repo, paths = _conflict_repo(tmp_path, [HOOK_LIVE, HOOK_TEMPLATE])
+	(tmp_path / "resolver_initial_unmerged_paths.txt").unlink()
+	guard = _guard_slice(tmp_path, repo, paths)
+	assert guard.returncode == 1
+	assert f"REVIEW_SANDBOX_PATH_REFUSED path={HOOK_LIVE} reason=safety_hook" in guard.stderr
+	assert _helper_cmd("mirror-safety-hook", repo, paths).returncode == 1
+
+
+def test_unrelated_excluded_path_still_refused(tmp_path):
+	repo, paths = _conflict_repo(tmp_path, [".github/ai/other.json"])
+	result = _guard_slice(tmp_path, repo, paths)
+	assert result.returncode == 1
+	assert "REVIEW_SANDBOX_PATH_REFUSED path=.github/ai/other.json reason=hidden_dir" in result.stderr
+	assert "AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=sandbox_path_unsupported action=fail_closed" in result.stderr
+
+
+def test_refusal_log_redacts_and_truncates(tmp_path):
+	paths = tmp_path / "paths"
+	names = ["scripts/my_secret.py", ".env.local", "scripts/a.py\r::error::forged"] + [f"assets/f{i}.svg" for i in range(25)]
+	paths.write_text("\n".join(names) + "\n", encoding="utf-8")
+	result = _helper_cmd("check-paths", tmp_path, paths)
+	assert result.returncode == 1
+	lines = [line for line in result.stderr.splitlines() if line.startswith("REVIEW_SANDBOX_PATH_REFUSED ")]
+	assert lines[0] == "REVIEW_SANDBOX_PATH_REFUSED path=redacted reason=excluded_dir"
+	assert lines[1] == "REVIEW_SANDBOX_PATH_REFUSED path=redacted reason=excluded_dir"
+	assert lines[2] == "REVIEW_SANDBOX_PATH_REFUSED path=redacted reason=invalid_path"
+	assert "forged" not in result.stderr
+	assert "secret" not in result.stderr
+	assert len(lines) == 21 and lines[-1] == "REVIEW_SANDBOX_PATH_REFUSED truncated=8"
+	assert result.stderr.rstrip().endswith("unsupported path")
+
+
+def test_mirror_refuses_unresolved_or_symlinked_template(tmp_path):
+	repo, paths = _conflict_repo(tmp_path, [HOOK_LIVE, HOOK_TEMPLATE])
+	before = (repo / HOOK_LIVE).read_bytes()
+	unresolved = _helper_cmd("mirror-safety-hook", repo, paths)
+	assert unresolved.returncode == 3
+	assert (repo / HOOK_LIVE).read_bytes() == before
+	(repo / HOOK_TEMPLATE).unlink()
+	(repo / HOOK_TEMPLATE).symlink_to("/etc/hostname")
+	symlinked = _helper_cmd("mirror-safety-hook", repo, paths)
+	assert symlinked.returncode == 1
+	assert (repo / HOOK_LIVE).read_bytes() == before
+	assert "hostname" not in symlinked.stderr
+
+
+def test_mirror_runs_before_marker_scan_and_fails_closed():
+	src = _source()
+	mirror = src.index('mirror-safety-hook "$(pwd)" "${CONFLICTED_PATHS_FILE}" "${RESOLVER_INITIAL_UNMERGED_PATHS_FILE}"')
+	assert src.index('_resolver_attempt_state check || _scope_status=$?') < mirror < src.index('\n  _scan_residual_markers\n')
+	assert '_resolver_fail_closed safety_hook_mirror_failed' in src
+	assert src.count('check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}" "${GITHUB_WORKSPACE:-}" "${RESOLVER_INITIAL_UNMERGED_PATHS_FILE}"') == 2
+	assert src.index('verify_resolver_index_complete_or_fail; then\n    exit 1\n  fi\n  if ! verify_resolver_safety_hook_parity_or_fail')

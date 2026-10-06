@@ -197,6 +197,8 @@ changelog.d/5889-release-gates-claude-assets.md
 changelog.d/5892-heal-autofix-fingerprint-header.md
 changelog.d/5964-reviewer-infra-nonblocking.md
 changelog.d/5999-restore-scoped-smoke-run-lookups.md
+changelog.d/6031-repo-checks-import-audit-in-container.md
+changelog.d/6031-validate-overlay-loader-helper-copy.md
 changelog.d/6055-review-editor-edits-reach-work-tree.md
 changelog.d/6118-implement-claude-cli-config-path.md
 changelog.d/6118-main-ci-green-claude-template-sync.md
@@ -278,8 +280,14 @@ changelog.d/6420-release-gate-claude-parity.md
 changelog.d/6435-prompt-audit-claude-config.md
 changelog.d/6455-rb-fix-sandbox-workspace.md
 changelog.d/6461-consolidator-opencode-sandbox.md
+changelog.d/6469-deploy-activate-credential-free-checks.md
+changelog.d/6490-orchestrate-decomposer-isolation.md
+changelog.d/6491-poller-judge-issue-engine-labels.md
+changelog.d/6494-claude-sandbox-egress-lockdown.md
+changelog.d/6504-implement-issue-body-github-env-injection.md
 changelog.d/autofix-cap-and-security-exhaustion-judge.md
 changelog.d/claude-branch-push-pr-grace-window.md
+changelog.d/claude-busy-ride-2ezayb-single-issue-security-pass-default-off.md
 changelog.d/conflict-resolver-sandbox-fail-closed.md
 changelog.d/release-smoke-run-lookup.md
 changelog.d/review-tier-random-reviewers.md
@@ -841,6 +849,7 @@ tests/test_claude_template_live_parity.py
 tests/test_codex_agent_isolation_contract.py
 tests/test_codex_heartbeat.py
 tests/test_codex_isolated_exec.py
+tests/test_codex_isolated_exec_claude_contract.py
 tests/test_codex_isolated_exec_docker_e2e.py
 tests/test_codex_isolated_workspace.py
 tests/test_codex_skip_git_repo_check_contract.py
@@ -856,6 +865,7 @@ tests/test_consumer_artifact_cleanup_preserves_tracked.py
 tests/test_cost_audit_semble_metrics.py
 tests/test_cost_audit_serena_metrics.py
 tests/test_dependency_registry_proxy.py
+tests/test_deploy_activate_command.py
 tests/test_detect_editor_changes_lost.py
 tests/test_drift_audit_job.py
 tests/test_e2e_editor_smoke_canary.py

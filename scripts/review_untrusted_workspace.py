@@ -24,6 +24,11 @@ EXCLUDED = {".git", ".ai", ".codex", ".opencode", ".serena", ".venv", ".review-v
 ROOT_FILES = {"README.md", "agents.md", "AGENTS.md", "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "pyproject.toml", "requirements.txt", "setup.cfg", "pytest.ini", "tox.ini", "go.mod", "Cargo.toml"}
 SUFFIXES = {".py", ".sh", ".js", ".jsx", ".cjs", ".mjs", ".ts", ".tsx", ".cts", ".mts", ".go", ".rs", ".java", ".json", ".md", ".yml", ".yaml", ".toml", ".txt", ".css", ".html", ".sql", ".lock", ".cfg", ".ini"}
 COMMAND_TWIN_DIR = "workflow-templates/.claude/commands"
+# The live hook is host-executed and never enters a sandbox. A conflict on it is
+# admitted only together with its template, which the host then mirrors (#6596).
+SAFETY_HOOK_LIVE = ".claude/hooks/pr_merge_status_guard.py"
+SAFETY_HOOK_TEMPLATE = "workflow-templates/.claude/hooks/pr_merge_status_guard.py"
+MAX_REFUSAL_LOG_LINES = 20
 
 
 class UnsafeWorkspaceDirectory(ValueError):
@@ -96,6 +101,14 @@ def template_command_inventory(host):
 		if entry.is_file() and not entry.is_symlink() and allowed(name, commands={name}):
 			commands.add(name)
 	return frozenset(commands)
+
+
+def trusted_command_inventory(host, trusted_checkout):
+	# Only names present in both the host checkout and the verified
+	# workflow-support checkout may authorize a command; none without support.
+	if not trusted_checkout:
+		return frozenset()
+	return template_command_inventory(Path(trusted_checkout) / ".codex-workflow-src") & template_command_inventory(host)
 
 
 def load_admitted_commands(manifest):
@@ -196,9 +209,7 @@ def snapshot(host, workspace, manifest, host_git_dir=None):
 		paths.update(p.decode("utf-8") for p in subprocess.check_output(cmd, cwd=host, env=env).split(b"\0") if p)
 	# The PR worktree can add twins before snapshot; only names present in the
 	# verified workflow-support checkout may authorize a command for this run.
-	trusted_checkout = os.environ.get("GITHUB_WORKSPACE")
-	commands = (template_command_inventory(Path(trusted_checkout) / ".codex-workflow-src") &
-		template_command_inventory(host)) if trusted_checkout else frozenset()
+	commands = trusted_command_inventory(host, os.environ.get("GITHUB_WORKSPACE"))
 	baseline = {}
 	total = 0
 	for name in sorted(paths):
@@ -400,19 +411,105 @@ def refresh(host, workspace, manifest):
 			os.chmod(target, mode)
 
 
-def check_paths(host, paths_file):
+def paired_safety_hook(paths_set, initial_unmerged_file):
+	if initial_unmerged_file is None or SAFETY_HOOK_LIVE not in paths_set or SAFETY_HOOK_TEMPLATE not in paths_set:
+		return False
+	try:
+		with initial_unmerged_file.open(encoding="utf-8", newline="") as handle:
+			initial_unmerged = set(handle.read().split("\n"))
+	except (OSError, UnicodeError):
+		return False
+	return SAFETY_HOOK_LIVE in initial_unmerged and SAFETY_HOOK_TEMPLATE in initial_unmerged
+
+
+def _refusal_reason(name, paths_set, commands, paired_hook):
+	"""Return None when the conflict path is admissible, else a fixed reason code."""
+	parts = PurePosixPath(name).parts
+	if not parts or name.startswith("/") or ".." in parts or "\\" in name or "\n" in name or "\r" in name:
+		return "invalid_path"
+	if name == SAFETY_HOOK_LIVE:
+		# Never admitted into a sandbox: the host mirrors the resolved template.
+		return None if paired_hook else "safety_hook"
+	if allowed(name, commands=commands):
+		return None
+	if name == "tests/test_audit_plans_command.py" or any(part.lower() in EXCLUDED or part.lower().startswith(".env") or "secret" in part.lower() or "credential" in part.lower() or part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore", ".egg-info", ".dist-info")) for part in parts):
+		return "excluded_dir"
+	if len(parts) == 3 and parts[:2] == (".claude", "commands") and parts[2].endswith(".md") and not parts[2].startswith("."):
+		return "command_not_admitted"
+	if parts[0].startswith("."):
+		return "hidden_dir"
+	return "unsupported_suffix"
+
+
+def check_paths(host, paths_file, trusted_checkout=None, initial_unmerged_file=None):
 	with paths_file.open(encoding="utf-8", newline="") as handle:
 		path_lines = handle.read().split("\n")
-	for name in path_lines:
-		if not name:
-			continue
-		try:
-			if not allowed(name):
-				raise ValueError("unsupported path")
-			checked_path(host, name)
-		except (ValueError, OSError):
-			print("unsupported path", file=sys.stderr)
-			raise SystemExit(1) from None
+	names = [name for name in path_lines if name]
+	paths_set = set(names)
+	paired_hook = paired_safety_hook(paths_set, initial_unmerged_file)
+	commands = frozenset()
+	if any(name.startswith(".claude/commands/") for name in names):
+		commands = trusted_command_inventory(host, trusted_checkout)
+	refused = []
+	for name in names:
+		reason = _refusal_reason(name, paths_set, commands, paired_hook)
+		if reason is None:
+			try:
+				checked_path(host, name)
+			except ValueError:
+				reason = "symlink"
+			except OSError:
+				reason = "invalid_path"
+		if reason is not None:
+			refused.append((name, reason))
+	if not refused:
+		return
+	# Path names come from the PR: only bounded, redacted names reach logs.
+	for name, reason in refused[:MAX_REFUSAL_LOG_LINES]:
+		print(f"REVIEW_SANDBOX_PATH_REFUSED path={_log_safe_dir(name)} reason={reason}", file=sys.stderr)
+	if len(refused) > MAX_REFUSAL_LOG_LINES:
+		print(f"REVIEW_SANDBOX_PATH_REFUSED truncated={len(refused) - MAX_REFUSAL_LOG_LINES}", file=sys.stderr)
+	print("unsupported path", file=sys.stderr)
+	raise SystemExit(1)
+
+
+def mirror_safety_hook(host, paths_file, initial_unmerged_file=None):
+	"""Copy the resolved hook template onto the conflicted live hook.
+
+	Returns 0 when not applicable or mirrored, 3 when the template still has
+	conflict markers (the caller's marker scan handles the retry).
+	Raises ValueError/OSError on an unsafe source or destination.
+	"""
+	with paths_file.open(encoding="utf-8", newline="") as handle:
+		names = {name for name in handle.read().split("\n") if name}
+	if SAFETY_HOOK_LIVE not in names:
+		return 0
+	if not paired_safety_hook(names, initial_unmerged_file):
+		raise ValueError("unpaired safety hook conflict")
+	template = checked_path(host, SAFETY_HOOK_TEMPLATE)
+	live = checked_path(host, SAFETY_HOOK_LIVE)
+	data, mode = read_regular(template)
+	if re.search(rb"^(<<<<<<< |>>>>>>> )", data, re.M):
+		return 3
+	if live.exists() or live.is_symlink():
+		info = live.lstat()
+		if not stat.S_ISREG(info.st_mode):
+			raise ValueError("unsafe live hook")
+	if not live.parent.is_dir() or live.parent.is_symlink():
+		raise ValueError("unsafe live hook directory")
+	fd, tmp_name = tempfile.mkstemp(dir=live.parent, prefix=".review-hook-mirror-")
+	try:
+		with os.fdopen(fd, "wb") as out:
+			out.write(data)
+		os.chmod(tmp_name, mode)
+		os.replace(tmp_name, live)
+	finally:
+		if os.path.exists(tmp_name):
+			os.unlink(tmp_name)
+	written, written_mode = read_regular(checked_path(host, SAFETY_HOOK_LIVE))
+	if written != data or written_mode != mode:
+		raise ValueError("live hook mirror mismatch")
+	return 0
 
 
 def main():
@@ -439,10 +536,22 @@ def main():
 			print("::error::Review static README output failed", file=sys.stderr)
 			raise SystemExit(1) from None
 		return
-	# snapshot alone takes an optional fifth argument: the host Git dir.
-	if sys.argv[1:2] == ["check-paths"] and len(sys.argv) == 4:
+	if sys.argv[1:2] == ["mirror-safety-hook"]:
+		if len(sys.argv) not in (4, 5):
+			raise SystemExit(2)
 		try:
-			check_paths(Path(sys.argv[2]), Path(sys.argv[3]))
+			mirror_rc = mirror_safety_hook(Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4]) if len(sys.argv) == 5 else None)
+		except (OSError, ValueError, UnicodeError):
+			print("::error::Safety hook mirror refused an unsafe template or destination", file=sys.stderr)
+			raise SystemExit(1) from None
+		raise SystemExit(mirror_rc)
+	# check-paths takes an optional trusted checkout root (GITHUB_WORKSPACE)
+	# and initial unmerged snapshot for paired live-hook conflicts;
+	# an empty value admits no commands. snapshot alone takes an optional
+	# fifth argument: the host Git dir.
+	if sys.argv[1:2] == ["check-paths"] and len(sys.argv) in (4, 5, 6):
+		try:
+			check_paths(Path(sys.argv[2]), Path(sys.argv[3]), sys.argv[4] if len(sys.argv) >= 5 else None, Path(sys.argv[5]) if len(sys.argv) == 6 else None)
 		except (OSError, UnicodeError):
 			print("unsupported path", file=sys.stderr)
 			raise SystemExit(1) from None
