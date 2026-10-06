@@ -1500,11 +1500,25 @@ through `clarify → plan → implement → review`.
   Free-form step names and error signatures are represented only by SHA-256
   fingerprints. Their editor processes drop GitHub/Telegram credentials and the
   raw-evidence directory pointer, and temporarily hide git
-  checkout credentials; network access for the model remains available. The
+  checkout credentials (including a split `WORKSPACE_PATH` checkout); network
+  access for the model remains available. The
   credential helper rejects failed hides/restores and restores auth only when
   the origin still names the workflow's original repository (or its trusted
   support checkout) and its push URL agrees, not an editor-changed GitHub destination;
   generic GitHub extraheaders are restored scoped to the verified origin only.
+  Implement restores the repository-scoped workflow token rather than `GH_PAT`.
+  Its preflight and commit-time staging paths recheck editor-writable Git config
+  and attributes (including new or changed per-directory `.gitattributes` driver bindings)
+  immediately before `git add`, ignore global Git config, and
+  command-override hooks, fsmonitor and global attributes. Push repeats the
+  check, keeps global Git config disabled, and uses the same repository-scoped
+  token; later GitHub API and PR operations continue to use `GH_PAT` where
+  cross-workflow event delivery requires it. Because pushes authenticated with
+  the workflow token do not trigger `pull_request:synchronize`, the existing-PR
+  recovery path dispatches the review wrapper from the default branch with
+  the reused PR number only when its head matches the pushed branch. A failed
+  dispatch stops implementation rather than treating the PR as reviewed; new
+  PRs still review on `pull_request:opened`.
   Plan and implement pin the staged helper's SHA-256 before the editor, execute
   matching bytes from shell memory and fail closed if none remain. Helper Bash
   processes ignore `BASH_ENV`/`ENV`; implementation's post-editor repair and

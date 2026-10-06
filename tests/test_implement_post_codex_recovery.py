@@ -22,6 +22,7 @@ import textwrap
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 IMPLEMENT_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
+EDITOR_GIT_CREDENTIALS_SCRIPT = REPO_ROOT / "scripts" / "editor_git_credentials.sh"
 IMPLEMENT_STAGED_SUPPORT_WORKSPACE_SCRIPT = REPO_ROOT / "scripts" / "implement_staged_support_workspace.sh"
 IMPLEMENT_GUARD_HANDLER = REPO_ROOT / "scripts" / "implement_handle_guard_block.sh"
 FILES_TOUCHED_SCOPE_GUARD = REPO_ROOT / "scripts" / "files_touched_scope_guard.py"
@@ -1360,6 +1361,7 @@ def test_commit_helper_fails_closed_on_unsafe_fetched_manifest_paths() -> None:
 		_bootstrap_git_repo(repo_dir)
 		(repo_dir / "scripts").mkdir()
 		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+		shutil.copy2(EDITOR_GIT_CREDENTIALS_SCRIPT, repo_dir / "scripts" / "editor_git_credentials.sh")
 		outside_path.write_text("keep\n", encoding="utf-8")
 		github_output = repo_dir / "github_output.txt"
 		github_output.write_text("", encoding="utf-8")
@@ -1398,7 +1400,8 @@ def test_commit_helper_treats_unset_fetched_manifest_as_empty() -> None:
 		_bootstrap_git_repo(repo_dir)
 		(repo_dir / "scripts").mkdir()
 		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
-		_git(["git", "add", "scripts/implement_commit_changes.sh"], cwd=repo_dir)
+		shutil.copy2(EDITOR_GIT_CREDENTIALS_SCRIPT, repo_dir / "scripts" / "editor_git_credentials.sh")
+		_git(["git", "add", "scripts/implement_commit_changes.sh", "scripts/editor_git_credentials.sh"], cwd=repo_dir)
 		_git(["git", "commit", "-m", "add helper"], cwd=repo_dir)
 		github_output = tmp_path / "github_output.txt"
 		github_output.write_text("", encoding="utf-8")
@@ -1437,8 +1440,9 @@ def test_commit_helper_rolls_back_post_commit_scope_lock_violation() -> None:
 		_bootstrap_git_repo(repo_dir)
 		(repo_dir / "scripts").mkdir()
 		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+		shutil.copy2(EDITOR_GIT_CREDENTIALS_SCRIPT, repo_dir / "scripts" / "editor_git_credentials.sh")
 		shutil.copy2(FILES_TOUCHED_SCOPE_GUARD, repo_dir / "scripts" / "files_touched_scope_guard.py")
-		_git(["git", "add", "scripts/implement_commit_changes.sh", "scripts/files_touched_scope_guard.py"], cwd=repo_dir)
+		_git(["git", "add", "scripts/implement_commit_changes.sh", "scripts/editor_git_credentials.sh", "scripts/files_touched_scope_guard.py"], cwd=repo_dir)
 		_git(["git", "commit", "-m", "add scope helpers"], cwd=repo_dir)
 		baseline_head = subprocess.run(
 			["git", "rev-parse", "HEAD"],
@@ -1545,6 +1549,7 @@ def _staged_support_fixture(tmp_path: Path, worktree_helper: str | None) -> tupl
 	support_run_dir = runtime_dir / "staged_support_run" / "scripts"
 	support_run_dir.mkdir(parents=True)
 	shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, support_run_dir / "implement_commit_changes.sh")
+	shutil.copy2(EDITOR_GIT_CREDENTIALS_SCRIPT, support_run_dir / "editor_git_credentials.sh")
 	base_dir = runtime_dir / "staged_support_base"
 	(base_dir / "scripts").mkdir(parents=True)
 	(base_dir / "scripts" / "helper.sh").write_text(_STAGED_HELPER_MAIN, encoding="utf-8")
@@ -2145,7 +2150,7 @@ def test_stage_workflow_support_step_records_self_repo_staged_support_ledger() -
 	):
 		assert marker in script_text, marker
 	# The restore runs before anything is staged.
-	assert script_text.index("IMPLEMENT_STAGED_SUPPORT_RESTORE ") < script_text.index('git add -u -- "${add_u_excludes[@]}"')
+	assert script_text.index("IMPLEMENT_STAGED_SUPPORT_RESTORE ") < script_text.index('GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null add -u -- "${add_u_excludes[@]}"')
 	commit_block = _step_block_text("Commit changes")
 	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"' in commit_block
 	assert 'source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh"' in _step_block_text("Push branch")

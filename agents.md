@@ -473,7 +473,8 @@ a new value, add it to the appropriate overrides file with a
   fallback use the same container. Missing isolation fails closed.
   A preceding env scrub drops GH_TOKEN, GH_PAT, GITHUB_TOKEN, Telegram and
   Actions runtime credentials; `scripts/editor_git_credentials.sh` hides git
-  origin/extraheader auth for the editor and restores it after each launch.
+  origin/extraheader auth for the editor and restores it after each launch,
+  including a split `WORKSPACE_PATH` checkout alongside `GITHUB_WORKSPACE`.
   Both launches and the later syntax-repair restore execute only bytes matching
   the pre-editor stage output's SHA-256, loaded into shell memory; an unmatched
   helper fails closed rather than restoring auth from an editor-writable file.
@@ -481,7 +482,22 @@ a new value, add it to the appropriate overrides file with a
   hide refuses before the editor starts, and restore refuses before any token
   is injected, when a checkout's origin is not its trusted repository or was
   changed, or a pushurl, URL rewrite, proxy, credential helper or include
-  directive sits in an editor-writable git config scope.
+  directive sits in an editor-writable git config scope. It also refuses
+  command-running Git keys (filter/diff/merge drivers, `core.attributesFile`,
+  `core.hooksPath`, `core.editor`, `core.pager`, signing programs, `lfs.*`) in those scopes
+  and driver assignments in `.git/info/attributes`, global attributes, or
+  new or modified working-tree `.gitattributes` files (unchanged tracked
+  bindings remain usable). Both
+  preflight and commit-time staging call its tokenless `check` action immediately
+  before `git add`, ignore
+  editor-writable global Git config, and command-override hooks, fsmonitor and
+  global attributes. Credential restore and push use the repository-scoped
+  workflow token rather than `GH_PAT`; push repeats the check and ignores global
+  Git config before writing authenticated origin state. Since the workflow
+  token does not trigger `pull_request:synchronize`, the existing-PR recovery
+  path explicitly dispatches `internal-review.yml` (or `ai-review.yml` in a
+  consumer) from the default branch only for the pushed head branch; a failed
+  dispatch fails the step.
   The editor never reads those paths; only the restore / reinstall / commit
   steps of the job do. A `pytest` the editor starts to validate its own change
   therefore cannot write fixture paths into the live run's ledgers even when

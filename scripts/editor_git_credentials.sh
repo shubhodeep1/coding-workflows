@@ -5,6 +5,7 @@
 #          origin URL and remove its http.<url>.extraheader entries. The
 #          marker records what was removed (never a secret).
 # restore: after the editor exits, put the trusted step's GH_TOKEN back.
+# check:   before staging, refuse editor-writable Git command drivers again.
 #
 # Fail-closed: the editor can write each checkout's git config, the global
 # git config and the marker, so restore checks every checkout against its
@@ -18,15 +19,16 @@ set -u
 marker="${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}}/editor_git_credentials_hidden.txt"
 action="${1:-}"
 shift || true
-case "${action}" in hide|restore) ;; *) echo 'usage: editor_git_credentials.sh hide|restore [repo...]' >&2; exit 2 ;; esac
+case "${action}" in hide|restore|check) ;; *) echo 'usage: editor_git_credentials.sh hide|restore|check [repo...]' >&2; exit 2 ;; esac
 # The workflows check the support source out from this repository.
 support_repository="shubhodeep1/coding-workflows"
-# Settings that could send a restored token elsewhere or run a command that
-# receives it. Only system scope (root-owned) and command scope (this trusted
+# Settings that could send a restored token elsewhere or run a command (Git
+# filters, diff/merge drivers, LFS, signing, pack helpers) that receives it.
+# Only system scope (root-owned) and command scope (this trusted
 # step's GIT_CONFIG_* environment) may set them. Include directives are
 # refused too: actions/checkout@v5 writes its header into .git/config, and a
 # credential file pulled in by include would stay visible to the editor.
-hazard_re='^(remote\.origin\.(pushurl|proxy)|url\..*\.(insteadof|pushinsteadof)|http\.(.*\.)?(proxy|sslverify|sslcainfo|sslcapath|sslcert|sslkey|curloptresolve|followredirects)|credential\.(.*\.)?helper|core\.(askpass|sshcommand|gitproxy|fsmonitor)|include\.path|includeif\..*\.path)$'
+hazard_re='^(remote\.origin\.(pushurl|proxy)|url\..*\.(insteadof|pushinsteadof)|http\.(.*\.)?(proxy|sslverify|sslcainfo|sslcapath|sslcert|sslkey|curloptresolve|followredirects)|credential\.(.*\.)?helper|core\.(askpass|sshcommand|gitproxy|fsmonitor|attributesfile|alternaterefscommand)|include\.path|includeif\..*\.path|filter\..*\.(clean|smudge|process)|diff\.external|diff\..*\.(command|textconv)|merge\..*\.driver|gpg\.(.*\.)?program|remote\..*\.(uploadpack|receivepack)|uploadpack\.packobjectshook|lfs\..*)$'
 
 # Implement exports GIT_DIR/GIT_WORK_TREE; git -C alone still uses that repo.
 repo_git()
@@ -108,6 +110,41 @@ has_config_hazard()
 	return 1
 }
 
+# Same scope rule, but retain the caller's Git environment (notably GIT_DIR).
+has_config_hazard_effective()
+{
+	local out rc scope rest
+	out="$(git config --show-scope --get-regexp "${hazard_re}" 2>/dev/null)"
+	rc=$?
+	[ "${rc}" -eq 1 ] && return 1
+	[ "${rc}" -eq 0 ] || return 0
+	while IFS=$'\t' read -r scope rest; do
+		[ -n "${rest}" ] || continue
+		case "${scope}" in system|command) ;; *) return 0 ;; esac
+	done <<< "${out}"
+	return 1
+}
+
+# Git may read an untracked attributes file outside the repository content.
+# Do not follow editor-writable symlinks, including dangling ones.
+has_attributes_hazard()
+{
+	local info_path global_path attrs_path grep_rc
+	info_path="$(repo_git "$1" rev-parse --git-path info/attributes 2>/dev/null)" || return 0
+	case "${info_path}" in /*) ;; *) info_path="$1/${info_path}" ;; esac
+	global_path="${XDG_CONFIG_HOME:-${HOME:-}/.config}/git/attributes"
+	for attrs_path in "${info_path}" "${global_path}"; do
+		if [ -L "${attrs_path}" ]; then return 0; fi
+		if [ -e "${attrs_path}" ]; then
+			[ -f "${attrs_path}" ] && [ -r "${attrs_path}" ] || return 0
+			grep -E '^[[:space:]]*[^#[:space:]].*[[:space:]](filter|diff|merge)=[^[:space:]]+' "${attrs_path}" >/dev/null 2>&1
+			grep_rc=$?
+			[ "${grep_rc}" -eq 1 ] || return 0
+		fi
+	done
+	return 1
+}
+
 valid_slug()
 {
 	[[ "$1" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
@@ -117,6 +154,28 @@ if [ "$#" -gt 0 ]; then
 	repos=("$@")
 else
 	repos=("${GITHUB_WORKSPACE:-$PWD}" "${GITHUB_WORKSPACE:-$PWD}/.codex-workflow-src" "${GITHUB_WORKSPACE:-$PWD}/.codex-workflow-src-main")
+fi
+
+if [ "${action}" = check ]; then
+	refused=false
+	if has_config_hazard_effective; then
+		log_event effective none refused config_hazard
+		refused=true
+	fi
+	for repo in "${repos[@]}"; do
+		is_checkout_root "${repo}" || continue
+		label="${repo##*/}"
+		if has_config_hazard "${repo}"; then
+			log_event "${label}" none refused config_hazard
+			refused=true
+		fi
+		if has_attributes_hazard "${repo}"; then
+			log_event "${label}" none refused attributes_hazard
+			refused=true
+		fi
+	done
+	[ "${refused}" = false ] || exit 1
+	exit 0
 fi
 
 if [ -L "${marker}" ]; then
@@ -156,6 +215,11 @@ if [ "${action}" = hide ]; then
 		fi
 		if has_config_hazard "${repo}"; then
 			log_event "${label}" none refused config_hazard
+			refused=true
+			continue
+		fi
+		if has_attributes_hazard "${repo}"; then
+			log_event "${label}" none refused attributes_hazard
 			refused=true
 			continue
 		fi
@@ -282,6 +346,10 @@ for repo in "${!origin_clean[@]}"; do
 	fi
 	if has_config_hazard "${repo}"; then
 		log_event "${label}" none refused config_hazard
+		refused=true
+	fi
+	if has_attributes_hazard "${repo}"; then
+		log_event "${label}" none refused attributes_hazard
 		refused=true
 	fi
 done
