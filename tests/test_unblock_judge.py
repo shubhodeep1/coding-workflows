@@ -931,6 +931,30 @@ def _judge(tmp_path: Path, item: dict, comments: list | None = None, verdict: di
 ISSUE = {"number": 7, "state": "open", "title": "Add cache", "body": "Do it", "labels": [{"name": "ai:blocked"}]}
 
 
+@pytest.mark.parametrize("configured,expected", [("invalid", "1500"), ("0", "1500"), ("1800", "1800")])
+def test_unblock_model_timeout_uses_safe_default_for_invalid_input(tmp_path: Path, configured: str, expected: str) -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	support = tmp_path / "support"
+	(support / "scripts").mkdir(parents=True)
+	(support / "prompts").mkdir()
+	for name in ("unblock_ledger.py", "unblock_actions.py", "security_dependency.py"):
+		(support / "scripts" / name).symlink_to(ROOT / "scripts" / name)
+	(support / "prompts" / "mode-judge-unblock.txt").write_text("Judge the item.\n", encoding="utf-8")
+	(support / "scripts" / "clarify_isolated_run.sh").write_text(
+		'printf "%s\\n" "$CLARIFY_ISOLATION_TIMEOUT_SECS" > "$FAKE_TEST_JUDGE_TIMEOUT_FILE"\n'
+		'printf "%s\\n" \'{"verdict":"retry_budget","reason":"retry","instructions":"try again"}\' > "$2"\n',
+		encoding="utf-8",
+	)
+	timeout_file = tmp_path / "timeout.txt"
+	result, state = _judge(tmp_path, ISSUE, SUPPORT_DIR=str(support), TARGET_DIR=str(support),
+		UNBLOCK_JUDGE_TIMEOUT_SECS=configured, FAKE_TEST_JUDGE_TIMEOUT_FILE=str(timeout_file), MOCK_UNBLOCK_JUDGE_JSON="")
+	assert result.returncode == 0, result.stderr
+	assert timeout_file.read_text(encoding="utf-8").strip() == expected
+	assert ("outcome=timeout_fallback" in result.stdout) == (configured != expected)
+	assert any("verdict=retry_budget" in comment["body"] for comment in state["comments"])
+
+
 def _run_metadata(run_id: int, **changes) -> dict:
 	run = {
 		"id": run_id, "repository": {"full_name": "o/r"}, "head_repository": {"full_name": "o/r"},

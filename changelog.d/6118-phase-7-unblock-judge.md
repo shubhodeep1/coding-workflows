@@ -11,6 +11,7 @@ Once per poll tick, `orchestrate_poll_process.sh` searches for items carrying a 
 | Rounds per item / per project | 2 / 6 |
 | Still blocked after the last round | closed after 24 hours |
 | Fix-up wait before deciding again | 72 hours (`UNBLOCK_JUDGE_FIXUP_WAIT_HOURS`) |
+| Isolated model timeout | 1500 seconds (`UNBLOCK_JUDGE_TIMEOUT_SECS`; invalid values fall back to 1500) |
 | New label | `ai:unblock-closed` |
 | New wrapper | `workflow-templates/unblock_judge_dispatch.yml` (standard and full profiles) |
 

@@ -924,6 +924,11 @@ unblock_ask_model()
 			echo '{}' > "${RUNTIME_DIR}/verdict_raw.json"
 			return 0
 		fi
+		UNBLOCK_JUDGE_TIMEOUT_SECS="${UNBLOCK_JUDGE_TIMEOUT_SECS:-1500}"
+		if [[ ! "${UNBLOCK_JUDGE_TIMEOUT_SECS}" =~ ^[1-9][0-9]*$ ]]; then
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} outcome=timeout_fallback reason=invalid_timeout default=1500"
+			UNBLOCK_JUDGE_TIMEOUT_SECS="1500"
+		fi
 		engine="codex"
 		if [ -f "${SUPPORT_DIR}/scripts/ai_engine.sh" ]; then
 			# shellcheck source=/dev/null
