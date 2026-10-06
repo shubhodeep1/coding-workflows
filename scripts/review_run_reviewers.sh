@@ -5183,11 +5183,16 @@ run_reviewer_pass() {
     && grep -Eiq 'context.{0,50}(exceed|overflow|too long)|exceed.{0,50}context|too many (input )?tokens|prompt (is )?too long' "${pass_log_files[0]}" \
     && normalize_reviewer_model_list "${REVIEWER_MODELS}" | grep -Fxq 'openai/gpt-6-luna' \
     && [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
-    echo "::warning::Lite reviewer Mistral exceeded its context window; retrying with live openai/gpt-6-luna." >&2
-    run_reviewer "openai/gpt-6-luna" "openai_gpt-6-luna" "${pass_prefix}" "${pass_prompt}" "${pass_reasoning}" >&2
-    if [ "$(cat "${PREVIOUS_REVIEWS_DIR}/status_${pass_prefix}_openai_gpt-6-luna.txt" 2>/dev/null || true)" = "success" ]; then
-      pass_successful=1
-      reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "openai/gpt-6-luna"
+    if ! reviewer_circuit_breaker_enabled || {
+      reviewer_health_dispatch_prepare "openai/gpt-6-luna"
+      [ "${REVIEWER_HEALTH_DISPATCH_DECISION}" != "skip_open" ]
+    }; then
+      echo "::warning::Lite reviewer Mistral exceeded its context window; retrying with live openai/gpt-6-luna." >&2
+      run_reviewer "openai/gpt-6-luna" "openai_gpt-6-luna" "${pass_prefix}" "${pass_prompt}" "${pass_reasoning}" >&2
+      if [ "$(cat "${PREVIOUS_REVIEWS_DIR}/status_${pass_prefix}_openai_gpt-6-luna.txt" 2>/dev/null || true)" = "success" ]; then
+        pass_successful=1
+        reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "openai/gpt-6-luna"
+      fi
     fi
   fi
 

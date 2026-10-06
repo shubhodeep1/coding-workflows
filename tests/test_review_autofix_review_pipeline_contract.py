@@ -4607,7 +4607,13 @@ def test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer(
 		get_active_reviewer_models_text() { cat "$REVIEWER_ACTIVE_MODELS_FILE"; }
 		reviewer_write_model_list_file() { printf '%s\\n' "${@:2}" > "$1"; }
 		reviewer_resume_should_reuse_success_slot() { return 1; }
-		reviewer_circuit_breaker_enabled() { return 1; }
+		reviewer_circuit_breaker_enabled() { [ -n "${TEST_HEALTH_DECISION:-}" ]; }
+		reviewer_health_dispatch_prepare() {
+		  REVIEWER_HEALTH_DISPATCH_DECISION=run
+		  if [ "$1" = 'openai/gpt-6-luna' ]; then
+		    REVIEWER_HEALTH_DISPATCH_DECISION="$TEST_HEALTH_DECISION"
+		  fi
+		}
 		emit_run_budget_gate_note() { :; }
 		codex_run_budget_phase_may_start() { return 0; }
 		normalize_reviewer_model_list() { printf '%s\\n' "$1" | tr ',' '\\n'; }
@@ -4624,11 +4630,13 @@ def test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer(
 		result="$(run_reviewer_pass review "$PROMPT_FILE" high)"
 		printf 'RESULT=%s\\nACTIVE=%s\\n' "$result" "$(cat "$REVIEWER_ACTIVE_MODELS_FILE")"
 		""")
-	for error, roster, fallback_status, expected_count in (
-		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2),
-		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "failed", 2),
-		("HTTP 401 unauthorized", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 1),
-		("maximum context length exceeded", "mistralai/mistral-small-2603", "success", 1),
+	for error, roster, fallback_status, expected_count, health_decision in (
+		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2, ""),
+		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "failed", 2, ""),
+		("HTTP 401 unauthorized", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 1, ""),
+		("maximum context length exceeded", "mistralai/mistral-small-2603", "success", 1, ""),
+		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 1, "skip_open"),
+		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2, "run"),
 	):
 		with tempfile.TemporaryDirectory(prefix="lite-mistral-overflow-") as temp_dir:
 			root = Path(temp_dir)
@@ -4647,6 +4655,7 @@ def test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer(
 					"MISTRAL_ERROR": error,
 					"REVIEWER_MODELS": roster,
 					"FALLBACK_STATUS": fallback_status,
+					"TEST_HEALTH_DECISION": health_decision,
 					"REVIEW_TIER": "lite",
 					"PR_NUMBER": "6438",
 				},
