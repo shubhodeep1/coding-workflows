@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\nQ3: A\n\nRATIONALE:\nQ1: Option A matches how the guard already treats wrappers it cannot read. The template hook already records an unreadable `env -S` wrapper as `\"unparsed env wrapper\"` (around line 492 of `workflow-templates/.claude/hooks/pr_merge_status_guard.py`) and asks for confirmation (around line 1509). Reading a literal `bash -c '<script>'` and running the normal merged-PR check on it closes the reported exploit (`bash -c 'git push origin HEAD:claude/dead'`) without blocking legitimate wrapped commits on unmerged branches. Option C would block those commits.\nQ2: The finding and its recommendation name shell wrappers and substitutions, so the scope is: shell `-c` interpreters (`bash`, `sh`, `zsh`, `dash`, including absolute paths), `eval`, `$(...)` and backticks. The tokenizer already lists `eval` at line 465, so this extends existing code rather than adding a new mechanism. Prefix wrappers such as `sudo`, `timeout` and `xargs` are outside this finding.\nQ3: CI never prepares `.claude/hooks/**` for the parity check, and checks outside `main` PRs test the committed tree. So the live hook and its template must match byte for byte inside the same PR. Option A keeps that guarantee. Option B leaves CI red on this PR. Option C weakens parity for a security hook, which the question itself advises against.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. All decisions are lettered. Notes for the planner:\nQ1/Q2:\n  - Change `workflow-templates/.claude/hooks/pr_merge_status_guard.py`:\n    - When a segment's command is a shell interpreter (basename `bash`, `sh`, `zsh` or `dash`) with `-c` followed by one literal string, recursively parse that string and add its Git invocations, so pushes and commits get the normal merged-PR check.\n    - When the inner text cannot be read safely (`eval` with variables or expansions, `$(...)` or backticks containing `git`, a non-literal `-c` argument, or nested wrappers beyond a small depth limit) and the text mentions `git` with `push` or `commit`, emit an invocation with a new warning such as `\"unparsed shell wrapper\"`. Route it through the same ask path as `\"unparsed env wrapper\"`.\n    - Bound the recursion depth so it fails closed: past the limit, ask.\n  - Add tests to the existing guard test module covering:\n    - a literal `bash -c` push to a merged branch is blocked;\n    - a literal `bash -c` push to an unmerged branch is allowed;\n    - `eval \"$x\"`, `$(git push ...)` and backtick forms ask;\n    - absolute-path `/bin/sh -c` works the same as `sh -c`.\n\nQ3:\n  - Make the same change to `.claude/hooks/pr_merge_status_guard.py` so the two files stay byte-identical; `tests/test_claude_template_live_parity.py` must pass.\n  - If the implement sandbox cannot write the live file, the review editor's sandbox does admit `.claude/hooks/pr_merge_status_guard.py` and can make the copy.\n  - Otherwise the PR body must list the copy as a required manual step before merge.\n  - Do not edit `.github/ai/claude_template_divergence.json`.\n\nESCALATION (required for any ESCALATE decision):\nNone.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\nNone.",
+  "fingerprint": "42cc61212cf2d65936f8bdee38f0aca9265c0fca639ca0f32a1ab4c0c318141b",
+  "lineage": {
+    "issue_number": 6558,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37454156031",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37454156031",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6558"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261006111719_54752f767f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6558,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37454156031"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6558",
+  "timestamps": {
+    "created_at": "2026-10-06T11:17:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
