@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_single_issue_security_pass.sh:64-71 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The docblock says there are up to three pending-marker POSTs but omits that `SECURITY_PASS_PENDING_MARKER_ATTEMPTS` makes the bound configurable, with an effective range of 1-10.\n  WHY: A wrapper author relying on the docblock could miscount the worst-case API budget or fail to forward the override.\n- scripts/review_single_issue_security_pass.sh:137-153 | severity=low | confidence=1\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The validation chain for retry attempts is difficult to follow because it silently resets values above 10 to 3 without explaining the effective range.\n  WHY: A comment clarifying that the effective range is 1-10 and invalid or out-of-range values reset to 3 would make the validation contract clearer.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_single_issue_security_pass.sh:64-71 | severity=NIT | confidence=4\n  PROBLEM: The docblock hardcodes \"up to three pending-marker POSTs\" but does not document that the bound is configurable via `SECURITY_PASS_PENDING_MARKER_ATTEMPTS` (effective range 1-10 after the script's own validation) and `SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS`.\n  WHY: A wrapper author following the docblock alone may undercount the worst-case API budget or fail to forward the env var to override the bound.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/review_single_issue_security_pass.sh:64-71\n  PROBLEM: The docblock states \"up to three pending-marker POSTs\" but does not document that `SECURITY_PASS_PENDING_MARKER_ATTEMPTS` makes the bound configurable with an effective range of 1-10.\n  WHY: Documenting the configurable bound would make the retry limit clearer.\n- scripts/review_single_issue_security_pass.sh:137-153\n  PROBLEM: The validation chain uses a regex check, string-length check, and numeric check that silently reset values above 10 to 3.\n  WHY: The layered checks make the contract difficult to follow; a comment could explain the effective range as 1-10, with invalid or out-of-range values reset to 3.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "d5c990bc1acd17fde80acb8002ae0542c15875dd4c14aa12a06739d6fb0b2504",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6488,
+    "run_id": "37414965999",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37414965999",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006052428_dafab71557",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6488,
+    "run_id": "37414965999"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T05:24:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
