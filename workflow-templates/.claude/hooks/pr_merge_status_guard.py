@@ -1495,6 +1495,9 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		if invocation.subcommand == "push" and invocation.warning == "unparsed env wrapper":
 			unverified_destinations.add("unparsed env-wrapped Git command")
 			continue
+		if invocation.subcommand == "commit" and invocation.warning and invocation.config_override:
+			_request_confirmation("could not resolve env-wrapped git commit directory; the session checkout may not be the commit target")
+			continue
 		if invocation.subcommand == "push" and invocation.warning:
 			uncertain_push_reasons.append(invocation.warning)
 		if invocation.subcommand == "push" and invocation.config_override:
