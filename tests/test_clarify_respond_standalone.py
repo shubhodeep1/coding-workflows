@@ -224,6 +224,11 @@ def test_standalone_worker_failure_does_not_end_the_job() -> None:
 	assert "(steps.run_codex.outcome != 'failure' || steps.standalone_fallback.outputs.ready == 'true')" in parse
 	names = list(steps)
 	assert names.index("Standalone RECOMMENDED fallback") < names.index("Data-provision guard") < names.index("Parse and post answer") < names.index("Record standalone auto-decisions")
+	assert names.index("Standalone RECOMMENDED fallback") < names.index("Answer completeness guard") < names.index("Data-provision guard")
+	assert steps["Answer completeness guard"]["id"] == "answer_completeness"
+	assert steps["Answer completeness guard"]["if"] == steps["Data-provision guard"]["if"].split(" && steps.answer_completeness", 1)[0]
+	for name in ("Data-provision guard", "Parse and post answer"):
+		assert "steps.answer_completeness.outputs.complete != 'false'" in steps[name]["if"]
 
 
 def test_data_guard_step_fails_closed_without_guard_or_inputs(tmp_path: Path) -> None:
@@ -264,6 +269,41 @@ def _run_fallback(tmp_path: Path, questions: str) -> tuple[dict[str, str], str, 
 	result = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
 	assert result.returncode == 0, result.stderr
 	return _outputs(tmp_path / "output"), Path(env["CODEX_OUTPUT_FILE"]).read_text(encoding="utf-8"), (sent.read_text(encoding="utf-8") if sent.exists() else "") + result.stdout
+
+
+def _run_completeness(tmp_path: Path, answer: str, questions: str = QUESTIONS, helper: bool = True) -> tuple[subprocess.CompletedProcess[str], dict[str, str], str, str]:
+	sent = tmp_path / "sent.txt"
+	_install_scripts(tmp_path, sent)
+	if not helper:
+		(tmp_path / "scripts" / "auto_decisions.py").unlink()
+	env = _env(tmp_path, CLARIFY_RESPOND_MODE="standalone")
+	(tmp_path / "runtime" / "clarification_comment.txt").write_text(questions, encoding="utf-8")
+	Path(env["CODEX_OUTPUT_FILE"]).write_text(answer, encoding="utf-8")
+	script = _substitute(_steps()["Answer completeness guard"]["run"])
+	result = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+	return result, _outputs(tmp_path / "output"), Path(env["CODEX_OUTPUT_FILE"]).read_text(encoding="utf-8"), sent.read_text(encoding="utf-8") if sent.exists() else ""
+
+
+def test_completeness_step_fills_before_the_data_guard(tmp_path: Path) -> None:
+	result, outputs, answers, sent = _run_completeness(tmp_path, "DECISIONS:\nQ1: C\n")
+	assert result.returncode == 0 and outputs == {"complete": "true", "filled": "Q2"}
+	assert auto.complete_answers(QUESTIONS, answers)["status"] == "complete"
+	assert "Q2: A\n" in answers and "CRITICAL" not in sent
+	assert "outcome=filled missing=Q2" in result.stdout
+
+
+def test_completeness_step_blocks_and_pages_without_editing(tmp_path: Path) -> None:
+	partial = "DECISIONS:\nQ1: C\n"
+	result, outputs, answers, sent = _run_completeness(tmp_path, partial, QUESTIONS.replace(" (RECOMMENDED)", ""))
+	assert result.returncode == 0 and outputs == {"complete": "false"}
+	assert answers == partial and "CRITICAL|Clarification required" in sent
+	assert "reason=incomplete_answer_undecided" in result.stdout
+
+
+def test_completeness_step_fails_closed_when_helper_is_missing(tmp_path: Path) -> None:
+	result, outputs, answers, _ = _run_completeness(tmp_path, WORKER_ANSWER, helper=False)
+	assert result.returncode == 1 and outputs == {}
+	assert answers == WORKER_ANSWER
 
 
 def test_fallback_posts_recommended_options_without_paging(tmp_path: Path) -> None:
@@ -333,6 +373,15 @@ def test_worker_decisions_and_setup_items_are_recorded(tmp_path: Path) -> None:
 	assert "STANDALONE_AUTO_DECIDE issue=6262 outcome=answered decider=clarify-respond_on_claude decisions=2 ad_total=2 setup_total=1" in stdout
 
 
+def test_filled_decisions_are_attributed_separately(tmp_path: Path) -> None:
+	filled = auto.complete_answers(QUESTIONS, "DECISIONS:\nQ1: C\n")["answers"]
+	calls, stdout = _run_record(tmp_path, [], filled, CLARIFY_RESPOND_FILLED_QIDS="Q2")
+	body = _body(calls[0])
+	assert "clarify comment 5986601001, clarify-respond on claude, Q1" in body
+	assert "clarify comment 5986601001, RECOMMENDED fallback, Q2" in body
+	assert "filled=1" in stdout
+
+
 def test_a_later_cycle_updates_the_comment_in_place(tmp_path: Path) -> None:
 	first = auto.render([], auto.from_answers(QUESTIONS, WORKER_ANSWER), "clarify comment 1, clarify-respond on claude")
 	existing = {"id": 77, "body": first["body"], "author_association": "OWNER", "user": {"login": "owner"}, "created_at": "2026-10-05T00:00:00Z"}
@@ -382,6 +431,83 @@ def test_from_answers_handles_strategies_guard_overrides_and_missing_decisions()
 	bare = auto.from_answers(QUESTIONS, "Q1: B\nQ2: A\n")
 	assert bare["answers"] == "Q1: B\nQ2: A\n"
 	assert bare["decisions"][0]["why"] == "Every read-profile role"
+
+
+def test_complete_answer_is_byte_identical_and_strategies_are_permitted() -> None:
+	assert auto.complete_answers(QUESTIONS, WORKER_ANSWER) == {
+		"status": "complete", "answers": WORKER_ANSWER, "filled": [],
+		"missing": [], "invalid": [], "extra": [], "undecided": [],
+	}
+	for strategy in ("DERIVE_FROM_REPO", "SYNTHESIZE", "REFRAME", "ESCALATE"):
+		answer = f"DECISIONS:\nQ1: {strategy}\nQ2: A\n"
+		assert auto.complete_answers(QUESTIONS, answer)["answers"] == answer
+	emphasized = "**DECISIONS:**\n**Q1**: **B**\n**Q2**: **A**\n"
+	assert auto.complete_answers(QUESTIONS, emphasized)["answers"] == emphasized
+
+
+def test_incomplete_answer_keeps_valid_pick_and_removes_stale_rationale() -> None:
+	answer = "DECISIONS:\nQ1: C\n\nRATIONALE:\nQ1: keep this\nQ2: stale\n  continuation\n\nSETUP REQUIRED:\n- TOKEN is needed\n"
+	result = auto.complete_answers(QUESTIONS, answer)
+	assert result["status"] == "filled" and result["filled"] == ["Q2"]
+	assert result["missing"] == ["Q2"] and not result["undecided"]
+	assert result["answers"].startswith("DECISIONS:\nQ1: C\nQ2: A\n")
+	assert "Q1: keep this" in result["answers"] and "Q2: stale" not in result["answers"]
+	assert "continuation" not in result["answers"] and "- TOKEN is needed" in result["answers"]
+	assert auto.from_answers(QUESTIONS, result["answers"])["answers"] == "Q1: C\nQ2: A\n"
+	assert auto.complete_answers(QUESTIONS, result["answers"])["status"] == "complete"
+
+
+def test_filled_answer_remains_complete_after_data_provision_guard(tmp_path: Path) -> None:
+	questions = "**Q1: Choose?**\n- A — go (RECOMMENDED)\n- B — wait\n**Q2: Choose?**\n- A — go (RECOMMENDED)\n- B — wait\n"
+	clarification = tmp_path / "questions.txt"
+	clarification.write_text(questions, encoding="utf-8")
+	answer = tmp_path / "answer.txt"
+	answer.write_text(auto.complete_answers(questions, "DECISIONS:\nQ1: B\n")["answers"], encoding="utf-8")
+	guarded = subprocess.run(
+		[sys.executable, str(ROOT / "scripts" / "clarify_data_provision_guard.py"),
+		"--clarification-file", str(clarification), "--answers-file", str(answer)],
+		capture_output=True, text=True, check=True,
+	)
+	assert auto.complete_answers(questions, guarded.stdout)["status"] == "complete"
+
+
+@pytest.mark.parametrize("bad", ["Q1: Z", "Q1: A+Z", "q1: b", "Q1: B\nQ1: C", "Q1: B+B", "Q1: <!-- #123"])
+def test_invalid_picks_are_replaced_with_recommended(bad: str) -> None:
+	result = auto.complete_answers(QUESTIONS, bad + "\nQ2: A\n")
+	assert result["status"] == "filled" and result["filled"] == ["Q1"]
+	assert result["invalid"][0]["qid"] == "Q1"
+	assert auto.from_answers(QUESTIONS, result["answers"])["answers"] == "Q1: B\nQ2: A\n"
+	assert "<!--" not in result["answers"] and not re.search(r"#\d", result["answers"])
+
+
+def test_extra_pick_is_removed_and_missing_recommendation_blocks() -> None:
+	extra = auto.complete_answers(QUESTIONS, "Q1: B\nQ2: A\nQ9: A\n")
+	assert extra["status"] == "filled" and extra["filled"] == [] and extra["extra"] == ["Q9"]
+	assert "Q9:" not in extra["answers"]
+	no_recommendation = QUESTIONS.replace(" (RECOMMENDED)", "")
+	blocked = auto.complete_answers(no_recommendation, "Q1: B\n")
+	assert blocked["status"] == "blocked" and blocked["undecided"] == ["Q2"]
+	assert auto.complete_answers(QUESTIONS, "ESCALATION:\nQ1: B\n")["status"] == "blocked"
+	assert auto.complete_answers("nothing here", "Q1: A\n")["status"] == "unparseable"
+
+
+def test_complete_cli_and_per_decision_source(tmp_path: Path) -> None:
+	questions = tmp_path / "q.txt"
+	questions.write_text(QUESTIONS, encoding="utf-8")
+	answer = tmp_path / "a.txt"
+	answer.write_text("Q1: B\n", encoding="utf-8")
+	cmd = [sys.executable, str(AUTO_DECISIONS), "complete", "--questions-file", str(questions), "--answers-file", str(answer)]
+	result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+	assert result.returncode == 0 and json.loads(result.stdout)["status"] == "filled"
+	assert subprocess.run(cmd[:-1] + [str(tmp_path / "missing")], capture_output=True, check=False).returncode == 2
+	assert subprocess.run(cmd[:-2], capture_output=True, check=False).returncode == 1
+	decisions = auto.from_answers(QUESTIONS, WORKER_ANSWER)
+	decisions["decisions"][0]["source"] = "RECOMMENDED fallback"
+	body = auto.render([], decisions, "worker")["body"]
+	assert "(RECOMMENDED fallback, Q1)" in body and "(worker, Q2)" in body
+	decisions["decisions"][0]["source"] = 1
+	with pytest.raises(auto.UsageError):
+		auto.render([], decisions, "worker")
 
 
 @pytest.mark.parametrize("section_header", [

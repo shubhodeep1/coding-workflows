@@ -29,6 +29,10 @@ unreadable file):
       from the matching RATIONALE line, and `setup`, the bullets of an
       optional `SETUP REQUIRED:` section. `undecided` lists the questions
       the answer does not decide.
+  complete --questions-file <path> --answers-file <path>
+      Check that every question has a permitted decision. Keep a complete
+      answer unchanged, fill missing or invalid picks from RECOMMENDED options,
+      or block when no safe fallback exists.
   render --comments-file <path> --decisions-file <path> --source <text>
       The body of the auto-decisions comment with the new entries appended
       (`AD-<n>`, continuing the existing numbering) and new setup items
@@ -81,6 +85,7 @@ SETUP_RE = re.compile(r"^- \*\*SETUP-([1-9][0-9]*)\*\* (.*)$")
 ANSWER_RE = re.compile(
 	r"^\s*\*?\*?(Q[1-9][0-9]*)\*?\*?\s*:\s*\*?\*?([A-Z](?:\+[A-Z])*|DERIVE_FROM_REPO|SYNTHESIZE|REFRAME|ESCALATE)\*?\*?\s*$"
 )
+DECISION_LINE_RE = re.compile(r"^\s*\*{0,2}(Q[0-9]+)\*{0,2}\s*:\s*(.*?)\s*$", re.IGNORECASE)
 RATIONALE_RE = re.compile(r"^\s*\*?\*?(Q[1-9][0-9]*)\*?\*?\s*:\s*(.+?)\s*$")
 SECTION_RE = re.compile(r"^\s*(?:#{1,6}\s*)?(?:\*\*)?([A-Z][A-Z -]*[A-Z])(?:\*\*)?\s*(?:\([^)]*\))?\s*:\s*(?:\*\*)?\s*$")
 BULLET_RE = re.compile(r"^\s*[-*]\s+(.+?)\s*$")
@@ -247,6 +252,114 @@ def from_answers(questions_text: str, answers_text: str) -> dict:
 	return {"decisions": decisions, "answers": answers, "undecided": undecided, "setup": [item for item in setup if item]}
 
 
+def _permitted_pick(pick: str, options: list[dict]) -> bool:
+	if pick in ("DERIVE_FROM_REPO", "SYNTHESIZE", "REFRAME", "ESCALATE"):
+		return True
+	if not re.fullmatch(r"[A-Z](?:\+[A-Z])*", pick):
+		return False
+	letters = pick.split("+")
+	listed = {option["letter"] for option in options}
+	return len(letters) == len(set(letters)) and (pick in listed or all(letter in listed for letter in letters))
+
+
+def complete_answers(questions_text: str, answers_text: str) -> dict:
+	"""Validate worker decisions before they can become a bot /answer."""
+	questions, order = _question_blocks(questions_text)
+	picks: dict[str, list[str]] = {}
+	section = ""
+	has_escalation = False
+	for line in answers_text.splitlines():
+		heading = SECTION_RE.match(line)
+		if heading:
+			section = heading.group(1).strip().upper()
+			has_escalation |= section == "ESCALATION"
+			continue
+		if section in ("", "DECISIONS"):
+			match = DECISION_LINE_RE.match(line)
+			if match:
+				strict = ANSWER_RE.match(line)
+				picks.setdefault(match.group(1).upper(), []).append(strict.group(2) if strict else match.group(2).strip())
+
+	missing: list[str] = []
+	invalid: list[dict[str, str]] = []
+	valid: dict[str, str] = {}
+	for qid in order:
+		values = picks.get(qid, [])
+		if not values:
+			missing.append(qid)
+			continue
+		if len(set(values)) != 1:
+			invalid.append({"qid": qid, "pick": _clean("; ".join(values))[:40], "reason": "conflicting"})
+			continue
+		pick = values[0]
+		if _permitted_pick(pick, questions[qid]["options"]):
+			valid[qid] = pick
+		else:
+			invalid.append({"qid": qid, "pick": _clean(pick)[:40], "reason": "invalid"})
+	extra = [qid for qid in picks if qid not in questions]
+	filled = [qid for qid in order if qid in missing or any(row["qid"] == qid for row in invalid)]
+	result = {
+		"status": "complete", "answers": answers_text, "filled": filled,
+		"missing": missing, "invalid": invalid, "extra": extra, "undecided": [],
+	}
+	if not order:
+		result["status"] = "unparseable"
+		return result
+	if not filled and not extra:
+		return result
+
+	# A partial escalation must not silently turn into a fallback decision.
+	recommended = parse_questions(questions_text)["decisions"]
+	recommended_picks = {row["qid"]: row["pick"] for row in recommended}
+	undecided = [
+		qid for qid in filled
+		if qid not in recommended_picks or not _permitted_pick(recommended_picks[qid], questions[qid]["options"])
+	]
+	result["undecided"] = undecided
+	if undecided or (filled and has_escalation):
+		result["status"] = "blocked"
+		return result
+
+	canonical = ["DECISIONS:", *(f"{qid}: {valid.get(qid, recommended_picks.get(qid))}" for qid in order)]
+	if filled:
+		canonical.extend(["", "RATIONALE:"])
+		invalid_by_qid = {row["qid"]: row for row in invalid}
+		for qid in filled:
+			reason = invalid_by_qid.get(qid)
+			detail = "missing" if reason is None else f"invalid: {ISSUE_REF_RE.sub('#⁠\\1', reason['pick'])}"
+			canonical.append(
+				f"{qid}: RECOMMENDED option {recommended_picks[qid]} used; "
+				f"the worker answer gave no permitted decision ({detail})."
+			)
+
+	# Remove the old decisions and stale rationale for filled questions; keep
+	# all other worker context, including rationale for decisions we retained.
+	preserved: list[str] = []
+	section = ""
+	skip_rationale = False
+	for line in answers_text.splitlines():
+		heading = SECTION_RE.match(line)
+		if heading:
+			section = heading.group(1).strip().upper()
+			skip_rationale = False
+			if section != "DECISIONS":
+				preserved.append(line)
+			continue
+		if section in ("", "DECISIONS") and DECISION_LINE_RE.match(line):
+			continue
+		if section == "RATIONALE":
+			rationale = DECISION_LINE_RE.match(line)
+			if rationale:
+				skip_rationale = rationale.group(1).upper() in filled
+			if skip_rationale:
+				continue
+		preserved.append(line)
+	preserved_text = "\n".join(preserved).strip()
+	result["status"] = "filled"
+	result["answers"] = "\n".join(canonical).rstrip() + "\n" + ("\n" + preserved_text + "\n" if preserved_text else "")
+	return result
+
+
 def _trusted(comment: dict) -> bool:
 	user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
 	login = str(user.get("login") or "")
@@ -277,11 +390,14 @@ def _entry_lines(body: str) -> list[str]:
 
 
 def _format_entry(number: int, decision: dict, source: str) -> str:
+	if "source" in decision and not isinstance(decision["source"], str):
+		raise UsageError("decision source must be a string")
+	entry_source = _clean(decision.get("source") or source)
 	alternatives = ", ".join(
 		f"{alt['letter']} ({alt['text']})" if alt.get("text") else alt["letter"] for alt in decision.get("alternatives", [])
 	)
 	parts = [
-		f"- **AD-{number}** ({_clean(source)}, {decision['qid']}) {decision['question'] or '(question text not parsed)'}",
+		f"- **AD-{number}** ({entry_source}, {decision['qid']}) {decision['question'] or '(question text not parsed)'}",
 		f"→ **{decision['pick']}**" + (f": {decision['why']}" if decision.get("why") else ""),
 	]
 	if alternatives:
@@ -359,6 +475,9 @@ def build_parser() -> argparse.ArgumentParser:
 	answers_cmd = sub.add_parser("from-answers")
 	answers_cmd.add_argument("--questions-file", required=True)
 	answers_cmd.add_argument("--answers-file", required=True)
+	complete_cmd = sub.add_parser("complete")
+	complete_cmd.add_argument("--questions-file", required=True)
+	complete_cmd.add_argument("--answers-file", required=True)
 	render_cmd = sub.add_parser("render")
 	render_cmd.add_argument("--comments-file", required=True)
 	render_cmd.add_argument("--decisions-file", required=True)
@@ -382,6 +501,11 @@ def main(argv: list[str] | None = None) -> int:
 					)
 				)
 			)
+		elif args.command == "complete":
+			print(json.dumps(complete_answers(
+				_read_text(args.questions_file, "--questions-file"),
+				_read_text(args.answers_file, "--answers-file"),
+			)))
 		elif args.command == "render":
 			print(
 				json.dumps(

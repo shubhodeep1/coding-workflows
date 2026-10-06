@@ -1124,8 +1124,70 @@ jobs:
           MSG+="Run: ${RUN_URL}"
           tg_send_phase_tracked "${ISSUE_NUMBER}" "clarify" "${MSG}" "CRITICAL"
 
-      - name: Data-provision guard
+      - name: Answer completeness guard
+        id: answer_completeness
         if: steps.check_orchestrator.outputs.respond == 'true' && (steps.run_codex.outcome == 'success' || steps.semantic_cache_lookup.outputs.cache_hit == 'true' || steps.standalone_fallback.outputs.ready == 'true')
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+          CLARIFY_RESPOND_MODE: ${{ steps.check_orchestrator.outputs.mode }}
+        run: |
+          set -euo pipefail
+          if [ ! -f scripts/auto_decisions.py ] || [ ! -f "${RUNTIME_DIR}/clarification_comment.txt" ] || [ ! -f "${CODEX_OUTPUT_FILE}" ]; then
+            echo "::error::Missing answer completeness helper or inputs; refusing to post an unchecked answer."
+            exit 1
+          fi
+          COMPLETENESS_FILE="${RUNTIME_DIR}/answer_completeness.json"
+          if ! python3 scripts/auto_decisions.py complete \
+            --questions-file "${RUNTIME_DIR}/clarification_comment.txt" \
+            --answers-file "${CODEX_OUTPUT_FILE}" > "${COMPLETENESS_FILE}"; then
+            echo "::error::Answer completeness check failed; refusing to post an unchecked answer."
+            exit 1
+          fi
+          if ! jq -e '(.status == "complete" or .status == "filled" or .status == "blocked" or .status == "unparseable") and (.answers | type == "string") and (.filled | type == "array") and (.missing | type == "array") and (.invalid | type == "array") and (.extra | type == "array")' "${COMPLETENESS_FILE}" >/dev/null; then
+            echo "::error::Malformed answer completeness result; refusing to post."
+            exit 1
+          fi
+          outcome="$(jq -r '.status' "${COMPLETENESS_FILE}")"
+          missing="$(jq -r '[.missing[]] | join(",") | if . == "" then "none" else . end' "${COMPLETENESS_FILE}")"
+          invalid="$(jq -r '[.invalid[].qid] | join(",") | if . == "" then "none" else . end' "${COMPLETENESS_FILE}")"
+          extra="$(jq -r '[.extra[]] | join(",") | if . == "" then "none" else . end' "${COMPLETENESS_FILE}")"
+          filled="$(jq -r '[.filled[]] | join(",") | if . == "" then "none" else . end' "${COMPLETENESS_FILE}")"
+          echo "CLARIFY_RESPOND_ANSWER_COMPLETENESS issue=${ISSUE_NUMBER} mode=${CLARIFY_RESPOND_MODE} outcome=${outcome} missing=${missing} invalid=${invalid} extra=${extra} filled=${filled}"
+          case "${outcome}" in
+            complete)
+              echo "complete=true" >> "$GITHUB_OUTPUT"
+              ;;
+            filled)
+              # Do not print the untrusted answer diff: it may contain credentials.
+              jq -rj '.answers' "${COMPLETENESS_FILE}" > "${CODEX_OUTPUT_FILE}"
+              echo "::warning::Answer decisions were completed with RECOMMENDED options for ${filled}; extra decisions: ${extra}."
+              echo "complete=true" >> "$GITHUB_OUTPUT"
+              echo "filled=$(jq -r '.filled | join(",")' "${COMPLETENESS_FILE}")" >> "$GITHUB_OUTPUT"
+              ;;
+            blocked|unparseable)
+              echo "complete=false" >> "$GITHUB_OUTPUT"
+              if [ "${CLARIFY_RESPOND_MODE}" = "standalone" ]; then
+                echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=skip reason=incomplete_answer_undecided decisions=0"
+              fi
+              source scripts/tg_helpers.sh
+              RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              MSG="Clarification required for #${ISSUE_NUMBER}: ${ISSUE_TITLE:-}"
+              MSG+=$'\n'
+              MSG+="The clarify-respond answer was ${outcome}; no /answer was posted."
+              MSG+=$'\n'
+              MSG+="Issue: ${ISSUE_URL}"
+              MSG+=$'\n'
+              MSG+="Run: ${RUN_URL}"
+              tg_send_phase_tracked "${ISSUE_NUMBER}" "clarify" "${MSG}" "CRITICAL"
+              ;;
+          esac
+
+      - name: Data-provision guard
+        if: steps.check_orchestrator.outputs.respond == 'true' && (steps.run_codex.outcome == 'success' || steps.semantic_cache_lookup.outputs.cache_hit == 'true' || steps.standalone_fallback.outputs.ready == 'true') && steps.answer_completeness.outputs.complete != 'false'
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -1167,7 +1229,7 @@ jobs:
       - name: Parse and post answer
         # A standalone worker failure without a RECOMMENDED fallback posts
         # nothing (the fallback step paged a human instead).
-        if: steps.check_orchestrator.outputs.respond == 'true' && (steps.run_codex.outcome != 'failure' || steps.standalone_fallback.outputs.ready == 'true')
+        if: steps.check_orchestrator.outputs.respond == 'true' && (steps.run_codex.outcome != 'failure' || steps.standalone_fallback.outputs.ready == 'true') && steps.answer_completeness.outputs.complete != 'false'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
@@ -1194,6 +1256,7 @@ jobs:
           CLARIFY_RESPOND_FALLBACK_READY: ${{ steps.standalone_fallback.outputs.ready || 'false' }}
           CLARIFY_RESPOND_CACHE_HIT: ${{ steps.semantic_cache_lookup.outputs.cache_hit || 'false' }}
           CLARIFY_RESPOND_ENGINE: ${{ steps.run_codex.outputs.engine || steps.ai_engine.outputs.engine || 'codex' }}
+          CLARIFY_RESPOND_FILLED_QIDS: ${{ steps.answer_completeness.outputs.filled || '' }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -1212,6 +1275,19 @@ jobs:
             echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=answered reason=ad_parse_failed"
             exit 0
           fi
+          AD_FILLED_COUNT=0
+          CLARIFY_RESPOND_FILLED_QIDS="${CLARIFY_RESPOND_FILLED_QIDS:-}"
+          if [[ "${CLARIFY_RESPOND_FILLED_QIDS}" =~ ^Q[1-9][0-9]*(,Q[1-9][0-9]*)*$ ]]; then
+            AD_FILLED_COUNT="$(jq -r --arg filled "${CLARIFY_RESPOND_FILLED_QIDS}" \
+              --arg source "clarify comment ${CLARIFICATION_COMMENT_ID}, RECOMMENDED fallback" \
+              '($filled | split(",")) as $qids | .decisions |= map(if .qid as $qid | $qids | index($qid) != null then . + {source: $source} else . end) | [.decisions[] | select(.source == $source)] | length' \
+              "${AD_DECISIONS_FILE}")"
+            jq --arg filled "${CLARIFY_RESPOND_FILLED_QIDS}" \
+              --arg source "clarify comment ${CLARIFICATION_COMMENT_ID}, RECOMMENDED fallback" \
+              '($filled | split(",")) as $qids | .decisions |= map(if .qid as $qid | $qids | index($qid) != null then . + {source: $source} else . end)' \
+              "${AD_DECISIONS_FILE}" > "${AD_DECISIONS_FILE}.filled"
+            mv "${AD_DECISIONS_FILE}.filled" "${AD_DECISIONS_FILE}"
+          fi
           AD_RENDER_FILE="${RUNTIME_DIR}/standalone_decisions_comment.json"
           if ! python3 scripts/auto_decisions.py render --comments-file "${RUNTIME_DIR}/issue_all_comments.json" \
             --decisions-file "${AD_DECISIONS_FILE}" \
@@ -1229,7 +1305,7 @@ jobs:
               -f body="$(jq -r '.body' "${AD_RENDER_FILE}")" >/dev/null \
               || echo "::warning::Could not post the auto-decisions comment on issue #${ISSUE_NUMBER}"
           fi
-          echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=answered decider=$(printf '%s' "${AD_DECIDER}" | tr ' ,' '_') decisions=$(jq -r '.decisions | length' "${AD_DECISIONS_FILE}") ad_total=$(jq -r '.total' "${AD_RENDER_FILE}") setup_total=$(jq -r '.setup_total' "${AD_RENDER_FILE}")"
+          echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=answered decider=$(printf '%s' "${AD_DECIDER}" | tr ' ,' '_') decisions=$(jq -r '.decisions | length' "${AD_DECISIONS_FILE}") ad_total=$(jq -r '.total' "${AD_RENDER_FILE}") setup_total=$(jq -r '.setup_total' "${AD_RENDER_FILE}") filled=${AD_FILLED_COUNT}"
 
       - name: Reconfigure git auth for memory helper clones
         if: always() && steps.check_orchestrator.outputs.respond == 'true'

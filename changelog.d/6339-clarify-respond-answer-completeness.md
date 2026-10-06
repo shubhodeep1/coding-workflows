@@ -1,0 +1,2 @@
+<!-- changelog: security -->
+- **Incomplete clarify-respond answers no longer start planning.** Both standalone and orchestrator answers are checked against every clarification question before posting. Missing or invalid decisions use RECOMMENDED options when available; otherwise the workflow holds the answer and pages an operator. Filled choices are credited to the fallback in auto-decision comments.
