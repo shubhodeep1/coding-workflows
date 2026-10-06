@@ -19,10 +19,14 @@ def test_implement_workspace_resync_and_protected_transfer(tmp_path: Path) -> No
 	(host / "src/app.kt").write_text("one\n")
 	(host / "src/other.kt").write_text("other\n")
 	(host / "src/.env").write_text("not copied\n")
+	(host / ".env.example").write_text("ROOT_EXAMPLE=one\n")
+	(host / "src/.env.example").write_text("NESTED_EXAMPLE=one\n")
+	(host / "src/.env.production").write_text("not copied\n")
 	(host / "secrets").mkdir()
 	(host / "secrets/private.kt").write_text("not copied\n")
+	(host / "secrets/.env.example").write_text("not copied\n")
 	subprocess.run(["git", "init", "-q", str(host)], check=True)
-	subprocess.run(["git", "add", "src", "secrets"], cwd=host, check=True)
+	subprocess.run(["git", "add", "src", "secrets", ".env.example"], cwd=host, check=True)
 	workspace = tmp_path / "source"
 	workspace.mkdir()
 	manifest = tmp_path / "baseline.json"
@@ -35,23 +39,33 @@ def test_implement_workspace_resync_and_protected_transfer(tmp_path: Path) -> No
 
 	assert run("snapshot").returncode == 0
 	assert (workspace / "src/app.kt").read_text() == "one\n"
+	assert (workspace / ".env.example").read_text() == "ROOT_EXAMPLE=one\n"
+	assert (workspace / "src/.env.example").read_text() == "NESTED_EXAMPLE=one\n"
 	assert not (workspace / "src/.env").exists()
+	assert not (workspace / "src/.env.production").exists()
 	assert not (workspace / "secrets/private.kt").exists()
+	assert not (workspace / "secrets/.env.example").exists()
 	(host / "src/app.kt").write_text("host changed\n")
+	(host / ".env.example").write_text("ROOT_EXAMPLE=host\n")
 	(host / "src/other.kt").unlink()
 	(workspace / "src/.review-venv").mkdir()
 	(workspace / "src/.review-venv/preserved").write_text("build data")
 	assert run("resync").returncode == 0
 	assert (workspace / "src/app.kt").read_text() == "host changed\n"
+	assert (workspace / ".env.example").read_text() == "ROOT_EXAMPLE=host\n"
 	assert not (workspace / "src/other.kt").exists()
 	assert (workspace / "src/.review-venv/preserved").read_text() == "build data"
 	(workspace / "src/app.kt").write_text("isolated edit\n")
+	(workspace / ".env.example").write_text("ROOT_EXAMPLE=isolated\n")
+	(workspace / "src/.env.example").write_text("NESTED_EXAMPLE=isolated\n")
 	protected = tmp_path / "protected.txt"
 	protected.write_text("src/app.kt\n")
 	result = run("transfer", str(protected))
 	assert result.returncode == 0, result.stderr
 	assert "dropped_protected count=1" in result.stderr
 	assert (host / "src/app.kt").read_text() == "host changed\n"
+	assert (host / ".env.example").read_text() == "ROOT_EXAMPLE=isolated\n"
+	assert (host / "src/.env.example").read_text() == "NESTED_EXAMPLE=isolated\n"
 	assert run("resync").returncode == 0
 	assert (workspace / "src/app.kt").read_text() == "host changed\n"
 

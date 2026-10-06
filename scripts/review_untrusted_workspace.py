@@ -39,8 +39,11 @@ def allowed(name, host=None, commands=None):
 		return False
 	if name == "scripts/editor_git_credentials.sh":
 		return True
-	if any(part.lower() in EXCLUDED or part.lower().startswith(".env") or "secret" in part.lower() or "credential" in part.lower() or part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore", ".egg-info", ".dist-info")) for part in parts):
+	implement_env_example = os.environ.get("UNTRUSTED_WORKSPACE_PROFILE") == "implement" and parts[-1] == ".env.example"
+	if any(part.lower() in EXCLUDED or (part.lower().startswith(".env") and not (implement_env_example and part == parts[-1])) or "secret" in part.lower() or "credential" in part.lower() or part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore", ".egg-info", ".dist-info")) for part in parts):
 		return False
+	if implement_env_example:
+		return True
 	if name in (".github/ai/claude_engine.json", ".claude/hooks/gh_api_write_guard.py", ".claude/hooks/pr_merge_status_guard.py", "scripts/claude_settings.json.tmpl"):
 		return True
 	# Command admission must use the inventory frozen by snapshot.
@@ -48,7 +51,7 @@ def allowed(name, host=None, commands=None):
 		return commands is not None and name in commands
 	if parts[0].startswith(".") and (len(parts) < 3 or parts[:2] not in ((".github", "workflows"), (".github", "actions"))):
 		return False
-	return name in ROOT_FILES or PurePosixPath(name).suffix.lower() in SUFFIXES or (os.environ.get("UNTRUSTED_WORKSPACE_PROFILE") == "implement" and (PurePosixPath(name).suffix.lower() in IMPLEMENT_SUFFIXES or name.endswith(".env.example"))) or parts[-1] == "Dockerfile"
+	return name in ROOT_FILES or PurePosixPath(name).suffix.lower() in SUFFIXES or (os.environ.get("UNTRUSTED_WORKSPACE_PROFILE") == "implement" and PurePosixPath(name).suffix.lower() in IMPLEMENT_SUFFIXES) or parts[-1] == "Dockerfile"
 
 
 def checked_path(root, name):
