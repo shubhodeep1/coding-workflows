@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:681-742 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: `extract_affected_files` has no production callers after `compose_issue_body` switched to `derive_heal_scope_paths`, leaving dead code that may mislead contributors about the scope authorization mechanism.\n  WHY: The function remains present and tested but serves no runtime purpose; both reviewers rated this a nit.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- The reviewer states that the dead-code finding is the only concrete issue, but provides no finding details.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal.py | Line or code reference: extract_affected_files (lines 681-742) | severity=NIT | confidence=4\n  PROBLEM: The function extract_affected_files is no longer called within scripts/workflow_failure_heal.py or other files in the diff, as compose_issue_body was updated to use derive_heal_scope_paths in the last run. It remains present but unused, which may mislead future contributors about the authorization mechanism for write scope.\n  WHY: Not a runtime failure, but dead code that should be removed or commented to avoid confusion regarding the security boundary for scope lock.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/workflow_failure_heal.py | Line or code reference: extract_affected_files (lines 681-719) | severity=NIT | confidence=4\n  PROBLEM: extract_affected_files has no production callers after compose_issue_body switched to derive_heal_scope_paths at line 1769. The function is retained and tested but serves no runtime purpose.\n  WHY: This is dead code. While the docstring at line 682 correctly states \"model output from this helper never authorizes writes,\" the function's presence in the public API alongside derive_heal_scope_paths could mislead future contributors into thinking extract_affected_files still participates in scope authorization. The test test_intake_scope_marker_only_lists_exact_affected_files exercises it, reinforcing the impression that it has runtime significance.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/workflow_failure_heal.py | Location: extract_affected_files (lines 681-719)\n  PROBLEM: extract_affected_files has no production callers after compose_issue_body switched to derive_heal_scope_paths. It is retained with tests but serves no runtime purpose, which could mislead contributors into thinking it still authorizes scope writes.\n  WHY: Suggested minimal fix: Add a one-line module-level comment above the function noting it is retained for diagnostic parsing tests only and does not authorize implementation writes (the docstring already says this, but a callout comment would make the dead-code status explicit).\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "273099a0e6e3600dab33ddb1cc66aa26a563c667303f20109b62148a69b91211",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6471,
+    "run_id": "37505509513",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37505509513",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006190103_5dca58f519",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6471,
+    "run_id": "37505509513"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T19:01:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
