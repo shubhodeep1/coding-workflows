@@ -32,6 +32,11 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from codex_isolation_fakes import docker_runs, enable_fake_isolation, install_fake_docker, short_temp_dir  # noqa: E402
+# CI enumerates this module; collect the launch contract tests here as well.
+from test_codex_isolated_exec_claude_contract import (  # noqa: E402
+	test_claude_never_runs_on_the_host_without_the_isolation_helper,  # noqa: F401
+	test_implement_prompt_marks_user_comments_as_untrusted,  # noqa: F401
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 AI_ENGINE = REPO_ROOT / "scripts" / "ai_engine.sh"
@@ -44,6 +49,11 @@ import json, os, sys
 log = os.environ["FAKE_CLAUDE_LOG"]
 # The relay's account token, recovered by the fake container (test only).
 token = os.environ.get("FAKE_RELAY_TOKEN", "")
+account = "ok"
+for prefix, outcome in (("TOK_LIMIT", "limit"), ("TOK_AUTH", "auth"), ("TOK_CRASH", "crash"), ("TOK_WRITE_MD", "write_md")):
+	if token.startswith(prefix):
+		account = outcome
+		break
 mounts = json.loads(os.environ.get("FAKE_CONTAINER_MOUNTS", "[]"))
 def host_path(path):
 	for mount in mounts:
@@ -72,6 +82,7 @@ record = {
 		"ACTIONS_ID_TOKEN_REQUEST_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_RUNTIME_TOKEN",
 	)},
 	"gh_token_env": "GH_TOKEN" in os.environ,
+	"secret_env_names": sorted(name for name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "TG_BOT_SECRET") if name in os.environ),
 	"settings": settings_text,
 }
 with open(log, "a", encoding="utf-8") as handle:
@@ -79,17 +90,17 @@ with open(log, "a", encoding="utf-8") as handle:
 def emit(event):
 	print(json.dumps(event), flush=True)
 emit({"type": "system", "subtype": "init"})
-if token.startswith("TOK_LIMIT"):
+if account == "limit":
 	emit({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}})
 	emit({"type": "result", "subtype": "error_during_execution", "is_error": True, "result": "API Error"})
 	sys.exit(1)
-if token.startswith("TOK_AUTH"):
+if account == "auth":
 	emit({"type": "result", "subtype": "success", "is_error": True, "result": "Failed to authenticate. API Error: 401 OAuth access token is invalid."})
 	sys.exit(1)
-if token.startswith("TOK_CRASH"):
+if account == "crash":
 	print("boom", file=sys.stderr)
 	sys.exit(3)
-if token.startswith("TOK_WRITE_MD"):
+if account == "write_md":
 	with open("CLAUDE.md", "w", encoding="utf-8") as handle:
 		handle.write("new instructions\n")
 if token.startswith("TOK_TAMPER"):
@@ -105,6 +116,8 @@ import json, os, subprocess, sys
 from pathlib import Path
 log = Path(__DOCKER_LOG__)
 argv = sys.argv[1:]
+if (argv[0] == "run" and "--init" in argv) or (argv[0] == "build" and "-t" not in argv):
+	os.execv(str(Path(__file__).with_name("write-docker")), ["write-docker", *argv])
 record = {"argv": argv, "env": dict(os.environ), "stdin": sys.stdin.read() if argv[0] == "run" else ""}
 if argv[0] == "run":
 	record["auxiliary_snapshots"] = {}
@@ -189,9 +202,6 @@ def sandbox(tmp_path: Path):
 	fake = fake_bin / "claude"
 	fake.write_text(FAKE_CLAUDE, encoding="utf-8")
 	fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
-	docker = fake_bin / "docker"
-	docker.write_text(FAKE_DOCKER.replace("__DOCKER_LOG__", repr(str(tmp_path / "docker.jsonl"))), encoding="utf-8")
-	docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
 	ps = fake_bin / "ps"
 	ps.write_text(FAKE_PS, encoding="utf-8")
 	ps.chmod(ps.stat().st_mode | stat.S_IXUSR)
@@ -232,17 +242,23 @@ def sandbox(tmp_path: Path):
 			"SUPPORT_INSTRUCTIONS_FILE": str(INSTRUCTIONS),
 			"FAKE_CLAUDE_LOG": str(tmp_path / "calls.jsonl"),
 			"FAKE_SUPPORT_FILE": str(support / "scripts" / "ai_engine.sh"),
+			"FAKE_CLAUDE_BIN": str(fake),
 			"PYTHONDONTWRITEBYTECODE": "1",
 			"CODEX_HEARTBEAT_INTERVAL_SECS": "30",
 			"ALLOW_WORKFLOW_EDITS": "false",
 			"ANTHROPIC_API_KEY": "must-not-reach-the-cli",
 			"GH_TOKEN": "ghp_mustnotreachtheclaudecli0000000000000",
+			"OPENROUTER_API_KEY": "must-not-reach-the-cli",
 		}
 	)
 	# The broker's Unix socket path must stay under 108 bytes.
 	env["RUNNER_TEMP"] = str(short_temp_dir())
 	env = enable_fake_isolation(fake_bin, support / "scripts", env, passthrough_prefixes=("FAKE_",), short_temp=False)
-	yield {"tmp": tmp_path, "env": env, "pool": pool, "work": work, "prompt": prompt, "home": home, "bin": fake_bin, "support": support, "runner_temp": Path(env["RUNNER_TEMP"])}
+	docker = fake_bin / "docker"
+	docker.rename(fake_bin / "write-docker")
+	docker.write_text(FAKE_DOCKER.replace("__DOCKER_LOG__", repr(str(tmp_path / "docker.jsonl"))), encoding="utf-8")
+	docker.chmod(docker.stat().st_mode | stat.S_IXUSR)
+	yield {"tmp": tmp_path, "env": env, "pool": pool, "work": work, "prompt": prompt, "home": home, "bin": fake_bin, "support": support, "ai_engine": support / "scripts" / "ai_engine.sh", "runner_temp": Path(env["RUNNER_TEMP"])}
 	shutil.rmtree(env["RUNNER_TEMP"], ignore_errors=True)
 
 
@@ -350,6 +366,35 @@ def test_no_credential_falls_back_with_one_telegram_note(sandbox: dict) -> None:
 	assert _calls(sandbox) == []
 
 
+def test_missing_cli_falls_back(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	# The fake runner executes the image CLI from its own path, not the host PATH.
+	image_claude = sandbox["tmp"] / "image-claude"
+	shutil.copy2(sandbox["bin"] / "claude", image_claude)
+	install_fake_docker(sandbox["bin"], sandbox["bin"].parent / "fake-docker.jsonl", {
+		"FAKE_CLAUDE_BIN": str(image_claude), "FAKE_CLAUDE_LOG": sandbox["env"]["FAKE_CLAUDE_LOG"],
+	})
+	(sandbox["bin"] / "claude").unlink()
+	env_path = ":".join(part for part in sandbox["env"]["PATH"].split(":") if not (Path(part) / "claude").exists())
+	result = _claude_run(sandbox, PATH=env_path)
+	assert _rc(result) == 0, result.stderr
+	assert [call["container_token"] for call in _calls(sandbox)] == ["isolated-placeholder"]
+	assert "AI_ENGINE_FALLBACK" not in result.stderr
+
+
+@pytest.mark.parametrize("symlink", (False, True))
+def test_missing_isolation_helper_falls_back(sandbox: dict, symlink: bool) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	helper = sandbox["ai_engine"].parent / "codex_isolated_exec.sh"
+	helper.unlink()
+	if symlink:
+		helper.symlink_to(REPO_ROOT / "scripts" / "claude_engine.py")
+	result = _claude_run(sandbox, "IMPLEMENT")
+	assert _rc(result) == 75
+	assert "AI_ENGINE_FALLBACK role=IMPLEMENT reason=support_missing" in result.stderr
+	assert _calls(sandbox) == []
+
+
 def test_isolation_unavailable_falls_back(sandbox: dict) -> None:
 	# No image (or no Docker): no account can run, so claude_run falls back
 	# to codex once instead of trying every account (answer Q20 A).
@@ -361,22 +406,6 @@ def test_isolation_unavailable_falls_back(sandbox: dict) -> None:
 	assert "CLAUDE_POOL run role=PLAN account=A outcome=unavailable reason=isolation_unavailable exit_code=75" in result.stderr
 	assert "account=B" not in result.stderr
 	assert "AI_ENGINE_FALLBACK role=PLAN reason=isolation_unavailable" in result.stderr
-	assert _calls(sandbox) == []
-
-
-def test_missing_isolation_helper_falls_back(sandbox: dict, tmp_path: Path) -> None:
-	_accounts(sandbox, A="TOK_OK")
-	scripts = tmp_path / "scripts-no-helper"
-	scripts.mkdir()
-	for name in ("ai_engine.sh", "claude_engine.py", "claude_settings.json.tmpl", "codex_stall_guard.sh"):
-		(scripts / name).write_bytes((REPO_ROOT / "scripts" / name).read_bytes())
-	out = sandbox["tmp"] / "out.txt"
-	result = subprocess.run(
-		["bash", "-c", f'source {shlex.quote(str(scripts / "ai_engine.sh"))}; rc=0; claude_run PLAN {shlex.quote(str(sandbox["prompt"]))} {shlex.quote(str(out))} {shlex.quote(str(sandbox["work"]))} || rc=$?; echo "RC=${{rc}}"'],
-		capture_output=True, text=True, env=dict(sandbox["env"], SUPPORT_ROOT_DIR=str(REPO_ROOT)), cwd=sandbox["tmp"], timeout=120, check=False,
-	)
-	assert _rc(result) == 75, result.stderr
-	assert "AI_ENGINE_FALLBACK role=PLAN reason=support_missing" in result.stderr
 	assert _calls(sandbox) == []
 
 
@@ -409,6 +438,7 @@ def test_usage_limit_and_rejected_token_move_to_the_next_account(sandbox: dict) 
 	assert usage_lines and json.loads(usage_lines[-1])["total_cost_usd"] == 0.01
 	calls = _calls(sandbox)
 	assert [call["token"] for call in calls] == ["TOK_LIMIT_a", "TOK_AUTH_b", "TOK_OK_c"]
+	assert [call["container_token"] for call in calls] == ["isolated-placeholder"] * 3
 	assert "AI_ENGINE_FALLBACK" not in result.stderr
 
 
@@ -451,7 +481,7 @@ def test_write_role_command_line(sandbox: dict) -> None:
 		"--system-prompt-file": "/support/instructions.md",
 		"--settings": "/support/settings.json",
 		"--setting-sources": "",
-		"--tools": "Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch",
+		"--tools": "Read,Grep,Glob,Bash,Edit,Write",
 		"--permission-mode": "bypassPermissions",
 		"--output-format": "stream-json",
 	}
@@ -471,6 +501,7 @@ def test_write_role_command_line(sandbox: dict) -> None:
 	assert call["base_url"] == "http://127.0.0.1:8765"
 	assert call["api_key_env"] is False
 	assert call["gh_token_env"] is False
+	assert call["secret_env_names"] == []
 	assert call["stdin"] == "do the thing\n"
 	# A write role edits a copy of the workdir, never the checkout itself.
 	assert call["cwd"] != str(sandbox["work"].resolve())
@@ -481,6 +512,8 @@ def test_write_role_command_line(sandbox: dict) -> None:
 	assert "--network" in run["argv"] and run["argv"][run["argv"].index("--network") + 1] == "none"
 	assert "TOK_OK" not in json.dumps(run)
 	assert "ghp_" not in json.dumps(run["argv"]) and "GH_TOKEN" not in run["env"]
+	token_file = sandbox["pool"] / "tokens" / "A"
+	assert not any(token_file.is_relative_to(Path(arg.split(",", 2)[1][4:])) for arg in run["argv"] if arg.startswith("type=bind,src="))
 	assert any(arg.endswith(",readonly") is False and f"dst={sandbox['work'].resolve()}" in arg for arg in run["argv"])
 
 
@@ -1154,6 +1187,8 @@ def test_profile_tool_lists_match_claude_engine() -> None:
 		assert "--tools default" not in src
 		assert 'tools="default"' not in src
 	assert module.PROFILE_TOOLS["write"] != "default"
+	assert "WebFetch" not in module.PROFILE_TOOLS["write"]
+	assert "WebSearch" not in module.PROFILE_TOOLS["write"]
 
 
 def test_allow_workflow_edits_reaches_the_policy(sandbox: dict) -> None:

@@ -683,7 +683,7 @@ claude_run()
 		# An explicit list, not "default": the default set loads ~35 tools whose
 		# descriptions push a no-op start-up past the 25,000-token context gate.
 		# Keep in sync with PROFILE_TOOLS["write"] in claude_engine.py.
-		*) tools="Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch"; mode="bypassPermissions"; isolation_mode="workspace" ;;
+		*) tools="Read,Grep,Glob,Bash,Edit,Write"; mode="bypassPermissions"; isolation_mode="workspace" ;;
 	esac
 	# The CLI's session store (~/.claude) lives outside the container so a
 	# later claude_run in the same job can resume the session (answer Q18 A).

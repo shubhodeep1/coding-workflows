@@ -995,6 +995,12 @@ stages the runner, broker and catalog from verified support. Missing Docker or
 snapshots exceeding 5,000 files/64 MiB fail the judge attempt closed rather
 than running on the host; trusted poller code still applies the validated
 verdict.
+The write profile has no `WebFetch`/`WebSearch`, and the host relay
+(`scripts/claude_anthropic_relay.py`) accepts only untyped or `custom`
+client tools, rejecting unknown provider-side tool types as well as known
+web, code-execution and MCP-connector tools. A missing
+`codex_isolated_exec.sh` makes `claude_run` fall back to codex rather than
+running Claude with host credentials.
 
 OpenCode version `1.18.23` is installed by the dispatch-only
 `.github/workflows/opencode-live-smoke.yml` rollout gate and by production

@@ -207,7 +207,7 @@ READ_PROFILE_DENY: tuple[str, ...] = (
 READ_GUARD_SAFE_EXACT = frozenset(("--text",))
 _READ_GUARD_GIT_OPTIONS = ("--output", "--open-files-in-pager", "--ext-diff", "--textconv", "--no-index")
 PROFILE_TOOLS: dict[str, str] = {
-	"write": "Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch",
+	"write": "Read,Grep,Glob,Bash,Edit,Write",
 	"read": "Read,Grep,Glob,Bash",
 }
 PROFILE_MODES: dict[str, str] = {
