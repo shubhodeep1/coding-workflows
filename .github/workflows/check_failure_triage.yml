@@ -431,7 +431,7 @@ jobs:
           source scripts/gh_helpers.sh
           body_file="${RUNTIME_DIR}/issue_body.md"
           test -s "${body_file}"
-          PYTHONDONTWRITEBYTECODE=1 python3 - "${body_file}" <<'PY'
+          PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${body_file}" <<'PY'
           import json
           import os
           import pathlib
@@ -490,7 +490,7 @@ jobs:
           CHECK_NAME: ${{ inputs.check_name }}
         run: |
           set -euo pipefail
-          safe_check_name="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -c '
+          safe_check_name="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c '
           import sys, unicodedata
           check_name_text = "".join(" " if unicodedata.category(char).startswith("C") or unicodedata.category(char) in ("Zl", "Zp") else char for char in sys.argv[1])
           print(" ".join(check_name_text.split()).replace("`", "\u0027").replace("<", "&lt;")[:160] or "(unnamed check)")

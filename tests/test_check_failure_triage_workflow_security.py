@@ -142,6 +142,10 @@ class CheckFailureTriageWorkflowSecurityTests(unittest.TestCase):
 		for script in (triage, engine):
 			self.assertNotRegex(script, r"\bpython3\s+-(?:c\b|\s)")
 		self.assertIn('python3 -I -B scripts/collect_pr_check_runs_context.py', triage)
+		post_script = _step(_workflow()["jobs"]["triage"], name="Post check-failure triage issue")["run"]
+		self.assertIn('python3 -I -B - "${body_file}"', post_script)
+		failure_script = _step(_workflow()["jobs"]["triage"], name="Notify on triage workflow failure")["run"]
+		self.assertIn('python3 -I -B -c', failure_script)
 
 	def test_isolated_helper_rejects_invalid_source_root_before_docker(self) -> None:
 		with tempfile.TemporaryDirectory(prefix="clarify-root-") as temp_dir:
