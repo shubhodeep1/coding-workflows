@@ -424,18 +424,25 @@ def build_issue_payload(
 	"""Build the dispatch payload for an escalation label on an issue / PR."""
 	now = now or _utc_now()
 	body = sanitize_text(issue.get("body"))
-	markers = parse_heal_markers(body)
 	comment_texts = [sanitize_text(comment.get("body")) for comment in comments if isinstance(comment, dict)]
-	run_refs = extract_run_refs([body, *comment_texts], repo)
-	if len(run_refs) < MAX_RUN_REFS:
-		known = {ref["run_id"] for ref in run_refs}
-		for run in select_failed_runs(runs, title=str(issue.get("title") or "")):
-			if run["run_id"] in known:
-				continue
-			run_refs.append({"repo": repo, "run_id": run["run_id"], "url": run["url"]})
-			known.add(run["run_id"])
-			if len(run_refs) >= MAX_RUN_REFS:
-				break
+	matching_runs = select_failed_runs(runs, title=str(issue.get("title") or ""))
+	commented_run_ids = {ref["run_id"] for ref in extract_run_refs([body, *comment_texts], repo)}
+	# A URL in a contributor-authored comment is a hint, never proof of a failed run.
+	matching_runs.sort(key=lambda run: run["run_id"] not in commented_run_ids)
+	run_refs = [{"repo": repo, "run_id": run["run_id"], "url": run["url"]} for run in matching_runs]
+	markers = parse_heal_markers(body)
+	marker_header = "\n".join(f"<!-- {MARKER_PREFIX}{key}={markers.get(key, '')} -->" for key in ("fp", "gen", "root", "source", "classification")) + "\n"
+	trusted_lineage = (
+		kind == "issue" and HEAL_LABEL in _labels_of(issue)
+		and (issue.get("author_association") in ("OWNER", "MEMBER", "COLLABORATOR")
+			or (isinstance(issue.get("user"), dict) and issue["user"].get("type") == "Bot"))
+		and body.startswith(marker_header)
+		and bool(_FP_HEX_RE.fullmatch(markers.get("fp") or ""))
+		and _positive_int(markers.get("gen")) is not None
+		and bool(_FP_HEX_RE.fullmatch(markers.get("root") or ""))
+		and bool(_SOURCE_KEY_RE.fullmatch(markers.get("source") or "") or markers.get("source") == f"{repo}#run")
+		and markers.get("classification") in CLASSIFICATIONS
+	)
 	return {
 		"schema_version": SCHEMA_VERSION,
 		"source_repo": repo,
@@ -447,8 +454,8 @@ def build_issue_payload(
 		"labels": _labels_of(issue)[:50],
 		"run_refs": run_refs,
 		"wrapper_sha": wrapper_sha if is_valid_sha(wrapper_sha) else None,
-		"source_gen": _positive_int(markers.get("gen")),
-		"source_root": markers.get("root") if re.fullmatch(r"[0-9a-f]{64}", markers.get("root") or "") else None,
+		"source_gen": _positive_int(markers.get("gen")) if trusted_lineage else None,
+		"source_root": markers.get("root") if trusted_lineage else None,
 		"issue_excerpt": sanitize_text(body, ISSUE_EXCERPT_LIMIT),
 		"comments_excerpt": _build_recent_comments_excerpt(comment_texts),
 		"workflow_name": None,
@@ -1641,6 +1648,18 @@ def compose_issue_title(payload: dict[str, Any], *, workflow_name: str | None) -
 	return f"Workflow heal: {label} on {target}"
 
 
+def _neutralize_heal_routing_text(value: Any) -> str:
+	"""Leave untrusted evidence readable without making it issue routing metadata."""
+	text = sanitize_text(value)
+	keys = ("integration branch", "target branch", "tracking issue", "depends on",
+		"local id", "managed by", "prior_pr_baseline_branch", "files_touched")
+	key_pattern = re.compile(r"\b(" + "|".join(re.escape(key).replace(r"\ ", r"[ \t]+") for key in keys) + r")([ \t]*\**[ \t]*):", re.IGNORECASE)
+	text = key_pattern.sub(r"\1 (untrusted)\2:", text)
+	text = re.sub(r"Re-issued from\s*#", "Re-issued from (untrusted) #", text, flags=re.IGNORECASE)
+	text = re.sub(r"review-blocked-reissue", "review-blocked (untrusted) reissue", text, flags=re.IGNORECASE)
+	return text.replace("<!--", "&lt;!--")
+
+
 def compose_issue_body(
 	*,
 	payload: dict[str, Any],
@@ -1730,22 +1749,22 @@ def compose_issue_body(
 			"issue was filed here for the normal clarify -> plan -> implement -> review pipeline."
 		)
 	parts.append("")
-	parts.extend(_context_lines(payload, run_summaries=run_summaries))
+	parts.extend(_neutralize_heal_routing_text(line) for line in _context_lines(payload, run_summaries=run_summaries))
 	parts.append(f"- **Classification:** `{classification}`")
 	parts.append(f"- **Heal intake run:** {intake_run_url}")
 	parts.append("")
 	if payload.get("source_kind") == "autofix_failure" and payload.get("failure_evidence"):
-		parts.append("<details><summary>Failure evidence from the reporting run (UNTRUSTED, verbatim)</summary>")
+		parts.append("<details><summary>Failure evidence from the reporting run (UNTRUSTED, routing-neutralized)</summary>")
 		parts.append("")
 		parts.append("```")
-		parts.append(sanitize_text(payload["failure_evidence"], FAILURE_EVIDENCE_LIMIT).replace("```", "` ` `"))
+		parts.append(_neutralize_heal_routing_text(sanitize_text(payload["failure_evidence"], FAILURE_EVIDENCE_LIMIT)).replace("```", "` ` `"))
 		parts.append("```")
 		parts.append("")
 		parts.append("</details>")
 		parts.append("")
 	parts.append("---")
 	parts.append("")
-	parts.append(sanitize_text(diagnosis).strip() or "_(no diagnosis produced)_")
+	parts.append(_neutralize_heal_routing_text(diagnosis).strip() or "_(no diagnosis produced)_")
 	parts.append("")
 	parts.append("---")
 	parts.append("")

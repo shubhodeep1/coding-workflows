@@ -10,3 +10,5 @@
 | `main` CI push runs that failed, 2026-10-03 09:51 to 2026-10-04 17:56 UTC | 35 of 35 |
 
 What this means for operators: a red CI on a PR now opens an `ai:check-triage` issue when no matching one is open, and a red `main` now opens an `ai:workflow-heal` issue against `main`, so a broken base no longer sits unnoticed. Fix PRs for workflow-heal issues, including release-workflow heal issues, must pass the head-bound security audit. In consumer repos every finished workflow leaves a skipped `AI Check Failure Triage` run in the Actions tab; `CHECK_FAILURE_TRIAGE_ENABLED=false` still turns triage off.
+
+Workflow-heal reports only follow comment run links confirmed by the recent failed-run listing. Only heal-labeled issues with a canonical marker header and a trusted author pass lineage markers forward. Intake-issued branch routing cannot be overridden by untrusted log evidence or diagnosis text.

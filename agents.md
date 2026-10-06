@@ -215,8 +215,14 @@ Phases of the unattended pipeline (each is a separate workflow file under
     fixes, continue the lineage), caps the lineage at
     `WORKFLOW_HEAL_MAX_LINEAGE_DEPTH` (escalates with
     `ai:workflow-heal-escalated` + Telegram), and bounds the volume with
-    `WORKFLOW_HEAL_MAX_OPEN_ISSUES` / `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY`.
-    Fix PRs linked to `ai:workflow-heal` issues run the single-issue security
+     `WORKFLOW_HEAL_MAX_OPEN_ISSUES` / `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY`.
+     Comment run links only prioritize failed runs verified in the recent
+     run listing with a matching issue title; source generation markers are
+     inherited only from heal-labeled issues with a canonical marker header
+     and a bot or owner/member/collaborator author. The
+     composed issue neutralizes untrusted routing keys in evidence and diagnosis
+     so only intake-owned branch metadata can select the fix target.
+     Fix PRs linked to `ai:workflow-heal` issues run the single-issue security
     pass at their current head; the heal label and `fp` marker do not exempt
     them (finding `ci-heal-skips-security-pass`). A third reporter lives
     in the failure path of `review_autofix.yml`

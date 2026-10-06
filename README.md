@@ -1566,9 +1566,14 @@ through `clarify → plan → implement → review`.
   auto-release run that failed only because the smoke gate failed is skipped
   (`skip reason=downstream_gate_failure`) because the gate run reports itself.
 - **Report (consumer side):** the reporter reads the escalated issue / PR, its
-  comments, and the repository's recent runs, links the failed runs (run URLs in
-  the pipeline's failure comments plus failed runs whose display title equals
-  the issue title, at most 3), records the coding-workflows release SHA the
+  comments, and the repository's recent runs. It links at most 3 listed failed
+  runs whose display title matches the issue title; run URLs in comments can
+  prioritize those runs but cannot introduce an unverified run ID. A run absent
+  from the recent listing is omitted. Lineage markers in the source issue are
+  inherited only from an `ai:workflow-heal` issue with a canonical header
+  authored by a bot or an owner/member/collaborator;
+  forged markers on other issues do not consume the heal generation budget.
+  The reporter records the coding-workflows release SHA the
   wrappers are pinned to, and sends one `repository_dispatch` (event type
   `workflow-failure-heal`) to coding-workflows. It skips closed issues and the
   `[E2E Smoke Test` fixtures the release gate creates. Stable log lines are
@@ -1658,6 +1663,11 @@ through `clarify → plan → implement → review`.
   `WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED=false`, is logged as
   `classification_remapped … to=workflow-defect reason=…` and takes the
   `workflow-defect` route above.
+  Before filing a heal issue, the intake neutralizes routing keys and issue
+  markers in the untrusted diagnosis, failure evidence, and run summaries.
+  Only the intake's own header can set `Target branch:`, `Integration branch:`,
+  or `Tracking issue:`; quoted evidence remains readable but cannot retarget
+  the fix.
 - **Heal PR reconcile:** a heal PR filed on a source PR's head branch is
   stacked on that PR. When a pull request in coding-workflows closes, the
   `heal-pr-reconcile` job in `internal-cancel-on-pr-close.yml` runs
