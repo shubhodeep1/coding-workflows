@@ -10,6 +10,13 @@ Consumer repos define their own `agents.md` with their own architectural
 facts. The unattended pipeline loads this file as `agents_canonical.md` and
 the consumer's `agents.md` separately; both are inlined into the prompt.
 
+The interactive merged-PR hook (`.claude/hooks/pr_merge_status_guard.py` and
+its consumer template) recognizes guarded git commands after nested control
+words, shell negation (`!`), and simple `case` arms. Since their effective
+directory is uncertain, pushes check the session checkout and request
+confirmation unless blocked; commits in that context remain warning-only
+when not blocked.
+
 ---
 
 ## Workflow architecture
@@ -84,9 +91,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
    and `.claude/` files remain excluded from
    snapshot and transfer. An editor write to an excluded file in an
    admitted directory is dropped; a new directory outside the admitted ones
-   fails the transfer (`reason=unsafe_directory`) and the editor step with it. Its
-   isolation helpers must already exist in the verified workflow support
-   commit; a PR's own copies are review data,
+   fails the transfer (`reason=unsafe_directory`) and the editor step with it.
+   The command contract test `tests/test_audit_plans_command.py` is omitted
+   from the sandbox; host CI still runs it. Its isolation helpers must already
+   exist in the verified workflow support commit; a PR's own copies are review data,
    not executable support, so review fails closed until that commit lands.
    PR-backed `claude/*` heads take the normal review path like every other
    PR: the GPT editor, conflict resolver, review-blocked judge and auto-merge
@@ -484,6 +492,58 @@ a new value, add it to the appropriate overrides file with a
   failure-path reporter skips when support staging did not complete or its
   optional Python helper is absent; neither case executes `scripts/` from
   the PR worktree.
+- The review `codex-agent` sets `PYTHONSAFEPATH=1` so host Python invoked
+  with `-`, `-c`, or `-m` cannot import PR-controlled modules from its working
+  directory (also after switching to `WORKSPACE_PATH`). Keep sibling imports
+  anchored to the trusted support directory; `workspace_init.sh` uses `-I -B`
+  independently of job env. Python older than 3.11 ignores `PYTHONSAFEPATH`.
+- Host-side static-context reads of checkout-controlled `README.md` and
+  `agents.md` skip symbolic links rather than following them into prompt text.
+  Required `unattended_system_instructions.md` and `ai_pipeline.md` symlinks
+  instead fail prompt assembly before any content is written; review checkout
+  credential persistence is unchanged.
+- Static prompts omit the optional overflow-runbook pointer when
+  `probably_unnecessary_but_read_if_stuck.md` is a symlink; regular runbooks
+  still receive the pointer. A symlink emits a warning without directing the
+  model to read its target from the credential-bearing checkout.
+- The review gate's existing PR read validates the same-repository head and
+  exports `review_checkout_sha` only for a 40-hex SHA. `Checkout repo` uses
+  that SHA for every PR event, so reviewer and other `GITHUB_WORKSPACE` file
+  reads see the verified PR head rather than the dispatching branch or a stale
+  pull-request event payload; the no-PR push route still uses `github.sha`.
+  Fork, missing-repo and invalid-head PRs skip both review and deterministic
+  auto-merge. Before OpenCode setup, the job
+  refuses project OpenCode configuration/plugins in the source checkout; it
+  also requires an existing split workspace and checks its configuration
+  before reviewer launch. An unreadable fetched git head fails the job; a
+  source/workspace/PR-metadata SHA mismatch, or a branch that advances during
+  fetch, sets `AUTOFIX_STALE_BASE_SKIP` so no reviewer, editor or merge acts
+  on stale files.
+- Before host-side pre-review helpers run against the PR tree, `review_autofix.yml`
+  requires a Python that honors `PYTHONSAFEPATH`. The Semble and Serena
+  bootstrap import probes run from private neutral directories; Serena's
+  trusted absolute-path handshake probe retains the project cwd for
+  `--project-from-cwd` while clearing `PYTHONPATH` and using safe-path for
+  the probe only. Its installed server keeps script-directory imports.
+  Serena requires an absolute `HOME` for Codex config writes; a relative or
+  missing `HOME` leaves the tool unavailable rather than writing under the PR tree.
+  Other pre-review `python3 -c`, `-m` and stdin calls set `PYTHONSAFEPATH=1`
+  per call, including consolidator, reviewer and host-side editor helpers;
+  reviewer Python imports require absolute trusted support directories rather
+  than falling back to the PR checkout. The host-side partial-finalize timeout
+  extractor also uses safe-path when reading the workflow YAML. Script-file
+  imports and the checkout's Git auth are unchanged.
+- `orchestrate.yml` and `orchestrate_clarify_respond.yml` also assemble static
+  context on the host. They reject symlinked required instructions and pipeline
+  files before writing prompt output, and omit symlinked local agents files,
+  `README.md`, and the optional overflow-runbook pointer with warnings. Regular
+  files retain their existing content and local agents-file precedence in the
+  clarify-respond workflow. Checkout credential handling is unchanged.
+- Review's optional break-glass scan and conflict-resolution prompt rendering
+  also use safe-path Python in the credential-bearing checkout. The conflict
+  preparation path can run before reviewers when pre-review conflict resolution
+  is enabled; resolver retries remain host-side but no longer import checkout
+  modules through Python's implicit current-directory entry.
 - `internal-review.yml` itself must not forward a `with:` input that
   `review_autofix.yml` on `main` does not define yet: GitHub validates the
   call against `main`'s file, so every review run on the PR adding the input
@@ -889,6 +949,14 @@ committing the corresponding file:
   append/replace entries only. This repository ships a no-op overlay
   (`schema_version` only, no `prompt_overrides`), so `WORKFLOW_OVERLAY_ENABLED`
   is `true` but no rendered prompt is altered until override entries are added.
+  Review/autofix and validate stage it and its fragments from one fetched,
+  pinned default-branch commit, not from the PR/integration checkout; a fetch
+  failure disables the overlay instead of falling back to the checkout.
+  Missing or non-regular trusted fragments fail staging; unreadable trusted
+  blobs and Git call timeouts (60 seconds per call, no credential prompts)
+  disable the overlay.
+  `replace_path` is ignored with a warning for `mode-judge`, `mode-judge-*`
+  and `mode-orchestrate-poll-judge`; `append_path` remains supported.
 - `.github/ai/concurrency_caps.yml` — parsed by
   `scripts/orchestrate_lib.py::load_concurrency_caps`. Missing or empty files
   disable the cap layer and restore legacy uncapped dispatch.
@@ -1456,6 +1524,8 @@ and shipped:
 - `MODEL_CATALOG_BACKFILL`
 - `CLAUDE_FIXER_AUTO_MERGE`
 - `SECURITY_AUDIT_TARGET`
+- `WORKFLOW_OVERLAY_SOURCE`
+- `WORKFLOW_OVERLAY_REPLACE_REJECTED`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -1658,6 +1728,8 @@ LOG_PREFIX.name=MODEL_CATALOG_BACKFILL
 LOG_PREFIX.name=AUTOFIX_FAILURE_HEADLINE
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
+LOG_PREFIX.name=WORKFLOW_OVERLAY_SOURCE
+LOG_PREFIX.name=WORKFLOW_OVERLAY_REPLACE_REJECTED
 
 ---
 
@@ -1707,7 +1779,7 @@ Operator runbooks (env var reference, autofix retrigger/dedup internals,
 orchestrator integration-sync auto-heal, validation self-healing, workflow
 log analysis pipeline, semantic cache scope, wrapper pin policy) live in
 `./probably_unnecessary_but_read_if_stuck.md`. Read it only when needed —
-it is intentionally large.
+and only if it is a regular file, not a symlink — it is intentionally large.
 
 `CHANGELOG.md` is never edited directly. Write one fragment per PR at
 `changelog.d/<issue-or-pr>-<slug>.md`; `scripts/assemble_changelog.py` folds
@@ -1724,6 +1796,8 @@ depend on it.
 
 ## Review pipeline consolidator + ledger contract
 
+- The review workflow's "Pre-assemble static context" step reads PR-head `README.md` only through `review_untrusted_workspace.py readme-trimmed`: its no-follow, regular-file, size-bounded reader omits rejected READMEs with `REVIEW_STATIC_CONTEXT_README` diagnostics (a reader failure stops review). Only trusted instructions enter `pre_assembled_static.txt`; the trimmed README is stored under the owner-only `RUNTIME_DIR` and embedded as `UNTRUSTED_DATA:` lines in reviewer, consolidator, editor, interim-judge, review-blocked-judge, and smoke-synthesis prompts. A README whose prefixed lines exceed 200,000 bytes is omitted with `reason=prompt_size`; reviewer budget accounting includes the framed bytes. The step also refuses symlink/non-regular `pre_assembled_static.txt` output paths before assembling the prompt.
+- Every other host-side prompt assembler routes `README.md` through `scripts/build_static_context.sh readme`. The shared reader uses `lstat` plus `O_NOFOLLOW`, rejects non-regular, set-ID, larger-than-2-MiB, or over-200,000-prefixed-byte files, and emits accepted content only as `UNTRUSTED_DATA:` lines; rejected files log `STATIC_CONTEXT_README` and are omitted, while read failures stop assembly. The `readme` phase requires only `README.md`; the clarify/plan helper and both orchestrate workflow assemblers refuse a symlink or non-regular output path before writing static context.
 - Review-pipeline helper stages are fail-open by contract. Floor rules, consolidator, parser, and ledger failures degrade to empty/advisory local artifacts and do not block the editor or reviewer loop.
 - `reviewer_bundle.txt` is the authoritative findings source. `review_issues.txt` and `ledger_status.txt` are advisory only and may not suppress valid raw-bundle findings.
 - `floor_tags.txt` is the only non-skippable advisory channel: findings promoted there must be fixed or explicitly rejected with reason.
