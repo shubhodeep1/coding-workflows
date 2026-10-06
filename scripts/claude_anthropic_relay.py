@@ -16,7 +16,9 @@ and ``ANTHROPIC_BASE_URL=http://127.0.0.1:8765``:
 Neither side accepts a destination URL from the client. Only POST
 ``/v1/messages`` and ``/v1/messages/count_tokens`` (optionally
 ``?beta=true``) cross the boundary. Request and response headers pass through
-fixed allow lists. Never log requests, upstream bodies, headers or the token.
+fixed allow lists. Only client-executed tools are allowed: the host broker
+refuses provider-side web, code-execution and MCP connector tools. Never log
+requests, upstream bodies, headers or the token.
 """
 
 import http.client
@@ -44,6 +46,9 @@ FORWARD_RESPONSE_HEADERS = ("content-type", "request-id", "retry-after", "x-shou
 FORWARD_RESPONSE_PREFIXES = ("anthropic-ratelimit-",)
 OAUTH_BETA = "oauth-2025-04-20"
 MAX_HEADER_VALUE = 4096
+PROVIDER_EGRESS_TOOL_PREFIXES = ("web_search_", "web_fetch_", "code_execution_")
+PROVIDER_EGRESS_TOOL_TYPES = ("mcp_toolset",)
+PROVIDER_EGRESS_REQUEST_KEYS = ("mcp_servers", "container")
 
 
 class UnixHTTPConnection(http.client.HTTPConnection):
@@ -79,6 +84,31 @@ def with_oauth_beta(value):
 	if OAUTH_BETA not in flags:
 		flags.append(OAUTH_BETA)
 	return ",".join(flags)
+
+
+def request_has_provider_egress(request: dict) -> bool:
+	"""Reject provider-executed tools at the host trust boundary."""
+	if any(key in request for key in PROVIDER_EGRESS_REQUEST_KEYS):
+		return True
+	if "tools" not in request:
+		return False
+	tools = request["tools"]
+	if not isinstance(tools, list):
+		return True
+	for tool in tools:
+		if not isinstance(tool, dict):
+			return True
+		if "type" in tool:
+			tool_type = tool["type"]
+			# Unknown typed tools may execute on the provider; only custom tools run in the client.
+			if (
+				not isinstance(tool_type, str)
+				or tool_type.startswith(PROVIDER_EGRESS_TOOL_PREFIXES)
+				or tool_type in PROVIDER_EGRESS_TOOL_TYPES
+				or tool_type != "custom"
+			):
+				return True
+	return False
 
 
 def read_token(path):
@@ -161,6 +191,8 @@ class Relay(http.server.BaseHTTPRequestHandler):
 			except (UnicodeError, ValueError):
 				return self._reject(400)
 			if not isinstance(request, dict) or request.get("model") not in self.server.models:
+				return self._reject(400)
+			if request_has_provider_egress(request):
 				return self._reject(400)
 			headers["anthropic-beta"] = with_oauth_beta(headers.get("anthropic-beta"))
 			headers["authorization"] = "Bearer " + self.server.token
