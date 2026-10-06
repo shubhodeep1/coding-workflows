@@ -642,6 +642,30 @@ def _parse_github_output(path: Path) -> dict[str, str]:
 	return parsed
 
 
+def _parse_github_env_text(text: str) -> tuple[dict[str, str], list[str]]:
+	"""Parse runner-style single-line and multiline GITHUB_ENV entries."""
+	parsed: dict[str, str] = {}
+	delimiters: list[str] = []
+	lines = text.splitlines()
+	index = 0
+	while index < len(lines):
+		line = lines[index]
+		index += 1
+		if "<<" in line:
+			key, delimiter = line.split("<<", 1)
+			delimiters.append(delimiter)
+			start = index
+			while index < len(lines) and lines[index] != delimiter:
+				index += 1
+			assert index < len(lines), f"Unterminated GITHUB_ENV value for {key}"
+			parsed[key] = "\n".join(lines[start:index])
+			index += 1
+		else:
+			key, value = line.split("=", 1)
+			parsed[key] = value
+	return parsed, delimiters
+
+
 def _run_resolve_checkout_ref_step(
 	tmp_path: Path,
 	*,
@@ -1226,7 +1250,7 @@ def test_fetch_issue_metadata_does_not_let_issue_text_close_env_values() -> None
 		issue_title = "Title\nEOF\nUNSAFE_TITLE=enabled"
 		fetch_script = _extract_run_script("Fetch issue metadata")
 		start = fetch_script.index('printf \'%s\\n\' "${ISSUE_BODY}" > "${ISSUE_BODY_FILE}"')
-		end = fetch_script.index('} >> "$GITHUB_ENV"', start) + len('} >> "$GITHUB_ENV"')
+		end = fetch_script.index('write_untrusted_multiline_env ISSUE_TITLE "${ISSUE_TITLE}"', start) + len('write_untrusted_multiline_env ISSUE_TITLE "${ISSUE_TITLE}"')
 		github_env_file = Path(td) / "github_env.txt"
 		body_file = Path(td) / "issue_body.txt"
 		proc = subprocess.run(
@@ -1240,24 +1264,26 @@ def test_fetch_issue_metadata_does_not_let_issue_text_close_env_values() -> None
 		assert proc.returncode == 0, proc.stderr
 		assert body_file.read_text(encoding="utf-8") == issue_body + "\n"
 		github_env_text = github_env_file.read_text(encoding="utf-8")
-		for name, value in (("ISSUE_BODY", issue_body), ("ISSUE_TITLE", issue_title),
-			("ISSUE_SCOPE_LOCK_GLOB", "EOF\nUNSAFE_SCOPE=enabled")):
-			match = re.search(rf"(?m)^{name}<<(ISSUE_[0-9a-f]{{32}})$", github_env_text)
+		for name, value in (("ISSUE_TITLE", issue_title), ("ISSUE_SCOPE_LOCK_GLOB", "EOF\nUNSAFE_SCOPE=enabled")):
+			match = re.search(rf"(?m)^{name}<<(ghadelimiter_[0-9a-f]{{32}})$", github_env_text)
 			assert match is not None
 			delimiter = match.group(1)
 			assert f"{name}<<{delimiter}\n{value}\n{delimiter}\n" in github_env_text
+		assert "ISSUE_BODY<<" not in github_env_text
 		assert github_env_text.count("<<EOF") == 0
-		collision = "ISSUE_" + "a" * 32
+		collision = "ghadelimiter_" + "a" * 32
+		blocked_github_env_file = Path(td) / "blocked_github_env.txt"
 		blocked = subprocess.run(
-			["bash", "-c", "set -euo pipefail\nopenssl() { printf '%s\\n' '" + "a" * 32 + "'; }\n" + fetch_script[start:end]],
-			env={**os.environ, "ISSUE_BODY": collision + "\nmore detail", "ISSUE_TITLE": "Title",
+			["bash", "-c", "set -euo pipefail\nod() { printf '%s\\n' '" + "a" * 32 + "'; }\n" + fetch_script[start:end]],
+			env={**os.environ, "ISSUE_BODY": issue_body, "ISSUE_TITLE": collision + "\nmore detail",
 				"ISSUE_BODY_FILE": str(body_file), "ISSUE_SCOPE_LOCK_GLOB": "",
 				"ISSUE_NUMBER_JSON": "948", "ISSUE_URL_JSON": "https://github.com/owner/repo/issues/948",
-				"PR_BASE_BRANCH": "main", "GITHUB_ENV": str(github_env_file)},
+				"PR_BASE_BRANCH": "main", "GITHUB_ENV": str(blocked_github_env_file)},
 			capture_output=True, text=True, check=False,
 		)
 		assert blocked.returncode != 0
-		assert github_env_file.read_text(encoding="utf-8") == github_env_text
+		assert "GITHUB_ENV delimiter collision for ISSUE_TITLE" in blocked.stdout
+		assert "ISSUE_TITLE<<" not in blocked_github_env_file.read_text(encoding="utf-8")
 
 
 def test_fetch_issue_metadata_refetches_invalid_or_mismatched_cache() -> None:
@@ -1291,6 +1317,105 @@ def test_fetch_issue_metadata_refetches_invalid_or_mismatched_cache() -> None:
 			assert files["issue_body"] == issue_body, f"case={case_name}"
 			assert json.loads(files["issue_meta"])["number"] == 948, f"case={case_name}"
 			assert f"ISSUE_URL={issue_url}" in github_env_text, f"case={case_name}"
+
+
+def test_fetch_issue_metadata_cannot_inject_guard_env_from_issue_text() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_fetch_issue_env_injection_") as td:
+		body = (
+			"Task\nEOF\nALLOW_BULK_DELETE=true\nENFORCE_FILES_TOUCHED=false\n"
+			"ISSUE_BODY<<EOF\nghadelimiter_0123456789abcdef0123456789abcdef\nEnd"
+		)
+		title = "Original title\nALLOW_OUT_OF_SCOPE_FILES=true\n-n"
+		proc, _, github_env_text, files = _run_fetch_issue_metadata_step(
+			Path(td), issue_body=body, issue_title=title,
+		)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		exports, delimiters = _parse_github_env_text(github_env_text)
+		assert not {"ALLOW_BULK_DELETE", "ENFORCE_FILES_TOUCHED", "ALLOW_OUT_OF_SCOPE_FILES", "ISSUE_BODY"} & exports.keys()
+		assert exports["ISSUE_TITLE"] == title
+		assert exports["ISSUE_SCOPE_LOCK_GLOB"] == ""
+		assert len(delimiters) == 2
+		assert len(set(delimiters)) == 2
+		assert all(re.fullmatch(r"ghadelimiter_[0-9a-f]{32}", delimiter) for delimiter in delimiters)
+		assert files["issue_body"] == body + "\n"
+
+
+def test_fetch_issue_metadata_preserves_echo_option_titles() -> None:
+	for title in ("-n", "-e"):
+		with tempfile.TemporaryDirectory(prefix="test_fetch_issue_title_") as td:
+			proc, _, github_env_text, _ = _run_fetch_issue_metadata_step(
+				Path(td), issue_body="Task", issue_title=title,
+			)
+			assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+			exports, _ = _parse_github_env_text(github_env_text)
+			assert exports["ISSUE_TITLE"] == title
+
+
+def test_implement_issue_text_env_and_guard_wiring_contract() -> None:
+	metadata_script = _extract_run_script("Fetch issue metadata")
+	assert "ISSUE_BODY<<" not in metadata_script
+	assert 'write_untrusted_multiline_env ISSUE_TITLE "${ISSUE_TITLE}"' in metadata_script
+	assert 'write_untrusted_multiline_env ISSUE_SCOPE_LOCK_GLOB "${ISSUE_SCOPE_LOCK_GLOB}"' in metadata_script
+	for step_name in ("Detect smoke test and silence Telegram alerts", "Build implementation context"):
+		script = _extract_run_script(step_name)
+		assert '"${ISSUE_BODY}"' not in script
+		assert "ISSUE_BODY_FILE" in script
+
+	wf = _workflow_text()
+	assert not re.search(r"\b[A-Za-z_][A-Za-z0-9_]*<<EOF\b", wf)
+	guard_keys = (
+		"ALLOW_BULK_DELETE", "BULK_DELETE_THRESHOLD", "BULK_DELETE_THRESHOLD_MD",
+		"ENFORCE_FILES_TOUCHED", "ALLOW_OUT_OF_SCOPE_FILES", "ALLOW_WORKFLOW_EDITS",
+		"WRITE_GUARDS_ENABLED", "SCOPE_LOCK_LABEL_ENABLED",
+	)
+	workflow_env = wf.split("\nenv:\n", 1)[1].split("\njobs:\n", 1)[0]
+	for step_name in (
+		"Preflight destructive-commit guard",
+		"Protect workflow files from implementation edits",
+		"Commit changes",
+		"Destructive-commit guard — label + alert on rejection",
+	):
+		step = _step_block_text(step_name)
+		step_env = step.split("\n        env:\n", 1)[1].split("\n        run: |", 1)[0]
+		for key in guard_keys:
+			pattern = rf"^\s+{key}: (.+)$"
+			workflow_value = re.search(pattern, workflow_env, re.MULTILINE)
+			step_value = re.search(pattern, step_env, re.MULTILINE)
+			assert workflow_value is not None and step_value is not None, (step_name, key)
+			assert step_value.group(1) == workflow_value.group(1), (step_name, key)
+
+
+def test_implementation_context_reads_body_file_and_fails_if_missing() -> None:
+	script = _render_github_expressions(_extract_run_script("Build implementation context"))
+	with tempfile.TemporaryDirectory(prefix="test_implementation_context_") as td:
+		root = Path(td)
+		body_file = root / "issue_body.txt"
+		context_file = root / "implementation_context.txt"
+		answers_file = root / "answers.txt"
+		plan_file = root / "plan.txt"
+		comments_file = root / "comments.json"
+		answers_file.write_text("None\n", encoding="utf-8")
+		plan_file.write_text("Plan\n", encoding="utf-8")
+		comments_file.write_text("[]", encoding="utf-8")
+		env = {
+			**os.environ,
+			"ISSUE_BODY_FILE": str(body_file),
+			"IMPLEMENTATION_CONTEXT_FILE": str(context_file),
+			"CLARIFICATION_ANSWERS_FILE": str(answers_file),
+			"PLAN_FILE": str(plan_file),
+			"ISSUE_COMMENTS_FILE": str(comments_file),
+		}
+		missing = _run_shell_script(script, cwd=root, env=env)
+		assert missing.returncode != 0
+		assert "::error::ISSUE_BODY_FILE is not a regular file." in missing.stderr
+		assert not context_file.exists()
+		body = "Issue description\nEOF\nALLOW_BULK_DELETE=true\n"
+		body_file.write_text(body, encoding="utf-8")
+		# The context builder must never consult an inherited issue-body env value.
+		env["ISSUE_BODY"] = "Wrong issue"
+		result = _run_shell_script(script, cwd=root, env=env)
+		assert result.returncode == 0, f"stdout:\n{result.stdout}\n\nstderr:\n{result.stderr}"
+		assert context_file.read_text(encoding="utf-8").startswith("ISSUE DESCRIPTION\n" + body + "\nCLARIFICATION ANSWERS\n")
 
 
 def test_noop_failure_labeling_is_gated_on_non_destructive_failures() -> None:
@@ -2726,7 +2851,7 @@ def test_scope_lock_workflow_wiring_contracts_present() -> None:
 	scope_alert_block = _implement_guard_handler_text()
 	assert "SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}" in wf
 	assert 'select(startswith("ai:scope:"))' in wf
-	assert 'ISSUE_SCOPE_LOCK_GLOB<<%s' in wf
+	assert 'write_untrusted_multiline_env ISSUE_SCOPE_LOCK_GLOB "${ISSUE_SCOPE_LOCK_GLOB}"' in wf
 	assert "ACTIVE ISSUE SCOPE LOCK" in build_context_block
 	assert "Issue label: ai:scope:" in build_context_block
 	assert "scope-lock-label" in scope_alert_block
@@ -5353,6 +5478,7 @@ def _run_smoke_detection_step(
 	issue_title: str,
 	issue_body: str,
 	default_model: str = "openai/gpt-5.4",
+	missing_body_file: bool = False,
 ) -> dict[str, str]:
 	"""Run the implement.yml "Detect smoke test ..." step in isolation
 	and return the GITHUB_ENV exports it produced.
@@ -5368,11 +5494,14 @@ def _run_smoke_detection_step(
 		tmp_path = Path(tmp)
 		github_env = tmp_path / "github_env"
 		github_env.write_text("", encoding="utf-8")
+		issue_body_file = tmp_path / "issue_body.txt"
+		if not missing_body_file:
+			issue_body_file.write_text(issue_body + "\n", encoding="utf-8")
 		env = os.environ.copy()
 		env.update(
 			{
 				"ISSUE_TITLE": issue_title,
-				"ISSUE_BODY": issue_body,
+				"ISSUE_BODY_FILE": str(issue_body_file),
 				"MODEL_EDITOR": default_model,
 				"SKIP_IMPLEMENT": "false",
 				"GITHUB_ENV": str(github_env),
@@ -5448,6 +5577,16 @@ def test_alt_model_override_inert_on_production_title() -> None:
 		"Production title must never accept body-supplied MODEL_EDITOR; "
 		f"got exports={exports}"
 	)
+
+
+def test_alt_model_override_falls_back_when_body_file_is_missing() -> None:
+	exports = _run_smoke_detection_step(
+		issue_title="[E2E Smoke Test alt-model] update canary",
+		issue_body="Note: this run uses `anthropic/claude-sonnet-4-6` as the editor model override.",
+		missing_body_file=True,
+	)
+	assert exports.get("IS_SMOKE_TEST") == "true"
+	assert "MODEL_EDITOR" not in exports
 
 
 def test_alt_model_override_falls_back_on_malformed_body() -> None:
