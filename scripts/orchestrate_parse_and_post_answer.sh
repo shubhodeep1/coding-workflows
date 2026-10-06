@@ -79,7 +79,7 @@ enforce_answer_freshness() {
 			--comment-id "${CLARIFICATION_COMMENT_ID}" \
 			--command "answer" \
 			--status "${freshness_status}" \
-			--metadata-json "$(jq -cn --arg clarify_comment_id "${CLARIFICATION_COMMENT_ID}" --arg superseded_reason "${FRESHNESS_REASON}" '{clarify_comment_id: $clarify_comment_id, superseded_reason: $superseded_reason}')" >/dev/null || echo "::warning::Failed to record superseded completion in processed-command ledger (fail-open)."
+			--metadata-json "$(jq -cn --arg clarify_comment_id "${CLARIFICATION_COMMENT_ID}" --arg superseded_reason "${FRESHNESS_REASON}" '{clarify_comment_id: ($clarify_comment_id|tonumber), superseded_reason: $superseded_reason}')" >/dev/null || echo "::warning::Failed to record superseded completion in processed-command ledger (fail-open)."
 	fi
 	{
 		echo "SKIP_AUTO_ANSWER=true"

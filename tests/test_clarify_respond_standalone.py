@@ -558,6 +558,7 @@ def test_failed_recheck_marks_only_that_claim_retryable(tmp_path: Path) -> None:
 		'memory_processed_command_claim() { printf "%s\\n" "$*" >> "${POSTER_MEMORY_STATUS}.log"; printf claimed > "${POSTER_MEMORY_STATUS}"; printf \'{"claimed":true}\\n\'; }\n'
 		'memory_clarify_loop_guard() { printf \'{"result":{"blocked":false}}\\n\'; }\n'
 		'memory_processed_command_complete() {\n'
+		'  printf "%s\\n" "$*" >> "${POSTER_MEMORY_STATUS}.completions"\n'
 		'  while [ "$#" -gt 0 ]; do\n'
 		'    if [ "$1" = "--status" ]; then printf "%s" "$2" > "${POSTER_MEMORY_STATUS}"; break; fi\n'
 		'    shift\n'
@@ -573,6 +574,8 @@ def test_failed_recheck_marks_only_that_claim_retryable(tmp_path: Path) -> None:
 	assert status_file.read_text() == "answered"
 	assert len((tmp_path / "poster_memory_status.log").read_text().splitlines()) == 2
 	assert "--retry-on-status recheck_unavailable" in (tmp_path / "poster_memory_status.log").read_text()
+	completions = (tmp_path / "poster_memory_status.completions").read_text().splitlines()
+	assert [json.loads(line.split("--metadata-json ", 1)[1])["clarify_comment_id"] for line in completions] == [1, 1]
 
 
 @pytest.mark.parametrize("kwargs, reason, code", [
