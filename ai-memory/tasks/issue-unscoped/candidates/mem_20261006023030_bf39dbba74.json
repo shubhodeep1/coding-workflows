@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cEvery call keeps its unchanged codex or OpenCode command as the exit-75 fallback in the same attempt.\u201d\n  expected_change_site: `scripts/orchestrate_poll_process.sh::poller_judge_isolated`\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: When a poller judge\u2019s Claude call returns 75, lines 232-235 retry through `_poller_rb_judge_sandbox_attempt codex`. That path builds an OpenCode config and runs the review sandbox, rather than retaining and invoking the unchanged Codex command shown in the original PR diff. The README documents this isolated OpenCode fallback, so the implementation and PR description disagree.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: \u201cEvery call keeps its unchanged codex or OpenCode command as the exit-75 fallback in the same attempt.\u201d\n  Expected change site: `scripts/orchestrate_poll_process.sh::poller_judge_isolated`\n  Evidence of absence: When a poller judge\u2019s Claude call returns 75, lines 232-235 retry through `_poller_rb_judge_sandbox_attempt codex`. That path builds an OpenCode config and runs the review sandbox, rather than retaining and invoking the unchanged Codex command shown in the original PR diff. The README documents this isolated OpenCode fallback, so the implementation and PR description disagree.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "8a5c1b23f5cd047afe529bdb002a59c2cc83c9036a0d8065accfb672edd6cd66",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6208,
+    "run_id": "37402067319",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37402067319",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006023030_bf39dbba74",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6208,
+    "run_id": "37402067319"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T02:30:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
