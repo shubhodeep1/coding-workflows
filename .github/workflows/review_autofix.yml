@@ -6137,6 +6137,20 @@ jobs:
             echo "::warning::Failed to post review-blocked comment on PR #${PR_NUMBER}."
           fi
 
+          # Hand-over (replace-claude-sessions plan Phase 7, Q13): when the
+          # judge itself gave up (no usable output, an unsafe action it may
+          # not take, or a follow-up it could not describe), the PR gets
+          # ai:needs-human so the unblock scan picks it up. Transient gates
+          # keep retrying through stall recovery without a label.
+          case "${JUDGE_SKIP_REASON:-}" in
+            llm_failed*|json_parse_failed*|missing_followup_details|merged_pr_unsafe_action|auto_merge_disabled)
+              if ! gh api -X POST "repos/${{ github.repository }}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:needs-human" >/dev/null; then
+                echo "::warning::Failed to add ai:needs-human to PR #${PR_NUMBER} for the unblock judge."
+              fi
+              echo "UNBLOCK_HANDOVER pr=${PR_NUMBER} stop=rb_judge reason=${JUDGE_SKIP_REASON} outcome=labelled"
+              ;;
+          esac
+
       - name: Push all pending commits
         # Deferred push: autofix commits and/or conflict resolution commits
         # are pushed together AFTER labeling and auto-merge are configured.
