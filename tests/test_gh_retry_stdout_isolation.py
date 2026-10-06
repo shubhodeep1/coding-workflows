@@ -390,3 +390,22 @@ def test_review_watchdog_state_is_job_local_and_expires(tmp_path: Path) -> None:
 	result = subprocess.run(["bash", "-c", f'source "{GH_HELPERS}"; gh_review_pr_state o/r 7'], env=env, capture_output=True, text=True)
 	assert result.returncode == 0 and result.stdout == "open\n"
 	assert call_log.read_text().count("called") == 2
+
+
+def test_review_watchdog_does_not_cache_terminal_state(tmp_path: Path) -> None:
+	"""A reopened PR must not be aborted based on an earlier closed read."""
+	call_log = tmp_path / "calls"
+	state_file = tmp_path / "state"
+	state_file.write_text("closed\n")
+	env = {**os.environ, "RUNNER_TEMP": str(tmp_path), "GITHUB_RUN_ID": "26",
+		"CALL_LOG": str(call_log), "STATE_FILE": str(state_file)}
+	script = f'''source "{GH_HELPERS}"
+gh() {{ printf 'called\\n' >> "$CALL_LOG"; read -r terminal_state_from_fixture < "$STATE_FILE"; printf '%s\\n' "$terminal_state_from_fixture"; }}
+gh_review_pr_state o/r 7
+'''
+	result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+	assert result.returncode == 0 and result.stdout == "closed\n", result.stderr
+	state_file.write_text("open\n")
+	result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+	assert result.returncode == 0 and result.stdout == "open\n", result.stderr
+	assert call_log.read_text().count("called") == 2

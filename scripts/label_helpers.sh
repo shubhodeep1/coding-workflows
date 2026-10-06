@@ -94,6 +94,7 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:security-pass-fixing"]="Security-pass fix-up issue in pipeline"
 	["ai:security-pass-failed"]="Project security pass exhausted its fix-cycle budget"
 	["ai:clarify-failed"]="Clarify workflow failed before producing a valid response"
+	["ai:reclarify-requeue"]="Trusted /reclarify failed before routing; poller will retry after PAT budget recovers"
 	["ai:clarify-respond-failed"]="Orchestrator clarify-respond workflow failed before posting an answer"
 	["ai:plan-failed"]="Plan workflow failed before producing an approved implementation plan"
 	["ai:implement-diagnose-failed"]="Implement diagnose workflow failed while generating fix-up guidance"

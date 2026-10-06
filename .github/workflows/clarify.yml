@@ -1597,7 +1597,7 @@ jobs:
       # A token-created marker does not start a new workflow; the scheduled
       # poller replays this command with the PAT once the budget recovers.
       - name: Queue failed reclarify for poller
-        if: ${{ failure() && github.event_name == 'issue_comment' && github.event.comment.user.type == 'User' && steps.parse_codex.outputs.blocked != 'true' && steps.clarify_route.outputs.is_closed != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' || steps.clarify_route.outputs.issue_implementer == 'claude') && steps.post_questions.outcome != 'success' && steps.post_clear.outcome != 'success' && (steps.clarify_route.outputs.issue_implementer != 'claude' || steps.claude_handoff.outcome != 'success') }}
+        if: ${{ failure() && github.event_name == 'issue_comment' && github.event.comment.user.type == 'User' && steps.parse_codex.outputs.blocked != 'true' && steps.clarify_route.outputs.is_closed != 'true' && steps.clarify_route.outputs.skip_codex != 'true' && steps.post_questions.outcome != 'success' && steps.post_clear.outcome != 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
@@ -1609,12 +1609,12 @@ jobs:
           [[ "${ISSUE_NUMBER}" =~ ^[1-9][0-9]*$ && "${SOURCE_COMMENT_ID}" =~ ^[1-9][0-9]*$ ]] || exit 1
           [[ "${SOURCE_COMMENT_BODY}" == /reclarify* ]] || exit 1
           case "${SOURCE_ASSOCIATION}" in OWNER|MEMBER|COLLABORATOR) ;; *) exit 1 ;; esac
-          # Existing label contract is provisioned by sync_ai_labels; failure
-          # here remains a visible failed step rather than silently losing work.
-          gh api -X POST "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/labels" \
-            -f 'labels[]=ai:reclarify-requeue' >/dev/null
           gh api -X POST "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
             -f body="<!-- ai:reclarify-requeue:v1 source=${SOURCE_COMMENT_ID} -->" >/dev/null
+          # Never leave a queued label without the source marker the poller
+          # requires to authorize replay. Label failure stays visible in CI.
+          gh api -X POST "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/labels" \
+            -f 'labels[]=ai:reclarify-requeue' >/dev/null
 
       - name: Telegram failure notification
         if: failure() || cancelled()

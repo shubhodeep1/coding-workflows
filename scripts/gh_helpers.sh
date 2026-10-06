@@ -98,15 +98,17 @@ gh_review_pr_state()
 			read -r saved_repo saved_number saved_state expires < "${cache_file}" || true
 			if [ "${saved_repo:-}" = "${repo}" ] && [ "${saved_number:-}" = "${number}" ] &&
 			   [[ "${expires:-}" =~ ^[0-9]+$ ]] && [ "${expires}" -gt "${now}" ] &&
-			   [[ "${saved_state:-}" =~ ^(open|closed|merged)$ ]]; then
+			   [ "${saved_state:-}" = "open" ]; then
 				printf '%s\n' "${saved_state}"
 				exit 0
 			fi
 		fi
 		state="$(gh_retry gh api "repos/${repo}/pulls/${number}" --jq .state 2>/dev/null)" || state=""
 		if [[ "${state}" =~ ^(open|closed|merged)$ ]]; then
-			printf '%s %s %s %s\n' "${repo}" "${number}" "${state}" "$((now + 120))" > "${cache_file}.tmp" &&
-				mv -f "${cache_file}.tmp" "${cache_file}"
+			if [ "${state}" = "open" ]; then
+				printf '%s %s %s %s\n' "${repo}" "${number}" "${state}" "$((now + 120))" > "${cache_file}.tmp" &&
+					mv -f "${cache_file}.tmp" "${cache_file}"
+			fi
 			printf '%s\n' "${state}"
 		else
 			printf 'open\n'

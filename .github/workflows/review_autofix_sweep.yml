@@ -289,55 +289,6 @@ jobs:
             snapshot_active_review_runs "${wf}"
           done
 
-          # One GraphQL query per bounded set of eligible Claude PRs. The
-          # comments connection is only evidence when complete; uncertain
-          # identity, pagination or partial GraphQL data dispatches normally.
-          declare -A handoff_proven=()
-          mapfile -t claude_rows < <(printf '%s' "${prs_json}" | jq -c '.[] | select(.head_ref | startswith("claude/"))')
-          # Neither the PR list nor the Actions-runs snapshot identifies
-          # the account that posted the hand-off; read it only when needed.
-          handoff_author=""
-          if [ "${#claude_rows[@]}" -gt 0 ]; then
-            handoff_author="$(gh api user --jq .login 2>/dev/null || true)"
-          fi
-          if [[ "${handoff_author}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]]; then
-            for ((offset=0; offset<${#claude_rows[@]}; offset+=30)); do
-              aliases=""
-              for ((i=offset; i<offset+30 && i<${#claude_rows[@]}; i++)); do
-                n="$(printf '%s' "${claude_rows[i]}" | jq -r '.number')"
-                [[ "${n}" =~ ^[1-9][0-9]*$ ]] || continue
-                aliases+="p${n}: pullRequest(number: ${n}) { number headRefOid isDraft mergeStateStatus title labels(first: 100) { pageInfo { hasNextPage } nodes { name } } comments(last: 100) { pageInfo { hasPreviousPage } nodes { author { login } body } } } "
-              done
-              [ -n "${aliases}" ] || continue
-              owner="${REPOSITORY%%/*}"; repo_name="${REPOSITORY#*/}"
-              [[ "${owner}" =~ ^[A-Za-z0-9_.-]+$ && "${repo_name}" =~ ^[A-Za-z0-9_.-]+$ ]] || continue
-              query="query { repository(owner: \"${owner}\", name: \"${repo_name}\") { ${aliases} } }"
-              if result="$(GH_TOKEN="${READ_TOKEN}" gh api graphql -f query="${query}" 2>/dev/null)" && \
-                printf '%s' "${result}" | jq -e '(.errors? // []) | length == 0' >/dev/null 2>&1; then
-                while IFS= read -r n; do
-                  [[ "${n}" =~ ^[1-9][0-9]*$ ]] || continue
-                  handoff_proven["${n}"]="$(printf '%s' "${result}" | jq -r --arg key "p${n}" --arg author "${handoff_author}" '
-                    .data.repository[$key] as $pr |
-                    if ($pr.number == ($key | ltrimstr("p") | tonumber)) and
-                       ($pr.headRefOid | type == "string") and
-                       ($pr.mergeStateStatus != null and $pr.mergeStateStatus != "UNKNOWN" and $pr.mergeStateStatus != "DIRTY") and
-                       ($pr.isDraft == false) and
-                       ($pr.title | type == "string") and
-                       ($pr.labels.pageInfo.hasNextPage == false) and
-                       ($pr.labels.nodes | type == "array") and
-                       ($pr.comments.pageInfo.hasPreviousPage == false) and
-                       ($pr.comments.nodes | type == "array") and
-                       (($pr.title | contains("[force-review]")) | not) and
-                       ([$pr.labels.nodes[]?.name] | index("force-review") == null) and
-                       any($pr.comments.nodes[]?; .author.login == $author and
-                         (.body | test("^## Review round [0-9]+: (findings handed|merge conflict, handed) to the Claude session\\n")) and
-                         (.body | split("\n") | any(.[]; test("^<!-- ai:claude-fixer-handoff:v1 kind=(findings|conflict) head=" + $pr.headRefOid + " round=[0-9]+ -->$"))))
-                    then $pr.headRefOid else "" end' 2>/dev/null || true)"
-                done < <(printf '%s' "${result}" | jq -r '.data.repository | keys[] | select(test("^p[1-9][0-9]*$")) | ltrimstr("p")' 2>/dev/null)
-              fi
-            done
-          fi
-
           # Read into an array so counters survive the loop (no subshell pipe).
           mapfile -t rows < <(printf '%s' "${prs_json}" | jq -c '.[]')
 
@@ -346,7 +297,6 @@ jobs:
             head_ref="$(printf '%s' "${row}" | jq -r '.head_ref')"
             pr_title="$(printf '%s' "${row}" | jq -r '.title')"
             pr_body="$(printf '%s' "${row}" | jq -r '.body')"
-            pr_head_sha="$(printf '%s' "${row}" | jq -r '.head_sha // ""')"
 
             # The PR number is the only PR data the dispatch carries
             # (issue #4618), so accept nothing but a positive integer.
@@ -390,11 +340,6 @@ jobs:
             done
             if [ "${active}" -eq 1 ]; then
               skipped_active=$((skipped_active + 1))
-              continue
-            fi
-
-            if [[ "${pr_head_sha}" =~ ^[0-9a-f]{40}$ ]] && [ "${handoff_proven["${pr_number}"]:-}" = "${pr_head_sha}" ]; then
-              echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=claude_fixer_awaiting_session"
               continue
             fi
 

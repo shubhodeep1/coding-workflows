@@ -24940,7 +24940,7 @@ echo "========================================"
 STANDALONE_PRS="$(gh_retry gh pr list \
 	--repo "${GITHUB_REPOSITORY}" \
 	--state open \
-	--json number,headRefName,baseRefName,isDraft \
+	--json number,headRefName,headRefOid,baseRefName,isDraft \
 	--limit 3000 2>/dev/null || echo "[]")"
 
 STANDALONE_COUNT="$(echo "${STANDALONE_PRS}" | jq 'length')"
@@ -24971,7 +24971,7 @@ if [[ "${GITHUB_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
 			fi
 			_standalone_num="$(printf '%s' "${STANDALONE_PRS}" | jq -r ".[${_standalone_i}].number // empty")"
 			[[ "${_standalone_num}" =~ ^[1-9][0-9]*$ ]] || continue
-			_standalone_aliases+="p${_standalone_num}: pullRequest(number: ${_standalone_num}) { number state headRefName isDraft mergeStateStatus comments(last: 100) { pageInfo { hasPreviousPage } nodes { body } } } "
+			_standalone_aliases+="p${_standalone_num}: pullRequest(number: ${_standalone_num}) { number state headRefName headRefOid isDraft mergeStateStatus comments(last: 100) { pageInfo { hasPreviousPage } nodes { body } } } "
 		done
 		[ -n "${_standalone_aliases}" ] || continue
 		_standalone_query="query { repository(owner: \"${_standalone_owner}\", name: \"${_standalone_name}\") { ${_standalone_aliases} } }"
@@ -24982,17 +24982,18 @@ if [[ "${GITHUB_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
 			while IFS= read -r _standalone_num; do
 				[[ "${_standalone_num}" =~ ^[1-9][0-9]*$ ]] || continue
 				_standalone_head="$(printf '%s' "${STANDALONE_PRS}" | jq -r --argjson num "${_standalone_num}" '.[] | select(.number == $num) | .headRefName // ""' | head -n 1)"
-				if printf '%s' "${_standalone_response}" | jq -e --arg key "p${_standalone_num}" --arg ref "${_standalone_head}" --argjson num "${_standalone_num}" \
-					'.data.repository[$key] | .number == $num and .headRefName == $ref and .state == "OPEN" and .isDraft == false and .mergeStateStatus == "CLEAN"' >/dev/null 2>&1; then
-					_STANDALONE_CLEAN_PRS["${_standalone_num}"]="${_standalone_head}"
+				_standalone_list_oid="$(printf '%s' "${STANDALONE_PRS}" | jq -r --argjson num "${_standalone_num}" '.[] | select(.number == $num) | .headRefOid // ""' | head -n 1)"
+				if printf '%s' "${_standalone_response}" | jq -e --arg key "p${_standalone_num}" --arg ref "${_standalone_head}" --arg oid "${_standalone_list_oid}" --argjson num "${_standalone_num}" \
+					'.data.repository[$key] | .number == $num and .headRefName == $ref and .headRefOid == $oid and ($oid | test("^[0-9a-f]{40}$")) and .state == "OPEN" and .isDraft == false and .mergeStateStatus == "CLEAN"' >/dev/null 2>&1; then
+					_STANDALONE_CLEAN_PRS["${_standalone_num}"]="${_standalone_list_oid}"
 				fi
 				# Only a complete comment connection can prove no workflow warning
 				# exists. Otherwise the original REST history check still runs.
-				if printf '%s' "${_standalone_response}" | jq -e --arg key "p${_standalone_num}" --arg ref "${_standalone_head}" --argjson num "${_standalone_num}" \
-					'.data.repository[$key] | .number == $num and .headRefName == $ref and .state == "OPEN" and
+				if printf '%s' "${_standalone_response}" | jq -e --arg key "p${_standalone_num}" --arg ref "${_standalone_head}" --arg oid "${_standalone_list_oid}" --argjson num "${_standalone_num}" \
+					'.data.repository[$key] | .number == $num and .headRefName == $ref and .headRefOid == $oid and ($oid | test("^[0-9a-f]{40}$")) and .state == "OPEN" and
 					 (.comments.pageInfo.hasPreviousPage == false) and (.comments.nodes | type) == "array" and
 					 (any(.comments.nodes[]; (.body // "") | contains("Editor no-op suspicious")) | not)' >/dev/null 2>&1; then
-					_STANDALONE_NOOP_CLEAR_PRS["${_standalone_num}"]="${_standalone_head}"
+					_STANDALONE_NOOP_CLEAR_PRS["${_standalone_num}"]="${_standalone_list_oid}"
 				fi
 			done < <(printf '%s' "${_standalone_response}" | jq -r '.data.repository | keys[] | select(test("^p[1-9][0-9]*$")) | ltrimstr("p")' 2>/dev/null)
 		fi
@@ -25002,6 +25003,7 @@ fi
 for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	S_PR="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].number")"
 	S_HEAD="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].headRefName")"
+	S_HEAD_OID="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].headRefOid // \"\"")"
 	S_BASE="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].baseRefName")"
 	S_DRAFT="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].isDraft // false")"
 	if [ -z "${S_PR}" ] || [ "${S_PR}" = "null" ]; then
@@ -25028,7 +25030,7 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 		echo "  PR #${S_PR} is a draft claude/* PR; skipping standalone conflict recovery."
 		continue
 	fi
-	if [ "${_STANDALONE_CLEAN_PRS["${S_PR}"]:-}" = "${S_HEAD}" ]; then
+	if [[ "${S_HEAD_OID}" =~ ^[0-9a-f]{40}$ ]] && [ "${_STANDALONE_CLEAN_PRS["${S_PR}"]:-}" = "${S_HEAD_OID}" ]; then
 		continue
 	fi
 
@@ -25211,6 +25213,7 @@ fi
 for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	N_PR="$(echo "${STANDALONE_PRS}" | jq -r ".[${nidx}].number")"
 	N_HEAD="$(echo "${STANDALONE_PRS}" | jq -r ".[${nidx}].headRefName")"
+	N_HEAD_OID="$(echo "${STANDALONE_PRS}" | jq -r ".[${nidx}].headRefOid // \"\"")"
 	N_BASE="$(echo "${STANDALONE_PRS}" | jq -r ".[${nidx}].baseRefName")"
 	N_DRAFT="$(echo "${STANDALONE_PRS}" | jq -r ".[${nidx}].isDraft // false")"
 
@@ -25225,7 +25228,7 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	if [[ "${N_HEAD}" == claude/* ]] && [ "${N_DRAFT}" = "true" ]; then
 		continue
 	fi
-	if [ "${_STANDALONE_NOOP_CLEAR_PRS["${N_PR}"]:-}" = "${N_HEAD}" ]; then
+	if [[ "${N_HEAD_OID}" =~ ^[0-9a-f]{40}$ ]] && [ "${_STANDALONE_NOOP_CLEAR_PRS["${N_PR}"]:-}" = "${N_HEAD_OID}" ]; then
 		continue
 	fi
 	# Skip integration / orchestrator-managed branches — those have
