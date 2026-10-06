@@ -1126,6 +1126,23 @@ not delete wrappers that are already present in `.github/workflows/`.
 > than checking an unrelated current branch. A push with no refspec keeps the
 > existing current-branch check.
 
+> **Source-repo `.claude/` parity:** On pushes to `main` that change
+> `workflow-templates/.claude/**`, `sync-claude-live-copies.yml` opens or
+> refreshes a PR copying template-only changes into this repo's `.claude/`.
+> This includes new templates without a live file and template changes missed
+> by a failed or superseded sync run. An intentional newer live-file edit, or
+> a file listed in `.github/ai/claude_template_divergence.json`, is not
+> overwritten. Copies preserve executable permissions; parity CI checks both
+> contents and execute bits. An unusable push `before` SHA skips syncing; the
+> parity CI test still reports missing or differing live files. Template or
+> live-path symlinks fail the sync/parity check instead of being followed,
+> preventing copies from reading credentials or writing outside `.claude/`.
+> For PRs into `main`, CI prepares template-only copies in its disposable
+> checkout before running parity tests, so those PRs can pass before the
+> post-merge sync opens a live-copy PR. A PR that edits its live copy but
+> leaves it mismatched still fails; push CI checks the committed tree without
+> preparation and reports any remaining drift.
+
 > **Retired upstream files are removed on sync:** the `update_workflows.yml`
 > step `Remove retired upstream files` reads the manifest
 > `workflow-templates/retired_files.txt`, which lists `.claude/` files that
@@ -1976,6 +1993,14 @@ attempts of that role in the same job.
 | `scripts/claude_anthropic_relay.py` | Host relay for the sandboxed roles (clarify, review editor): the container gets `ANTHROPIC_BASE_URL=http://127.0.0.1:8765` and a placeholder token; the host side swaps in the real OAuth token and forwards only `POST /v1/messages` to `api.anthropic.com`. |
 | `.github/actions/install-claude` | Installs and verifies the pinned `@anthropic-ai/claude-code` on Node 22. |
 | `.github/workflows/claude-engine-smoke.yml` | Dispatch-only self-test per tool profile: offline checks, then the context gate, P5 denials and relay gate when a credential is available, or the codex fallback when it is not. |
+
+For a POST rejected during initial request or forwarded-header validation,
+the relay waits at most one second to drain a declared body with a short decimal `Content-Length`
+of at most `MAX_BODY` before returning 400. A client that withholds the body
+still receives the rejection; the 400 response has its own one-second socket
+timeout even if the drain deadline expires. Malformed or oversized lengths are
+rejected without draining. All rejection responses, including GET and CONNECT,
+use the same one-second socket timeout for the response write.
 
 **Which engine a role uses**, first match wins: the work item's labels
 (`ai:codex` beats `ai:engine-claude`, which also forces Opus 5.5 at `high`),
