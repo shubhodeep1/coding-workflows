@@ -1515,14 +1515,21 @@ through `clarify → plan → implement → review`.
   a failed non-reporter job, and a failure comment on the source issue linking
   that run. Consumer comments must have a GitHub-reported OWNER, MEMBER or
   COLLABORATOR association, or be from `github-actions[bot]`; consumer `GH_PAT`
-  accounts need not match the intake's. Self-repo reports additionally require
+  accounts need not match the intake's. This association and the run event are
+  checked before any job logs are read. Self-repo reports additionally require
   the comment author to match the intake's authenticated pipeline account.
   A completed run must have failed; an in-progress run is accepted once its
   phase job failed. API failures or mismatches skip with
-  `WORKFLOW_HEAL skip reason=phase_report_unverified` and a Telegram WARNING.
+  `WORKFLOW_HEAL skip reason=provenance_rejected` before job collection or
+  `WORKFLOW_HEAL skip reason=phase_report_unverified` during the phase-job check,
+  and send a Telegram WARNING.
   A missing failure comment, or unavailable pipeline-account identity for a
   self-repo report, also skips (even for a real failed run). Failed evidence
   fetches are logged; per-credential sender binding is outside this check.
+  Label-escalation `issue` and `pull_request` reports remain outside the
+  provenance gate: their issue/comment-derived run references can still cause
+  job logs to be read without these checks. The shared `GH_PAT` retains access
+  to all registered consumer repositories.
   The intake fingerprints
   verified reports from the current failed run's job log (earlier streak logs
   are diagnosis context only; `phase:<phase>_failed` when the current log cannot

@@ -11,11 +11,10 @@
 # failed clarify / plan / implement run (`phase_failure`), a failed release /
 # promotion `workflow_run`, or a manual `workflow_dispatch` re-run. It:
 #
-#   1. Validates the payload (every field is re-checked; phase_failure reports
-#      also require GitHub-read run, job and issue-comment provenance before
-#      dedup or escalation; the body, comments, and logs stay untrusted data
-#      for the model; an `autofix_failure` report from
-#      the review/autofix workflow carries its own evidence text) and applies the skip gates:
+#   1. Validates the payload and verifies phase, autofix and release run
+#      provenance before reading their logs (label escalations are excluded)
+#      (the body, comments, and logs stay untrusted data for the model; an
+#      `autofix_failure` report carries its own evidence text), then applies the skip gates:
 #      kill switch, unregistered source repo, smoke-test fixture, self run,
 #      downstream release-gate failure already reported by the gate itself.
 #   2. Fetches the failed jobs + a filtered tail of their logs for the linked
@@ -204,6 +203,64 @@ fi
 SOURCE_LABEL="${SOURCE_REPO}#${ISSUE_NUMBER:-run}"
 log "received source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} label=${LABEL:-none} workflow=${PAYLOAD_WORKFLOW_NAME:-none}"
 
+# --- Provenance (before any log read) --------------------------------------
+
+PENDING_CURRENT_RUN=""
+if [[ "${SOURCE_KIND}" == "phase_failure" || "${SOURCE_KIND}" == "autofix_failure" || "${SOURCE_KIND}" == "workflow_run" ]]; then
+	PROVENANCE_DIR="${RUNTIME_DIR}/provenance"
+	mkdir -p "${PROVENANCE_DIR}"
+	PROVENANCE_RUNS="${PROVENANCE_DIR}/runs.json"
+	PROVENANCE_COMMENTS=""
+	PROVENANCE_RESULT="${PROVENANCE_DIR}/result.json"
+	PROVENANCE_LOGIN=""
+	printf '{}\n' > "${PROVENANCE_RUNS}"
+	# §14 API audit: the existing actions/runs/{id}/jobs call returns no run
+	# repository, workflow path, conclusion or PR association, and no issue/PR
+	# comments were read here before. At most one /user read, three run GETs,
+	# and one paginated comment read; failures reject rather than bypass this gate.
+	if [ "${SOURCE_KIND}" != "workflow_run" ]; then
+		if [ "${SOURCE_KIND}" != "phase_failure" ] || [ "${SOURCE_REPO,,}" = "${SELF_REPO,,}" ]; then
+			PROVENANCE_LOGIN="$(gh_retry gh api --method GET user --jq .login 2>/dev/null || true)"
+		fi
+		PROVENANCE_COMMENTS="${PROVENANCE_DIR}/comments.json"
+		if ! gh_retry gh api --method GET --paginate "repos/${SOURCE_REPO}/issues/${ISSUE_NUMBER}/comments" -F per_page=100 \
+			--jq '.[] | {id, body: (.body // ""), user: (.user // {}), author_association: (.author_association // "")}' 2>/dev/null \
+			| jq -s '.' > "${PROVENANCE_COMMENTS}" 2>/dev/null \
+			|| ! jq -e 'type == "array"' "${PROVENANCE_COMMENTS}" >/dev/null 2>&1; then
+			PROVENANCE_COMMENTS=""
+		fi
+	fi
+	while IFS= read -r provenance_run_id; do
+		PROVENANCE_RUN_FILE="${PROVENANCE_DIR}/run-${provenance_run_id}.json"
+		if gh_api_json_to_file "${PROVENANCE_RUN_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${provenance_run_id}" 2>/dev/null \
+			&& jq -e 'type == "object"' "${PROVENANCE_RUN_FILE}" >/dev/null 2>&1; then
+			jq --arg id "${provenance_run_id}" --slurpfile run "${PROVENANCE_RUN_FILE}" '. + {($id): $run[0]}' "${PROVENANCE_RUNS}" > "${PROVENANCE_RUNS}.tmp" \
+				&& mv "${PROVENANCE_RUNS}.tmp" "${PROVENANCE_RUNS}"
+		fi
+	done < <(jq -r '.run_refs[].run_id' "${PAYLOAD_FILE}")
+	if ! python3 "${HEAL_PY}" verify-run-provenance --payload-json "${PAYLOAD_FILE}" --runs-json "${PROVENANCE_RUNS}" \
+		--comments-json "${PROVENANCE_COMMENTS}" --trusted-login "${PROVENANCE_LOGIN}" --self-repo "${SELF_REPO}" > "${PROVENANCE_RESULT}" 2>/dev/null \
+		|| ! jq -e 'type == "object" and (.status == "ok" or .status == "rejected") and (.run_refs | type == "array") and (.rejections | type == "array")' "${PROVENANCE_RESULT}" >/dev/null 2>&1; then
+		printf '{"status":"rejected","reason":"verifier_error","rejections":[]}\n' > "${PROVENANCE_RESULT}"
+	fi
+	while IFS=$'\t' read -r provenance_run_id provenance_reason; do
+		log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${provenance_run_id} reason=${provenance_reason}"
+	done < <(jq -r '.rejections[] | [.run_id, .reason] | @tsv' "${PROVENANCE_RESULT}")
+	if [ "$(jq -r '.status' "${PROVENANCE_RESULT}")" != "ok" ]; then
+		PROVENANCE_REASON="$(jq -r '.reason // "verifier_error"' "${PROVENANCE_RESULT}")"
+		log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=${PROVENANCE_REASON}"
+		tg_send_msg "Workflow failure heal rejected run provenance for ${SOURCE_REPO} (${SOURCE_KIND}, issue ${ISSUE_NUMBER:-none}, reason ${PROVENANCE_REASON})."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		exit 0
+	fi
+	PENDING_CURRENT_RUN="$(jq -r '.pending_current_run // ""' "${PROVENANCE_RESULT}")"
+	if ! jq --slurpfile result "${PROVENANCE_RESULT}" '.run_refs = $result[0].run_refs' "${PAYLOAD_FILE}" > "${PAYLOAD_FILE}.tmp" \
+		|| ! mv "${PAYLOAD_FILE}.tmp" "${PAYLOAD_FILE}"; then
+		log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=verifier_error"
+		exit 0
+	fi
+	log "provenance_verified source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} runs=$(jq '.run_refs | length' "${PAYLOAD_FILE}")"
+fi
+
 # --- Collect failed jobs + logs --------------------------------------------
 
 LOG_DIR="${RUNTIME_DIR}/logs"
@@ -223,11 +280,29 @@ while IFS=$'\t' read -r run_id run_url; do
 	JOBS_FILE="${LOG_DIR}/run-${run_id}-jobs.json"
 	if ! gh_api_json_to_file "${JOBS_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${run_id}/jobs" -F per_page=100; then
 		log "warn jobs_fetch_failed source=${SOURCE_REPO} run=${run_id}"
+		if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${RUN_COUNT}" -eq 1 ]; then
+			log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${run_id} reason=current_run_jobs_unavailable"
+			log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=current_run_jobs_unavailable"
+			exit 0
+		fi
 		continue
 	fi
 	if ! jq -e '.jobs | type == "array"' "${JOBS_FILE}" >/dev/null 2>&1; then
 		log "warn jobs_fetch_invalid source=${SOURCE_REPO} run=${run_id}"
+		if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${RUN_COUNT}" -eq 1 ]; then
+			log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${run_id} reason=current_run_jobs_unavailable"
+			log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=current_run_jobs_unavailable"
+			exit 0
+		fi
 		continue
+	fi
+	if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${RUN_COUNT}" -eq 1 ] \
+		&& ! jq -e 'any(.jobs[]; (.conclusion == "failure" or .conclusion == "timed_out")
+			and (.name | type == "string") and .name != "heal-report"
+			and (.name | endswith("/ heal-report") | not))' "${JOBS_FILE}" >/dev/null 2>&1; then
+		log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${run_id} reason=current_run_no_failed_job"
+		log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=current_run_no_failed_job"
+		exit 0
 	fi
 	JOB_COUNT=0
 	while IFS=$'\t' read -r job_id job_name workflow_name failing_step; do
@@ -268,6 +343,13 @@ while IFS=$'\t' read -r run_id run_url; do
 		| map(gsub("[\\t\\n\\r]"; " ")) | @tsv' "${JOBS_FILE}")
 done < <(jq -r '.run_refs[] | [.run_id, .url] | @tsv' "${PAYLOAD_FILE}")
 
+if [ "${SOURCE_KIND}" = "phase_failure" ] && [ -n "${PENDING_CURRENT_RUN}" ] \
+	&& ! jq -e --arg run_id "${PENDING_CURRENT_RUN}" 'any(.[]; .run_id == $run_id)' "${SUMMARIES_FILE}" >/dev/null 2>&1; then
+	log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${PENDING_CURRENT_RUN} reason=current_run_no_failed_job"
+	log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=current_run_no_failed_job"
+	exit 0
+fi
+
 SUMMARY_COUNT="$(jq 'length' "${SUMMARIES_FILE}")"
 FIRST_WORKFLOW_NAME="$(jq -r 'map(select(.workflow_name != "")) | first | .workflow_name // ""' "${SUMMARIES_FILE}")"
 FIRST_FAILING_STEP="$(jq -r 'map(select(.failing_step != "")) | first | .failing_step // ""' "${SUMMARIES_FILE}")"
@@ -284,37 +366,12 @@ fi
 
 if [ "${SOURCE_KIND}" = "phase_failure" ]; then
 	PHASE_RUN_ID="$(_pf '.run_refs[0].run_id // ""')"
-	PHASE_RUN_FILE="${RUNTIME_DIR}/phase_run.json"
+	PHASE_RUN_FILE="${PROVENANCE_DIR}/run-${PHASE_RUN_ID}.json"
 	PHASE_JOBS_FILE="${LOG_DIR}/run-${PHASE_RUN_ID}-jobs.json"
-	PHASE_COMMENTS_FILE="${RUNTIME_DIR}/phase_issue_comments.json"
+	PHASE_COMMENTS_FILE="${PROVENANCE_COMMENTS}"
 	PHASE_PROVENANCE_FILE="${RUNTIME_DIR}/phase_provenance.json"
-	# Consumer GH_PAT accounts can differ from this repo's: trust the source
-	# issue's GitHub-reported author association instead. For self-reports,
-	# require the same pipeline account that posts the failure comment.
-	PHASE_COMMENT_AUTHOR=""
-	if [ "${SOURCE_REPO,,}" = "${SELF_REPO,,}" ]; then
-		# §14 audit: run/job and issue reads do not identify the token's account.
-		PHASE_COMMENT_AUTHOR="$(gh_retry gh api --method GET user --jq '.login // empty' 2>/dev/null || true)"
-		if [ -z "${PHASE_COMMENT_AUTHOR}" ]; then
-			log "warn phase_provenance_fetch_failed evidence=identity source=${SOURCE_REPO} run=${PHASE_RUN_ID}"
-		fi
-	fi
-	# §14 audit: the existing jobs list has no run event, path, repository or
-	# status; job logs, heal-issue lists and branch reads have no run metadata.
-	# This is one read of the claimed run in the registered source repository.
-	if ! gh_api_json_to_file "${PHASE_RUN_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${PHASE_RUN_ID}"; then
-		log "warn phase_provenance_fetch_failed evidence=run source=${SOURCE_REPO} run=${PHASE_RUN_ID}"
-		rm -f "${PHASE_RUN_FILE}"
-	fi
-	# §14 audit: the intake only POSTs to source-issue comments; the reporter's
-	# comment snapshot in the payload is untrusted. No existing read can prove
-	# the issue/run link. This is one paginated read of a single foreign issue.
-	if ! gh_retry gh api --method GET --paginate "repos/${SOURCE_REPO}/issues/${ISSUE_NUMBER}/comments" -F per_page=100 \
-		--jq '.[] | {user: {login: (.user.login // "")}, author_association: (.author_association // ""), body: (.body // "")}' \
-		| jq -s '.' > "${PHASE_COMMENTS_FILE}"; then
-		log "warn phase_provenance_fetch_failed evidence=comments source=${SOURCE_REPO} issue=${ISSUE_NUMBER} run=${PHASE_RUN_ID}"
-		rm -f "${PHASE_COMMENTS_FILE}"
-	fi
+	# Reuse the run, comment and account snapshots already checked before log reads.
+	PHASE_COMMENT_AUTHOR="${PROVENANCE_LOGIN}"
 	if ! python3 "${HEAL_PY}" verify-phase-provenance --payload-json "${PAYLOAD_FILE}" \
 		--run-json "${PHASE_RUN_FILE}" --jobs-json "${PHASE_JOBS_FILE}" \
 		--comments-json "${PHASE_COMMENTS_FILE}" --self-repo "${SELF_REPO}" \
