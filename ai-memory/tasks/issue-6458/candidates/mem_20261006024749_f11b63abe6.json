@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: Option A is the only choice that follows the finding's full recommendation: an isolated process and filesystem namespace, the whole editor process tree ended before credentials come back, and credentialed Git kept away from the editor. B and C close the restore race but leave same-UID `/proc/<pid>/environ` access open while the editor runs, and the advisory is rated high/9. The repo already runs both engines this way. `scripts/clarify_isolated_run.sh` runs codex and claude in `--network none --read-only --cap-drop ALL` containers with a host-side broker or relay. `scripts/review_untrusted_sandbox.sh` already does a writable snapshot of the workspace followed by a checked transfer back. A therefore extends existing mechanisms rather than inventing new ones.\nQ2: The same hide \u2192 editor \u2192 restore race exists at every call site of `editor_git_credentials.sh`. That is `implement.yml:2865/2883` (the main loop), `implement.yml:4136/4153/4159` (the post-Codex syntax-repair loop) and `scripts/run_plan_codex.sh:295/308` (plan). Fixing only some of them would leave the same defect class open, and the security-pass rules ask for every instance of a class to be cleared.\n\nEXECUTION PLAN (required for any non-letter decision):\n(none \u2014 both decisions are lettered; implementation guidance for the planner follows)\nQ1:\n  inputs:\n    - scripts/review_untrusted_sandbox.sh (snapshot of the workspace through `review_untrusted_workspace.py`, image build with optional Claude CLI, checked transfer back)\n    - scripts/clarify_isolated_run.sh (the codex-in-container path: write_codex_config.sh, codex_model_catalog.json and the OpenRouter broker socket; the claude-in-container path: claude_anthropic_relay.py and the settings template)\n    - scripts/clarify_openrouter_broker.py, scripts/claude_anthropic_relay.py\n    - .github/workflows/implement.yml:2865-2883, 4136-4159; scripts/run_plan_codex.sh:278-308\n  steps:\n    - Build an editor-isolation helper by extending the existing sandbox helpers. Do not create a competing mechanism. The helper takes an engine argument (codex|claude), snapshots the editor's working tree (without `.git`), starts the container, and passes in only the model-broker socket. The container gets no GitHub, Telegram or Actions tokens, and runs with `--network none`, a read-only root, `--cap-drop ALL` and `no-new-privileges`.\n    - Run `codex_thread_reuse.sh direct-run` (or its Claude equivalent) inside the container. Keep the existing timeout, stall guard and session-reuse state, mounted from a run-scoped directory.\n    - After the container exits, `docker rm -f` it and confirm it is gone. Then copy the validated changes back with the existing checked-transfer rules. Restore credentials only after both steps, and fail closed if the container cannot be confirmed removed.\n    - Keep commit and push on the host checkout. The editor never sees that checkout, because it works only on the snapshot.\n    - If Docker or the isolation support is unavailable, fail the run with `::error::`. Do not fall back to running the editor on the host.\n    - Add contract tests that pin: no editor launch runs on the host; credentials are restored only after the container is removed; and the scrubbed variables never reach the container.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: When the container is removed, every process it started is gone. That includes detached and same-UID children, so nothing is left alive to read the PAT once it is restored. Because the container has no network and never received the token, the editor cannot exfiltrate anything while it runs either.\n  reversibility: Each call site keeps its current `hide`/`restore` calls around the new helper, so a revert is a one-hunk change per site.\nQ2:\n  inputs:\n    - .github/workflows/implement.yml (both launch loops), scripts/run_plan_codex.sh\n  steps:\n    - Route all three launch sites through the isolation helper from Q1.\n    - Plan's editor is read-only, so it can use the clarify-style read-only mount profile and needs no transfer back. Both implement launch sites need the writable snapshot plus the checked transfer.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: This covers every site that currently relies on hide/restore.\n  reversibility: Each site is independent and can be reverted on its own.\n\nESCALATION (required for any ESCALATE decision):\n(none)",
+  "fingerprint": "281f92cb4418d17bf850a04a41a1b770244ad8ee47e5b11e014d33255b1bbf5e",
+  "lineage": {
+    "issue_number": 6458,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37405173648",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37405173648",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6458"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261006024749_f11b63abe6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6458,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37405173648"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6458",
+  "timestamps": {
+    "created_at": "2026-10-06T02:47:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
