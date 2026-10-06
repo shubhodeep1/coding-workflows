@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cThe fix must remove the cause and ship a regression test that reproduces the failing condition: it fails on the reported head and passes with the fix. Record in the PR that you ran it both ways.\u201d\n  expected_change_site: `tests/test_review_autofix_review_pipeline_contract.py::test_review_sandbox_cleanup_failure_preserves_commit_but_blocks_publication` and the PR verification record\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  EVIDENCE: The negative control reproduces the legacy cleanup-before-commit failure in-process, but the regression test was not run at reported head `d94f506a9b5431fec17ca8ac1c42e739967c2ef6`; the PR discussion records that this run was unavailable, and the PR body/changelog do not record both-head verification.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"The fix must remove the cause and ship a regression test that reproduces the failing condition: it fails on the reported head and passes with the fix. Record in the PR that you ran it both ways.\"\n  Expected change site: PR body / changelog record of both-head verification (and the negative-control test at `tests/test_review_autofix_review_pipeline_contract.py::test_review_sandbox_cleanup_failure_preserves_commit_but_blocks_publication`).\n  Evidence of absence: The new regression test reproduces the failure path via an in-process negative control that simulates the legacy cleanup-before-commit sequence, but the editor's own PR comments (entries 6014375584, 6015366480, 6016809244 in `pr_all_comments_context.txt`) repeatedly state the test was not run at the reported head `d94f506a9b5431fec17ca8ac1c42e739967c2ef6` because the object was absent locally, the checkout had no remote, GitHub DNS resolution failed, and `gh` was unavailable. The PR body (`Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6534`) and `changelog.d/6534-review-sandbox-cleanup-after-commit.md` make no mention of this verification limitation; the only place it appears is in the bot comment trail as `TASK_GAP_DEFERRED`. The strict \"ran it both ways\" claim is therefore not recorded on the PR itself.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: \u201cThe fix must remove the cause and ship a regression test that reproduces the failing condition: it fails on the reported head and passes with the fix. Record in the PR that you ran it both ways.\u201d\n  Expected change site: `tests/test_review_autofix_review_pipeline_contract.py::test_review_sandbox_cleanup_failure_preserves_commit_but_blocks_publication` and the PR verification record.\n  Evidence of absence: The negative control at `tests/test_review_autofix_review_pipeline_contract.py:8210-8247` simulates the legacy cleanup-before-commit ordering in the current checkout; it does not run the test at reported head `d94f506a9b5431fec17ca8ac1c42e739967c2ef6`. The PR discussion records that the reported-head run was unavailable, so the required both-head verification is not established.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: \"The fix must remove the cause and ship a regression test that reproduces the failing condition: it fails on the reported head and passes with the fix. Record in the PR that you ran it both ways.\"\n  Expected change site: tests/test_review_autofix_review_pipeline_contract.py::test_review_sandbox_cleanup_failure_preserves_commit_but_blocks_publication and a PR comment or body section recording both-head results\n  Evidence of absence: The regression test reproduces the failing condition in-process (the negative control replays the legacy cleanup-before-commit ordering and asserts EDITOR_CHANGES_LOST=true, while the positive path asserts the fix preserves the commit). However, the test was not executed at reported head d94f506a9b5431fec17ca8ac1c42e739967c2ef6, and the PR discussion records that this actual-head run was unavailable rather than recording a both-head result as the issue requires. The spirit of the requirement (prove the test catches the bug) is met via the in-process negative control, but the literal \"run at reported head and record both ways\" is not satisfied.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- scripts/review_untrusted_sandbox.sh:~line 169-170 | HARDENING_RISK_SCORE=1\n  PROBLEM: The find -P traversal cannot descend into directories that lack u+x, so deeply nested non-writable subdirectories may not all receive the chmod in a single pass; a second find/chmod pass after the first chmod would fix directories that were previously unreachable.\n  WHY: The script already fails closed with diagnostics when the second rm -rf still fails, so this is not a correctness gap.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- Requirement: \"The fix must remove the cause and ship a regression test that reproduces the failing condition: it fails on the reported head and passes with the fix. Record in the PR that you ran it both ways.\"\n  Expected change site: tests/test_review_autofix_review_pipeline_contract.py::test_review_sandbox_cleanup_failure_preserves_commit_but_blocks_publication and the PR verification record.\n  Evidence of absence: The regression test reproduces the deterministic legacy ordering in-process and verifies the fixed ordering commits before fatal cleanup. The PR discussion (entry[5], entry[2]) explicitly records that the reported head `d94f506a9b5431fec17ca8ac1c42e739967c2ef6` was unavailable locally (no remote, GitHub DNS resolution failed, gh unavailable), so the test was not run at the reported head. The \"fails on the reported head and passes with the fix\" both-way verification was not established; only an in-process simulation of the legacy ordering was recorded.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d440930b3a0d65d585fe0e9e72aecb72026ff9babb0811110d410213b03445ea",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6542,
+    "run_id": "37471092719",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37471092719",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006144224_55e0ace47d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6542,
+    "run_id": "37471092719"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T14:42:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
