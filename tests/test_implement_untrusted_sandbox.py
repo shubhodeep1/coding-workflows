@@ -25,8 +25,15 @@ def test_implement_workspace_resync_and_protected_transfer(tmp_path: Path) -> No
 	(host / "secrets").mkdir()
 	(host / "secrets/private.kt").write_text("not copied\n")
 	(host / "secrets/.env.example").write_text("not copied\n")
+	(host / ".claude/commands").mkdir(parents=True)
+	(host / ".claude/.env.example").write_text("not copied\n")
+	(host / ".claude/commands/.env.example").write_text("not copied\n")
+	(host / ".claude/hooks").mkdir(parents=True)
+	(host / ".claude/hooks/.env.example").write_text("not copied\n")
+	(host / ".github/ai").mkdir(parents=True)
+	(host / ".github/ai/.env.example").write_text("not copied\n")
 	subprocess.run(["git", "init", "-q", str(host)], check=True)
-	subprocess.run(["git", "add", "src", "secrets", ".env.example"], cwd=host, check=True)
+	subprocess.run(["git", "add", "src", "secrets", ".env.example", ".claude", ".github"], cwd=host, check=True)
 	workspace = tmp_path / "source"
 	workspace.mkdir()
 	manifest = tmp_path / "baseline.json"
@@ -45,6 +52,8 @@ def test_implement_workspace_resync_and_protected_transfer(tmp_path: Path) -> No
 	assert not (workspace / "src/.env.production").exists()
 	assert not (workspace / "secrets/private.kt").exists()
 	assert not (workspace / "secrets/.env.example").exists()
+	for restricted_path in (".claude/.env.example", ".claude/commands/.env.example", ".claude/hooks/.env.example", ".github/ai/.env.example"):
+		assert not (workspace / restricted_path).exists()
 	(host / "src/app.kt").write_text("host changed\n")
 	(host / ".env.example").write_text("ROOT_EXAMPLE=host\n")
 	(host / "src/other.kt").unlink()
@@ -58,6 +67,9 @@ def test_implement_workspace_resync_and_protected_transfer(tmp_path: Path) -> No
 	(workspace / "src/app.kt").write_text("isolated edit\n")
 	(workspace / ".env.example").write_text("ROOT_EXAMPLE=isolated\n")
 	(workspace / "src/.env.example").write_text("NESTED_EXAMPLE=isolated\n")
+	for restricted_path in (".claude/.env.example", ".claude/commands/.env.example", ".claude/hooks/.env.example", ".github/ai/.env.example"):
+		(workspace / restricted_path).parent.mkdir(parents=True, exist_ok=True)
+		(workspace / restricted_path).write_text("isolated edit\n")
 	protected = tmp_path / "protected.txt"
 	protected.write_text("src/app.kt\n")
 	result = run("transfer", str(protected))
@@ -66,6 +78,8 @@ def test_implement_workspace_resync_and_protected_transfer(tmp_path: Path) -> No
 	assert (host / "src/app.kt").read_text() == "host changed\n"
 	assert (host / ".env.example").read_text() == "ROOT_EXAMPLE=isolated\n"
 	assert (host / "src/.env.example").read_text() == "NESTED_EXAMPLE=isolated\n"
+	for restricted_path in (".claude/.env.example", ".claude/commands/.env.example", ".claude/hooks/.env.example", ".github/ai/.env.example"):
+		assert (host / restricted_path).read_text() == "not copied\n"
 	assert run("resync").returncode == 0
 	assert (workspace / "src/app.kt").read_text() == "host changed\n"
 
