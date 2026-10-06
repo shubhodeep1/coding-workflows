@@ -10,7 +10,21 @@ log_file="${3:?log file required}"
 engine="${4:-codex}"
 engine_role="${5:-CLARIFY}"
 case "${engine}" in codex|claude) ;; *) echo '::error::Invalid clarify engine' >&2; exit 1 ;; esac
-[[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|WAVE_JUDGE)$ ]] || { echo '::error::Invalid clarify engine role' >&2; exit 1; }
+[[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|UNBLOCK_JUDGE)$ ]] || [ "${engine_role}" = WAVE_JUDGE ] || { echo '::error::Invalid clarify engine role' >&2; exit 1; }
+[ "${engine}" != claude ] || [[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|UNBLOCK_JUDGE)$ ]] || { echo '::error::Invalid Claude engine role' >&2; exit 1; }
+support="scripts"
+if [ -n "${CLARIFY_ISOLATION_SUPPORT_DIR:-}" ]; then
+	if [[ "${CLARIFY_ISOLATION_SUPPORT_DIR}" != /* ]] || [ ! -d "${CLARIFY_ISOLATION_SUPPORT_DIR}" ]; then
+		echo '::error::Invalid clarify isolation support directory' >&2
+		exit 1
+	fi
+	support="${CLARIFY_ISOLATION_SUPPORT_DIR}"
+fi
+isolation_timeout="${CLARIFY_ISOLATION_TIMEOUT_SECS:-}"
+if [ -n "${isolation_timeout}" ] && { [[ ! "${isolation_timeout}" =~ ^[0-9]+$ ]] || [[ ! "${isolation_timeout}" =~ [1-9] ]]; }; then
+	echo '::error::Invalid clarify isolation timeout' >&2
+	exit 1
+fi
 version="${CLARIFY_CODEX_VERSION:-v0.114.0}"
 [[ "${version}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid Codex version' >&2; exit 1; }
 [[ "${MODEL_EDITOR:-}" =~ ^[a-zA-Z0-9/_.-]+$ ]] || { echo '::error::Invalid model slug' >&2; exit 1; }
@@ -21,7 +35,7 @@ else
 	[ -s "${prompt_file}" ] || { echo '::error::Clarify isolation preflight failed' >&2; exit 1; }
 fi
 command -v docker >/dev/null && command -v python3 >/dev/null || { echo '::error::Clarify isolation prerequisites unavailable' >&2; exit 1; }
-[ -f scripts/clarify_sandbox/Dockerfile ] && [ -f scripts/clarify_openrouter_broker.py ] && [ -f scripts/write_codex_config.sh ] && [ -f scripts/codex_model_catalog.json ] || { echo '::error::Clarify isolation support missing' >&2; exit 1; }
+[ -f "${support}/clarify_sandbox/Dockerfile" ] && [ -f "${support}/clarify_openrouter_broker.py" ] && [ -f "${support}/write_codex_config.sh" ] && [ -f "${support}/codex_model_catalog.json" ] || { echo '::error::Clarify isolation support missing' >&2; exit 1; }
 
 # The runner-owned temporary root contains no credentials. Its socket child is
 # traversable by the container's matching non-root UID, not by other users.
@@ -43,7 +57,7 @@ mkdir -m 0755 "${run_root}/source" "${run_root}/results"
 # Include only regular, tracked source files with safe path classes. Never
 # follow a symlink (including parent directories); do not include .git,
 # support checkouts, runner configuration, env files or private keys.
-PYTHONDONTWRITEBYTECODE=1 python3 - "${run_root}/source" <<'PY'
+PYTHONDONTWRITEBYTECODE=1 python3 - "${run_root}/source" "${CLARIFY_ISOLATION_SUPPORT_DIR:-}" <<'PY'
 import os
 import pathlib
 import stat
@@ -102,12 +116,20 @@ try:
             copy(entry.decode("utf-8"))
     # Consumer checkouts do not track the staged writer/catalog; these are
     # fixed support files, never read from the issue prompt or user input.
-    for required in ("scripts/write_codex_config.sh", "scripts/codex_model_catalog.json"):
-        if not (dest / required).exists():
-            copy(required)
+    if not sys.argv[2]:
+        for required in ("scripts/write_codex_config.sh", "scripts/codex_model_catalog.json"):
+            if not (dest / required).exists():
+                copy(required)
 except (OSError, ValueError, UnicodeError) as exc:
     raise SystemExit("clarify source snapshot rejected") from None
 PY
+
+# A separate support checkout must supply the executable config writer and
+# catalog, not similarly named files in the untrusted target snapshot.
+if [ -n "${CLARIFY_ISOLATION_SUPPORT_DIR:-}" ]; then
+	install -D -m 0644 "${support}/write_codex_config.sh" "${run_root}/source/scripts/write_codex_config.sh"
+	install -D -m 0644 "${support}/codex_model_catalog.json" "${run_root}/source/scripts/codex_model_catalog.json"
+fi
 
 # Claude engine branch: the same isolation, with the Claude Code CLI inside
 # the container and scripts/claude_anthropic_relay.py on the host. The real
@@ -130,7 +152,7 @@ if [ "${engine}" = claude ]; then
 	chmod 0644 "${run_root}/claude-settings.json"
 	mapfile -t claude_accounts < <(ai_engine_accounts)
 	[ "${#claude_accounts[@]}" -gt 0 ] || { ai_engine_fallback "${engine_role}" no_credential; exit 75; }
-	if ! image="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker build -q --build-arg "CODEX_VERSION=${version}" --build-arg "CLAUDE_CLI_VERSION=${claude_version}" -f scripts/clarify_sandbox/Dockerfile scripts/clarify_sandbox)"; then
+	if ! image="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker build -q --build-arg "CODEX_VERSION=${version}" --build-arg "CLAUDE_CLI_VERSION=${claude_version}" -f "${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox")"; then
 		ai_engine_fallback "${engine_role}" image_build_failed
 		exit 75
 	fi
@@ -169,6 +191,7 @@ if [ "${engine}" = claude ]; then
 			--env CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder \
 			--env CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 --env DISABLE_AUTOUPDATER=1 \
 			--env "CLAUDE_MODEL=${claude_model}" --env "CLAUDE_EFFORT=${claude_effort}" \
+			--env "CLARIFY_ISOLATION_TIMEOUT_SECS=${isolation_timeout}" \
 			--workdir /source "${image}" /bin/bash -c '
 				set -euo pipefail
 				printf "{\"projects\":{\"/source\":{\"hasTrustDialogAccepted\":true}}}\n" > "${HOME}/.claude.json"
@@ -176,13 +199,23 @@ if [ "${engine}" = claude ]; then
 				bridge_pid=$!
 				trap '\''kill "${bridge_pid}" 2>/dev/null || true'\'' EXIT
 				python3 -c '\''import socket,time; [(time.sleep(.1) if s.connect_ex(("127.0.0.1",8765)) else exit(0)) for s in (socket.socket() for _ in range(50))]; exit(1)'\''
-				claude -p --model "${CLAUDE_MODEL}" --effort "${CLAUDE_EFFORT}" \
-					--system-prompt-file /instructions.md \
-					--setting-sources "" --settings /settings.json \
-					--strict-mcp-config --disable-slash-commands \
-					--exclude-dynamic-system-prompt-sections \
-					--tools Read,Grep,Glob --permission-mode dontAsk \
-					--output-format stream-json --verbose < /prompt > /results/transcript.jsonl 2> /results/stderr
+				if [ -n "${CLARIFY_ISOLATION_TIMEOUT_SECS}" ]; then
+					timeout "${CLARIFY_ISOLATION_TIMEOUT_SECS}" claude -p --model "${CLAUDE_MODEL}" --effort "${CLAUDE_EFFORT}" \
+						--system-prompt-file /instructions.md \
+						--setting-sources "" --settings /settings.json \
+						--strict-mcp-config --disable-slash-commands \
+						--exclude-dynamic-system-prompt-sections \
+						--tools Read,Grep,Glob --permission-mode dontAsk \
+						--output-format stream-json --verbose < /prompt > /results/transcript.jsonl 2> /results/stderr
+				else
+					claude -p --model "${CLAUDE_MODEL}" --effort "${CLAUDE_EFFORT}" \
+						--system-prompt-file /instructions.md \
+						--setting-sources "" --settings /settings.json \
+						--strict-mcp-config --disable-slash-commands \
+						--exclude-dynamic-system-prompt-sections \
+						--tools Read,Grep,Glob --permission-mode dontAsk \
+						--output-format stream-json --verbose < /prompt > /results/transcript.jsonl 2> /results/stderr
+				fi
 			' || run_rc=$?
 		kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; broker_pid=""
 		[ ! -f "${run_root}/results/stderr" ] || tee -a "${log_file}" < "${run_root}/results/stderr" >&2
@@ -209,10 +242,10 @@ fi
 
 # Nothing from the privileged checkout, HOME or runtime workspace is mounted.
 # The Docker build context contains only the pinned Dockerfile.
-image="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker build -q --build-arg "CODEX_VERSION=${version}" -f scripts/clarify_sandbox/Dockerfile scripts/clarify_sandbox)"
+image="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker build -q --build-arg "CODEX_VERSION=${version}" -f "${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox")"
 [ -n "${image}" ] || { echo '::error::Clarify image build failed' >&2; exit 1; }
 env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" CLARIFY_MODEL="${MODEL_EDITOR}" PYTHONDONTWRITEBYTECODE=1 \
-	python3 scripts/clarify_openrouter_broker.py broker "${run_root}/socket/provider.sock" &
+	python3 "${support}/clarify_openrouter_broker.py" broker "${run_root}/socket/provider.sock" &
 broker_pid=$!
 for _ in $(seq 1 50); do
 	[ -S "${run_root}/socket/provider.sock" ] && break
@@ -229,11 +262,12 @@ env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker run --rm \
 	--mount "type=bind,src=${run_root}/source,dst=/source,readonly" \
 	--mount "type=bind,src=$(realpath "${prompt_file}"),dst=/prompt,readonly" \
 	--mount "type=bind,src=${run_root}/socket,dst=/socket,readonly" \
-	--mount "type=bind,src=$(realpath scripts/clarify_openrouter_broker.py),dst=/bridge.py,readonly" \
+	--mount "type=bind,src=$(realpath "${support}/clarify_openrouter_broker.py"),dst=/bridge.py,readonly" \
 	--mount "type=bind,src=${run_root}/results,dst=/results" \
 	--env HOME=/home/agent --env CODEX_HOME=/home/agent/.codex \
 	--env CLARIFY_PROXY_KEY=isolated-placeholder \
 	--env "CLARIFY_MODEL=${MODEL_EDITOR}" --env "CLARIFY_REASONING=${MODEL_REASONING_EFFORT}" \
+	--env "CLARIFY_ISOLATION_TIMEOUT_SECS=${isolation_timeout}" \
 	--workdir /source "${image}" /bin/bash -c '
 		set -euo pipefail
 		mkdir -p "${CODEX_HOME}"
@@ -244,7 +278,11 @@ env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker run --rm \
 		trap '\''kill "${bridge_pid}" 2>/dev/null || true'\'' EXIT
 		# Bridge startup is bounded; model traffic stays on loopback.
 		python3 -c '\''import socket,time; [(time.sleep(.1) if s.connect_ex(("127.0.0.1",8765)) else exit(0)) for s in (socket.socket() for _ in range(50))]; exit(1)'\''
-		codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${CLARIFY_MODEL:-openai/gpt-6-sol}" --sandbox read-only < /prompt > /results/output 2> /results/stderr
+		if [ -n "${CLARIFY_ISOLATION_TIMEOUT_SECS}" ]; then
+			timeout "${CLARIFY_ISOLATION_TIMEOUT_SECS}" codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${CLARIFY_MODEL:-openai/gpt-6-sol}" --sandbox read-only < /prompt > /results/output 2> /results/stderr
+		else
+			codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${CLARIFY_MODEL:-openai/gpt-6-sol}" --sandbox read-only < /prompt > /results/output 2> /results/stderr
+		fi
 	' || {
 		[ ! -f "${run_root}/results/stderr" ] || tee -a "${log_file}" < "${run_root}/results/stderr" >&2
 		exit 1
