@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:1656,1799-1803 | severity=critical | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The routing-key neutralizer only matches words separated by spaces or tabs, while the post-composition backstop matches any whitespace, so cross-line or Unicode-whitespace keys can pass neutralization and trigger a `ValueError`.\n  WHY: Untrusted text containing such a key cannot retarget the line-anchored downstream consumers, but the uncaught `ValueError` prevents the heal issue from being filed; severity is critical based on the highest rating (BLOCKER), with reviewers also rating it MAJOR and NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/workflow_failure_heal.py:1656 vs 1800 | severity=high | confidence=[4]\n  PROBLEM: The neutralizer matches key words separated only by spaces and tabs, while the backstop rejects keys separated by any whitespace.\n  WHY: Newline or Unicode-separated routing keys survive neutralization and trigger the `ValueError`, preventing heal issue creation even though downstream consumers cannot match a key split across lines.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal.py:_neutralize_heal_routing_text function (key_pattern definition) | severity=critical | confidence=[4]\n  PROBLEM: The neutralizer restricts whitespace matching to spaces and tabs, while the validation checker uses `\\s+`.\n  WHY: Routing metadata separated by newlines or Unicode whitespace is not neutralized, but triggers a `ValueError` in `compose_issue_body`, preventing the triage issue from being filed.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal.py:1652-1657,1799-1803 | severity=high | confidence=[4]\n  PROBLEM: The neutralizer matches multi-word keys separated only by space or tab, while the backstop also matches keys separated by newlines, Unicode separators, and other whitespace.\n  WHY: Cross-line keys survive `sanitize_text` and neutralization, then trigger `ValueError(\"heal issue body contains untrusted routing metadata\")`, preventing the heal issue from being filed although downstream consumers require the key and colon on the same line.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal.py:_neutralize_heal_routing_text at line 1656; post-composition check at lines 1799-1803 | severity=low | confidence=[4]\n  PROBLEM: The neutralizer matches routing-key words separated only by spaces or tabs, but the post-composition check accepts any whitespace.\n  WHY: A routing key split by a newline or Unicode whitespace survives neutralization, then causes the check to raise `ValueError`; the exception propagates from `_cmd_compose_issue`, so the heal issue is not filed.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/workflow_failure_heal.py:1656 (neutralizer) vs 1799-1803 (checker) | severity=high | confidence=[3]\n  PROBLEM: The neutralizer matches routing-key separators consisting of spaces or tabs, while the post-composition checker matches any whitespace.\n  WHY: A cross-line routing key in untrusted text survives neutralization, matches the checker, and raises `ValueError`, preventing the heal issue from being filed even though downstream routing consumers use line-anchored patterns.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/workflow_failure_heal.py:1656 (`replace(r\"\\ \", r\"[ \\t]+\")`) vs the post-composition backstop at lines 1799-1803 (`integration\\s+branch|target\\s+branch|...`), added in the last run | severity=high | confidence=[4]\n  PROBLEM: The neutralizer only rewrites routing keys whose words are separated by ASCII space or tab, while the backstop matches any whitespace, including newline, NBSP, and U+2028.\n  WHY: Untrusted text preserved by `sanitize_text` can pass through neutralization and make `compose_issue_body` raise `ValueError`; `_cmd_compose_issue` has no handler, so the heal issue is never filed, although line-anchored routing consumers cannot be retargeted by such keys.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "8d7c076c49863428e547d215c3da4da747638e9b870c8e702fd1e7a94e987e03",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6273,
+    "run_id": "37438409282",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37438409282",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006094043_ba5c6bb29e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6273,
+    "run_id": "37438409282"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T09:40:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
