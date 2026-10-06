@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Review autofix treats proposed changes as untrusted until they pass sandbox and workspace checks.",
   "timestamps": {
     "created_at": "2026-10-06T19:20:15Z",
