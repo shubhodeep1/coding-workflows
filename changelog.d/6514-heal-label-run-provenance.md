@@ -7,17 +7,17 @@ The intake now reads each referenced run from GitHub before collecting jobs, and
 
 - it is in the escalated issue's repository and has the claimed id;
 - it completed with `failure`, `timed_out` or `cancelled`;
-- it is tied to the escalated issue or PR: a recognized pipeline failure comment from `github-actions[bot]` in a consumer repository links it (in this repository, only the authenticated pipeline account counts), or, for a pull request, it belongs to that pull request (`pull_requests` or a `[pr:<N>]` dispatch name). A human collaborator's link or a matching title alone cannot establish the association.
+- it is tied to the escalated issue or PR: a recognized pipeline failure comment from `github-actions[bot]` or the GitHub-authenticated dispatch sender's PAT account in a consumer repository links it (in this repository, only the authenticated intake account counts), or, for a pull request, it belongs to that pull request (`pull_requests` or a `[pr:<N>]` dispatch name). Cancelled clarify/implement comments are recognized. Other human collaborators' links or a matching title alone cannot establish the association.
 
-Runs that fail a check are dropped and logged. The escalation itself still proceeds, without those logs. The reporter now lets only recognized automation failure comments reorder its title-matched runs, not issue bodies or human comments.
+Runs that fail a check are dropped and logged. The escalation itself still proceeds, without those logs. The reporter prioritizes only recognized Actions-bot failure comments; PAT-authored comments keep the ordinary title-matched order, and the intake verifies their links before reading logs.
 
 | The numbers that matter | Value |
 | --- | --- |
-| Extra GitHub API calls per label report | at most 3 run reads, 1 paginated comment read, and 1 `/user` read (this repository only) |
+| Extra GitHub API calls per label report | at most 3 run reads, 1 paginated comment read, and 1 `/user` read (this repository only); the consumer dispatch sender comes from the event |
 | New log lines | `WORKFLOW_HEAL provenance_rejected ... kind=issue\|pull_request ... reason=<r>` and `provenance_verified ... runs=<n>` (existing formats) |
 | Rejection reasons | `run_lookup_failed`, `repo_mismatch`, `run_id_mismatch`, `not_failed`, `not_linked_to_issue` |
 
-What this means for consumer repos: nothing to change. The check runs in this repository's intake. If a label escalation has no recognized Actions-bot failure comment or PR association, the report still proceeds, but without those runs' logs. Phase-failure reports retain their separate provenance path.
+What this means for consumer repos: nothing to change. The check runs in this repository's intake. Recognized failure comments from the consumer's `GH_PAT` account work when that account sent the report; a different collaborator's link is ignored. If there is no verified comment or PR association, the report still proceeds without those runs' logs. Phase-failure reports retain their separate provenance path.
 
 ### For contributors
 

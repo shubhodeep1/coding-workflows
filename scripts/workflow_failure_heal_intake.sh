@@ -224,10 +224,16 @@ if [[ "${SOURCE_KIND}" == "phase_failure" || "${SOURCE_KIND}" == "autofix_failur
 	# the payload carries no GitHub-read run metadata, so no earlier call can
 	# say whether a referenced run is in this repository, failed, and belongs
 	# to the escalated issue / PR. Their unverified references are dropped and
-	# the report continues; /user is read only for a self-repo report.
+	# the report continues. For consumer label reports, GitHub's dispatch
+	# sender is the reporting PAT account (not the issue's commenter); a
+	# missing sender cannot authorize a human-authored comment.
 	if [ "${SOURCE_KIND}" != "workflow_run" ]; then
 		if [ "${SOURCE_KIND}" = "autofix_failure" ] || [ "${SOURCE_REPO,,}" = "${SELF_REPO,,}" ]; then
 			PROVENANCE_LOGIN="$(gh_retry gh api --method GET user --jq .login 2>/dev/null || true)"
+		elif [ "${SOURCE_KIND}" = "issue" ] || [ "${SOURCE_KIND}" = "pull_request" ]; then
+			if [ "${GITHUB_EVENT_NAME:-}" = "repository_dispatch" ] && [ -f "${GITHUB_EVENT_PATH:-/dev/null}" ]; then
+				PROVENANCE_LOGIN="$(jq -r 'if .action == "workflow-failure-heal" then .sender.login // "" else "" end' "${GITHUB_EVENT_PATH}" 2>/dev/null || true)"
+			fi
 		fi
 		PROVENANCE_COMMENTS="${PROVENANCE_DIR}/comments.json"
 		if ! gh_retry gh api --method GET --paginate "repos/${SOURCE_REPO}/issues/${ISSUE_NUMBER}/comments" -F per_page=100 \

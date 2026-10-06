@@ -1757,10 +1757,9 @@ def _comment_author(comment: dict[str, Any]) -> str:
 def _trusted_run_link_comment(comment: Any, *, repo: str, self_repo: str, trusted_login: str) -> bool:
 	"""True for a recognizable automation failure comment on an issue / PR.
 
-	Consumer label reports trust only the GitHub Actions bot, not a human
-	commenter's association. This repository also requires the authenticated
-	pipeline login (which may be a human account). Neither trusts arbitrary
-	comments, even from that account, as a run-to-issue link.
+	Consumer label reports trust the GitHub Actions bot or the authenticated
+	dispatch sender, not an arbitrary collaborator. This repository requires
+	the authenticated pipeline login. Neither trusts arbitrary comments.
 	"""
 	if not isinstance(comment, dict):
 		return False
@@ -1770,12 +1769,15 @@ def _trusted_run_link_comment(comment: Any, *, repo: str, self_repo: str, truste
 	if author not in PHASE_REPORT_TRUSTED_BOT_LOGINS and comment.get("author_association") not in PHASE_REPORT_TRUSTED_ASSOCIATIONS:
 		return False
 	body = sanitize_text(comment.get("body")).lstrip()
-	if not body.startswith(AUTOFIX_FAILURE_COMMENT_MARKERS) and not any(body.startswith(prefixes) for prefixes in PHASE_FAILURE_COMMENT_PREFIXES.values()):
+	if (not body.startswith(AUTOFIX_FAILURE_COMMENT_MARKERS)
+		and not any(body.startswith(prefixes) for prefixes in PHASE_FAILURE_COMMENT_PREFIXES.values())
+		and not body.startswith(("AI clarification workflow was cancelled/timed out for ",
+			"AI implementation workflow was cancelled/timed out for "))):
 		return False
 	if self_repo and str(repo or "").lower() == self_repo.lower():
 		login = str(trusted_login or "").strip().lower()
 		return bool(login) and author == login
-	return author in PHASE_REPORT_TRUSTED_BOT_LOGINS
+	return author in PHASE_REPORT_TRUSTED_BOT_LOGINS or (bool(trusted_login.strip()) and author == trusted_login.strip().lower())
 
 
 def _verify_label_run_refs(

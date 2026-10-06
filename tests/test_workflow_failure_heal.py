@@ -1536,7 +1536,7 @@ def _intake_state(**overrides) -> dict:
 		"user_login": "workflow-bot",
 		"comments": {
 			f"repos/{repo}/issues/42/comments": [
-				{**_plan_failed_comment(repo, run_id), "user": {"login": "workflow-bot" if repo == SELF_REPO else "github-actions[bot]"}, "author_association": "OWNER" if repo == SELF_REPO else "NONE"} for run_id in (499, 500)
+				{**_plan_failed_comment(repo, run_id), "user": {"login": "workflow-bot"}, "author_association": "OWNER"} for run_id in (499, 500)
 			] for repo in (SELF_REPO, CONSUMER_REPO)
 		},
 		"jobs": {
@@ -1581,6 +1581,8 @@ def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[s
 				} for ref in payload.get("run_refs", [])
 			}
 		state_file.write_text(json.dumps(state), encoding="utf-8")
+		event_file = tmp / "event.json"
+		event_file.write_text(json.dumps({"action": "workflow-failure-heal", "sender": {"login": state.get("sender_login", "workflow-bot")}}), encoding="utf-8")
 		payload_file = tmp / "payload_raw.json"
 		payload_file.write_text(json.dumps(payload), encoding="utf-8")
 		diagnosis_file = tmp / "diagnosis.md"
@@ -1589,6 +1591,8 @@ def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[s
 		env.update(
 			{
 				"GITHUB_REPOSITORY": SELF_REPO,
+				"GITHUB_EVENT_NAME": "repository_dispatch",
+				"GITHUB_EVENT_PATH": str(event_file),
 				"WORKFLOW_HEAL_PAYLOAD_FILE": str(payload_file),
 				"WORKFLOW_HEAL_SOURCE_CHECKOUT": "false",
 				"MOCK_DIAGNOSIS_FILE": str(diagnosis_file),
@@ -4113,10 +4117,17 @@ def test_verify_run_provenance_label_escalations() -> None:
 		dropped = check(payload, {"500": unrelated}, [link(CONSUMER_REPO, 500, "attacker")])
 		assert dropped["status"] == "ok" and dropped["run_refs"] == [] and dropped["reason"] == "no_verified_runs"
 		assert dropped["rejections"] == [{"run_id": "500", "reason": "not_linked_to_issue"}]
-		# Consumer: a human collaborator's link is not an automation record.
+		# A collaborator is not the reporting PAT account just because of association.
 		assert not check(payload, {"500": unrelated}, [link(CONSUMER_REPO, 500, "maintainer", "MEMBER")])["run_refs"]
+		assert check(payload, {"500": unrelated}, [link(CONSUMER_REPO, 500, "workflow-bot", "MEMBER")], login="workflow-bot")["run_refs"]
+		assert not check(payload, {"500": unrelated}, [link(CONSUMER_REPO, 500, "maintainer", "MEMBER")], login="workflow-bot")["run_refs"]
 		assert check(payload, {"500": unrelated}, [link(CONSUMER_REPO, 500, "github-actions[bot]")])["run_refs"]
 		assert not check(payload, {"500": unrelated}, [{**link(CONSUMER_REPO, 500, "github-actions[bot]"), "body": f"Run: https://github.com/{CONSUMER_REPO}/actions/runs/500"}])["run_refs"]
+		for phase in ("clarification", "implementation"):
+			cancelled_link = link(CONSUMER_REPO, 500, "workflow-bot", "MEMBER")
+			cancelled_link["body"] = f"AI {phase} workflow was cancelled/timed out for https://github.com/{CONSUMER_REPO}/issues/42. Run: https://github.com/{CONSUMER_REPO}/actions/runs/500"
+			assert check(payload, {"500": _provenance_run(conclusion="cancelled")}, [cancelled_link], login="workflow-bot")["run_refs"]
+			assert not check(payload, {"500": _provenance_run(conclusion="cancelled")}, [{**cancelled_link, "user": {"login": "maintainer"}}], login="workflow-bot")["run_refs"]
 		# Comments unavailable: title alone cannot authorize a log read.
 		assert check(payload, {"500": _provenance_run(display_title=title)}, None)["rejections"][0]["reason"] == "not_linked_to_issue"
 		assert check(payload, {"500": unrelated}, None)["rejections"][0]["reason"] == "not_linked_to_issue"
@@ -4182,6 +4193,7 @@ def test_intake_verifies_label_escalation_run_refs_before_reading_logs() -> None
 	text = INTAKE_SCRIPT.read_text(encoding="utf-8")
 	assert '"${SOURCE_KIND}" == "issue" || "${SOURCE_KIND}" == "pull_request"' in text
 	assert 'if [ "${SOURCE_KIND}" = "autofix_failure" ] || [ "${SOURCE_REPO,,}" = "${SELF_REPO,,}" ]; then' in text
+	assert 'if .action == "workflow-failure-heal" then .sender.login // ""' in text
 	report_text = REPORT_SCRIPT.read_text(encoding="utf-8")
 	assert "author_association: (.author_association" in report_text and "user: {login: (.user.login" in report_text
 	payload = _consumer_payload()
@@ -4198,6 +4210,23 @@ def test_intake_verifies_label_escalation_run_refs_before_reading_logs() -> None
 	assert len(after["issues_created"]) == 1
 	# Consumer label report: no /user identity read.
 	assert not any("user" in call for call in after["calls"])
+	# A recognized comment by the authenticated consumer dispatch sender keeps
+	# the run, but a different collaborator's comment cannot authorize its logs.
+	state = _intake_state(run_details={run_path: {**_provenance_run(path="ai-implement.yml"), "display_title": payload["issue_title"]}})
+	result, after, prompt = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "provenance_verified" in result.stdout and "runs=1" in result.stdout
+	assert "resolve_integration_ref.sh: Integration branch" in prompt
+	state = _intake_state(sender_login="other-account", run_details={run_path: {**_provenance_run(path="ai-implement.yml"), "display_title": payload["issue_title"]}})
+	result, after, prompt = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "reason=not_linked_to_issue" in result.stdout
+	assert not any("/actions/runs/500/jobs" in part or "/actions/jobs/" in part for call in after["calls"] for part in call)
+	state = _intake_state(sender_login="", run_details={run_path: {**_provenance_run(path="ai-implement.yml"), "display_title": payload["issue_title"]}})
+	result, after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "reason=not_linked_to_issue" in result.stdout
+	assert not any("/actions/runs/500/jobs" in part or "/actions/jobs/" in part for call in after["calls"] for part in call)
 
 
 def test_verify_run_provenance_cli_missing_comments_fails_closed(tmp_path) -> None:

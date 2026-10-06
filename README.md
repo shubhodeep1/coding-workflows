@@ -1593,8 +1593,11 @@ through `clarify → plan → implement → review`.
   only when GitHub reports the run in the source repository, completed with
   `failure`, `timed_out` or `cancelled`, and tied to the escalated issue or PR
   (a link in a recognized pipeline failure comment from `github-actions[bot]`
-  in consumer repositories or the authenticated pipeline account here; or,
-  for a PR, the run's pull request or `[pr:<N>]` dispatch name). Human
+  or the authenticated dispatch sender's PAT account in consumer repositories,
+  or the authenticated intake account here; or, for a PR, the run's pull
+  request or `[pr:<N>]` dispatch name). The sender is read from GitHub's
+  `repository_dispatch` event, not the report payload; when it is unavailable,
+  a consumer human-authored comment cannot vouch for a run. Other human
   collaborator comments and issue bodies do not vouch for label-report runs. A
   matching display title alone does not establish association. If the comment
   history is unavailable and no PR association can be verified, the report
