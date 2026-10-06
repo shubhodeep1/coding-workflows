@@ -6289,28 +6289,46 @@ def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_advisories()
 	assert "| SEC-TEST-1 | medium | scripts/example.py:1 | accept_with_followup | [keep_fixing capped after 2 judge round(s); converted to advisory follow-up]" in judge_comments[0]
 
 
-def test_security_pass_cap_never_waives_a_high_finding() -> None:
-	for severity in ("high", "critical", "unknown"):
-		blocking_finding = _security_pass_test_finding()
-		blocking_finding["severity"] = severity
-		result = _run_poller(
-			state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
-			enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
-			security_audit_payload=_security_audit_findings_payload([blocking_finding]),
-			issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
-			env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing")))},
-		)
-		assert result["latest_state"]["status"] == "failed"
-		assert result["latest_state"]["security_pass_waived_findings"] == []
-		assert result.get("created_issues", []) == []
-		assert "ai:security-pass-failed" in result["tracking_labels"]
-		assert "reason=blocking_findings_after_cap" in result["stdout"] + result["stderr"]
-		assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED" not in result["stdout"] + result["stderr"]
-		judge_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]
-			if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 3)")]
-		assert len(judge_comments) == 1
-		assert "MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=2" in judge_comments[0]
-		assert "| SEC-TEST-1 |" in judge_comments[0]
+@pytest.mark.parametrize("severity", ["high", "critical"])
+def test_security_pass_cap_never_waives_a_high_finding(severity: str) -> None:
+	blocking_finding = _security_pass_test_finding()
+	blocking_finding["severity"] = severity
+	result = _run_poller(
+		state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
+		enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([blocking_finding]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing")))},
+	)
+	assert result["latest_state"]["status"] == "failed"
+	assert result["latest_state"]["security_pass_waived_findings"] == []
+	assert result.get("created_issues", []) == []
+	assert "ai:security-pass-failed" in result["tracking_labels"]
+	assert "reason=blocking_findings_after_cap" in result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED" not in result["stdout"] + result["stderr"]
+	judge_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 3)")]
+	assert len(judge_comments) == 1
+	assert "MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=2" in judge_comments[0]
+	assert "| SEC-TEST-1 |" in judge_comments[0]
+
+
+def test_security_pass_unrated_audit_output_fails_closed_before_judge() -> None:
+	blocking_finding = _security_pass_test_finding()
+	blocking_finding["severity"] = "unknown"
+	result = _run_poller(
+		state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
+		enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([blocking_finding]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing")))},
+	)
+	assert result["latest_state"]["security_pass_status"] == "failed"
+	assert result["latest_state"]["security_pass_waived_findings"] == []
+	assert result.get("created_issues", []) == []
+	assert "SECURITY_PASS_FAILED reason=engine_unavailable" in result["stdout"] + result["stderr"]
+	assert not any(comment["body"].startswith("## ⚖️ Security-pass exhaustion judge")
+		for comment in result["issues"]["192"]["comments"])
 
 
 def test_security_pass_cap_does_not_record_advisories_before_terminal_failure() -> None:

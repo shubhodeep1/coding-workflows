@@ -818,7 +818,9 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   does not trust its stored URL or PR history for that push. Wrapped commits
   are checked in the directory selected by `env -C` or `GIT_DIR`; a commit
   from an ambiguous directory and an unparseable `env -S` command ask for
-  confirmation. A push from an unresolved directory (including an appended
+  confirmation. When `env -C` cannot resolve its directory, the commit guard
+  asks without querying the session checkout's PR history. A push from an
+  unresolved directory (including an appended
   `GIT_DIR+=` / `GIT_WORK_TREE+=`, whose value is never applied) is checked
   against the session checkout, which can still block, and otherwise asks.
   Leading redirections, including those after environment assignments, do
@@ -1506,7 +1508,8 @@ Waivers travel to the engine as `SECURITY_AUDIT_WAIVED_FINDINGS`
 and `security_pass_apply_waivers_to_findings` re-applies them to the result
 (exact id, or same file, category, severity and exploit scenario within
 `SECURITY_AUDIT_WAIVER_LINE_WINDOW`, default 40 lines; legacy waivers with no
-scenario match by id only). `/security-pass-waive <finding_id> ...` (human
+scenario match by id only when any recorded category and severity also match).
+`/security-pass-waive <finding_id> ...` (human
 OWNER/MEMBER/COLLABORATOR only, dedup marker
 `<!-- security-pass-waive-dedup:<comment-id> -->`) records operator waivers; in
 the failed state it then resets the loop like `/re-security-pass`, in
