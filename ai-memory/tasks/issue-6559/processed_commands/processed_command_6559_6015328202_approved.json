@@ -5,13 +5,34 @@
   "entry_id": "processed_command_6559_6015328202_approved",
   "issue_number": 6559,
   "metadata": {
+    "branch": "ai/issue-6559",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/internal-workflow-failure-heal.yml",
+      ".github/workflows/workflow-failure-heal-intake.yml",
+      ".github/workflows/workflow_failure_heal.yml",
+      "README.md",
+      "agents.md",
+      "changelog.d/6559-heal-report-identity.md",
+      "scripts/workflow_failure_heal.py",
+      "scripts/workflow_failure_heal_autofix_report.sh",
+      "scripts/workflow_failure_heal_intake.sh",
+      "scripts/workflow_failure_heal_report.sh",
+      "tests/test_workflow_failure_heal.py",
+      "workflow-templates/ai-workflow-failure-heal.yml"
+    ],
+    "issue_number": 6559,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6559",
+    "pr_number": 6564,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6564",
+    "run_attempt": "1",
+    "run_id": "37456974778",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37456974778"
   },
   "run_attempt": 1,
   "run_id": "37456974778",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-06T11:35:26Z",
+  "status": "completed",
+  "timestamp": "2026-10-06T11:55:11Z",
   "workflow": "implement"
 }
