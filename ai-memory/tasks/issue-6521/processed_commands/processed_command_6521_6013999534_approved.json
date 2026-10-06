@@ -5,13 +5,26 @@
   "entry_id": "processed_command_6521_6013999534_approved",
   "issue_number": 6521,
   "metadata": {
+    "branch": "ai/issue-6521",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/validate.yml",
+      "changelog.d/6521-validate-renderer-prep-always.md",
+      "scripts/validate_process.sh",
+      "tests/test_validate_workflow_validate_bootstrap.py"
+    ],
+    "issue_number": 6521,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6521",
+    "pr_number": 6551,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6551",
+    "run_attempt": "1",
+    "run_id": "37447739973",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37447739973"
   },
   "run_attempt": 1,
   "run_id": "37447739973",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-06T10:10:28Z",
+  "status": "completed",
+  "timestamp": "2026-10-06T10:22:58Z",
   "workflow": "implement"
 }
