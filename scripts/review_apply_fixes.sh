@@ -1221,8 +1221,9 @@ You work in a filtered copy of the checkout. Top-level dot-directories are
 excluded except for ".github/workflows/", ".github/actions/" and the files
 ".github/ai/claude_engine.json" and ".claude/hooks/gh_api_write_guard.py".
 "scripts/claude_settings.json.tmpl" is also admitted. In particular,
-".claude/commands/", the rest of ".claude/" and ".github/ai/" are not
-available except for the named files. Secret, credential, ".env" and
+".claude/commands/" files are admitted only when their twins exist in the
+verified workflow-support checkout. Other ".claude/" and ".github/ai/"
+paths are not available except for the named files. Secret, credential, ".env" and
 key-file paths, dependency and build directories, and files with extensions
 outside the admitted set are excluded and cannot be written back.
 A FileNotFoundError or "File not found" for an excluded path is a sandbox
@@ -1448,8 +1449,8 @@ If additional context is required beyond what is inlined, you may read:
 - files imported by the changed code
 - the original bug report file located under ${PREVIOUS_REVIEWS_DIR}
 - do not use .github/workflows/previous_reviews/ because that path is invalid in this workflow
-- The editor workspace contains only admitted source paths. Root dot-directories other than .github/workflows/ and .github/actions/, including .claude/, are not present. Do not create or recreate them. If a finding needs an edit there, list it under Ignored suggestions with reason "outside editor workspace".
-- Creating a directory symlink, a directory under .github/ other than workflows/ or actions/, a directory with a secret-like name, or a case variant of an excluded build/cache directory aborts the whole transfer of your edits. Exact excluded build/cache names are omitted.
+- The editor workspace contains only admitted source paths, including selected .claude/commands/ files, .claude/hooks/gh_api_write_guard.py and .github/ai/claude_engine.json when present. Do not create excluded paths; if a finding needs one, list it under Ignored suggestions with reason "sandbox-excluded path".
+- Creating a directory symlink, an unadmitted directory under .github/ or .claude/, a directory with a secret-like name, or a case variant of an excluded build/cache directory aborts the whole transfer of your edits. Exact excluded build/cache names are omitted.
 The bug report may contain important context about the problem being fixed.
 
 EDITOR ROLE
@@ -2204,6 +2205,9 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
   if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then
     transfer_reason=unknown
     transfer_reason_dir=
+    transfer_reason_category=
+    transfer_reason_depth=
+    transfer_reason_valid=false
     transfer_reason_file="${RUNTIME_DIR}/review_sandbox_transfer_reason_${tmp_output##*/}"
     if [ -f "${transfer_reason_file}" ] && [ ! -L "${transfer_reason_file}" ] &&
        [ "$(wc -c < "${transfer_reason_file}")" -le 240 ] &&
@@ -2214,7 +2218,8 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
           transfer_reason_tail="${transfer_reason_line#'::error::Review isolation snapshot or transfer rejected (ValueError) reason='}"
           case "${transfer_reason_tail}" in
             admitted_inventory_missing|symlink_path|unsafe_file|file_changed|entry_limit|unsafe_directory|unsafe_result_path|workspace_size_limit|host_baseline_changed|host_path_conflict|transfer_rollback_failed)
-              transfer_reason="${transfer_reason_tail}" ;;
+              transfer_reason="${transfer_reason_tail}"
+              transfer_reason_valid=true ;;
             'unsafe_directory dir='*)
               transfer_reason_dir="${transfer_reason_tail#'unsafe_directory dir='}"
               if [[ "${transfer_reason_dir}" =~ ^[A-Za-z0-9._-][A-Za-z0-9._/-]{0,63}$ ]] &&
@@ -2223,13 +2228,24 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
                  [[ "${transfer_reason_dir,,}" != *secret* && "${transfer_reason_dir,,}" != *credential* ]] &&
                  [[ ! "${transfer_reason_dir,,}" =~ (^|/)\.env ]]; then
                 transfer_reason=unsafe_directory
+                transfer_reason_valid=true
               else
                 transfer_reason_dir=
+              fi ;;
+            'unsafe_directory category='*)
+              if [[ "${transfer_reason_tail}" =~ ^unsafe_directory\ category=(symlink|invalid_name|dot_github_subtree|env_like|sensitive_name|key_material_suffix|excluded_name_variant|other)\ depth=(1|2|3\+)$ ]]; then
+                transfer_reason=unsafe_directory
+                transfer_reason_category="${BASH_REMATCH[1]}"
+                transfer_reason_depth="${BASH_REMATCH[2]}"
+                transfer_reason_valid=true
               fi ;;
           esac ;;
       esac
     fi
-    echo "::error::Review sandbox result transfer was incomplete; refusing editor fallback. reason=${transfer_reason}${transfer_reason_dir:+ dir=${transfer_reason_dir}}" | tee -a "${tmp_err}" >&2
+    if [ "${transfer_reason_valid}" = true ]; then
+      cp "${transfer_reason_file}" "${PREVIOUS_REVIEWS_DIR}/review_sandbox_transfer_reason_${attempt}.txt" 2>/dev/null || true
+    fi
+    echo "::error::Review sandbox result transfer was incomplete; refusing editor fallback. reason=${transfer_reason}${transfer_reason_dir:+ dir=${transfer_reason_dir}}${transfer_reason_category:+ category=${transfer_reason_category} depth=${transfer_reason_depth}}" | tee -a "${tmp_err}" >&2
     cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err" 2>/dev/null || true
     exit 1
   fi

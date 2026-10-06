@@ -26,17 +26,44 @@ SUFFIXES = {".py", ".sh", ".js", ".jsx", ".cjs", ".mjs", ".ts", ".tsx", ".cts", 
 COMMAND_TWIN_DIR = "workflow-templates/.claude/commands"
 
 
+def _unsafe_directory_category(name, *, is_symlink=False):
+	if is_symlink:
+		return "symlink"
+	parts = PurePosixPath(name).parts
+	if not parts or not re.fullmatch(r"[A-Za-z0-9._/-]+", name) or any(not part or part in (".", "..") for part in parts):
+		return "invalid_name"
+	lower_parts = tuple(part.lower() for part in parts)
+	if any(part.startswith(".env") for part in lower_parts):
+		return "env_like"
+	if any("secret" in part or "credential" in part for part in lower_parts):
+		return "sensitive_name"
+	if any(part.endswith((".pem", ".key", ".p12", ".pfx", ".keystore")) for part in lower_parts):
+		return "key_material_suffix"
+	if any(part in EXCLUDED and original != part for original, part in zip(parts, lower_parts)):
+		return "excluded_name_variant"
+	if len(parts) > 1 and lower_parts[0] == ".github" and lower_parts[:2] not in ((".github", "workflows"), (".github", "actions")):
+		return "dot_github_subtree"
+	return "other"
+
+
+def _directory_depth_bucket(name):
+	depth = len(PurePosixPath(name).parts)
+	return "3+" if depth >= 3 else str(max(depth, 1))
+
+
 class UnsafeWorkspaceDirectory(ValueError):
-	def __init__(self, rejected_dir):
+	def __init__(self, rejected_dir, *, is_symlink=False):
 		super().__init__("unsafe workspace directory")
 		self.rejected_dir = rejected_dir
+		self.category = _unsafe_directory_category(rejected_dir, is_symlink=is_symlink)
+		self.depth = _directory_depth_bucket(rejected_dir)
 
 
 def _log_safe_dir(name):
 	if not re.fullmatch(r"[A-Za-z0-9._-][A-Za-z0-9._/-]{0,63}", name):
 		return "redacted"
 	parts = name.split("/")
-	if any(not part or part in (".", "..") or "secret" in part.lower() or "credential" in part.lower() or part.lower().startswith(".env") for part in parts):
+	if any(not part or part in (".", "..") or "secret" in part.lower() or "credential" in part.lower() or part.lower().startswith(".env") or part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore", ".egg-info", ".dist-info")) for part in parts):
 		return "redacted"
 	return name
 
@@ -162,7 +189,9 @@ def enumerate_workspace(root, host=None, commands=None):
 			if child in EXCLUDED or child.endswith((".egg-info", ".dist-info")) or (rel == Path(".") and child.startswith(".") and child not in (".github", ".claude")):
 				dirs.remove(child)
 				continue
-			if (name not in (".github", ".github/ai", ".claude", ".claude/hooks") and not (name == ".claude/commands" and commands) and not allowed(name + "/placeholder.py")) or (Path(directory) / child).is_symlink():
+			if (Path(directory) / child).is_symlink():
+				raise UnsafeWorkspaceDirectory(name, is_symlink=True)
+			if name not in (".github", ".github/ai", ".claude", ".claude/hooks") and not (name == ".claude/commands" and commands) and not allowed(name + "/placeholder.py"):
 				raise UnsafeWorkspaceDirectory(name)
 		for child in files:
 			entries += 1
@@ -474,7 +503,7 @@ def main():
 			"transfer rollback failed": "transfer_rollback_failed",
 			"unsafe result path": "unsafe_result_path",
 		}.get(str(exc), "unknown") if sys.argv[1] == "transfer" and isinstance(exc, ValueError) else "unknown"
-		directory_detail = f" dir={_log_safe_dir(exc.rejected_dir)}" if sys.argv[1] == "transfer" and isinstance(exc, UnsafeWorkspaceDirectory) else ""
+		directory_detail = f" category={exc.category} depth={exc.depth}" if sys.argv[1] == "transfer" and isinstance(exc, UnsafeWorkspaceDirectory) else ""
 		error_type = "ValueError" if isinstance(exc, UnsafeWorkspaceDirectory) else type(exc).__name__
 		print(f"::error::Review isolation snapshot or transfer rejected ({error_type}) reason={reason_code}{directory_detail}", file=sys.stderr)
 		raise SystemExit(1) from None

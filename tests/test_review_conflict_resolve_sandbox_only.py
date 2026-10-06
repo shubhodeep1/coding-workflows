@@ -50,10 +50,12 @@ case "$1" in
     [ "${MODE:-}" != prepare_failed ] || exit 1
     if [ "${2:-}" = codex ]; then echo "$FAKE_ROOT/codex"; else echo "$FAKE_ROOT/claude"; fi ;;
   run)
-    if [ "${MODE:-}" = transfer_failed ] || [ "${MODE:-}" = transfer_unknown ] || [ "${MODE:-}" = rollback_failed ]; then
+    if [ "${MODE:-}" = transfer_failed ] || [ "${MODE:-}" = transfer_category ] || [ "${MODE:-}" = transfer_unknown ] || [ "${MODE:-}" = rollback_failed ]; then
       touch "$RUNTIME_DIR/review_sandbox_transfer_failed"
       if [ "${MODE:-}" = rollback_failed ]; then
         echo '::error::Review isolation snapshot or transfer rejected (ValueError) reason=transfer_rollback_failed' > "$RUNTIME_DIR/review_sandbox_transfer_reason_${3##*/}"
+      elif [ "${MODE:-}" = transfer_category ]; then
+        echo '::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category=symlink depth=2' > "$RUNTIME_DIR/review_sandbox_transfer_reason_${3##*/}"
       elif [ "${MODE:-}" = transfer_unknown ]; then
         echo 'unexpected transfer error' > "$RUNTIME_DIR/review_sandbox_transfer_reason_${3##*/}"
       else
@@ -73,7 +75,7 @@ esac
 @pytest.mark.parametrize("mode,engine,expected_rc", [
 	("ok", "codex", 0), ("ok", "claude", 0),
 	("prepare_failed", "codex", 1), ("outdated", "codex", 1),
-	("transfer_failed", "codex", 1),
+	("transfer_failed", "codex", 1), ("transfer_category", "codex", 1),
 ])
 def test_attempts_never_run_host_writer(tmp_path, mode, engine, expected_rc):
 	sandbox, calls = _stub(tmp_path)
@@ -134,11 +136,13 @@ attempt=1
 	assert not (tmp_path / "review_sandbox_transfer_failed").exists()
 	if mode == "transfer_failed":
 		assert "reason=unsafe_file" in result.stderr
+	if mode == "transfer_category":
+		assert "reason=unsafe_directory" in result.stderr
 	if mode == "outdated":
 		assert "reason=sandbox_helper_outdated" in result.stderr
 
 
-@pytest.mark.parametrize("mode", ["prepare_failed", "outdated", "transfer_failed", "transfer_unknown", "cleanup_failed", "rollback_failed"])
+@pytest.mark.parametrize("mode", ["prepare_failed", "outdated", "transfer_failed", "transfer_category", "transfer_unknown", "cleanup_failed", "rollback_failed"])
 def test_unsafe_failure_stops_instead_of_retrying(tmp_path, mode):
 	sandbox, calls = _stub(tmp_path)
 	src = _helper()
@@ -170,6 +174,7 @@ echo unexpected
 		"prepare_failed": "reason=sandbox_prepare_failed",
 		"outdated": "reason=sandbox_helper_outdated",
 		"transfer_failed": "reason=sandbox_transfer_failed",
+		"transfer_category": "reason=sandbox_transfer_failed",
 		"transfer_unknown": "reason=sandbox_transfer_failed",
 		"cleanup_failed": "sandbox cleanup failed",
 		"rollback_failed": "reason=transfer_rollback_failed",

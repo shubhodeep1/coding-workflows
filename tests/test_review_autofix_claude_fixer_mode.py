@@ -553,7 +553,7 @@ case "$1" in
         [ "$7" != claude ] || exit 75
         printf 'verdict\n' > "$3" ;;
       transfer_failed) : > "${RUNTIME_DIR}/review_sandbox_transfer_failed"; exit 1 ;;
-      unsafe_directory) printf '::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=.claude/commands\n' > "${RUNTIME_DIR}/review_sandbox_transfer_reason_${3##*/}"; : > "${RUNTIME_DIR}/review_sandbox_transfer_failed"; exit 1 ;;
+      unsafe_directory) printf '::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category=other depth=2\n' > "${RUNTIME_DIR}/review_sandbox_transfer_reason_${3##*/}"; : > "${RUNTIME_DIR}/review_sandbox_transfer_failed"; exit 1 ;;
       marker_on_success) : > "${RUNTIME_DIR}/review_sandbox_transfer_failed" ;;
       unavailable) exit 75 ;;
       claude_unavailable) if [ "$7" = claude ]; then printf 'stale\n' > "$3"; exit 75; fi ;;
