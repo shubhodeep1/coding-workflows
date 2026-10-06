@@ -478,7 +478,11 @@ fi
 if [ "${HEAL_EVIDENCE_SCOPE_LOCK:-false}" != "true" ] && [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ]; then
   echo "::notice::files_touched scope guard disabled (ENFORCE_FILES_TOUCHED='${ENFORCE_FILES_TOUCHED:-true}')."
 else
-  scope_staged="$(git diff --cached --name-only --diff-filter=ACMRD || true)"
+  if [ "${HEAL_EVIDENCE_SCOPE_LOCK:-false}" = "true" ]; then
+    scope_staged="$(git diff --cached --name-only --no-renames --diff-filter=ACMRTD)"
+  else
+    scope_staged="$(git diff --cached --name-only --diff-filter=ACMRD || true)"
+  fi
   if [ -n "${scope_staged}" ]; then
     scope_staged_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-staged.XXXXXX")"
     scope_allowlist_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-allowlist.XXXXXX")"
@@ -487,7 +491,7 @@ else
     if [ "${HEAL_EVIDENCE_SCOPE_LOCK:-false}" = "true" ]; then
       scope_input_file="$(mktemp "${TMPDIR:-/tmp}/implement-heal-scope.XXXXXX")"
       printf '%s\n' "${HEAL_EVIDENCE_SCOPE_ALLOWLIST:-}" > "${scope_input_file}"
-      scope_input_args=(--allowlist-file "${scope_input_file}")
+      scope_input_args=(--allowlist-file "${scope_input_file}" --heal-protected)
       echo "HEAL_EVIDENCE_SCOPE_LOCK lock=true entries=$(printf '%s\n' "${HEAL_EVIDENCE_SCOPE_ALLOWLIST:-}" | sed '/^$/d' | wc -l | tr -d ' ')"
     fi
     scope_violations=""
@@ -539,6 +543,24 @@ else
           rm -f "${scope_allowlist_file}"
           exit 1
         fi
+        ;;
+      30)
+        scope_count="$(printf '%s\n' "${scope_violations}" | sed '/^$/d' | wc -l | tr -d ' ')"
+        scope_allowlist="$(sed '/^$/d' "${scope_allowlist_file}" 2>/dev/null || true)"
+        echo "::error::Heal-evidence scope lock refused ${scope_count} protected staged path(s)."
+        echo "HEAL_EVIDENCE_SCOPE_LOCK protected_paths=${scope_count}"
+        {
+          echo 'scope_violation_blocked=heal-evidence-protected-path'
+          echo "scope_violation_count=${scope_count}"
+          echo 'scope_violation_files<<__SVF_EOF__'
+          printf '%s\n' "${scope_violations}" | sed '/^$/d'
+          echo '__SVF_EOF__'
+          echo 'scope_violation_allowlist<<__SVA_EOF__'
+          printf '%s\n' "${scope_allowlist}" | sed '/^$/d'
+          echo '__SVA_EOF__'
+        } >> "$GITHUB_OUTPUT"
+        rm -f "${scope_allowlist_file}"
+        exit 1
         ;;
       *)
         if [ "${HEAL_EVIDENCE_SCOPE_LOCK:-false}" = "true" ]; then

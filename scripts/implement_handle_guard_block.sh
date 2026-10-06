@@ -101,8 +101,14 @@ if [ -n "${SVB_REASON:-}" ]; then
     SCOPE_TG_TITLE="🚨 CRITICAL: ai:scope label blocked implementation"
   elif [ "${SVB_REASON}" = "heal-evidence-no-allowlist" ] || [ "${SVB_REASON}" = "heal-evidence-guard-unavailable" ]; then
     SCOPE_HEADER="🚨 **Heal-evidence scope lock rejected this implementation run.**"
-    SCOPE_REDISPATCH_HINT="Add a \`files_touched:\` block to the issue or a Files likely to change section to the plan, then remove \`ai:scope-blocked\` and re-approve. The \`ALLOW_OUT_OF_SCOPE_FILES\` override does not apply under this lock."
+    SCOPE_REDISPATCH_HINT="The heal issue has no intake-verified \`workflow-failure-heal:scope\` marker (older or externally edited issues are not eligible), or its scope guard is unavailable. Re-file through the intake, or have a maintainer review the issue and remove \`ai:workflow-heal\` to use normal \`files_touched\` rules. The \`ALLOW_OUT_OF_SCOPE_FILES\` override does not apply under this lock."
     SCOPE_TG_TITLE="🚨 CRITICAL: heal-evidence scope lock blocked implementation"
+  elif [ "${SVB_REASON}" = "heal-evidence-protected-path" ]; then
+    SCOPE_HEADER="🚨 **Heal-evidence scope lock refused a protected path.**"
+    SCOPE_COUNT_LABEL="Protected staged paths"
+    SCOPE_DETAIL_HEADING="Staged paths under a protected location (\`.git\`, \`.github/ai\`, \`.claude\`, \`workflow-templates/.claude\`, root instruction files):"
+    SCOPE_REDISPATCH_HINT="Heal implementations cannot change these protected paths; a human must make that change. \`ALLOW_OUT_OF_SCOPE_FILES\` does not apply under this lock."
+    SCOPE_TG_TITLE="🚨 CRITICAL: heal-evidence protected path blocked implementation"
   fi
   SCOPE_BLOCK_LABEL_DESCRIPTION='Implementation blocked: staged files fell outside files_touched scope; human review required'
   if ! gh label create 'ai:scope-blocked' \

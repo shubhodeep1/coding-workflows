@@ -160,6 +160,7 @@ _RUN_URL_RE = re.compile(
 _SMOKE_TITLE_RE = re.compile(r"\[E2E Smoke Test\b", re.IGNORECASE)
 _SMOKE_LABELS = frozenset({"e2e-smoke-test"})
 _MARKER_RE = re.compile(r"<!--\s*" + re.escape(MARKER_PREFIX) + r"(?P<key>[a-z_]+)=(?P<value>[^\s>]+)\s*-->")
+SCOPE_MARKER_MAX_ENTRIES = 20
 _ORCHESTRATOR_STATE_V2_COMMENT_RE = re.compile(
 	r"<!-- ORCHESTRATOR_STATE_V2 part=(?P<part>[1-9][0-9]*)/(?P<total>[1-9][0-9]*) manifest=[0-9a-f]{64} -->\n"
 	r".*\nORCHESTRATOR_STATE_V2 -->",
@@ -668,6 +669,60 @@ def is_valid_repo_path(value: Any) -> bool:
 	if value.startswith("/"):
 		return False
 	return all(part not in ("", ".", "..") for part in value.split("/"))
+
+
+def is_exact_scope_path(value: Any) -> bool:
+	"""Allow only bounded file paths, never a directory, glob or git metadata."""
+	if not is_valid_repo_path(value) or any(part.casefold() == ".git" for part in value.split("/")):
+		return False
+	last = value.rsplit("/", 1)[-1]
+	stem, separator, extension = last.rpartition(".")
+	return bool(stem and separator and extension)
+
+
+def extract_affected_files(diagnosis: str, issue_repo: str) -> list[str]:
+	"""Extract exact paths for the destination repository from the first affected-files section."""
+	if not is_valid_repo_slug(issue_repo):
+		return []
+	paths: list[str] = []
+	inside_fence = False
+	in_section = False
+	for line in diagnosis.splitlines():
+		if line.strip().startswith("```"):
+			inside_fence = not inside_fence
+			continue
+		if inside_fence:
+			continue
+		if not in_section:
+			if re.fullmatch(r"##\s+Affected files\s*", line, re.IGNORECASE):
+				in_section = True
+			continue
+		if line.lstrip().startswith("#"):
+			break
+		bullet = re.match(r"^\s*[-*]\s+(.+)", line)
+		if not bullet:
+			continue
+		tokens = bullet.group(1).replace("`", "").split()
+		if not tokens:
+			continue
+		token = tokens[0].rstrip(",;.")
+		prefix = issue_repo + ":"
+		alternate = issue_repo + "/"
+		if token[:len(prefix)].lower() == prefix.lower():
+			path = token[len(prefix):]
+		elif token[:len(alternate)].lower() == alternate.lower():
+			path = token[len(alternate):]
+		else:
+			continue
+		if is_exact_scope_path(path) and path not in paths:
+			paths.append(path)
+			if len(paths) == SCOPE_MARKER_MAX_ENTRIES:
+				break
+	return paths
+
+
+def compose_scope_marker(paths: list[str]) -> str:
+	return f"<!-- {MARKER_PREFIX}scope={','.join(paths)} -->" if paths else ""
 
 
 def normalize_changed_files(paths: Iterable[Any]) -> list[str]:
@@ -1671,6 +1726,7 @@ def compose_issue_body(
 	intake_run_url: str,
 	run_summaries: list[dict[str, Any]],
 	integration_branch: str | None = None,
+	issue_repo: str | None = None,
 ) -> str:
 	"""Compose the heal issue body (upstream or consumer-side).
 
@@ -1693,6 +1749,10 @@ def compose_issue_body(
 	runs_marker = compose_runs_marker(payload.get("run_refs"))
 	if runs_marker:
 		parts.append(runs_marker)
+	if issue_repo and is_valid_repo_slug(issue_repo):
+		scope_marker = compose_scope_marker(extract_affected_files(diagnosis, issue_repo))
+		if scope_marker:
+			parts.append(scope_marker)
 	parts.append("")
 	if target_branch:
 		parts.append(f"- **Target branch:** `{target_branch}`")
@@ -1757,14 +1817,14 @@ def compose_issue_body(
 		parts.append("<details><summary>Failure evidence from the reporting run (UNTRUSTED, verbatim)</summary>")
 		parts.append("")
 		parts.append("```")
-		parts.append(sanitize_text(payload["failure_evidence"], FAILURE_EVIDENCE_LIMIT).replace("```", "` ` `"))
+		parts.append(sanitize_text(payload["failure_evidence"], FAILURE_EVIDENCE_LIMIT).replace("workflow-failure-heal:scope", "workflow-failure-heal:scope_untrusted").replace("```", "` ` `"))
 		parts.append("```")
 		parts.append("")
 		parts.append("</details>")
 		parts.append("")
 	parts.append("---")
 	parts.append("")
-	parts.append(sanitize_text(diagnosis).strip() or "_(no diagnosis produced)_")
+	parts.append(sanitize_text(diagnosis).replace("workflow-failure-heal:scope", "workflow-failure-heal:scope_untrusted").strip() or "_(no diagnosis produced)_")
 	parts.append("")
 	parts.append("---")
 	parts.append("")
@@ -2260,6 +2320,7 @@ def _cmd_compose_issue(args: argparse.Namespace) -> int:
 		intake_run_url=args.intake_run_url,
 		run_summaries=[item for item in run_summaries if isinstance(item, dict)],
 		integration_branch=args.integration_branch or None,
+		issue_repo=args.issue_repo or None,
 	)
 	Path(args.title_out).write_text(title + "\n", encoding="utf-8")
 	Path(args.body_out).write_text(body, encoding="utf-8")
@@ -2447,6 +2508,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--classification", required=True, choices=CLASSIFICATIONS)
 	p.add_argument("--target-branch", default="")
 	p.add_argument("--integration-branch", default="")
+	p.add_argument("--issue-repo", default="")
 	p.add_argument("--max-depth", type=int, default=DEFAULT_MAX_LINEAGE_DEPTH)
 	p.add_argument("--intake-run-url", required=True)
 	p.add_argument("--title-out", required=True)

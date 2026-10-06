@@ -239,6 +239,21 @@ def test_cli_exit_codes_and_allowlist_dump() -> None:
 	assert rc == guard.EXIT_OUT_OF_SCOPE
 	assert out.split() == ["tasks/send.ts", "tasks/send.js"]
 
+
+def test_heal_protected_paths_override_allowlist() -> None:
+	protected = [".claude/settings.json", ".github/ai/claude_engine.json", "workflow-templates/.claude/hooks/x.py", "CLAUDE.md", "AGENTS.md", "unattended_system_instructions.md", "x/.GIT/hooks/pre-commit"]
+	with tempfile.TemporaryDirectory() as td:
+		staged = Path(td) / "staged.txt"
+		allow = Path(td) / "allow.txt"
+		allow.write_text("\n".join(protected + ["scripts/x.sh", ".github/workflows/y.yml", "docs/CLAUDE.md"]))
+		staged.write_text("\n".join(protected))
+		command = [sys.executable, str(GUARD_SCRIPT), "--allowlist-file", str(allow), "--staged-file", str(staged)]
+		proc = subprocess.run(command + ["--heal-protected"], capture_output=True, text=True)
+		assert proc.returncode == guard.EXIT_HEAL_PROTECTED and proc.stdout.splitlines() == protected
+		assert subprocess.run(command, capture_output=True).returncode == 0
+		staged.write_text("scripts/x.sh\n.github/workflows/y.yml\ndocs/CLAUDE.md\n")
+		assert subprocess.run(command + ["--heal-protected"], capture_output=True).returncode == 0
+
 	rc, _out = _run_cli("no allowlist here", ["whatever.ts"])
 	assert rc == guard.EXIT_SKIP_NO_ALLOWLIST
 

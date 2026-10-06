@@ -339,7 +339,8 @@ def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
 	assert "steps.collect_heal_evidence.outputs.present == 'true'" in implement
 	for step in ("Preflight destructive-commit guard", "Commit changes"):
 		block = implement.split(f"      - name: {step}\n", 1)[1].split("      - name: ", 1)[0]
-		assert "HEAL_EVIDENCE_SCOPE_LOCK: ${{ steps.collect_heal_evidence.outputs.present" in block
+		# A failed collect must not downgrade an eligible heal issue to the normal scope rules.
+		assert "HEAL_EVIDENCE_SCOPE_LOCK: ${{ steps.heal_evidence_gate.outputs.enabled" in block
 		assert "HEAL_EVIDENCE_SCOPE_ALLOWLIST: ${{ steps.heal_evidence_scope.outputs.allowlist }}" in block
 	assert implement.count('editor_git_credentials.sh" hide') == 2
 	assert implement.count('editor_git_credentials.sh" restore') >= 2

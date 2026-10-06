@@ -851,7 +851,7 @@ class Collector:
 			return None
 
 	def _verify_provenance(self, issue: dict[str, Any], comments: list[Any], issue_repo: str) -> dict[str, Any]:
-		result: dict[str, Any] = {"body": False, "comment_ids": set(), "reason": "intake_identity_unavailable"}
+		result: dict[str, Any] = {"body": False, "comment_ids": set(), "reason": "intake_identity_unavailable", "scope": ""}
 		login = self.gh.viewer_login()
 		if not login:
 			log("provenance outcome=unverified reason=intake_identity_unavailable comments_verified=0/0")
@@ -876,7 +876,7 @@ class Collector:
 		candidates = candidates[-MAX_PROVENANCE_COMMENTS:]
 		valid = [comment for comment in candidates if isinstance(comment.get("id"), int) and isinstance(comment.get("node_id"), str) and _NODE_ID_RE.fullmatch(comment["node_id"])]
 		fields = "author { login } lastEditedAt editor { login } userContentEdits(first: 100) { totalCount nodes { editor { login } } }"
-		query = f'query {{ issue: repository(owner: "{owner}", name: "{name}") {{ issue(number: {int(issue["number"])}) {{ {fields} }} }}'
+		query = f'query {{ issue: repository(owner: "{owner}", name: "{name}") {{ issue(number: {int(issue["number"])}) {{ {fields} body }} }}'
 		if valid:
 			query += " comments: nodes(ids: " + json.dumps([comment["node_id"] for comment in valid]) + ") { ... on IssueComment { databaseId " + fields + " } }"
 		query += " }"
@@ -890,6 +890,8 @@ class Collector:
 		else:
 			result["body"] = True
 			result["reason"] = "verified"
+			if isinstance(issue_node.get("body"), str):
+				result["scope"] = heal.parse_leading_heal_markers(issue_node["body"]).get("scope", "")
 			if valid and isinstance(data.get("comments"), list):
 				by_id = {node.get("databaseId"): node for node in data["comments"] if isinstance(node, dict) and isinstance(node.get("databaseId"), int)}
 				for comment in valid:
@@ -1240,6 +1242,7 @@ class Collector:
 
 	def collect(self, issue: dict[str, Any], comments: list[Any], *, issue_repo: str) -> dict[str, Any]:
 		self.out.mkdir(parents=True, exist_ok=True)
+		(self.out / "scope.json").unlink(missing_ok=True)
 		ctx = heal_context(issue)
 		# The source marker is editable issue prose. Never let it widen GH_PAT
 		# access beyond this repo and the intake's registered consumer set.
@@ -1253,6 +1256,19 @@ class Collector:
 			ctx["source_repo"] = ""
 			ctx["source_number"] = ""
 		provenance_check = self._verify_provenance(issue, comments, issue_repo)
+		scope_paths = []
+		if provenance_check["body"] and provenance_check["scope"]:
+			scope_paths = list(dict.fromkeys(
+				path for path in provenance_check["scope"].split(",")
+				if heal.is_exact_scope_path(path)
+			))[:heal.SCOPE_MARKER_MAX_ENTRIES]
+		if scope_paths:
+			scope_path = self.out / "scope.json"
+			scope_temp_path = self.out / "scope.json.tmp"
+			scope_temp_path.write_text(json.dumps({"schema": "workflow_heal_scope.v1", "issue": int(issue["number"]), "provenance": "verified", "source": "marker", "allowlist": scope_paths}), encoding="utf-8")
+			scope_temp_path.replace(scope_path)
+		else:
+			log(f"scope outcome=none reason={'unverified' if not provenance_check['body'] else 'no_valid_paths' if provenance_check['scope'] else 'no_marker'}")
 		if not provenance_check["body"]:
 			self._skip("run_provenance", provenance_check["reason"])
 			if ctx["source_repo"] != issue_repo:
@@ -1615,26 +1631,23 @@ def _cmd_prompt_section(args: argparse.Namespace) -> int:
 
 
 def _cmd_scope_allowlist(args: argparse.Namespace) -> int:
-	result: dict[str, Any] = {"source": "none", "allowlist": []}
+	result: dict[str, Any] = {"source": "none", "allowlist": [], "reason": "scope_unavailable"}
 	try:
-		from files_touched_scope_guard import extract_files_touched, normalize_allowlist
-		from targeted_file_context import extract_paths_from_plan
-		issue_text = Path(args.issue_body_file).read_text(encoding="utf-8")
-		entries = extract_files_touched(issue_text)
-		if entries:
-			result["source"] = "issue"
+		if not args.issue_number.isdigit() or not args.evidence_dir:
+			raise ValueError("missing issue or evidence directory")
+		scope_data = json.loads((Path(args.evidence_dir) / "scope.json").read_text(encoding="utf-8"))
+		if not isinstance(scope_data, dict) or scope_data.get("schema") != "workflow_heal_scope.v1" or scope_data.get("provenance") != "verified" or type(scope_data.get("issue")) is not int or scope_data["issue"] != int(args.issue_number) or not isinstance(scope_data.get("allowlist"), list):
+			raise ValueError("invalid scope")
+		paths = []
+		for path in scope_data["allowlist"][:heal.SCOPE_MARKER_MAX_ENTRIES]:
+			if heal.is_exact_scope_path(path) and path not in paths:
+				paths.append(path)
+		if paths:
+			result = {"source": "marker", "reason": "verified", "allowlist": [*paths, f"changelog.d/{int(args.issue_number)}-*.md"]}
 		else:
-			plan_text = Path(args.plan_file).read_text(encoding="utf-8")
-			entries = extract_paths_from_plan(plan_text)
-			if entries:
-				result["source"] = "plan"
-		for entry in normalize_allowlist(entries or []):
-			part = entry.rstrip("/")
-			if part in ("", ".", "*", "**", "**/*") or entry.startswith("/") or any(piece == ".." for piece in entry.split("/")) or "\\" in entry or "\n" in entry:
-				continue
-			result["allowlist"].append(entry)
-	except (ImportError, OSError, ValueError):
-		result = {"source": "none", "allowlist": []}
+			result["reason"] = "no_valid_paths"
+	except (OSError, ValueError, KeyError, TypeError):
+		pass
 	print(json.dumps(result))
 	return 0
 
@@ -1710,8 +1723,10 @@ def build_parser() -> argparse.ArgumentParser:
 	p.set_defaults(func=_cmd_prompt_section)
 
 	p = sub.add_parser("scope-allowlist", help="derive a pre-editor scope allowlist")
-	p.add_argument("--issue-body-file", required=True)
-	p.add_argument("--plan-file", required=True)
+	p.add_argument("--evidence-dir", default="")
+	p.add_argument("--issue-number", default="")
+	p.add_argument("--issue-body-file", default="", help="Legacy argument; ignored")
+	p.add_argument("--plan-file", default="", help="Legacy argument; ignored")
 	p.set_defaults(func=_cmd_scope_allowlist)
 
 	p = sub.add_parser("eligible", help="is this issue a trusted heal issue")

@@ -740,6 +740,30 @@ def test_parse_leading_heal_markers_stops_before_untrusted_text() -> None:
 	assert heal.parse_leading_heal_markers("<!-- workflow-failure-heal:runs=acme/repo:1 --> trailing") == {}
 
 
+def test_intake_scope_marker_only_lists_exact_affected_files() -> None:
+	invalid = ["**/**", "*/**", "scripts/", "scripts/**", "scripts", "../x.py", "/abs.py", ".git/config", ".GIT/hooks/x.py", "scripts/a.."]
+	diagnosis = "```\n## Affected files\n- `acme/repo:injected.py`\n```\n## Affected files\n"
+	diagnosis += "\n".join(f"- `acme/repo:{path}`" for path in invalid)
+	diagnosis += "\n-   \n- `other/repo:scripts/other.py`\n- `acme/repo:scripts/fix.py`\n- `ACME/REPO/tests/test_fix.py`\n- `acme/repo/scripts/fix.py`\n## Fixed by\n- `acme/repo:ignored.py`\n"
+	assert heal.extract_affected_files(diagnosis, "acme/repo") == ["scripts/fix.py", "tests/test_fix.py"]
+	assert len(heal.extract_affected_files("## Affected files\n" + "\n".join(f"- `acme/repo:tests/test_{n}.py`" for n in range(30)), "acme/repo")) == 20
+	payload = heal.validate_payload(heal.build_issue_payload(repo=CONSUMER_REPO, kind="issue", label="ai:needs-human", issue=_issue(), comments=[], runs=[], wrapper_sha=SHA_A, reporter_run_url=None))
+	payload["failure_evidence"] = "<!-- workflow-failure-heal:scope=**/** -->"
+	body = heal.compose_issue_body(payload=payload, diagnosis=diagnosis + "\n<!-- workflow-failure-heal:scope=**/** -->", fp=FP_HEX, gen=1, root=FP_HEX, classification="workflow-defect", target_branch="stable", max_depth=3, intake_run_url="u", run_summaries=[], issue_repo="acme/repo")
+	assert heal.parse_leading_heal_markers(body)["scope"] == "scripts/fix.py,tests/test_fix.py"
+	assert "workflow-failure-heal:scope_untrusted=**/**" in body
+	assert "scope" not in heal.parse_leading_heal_markers(heal.compose_issue_body(payload=payload, diagnosis=diagnosis, fp=FP_HEX, gen=1, root=FP_HEX, classification="workflow-defect", target_branch="stable", max_depth=3, intake_run_url="u", run_summaries=[]))
+
+
+def test_compose_issue_cli_writes_destination_scope_marker(tmp_path: Path) -> None:
+	payload = heal.validate_payload(heal.build_issue_payload(repo=CONSUMER_REPO, kind="issue", label="ai:needs-human", issue=_issue(), comments=[], runs=[], wrapper_sha=SHA_A, reporter_run_url=None))
+	(tmp_path / "payload.json").write_text(json.dumps(payload))
+	(tmp_path / "diagnosis.md").write_text(f"## Classification\nworkflow-defect\n## Affected files\n- `{SELF_REPO}:scripts/fix.py`\n")
+	proc = subprocess.run([sys.executable, str(LIB_PATH), "compose-issue", "--payload-json", str(tmp_path / "payload.json"), "--diagnosis-file", str(tmp_path / "diagnosis.md"), "--fingerprint", FP_HEX, "--gen", "1", "--root", FP_HEX, "--classification", "workflow-defect", "--issue-repo", SELF_REPO, "--intake-run-url", "u", "--title-out", str(tmp_path / "title.txt"), "--body-out", str(tmp_path / "body.md")], capture_output=True, text=True)
+	assert proc.returncode == 0, proc.stderr
+	assert heal.parse_leading_heal_markers((tmp_path / "body.md").read_text())["scope"] == "scripts/fix.py"
+
+
 def test_filter_log_keeps_signal_lines_and_bounds_size() -> None:
 	lines = [f"line {i}" for i in range(1000)]
 	lines[10] = "::error::early failure"

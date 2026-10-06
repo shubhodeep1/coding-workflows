@@ -2224,6 +2224,7 @@ def test_heal_evidence_scope_lock_blocks_overrides_and_allows_named_file() -> No
 			("missing", "", "heal-evidence-no-allowlist"),
 			("outside", "other.md", "out-of-scope"),
 			("inside", "README.md", ""),
+			("protected", "README.md\nCLAUDE.md", "heal-evidence-protected-path"),
 		):
 			parent = tmp_path / name
 			parent.mkdir()
@@ -2236,6 +2237,8 @@ def test_heal_evidence_scope_lock_blocks_overrides_and_allows_named_file() -> No
 				"ENFORCE_FILES_TOUCHED": "false",
 				"ALLOW_OUT_OF_SCOPE_FILES": "true",
 			})
+			if name == "protected":
+				(repo_dir / "CLAUDE.md").write_text("editor change\n", encoding="utf-8")
 			proc = _run_commit_helper(repo_dir, env)
 			assert (proc.returncode == 0) == (expected == ""), proc.stdout + proc.stderr
 			if expected:
@@ -2262,6 +2265,63 @@ def test_heal_evidence_preflight_blocks_missing_allowlist() -> None:
 		proc = _run_shell_script(script, cwd=repo_dir, env=env)
 		assert proc.returncode != 0, proc.stdout + proc.stderr
 		assert "scope_violation_blocked=heal-evidence-no-allowlist" in github_output.read_text()
+
+
+def test_heal_evidence_rename_out_of_protected_path_blocks_both_guards() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_heal_rename_") as td:
+		for mode in ("preflight", "commit"):
+			parent = Path(td) / mode
+			parent.mkdir()
+			repo_dir, github_output, env, _ = _staged_support_fixture(parent, _STAGED_HELPER_MAIN)
+			shutil.copy2(FILES_TOUCHED_SCOPE_GUARD, Path(env["IMPLEMENT_STAGED_SUPPORT_RUN_DIR"]) / "files_touched_scope_guard.py")
+			(repo_dir / ".claude").mkdir()
+			(repo_dir / ".claude" / "a.md").write_text("original\n")
+			_git(["git", "add", ".claude/a.md"], cwd=repo_dir)
+			_git(["git", "commit", "-m", "add source"], cwd=repo_dir)
+			_git(["git", "mv", ".claude/a.md", "scripts/a.md"], cwd=repo_dir)
+			env.update({"HEAL_EVIDENCE_SCOPE_LOCK": "true", "HEAL_EVIDENCE_SCOPE_ALLOWLIST": "README.md\nscripts/a.md", "ENFORCE_FILES_TOUCHED": "false", "ALLOW_OUT_OF_SCOPE_FILES": "true"})
+			if mode == "preflight":
+				script = _render_github_expressions(_extract_run_script("Preflight destructive-commit guard"), {"github.repository": "shubhodeep1/coding-workflows"})
+				proc = _run_shell_script(script, cwd=repo_dir, env=env)
+			else:
+				proc = _run_commit_helper(repo_dir, env)
+			assert proc.returncode != 0, proc.stdout + proc.stderr
+			assert "scope_violation_blocked=heal-evidence-protected-path" in github_output.read_text()
+			assert ".claude/a.md" in github_output.read_text()
+
+
+def test_heal_evidence_protected_typechange_blocks_both_guards() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_heal_typechange_") as td:
+		for mode in ("preflight", "commit"):
+			parent = Path(td) / mode
+			parent.mkdir()
+			repo_dir, github_output, env, _ = _staged_support_fixture(parent, _STAGED_HELPER_MAIN)
+			shutil.copy2(FILES_TOUCHED_SCOPE_GUARD, Path(env["IMPLEMENT_STAGED_SUPPORT_RUN_DIR"]) / "files_touched_scope_guard.py")
+			(repo_dir / ".claude").mkdir()
+			protected_file = repo_dir / ".claude" / "a.md"
+			protected_file.write_text("original\n")
+			_git(["git", "add", ".claude/a.md"], cwd=repo_dir)
+			_git(["git", "commit", "-m", "add source"], cwd=repo_dir)
+			protected_file.unlink()
+			protected_file.symlink_to("../README.md")
+			_git(["git", "add", ".claude/a.md"], cwd=repo_dir)
+			env.update({"HEAL_EVIDENCE_SCOPE_LOCK": "true", "HEAL_EVIDENCE_SCOPE_ALLOWLIST": "README.md\n.claude/a.md", "ENFORCE_FILES_TOUCHED": "false", "ALLOW_OUT_OF_SCOPE_FILES": "true"})
+			if mode == "preflight":
+				script = _render_github_expressions(_extract_run_script("Preflight destructive-commit guard"), {"github.repository": "shubhodeep1/coding-workflows"})
+				proc = _run_shell_script(script, cwd=repo_dir, env=env)
+			else:
+				proc = _run_commit_helper(repo_dir, env)
+			assert proc.returncode != 0, proc.stdout + proc.stderr
+			assert "scope_violation_blocked=heal-evidence-protected-path" in github_output.read_text()
+
+
+def test_heal_evidence_allowlist_step_uses_verified_evidence() -> None:
+	step = _step_block_text("Derive heal-evidence scope allowlist")
+	assert 'scope-allowlist --evidence-dir "${HEAL_EVIDENCE_DIR:-}" --issue-number "${ISSUE_NUMBER:-}"' in step
+	assert "--plan-file" not in step and "--issue-body-file" not in step
+	for guard_step in ("Preflight destructive-commit guard", "Commit changes"):
+		block = _step_block_text(guard_step)
+		assert "HEAL_EVIDENCE_SCOPE_LOCK: ${{ steps.heal_evidence_gate.outputs.enabled == 'true' && 'true' || 'false' }}" in block
 
 
 def test_validate_step_uses_reusable_validator_with_continue_on_error() -> None:
@@ -2405,6 +2465,7 @@ def test_guard_handler_executes_all_rejection_modes_after_support_cleanup() -> N
 		("unsafe-manifest", "owner/consumer", "unsafe-fetched-manifest", "", "", "ai:destructive-blocked", "artifact-cleanup manifest contained unsafe path(s)"),
 		("files-touched", "shubhodeep1/coding-workflows", "", "files-touched", "", "ai:scope-blocked", "files_touched scope guard rejected"),
 		("scope-lock", "owner/consumer", "", "scope-lock-label", "", "ai:scope-blocked", "Issue scope-lock rejected"),
+		("heal-protected", "owner/consumer", "", "heal-evidence-protected-path", "", "ai:scope-blocked", "Heal-evidence scope lock refused a protected path"),
 		("staged-support", "shubhodeep1/coding-workflows", "", "", "true", "ai:needs-human", "Staged-support restore failed"),
 	)
 	for case_name, repository, destructive_reason, scope_reason, staged_support_reason, expected_label, expected_comment in cases:
