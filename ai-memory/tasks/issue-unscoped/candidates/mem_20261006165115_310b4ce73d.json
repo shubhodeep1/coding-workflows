@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:2089-2093 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  PROBLEM: `budget_decision` re-parses the verified `source_issue` string instead of using the repo and issue number already extracted by `verify_source_lineage`.\n  WHY: This does not fail at runtime today, but duplicated parsing can drift if the validated format changes.\n- tests/test_workflow_failure_heal.py:831-834 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: The test calls `decide([root_issue, listed], 2, max_depth=2)` twice with identical arguments to assert the action and prior fields.\n  WHY: The redundant call adds no coverage and wastes an invocation; it is not a runtime correctness bug.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/workflow_failure_heal.py:2089-2093 | severity=NIT | confidence=3\n  PROBLEM: In budget_decision, when source_gen is verified, prior_issue and prior_repo are parsed from source_issue via rsplit/split rather than consumed from verify_source_lineage which already extracted repo (via _SOURCE_KEY_RE group) and number (via the same rsplit).\n  WHY: Currently no failure \u2014 both sites parse the same validated string with equivalent operations. The risk is maintenance: the two extractions can diverge.\n- tests/test_workflow_failure_heal.py:832-834 | severity=NIT | confidence=3\n  PROBLEM: decide([root_issue, listed], 2, max_depth=2) is called on line 832 to check the action and again on line 833 to check prior fields. The two assertions could share one call result.\n  WHY: Does not fail; test correctness is unaffected. Redundant call adds trivial latency.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_workflow_failure_heal.py:831-832 | severity=NIT | confidence=4\n  PROBLEM: The test calls `decide([root_issue, listed], 2, max_depth=2)` twice with identical arguments \u2014 once for the `action == \"escalate\"` assertion and again to capture `capped_chain` for the `prior_issue`/`prior_repo` assertions. The second invocation already returns the full dict whose `action` field could be checked once.\n  WHY: Not a runtime correctness bug; the duplicated call wastes a `budget_decision` invocation per test run (and per parameterised case) without adding coverage. A human reviewer would consolidate these into a single call: `capped_chain = decide(...); assert capped_chain[\"action\"] == \"escalate\"; assert capped_chain[\"prior_issue\"] == 42 and capped_chain[\"prior_repo\"] == CONSUMER_REPO`.\n- scripts/workflow_failure_heal.py:2090-2091 | severity=NIT | confidence=3\n  PROBLEM: `verify_source_lineage` (lines 605-650) has already parsed `source_issue` via `_SOURCE_KEY_RE.fullmatch(str(source_issue or \"\"))` and extracted `repo = key_match.group(\"repo\")` plus `number = int(str(source_issue).rsplit(\"#\", 1)[1])`. The new block re-parses the same string with two different split strategies (`rsplit(\"#\", 1)` for the number and `split(\"#\", 1)` for the repo) instead of consuming the already-validated `repo` / `number` from the verified verdict.\n  WHY: Not a runtime bug today \u2014 the `if source_gen is not None` guard only reaches the parsing when `verdict[\"verified\"]` is True, which guarantees the regex matched and the format is `owner/repo#N`. But the duplicated parsing means any future `_SOURCE_KEY_RE` format change (for example, allowing `#` in the repo segment) must be propagated to both call sites, or `prior_repo` / `prior_issue` silently misparses. Returning `prior_issue` and `prior_repo` from `verify_source_lineage` and consuming them here would eliminate that drift hazard.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_workflow_failure_heal.py:831-833 | PROBLEM: `decide([root_issue, listed], 2, max_depth=2)` is called twice with identical arguments \u2014 once for the action assertion and once for the prior_issue/prior_repo assertion.\n  WHY: This is redundant and could mask a regression if the function had side effects. Suggested minimal fix: Capture the result once: `capped_chain = decide([root_issue, listed], 2, max_depth=2)` then assert both `capped_chain[\"action\"] == \"escalate\"` and the prior fields on `capped_chain`.\n  Estimated lines changed: 2\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "d382d20975db2833e7acb3ca420626721369bc98ca497c2af0a7f59e12f9c825",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6553,
+    "run_id": "37492544052",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37492544052",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006165115_310b4ce73d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6553,
+    "run_id": "37492544052"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T16:51:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
