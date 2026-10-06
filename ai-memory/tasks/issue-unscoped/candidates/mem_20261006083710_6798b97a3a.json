@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:line ~776 | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: When `COMMENT_AUTHOR=\"\"`, the streak scanner omits the author filter, allowing comments from other automation accounts to contribute to the current phase report's failure streak.\n  WHY: Those comments can inflate the count beyond `WORKFLOW_HEAL_PHASE_FAILURE_STREAK` and trigger false heal escalations.\n- .claude/hooks/pr_merge_status_guard.py:1519-1522 | severity=high | confidence=[2]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_evaluate_bash` assumes `config_override` alone is sufficient to safely skip the checkout guard when a directory cannot be resolved.\n  WHY: An environment-wrapped git command may not produce an \"unresolved directory\" warning, potentially bypassing the guard prematurely.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Copy the stall guard alongside `ai_engine.sh` in `plan.yml`, `clarify.yml` and `orchestrate_clarify_respond.yml`.\"\n  expected_change_site: `.github/workflows/orchestrate_clarify_respond.yml`\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff for `.github/workflows/orchestrate_clarify_respond.yml` only updates the script staging list to include `codex_stall_guard.sh` but does not add the necessary logic to ensure it is actually staged into the run environment, unlike the changes made to `plan.yml` and `clarify.yml`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal.py:line ~776 | severity=high | confidence=[3]\n  PROBLEM: When `COMMENT_AUTHOR=\"\"` (e.g., identity resolution fails), the streak scanner omits the author filter.\n  WHY: This allows comments authored by other consumer pipeline accounts (e.g., different automation) to contribute to the streak of the current phase report, potentially inflating the count beyond `WORKFLOW_HEAL_PHASE_FAILURE_STREAK` and triggering false heal escalations.\n- .claude/hooks/pr_merge_status_guard.py:1519-1522 | severity=high | confidence=[2]\n  PROBLEM: The change in `_evaluate_bash` assumes that `config_override` is the only necessary condition to safely skip the checkout guard when a directory cannot be resolved.\n  WHY: If a git command is wrapped with an environment override that does not result in an \"unresolved directory\" warning, this logic might bypass the guard prematurely. While the current change improves on the previous over-eager warning, it relies on this assumption for safety in all command scenarios.\n- Requirement: \"Copy the stall guard alongside `ai_engine.sh` in `plan.yml`, `clarify.yml` and `orchestrate_clarify_respond.yml`.\"\n  Expected change site: `.github/workflows/orchestrate_clarify_respond.yml`\n  Evidence of absence: The PR diff for `.github/workflows/orchestrate_clarify_respond.yml` only updates the script staging list to include `codex_stall_guard.sh` but does not add the necessary logic to ensure it is actually staged into the run environment, unlike the changes made to `plan.yml` and `clarify.yml`.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ba02a7ee65a5f460b01f70b979174c93d883fe8ca81a0d14d7160d94e1d5660e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6433,
+    "run_id": "37429043879",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37429043879",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006083710_6798b97a3a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6433,
+    "run_id": "37429043879"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T08:37:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
