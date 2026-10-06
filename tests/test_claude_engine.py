@@ -83,6 +83,7 @@ def test_checked_in_config_matches_code_defaults() -> None:
 	for role in CUTOVER_ROLES:
 		expected["role_defaults"][role]["engine"] = "claude"
 	assert {**config, "broker_url": ""} == expected
+	assert config["role_defaults"]["UNBLOCK_JUDGE"]["profile"] == "read"
 
 
 @pytest.mark.parametrize(

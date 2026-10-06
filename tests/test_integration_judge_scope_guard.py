@@ -39,14 +39,19 @@ def judge_repo(tmp_path: Path, request: pytest.FixtureRequest):
 		conflict_path = request.param[1]
 	elif request.param == "disjoint":
 		conflict_path = "src/app.py"
+	elif request.param == "symlink":
+		conflict_path = "src/link"
 	elif request.param == "newline":
 		conflict_path = "lines\nbreak.txt"
 	else:
 		conflict_path = ".github/workflows/ci.yml" if request.param else "conflict.txt"
 	conflicted = root / conflict_path
 	conflicted.parent.mkdir(parents=True, exist_ok=True)
-	conflicted.write_text("base\n" if request.param == "disjoint" else
-	                      "first\nshared\nbase\nlast\n" if request.param == "base-shared" else "first\nbase\nlast\n")
+	if request.param == "symlink":
+		conflicted.symlink_to("base-target")
+	else:
+		conflicted.write_text("base\n" if request.param == "disjoint" else
+		                      "first\nshared\nbase\nlast\n" if request.param == "base-shared" else "first\nbase\nlast\n")
 	(root / "untouched.txt").write_text("untouched\n")
 	git(root, "add", ".")
 	git(root, "commit", "-m", "base")
@@ -55,6 +60,9 @@ def judge_repo(tmp_path: Path, request: pytest.FixtureRequest):
 	git(root, "checkout", "-b", "integration")
 	if request.param == "deleted-ours":
 		conflicted.unlink()
+	elif request.param == "symlink":
+		conflicted.unlink()
+		conflicted.symlink_to("ours-target")
 	else:
 		conflicted.write_text("ours\n" if request.param == "disjoint" else
 		                      "first\n" + "\n" * 2000 + "ours\nlast\n" if request.param == "repeated" else
@@ -66,6 +74,9 @@ def judge_repo(tmp_path: Path, request: pytest.FixtureRequest):
 	git(root, "checkout", "main")
 	if request.param == "deleted-theirs":
 		conflicted.unlink()
+	elif request.param == "symlink":
+		conflicted.unlink()
+		conflicted.symlink_to("theirs-target")
 	else:
 		conflicted.write_text("theirs\n" if request.param == "disjoint" else
 		                      "first\n" + "\n" * 2000 + "theirs\nlast\n" if request.param == "repeated" else
@@ -200,6 +211,48 @@ def test_protected_one_sided_conflict_can_choose_deletion(judge_repo):
 	assert "outcome=accepted" in result.stderr
 	assert result.stdout.strip() == git(wt, "write-tree").stdout.strip()
 	assert git(wt, "ls-files", "--", conflict_path).stdout == ""
+	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() == before
+
+
+@pytest.mark.parametrize("judge_repo", ["symlink"], indirect=True)
+@pytest.mark.parametrize("select_side", [True, False])
+def test_symlink_conflict_requires_intact_side(judge_repo, select_side):
+	wt, baseline, remote, before, conflict_path, run = judge_repo
+	git(wt, "checkout", "--ours", "--", conflict_path)
+	if not select_side:
+		(wt / conflict_path).unlink()
+		(wt / conflict_path).symlink_to("invented-target")
+	git(wt, "add", "--", conflict_path)
+	result = run(f'_integration_judge_verify_scope "{wt}" "{baseline}" 42')
+	assert (result.returncode == 0) == select_side, result.stderr + result.stdout
+	if not select_side:
+		assert "reason=protected_path_provenance" in result.stderr
+	assert git(wt, "ls-files", "-s", "--", conflict_path).stdout.startswith("120000 ")
+	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() == before
+
+
+@pytest.mark.parametrize("judge_repo", [("path", "src/app.py")], indirect=True)
+@pytest.mark.parametrize("select_side", [True, False])
+def test_gitlink_conflict_requires_intact_side(judge_repo, select_side):
+	wt, baseline, remote, before, conflict_path, run = judge_repo
+	main_commit = git(wt, "rev-parse", "main").stdout.strip()
+	base_commit = git(wt, "rev-parse", "main^").stdout.strip()
+	unmerged_path = baseline / "unmerged.z"
+	updated_entries = []
+	for entry in unmerged_path.read_bytes().split(b"\0"):
+		if not entry:
+			continue
+		header, staged_path = entry.split(b"\t", 1)
+		stage_number = header.split(b" ")[-1]
+		if stage_number in (b"2", b"3"):
+			entry = b"160000 " + (before if stage_number == b"2" else main_commit).encode() + b" " + stage_number + b"\t" + staged_path
+		updated_entries.append(entry)
+	unmerged_path.write_bytes(b"\0".join(updated_entries) + b"\0")
+	git(wt, "update-index", "--add", "--cacheinfo", f"160000,{before if select_side else base_commit},{conflict_path}")
+	result = run(f'_integration_judge_verify_scope "{wt}" "{baseline}" 42')
+	assert (result.returncode == 0) == select_side, result.stderr + result.stdout
+	if not select_side:
+		assert "reason=protected_path_provenance" in result.stderr
 	assert git(remote, "rev-parse", "refs/heads/integration").stdout.strip() == before
 
 

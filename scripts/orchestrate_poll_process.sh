@@ -2024,6 +2024,15 @@ if ! [[ "${JUDGE_REPEAT_FINGERPRINT_MAX}" =~ ^[0-9]+$ ]] || [ "${JUDGE_REPEAT_FI
   echo "::warning::JUDGE_REPEAT_FINGERPRINT_MAX must be a positive integer; defaulting to 2"
   JUDGE_REPEAT_FINGERPRINT_MAX="2"
 fi
+# Consecutive project-judge runs with no usable output (the model failed, or
+# its output did not parse) before the project fails with ai:blocked and goes
+# to the unblock judge (plan Phase 7, Q13). Before, this exit retried every
+# tick forever with a CRITICAL alert each time.
+JUDGE_OUTPUT_FAILURE_MAX="${JUDGE_OUTPUT_FAILURE_MAX:-3}"
+if ! [[ "${JUDGE_OUTPUT_FAILURE_MAX}" =~ ^[0-9]+$ ]] || [ "${JUDGE_OUTPUT_FAILURE_MAX}" -lt 1 ]; then
+  echo "::warning::JUDGE_OUTPUT_FAILURE_MAX must be a positive integer; defaulting to 3"
+  JUDGE_OUTPUT_FAILURE_MAX="3"
+fi
 
 # Byte budgets for the PR diffs embedded in the wave judge prompt. codex's
 # `turn/start` stdin envelope is a hard 1,048,576-character cap; the judge
@@ -2861,8 +2870,33 @@ is_valid_orchestrator_state_json() {
   ' >/dev/null 2>&1
 }
 
+UNBLOCK_TRUSTED_LOGIN=""
+UNBLOCK_TRUSTED_LOGIN_STATE="unset"
+ORCH_STATE_IDENTITY_ALERT_SENT="false"
+
+# The pipeline's own login (the GH_PAT user), resolved at most once per tick
+# with one `user` read; empty when it cannot be resolved.
+unblock_trusted_login() {
+  if [ "${UNBLOCK_TRUSTED_LOGIN_STATE}" = "unset" ]; then
+    UNBLOCK_TRUSTED_LOGIN="$(gh_retry _safe_gh_jq "user" --jq '.login // ""' 2>/dev/null || true)"
+    if [[ "${UNBLOCK_TRUSTED_LOGIN}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+      UNBLOCK_TRUSTED_LOGIN_STATE="ok"
+    else
+      UNBLOCK_TRUSTED_LOGIN=""
+      UNBLOCK_TRUSTED_LOGIN_STATE="failed"
+      if [ "${ORCH_STATE_IDENTITY_ALERT_SENT}" != "true" ]; then
+        tg_send_msg "Orchestrator cannot verify its GitHub identity for ${GITHUB_REPOSITORY}; tracking projects are paused. Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID:-unknown}")" "CRITICAL" >/dev/null 2>&1 || true
+        ORCH_STATE_IDENTITY_ALERT_SENT="true"
+      fi
+    fi
+  fi
+  printf '%s' "${UNBLOCK_TRUSTED_LOGIN}"
+}
+
 extract_latest_valid_orchestrator_state() {
   local comments_json="$1"
+  local trusted_comments_json
+  local ignored_count
   local candidate
   local candidate_body
   local candidate_state
@@ -2872,6 +2906,28 @@ extract_latest_valid_orchestrator_state() {
   EXTRACTED_STATE_JSON=""
   EXTRACTED_STATE_FALLBACK_USED="false"
   EXTRACTED_STATE_COMMENT_COUNT=0
+  EXTRACTED_STATE_IDENTITY_UNAVAILABLE="false"
+  EXTRACTED_STATE_UNTRUSTED_IGNORED=0
+
+  unblock_trusted_login >/dev/null
+  if [ -z "${UNBLOCK_TRUSTED_LOGIN}" ]; then
+    EXTRACTED_STATE_IDENTITY_UNAVAILABLE="true"
+    echo "::warning::ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=${TRACKING_NUM:-?} outcome=identity_unavailable" >&2
+    return 1
+  fi
+  if ! trusted_comments_json="$(printf '%s' "${comments_json}" | jq -c --arg login "${UNBLOCK_TRUSTED_LOGIN}" '[.[]? | select((.user.login // "") == $login)]' 2>/dev/null)"; then
+    # Do not mistake a failed author-filter parse for an empty, verified
+    # thread: the latter can trigger destructive state reconstruction.
+    trusted_comments_json='[]'
+    EXTRACTED_STATE_IDENTITY_UNAVAILABLE="true"
+    echo "::warning::ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=${TRACKING_NUM:-?} outcome=identity_unavailable reason=filter_failed" >&2
+    return 1
+  fi
+  ignored_count="$(printf '%s' "${comments_json}" | jq -r --arg login "${UNBLOCK_TRUSTED_LOGIN}" '[.[]? | select((.user.login // "") != $login and ((.body // "") | (contains("ORCHESTRATOR_STATE_V1") or contains("ORCHESTRATOR_STATE_V2"))))] | length' 2>/dev/null)" || ignored_count=0
+  EXTRACTED_STATE_UNTRUSTED_IGNORED="${ignored_count}"
+  if [ "${EXTRACTED_STATE_UNTRUSTED_IGNORED}" -gt 0 ]; then
+    echo "::warning::ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=${TRACKING_NUM:-?} outcome=filtered ignored=${EXTRACTED_STATE_UNTRUSTED_IGNORED}" >&2
+  fi
 
   # Try the V2 chunked-chain reader first.  If a complete V2 chain is
   # present (newest write wins), use it; otherwise fall through to the
@@ -2881,7 +2937,7 @@ extract_latest_valid_orchestrator_state() {
   local _v2_comments_file _v2_payload_file _v2_rc
   _v2_comments_file="$(mktemp "${TMPDIR:-/tmp}/orch_state_v2_comments.XXXXXX")"
   _v2_payload_file="$(mktemp "${TMPDIR:-/tmp}/orch_state_v2_payload.XXXXXX")"
-  printf '%s' "${comments_json}" > "${_v2_comments_file}"
+  printf '%s' "${trusted_comments_json}" > "${_v2_comments_file}"
   python3 scripts/orchestrate_state_v2.py extract \
     --comments-json "${_v2_comments_file}" > "${_v2_payload_file}" 2>/dev/null
   _v2_rc=$?
@@ -2930,7 +2986,7 @@ extract_latest_valid_orchestrator_state() {
       fi
       return 0
     fi
-  done < <(printf '%s' "${comments_json}" | jq -c '[.[] | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] | reverse | .[]?' 2>/dev/null || true)
+  done < <(printf '%s' "${trusted_comments_json}" | jq -c '[.[] | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] | reverse | .[]?' 2>/dev/null || true)
 
   return 1
 }
@@ -4627,6 +4683,7 @@ resolve_active_orchestrator_context_for_issue() {
   local tracking_state_json
 
   RESOLVED_ORCHESTRATOR_OWNED="false"
+  RESOLVED_ORCHESTRATOR_STATE_IDENTITY_UNAVAILABLE="false"
   RESOLVED_TRACKING_ISSUE=""
   RESOLVED_INTEGRATION_BRANCH=""
   RESOLVED_INTEGRATION_BRANCH_EXISTS="false"
@@ -4669,6 +4726,10 @@ resolve_active_orchestrator_context_for_issue() {
 
     tracking_state_json=""
     if ! extract_latest_valid_orchestrator_state "${tracking_comments}"; then
+      if [ "${EXTRACTED_STATE_IDENTITY_UNAVAILABLE}" = "true" ]; then
+        RESOLVED_ORCHESTRATOR_STATE_IDENTITY_UNAVAILABLE="true"
+        return 0
+      fi
       continue
     fi
     tracking_state_json="${EXTRACTED_STATE_JSON}"
@@ -8890,10 +8951,16 @@ try:
             raise ValueError("invalid staged entry")
         header, indexed_path = entries[0].split(b"\t", 1)
         mode, blob, stage = header.split(b" ")
-        if indexed_path != path or stage != b"0" or mode not in (b"100644", b"100755"):
+        if indexed_path != path or stage != b"0" or mode not in (b"100644", b"100755", b"120000", b"160000"):
             raise ValueError("invalid protected mode")
         if mode not in {side[0] for side in sides.values() if side}:
             raise ValueError("changed protected mode")
+        if mode in (b"120000", b"160000"):
+            # A symlink target or gitlink must be selected intact from a side;
+            # a gitlink points to a commit, not a blob of text to interleave.
+            if (mode, blob) not in (sides.get(b"2"), sides.get(b"3")):
+                raise ValueError("invented conflict target")
+            continue
         allowed = set()
         side_lines = []
         side_counts = []
@@ -13041,8 +13108,11 @@ prime_phase_concurrency_snapshot() {
 # the rare recovery-push path (the PR-named lookup below adds its own paged
 # calls only when $2 is given and the branch listing matched nothing).
 #
-# Args: $1 = head branch.  Echoes the databaseId of the freshest matching
-# in_progress/queued/pending review run younger than REVIEW_RUN_MAX_RUNTIME_MINUTES,
+# Args: $1 = head branch, $2 = optional PR number. Echoes the databaseId of
+# the freshest matching branch run or PR-named dispatch run; an unavailable
+# listing with a PR number returns "listing-incomplete" to defer the push.
+# Without a PR number the original branch-only, fail-open behavior remains.
+# Matches in_progress/queued/pending review runs younger than REVIEW_RUN_MAX_RUNTIME_MINUTES,
 # else nothing.  Freshness mirrors build_active_issue_set's review-run window
 # so a review still legitimately editing past STALL_THRESHOLD_MINUTES is not
 # clobbered, while a genuinely hung run older than the review budget does not
@@ -13110,6 +13180,9 @@ _direct_inflight_review_run_on_branch()
 	if [ "${_di_rc}" -ne 0 ] || [ -z "${_di_runs_json}" ] \
 		|| ! printf '%s' "${_di_runs_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
 		echo "STALL_INFLIGHT_DIRECT_CHECK branch=${_di_branch} rc=${_di_rc} runs=${_di_runs_total} live=${_di_runs_live} matched=0 outcome=listing_unavailable" >&2
+		if [[ "${_di_pr}" =~ ^[1-9][0-9]*$ ]]; then
+			printf '%s\n' "listing-incomplete"
+		fi
 		return 0
 	fi
 	_di_runs_total="$(printf '%s' "${_di_runs_json}" | jq -r 'length' 2>/dev/null || echo "invalid")"
@@ -14283,16 +14356,22 @@ STALL_EOF
               _rtr_wf_conclusion="${_rtr_wf_row}"
               _rtr_wf_created_at=""
             fi
-            if [ -n "${_rtr_wf_created_at}" ] && [[ "${_rtr_wf_created_at}" > "${_rtr_newest_completed_at}" ]]; then
+            # A tied failure must not be lost because the workflows were listed
+            # in a different order; completed run timestamps have second precision.
+            if [ -n "${_rtr_wf_created_at}" ] && { [[ "${_rtr_wf_created_at}" > "${_rtr_newest_completed_at}" ]] ||
+                 { [ "${_rtr_wf_created_at}" = "${_rtr_newest_completed_at}" ] &&
+                   [ -z "${_rtr_failed_conclusion}" ] &&
+                   [[ "${_rtr_wf_conclusion}" =~ ^(failure|cancelled|timed_out)$ ]]; }; }; then
               _rtr_newest_completed_at="${_rtr_wf_created_at}"
-            fi
-            case "${_rtr_wf_conclusion}" in
-              failure|cancelled|timed_out)
+              _rtr_failed_conclusion=""
+              _rtr_failed_wf=""
+              case "${_rtr_wf_conclusion}" in
+                failure|cancelled|timed_out)
                 _rtr_failed_conclusion="${_rtr_wf_conclusion}"
                 _rtr_failed_wf="${wf_candidate}"
-                break
                 ;;
-            esac
+              esac
+            fi
           done
           # Default-branch dispatches (issue #4701): a review run that
           # _dispatch_review_for_conflicts or the sweep dispatched is named
@@ -14300,10 +14379,10 @@ STALL_EOF
           # branch lookups above never see it. When they found no failed
           # run, look at the newest PR-named dispatch run (one paged lookup,
           # §15; see _pr_named_review_dispatch_runs for its call budget):
-          # it counts when it completed with a failure and is newer than
-          # every completed head-branch run seen. A missing createdAt counts
-          # as older, so this path only adds a redispatch when the failure
-          # is definitely the newest run.
+          # it counts when it completed with a failure and is no older than
+          # every completed head-branch run seen (ties prefer failure). A missing
+          # createdAt counts as older, so this path only adds a redispatch when
+          # the failure is newest or tied for newest.
           # An incomplete listing (issue #4927) can neither show the newest
           # PR-named run nor rule out a live one, so this cycle neither
           # redispatches nor pushes; the next poll cycle retries.
@@ -14333,7 +14412,7 @@ STALL_EOF
               _rtr_pr_named_created_at="${_rtr_pr_named_row#*$'\t'}"
               case "${_rtr_pr_named_conclusion}" in
                 failure|cancelled|timed_out)
-                  if [ -n "${_rtr_pr_named_created_at}" ] && [[ "${_rtr_pr_named_created_at}" > "${_rtr_newest_completed_at}" ]]; then
+                  if [ -n "${_rtr_pr_named_created_at}" ] && [[ "${_rtr_pr_named_created_at}" > "${_rtr_newest_completed_at}" || "${_rtr_pr_named_created_at}" = "${_rtr_newest_completed_at}" ]]; then
                     _rtr_failed_conclusion="${_rtr_pr_named_conclusion}"
                     _rtr_failed_wf="review run dispatched for PR #${pr_num}"
                   fi
@@ -14416,15 +14495,17 @@ STALL_EOF
               --argjson now "${_rtr_now_epoch}" \
               --argjson threshold "${_rtr_stall_secs}" '
               [.workflow_runs[]?
-               | select((.status // "") == "in_progress" or (.status // "") == "queued")
+               | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
                | select(
                    ((.head_branch // "") == $br)
                    or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
-                   # A default-branch dispatch (issues #4618, #4701) is named
-                   # for its PR; its head_branch is the default branch.
-                   or ($pr != "" and (.event // "") == "workflow_dispatch"
-                       and ((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
-                            or (.display_title // "") == ("AI Review [pr:" + $pr + "]")))
+                    # A default-branch dispatch (issues #4618, #4701) is named
+                    # for its PR; its head_branch is the default branch.
+                    or ($pr != "" and (.event // "") == "workflow_dispatch"
+                        and (((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+                              and ((.path // "") | test("(^|/)internal-review\\.yml(@.*)?$")))
+                             or ((.display_title // "") == ("AI Review [pr:" + $pr + "]")
+                              and ((.path // "") | test("(^|/)ai-review\\.yml(@.*)?$")))))
                  )
                | select(
                    (.name // "") == "AI Review"
@@ -14432,9 +14513,7 @@ STALL_EOF
                    or (.name // "") == "Review Autofix"
                    or (.name // "") == "Internal: AI Review & Autofix"
                    or (.name // "") == "Codex PR Self-Healing Semantic Agent"
-                   or ((.path // "") | endswith("ai-review.yml"))
-                   or ((.path // "") | endswith("internal-review.yml"))
-                   or ((.path // "") | endswith("review_autofix.yml"))
+                   or ((.path // "") | test("(^|/)(ai-review|internal-review|review_autofix)\\.yml(@.*)?$"))
                  )
                | ([.run_started_at, .created_at]
                   | map(select(type == "string" and . != ""))[0] // "") as $ts
@@ -14874,14 +14953,14 @@ invoke_stall_judge() {
                or (.name // "") == "Review Autofix"
                or (.name // "") == "Internal: AI Review & Autofix"
                or (.name // "") == "Codex PR Self-Healing Semantic Agent"
-               or (.path // "" | endswith("ai-review.yml"))
-               or (.path // "" | endswith("internal-review.yml"))
-               or (.path // "" | endswith("review_autofix.yml")))
-      | select(($head_ref != "" and (.head_branch // "") == $head_ref) or ($head_sha != "" and (.head_sha // "") == $head_sha)
-               or ($pr != ""
-                   and (.event // "") == "workflow_dispatch"
-                   and ((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
-                        or (.display_title // "") == ("AI Review [pr:" + $pr + "]"))))
+               or (.path // "" | test("(^|/)(ai-review|internal-review|review_autofix)\\.yml(@.*)?$")))
+       | select(($head_ref != "" and (.head_branch // "") == $head_ref) or ($head_sha != "" and (.head_sha // "") == $head_sha)
+                or ($pr != ""
+                    and (.event // "") == "workflow_dispatch"
+                    and (((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+                          and ((.path // "") | test("(^|/)internal-review\\.yml(@.*)?$")))
+                         or ((.display_title // "") == ("AI Review [pr:" + $pr + "]")
+                          and ((.path // "") | test("(^|/)ai-review\\.yml(@.*)?$"))))))
       | {id: .id, workflow: (.name // ""), conclusion: (.conclusion // ""), status: (.status // ""), head_branch: (.head_branch // ""), created_at: (.created_at // "")}
     ]
     | sort_by(.created_at)
@@ -16101,6 +16180,424 @@ _reconcile_merged_pr_issue() {
   fi
 }
 
+# ---------------------------------------------------------------
+# Unblock judge (docs/plans/replace-claude-sessions-with-cli-engine-plan.md,
+# Phase 7): the once-per-tick scan and the per-project hooks.
+# ---------------------------------------------------------------
+# Tracking issues of projects in state `failed` this tick, one per line,
+# written by the per-project loop and read by run_unblock_scan. No API call.
+UNBLOCK_FAILED_PROJECTS_FILE="$(mktemp "${RUNNER_TEMP:-/tmp}/unblock_failed_projects.XXXXXX" 2>/dev/null || echo "${RUNNER_TEMP:-/tmp}/unblock_failed_projects.txt")"
+: > "${UNBLOCK_FAILED_PROJECTS_FILE}" 2>/dev/null || true
+# unblock_trusted_login and its cache are defined above the state extractor.
+
+# Per project, before any command handler. Returns 10 only when the
+# ai:unblock-closed label has the newest trusted close verdict for this project
+# bound to its current blocked state: the state becomes `abandoned`, the
+# tracking issue is closed through the API (no auto-close keyword, §19) and
+# the caller moves on. A refused label is logged and ignored. Otherwise files
+# every pending trusted
+# `<!-- ai:unblock-fixup-request:v1 item=<n> id=<local id> -->` comment as a
+# fix-up issue in the current wave (the same way judge fix-ups are filed),
+# posts the wait marker on item <n>, and resumes a `failed` project so the
+# wave runs. Reads COMMENTS, STATE_FILE, TRACKING_NUM, TRACKING_LABELS,
+# PROJECT_STATUS. Project/issue items need no extra API call; other items
+# require at most one pulls/<n> GET per pending request per tick to verify a
+# same-repository ai/issue-<n> head whose issue is in the project state.
+# Membership for both issue and PR items uses already-fetched, author-filtered
+# tracking comments, never the potentially forged working STATE_FILE.
+# Definitive rejections are recorded so they are not read again. No batched
+# cache in this path holds a PR's head repo or ref; _fetch_pr_json is the
+# smallest existing call that supplies both (§14).
+handle_unblock_judge_project_hooks() {
+  local login requests count idx request req_item req_id req_title req_body full_body wave_idx new_url new_num
+  local binding_pr_json binding_head_issue binding_reason binding_trusted_state_json="" binding_trusted_state_status="unset"
+  local close_reason close_marker close_stop
+  if has_label "${TRACKING_LABELS}" "ai:unblock-closed"; then
+    # Finish a previously issued verdict even if UNBLOCK_JUDGE_ENABLED was switched off.
+    close_reason=""
+    unblock_trusted_login >/dev/null
+    login="${UNBLOCK_TRUSTED_LOGIN}"
+    if [ -z "${login}" ]; then
+      close_reason="login_unavailable"
+    elif [ "${COMMENTS_FETCH_OK:-false}" != "true" ]; then
+      close_reason="comments_unavailable"
+    else
+      if ! close_marker="$(printf '%s' "${COMMENTS}" | jq -c --arg login "${login}" --arg item "${TRACKING_NUM}" '
+        . as $comments
+        | [ .[] | select((.user.login // "") == $login and (.id | type) == "number" and .id > 0 and .id == (.id | floor))
+          | ((.body // "") | split("\n") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)) | last // "") as $last
+          | ($last | capture("^<!-- ai:unblock:v1 item=(?<item>[1-9][0-9]*) stop=(?<stop>[a-z-]+) fingerprint=[0-9a-f]{12} verdict=(?<verdict>[a-z_]+) round=[1-9][0-9]*(?: override=[a-z_]+)? -->$")?) as $marker
+          | select($marker.item == $item)
+          | {id: .id, stop: $marker.stop, verdict: $marker.verdict} ]
+        | sort_by(.id) | last // empty
+        | . as $verdict
+        # A new state write after the verdict can represent a resume and a later failure.
+        | . + {state_after: any($comments[]; (.user.login // "") == $login and (.id | type) == "number" and .id > $verdict.id
+          and ((.body // "") | test("^<!-- ORCHESTRATOR_STATE_V(1\\r?\\n|2 part=[0-9]+/[0-9]+ manifest=[0-9a-f]{64} -->)")))}' 2>/dev/null)"; then
+        close_reason="comments_unavailable"
+      elif [ -z "${close_marker}" ]; then
+        close_reason="no_trusted_marker"
+      elif [ "$(printf '%s' "${close_marker}" | jq -r '.verdict')" != "close" ]; then
+        close_reason="stale_marker"
+      elif [ "${PROJECT_STATUS}" != "abandoned" ] && [ "$(printf '%s' "${close_marker}" | jq -r '.state_after')" != "false" ]; then
+        close_reason="stale_marker"
+      elif [ "${PROJECT_STATUS}" != "abandoned" ]; then
+        close_stop="$(printf '%s' "${close_marker}" | jq -r '.stop')"
+        if [ "${close_stop}" = "project-failed" ]; then
+          [ "${PROJECT_STATUS}" = "failed" ] || close_reason="state_mismatch"
+        elif [ "${PROJECT_STATUS}" != "failed" ] \
+          || ! printf '%s' "${TRACKING_LABELS}" | jq -e --arg label "ai:${close_stop}" 'type == "array" and index($label) != null' >/dev/null 2>&1; then
+          close_reason="state_mismatch"
+        fi
+      fi
+    fi
+    if [ -n "${close_reason}" ]; then
+      echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=abandoned outcome=refused reason=${close_reason}"
+    else
+      if [ "${PROJECT_STATUS}" != "abandoned" ]; then
+        jq '.status = "abandoned"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        post_state_comment || true
+      fi
+      if gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" -f state=closed -f state_reason=not_planned >/dev/null 2>&1; then
+        echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=abandoned outcome=closed"
+      else
+        echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=abandoned outcome=close_failed"
+      fi
+      return 10
+    fi
+  fi
+  if [ "${UNBLOCK_JUDGE_ENABLED:-true}" = "false" ] \
+    || ! printf '%s' "${COMMENTS:-[]}" | jq -e 'any(.[]?; (.body // "") | startswith("<!-- ai:unblock-fixup-request:v1 "))' >/dev/null 2>&1; then
+    return 0
+  fi
+  unblock_trusted_login >/dev/null
+  login="${UNBLOCK_TRUSTED_LOGIN}"
+  [ -n "${login}" ] || return 0
+  if ! requests="$(printf '%s' "${COMMENTS}" | jq -c --arg login "${login}" '
+    [.[]? | select((.user.login // "") == $login) | . as $comment
+      | (.body // "" | split("\n") | map(rtrimstr("\r"))) as $lines
+      | select(($lines[0] // "") | startswith("<!-- ai:unblock-fixup-request:v1 "))
+      | (($lines[0] | capture("^<!-- ai:unblock-fixup-request:v1 item=(?<item>[1-9][0-9]*) id=(?<id>unblock-[0-9]+-r[0-9]+) -->$")?) // {}) as $m
+      | {comment_id: $comment.id, item: $m.item, id: $m.id,
+         title: (($lines[1] // "") | sub("^###\\s*"; "")),
+         body: ($lines[2:] | join("\n"))}]' 2>/dev/null)"; then
+    echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup outcome=request_parse_failed"
+    return 0
+  fi
+  count="$(printf '%s' "${requests}" | jq 'length' 2>/dev/null || echo 0)"
+  for ((idx = 0; idx < count; idx++)); do
+    request="$(printf '%s' "${requests}" | jq -c ".[${idx}]" 2>/dev/null || true)"
+    req_item="$(jq -r '.item // ""' <<< "${request}" 2>/dev/null || true)"
+    req_id="$(jq -r '.id // ""' <<< "${request}" 2>/dev/null || true)"
+    req_title="$(jq -r '.title // ""' <<< "${request}" 2>/dev/null || true)"
+    req_body="$(jq -r '.body // ""' <<< "${request}" 2>/dev/null || true)"
+    if [[ ! "${req_item}" =~ ^[1-9][0-9]*$ ]] || [ -z "${req_id}" ]; then
+      echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup comment=$(jq -r 'if (.comment_id | type) == "number" then .comment_id else "unknown" end' <<< "${request}") outcome=invalid_request"
+      continue
+    fi
+    if [ -n "$(jq -r --arg id "${req_id}" '.issue_number_map[$id] // empty' "${STATE_FILE}" 2>/dev/null || echo unreadable)" ]; then
+      continue
+    fi
+    if jq -e --arg id "${req_id}" '(.unblock_fixup_rejected_ids // []) | index($id) != null' "${STATE_FILE}" >/dev/null 2>&1; then
+      continue
+    fi
+    if [ "${req_item}" != "${TRACKING_NUM}" ]; then
+      if [ "${binding_trusted_state_status}" = "unset" ]; then
+        if binding_trusted_state_json="$(printf '%s' "${COMMENTS}" | jq -c --arg login "${login}" '[.[] | select((.user.login // "") == $login)]' | PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_state_v2.py extract --comments-json /dev/stdin 2>/dev/null)" \
+          && jq -e 'type == "object"' <<< "${binding_trusted_state_json}" >/dev/null 2>&1; then
+          binding_trusted_state_status="ok"
+        else
+          binding_trusted_state_status="unavailable"
+        fi
+      fi
+      if [ "${binding_trusted_state_status}" != "ok" ]; then
+        echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} outcome=binding_unavailable reason=trusted_state"
+        continue
+      fi
+    fi
+    if [ "${req_item}" != "${TRACKING_NUM}" ] \
+      && ! jq -e --argjson issue "${req_item}" 'any((.issue_number_map // {})[]; . == $issue) or any(.waves[]?.issues[]?; .github_issue == $issue) or any(.security_pass_active_fix_issues[]?; . == $issue) or any(.validation_active_fix_issues[]?; . == $issue)' <<< "${binding_trusted_state_json}" >/dev/null 2>&1; then
+      binding_pr_json="$(_fetch_pr_json "${req_item}")"
+      if ! jq -e '.number | type == "number"' <<< "${binding_pr_json}" >/dev/null 2>&1; then
+        echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} outcome=binding_unavailable reason=pr_read"
+        continue
+      fi
+      binding_reason=""
+      if ! jq -e --argjson issue "${req_item}" --arg base "orchestrator/project-${TRACKING_NUM}" \
+        --argjson trusted_state "${binding_trusted_state_json}" \
+        '.number == $issue and .base.ref == $base and .base.ref == ($trusted_state.integration_branch // "")' <<< "${binding_pr_json}" >/dev/null 2>&1; then
+        binding_reason="base"
+      elif ! jq -e --arg base "orchestrator/project-${TRACKING_NUM}" '.integration_branch == $base' "${STATE_FILE}" >/dev/null 2>&1; then
+        echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} outcome=binding_unavailable reason=state_drift"
+        continue
+      elif ! jq -e --arg repo "${GITHUB_REPOSITORY}" '(.head.repo.full_name // "" | ascii_downcase) == ($repo | ascii_downcase)' <<< "${binding_pr_json}" >/dev/null 2>&1; then
+        binding_reason="head_repo"
+      else
+        binding_head_issue="$(jq -r '.head.ref // ""' <<< "${binding_pr_json}" 2>/dev/null || true)"
+        if [[ "${binding_head_issue}" =~ ^ai/issue-([1-9][0-9]*)$ ]]; then
+          binding_head_issue="${BASH_REMATCH[1]}"
+          if ! jq -e --argjson issue "${binding_head_issue}" 'any((.issue_number_map // {})[]; . == $issue) or any(.waves[]?.issues[]?; .github_issue == $issue) or any(.security_pass_active_fix_issues[]?; . == $issue) or any(.validation_active_fix_issues[]?; . == $issue)' <<< "${binding_trusted_state_json}" >/dev/null 2>&1; then
+            binding_reason="not_member"
+          fi
+        else
+          binding_reason="head_ref"
+        fi
+      fi
+      if [ -n "${binding_reason}" ]; then
+        jq --arg id "${req_id}" '.unblock_fixup_rejected_ids = (((.unblock_fixup_rejected_ids // []) + [$id] | reduce .[] as $entry ([]; if index($entry) == null then . + [$entry] else . end)) | .[-50:])' \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}" && post_state_comment || true
+        echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} outcome=binding_unverified reason=${binding_reason}"
+        continue
+      fi
+    fi
+    [ -n "${req_title}" ] || req_title="Unblock fix-up for #${req_item}"
+    wave_idx="$(jq -r '((.current_wave // 1) | tonumber) - 1 | if . < 0 then 0 else . end' "${STATE_FILE}" 2>/dev/null || echo 0)"
+    full_body="${req_body}
+
+---
+**Orchestrator metadata** (do not edit)
+- Tracking issue: #${TRACKING_NUM}
+- Integration branch: $(jq -r '.integration_branch // ""' "${STATE_FILE}")
+- Local ID: \`${req_id}\`
+- Type: unblock-judge fix-up (item #${req_item})
+- Managed by: AI Orchestrator"
+    ensure_label_exists "ai:clarification"
+    ensure_label_exists "ai:orchestrator-managed"
+    mapfile -t _engine_label_args < <(engine_label_create_args)
+    new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" \
+      --repo "${GITHUB_REPOSITORY}" \
+      --title "${req_title}" \
+      --body "${full_body}" \
+      --label "ai:clarification" \
+      --label "ai:orchestrator-managed" 2>/dev/null || true)"
+    new_url="$(printf '%s\n' "${new_url}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
+    new_num="$(basename "${new_url%%[?#]*}")"
+    if ! [[ "${new_num}" =~ ^[0-9]+$ ]]; then
+      echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} outcome=create_failed"
+      continue
+    fi
+    jq --arg id "${req_id}" --argjson num "${new_num}" --argjson wave_idx "${wave_idx}" \
+      '.issue_number_map[$id] = $num
+       | if (.waves | length) > $wave_idx then .waves[$wave_idx].issues += [{"id": $id, "github_issue": $num, "status": "pending"}] else . end
+       | if .status == "failed" then .status = "in_progress" else . end' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment || true
+    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${req_item}/comments" \
+      -f body="Waiting for fix-up #${new_num} to merge; the unblock judge resumes this item afterwards.
+
+<!-- ai:unblock-wait:v1 item=${req_item} fixup=${new_num} -->" >/dev/null 2>&1 || true
+    if [ "${PROJECT_STATUS}" = "failed" ]; then
+      post_tracking_comment "## Unblock judge fix-up filed
+
+Fix-up #${new_num} (\`${req_id}\`) was added to the current wave for #${req_item}. Status: failed -> in_progress." || true
+      PROJECT_STATUS="in_progress"
+    fi
+    echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} issue=${new_num} outcome=filed"
+  done
+  return 0
+}
+
+# Hand-over (plan Phase 7, Q13): the merge deferral cap used to end in a
+# Telegram WARNING only, repeated every tick. When the cap is first reached the
+# PR gets ai:needs-human and one comment saying why, so the unblock scan picks
+# it up (its PR retry is a review dispatch, whose conflict resolver handles
+# the conflict). Two writes, once per PR.
+unblock_handover_merge_deferral() {
+  local pr="$1" issue="$2" why="$3"
+  [[ "${pr}" =~ ^[0-9]+$ ]] || return 0
+  ensure_label_exists "ai:needs-human"
+  if ! printf '%s' "${_rtm_pr_json:-{}}" | jq -e 'any(.labels[]?; .name == "ai:needs-human")' >/dev/null 2>&1; then
+    gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${pr}/labels" -f "labels[]=ai:needs-human" >/dev/null 2>&1 \
+      || echo "::warning::Could not add ai:needs-human to PR #${pr} after MAX_MERGE_DEFERRALS."
+  fi
+  if [ "${4:-}" = "${MAX_MERGE_DEFERRALS}" ]; then
+    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${pr}/comments" \
+      -f body="Merge deferred ${MAX_MERGE_DEFERRALS} times for issue #${issue} because of persistent ${why}; handed to the unblock judge." >/dev/null 2>&1 || true
+  fi
+}
+
+# Hand-over (plan Phase 7, Q13): counts consecutive project-judge runs with
+# no usable output in the state (judge_output_failures, reset on the next
+# parsed verdict). At JUDGE_OUTPUT_FAILURE_MAX the project fails with
+# ai:blocked, the same terminal as the repeat-fingerprint breaker, so the
+# unblock scan picks it up and `/judge_resume` resumes it. One state comment
+# per failure, plus one tracking comment at the cap.
+unblock_handover_judge_output() {
+  local why="$1" failures
+  failures="$(jq -r '(.judge_output_failures // 0) + 1' "${STATE_FILE}" 2>/dev/null || echo 1)"
+  [[ "${failures}" =~ ^[0-9]+$ ]] || failures=1
+  if [ "${failures}" -ge "${JUDGE_OUTPUT_FAILURE_MAX}" ]; then
+    jq --argjson n "${failures}" '.judge_output_failures = $n | .status = "failed"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment || true
+    set_tracking_phase_label "ai:blocked"
+    post_tracking_comment "## Judge gave no usable verdict
+
+The project judge produced no usable output (${why}) ${failures} time(s) in a row (JUDGE_OUTPUT_FAILURE_MAX=${JUDGE_OUTPUT_FAILURE_MAX}). The project is marked failed for the unblock judge; \`/judge_resume\` resumes it." || true
+    echo "${TRACKING_NUM}" >> "${UNBLOCK_FAILED_PROJECTS_FILE}" 2>/dev/null || true
+    echo "UNBLOCK_HANDOVER tracking_issue=${TRACKING_NUM} stop=judge_output reason=${why} failures=${failures} outcome=failed"
+  else
+    jq --argjson n "${failures}" '.judge_output_failures = $n' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment || true
+    echo "UNBLOCK_HANDOVER tracking_issue=${TRACKING_NUM} stop=judge_output reason=${why} failures=${failures} outcome=counted"
+  fi
+}
+
+# Once per tick, after the per-project loop: find blocked items and dispatch
+# unblock_judge_dispatch.yml for at most UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK
+# of them (scripts/unblock_scan.py decides).
+# API budget (§15): one REST search for open issues and PRs with a block
+# label (oldest update first, at most 30); when it returns candidates, one
+# batched GraphQL query (labeled events and the last 30 comments of each),
+# one list of the dispatch workflow's recent runs, the `user` read once per
+# tick, and one dispatch per chosen item. An incomplete comment window may
+# need one paginated REST history read for the oldest eligible item; GraphQL
+# cannot order comments by edit time, so its last 30 cannot prove whether an
+# older wait marker was refreshed. Failed reads never dispatch on partial data.
+run_unblock_scan() {
+  local labels_q search_items numbers_json count query fragment i n details_resp details runs now_iso selection verify_item verified_details
+  local work_dir="${RUNNER_TEMP:-/tmp}/unblock-scan"
+  if [ "${UNBLOCK_JUDGE_ENABLED:-true}" = "false" ]; then
+    echo "UNBLOCK_SCAN outcome=skip reason=disabled"
+    return 0
+  fi
+  # Optional helpers, staged by orchestrate_poll.yml when the support
+  # checkout has them: a missing file skips the scan, never the tick.
+  if ! { [ -f scripts/unblock_scan.py ] && [ -f scripts/unblock_ledger.py ]; }; then
+    echo "UNBLOCK_SCAN outcome=skip reason=support_missing"
+    return 0
+  fi
+  mkdir -p "${work_dir}"
+  labels_q="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/unblock_ledger.py labels 2>/dev/null | jq -r '.labels | map("\"" + . + "\"") | join(",")' 2>/dev/null || true)"
+  if [ -z "${labels_q}" ]; then
+    echo "UNBLOCK_SCAN outcome=skip reason=labels_unavailable"
+    return 0
+  fi
+  if ! search_items="$(gh_retry gh api --method GET "search/issues" \
+    -f q="repo:${GITHUB_REPOSITORY} is:open label:${labels_q}" \
+    -f sort=updated -f order=asc -f per_page=30 \
+    --jq '[.items[]? | {number, labels: [.labels[]?.name], pull_request: (.pull_request != null), created_at, updated_at}]' 2>/dev/null)"; then
+    echo "UNBLOCK_SCAN outcome=skip reason=search_failed"
+    return 0
+  fi
+  printf '%s' "${search_items}" > "${work_dir}/search.json"
+  sort -u "${UNBLOCK_FAILED_PROJECTS_FILE}" 2>/dev/null | jq -R 'select(test("^[0-9]+$")) | tonumber' | jq -s '.' > "${work_dir}/failed_projects.json" 2>/dev/null \
+    || echo '[]' > "${work_dir}/failed_projects.json"
+  numbers_json="$(jq -c --slurpfile failed "${work_dir}/failed_projects.json" '
+    ($failed[0] | unique) as $all_projects
+    | ($all_projects | if length > 30 then
+        ((now / 300 | floor) % ($all_projects | length)) as $offset
+        | .[$offset:] + .[:$offset]
+      else . end | .[:30]) as $projects
+    | $projects + ([.[].number] | unique | map(select(. as $number | $projects | index($number) == null)) | .[:(30 - ($projects | length))])
+  ' "${work_dir}/search.json" 2>/dev/null || echo '[]')"
+  count="$(printf '%s' "${numbers_json}" | jq 'length' 2>/dev/null || echo 0)"
+  [[ "${count}" =~ ^[0-9]+$ ]] || count=0
+  if [ "${count}" -eq 0 ]; then
+    echo "UNBLOCK_SCAN candidates=0 dispatched=0 outcome=idle"
+    return 0
+  fi
+  unblock_trusted_login >/dev/null
+  if [ -z "${UNBLOCK_TRUSTED_LOGIN}" ]; then
+    echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=login_unavailable"
+    return 0
+  fi
+  fragment=""
+  for ((i = 0; i < count; i++)); do
+    n="$(printf '%s' "${numbers_json}" | jq -r ".[${i}]" 2>/dev/null || true)"
+    [[ "${n}" =~ ^[0-9]+$ ]] || continue
+    fragment+=$'\n'"    i${n}: issueOrPullRequest(number: ${n}) {
+      ... on Issue {
+        timelineItems(last: 30, itemTypes: [LABELED_EVENT]) { nodes { ... on LabeledEvent { createdAt label { name } } } }
+        comments(last: 30) { totalCount nodes { body createdAt updatedAt author { login } } }
+      }
+      ... on PullRequest {
+        timelineItems(last: 30, itemTypes: [LABELED_EVENT]) { nodes { ... on LabeledEvent { createdAt label { name } } } }
+        comments(last: 30) { totalCount nodes { body createdAt updatedAt author { login } } }
+      }
+    }"
+  done
+  query="query {
+  repository(owner: \"${GITHUB_REPOSITORY%%/*}\", name: \"${GITHUB_REPOSITORY##*/}\") {${fragment}
+  }
+}"
+  if ! details_resp="$(gh_retry gh api graphql -f query="${query}" 2>/dev/null)"; then
+    echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=details_failed"
+    return 0
+  fi
+  # Wait markers are refreshed in place, so a comment counts from its last edit.
+  details="$(printf '%s' "${details_resp}" | jq -c '
+    (.data.repository // {}) | to_entries
+    | map(select(.value != null) | {key: (.key | ltrimstr("i")), value: {
+        labeled: [.value.timelineItems.nodes[]? | select(.label != null) | {label: .label.name, created_at: .createdAt}],
+        comments: [.value.comments.nodes[]? | {login: (.author.login // ""), body: (.body // ""), created_at: ((.updatedAt // .createdAt) // "")}],
+        comment_count: .value.comments.totalCount,
+        history_incomplete: ((.value.comments.totalCount | type) != "number" or (.value.comments.nodes | type) != "array" or .value.comments.totalCount > (.value.comments.nodes | length))
+      }})
+    | from_entries' 2>/dev/null || echo '{}')"
+  printf '%s' "${details}" > "${work_dir}/details.json"
+  if ! runs="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/unblock_judge_dispatch.yml/runs?per_page=50" \
+    --jq '[.workflow_runs[]? | {display_title, name, status, created_at}]' 2>/dev/null)"; then
+    echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=dispatch_workflow_unavailable"
+    return 0
+  fi
+  printf '%s' "${runs}" > "${work_dir}/runs.json"
+  now_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  if ! selection="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/unblock_scan.py select \
+    --search-file "${work_dir}/search.json" --details-file "${work_dir}/details.json" \
+    --runs-file "${work_dir}/runs.json" --failed-projects-file "${work_dir}/failed_projects.json" \
+    --trusted-login "${UNBLOCK_TRUSTED_LOGIN}" --now "${now_iso}" \
+    --min-blocked-minutes "${UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES:-30}" \
+    --marker-hours "${UNBLOCK_JUDGE_RETRY_HOURS:-6}" \
+    --inflight-minutes "${UNBLOCK_JUDGE_INFLIGHT_MINUTES:-60}" \
+    --max "${UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK:-5}")"; then
+    echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=select_failed"
+    return 0
+  fi
+  verify_item="$(printf '%s' "${selection}" | jq -r '.verify_history // empty')"
+  if [[ "${verify_item}" =~ ^[1-9][0-9]*$ ]]; then
+    # No complete history exists in the batched GraphQL response. Verify only
+    # one rotating candidate per tick; never treat a partial REST read as clear.
+    if gh_retry gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${verify_item}/comments?per_page=100" > "${work_dir}/full_comments.json" 2>/dev/null &&
+      jq -e --argjson expected "$(printf '%s' "${details}" | jq -r --arg id "${verify_item}" '.[$id].comment_count // -1')" '
+        type == "array" and $expected >= 0 and
+        all(.[]; type == "array" and all(.[]; type == "object" and (.body | type) == "string" and (.created_at | type) == "string")) and
+        ([.[][]] | length >= $expected)
+      ' "${work_dir}/full_comments.json" >/dev/null 2>&1; then
+      verified_details="$(jq -c --arg id "${verify_item}" --slurpfile pages "${work_dir}/full_comments.json" '
+        .[$id].comments = [$pages[0][][] | {login: (.user.login // ""), body: .body, created_at: (.updated_at // .created_at)}]
+        | .[$id].history_incomplete = false
+      ' "${work_dir}/details.json" 2>/dev/null || true)"
+      if [ -n "${verified_details}" ]; then
+        printf '%s' "${verified_details}" > "${work_dir}/details.json"
+        selection="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/unblock_scan.py select \
+          --search-file "${work_dir}/search.json" --details-file "${work_dir}/details.json" \
+          --runs-file "${work_dir}/runs.json" --failed-projects-file "${work_dir}/failed_projects.json" \
+          --trusted-login "${UNBLOCK_TRUSTED_LOGIN}" --now "${now_iso}" \
+          --min-blocked-minutes "${UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES:-30}" \
+          --marker-hours "${UNBLOCK_JUDGE_RETRY_HOURS:-6}" \
+          --inflight-minutes "${UNBLOCK_JUDGE_INFLIGHT_MINUTES:-60}" \
+          --max "${UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK:-5}")" || {
+          echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=reselect_failed"
+          return 0
+        }
+      fi
+    else
+      echo "UNBLOCK_SCAN item=${verify_item} outcome=skip reason=full_history_unavailable"
+    fi
+  fi
+  local dispatched=0 item kind
+  while IFS=$'\t' read -r item kind; do
+    [[ "${item}" =~ ^[0-9]+$ ]] || continue
+    if gh_retry gh workflow run unblock_judge_dispatch.yml --repo "${GITHUB_REPOSITORY}" -f item="${item}" >/dev/null 2>&1; then
+      dispatched=$((dispatched + 1))
+      echo "UNBLOCK_SCAN item=${item} kind=${kind} outcome=dispatched"
+    else
+      echo "UNBLOCK_SCAN item=${item} kind=${kind} outcome=dispatch_failed"
+    fi
+  done < <(printf '%s' "${selection}" | jq -r '.dispatch[]? | "\(.item)\t\(.kind)"')
+  echo "UNBLOCK_SCAN candidates=${count} dispatched=${dispatched} skipped=$(printf '%s' "${selection}" | jq -c '.skipped // {}') outcome=done"
+}
+
 # release_staged_support_needs_human_latches
 #
 # Release the ai:needs-human latch that implement.yml's staged-support
@@ -16336,6 +16833,10 @@ run_standalone_stall_recovery() {
       t_state_json=""
       if extract_latest_valid_orchestrator_state "${t_comments}"; then
         t_state_json="${EXTRACTED_STATE_JSON}"
+      fi
+      if [ "${EXTRACTED_STATE_IDENTITY_UNAVAILABLE}" = "true" ]; then
+        echo "::warning::Pipeline identity unavailable; skipping standalone stall recovery this tick (managed issue set cannot be verified)."
+        return 0
       fi
       managed_nums="$(printf '%s' "${t_state_json}" | jq -r '.waves[]?.issues[]?.github_issue // empty' 2>/dev/null || true)"
       if [ -n "${managed_nums}" ]; then
@@ -17137,15 +17638,17 @@ STALL_EOF
                 --argjson now "${_std_rtr_now_epoch}" \
                 --argjson threshold "${_std_rtr_stall_secs}" '
                 [.workflow_runs[]?
-                 | select((.status // "") == "in_progress" or (.status // "") == "queued")
+                 | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
                  | select(
                      ((.head_branch // "") == $br)
                      or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
-                     # A default-branch dispatch (issues #4618, #4701) is named
-                     # for its PR; its head_branch is the default branch.
-                     or ($pr != "" and (.event // "") == "workflow_dispatch"
-                         and ((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
-                              or (.display_title // "") == ("AI Review [pr:" + $pr + "]")))
+                      # A default-branch dispatch (issues #4618, #4701) is named
+                      # for its PR; its head_branch is the default branch.
+                      or ($pr != "" and (.event // "") == "workflow_dispatch"
+                          and (((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+                                and ((.path // "") | test("(^|/)internal-review\\.yml(@.*)?$")))
+                               or ((.display_title // "") == ("AI Review [pr:" + $pr + "]")
+                                and ((.path // "") | test("(^|/)ai-review\\.yml(@.*)?$")))))
                    )
                  | select(
                      (.name // "") == "AI Review"
@@ -17153,9 +17656,7 @@ STALL_EOF
                      or (.name // "") == "Review Autofix"
                      or (.name // "") == "Internal: AI Review & Autofix"
                      or (.name // "") == "Codex PR Self-Healing Semantic Agent"
-                     or ((.path // "") | endswith("ai-review.yml"))
-                     or ((.path // "") | endswith("internal-review.yml"))
-                     or ((.path // "") | endswith("review_autofix.yml"))
+                     or ((.path // "") | test("(^|/)(ai-review|internal-review|review_autofix)\\.yml(@.*)?$"))
                    )
                  | ([.run_started_at, .created_at]
                     | map(select(type == "string" and . != ""))[0] // "") as $ts
@@ -18434,6 +18935,14 @@ if _is_truthy "${STAGED_SUPPORT_LATCH_SWEEP_ONLY:-false}"; then
   exit 0
 fi
 
+# With no tracking issue, the workflow skips the full poller; this is the
+# only path that scans blocked standalone items on those ticks. The workflow's
+# complementary has_work gates keep it exclusive with the post-loop scan.
+if _is_truthy "${UNBLOCK_SCAN_SWEEP_ONLY:-false}"; then
+  run_unblock_scan || echo "UNBLOCK_SCAN outcome=skip reason=error rc=$?"
+  exit 0
+fi
+
 # ---------------------------------------------------------------
 # Process each tracking issue
 # ---------------------------------------------------------------
@@ -18480,6 +18989,8 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   fi
   rm -f "${_comments_raw}"
 
+  # State is executable pipeline control data; the extractor verifies every
+  # comment's author before either V1 or V2 parsing.
   STATE_JSON=""
   STATE_COMMENT_COUNT=0
   STATE_FALLBACK_USED="false"
@@ -18517,6 +19028,10 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     # later poll cycle read the real state.
     if [ "${COMMENTS_FETCH_OK}" != "true" ]; then
       echo "::warning::Comments fetch failed for tracking issue #${TRACKING_NUM}; cannot confirm orchestrator state is missing. Skipping state reconstruction this cycle (will retry next poll)."
+      continue
+    fi
+    if [ "${EXTRACTED_STATE_IDENTITY_UNAVAILABLE}" = "true" ]; then
+      echo "::warning::Pipeline identity unavailable; cannot verify state-comment authors for #${TRACKING_NUM}; skipping this tracking issue and state reconstruction this cycle."
       continue
     fi
     if [ "${STATE_COMMENT_COUNT}" -gt 0 ]; then
@@ -18613,6 +19128,17 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
   DEFAULT_BRANCH_TRACKING=""
   INTEGRATION_BRANCH_TRACKING="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
+  # Unblock judge (plan Phase 7): a project it closed is abandoned here; its
+  # fix-up requests join the current wave; a failed project is offered to
+  # this tick's unblock scan.
+  unblock_hook_rc=0
+  handle_unblock_judge_project_hooks || unblock_hook_rc=$?
+  if [ "${unblock_hook_rc}" -eq 10 ]; then
+    continue
+  fi
+  if [ "${PROJECT_STATUS}" = "failed" ]; then
+    echo "${TRACKING_NUM}" >> "${UNBLOCK_FAILED_PROJECTS_FILE}" 2>/dev/null || true
+  fi
 	if [ "${ENABLE_SECURITY_PASS}" != "true" ] \
 		&& { [ "${PROJECT_STATUS}" = "security-pass" ] \
 			|| [ "${PROJECT_STATUS}" = "security-pass-fixing" ] \
@@ -19520,17 +20046,20 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
   # /re-security-pass — manual reset from security-pass exhaustion
   # ---------------------------------------------------------------
   if [ "${PROJECT_STATUS}" = "failed" ] && has_label "${TRACKING_LABELS}" "ai:security-pass-failed"; then
-    RE_SECURITY_PASS_COMMENT_JSON="$(echo "${COMMENTS}" | jq -c '
-      (to_entries
-        | map(select((.value.body // "") | (
-            startswith("<!-- ORCHESTRATOR_STATE_V1")
-            or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->")
-            or startswith("<!-- re-security-pass-dedup:")
-        )))
+    RE_SECURITY_PASS_COMMENT_JSON="$(echo "${COMMENTS}" | jq -c --arg login "${UNBLOCK_TRUSTED_LOGIN}" '
+       (to_entries
+        | map(select((.value.user.login // "") == $login and ((.value.body // "") | (
+             startswith("<!-- ORCHESTRATOR_STATE_V1")
+             or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->")
+             or startswith("<!-- re-security-pass-dedup:")
+        ))))
         | last
         | .key // -1) as $last_security_pass_boundary_idx |
       [to_entries[]
-        | select(.key > $last_security_pass_boundary_idx and ((.value.body // "") | test("^\\s*/re-security-pass(\\s|$)"; "m")))
+        | select(.key > $last_security_pass_boundary_idx and ((.value.body // "") | test("^\\s*/re-security-pass(\\s|$)"; "m"))
+          and (((.value.user.login // "") == $login) or
+            (((.value.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+              and ((.value.user.type // "") != "Bot") and (((.value.user.login // "") | endswith("[bot]")) | not))))
         | .value
       ]
       | last // empty
@@ -19654,17 +20183,20 @@ The security pass that parked this project ran on workflow engine \`${SP_AUTO_RE
   # the latest state comment resets counters and re-dispatches validation.
   if [ "${PROJECT_STATUS}" = "failed" ] \
     && (has_label "${TRACKING_LABELS}" "ai:validation-failed" || has_label "${TRACKING_LABELS}" "ai:validate-failed"); then
-    REVALIDATE_COMMENT_JSON="$(echo "${COMMENTS}" | jq -c '
-      (to_entries
-        | map(select((.value.body // "") | (
-            startswith("<!-- ORCHESTRATOR_STATE_V1")
-            or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->")
-            or startswith("<!-- revalidate-dedup:")
-        )))
+    REVALIDATE_COMMENT_JSON="$(echo "${COMMENTS}" | jq -c --arg login "${UNBLOCK_TRUSTED_LOGIN}" '
+       (to_entries
+        | map(select((.value.user.login // "") == $login and ((.value.body // "") | (
+             startswith("<!-- ORCHESTRATOR_STATE_V1")
+             or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->")
+             or startswith("<!-- revalidate-dedup:")
+        ))))
         | last
         | .key // -1) as $last_revalidate_boundary_idx |
       [to_entries[]
-        | select(.key > $last_revalidate_boundary_idx and ((.value.body // "") | test("^\\s*/revalidate(\\s|$)"; "m")))
+        | select(.key > $last_revalidate_boundary_idx and ((.value.body // "") | test("^\\s*/revalidate(\\s|$)"; "m"))
+          and (((.value.user.login // "") == $login) or
+            (((.value.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+              and ((.value.user.type // "") != "Bot") and (((.value.user.login // "") | endswith("[bot]")) | not))))
         | .value
       ]
       | last // empty
@@ -19836,10 +20368,13 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
   if [ "${PROJECT_STATUS}" = "failed" ] \
     && ! has_label "${TRACKING_LABELS}" "ai:validation-failed" \
     && ! has_label "${TRACKING_LABELS}" "ai:validate-failed"; then
-    JUDGE_RESUME_BODY="$(echo "${COMMENTS}" | jq -r '
-      (to_entries | map(select((.value.body // "") | (startswith("<!-- ORCHESTRATOR_STATE_V1") or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->")))) | last | .key // -1) as $last_state_idx |
+    JUDGE_RESUME_BODY="$(echo "${COMMENTS}" | jq -r --arg login "${UNBLOCK_TRUSTED_LOGIN}" '
+      (to_entries | map(select((.value.user.login // "") == $login and ((.value.body // "") | (startswith("<!-- ORCHESTRATOR_STATE_V1") or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->"))))) | last | .key // -1) as $last_state_idx |
       [to_entries[]
-        | select(.key > $last_state_idx and (.value.body | test("^\\s*/judge_resume(\\s|$)"; "m")))
+        | select(.key > $last_state_idx and ((.value.body // "") | test("^\\s*/judge_resume(\\s|$)"; "m"))
+          and (((.value.user.login // "") == $login) or
+            (((.value.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+              and ((.value.user.type // "") != "Bot") and (((.value.user.login // "") | endswith("[bot]")) | not))))
       ]
       | last
       | .value.body // ""
@@ -20734,6 +21269,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
               echo "  [merge-probe] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue} (defer ${_rtm_defer_count}/${MAX_MERGE_DEFERRALS}) — sibling conflict detected."
               if [ "${_rtm_defer_count}" -ge "${MAX_MERGE_DEFERRALS}" ]; then
                 tg_notify "PR #${RTM_PR} (issue #${rtm_issue}) has exceeded MAX_MERGE_DEFERRALS=${MAX_MERGE_DEFERRALS} with persistent sibling merge-tree conflicts. Human review required."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")" "WARNING"
+                unblock_handover_merge_deferral "${RTM_PR}" "${rtm_issue}" "sibling merge-tree conflicts" "${_rtm_defer_count}"
 		      fi
 		      continue
 		    fi
@@ -20769,6 +21305,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 		        echo "  [premerge-rebase] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue} (defer ${_rtm_defer_count}/${MAX_MERGE_DEFERRALS}) — pre-merge rebase conflicts."
 		        if [ "${_rtm_defer_count}" -ge "${MAX_MERGE_DEFERRALS}" ]; then
 		          tg_notify "PR #${RTM_PR} (issue #${rtm_issue}) has exceeded MAX_MERGE_DEFERRALS=${MAX_MERGE_DEFERRALS} with persistent pre-merge rebase conflicts. Human review required."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")" "WARNING"
+		          unblock_handover_merge_deferral "${RTM_PR}" "${rtm_issue}" "pre-merge rebase conflicts" "${_rtm_defer_count}"
 		        fi
 		        continue
 		        ;;
@@ -21351,7 +21888,11 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
           ORCH_FOLLOWUP_INTEGRATION_BRANCH="${RESOLVED_INTEGRATION_BRANCH}"
           ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS="${RESOLVED_INTEGRATION_BRANCH_EXISTS}"
 
-          if [ "${ORCH_FOLLOWUP_OWNED}" = "true" ]; then
+          if [ "${RESOLVED_ORCHESTRATOR_STATE_IDENTITY_UNAVAILABLE}" = "true" ]; then
+            FOLLOWUP_PR_BLOCKED="true"
+            FOLLOWUP_BLOCK_REASON="Orchestrator state author cannot be verified (pipeline identity unavailable); not retargeting follow-up PR for issue #${rb_issue} this tick."
+            echo "::warning::${FOLLOWUP_BLOCK_REASON}"
+          elif [ "${ORCH_FOLLOWUP_OWNED}" = "true" ]; then
             if [ "${ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${ORCH_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
               BASE_REF="${ORCH_FOLLOWUP_INTEGRATION_BRANCH}"
               echo "  Follow-up PR for issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}). Retargeting base to ${BASE_REF}."
@@ -23621,6 +24162,7 @@ ${PR_DIFF}
 	  if [ "${JUDGE_SUCCESS}" != "true" ]; then
 	    echo "::error::Judge failed for tracking issue #${TRACKING_NUM}"
 	    tg_notify "Orchestrator Judge failed for #${TRACKING_NUM}. Manual review needed." "CRITICAL"
+	    unblock_handover_judge_output "llm_failed"
 	    continue
 	  fi
 	  archive_transcript "${GITHUB_RUN_ID:-local-run}" "judge" "${JUDGE_OUTPUT_FILE}"
@@ -23631,7 +24173,11 @@ ${PR_DIFF}
   if [ -z "${JUDGE_JSON}" ]; then
     echo "::error::Could not parse judge output for #${TRACKING_NUM}"
     tg_notify "Orchestrator Judge output unparseable for #${TRACKING_NUM}. Manual review needed." "CRITICAL"
+    unblock_handover_judge_output "unparseable"
     continue
+  fi
+  if [ "$(jq -r '.judge_output_failures // 0' "${STATE_FILE}" 2>/dev/null || echo 0)" != "0" ]; then
+    jq '.judge_output_failures = 0' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   fi
 
   emit_judge_lessons_learned_records "orchestrate_judge" "${TRACKING_NUM}" "" "${JUDGE_JSON}"
@@ -24327,6 +24873,9 @@ done
 run_standalone_stall_recovery
 
 release_staged_support_needs_human_latches
+
+# Never ends the tick: a failure inside is logged and the sweeps below run.
+run_unblock_scan || echo "UNBLOCK_SCAN outcome=skip reason=error rc=$?"
 
 close_merged_issues_sweep
 

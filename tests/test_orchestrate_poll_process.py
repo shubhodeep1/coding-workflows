@@ -341,9 +341,12 @@ def test_parameterized_search_issues_calls_pin_get_only_on_targeted_poller_paths
 		if "gh_retry gh api" in line and '"search/issues"' in line
 	]
 
-	assert len(parameterized_search_calls) == 5
+	assert len(parameterized_search_calls) == 6
 	assert all("--method GET" in call for call in parameterized_search_calls)
 	assert sum("--paginate" in call for call in parameterized_search_calls) == 3
+	# The unblock scan's one search per tick (plan Phase 7): sorted, one page.
+	assert '-f q="repo:${GITHUB_REPOSITORY} is:open label:${labels_q}"' in poller_source_text
+	assert "-f sort=updated -f order=asc -f per_page=30" in poller_source_text
 
 	# Preserve the advisory reconciliation search and the two marker-search
 	# fallbacks, including their paginated aggregation.
@@ -1091,6 +1094,8 @@ def _run_poller(
 				user_entry = {"login": str(user) if user else "octocat"}
 			user_entry.setdefault("login", "octocat")
 			entry["user"] = user_entry
+			if user_entry["login"] == "octocat":
+				entry.setdefault("author_association", "OWNER")
 			entry.setdefault(
 				"html_url",
 				f"https://github.com/owner/repo/issues/{issue_num}#issuecomment-{entry['id']}",
@@ -1533,6 +1538,9 @@ if args[0] == 'run' and len(args) >= 2 and args[1] == 'list':
 			event = args[i + 1]
 		if arg == '--jq' and i + 1 < len(args):
 			jq_query = args[i + 1]
+	if event == 'workflow_dispatch' and store.get('pr_named_listing_fail'):
+		print('dispatch run listing unavailable', file=sys.stderr)
+		sys.exit(1)
 	runs = []
 	for run in store.get('active_autofix_runs', []):
 		if workflow and run.get('workflow') != workflow:
@@ -1547,6 +1555,9 @@ if args[0] == 'run' and len(args) >= 2 and args[1] == 'list':
 		entry = {
 			'status': run.get('status', 'queued'),
 			'conclusion': run.get('conclusion', ''),
+			'createdAt': run.get('createdAt', '2999-01-01T00:00:00Z'),
+			'startedAt': run.get('startedAt', '2999-01-01T00:00:00Z'),
+			'databaseId': run.get('databaseId', 99),
 		}
 		for key in ('event', 'displayTitle', 'createdAt', 'startedAt', 'databaseId'):
 			if key in run:
@@ -1825,6 +1836,13 @@ if args[0] == 'api':
 		print('{}')
 		sys.exit(0)
 	store.setdefault('api_calls', []).append(path)
+	if path == 'user':
+		save()
+		if store.get('fail_user_lookup'):
+			sys.exit(1)
+		login = store.get('authenticated_login', os.environ.get('MOCK_GH_USER_LOGIN', 'github-actions[bot]'))
+		print(login if jq else json.dumps({'login': login}))
+		sys.exit(0)
 
 	if path == 'graphql':
 		mode = store.get('graphql_mode', 'full')
@@ -5096,6 +5114,26 @@ def test_staged_support_latch_sweep_only_mode_releases_without_tracking_work() -
 	assert "Standalone issue stall recovery" not in combined_log
 
 
+def test_unblock_scan_sweep_only_mode_runs_without_tracking_work() -> None:
+	for enabled, expected in (("false", "outcome=skip reason=disabled"), ("true", "candidates=0 dispatched=0 outcome=idle")):
+		result = _run_poller(
+			state=_base_state(status="in_progress"),
+			enable_validation="false",
+			max_validate_cycles="3",
+			env_overrides={
+				"UNBLOCK_SCAN_SWEEP_ONLY": "true",
+				"UNBLOCK_JUDGE_ENABLED": enabled,
+				"OPENROUTER_API_KEY": "",
+			},
+		)
+		combined_log = result["stdout"] + result["stderr"]
+		assert f"UNBLOCK_SCAN {expected}" in combined_log
+		assert "Processing tracking issue" not in combined_log
+		assert "Standalone issue stall recovery" not in combined_log
+		assert "Staged-support needs-human latch release" not in combined_log
+		assert result["api_calls"].count("search/issues") == (enabled == "true")
+
+
 def test_staged_support_latch_release_honours_marker_and_leaves_other_latches_alone() -> None:
 	engine_sha = "c" * 40
 
@@ -6058,6 +6096,10 @@ def test_security_pass_advisory_followup_reconciles_remote_marker_before_create(
 			"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(
 				_security_pass_judge_verdict(("SEC-TEST-1", "accept_with_followup"))
 			),
+			# The search count below is the advisory reconciliation's; the
+			# tick-level unblock scan's own search is covered by
+			# tests/test_unblock_scan.py.
+			"UNBLOCK_JUDGE_ENABLED": "false",
 		},
 	)
 
@@ -12738,9 +12780,26 @@ def test_standalone_conflict_sweep_handles_non_ai_branch_conflicts():
 	assert result["update_branch_calls"] == [411]
 	assert len(result["review_dispatches"]) == 1
 	assert result["review_dispatches"][0]["pr_number"] == 411
-	# Issue #4701: the conflict dispatch runs the default branch's workflow
-	# file (no --ref), never the PR head branch's own copy.
+	# The conflict dispatch executes the default-branch workflow, not the PR head.
 	assert result["review_dispatches"][0]["ref"] is None
+
+
+def test_standalone_conflict_sweep_sees_named_pending_dispatch():
+	state = _base_state(status="complete")
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		prs=[{"number": 411, "state": "open", "baseRefName": "main",
+		      "headRefName": "claude/issue-10", "headSha": "sha411",
+		      "mergeable": False, "mergeable_state": "dirty"}],
+		update_branch_fail_for_prs=[411],
+		active_autofix_runs=[{
+			"workflow": "internal-review.yml", "workflowName": "Internal: AI Review & Autofix",
+			"branch": "main", "event": "workflow_dispatch",
+			"displayTitle": "Internal: AI Review & Autofix [pr:411]", "status": "pending",
+		}],
+	)
+	assert result["review_dispatches"] == []
+	assert "Active autofix run found" in result["stdout"]
 
 
 def test_standalone_conflict_sweep_keeps_ai_issue_branch_behavior():
@@ -13050,6 +13109,33 @@ def test_standalone_retrigger_review_skips_empty_commit_when_review_run_has_blan
 		f"expected no standalone empty-commit push when a blank-head_branch run matches "
 		f"the PR head_sha; got push calls {result.get('git_push_calls', [])}"
 	)
+
+
+def test_standalone_retrigger_review_sees_pr_named_pending_run():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({"schema_version": 1, "last_seen_phase": "ai:done", "status_since_ts": 1, "stall_recovery_count": 0})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]}, issue_linked_prs={501: 416},
+		mock_gh_issue_list_label_filter=True,
+		prs=[{"number": 416, "body": "Closes #501", "state": "open", "baseRefName": "main",
+		      "headRefName": "claude/issue-501", "headRefFromApi": "claude/issue-501",
+		      "headSha": "a" * 40, "mergeable": True, "mergeable_state": "clean"}],
+		actions_runs_workflow_runs=[{
+			"id": 26088864017, "name": "Internal: AI Review & Autofix",
+			"path": ".github/workflows/internal-review.yml@main", "event": "workflow_dispatch",
+			"display_title": "Internal: AI Review & Autofix [pr:416]",
+			"status": "pending", "head_branch": "main", "head_sha": "c" * 40,
+			"created_at": "2999-01-01T00:00:00Z",
+		}], mock_git_push_success=True,
+	)
+	assert result.get("git_push_calls", []) == []
+	assert _extract_latest_standalone_state(result["issues"]["501"]["comments"])["stall_recovery_count"] == 0
 
 
 def test_standalone_retrigger_review_skips_empty_commit_for_review_run_past_stall_threshold_but_within_budget():
@@ -16810,6 +16896,36 @@ def test_revalidate_not_triggered_for_non_validation_failure():
 # ---------------------------------------------------------------------------
 
 
+def test_missing_pipeline_login_alerts_once_per_tick():
+	poller_source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	login_function = poller_source.split("unblock_trusted_login() {", 1)[1].split("\n}", 1)[0]
+	script = (
+		"set -euo pipefail\nUNBLOCK_TRUSTED_LOGIN=''\nUNBLOCK_TRUSTED_LOGIN_STATE=unset\nORCH_STATE_IDENTITY_ALERT_SENT=false\n"
+		"GITHUB_REPOSITORY=owner/repo\nGITHUB_RUN_ID=123\nalert_count=0\n"
+		"gh_retry() { return 1; }\n_gh_url() { printf 'https://github.test/run'; }\n"
+		"tg_send_msg() { alert_count=$((alert_count + 1)); }\n"
+		f"unblock_trusted_login() {{{login_function}\n}}\n"
+		"unblock_trusted_login >/dev/null\nunblock_trusted_login >/dev/null\n"
+		"printf '%s %s' \"${UNBLOCK_TRUSTED_LOGIN_STATE}\" \"${alert_count}\"\n"
+	)
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+	assert result.returncode == 0 and result.stdout == "failed 1", result.stderr
+
+
+def test_project_state_and_reset_commands_require_authenticated_commenters():
+	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'unblock_trusted_login >/dev/null\n  if [ -z "${UNBLOCK_TRUSTED_LOGIN}" ]; then' in poller
+	assert 'extract_latest_valid_orchestrator_state "${COMMENTS}"' in poller
+	assert 'select((.user.login // "") == $login)' in poller
+	for command in ("RE_SECURITY_PASS_COMMENT_JSON", "REVALIDATE_COMMENT_JSON", "JUDGE_RESUME_BODY"):
+		start = poller.index(f'{command}="$(echo "${{COMMENTS}}" | jq')
+		end = poller.index("')\"", start)
+		filter_text = poller[start:end]
+		assert '--arg login "${UNBLOCK_TRUSTED_LOGIN}"' in filter_text
+		assert 'IN("OWNER", "MEMBER", "COLLABORATOR")' in filter_text
+		assert '((.value.user.login // "") == $login)' in filter_text
+
+
 def test_judge_resume_plain_preserves_counters():
 	state = _base_state(status="failed")
 	state["judge_stall_cycles"] = 7
@@ -16831,6 +16947,50 @@ def test_judge_resume_plain_preserves_counters():
 		"Counter handling: judge_stall_cycles: preserved (7); recovery_count: preserved (3)" in body
 		for body in tracking_comments
 	)
+
+
+def test_untrusted_state_comments_cannot_replace_pipeline_state():
+	state = _base_state(status="in_progress")
+	for forged_comments in (
+		[_state_comment({**state, "status": "failed"})],
+		_build_v2_state_comment_chain(json.dumps({**state, "status": "failed"}), chunk_size=100),
+	):
+		result = _run_poller(
+			state=state, enable_validation="false", max_validate_cycles="3",
+			tracking_comments=forged_comments, issue_labels={10: ["ai:implementing"]},
+		)
+		assert result["latest_state"]["status"] == "in_progress"
+
+
+def test_untrusted_judge_resume_cannot_reset_project_counters():
+	state = _base_state(status="failed")
+	state.update(judge_stall_cycles=8, recovery_count=4)
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		tracking_comments=[{"body": "/judge_resume --force", "user": {"login": "outsider"}, "author_association": "NONE"}],
+	)
+	assert result["latest_state"]["status"] == "failed"
+	assert result["latest_state"]["judge_stall_cycles"] == 8
+	assert result["latest_state"]["recovery_count"] == 4
+
+
+def test_untrusted_revalidation_cannot_reset_failed_project():
+	state = _base_state(status="failed")
+	result = _run_poller(
+		state=state, enable_validation="true", max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed"],
+		tracking_comments=[{"body": "/revalidate", "user": {"login": "outsider"}, "author_association": "NONE"}],
+	)
+	assert result["latest_state"]["status"] == "failed"
+	assert result["validation_dispatches"] == []
+
+
+def test_untrusted_security_pass_reset_cannot_clear_findings():
+	state = _security_pass_failed_state_for_auto_reset("a" * 40)
+	result = _run_failed_project_tick(state, {"SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE": "false"},
+		tracking_comments=[{"body": "/re-security-pass", "user": {"login": "outsider"}, "author_association": "NONE"}])
+	assert result["latest_state"]["status"] == "failed"
+	assert result["latest_state"]["security_pass_reported_findings"] == state["security_pass_reported_findings"]
 
 
 def test_judge_resume_not_blocked_by_prose_marker_comment_after_command():
@@ -17219,6 +17379,24 @@ def test_retrigger_review_redispatches_when_last_autofix_concluded_failure():
 		f"expected review_autofix redispatch for PR 77 after last run concluded failure; "
 		f"got: {result.get('review_dispatches')}"
 	)
+
+
+def test_retrigger_review_redispatches_on_tied_head_branch_failure():
+	state, prs = _retrigger_review_pr_state(77, "claude/retrigger-review-tied-failure")
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 77}, prs=prs,
+		active_autofix_runs=[
+			{"workflow": "ai-review.yml", "branch": "claude/retrigger-review-tied-failure",
+			 "status": "completed", "conclusion": "success", "createdAt": "2026-09-28T01:00:00Z"},
+			{"workflow": "internal-review.yml", "branch": "claude/retrigger-review-tied-failure",
+			 "status": "completed", "conclusion": "failure", "createdAt": "2026-09-28T01:00:00Z"},
+		],
+		mock_git_push_success=True,
+	)
+	assert any(d.get("pr_number") == 77 for d in result["review_dispatches"]), result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert "last internal-review.yml run concluded 'failure'" in result["stdout"]
 
 
 def test_retrigger_review_skips_merge_train_queued_pr_without_consuming_stall_budget():
@@ -17812,6 +17990,26 @@ def test_retrigger_review_ignores_pr_named_failure_superseded_by_newer_head_bran
 	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "93"]
 	assert dispatches_for_pr == [], dispatches_for_pr
 	assert result.get("git_push_calls", []), "expected the empty-commit push path"
+
+
+def test_retrigger_review_redispatches_pr_named_failure_tied_with_head_branch_success():
+	state, prs = _retrigger_review_pr_state(93, "claude/retrigger-review-pr-named-tied")
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 93}, prs=prs,
+		active_autofix_runs=[
+			{"workflow": "internal-review.yml", "branch": "claude/retrigger-review-pr-named-tied",
+			 "event": "pull_request", "status": "completed", "conclusion": "success",
+			 "createdAt": "2026-09-28T01:00:00Z"},
+			{"workflow": "internal-review.yml", "branch": "main", "event": "workflow_dispatch",
+			 "displayTitle": "Internal: AI Review & Autofix [pr:93]",
+			 "status": "completed", "conclusion": "failure", "createdAt": "2026-09-28T01:00:00Z"},
+		],
+		mock_git_push_success=True,
+	)
+	assert any(d.get("pr_number") == 93 for d in result["review_dispatches"]), result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert "review run dispatched for PR #93" in result["stdout"]
 
 
 def test_retrigger_review_skips_push_and_redispatch_when_pr_named_listing_is_incomplete():
@@ -18537,6 +18735,99 @@ def test_state_extraction_with_special_chars_in_comment_bodies():
 	assert final_state["status"] == "in_progress"
 
 
+@pytest.mark.parametrize("forged_version", ["v1", "v2"])
+def test_state_extraction_ignores_newer_forged_state(forged_version: str):
+	state = _base_state(status="in_progress")
+	forged = dict(state, status="complete")
+	if forged_version == "v1":
+		forged_bodies = [_state_comment(forged)]
+	else:
+		forged_bodies = [entry["body"] for entry in _build_v2_state_comment_chain(json.dumps(forged), chunk_size=20000)]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=[{"body": body, "user": {"login": "attacker"}} for body in forged_bodies],
+		issue_labels={10: ["ai:implementing"]},
+	)
+	assert result["latest_state"]["status"] == "in_progress"
+	assert "ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=192 outcome=filtered ignored=" in result["stderr"]
+	assert "State reconstructed and posted" not in result["stdout"]
+
+
+def test_state_extraction_skips_mixed_author_v2_chain():
+	state = _base_state(status="in_progress")
+	trusted = dict(state, author_filter_probe="trusted-v2")
+	trusted_chain = _build_v2_state_comment_chain(json.dumps(trusted), chunk_size=20000)
+	forged = dict(state, status="complete")
+	encoded_length = len(base64.b64encode(json.dumps(forged).encode("utf-8")))
+	mixed_chain = _build_v2_state_comment_chain(json.dumps(forged), chunk_size=encoded_length // 2)
+	assert len(mixed_chain) >= 2
+	comments = [
+		{"body": entry["body"], "user": {"login": "github-actions[bot]"}}
+		for entry in trusted_chain + mixed_chain[:-1]
+	]
+	comments.append({"body": mixed_chain[-1]["body"], "user": {"login": "attacker"}})
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=comments,
+		issue_labels={10: ["ai:implementing"]},
+	)
+	assert result["latest_state"]["author_filter_probe"] == "trusted-v2"
+	assert result["latest_state"]["status"] == "in_progress"
+	assert "outcome=filtered ignored=1" in result["stderr"]
+
+
+def test_state_identity_failure_skips_reconstruction_and_state_writes():
+	result = _run_poller(
+		state=_base_state(status="in_progress"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		mock_store_extra={"fail_user_lookup": True},
+	)
+	assert "ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=192 outcome=identity_unavailable" in result["stderr"]
+	assert "skipping this tracking issue and state reconstruction" in result["stdout"]
+	assert "search/issues" not in result["api_calls"]
+	assert len(result["issues"]["192"]["comments"]) == 1
+
+
+def test_state_author_filter_covers_all_extraction_callers():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	extractor = script.split("extract_latest_valid_orchestrator_state() {", 1)[1].split("\nensure_label_exists()", 1)[0]
+	assert extractor.index("unblock_trusted_login >/dev/null") < extractor.index("orchestrate_state_v2.py extract")
+	assert 'printf \'%s\' "${trusted_comments_json}" > "${_v2_comments_file}"' in extractor
+	assert 'printf \'%s\' "${trusted_comments_json}" | jq -c' in extractor
+	assert 'extract_latest_valid_orchestrator_state "${COMMENTS}"' in script
+	main = script.split('if [ -z "${STATE_JSON}" ] || [ "${STATE_JSON}" = "null" ]; then', 1)[1]
+	assert main.index('"${EXTRACTED_STATE_IDENTITY_UNAVAILABLE}"') < main.index('"${STATE_COMMENT_COUNT}"')
+	assert 'RESOLVED_ORCHESTRATOR_STATE_IDENTITY_UNAVAILABLE="true"' in script
+	assert 'FOLLOWUP_PR_BLOCKED="true"' in script.split('if [ "${RESOLVED_ORCHESTRATOR_STATE_IDENTITY_UNAVAILABLE}" = "true" ]; then', 1)[1]
+	assert 'skipping standalone stall recovery this tick' in script
+
+
+def test_state_identity_failure_alerts_once_without_tracking_issues():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	identity_helper = script.split('UNBLOCK_TRUSTED_LOGIN=""\nUNBLOCK_TRUSTED_LOGIN_STATE="unset"', 1)[1].split('\nextract_latest_valid_orchestrator_state() {', 1)[0]
+	harness = '''set -euo pipefail
+gh_retry() { return 1; }
+_gh_url() { printf 'https://example.test/run'; }
+alerts=0
+tg_send_msg() { [ "$2" = CRITICAL ]; alerts=$((alerts + 1)); }
+GITHUB_REPOSITORY=owner/repo
+UNBLOCK_TRUSTED_LOGIN=""
+UNBLOCK_TRUSTED_LOGIN_STATE="unset"
+''' + identity_helper + '''
+unblock_trusted_login >/dev/null
+unblock_trusted_login >/dev/null
+[ "$alerts" -eq 1 ]
+[ "$UNBLOCK_TRUSTED_LOGIN_STATE" = failed ]
+'''
+	result = subprocess.run(["bash", "-c", harness], capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+
+
 def test_malformed_latest_state_falls_back_to_older_valid_and_posts_healed_state():
 	state = _base_state(status="in_progress")
 	malformed_latest = '<!-- ORCHESTRATOR_STATE_V1\n{"schema_version":"orchestrate_state.v1",\nORCHESTRATOR_STATE_V1 -->'
@@ -18544,7 +18835,7 @@ def test_malformed_latest_state_falls_back_to_older_valid_and_posts_healed_state
 		state=state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		tracking_comments=[malformed_latest],
+		tracking_comments=[{"body": malformed_latest, "user": {"login": "github-actions[bot]"}}],
 		issue_labels={10: ["ai:implementing"]},
 	)
 	assert "restored from older valid state and posted healed canonical state" in result["stdout"]
@@ -18598,7 +18889,7 @@ def test_all_invalid_state_comments_trigger_reconstruction_path_without_heal():
 		state=invalid_state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		tracking_comments=[malformed_latest],
+		tracking_comments=[{"body": malformed_latest, "user": {"login": "github-actions[bot]"}}],
 		issue_labels={10: ["ai:implementing"]},
 	)
 	assert "No valid ORCHESTRATOR_STATE_V1 comment found for tracking issue #192. Attempting state reconstruction..." in result["stdout"]
@@ -18681,7 +18972,7 @@ def test_reconstruction_refused_when_body_has_completed_unmapped_issue():
 		state=invalid_state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		tracking_comments=[malformed_latest],
+		tracking_comments=[{"body": malformed_latest, "user": {"login": "github-actions[bot]"}}],
 		tracking_body=rewindable_body,
 		issue_labels={10: ["ai:implementing"]},
 	)
