@@ -8,6 +8,8 @@ name: AI Issue PR Status Sync
         required: true
       TG_BOT_SECRET:
         required: false
+      OPENROUTER_API_KEY:
+        required: false
 
 env:
   FINAL_LABEL: ${{ github.event.pull_request.merged && 'ai:merged' || 'ai:closed' }}
@@ -16,6 +18,8 @@ jobs:
   sync-issue-status:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      linked_issue: ${{ steps.linked_issue.outputs.number }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -138,12 +142,6 @@ jobs:
             fi
             _fetched_scripts+=("${f}")
           done
-          # Optional helper for the implement-plan lessons step. Kept out of
-          # MEMORY_HELPERS_READY so a support ref that predates it never
-          # blocks lineage finalization; that step skips when it is missing.
-          if fetch_from_ref_or_local "scripts/ingest_implement_plan_lessons.py" "scripts/ingest_implement_plan_lessons.py"; then
-            _fetched_scripts+=("ingest_implement_plan_lessons.py")
-          fi
           # Block fetched scripts from being committed in consumer repos.
           if [ "${{ github.repository }}" != "${wf_source}" ]; then
             {
@@ -468,6 +466,15 @@ jobs:
           # downstream lineage, alerting, and cleanup steps.
           export_orchestrator_issue_classification
 
+      - name: Expose the first linked issue
+        # For the activation-verify job (port P4); LINKED_ISSUE_NUMBERS comes
+        # from the step above, so this costs no API call.
+        id: linked_issue
+        if: always()
+        run: |
+          first_linked="$(printf '%s\n' "${LINKED_ISSUE_NUMBERS:-}" | grep -E '^[0-9]+$' | head -n 1 || true)"
+          echo "number=${first_linked}" >> "$GITHUB_OUTPUT"
+
       - name: Finalize linked issue lineage state
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -533,40 +540,6 @@ jobs:
               --pr-number "${PR_NUMBER}" \
               --pr-url "${PR_URL}"
           done <<< "${LINKED_ISSUE_NUMBERS}"
-
-      # /implement-plan-claude records reusable lessons in its progress log
-      # (docs/implement-plan/<slug>.md, `## Lessons`). When a PR that carries
-      # the log merges, copy those lessons into the ai-memory branch.
-      # Idempotent (record ids derive from slug + source + text) and
-      # fail-open: this step never turns the job red.
-      - name: Ingest implement-plan lessons into AI memory
-        if: ${{ !cancelled() && github.event.pull_request.merged == true && (startsWith(github.event.pull_request.head.ref, 'claude/implement-plan-') || startsWith(github.event.pull_request.head.ref, 'claude/verify-activation-')) }}
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          AI_MEMORY_ENABLED: ${{ vars.AI_MEMORY_ENABLED || 'true' }}
-          LESSONS_LEARNED_ENABLED: ${{ vars.LESSONS_LEARNED_ENABLED || 'true' }}
-          MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: |
-          set -euo pipefail
-
-          if [ ! -f scripts/ingest_implement_plan_lessons.py ] || [ ! -f scripts/ai_memory_lib.py ]; then
-            echo "::warning::implement-plan lessons helper unavailable; skipping ingestion"
-            echo "AI_MEMORY_TELEMETRY: {\"op\":\"ingest_implement_plan_lessons\",\"ok\":true,\"fail_open\":true,\"reason\":\"helper_missing\",\"source\":\"issue_pr_status.yml\"}"
-            exit 0
-          fi
-
-          if [ -z "${MERGE_COMMIT_SHA:-}" ] || ! git fetch --no-tags --quiet --depth=1 origin "${MERGE_COMMIT_SHA}"; then
-            echo "::warning::could not fetch merge commit ${MERGE_COMMIT_SHA:-<none>}; skipping implement-plan lessons ingestion"
-            echo "AI_MEMORY_TELEMETRY: {\"op\":\"ingest_implement_plan_lessons\",\"ok\":false,\"fail_open\":true,\"reason\":\"merge_commit_unavailable\",\"source\":\"issue_pr_status.yml\"}"
-            exit 0
-          fi
-
-          python3 scripts/ingest_implement_plan_lessons.py \
-            --ref "${MERGE_COMMIT_SHA}" \
-            --pr-number "${PR_NUMBER}"
 
       - name: Send PR merged Telegram alert
         if: github.event.pull_request.merged == true
@@ -743,3 +716,132 @@ jobs:
               tg_cleanup_msgs "${issue_number}"
             done <<< "${LINKED_ISSUE_NUMBERS}"
           fi
+
+  activation-verify:
+    # Port P4 (docs/plans/replace-claude-sessions-with-cli-engine-plan.md,
+    # Phase 8c): after a PR merges into the default branch, grade the merged
+    # work LIVE or DORMANT with the ACTIVATION_VERIFY role, post the verdict,
+    # open one issue for code gaps and record operator steps in the
+    # ai:operator-step issue (scripts/activation_verify.sh). Integration
+    # branches are skipped; the poller verifies a project when it completes.
+    # Never fails the workflow.
+    needs: sync-issue-status
+    if: always() && github.event.pull_request.merged == true && github.event.pull_request.base.ref == github.event.repository.default_branch && !startsWith(github.event.pull_request.head.ref, 'orchestrator/project-') && vars.ACTIVATION_VERIFY_ENABLED != 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    continue-on-error: true
+    steps:
+      - name: Resolve trusted activation support commit
+        id: resolve_support
+        env:
+          WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          CALLER_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          support_workflow_repository="$(jq -r '.workflow_repository // ""' <<< "${WORKFLOW_JOB_JSON}")"
+          support_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${WORKFLOW_JOB_JSON}")"
+          source_ref='^shubhodeep1/coding-workflows/\.github/workflows/issue_pr_status\.yml@refs/heads/[^[:space:]]+$'
+          stable_ref='^shubhodeep1/coding-workflows/\.github/workflows/issue_pr_status\.yml@refs/tags/stable$'
+          consumer_pin='^shubhodeep1/coding-workflows/\.github/workflows/issue_pr_status\.yml@[0-9a-f]{40}$'
+          if [ "${support_workflow_repository}" != "shubhodeep1/coding-workflows" ] ||
+             { [ "${CALLER_REPOSITORY}" = "shubhodeep1/coding-workflows" ] && [[ ! "${support_workflow_ref}" =~ ${source_ref} ]]; } ||
+             { [ "${CALLER_REPOSITORY}" != "shubhodeep1/coding-workflows" ] &&
+               [[ ! "${support_workflow_ref}" =~ ${stable_ref} ]] && [[ ! "${support_workflow_ref}" =~ ${consumer_pin} ]]; }; then
+            echo "::error::Activation support workflow identity is unapproved."
+            exit 1
+          fi
+          if [ "${CALLER_REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then
+            if ! support_main_json="$(gh api repos/shubhodeep1/coding-workflows/branches/main)" ||
+               ! jq -e '.protected == true' <<< "${support_main_json}" >/dev/null; then
+              echo "::error::Activation support main branch is not confirmed protected."
+              exit 1
+            fi
+            support_sha="$(jq -r '.commit.sha // ""' <<< "${support_main_json}")"
+          elif [[ "${support_workflow_ref}" =~ ${consumer_pin} ]]; then
+            support_sha="${support_workflow_ref##*@}"
+          else
+            if ! support_tag_json="$(gh api repos/shubhodeep1/coding-workflows/git/ref/tags/stable)"; then
+              echo "::error::Activation support stable tag is unavailable."
+              exit 1
+            fi
+            support_tag_type="$(jq -r '.object.type // ""' <<< "${support_tag_json}")"
+            support_sha="$(jq -r '.object.sha // ""' <<< "${support_tag_json}")"
+            if [ "${support_tag_type}" = "tag" ] && [[ "${support_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+              if ! support_tag_json="$(gh api "repos/shubhodeep1/coding-workflows/git/tags/${support_sha}")"; then
+                echo "::error::Activation support annotated tag is unavailable."
+                exit 1
+              fi
+              support_tag_type="$(jq -r '.object.type // ""' <<< "${support_tag_json}")"
+              support_sha="$(jq -r '.object.sha // ""' <<< "${support_tag_json}")"
+            fi
+            if [ "${support_tag_type}" != "commit" ]; then
+              echo "::error::Activation support stable tag is not a commit."
+              exit 1
+            fi
+          fi
+          if [[ ! "${support_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Activation support did not resolve to a commit SHA."
+            exit 1
+          fi
+          echo "support_sha=${support_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout trusted activation support
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ steps.resolve_support.outputs.support_sha }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Verify trusted activation support
+        env:
+          SUPPORT_SHA: ${{ steps.resolve_support.outputs.support_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${SUPPORT_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
+             [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${SUPPORT_SHA}" ] ||
+             [ ! -f .codex-workflow-src/scripts/activation_verify.sh ]; then
+            echo "::error::Activation support checkout is not the approved commit."
+            exit 1
+          fi
+
+      - name: Checkout merged code
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          token: ${{ secrets.GH_PAT }}
+          path: target
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Install Codex CLI
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
+        with:
+          codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+
+      - name: Verify activation
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+          REPOSITORY: ${{ github.repository }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          PR_COMMITS: ${{ github.event.pull_request.commits }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body || '' }}
+          LINKED_ISSUE: ${{ needs.sync-issue-status.outputs.linked_issue }}
+          ACTIVATION_VERIFY_MODEL: ${{ vars.ACTIVATION_VERIFY_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+          ACTIVATION_VERIFY_REASONING: ${{ vars.THINKING_LEVEL_ACTIVATION_VERIFY || 'high' }}
+        run: |
+          SUPPORT_DIR="${GITHUB_WORKSPACE}/.codex-workflow-src" \
+          TARGET_DIR="${GITHUB_WORKSPACE}/target" \
+          RUNTIME_DIR="${RUNNER_TEMP}/activation-verify" \
+            bash "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/activation_verify.sh" pr

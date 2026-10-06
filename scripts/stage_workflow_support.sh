@@ -20,6 +20,10 @@ if [ -z "${RUNNER_TEMP:-}" ] || [ -z "${GITHUB_RUN_ID:-}" ] || [ -z "${GITHUB_RU
   echo "::error::stage_workflow_support.sh requires RUNNER_TEMP, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, and GITHUB_ENV."
   exit 1
 fi
+if [ -z "${CURRENT_REPOSITORY}" ]; then
+  echo "::error::stage_workflow_support.sh requires CURRENT_REPOSITORY or GITHUB_REPOSITORY for trusted overlay staging." >&2
+  exit 1
+fi
 
 wf_source="${WORKFLOW_SOURCE_REPO}"
 workspace_root="${GITHUB_WORKSPACE:-$PWD}"
@@ -50,7 +54,7 @@ mkdir -p "${SUPPORT_SCRIPTS_DIR}" "${SUPPORT_PROMPTS_DIR}" "${SUPPORT_AI_MEMORY_
   echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${UNATTENDED_IDENTITY_REINJECT_ENABLED:-false}"
 } >> "$GITHUB_ENV"
 
-REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh assemble_prompt.sh nag_reminder.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py cost_audit.py codex_helpers.sh codex_heartbeat.sh codex_stall_guard.sh watchdog_helpers.sh opencode_helpers.sh write_opencode_config.sh review_run_reviewers.sh review_apply_fixes.sh review_untrusted_sandbox.sh review_untrusted_workspace.py clarify_openrouter_broker.py review_reject_verify.sh review_rb_judge.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh write_guard.sh review_collect_pr_metadata.sh collect_pr_check_runs_context.py review_enable_auto_merge.sh review_conflict_prepare.sh review_conflict_resolve.sh review_merge_train.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh review_resolve_review_threads.sh review_resolve_review_threads_plan.py workspace_init.sh workspace_safety_check.sh review_autofix_step_merge_topology_gate.sh review_autofix_step_editor_uncommitted_changes.sh review_autofix_step_detect_merge_conflicts.sh review_autofix_step_partial_finalize.sh review_autofix_step_iteration_summary.sh review_autofix_step_claude_fixer_handoff.sh"
+REQUIRED_BOOTSTRAP_SCRIPTS="gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh generate_symbol_diff_summary.py render_prompt.sh assemble_prompt.sh nag_reminder.sh load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py cost_audit.py codex_helpers.sh codex_heartbeat.sh codex_stall_guard.sh watchdog_helpers.sh opencode_helpers.sh write_opencode_config.sh review_run_reviewers.sh review_apply_fixes.sh review_untrusted_sandbox.sh review_untrusted_workspace.py clarify_openrouter_broker.py review_reject_verify.sh review_rb_judge.sh review_rb_judge_security_pass.sh review_run_judge_interim.sh review_synthesise_smoke.sh review_commit_changes.sh write_guard.sh review_collect_pr_metadata.sh collect_pr_check_runs_context.py review_enable_auto_merge.sh review_conflict_prepare.sh review_conflict_resolve.sh review_merge_train.sh orchestrate_force_tick.sh check_workflow_script_refs.py check_resolver_diff.sh summarize_reviewer_consensus.sh check_external_branch_advance.sh post_review_comment.sh targeted_file_context.py write_codex_config.sh detect_editor_changes_lost.sh validate_editor_audit.sh review_resolve_review_threads.sh review_resolve_review_threads_plan.py workspace_init.sh workspace_safety_check.sh review_autofix_step_merge_topology_gate.sh review_autofix_step_editor_uncommitted_changes.sh review_autofix_step_detect_merge_conflicts.sh review_autofix_step_partial_finalize.sh review_autofix_step_iteration_summary.sh review_autofix_step_post_commit_retrigger.sh review_autofix_step_changes_lost_redispatch.sh review_autofix_step_count_iterations.sh review_single_issue_security_pass.sh security_pass_skip.py"
 # Keep this registry for compatibility, but all runtime files now come from
 # the same verified workflow commit as the required bootstrap scripts.
 #
@@ -159,10 +163,11 @@ for sf in memory_record.v1.json lessons_learned_record.v1.json processed_command
   fi
 done
 
-# WORKFLOW.md overlay is opt-in by file presence; absent file must
-# stay a no-op while valid prompt overrides flow through render_prompt.py.
+# Read the overlay from the pinned default branch, never the PR head.
 PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/load_workflow_overlay.py" \
   --repo-root "${workspace_root}" \
+  --trusted-source-repo "${CURRENT_REPOSITORY}" \
+  --trusted-root "${SUPPORT_ROOT_DIR}/workflow-overlay" \
   --schema-path "${SUPPORT_AI_MEMORY_DIR}/schemas/workflow_overlay.v1.json" \
   --github-env "${GITHUB_ENV}"
 
@@ -819,11 +824,20 @@ emit_consumer_gitignore()
 run_overlay_loader()
 {
 	: "${GITHUB_ENV:?GITHUB_ENV must be set}"
-	# WORKFLOW.md overlay is opt-in by file presence; absent file must
-	# stay a no-op while valid prompt overrides flow through render_prompt.py.
+	if [ -z "${RUNNER_TEMP:-}" ] || [ -z "${GITHUB_RUN_ID:-}" ] || [ -z "${GITHUB_RUN_ATTEMPT:-}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
+		echo "::error::Trusted overlay staging requires RUNNER_TEMP, GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, and GITHUB_REPOSITORY." >&2
+		return 1
+	fi
+	local overlay_schema_path="ai-memory/schemas/workflow_overlay.v1.json"
+	if [ -f "${SUPPORT_PRIMARY_ROOT}/ai-memory/schemas/workflow_overlay.v1.json" ]; then
+		overlay_schema_path="${SUPPORT_PRIMARY_ROOT}/ai-memory/schemas/workflow_overlay.v1.json"
+	fi
+	# The default-branch copy must outlive SUPPORT_STAGE_ROOT's EXIT cleanup.
 	PYTHONDONTWRITEBYTECODE=1 python3 scripts/load_workflow_overlay.py \
 		--repo-root "${REPO_ROOT}" \
-		--schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
+		--trusted-source-repo "${GITHUB_REPOSITORY}" \
+		--trusted-root "${RUNNER_TEMP}/workflow-overlay-trusted-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+		--schema-path "${overlay_schema_path}" \
 		--github-env "${GITHUB_ENV}"
 }
 

@@ -512,8 +512,12 @@ def _run_diagnose_step(
 	issue_meta_payload: object | None = None,
 	write_issue_body_file: bool = True,
 	issue_api_failures_remaining: int = 0,
+	fake_ai_engine: str | None = None,
+	extra_env: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict, Path, dict[str, str]]:
 	repo_dir = _prepare_diagnose_repo(tmp_path)
+	if fake_ai_engine is not None:
+		(repo_dir / "scripts" / "ai_engine.sh").write_text(fake_ai_engine, encoding="utf-8")
 	runtime_dir = tmp_path / "runtime"
 	bin_dir = tmp_path / "bin"
 	runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -592,6 +596,8 @@ def _run_diagnose_step(
 			"TMPDIR": str(runtime_dir),
 		}
 	)
+	if extra_env:
+		env.update(extra_env)
 
 	proc = _run_shell_script(script, cwd=repo_dir, env=env)
 	state = _read_gh_state(gh_state_file)
@@ -1939,7 +1945,7 @@ def test_staged_support_workspace_fails_closed_on_unsafe_path_or_missing_base() 
 
 def test_implement_workflow_wires_staged_support_workspace_helper() -> None:
 	stage_block = _step_block_text("Stage workflow support files")
-	assert "lint_pr_body_auto_close.py implement_staged_support_workspace.sh; do" in stage_block
+	assert "lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do" in stage_block
 	assert 'echo "STAGED_SUPPORT_EDITOR_HEAD_LEDGER=${RUNTIME_DIR}/staged_support_editor_head.txt"' in stage_block
 	implement_run = _extract_run_script("Run Codex implementation")
 	helper_line = 'STAGED_SUPPORT_WORKSPACE_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_staged_support_workspace.sh"'
@@ -5334,6 +5340,126 @@ def test_review_pipeline_integration_chain_module_runs_clean() -> None:
 		f"stdout:\n{result.stdout}\n"
 		f"stderr:\n{result.stderr}"
 	)
+
+# Phase 5b (replace-claude-sessions plan): a stand-in for scripts/ai_engine.sh
+# whose claude_run records its arguments and plays the scenario in
+# MOCK_CLAUDE_MODE: success writes MOCK_CODEX_OUTPUT, unavailable returns 75,
+# crash returns 1.
+FAKE_DIAGNOSE_AI_ENGINE = r"""claude_run() {
+  printf '%s|%s|%s|%s|%s\n' "$1" "$(basename "$2")" "$(basename "$3")" "${AI_ENGINE_MODEL_HINT:-}" "${AI_ENGINE_EFFORT_HINT:-}" >> "${MOCK_CLAUDE_CALLS_FILE}"
+  case "${MOCK_CLAUDE_MODE:-success}" in
+    success) printf '%s\n' "${MOCK_CODEX_OUTPUT}" > "$3"; return 0 ;;
+    unavailable) echo "AI_ENGINE_FALLBACK role=$1 reason=no_credential" >&2; return 75 ;;
+    *) return 1 ;;
+  esac
+}
+"""
+
+_DIAGNOSE_OK_OUTPUT = {
+	"status": "needs_fixes",
+	"diagnosis": "diag",
+	"evidence_trace": [
+		{"file": "broken.yml", "line": 1, "function": "document", "observation": "error"},
+	],
+	"hypothesis": "diag hypothesis",
+	"fix_issues": [{"id": "fix-1", "title": "Fix 1", "body": "Body", "priority": 1, "depends_on": []}],
+	"harness_fixes": "",
+}
+
+
+def _run_diagnose_on_engine(tmp_path: Path, engine: str, claude_mode: str) -> tuple[subprocess.CompletedProcess[str], dict[str, str], str]:
+	claude_calls = tmp_path / "claude_calls.log"
+	proc, _state, _runtime_dir, paths = _run_diagnose_step(
+		tmp_path,
+		issue_labels=["ai:implementing"],
+		capture_contents="===== broken.yml =====\nerror\n",
+		codex_mode="success",
+		codex_output=_DIAGNOSE_OK_OUTPUT,
+		failed_step_name="Validate syntax of changed files",
+		issue_body="Tracking issue: #829\n",
+		fake_ai_engine=FAKE_DIAGNOSE_AI_ENGINE,
+		extra_env={
+			"AI_ENGINE_RESOLVED_IMPLEMENT_DIAGNOSE": engine,
+			"MODEL_DIAGNOSE_REASONING_EFFORT": "high",
+			"MOCK_CLAUDE_MODE": claude_mode,
+			"MOCK_CLAUDE_CALLS_FILE": str(claude_calls),
+		},
+	)
+	return proc, paths, _read_file(str(claude_calls))
+
+
+def test_diagnose_on_claude_runs_claude_and_never_codex() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		proc, paths, claude_calls = _run_diagnose_on_engine(Path(td), "claude", "success")
+		assert proc.returncode == 0, proc.stderr
+		assert claude_calls.splitlines() == [
+			"IMPLEMENT_DIAGNOSE|implement_diagnose_prompt.txt|implement_diagnose_output.txt|openai/gpt-5.4|high",
+		]
+		assert _read_file(paths["calls_file"]).strip() == ""
+		assert "handled=true" in _read_file(paths["github_output"])
+		assert json.loads(_read_file(paths["result_file"]))["status"] == "needs_fixes"
+
+
+def test_diagnose_claude_uses_role_specific_effort_and_timeout() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		claude_calls = Path(td) / "claude_calls.log"
+		proc, _state, _runtime_dir, paths = _run_diagnose_step(
+			Path(td),
+			issue_labels=["ai:implementing"],
+			capture_contents="===== broken.yml =====\nerror\n",
+			codex_mode="success",
+			codex_output=_DIAGNOSE_OK_OUTPUT,
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+			fake_ai_engine=FAKE_DIAGNOSE_AI_ENGINE,
+			extra_env={
+				"AI_ENGINE_RESOLVED_IMPLEMENT_DIAGNOSE": "claude",
+				"MODEL_DIAGNOSE_REASONING_EFFORT": "medium",
+				"MOCK_CLAUDE_MODE": "success",
+				"MOCK_CLAUDE_CALLS_FILE": str(claude_calls),
+			},
+		)
+		assert proc.returncode == 0, proc.stderr
+		assert claude_calls.read_text(encoding="utf-8").strip().endswith("|medium")
+		assert _read_file(paths["calls_file"]).strip() == ""
+		diagnose = (REPO_ROOT / "scripts" / "implement_diagnose_post_codex_failure.sh").read_text(encoding="utf-8")
+		assert 'timeout --signal=TERM --kill-after=5s "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s bash -c' in diagnose
+
+
+def test_diagnose_claude_unavailable_runs_the_unchanged_codex_call() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		proc, paths, claude_calls = _run_diagnose_on_engine(Path(td), "claude", "unavailable")
+		assert proc.returncode == 0, proc.stderr
+		assert len(claude_calls.splitlines()) == 1
+		call_lines = [line for line in _read_file(paths["calls_file"]).splitlines() if line.strip()]
+		assert len(call_lines) == 1
+		assert "exec" in json.loads(call_lines[0])
+		assert "handled=true" in _read_file(paths["github_output"])
+		assert json.loads(_read_file(paths["result_file"]))["status"] == "needs_fixes"
+
+
+def test_diagnose_claude_crash_does_not_fall_back_to_codex() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		_proc, paths, claude_calls = _run_diagnose_on_engine(Path(td), "claude", "crash")
+		assert len(claude_calls.splitlines()) == 1
+		assert _read_file(paths["calls_file"]).strip() == ""
+
+
+def test_diagnose_on_codex_never_touches_claude() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		proc, paths, claude_calls = _run_diagnose_on_engine(Path(td), "codex", "success")
+		assert proc.returncode == 0, proc.stderr
+		assert claude_calls == ""
+		assert len([line for line in _read_file(paths["calls_file"]).splitlines() if line.strip()]) == 1
+
+
+def test_diagnose_codex_command_is_unchanged() -> None:
+	diagnose = (REPO_ROOT / "scripts" / "implement_diagnose_post_codex_failure.sh").read_text(encoding="utf-8")
+	assert (
+		'timeout "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s codex --ask-for-approval never -c model_verbosity=low '
+		'-c include_apply_patch_tool=true exec --skip-git-repo-check --model "${DIAGNOSE_MODEL}" --sandbox danger-full-access'
+	) in diagnose
+
 
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

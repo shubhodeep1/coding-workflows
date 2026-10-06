@@ -283,7 +283,7 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh; do
+          for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh ai_engine.sh claude_engine.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -295,6 +295,17 @@ jobs:
             install -m 0755 "${src}" "scripts/${f}"
             _fetched_scripts+=("${f}")
           done
+
+          src=".codex-workflow-src/scripts/claude_settings.json.tmpl"
+          if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/claude_settings.json.tmpl" ]; then
+            src=".codex-workflow-src-main/scripts/claude_settings.json.tmpl"
+          fi
+          if [ ! -f "${src}" ]; then
+            echo "::error::Missing required Claude settings template in ${wf_source}@${SCRIPT_REF}"
+            exit 1
+          fi
+          install -m 0644 "${src}" scripts/claude_settings.json.tmpl
+          _fetched_scripts+=(claude_settings.json.tmpl)
 
           # render_prompt.py is the optional Python backend for the
           # render_prompt.sh shim adopted by branches that took the issue
@@ -572,15 +583,6 @@ jobs:
             exit 0
           fi
           ISSUE_LABELS_JSON="$(jq -c '[.labels[].name]' "${ISSUE_META_FILE}")"
-          # Claude-claimed issues (ai:claude without an ai:codex switch) are
-          # implemented by the Claude issue flow (scripts/claude_issue_route.py);
-          # a manual /answer must not start a competing Codex plan.
-          if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:claude") != null and index("ai:codex") == null' >/dev/null; then
-            echo "Issue #${ISSUE_NUMBER} is claimed by the Claude issue implementer (ai:claude). Skipping planning run."
-            echo "AI_PHASE_GATE_V1 phase=plan gate=trigger_validation reason=claude_routed outcome=skip issue=${ISSUE_NUMBER}"
-            echo "SKIP_PLAN=true" >> "$GITHUB_ENV"
-            exit 0
-          fi
           if printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:planning") != null' >/dev/null; then
             echo "Issue #${ISSUE_NUMBER} is already in ai:planning phase."
           elif printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:clarification") != null' >/dev/null; then
@@ -1146,12 +1148,53 @@ jobs:
             } | sed '/^$/d' | LC_ALL=C sort -u
           ) | LC_ALL=C sort -u > "${PRE_PLAN_WRITE_GUARD_PATHS_FILE}"
 
+      # Claude engine (replace-claude-sessions plan Phase 5a): the PLAN role
+      # runs on Claude unless the issue's labels, AI_ENGINE_PLAN or AI_ENGINE
+      # say codex. The CLI and the pool credential are fetched only when it
+      # resolves to Claude; any Claude failure to start falls back to the
+      # unchanged codex call in scripts/run_plan_codex.sh (exit 75, plan D1).
+      - name: Resolve AI engine
+        id: ai_engine
+        if: env.SKIP_PLAN != 'true'
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_PLAN: ${{ vars.AI_ENGINE_PLAN || '' }}
+          AI_ENGINE_MODEL_HINT: ${{ env.MODEL_EDITOR }}
+          AI_ENGINE_EFFORT_HINT: ${{ env.MODEL_REASONING_EFFORT }}
+        run: |
+          set -euo pipefail
+          engine="codex"
+          if [ -f scripts/ai_engine.sh ]; then
+            # shellcheck disable=SC1091
+            source scripts/ai_engine.sh
+            AI_ENGINE_LABELS="$(jq -c '[.labels[]?.name]' "${ISSUE_META_FILE}")"
+            export AI_ENGINE_LABELS
+            engine="$(ai_engine_for_role PLAN || echo codex)"
+          fi
+          [ "${engine}" = "claude" ] || engine="codex"
+          echo "engine=${engine}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: env.SKIP_PLAN != 'true' && steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/install-claude
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: env.SKIP_PLAN != 'true' && steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/claude-pool-token
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
       - name: Run Codex planning
         if: env.SKIP_PLAN != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_PLAN || '40' }}
+          PLAN_ENGINE: ${{ steps.ai_engine.outputs.engine || 'codex' }}
         run: |
           bash scripts/run_plan_codex.sh
 

@@ -184,11 +184,6 @@ jobs:
             echo "Issue #${ISSUE_NUMBER} is closed. Skipping implementation steps."
             echo "AI_PHASE_GATE_V1 phase=implement gate=phase_precheck reason=issue_closed outcome=skip issue=${ISSUE_NUMBER}"
             echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
-          elif printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:claude") != null and index("ai:codex") == null' >/dev/null; then
-            # Claimed by the Claude issue implementer (scripts/claude_issue_route.py).
-            echo "Issue #${ISSUE_NUMBER} is claimed by the Claude issue implementer (ai:claude). Skipping implementation steps."
-            echo "AI_PHASE_GATE_V1 phase=implement gate=phase_precheck reason=claude_routed outcome=skip issue=${ISSUE_NUMBER}"
-            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
           elif printf '%s' "${ISSUE_LABELS_JSON}" | jq -e 'index("ai:implementing") != null' >/dev/null; then
             echo "Issue #${ISSUE_NUMBER} already has ai:implementing label. Another implement run is in progress. Skipping."
             echo "AI_PHASE_GATE_V1 phase=implement gate=phase_precheck reason=already_implementing outcome=skip issue=${ISSUE_NUMBER}"
@@ -442,6 +437,9 @@ jobs:
         id: refctx
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          RETARGET_MERGED_BASE_ENABLED: ${{ vars.RETARGET_MERGED_BASE_ENABLED || 'true' }}
+          RETARGET_MERGED_BASE_MAX_HOPS: ${{ vars.RETARGET_MERGED_BASE_MAX_HOPS || '3' }}
+          RETARGET_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           issue_number="${ISSUE_NUMBER:-}"
@@ -506,6 +504,18 @@ jobs:
             GH_TOKEN="${GH_TOKEN}" \
             bash "${resolver_script}"
           })"; then
+            # Port P6 (replace-claude-sessions plan, Phase 8d): an integration
+            # branch whose own PR already merged (and whose tip is still that
+            # PR's head) is finished, so new work targets that PR's base.
+            # The helper ships next to the resolver; an older staged source
+            # without it keeps the branch unchanged. Fail-open by design.
+            retarget_helper="$(dirname "${resolver_script}")/retarget_merged_base.sh"
+            if [ -n "${integration_branch}" ] && [ -n "${RETARGET_DEFAULT_BRANCH}" ] && [ -f "${retarget_helper}" ]; then
+              retarget_branch="$(GH_TOKEN="${GH_TOKEN}" bash "${retarget_helper}" resolve "${{ github.repository }}" "${integration_branch}" "${RETARGET_DEFAULT_BRANCH}")" || retarget_branch=""
+              if [ -n "${retarget_branch}" ]; then
+                integration_branch="${retarget_branch}"
+              fi
+            fi
             echo "ref=${integration_branch}" >> "$GITHUB_OUTPUT"
           else
             echo "::warning::Canonical integration resolver failed; falling back to default branch."
@@ -1014,7 +1024,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh lint_pr_body_auto_close.py implement_staged_support_workspace.sh; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh security_dependency.py auto_decisions.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -1029,6 +1039,18 @@ jobs:
             # Intentionally NOT adding scripts/${f} to FETCHED_MANIFEST —
             # see the persistence note above the loop.
           done
+
+          src=".codex-workflow-src/scripts/claude_settings.json.tmpl"
+          if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/claude_settings.json.tmpl" ]; then
+            src=".codex-workflow-src-main/scripts/claude_settings.json.tmpl"
+          fi
+          if [ ! -f "${src}" ]; then
+            echo "::error::Missing required Claude settings template in ${wf_source}@${SCRIPT_REF}"
+            exit 1
+          fi
+          install -m 0644 "${src}" scripts/claude_settings.json.tmpl
+          _fetched_scripts+=(claude_settings.json.tmpl)
+          _staged_support_installed_paths+=(scripts/claude_settings.json.tmpl)
 
           # The guard rejection handler runs after implement_commit_changes.sh,
           # whose fetched-manifest cleanup can remove repository support files.
@@ -1730,6 +1752,21 @@ jobs:
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry &>/dev/null || gh_retry() { "$@"; }
           source scripts/label_helpers.sh
+          # Recheck just before advancing the phase. /approved must not
+          # bypass a still-open security prerequisite or a failed API read.
+          DEPENDENCY_META="$(gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" 2>/dev/null || true)"
+          if [ -z "${DEPENDENCY_META}" ]; then
+            echo "AI_PHASE_GATE_V1 phase=implement gate=security_dependency reason=metadata_unavailable outcome=skip issue=${ISSUE_NUMBER}"
+            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          printf '%s\n' "${DEPENDENCY_META}" > "${ISSUE_META_FILE}"
+          DEPENDENCY_VERDICT="$(python3 scripts/security_dependency.py security-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held"}')"
+          if [ "$(printf '%s' "${DEPENDENCY_VERDICT}" | jq -r '.status // "held"' 2>/dev/null)" = "held" ]; then
+            echo "AI_PHASE_GATE_V1 phase=implement gate=security_dependency reason=held outcome=skip issue=${ISSUE_NUMBER}"
+            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
           # Reuse the issue snapshot fetched in "Fetch issue metadata"
           # rather than re-hitting the API.  Falls back to a fresh API
           # call when the file is missing OR jq fails to parse it
@@ -1990,12 +2027,76 @@ jobs:
             --issue-title "${ISSUE_TITLE_JSON}" \
             --issue-body-file "${ISSUE_BODY_FILE}"
 
+      - name: Recheck security dependency before edits
+        if: env.SKIP_IMPLEMENT != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh
+          if ! gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}" > "${ISSUE_META_FILE}"; then
+            echo "AI_PHASE_GATE_V1 phase=implement gate=security_dependency reason=metadata_unavailable outcome=skip issue=${ISSUE_NUMBER}"
+            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          verdict="$(python3 scripts/security_dependency.py security-dependency --issue-json "${ISSUE_META_FILE}" --repo "${{ github.repository }}" --issue-number "${ISSUE_NUMBER}" 2>/dev/null || echo '{"status":"held"}')"
+          if [ "$(printf '%s' "${verdict}" | jq -r '.status // "held"' 2>/dev/null)" = "held" ]; then
+            echo "AI_PHASE_GATE_V1 phase=implement gate=security_dependency reason=held_before_edits outcome=skip issue=${ISSUE_NUMBER}"
+            echo "SKIP_IMPLEMENT=true" >> "$GITHUB_ENV"
+          fi
+
       - name: Run workspace before_run hook
         if: env.SKIP_IMPLEMENT != 'true'
         id: workspace_before_run_hook
         run: |
           set -euo pipefail
           bash scripts/run_workspace_hook.sh implement before_run
+
+      # Claude engine (replace-claude-sessions plan Phase 5b): IMPLEMENT,
+      # IMPLEMENT_REPAIR and IMPLEMENT_DIAGNOSE each resolve their engine from
+      # the issue's labels, AI_ENGINE_<ROLE> and AI_ENGINE, exported to the
+      # job as AI_ENGINE_RESOLVED_<ROLE>. The CLI and the pool credential are
+      # fetched only when one of them is Claude; a role that cannot start on
+      # Claude falls back to its unchanged codex call (exit 75, plan D1).
+      - name: Resolve AI engine
+        if: env.SKIP_IMPLEMENT != 'true'
+        id: ai_engine
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_IMPLEMENT: ${{ vars.AI_ENGINE_IMPLEMENT || '' }}
+          AI_ENGINE_IMPLEMENT_REPAIR: ${{ vars.AI_ENGINE_IMPLEMENT_REPAIR || '' }}
+          AI_ENGINE_IMPLEMENT_DIAGNOSE: ${{ vars.AI_ENGINE_IMPLEMENT_DIAGNOSE || '' }}
+          AI_ENGINE_MODEL_HINT: ${{ env.MODEL_EDITOR }}
+          AI_ENGINE_EFFORT_HINT: ${{ env.MODEL_REASONING_EFFORT }}
+        run: |
+          set -euo pipefail
+          any_claude="false"
+          for role in IMPLEMENT IMPLEMENT_REPAIR IMPLEMENT_DIAGNOSE; do
+            engine="codex"
+            if [ -f scripts/ai_engine.sh ]; then
+              # shellcheck disable=SC1091
+              source scripts/ai_engine.sh
+              engine="$(ai_engine_for_role "${role}" || echo codex)"
+            fi
+            [ "${engine}" = "claude" ] || engine="codex"
+            [ "${engine}" = "claude" ] && any_claude="true"
+            echo "AI_ENGINE_RESOLVED_${role}=${engine}" >> "$GITHUB_ENV"
+          done
+          echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: env.SKIP_IMPLEMENT != 'true' && steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/install-claude
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: env.SKIP_IMPLEMENT != 'true' && steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/claude-pool-token
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
 
       - name: Run Codex implementation
         if: env.SKIP_IMPLEMENT != 'true'
@@ -2692,6 +2793,8 @@ jobs:
             # unsynced integration branch checks out an older conftest.py, so
             # the workflow side has to hold on its own.
             CODEX_THREAD_REUSE_STATE_KEY="implement" \
+              CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT:-codex}" \
+              CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT" \
               CODEX_THREAD_REUSE_PROMPT_FILE="${PROMPT_FILE_TO_USE}" \
               CODEX_THREAD_REUSE_OUTPUT_FILE="${CODEX_OUTPUT_FILE}" \
               CODEX_THREAD_REUSE_PHASE="implement" \
@@ -3934,6 +4037,9 @@ jobs:
             emit_implement_substate "implement_repair" "implement_repair" "StreamingTurn" "${attempt}" "${REPAIR_LOG_FILE}"
             # Same ledger scrub as the implementation launch above.
             if ! CODEX_THREAD_REUSE_STATE_KEY="implement-repair" \
+              CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex}" \
+              CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT_REPAIR" \
+              AI_ENGINE_EFFORT_HINT="${REPAIR_REASONING}" \
               CODEX_THREAD_REUSE_PROMPT_FILE="${REPAIR_PROMPT_FILE}" \
               CODEX_THREAD_REUSE_OUTPUT_FILE="${REPAIR_OUTPUT_FILE}" \
               CODEX_THREAD_REUSE_PHASE="implement_repair" \
@@ -4683,6 +4789,20 @@ jobs:
           if [ -n "${TRACKING_ISSUE_NUMBER}" ]; then
             printf 'Refs #%s\n' "${TRACKING_ISSUE_NUMBER}" >> "${PR_BODY_FILE}"
           fi
+          # Port P3 (replace-claude-sessions plan, Phase 8b): repeat the
+          # issue's <!-- ai:auto-decisions:v1 --> entries in the PR body, from
+          # the comments "Fetch issue comments" already read (no API call).
+          # The renderer breaks up #<digits>, so the section can never
+          # reference or auto-close an issue; a failure only warns.
+          AUTO_DECISIONS_SECTION_FILE="${RUNTIME_DIR}/pr-body-lint/auto-decisions.md"
+          if [ -s "${ISSUE_COMMENTS_FILE:-}" ]; then
+            if PYTHONDONTWRITEBYTECODE=1 python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/auto_decisions.py" pr-section \
+              --comments-file "${ISSUE_COMMENTS_FILE}" > "${AUTO_DECISIONS_SECTION_FILE}" 2>/dev/null; then
+              cat "${AUTO_DECISIONS_SECTION_FILE}" >> "${PR_BODY_FILE}"
+            else
+              echo "::warning::Could not render the auto-decisions section for issue #${ISSUE_NUMBER}; the PR body omits it."
+            fi
+          fi
           printf '%s\n\n' "${PR_TITLE}" > "${PR_LINT_FILE}"
           cat "${PR_BODY_FILE}" >> "${PR_LINT_FILE}"
           PYTHONDONTWRITEBYTECODE=1 python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/lint_pr_body_auto_close.py" \
@@ -4730,6 +4850,16 @@ jobs:
           )
           if [ "${IS_SMOKE_TEST:-false}" = "true" ]; then
             PR_CREATE_ARGS+=(--label "force-review" --label "e2e-smoke-test")
+          fi
+          # Engine label (plan Phase 6, D2): the PR's review roles follow the
+          # issue's engine. Read from the issue metadata already fetched for
+          # this run (no extra API call); ai:codex wins over ai:engine-claude.
+          if [ -n "${ISSUE_META_FILE:-}" ] && [ -s "${ISSUE_META_FILE}" ]; then
+            PR_ENGINE_LABEL="$(jq -r '[.labels[]?.name] | if index("ai:codex") then "ai:codex" elif index("ai:engine-claude") then "ai:engine-claude" else "" end' "${ISSUE_META_FILE}" 2>/dev/null || true)"
+            if [ -n "${PR_ENGINE_LABEL}" ]; then
+              PR_CREATE_ARGS+=(--label "${PR_ENGINE_LABEL}")
+              echo "AI_ENGINE_PR_LABEL issue=${ISSUE_NUMBER:-unknown} label=${PR_ENGINE_LABEL}"
+            fi
           fi
 
           if ! gh pr create "${PR_CREATE_ARGS[@]}" > "${RUNTIME_DIR}/created_pr_url.txt" 2> "${RUNTIME_DIR}/created_pr_url.err"; then
@@ -4794,6 +4924,11 @@ jobs:
             fi
             if [ -n "${EXISTING_PR}" ]; then
               echo "Found existing PR: ${EXISTING_PR}"
+              if [ -n "${PR_ENGINE_LABEL:-}" ] && ! gh_retry gh pr edit "${EXISTING_PR}" \
+                  --repo "${{ github.repository }}" --add-label "${PR_ENGINE_LABEL}"; then
+                echo "::error::Could not copy the issue's engine label to existing PR ${EXISTING_PR}"
+                exit 1
+              fi
               echo "pr_url=${EXISTING_PR}" >> "$GITHUB_OUTPUT"
               exit 0
             fi

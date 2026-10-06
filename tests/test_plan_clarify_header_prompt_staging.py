@@ -102,18 +102,42 @@ def test_clarify_sandbox_support_has_main_snapshot_fallback() -> None:
 
 def test_clarify_respond_isolates_every_model_call() -> None:
 	respond = (WORKFLOW_DIR / "orchestrate_clarify_respond.yml").read_text(encoding="utf-8")
-	assert "orchestrate_parse_and_post_answer.sh clarify_isolated_run.sh clarify_openrouter_broker.py; do" in respond
+	assert "orchestrate_parse_and_post_answer.sh clarify_isolated_run.sh clarify_openrouter_broker.py ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl auto_decisions.py clarify_github_facts.py clarify_data_provision_guard.py; do" in respond
 	assert 'sandbox_src=".codex-workflow-src/scripts/clarify_sandbox/Dockerfile"' in respond
 	assert '.codex-workflow-src-main/scripts/clarify_sandbox/Dockerfile' in respond
 	assert 'install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile' in respond
 	assert 'printf \'%s\\n\' "${_fetched_scripts[@]}" clarify_sandbox/ .gitignore' in respond
 	assert "--sandbox danger-full-access" not in respond
 	assert "codex --ask-for-approval" not in respond
-	assert respond.count('bash scripts/clarify_isolated_run.sh ') == 3
-	assert 'bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}"' in respond
-	assert 'bash scripts/clarify_isolated_run.sh "${RUNTIME_DIR}/critic_prompt.txt" "${RUNTIME_DIR}/critic_output.txt"' in respond
-	assert 'bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}.v2" "${CODEX_OUTPUT_FILE}"' in respond
+	# Each of the three model calls has a Claude branch (Phase 5a) and the
+	# unchanged codex call it falls back to (exit 75, plan D1).
+	assert respond.count('bash scripts/clarify_isolated_run.sh ') == 6
+	for args, rc in (
+		('"${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"', "rc"),
+		('"${RUNTIME_DIR}/critic_prompt.txt" "${RUNTIME_DIR}/critic_output.txt" "${RUNTIME_DIR}/codex_log.txt"', "critic_rc"),
+		('"${CODEX_PROMPT_FILE}.v2" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"', "revise_rc"),
+	):
+		assert f"bash scripts/clarify_isolated_run.sh {args} claude CLARIFY_RESPOND || {rc}=$?" in respond
+		assert f"bash scripts/clarify_isolated_run.sh {args} || {rc}=$?" in respond
+		assert f'if [ "${{{rc}}}" -eq 75 ]; then' in respond
 	assert respond.count("CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}") == 2
+
+
+def test_clarify_respond_critique_uses_the_answer_step_fallback() -> None:
+	respond = (WORKFLOW_DIR / "orchestrate_clarify_respond.yml").read_text(encoding="utf-8")
+	answer_output = 'echo "engine=${CLARIFY_RESPOND_ENGINE}" >> "$GITHUB_OUTPUT"'
+	assert answer_output in respond
+	assert respond.index(answer_output) < respond.index("      - name: Self-critique pass for non-letter decisions")
+	assert "CLARIFY_RESPOND_ENGINE: ${{ steps.run_codex.outputs.engine || steps.ai_engine.outputs.engine || 'codex' }}" in respond
+
+
+def test_claude_image_build_failure_triggers_codex_fallback() -> None:
+	runner_text = (REPO_ROOT / "scripts" / "clarify_isolated_run.sh").read_text(encoding="utf-8")
+	claude_build = runner_text[runner_text.index('\tif ! image='):runner_text.index('\tfor account in "${claude_accounts[@]}"; do')]
+	build_script = 'set -euo pipefail\nenv() { return 1; }\nai_engine_fallback() { printf "AI_ENGINE_FALLBACK role=%s reason=%s\\n" "$1" "$2" >&2; }\nengine_role=CLARIFY\nversion=v0.114.0\nclaude_version=1.0.0\n' + claude_build
+	build_result = subprocess.run(["bash", "-c", build_script], env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True, check=False)
+	assert build_result.returncode == 75, build_result.stderr
+	assert "AI_ENGINE_FALLBACK role=CLARIFY reason=image_build_failed" in build_result.stderr
 
 
 def test_render_callers_stage_header_prompt() -> None:

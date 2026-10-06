@@ -53,7 +53,9 @@ SMOKE_SILENCING_WORKFLOWS = (
 # Exact step-level declarations expected per workflow, so a future edit
 # cannot silently drop one (count and text are both pinned).
 EXPECTED_STEP_DECLARATIONS = {
-	# 4 = the Claude issue handoff step + the three clarify notification steps.
+	# 4 = the three clarify notification steps + "Standalone auto-decide"
+	# (replace-claude-sessions Phase 8b), whose answer poster's loop guard can
+	# alert. The Claude issue handoff step was retired in Phase 2.
 	"clarify.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 4,
 	"plan.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 4,
 	"implement.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 2,
@@ -65,7 +67,9 @@ EXPECTED_STEP_DECLARATIONS = {
 	],
 	"orchestrate.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 1,
 	"orchestrate_poll.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 2,
-	"orchestrate_clarify_respond.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 2,
+	# 3 = "Standalone RECOMMENDED fallback" (pages when the standalone worker
+	# fails with no fallback), "Parse and post answer", the failure alert.
+	"orchestrate_clarify_respond.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 3,
 }
 
 STEP_DECL_RE = re.compile(r"^\s+ALERT_MSG_LEVEL:\s*(\$\{\{.*\}\})\s*$")

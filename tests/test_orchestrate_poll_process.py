@@ -1515,17 +1515,22 @@ if args[0] == 'run' and len(args) >= 2 and args[1] == 'list':
 			continue
 		if branch and run.get('branch') != branch:
 			continue
-		if event and run.get('event') != event:
+		# A run carries an event only when a test sets one (the PR-named
+		# default-branch dispatch runs of issue #4701); untagged runs keep
+		# matching every --event filter as before.
+		if event and run.get('event', event) != event:
 			continue
-		runs.append({
+		entry = {
 			'status': run.get('status', 'queued'),
 			'conclusion': run.get('conclusion', ''),
 			'createdAt': run.get('createdAt', '2999-01-01T00:00:00Z'),
 			'startedAt': run.get('startedAt', '2999-01-01T00:00:00Z'),
 			'databaseId': run.get('databaseId', 99),
-			'displayTitle': run.get('displayTitle', ''),
-			'workflowName': run.get('workflowName', ''),
-		})
+		}
+		for key in ('event', 'displayTitle', 'createdAt', 'startedAt', 'databaseId'):
+			if key in run:
+				entry[key] = run[key]
+		runs.append(entry)
 	if jq_query:
 		import subprocess as _sp
 		p = _sp.run(['jq', '-r', jq_query], input=json.dumps(runs), capture_output=True, text=True)
@@ -1848,6 +1853,8 @@ if args[0] == 'api':
 				issue_payload['number'] = issue_num
 			if re.search(r'(?m)^\s*state\s*$', query):
 				issue_payload['state'] = issue_state
+			if re.search(r'(?m)^\s*body\s*$', query):
+				issue_payload['body'] = issue.get('body', '')
 			if 'labels(first:' in query:
 				issue_payload['labels'] = {'nodes': [{'name': label} for label in labels]}
 			if 'comments(last:' in query and issue_num not in set(store.get('graphql_comments_unavailable_for', [])):
@@ -2185,7 +2192,9 @@ if args[0] == 'api':
 				sys.exit(p.returncode)
 			print(p.stdout, end='')
 		else:
-			print(json.dumps({'body': issue.get('body', ''), 'state': issue_state}))
+			print(json.dumps({'body': issue.get('body', ''), 'state': issue_state,
+				'number': num, 'repository_url': 'https://api.github.com/repos/owner/repo',
+				'labels': [{'name': label} for label in issue.get('labels', [])]}))
 		save()
 		sys.exit(0)
 
@@ -2677,12 +2686,49 @@ if args[0] == 'api':
 		sys.stdout.write(output)
 		sys.exit(0)
 
-	m = re.search(r'/actions/workflows/([^/]+)/runs', path)
+	m = re.search(r'/actions/workflows/([^/?]+)/runs', path)
 	if m:
 		runs = store.get('validation_workflow_runs', [])
 		by_file = store.get('workflow_runs_by_file') or {}
 		if m.group(1) in by_file:
 			runs = by_file[m.group(1)]
+		elif m.group(1) in ('internal-review.yml', 'ai-review.yml') and 'event=workflow_dispatch' in path:
+			# The poller's PR-named review dispatch lookup (issue #4927) lists
+			# each wrapper's workflow_dispatch runs over REST. Serve the
+			# active_autofix_runs entries of that wrapper (or with no
+			# workflow) that are workflow_dispatch runs or carry no event, in
+			# REST shape, one page at a time.
+			if store.get('pr_named_listing_fail'):
+				print('gh: Server Error (HTTP 502)', file=sys.stderr)
+				sys.exit(1)
+			page_m = re.search(r'[?&]page=(\d+)', path)
+			per_m = re.search(r'[?&]per_page=(\d+)', path)
+			page = int(page_m.group(1)) if page_m else 1
+			per_page = int(per_m.group(1)) if per_m else 30
+			runs = []
+			for idx, run in enumerate(store.get('active_autofix_runs', [])):
+				if run.get('workflow') not in (None, m.group(1)):
+					continue
+				if run.get('event', 'workflow_dispatch') != 'workflow_dispatch':
+					continue
+				runs.append({
+					'id': run.get('databaseId', 900000 + idx),
+					'event': run.get('event', 'workflow_dispatch'),
+					'status': run.get('status', 'queued'),
+					'conclusion': run.get('conclusion', ''),
+					'display_title': run.get('displayTitle', ''),
+					'created_at': run.get('createdAt', ''),
+					'run_started_at': run.get('startedAt', run.get('createdAt', '')),
+				})
+			result = {'workflow_runs': runs[(page - 1) * per_page:page * per_page], 'total_count': len(runs)}
+			save()
+			if jq:
+				import subprocess as _sp
+				p = _sp.run(['jq', '-c', jq], input=json.dumps(result), capture_output=True, text=True)
+				print(p.stdout.rstrip())
+			else:
+				print(json.dumps(result))
+			sys.exit(0)
 		result = {'workflow_runs': runs, 'total_count': len(runs)}
 		if jq:
 			import subprocess as _sp
@@ -5336,24 +5382,62 @@ def test_staged_support_guards_refetch_when_graphql_comments_are_unavailable() -
 	assert not any(comment["body"].startswith("/approved") for comment in standalone["issues"]["700"]["comments"])
 
 
-def test_standalone_stall_recovery_skips_claude_claimed_issues() -> None:
-	"""Claude-claimed standalone issues (ai:claude, no ai:codex) belong to the
-	Claude issue flow; stall recovery must not re-issue a Codex phase."""
+def test_standalone_stall_recovery_no_longer_skips_claude_labelled_issues() -> None:
+	"""The Claude issue implementer is retired: a leftover ai:claude label no
+	longer exempts a standalone issue from Codex stall recovery."""
 	claimed = _run_latch_release_tick(
 		issue_labels=["ai:awaiting-approval", "ai:claude"],
 		issue_comments=["routine comment"],
 		env_overrides={},
 	)
-	claimed_log = claimed["stdout"] + claimed["stderr"]
-	assert "STALL_SKIP issue=700 reason=claude_routed action=none" in claimed_log
-	assert not any(comment["body"].startswith("/approved") for comment in claimed["issues"]["700"]["comments"])
+	assert "reason=claude_routed" not in claimed["stdout"] + claimed["stderr"]
 
-	switched = _run_latch_release_tick(
-		issue_labels=["ai:awaiting-approval", "ai:claude", "ai:codex"],
-		issue_comments=["routine comment"],
-		env_overrides={},
+
+def test_standalone_security_followup_releases_only_after_prerequisite_merges() -> None:
+	dependent_body = "<!-- ai:security-finding:SEC-TEST -->\n- Depends on: #701\n"
+	for closed, labels, expected in (
+		(False, [], "security_dependency_held"),
+		(True, [], "security_dependency_held"),
+		(True, ["ai:merged"], "security_dependency_released"),
+	):
+		state = _base_state(status="in_progress")
+		state["waves"][0]["issues"][0]["status"] = "merged"
+		result = _run_poller(
+			state=state, enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:merged"], 700: ["ai:clarification", "ai:security"], 701: labels},
+			issue_bodies={700: dependent_body}, issue_closed={701: closed},
+			issue_comments={700: []}, mock_gh_issue_list_label_filter=True,
+		)
+		assert f"STALL_SKIP issue=700 reason={expected}" in result["stdout"] + result["stderr"]
+		if closed and not labels:
+			assert "detail=closed_without_ai_merged" in result["stdout"] + result["stderr"]
+		releases = [c for c in result["issues"]["700"]["comments"] if c["body"].startswith("/reclarify")]
+		assert len(releases) == (1 if closed and labels else 0)
+
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	trusted_marker = {
+		"body": "/reclarify\n<!-- ai:security-dependency-released:700 -->",
+		"author_association": "OWNER", "user": {"login": "owner"},
+	}
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 700: ["ai:clarification", "ai:security"], 701: ["ai:merged"]},
+		issue_bodies={700: dependent_body}, issue_closed={701: True},
+		issue_comments={700: [trusted_marker]}, mock_gh_issue_list_label_filter=True,
 	)
-	assert "reason=claude_routed" not in switched["stdout"] + switched["stderr"]
+	assert len([c for c in result["issues"]["700"]["comments"] if c["body"].startswith("/reclarify")]) == 1
+
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 700: ["ai:clarification", "ai:security"], 701: ["ai:merged"]},
+		issue_bodies={700: dependent_body}, issue_closed={701: True},
+		issue_comments={700: [{**trusted_marker, "author_association": "NONE", "user": {"login": "stranger"}}]},
+		mock_gh_issue_list_label_filter=True,
+	)
+	assert len([c for c in result["issues"]["700"]["comments"] if c["body"].startswith("/reclarify")]) == 2
 
 
 def test_standalone_staged_support_guard_reuses_conclusive_comment_cache() -> None:
@@ -11890,9 +11974,9 @@ def test_standalone_conflict_sweep_skips_integration_base_prs():
 	assert result["review_dispatches"] == []
 
 
-def test_standalone_conflict_sweep_skips_draft_claude_prs():
-	# A draft claude/* project integration PR is synced by its own chain;
-	# the sweep neither update-branches it nor dispatches a review for it.
+def test_standalone_conflict_sweep_no_longer_special_cases_draft_claude_prs():
+	# The /implement-plan-claude chain that used to sync draft claude/* PRs
+	# is retired, so the sweep no longer skips them with the chain message.
 	state = _base_state(status="complete")
 	prs = [
 		{
@@ -11913,9 +11997,7 @@ def test_standalone_conflict_sweep_skips_draft_claude_prs():
 		prs=prs,
 		update_branch_fail_for_prs=[415],
 	)
-	assert result["update_branch_calls"] == []
-	assert result["review_dispatches"] == []
-	assert "PR #415 is a draft claude/* PR" in result["stdout"]
+	assert "PR #415 is a draft claude/* PR" not in result["stdout"]
 
 
 def test_standalone_conflict_sweep_handles_non_ai_branch_conflicts():
@@ -11941,6 +12023,7 @@ def test_standalone_conflict_sweep_handles_non_ai_branch_conflicts():
 	assert result["update_branch_calls"] == [411]
 	assert len(result["review_dispatches"]) == 1
 	assert result["review_dispatches"][0]["pr_number"] == 411
+	# The conflict dispatch executes the default-branch workflow, not the PR head.
 	assert result["review_dispatches"][0]["ref"] is None
 
 
@@ -16774,150 +16857,314 @@ def test_retrigger_review_skips_empty_commit_when_review_run_has_blank_head_bran
 	)
 
 
-def _pr_named_retrigger_state(pr_number: int) -> tuple[dict, list[dict]]:
+def _retrigger_review_pr_state(pr_number: int, head_ref: str) -> tuple[dict, list[dict]]:
 	state = _base_state(status="in_progress")
 	issue = state["waves"][0]["issues"][0]
-	issue.update(status="in_progress", last_seen_phase="ai:done", status_since_ts=1, stall_recovery_count=0)
-	return state, [{
-		"number": pr_number, "body": "Closes #10", "state": "open",
-		"mergeable": True, "mergeable_state": "clean", "baseRefName": "main",
-		"headRefName": "claude/review-named", "headRefFromApi": "claude/review-named",
-		"headSha": f"sha{pr_number}",
-	}]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:done"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	prs = [
+		{
+			"number": pr_number,
+			"body": "Closes #10",
+			"state": "open",
+			"mergeable": True,
+			"mergeable_state": "clean",
+			"headRefName": head_ref,
+			"headRefFromApi": head_ref,
+			"headSha": f"sha{pr_number}",
+			"baseRefName": "main",
+		},
+	]
+	return state, prs
 
 
-def test_retrigger_review_sees_pr_named_pending_run_in_cache():
-	state, prs = _pr_named_retrigger_state(91)
+def test_retrigger_review_skips_empty_commit_when_pr_named_dispatch_run_is_in_flight():
+	# Issue #4701: a review run dispatched from the default branch has
+	# head_branch=main and main's head_sha, so only its PR run name ties it
+	# to the PR. It must still block the destructive empty-commit push.
+	state, prs = _retrigger_review_pr_state(91, "claude/retrigger-review-pr-named")
 	result = _run_poller(
-		state=state, enable_validation="false", max_validate_cycles="3",
-		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 91}, prs=prs,
-		actions_runs_workflow_runs=[{
-			"id": 991, "name": "AI Review", "path": ".github/workflows/ai-review.yml@main",
-			"event": "workflow_dispatch", "display_title": "AI Review [pr:91]",
-			"status": "pending", "head_branch": "main", "head_sha": "c" * 40,
-			"run_started_at": "2999-01-01T00:00:00Z",
-		}], mock_git_push_success=True,
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 91},
+		prs=prs,
+		actions_runs_workflow_runs=[
+			{
+				"id": 26088864091,
+				"name": "Internal: AI Review & Autofix",
+				"display_title": "Internal: AI Review & Autofix [pr:91]",
+				"event": "workflow_dispatch",
+				"path": ".github/workflows/internal-review.yml",
+				"status": "in_progress",
+				"head_branch": "main",
+				"head_sha": "c" * 40,
+				"run_started_at": "2999-01-01T00:00:00Z",
+			},
+		],
+		mock_git_push_success=True,
 	)
-	assert result.get("git_push_calls", []) == []
-	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 0, issue_entry
+	assert result.get("git_push_calls", []) == [], result.get("git_push_calls", [])
 
 
-def test_retrigger_review_redispatches_failed_pr_named_run():
-	state, prs = _pr_named_retrigger_state(92)
+def test_retrigger_review_ignores_pr_named_dispatch_run_of_another_pr():
+	# The name must match this PR exactly: [pr:910] is not [pr:91], and a
+	# pull_request run titled like the marker is not a dispatch run.
+	state, prs = _retrigger_review_pr_state(91, "claude/retrigger-review-pr-named-other")
 	result = _run_poller(
-		state=state, enable_validation="false", max_validate_cycles="3",
-		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 92}, prs=prs,
-		active_autofix_runs=[{
-			"workflow": "internal-review.yml", "workflowName": "Internal: AI Review & Autofix",
-			"branch": "main", "event": "workflow_dispatch",
-			"displayTitle": "Internal: AI Review & Autofix [pr:92]",
-			"status": "completed", "conclusion": "failure",
-			"createdAt": "2999-01-01T00:00:00Z",
-		}], mock_git_push_success=True,
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 91},
+		prs=prs,
+		actions_runs_workflow_runs=[
+			{
+				"id": 26088864910,
+				"name": "Internal: AI Review & Autofix",
+				"display_title": "Internal: AI Review & Autofix [pr:910]",
+				"event": "workflow_dispatch",
+				"path": ".github/workflows/internal-review.yml",
+				"status": "in_progress",
+				"head_branch": "main",
+				"head_sha": "c" * 40,
+				"run_started_at": "2999-01-01T00:00:00Z",
+			},
+			{
+				"id": 26088864911,
+				"name": "Internal: AI Review & Autofix",
+				"display_title": "Internal: AI Review & Autofix [pr:91]",
+				"event": "pull_request",
+				"path": ".github/workflows/internal-review.yml",
+				"status": "in_progress",
+				"head_branch": "some/other-branch",
+				"head_sha": "d" * 40,
+				"run_started_at": "2999-01-01T00:00:00Z",
+			},
+		],
+		mock_git_push_success=True,
 	)
-	assert any(d["pr_number"] == 92 and d["ref"] is None for d in result["review_dispatches"])
-	assert result.get("git_push_calls", []) == []
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 1, issue_entry
+	assert result.get("git_push_calls", []), "expected the empty-commit push to proceed"
 
 
-def test_retrigger_review_direct_guard_sees_pr_named_pending_run():
-	state, prs = _pr_named_retrigger_state(94)
+def test_retrigger_review_redispatches_when_pr_named_dispatch_run_failed():
+	# Issue #4701: the newest review run for the PR is a default-branch
+	# dispatch that failed. The head-branch lookups cannot see it, so the
+	# PR-named fallback must route to a redispatch, not an empty commit.
+	state, prs = _retrigger_review_pr_state(92, "claude/retrigger-review-pr-named-failed")
 	result = _run_poller(
-		state=state, enable_validation="false", max_validate_cycles="3",
-		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 94}, prs=prs,
-		active_autofix_runs=[{
-			"workflow": "ai-review.yml", "workflowName": "AI Review",
-			"branch": "main", "event": "workflow_dispatch",
-			"displayTitle": "AI Review [pr:94]", "databaseId": 994,
-			"status": "pending", "createdAt": "2999-01-01T00:00:00Z",
-		}], mock_git_push_success=True,
-	)
-	assert result.get("git_push_calls", []) == []
-	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
-
-
-def test_retrigger_review_does_not_push_on_named_listing_failure():
-	state, prs = _pr_named_retrigger_state(96)
-	result = _run_poller(
-		state=state, enable_validation="false", max_validate_cycles="3",
-		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 96}, prs=prs,
-		mock_store_extra={"pr_named_listing_fail": True}, mock_git_push_success=True,
-	)
-	assert result.get("git_push_calls", []) == []
-	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 0
-	assert "PR-named run lookup unavailable" in result["stdout"]
-
-
-def test_retrigger_review_ignores_older_named_failure():
-	state, prs = _pr_named_retrigger_state(93)
-	result = _run_poller(
-		state=state, enable_validation="false", max_validate_cycles="3",
-		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 93}, prs=prs,
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 92},
+		prs=prs,
 		active_autofix_runs=[
-			{"workflow": "ai-review.yml", "workflowName": "AI Review", "branch": "main",
-			 "event": "workflow_dispatch", "displayTitle": "AI Review [pr:93]",
-			 "status": "completed", "conclusion": "failure", "createdAt": "2026-09-28T01:00:00Z"},
-			{"workflow": "ai-review.yml", "branch": "claude/review-named",
-			 "status": "completed", "conclusion": "success", "createdAt": "2026-09-28T02:00:00Z"},
-		], mock_git_push_success=True,
+			{
+				"workflow": "internal-review.yml",
+				"branch": "main",
+				"event": "workflow_dispatch",
+				"displayTitle": "Internal: AI Review & Autofix [pr:92]",
+				"status": "completed",
+				"conclusion": "failure",
+				"createdAt": "2026-09-28T01:00:00Z",
+			},
+		],
+		mock_git_push_success=True,
 	)
-	assert not any(d["pr_number"] == 93 for d in result["review_dispatches"])
+	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "92"]
+	assert dispatches_for_pr, result.get("review_dispatches")
+	assert all(d.get("ref") is None for d in dispatches_for_pr), dispatches_for_pr
+	assert result.get("git_push_calls", []) == []
+	assert "review run dispatched for PR #92" in result["stdout"]
 
 
-def test_retrigger_review_ignores_branch_failure_superseded_by_named_success():
-	state, prs = _pr_named_retrigger_state(95)
+def test_retrigger_review_pr_named_failure_lookup_reaches_past_the_review_window():
+	# Conformance fix 2 (AD-8): a review run that hit the codex-agent job's
+	# 240-minute timeout ends only minutes before it leaves the 250-minute
+	# in-flight window. The failed-autofix redispatch lookup therefore reads
+	# back REVIEW_RUN_MAX_RUNTIME_MINUTES + STALL_THRESHOLD_MINUTES
+	# (250 + 120 by default), while the in-flight guards keep 250.
+	import calendar
+
+	state, prs = _retrigger_review_pr_state(95, "claude/retrigger-review-pr-named-lookback")
+	started = time.time()
 	result = _run_poller(
-		state=state, enable_validation="false", max_validate_cycles="3",
-		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 95}, prs=prs,
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 95},
+		prs=prs,
 		active_autofix_runs=[
-			{"workflow": "ai-review.yml", "branch": "claude/review-named",
-			 "status": "completed", "conclusion": "failure", "createdAt": "2026-09-28T01:00:00Z"},
-			{"workflow": "ai-review.yml", "workflowName": "AI Review", "branch": "main",
-			 "event": "workflow_dispatch", "displayTitle": "AI Review [pr:95]",
-			 "status": "completed", "conclusion": "success", "createdAt": "2026-09-28T02:00:00Z"},
-		], mock_git_push_success=True,
+			{
+				"workflow": "internal-review.yml",
+				"branch": "main",
+				"event": "workflow_dispatch",
+				"displayTitle": "Internal: AI Review & Autofix [pr:95]",
+				"status": "completed",
+				"conclusion": "timed_out",
+				"createdAt": "2026-09-28T01:00:00Z",
+			},
+		],
+		mock_git_push_success=True,
 	)
-	assert not any(d["pr_number"] == 95 for d in result["review_dispatches"])
+	finished = time.time()
+	ages = []
+	for path in result.get("api_calls", []):
+		if "actions/workflows/internal-review.yml/runs?event=workflow_dispatch" not in path:
+			continue
+		m = re.search(r"created=>=(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)", path)
+		assert m, path
+		cutoff = calendar.timegm(time.strptime(m.group(1), "%Y-%m-%dT%H:%M:%SZ"))
+		# Cutoff age in minutes, bounded by the poller's start and end times.
+		# The helper takes "now" between those two instants, so the lookback
+		# lies in [low, high] however long the poller runs; the 0.1-minute
+		# slack only absorbs the cutoff's truncation to whole seconds.
+		ages.append(((started - cutoff) / 60, (finished - cutoff) / 60))
+	assert ages, result.get("api_calls", [])
+	# The first PR-named lookup is the redispatch's (370 minutes); the
+	# dispatch guard that follows keeps the in-flight window (250 minutes).
+	low, high = ages[0]
+	assert low - 0.1 <= 370 <= high + 0.1, ages
+	assert any(low - 0.1 <= 250 <= high + 0.1 for low, high in ages[1:]), ages
+	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "95"]
+	assert dispatches_for_pr, result.get("review_dispatches")
+	assert result.get("git_push_calls", []) == []
 
 
-def test_retrigger_review_does_not_redispatch_on_tied_failure_and_success():
-	state, prs = _pr_named_retrigger_state(97)
+def _assert_retrigger_review_pr_named_lookback_is_decimal(
+	review_window_env, stall_threshold_env, expected_lookback
+):
+	# PR #5098 review round 2: the redispatch lookback sums
+	# REVIEW_RUN_MAX_RUNTIME_MINUTES and STALL_THRESHOLD_MINUTES with bash
+	# arithmetic. The startup check accepts leading zeros, so it also strips
+	# them; otherwise the sum reads them as octal (a shorter window) or
+	# aborts the recovery action.
+	import calendar
+
+	state, prs = _retrigger_review_pr_state(96, "claude/retrigger-review-pr-named-lookback-decimal")
+	started = time.time()
 	result = _run_poller(
-		state=state, enable_validation="false", max_validate_cycles="3",
-		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 97}, prs=prs,
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 96},
+		prs=prs,
 		active_autofix_runs=[
-			{"workflow": "ai-review.yml", "branch": "claude/review-named",
-			 "status": "completed", "conclusion": "failure", "createdAt": "2026-09-28T02:00:00Z"},
-			{"workflow": "ai-review.yml", "workflowName": "AI Review", "branch": "main",
-			 "event": "workflow_dispatch", "displayTitle": "AI Review [pr:97]",
-			 "status": "completed", "conclusion": "success", "createdAt": "2026-09-28T02:00:00Z"},
-		], mock_git_push_success=True,
+			{
+				"workflow": "internal-review.yml",
+				"branch": "main",
+				"event": "workflow_dispatch",
+				"displayTitle": "Internal: AI Review & Autofix [pr:96]",
+				"status": "completed",
+				"conclusion": "timed_out",
+				"createdAt": "2026-09-28T01:00:00Z",
+			},
+		],
+		mock_git_push_success=True,
+		env_overrides={
+			"REVIEW_RUN_MAX_RUNTIME_MINUTES": review_window_env,
+			"STALL_THRESHOLD_MINUTES": stall_threshold_env,
+		},
 	)
-	assert not any(d["pr_number"] == 97 for d in result["review_dispatches"])
+	finished = time.time()
+	combined = result.get("stdout", "") + result.get("stderr", "")
+	assert "value too great for base" not in combined
+	ages = []
+	for path in result.get("api_calls", []):
+		if "actions/workflows/internal-review.yml/runs?event=workflow_dispatch" not in path:
+			continue
+		m = re.search(r"created=>=(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ)", path)
+		assert m, path
+		cutoff = calendar.timegm(time.strptime(m.group(1), "%Y-%m-%dT%H:%M:%SZ"))
+		# Bounded as in the test above: "now" falls between the two instants.
+		ages.append(((started - cutoff) / 60, (finished - cutoff) / 60))
+	assert ages, result.get("api_calls", [])
+	low, high = ages[0]
+	assert low - 0.1 <= expected_lookback <= high + 0.1, ages
+	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "96"]
+	assert dispatches_for_pr, result.get("review_dispatches")
+	assert result.get("git_push_calls", []) == []
 
 
-def test_stall_judge_cached_runs_match_only_the_correct_pr_dispatch():
-	script = POLLER_SCRIPT.read_text(encoding="utf-8")
-	start = script.index('workflow_outcomes="$(printf \'%s\' "${workflows_json}" | jq -c --arg head_ref')
-	jq_filter = script[start:].split(' --arg pr "${target_pr}" \'\n', 1)[1].split("\n  ' 2>/dev/null", 1)[0]
-	runs = {"workflow_runs": [
-		{"id": 1, "name": "AI Review", "path": ".github/workflows/ai-review.yml@main",
-		 "event": "workflow_dispatch", "display_title": "AI Review [pr:91]", "head_branch": "main"},
-		{"id": 2, "name": "AI Review", "path": ".github/workflows/ai-review.yml@main",
-		 "event": "pull_request", "display_title": "AI Review [pr:91]", "head_branch": "other"},
-		{"id": 3, "name": "AI Review", "path": ".github/workflows/ai-review.yml@main",
-		 "event": "workflow_dispatch", "display_title": "AI Review [pr:910]", "head_branch": "other"},
-		{"id": 4, "name": "AI Review", "path": ".github/workflows/unrelated.yml",
-		 "event": "workflow_dispatch", "display_title": "AI Review [pr:91]", "head_branch": "other"},
-		{"id": 5, "name": "Internal: AI Review & Autofix",
-		 "path": ".github/workflows/internal-review.yml@main", "event": "workflow_dispatch",
-		 "display_title": "Internal: AI Review & Autofix [pr:91]", "head_branch": "main"},
-	]}
-	proc = subprocess.run(
-		["jq", "-c", "--arg", "head_ref", "claude/issue-91", "--arg", "head_sha", "c" * 40,
-		 "--arg", "pr", "91", jq_filter], input=json.dumps(runs), text=True,
-		capture_output=True, check=True,
+def test_retrigger_review_pr_named_lookback_reads_leading_zero_env_as_decimal():
+	# Octal would read these as 168 + 80 = 248, under the 250 window.
+	_assert_retrigger_review_pr_named_lookback_is_decimal("0250", "0120", 370)
+
+
+def test_retrigger_review_pr_named_lookback_survives_non_octal_leading_zero_env():
+	# Octal arithmetic fails on "08" ("value too great for base").
+	_assert_retrigger_review_pr_named_lookback_is_decimal("250", "08", 258)
+
+
+def test_retrigger_review_ignores_pr_named_failure_superseded_by_newer_head_branch_run():
+	# An older PR-named failure behind a newer successful head-branch run is
+	# not the PR's current state: keep the empty-commit path (AD-6).
+	state, prs = _retrigger_review_pr_state(93, "claude/retrigger-review-pr-named-superseded")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 93},
+		prs=prs,
+		active_autofix_runs=[
+			{
+				"workflow": "internal-review.yml",
+				"branch": "main",
+				"event": "workflow_dispatch",
+				"displayTitle": "Internal: AI Review & Autofix [pr:93]",
+				"status": "completed",
+				"conclusion": "failure",
+				"createdAt": "2026-09-28T01:00:00Z",
+			},
+			{
+				"workflow": "internal-review.yml",
+				"branch": "claude/retrigger-review-pr-named-superseded",
+				"event": "pull_request",
+				"status": "completed",
+				"conclusion": "success",
+				"createdAt": "2026-09-28T02:00:00Z",
+			},
+		],
+		mock_git_push_success=True,
 	)
-	assert {run["id"] for run in json.loads(proc.stdout)} == {1, 5}
+	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "93"]
+	assert dispatches_for_pr == [], dispatches_for_pr
+	assert result.get("git_push_calls", []), "expected the empty-commit push path"
+
+
+def test_retrigger_review_skips_push_and_redispatch_when_pr_named_listing_is_incomplete():
+	# Issue #4927: the wrapper dispatch-run listing failed, so the poller
+	# cannot rule out a live default-branch review run for the PR. It must
+	# neither push the empty commit nor redispatch, and must not spend a
+	# recovery attempt; the next poll cycle retries.
+	state, prs = _retrigger_review_pr_state(94, "claude/retrigger-review-pr-named-incomplete")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 94},
+		prs=prs,
+		mock_store_extra={"pr_named_listing_fail": True},
+		mock_git_push_success=True,
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 0, issue_entry
+	assert result.get("git_push_calls", []) == [], result.get("git_push_calls", [])
+	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "94"]
+	assert dispatches_for_pr == [], dispatches_for_pr
+	assert "review dispatch run listing incomplete (PR-named lookup)" in result["stdout"], result["stdout"][-4000:]
 
 
 def test_retrigger_review_ignores_inflight_run_on_unrelated_branch():

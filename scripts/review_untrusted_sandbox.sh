@@ -18,10 +18,37 @@ if [ "${action}" = prepare ]; then
 	trap 'env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker rm -f "${dep_container}" >/dev/null 2>&1 || true; rm -rf -- "${root}"' EXIT
 	mkdir -m 0700 "${root}/socket" "${root}/home"
 	mkdir -m 0755 "${root}/source"
-	PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" snapshot "${workspace}" "${root}/source" "${root}/baseline.json"
+	# The editor step works in the per-PR workspace: review_autofix.yml's
+	# "Activate workspace shell context" cds every later step into
+	# WORKSPACE_PATH and points GIT_WORK_TREE at it, while GITHUB_WORKSPACE
+	# keeps only the Git database. Snapshot and transfer the tree the commit
+	# step reads, or every validated edit lands where nothing commits it
+	# (issues #4580, #6055). workspace_init.sh creates it only under
+	# ${RUNNER_TEMP}/workspaces; without one the checkout stays the target.
+	snapshot_git_dir=()
+	if [ -n "${WORKSPACE_PATH:-}" ]; then
+		workspace_root="$(realpath -e -- "${RUNNER_TEMP:-/tmp}/workspaces" 2>/dev/null || echo /invalid)"
+		workspace="$(realpath -e -- "${WORKSPACE_PATH}" 2>/dev/null || echo /invalid)"
+		checkout_git_dir="$(realpath -e -- "${GITHUB_WORKSPACE:-/invalid}/.git" 2>/dev/null || echo /invalid)"
+		[ -d "${workspace}" ] && [[ "${workspace}" != *$'\n'* ]] && [ "$(dirname -- "${workspace}")" = "${workspace_root}" ] && [ -d "${checkout_git_dir}" ] || { echo '::error::Review workspace path rejected' >&2; exit 1; }
+		snapshot_git_dir=("${checkout_git_dir}")
+	fi
+	printf '%s\n' "${workspace}" > "${root}/workspace"
+	PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" snapshot "${workspace}" "${root}/source" "${root}/baseline.json" "${snapshot_git_dir[@]}"
 	version="${OPENCODE_VERSION:-1.18.23}"
 	[[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid review OpenCode version' >&2; exit 1; }
-	image="$(env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker build -q --build-arg "OPENCODE_VERSION=${version}" -f "${support}/review_sandbox/Dockerfile" "${support}/review_sandbox")"
+	# `prepare claude` (scripts/ai_engine.sh) adds the pinned Claude Code CLI
+	# to the same image; plain `prepare` builds the OpenCode image unchanged.
+	if [ "${2:-codex}" = claude ] && [ -f "${support}/ai_engine.sh" ] && [ -f "${support}/claude_engine.py" ]; then
+		# shellcheck source=ai_engine.sh
+		source "${support}/ai_engine.sh"
+		claude_cli_version="$(ai_engine_cli_version)"
+		[[ "${claude_cli_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid review Claude CLI version' >&2; exit 1; }
+		image="$(env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker build -q --build-arg "OPENCODE_VERSION=${version}" --build-arg "CLAUDE_CLI_VERSION=${claude_cli_version}" -f "${support}/review_sandbox/Dockerfile" "${support}/review_sandbox")"
+		printf 'claude\n' > "${root}/engine"
+	else
+		image="$(env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker build -q --build-arg "OPENCODE_VERSION=${version}" -f "${support}/review_sandbox/Dockerfile" "${support}/review_sandbox")"
+	fi
 	[ -n "${image}" ] || exit 1
 	printf '%s\n' "${image}" > "${root}/image"
 	# Network access is confined to the credential-free dependency phase.
@@ -98,18 +125,141 @@ if [ "${action}" = cleanup ]; then
 	rm -rf -- "${root}"
 	exit 0
 fi
+# Transfer only into the workspace prepare validated and recorded.
+[ -f "${root}/workspace" ] || { echo '::error::Review sandbox not prepared' >&2; exit 1; }
+workspace="$(< "${root}/workspace")"
+[ -d "${workspace}" ] || { echo '::error::Review workspace path rejected' >&2; exit 1; }
 
-[ "$#" -eq 6 ] || exit 2
+[ "$#" -eq 6 ] || [ "$#" -eq 7 ] || exit 2
 prompt="$2"
 output="$3"
 model="$4"
 variant="$5"
 config="$6"
+engine="${7:-codex}"
+case "${engine}" in codex|claude) ;; *) exit 2 ;; esac
+
+# Claude engine branch (scripts/ai_engine.sh): the same container, mounts and
+# transfer, with the Claude Code CLI behind scripts/claude_anthropic_relay.py.
+# <model> and <variant> are the D3 hints and <config> is unused. Exit 75 means
+# Claude is unavailable and the caller runs the OpenCode path (D1).
+if [ "${engine}" = claude ]; then
+	[ "$(cat "${root}/engine" 2>/dev/null)" = claude ] || { echo "AI_ENGINE_FALLBACK role=REVIEW_EDITOR reason=sandbox_not_prepared" >&2; exit 75; }
+	for required in ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl; do
+		[ -f "${support}/${required}" ] || { echo "AI_ENGINE_FALLBACK role=REVIEW_EDITOR reason=support_missing" >&2; exit 75; }
+	done
+	[ -s "${prompt}" ] || { echo '::error::Review relay preflight failed' >&2; exit 1; }
+	# shellcheck source=ai_engine.sh
+	source "${support}/ai_engine.sh"
+	claude_model="$(ai_engine_model REVIEW_EDITOR "${model}")"
+	claude_effort="$(ai_engine_effort REVIEW_EDITOR "${variant}")"
+	probe_model="$(_ai_engine_py config --key probe_model)"
+	guard_hook="$(_ai_engine_py support-file --name guard-hook)" || { ai_engine_fallback REVIEW_EDITOR policy_unavailable; exit 75; }
+	instructions="$(_ai_engine_instructions_file)" || { ai_engine_fallback REVIEW_EDITOR instructions_missing; exit 75; }
+	settings_args=(settings --checkout /source --out "${root}/claude-settings.json" --profile write --guard-hook /guard.py)
+	[ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ] && settings_args+=(--allow-workflow-edits)
+	_ai_engine_py "${settings_args[@]}" || { ai_engine_fallback REVIEW_EDITOR policy_unavailable; exit 75; }
+	mapfile -t claude_accounts < <(ai_engine_accounts)
+	[ "${#claude_accounts[@]}" -gt 0 ] || { ai_engine_fallback REVIEW_EDITOR no_credential; exit 75; }
+	install -m 0600 "${prompt}" "${root}/prompt"
+	image="$(< "${root}/image")"
+	[[ "${image}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo '::error::Invalid review image ID' >&2; exit 1; }
+	container="review-editor-$$"
+	printf '%s\n' "${container}" > "${root}/active-container"
+	broker_pid=""
+	claude_finish()
+	{
+		[ -z "${broker_pid}" ] || { kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; }
+		env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker rm -f "${container}" >/dev/null 2>&1 || true
+		rm -f -- "${root}/active-container" "${root}/socket/provider.sock"
+	}
+	trap claude_finish EXIT
+	trap 'exit 130' INT
+	trap 'exit 143' TERM
+	rc="${_AI_ENGINE_EXIT_FALLBACK}"
+	for account in "${claude_accounts[@]}"; do
+		rm -f -- "${root}/socket/provider.sock" "${root}/transcript.jsonl"
+		env -i PATH="${PATH}" PYTHONDONTWRITEBYTECODE=1 \
+			python3 "${support}/claude_anthropic_relay.py" broker "${root}/socket/provider.sock" "$(ai_engine_pool_dir)/tokens/${account}" "${claude_model},${probe_model}" &
+		broker_pid=$!
+		for _ in $(seq 1 50); do
+			[ -S "${root}/socket/provider.sock" ] && break
+			kill -0 "${broker_pid}" 2>/dev/null || break
+			sleep 0.1
+		done
+		if [ ! -S "${root}/socket/provider.sock" ]; then
+			echo "CLAUDE_POOL run role=REVIEW_EDITOR account=${account} outcome=crashed reason=relay_unavailable" >&2
+			kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; broker_pid=""
+			continue
+		fi
+		# No host checkout, HOME, Docker socket, tokens or Git remote is mounted.
+		run_rc=0
+		env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run --rm --name "${container}" \
+			--user "$(id -u):$(id -g)" --network none --read-only --cap-drop ALL \
+			--security-opt no-new-privileges --pids-limit 128 --memory 3g --cpus 2 \
+			--tmpfs /tmp:rw,nosuid,nodev,size=128m \
+			--mount "type=bind,src=${root}/source,dst=/source" \
+			--mount "type=bind,src=${root}/socket,dst=/socket,readonly" \
+			--mount "type=bind,src=${root}/home,dst=/home/agent" \
+			--mount "type=bind,src=${root}/prompt,dst=/prompt,readonly" \
+			--mount "type=bind,src=$(realpath "${support}/claude_anthropic_relay.py"),dst=/relay.py,readonly" \
+			--mount "type=bind,src=$(realpath "${instructions}"),dst=/instructions.md,readonly" \
+			--mount "type=bind,src=${root}/claude-settings.json,dst=/settings.json,readonly" \
+			--mount "type=bind,src=$(realpath "${guard_hook}"),dst=/guard.py,readonly" \
+			--env HOME=/home/agent --env ANTHROPIC_BASE_URL=http://127.0.0.1:8765 \
+			--env CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder \
+			--env CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 --env DISABLE_AUTOUPDATER=1 \
+			--env "CLAUDE_MODEL=${claude_model}" --env "CLAUDE_EFFORT=${claude_effort}" --workdir /source "${image}" /bin/bash -c '
+				set -euo pipefail
+				printf "{\"projects\":{\"/source\":{\"hasTrustDialogAccepted\":true}}}\n" > "${HOME}/.claude.json"
+				python3 /relay.py bridge /socket/provider.sock &
+				bridge_pid=$!
+				trap '\''kill "${bridge_pid}" 2>/dev/null || true'\'' EXIT
+				python3 -c '\''import socket,time; [(time.sleep(.1) if s.connect_ex(("127.0.0.1",8765)) else exit(0)) for s in (socket.socket() for _ in range(50))]; exit(1)'\''
+				export PATH=/source/.review-venv/bin:$PATH NO_COLOR=1
+				claude -p --model "${CLAUDE_MODEL}" --effort "${CLAUDE_EFFORT}" \
+					--system-prompt-file /instructions.md \
+					--setting-sources "" --settings /settings.json \
+					--strict-mcp-config --disable-slash-commands \
+					--exclude-dynamic-system-prompt-sections \
+					--tools Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch --permission-mode bypassPermissions \
+					--output-format stream-json --verbose < /prompt
+			' > "${root}/transcript.jsonl" || run_rc=$?
+		kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; broker_pid=""
+		verdict="$(_ai_engine_py classify --transcript "${root}/transcript.jsonl" --exit-code "${run_rc}")" || verdict='{"outcome":"crashed","reason":"classify_failed"}'
+		outcome="$(_ai_engine_json_field "${verdict}" outcome)"
+		echo "CLAUDE_POOL run role=REVIEW_EDITOR account=${account} outcome=${outcome} reason=$(_ai_engine_json_field "${verdict}" reason) exit_code=${run_rc}" >&2
+		case "${outcome}" in
+			success)
+				_ai_engine_py extract --transcript "${root}/transcript.jsonl" --out "${output}" >&2 && rc=0 || rc=1
+				break
+				;;
+			usage_limit|auth_failed)
+				continue
+				;;
+			*)
+				rc=1
+				break
+				;;
+		esac
+	done
+	[ "${rc}" -ne "${_AI_ENGINE_EXIT_FALLBACK}" ] || ai_engine_fallback REVIEW_EDITOR all_accounts_failed
+	# Never transfer on a failed model invocation or a swapped host baseline.
+	if [ "${rc}" -eq 0 ]; then
+		: > "${RUNTIME_DIR:?}/review_sandbox_transfer_failed"
+		if PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" transfer "${workspace}" "${root}/source" "${root}/baseline.json" 2> "${RUNTIME_DIR}/review_sandbox_transfer_reason_${output##*/}"; then
+			rm -f "${RUNTIME_DIR}/review_sandbox_transfer_failed"
+		else
+			rc=1
+		fi
+	fi
+	exit "${rc}"
+fi
 [[ "${model}" =~ ^[a-zA-Z0-9._:+-]+/[a-zA-Z0-9._:+/-]+$ ]] && [[ "${variant}" =~ ^(none|low|medium|high|xhigh)$ ]] || exit 2
 [ -n "${OPENROUTER_API_KEY:-}" ] && [ -s "${prompt}" ] || { echo '::error::Review relay preflight failed' >&2; exit 1; }
 
 # Never mount a host-generated config with other providers or host paths.
-if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${config}" "${root}/config.json" "${model}" <<'PY'
+if ! PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${config}" "${root}/config.json" "${model}" <<'PY'
 import json
 import sys
 with open(sys.argv[1], encoding="utf-8") as handle:
@@ -177,7 +327,8 @@ env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run --rm --name "${container}"
 		# The marker survives a killed/incomplete transfer. The editor wrapper
 		# fails the step instead of treating a partial host edit as a retry.
 		: > "${RUNTIME_DIR:?}/review_sandbox_transfer_failed"
-		if PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" transfer "${workspace}" "${root}/source" "${root}/baseline.json"; then
+		# Only the trusted transfer helper writes this attempt-scoped diagnostic.
+		if PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" transfer "${workspace}" "${root}/source" "${root}/baseline.json" 2> "${RUNTIME_DIR}/review_sandbox_transfer_reason_${output##*/}"; then
 			rm -f "${RUNTIME_DIR}/review_sandbox_transfer_failed"
 		else
 			rc=1

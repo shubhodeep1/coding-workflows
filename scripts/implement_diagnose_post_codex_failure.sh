@@ -665,9 +665,30 @@ DIAGNOSE_SUCCESS=false
 if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}"
 fi
-if timeout "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${DIAGNOSE_MODEL}" --sandbox danger-full-access \
-  < "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}" > "${IMPLEMENT_DIAGNOSE_OUTPUT_FILE}" \
-  2> >(tee -a "${IMPLEMENT_DIAGNOSE_LOG_FILE}" >&2); then
+# Claude engine (replace-claude-sessions plan Phase 5b): the workflow exports
+# AI_ENGINE_RESOLVED_IMPLEMENT_DIAGNOSE. On Claude the diagnosis runs through
+# claude_run; exit 75 (Claude unavailable) runs the unchanged codex call.
+diagnose_rc=75
+if [ "${AI_ENGINE_RESOLVED_IMPLEMENT_DIAGNOSE:-codex}" = "claude" ]; then
+  if [ -f "${IMPLEMENT_DIAGNOSE_SCRIPTS_DIR}/ai_engine.sh" ]; then
+    # shellcheck source=ai_engine.sh
+    source "${IMPLEMENT_DIAGNOSE_SCRIPTS_DIR}/ai_engine.sh"
+    diagnose_rc=0
+    AI_ENGINE_MODEL_HINT="${DIAGNOSE_MODEL}" AI_ENGINE_EFFORT_HINT="${DIAGNOSE_REASONING}" \
+      timeout --signal=TERM --kill-after=5s "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s bash -c 'source "$1"; shift; claude_run "$@"' _ "${IMPLEMENT_DIAGNOSE_SCRIPTS_DIR}/ai_engine.sh" \
+      IMPLEMENT_DIAGNOSE "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}" "${IMPLEMENT_DIAGNOSE_OUTPUT_FILE}" "${PWD}" \
+      2> >(tee -a "${IMPLEMENT_DIAGNOSE_LOG_FILE}" >&2) || diagnose_rc=$?
+  else
+    echo "AI_ENGINE_FALLBACK role=IMPLEMENT_DIAGNOSE reason=support_missing" >&2
+  fi
+fi
+if [ "${diagnose_rc}" -eq 75 ]; then
+  diagnose_rc=0
+  timeout "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${DIAGNOSE_MODEL}" --sandbox danger-full-access \
+    < "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}" > "${IMPLEMENT_DIAGNOSE_OUTPUT_FILE}" \
+    2> >(tee -a "${IMPLEMENT_DIAGNOSE_LOG_FILE}" >&2) || diagnose_rc=$?
+fi
+if [ "${diagnose_rc}" -eq 0 ]; then
   if extract_last_json_with_key "${IMPLEMENT_DIAGNOSE_OUTPUT_FILE}" "status" "${IMPLEMENT_DIAGNOSE_RESULT_FILE}"; then
     DIAGNOSE_SUCCESS=true
   fi

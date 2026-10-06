@@ -23,8 +23,6 @@ ALLOWLIST_EXCEPTIONS = {
 	"audit_consumer_drift.yml": "Consumer-wrapper drift audit is scheduled/manual repository maintenance, not an orchestrator issue-phase checkout path.",
 	"cancel_on_pr_close.yml": "PR-close cleanup cancels branch runs and has no orchestrator issue-phase checkout.",
 	"ci.yml": "PR CI validation has no orchestrator issue metadata.",
-	"claude-issue-intake.yml": "Claude issue intake is repository_dispatch automation that queues the issue for the Claude issue pickup from the default branch; it runs no orchestrator issue phase and reads no issue metadata into a checkout ref.",
-	"claude-issue-queue-watchdog.yml": "Claude issue queue watchdog is scheduled default-branch automation that labels stale queue issues; it runs no orchestrator issue phase and reads no issue metadata into a checkout ref.",
 	"integration-pr-readiness.yml": "Integration-PR readiness check runs on pull_request refs and posts commit status metadata, not orchestrator issue-phase checkout.",
 	"issue_pr_status.yml": "Issue/PR status utility workflow does not execute orchestrator issue phases.",
 	"lint-plan-archival.yml": "Plan-archival lint validates pull_request body/diff state rather than orchestrator issue-phase integration refs.",
@@ -34,7 +32,7 @@ ALLOWLIST_EXCEPTIONS = {
 	"orchestrate.yml": "Project bootstrap workflow has no integration-branch metadata at checkout time.",
 	"orchestrate_poll.yml": "Poller handles multiple tracking issues per run; a single checkout integration ref is undefined.",
 	"review_autofix.yml": "PR review/autofix operates on PR refs rather than orchestrator integration metadata.",
-	"review_autofix_sweep.yml": "The claude-pr-catch-all job checks out the default branch for scripts/claude_pr_sweep.py and the consumer registry; it reads PR state over the API and never checks out an issue or integration ref.",
+	"review_autofix_sweep.yml": "Scheduled review and CI recovery checks out the trusted default branch, not an issue integration ref.",
 	"security-audit.yml": "Scheduled/manual default-branch security audit is a source-repo maintenance workflow, not an orchestrator issue-phase checkout path.",
 	"sync_ai_labels.yml": "Repository label-sync maintenance manages ai:* labels and does not execute orchestrator issue phases.",
 	"test-and-mark-stable.yml": "Release test workflow checks specific refs/tags and is outside orchestrator phase execution.",
@@ -48,11 +46,13 @@ ALLOWLIST_EXCEPTIONS = {
 	"nightly-validation-selftest.yml": "Nightly fixture self-test runs on schedule/workflow_dispatch without orchestrator issue metadata.",
 	"workspace-cache-maintenance.yml": "Scheduled workspace-cache pruning operates on repository cache metadata, not orchestrator issue-phase integration refs.",
 	"forward-merge-stable-to-main.yml": "Stable→main forward-merge workflow operates on repo refs (stable, main), not tracking-issue metadata.",
+	"sync-claude-live-copies.yml": "Push-to-main maintenance copies template-only .claude changes to the live copy; it reads no tracking-issue metadata.",
 	"promote-main-to-stable.yml": "Main→stable promotion workflow operates on repo refs (main, stable), not tracking-issue metadata.",
 	"auto-release-stable.yml": "Scheduled stable-branch release check operates on repo refs (stable branch vs stable tag), not tracking-issue metadata.",
 	"workflow_failure_heal.yml": "Escalation reporter checks out the repo only to read consumer wrapper release pins and dispatches upstream; it executes no orchestrator issue phase.",
 	"workflow-failure-heal-intake.yml": "Heal intake is repository_dispatch / workflow_run issue-filing automation on the default branch, not an orchestrator issue-phase checkout path.",
 	"internal-cancel-on-pr-close.yml": "Heal PR reconcile checks out main on pull_request close to merge or close heal PRs of the closed PR; it executes no orchestrator issue phase.",
+	"claude-engine-smoke.yml": "Dispatch-only Claude engine self-test checks out the dispatched ref to exercise its own scripts; it executes no orchestrator issue phase.",
 }
 
 

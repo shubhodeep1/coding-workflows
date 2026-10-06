@@ -6,11 +6,20 @@ set -euo pipefail
 prompt_file="${1:?prompt file required}"
 output_file="${2:?output file required}"
 log_file="${3:?log file required}"
+# Optional engine (scripts/ai_engine.sh) and role; the default is the codex path.
+engine="${4:-codex}"
+engine_role="${5:-CLARIFY}"
+case "${engine}" in codex|claude) ;; *) echo '::error::Invalid clarify engine' >&2; exit 1 ;; esac
+[[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND)$ ]] || { echo '::error::Invalid clarify engine role' >&2; exit 1; }
 version="${CLARIFY_CODEX_VERSION:-v0.114.0}"
 [[ "${version}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid Codex version' >&2; exit 1; }
 [[ "${MODEL_EDITOR:-}" =~ ^[a-zA-Z0-9/_.-]+$ ]] || { echo '::error::Invalid model slug' >&2; exit 1; }
 [[ "${MODEL_REASONING_EFFORT:-}" =~ ^(xhigh|high|medium|low|none)$ ]] || { echo '::error::Invalid reasoning level' >&2; exit 1; }
-[ -n "${OPENROUTER_API_KEY:-}" ] && [ -s "${prompt_file}" ] || { echo '::error::Clarify isolation preflight failed' >&2; exit 1; }
+if [ "${engine}" = codex ]; then
+	[ -n "${OPENROUTER_API_KEY:-}" ] && [ -s "${prompt_file}" ] || { echo '::error::Clarify isolation preflight failed' >&2; exit 1; }
+else
+	[ -s "${prompt_file}" ] || { echo '::error::Clarify isolation preflight failed' >&2; exit 1; }
+fi
 command -v docker >/dev/null && command -v python3 >/dev/null || { echo '::error::Clarify isolation prerequisites unavailable' >&2; exit 1; }
 [ -f scripts/clarify_sandbox/Dockerfile ] && [ -f scripts/clarify_openrouter_broker.py ] && [ -f scripts/write_codex_config.sh ] && [ -f scripts/codex_model_catalog.json ] || { echo '::error::Clarify isolation support missing' >&2; exit 1; }
 
@@ -99,6 +108,104 @@ try:
 except (OSError, ValueError, UnicodeError) as exc:
     raise SystemExit("clarify source snapshot rejected") from None
 PY
+
+# Claude engine branch: the same isolation, with the Claude Code CLI inside
+# the container and scripts/claude_anthropic_relay.py on the host. The real
+# OAuth token stays in the host relay; the container sees a placeholder.
+# Exit 75 means Claude is unavailable and the caller runs the codex path (D1).
+if [ "${engine}" = claude ]; then
+	engine_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	for required in ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl; do
+		[ -f "${engine_dir}/${required}" ] || { echo "AI_ENGINE_FALLBACK role=${engine_role} reason=support_missing" >&2; exit 75; }
+	done
+	# shellcheck source=ai_engine.sh
+	source "${engine_dir}/ai_engine.sh"
+	claude_model="$(ai_engine_model "${engine_role}" "${MODEL_EDITOR}")"
+	claude_effort="$(ai_engine_effort "${engine_role}" "${MODEL_REASONING_EFFORT}")"
+	claude_version="$(ai_engine_cli_version)"
+	probe_model="$(_ai_engine_py config --key probe_model)"
+	guard_hook="$(_ai_engine_py support-file --name guard-hook)" || { ai_engine_fallback "${engine_role}" policy_unavailable; exit 75; }
+	instructions="$(_ai_engine_instructions_file)" || { ai_engine_fallback "${engine_role}" instructions_missing; exit 75; }
+	_ai_engine_py settings --checkout /source --out "${run_root}/claude-settings.json" --profile read --guard-hook /guard.py || { ai_engine_fallback "${engine_role}" policy_unavailable; exit 75; }
+	chmod 0644 "${run_root}/claude-settings.json"
+	mapfile -t claude_accounts < <(ai_engine_accounts)
+	[ "${#claude_accounts[@]}" -gt 0 ] || { ai_engine_fallback "${engine_role}" no_credential; exit 75; }
+	if ! image="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker build -q --build-arg "CODEX_VERSION=${version}" --build-arg "CLAUDE_CLI_VERSION=${claude_version}" -f scripts/clarify_sandbox/Dockerfile scripts/clarify_sandbox)"; then
+		ai_engine_fallback "${engine_role}" image_build_failed
+		exit 75
+	fi
+	[ -n "${image}" ] || { ai_engine_fallback "${engine_role}" image_build_failed; exit 75; }
+	for account in "${claude_accounts[@]}"; do
+		rm -f -- "${run_root}/results/transcript.jsonl" "${run_root}/results/stderr" "${run_root}/socket/provider.sock"
+		env -i PATH="${PATH}" PYTHONDONTWRITEBYTECODE=1 \
+			python3 "${engine_dir}/claude_anthropic_relay.py" broker "${run_root}/socket/provider.sock" "$(ai_engine_pool_dir)/tokens/${account}" "${claude_model},${probe_model}" &
+		broker_pid=$!
+		for _ in $(seq 1 50); do
+			[ -S "${run_root}/socket/provider.sock" ] && break
+			kill -0 "${broker_pid}" 2>/dev/null || break
+			sleep 0.1
+		done
+		if [ ! -S "${run_root}/socket/provider.sock" ]; then
+			echo "CLAUDE_POOL run role=${engine_role} account=${account} outcome=crashed reason=relay_unavailable" >&2
+			kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; broker_pid=""
+			continue
+		fi
+		run_rc=0
+		env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker run --rm \
+			--name "${container_name}" --user "$(id -u):$(id -g)" \
+			--network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+			--pids-limit 128 --memory 2g --cpus 2 \
+			--tmpfs /tmp:rw,nosuid,nodev,size=64m --tmpfs /home/agent:rw,nosuid,nodev,size=64m,mode=1777 \
+			--mount "type=bind,src=${run_root}/source,dst=/source,readonly" \
+			--mount "type=bind,src=$(realpath "${prompt_file}"),dst=/prompt,readonly" \
+			--mount "type=bind,src=${run_root}/socket,dst=/socket,readonly" \
+			--mount "type=bind,src=${engine_dir}/claude_anthropic_relay.py,dst=/relay.py,readonly" \
+			--mount "type=bind,src=$(realpath "${instructions}"),dst=/instructions.md,readonly" \
+			--mount "type=bind,src=${run_root}/claude-settings.json,dst=/settings.json,readonly" \
+			--mount "type=bind,src=$(realpath "${guard_hook}"),dst=/guard.py,readonly" \
+			--mount "type=bind,src=${run_root}/results,dst=/results" \
+			--env HOME=/home/agent \
+			--env ANTHROPIC_BASE_URL=http://127.0.0.1:8765 \
+			--env CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder \
+			--env CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 --env DISABLE_AUTOUPDATER=1 \
+			--env "CLAUDE_MODEL=${claude_model}" --env "CLAUDE_EFFORT=${claude_effort}" \
+			--workdir /source "${image}" /bin/bash -c '
+				set -euo pipefail
+				printf "{\"projects\":{\"/source\":{\"hasTrustDialogAccepted\":true}}}\n" > "${HOME}/.claude.json"
+				python3 /relay.py bridge /socket/provider.sock &
+				bridge_pid=$!
+				trap '\''kill "${bridge_pid}" 2>/dev/null || true'\'' EXIT
+				python3 -c '\''import socket,time; [(time.sleep(.1) if s.connect_ex(("127.0.0.1",8765)) else exit(0)) for s in (socket.socket() for _ in range(50))]; exit(1)'\''
+				claude -p --model "${CLAUDE_MODEL}" --effort "${CLAUDE_EFFORT}" \
+					--system-prompt-file /instructions.md \
+					--setting-sources "" --settings /settings.json \
+					--strict-mcp-config --disable-slash-commands \
+					--exclude-dynamic-system-prompt-sections \
+					--tools Read,Grep,Glob --permission-mode dontAsk \
+					--output-format stream-json --verbose < /prompt > /results/transcript.jsonl 2> /results/stderr
+			' || run_rc=$?
+		kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; broker_pid=""
+		[ ! -f "${run_root}/results/stderr" ] || tee -a "${log_file}" < "${run_root}/results/stderr" >&2
+		verdict="$(_ai_engine_py classify --transcript "${run_root}/results/transcript.jsonl" --exit-code "${run_rc}")" || verdict='{"outcome":"crashed","reason":"classify_failed"}'
+		outcome="$(_ai_engine_json_field "${verdict}" outcome)"
+		echo "CLAUDE_POOL run role=${engine_role} account=${account} outcome=${outcome} reason=$(_ai_engine_json_field "${verdict}" reason) exit_code=${run_rc}" >&2
+		case "${outcome}" in
+			success)
+				_ai_engine_py extract --transcript "${run_root}/results/transcript.jsonl" --out "${run_root}/results/output" >&2 || exit 1
+				install -m 0600 "${run_root}/results/output" "${output_file}"
+				exit 0
+				;;
+			usage_limit|auth_failed)
+				continue
+				;;
+			*)
+				exit 1
+				;;
+		esac
+	done
+	ai_engine_fallback "${engine_role}" all_accounts_failed
+	exit 75
+fi
 
 # Nothing from the privileged checkout, HOME or runtime workspace is mounted.
 # The Docker build context contains only the pinned Dockerfile.

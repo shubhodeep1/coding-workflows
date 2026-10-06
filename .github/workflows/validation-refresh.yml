@@ -42,6 +42,8 @@ permissions:
   # clone of each consumer repo for drift monitoring only. It does not commit,
   # push, or open pull requests in this repo or any consumer repo.
   contents: read
+  # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
 
 concurrency:
   # Include `branch_name` in the group key so smoke-test dispatches from

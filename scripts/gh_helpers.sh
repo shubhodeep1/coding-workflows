@@ -1195,14 +1195,143 @@ gh_issue_timeline_with_cross_refs()
 }
 
 # ---------------------------------------------------------------
+# _autofix_pr_named_review_runs — list the review wrapper runs that were
+# dispatched for one PR.
+#
+# Motivation (issue #4898): the review dispatches now run from the default
+# branch (review_autofix.yml's two retrigger steps, the sweep since #4618,
+# the poller and merge train since #4701), so their head_branch and head_sha
+# are the default branch's and no branch-scoped lookup can see them. The
+# review wrappers name every workflow_dispatch run for its PR:
+#   internal-review.yml (this repo):  "Internal: AI Review & Autofix [pr:<N>]"
+#   ai-review.yml (consumer repos):   "AI Review [pr:<N>]"
+# A workflow_dispatch run's name comes from the dispatched ref's workflow
+# file, never from PR text, so an exact name match identifies the PR. This
+# is the same match as _pr_named_review_dispatch_runs in
+# scripts/orchestrate_poll_process.sh, which review_autofix.yml does not
+# source; this one uses REST like its two callers below.
+#
+# Input:
+#   $1 pr_number — must match ^[1-9][0-9]*$
+#   $2 status    — optional REST status filter (e.g. "completed")
+#   $3 since_epoch — optional trusted GitHub run creation time; narrows
+#                    the budget listing to this head's push window
+#
+# Output (stdout): one JSON array of the matching runs:
+#   [{id, status, conclusion, created_at, path}].
+#
+# Return: 0 on success (possibly []); 1 on an invalid PR number (no call),
+#   an API error, an empty response, or unparseable JSON. Each caller
+#   decides whether a failure fails open or closed.
+#
+# API calls: one repo metadata read (default branch) and paged GETs for
+#   internal-review.yml and ai-review.yml, only after a branch lookup miss.
+#   The branch-filtered list cannot contain these default-branch dispatches;
+#   an unfiltered first page can omit them behind unrelated workflows. A
+#   budget lookup adds a created>= filter from the head's trusted run time
+#   so historical review runs cannot exhaust the page budget unnecessarily.
+#   The peer lookup leaves time unfiltered so even an old active run counts.
+#   A missing wrapper (HTTP 404) contributes no runs; any other read/parse or
+#   pagination-cap failure returns 1, so callers retain their own fail-open
+#   (peer) / fail-closed (budget) semantics. Input and output are arrays of
+#   Actions run records; at most 10 pages per wrapper, no partial output.
+# ---------------------------------------------------------------
+_autofix_pr_named_review_runs()
+{
+	local pr_number="${1:-}"
+	local status_filter="${2:-}"
+	local review_since_epoch="${3:-}"
+
+	if ! [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
+		return 1
+	fi
+	local -a review_status_args=()
+	if [ -n "${status_filter}" ]; then
+		review_status_args=(-f "status=${status_filter}")
+	fi
+	local -a review_created_args=()
+	if [ -n "${review_since_epoch}" ]; then
+		[[ "${review_since_epoch}" =~ ^[0-9]+$ ]] || return 1
+		local review_since_iso
+		review_since_iso=$(jq -nr --argjson t "${review_since_epoch}" '$t | todate' 2>/dev/null) || return 1
+		[[ "${review_since_iso}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || return 1
+		review_created_args=(-f "created=>=${review_since_iso}")
+	fi
+
+	# Neither branch-filtered call can provide the repository's default
+	# branch. Read it once here instead of trusting a caller-supplied ref.
+	local review_default_branch
+	review_default_branch=$(gh_retry gh api -X GET "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null) || return 1
+	[[ "${review_default_branch}" =~ ^[A-Za-z0-9._/-]+$ ]] || return 1
+	local review_wrapper review_page review_response review_total review_count review_page_count
+	local review_error_file review_all='[]' review_wrapper_runs
+	review_error_file=$(mktemp "${TMPDIR:-/tmp}/autofix_pr_named_runs.XXXXXX") || return 1
+	for review_wrapper in internal-review.yml ai-review.yml; do
+		review_page=1
+		review_wrapper_runs='[]'
+		while :; do
+			[ "${review_page}" -le 10 ] || { rm -f "${review_error_file}"; return 1; }
+			# -X GET is required: -f parameters otherwise make gh api POST.
+			if ! review_response=$(gh_retry gh api -X GET \
+				-H "Accept: application/vnd.github+json" \
+				"/repos/${GITHUB_REPOSITORY}/actions/workflows/${review_wrapper}/runs" \
+				-f "event=workflow_dispatch" -f "per_page=100" -f "page=${review_page}" \
+				"${review_status_args[@]}" "${review_created_args[@]}" 2>"${review_error_file}"); then
+				if [ "${review_page}" -eq 1 ] && grep -q 'HTTP 404' "${review_error_file}"; then
+					break
+				fi
+				rm -f "${review_error_file}"
+				return 1
+			fi
+			if ! printf '%s' "${review_response}" | jq -es \
+				'length == 1 and (.[0] | (.total_count | type == "number" and . >= 0 and . == floor) and (.workflow_runs | type == "array" and length <= 100 and all(.[]; type == "object" and (.id | type == "number"))))' >/dev/null 2>&1; then
+				rm -f "${review_error_file}"
+				return 1
+			fi
+			review_total=$(printf '%s' "${review_response}" | jq -r '.total_count')
+			review_page_count=$(printf '%s' "${review_response}" | jq -r '.workflow_runs | length')
+			# Append only after a complete page. Never let a partial listing
+			# suppress a needed review or open an unbounded retry loop.
+			review_wrapper_runs=$(printf '%s\n%s\n' "${review_wrapper_runs}" "${review_response}" \
+				| jq -cs '.[0] + .[1].workflow_runs | unique_by(.id)') || { rm -f "${review_error_file}"; return 1; }
+			review_count=$(printf '%s' "${review_wrapper_runs}" | jq -r 'length')
+			if [ "${review_count}" -gt "${review_total}" ]; then
+				rm -f "${review_error_file}"
+				return 1
+			fi
+			if [ "${review_count}" -ge "${review_total}" ]; then
+				break
+			fi
+			if [ "${review_page_count}" -lt 100 ]; then
+				rm -f "${review_error_file}"
+				return 1
+			fi
+			review_page=$(( review_page + 1 ))
+		done
+		review_all=$(printf '%s\n%s\n' "${review_all}" "${review_wrapper_runs}" | jq -cs '.[0] + .[1]') \
+			|| { rm -f "${review_error_file}"; return 1; }
+	done
+	rm -f "${review_error_file}"
+	printf '%s' "${review_all}" | jq -c --arg pr "${pr_number}" --arg branch "${review_default_branch}" '
+		[.[]
+		 | select(type == "object")
+		 | select(.event == "workflow_dispatch" and .head_branch == $branch)
+		 | select((.path == ".github/workflows/internal-review.yml" and .display_title == ("Internal: AI Review & Autofix [pr:" + $pr + "]"))
+		     or (.path == ".github/workflows/ai-review.yml" and .display_title == ("AI Review [pr:" + $pr + "]")))
+		 | {id, status, conclusion, created_at, path}]
+	' 2>/dev/null
+}
+
+# ---------------------------------------------------------------
 # autofix_retrigger_has_inflight_peer — detect an already-queued or
 # already-running peer review/autofix run on the same PR head branch,
 # so the caller can skip an otherwise-redundant workflow_dispatch.
 #
 # Motivation:
 #   review_autofix.yml finishes a commit-and-push cycle and then
-#   issues `gh workflow run review_autofix.yml` as a fallback in
-#   case the merge-ref for the synchronize event is unbuildable.
+#   dispatches the next review run from the default branch (the
+#   PR-named wrapper first, issue #4898) as a fallback in case the
+#   merge-ref for the synchronize event is unbuildable.
 #   In the common case the push already fires pull_request.synchronize
 #   → internal-review.yml → review_autofix.yml, so both runs land in
 #   the same `pr-autofix-${PR}` concurrency group with
@@ -1213,7 +1342,8 @@ gh_issue_timeline_with_cross_refs()
 #   in flight.
 #
 # Input:
-#   $1 pr_number      — PR number (informational, used in log lines)
+#   $1 pr_number      — PR number: used in log lines, and must match
+#                       ^[1-9][0-9]*$ for the PR-named lookup below
 #   $2 head_branch    — PR head branch name (required for filtering)
 #   $3 current_run_id — github.run_id of the CURRENT run, so we can
 #                       exclude ourselves from the peer check.
@@ -1230,17 +1360,32 @@ gh_issue_timeline_with_cross_refs()
 #   1 — no peer found, or the check failed; caller SHOULD proceed
 #       (fail-open: never block dispatch on a detection failure)
 #
+# PR-named runs (issue #4898):
+#   Review runs dispatched from the default branch (both retrigger steps,
+#   the sweep, the poller, the merge train) have the default branch as
+#   head_branch, so the branch lookup cannot see them. When it finds no
+#   peer and $1 is a valid PR number, the helper also counts queued or
+#   running workflow_dispatch runs named for the PR
+#   (_autofix_pr_named_review_runs), excluding the current run. The
+#   AUTOFIX_PEER_CHECK line keeps its exact field set (a pinned log
+#   contract); a PR-named peer shows up in peer_run / peer_path.
+#
 # API calls:
-#   Exactly 1 `gh api GET /repos/{repo}/actions/runs` call per
-#   invocation, wrapped in gh_retry (rate-limit aware).  Results are
-#   not cached — the two retrigger blocks fire at most twice per run
-#   and the set of in-flight runs is mutable between those calls.
+#   1 `gh api GET /repos/{repo}/actions/runs` call per invocation,
+#   wrapped in gh_retry (rate-limit aware), plus 1 PR-named
+#   `?event=workflow_dispatch` call only when the branch lookup found no
+#   peer.  Results are not cached — the two retrigger blocks fire at
+#   most twice per run and the set of in-flight runs is mutable between
+#   those calls.
 #
 # CLAUDE.md §15 audit:
 #   The prior retrigger path dispatched unconditionally, so there is
 #   no existing gh call here to extend.  A single list-runs call
 #   replaces the wasted dispatch on the collision path, so net API
-#   cost is negative when a peer is found and neutral otherwise.
+#   cost is negative when a peer is found and neutral otherwise.  The
+#   branch-filtered call cannot return default-branch runs, and widening
+#   it to an unfiltered page would drop older same-branch runs, so the
+#   PR-named lookup is a second call on the no-peer path only.
 # ---------------------------------------------------------------
 autofix_retrigger_has_inflight_peer()
 {
@@ -1276,6 +1421,10 @@ autofix_retrigger_has_inflight_peer()
 		echo "AUTOFIX_PEER_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=empty_response" >&2
 		return 1
 	fi
+	if ! printf '%s' "${response}" | jq -es 'length == 1 and (.[0].workflow_runs | type == "array")' >/dev/null 2>&1; then
+		echo "AUTOFIX_PEER_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=jq_error" >&2
+		return 1
+	fi
 
 	# Filter: in-flight (queued or in_progress), not ourselves, and
 	# running one of the review/autofix workflow files. Match by
@@ -1285,7 +1434,7 @@ autofix_retrigger_has_inflight_peer()
 	if ! peer_info=$(printf '%s' "${response}" | jq -r --arg current "${current_run_id}" '
 		[
 			.workflow_runs[]?
-			| select(.status == "queued" or .status == "in_progress")
+			| select(.status == "queued" or .status == "pending" or .status == "in_progress")
 			| select((.id | tostring) != $current)
 			| select(.path | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$"))
 		]
@@ -1300,6 +1449,27 @@ autofix_retrigger_has_inflight_peer()
 	peer_count=$(printf '%s' "${peer_info}" | awk '{print $1}')
 	peer_run=$(printf '%s' "${peer_info}" | awk '{print $2}')
 	peer_path=$(printf '%s' "${peer_info}" | awk '{print $3}')
+	if ! [ "${peer_count:-0}" -gt 0 ] 2>/dev/null && [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then
+		# Default-branch dispatch runs are invisible to the branch lookup
+		# above (issue #4898); look for one named for this PR. Fail open.
+		local pr_named_runs pr_named_info
+		if pr_named_runs=$(_autofix_pr_named_review_runs "${pr_number}") \
+			&& pr_named_info=$(printf '%s' "${pr_named_runs}" | jq -r --arg current "${current_run_id}" '
+				[
+					.[]
+					| select(.status == "queued" or .status == "in_progress" or .status == "pending" or .status == "waiting" or .status == "requested")
+					| select((.id | tostring) != $current)
+				]
+				| {count: length, first_id: (.[0].id // "-"), first_path: (.[0].path // "-")}
+				| "\(.count) \(.first_id) \(.first_path)"
+			' 2>/dev/null); then
+			peer_count=$(printf '%s' "${pr_named_info}" | awk '{print $1}')
+			peer_run=$(printf '%s' "${pr_named_info}" | awk '{print $2}')
+			peer_path=$(printf '%s' "${pr_named_info}" | awk '{print $3}')
+		else
+			echo "AUTOFIX_PEER_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=pr_named_api_error" >&2
+		fi
+	fi
 
 	echo "AUTOFIX_PEER_CHECK pr=${pr_number:-?} branch=${head_branch} current_run=${current_run_id:-?} peer_count=${peer_count:-0} peer_run=${peer_run:--} peer_path=${peer_path:--}"
 	emit_event "AUTOFIX_PEER_CHECK" \
@@ -1336,14 +1506,54 @@ autofix_retrigger_has_inflight_peer()
 #   further dispatch is allowed.
 #
 # Input:
-#   $1 pr_number      — PR number (informational, used in log lines)
+#   $1 pr_number      — PR number: used in log lines, and must match
+#                       ^[1-9][0-9]*$ when the PR-named lookup below runs
 #   $2 head_branch    — PR head branch name (required for filtering)
 #   $3 current_run_id — github.run_id of the CURRENT run (excluded)
 #   $4 head_sha       — the PR head commit this run reviewed (required)
+#   $5 head_commit_epoch — optional, accepted and ignored: the head
+#                       commit's committer time (`git log -1 --format=%ct`).
+#                       The PR author sets it, so it is never used as the
+#                       push-time bound (issue #5523); it stays in the
+#                       signature so existing callers keep working
+#   $6 event_name     — optional: the current run's event
+#                       (GITHUB_EVENT_NAME, the caller's event inside a
+#                       reusable workflow); see "Unnamed dispatch runs"
+#
+# PR-named runs (issue #4898):
+#   The retry is dispatched from the default branch, so its head_sha is
+#   the default branch's and the branch lookup never counts it. When the
+#   branch lookup counts nothing, the helper also counts completed,
+#   non-cancelled workflow_dispatch runs named for the PR
+#   (_autofix_pr_named_review_runs), excluding the current run, that were
+#   created at or after the head's push-time bound: the earliest
+#   created_at of any run in the branch page whose head_sha is this head
+#   (the push's pull_request run, cancelled twins included, and any other
+#   workflow the push triggered). GitHub records both fields, so neither
+#   can be set by the PR author. The head commit's committer time is not
+#   used (issue #5523): a backdated commit would pull earlier heads'
+#   reviews into this head's count and suppress its retry. No run on the
+#   head, an invalid PR number, or a failed call fails closed.
+#
+# Unnamed dispatch runs (issue #4898, conformance audit):
+#   A retry dispatched from the default branch under a name the PR-named
+#   match cannot see (a differently named caller wrapper, review_autofix.yml
+#   itself, or an ai-review.yml that predates the "[pr:<N>]" run name) is
+#   invisible to both lookups, so the next retry would count nothing and
+#   dispatch again without bound once the head's pull_request twin was
+#   concurrency-cancelled. When $6 is workflow_dispatch and the current
+#   run is not among the PR-named runs, the budget is consumed
+#   (reason=unnamed_dispatch_run, fail closed): such a run never
+#   dispatches an automated retry. The PR-named page is therefore fetched
+#   without a status filter (still one call) and filtered to completed
+#   runs locally, so the in-progress current run is in it. An empty $6
+#   (a caller that predates it) skips this check; the budget line then
+#   shows event=-, so a caller that drops the event is visible in the log.
 #
 # Output (stdout):
 #   AUTOFIX_CHANGES_LOST_BUDGET pr=<n> branch=<b> head_sha=<sha> \
-#     current_run=<r> prior_completed=<n>
+#     current_run=<r> prior_completed=<n> pr_named_completed=<n|-> \
+#     event=<$6|->
 #   An AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED line is emitted on
 #   probe failure (stderr).
 #
@@ -1356,10 +1566,13 @@ autofix_retrigger_has_inflight_peer()
 #   1 — budget available; caller may dispatch one automated retry.
 #
 # API calls:
-#   Exactly 1 `gh api GET /repos/{repo}/actions/runs` call per
-#   invocation, wrapped in gh_retry (§15: same single branch-scoped
-#   list the peer helper issues; the two probes run back-to-back in
-#   one step at most once per review run).
+#   1 `gh api GET /repos/{repo}/actions/runs` call per invocation,
+#   wrapped in gh_retry (§15: same single branch-scoped list the peer
+#   helper issues; the two probes run back-to-back in one step at most
+#   once per review run), plus 1 PR-named `?event=workflow_dispatch`
+#   call only when the branch lookup counted nothing.
+#   The branch-filtered call cannot return default-branch runs, so no
+#   existing call could carry the PR-named match.
 # ---------------------------------------------------------------
 autofix_changes_lost_head_retry_consumed()
 {
@@ -1367,6 +1580,9 @@ autofix_changes_lost_head_retry_consumed()
 	local head_branch="${2:-}"
 	local current_run_id="${3:-}"
 	local head_sha="${4:-}"
+	# Accepted for caller compatibility and not used (issue #5523).
+	local head_commit_epoch="${5:-}"
+	local run_event_name="${6:-}"
 
 	if [ -z "${head_branch}" ] || [ -z "${current_run_id}" ] || [ -z "${head_sha}" ] || [ -z "${GITHUB_REPOSITORY:-}" ]; then
 		echo "AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch:-?} reason=missing_inputs" >&2
@@ -1396,6 +1612,10 @@ autofix_changes_lost_head_retry_consumed()
 		echo "AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=empty_response" >&2
 		return 0
 	fi
+	if ! printf '%s' "${response}" | jq -es 'length == 1 and (.[0].workflow_runs | type == "array")' >/dev/null 2>&1; then
+		echo "AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=jq_error" >&2
+		return 0
+	fi
 
 	# Completed, non-cancelled review-family runs on this exact head,
 	# excluding the current run.  A cancelled run is the concurrency-
@@ -1419,7 +1639,63 @@ autofix_changes_lost_head_retry_consumed()
 		return 0
 	fi
 
-	echo "AUTOFIX_CHANGES_LOST_BUDGET pr=${pr_number:-?} branch=${head_branch} head_sha=${head_sha} current_run=${current_run_id} prior_completed=${prior_completed:-0}"
+	local pr_named_completed="-"
+	if ! [ "${prior_completed:-0}" -gt 0 ] 2>/dev/null; then
+		# The retry runs from the default branch (issue #4898), so the
+		# branch lookup above never sees it; count the completed runs named
+		# for this PR since the head was pushed. Fail closed throughout.
+		if ! [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then
+			echo "AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=invalid_pr_number" >&2
+			return 0
+		fi
+		# Push-time bound: GitHub-recorded run times on this head only,
+		# never the author-set commit time (issue #5523).
+		local push_bound
+		if ! push_bound=$(printf '%s' "${response}" | jq -r \
+			--arg head "${head_sha}" '
+			[
+				.workflow_runs[]?
+				| select((.head_sha // "") == $head)
+				| (.created_at // "")
+				| (try fromdateiso8601 catch empty)
+			]
+			| if length == 0 then "" else (min | floor | tostring) end
+		' 2>/dev/null) || [ -z "${push_bound}" ]; then
+			echo "AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=missing_head_time" >&2
+			return 0
+		fi
+		local pr_named_runs
+		if ! pr_named_runs=$(_autofix_pr_named_review_runs "${pr_number}" "" "${push_bound}"); then
+			echo "AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=pr_named_api_error" >&2
+			return 0
+		fi
+		if [ "${run_event_name}" = "workflow_dispatch" ] \
+			&& ! printf '%s' "${pr_named_runs}" | jq -e --arg current "${current_run_id}" \
+				'any(.[]; (.id | tostring) == $current)' >/dev/null 2>&1; then
+			# This dispatch run is not named for the PR, so a retry it
+			# dispatched could never count it (see "Unnamed dispatch runs").
+			echo "AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=unnamed_dispatch_run" >&2
+			return 0
+		fi
+		if ! pr_named_completed=$(printf '%s' "${pr_named_runs}" | jq -r \
+			--arg current "${current_run_id}" \
+			--argjson bound "${push_bound}" '
+			[
+				.[]
+				| select(.status == "completed")
+				| select((.conclusion // "") != "cancelled")
+				| select((.id | tostring) != $current)
+				| select(((.created_at // "") | (try fromdateiso8601 catch -1)) >= $bound)
+			]
+			| length
+		' 2>/dev/null) || ! [[ "${pr_named_completed}" =~ ^[0-9]+$ ]]; then
+			echo "AUTOFIX_CHANGES_LOST_BUDGET_QUERY_FAILED pr=${pr_number:-?} branch=${head_branch} reason=pr_named_jq_error" >&2
+			return 0
+		fi
+		prior_completed=$(( ${prior_completed:-0} + pr_named_completed ))
+	fi
+
+	echo "AUTOFIX_CHANGES_LOST_BUDGET pr=${pr_number:-?} branch=${head_branch} head_sha=${head_sha} current_run=${current_run_id} prior_completed=${prior_completed:-0} pr_named_completed=${pr_named_completed} event=${run_event_name:--}"
 
 	if [ "${prior_completed:-0}" -gt 0 ] 2>/dev/null; then
 		return 0
@@ -1649,7 +1925,7 @@ sanitize_codex_prompt_file()
 		: > "${_tmp}" 2>/dev/null || { rm -f "${_tmp}"; return 0; }
 	fi
 	if command -v python3 >/dev/null 2>&1; then
-		if python3 - "${_path}" "${_tmp}" <<'PY' 2>/dev/null
+		if PYTHONSAFEPATH=1 python3 - "${_path}" "${_tmp}" <<'PY' 2>/dev/null
 from pathlib import Path
 import sys
 

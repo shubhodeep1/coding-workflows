@@ -343,7 +343,7 @@ if args[:1] == ["api"]:
 			response = responses[idx]
 			state["check_runs_index"] = idx + 1
 		else:
-			response = state.get("check_runs_default", {"json": []})
+			response = state.get("check_runs_default", {"json": [{"check_runs": []}]})
 		exit_code, stdout, stderr = render_response(response)
 		save()
 		if stdout:
@@ -626,6 +626,7 @@ def _run_restore_same_head_resume_step(
 		env=_git_clean_env({
 			"GITHUB_ENV": str(github_env_file),
 			"PR_NUMBER": pr_number,
+			"RETARGETED_BASE_REF": "main",
 			"REVIEW_MAX_RESUME_ROUNDS": review_max_resume_rounds,
 			"PREVIOUS_REVIEWS_DIR": str(effective_reviews_dir),
 			"RUNTIME_DIR": str(effective_runtime_dir),
@@ -719,22 +720,18 @@ sys.exit(1)
 
 
 def _dispatch_fallback_chain_slice(step_name: str) -> str:
+	# The default-branch dispatch chain (issue #4898) sits between two marker
+	# comments in both retrigger step bodies.
 	block = _step_block(step_name)
 	lines = block.splitlines()
-	needle = 'if [ "${caller_workflow}" != "review_autofix.yml" ]; then'
-	for idx, line in enumerate(lines):
-		if line.strip() != needle:
-			continue
-		start_indent = len(line) - len(line.lstrip(" "))
-		for end_idx in range(idx + 1, len(lines)):
-			candidate = lines[end_idx]
-			if candidate.strip() != "fi":
-				continue
-			end_indent = len(candidate) - len(candidate.lstrip(" "))
-			if end_indent == start_indent:
-				return textwrap.dedent("\n".join(lines[idx : end_idx + 1])).strip()
-		break
-	assert False, f"missing redispatch fallback chain in step: {step_name}"
+	start_marker = "# --- default-branch review dispatch (issue #4898) ---"
+	end_marker = "# --- end default-branch review dispatch ---"
+	starts = [idx for idx, line in enumerate(lines) if line.strip() == start_marker]
+	ends = [idx for idx, line in enumerate(lines) if line.strip() == end_marker]
+	assert len(starts) == 1 and len(ends) == 1 and starts[0] < ends[0], (
+		f"missing redispatch dispatch chain in step: {step_name}"
+	)
+	return textwrap.dedent("\n".join(lines[starts[0] : ends[0] + 1])).strip()
 
 
 def _reviewer_iteration_scope_helper_block() -> str:
@@ -2431,6 +2428,7 @@ def _run_restore_same_head_resume_harness(
 
 		for marker in markers:
 			payload = dict(marker)
+			payload.setdefault("base_ref", "main")
 			if payload.get("head_sha") == "__HEAD__":
 				payload["head_sha"] = head_sha
 			round_value = int(payload["resume_round"])
@@ -2550,6 +2548,7 @@ def _run_partial_finalize_step(
 			"GITHUB_ENV": str(github_env_file),
 			"GH_TOKEN": "test-token",
 			"PR_NUMBER": "123",
+			"RETARGETED_BASE_REF": "main",
 			"RUNTIME_DIR": str(runtime),
 			"PREVIOUS_REVIEWS_DIR": str(reviews),
 			"EDITOR_SUMMARY_FILE": str(editor_summary),
@@ -3317,6 +3316,90 @@ def test_pending_and_startup_failure_checks_cannot_look_clean() -> None:
 	assert "failed_count: 1\n" in result["context_text"]
 
 
+def test_collect_pr_check_runs_helper_accepts_genuine_empty_check_list() -> None:
+	result = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}},
+		check_runs_responses=[{"json": [{"check_runs": []}]}],
+	)
+	assert result["returncode"] == 0, result
+	assert "collection_status: ready\n" in result["context_text"]
+	assert "total_check_runs: 0\n" in result["context_text"]
+	assert "No failed or incomplete check-runs detected" in result["context_text"]
+
+
+def test_collect_pr_check_runs_helper_rejects_malformed_successful_output() -> None:
+	bad_responses = [
+		({"stdout": ""}, "empty_output"),
+		({"stdout": "NOT-JSON-SECRET-MARKER"}, "invalid_json"),
+		({"stdout": '{"check_runs": []}{"check_runs": []}'}, "invalid_json"),
+		({"json": []}, "no_pages"),
+		({"json": {"message": "NOT-JSON-SECRET-MARKER"}}, "missing_check_runs"),
+		({"json": {"check_runs": None}}, "missing_check_runs"),
+		({"json": {"check_runs": {}}}, "missing_check_runs"),
+		({"json": [{"check_runs": []}, 1]}, "invalid_page"),
+		({"json": [{"check_runs": []}, {}]}, "missing_check_runs"),
+	]
+	for response, reason in bad_responses:
+		result = _run_collect_pr_check_runs_harness(
+			pr_payload={"head": {"sha": "abc123"}}, wait_timeout_secs="0",
+			check_runs_responses=[response],
+		)
+		assert result["returncode"] == 0, (reason, result)
+		assert "collection_status: api_error\n" in result["context_text"], (reason, result)
+		assert "total_check_runs: 0\n" in result["context_text"]
+		assert "No failed or incomplete check-runs detected" not in result["context_text"]
+		assert f"reason={reason} bytes=" in result["stdout"]
+		assert "head_sha=abc123" in result["stdout"]
+		assert "NOT-JSON-SECRET-MARKER" not in result["stdout"] + result["context_text"]
+		assert result["mock_state"]["check_runs_index"] == 1
+
+
+def test_collect_pr_check_runs_helper_recovers_from_malformed_snapshot() -> None:
+	result = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}}, wait_timeout_secs="15", poll_interval_secs="5",
+		check_runs_responses=[{"stdout": "garbage"}, {"json": [{"check_runs": [
+			{"id": 1, "name": "ci", "status": "completed", "conclusion": "success"},
+		]}]}],
+	)
+	assert result["returncode"] == 0, result
+	assert "collection_status: ready\n" in result["context_text"]
+	assert "total_check_runs: 1\n" in result["context_text"]
+	assert "reason=invalid_json" in result["stdout"]
+	assert result["mock_state"]["check_runs_index"] == 2
+
+
+def test_collect_pr_check_runs_helper_stops_malformed_repoll_at_deadline() -> None:
+	result = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}}, wait_timeout_secs="1", poll_interval_secs="5",
+		check_runs_responses=[{"json": []}, {"json": [{"check_runs": [
+			{"id": 1, "status": "completed", "conclusion": "success"},
+		]}]}],
+	)
+	assert result["returncode"] == 0, result
+	assert "collection_status: api_error\n" in result["context_text"]
+	assert result["mock_state"]["check_runs_index"] == 1
+
+
+def test_collect_pr_check_runs_helper_retry_drops_failed_attempt_stdout() -> None:
+	runs = [
+		{"id": idx, "name": f"check-{idx}", "status": "completed", "conclusion": "success"}
+		for idx in range(4)
+	]
+	result = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}}, gh_retry_max_attempts="2",
+		check_runs_responses=[
+			{"exit_code": 1, "stdout": '{"message":"FAILED-ATTEMPT-BODY"}', "stderr": "gh: HTTP 502: Bad Gateway"},
+			{"json": [{"check_runs": runs}]},
+		],
+	)
+	assert result["returncode"] == 0, result
+	assert "collection_status: ready\n" in result["context_text"]
+	assert "total_check_runs: 4\n" in result["context_text"]
+	assert "failed_count: 0\n" in result["context_text"]
+	assert "FAILED-ATTEMPT-BODY" not in result["stdout"] + result["stderr"] + result["context_text"]
+	assert result["mock_state"]["check_runs_index"] == 2
+
+
 def test_collect_pr_check_runs_helper_fail_open_contracts() -> None:
 	disabled = _run_collect_pr_check_runs_harness(
 		pr_payload={"head": {"sha": "abc123"}},
@@ -3342,7 +3425,7 @@ def test_collect_pr_check_runs_helper_fail_open_contracts() -> None:
 	)
 	assert api_error["returncode"] == 0, api_error
 	assert "collection_status: api_error\n" in api_error["context_text"]
-	assert "Check-run API call failed; treat absence of failures as unknown rather than confirmed-passing.\n" in api_error["context_text"]
+	assert "Check-run API output was unavailable or invalid; treat absence of failures as unknown rather than confirmed-passing.\n" in api_error["context_text"]
 	assert "mock gh: check-runs failure\n" in api_error["stderr"]
 	assert "Check-run context bytes:" in api_error["stdout"]
 
@@ -3361,7 +3444,7 @@ def test_collect_pr_check_runs_helper_writer_error_is_observable_and_fail_open()
 		context_file.write_text("stale-context\n", encoding="utf-8")
 
 		def _fake_run_check_runs_api(*, repository: str, head_sha: str, script_dir: Path) -> subprocess.CompletedProcess[str]:
-			return subprocess.CompletedProcess(args=["gh"], returncode=0, stdout="[]", stderr="")
+			return subprocess.CompletedProcess(args=["gh"], returncode=0, stdout='[{"check_runs": []}]', stderr="")
 
 		def _boom(*, raw_text: str, head_sha: str, final_status: str) -> str:
 			raise RuntimeError("boom")
@@ -3422,7 +3505,7 @@ def test_collect_pr_check_runs_helper_top_level_exception_is_fail_open() -> None
 		context_file.write_text("stale-context\n", encoding="utf-8")
 
 		def _fake_run_check_runs_api(*, repository: str, head_sha: str, script_dir: Path) -> subprocess.CompletedProcess[str]:
-			return subprocess.CompletedProcess(args=["gh"], returncode=0, stdout="[]", stderr="")
+			return subprocess.CompletedProcess(args=["gh"], returncode=0, stdout='[{"check_runs": []}]', stderr="")
 
 		def _boom_wait_view(raw_text: str, self_run_id: str):
 			raise RuntimeError("wait-view boom")
@@ -4425,9 +4508,9 @@ def test_review_tier_random_pick_is_seeded_by_pr_number_and_pinned_by_variables(
 
 
 def test_review_tier_lite_draws_from_standard_list_and_defaults_skip_expensive_models() -> None:
-	"""Reduced tiers leave out the two most expensive panel models by default."""
+	"""Reduced tiers leave out the two full-panel-only models by default."""
 	reviewer_models = _workflow_reviewer_models()
-	expensive = {"google/gemini-3.8-flash", "z-ai/glm-5.2"}
+	expensive = {"google/gemini-3.1-flash-lite", "z-ai/glm-5.2"}
 	default_standard = ["minimax/minimax-m3", "deepseek/deepseek-v4-pro", "qwen/qwen3.7-plus", "openai/gpt-6-luna"]
 	assert expensive <= set(reviewer_models)
 	assert set(default_standard) <= set(reviewer_models)
@@ -4729,10 +4812,10 @@ def test_gate_protects_executable_configuration_from_both_skip_routes() -> None:
 	# Run the real gate body with the existing mocked /pulls/{n}/files
 	# harness. The doc-only branch needs a large change under docs/; the
 	# small-diff branch also accepts root and nested paths outside docs/.
-	from test_workflow_failure_heal import SHA_A, _run_gate
+	from test_workflow_failure_heal import SELF_REPO, SHA_A, _run_gate
 
 	base_pr = {
-		"state": "open", "merged": False, "head": {"ref": "ai/issue-4454", "sha": SHA_A},
+		"state": "open", "merged": False, "head": {"ref": "ai/issue-4454", "sha": SHA_A, "repo": {"full_name": SELF_REPO}},
 		"labels": [], "additions": 1, "deletions": 1, "changed_files": 1,
 		"mergeable": True, "mergeable_state": "clean", "title": "test", "body": "",
 	}
@@ -4854,7 +4937,7 @@ def test_reviewer_failback_mapping_covers_live_reviewer_roster() -> None:
 
 	assert sorted(mapped) == [
 		"deepseek/deepseek-v4-pro",
-		"google/gemini-3.8-flash",
+		"google/gemini-3.1-flash-lite",
 		"minimax/minimax-m3",
 		"openai/gpt-6-luna",
 		"qwen/qwen3.7-plus",
@@ -4862,6 +4945,7 @@ def test_reviewer_failback_mapping_covers_live_reviewer_roster() -> None:
 	]
 	assert sorted(unmapped) == []
 	assert chains["deepseek/deepseek-v4-pro"] == ["deepseek/deepseek-v3.2"]
+	assert chains["google/gemini-3.1-flash-lite"] == ["google/gemini-3-flash-preview"]
 	assert chains["google/gemini-3.8-flash"] == ["google/gemini-3.1-flash-lite"]
 	assert chains["minimax/minimax-m3"] == ["minimax/minimax-m2.5"]
 	assert chains["openai/gpt-6-luna"] == ["openai/gpt-5.6-luna"]
@@ -5592,10 +5676,21 @@ def test_editor_changes_lost_redispatch_matches_post_commit_fallback_chain() -> 
 	changes_lost_block = _step_block("Re-dispatch review on editor-changes-lost")
 
 	for block in (post_commit_block, changes_lost_block):
-		assert 'if gh workflow run "review_autofix.yml" \\' in block
+		# Issue #4898: dispatch from the default branch (no --ref), PR-named
+		# wrappers first, review_autofix.yml last, validated PR number only.
+		assert 'if gh workflow run "${candidate}" \\' in block
 		assert '-f pr_number="${PR_NUMBER}" \\' in block
-		assert '-f allow_workflow_edits="${ALLOW_WORKFLOW_EDITS}"; then' in block
+		assert '-f allow_workflow_edits="${retrigger_allow_workflow_edits}"; then' in block
 		assert 'caller_workflow="internal-review.yml"' in block
+		assert 'retrigger_candidates+=(review_autofix.yml)' in block
+		assert 'if ! [[ "${PR_NUMBER:-}" =~ ^[1-9][0-9]*$ ]]; then' in block
+		for line in block.splitlines():
+			if "gh workflow run" in line or line.strip().startswith("--ref"):
+				assert "--ref" not in line, line
+		# The caller ref reaches the sourced body through env, never as an
+		# expression (GitHub does not substitute ${{ }} in scripts/).
+		assert "REVIEW_AUTOFIX_CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}" in block
+		assert "${{ github.workflow_ref }}" not in block.split("run: |", 1)[1]
 
 	assert _dispatch_fallback_chain_slice("Re-trigger review via workflow_dispatch") == _dispatch_fallback_chain_slice(
 		"Re-dispatch review on editor-changes-lost"
@@ -6363,6 +6458,8 @@ def test_review_partial_finalize_marker_sets_no_progress_terminal_state() -> Non
 		second = _run_partial_finalize_step(context, previous_env=first["github_env"])
 
 	assert first["github_env"]["AUTOFIX_RESUME_STATE"] == "resumable"
+	assert first["marker_payload"]["base_ref"] == "main"
+	assert "base_ref=main" in first["latest_comment"]
 	assert first["github_env"]["AUTOFIX_RESUME_SHOULD_CONTINUE"] == "true"
 	assert second["github_env"]["AUTOFIX_RESUME_ROUND"] == "2"
 	assert second["github_env"]["AUTOFIX_RESUME_STATE"] == "no_progress"
@@ -7774,6 +7871,13 @@ def main() -> int:
 	test_collect_pr_check_runs_helper_is_bootstrapped_and_delegated()
 	test_collect_pr_check_runs_helper_closes_direct_log_redirect_response()
 	test_collect_pr_check_runs_helper_ready_contract_preserves_self_run_exclusion()
+	test_post_review_snapshot_ignores_only_its_own_incomplete_check()
+	test_pending_and_startup_failure_checks_cannot_look_clean()
+	test_collect_pr_check_runs_helper_accepts_genuine_empty_check_list()
+	test_collect_pr_check_runs_helper_rejects_malformed_successful_output()
+	test_collect_pr_check_runs_helper_recovers_from_malformed_snapshot()
+	test_collect_pr_check_runs_helper_stops_malformed_repoll_at_deadline()
+	test_collect_pr_check_runs_helper_retry_drops_failed_attempt_stdout()
 	test_collect_pr_check_runs_helper_fail_open_contracts()
 	test_collect_pr_check_runs_helper_writer_error_is_observable_and_fail_open()
 	test_collect_pr_check_runs_helper_top_level_exception_is_fail_open()
@@ -7878,7 +7982,9 @@ def main() -> int:
 	test_stage_step_model_catalog_backfill_fails_open()
 	test_review_isolation_wiring_and_model_relay()
 	test_review_isolation_workspace_transfer_and_hostile_paths()
+	test_review_isolation_transfer_failure_evidence()
 	test_review_isolation_traverses_only_allowed_github_directories()
+	test_review_isolation_transfers_into_active_work_tree()
 	test_review_relay_accepts_only_configured_chat_model()
 	test_review_relay_main_preserves_invoked_mode()
 	print("OK: review_autofix review-pipeline plumbing contract holds")
@@ -7959,6 +8065,10 @@ def test_review_isolation_wiring_and_model_relay() -> None:
 	assert '--env OPENROUTER_API_KEY=isolated-placeholder' in helper
 	assert 'review_untrusted_workspace.py" transfer' in helper
 	assert ': > "${RUNTIME_DIR:?}/review_sandbox_transfer_failed"' in helper
+	assert '2> "${RUNTIME_DIR}/review_sandbox_transfer_reason_${output##*/}"' in helper
+	assert helper.count('2> "${RUNTIME_DIR}/review_sandbox_transfer_reason_${output##*/}"') == 2
+	assert 'rm -f "${RUNTIME_DIR}/review_sandbox_transfer_failed"' in helper
+	assert 'rm -f "${RUNTIME_DIR}/review_sandbox_transfer_reason_${tmp_output##*/}"' in _apply_fixes_text()
 	assert 'if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then' in _apply_fixes_text()
 	assert 'review_sandbox/Dockerfile' in stage
 	assert '"${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup' in _workflow_text()
@@ -8012,42 +8122,309 @@ def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:
 		# A later retry has an updated baseline; a concurrent host edit does not.
 		(host / "scripts/app.py").write_text("host changed\n")
 		(source / "scripts/app.py").write_text("isolated changed\n")
-		assert run("transfer").returncode != 0
+		rejection = run("transfer")
+		assert rejection.returncode != 0
+		assert rejection.stderr == "::error::Review isolation snapshot or transfer rejected (ValueError) reason=host_baseline_changed\n"
 		assert (host / "scripts/app.py").read_text() == "host changed\n"
 		(host / "scripts/app.py").write_text("after\n")
 		(source / "scripts/new.py").unlink()
 		(source / "scripts/new.py").symlink_to("/etc/passwd")
-		assert run("transfer").returncode != 0
+		rejection = run("transfer")
+		assert rejection.returncode != 0
+		assert rejection.stderr == "::error::Review isolation snapshot or transfer rejected (ValueError) reason=symlink_path\n"
 		assert (host / "scripts/new.py").read_text() == "new\n"
+
+
+def test_review_isolation_transfer_failure_evidence() -> None:
+	apply_fixes = _apply_fixes_text()
+	start = '  if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then'
+	# Execute the actual early-exit block, not a reimplementation of its parsing.
+	block = start + apply_fixes.split(start, 1)[1].split("\n  fi\n", 1)[0] + "\n  fi\n"
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		archive = root / "previous_reviews"
+		archive.mkdir()
+		(root / "review_sandbox_transfer_failed").touch()
+		attempt_output = root / "attempt-output"
+		attempt_err = root / "attempt-stderr"
+		reason_file = root / f"review_sandbox_transfer_reason_{attempt_output.name}"
+		old_reason = root / "review_sandbox_transfer_reason_previous-attempt"
+		old_reason.write_text("::error::Review isolation snapshot or transfer rejected (ValueError) reason=symlink_path\n")
+		base_env = {**os.environ, "RUNTIME_DIR": str(root), "PREVIOUS_REVIEWS_DIR": str(archive),
+			"attempt": "2", "tmp_output": str(attempt_output), "tmp_err": str(attempt_err)}
+		valid_reason = "::error::Review isolation snapshot or transfer rejected (ValueError) reason=host_baseline_changed\n"
+		for diagnostic, expected in (
+			(valid_reason, "host_baseline_changed"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=admitted_inventory_missing\n", "admitted_inventory_missing"),
+			(None, "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=forged\n", "unknown"),
+			(valid_reason + "secret second line\n", "unknown"),
+			("untrusted contents " * 100, "unknown"),
+		):
+			attempt_err.write_text("existing editor stderr\n")
+			if diagnostic is None:
+				reason_file.unlink(missing_ok=True)
+			else:
+				reason_file.write_text(diagnostic)
+			result = subprocess.run(["bash", "-c", "set -eu\n" + block], env=base_env,
+				capture_output=True, text=True, check=False)
+			assert result.returncode == 1
+			assert (root / "review_sandbox_transfer_failed").exists()
+			assert result.stderr == f"::error::Review sandbox result transfer was incomplete; refusing editor fallback. reason={expected}\n"
+			assert (archive / "editor_attempt_2.err").read_text() == "existing editor stderr\n" + result.stderr
+			assert "secret" not in result.stderr
+		# A successful transfer removes the marker, so even a stale reason is ignored.
+		(root / "review_sandbox_transfer_failed").unlink()
+		result = subprocess.run(["bash", "-c", "set -eu\n" + block], env=base_env,
+			capture_output=True, text=True, check=False)
+		assert result.returncode == 0 and not result.stderr
 
 
 def test_review_isolation_traverses_only_allowed_github_directories() -> None:
 	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	helper_text = workspace_helper.read_text()
+	assert helper_text.count("commands = load_admitted_commands(manifest)") == 2
+	assert "allowed(name, host)" not in helper_text.split("def transfer(", 1)[1].split("def refresh(", 1)[0]
 	with tempfile.TemporaryDirectory() as td:
 		root = Path(td)
 		host = root / "host"
 		source = root / "isolated" / "source"
 		source.mkdir(parents=True)
-		for subdir in ("workflows", "actions"):
+		for subdir in ("workflows", "actions", "ai"):
 			(host / ".github" / subdir).mkdir(parents=True)
-			(host / ".github" / subdir / "example.yml").write_text("before\n")
+			(host / ".github" / subdir / ("claude_engine.json" if subdir == "ai" else "example.yml")).write_text("before\n")
+		(host / ".github/ai/WORKFLOW.md").write_text("operator config\n")
+		(host / ".claude/hooks").mkdir(parents=True)
+		(host / ".claude/hooks/gh_api_write_guard.py").write_text("before\n")
+		(host / ".claude/hooks/other.py").write_text("operator hook\n")
+		(host / ".claude/commands").mkdir(parents=True)
+		(host / ".claude/commands/audit-plans.md").write_text("before\n")
+		(host / ".claude/commands/other.md").write_text("operator command\n")
+		(host / ".claude/commands/apply-url.md").write_text("before\n")
+		# A live command needs a twin in both the PR and verified support checkouts.
+		(host / "workflow-templates/.claude/commands").mkdir(parents=True)
+		(host / "workflow-templates/.claude/commands/audit-plans.md").write_text("template\n")
+		(host / "workflow-templates/.claude/commands/apply-url.md").write_text("template\n")
+		(host / "workflow-templates/.claude/commands/pr-new.md").write_text("PR template\n")
+		trusted_checkout = root / "verified" / ".codex-workflow-src" / "workflow-templates/.claude/commands"
+		trusted_checkout.mkdir(parents=True)
+		(trusted_checkout / "audit-plans.md").write_text("trusted template\n")
+		(trusted_checkout / "apply-url.md").write_text("trusted template\n")
+		admission_spec = importlib.util.spec_from_file_location("review_workspace_admission", workspace_helper)
+		assert admission_spec and admission_spec.loader
+		admission_module = importlib.util.module_from_spec(admission_spec)
+		admission_spec.loader.exec_module(admission_module)
+		assert not admission_module.allowed(".claude/commands/pr-new.md", host)
+		assert admission_module.allowed(".claude/commands/audit-plans.md", commands={".claude/commands/audit-plans.md"})
+		(host / "scripts").mkdir()
+		(host / "scripts/claude_settings.json.tmpl").write_text("before\n")
+		(host / "tests").mkdir()
+		(host / "tests/test_audit_plans_command.py").write_text("operator command contract\n")
 		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
-		subprocess.run(["git", "add", ".github"], cwd=host, env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", ".github", ".claude", "workflow-templates", "scripts", "tests"], cwd=host, env=_git_clean_env(), check=True)
 		manifest = root / "isolated" / "baseline.json"
 		def run(action: str) -> subprocess.CompletedProcess[str]:
 			return subprocess.run(
 				[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest)],
+				env={**_git_clean_env(), "GITHUB_WORKSPACE": str(root / "verified")},
 				capture_output=True, text=True, check=False,
 			)
 		assert run("snapshot").returncode == 0
+		inventory_path = manifest.with_name(manifest.name + ".admitted_commands.json")
+		assert json.loads(inventory_path.read_text()) == [".claude/commands/apply-url.md", ".claude/commands/audit-plans.md"]
+		# A PR-added twin before snapshot cannot authorize a new command.
+		(source / ".claude/commands/pr-new.md").write_text("PR command\n")
+		assert run("transfer").returncode == 0
+		assert not (host / ".claude/commands/pr-new.md").exists()
+		(source / ".claude/commands/pr-new.md").unlink()
+		assert not (source / ".github/ai/WORKFLOW.md").exists()
+		assert (source / ".claude/hooks/gh_api_write_guard.py").exists()
+		assert not (source / ".claude/hooks/other.py").exists()
+		assert (source / ".claude/commands/audit-plans.md").exists()
+		assert (source / ".claude/commands/apply-url.md").exists()
+		assert not (source / ".claude/commands/other.md").exists()
+		assert (source / "scripts/claude_settings.json.tmpl").exists()
+		assert not (source / "tests/test_audit_plans_command.py").exists()
 		assert run("refresh").returncode == 0
 		(source / ".github/workflows/example.yml").write_text("after\n")
+		(source / ".github/ai/claude_engine.json").write_text("after\n")
+		(source / ".claude/hooks/gh_api_write_guard.py").write_text("after\n")
+		(source / ".claude/commands/audit-plans.md").write_text("after\n")
+		(source / ".claude/commands/apply-url.md").write_text("after\n")
+		(source / "scripts/claude_settings.json.tmpl").write_text("after\n")
 		assert run("transfer").returncode == 0
 		assert (host / ".github/workflows/example.yml").read_text() == "after\n"
-		(source / ".github/ai").mkdir()
-		(source / ".github/ai/untrusted.yml").write_text("untrusted\n")
+		assert (host / ".github/ai/claude_engine.json").read_text() == "after\n"
+		assert (host / ".claude/hooks/gh_api_write_guard.py").read_text() == "after\n"
+		assert (host / ".claude/commands/audit-plans.md").read_text() == "after\n"
+		assert (host / ".claude/commands/apply-url.md").read_text() == "after\n"
+		assert (host / "scripts/claude_settings.json.tmpl").read_text() == "after\n"
+		assert (host / "tests/test_audit_plans_command.py").read_text() == "operator command contract\n"
+		# A command without a host template twin stays out: the write is dropped.
+		(source / ".claude/commands/other.md").write_text("untrusted\n")
+		assert run("transfer").returncode == 0
+		assert (host / ".claude/commands/other.md").read_text() == "operator command\n"
+		(source / ".claude/commands/other.md").unlink()
+		# Creating the twin in the same transfer does not admit a new command.
+		(source / "workflow-templates/.claude/commands/new.md").write_text("template\n")
+		(source / ".claude/commands/new.md").write_text("untrusted\n")
+		assert run("transfer").returncode == 0
+		assert (host / "workflow-templates/.claude/commands/new.md").read_text() == "template\n"
+		assert not (host / ".claude/commands/new.md").exists()
+		(source / ".claude/commands/new.md").unlink()
+		# A retry cannot widen admission after the first transfer adds the twin.
+		(source / ".claude/commands/new.md").write_text("untrusted retry\n")
+		(source / ".claude/commands/scratch.txt").write_text("untrusted retry scratch\n")
+		(source / ".claude/commands/broken.md").symlink_to("missing.md")
+		assert run("transfer").returncode == 0
+		assert (source / ".claude/commands/scratch.txt").exists()
+		assert (source / ".claude/commands/broken.md").is_symlink()
+		assert not (host / ".claude/commands/new.md").exists()
+		assert not (host / ".claude/commands/scratch.txt").exists()
+		assert run("refresh").returncode == 0
+		assert not (source / ".claude/commands/new.md").exists()
+		assert not (source / ".claude/commands/scratch.txt").exists()
+		assert not (source / ".claude/commands/broken.md").is_symlink()
+		(source / ".github/ai/WORKFLOW.md").write_text("untrusted\n")
+		assert run("transfer").returncode == 0
+		assert (host / ".github/ai/WORKFLOW.md").read_text() == "operator config\n"
+		(source / ".github/ai/WORKFLOW.md").unlink()
+		(source / ".github/untrusted").mkdir()
+		(source / ".github/untrusted/result.yml").write_text("untrusted\n")
 		assert run("transfer").returncode != 0
-		assert not (host / ".github/ai/untrusted.yml").exists()
+		assert not (host / ".github/untrusted/result.yml").exists()
+		shutil.rmtree(source / ".github/untrusted")
+		# A new .claude/ directory outside the admitted ones still fails closed.
+		(source / ".claude/skills").mkdir()
+		(source / ".claude/skills/result.md").write_text("untrusted\n")
+		assert run("transfer").returncode != 0
+		assert not (host / ".claude/skills").exists()
+		# Missing or corrupt authorization state cannot fall back to the live host.
+		shutil.rmtree(source / ".claude/skills")
+		inventory_path.write_text('{"not": "a list"}')
+		rejection = run("transfer")
+		assert rejection.returncode != 0
+		assert "reason=admitted_inventory_missing" in rejection.stderr
+		inventory_path.unlink()
+		rejection = run("transfer")
+		assert rejection.returncode != 0
+		assert "reason=admitted_inventory_missing" in rejection.stderr
+		assert run("refresh").returncode != 0
+		assert not (host / ".claude/commands/new.md").exists()
+		# No verified support checkout means no command path is admitted.
+		no_support_source = root / "without-support" / "source"
+		no_support_source.mkdir(parents=True)
+		no_support_manifest = root / "without-support" / "baseline.json"
+		no_support_snapshot = subprocess.run(
+			[sys.executable, str(workspace_helper), "snapshot", str(host), str(no_support_source), str(no_support_manifest)],
+			env={**_git_clean_env(), "GITHUB_WORKSPACE": str(root / "without-support")},
+			capture_output=True, text=True, check=False,
+		)
+		assert no_support_snapshot.returncode == 0
+		assert json.loads(no_support_manifest.with_name(no_support_manifest.name + ".admitted_commands.json").read_text()) == []
+		assert not (no_support_source / ".claude/commands/audit-plans.md").exists()
+
+
+def test_review_isolation_transfers_into_active_work_tree() -> None:
+	"""Editor edits land in the work tree the job's git commands read (#6055).
+
+	"Activate workspace shell context" moves every later step into a per-run
+	copy (WORKSPACE_PATH) that has no .git of its own, with GIT_WORK_TREE set
+	to it and GIT_DIR to ${GITHUB_WORKSPACE}/.git. The sandbox used to
+	snapshot from and transfer into GITHUB_WORKSPACE, so every editor edit
+	reached a directory git no longer looked at and the run ended in
+	editor_changes_lost. Prepare validates WORKSPACE_PATH (it must sit
+	directly under ${RUNNER_TEMP}/workspaces) and records it for run.
+	Docker is stubbed; the stub editor edits /source.
+	"""
+	with tempfile.TemporaryDirectory(prefix="review-iso-") as td:
+		root = Path(td)
+		checkout = root / "checkout"
+		work_tree = root / "workspaces" / "run"
+		runner_temp = root
+		runtime_dir = root / "runtime"
+		stub_bin = root / "bin"
+		for path in (checkout / "scripts", work_tree / "scripts", runtime_dir, stub_bin):
+			path.mkdir(parents=True)
+		(checkout / "scripts/app.py").write_text("before\n")
+		subprocess.run(["git", "init", "-q", str(checkout)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", "scripts"], cwd=checkout, env=_git_clean_env(), check=True)
+		subprocess.run(
+			["git", "-c", "user.name=t", "-c", "user.email=t@invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "base"],
+			cwd=checkout, env=_git_clean_env(), check=True,
+		)
+		(work_tree / "scripts/app.py").write_text("before\n")
+		docker_stub = stub_bin / "docker"
+		docker_stub.write_text(textwrap.dedent("""\
+			#!/usr/bin/env bash
+			case "$1" in
+				build) echo "sha256:$(printf '0%.0s' $(seq 1 64))"; exit 0 ;;
+				rm) exit 0 ;;
+			esac
+			source_dir=""
+			editor=false
+			for arg in "$@"; do
+				case "${arg}" in
+					type=bind,src=*,dst=/source) source_dir="${arg#type=bind,src=}"; source_dir="${source_dir%,dst=/source}" ;;
+					review-editor-*) editor=true ;;
+				esac
+			done
+			if [ "${editor}" = true ]; then
+				printf 'after\\n' > "${source_dir}/scripts/app.py"
+				echo "Changes made:"
+			fi
+			exit 0
+			"""))
+		docker_stub.chmod(0o755)
+		github_env = root / "github_env"
+		github_env.write_text("")
+		env = _git_clean_env({
+			"PATH": f"{stub_bin}:{os.environ['PATH']}",
+			"GIT_DIR": str(checkout / ".git"),
+			"GIT_WORK_TREE": str(work_tree),
+			"WORKSPACE_PATH": str(work_tree),
+			"GITHUB_WORKSPACE": str(checkout),
+			"GITHUB_ENV": str(github_env),
+			"RUNNER_TEMP": str(runner_temp),
+			"RUNTIME_DIR": str(runtime_dir),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"OPENROUTER_API_KEY": "test-only-key",
+			"PYTHONDONTWRITEBYTECODE": "1",
+		})
+		sandbox = str(REPO_ROOT / "scripts/review_untrusted_sandbox.sh")
+		# A workspace outside ${RUNNER_TEMP}/workspaces is never a transfer target.
+		stray = root / "stray"
+		stray.mkdir()
+		rejected = subprocess.run(
+			["bash", sandbox, "prepare"], cwd=work_tree, env={**env, "WORKSPACE_PATH": str(stray)},
+			capture_output=True, text=True, timeout=120,
+		)
+		assert rejected.returncode != 0 and "Review workspace path rejected" in rejected.stderr
+		github_env.write_text("")
+		prepared = subprocess.run(["bash", sandbox, "prepare"], cwd=work_tree, env=env, capture_output=True, text=True, timeout=120)
+		assert prepared.returncode == 0, prepared.stdout + prepared.stderr
+		sandbox_root = github_env.read_text().split("REVIEW_SANDBOX_ROOT=", 1)[1].strip()
+		prompt = root / "prompt.txt"
+		prompt.write_text("fix it\n")
+		config = root / "config.json"
+		config.write_text(json.dumps({
+			"model": "openrouter/openai/gpt-6-sol",
+			"provider": {"openrouter": {"options": {"baseURL": "https://openrouter.ai/api/v1"}}},
+		}))
+		ran = subprocess.run(
+			["bash", sandbox, "run", str(prompt), str(root / "editor_output.txt"), "openai/gpt-6-sol", "high", str(config)],
+			cwd=work_tree, env={**env, "REVIEW_SANDBOX_ROOT": sandbox_root}, capture_output=True, text=True, timeout=120,
+		)
+		assert ran.returncode == 0, ran.stdout + ran.stderr
+		assert not (runtime_dir / "review_sandbox_transfer_failed").exists()
+		assert (work_tree / "scripts/app.py").read_text() == "after\n"
+		assert (checkout / "scripts/app.py").read_text() == "before\n"
+		changed = subprocess.run(
+			["git", "diff", "--name-only", "HEAD"], cwd=work_tree,
+			env={**_git_clean_env(), "GIT_DIR": str(checkout / ".git"), "GIT_WORK_TREE": str(work_tree)},
+			capture_output=True, text=True, check=True,
+		)
+		assert changed.stdout.split() == ["scripts/app.py"]
 
 
 def test_review_relay_accepts_only_configured_chat_model() -> None:

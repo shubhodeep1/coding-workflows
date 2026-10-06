@@ -376,7 +376,7 @@ jobs:
           mkdir -p scripts prompts .github/ai
 
           _fetched_scripts=()
-          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py targeted_file_context.py write_codex_config.sh codex_heartbeat.sh security_audit.sh worktree_registry.sh worktree_gc.sh; do
+          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py build_static_context.sh targeted_file_context.py write_codex_config.sh codex_heartbeat.sh security_audit.sh worktree_registry.sh worktree_gc.sh security_dependency.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -505,6 +505,22 @@ jobs:
             fi
             mkdir -p "$(dirname -- "prompts/${prompt_assembly_asset}")"
             install -m 0644 "${asset_src}" "prompts/${prompt_assembly_asset}"
+          done
+
+          # Activation verification at project completion (port P4,
+          # replace-claude-sessions plan Phase 8c). Optional: a missing file
+          # only skips the verification, never the poll.
+          for activation_asset in scripts/activation_verify.sh scripts/operator_step_issue.py prompts/mode-activation-verify.txt prompts/_templates/mode-activation-verify.txt; do
+            asset_src=".codex-workflow-src/${activation_asset}"
+            if [ ! -f "${asset_src}" ] && [ -f ".codex-workflow-src-main/${activation_asset}" ]; then
+              asset_src=".codex-workflow-src-main/${activation_asset}"
+            fi
+            if [ ! -f "${asset_src}" ]; then
+              echo "::warning::Activation verification support file ${activation_asset} is missing; project activation checks are skipped."
+              continue
+            fi
+            mkdir -p "$(dirname -- "${activation_asset}")"
+            install -m 0644 "${asset_src}" "${activation_asset}"
           done
 
           security_exclusions_src=".codex-workflow-src/scripts/security_audit_fp_exclusions.json"
@@ -686,6 +702,9 @@ jobs:
           MAX_SECURITY_PASS_FIX_REISSUES: ${{ vars.MAX_SECURITY_PASS_FIX_REISSUES || '2' }}
           SECURITY_PASS_CONFIDENCE_GATE: ${{ vars.SECURITY_PASS_CONFIDENCE_GATE || '8' }}
           SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED: ${{ vars.SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED || 'true' }}
+          ACTIVATION_VERIFY_ENABLED: ${{ vars.ACTIVATION_VERIFY_ENABLED || 'true' }}
+          ACTIVATION_VERIFY_MODEL: ${{ vars.ACTIVATION_VERIFY_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+          ACTIVATION_VERIFY_REASONING: ${{ vars.THINKING_LEVEL_ACTIVATION_VERIFY || 'high' }}
           MAX_SECURITY_PASS_JUDGE_ROUNDS: ${{ vars.MAX_SECURITY_PASS_JUDGE_ROUNDS || '0' }}
           MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS: ${{ vars.MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS || '2' }}
           SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED: ${{ vars.SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED || 'true' }}

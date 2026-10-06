@@ -388,6 +388,17 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Prepare template-only PR live copies for parity tests
+        if: github.event_name == 'pull_request' && github.base_ref == 'main'
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          python3 scripts/sync_claude_live_copies.py sync --dry-run --before "${PR_BASE_SHA}" --after HEAD --keep-committed-security-paths
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -459,6 +470,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr_merge_status_guard.py
 
+      - name: Live .claude/ copies match their templates
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_template_live_parity.py
+
       - name: Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)
         # Drives scripts/review_merge_train.sh through a fake `gh` and pins
         # the per-run file-list cache (one GET /pulls/{n}/files per distinct
@@ -477,53 +493,95 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr_watch_guard.py
 
+      - name: Retarget after a merged base tests (port P6)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_retarget_merged_base.py
+
+      - name: Standalone clarify auto-decide tests (port P3)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_auto_decisions.py \
+            tests/test_clarify_respond_standalone.py \
+            tests/test_clarify_github_facts.py
+
+      - name: Single-issue security pass tests (port P1)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_single_issue_security_pass.py
+
+      - name: Activation verification tests (port P4)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_activation_verify.py
+
       - name: gh api permission guard hook tests (CLAUDE.md §23.H)
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_gh_api_write_guard.py
 
-      - name: PR status check-in reminder hook tests (CLAUDE.md §26)
+      - name: Claude engine selection and claude_run tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr_check_in_reminder.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ai_engine.py
 
-      - name: Check-in status helper tests (/implement-plan-claude, CLAUDE.md §26)
+      - name: Claude engine decision tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_check_in_status.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_engine.py
 
-      - name: Stale Routine sweep tests (CLAUDE.md §26.G)
+      - name: Engine label propagation tests (ai:engine-claude)
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stale_routines.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_engine_label_propagation.py
 
-      - name: Stale session sweep tests (CLAUDE.md §26.I)
+      - name: Claude engine permission policy tests (P5)
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_session_janitor.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_settings_policy.py
 
-      - name: Unattended helper and permission prompt report tests (CLAUDE.md §23.I)
+      - name: Claude Anthropic relay tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
-            tests/test_dispatch_workflow.py \
-            tests/test_edit_comment.py \
-            tests/test_permission_prompts.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_anthropic_relay.py
 
-      - name: Claude-fixer hand-back, claim and catch-all sweep tests (CLAUDE.md §26.C, §26.H)
+      - name: Claude pool token action tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_check_in_status_hand_back.py tests/test_claude_pr_sweep.py tests/test_check_in_session_targeting.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_pool_token.py
 
-      - name: /implement-plan-claude command contract tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_implement_plan_claude_command.py tests/test_session_titles.py
+      - name: Set up Node 22 for the claude-pool-broker Worker tests
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
 
-      - name: Claude issue implementer tests (routing, handoff, intake, §28 command contract)
+      - name: claude-pool-broker Worker tests (vitest)
+        working-directory: tools/claude-pool-broker
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_issue_route.py tests/test_implement_issue_claude_command.py tests/test_security_pass_skip.py
+          npm ci --no-audit --no-fund
+          npx vitest run
+
+      - name: Session automation retirement guard and retired labels/files tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_no_session_automation.py tests/test_ai_labels_retired.py tests/test_update_workflows_retired_files.py
+
+      - name: Security-pass skip rule tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_pass_skip.py
+
+      - name: Security dependency hold tests (issue 4934)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_security_dependency.py
+
+      - name: Skip-AI marker rule and gate skip notice tests (issue 4985)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_skip_ai_marker_rule.py
 
       - name: CLAUDE.md section numbering guard (§6 identifiers)
         run: |
@@ -534,11 +592,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_audit_plans_command.py
-
-      - name: Implement-plan lessons ingestion + conformance-stage contract tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ingest_implement_plan_lessons.py
 
       - name: Orchestrate lib unit tests
         run: |
@@ -839,6 +892,8 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_review_pipeline_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_pr_tree_python_isolation.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_merge_precheck.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_terminal_same_head_gate.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_slop_scan_local.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_editor_noop_cascade_contract.py
@@ -851,10 +906,20 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_step_scripts_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_file_size_limit.py
 
-      - name: Review autofix Claude-fixer mode and validate target_ref contract tests
+      - name: Review autofix retired Claude-fixer hand-off and validate target_ref contract tests
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_claude_fixer_mode.py tests/test_validate_target_ref_input.py
+
+      - name: Review autofix iteration count tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_iteration_count.py
+
+      - name: Review-blocked judge security-pass helper tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_rb_judge_security_pass.py
 
       - name: Review consolidator reject-verifier contract test
         run: |
@@ -1035,7 +1100,7 @@ jobs:
           from pathlib import Path
 
           payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          assert set(payload) == {"created", "updated", "unchanged", "errors"}
+          assert set(payload) == {"created", "updated", "unchanged", "deleted", "errors"}
           assert isinstance(payload["errors"], list)
           PY
 
@@ -1111,10 +1176,17 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_sweep_stale_queued.py
 
+      - name: Cancelled CI sweep recovery tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_cancelled_rerun.py
+
       - name: Conflict-dispatch active-run visibility contract tests
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_conflict_dispatch_active_run_visibility.py
+          # Issue #4701: default-branch review dispatches and PR-named run lookups.
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_dispatch_default_branch.py
 
       - name: Workflow log collector coverage gate
         run: |

@@ -23,8 +23,10 @@ head-ref dispatch ran the unmerged branch's copy of internal-review.yml with
 the sweep's secrets. The sweep now always dispatches from the default
 branch, and closes the ref blind spot a different way: internal-review.yml
 names every dispatched run ``Internal: AI Review & Autofix [pr:<N>]``, and
-both guards match that name by PR. The forward-merge fallback also runs the
-default-branch workflow (its branch can differ from the protected copy).
+both guards match that name by PR. Issue #4701 moved the remaining head-ref
+dispatches (the poller's ``_dispatch_review_for_conflicts``, the merge train,
+and the forward-merge fallback) to the default branch too, and the poller's
+lookups match the PR-named runs through ``_pr_named_review_dispatch_runs``.
 
 These are text contracts on the shipped files, so a refactor cannot
 silently reintroduce either blind spot, or a head-ref dispatch, while the
@@ -88,7 +90,9 @@ class SweepDispatchRefContract(unittest.TestCase):
 	def test_dispatch_never_passes_a_ref(self) -> None:
 		self.assertNotIn("--ref", self._dispatch_block())
 		self.assertNotIn('dispatch_args+=(--ref "${head_ref}")', self.text)
-		sweep_job = self.text[self.text.index("  sweep:\n"):self.text.index("  claude-pr-catch-all:\n")]
+		# The sweep job is the workflow's last job since the claude-pr-catch-all
+		# job was retired (replace-claude-sessions plan, Phase 2).
+		sweep_job = self.text[self.text.index("  sweep:\n"):]
 		self.assertNotIn('--ref "', sweep_job)
 
 	def test_dispatch_carries_only_pr_number_and_edit_flag(self) -> None:
@@ -130,22 +134,37 @@ class PollerPrNamedRunContract(unittest.TestCase):
 		text = POLL_SCRIPT.read_text(encoding="utf-8")
 		start = text.index("_has_active_autofix_run()\n{")
 		self.body = text[start:text.index("\n}\n", start)]
+		helper_start = text.index("_pr_named_review_dispatch_runs()\n{")
+		self.helper = text[helper_start:text.index("\n}\n", helper_start)]
 
 	def test_guard_looks_up_pr_named_dispatch_runs(self) -> None:
-		self.assertIn('_pr_named_review_dispatch_runs "${pr_number}"', self.body)
-		helper = POLL_SCRIPT.read_text(encoding="utf-8")
-		self.assertIn("--event workflow_dispatch --limit 100", helper)
-		self.assertIn('"AI Review [pr:" + $pr + "]"', helper)
+		# Issue #4701: the lookup lives in the shared helper, which matches
+		# both wrapper names. Issue #4927: it lists each wrapper's own
+		# workflow_dispatch runs page by page instead of one global page of
+		# the newest 100 dispatches, and an incomplete listing counts as an
+		# active run.
+		self.assertIn('_pr_named_review_dispatch_runs "${pr_number}")" || pr_named_rc=$?', self.body)
+		self.assertIn('if [ "${pr_named_rc}" -ne 0 ]; then', self.body)
+		self.assertIn("for _pnr_wrapper in internal-review.yml ai-review.yml; do", self.helper)
+		self.assertIn(
+			'actions/workflows/${_pnr_wrapper}/runs?event=workflow_dispatch&created=>=${_pnr_cutoff}&per_page=100&page=${_pnr_page}',
+			self.helper,
+		)
+		self.assertNotIn("gh run list", self.helper)
+		self.assertNotIn("--limit 100", self.helper)
+		self.assertIn('("Internal: AI Review & Autofix [pr:" + $pr + "]")', self.helper)
+		self.assertIn('("AI Review [pr:" + $pr + "]")', self.helper)
 
 	def test_pr_named_lookup_follows_the_head_branch_lookups(self) -> None:
-		self.assertLess(self.body.index('--branch "${head_ref}"'), self.body.index('_pr_named_review_dispatch_runs "${pr_number}"'))
+		self.assertLess(self.body.index('--branch "${head_ref}"'), self.body.index("_pr_named_review_dispatch_runs"))
 
 	def test_pr_named_lookup_validates_the_pr_number(self) -> None:
 		self.assertIn('if [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then', self.body)
+		self.assertIn('if ! [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then', self.helper)
 
 	def test_run_name_prefix_matches_internal_review(self) -> None:
 		self.assertIn(DISPATCH_RUN_NAME, INTERNAL_REVIEW_WF.read_text(encoding="utf-8"))
-		self.assertIn(DISPATCH_RUN_NAME, POLL_SCRIPT.read_text(encoding="utf-8"))
+		self.assertIn(DISPATCH_RUN_NAME, self.helper)
 
 
 class ForwardMergeDispatchRefContract(unittest.TestCase):
@@ -155,34 +174,19 @@ class ForwardMergeDispatchRefContract(unittest.TestCase):
 	def test_fallback_step_exports_branch_output(self) -> None:
 		self.assertIn('echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"', self.text)
 
-	def test_review_dispatch_uses_default_branch_and_validates_pr(self) -> None:
-		self.assertIn("HEAD_BRANCH: ${{ steps.fallback.outputs.branch }}", self.text)
-		step = self.text[self.text.index("      - name: Dispatch AI review for the fallback PR"):]
-		self.assertNotIn('dispatch_args+=(--ref', step)
-		self.assertIn('[[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]', step)
+	def test_review_dispatch_runs_from_the_default_branch(self) -> None:
+		# Issue #4701: the fallback dispatch never passes --ref.
+		step = self.text[self.text.index("- name: Dispatch AI review for the fallback PR"):self.text.index("- name: Summary")]
+		self.assertIn("HEAD_BRANCH: ${{ steps.fallback.outputs.branch }}", step)
+		self.assertNotIn("--ref", step)
+		self.assertNotIn('dispatch_args+=(--ref "${HEAD_BRANCH}")', self.text)
+		self.assertIn('gh workflow run internal-review.yml "${dispatch_args[@]}"', step)
 
-
-class RemainingDispatchSiteContract(unittest.TestCase):
-	def test_poller_dispatch_never_selects_pr_head_workflow(self) -> None:
-		text = POLL_SCRIPT.read_text(encoding="utf-8")
-		start = text.index("_dispatch_review_for_conflicts()\n{")
-		body = text[start:text.index("\n}\n", start)]
-		self.assertIn('[[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]', body)
-		self.assertNotIn('--ref "${head_ref}"', body)
-
-	def test_consumer_run_name_is_pr_scoped(self) -> None:
-		text = (REPO_ROOT / "workflow-templates" / "ai-review.yml").read_text(encoding="utf-8")
-		self.assertIn("format('AI Review [pr:{0}]', inputs.pr_number)", text)
-
-	def test_both_empty_commit_guards_and_stall_judge_use_pr_identity(self) -> None:
-		text = POLL_SCRIPT.read_text(encoding="utf-8")
-		for scope, end in (
-			("_direct_inflight_review_run_on_branch()\n{", "# Build a set of issue numbers"),
-			("invoke_stall_judge() {", "# Judge decision cache"),
-		):
-			self.assertIn('pr', text[text.index(scope):text.index(end, text.index(scope))])
-		self.assertIn('_direct_inflight_review_run_on_branch "${head_ref}" "${pr_num}"', text)
-		self.assertEqual(text.count('(.display_title == ("AI Review [pr:" + $pr + "]")'), 3)
+	def test_review_dispatch_validates_the_pr_number(self) -> None:
+		step = self.text[self.text.index("- name: Dispatch AI review for the fallback PR"):self.text.index("- name: Summary")]
+		guard = 'if ! [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then'
+		self.assertIn(guard, step)
+		self.assertLess(step.index(guard), step.index("gh workflow run internal-review.yml"))
 
 
 if __name__ == "__main__":

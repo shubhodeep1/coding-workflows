@@ -73,13 +73,9 @@ declare -A _AI_LABEL_COLORS=(
 	["ai:check-triage-escalated"]="b60205"
 	["ai:workflow-heal"]="d876e3"
 	["ai:workflow-heal-escalated"]="b60205"
-	["ai:claude"]="7057ff"
+	["ai:operator-step"]="fbca04"
 	["ai:codex"]="0e8a16"
-	["ai:claude-handoff-failed"]="b60205"
-	["ai:claude-blocked"]="b60205"
-	["ai:claude-issue-queue"]="5319e7"
-	["ai:claude-issue-queue-stale"]="b60205"
-	["ai:permission-prompt"]="c5def5"
+	["ai:engine-claude"]="d4c5f9"
 )
 
 declare -A _AI_LABEL_DESCS=(
@@ -135,13 +131,9 @@ declare -A _AI_LABEL_DESCS=(
 	["ai:check-triage-escalated"]="Check-failure auto-fix chain hit the lineage cap; needs human attention"
 	["ai:workflow-heal"]="Issue auto-filed from an escalated workflow failure by workflow failure heal"
 	["ai:workflow-heal-escalated"]="Workflow failure heal chain hit the lineage cap; needs human attention"
-	["ai:claude"]="Standalone issue implemented by Claude Code (claimed by the Claude issue implementer)"
+	["ai:operator-step"]="Steps only a person can take; the pipeline continues and the gated work stays off until they are done"
 	["ai:codex"]="Per-issue switch: implement this standalone issue with the Codex pipeline instead of Claude"
-	["ai:claude-handoff-failed"]="Claude issue handoff failed; comment /reclarify to retry or add ai:codex to switch"
-	["ai:claude-blocked"]="Claude issue session stopped on a hard blocker; see the latest issue comment"
-	["ai:claude-issue-queue"]="Queue item for the Claude issue pickup (coding-workflows only; opened by the intake, closed by the pickup)"
-	["ai:claude-issue-queue-stale"]="Claude issue queue item nobody picked up in time; restart the pickup with /claude-issue-pickup start — restart"
-	["ai:permission-prompt"]="A Claude Code session stopped at a permission prompt or Auto-mode denial (coding-workflows only; filed by permission_prompts.py)"
+	["ai:engine-claude"]="Run every model role of this work on Claude (Opus 5.5, high effort); ai:codex wins when both are set"
 )
 
 _AI_PHASE_LABELS='["ai:done","ai:implementing","ai:awaiting-approval","ai:planning","ai:clarification","ai:validating","ai:validated","ai:validation-failed","ai:validation-fixing","ai:validation-recovery","ai:security-pass","ai:security-pass-fixing","ai:security-pass-failed","ai:ready-to-merge","ai:needs-human","ai:blocked","ai:review-blocked","ai:implementation-failed","ai:merged","ai:closed"]'

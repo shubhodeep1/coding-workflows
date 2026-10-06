@@ -53,6 +53,19 @@ Copy this block when adding a new entry:
 
 ## Entries
 
+### `scripts/sync_claude_live_copies.py` + `.github/workflows/sync-claude-live-copies.yml`
+
+- **Introduced in:** #6118 (2026-10-05)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `gh api 'repos/shubhodeep1/coding-workflows/actions/workflows/sync-claude-live-copies.yml/runs?status=in_progress&per_page=1' --jq '.total_count'` returns `0` (no live-copy sync run is still active).
+  - `gh api 'repos/shubhodeep1/coding-workflows/pulls?state=open&head=shubhodeep1:ai/sync-claude-live-copies&per_page=100'` returns `[]` (no unmerged live-copy sync PR).
+  - `PYTHONDONTWRITEBYTECODE=1 python3 scripts/sync_claude_live_copies.py check` exits 0 on the default branch (no template/live drift at removal time).
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_template_live_parity.py` passes (the parity guard remains effective or has a tested replacement).
+  - `rg -n 'sync_claude_live_copies\.py' .github/workflows scripts --glob '!scripts/sync_claude_live_copies.py'` shows no remaining caller after a replacement for the push-to-main sync has been wired in and verified.
+- **Owner:** @shubhodeep1
+
 ### `scripts/workflow_failure_heal_report.sh` + `scripts/workflow_failure_heal_autofix_report.sh` + `scripts/workflow_failure_heal_intake.sh` + `scripts/workflow_failure_heal.py` + `.github/workflows/workflow_failure_heal.yml` + `.github/workflows/workflow-failure-heal-intake.yml`
 
 - **Introduced in:** #4165 (2026-09-20)
@@ -213,25 +226,3 @@ Copy this block when adding a new entry:
   - `rg -n 'opencode|OPENCODE_' .github/workflows .github/actions scripts` confirms no remaining OpenCode runtime references before the helper is removed.
 - **Owner:** @shubhodeep1
 
-### `.claude/commands/claude-issue-pickup.md` (Claude issue pickup session)
-
-- **Introduced in:** #4531 (2026-09-26)
-- **Type:** supervisor
-- **Removal trigger:** when a claude.ai routine run (or another automatic session start) gets the claude-code-remote tools (`create_session`, `send_later`), so the intake can start implementation sessions directly again; otherwise permanent — review annually.
-- **Removal preflight checks:**
-  - A replacement start path is live: an issue routed to Claude gets its `/implement-issue-claude` session (progress comment `<!-- ai:claude-issue-progress:v1 -->` plus a `claude/implement-plan-issue-<N>-*` branch) without an `ai:claude-issue-queue` item.
-  - `gh api "repos/shubhodeep1/coding-workflows/issues?labels=ai:claude-issue-queue&state=open"` returns `[]` (nothing is waiting for the pickup).
-  - `/claude-issue-pickup stop` reports its trigger deleted, and `list_triggers` shows no enabled `Claude issue pickup: hourly` or `Claude issue pickup: catch-up` trigger.
-  - `scripts/claude_issue_intake.sh` no longer opens queue issues (`rg -n 'queue-issue' scripts/claude_issue_intake.sh` returns nothing).
-- **Owner:** @shubhodeep1
-
-### `.github/workflows/claude-issue-queue-watchdog.yml` + `scripts/claude_issue_queue_watchdog.sh`
-
-- **Introduced in:** #4531 (2026-09-26)
-- **Type:** long-running
-- **Removal trigger:** together with the Claude issue pickup above (it only watches the pickup's queue).
-- **Removal preflight checks:**
-  - The pickup entry above has been removed, i.e. its preflight checks passed.
-  - `gh api "repos/shubhodeep1/coding-workflows/issues?labels=ai:claude-issue-queue&state=all&per_page=1"` shows no queue item created after the removal of the queue path.
-  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_claude_issue_route.py` returns exit code 0 after the watchdog tests are removed with it.
-- **Owner:** @shubhodeep1
