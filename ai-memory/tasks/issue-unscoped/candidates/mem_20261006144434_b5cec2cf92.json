@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_plan_clarify_blocked_output.py:356 | severity=critical | confidence=[5]\n  flagged_by: [z-ai_glm-5_2]\n  PROBLEM: The test assertion expects a heredoc command substring that does not exist in the runner script, so the test fails.\n  WHY: When pytest runs this test, the `assert ... in runner` check fails because the expected substring is not present in the file content.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_plan_clarify_blocked_output.py:356 | severity=BLOCKER | confidence=5\n  PROBLEM: The assertion checks for a substring that does not exist in the script file. The test asserts `'PYTHONDONTWRITEBYTECODE=1 python3 - \"${run_root}/source\" <<\\'PY\\' || exit 76' in runner`, but the actual line 61 of scripts/clarify_isolated_run.sh is `PYTHONDONTWRITEBYTECODE=1 python3 - \"${run_root}/source\" \"${CLARIFY_ISOLATION_SUPPORT_DIR:-}\" <<'PY' || exit 76`. The assertion string omits the `\"${CLARIFY_ISOLATION_SUPPORT_DIR:-}\"` argument that sits between `\"${run_root}/source\"` and `<<'PY'`, so the substring check will fail.\n  WHY: When pytest runs this test, the `assert ... in runner` check fails because the expected substring is not present in the file content. CI will report a test failure for test_clarify_isolated_docker_commands_strip_runner_secrets.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "1f4088dbe0c7a613cd7924eaa9629157b85169d7deaac03a8462fa3945bb0263",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6498,
+    "run_id": "37471858350",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37471858350",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006144434_b5cec2cf92",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6498,
+    "run_id": "37471858350"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T14:44:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
