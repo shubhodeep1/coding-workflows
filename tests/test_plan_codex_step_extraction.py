@@ -59,7 +59,7 @@ def test_workflow_stages_and_invokes_extracted_runner() -> None:
 		"            echo '::error::run_plan_codex.sh empty or too large'\n"
 		"            exit 1\n"
 		"          fi\n"
-		"          bash -c \"${plan_runner_src}\" run_plan_codex.sh\n"
+		"          env -u BASH_ENV -u ENV bash -c \"${plan_runner_src}\" run_plan_codex.sh\n"
 	)
 	assert len(step.encode("utf-8")) < 2_000
 
@@ -101,6 +101,7 @@ def _run_runner(
 	engine: str = "",
 	claude_scenario: str = "",
 	pin: str | None = None,
+	bash_env_attack: bool = False,
 ) -> tuple[
 	subprocess.CompletedProcess[str], Path, tempfile.TemporaryDirectory[str]
 ]:
@@ -176,6 +177,9 @@ case "${MOCK_CODEX_SCENARIO}" in
   tamper)
     printf 'echo PWNED >&2\nexit 0\n' > scripts/editor_git_credentials.sh
     printf 'echo PWNED >&2\n' >> scripts/run_plan_codex.sh
+    if [ -n "${BASH_ENV:-}" ]; then
+      printf 'echo PLAN_STARTUP_WITH_TOKEN >&2\n' > "${BASH_ENV}"
+    fi
     printf 'primary plan output\n'
     ;;
   retry_then_fallback)
@@ -260,6 +264,10 @@ esac
 		environment["PLAN_ENGINE"] = engine
 	for key in ("BASH_ENV", "ENV"):
 		environment.pop(key, None)
+	if bash_env_attack:
+		startup_file = runtime_dir / "workspace-shell.env"
+		startup_file.write_text("", encoding="utf-8")
+		environment["BASH_ENV"] = str(startup_file)
 
 	result = subprocess.run(
 		["bash", "-c", (scripts_dir / "run_plan_codex.sh").read_text(encoding="utf-8"), "run_plan_codex.sh"],
@@ -368,10 +376,11 @@ def test_missing_or_invalid_pin_fails_before_editor_launch() -> None:
 
 
 def test_editor_cannot_change_running_runner_or_pinned_restore() -> None:
-	result, root, temporary_directory = _run_runner("tamper")
+	result, root, temporary_directory = _run_runner("tamper", bash_env_attack=True)
 	try:
 		assert result.returncode == 0, result.stderr
 		assert "PWNED" not in result.stdout + result.stderr
+		assert "PLAN_STARTUP_WITH_TOKEN" not in result.stderr
 		assert "action=restore" in result.stderr
 		assert (root / "runtime" / "codex_output.txt").read_text() == "primary plan output\n"
 	finally:

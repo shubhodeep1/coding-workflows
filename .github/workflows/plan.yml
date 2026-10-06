@@ -1257,7 +1257,7 @@ jobs:
             echo '::error::run_plan_codex.sh empty or too large'
             exit 1
           fi
-          bash -c "${plan_runner_src}" run_plan_codex.sh
+          env -u BASH_ENV -u ENV bash -c "${plan_runner_src}" run_plan_codex.sh
 
       - name: Enforce plan write guard
         if: env.SKIP_PLAN != 'true'

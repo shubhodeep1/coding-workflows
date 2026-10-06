@@ -357,8 +357,13 @@ def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
 	for step_name in ("Run Codex implementation", "Attempt post-Codex syntax repair", "Restore git credentials after syntax repair"):
 		step = implement.split(f"      - name: {step_name}\n", 1)[1].split("      - name: ", 1)[0]
 		assert "EDITOR_GIT_CREDENTIALS_SHA256: ${{ steps.stage_support.outputs.editor_git_credentials_sha256 }}" in step
-		assert 'bash -c "${EDITOR_GIT_CREDENTIALS_SCRIPT}" editor_git_credentials.sh "$@"' in step
+		assert 'env -u BASH_ENV -u ENV bash -c "${EDITOR_GIT_CREDENTIALS_SCRIPT}" editor_git_credentials.sh "$@"' in step
 		assert "reason=pinned_helper_unavailable" in step
+	for step_name in ("Attempt post-Codex syntax repair", "Restore git credentials after syntax repair"):
+		step = implement.split(f"      - name: {step_name}\n", 1)[1].split("      - name: ", 1)[0]
+		assert "BASH_ENV: ''" in step
+		assert 'cd "${WORKSPACE_PATH}"' in step
+	assert 'env -u BASH_ENV -u ENV bash -c "${EDITOR_GIT_CREDENTIALS_SCRIPT}"' in (ROOT / "scripts" / "run_plan_codex.sh").read_text()
 	assert "--format structured" in implement
 	assert "--format structured" in (ROOT / "scripts" / "run_plan_codex.sh").read_text()
 	assert "--format structured" not in (WORKFLOWS / "clarify.yml").read_text()
@@ -408,18 +413,24 @@ def test_post_repair_restore_ignores_tampered_editor_writable_copies(tmp_path: P
 	(scripts / "editor_git_credentials.sh").write_text(attack_body)
 	(runtime / "editor_git_credentials.sh").write_text(attack_body)
 	(support / "editor_git_credentials.sh").write_text(safe_body)
-	env = dict(os.environ, IMPLEMENT_STAGED_SUPPORT_RUN_DIR=str(runtime),
+	startup_file = tmp_path / "workspace-shell.env"
+	startup_file.write_text("echo STARTUP_WITH_TOKEN >&2\n")
+	env = dict(os.environ, WORKSPACE_PATH=str(tmp_path), IMPLEMENT_STAGED_SUPPORT_RUN_DIR=str(runtime),
 		EDITOR_GIT_CREDENTIALS_SHA256=hashlib.sha256(safe_body.encode()).hexdigest())
 	for key in ("BASH_ENV", "ENV"):
 		env.pop(key, None)
-	result = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True)
+	# Simulate a tampered startup file after the host step's clean Bash has started.
+	command = f'export BASH_ENV="{startup_file}"; ' + script
+	result = subprocess.run(["bash", "-c", command], cwd=tmp_path, env=env, capture_output=True, text=True)
 	assert result.returncode == 0, result.stderr
 	assert result.stdout.strip() == "SAFE_RESTORE"
+	assert "STARTUP_WITH_TOKEN" not in result.stderr
 	(support / "editor_git_credentials.sh").write_text(attack_body)
-	result = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True)
+	result = subprocess.run(["bash", "-c", command], cwd=tmp_path, env=env, capture_output=True, text=True)
 	assert result.returncode != 0
 	assert "reason=pinned_helper_unavailable" in result.stderr
 	assert "PWNED" not in result.stdout + result.stderr
+	assert "STARTUP_WITH_TOKEN" not in result.stderr
 
 
 def test_review_workspace_accepts_only_the_known_helper_path() -> None:

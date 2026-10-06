@@ -292,7 +292,7 @@ if [ -z "${_egc_src}" ]; then
   exit 1
 fi
 EDITOR_GIT_CREDENTIALS_SCRIPT="${_egc_src}"
-editor_git_credentials() { bash -c "${EDITOR_GIT_CREDENTIALS_SCRIPT}" editor_git_credentials.sh "$@"; }
+editor_git_credentials() { env -u BASH_ENV -u ENV bash -c "${EDITOR_GIT_CREDENTIALS_SCRIPT}" editor_git_credentials.sh "$@"; }
 
 max_attempts=3
 trap 'editor_git_credentials restore' EXIT

@@ -242,6 +242,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
     Plan and implement pin the staged credential helper's hash before the editor,
     then run matching bytes from shell memory; plan also runs its editor runner
     from memory so in-place changes cannot alter its post-editor restore.
+    Pinned helper Bash processes drop `BASH_ENV`/`ENV`, and the syntax-repair
+    and post-repair restore steps start with `BASH_ENV` unset; an editor-written
+    workspace startup file cannot run before those credentialed steps.
     Heal-evidence implement runs pin the issue/plan scope allowlist before the
     editor; preflight and commit ignore scope bypass variables and block empty
     allowlists. This is not a same-uid process isolation boundary.

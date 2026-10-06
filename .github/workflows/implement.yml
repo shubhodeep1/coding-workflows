@@ -2742,7 +2742,7 @@ jobs:
               exit 1
             fi
             EDITOR_GIT_CREDENTIALS_SCRIPT="${_egc_src}"
-            editor_git_credentials() { bash -c "${EDITOR_GIT_CREDENTIALS_SCRIPT}" editor_git_credentials.sh "$@"; }
+            editor_git_credentials() { env -u BASH_ENV -u ENV bash -c "${EDITOR_GIT_CREDENTIALS_SCRIPT}" editor_git_credentials.sh "$@"; }
 
             trap 'editor_git_credentials restore' EXIT
 
@@ -3773,11 +3773,13 @@ jobs:
         id: post_codex_syntax_repair
         continue-on-error: true
         env:
+          BASH_ENV: ''
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           EDITOR_GIT_CREDENTIALS_SHA256: ${{ steps.stage_support.outputs.editor_git_credentials_sha256 }}
         run: |
           set -euo pipefail
+          cd "${WORKSPACE_PATH}"
           _egc_pin="${EDITOR_GIT_CREDENTIALS_SHA256:-}"
           _egc_src=""
           if [[ "${_egc_pin}" =~ ^[0-9a-f]{64}$ ]]; then
@@ -3795,7 +3797,7 @@ jobs:
             exit 1
           fi
           EDITOR_GIT_CREDENTIALS_SCRIPT="${_egc_src}"
-          editor_git_credentials() { bash -c "${EDITOR_GIT_CREDENTIALS_SCRIPT}" editor_git_credentials.sh "$@"; }
+          editor_git_credentials() { env -u BASH_ENV -u ENV bash -c "${EDITOR_GIT_CREDENTIALS_SCRIPT}" editor_git_credentials.sh "$@"; }
           echo "repaired=false" >> "$GITHUB_OUTPUT"
 
           # Source sanitize_codex_prompt_file (best-effort) so the
@@ -4297,10 +4299,12 @@ jobs:
       - name: Restore git credentials after syntax repair
         if: always() && env.SKIP_IMPLEMENT != 'true' && steps.post_codex_syntax_repair.outcome != 'skipped'
         env:
+          BASH_ENV: ''
           GH_TOKEN: ${{ secrets.GH_PAT }}
           EDITOR_GIT_CREDENTIALS_SHA256: ${{ steps.stage_support.outputs.editor_git_credentials_sha256 }}
         run: |
           set -euo pipefail
+          cd "${WORKSPACE_PATH}"
           _egc_pin="${EDITOR_GIT_CREDENTIALS_SHA256:-}"
           _egc_src=""
           if [[ "${_egc_pin}" =~ ^[0-9a-f]{64}$ ]]; then
@@ -4318,7 +4322,7 @@ jobs:
             exit 1
           fi
           EDITOR_GIT_CREDENTIALS_SCRIPT="${_egc_src}"
-          editor_git_credentials() { bash -c "${EDITOR_GIT_CREDENTIALS_SCRIPT}" editor_git_credentials.sh "$@"; }
+          editor_git_credentials() { env -u BASH_ENV -u ENV bash -c "${EDITOR_GIT_CREDENTIALS_SCRIPT}" editor_git_credentials.sh "$@"; }
           editor_git_credentials restore
 
       - name: Protect workflow files from implementation edits

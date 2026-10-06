@@ -1505,6 +1505,13 @@ through `clarify → plan → implement → review`.
   the origin still names the workflow's original repository (or its trusted
   support checkout) and its push URL agrees, not an editor-changed GitHub destination;
   generic GitHub extraheaders are restored scoped to the verified origin only.
+  Plan and implement pin the staged helper's SHA-256 before the editor, execute
+  matching bytes from shell memory and fail closed if none remain. Helper Bash
+  processes ignore `BASH_ENV`/`ENV`; implementation's post-editor repair and
+  restore steps also start without `BASH_ENV`, so an editor-written workspace
+  startup file cannot execute before these steps handle credentials. Planning
+  runs its editor runner from memory to prevent in-place edits from changing
+  its post-editor restore path.
   Implement runs with heal evidence also pin the issue/plan file allowlist
   before the editor and block out-of-scope commits even when the normal guard
   or per-run override is disabled. This is not a process isolation boundary:
