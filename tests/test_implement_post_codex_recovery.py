@@ -79,9 +79,12 @@ def test_review_commit_paths_exclude_generated_manifest() -> None:
 	pathspec = "':!.ai/.workspace_source_manifest.txt'"
 	review = (REPO_ROOT / "scripts" / "review_commit_changes.sh").read_text(encoding="utf-8")
 	judge = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
+	resolver = (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
 	assert all(pathspec in line for line in review.splitlines() if "git add -u --" in line or "git ls-files --others --exclude-standard -z -- ':!node_modules'" in line)
 	assert "node_modules/*|.ai/.workspace_source_manifest.txt) continue" in review
 	assert all(pathspec in line for line in judge.splitlines() if "git add -u --" in line)
+	assert "git add -u -- ':!node_modules'" in resolver
+	assert all(pathspec in line for line in resolver.splitlines() if line.lstrip().startswith(("git add -u --", "git ls-files --others --exclude-standard -z -- ':!node_modules'")))
 
 
 def _implement_guard_handler_text() -> str:
@@ -5522,7 +5525,11 @@ def main() -> int:
 	for func in test_funcs:
 		name = func.__name__
 		try:
-			func()
+			if func is test_generated_manifest_staging_excludes_modifications_but_accepts_deletion:
+				with tempfile.TemporaryDirectory() as tmp_dir:
+					func(Path(tmp_dir))
+			else:
+				func()
 			print(f"  PASS  {name}")
 			passed += 1
 		except Exception as e:

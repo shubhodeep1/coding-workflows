@@ -353,6 +353,7 @@ def main() -> int:
 		test_metadata_miss_sets_created_now_true,
 		test_metadata_rejects_workspace_escape_key,
 		test_finalize_refreshes_source_tree_and_preserves_extra_state,
+		test_finalize_without_committed_manifest_keeps_new_workspace_files_and_prunes_old_inventory,
 	):
 		_run_tmp_path_case(case_fn)
 	test_implement_workflow_stages_workspace_helper_and_orders_restore_keys()

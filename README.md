@@ -1121,7 +1121,8 @@ not delete wrappers that are already present in `.github/workflows/`.
 > prefixes) no longer hide a nested `git push`: the guard checks the session
 > checkout and, if it does not block, asks for confirmation because the
 > effective directory is uncertain. A `git commit` in the same uncertain
-> context remains warning-only.
+> context remains warning-only. An env-wrapped commit whose directory cannot
+> be resolved instead asks without querying PR history from the wrong checkout.
 > When a `git push` source cannot be resolved locally (for example,
 > a shell-expanded source), the merged-PR guard asks for confirmation rather
 > than using the session checkout as a substitute for the pushed commit.

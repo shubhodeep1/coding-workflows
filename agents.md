@@ -15,7 +15,8 @@ its consumer template) recognizes guarded git commands after nested control
 words, shell negation (`!`), and simple `case` arms. Since their effective
 directory is uncertain, pushes check the session checkout and request
 confirmation unless blocked; commits in that context remain warning-only
-when not blocked.
+when not blocked, except unresolved env-wrapped commit directories request
+confirmation without checking the session checkout.
 
 ---
 

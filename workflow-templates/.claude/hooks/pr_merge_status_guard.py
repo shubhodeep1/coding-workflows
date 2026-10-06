@@ -191,6 +191,7 @@ class _GitInvocation(NamedTuple):
 	arguments: list[str]
 	warning: str = ""
 	config_override: bool = False
+	env_wrapped: bool = False
 
 
 class _GuardTarget(NamedTuple):
@@ -481,7 +482,8 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				invocations.append(_GitInvocation(checkout, {}, "push", [], "unparsed env wrapper", True))
 			continue
 		env_cwd = working_directory
-		if index != env_index:
+		env_wrapped = index != env_index
+		if env_wrapped:
 			config_override = True
 			for position in range(env_index + 1, index):
 				word = tokens[position]
@@ -541,6 +543,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			tokens[index], tokens[index + 1:],
 			"could not resolve git command directory; checking the session checkout instead" if uncertain else "",
 			config_override,
+			env_wrapped,
 		))
 	return invocations
 
@@ -1488,10 +1491,14 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	bulk_reasons: list[str] = []
 	unverified_destinations: set[str] = set()
 	uncertain_push_reasons: list[str] = []
+	unresolved_env_commit_directories: list[str] = []
 	unknown_destination_reasons: list[str] = []
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
+		if invocation.subcommand == "commit" and invocation.warning and invocation.env_wrapped:
+			unresolved_env_commit_directories.append("could not resolve env-wrapped git commit directory")
+			continue
 		if invocation.subcommand == "push" and invocation.warning == "unparsed env wrapper":
 			unverified_destinations.add("unparsed env-wrapped Git command")
 			continue
@@ -1608,6 +1615,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			"checked the session checkout instead"
 		)
 	confirmation_reasons.extend(unresolved_push_sources)
+	confirmation_reasons.extend(unresolved_env_commit_directories)
 	confirmation_reasons.extend(unresolved_push_destinations)
 	confirmation_reasons.extend(unknown_destination_reasons)
 	if bulk_reasons:

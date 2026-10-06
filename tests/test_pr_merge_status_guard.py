@@ -1432,6 +1432,15 @@ def test_env_unresolved_commit_directory_asks_instead_of_checking_checkout(merge
 	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
 
 
+def test_non_env_uncertain_configured_commit_keeps_warning_only_behavior(merged_branch_repo, monkeypatch, capsys) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: [])
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "if true; then git -c user.name=bot commit -m x"}})
+	assert code == 0 and message == ""
+	assert "permissionDecision" not in capsys.readouterr().out
+
+
 def test_env_chdir_does_not_change_subsequent_command_directory(merged_branch_repo, monkeypatch) -> None:
 	repo, _ = merged_branch_repo
 	other = repo.parent / "open-worktree"
