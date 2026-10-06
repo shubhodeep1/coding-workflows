@@ -11,7 +11,7 @@ CONTAINER_IMPORT_AUDIT="${CONTAINER_IMPORT_AUDIT:-/workspace/out/tests/_lib/impo
 echo "1..1"
 
 set +e
-audit_output="$(docker compose -f "${COMPOSE_FILE}" exec -T "${APP_SERVICE}" /bin/sh -c "python3 ${CONTAINER_IMPORT_AUDIT}" 2>&1)"
+audit_output="$(docker compose -f "${COMPOSE_FILE}" exec -T "${APP_SERVICE}" python3 "${CONTAINER_IMPORT_AUDIT}" 2>&1)"
 audit_rc=$?
 set -e
 
