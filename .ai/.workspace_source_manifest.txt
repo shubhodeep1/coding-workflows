@@ -220,11 +220,16 @@ changelog.d/6230-security-audit-oversized-scoped-files.md
 changelog.d/6231-integration-judge-scope-guard.md
 changelog.d/6248-static-context-symlink-guard.md
 changelog.d/6249-merge-guard-ampersand-redirect.md
+changelog.d/6254-pr-tree-python-safe-path.md
 changelog.d/6262-clarify-respond-standalone.md
+changelog.d/6272-review-static-readme-nofollow.md
 changelog.d/6286-pr-merge-guard-appended-git-dir.md
+changelog.d/6289-merge-guard-redirected-cd-exit.md
+changelog.d/6290-review-overlay-trusted-source.md
 changelog.d/6293-numeric-push-refspec-redirect.md
 changelog.d/6296-check-triage-trusted-prompts.md
 changelog.d/6304-pr-merge-guard-spaced-numeric-refspec.md
+changelog.d/6308-review-host-python-safe-path.md
 changelog.d/6321-merge-guard-empty-quote-fd.md
 changelog.d/6322-pr-merge-guard-single-json-output.md
 changelog.d/6323-check-triage-isolated-diagnosis.md
@@ -248,6 +253,7 @@ changelog.d/6402-triage-host-python-isolation.md
 changelog.d/6403-triage-check-name-neutralize.md
 changelog.d/6404-claude-live-sync-pr-provenance.md
 changelog.d/6420-release-gate-claude-parity.md
+changelog.d/6436-triage-omit-pr-agent-instructions.md
 changelog.d/autofix-cap-and-security-exhaustion-judge.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/release-smoke-run-lookup.md
@@ -940,12 +946,14 @@ tests/test_review_conflict_resolve_smoke_deterministic.py
 tests/test_review_dispatch_default_branch.py
 tests/test_review_editor_fifo_drain.py
 tests/test_review_floor_rules.py
+tests/test_review_host_python_safe_path.py
 tests/test_review_issue_ledger.py
 tests/test_review_judge_interim_round_trip.py
 tests/test_review_ledger_cache_path_stability.py
 tests/test_review_merge_train.py
 tests/test_review_parse_consolidator.py
 tests/test_review_pipeline_integration.py
+tests/test_review_pr_tree_python_isolation.py
 tests/test_review_rb_judge_label_propagation.py
 tests/test_review_rb_judge_reference_staging.py
 tests/test_review_rb_judge_reissue_baseline.py
@@ -956,6 +964,7 @@ tests/test_review_rereview_and_approval_rubric.py
 tests/test_review_resolve_review_threads.py
 tests/test_review_reviewer_attempt_prompt_isolation.py
 tests/test_review_semble_contract.py
+tests/test_review_static_context_readme.py
 tests/test_review_surface_prompt_hardening.py
 tests/test_review_synthesise_smoke.py
 tests/test_run_substate_ledger.py
