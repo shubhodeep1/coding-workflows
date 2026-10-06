@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: `scripts/security_pass_skip.py` already left `ai:check-triage` out of `SKIP_LABEL_MARKERS` (the comment at lines 61-63, finding `triage-issue-launders-security-pass-exemption`). The reason was that owner-filed issues built from logs contributors can influence don't show a fix is safe. `ai:workflow-heal` at line 66 has the same problem: three of its four intake sources (default-branch `CI`, `autofix_failure`, consumer `repository_dispatch`) come from logs contributors can influence, and the only check is the `workflow-failure-heal:fp=` marker, which doesn't record where the issue came from. Option A fails closed, needs no new marker or provenance check that would itself have to be trusted, and follows the existing precedent. B and C would add code to the intake and the checker that can also be bypassed, and C leaves two of the risky sources exempt.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/security_pass_skip.py (`SKIP_LABEL_MARKERS` at lines 64-67; the docstring at line 8 that lists `ai:workflow-heal`; the `ai:check-triage` exclusion comment at lines 61-63)\n    - tests covering `security_pass_skip.py` / `decide_security_pass_skip` (locate them with a grep for `security_pass_skip` or `ai:workflow-heal` under `tests/`)\n    - README.md row for `SINGLE_ISSUE_SECURITY_PASS_ENABLED`, and any agents.md or docs text that describes the heal-issue exemption\n    - a changelog fragment at `changelog.d/<issue>-workflow-heal-security-pass.md`\n  steps:\n    - Remove the `\"ai:workflow-heal\"` entry from `SKIP_LABEL_MARKERS`. Extend the comment above the table so it names `ai:workflow-heal` next to `ai:check-triage`, gives the reason (heal issues come from CI, autofix-failure and consumer-escalation logs that contributors can influence) and cites finding `ci-heal-skips-security-pass`.\n    - Update the module docstring (line 8 and the \"OWNER ... workflow-heal workflows\" wording at line 15) so it no longer lists `ai:workflow-heal` as a skip label.\n    - Change any existing test that expects a heal issue to skip, so it now expects `skip: False` with reason `no skip label`. Add a regression test: an OWNER-authored issue labelled `ai:workflow-heal` at creation, with a valid `<!-- workflow-failure-heal:fp=... -->` marker, does not skip.\n    - Keep the `ai:security` path and its tests unchanged.\n    - Update the docs that describe the exemption, and add the changelog fragment.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: Every heal-linked fix PR now goes through the single-issue security pass, so a contributor can no longer get unaudited code merged by shaping the logs a heal issue is built from. That is exactly what the finding asks for.\n  reversibility: If release and promotion heal fixes later need the fast path back, a follow-up can add a provenance marker written by the intake (as in option B) and re-add a narrowed entry for it. Nothing in this change prevents that.",
+  "fingerprint": "39f25864319c29dbbd443d5da866c0d3b0d7fb3f8e5bf213f58c16a1c600ebd5",
+  "lineage": {
+    "issue_number": 6486,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37413957818",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37413957818",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6486"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261006043727_1430cd7ae3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6486,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37413957818"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6486",
+  "timestamps": {
+    "created_at": "2026-10-06T04:37:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
