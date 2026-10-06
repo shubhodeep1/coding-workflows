@@ -269,9 +269,10 @@ codex_thread_reuse_record_session_from_marker()
 {
 	local state_key="${1:?state key required}"
 	local marker_file="${2:?marker file required}"
-	local session_root="${CODEX_THREAD_REUSE_SESSION_ROOT:-${HOME:-}/.codex/sessions}"
+	local session_root=""
 	local session_id=""
 
+	session_root="$(codex_thread_reuse_session_root)"
 	session_id="$(python3 - "${marker_file}" "${session_root}" "$(pwd)" <<'PY'
 from __future__ import annotations
 
@@ -459,6 +460,46 @@ EOF
 	printf '%s\n' "${wrapper_dir}"
 }
 
+# Launcher for one `codex` exec/resume. When CODEX_ISOLATED_EXEC names the
+# trusted copy of scripts/codex_isolated_exec.sh, Codex runs in the
+# credential-free, network-isolated container (CODEX_ISOLATED_MODE:
+# read-only | workspace, default read-only; CODEX_ISOLATED_ROOT: optional
+# persistent sandbox root from `codex_isolated_exec.sh prepare`). Sessions
+# then live in a host directory mounted as the container's CODEX_HOME, so
+# thread reuse keeps working. Without CODEX_ISOLATED_EXEC the host binary
+# runs, as before.
+codex_thread_reuse_isolated_home()
+{
+	printf '%s/isolated-codex-home\n' "$(codex_thread_reuse_ensure_runtime_root)"
+}
+
+codex_thread_reuse_launcher()
+{
+	local real_codex="${1:?real codex required}"
+
+	CODEX_THREAD_REUSE_LAUNCHER=()
+	if [ -z "${CODEX_ISOLATED_EXEC:-}" ]; then
+		CODEX_THREAD_REUSE_LAUNCHER=("${real_codex}")
+		return 0
+	fi
+	CODEX_THREAD_REUSE_LAUNCHER=(bash "${CODEX_ISOLATED_EXEC}" run --mode "${CODEX_ISOLATED_MODE:-read-only}")
+	if [ -n "${CODEX_ISOLATED_ROOT:-}" ]; then
+		CODEX_THREAD_REUSE_LAUNCHER+=(--root "${CODEX_ISOLATED_ROOT}")
+	fi
+	CODEX_THREAD_REUSE_LAUNCHER+=(--codex-home "$(codex_thread_reuse_isolated_home)" --)
+}
+
+codex_thread_reuse_session_root()
+{
+	if [ -n "${CODEX_THREAD_REUSE_SESSION_ROOT:-}" ]; then
+		printf '%s\n' "${CODEX_THREAD_REUSE_SESSION_ROOT}"
+	elif [ -n "${CODEX_ISOLATED_EXEC:-}" ]; then
+		printf '%s/sessions\n' "$(codex_thread_reuse_isolated_home)"
+	else
+		printf '%s/.codex/sessions\n' "${HOME:-}"
+	fi
+}
+
 codex_thread_reuse_run_once()
 {
 	local real_codex="${1:?real codex required}"
@@ -491,7 +532,8 @@ codex_thread_reuse_run_once()
 	local -a runner=()
 	local -a cmd=()
 
-	cmd=("${real_codex}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true)
+	codex_thread_reuse_launcher "${real_codex}"
+	cmd=("${CODEX_THREAD_REUSE_LAUNCHER[@]}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true)
 	if [ "${mode}" = 'resume' ]; then
 		cmd+=(exec resume)
 	else
@@ -617,7 +659,13 @@ codex_thread_reuse_claude_direct_run()
 		claude_session_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 		printf '%s\n' "${claude_session_id}" > "${id_file}"
 	fi
-	if [ -n "${continuation_file}" ] && compgen -G "${HOME}/.claude/projects/*/${claude_session_id}.jsonl" >/dev/null; then
+	# claude_run keeps the isolated CLI's sessions outside the container
+	# (ai_engine_claude_home); a resumable session gets the continuation prompt.
+	local claude_session_store="${HOME}/.claude"
+	if declare -F ai_engine_claude_home >/dev/null 2>&1; then
+		claude_session_store="$(ai_engine_claude_home)"
+	fi
+	if [ -n "${continuation_file}" ] && compgen -G "${claude_session_store}/projects/*/${claude_session_id}.jsonl" >/dev/null; then
 		claude_prompt="$(mktemp /tmp/codex_thread_reuse_claude_prompt.XXXXXX)"
 		if codex_thread_reuse_transform_prompt \
 			"${transform_mode}" \
@@ -859,8 +907,9 @@ codex_thread_reuse_wrapper_main()
 	if [ "${saw_exec}" != 'true' ]; then
 		exec "${real_codex}" "${prefix[@]}"
 	fi
+	codex_thread_reuse_launcher "${real_codex}"
 	if [ "${#suffix[@]}" -gt 0 ] && [ "${suffix[0]}" = 'resume' ]; then
-		exec "${real_codex}" "${prefix[@]}" exec "${suffix[@]}"
+		exec "${CODEX_THREAD_REUSE_LAUNCHER[@]}" "${prefix[@]}" exec "${suffix[@]}"
 	fi
 
 	prompt_file="$(mktemp /tmp/codex_thread_reuse_wrapper_prompt.XXXXXX)"
@@ -885,7 +934,7 @@ codex_thread_reuse_wrapper_main()
 			"${marker_end}"; then
 			capture_marker="$(codex_thread_reuse_begin_capture "${state_key}")"
 			set +e
-			"${real_codex}" "${prefix[@]}" exec resume "${suffix[@]}" "${resume_session_id}" - < "${transformed_prompt}"
+			"${CODEX_THREAD_REUSE_LAUNCHER[@]}" "${prefix[@]}" exec resume "${suffix[@]}" "${resume_session_id}" - < "${transformed_prompt}"
 			rc=$?
 			set -e
 			if [ "${rc}" -eq 0 ]; then
@@ -904,7 +953,7 @@ codex_thread_reuse_wrapper_main()
 		capture_marker="$(codex_thread_reuse_begin_capture "${state_key}")"
 	fi
 	set +e
-	"${real_codex}" "${prefix[@]}" exec "${suffix[@]}" < "${prompt_file}"
+	"${CODEX_THREAD_REUSE_LAUNCHER[@]}" "${prefix[@]}" exec "${suffix[@]}" < "${prompt_file}"
 	rc=$?
 	set -e
 	if [ "${reuse_available}" = 'true' ] && [ -n "${capture_marker}" ]; then

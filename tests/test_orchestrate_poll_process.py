@@ -19,9 +19,13 @@ import time
 import unittest
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 
 # Upper bound for a single poller invocation under test. The mocked poller
 # should complete in a few seconds; anything longer indicates a hang (e.g. an
@@ -60,7 +64,9 @@ def _git_test_env() -> dict[str, str]:
 	return env
 
 
-def _make_poller_sandbox(target: Path) -> None:
+def _make_poller_sandbox(
+	target: Path, origin_url: str = "https://github.com/test-harness/poller-sandbox.git",
+) -> None:
 	"""Populate ``target`` with a minimal copy of the coding-workflows tree
 	the poller expects at runtime and initialize a throwaway git repo
 	inside it.
@@ -187,7 +193,7 @@ def _make_poller_sandbox(target: Path) -> None:
 	subprocess.run(
 		[
 			"git", "-C", str(target), "remote", "add",
-			"origin", "https://github.com/test-harness/poller-sandbox.git",
+			"origin", origin_url,
 		],
 		check=True,
 		env=git_env,
@@ -705,6 +711,7 @@ def _run_poller(
 	fail_search_issues: bool = False,
 	search_issue_items: list[dict] | None = None,
 	prs: list[dict] | None = None,
+	pr_files_fail: bool = False,
 	pr_commits: dict[int, list[dict]] | None = None,
 	pr_api_sequence: dict[int, list[dict]] | None = None,
 	existing_branches: list[str] | None = None,
@@ -783,6 +790,8 @@ def _run_poller(
 	fail_security_pass_managed_issue_lookup: bool = False,
 	security_pass_managed_issue_pages_raw: str | None = None,
 	env_overrides: dict[str, str] | None = None,
+	# A coding-workflows origin skips the consumer artifact cleanup.
+	sandbox_origin_url: str | None = None,
 	mock_store_extra: dict | None = None,
 ) -> dict:
 	tracking_num = 192
@@ -863,8 +872,15 @@ def _run_poller(
 		home_dir = tmp / "home"
 		runtime_dir = tmp / "runtime"
 		store_file = tmp / "gh_store.json"
-		_make_poller_sandbox(sandbox)
+		if sandbox_origin_url:
+			_make_poller_sandbox(sandbox, sandbox_origin_url)
+		else:
+			_make_poller_sandbox(sandbox)
 		sandbox_sha_aliases = {
+			"@sandbox_head": subprocess.run(
+				["git", "-C", str(sandbox), "rev-parse", "HEAD"],
+				check=True, capture_output=True, text=True, env=_git_test_env(),
+			).stdout.strip(),
 			"__integration_head__": subprocess.run(
 				["git", "-C", str(sandbox), "rev-parse", "refs/heads/orchestrator/project-192"],
 				check=True,
@@ -939,6 +955,16 @@ def _run_poller(
 			}
 			for pr in prs
 		]
+		pr_api_sequence = {
+			pr_number: [
+				{
+					**snapshot,
+					**({"headSha": _resolve_sandbox_sha_alias(str(snapshot["headSha"]))} if "headSha" in snapshot else {}),
+				}
+				for snapshot in snapshots
+			]
+			for pr_number, snapshots in pr_api_sequence.items()
+		}
 		resolved_pull_ref_shas = {
 			str(pr_number): _resolve_sandbox_sha_alias(raw_sha)
 			for pr_number, raw_sha in pull_ref_shas.items()
@@ -1231,6 +1257,7 @@ def _run_poller(
 
 		gh_mock = r'''#!/usr/bin/env python3
 import json
+import os
 import re
 import subprocess
 import sys
@@ -2206,6 +2233,9 @@ if args[0] == 'api':
 		print(json.dumps(store.get('pr_commits', {}).get(m_commits.group(1), [])))
 		sys.exit(0)
 	if m_files:
+		if os.environ.get('MOCK_PR_FILES_FAIL') == 'true':
+			print('forced PR files failure', file=sys.stderr)
+			sys.exit(1)
 		pr_num = int(m_files.group(1))
 		pr = None
 		for item in store.get('prs', []):
@@ -2214,7 +2244,7 @@ if args[0] == 'api':
 				break
 		files = []
 		if pr is not None:
-			files = [{'filename': f} for f in pr.get('files', [])]
+			files = [f if isinstance(f, dict) else {'filename': f} for f in pr.get('files', [])]
 		if jq:
 			import subprocess as _sp
 			p = _sp.run(['jq', '-r', jq], input=json.dumps(files), capture_output=True, text=True)
@@ -2258,6 +2288,7 @@ if args[0] == 'api':
 		if pr is None:
 			print('{}')
 			sys.exit(0)
+		pr.setdefault('changed_files', len(next((item.get('files', []) for item in store.get('prs', []) if item.get('number') == pr_num), [])))
 		if any('application/vnd.github.diff' in arg for arg in args) and 'diff' in pr:
 			print(pr.get('diff', ''), end='')
 			sys.exit(0)
@@ -2316,6 +2347,7 @@ if args[0] == 'api':
 				'merged': pr.get('merged', False),
 				'merged_at': pr.get('merged_at', ('mock-merged-at' if pr.get('merged', False) else None)),
 				'merge_commit_sha': pr.get('merge_commit_sha'),
+				'changed_files': pr.get('changed_files', 0),
 				'labels': [{'name': label} for label in pr.get('labels', [])],
 				'title': pr.get('title', ''),
 				'body': pr.get('body', ''),
@@ -2325,6 +2357,10 @@ if args[0] == 'api':
 				'head': {
 					'sha': pr.get('headSha', f'mocksha{pr_num}'),
 					'ref': pr.get('headRefFromApi', pr.get('headRefName', '')),
+					'repo': (
+						None if pr.get('headRepoFullName', os.environ.get('GITHUB_REPOSITORY', 'owner/repo')) is None
+						else {'full_name': pr.get('headRepoFullName', os.environ.get('GITHUB_REPOSITORY', 'owner/repo'))}
+					),
 				},
 			}))
 		sys.exit(0)
@@ -2764,8 +2800,16 @@ from pathlib import Path
 
 store_path = Path(os.environ['GH_MOCK_STORE'])
 store = json.loads(store_path.read_text(encoding='utf-8'))
-args = sys.argv[1:]
+raw_args = sys.argv[1:]
 real_git = os.environ.get('REAL_GIT_BIN', 'git')
+# The poller's judge worktrees run `git -C <worktree> ...` (and `-c k=v`);
+# match on the subcommand that follows those global options, but keep them
+# for the real git call so the worktree stays the target.
+global_opts = []
+args = list(raw_args)
+while len(args) >= 2 and args[0] in ('-C', '-c'):
+	global_opts.extend(args[:2])
+	args = args[2:]
 
 if len(args) >= 2 and args[0] == 'merge-tree' and args[1] == '--write-tree' and '--name-only' in args:
 	paths = list(store.get('merge_tree_conflict_paths', []))
@@ -2782,8 +2826,28 @@ if len(args) >= 2 and args[0] == 'push' and os.environ.get('MOCK_GIT_PUSH_SUCCES
 	store_path.write_text(json.dumps(store), encoding='utf-8')
 	sys.exit(0)
 
+if args and args[0] == 'commit' and any('[orchestrator-fix]' in arg for arg in args[1:]):
+	store.setdefault('review_blocked_fix_commit_calls', []).append(args[1:])
+	store_path.write_text(json.dumps(store), encoding='utf-8')
+
 if args and args[0] == 'checkout' and os.environ.get('MOCK_GIT_CHECKOUT_FAIL', '') == 'true':
 	sys.exit(1)
+# Combined-mode branch prep now creates a judge worktree instead of
+# switching the poller's own checkout; the checkout-failure knob covers it.
+if args[:2] == ['worktree', 'add'] and os.environ.get('MOCK_GIT_CHECKOUT_FAIL', '') == 'true':
+	sys.exit(1)
+if args[:2] == ['worktree', 'add']:
+	store.setdefault('git_worktree_add_calls', []).append(args[2:])
+	store_path.write_text(json.dumps(store), encoding='utf-8')
+
+if args and args[0] == 'fetch' and len([a for a in args[1:] if a not in ('--no-tags', 'origin')]) > 1:
+	# Several refspecs in one call (the integration judge fetches both
+	# branches at once): emulate each one through this mock.
+	for one_refspec in [a for a in args[1:] if a not in ('--no-tags', 'origin')]:
+		one = subprocess.run([sys.executable, __file__, *global_opts, 'fetch', '--no-tags', 'origin', one_refspec])
+		if one.returncode != 0:
+			sys.exit(one.returncode)
+	sys.exit(0)
 
 if args and args[0] == 'fetch':
 	refspec = None
@@ -2849,7 +2913,7 @@ if args and args[0] == 'fetch':
 					sys.exit(update_ref.returncode)
 				sys.exit(1)
 
-proc = subprocess.run([real_git, *args])
+proc = subprocess.run([real_git, *raw_args])
 sys.exit(proc.returncode)
 ''',
 		)
@@ -2903,8 +2967,8 @@ except Exception:
 
 output = os.environ.get('MOCK_CODEX_JSON', '{}')
 parsed = json.loads(output)
-touch_file = os.environ.get('MOCK_CODEX_TOUCH_FILE', '')
-if touch_file:
+for touch_file in os.environ.get('MOCK_CODEX_TOUCH_FILE', '').splitlines():
+	os.makedirs(os.path.dirname(os.path.abspath(touch_file)), exist_ok=True)
 	with open(touch_file, 'a', encoding='utf-8') as fh:
 		fh.write("mock change\\n")
 print(json.dumps(parsed))
@@ -3405,6 +3469,7 @@ sys.exit(proc.returncode)
 				"REAL_JQ_BIN": real_jq,
 				"REAL_PYTHON_BIN": real_python,
 				"MOCK_CODEX_JSON": json.dumps(codex_json),
+				"MOCK_PR_FILES_FAIL": "true" if pr_files_fail else "false",
 				"MOCK_GIT_PUSH_SUCCESS": "true" if mock_git_push_success else "false",
 				"MOCK_GIT_CHECKOUT_FAIL": "true" if mock_git_checkout_fail else "false",
 				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
@@ -3414,19 +3479,23 @@ sys.exit(proc.returncode)
 			env["MOCK_STALL_JUDGE_JSON"] = json.dumps(mock_stall_judge_json)
 		if codex_touch_file:
 			touch_path = Path(codex_touch_file)
-			if not touch_path.is_absolute():
-				# Relative paths resolve inside the sandbox git repo, which is
-				# the poller's cwd and the checkout the judge edits. Resolving
-				# them against runtime_dir (outside the repo) meant the mock
-				# judge never changed a tracked tree; the follow-up-PR tests
-				# then only saw a dirty tree because the consumer artifact
-				# cleanup used to delete tracked files (fixed in #4033).
-				touch_path = sandbox / touch_path
+			# Relative paths stay relative: the mock codex resolves them
+			# against its working directory, which is the copy of the judge's
+			# worktree inside the (fake) isolated container, so the edit
+			# reaches the worktree only through the helper's write-back, as a
+			# real judge edit does. Resolving them against runtime_dir
+			# (outside the repo) meant the mock judge never changed a tracked
+			# tree; the follow-up-PR tests then only saw a dirty tree because
+			# the consumer artifact cleanup used to delete tracked files
+			# (fixed in #4033).
 			env["MOCK_CODEX_TOUCH_FILE"] = str(touch_path)
 		if mock_orch_state_v2_pack_mode:
 			env["MOCK_ORCH_STATE_V2_PACK_MODE"] = mock_orch_state_v2_pack_mode
 		if env_overrides:
 			env.update({str(k): str(v) for k, v in env_overrides.items()})
+		# Judges launch Codex through scripts/codex_isolated_exec.sh; the
+		# recording fake docker runs the mock codex in the fake container.
+		env = enable_fake_isolation(bin_dir, sandbox / "scripts", env)
 
 		proc = _run_poller_subprocess(
 			["bash", str(POLLER_SCRIPT)],
@@ -9402,6 +9471,7 @@ def test_review_blocked_merged_followup_retargets_to_integration_branch():
 				"mergeable_state": "clean",
 				"title": "Test PR",
 				"body": "Body",
+				"files": ["sandbox_fix.txt"],
 			},
 		],
 		existing_branches=["main", "orchestrator/project-192"],
@@ -9441,9 +9511,11 @@ def test_review_blocked_judge_caps_minified_pr_diff_by_bytes():
 			"baseRefName": "main",
 			"headRefName": "ai/issue-10",
 			"headRefFromApi": "ai/issue-10",
+			"headSha": "@sandbox_head",
 			"mergeable": True,
 			"mergeable_state": "clean",
 			"body": "ordinary PR body",
+			"headSha": "__default_head__",
 			"diff": huge_line,
 		}],
 		codex_json={
@@ -9479,6 +9551,7 @@ def test_review_blocked_judge_skips_codex_when_prompt_exceeds_character_cap():
 			"baseRefName": "main",
 			"headRefName": "ai/issue-10",
 			"headRefFromApi": "ai/issue-10",
+			"headSha": "__default_head__",
 			"mergeable": True,
 			"mergeable_state": "clean",
 		}],
@@ -9545,6 +9618,7 @@ def test_review_blocked_merged_followup_refuses_default_base_when_active_integra
 				"mergeable_state": "clean",
 				"title": "Test PR",
 				"body": "Body",
+				"files": ["sandbox_fix.txt"],
 			},
 		],
 		existing_branches=["main", "orchestrator/project-192"],
@@ -9620,6 +9694,7 @@ def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_c
 				"mergeable_state": "clean",
 				"title": "Test PR",
 				"body": "Body",
+				"files": ["sandbox_fix.txt"],
 			},
 		],
 		existing_branches=["main"],
@@ -9637,6 +9712,604 @@ def test_review_blocked_merged_followup_keeps_default_base_when_no_integration_c
 
 	followup_prs = [pr for pr in result["prs"] if int(pr.get("number", 0)) != 901]
 	assert any(pr.get("baseRefName") == "main" for pr in followup_prs)
+
+
+def _review_blocked_fix_scope_case(
+	*, touch: str, files: list[str | dict], description: str = "patched",
+	remaining: list[dict] | None = None, pr_files_fail: bool = False,
+	pr_changed_file_count: int | None = None,
+	env_overrides: dict[str, str] | None = None,
+	sandbox_origin_url: str | None = None,
+	pr_overrides: dict | None = None,
+	pr_api_sequence: dict[int, list[dict]] | None = None,
+	head_repo: str | None = "owner/repo", head_sha: str = "__default_head__",
+	head_ref_from_api: str = "ai/issue-10",
+	missing_git_branch_fetches: list[str] | None = None,
+	refetched_head_ref: str | None = None, codex_action: str = "fix",
+) -> dict:
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	pr_details = {
+		"number": 901, "state": "open", "merged": False,
+		"baseRefName": "main", "headRefName": "ai/issue-10",
+		"headRefFromApi": head_ref_from_api, "mergeable": True,
+		"mergeable_state": "clean", "title": "Test PR",
+		"body": "Body", "files": files,
+		"headSha": head_sha, "headRepoFullName": head_repo,
+		"changed_files": len(files) if pr_changed_file_count is None else pr_changed_file_count,
+	}
+	return _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]},
+		issue_linked_prs={10: 901},
+		prs=[{**pr_details, **(pr_overrides or {})}],
+		pr_api_sequence=pr_api_sequence if pr_api_sequence is not None else (
+			{901: [dict(pr_details) for _ in range(4)] + [
+				{**pr_details, "headRefFromApi": refetched_head_ref},
+			]} if refetched_head_ref is not None else None
+		),
+		codex_json={
+			"action": codex_action, "justification": "apply fixes",
+			"fix_description": description,
+			"remaining_issues_summary": "remaining",
+			"remaining_issues": remaining or [],
+		},
+		codex_touch_file=touch,
+		mock_git_push_success=True,
+		capture_telegram_calls=True,
+		pr_files_fail=pr_files_fail,
+		env_overrides=env_overrides,
+		sandbox_origin_url=sandbox_origin_url,
+		missing_git_branch_fetches=missing_git_branch_fetches,
+	)
+
+
+def test_review_blocked_fix_scope_accepts_pr_file():
+	result = _review_blocked_fix_scope_case(touch="sandbox_fix.txt", files=["sandbox_fix.txt"])
+	assert "REVIEW_BLOCKED_FIX_TARGET_VERIFIED issue=10 pr=901 head_sha=" in result["stdout"]
+	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
+	assert result.get("git_push_calls", [])
+	assert any("HEAD:ai/issue-10" in call for call in result["git_push_calls"])
+	assert "ai:review-blocked" not in result["issues"]["10"]["labels"]
+	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	assert "LOG_PREFIX.name=REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED" in agents_text
+	assert "LOG_PREFIX.name=REVIEW_BLOCKED_FIX_SCOPE_REJECTED" in agents_text
+	assert "LOG_PREFIX.name=REVIEW_BLOCKED_FIX_TARGET_VERIFIED" in agents_text
+	assert "LOG_PREFIX.name=REVIEW_BLOCKED_FIX_TARGET_REJECTED" in agents_text
+	assert "LOG_PREFIX.name=REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED" in agents_text
+
+
+# The file's own runner calls tests without arguments, so cases loop here.
+_RB_FIX_TARGET_UNTRUSTED_PR_CASES = [
+	({"headRepoFullName": "attacker/repo", "headRefName": "main", "headRefFromApi": "main", "body": "Refs #10"}, "cross_repository"),
+	({"headRepoFullName": None}, "head_repo_unavailable"),
+	({"headRefName": "feature/x", "headRefFromApi": "feature/x", "body": "Refs #10"}, "not_implementation_pr"),
+	({"headSha": "not-a-sha"}, "head_sha_missing"),
+]
+
+
+def test_review_blocked_fix_target_rejects_untrusted_pr():
+	failures = []
+	for pr_overrides, reason in _RB_FIX_TARGET_UNTRUSTED_PR_CASES:
+		result = _review_blocked_fix_scope_case(
+			touch="sandbox_fix.txt", files=["sandbox_fix.txt"], pr_overrides=pr_overrides,
+		)
+		try:
+			assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
+			assert result.get("git_push_calls", []) == []
+			assert result.get("review_blocked_fix_commit_calls", []) == []
+			assert "Judge decision for #10" not in result["stdout"]
+		except AssertionError as exc:
+			failures.append((reason, str(exc)))
+	assert not failures, failures
+
+
+def test_review_blocked_fix_target_rejects_failed_fetch_without_local_fallback():
+	result = _review_blocked_fix_scope_case(
+		touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
+		missing_git_branch_fetches=["ai/issue-10"],
+	)
+	assert "REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=fetch_failed" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+
+
+def test_review_blocked_fix_target_rejects_fetched_tip_mismatch():
+	result = _review_blocked_fix_scope_case(
+		touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
+		pr_overrides={"headSha": "f" * 40},
+	)
+	assert "REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=head_sha_mismatch" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+
+
+def test_review_blocked_fix_target_rejects_ref_change_before_checkout():
+	open_pr = {
+		"number": 901, "state": "open", "merged": False,
+		"headRefName": "ai/issue-10", "headRefFromApi": "ai/issue-10",
+		"headSha": "__default_head__", "baseRefName": "main",
+		"body": "Closes #10", "mergeable": True, "mergeable_state": "clean",
+	}
+	result = _review_blocked_fix_scope_case(
+		touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
+		pr_api_sequence={901: [dict(open_pr) for _ in range(5)] + [{**open_pr, "headRefFromApi": "feature/other"}]},
+	)
+	assert "REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=head_ref_changed" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+
+
+# The file's own runner calls tests without arguments, so cases loop here.
+_RB_FIX_TARGET_HEAD_MOVE_CASES = [
+	({"headSha": "__integration_head__"}, "head_moved"),
+	({"headRepoFullName": "attacker/repo"}, "head_repo_mismatch"),
+	({"headRefFromApi": "feature/other"}, "head_ref_changed"),
+]
+
+
+def test_review_blocked_fix_target_rejects_head_move_during_judge():
+	failures = []
+	for changed_pr, reason in _RB_FIX_TARGET_HEAD_MOVE_CASES:
+		open_pr = {
+			"number": 901, "state": "open", "merged": False,
+			"baseRefName": "main", "headRefName": "ai/issue-10",
+			"headRefFromApi": "ai/issue-10", "headSha": "__default_head__",
+			"mergeable": True, "mergeable_state": "clean", "body": "Body",
+		}
+		result = _review_blocked_fix_scope_case(
+			touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
+			# Reconciliation and branch prep consume six pulls/901 reads; the
+			# subsequent re-check must see the changed SHA.
+			pr_api_sequence={901: [dict(open_pr) for _ in range(6)] + [{**open_pr, **changed_pr}]},
+		)
+		try:
+			assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
+			assert result.get("git_push_calls", []) == []
+			assert result.get("review_blocked_fix_commit_calls", []) == []
+			assert result["latest_state"]["review_blocked_retries"].get("10", 0) == 0
+		except AssertionError as exc:
+			failures.append((reason, str(exc)))
+	assert not failures, failures
+
+
+# The file's own runner calls tests without arguments, so cases loop here.
+_RB_MERGED_FIX_TARGET_FOLLOWUP_CASES = [
+	# #6388's head-identity check rejects the fork before #6325's comparison.
+	({"headRepoFullName": "attacker/repo"}, "cross_repository"),
+	({"headRefName": "feature/x", "headRefFromApi": "feature/x", "body": "Refs #10"}, "not_implementation_pr"),
+]
+
+
+def test_review_blocked_merged_fix_target_rejects_unrelated_followup():
+	failures = []
+	for merged_overrides, reason in _RB_MERGED_FIX_TARGET_FOLLOWUP_CASES:
+		state = _base_state(status="in_progress")
+		state["integration_branch"] = "orchestrator/project-192"
+		state["waves"][0]["issues"][0]["status"] = "review-blocked"
+		open_pr = {
+			"number": 901, "state": "open", "merged": False,
+			"headRefName": "ai/issue-10", "headRefFromApi": "ai/issue-10",
+			"baseRefName": "main", "body": "Closes #10",
+			"mergeable": True, "mergeable_state": "clean",
+		}
+		merged_pr = {
+			**open_pr, "state": "closed", "merged": True,
+			"merged_at": "2026-04-15T00:00:00Z", **merged_overrides,
+		}
+		result = _run_poller(
+			state=state, enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:review-blocked"]}, issue_linked_prs={10: 901},
+			pr_api_sequence={901: [dict(open_pr) for _ in range(4)] + [dict(merged_pr)]},
+			prs=[{**merged_pr, "files": ["sandbox_fix.txt"]}],
+			existing_branches=["main", "orchestrator/project-192"],
+			codex_json={"action": "fix", "justification": "apply fixes", "fix_description": "patched"},
+			codex_touch_file="sandbox_fix.txt", mock_git_push_success=True,
+		)
+		try:
+			assert f"issue=10 pr=901 reason={reason}" in result["stdout"]
+			assert result.get("git_push_calls", []) == []
+			assert result.get("review_blocked_fix_commit_calls", []) == []
+			assert len(result["prs"]) == 1
+		except AssertionError as exc:
+			failures.append((reason, str(exc)))
+	assert not failures, failures
+
+
+def test_review_blocked_rejects_unverified_open_pr_head():
+	for head_repo, head_sha, head_ref, missing_fetches, reason in (
+		("attacker/repo", "@sandbox_head", "ai/issue-10", None, "cross_repository"),
+		(None, "@sandbox_head", "ai/issue-10", None, "head_repo_unavailable"),
+		("owner/repo", "mocksha901", "ai/issue-10", None, "head_sha_unavailable"),
+		("owner/repo", "0" * 40, "ai/issue-10", None, "head_sha_mismatch"),
+		("owner/repo", "@sandbox_head", "ai/issue-10", ["ai/issue-10"], "fetch_failed"),
+	):
+		result = _review_blocked_fix_scope_case(
+			touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
+			head_repo=head_repo, head_sha=head_sha, head_ref_from_api=head_ref,
+			missing_git_branch_fetches=missing_fetches,
+		)
+		assert f"REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=10 pr=901 reason={reason}" in result["stdout"]
+		assert result.get("git_push_calls", []) == []
+		assert result.get("review_blocked_fix_commit_calls", []) == []
+		assert not any("ai/issue-10" in call for call in result.get("git_worktree_add_calls", []))
+		assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+		assert "reusing local HEAD as PR branch base" not in result["stdout"]
+		assert result["latest_state"]["review_blocked_retries"].get("10", 0) == 0
+		assert "Judge decision for #10" not in result["stdout"]
+
+
+def test_review_blocked_rejects_changed_pr_head_ref_before_judge():
+	result = _review_blocked_fix_scope_case(
+		touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
+		refetched_head_ref="ai/issue-elsewhere",
+	)
+	# The #6325 fix-target check runs first and rejects the non-implementation
+	# head before #6388's ref comparison; either way the judge never runs.
+	assert "REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=not_implementation_pr" in result["stdout"]
+	assert result["latest_state"]["review_blocked_retries"].get("10", 0) == 0
+	assert result.get("git_push_calls", []) == []
+	assert "Judge decision for #10" not in result["stdout"]
+
+
+def test_review_blocked_rejects_fork_before_any_judge_action():
+	for action in ("merge", "merge_with_followup", "close_and_reissue"):
+		result = _review_blocked_fix_scope_case(
+			touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
+			head_repo="attacker/repo", codex_action=action,
+			env_overrides={"MAX_REVIEW_BLOCKED_RETRIES": "0"},
+		)
+		assert "REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=10 pr=901 reason=cross_repository" in result["stdout"]
+		assert "Judge decision for #10" not in result["stdout"]
+		assert result["latest_state"]["review_blocked_retries"].get("10", 0) == 0
+		assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+		assert result.get("git_push_calls", []) == []
+
+
+def test_review_blocked_open_pr_head_identity_contract():
+	text = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert '"${RB_COMBINED_WORKDIR}" "${RB_FIX_TARGET_HEAD_SHA}"' in text
+	assert "reusing local HEAD as PR branch base" not in text
+	judge_section = text.split("# Guard: check PR state before invoking the judge", 1)[1]
+	assert judge_section.index('if ! _pr_json_head_repo_is_origin "${_rb_pr_json}"; then') < judge_section.index("# Run the judge")
+
+
+def test_review_blocked_rejects_fork_head_on_merged_followup():
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	open_pr = {
+		"number": 901, "state": "open", "merged": False,
+		"baseRefName": "main", "headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10", "headRepoFullName": "attacker/repo",
+	}
+	merged_pr = {
+		**open_pr, "state": "closed", "merged": True,
+		"merged_at": "2026-04-15T00:00:00Z", "files": ["sandbox_fix.txt"],
+	}
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]}, issue_linked_prs={10: 901},
+		pr_api_sequence={901: [dict(open_pr) for _ in range(4)] + [dict(merged_pr)]},
+		prs=[merged_pr],
+		codex_json={"action": "fix", "justification": "apply fixes", "fix_description": "patched"},
+		codex_touch_file="sandbox_fix.txt", mock_git_push_success=True,
+	)
+	assert "REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=10 pr=901 reason=cross_repository" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert not any("fix/10-followup-" in str(call) for call in result.get("git_worktree_add_calls", []))
+
+
+def test_review_blocked_fix_scope_rejects_unrelated_file():
+	result = _review_blocked_fix_scope_case(touch="sandbox_fix.txt", files=["other.txt"])
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope rejected=1 paths=sandbox_fix.txt" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
+
+
+def test_review_blocked_fix_scope_rejects_empty_staged_set():
+	# Consumer repos delete .github/prompts before staging; only the
+	# coding-workflows checkout keeps it, so only there can staging exclude it.
+	result = _review_blocked_fix_scope_case(
+		touch=".github/prompts/excluded.txt", files=[".github/prompts/excluded.txt"],
+		sandbox_origin_url="https://github.com/test-harness/coding-workflows.git",
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=no_staged_changes" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+
+
+def test_review_blocked_fix_scope_rejects_workflow_edit_opt_out():
+	result = _review_blocked_fix_scope_case(
+		touch="scripts/excluded.sh", files=["scripts/excluded.sh"],
+		env_overrides={"ALLOW_WORKFLOW_EDITS": "false"},
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=workflow_edits_disabled rejected=1 paths=scripts/excluded.sh" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
+
+
+def test_review_blocked_fix_scope_rejects_workflow_edit_opt_out_automation_assets():
+	failures = []
+	for path in (
+		"workflow-templates/ai-review.yml",
+		"workflow-templates/.claude/hooks/x.py",
+		".github/actions/x/action.yml",
+		".claude/hooks/x.py",
+	):
+		result = _review_blocked_fix_scope_case(
+			touch=path, files=[path], env_overrides={"ALLOW_WORKFLOW_EDITS": "false"},
+		)
+		try:
+			assert f"reason=workflow_edits_disabled rejected=1 paths={path}" in result["stdout"]
+			assert result.get("git_push_calls", []) == []
+			assert result.get("review_blocked_fix_commit_calls", []) == []
+			assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+		except AssertionError as exc:
+			failures.append((path, str(exc)))
+	assert not failures, failures
+
+
+def test_review_blocked_fix_scope_rejects_mixed_workflow_edit_opt_out():
+	result = _review_blocked_fix_scope_case(
+		touch="sandbox_fix.txt", files=["sandbox_fix.txt", "workflow-templates/ai-plan.yml"],
+		env_overrides={
+			"ALLOW_WORKFLOW_EDITS": "false",
+			"MOCK_CODEX_TOUCH_FILE": "sandbox_fix.txt\nworkflow-templates/ai-plan.yml",
+		},
+	)
+	assert "reason=workflow_edits_disabled rejected=1 paths=workflow-templates/ai-plan.yml" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+
+
+def test_review_blocked_fix_scope_accepts_template_pr_file_by_default():
+	result = _review_blocked_fix_scope_case(
+		touch="workflow-templates/ai-review.yml", files=["workflow-templates/ai-review.yml"],
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
+	assert any("HEAD:ai/issue-10" in call for call in result.get("git_push_calls", []))
+
+
+def test_review_blocked_fix_scope_rejects_template_outside_pr():
+	result = _review_blocked_fix_scope_case(
+		touch="workflow-templates/ai-review.yml", files=["sandbox_fix.txt"],
+	)
+	assert "reason=protected_not_in_pr rejected=1 paths=workflow-templates/ai-review.yml" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+
+
+def test_review_blocked_fix_scope_uses_shared_protected_predicate():
+	text = POLLER_SCRIPT.read_text(encoding="utf-8")
+	predicate = text.split("      _rb_fix_scope_is_protected() {", 1)[1].split("      rb_fix_scope_check() {", 1)[0]
+	check = text.split("      rb_fix_scope_check() {", 1)[1].split("      # Build the judge prompt", 1)[0]
+	assert "|workflow-templates/*) return 0 ;;" in predicate
+	assert 'if [ "${ALLOW_WORKFLOW_EDITS:-true}" != "true" ] && _rb_fix_scope_is_protected "${path}"; then' in check
+
+
+def test_review_blocked_fix_scope_reports_all_workflow_edit_opt_out_paths():
+	result = _review_blocked_fix_scope_case(
+		touch="scripts/a.sh", files=["scripts/a.sh", "scripts/b.sh"],
+		env_overrides={"ALLOW_WORKFLOW_EDITS": "false", "MOCK_CODEX_TOUCH_FILE": "scripts/a.sh\nscripts/b.sh"},
+	)
+	assert "reason=workflow_edits_disabled rejected=2 paths=scripts/a.sh,scripts/b.sh" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+	assert any("scripts/a.sh,scripts/b.sh" in n.get("message", "") for n in result["telegram_notifications"])
+
+
+def test_review_blocked_fix_scope_rejects_non_protected_judge_citation():
+	result = _review_blocked_fix_scope_case(
+		touch="docs/new.md", files=["other.txt"],
+		remaining=[{"file": "docs/new.md"}],
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"]["10"] == 1
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+
+
+def test_review_blocked_fix_scope_rejects_fix_description_citation():
+	result = _review_blocked_fix_scope_case(
+		touch="docs/new.md", files=["other.txt"], description="Updated `docs/new.md`",
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"]["10"] == 1
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+
+
+def test_review_blocked_fix_scope_rejects_extensionless_citation():
+	result = _review_blocked_fix_scope_case(
+		touch="Makefile", files=["other.txt"], description="Updated `Makefile`",
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"]["10"] == 1
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+
+
+def test_review_blocked_fix_scope_rejects_injected_auth_citations():
+	result = _review_blocked_fix_scope_case(
+		touch="src/auth.py", files=["other.txt"],
+		remaining=[{"file": "src/auth.py"}], description="Updated `src/auth.py`",
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=out_of_scope rejected=1 paths=src/auth.py" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+
+
+def test_review_blocked_fix_scope_accepts_cited_pr_file_without_citation_authority():
+	result = _review_blocked_fix_scope_case(
+		touch="docs/new.md", files=["docs/new.md"],
+		remaining=[{"file": "docs/new.md"}],
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901 staged=1 pr_files=1 judge_cited=0" in result["stdout"]
+	assert result.get("git_push_calls", [])
+
+
+def test_review_blocked_fix_scope_rejects_protected_judge_citation():
+	result = _review_blocked_fix_scope_case(
+		touch="scripts/evil.sh", files=["other.txt"],
+		remaining=[{"file": "scripts/evil.sh"}],
+	)
+	assert "reason=protected_not_in_pr" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+
+
+def test_review_blocked_fix_scope_protected_reason_wins_for_mixed_rejections():
+	result = _review_blocked_fix_scope_case(
+		touch="docs/new.md", files=["other.txt"],
+		env_overrides={"MOCK_CODEX_TOUCH_FILE": "docs/new.md\nscripts/evil.sh"},
+	)
+	assert "reason=protected_not_in_pr rejected=2 paths=docs/new.md,scripts/evil.sh" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+
+
+def test_review_blocked_fix_scope_rejects_uncited_unrelated_workflow():
+	result = _review_blocked_fix_scope_case(
+		touch=".github/workflows/unrelated.yml", files=["sandbox_fix.txt"],
+		env_overrides={"ALLOW_WORKFLOW_EDITS": "true"},
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_not_in_pr rejected=1 paths=.github/workflows/unrelated.yml" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
+
+
+def test_review_blocked_fix_scope_rejects_uncited_unrelated_script():
+	result = _review_blocked_fix_scope_case(
+		touch="scripts/unrelated.sh", files=["sandbox_fix.txt"],
+		env_overrides={"ALLOW_WORKFLOW_EDITS": "true"},
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_not_in_pr rejected=1 paths=scripts/unrelated.sh" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
+
+
+def test_review_blocked_fix_scope_rejects_unrelated_action_and_claude_hook():
+	result = _review_blocked_fix_scope_case(
+		touch=".github/actions/x/action.yml", files=["sandbox_fix.txt"],
+		env_overrides={
+			"ALLOW_WORKFLOW_EDITS": "true",
+			"MOCK_CODEX_TOUCH_FILE": ".github/actions/x/action.yml\n.claude/hooks/x.py",
+		},
+	)
+	assert "reason=protected_not_in_pr rejected=2" in result["stdout"]
+	assert any(
+		".github/actions/x/action.yml" in line and ".claude/hooks/x.py" in line
+		for line in result["stdout"].splitlines() if "REVIEW_BLOCKED_FIX_SCOPE_REJECTED" in line
+	)
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+
+
+def test_review_blocked_fix_scope_rejects_mixed_in_scope_and_unrelated_workflow():
+	result = _review_blocked_fix_scope_case(
+		touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
+		remaining=[{"file": ".github/workflows/unrelated.yml"}],
+		description="Updated `.github/workflows/unrelated.yml`",
+		env_overrides={
+			"ALLOW_WORKFLOW_EDITS": "true",
+			"MOCK_CODEX_TOUCH_FILE": "sandbox_fix.txt\n.github/workflows/unrelated.yml",
+		},
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_not_in_pr rejected=1 paths=.github/workflows/unrelated.yml" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+
+
+def test_review_blocked_fix_scope_accepts_protected_pr_file():
+	result = _review_blocked_fix_scope_case(touch="scripts/foo.sh", files=["scripts/foo.sh"])
+	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
+	assert result.get("git_push_calls", [])
+
+
+def test_review_blocked_fix_scope_accepts_renamed_pr_source():
+	result = _review_blocked_fix_scope_case(
+		touch="scripts/old.sh",
+		files=[{"filename": "scripts/new.sh", "previous_filename": "scripts/old.sh"}],
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
+	assert result.get("git_push_calls", [])
+
+
+def test_review_blocked_fix_scope_rejects_capped_pr_listing():
+	result = _review_blocked_fix_scope_case(
+		touch="sandbox_fix.txt", files=[f"docs/file-{n}.md" for n in range(3000)],
+	)
+	assert "reason=pr_files_unavailable" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+
+
+def test_review_blocked_fix_scope_rejects_incomplete_pr_listing():
+	result = _review_blocked_fix_scope_case(
+		touch="sandbox_fix.txt", files=["sandbox_fix.txt"], pr_changed_file_count=2,
+	)
+	assert "reason=pr_files_unavailable rejected=1 paths=sandbox_fix.txt" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+
+
+def test_review_blocked_fix_scope_ignores_invalid_citations():
+	result = _review_blocked_fix_scope_case(
+		touch="escape.txt", files=["other.txt"],
+		remaining=[{"file": "../escape.txt"}, {"file": ".git/config"}],
+	)
+	assert "reason=out_of_scope" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+
+
+def test_review_blocked_fix_scope_fails_closed_on_pr_listing_failure():
+	result = _review_blocked_fix_scope_case(touch="sandbox_fix.txt", files=["sandbox_fix.txt"], pr_files_fail=True)
+	assert "reason=pr_files_unavailable rejected=1 paths=sandbox_fix.txt" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+
+
+def test_review_blocked_fix_scope_rejects_merged_followup():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["waves"][0]["issues"][0]["status"] = "review-blocked"
+	open_pr = {
+		"number": 901, "state": "open", "merged": False,
+		"baseRefName": "main", "headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10", "mergeable": True,
+		"mergeable_state": "clean", "body": "Body",
+	}
+	merged_pr = {**open_pr, "state": "closed", "merged": True, "merged_at": "2026-04-15T00:00:00Z"}
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:review-blocked"]}, issue_linked_prs={10: 901},
+		pr_api_sequence={901: [dict(open_pr) for _ in range(4)] + [merged_pr]},
+		prs=[{**merged_pr, "files": ["other.txt"]}],
+		existing_branches=["main", "orchestrator/project-192"],
+		codex_json={"action": "fix", "justification": "apply fixes", "fix_description": "patched"},
+		codex_touch_file="sandbox_fix.txt", mock_git_push_success=True,
+	)
+	assert "reason=out_of_scope" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert len(result["prs"]) == 1
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
 
 
 def test_review_blocked_followup_refusal_increments_retry_counter():
@@ -9697,6 +10370,7 @@ def test_review_blocked_followup_refusal_increments_retry_counter():
 				"mergeable_state": "clean",
 				"title": "Test PR",
 				"body": "Body",
+				"files": ["sandbox_fix.txt"],
 			},
 		],
 		existing_branches=["main", "orchestrator/project-192"],
@@ -22254,6 +22928,21 @@ def test_custom_runner_emits_timing_heartbeat_and_preserves_exit_semantics():
 		) == 0
 	assert '"event":"heartbeat"' not in pass_output.getvalue()
 	assert '"event":"slowest"' not in pass_output.getvalue()
+
+
+def test_custom_runner_tests_need_no_pytest_arguments():
+	import inspect
+
+	# CI discovers these functions by name and invokes each with func().
+	required_arguments = []
+	for name, func in globals().items():
+		if not name.startswith("test_") or not callable(func):
+			continue
+		try:
+			inspect.signature(func).bind()
+		except TypeError:
+			required_arguments.append(name)
+	assert not required_arguments, required_arguments
 
 
 def _extract_bash_function(script: str, signature: str) -> str:
