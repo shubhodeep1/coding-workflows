@@ -85,7 +85,11 @@ MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="verify_integration_fingerprints.py review_confli
 # review/autofix failure reporter (README "Workflow Failure Heal"). Optional so
 # a consumer pinned to a release that predates them still bootstraps; the
 # reporting step skips with a stable log line when they are absent.
-OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh workflow_failure_heal.py workflow_failure_heal_autofix_report.sh"
+# ai_engine.sh + claude_engine.py + claude_anthropic_relay.py +
+# claude_settings.json.tmpl: the Claude engine of the review write roles
+# (replace-claude-sessions plan Phase 5c). Optional: without them every review
+# role runs its unchanged OpenCode path (plan D1).
+OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh workflow_failure_heal.py workflow_failure_heal_autofix_report.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl"
 for f in ${REQUIRED_BOOTSTRAP_SCRIPTS}; do
   src=".codex-workflow-src/scripts/${f}"
   if [ ! -f "${src}" ]; then
