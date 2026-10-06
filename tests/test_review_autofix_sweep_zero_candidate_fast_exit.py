@@ -121,6 +121,8 @@ def test_pat_budget_steps_bracket_every_active_job() -> None:
 		"clarify.yml": ("clarify",),
 		"orchestrate_poll.yml": ("poll",),
 		"review_autofix_sweep.yml": ("sweep",),
+		"workflow-failure-heal-intake.yml": ("intake",),
+		"validation-improvements-intake.yml": ("intake",),
 		"review_autofix.yml": ("gate", "codex-agent", "post-merge-validate-dispatch",
 			"post-merge-force-poll", "deterministic-skip-merge", "fingerprint-cap-block"),
 	}
@@ -141,8 +143,10 @@ fi
 				steps = workflow["jobs"][name]["steps"]
 				budget = [step for step in steps if step["name"].startswith("Record GH_PAT budget at ")]
 				assert len(budget) == 2, (file, name)
+				if file.endswith("-intake.yml"):
+					assert steps[0] is budget[0], (file, name)
 				assert budget[1]["if"] == "always()"
-				assert budget[0]["env"]["GH_TOKEN"] == "${{ secrets.GH_PAT }}"
+				assert budget[0]["env"].get("GH_TOKEN", workflow["jobs"][name].get("env", {}).get("GH_TOKEN")) == "${{ secrets.GH_PAT }}"
 				for phase, step in zip(("start", "end"), budget):
 					env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
 						"GH_PAT_BUDGET_FILE": str(bin_dir / f"budget-{file}-{name}"), "GH_TOKEN": "fake"}

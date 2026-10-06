@@ -34,7 +34,7 @@ replay_failed_reclarify_commands() {
   [ "$(printf '%s' "${queued}" | jq 'length' 2>/dev/null)" -gt 0 ] 2>/dev/null || return 0
   # Existing issue/comment listings identify authors, not the PAT account;
   # this one identity read is shared by all queued issues in the poll tick.
-  trusted_login="$(gh api user --jq .login 2>/dev/null)" || trusted_login=""
+  trusted_login="$(gh_retry gh api user --jq .login 2>/dev/null)" || trusted_login=""
   [[ "${trusted_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]] || return 0
   while IFS= read -r issue_num; do
     [[ "${issue_num}" =~ ^[1-9][0-9]*$ ]] || continue
