@@ -2879,6 +2879,12 @@ and resolver chains, a failed project) now goes to the unblock judge
   fall back to an older `failed` state for this decision. A failed read or late
   resume withholds the label, though a resume after verdict recording can leave
   an unacted-on verdict.
+  The poller accepts V1/V2 project state only from comments by its authenticated
+  `GH_PAT` login. It ignores state-shaped comments from other authors and skips
+  a tracking issue for that tick if the login cannot be resolved. A
+  `/judge_resume`, `/revalidate` or `/re-security-pass` reset requires either
+  that login or a human `OWNER`, `MEMBER` or `COLLABORATOR`; outside commenters
+  and other bots cannot clear project failure counters.
   Scope overrides must match the trusted guard rejection exactly. Bulk-delete
   overrides may approve a non-empty subset of its rejected paths only when the
   failed implement run's matching Actions artifact verifies the same issue,

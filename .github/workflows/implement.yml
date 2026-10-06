@@ -1640,21 +1640,26 @@ jobs:
           printf '%s\n' "${ISSUE_BODY}" > "${ISSUE_BODY_FILE}"
 
           # TRUST BOUNDARY: ISSUE_BODY is user-controlled content from the GitHub
-          # issue. It is passed via heredoc (not shell expansion) to prevent injection
-          # into shell commands. Downstream consumers must treat it as untrusted input.
+          # issue. A fixed GITHUB_ENV delimiter lets an issue line containing
+          # EOF inject workflow variables. Check all multiline fields against
+          # a fresh delimiter before exporting any of them.
+          issue_env_delimiter=""
+          for issue_env_attempt in 1 2 3; do
+            issue_env_delimiter="ISSUE_$(openssl rand -hex 16)"
+            [ "${issue_env_delimiter}" != "ISSUE_" ] || exit 1
+            if ! printf '%s\n' "${ISSUE_SCOPE_LOCK_GLOB}" "${ISSUE_TITLE}" "${ISSUE_BODY}" | grep -Fx "${issue_env_delimiter}" >/dev/null; then
+              break
+            fi
+            issue_env_delimiter=""
+          done
+          [ -n "${issue_env_delimiter}" ] || exit 1
           {
             echo "ISSUE_NUMBER=${ISSUE_NUMBER_JSON}"
             echo "ISSUE_URL=${ISSUE_URL_JSON}"
             echo "PR_BASE_BRANCH=${PR_BASE_BRANCH}"
-            echo 'ISSUE_SCOPE_LOCK_GLOB<<EOF'
-            echo "${ISSUE_SCOPE_LOCK_GLOB}"
-            echo 'EOF'
-            echo 'ISSUE_TITLE<<EOF'
-            echo "${ISSUE_TITLE}"
-            echo 'EOF'
-            echo 'ISSUE_BODY<<EOF'
-            echo "${ISSUE_BODY}"
-            echo 'EOF'
+            printf 'ISSUE_SCOPE_LOCK_GLOB<<%s\n%s\n%s\n' "${issue_env_delimiter}" "${ISSUE_SCOPE_LOCK_GLOB}" "${issue_env_delimiter}"
+            printf 'ISSUE_TITLE<<%s\n%s\n%s\n' "${issue_env_delimiter}" "${ISSUE_TITLE}" "${issue_env_delimiter}"
+            printf 'ISSUE_BODY<<%s\n%s\n%s\n' "${issue_env_delimiter}" "${ISSUE_BODY}" "${issue_env_delimiter}"
           } >> "$GITHUB_ENV"
 
       - name: Detect smoke test and silence Telegram alerts
