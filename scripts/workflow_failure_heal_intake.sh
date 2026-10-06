@@ -12,7 +12,8 @@
 # promotion `workflow_run`, or a manual `workflow_dispatch` re-run. It:
 #
 #   1. Validates the payload and verifies phase, autofix and release run
-#      provenance before reading their logs (label escalations are excluded)
+#      provenance before reading their logs; a label escalation keeps only the
+#      run references GitHub ties to its issue / PR (issue #6514)
 #      (the body, comments, and logs stay untrusted data for the model; an
 #      `autofix_failure` report carries its own evidence text), then applies the skip gates:
 #      kill switch, unregistered source repo, smoke-test fixture, self run,
@@ -206,7 +207,8 @@ log "received source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-no
 # --- Provenance (before any log read) --------------------------------------
 
 PENDING_CURRENT_RUN=""
-if [[ "${SOURCE_KIND}" == "phase_failure" || "${SOURCE_KIND}" == "autofix_failure" || "${SOURCE_KIND}" == "workflow_run" ]]; then
+if [[ "${SOURCE_KIND}" == "phase_failure" || "${SOURCE_KIND}" == "autofix_failure" || "${SOURCE_KIND}" == "workflow_run" \
+	|| "${SOURCE_KIND}" == "issue" || "${SOURCE_KIND}" == "pull_request" ]]; then
 	PROVENANCE_DIR="${RUNTIME_DIR}/provenance"
 	mkdir -p "${PROVENANCE_DIR}"
 	PROVENANCE_RUNS="${PROVENANCE_DIR}/runs.json"
@@ -218,9 +220,20 @@ if [[ "${SOURCE_KIND}" == "phase_failure" || "${SOURCE_KIND}" == "autofix_failur
 	# repository, workflow path, conclusion or PR association, and no issue/PR
 	# comments were read here before. At most one /user read, three run GETs,
 	# and one paginated comment read; failures reject rather than bypass this gate.
+	# Label escalations (issue / pull_request, issue #6514) use the same calls:
+	# the payload carries no GitHub-read run metadata, so no earlier call can
+	# say whether a referenced run is in this repository, failed, and belongs
+	# to the escalated issue / PR. Their unverified references are dropped and
+	# the report continues. For consumer label reports, GitHub's dispatch
+	# sender is the reporting PAT account (not the issue's commenter); a
+	# missing sender cannot authorize a human-authored comment.
 	if [ "${SOURCE_KIND}" != "workflow_run" ]; then
-		if [ "${SOURCE_KIND}" != "phase_failure" ] || [ "${SOURCE_REPO,,}" = "${SELF_REPO,,}" ]; then
+		if [ "${SOURCE_KIND}" = "autofix_failure" ] || [ "${SOURCE_REPO,,}" = "${SELF_REPO,,}" ]; then
 			PROVENANCE_LOGIN="$(gh_retry gh api --method GET user --jq .login 2>/dev/null || true)"
+		elif [ "${SOURCE_KIND}" = "issue" ] || [ "${SOURCE_KIND}" = "pull_request" ]; then
+			if [ "${GITHUB_EVENT_NAME:-}" = "repository_dispatch" ] && [ -f "${GITHUB_EVENT_PATH:-/dev/null}" ]; then
+				PROVENANCE_LOGIN="$(jq -r 'if .action == "workflow-failure-heal" then .sender.login // "" else "" end' "${GITHUB_EVENT_PATH}" 2>/dev/null || true)"
+			fi
 		fi
 		PROVENANCE_COMMENTS="${PROVENANCE_DIR}/comments.json"
 		if ! gh_retry gh api --method GET --paginate "repos/${SOURCE_REPO}/issues/${ISSUE_NUMBER}/comments" -F per_page=100 \

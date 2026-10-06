@@ -165,6 +165,7 @@ analysis/workflow-optimization-2026-10-03-2.md
 analysis/workflow-optimization-2026-10-03.md
 analysis/workflow-optimization-2026-10-06.md
 changelog.d/.gitkeep
+changelog.d/37432054768-merge-guard-env-chdir.md
 changelog.d/3965-validation-run-attribution.md
 changelog.d/4618-sweep-dispatch-default-branch.md
 changelog.d/4619-gh-api-guard-file-backed-fields.md
@@ -198,6 +199,7 @@ changelog.d/5892-heal-autofix-fingerprint-header.md
 changelog.d/5964-reviewer-infra-nonblocking.md
 changelog.d/5999-restore-scoped-smoke-run-lookups.md
 changelog.d/6031-repo-checks-import-audit-in-container.md
+changelog.d/6031-validate-overlay-loader-helper-copy.md
 changelog.d/6055-review-editor-edits-reach-work-tree.md
 changelog.d/6118-ci-failure-triage-workflow-run.md
 changelog.d/6118-implement-claude-cli-config-path.md
@@ -291,11 +293,23 @@ changelog.d/6436-triage-omit-pr-agent-instructions.md
 changelog.d/6455-rb-fix-sandbox-workspace.md
 changelog.d/6461-consolidator-opencode-sandbox.md
 changelog.d/6467-phase-report-provenance.md
+changelog.d/6468-heal-lineage-source-marker-trust.md
+changelog.d/6469-deploy-activate-credential-free-checks.md
 changelog.d/6486-workflow-heal-security-pass.md
+changelog.d/6491-poller-judge-issue-engine-labels.md
+changelog.d/6493-heal-intake-run-provenance.md
+changelog.d/6494-claude-sandbox-egress-lockdown.md
 changelog.d/6500-merge-train-fork-blockers.md
+changelog.d/6501-merge-train-marker-author.md
+changelog.d/6504-implement-issue-body-github-env-injection.md
+changelog.d/6505-orchestrator-state-author-filter.md
+changelog.d/6507-merge-train-bypass-authorization.md
 changelog.d/6512-heal-evidence-routing-neutralize.md
+changelog.d/6513-heal-lineage-verification.md
+changelog.d/6524-det-skip-integration-pr-exclusion.md
 changelog.d/autofix-cap-and-security-exhaustion-judge.md
 changelog.d/claude-branch-push-pr-grace-window.md
+changelog.d/claude-busy-ride-2ezayb-single-issue-security-pass-default-off.md
 changelog.d/conflict-resolver-sandbox-fail-closed.md
 changelog.d/release-smoke-run-lookup.md
 changelog.d/review-tier-random-reviewers.md
@@ -360,6 +374,7 @@ docs/plans/orchestrator-prerequisite-gate-automation-plan.md
 docs/plans/orchestrator-sync-contract-list-union-plan.md
 docs/plans/orchestrator-validation-resilience-plan.md
 docs/plans/release-blocker-heal-reports-plan.md
+docs/plans/remove-unattended-pipeline-stuck-states-plan.md
 docs/plans/replace-claude-sessions-with-cli-engine-plan.md
 docs/plans/review-autofix-deterministic-editor-failure-resume-plan.md
 docs/plans/review-blocked-approval-gate-trust-scope-plan.md
@@ -859,6 +874,7 @@ tests/test_claude_template_live_parity.py
 tests/test_codex_agent_isolation_contract.py
 tests/test_codex_heartbeat.py
 tests/test_codex_isolated_exec.py
+tests/test_codex_isolated_exec_claude_contract.py
 tests/test_codex_isolated_exec_docker_e2e.py
 tests/test_codex_isolated_workspace.py
 tests/test_codex_skip_git_repo_check_contract.py
@@ -874,6 +890,7 @@ tests/test_consumer_artifact_cleanup_preserves_tracked.py
 tests/test_cost_audit_semble_metrics.py
 tests/test_cost_audit_serena_metrics.py
 tests/test_dependency_registry_proxy.py
+tests/test_deploy_activate_command.py
 tests/test_detect_editor_changes_lost.py
 tests/test_drift_audit_job.py
 tests/test_e2e_editor_smoke_canary.py
@@ -989,6 +1006,7 @@ tests/test_review_autofix_sweep_zero_candidate_fast_exit.py
 tests/test_review_autofix_terminal_same_head_gate.py
 tests/test_review_commit_changelog_fragment_preserved.py
 tests/test_review_commit_new_files_preserved.py
+tests/test_review_conflict_prepare_state_author.py
 tests/test_review_conflict_resolve_reasoning_step_down.py
 tests/test_review_conflict_resolve_retry_prelude_render.py
 tests/test_review_conflict_resolve_retry_state.py

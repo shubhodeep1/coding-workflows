@@ -1588,10 +1588,23 @@ through `clarify → plan → implement → review`.
   A missing failure comment, or unavailable pipeline-account identity for a
   self-repo report, also skips (even for a real failed run). Failed evidence
   fetches are logged; per-credential sender binding is outside this check.
-  Label-escalation `issue` and `pull_request` reports remain outside the
-  provenance gate: their issue/comment-derived run references can still cause
-  job logs to be read without these checks. The shared `GH_PAT` retains access
-  to all registered consumer repositories.
+  Label-escalation `issue` and `pull_request` reports are checked per run
+  reference instead: before any job log is read, the intake keeps a reference
+  only when GitHub reports the run in the source repository, completed with
+  `failure`, `timed_out` or `cancelled`, and tied to the escalated issue or PR
+  (a link in a recognized pipeline failure comment from `github-actions[bot]`
+  or the authenticated dispatch sender's PAT account in consumer repositories,
+  or the authenticated intake account here; or, for a PR, the run's pull
+  request or `[pr:<N>]` dispatch name). The sender is read from GitHub's
+  `repository_dispatch` event, not the report payload; when it is unavailable,
+  a consumer human-authored comment cannot vouch for a run. Other human
+  collaborator comments and issue bodies do not vouch for label-report runs. A
+  matching display title alone does not establish association. If the comment
+  history is unavailable and no PR association can be verified, the report
+  continues without that run's logs. Dropped references log
+  `WORKFLOW_HEAL provenance_rejected`, and the escalation proceeds without
+  their logs. The shared `GH_PAT` retains access to all registered consumer
+  repositories.
   The intake fingerprints
   verified reports from the current failed run's job log (earlier streak logs
   are diagnosis context only; `phase:<phase>_failed` when the current log cannot
