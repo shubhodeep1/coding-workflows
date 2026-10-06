@@ -2173,6 +2173,7 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         id: implement_run
         env:
+          BASH_ENV: ''
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_IMPLEMENT || '50' }}
           # Legacy idle-time knob retained for backward compatibility; when a
@@ -2205,6 +2206,7 @@ jobs:
           EDITOR_GIT_CREDENTIALS_SHA256: ${{ steps.stage_support.outputs.editor_git_credentials_sha256 }}
         run: |
           set -euo pipefail
+          cd "${WORKSPACE_PATH}"
 
           # Source sanitize_codex_prompt_file (best-effort). Codex
           # CLI's stdin reader strictly validates UTF-8; any invalid
@@ -2909,6 +2911,17 @@ jobs:
               env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_CHAT_ID -u TG_ADMIN_CHAT_ID -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH \
               env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \
               bash scripts/codex_thread_reuse.sh direct-run || cmd_rc=$?
+
+            # The editor can replace the job's workspace-shell.env. Keep the
+            # next step clear of it until a fresh startup file is installed.
+            echo 'BASH_ENV=' >> "$GITHUB_ENV"
+            workspace_shell_env_clean="$(mktemp "${RUNTIME_DIR}/workspace-shell.XXXXXX")"
+            printf '%s\n' \
+              'if [ -n "${WORKSPACE_PATH:-}" ] && [ -d "${WORKSPACE_PATH}" ]; then' \
+              '  cd "${WORKSPACE_PATH}"' \
+              'fi' > "${workspace_shell_env_clean}"
+            mv -fT -- "${workspace_shell_env_clean}" "${RUNTIME_DIR}/workspace-shell.env"
+            echo "BASH_ENV=${RUNTIME_DIR}/workspace-shell.env" >> "$GITHUB_ENV"
 
             editor_git_credentials restore
 
@@ -4201,12 +4214,28 @@ jobs:
               env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_CHAT_ID -u TG_ADMIN_CHAT_ID -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH \
               env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \
               bash scripts/codex_thread_reuse.sh direct-run; then
+              echo 'BASH_ENV=' >> "$GITHUB_ENV"
+              workspace_shell_env_clean="$(mktemp "${RUNTIME_DIR}/workspace-shell.XXXXXX")"
+              printf '%s\n' \
+                'if [ -n "${WORKSPACE_PATH:-}" ] && [ -d "${WORKSPACE_PATH}" ]; then' \
+                '  cd "${WORKSPACE_PATH}"' \
+                'fi' > "${workspace_shell_env_clean}"
+              mv -fT -- "${workspace_shell_env_clean}" "${RUNTIME_DIR}/workspace-shell.env"
+              echo "BASH_ENV=${RUNTIME_DIR}/workspace-shell.env" >> "$GITHUB_ENV"
               editor_git_credentials restore
               emit_implement_substate "implement_repair" "implement_repair" "Finishing" "${attempt}" "${REPAIR_LOG_FILE}"
               echo "::warning::Post-Codex repair attempt ${attempt} failed while invoking Codex."
               emit_implement_substate "implement_repair" "implement_repair" "Failed" "${attempt}" "${REPAIR_LOG_FILE}"
               continue
             fi
+            echo 'BASH_ENV=' >> "$GITHUB_ENV"
+            workspace_shell_env_clean="$(mktemp "${RUNTIME_DIR}/workspace-shell.XXXXXX")"
+            printf '%s\n' \
+              'if [ -n "${WORKSPACE_PATH:-}" ] && [ -d "${WORKSPACE_PATH}" ]; then' \
+              '  cd "${WORKSPACE_PATH}"' \
+              'fi' > "${workspace_shell_env_clean}"
+            mv -fT -- "${workspace_shell_env_clean}" "${RUNTIME_DIR}/workspace-shell.env"
+            echo "BASH_ENV=${RUNTIME_DIR}/workspace-shell.env" >> "$GITHUB_ENV"
             editor_git_credentials restore
             emit_implement_substate "implement_repair" "implement_repair" "Finishing" "${attempt}" "${REPAIR_LOG_FILE}"
 

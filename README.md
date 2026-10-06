@@ -1511,7 +1511,11 @@ through `clarify → plan → implement → review`.
   restore steps also start without `BASH_ENV`, so an editor-written workspace
   startup file cannot execute before these steps handle credentials. Planning
   runs its editor runner from memory to prevent in-place edits from changing
-  its post-editor restore path.
+  its post-editor restore path. The credentialed implementation step also
+  starts without `BASH_ENV` and enters the workspace explicitly; after each
+  implementation or repair editor launch, it replaces the writable startup
+  file before later steps can source it, clearing the next step's `BASH_ENV`
+  first so a failed replacement cannot source the poisoned file.
   Implement runs with heal evidence also pin the issue/plan file allowlist
   before the editor and block out-of-scope commits even when the normal guard
   or per-run override is disabled. This is not a process isolation boundary:

@@ -363,6 +363,9 @@ def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
 		step = implement.split(f"      - name: {step_name}\n", 1)[1].split("      - name: ", 1)[0]
 		assert "BASH_ENV: ''" in step
 		assert 'cd "${WORKSPACE_PATH}"' in step
+	implementation = implement.split("      - name: Run Codex implementation\n", 1)[1].split("      - name: ", 1)[0]
+	assert "BASH_ENV: ''" in implementation
+	assert 'cd "${WORKSPACE_PATH}"' in implementation.split('source scripts/gh_helpers.sh', 1)[0]
 	assert 'env -u BASH_ENV -u ENV bash -c "${EDITOR_GIT_CREDENTIALS_SCRIPT}"' in (ROOT / "scripts" / "run_plan_codex.sh").read_text()
 	assert "--format structured" in implement
 	assert "--format structured" in (ROOT / "scripts" / "run_plan_codex.sh").read_text()
@@ -431,6 +434,46 @@ def test_post_repair_restore_ignores_tampered_editor_writable_copies(tmp_path: P
 	assert "reason=pinned_helper_unavailable" in result.stderr
 	assert "PWNED" not in result.stdout + result.stderr
 	assert "STARTUP_WITH_TOKEN" not in result.stderr
+
+
+def test_editor_poisoned_workspace_startup_is_replaced_before_next_step(tmp_path: Path) -> None:
+	workflow = (WORKFLOWS / "implement.yml").read_text()
+	marker = 'echo \'BASH_ENV=\' >> "$GITHUB_ENV"'
+	restored = 'echo "BASH_ENV=${RUNTIME_DIR}/workspace-shell.env" >> "$GITHUB_ENV"'
+	parts = workflow.split(marker)
+	assert len(parts) == 4  # implementation and both syntax-repair outcomes
+	for index, part in enumerate(parts[1:]):
+		assert restored in part
+		block = marker + part.split(restored, 1)[0] + restored
+		runtime = tmp_path / f"runtime-{index}"
+		workspace = tmp_path / f"workspace-{index}"
+		runtime.mkdir()
+		workspace.mkdir()
+		target = tmp_path / f"poison-{index}.env"
+		target.write_text("echo STARTUP_WITH_TOKEN >&2\n")
+		(runtime / "workspace-shell.env").symlink_to(target)
+		github_env = tmp_path / f"github-{index}.env"
+		env = dict(os.environ, RUNTIME_DIR=str(runtime), WORKSPACE_PATH=str(workspace),
+			GITHUB_ENV=str(github_env), GH_TOKEN="fake-token", BASH_ENV="")
+		result = subprocess.run(["bash", "-e", "-c", block], cwd=tmp_path, env=env,
+			capture_output=True, text=True)
+		assert result.returncode == 0, result.stderr
+		assert "STARTUP_WITH_TOKEN" not in result.stderr
+		assert target.read_text() == "echo STARTUP_WITH_TOKEN >&2\n"
+		assert not (runtime / "workspace-shell.env").is_symlink()
+		assert github_env.read_text().splitlines() == ["BASH_ENV=", f"BASH_ENV={runtime}/workspace-shell.env"]
+		env["BASH_ENV"] = str(runtime / "workspace-shell.env")
+		child = subprocess.run(["bash", "-c", "pwd"], cwd=tmp_path, env=env,
+			capture_output=True, text=True)
+		assert child.returncode == 0 and child.stdout.strip() == str(workspace)
+		assert "STARTUP_WITH_TOKEN" not in child.stderr
+	broken_env_file = tmp_path / "github-broken.env"
+	bad_env = dict(os.environ, RUNTIME_DIR=str(tmp_path / "missing-runtime"),
+		GITHUB_ENV=str(broken_env_file), BASH_ENV="")
+	failed_reset = subprocess.run(["bash", "-e", "-c", marker + parts[1].split(restored, 1)[0] + restored],
+		cwd=tmp_path, env=bad_env, capture_output=True, text=True)
+	assert failed_reset.returncode != 0
+	assert broken_env_file.read_text() == "BASH_ENV=\n"
 
 
 def test_review_workspace_accepts_only_the_known_helper_path() -> None:
