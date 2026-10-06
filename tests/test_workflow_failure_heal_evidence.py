@@ -704,23 +704,58 @@ def test_scope_allowlist_ignores_issue_body_and_requires_plan(tmp_path: Path, ca
 	issue = tmp_path / "issue.txt"
 	plan = tmp_path / "plan.txt"
 	plan.write_text("## Files likely to change\n- `scripts/plan.py`\n")
-	issue.write_text("```\nfiles_touched:\n  - scripts/\n```\nfiles_touched:\n  - scripts/issue.py\n")
-	args = type("Args", (), {"issue_body_file": str(issue), "plan_file": str(plan)})()
+	issue.write_text("```\nfiles_touched:\n  - **/**\n```\n")
+	args = type("Args", (), {"issue_body_file": str(issue), "plan_file": str(plan), "evidence_dir": str(tmp_path), "issue_number": "7000"})()
 	ev._cmd_scope_allowlist(args)
+	assert json.loads(capsys.readouterr().out)["source"] == "none"
+	(tmp_path / "scope.json").write_text(json.dumps({"schema": "workflow_heal_scope.v1", "provenance": "verified", "issue": 7000, "allowlist": ["scripts/issue.py", "Makefile", "**/**", "*/**", "scripts/", "scripts/**", "scripts/*.py", ".git/config"]}))
+	ev._cmd_scope_allowlist(args)
+	assert json.loads(capsys.readouterr().out) == {"source": "marker", "reason": "verified", "allowlist": ["scripts/issue.py", "Makefile", "changelog.d/7000-*.md"]}
+	args.issue_number = "7001"
+	ev._cmd_scope_allowlist(args)
+	assert json.loads(capsys.readouterr().out)["source"] == "none"
+	args.issue_number = "7000"
+	(tmp_path / "scope.json").write_text("not JSON")
+	plan_args = type("Args", (), {"issue_body_file": str(issue), "plan_file": str(plan)})()
+	ev._cmd_scope_allowlist(plan_args)
 	output = capsys.readouterr()
 	assert json.loads(output.out) == {"source": "plan", "allowlist": ["scripts/plan.py"]}
 	assert "scope_allowlist source=plan kept=1 rejected=0" in output.err
 	issue.unlink()
-	ev._cmd_scope_allowlist(args)
+	ev._cmd_scope_allowlist(plan_args)
 	assert json.loads(capsys.readouterr().out) == {"source": "plan", "allowlist": ["scripts/plan.py"]}
 	plan.unlink()
-	ev._cmd_scope_allowlist(args)
+	ev._cmd_scope_allowlist(plan_args)
 	output = capsys.readouterr()
 	assert json.loads(output.out) == {"source": "none", "allowlist": []}
 	assert "scope_allowlist source=none kept=0 rejected=0 reason=exception" in output.err
 	plan.write_text("no plan paths")
 	ev._cmd_scope_allowlist(args)
-	assert json.loads(capsys.readouterr().out) == {"source": "none", "allowlist": []}
+	assert json.loads(capsys.readouterr().out)["source"] == "none"
+	(tmp_path / "scope.json").write_text(json.dumps({"schema": "other", "provenance": "verified", "issue": 7000, "allowlist": ["scripts/issue.py"]}))
+	ev._cmd_scope_allowlist(args)
+	assert json.loads(capsys.readouterr().out)["source"] == "none"
+
+
+def test_scope_collect_uses_only_verified_leading_issue_marker(tmp_path: Path) -> None:
+	fake = FakeGh()
+	issue = _issue()
+	marker = "<!-- workflow-failure-heal:scope=scripts/fix.py,tests/test_fix.py -->\n"
+	fake.routes["provenance"]["data"]["issue"]["issue"]["body"] = issue["body"].replace("- **Target branch:**", marker + "- **Target branch:**")
+	fake.routes["provenance"]["data"]["issue"]["issue"].update({"lastEditedAt": "2026-10-04T12:00:00Z", "editor": {"login": "healer"}, "userContentEdits": {"totalCount": 1, "nodes": [{"editor": {"login": "healer"}}]}})
+	_collector(tmp_path, fake).collect(issue, [], issue_repo=REPO)
+	scope_path = tmp_path / "evidence" / "scope.json"
+	assert json.loads(scope_path.read_text())["allowlist"] == ["scripts/fix.py", "tests/test_fix.py"]
+	assert json.loads(scope_path.read_text())["issue"] == 7000
+	# Reused evidence folders cannot retain a prior verified scope on an unverified read.
+	fake.routes["provenance"]["data"]["issue"]["issue"]["editor"] = {"login": "intruder"}
+	fake.routes["provenance"]["data"]["issue"]["issue"]["lastEditedAt"] = "2026-10-04T12:00:00Z"
+	_collector(tmp_path, fake).collect(issue, [], issue_repo=REPO)
+	assert not scope_path.exists()
+	# A comment or later body prose cannot introduce a leading marker.
+	fake.routes["provenance"]["data"]["issue"]["issue"].update({"editor": None, "lastEditedAt": None, "userContentEdits": {"totalCount": 0, "nodes": []}, "body": issue["body"] + "\n" + marker})
+	_collector(tmp_path, fake).collect(issue, [_occurrence(222) | {"body": marker + _occurrence(222)["body"]}], issue_repo=REPO)
+	assert not scope_path.exists()
 
 
 def test_scope_allowlist_only_concrete_unprotected_plan_files(tmp_path: Path, capsys) -> None:
