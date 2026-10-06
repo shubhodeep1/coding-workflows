@@ -8207,6 +8207,44 @@ def test_review_sandbox_cleanup_failure_preserves_commit_but_blocks_publication(
 		assert git("show", "HEAD:edited.txt") == "after"
 		assert "DID_COMMIT=true" in github_env.read_text(encoding="utf-8")
 		assert failed  # success()-gated push/merge cannot publish this commit.
+		# Negative control: the old cleanup-before-commit order skips a real edit
+		# after cleanup fails, making the lost-changes detector eligible instead.
+		(repo / "edited.txt").write_text("old-order\n", encoding="utf-8")
+		legacy_head = git("rev-parse", "HEAD")
+		legacy_cleanup_result = None
+		legacy_commit_result = None
+		legacy_failed = False
+		legacy_steps = (cleanup_step, commit_step)
+		assert legacy_steps.index(cleanup_step) < legacy_steps.index(commit_step)
+		for step in legacy_steps:
+			if step is commit_step and not legacy_failed:  # Implicit success() skips this after cleanup fails.
+				legacy_commit_result = subprocess.run(
+					["bash", str(REPO_ROOT / "scripts/review_commit_changes.sh")],
+					cwd=repo, env=commit_env, capture_output=True, text=True, check=False)
+			elif step is cleanup_step:
+				legacy_cleanup_result = subprocess.run(
+					["bash", str(REPO_ROOT / "scripts/review_untrusted_sandbox.sh"), "cleanup"],
+					env=cleanup_env, capture_output=True, text=True, check=False)
+				legacy_failed = legacy_cleanup_result.returncode != 0
+		assert legacy_cleanup_result is not None
+		assert legacy_cleanup_result.returncode == 1
+		assert "reason=remove_failed" in legacy_cleanup_result.stderr
+		assert legacy_commit_result is None, "old cleanup-before-commit order unexpectedly ran the commit"
+		assert git("rev-parse", "HEAD") == legacy_head
+		assert git("show", "HEAD:edited.txt") == "after"
+		assert (repo / "edited.txt").read_text(encoding="utf-8") == "old-order\n"
+		assert "steps.commit_changes.outputs.did_commit != 'true'" in detector_step["if"]
+		legacy_detector_env = _git_clean_env({
+			"GITHUB_ENV": str(tmp / "legacy_github_env"), "CAN_PUSH": "true",
+			"EDITOR_SUMMARY_FILE": str(tmp / "editor_summary.txt"),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+		})
+		legacy_detector_result = subprocess.run(
+			["bash", str(REPO_ROOT / "scripts/review_autofix_step_editor_uncommitted_changes.sh")],
+			cwd=repo, env=legacy_detector_env, capture_output=True, text=True, check=False)
+		assert legacy_detector_result.returncode == 0, legacy_detector_result.stderr
+		assert "Editor claimed changes but no commit was produced" in legacy_detector_result.stdout
+		assert "EDITOR_CHANGES_LOST=true" in (tmp / "legacy_github_env").read_text(encoding="utf-8")
 
 
 def _run_review_sandbox_cleanup(tmp: Path, root: Path) -> subprocess.CompletedProcess[str]:
