@@ -118,6 +118,9 @@ case "${method}" in
   GET)
     if [ -f "${FAKE_GH_DIR}/fail_get" ]; then exit 1; fi
     case "${path}" in
+      user)
+        if [ -f "${FAKE_GH_DIR}/fail_user_get" ]; then exit 1; fi
+        fixture="${FAKE_GH_DIR}/user.json" ;;
       repos/*/pulls) fixture="${FAKE_GH_DIR}/pulls.json" ;;
       repos/*/pulls/*/files) n="${path#*/pulls/}"; n="${n%%/*}"; fixture="${FAKE_GH_DIR}/files_${n}.json" ;;
       repos/*/issues/*/comments) n="${path#*/issues/}"; n="${n%%/*}"; fixture="${FAKE_GH_DIR}/comments_${n}.json" ;;
@@ -128,7 +131,9 @@ case "${method}" in
       exit 1
     fi
     if [ ! -f "${fixture}" ]; then
-      echo '[]'
+      if [ "${path}" = "user" ]; then
+        if [ -n "${jqf}" ]; then printf '%s\n' '{"login":"merge-train-bot"}' | jq -r "${jqf}"; else echo '{"login":"merge-train-bot"}'; fi
+      else echo '[]'; fi
       exit 0
     fi
     if [ -n "${jqf}" ]; then jq -r "${jqf}" "${fixture}"; else cat "${fixture}"; fi
@@ -139,6 +144,10 @@ case "${method}" in
     ;;
   POST)
     if [[ "${path}" == repos/*/issues/*/labels ]] && [ -f "${FAKE_GH_DIR}/label_post_fail" ]; then exit 1; fi
+    exit 0
+    ;;
+  PATCH)
+    if [[ "${path}" == repos/*/issues/comments/* ]] && [ -f "${FAKE_GH_DIR}/comment_patch_fail" ]; then exit 1; fi
     exit 0
     ;;
   *) exit 0 ;;
@@ -274,6 +283,7 @@ def test_gate_smoke_retires_prior_queue_before_removing_label(tmp_path: Path) ->
 	]), encoding="utf-8")
 	(fixtures / "comments_4077.json").write_text(json.dumps([{
 		"id": 98,
+		"user": {"login": "merge-train-bot"},
 		"body": "<!-- merge-train:queued -->\nReview queued",
 	}]), encoding="utf-8")
 	_write_files(fixtures, 4075, ["tests/e2e_smoke_canary.txt"])
@@ -397,6 +407,7 @@ def test_gate_releases_stale_label_when_unblocked(tmp_path: Path) -> None:
 	]), encoding="utf-8")
 	(fixtures / "comments_4077.json").write_text(json.dumps([{
 		"id": 98,
+		"user": {"login": "merge-train-bot"},
 		"body": "<!-- merge-train:queued -->\nReview queued",
 	}]), encoding="utf-8")
 	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
@@ -420,6 +431,7 @@ def test_gate_consumes_prior_queue_marker_as_one_shot_bypass(tmp_path: Path) -> 
 	]), encoding="utf-8")
 	(fixtures / "comments_4077.json").write_text(json.dumps([{
 		"id": 99,
+		"user": {"login": "merge-train-bot"},
 		"body": "<!-- merge-train:queued -->\nReview queued",
 	}]), encoding="utf-8")
 	_write_files(fixtures, 4075, ["backend/promo_email_sender.py"])
@@ -434,6 +446,87 @@ def test_gate_consumes_prior_queue_marker_as_one_shot_bypass(tmp_path: Path) -> 
 	assert "labels[]=ai:merge-queued" not in log_text
 	assert "AUTOFIX_MERGE_QUEUED" not in env_out
 	assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
+
+
+@pytest.mark.parametrize("comments,patch_fails,expected_patch", [
+	([{"id": 99, "user": {"login": "attacker"}, "body": "<!-- merge-train:queued -->"}], False, None),
+	([{"id": 98, "user": {"login": "merge-train-bot"}, "body": "<!-- merge-train:queued -->"},
+	  {"id": 99, "user": {"login": "attacker"}, "body": "<!-- merge-train:queued -->"}], False, 98),
+	([{"id": 98, "user": {"login": "merge-train-bot"}, "body": "<!-- merge-train:queued -->"}], True, 98),
+])
+def test_gate_requires_own_consumed_marker_for_bypass(
+	tmp_path: Path, comments: list[dict], patch_fails: bool, expected_patch: int | None,
+) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"), _pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	(fixtures / "comments_4077.json").write_text(json.dumps(comments), encoding="utf-8")
+	_write_files(fixtures, 4075, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	if patch_fails:
+		(fixtures / "comment_patch_fail").touch()
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064",
+	)
+	assert result.returncode == 0, result.stderr
+	assert log_text.count("gh api user") == 1
+	assert "PATCH repos/acme/consumer/issues/comments/99" not in log_text
+	if expected_patch is not None:
+		assert f"PATCH repos/acme/consumer/issues/comments/{expected_patch}" in log_text
+	if expected_patch is not None and not patch_fails:
+		assert "result=bypassed" in result.stdout
+		assert "labels[]=ai:merge-queued" not in log_text
+	else:
+		assert "result=bypassed" not in result.stdout
+		assert "result=queued" in result.stdout
+		assert "POST repos/acme/consumer/issues/4077/labels" in log_text
+		assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
+		if expected_patch is None:
+			assert "POST repos/acme/consumer/issues/4077/comments" in log_text
+
+
+def test_gate_identity_failure_does_not_trust_queue_marker(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"), _pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	(fixtures / "comments_4077.json").write_text(json.dumps([{
+		"id": 99, "user": {"login": "merge-train-bot"}, "body": "<!-- merge-train:queued -->",
+	}]), encoding="utf-8")
+	_write_files(fixtures, 4075, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	(fixtures / "fail_user_get").touch()
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064",
+		GH_RETRY_MAX_ATTEMPTS="1",
+	)
+	assert result.returncode == 0, result.stderr
+	assert "could not resolve the authenticated account" in result.stdout
+	assert "could not inspect prior queue state" in result.stdout
+	assert "result=bypassed" not in result.stdout
+	assert "issues/4077/comments" not in log_text
+	assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
+	assert log_text.count("gh api user") == 1
+
+
+def test_gate_identity_failure_keeps_unblocked_queue_label(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	(fixtures / "fail_user_get").touch()
+	result, log_text, _env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064",
+		GH_RETRY_MAX_ATTEMPTS="1",
+	)
+	assert result.returncode == 0, result.stderr
+	assert "retaining ai:merge-queued" in result.stdout
+	assert "DELETE repos/acme/consumer/issues/4077/labels" not in log_text
 
 
 def test_gate_falls_back_to_api_for_git_quoted_paths(tmp_path: Path) -> None:
@@ -534,6 +627,7 @@ def test_release_dispatches_only_unblocked_queued_prs(tmp_path: Path) -> None:
 	]), encoding="utf-8")
 	(fixtures / "comments_4077.json").write_text(json.dumps([{
 		"id": 97,
+		"user": {"login": "merge-train-bot"},
 		"body": "<!-- merge-train:queued -->\nReview queued",
 	}]), encoding="utf-8")
 	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
@@ -554,6 +648,46 @@ def test_release_dispatches_only_unblocked_queued_prs(tmp_path: Path) -> None:
 	assert "DELETE repos/acme/consumer/issues/4077/labels/ai%3Amerge-queued" in log_text
 	assert "issues/4081/labels/ai%3Amerge-queued" not in log_text
 	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=2 released=1 base_filter=main" in result.stdout
+
+
+def test_release_ignores_forged_marker_and_resolves_identity_once(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+		_pr(4085, "ai/issue-4069", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/a.py"])
+	_write_files(fixtures, 4085, ["backend/b.py"])
+	(fixtures / "comments_4077.json").write_text(json.dumps([
+		{"id": 97, "user": {"login": "attacker"}, "body": "<!-- merge-train:queued -->"},
+		{"id": 100, "user": {"login": "attacker"}, "body": "<!-- merge-train:released -->"},
+	]), encoding="utf-8")
+	(fixtures / "comments_4085.json").write_text(json.dumps([{
+		"id": 98, "user": {"login": "merge-train-bot"}, "body": "<!-- merge-train:queued -->",
+	}]), encoding="utf-8")
+	result, log_text, _env_out = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=2 released=2" in result.stdout
+	assert "PATCH repos/acme/consumer/issues/comments/97" not in log_text
+	assert "PATCH repos/acme/consumer/issues/comments/100" not in log_text
+	assert "POST repos/acme/consumer/issues/4077/comments" in log_text
+	assert "PATCH repos/acme/consumer/issues/comments/98" in log_text
+	assert log_text.count("gh api user") == 1
+
+
+def test_release_keeps_queue_when_identity_unavailable(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/a.py"])
+	(fixtures / "fail_user_get").touch()
+	result, log_text, _env_out = _run("release", tmp_path, bin_dir, fixtures, log, GH_RETRY_MAX_ATTEMPTS="1")
+	assert result.returncode == 0, result.stderr
+	assert "could not resolve the authenticated account" in result.stdout
+	assert "could not inspect the queue marker" in result.stdout
+	assert "DELETE repos/acme/consumer/issues/4077/labels" not in log_text
+	assert "gh workflow run" not in log_text
 
 
 def test_release_ignores_fork_blocker_and_dispatches(tmp_path: Path) -> None:
@@ -1059,6 +1193,7 @@ def test_release_leaves_pr_queued_when_run_listing_fails(tmp_path: Path) -> None
 	_write_files(fixtures, 4085, ["twap_router.py"])
 	(fixtures / "comments_4077.json").write_text(json.dumps([{
 		"id": 97,
+		"user": {"login": "merge-train-bot"},
 		"body": "<!-- merge-train:queued -->\nReview queued",
 	}]), encoding="utf-8")
 	(fixtures / "fail_runs_get").touch()

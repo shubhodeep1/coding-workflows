@@ -195,6 +195,7 @@ changelog.d/5889-release-gates-claude-assets.md
 changelog.d/5892-heal-autofix-fingerprint-header.md
 changelog.d/5964-reviewer-infra-nonblocking.md
 changelog.d/5999-restore-scoped-smoke-run-lookups.md
+changelog.d/6031-repo-checks-import-audit-in-container.md
 changelog.d/6055-review-editor-edits-reach-work-tree.md
 changelog.d/6118-main-ci-green-claude-template-sync.md
 changelog.d/6118-phase-0-standalone-issues-default-to-codex.md
@@ -239,11 +240,14 @@ changelog.d/6362-deps-network-without-source.md
 changelog.d/6375-claude-live-sync-provenance-hold.md
 changelog.d/6388-review-blocked-pr-head-identity.md
 changelog.d/6389-review-blocked-fix-scope-pr-files-only.md
+changelog.d/6390-review-blocked-workflow-opt-out-paths.md
 changelog.d/6391-sync-pr-lookup-verifies-base.md
 changelog.d/6400-rb-judge-security-severity-block.md
 changelog.d/6401-single-issue-security-pass-completed-audit.md
 changelog.d/6404-claude-live-sync-pr-provenance.md
 changelog.d/6420-release-gate-claude-parity.md
+changelog.d/6455-rb-fix-sandbox-workspace.md
+changelog.d/6500-merge-train-fork-blockers.md
 changelog.d/autofix-cap-and-security-exhaustion-judge.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/release-smoke-run-lookup.md

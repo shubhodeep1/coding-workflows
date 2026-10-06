@@ -54,7 +54,7 @@ Phases of the unattended pipeline (each is a separate workflow file under
    model reviewer + consolidator + editor loop on PR changes. Two pre-review
    gates run first: the merge train (`scripts/review_merge_train.sh gate`,
    `MERGE_TRAIN_ENABLED`) queues an `ai/issue-*` PR behind older open
-   same-repository `ai/issue-*` PRs on the same base that edit the same files (label
+   same-repository `ai/issue-*` PRs on the same base that edit the same files (the queued marker is verified against the `GH_PAT` account before it can authorize a bypass; label
    `ai:merge-queued`; released by `cancel_on_pr_close.yml` on close and by
    `orchestrate_poll.yml` every tick; managed/standalone conflict and stall
    recovery treat the label as an intentional wait), and the merge-topology gate hands a
