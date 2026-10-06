@@ -8890,10 +8890,16 @@ try:
             raise ValueError("invalid staged entry")
         header, indexed_path = entries[0].split(b"\t", 1)
         mode, blob, stage = header.split(b" ")
-        if indexed_path != path or stage != b"0" or mode not in (b"100644", b"100755"):
+        if indexed_path != path or stage != b"0" or mode not in (b"100644", b"100755", b"120000", b"160000"):
             raise ValueError("invalid protected mode")
         if mode not in {side[0] for side in sides.values() if side}:
             raise ValueError("changed protected mode")
+        if mode in (b"120000", b"160000"):
+            # A symlink target or gitlink must be selected intact from a side;
+            # a gitlink points to a commit, not a blob of text to interleave.
+            if (mode, blob) not in (sides.get(b"2"), sides.get(b"3")):
+                raise ValueError("invented conflict target")
+            continue
         allowed = set()
         side_lines = []
         side_counts = []

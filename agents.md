@@ -666,7 +666,8 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   there is no automated deletion override, including for lines both sides added.
   Deleting a conflicted file present on both sides or using a file mode from
   neither side is rejected; one-sided delete/modify conflicts may still resolve
-  to deletion.
+  to deletion. Symlink and gitlink resolutions may select an intact target from
+  either merge side; gitlinks are not read as text blobs.
   Lines inherited unchanged from the common base cannot be duplicated; a
   provenance check that exceeds its fixed work limit rejects the resolution
   without pushing.
@@ -757,11 +758,12 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   are checked in the directory selected by `env -C` or `GIT_DIR`; a commit
   whose directory selector cannot be resolved and an unparseable `env -S`
   command ask for confirmation without querying the session checkout's PR
-  history. Unrelated `env`/Git config in shell control does not turn a
-  warning-only unresolved commit into an ask. A push from an unresolved
-  directory (including an appended `GIT_DIR+=` / `GIT_WORK_TREE+=`, whose
-  value is never applied) is checked
-  against the session checkout, which can still block, and otherwise asks.
+  history. An absolute `core.worktree` path cannot resolve an unknown Git
+  directory, so that commit also asks. Unrelated `env`/Git config in shell
+  control does not turn a warning-only unresolved commit into an ask. A push
+  from an unresolved directory (including an appended `GIT_DIR+=` /
+  `GIT_WORK_TREE+=`, whose value is never applied) is checked against the
+  session checkout, which can still block, and otherwise asks.
   Leading redirections, including those after environment assignments, do
   not bypass commit/push detection. A spaced, quoted or escaped digit before a
   redirection (`2 >out`, `'2'>out`) is a push refspec with the normal check;

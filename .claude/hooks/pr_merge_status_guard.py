@@ -532,6 +532,9 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 					worktree_value = value.split("=", 1)[1]
 					if uncertain and (not os.path.isabs(worktree_value) or _literal_guard_path(worktree_value, checkout) is None):
 						unresolved_directory_selector = True
+					elif uncertain:
+						# Even a valid absolute worktree does not identify the Git directory.
+						unresolved_directory_selector = True
 			if value is not None:
 				if option.startswith("-C"):
 					git_cwd = (_literal_guard_path(value, git_cwd or checkout)

@@ -1358,6 +1358,7 @@ resolutions of protected files cannot delete a file present on both merge
 sides or remove lines shared by both sides, including repeated lines. A
 one-sided delete/modify conflict may still resolve to deletion. Invalid
 resolutions are rejected without a push and retried on the next poll tick.
+Symlink and gitlink conflicts may select an intact target from either merge side.
 If the integration judge cannot publish a resolution, the poller warns and
 rechecks mergeability on the next tick instead of failing the project immediately.
 The merged-PR push guard checks `origin` as before. A push selecting a different
@@ -1377,9 +1378,11 @@ merged-PR check in the worktree selected by `env -C` or `GIT_DIR`; if that
 selector cannot be resolved, the commit asks, and an unparseable `env -S`
 command asks. Other commits with an unresolved directory (for example, shell
 control with `env FOO=bar` or `git -c user.name=bot`) only warn after checking
-the session checkout. A push from a directory the guard cannot resolve
-(including an appended `GIT_DIR+=` or `GIT_WORK_TREE+=`, whose value is never applied) is
-checked against the session checkout, which can still block, and otherwise asks.
+the session checkout. If the directory is unknown, even an absolute
+`-c core.worktree=` value does not identify the Git directory, so a commit asks.
+A push from a directory the guard cannot resolve (including an appended
+`GIT_DIR+=` or `GIT_WORK_TREE+=`, whose value is never applied) is checked
+against the session checkout, which can still block, and otherwise asks.
 Leading shell redirections, including those following environment assignments,
 do not bypass the merged-PR check. A spaced, quoted or escaped digit before a
 redirection (`2 >out`, `'2'>out`) is a push refspec and gets the normal

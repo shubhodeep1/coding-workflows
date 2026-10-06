@@ -1467,6 +1467,28 @@ def test_unresolved_directory_selector_inside_shell_control_asks(merged_branch_r
 	assert _ask_decision(proc) is not None
 
 
+def test_absolute_core_worktree_cannot_identify_repo_inside_shell_control(merged_branch_repo, monkeypatch, capsys) -> None:
+	repo, _ = merged_branch_repo
+	other = repo.parent / "open-worktree"
+	_git(repo, "worktree", "add", "-b", "feature/open", str(other), "main")
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("must not check the session checkout"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(other),
+		"tool_input": {"command": f"if true; then git -c core.worktree={repo} commit -m x; fi"}})
+	assert code == 0 and message == ""
+	assert json.loads(capsys.readouterr().out.splitlines()[-1])["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_absolute_core_worktree_with_known_directory_checks_repo(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, branch, cwd: [dict(MERGED_PR, headRefOid=merged_sha)])
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": f"git -c core.worktree={repo} commit -m x"}})
+	assert code == 2 and "Branch `feature/x`" in message
+
+
 @pytest.mark.parametrize("selector,path", [
 	("GIT_DIR", ".git"),
 	("GIT_WORK_TREE", ""),
