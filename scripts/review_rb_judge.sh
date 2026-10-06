@@ -168,9 +168,9 @@ _review_rb_consume_transfer_marker()
     if [ -f "${rb_transfer_reason_file}" ] && [ ! -L "${rb_transfer_reason_file}" ] &&
        [ "$(wc -c < "${rb_transfer_reason_file}")" -le 240 ] &&
        [[ "$(< "${rb_transfer_reason_file}")" =~ ^::error::Review\ isolation\ snapshot\ or\ transfer\ rejected\ \(ValueError\)\ reason=(admitted_inventory_missing|symlink_path|symlink_in_path|unsafe_file|file_changed|entry_limit|unsafe_directory(\ category=(symlink|invalid_name|dot_github_subtree|env_like|sensitive_name|key_material_suffix|excluded_name_variant|other)\ depth=(1|2|3[+])|\ dir=[A-Za-z0-9._/-]{1,64})?|unsafe_result_path|workspace_size_limit|size_limit|host_baseline_changed|host_path_conflict|result_conflicts_host|transfer_rollback_failed)$ ]]; then
-      rb_transfer_reason=" reason=${BASH_REMATCH[1]%% *}"
-      if [ -n "${BASH_REMATCH[3]:-}" ]; then
-        rb_transfer_reason+=" category=${BASH_REMATCH[3]} depth=${BASH_REMATCH[4]}"
+       rb_transfer_reason=" reason=${BASH_REMATCH[1]%% *}"
+       if [ -n "${BASH_REMATCH[3]:-}" ]; then
+         rb_transfer_reason+=" category=${BASH_REMATCH[3]} depth=${BASH_REMATCH[4]}"
       fi
     fi
     echo "::error::Review-blocked judge sandbox transfer failed; refusing to commit the fix.${rb_transfer_reason}" >&2

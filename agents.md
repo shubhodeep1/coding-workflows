@@ -105,7 +105,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
      and `.claude/` files remain excluded from snapshot and transfer. An editor
      write to an excluded file in an admitted directory is dropped; a new
      directory outside the admitted ones fails the transfer and the editor step
-     with it, reporting `reason=unsafe_directory dir=<bounded>` when safe.
+     with it, reporting a fixed `reason=unsafe_directory category=<class>` and
+     bucketed `depth=1|2|3+` without printing the sandbox-controlled path.
     The command contract test `tests/test_audit_plans_command.py` is omitted
     from the sandbox; host CI still runs it. The isolation helpers must already
     exist in the verified workflow support commit; a PR's own copies are review data,
