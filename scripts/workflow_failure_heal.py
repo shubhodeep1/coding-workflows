@@ -672,16 +672,14 @@ def is_valid_repo_path(value: Any) -> bool:
 
 
 def is_exact_scope_path(value: Any) -> bool:
-	"""Allow only bounded file paths, never a directory, glob or git metadata."""
+	"""Allow bounded literal paths; heal-mode matching cannot authorize descendants."""
 	if not is_valid_repo_path(value) or any(part.casefold() == ".git" for part in value.split("/")):
 		return False
-	last = value.rsplit("/", 1)[-1]
-	stem, separator, extension = last.rpartition(".")
-	return bool(stem and separator and extension)
+	return not value.endswith(".")
 
 
 def extract_affected_files(diagnosis: str, issue_repo: str) -> list[str]:
-	"""Extract exact paths for the destination repository from the first affected-files section."""
+	"""Extract diagnostic paths; model output from this helper never authorizes writes."""
 	if not is_valid_repo_slug(issue_repo):
 		return []
 	paths: list[str] = []
@@ -705,7 +703,7 @@ def extract_affected_files(diagnosis: str, issue_repo: str) -> list[str]:
 		tokens = bullet.group(1).replace("`", "").split()
 		if not tokens:
 			continue
-		token = tokens[0].rstrip(",;.")
+		token = tokens[0].rstrip(",;")
 		prefix = issue_repo + ":"
 		alternate = issue_repo + "/"
 		if token[:len(prefix)].lower() == prefix.lower():
@@ -719,6 +717,25 @@ def extract_affected_files(diagnosis: str, issue_repo: str) -> list[str]:
 			if len(paths) == SCOPE_MARKER_MAX_ENTRIES:
 				break
 	return paths
+
+
+def derive_heal_scope_paths(payload: dict[str, Any], issue_repo: str) -> list[str]:
+	"""Derive write scope only from validated autofix reporter facts."""
+	if payload.get("source_kind") != "autofix_failure" or not is_valid_repo_slug(issue_repo):
+		return []
+	paths: list[str] = []
+	crash_file = payload.get("crash_file")
+	if is_exact_scope_path(crash_file):
+		paths.append(crash_file)
+	if payload.get("source_repo") == issue_repo:
+		_ownership, pipeline_files = classify_pipeline_ownership(
+			crash_file=crash_file,
+			changed_files=payload.get("changed_files") or [],
+			script_ref=payload.get("script_ref"),
+			head_sha=payload.get("head_sha"),
+		)
+		paths.extend(path for path in pipeline_files if is_exact_scope_path(path))
+	return list(dict.fromkeys(paths))[:SCOPE_MARKER_MAX_ENTRIES]
 
 
 def compose_scope_marker(paths: list[str]) -> str:
@@ -1750,7 +1767,7 @@ def compose_issue_body(
 	if runs_marker:
 		parts.append(runs_marker)
 	if issue_repo and is_valid_repo_slug(issue_repo):
-		scope_marker = compose_scope_marker(extract_affected_files(diagnosis, issue_repo))
+		scope_marker = compose_scope_marker(derive_heal_scope_paths(payload, issue_repo))
 		if scope_marker:
 			parts.append(scope_marker)
 	parts.append("")

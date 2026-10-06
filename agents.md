@@ -249,11 +249,13 @@ Phases of the unattended pipeline (each is a separate workflow file under
     workspace explicitly; each editor attempt replaces the startup file before
     later steps source it, clearing the inherited setting first on failure.
     Heal-evidence implement runs pin the intake-verified leading scope marker
-    (exact files in the intake diagnosis for the issue's repository) before the
+    (exact files from validated autofix reporter facts, never diagnosis prose) before the
     editor; preflight and commit ignore scope bypass variables, block empty
-    allowlists and reject protected paths even when listed. The only generated
-    scope entry is the issue-number-bound changelog fragment. This is not a
-    same-uid process isolation boundary.
+    allowlists and reject protected paths (including root `ai_pipeline.md`) even
+    when listed. Named files match exactly, including extensionless files; only
+    the issue-number-bound changelog fragment uses a pattern. Reports without a
+    validated crash file or GitHub-derived pipeline-file list get no marker and
+    fail closed. This is not a same-uid process isolation boundary.
     Stable log prefixes:
     `WORKFLOW_HEAL_REPORT`, `WORKFLOW_HEAL_AUTOFIX_REPORT`,
     `WORKFLOW_HEAL_PR_RECONCILE`, `WORKFLOW_HEAL`, `WORKFLOW_HEAL_EVIDENCE`.

@@ -130,8 +130,9 @@ removing an existing identifier, env var, label, or log prefix.
 One bullet per file most likely to need changes, exactly as
 `- <owner>/<repo>:<repo-relative/path.ext>` (wrap the value in backticks).
 List exact file paths only, not globs or directories; include regression test
-files the fix must add or change. The intake turns entries for the issue's own
-repository into the implementer's file allowlist; any other path is blocked.
+files the fix must add or change. This section is diagnostic model output and
+never authorizes implementation writes; only verified machine-readable report
+facts can populate the implementer's scope marker.
 
 ## Fixed by
 Only for `already-fixed`, and required for it: the fixing commit SHA(s),

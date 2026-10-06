@@ -70,7 +70,7 @@ STATUS_SKIP_NO_ALLOWLIST = "skip-no-allowlist"
 STATUS_OUT_OF_SCOPE = "out-of-scope"
 STATUS_HEAL_PROTECTED = "heal-protected"
 HEAL_PROTECTED_PREFIXES = (".github/ai", ".claude", "workflow-templates/.claude")
-HEAL_PROTECTED_ROOT_FILES = frozenset({"claude.md", "agents.md", "unattended_system_instructions.md"})
+HEAL_PROTECTED_ROOT_FILES = frozenset({"claude.md", "agents.md", "ai_pipeline.md", "unattended_system_instructions.md"})
 
 # Dependency lockfiles the implement prompt (prompts/mode-implement.txt,
 # "Dependency / lockfile discipline") instructs the editor to regenerate in the
@@ -280,6 +280,20 @@ def main(argv: list[str] | None = None) -> int:
 	allowlist_entries = _read_allowlist(args.allowlist_file) if args.allowlist_file else None
 
 	status, allowlist, out_of_scope = evaluate(issue_body, staged_paths, allowlist_entries=allowlist_entries)
+	if args.heal_protected and allowlist:
+		# The normal matcher also admits directory prefixes and lockfiles; heal scope is file-exact.
+		out_of_scope = [
+			path for path in staged_paths
+			if not any(
+				path == entry or (
+					re.fullmatch(r"changelog\.d/[1-9][0-9]*-\*\.md", entry)
+					and path.count("/") == 1
+					and fnmatch.fnmatchcase(path, entry)
+				)
+				for entry in allowlist
+			)
+		]
+		status = STATUS_OUT_OF_SCOPE if out_of_scope else STATUS_IN_SCOPE
 
 	if args.allowlist_out:
 		try:

@@ -241,7 +241,7 @@ def test_cli_exit_codes_and_allowlist_dump() -> None:
 
 
 def test_heal_protected_paths_override_allowlist() -> None:
-	protected = [".claude/settings.json", ".github/ai/claude_engine.json", "workflow-templates/.claude/hooks/x.py", "CLAUDE.md", "AGENTS.md", "unattended_system_instructions.md", "x/.GIT/hooks/pre-commit"]
+	protected = [".claude/settings.json", ".github/ai/claude_engine.json", "workflow-templates/.claude/hooks/x.py", "CLAUDE.md", "AGENTS.md", "ai_pipeline.md", "unattended_system_instructions.md", "x/.GIT/hooks/pre-commit"]
 	with tempfile.TemporaryDirectory() as td:
 		staged = Path(td) / "staged.txt"
 		allow = Path(td) / "allow.txt"
@@ -253,6 +253,13 @@ def test_heal_protected_paths_override_allowlist() -> None:
 		assert subprocess.run(command, capture_output=True).returncode == 0
 		staged.write_text("scripts/x.sh\n.github/workflows/y.yml\ndocs/CLAUDE.md\n")
 		assert subprocess.run(command + ["--heal-protected"], capture_output=True).returncode == 0
+		allow.write_text("Makefile\nscripts/fix.py\nchangelog.d/7000-*.md\n")
+		staged.write_text("Makefile\nscripts/fix.py\nchangelog.d/7000-fix.md\n")
+		assert subprocess.run(command + ["--heal-protected"], capture_output=True).returncode == 0
+		staged.write_text("scripts/fix.py/other.py\npackage-lock.json\nchangelog.d/7001-fix.md\nchangelog.d/7000-subdir/other.md\n")
+		proc = subprocess.run(command + ["--heal-protected"], capture_output=True, text=True)
+		assert proc.returncode == guard.EXIT_OUT_OF_SCOPE
+		assert proc.stdout.splitlines() == ["scripts/fix.py/other.py", "package-lock.json", "changelog.d/7001-fix.md", "changelog.d/7000-subdir/other.md"]
 
 	rc, _out = _run_cli("no allowlist here", ["whatever.ts"])
 	assert rc == guard.EXIT_SKIP_NO_ALLOWLIST

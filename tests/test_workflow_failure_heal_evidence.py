@@ -708,9 +708,9 @@ def test_scope_allowlist_ignores_issue_body_and_requires_plan(tmp_path: Path, ca
 	args = type("Args", (), {"issue_body_file": str(issue), "plan_file": str(plan), "evidence_dir": str(tmp_path), "issue_number": "7000"})()
 	ev._cmd_scope_allowlist(args)
 	assert json.loads(capsys.readouterr().out)["source"] == "none"
-	(tmp_path / "scope.json").write_text(json.dumps({"schema": "workflow_heal_scope.v1", "provenance": "verified", "issue": 7000, "allowlist": ["scripts/issue.py", "**/**", "*/**", "scripts/", "scripts/**", ".git/config", "scripts"]}))
+	(tmp_path / "scope.json").write_text(json.dumps({"schema": "workflow_heal_scope.v1", "provenance": "verified", "issue": 7000, "allowlist": ["scripts/issue.py", "Makefile", "**/**", "*/**", "scripts/", "scripts/**", "scripts/*.py", ".git/config"]}))
 	ev._cmd_scope_allowlist(args)
-	assert json.loads(capsys.readouterr().out) == {"source": "marker", "reason": "verified", "allowlist": ["scripts/issue.py", "changelog.d/7000-*.md"]}
+	assert json.loads(capsys.readouterr().out) == {"source": "marker", "reason": "verified", "allowlist": ["scripts/issue.py", "Makefile", "changelog.d/7000-*.md"]}
 	args.issue_number = "7001"
 	ev._cmd_scope_allowlist(args)
 	assert json.loads(capsys.readouterr().out)["source"] == "none"

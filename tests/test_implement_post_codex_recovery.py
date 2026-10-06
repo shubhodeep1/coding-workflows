@@ -2230,6 +2230,7 @@ def test_heal_evidence_scope_lock_blocks_overrides_and_allows_named_file() -> No
 			("outside", "other.md", "out-of-scope"),
 			("inside", "README.md", ""),
 			("protected", "README.md\nCLAUDE.md", "heal-evidence-protected-path"),
+			("instruction", "README.md\nai_pipeline.md", "heal-evidence-protected-path"),
 		):
 			parent = tmp_path / name
 			parent.mkdir()
@@ -2244,6 +2245,8 @@ def test_heal_evidence_scope_lock_blocks_overrides_and_allows_named_file() -> No
 			})
 			if name == "protected":
 				(repo_dir / "CLAUDE.md").write_text("editor change\n", encoding="utf-8")
+			if name == "instruction":
+				(repo_dir / "ai_pipeline.md").write_text("editor change\n", encoding="utf-8")
 			proc = _run_commit_helper(repo_dir, env)
 			assert (proc.returncode == 0) == (expected == ""), proc.stdout + proc.stderr
 			if expected:
