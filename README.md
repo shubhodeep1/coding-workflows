@@ -2125,8 +2125,10 @@ mounted. Repositories using git object alternates, sharing worktrees, retaining
 unreachable objects, or with filtered paths in reachable history retain
 working-tree files but omit git history (`git=omitted`,
 `reason=alternates|filtered_history` in the isolation log). Non-git
-workdirs copy only regular files, excluding secret
-filenames and key suffixes. The host-side Anthropic relay keeps the OAuth token
+workdirs copy only regular files, excluding secret filenames and key extensions
+even when followed by another extension (for example `client.pem.txt`). Such
+paths also prevent Git history from entering the snapshot. The host-side
+Anthropic relay keeps the OAuth token
 outside the container. A Docker, relay, image or snapshot preflight failure
 returns `75` for the caller's existing fallback, never unisolated Claude.
 `CLAUDE_READ_ISOLATION` logs only the role, outcome, reason and snapshot counts.

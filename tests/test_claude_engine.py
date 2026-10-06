@@ -590,6 +590,28 @@ def test_read_snapshot_omits_credentials_removed_from_current_tree(tmp_path: Pat
 	assert not (dest / ".git").exists()
 
 
+def test_read_snapshot_omits_double_extension_credential_and_history(tmp_path: Path) -> None:
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	subprocess.run(["git", "init", "-q", str(repo)], check=True)
+	(repo / "client.pem.txt").write_text("credential\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(repo), "add", "client.pem.txt"], check=True)
+	subprocess.run(["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "credential"], check=True)
+	current_dest = tmp_path / "current-snapshot"
+	current_result = _run("read-snapshot", "--workdir", str(repo), "--dest", str(current_dest))
+	assert current_result.returncode == 0, current_result.stderr
+	assert not (current_dest / "client.pem.txt").exists()
+	assert json.loads(current_result.stdout)["reason"] == "filtered_history"
+	assert not (current_dest / ".git").exists()
+	subprocess.run(["git", "-C", str(repo), "rm", "-q", "client.pem.txt"], check=True)
+	subprocess.run(["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.invalid", "commit", "-qm", "remove credential"], check=True)
+	history_dest = tmp_path / "history-snapshot"
+	history_result = _run("read-snapshot", "--workdir", str(repo), "--dest", str(history_dest))
+	assert history_result.returncode == 0, history_result.stderr
+	assert json.loads(history_result.stdout)["reason"] == "filtered_history"
+	assert not (history_dest / ".git").exists()
+
+
 def test_read_snapshot_deduplicates_unmerged_index_paths(tmp_path: Path) -> None:
 	repo = tmp_path / "conflicted"
 	repo.mkdir()
@@ -732,6 +754,7 @@ def test_read_snapshot_excludes_credentials_and_rebuilds_git(tmp_path: Path, mon
 	(source / ".env").write_text("private", encoding="utf-8")
 	(source / "id.key").write_text("private", encoding="utf-8")
 	(source / "skip.pem").write_text("private", encoding="utf-8")
+	(source / "client.pem.txt").write_text("private", encoding="utf-8")
 	(source / "keys").mkdir()
 	for key_name in ("id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", "id_ed25519_sk", "id_ecdsa_sk", "id_xmss"):
 		(source / "keys" / key_name).write_text("private", encoding="utf-8")
@@ -757,7 +780,7 @@ def test_read_snapshot_excludes_credentials_and_rebuilds_git(tmp_path: Path, mon
 	monkeypatch.delenv("GIT_WORK_TREE")
 	status = subprocess.check_output(["git", "-C", str(dest), "status", "--short"], text=True).splitlines()
 	assert status == []
-	for path in ("CLAUDE.md", ".env", "id.key", "skip.pem", "link.txt", "big.bin", "ignored.txt", ".codex-workflow-src", ".claude", ".ssh"):
+	for path in ("CLAUDE.md", ".env", "id.key", "skip.pem", "client.pem.txt", "link.txt", "big.bin", "ignored.txt", ".codex-workflow-src", ".claude", ".ssh"):
 		assert not (dest / path).exists(), path
 	assert not (dest / "keys").exists()
 	assert "hidden" not in (dest / ".git" / "config").read_text(encoding="utf-8")

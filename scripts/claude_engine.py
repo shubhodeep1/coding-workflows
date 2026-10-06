@@ -1216,6 +1216,11 @@ _SNAPSHOT_BAD_PARTS = frozenset((".git", ".ai", ".codex", ".claude", ".ssh", ".c
 _SNAPSHOT_BAD_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".keystore")
 
 
+def _snapshot_bad_suffix(component: str) -> bool:
+	lowered = component.lower()
+	return lowered.endswith(_SNAPSHOT_BAD_SUFFIXES) or any(f"{suffix}." in lowered for suffix in _SNAPSHOT_BAD_SUFFIXES)
+
+
 def _snapshot_limit(name: str, default: int) -> int:
 	value = os.environ.get(name, str(default))
 	if re.fullmatch(r"[1-9][0-9]{0,11}", value):
@@ -1239,7 +1244,7 @@ def _snapshot_copy(source_root: Path, target_root: Path, relative: Path, limits:
 	parts = relative.parts
 	if not parts or any(part in (".", "..", "") for part in parts) or relative.is_absolute():
 		raise EngineError("unsafe snapshot path")
-	if any(part.lower() in _SNAPSHOT_BAD_PARTS or part.lower().startswith(".env") or part.lower().endswith(_SNAPSHOT_BAD_SUFFIXES) for part in parts):
+	if any(part.lower() in _SNAPSHOT_BAD_PARTS or part.lower().startswith(".env") or _snapshot_bad_suffix(part) for part in parts):
 		return
 	node = source_root
 	for index, part in enumerate(parts):
@@ -1332,7 +1337,7 @@ def _snapshot_metadata(workdir: Path, dest: Path, omit_root_claude_md: bool = Fa
 			for history_path in history_paths:
 				history_relative = Path(os.fsdecode(history_path.lstrip(b"\n")))
 				parts = history_relative.parts
-				if omit_root_claude_md and history_relative == Path("CLAUDE.md") or any(part.lower() in _SNAPSHOT_BAD_PARTS or part.lower().startswith(".env") or part.lower().endswith(_SNAPSHOT_BAD_SUFFIXES) for part in parts):
+				if omit_root_claude_md and history_relative == Path("CLAUDE.md") or any(part.lower() in _SNAPSHOT_BAD_PARTS or part.lower().startswith(".env") or _snapshot_bad_suffix(part) for part in parts):
 					history_process.terminate()
 					return "omitted", "filtered_history"
 		if history_pending or history_process.wait() != 0:
@@ -1496,7 +1501,7 @@ def build_read_snapshot(source: Path, dest: Path, omit_claude_md: bool = False, 
 			any(part.lower() in (".git", ".claude", ".ssh") or part.lower().startswith((".codex-workflow-src", ".env"))
 				or part.lower() in ("secrets", "credentials") for part in parts) or
 			parts[-1].lower() in (".git-credentials", ".netrc", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", "id_ed25519_sk", "id_ecdsa_sk", "id_xmss") or
-			Path(entry).suffix.lower() in (".pem", ".key", ".p12", ".pfx", ".keystore") or
+			any(_snapshot_bad_suffix(part) for part in parts) or
 			(omit_claude_md and parts[-1] == "CLAUDE.md")):
 			continue
 		current = source
