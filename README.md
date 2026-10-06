@@ -65,6 +65,22 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `FUNTOKEN_IO_CF` | No | Interactive Claude Code sessions only (CLAUDE.md §24) — no Actions workflow reads it | Cloudflare credentials for the **funtoken.io** website, as a single string in the format `<account_id>:<api_token>`. Set as an env var in the Claude Code session environment (not an Actions secret). Lets interactive sessions read Cloudflare state (Workers, routes, DNS, logs) self-serve and create/edit Cloudflare Workers when the task calls for it; deleting resources, DNS/zone changes, and secret rotation always require asking the user first. Worker/zone identifiers per repo live in the `## Cloudflare resources` section of `agents.md`/`AGENTS.md`. |
 | `FT_GAMES_CF` | No | Interactive Claude Code sessions only (CLAUDE.md §24) — no Actions workflow reads it | Cloudflare credentials for the **ft.games** and **5m.fun** websites, same `<account_id>:<api_token>` format and same rules as `FUNTOKEN_IO_CF`. The two vars are different Cloudflare accounts and are not interchangeable — pick the one covering the site the work targets (CLAUDE.md §24.A). |
 
+Cloudflare Worker uploads under CLAUDE.md §24.C, including `/deploy-activate`,
+require a verified, clean commit on the protected default branch. Pre-deploy
+checks run without session credentials in a no-egress sandbox, or use the
+pinned commit's GitHub check-runs when isolation is unavailable; failing or
+pending checks block deployment. When Wrangler and a safe sandbox are available,
+`/deploy-activate` also requires a successful dry run before the Worker deploy;
+a failed dry run blocks deployment. Only the matching site's Cloudflare credential
+is passed to the deploy process in an allowlisted environment; other session
+credentials are not inherited by Wrangler build hooks. The provided tokens
+are account-owned, not Worker-scoped; obtaining a narrower token requires
+operator provisioning. If protection, pinning, worktree verification or
+pre-deploy checks cannot be confirmed, `/deploy-activate` blocks the Worker
+step rather than supplying manual deploy instructions. A missing or rejected
+Cloudflare session credential also blocks that step; it is not a manual
+deployment fallback.
+
 #### Variables
 
 > **Head-bound merge authorization:** review/autofix applies `ai:review-skipped`

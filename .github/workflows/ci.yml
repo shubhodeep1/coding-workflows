@@ -622,6 +622,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_audit_plans_command.py
 
+      - name: /deploy-activate command contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_deploy_activate_command.py
+
       - name: Orchestrate lib unit tests
         run: |
           set -euo pipefail
