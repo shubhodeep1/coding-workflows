@@ -1290,6 +1290,8 @@ dashboard without producing a fresh comment per tick.
 | `<!-- ORCHESTRATOR_STATE_V2 part=N/N manifest=<sha> -->` … `<!-- ORCHESTRATOR_STATE_V2 -->` | `post_state_comment` / `_post_state_comment_v2_chunk` | Canonical machine-readable orchestrator state snapshot. Multi-chunk so it can carry state blobs >65 KiB. Reader: `extract_latest_valid_orchestrator_state`. Reader falls back to the legacy V1 marker `<!-- ORCHESTRATOR_STATE_V1 -->` for issues that have not yet been re-written. |
 | `<!-- orchestrator:completion-status -->` | `update_completion_status_comment` | Human-readable "what is blocking completion" summary. Second-line tag `<!-- status:<token> -->` exposes the canonical status token (`in-progress` \| `waiting` \| `ready` \| `validated` \| `failed`) for grep-friendly downstream parsing. Idempotent — skips the API call when the rendered body already matches, and persists `.completion_status_comment_id` + `.completion_status_comment_body_hash` in the state file so edit-in-place fallback survives the next cron invocation. |
 
+V1 and V2 state comments are read only when every selected comment is authored by the current `GH_PAT` login; an unavailable identity skips project processing rather than reconstructing state. Integration-sync conflict preparation also rejects an unavailable login before invoking the resolver, so the review run fails and retries on a later trigger instead of resolving without verified state. After rotating `GH_PAT` to a different account, re-post legacy state using the new account (or retain the original account) before polling resumes.
+
 When `ENABLE_SECURITY_PASS=true` (default `true`), every completion route
 enters `security-pass` before validation or finalization. A pass is valid only
 when `security_pass_status == "passed"` and `security_pass_head_sha` exactly
@@ -1719,6 +1721,7 @@ and shipped:
 - `DRIFT_SCAN_OK`
 - `DRIFT_SCAN_ERROR`
 - `SECURITY_PASS_STARTED`
+- `ORCHESTRATOR_STATE_AUTHOR_FILTER` (`tracking_issue= outcome=identity_unavailable|filtered ignored=<count>` when filtered)
 - `SECURITY_PASS_SCOPE`
 - `SECURITY_PASS_CLEAN`
 - `SECURITY_PASS_BLOCKED`
@@ -1938,6 +1941,7 @@ LOG_PREFIX.name=DRIFT_SCAN_DIFF
 LOG_PREFIX.name=DRIFT_SCAN_OK
 LOG_PREFIX.name=DRIFT_SCAN_ERROR
 LOG_PREFIX.name=SECURITY_PASS_STARTED
+LOG_PREFIX.name=ORCHESTRATOR_STATE_AUTHOR_FILTER
 LOG_PREFIX.name=SECURITY_PASS_SCOPE
 LOG_PREFIX.name=SECURITY_PASS_CLEAN
 LOG_PREFIX.name=SECURITY_PASS_BLOCKED
