@@ -99,7 +99,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 
 - `scripts/activation_verify.sh` — Grade merged work LIVE or DORMANT, post the verdict, open one issue for code gaps and record operator steps (port P4).
 - `scripts/ai_context_utils.py` — Python helper for ai context utils.
-- `scripts/ai_engine.sh` — Sourceable helpers that choose a role's engine (codex or Claude), run `claude -p` (`claude_run`), and fall back to codex (D1).
+- `scripts/ai_engine.sh` — Sourceable helpers that choose a role's engine (codex or Claude), run `claude -p` in the isolated container (`claude_run` via `codex_isolated_exec.sh --engine claude`), and fall back to codex (D1).
 - `scripts/ai_labels.py` — AI label contract utilities for workflow phase transitions and repair.
 - `scripts/ai_memory.py` — CLI for AI memory operations used by GitHub workflows.
 - `scripts/ai_memory_lib.py` — Shared AI memory helpers for GitHub workflows.
@@ -127,6 +127,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/clarify_informal_detect.py` — Score clarify issue bodies for advisory informal-issue signals.
 - `scripts/clarify_isolated_run.sh` — Launch the read-only, credential-free clarification container.
 - `scripts/clarify_openrouter_broker.py` — Restrict clarification model traffic through a host Unix socket.
+- `scripts/dependency_registry_proxy.py` — Restrict network-isolated dependency installs to allowlisted HTTPS registries via a host Unix socket.
 - `scripts/clarify_sandbox/Dockerfile` — Pinned Codex container for isolated clarification.
 - `scripts/claude_anthropic_relay.py` — Host-side Anthropic relay and in-container bridge that keep the Claude OAuth token out of sandboxed runs.
 - `scripts/claude_engine.py` — Claude engine decisions: role resolution, the P5 settings, transcript extraction and classification, probe parsing, account order.
@@ -134,6 +135,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/claude_settings.json.tmpl` — P5 permission policy template rendered into the Claude engine's `--settings` file.
 - `scripts/codex_heartbeat.sh` — Shell helper for codex heartbeat.
 - `scripts/codex_helpers.sh` — Shell helper for Codex config assembly.
+- `scripts/codex_isolated_exec.sh` — Run one Codex agent, or one Claude engine attempt (`--engine claude`, behind `claude_anthropic_relay.py`), in a credential-free, network-isolated container (read-only or workspace mode) behind the host-side model broker.
+- `scripts/codex_isolated_workspace.py` — Snapshot, dependency-prep finalisation and validated write-back for `codex_isolated_exec.sh` workspaces.
 - `scripts/codex_model_catalog.json` — JSON asset for codex_model_catalog.json.
 - `scripts/codex_model_catalog_overrides.yaml` — YAML asset for codex_model_catalog_overrides.yaml.
 - `scripts/codex_stall_guard.sh` — Shell helper for codex stall guard.
