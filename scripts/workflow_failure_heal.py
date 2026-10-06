@@ -405,12 +405,14 @@ def verify_phase_report_provenance(payload: Any, *, run: Any, jobs: Any, comment
 		and any(ref["run_id"] == run_id for ref in extract_run_refs([comment["body"]], source_repo))]
 	if not linked:
 		return decision(False, "no_linking_comment")
-	if not trusted_author:
+	if source_repo.casefold() == self_repo.casefold() and not trusted_author:
 		return decision(False, "comment_author_unavailable")
 	if not any(
-		isinstance(comment.get("user"), dict) and comment["user"].get("login") == trusted_author
-		and (trusted_author in PHASE_REPORT_TRUSTED_BOT_LOGINS
+		isinstance(comment.get("user"), dict)
+		and isinstance(comment["user"].get("login"), str) and bool(comment["user"]["login"])
+		and (comment["user"].get("login") in PHASE_REPORT_TRUSTED_BOT_LOGINS
 			or comment.get("author_association") in PHASE_REPORT_TRUSTED_ASSOCIATIONS)
+		and (source_repo.casefold() != self_repo.casefold() or comment["user"].get("login") == trusted_author)
 		for comment in linked
 	):
 		return decision(False, "untrusted_comment_author")

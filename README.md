@@ -1512,15 +1512,18 @@ through `clarify → plan → implement → review`.
   verdict (the `Gate workflow failure heal report` step sets the job output
   `heal_report`). Before dedup, escalation or issue creation, the intake checks
   the GitHub-read run's repository, event, matching phase wrapper and outcome,
-  a failed non-reporter job, and a failure comment from the authenticated
-  pipeline account on the source issue linking that run. The reporter and
-  intake must use the same account for `GH_PAT`; otherwise the report is dropped.
+  a failed non-reporter job, and a failure comment on the source issue linking
+  that run. Consumer comments must have a GitHub-reported OWNER, MEMBER or
+  COLLABORATOR association, or be from `github-actions[bot]`; consumer `GH_PAT`
+  accounts need not match the intake's. Self-repo reports additionally require
+  the comment author to match the intake's authenticated pipeline account.
   A completed run must have failed; an in-progress run is accepted once its
   phase job failed. API failures or mismatches skip with
   `WORKFLOW_HEAL skip reason=phase_report_unverified` and a Telegram WARNING.
-  A missing failure comment or unavailable pipeline-account identity also skips
-  (even for a real failed run); the intake logs failed evidence fetches;
-  per-credential sender binding is outside this check. The intake fingerprints
+  A missing failure comment, or unavailable pipeline-account identity for a
+  self-repo report, also skips (even for a real failed run). Failed evidence
+  fetches are logged; per-credential sender binding is outside this check.
+  The intake fingerprints
   verified reports from the current failed run's job log (earlier streak logs
   are diagnosis context only; `phase:<phase>_failed` when the current log cannot
   be read), keys it on the source issue like a review/autofix report on its PR,

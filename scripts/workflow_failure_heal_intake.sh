@@ -288,12 +288,16 @@ if [ "${SOURCE_KIND}" = "phase_failure" ]; then
 	PHASE_JOBS_FILE="${LOG_DIR}/run-${PHASE_RUN_ID}-jobs.json"
 	PHASE_COMMENTS_FILE="${RUNTIME_DIR}/phase_issue_comments.json"
 	PHASE_PROVENANCE_FILE="${RUNTIME_DIR}/phase_provenance.json"
-	# The reporter posts failure comments with GH_PAT; the intake uses the
-	# same pipeline account. A collaborator's own comment cannot prove lineage.
-	# §14 audit: run/job and issue reads do not identify the token's account.
-	PHASE_COMMENT_AUTHOR="$(gh_retry gh api --method GET user --jq '.login // empty' 2>/dev/null || true)"
-	if [ -z "${PHASE_COMMENT_AUTHOR}" ]; then
-		log "warn phase_provenance_fetch_failed evidence=identity source=${SOURCE_REPO} run=${PHASE_RUN_ID}"
+	# Consumer GH_PAT accounts can differ from this repo's: trust the source
+	# issue's GitHub-reported author association instead. For self-reports,
+	# require the same pipeline account that posts the failure comment.
+	PHASE_COMMENT_AUTHOR=""
+	if [ "${SOURCE_REPO,,}" = "${SELF_REPO,,}" ]; then
+		# §14 audit: run/job and issue reads do not identify the token's account.
+		PHASE_COMMENT_AUTHOR="$(gh_retry gh api --method GET user --jq '.login // empty' 2>/dev/null || true)"
+		if [ -z "${PHASE_COMMENT_AUTHOR}" ]; then
+			log "warn phase_provenance_fetch_failed evidence=identity source=${SOURCE_REPO} run=${PHASE_RUN_ID}"
+		fi
 	fi
 	# §14 audit: the existing jobs list has no run event, path, repository or
 	# status; job logs, heal-issue lists and branch reads have no run metadata.

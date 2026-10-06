@@ -3456,15 +3456,18 @@ def test_verify_phase_report_provenance_checks_run_jobs_and_comment() -> None:
 	check("no_linking_comment", comment_data=[])
 	check("no_linking_comment", comment_data=[_trusted_plan_link(CONSUMER_REPO, 501)])
 	check("untrusted_comment_author", comment_data=[{**comments[0], "user": {"login": "stranger"}, "author_association": "CONTRIBUTOR"}])
-	check("untrusted_comment_author", comment_data=[{**comments[0], "user": {"login": "stranger"}, "author_association": "OWNER"}])
-	check("untrusted_comment_author", comment_data=[{**comments[0], "user": {"login": "github-actions[bot]"}, "author_association": "NONE"}])
-	assert heal.verify_phase_report_provenance(payload, run=run, jobs=jobs, comments=comments, self_repo=SELF_REPO, trusted_author=None)["reason"] == "comment_author_unavailable"
+	check("untrusted_comment_author", comment_data=[{**comments[0], "user": {"login": ""}, "author_association": "OWNER"}])
+	check("ok", comment_data=[{**comments[0], "user": {"login": "consumer-ci"}, "author_association": "OWNER"}])
+	check("ok", comment_data=[{**comments[0], "user": {"login": "github-actions[bot]"}, "author_association": "NONE"}])
+	assert heal.verify_phase_report_provenance(payload, run=run, jobs=jobs, comments=comments, self_repo=SELF_REPO, trusted_author=None)["verified"] is True
 	assert heal.verify_phase_report_provenance(payload, run=run, jobs=jobs, comments=[{**comments[0], "user": {"login": "github-actions[bot]"}, "author_association": "NONE"}], self_repo=SELF_REPO, trusted_author="github-actions[bot]")["verified"] is True
 	check("run_unavailable", run_data=None)
 	check("jobs_unavailable", job_data=None)
 	check("comments_unavailable", comment_data=None)
 	self_payload, self_run, self_jobs, self_comments = _phase_provenance_inputs(SELF_REPO)
 	check("ok", report=self_payload, run_data={**self_run, "path": ".github/workflows/internal-plan.yml"}, job_data=self_jobs, comment_data=self_comments)
+	assert heal.verify_phase_report_provenance(self_payload, run={**self_run, "path": ".github/workflows/internal-plan.yml"}, jobs=self_jobs, comments=self_comments, self_repo=SELF_REPO, trusted_author=None)["reason"] == "comment_author_unavailable"
+	check("untrusted_comment_author", report=self_payload, run_data={**self_run, "path": ".github/workflows/internal-plan.yml"}, job_data=self_jobs, comment_data=[{**self_comments[0], "user": {"login": "other-owner"}}])
 	assert heal.phase_report_workflow_paths("plan", source_repo=SELF_REPO.upper(), self_repo=SELF_REPO)[-1] == ".github/workflows/internal-plan.yml"
 	with pytest.raises(ValueError, match="unknown phase"):
 		heal.phase_report_workflow_paths("review", source_repo=SELF_REPO, self_repo=SELF_REPO)
@@ -3481,7 +3484,7 @@ def test_verify_phase_provenance_cli_fails_closed_on_missing_or_invalid_evidence
 	assert heal.main(args) == 0
 	assert json.loads(capsys.readouterr().out)["verified"] is True
 	assert heal.main([*args[:-1], ""]) == 0
-	assert json.loads(capsys.readouterr().out)["reason"] == "comment_author_unavailable"
+	assert json.loads(capsys.readouterr().out)["verified"] is True
 	files[1].write_text("not JSON", encoding="utf-8")
 	assert heal.main(args) == 0
 	assert json.loads(capsys.readouterr().out)["reason"] == "run_unavailable"
@@ -3746,6 +3749,18 @@ def test_intake_phase_failure_opens_issue_from_the_failed_job_log() -> None:
 		assert len(calls) == 1 and calls[0][calls[0].index("--method") + 1] == "GET"
 
 
+def test_intake_phase_failure_accepts_consumer_pipeline_account() -> None:
+	state = _plan_intake_state(identity_read_fail=True)
+	state["comments"][f"repos/{CONSUMER_REPO}/issues/42/comments"] = [
+		{**_trusted_plan_link(CONSUMER_REPO), "user": {"login": "consumer-ci"}, "author_association": "MEMBER"},
+	]
+	result, after, _ = _run_intake(_phase_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "phase_report_verified" in result.stdout
+	assert after["issues_created"][0]["repo"] == SELF_REPO
+	assert not any(call[:2] == ["api", "--method"] and "user" in call for call in after["calls"])
+
+
 @pytest.mark.parametrize("case,reason", [
 	("run_missing", "run_unavailable"),
 	("other_repo", "repo_mismatch"),
@@ -3753,8 +3768,7 @@ def test_intake_phase_failure_opens_issue_from_the_failed_job_log() -> None:
 	("success", "run_not_failed"),
 	("no_comment", "no_linking_comment"),
 	("untrusted_comment", "untrusted_comment_author"),
-	("collaborator_comment", "untrusted_comment_author"),
-	("identity_error", "comment_author_unavailable"),
+	("self_identity_error", "comment_author_unavailable"),
 	("comments_error", "comments_unavailable"),
 ])
 def test_intake_phase_failure_unverified_reports_have_no_mutations(case: str, reason: str) -> None:
@@ -3773,18 +3787,14 @@ def test_intake_phase_failure_unverified_reports_have_no_mutations(case: str, re
 		state["comments"][f"repos/{CONSUMER_REPO}/issues/42/comments"] = [
 			{**_trusted_plan_link(CONSUMER_REPO), "user": {"login": "stranger"}, "author_association": "NONE"},
 		]
-	elif case == "collaborator_comment":
-		state["comments"][f"repos/{CONSUMER_REPO}/issues/42/comments"] = [
-			{**_trusted_plan_link(CONSUMER_REPO), "user": {"login": "stranger"}, "author_association": "OWNER"},
-		]
-	elif case == "identity_error":
-		state["identity_read_fail"] = True
+	elif case == "self_identity_error":
+		state = _plan_intake_state(repo=SELF_REPO, identity_read_fail=True)
 	elif case == "comments_error":
 		state["comment_read_fail"] = True
-	result, after, _ = _run_intake(_phase_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	result, after, _ = _run_intake(_phase_payload(repo=SELF_REPO if case == "self_identity_error" else CONSUMER_REPO), state, diagnosis=DIAG_WORKFLOW_DEFECT)
 	assert result.returncode == 0, result.stderr + result.stdout
 	assert f"WORKFLOW_HEAL skip reason=phase_report_unverified detail={reason} outcome=skip" in result.stdout
-	if case in ("run_missing", "comments_error", "identity_error"):
+	if case in ("run_missing", "comments_error", "self_identity_error"):
 		assert f"warn phase_provenance_fetch_failed evidence={'run' if case == 'run_missing' else 'comments' if case == 'comments_error' else 'identity'}" in result.stdout
 	assert "fingerprint fp=" not in result.stdout
 	assert not any(key in after for key in ("issues_created", "comments_posted", "issue_edits"))
