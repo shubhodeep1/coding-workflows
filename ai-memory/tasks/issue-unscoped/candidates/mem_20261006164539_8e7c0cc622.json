@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrator_judges_claude_engine.py:234 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The test assigns `GITHUB_WORKSPACE` without exporting it, so child processes may not receive the environment variable and may not exercise the intended worktree-resolution path.\n  WHY: The reviewers describe the test as potentially failing or taking a fallback path; severity differs, with minimax_minimax-m3 rating it MAJOR and qwen_qwen3_7-plus rating it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_orchestrator_judges_claude_engine.py:234 | confidence=4\n  PROBLEM: GITHUB_WORKSPACE environment variable is not exported to subprocesses.\n  WHY: The assignment is not exported, so child processes will not have GITHUB_WORKSPACE if they rely on it to locate the worktree.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrator_judges_claude_engine.py:234 | severity=high | confidence=4\n  PROBLEM: Only RUNTIME_DIR is exported; GITHUB_WORKSPACE remains a shell variable and is not visible to subprocesses.\n  WHY: The test may fail to exercise the verified_engine_and_its_worktree code path that resolves a worktree from GITHUB_WORKSPACE, and helpers or downstream processes that read the variable will not receive it.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_orchestrator_judges_claude_engine.py:234 | severity=low | confidence=4\n  PROBLEM: GITHUB_WORKSPACE is a local shell variable rather than an exported environment variable.\n  WHY: The child bash process may fall back to $PWD, so the test does not exercise the production environment-variable path.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0746ea5817ad17ac3dbc65c068bae6777254dd724b96fd5363f8e8a2d2bf230f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6273,
+    "run_id": "37492342401",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37492342401",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006164539_8e7c0cc622",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6273,
+    "run_id": "37492342401"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T16:45:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
