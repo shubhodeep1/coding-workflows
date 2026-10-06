@@ -15,3 +15,4 @@ What this means for operators: implement, implement-repair and implement-diagnos
 ### For contributors
 
 `tests/test_install_claude_action.py` runs the action's install step with a fake `npm` and `claude` under a `BASH_ENV` that changes into a directory without `.codex-workflow-src`, and asserts that both Claude steps in `implement.yml` run after the `BASH_ENV` switch. CI runs it in the "Install Claude CLI action tests" step of `ci.yml`.
+The merged-PR guard now requests confirmation when an `env`-wrapped commit has an unresolved directory, rather than checking the session checkout's PR history; its live and consumer-template copies remain identical.
