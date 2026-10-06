@@ -762,10 +762,12 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   does not trust its stored URL or PR history for that push. Wrapped commits
   are checked in the directory selected by `env -C` or `GIT_DIR`; a commit
   whose directory selector cannot be resolved and an unparseable `env -S`
-  command ask for confirmation; unrelated `env`/Git config in shell control
-  does not turn a warning-only unresolved commit into an ask. A push from an
-  unresolved directory (including an appended `GIT_DIR+=` / `GIT_WORK_TREE+=`,
-  whose value is never applied) is checked
+  command ask for confirmation; when `env -C` cannot resolve its directory,
+  the commit guard asks without querying the session checkout's PR history.
+  Unrelated `env`/Git config in shell control does not turn a warning-only
+  unresolved commit into an ask. A push from an unresolved directory
+  (including an appended `GIT_DIR+=` / `GIT_WORK_TREE+=`, whose value is
+  never applied) is checked
   against the session checkout, which can still block, and otherwise asks.
   Leading redirections, including those after environment assignments, do
   not bypass commit/push detection. A spaced, quoted or escaped digit before a

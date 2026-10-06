@@ -245,6 +245,7 @@ changelog.d/6400-rb-judge-security-severity-block.md
 changelog.d/6401-single-issue-security-pass-completed-audit.md
 changelog.d/6404-claude-live-sync-pr-provenance.md
 changelog.d/6420-release-gate-claude-parity.md
+changelog.d/6435-prompt-audit-claude-config.md
 changelog.d/6454-integration-judge-shared-protected-lines.md
 changelog.d/6455-rb-fix-sandbox-workspace.md
 changelog.d/6472-security-audit-partial-coverage-marker.md
