@@ -117,7 +117,7 @@ VERDICT_UNAVAILABLE = "unavailable"
 # `--opt=value`. Needed so `git -C /repo commit` resolves to `commit` rather
 # than to the path.
 GIT_GLOBAL_OPTS_WITH_VALUE = frozenset(
-	{"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--exec-path"}
+	{"-C", "-c", "--config-env", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--exec-path"}
 )
 
 # Shell punctuation we treat as command separators when tokenizing a Bash line.
@@ -388,8 +388,11 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			working_directory = None
 		index = 0
 		environment: dict[str, str] = {}
+		config_uncertain = False
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
 			name, value = tokens[index].split("=", 1)
+			if name.startswith("GIT_CONFIG_"):
+				config_uncertain = True
 			if name.endswith("+"):
 				# Appending to an existing Git override depends on the shell state.
 				name = name[:-1]
@@ -406,6 +409,8 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 		while index < len(tokens) and tokens[index].startswith("-"):
 			option = tokens[index]
 			value = None
+			if option in ("-c", "--config-env") or option.startswith(("-c", "--config-env=")):
+				config_uncertain = True
 			if option in GIT_GLOBAL_OPTS_WITH_VALUE:
 				if index + 1 >= len(tokens):
 					uncertain = True
@@ -439,6 +444,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			checkout if uncertain else git_cwd or checkout,
 			{} if uncertain else environment,
 			tokens[index], tokens[index + 1:],
+			"could not verify git push configuration overrides" if config_uncertain and tokens[index] == "push" else
 			"could not resolve git command directory; checking the session checkout instead" if uncertain else "",
 		))
 	return invocations
@@ -813,10 +819,11 @@ def _default_push_remote(cwd: str) -> str:
 def _remote_push_urls(name: str, cwd: str) -> list[str]:
 	if not _REMOTE_NAME_RE.fullmatch(name) or ".." in name:
 		return []
-	code, out, _ = _run(["git", "config", "--get-all", f"remote.{name}.pushurl"], cwd, _GIT_TIMEOUT_SECONDS)
-	if code == 0:
-		return out.splitlines()
-	code, out, _ = _run(["git", "config", "--get-all", f"remote.{name}.url"], cwd, _GIT_TIMEOUT_SECONDS)
+	code, configured, _ = _run(["git", "config", "--get-all", f"remote.{name}.pushurl"], cwd, _GIT_TIMEOUT_SECONDS)
+	if code not in (0, 1) or (code == 0 and any(not url for url in configured.splitlines())):
+		return []
+	# Git applies insteadOf/pushInsteadOf here, unlike a raw config lookup.
+	code, out, _ = _run(["git", "remote", "get-url", "--push", "--all", name], cwd, _GIT_TIMEOUT_SECONDS)
 	return out.splitlines() if code == 0 else []
 
 
@@ -831,9 +838,22 @@ def _resolve_push_destination(cwd: str, push_repository: str) -> _PushDestinatio
 			return _PushDestination(label, (), token, "one or more push URLs are not GitHub repositories")
 		# Fetching a remote with a different pushurl would inspect the *fetch*
 		# repository's history, not the destination's. Degrade to confirmation.
-		code, out, _ = _run(["git", "config", "--get", f"remote.{token}.url"], cwd, _GIT_TIMEOUT_SECONDS)
+		code, out, _ = _run(["git", "remote", "get-url", token], cwd, _GIT_TIMEOUT_SECONDS)
 		history_remote = token if code == 0 and slugs == (extract_repo_slug(out),) else ""
 		return _PushDestination(label, slugs, history_remote, "")
+	# Push-only rewrites do not appear in ls-remote --get-url for literal URLs.
+	# Reject rather than trusting the raw spelling when one is configured.
+	if "://" in token or ("@" in token and ":" in token):
+		code, _, _ = _run(["git", "config", "--get-regexp", r"^url\..*\.pushinsteadof$"], cwd, _GIT_TIMEOUT_SECONDS)
+		if code != 1:
+			return _PushDestination(label, (), "", "cannot verify literal URL with push-only rewrites")
+		code, out, _ = _run(["git", "ls-remote", "--get-url", token], cwd, _GIT_TIMEOUT_SECONDS)
+		if code != 0 or not out.strip():
+			return _PushDestination(label, (), "", "cannot resolve the effective push URL")
+		literal_slugs = tuple(dict.fromkeys(extract_repo_slug(url) for url in out.splitlines()))
+		if "" in literal_slugs:
+			return _PushDestination(label, (), "", "effective push URL is not a GitHub repository")
+		return _PushDestination(label, literal_slugs, "", "")
 	slug = extract_repo_slug(token)
 	if not slug:
 		return _PushDestination(label, (), "", "not a configured GitHub remote or URL")
@@ -1416,6 +1436,8 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
+		if invocation.subcommand == "push" and invocation.warning == "could not verify git push configuration overrides":
+			return 2, "BLOCKED: git push configuration overrides may rewrite the destination URL. Use a configured GitHub remote without inline Git configuration."
 		if invocation.subcommand == "push" and invocation.warning:
 			_warn(invocation.warning)
 			unresolved_push_sources.append(
