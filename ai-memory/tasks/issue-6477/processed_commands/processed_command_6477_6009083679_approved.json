@@ -5,13 +5,26 @@
   "entry_id": "processed_command_6477_6009083679_approved",
   "issue_number": 6477,
   "metadata": {
+    "branch": "ai/issue-6477",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      "agents.md",
+      "changelog.d/6477-integration-judge-provenance-all-paths.md",
+      "scripts/orchestrate_poll_process.sh",
+      "tests/test_integration_judge_scope_guard.py"
+    ],
+    "issue_number": 6477,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6477",
+    "pr_number": 6485,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6485",
+    "run_attempt": "1",
+    "run_id": "37411882166",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37411882166"
   },
   "run_attempt": 1,
   "run_id": "37411882166",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-06T04:06:57Z",
+  "status": "completed",
+  "timestamp": "2026-10-06T04:24:14Z",
   "workflow": "implement"
 }
