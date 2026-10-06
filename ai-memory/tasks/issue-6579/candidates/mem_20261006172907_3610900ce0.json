@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6579,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6579\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6581\",\"pr_number\":6581,\"branch\":\"ai/issue-6579\",\"run_id\":\"37501395093\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37501395093\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"agents.md\",\"changelog.d/6579-heal-intake-ci-provenance.md\",\"scripts/workflow_failure_heal.py\",\"scripts/workflow_failure_heal_intake.sh\",\"tests/test_workflow_failure_heal.py\"]}",
+  "fingerprint": "10fc01713bb8f5aa7df86b5754201acbbccd51e1a60bb53885ae20cd4c11f2b6",
+  "lineage": {
+    "issue_number": 6579,
+    "parent_ids": [],
+    "pr_number": 6581,
+    "run_id": "37501395093",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37501395093",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6581"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261006172907_3610900ce0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6579,
+    "level": "run",
+    "pr_number": 6581,
+    "run_id": "37501395093"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6579: https://github.com/shubhodeep1/coding-workflows/pull/6581",
+  "timestamps": {
+    "created_at": "2026-10-06T17:29:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
