@@ -121,6 +121,10 @@ class Relay(http.server.BaseHTTPRequestHandler):
 					pass
 				finally:
 					self.connection.settimeout(previous_timeout)
+		try:
+			self.connection.settimeout(1)
+		except OSError:
+			pass
 		self.send_error(status, "Request rejected")
 		self.close_connection = True
 
@@ -130,6 +134,7 @@ class Relay(http.server.BaseHTTPRequestHandler):
 		self._request_body_consumed = False
 		mode = self.server.mode
 		length = self.headers.get("Content-Length", "")
+		headers = forwarded_request_headers(self.headers)
 		if (
 			not PATH_RE.match(self.path)
 			or self.headers.get("Transfer-Encoding")
@@ -146,10 +151,27 @@ class Relay(http.server.BaseHTTPRequestHandler):
 			or not length.isdecimal()
 			or len(length) > len(str(MAX_BODY))
 			or not 0 < int(length) <= MAX_BODY
+			or headers is None
 		):
-			return self._reject(400)
-		headers = forwarded_request_headers(self.headers)
-		if headers is None:
+			# Consume a bounded, declared body before closing so a rejected
+			# client still sending it can receive the 400 instead of EPIPE.
+			if len(length) <= 8 and length.isascii() and length.isdecimal() and 0 < int(length) <= MAX_BODY:
+				drain_deadline = time.monotonic() + 1
+				drain_remaining = int(length)
+				try:
+					while drain_remaining and (drain_wait := drain_deadline - time.monotonic()) > 0:
+						self.connection.settimeout(drain_wait)
+						drain_chunk = self.rfile.read1(min(drain_remaining, 65536))
+						if not drain_chunk:
+							break
+						drain_remaining -= len(drain_chunk)
+				except OSError:
+					pass
+				# Give the rejection write its own bounded timeout even if draining failed.
+				try:
+					self.connection.settimeout(1)
+				except OSError:
+					pass
 			return self._reject(400)
 		previous_timeout = self.connection.gettimeout()
 		deadline = time.monotonic() + BODY_READ_TIMEOUT
