@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow failure healing depends on preserving evidence and verifying run lineage.",
   "timestamps": {
     "created_at": "2026-10-06T19:23:03Z",
