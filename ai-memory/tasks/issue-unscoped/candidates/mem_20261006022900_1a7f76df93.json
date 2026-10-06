@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- docs/deploy-activation/plan-replace-claude-sessions-with-cli-engine-plan-phase-4.md:line 20 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Step 7 is marked complete even though its compound criteria are only partially satisfied, which can hide the still-open consumer-side follow-up.\n  WHY: Although the annotation and Notes section mention the deferred `@stable` follow-up, the `[x]` checkbox is the primary scanning surface for pending work.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- docs/deploy-activation/plan-replace-claude-sessions-with-cli-engine-plan-phase-4.md:line 20 | severity=low | confidence=4\n  PROBLEM: Step 7's checkbox is flipped to `[x]` despite the step's compound criteria still being half-open.\n  WHY: this is a docs-only change, so there is no runtime failure; the failure is the operational one the cross-pollination reviewer flagged \u2014 the activation log becomes a less reliable source of truth for what's actually pending. The new Note at the bottom (\"Step 7 `@stable` follow-up\") mitigates this for careful readers, but a checkbox is the primary scanning surface.\n=== END FINDINGS FROM minimax_minimax-m3 ===",
+  "fingerprint": "1968a6ae1903abc52504abb4286233ea5bf317a37b820d1b81d92e46e0fc83e2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6447,
+    "run_id": "37403593899",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37403593899",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006022900_1a7f76df93",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6447,
+    "run_id": "37403593899"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T02:29:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
