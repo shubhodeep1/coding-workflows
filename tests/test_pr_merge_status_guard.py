@@ -1441,6 +1441,11 @@ def test_env_wrapped_commit_checks_selected_repo(merged_branch_repo, monkeypatch
 	"env -C /does-not-exist git commit -m x",
 	"git -C /does-not-exist commit -m x",
 	"GIT_DIR=/does-not-exist git commit -m x",
+	"GIT_DIR+=/does-not-exist git commit -m x",
+	"GIT_WORK_TREE+=/does-not-exist git commit -m x",
+	'cd "$WT" && git commit -m x',
+	"cd $WT && git commit -m x",
+	'if true; then cd "$WT" && git commit -m x; fi',
 	"env -S 'git commit -m ${MESSAGE}'",
 	"env -v git commit -m x",
 ])
@@ -1864,7 +1869,7 @@ def test_dev_null_redirect_keeps_cd_or_exit_worktree(merged_branch_repo, monkeyp
 
 @pytest.mark.parametrize("subcommand,asks", [
 	("git push origin HEAD:feature/open", True),
-	("git commit -m x", False),
+	("git commit -m x", True),
 ])
 @pytest.mark.parametrize("directory_change", ["cd $WT &&", "cd {other_dir} >{missing};"])
 def test_unknown_directory_push_asks_but_commit_warns(
@@ -1877,7 +1882,7 @@ def test_unknown_directory_push_asks_but_commit_warns(
 	prefix = directory_change.format(other_dir=repo.parent, missing=repo.parent / "missing" / "output")
 	proc = _run_hook(repo, stub_bin, f"{prefix} {subcommand}")
 	assert proc.returncode == 0, proc.stdout + proc.stderr
-	assert "could not resolve git command directory" in proc.stdout
+	assert "could not resolve git" in proc.stdout
 	assert (_ask_decision(proc) is not None) is asks
 
 
@@ -1920,6 +1925,7 @@ def test_shell_control_commit_on_open_checkout_only_warns(merged_branch_repo) ->
 	_git(repo, "checkout", "main")
 	proc = _run_hook(repo, stub_bin, "if true; then git commit -m next; fi")
 	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "could not resolve git command directory" in proc.stdout
 	assert _ask_decision(proc) is None
 
 

@@ -15,8 +15,9 @@ a preceding resolvable cd, git -C, and git-directory/work-tree overrides are
 applied without executing the Bash text. Pushes with explicit branch refspecs
 are checked against the destination branch and the source commit, including
 when the source is a detached HEAD. Unknown directories warn and fall back to
-the session checkout check; unresolvable explicit push targets require
-confirmation. Repeated targets share a PR snapshot
+the session checkout check; unresolved directory-changing commands also require
+commit confirmation. Unresolvable explicit push targets require confirmation.
+Repeated targets share a PR snapshot
 per repository and branch, while different source tips are checked separately.
 A `cd` or `exit` with a redirect that might fail (anything but a plain
 `/dev/null` target) makes the directory unknown. After checking the session
@@ -428,6 +429,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 		return []
 	working_directory: str | None = checkout
 	conditional_cd = False
+	unresolved_directory_change = False
 	invocations: list[_GitInvocation] = []
 	for operator, tokens, redirect_may_fail in segments:
 		tokens, control_prefix = _command_after_control_prefix(tokens)
@@ -442,6 +444,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			continue
 		if operator not in ("", "&&") and conditional_cd:
 			working_directory = None
+			unresolved_directory_change = True
 			conditional_cd = False
 		if operator not in ("", "&&", ";", "\n"):
 			working_directory = None
@@ -455,14 +458,18 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				_literal_guard_path(operand[0], working_directory, shell_cd=True)
 				if len(operand) == 1 and working_directory is not None and not redirect_may_fail else None
 			)
+			if working_directory is None:
+				unresolved_directory_change = True
 			conditional_cd = operator == "&&" or conditional_cd
 			continue
 		if tokens[0] in ("pushd", "popd", "eval", "source", ".", "(", "{"):
 			working_directory = None
+			unresolved_directory_change = True
 		index = 0
 		environment: dict[str, str] = {}
 		config_override = False
-		explicit_git_directory = False
+		# A prior unresolved cd/pushd may select another repository.
+		explicit_git_directory = unresolved_directory_change
 		# Bash append assignments are prefixes too; keep the following git visible.
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
 			name, value = tokens[index].split("=", 1)
@@ -471,6 +478,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				name = name[:-1]
 				if name in ("GIT_DIR", "GIT_WORK_TREE"):
 					working_directory = None
+					explicit_git_directory = True
 			elif name in ("GIT_DIR", "GIT_WORK_TREE"):
 				environment[name] = value
 				explicit_git_directory = True

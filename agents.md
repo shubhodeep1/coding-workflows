@@ -14,8 +14,9 @@ The interactive merged-PR hook (`.claude/hooks/pr_merge_status_guard.py` and
 its consumer template) recognizes guarded git commands after nested control
 words, shell negation (`!`), and simple `case` arms. Since their effective
 directory is uncertain, pushes check the session checkout and request
-confirmation unless blocked; commits in that context remain warning-only
-when not blocked.
+confirmation unless blocked; commits following unresolved directory-changing
+commands also ask, while control-flow-only commits remain warning-only when
+not blocked.
 
 ---
 

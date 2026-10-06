@@ -1250,7 +1250,7 @@ def test_fetch_issue_metadata_does_not_let_issue_text_close_env_values() -> None
 		issue_title = "Title\nEOF\nUNSAFE_TITLE=enabled"
 		fetch_script = _extract_run_script("Fetch issue metadata")
 		start = fetch_script.index('printf \'%s\\n\' "${ISSUE_BODY}" > "${ISSUE_BODY_FILE}"')
-		end = fetch_script.index('} >> "$GITHUB_ENV"', start) + len('} >> "$GITHUB_ENV"')
+		end = fetch_script.index('write_untrusted_multiline_env ISSUE_TITLE "${ISSUE_TITLE}"', start) + len('write_untrusted_multiline_env ISSUE_TITLE "${ISSUE_TITLE}"')
 		github_env_file = Path(td) / "github_env.txt"
 		body_file = Path(td) / "issue_body.txt"
 		proc = subprocess.run(
@@ -1264,24 +1264,26 @@ def test_fetch_issue_metadata_does_not_let_issue_text_close_env_values() -> None
 		assert proc.returncode == 0, proc.stderr
 		assert body_file.read_text(encoding="utf-8") == issue_body + "\n"
 		github_env_text = github_env_file.read_text(encoding="utf-8")
-		for name, value in (("ISSUE_BODY", issue_body), ("ISSUE_TITLE", issue_title),
-			("ISSUE_SCOPE_LOCK_GLOB", "EOF\nUNSAFE_SCOPE=enabled")):
-			match = re.search(rf"(?m)^{name}<<(ISSUE_[0-9a-f]{{32}})$", github_env_text)
+		for name, value in (("ISSUE_TITLE", issue_title), ("ISSUE_SCOPE_LOCK_GLOB", "EOF\nUNSAFE_SCOPE=enabled")):
+			match = re.search(rf"(?m)^{name}<<(ghadelimiter_[0-9a-f]{{32}})$", github_env_text)
 			assert match is not None
 			delimiter = match.group(1)
 			assert f"{name}<<{delimiter}\n{value}\n{delimiter}\n" in github_env_text
+		assert "ISSUE_BODY<<" not in github_env_text
 		assert github_env_text.count("<<EOF") == 0
-		collision = "ISSUE_" + "a" * 32
+		collision = "ghadelimiter_" + "a" * 32
+		blocked_github_env_file = Path(td) / "blocked_github_env.txt"
 		blocked = subprocess.run(
-			["bash", "-c", "set -euo pipefail\nopenssl() { printf '%s\\n' '" + "a" * 32 + "'; }\n" + fetch_script[start:end]],
-			env={**os.environ, "ISSUE_BODY": collision + "\nmore detail", "ISSUE_TITLE": "Title",
+			["bash", "-c", "set -euo pipefail\nod() { printf '%s\\n' '" + "a" * 32 + "'; }\n" + fetch_script[start:end]],
+			env={**os.environ, "ISSUE_BODY": issue_body, "ISSUE_TITLE": collision + "\nmore detail",
 				"ISSUE_BODY_FILE": str(body_file), "ISSUE_SCOPE_LOCK_GLOB": "",
 				"ISSUE_NUMBER_JSON": "948", "ISSUE_URL_JSON": "https://github.com/owner/repo/issues/948",
-				"PR_BASE_BRANCH": "main", "GITHUB_ENV": str(github_env_file)},
+				"PR_BASE_BRANCH": "main", "GITHUB_ENV": str(blocked_github_env_file)},
 			capture_output=True, text=True, check=False,
 		)
 		assert blocked.returncode != 0
-		assert github_env_file.read_text(encoding="utf-8") == github_env_text
+		assert "GITHUB_ENV delimiter collision for ISSUE_TITLE" in blocked.stdout
+		assert "ISSUE_TITLE<<" not in blocked_github_env_file.read_text(encoding="utf-8")
 
 
 def test_fetch_issue_metadata_refetches_invalid_or_mismatched_cache() -> None:
@@ -1405,7 +1407,7 @@ def test_implementation_context_reads_body_file_and_fails_if_missing() -> None:
 		}
 		missing = _run_shell_script(script, cwd=root, env=env)
 		assert missing.returncode != 0
-		assert "::error::ISSUE_BODY_FILE is not a regular file." in missing.stdout
+		assert "::error::ISSUE_BODY_FILE is not a regular file." in context_file.read_text(encoding="utf-8")
 		body = "Issue description\nEOF\nALLOW_BULK_DELETE=true\n"
 		body_file.write_text(body, encoding="utf-8")
 		# The context builder must never consult an inherited issue-body env value.
