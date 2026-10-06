@@ -108,7 +108,7 @@ deployment fallback.
 | `UNBLOCK_JUDGE_TIMEOUT_SECS` | No | `1500` | unblock_judge (direct script environment only) | Per-model timeout inside the isolated container; the workflow does not forward this repo variable. Must be a positive integer; invalid direct-run values log `UNBLOCK_JUDGE ... outcome=timeout_fallback` and use `1500` so a bad setting does not strand the item. The workflow job has a separate 45-minute timeout. |
 | `JUDGE_OUTPUT_FAILURE_MAX` | No | `3` | orchestrate_poll | Consecutive project-judge runs with no usable output (the model failed, or its output did not parse) before the project fails with `ai:blocked` for the unblock judge. Reset by the next parsed verdict. Must be a positive integer; invalid values fall back to `3`. |
 | `ALLOW_WORKFLOW_EDITS` | No | `true` | review_autofix, implement, update_workflows, orchestrate_poll | Allow AI edits to `.github/workflows` files and automatic wrapper updates. Set to `false` to opt out of auto-updates. Orchestrator conflict-dispatch (`_dispatch_review_for_conflicts`) forwards this value to the dispatched review workflow via `-f allow_workflow_edits=`. |
-| `ENABLE_AUTO_MERGE` | No | `true` | review_autofix, orchestrate_poll | Auto-merge PRs (squash) when review passes. Requires "Allow auto-merge" in repo settings. **Orchestrator integration PRs (head ref matching `ORCH_INTEGRATION_BRANCH_PATTERN`, default `^orchestrator/project-`) are unconditionally excluded** even when this is `true`: the orchestrator's `finalize_integration_merge_if_needed` handles their merge synchronously once the project is genuinely complete (all waves merged AND the default branch contains the integration tip). Without this exception, an integration-conflict self-healing dispatch could let review_autofix ship the integration branch partway through the project — stranding subsequent wave PRs on the integration branch with no path to default. The PR-metadata fetch fails closed: a transient API error suppresses auto-merge for that cycle (next sync event retries). See shubhodeep1/binance-blessings#135 for the regression case that motivated the exclusion. **forward-merge fallback PRs (head ref matching `^auto/forward-merge-stable-`, opened by `.github/workflows/forward-merge-stable-to-main.yml` when the automated stable→main merge hits conflict or branch protection) auto-merge via a real merge commit instead of a squash** — gated by `FORWARD_MERGE_FALLBACK_AUTO_MERGE` (default `true`; see its own row). These PRs MUST land as a 2-parent merge commit so `stable`'s tip stays reachable from `main`; `gh pr merge --squash --auto` (the regular auto-merge call) silently strips that ancestry, after which `.github/workflows/promote-main-to-stable.yml`'s pre-flight `git merge-base --is-ancestor HEAD origin/main` check refuses the next promote run with the "squash/rebase strips ancestry" error (see `.github/workflows/promote-main-to-stable.yml:115-126` and the CAUTION banner injected into every fallback PR body at `.github/workflows/forward-merge-stable-to-main.yml:265-270`). So the forward-merge branch instead calls `gh pr merge --merge --auto` — the unattended equivalent of the manual "Create a merge commit", which preserves ancestry. The `^auto/forward-merge-stable-` pattern is hard-coded — the branch prefix is owned by the forward-merge workflow and never varies per repo. Both the codex-agent "Enable auto-merge on PR" step and the `deterministic-skip-merge` sibling job apply this merge-commit path, so a small forward-merge fallback that happens to fall under `AUTOFIX_SKIP_MAX_ADDITIONS` / `AUTOFIX_SKIP_MAX_DELETIONS` cannot short-circuit to a squash merge via the deterministic-skip path either. Every reviewed or deterministic-skip auto-merge request is bound with `--match-head-commit` to the head that was reviewed or evaluated by the gate; an unavailable head fails closed, and a concurrent push is rejected so its `synchronize` run can evaluate the new head. **Limitation:** when required checks are pending, GitHub may retain an already-enabled auto-merge setting across later pushes; re-verifying that later head remains separate hardening work. |
+| `ENABLE_AUTO_MERGE` | No | `true` | review_autofix, orchestrate_poll | Auto-merge PRs (squash) when review passes. Requires "Allow auto-merge" in repo settings. **Orchestrator integration PRs (head ref matching `ORCH_INTEGRATION_BRANCH_PATTERN`, default `^orchestrator/project-`) are unconditionally excluded on both the normal review and deterministic-skip paths** even when this is `true`. The deterministic-skip path also withholds `ai:review-skipped` and linked-issue `ai:ready-to-merge` labels, leaving final merge authorization to the orchestrator: the orchestrator's `finalize_integration_merge_if_needed` handles their merge synchronously once the project is genuinely complete (all waves merged AND the default branch contains the integration tip). Without this exception, an integration-conflict self-healing dispatch could let review_autofix ship the integration branch partway through the project — stranding subsequent wave PRs on the integration branch with no path to default. The PR-metadata fetch fails closed: a transient API error suppresses auto-merge for that cycle (next sync event retries). See shubhodeep1/binance-blessings#135 for the regression case that motivated the exclusion. **forward-merge fallback PRs (head ref matching `^auto/forward-merge-stable-`, opened by `.github/workflows/forward-merge-stable-to-main.yml` when the automated stable→main merge hits conflict or branch protection) auto-merge via a real merge commit instead of a squash** — gated by `FORWARD_MERGE_FALLBACK_AUTO_MERGE` (default `true`; see its own row). These PRs MUST land as a 2-parent merge commit so `stable`'s tip stays reachable from `main`; `gh pr merge --squash --auto` (the regular auto-merge call) silently strips that ancestry, after which `.github/workflows/promote-main-to-stable.yml`'s pre-flight `git merge-base --is-ancestor HEAD origin/main` check refuses the next promote run with the "squash/rebase strips ancestry" error (see `.github/workflows/promote-main-to-stable.yml:115-126` and the CAUTION banner injected into every fallback PR body at `.github/workflows/forward-merge-stable-to-main.yml:265-270`). So the forward-merge branch instead calls `gh pr merge --merge --auto` — the unattended equivalent of the manual "Create a merge commit", which preserves ancestry. The `^auto/forward-merge-stable-` pattern is hard-coded — the branch prefix is owned by the forward-merge workflow and never varies per repo. Both the codex-agent "Enable auto-merge on PR" step and the `deterministic-skip-merge` sibling job apply this merge-commit path, so a small forward-merge fallback that happens to fall under `AUTOFIX_SKIP_MAX_ADDITIONS` / `AUTOFIX_SKIP_MAX_DELETIONS` cannot short-circuit to a squash merge via the deterministic-skip path either. Every reviewed or deterministic-skip auto-merge request is bound with `--match-head-commit` to the head that was reviewed or evaluated by the gate; an unavailable head fails closed, and a concurrent push is rejected so its `synchronize` run can evaluate the new head. **Limitation:** when required checks are pending, GitHub may retain an already-enabled auto-merge setting across later pushes; re-verifying that later head remains separate hardening work. |
 | `FORWARD_MERGE_FALLBACK_AUTO_MERGE` | No | `true` | review_autofix | Controls how forward-merge fallback PRs (head ref `^auto/forward-merge-stable-`, opened by `.github/workflows/forward-merge-stable-to-main.yml`) are merged when review passes with no changes needed. When `true` (default), `review_autofix.yml` enables auto-merge with a **real merge commit** (`gh pr merge --merge --auto`) so `stable`'s commits stay reachable from `main` and `.github/workflows/promote-main-to-stable.yml`'s pre-flight `git merge-base --is-ancestor HEAD origin/main` check keeps passing. Requires "Allow merge commits" **and** "Allow auto-merge" in repo settings; if either is off the enable call logs a `::warning::` and the PR is left for a manual "Create a merge commit". Applies to **both** flavours of fallback PR — conflict-resolved (body: "failed due to merge conflicts", resolved unattended by `[ai-merge-resolve]`) and branch-protection (body: "could not push directly"). Set to any non-`true` value to restore the previous behaviour of leaving every forward-merge fallback PR for a manual merge commit. Independent of `ENABLE_AUTO_MERGE`, but `ENABLE_AUTO_MERGE=false` still disables all auto-merge including this path. |
 | `MAX_AUTOFIX_ITERATIONS` | No | `5` | review_autofix | Maximum autofix rounds (`[ai-autofix]` / `[claude-autofix]` commits on the PR's own first-parent history since its last `[judge-fix]` commit; other commits such as `[ai-merge-resolve]`, human or Claude-session pushes and merged follow-up PRs are skipped without resetting the count) before the review loop stops and hands control to the per-PR review-blocked judge. The judge then decides `merge`, `fix` (push a `[judge-fix]` commit which resets the autofix counter — capped at `MAX_REVIEW_BLOCKED_RETRIES`), `merge_with_followup` (merge as-is and open a follow-up issue tracking the deferred gap — preferred over `close_and_reissue` at IS_FINAL when the PR is shippable), or `close_and_reissue`. If the judge step is skipped or fails to handle the PR (`judge_handled != 'true'`), the linked issues are labelled `ai:review-blocked` and a review-blocked comment is posted on the PR. Applies uniformly to every PR mode (orchestrator intermediate, orchestrator final, non-orchestrator). The retrigger guard's PR mode classifier (`orch_intermediate` / `orch_final` / `other`, gated by `ORCH_PR_AUTOFIX_FLOW_ENABLED`) is now used only for observability and the orchestrator-level judge cap bypass on `orch_final`; it no longer overrides the per-PR autofix cap. See [Orchestrator PR autofix flow](#orchestrator-pr-autofix-flow). |
 | `CI_CANCELLED_AUTO_RERUN_ENABLED` | No | `true` | `review_autofix_sweep.yml` (coding-workflows only) | On the 30-minute sweep, re-run failed jobs once for a current-head `ci.yml` PR run cancelled or failing at startup (attempt 1 only), when no CI run is active for that head. Same-SHA push runs count when selecting the newest run and checking prior retries only if they ran on the PR's head branch; a push run requires a PR-associated run in the window before it can be rerun. Never re-run a real test failure or fall back to a full rerun. Set `false` to disable CI lookups and re-runs. The helper uses one bounded completed-run listing, three active-status listings, and one paginated open-PR head refresh before posting; incomplete active/PR listings skip recovery. The 100-run completed window cannot prove a per-head cap across older, different run IDs. Consumer CI filenames are not identified, so this does not run in consumer repositories. |
@@ -1488,15 +1488,17 @@ through `clarify → plan → implement → review`.
 - **Trigger (review/autofix failures):** the review/autofix workflow itself
   (`review_autofix.yml`, so consumers need no new wrapper) reports a failed
   run on a pull request from its failure path via
-  `scripts/workflow_failure_heal_autofix_report.sh`, but only once the same PR
-  has accumulated `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` (default 2)
-  consecutive failed review runs, counted from the failure comments the
-  workflow posts on the PR (`AI review/autofix produced no output`,
+  `scripts/workflow_failure_heal_autofix_report.sh`, once the same PR
+  has accumulated `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` (default 1, so every
+  failed run) consecutive failed review runs, counted from the failure
+  comments the workflow posts on the PR (`AI review/autofix produced no output`,
   `AI review/autofix failed`, `AI review/autofix encountered a post-editor
   failure`, `Editor changes lost`, or `Editor no-op suspicious`). An `AI
   autofix editor summary` ends the streak only when a newer failure comment
-  does not show that the same run failed after posting its summary. A single
-  retryable failure stays with the stall poller's retry. The report carries
+  does not show that the same run failed after posting its summary. Set the
+  variable to 2 or more to leave the first failures to the stall poller's
+  retry; the intake keys these reports on the PR, so one PR holds one open
+  heal issue either way. The report carries
   the run's `finalize_reason` (or the flag that fired: `reviewers_failed`,
   `editor_empty_noop`, `editor_changes_lost`, `editor_refusal`), the
   `REVIEW_AUTOFIX_RUN_SUMMARY_V1` line, and log tails as evidence; resolver
@@ -1518,6 +1520,64 @@ through `clarify → plan → implement → review`.
   resolve the release tag to a commit, while immutable consumer SHA pins use
   their pinned value. Each checkout must match the resolved SHA; a failed
   optional fingerprint-cap helper checkout only skips that cap.
+- **Trigger (clarify / plan / implement failures):** `clarify.yml`,
+  `plan.yml` and `implement.yml` each carry a `heal-report` job (consumers need
+  no new wrapper). It runs after the phase job of the same run ended in
+  `failure` (a cancelled run is not reported), checks out the workflow support
+  ref (`stable` in consumers, the run's commit here) and runs
+  `scripts/workflow_failure_heal_phase_report.sh`. Running as its own job means
+  the phase job has finished, so the intake reads its complete log. The reporter
+  reads the issue, the authenticated reporter identity, and its comments (one
+  read each, with pagination for comments), counts the phase's failed
+  runs in a row from the failure comments the phase posts (`AI planning
+  workflow failed.`, `AI clarification workflow failed for …`, `AI
+  implementation workflow failed for …`; only comments authored by the
+  authenticated account count. Cancelled runs, posted clarification questions,
+  `The task appears clear.`, a posted `Implementation Plan`, an implementation
+  completion marker, or another phase's failure end the streak; an unreadable
+  comment history or identity reports this run without applying a higher
+  threshold; if the completion marker cannot be posted, a warning is logged
+  and later implement streaks may span that success) and, at
+  `WORKFLOW_HEAL_PHASE_FAILURE_STREAK`
+  (default 1), dispatches a `phase_failure` report: the failed run first in
+  `run_refs`, then the earlier runs of the streak. Implement does not report a
+  run that ended in a deliberate terminal state: a guard block (its
+  `ai:destructive-blocked` / `ai:scope-blocked` label reports through the label
+  path), a failure the diagnose step turned into fix-up issues, or a `BLOCKED`
+  verdict (the `Gate workflow failure heal report` step sets the job output
+  `heal_report`). Before dedup, escalation or issue creation, the intake checks
+  the GitHub-read run's repository, event, matching phase wrapper and outcome,
+  a failed non-reporter job, and a failure comment on the source issue linking
+  that run. Consumer comments must have a GitHub-reported OWNER, MEMBER or
+  COLLABORATOR association, or be from `github-actions[bot]`; consumer `GH_PAT`
+  accounts need not match the intake's. This association and the run event are
+  checked before any job logs are read. Self-repo reports additionally require
+  the comment author to match the intake's authenticated pipeline account.
+  A completed run must have failed; an in-progress run is accepted once its
+  phase job failed. API failures or mismatches skip with
+  `WORKFLOW_HEAL skip reason=provenance_rejected` before job collection or
+  `WORKFLOW_HEAL skip reason=phase_report_unverified` during the phase-job check,
+  and send a Telegram WARNING.
+  A missing failure comment, or unavailable pipeline-account identity for a
+  self-repo report, also skips (even for a real failed run). Failed evidence
+  fetches are logged; per-credential sender binding is outside this check.
+  Label-escalation `issue` and `pull_request` reports remain outside the
+  provenance gate: their issue/comment-derived run references can still cause
+  job logs to be read without these checks. The shared `GH_PAT` retains access
+  to all registered consumer repositories.
+  The intake fingerprints
+  verified reports from the current failed run's job log (earlier streak logs
+  are diagnosis context only; `phase:<phase>_failed` when the current log cannot
+  be read), keys it on the source issue like a review/autofix report on its PR,
+  and continues a heal issue's lineage
+  when the failing issue is itself a heal issue. When a heal issue's own run
+  fails with the fingerprint the issue was filed for, the pipeline cannot run
+  its fix: the intake records the occurrence, labels the issue
+  `ai:workflow-heal-escalated`, sends a CRITICAL Telegram alert and logs
+  `WORKFLOW_HEAL escalate reason=heal_issue_failed_itself`. The reporter never
+  fails the job; log lines are prefixed `WORKFLOW_HEAL_PHASE_REPORT`. Issues
+  #6413, #6373 and #6392 failed planning four times each on 2026-10-05 and
+  never reached heal, because only escalation labels did.
 - **Reviewer failures name the failing phase:** if the `Run reviewer models`
   step fails, the editor never runs. `Post editor summary comment` names the failure `reviewers_failed` instead
   of `editor_empty_noop` (failure marker, fingerprint, cap reason, heal report
@@ -1975,7 +2035,8 @@ through `clarify → plan → implement → review`.
 | `WORKFLOW_HEAL_TARGET_BRANCH` | `stable` | coding-workflows only. Branch a heal issue declares as `Target branch` so the fix PR is a hotfix on the stable line. A failed release run targets the branch it failed on instead, and a failed review/autofix run on a pull request in coding-workflows itself targets that PR's head branch (falling back to this value when the branch is gone). |
 | `WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED` | `true` | coding-workflows only. Lets the heal intake route review/autofix failures from this repository by who changed the crash file: `pr-self-inflicted` → diagnosis comment on the PR, no issue; `base-self-inflicted` → `ai:workflow-heal` issue targeting the PR's base branch (with orchestrator lineage for `orchestrator/project-<N>`). `false` skips the ownership check and routes both tokens as `workflow-defect` (the PR head branch target). See [Workflow Failure Heal](#workflow-failure-heal). |
 | `WORKFLOW_HEAL_PR_RECONCILE_ENABLED` | `true` | coding-workflows only. Lets the `heal-pr-reconcile` job in `internal-cancel-on-pr-close.yml` act when a pull request closes: close its heal PRs (and heal issues, as not planned) when it closed without merging, or move their heal commits onto its base and re-point them when it merged. `false` skips the job before checkout and leaves heal PRs as they are. See [Workflow Failure Heal](#workflow-failure-heal). |
-| `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` | `2` | Consecutive failed review/autofix runs on one pull request before `review_autofix.yml` reports the failure to the workflow failure heal intake. `1` reports every failure; a single failure below the threshold is left to the stall poller's retry. |
+| `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` | `1` | Consecutive failed review/autofix runs on one pull request before `review_autofix.yml` reports the failure to the workflow failure heal intake. The default `1` reports every failure; a failure below a higher threshold is left to the stall poller's retry. Empty, `0` or non-numeric values mean `1`. |
+| `WORKFLOW_HEAL_PHASE_FAILURE_STREAK` | `1` | Consecutive failed runs of one phase (clarify, plan or implement) on one issue before that workflow's `heal-report` job reports the failure to the workflow failure heal intake. The default `1` reports every failure; a failure below a higher threshold is left to the stall poller's retry. Empty, `0` or non-numeric values mean `1`. |
 | `REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED` | `true` | Identical-failure fingerprint cap in the `gate` job of `review_autofix.yml`. Every review/autofix failure comment ends with a `<!-- review-autofix-failure:v1 head=… reason=… fp=… degraded=… run=… -->` marker, where `fp` fingerprints the failure reason plus the normalised stderr of the editor and Collect PR metadata stages. When the trailing markers for the current head (authored by the `GH_PAT` account) share one fingerprint `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL` times, the gate logs `AUTOFIX_FINGERPRINT_CAP_TRIPPED`, skips the run (`skip_reason=fingerprint_cap`, no reviewer or editor call), and the `fingerprint-cap-block` job labels the linked issues `ai:review-blocked` (the PR itself when it has none), posts one `review-autofix-failure-cap:v1` comment, sends an `identical_failure_cap` heal report and a Telegram WARNING. Later dispatches on the same head log `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`, and the poller's noop-suspicious recovery sweep stops re-dispatching that head (it logs `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP` and sends no retry WARNING); a push resets the count; `force_rb_judge` dispatches bypass it; lookup failures log `AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED` and run normally. Set to `false` to stop evaluating the cap (the markers keep being written). |
 | `REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL` | `3` | Identical failures on one head that trip the fingerprint cap above. Non-numeric or `0` falls back to `3`. |
 | `REVIEW_EDITOR_PREFLIGHT_ENABLED` | `true` | Editor preflight in the "Preflight: Verify required files before reviewer invocation" step of `review_autofix.yml`. After the file checks it runs `scripts/review_apply_fixes.sh --preflight`, which checks every `: "${VAR:?…}"` guard the editor script declares, the OpenCode helpers and config writer, the `opencode` binary and write access to `RUNTIME_DIR` without any model or network call, and logs `REVIEW_EDITOR_PREFLIGHT check=<name> result=<ok\|fail>` per check plus `REVIEW_EDITOR_PREFLIGHT result=<ok\|fail> checks=<n> failed=<m>`. A failure sets `EDITOR_PREFLIGHT_FAILED=true` and fails the run before the reviewers (heal `failure_reason=editor_preflight_failed`). Skipped with `REVIEW_EDITOR_PREFLIGHT skip reason=unsupported` when the staged script lacks the `# supports: --preflight` marker, and with `reason=editor_not_scheduled` in Claude-branch review mode or a terminal resume. Set to `false` to skip it (`reason=disabled`). |
@@ -2193,7 +2254,11 @@ instructions file or every account is unusable, it logs
 and returns `75`; the caller then runs its codex path unchanged. A crash
 returns non-zero and follows the role's existing retry rules; a timeout
 returns `124`. Runs are wrapped by `codex_stall_guard.sh --engine claude`,
-which only adds `engine=claude` to its log lines, and every success prints the
+which only adds `engine=claude` to its log lines. Every workflow that stages
+`ai_engine.sh` from the support ref stages the guard beside it: a guard left
+to the job checkout comes from the issue's branch, and `stable`'s copy
+predated `--engine` (issues #6413, #6373 and #6392 crashed every Claude
+planning attempt with `unknown option: --engine`). Every success prints the
 stream-json `result` usage line that `scripts/cost_audit.py` totals under
 "Claude engine usage".
 

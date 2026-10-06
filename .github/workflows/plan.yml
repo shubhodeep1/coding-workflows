@@ -2319,8 +2319,12 @@ jobs:
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           FAILED_STEP_HINT="Check the AI Plan run logs and inspect the first failed step."
+          PLAN_CANCELLED_SUFFIX=""
+          if [ "${{ job.status }}" = "cancelled" ]; then
+            PLAN_CANCELLED_SUFFIX=$'\n<!-- ai:plan-cancelled -->'
+          fi
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
-            -f body=$'AI planning workflow failed.\n\nWorkflow: AI Plan\nIssue: #'"${ISSUE_NUMBER}"$'\nIssue URL: '"${ISSUE_URL}"$'\nContext: '"${PLAN_FAILURE_CONTEXT}"$'\nHint: '"${FAILED_STEP_HINT}"$'\nRun: '"${RUN_URL}"
+            -f body=$'AI planning workflow failed.\n\nWorkflow: AI Plan\nIssue: #'"${ISSUE_NUMBER}"$'\nIssue URL: '"${ISSUE_URL}"$'\nContext: '"${PLAN_FAILURE_CONTEXT}"$'\nHint: '"${FAILED_STEP_HINT}"$'\nRun: '"${RUN_URL}${PLAN_CANCELLED_SUFFIX}"
 
       - name: Telegram failure notification
         if: failure() || cancelled()
@@ -2353,3 +2357,60 @@ jobs:
       - name: Exit safely
         if: failure() || cancelled()
         run: exit 0
+
+  heal-report:
+    # Workflow failure heal (README "Workflow Failure Heal"): report a failed
+    # plan run to coding-workflows' heal intake, which diagnoses it and opens
+    # an ai:workflow-heal issue for the pipeline to fix. A separate job, so the
+    # plan job has finished and the intake reads its complete log. Only a
+    # `failure` result is reported: a cancelled run was superseded or timed
+    # out. `permissions: {}` keeps the job inside any caller's grant;
+    # GH_PAT does the work. The reporter always exits 0.
+    needs: plan
+    if: >-
+      always() && needs.plan.result == 'failure' &&
+      !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+      WORKFLOW_HEAL_PHASE_FAILURE_STREAK: ${{ vars.WORKFLOW_HEAL_PHASE_FAILURE_STREAK || '1' }}
+      WORKFLOW_HEAL_PHASE: plan
+      WORKFLOW_HEAL_ISSUE_NUMBER: ${{ github.event.issue.number }}
+      REPORT_WORKFLOW_NAME: ${{ github.workflow }}
+    steps:
+      - name: Resolve workflow support ref
+        run: |
+          set -euo pipefail
+          wf_source="shubhodeep1/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+          else
+            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+          fi
+
+      - name: Checkout workflow support source
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ env.SCRIPT_REF }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: scripts
+
+      - name: Report the failed run to workflow failure heal
+        run: |
+          set -euo pipefail
+          reporter=".codex-workflow-src/scripts/workflow_failure_heal_phase_report.sh"
+          if [ ! -f "${reporter}" ]; then
+            echo "WORKFLOW_HEAL_PHASE_REPORT skip reason=reporter_missing ref=${SCRIPT_REF}"
+            exit 0
+          fi
+          REPORT_WRAPPER_SHA="$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" \
+            RUNTIME_DIR="${RUNNER_TEMP}/workflow-heal-phase-report" \
+            bash "${reporter}"
