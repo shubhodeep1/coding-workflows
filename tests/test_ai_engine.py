@@ -799,7 +799,7 @@ def test_read_isolation_missing_support_falls_back(sandbox: dict) -> None:
 	args = " ".join(shlex.quote(str(part)) for part in ("SECURITY_AUDIT", sandbox["prompt"], sandbox["tmp"] / "out.txt", sandbox["work"]))
 	result = _bash(sandbox, f'_AI_ENGINE_DIR={shlex.quote(str(support_scripts))}; rc=0; claude_run {args} || rc=$?; echo "RC=${{rc}}"')
 	assert _rc(result) == 75
-	assert "reason=isolation_support_missing" in result.stderr
+	assert "reason=policy_unavailable" in result.stderr
 	assert _calls(sandbox) == []
 
 
