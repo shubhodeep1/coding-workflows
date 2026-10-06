@@ -21,6 +21,7 @@ MAX_FILES = 5000
 EXCLUDED = {".git", ".ai", ".codex", ".opencode", ".serena", ".venv", ".review-venv", "venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".cache", ".tox", ".nox", "dist", "build", "coverage", ".next", ".turbo", ".codex-workflow-src", ".codex-workflow-src-main", "secrets", "credentials"}
 ROOT_FILES = {"README.md", "agents.md", "AGENTS.md", "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "pyproject.toml", "requirements.txt", "setup.cfg", "pytest.ini", "tox.ini", "go.mod", "Cargo.toml"}
 SUFFIXES = {".py", ".sh", ".js", ".jsx", ".cjs", ".mjs", ".ts", ".tsx", ".cts", ".mts", ".go", ".rs", ".java", ".json", ".md", ".yml", ".yaml", ".toml", ".txt", ".css", ".html", ".sql", ".lock", ".cfg", ".ini"}
+IMPLEMENT_SUFFIXES = {".c", ".h", ".cc", ".cpp", ".hpp", ".cs", ".kt", ".kts", ".swift", ".rb", ".php", ".scala", ".vue", ".svelte", ".scss", ".less", ".xml", ".graphql", ".proto", ".tf", ".hcl", ".gradle", ".properties", ".csv"}
 COMMAND_TWIN_DIR = "workflow-templates/.claude/commands"
 
 
@@ -38,16 +39,17 @@ def allowed(name, host=None, commands=None):
 		return False
 	if name == "scripts/editor_git_credentials.sh":
 		return True
-	if any(part.lower() in EXCLUDED or part.lower().startswith(".env") or "secret" in part.lower() or "credential" in part.lower() or part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore", ".egg-info", ".dist-info")) for part in parts):
+	implement_env_example = os.environ.get("UNTRUSTED_WORKSPACE_PROFILE") == "implement" and parts[-1] == ".env.example"
+	if any(part.lower() in EXCLUDED or (part.lower().startswith(".env") and not (implement_env_example and part == parts[-1])) or "secret" in part.lower() or "credential" in part.lower() or part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore", ".egg-info", ".dist-info")) for part in parts):
 		return False
 	if name in (".github/ai/claude_engine.json", ".claude/hooks/gh_api_write_guard.py", ".claude/hooks/pr_merge_status_guard.py", "scripts/claude_settings.json.tmpl"):
 		return True
 	# Command admission must use the inventory frozen by snapshot.
 	if len(parts) == 3 and parts[:2] == (".claude", "commands") and parts[2].endswith(".md") and not parts[2].startswith("."):
 		return commands is not None and name in commands
-	if parts[0].startswith(".") and (len(parts) < 3 or parts[:2] not in ((".github", "workflows"), (".github", "actions"))):
+	if parts[0].startswith(".") and (len(parts) < 3 or parts[:2] not in ((".github", "workflows"), (".github", "actions"))) and not (implement_env_example and len(parts) == 1):
 		return False
-	return name in ROOT_FILES or PurePosixPath(name).suffix.lower() in SUFFIXES or parts[-1] == "Dockerfile"
+	return name in ROOT_FILES or PurePosixPath(name).suffix.lower() in SUFFIXES or implement_env_example or (os.environ.get("UNTRUSTED_WORKSPACE_PROFILE") == "implement" and PurePosixPath(name).suffix.lower() in IMPLEMENT_SUFFIXES) or parts[-1] == "Dockerfile"
 
 
 def checked_path(root, name):
@@ -189,11 +191,17 @@ def snapshot(host, workspace, manifest, host_git_dir=None):
 	subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-c", "user.name=isolated", "-c", "user.email=isolated@invalid", "commit", "--allow-empty", "-qm", "snapshot"], cwd=workspace, check=True, env=env)
 
 
-def transfer(host, workspace, manifest):
+def transfer(host, workspace, manifest, protected_file=None):
 	commands = load_admitted_commands(manifest)
 	baseline = json.loads(manifest.read_text(encoding="utf-8"))
 	results = {name: (data, mode) for name, data, mode in enumerate_workspace(workspace, None, commands)}
+	protected = set()
+	if protected_file is not None:
+		protected = set(protected_file.read_text(encoding="utf-8").splitlines())
+		if any(not name or name.startswith("/") or ".." in PurePosixPath(name).parts or "\\" in name or "\r" in name for name in protected):
+			raise ValueError("unsafe protected path")
 	changes = []
+	dropped = 0
 	# Even an untouched result must not conceal a host-side update made since
 	# the snapshot (including a write by another workflow process).
 	for name, old in baseline.items():
@@ -207,6 +215,9 @@ def transfer(host, workspace, manifest):
 			continue
 		if not allowed(name, None, commands):
 			raise ValueError("unsafe result path")
+		if name in protected:
+			dropped += 1
+			continue
 		host_file = checked_path(host, name)
 		if old is None and (host_file.exists() or host_file.is_symlink()):
 			raise ValueError("new result conflicts with host path")
@@ -229,6 +240,62 @@ def transfer(host, workspace, manifest):
 			if os.path.exists(tmp):
 				os.unlink(tmp)
 	manifest.write_text(json.dumps(baseline), encoding="utf-8")
+	if protected_file is not None:
+		print(f"IMPLEMENT_ISOLATION action=transfer outcome=dropped_protected count={dropped}", file=sys.stderr)
+
+
+def resync(host, workspace, manifest):
+	"""Rebaseline from the host after trusted steps changed it between attempts."""
+	commands = load_admitted_commands(manifest)
+	json.loads(manifest.read_text(encoding="utf-8"))
+	env = git_env(manifest)
+	git = ["git"]
+	if not (host / ".git").is_dir():
+		trusted_git = Path(os.environ.get("GITHUB_WORKSPACE", "/invalid")) / ".git"
+		if not trusted_git.is_dir():
+			raise ValueError("host git dir missing")
+		git += ["--git-dir", str(trusted_git), "--work-tree", str(host)]
+	paths = set()
+	for cmd in (git + ["ls-files", "-z"], git + ["ls-files", "--others", "--exclude-standard", "-z"]):
+		paths.update(p.decode("utf-8") for p in subprocess.check_output(cmd, cwd=host, env=env).split(b"\0") if p)
+	updated = {}
+	content = {}
+	total = 0
+	for name in sorted(paths):
+		if not allowed(name, commands=commands):
+			continue
+		if (host / name).is_symlink():
+			continue
+		path = checked_path(host, name)
+		if not path.exists():
+			continue
+		data, mode = read_regular(path)
+		total += len(data)
+		if len(updated) >= MAX_FILES or total > MAX_TOTAL:
+			raise ValueError("workspace size limit exceeded")
+		updated[name] = [hashlib.sha256(data).hexdigest(), mode]
+		content[name] = (data, mode)
+	# Validate the entire sandbox before changing it. Excluded build products stay.
+	results = {name: (data, mode) for name, data, mode in enumerate_workspace(workspace, None, commands)}
+	command_dir = checked_path(workspace, ".claude/commands")
+	if command_dir.is_dir():
+		for target in command_dir.iterdir():
+			if (target.is_file() or target.is_symlink()) and not target.name.startswith(".") and ".claude/commands/" + target.name not in commands:
+				target.unlink()
+	for name in sorted(set(results) - set(updated)):
+		checked_path(workspace, name).unlink()
+	for name, (data, mode) in content.items():
+		target = checked_path(workspace, name)
+		if name in results and updated[name] == [hashlib.sha256(results[name][0]).hexdigest(), results[name][1]]:
+			continue
+		target.parent.mkdir(parents=True, exist_ok=True)
+		if target.exists():
+			target.unlink()
+		with target.open("xb") as out:
+			out.write(data)
+		os.chmod(target, mode)
+	# Keep admission frozen, even if the host adds a new command twin.
+	manifest.write_text(json.dumps(updated), encoding="utf-8")
 
 
 def refresh(host, workspace, manifest):
@@ -262,7 +329,7 @@ def refresh(host, workspace, manifest):
 
 def main():
 	# snapshot alone takes an optional fifth argument: the host Git dir.
-	if sys.argv[1:2] not in (["snapshot"], ["refresh"], ["transfer"]) or not (len(sys.argv) == 5 or (len(sys.argv) == 6 and sys.argv[1] == "snapshot")):
+	if sys.argv[1:2] not in (["snapshot"], ["refresh"], ["transfer"], ["resync"]) or not (len(sys.argv) == 5 or (len(sys.argv) == 6 and sys.argv[1] in ("snapshot", "transfer"))):
 		raise SystemExit(2)
 	host, workspace, manifest = map(Path, sys.argv[2:5])
 	try:
@@ -270,8 +337,10 @@ def main():
 			snapshot(host, workspace, manifest, Path(sys.argv[5]) if len(sys.argv) == 6 else None)
 		elif sys.argv[1] == "refresh":
 			refresh(host, workspace, manifest)
+		elif sys.argv[1] == "resync":
+			resync(host, workspace, manifest)
 		else:
-			transfer(host, workspace, manifest)
+			transfer(host, workspace, manifest, Path(sys.argv[5]) if len(sys.argv) == 6 else None)
 	except (OSError, ValueError, UnicodeError, subprocess.CalledProcessError) as exc:
 		# Only fixed, path-free transfer reasons may cross into workflow logs.
 		reason_code = {
@@ -286,7 +355,10 @@ def main():
 			"host baseline changed": "host_baseline_changed",
 			"new result conflicts with host path": "host_path_conflict",
 			"unsafe result path": "unsafe_result_path",
+			"unsafe protected path": "unsafe_protected_path",
 		}.get(str(exc), "unknown") if sys.argv[1] == "transfer" and isinstance(exc, ValueError) else "unknown"
+		if sys.argv[1] == "resync":
+			reason_code = "resync_failed"
 		print(f"::error::Review isolation snapshot or transfer rejected ({type(exc).__name__}) reason={reason_code}", file=sys.stderr)
 		raise SystemExit(1) from None
 

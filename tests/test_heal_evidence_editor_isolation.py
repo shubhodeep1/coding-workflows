@@ -1,7 +1,9 @@
 """Contracts for the heal-evidence editor trust boundary."""
 
+import hashlib
 import os
 import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -502,9 +504,30 @@ def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
 		block = implement.split(f"      - name: {step}\n", 1)[1].split("      - name: ", 1)[0]
 		assert "HEAL_EVIDENCE_SCOPE_LOCK: ${{ steps.collect_heal_evidence.outputs.present" in block
 		assert "HEAL_EVIDENCE_SCOPE_ALLOWLIST: ${{ steps.heal_evidence_scope.outputs.allowlist }}" in block
-	assert implement.count('editor_git_credentials.sh" hide') == 2
-	assert implement.count('editor_git_credentials.sh" restore') >= 2
+	assert implement.count('editor_git_credentials hide') == 2
+	assert implement.count('editor_git_credentials restore') >= 4
 	assert "if: always() && env.SKIP_IMPLEMENT != 'true' && steps.post_codex_syntax_repair.outcome != 'skipped'" in implement
+	for workflow in (implement, plan):
+		stage = workflow.split("      - name: Stage workflow support files\n", 1)[1].split("      - name: ", 1)[0]
+		assert "id: stage_support" in stage
+		assert 'echo "editor_git_credentials_sha256=${editor_git_credentials_sha256}" >> "$GITHUB_OUTPUT"' in stage
+		assert "EDITOR_GIT_CREDENTIALS_SHA256: ${{ steps.stage_support.outputs.editor_git_credentials_sha256 }}" in workflow
+	assert 'bash -c "${plan_runner_src}" run_plan_codex.sh' in plan
+	assert 'bash scripts/editor_git_credentials.sh' not in plan
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/editor_git_credentials.sh"' not in implement
+	for step_name in ("Run Codex implementation", "Attempt post-Codex syntax repair", "Restore git credentials after syntax repair"):
+		step = implement.split(f"      - name: {step_name}\n", 1)[1].split("      - name: ", 1)[0]
+		assert "EDITOR_GIT_CREDENTIALS_SHA256: ${{ steps.stage_support.outputs.editor_git_credentials_sha256 }}" in step
+		assert 'env -u BASH_ENV -u ENV bash -c "${EDITOR_GIT_CREDENTIALS_SCRIPT}" editor_git_credentials.sh "$@"' in step
+		assert "reason=pinned_helper_unavailable" in step
+	for step_name in ("Attempt post-Codex syntax repair", "Restore git credentials after syntax repair"):
+		step = implement.split(f"      - name: {step_name}\n", 1)[1].split("      - name: ", 1)[0]
+		assert "BASH_ENV: ''" in step
+		assert 'cd "${WORKSPACE_PATH}"' in step
+	implementation = implement.split("      - name: Run Codex implementation\n", 1)[1].split("      - name: ", 1)[0]
+	assert "BASH_ENV: ''" in implementation
+	assert 'cd "${WORKSPACE_PATH}"' in implementation.split('source scripts/gh_helpers.sh', 1)[0]
+	assert 'env -u BASH_ENV -u ENV bash -c "${EDITOR_GIT_CREDENTIALS_SCRIPT}"' in (ROOT / "scripts" / "run_plan_codex.sh").read_text()
 	assert "--format structured" in implement
 	assert "--format structured" in (ROOT / "scripts" / "run_plan_codex.sh").read_text()
 	assert "--format structured" not in (WORKFLOWS / "clarify.yml").read_text()
@@ -512,8 +535,8 @@ def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
 	assert "GH_TOKEN: ${{ github.token }}" in implementation
 	repair = implement.split("      - name: Attempt post-Codex syntax repair\n", 1)[1].split("      - name: ", 1)[0]
 	assert "GH_TOKEN: ${{ github.token }}" in repair
-	assert repair.count('editor_git_credentials.sh" restore') == 2
-	assert repair.index('editor_git_credentials.sh" restore') < repair.index('echo "::warning::Post-Codex repair attempt')
+	assert repair.count('editor_git_credentials restore') == 2
+	assert repair.index('editor_git_credentials restore') < repair.index('echo "::warning::Post-Codex repair attempt')
 	assert implement.count('env -u GH_TOKEN -u GH_PAT') == 2
 	assert implement.count('-u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH \\') == 2
 	plan_runner = (ROOT / "scripts" / "run_plan_codex.sh").read_text()
@@ -531,6 +554,97 @@ def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
 	assert "secrets.GH_PAT" not in push
 	assert implement.count('git -c core.hooksPath=/dev/null fetch') == 2
 	assert 'git -c core.hooksPath=/dev/null rebase' in implement
+
+
+def test_stage_pin_and_in_memory_loader_hash_the_same_bytes() -> None:
+	plan = (WORKFLOWS / "plan.yml").read_text()
+	implement = (WORKFLOWS / "implement.yml").read_text()
+	runner = (ROOT / "scripts" / "run_plan_codex.sh").read_text()
+	stage_expression = 'printf \'%s\\n\' "$(cat -- scripts/editor_git_credentials.sh)" | sha256sum | awk \'{print $1}\''
+	loader_expression = 'printf \'%s\\n\' "${_egc_body}" | sha256sum | awk \'{print $1}\''
+	for workflow in (plan, implement):
+		assert stage_expression in workflow
+	assert implement.count(loader_expression) == 3
+	assert loader_expression in runner
+	result = subprocess.run(
+		["bash", "-c", "_egc_body=\"$(cat -- scripts/editor_git_credentials.sh)\"; " + loader_expression],
+		cwd=ROOT, capture_output=True, text=True, check=True,
+	)
+	assert result.stdout.strip() == hashlib.sha256(HELPER.read_bytes()).hexdigest()
+
+
+def test_post_repair_restore_ignores_tampered_editor_writable_copies(tmp_path: Path) -> None:
+	workflow = (WORKFLOWS / "implement.yml").read_text()
+	step = workflow.split("      - name: Restore git credentials after syntax repair\n", 1)[1].split("      - name: ", 1)[0]
+	script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+	scripts = tmp_path / "scripts"
+	runtime = tmp_path / "runtime"
+	support = tmp_path / ".codex-workflow-src" / "scripts"
+	for directory in (scripts, runtime, support):
+		directory.mkdir(parents=True)
+	safe_body = "echo SAFE_RESTORE\n"
+	attack_body = "echo PWNED\n"
+	(scripts / "editor_git_credentials.sh").write_text(attack_body)
+	(runtime / "editor_git_credentials.sh").write_text(attack_body)
+	(support / "editor_git_credentials.sh").write_text(safe_body)
+	startup_file = tmp_path / "workspace-shell.env"
+	startup_file.write_text("echo STARTUP_WITH_TOKEN >&2\n")
+	env = dict(os.environ, WORKSPACE_PATH=str(tmp_path), IMPLEMENT_STAGED_SUPPORT_RUN_DIR=str(runtime),
+		EDITOR_GIT_CREDENTIALS_SHA256=hashlib.sha256(safe_body.encode()).hexdigest())
+	for key in ("BASH_ENV", "ENV"):
+		env.pop(key, None)
+	# Simulate a tampered startup file after the host step's clean Bash has started.
+	command = f'export BASH_ENV="{startup_file}"; ' + script
+	result = subprocess.run(["bash", "-c", command], cwd=tmp_path, env=env, capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.strip() == "SAFE_RESTORE"
+	assert "STARTUP_WITH_TOKEN" not in result.stderr
+	(support / "editor_git_credentials.sh").write_text(attack_body)
+	result = subprocess.run(["bash", "-c", command], cwd=tmp_path, env=env, capture_output=True, text=True)
+	assert result.returncode != 0
+	assert "reason=pinned_helper_unavailable" in result.stderr
+	assert "PWNED" not in result.stdout + result.stderr
+	assert "STARTUP_WITH_TOKEN" not in result.stderr
+
+
+def test_editor_poisoned_workspace_startup_is_replaced_before_next_step(tmp_path: Path) -> None:
+	workflow = (WORKFLOWS / "implement.yml").read_text()
+	marker = 'echo \'BASH_ENV=\' >> "$GITHUB_ENV"'
+	restored = 'echo "BASH_ENV=${RUNTIME_DIR}/workspace-shell.env" >> "$GITHUB_ENV"'
+	parts = workflow.split(marker)
+	assert len(parts) == 4  # implementation and both syntax-repair outcomes
+	for index, part in enumerate(parts[1:]):
+		assert restored in part
+		block = marker + part.split(restored, 1)[0] + restored
+		runtime = tmp_path / f"runtime-{index}"
+		workspace = tmp_path / f"workspace-{index}"
+		runtime.mkdir()
+		workspace.mkdir()
+		target = tmp_path / f"poison-{index}.env"
+		target.write_text("echo STARTUP_WITH_TOKEN >&2\n")
+		(runtime / "workspace-shell.env").symlink_to(target)
+		github_env = tmp_path / f"github-{index}.env"
+		env = dict(os.environ, RUNTIME_DIR=str(runtime), WORKSPACE_PATH=str(workspace),
+			GITHUB_ENV=str(github_env), GH_TOKEN="fake-token", BASH_ENV="")
+		result = subprocess.run(["bash", "-e", "-c", block], cwd=tmp_path, env=env,
+			capture_output=True, text=True)
+		assert result.returncode == 0, result.stderr
+		assert "STARTUP_WITH_TOKEN" not in result.stderr
+		assert target.read_text() == "echo STARTUP_WITH_TOKEN >&2\n"
+		assert not (runtime / "workspace-shell.env").is_symlink()
+		assert github_env.read_text().splitlines() == ["BASH_ENV=", f"BASH_ENV={runtime}/workspace-shell.env"]
+		env["BASH_ENV"] = str(runtime / "workspace-shell.env")
+		child = subprocess.run(["bash", "-c", "pwd"], cwd=tmp_path, env=env,
+			capture_output=True, text=True)
+		assert child.returncode == 0 and child.stdout.strip() == str(workspace)
+		assert "STARTUP_WITH_TOKEN" not in child.stderr
+	broken_env_file = tmp_path / "github-broken.env"
+	bad_env = dict(os.environ, RUNTIME_DIR=str(tmp_path / "missing-runtime"),
+		GITHUB_ENV=str(broken_env_file), BASH_ENV="")
+	failed_reset = subprocess.run(["bash", "-e", "-c", marker + parts[1].split(restored, 1)[0] + restored],
+		cwd=tmp_path, env=bad_env, capture_output=True, text=True)
+	assert failed_reset.returncode != 0
+	assert broken_env_file.read_text() == "BASH_ENV=\n"
 
 
 def test_review_workspace_accepts_only_the_known_helper_path() -> None:

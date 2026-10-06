@@ -538,7 +538,7 @@ def test_implement_workflow_contains_thread_reuse_wiring() -> None:
 	assert "mode-implement-repair-continuation.txt mode-implement-diagnose-continuation.txt mode-validate-self-heal-continuation.txt" in text
 	assert "mode-implement-repair-continuation.yml mode-implement-diagnose-continuation.yml mode-validate-self-heal-continuation.yml" in text
 	assert "name: Probe Codex thread-reuse support" in text
-	assert "bash scripts/codex_thread_reuse.sh direct-run || cmd_rc=$?" in text
+	assert 'bash "${IMPLEMENT_SANDBOX_SUPPORT_DIR}/scripts/codex_thread_reuse.sh" direct-run || cmd_rc=$?' in text
 	assert 'CODEX_THREAD_REUSE_MARKER_START="=== CAPTURED SYNTAX DIAGNOSTICS (FULL) ==="' in text
 	assert "codex_thread_reuse_install_wrapper" in text
 	assert "=== IMPLEMENT FAILURE DIAGNOSIS TASK ===" in text
@@ -682,6 +682,48 @@ def test_claude_unavailable_runs_the_unchanged_codex_path() -> None:
 		assert "AI_ENGINE_FALLBACK role=IMPLEMENT reason=no_credential" in proc.stderr
 		assert len(_claude_calls(env)) == 1
 		assert [entry["mode"] for entry in _read_fake_codex_log(env)] == ["exec"]
+
+
+def test_claude_runner_override_keeps_session_in_isolated_home() -> None:
+	with tempfile.TemporaryDirectory(prefix="codex_thread_claude_") as td:
+		root = Path(td)
+		env, helper = _claude_env(root, "success")
+		isolated_home = root / "isolated-home"
+		(isolated_home / ".claude/projects/x").mkdir(parents=True)
+		runner = root / "sandbox-runner.sh"
+		runner.write_text('''#!/usr/bin/env bash
+set -eu
+[ "$1" = claude ]
+printf '%s %s %s %s %s\n' "$2" "$3" "$4" "$5" "$6" >> "$FAKE_RUNNER_LOG"
+cat "$3" >> "$FAKE_RUNNER_PROMPTS"
+printf 'isolated output\\n' > "$4"
+mkdir -p "$CODEX_THREAD_REUSE_CLAUDE_HOME/.claude/projects/x"
+: > "$CODEX_THREAD_REUSE_CLAUDE_HOME/.claude/projects/x/$6.jsonl"
+''', encoding="utf-8")
+		runner.chmod(0o755)
+		env.update({"CODEX_THREAD_REUSE_CLAUDE_RUNNER": str(runner), "CODEX_THREAD_REUSE_CLAUDE_HOME": str(isolated_home), "FAKE_RUNNER_LOG": str(root / "runner.log"), "FAKE_RUNNER_PROMPTS": str(root / "prompts.log")})
+		continuation = root / "continue.txt"
+		continuation.write_text("next step\n", encoding="utf-8")
+		extra = {"CODEX_THREAD_REUSE_CONTINUATION_FILE": str(continuation), "CODEX_THREAD_REUSE_TRANSFORM_MODE": "replace-prefix", "CODEX_THREAD_REUSE_MARKER_START": "=== DIAG ==="}
+		first, output = _run_claude_direct(env, helper, prompt_text="first\n=== DIAG ===\nerror\n", extra=extra)
+		assert first.returncode == 0, first.stderr
+		assert output == "isolated output\n"
+		second, _ = _run_claude_direct(env, helper, prompt_text="second\n=== DIAG ===\nerror\n", extra=extra)
+		assert second.returncode == 0, second.stderr
+		calls = (root / "runner.log").read_text().splitlines()
+		assert len(calls) == 2 and calls[0].split()[-1] == calls[1].split()[-1]
+		assert "next step" in (root / "prompts.log").read_text()
+		assert _claude_calls(env) == []
+
+
+def test_missing_explicit_codex_shim_never_runs_host_codex() -> None:
+	with tempfile.TemporaryDirectory(prefix="codex_thread_isolation_") as td:
+		env, helper = _claude_env(Path(td), "success")
+		env["CODEX_THREAD_REUSE_ENGINE"] = "codex"
+		env["CODEX_THREAD_REUSE_REAL_CODEX"] = str(Path(td) / "missing" / "codex")
+		proc, _ = _run_claude_direct(env, helper, prompt_text="prompt\n")
+		assert proc.returncode != 0
+		assert _read_fake_codex_log(env) == []
 
 
 def test_claude_repair_uses_the_repair_effort_hint() -> None:

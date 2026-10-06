@@ -239,9 +239,19 @@ Phases of the unattended pipeline (each is a separate workflow file under
     git auth. Post-editor implementation commits and pushes disable Git hooks.
     Hiding/restoring git auth fails the editor step on error; restoration
     verifies the workflow repository identity, not merely the GitHub host.
-    Heal-evidence implement runs pin the issue/plan scope allowlist before the
-    editor; preflight and commit ignore scope bypass variables and block empty
-    allowlists. This is not a same-uid process isolation boundary.
+    Plan and implement pin the staged credential helper's hash before the editor,
+    then run matching bytes from shell memory; plan also runs its editor runner
+    from memory so in-place changes cannot alter its post-editor restore.
+    Pinned helper Bash processes drop `BASH_ENV`/`ENV`, and the syntax-repair
+    and post-repair restore steps start with `BASH_ENV` unset; an editor-written
+    workspace startup file cannot run before those credentialed steps. The
+    implementation step likewise starts with `BASH_ENV` empty and enters the
+    workspace explicitly; each editor attempt replaces the startup file before
+    later steps source it, clearing the inherited setting first on failure.
+    Heal-evidence implement runs pin a plan-only, concrete-file scope allowlist
+    before the editor, excluding scope-guard files and paths under `.github/ai/`
+    and `.claude/hooks/`; preflight and commit ignore scope bypass variables and
+    block empty allowlists. This is not a same-uid process isolation boundary.
     Stable log prefixes:
     `WORKFLOW_HEAL_REPORT`, `WORKFLOW_HEAL_AUTOFIX_REPORT`,
     `WORKFLOW_HEAL_PR_RECONCILE`, `WORKFLOW_HEAL`, `WORKFLOW_HEAL_EVIDENCE`.
@@ -454,11 +464,19 @@ a new value, add it to the appropriate overrides file with a
   `IMPLEMENT_STAGED_SUPPORT_REBASE_FAILED`, `IMPLEMENT_STAGED_SUPPORT_RESTORE`.
 - Both codex editor launches in `implement.yml` (the "Run Codex implementation"
   attempt loop and the "Attempt post-Codex syntax repair" loop) run
-  `bash scripts/codex_thread_reuse.sh direct-run` through
+  the immutable `IMPLEMENT_SANDBOX_SUPPORT_DIR` copy of `codex_thread_reuse.sh`
+  through
   `env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR`.
+  The model CLIs run in a credential-free, network-disabled Docker container
+  through `implement_untrusted_sandbox.sh`; the host brokers hold credentials
+  and only validated edits are transferred back. Both Claude and the Codex
+  fallback use the same container. Missing isolation fails closed.
   A preceding env scrub drops GH_TOKEN, GH_PAT, GITHUB_TOKEN, Telegram and
   Actions runtime credentials; `scripts/editor_git_credentials.sh` hides git
   origin/extraheader auth for the editor and restores it after each launch.
+  Both launches and the later syntax-repair restore execute only bytes matching
+  the pre-editor stage output's SHA-256, loaded into shell memory; an unmatched
+  helper fails closed rather than restoring auth from an editor-writable file.
   It fails closed (exit 1, log prefix `EDITOR_GIT_CREDENTIALS … reason=…`):
   hide refuses before the editor starts, and restore refuses before any token
   is injected, when a checkout's origin is not its trusted repository or was
@@ -1512,6 +1530,7 @@ and shipped:
 - `WORKFLOW_HEAL_EVIDENCE`
 - `HEAL_EVIDENCE_SCOPE_LOCK`
 - `EDITOR_GIT_CREDENTIALS`
+- `IMPLEMENT_ISOLATION`
 - `AUTOFIX_FINGERPRINT`
 - `AUTOFIX_FINGERPRINT_CAP_TRIPPED`
 - `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`
@@ -1717,6 +1736,7 @@ LOG_PREFIX.name=WORKFLOW_HEAL
 LOG_PREFIX.name=WORKFLOW_HEAL_EVIDENCE
 LOG_PREFIX.name=HEAL_EVIDENCE_SCOPE_LOCK
 LOG_PREFIX.name=EDITOR_GIT_CREDENTIALS
+LOG_PREFIX.name=IMPLEMENT_ISOLATION
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_TRIPPED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED
