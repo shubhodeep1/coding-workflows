@@ -680,7 +680,7 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 # Claude engine (replace-claude-sessions plan Phase 5d): the WORKFLOW_HEAL
 # role (read-only profile) runs through claude_run_selected with the same
 # credentials stripped from its environment. Exit 75 (role on codex, Claude
-# unavailable, or ai_engine.sh missing) runs the unchanged codex call below.
+# unavailable, or ai_engine.sh missing) runs the isolated codex call below.
 heal_claude_rc=75
 if [ -f scripts/ai_engine.sh ]; then
 	heal_claude_rc=0
@@ -702,6 +702,15 @@ if [ -f scripts/ai_engine.sh ]; then
 		2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || heal_claude_rc=$?
 fi
 
+# The failed-run logs, issue and comment excerpts are untrusted, so the
+# Codex fallback runs in a credential-free, network-isolated read-only
+# snapshot. The two source worktrees are copied in at their own paths.
+heal_isolated_args=(run --mode read-only)
+for heal_include_dir in "${HEAL_SOURCE_DIR}" "${HEAL_BRANCH_TIP_DIR}"; do
+	if [ -d "${heal_include_dir}" ]; then
+		heal_isolated_args+=(--include "${heal_include_dir}")
+	fi
+done
 if [ "${heal_claude_rc}" -ne 75 ]; then
 	if [ "${heal_claude_rc}" -eq 86 ]; then
 		log "error support_tampered"
@@ -724,7 +733,8 @@ if [ "${heal_claude_rc}" -ne 75 ]; then
 	fi
 elif command -v codex >/dev/null 2>&1; then
 	if env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID \
-		codex --ask-for-approval never \
+		bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex_isolated_exec.sh" "${heal_isolated_args[@]}" -- \
+		--ask-for-approval never \
 		-c model_verbosity="${MODEL_VERBOSITY:-low}" \
 		-c include_apply_patch_tool=false \
 		-c 'shell_environment_policy.ignore_default_excludes=false' \

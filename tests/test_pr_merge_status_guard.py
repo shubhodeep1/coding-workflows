@@ -88,6 +88,17 @@ def test_unguarded_commands_are_ignored(command: str) -> None:
 	assert not (guard.git_subcommands(command) & guard.GUARDED_SUBCOMMANDS)
 
 
+@pytest.mark.parametrize("command", [
+	">/tmp/guard-out git commit -m x",
+	"2>/dev/null git push origin HEAD:feature/x",
+	"2>&1 git push origin HEAD:feature/x",
+	"VAR=1 2>&1 git push origin HEAD:feature/x",
+	"FOO=bar 2>/dev/null git commit -m x",
+])
+def test_leading_redirection_preserves_guarded_command(command: str) -> None:
+	assert guard.git_subcommands(command) & guard.GUARDED_SUBCOMMANDS
+
+
 def test_unbalanced_quotes_do_not_raise() -> None:
 	assert guard.git_subcommands("git commit -m 'unterminated") == set()
 
@@ -1012,6 +1023,7 @@ def test_commit_in_merged_worktree_is_not_judged_from_main_checkout(merged_branc
 
 
 def test_unresolvable_worktree_falls_back_to_checkout_with_warning(merged_branch_repo) -> None:
+	"""Legacy name: unresolved worktrees now require confirmation, not checkout fallback."""
 	repo, stub_bin = merged_branch_repo
 	proc = _run_hook(repo, stub_bin, "cd $WT && git push origin HEAD:feature/open")
 	assert proc.returncode == 2, proc.stdout + proc.stderr
@@ -1160,13 +1172,17 @@ def test_conditional_cd_outside_its_list_warns_and_uses_checkout(merged_branch_r
 	"git push origin HEAD",
 	"COUNT+=1 git push origin HEAD:feature/x",
 	"git push --repo=origin",
+	"git push --repo origin origin HEAD:feature/x",
+	"git push --repo=origin origin HEAD:feature/x",
+	"git push --repo=origin origin feature/x:feature/x",
+	"git push --repo origin origin feature/x:feature/x",
+	"git push --rep=origin origin feature/x:feature/x",
 	"git push --repo=upstream origin",
 	"git push origin --repo=upstream",
 	"git push origin HEAD:feature/x --repo=upstream",
 	"git push --repo=upstream origin HEAD:feature/x",
 	"git push origin HEAD~0:feature/x",
 	"git push origin HEAD:feature/x 2>&1",
-	"git push origin 2>/dev/null",
 ])
 def test_push_parser_guards_real_destination(merged_branch_repo, monkeypatch, command: str) -> None:
 	repo, _ = merged_branch_repo
@@ -1258,25 +1274,334 @@ def test_adjacent_fd_redirect_does_not_create_numeric_refspec(command: str) -> N
 
 
 @pytest.mark.parametrize("command", [
-	"git push --repo=origin origin feature/x:feature/x",
-	"git push --repo origin origin feature/x:feature/x",
-	"git push --rep=origin origin feature/x:feature/x",
+	">/tmp/guard-out git commit -m x",
+	">/tmp/guard-out git push origin HEAD:feature/x",
+	"2>&1 git push origin HEAD:feature/x",
+	"VAR=1 2>&1 git push origin HEAD:feature/x",
+	"FOO=bar 2>/dev/null git commit -m x",
 ])
-def test_push_with_repo_option_checks_destination_from_main(merged_branch_repo, monkeypatch, command: str) -> None:
+def test_leading_redirection_still_blocks_merged_branch(merged_branch_repo, monkeypatch, command: str) -> None:
 	repo, _ = merged_branch_repo
 	merged_sha = _git(repo, "rev-parse", "HEAD")
-	_git(repo, "checkout", "main")
-	lookups: list[str] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: [dict(MERGED_PR, headRefOid=merged_sha)])
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": command}})
+	assert code == 2 and "Branch `feature/x`" in message
+
+
+def test_numeric_refspec_before_redirection_still_checks_merged_branch(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "branch", "2", "HEAD")
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, branch, cwd:
+		[dict(MERGED_PR, headRefOid=merged_sha)] if branch == "2" else [])
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push origin 2 > /dev/null"}})
+	assert code == 2 and "Branch `2`" in message
+
+
+@pytest.mark.parametrize("redirect", ["2 > /dev/null", "'2'>/dev/null", "\\2>/dev/null"])
+def test_ambiguous_numeric_redirect_asks_if_branch_is_safe(merged_branch_repo, monkeypatch, capsys, redirect: str) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, branch, cwd: [])
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": f"git push origin {redirect}"}})
+	assert code == 0 and message == ""
+	decision = json.loads(capsys.readouterr().out.splitlines()[-1])
+	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+@pytest.mark.parametrize("command", [
+	"git push origin 2>/dev/null",
+	"git push -u origin feature/x 2>&1 | tail -1",
+	"git push origin HEAD:feature/y 2>&1",
+])
+def test_glued_fd_redirect_after_push_needs_no_confirmation(merged_branch_repo, monkeypatch, capsys, command: str) -> None:
+	# Bash reads digits glued to `<`/`>` as an IO number, never as a refspec.
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, branch, cwd: [])
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": command}})
+	assert code == 0 and message == ""
+	assert "permissionDecision" not in capsys.readouterr().out
+
+
+def test_glued_fd_redirect_still_blocks_merged_branch(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, branch, cwd:
+		[dict(MERGED_PR, headRefOid=merged_sha)] if branch == "feature/x" else [])
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push -u origin feature/x 2>&1 | tail -1"}})
+	assert code == 2 and "Branch `feature/x`" in message
+
+
+def test_unresolved_push_source_asks_without_checkout_lookup(merged_branch_repo, monkeypatch, capsys) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("unresolved source must not check checkout"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push origin $SOURCE:feature/x"}})
+	assert code == 0 and message == ""
+	decision = json.loads(capsys.readouterr().out.splitlines()[-1])
+	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+@pytest.mark.parametrize("prefix", ["GIT_DIR+=other", "GIT_WORK_TREE+=other"])
+def test_appended_git_directory_push_asks_when_checkout_is_safe(merged_branch_repo, monkeypatch, capsys, prefix: str) -> None:
+	# The appended value is never applied; the session checkout is checked
+	# (it may block, see test_appended_git_override_falls_back_without_using_rhs)
+	# and otherwise the push still asks.
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: [])
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": f"{prefix} git push origin HEAD:feature/x"}})
+	assert code == 0 and message == ""
+	decision = json.loads(capsys.readouterr().out.splitlines()[-1])
+	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "could not resolve git push repository" in decision["systemMessage"]
+
+
+@pytest.mark.parametrize("command", [
+	"git push --repo=https://github.com/other/repo HEAD:feature/x",
+	"git push --rep https://github.com/other/repo HEAD:feature/x",
+	"git push https://github.com/other/repo HEAD:feature/x",
+	"git push https://github.com/o/r.git HEAD:feature/x",
+	"git push --repo=origin https://github.com/o/r.git HEAD:feature/x",
+	"git push --repo=https://github.com/o/r.git",
+	"git push git@github.com:o/r.git HEAD:feature/x",
+	"git push --repo=upstream",
+	"git push --repo upstream",
+	"git push --rep upstream",
+	"git push --repo=upstream HEAD:feature/x",
+	"git push --repo=origin HEAD:feature/x",
+	"git push --repo origin HEAD:feature/x",
+	"git push --repo=https://github.com/other/repo --signed=if-asked HEAD:feature/x",
+	"git push --repo=https://x-access-token:private@github.com/other/repo HEAD:feature/x",
+])
+def test_push_to_unverified_repository_requires_confirmation(merged_branch_repo, monkeypatch, capsys, command: str) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("must not query origin for another repository"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": command}})
+	assert code == 0 and message == ""
+	output = capsys.readouterr().out
+	decision = json.loads(output.splitlines()[-1])
+	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "private" not in output
+	if "github.com/o/r.git" in command:
+		assert "explicit push URL may be rewritten" in output
+
+
+@pytest.mark.parametrize("command", [
+	"git -c remote.origin.url=https://github.com/other/repo push origin --delete feature/x",
+	"git -c remote.origin.pushurl=https://github.com/other/repo push origin :feature/x",
+	"git -c url.https://github.com/other/repo.insteadOf=https://github.com/o/r push origin HEAD:feature/x",
+	"git -cremote.origin.url=https://github.com/other/repo push origin --tags",
+	"git --config-env=remote.origin.url=REMOTE_URL push origin HEAD:feature/x",
+	"git --config-env remote.origin.url=REMOTE_URL push origin HEAD:feature/x",
+	"git -c user.name=bot push origin HEAD:feature/x",
+])
+def test_per_command_config_push_asks_without_using_origin_prs(merged_branch_repo, monkeypatch, capsys, command: str) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("overridden push must not query origin"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": command}})
+	assert code == 0 and message == ""
+	output = capsys.readouterr().out
+	decision = json.loads(output.splitlines()[-1])
+	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "other/repo" not in output  # URLs may carry credentials; never print config values.
+
+
+@pytest.mark.parametrize("command", [
+	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.url GIT_CONFIG_VALUE_0=https://github.com/other/repo git push origin HEAD:feature/x",
+	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.pushurl GIT_CONFIG_VALUE_0=https://github.com/other/repo git push origin --tags",
+	"GIT_CONFIG_PARAMETERS='remote.origin.url=https://github.com/other/repo' git push origin HEAD:feature/x",
+	"GIT_CONFIG_GLOBAL=/tmp/other-config git push origin :feature/x",
+	"GIT_CONFIG_COUNT+=1 git push origin HEAD:feature/x",
+	"GIT_CONFIG=/tmp/other-config git push origin HEAD:feature/x",
+	"env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.url GIT_CONFIG_VALUE_0=https://github.com/other/repo git push origin HEAD:feature/x",
+	"/usr/bin/env -i GIT_CONFIG_GLOBAL=/tmp/other-config git push origin HEAD:feature/x",
+	"env -u GIT_CONFIG_GLOBAL git push origin HEAD:feature/x",
+	"env - git push origin HEAD:feature/x",
+	"env FOO+=bar git push origin HEAD:feature/x",
+	"env -S 'git push origin HEAD:feature/x'",
+	"env --split-string='git push origin HEAD:feature/x'",
+	"env -S 'GIT_CONFIG_COUNT=1 git push origin HEAD:feature/x'",
+	"env -v git push origin HEAD:feature/x",
+	"env -S 'git push origin ${TARGET}'",
+])
+def test_environment_config_push_asks_without_using_origin_prs(merged_branch_repo, monkeypatch, capsys, command: str) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("overridden push must not query origin"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": command}})
+	assert code == 0 and message == ""
+	decision = json.loads(capsys.readouterr().out.splitlines()[-1])
+	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "other/repo" not in json.dumps(decision)
+
+
+@pytest.mark.parametrize("command", [
+	"env GIT_CONFIG_COUNT=0 git commit -m x",
+	"env - git commit -m x",
+	"env FOO+=bar git commit -m x",
+	"env -S 'git commit -m x'",
+	"env --split-string='git commit -m x'",
+])
+def test_env_wrapped_commit_keeps_the_merged_pr_check(merged_branch_repo, monkeypatch, command: str) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: [dict(MERGED_PR, headRefOid=merged_sha)])
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": command}})
+	assert code == 2 and "Branch `feature/x`" in message
+
+
+@pytest.mark.parametrize("wrapper", [
+	"env -C {repo} git commit -m x",
+	"env --chdir={repo} git commit -m x",
+	"env GIT_DIR={repo}/.git GIT_WORK_TREE={repo} git commit -m x",
+	"env -S 'GIT_DIR={repo}/.git git commit -m x'",
+])
+def test_env_wrapped_commit_checks_selected_repo(merged_branch_repo, monkeypatch, wrapper: str) -> None:
+	repo, _ = merged_branch_repo
+	other = repo.parent / "open-worktree"
+	_git(repo, "worktree", "add", "-b", "feature/open", str(other), "main")
+	merged_sha = _git(repo, "rev-parse", "feature/x")
+	seen: list[tuple[str, str]] = []
 	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
 	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
 	def listing(slug, branch, cwd):
-		lookups.append(branch)
+		seen.append((branch, cwd))
+		return [dict(MERGED_PR, headRefOid=merged_sha)] if branch == "feature/x" else [OPEN_PR]
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	command = wrapper.format(repo=repo)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(other), "tool_input": {"command": command}})
+	assert code == 2 and "Branch `feature/x`" in message
+	# GIT_DIR selects the repository without changing process cwd; env -C
+	# changes cwd but leaves the Git environment alone.
+	assert seen == [("feature/x", str(other) if "GIT_DIR=" in command else str(repo))]
+
+
+@pytest.mark.parametrize("command", [
+	"env -C /does-not-exist git commit -m x",
+	"env -S 'git commit -m ${MESSAGE}'",
+	"env -v git commit -m x",
+])
+def test_env_unresolved_commit_directory_asks_instead_of_checking_checkout(merged_branch_repo, monkeypatch, capsys, command: str) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("must not check the wrong checkout"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": command}})
+	assert code == 0 and message == ""
+	decision = json.loads(capsys.readouterr().out.splitlines()[-1])
+	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_env_chdir_does_not_change_subsequent_command_directory(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	other = repo.parent / "open-worktree"
+	_git(repo, "worktree", "add", "-b", "feature/open", str(other), "main")
+	merged_sha = _git(repo, "rev-parse", "feature/x")
+	seen: list[tuple[str, str]] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		seen.append((branch, cwd))
+		return [dict(MERGED_PR, headRefOid=merged_sha)] if branch == "feature/x" else [OPEN_PR]
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(other),
+		"tool_input": {"command": f"env -C {repo} git commit -m x; git commit -m y"}})
+	assert code == 2 and "Branch `feature/x`" in message
+	assert seen == [("feature/x", str(repo)), ("feature/open", str(other))]
+
+
+def test_per_command_config_commit_keeps_the_merged_pr_check(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+
+	def listing(slug, branch, cwd):
+		return [dict(MERGED_PR, headRefOid=merged_sha)]
+
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git -c user.name=bot commit -m x"}})
+	assert code == 2 and "Branch `feature/x`" in message
+
+
+def test_matching_refspec_on_unverified_remote_does_not_check_origin(merged_branch_repo, monkeypatch, capsys) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("must not query origin for another repository"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push https://github.com/other/repo :"}})
+	assert code == 0 and message == ""
+	decision = json.loads(capsys.readouterr().out.splitlines()[-1])
+	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+@pytest.mark.parametrize("command", [
+	"git push https://github.com/other/repo :feature/x",
+	"git push --repo=https://github.com/other/repo :feature/x",
+	"git push --repo=https://github.com/other/repo -d feature/x",
+	"git push https://github.com/other/repo --delete feature/x",
+	"git push https://github.com/other/repo --tags",
+])
+def test_deletion_and_tag_only_pushes_to_other_repository_ask(merged_branch_repo, monkeypatch, capsys, command: str) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("must not query origin for another repository"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": command}})
+	assert code == 0 and message == ""
+	decision = json.loads(capsys.readouterr().out.splitlines()[-1])
+	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+@pytest.mark.parametrize("remote", ["origin"])
+def test_deletion_on_origin_does_not_check_merged_pr(merged_branch_repo, monkeypatch, capsys, remote: str) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("deletions must not check PR history"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": f"git push {remote} :feature/x"}})
+	assert code == 0 and message == ""
+	assert "permissionDecision" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("args", [":feature/x", "--delete feature/x", "--tags"])
+def test_same_slug_explicit_url_asks_for_deletion_and_tags(merged_branch_repo, monkeypatch, capsys, args: str) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *unused: pytest.fail("must not query origin"))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": f"git push https://github.com/o/r.git {args}"}})
+	assert code == 0 and message == ""
+	assert json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_explicit_origin_url_still_checks_origin_pr(merged_branch_repo, monkeypatch, capsys) -> None:
+	"""Legacy name: even a matching explicit URL now asks without an origin lookup."""
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	lookups: list[tuple[str, str]] = []
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		lookups.append((slug, branch))
 		return [dict(MERGED_PR, headRefOid=merged_sha)]
 	monkeypatch.setattr(guard, "query_pull_requests", listing)
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
-		"tool_input": {"command": command}})
-	assert code == 2, message
-	assert lookups == ["feature/x"]
+		"tool_input": {"command": "git push --repo=https://github.com/other/repo https://github.com/o/r.git HEAD:feature/x"}})
+	assert code == 0 and message == ""
+	assert lookups == []  # URL rewriting means origin's PR history cannot authorize this push.
+	assert json.loads(capsys.readouterr().out)["hookSpecificOutput"]["permissionDecision"] == "ask"
 
 
 @pytest.mark.parametrize("command", [

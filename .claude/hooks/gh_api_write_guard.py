@@ -150,7 +150,7 @@ _EXECUTOR_COMMANDS = frozenset(
 _EXECUTOR_BEFORE_HEREDOC_RE = re.compile(
 	r"(?:^|[\s;&|(`])(?:\S*/)?(?:" + "|".join(re.escape(word) for word in sorted(_EXECUTOR_COMMANDS)) + r")(?:\s|$)"
 )
-_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")
 
 # `gh api` flags (gh 2.x). Unknown flags make the call unreadable.
 _VALUE_FLAGS = {

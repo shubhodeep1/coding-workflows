@@ -2010,8 +2010,8 @@ case "${RB_ACTION}" in
         echo "fix_description describing what you changed."
         echo
         # Edit-discipline guidance is scoped to THIS step (the fix
-        # step runs with --sandbox danger-full-access and is expected
-        # to write files). The read-only judge step intentionally
+        # step is an OpenCode writer in review_untrusted_sandbox.sh and is
+        # expected to write files). The read-only judge step intentionally
         # omits this block — its sandbox would silently reject any
         # write, and including it there encouraged the model to
         # re-explore in pursuit of a write it could never land.
@@ -2043,26 +2043,45 @@ __EDIT_DISCIPLINE__
       rb_fix_stall_status_file="$(mktemp /tmp/rb_fix_stall_status.XXXXXX)"
       rb_fix_stall_state=""
       rb_fix_rc=0
+      # The fix writer edits files with a full tool surface while reading
+      # untrusted PR content, so it runs in the review editor's
+      # credential-free, network-isolated sandbox
+      # (review_untrusted_sandbox.sh): no GH_PAT, no OpenRouter key, no host
+      # checkout or .git inside; validated edits are copied back afterwards.
+      # Serena runs only on the host, so the writer gets no MCP server.
+      # GITHUB_WORKSPACE stays the checkout: prepare validates its .git and
+      # takes the per-PR tree from WORKSPACE_PATH, which has no .git (#6455).
       rb_fix_serena_mode="off"
-      if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
-        rb_fix_serena_mode="on"
-      fi
       rb_fix_opencode_ready=true
       if ! review_rb_prepare_opencode_config writer review_rb_fix "${RB_FIX_OPENCODE_CONFIG}" "${rb_fix_serena_mode}"; then
         rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}"
         exit 1
       fi
+      rb_fix_sandbox_env="$(mktemp /tmp/rb_fix_sandbox_env.XXXXXX)"
+      # Keep GITHUB_WORKSPACE on the checkout with .git; pass the per-PR tree
+      # through the sandbox's validated WORKSPACE_PATH (issues #4580, #6055, #6455).
+      rb_fix_checkout_real="$(realpath -e -- "${GITHUB_WORKSPACE:-}" 2>/dev/null || true)"
+      rb_fix_workdir_real="$(realpath -e -- "${RB_OPENCODE_WORKSPACE}" 2>/dev/null || true)"
+      if [ -n "${rb_fix_checkout_real}" ] && [ "${rb_fix_checkout_real}" = "${rb_fix_workdir_real}" ]; then
+        rb_fix_sandbox_workspace_env=(-u WORKSPACE_PATH)
+      else
+        rb_fix_sandbox_workspace_env=("WORKSPACE_PATH=${RB_OPENCODE_WORKSPACE}")
+      fi
+      if ! env "${rb_fix_sandbox_workspace_env[@]}" GITHUB_ENV="${rb_fix_sandbox_env}" bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare; then
+        echo "::error::Review-blocked fix sandbox could not be prepared; the fix writer never runs on the host."
+        rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}" "${rb_fix_sandbox_env}"
+        exit 1
+      fi
+      rb_fix_sandbox_root="$(sed -n 's/^REVIEW_SANDBOX_ROOT=//p' "${rb_fix_sandbox_env}" | tail -n 1)"
+      rm -f "${rb_fix_sandbox_env}"
       rb_fix_opencode_cmd=(
-        bash -c
-        # shellcheck disable=SC2016
-        'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
-        opencode-rb-fix
-        "${OPENCODE_HELPERS_PATH}"
-        writer
+        env "REVIEW_SANDBOX_ROOT=${rb_fix_sandbox_root}"
+        bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run
+        "${RB_FIX_PROMPT}"
+        "${RB_FIX_OUTPUT}"
         "${MODEL_EDITOR}"
         "${JUDGE_EFFECTIVE_REASONING_EFFORT}"
         "${RB_FIX_OPENCODE_CONFIG}"
-        "${RB_OPENCODE_WORKSPACE}"
       )
       emit_review_rb_substate "review_rb_fix" "judge_fix" "LaunchingAgentProcess" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
       emit_review_rb_substate "review_rb_fix" "judge_fix" "InitializingSession" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
@@ -2091,6 +2110,7 @@ __EDIT_DISCIPLINE__
       if rb_fix_stall_state="$(read_codex_stall_guard_state_with_warning "${rb_fix_stall_status_file}" "Review-blocked fix OpenCode" )"; then
         :
       fi
+      REVIEW_SANDBOX_ROOT="${rb_fix_sandbox_root}" bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup || true
       review_rb_strip_opencode_output_file "${RB_FIX_OUTPUT}"
       review_rb_strip_opencode_output_file "${RB_FIX_STDERR}"
       emit_review_rb_substate "review_rb_fix" "judge_fix" "Finishing" "${rb_fix_attempt}" "${RB_FIX_STDERR}"
