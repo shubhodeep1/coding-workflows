@@ -293,6 +293,7 @@ changelog.d/6461-consolidator-opencode-sandbox.md
 changelog.d/6467-phase-report-provenance.md
 changelog.d/6486-workflow-heal-security-pass.md
 changelog.d/6500-merge-train-fork-blockers.md
+changelog.d/6512-heal-evidence-routing-neutralize.md
 changelog.d/autofix-cap-and-security-exhaustion-judge.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/conflict-resolver-sandbox-fail-closed.md

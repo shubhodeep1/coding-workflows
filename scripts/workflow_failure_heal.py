@@ -573,6 +573,131 @@ def _build_recent_comments_excerpt(comment_texts: list[str], limit: int = COMMEN
 	return "".join(pieces)
 
 
+_HEAL_MARKER_HEADER_KEYS = ("fp", "gen", "root", "source", "classification")
+_TRUSTED_AUTHOR_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
+
+
+def _trusted_heal_author(issue: dict[str, Any]) -> bool:
+	"""True when ``issue`` could have been filed by the heal automation.
+
+	A repository OWNER / MEMBER / COLLABORATOR or a Bot (App identities file
+	heal issues in consumer repositories). The GitHub issue object nests the
+	type under ``user``; the intake's heal-issue list carries it flat as
+	``user_type``.
+	"""
+	if not isinstance(issue, dict):
+		return False
+	if issue.get("author_association") in _TRUSTED_AUTHOR_ASSOCIATIONS:
+		return True
+	user = issue.get("user")
+	if isinstance(user, dict) and user.get("type") == "Bot":
+		return True
+	return issue.get("user_type") == "Bot"
+
+
+def _canonical_heal_markers(body: Any) -> dict[str, str] | None:
+	"""Return the heal markers only when ``body`` starts with the exact header.
+
+	The header is the five marker lines ``compose_issue_body`` writes first
+	(fp, gen, root, source, classification). Markers anywhere else in the body
+	are author-controlled text and never count. fp / root must be 64-char hex,
+	gen a positive integer and classification a known token.
+	"""
+	text = sanitize_text(body)
+	markers = parse_heal_markers(text)
+	header = "\n".join(f"<!-- {MARKER_PREFIX}{key}={markers.get(key, '')} -->" for key in _HEAL_MARKER_HEADER_KEYS) + "\n"
+	if not text.startswith(header):
+		return None
+	if not _FP_HEX_RE.fullmatch(markers.get("fp") or ""):
+		return None
+	if _positive_int(markers.get("gen")) is None:
+		return None
+	if not _FP_HEX_RE.fullmatch(markers.get("root") or ""):
+		return None
+	if markers.get("classification") not in CLASSIFICATIONS:
+		return None
+	return markers
+
+
+def verify_source_lineage(
+	issues: Iterable[dict[str, Any]],
+	*,
+	source_issue: str | None,
+	source_gen: int | None,
+	source_root: str | None,
+) -> dict[str, Any]:
+	"""Check a report's inherited heal generation against filed heal issues.
+
+	``source_gen`` / ``source_root`` arrive in the dispatch payload, so they
+	are a claim, not proof (issue #6513: a forged ``gen=999`` tripped the
+	lineage cap and suppressed the repair issue). The claim is accepted only
+	when ``source_issue`` (``owner/repo#N``) is in ``issues`` (the
+	``ai:workflow-heal`` list the intake fetched itself, so GitHub vouches for
+	the label), its author is trusted, its body starts with the canonical
+	marker header, that header's gen / root equal the claim, and the
+	generation is backed by a chronological chain of trusted heal issues
+	with every preceding generation (generation 1 must be its own root).
+	The first failed check is the
+	``reason``.
+	"""
+	def _reject(reason: str) -> dict[str, Any]:
+		return {"verified": False, "reason": reason, "gen": None, "root": None}
+
+	key_match = _SOURCE_KEY_RE.fullmatch(str(source_issue or ""))
+	if not key_match:
+		return _reject("source_issue_missing")
+	repo = key_match.group("repo")
+	number = int(str(source_issue).rsplit("#", 1)[1])
+	listed = [issue for issue in issues if isinstance(issue, dict) and not issue.get("pull_request")]
+	entry = next((issue for issue in listed if _positive_int(issue.get("number")) == number and issue.get("repository") == repo), None)
+	if entry is None:
+		return _reject("source_issue_not_listed")
+	if not _trusted_heal_author(entry):
+		return _reject("untrusted_author")
+	markers = _canonical_heal_markers(entry.get("body"))
+	if markers is None:
+		return _reject("non_canonical_markers")
+	listed_gen = _positive_int(markers.get("gen"))
+	listed_root = markers.get("root") or ""
+	if listed_gen is None or listed_gen != _positive_int(source_gen) or listed_root != source_root:
+		return _reject("payload_mismatch")
+	if listed_gen == 1:
+		if markers.get("fp") != listed_root:
+			return _reject("lineage_gap")
+		return {"verified": True, "reason": "", "gen": listed_gen, "root": listed_root}
+	# Issue numbers are not comparable across repositories. Require each earlier
+	# generation in creation order, not just any older issue claiming gen >= N-1.
+	# This bounds an edited marker by the number of already-filed heal issues.
+	source_created = _parse_iso(entry.get("created_at"))
+	if source_created is None or listed_gen > len(listed):
+		return _reject("lineage_gap")
+	expected_gen = listed_gen - 1
+	while expected_gen:
+		predecessor = None
+		predecessor_created = None
+		for candidate in listed:
+			if candidate is entry or not _trusted_heal_author(candidate):
+				continue
+			candidate_created = _parse_iso(candidate.get("created_at"))
+			if candidate_created is None or candidate_created >= source_created:
+				continue
+			candidate_markers = _canonical_heal_markers(candidate.get("body"))
+			if candidate_markers is None or candidate_markers.get("root") != listed_root:
+				continue
+			if _positive_int(candidate_markers.get("gen")) != expected_gen:
+				continue
+			if expected_gen == 1 and candidate_markers.get("fp") != listed_root:
+				continue
+			if predecessor_created is None or candidate_created > predecessor_created:
+				predecessor = candidate
+				predecessor_created = candidate_created
+		if predecessor is None:
+			return _reject("lineage_gap")
+		source_created = predecessor_created
+		expected_gen -= 1
+	return {"verified": True, "reason": "", "gen": listed_gen, "root": listed_root}
+
+
 def build_issue_payload(
 	*,
 	repo: str,
@@ -594,18 +719,12 @@ def build_issue_payload(
 	# A URL in a contributor-authored comment is a hint, never proof of a failed run.
 	matching_runs.sort(key=lambda run: run["run_id"] not in commented_run_ids)
 	run_refs = [{"repo": repo, "run_id": run["run_id"], "url": run["url"]} for run in matching_runs]
-	markers = parse_heal_markers(body)
-	marker_header = "\n".join(f"<!-- {MARKER_PREFIX}{key}={markers.get(key, '')} -->" for key in ("fp", "gen", "root", "source", "classification")) + "\n"
+	markers = _canonical_heal_markers(body) or {}
 	trusted_lineage = (
 		kind == "issue" and HEAL_LABEL in _labels_of(issue)
-		and (issue.get("author_association") in ("OWNER", "MEMBER", "COLLABORATOR")
-			or (isinstance(issue.get("user"), dict) and issue["user"].get("type") == "Bot"))
-		and body.startswith(marker_header)
-		and bool(_FP_HEX_RE.fullmatch(markers.get("fp") or ""))
-		and _positive_int(markers.get("gen")) is not None
-		and bool(_FP_HEX_RE.fullmatch(markers.get("root") or ""))
+		and _trusted_heal_author(issue)
+		and bool(markers)
 		and bool(_SOURCE_KEY_RE.fullmatch(markers.get("source") or "") or markers.get("source") == f"{repo}#run")
-		and markers.get("classification") in CLASSIFICATIONS
 	)
 	return {
 		"schema_version": SCHEMA_VERSION,
@@ -1166,6 +1285,12 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 	source_root = payload.get("source_root")
 	if not (isinstance(source_root, str) and re.fullmatch(r"[0-9a-f]{64}", source_root)):
 		source_root = None
+	source_gen = _positive_int(payload.get("source_gen")) if payload.get("source_gen") is not None else None
+	# Inherited lineage from an issue or phase report is only a claim until the
+	# intake verifies it against its own heal-issue listing.
+	if kind not in ("issue", "phase_failure") or source_gen is None or source_root is None:
+		source_gen = None
+		source_root = None
 
 	labels = [single_line(name, 100) for name in payload.get("labels") or [] if isinstance(name, str)][:50]
 	# Ownership facts (optional, autofix_failure only): invalid values are
@@ -1188,7 +1313,7 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		"labels": labels,
 		"run_refs": run_refs,
 		"wrapper_sha": wrapper_sha,
-		"source_gen": _positive_int(payload.get("source_gen")) if payload.get("source_gen") is not None else None,
+		"source_gen": source_gen,
 		"source_root": source_root,
 		"issue_excerpt": sanitize_text(payload.get("issue_excerpt"), ISSUE_EXCERPT_LIMIT),
 		"comments_excerpt": sanitize_text(payload.get("comments_excerpt"), COMMENTS_EXCERPT_LIMIT),
@@ -1833,7 +1958,6 @@ def budget_decision(
 	source_key: str | None = None,
 	linked_heal_issue: int | None = None,
 	source_issue: str | None = None,
-	trusted_author: str | None = None,
 ) -> dict[str, Any]:
 	"""Decide what to do with a fingerprinted failure given the heal issue list.
 
@@ -1852,11 +1976,27 @@ def budget_decision(
 	``heal_fix_branch_issue``), looked up in ``source_key``'s repository in
 	any state; the report continues that issue's lineage, so a heal fix PR
 	whose own review keeps failing reaches the lineage cap instead of opening
-	a fresh generation-1 heal issue each round. A reported ``source_gen`` /
-	``source_root`` takes precedence only when ``source_issue`` identifies a
-	listed heal issue authored by ``trusted_author`` with matching markers.
+	a fresh generation-1 heal issue each round. Neither changes the decision
+	when ``source_gen`` is given.
+
+	``source_gen`` / ``source_root`` are inherited only when
+	``verify_source_lineage`` confirms them against ``source_issue`` in
+	``issues``; an unverified claim is ignored and lineage comes from the
+	fingerprint / source PR as if none were given. Every decision carries
+	``source_lineage`` (``none`` / ``verified`` / ``rejected``) and, when
+	rejected, ``source_lineage_reason``.
 	"""
 	now = now or _utc_now()
+	issues = list(issues)
+	lineage_fields: dict[str, Any] = {"source_lineage": "none"}
+	if source_gen is not None:
+		verdict = verify_source_lineage(issues, source_issue=source_issue, source_gen=source_gen, source_root=source_root)
+		if verdict["verified"]:
+			lineage_fields = {"source_lineage": "verified"}
+		else:
+			lineage_fields = {"source_lineage": "rejected", "source_lineage_reason": verdict["reason"]}
+			source_gen = None
+			source_root = None
 	day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 	open_issues: list[dict[str, Any]] = []
 	created_today = 0
@@ -1868,9 +2008,6 @@ def budget_decision(
 	source_key_match = _SOURCE_KEY_RE.match(str(source_key or ""))
 	source_key = source_key if source_key_match else None
 	linked_heal_repo = source_key_match.group("repo") if source_key_match else ""
-	source_issue_match = _SOURCE_KEY_RE.fullmatch(str(source_issue or ""))
-	source_issue_number = _positive_int(str(source_issue).rsplit("#", 1)[-1]) if source_issue_match else None
-	verified_source_record: dict[str, Any] | None = None
 	if not source_key:
 		linked_heal_issue = None
 
@@ -1894,18 +2031,20 @@ def budget_decision(
 		if number is None:
 			continue
 		issue_repository = issue.get("repository") if is_valid_repo_slug(issue.get("repository")) else ""
-		if source_issue_number == number and source_issue_match and (
-			issue_repository == source_issue_match.group("repo")
-			or (not issue_repository and source_issue_match.group("repo") == preferred_repo)
-		):
-			verified_source_record = issue
-		markers = parse_heal_markers(issue.get("body"))
+		markers = _canonical_heal_markers(issue.get("body")) if _trusted_heal_author(issue) else None
 		state = str(issue.get("state") or "").lower()
 		created = _parse_iso(issue.get("created_at"))
 		if created is not None and created >= day_start:
 			created_today += 1
-		same_source = bool(source_key) and markers.get("source") == source_key
+		same_source = bool(source_key) and markers is not None and markers.get("source") == source_key
 		is_linked_heal_issue = linked_heal_issue is not None and number == linked_heal_issue and issue_repository in (linked_heal_repo, "")
+		if markers and (markers.get("fp") == fp or same_source or is_linked_heal_issue) and not verify_source_lineage(
+			issues, source_issue=f"{issue_repository}#{number}",
+			source_gen=_positive_int(markers.get("gen")), source_root=markers.get("root"),
+		)["verified"]:
+			markers = None
+		markers = markers or {}
+		same_source = bool(source_key) and markers.get("source") == source_key
 		if state == "open":
 			open_issues.append(issue)
 			if markers.get("fp") == fp:
@@ -1915,6 +2054,10 @@ def budget_decision(
 			elif is_linked_heal_issue:
 				prior_source_lineage.append((_positive_int(markers.get("gen")) or 1, number, markers.get("root") or fp, issue_repository))
 		elif markers.get("fp") == fp:
+			# A rejected claim from this source cannot become authoritative
+			# again merely because its fingerprint matches the new report.
+			if lineage_fields["source_lineage"] == "rejected" and source_issue == f"{issue_repository}#{number}":
+				continue
 			gen = _positive_int(markers.get("gen")) or 1
 			prior_same_fp.append((gen, number, markers.get("root") or fp, issue_repository))
 		elif same_source or is_linked_heal_issue:
@@ -1925,60 +2068,34 @@ def budget_decision(
 		duplicate = source_duplicate
 		duplicate_match = "source"
 	if duplicate is not None:
+		duplicate_markers = _canonical_heal_markers(duplicate.get("body")) or {}
 		return {
 			"action": "duplicate",
 			"match": duplicate_match,
 			"existing_issue": _positive_int(duplicate.get("number")),
 			"existing_url": sanitize_text(duplicate.get("html_url"), 300),
 			"existing_repo": duplicate.get("repository") if is_valid_repo_slug(duplicate.get("repository")) else "",
-			"gen": _positive_int(parse_heal_markers(duplicate.get("body")).get("gen")) or 1,
-			"root": parse_heal_markers(duplicate.get("body")).get("root") or fp,
+			"gen": _positive_int(duplicate_markers.get("gen")) or 1,
+			"root": duplicate_markers.get("root") or fp,
 			"open_count": len(open_issues),
 			"today_count": created_today,
+			**lineage_fields,
 		}
 
 	gen = 1
 	root = fp
 	prior_issue: int | None = None
 	prior_repo = ""
-	lineage_source = "none"
-	lineage_ignored_reason: str | None = None
 	if source_gen is not None:
-		if source_issue_number is None:
-			lineage_ignored_reason = "no_source_issue"
-		elif not trusted_author:
-			lineage_ignored_reason = "no_trusted_author"
-		elif verified_source_record is None:
-			lineage_ignored_reason = "not_heal_issue"
-		else:
-			recorded_user = verified_source_record.get("user")
-			recorded_author = verified_source_record.get("author") or (recorded_user.get("login") if isinstance(recorded_user, dict) else None)
-			recorded_markers = parse_heal_markers(verified_source_record.get("body"))
-			recorded_gen = _positive_int(recorded_markers.get("gen"))
-			if recorded_author != trusted_author:
-				lineage_ignored_reason = "untrusted_author"
-			elif recorded_gen is None or recorded_gen != _positive_int(source_gen):
-				lineage_ignored_reason = "gen_mismatch"
-			elif source_root and recorded_markers.get("root") != source_root:
-				lineage_ignored_reason = "root_mismatch"
-			else:
-				gen = recorded_gen + 1
-				root = recorded_markers.get("root") or fp
-				lineage_source = "verified_source_issue"
-				prior_issue = source_issue_number
-				prior_repo = source_issue_match.group("repo")
-		if lineage_ignored_reason:
-			lineage_source = "source_marker_ignored"
-	if lineage_source != "verified_source_issue" and (prior_same_fp or prior_source_lineage):
+		gen = source_gen + 1
+		root = source_root or fp
+		prior_issue = int(source_issue.rsplit("#", 1)[1])
+		prior_repo = source_issue.split("#", 1)[0]
+	elif prior_same_fp or prior_source_lineage:
 		prior_lineage = sorted(prior_same_fp + prior_source_lineage)
 		prior_gen, prior_issue, prior_root, prior_repo = prior_lineage[-1]
 		gen = prior_gen + 1
 		root = prior_root
-		if not lineage_ignored_reason:
-			lineage_source = "fingerprint" if prior_lineage[-1] in prior_same_fp else "source"
-	lineage_metadata = {"lineage_source": lineage_source}
-	if lineage_ignored_reason:
-		lineage_metadata["lineage_ignored_reason"] = lineage_ignored_reason
 	if gen > max_depth:
 		return {
 			"action": "escalate",
@@ -1989,13 +2106,13 @@ def budget_decision(
 			"prior_repo": prior_repo,
 			"open_count": len(open_issues),
 			"today_count": created_today,
-			**lineage_metadata,
+			**lineage_fields,
 		}
 	if len(open_issues) >= max_open:
-		return {"action": "budget_exhausted", "reason": "max_open_issues", "gen": gen, "root": root, "open_count": len(open_issues), "today_count": created_today, **lineage_metadata}
+		return {"action": "budget_exhausted", "reason": "max_open_issues", "gen": gen, "root": root, "open_count": len(open_issues), "today_count": created_today, **lineage_fields}
 	if created_today >= max_per_day:
-		return {"action": "budget_exhausted", "reason": "max_issues_per_day", "gen": gen, "root": root, "open_count": len(open_issues), "today_count": created_today, **lineage_metadata}
-	return {"action": "open", "gen": gen, "root": root, "open_count": len(open_issues), "today_count": created_today, **lineage_metadata}
+		return {"action": "budget_exhausted", "reason": "max_issues_per_day", "gen": gen, "root": root, "open_count": len(open_issues), "today_count": created_today, **lineage_fields}
+	return {"action": "open", "gen": gen, "root": root, "open_count": len(open_issues), "today_count": created_today, **lineage_fields}
 
 
 # ---------------------------------------------------------------------------
@@ -2253,7 +2370,7 @@ def compose_issue_body(
 		raise ValueError("heal issue routing header contains unexpected lines")
 	untrusted_body = "\n".join(body_lines[len(routing_header):])
 	if re.search(
-		r"\b(?:integration\s+branch|target\s+branch|tracking\s+issue|depends\s+on|local\s+id|managed\s+by|prior_pr_baseline_branch|files_touched)\s*\**\s*:|Re-issued from\s*#|review-blocked-reissue|<!--",
+		r"\b(?:integration\s+branch|target\s+branch|tracking\s+issue|depends\s+on|local\s+id|managed\s+by|prior_pr_baseline_branch|files_touched)\s*\**\s*:|Re-issued from\s*#|review-blocked-reissue|(?<!&lt;)<!--",
 		untrusted_body, re.IGNORECASE,
 	):
 		raise ValueError("heal issue body contains untrusted routing metadata")
@@ -2732,7 +2849,6 @@ def _cmd_budget(args: argparse.Namespace) -> int:
 		source_key=args.source_key or None,
 		linked_heal_issue=heal_fix_branch_issue(args.source_head_branch),
 		source_issue=args.source_issue or None,
-		trusted_author=args.trusted_author or None,
 	)
 	_write_json(decision)
 	return 0
@@ -2974,13 +3090,12 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--preferred-repo", default="")
 	p.add_argument("--source-gen", type=int)
 	p.add_argument("--source-root", default="")
-	p.add_argument("--source-issue", default="", help="owner/repo#N of the issue carrying the reported lineage")
-	p.add_argument("--trusted-author", default="", help="authenticated intake account that created heal issues")
 	p.add_argument("--max-depth", type=int, default=DEFAULT_MAX_LINEAGE_DEPTH)
 	p.add_argument("--max-open", type=int, default=DEFAULT_MAX_OPEN_ISSUES)
 	p.add_argument("--max-per-day", type=int, default=DEFAULT_MAX_ISSUES_PER_DAY)
 	p.add_argument("--source-key", default="", help="owner/repo#N of the reported pull request (review/autofix reports)")
 	p.add_argument("--source-head-branch", default="", help="head branch of that pull request; ai/issue-<N> links heal issue N")
+	p.add_argument("--source-issue", default="", help="owner/repo#N of the reported issue whose heal markers back --source-gen / --source-root")
 	p.set_defaults(func=_cmd_budget)
 
 	p = sub.add_parser("parse-classification", help="Read the classification token from the diagnosis")
