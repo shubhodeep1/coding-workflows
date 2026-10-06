@@ -263,6 +263,7 @@ changelog.d/6400-rb-judge-security-severity-block.md
 changelog.d/6401-single-issue-security-pass-completed-audit.md
 changelog.d/6404-claude-live-sync-pr-provenance.md
 changelog.d/6420-release-gate-claude-parity.md
+changelog.d/6435-prompt-audit-claude-config.md
 changelog.d/6455-rb-fix-sandbox-workspace.md
 changelog.d/autofix-cap-and-security-exhaustion-judge.md
 changelog.d/claude-branch-push-pr-grace-window.md
