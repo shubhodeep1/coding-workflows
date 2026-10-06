@@ -1,5 +1,5 @@
 <!-- changelog: changed -->
-- **Unsafe review sandbox directories now report the rejecting rule class without printing the path.** A rejected transfer emits `reason=unsafe_directory`, one fixed `category=` token, and a bucketed `depth=`. Snapshot and refresh rejections emit `reason=unknown`, and other transfer failures emit a fixed reason or `unknown`. No previously refused directory, symlink or file is accepted now. Before this change, the failure behind issue #6424 (PR #6288, run 37264822053) could not be traced to a rule.
+- **Review sandbox rejections now say which rule fired, without printing the path.** Unsafe directories emit `reason=unsafe_directory`, a fixed `category=` token and bucketed `depth=`. Annotated snapshot, refresh and transfer failures emit fixed reason tokens; unannotated errors retain their legacy reason or `unknown`. No previously refused directory, symlink or file is accepted now. Before this change, the failure behind issue #6424 (PR #6288, run 37264822053) could not be traced to a rule.
 
   | Field | Values |
   |---|---|

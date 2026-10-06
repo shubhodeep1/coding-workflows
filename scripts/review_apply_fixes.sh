@@ -2217,7 +2217,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
         '::error::Review isolation snapshot or transfer rejected (ValueError) reason='*)
           transfer_reason_tail="${transfer_reason_line#'::error::Review isolation snapshot or transfer rejected (ValueError) reason='}"
           case "${transfer_reason_tail}" in
-            admitted_inventory_missing|symlink_path|unsafe_file|file_changed|entry_limit|unsafe_directory|unsafe_result_path|workspace_size_limit|host_baseline_changed|host_path_conflict|transfer_rollback_failed)
+            admitted_inventory_missing|symlink_path|symlink_in_path|unsafe_file|file_changed|entry_limit|unsafe_directory|unsafe_result_path|workspace_size_limit|size_limit|host_baseline_changed|host_path_conflict|result_conflicts_host|transfer_rollback_failed)
               transfer_reason="${transfer_reason_tail}"
               transfer_reason_valid=true ;;
             'unsafe_directory dir='*)
