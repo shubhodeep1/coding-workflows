@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:8883-8885 | severity=low | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: A missing stage-0 index entry rejects every deleted protected conflict, including one-sided delete/modify conflicts.\n  WHY: Choosing deletion in a one-sided delete/modify conflict leaves no stage-0 entry, so the verifier rejects the resolution before commit and push, breaking the stated requirement to preserve existing behavior for one-sided conflicts.\n- scripts/orchestrate_poll_process.sh:8908-8913 in the PR diff | severity=low | confidence=[1]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The shared-line retention check is skipped when a protected file conflict has only one side, but the reviewer reports no correctness gap.\n  WHY: The earlier deleted protected conflict guard catches files deleted entirely, and `resolved_counts` is computed before the conditional block and reused downstream for the provenance check.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Before automated push, require protected-file resolutions to retain unchanged lines shared by both merge sides, unless a trusted, machine-verifiable deletion authorization covers them.\"\n  expected_change_site: scripts/orchestrate_poll_process.sh around lines 8903-8918 plus a new authorization gate\n  confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  EVIDENCE: The implementation rejects shared-line removals without an override path; changelog.d/6454-integration-judge-shared-protected-lines.md explicitly states \"no automated deletion override exists\" and \"resolve any protected-file merge that genuinely needs to remove shared lines manually\"; agents.md:666 states \"there is no automated deletion override, including for lines both sides added.\"\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh: lines 8908-8913 in the PR diff | severity=NIT | confidence=1\n  PROBLEM: When a protected file conflict has only one side, the new shared-line retention check inside `if len(side_counts) == 2` is skipped, but the earlier `raise ValueError(\"deleted protected conflict\")` guard added in the last run already catches files deleted entirely.\n  WHY IT FAILS AT RUNTIME: Does not fail at runtime; the existing deletion guard covers the missing-side case.\n- TASK_GAP\n  Requirement: \"Before automated push, require protected-file resolutions to retain unchanged lines shared by both merge sides, unless a trusted, machine-verifiable deletion authorization covers them.\"\n  Expected change site: scripts/orchestrate_poll_process.sh (the verify_scope provenance check) and optionally a new authorization gate\n  Evidence of absence: The implementation rejects every removal of lines shared by both merge sides with no override path. The changelog fragment at changelog.d/6454-integration-judge-shared-protected-lines.md explicitly states \"no automated deletion override exists\" and \"resolve any protected-file merge that genuinely needs to remove shared lines manually.\" This is a deliberate design choice; the implementation takes the simplest fail-closed approach rather than building a trusted deletion-authorization system. The requirement's core mandate is fully met; the \"unless\" clause is an optional recommendation for a future override mechanism, not a mandatory deliverable.\n  ISSUE_CONFIDENCE: 2\n  SEVERITY: NIT\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Before automated push, require protected-file resolutions to retain unchanged lines shared by both merge sides, unless a trusted, machine-verifiable deletion authorization covers them.\"\n  Expected change site: scripts/orchestrate_poll_process.sh around lines 8903-8918 plus a new authorization gate (env var, marker, or operator-facing knob) that can whitelist a legitimate shared-line deletion\n  Evidence of absence: scripts/orchestrate_poll_process.sh:8903-8918 only emits `removed shared protected line` and `deleted protected conflict` ValueErrors with no override path; the new changelog fragment changelog.d/6454-integration-judge-shared-protected-lines.md explicitly states \"no automated deletion override exists\"; agents.md:666 states \"there is no automated deletion override, including for lines both sides added.\" The strict interpretation addresses the exploit scenario (A08:2021-Software and Data Integrity Failures) but does not implement the issue's conditional \"unless a trusted, machine-verifiable deletion authorization covers them\" recommendation. This is a deliberate design choice rather than a defect; legitimate shared-line deletions are routed to manual resolution.\n  ISSUE_CONFIDENCE: 3\n  SEVERITY: NIT\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh: 8883-8885, `_integration_judge_verify_scope` | severity=NIT | confidence=4\n  PROBLEM: A missing stage-0 index entry now rejects every deleted protected conflict, even when only one merge side contains the file.\n  WHY IT FAILS AT RUNTIME: In a one-sided delete/modify conflict, choosing the deletion leaves no stage-0 entry. The verifier rejects that resolution before commit and push, whereas the previous check rejected deletion only when both sides were present. This breaks the stated requirement to preserve existing behavior for one-sided conflicts.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "f00af867522a6f791cbfd63b931951cd02b4d35b248751b5477272ac053dd8e1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6466,
+    "run_id": "37411944015",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37411944015",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006043545_da55e64f4c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6466,
+    "run_id": "37411944015"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T04:35:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
