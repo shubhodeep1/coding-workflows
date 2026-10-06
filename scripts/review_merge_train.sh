@@ -11,10 +11,10 @@
 # one "Merge conflicts resolved automatically" ping per run.
 #
 # Policy (Q2 = "lowest PR number wins"): a PR whose changed files overlap an
-# OLDER open ai/issue-* PR on the same base is queued — labelled
+# OLDER open same-repository ai/issue-* PR on the same base is queued — labelled
 # ai:merge-queued and its review run soft-exits — until every older
-# overlapping PR is merged or closed. The queue is released by the `release`
-# subcommand, run from cancel_on_pr_close.yml whenever a PR closes
+# overlapping PR is merged or closed. Fork heads are never blockers. The queue
+# is released by the `release` subcommand, run from cancel_on_pr_close.yml whenever a PR closes
 # (event path, immediate) and from orchestrate_poll.yml on every tick
 # (backstop; runs even when the repo has no active orchestrator project).
 #
@@ -188,7 +188,7 @@ _mt_intersect() {
 }
 
 # Open PRs, oldest first, one compact JSON object per line:
-# {number, head, base, draft, labels[]}. `tojson` matters: `gh api --jq`
+# {number, head, head_repo, base, draft, labels[]}. `tojson` matters: `gh api --jq`
 # pretty-prints object results across several lines, and the callers read
 # this output line by line. $1 = base branch filter (empty = all bases).
 _mt_list_open_prs() {
@@ -198,11 +198,11 @@ _mt_list_open_prs() {
 		endpoint="${endpoint}&base=${base}"
 	fi
 	gh_retry gh api --paginate "${endpoint}" \
-		--jq '.[] | {number: .number, head: .head.ref, base: .base.ref, draft: .draft, labels: [.labels[].name]} | tojson' 2>/dev/null
+		--jq '.[] | {number: .number, head: .head.ref, head_repo: (.head.repo.full_name // ""), base: .base.ref, draft: .draft, labels: [.labels[].name]} | tojson' 2>/dev/null
 }
 
-# Older open ai/issue-* PRs (same base, lower number, not draft, not
-# review-blocked / closed-labelled) whose files overlap $4 (this PR's paths).
+# Older open same-repository ai/issue-* PRs (same base, lower number, not
+# draft, not review-blocked / closed-labelled) whose files overlap $4 (this PR's paths).
 # `_mt_blockers_for_into <varname> <pr> <base> <own_files> <prs_json>` assigns
 # newline-separated "#N:path,path" lines (empty when unblocked) to the caller's
 # variable; returns 1 on API failure. It must run in the caller's shell, not a
@@ -211,16 +211,21 @@ _mt_list_open_prs() {
 # is the printing form kept for compatibility.
 _mt_blockers_for_into() {
 	local __mt_blockers_dest="$1" pr="$2" base="$3" own_files="$4" prs_json="$5"
-	local examined=0 line num head draft labels files common __mt_blockers_acc=""
+	local examined=0 line num head head_repo draft labels files common __mt_blockers_acc=""
 	while IFS= read -r line; do
 		[ -n "${line}" ] || continue
 		num="$(printf '%s' "${line}" | jq -r '.number')"
 		head="$(printf '%s' "${line}" | jq -r '.head')"
+		head_repo="$(printf '%s' "${line}" | jq -r '.head_repo')"
 		draft="$(printf '%s' "${line}" | jq -r '.draft')"
 		labels="$(printf '%s' "${line}" | jq -r '.labels | join(",")')"
 		[[ "${num}" =~ ^[0-9]+$ ]] || continue
 		[ "${num}" -lt "${pr}" ] || continue
 		[[ "${head}" == "${MT_PREFIX}"* ]] || continue
+		if [ -z "${head_repo}" ] || [ "${head_repo,,}" != "${MT_REPO,,}" ]; then
+			_mt_log "MERGE_TRAIN_FOREIGN_HEAD_SKIPPED pr=${pr} older=${num}"
+			continue
+		fi
 		[ "${draft}" != "true" ] || continue
 		case ",${labels}," in
 			*,ai:review-blocked,*|*,ai:closed,*|*,ai:merged,*) continue ;;
