@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 from unittest import mock
 
+import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -7983,6 +7984,11 @@ def main() -> int:
 	test_stage_step_backfills_missing_model_catalog_rows_from_main()
 	test_stage_step_model_catalog_backfill_fails_open()
 	test_review_isolation_wiring_and_model_relay()
+	test_review_sandbox_cleanup_runs_after_commit_and_before_publication()
+	if os.geteuid() != 0:
+		test_review_sandbox_cleanup_removes_unwritable_directories()
+		test_review_sandbox_cleanup_fails_closed_with_safe_diagnostic()
+	test_review_sandbox_cleanup_rejects_symlink_root()
 	test_review_isolation_workspace_transfer_and_hostile_paths()
 	test_review_isolation_transfer_failure_evidence()
 	test_review_isolation_traverses_only_allowed_github_directories()
@@ -8080,6 +8086,109 @@ def test_review_isolation_wiring_and_model_relay() -> None:
 	assert 'REVIEW_PATH = "/api/v1/chat/completions"' in broker
 	assert '"review-broker"' in broker and '"review-bridge"' in broker
 	assert 'self.server.model' in broker
+
+
+def test_review_sandbox_cleanup_runs_after_commit_and_before_publication() -> None:
+	workflow = _workflow_text()
+	assert workflow.index("- name: Apply fixes with editor model") < workflow.index("- name: Commit changes")
+	assert workflow.index("- name: Commit changes") < workflow.index("- name: Clean up isolated review workspace")
+	assert workflow.index("- name: Clean up isolated review workspace") < workflow.index("- name: Run interim judge")
+	assert workflow.index("- name: Clean up isolated review workspace") < workflow.index("- name: Enable auto-merge on PR")
+	assert workflow.index("- name: Clean up isolated review workspace") < workflow.index("- name: Push all pending commits")
+	assert workflow.index("- name: Remove slop-scan runtime artifact") < workflow.index("- name: Commit changes")
+	assert 'review_untrusted_sandbox.sh" cleanup' not in workflow[
+		workflow.index("- name: Apply fixes with editor model"):workflow.index("- name: Commit changes")
+	]
+	assert "if: always() && env.REVIEW_SANDBOX_ROOT != ''" in _step_block("Clean up isolated review workspace")
+	assert 'run: bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup' in _step_block("Clean up isolated review workspace")
+	assert "success()" not in next(line for line in _step_block("Commit changes").splitlines() if line.strip().startswith("if:"))
+	assert 'if: "success() &&' in _step_block("Enable auto-merge on PR")
+	assert "if: success() &&" in _step_block("Push all pending commits")
+
+
+def _run_review_sandbox_cleanup(tmp: Path, root: Path) -> subprocess.CompletedProcess[str]:
+	support = tmp / "support"
+	(support / "review_sandbox").mkdir(parents=True)
+	for name in ("review_untrusted_workspace.py", "clarify_openrouter_broker.py"):
+		(support / name).touch()
+	(support / "review_sandbox" / "Dockerfile").touch()
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	(bin_dir / "docker").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+	(bin_dir / "docker").chmod(0o755)
+	env = {
+		"PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", "/usr/bin:/bin"),
+		"RUNNER_TEMP": str(root.parent),
+		"REVIEW_SANDBOX_ROOT": str(root),
+		"SUPPORT_SCRIPTS_DIR": str(support),
+	}
+	return subprocess.run(["bash", str(REPO_ROOT / "scripts/review_untrusted_sandbox.sh"), "cleanup"],
+		env=env, capture_output=True, text=True, check=False)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses directory permissions")
+def test_review_sandbox_cleanup_removes_unwritable_directories() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		root = tmp / "review-isolated-test"
+		cache = root / "source/cache"
+		pkg = cache / "pkg"
+		pkg.mkdir(parents=True)
+		(root / "image").touch()
+		(root / "baseline.json").touch()
+		(pkg / "file").touch()
+		pkg.chmod(0o555)
+		cache.chmod(0o555)
+		try:
+			result = _run_review_sandbox_cleanup(tmp, root)
+			assert result.returncode == 0, result.stderr
+			assert not root.exists()
+			assert "::notice::Review sandbox cleanup restored directory permissions before removal (dirs_fixed=2)" in result.stdout
+		finally:
+			if cache.exists():
+				cache.chmod(0o755)
+			if pkg.exists():
+				pkg.chmod(0o755)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses directory permissions")
+def test_review_sandbox_cleanup_fails_closed_with_safe_diagnostic() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		parent = tmp / "readonly"
+		parent.mkdir()
+		root = parent / "review-isolated-test"
+		root.mkdir()
+		(root / "image").touch()
+		(root / "baseline.json").touch()
+		hostile_name = "\n::error::x"
+		(root / hostile_name).touch()
+		# The sandbox's parent cannot be modified, so removal must stay fatal.
+		parent.chmod(0o555)
+		try:
+			result = _run_review_sandbox_cleanup(tmp, root)
+			assert result.returncode == 1
+			assert "reason=remove_failed residual_entries=" in result.stderr
+			assert "foreign_owned=" in result.stderr and "unwritable_dirs=" in result.stderr
+			assert hostile_name not in result.stderr
+			assert not any(line.startswith("::error::x") for line in result.stderr.splitlines())
+		finally:
+			parent.chmod(0o700)
+
+
+def test_review_sandbox_cleanup_rejects_symlink_root() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		target = tmp / "review-isolated-target"
+		target.mkdir()
+		(target / "image").touch()
+		(target / "baseline.json").touch()
+		root = tmp / "review-isolated-link"
+		root.symlink_to(target, target_is_directory=True)
+		result = _run_review_sandbox_cleanup(tmp, root)
+		assert result.returncode == 1
+		assert "reason=root_symlink" in result.stderr
+		assert root.is_symlink() and target.is_dir()
 
 
 def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:

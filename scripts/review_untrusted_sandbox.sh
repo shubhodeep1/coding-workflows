@@ -158,11 +158,28 @@ fi
 	[ "$(dirname "$(realpath -e -- "${root}" 2>/dev/null || echo /invalid)")" = "$(realpath -e -- "${RUNNER_TEMP:-/tmp}")" ] && \
 	[ -f "${root}/image" ] && [ -f "${root}/baseline.json" ] || { echo '::error::Review sandbox not prepared' >&2; exit 1; }
 if [ "${action}" = cleanup ]; then
+	[ ! -L "${root}" ] || { echo '::error::Review sandbox cleanup failed: reason=root_symlink' >&2; exit 1; }
 	if [ -f "${root}/active-container" ]; then
 		active_container="$(< "${root}/active-container")"
 		[[ "${active_container}" =~ ^review-editor-[0-9]+$ ]] && env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker rm -f "${active_container}" >/dev/null 2>&1 || true
 	fi
-	rm -rf -- "${root}"
+	if ! rm -rf -- "${root}" 2>/dev/null; then
+		# Containers run as the runner UID; non-writable cache directories can
+		# survive rm. Never follow links or change permissions on regular files.
+		dirs_fixed="$( (find -P "${root}" -xdev -type d ! -perm -u=wx -printf '.' 2>/dev/null || true) | wc -c)"
+		find -P "${root}" -xdev -type d ! -perm -u=wx -exec chmod u+rwx -- {} \; 2>/dev/null || true
+		if rm -rf -- "${root}" 2>/dev/null && [ ! -e "${root}" ] && [ ! -L "${root}" ]; then
+			echo "::notice::Review sandbox cleanup restored directory permissions before removal (dirs_fixed=${dirs_fixed})"
+			exit 0
+		fi
+	fi
+	if [ -e "${root}" ] || [ -L "${root}" ]; then
+		residual_entries="$( (find -P "${root}" -xdev -mindepth 1 -printf '.' 2>/dev/null || true) | wc -c)"
+		foreign_owned="$( (find -P "${root}" -xdev -mindepth 1 ! -uid "$(id -u)" -printf '.' 2>/dev/null || true) | wc -c)"
+		unwritable_dirs="$( (find -P "${root}" -xdev -type d ! -perm -u=wx -printf '.' 2>/dev/null || true) | wc -c)"
+		echo "::error::Review sandbox cleanup failed: reason=remove_failed residual_entries=${residual_entries} foreign_owned=${foreign_owned} unwritable_dirs=${unwritable_dirs}" >&2
+		exit 1
+	fi
 	exit 0
 fi
 # Transfer only into the workspace prepare validated and recorded.
