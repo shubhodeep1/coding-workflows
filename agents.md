@@ -1877,6 +1877,7 @@ and shipped:
 - `INTEGRATION_JUDGE_SCOPE`
 - `WORKFLOW_OVERLAY_SOURCE`
 - `WORKFLOW_OVERLAY_REPLACE_REJECTED`
+- `REVIEW_UNTRUSTED_PATH_REJECTED` (`scripts/review_untrusted_workspace.py report-rejections`: `path=<sanitized> rule=unsafe_path|excluded_input|excluded_dir|credential_like|command_not_admitted|hidden_dir|unsupported_type|symlink|unclassified`; at most 10 lines, then `REVIEW_UNTRUSTED_PATH_REJECTED_TRUNCATED omitted=<n>`. Paths are printable ASCII capped at 200 characters; file contents are never printed.)
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -2099,6 +2100,7 @@ LOG_PREFIX.name=SECURITY_AUDIT_SUPPORT_INTEGRITY
 LOG_PREFIX.name=INTEGRATION_JUDGE_SCOPE
 LOG_PREFIX.name=WORKFLOW_OVERLAY_SOURCE
 LOG_PREFIX.name=WORKFLOW_OVERLAY_REPLACE_REJECTED
+LOG_PREFIX.name=REVIEW_UNTRUSTED_PATH_REJECTED
 
 ---
 
@@ -2233,7 +2235,7 @@ depend on it.
 | `REVIEW_APPROVAL_RUBRIC_ENABLED` | `false` | Enable logical review-state output from the review-blocked judge and outbound PR-review mapping through `post_review_comment.sh --review-state`. |
 | `REVIEW_BREAK_GLASS_ENABLED` | `false` | Enable the anchored `@codex break-glass` override scan; when active it downgrades only the outbound `REQUEST_CHANGES` event to comment-only. |
 | `CI_POLL_TEST_SHARDS` | `4` | Parallel local shards for the orchestrate-poll module in each group of CI's `orchestrate-poll` matrix and in the release gates' `validate-scripts` job. `1` is sequential; invalid values warn and fall back to `1`. |
-| `CONFLICT_MANIFEST_UNION_ENABLED` | `true` | Deterministically resolve two-sided `.ai/.workspace_source_manifest.txt` content conflicts before the model resolver; manifest-only conflicts are committed as `[ai-merge-resolve]` and skip the model. Integration-sync branches and delete/modify conflicts remain model-resolved. |
+| `CONFLICT_MANIFEST_UNION_ENABLED` | `true` | Deterministically resolve two-sided `.ai/.workspace_source_manifest.txt` content conflicts before the model resolver; manifest-only conflicts are committed as `[ai-merge-resolve]` and skip the model. A delete/modify conflict on the manifest keeps the surviving side, sorted and deduplicated, because the resolver sandbox never admits `.ai` paths (#6575). Integration-sync branches remain model-resolved. |
 | `REVIEW_RESOLVE_THREADS_ENABLED` | `true` | Resolve PR review threads the editor audited in its `PR comment audit:` section. Keyed on comment id, so two comments at one path cannot resolve each other; `ignored` entries get the editor's reason as a reply before resolving. |
 | `REVIEW_RESOLVE_THREADS_MAX` | `50` | Per-run cap on resolved review threads; anything above it is warned about and left open. |
 | `SWEEP_STALE_QUEUED_MINUTES` | `120` | Age past which a still-`queued` review run stops suppressing a sweep dispatch (wedged-run recovery). `in_progress` runs are never discounted; `0` disables the cutoff. |
