@@ -86,7 +86,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `FORWARD_MERGE_FALLBACK_AUTO_MERGE` | No | `true` | review_autofix | Controls how forward-merge fallback PRs (head ref `^auto/forward-merge-stable-`, opened by `.github/workflows/forward-merge-stable-to-main.yml`) are merged when review passes with no changes needed. When `true` (default), `review_autofix.yml` enables auto-merge with a **real merge commit** (`gh pr merge --merge --auto`) so `stable`'s commits stay reachable from `main` and `.github/workflows/promote-main-to-stable.yml`'s pre-flight `git merge-base --is-ancestor HEAD origin/main` check keeps passing. Requires "Allow merge commits" **and** "Allow auto-merge" in repo settings; if either is off the enable call logs a `::warning::` and the PR is left for a manual "Create a merge commit". Applies to **both** flavours of fallback PR — conflict-resolved (body: "failed due to merge conflicts", resolved unattended by `[ai-merge-resolve]`) and branch-protection (body: "could not push directly"). Set to any non-`true` value to restore the previous behaviour of leaving every forward-merge fallback PR for a manual merge commit. Independent of `ENABLE_AUTO_MERGE`, but `ENABLE_AUTO_MERGE=false` still disables all auto-merge including this path. |
 | `MAX_AUTOFIX_ITERATIONS` | No | `5` | review_autofix | Maximum consecutive autofix rounds before the review loop stops and hands control to the per-PR review-blocked judge. The judge then decides `merge`, `fix` (push a `[judge-fix]` commit which resets the autofix counter — capped at `MAX_REVIEW_BLOCKED_RETRIES`), `merge_with_followup` (merge as-is and open a follow-up issue tracking the deferred gap — preferred over `close_and_reissue` at IS_FINAL when the PR is shippable), or `close_and_reissue`. If the judge step is skipped or fails to handle the PR (`judge_handled != 'true'`), the linked issues are labelled `ai:review-blocked` and a review-blocked comment is posted on the PR. Applies uniformly to every PR mode (orchestrator intermediate, orchestrator final, non-orchestrator). The retrigger guard's PR mode classifier (`orch_intermediate` / `orch_final` / `other`, gated by `ORCH_PR_AUTOFIX_FLOW_ENABLED`) is now used only for observability and the orchestrator-level judge cap bypass on `orch_final`; it no longer overrides the per-PR autofix cap. See [Orchestrator PR autofix flow](#orchestrator-pr-autofix-flow). |
 | `CI_CANCELLED_AUTO_RERUN_ENABLED` | No | `true` | `review_autofix_sweep.yml` (coding-workflows only) | On the 30-minute sweep, re-run failed jobs once for a current-head `ci.yml` PR run cancelled or failing at startup (attempt 1 only), when no CI run is active for that head. Same-SHA push runs count when selecting the newest run and checking prior retries only if they ran on the PR's head branch; a push run requires a PR-associated run in the window before it can be rerun. Never re-run a real test failure or fall back to a full rerun. Set `false` to disable CI lookups and re-runs. The helper uses one bounded completed-run listing, three active-status listings, and one paginated open-PR head refresh before posting; incomplete active/PR listings skip recovery. The 100-run completed window cannot prove a per-head cap across older, different run IDs. Consumer CI filenames are not identified, so this does not run in consumer repositories. |
-| `CLAUDE_FIXER_ENABLED` | No | `true` | review_autofix, orchestrate_poll | Claude-fixer mode (Phase 5c of `docs/plans/replace-claude-sessions-with-cli-engine-plan.md`): `false` keeps the review editor, consolidator, conflict resolver and review-blocked judge (`REVIEW_EDITOR`, `REVIEW_CONSOLIDATOR`, `CONFLICT_RESOLVER`, `RB_JUDGE`) off the Claude engine, ahead of the `ai:engine-claude` label and `AI_ENGINE`. The resolver's OpenCode path is sandboxed too; unsupported conflicted paths are refused without a model run. All four Claude review roles run in a network-isolated sandbox with a credential-free relay, never host Claude; the consolidator and judge verdict use read-only access. The former Claude-fixer session hand-off stays retired: every PR-backed `claude/*` PR takes the normal review path. |
+| `CLAUDE_FIXER_ENABLED` | No | `true` | review_autofix, orchestrate_poll | Claude-fixer mode (Phase 5c of `docs/plans/replace-claude-sessions-with-cli-engine-plan.md`): `false` keeps the review editor, consolidator, conflict resolver and review-blocked judge (`REVIEW_EDITOR`, `REVIEW_CONSOLIDATOR`, `CONFLICT_RESOLVER`, `RB_JUDGE`) off the Claude engine, ahead of the `ai:engine-claude` label and `AI_ENGINE`. All four Claude review roles run in a network-isolated sandbox with a credential-free relay, never host Claude; the consolidator and judge verdict use read-only access. With the engine off or Claude unavailable, the in-workflow review-blocked judge runs OpenCode only in a fresh sandbox; missing isolation defers the judge, never starting a host writer. The resolver's OpenCode path is sandboxed too; unsupported conflicted paths are refused without a model run. A Claude-selected conflict resolver never falls back to host OpenCode: it retries OpenCode in a fresh sandbox on Claude unavailability and otherwise fails closed if isolation, cleanup or validated transfer fails. The former Claude-fixer session hand-off stays retired: every PR-backed `claude/*` PR takes the normal review path. |
 | `CLAUDE_BRANCH_PUSH_PR_GRACE_SECONDS` | No | `300` | `internal-review.yml` (coding-workflows only) | When a push to a `claude/**` branch finds no open PR, `resolve-claude-branch-pr` re-checks every 60s for up to this many seconds and skips the no-PR reviewer run as soon as a PR appears, since the PR's own `pull_request` run reviews the same commit. Without it, sessions that push and then open the PR seconds later got the full reviewer panel twice. `0` restores the single lookup at push time; values that are not an integer from 0 to 3600 fall back to `300` with a `::warning::`. A failed lookup counts as no PR yet and is logged as `RESOLVE_CLAUDE_BRANCH_PR_LOOKUP_FAILED` with gh's error text (for example a `GH_PAT` rate limit), so the review still runs when the window ends. |
 | `ORCH_PR_AUTOFIX_FLOW_ENABLED` | No | `true` | review_autofix, orchestrate_poll | Master switch for the orchestrator-aware PR autofix flow. When `true`, `review_autofix.yml`'s retrigger guard classifies the PR (`orch_intermediate` / `orch_final` / `other`) by base/head branch (used for observability and the orchestrator-side cap bypass on `orch_final`); `orchestrate_poll_process.sh` bypasses the `MAX_JUDGE_CYCLES` cap while the integration→default-branch final PR is open and pending merge so the final PR can run unlimited 5-autofix→judge cycles until mergeable. The per-PR autofix loop itself uses `MAX_AUTOFIX_ITERATIONS` uniformly across every mode. Set to `false` to force `orch_pr_mode` to stay at `other` for every PR (head/base never inspected) and disable the orchestrator-side cap bypass (`MAX_JUDGE_CYCLES=25` then applies to the final-PR loop too). See [Orchestrator PR autofix flow](#orchestrator-pr-autofix-flow). |
 | `ORCH_INTEGRATION_BRANCH_PATTERN` | No | `^orchestrator/project-` | review_autofix | POSIX-extended regex used by the retrigger guard to identify orchestrator integration branches (head ref) and orchestrator-targeted bases. Defaults match the orchestrator's conventional branch naming (`orchestrator/project-<TRACKING_ISSUE_NUMBER>` set by `.github/workflows/orchestrate.yml`). Override only if you have customised the orchestrator branch naming. |
@@ -132,7 +132,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `THINKING_LEVEL_REVIEW_BLOCKED_JUDGE` | No | `high` | review_autofix | Reasoning effort for the review-blocked judge in non-orchestrator PRs (`xhigh`, `high`, `medium`, `none`). |
 | `MAX_REVIEW_BLOCKED_RETRIES` | No | `2` | review_autofix, orchestrate_poll | Maximum judge `fix` retries for review-blocked PRs before forcing a final decision (`merge`, `merge_with_followup`, or `close_and_reissue` — no further `fix` attempts at IS_FINAL). Used by both the review_autofix judge (counts `[judge-fix]` commits) and the orchestrator poller. Bump to `3` to give the judge one more `fix` attempt before falling back to a terminal action. |
 | `RB_JUDGE_ISOLATION_MAX_FAILURES` | No | `3` | orchestrate_poll | Consecutive isolation failures on one review-blocked PR head before the poller labels its issue `ai:needs-human` and stops retrying that head. A new head or removal of the label permits another attempt. Invalid or nonpositive values use `3`. No host-agent fallback is permitted. |
-| `JUDGE_ISOLATION_MAX_FAILURES` | No | `3` | orchestrate_poll | Consecutive sandbox isolation failures per wave, stall, integration or security-pass judge before the tracking issue (standalone issue for a standalone stall judge) is labelled `ai:needs-human`. Clearing the label resets that judge's counter; invalid or nonpositive values use `3`. Neither engine runs on the credentialed host. |
+| `JUDGE_ISOLATION_MAX_FAILURES` | No | `3` | orchestrate_poll | Consecutive sandbox isolation failures per wave, stall, integration or security-pass judge before the tracking issue (standalone issue for a standalone stall judge) is labelled `ai:needs-human`. A successful live read confirming the label was removed resets that judge's counter; a failed read keeps the latch. Invalid or nonpositive values use `3`. Neither engine runs on the credentialed host. |
 | `WORKSPACE_HOOK_TIMEOUT_SECONDS` | No | `600` | implement, validate | Timeout in seconds for optional workspace lifecycle hooks executed by `scripts/run_workspace_hook.sh`. Invalid or non-positive values fall back to `600`. `after_create` / `before_run` failures are fatal; `after_run` / `before_remove` failures are logged and ignored. |
 | `WORKSPACE_REUSE_ENABLED` | No | `false` | implement, review_autofix, validate | Enables cache-backed per-issue workspaces under `${RUNNER_TEMP}/workspaces/<WORKSPACE_KEY>`. When `false`, the workflows keep the legacy per-run workspace layout; when `true`, exact workspace-cache restores can set `CREATED_NOW=false` so one-time setup and `after_create` hooks are skipped on reuse. |
 | `CODEX_THREAD_REUSE_ENABLED` | No | `false` | implement, review_autofix, validate | Enables same-run Codex session reuse through `scripts/codex_thread_reuse.sh` plus the `mode-*-continuation.txt` prompts. Unsupported resume capability or helper failures fail open to the fresh full-prompt path. |
@@ -183,7 +183,8 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `MAX_JUDGE_CYCLES` | No | `25` | orchestrate_poll | Maximum judge evaluation cycles per project before forcing failure. Prevents infinite fix-up loops when the judge repeatedly returns `in_progress`. **Orchestrator final-PR bypass:** when `ORCH_PR_AUTOFIX_FLOW_ENABLED=true` (default) and the integration→default-branch final PR is open with `final_merge_status=pending`, this cap is bypassed for the final-PR loop only — the loop runs unlimited 5-autofix→judge cycles until the PR is mergeable. The cap remains in force for sub-issue stalls, recovery loops, and the intermediate-PR phase (per-sub-issue judge runs are governed by `MAX_REVIEW_BLOCKED_RETRIES` inside `review_autofix.yml`, not by this orchestrator-level counter). The bypass emits a `[final-merge] judge cap bypassed` log line each time it fires. See [Orchestrator PR autofix flow](#orchestrator-pr-autofix-flow). |
 | `ENABLE_CLEAN_WAVE_JUDGE_SKIP` | No | `true` | orchestrate_poll | When true, a completed clean wave (no failures, not stuck-wave) advances mechanically without invoking the judge. Also skips the judge on clean project completions (all waves merged, no failures, no review-blocked issues) — the verdict is deterministic (`complete`). Set to `false` to force judge execution on every wave completion and project finalization. |
 | `ORCHESTRATOR_MAX_CLARIFY_CYCLES` | No | `3` | orchestrate_clarify_respond, clarify | Maximum orchestrator clarification auto-answer cycles per issue. When the limit is exceeded, or when a clarify hash repeats, `orchestrate_clarify_respond` stops posting auto-answers and escalates the issue to `ai:blocked` for explicit human intervention. A backup comment-count guard counts existing `/answer [auto-answered-by-orchestrator]` comments on the issue thread (0 extra API calls) and blocks when the count reaches this limit, even when the memory-based guard fails open. The standalone auto-decide step in `clarify.yml` posts through the same guard, so the same limit applies to standalone issues. |
-| `STANDALONE_AUTO_DECIDE_ENABLED` | No | `true` | clarify, implement | Standalone clarify auto-decide (port P3 of `docs/plans/replace-claude-sessions-with-cli-engine-plan.md`). When `clarify.yml` posts questions on an issue that is not `ai:orchestrator-managed`, it answers them at once with each question's RECOMMENDED option through `scripts/orchestrate_parse_and_post_answer.sh` (same `/answer [auto-answered-by-orchestrator]` comment and loop guard as the orchestrator), and records each pick as an `AD-<n>` entry in one `<!-- ai:auto-decisions:v1 -->` comment, updated in place on later cycles; `implement.yml` repeats the entries in the PR body under "Auto-decisions". Clarify fetches all issue comments with one paginated request (one API call per page), while still passing only the oldest 50 to the clarify prompt; the full snapshot lets the fallback guard count prior auto-answers even without semantic caching and preserves AD numbering on long threads. A failed full fetch stops clarification before posting an answer; an unavailable history at auto-decide time skips the automatic answer. Skipped after a human `/reclarify`, when any question has no RECOMMENDED option, or when this is `false`; the 60-minute stall-ladder auto-answer stays as the backstop. Logs `STANDALONE_AUTO_DECIDE issue= outcome= reason= decisions=`. |
+| `STANDALONE_AUTO_DECIDE_ENABLED` | No | `true` | clarify, implement | Standalone clarify auto-decide (port P3 of `docs/plans/replace-claude-sessions-with-cli-engine-plan.md`). When `clarify.yml` posts questions on an issue that is not `ai:orchestrator-managed`, it answers them at once with each question's RECOMMENDED option through `scripts/orchestrate_parse_and_post_answer.sh` (same `/answer [auto-answered-by-orchestrator]` comment and loop guard as the orchestrator), and records each pick as an `AD-<n>` entry in one `<!-- ai:auto-decisions:v1 -->` comment, updated in place on later cycles; `implement.yml` repeats the entries in the PR body under "Auto-decisions". Clarify fetches all issue comments with one paginated request (one API call per page), while still passing only the oldest 50 to the clarify prompt; the full snapshot lets the fallback guard count prior auto-answers even without semantic caching and preserves AD numbering on long threads. A failed full fetch stops clarification before posting an answer; an unavailable history at auto-decide time skips the automatic answer. Skipped after a human `/reclarify`, when any question has no RECOMMENDED option, or when this is `false`; the 60-minute stall-ladder auto-answer stays as the backstop. Logs `STANDALONE_AUTO_DECIDE issue= outcome= reason= decisions=`. With `STANDALONE_CLARIFY_RESPOND_ENABLED` (default `true`) the step only delegates (`reason=delegated_to_clarify_respond`) and the Claude clarify-respond worker answers instead; see that row. `false` here turns off every automatic answer on standalone issues, the worker included. `clarify.yml`'s "Clarification required" Telegram alert is skipped when the questions were auto-answered or delegated (`AI_PHASE_GATE_V1 phase=clarify gate=tg_alert reason=auto_answered|delegated_to_clarify_respond outcome=skip`). |
+| `STANDALONE_CLARIFY_RESPOND_ENABLED` | No | `true` | clarify, orchestrate_clarify_respond | Standalone issues answered by the clarify-respond worker (issue #6262 follow-up). `orchestrate_clarify_respond.yml`, which the questions comment already triggers, answers the questions `clarify.yml` posted on an open issue that is not `ai:orchestrator-managed` with the same `CLARIFY_RESPOND` role orchestrator issues use (Claude in the network-isolated sandbox, codex fallback), instead of the RECOMMENDED-only pick. Before the model runs, the workflow reads the state of the PRs, issues, branches and workflow runs the issue and questions reference (`scripts/clarify_github_facts.py`: one GraphQL call plus at most 5 run reads, fail-open) and gives it to the model as GITHUB FACTS, so questions about whether a dependency merged or which branch holds the code are settled without a token in the sandbox. Credentials and setup never stop an issue: the worker decides with a placeholder (an UPPER_SNAKE_CASE secret or variable read with no default, the feature skipped or failing closed while it is unset) and lists it under "Setup required" in the `<!-- ai:auto-decisions:v1 -->` comment, which `implement.yml` repeats in the PR body; every decision is recorded there as `AD-<n>` with who took it. A human is paged only when the worker escalates (an issue with no stated intent, such as the release gate's "Make it better." fixture) or the loop guard blocks (`ai:blocked`, `WARNING`), or when the worker fails and a question has no RECOMMENDED option to fall back to (`CRITICAL`). If the worker fails, each question's RECOMMENDED option is posted instead. Skipped after a human `/reclarify` (the questions comment then ends with `<!-- ai:clarification-human-answer -->`) and for plan-stage questions. If the issue's comments cannot be read, the run fails before the model runs and the stall-ladder auto-answer is the backstop. Set to `false` to restore the RECOMMENDED-only answers in `clarify.yml`. Logs `AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=standalone reason= outcome=` and `STANDALONE_AUTO_DECIDE issue= outcome=answered|fallback|skip decider= decisions= ad_total= setup_total=`. |
 | `STALL_THRESHOLD_MINUTES` | No | `120` | orchestrate_poll | Fallback minutes an issue can remain in the same pipeline phase before auto-recovery. Used when no per-phase override is set. Read as decimal: leading zeros are stripped (`0120` is 120). |
 | `STALL_THRESHOLD_NO_LABELS_MINUTES` | No | `60` | orchestrate_poll | Stall threshold for issues with no AI pipeline labels (pre-pipeline). |
 | `STALL_THRESHOLD_CLARIFICATION_MINUTES` | No | `60` | orchestrate_poll | Stall threshold for `ai:clarification` phase. |
@@ -224,7 +225,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | `INTEGRATION_CONFLICT_LIFETIME_MAX` | No | `10` | orchestrate_poll | Cumulative cap on the **total** number of resolver+judge dispatches per integration branch across all retry episodes. Unlike the per-burst counters above (which reset to `0` after each judge escalation in `heal_integration_branch_conflict`), this counter is additive across the lifetime of the tracking-issue state and only zeros when that state is rebuilt. When `integration_conflict_total_dispatches >= INTEGRATION_CONFLICT_LIFETIME_MAX`, the heal function flips `status=failed` + `final_merge_status=failed` + `integration_sync_status=failed`, posts a `❌ Integration self-healing capped` tracking-issue comment, fires a CRITICAL Telegram alert, and stops dispatching. Catches the alternating resolver/judge loop where each judge invocation resets `unresolved_ticks=0` but the merge stays dirty as `main` keeps moving (observed on `orchestrator/project-1479` PR #1533, 2026-04-25, 8 fingerprint-FAILED annotations across a single 2h47m run + many such runs). Two race-recovery escape paths run before terminalization (added 2026-05-13 after `orchestrator/project-40` PR #223 false-positive cap trip): (1) re-query PR `mergeable` — if `true`, a late-finishing dispatch has landed its `[ai-merge-resolve]` commit between ticks, so the heal function clears state via `mark_integration_sync_clean` and returns instead of terminalizing; (2) call `_has_active_autofix_run` — if a resolver dispatch is still in flight against the integration branch, defer the cap decision one tick so the running dispatch can complete. Both checks fail-open on API error. Independently, each call to `heal_integration_branch_conflict` runs a pre-flight `git merge-tree` probe and short-circuits to `mark_integration_sync_clean` without dispatching or incrementing the counter when the merge into `default_branch` is verifiably clean (catches the case where GitHub's PR-`mergeable=false` signal lags behind the actual merge state by minutes/hours on large PRs and the workflow's runtime `MERGE_CONFLICT` recompute would fall through to autofix anyway). Must be a positive integer; invalid values fall back to `10`. |
 | `FINGERPRINT_PER_FILE_CAP` | No | `12` | orchestrate_poll | Maximum number of `must_contain` / `must_not_contain` regex patterns the orchestrator captures per file per direction when a sub-issue PR merges into an integration branch. Higher values give the integration-sync conflict verifier finer-grained intent coverage at the cost of larger state-comment payloads and longer verification runs. |
 | `FINGERPRINT_MIN_PATTERN_CHARS` | No | `12` | orchestrate_poll | Minimum trimmed-line length for a fingerprint pattern. Lines shorter than this are skipped during capture (too generic to fingerprint reliably). |
-| `RESOLVER_ESCAPE_THRESHOLD_N` | No | `5` | review_autofix | Per-tier same-head, same-signature consecutive-failure step size for integration-sync resolver retry-state tracking in `scripts/review_conflict_resolve.sh`. Multiples of `N` advance `strict` → `ratio` → `count_only` → `warn_only` and emit `FINGERPRINT_TIER_DOWNGRADED_V1`; the next multiple (default `20` total failures) marks the final PR issue `ai:resolver-escalated` and stops first-line redispatch until the PR head changes. |
+| `RESOLVER_ESCAPE_THRESHOLD_N` | No | `5` | review_autofix | Per-tier same-head, same-signature consecutive-failure step size for integration-sync resolver retry-state tracking in `scripts/review_conflict_resolve.sh`. Fingerprint failures at multiples of `N` advance `strict` → `ratio` → `count_only` → `warn_only` and emit `FINGERPRINT_TIER_DOWNGRADED_V1`; repeated isolation failures keep fingerprint verification `strict`. Either failure class marks the final PR issue `ai:resolver-escalated` at the next multiple (default `20` total failures) and stops first-line redispatch until the PR head changes. |
 | `FINGERPRINT_QUARANTINE_RUNS_M` | No | `3` | review_autofix | Consecutive `PRE_EXISTING_FINGERPRINT_DRIFT_V1 unchanged` observations required before `scripts/verify_integration_fingerprints.py` moves an `fp_key` into ai-memory quarantine, suppresses it on later runs, and emits the one-time `FINGERPRINT_QUARANTINED_V1` marker. |
 | `DRIFT_AUDIT_ENABLED` | No | `false` | drift-audit | Opt-in gate for `.github/workflows/drift-audit.yml` / `scripts/drift_audit.sh`. When `true`, the daily `0 3 * * *` audit clusters recent `PRE_EXISTING_FINGERPRINT_DRIFT_V1` / `FINGERPRINT_QUARANTINED_V1` markers by `fp_key` and opens or updates tracker issues; when `false`, the workflow exits cleanly without scanning. Each enabled run also posts a Telegram run summary (gated by `TG_BOT_SECRET` / `TG_ADMIN_CHAT_ID`, no-op when unset) linking to the workflow run, and writes a GitHub Actions job summary. |
 | `BRANCH_REBUILD_ENABLED` | No | `false` | orchestrate_poll | Enable the last-resort integration-branch rebuild flow for `orchestrator/project-*` branches after the resolver escape valve has already tripped on the current final PR head. Fails safe unless ai-memory audit storage and replay metadata are available. |
@@ -337,7 +338,14 @@ Several Symphony-era behaviors are configured by optional committed files rather
 
 Copy the ready-to-use templates from [`workflow-templates/`](workflow-templates/) into your repo's `.github/workflows/` directory. Reference implementations also live in [`.github/workflows/internal-*.yml`](.github/workflows/) in this repository.
 
-At minimum, create these three core wrappers. Each job carries the same `if:` predicate as the
+At minimum, create `ai-clarify.yml`, `ai-plan.yml`, `ai-implement.yml`, and
+`ai-orchestrate-clarify-respond.yml`. The fourth wrapper listens for clarification
+questions posted by `ai-clarify.yml`; without it, the default standalone worker
+delegation has no listener and suppresses the clarification alert. Copy the
+[responder template](workflow-templates/ai-orchestrate-clarify-respond.yml) along
+with the three wrappers below. For an existing three-wrapper installation, add
+the responder or set `STANDALONE_CLARIFY_RESPOND_ENABLED=false` to retain the
+RECOMMENDED-only answer path. Each job carries the same `if:` predicate as the
 reusable workflow it calls (see `agents.md`, "Phase wrapper predicate parity"). `ai-clarify`
 automatically triages newly opened issues only when the original author is a GitHub `User` with
 `author_association` of `OWNER`, `MEMBER`, or `COLLABORATOR`, or the exact `github-actions[bot]`
@@ -448,6 +456,9 @@ not re-run the same blocked plan. Resume with `/answer` to re-plan, or remove `a
 add `ai:awaiting-approval` and comment `/approved` to re-run the approved plan.
 
 #### Optional wrappers
+
+The responder shown below is required for default standalone auto-decisions;
+the other wrappers in this section are optional.
 
 **`.github/workflows/ai-review.yml`** — Multi-model PR review with automated fixes
 ```yaml
@@ -823,7 +834,12 @@ jobs:
     secrets: inherit
 ```
 
-**`.github/workflows/ai-orchestrate-clarify-respond.yml`** — Auto-answers clarification questions on orchestrator-managed issues
+**`.github/workflows/ai-orchestrate-clarify-respond.yml`** — Auto-answers clarification questions on orchestrator-managed issues and on standalone issues (`STANDALONE_CLARIFY_RESPOND_ENABLED`)
+
+Standalone questions run the worker with a new GitHub facts fetch (which fails open if unavailable); semantic-cache lookup and storage are skipped for this mode because the cache key does not include current PR, branch, or run state. Orchestrator-managed issues keep the existing semantic cache behavior.
+
+For manual installation, copy the [template](workflow-templates/ai-orchestrate-clarify-respond.yml), including its job-level event predicate and `id-token: write` permission.
+
 ```yaml
 name: AI Orchestrate Clarify Respond
 on:
@@ -832,8 +848,18 @@ on:
 permissions:
   contents: read
   issues: write
+  id-token: write
 jobs:
   respond:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.action == 'created' &&
+      github.event.issue.pull_request == null &&
+      (
+        (github.event.comment.user.type == 'Bot' && github.event.comment.user.login == 'github-actions[bot]') ||
+        (github.event.comment.user.type == 'User' && contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+      ) &&
+      contains(github.event.comment.body, 'Clarification required')
     uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate_clarify_respond.yml@<40-character-release-sha> # stable
     secrets: inherit
 ```
@@ -984,15 +1010,16 @@ auto-creates by setting the `WORKFLOW_PROFILE` repository variable. Supported
 values are `core`, `standard`, and `full`; the default is `full`, which
 preserves today's behavior of installing every wrapper template.
 
-- `core` installs the six-wrapper manifest in
+- `core` installs the seven-wrapper manifest in
   [`workflow-templates/profiles/core.txt`](workflow-templates/profiles/core.txt):
   `ai-clarify.yml`, `ai-plan.yml`, `ai-implement.yml`, `ai-review.yml`,
-  `ai-issue-pr-status.yml`, and `ai-cancel-on-pr-close.yml`.
+  `ai-issue-pr-status.yml`, `ai-cancel-on-pr-close.yml`, and
+  `ai-orchestrate-clarify-respond.yml`. The responder wrapper receives
+  standalone clarification questions even without the orchestrator poller.
 - `standard` installs `core` plus the orchestrator/validation additions listed
   in
   [`workflow-templates/profiles/standard.txt`](workflow-templates/profiles/standard.txt):
-  `ai-orchestrate.yml`, `ai-orchestrate-poll.yml`,
-  `ai-orchestrate-clarify-respond.yml`, `ai-validate.yml`, and
+  `ai-orchestrate.yml`, `ai-orchestrate-poll.yml`, `ai-validate.yml`, and
   `review_rb_judge_dispatch.yml`.
   The standard manifest also includes the optional `ai-sync-labels.yml`
   wrapper so stable-channel syncs can auto-install the label-sync entrypoint.
@@ -1003,9 +1030,10 @@ Profile downgrades are non-destructive: switching from `full` to `core` or
 `standard` stops creating out-of-profile wrappers in future syncs, but does
 not delete wrappers that are already present in `.github/workflows/`.
 
-> **Terminology note:** the minimum manual-bootstrap wrappers are
-> `ai-clarify.yml`, `ai-plan.yml`, and `ai-implement.yml`. The `core` install
-> profile is a separate six-wrapper auto-install manifest used only by
+> **Terminology note:** the minimum manual-bootstrap wrappers with default
+> standalone auto-decisions are `ai-clarify.yml`, `ai-plan.yml`,
+> `ai-implement.yml`, and `ai-orchestrate-clarify-respond.yml`. The `core` install
+> profile is a separate seven-wrapper auto-install manifest used only by
 > `ai-update-workflows.yml`.
 
 > **Canonical audit-gate delivery contract:** `update_workflows.yml` applies
@@ -1144,7 +1172,7 @@ not delete wrappers that are already present in `.github/workflows/`.
 
 Create a new issue describing a feature or bug fix. Every standalone issue runs the Codex pipeline described below (clarify → plan → implement). `/implement-issue-claude` is a thin hand-off that labels an issue `ai:engine-claude` for the Claude engine once that lands (see `docs/plans/replace-claude-sessions-with-cli-engine-plan.md`):
 
-1. **Clarify** evaluates whether the issue has enough detail. If not, it comments with clarification questions. If required input is external and non-synthesizable (for example branch/SHA/credential/external URL), it emits a `BLOCKED: <reason>` handoff that labels the issue `ai:blocked` and pauses auto-answer loops until a human supplies the missing input.
+1. **Clarify** evaluates whether the issue has enough detail. If not, it comments with clarification questions; by default, the clarify-respond worker answers standalone questions. Credentials and operator setup are carried forward as placeholders, undecided branch names follow repository conventions, and future commits are referenced symbolically. Only when the task depends on the unavailable contents of an auth-walled or private URL does Clarify emit a `BLOCKED: <reason>` handoff that labels the issue `ai:blocked` and pauses auto-answer loops until the missing content is supplied.
 2. Once the issue is clear, comment `/answer` to trigger **Plan** generation. A plan whose pre-execution self-check reports `PLAN_SELF_CHECK: BLOCKER:` with `STATUS: NOT_CLEAR` and no Q-ID clarification block takes the same `ai:blocked` handoff as a `BLOCKED:` line — the issue is labeled `ai:blocked`, a "Planning blocked: human input required" comment names the first blocker line, and auto-answer/stall-recovery loops pause until a human resolves the blocker and replies `/answer`. Plans that pose Q-ID questions (or carry a `NEEDS_CLARIFICATION` status) alongside blockers reopen clarification as before.
 3. Review the plan, then comment `/approved` to start **Implementation** — a PR is created for you.
 
@@ -1190,7 +1218,7 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `cancel_on_pr_close.yml` | `pull_request.closed` | Active-run cancellation |
 | `memory_maintenance.yml` | `schedule` (monthly) | Memory compaction/archival |
 | `orchestrate.yml` | `workflow_dispatch` | Project decomposition + multi-issue orchestration |
-| `orchestrate_clarify_respond.yml` | `issue_comment.created` | Auto-answers clarification questions on orchestrator issues |
+| `orchestrate_clarify_respond.yml` | `issue_comment.created` | Auto-answers clarification questions on orchestrator issues and standalone issues |
 | `orchestrate_poll.yml` | `schedule` (every ~5 min) | Orchestrator progress poller + judge + auto-recovery. Polling cadence is driven entirely by the wrapper workflow's cron schedule; the legacy self-retrigger path (cooldown sleep + `workflow_dispatch` at end-of-run) and its rate-limit circuit-breaker gate have been removed. |
 | `update_workflows.yml` | `schedule` (daily), `repository_dispatch`, `workflow_dispatch` | Auto-updates existing and creates new workflow wrappers from upstream templates |
 | `workflow-log-analysis.yml` | `workflow_dispatch` (typically called from comprehensive-test-and-release / test-and-mark-stable smoke gates) | Periodic Codex audit of workflow runs (analyze, deep-audit, api-redundancy passes); see [`probably_unnecessary_but_read_if_stuck.md`](probably_unnecessary_but_read_if_stuck.md) for the runbook |
@@ -1555,6 +1583,7 @@ through `clarify → plan → implement → review`.
 | `ENABLE_CLEAN_WAVE_JUDGE_SKIP` | `true` | Skip judge on clean completed waves (no failures) and on clean project completions; advance mechanically |
 | `ORCHESTRATOR_MAX_CLARIFY_CYCLES` | `3` | Maximum orchestrator clarify auto-answer cycles before the auto-answer loop is halted and the issue is escalated to `ai:blocked` for human input |
 | `STANDALONE_AUTO_DECIDE_ENABLED` | `true` | Answer a standalone issue's clarify questions at once with their RECOMMENDED options and log each pick in the `<!-- ai:auto-decisions:v1 -->` comment (see the repository variables table) |
+| `STANDALONE_CLARIFY_RESPOND_ENABLED` | `true` | Have the Claude clarify-respond worker answer those standalone questions from the repository and GitHub state, with placeholders for credentials and setup, falling back to the RECOMMENDED options (see the repository variables table) |
 | `STALL_THRESHOLD_MINUTES` | `120` | Fallback minutes before a stalled issue triggers auto-recovery |
 | `STALL_THRESHOLD_NO_LABELS_MINUTES` | `60` | Stall threshold for pre-pipeline (no labels) phase |
 | `STALL_THRESHOLD_CLARIFICATION_MINUTES` | `60` | Stall threshold for clarification phase |
@@ -1588,7 +1617,7 @@ through `clarify → plan → implement → review`.
 | `INTEGRATION_CONFLICT_LIFETIME_MAX` | `10` | Cumulative cap on resolver+judge dispatches per integration branch across all retry episodes; once reached, `heal_integration_branch_conflict` flips `status=failed` and stops dispatching. Catches the resolver/judge alternation loop where per-burst counters reset on each judge escalation but the merge stays dirty as main keeps moving |
 | `FINGERPRINT_PER_FILE_CAP` | `12` | Cap on `must_contain`/`must_not_contain` patterns captured per file per merged sub-issue |
 | `FINGERPRINT_MIN_PATTERN_CHARS` | `12` | Minimum trimmed-line length for a captured fingerprint pattern |
-| `RESOLVER_ESCAPE_THRESHOLD_N` | `5` | Per-tier same-head, same-signature failure step size for resolver retry state; multiples of `N` advance `strict` → `ratio` → `count_only` → `warn_only`, and the next multiple escalates the final PR issue with `ai:resolver-escalated` |
+| `RESOLVER_ESCAPE_THRESHOLD_N` | `5` | Per-tier same-head, same-signature failure step size for resolver retry state; fingerprint failures at multiples of `N` advance `strict` → `ratio` → `count_only` → `warn_only`, repeated isolation failures remain `strict`, and either class escalates the final PR issue with `ai:resolver-escalated` at the next multiple |
 | `FINGERPRINT_QUARANTINE_RUNS_M` | `3` | Consecutive unchanged-drift observations before a fingerprint moves into ai-memory quarantine and emits `FINGERPRINT_QUARANTINED_V1` |
 | `DRIFT_AUDIT_ENABLED` | `false` | Opt-in gate for the daily `drift-audit.yml` workflow; when enabled it clusters `PRE_EXISTING_FINGERPRINT_DRIFT_V1` / `FINGERPRINT_QUARANTINED_V1` markers and opens/updates tracker issues |
 | `BRANCH_REBUILD_ENABLED` | `false` | Enable last-resort `orchestrator/project-*` integration-branch rebuilds after resolver escalation has already persisted on the final PR head |
@@ -1923,6 +1952,9 @@ for final verdicts and write with validated transfer when its combined
 decide-and-fix branch is checked out. Unavailable Claude retries OpenCode in
 a fresh isolated sandbox; missing isolation defers instead of running a host
 agent and escalates after `RB_JUDGE_ISOLATION_MAX_FAILURES` failures on one head.
+The in-workflow review-blocked judge likewise runs OpenCode verdicts and fixes
+in fresh sandboxes when Claude is disabled or unavailable; isolation failure
+defers with `judge_skip_reason=isolation_unavailable` instead of running on the host.
 The poller's wave, stall, integration and security-pass judges run read-only in
 that sandbox on both engines. Missing isolation defers the judge without
 consuming a recovery budget and escalates after `JUDGE_ISOLATION_MAX_FAILURES`
@@ -1947,6 +1979,8 @@ cannot start (no CLI, no credential, clarify image build failure or every
 account gated: exit `75`, logged
 `AI_ENGINE_FALLBACK`), the same attempt runs its codex/OpenCode fallback.
 Poller judges retry OpenCode in a fresh isolated sandbox, never host Codex.
+If the decomposer cannot source `scripts/ai_engine.sh`, engine selection warns
+and continues on Codex instead of stopping the orchestration job.
 `AI_ENGINE_<ROLE>=codex` (or `ai:codex` on
 the issue) puts a role back on codex without a code change.
 Review write roles read PR labels from the existing PR-state lookup, including
@@ -2093,7 +2127,7 @@ workflow_dispatch (project description)
 **1.** Copy the three wrapper workflows from [`workflow-templates/`](workflow-templates/) into your consumer repo's `.github/workflows/` directory:
 
 - [`ai-orchestrate.yml`](workflow-templates/ai-orchestrate.yml) — triggers decomposition via `workflow_dispatch`
-- [`ai-orchestrate-clarify-respond.yml`](workflow-templates/ai-orchestrate-clarify-respond.yml) — auto-answers clarification questions on orchestrator issues
+- [`ai-orchestrate-clarify-respond.yml`](workflow-templates/ai-orchestrate-clarify-respond.yml) — auto-answers clarification questions on orchestrator issues and standalone issues
 - [`ai-orchestrate-poll.yml`](workflow-templates/ai-orchestrate-poll.yml) — scheduled poller (every 5 min)
 
 Or create them manually — see the inline examples in the [Quickstart](#quickstart) section above.
@@ -2512,7 +2546,7 @@ Telegram notifications fall into three categories based on their lifecycle:
 
 **Phase-tracked alerts (deleted when the phase completes):**
 For non-orchestrator issues, human-intervention alerts are cleaned up automatically when the next phase begins:
-- **Clarification required** — sent by `clarify.yml` and `plan.yml` for non-orchestrator issues only, deleted when `plan.yml` runs (stored as `<!-- tg_phase:clarify:id -->`). Orchestrator-managed issues skip this alert because clarify uses a label-based fast path (`ai:orchestrator-managed`) that auto-posts `/answer [auto-answered-by-orchestrator]` unless a human forces `/reclarify`; if `plan.yml` cannot auto-parse recommended clarification answers it sends a general tracked `WARNING` and waits for a human `/answer`.
+- **Clarification required** — sent by `clarify.yml` and `plan.yml` for non-orchestrator issues only, deleted when `plan.yml` runs (stored as `<!-- tg_phase:clarify:id -->`). `clarify.yml` sends it only when no automatic answer is coming: questions the standalone auto-decide answered, or delegated to the clarify-respond worker (`STANDALONE_CLARIFY_RESPOND_ENABLED`), page nobody. The worker sends the same `CRITICAL` alert itself if it fails and a question has no RECOMMENDED option to fall back to; an escalation or loop-guard block sends the `WARNING` below. Orchestrator-managed issues skip this alert because clarify uses a label-based fast path (`ai:orchestrator-managed`) that auto-posts `/answer [auto-answered-by-orchestrator]` unless a human forces `/reclarify`; if `plan.yml` cannot auto-parse recommended clarification answers it sends a general tracked `WARNING` and waits for a human `/answer`.
 - **Plan awaiting approval** — sent by `plan.yml` (when `AUTO_IMPLEMENT_ON_CLEAR_PLAN` is not true), deleted when `implement.yml` runs (stored as `<!-- tg_phase:plan:id -->`)
 
 **General tracked alerts (deleted at successful terminal state only):**

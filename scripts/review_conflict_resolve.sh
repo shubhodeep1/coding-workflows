@@ -482,7 +482,7 @@ fi
 # model now uses the sandbox's Git snapshot, not the host's merge index.
 _resolver_disable_opencode_snapshot()
 {
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${RESOLVER_OPENCODE_CONFIG}" <<'PY'
+  PYTHONDONTWRITEBYTECODE=1 python3 - "${1:-${RESOLVER_OPENCODE_CONFIG}}" <<'PY'
 import json
 import os
 from pathlib import Path
@@ -555,6 +555,67 @@ _resolver_model_index_prepare()
   rm -f -- "${RESOLVER_MODEL_INDEX_FILE}" "${RESOLVER_MODEL_INDEX_FILE}.lock" || return 1
   cp -- "${_real_index}" "${RESOLVER_MODEL_INDEX_FILE}" || return 1
   cmp -s -- "${_real_index}" "${RESOLVER_MODEL_INDEX_FILE}"
+}
+
+_resolver_fail_closed()
+{
+  echo "AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=$1 action=fail_closed" >&2
+  echo "::error::Conflict resolver isolation unavailable (reason=$1); refusing host fallback." >&2
+  if type _persist_resolver_retry_state_from_current_failure >/dev/null 2>&1; then
+    RESOLVER_ISOLATION_FAILURE_REASON="$1" _persist_resolver_retry_state_from_current_failure || true
+  fi
+  emit_conflict_resolver_substate "Failed" "${attempt}"
+  rm -f -- "${tmp_output}" "${_stall_status_file}"
+  exit 1
+}
+
+# Each invocation prepares its own snapshot: a failed Claude run may have
+# modified its copy, so the OpenCode retry must never reuse that root.
+_resolver_sandbox_attempt()
+{
+  local sandbox_attempt_engine="$1" sandbox_attempt_root="" sandbox_attempt_config=/dev/null
+  local sandbox_attempt_rc=0
+  resolver_sandbox_failure_reason=""
+  if ! sandbox_attempt_root="$(bash "${resolver_sandbox_sh}" prepare-ephemeral)" || [ -z "${sandbox_attempt_root}" ]; then
+    resolver_sandbox_failure_reason=sandbox_prepare_failed
+    if [ -n "${sandbox_attempt_root}" ]; then
+      REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" bash "${resolver_sandbox_sh}" cleanup || true
+    fi
+    return 77
+  fi
+  if [ "${sandbox_attempt_engine}" = codex ]; then
+    sandbox_attempt_config="${RUNTIME_DIR}/resolver_sandbox_opencode.json"
+    if ! bash "${OPENCODE_CONFIG_WRITER_PATH}" --role writer --model "${MODEL_EDITOR}" \
+      --project-path "$(pwd)" --config-path "${sandbox_attempt_config}" --serena off ||
+      ! _resolver_disable_opencode_snapshot "${sandbox_attempt_config}"; then
+      resolver_sandbox_failure_reason=opencode_config_failed
+      REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" bash "${resolver_sandbox_sh}" cleanup || true
+      return 77
+    fi
+  fi
+  if ! : > "${tmp_output}"; then
+    resolver_sandbox_failure_reason=sandbox_output_unavailable
+    REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" bash "${resolver_sandbox_sh}" cleanup || true
+    return 77
+  fi
+  REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" \
+    timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+    bash "${resolver_sandbox_sh}" run "${_effective_prompt_file}" "${tmp_output}" \
+    "${MODEL_EDITOR}" "${_current_reasoning_effort}" "${sandbox_attempt_config}" "${sandbox_attempt_engine}" CONFLICT_RESOLVER write \
+    || sandbox_attempt_rc=$?
+  if ! REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" bash "${resolver_sandbox_sh}" cleanup; then
+    resolver_sandbox_failure_reason=sandbox_cleanup_failed
+    return 77
+  fi
+  if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then
+    resolver_sandbox_failure_reason=sandbox_transfer_failed
+    return 77
+  fi
+  if [ "${sandbox_attempt_rc}" -eq 2 ]; then
+    resolver_sandbox_failure_reason=sandbox_helper_outdated
+    return 77
+  fi
+  return "${sandbox_attempt_rc}"
 }
 
 # Source-repo only: the final touched-set gate compares against the prepare
@@ -1423,6 +1484,12 @@ def select_verification_tier_from_pr_payload(pr_payload: dict[str, Any], thresho
     if retry_state_head_sha != head_sha:
         return {"tier": "strict", "reason": "retry_state_head_sha_mismatch", "consecutive_failure_count": 0}
     consecutive_failure_count = _parse_nonnegative_int(retry_state.get("consecutive_failure_count"), 0)
+    if str(retry_state.get("isolation_failure_reason", "") or "").strip():
+        return {
+            "tier": "strict",
+            "reason": f"isolation_failure_count={consecutive_failure_count}",
+            "consecutive_failure_count": consecutive_failure_count,
+        }
     return {
         "tier": select_verification_tier(consecutive_failure_count, threshold),
         "reason": f"retry_state_count={consecutive_failure_count}",
@@ -1657,6 +1724,7 @@ def build_resolver_retry_state_artifact(
     run_url: str,
     verifier_module: Any,
     max_items: int = 10,
+    isolation_failure_reason: str = "",
 ) -> dict[str, Any]:
     body = str(pr_payload.get("body", "") or "")
     head = pr_payload.get("head") or {}
@@ -1664,11 +1732,21 @@ def build_resolver_retry_state_artifact(
     if not head_sha:
         return {"ok": False, "reason": "missing PR head SHA in PR_PAYLOAD_FILE"}
 
-    regressed_by_resolver, pre_existing_drift = compute_failure_sets(
-        fingerprints,
-        baseline_state,
-        verifier_module,
-    )
+    if isolation_failure_reason:
+        regressed_by_resolver = [{
+            "issue": "",
+            "pr": pr_number,
+            "kind": "isolation_failure",
+            "path": "",
+            "fp_key": ["isolation_failure", isolation_failure_reason],
+        }]
+        pre_existing_drift = []
+    else:
+        regressed_by_resolver, pre_existing_drift = compute_failure_sets(
+            fingerprints,
+            baseline_state,
+            verifier_module,
+        )
     if not regressed_by_resolver and not pre_existing_drift:
         return {"ok": False, "reason": "no fingerprint failures detected for retry-state persistence"}
 
@@ -1699,15 +1777,18 @@ def build_resolver_retry_state_artifact(
     max_items = max(1, _parse_positive_int(max_items, 10))
     now_iso = _utc_now_iso()
     previous_verification_tier = "strict"
-    if previous_head_sha == head_sha and previous_signature == failure_signature_sha256:
-        previous_verification_tier = select_verification_tier(previous_count, threshold)
-    verification_tier = select_verification_tier(consecutive_failure_count, threshold)
-    tier_downgrade_marker = build_tier_downgrade_marker(
-        previous_verification_tier,
-        verification_tier,
-        consecutive_failure_count,
-        threshold,
-    )
+    verification_tier = "strict"
+    tier_downgrade_marker = ""
+    if not isolation_failure_reason:
+        if previous_head_sha == head_sha and previous_signature == failure_signature_sha256:
+            previous_verification_tier = select_verification_tier(previous_count, threshold)
+        verification_tier = select_verification_tier(consecutive_failure_count, threshold)
+        tier_downgrade_marker = build_tier_downgrade_marker(
+            previous_verification_tier,
+            verification_tier,
+            consecutive_failure_count,
+            threshold,
+        )
     escalated = consecutive_failure_count >= escalation_threshold
     if (
         escalated
@@ -1739,6 +1820,8 @@ def build_resolver_retry_state_artifact(
         "escalated_at": escalated_at,
         "updated_at": now_iso,
     }
+    if isolation_failure_reason:
+        retry_state["isolation_failure_reason"] = isolation_failure_reason
 
     return {
         "ok": True,
@@ -1771,12 +1854,14 @@ def build_resolver_retry_state_artifact(
 
 def main() -> int:
     support_scripts_dir = os.environ.get("SUPPORT_SCRIPTS_DIR", "scripts")
+    isolation_failure_reason = os.environ.get("RESOLVER_ISOLATION_FAILURE_REASON", "").strip()
     verifier_module = None
-    try:
-        verifier_module = load_verifier_module(support_scripts_dir)
-    except Exception as exc:  # noqa: BLE001 - fail-open in shell caller
-        print(json.dumps({"ok": False, "reason": f"failed to load verifier module: {exc}"}, ensure_ascii=True))
-        return 0
+    if not isolation_failure_reason:
+        try:
+            verifier_module = load_verifier_module(support_scripts_dir)
+        except Exception as exc:  # noqa: BLE001 - fail-open in shell caller
+            print(json.dumps({"ok": False, "reason": f"failed to load verifier module: {exc}"}, ensure_ascii=True))
+            return 0
 
     pr_payload, pr_payload_err = _load_json_path(
         os.environ.get("PR_PAYLOAD_FILE", ""),
@@ -1796,23 +1881,26 @@ def main() -> int:
         print(json.dumps({"ok": False, "reason": pr_issue_comments_err}, ensure_ascii=True))
         return 0
 
-    fingerprints, fingerprints_err = _load_json_path(
-        os.environ.get("INTEGRATION_FINGERPRINTS_FILE", ""),
-        dict,
-        {},
-    )
-    if fingerprints_err is not None:
-        print(json.dumps({"ok": False, "reason": fingerprints_err}, ensure_ascii=True))
-        return 0
+    fingerprints = {}
+    baseline_state = {}
+    if not isolation_failure_reason:
+        fingerprints, fingerprints_err = _load_json_path(
+            os.environ.get("INTEGRATION_FINGERPRINTS_FILE", ""),
+            dict,
+            {},
+        )
+        if fingerprints_err is not None:
+            print(json.dumps({"ok": False, "reason": fingerprints_err}, ensure_ascii=True))
+            return 0
 
-    baseline_state, baseline_err = _load_json_path(
-        os.environ.get("RESOLVER_FP_BASELINE_STATE_FILE", ""),
-        dict,
-        {},
-    )
-    if baseline_err is not None:
-        print(json.dumps({"ok": False, "reason": baseline_err}, ensure_ascii=True))
-        return 0
+        baseline_state, baseline_err = _load_json_path(
+            os.environ.get("RESOLVER_FP_BASELINE_STATE_FILE", ""),
+            dict,
+            {},
+        )
+        if baseline_err is not None:
+            print(json.dumps({"ok": False, "reason": baseline_err}, ensure_ascii=True))
+            return 0
 
     run_url = ""
     repository = os.environ.get("GITHUB_REPOSITORY", "")
@@ -1832,6 +1920,7 @@ def main() -> int:
         run_url=run_url,
         verifier_module=verifier_module,
         max_items=_parse_positive_int(os.environ.get("RESOLVER_RETRY_STATE_MAX_ITEMS"), 10),
+        isolation_failure_reason=isolation_failure_reason,
     )
     print(json.dumps(result, sort_keys=True, ensure_ascii=True))
     return 0
@@ -1861,10 +1950,13 @@ _sync_local_pr_body_from_file()
 
 _persist_resolver_retry_state_from_current_failure()
 {
+  local _resolver_isolation_failure_reason="${RESOLVER_ISOLATION_FAILURE_REASON:-}"
   if [ "${IS_INTEGRATION_SYNC:-false}" != "true" ]; then
     return 0
   fi
-  if [ "${RESOLVER_FP_EXIT:-0}" -ne 1 ] && [ "${RESOLVER_FP_VERIFICATION_TIER:-strict}" != "warn_only" ]; then
+  if [ -z "${_resolver_isolation_failure_reason}" ] \
+    && [ "${RESOLVER_FP_EXIT:-0}" -ne 1 ] \
+    && [ "${RESOLVER_FP_VERIFICATION_TIER:-strict}" != "warn_only" ]; then
     return 0
   fi
   if ! [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]]; then
@@ -1879,7 +1971,8 @@ _persist_resolver_retry_state_from_current_failure()
     echo "::warning::Resolver retry-state persistence skipped: PR_PAYLOAD_FILE is missing."
     return 0
   fi
-  if [ ! -f "${INTEGRATION_FINGERPRINTS_FILE:-/nonexistent}" ]; then
+  if [ -z "${_resolver_isolation_failure_reason}" ] \
+    && [ ! -f "${INTEGRATION_FINGERPRINTS_FILE:-/nonexistent}" ]; then
     echo "::warning::Resolver retry-state persistence skipped: INTEGRATION_FINGERPRINTS_FILE is missing."
     return 0
   fi
@@ -1893,7 +1986,8 @@ _persist_resolver_retry_state_from_current_failure()
     echo "::warning::Resolver retry-state persistence continuing without baseline fingerprints state; treating current failures as regressed for retry-state accounting."
     _retry_state_baseline_file=""
   fi
-  if [ ! -f "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" ]; then
+  if [ -z "${_resolver_isolation_failure_reason}" ] \
+    && [ ! -f "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" ]; then
     echo "::warning::Resolver retry-state persistence skipped: verify_integration_fingerprints.py unavailable."
     return 0
   fi
@@ -2367,39 +2461,30 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     # exports AI_ENGINE_RESOLVED_CONFLICT_RESOLVER (CLAUDE_FIXER_ENABLED=false
     # keeps it on codex). Both engines use fresh isolated snapshots.
     resolver_claude_rc=75
-  if [ "${AI_ENGINE_RESOLVED_CONFLICT_RESOLVER:-codex}" = "claude" ]; then
-      resolver_sandbox_root=""
-      if ! resolver_sandbox_root="$(bash "${resolver_sandbox_sh}" prepare-ephemeral)" || [ -z "${resolver_sandbox_root}" ]; then
-        echo 'AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=sandbox_prepare_failed action=opencode_sandbox' >&2
-      else
+    resolver_sandbox_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_sandbox.sh"
+    resolver_workspace_py="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_workspace.py"
+    if [ "${AI_ENGINE_RESOLVED_CONFLICT_RESOLVER:-codex}" = "claude" ]; then
+      if [ ! -f "${resolver_sandbox_sh}" ] || [ ! -f "${resolver_workspace_py}" ]; then
+        _resolver_fail_closed sandbox_prepare_failed
+      elif ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}"; then
+        _resolver_fail_closed sandbox_path_unsupported
+      fi
+      rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
+      resolver_claude_rc=0
+      _resolver_sandbox_attempt claude || resolver_claude_rc=$?
+      if [ "${resolver_claude_rc}" -eq 75 ]; then
+        echo 'AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=claude_unavailable action=sandbox_opencode' >&2
         rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
         resolver_claude_rc=0
-        REVIEW_SANDBOX_ROOT="${resolver_sandbox_root}" \
-          timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-          bash "${resolver_sandbox_sh}" run "${_effective_prompt_file}" "${tmp_output}" \
-          "${MODEL_EDITOR}" "${_current_reasoning_effort}" /dev/null claude CONFLICT_RESOLVER write \
-          || resolver_claude_rc=$?
-        if ! REVIEW_SANDBOX_ROOT="${resolver_sandbox_root}" bash "${resolver_sandbox_sh}" cleanup; then
-          echo '::error::Conflict resolver sandbox cleanup failed; refusing to retry or commit.' >&2
-          exit 1
-        fi
-        if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then
-          echo '::error::Conflict resolver sandbox transfer failed; refusing to accept output.' >&2
-          if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_reason_${tmp_output##*/}" ] &&
-             [ ! -L "${RUNTIME_DIR}/review_sandbox_transfer_reason_${tmp_output##*/}" ] &&
-             [ "$(wc -c < "${RUNTIME_DIR}/review_sandbox_transfer_reason_${tmp_output##*/}")" -le 240 ] &&
-             [ "$(< "${RUNTIME_DIR}/review_sandbox_transfer_reason_${tmp_output##*/}")" = '::error::Review isolation snapshot or transfer rejected (ValueError) reason=transfer_rollback_failed' ]; then
-            exit 1
-          fi
-          rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
-          resolver_claude_rc=1
-        fi
-        if [ "${resolver_claude_rc}" -eq 2 ]; then
-          echo 'AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=sandbox_helper_outdated action=opencode_sandbox' >&2
-          resolver_claude_rc=75
-        fi
+        _resolver_sandbox_attempt codex || resolver_claude_rc=$?
       fi
-      [ "${resolver_claude_rc}" -eq 75 ] || _codex_exit="${resolver_claude_rc}"
+      if [ "${resolver_claude_rc}" -eq 75 ]; then
+        _resolver_fail_closed sandbox_opencode_unavailable
+      elif [ "${resolver_claude_rc}" -eq 77 ]; then
+        _resolver_fail_closed "${resolver_sandbox_failure_reason}"
+      fi
+      _codex_exit="${resolver_claude_rc}"
+      resolver_claude_rc=0
     fi
     if [ "${resolver_claude_rc}" -eq 75 ]; then
       _resolver_sandbox_opencode_attempt

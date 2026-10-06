@@ -2861,15 +2861,16 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'if source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in consolidate
 	assert 'missing=opencode_config_writer failopen=1 output_bytes=0' in consolidate
 	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true' in consolidate
-	assert 'reviewer\n    "${MODEL_EDITOR}"' in rb_judge
-	assert 'writer\n        "${MODEL_EDITOR}"' in rb_judge
+	assert 'review_rb_opencode_sandbox_prepare "${RB_JUDGE_SANDBOX_OPENCODE_CONFIG}" review_rb_judge "${JUDGE_STDERR_FILE}" off' in rb_judge
+	assert 'review_rb_opencode_sandbox_prepare "${RB_FIX_OPENCODE_CONFIG}" review_rb_fix "${RB_FIX_STDERR}" "${rb_fix_serena_mode}"' in rb_judge
 	assert 'OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh}"' in rb_judge
 	assert 'opencode_emit_failure_alert review_rb_judge reviewer' in rb_judge
 	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in rb_judge
 	assert 'opencode_emit_failure_alert review_rb_judge reviewer "${MODEL_EDITOR:-unknown}" 1 config_writer_missing' in rb_judge
 	assert 'source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" 2>/dev/null || true' in rb_judge
-	assert 'if ! review_rb_prepare_opencode_config reviewer review_rb_judge "${RB_JUDGE_OPENCODE_CONFIG}" off; then\n  exit 1\nfi' in rb_judge
-	assert 'if ! review_rb_prepare_opencode_config writer review_rb_fix "${RB_FIX_OPENCODE_CONFIG}" "${rb_fix_serena_mode}"; then\n        rm -f "${RB_FIX_STDERR}" "${rb_fix_stall_status_file}"\n        exit 1\n      fi' in rb_judge
+	assert '[ "${rb_oc_phase}" != review_rb_judge ] || rb_oc_role=reviewer' in rb_judge
+	assert 'if ! review_rb_prepare_opencode_config "${rb_oc_role}" "${rb_oc_phase}" "${rb_oc_config_path}" "${rb_oc_serena_mode}"; then' in rb_judge
+	assert 'review_rb_opencode_sandbox_finish "${rb_fix_rc}" "${RB_FIX_OUTPUT}" "${RB_FIX_STDERR}" || rb_fix_rc=$?' in rb_judge
 	assert 'opencode_run_cmd "$@"' in resolver
 	assert 'writer\n    "${MODEL_EDITOR}"' in resolver
 	assert '"${_current_reasoning_effort}"' in resolver

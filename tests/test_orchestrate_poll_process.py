@@ -4843,7 +4843,6 @@ def test_engine_sha_requires_own_support_checkout() -> None:
 	with tempfile.TemporaryDirectory(prefix="poller-engine-sha-") as tmp:
 		parent = Path(tmp)
 		support_checkout = parent / ".codex-workflow-src"
-		support_checkout.mkdir()
 		git_env = _git_test_env()
 		for key in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
 			git_env.pop(key, None)
@@ -4863,6 +4862,10 @@ def test_engine_sha_requires_own_support_checkout() -> None:
 			], cwd=parent, env=git_env, capture_output=True, text=True, check=True)
 			return result.stdout.strip()
 
+		support_checkout.symlink_to(parent, target_is_directory=True)
+		assert resolve() == "ORCHESTRATOR_ENGINE_SHA sha=unknown source=unresolved"
+		support_checkout.unlink()
+		support_checkout.mkdir()
 		assert resolve() == "ORCHESTRATOR_ENGINE_SHA sha=unknown source=unresolved"
 		support_sha = commit_empty(support_checkout)
 		assert support_sha != parent_sha

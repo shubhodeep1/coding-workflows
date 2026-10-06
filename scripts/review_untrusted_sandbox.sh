@@ -325,7 +325,7 @@ assert config["provider"]["openrouter"]["options"]["baseURL"] == "https://openro
 assert config["model"] == "openrouter/" + sys.argv[3]
 config["provider"]["openrouter"]["options"] = {"baseURL": "http://127.0.0.1:8765/api/v1", "apiKey": "{env:OPENROUTER_API_KEY}"}
 config.pop("mcp", None)  # Serena runs only on the host, never inside the writer.
-if sys.argv[4] == "read" and sys.argv[5] in {"WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE"}:
+if sys.argv[4] == "read" and sys.argv[5] in {"WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE", "RB_JUDGE"}:
 	# OpenCode snapshots write to the private /source/.git; the read role's
 	# source is mounted read-only and the trusted host snapshot already exists.
 	config["snapshot"] = False
@@ -364,8 +364,15 @@ done
 # No host checkout, HOME, Docker socket, tokens or Git remote is mounted.
 rc=0
 opencode_source_mount="type=bind,src=${root}/source,dst=/source"
+opencode_agent=writer
 case "${claude_role}" in
 	WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE) opencode_source_mount+=',readonly' ;;
+	RB_JUDGE)
+		if [ "${claude_access}" = read ]; then
+			opencode_source_mount+=',readonly'
+			opencode_agent=reviewer
+		fi
+		;;
 esac
 env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run --rm --name "${container}" \
 	--user "$(id -u):$(id -g)" --network none --read-only --cap-drop ALL \
@@ -378,14 +385,14 @@ env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run --rm --name "${container}"
 	--mount "type=bind,src=${root}/prompt,dst=/prompt,readonly" \
 	--mount "type=bind,src=$(realpath "${support}/clarify_openrouter_broker.py"),dst=/bridge.py,readonly" \
 	--env HOME=/home/agent --env OPENROUTER_API_KEY=isolated-placeholder \
-	--env "MODEL=${model}" --env "VARIANT=${variant}" --workdir /source "${image}" /bin/bash -c '
+	--env "MODEL=${model}" --env "VARIANT=${variant}" --env "OPENCODE_AGENT=${opencode_agent}" --workdir /source "${image}" /bin/bash -c '
 		set -euo pipefail
 		python3 /bridge.py review-bridge /socket/provider.sock &
 		bridge_pid=$!
 		trap '\''kill "${bridge_pid}" 2>/dev/null || true'\'' EXIT
 		python3 -c '\''import socket,time; [(time.sleep(.1) if s.connect_ex(("127.0.0.1",8765)) else exit(0)) for s in (socket.socket() for _ in range(50))]; exit(1)'\''
 		export PATH=/source/.review-venv/bin:$PATH OPENCODE_CONFIG=/config.json NO_COLOR=1
-		opencode run --dir /source -m "openrouter/${MODEL}" --agent writer --variant "${VARIANT}" --title coding-workflows-agent-run --print-logs --log-level INFO --auto < /prompt
+		opencode run --dir /source -m "openrouter/${MODEL}" --agent "${OPENCODE_AGENT}" --variant "${VARIANT}" --title coding-workflows-agent-run --print-logs --log-level INFO --auto < /prompt
 	' > "${output}" || rc=$?
 	# Never transfer on a failed model invocation or a swapped host baseline.
 	# Arg 9 (read) applies to both engines; read-only roles never transfer edits back.
