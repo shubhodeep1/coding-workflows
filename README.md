@@ -1667,7 +1667,8 @@ through `clarify → plan → implement → review`.
   markers in the untrusted diagnosis, failure evidence, and run summaries.
   Only the intake's own header can set `Target branch:`, `Integration branch:`,
   or `Tracking issue:`; quoted evidence remains readable but cannot retarget
-  the fix.
+  the fix. After composition, unexpected routing directives or issue markers
+  stop issue creation rather than silently retargeting the fix.
 - **Heal PR reconcile:** a heal PR filed on a source PR's head branch is
   stacked on that PR. When a pull request in coding-workflows closes, the
   `heal-pr-reconcile` job in `internal-cancel-on-pr-close.yml` runs

@@ -1698,6 +1698,7 @@ def compose_issue_body(
 		parts.append(f"- **Integration branch:** `{integration_branch}`")
 	if target_branch or tracking_issue:
 		parts.append("")
+	routing_header = parts[:]
 	parts.append(f"## Automated workflow failure heal (generation {gen} of max {max_depth})")
 	parts.append("")
 	if classification == "base-self-inflicted":
@@ -1790,7 +1791,17 @@ def compose_issue_body(
 		"review/autofix failure, from the same pull request) are recorded as occurrence comments on "
 		"this issue while it stays open._"
 	)
-	return "\n".join(parts) + "\n"
+	body = "\n".join(parts) + "\n"
+	body_lines = body.splitlines()
+	if body_lines[:len(routing_header)] != routing_header:
+		raise ValueError("heal issue routing header contains unexpected lines")
+	untrusted_body = "\n".join(body_lines[len(routing_header):])
+	if re.search(
+		r"\b(?:integration\s+branch|target\s+branch|tracking\s+issue|depends\s+on|local\s+id|managed\s+by|prior_pr_baseline_branch|files_touched)\s*\**\s*:|Re-issued from\s*#|review-blocked-reissue|<!--",
+		untrusted_body, re.IGNORECASE,
+	):
+		raise ValueError("heal issue body contains untrusted routing metadata")
+	return body
 
 
 def compose_occurrence_comment(payload: dict[str, Any], *, intake_run_url: str) -> str:

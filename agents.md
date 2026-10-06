@@ -221,6 +221,7 @@ Phases of the unattended pipeline (each is a separate workflow file under
      inherited only from heal-labeled issues with a canonical marker header
      and a bot or owner/member/collaborator author. The
      composed issue neutralizes untrusted routing keys in evidence and diagnosis
+     and rejects any remaining routing directives or extra markers before filing,
      so only intake-owned branch metadata can select the fix target.
      Fix PRs linked to `ai:workflow-heal` issues run the single-issue security
     pass at their current head; the heal label and `fp` marker do not exempt
