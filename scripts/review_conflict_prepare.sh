@@ -470,38 +470,50 @@ if [ "${IS_INTEGRATION_SYNC}" = "true" ] && [[ "${INTEGRATION_TRACKING_NUM}" =~ 
   INTEGRATION_TRACKING_BODY="$(printf '%s' "${_ti_json}" | jq -r '.body // ""' 2>/dev/null || echo "")"
   unset _ti_json
 
-  _ti_comments_raw="$(mktemp)"
-  if gh_retry gh api --paginate \
-    "repos/${GITHUB_REPOSITORY}/issues/${INTEGRATION_TRACKING_NUM}/comments?per_page=100" \
-    > "${_ti_comments_raw}" 2>/dev/null; then
-    _state_payload="$(jq -s '
-      ([.[][] | select(.body | contains("ORCHESTRATOR_STATE_V1"))] // [])
-      | last // {}
-      | .body // ""
-      | capture("ORCHESTRATOR_STATE_V1\\n(?<json>(.|\\n)*)\\nORCHESTRATOR_STATE_V1")
-      | .json // ""
-    ' "${_ti_comments_raw}" 2>/dev/null || echo '""')"
-    _state_json="$(printf '%s' "${_state_payload}" | jq -r '.' 2>/dev/null || echo "")"
-    if [ -n "${_state_json}" ]; then
-      # Build the merged sub-issues list (id : github_issue : status)
-      INTEGRATION_MERGED_SUB_ISSUES_LIST="$(printf '%s' "${_state_json}" | jq -r '
-        [
-          .waves[]?.issues[]?
-          | select(.status == "merged")
-          | "          - " + (.id // "?") + " (issue #" + ((.github_issue // 0) | tostring) + ")"
-        ] | join("\n")
-      ' 2>/dev/null || echo "")"
-      INTEGRATION_MERGED_SUB_ISSUE_COUNT="$(printf '%s' "${_state_json}" | jq -r '
-        [.waves[]?.issues[]? | select(.status == "merged")] | length
-      ' 2>/dev/null || echo "0")"
-      INTEGRATION_FINGERPRINTS_JSON="$(printf '%s' "${_state_json}" | jq -c '
-        .merged_issue_fingerprints // {}
-      ' 2>/dev/null || echo "{}")"
-    fi
-    unset _state_payload _state_json
+  # GH_TOKEN comes from GH_PAT; a different/unavailable identity degrades
+  # resolver context rather than accepting another commenter's state.
+  if command -v _safe_gh_jq >/dev/null 2>&1; then
+    _conflict_state_login="$(gh_retry _safe_gh_jq "user" --jq '.login // ""' 2>/dev/null || true)"
+  else
+    _conflict_state_login="$(gh_retry gh api user --jq '.login // ""' 2>/dev/null || true)"
   fi
-  rm -f "${_ti_comments_raw}"
-  unset _ti_comments_raw
+  if [[ "${_conflict_state_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+    _ti_comments_raw="$(mktemp)"
+    if gh_retry gh api --paginate \
+      "repos/${GITHUB_REPOSITORY}/issues/${INTEGRATION_TRACKING_NUM}/comments?per_page=100" \
+      > "${_ti_comments_raw}" 2>/dev/null; then
+      _state_payload="$(jq -s --arg login "${_conflict_state_login}" '
+        ([.[][] | select((.user.login // "") == $login) | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] // [])
+        | last // {}
+        | .body // ""
+        | capture("ORCHESTRATOR_STATE_V1\\n(?<json>(.|\\n)*)\\nORCHESTRATOR_STATE_V1")
+        | .json // ""
+      ' "${_ti_comments_raw}" 2>/dev/null || echo '""')"
+      _state_json="$(printf '%s' "${_state_payload}" | jq -r '.' 2>/dev/null || echo "")"
+      if [ -n "${_state_json}" ]; then
+        # Build the merged sub-issues list (id : github_issue : status)
+        INTEGRATION_MERGED_SUB_ISSUES_LIST="$(printf '%s' "${_state_json}" | jq -r '
+          [
+            .waves[]?.issues[]?
+            | select(.status == "merged")
+            | "          - " + (.id // "?") + " (issue #" + ((.github_issue // 0) | tostring) + ")"
+          ] | join("\n")
+        ' 2>/dev/null || echo "")"
+        INTEGRATION_MERGED_SUB_ISSUE_COUNT="$(printf '%s' "${_state_json}" | jq -r '
+          [.waves[]?.issues[]? | select(.status == "merged")] | length
+        ' 2>/dev/null || echo "0")"
+        INTEGRATION_FINGERPRINTS_JSON="$(printf '%s' "${_state_json}" | jq -c '
+          .merged_issue_fingerprints // {}
+        ' 2>/dev/null || echo "{}")"
+      fi
+      unset _state_payload _state_json
+    fi
+    rm -f "${_ti_comments_raw}"
+    unset _ti_comments_raw
+  else
+    echo "::warning::review_conflict_prepare: pipeline identity unavailable; orchestrator state not read"
+  fi
+  unset _conflict_state_login
 
   if [ -z "${INTEGRATION_MERGED_SUB_ISSUES_LIST}" ]; then
     INTEGRATION_MERGED_SUB_ISSUES_LIST="          (no merged sub-issues recorded in tracking-issue state — this typically means the integration branch is empty or state is not yet seeded)"
