@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6463,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6463\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6484\",\"pr_number\":6484,\"branch\":\"ai/issue-6463\",\"run_id\":\"37407819285\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37407819285\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/ci.yml\",\".github/workflows/clarify.yml\",\".github/workflows/implement.yml\",\".github/workflows/orchestrate_poll.yml\",\".github/workflows/plan.yml\",\"README.md\",\"agents.md\",\"changelog.d/6463-heal-editor-privilege-boundary.md\",\"docs/INVENTORY.md\",\"scripts/clarify_isolated_run.sh\",\"scripts/clarify_sandbox/Dockerfile\",\"scripts/files_touched_scope_guard.py\",\"scripts/heal_isolated_implement.sh\",\"scripts/implement_commit_changes.sh\",\"scripts/implement_heal_preflight.sh\",\"scripts/orchestrate_poll_process.sh\",\"scripts/review_rb_judge.sh\",\"scripts/review_untrusted_workspace.py\",\"scripts/run_plan_codex.sh\",\"scripts/stage_workflow_support.sh\",\"scripts/workflow_failure_heal.py\",\"scripts/workflow_failure_heal_evidence.sh\",\"scripts/workflow_failure_heal_intake.sh\",\"scripts/workflow_failure_heal_report.sh\",\"tests/test_files_touched_scope_guard.py\",\"tests/test_heal_isolated_editor.py\",\"tests/test_workflow_failure_heal.py\",\"tests/test_workflow_untrusted_input_contract.py\"]}",
+  "fingerprint": "e0ad17d93e33e0091f60f2d45b44d4baaade7b0db02a2d839d1d9964542799c8",
+  "lineage": {
+    "issue_number": 6463,
+    "parent_ids": [],
+    "pr_number": 6484,
+    "run_id": "37407819285",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37407819285",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6484"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261006040723_270fe2777b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6463,
+    "level": "run",
+    "pr_number": 6484,
+    "run_id": "37407819285"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6463: https://github.com/shubhodeep1/coding-workflows/pull/6484",
+  "timestamps": {
+    "created_at": "2026-10-06T04:07:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
