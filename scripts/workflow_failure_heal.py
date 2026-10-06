@@ -362,7 +362,7 @@ def phase_report_workflow_paths(phase: str, *, source_repo: str, self_repo: str)
 	return paths
 
 
-def verify_phase_report_provenance(payload: Any, *, run: Any, jobs: Any, comments: Any, self_repo: str) -> dict[str, Any]:
+def verify_phase_report_provenance(payload: Any, *, run: Any, jobs: Any, comments: Any, self_repo: str, trusted_author: str | None) -> dict[str, Any]:
 	"""Check GitHub-read evidence before acting on an untrusted phase report."""
 	refs = payload.get("run_refs") if isinstance(payload, dict) else None
 	reason = payload.get("failure_reason") if isinstance(payload, dict) else None
@@ -405,9 +405,12 @@ def verify_phase_report_provenance(payload: Any, *, run: Any, jobs: Any, comment
 		and any(ref["run_id"] == run_id for ref in extract_run_refs([comment["body"]], source_repo))]
 	if not linked:
 		return decision(False, "no_linking_comment")
+	if not trusted_author:
+		return decision(False, "comment_author_unavailable")
 	if not any(
-		(isinstance(comment.get("user"), dict) and comment["user"].get("login") in PHASE_REPORT_TRUSTED_BOT_LOGINS)
-		or comment.get("author_association") in PHASE_REPORT_TRUSTED_ASSOCIATIONS
+		isinstance(comment.get("user"), dict) and comment["user"].get("login") == trusted_author
+		and (trusted_author in PHASE_REPORT_TRUSTED_BOT_LOGINS
+			or comment.get("author_association") in PHASE_REPORT_TRUSTED_ASSOCIATIONS)
 		for comment in linked
 	):
 		return decision(False, "untrusted_comment_author")
@@ -2397,7 +2400,8 @@ def _cmd_verify_phase_provenance(args: argparse.Namespace) -> int:
 			return None
 
 	_write_json(verify_phase_report_provenance(read_optional(args.payload_json), run=read_optional(args.run_json),
-		jobs=read_optional(args.jobs_json), comments=read_optional(args.comments_json), self_repo=args.self_repo))
+		jobs=read_optional(args.jobs_json), comments=read_optional(args.comments_json), self_repo=args.self_repo,
+		trusted_author=args.comment_author))
 	return 0
 
 
@@ -2633,6 +2637,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--jobs-json", required=True)
 	p.add_argument("--comments-json", required=True)
 	p.add_argument("--self-repo", required=True)
+	p.add_argument("--comment-author", required=True)
 	p.set_defaults(func=_cmd_verify_phase_provenance)
 
 	p = sub.add_parser("wrap-dispatch", help="Print the repository_dispatch body with the report enveloped under client_payload.report")

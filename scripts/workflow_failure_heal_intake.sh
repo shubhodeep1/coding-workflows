@@ -288,10 +288,18 @@ if [ "${SOURCE_KIND}" = "phase_failure" ]; then
 	PHASE_JOBS_FILE="${LOG_DIR}/run-${PHASE_RUN_ID}-jobs.json"
 	PHASE_COMMENTS_FILE="${RUNTIME_DIR}/phase_issue_comments.json"
 	PHASE_PROVENANCE_FILE="${RUNTIME_DIR}/phase_provenance.json"
+	# The reporter posts failure comments with GH_PAT; the intake uses the
+	# same pipeline account. A collaborator's own comment cannot prove lineage.
+	# §14 audit: run/job and issue reads do not identify the token's account.
+	PHASE_COMMENT_AUTHOR="$(gh_retry gh api --method GET user --jq '.login // empty' 2>/dev/null || true)"
+	if [ -z "${PHASE_COMMENT_AUTHOR}" ]; then
+		log "warn phase_provenance_fetch_failed evidence=identity source=${SOURCE_REPO} run=${PHASE_RUN_ID}"
+	fi
 	# §14 audit: the existing jobs list has no run event, path, repository or
 	# status; job logs, heal-issue lists and branch reads have no run metadata.
 	# This is one read of the claimed run in the registered source repository.
 	if ! gh_api_json_to_file "${PHASE_RUN_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${PHASE_RUN_ID}"; then
+		log "warn phase_provenance_fetch_failed evidence=run source=${SOURCE_REPO} run=${PHASE_RUN_ID}"
 		rm -f "${PHASE_RUN_FILE}"
 	fi
 	# §14 audit: the intake only POSTs to source-issue comments; the reporter's
@@ -300,11 +308,13 @@ if [ "${SOURCE_KIND}" = "phase_failure" ]; then
 	if ! gh_retry gh api --method GET --paginate "repos/${SOURCE_REPO}/issues/${ISSUE_NUMBER}/comments" -F per_page=100 \
 		--jq '.[] | {user: {login: (.user.login // "")}, author_association: (.author_association // ""), body: (.body // "")}' \
 		| jq -s '.' > "${PHASE_COMMENTS_FILE}"; then
+		log "warn phase_provenance_fetch_failed evidence=comments source=${SOURCE_REPO} issue=${ISSUE_NUMBER} run=${PHASE_RUN_ID}"
 		rm -f "${PHASE_COMMENTS_FILE}"
 	fi
 	if ! python3 "${HEAL_PY}" verify-phase-provenance --payload-json "${PAYLOAD_FILE}" \
 		--run-json "${PHASE_RUN_FILE}" --jobs-json "${PHASE_JOBS_FILE}" \
-		--comments-json "${PHASE_COMMENTS_FILE}" --self-repo "${SELF_REPO}" > "${PHASE_PROVENANCE_FILE}" \
+		--comments-json "${PHASE_COMMENTS_FILE}" --self-repo "${SELF_REPO}" \
+		--comment-author "${PHASE_COMMENT_AUTHOR}" > "${PHASE_PROVENANCE_FILE}" \
 		|| ! jq -e 'type == "object" and (.verified | type == "boolean") and (.reason | type == "string")' "${PHASE_PROVENANCE_FILE}" >/dev/null 2>&1; then
 		printf '{"verified":false,"reason":"verifier_error"}\n' > "${PHASE_PROVENANCE_FILE}"
 	fi

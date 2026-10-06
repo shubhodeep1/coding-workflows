@@ -199,8 +199,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
     escalated (`reason=heal_issue_failed_itself`). Implement skips guard
     blocks, diagnosed fix-up failures and `BLOCKED` verdicts through the job
     output `heal_report`. Before fingerprinting or mutation, the intake verifies
-    phase reports against the GitHub-read run, failed phase job and trusted
-    source-issue comment linking that run; mismatches and read failures skip
+    phase reports against the GitHub-read run, failed phase job and source-issue
+    comment from the authenticated pipeline account linking that run; mismatches,
+    unavailable account identity and read failures skip
     with `WORKFLOW_HEAL skip reason=phase_report_unverified` and a WARNING.
     Its comment streak trusts only the authenticated
     workflow account; cancellations and successful implementation break the
