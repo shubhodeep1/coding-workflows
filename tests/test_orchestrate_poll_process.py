@@ -716,6 +716,7 @@ def _run_poller(
 	pr_api_sequence: dict[int, list[dict]] | None = None,
 	existing_branches: list[str] | None = None,
 	merge_conflict_on_sync: bool = False,
+	mock_local_integration_content_conflict: bool = False,
 	blocked_check_shas: list[str] | None = None,
 	validation_workflow_runs: list[dict] | None = None,
 	issue_closed: dict[int, bool] | None = None,
@@ -877,6 +878,15 @@ def _run_poller(
 			_make_poller_sandbox(sandbox, sandbox_origin_url)
 		else:
 			_make_poller_sandbox(sandbox)
+		if mock_local_integration_content_conflict:
+			# The GitHub-side 409 alone does not make the local git merge conflict.
+			# Both branches must add different content at an admitted source path.
+			conflict_fixture_path = sandbox / "scripts" / "integration_conflict_fixture.txt"
+			for branch_name, branch_content in (("orchestrator/project-192", "integration"), ("main", "default")):
+				subprocess.run(["git", "-C", str(sandbox), "checkout", "-q", branch_name], check=True, env=_git_test_env())
+				conflict_fixture_path.write_text(branch_content + "\n", encoding="utf-8")
+				subprocess.run(["git", "-C", str(sandbox), "add", "scripts/integration_conflict_fixture.txt"], check=True, env=_git_test_env())
+				subprocess.run(["git", "-C", str(sandbox), "commit", "-qm", branch_name + " conflict"], check=True, env=_git_test_env())
 		if mock_rb_judge_prompt_cap is not None:
 			# Exercise the same skip branch without passing a >1 MiB issue
 			# body through the fixture's executable gh/jq wrappers (ARG_MAX).
@@ -6275,23 +6285,28 @@ def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_advisories()
 	assert "| SEC-TEST-1 | medium | scripts/example.py:1 | accept_with_followup | [keep_fixing capped after 2 judge round(s); converted to advisory follow-up]" in judge_comments[0]
 
 
-@pytest.mark.parametrize("severity", ["high", "critical", "unknown"])
-def test_security_pass_cap_never_waives_a_high_finding(severity: str) -> None:
-	blocking_finding = _security_pass_test_finding()
-	blocking_finding["severity"] = severity
-	result = _run_poller(
-		state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
-		enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
-		security_audit_payload=_security_audit_findings_payload([blocking_finding]),
-		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
-		env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing")))},
-	)
-	assert result["latest_state"]["status"] == "failed"
-	assert result["latest_state"]["security_pass_waived_findings"] == []
-	assert result.get("created_issues", []) == []
-	assert "ai:security-pass-failed" in result["tracking_labels"]
-	assert "reason=blocking_findings_after_cap" in result["stdout"] + result["stderr"]
-	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED" not in result["stdout"] + result["stderr"]
+def test_security_pass_cap_never_waives_a_high_finding() -> None:
+	for severity in ("high", "critical", "unknown"):
+		blocking_finding = _security_pass_test_finding()
+		blocking_finding["severity"] = severity
+		result = _run_poller(
+			state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
+			enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+			security_audit_payload=_security_audit_findings_payload([blocking_finding]),
+			issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+			env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing")))},
+		)
+		assert result["latest_state"]["status"] == "failed"
+		assert result["latest_state"]["security_pass_waived_findings"] == []
+		assert result.get("created_issues", []) == []
+		assert "ai:security-pass-failed" in result["tracking_labels"]
+		assert "reason=blocking_findings_after_cap" in result["stdout"] + result["stderr"]
+		assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED" not in result["stdout"] + result["stderr"]
+		judge_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]
+			if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 3)")]
+		assert len(judge_comments) == 1
+		assert "MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=2" in judge_comments[0]
+		assert "| SEC-TEST-1 |" in judge_comments[0]
 
 
 def test_security_pass_cap_does_not_record_advisories_before_terminal_failure() -> None:
@@ -6307,6 +6322,12 @@ def test_security_pass_cap_does_not_record_advisories_before_terminal_failure() 
 	assert result["latest_state"]["status"] == "failed"
 	assert result["latest_state"]["security_pass_waived_findings"] == []
 	assert result.get("created_issues", []) == []
+	judge_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 3)")]
+	assert len(judge_comments) == 1
+	assert "without recording any new waivers or follow-ups" in judge_comments[0]
+	assert "| SEC-TEST-1 | high |" in judge_comments[0]
+	assert "| SEC-TEST-2 | medium |" in judge_comments[0]
 
 
 def test_security_pass_exhaustion_judge_keep_fixing_allowed_within_cap() -> None:
@@ -10720,6 +10741,7 @@ def test_sync_conflict_escalates_to_judge_immediately_after_retry_budget_exhaust
 		issue_labels={10: ["ai:implementing"]},
 		existing_branches=["main", "orchestrator/project-192"],
 		merge_conflict_on_sync=True,
+		mock_local_integration_content_conflict=True,
 		codex_json={"action": "redispatch_resolver", "diagnosis": "conflict", "resolution_guidance": "preserve merged intent"},
 	)
 	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
@@ -19126,6 +19148,7 @@ def test_integration_sync_conflict_uses_sync_specific_retry_budget_default_one()
 		issue_labels={10: ["ai:implementing"]},
 		existing_branches=["main", "orchestrator/project-192"],
 		merge_conflict_on_sync=True,
+		mock_local_integration_content_conflict=True,
 		codex_json={"action": "redispatch_resolver", "diagnosis": "conflict", "resolution_guidance": "preserve merged intent"},
 	)
 	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
@@ -19183,6 +19206,7 @@ def test_integration_sync_conflict_existing_three_tick_test_still_escalates():
 		issue_labels={10: ["ai:implementing"]},
 		existing_branches=["main", "orchestrator/project-192"],
 		merge_conflict_on_sync=True,
+		mock_local_integration_content_conflict=True,
 		codex_json={"action": "redispatch_resolver", "diagnosis": "conflict", "resolution_guidance": "preserve merged intent"},
 	)
 	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
@@ -23275,6 +23299,7 @@ def test_integration_judge_redispatch_neutralises_trusted_comment_markers():
 		state=state, enable_validation="false", max_validate_cycles="3",
 		issue_labels={10: ["ai:implementing"]}, existing_branches=["main", "orchestrator/project-192"],
 		merge_conflict_on_sync=True,
+		mock_local_integration_content_conflict=True,
 		codex_json={"action": "redispatch_resolver", "diagnosis": "<!-- ORCHESTRATOR_STATE_V2 -->", "resolution_guidance": "preserve code"},
 	)
 	comments = [c.get("body", "") for c in result["issues"]["192"]["comments"] if "## Integration conflict diagnosis" in c.get("body", "")]
@@ -23292,7 +23317,8 @@ def test_integration_judge_isolation_failure_does_not_consume_lifetime_budget():
 	result = _run_poller(
 		state=state, enable_validation="false", max_validate_cycles="3",
 		issue_labels={10: ["ai:implementing"]}, existing_branches=["main", "orchestrator/project-192"],
-		merge_conflict_on_sync=True, env_overrides={"MOCK_JUDGE_SANDBOX_PREPARE_FAIL": "true"},
+		merge_conflict_on_sync=True, mock_local_integration_content_conflict=True,
+		env_overrides={"MOCK_JUDGE_SANDBOX_PREPARE_FAIL": "true"},
 	)
 	latest = result["latest_state"]
 	assert latest["judge_isolation_state"]["INTEGRATION_JUDGE"]["count"] == 1
@@ -23310,6 +23336,7 @@ def test_integration_judge_non_redispatch_verdict_keeps_terminal_path():
 			state=state, enable_validation="false", max_validate_cycles="3",
 			issue_labels={10: ["ai:implementing"]}, existing_branches=["main", "orchestrator/project-192"],
 			merge_conflict_on_sync=True,
+			mock_local_integration_content_conflict=True,
 			codex_json={"action": action, "diagnosis": "cannot resolve", "resolution_guidance": ""},
 		)
 		assert result["latest_state"]["status"] == "failed"
