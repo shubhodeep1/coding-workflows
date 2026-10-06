@@ -4632,6 +4632,8 @@ def test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer(
 		""")
 	for error, roster, fallback_status, expected_count, health_decision in (
 		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2, ""),
+		("maximum context length is 262144 tokens, however you requested 300000 tokens", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2, ""),
+		("model context window full", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2, ""),
 		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "failed", 2, ""),
 		("HTTP 401 unauthorized", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 1, ""),
 		("maximum context length exceeded", "mistralai/mistral-small-2603", "success", 1, ""),

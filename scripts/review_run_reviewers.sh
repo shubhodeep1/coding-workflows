@@ -5180,7 +5180,7 @@ run_reviewer_pass() {
   if [ "${REVIEW_TIER:-}" = "lite" ] && [ "${#pass_models[@]}" -eq 1 ] \
     && [ "${pass_models[0]}" = "mistralai/mistral-small-2603" ] && [ "${pass_successful}" -eq 0 ] \
     && [ -f "${pass_status_files[0]}" ] && [ "$(cat "${pass_status_files[0]}")" = "failed" ] \
-    && grep -Eiq 'context.{0,50}(exceed|overflow|too long)|exceed.{0,50}context|too many (input )?tokens|prompt (is )?too long' "${pass_log_files[0]}" \
+    && grep -Eiq 'context.{0,50}(exceed|overflow|too long|length is [0-9]+ tokens|window full)|exceed.{0,50}context|too many (input )?tokens|prompt (is )?too long' "${pass_log_files[0]}" \
     && normalize_reviewer_model_list "${REVIEWER_MODELS}" | grep -Fxq 'openai/gpt-6-luna' \
     && [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
     if ! reviewer_circuit_breaker_enabled || {
