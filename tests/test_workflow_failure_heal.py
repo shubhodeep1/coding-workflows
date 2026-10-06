@@ -3379,3 +3379,286 @@ def test_review_autofix_failure_comment_names_the_failed_step_and_first_error() 
 	assert 'echo "AUTOFIX_FAILURE_FIRST_ERROR=${first_error}" >> "$GITHUB_ENV"' in wf
 	assert '"**Failed step:** \\`${AUTOFIX_FAILED_STEP//\\`/\\\'}\\`"' in wf
 	assert '"**First error:** \\`${AUTOFIX_FAILURE_FIRST_ERROR//\\`/\\\'}\\`"' in wf
+
+
+# ---------------------------------------------------------------------------
+# clarify / plan / implement failures (phase_failure, heal-report job)
+# ---------------------------------------------------------------------------
+
+PHASE_REPORT_SCRIPT = SCRIPTS_DIR / "workflow_failure_heal_phase_report.sh"
+
+
+def _plan_failed_comment(repo: str, run_id: int) -> dict:
+	# The body plan.yml's "Comment on issue failure" step posts.
+	return {
+		"body": (
+			"AI planning workflow failed.\n\nWorkflow: AI Plan\nIssue: #42\n"
+			f"Issue URL: https://github.com/{repo}/issues/42\n"
+			"Context: AI Plan phase failed before posting the implementation plan.\n"
+			"Hint: Check the AI Plan run logs and inspect the first failed step.\n"
+			f"Run: https://github.com/{repo}/actions/runs/{run_id}"
+		)
+	}
+
+
+def _issue_6413_comments(repo: str) -> list[dict]:
+	# The comment trail of #6413: clarify finished, then plan failed again on
+	# every stall-recovery /answer.
+	return [
+		{"body": "<!-- ai:clarification-questions -->\nClarification required\n\nQ1: ..."},
+		{"body": "/answer [auto-answered-by-orchestrator]\n\nQ1: A"},
+		{"body": "<!-- ai:auto-decisions:v1 -->\n## Auto-decisions"},
+		_plan_failed_comment(repo, 101),
+		{"body": "<!-- tg_cleanup:9186,9217 -->"},
+		{"body": "<!-- AI_STANDALONE_STALL_STATE_V1\n{}\nAI_STANDALONE_STALL_STATE_V1 -->"},
+		{"body": "/answer\n\n_Standalone stall recovery: planning stalled. Re-triggering plan generation._"},
+		_plan_failed_comment(repo, 102),
+		{"body": "/answer [auto-answered-by-poller]\n\n_Standalone stall recovery: clarification stalled._"},
+	]
+
+
+def test_phase_failure_streak_counts_the_trailing_failures_of_one_phase() -> None:
+	comments = _issue_6413_comments(CONSUMER_REPO)
+	# The failed run's own comment is already on the issue.
+	result = heal.phase_failure_streak([*comments, _plan_failed_comment(CONSUMER_REPO, 103)], phase="plan", repo=CONSUMER_REPO, run_id="103")
+	assert result == {"streak": 3, "run_ids": ["102", "101"]}
+	# Its comment step failed: the run is counted on top.
+	assert heal.phase_failure_streak(comments, phase="plan", repo=CONSUMER_REPO, run_id=103) == {"streak": 3, "run_ids": ["102", "101"]}
+	# A finished plan ends an implement streak; another phase's failure ends one too.
+	implement_failed = {"body": f"AI implementation workflow failed for https://github.com/{CONSUMER_REPO}/issues/42. Run: https://github.com/{CONSUMER_REPO}/actions/runs/201"}
+	trail = [*comments, {"body": "Implementation Plan\n\n## Steps"}, implement_failed]
+	assert heal.phase_failure_streak(trail, phase="implement", repo=CONSUMER_REPO, run_id=202) == {"streak": 2, "run_ids": ["201"]}
+	assert heal.phase_failure_streak([*comments, implement_failed], phase="plan", repo=CONSUMER_REPO, run_id=104) == {"streak": 1, "run_ids": []}
+	# Run links to another repository are not this issue's runs.
+	assert heal.phase_failure_streak([_plan_failed_comment("other/repo", 9)], phase="plan", repo=CONSUMER_REPO, run_id=10) == {"streak": 2, "run_ids": []}
+	try:
+		heal.phase_failure_streak([], phase="review", repo=CONSUMER_REPO, run_id=1)
+	except ValueError:
+		pass
+	else:
+		raise AssertionError("an unknown phase must be rejected")
+
+
+def test_phase_failure_comment_markers_match_the_workflows() -> None:
+	workflows = {name: (REPO_ROOT / ".github" / "workflows" / f"{name}.yml").read_text(encoding="utf-8") for name in ("plan", "clarify", "implement")}
+	assert "-f body=$'AI planning workflow failed.\\n" in workflows["plan"]
+	assert 'REASON="AI clarification workflow failed for ${ISSUE_URL}. Run: ${RUN_URL}"' in workflows["clarify"]
+	assert 'REASON="AI clarification workflow was cancelled/timed out for ${ISSUE_URL}. Run: ${RUN_URL}"' in workflows["clarify"]
+	assert 'REASON="AI implementation workflow failed for ${ISSUE_URL}. Run: ${RUN_URL}"' in workflows["implement"]
+	assert 'REASON="AI implementation workflow was cancelled/timed out for ${ISSUE_URL}. Run: ${RUN_URL}"' in workflows["implement"]
+	assert heal.PHASE_FAILURE_COMMENT_PREFIXES["plan"] == ("AI planning workflow failed.",)
+	assert heal.PHASE_FAILURE_COMMENT_PREFIXES["clarify"] == ("AI clarification workflow failed for ", "AI clarification workflow was cancelled/timed out for ")
+	assert heal.PHASE_FAILURE_COMMENT_PREFIXES["implement"] == ("AI implementation workflow failed for ", "AI implementation workflow was cancelled/timed out for ")
+	# The success comments that end a streak.
+	assert 'echo "<!-- ai:clarification-questions -->"' in workflows["clarify"] and 'echo "Clarification required"' in workflows["clarify"]
+	assert "-f body=$'The task appears clear.\\n" in workflows["clarify"]
+	assert '            echo "Implementation Plan"\n            echo\n            cat "${CODEX_OUTPUT_FILE}"' in workflows["plan"]
+	assert heal.PHASE_FAILURE_REASONS == ("clarify_failed", "plan_failed", "implement_failed")
+
+
+def _phase_payload(*, repo: str = CONSUMER_REPO, issue: dict | None = None, comments: list[dict] | None = None, run_id: str = "500", workflow_name: str = "AI Plan") -> dict:
+	return heal.build_phase_failure_payload(
+		repo=repo,
+		phase="plan",
+		issue=issue or _issue(labels=["ai:clarification"]),
+		comments=comments if comments is not None else [_plan_failed_comment(repo, 499), _plan_failed_comment(repo, int(run_id))],
+		workflow_name=workflow_name,
+		run_id=run_id,
+		wrapper_sha=SHA_A,
+		reporter_run_url=f"https://github.com/{repo}/actions/runs/{run_id}",
+	)
+
+
+def test_build_phase_failure_payload_validates_and_carries_lineage() -> None:
+	body = f"<!-- {heal.MARKER_PREFIX}fp={FP_HEX} -->\n<!-- {heal.MARKER_PREFIX}gen=1 -->\n<!-- {heal.MARKER_PREFIX}root={FP_HEX} -->\nheal body"
+	payload = heal.validate_payload(_phase_payload(issue=_issue(body=body, labels=["ai:clarification", "ai:workflow-heal"])))
+	assert payload["source_kind"] == "phase_failure" and payload["label"] is None
+	assert payload["failure_reason"] == "plan_failed" and payload["failure_streak"] == 2
+	assert [ref["run_id"] for ref in payload["run_refs"]] == ["500", "499"]
+	assert payload["source_gen"] == 1 and payload["source_root"] == FP_HEX
+	assert payload["wrapper_sha"] == SHA_A and payload["workflow_name"] == "AI Plan" and payload["conclusion"] == "failure"
+	assert payload["failure_evidence"] == "" and payload["failure_fingerprint"] is None
+	assert heal.compose_issue_title(payload, workflow_name="Internal: AI Plan") == f"Workflow heal: Internal: AI Plan failed 2x for {CONSUMER_REPO}#42 (plan_failed)"
+	body_text = heal.compose_issue_body(payload=payload, diagnosis="## Classification\nworkflow-defect", fp=FP_HEX, gen=2, root=FP_HEX, classification="workflow-defect", target_branch="stable", max_depth=3, intake_run_url="u", run_summaries=[])
+	assert "A clarify / plan / implement run failed on an issue." in body_text
+	assert f"- **Source issue:** https://github.com/{CONSUMER_REPO}/issues/42 ({CONSUMER_REPO}#42)" in body_text
+	assert "- **Consecutive failed plan runs on this issue:** 2" in body_text
+	assert f"<!-- {heal.MARKER_PREFIX}source={CONSUMER_REPO}#42 -->" in body_text
+	for bad in ({"failure_reason": "review_failed"}, {"failure_reason": None}, {"run_refs": []}, {"issue_number": None}):
+		try:
+			heal.validate_payload({**payload, **bad})
+		except ValueError:
+			continue
+		raise AssertionError(f"accepted {bad}")
+
+
+def _stage_phase_report(tmp: Path, *, comments: list[dict], issue: dict | None = None, flags: dict[str, str] | None = None) -> tuple[Path, Path, dict[str, str]]:
+	work, state_file, env = _stage(tmp, with_codex=False)
+	shutil.copy(PHASE_REPORT_SCRIPT, work / "scripts" / PHASE_REPORT_SCRIPT.name)
+	state_file.write_text(
+		json.dumps({"issues": {"42": issue or _issue(labels=["ai:clarification"])}, "comments": {f"repos/{CONSUMER_REPO}/issues/42/comments": comments}}),
+		encoding="utf-8",
+	)
+	env.update(
+		{
+			"GITHUB_REPOSITORY": CONSUMER_REPO,
+			"GITHUB_RUN_ID": "500",
+			"WORKFLOW_HEAL_PHASE": "plan",
+			"WORKFLOW_HEAL_ISSUE_NUMBER": "42",
+			"REPORT_WORKFLOW_NAME": "AI Plan",
+			"REPORT_WRAPPER_SHA": SHA_A.upper(),
+		}
+	)
+	env.update(flags or {})
+	return work, state_file, env
+
+
+def test_phase_report_dispatches_the_first_failed_run() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-phase-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_phase_report(tmp, comments=[*_issue_6413_comments(CONSUMER_REPO), _plan_failed_comment(CONSUMER_REPO, 500)])
+		result = _run(work / "scripts" / PHASE_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "WORKFLOW_HEAL_PHASE_REPORT dispatched issue=42 phase=plan streak=3 run=500 workflow=AI Plan" in result.stdout
+		state = _state(state_file)
+		assert len(state["dispatches"]) == 1
+		dispatch = state["dispatches"][0]
+		assert dispatch["path"] == f"repos/{SELF_REPO}/dispatches" and dispatch["body"]["event_type"] == "workflow-failure-heal"
+		payload = heal.validate_payload(dispatch["body"]["client_payload"]["report"])
+		assert payload["source_kind"] == "phase_failure" and payload["failure_reason"] == "plan_failed"
+		assert [ref["run_id"] for ref in payload["run_refs"]] == ["500", "102", "101"]
+		assert payload["wrapper_sha"] == SHA_A and payload["issue_number"] == 42
+		# One issue read and one comment read, both GET; then the dispatch.
+		reads = [call for call in state["calls"] if call[:1] == ["api"] and "--input" not in call]
+		assert len(reads) == 2 and all(call[call.index("--method") + 1] == "GET" for call in reads)
+
+
+def test_phase_report_skip_paths() -> None:
+	first = [_plan_failed_comment(CONSUMER_REPO, 500)]
+	cases = [
+		("below_streak", first, None, {"WORKFLOW_HEAL_PHASE_FAILURE_STREAK": "2"}, "skip reason=below_streak issue=42 phase=plan streak=1 threshold=2"),
+		("disabled", first, None, {"WORKFLOW_HEAL_ENABLED": "false"}, "skip reason=disabled"),
+		("unknown_phase", first, None, {"WORKFLOW_HEAL_PHASE": "review"}, "skip reason=unknown_phase phase=review"),
+		("missing_issue", first, None, {"WORKFLOW_HEAL_ISSUE_NUMBER": ""}, "skip reason=missing_context"),
+		("closed", first, _issue(state="closed"), {}, "skip reason=issue_not_open issue=42 state=closed"),
+		("smoke", first, _issue(title="[E2E Smoke Test] plan"), {}, "skip reason=smoke_test_fixture issue=42 phase=plan"),
+	]
+	for name, comments, issue, flags, expected in cases:
+		with tempfile.TemporaryDirectory(prefix=f"heal-phase-{name}-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage_phase_report(tmp, comments=comments, issue=issue, flags=flags)
+			result = _run(work / "scripts" / PHASE_REPORT_SCRIPT.name, work, env)
+			assert result.returncode == 0, (name, result.stderr, result.stdout)
+			assert expected in result.stdout, (name, result.stdout)
+			assert "dispatches" not in _state(state_file), name
+	# A rejected dispatch is logged and never fails the job.
+	with tempfile.TemporaryDirectory(prefix="heal-phase-denied-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_phase_report(tmp, comments=first)
+		state = _state(state_file)
+		state["dispatch_fail"] = True
+		state_file.write_text(json.dumps(state), encoding="utf-8")
+		result = _run(work / "scripts" / PHASE_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "skip reason=dispatch_denied issue=42 phase=plan streak=1 upstream=shubhodeep1/coding-workflows detail=HTTP 422" in result.stdout
+	# Unset, empty, zero and non-numeric thresholds mean the default of 1.
+	for value in ("", "0", "abc"):
+		with tempfile.TemporaryDirectory(prefix="heal-phase-default-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage_phase_report(tmp, comments=first, flags={"WORKFLOW_HEAL_PHASE_FAILURE_STREAK": value})
+			result = _run(work / "scripts" / PHASE_REPORT_SCRIPT.name, work, env)
+			assert "dispatched issue=42 phase=plan streak=1" in result.stdout, (value, result.stdout)
+
+
+PLAN_JOB_LOG = (
+	"2026-10-05T23:41:45.000Z ##[group]Run bash scripts/run_plan_codex.sh\n"
+	"2026-10-05T23:41:47.000Z codex_stall_guard.sh: unknown option: --engine\n"
+	"2026-10-05T23:42:19.000Z ##[error]Codex planning failed after 3 attempts.\n"
+	"2026-10-05T23:42:19.000Z ##[error]Process completed with exit code 1.\n"
+)
+
+
+def _plan_intake_state(**overrides) -> dict:
+	jobs = {"500": [{"id": 9101, "name": "plan / plan", "workflow_name": "AI Plan", "conclusion": "failure", "steps": [{"name": "Run Codex planning", "conclusion": "failure"}]}]}
+	return _intake_state(**{"jobs": jobs, "job_logs": {"9101": PLAN_JOB_LOG}, **overrides})
+
+
+def test_intake_phase_failure_opens_issue_from_the_failed_job_log() -> None:
+	result, state, prompt = _run_intake(_phase_payload(), _plan_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "kind=phase_failure issue=42" in result.stdout
+	assert "workflow=AI Plan step=Run Codex planning runs=1" in result.stdout
+	created = state["issues_created"][0]
+	assert created["repo"] == SELF_REPO and created["label"] == heal.HEAL_LABEL
+	assert created["title"] == f"Workflow heal: AI Plan failed 2x for {CONSUMER_REPO}#42 (plan_failed)"
+	match = TARGET_BRANCH_RE.search(created["body"])
+	assert match and (match.group(1) or match.group(2)) == "stable"
+	assert f"{heal.MARKER_PREFIX}source={CONSUMER_REPO}#42" in created["body"]
+	assert "Failed plan run on issue #42" in prompt and "Consecutive failed plan runs on this issue: 2" in prompt
+	assert "codex planning failed after" in prompt.lower() and "failing step: Run Codex planning" in prompt
+	# The source issue got the outcome comment.
+	assert any(c["path"] == f"repos/{CONSUMER_REPO}/issues/42/comments" for c in state["comments_posted"])
+
+
+def test_intake_phase_failure_deduplicates_on_source_issue_and_falls_back_without_logs() -> None:
+	state = _plan_intake_state()
+	state["heal_issues"] = [_sourced_heal_issue(31, state="open", fp="9" * 64, source=f"{CONSUMER_REPO}#42")]
+	result, state_after, _ = _run_intake(_phase_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL duplicate existing_issue=31" in result.stdout and "match=source" in result.stdout
+	assert "issues_created" not in state_after and "issue_edits" not in state_after
+	# Without a readable job log the fingerprint keys on the phase, not on a label.
+	result, _state_after, _ = _run_intake(_phase_payload(), _plan_intake_state(jobs={}), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	expected_fp = heal.fingerprint("AI Plan", "", "phase:plan_failed")
+	assert f"fingerprint fp={expected_fp} workflow=AI Plan step=none runs=0" in result.stdout
+
+
+def test_intake_escalates_a_heal_issue_that_fails_its_own_run() -> None:
+	# A heal issue (#6413-style, in this repository) whose plan run fails with
+	# the failure it was filed for: the pipeline cannot run its own fix.
+	first, _state_first, _ = _run_intake(_phase_payload(repo=SELF_REPO), _plan_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	fp = re.search(r"fingerprint fp=([0-9a-f]{64})", first.stdout).group(1)
+	heal_issue = _sourced_heal_issue(42, state="open", fp=fp, source=f"{SELF_REPO}#6208")
+	body = heal_issue["body"]
+	payload = _phase_payload(repo=SELF_REPO, issue=_issue(body=body, labels=["ai:planning", heal.HEAL_LABEL]))
+	state = _plan_intake_state(heal_issues=[heal_issue])
+	result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL escalate reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed" in result.stdout
+	assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
+	assert "issues_created" not in state_after
+	assert any(c["path"] == f"repos/{SELF_REPO}/issues/42/comments" for c in state_after["comments_posted"])
+
+
+def test_phase_workflows_wire_the_heal_report_job() -> None:
+	for name, job_name in (("plan", "plan"), ("clarify", "clarify"), ("implement", "implement")):
+		workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / f"{name}.yml").read_text(encoding="utf-8"))
+		job = workflow["jobs"]["heal-report"]
+		assert job["needs"] == job_name
+		condition = " ".join(job["if"].split())
+		assert condition.startswith(f"always() && needs.{job_name}.result == 'failure' &&")
+		assert "!contains(fromJson('[\"false\"]'), vars.WORKFLOW_HEAL_ENABLED)" in condition
+		assert job["permissions"] == {}
+		assert job["env"]["WORKFLOW_HEAL_PHASE"] == name
+		assert job["env"]["WORKFLOW_HEAL_PHASE_FAILURE_STREAK"] == "${{ vars.WORKFLOW_HEAL_PHASE_FAILURE_STREAK || '1' }}"
+		assert job["env"]["WORKFLOW_HEAL_ISSUE_NUMBER"] == "${{ github.event.issue.number }}"
+		assert job["env"]["GH_TOKEN"] == "${{ secrets.GH_PAT }}"
+		checkout = next(step for step in job["steps"] if step.get("uses") == "actions/checkout@v5")
+		assert checkout["with"]["repository"] == "shubhodeep1/coding-workflows" and checkout["with"]["ref"] == "${{ env.SCRIPT_REF }}"
+		assert checkout["with"]["persist-credentials"] is False and checkout["continue-on-error"] is True
+		report = job["steps"][-1]["run"]
+		assert ".codex-workflow-src/scripts/workflow_failure_heal_phase_report.sh" in report and "reason=reporter_missing" in report
+		assert "${{" not in report
+	implement = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "implement.yml").read_text(encoding="utf-8"))
+	assert "needs.implement.outputs.heal_report == 'true'" in implement["jobs"]["heal-report"]["if"]
+	assert implement["jobs"]["implement"]["outputs"]["heal_report"] == "${{ steps.heal_report_gate.outputs.report }}"
+	steps = implement["jobs"]["implement"]["steps"]
+	names = [step.get("name") for step in steps]
+	gate = steps[names.index("Gate workflow failure heal report")]
+	comment = steps[names.index("Comment on issue failure")]
+	assert gate["id"] == "heal_report_gate"
+	# Same terminal-state exclusions as the failure comment, failures only.
+	assert gate["if"] == comment["if"].replace("(failure() || cancelled()) && ", "failure() && ", 1)
+	assert 'codex_blocked.flag' in gate["run"] and 'echo "report=true" >> "$GITHUB_OUTPUT"' in gate["run"]
+	assert names.index("Comment on issue failure") < names.index("Gate workflow failure heal report") < names.index("Exit safely")

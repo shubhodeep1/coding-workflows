@@ -10,6 +10,10 @@ Two shell drivers use this module through its CLI:
     failure path of ``review_autofix.yml`` (in consumers and in this repo). It
     counts how many review runs in a row failed on the pull request and, past
     the streak threshold, reports the failure with the run's own evidence.
+  * ``scripts/workflow_failure_heal_phase_report.sh`` runs in the ``heal-report``
+    job of ``clarify.yml``, ``plan.yml`` and ``implement.yml`` after the phase
+    job failed. It counts the phase's failed runs in a row on the issue and,
+    at the streak threshold, reports the failed run.
   * ``scripts/workflow_failure_heal_intake.sh`` runs in coding-workflows. It
     validates the payload, fingerprints the failure, applies the dedup / lineage
     / budget gates, and composes the heal issue body.
@@ -62,7 +66,7 @@ RELEASE_WORKFLOW_NAMES: tuple[str, ...] = (
 	"Forward-merge stable to main",
 )
 
-SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure")
+SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure")
 REPORTABLE_CONCLUSIONS = ("failure", "timed_out")
 
 # `already-fixed` opens no issue, but only when check_heal_already_fixed_claim
@@ -115,6 +119,27 @@ AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS: tuple[str, ...] = (
 	"Editor changes lost",
 	"Editor no-op suspicious",
 )
+
+# Pipeline phases whose failed runs report themselves (the `heal-report` job of
+# clarify.yml, plan.yml and implement.yml). Each phase's failure path posts one
+# of these comments on the issue; keep them in sync with the "Comment on issue
+# failure" steps (tests pin the parity). The streak counter reads them newest
+# first; a comment opening with a PHASE_SUCCESS_COMMENT_PREFIXES entry (a
+# clarify or plan run that finished) or another phase's failure ends it.
+PHASE_FAILURE_COMMENT_PREFIXES: dict[str, tuple[str, ...]] = {
+	"clarify": ("AI clarification workflow failed for ", "AI clarification workflow was cancelled/timed out for "),
+	"plan": ("AI planning workflow failed.",),
+	"implement": ("AI implementation workflow failed for ", "AI implementation workflow was cancelled/timed out for "),
+}
+PHASE_SUCCESS_COMMENT_PREFIXES: tuple[str, ...] = (
+	"<!-- ai:clarification-questions",
+	"Clarification required",
+	"The task appears clear.",
+	"Implementation Plan\n",
+)
+# failure_reason of a phase_failure report: `<phase>_failed`.
+PHASE_FAILURE_REASONS: tuple[str, ...] = tuple(f"{phase}_failed" for phase in PHASE_FAILURE_COMMENT_PREFIXES)
+DEFAULT_PHASE_FAILURE_STREAK = 1
 
 # Identical-failure fingerprint cap (review_autofix.yml gate). Every failure
 # comment the review workflow posts ends with a failure marker; the gate counts
@@ -630,6 +655,103 @@ def _autofix_failure_run_refs(
 	return refs[:MAX_RUN_REFS]
 
 
+def phase_failure_streak(comments: Iterable[dict[str, Any]], *, phase: str, repo: str, run_id: Any) -> dict[str, Any]:
+	"""Count the trailing failed runs of one pipeline phase on an issue.
+
+	``comments`` is the issue-comment list, oldest first. Scanning from the
+	newest comment, every failure comment of ``phase`` adds one; a success
+	comment (PHASE_SUCCESS_COMMENT_PREFIXES) or another phase's failure comment
+	ends the streak; anything else (stall-recovery ``/answer`` comments,
+	markers) is skipped. The reporting run posted its own failure comment
+	before the report ran; when no counted comment links ``run_id`` (the
+	comment step failed) the run is added on top.
+
+	Returns ``{"streak": N, "run_ids": [...]}``: the runs the counted comments
+	link, newest first, without ``run_id``.
+	"""
+	own = PHASE_FAILURE_COMMENT_PREFIXES.get(phase)
+	if not own:
+		raise ValueError(f"unknown phase {phase!r}")
+	others = tuple(prefix for name, prefixes in PHASE_FAILURE_COMMENT_PREFIXES.items() if name != phase for prefix in prefixes)
+	current = str(_positive_int(run_id) or "")
+	streak = 0
+	current_seen = False
+	run_ids: list[str] = []
+	for comment in reversed(list(comments)):
+		if not isinstance(comment, dict):
+			continue
+		body = sanitize_text(comment.get("body")).lstrip()
+		if body.startswith(own):
+			streak += 1
+			for ref in extract_run_refs([body], repo, limit=1):
+				if ref["run_id"] == current:
+					current_seen = True
+				elif ref["run_id"] not in run_ids:
+					run_ids.append(ref["run_id"])
+			continue
+		if body.startswith(PHASE_SUCCESS_COMMENT_PREFIXES) or body.startswith(others):
+			break
+	if current and not current_seen:
+		streak += 1
+	return {"streak": max(1, streak), "run_ids": run_ids}
+
+
+def build_phase_failure_payload(
+	*,
+	repo: str,
+	phase: str,
+	issue: dict[str, Any],
+	comments: list[dict[str, Any]],
+	workflow_name: str,
+	run_id: str,
+	wrapper_sha: str | None,
+	reporter_run_url: str | None,
+	now: datetime | None = None,
+) -> dict[str, Any]:
+	"""Build the dispatch payload for a failed clarify / plan / implement run on an issue.
+
+	``run_refs`` lists the failed run first, then the earlier failed runs of
+	the same streak (newest first). The issue body's heal markers carry over as
+	``source_gen`` / ``source_root``, so a heal issue whose own pipeline run
+	fails continues its lineage up to the cap.
+	"""
+	now = now or _utc_now()
+	run_number = _positive_int(run_id)
+	if run_number is None:
+		raise ValueError("run_id must be a positive integer")
+	body = sanitize_text(issue.get("body"))
+	markers = parse_heal_markers(body)
+	comment_texts = [sanitize_text(comment.get("body")) for comment in comments if isinstance(comment, dict)]
+	streak = phase_failure_streak(comments, phase=phase, repo=repo, run_id=run_number)
+	run_refs = [{"repo": repo, "run_id": str(run_number), "url": f"https://github.com/{repo}/actions/runs/{run_number}"}]
+	for earlier in streak["run_ids"][: MAX_RUN_REFS - 1]:
+		run_refs.append({"repo": repo, "run_id": earlier, "url": f"https://github.com/{repo}/actions/runs/{earlier}"})
+	return {
+		"schema_version": SCHEMA_VERSION,
+		"source_repo": repo,
+		"source_kind": "phase_failure",
+		"issue_number": _positive_int(issue.get("number")),
+		"issue_title": single_line(issue.get("title"), 300),
+		"issue_url": sanitize_text(issue.get("html_url"), 300),
+		"label": None,
+		"labels": _labels_of(issue)[:50],
+		"run_refs": run_refs,
+		"wrapper_sha": wrapper_sha if is_valid_sha(wrapper_sha) else None,
+		"source_gen": _positive_int(markers.get("gen")),
+		"source_root": markers.get("root") if re.fullmatch(r"[0-9a-f]{64}", markers.get("root") or "") else None,
+		"issue_excerpt": sanitize_text(body, ISSUE_EXCERPT_LIMIT),
+		"comments_excerpt": _build_recent_comments_excerpt(comment_texts),
+		"workflow_name": single_line(workflow_name, 200),
+		"head_branch": None,
+		"head_sha": None,
+		"conclusion": "failure",
+		"failure_reason": f"{phase}_failed",
+		"failure_streak": streak["streak"],
+		"reporter_run_url": sanitize_text(reporter_run_url, 300) or None,
+		"reported_at": _iso(now),
+	}
+
+
 def _normalize_script_ref(value: Any) -> str | None:
 	"""``script_ref`` is the coding-workflows ref the run staged: a SHA or ``stable``."""
 	ref = str(value or "").strip()
@@ -835,6 +957,13 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		if failure_reason is None:
 			raise ValueError("failure_reason is missing or malformed for autofix_failure reports")
 		failure_streak = failure_streak or 1
+	elif kind == "phase_failure":
+		if issue_number is None:
+			raise ValueError("issue_number is required for phase_failure reports")
+		if failure_reason not in PHASE_FAILURE_REASONS:
+			raise ValueError("failure_reason must be one of " + ", ".join(PHASE_FAILURE_REASONS) + " for phase_failure reports")
+		failure_streak = failure_streak or 1
+		failure_fingerprint = None
 	else:
 		failure_reason = None
 		failure_streak = None
@@ -858,6 +987,8 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 	head_sha = head_sha.lower() if isinstance(head_sha, str) and is_valid_sha(head_sha.lower()) else None
 	head_branch = payload.get("head_branch")
 	head_branch = head_branch if is_valid_branch(head_branch) else None
+	if kind == "phase_failure" and not run_refs:
+		raise ValueError("phase_failure reports need the failed run reference")
 	if kind == "workflow_run":
 		if not run_refs:
 			raise ValueError("workflow_run reports need the failed run reference")
@@ -1601,6 +1732,10 @@ def _context_lines(payload: dict[str, Any], *, run_summaries: list[dict[str, Any
 		if kind == "autofix_failure":
 			lines.append(f"- **Failure reason:** `{payload.get('failure_reason')}`")
 			lines.append(f"- **Consecutive failed review runs on this PR:** {payload.get('failure_streak') or 1}")
+		elif kind == "phase_failure":
+			phase = str(payload.get("failure_reason") or "").removesuffix("_failed") or "pipeline"
+			lines.append(f"- **Failure reason:** `{payload.get('failure_reason')}`")
+			lines.append(f"- **Consecutive failed {phase} runs on this issue:** {payload.get('failure_streak') or 1}")
 		else:
 			lines.append(f"- **Escalation label:** `{payload.get('label')}`")
 	if payload.get("workflow_name"):
@@ -1629,6 +1764,10 @@ def compose_issue_title(payload: dict[str, Any], *, workflow_name: str | None) -
 		target = f"{payload['source_repo']}#{payload.get('issue_number')}"
 		streak = payload.get("failure_streak") or 1
 		return f"Workflow heal: {name or 'review/autofix'} failed {streak}x for {target} ({payload.get('failure_reason')})"
+	if payload.get("source_kind") == "phase_failure":
+		target = f"{payload['source_repo']}#{payload.get('issue_number')}"
+		streak = payload.get("failure_streak") or 1
+		return f"Workflow heal: {name or 'pipeline phase'} failed {streak}x for {target} ({payload.get('failure_reason')})"
 	label = payload.get("label") or "escalation"
 	target = f"{payload['source_repo']}#{payload.get('issue_number')}"
 	if name:
@@ -1700,6 +1839,12 @@ def compose_issue_body(
 				"source, so this issue was filed automatically for the clarify -> plan -> implement -> "
 				"review pipeline to fix it here."
 			)
+		elif payload.get("source_kind") == "phase_failure":
+			intro = (
+				"A clarify / plan / implement run failed on an issue. The diagnosis below attributes it to "
+				"the shared workflow source, so this issue was filed automatically for the clarify -> plan -> "
+				"implement -> review pipeline to fix it here."
+			)
 		else:
 			intro = (
 				"A pipeline failure in a consumer of these workflows was escalated for human attention. "
@@ -1759,8 +1904,8 @@ def compose_issue_body(
 	parts.append(
 		f"_Filed by the workflow failure heal intake. Lineage generation {gen} (cap {max_depth}); "
 		"the chain escalates to a human at the cap. Re-reports with the same fingerprint (or, for a "
-		"review/autofix failure, from the same pull request) are recorded as occurrence comments on "
-		"this issue while it stays open._"
+		"review/autofix or clarify / plan / implement failure, from the same pull request or issue) are "
+		"recorded as occurrence comments on this issue while it stays open._"
 	)
 	return "\n".join(parts) + "\n"
 
@@ -2004,6 +2149,30 @@ def _cmd_build_autofix_payload(args: argparse.Namespace) -> int:
 		payload["comments_excerpt"] = sanitize_text(payload["comments_excerpt"], 1500)
 		payload["issue_excerpt"] = sanitize_text(payload["issue_excerpt"], 1500)
 		payload["failure_evidence"] = sanitize_text(payload["failure_evidence"], 2000)
+	_write_json(payload)
+	return 0
+
+
+def _cmd_build_phase_payload(args: argparse.Namespace) -> int:
+	issue = _load_json_file(args.issue_json)
+	try:
+		comments = _load_json_file(args.comments_json) if args.comments_json else []
+	except (OSError, json.JSONDecodeError):
+		comments = []
+	payload = build_phase_failure_payload(
+		repo=args.repo,
+		phase=args.phase,
+		issue=issue if isinstance(issue, dict) else {},
+		comments=comments if isinstance(comments, list) else [],
+		workflow_name=args.workflow_name,
+		run_id=args.run_id,
+		wrapper_sha=args.wrapper_sha or None,
+		reporter_run_url=args.reporter_run_url or None,
+	)
+	validate_payload(payload)
+	if len(json.dumps(payload).encode("utf-8")) > MAX_PAYLOAD_BYTES:
+		payload["comments_excerpt"] = sanitize_text(payload["comments_excerpt"], 1500)
+		payload["issue_excerpt"] = sanitize_text(payload["issue_excerpt"], 1500)
 	_write_json(payload)
 	return 0
 
@@ -2306,6 +2475,17 @@ def build_parser() -> argparse.ArgumentParser:
 		help="list the runs of this author's review-autofix-failure:v1 markers for the PR head in run_refs",
 	)
 	p.set_defaults(func=_cmd_build_autofix_payload)
+
+	p = sub.add_parser("build-phase-payload", help="Build the payload for a failed clarify / plan / implement run on an issue")
+	p.add_argument("--repo", required=True)
+	p.add_argument("--phase", required=True, choices=tuple(PHASE_FAILURE_COMMENT_PREFIXES))
+	p.add_argument("--issue-json", required=True)
+	p.add_argument("--comments-json")
+	p.add_argument("--workflow-name", required=True)
+	p.add_argument("--run-id", required=True)
+	p.add_argument("--wrapper-sha", default="")
+	p.add_argument("--reporter-run-url", default="")
+	p.set_defaults(func=_cmd_build_phase_payload)
 
 	p = sub.add_parser("classify-crash-ownership", help="Print pr / base / none: who changed the file a review/autofix run crashed in")
 	p.add_argument("--payload-json", required=True)

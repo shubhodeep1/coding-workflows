@@ -6,8 +6,10 @@
 # (.github/workflows/workflow-failure-heal-intake.yml) in coding-workflows.
 # Invoked once per report: a `repository_dispatch` (event `workflow-failure-heal`)
 # sent by scripts/workflow_failure_heal_report.sh from a consumer (or from this
-# repo's own internal wrapper), a failed release / promotion `workflow_run`, or a
-# manual `workflow_dispatch` re-run. It:
+# repo's own internal wrapper), by workflow_failure_heal_autofix_report.sh from a
+# failed review/autofix run, or by workflow_failure_heal_phase_report.sh from a
+# failed clarify / plan / implement run (`phase_failure`), a failed release /
+# promotion `workflow_run`, or a manual `workflow_dispatch` re-run. It:
 #
 #   1. Validates the payload (every field is re-checked; the body, comments, and
 #      logs stay untrusted data for the model; an `autofix_failure` report from
@@ -21,7 +23,8 @@
 #      signature) and applies the dedup / lineage / budget decision against the
 #      open + closed `ai:workflow-heal` issues (see workflow_failure_heal.py):
 #      duplicate -> occurrence comment (an `autofix_failure` report also
-#      matches an open heal issue filed from the same pull request, and
+#      matches an open heal issue filed from the same pull request, a
+#      `phase_failure` report one filed from the same issue, and
 #      continues the lineage of a closed one or of the heal issue its
 #      `ai/issue-<N>` head branch fixes); lineage cap -> escalate;
 #      budget cap -> alert; otherwise continue.
@@ -304,6 +307,10 @@ elif [ "${#LOG_FILES[@]}" -gt 0 ]; then
 		SIG_ARGS+=(--log-file "${f}")
 	done
 	SIGNATURE="$(python3 "${HEAL_PY}" error-signature "${SIG_ARGS[@]}" 2>/dev/null || echo "no-error-lines")"
+elif [ "${SOURCE_KIND}" = "phase_failure" ]; then
+	# The failed run's logs could not be read: key on the phase instead of
+	# the (absent) escalation label.
+	SIGNATURE="phase:${FAILURE_REASON:-unknown}"
 else
 	SIGNATURE="label:${LABEL:-unknown}"
 fi
@@ -347,8 +354,11 @@ fi
 # fingerprint: the evidence (and so the fingerprint) differs run to run, which
 # let one PR open a new heal issue on every failed run. The PR's head branch
 # links the heal issue it fixes (ai/issue-<N>), so a heal fix PR whose own
-# review fails continues that issue's lineage and reaches the cap.
-if [ "${SOURCE_KIND}" = "autofix_failure" ] && [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
+# review fails continues that issue's lineage and reaches the cap. A
+# clarify / plan / implement report is keyed on its issue the same way (it has
+# no head branch; a heal issue's own failed run carries its gen / root markers
+# as source_gen / source_root instead).
+if { [ "${SOURCE_KIND}" = "autofix_failure" ] || [ "${SOURCE_KIND}" = "phase_failure" ]; } && [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
 	BUDGET_ARGS+=(--source-key "${SOURCE_REPO}#${ISSUE_NUMBER}" --source-head-branch "${HEAD_BRANCH}")
 fi
 DECISION_FILE="${RUNTIME_DIR}/decision.json"
@@ -374,6 +384,16 @@ case "${ACTION}" in
 			log "duplicate existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP} source=${SOURCE_LABEL} match=${DUPLICATE_MATCH}"
 		else
 			log "warn duplicate_comment_failed existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP}"
+		fi
+		if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${EXISTING}" = "${ISSUE_NUMBER}" ] && [ "${EXISTING_REPO}" = "${SOURCE_REPO}" ]; then
+			# The heal issue's own clarify / plan / implement run failed the way
+			# the issue was filed for: the pipeline cannot run the fix, and every
+			# retry would only add another occurrence here. Hand it to a human.
+			ensure_label_exists "${ESCALATED_LABEL}" "${EXISTING_REPO}" || true
+			gh_retry gh issue edit "${EXISTING}" --repo "${EXISTING_REPO}" --add-label "${ESCALATED_LABEL}" >/dev/null 2>&1 || log "warn escalation_label_failed issue=${EXISTING} repo=${EXISTING_REPO}"
+			log "escalate reason=heal_issue_failed_itself issue=${EXISTING} repo=${EXISTING_REPO} fp=${FP} failure=${FAILURE_REASON}"
+			tg_send_msg "Workflow failure heal: heal issue ${EXISTING_URL:-${EXISTING_REPO}#${EXISTING}} failed its own ${FAILURE_REASON%_failed} run with the failure it was filed for, so the pipeline cannot fix it; a human should look at this."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+			exit 0
 		fi
 		tg_send_msg "Workflow failure heal: ${SOURCE_LABEL} matches open heal issue ${EXISTING_URL:-#${EXISTING}} (recorded as another occurrence)." "DEBUG" >/dev/null 2>&1 || true
 		exit 0
@@ -631,6 +651,13 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 		echo "Failure reason: ${FAILURE_REASON}"
 		echo "Consecutive failed review runs on this PR: ${FAILURE_STREAK:-1}"
 		echo "PR labels: $(_pf '.labels | join(", ")')"
+	elif [ "${SOURCE_KIND}" = "phase_failure" ]; then
+		echo "Failed ${FAILURE_REASON%_failed} run on issue #${ISSUE_NUMBER} -- ${ISSUE_TITLE}"
+		echo "URL: ${ISSUE_URL}"
+		echo "Workflow: ${PAYLOAD_WORKFLOW_NAME}"
+		echo "Failure reason: ${FAILURE_REASON}"
+		echo "Consecutive failed ${FAILURE_REASON%_failed} runs on this issue: ${FAILURE_STREAK:-1}"
+		echo "Issue labels: $(_pf '.labels | join(", ")')"
 	elif [ -n "${ISSUE_NUMBER}" ]; then
 		echo "Escalated ${SOURCE_KIND}: #${ISSUE_NUMBER} -- ${ISSUE_TITLE}"
 		echo "URL: ${ISSUE_URL}"
