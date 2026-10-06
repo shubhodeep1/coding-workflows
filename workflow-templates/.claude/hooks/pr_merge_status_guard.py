@@ -1569,8 +1569,10 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 					continue
 				tip = target.tip
 				key = (slug, branch)
-				if key not in pr_snapshots:
-					cached = _read_cache(slug, branch)
+				# #6529: an open PR can merge inside the cache TTL; pushes need live state.
+				needs_live = target.reaches_remote
+				if key not in pr_snapshots or (needs_live and not pr_snapshots[key][1]):
+					cached = None if needs_live else _read_cache(slug, branch)
 					try:
 						pull_requests = cached if cached is not None else query_pull_requests(slug, branch, target.cwd)
 					except LookupUnavailable as exc:
@@ -1643,6 +1645,7 @@ def _evaluate_mcp_push(payload: dict) -> tuple[int, str]:
 	local checkout, the tip is fetched and the full three-condition rule
 	applies; otherwise ancestry cannot be verified and a merged-PR match asks
 	for confirmation instead of blocking (a block could not self-clear).
+	PR state is always queried live for these remote writes.
 	"""
 	if _guard_disabled():
 		return 0, ""
@@ -1686,15 +1689,13 @@ def _evaluate_mcp_push(payload: dict) -> tuple[int, str]:
 				return 0, ""
 			tip = remote_tip
 
-	cached = _read_cache(slug, branch)
 	try:
-		pull_requests = cached if cached is not None else query_pull_requests(slug, branch, cwd)
+		pull_requests = query_pull_requests(slug, branch, cwd)
 	except LookupUnavailable as exc:
 		return _unreachable_outcome(str(exc), tip, branch, base, cwd, True, slug)
+	_write_cache(slug, branch, pull_requests)
 
 	if not tip:
-		if cached is None:
-			_write_cache(slug, branch, pull_requests)
 		match = merged_without_open(pull_requests)
 		if match is not None:
 			_request_confirmation(
@@ -1705,17 +1706,6 @@ def _evaluate_mcp_push(payload: dict) -> tuple[int, str]:
 		return 0, ""
 
 	offender = blocking_pull_request(pull_requests, cwd, base, tip)
-	if offender is not None and cached is not None:
-		try:
-			pull_requests = query_pull_requests(slug, branch, cwd)
-		except LookupUnavailable as exc:
-			return _unreachable_outcome(
-				f"could not re-verify: {exc}", tip, branch, base, cwd, True, slug
-			)
-		_write_cache(slug, branch, pull_requests)
-		offender = blocking_pull_request(pull_requests, cwd, base, tip)
-	elif cached is None:
-		_write_cache(slug, branch, pull_requests)
 
 	if offender is None:
 		return 0, ""

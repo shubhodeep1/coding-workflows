@@ -1079,6 +1079,49 @@ def test_cached_merged_pr_is_rechecked_once_for_repeated_targets(merged_branch_r
 	assert calls == ["feature/x"]
 
 
+def test_push_ignores_cached_open_pr_and_blocks_on_fresh_merge(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	calls: list[str] = []
+	cache_reads: list[str] = []
+	def cached(slug, branch):
+		cache_reads.append(branch)
+		return [OPEN_PR]
+	monkeypatch.setattr(guard, "_read_cache", cached)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		calls.append(branch)
+		return [dict(MERGED_PR, headRefOid=merged_sha)]
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push origin HEAD:feature/x"}})
+	assert code == 2
+	assert "Branch `feature/x`" in message
+	assert calls == ["feature/x"]
+	assert cache_reads == []
+
+
+def test_commit_then_push_uses_cache_for_commit_and_one_live_lookup_for_push(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	cache_reads: list[str] = []
+	calls: list[str] = []
+	def cached(slug, branch):
+		cache_reads.append(branch)
+		return [MERGED_PR, OPEN_PR]
+	def listing(slug, branch, cwd):
+		calls.append(branch)
+		return [dict(MERGED_PR, headRefOid=merged_sha)]
+	monkeypatch.setattr(guard, "_read_cache", cached)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, _ = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git commit -m x && git push origin HEAD:feature/x HEAD:feature/x"}})
+	assert code == 2
+	assert cache_reads == ["feature/x"]
+	assert calls == ["feature/x"]
+
+
 @pytest.mark.parametrize("options", ["--delete --no-delete", "--tags --no-tags", "-uo ci.skip"])
 def test_negated_options_and_value_options_do_not_hide_a_push(merged_branch_repo, options: str) -> None:
 	repo, stub_bin = merged_branch_repo
@@ -2327,6 +2370,56 @@ def test_remote_only_mcp_push_caches_fresh_pr_snapshot(monkeypatch, tmp_path: Pa
 	payload = {**_mcp_payload(), "cwd": str(tmp_path)}
 	assert guard.evaluate(payload) == (0, "")
 	assert cache_writes == [("o/r", "feature/x", pull_requests)]
+
+
+def test_mcp_push_ignores_cached_open_pr_and_blocks_on_fresh_merge(merge_commit_repo, monkeypatch) -> None:
+	repo, _, merged_sha, _ = merge_commit_repo
+	calls: list[str] = []
+	cache_reads: list[str] = []
+	def cached(slug, branch):
+		cache_reads.append(branch)
+		return [OPEN_PR]
+	monkeypatch.setattr(guard, "_read_cache", cached)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def listing(slug, branch, cwd):
+		calls.append(branch)
+		return [dict(MERGED_PR, headRefOid=merged_sha)]
+	monkeypatch.setattr(guard, "query_pull_requests", listing)
+	code, message = guard.evaluate({**_mcp_payload(), "cwd": str(repo)})
+	assert code == 2
+	assert "origin/feature/x" in message
+	assert calls == ["feature/x"]
+	assert cache_reads == []
+
+
+@pytest.mark.parametrize("remote_only", [False, True])
+def test_push_lookup_failure_never_falls_back_to_cache(merge_commit_repo, monkeypatch, capsys, remote_only: bool) -> None:
+	repo, _, _, _ = merge_commit_repo
+	cache_reads: list[str] = []
+	def cached(slug, branch):
+		cache_reads.append(branch)
+		return [OPEN_PR]
+	monkeypatch.setattr(guard, "_read_cache", cached)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	def unavailable(slug, branch, cwd):
+		raise guard.LookupUnavailable("API unavailable")
+	monkeypatch.setattr(guard, "query_pull_requests", unavailable)
+	if remote_only:
+		payload = {**_mcp_payload(owner="other"), "cwd": str(repo)}
+	else:
+		payload = {"tool_name": "Bash", "cwd": str(repo),
+			"tool_input": {"command": "git push origin HEAD:feature/x"}}
+	code, message = guard.evaluate(payload)
+	if remote_only:
+		assert (code, message) == (0, "")
+		decision = _ask_decision(subprocess.CompletedProcess([], 0, stdout=capsys.readouterr().out, stderr=""))
+		assert decision is not None
+		assert "API unavailable" in decision["systemMessage"]
+	else:
+		assert code == 2
+		assert "GitHub could not be reached" in message
+		assert "fully contained in origin/main" in message
+	assert cache_reads == []
 
 
 @pytest.mark.parametrize("gated", [False, True])
