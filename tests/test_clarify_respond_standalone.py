@@ -134,8 +134,10 @@ def _outputs(path: Path) -> dict[str, str]:
 # --- Gate -----------------------------------------------------------------
 
 
-def _run_gate(tmp_path: Path, comment: str, body: str = "Fix it.", state: str = "open", labels: list[str] | None = None, title: str = "[security-audit] finding", **flags: str) -> tuple[dict[str, str], str, str]:
-	payload = {"number": 6262, "title": title, "body": body, "state": state, "labels": [{"name": name} for name in (labels or [])]}
+def _run_gate(tmp_path: Path, comment: str, body: str = "Fix it.", state: str = "open", labels: list[str] | None = None, title: str = "[security-audit] finding", user_type: str = "User", author_association: str | None = "OWNER", **flags: str) -> tuple[dict[str, str], str, str]:
+	payload = {"number": 6262, "title": title, "body": body, "state": state, "labels": [{"name": name} for name in (labels or [])], "user": {"type": user_type}}
+	if author_association is not None:
+		payload["author_association"] = author_association
 	_stub_gh(tmp_path / "bin", tmp_path / "gh.log", {"repos/owner/repo/issues/6262": json.dumps(payload)})
 	env = _env(
 		tmp_path,
@@ -175,6 +177,19 @@ def test_gate_picks_the_mode(tmp_path: Path, case: str, kwargs: dict, mode: str,
 def test_gate_silences_release_gate_fixtures(tmp_path: Path) -> None:
 	_, env, _ = _run_gate(tmp_path, QUESTIONS, title="[E2E Clarify Negative Test] under-specified task (run 1)", body="Make it better.")
 	assert "ALERT_MSG_LEVEL=SILENT" in env
+
+
+@pytest.mark.parametrize("user_type, author_association", [
+	("User", "NONE"),
+	("User", "CONTRIBUTOR"),
+	("User", "FIRST_TIME_CONTRIBUTOR"),
+	("Bot", "OWNER"),
+	("User", None),
+])
+def test_gate_keeps_alerts_for_unverified_fixture_authors(tmp_path: Path, user_type: str, author_association: str | None) -> None:
+	_, env, stdout = _run_gate(tmp_path, QUESTIONS, title="[E2E Clarify Negative Test] untrusted", user_type=user_type, author_association=author_association)
+	assert "ALERT_MSG_LEVEL=SILENT" not in env
+	assert "gate=smoke_alert_silence reason=unverified_fixture_provenance" in stdout
 
 
 def test_every_later_step_waits_for_the_gate() -> None:

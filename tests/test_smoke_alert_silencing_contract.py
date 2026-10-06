@@ -362,6 +362,27 @@ def test_plan_falls_back_to_orchestrator_parent_title() -> None:
 	assert 'echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"' in block
 
 
+def test_issue_title_silencing_requires_trusted_author() -> None:
+	"""A fixture-like title alone must not suppress clarification alerts."""
+	predicate = '.user.type == "User" and ((.author_association // "") | IN("OWNER","MEMBER","COLLABORATOR"))'
+	for workflow_name, step_name, next_step in (
+		("clarify.yml", "Detect smoke test and tune LLM settings", "Fetch issue comments"),
+		("orchestrate_clarify_respond.yml", "Check orchestrator metadata", "Resolve integration ref"),
+	):
+		workflow = _read(workflow_name)
+		block = workflow.split(f"- name: {step_name}\n", 1)[1].split(f"- name: {next_step}\n", 1)[0]
+		fixture_check = block.index("grep -qiE '^\\[E2E '")
+		provenance_check = block.index(predicate, fixture_check)
+		silence = block.index('echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"', provenance_check)
+		assert fixture_check < provenance_check < silence
+		assert "gate=smoke_alert_silence reason=unverified_fixture_provenance" in block[silence:]
+		if workflow_name == "clarify.yml":
+			assert block.index('echo "MODEL_REASONING_EFFORT=low" >> "$GITHUB_ENV"') < provenance_check
+			assert '[ -s "${ISSUE_META_FILE:-}" ] && jq -e' in block
+		else:
+			assert "printf '%s' \"${ISSUE_PAYLOAD}\" | jq -e" in block
+
+
 def _run() -> None:
 	import inspect
 	import sys
