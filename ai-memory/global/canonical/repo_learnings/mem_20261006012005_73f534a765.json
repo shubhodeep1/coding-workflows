@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "The clarify/respond standalone path needs explicit GitHub-facts and data-provision safeguards.",
   "timestamps": {
     "created_at": "2026-10-06T01:20:05Z",
