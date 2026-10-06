@@ -15,7 +15,9 @@ its consumer template) recognizes guarded git commands after nested control
 words, shell negation (`!`), and simple `case` arms. Since their effective
 directory is uncertain, pushes check the session checkout and request
 confirmation unless blocked; commits in that context remain warning-only
-when not blocked.
+when not blocked. An `env`-wrapped commit with an unresolvable directory or
+Git directory override asks for confirmation without querying the session
+checkout's PR history.
 
 ---
 

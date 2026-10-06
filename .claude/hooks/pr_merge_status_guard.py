@@ -542,7 +542,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			tokens[index], tokens[index + 1:],
 			(
 				"could not resolve env command directory; checking the session checkout instead"
-				if uncertain and env_cwd is None and env_wrapped else
+				if uncertain and env_wrapped else
 				"could not resolve git command directory; checking the session checkout instead" if uncertain else ""
 			),
 			config_override,

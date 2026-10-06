@@ -15,4 +15,4 @@ What this means for operators: review spend per run drops, and every panel model
 
 ### For contributors
 
-The `claude-branch-review` mode stays in `review_autofix.yml` behind the `force_claude_branch_review` input, with nothing calling it. `tests/test_internal_review_push_pr_grace.py` and its `ci.yml` step are removed with the jobs they tested. The glm-5.2 catalog entry and failback chain stay so a repo can still opt back in.
+The `claude-branch-review` mode stays in `review_autofix.yml` behind the `force_claude_branch_review` input, with nothing calling it. `tests/test_internal_review_push_pr_grace.py` and its `ci.yml` step are removed with the jobs they tested. The glm-5.2 catalog entry and failback chain stay so a repo can still opt back in. The merged-PR guard asks for confirmation when an `env`-wrapped commit's Git directory cannot be resolved, rather than checking the session checkout's PR history.
