@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which plan/implement runs should move behind the new privilege boundary? That means an isolated container with no access to `GH_PAT`, the credentialed checkout or the Docker socket, killed when its step ends, with authenticated collection and Git publication kept on the trusted host side.\nChoices:\nA) Only runs for workflow-heal issues (`ai:workflow-heal` / heal-evidence issues), for both plan and implement. Ordinary issues keep today's host editor path unchanged. (RECOMMENDED)\nB) Every plan and implement editor run, heal or not. This removes the host-editor credential exposure everywhere but is a much larger, higher-risk change.\nC) Implement only for heal issues. Plan keeps the host path and receives the bounded diagnostics as plain prompt text.\nQ2: What trusted source fixes the enforced file allowlist for a heal issue? It must be set before untrusted evidence is processed, so neither the evidence nor the plan can widen it.\nChoices:\nA) The intake writes a versioned scope marker into the heal issue at creation (for example `<!-- ai:workflow-heal-scope:v1 -->`). It lists paths taken only from deterministic, validated report fields: `crash_file`, the failing workflow file, and ownership-classified `changed_files` that exist at the support ref. It also always adds `tests/**` and `changelog.d/*.md` for the required regression test and changelog fragment. Implement accepts the marker only when the issue's author is the `GH_PAT` account and the body was not edited after creation. (RECOMMENDED)\nB) A fixed directory allowlist for every heal issue (`scripts/`, `prompts/`, `.github/workflows/`, `.github/actions/`, `tests/`, `changelog.d/`), independent of the report.\nC) Option A's per-report marker without the automatic `tests/**` / `changelog.d/` additions. Strictest, but a deterministic-failure heal could not add its required regression test.\nQ3: When a heal issue has no valid trusted scope (missing, edited or untrusted marker), how should implement fail closed?\nChoices:\nA) Refuse the run and label the issue `ai:needs-human` with a comment naming the reason. This avoids `ai:scope-blocked`, whose label event itself triggers `workflow_failure_heal.yml` and could start another heal for the same issue. (RECOMMENDED)\nB) Refuse and label `ai:scope-blocked`, accepting that this re-enters the heal reporter (the lineage cap still bounds it).\nC) Refuse with a comment and `ai:implementation-failed` only, leaving recovery to the stall poller.",
+  "fingerprint": "5d32308f777bd0e2cefa4eabbfdb4742faca4aabb49191db9537c34d5e7c9946",
+  "lineage": {
+    "issue_number": 6463,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37405635346",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37405635346",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261006025157_26e27369ec",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6463,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37405635346"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6463 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-06T02:51:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
