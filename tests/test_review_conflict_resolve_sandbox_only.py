@@ -21,6 +21,12 @@ def _helper() -> str:
 	return match.group()
 
 
+def _failure_helper() -> str:
+	match = re.search(r"^_resolver_fail_closed\(\)\n\{\n.*?\n\}\n", _source(), re.M | re.S)
+	assert match is not None
+	return match.group()
+
+
 def _launch() -> str:
 	src = _source()
 	return src[src.index('  if [ "${_run_codex}" = "true" ]; then\n'):src.index('  resolver_clean_output="${tmp_output}.ansi-clean"')]
@@ -63,8 +69,17 @@ esac
 ])
 def test_attempts_never_run_host_writer(tmp_path, mode, engine, expected_rc):
 	sandbox, calls = _stub(tmp_path)
+	(sandbox.parent / "review_untrusted_workspace.py").symlink_to(SCRIPT.parent / "review_untrusted_workspace.py")
+	paths = tmp_path / "paths"
+	paths.write_text("scripts/example.py\n", encoding="utf-8")
 	program = """set -euo pipefail
 emit_conflict_resolver_substate() { :; }
+_resolver_sandbox_attempt() {
+  printf 'sandbox-attempt %s\\n' "$1" >> "$CALLS"
+  if [ "$1" = claude ]; then return 75; fi
+  _resolver_sandbox_opencode_attempt
+  return "${_codex_exit}"
+}
 """ + _helper() + "\n" + _launch() + '\nprintf "exit=%s\\n" "${_codex_exit}"\n'
 	prompt = tmp_path / "prompt.txt"
 	prompt.write_text("resolve conflict\n", encoding="utf-8")
@@ -76,6 +91,7 @@ emit_conflict_resolver_substate() { :; }
 	env.pop("BASH_ENV", None)
 	env.pop("ENV", None)
 	setup = f'''resolver_sandbox_sh={str(sandbox)!r}
+CONFLICTED_PATHS_FILE={str(paths)!r}
 _effective_prompt_file={str(prompt)!r}
 tmp_output={str(output)!r}
 _stall_status_file={str(tmp_path / "status")!r}
@@ -101,9 +117,10 @@ attempt=1
 		assert "run " in logged and "codex CONFLICT_RESOLVER write" in logged
 		assert "cleanup " in logged
 	if engine == "claude":
-		assert logged.index("prepare-ephemeral ") < logged.index("run ")
+		assert logged.index("sandbox-attempt claude") < logged.index("sandbox-attempt codex") < logged.index("prepare-ephemeral ") < logged.index("run ")
 		assert "prepare-ephemeral  prepare-ephemeral codex" in logged
 		assert "claude" in logged and "codex" in logged
+		assert "reason=claude_unavailable action=sandbox_opencode" in result.stderr
 	assert not (tmp_path / "review_sandbox_transfer_failed").exists()
 	if mode == "transfer_failed":
 		assert "reason=unsafe_file" in result.stderr
@@ -151,11 +168,14 @@ RUNTIME_DIR={str(tmp_path)!r}
 SUPPORT_SCRIPTS_DIR={str(SCRIPT.parent)!r}
 CONFLICTED_PATHS_FILE={str(paths)!r}
 emit_conflict_resolver_substate() {{ :; }}
+_persist_resolver_retry_state_from_current_failure() {{ printf '%s\\n' "$RESOLVER_ISOLATION_FAILURE_REASON" > "$RUNTIME_DIR/persisted_reason"; }}
+{_failure_helper()}
 {guard}
 '''], cwd=tmp_path, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, capture_output=True, text=True)
 	assert result.returncode == 1
 	assert "reason=sandbox_path_unsupported" in result.stderr
 	assert "assets/x.svg" not in result.stderr
+	assert (tmp_path / "persisted_reason").read_text().strip() == "sandbox_path_unsupported"
 	assert not calls.exists()
 
 
@@ -163,14 +183,18 @@ def test_missing_sandbox_support_refuses_before_any_model(tmp_path):
 	src = _source()
 	guard = src[src.index('# Reject unsupported conflict paths for both engines'):src.index('_resolver_sandbox_opencode_attempt()')]
 	result = subprocess.run(["bash", "-c", f'''set -euo pipefail
+RUNTIME_DIR={str(tmp_path)!r}
 SUPPORT_SCRIPTS_DIR={str(tmp_path)!r}
 CONFLICTED_PATHS_FILE={str(tmp_path / "paths")!r}
 emit_conflict_resolver_substate() {{ :; }}
+_persist_resolver_retry_state_from_current_failure() {{ printf '%s\\n' "$RESOLVER_ISOLATION_FAILURE_REASON" > "$RUNTIME_DIR/persisted_reason"; }}
+{_failure_helper()}
 {guard}
 '''], cwd=tmp_path, capture_output=True, text=True)
 	assert result.returncode == 1
 	assert "reason=sandbox_support_missing" in result.stderr
 	assert "sandbox_path_unsupported" not in result.stderr
+	assert (tmp_path / "persisted_reason").read_text().strip() == "sandbox_support_missing"
 
 
 def test_no_host_model_launch_or_private_host_index_in_launch():

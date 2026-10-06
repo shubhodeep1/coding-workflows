@@ -564,8 +564,9 @@ _resolver_fail_closed()
   if type _persist_resolver_retry_state_from_current_failure >/dev/null 2>&1; then
     RESOLVER_ISOLATION_FAILURE_REASON="$1" _persist_resolver_retry_state_from_current_failure || true
   fi
-  emit_conflict_resolver_substate "Failed" "${attempt}"
-  rm -f -- "${tmp_output}" "${_stall_status_file}"
+  emit_conflict_resolver_substate "Failed" "${attempt:-0}"
+  if [ -n "${tmp_output:-}" ]; then rm -f -- "${tmp_output}"; fi
+  if [ -n "${_stall_status_file:-}" ]; then rm -f -- "${_stall_status_file}"; fi
   exit 1
 }
 
@@ -2239,14 +2240,10 @@ fi
 resolver_sandbox_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_sandbox.sh"
 resolver_workspace_py="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_workspace.py"
 if [ ! -f "${resolver_sandbox_sh}" ] || [ ! -f "${resolver_workspace_py}" ]; then
-  emit_conflict_resolver_substate "Failed" 0
-  echo "::error::Conflict resolver refused: isolated sandbox support is missing (reason=sandbox_support_missing); no model was run." >&2
-  exit 1
+  _resolver_fail_closed sandbox_support_missing
 fi
 if ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}" >/dev/null 2>&1; then
-  emit_conflict_resolver_substate "Failed" 0
-  echo "::error::Conflict resolver refused: a conflicted path is outside the isolated sandbox's admitted set (reason=sandbox_path_unsupported); no model was run." >&2
-  exit 1
+  _resolver_fail_closed sandbox_path_unsupported
 fi
 
 _resolver_sandbox_opencode_attempt()

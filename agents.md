@@ -104,7 +104,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
    timeouts on rejection, but other write errors reach the server error handler.
     Host `claude_run` refuses all four review roles. The resolver checks its
     conflicted paths against sandbox admission before either engine runs; an
-    unsupported path is refused. Its OpenCode runs (including Claude fallback)
+    unsupported path is refused and, for integration-sync PRs, counted toward
+    the existing resolver retry-state escalation. Its OpenCode runs (including
+    Claude fallback)
     use fresh isolated snapshots and validated transfer, never the host writer.
     A Claude-selected resolver retries OpenCode in a fresh sandbox only when
     Claude is unavailable; isolation or transfer failure fails closed.
