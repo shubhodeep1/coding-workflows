@@ -132,6 +132,12 @@ _API_WRITE_URL_PREFIXES = (
 	"https://api.digitalocean.com/",
 	"https://api.cloudflare.com/",
 )
+_API_WRITE_ALWAYS_CONFIRM_URL_PREFIXES = ("https://api.digitalocean.com/",)
+_CF_SESSION_CREDENTIAL_ENV_VARS = ("FUNTOKEN_IO_CF", "FT_GAMES_CF")
+_CF_ACCOUNT_ID_RE = re.compile(r"[0-9a-fA-F]{32}")
+_CF_WORKER_SCRIPT_URL_RE = re.compile(
+	r"https://api\.cloudflare\.com/client/v4/accounts/([0-9a-fA-F]{32})/workers/scripts/([A-Za-z0-9_-]+)((?:/[A-Za-z0-9_-]+)*)"
+)
 # `-q` must remain curl's first option so ~/.curlrc cannot add hidden transfers.
 _API_WRITE_COMMAND_PREFIXES = tuple(
 	f"curl -q -sS -X {method} {url_prefix}"
@@ -734,32 +740,63 @@ def _contains_unquoted_shell_expansion(command: str) -> bool:
 	return False
 
 
-def _api_write_requires_confirmation(command: str) -> bool:
-	"""Return whether an allowlisted API write uses non-canonical curl options.
+def _cloudflare_session_account_ids() -> frozenset[str]:
+	"""Read only the account IDs from well-formed session credentials."""
+	accounts: set[str] = set()
+	for name in _CF_SESSION_CREDENTIAL_ENV_VARS:
+		account, separator, token = os.environ.get(name, "").partition(":")
+		if separator and token and _CF_ACCOUNT_ID_RE.fullmatch(account):
+			accounts.add(account.lower())
+	return frozenset(accounts)
+
+
+def _api_write_destination_reason(url: str) -> str | None:
+	if url.startswith(_API_WRITE_ALWAYS_CONFIRM_URL_PREFIXES):
+		return "DigitalOcean API writes always need confirmation (CLAUDE.md §22.B)."
+	if url.startswith("https://api.cloudflare.com/"):
+		match = _CF_WORKER_SCRIPT_URL_RE.fullmatch(url)
+		if match is None:
+			return (
+				"Only account-scoped Worker script writes (accounts/<id>/workers/scripts/<name>) "
+				"skip confirmation; other Cloudflare writes (DNS, zone, routes, account settings) "
+				"need approval (CLAUDE.md §24.D)."
+			)
+		if match.group(1).lower() not in _cloudflare_session_account_ids():
+			return "Cloudflare account in the URL does not match FUNTOKEN_IO_CF or FT_GAMES_CF (or neither is set)."
+		if any("secret" in segment.lower() for segment in (match.group(2) + match.group(3)).split("/")):
+			return "Worker secret writes need approval (CLAUDE.md §24.D)."
+	return None
+
+
+def _api_write_confirmation_reason(command: str) -> str | None:
+	"""Return the reason an API write needs a harness prompt, if any.
 
 	The settings rules are necessarily prefix matches. Keep their silent path
-	limited to one explicit method and destination followed only by headers and
-	request-body options; anything capable of changing curl's method, URL, or
-	transfer list must go through the normal harness prompt.
+	limited to a Worker script in a session account and canonical curl options.
+	Request bodies are not inspected: an upload can still declare secret bindings.
 	"""
+	noncanonical_reason = "Non-canonical API curl options can override the allowlisted HTTP method or destination."
 	try:
 		segments = _shell_segments(command)
 	except ValueError:
-		return command.lstrip().startswith(_API_WRITE_COMMAND_PREFIXES)
+		return noncanonical_reason if command.lstrip().startswith(_API_WRITE_COMMAND_PREFIXES) else None
 
 	if not segments:
-		return False
+		return None
 	tokens = segments[0]
 	if len(tokens) < 6 or tokens[:4] != ["curl", "-q", "-sS", "-X"]:
-		return False
+		return None
 	if tokens[4] not in _API_WRITE_METHODS:
-		return False
+		return None
 	if not any(tokens[5].startswith(prefix) for prefix in _API_WRITE_URL_PREFIXES):
-		return False
+		return None
+	destination_reason = _api_write_destination_reason(tokens[5])
+	if destination_reason is not None:
+		return destination_reason
 	# The URL token is already host-gated above. Prompt only for expansions that
 	# can synthesize shell words before curl sees the approved API URL shape.
 	if any(marker in tokens[5] for marker in ("$", "{", "[", "*", "?")):
-		return True
+		return noncanonical_reason
 	# Scan only following option text so literal query/path URL characters are
 	# not mistaken for value expansions.
 	api_write_raw_parts = command.lstrip().split(None, 6)
@@ -771,14 +808,14 @@ def _api_write_requires_confirmation(command: str) -> bool:
 			and _contains_unquoted_shell_expansion(api_write_raw_parts[6])
 		)
 	):
-		return True
+		return noncanonical_reason
 
 	index = 6
 	while index < len(tokens):
 		token = tokens[index]
 		if token in _API_WRITE_VALUE_OPTIONS:
 			if index + 1 >= len(tokens):
-				return True
+				return noncanonical_reason
 			index += 2
 			continue
 		if any(
@@ -794,8 +831,20 @@ def _api_write_requires_confirmation(command: str) -> bool:
 		):
 			index += 1
 			continue
-		return True
-	return False
+		return noncanonical_reason
+	return None
+
+
+def _api_write_requires_confirmation(command: str) -> bool:
+	"""Return whether an allowlisted API write uses non-canonical curl options.
+
+	The settings rules are necessarily prefix matches. Keep their silent path
+	limited to one explicit method and destination followed only by headers and
+	request-body options; anything capable of changing curl's method, URL, or
+	transfer list must go through the normal harness prompt. The destination
+	policy also asks for writes outside session-owned Worker scripts.
+	"""
+	return _api_write_confirmation_reason(command) is not None
 
 
 def git_subcommands(command: str) -> set[str]:
@@ -1376,9 +1425,9 @@ def _request_confirmation(reason: str, prompt_reason: str | None = None) -> None
 		_pending_output["ask_reasons"].append(ask_reason)
 
 
-def _request_api_write_confirmation() -> None:
-	"""Restore the harness prompt for a non-canonical allowlisted API write."""
-	ask_reason = (
+def _request_api_write_confirmation(reason: str | None = None) -> None:
+	"""Restore the harness prompt for a non-canonical API write or destination."""
+	ask_reason = reason or (
 		"Non-canonical API curl options can override the allowlisted "
 		"HTTP method or destination."
 	)
@@ -1463,13 +1512,14 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	if not isinstance(command, str) or not command.strip():
 		return 0, ""
 	guarded_git_subcommands = git_subcommands(command) & GUARDED_SUBCOMMANDS
-	if _api_write_requires_confirmation(command):
+	api_write_reason = _api_write_confirmation_reason(command)
+	if api_write_reason is not None:
 		if guarded_git_subcommands:
 			return 2, (
 				"BLOCKED: run the non-canonical API write and git commit/push as "
 				"separate Bash calls so both permission guards can evaluate them."
 			)
-		_request_api_write_confirmation()
+		_request_api_write_confirmation(api_write_reason)
 		return 0, ""
 
 	if _guard_disabled():
