@@ -1244,6 +1244,46 @@ def test_fetch_issue_metadata_reuses_matching_cache_without_api_call() -> None:
 		assert "PR_BASE_BRANCH=orchestrator/project-829" in github_env_text
 
 
+def test_fetch_issue_metadata_does_not_let_issue_text_close_env_values() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_fetch_issue_env_delimiter_") as td:
+		issue_body = "Description\nEOF\nUNSAFE_BODY=enabled\nmore detail"
+		issue_title = "Title\nEOF\nUNSAFE_TITLE=enabled"
+		fetch_script = _extract_run_script("Fetch issue metadata")
+		start = fetch_script.index('printf \'%s\\n\' "${ISSUE_BODY}" > "${ISSUE_BODY_FILE}"')
+		end = fetch_script.index('} >> "$GITHUB_ENV"', start) + len('} >> "$GITHUB_ENV"')
+		github_env_file = Path(td) / "github_env.txt"
+		body_file = Path(td) / "issue_body.txt"
+		proc = subprocess.run(
+			["bash", "-c", "set -euo pipefail\n" + fetch_script[start:end]],
+			env={**os.environ, "ISSUE_BODY": issue_body, "ISSUE_TITLE": issue_title,
+				"ISSUE_BODY_FILE": str(body_file), "ISSUE_SCOPE_LOCK_GLOB": "EOF\nUNSAFE_SCOPE=enabled",
+				"ISSUE_NUMBER_JSON": "948", "ISSUE_URL_JSON": "https://github.com/owner/repo/issues/948",
+				"PR_BASE_BRANCH": "main", "GITHUB_ENV": str(github_env_file)},
+			capture_output=True, text=True, check=False,
+		)
+		assert proc.returncode == 0, proc.stderr
+		assert body_file.read_text(encoding="utf-8") == issue_body + "\n"
+		github_env_text = github_env_file.read_text(encoding="utf-8")
+		for name, value in (("ISSUE_BODY", issue_body), ("ISSUE_TITLE", issue_title),
+			("ISSUE_SCOPE_LOCK_GLOB", "EOF\nUNSAFE_SCOPE=enabled")):
+			match = re.search(rf"(?m)^{name}<<(ISSUE_[0-9a-f]{{32}})$", github_env_text)
+			assert match is not None
+			delimiter = match.group(1)
+			assert f"{name}<<{delimiter}\n{value}\n{delimiter}\n" in github_env_text
+		assert github_env_text.count("<<EOF") == 0
+		collision = "ISSUE_" + "a" * 32
+		blocked = subprocess.run(
+			["bash", "-c", "set -euo pipefail\nopenssl() { printf '%s\\n' '" + "a" * 32 + "'; }\n" + fetch_script[start:end]],
+			env={**os.environ, "ISSUE_BODY": collision + "\nmore detail", "ISSUE_TITLE": "Title",
+				"ISSUE_BODY_FILE": str(body_file), "ISSUE_SCOPE_LOCK_GLOB": "",
+				"ISSUE_NUMBER_JSON": "948", "ISSUE_URL_JSON": "https://github.com/owner/repo/issues/948",
+				"PR_BASE_BRANCH": "main", "GITHUB_ENV": str(github_env_file)},
+			capture_output=True, text=True, check=False,
+		)
+		assert blocked.returncode != 0
+		assert github_env_file.read_text(encoding="utf-8") == github_env_text
+
+
 def test_fetch_issue_metadata_refetches_invalid_or_mismatched_cache() -> None:
 	for case_name, issue_meta_payload in (
 		(

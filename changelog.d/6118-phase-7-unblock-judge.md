@@ -34,3 +34,6 @@ Activation verification uses the ACTIVATION_VERIFY role from `prompts/mode-activ
 Issue and project resume commands are posted before their block label is removed, except `/approved`: the block label is removed before posting that command so the implementation gate sees no guard label. If posting fails, the judge restores the block label for the next scan even when another actor removed it first (HTTP 404), and alerts CRITICAL if restoration also fails.
 
 The merged-PR guard also keeps numeric push refspecs in its branch check when output is redirected, while still recognizing adjacent unquoted file descriptors. Env-wrapped commits whose working directory cannot be resolved ask for confirmation instead of checking a different checkout.
+
+Project state and reset commands now verify their comment authors: only the authenticated pipeline account can write state, and only that account or a repository-associated human can reset a failed project. The implement workflow also uses a collision-checked random `GITHUB_ENV` delimiter for issue text, so an issue containing `EOF` cannot inject job variables.
+When the pipeline account cannot be verified, the poller pauses project processing and sends one CRITICAL Telegram alert per tick if configured.
