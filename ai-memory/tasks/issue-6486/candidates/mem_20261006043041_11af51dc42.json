@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How far should the `ai:workflow-heal` security-pass exemption in `scripts/security_pass_skip.py` (`SKIP_LABEL_MARKERS`) be narrowed?\nContext: `ai:check-triage` was already taken out of this table for the same reason: owner-filed issues built from logs contributors can influence (`triage-issue-launders-security-pass-exemption`). Today the intake files heal issues from four sources. Three of them come from logs contributors can influence: default-branch `CI` runs, `autofix_failure` reports (PR review logs), and consumer `repository_dispatch` escalations. The fourth is release and promotion `workflow_run` failures. A heal issue body today carries only the `fp`, `gen`, `root`, `source` and `classification` markers, so it does not show which source it came from.\nChoices:\nA) Remove `ai:workflow-heal` from `SKIP_LABEL_MARKERS`, so every heal-linked fix PR runs the single-issue security pass. This matches the `ai:check-triage` precedent, fails closed and needs no new marker. Update docs and contract tests to match. (RECOMMENDED)\nB) Keep the exemption only for release and promotion `workflow_run` heal issues. The intake would write a new provenance marker in the body (for example `<!-- workflow-failure-heal:source_kind=workflow_run -->` plus the workflow name), and `security_pass_skip.py` would check it. Issues from CI, `autofix_failure` and consumer escalations, and older issues without the marker, would run the pass.\nC) Exclude only CI-derived heal issues: add a marker recording the CI source and refuse the skip when it is present, keeping today's exemption for every other heal source. **Note:** this leaves the `autofix_failure` and consumer-escalation sources exempt, and they share the same contributor-log exposure.",
+  "fingerprint": "ee2ef5ac089fa52471707c35ea4440523727cc0e5de29aab9b17b83637363f94",
+  "lineage": {
+    "issue_number": 6486,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37413613162",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37413613162",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261006043041_11af51dc42",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6486,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37413613162"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6486 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-06T04:30:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
