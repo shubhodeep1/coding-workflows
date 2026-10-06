@@ -1809,6 +1809,22 @@ def test_autofix_report_dispatches_past_streak_threshold() -> None:
 		assert all(call[:1] != ["api"] or "/dispatches" in " ".join(call) for call in state["calls"])
 
 
+def test_autofix_report_default_threshold_reports_the_first_failure() -> None:
+	# Unset, empty, zero or non-numeric all mean the default of 1: one failed
+	# review run is enough to reach the heal intake.
+	for value in (None, "", "0", "abc"):
+		with tempfile.TemporaryDirectory(prefix="heal-autofix-default-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true"})
+			env.pop("WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK", None)
+			if value is not None:
+				env["WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK"] = value
+			result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+			assert result.returncode == 0, result.stderr + result.stdout
+			assert "dispatched pr=4174 failure=editor_empty_noop streak=1" in result.stdout, (value, result.stdout)
+			assert len(_state(state_file)["dispatches"]) == 1
+
+
 def test_autofix_report_counts_interleaved_post_editor_failures() -> None:
 	with tempfile.TemporaryDirectory(prefix="heal-autofix-interleaved-") as tmp_name:
 		tmp = Path(tmp_name)
@@ -1830,7 +1846,7 @@ def test_autofix_report_counts_interleaved_post_editor_failures() -> None:
 
 def test_autofix_report_skip_paths() -> None:
 	cases = [
-		("below_streak", [], {"AUTOFIX_EDITOR_EMPTY_NOOP": "true"}, "skip reason=below_streak pr=4174 reason=editor_empty_noop streak=1 threshold=2"),
+		("below_streak", [], {"AUTOFIX_EDITOR_EMPTY_NOOP": "true", "WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK": "2"}, "skip reason=below_streak pr=4174 reason=editor_empty_noop streak=1 threshold=2"),
 		("disabled", [{"body": AUTOFIX_NOOP_COMMENT}], {"WORKFLOW_HEAL_ENABLED": "false"}, "skip reason=disabled"),
 		("resolver", [{"body": AUTOFIX_NOOP_COMMENT}], {"RESOLVER_ESCALATED": "true"}, "skip reason=resolver_escalated"),
 		("dispatch_denied", [{"body": AUTOFIX_NOOP_COMMENT}], {"MOCK_DISPATCH_FAIL": "1"}, "skip reason=dispatch_denied pr=4174 failure=editor_empty_noop streak=2 upstream=shubhodeep1/coding-workflows detail=HTTP 422"),
@@ -1888,7 +1904,7 @@ def test_review_autofix_workflow_wires_the_heal_reporter() -> None:
 	)
 	assert "WORKFLOW_HEAL_ENABLED" in step["if"] and "RESOLVER_ESCALATED" in step["if"]
 	assert "${{" not in step["run"]
-	assert step["env"]["WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK"] == "${{ vars.WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK || '2' }}"
+	assert step["env"]["WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK"] == "${{ vars.WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK || '1' }}"
 	assert step["env"]["REPORT_WORKFLOW_NAME"] == "${{ github.workflow }}"
 	assert "workflow_failure_heal_autofix_report.sh" in step["run"]
 	# The summary step body lives in scripts/review_autofix_step_iteration_summary.sh.
