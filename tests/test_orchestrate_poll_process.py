@@ -1879,7 +1879,10 @@ if args[0] == 'api':
 	store.setdefault('api_calls', []).append(path)
 	if path == 'user':
 		save()
-		print(os.environ.get('MOCK_GH_USER_LOGIN', 'github-actions[bot]') if jq else json.dumps({'login': os.environ.get('MOCK_GH_USER_LOGIN', 'github-actions[bot]')}))
+		if store.get('fail_user_lookup'):
+			sys.exit(1)
+		login = store.get('authenticated_login', os.environ.get('MOCK_GH_USER_LOGIN', 'github-actions[bot]'))
+		print(login if jq else json.dumps({'login': login}))
 		sys.exit(0)
 
 	if path == 'graphql':
@@ -16972,7 +16975,7 @@ def test_missing_pipeline_login_alerts_once_per_tick():
 	poller_source = POLLER_SCRIPT.read_text(encoding="utf-8")
 	login_function = poller_source.split("unblock_trusted_login() {", 1)[1].split("\n}", 1)[0]
 	script = (
-		"set -euo pipefail\nUNBLOCK_TRUSTED_LOGIN=''\nUNBLOCK_TRUSTED_LOGIN_STATE=unset\n"
+		"set -euo pipefail\nUNBLOCK_TRUSTED_LOGIN=''\nUNBLOCK_TRUSTED_LOGIN_STATE=unset\nORCH_STATE_IDENTITY_ALERT_SENT=false\n"
 		"GITHUB_REPOSITORY=owner/repo\nGITHUB_RUN_ID=123\nalert_count=0\n"
 		"gh_retry() { return 1; }\n_gh_url() { printf 'https://github.test/run'; }\n"
 		"tg_send_msg() { alert_count=$((alert_count + 1)); }\n"
@@ -16987,7 +16990,7 @@ def test_missing_pipeline_login_alerts_once_per_tick():
 def test_project_state_and_reset_commands_require_authenticated_commenters():
 	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
 	assert 'unblock_trusted_login >/dev/null\n  if [ -z "${UNBLOCK_TRUSTED_LOGIN}" ]; then' in poller
-	assert 'extract_latest_valid_orchestrator_state "${TRUSTED_STATE_COMMENTS}"' in poller
+	assert 'extract_latest_valid_orchestrator_state "${COMMENTS}"' in poller
 	assert 'select((.user.login // "") == $login)' in poller
 	for command in ("RE_SECURITY_PASS_COMMENT_JSON", "REVALIDATE_COMMENT_JSON", "JUDGE_RESUME_BODY"):
 		start = poller.index(f'{command}="$(echo "${{COMMENTS}}" | jq')
@@ -18769,6 +18772,99 @@ def test_state_extraction_with_special_chars_in_comment_bodies():
 	assert final_state["status"] == "in_progress"
 
 
+@pytest.mark.parametrize("forged_version", ["v1", "v2"])
+def test_state_extraction_ignores_newer_forged_state(forged_version: str):
+	state = _base_state(status="in_progress")
+	forged = dict(state, status="complete")
+	if forged_version == "v1":
+		forged_bodies = [_state_comment(forged)]
+	else:
+		forged_bodies = [entry["body"] for entry in _build_v2_state_comment_chain(json.dumps(forged), chunk_size=20000)]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=[{"body": body, "user": {"login": "attacker"}} for body in forged_bodies],
+		issue_labels={10: ["ai:implementing"]},
+	)
+	assert result["latest_state"]["status"] == "in_progress"
+	assert "ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=192 outcome=filtered ignored=" in result["stderr"]
+	assert "State reconstructed and posted" not in result["stdout"]
+
+
+def test_state_extraction_skips_mixed_author_v2_chain():
+	state = _base_state(status="in_progress")
+	trusted = dict(state, author_filter_probe="trusted-v2")
+	trusted_chain = _build_v2_state_comment_chain(json.dumps(trusted), chunk_size=20000)
+	forged = dict(state, status="complete")
+	encoded_length = len(base64.b64encode(json.dumps(forged).encode("utf-8")))
+	mixed_chain = _build_v2_state_comment_chain(json.dumps(forged), chunk_size=encoded_length // 2)
+	assert len(mixed_chain) >= 2
+	comments = [
+		{"body": entry["body"], "user": {"login": "github-actions[bot]"}}
+		for entry in trusted_chain + mixed_chain[:-1]
+	]
+	comments.append({"body": mixed_chain[-1]["body"], "user": {"login": "attacker"}})
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=comments,
+		issue_labels={10: ["ai:implementing"]},
+	)
+	assert result["latest_state"]["author_filter_probe"] == "trusted-v2"
+	assert result["latest_state"]["status"] == "in_progress"
+	assert "outcome=filtered ignored=1" in result["stderr"]
+
+
+def test_state_identity_failure_skips_reconstruction_and_state_writes():
+	result = _run_poller(
+		state=_base_state(status="in_progress"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		mock_store_extra={"fail_user_lookup": True},
+	)
+	assert "ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=192 outcome=identity_unavailable" in result["stderr"]
+	assert "skipping this tracking issue and state reconstruction" in result["stdout"]
+	assert "search/issues" not in result["api_calls"]
+	assert len(result["issues"]["192"]["comments"]) == 1
+
+
+def test_state_author_filter_covers_all_extraction_callers():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	extractor = script.split("extract_latest_valid_orchestrator_state() {", 1)[1].split("\nensure_label_exists()", 1)[0]
+	assert extractor.index("unblock_trusted_login >/dev/null") < extractor.index("orchestrate_state_v2.py extract")
+	assert 'printf \'%s\' "${trusted_comments_json}" > "${_v2_comments_file}"' in extractor
+	assert 'printf \'%s\' "${trusted_comments_json}" | jq -c' in extractor
+	assert 'extract_latest_valid_orchestrator_state "${COMMENTS}"' in script
+	main = script.split('if [ -z "${STATE_JSON}" ] || [ "${STATE_JSON}" = "null" ]; then', 1)[1]
+	assert main.index('"${EXTRACTED_STATE_IDENTITY_UNAVAILABLE}"') < main.index('"${STATE_COMMENT_COUNT}"')
+	assert 'RESOLVED_ORCHESTRATOR_STATE_IDENTITY_UNAVAILABLE="true"' in script
+	assert 'FOLLOWUP_PR_BLOCKED="true"' in script.split('if [ "${RESOLVED_ORCHESTRATOR_STATE_IDENTITY_UNAVAILABLE}" = "true" ]; then', 1)[1]
+	assert 'skipping standalone stall recovery this tick' in script
+
+
+def test_state_identity_failure_alerts_once_without_tracking_issues():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	identity_helper = script.split('UNBLOCK_TRUSTED_LOGIN=""\nUNBLOCK_TRUSTED_LOGIN_STATE="unset"', 1)[1].split('\nextract_latest_valid_orchestrator_state() {', 1)[0]
+	harness = '''set -euo pipefail
+gh_retry() { return 1; }
+_gh_url() { printf 'https://example.test/run'; }
+alerts=0
+tg_send_msg() { [ "$2" = CRITICAL ]; alerts=$((alerts + 1)); }
+GITHUB_REPOSITORY=owner/repo
+UNBLOCK_TRUSTED_LOGIN=""
+UNBLOCK_TRUSTED_LOGIN_STATE="unset"
+''' + identity_helper + '''
+unblock_trusted_login >/dev/null
+unblock_trusted_login >/dev/null
+[ "$alerts" -eq 1 ]
+[ "$UNBLOCK_TRUSTED_LOGIN_STATE" = failed ]
+'''
+	result = subprocess.run(["bash", "-c", harness], capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+
+
 def test_malformed_latest_state_falls_back_to_older_valid_and_posts_healed_state():
 	state = _base_state(status="in_progress")
 	malformed_latest = '<!-- ORCHESTRATOR_STATE_V1\n{"schema_version":"orchestrate_state.v1",\nORCHESTRATOR_STATE_V1 -->'
@@ -18830,7 +18926,7 @@ def test_all_invalid_state_comments_trigger_reconstruction_path_without_heal():
 		state=invalid_state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		tracking_comments=[malformed_latest],
+		tracking_comments=[{"body": malformed_latest, "user": {"login": "github-actions[bot]"}}],
 		issue_labels={10: ["ai:implementing"]},
 	)
 	assert "No valid ORCHESTRATOR_STATE_V1 comment found for tracking issue #192. Attempting state reconstruction..." in result["stdout"]
@@ -18913,7 +19009,7 @@ def test_reconstruction_refused_when_body_has_completed_unmapped_issue():
 		state=invalid_state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		tracking_comments=[malformed_latest],
+		tracking_comments=[{"body": malformed_latest, "user": {"login": "github-actions[bot]"}}],
 		tracking_body=rewindable_body,
 		issue_labels={10: ["ai:implementing"]},
 	)

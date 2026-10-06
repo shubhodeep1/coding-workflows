@@ -3179,8 +3179,33 @@ is_valid_orchestrator_state_json() {
   ' >/dev/null 2>&1
 }
 
+UNBLOCK_TRUSTED_LOGIN=""
+UNBLOCK_TRUSTED_LOGIN_STATE="unset"
+ORCH_STATE_IDENTITY_ALERT_SENT="false"
+
+# The pipeline's own login (the GH_PAT user), resolved at most once per tick
+# with one `user` read; empty when it cannot be resolved.
+unblock_trusted_login() {
+  if [ "${UNBLOCK_TRUSTED_LOGIN_STATE}" = "unset" ]; then
+    UNBLOCK_TRUSTED_LOGIN="$(gh_retry _safe_gh_jq "user" --jq '.login // ""' 2>/dev/null || true)"
+    if [[ "${UNBLOCK_TRUSTED_LOGIN}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+      UNBLOCK_TRUSTED_LOGIN_STATE="ok"
+    else
+      UNBLOCK_TRUSTED_LOGIN=""
+      UNBLOCK_TRUSTED_LOGIN_STATE="failed"
+      if [ "${ORCH_STATE_IDENTITY_ALERT_SENT}" != "true" ]; then
+        tg_send_msg "Orchestrator cannot verify its GitHub identity for ${GITHUB_REPOSITORY}; tracking projects are paused. Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID:-unknown}")" "CRITICAL" >/dev/null 2>&1 || true
+        ORCH_STATE_IDENTITY_ALERT_SENT="true"
+      fi
+    fi
+  fi
+  printf '%s' "${UNBLOCK_TRUSTED_LOGIN}"
+}
+
 extract_latest_valid_orchestrator_state() {
   local comments_json="$1"
+  local trusted_comments_json
+  local ignored_count
   local candidate
   local candidate_body
   local candidate_state
@@ -3190,6 +3215,28 @@ extract_latest_valid_orchestrator_state() {
   EXTRACTED_STATE_JSON=""
   EXTRACTED_STATE_FALLBACK_USED="false"
   EXTRACTED_STATE_COMMENT_COUNT=0
+  EXTRACTED_STATE_IDENTITY_UNAVAILABLE="false"
+  EXTRACTED_STATE_UNTRUSTED_IGNORED=0
+
+  unblock_trusted_login >/dev/null
+  if [ -z "${UNBLOCK_TRUSTED_LOGIN}" ]; then
+    EXTRACTED_STATE_IDENTITY_UNAVAILABLE="true"
+    echo "::warning::ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=${TRACKING_NUM:-?} outcome=identity_unavailable" >&2
+    return 1
+  fi
+  if ! trusted_comments_json="$(printf '%s' "${comments_json}" | jq -c --arg login "${UNBLOCK_TRUSTED_LOGIN}" '[.[]? | select((.user.login // "") == $login)]' 2>/dev/null)"; then
+    # Do not mistake a failed author-filter parse for an empty, verified
+    # thread: the latter can trigger destructive state reconstruction.
+    trusted_comments_json='[]'
+    EXTRACTED_STATE_IDENTITY_UNAVAILABLE="true"
+    echo "::warning::ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=${TRACKING_NUM:-?} outcome=identity_unavailable reason=filter_failed" >&2
+    return 1
+  fi
+  ignored_count="$(printf '%s' "${comments_json}" | jq -r --arg login "${UNBLOCK_TRUSTED_LOGIN}" '[.[]? | select((.user.login // "") != $login and ((.body // "") | (contains("ORCHESTRATOR_STATE_V1") or contains("ORCHESTRATOR_STATE_V2"))))] | length' 2>/dev/null)" || ignored_count=0
+  EXTRACTED_STATE_UNTRUSTED_IGNORED="${ignored_count}"
+  if [ "${EXTRACTED_STATE_UNTRUSTED_IGNORED}" -gt 0 ]; then
+    echo "::warning::ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=${TRACKING_NUM:-?} outcome=filtered ignored=${EXTRACTED_STATE_UNTRUSTED_IGNORED}" >&2
+  fi
 
   # Try the V2 chunked-chain reader first.  If a complete V2 chain is
   # present (newest write wins), use it; otherwise fall through to the
@@ -3199,7 +3246,7 @@ extract_latest_valid_orchestrator_state() {
   local _v2_comments_file _v2_payload_file _v2_rc
   _v2_comments_file="$(mktemp "${TMPDIR:-/tmp}/orch_state_v2_comments.XXXXXX")"
   _v2_payload_file="$(mktemp "${TMPDIR:-/tmp}/orch_state_v2_payload.XXXXXX")"
-  printf '%s' "${comments_json}" > "${_v2_comments_file}"
+  printf '%s' "${trusted_comments_json}" > "${_v2_comments_file}"
   python3 scripts/orchestrate_state_v2.py extract \
     --comments-json "${_v2_comments_file}" > "${_v2_payload_file}" 2>/dev/null
   _v2_rc=$?
@@ -3248,7 +3295,7 @@ extract_latest_valid_orchestrator_state() {
       fi
       return 0
     fi
-  done < <(printf '%s' "${comments_json}" | jq -c '[.[] | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] | reverse | .[]?' 2>/dev/null || true)
+  done < <(printf '%s' "${trusted_comments_json}" | jq -c '[.[] | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] | reverse | .[]?' 2>/dev/null || true)
 
   return 1
 }
@@ -4949,6 +4996,7 @@ resolve_active_orchestrator_context_for_issue() {
   local tracking_state_json
 
   RESOLVED_ORCHESTRATOR_OWNED="false"
+  RESOLVED_ORCHESTRATOR_STATE_IDENTITY_UNAVAILABLE="false"
   RESOLVED_TRACKING_ISSUE=""
   RESOLVED_INTEGRATION_BRANCH=""
   RESOLVED_INTEGRATION_BRANCH_EXISTS="false"
@@ -4991,6 +5039,10 @@ resolve_active_orchestrator_context_for_issue() {
 
     tracking_state_json=""
     if ! extract_latest_valid_orchestrator_state "${tracking_comments}"; then
+      if [ "${EXTRACTED_STATE_IDENTITY_UNAVAILABLE}" = "true" ]; then
+        RESOLVED_ORCHESTRATOR_STATE_IDENTITY_UNAVAILABLE="true"
+        return 0
+      fi
       continue
     fi
     tracking_state_json="${EXTRACTED_STATE_JSON}"
@@ -16571,25 +16623,7 @@ _reconcile_merged_pr_issue() {
 # written by the per-project loop and read by run_unblock_scan. No API call.
 UNBLOCK_FAILED_PROJECTS_FILE="$(mktemp "${RUNNER_TEMP:-/tmp}/unblock_failed_projects.XXXXXX" 2>/dev/null || echo "${RUNNER_TEMP:-/tmp}/unblock_failed_projects.txt")"
 : > "${UNBLOCK_FAILED_PROJECTS_FILE}" 2>/dev/null || true
-UNBLOCK_TRUSTED_LOGIN=""
-UNBLOCK_TRUSTED_LOGIN_STATE="unset"
-
-# The pipeline's own login (the GH_PAT user), resolved at most once per tick
-# with one `user` read; empty when it cannot be resolved.
-unblock_trusted_login() {
-  if [ "${UNBLOCK_TRUSTED_LOGIN_STATE}" = "unset" ]; then
-    UNBLOCK_TRUSTED_LOGIN="$(gh_retry _safe_gh_jq "user" --jq '.login // ""' 2>/dev/null || true)"
-    if [[ "${UNBLOCK_TRUSTED_LOGIN}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
-      UNBLOCK_TRUSTED_LOGIN_STATE="ok"
-    else
-      UNBLOCK_TRUSTED_LOGIN=""
-      UNBLOCK_TRUSTED_LOGIN_STATE="failed"
-      # A failed identity probe stops every project; alert once, not per issue.
-      tg_send_msg "Orchestrator cannot verify its GitHub identity for ${GITHUB_REPOSITORY}; tracking projects are paused. Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID:-unknown}")" "CRITICAL" >/dev/null 2>&1 || true
-    fi
-  fi
-  printf '%s' "${UNBLOCK_TRUSTED_LOGIN}"
-}
+# unblock_trusted_login and its cache are defined above the state extractor.
 
 # Per project, before any command handler. Returns 10 only when the
 # ai:unblock-closed label has the newest trusted close verdict for this project
@@ -17234,6 +17268,10 @@ run_standalone_stall_recovery() {
       t_state_json=""
       if extract_latest_valid_orchestrator_state "${t_comments}"; then
         t_state_json="${EXTRACTED_STATE_JSON}"
+      fi
+      if [ "${EXTRACTED_STATE_IDENTITY_UNAVAILABLE}" = "true" ]; then
+        echo "::warning::Pipeline identity unavailable; skipping standalone stall recovery this tick (managed issue set cannot be verified)."
+        return 0
       fi
       managed_nums="$(printf '%s' "${t_state_json}" | jq -r '.waves[]?.issues[]?.github_issue // empty' 2>/dev/null || true)"
       if [ -n "${managed_nums}" ]; then
@@ -19398,21 +19436,12 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   fi
   rm -f "${_comments_raw}"
 
-  # State is executable pipeline control data, not issue discussion. Reuse
-  # the same authenticated GH_PAT identity as the unblock ledger/scan.
-  unblock_trusted_login >/dev/null
-  if [ -z "${UNBLOCK_TRUSTED_LOGIN}" ]; then
-    echo "::warning::Cannot verify state comment author for tracking issue #${TRACKING_NUM}; skipping this tick."
-    continue
-  fi
-  TRUSTED_STATE_COMMENTS="$(printf '%s' "${COMMENTS}" | jq -c --arg login "${UNBLOCK_TRUSTED_LOGIN}" '[.[] | select((.user.login // "") == $login)]' 2>/dev/null)" || {
-    echo "::warning::Cannot filter state comments for tracking issue #${TRACKING_NUM}; skipping this tick."
-    continue
-  }
+  # State is executable pipeline control data; the extractor verifies every
+  # comment's author before either V1 or V2 parsing.
   STATE_JSON=""
   STATE_COMMENT_COUNT=0
   STATE_FALLBACK_USED="false"
-  if extract_latest_valid_orchestrator_state "${TRUSTED_STATE_COMMENTS}"; then
+  if extract_latest_valid_orchestrator_state "${COMMENTS}"; then
     STATE_JSON="${EXTRACTED_STATE_JSON}"
     STATE_COMMENT_COUNT="${EXTRACTED_STATE_COMMENT_COUNT}"
     STATE_FALLBACK_USED="${EXTRACTED_STATE_FALLBACK_USED}"
@@ -19446,6 +19475,10 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     # later poll cycle read the real state.
     if [ "${COMMENTS_FETCH_OK}" != "true" ]; then
       echo "::warning::Comments fetch failed for tracking issue #${TRACKING_NUM}; cannot confirm orchestrator state is missing. Skipping state reconstruction this cycle (will retry next poll)."
+      continue
+    fi
+    if [ "${EXTRACTED_STATE_IDENTITY_UNAVAILABLE}" = "true" ]; then
+      echo "::warning::Pipeline identity unavailable; cannot verify state-comment authors for #${TRACKING_NUM}; skipping this tracking issue and state reconstruction this cycle."
       continue
     fi
     if [ "${STATE_COMMENT_COUNT}" -gt 0 ]; then
@@ -22389,7 +22422,11 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
           ORCH_FOLLOWUP_INTEGRATION_BRANCH="${RESOLVED_INTEGRATION_BRANCH}"
           ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS="${RESOLVED_INTEGRATION_BRANCH_EXISTS}"
 
-          if [ "${ORCH_FOLLOWUP_OWNED}" = "true" ]; then
+          if [ "${RESOLVED_ORCHESTRATOR_STATE_IDENTITY_UNAVAILABLE}" = "true" ]; then
+            FOLLOWUP_PR_BLOCKED="true"
+            FOLLOWUP_BLOCK_REASON="Orchestrator state author cannot be verified (pipeline identity unavailable); not retargeting follow-up PR for issue #${rb_issue} this tick."
+            echo "::warning::${FOLLOWUP_BLOCK_REASON}"
+          elif [ "${ORCH_FOLLOWUP_OWNED}" = "true" ]; then
             if [ "${ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${ORCH_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
               BASE_REF="${ORCH_FOLLOWUP_INTEGRATION_BRANCH}"
               echo "  Follow-up PR for issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}). Retargeting base to ${BASE_REF}."
