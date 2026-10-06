@@ -1924,7 +1924,11 @@ if args[0] == 'api':
 			if re.search(r'(?m)^\s*body\s*$', query):
 				issue_payload['body'] = issue.get('body', '')
 			if 'labels(first:' in query:
-				issue_payload['labels'] = {'nodes': [{'name': label} for label in labels]}
+				label_limit = int(re.search(r'labels\(first:\s*(\d+)\)', query).group(1))
+				issue_payload['labels'] = {
+					'nodes': [{'name': label} for label in labels[:label_limit]],
+					'pageInfo': {'hasNextPage': len(labels) > label_limit},
+				}
 			if 'comments(last:' in query and issue_num not in set(store.get('graphql_comments_unavailable_for', [])):
 				comment_nodes = []
 				for comment in issue.get('comments', [])[-100:]:
