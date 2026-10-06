@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_integration_judge_scope_guard.py:241-248 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: `test_unprotected_conflict_accepts_empty_resolution` expects an empty resolution to pass, but the verifier rejects it because both merge sides contain shared lines.\n  WHY: The test returns nonzero because the shared-line retention check now applies to every conflicted path, so it fails in CI.\n- tests/test_codex_agent_isolation_contract.py:208 | severity=high | confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The last autofix run added \"issue_pr_status.yml\" to a sandbox codex version pinning test, an unrelated change that may have been included by merge conflict resolution.\n  WHY: The change is unrelated to the PR's provenance-check purpose and may indicate that the merge resolution included changes from other work.\n- scripts/orchestrate_poll_process.sh:8886-8947 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: ValueError messages use \"protected\" for checks that now apply to all conflicted files, making the messages misleading.\n  WHY: This does not fail at runtime because the exception is caught and logged with the fixed reason token, but the misleading message may appear in a traceback or debug output.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:8886, 8894, 8896, 8907, 8914, 8920, 8935, 8947 | severity=NIT | confidence=4\n  PROBLEM: The ValueError messages at these lines use the word \"protected\" (\"deleted protected conflict\", \"invalid protected mode\", \"changed protected mode\") even though the checks now apply to all conflicted files. Same applies to \"invented protected line\" at line 8907, \"removed shared protected line\" at line 8914, \"duplicated unchanged protected line\" at line 8920, \"protected line provenance work limit exceeded\" at line 8935, and \"reordered or duplicated protected line\" at line 8947.\n  WHY: Does not fail at runtime. The ValueError is caught by the except block at line 8958 and logged with the fixed reason token \"protected_path_provenance\" kept for backward compatibility per the comment at line 8959. The misleading message would only appear in a traceback or debug output.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_integration_judge_scope_guard.py:241-248 | severity=MAJOR | confidence=5\n  PROBLEM: The test expects an empty resolution of the src/app.py conflict to be accepted. The verifier now applies the shared-line retention check to every conflicted path; both merge sides contain \u201cfirst\u201d and \u201clast\u201d, so the empty resolution is rejected at scripts/orchestrate_poll_process.sh:8911-8914.\n  WHY: Running this test returns nonzero from the verifier, so the test fails in CI.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_codex_agent_isolation_contract.py:Line 208 (in LAST RUN DIFF) | severity=MAJOR | confidence=4\n  PROBLEM: The last autofix run added \"issue_pr_status.yml\" to the test_workflows_pin_the_sandbox_codex_version parameter list, but this change is unrelated to the security fix being reviewed.\n  WHY: This appears to be a merge conflict resolution artifact from commit 47437c41e35bbfa09a2adcbcca6944436f37938a ([ai-merge-resolve]). The change adds a workflow to a test that verifies sandbox codex version pinning, but the PR's purpose is to fix the integration-judge provenance check, not to modify codex isolation tests. This unrelated change in the last autofix run suggests the merge resolution may have inadvertently included changes from other work.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "8f6e307d49939f4a4ae7ef75dde9a0e2ba060d2568269bedb434c61a84538912",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6485,
+    "run_id": "37426348638",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37426348638",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006071649_7f6be61d4a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6485,
+    "run_id": "37426348638"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T07:16:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
