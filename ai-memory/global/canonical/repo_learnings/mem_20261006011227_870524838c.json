@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Treat workflow behavior as a contract across workflow YAML, helper scripts, and focused tests.",
   "timestamps": {
     "created_at": "2026-10-06T01:12:27Z",
