@@ -839,7 +839,7 @@ def test_rb_helper_keeps_transfer_failure_after_cleanup(tmp_path):
 def test_rb_helper_reports_unsafe_directory_without_repeating_path(tmp_path):
 	proc, calls = _run_rb_helper(tmp_path, engine="claude", mode="unsafe_directory", access="write")
 	assert "rc=1 flag=true" in proc.stdout, proc.stderr
-	assert "sandbox transfer failed; refusing to commit the fix. reason=unsafe_directory" in proc.stderr
+	assert "sandbox transfer failed; refusing to commit the fix. reason=unsafe_directory category=other depth=2" in proc.stderr
 	assert "dir=.claude/commands" not in proc.stderr
 	assert calls.splitlines()[-1] == "cleanup"
 

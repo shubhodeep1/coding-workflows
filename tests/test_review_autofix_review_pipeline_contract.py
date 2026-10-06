@@ -8845,7 +8845,7 @@ def test_review_isolation_transfer_rejection_names_path_and_rule() -> None:
 		result, reason, host_before, host_after, leftovers = _review_isolation_transfer_case(mutate)
 		assert result.returncode == 1, (expected, result.stderr)
 		assert result.stderr == f"::error::Review isolation snapshot or transfer rejected (ValueError) {expected}\n", result.stderr
-		# Only bounded, redacted directory names reach the log.
+		# Only fixed classification tokens reach the log.
 		assert result.stderr.count("::") == 2 and result.stderr.count("\n") == 1
 		assert reason is None
 		assert host_after == host_before
@@ -8909,7 +8909,7 @@ def test_review_sandbox_transfer_reason_is_reported_and_archived() -> None:
 
 
 def test_review_isolation_unsafe_directory_reports_path_free_category() -> None:
-	"""An unsafe_directory rejection only names a bounded, redacted directory.
+	"""An unsafe_directory rejection only names fixed classification tokens.
 
 	The rejection itself is unchanged: the whole transfer still fails before
 	the first host write, including the legitimate edit beside the directory.

@@ -137,7 +137,7 @@ attempt=1
 	if mode == "transfer_failed":
 		assert "reason=unsafe_file" in result.stderr
 	if mode == "transfer_category":
-		assert "reason=unsafe_directory" in result.stderr
+		assert "reason=unsafe_directory category=symlink depth=2" in result.stderr
 	if mode == "outdated":
 		assert "reason=sandbox_helper_outdated" in result.stderr
 

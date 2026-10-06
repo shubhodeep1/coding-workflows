@@ -487,8 +487,7 @@ def main():
 		else:
 			transfer(host, workspace, manifest)
 	except (OSError, ValueError, UnicodeError, subprocess.CalledProcessError) as exc:
-		# Only fixed reasons cross into logs, except one bounded, redacted relative
-		# directory name. The first rejected directory in walk order is reported.
+		# Only fixed reason, category and depth tokens cross into logs, never a directory name.
 		reason_code = {
 			"admitted command inventory missing": "admitted_inventory_missing",
 			"symlink in workspace path": "symlink_path",
