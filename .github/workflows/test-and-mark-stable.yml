@@ -4657,10 +4657,13 @@ jobs:
       # workflow-templates/.claude/ (hooks, scripts, commands, settings.json)
       # to every consumer together with the workflow wrappers, so the release
       # gate runs the same Claude asset suites CI runs on every PR.
+      # Parity runs on the committed tree without PR-time dry-run preparation;
+      # a template waiting for a live-copy sync PR blocks the release.
       - name: Claude asset tests (CLAUDE.md, .claude hooks, scripts, commands)
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
+            tests/test_claude_template_live_parity.py \
             tests/test_pr_merge_status_guard.py \
             tests/test_pr_watch_guard.py \
             tests/test_gh_api_write_guard.py \

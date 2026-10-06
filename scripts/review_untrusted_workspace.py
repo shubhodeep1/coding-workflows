@@ -16,6 +16,7 @@ import tempfile
 from pathlib import Path, PurePosixPath
 
 MAX_FILE = 2 * 1024 * 1024
+MAX_README_PROMPT_BYTES = 200000
 MAX_TOTAL = 64 * 1024 * 1024
 MAX_FILES = 5000
 EXCLUDED = {".git", ".ai", ".codex", ".opencode", ".serena", ".venv", ".review-venv", "venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".cache", ".tox", ".nox", "dist", "build", "coverage", ".next", ".turbo", ".codex-workflow-src", ".codex-workflow-src-main", "secrets", "credentials"}
@@ -36,6 +37,8 @@ def allowed(name, host=None, commands=None):
 	parts = PurePosixPath(name).parts
 	if not parts or name.startswith("/") or ".." in parts or "\\" in name or "\n" in name or "\r" in name:
 		return False
+	if name == "tests/test_audit_plans_command.py":
+		return False  # Its operator-facing command input is intentionally excluded.
 	if any(part.lower() in EXCLUDED or part.lower().startswith(".env") or "secret" in part.lower() or "credential" in part.lower() or part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore", ".egg-info", ".dist-info")) for part in parts):
 		return False
 	if name in (".github/ai/claude_engine.json", ".claude/hooks/gh_api_write_guard.py", ".claude/hooks/pr_merge_status_guard.py", "scripts/claude_settings.json.tmpl"):
@@ -99,6 +102,26 @@ def read_regular(path):
 	if len(data) != info.st_size:
 		raise ValueError("file changed during read")
 	return data, 0o755 if info.st_mode & 0o111 else 0o644
+
+
+def readme_trimmed(host: Path) -> bytes:
+	# README is PR-controlled; only read the fixed name through the no-follow reader.
+	try:
+		os.lstat(host / "README.md")
+	except FileNotFoundError:
+		return b""
+	data, _ = read_regular(checked_path(host, "README.md"))
+	if not data:
+		return b""
+	lines = []
+	# awk prints each input record with a newline, including an unterminated last line.
+	for line in data.split(b"\n")[: -1 if data.endswith(b"\n") else None]:
+		if line.startswith(b"### 2. Create wrapper workflows"):
+			break
+		lines.append(line + b"\n")
+	if sum(len(line) + len(b"UNTRUSTED_DATA: ") for line in lines) > MAX_README_PROMPT_BYTES:
+		raise ValueError("README exceeds prompt budget")
+	return b"".join(lines)
 
 
 def fingerprint(path):
@@ -259,6 +282,29 @@ def refresh(host, workspace, manifest):
 
 
 def main():
+	if sys.argv[1:2] == ["readme-trimmed"]:
+		if len(sys.argv) != 3:
+			raise SystemExit(2)
+		try:
+			readme_data = readme_trimmed(Path(sys.argv[2]))
+		except ValueError as exc:
+			reason = {
+				"symlink in workspace path": "symlink_path",
+				"unsafe file type or size": "unsafe_file",
+				"file changed during read": "file_changed",
+				"README exceeds prompt budget": "prompt_size",
+			}.get(str(exc), "unknown")
+			print(f"REVIEW_STATIC_CONTEXT_README outcome=rejected reason={reason}", file=sys.stderr)
+			raise SystemExit(3) from None
+		except Exception:
+			print("::error::Review static README read failed", file=sys.stderr)
+			raise SystemExit(1) from None
+		try:
+			sys.stdout.buffer.write(readme_data)
+		except Exception:
+			print("::error::Review static README output failed", file=sys.stderr)
+			raise SystemExit(1) from None
+		return
 	# snapshot alone takes an optional fifth argument: the host Git dir.
 	if sys.argv[1:2] not in (["snapshot"], ["refresh"], ["transfer"]) or not (len(sys.argv) == 5 or (len(sys.argv) == 6 and sys.argv[1] == "snapshot")):
 		raise SystemExit(2)

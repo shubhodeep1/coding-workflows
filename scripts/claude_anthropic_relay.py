@@ -29,6 +29,7 @@ import socketserver
 import ssl
 import stat
 import sys
+import time
 
 MAX_BODY = 32 * 1024 * 1024
 UPSTREAM_HOST = "api.anthropic.com"
@@ -100,6 +101,10 @@ class Relay(http.server.BaseHTTPRequestHandler):
 		pass
 
 	def _reject(self, status):
+		try:
+			self.connection.settimeout(1)
+		except OSError:
+			pass
 		self.send_error(status, "Request rejected")
 		self.close_connection = True
 
@@ -108,6 +113,7 @@ class Relay(http.server.BaseHTTPRequestHandler):
 		# or (on the broker) any client authorization cross the boundary.
 		mode = self.server.mode
 		length = self.headers.get("Content-Length", "")
+		headers = forwarded_request_headers(self.headers)
 		if (
 			not PATH_RE.match(self.path)
 			or self.headers.get("Transfer-Encoding")
@@ -122,11 +128,29 @@ class Relay(http.server.BaseHTTPRequestHandler):
 			or self.headers.get("Content-Type", "").split(";")[0].strip().lower() != "application/json"
 			or not length.isascii()
 			or not length.isdecimal()
+			or len(length) > 10
 			or not 0 < int(length) <= MAX_BODY
+			or headers is None
 		):
-			return self._reject(400)
-		headers = forwarded_request_headers(self.headers)
-		if headers is None:
+			# Consume a bounded, declared body before closing so a rejected
+			# client still sending it can receive the 400 instead of EPIPE.
+			if len(length) <= 8 and length.isascii() and length.isdecimal() and 0 < int(length) <= MAX_BODY:
+				drain_deadline = time.monotonic() + 1
+				drain_remaining = int(length)
+				try:
+					while drain_remaining and (drain_wait := drain_deadline - time.monotonic()) > 0:
+						self.connection.settimeout(drain_wait)
+						drain_chunk = self.rfile.read1(min(drain_remaining, 65536))
+						if not drain_chunk:
+							break
+						drain_remaining -= len(drain_chunk)
+				except OSError:
+					pass
+				# Give the rejection write its own bounded timeout even if draining failed.
+				try:
+					self.connection.settimeout(1)
+				except OSError:
+					pass
 			return self._reject(400)
 		body = self.rfile.read(int(length))
 		if len(body) != int(length):

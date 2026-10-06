@@ -330,7 +330,7 @@ jobs:
           mkdir -p scripts
 
           _fetched_scripts=()
-          for f in gh_helpers.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh orchestrate_parse_and_post_answer.sh clarify_isolated_run.sh clarify_openrouter_broker.py ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl auto_decisions.py clarify_github_facts.py clarify_data_provision_guard.py; do
+          for f in gh_helpers.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh orchestrate_parse_and_post_answer.sh clarify_isolated_run.sh clarify_openrouter_broker.py ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl auto_decisions.py clarify_github_facts.py clarify_data_provision_guard.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -743,10 +743,20 @@ jobs:
         run: |
           set -euo pipefail
 
+          if [ -L unattended_system_instructions.md ] || [ -L ai_pipeline.md ]; then
+            echo "::error::Required static context input is a symbolic link; refusing to assemble the prompt." >&2
+            exit 1
+          fi
           if [ ! -s unattended_system_instructions.md ] || [ ! -s ai_pipeline.md ]; then
             echo "Missing or empty required codex input file(s): unattended_system_instructions.md and/or ai_pipeline.md"
             exit 1
           fi
+          if [ -L ./pre_assembled_static.txt ] || { [ -e ./pre_assembled_static.txt ] && [ ! -f ./pre_assembled_static.txt ]; }; then
+            echo "::error::Checkout contains a non-regular pre_assembled_static.txt; refusing to assemble static context." >&2
+            exit 1
+          fi
+          clarify_respond_readme_context="$(mktemp "${RUNNER_TEMP}/clarify-respond-readme.XXXXXX")"
+          bash scripts/build_static_context.sh readme "${clarify_respond_readme_context}"
 
           # Keep an identical static prefix at the start of every request so
           # provider-side prompt prefix caching can be reused across runs.
@@ -757,26 +767,31 @@ jobs:
             echo "=== AI PIPELINE ==="
             cat ai_pipeline.md
             echo
-            if [ -f AGENTS.md ]; then
+            if [ -L AGENTS.md ]; then
+              echo "::warning::AGENTS.md is a symbolic link; omitted from the static context." >&2
+            fi
+            if [ -L agents.md ]; then
+              echo "::warning::agents.md is a symbolic link; omitted from the static context." >&2
+            fi
+            if [ -f AGENTS.md ] && [ ! -L AGENTS.md ]; then
               echo "=== AGENTS.MD ==="
               cat AGENTS.md
               echo
-            elif [ -f agents.md ]; then
+            elif [ -f agents.md ] && [ ! -L agents.md ]; then
               echo "=== AGENTS.MD ==="
               cat agents.md
               echo
             fi
-            if [ -f README.md ]; then
-              echo "=== README.MD ==="
-              cat README.md
-              echo
-            fi
-            if [ -f probably_unnecessary_but_read_if_stuck.md ]; then
+            cat "${clarify_respond_readme_context}"
+            if [ -f probably_unnecessary_but_read_if_stuck.md ] && [ ! -L probably_unnecessary_but_read_if_stuck.md ]; then
               echo "=== OVERFLOW REFERENCE ==="
               echo "If you cannot make progress without operator-runbook details (env var reference, autofix retrigger/dedup internals, orchestrator integration-sync auto-heal, validation self-healing, workflow log analysis pipeline, semantic cache scope, wrapper pin policy), read ./probably_unnecessary_but_read_if_stuck.md from the working tree before bailing."
               echo
+            elif [ -L probably_unnecessary_but_read_if_stuck.md ]; then
+              echo "::warning::probably_unnecessary_but_read_if_stuck.md is a symbolic link; omitted from the static context." >&2
             fi
           } > ./pre_assembled_static.txt
+          rm -f "${clarify_respond_readme_context}"
 
       - name: Retrieve issue memory context
         if: steps.check_orchestrator.outputs.respond == 'true'
