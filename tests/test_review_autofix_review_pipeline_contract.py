@@ -7985,6 +7985,7 @@ def main() -> int:
 	test_stage_step_model_catalog_backfill_fails_open()
 	test_review_isolation_wiring_and_model_relay()
 	test_review_sandbox_cleanup_runs_after_commit_and_before_publication()
+	test_review_sandbox_cleanup_failure_preserves_commit_but_blocks_publication()
 	if os.geteuid() != 0:
 		test_review_sandbox_cleanup_removes_unwritable_directories()
 		test_review_sandbox_cleanup_fails_closed_with_safe_diagnostic()
@@ -8104,6 +8105,108 @@ def test_review_sandbox_cleanup_runs_after_commit_and_before_publication() -> No
 	assert "success()" not in next(line for line in _step_block("Commit changes").splitlines() if line.strip().startswith("if:"))
 	assert 'if: "success() &&' in _step_block("Enable auto-merge on PR")
 	assert "if: success() &&" in _step_block("Push all pending commits")
+
+
+def test_review_sandbox_cleanup_failure_preserves_commit_but_blocks_publication() -> None:
+	steps = yaml.safe_load(_workflow_text())["jobs"]["codex-agent"]["steps"]
+	steps_by_name = {step.get("name"): step for step in steps if isinstance(step, dict)}
+	commit_step = steps_by_name["Commit changes"]
+	cleanup_step = steps_by_name["Clean up isolated review workspace"]
+	detector_step = steps_by_name["Detect editor-claimed-but-uncommitted changes"]
+	push_step = steps_by_name["Push all pending commits"]
+	merge_step = steps_by_name["Enable auto-merge on PR"]
+	assert steps.index(commit_step) < steps.index(push_step)
+	assert steps.index(cleanup_step) < steps.index(merge_step)
+	assert steps.index(cleanup_step) < steps.index(push_step)
+	assert "success()" not in commit_step["if"]  # GitHub implicitly gates this step on success.
+	assert "always()" in cleanup_step["if"]
+	assert "!cancelled()" in detector_step["if"]
+	assert "steps.commit_changes.outputs.did_commit != 'true'" in detector_step["if"]
+	assert "success()" in push_step["if"] and "success()" in merge_step["if"]
+
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		repo = tmp / "repo"
+		repo.mkdir()
+		git_env = _git_clean_env()
+		def git(*args: str) -> str:
+			return subprocess.run(["git", *args], cwd=repo, env=git_env, check=True,
+				capture_output=True, text=True).stdout.strip()
+		git("init", "-q")
+		git("config", "user.name", "test")
+		git("config", "user.email", "test@example.invalid")
+		git("remote", "add", "origin", "https://github.com/example/review.git")
+		(repo / "edited.txt").write_text("before\n", encoding="utf-8")
+		git("add", "edited.txt")
+		git("commit", "-qm", "base")
+		base = git("rev-parse", "HEAD")
+		(repo / "edited.txt").write_text("after\n", encoding="utf-8")
+		(tmp / "last_diff.patch").write_text("", encoding="utf-8")
+		(tmp / "editor_summary.txt").write_text(
+			"Changes made:\n- edited edited.txt\nChange status:\n- edited\n", encoding="utf-8")
+		github_env = tmp / "github_env"
+		github_output = tmp / "github_output"
+		commit_env = _git_clean_env({
+			"GITHUB_ENV": str(github_env), "GITHUB_OUTPUT": str(github_output),
+			"COMMITTED_FILES_FILE": str(tmp / "committed_files.txt"),
+			"RUNTIME_DIR": str(tmp), "CAN_PUSH": "true", "IS_WORKFLOW_SOURCE_REPO": "true",
+			"WRITE_GUARDS_ENABLED": "false", "GH_PAT": "test-token",
+			"GITHUB_REPOSITORY": "example/review", "LAST_RUN_DIFF_FILE": str(tmp / "last_diff.patch"),
+			"EDITOR_SUMMARY_FILE": str(tmp / "editor_summary.txt"),
+			"PYTHONDONTWRITEBYTECODE": "1",
+		})
+		sandbox = tmp / "review-isolated-test"
+		sandbox.mkdir()
+		(sandbox / "image").touch()
+		(sandbox / "baseline.json").touch()
+		# Force a removal failure even as root; the real cleanup and commit helpers run.
+		support = tmp / "support"
+		(support / "review_sandbox").mkdir(parents=True)
+		for name in ("review_untrusted_workspace.py", "clarify_openrouter_broker.py"):
+			(support / name).touch()
+		(support / "review_sandbox" / "Dockerfile").touch()
+		bin_dir = tmp / "bin"
+		bin_dir.mkdir()
+		(bin_dir / "docker").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+		(bin_dir / "docker").chmod(0o755)
+		bash_env = tmp / "cleanup_bash_env"
+		bash_env.write_text('rm() { if [ "$1" = "-rf" ]; then return 1; fi; command rm "$@"; }\n',
+			encoding="utf-8")
+		cleanup_env = _git_clean_env({
+			"PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", "/usr/bin:/bin"),
+			"RUNNER_TEMP": str(tmp), "REVIEW_SANDBOX_ROOT": str(sandbox),
+			"SUPPORT_SCRIPTS_DIR": str(support), "BASH_ENV": str(bash_env),
+		})
+		commit = None
+		cleanup = None
+		failed = False
+		for step in sorted((commit_step, cleanup_step), key=steps.index):
+			if step is commit_step and not failed:  # Implicit success() on the commit step.
+				commit = subprocess.run(["bash", str(REPO_ROOT / "scripts/review_commit_changes.sh")],
+					cwd=repo, env=commit_env, capture_output=True, text=True, check=False)
+				assert commit.returncode == 0, commit.stdout + commit.stderr
+			elif step is cleanup_step:  # Explicit always() runs even after a failure.
+				cleanup = subprocess.run(["bash", str(REPO_ROOT / "scripts/review_untrusted_sandbox.sh"), "cleanup"],
+					env=cleanup_env, capture_output=True, text=True, check=False)
+				failed = cleanup.returncode != 0
+		assert cleanup is not None
+		assert cleanup.returncode == 1, (cleanup.stdout, cleanup.stderr)
+		assert "reason=remove_failed" in cleanup.stderr
+		assert commit is not None, "cleanup failure skipped the editor commit"
+		assert "did_commit=true" in github_output.read_text(encoding="utf-8")
+		assert "LEDGER_ONLY_COMMIT_STRICT=false" in github_env.read_text(encoding="utf-8")
+		# !cancelled() still reaches the detector, but did_commit=true suppresses
+		# its lost-changes claim; a failed step makes both publication gates false.
+		detector_should_run = (
+			"did_commit=true" not in github_output.read_text(encoding="utf-8")
+			or "LEDGER_ONLY_COMMIT_STRICT=true" in github_env.read_text(encoding="utf-8")
+		)
+		assert not detector_should_run
+		assert "EDITOR_CHANGES_LOST=" not in github_env.read_text(encoding="utf-8")
+		assert git("rev-parse", "HEAD") != base
+		assert git("show", "HEAD:edited.txt") == "after"
+		assert "DID_COMMIT=true" in github_env.read_text(encoding="utf-8")
+		assert failed  # success()-gated push/merge cannot publish this commit.
 
 
 def _run_review_sandbox_cleanup(tmp: Path, root: Path) -> subprocess.CompletedProcess[str]:
