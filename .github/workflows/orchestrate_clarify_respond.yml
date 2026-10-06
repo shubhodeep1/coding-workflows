@@ -1164,7 +1164,7 @@ jobs:
             filled)
               # Do not print the untrusted answer diff: it may contain credentials.
               jq -rj '.answers' "${COMPLETENESS_FILE}" > "${CODEX_OUTPUT_FILE}"
-              echo "::warning::Answer decisions were completed with RECOMMENDED options for ${filled}; extra decisions: ${extra}."
+              echo "::warning::Answer decisions normalized: RECOMMENDED fills=${filled}; extra decisions removed=${extra}."
               echo "complete=true" >> "$GITHUB_OUTPUT"
               echo "filled=$(jq -r '.filled | join(",")' "${COMPLETENESS_FILE}")" >> "$GITHUB_OUTPUT"
               ;;
@@ -1187,7 +1187,7 @@ jobs:
           esac
 
       - name: Data-provision guard
-        if: steps.check_orchestrator.outputs.respond == 'true' && (steps.run_codex.outcome == 'success' || steps.semantic_cache_lookup.outputs.cache_hit == 'true' || steps.standalone_fallback.outputs.ready == 'true') && steps.answer_completeness.outputs.complete != 'false'
+        if: steps.check_orchestrator.outputs.respond == 'true' && (steps.run_codex.outcome == 'success' || steps.semantic_cache_lookup.outputs.cache_hit == 'true' || steps.standalone_fallback.outputs.ready == 'true') && steps.answer_completeness.outputs.complete == 'true'
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -1229,7 +1229,7 @@ jobs:
       - name: Parse and post answer
         # A standalone worker failure without a RECOMMENDED fallback posts
         # nothing (the fallback step paged a human instead).
-        if: steps.check_orchestrator.outputs.respond == 'true' && (steps.run_codex.outcome != 'failure' || steps.standalone_fallback.outputs.ready == 'true') && steps.answer_completeness.outputs.complete != 'false'
+        if: steps.check_orchestrator.outputs.respond == 'true' && (steps.run_codex.outcome != 'failure' || steps.standalone_fallback.outputs.ready == 'true') && steps.answer_completeness.outputs.complete == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}

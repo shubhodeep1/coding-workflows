@@ -228,7 +228,9 @@ def test_standalone_worker_failure_does_not_end_the_job() -> None:
 	assert steps["Answer completeness guard"]["id"] == "answer_completeness"
 	assert steps["Answer completeness guard"]["if"] == steps["Data-provision guard"]["if"].split(" && steps.answer_completeness", 1)[0]
 	for name in ("Data-provision guard", "Parse and post answer"):
-		assert "steps.answer_completeness.outputs.complete != 'false'" in steps[name]["if"]
+		assert "steps.answer_completeness.outputs.complete == 'true'" in steps[name]["if"]
+	assert "steps.run_codex.outcome != 'failure'" in parse
+	assert "steps.run_codex.outcome == 'success'" in steps["Answer completeness guard"]["if"]
 
 
 def test_data_guard_step_fails_closed_without_guard_or_inputs(tmp_path: Path) -> None:
@@ -445,10 +447,11 @@ def test_complete_answer_is_byte_identical_and_strategies_are_permitted() -> Non
 	assert auto.complete_answers(QUESTIONS, emphasized)["answers"] == emphasized
 
 
-@pytest.mark.parametrize("decision", ["Q1: ESCALATE", "**Q1**: **ESCALATE**"])
+@pytest.mark.parametrize("decision", ["Q1: ESCALATE", "**Q1**: **ESCALATE**", "Q0: ESCALATE"])
 def test_complete_escalation_never_posts_an_answer(tmp_path: Path, decision: str) -> None:
 	answer = f"DECISIONS:\n{decision}\nQ2: A\n"
-	assert auto.complete_answers(QUESTIONS, answer)["answers"] == answer
+	if decision != "Q0: ESCALATE":
+		assert auto.complete_answers(QUESTIONS, answer)["answers"] == answer
 	scripts = tmp_path / "scripts"
 	scripts.mkdir()
 	shutil.copy(ROOT / "scripts" / "orchestrate_parse_and_post_answer.sh", scripts)
@@ -460,7 +463,8 @@ def test_complete_escalation_never_posts_an_answer(tmp_path: Path, decision: str
 		env=env, capture_output=True, text=True, check=False,
 	)
 	assert result.returncode == 0, result.stderr
-	calls = [json.loads(line) for line in (tmp_path / "gh.log").read_text(encoding="utf-8").splitlines()]
+	log = tmp_path / "gh.log"
+	calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()] if log.exists() else []
 	assert all("/answer" not in arg for call in calls for arg in call)
 	assert "SKIP_AUTO_ANSWER=true" in (tmp_path / "env").read_text(encoding="utf-8")
 	assert "reason=escalate_requested" in result.stdout
