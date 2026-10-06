@@ -722,11 +722,13 @@ fallback still fails preflight if its configuration is unavailable.
 Missing isolation returns exit 75, never host Claude.
 The poller's `WAVE_JUDGE` verdict uses `AI_ENGINE_READ_ONLY=true` so untrusted
 PR diffs are evaluated in the isolated container, not by a host write-profile
-model with the poller's GitHub token. Its Codex fallback uses
-`--sandbox read-only` and drops GitHub, Telegram, Actions and Anthropic credentials;
-`OPENROUTER_API_KEY` is still required by Codex's model provider but is excluded
-from model-launched commands by Codex's shell environment policy. Trusted poller
-code still applies the validated verdict.
+model with the poller's GitHub token. Its Codex fallback runs through the
+existing `clarify_isolated_run.sh` container and OpenRouter broker, not host
+Codex, so it cannot read the runner's Claude token pool. The poll workflow
+stages the runner, broker and catalog from verified support. Missing Docker or
+snapshots exceeding 5,000 files/64 MiB fail the judge attempt closed rather
+than running on the host; trusted poller code still applies the validated
+verdict.
 
 OpenCode version `1.18.23` is installed by the dispatch-only
 `.github/workflows/opencode-live-smoke.yml` rollout gate and by production

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run one clarify attempt in a credential-free, network-isolated container.
+# Run one clarify or wave-judge fallback attempt in a credential-free, network-isolated container.
 # Only this helper (not the agent) accesses Docker and the host-side broker.
 set -euo pipefail
 
@@ -10,7 +10,7 @@ log_file="${3:?log file required}"
 engine="${4:-codex}"
 engine_role="${5:-CLARIFY}"
 case "${engine}" in codex|claude) ;; *) echo '::error::Invalid clarify engine' >&2; exit 1 ;; esac
-[[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND)$ ]] || { echo '::error::Invalid clarify engine role' >&2; exit 1; }
+[[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|WAVE_JUDGE)$ ]] || { echo '::error::Invalid clarify engine role' >&2; exit 1; }
 version="${CLARIFY_CODEX_VERSION:-v0.114.0}"
 [[ "${version}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid Codex version' >&2; exit 1; }
 [[ "${MODEL_EDITOR:-}" =~ ^[a-zA-Z0-9/_.-]+$ ]] || { echo '::error::Invalid model slug' >&2; exit 1; }
@@ -55,7 +55,7 @@ dest = pathlib.Path(sys.argv[1])
 roots = {"src", "scripts", "tests", "prompts", "docs", "app", "lib", "workflow-templates", "validation", "db", "ai-memory", "changelog.d"}
 root_files = {"README.md", "agents.md", "AGENTS.md", "package.json", "pyproject.toml", "go.mod", "Cargo.toml"}
 suffixes = {".py", ".sh", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".java", ".json", ".md", ".yml", ".yaml", ".toml", ".txt", ".css", ".html", ".sql"}
-bad_parts = {".git", ".ai", ".codex", ".codex-workflow-src", ".codex-workflow-src-main", ".env", "secrets", "credentials", "__pycache__"}
+bad_parts = {".git", ".ai", ".codex", ".codex-workflow-src", ".codex-workflow-src-main", ".env", ".ssh", "secrets", "credentials", "__pycache__", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa", "id_ed25519_sk", "id_ecdsa_sk", "id_xmss"}
 count = 0
 total = 0
 

@@ -3,9 +3,9 @@
 scripts/orchestrate_poll_process.sh runs the wave, stall, integration,
 security-pass and review-blocked judges through ``poller_claude_judge``. On
 Claude the judge goes through ``claude_run``; when the role is on codex or
-Claude is unavailable (exit 75) the unchanged codex command runs (plan D1).
-These tests run the helper against a stand-in ai_engine.sh and pin each call
-site's codex command (G4).
+Claude is unavailable (exit 75), the wave judge uses isolated Codex and
+the other judges use their existing Codex commands (plan D1). These tests
+run the helper against a stand-in ai_engine.sh and pin each fallback (G4).
 """
 
 from __future__ import annotations
@@ -192,8 +192,7 @@ def test_model_hint_argument_overrides_model_editor(tmp_path: Path) -> None:
 	assert _read(Path(f"{calls}.claude")).split("|")[5] == "claude-sonnet-5-5"
 
 
-# Each judge call site: the role, then the unchanged codex command that runs
-# only on exit 75.
+# Each judge call site: the role, then its Codex fallback that runs on exit 75.
 SITES = {
 	"SECURITY_JUDGE": (
 		'poller_claude_judge SECURITY_JUDGE "${prompt_file}" "${output_file}" "${error_file}" "${effective_judge_model}" || security_judge_rc=$?',
@@ -218,7 +217,7 @@ SITES = {
 	"WAVE_JUDGE": (
 		'poller_claude_judge WAVE_JUDGE "${judge_effective_prompt_file}" "${JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/judge_log.txt" || wave_judge_rc=$?',
 		'if [ "${wave_judge_rc}" -eq 75 ]; then',
-		'cat "${judge_effective_prompt_file}" | env -u GH_TOKEN -u GITHUB_TOKEN -u GH_PAT -u GH_HOST -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_RUNTIME_TOKEN -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true -c \'shell_environment_policy.ignore_default_excludes=false\' -c \'shell_environment_policy.filters.OPENROUTER_API_KEY="exclude"\' exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox read-only > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true',
+		'bash scripts/clarify_isolated_run.sh "${judge_effective_prompt_file}" "${JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/judge_log.txt" codex WAVE_JUDGE || true',
 	),
 }
 
@@ -232,9 +231,49 @@ def test_each_judge_tries_claude_then_runs_the_unchanged_codex_command() -> None
 		assert text.index(codex_call, start) > text.index(gate, start), role
 		assert text.count(codex_call) == 1, role
 	assert len(re.findall(r"^\s+poller_claude_judge [A-Z_]+ ", text, re.M)) == len(SITES)
-	assert 'env_key = "OPENROUTER_API_KEY"' in (REPO_ROOT / "scripts" / "write_codex_config.sh").read_text(encoding="utf-8")
-	assert "-u OPENROUTER_API_KEY" not in SITES["WAVE_JUDGE"][2]
-	assert 'shell_environment_policy.filters.OPENROUTER_API_KEY="exclude"' in SITES["WAVE_JUDGE"][2]
+	assert "codex --ask-for-approval" not in SITES["WAVE_JUDGE"][2]
+	assert 'MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT_JUDGE:-high}"' in text
+	fallback = REPO_ROOT / "scripts" / "clarify_isolated_run.sh"
+	isolation = fallback.read_text(encoding="utf-8")
+	assert 'CLARIFY|CLARIFY_RESPOND|WAVE_JUDGE' in isolation
+	assert 'env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY}"' in isolation
+	assert '--network none --read-only --cap-drop ALL' in isolation
+	assert '--mount "type=bind,src=${run_root}/source,dst=/source,readonly"' in isolation
+	assert '--env CLARIFY_PROXY_KEY=isolated-placeholder' in isolation
+	assert '"id_ed25519"' in isolation
+
+
+def test_wave_judge_fallback_never_starts_host_codex(tmp_path: Path) -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	start = text.index("    wave_judge_rc=0\n")
+	end = text.index('    rm -f "${judge_attempt_prompt_file}"', start)
+	scripts = tmp_path / "scripts"
+	scripts.mkdir()
+	(scripts / "clarify_isolated_run.sh").write_text("# staged support\n", encoding="utf-8")
+	for available in (True, False):
+		(tmp_path / "verdict.txt").write_text("stale verdict\n", encoding="utf-8")
+		if not available:
+			(scripts / "clarify_isolated_run.sh").unlink()
+		script = (
+			"set -euo pipefail\n"
+			"poller_claude_judge() { return 75; }\n"
+			"bash() { printf '%s|%s|%s|%s\\n' \"$1\" \"$5\" \"$6\" \"${MODEL_REASONING_EFFORT}\" > call.txt; return 1; }\n"
+			"codex() { echo 'UNSAFE HOST CODEX' > host-codex.txt; }\n"
+			"MODEL_REASONING_EFFORT_JUDGE=xhigh\n"
+			"MODEL_EDITOR=openai/gpt-6-sol\n"
+			"RUNTIME_DIR=.\n"
+			"judge_effective_prompt_file=prompt.txt\n"
+			"JUDGE_OUTPUT_FILE=verdict.txt\n"
+			+ text[start:end]
+		)
+		proc = subprocess.run(["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True, check=False)
+		assert proc.returncode == 0, proc.stderr
+		assert not (tmp_path / "host-codex.txt").exists()
+		assert (tmp_path / "verdict.txt").read_text(encoding="utf-8") == ""
+		if available:
+			assert (tmp_path / "call.txt").read_text(encoding="utf-8").strip() == "scripts/clarify_isolated_run.sh|codex|WAVE_JUDGE|xhigh"
+		else:
+			assert "refusing host Codex" in proc.stderr
 
 
 def _poll_steps() -> list[dict]:
@@ -246,7 +285,7 @@ def test_poll_job_stages_the_engine_and_fetches_the_pool_only_when_needed() -> N
 	steps = _poll_steps()
 	names = [step.get("name") for step in steps]
 	stage = steps[names.index("Stage workflow support files")]["run"]
-	assert "security_dependency.py ai_engine.sh claude_engine.py claude_read_isolated_run.sh claude_read_snapshot.py claude_anthropic_relay.py review_untrusted_workspace.py claude_settings.json.tmpl codex_stall_guard.sh; do" in stage
+	assert "security_dependency.py ai_engine.sh claude_engine.py claude_read_isolated_run.sh claude_read_snapshot.py claude_anthropic_relay.py review_untrusted_workspace.py claude_settings.json.tmpl codex_stall_guard.sh clarify_isolated_run.sh clarify_openrouter_broker.py codex_model_catalog.json; do" in stage
 	assert 'install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile' in stage
 	resolve = steps[names.index("Resolve AI engine")]
 	assert resolve["id"] == "ai_engine"
