@@ -105,8 +105,8 @@ ROLES: tuple[str, ...] = (
 )
 UTILITY_ROLES: tuple[str, ...] = ("LOG_SUMMARY", "RETRO", "MATERIALITY", "SUMMARISER", "BEHAVIOURAL_SMOKE")
 # Roles whose codex call runs `--sandbox read-only` today keep a read-only
-# tool set on Claude; CHECK_TRIAGE also handles untrusted PR content without editing.
-READ_ROLES: tuple[str, ...] = ("CLARIFY", "CLARIFY_RESPOND", "SECURITY_JUDGE", "SECURITY_AUDIT", "WORKFLOW_HEAL", "CHECK_TRIAGE", "WAVE_JUDGE")
+# tool set on Claude; CHECK_TRIAGE, WAVE_JUDGE and UNBLOCK_JUDGE also read without editing.
+READ_ROLES: tuple[str, ...] = ("CLARIFY", "CLARIFY_RESPOND", "SECURITY_JUDGE", "SECURITY_AUDIT", "WORKFLOW_HEAL", "CHECK_TRIAGE", "WAVE_JUDGE", "UNBLOCK_JUDGE")
 
 LABEL_CODEX = "ai:codex"
 LABEL_ENGINE_CLAUDE = "ai:engine-claude"
@@ -207,7 +207,7 @@ READ_PROFILE_DENY: tuple[str, ...] = (
 READ_GUARD_SAFE_EXACT = frozenset(("--text",))
 _READ_GUARD_GIT_OPTIONS = ("--output", "--open-files-in-pager", "--ext-diff", "--textconv", "--no-index")
 PROFILE_TOOLS: dict[str, str] = {
-	"write": "Read,Grep,Glob,Bash,Edit,Write,WebFetch,WebSearch",
+	"write": "Read,Grep,Glob,Bash,Edit,Write",
 	"read": "Read,Grep,Glob,Bash",
 }
 PROFILE_MODES: dict[str, str] = {

@@ -535,6 +535,19 @@ jobs:
             mkdir -p "$(dirname -- "${activation_asset}")"
             install -m 0644 "${asset_src}" "${activation_asset}"
           done
+          # Unblock scan (replace-claude-sessions plan Phase 7). Optional: a
+          # missing file only skips the scan, never the poll.
+          for unblock_asset in scripts/unblock_scan.py scripts/unblock_ledger.py; do
+            asset_src=".codex-workflow-src/${unblock_asset}"
+            if [ ! -f "${asset_src}" ] && [ -f ".codex-workflow-src-main/${unblock_asset}" ]; then
+              asset_src=".codex-workflow-src-main/${unblock_asset}"
+            fi
+            if [ ! -f "${asset_src}" ]; then
+              echo "::warning::Unblock scan support file ${unblock_asset} is missing; the unblock scan is skipped."
+              continue
+            fi
+            install -m 0644 "${asset_src}" "${unblock_asset}"
+          done
 
           security_exclusions_src=".codex-workflow-src/scripts/security_audit_fp_exclusions.json"
           if [ ! -f "${security_exclusions_src}" ] && [ -f ".codex-workflow-src-main/scripts/security_audit_fp_exclusions.json" ]; then
@@ -800,6 +813,11 @@ jobs:
           ACTIVATION_VERIFY_ENABLED: ${{ vars.ACTIVATION_VERIFY_ENABLED || 'true' }}
           ACTIVATION_VERIFY_MODEL: ${{ vars.ACTIVATION_VERIFY_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
           ACTIVATION_VERIFY_REASONING: ${{ vars.THINKING_LEVEL_ACTIVATION_VERIFY || 'high' }}
+          UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
+          UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK: ${{ vars.UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK || '5' }}
+          UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES: ${{ vars.UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES || '30' }}
+          UNBLOCK_JUDGE_RETRY_HOURS: ${{ vars.UNBLOCK_JUDGE_RETRY_HOURS || '6' }}
+          UNBLOCK_JUDGE_INFLIGHT_MINUTES: ${{ vars.UNBLOCK_JUDGE_INFLIGHT_MINUTES || '60' }}
           MAX_SECURITY_PASS_JUDGE_ROUNDS: ${{ vars.MAX_SECURITY_PASS_JUDGE_ROUNDS || '0' }}
           MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS: ${{ vars.MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS || '2' }}
           SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED: ${{ vars.SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED || 'true' }}
@@ -861,6 +879,7 @@ jobs:
           CODEX_STALL_KILL_GRACE_SECONDS: ${{ vars.CODEX_STALL_KILL_GRACE_SECONDS || '30' }}
           MAX_RECOVERY_ATTEMPTS: ${{ vars.MAX_RECOVERY_ATTEMPTS || '3' }}
           JUDGE_REPEAT_FINGERPRINT_MAX: ${{ vars.JUDGE_REPEAT_FINGERPRINT_MAX || '2' }}
+          JUDGE_OUTPUT_FAILURE_MAX: ${{ vars.JUDGE_OUTPUT_FAILURE_MAX || '3' }}
           # Byte budgets for the PR diffs embedded in the wave judge prompt
           # (per PR, and shared across the whole prompt). codex rejects any
           # prompt over 1,048,576 characters before the model runs; the
@@ -944,6 +963,22 @@ jobs:
           done
           [ "${#support_dirs[@]}" -gt 0 ] || exit 1
           cmp -s "${SUPPORT_INTEGRITY_MANIFEST}.paths" <(find "${support_dirs[@]}" -path '*/.git' -prune -o -type f -print0 | sort -z)
+
+      - name: Run unblock scan without active projects
+        if: steps.find_tracking.outputs.has_work != 'true' && steps.verify_support_integrity.outcome != 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
+          UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK: ${{ vars.UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK || '5' }}
+          UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES: ${{ vars.UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES || '30' }}
+          UNBLOCK_JUDGE_RETRY_HOURS: ${{ vars.UNBLOCK_JUDGE_RETRY_HOURS || '6' }}
+          UNBLOCK_JUDGE_INFLIGHT_MINUTES: ${{ vars.UNBLOCK_JUDGE_INFLIGHT_MINUTES || '60' }}
+          UNBLOCK_SCAN_SWEEP_ONLY: "true"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: bash scripts/orchestrate_poll_process.sh
 
       - name: Run worktree registry GC
         if: steps.verify_support_integrity.outcome != 'failure'
