@@ -18,6 +18,48 @@ require_env() {
 	fi
 }
 
+answer_freshness_recheck() {
+	local issue_payload issue_state comment_pages decision
+	if ! [[ "${CLARIFICATION_COMMENT_ID}" =~ ^[1-9][0-9]*$ ]]; then
+		printf '%s\n' recheck_unavailable
+		return
+	fi
+	# The workflow's earlier issue/comment reads (and clarify.yml's cached thread)
+	# predate model execution. They cannot prove freshness here; the issue state
+	# is not in the paginated comments response, so both live reads are needed.
+	if ! issue_payload="$(gh_retry gh api "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}")" ||
+		! issue_state="$(jq -er 'if .state == "open" then "fresh" elif (.state | type) == "string" then "issue_closed" else error("invalid state") end' <<< "${issue_payload}" 2>/dev/null)"; then
+		printf '%s\n' recheck_unavailable
+		return
+	fi
+	if [ "${issue_state}" != "fresh" ]; then
+		printf '%s\n' "${issue_state}"
+		return
+	fi
+	if ! comment_pages="$(gh_retry gh api --paginate --slurp "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -X GET -f per_page=100)" ||
+		! decision="$(jq -er --arg trigger "${CLARIFICATION_COMMENT_ID}" '
+			if type != "array" or any(.[]; type != "array") then error("invalid pages")
+			else add // [] end
+			| if any(.[]; type != "object" or (.id | type) != "number" or (.body | type) != "string") then error("invalid comment")
+			  else . end
+			| ($trigger | tonumber) as $trigger_id
+			| if any(.[]; .id == $trigger_id) | not then "clarification_comment_missing"
+			  elif any(.[]; .id > $trigger_id and
+				((.user.login // "" | endswith("[bot]")) or
+				 (.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR")) and
+				(.body | test("^\\s*/answer\\b"; "i"))) then "newer_answer"
+			  elif any(.[]; .id > $trigger_id and
+				((.user.login // "" | endswith("[bot]")) or
+				 (.author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR")) and
+				(.body | test("<!-- ai:clarification-questions -->|^Clarification required"))) then "newer_clarification"
+			  else "fresh" end
+		' <<< "${comment_pages}" 2>/dev/null)"; then
+		printf '%s\n' recheck_unavailable
+		return
+	fi
+	printf '%s\n' "${decision}"
+}
+
 for required_env in GITHUB_REPOSITORY GITHUB_ENV GITHUB_ACTOR GITHUB_RUN_ID GITHUB_RUN_ATTEMPT ISSUE_NUMBER ISSUE_URL CLARIFICATION_COMMENT_ID RUNTIME_DIR CODEX_OUTPUT_FILE; do
 	require_env "${required_env}"
 done
@@ -167,6 +209,30 @@ if [ -f "${SCRIPT_DIR}/ai_memory_lib.py" ]; then
 	ANSWER_HASH="$(printf '%s' "${ANSWERS_BODY}" | python3 -c 'from scripts.ai_memory_lib import compute_normalized_sha256; import sys; print(compute_normalized_sha256(sys.stdin.read()))' 2>/dev/null || true)"
 	if [ -z "${ANSWER_HASH}" ]; then
 		echo "::warning::Failed to compute ANSWER_HASH; continuing with empty hash."
+	fi
+fi
+
+if [ "${SKIP_AUTO_ANSWER}" != "true" ] || [ "${LOOP_BLOCKED}" = "true" ] || [ "${HAS_ESCALATE}" = "true" ]; then
+	FRESHNESS_REASON="$(answer_freshness_recheck)"
+	if [ "${FRESHNESS_REASON}" != "fresh" ]; then
+		echo "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=answer_freshness reason=${FRESHNESS_REASON} outcome=skip issue=${ISSUE_NUMBER} comment_id=${CLARIFICATION_COMMENT_ID}"
+		if [ "${MEMORY_HELPERS_AVAILABLE}" = "true" ] && [ "${CLAIMED}" = "true" ]; then
+			memory_processed_command_complete \
+				--issue-number "${ISSUE_NUMBER}" \
+				--comment-id "${CLARIFICATION_COMMENT_ID}" \
+				--command "answer" \
+				--status "superseded" \
+				--metadata-json "$(jq -cn --arg clarify_comment_id "${CLARIFICATION_COMMENT_ID}" --arg superseded_reason "${FRESHNESS_REASON}" '{clarify_comment_id: $clarify_comment_id, superseded_reason: $superseded_reason}')" >/dev/null || echo "::warning::Failed to record superseded completion in processed-command ledger (fail-open)."
+		fi
+		{
+			echo "SKIP_AUTO_ANSWER=true"
+			echo "LOOP_BLOCKED=false"
+		} >> "$GITHUB_ENV"
+		if [ "${FRESHNESS_REASON}" = "recheck_unavailable" ]; then
+			echo "::error::Answer freshness could not be verified for issue #${ISSUE_NUMBER}."
+			exit 1
+		fi
+		exit 0
 	fi
 fi
 
