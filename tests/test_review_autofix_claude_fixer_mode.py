@@ -555,7 +555,7 @@ esac
 def _resolver_claude_sections() -> str:
 	text = (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
 	functions = ""
-	for name in ("_resolver_disable_opencode_snapshot", "_resolver_fail_closed", "_resolver_sandbox_attempt"):
+	for name in ("_resolver_disable_opencode_snapshot", "_resolver_fail_closed", "_resolver_sandbox_attempt", "_resolver_sandbox_opencode_attempt"):
 		match = re.search(rf"^{name}\(\)\n\{{\n.*?^\}}\n", text, re.M | re.S)
 		assert match, name
 		functions += match.group(0) + "\n"
@@ -585,6 +585,7 @@ def _run_resolver_claude_section(tmp: Path, *, mode: str, engine: str = "claude"
 		'_effective_prompt_file="${RUNTIME_DIR}/prompt.txt"\n_current_reasoning_effort=high\n'
 		'CONFLICTED_PATHS_FILE="${RUNTIME_DIR}/paths.txt"\nCONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=5\n'
 		'CODEX_STALL_GUARD_HELPER=/not/staged\nCODEX_HEARTBEAT_HELPER=/not/staged\n'
+		'RESOLVER_OPENCODE_CONFIG="${RUNTIME_DIR}/resolver_sandbox_opencode.json"\n'
 		'resolver_opencode_cmd=(bash -c \'echo host >> "$RUNTIME_DIR/host"\')\n_codex_exit=0\n'
 		'if true; then\n' + '    resolver_claude_rc=75\n' + call + '\n'
 		'printf "codex_exit=%s\\n" "${_codex_exit}"\n')
@@ -641,14 +642,14 @@ def test_resolver_claude_retry_uses_distinct_sandboxes_and_no_host(tmp_path):
 
 
 def test_resolver_selected_engine_and_failed_transfer(tmp_path):
-	for mode, engine, expected_exit, host in (("success", "claude", 0, False), ("success", "codex", 0, True)):
+	for mode, engine in (("success", "claude"), ("success", "codex")):
 		work = tmp_path / (mode + engine)
 		work.mkdir()
 		proc, calls = _run_resolver_claude_section(work, mode=mode, engine=engine)
 		assert proc.returncode == 0, proc.stderr
-		assert f"codex_exit={expected_exit}" in proc.stdout
-		assert (work / "host").exists() is host
-		assert bool(calls) is not host
+		assert "codex_exit=0" in proc.stdout
+		assert not (work / "host").exists()
+		assert calls == ["prepare-ephemeral", f"run|{engine}|CONFLICT_RESOLVER|write|{work / 'root-0'}", "cleanup"]
 
 
 def _rb_helper() -> str:
