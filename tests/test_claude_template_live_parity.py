@@ -315,6 +315,16 @@ def test_sync_creates_missing_live_copy(tmp_path: Path) -> None:
 	assert (root / ".claude/commands/new.md").read_text(encoding="utf-8") == "new command\n"
 
 
+def test_sync_refuses_nested_live_directory_symlink(tmp_path: Path) -> None:
+	root = _scratch_repo(tmp_path)
+	(root / "workflow-templates/.claude/commands").mkdir()
+	before, after = _commit(root, "workflow-templates/.claude/commands/new.md", "new command\n")
+	(root / ".claude/commands").symlink_to("../.git", target_is_directory=True)
+	with pytest.raises(ValueError, match="unsafe live symlink"):
+		sync_mod.sync(root, before, after, dry_run=True)
+	assert not (root / ".git/new.md").exists()
+
+
 def test_sync_commits_missing_live_copy(tmp_path: Path, monkeypatch) -> None:
 	root = _scratch_repo(tmp_path)
 	remote = tmp_path / "remote.git"
