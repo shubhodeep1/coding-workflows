@@ -366,6 +366,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 	for operator, tokens in segments:
 		if operator == "||" and tokens[0] == "exit" and working_directory is not None:
 			# If this exit runs the following git cannot; otherwise cd succeeded.
+			conditional_cd = False
 			continue
 		if operator not in ("", "&&") and conditional_cd:
 			working_directory = None
