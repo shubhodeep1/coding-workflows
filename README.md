@@ -2283,8 +2283,8 @@ Private-repository GitHub reads by the model are unavailable until a separately
 provisioned read-only identity is safely wired
 into the job; the job's write-capable token is never reused. Every other role
 runs `bypassPermissions`, where the P5 deny rules still apply, with the tools
-`Read`, `Grep`, `Glob`, `Bash`, `Edit`,
-`Write`, `WebFetch` and `WebSearch` (the review editor's sandbox included).
+`Read`, `Grep`, `Glob`, `Bash`, `Edit` and `Write` (the review editor's sandbox
+included). Write-profile roles cannot use `WebFetch` or `WebSearch`.
 The CLI's `default` tool set is not used: it loads about 35 tools, and their
 descriptions alone push a no-op start-up past the 25,000-token context gate
 in `claude-engine-smoke.yml`.

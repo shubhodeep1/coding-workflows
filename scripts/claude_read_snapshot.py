@@ -9,6 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from claude_engine import _SNAPSHOT_BAD_PARTS, _snapshot_bad_suffix
 from review_untrusted_workspace import (
 	MAX_FILES,
 	MAX_TOTAL,
@@ -122,7 +123,10 @@ def snapshot(root, source, gitdir, exclude_claude_md=False):
 	copied = set()
 	total = 0
 	for name in paths:
-		if not allowed(name) or (exclude_claude_md and name == "CLAUDE.md"):
+		if (not allowed(name) or (exclude_claude_md and name == "CLAUDE.md") or
+			any(part.lower() in _SNAPSHOT_BAD_PARTS or part.lower().startswith(".env") or
+				part.lower().split(".", 1)[0] in _SNAPSHOT_BAD_PARTS or _snapshot_bad_suffix(part)
+				for part in Path(name).parts)):
 			continue
 		if (root / name).is_symlink():
 			continue

@@ -276,7 +276,7 @@ def test_review_sandbox_admits_the_merge_guard_for_ci_repairs():
 # entrypoints, where it runs inside the isolated container, and the token
 # step's usage probe, which sends the fixed prompt "Reply OK" (no untrusted
 # text) from an empty directory with GH_TOKEN / GITHUB_TOKEN unset.
-CLAUDE_CONTAINER_ENTRYPOINTS = {"codex_isolated_exec.sh", "clarify_isolated_run.sh", "review_untrusted_sandbox.sh"}
+CLAUDE_CONTAINER_ENTRYPOINTS = {"codex_isolated_exec.sh", "clarify_isolated_run.sh", "review_untrusted_sandbox.sh", "claude_read_isolated_run.sh"}
 CLAUDE_FIXED_PROMPT_PROBES = {"claude_pool_token.sh"}
 RAW_CLAUDE = re.compile(r'''(?:^|[\s;&|(=]|--\s)claude\s+(?:-p\b|--print\b|"\$@")''')
 
@@ -287,7 +287,20 @@ def test_no_claude_cli_is_started_outside_the_isolation_helpers():
 	for path in sorted(paths):
 		if path.name in CLAUDE_CONTAINER_ENTRYPOINTS | CLAUDE_FIXED_PROMPT_PROBES:
 			continue
-		sites = [line.strip() for line in logical_lines(path.read_text(encoding="utf-8")) if RAW_CLAUDE.search(line)]
+		text = path.read_text(encoding="utf-8")
+		sites = [line.strip() for line in logical_lines(text) if RAW_CLAUDE.search(line)]
+		if path.name == "ai_engine.sh":
+			# This literal shell body is passed to docker, not run by the host.
+			prefix, marker, rest = text.partition("--workdir \"${workdir}\" \"${image}\" /bin/bash -c '")
+			container_script, end_marker, _ = rest.partition("' _ \"${session_args[@]}\")")
+			assert marker and end_marker and "\t\tcmd=(env -u GH_TOKEN" in prefix
+			container_prefix = prefix.rsplit("\t\tcmd=(env -u GH_TOKEN", 1)[-1]
+			assert "--network none --read-only" in container_prefix
+			assert "--env CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder" in container_prefix
+			assert container_script.count("claude -p ") == 1
+			container_sites = {line.strip() for line in logical_lines(container_script) if RAW_CLAUDE.search(line)}
+			for site in container_sites:
+				sites.remove(site)
 		if sites:
 			offenders[str(path.relative_to(REPO_ROOT))] = sites
 	assert not offenders, (

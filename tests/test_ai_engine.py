@@ -1372,3 +1372,5 @@ def test_every_workflow_staging_ai_engine_also_stages_its_stall_guard() -> None:
 	assert {name for name, _ in staging_lists} >= {"plan.yml", "clarify.yml", "orchestrate_clarify_respond.yml", "implement.yml"}
 	missing = [name for name, names in staging_lists if "codex_stall_guard.sh" not in names]
 	assert not missing, f"stage codex_stall_guard.sh beside ai_engine.sh in: {missing}"
+	missing_relay = [name for name, names in staging_lists if name == "orchestrate.yml" and "claude_anthropic_relay.py" not in names]
+	assert not missing_relay, f"stage claude_anthropic_relay.py beside ai_engine.sh in: {missing_relay}"

@@ -82,6 +82,8 @@ def test_git_snapshot_keeps_history_but_not_config_or_credentials(tmp_path: Path
 		config.write('[http "https://github.com/"]\n\textraheader = AUTHORIZATION: secret\n')
 	(work / ".env").write_text("SECRET=never\n", encoding="utf-8")
 	(work / "creds.key").write_text("never\n", encoding="utf-8")
+	(work / "id_ed25519_sk.txt").write_text("never\n", encoding="utf-8")
+	(work / "client.pem.txt").write_text("never\n", encoding="utf-8")
 	(work / "tokens").mkdir()
 	(work / "tokens/A").write_text("never\n", encoding="utf-8")
 	(work / "bad.md").symlink_to(work / ".env")
@@ -92,7 +94,7 @@ def test_git_snapshot_keeps_history_but_not_config_or_credentials(tmp_path: Path
 	assert result.returncode == 0, result.stderr
 	assert Path(result.stdout.strip()) == work / ".git/objects"
 	assert (destination / "source/safe.py").read_text() == "version = 2\n"
-	assert not any((destination / "source" / name).exists() for name in (".env", "creds.key", "bad.md", ".codex-workflow-src", "tokens/A"))
+	assert not any((destination / "source" / name).exists() for name in (".env", "creds.key", "id_ed25519_sk.txt", "client.pem.txt", "bad.md", ".codex-workflow-src", "tokens/A"))
 	assert "extraheader" not in (destination / "gitdir/config").read_text()
 	# Simulate the container's /gitobjects mount for the local git probe.
 	(destination / "gitdir/objects/info/alternates").write_text(str(work / ".git/objects") + "\n")
@@ -100,25 +102,26 @@ def test_git_snapshot_keeps_history_but_not_config_or_credentials(tmp_path: Path
 	assert _git(destination / "source", "log", "-2", "--format=%s", gitdir=destination / "gitdir").splitlines() == ["second", "first"]
 
 
-def test_filtered_git_history_cannot_recover_a_committed_secret(tmp_path: Path) -> None:
+@pytest.mark.parametrize("secret_name", [".env", "id_ed25519_sk.txt", "client.pem.txt"])
+def test_filtered_git_history_cannot_recover_a_committed_secret(tmp_path: Path, secret_name: str) -> None:
 	work = tmp_path / "work"
 	work.mkdir()
 	_git(work, "init", "-q")
 	(work / "safe.py").write_text("public\n")
-	(work / ".env").write_text("COMMITTED_SECRET=never\n")
-	_git(work, "add", "safe.py", ".env")
+	(work / secret_name).write_text("COMMITTED_SECRET=never\n")
+	_git(work, "add", "safe.py", secret_name)
 	_git(work, "-c", "user.name=test", "-c", "user.email=test@invalid", "commit", "-qm", "first")
-	(work / ".env").unlink()
+	(work / secret_name).unlink()
 	_git(work, "add", "-u")
 	_git(work, "-c", "user.name=test", "-c", "user.email=test@invalid", "commit", "-qm", "second")
 	destination = tmp_path / "dest"
 	result = _snapshot(work, destination)
 	assert result.returncode == 0, result.stderr
 	assert result.stdout == ""
-	assert not (destination / "source/.env").exists()
+	assert not (destination / "source" / secret_name).exists()
 	assert not (destination / "gitdir").exists()
 	assert _git(destination / "source", "log", "-1", "--format=%s") == "snapshot"
-	assert subprocess.run(["git", "show", "HEAD:.env"], cwd=destination / "source", capture_output=True).returncode != 0
+	assert subprocess.run(["git", "show", f"HEAD:{secret_name}"], cwd=destination / "source", capture_output=True).returncode != 0
 
 
 def test_unreachable_git_objects_are_not_mounted(tmp_path: Path) -> None:

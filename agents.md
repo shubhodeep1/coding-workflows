@@ -1009,6 +1009,8 @@ client tools, rejecting unknown provider-side tool types as well as known
 web, code-execution and MCP-connector tools. A missing
 `codex_isolated_exec.sh` makes `claude_run` fall back to codex rather than
 running Claude with host credentials.
+`orchestrate.yml` stages `claude_anthropic_relay.py` beside the isolated
+launcher and engine from verified support so its Claude decomposer can start.
 
 OpenCode version `1.18.23` is installed by the dispatch-only
 `.github/workflows/opencode-live-smoke.yml` rollout gate and by production
