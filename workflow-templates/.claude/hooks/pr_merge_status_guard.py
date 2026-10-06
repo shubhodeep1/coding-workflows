@@ -191,6 +191,7 @@ class _GitInvocation(NamedTuple):
 	arguments: list[str]
 	warning: str = ""
 	config_override: bool = False
+	explicit_git_directory: bool = False
 
 
 class _GuardTarget(NamedTuple):
@@ -461,6 +462,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 		index = 0
 		environment: dict[str, str] = {}
 		config_override = False
+		explicit_git_directory = False
 		# Bash append assignments are prefixes too; keep the following git visible.
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
 			name, value = tokens[index].split("=", 1)
@@ -471,6 +473,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 					working_directory = None
 			elif name in ("GIT_DIR", "GIT_WORK_TREE"):
 				environment[name] = value
+				explicit_git_directory = True
 			if name == "GIT_CONFIG" or name.startswith("GIT_CONFIG_"):
 				config_override = True
 			index += 1
@@ -500,6 +503,8 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 		uncertain = git_cwd is None
 		while index < len(tokens) and tokens[index].startswith("-"):
 			option = tokens[index]
+			if option.startswith(("-C", "--git-dir", "--work-tree")):
+				explicit_git_directory = True
 			value = None
 			if option in GIT_GLOBAL_OPTS_WITH_VALUE:
 				if index + 1 >= len(tokens):
@@ -541,6 +546,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			tokens[index], tokens[index + 1:],
 			"could not resolve git command directory; checking the session checkout instead" if uncertain else "",
 			config_override,
+			explicit_git_directory,
 		))
 	return invocations
 
@@ -1495,7 +1501,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		if invocation.subcommand == "push" and invocation.warning == "unparsed env wrapper":
 			unverified_destinations.add("unparsed env-wrapped Git command")
 			continue
-		if invocation.subcommand == "commit" and invocation.warning:
+		if invocation.subcommand == "commit" and invocation.warning and (invocation.config_override or invocation.explicit_git_directory):
 			_request_confirmation("could not resolve git commit directory; PR status cannot be checked for the intended checkout")
 			continue
 		if invocation.subcommand == "push" and invocation.warning:

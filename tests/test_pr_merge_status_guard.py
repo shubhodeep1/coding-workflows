@@ -1440,6 +1440,7 @@ def test_env_wrapped_commit_checks_selected_repo(merged_branch_repo, monkeypatch
 @pytest.mark.parametrize("command", [
 	"env -C /does-not-exist git commit -m x",
 	"git -C /does-not-exist commit -m x",
+	"GIT_DIR=/does-not-exist git commit -m x",
 	"env -S 'git commit -m ${MESSAGE}'",
 	"env -v git commit -m x",
 ])
