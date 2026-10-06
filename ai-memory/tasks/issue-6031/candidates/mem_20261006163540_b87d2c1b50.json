@@ -1,0 +1,37 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "status=fail; raw_status=harness_error; summary=Validation failed due to harness error; failure_summary=Validation harness error: In coding-workflows, run the python-repo-checks import audit against the app container's Python and installed packages rather than the runner's Python. Update the upstream 20_import_audit.sh.j2 template and add regression coverage verifying the audit executes in the container; then regenerate the harness and verify validation/logs/20_import_audit.sh passes without installing PyYAML on the runner.",
+  "fingerprint": "667052c9f05f7aa60c75f17ec1150c2e5452458bf84a75bd2dc77d67556b1feb",
+  "lineage": {
+    "issue_number": 6031,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37492941663",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37492941663",
+    "source_refs": [],
+    "workflow": "validate"
+  },
+  "record_id": "mem_20261006163540_b87d2c1b50",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6031,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37492941663"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Validation failed due to harness error",
+  "timestamps": {
+    "created_at": "2026-10-06T16:35:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
