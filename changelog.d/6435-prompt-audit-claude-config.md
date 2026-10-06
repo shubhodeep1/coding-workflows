@@ -1,0 +1,17 @@
+<!-- changelog: changed -->
+- **`CLAUDE.md` and the shipped slash commands no longer describe retired machinery.** `/deploy-activate` now runs Cloudflare steps itself under `CLAUDE.md` §24, the way it already ran DigitalOcean steps under §22.
+
+A prompt audit found several commands that contradicted the repository. `/implement-plan-ai` called `/implement-plan-claude` an in-session implementer, but it is the Claude-engine orchestrator hand-off. `/implement-issue-claude` said the engine label stays inert until Phase 6, which has shipped. `/analyze-log` and `/investigate-issue` treated `gh auth status` as the auth check, which §23 says fails behind the Claude Code Web proxy. `/write-plan` sent implementation to `/investigate-issue` instead of the orchestrator. `/audit-plans` stopped screening for `docs/implement-plan/` progress logs and `claude/implement-plan-*` PRs, which no longer exist since the session chain was retired. In `CLAUDE.md`, the §12 trigger list no longer names a PR comment, the inactive §12.G body is reduced to a stub, and the pre-task step reads the relevant sections of `README.md` and `agents.md` instead of both files in full.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Commands changed | `analyze-log`, `audit-plans`, `deploy-activate`, `implement-issue-claude`, `implement-plan-ai`, `investigate-issue`, `verify-activation`, `write-plan` |
+| Template copies changed | `workflow-templates/.claude/commands/{audit-plans,write-plan,verify-activation}.md` |
+| `CLAUDE.md` sections edited | PRE-TASK, §0, §12, §12.G, §19, §27 (numbering unchanged) |
+| Cloudflare credentials | `FUNTOKEN_IO_CF` (funtoken.io), `FT_GAMES_CF` (ft.games, 5m.fun) |
+
+What this means for consumer repos: the next `@stable` sync delivers the updated `CLAUDE.md` and template commands. Section numbers are unchanged, and no rule was loosened. With a Cloudflare credential present, `/deploy-activate` runs Cloudflare reads directly and runs Worker deploys after you approve each step. You still set Worker secret values yourself, and §24.D operations still need a Q/A approval first.
+
+### For contributors
+
+`tests/test_audit_plans_command.py` no longer asserts the legacy `/implement-plan-claude` screening text; it asserts that text stays out of the command.
