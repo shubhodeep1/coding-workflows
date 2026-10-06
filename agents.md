@@ -1436,12 +1436,16 @@ filed before the merge (#4090 / #4091) without a human.
 how many judge rounds may end in `keep_fixing`: `judge_round` beyond the cap
 puts `keep_fixing_available: false` and `max_keep_fixing_rounds` in the
 diagnostics, and after verdict normalization the poller rewrites every
-`keep_fixing` decision to `accept_with_followup` with the justification
-prefixed `[keep_fixing capped after <c> judge round(s); converted to advisory
-follow-up]` (`SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=<N>
-round=<r> cap=<c> converted=<n>`), so the accept-all path runs and the project
-completes with deferred advisories. `fail` verdicts are untouched; unlike
-`MAX_SECURITY_PASS_JUDGE_ROUNDS` this cap never terminalizes. Project #3965
+`keep_fixing` decision to `fail` with the justification prefixed
+`[keep_fixing capped after <c> judge round(s); converted to fail — needs a fix
+or a human waiver]` (`SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=<N>
+round=<r> cap=<c> converted=<n>`), so the round takes the `fail` path and the
+project terminalizes as `ai:security-pass-failed` (no waiver rows, no
+advisories, even for findings the judge accepted in the same verdict). The cap
+never accepts a finding (#6539: the earlier conversion to
+`accept_with_followup` recorded a high-severity finding as passed); recovery
+is the unblock judge, the engine-change auto-reset, `/re-security-pass` or
+`/security-pass-waive`. Project #3965
 ran fix cycles 6 and 7 on a 5-cycle budget because rounds 1 and 2 each chose
 `keep_fixing` and nothing bounded the sequence.
 Waivers travel to the engine as `SECURITY_AUDIT_WAIVED_FINDINGS`

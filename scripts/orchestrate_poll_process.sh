@@ -1655,13 +1655,14 @@ if ! [[ "${MAX_SECURITY_PASS_JUDGE_ROUNDS}" =~ ^[0-9]+$ ]]; then
 fi
 # MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS bounds how many judge rounds per project
 # may end in `keep_fixing`.  From the next round on, every keep_fixing
-# decision is converted to accept_with_followup (the finding becomes a
-# tracked, non-blocking advisory filed after the merge) so the loop converges
-# without a human; `fail` is untouched.  Project #3965 ran 7 fix cycles on a
-# 5-cycle budget because rounds 1 and 2 each granted "one more" cycle and
-# nothing bounded the sequence.  Unlike MAX_SECURITY_PASS_JUDGE_ROUNDS, which
-# terminalizes for a human, this cap keeps the project unattended.  0 =
-# unbounded (legacy behaviour).
+# decision is converted to `fail`, so the loop converges by terminalizing the
+# project as ai:security-pass-failed; the cap never accepts a finding (#6539:
+# the earlier conversion to accept_with_followup recorded high-severity
+# findings as passed).  Project #3965 ran 7 fix cycles on a 5-cycle budget
+# because rounds 1 and 2 each granted "one more" cycle and nothing bounded the
+# sequence.  Recovery from the terminal state stays automated: the unblock
+# judge, the engine-change auto-reset, `/re-security-pass` and
+# `/security-pass-waive`.  0 = unbounded (legacy behaviour).
 MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS="${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS:-2}"
 if ! [[ "${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}" =~ ^[0-9]+$ ]]; then
   echo "::warning::MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS must be a non-negative integer; defaulting to 2"
@@ -6397,7 +6398,7 @@ security_pass_exhaustion_judge() {
   local judge_json judge_success attempt effective_judge_model semble_query_file semble_prefetch static_file
   local accepted_count fixing_count failed_count decisions_table waivers_json fixing_findings_file
   local followup_issue followup_issues finding_json finding_id justification summary
-  local keep_fixing_capped keep_fixing_converted capped_suffix
+  local keep_fixing_capped keep_fixing_converted capped_suffix failed_sentence
 
   SECURITY_PASS_JUDGE_OUTCOME=""
   if [ "${SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED}" != "true" ]; then
@@ -6416,7 +6417,7 @@ security_pass_exhaustion_judge() {
   fi
   judge_round=$((judge_rounds + 1))
   # keep_fixing is available for the first MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS
-  # rounds; later rounds convert it to accept_with_followup (see below).
+  # rounds; later rounds convert it to fail (see below).
   keep_fixing_capped="false"
   if [ "${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}" -gt 0 ] && [ "${judge_round}" -gt "${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}" ]; then
     keep_fixing_capped="true"
@@ -6561,8 +6562,12 @@ security_pass_exhaustion_judge() {
 
   # Convergence backstop: once the judge has had MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS
   # rounds that could grant another cycle, a keep_fixing decision is converted
-  # to accept_with_followup so the finding becomes a deferred advisory and the
-  # project completes unattended.  A project-wide `fail` verdict never reaches
+  # to `fail`, so the round takes the failed_count > 0 branch below and the
+  # caller terminalizes the project as ai:security-pass-failed.  The cap never
+  # accepts a finding (#6539): accepted rows in the same verdict are dropped
+  # too, because that branch returns before any waiver is recorded.  Recovery
+  # is the unblock judge, `/re-security-pass`, `/security-pass-waive`, or the
+  # engine-change auto-reset.  A project-wide `fail` verdict never reaches
   # here with keep_fixing rows (mixed verdicts are rejected above).
   keep_fixing_converted=0
   capped_suffix=""
@@ -6570,10 +6575,10 @@ security_pass_exhaustion_judge() {
     keep_fixing_converted="$(jq -r '[.decisions[] | select(.action == "keep_fixing")] | length' "${verdict_file}")"
     [[ "${keep_fixing_converted}" =~ ^[0-9]+$ ]] || keep_fixing_converted=0
     if [ "${keep_fixing_converted}" -gt 0 ]; then
-      if ! jq --arg note "[keep_fixing capped after ${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS} judge round(s); converted to advisory follow-up] " '
+      if ! jq --arg note "[keep_fixing capped after ${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS} judge round(s); converted to fail — needs a fix or a human waiver] " '
         .decisions = [
           .decisions[]
-          | if .action == "keep_fixing" then (.action = "accept_with_followup" | .justification = ($note + .justification)) else . end
+          | if .action == "keep_fixing" then (.action = "fail" | .justification = ($note + .justification)) else . end
         ]
       ' "${verdict_file}" > "${verdict_file}.tmp" || ! mv "${verdict_file}.tmp" "${verdict_file}"; then
         rm -f "${verdict_file}.tmp"
@@ -6581,7 +6586,7 @@ security_pass_exhaustion_judge() {
         return 1
       fi
       echo "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=${TRACKING_NUM} round=${judge_round} cap=${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS} converted=${keep_fixing_converted}"
-      capped_suffix=" ${keep_fixing_converted} of them were \`keep_fixing\` decisions converted to advisories because the keep_fixing round budget (\`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}\`) is spent."
+      capped_suffix=" ${keep_fixing_converted} of them were \`keep_fixing\` decisions converted to \`fail\` because the keep_fixing round budget (\`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}\`) is spent; no finding is accepted by the cap."
     fi
   fi
 
@@ -6593,9 +6598,14 @@ security_pass_exhaustion_judge() {
 
   if [ "${failed_count}" -gt 0 ]; then
     decisions_table="$(render_security_pass_judge_decisions_table "${verdict_file}" 2>/dev/null || true)"
+    if [ "${keep_fixing_converted}" -gt 0 ]; then
+      failed_sentence="${failed_count} finding(s) cannot be accepted, so the project is terminalized as \`ai:security-pass-failed\`.${capped_suffix}"
+    else
+      failed_sentence="The judge decided that ${failed_count} finding(s) need a human, so the project is terminalized as \`ai:security-pass-failed\`."
+    fi
     post_tracking_comment "## ⚖️ Security-pass exhaustion judge (round ${judge_round})
 
-The consolidated fix-cycle budget (${completed_cycles}/${MAX_SECURITY_PASS_CYCLES}) is spent and ${finding_count} blocking finding(s) remain at integration head \`${head_sha}\`. The judge decided that ${failed_count} finding(s) need a human, so the project is terminalized as \`ai:security-pass-failed\`.
+The consolidated fix-cycle budget (${completed_cycles}/${MAX_SECURITY_PASS_CYCLES}) is spent and ${finding_count} blocking finding(s) remain at integration head \`${head_sha}\`. ${failed_sentence}
 
 **Summary:** $(security_pass_prose "${summary}")
 ${decisions_table:+
@@ -6695,7 +6705,7 @@ ${decisions_table}}"
   post_state_comment || true
   post_tracking_comment "## ⚖️ Security-pass exhaustion judge (round ${judge_round})
 
-The consolidated fix-cycle budget (${completed_cycles}/${MAX_SECURITY_PASS_CYCLES}) is spent and ${finding_count} blocking finding(s) remained at integration head \`${head_sha}\`. The judge accepted every remaining finding as a known risk${followup_suffix}; the security pass is recorded clean at this head and completion continues.${capped_suffix} Comment \`/re-security-pass\` to re-run a full audit instead.
+The consolidated fix-cycle budget (${completed_cycles}/${MAX_SECURITY_PASS_CYCLES}) is spent and ${finding_count} blocking finding(s) remained at integration head \`${head_sha}\`. The judge accepted every remaining finding as a known risk${followup_suffix}; the security pass is recorded clean at this head and completion continues. Comment \`/re-security-pass\` to re-run a full audit instead.
 
 **Summary:** $(security_pass_prose "${summary}")
 ${decisions_table:+
