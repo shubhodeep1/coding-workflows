@@ -1188,6 +1188,8 @@ def test_config_env_global_option_does_not_hide_push() -> None:
 	'env -S"git commit -m x"',
 	"env -S 'git\npush origin feature/x'",
 	"/bin/env -S 'git\npush origin feature/x'",
+	r"env -S 'git\_push origin feature/x'",
+	r"/bin/env -S 'git\_commit -m x'",
 ])
 def test_env_split_string_push_is_denied_when_mapping_is_unknown(command: str) -> None:
 	code, message = guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})

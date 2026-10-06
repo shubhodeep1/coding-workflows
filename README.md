@@ -1128,7 +1128,7 @@ not delete wrappers that are already present in `.github/workflows/`.
 > remote uses that URL. Inline `--config-env` and `GIT_CONFIG_*`
 > assignments (including option-prefixed `env GIT_CONFIG_*=... git push`) that cannot be
 > resolved safely are blocked, as are `env -S` Git writes (including attached
-> split strings), unrecognized `env` options before Git writes, and unmappable
+> split strings and `\_` word separators), unrecognized `env` options before Git writes, and unmappable
 > inline bulk/refspec pushes. `env -a`/`--argv0` values are skipped before
 > parsing the real Git executable. These checks also apply to path-qualified
 > `env` invocations such as `/bin/env`.

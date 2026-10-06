@@ -1521,10 +1521,11 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			if index < len(tokens) and (tokens[index] == "env" or tokens[index].endswith("/env")) and any(
 				option == "-S" or option.startswith(("-S", "--split-string")) for option in tokens[index + 1:]
 			):
+				# GNU env -S expands \_ to a separator before invoking Git.
 				if re.search(r"\bgit\b[\s\S]*\b(?:push|commit)\b", " ".join(
 					option[2:] if option.startswith("-S") and option != "-S" else option
 					for option in tokens[index + 1:]
-				)):
+				).replace("\\_", " ")):
 					return 2, "BLOCKED: env -S Git command cannot be mapped safely by the merged-PR guard."
 	except ValueError:
 		pass
