@@ -37,6 +37,11 @@
 #
 # Log: RB_JUDGE_SECURITY_PASS mode= pr= outcome= reason=
 
+# shellcheck source=/dev/null
+if [ -f "$(dirname -- "${BASH_SOURCE[0]}")/review_head_gate.sh" ]; then
+	source "$(dirname -- "${BASH_SOURCE[0]}")/review_head_gate.sh" || true
+fi
+
 rb_security_log()
 {
 	echo "RB_JUDGE_SECURITY_PASS $*"
@@ -225,19 +230,12 @@ rb_security_block_already_reported()
 # The existing PR reads precede the judge LLM, so re-read at this boundary.
 rb_security_disable_auto_merge()
 {
-	local head_sha="$1" live_pr_json
+	local head_sha="$1"
 	[[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] || return 1
-	# No existing read covers the live enrollment at this point; do not use
-	# the earlier PR payload, which can predate the judge's assessment.
-	live_pr_json="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null)" || return 1
-	if ! jq -e '.state == "open" and (.head.sha | type == "string") and has("auto_merge") and (.auto_merge == null or (.auto_merge | type == "object"))' <<< "${live_pr_json}" >/dev/null 2>&1; then
-		return 1
-	fi
-	if jq -e '.auto_merge != null' <<< "${live_pr_json}" >/dev/null 2>&1; then
-		# Withdraw even if the head moved: an enrollment on the new head is not audited by this judge.
-		gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --disable-auto >/dev/null 2>&1 || return 1
-	fi
-	jq -e --arg sha "${head_sha}" '.head.sha == $sha' <<< "${live_pr_json}" >/dev/null 2>&1
+	type review_head_gate_withdraw_auto_merge >/dev/null 2>&1 || return 1
+	# No earlier judge read covers the live enrollment at this boundary.
+	review_head_gate_withdraw_auto_merge "${REPOSITORY}" "${PR_NUMBER}" || return 1
+	jq -e --arg sha "${head_sha}" '.head.sha == $sha' <<< "${REVIEW_HEAD_GATE_LIVE_PR_JSON}" >/dev/null 2>&1
 }
 
 rb_security_block_hold()

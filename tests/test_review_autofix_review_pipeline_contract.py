@@ -39,6 +39,7 @@ RB_JUDGE = REPO_ROOT / "scripts" / "review_rb_judge.sh"
 AGENTS_MD_MATERIALITY = REPO_ROOT / "scripts" / "review_agents_md_materiality.sh"
 METADATA_HELPER = REPO_ROOT / "scripts" / "review_collect_pr_metadata.sh"
 AUTO_MERGE_HELPER = REPO_ROOT / "scripts" / "review_enable_auto_merge.sh"
+HEAD_GATE_HELPER = REPO_ROOT / "scripts" / "review_head_gate.sh"
 CHECK_RUNS_HELPER = REPO_ROOT / "scripts" / "collect_pr_check_runs_context.py"
 REVIEWER_FAILBACK_CHAINS = REPO_ROOT / "scripts" / "reviewer_failback_chains.json"
 MODEL_CATALOG = REPO_ROOT / "scripts" / "codex_model_catalog.json"
@@ -57,6 +58,29 @@ PHASE_H_CONTEXT_BUDGET_FIXTURE = FIXTURES_DIR / "phase-h-context-budget-overflow
 def _workflow_text() -> str:
 	# Moved step bodies (scripts/review_autofix_step_*.sh) inlined again.
 	return expanded_review_autofix_text()
+
+
+def test_head_gate_is_verified_and_binds_merge_status_to_evaluated_head() -> None:
+	workflow = _workflow_text()
+	stage = STAGE_HELPER.read_text(encoding="utf-8")
+	auto_merge = AUTO_MERGE_HELPER.read_text(encoding="utf-8")
+	judge = RB_JUDGE.read_text(encoding="utf-8")
+	assert workflow.index('name: Verify retarget helper identity') < workflow.index('name: Checkout head-gate helper')
+	assert workflow.index('name: Verify head-gate helper identity') < workflow.index('name: Evaluate review gate') < workflow.index('name: Withdraw stale auto-merge and publish head-gate status')
+	assert 'ref: ${{ steps.resolve_support.outputs.review_support_sha }}' in workflow
+	assert 'git -C .codex-head-gate-src rev-parse HEAD' in workflow
+	assert 'bash .codex-head-gate-src/scripts/review_head_gate.sh gate' in workflow
+	assert 'auto_merge_enabled: (if has("auto_merge")' in workflow
+	for key in ("PR_EVENT_HEAD_SHA", "GATE_HEAD_SHA", "GATE_AUTO_MERGE_ENABLED", "DETERMINISTIC_SKIP", "REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED"):
+		assert f"{key}:" in workflow
+	assert 'review_head_gate.sh' in stage.split('REQUIRED_BOOTSTRAP_SCRIPTS="', 1)[1].split('"', 1)[0].split()
+	assert 'REVIEW_HEAD_GATE_CONTEXT="ai-review/head-gate"' in HEAD_GATE_HELPER.read_text(encoding="utf-8")
+	assert auto_merge.index('review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success "review and security gate passed"', auto_merge.index('_orch_pr_head_sha=')) < auto_merge.index('gh_retry gh pr merge')
+	judge_lines = judge.splitlines()
+	for index, merge_line in enumerate(judge_lines):
+		if 'if gh pr merge "${PR_NUMBER}"' in merge_line and ('--match-head-commit "${RB_JUDGED_HEAD_SHA}"' in merge_line or '"${_match_head_arg[@]}"' in merge_line):
+			assert 'review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success' in judge_lines[index - 1]
+	assert judge.index('rb_security_merge_gate; then') < judge.index('review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success')
 
 
 def _stage_helper_text() -> str:

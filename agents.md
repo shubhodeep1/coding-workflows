@@ -79,6 +79,16 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP` instead of sending the "retry N/3"
    Telegram WARNING. A push clears the skip, and an unresolvable head SHA or
    token identity keeps the old re-dispatch.
+   The gate runs `scripts/review_head_gate.sh` from its verified support SHA:
+   `pull_request.synchronize` withdraws stale auto-merge (failure fails the
+   gate), and opened/synchronize events mark their SHA `pending` in the fixed
+   commit-status context `ai-review/head-gate`. Deterministic skips and clean
+   review/security tails post `success` on the evaluated head before their
+   head-bound merge; the review-blocked judge does likewise after its security
+   gate. `REVIEW_HEAD_GATE_STATUS_ENABLED` and
+   `REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED` default to `true`. GitHub does not
+   enforce this status until the default branch's required checks include it;
+   this workflow does not edit branch protection. Logs: `REVIEW_HEAD_GATE`.
    The review editor's disposable Docker workspace admits `.cjs`, `.mjs`,
    `.cts`, and `.mts` alongside other source extensions for snapshot and
    validated transfer. For Claude engine fixes it also admits only
@@ -1557,6 +1567,7 @@ and shipped:
 - `AUTOFIX_DISPATCH_SKIPPED`
 - `AUTOFIX_DISPATCH_ISSUED`
 - `AUTOFIX_GATE_SKIP`
+- `REVIEW_HEAD_GATE`
 - `AUTOFIX_GATE_NO_SKIP_TERMINAL_SAME_HEAD`
 - `AUTOFIX_GATE_TERMINAL_SAME_HEAD_UNCHECKED`
 - `AUTOFIX_GATE_TERMINAL_SAME_HEAD_OVERRIDE`
@@ -1771,6 +1782,7 @@ LOG_PREFIX.name=AUTOFIX_PEER_CHECK
 LOG_PREFIX.name=AUTOFIX_DISPATCH_SKIPPED
 LOG_PREFIX.name=AUTOFIX_DISPATCH_ISSUED
 LOG_PREFIX.name=AUTOFIX_GATE_SKIP
+LOG_PREFIX.name=REVIEW_HEAD_GATE
 LOG_PREFIX.name=AUTOFIX_GATE_NO_SKIP_TERMINAL_SAME_HEAD
 LOG_PREFIX.name=AUTOFIX_GATE_TERMINAL_SAME_HEAD_UNCHECKED
 LOG_PREFIX.name=AUTOFIX_GATE_TERMINAL_SAME_HEAD_OVERRIDE

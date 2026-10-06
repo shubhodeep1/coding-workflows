@@ -38,6 +38,16 @@ for _ledger_candidate in \
   fi
 done
 source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
+# shellcheck source=/dev/null
+if [ -f "${SUPPORT_SCRIPTS_DIR}/review_head_gate.sh" ]; then
+  source "${SUPPORT_SCRIPTS_DIR}/review_head_gate.sh" || true
+fi
+if ! type review_head_gate_post_status >/dev/null 2>&1; then
+  review_head_gate_post_status()
+  {
+    echo "::warning::review_head_gate.sh unavailable; leaving review status pending."
+  }
+fi
 # Security-exhaustion mode and the judge-merge security gate
 # (scripts/review_rb_judge_security_pass.sh). An older staged bundle without
 # the helper keeps the pre-helper behaviour: normal judge mode, merges
@@ -1894,6 +1904,7 @@ case "${RB_ACTION}" in
         # reaching the `|| true` fallthrough. Rate-limit alerts still
         # fire through every other gh_retry-wrapped call in this
         # script.
+        review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
         if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null \
           || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null; then
           RB_MERGE_READY_LABEL_ALLOWED="true"
@@ -1942,6 +1953,7 @@ case "${RB_ACTION}" in
       PR_STATE="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed' || echo "")"
       if [ "${PR_STATE}" = "open" ] && [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
         # Best-effort merge — see note above re: gh_retry.
+        review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
         if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null \
           || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null; then
           RB_MERGE_READY_LABEL_ALLOWED="true"
@@ -2438,6 +2450,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
             # fall back to an unbound merge: the check-runs gate
             # requires RB_JUDGED_HEAD_SHA, so reaching here means it's set.
             _match_head_arg=(--match-head-commit "${RB_JUDGED_HEAD_SHA}")
+            review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
             if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash "${_match_head_arg[@]}" 2>/dev/null; then
               echo "PR #${PR_NUMBER} merged synchronously."
               MERGE_CONFIRMED="true"
