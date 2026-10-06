@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrator_judges_claude_engine.py:160-178 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The test expects sorted label arrays, but the reported output is insertion-ordered, causing order-sensitive Python list equality assertions to fail.\n  WHY: Reviewers report that `unique` preserves insertion order and the assertion fails; other reviewers verify that jq `unique` sorts the output and dispute this finding.\n- scripts/orchestrate_poll_process.sh:229-230 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: A complete verified empty label array is treated as unavailable for standalone scope because the helper requires `length > 0`.\n  WHY: The caller then forces Codex instead of allowing the configured engine resolution to apply, although the empty snapshot is available; reviewers disagree about whether this default is a contract defect or an intentional safe default.\n- scripts/orchestrate_poll_process.sh:110 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `POLLER_JUDGE_WORKSPACE_OVERRIDE` is an undocumented, unused-by-callers environment-variable override for the RB-judge sandbox workspace.\n  WHY: Reviewers report that no caller sets it and that its contract is undocumented, making the override difficult to discover and potentially allowing an unintended workspace redirect.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:229 | severity=low | confidence=3\n  PROBLEM: A standalone stall issue with a complete empty label page (0 labels, hasNextPage=false) is treated as unavailable because standalone scope requires `length > 0`.\n  WHY: For a standalone issue with zero labels and a configured AI_ENGINE_STALL_JUDGE=claude (or AI_ENGINE=claude), the poller forces codex instead of honoring the configured engine; the requirement says to default to codex when the snapshot is unavailable, and an empty complete page is available.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_orchestrator_judges_claude_engine.py:160-178 | severity=critical | confidence=4\n  PROBLEM: The test expects specific list order but `unique` filter preserves insertion order, not sort order.\n  WHY: Python list equality `==` is order-sensitive; the implementation returns `[\"ai:orchestrator-managed\",\"ai:codex\",\"ai:engine-claude\"]` for the managed case while the test expects `[\"ai:codex\",\"ai:engine-claude\",\"ai:orchestrator-managed\"]`, causing assertion failure.\n- scripts/orchestrate_poll_process.sh:229-230 | severity=high | confidence=4\n  PROBLEM: An empty but complete label array is treated as \"unavailable\" rather than as an available set of zero labels.\n  WHY: The `select(length > 0)` in `poller_judge_engine_labels_json` excludes empty label lists for standalone issues, so they default to Codex instead of honoring the engine resolution logic or a configured `AI_ENGINE=claude`.\n- scripts/orchestrate_poll_process.sh:110 | severity=low | confidence=3\n  PROBLEM: An environment variable contract is introduced without documentation or changelog entry.\n  WHY: Future maintainers cannot discover it, and out-of-tree callers might rely on it, making it difficult to maintain or deprecate without potential silent breaks.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrator_judges_claude_engine.py:162-165 | severity=high | confidence=5\n  PROBLEM: Every managed-scope parametrization asserts alphabetically sorted label arrays, but jq's `unique` preserves first-occurrence order.\n  WHY: With issue_labels='[\"ai:orchestrator-managed\",\"ai:codex\"]' and tracking_labels='[\"ai:engine-claude\"]', the implementation emits `[\"ai:orchestrator-managed\",\"ai:codex\",\"ai:engine-claude\"]`, and `json.loads(labels_json) == expected` fails because Python list equality is order-sensitive.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:229 | severity=low | confidence=4\n  PROBLEM: A verified empty issue-label array is treated as an unavailable snapshot because standalone scope requires `length > 0`.\n  WHY: The helper rejects the empty snapshot, so the call site passes `unavailable` and forces Codex instead of allowing the configured `STALL_JUDGE` engine selection to apply.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:110 | severity=low | confidence=3\n  PROBLEM: `POLLER_JUDGE_WORKSPACE_OVERRIDE` is declared and used for RB_JUDGE in non-combined mode, but never set anywhere in the repository; other paths overwrite it.\n  WHY: There is no runtime failure today, but the variable is a dead privileged override knob that could redirect the RB-judge sandbox workspace without caller-driven validation or documentation.\n- scripts/orchestrate_poll_process.sh:229-230 | severity=low | confidence=4\n  PROBLEM: A verified empty label array is treated as unavailable because standalone scope requires `length > 0`.\n  WHY: The caller converts it to `unavailable`, and `poller_judge_isolated()` forces Codex without calling `ai_engine_for_role()`, ignoring a configured `AI_ENGINE_STALL_JUDGE=claude` or `AI_ENGINE=claude`; the requirement specifies forcing Codex when the snapshot is unavailable, and an empty complete snapshot is available.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/orchestrate_poll_process.sh:110 | severity=low | confidence=3\n  PROBLEM: `POLLER_JUDGE_WORKSPACE_OVERRIDE` is an undocumented dormant environment-variable escape hatch with no caller in the repository.\n  WHY: It survives only on the RB_JUDGE non-combined-mode path, where a future caller or test scaffold could export it and redirect the sandbox workspace to an unintended path without a documented contract or validation.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "12c18f1d7096c8dc487b7901a24b0ada82283f42c40af5bfa0fc7ad5981fc6e2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6497,
+    "run_id": "37436681579",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37436681579",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006091315_8961768d20",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6497,
+    "run_id": "37436681579"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T09:13:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
