@@ -56,7 +56,7 @@ def _directory_category(name, is_symlink):
 	if not parts or name.startswith("/") or ".." in parts or "\\" in name or "\n" in name or "\r" in name:
 		return "invalid_name"
 	lowered = [part.lower() for part in parts]
-	if parts[0].startswith("."):
+	if parts[0] == ".github":
 		return "dot_github_subtree"
 	if any(part.startswith(".env") for part in lowered):
 		return "env_like"

@@ -7576,6 +7576,7 @@ def test_review_isolation_rejection_line_drops_unknown_tokens() -> None:
 	known = workspace_module._rejection("x", "unsafe_directory", "symlink", "3+")
 	assert workspace_module._rejection_line(known) == legacy + " reason=unsafe_directory category=symlink depth=3+"
 	assert isinstance(known, ValueError) and str(known) == "x"
+	assert workspace_module._directory_category(".hidden/path", False) == "other"
 
 
 def test_review_relay_accepts_only_configured_chat_model() -> None:
