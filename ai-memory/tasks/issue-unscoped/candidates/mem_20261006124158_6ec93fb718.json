@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_workflow_failure_heal.py:877-893 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: The regression test patches `_neutralize_heal_routing_text` but leaves `neutralize_untrusted_routing` active, so routing inputs are neutralized before the test's final-validation assertion and the expected `ValueError` is not raised.\n  WHY: CI reports `DID NOT RAISE ValueError`; the test does not disable every neutralization path that changes the input before validation.\n- scripts/workflow_failure_heal.py:1861-1865 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The final routing-metadata safety check does not match neutralized directive forms such as `Target branch (untrusted):`, allowing those forms to pass validation.\n  WHY: The check runs after neutralization, but its patterns match only the original forms; severity disagreement: BLOCKER was reported by qwen_qwen3_7-plus and MAJOR by google_gemini-3_1-flash-lite.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_workflow_failure_heal.py: 879 (the monkeypatch.setattr call) | severity=BLOCKER | confidence=5\n  PROBLEM: The test patches only `_neutralize_heal_routing_text`, leaving direct `neutralize_untrusted_routing` calls active on diagnosis, failure evidence, and run-summary fields.\n  WHY: Those calls alter the routing directives before the final safety regex runs, so the expected `ValueError` is not raised and CI reports `DID NOT RAISE ValueError`.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_workflow_failure_heal.py: 877-893 | severity=BLOCKER | confidence=5\n  PROBLEM: The regression test patches `_neutralize_heal_routing_text` but leaves `neutralize_untrusted_routing` active before the final check.\n  WHY: Neutralization changes the routing directive format, so the regex does not match and `ValueError` is never raised.\n- scripts/workflow_failure_heal.py: 1861-1865 | severity=MAJOR | confidence=5\n  PROBLEM: The final safety check's regexes do not account for `(untrusted)` being inserted into routing keys before the check runs.\n  WHY: The regex fails to match neutralized lines, making the safety net inert for those forms.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal.py: lines 1861-1865 (the `re.search` inside `compose_issue_body`) | confidence=5\n  PROBLEM: The final routing-metadata safety check runs after neutralization, but its regex matches only pre-neutralization forms.\n  WHY: Neutralized routing keys, `Re-issued from`, `review-blocked-reissue`, and HTML-comment markers do not match the regex, so the safety net does not reject them.\n- scripts/workflow_failure_heal.py: lines 1861-1865 | confidence=5\n  PROBLEM: The validation regex does not match post-neutralization forms of routing directives.\n  WHY: The neutralized forms do not match the current regex, so the expected `ValueError` is not raised.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_workflow_failure_heal.py: 879-893, `test_compose_issue_body_rejects_routing_directives_left_after_neutralization` | severity=BLOCKER | confidence=5\n  PROBLEM: The test patches `_neutralize_heal_routing_text` but leaves `neutralize_untrusted_routing` active.\n  WHY: The active sanitizer changes routing keys before validation, so `compose_issue_body` returns instead of raising the expected `ValueError`; CI reports \u201cDID NOT RAISE ValueError\u201d.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/workflow_failure_heal.py: 1861-1865 | severity=BLOCKER | confidence=5\n  PROBLEM: The final validation regex checks routing directives in their original form, but neutralization converts them to forms such as `Target branch (untrusted):`.\n  WHY: The regex matches only the original pattern, so it does not catch neutralized directives; the regression test consequently fails to raise the expected `ValueError`.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/test_workflow_failure_heal.py: 877-893 (test_compose_issue_body_rejects_routing_directives_left_after_neutralization) | severity=BLOCKER | confidence=5\n  PROBLEM: The test patches `_neutralize_heal_routing_text` but leaves direct `neutralize_untrusted_routing` calls active on diagnosis, failure evidence, and run-summary fields.\n  WHY: The inputs are neutralized before the final regex runs, so `ValueError` is never raised and CI fails with `DID NOT RAISE`.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "ae6a4348be3dd23447d5520b11bd2153ce34b9ca5fc449a6a12ef71495e4375a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6273,
+    "run_id": "37461855465",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37461855465",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006124158_6ec93fb718",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6273,
+    "run_id": "37461855465"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T12:41:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
