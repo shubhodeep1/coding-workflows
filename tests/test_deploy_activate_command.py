@@ -81,7 +81,7 @@ def test_credential_selection_is_site_specific(cloudflare_steps: str) -> None:
 
 def test_mutations_require_a_confirmed_step(cloudflare_steps: str) -> None:
 	assert "**Reads**" in cloudflare_steps and "self-serve" in cloudflare_steps
-	assert "when I confirm (`done` / `go`), run it yourself" in cloudflare_steps
+	assert "recheck the pin and run the approved change yourself" in cloudflare_steps
 	assert "Never run a Cloudflare mutation in the same turn that proposes it" in cloudflare_steps
 	assert "operations are ask-first on top of the step loop" in cloudflare_steps
 	assert "Deleting a Worker, route, custom domain, or cron trigger" in cloudflare_steps
