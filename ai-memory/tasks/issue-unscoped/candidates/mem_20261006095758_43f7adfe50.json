@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/codex_isolation_fakes.py:207 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  PROBLEM: `SECRET_ENV` omits `ANTHROPIC_API_KEY`, so `assert_no_secret_env` does not detect that credential leaking into the isolated container.\n  WHY: A leaked `ANTHROPIC_API_KEY` would pass tests using this helper; severity was reported as MAJOR by google_gemini-3_1-flash-lite and NIT by minimax_minimax-m3, while qwen_qwen3_7-plus and z-ai_glm-5_2 did not state severity.\n- tests/test_ai_engine.py:254-261 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_2]\n  PROBLEM: `test_missing_cli_falls_back()` can pass when the fake Docker runner crashes because it cannot launch `claude`, rather than verifying the intended fallback behavior.\n  WHY: The test's non-75 exit assertion does not establish that the intended fallback occurred; severity was reported as MAJOR by google_gemini-3_1-flash-lite and NIT by minimax_minimax-m3, while z-ai_glm-5_2 did not state severity.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/codex_isolation_fakes.py:207 | severity=MAJOR | confidence=[4]\n  PROBLEM: The SECRET_ENV tuple used by assert_no_secret_env fails to include \"ANTHROPIC_API_KEY\".\n  WHY: The helper responsible for detecting secret leaks in the Claude sandbox will not detect if ANTHROPIC_API_KEY is incorrectly passed into the isolated environment.\n- tests/test_ai_engine.py:254-261 | severity=MAJOR | confidence=[4]\n  PROBLEM: test_missing_cli_falls_back() does not adequately verify the intended fallback behavior when claude is not found on the PATH.\n  WHY: The test removes claude from the PATH but fails to demonstrate that the system falls back to Codex as intended; instead, it relies on a Docker stub crash which returns exit code 1, passing the assert _rc(result) != 75 check without verifying the logic of the fallback mechanism.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/codex_isolation_fakes.py:207 | severity=NIT | confidence=[4]\n  PROBLEM: The pre-existing `assert_no_secret_env` helper still uses `SECRET_ENV`, which is missing ANTHROPIC_API_KEY.\n  WHY: A regression that places `ANTHROPIC_API_KEY` into the container environment would pass `assert_no_secret_env` and silently weaken the credential-isolation contract for every test that consumes the helper.\n- tests/test_ai_engine.py:254-261 | severity=NIT | confidence=[4]\n  PROBLEM: `test_missing_cli_falls_back` asserts only `_rc(result) != 75` and `\"reason=cli_missing\" not in result.stderr`, although the fake Docker runner does not use `FAKE_CLAUDE_BIN` to locate the binary.\n  WHY: The runner crashes with `FileNotFoundError` on `claude`, so the test passes for reasons other than verifying the intended behavior.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/codex_isolation_fakes.py:207 | confidence=[not stated]\n  PROBLEM: `SECRET_ENV` omits \"ANTHROPIC_API_KEY\", while the parallel `secret_env_names` list added in `tests/test_ai_engine.py:76` includes it.\n  WHY: `assert_no_secret_env` (line 210) uses the incomplete tuple, so the Docker E2E test would not detect `ANTHROPIC_API_KEY` leaking into the isolated container.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- tests/codex_isolation_fakes.py:207 | confidence=[not stated]\n  PROBLEM: SECRET_ENV omits \"ANTHROPIC_API_KEY\", while the parallel secret_env_names list in tests/test_ai_engine.py:76 includes it.\n  WHY: assert_no_secret_env (line 210) uses SECRET_ENV, so a leaked ANTHROPIC_API_KEY value would not be caught by tests/test_codex_isolated_exec.py:501 which calls assert_no_secret_env(record[\"env\"]).\n- tests/test_ai_engine.py:254-261 | confidence=[not stated]\n  PROBLEM: The test strips every PATH entry containing \"claude\" and asserts _rc(result) != 75 and \"reason=cli_missing\" not in result.stderr.\n  WHY: The fake docker runner cannot launch claude, crashes, and returns non-75, so the test passes vacuously; additionally, ai_engine.sh has no \"cli_missing\" reason string.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e1abcc42f141a5419a7f3c1edb0bedcff2fb54f91df980a5caf1b6a616d05b57",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6502,
+    "run_id": "37440406791",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37440406791",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006095758_43f7adfe50",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6502,
+    "run_id": "37440406791"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T09:57:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
