@@ -5191,9 +5191,9 @@ run_reviewer_pass() {
     esac
   done
 
-  # A skipped sole lite Mistral slot or a context overflow needs a successful
+  # A skipped sole Mistral slot or a context overflow needs a successful
   # larger-window reviewer before the PR can continue.
-  if [ "${REVIEW_TIER:-}" = "lite" ] && [ "${#pass_models[@]}" -eq 1 ] \
+  if [ "${#pass_models[@]}" -eq 1 ] \
     && [ "${pass_models[0]}" = "mistralai/mistral-small-2603" ] && [ "${pass_successful}" -eq 0 ] \
     && [ -f "${pass_status_files[0]}" ] \
     && { [ "${sf_status}" = "skipped_unmapped" ] || [ "${sf_status}" = "skipped_open" ] || {
@@ -5206,7 +5206,7 @@ run_reviewer_pass() {
       reviewer_health_dispatch_prepare "openai/gpt-6-luna"
       [ "${REVIEWER_HEALTH_DISPATCH_DECISION}" != "skip_open" ]
     }; then
-      echo "::warning::Lite reviewer Mistral was skipped or exceeded its context window; retrying with live openai/gpt-6-luna." >&2
+      echo "::warning::Sole reviewer Mistral was skipped or exceeded its context window; retrying with live openai/gpt-6-luna." >&2
       run_reviewer "openai/gpt-6-luna" "openai_gpt-6-luna" "${pass_prefix}" "${pass_prompt}" "${pass_reasoning}" >&2
       if [ "$(cat "${PREVIOUS_REVIEWS_DIR}/status_${pass_prefix}_openai_gpt-6-luna.txt" 2>/dev/null || true)" = "success" ]; then
         pass_successful=1
@@ -5440,7 +5440,7 @@ if [ "${reviewers_successful}" -eq 0 ]; then
         ;;
     esac
   done
-  if [ "${REVIEW_TIER:-}" != "lite" ] && [ "${review_skip_only_statuses}" -gt 0 ] && [ "${review_hard_failures}" -eq 0 ]; then
+  if [ "$(wc -l < "${REVIEWER_ACTIVE_MODELS_FILE}" 2>/dev/null || echo 0)" -gt 1 ] && [ "${review_skip_only_statuses}" -gt 0 ] && [ "${review_hard_failures}" -eq 0 ]; then
     echo "::warning::Reviewer pass produced no successful findings; all review slots were skipped fail-open (cached-open or unmapped). Continuing with REVIEWERS_SUCCESSFUL=0."
     echo "REVIEWERS_SUCCESSFUL=0" >> "$GITHUB_ENV"
     exit 0

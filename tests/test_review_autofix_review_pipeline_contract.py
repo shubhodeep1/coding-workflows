@@ -2404,6 +2404,8 @@ def _run_reviewer_zero_success_guard_harness(*, statuses: list[str], review_tier
 		reviews = tmp / "reviews"
 		reviews.mkdir()
 		github_env_file = tmp / "github_env.txt"
+		active_models_file_for_guard = tmp / "active_models.txt"
+		active_models_file_for_guard.write_text("".join(f"model{idx}\n" for idx in range(1, len(statuses) + 1)), encoding="utf-8")
 
 		for idx, status in enumerate(statuses, 1):
 			(reviews / f"status_review_model{idx}.txt").write_text(f"{status}\n", encoding="utf-8")
@@ -2423,6 +2425,7 @@ def _run_reviewer_zero_success_guard_harness(*, statuses: list[str], review_tier
 				"PREVIOUS_REVIEWS_DIR": str(reviews),
 				"PR_NUMBER": "123",
 				"REVIEW_TIER": review_tier,
+				"REVIEWER_ACTIVE_MODELS_FILE": str(active_models_file_for_guard),
 				"GITHUB_ENV": str(github_env_file),
 			},
 			capture_output=True,
@@ -4625,7 +4628,7 @@ def test_review_tier_lite_draws_from_standard_list_and_defaults_use_whole_panel(
 	assert pinned_lite["active_models"] == ["mistralai/mistral-small-2603"]
 
 
-def test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer() -> None:
+def test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer(review_tier: str = "lite") -> None:
 	reviewer_text = REVIEWERS.read_text(encoding="utf-8")
 	pass_function = reviewer_text.split("run_reviewer_pass() {", 1)[1].split("# Wrap a consolidated pass-1 ledger", 1)[0]
 	script = "run_reviewer_pass() {" + pass_function + textwrap.dedent("""\
@@ -4692,7 +4695,7 @@ def test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer(
 					"REVIEWER_MODELS": roster,
 					"FALLBACK_STATUS": fallback_status,
 					"TEST_HEALTH_DECISION": health_decision,
-					"REVIEW_TIER": "lite",
+					"REVIEW_TIER": review_tier,
 					"PR_NUMBER": "6438",
 				},
 				capture_output=True,
@@ -4705,6 +4708,10 @@ def test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer(
 				assert "ACTIVE=openai/gpt-6-luna" in proc.stdout
 			else:
 				assert "ACTIVE=mistralai/mistral-small-2603" in proc.stdout
+
+
+def test_risk_tier_sole_mistral_retries_with_live_larger_window_reviewer() -> None:
+	test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer("disabled")
 
 
 def test_review_tier_disabled_keeps_risk_tier_selection_and_pick_guards_short_args() -> None:
@@ -5364,11 +5371,12 @@ def test_reviewer_zero_success_guard_fails_open_when_every_review_slot_was_skipp
 
 
 def test_reviewer_zero_success_guard_fails_closed_for_lite_without_a_successful_reviewer() -> None:
-	for status in ("skipped_open", "skipped_unmapped", "failed"):
-		result = _run_reviewer_zero_success_guard_harness(statuses=[status], review_tier="lite")
-		assert result["returncode"] == 1
-		assert result["github_env"] == ""
-		assert "All reviewers failed." in result["stdout"]
+	for review_tier in ("lite", "disabled", "trivial", "standard", "full"):
+		for status in ("skipped_open", "skipped_unmapped", "failed"):
+			result = _run_reviewer_zero_success_guard_harness(statuses=[status], review_tier=review_tier)
+			assert result["returncode"] == 1
+			assert result["github_env"] == ""
+			assert "All reviewers failed." in result["stdout"]
 
 
 def test_reviewer_filter_harness_strips_low_signal_paths_and_preserves_exemptions() -> None:
@@ -8076,7 +8084,8 @@ def main() -> int:
 	test_review_tier_resolver_routes_lite_standard_and_full_and_handles_overrides()
 	test_review_tier_random_pick_is_seeded_by_pr_number_and_pinned_by_variables()
 	test_review_tier_lite_draws_from_standard_list_and_defaults_use_whole_panel()
-	test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer()
+	test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer("lite")
+	test_risk_tier_sole_mistral_retries_with_live_larger_window_reviewer()
 	test_review_tier_disabled_keeps_risk_tier_selection_and_pick_guards_short_args()
 	test_review_tier_protected_paths_match_deterministic_skip_gate()
 	test_auto_merge_guard_honours_configured_orchestrator_branch_pattern()
