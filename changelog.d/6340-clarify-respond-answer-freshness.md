@@ -1,0 +1,2 @@
+<!-- changelog: security -->
+- **Clarify-respond now rechecks live answers before posting.** The shared answer poster skips stale replies and escalation if an authorized answer or newer clarification has arrived, the triggering question is gone, or the issue has closed. Only trusted users and the authorized GitHub Actions bot can supersede an answer. Duplicate claims cannot trigger escalation. An unavailable recheck fails without posting; a later run can retry if the retryable status was persisted to memory.

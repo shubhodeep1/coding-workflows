@@ -215,6 +215,7 @@ changelog.d/6293-numeric-push-refspec-redirect.md
 changelog.d/6304-pr-merge-guard-spaced-numeric-refspec.md
 changelog.d/6322-pr-merge-guard-single-json-output.md
 changelog.d/6338-data-provision-guard-no-security-skip.md
+changelog.d/6339-clarify-respond-answer-completeness.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/release-smoke-run-lookup.md
 changelog.d/review-tier-random-reviewers.md

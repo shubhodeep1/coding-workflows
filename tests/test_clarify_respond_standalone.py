@@ -447,26 +447,205 @@ def test_complete_answer_is_byte_identical_and_strategies_are_permitted() -> Non
 	assert auto.complete_answers(QUESTIONS, emphasized)["answers"] == emphasized
 
 
-@pytest.mark.parametrize("decision", ["Q1: ESCALATE", "**Q1**: **ESCALATE**", "Q0: ESCALATE"])
-def test_complete_escalation_never_posts_an_answer(tmp_path: Path, decision: str) -> None:
-	answer = f"DECISIONS:\n{decision}\nQ2: A\n"
-	if decision != "Q0: ESCALATE":
-		assert auto.complete_answers(QUESTIONS, answer)["answers"] == answer
+def _run_poster(
+	tmp_path: Path, comments: list[dict] | None = None, *,
+	issue_response: str = '{"state":"open"}', comments_response: str | None = None,
+	comments_fail: bool = False, answer: str = "Q1: B\nQ2: A\n", comment_id: str = "1",
+	poster_memory_status: str = "",
+) -> tuple[subprocess.CompletedProcess[str], list[list[str]], str]:
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir(exist_ok=True)
+	gh = bin_dir / "gh"
+	gh.write_text(
+		"#!/usr/bin/env python3\n"
+		"import json, os, sys\n"
+		"args = sys.argv[1:]\n"
+		"with open(os.environ['POSTER_GH_LOG'], 'a') as log: log.write(json.dumps(args) + '\\n')\n"
+		"if args[:2] == ['api', 'repos/owner/repo/issues/6262']:\n"
+		"    print(os.environ['POSTER_ISSUE_RESPONSE'])\n"
+		"elif '--slurp' in args:\n"
+		"    if os.environ['POSTER_COMMENTS_FAIL'] == 'true': sys.exit(1)\n"
+		"    print(os.environ['POSTER_COMMENTS_RESPONSE'])\n"
+		"elif args[:2] == ['api', 'repos/owner/repo/issues/6262/comments']:\n"
+		"    print('{\"id\":9}')\n"
+		"else: sys.exit(1)\n",
+		encoding="utf-8",
+	)
+	gh.chmod(gh.stat().st_mode | stat.S_IXUSR)
 	scripts = tmp_path / "scripts"
-	scripts.mkdir()
+	scripts.mkdir(exist_ok=True)
 	shutil.copy(ROOT / "scripts" / "orchestrate_parse_and_post_answer.sh", scripts)
-	_stub_gh(tmp_path / "bin", tmp_path / "gh.log", {"repos/owner/repo/issues/6262/comments": '{"id": 1}'})
-	env = _env(tmp_path, GITHUB_REPOSITORY="owner/repo", GITHUB_ACTOR="bot", CLARIFICATION_COMMENT_ID="1")
+	log = tmp_path / "gh.log"
+	env = _env(
+		tmp_path, GITHUB_REPOSITORY="owner/repo", GITHUB_ACTOR="bot",
+		CLARIFICATION_COMMENT_ID=comment_id, POSTER_GH_LOG=str(log),
+		POSTER_ISSUE_RESPONSE=issue_response,
+		POSTER_COMMENTS_RESPONSE=comments_response if comments_response is not None else json.dumps([comments if comments is not None else [
+			{"id": 1, "body": QUESTIONS, "author_association": "OWNER", "user": {"login": "owner", "type": "User"}},
+		]]),
+		POSTER_COMMENTS_FAIL="true" if comments_fail else "false",
+		POSTER_MEMORY_STATUS=poster_memory_status,
+	)
 	Path(env["CODEX_OUTPUT_FILE"]).write_text(answer, encoding="utf-8")
 	result = subprocess.run(
 		["bash", str(scripts / "orchestrate_parse_and_post_answer.sh")], cwd=tmp_path,
 		env=env, capture_output=True, text=True, check=False,
 	)
-	assert result.returncode == 0, result.stderr
-	log = tmp_path / "gh.log"
 	calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()] if log.exists() else []
-	assert all("/answer" not in arg for call in calls for arg in call)
-	assert "SKIP_AUTO_ANSWER=true" in (tmp_path / "env").read_text(encoding="utf-8")
+	return result, calls, (tmp_path / "env").read_text(encoding="utf-8")
+
+
+def _poster_comment(comment_id: int, body: str, association: str = "OWNER", login: str = "owner", commenter_type: str = "User") -> dict:
+	return {"id": comment_id, "body": body, "author_association": association, "user": {"login": login, "type": commenter_type}}
+
+
+def test_fresh_poster_posts_once(tmp_path: Path) -> None:
+	result, calls, env = _run_poster(tmp_path, [_poster_comment(0, "/answer"), _poster_comment(1, QUESTIONS)])
+	assert result.returncode == 0, result.stderr
+	assert "Posted auto-answer on issue #6262" in result.stdout
+	assert "SKIP_AUTO_ANSWER=false" in env
+	assert calls[0][:2] == ["api", "repos/owner/repo/issues/6262"]
+	assert "--slurp" in calls[1]
+	assert len([call for call in calls if call[:2] == ["api", "repos/owner/repo/issues/6262/comments"]]) == 1
+	assert calls[2][:2] == ["api", "repos/owner/repo/issues/6262/comments"]
+
+
+@pytest.mark.parametrize("extra, reason", [
+	(_poster_comment(2, "  /AnSwEr Q1: A"), "newer_answer"),
+	(_poster_comment(2, "/answer [auto-answered-by-orchestrator]\nQ1: B", "NONE", "github-actions[bot]", "Bot"), "newer_answer"),
+	(_poster_comment(2, "<!-- ai:clarification-questions -->\nQ1: ..."), "newer_clarification"),
+	(_poster_comment(2, "Clarification required\nQ1: ...", "NONE", "github-actions[bot]", "Bot"), "newer_clarification"),
+])
+def test_poster_skips_superseded_thread(tmp_path: Path, extra: dict, reason: str) -> None:
+	result, calls, env = _run_poster(tmp_path, [_poster_comment(1, QUESTIONS), extra])
+	assert result.returncode == 0, result.stderr
+	assert f"gate=answer_freshness reason={reason} outcome=skip" in result.stdout
+	assert "SKIP_AUTO_ANSWER=true" in env and "LOOP_BLOCKED=false" in env
+	assert all(call[:2] != ["api", "repos/owner/repo/issues/6262/comments"] for call in calls)
+
+
+@pytest.mark.parametrize("extra", [
+	_poster_comment(2, "/answer", "NONE", "outsider"),
+	_poster_comment(2, "/answer [auto-answered-by-orchestrator]", "NONE", "other[bot]", "Bot"),
+	_poster_comment(2, "/answer", "NONE", "github-actions[bot]", "Bot"),
+	_poster_comment(2, "/answer", "OWNER", "other[bot]", "Bot"),
+	_poster_comment(2, "<!-- ai:clarification-questions -->\nClarification required", "NONE", "other[bot]", "Bot"),
+])
+def test_untrusted_answer_cannot_suppress_poster(tmp_path: Path, extra: dict) -> None:
+	result, calls, env = _run_poster(tmp_path, [_poster_comment(1, QUESTIONS), extra])
+	assert result.returncode == 0 and "SKIP_AUTO_ANSWER=false" in env, result.stderr
+	assert any(call[:2] == ["api", "repos/owner/repo/issues/6262/comments"] for call in calls)
+
+
+def test_poster_reads_all_comment_pages(tmp_path: Path) -> None:
+	pages = [[_poster_comment(1, QUESTIONS)], [_poster_comment(2, "/answer")]]
+	result, calls, env = _run_poster(tmp_path, comments_response=json.dumps(pages))
+	assert result.returncode == 0 and "reason=newer_answer" in result.stdout
+	assert "SKIP_AUTO_ANSWER=true" in env
+	assert all(call[:2] != ["api", "repos/owner/repo/issues/6262/comments"] for call in calls)
+
+
+def test_failed_recheck_marks_only_that_claim_retryable(tmp_path: Path) -> None:
+	scripts = tmp_path / "scripts"
+	scripts.mkdir()
+	(scripts / "memory_helpers.sh").write_text(
+		'memory_ensure_branch() { :; }\n'
+		'memory_processed_command_check() {\n'
+		'  if [ -f "${POSTER_MEMORY_STATUS}" ]; then\n'
+		'    printf \'{"exists":true,"entry":{"status":"%s"}}\\n\' "$(< "${POSTER_MEMORY_STATUS}")"\n'
+		'  else printf \'{"exists":false}\\n\'; fi\n'
+		'}\n'
+		'memory_processed_command_claim() { printf "%s\\n" "$*" >> "${POSTER_MEMORY_STATUS}.log"; printf claimed > "${POSTER_MEMORY_STATUS}"; printf \'{"claimed":true}\\n\'; }\n'
+		'memory_clarify_loop_guard() { printf \'{"result":{"blocked":false}}\\n\'; }\n'
+		'memory_processed_command_complete() {\n'
+		'  printf "%s\\n" "$*" >> "${POSTER_MEMORY_STATUS}.completions"\n'
+		'  while [ "$#" -gt 0 ]; do\n'
+		'    if [ "$1" = "--status" ]; then printf "%s" "$2" > "${POSTER_MEMORY_STATUS}"; break; fi\n'
+		'    shift\n'
+		'  done\n'
+		'}\n', encoding="utf-8",
+	)
+	status_file = tmp_path / "poster_memory_status"
+	failed, calls, _ = _run_poster(tmp_path, comments_fail=True, poster_memory_status=str(status_file))
+	assert failed.returncode == 1 and status_file.read_text() == "recheck_unavailable"
+	assert not any(call[:2] == ["api", "repos/owner/repo/issues/6262/comments"] for call in calls)
+	retried, calls, _ = _run_poster(tmp_path, poster_memory_status=str(status_file))
+	assert retried.returncode == 0 and "Posted auto-answer" in retried.stdout
+	assert status_file.read_text() == "answered"
+	assert len((tmp_path / "poster_memory_status.log").read_text().splitlines()) == 2
+	assert "--retry-on-status recheck_unavailable" in (tmp_path / "poster_memory_status.log").read_text()
+	completions = (tmp_path / "poster_memory_status.completions").read_text().splitlines()
+	assert [json.loads(line.split("--metadata-json ", 1)[1])["clarify_comment_id"] for line in completions] == [1, 1]
+
+
+@pytest.mark.parametrize("kwargs, reason, code", [
+	({"comments": [_poster_comment(2, "hi")]}, "clarification_comment_missing", 0),
+	({"issue_response": '{"state":"closed"}'}, "issue_closed", 0),
+	({"issue_response": "not json"}, "recheck_unavailable", 1),
+	({"comments_fail": True}, "recheck_unavailable", 1),
+	({"comments_response": "{}"}, "recheck_unavailable", 1),
+	({"comments_response": "[{\"id\":1}]"}, "recheck_unavailable", 1),
+	({"comment_id": "1oops"}, "recheck_unavailable", 1),
+])
+def test_poster_fails_closed_or_skips_stale_thread(tmp_path: Path, kwargs: dict, reason: str, code: int) -> None:
+	result, calls, env = _run_poster(tmp_path, **kwargs)
+	assert result.returncode == code, result.stderr
+	assert f"gate=answer_freshness reason={reason} outcome=skip" in result.stdout
+	assert ("::error::" in result.stdout) == (code == 1)
+	assert "SKIP_AUTO_ANSWER=true" in env
+	assert all(call[:2] != ["api", "repos/owner/repo/issues/6262/comments"] for call in calls)
+
+
+def test_escalation_cannot_override_newer_human_answer(tmp_path: Path) -> None:
+	result, calls, env = _run_poster(tmp_path, [_poster_comment(1, QUESTIONS), _poster_comment(2, "/answer")], answer="Q1: ESCALATE\n")
+	assert result.returncode == 0 and "reason=newer_answer" in result.stdout
+	assert "SKIP_AUTO_ANSWER=true" in env
+	assert not any(call[0] == "issue" or call[:2] == ["api", "repos/owner/repo/issues/6262/comments"] for call in calls)
+
+
+def test_already_processed_escalation_does_not_post_or_block(tmp_path: Path) -> None:
+	scripts = tmp_path / "scripts"
+	scripts.mkdir()
+	(scripts / "memory_helpers.sh").write_text(
+		'memory_ensure_branch() { :; }\n'
+		'memory_processed_command_check() { printf \'{"exists":true,"entry":{"status":"answered"}}\\n\'; }\n',
+		encoding="utf-8",
+	)
+	result, calls, env = _run_poster(tmp_path, answer="Q1: ESCALATE\n")
+	assert result.returncode == 0, result.stderr
+	assert "reason=already_processed" in result.stdout
+	assert "SKIP_AUTO_ANSWER=true" in env
+	assert calls == []
+
+
+def test_escalation_rechecks_immediately_before_comment_and_then_edits_labels(tmp_path: Path) -> None:
+	result, calls, env = _run_poster(tmp_path, answer="Q1: ESCALATE\n")
+	assert result.returncode == 0 and "SKIP_AUTO_ANSWER=true" in env, result.stderr
+	assert len(calls) == 4
+	assert calls[0][:2] == ["api", "repos/owner/repo/issues/6262"]
+	assert "--slurp" in calls[1]
+	assert calls[2][:2] == ["api", "repos/owner/repo/issues/6262/comments"]
+	assert any(arg.startswith("body=Autonomous resolution") for arg in calls[2])
+	assert calls[3][:3] == ["issue", "edit", "6262"]
+
+
+@pytest.mark.parametrize("kwargs", [{"comments_fail": True}, {"issue_response": '{"state":"closed"}'}])
+def test_escalation_recheck_blocks_both_post_and_label_edit(tmp_path: Path, kwargs: dict) -> None:
+	result, calls, env = _run_poster(tmp_path, answer="Q1: ESCALATE\n", **kwargs)
+	assert "SKIP_AUTO_ANSWER=true" in env
+	assert all(call[0] != "issue" and call[:2] != ["api", "repos/owner/repo/issues/6262/comments"] for call in calls)
+	assert result.returncode == (1 if kwargs.get("comments_fail") else 0)
+
+
+@pytest.mark.parametrize("decision", ["Q1: ESCALATE", "**Q1**: **ESCALATE**", "Q0: ESCALATE"])
+def test_complete_escalation_never_posts_an_answer(tmp_path: Path, decision: str) -> None:
+	answer = f"DECISIONS:\n{decision}\nQ2: A\n"
+	if decision != "Q0: ESCALATE":
+		assert auto.complete_answers(QUESTIONS, answer)["answers"] == answer
+	result, calls, env = _run_poster(tmp_path, answer=answer)
+	assert result.returncode == 0, result.stderr
+	assert all(not any(arg.startswith("body=/answer") for arg in call) for call in calls)
+	assert "SKIP_AUTO_ANSWER=true" in env
 	assert "reason=escalate_requested" in result.stdout
 
 
