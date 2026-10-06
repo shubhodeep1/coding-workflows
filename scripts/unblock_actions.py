@@ -19,6 +19,9 @@ the network; the shell only executes.
        PR provenance is validated again here; missing or malformed fields fail
        closed for issue-creating PR verdicts. Trusted PR-derived issue bodies
        carry an audit-only `ai:unblock-provenance:v1` marker.
+       `accept_with_followup` on an `ai:security` issue is refused here too: it
+       yields only a keep-open comment and a WARNING, never a follow-up issue
+       or a resume command, so the finding stays blocked (#6541).
   followup --context-file PATH --fixup N
       The reset to run once the fix-up issue N of a `descope` or
       `operator_step` verdict has merged (Q11).
@@ -407,6 +410,19 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 			location = f"the re-issue request recorded on tracking issue #{ctx['tracking']}" if ctx["tracking"] else "the newest issue that links this one"
 			ops.append({"op": "comment", "issue": item, "body": f"This security finding stays open; it is tracked here until a linked fix is merged. Re-issue: see {location}."})
 	elif name == "accept_with_followup":
+		if _is_security_issue(ctx):
+			# A security finding is never waived with an unbound follow-up; the
+			# block label stays so the scan keeps seeing it (#6541).
+			return [
+				{
+					"op": "comment",
+					"issue": item,
+					"body": "This security finding stays open and blocked: the unblock judge cannot accept it with a follow-up. "
+					"A split must be a security-labelled re-issue bound to this finding; it stays tracked here until a linked fix is merged."
+					"\n\nWhy: " + _one_line(verdict["reason"]),
+				},
+				{"op": "telegram", "level": "WARNING", "text": f"Unblock judge refused accept_with_followup for security finding #{item} ({ctx['stop']}); the block is kept."},
+			]
 		followup_body = "\n".join([f"Accepted with this follow-up by the unblock judge (#{item}).", "", f"Follow-up: {verdict['instructions']}"])
 		if ctx["kind"] == "pr":
 			followup_body += "\n\n" + _provenance_line(ctx)

@@ -1,0 +1,2 @@
+<!-- changelog: security -->
+- **The unblock judge no longer waives security findings with a follow-up.** A blocked `ai:security` issue could get `accept_with_followup`, which opened an unlabelled follow-up issue and posted `/approved` on the finding. That verdict is now left off the judge's menu for `ai:security` issues, and if a model returns it anyway it is refused and the issue stays open and blocked. To split a security finding, the judge uses `reissue`, which carries the finding marker and the `ai:security` label onto the replacement.
