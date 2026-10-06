@@ -496,7 +496,11 @@ def _push_targets(invocation: _GitInvocation, checkout: str) -> list[_GuardTarge
 	if uncertain:
 		return [_GuardTarget(checkout, {}, "", "HEAD", True,
 			"could not resolve git push options; destination branch is unknown")]
-	if remote_provided and positionals:
+	# A colon-qualified first positional is a refspec when --repo supplied
+	# the remote; otherwise preserve the positional-repository path.
+	if remote_provided and positionals and ":" in positionals[0]:
+		refspecs = positionals
+	elif remote_provided and positionals:
 		with _git_environment(invocation.environment):
 			code, _, _ = _run(
 				["git", "config", "--get", f"remote.{positionals[0]}.url"],

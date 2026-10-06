@@ -220,6 +220,7 @@ changelog.d/6322-pr-merge-guard-single-json-output.md
 changelog.d/6375-claude-live-sync-provenance-hold.md
 changelog.d/6391-sync-pr-lookup-verifies-base.md
 changelog.d/6404-claude-live-sync-pr-provenance.md
+changelog.d/autofix-cap-and-security-exhaustion-judge.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/release-smoke-run-lookup.md
 changelog.d/review-tier-random-reviewers.md
@@ -544,6 +545,7 @@ scripts/retarget_merged_base.sh
 scripts/review_agents_md_materiality.sh
 scripts/review_apply_fixes.sh
 scripts/review_autofix_step_changes_lost_redispatch.sh
+scripts/review_autofix_step_count_iterations.sh
 scripts/review_autofix_step_detect_merge_conflicts.sh
 scripts/review_autofix_step_editor_uncommitted_changes.sh
 scripts/review_autofix_step_iteration_summary.sh
@@ -562,6 +564,7 @@ scripts/review_issue_ledger.sh
 scripts/review_merge_train.sh
 scripts/review_parse_consolidator.sh
 scripts/review_rb_judge.sh
+scripts/review_rb_judge_security_pass.sh
 scripts/review_reject_verify.sh
 scripts/review_resolve_review_threads.sh
 scripts/review_resolve_review_threads_plan.py
@@ -874,6 +877,7 @@ tests/test_review_autofix_claude_fixer_mode.py
 tests/test_review_autofix_editor_noop_cascade_contract.py
 tests/test_review_autofix_failure_log_upload.py
 tests/test_review_autofix_force_tick_repository_env.py
+tests/test_review_autofix_iteration_count.py
 tests/test_review_autofix_last_run_diff_oscillation_guard.py
 tests/test_review_autofix_merge_precheck.py
 tests/test_review_autofix_phase_transition_contract.py
@@ -903,6 +907,7 @@ tests/test_review_pipeline_integration.py
 tests/test_review_rb_judge_label_propagation.py
 tests/test_review_rb_judge_reference_staging.py
 tests/test_review_rb_judge_reissue_baseline.py
+tests/test_review_rb_judge_security_pass.py
 tests/test_review_rb_judge_self_run_exclusion.py
 tests/test_review_reject_verify.py
 tests/test_review_rereview_and_approval_rubric.py
