@@ -34,6 +34,13 @@
 #             audited too.
 #           A dispatch that fails (for example a consumer wrapper without the
 #           `pr_number` input) holds the merge for a later retry.
+#           Every hold=true also writes `hold_reason=<reason>`: audit_dispatched,
+#           audit_pending or awaiting_followups when the pipeline resolves the
+#           hold by itself; markers_unverifiable, extensions_unverifiable,
+#           label_write_failed, cycles_exhausted,
+#           exhausted_without_completed_audit or dispatch_failed otherwise.
+#           review_rb_judge.sh passes it on so a judge merge held here alerts
+#           only when a human is needed.
 #   status  Runs the gate's checks with no label, comment, dispatch or
 #           GITHUB_OUTPUT write. May fetch missing Git history to verify
 #           extension ancestry; prints
@@ -85,7 +92,12 @@ single_pass_output()
 		echo "::error::GITHUB_OUTPUT is unset; cannot record the security-pass decision." >&2
 		exit 1
 	fi
-	if ! printf 'hold=%s\n' "$1" >> "${GITHUB_OUTPUT}"; then
+	local decision="hold=$1"
+	# hold_reason=<reason> (see the header) accompanies every hold=true.
+	if [ "$1" = "true" ] && [ -n "${2:-}" ]; then
+		decision+=$'\n'"hold_reason=$2"
+	fi
+	if ! printf '%s\n' "${decision}" >> "${GITHUB_OUTPUT}"; then
 		echo "::error::Could not record the security-pass decision; failing closed." >&2
 		exit 1
 	fi
@@ -270,20 +282,20 @@ single_pass_gate()
 		|| ! jq -e 'type == "array"' "${comments}" >/dev/null 2>&1; then
 		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=markers_unverifiable"
 		single_pass_state unverifiable
-		single_pass_output true
+		single_pass_output true markers_unverifiable
 		return 0
 	fi
 	if ! markers="$(single_pass_markers "${comments}")"; then
 		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=markers_unverifiable"
 		single_pass_state unverifiable
-		single_pass_output true
+		single_pass_output true markers_unverifiable
 		return 0
 	fi
 	cycles_used="$(printf '%s\n' "${markers}" | awk -F'\t' 'NF >= 5 && $5 + 0 > m { m = $5 + 0 } END { print m + 0 }')"
 	if ! extensions="$(single_pass_extensions "${comments}" "${head_sha}" . "${head_ref}")"; then
 		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=extensions_unverifiable"
 		single_pass_state unverifiable
-		single_pass_output true
+		single_pass_output true extensions_unverifiable
 		return 0
 	fi
 	effective_max=$((max_cycles + extensions))
@@ -306,7 +318,7 @@ single_pass_gate()
 		if [ "${age_hours}" -lt "${stale_hours}" ]; then
 			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=audit_pending cycle=${cycles_used}"
 			single_pass_state pending
-			single_pass_output true
+			single_pass_output true audit_pending
 			return 0
 		fi
 	fi
@@ -315,7 +327,7 @@ single_pass_gate()
 		# next cycle audits that head.
 		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=awaiting_followups cycle=${cycles_used}"
 		single_pass_state findings
-		single_pass_output true
+		single_pass_output true awaiting_followups
 		return 0
 	fi
 	if [ "${cycles_used}" -ge "${effective_max}" ]; then
@@ -340,7 +352,7 @@ single_pass_gate()
 				if ! gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" -f 'labels[]=ai:security-pass-failed' >/dev/null 2>&1; then
 					echo "::error::Could not label PR #${PR_NUMBER} ai:security-pass-failed; failing closed so workflow recovery can retry."
 					single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=failed reason=label_write_failed cycle=${cycles_used}"
-					single_pass_output true
+					single_pass_output true label_write_failed
 					return 1
 				fi
 				if [ -n "${completed_findings}" ]; then
@@ -357,11 +369,11 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 			fi
 			if [ -n "${completed_findings}" ]; then
 				single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=cycles_exhausted cycle=${cycles_used}"
-				single_pass_output true
+				single_pass_output true cycles_exhausted
 				single_pass_exhausted_output
 			else
 				single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=exhausted_without_completed_audit cycle=${cycles_used} head_attempts=${head_attempts}"
-				single_pass_output true
+				single_pass_output true exhausted_without_completed_audit
 			fi
 			return 0
 		fi
@@ -379,7 +391,7 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=dispatch_failed workflow=${workflow} cycle=${next_cycle}"
 		fi
 		echo "::warning::Could not dispatch ${workflow} for PR #${PR_NUMBER}; holding the merge until an audit can run."
-		single_pass_output true
+		single_pass_output true dispatch_failed
 		return 0
 	fi
 	if [ "${exhausted_retry}" = "true" ]; then
@@ -398,7 +410,7 @@ $(single_pass_marker pending "${head_sha}" "${next_cycle}")"
 	gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${body}" >/dev/null 2>&1 \
 		|| echo "::warning::Could not post the pending security-pass marker on PR #${PR_NUMBER}."
 	single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=dispatched cycle=${next_cycle} workflow=${workflow}$([ "${exhausted_retry}" = "true" ] && printf ' reason=exhausted_retry')"
-	single_pass_output true
+	single_pass_output true audit_dispatched
 }
 
 single_pass_report()

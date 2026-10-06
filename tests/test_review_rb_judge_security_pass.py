@@ -422,24 +422,30 @@ def test_prompt_blocks_merge_with_high_severity(tmp_path: Path, final: str) -> N
 
 
 @pytest.mark.parametrize(
-	"gate_output, gate_rc, allowed, reason",
+	"gate_output, gate_rc, allowed, reason, hold_reason",
 	[
-		("hold=false\\n", 0, True, "gate_clear"),
-		("hold=true\\n", 0, False, "audit_or_findings"),
-		("hold=true\\nexhausted=true\\n", 0, False, "exhausted"),
-		("hold=true\\n", 1, False, "gate_failed"),
-		("", 0, False, "gate_failed"),
+		("hold=false\\n", 0, True, "gate_clear", ""),
+		("hold=true\\n", 0, False, "audit_or_findings", "unknown"),
+		("hold=true\\nhold_reason=audit_dispatched\\n", 0, False, "audit_or_findings", "audit_dispatched"),
+		("hold=true\\nhold_reason=dispatch_failed\\n", 0, False, "audit_or_findings", "dispatch_failed"),
+		("hold=true\\nhold_reason=$(id)\\n", 0, False, "audit_or_findings", "unknown"),
+		("hold=true\\nhold_reason=cycles_exhausted\\nexhausted=true\\n", 0, False, "exhausted", "cycles_exhausted"),
+		("hold=true\\nhold_reason=label_write_failed\\n", 1, False, "gate_failed", "gate_failed"),
+		("", 0, False, "gate_failed", "gate_failed"),
 	],
 )
-def test_judge_merge_goes_through_the_security_gate(tmp_path: Path, gate_output: str, gate_rc: int, allowed: bool, reason: str) -> None:
+def test_judge_merge_goes_through_the_security_gate(tmp_path: Path, gate_output: str, gate_rc: int, allowed: bool, reason: str, hold_reason: str) -> None:
 	result, _, pass_calls = _run(
 		tmp_path,
-		'if rb_security_merge_gate; then echo ALLOW; else echo HOLD; fi',
+		'if rb_security_merge_gate; then echo ALLOW; else echo HOLD; fi; echo "HOLD_REASON=${RB_SECURITY_HOLD_REASON}"',
 		{"FAKE_PASS_GATE_OUTPUT": gate_output, "FAKE_PASS_GATE_RC": str(gate_rc)},
 	)
 	assert result.returncode == 0, result.stderr
 	assert ("ALLOW" if allowed else "HOLD") in result.stdout.splitlines()
 	assert f"reason={reason}" in result.stdout
+	# The judge passes the hold reason on so the alert step can tell a hold
+	# that clears by itself from one that needs a human.
+	assert f"HOLD_REASON={hold_reason}" in result.stdout.splitlines()
 	assert pass_calls == ["gate"]
 	# The gate's outputs go to a scratch file, never to the judge's GITHUB_OUTPUT.
 	assert not (tmp_path / "judge_output").exists() or (tmp_path / "judge_output").read_text(encoding="utf-8") == ""
@@ -458,12 +464,13 @@ def test_judge_merge_goes_through_the_security_gate(tmp_path: Path, gate_output:
 	],
 )
 def test_security_mode_merges_reverify_audited_head(tmp_path: Path, state: str, audited_head: str, judged_head: str, status_rc: str, allowed: bool) -> None:
-	result, _, pass_calls = _run(tmp_path, 'RB_SECURITY_MODE=true; if rb_security_merge_gate; then echo ALLOW; else echo HOLD; fi', {
+	result, _, pass_calls = _run(tmp_path, 'RB_SECURITY_MODE=true; if rb_security_merge_gate; then echo ALLOW; else echo HOLD; fi; echo "HOLD_REASON=${RB_SECURITY_HOLD_REASON}"', {
 		"FAKE_PASS_STATE": state, "FAKE_PASS_AUDITED_HEAD": audited_head, "RB_JUDGED_HEAD_SHA": judged_head,
 		"FAKE_PASS_STATUS_RC": status_rc,
 	})
 	assert result.returncode == 0, result.stderr
 	assert ("ALLOW" if allowed else "HOLD") in result.stdout.splitlines()
+	assert f"HOLD_REASON={'' if allowed else 'security_mode_unverified'}" in result.stdout.splitlines()
 	assert f"reason=security_mode_{'audited_head' if allowed else 'unverified'}" in result.stdout
 	assert pass_calls == ["status"]
 
@@ -514,6 +521,8 @@ def test_judge_script_wiring() -> None:
 	gate_at = text.index("! rb_security_merge_gate")
 	assert gate_at < text.index('case "${RB_ACTION}" in\n  merge)')
 	assert "judge_action=security_hold" in text
+	assert text.count('echo "judge_action=security_hold" >> "$GITHUB_OUTPUT"') == 3
+	assert text.count('echo "judge_skip_reason=security_hold_${RB_SECURITY_HOLD_REASON:-unknown}" >> "$GITHUB_OUTPUT"') == 3
 	assert 'rb_security_post_extension "$(git rev-parse HEAD' in text
 	assert text.index('rb_security_post_extension "$(git rev-parse HEAD') < text.index('git push origin "HEAD:${TARGET_BRANCH}"')
 	assert 'if ! rb_security_post_extension "$(git rev-parse HEAD 2>/dev/null || true)"; then' in text
@@ -560,11 +569,11 @@ def test_noop_fix_merge_paths_hold_before_labelling_issues(tmp_path: Path) -> No
 		output = tmp_path / "judge_output"
 		output.write_text("", encoding="utf-8")
 		result = subprocess.run(
-			["bash", "-c", 'set -euo pipefail; rb_security_merge_gate() { return 1; }; ' + branch + 'echo LABELS_ALLOWED'],
+			["bash", "-c", 'set -euo pipefail; rb_security_merge_gate() { RB_SECURITY_HOLD_REASON=audit_pending; return 1; }; ' + branch + 'echo LABELS_ALLOWED'],
 			env={"PATH": os.environ["PATH"], "GITHUB_OUTPUT": str(output)}, capture_output=True, text=True,
 		)
 		assert result.returncode == 0 and "LABELS_ALLOWED" not in result.stdout
-		assert output.read_text(encoding="utf-8") == "judge_handled=true\njudge_action=security_hold\n"
+		assert output.read_text(encoding="utf-8") == "judge_handled=true\njudge_action=security_hold\njudge_skip_reason=security_hold_audit_pending\n"
 
 
 def test_review_workflow_runs_the_judge_on_security_exhaustion() -> None:
@@ -586,3 +595,79 @@ def test_review_workflow_runs_the_judge_on_security_exhaustion() -> None:
 	telegram = steps["Telegram review-blocked judge decision"]["run"]
 	assert "security_blocked)" in telegram and "security_blocked_pending)" in telegram
 	assert telegram.index("security_blocked_pending)") < telegram.index('exit 0 ;;', telegram.index("security_blocked_pending)"))
+
+
+def test_merge_path_hold_emits_the_gate_hold_reason(tmp_path: Path) -> None:
+	text = JUDGE.read_text(encoding="utf-8")
+	start = text.index('RB_MERGE_ACTION="false"')
+	end = text.index('case "${RB_ACTION}" in\n  merge)', start)
+	output = tmp_path / "judge_output"
+	output.write_text("", encoding="utf-8")
+	result = subprocess.run(
+		["bash", "-c", 'set -euo pipefail; gh_retry() { :; }; '
+		 'rb_security_merge_gate() { RB_SECURITY_HOLD_REASON=dispatch_failed; return 1; }; '
+		 + text[start:end] + 'echo UNEXPECTED_MERGE'],
+		env={"PATH": os.environ["PATH"], "GITHUB_OUTPUT": str(output), "RB_ACTION": "merge", "IS_FINAL": "false",
+			"PR_NUMBER": "42", "REPOSITORY": "o/r"},
+		capture_output=True, text=True, check=False,
+	)
+	assert result.returncode == 0 and "UNEXPECTED_MERGE" not in result.stdout
+	assert output.read_text(encoding="utf-8") == "judge_handled=true\njudge_action=security_hold\njudge_skip_reason=security_hold_dispatch_failed\n"
+
+
+def _run_telegram_step(tmp_path: Path, judge_action: str, judge_skip_reason: str) -> tuple[subprocess.CompletedProcess, str]:
+	"""Runs the real `Telegram review-blocked judge decision` body with the
+	helpers stubbed: tg_send_tracked appends `<level>|<message>` to a file."""
+	workflow = yaml.safe_load(REVIEW.read_text(encoding="utf-8"))
+	steps = {step.get("name", ""): step for step in workflow["jobs"]["codex-agent"]["steps"]}
+	body = steps["Telegram review-blocked judge decision"]["run"]
+	body = body.replace("${{ github.server_url }}", "https://github.com").replace("${{ github.repository }}", "o/r")
+	body = body.replace("${{ github.run_id }}", "1")
+	assert "${{" not in body
+	support = tmp_path / "support"
+	support.mkdir(exist_ok=True)
+	sent = tmp_path / "sent.txt"
+	(support / "tg_helpers.sh").write_text(
+		'tg_send_tracked() { printf \'%s|%s\\n\' "$3" "$2" >> "${FAKE_TG_SENT}"; }\n', encoding="utf-8")
+	(support / "gh_helpers.sh").write_text("", encoding="utf-8")
+	result = subprocess.run(
+		["bash", "-e", "-c", body],
+		env={"PATH": os.environ["PATH"], "SUPPORT_SCRIPTS_DIR": str(support), "FAKE_TG_SENT": str(sent),
+			"PR_NUMBER": "42", "LINKED_ISSUES_JSON": "[]", "JUDGE_HANDLED": "true",
+			"JUDGE_ACTION": judge_action, "JUDGE_SKIP_REASON": judge_skip_reason, "MAX_AUTOFIX_ITERATIONS": "5"},
+		capture_output=True, text=True, check=False,
+	)
+	return result, sent.read_text(encoding="utf-8") if sent.exists() else ""
+
+
+@pytest.mark.parametrize("hold_reason", ["audit_dispatched", "audit_pending", "awaiting_followups"])
+def test_self_resolving_security_hold_sends_no_alert(tmp_path: Path, hold_reason: str) -> None:
+	# PRs #6288 and #6209: the judge chose merge, the gate dispatched a retry
+	# audit, and the generic fallback paged "Review-blocked judge action:
+	# security_hold" as CRITICAL although the audit brings the judge back.
+	result, sent = _run_telegram_step(tmp_path, "security_hold", f"security_hold_{hold_reason}")
+	assert result.returncode == 0, result.stderr
+	assert sent == ""
+	assert "suppressing alert" in result.stdout
+
+
+@pytest.mark.parametrize(
+	"skip_reason, shown",
+	[
+		("security_hold_dispatch_failed", "dispatch_failed"),
+		("security_hold_exhausted_without_completed_audit", "exhausted_without_completed_audit"),
+		("security_hold_gate_failed", "gate_failed"),
+		("security_hold_markers_unverifiable", "markers_unverifiable"),
+		("security_hold_security_mode_unverified", "security_mode_unverified"),
+		("security_hold_unknown", "unknown"),
+		("", "unknown"),
+	],
+)
+def test_stuck_security_hold_pages_critical_with_its_reason(tmp_path: Path, skip_reason: str, shown: str) -> None:
+	result, sent = _run_telegram_step(tmp_path, "security_hold", skip_reason)
+	assert result.returncode == 0, result.stderr
+	level, _, message = sent.partition("|")
+	assert level == "CRITICAL"
+	assert f"will not clear on its own ({shown})" in message
+	assert "Needs a human" in message and "Review-blocked judge action: security_hold" not in message
+	assert "PR: https://github.com/o/r/pull/42" in sent
