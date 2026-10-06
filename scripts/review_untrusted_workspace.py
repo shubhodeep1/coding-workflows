@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -91,6 +92,21 @@ def _rejection_line(exc):
 COMMAND_TWIN_DIR = "workflow-templates/.claude/commands"
 
 
+class UnsafeWorkspaceDirectory(ValueError):
+	def __init__(self, rejected_dir):
+		super().__init__("unsafe workspace directory")
+		self.rejected_dir = rejected_dir
+
+
+def _log_safe_dir(name):
+	if not re.fullmatch(r"[A-Za-z0-9._-][A-Za-z0-9._/-]{0,63}", name):
+		return "redacted"
+	parts = name.split("/")
+	if any(not part or part in (".", "..") or "secret" in part.lower() or "credential" in part.lower() or part.lower().startswith(".env") for part in parts):
+		return "redacted"
+	return name
+
+
 def git_env(manifest):
 	# The runner exports GIT_DIR/GIT_WORK_TREE and may set global hooks or
 	# credential helpers. None may reach the synthetic repository.
@@ -107,7 +123,10 @@ def allowed(name, host=None, commands=None):
 		return False  # Its operator-facing command input is intentionally excluded.
 	if any(part.lower() in EXCLUDED or part.lower().startswith(".env") or "secret" in part.lower() or "credential" in part.lower() or part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore", ".egg-info", ".dist-info")) for part in parts):
 		return False
-	if name in (".github/ai/claude_engine.json", ".claude/hooks/gh_api_write_guard.py", ".claude/hooks/pr_merge_status_guard.py", "scripts/claude_settings.json.tmpl"):
+	# This host-executed safety hook is never review-editor output.
+	if name == ".claude/hooks/pr_merge_status_guard.py":
+		return False
+	if name in (".github/ai/claude_engine.json", ".claude/hooks/gh_api_write_guard.py", "scripts/claude_settings.json.tmpl"):
 		return True
 	# Command admission must use the inventory frozen by snapshot.
 	if len(parts) == 3 and parts[:2] == (".claude", "commands") and parts[2].endswith(".md") and not parts[2].startswith("."):
@@ -210,7 +229,7 @@ def enumerate_workspace(root, host=None, commands=None):
 				dirs.remove(child)
 				continue
 			child_is_symlink = (Path(directory) / child).is_symlink()
-			if (name not in (".github", ".github/ai", ".claude", ".claude/hooks", ".claude/commands") and not allowed(name + "/placeholder.py")) or child_is_symlink:
+			if (name not in (".github", ".github/ai", ".claude", ".claude/hooks") and not (name == ".claude/commands" and commands) and not allowed(name + "/placeholder.py")) or child_is_symlink:
 				raise _rejection("unsafe workspace directory", "unsafe_directory", _directory_category(name, child_is_symlink), _directory_depth(name))
 		for child in files:
 			entries += 1
@@ -277,6 +296,23 @@ def snapshot(host, workspace, manifest, host_git_dir=None):
 	subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-c", "user.name=isolated", "-c", "user.email=isolated@invalid", "commit", "--allow-empty", "-qm", "snapshot"], cwd=workspace, check=True, env=env)
 
 
+def _check_destination_parents(host, name, deleted_names):
+	parent = host
+	for part in PurePosixPath(name).parts[:-1]:
+		parent = parent / part
+		try:
+			info = parent.lstat()
+		except FileNotFoundError:
+			return
+		except NotADirectoryError:
+			raise ValueError("new result conflicts with host path") from None
+		if stat.S_ISDIR(info.st_mode):
+			continue
+		if stat.S_ISREG(info.st_mode) and parent.relative_to(host).as_posix() in deleted_names:
+			return
+		raise ValueError("new result conflicts with host path")
+
+
 def transfer(host, workspace, manifest):
 	commands = load_admitted_commands(manifest)
 	baseline = json.loads(manifest.read_text(encoding="utf-8"))
@@ -299,24 +335,107 @@ def transfer(host, workspace, manifest):
 		if old is None and (host_file.exists() or host_file.is_symlink()):
 			raise _rejection("new result conflicts with host path", "result_conflicts_host")
 		changes.append((name, host_file, new))
-	# All preconditions are checked before the first host write.
+	deleted_names = {name for name, _, new in changes if new is None}
 	for name, host_file, new in changes:
 		if new is None:
-			host_file.unlink()
-			baseline.pop(name, None)
 			continue
-		host_file.parent.mkdir(parents=True, exist_ok=True)
-		fd, tmp = tempfile.mkstemp(dir=host_file.parent, prefix=".review-isolated-")
+		_check_destination_parents(host, name, deleted_names)
 		try:
-			with os.fdopen(fd, "wb") as out:
-				out.write(new[0])
-			os.chmod(tmp, new[1])
-			os.replace(tmp, host_file)
-			baseline[name] = [hashlib.sha256(new[0]).hexdigest(), new[1]]
-		finally:
-			if os.path.exists(tmp):
-				os.unlink(tmp)
-	manifest.write_text(json.dumps(baseline), encoding="utf-8")
+			info = host_file.lstat()
+		except FileNotFoundError:
+			pass
+		except NotADirectoryError:
+			# Only a baseline file scheduled for deletion may become a directory.
+			if not any(name.startswith(deleted + "/") for deleted in deleted_names):
+				raise ValueError("new result conflicts with host path") from None
+		else:
+			if not stat.S_ISREG(info.st_mode):
+				raise ValueError("new result conflicts with host path")
+	backups = {}
+	for name, host_file, _ in changes:
+		if name in baseline:
+			backups[name] = read_regular(host_file)
+			if [hashlib.sha256(backups[name][0]).hexdigest(), backups[name][1]] != baseline[name]:
+				raise ValueError("host baseline changed")
+	stage = Path(tempfile.mkdtemp(dir=host, prefix=".review-isolated-stage-"))
+	journal = []
+	try:
+		# Stage every payload before touching a destination.
+		for index, (_, _, new) in enumerate(changes):
+			if new is not None:
+				staged = stage / str(index)
+				fd = os.open(staged, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+				with os.fdopen(fd, "wb") as out:
+					out.write(new[0])
+				os.chmod(staged, new[1])
+		updated = baseline.copy()
+		try:
+			for index, (name, host_file, new) in enumerate(changes):
+				if new is None:
+					host_file.unlink()
+					journal.append(("deleted", host_file, *backups[name]))
+					updated.pop(name, None)
+					continue
+				missing = []
+				parent = host_file.parent
+				while parent != host and not parent.exists():
+					missing.append(parent)
+					parent = parent.parent
+				for directory in reversed(missing):
+					directory.mkdir()
+					journal.append(("mkdir", directory))
+				# Do not follow a parent that changed since prevalidation.
+				_check_destination_parents(host, name, set())
+				if name in backups:
+					os.replace(stage / str(index), host_file)
+					journal.append(("replaced", host_file, *backups[name]))
+				else:
+					os.link(stage / str(index), host_file, follow_symlinks=False)
+					journal.append(("created", host_file))
+				updated[name] = [hashlib.sha256(new[0]).hexdigest(), new[1]]
+			# Cleanup is part of the transaction: a cleanup failure must not
+			# report failure after publishing host edits and the manifest.
+			shutil.rmtree(stage)
+			# Publish the manifest atomically only after the entire host apply succeeds.
+			fd, manifest_tmp = tempfile.mkstemp(dir=manifest.parent, prefix=".review-isolated-")
+			try:
+				with os.fdopen(fd, "w", encoding="utf-8") as out:
+					json.dump(updated, out)
+				os.replace(manifest_tmp, manifest)
+			finally:
+				if os.path.exists(manifest_tmp):
+					os.unlink(manifest_tmp)
+		except Exception:
+			try:
+				for entry in reversed(journal):
+					kind, path, *original = entry
+					if kind == "mkdir":
+						path.rmdir()
+					elif kind == "created":
+						path.unlink()
+					else:
+						fd, restore_tmp = tempfile.mkstemp(dir=path.parent, prefix=".review-isolated-")
+						try:
+							with os.fdopen(fd, "wb") as out:
+								out.write(original[0])
+							os.chmod(restore_tmp, original[1])
+							os.replace(restore_tmp, path)
+						finally:
+							if os.path.exists(restore_tmp):
+								os.unlink(restore_tmp)
+			except Exception:  # noqa: BLE001 - any rollback failure invalidates atomicity
+				raise ValueError("transfer rollback failed") from None
+			raise
+	finally:
+		if stage.exists():
+			# Preserve the original apply/rollback failure if staging cleanup
+			# also fails; the sandbox marker still prevents a commit.
+			pending_error = sys.exc_info()[0]
+			try:
+				shutil.rmtree(stage)
+			except OSError:
+				if pending_error is None:
+					raise
 
 
 def refresh(host, workspace, manifest):
@@ -348,6 +467,21 @@ def refresh(host, workspace, manifest):
 			os.chmod(target, mode)
 
 
+def check_paths(host, paths_file):
+	with paths_file.open(encoding="utf-8", newline="") as handle:
+		path_lines = handle.read().split("\n")
+	for name in path_lines:
+		if not name:
+			continue
+		try:
+			if not allowed(name):
+				raise ValueError("unsupported path")
+			checked_path(host, name)
+		except (ValueError, OSError):
+			print("unsupported path", file=sys.stderr)
+			raise SystemExit(1) from None
+
+
 def main():
 	if sys.argv[1:2] == ["readme-trimmed"]:
 		if len(sys.argv) != 3:
@@ -373,6 +507,13 @@ def main():
 			raise SystemExit(1) from None
 		return
 	# snapshot alone takes an optional fifth argument: the host Git dir.
+	if sys.argv[1:2] == ["check-paths"] and len(sys.argv) == 4:
+		try:
+			check_paths(Path(sys.argv[2]), Path(sys.argv[3]))
+		except (OSError, UnicodeError):
+			print("unsupported path", file=sys.stderr)
+			raise SystemExit(1) from None
+		return
 	if sys.argv[1:2] not in (["snapshot"], ["refresh"], ["transfer"]) or not (len(sys.argv) == 5 or (len(sys.argv) == 6 and sys.argv[1] == "snapshot")):
 		raise SystemExit(2)
 	host, workspace, manifest = map(Path, sys.argv[2:5])
@@ -399,6 +540,7 @@ def main():
 				"workspace size limit exceeded": "workspace_size_limit",
 				"host baseline changed": "host_baseline_changed",
 				"new result conflicts with host path": "host_path_conflict",
+				"transfer rollback failed": "transfer_rollback_failed",
 				"unsafe result path": "unsafe_result_path",
 			}.get(str(exc), "unknown") if sys.argv[1] == "transfer" and isinstance(exc, ValueError) else "unknown"
 			print(f"::error::Review isolation snapshot or transfer rejected ({type(exc).__name__}) reason={reason_code}", file=sys.stderr)

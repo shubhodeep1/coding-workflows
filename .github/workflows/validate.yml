@@ -783,7 +783,7 @@ jobs:
         # with a misleading "runtime unavailable" (#6521). It still requires the
         # trusted runtime and the trusted support staging, which only succeeds
         # after checkout authorization, and gates on the preceding after_create hook.
-        if: always() && steps.runtime.outcome == 'success' && steps.support_staging.outcome == 'success' && steps.workspace_after_create_hook.outcome != 'failure'
+        if: always() && !cancelled() && steps.runtime.outcome == 'success' && steps.support_staging.outcome == 'success' && steps.workspace_after_create_hook.outcome != 'failure'
         env:
           RUNTIME_DIR: ${{ steps.runtime.outputs.runtime_dir }}
           WORKSPACE_PATH: ${{ steps.workspace_state.outputs.workspace_path }}
