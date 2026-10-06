@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: At the keep_fixing round cap, what should happen to a `keep_fixing` decision on a high, critical or unrated finding (severity missing or not one of critical/high/medium/low)?\nChoices:\nA) Convert it to `fail`. The existing `failed_count > 0` branch then stops the project as `ai:security-pass-failed`. It can still recover through `/re-security-pass`, `/security-pass-waive`, or the automatic reset when the engine changes. Medium and low `keep_fixing` decisions are still converted to advisories as they are today. (RECOMMENDED)\nB) Leave it as `keep_fixing`, which opens one more fix cycle. Add a new hard ceiling with a default, such as `MAX_SECURITY_PASS_BLOCKING_KEEP_FIXING_ROUNDS`, after which it becomes `fail`.\nC) Leave it as `keep_fixing` with no new ceiling, bounded only by `MAX_SECURITY_PASS_JUDGE_ROUNDS`. **Note:** that setting defaults to `0` (unbounded), which brings back the endless fix-cycle loop seen in project #3965.\nQ2: Should the fix also stop the judge itself from choosing `accept_with_followup` for high, critical or unrated findings in any round, not only at the cap?\nChoices:\nA) Yes. In the poller, rewrite any judge `accept_with_followup` on a high, critical or unrated finding: to `keep_fixing` while keep_fixing rounds remain, and to the Q1 outcome once they are spent. Also add a matching rule to the exhaustion-judge prompt. Human `/security-pass-waive` stays allowed. (RECOMMENDED)\nB) No. Only change the cap conversion at line 6861, as the finding describes. The judge can still choose to waive high-severity findings itself.",
+  "fingerprint": "450e6ed3b6b723d43a816424ff21b8e8a0ec4d8a940c050254320dea3f8bdff0",
+  "lineage": {
+    "issue_number": 6517,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37430865741",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37430865741",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261006074316_ccae1ba8b7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6517,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37430865741"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6517 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-06T07:43:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
