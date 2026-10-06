@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -18,6 +19,8 @@ REVIEW_APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
 CONSOLIDATE_SCRIPT = REPO_ROOT / "scripts" / "review_consolidate.sh"
 REVIEW_AUTOFIX_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 FIXTURES = REPO_ROOT / "tests" / "fixtures" / "review_pipeline"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from test_review_autofix_claude_fixer_mode import install_consolidator_mock_support  # noqa: E402
 
 
 def _install_mock_codex(
@@ -515,6 +518,7 @@ def test_prepare_priors_merges_prior_round_into_consolidator_prompt() -> None:
 		assert "JUDGE_INTERIM_PRIORS_MERGED count=1" in prepare_result.stdout
 
 		shutil.copy2(FIXTURES / "reviewer_bundle.txt", runtime_dir / "reviewer_bundle.txt")
+		support_dir = install_consolidator_mock_support(workspace)
 		mock_bin_dir = workspace / "mock_bin"
 		_install_mock_codex(
 			mock_bin_dir,
@@ -524,6 +528,10 @@ def test_prepare_priors_merges_prior_round_into_consolidator_prompt() -> None:
 		env["PYTHONDONTWRITEBYTECODE"] = "1"
 		env["PATH"] = f"{mock_bin_dir}:{env.get('PATH', '')}"
 		env["RUNTIME_DIR"] = str(runtime_dir)
+		env["SUPPORT_SCRIPTS_DIR"] = str(support_dir)
+		env["MOCK_CONSOLIDATOR_ROOT"] = str(workspace / "isolated")
+		env["MOCK_CONSOLIDATOR_CALLS"] = str(workspace / "calls")
+		env["MOCK_OPENCODE_OUTPUT_FILE"] = str(mock_bin_dir / "codex_stdout.txt")
 		env["SUPPORT_PROMPTS_DIR"] = str(REPO_ROOT / "prompts")
 		env["JUDGE_INTERIM_PRIORS_FILE"] = str(priors_file)
 		env["MOCK_CODEX_STDOUT_FILE"] = str(mock_bin_dir / "codex_stdout.txt")

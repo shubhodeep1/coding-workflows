@@ -2854,9 +2854,18 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in apply_fixes
 	assert 'failure_class=config_writer_missing' in apply_fixes
 	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true' in apply_fixes
-	assert 'opencode_run_cmd "$@"' in consolidate
-	assert '\twriter\n\t"${REVIEW_CONSOLIDATOR_MODEL}"' in consolidate
-	assert 'opencode_emit_failure_alert review_consolidate writer' in consolidate
+	assert 'opencode_run_cmd' not in consolidate
+	assert 'prepare-ephemeral codex' in consolidate
+	assert 'codex REVIEW_CONSOLIDATOR read' in consolidate
+	assert '--role reviewer' in consolidate
+	assert 'opencode_emit_failure_alert review_consolidate reviewer' in consolidate
+	assert 'CONSOLIDATOR_ISOLATION outcome=skipped reason=%s' in consolidate
+	sandbox = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert '"RB_JUDGE", "REVIEW_CONSOLIDATOR"' in sandbox
+	assert 'RB_JUDGE|REVIEW_CONSOLIDATOR)' in sandbox
+	assert 'opencode_source_mount+=\',readonly\'' in sandbox
+	assert 'opencode_agent=reviewer' in sandbox
+	assert 'LOG_PREFIX.name=CONSOLIDATOR_ISOLATION' in (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
 	assert 'opencode_helpers_loaded=false' in consolidate
 	assert 'if source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in consolidate
 	assert 'missing=opencode_config_writer failopen=1 output_bytes=0' in consolidate
