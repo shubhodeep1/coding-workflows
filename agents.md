@@ -762,12 +762,11 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   does not trust its stored URL or PR history for that push. Wrapped commits
   are checked in the directory selected by `env -C` or `GIT_DIR`; a commit
   whose directory selector cannot be resolved and an unparseable `env -S`
-  command ask for confirmation; when `env -C` cannot resolve its directory,
-  the commit guard asks without querying the session checkout's PR history.
-  Unrelated `env`/Git config in shell control does not turn a warning-only
-  unresolved commit into an ask. A push from an unresolved directory
-  (including an appended `GIT_DIR+=` / `GIT_WORK_TREE+=`, whose value is
-  never applied) is checked
+  command ask for confirmation without querying the session checkout's PR
+  history. Unrelated `env`/Git config in shell control does not turn a
+  warning-only unresolved commit into an ask. A push from an unresolved
+  directory (including an appended `GIT_DIR+=` / `GIT_WORK_TREE+=`, whose
+  value is never applied) is checked
   against the session checkout, which can still block, and otherwise asks.
   Leading redirections, including those after environment assignments, do
   not bypass commit/push detection. A spaced, quoted or escaped digit before a
@@ -926,6 +925,12 @@ engine switch. When Claude is unavailable (`claude_run` exit 75,
 `AI_ENGINE_FALLBACK`), the run uses the codex/OpenCode path unchanged. The
 pinned CLI is `@anthropic-ai/claude-code` `cli_version` from the same file,
 installed by `.github/actions/install-claude`.
+The write profile has no `WebFetch`/`WebSearch`, and the host relay
+(`scripts/claude_anthropic_relay.py`) accepts only untyped or `custom`
+client tools, rejecting unknown provider-side tool types as well as known
+web, code-execution and MCP-connector tools. A missing
+`codex_isolated_exec.sh` makes `claude_run` fall back to codex rather than
+running Claude with host credentials.
 
 OpenCode version `1.18.23` is installed by the dispatch-only
 `.github/workflows/opencode-live-smoke.yml` rollout gate and by production
