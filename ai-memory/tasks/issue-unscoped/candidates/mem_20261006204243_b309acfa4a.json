@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrator_judges_claude_engine.py:234 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `GITHUB_WORKSPACE` is not exported, so a subprocess that relies on it without `WORKSPACE_PATH` will not receive it.\n  WHY: The current test masks the omission by setting `WORKSPACE_PATH`, but a setup without that fallback would hide `GITHUB_WORKSPACE` from the subprocess.\n- tests/test_orchestrate_poll_process.py:18914 | severity=low | confidence=1\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `UNBLOCK_JUDGE_ENABLED=false` test override lacks a comment explaining why it is needed.\n  WHY: Without that context, a future reviewer may not know the override isolates the identity-failure test from the unblock scan and could remove it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Verify that all #6514 deliverables are reflected in the PR; the issue says, \"Workflow failure heal now checks the runs a label escalation links before it reads their logs, so a comment can no longer point the intake at an unrelated failed run.\"\n  expected_change_site: `scripts/workflow_failure_heal.py` (`verify_run_provenance`, `_verify_label_run_refs`, `_trusted_run_link_comment`, `_comment_author` projection), `scripts/workflow_failure_heal_intake.sh`, `scripts/workflow_failure_heal_report.sh`, `tests/test_workflow_failure_heal.py`, `README.md`, `agents.md`, `changelog.d/6514-heal-label-run-provenance.md`\n  confidence=[1]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The PR diff inlines all of the above; the LAST RUN DIFF in this pass only carries the two test isolation tweaks (`tests/test_orchestrate_poll_process.py` and `tests/test_orchestrator_judges_claude_engine.py`), both tests verifying prior-round behaviour rather than the new #6514 paths.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrator_judges_claude_engine.py:234 | severity=low | confidence=2\n  PROBLEM: The added `export` only marks `RUNTIME_DIR` as exported; `GITHUB_WORKSPACE` is set inline but not exported on the same line.\n  WHY: The current test passes because `WORKSPACE_PATH` is set, but without that fallback, `GITHUB_WORKSPACE` would not be present in the launched rb judge subprocess.\n- tests/test_orchestrate_poll_process.py:18914 | severity=low | confidence=1\n  PROBLEM: The test sets `UNBLOCK_JUDGE_ENABLED=false` to isolate the identity-failure path, but does not document why the override is required.\n  WHY: This is a maintainability concern, not a runtime failure; a comment would help prevent future drift if the unblock scan touches the same surface.\n- Requirement: verify that all #6514 deliverables are reflected in the PR.\n  Expected change site: `scripts/workflow_failure_heal.py` (verify_run_provenance, _verify_label_run_refs, _trusted_run_link_comment, _comment_author projection), `scripts/workflow_failure_heal_intake.sh` (provenance branch for issue / pull_request kinds), `scripts/workflow_failure_heal_report.sh` (user.login / author_association in comments projection), `tests/test_workflow_failure_heal.py` (new tests for label-escalation provenance), `README.md`, `agents.md` documentation blocks, `changelog.d/6514-heal-label-run-provenance.md`.\n  Evidence of absence: The PR diff inlines all of the above; the LAST RUN DIFF in this pass only carries the two test isolation tweaks (orchestrate_poll_process.py and orchestrator_judges_claude_engine.py) \u2014 both tests verifying prior-round behaviour, not the new #6514 paths.\n  ISSUE_CONFIDENCE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "23db243268198441e0ef7ebde6a80795ca72879ff4262d3acbacc2c21dd35d2d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37526918122",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37526918122",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006204243_b309acfa4a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37526918122"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T20:42:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
