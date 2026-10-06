@@ -5317,7 +5317,7 @@ reviewer_pass2_skip_reason() {
   [ "$(git rev-parse HEAD 2>/dev/null || true)" = "${INITIAL_HEAD_SHA}" ] || { echo head_moved; return; }
   git merge-tree --write-tree "origin/${BASE_BRANCH}" HEAD >/dev/null 2>&1 || { echo merge_unknown_or_conflicted; return; }
 
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${REVIEWER_ACTIVE_MODELS_FILE}" "${PREVIOUS_REVIEWS_DIR}" \
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${REVIEWER_ACTIVE_MODELS_FILE}" "${PREVIOUS_REVIEWS_DIR}" \
     "${PASS1_LEDGER_FILE}" "${RAW_REVIEWER_PR_CHANGED_FILES_FILE}" "${RAW_REVIEWER_PR_DIFF_FILE}" "origin/${BASE_BRANCH}...HEAD" <<'PY'
 import pathlib
 import re

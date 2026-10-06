@@ -30,6 +30,18 @@ def _poison_module(path: Path, marker: Path, extra: str = "") -> None:
 	path.write_text(f"open({str(marker)!r}, 'w').write('executed')\n{extra}", encoding="utf-8")
 
 
+def _failing_docker_path(tmp_path: Path) -> str:
+	# The Semble scripts run Python only inside a Docker sandbox. Fail every
+	# docker call so these tests never build images and still reach the
+	# fail-open path from a poisoned PR tree.
+	stub_dir = tmp_path / "docker-stub"
+	stub_dir.mkdir()
+	stub = stub_dir / "docker"
+	stub.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+	stub.chmod(0o755)
+	return f"{stub_dir}{os.pathsep}{os.environ.get('PATH', '')}"
+
+
 def test_semble_install_never_imports_pr_modules(tmp_path: Path) -> None:
 	pr_tree = tmp_path / "pr"
 	pr_tree.mkdir()
@@ -41,6 +53,7 @@ def test_semble_install_never_imports_pr_modules(tmp_path: Path) -> None:
 	result = _run("install_semble.sh", pr_tree, {
 		"SEMBLE_PYTHON_BIN": sys.executable, "PYTHONUSERBASE": str(tmp_path / "userbase"),
 		"HOME": str(tmp_path), "PIP_NO_INDEX": "1", "GITHUB_ENV": str(github_env),
+		"PATH": _failing_docker_path(tmp_path),
 	})
 	assert result.returncode == 0, result.stderr
 	assert not marker.exists()
@@ -57,7 +70,7 @@ def test_semble_builder_never_imports_pr_modules(tmp_path: Path) -> None:
 	result = _run("build_semble_wrapper.sh", pr_tree, {
 		"SEMBLE_PYTHON_BIN": sys.executable, "GITHUB_WORKSPACE": str(pr_tree),
 		"SEMBLE_INDEX_PATH": str(tmp_path / "index"), "GITHUB_ENV": str(github_env),
-		"PYTHONNOUSERSITE": "1",
+		"PYTHONNOUSERSITE": "1", "PATH": _failing_docker_path(tmp_path),
 	})
 	assert result.returncode == 0, result.stderr
 	assert not marker.exists()
@@ -198,11 +211,16 @@ def test_pre_review_python_invocations_are_safe_path_scoped() -> None:
 	installer = (SCRIPTS / "install_semble.sh").read_text(encoding="utf-8")
 	builder = (SCRIPTS / "build_semble_wrapper.sh").read_text(encoding="utf-8")
 	serena = (SCRIPTS / "setup_serena.sh").read_text(encoding="utf-8")
-	assert "PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1" in installer
-	assert "PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1" in builder
 	assert "PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1" in serena
-	assert installer.count("semble_python -m pip") == 2
-	assert "semble_python - \"${repo_root}\"" in builder
+	# Semble runs no host Python: install and index happen in a Docker
+	# sandbox (#6363), so the PR tree never reaches a host interpreter.
+	assert "no host Python runs" in installer
+	assert 'docker build -q -t "${SEMBLE_SANDBOX_IMAGE}" "${context_dir}"' in installer
+	assert "SEMBLE_PYTHON_BIN is ignored" in installer
+	assert 'env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run --rm' in builder
+	for script_text in (installer, builder):
+		assert not re.search(r'"\$\{SEMBLE_PYTHON_BIN\}"|"\$\{semble_python_path\}"', script_text)
+		assert "pip install" not in script_text.replace("RUN pip install", "")
 	assert serena.count("serena_python - <<'PY'") == 2
 	assert serena.count("serena_uv tool install") == 2
 	assert "UV_NO_CONFIG=1 uv" in serena
