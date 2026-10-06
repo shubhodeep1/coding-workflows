@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -660,6 +661,87 @@ def test_integration_judge_does_not_charge_an_already_active_resolver() -> None:
 	assert result.returncode == 0, result.stderr
 	assert "Resolver already in flight" in result.stdout
 	assert "unexpected accounting" not in result.stdout
+
+
+def test_active_resolver_skips_integration_judge_before_model_call() -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	gate = text.split('  if [ "${unresolved_ticks}" -ge "${effective_max_retries}" ]; then', 1)[1].split(
+		'    invoke_judge_for_integration_conflict "${final_pr}"', 1,
+	)[0]
+	program = ('set -euo pipefail\n'
+		+ '_CONFLICT_DISPATCH_TRACKER=/dev/null\n'
+		+ '_has_active_autofix_run() { printf "active\\n"; return 0; }\n'
+		+ 'check_gate() {\nlocal unresolved_ticks=3 effective_max_retries=1 final_pr=77 integration_branch=integration\n'
+		+ 'if [ "${unresolved_ticks}" -ge "${effective_max_retries}" ]; then\n'
+		+ gate + 'printf "judge-called\\n"\nfi\n}\ncheck_gate\n')
+	result = subprocess.run(["bash", "-c", program], capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert "active" in result.stdout
+	assert "judge-called" not in result.stdout
+	assert gate.index('_has_active_autofix_run "${final_pr}"') < len(gate)
+
+
+def test_cycle_local_dispatch_skips_integration_judge_before_run_is_visible(tmp_path: Path) -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	gate = text.split('  if [ "${unresolved_ticks}" -ge "${effective_max_retries}" ]; then', 1)[1].split(
+		'    invoke_judge_for_integration_conflict "${final_pr}"', 1,
+	)[0]
+	tracker = tmp_path / "dispatches"
+	tracker.write_text("77\n", encoding="utf-8")
+	program = ('set -euo pipefail\n'
+		+ f'_CONFLICT_DISPATCH_TRACKER={tracker}\n'
+		+ '_has_active_autofix_run() { printf "API queried\\n"; return 1; }\n'
+		+ 'check_gate() {\nlocal unresolved_ticks=3 effective_max_retries=1 final_pr=77 integration_branch=integration\n'
+		+ 'if [ "${unresolved_ticks}" -ge "${effective_max_retries}" ]; then\n'
+		+ gate + 'printf "judge-called\\n"\nfi\n}\ncheck_gate\n')
+	result = subprocess.run(["bash", "-c", program], capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert "judge-called" not in result.stdout
+	assert "API queried" not in result.stdout
+
+
+def test_unpublished_integration_guidance_defers_resolver_dispatch() -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	invocation = text.split("invoke_judge_for_integration_conflict() {", 1)[1].split("\n}\n", 1)[0]
+	assert 'post_issue_comment_json "${TRACKING_NUM}" "${integration_comment_body}"' in invocation
+	assert 'if ! printf \'%s\' "${integration_comment_result}" | jq -e' in invocation
+	assert invocation.index('return 4') < invocation.index('_dispatch_review_for_conflicts "${final_pr}"')
+	caller = text.split('invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" || integration_judge_result=$?', 1)[1]
+	assert caller.index('if [ "${integration_judge_result}" -eq 4 ]; then') < caller.index('total_dispatches=$((total_dispatches + 1))')
+
+
+def test_integration_guidance_is_head_and_base_bound_and_untrusted(tmp_path: Path) -> None:
+	prepare = (REPO_ROOT / "scripts" / "review_conflict_prepare.sh").read_text(encoding="utf-8")
+	resolver_prompt = (REPO_ROOT / "prompts" / "integration-sync-conflict-resolver.txt").read_text(encoding="utf-8")
+	assert '{{JUDGE_GUIDANCE}}' in resolver_prompt
+	assert 'UNTRUSTED INTEGRATION JUDGE GUIDANCE' in prepare
+	assert 'INTEGRATION_JUDGE_GUIDANCE=""' in prepare
+	assert "tpl=tpl.replace('{{JUDGE_GUIDANCE}}', os.environ.get('JUDGE_GUIDANCE',''))" in prepare
+	assert 'INTEGRATION_JUDGE_GUIDANCE="$(jq -sr ' in prepare
+	judge = POLLER.read_text(encoding="utf-8")
+	assert 'integration-judge-guidance:v1 pr=${final_pr} head=$(git -C "${judge_wt}" rev-parse HEAD) base=$(git -C "${judge_wt}" rev-parse "refs/remotes/origin/${default_branch}")' in judge
+	if shutil.which("jq") is None:
+		pytest.skip("jq required to exercise the workflow's comment selector")
+
+	git_env = {key: value for key, value in os.environ.items() if key not in ("GIT_DIR", "GIT_WORK_TREE", "BASH_ENV", "ENV")}
+	subprocess.run(["git", "init", "-q", str(tmp_path)], env=git_env, check=True)
+	subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+		"commit", "--allow-empty", "-qm", "initial"], env=git_env, check=True)
+	head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=tmp_path, env=git_env, text=True).strip()
+	subprocess.run(["git", "update-ref", "refs/remotes/origin/main", head_sha], cwd=tmp_path, env=git_env, check=True)
+	selector = 'INTEGRATION_JUDGE_GUIDANCE="$(jq -sr ' + prepare.split('INTEGRATION_JUDGE_GUIDANCE="$(jq -sr ', 1)[1].split('    _state_payload=', 1)[0]
+	marker = f"<!-- ai:integration-judge-guidance:v1 pr=77 head={head_sha} base={head_sha} -->"
+	comment = "## Integration conflict diagnosis\n\nFinal PR #77: conflict\n\nResolver guidance: preserve both changes\n\n"
+	for suffix, expected in ((marker, True), (marker.replace("pr=77", "pr=78"), False),
+		(marker.replace(f"head={head_sha}", "head=" + "a" * 40), False),
+		(marker.replace(f"base={head_sha}", "base=" + "b" * 40), False)):
+		comments_file = tmp_path / "comments.json"
+		comments_file.write_text(json.dumps([{"body": comment + suffix}]), encoding="utf-8")
+		env = {**git_env, "PR_NUMBER": "77", "BASE_BRANCH": "main", "_ti_comments_raw": str(comments_file)}
+		result = subprocess.run(["bash", "-c", 'set -euo pipefail\n' + selector + 'printf "%s" "$INTEGRATION_JUDGE_GUIDANCE"'],
+			cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+		assert result.returncode == 0, result.stderr
+		assert ("preserve both changes" in result.stdout) is expected
 
 
 def test_judge_isolation_defers_escalates_once_and_resets_on_label_removal(tmp_path: Path) -> None:

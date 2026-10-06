@@ -167,7 +167,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
    stall and review-blocked judges combine issue and tracking labels
    (`ai:codex` wins), falling back to codex when issue labels cannot be
    verified. Project-level judges keep tracking labels. Integration verdicts
-   re-dispatch the isolated conflict resolver.
+   re-dispatch the isolated conflict resolver;
+   the resolver reads the existing tracking-comment snapshot for guidance
+   bound to its PR head and default-branch tip, fenced as untrusted advisory context.
+   Unconfirmed guidance publication defers dispatch without charging budget.
+   An active resolver is checked before the judge call and again at dispatch.
 10. **judge** (`mode-judge.txt`, `mode-orchestrate-poll-judge.txt`,
     `mode-judge-review-blocked.txt`, `mode-judge-stall-recovery.txt`) —
     JSON-emitting evaluation of wave state.
