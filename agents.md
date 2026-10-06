@@ -110,6 +110,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
    read-only snapshot, and the judge and resolver prepare fresh snapshots
    without installing dependencies. The relay suppresses peer disconnects and
    timeouts on rejection, but other write errors reach the server error handler.
+   The consolidator's OpenCode path (including Claude-unavailable fallback)
+   uses a fresh credential-free, read-only ephemeral sandbox with the reviewer
+   agent; isolation failure skips consolidation with empty output.
     Host `claude_run` refuses all four review roles. The resolver checks its
     conflicted paths against sandbox admission before either engine runs; an
     unsupported path is refused and, for integration-sync PRs, counted toward
@@ -1568,6 +1571,7 @@ and shipped:
 - `MODEL_CATALOG_BACKFILL`
 - `CLAUDE_FIXER_AUTO_MERGE`
 - `RB_JUDGE_ISOLATION`
+- `CONSOLIDATOR_ISOLATION`
 - `JUDGE_ISOLATION`
 - `SECURITY_AUDIT_TARGET`
 - `WORKFLOW_OVERLAY_SOURCE`
@@ -1774,6 +1778,7 @@ LOG_PREFIX.name=MODEL_CATALOG_BACKFILL
 LOG_PREFIX.name=AUTOFIX_FAILURE_HEADLINE
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
 LOG_PREFIX.name=RB_JUDGE_ISOLATION
+LOG_PREFIX.name=CONSOLIDATOR_ISOLATION
 LOG_PREFIX.name=JUDGE_ISOLATION
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
 LOG_PREFIX.name=WORKFLOW_OVERLAY_SOURCE

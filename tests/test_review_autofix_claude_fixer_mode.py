@@ -492,8 +492,8 @@ def test_engine_files_ride_the_optional_bootstrap():
 		assert name in line.split("=", 1)[1].strip("\"").split(), name
 
 
-# Each review script: the Claude branch, the 75 gate, and the unchanged
-# OpenCode command after it (G4).
+# Each review script: the Claude branch, the 75 gate, and the OpenCode
+# command after it (G4); consolidation uses a fresh sandbox.
 REVIEW_SITES = {
 	"review_apply_fixes.sh": (
 		'if [ "${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex}" = "claude" ]; then',
@@ -502,8 +502,8 @@ REVIEW_SITES = {
 	),
 	"review_consolidate.sh": (
 		'claude REVIEW_CONSOLIDATOR read \\',
-		'elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then',
-		'			-- "${consolidator_cmd[@]}" < "${CONSOLIDATOR_PROMPT_FILE}"; then',
+		'elif consolidator_opencode_sandbox_prepare; then',
+		'				-- "${consolidator_cmd[@]}" < "${CONSOLIDATOR_PROMPT_FILE}"; then',
 	),
 	"review_conflict_resolve.sh": (
 		'_resolver_sandbox_attempt claude || resolver_claude_rc=$?',
@@ -564,6 +564,112 @@ case "$1" in
   cleanup) echo cleanup >> "${CALLS}"; case "${MODE}" in cleanup_failed|prepare_partial_cleanup_failed) exit 1 ;; esac ;;
 esac
 '''
+
+
+FAKE_CONSOLIDATOR_SANDBOX = r'''#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  prepare-ephemeral)
+    [ "$#" -eq 2 ] && [ "$2" = codex ] || exit 2
+    printf 'prepare-ephemeral\n' >> "${MOCK_CONSOLIDATOR_CALLS}"
+    [ "${MOCK_SANDBOX_MODE:-}" != prepare_failed ] || exit 1
+    printf '%s\n' "${MOCK_CONSOLIDATOR_ROOT}"
+    ;;
+  run)
+    [ "$#" -eq 9 ] || exit 2
+    printf 'run|%s|%s|%s|%s\n' "$7" "$8" "$9" "${REVIEW_SANDBOX_ROOT}" >> "${MOCK_CONSOLIDATOR_CALLS}"
+    if [ "$7" = claude ]; then
+      [ "${MOCK_CLAUDE_RC:-0}" -eq 0 ] || exit "${MOCK_CLAUDE_RC}"
+    elif [ "${MOCK_SANDBOX_MODE:-}" = run_outdated ] || [ "${MOCK_SANDBOX_MODE:-}" = run_outdated_cleanup_failed ]; then
+      exit 2
+    fi
+    [ -z "${MOCK_CONSOLIDATOR_PROMPT_CAPTURE:-}" ] || cp "$2" "${MOCK_CONSOLIDATOR_PROMPT_CAPTURE}"
+    cp "${MOCK_OPENCODE_OUTPUT_FILE}" "$3"
+    exit "${MOCK_CONSOLIDATOR_RUN_RC:-0}"
+    ;;
+  cleanup)
+    printf 'cleanup\n' >> "${MOCK_CONSOLIDATOR_CALLS}"
+    case "${MOCK_SANDBOX_MODE:-}" in cleanup_failed|run_outdated_cleanup_failed) exit 1 ;; esac
+    ;;
+  *) exit 2 ;;
+esac
+'''
+
+
+def install_consolidator_mock_support(tmp: Path, *, sandbox: bool = True, support_dir: Path | None = None) -> Path:
+	"""Use real trusted helpers, replacing only the sandbox with a recording stub."""
+	support_dir = support_dir or tmp / "consolidator_support"
+	support_dir.mkdir(exist_ok=True)
+	for script in (REPO_ROOT / "scripts").iterdir():
+		if script.is_file() and script.name != "review_untrusted_sandbox.sh":
+			if not (support_dir / script.name).exists():
+				(support_dir / script.name).symlink_to(script)
+	if sandbox:
+		(support_dir / "review_untrusted_sandbox.sh").write_text(FAKE_CONSOLIDATOR_SANDBOX, encoding="utf-8")
+	return support_dir
+
+
+def _run_consolidator_sandbox_case(tmp: Path, *, mode: str = "success", engine: str = "codex", claude_rc: int = 0, sandbox: bool = True):
+	support = install_consolidator_mock_support(tmp, sandbox=sandbox)
+	runtime = tmp / "runtime"
+	runtime.mkdir()
+	(runtime / "reviewer_bundle.txt").write_text("Finding in src/a.py\n", encoding="utf-8")
+	fixture = tmp / "fixture.txt"
+	fixture.write_text("=== ISSUE example ===\nFILE: src/a.py\n=== END ISSUE example ===\n", encoding="utf-8")
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	(bin_dir / "opencode").write_text('#!/bin/sh\nif [ "$1" = --version ]; then echo 1.18.23; else touch "$HOST_WRITER_MARKER"; fi\n', encoding="utf-8")
+	(bin_dir / "opencode").chmod(0o755)
+	config_writer = tmp / "config_writer.sh"
+	config_writer.write_text('#!/bin/sh\nwhile [ "$#" -gt 0 ]; do if [ "$1" = --config-path ]; then printf "{}\\n" > "$2"; fi; shift; done\n', encoding="utf-8")
+	env = dict(os.environ, SUPPORT_SCRIPTS_DIR=str(support), SUPPORT_PROMPTS_DIR=str(REPO_ROOT / "prompts"),
+		RUNTIME_DIR=str(runtime), OPENCODE_CONFIG_WRITER_PATH=str(config_writer),
+		MOCK_CONSOLIDATOR_ROOT=str(tmp / "isolated"), MOCK_CONSOLIDATOR_CALLS=str(tmp / "calls"),
+		MOCK_OPENCODE_OUTPUT_FILE=str(fixture), MOCK_SANDBOX_MODE=mode, MOCK_CLAUDE_RC=str(claude_rc),
+		HOST_WRITER_MARKER=str(tmp / "host_writer"), AI_ENGINE_RESOLVED_REVIEW_CONSOLIDATOR=engine,
+		PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}", PYTHONDONTWRITEBYTECODE="1",
+		AI_MEMORY_ENABLED="false", CODEX_HEARTBEAT_ENABLED="0")
+	if engine == "claude":
+		env["REVIEW_SANDBOX_ROOT"] = str(tmp / "shared")
+	for inherited in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "TG_BOT_SECRET", "TG_ADMIN_CHAT_ID"):
+		env.pop(inherited, None)
+	proc = subprocess.run(["bash", str(REPO_ROOT / "scripts" / "review_consolidate.sh")],
+		cwd=tmp, env=env, capture_output=True, text=True)
+	calls = (tmp / "calls").read_text(encoding="utf-8").splitlines() if (tmp / "calls").exists() else []
+	return proc, calls, runtime / "consolidator_raw.txt"
+
+
+def test_consolidator_default_and_claude_unavailable_use_fresh_read_only_sandbox(tmp_path):
+	for engine, claude_rc in (("codex", 0), ("claude", 75)):
+		work = tmp_path / engine
+		work.mkdir()
+		proc, calls, output = _run_consolidator_sandbox_case(work, engine=engine, claude_rc=claude_rc)
+		assert proc.returncode == 0, proc.stderr
+		assert calls[-3:] == ["prepare-ephemeral", f"run|codex|REVIEW_CONSOLIDATOR|read|{work / 'isolated'}", "cleanup"]
+		assert output.read_text(encoding="utf-8").startswith("=== ISSUE example ===")
+		assert not (work / "host_writer").exists()
+
+
+def test_consolidator_isolation_failures_skip_without_host_writer(tmp_path):
+	for index, (mode, sandbox, reason) in enumerate((
+		("prepare_failed", True, "sandbox_prepare_failed"),
+		("run_outdated", True, "sandbox_helper_outdated"),
+		("run_outdated_cleanup_failed", True, "sandbox_helper_outdated"),
+		("success", False, "sandbox_support_missing"),
+		("cleanup_failed", True, "sandbox_cleanup_failed"),
+	)):
+		work = tmp_path / str(index)
+		work.mkdir()
+		proc, calls, output = _run_consolidator_sandbox_case(work, mode=mode, sandbox=sandbox)
+		assert proc.returncode == 0, proc.stderr
+		assert output.read_text(encoding="utf-8") == ""
+		assert f"CONSOLIDATOR_ISOLATION outcome=skipped reason={reason}" in proc.stderr
+		assert not (work / "host_writer").exists()
+		if mode in ("run_outdated", "run_outdated_cleanup_failed", "cleanup_failed"):
+			assert "cleanup" in calls
+		if mode == "run_outdated_cleanup_failed":
+			assert "::warning::Consolidator sandbox cleanup failed" in proc.stderr
+			assert "CONSOLIDATOR_ISOLATION outcome=skipped reason=sandbox_cleanup_failed" not in proc.stderr
 
 
 def _resolver_claude_sections() -> str:

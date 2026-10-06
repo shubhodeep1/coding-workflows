@@ -126,7 +126,6 @@ ai_pipeline.md
 analysis/last_collection_timestamp.txt
 analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
-analysis/workflow-optimization-2026-09-03.md
 analysis/workflow-optimization-2026-09-06.md
 analysis/workflow-optimization-2026-09-07.md
 analysis/workflow-optimization-2026-09-08.md
@@ -162,6 +161,7 @@ analysis/workflow-optimization-2026-10-01.md
 analysis/workflow-optimization-2026-10-02.md
 analysis/workflow-optimization-2026-10-03-2.md
 analysis/workflow-optimization-2026-10-03.md
+analysis/workflow-optimization-2026-10-06.md
 changelog.d/.gitkeep
 changelog.d/3965-validation-run-attribution.md
 changelog.d/4618-sweep-dispatch-default-branch.md
@@ -220,6 +220,7 @@ changelog.d/6238-claude-read-profile-no-shell.md
 changelog.d/6248-static-context-symlink-guard.md
 changelog.d/6249-merge-guard-ampersand-redirect.md
 changelog.d/6255-review-sandbox-transfer-diagnostics.md
+changelog.d/6262-clarify-respond-standalone.md
 changelog.d/6286-pr-merge-guard-appended-git-dir.md
 changelog.d/6293-numeric-push-refspec-redirect.md
 changelog.d/6304-pr-merge-guard-spaced-numeric-refspec.md
@@ -231,9 +232,16 @@ changelog.d/6358-poller-judges-isolated-sandbox.md
 changelog.d/6359-rb-judge-atomic-transfer.md
 changelog.d/6375-claude-live-sync-provenance-hold.md
 changelog.d/6391-sync-pr-lookup-verifies-base.md
+changelog.d/6397-conflict-resolver-sandbox-only.md
+changelog.d/6398-rb-judge-no-host-opencode-fallback.md
+changelog.d/6399-judge-isolation-latch-label-fetch.md
+changelog.d/6400-rb-judge-security-severity-block.md
+changelog.d/6401-single-issue-security-pass-completed-audit.md
 changelog.d/6404-claude-live-sync-pr-provenance.md
+changelog.d/6420-release-gate-claude-parity.md
 changelog.d/autofix-cap-and-security-exhaustion-judge.md
 changelog.d/claude-branch-push-pr-grace-window.md
+changelog.d/conflict-resolver-sandbox-fail-closed.md
 changelog.d/release-smoke-run-lookup.md
 changelog.d/review-tier-random-reviewers.md
 changelog.d/reviewer-panel-gemini-3-1-flash-lite.md
@@ -470,6 +478,7 @@ scripts/check_resolver_diff.sh
 scripts/check_workflow_script_refs.py
 scripts/ci_cancelled_rerun.py
 scripts/clarify_data_provision_guard.py
+scripts/clarify_github_facts.py
 scripts/clarify_informal_detect.py
 scripts/clarify_isolated_run.sh
 scripts/clarify_openrouter_broker.py
@@ -771,7 +780,9 @@ tests/test_ci_inventory_parity_order_contract.py
 tests/test_ci_job_split_contract.py
 tests/test_ci_poll_test_sharding.py
 tests/test_ci_shared_shell_block_guard.py
+tests/test_clarify_github_facts.py
 tests/test_clarify_informal_detect.py
+tests/test_clarify_respond_standalone.py
 tests/test_claude_anthropic_relay.py
 tests/test_claude_engine.py
 tests/test_claude_md_section_numbers.py
@@ -907,6 +918,7 @@ tests/test_review_commit_new_files_preserved.py
 tests/test_review_conflict_resolve_reasoning_step_down.py
 tests/test_review_conflict_resolve_retry_prelude_render.py
 tests/test_review_conflict_resolve_retry_state.py
+tests/test_review_conflict_resolve_sandbox_only.py
 tests/test_review_conflict_resolve_smoke_deterministic.py
 tests/test_review_dispatch_default_branch.py
 tests/test_review_editor_fifo_drain.py
