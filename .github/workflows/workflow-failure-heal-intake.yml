@@ -42,6 +42,8 @@ permissions:
   contents: read
   issues: write
   actions: read
+  # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
 
 # Serialise every intake so the fingerprint dedup and the open-issue / per-day
 # budgets are evaluated against a consistent issue list.
@@ -153,6 +155,9 @@ jobs:
           codex_config_assemble "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "low"
 
       - name: Run workflow failure heal intake
+        env:
+          # Codex version baked into the isolated diagnosis agent's image (scripts/codex_isolated_exec.sh).
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
         run: |
           set -euo pipefail
           bash scripts/workflow_failure_heal_intake.sh

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ORCHESTRATE_POLL_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
@@ -143,6 +145,12 @@ def test_security_pass_recovery_log_prefixes_are_registered() -> None:
 		assert f"LOG_PREFIX.name={prefix}" in agents_text
 
 
+def test_validation_run_attribution_log_prefix_is_registered() -> None:
+	agents_text = AGENTS_MD.read_text(encoding="utf-8")
+	assert "- `VALIDATION_RUN_ATTRIBUTION`" in agents_text
+	assert "LOG_PREFIX.name=VALIDATION_RUN_ATTRIBUTION" in agents_text
+
+
 def test_staged_support_latch_sweep_runs_without_tracking_issues() -> None:
 	wf = _workflow(ORCHESTRATE_POLL_WF)
 	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
@@ -156,6 +164,40 @@ def test_staged_support_latch_sweep_runs_without_tracking_issues() -> None:
 	assert 'run: ALERT_MSG_LEVEL="${ALERT_MSG_LEVEL:-${STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL}}" bash scripts/orchestrate_poll_process.sh' in step
 	assert 'if _is_truthy "${STAGED_SUPPORT_LATCH_SWEEP_ONLY:-false}"; then' in poller
 	assert "release_staged_support_needs_human_latches\n  exit 0" in poller
+
+
+def test_unblock_scan_runs_without_tracking_issues() -> None:
+	wf = _workflow(ORCHESTRATE_POLL_WF)
+	poller = ORCHESTRATE_POLL_PROCESS.read_text(encoding="utf-8")
+	latch_start = wf.index("- name: Release staged-support latches without active projects")
+	step_start = wf.index("- name: Run unblock scan without active projects")
+	step_end = wf.index("- name: Run worktree registry GC", step_start)
+	step = wf[step_start:step_end]
+	assert latch_start < step_start < step_end
+	assert "if: steps.find_tracking.outputs.has_work != 'true'" in step
+	assert "github.repository ==" not in step
+	assert 'UNBLOCK_SCAN_SWEEP_ONLY: "true"' in step
+	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in step
+	assert "TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}" in step
+	assert "TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}" in step
+	assert "ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}" in step
+	assert 'PYTHONDONTWRITEBYTECODE: "1"' in step
+	assert "run: bash scripts/orchestrate_poll_process.sh" in step
+	for name, default in (
+		("UNBLOCK_JUDGE_ENABLED", "true"),
+		("UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK", "5"),
+		("UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES", "30"),
+		("UNBLOCK_JUDGE_RETRY_HOURS", "6"),
+		("UNBLOCK_JUDGE_INFLIGHT_MINUTES", "60"),
+	):
+		assert f"{name}: ${{{{ vars.{name} || '{default}' }}}}" in step
+	assert "- name: Process each tracking issue\n        if: steps.find_tracking.outputs.has_work == 'true'" in wf
+	assert (
+		'if _is_truthy "${UNBLOCK_SCAN_SWEEP_ONLY:-false}"; then\n'
+		'  run_unblock_scan || echo "UNBLOCK_SCAN outcome=skip reason=error rc=$?"\n'
+		'  exit 0'
+	) in poller
+	yaml.safe_load(wf)
 
 
 def test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow() -> None:
@@ -179,6 +221,7 @@ def main() -> int:
 	test_security_pass_dark_launch_env_and_assets_are_wired()
 	test_security_pass_recovery_log_prefixes_are_registered()
 	test_staged_support_latch_sweep_runs_without_tracking_issues()
+	test_unblock_scan_runs_without_tracking_issues()
 	test_worktree_registry_helpers_and_gc_are_wired_into_poller_workflow()
 	return 0
 

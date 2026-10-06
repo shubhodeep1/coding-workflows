@@ -47,6 +47,7 @@ _FALLBACK_PATTERNS = re.compile(
 	r"best\s+effort|defer|omit|not\s+require)",
 	re.IGNORECASE,
 )
+_LETTER_DECISION_RE = re.compile(r"\*{0,2}(Q\d+)\*{0,2}\s*:\s*\*{0,2}([A-Z](?:\+[A-Z])*)\*{0,2}")
 
 
 def _parse_questions(clarification_text: str) -> dict[str, dict[str, str]]:
@@ -80,20 +81,21 @@ def _parse_questions(clarification_text: str) -> dict[str, dict[str, str]]:
 def _parse_answers(answers_text: str) -> dict[str, list[str]]:
 	"""Parse answer text into {Q_ID: [selected_letters]}."""
 	answers: dict[str, list[str]] = {}
-	in_decisions = False
+	in_decisions = True
 
 	for line in answers_text.splitlines():
 		stripped = line.strip()
-		if stripped.upper().startswith("DECISIONS"):
+		header_token = stripped.lstrip("#* \t").upper()
+		if header_token.startswith("DECISIONS"):
 			in_decisions = True
 			continue
-		if stripped.upper().startswith("RATIONALE"):
+		if header_token.startswith(("RATIONALE", "EXECUTION PLAN", "ESCALATION", "SETUP REQUIRED", "DATA-PROVISION GUARD OVERRIDES")):
 			in_decisions = False
 			continue
 
-		if in_decisions or not answers:
-			# Match Q1: A or Q1: A+C
-			m = re.match(r"(Q\d+):\s*([A-Z](?:\+[A-Z])*)\s*$", stripped)
+		if in_decisions:
+			# Match Q1: A or Q1: A+C, including Markdown emphasis.
+			m = _LETTER_DECISION_RE.fullmatch(stripped)
 			if m:
 				qid = m.group(1)
 				letters = m.group(2).split("+")
@@ -178,7 +180,7 @@ def run_guard(clarification_file: Path, answers_file: Path) -> str:
 		for qid, new_letter in overrides.items():
 			# Only match decision lines (Q1: A or Q1: A+B), not rationale lines
 			# (Q1: The recommended...) — require single-letter or +letter at end.
-			if re.match(rf"{re.escape(qid)}:\s*[A-Z](?:\+[A-Z])*\s*$", stripped):
+			if (decision_match := _LETTER_DECISION_RE.fullmatch(stripped)) and decision_match.group(1) == qid:
 				patched_lines.append(f"{qid}: {new_letter}")
 				matched = True
 				break
