@@ -2089,6 +2089,8 @@ def budget_decision(
 	if source_gen is not None:
 		gen = source_gen + 1
 		root = source_root or fp
+		prior_issue = int(source_issue.rsplit("#", 1)[1])
+		prior_repo = source_issue.split("#", 1)[0]
 	elif prior_same_fp or prior_source_lineage:
 		prior_lineage = sorted(prior_same_fp + prior_source_lineage)
 		prior_gen, prior_issue, prior_root, prior_repo = prior_lineage[-1]

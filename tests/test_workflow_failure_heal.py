@@ -830,6 +830,8 @@ def test_budget_decision_verifies_inherited_lineage() -> None:
 	assert decide([stale_second, root_issue, listed, third], 3, source_issue=third_source)["source_lineage"] == "verified"
 	# Real caps still apply to a verified lineage.
 	assert decide([root_issue, listed], 2, max_depth=2)["action"] == "escalate"
+	capped_chain = decide([root_issue, listed], 2, max_depth=2)
+	assert capped_chain["prior_issue"] == 42 and capped_chain["prior_repo"] == CONSUMER_REPO
 	# A gen-1 source issue verifies on its own; a Bot author (flat user_type) is trusted.
 	bot_root = _lineage_issue(42, fp=root, gen=1, root=root, repository=CONSUMER_REPO, author_association="NONE", user_type="Bot")
 	single = decide([bot_root], 1)
