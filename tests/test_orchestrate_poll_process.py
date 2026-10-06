@@ -18906,13 +18906,14 @@ def test_state_extraction_skips_mixed_author_v2_chain():
 
 
 def test_state_identity_failure_skips_reconstruction_and_state_writes():
-	result = _run_poller(
-		state=_base_state(status="in_progress"),
-		enable_validation="false",
-		max_validate_cycles="3",
-		env_overrides={"UNBLOCK_JUDGE_ENABLED": "false"},
-		mock_store_extra={"fail_user_lookup": True},
-	)
+	with pytest.MonkeyPatch.context() as identity_env_patch:
+		identity_env_patch.setenv("UNBLOCK_JUDGE_ENABLED", "false")
+		result = _run_poller(
+			state=_base_state(status="in_progress"),
+			enable_validation="false",
+			max_validate_cycles="3",
+			mock_store_extra={"fail_user_lookup": True},
+		)
 	assert "ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=192 outcome=identity_unavailable" in result["stderr"]
 	assert "skipping this tracking issue and state reconstruction" in result["stdout"]
 	assert "search/issues" not in result["api_calls"]
