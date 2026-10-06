@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "Workflow changes in this repository commonly span a GitHub Actions workflow and its shell or Python helper, with contract tests checking that they stay aligned. When changing orchestration or security behavior, inspect and test all three layers rather than validating the helper in isolation.",
+  "fingerprint": "f70dfeb195ba5cc1e4df3e560626725bcaf9bb493c74bb6e32099e9e6ad2ce27",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37397616861",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37397616861",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6342",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6389",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6398",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6420",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6423",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6351",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6406",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6418",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6421",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6425"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261006011227_870524838c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Treat workflow behavior as a contract across workflow YAML, helper scripts, and focused tests.",
+  "timestamps": {
+    "created_at": "2026-10-06T01:12:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
