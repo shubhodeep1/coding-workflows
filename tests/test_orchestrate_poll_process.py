@@ -16550,6 +16550,24 @@ def test_retrigger_review_redispatches_when_last_autofix_concluded_failure():
 	)
 
 
+def test_retrigger_review_redispatches_on_tied_head_branch_failure():
+	state, prs = _retrigger_review_pr_state(77, "claude/retrigger-review-tied-failure")
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 77}, prs=prs,
+		active_autofix_runs=[
+			{"workflow": "ai-review.yml", "branch": "claude/retrigger-review-tied-failure",
+			 "status": "completed", "conclusion": "success", "createdAt": "2026-09-28T01:00:00Z"},
+			{"workflow": "internal-review.yml", "branch": "claude/retrigger-review-tied-failure",
+			 "status": "completed", "conclusion": "failure", "createdAt": "2026-09-28T01:00:00Z"},
+		],
+		mock_git_push_success=True,
+	)
+	assert any(d.get("pr_number") == 77 for d in result["review_dispatches"]), result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert "last internal-review.yml run concluded 'failure'" in result["stdout"]
+
+
 def test_retrigger_review_skips_merge_train_queued_pr_without_consuming_stall_budget():
 	state = _base_state(status="in_progress")
 	issue = state["waves"][0]["issues"][0]

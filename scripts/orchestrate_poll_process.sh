@@ -13915,9 +13915,12 @@ STALL_EOF
               _rtr_wf_conclusion="${_rtr_wf_row}"
               _rtr_wf_created_at=""
             fi
+            # A tied failure must not be lost because the workflows were listed
+            # in a different order; completed run timestamps have second precision.
             if [ -n "${_rtr_wf_created_at}" ] && { [[ "${_rtr_wf_created_at}" > "${_rtr_newest_completed_at}" ]] ||
                  { [ "${_rtr_wf_created_at}" = "${_rtr_newest_completed_at}" ] &&
-                   [ -n "${_rtr_failed_conclusion}" ] && [ "${_rtr_wf_conclusion}" = "success" ]; }; }; then
+                   [ -z "${_rtr_failed_conclusion}" ] &&
+                   [[ "${_rtr_wf_conclusion}" =~ ^(failure|cancelled|timed_out)$ ]]; }; }; then
               _rtr_newest_completed_at="${_rtr_wf_created_at}"
               _rtr_failed_conclusion=""
               _rtr_failed_wf=""

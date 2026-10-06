@@ -136,6 +136,8 @@ class PollerPrNamedRunContract(unittest.TestCase):
 		self.body = text[start:text.index("\n}\n", start)]
 		helper_start = text.index("_pr_named_review_dispatch_runs()\n{")
 		self.helper = text[helper_start:text.index("\n}\n", helper_start)]
+		judge_start = text.index("invoke_stall_judge() {")
+		self.judge = text[judge_start:text.index("\n}\n", judge_start)]
 
 	def test_guard_looks_up_pr_named_dispatch_runs(self) -> None:
 		# Issue #4701: the lookup lives in the shared helper, which matches
@@ -165,6 +167,14 @@ class PollerPrNamedRunContract(unittest.TestCase):
 	def test_run_name_prefix_matches_internal_review(self) -> None:
 		self.assertIn(DISPATCH_RUN_NAME, INTERNAL_REVIEW_WF.read_text(encoding="utf-8"))
 		self.assertIn(DISPATCH_RUN_NAME, self.helper)
+
+	def test_stall_judge_scopes_named_runs_to_review_wrapper_and_dispatch_event(self) -> None:
+		self.assertIn('workflow_outcomes="$(printf', self.judge)
+		self.assertIn('(.event // "") == "workflow_dispatch"', self.judge)
+		self.assertIn('("Internal: AI Review & Autofix [pr:" + $pr + "]")', self.judge)
+		self.assertIn('internal-review\\\\.yml(@.*)?$', self.judge)
+		self.assertIn('("AI Review [pr:" + $pr + "]")', self.judge)
+		self.assertIn('ai-review\\\\.yml(@.*)?$', self.judge)
 
 
 class ForwardMergeDispatchRefContract(unittest.TestCase):
