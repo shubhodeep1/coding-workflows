@@ -112,10 +112,10 @@ def mismatched(root: Path) -> list[str]:
 		raise ValueError(f"unsafe live symlink: {LIVE_PREFIX}")
 	drift: list[str] = []
 	for relative in paired_paths(root):
-		if relative in divergent:
-			continue
 		if any((root / LIVE_PREFIX / part).is_symlink() for part in (Path(relative), *Path(relative).parents)):
 			raise ValueError(f"unsafe live symlink: {relative}")
+		if relative in divergent:
+			continue
 		if (
 			not (root / LIVE_PREFIX / relative).is_file()
 			or not filecmp.cmp(root / TEMPLATE_PREFIX / relative, root / LIVE_PREFIX / relative, shallow=False)

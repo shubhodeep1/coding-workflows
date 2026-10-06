@@ -47,6 +47,7 @@ def test_allowlist_names_real_divergent_pairs() -> None:
 	divergent = json.loads((REPO_ROOT / sync_mod.ALLOWLIST_PATH).read_text(encoding="utf-8"))["divergent"]
 	for relative, reason in divergent.items():
 		assert relative in pairs, f"{relative} has no template/live pair"
+		assert not (REPO_ROOT / sync_mod.LIVE_PREFIX / relative).is_symlink(), f"{relative} has a symlinked live copy"
 		assert (REPO_ROOT / sync_mod.LIVE_PREFIX / relative).is_file(), f"{relative} has no live copy"
 		assert isinstance(reason, str) and reason.strip(), relative
 
@@ -286,6 +287,20 @@ def test_sync_refuses_live_symlink_destination(tmp_path: Path) -> None:
 	live.symlink_to("../../.git/config")
 	with pytest.raises(ValueError, match="unsafe live symlink"):
 		sync_mod.sync(root, before, after, dry_run=True)
+	assert "v2" not in (root / ".git/config").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("dry_run", (True, False))
+def test_allowlisted_live_symlink_is_rejected(tmp_path: Path, dry_run: bool) -> None:
+	root = _scratch_repo(tmp_path)
+	before, after = _commit(root, "workflow-templates/.claude/hooks/guard.py", "v2\n")
+	live = root / ".claude/hooks/own.py"
+	live.unlink()
+	live.symlink_to("../../.git/config")
+	with pytest.raises(ValueError, match="unsafe live symlink: hooks/own.py"):
+		sync_mod.mismatched(root)
+	with pytest.raises(ValueError, match="unsafe live symlink: hooks/own.py"):
+		sync_mod.sync(root, before, after, dry_run=dry_run)
 	assert "v2" not in (root / ".git/config").read_text(encoding="utf-8")
 
 
