@@ -249,7 +249,7 @@ while IFS=$'\t' read -r run_id run_url; do
 				: > "${FILTERED_LOG}"
 			fi
 			rm -f "${RAW_LOG}"
-			if [ "${SOURCE_KIND}" = "phase_failure" ] && [ -s "${FILTERED_LOG}" ]; then
+			if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${RUN_COUNT}" -eq 1 ] && [ -s "${FILTERED_LOG}" ]; then
 				LOG_FILES+=("${FILTERED_LOG}")
 			fi
 		else
@@ -271,6 +271,12 @@ done < <(jq -r '.run_refs[] | [.run_id, .url] | @tsv' "${PAYLOAD_FILE}")
 SUMMARY_COUNT="$(jq 'length' "${SUMMARIES_FILE}")"
 FIRST_WORKFLOW_NAME="$(jq -r 'map(select(.workflow_name != "")) | first | .workflow_name // ""' "${SUMMARIES_FILE}")"
 FIRST_FAILING_STEP="$(jq -r 'map(select(.failing_step != "")) | first | .failing_step // ""' "${SUMMARIES_FILE}")"
+if [ "${SOURCE_KIND}" = "phase_failure" ]; then
+	# Earlier streak runs provide diagnostic context, not the current run's identity.
+	PHASE_FAILED_RUN_ID="$(jq -r '.run_refs[0].run_id' "${PAYLOAD_FILE}")"
+	FIRST_WORKFLOW_NAME="$(jq -r --arg current "${PHASE_FAILED_RUN_ID}" 'map(select(.run_id == $current and .workflow_name != "")) | first | .workflow_name // ""' "${SUMMARIES_FILE}")"
+	FIRST_FAILING_STEP="$(jq -r --arg current "${PHASE_FAILED_RUN_ID}" 'map(select(.run_id == $current and .failing_step != "")) | first | .failing_step // ""' "${SUMMARIES_FILE}")"
+fi
 [ -n "${FIRST_WORKFLOW_NAME}" ] || FIRST_WORKFLOW_NAME="${PAYLOAD_WORKFLOW_NAME}"
 if [ -z "${FIRST_WORKFLOW_NAME}" ]; then
 	FIRST_WORKFLOW_NAME="label:${LABEL:-unknown}"

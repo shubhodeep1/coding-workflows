@@ -4,10 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -28,6 +32,7 @@ WORKFLOW_SCHEMA_VERSION = "workflow_overlay.v1"
 OVERLAY_TOP_LEVEL_KEYS = {"schema_version", "prompt_overrides"}
 PROMPT_OVERRIDE_KEYS = {"mode", "append_path", "replace_path"}
 OVERLAY_MODE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*$")
+TRUSTED_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
 class WorkflowOverlayLoadError(Exception):
@@ -52,6 +57,9 @@ def build_parser() -> argparse.ArgumentParser:
 		default=os.environ.get("GITHUB_ENV", ""),
 		help="Path to the GitHub Actions env file (defaults to $GITHUB_ENV)",
 	)
+	parser.add_argument("--trusted-source-repo", default="", help="Repository whose default branch owns the overlay")
+	parser.add_argument("--trusted-source-branch", default="", help="Branch to fetch (defaults to the repository default)")
+	parser.add_argument("--trusted-root", default="", help="Private directory for the pinned overlay and fragments")
 	return parser
 
 
@@ -414,6 +422,167 @@ def append_github_env(github_env_path: Path, values: dict[str, str]) -> None:
 		raise WorkflowOverlayLoadError(f"Unable to write GitHub env file '{github_env_path}': {exc}") from exc
 
 
+def _trusted_git(args: list[str], *, auth_env: dict[str, str]) -> subprocess.CompletedProcess[bytes]:
+	# Git diagnostics may contain credential headers; never pass stderr to logs.
+	try:
+		return subprocess.run(["git", *args], env=auth_env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False, timeout=60)
+	except FileNotFoundError as exc:
+		raise WorkflowOverlayLoadError("git_unavailable") from exc
+	except subprocess.TimeoutExpired as exc:
+		raise WorkflowOverlayLoadError("git_timeout") from exc
+
+
+def _trusted_git_env() -> dict[str, str]:
+	auth_env = os.environ.copy()
+	# Workflow steps can pin git to the PR checkout; isolate all trusted-source operations.
+	for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
+		auth_env.pop(name, None)
+	for name in tuple(auth_env):
+		if name.startswith("GIT_CONFIG_"):
+			auth_env.pop(name)
+	auth_env["GIT_TERMINAL_PROMPT"] = "0"
+	token = auth_env.get("GH_TOKEN", "").strip() or auth_env.get("GITHUB_TOKEN", "").strip()
+	if token:
+		encoded = base64.b64encode(f"x-access-token:{token}".encode()).decode("ascii")
+		auth_env.update({
+			"GIT_CONFIG_COUNT": "1",
+			"GIT_CONFIG_KEY_0": "http.extraHeader",
+			"GIT_CONFIG_VALUE_0": f"Authorization: Basic {encoded}",
+		})
+	return auth_env
+
+
+def _trusted_remote_url(repo: str) -> str:
+	if TRUSTED_REPO_PATTERN.fullmatch(repo) is None or any(part in (".", "..") for part in repo.split("/")):
+		raise WorkflowOverlayLoadError("Invalid trusted source repository")
+	server_url = (os.environ.get("GITHUB_SERVER_URL") or "https://github.com").strip().rstrip("/") or "https://github.com"
+	return f"{server_url}/{repo}"
+
+
+def _trusted_branch(remote_url: str, explicit_branch: str, auth_env: dict[str, str]) -> str:
+	branch = explicit_branch
+	if not branch:
+		event_path = os.environ.get("GITHUB_EVENT_PATH", "")
+		if event_path:
+			try:
+				branch = json.loads(Path(event_path).read_text(encoding="utf-8")).get("repository", {}).get("default_branch", "")
+			except (OSError, ValueError, AttributeError):
+				pass
+	if not branch:
+		result = _trusted_git(["ls-remote", "--symref", remote_url, "HEAD"], auth_env=auth_env)
+		if result.returncode != 0:
+			raise WorkflowOverlayLoadError("default_branch_lookup_failed")
+		for line in result.stdout.decode("utf-8", errors="replace").splitlines():
+			match = re.fullmatch(r"ref: refs/heads/(.+)\tHEAD", line)
+			if match:
+				branch = match.group(1)
+				break
+	if not isinstance(branch, str) or not branch or any(ch in branch for ch in "\r\n\t"):
+		raise WorkflowOverlayLoadError("default_branch_invalid")
+	if _trusted_git(["check-ref-format", f"refs/heads/{branch}"], auth_env=auth_env).returncode != 0:
+		raise WorkflowOverlayLoadError("default_branch_invalid")
+	return branch
+
+
+def fetch_trusted_overlay_source(repo: str, branch: str, git_dir: Path) -> str:
+	remote_url = _trusted_remote_url(repo)
+	auth_env = _trusted_git_env()
+	if _trusted_git(["init", "--bare", str(git_dir)], auth_env=auth_env).returncode != 0:
+		raise WorkflowOverlayLoadError("git_init_failed")
+	if _trusted_git([f"--git-dir={git_dir}", "remote", "add", "origin", remote_url], auth_env=auth_env).returncode != 0:
+		raise WorkflowOverlayLoadError("git_remote_failed")
+	if _trusted_git([
+		f"--git-dir={git_dir}", "fetch", "--no-tags", "--depth", "1", "--filter=blob:none",
+		"origin", f"refs/heads/{branch}",
+	], auth_env=auth_env).returncode != 0:
+		raise WorkflowOverlayLoadError("fetch_failed")
+	result = _trusted_git([f"--git-dir={git_dir}", "rev-parse", "FETCH_HEAD"], auth_env=auth_env)
+	sha = result.stdout.decode("ascii", errors="replace").strip()
+	if result.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", sha) is None:
+		raise WorkflowOverlayLoadError("fetch_head_invalid")
+	return sha
+
+
+def materialize_trusted_file(git_dir: Path, sha: str, rel_path: str, trusted_root: Path) -> bool:
+	path = Path(rel_path)
+	if path.is_absolute() or not path.parts or any(part in (".", "..") for part in path.parts) or "\\" in rel_path or any(ord(ch) < 32 for ch in rel_path):
+		raise WorkflowOverlayLoadError("Unsafe trusted overlay fragment path")
+	destination = (trusted_root / path).resolve()
+	if not destination.is_relative_to(trusted_root):
+		raise WorkflowOverlayLoadError("Trusted overlay fragment escapes destination")
+	auth_env = _trusted_git_env()
+	result = _trusted_git([f"--git-dir={git_dir}", "ls-tree", "-z", "--full-tree", sha, "--", rel_path], auth_env=auth_env)
+	if result.returncode != 0:
+		raise WorkflowOverlayLoadError("Trusted overlay tree lookup failed")
+	if not result.stdout:
+		return False
+	entry = result.stdout.rstrip(b"\0").split(b"\0")
+	if len(entry) != 1 or b"\t" not in entry[0]:
+		raise WorkflowOverlayLoadError("Invalid trusted overlay tree entry")
+	metadata, entry_path = entry[0].split(b"\t", 1)
+	if entry_path != rel_path.encode("utf-8") or metadata.split(b" ", 1)[0] not in (b"100644", b"100755"):
+		raise WorkflowOverlayLoadError("Trusted overlay path must be a regular blob")
+	result = _trusted_git([f"--git-dir={git_dir}", "show", f"{sha}:{rel_path}"], auth_env=auth_env)
+	if result.returncode != 0:
+		raise WorkflowOverlayLoadError("Trusted overlay blob read failed")
+	destination.parent.mkdir(parents=True, exist_ok=True)
+	destination.write_bytes(result.stdout)
+	return True
+
+
+def load_trusted_overlay(args: argparse.Namespace, repo_root: Path) -> None:
+	if not args.trusted_root:
+		raise WorkflowOverlayLoadError("--trusted-root is required with --trusted-source-repo")
+	trusted_path = Path(args.trusted_root)
+	if trusted_path.is_symlink():
+		raise WorkflowOverlayLoadError("Trusted overlay root must not be a symlink")
+	trusted_root = trusted_path.resolve()
+	if trusted_root == repo_root or trusted_root.is_relative_to(repo_root) or repo_root.is_relative_to(trusted_root):
+		raise WorkflowOverlayLoadError("Trusted overlay root must be outside the checkout")
+	try:
+		if trusted_root.exists():
+			shutil.rmtree(trusted_root)
+		trusted_root.mkdir(parents=True)
+	except OSError as exc:
+		raise WorkflowOverlayLoadError("Unable to prepare trusted overlay root") from exc
+	github_env_path = Path(args.github_env)
+	try:
+		remote_url = _trusted_remote_url(args.trusted_source_repo)
+		branch = _trusted_branch(remote_url, args.trusted_source_branch, _trusted_git_env())
+		with tempfile.TemporaryDirectory(prefix="workflow-overlay-git-", dir=trusted_root.parent) as git_tmp:
+			git_dir = Path(git_tmp) / "repo.git"
+			sha = fetch_trusted_overlay_source(args.trusted_source_repo, branch, git_dir)
+			overlay_rel_path = WORKFLOW_OVERLAY_RELATIVE_PATH.as_posix()
+			present = materialize_trusted_file(git_dir, sha, overlay_rel_path, trusted_root)
+			if not present:
+				append_github_env(github_env_path, render_export_values(overlay_enabled=False, repo_root=trusted_root, overrides=()))
+				print(f"::notice::WORKFLOW_OVERLAY_SOURCE mode=trusted repo={args.trusted_source_repo} branch={branch} sha={sha} overlay=absent fragments=0")
+				return
+			overlay_path = trusted_root / WORKFLOW_OVERLAY_RELATIVE_PATH
+			front_matter_text = extract_front_matter(load_overlay_document(trusted_root) or "", overlay_path)
+			payload = parse_front_matter(front_matter_text, overlay_path)
+			schema_path = Path(args.schema_path)
+			validate_payload_against_schema(payload, load_schema(schema_path), schema_path)
+			overrides = coerce_prompt_overrides(payload, overlay_path)
+			fragments = 0
+			for override in overrides:
+				fragment_path = override.append_path or override.replace_path
+				if not fragment_path or not materialize_trusted_file(git_dir, sha, fragment_path, trusted_root):
+					raise WorkflowOverlayLoadError("Trusted overlay fragment missing")
+				fragments += 1
+		append_github_env(github_env_path, render_export_values(overlay_enabled=True, repo_root=trusted_root, overrides=overrides))
+		print(f"::notice::WORKFLOW_OVERLAY_SOURCE mode=trusted repo={args.trusted_source_repo} branch={branch} sha={sha} overlay=present fragments={fragments}")
+	except WorkflowOverlayLoadError as exc:
+		if str(exc) not in {
+			"default_branch_lookup_failed", "default_branch_invalid", "git_init_failed", "git_remote_failed", "fetch_failed", "fetch_head_invalid", "git_unavailable", "git_timeout",
+			"Trusted overlay tree lookup failed", "Trusted overlay blob read failed"
+		}:
+			raise
+		# An unavailable remote disables only the overlay; never read the checkout copy.
+		append_github_env(github_env_path, render_export_values(overlay_enabled=False, repo_root=trusted_root, overrides=()))
+		print(f"::warning::WORKFLOW_OVERLAY_SOURCE mode=trusted outcome=disabled reason={exc}", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
 	args = build_parser().parse_args(argv)
 	if not args.github_env:
@@ -422,6 +591,11 @@ def main(argv: list[str] | None = None) -> int:
 
 	try:
 		repo_root = resolve_repo_root(args.repo_root)
+		if args.trusted_source_repo:
+			load_trusted_overlay(args, repo_root)
+			return 0
+		if args.trusted_root or args.trusted_source_branch:
+			raise WorkflowOverlayLoadError("--trusted-root and --trusted-source-branch require --trusted-source-repo")
 		overlay_path = repo_root / WORKFLOW_OVERLAY_RELATIVE_PATH
 		document_text = load_overlay_document(repo_root)
 		if document_text is None:

@@ -9,8 +9,8 @@ $ARGUMENTS
 1. **Resolve the issue.** Parse `$ARGUMENTS` to `<owner>/<repo>#<N>` and read it (`mcp__github__issue_read`, or `gh api repos/<owner>/<repo>/issues/<N>`). If it is missing, is a pull request, or the reference is ambiguous, stop and ask.
 2. **Check that it is a standalone issue.** If it is closed, or carries `ai:orchestrator-managed` / `ai:orchestrator-tracking` (the orchestrator owns it), stop and report instead of relabelling.
 3. **Check for `ai:codex`.** `ai:codex` wins over `ai:engine-claude` (plan decision D2). If the issue carries it, stop and ask (§2 Q/A) whether to remove `ai:codex`; never remove it unasked.
-4. **Label it.** Add `ai:engine-claude` (a §23.B routine label write).
-5. **Restart the pipeline.** Post one comment whose first line is `/reclarify` (clarify only starts on a comment that begins with it), followed by one line naming the engine, and the attribution footer.
+4. **Label it.** Add `ai:engine-claude` (a §23.B routine label write). Confirm the label is present on the issue before continuing. If the write fails (including a missing label in an unsynced repository), stop and report the error; never post `/reclarify` without the label.
+5. **Restart the pipeline.** Post one comment whose first line is `/reclarify` (clarify only starts on a comment that begins with it), followed by one line naming the requested engine, and the attribution footer.
 6. **Report.**
 
 ## Output Format
