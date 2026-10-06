@@ -2701,7 +2701,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}",
 		"REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || '' }}",
 		"REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}",
-		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna' }}",
+		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || '' }}",
 		"REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}",
@@ -2762,7 +2762,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}",
 		"REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || '' }}",
 		"REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}",
-		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna' }}",
+		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || '' }}",
 		"REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}",
@@ -4501,35 +4501,51 @@ def test_review_tier_random_pick_is_seeded_by_pr_number_and_pinned_by_variables(
 	# A repo that sets the variables keeps exactly those reviewers.
 	pinned_result = _run_review_tier_harness(
 		diff_text=standard_diff,
-		extra_env={"PR_NUMBER": "4242", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "z-ai/glm-5.2"},
+		extra_env={"PR_NUMBER": "4242", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "mistralai/mistral-small-2603"},
 	)
 	assert pinned_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "configured_standard"
-	assert pinned_result["active_models"] == ["z-ai/glm-5.2"]
+	assert pinned_result["active_models"] == ["mistralai/mistral-small-2603"]
 
 
-def test_review_tier_lite_draws_from_standard_list_and_defaults_skip_expensive_models() -> None:
-	"""Reduced tiers leave out the two full-panel-only models by default."""
+def test_review_tier_lite_draws_from_standard_list_and_defaults_use_whole_panel() -> None:
+	"""By default every tier draws from the whole panel; a pinned standard list
+	becomes the lite pool (PR #6438: the panel models now cost about the same,
+	so no model is reserved for the full tier)."""
 	reviewer_models = _workflow_reviewer_models()
-	expensive = {"google/gemini-3.1-flash-lite", "z-ai/glm-5.2"}
-	default_standard = ["minimax/minimax-m3", "deepseek/deepseek-v4-pro", "qwen/qwen3.7-plus", "openai/gpt-6-luna"]
-	assert expensive <= set(reviewer_models)
-	assert set(default_standard) <= set(reviewer_models)
-	assert set(default_standard) == set(reviewer_models) - expensive
+	assert len(reviewer_models) == 6
 
 	workflow_text = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
-	default_line = (
-		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || '"
-		+ ",".join(default_standard)
-		+ "' }}"
-	)
+	default_line = "REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || '' }}"
 	assert workflow_text.count(default_line) == 2
 
 	lite_diff = _numbered_code_diff({"src/app.py": 5})
 	standard_diff = _numbered_code_diff({"src/app.py": 120})
-	defaults = {"REVIEW_TIER_LITE_REVIEWER_SLUG": "", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": ",".join(default_standard)}
+	empty_defaults = {"REVIEW_TIER_LITE_REVIEWER_SLUG": "", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": ""}
 
 	def expected_lite(pr_number: str, pool: list[str]) -> list[str]:
 		return [min(pool, key=lambda model: hashlib.sha256(f"{pr_number}:{model}".encode("utf-8")).hexdigest())]
+
+	# With the defaults, every panel model shows up as a lite and a standard reviewer.
+	default_lite_picks: set[str] = set()
+	default_standard_picks: set[str] = set()
+	for pr_number in [str(n) for n in range(1, 41)]:
+		lite_result = _run_review_tier_harness(diff_text=lite_diff, extra_env={**empty_defaults, "PR_NUMBER": pr_number})
+		assert lite_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "random_lite"
+		assert lite_result["active_models"] == expected_lite(pr_number, reviewer_models)
+		default_lite_picks.update(lite_result["active_models"])
+		standard_result = _run_review_tier_harness(diff_text=standard_diff, extra_env={**empty_defaults, "PR_NUMBER": pr_number})
+		assert standard_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "random_standard"
+		assert len(standard_result["active_models"]) == 4
+		default_standard_picks.update(standard_result["active_models"])
+	assert default_lite_picks == set(reviewer_models)
+	assert default_standard_picks == set(reviewer_models)
+
+	# A repo that pins the standard list: lite draws from that list only.
+	pinned_standard = ["minimax/minimax-m3", "deepseek/deepseek-v4-pro", "qwen/qwen3.7-plus", "openai/gpt-6-luna"]
+	assert set(pinned_standard) < set(reviewer_models)
+	excluded = set(reviewer_models) - set(pinned_standard)
+	defaults = {"REVIEW_TIER_LITE_REVIEWER_SLUG": "", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": ",".join(pinned_standard)}
+	default_standard = pinned_standard
 
 	lite_picks: set[str] = set()
 	for pr_number in [str(n) for n in range(1, 41)]:
@@ -4537,9 +4553,9 @@ def test_review_tier_lite_draws_from_standard_list_and_defaults_skip_expensive_m
 		assert lite_result["REVIEW_TIER"] == "lite"
 		assert lite_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "random_lite"
 		assert lite_result["active_models"] == expected_lite(pr_number, default_standard)
-		assert not set(lite_result["active_models"]) & expensive
+		assert not set(lite_result["active_models"]) & excluded
 		lite_picks.update(lite_result["active_models"])
-	# Lite spreads across the standard list rather than always one model.
+	# Lite spreads across the pinned list rather than always one model.
 	assert lite_picks == set(default_standard)
 
 	# Standard runs exactly the four configured reviewers, in the given order.
@@ -4548,7 +4564,7 @@ def test_review_tier_lite_draws_from_standard_list_and_defaults_skip_expensive_m
 	assert standard_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "configured_standard"
 	assert standard_result["active_models"] == default_standard
 
-	# The full panel still runs every model, the expensive ones included.
+	# The full panel still runs every model.
 	full_result = _run_review_tier_harness(
 		diff_text=_numbered_code_diff({"src/app.py": 150, "lib/util.py": 60}),
 		extra_env={**defaults, "PR_NUMBER": "77"},
@@ -4578,10 +4594,10 @@ def test_review_tier_lite_draws_from_standard_list_and_defaults_skip_expensive_m
 	# A pinned lite slug still wins over the standard pool.
 	pinned_lite = _run_review_tier_harness(
 		diff_text=lite_diff,
-		extra_env={**defaults, "REVIEW_TIER_LITE_REVIEWER_SLUG": "z-ai/glm-5.2", "PR_NUMBER": "9"},
+		extra_env={**defaults, "REVIEW_TIER_LITE_REVIEWER_SLUG": "mistralai/mistral-small-2603", "PR_NUMBER": "9"},
 	)
 	assert pinned_lite["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "configured_lite"
-	assert pinned_lite["active_models"] == ["z-ai/glm-5.2"]
+	assert pinned_lite["active_models"] == ["mistralai/mistral-small-2603"]
 
 
 def test_review_tier_disabled_keeps_risk_tier_selection_and_pick_guards_short_args() -> None:
@@ -4941,17 +4957,18 @@ def test_reviewer_failback_mapping_covers_live_reviewer_roster() -> None:
 		"minimax/minimax-m3",
 		"openai/gpt-6-luna",
 		"qwen/qwen3.7-plus",
-		"z-ai/glm-5.2",
 	]
-	assert sorted(unmapped) == []
+	# The catalog ships no other Mistral slug, so mistral-small has no chain:
+	# a prompt over its 262K window is one failed, non-blocking slot (PR #6438).
+	assert sorted(unmapped) == ["mistralai/mistral-small-2603"]
 	assert chains["deepseek/deepseek-v4-pro"] == ["deepseek/deepseek-v3.2"]
 	assert chains["google/gemini-3.1-flash-lite"] == ["google/gemini-3-flash-preview"]
 	assert chains["google/gemini-3.8-flash"] == ["google/gemini-3.1-flash-lite"]
 	assert chains["minimax/minimax-m3"] == ["minimax/minimax-m2.5"]
 	assert chains["openai/gpt-6-luna"] == ["openai/gpt-5.6-luna"]
 	assert chains["qwen/qwen3.7-plus"] == ["qwen/qwen3.6-plus"]
-	assert chains["z-ai/glm-5.2"] == ["z-ai/glm-5.3-flashx"]
 	# Retired-roster mappings stay for operator overrides (CLAUDE.md §6).
+	assert chains["z-ai/glm-5.2"] == ["z-ai/glm-5.3-flashx"]
 	assert chains["moonshotai/kimi-k3"] == ["moonshotai/kimi-k2.7-code"]
 	assert chains["x-ai/grok-4.6"] == ["x-ai/grok-4.20"]
 	assert chains["x-ai/grok-4.20"] == ["x-ai/grok-4.3"]
