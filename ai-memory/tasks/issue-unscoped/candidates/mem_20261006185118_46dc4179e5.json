@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The fix must remove the cause and ship a regression test that reproduces the failing condition: it fails on the reported head and passes with the fix. Record in the PR that you ran it both ways.\"\n  expected_change_site: `tests/test_conflict_manifest_union_contract.py` and the PR verification record\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus, z-ai_glm-5_2]\n  EVIDENCE: The regression test reproduces the delete/modify conflict and passes with the fix, but the reported SHA `07305da66193e6ee7b918d75bae8cbb964c0da47` was unavailable; validation used a reconstructed pre-fix resolver block, and the PR does not record running the test against the reported head.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- TASK_GAP\n  Requirement: \"The fix must remove the cause and ship a regression test that reproduces the failing condition: it fails on the reported head and passes with the fix. Record in the PR that you ran it both ways.\"\n  Expected change site: tests/test_conflict_manifest_union_contract.py and the PR verification record (changelog fragment / PR body).\n  Evidence of absence: The regression test test_manifest_delete_modify_resolved_with_other_conflict and its stage-2 sibling test_manifest_modify_delete_stage2_only correctly reproduce the delete/modify manifest conflict (they assert `git ls-files -u -- MANIFEST_PATH` returns empty after the union block, which fails on pre-fix behavior). However, the PR does not record a run against the exact reported head 07305da66193e6ee7b918d75bae8cbb964c0da47; the editor summary documents that the SHA was unavailable in the isolated checkout and that verification was instead performed against a reconstructed pre-fix resolver block.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: The regression test must fail on the reported head (`07305da66193e6ee7b918d75bae8cbb964c0da47`) and pass with the fix.\n  Expected change site: `tests/test_conflict_manifest_union_contract.py` and the PR verification record.\n  Evidence of absence: The PR discussion records that the reported SHA was unavailable and the failure was tested against a reconstructed pre-fix resolver block instead. The PR does not record a test run on reported head `07305da66193e6ee7b918d75bae8cbb964c0da47`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cThe regression test \u2026 fails on the reported head and passes with the fix\u201d; \u201cRecord in the PR that you ran it both ways.\u201d\n  Expected change site: `tests/test_conflict_manifest_union_contract.py` and the PR verification record.\n  Evidence of absence: The PR discussion records that the reported head (`07305da66193e6ee7b918d75bae8cbb964c0da47`) was unavailable. The before-fix run used a reconstructed pre-fix resolver block instead, so the test was not run against the specified head.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"The fix must remove the cause and ship a regression test that reproduces the failing condition: it fails on the reported head and passes with the fix. Record in the PR that you ran it both ways.\"\n  Expected change site: `tests/test_conflict_manifest_union_contract.py` and the PR discussion / verification record\n  Evidence of absence: The PR discussion (entry[1]) states \"The isolated checkout lacks the reported SHA and GitHub tooling, so I'm validating the regression against a reconstructed pre-fix resolver block\" and \"The regression fails on reconstructed pre-fix behavior and passes on the current tree.\" The issue explicitly requires running the test against reported head `07305da66193e6ee7b918d75bae8cbb964c0da47` and recording both results in the PR. The PR records only the reconstructed-pre-fix result, not the reported-head result. While the synthetic regression test (`test_manifest_delete_modify_resolved_with_other_conflict`) correctly reproduces the delete/modify conflict shape and validates the fix, the issue's explicit requirement to test against the reported head SHA and record both outcomes is not met.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- TASK_GAP\n  Requirement: \"The fix must remove the cause and ship a regression test that reproduces the failing condition: it fails on the reported head and passes with the fix. Record in the PR that you ran it both ways.\"\n  Expected change site: tests/test_conflict_manifest_union_contract.py and the PR verification record\n  Evidence of absence: The PR discussion (entry[1]) records that the reported SHA `07305da66193e6ee7b918d75bae8cbb964c0da47` was unavailable in the synthetic checkout, so the regression was validated against a reconstructed pre-fix resolver block instead. The PR does not record a test run on the reported head. The regression test `test_manifest_delete_modify_resolved_with_other_conflict` does reproduce the delete/modify shape that caused the failure and would fail on pre-fix code, but the \"fails on the reported head\" half of the requirement is not satisfied as literally stated.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "2af341590b35624c2385a997b83fe59d8911525a83477c66956d114cf6142890",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6577,
+    "run_id": "37502979457",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37502979457",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006185118_46dc4179e5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6577,
+    "run_id": "37502979457"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T18:51:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
