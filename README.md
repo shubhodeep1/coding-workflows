@@ -1120,8 +1120,10 @@ not delete wrappers that are already present in `.github/workflows/`.
 > prefixes) no longer hide a nested `git push`: the guard checks the session
 > checkout and, if it does not block, asks for confirmation because the
 > effective directory is uncertain. A `git commit` in the same uncertain
-> context remains warning-only, except an `env -C` commit with an unresolved
-> directory: that asks rather than consulting the session checkout's PRs.
+> context remains warning-only, except an `env -C` or `env --chdir` commit
+> with an unresolved directory: that asks rather than consulting the session
+> checkout's PRs. A literal `env -S 'git commit ...'` is checked normally;
+> dynamic split strings still ask for confirmation.
 > When a `git push` source cannot be resolved locally (for example,
 > a shell-expanded source), the merged-PR guard asks for confirmation rather
 > than using the session checkout as a substitute for the pushed commit.
@@ -1134,9 +1136,11 @@ not delete wrappers that are already present in `.github/workflows/`.
 > blocks the push instead of treating it as a refspec. A GitHub URL is checked
 > against its destination repository; an unavailable PR lookup asks for confirmation.
 > Push URLs are resolved by Git after configured `insteadOf`/`pushInsteadOf`
-> rewrites. Non-GitHub effective URLs and pushes with inline configuration
-> overrides are blocked. Literal URLs are blocked when push-only rewrites are
-> configured, because Git's URL-only lookup cannot verify their push target.
+> rewrites. Non-GitHub effective URLs and empty configured push URLs are
+> blocked; resolvable inline configuration is checked against its effective
+> destination, while uncertain configuration asks. Literal URLs are blocked
+> when push-only rewrites are configured, because Git's URL-only lookup cannot
+> verify their push target.
 
 > The merged-PR guard checks numeric push refspecs before a separate output
 > redirect (`git push origin 123 > /dev/null`). When an explicit push refspec

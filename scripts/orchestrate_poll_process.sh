@@ -104,7 +104,7 @@ _POLLER_AI_ENGINE_SH="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && p
 poller_claude_judge()
 {
   local role="$1" prompt_file="$2" output_file="$3" log_file="$4" model_hint="${5:-${MODEL_EDITOR:-}}" judge_workdir="${6:-${PWD}}"
-  local judge_engine="codex" judge_rc=0 judge_read_only=false
+  local judge_engine="codex" judge_rc=0 judge_read_only="${AI_ENGINE_READ_ONLY:-false}"
   [ -f "${_POLLER_AI_ENGINE_SH}" ] || return 75
   # shellcheck source=ai_engine.sh
   source "${_POLLER_AI_ENGINE_SH}" || return 75

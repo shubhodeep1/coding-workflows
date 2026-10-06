@@ -284,7 +284,7 @@ Git metadata is omitted. Session reuse mounts only the selected session ID's
 transcript directory.
 The merged-PR push guard preserves whitespace-separated numeric refspecs before
 output redirects; only attached numeric file-descriptor prefixes are removed.
-For pushes it checks Git's effective push URL (including URL rewrites and inline config) before looking up the destination PR; non-GitHub raw remotes rewritten to GitHub are accepted. Unresolvable config, including `env -S` / `--split-string` commands, asks for confirmation.
+For pushes it checks Git's effective push URL (including URL rewrites and inline config) before looking up the destination PR; non-GitHub raw remotes rewritten to GitHub are accepted, while empty configured push URLs are rejected. Unresolvable config and split-string pushes ask for confirmation; literal `env -S` commits are checked against their selected checkout.
 Git writes with process substitution (for example a dynamic `GIT_CONFIG_GLOBAL` file) ask for confirmation before the guard trusts any parsed destination.
 Deletion and tag-only pushes validate the effective destination too, but do not query PR history for a branch commit.
 The Bash guard also recognizes absolute `env` and `git` executable paths when resolving these inline overrides.
@@ -982,9 +982,11 @@ fallback still fails preflight if its configuration is unavailable.
 Missing isolation returns exit 75, never host Claude.
 The poller's `WAVE_JUDGE` verdict uses `AI_ENGINE_READ_ONLY=true` so untrusted
 PR diffs are evaluated in the isolated container, not by a host write-profile
-model with the poller's GitHub token. Its Codex fallback runs through the
-existing `clarify_isolated_run.sh` container and OpenRouter broker, not host
-Codex, so it cannot read the runner's Claude token pool. The poll workflow
+model with the poller's GitHub token. `poller_claude_judge` preserves the same
+caller override for `STALL_JUDGE` and the `RB_JUDGE` verdict. The wave judge's
+Codex fallback runs through the existing `clarify_isolated_run.sh` container
+and OpenRouter broker, not host Codex, so it cannot read the runner's Claude
+token pool. The poll workflow
 stages the runner, broker and catalog from verified support. Missing Docker or
 snapshots exceeding 5,000 files/64 MiB fail the judge attempt closed rather
 than running on the host; trusted poller code still applies the validated

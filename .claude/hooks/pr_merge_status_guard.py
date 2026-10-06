@@ -200,6 +200,7 @@ class _GitInvocation(NamedTuple):
 	config_args: tuple[str, ...] = ()
 	config_environment: tuple[tuple[str, str], ...] = ()
 	config_uncertain: str = ""
+	env_directory_unresolved: bool = False
 
 
 class _GuardTarget(NamedTuple):
@@ -492,6 +493,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 		config_environment: dict[str, str] = {}
 		config_uncertain = "config may change earlier in this Bash command" if config_mutated else ""
 		assignment_only_config = False
+		env_directory_unresolved = False
 		if tokens[0] in ("export", "declare", "typeset", "readonly", "unset") and any(
 			_GIT_CONFIG_ENV_RE.fullmatch(word.split("=", 1)[0].removesuffix("+"))
 			for word in tokens[1:]
@@ -532,6 +534,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 					env_word_value = (tokens[position + 1] if word in ("-C", "--chdir") else
 						word.split("=", 1)[1] if word.startswith("--chdir=") else word[2:])
 					env_cwd = _literal_guard_path(env_word_value, env_cwd) if env_cwd else None
+					env_directory_unresolved |= env_cwd is None
 				elif re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", word):
 					env_name, env_word_value = word.split("=", 1)
 					if env_name in ("GIT_DIR", "GIT_WORK_TREE"):
@@ -603,7 +606,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			{} if uncertain else environment,
 			tokens[index], tokens[index + 1:],
 			"could not resolve git command directory; checking the session checkout instead" if uncertain else "",
-			tuple(config_args), tuple(config_environment.items()), config_uncertain,
+			tuple(config_args), tuple(config_environment.items()), config_uncertain, env_directory_unresolved,
 		))
 	return invocations
 
@@ -947,8 +950,8 @@ def _env_split_string_has_guarded_git(command: str, depth: int = 0) -> bool:
 					break
 				if split_value and (
 					# Shell or env expansion may supply the executable and its arguments.
-					"$" in split_value or "`" in split_value
-					or git_subcommands(split_value) & GUARDED_SUBCOMMANDS
+					"$" in split_value or "`" in split_value or "\\" in split_value
+					or git_subcommands(split_value) & {"push"}
 					or _env_split_string_has_guarded_git(split_value, depth + 1)
 				):
 					return True
@@ -1063,7 +1066,7 @@ def _remote_push_urls(name: str, cwd: str, config_args: tuple[str, ...] = ()) ->
 		return []
 	code, out, _ = _run(["git", "--no-pager", *config_args, "config", "--get-all", f"remote.{name}.pushurl"], cwd, _GIT_TIMEOUT_SECONDS)
 	if code == 0:
-		return out.splitlines()
+		return out.splitlines() or [""]
 	code, out, _ = _run(["git", "--no-pager", *config_args, "config", "--get-all", f"remote.{name}.url"], cwd, _GIT_TIMEOUT_SECONDS)
 	return out.splitlines() if code == 0 else []
 
@@ -1126,6 +1129,8 @@ def _resolve_push_destination(
 	with _inline_git_config(config_args, config_environment):
 		urls = _remote_push_urls(token, cwd, config_args)
 		if urls:
+			if not all(urls):
+				return _PushDestination(label, (), "", "push URL is empty")
 			effective_urls = _effective_remote_push_urls(token, cwd, config_args)
 			if effective_urls is None:
 				return _PushDestination(label, (), "", "could not resolve the effective push URL")
@@ -1752,6 +1757,9 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			continue
 		if invocation.subcommand == "push" and invocation.warning:
 			uncertain_push_reasons.append(invocation.warning)
+		if invocation.subcommand == "commit" and invocation.env_directory_unresolved:
+			_request_confirmation("could not resolve env chdir for git commit; the session checkout may not be the committed repository")
+			continue
 		targets = (
 			_push_targets(invocation, checkout) if invocation.subcommand == "push" else
 			[_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", False, invocation.warning)]
