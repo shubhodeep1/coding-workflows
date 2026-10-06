@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -630,6 +632,230 @@ def test_run_validation_repo_checks_default_commands_do_not_reparse_shell_metach
 		assert not marker_path.exists()
 
 
+# --- Issue #6578: self-repo validation-harness templates come from the
+# verified support commit, never from the (integration) validation checkout.
+
+_TEMPLATE_REL = "workflow-templates/validation-harness/python-repo-checks/tests/20_import_audit.sh.j2"
+_STALE_HOST_TEMPLATE = '#!/usr/bin/env bash\npython3 "${SCRIPT_DIR}/_lib/import_audit.py"\n'
+_TRUSTED_CONTAINER_TEMPLATE = (
+	'#!/usr/bin/env bash\n'
+	'docker compose -f "${COMPOSE_FILE}" exec -T app python /tests/_lib/import_audit.py\n'
+)
+_JQ_SHIM = (
+	"#!/usr/bin/env python3\n"
+	"import json, sys\n"
+	"args = sys.argv[1:]\n"
+	"key = args[args.index('--arg') + 2]\n"
+	"expr, path = args[args.index('--arg') + 3], args[args.index('--arg') + 4]\n"
+	"value = json.load(open(path)).get(key)\n"
+	"if '[]' in expr:\n"
+	"    for item in value or []:\n"
+	"        print(item)\n"
+	"elif value:\n"
+	"    print(value)\n"
+)
+
+
+def _git(cwd: Path, *args: str) -> str:
+	return subprocess.run(
+		["git", *args], cwd=cwd, check=True, capture_output=True, text=True,
+	).stdout.strip()
+
+
+def _init_repo(path: Path, files: dict[str, str]) -> str:
+	path.mkdir(parents=True)
+	_git(path, "init", "-q", "-b", "main")
+	for rel, content in files.items():
+		target = path / rel
+		target.parent.mkdir(parents=True, exist_ok=True)
+		target.write_text(content, encoding="utf-8")
+	_git(path, "add", "-A")
+	_git(path, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "init")
+	return _git(path, "rev-parse", "HEAD")
+
+
+def _run_validate_staging(
+	tmp: Path,
+	*,
+	source_files: dict[str, str],
+	manifest_paths: list[str],
+	repository: str = "shubhodeep1/coding-workflows",
+	support_ref: str | None = None,
+	helper: Path = STAGE_WORKFLOW_SUPPORT,
+	workspace_template_symlink: Path | None = None,
+	workspace_template_directory: bool = False,
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+	overlay_files = {
+		"scripts/load_workflow_overlay.py": (REPO_ROOT / "scripts" / "load_workflow_overlay.py").read_text(encoding="utf-8"),
+		"ai-memory/schemas/workflow_overlay.v1.json": (REPO_ROOT / "ai-memory" / "schemas" / "workflow_overlay.v1.json").read_text(encoding="utf-8"),
+	}
+	source = tmp / "source"
+	source_sha = _init_repo(source, {**overlay_files, **source_files})
+	_git(source, "config", "uploadpack.allowAnySHA1InWant", "true")
+	workspace = tmp / "workspace"
+	_init_repo(workspace, {**overlay_files, _TEMPLATE_REL: _STALE_HOST_TEMPLATE})
+	if workspace_template_symlink is not None:
+		(workspace / _TEMPLATE_REL).unlink()
+		(workspace / _TEMPLATE_REL).symlink_to(workspace_template_symlink)
+	if workspace_template_directory:
+		(workspace / _TEMPLATE_REL).unlink()
+		(workspace / _TEMPLATE_REL).mkdir()
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	if not shutil.which("jq"):
+		(bin_dir / "jq").write_text(_JQ_SHIM, encoding="utf-8")
+		(bin_dir / "jq").chmod(0o755)
+	gitconfig = tmp / "gitconfig"
+	gitconfig.write_text(
+		f'[url "file://{source}"]\n'
+		f"\tinsteadOf = https://x-access-token:dummy@github.com/{repository}\n"
+		f"\tinsteadOf = https://x-access-token:dummy@github.com/shubhodeep1/coding-workflows\n"
+		"[protocol \"file\"]\n\tallow = always\n",
+		encoding="utf-8",
+	)
+	manifest = tmp / "manifest.json"
+	manifest.write_text(json.dumps({"optional_copy_files": manifest_paths}), encoding="utf-8")
+	runner_temp = tmp / "runner_temp"
+	runner_temp.mkdir()
+	env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k not in {"BASH_ENV", "ENV"}}
+	env.pop("VALIDATE_AUTHORIZED_TARGET_SHA", None)
+	env.pop("WORKFLOW_SUPPORT_SOURCE_REPO", None)
+	env.update({
+		"PATH": f"{bin_dir}:{os.environ['PATH']}",
+		"GIT_CONFIG_GLOBAL": str(gitconfig),
+		"GIT_CONFIG_NOSYSTEM": "1",
+		"GITHUB_WORKSPACE": str(workspace),
+		"GITHUB_REPOSITORY": repository,
+		"GITHUB_SERVER_URL": "https://github.com",
+		"GH_TOKEN": "dummy",
+		"WORKFLOW_SUPPORT_REF": support_ref or source_sha,
+		"RUNNER_TEMP": str(runner_temp),
+		"GITHUB_ENV": str(tmp / "github_env"),
+		"PYTHONDONTWRITEBYTECODE": "1",
+	})
+	result = subprocess.run(
+		["bash", str(helper), "validate", "--manifest", str(manifest)],
+		cwd=workspace, env=env, capture_output=True, text=True, timeout=120,
+	)
+	return result, workspace
+
+
+def test_self_repo_validation_templates_come_from_verified_support_commit() -> None:
+	# Regression for #6578: an older integration-branch template ran the import
+	# audit with the runner's Python; without the new copy path it still renders
+	# that host command, while the trusted copy renders the container command.
+	with tempfile.TemporaryDirectory() as tmpdir:
+		for baseline in (True, False):
+			fixture_root = Path(tmpdir) / ("baseline" if baseline else "fixed")
+			result, workspace = _run_validate_staging(
+				fixture_root,
+				source_files={_TEMPLATE_REL: _TRUSTED_CONTAINER_TEMPLATE},
+				manifest_paths=[] if baseline else [_TEMPLATE_REL],
+			)
+			assert result.returncode == 0, result.stdout + result.stderr
+			(workspace / "workflow-templates/validation-harness/_shared").mkdir(parents=True)
+			validation_manifest = fixture_root / "validate.yml"
+			validation_manifest.write_text(
+				"type: python-repo-checks\nslots:\n  project_name: staging-regression\n  canary_tools: [python3]\n",
+				encoding="utf-8",
+			)
+			rendered_root = fixture_root / "rendered"
+			render_result = subprocess.run(
+				[sys.executable, str(REPO_ROOT / "scripts/render_validation_templates.py"),
+				 "--manifest", str(validation_manifest),
+				 "--schema", str(REPO_ROOT / "scripts/templates/slot_manifest.schema.json"),
+				 "--templates-root", str(workspace / "workflow-templates/validation-harness"),
+				 "--output-root", str(rendered_root)],
+				cwd=workspace, capture_output=True, text=True, timeout=30,
+			)
+			assert render_result.returncode == 0, render_result.stdout + render_result.stderr
+			audit_text = (rendered_root / "tests/20_import_audit.sh").read_text(encoding="utf-8")
+			if baseline:
+				assert 'python3 "${SCRIPT_DIR}/_lib/import_audit.py"' in audit_text
+				assert "docker compose" not in audit_text
+			else:
+				assert 'docker compose -f "${COMPOSE_FILE}" exec -T app python /tests/_lib/import_audit.py' in audit_text
+				assert 'python3 "${SCRIPT_DIR}' not in audit_text
+				assert f"VALIDATE_TRUSTED_TEMPLATE_OVERRIDE path={_TEMPLATE_REL}" in result.stdout
+				assert "VALIDATE_TRUSTED_TEMPLATES staged=1" in result.stdout
+
+
+def test_self_repo_validation_templates_fail_closed_without_trusted_commit() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		result, workspace = _run_validate_staging(
+			Path(tmpdir),
+			source_files={_TEMPLATE_REL: _TRUSTED_CONTAINER_TEMPLATE},
+			manifest_paths=[_TEMPLATE_REL],
+			support_ref="0" * 40,
+		)
+		assert result.returncode != 0, result.stdout + result.stderr
+		assert "::error::Trusted validation-harness templates are unavailable" in result.stderr
+		assert (workspace / _TEMPLATE_REL).read_text(encoding="utf-8") == _STALE_HOST_TEMPLATE
+
+
+def test_self_repo_validation_templates_fail_closed_on_missing_trusted_asset() -> None:
+	missing_rel = "workflow-templates/validation-harness/python-repo-checks/tests/99_missing.sh.j2"
+	with tempfile.TemporaryDirectory() as tmpdir:
+		result, _ = _run_validate_staging(
+			Path(tmpdir),
+			source_files={_TEMPLATE_REL: _TRUSTED_CONTAINER_TEMPLATE},
+			manifest_paths=[_TEMPLATE_REL, missing_rel],
+		)
+		assert result.returncode != 0, result.stdout + result.stderr
+		assert f"Required trusted validation-harness template {missing_rel} is missing from" in result.stderr
+
+
+def test_self_repo_validation_templates_reject_symlinked_destination() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		fixture_root = Path(tmpdir)
+		outside_file = fixture_root / "outside.sh"
+		outside_file.write_text("untouched\n", encoding="utf-8")
+		result, workspace = _run_validate_staging(
+			fixture_root,
+			source_files={_TEMPLATE_REL: _TRUSTED_CONTAINER_TEMPLATE},
+			manifest_paths=[_TEMPLATE_REL],
+			workspace_template_symlink=outside_file,
+		)
+		assert result.returncode != 0, result.stdout + result.stderr
+		assert "::error::Refusing symlinked validation-harness template path" in result.stderr
+		assert (workspace / _TEMPLATE_REL).is_symlink()
+		assert outside_file.read_text(encoding="utf-8") == "untouched\n"
+
+
+def test_self_repo_validation_templates_reject_directory_destination() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		result, workspace = _run_validate_staging(
+			Path(tmpdir),
+			source_files={_TEMPLATE_REL: _TRUSTED_CONTAINER_TEMPLATE},
+			manifest_paths=[_TEMPLATE_REL],
+			workspace_template_directory=True,
+		)
+		assert result.returncode != 0, result.stdout + result.stderr
+		assert "::error::Refusing non-file validation-harness template path" in result.stderr
+		assert (workspace / _TEMPLATE_REL).is_dir()
+		assert list((workspace / _TEMPLATE_REL).iterdir()) == []
+
+
+def test_consumer_validation_templates_keep_existing_copy_path() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		result, workspace = _run_validate_staging(
+			Path(tmpdir),
+			source_files={_TEMPLATE_REL: _TRUSTED_CONTAINER_TEMPLATE},
+			manifest_paths=[_TEMPLATE_REL],
+			repository="other/repo",
+		)
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert "VALIDATE_TRUSTED_TEMPLATE" not in result.stdout
+		assert (workspace / _TEMPLATE_REL).read_text(encoding="utf-8") == _TRUSTED_CONTAINER_TEMPLATE
+
+
+def test_stage_workflow_support_helper_routes_self_repo_templates_to_trusted_commit() -> None:
+	helper = _helper_text()
+	assert "stage_self_repo_validation_template_entry" in helper
+	assert "workflow-templates/validation-harness/*" in helper
+	assert 'checkout_support_ref "${ORIGINAL_SCRIPT_REF}" "${SUPPORT_STAGE_ROOT}/trusted-templates"' in helper
+
+
 def main() -> int:
 	test_validate_workflow_bootstrap_uses_shared_helper_and_lists_template_assets()
 	test_validate_workflow_bootstrap_lists_prompt_assembly_assets()
@@ -641,6 +867,13 @@ def main() -> int:
 	test_renderer_dependency_step_runs_after_unrelated_earlier_failure()
 	test_renderer_dependency_step_checks_renderer_in_workspace_path()
 	test_skipped_renderer_preparation_surfaces_dependency_failure()
+	test_self_repo_validation_templates_come_from_verified_support_commit()
+	test_self_repo_validation_templates_fail_closed_without_trusted_commit()
+	test_self_repo_validation_templates_fail_closed_on_missing_trusted_asset()
+	test_self_repo_validation_templates_reject_symlinked_destination()
+	test_self_repo_validation_templates_reject_directory_destination()
+	test_consumer_validation_templates_keep_existing_copy_path()
+	test_stage_workflow_support_helper_routes_self_repo_templates_to_trusted_commit()
 	test_validate_workflow_bootstraps_revalidate_lifecycle_ai_memory_schemas()
 	test_validate_workflow_bootstraps_codex_heartbeat_support()
 	test_codex_heartbeat_helper_contract()

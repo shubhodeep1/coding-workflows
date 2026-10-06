@@ -159,6 +159,8 @@ analysis/workflow-optimization-2026-09-26-2.md
 analysis/workflow-optimization-2026-09-26-3.md
 analysis/workflow-optimization-2026-09-26.md
 changelog.d/.gitkeep
+changelog.d/6424-review-sandbox-unsafe-directory-category.md
+changelog.d/6521-validate-renderer-prep-always.md
 codex.md
 docs/INVENTORY.md
 docs/ai-tools-future-improvements.md
@@ -530,6 +532,7 @@ scripts/templates/slot_manifest.schema.json
 scripts/tg_helpers.sh
 scripts/transcript_archive.sh
 scripts/truncate_to_utf8_byte_cap.py
+scripts/unblock_ledger.py
 scripts/validate_changed_files_syntax.sh
 scripts/validate_driver.sh
 scripts/validate_editor_audit.sh
