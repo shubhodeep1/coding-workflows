@@ -659,9 +659,9 @@ jobs:
           fi
 
       # The model runs network-isolated with no GitHub credential, so the
-      # state of the PRs, issues, branches and runs the issue and questions
-      # reference is read here, on the host, and given to it as GITHUB FACTS
-      # (issue #6262 follow-up). One GraphQL call plus at most 5 run reads
+      # state of references in the current repository is read here, on the
+      # host, and given to it as GITHUB FACTS; other repositories are listed
+      # as not read (issue #6262 follow-up). One GraphQL call plus at most 5 run reads
       # (CLAUDE.md §15); fail-open, the prompt then just has no facts block.
       - name: Fetch GitHub facts for the questions
         if: steps.check_orchestrator.outputs.respond == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
@@ -676,16 +676,11 @@ jobs:
             echo "::notice::clarify_github_facts.py not staged; continuing without GitHub facts."
             exit 0
           fi
-          CONSUMER_REPOS_ARGS=()
-          if [ -f .github/ai/consumer_repos.json ]; then
-            CONSUMER_REPOS_ARGS=(--consumer-repos-file .github/ai/consumer_repos.json)
-          fi
           python3 scripts/clarify_github_facts.py \
             --repo "${{ github.repository }}" \
             --issue-number "${ISSUE_NUMBER}" \
             --text-file "${RUNTIME_DIR}/issue_body.txt" \
             --text-file "${RUNTIME_DIR}/clarification_comment.txt" \
-            "${CONSUMER_REPOS_ARGS[@]}" \
             --output "${RUNTIME_DIR}/github_facts.txt" \
             || echo "::warning::GitHub facts fetch failed (fail-open); continuing without them."
 

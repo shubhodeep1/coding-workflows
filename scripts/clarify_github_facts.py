@@ -18,17 +18,21 @@ questions). References are extracted from them:
     of an `Integration branch:` line. Bare names belong to `--repo`;
     `feature/x` in (or exists in) `owner/repo` belongs to that repo;
   - workflow runs: `.../owner/repo/actions/runs/<id>` URLs.
-Only the current repository (`--repo`) and the repositories listed in
-`--consumer-repos-file` (a JSON array of `owner/repo`) are read; other
-references are ignored. At most 30 issue/PR, 10 branch and 5 run references
-are read, and the issue itself (`--issue-number`) is skipped.
+Only the current repository (`--repo`) is read. Issue, PR, branch and run references
+to other repositories are listed as "not read (cross-repository)" (at most
+10). `--consumer-repos-file` is accepted but ignored for compatibility:
+issue authors must not be able to make the shared token read repositories
+they cannot see (security finding `cross-repository-facts-use-shared-pat`).
+At most 30 issue/PR, 10 branch and 5 run references are read, and the issue
+itself (`--issue-number`) is skipped.
 
 Output: the facts block on `--output` (empty when nothing was referenced),
 one line per reference, plus a one-line JSON summary on stdout.
 
 API calls (CLAUDE.md §15): one GraphQL request that reads every issue, PR and
 branch reference at once through aliases, plus one REST request per run
-reference (at most 5). No call is made when nothing is referenced.
+reference (at most 5), all in the current repository. No call is made when
+nothing in the current repository is referenced.
 
 Fail-open: a missing `gh`, an API error or a malformed response never fails
 the caller. The block then says which references could not be read, and the
@@ -49,6 +53,7 @@ from typing import Callable
 MAX_ISSUES = 30
 MAX_BRANCHES = 10
 MAX_RUNS = 5
+MAX_CROSS_REPO = 10
 MAX_TITLE = 120
 
 NAME = r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})"
@@ -85,6 +90,9 @@ def _title(value: object) -> str:
 def _is_branch(token: str, checkout: Path, check_checkout_paths: bool = True) -> bool:
 	if not BRANCH_RE.match(token) or ".." in token or token.endswith((".lock", "/")):
 		return False
+	# A foreign branch is explicitly qualified; local filename heuristics do not apply.
+	if not check_checkout_paths:
+		return True
 	if check_checkout_paths and ((checkout / token).exists() or (checkout / token.split("/", 1)[0]).exists()):
 		return False
 	last = token.rsplit("/", 1)[-1]
@@ -96,10 +104,16 @@ def extract_refs(text: str, repo: str, allowed: set[str], issue_number: int, che
 	issues: list[tuple[str, int]] = []
 	branches: list[tuple[str, str]] = []
 	runs: list[tuple[str, int]] = []
+	cross_repo: list[tuple[str, str, int | str]] = []
 
 	def add_issue(slug: str, number: int) -> None:
 		slug = slug.lower()
-		if slug not in allowed or (slug == repo.lower() and number == issue_number):
+		if slug not in allowed:
+			issue_cross_ref = ("issue", slug, number)
+			if issue_cross_ref not in cross_repo and len(cross_repo) < MAX_CROSS_REPO:
+				cross_repo.append(issue_cross_ref)
+			return
+		if slug == repo.lower() and number == issue_number:
 			return
 		if (slug, number) not in issues:
 			issues.append((slug, number))
@@ -112,7 +126,11 @@ def extract_refs(text: str, repo: str, allowed: set[str], issue_number: int, che
 		add_issue(repo, int(match.group(1)))
 	for match in RUN_REF_RE.finditer(text):
 		key = (match.group(1).lower(), int(match.group(2)))
-		if key[0] in allowed and key not in runs:
+		if key[0] not in allowed:
+			run_cross_ref = ("run", *key)
+			if run_cross_ref not in cross_repo and len(cross_repo) < MAX_CROSS_REPO:
+				cross_repo.append(run_cross_ref)
+		elif key not in runs:
 			runs.append(key)
 	# A backticked `owner/repo` looks like a one-slash branch; the allowed
 	# repositories are the only slugs that can matter here, so skip those.
@@ -122,15 +140,21 @@ def extract_refs(text: str, repo: str, allowed: set[str], issue_number: int, che
 		qualified = BRANCH_REPO_RE.match(text[end:])
 		branch_repo = qualified.group(1).lower() if qualified else repo.lower()
 		branch_ref = (branch_repo, token)
-		if branch_repo not in allowed or branch_ref in branches or token in ("main", "stable", "master") or token.lower() in allowed:
+		if branch_ref in branches or token in ("main", "stable", "master") or token.lower() in allowed:
 			continue
 		if (is_integration and ".." not in token) or _is_branch(token, checkout, branch_repo == repo.lower()):
-			branches.append(branch_ref)
-	return {"issues": issues[:MAX_ISSUES], "branches": branches[:MAX_BRANCHES], "runs": runs[:MAX_RUNS]}
+			if branch_repo not in allowed:
+				if ("branch", branch_repo, token) not in cross_repo and len(cross_repo) < MAX_CROSS_REPO:
+					cross_repo.append(("branch", branch_repo, token))
+			else:
+				branches.append(branch_ref)
+	return {"issues": issues[:MAX_ISSUES], "branches": branches[:MAX_BRANCHES], "runs": runs[:MAX_RUNS], "cross_repo": cross_repo}
 
 
 def build_query(repo: str, issues: list[tuple[str, int]], branches: list[tuple[str, str]]) -> tuple[str, dict]:
 	"""One aliased GraphQL query, and the alias map used to read it back."""
+	issues = [(slug, number) for slug, number in issues if slug == repo.lower()]
+	branches = [local_branch_ref for local_branch_ref in branches if local_branch_ref[0] == repo.lower()]
 	slugs = sorted({slug for slug, _ in issues} | {slug for slug, _ in branches})
 	aliases: dict = {}
 	parts = []
@@ -201,6 +225,8 @@ def collect(refs: dict, repo: str, runner: Runner) -> tuple[list[str], dict]:
 				else:
 					lines.append(f"- Branch `{value}` in {slug}: does not exist")
 	for slug, run_id in refs["runs"]:
+		if slug != repo.lower():
+			continue
 		stats["rest_calls"] += 1
 		rc, out = runner(["api", f"repos/{slug}/actions/runs/{run_id}"])
 		try:
@@ -215,6 +241,13 @@ def collect(refs: dict, repo: str, runner: Runner) -> tuple[list[str], dict]:
 			f"- Run {slug} {run_id}: \"{_title(run.get('name'))}\" {run.get('status') or '?'}/{run.get('conclusion') or 'none'} "
 			f"on `{run.get('head_branch') or '?'}` @ {str(run.get('head_sha') or '')[:12]} ({run.get('created_at') or '?'})"
 		)
+	for cross_kind, cross_slug, cross_number in refs.get("cross_repo", []):
+		if cross_kind == "issue":
+			lines.append(f"- {cross_slug}#{cross_number}: not read (cross-repository)")
+		elif cross_kind == "run":
+			lines.append(f"- Run {cross_slug} {cross_number}: not read (cross-repository)")
+		elif cross_kind == "branch":
+			lines.append(f"- Branch `{cross_number}` in {cross_slug}: not read (cross-repository)")
 	return lines, stats
 
 
@@ -223,6 +256,8 @@ def main(argv: list[str] | None = None, runner: Runner = _run_gh) -> int:
 	parser.add_argument("--repo", required=True)
 	parser.add_argument("--issue-number", type=int, default=0)
 	parser.add_argument("--text-file", action="append", required=True)
+	# Kept for older workflow callers, but never read: issue authors must not
+	# choose other repositories for the shared token to query.
 	parser.add_argument("--consumer-repos-file", default="")
 	parser.add_argument("--checkout", default=".")
 	parser.add_argument("--output", required=True)
@@ -237,12 +272,6 @@ def main(argv: list[str] | None = None, runner: Runner = _run_gh) -> int:
 		except OSError:
 			continue
 	allowed = {args.repo.lower()}
-	if args.consumer_repos_file:
-		try:
-			listed = json.loads(Path(args.consumer_repos_file).read_text(encoding="utf-8"))
-			allowed |= {str(slug).lower() for slug in listed if isinstance(slug, str) and SLUG_RE.match(slug)}
-		except (OSError, ValueError, TypeError):
-			pass
 	refs = extract_refs(text, args.repo, allowed, args.issue_number, Path(args.checkout))
 	lines, stats = collect(refs, args.repo, runner)
 	body = ""
@@ -257,6 +286,7 @@ def main(argv: list[str] | None = None, runner: Runner = _run_gh) -> int:
 				"issues": len(refs["issues"]),
 				"branches": len(refs["branches"]),
 				"runs": len(refs["runs"]),
+				"cross_repo": len(refs["cross_repo"]),
 				**stats,
 			}
 		)

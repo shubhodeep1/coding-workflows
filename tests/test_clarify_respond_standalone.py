@@ -202,6 +202,8 @@ def test_facts_are_fetched_on_the_host_and_given_to_the_model() -> None:
 		assert "steps.check_orchestrator.outputs.mode != 'standalone'" in steps[name]["if"]
 	assert names.index("Semantic cache lookup") < names.index("Fetch GitHub facts for the questions") < names.index("Remove git auth before Codex execution")
 	assert "python3 scripts/clarify_github_facts.py" in facts["run"]
+	assert "consumer-repos-file" not in facts["run"]
+	assert "consumer_repos.json" not in facts["run"]
 	run = steps["Build prompt and run Codex"]["run"]
 	assert run.index('echo "=== CLARIFICATION QUESTIONS ==="') < run.index('echo "=== GITHUB FACTS ==="')
 	stage = steps["Stage workflow support files"]["run"]
