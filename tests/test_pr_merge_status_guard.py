@@ -1465,6 +1465,23 @@ def test_per_command_config_commit_keeps_the_merged_pr_check(merged_branch_repo,
 	assert code == 2 and "Branch `feature/x`" in message
 
 
+@pytest.mark.parametrize("command", [
+	"if true; then git -c user.name=bot commit -m x; fi",
+	"if true; then git --config-env=user.name=BOT_NAME commit -m x; fi",
+	"if true; then GIT_CONFIG_COUNT=0 git commit -m x; fi",
+])
+def test_ambiguous_non_env_config_commit_warns_without_asking(merged_branch_repo, monkeypatch, capsys, command: str) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "checkout", "main")
+	monkeypatch.setattr(guard, "_read_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: [])
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": command}})
+	assert code == 0 and message == ""
+	response = json.loads(capsys.readouterr().out.splitlines()[-1])
+	assert "could not resolve git command directory" in response["systemMessage"]
+	assert "hookSpecificOutput" not in response
+
+
 def test_matching_refspec_on_unverified_remote_does_not_check_origin(merged_branch_repo, monkeypatch, capsys) -> None:
 	repo, _ = merged_branch_repo
 	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("must not query origin for another repository"))

@@ -193,6 +193,7 @@ class _GitInvocation(NamedTuple):
 	arguments: list[str]
 	warning: str = ""
 	config_override: bool = False
+	env_wrapped: bool = False
 
 
 class _GuardTarget(NamedTuple):
@@ -482,8 +483,9 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			if any("git" in word or "$" in word for word in tokens[env_index + 1:]):
 				invocations.append(_GitInvocation(checkout, {}, "push", [], "unparsed env wrapper", True))
 			continue
+		env_wrapped = index != env_index
 		env_cwd = working_directory
-		if index != env_index:
+		if env_wrapped:
 			config_override = True
 			for position in range(env_index + 1, index):
 				word = tokens[position]
@@ -543,6 +545,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			tokens[index], tokens[index + 1:],
 			"could not resolve git command directory; checking the session checkout instead" if uncertain else "",
 			config_override,
+			env_wrapped,
 		))
 	return invocations
 
@@ -1497,7 +1500,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		if invocation.subcommand == "push" and invocation.warning == "unparsed env wrapper":
 			unverified_destinations.add("unparsed env-wrapped Git command")
 			continue
-		if invocation.subcommand == "commit" and invocation.warning and invocation.config_override:
+		if invocation.subcommand == "commit" and invocation.warning and invocation.env_wrapped:
 			_request_confirmation("could not resolve env-wrapped git commit directory; the session checkout may not be the commit target")
 			continue
 		if invocation.subcommand == "push" and invocation.warning:
