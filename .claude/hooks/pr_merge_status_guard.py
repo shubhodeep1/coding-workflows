@@ -191,6 +191,7 @@ class _GitInvocation(NamedTuple):
 	arguments: list[str]
 	warning: str = ""
 	config_override: bool = False
+	env_directory_unresolved: bool = False
 
 
 class _GuardTarget(NamedTuple):
@@ -544,6 +545,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			("could not resolve env -C directory" if env_directory_unresolved else
 			 "could not resolve git command directory; checking the session checkout instead") if uncertain else "",
 			config_override,
+			env_directory_unresolved,
 		))
 	return invocations
 
@@ -1495,7 +1497,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
-		if invocation.subcommand == "commit" and invocation.warning == "could not resolve env -C directory":
+		if invocation.subcommand == "commit" and invocation.env_directory_unresolved:
 			unverified_destinations.add("could not resolve git commit directory; cannot verify the intended checkout")
 			continue
 		if invocation.subcommand == "push" and invocation.warning == "unparsed env wrapper":
