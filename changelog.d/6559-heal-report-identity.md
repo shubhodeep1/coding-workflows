@@ -1,0 +1,16 @@
+<!-- changelog: security -->
+- **The workflow failure heal intake now checks which repository a report really came from.** A report that names another registered repository as its source is rejected before anything is filed.
+
+Until now the intake only checked that a report's `source_repo` was in `.github/ai/consumer_repos.json`. Anything able to send the `repository_dispatch` could claim to be any registered repository and get a heal issue opened from made-up evidence (security finding `heal-dispatch-source-spoofing`). Both reporters now request a GitHub Actions OIDC token, audience `coding-workflows-heal-report`, and send it as `client_payload.report_identity`. The intake checks the token's signature against GitHub's JWKS. It also requires that the token names the claimed repository, comes from this repository's own reporter workflow (`workflow_failure_heal.yml` or `review_autofix.yml`), and matches the reporting run. It then confirms through the GitHub API that the claimed issue or pull request, the label and the failed runs all belong to that repository. Runs from elsewhere, or runs that did not fail, never reach the diagnosis model.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Extra GitHub API reads per report | 1 issue or pull request read; 1 events or compare read only when the label is gone or the PR head moved |
+| Extra run reads | 0 (the existing per-run jobs read is made once and reused) |
+| New dependencies | 0 (RS256 is verified with the Python standard library) |
+
+What this means for operators: the consumer `ai-workflow-failure-heal.yml` wrapper now grants `id-token: write`, and it arrives with the next workflow sync. Until a consumer syncs, its reports carry no token. Those reports are still accepted once the binding checks pass, with a Telegram WARNING, while the new `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH` variable is `false` (the default). Set it to `true` once every consumer has synced. `WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS` (default 3600) bounds how old a token may be when the intake gets to it. A rejected report logs `WORKFLOW_HEAL report_auth=rejected reason=<reason>`, sends a Telegram WARNING, and files nothing.
+
+### For contributors
+
+`scripts/workflow_failure_heal.py` gains `request-report-identity`, `extract-report-identity`, `verify-report-identity` and `bind-report`. `wrap-dispatch` gains `--report-identity-file`; without it the dispatch body is byte-identical to before. The intake's materialize step now reads `client_payload` from `GITHUB_EVENT_PATH` instead of an env binding, so the token is never echoed in the step's env block, and it hands the intake only the token's state. `WORKFLOW_HEAL_OIDC_JWKS_FILE` is a test hook (empty by default).

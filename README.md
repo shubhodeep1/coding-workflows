@@ -1554,6 +1554,29 @@ through `clarify → plan → implement → review`.
   accepts the older flat shape. A rejected dispatch logs the first 300
   characters of the API error as `detail=…` on the `error dispatch_failed` /
   `skip reason=dispatch_denied` line.
+- **Report authentication (issue #6559):** each reporter requests a GitHub
+  Actions OIDC token (audience `coding-workflows-heal-report`, so the
+  wrappers grant `id-token: write`) and sends it as
+  `client_payload.report_identity` (`identity=attached|absent` on the
+  reporter's log line; the token is never logged). The intake verifies a
+  token whenever one is present: RS256 against GitHub's JWKS, issuer,
+  audience, `iat` no older than `WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS`
+  (default 3600; `exp` is not enforced, so a queued intake still accepts it),
+  `repository` equal to `source_repo`, `job_workflow_ref` pointing at this
+  repository's `workflow_failure_heal.yml` or `review_autofix.yml`, and the
+  token's run equal to the report's `reporter_run_url`. It then binds the
+  claims through the GitHub API: the claimed issue / PR exists in
+  `source_repo` (with the claimed label, or a `labeled` event for it), an
+  autofix report's head is the PR head or an ancestor of it, and every
+  claimed run belongs to `source_repo` and failed (other runs are dropped; an
+  autofix report with no bound run is rejected). A report without a token
+  (a consumer whose wrappers have not synced yet) is accepted after the
+  binding checks with a Telegram WARNING while
+  `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH=false` (the default) and skipped when it
+  is `true`. Manual `workflow_dispatch` re-runs always take the binding
+  checks; `workflow_run` payloads come from GitHub's own event. Every
+  rejection fails closed with `WORKFLOW_HEAL report_auth=rejected reason=…`,
+  a Telegram WARNING, and no issue or comment.
 - **Intake (coding-workflows):** `scripts/workflow_failure_heal_intake.sh`
   re-validates the payload (`scripts/workflow_failure_heal.py validate-payload`),
   accepts reports only from this repo and the repos listed in
@@ -1951,6 +1974,8 @@ through `clarify → plan → implement → review`.
 | `WORKFLOW_HEAL_MAX_OPEN_ISSUES` | `10` | coding-workflows only. Max open `ai:workflow-heal` issues; further reports are logged with `skip reason=budget_exhausted` and a Telegram WARNING. |
 | `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY` | `20` | coding-workflows only. Max `ai:workflow-heal` issues opened per UTC day. |
 | `WORKFLOW_HEAL_TARGET_BRANCH` | `stable` | coding-workflows only. Branch a heal issue declares as `Target branch` so the fix PR is a hotfix on the stable line. A failed release run targets the branch it failed on instead, and a failed review/autofix run on a pull request in coding-workflows itself targets that PR's head branch (falling back to this value when the branch is gone). |
+| `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH` | `false` | coding-workflows only. `true` makes the heal intake skip `repository_dispatch` reports that carry no OIDC `report_identity` (`reason=unauthenticated_report`). `false` (transition default) accepts them after the binding checks, with a Telegram WARNING. A report that carries an identity is always verified. Only `true` / `false` are accepted; other values warn and use `false`. See [Workflow Failure Heal](#workflow-failure-heal). |
+| `WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS` | `3600` | coding-workflows only. Maximum age of a heal report identity's `iat` claim when the intake verifies it; older tokens are rejected as `identity_stale`. |
 | `WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED` | `true` | coding-workflows only. Lets the heal intake route review/autofix failures from this repository by who changed the crash file: `pr-self-inflicted` → diagnosis comment on the PR, no issue; `base-self-inflicted` → `ai:workflow-heal` issue targeting the PR's base branch (with orchestrator lineage for `orchestrator/project-<N>`). `false` skips the ownership check and routes both tokens as `workflow-defect` (the PR head branch target). See [Workflow Failure Heal](#workflow-failure-heal). |
 | `WORKFLOW_HEAL_PR_RECONCILE_ENABLED` | `true` | coding-workflows only. Lets the `heal-pr-reconcile` job in `internal-cancel-on-pr-close.yml` act when a pull request closes: close its heal PRs (and heal issues, as not planned) when it closed without merging, or move their heal commits onto its base and re-point them when it merged. `false` skips the job before checkout and leaves heal PRs as they are. See [Workflow Failure Heal](#workflow-failure-heal). |
 | `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` | `2` | Consecutive failed review/autofix runs on one pull request before `review_autofix.yml` reports the failure to the workflow failure heal intake. `1` reports every failure; a single failure below the threshold is left to the stall poller's retry. |
