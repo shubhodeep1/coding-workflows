@@ -859,9 +859,11 @@ def _env_split_string_has_guarded_git(command: str, depth: int = 0) -> bool:
 	except ValueError:
 		return bool(re.search(r"(?:^|[/\s])git\s+(?:commit|push)\b", command))
 	for tokens in segments:
-		for index, token in enumerate(tokens):
-			if token != "env" and not token.endswith("/env"):
-				continue
+		tokens, _ = _command_after_control_prefix(tokens)
+		index = 0
+		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
+			index += 1
+		while index < len(tokens) and (tokens[index] == "env" or tokens[index].endswith("/env")):
 			option_index = index + 1
 			while option_index < len(tokens):
 				option = tokens[option_index]
@@ -874,6 +876,11 @@ def _env_split_string_has_guarded_git(command: str, depth: int = 0) -> bool:
 					split_value = option.split("=", 1)[1]
 				elif option.startswith("-S") and option != "-S":
 					split_value = option[2:]
+				elif option in ("-u", "--unset", "-C", "--chdir"):
+					option_index += 2
+					continue
+				elif not (option.startswith("-") or re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", option)):
+					break
 				if split_value and (
 					# Shell or env expansion may supply the executable and its arguments.
 					"$" in split_value or "`" in split_value
@@ -882,6 +889,7 @@ def _env_split_string_has_guarded_git(command: str, depth: int = 0) -> bool:
 				):
 					return True
 				option_index += 1
+			index = option_index
 	return False
 
 

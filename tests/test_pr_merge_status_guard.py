@@ -1732,6 +1732,8 @@ def test_non_git_env_split_string_is_ignored(merged_branch_repo, capsys) -> None
 	repo, _ = merged_branch_repo
 	assert guard.evaluate(_bash_payload("env -S 'printf hello'") | {"cwd": str(repo)}) == (0, "")
 	assert guard.evaluate(_bash_payload("/bin/env -S 'printf hello'") | {"cwd": str(repo)}) == (0, "")
+	assert guard.evaluate(_bash_payload("printf '%s\\n' /tmp/env -S 'git push origin HEAD:feature/x'") | {"cwd": str(repo)}) == (0, "")
+	assert guard.evaluate(_bash_payload("env printf '%s\\n' /tmp/env -S 'git push origin HEAD:feature/x'") | {"cwd": str(repo)}) == (0, "")
 	assert capsys.readouterr().out == ""
 
 
