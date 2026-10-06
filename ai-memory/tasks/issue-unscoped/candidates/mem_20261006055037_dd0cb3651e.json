@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit.sh:1315 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, qwen_qwen3_7-plus]\n  PROBLEM: The oversized-count diagnostic omits `text_capped=${OVERSIZED_TEXT_CAPPED_COUNT}`, the value used in the partial-coverage marker decision.\n  WHY: The marker logic reads the value correctly, but its absence from this log line makes it harder to diagnose why the marker was or was not held.\n- scripts/codex_isolated_workspace.py:388 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: No defect was identified; an over-cap file that becomes unreadable during `_looks_binary` is classified as binary and excluded from `unscoped_text_capped`.\n  WHY: The reviewer describes this as intentional fail-safe behavior and a minor transient edge case, not a runtime failure.\n- .github/workflows/security-audit.yml:285-293 | severity=low | confidence=[2]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: No defect was identified in the workflow's forwarding of Telegram settings to the audit step.\n  WHY: The reviewer found the optional secret and shell-level guards correctly gate Telegram behavior.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cThe next run audits the full repository again\u201d after a full scan skips over-cap text files.\n  expected_change_site: scripts/security_audit.sh scope resolution and partial-coverage marker handling.\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The partial-coverage branch leaves the last-audited SHA unchanged, but does not persist or consult a partial-coverage state when choosing the next run\u2019s scope; if the marker\u2019s diff later falls to 200 or fewer changed files, lines 782\u2013800 select incremental scope, where an unchanged oversized file is outside the explicit scope and is not counted as text-capped by the exporter, so the run can advance the marker without inspecting that file.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/security_audit.sh:1315 | severity=NIT | confidence=4\n  PROBLEM: The diagnostic log line `echo \"security-audit: oversized scoped=${OVERSIZED_SCOPED_COUNT} unscoped=${OVERSIZED_UNSCOPED_COUNT}\"` does not include `text_capped=${OVERSIZED_TEXT_CAPPED_COUNT}` despite the variable being read at line 1314 with `read -r OVERSIZED_SCOPED_COUNT OVERSIZED_UNSCOPED_COUNT OVERSIZED_TEXT_CAPPED_COUNT`. The OVERSIZED_TEXT_CAPPED_COUNT value is the key decision variable that controls whether the last-audited-commit marker is held at line 2088.\n  WHY: This is a diagnostic-only gap. The marker logic at line 2088 correctly reads the variable, so the audit behaves correctly. But the diagnostic log line is the grep-friendly summary that operators and the workflow-log-analysis pipeline consume to understand why a run did or did not advance the marker. Without this field, the log cannot distinguish a full-coverage run from a partial-coverage run at this diagnostic checkpoint.\n- scripts/codex_isolated_workspace.py:388 | severity=NIT | confidence=2\n  PROBLEM: The `_looks_binary(node)` call at line 388 is reachable for files in the `over_file_cap` and `over_total_cap` paths. `_looks_binary` returns `True` on `OSError` (line 299-300: `return True`), meaning an unreadable over-cap file is classified as binary and excluded from `unscoped_text_capped`, so it does not hold the marker. This is the correct fail-safe direction but worth noting as documented behavior.\n  WHY: Not a runtime failure \u2014 the design is intentional and correct. Only a minor edge case where a large text file transiently becomes unreadable between the `walk_paths` call and the `_looks_binary` call. In that case the file is classified as binary and the marker advances, which is the conservative choice for availability.\n- .github/workflows/security-audit.yml:285-293 | severity=NIT | confidence=2\n  PROBLEM: The security-audit workflow now passes TG_BOT_SECRET, TG_ADMIN_CHAT_ID, and ALERT_MSG_LEVEL to the Run security audit step. The shell script sources tg_helpers.sh only when the script file exists and guards the tg_send_msg call with `declare -F tg_send_msg >/dev/null` at line 2091, so missing Telegram credentials fail open. The workflow also declares the secret as required=false at line 37-38. Both gating mechanisms are present and correct.\n  WHY: This is not a problem. The added Telegram surface is properly gated at both the workflow level (optional secret) and the shell level (conditional sourcing and function-existence guard). I reviewed this path because the cross-pollination summary raised no concern here, but the surface is new and worth verifying. No defect found.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cThe next run audits the full repository again\u201d after a full scan skips over-cap text files.\n  Expected change site: scripts/security_audit.sh scope resolution and partial-coverage marker handling.\n  Evidence of absence: The partial-coverage branch leaves the last-audited SHA unchanged, but does not persist or consult a partial-coverage state when choosing the next run\u2019s scope. If the marker\u2019s diff later falls to 200 or fewer changed files, lines 782\u2013800 select incremental scope. In that mode, an unchanged oversized file is outside the explicit scope and is not counted as text-capped by the exporter, so the run can advance the marker without inspecting that file.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/security_audit.sh:1315 | severity=NIT | confidence=4\n  PROBLEM: The diagnostic echo `echo \"security-audit: oversized scoped=${OVERSIZED_SCOPED_COUNT} unscoped=${OVERSIZED_UNSCOPED_COUNT}\"` omits `text_capped=${OVERSIZED_TEXT_CAPPED_COUNT}`. This variable drives the partial-coverage decision at line 2088, but the log line that prints every oversized count does not include it.\n  WHY: The marker-update logic reads the variable correctly, so there is no runtime failure. But when operators grep logs to diagnose why the marker was or was not held, the key decision variable is absent from the diagnostic line, forcing them to infer it from later `coverage=partial` lines.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "2b579b2b626d132011c7c411042dedfd8b655fddbf3417f4f7ae6cd935371c0d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6480,
+    "run_id": "37419131276",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37419131276",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006055037_dd0cb3651e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6480,
+    "run_id": "37419131276"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T05:50:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
