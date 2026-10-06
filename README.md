@@ -328,7 +328,8 @@ Review-blocked reissues carry parent orchestrator metadata only when its trackin
 
 Several Symphony-era behaviors are configured by optional committed files rather than additional repo vars:
 
-- `.github/ai/WORKFLOW.md` is opt-in and is loaded by `scripts/load_workflow_overlay.py`. On current HEAD it is validated by `ai-memory/schemas/workflow_overlay.v1.json`, and the shipped schema currently supports only `schema_version` plus `prompt_overrides[]` append/replace entries. This repository ships a no-op overlay (front matter `schema_version` only, no `prompt_overrides`): its presence sets `WORKFLOW_OVERLAY_ENABLED=true` so the loader path is exercised, but no rendered prompt is altered. Add `prompt_overrides[]` entries to it to tune per-mode prompts.
+- `.github/ai/WORKFLOW.md` is opt-in and is loaded by `scripts/load_workflow_overlay.py`. On current HEAD it is validated by `ai-memory/schemas/workflow_overlay.v1.json`, and the shipped schema currently supports only `schema_version` plus `prompt_overrides[]` append/replace entries. This repository ships a no-op overlay (front matter `schema_version` only, no `prompt_overrides`): its presence sets `WORKFLOW_OVERLAY_ENABLED=true` so the loader path is exercised, but no rendered prompt is altered. Add `prompt_overrides[]` entries to it to tune per-mode prompts. Review/autofix and validate fetch the overlay and fragments from one pinned default-branch commit into a private runtime directory; PR changes to them take effect only after merge. If that fetch fails, these workflows use stock prompts rather than the checkout overlay. `replace_path` is ignored with a warning for `mode-judge`, `mode-judge-*`, and `mode-orchestrate-poll-judge`; trusted `append_path` overrides still apply.
+  Missing or non-regular trusted fragments stop overlay staging rather than exporting an unusable override; a trusted blob read failure disables the overlay. Trusted Git calls do not prompt for credentials and time out after 60 seconds per call, disabling the overlay on timeout.
 - `.github/ai/concurrency_caps.yml` is opt-in and is parsed by `scripts/orchestrate_lib.py`. Missing or empty files disable per-state caps and restore the legacy uncapped dispatch behavior.
 - `.github/ai/workspace_hooks/<phase>/<hook>.sh` is opt-in and is executed by `scripts/run_workspace_hook.sh`. The shipped hook names are `after_create`, `before_run`, `after_run`, and `before_remove`; missing hook files are a no-op. Validation hooks run in a network-disabled, credential-free container on a screened workspace copy; they cannot access checkout `.git`, runner home, or secrets. To return data to the host, write non-executable `.txt` files with simple names (1–64 ASCII letters/digits/underscores/hyphens before `.txt`, starting with a letter or digit) under `validation/hook-output/<hook>/`, where `<hook>` is the current hook name. These files are untrusted data: do not source, execute, or interpret them as commands in host steps. Any other file change or deletion (including source, harness, configuration, or mode-only changes) rejects the entire return and stops validation, even for `after_run` and `before_remove`; migrate hooks that wrote elsewhere to this data-only namespace. Ordinary hook execution failures in `after_run` and `before_remove` remain nonfatal.
 - `state-snapshot` is the per-tick orchestrator artifact written by `scripts/build_state_snapshot.py` and uploaded from `orchestrate_poll.yml` when `STATE_SNAPSHOT_ARTIFACT_ENABLED!=false`. Branch publication of the rolling history to `STATE_SNAPSHOT_BRANCH_NAME` (default `state-snapshot`), capped by `STATE_SNAPSHOT_HISTORY_DEPTH`, is enabled by default (`STATE_SNAPSHOT_BRANCH_ENABLED=true`); set `STATE_SNAPSHOT_BRANCH_ENABLED=false` to disable it without affecting the artifact upload.
@@ -1106,10 +1107,20 @@ not delete wrappers that are already present in `.github/workflows/`.
 > (`hooks/pr_watch_guard.py`, §25). The former post-push PR status check-in
 > reminder, the permission-prompt logger and their helper scripts were retired
 > (see the retired-files paragraph below). Nothing to configure in the
-> consumer. For an unresolved `GIT_DIR+=` or `GIT_WORK_TREE+=` push override,
+> consumer. The merged-PR guard requests confirmation for any unparsable
+> Bash command, since an earlier complete line may execute even if a later
+> line has an unmatched quote. This also covers quoted or escaped `git` names.
+> For `>|`, an adjacent numeric prefix is a file descriptor, not a push refspec;
+> the guard checks the current branch for a default `git push origin`.
+> For an unresolved `GIT_DIR+=` or `GIT_WORK_TREE+=` push override,
 > the merged-PR guard ignores the unresolved value and checks the session checkout.
 > If that check does not block, it asks for confirmation because the pushed
 > repository may differ. Other unresolved push directories follow the same rule.
+> Shell control words such as `if`, `then`, `do`, and `!` (including repeated
+> prefixes) no longer hide a nested `git push`: the guard checks the session
+> checkout and, if it does not block, asks for confirmation because the
+> effective directory is uncertain. A `git commit` in the same uncertain
+> context remains warning-only.
 > When a `git push` source cannot be resolved locally (for example,
 > a shell-expanded source), the merged-PR guard asks for confirmation rather
 > than using the session checkout as a substitute for the pushed commit.
@@ -1117,14 +1128,32 @@ not delete wrappers that are already present in `.github/workflows/`.
 > `git push origin HEAD:$DEST`) also asks instead of checking the checkout branch.
 > If `--repo` and a positional remote are both supplied, the guard checks the
 > refspecs after that remote, not the remote name as a branch. If the local
-> remote-config lookup cannot identify the positional repository (including an
-> unconfigured path or URL), the guard asks instead of treating it as a refspec.
+> remote-config lookup cannot identify a positional remote name, the guard asks
+> instead of treating it as a refspec; a positional URL or path is compared with
+> origin and asks unless it is origin.
 
 > The merged-PR guard checks numeric push refspecs before a separate output
 > redirect (`git push origin 123 > /dev/null`). When an explicit push refspec
 > or option leaves the destination unknown, it requests confirmation rather
 > than checking an unrelated current branch. A push with no refspec keeps the
 > existing current-branch check.
+
+> **Source-repo `.claude/` parity:** On pushes to `main` that change
+> `workflow-templates/.claude/**`, `sync-claude-live-copies.yml` opens or
+> refreshes a PR copying template-only changes into this repo's `.claude/`.
+> This includes new templates without a live file and template changes missed
+> by a failed or superseded sync run. An intentional newer live-file edit, or
+> a file listed in `.github/ai/claude_template_divergence.json`, is not
+> overwritten. Copies preserve executable permissions; parity CI checks both
+> contents and execute bits. An unusable push `before` SHA skips syncing; the
+> parity CI test still reports missing or differing live files. Template or
+> live-path symlinks fail the sync/parity check instead of being followed,
+> preventing copies from reading credentials or writing outside `.claude/`.
+> For PRs into `main`, CI prepares template-only copies in its disposable
+> checkout before running parity tests, so those PRs can pass before the
+> post-merge sync opens a live-copy PR. A PR that edits its live copy but
+> leaves it mismatched still fails; push CI checks the committed tree without
+> preparation and reports any remaining drift.
 
 > **Retired upstream files are removed on sync:** the `update_workflows.yml`
 > step `Remove retired upstream files` reads the manifest
@@ -1253,6 +1282,92 @@ See [`workflow-templates/`](workflow-templates/) in this repository for ready-to
 | `workflow_failure_heal.yml` | `issues.labeled`, `pull_request.labeled` (human-needed escalation labels) | Reports an `ai:needs-human` / terminal-latch escalation to coding-workflows, whose `workflow-failure-heal-intake.yml` diagnoses the failed runs and opens an `ai:workflow-heal` issue for the pipeline to fix (in coding-workflows for workflow defects, in the consumer for consumer defects). On by default; disable via `WORKFLOW_HEAL_ENABLED=false`; see "Workflow Failure Heal" below |
 
 <!-- §Workflow Log Analysis And Improvement and §Workflow Log Analysis moved to ./probably_unnecessary_but_read_if_stuck.md — read it there if you need workflow-log-analysis pipeline runbook details (collector/analyzer contracts, phase behavior, env vars). -->
+
+### Isolated Codex agents
+
+Every Codex agent that reads untrusted text runs in a credential-free,
+network-isolated Docker container (`scripts/codex_isolated_exec.sh`), the same
+way clarify already did. That covers plan, implement (attempts, post-Codex
+repair, diagnose and the PR issue summary), validate, the validation discovery
+bootstrap, the orchestrator's decomposer and judges, workflow log analysis and
+the retro fan-out, check-failure triage, the security audit, the workflow
+failure heal intake and the activation verifier. A prompt injection in an issue, comment, PR diff or log
+can no longer read `GH_PAT`, the OpenRouter key, the Telegram secrets or the
+checkout's `.git`: none of them is inside the container, the container has no
+network, and model calls go through a host-side broker that holds the key and
+forwards one fixed endpoint for one model.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Container | `--network none --read-only --cap-drop ALL --security-opt no-new-privileges`, runner UID, no runner env |
+| Image | built per job from a fixed Dockerfile with the `CODEX_VERSION` Codex CLI (about 70 s the first time, cached after) |
+| Read-only snapshot | tracked files only, symlinks / `.git` / `.env*` / key files (including `.ssh`, `.npmrc`, `.netrc`) skipped, files > 2 MiB skipped, 50,000 files / 512 MiB cap; synthetic Git contains only allowed HEAD blobs |
+| Workspace write-back | credential-looking paths excluded; changed regular files only (mode 0644/0755), with staged replacements and rollback on failure; symlinks, special files or a host file changed meanwhile reject the transfer |
+| Implement dependencies | staged Node manifests and filtered `requirements.txt` / `pyproject.toml` dependencies (both when present) installed once per job in a credential-free container with `--network none`, using an allowlisted HTTPS registry proxy; installable Python source (`pyproject.toml`, or requirements with `setup.py`) runs separately offline, including Node/Python hybrids; a failed dev dependency install warns even if base dependencies install on retry; never copied back; when the proxy is unavailable, installation is skipped without restoring network access |
+| Claude engine (`claude_run`) | same container via `--engine claude`, pinned Claude Code CLI added to the image; the token stays in the host relay (`claude_anthropic_relay.py`); unavailable isolation returns `75` so the role runs codex (README "Claude engine") |
+
+Credential-store filenames such as `client_secret.json`, `credentials.conf`,
+`client_secret.properties`, `credentials.xml`, and `oauth.secret.properties` remain excluded, but
+ordinary source modules such as `secret_manager.py` and `credential_provider.py`
+remain available to the agent for planned edits.
+
+What this means for operators: runners need Docker (GitHub-hosted
+`ubuntu-latest` has it). A missing Docker or a failed image build fails the
+step with `::error::CODEX_ISOLATION …`; Codex never falls back to running on
+the host, and there is no variable that turns isolation off. The implement
+agent has no network, so it cannot `pip install` or `npm install` during the
+run; dependencies the repository declares are preinstalled, and it marks any
+other validation UNVERIFIED. Serena (and any MCP server) is not available
+inside the container, so isolated prompts carry no Serena hints; Semble
+results are rendered on the host and are unaffected. Workspace `after_run`
+hooks run from the copy taken before the editor. The persistent implement
+sandbox is removed by the job's final cleanup step. Details, including the
+trusted-copy rule for scripts the job runs after an agent wrote files, are in
+`agents.md` under "Isolated Codex agents".
+Review-blocked follow-up and existing-PR pushes use one-shot Git credentials;
+the poller does not write `GH_TOKEN` into shared worktree Git configuration.
+Before publishing a review-blocked `fix`, the poller checks staged paths against
+the complete PR file list (including rename source paths). Judge citations do
+not authorize extra files; an incomplete list or out-of-scope path rejects
+the whole fix, warns operators, and consumes a review-blocked retry without a push.
+An empty staged set is rejected too. Listing failures report the staged paths in
+the rejection log and alert to make the attempted fix diagnosable.
+With `ALLOW_WORKFLOW_EDITS=false`, edits to `scripts/`, `prompts/`,
+`.github/`, `workflow-templates/`, or `.claude/` reject the entire fix through
+the same retry path, even when the PR previously changed that path. The
+review-blocked fix sandbox keeps `GITHUB_WORKSPACE` pointed at the checkout's
+Git database and selects the validated per-PR `WORKSPACE_PATH`; an invalid
+workspace fails preparation before the writer starts. Integration-judge
+resolutions of protected files cannot delete the file or remove lines shared
+by both merge sides, including repeated lines. Such resolutions are rejected
+without a push and retried on the next poll tick.
+If the integration judge cannot publish a resolution, the poller warns and
+rechecks mergeability on the next tick instead of failing the project immediately.
+The merged-PR push guard checks `origin` as before. A push selecting a different
+repository with `--repo` or a positional remote asks for confirmation rather
+than treating the checkout's origin PR history as proof that the push is safe.
+When both are supplied, Git uses the positional repository; the guard checks
+that destination, not the `--repo` fallback.
+An explicit push URL asks even when its slug matches `origin`: Git may rewrite
+the URL with `url.*.insteadOf` or `pushInsteadOf`. The guard does not query
+origin PR history for that push, including deletion-only or tag-only pushes.
+Pushes with per-command Git configuration (`git -c` or `--config-env`) also ask:
+an override can redirect `origin`, so the guard does not use its stored PR history.
+The same confirmation applies to inline `GIT_CONFIG_*` or `GIT_CONFIG`
+assignments and to `env`-wrapped pushes; the guard does not use origin PR
+history to authorize those pushes. Wrapped commits still receive the normal
+merged-PR check in the worktree selected by `env -C` or `GIT_DIR`; if that
+location cannot be resolved, the commit asks, and an unparseable `env -S`
+command asks. A push from a directory the guard cannot resolve (including an
+appended `GIT_DIR+=` or `GIT_WORK_TREE+=`, whose value is never applied) is
+checked against the session checkout, which can still block, and otherwise asks.
+Leading shell redirections, including those following environment assignments,
+do not bypass the merged-PR check. A spaced, quoted or escaped digit before a
+redirection (`2 >out`, `'2'>out`) is a push refspec and gets the normal
+merged-PR check; only digits glued to the redirection (`2>&1`, `2>/dev/null`)
+are a file descriptor, as in Bash.
+An unresolved push source also requires confirmation instead of checking the
+session checkout's unrelated HEAD.
 
 ### Workflow file size limit
 
@@ -1800,6 +1915,7 @@ through `clarify → plan → implement → review`.
 | `EVENTS_JSONL_ENABLED` | `false` | Opt-in append-only JSONL mirror for stable workflow-event prefixes. When `true`, supported emitters append `.events/run-<GITHUB_RUN_ID\|local>.jsonl` under `GITHUB_WORKSPACE` after writing the original text line/comment marker; write failures emit `EVENTS_EMIT_FAIL` and fail open, so existing stderr/comment behavior remains authoritative. |
 | `REVIEW_MAX_RESUME_ROUNDS` | `3` | Maximum same-head partial-resume rounds before `review_autofix.yml` terminalizes the cached partial state as `round_budget_exhausted`; same-head no-progress rounds terminalize earlier as `no_progress`. |
 | `CODEX_VERSION` | `v0.114.0` | Pinned Codex CLI version retained by production paths that still use Codex outside the fully migrated review/autofix model pipeline. |
+| `DEPENDENCY_PROXY_ALLOWED_HOSTS` | `pypi.org,files.pythonhosted.org,registry.npmjs.org,registry.yarnpkg.com` | Complete comma- or whitespace-separated allowlist of public DNS names for the isolated implement/review dependency installs. Replace the list to add a public mirror; unlisted hosts, non-global DNS addresses and plain HTTP are refused. Direct-only egress is required on the runner; corporate upstream proxies are not chained. |
 | `OPENCODE_VERSION` | `1.18.23` | Exact OpenCode CLI pin used by the dispatchable `opencode-live-smoke.yml` rollout gate and the complete production review/autofix model pipeline. |
 | `ENABLE_SECURITY_PASS` | `true` | Enable the scheduled poller's mandatory current-head project security pass before validation or finalization. Set to `false` for the immediate operator kill switch. |
 | `MAX_SECURITY_PASS_CYCLES` | `5` | Maximum completed consolidated security-fix cycles before terminal `ai:security-pass-failed`. |
@@ -1977,6 +2093,14 @@ attempts of that role in the same job.
 | `.github/actions/install-claude` | Installs and verifies the pinned `@anthropic-ai/claude-code` on Node 22. |
 | `.github/workflows/claude-engine-smoke.yml` | Dispatch-only self-test per tool profile: offline checks, then the context gate, P5 denials and relay gate when a credential is available, or the codex fallback when it is not. |
 
+For a POST rejected during initial request or forwarded-header validation,
+the relay waits at most one second to drain a declared body with a short decimal `Content-Length`
+of at most `MAX_BODY` before returning 400. A client that withholds the body
+still receives the rejection; the 400 response has its own one-second socket
+timeout even if the drain deadline expires. Malformed or oversized lengths are
+rejected without draining. All rejection responses, including GET and CONNECT,
+use the same one-second socket timeout for the response write.
+
 **Which engine a role uses**, first match wins: the work item's labels
 (`ai:codex` beats `ai:engine-claude`, which also forces Opus 5.5 at `high`),
 `AI_ENGINE_<ROLE>`, `AI_ENGINE`, then the role's default in
@@ -2027,8 +2151,10 @@ in `claude-engine-smoke.yml`.
 writes (`CLAUDE_ENGINE_POOL_DIR`, default `$RUNNER_TEMP/claude-pool`: an
 `order` file, best account first, and one `0600` file per account under
 `tokens/`). A usage-limited or rejected account moves the run to the next one.
-When no CLI, policy, instructions file or account is usable, it logs
-`AI_ENGINE_FALLBACK role= reason=`, sends at most one Telegram note per job,
+When the isolation helper, Docker, the sandbox image, the policy, the
+instructions file or every account is unusable, it logs
+`AI_ENGINE_FALLBACK role= reason=` (`isolation_unavailable`, `support_missing`,
+`no_credential`, `all_accounts_failed`, …), sends at most one Telegram note per job,
 and returns `75`; the caller then runs its codex path unchanged. A crash
 returns non-zero and follows the role's existing retry rules; a timeout
 returns `124`. Runs are wrapped by `codex_stall_guard.sh --engine claude`,
@@ -2036,14 +2162,33 @@ which only adds `engine=claude` to its log lines, and every success prints the
 stream-json `result` usage line that `scripts/cost_audit.py` totals under
 "Claude engine usage".
 
+**Isolation.** `claude_run` never starts the CLI on the runner. Each account
+attempt runs `scripts/codex_isolated_exec.sh run --engine claude` (see
+"Isolated Codex agents"): the same credential-free container with
+`--network none`, a read-only root and no capabilities, with the pinned CLI
+added to the image. `scripts/claude_anthropic_relay.py` runs on the host as the
+broker: it alone reads the account's token file, swaps it into each request
+and forwards only the role's model and the probe model to `api.anthropic.com`;
+the container holds the placeholder `isolated-placeholder` and never sees
+`GH_TOKEN`, the OpenRouter key or the checkout's `.git`. A `read` profile sees
+a read-only copy of the workdir; a write profile edits a copy whose changed
+regular files are copied back. The CLI's session store is
+`$RUNNER_TEMP/claude-isolated-home`, mounted as `~/.claude`, so a later
+`claude_run` in the same job resumes its `session_id`. The settings, the
+`gh_api_write_guard.py` hook and the instructions are copied to `/support/` in
+the container. Docker missing or a failed image build makes `claude_run`
+return `75` (`isolation_unavailable`), and the role runs codex, which is
+isolated the same way. On a runner that runs as root the container gets
+`IS_SANDBOX=1`, which the CLI requires for `bypassPermissions` as root.
+
 **Context gate.** `--bare` is not used because it never reads OAuth
 credentials. The smoke run checks that a no-op run starts below 25,000 input
 tokens and that a marker placed only in the checkout's `CLAUDE.md` is not
-visible. If it is, set `hide_claude_md: true` in `claude_engine.json`:
-`claude_run` then moves `CLAUDE.md` out of the checkout for the call and puts
-it back afterwards. If the run creates a new `CLAUDE.md`, it keeps the new
-file, saves the original as `CLAUDE.md.original.<unique suffix>` beside it,
-and reports that path instead of overwriting the new content.
+visible. If it is, set `hide_claude_md: true` in `claude_engine.json`: the
+container's copy then leaves the top-level `CLAUDE.md` out (and out of its
+synthetic `.git`), and the write-back never creates or changes it. The host
+file is never moved; a `CLAUDE.md` the run writes is dropped and logged as
+`CODEX_ISOLATION transfer ignored=CLAUDE.md reason=hidden`.
 
 **Token broker.** The account tokens never live in coding-workflows or in a
 consumer repo. They are `CLAUDE_POOL_TOKEN_<NAME>` secrets in
@@ -2191,6 +2336,8 @@ Two optional inputs support the orchestrator's delta re-audits. `SECURITY_AUDIT_
 | `SECURITY_AUDIT_FIX_CYCLE_DIFFS` | _(empty)_ | Optional, findings-JSON-only path to a JSON array of fix-cycle diff entries (`cycle`, `since_sha`, `head_sha`, `files`). Files join the incremental scope; added/modified hunks are rendered into the prompt as newly introduced code. Fails open on any defect (warning, audit continues). Rejected in `issues` mode. |
 | `SECURITY_AUDIT_FIX_DIFF_MAX_LINES` | `1200` | Non-negative integer cap on the total hunk lines rendered from fix-cycle diffs; files past the cap are listed by name only. An invalid value warns and falls back to the default. |
 | `SECURITY_AUDIT_FIX_DIFF_MAX_BYTES` | `96000` | Non-negative integer cap on the total hunk bytes rendered from fix-cycle diffs; same fallback behaviour as the line cap. |
+| `SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES` | `16777216` | Positive per-file cap for oversized tracked files larger than the 2 MiB read-only snapshot limit. An explicitly scoped file (changed, prior-finding or fix-cycle) above it stops the audit before the model runs; in a full scan, another file above it is listed in the coverage note as not inspected. Explicitly scoped tracked files excluded by the read-only credential/hidden-path filter also stop the audit without exposing their contents. Invalid values warn and use the default. |
+| `SECURITY_AUDIT_OVERSIZED_TOTAL_MAX_BYTES` | `67108864` | Positive total cap for exported oversized files, also limited by the 256 MiB include cap. Explicitly scoped files take the budget first and exceeding it with them stops the audit. Invalid values warn and use the default. Full scans also chunk every other eligible oversized text file while the caps allow; binaries (a NUL byte in the first 8 KiB) and files past either cap are listed in the coverage note instead of failing the audit. Incremental scans report oversized files outside their explicit scope as a coverage note. |
 
 When an explicit diff pair is present, the prompt lists files changed in `base..head` and the deterministic post-filter suppresses findings outside that list. Without the pair, the `issues` mode retains marker-derived incremental behavior, while `findings-json` audits the full checkout because it deliberately performs no tracker reads. Both modes apply strict model-output validation, `SECURITY_AUDIT_CONFIDENCE_GATE`, and `SECURITY_AUDIT_FP_EXCLUSIONS` before results leave the engine.
 
