@@ -98,6 +98,16 @@ deployment fallback.
 | `ACTIVATION_VERIFY_ENABLED` | No | `true` | issue_pr_status, orchestrate_poll | Activation verification (port P4 of `docs/plans/replace-claude-sessions-with-cli-engine-plan.md`). After a PR merges into the default branch (integration branches excluded), the `activation-verify` job in `issue_pr_status.yml` runs `scripts/activation_verify.sh pr`; when an orchestrator project completes, the poller runs it in `project` mode against the default branch. PR mode reads the changed files from GitHub, using the merge diff only for a merge commit or known single-commit PR; project mode reads the final PR's files, or planned file hints when there is no final PR. An unavailable file list skips verification rather than grading incomplete work. The ACTIVATION_VERIFY role (`prompts/mode-activation-verify.txt`) grades the merged work LIVE or DORMANT and lists each gap as `code` or `operator`. The verdict is posted on the linked issue (else the PR) or the tracking issue, ending in `<!-- ai:activation:v1 verdict=<V> source=<pr-N|project-N> -->` only after gap writes succeed; `code` gaps become one standalone issue for the pipeline (body starts `<!-- ai:activation-fix:v1 source=... -->`, and its own merge is not verified again); `operator` gaps go to the `ai:operator-step` issue (`scripts/operator_step_issue.py`); one Telegram message (WARNING when DORMANT). If the fix-issue lookup fails, no new issue is created, but operator steps and a non-terminal verdict comment still surface the gaps. The poller retries a project only when a trusted partial marker exists, while fewer than three partial comments exist and for no longer than 30 minutes after the first; failed comment writes cannot extend this window but can cause another attempt within it. A failed first verdict write does not trigger a post-completion retry. PR mode needs another run after the lookup recovers. The model runs read-only without GitHub or Telegram credentials; its model API key is redacted from model-derived GitHub content. Never fails its workflow. Logs `ACTIVATION_VERIFY mode= item= verdict= code_gaps= operator_gaps= outcome= reason=`. |
 | `ACTIVATION_VERIFY_MODEL` | No | `WORKFLOW_EDITOR_MODEL`, else `openai/gpt-6-sol` | issue_pr_status, orchestrate_poll | Model for the activation verifier. |
 | `THINKING_LEVEL_ACTIVATION_VERIFY` | No | `high` | issue_pr_status, orchestrate_poll | Reasoning effort for the activation verifier. |
+| `UNBLOCK_JUDGE_ENABLED` | No | `true` | orchestrate_poll, unblock_judge | Unblock judge (Phase 7 of `docs/plans/replace-claude-sessions-with-cli-engine-plan.md`, see [Unblock judge](#unblock-judge)). `false` stops the poller's unblock scan, the judge runs, and the poller's fix-up adoption; items then wait for a person as before. |
+| `UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK` | No | `5` | orchestrate_poll | Legacy upper bound for unblock dispatch. The scan sends only one judge at a time (even if this is higher), oldest block first. Set `0` to disable dispatch. |
+| `UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES` | No | `30` | orchestrate_poll | How long an item must carry its block label (or a project must have been failed) before the scan sends it to the judge. |
+| `UNBLOCK_JUDGE_RETRY_HOURS` | No | `6` | orchestrate_poll | The scan skips an item whose newest trusted `ai:unblock` marker (a verdict, or a refreshed fix-up wait) is younger than this. |
+| `UNBLOCK_JUDGE_INFLIGHT_MINUTES` | No | `60` | orchestrate_poll | The scan skips an item with a queued or running judge, or one that started within this many minutes (read from the run name `Unblock judge #<n>`). |
+| `UNBLOCK_JUDGE_FIXUP_WAIT_HOURS` | No | `72` | unblock_judge | How long the judge waits for the fix-up issue of a `descope` or `operator_step` verdict to merge before it decides again. |
+| `UNBLOCK_JUDGE_MODEL` | No | `WORKFLOW_EDITOR_MODEL`, else `openai/gpt-6-sol` | unblock_judge | Model for the UNBLOCK_JUDGE role (both Codex and Claude run in a read-only, network-isolated container; their credentials stay in host-side relays. The Claude path follows `.github/ai/claude_engine.json` and falls back to isolated Codex only when unavailable). |
+| `THINKING_LEVEL_UNBLOCK_JUDGE` | No | `high` | unblock_judge | Reasoning effort for the unblock judge. |
+| `UNBLOCK_JUDGE_TIMEOUT_SECS` | No | `1500` | unblock_judge (direct script environment only) | Per-model timeout inside the isolated container; the workflow does not forward this repo variable. Must be a positive integer; invalid direct-run values log `UNBLOCK_JUDGE ... outcome=timeout_fallback` and use `1500` so a bad setting does not strand the item. The workflow job has a separate 45-minute timeout. |
+| `JUDGE_OUTPUT_FAILURE_MAX` | No | `3` | orchestrate_poll | Consecutive project-judge runs with no usable output (the model failed, or its output did not parse) before the project fails with `ai:blocked` for the unblock judge. Reset by the next parsed verdict. Must be a positive integer; invalid values fall back to `3`. |
 | `ALLOW_WORKFLOW_EDITS` | No | `true` | review_autofix, implement, update_workflows, orchestrate_poll | Allow AI edits to `.github/workflows` files and automatic wrapper updates. Set to `false` to opt out of auto-updates. Orchestrator conflict-dispatch (`_dispatch_review_for_conflicts`) forwards this value to the dispatched review workflow via `-f allow_workflow_edits=`. |
 | `ENABLE_AUTO_MERGE` | No | `true` | review_autofix, orchestrate_poll | Auto-merge PRs (squash) when review passes. Requires "Allow auto-merge" in repo settings. **Orchestrator integration PRs (head ref matching `ORCH_INTEGRATION_BRANCH_PATTERN`, default `^orchestrator/project-`) are unconditionally excluded** even when this is `true`: the orchestrator's `finalize_integration_merge_if_needed` handles their merge synchronously once the project is genuinely complete (all waves merged AND the default branch contains the integration tip). Without this exception, an integration-conflict self-healing dispatch could let review_autofix ship the integration branch partway through the project — stranding subsequent wave PRs on the integration branch with no path to default. The PR-metadata fetch fails closed: a transient API error suppresses auto-merge for that cycle (next sync event retries). See shubhodeep1/binance-blessings#135 for the regression case that motivated the exclusion. **forward-merge fallback PRs (head ref matching `^auto/forward-merge-stable-`, opened by `.github/workflows/forward-merge-stable-to-main.yml` when the automated stable→main merge hits conflict or branch protection) auto-merge via a real merge commit instead of a squash** — gated by `FORWARD_MERGE_FALLBACK_AUTO_MERGE` (default `true`; see its own row). These PRs MUST land as a 2-parent merge commit so `stable`'s tip stays reachable from `main`; `gh pr merge --squash --auto` (the regular auto-merge call) silently strips that ancestry, after which `.github/workflows/promote-main-to-stable.yml`'s pre-flight `git merge-base --is-ancestor HEAD origin/main` check refuses the next promote run with the "squash/rebase strips ancestry" error (see `.github/workflows/promote-main-to-stable.yml:115-126` and the CAUTION banner injected into every fallback PR body at `.github/workflows/forward-merge-stable-to-main.yml:265-270`). So the forward-merge branch instead calls `gh pr merge --merge --auto` — the unattended equivalent of the manual "Create a merge commit", which preserves ancestry. The `^auto/forward-merge-stable-` pattern is hard-coded — the branch prefix is owned by the forward-merge workflow and never varies per repo. Both the codex-agent "Enable auto-merge on PR" step and the `deterministic-skip-merge` sibling job apply this merge-commit path, so a small forward-merge fallback that happens to fall under `AUTOFIX_SKIP_MAX_ADDITIONS` / `AUTOFIX_SKIP_MAX_DELETIONS` cannot short-circuit to a squash merge via the deterministic-skip path either. Every reviewed or deterministic-skip auto-merge request is bound with `--match-head-commit` to the head that was reviewed or evaluated by the gate; an unavailable head fails closed, and a concurrent push is rejected so its `synchronize` run can evaluate the new head. **Limitation:** when required checks are pending, GitHub may retain an already-enabled auto-merge setting across later pushes; re-verifying that later head remains separate hardening work. |
 | `FORWARD_MERGE_FALLBACK_AUTO_MERGE` | No | `true` | review_autofix | Controls how forward-merge fallback PRs (head ref `^auto/forward-merge-stable-`, opened by `.github/workflows/forward-merge-stable-to-main.yml`) are merged when review passes with no changes needed. When `true` (default), `review_autofix.yml` enables auto-merge with a **real merge commit** (`gh pr merge --merge --auto`) so `stable`'s commits stay reachable from `main` and `.github/workflows/promote-main-to-stable.yml`'s pre-flight `git merge-base --is-ancestor HEAD origin/main` check keeps passing. Requires "Allow merge commits" **and** "Allow auto-merge" in repo settings; if either is off the enable call logs a `::warning::` and the PR is left for a manual "Create a merge commit". Applies to **both** flavours of fallback PR — conflict-resolved (body: "failed due to merge conflicts", resolved unattended by `[ai-merge-resolve]`) and branch-protection (body: "could not push directly"). Set to any non-`true` value to restore the previous behaviour of leaving every forward-merge fallback PR for a manual merge commit. Independent of `ENABLE_AUTO_MERGE`, but `ENABLE_AUTO_MERGE=false` still disables all auto-merge including this path. |
@@ -168,7 +178,7 @@ deployment fallback.
 | `MAX_VALIDATE_CYCLES` | No | `3` | orchestrate_poll | Maximum runtime validation cycles (initial run + fix/revalidate loops) before forcing `ai:validation-failed`. |
 | `ENABLE_SECURITY_PASS` | No | `true` | orchestrate_poll | Mandatory current-integration-head security pass before validation or finalization. Every completion route must obtain a clean SHA-bound pass; set to `false` for the immediate operator kill switch. |
 | `MAX_SECURITY_PASS_CYCLES` | No | `5` | orchestrate_poll, review_autofix | Maximum completed consolidated security-fix cycles before persistent findings terminalize the project as `ai:security-pass-failed`. The counter resets to `0` when a recorded clean pass is invalidated by an advancing integration head, so findings in newly-synced code get their own budget. Re-audits after a merged fix are delta audits (files changed since the last audited commit plus files cited by earlier findings), so the budget is spent on findings that persist, not on fresh samples of unchanged code. Also caps the single-issue security pass (`SINGLE_ISSUE_SECURITY_PASS_ENABLED`) per PR. |
-| `SINGLE_ISSUE_SECURITY_PASS_ENABLED` | No | `true` | review_autofix, security-audit | Single-issue security pass (port P1 of `docs/plans/replace-claude-sessions-with-cli-engine-plan.md`). Eligible standalone PRs into the default branch also bypass the deterministic doc-only/small-diff auto-merge path so they reach the audit gate after review. Same-repository heads that are not integration branches or `e2e-smoke-test` PRs wait until a security audit of the current head is clean; only a PR with exactly one linked issue may skip when that issue is a verified automation follow-up per `scripts/security_pass_skip.py`. It dispatches `security-audit.yml` (consumers: `ai-security-audit.yml`) with `ref` = the PR head branch and `pr_number`; the audit posts a `<!-- ai:single-issue-security-pass:v1 status=clean|findings|failed head=<sha> cycle=<n> -->` comment and re-runs the review on clean or failed. Its follow-up issues target the PR branch, so their merges start the next cycle. Only a result from the authenticated pipeline account for the live PR head is accepted; with `github.token` instead of `GH_PAT`, the expected account is `github-actions[bot]`. An audit without a findings summary, including `SECURITY_AUDIT_ENABLED=false`, reports `failed`, never `clean`. An unavailable account identity or comment history holds the merge. If the gate cannot write its hold decision to `GITHUB_OUTPUT`, the review job fails closed. After `MAX_SECURITY_PASS_CYCLES` cycles a completed audit with findings on the current head labels the PR `ai:security-pass-failed` and the gate outputs `exhausted=true`, which runs the review-blocked judge in security-exhaustion mode (`scripts/review_rb_judge_security_pass.sh`): with the open `[security-audit]` findings for the branch in its prompt, it may merge or `merge_with_followup` with medium/low findings open (they remain issues and, through `scripts/retarget_merged_base.sh`, are fixed against the default branch after the merge), or `fix` within `MAX_REVIEW_BLOCKED_RETRIES` (each such fix posts a `<!-- ai:single-issue-security-pass-extension:v1 head=<sha> -->` marker that grants one more audit cycle, so the fix is audited). High/critical/unrated findings block merges: while retries remain a merge verdict becomes a fix; any final-round verdict, including `close_and_reissue`, or a no-change fix holds the PR until a clean audit or human decision. `close_and_reissue` remains available before the final round. A head without a completed audit instead receives up to `SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS` additional trusted pending attempts beyond the cycle cap, then is labelled and held without `exhausted=true`; a completed findings audit for the same head still qualifies if a later attempt fails. A failed label write fails the review run closed so workflow recovery can retry it. A merge the review-blocked judge decides after autofix exhaustion also goes through this gate (outside security-exhaustion mode): a clean audit of the head merges, otherwise the judge's merge is held (`judge_action=security_hold`) while the audit runs, and the judge decides again when the audit re-runs the review. In security-exhaustion mode the judge additionally requires a completed audit matching `RB_JUDGED_HEAD_SHA`. `review_single_issue_security_pass.sh status` evaluates the gate without side effects and prints `SINGLE_ISSUE_SECURITY_PASS_STATE=` and, for an exhausted audited head, `SINGLE_ISSUE_SECURITY_PASS_AUDITED_HEAD=`. A failed audit dispatch at any cycle (for example a consumer wrapper without the `pr_number` input) logs a warning and holds the merge for a later review retry. The audit workflow needs `pull-requests: read` to verify the PR and `actions: write` to re-dispatch review using `github.token` when `GH_PAT` is absent. Logs `SINGLE_ISSUE_SECURITY_PASS mode= pr= head= outcome= reason= cycle=`. Set `false` to disable. |
+| `SINGLE_ISSUE_SECURITY_PASS_ENABLED` | No | `false` | review_autofix, security-audit | Single-issue security pass (port P1 of `docs/plans/replace-claude-sessions-with-cli-engine-plan.md`). Off by default since 2026-10-06: per-PR audits and the follow-up issues they opened drove most of the OpenRouter spend. Orchestrator projects keep their own security pass (`ENABLE_SECURITY_PASS`). Set `true` to opt in. When enabled, eligible standalone PRs into the default branch also bypass the deterministic doc-only/small-diff auto-merge path so they reach the audit gate after review. Same-repository heads that are not integration branches or `e2e-smoke-test` PRs wait until a security audit of the current head is clean; only a PR with exactly one linked issue may skip when that issue is a verified automation follow-up per `scripts/security_pass_skip.py`. It dispatches `security-audit.yml` (consumers: `ai-security-audit.yml`) with `ref` = the PR head branch and `pr_number`; the audit posts a `<!-- ai:single-issue-security-pass:v1 status=clean|findings|failed head=<sha> cycle=<n> -->` comment and re-runs the review on clean or failed. Its follow-up issues target the PR branch, so their merges start the next cycle. Only a result from the authenticated pipeline account for the live PR head is accepted; with `github.token` instead of `GH_PAT`, the expected account is `github-actions[bot]`. An audit without a findings summary, including `SECURITY_AUDIT_ENABLED=false`, reports `failed`, never `clean`. An unavailable account identity or comment history holds the merge. If the gate cannot write its hold decision to `GITHUB_OUTPUT`, the review job fails closed. After `MAX_SECURITY_PASS_CYCLES` cycles a completed audit with findings on the current head labels the PR `ai:security-pass-failed` and the gate outputs `exhausted=true`, which runs the review-blocked judge in security-exhaustion mode (`scripts/review_rb_judge_security_pass.sh`): with the open `[security-audit]` findings for the branch in its prompt, it may merge or `merge_with_followup` with medium/low findings open (they remain issues and, through `scripts/retarget_merged_base.sh`, are fixed against the default branch after the merge), or `fix` within `MAX_REVIEW_BLOCKED_RETRIES` (each such fix posts a `<!-- ai:single-issue-security-pass-extension:v1 head=<sha> -->` marker that grants one more audit cycle, so the fix is audited). High/critical/unrated findings block merges: while retries remain a merge verdict becomes a fix; any final-round verdict, including `close_and_reissue`, or a no-change fix holds the PR until a clean audit or human decision. `close_and_reissue` remains available before the final round. A head without a completed audit instead receives up to `SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS` additional trusted pending attempts beyond the cycle cap, then is labelled and held without `exhausted=true`; a completed findings audit for the same head still qualifies if a later attempt fails. A failed label write fails the review run closed so workflow recovery can retry it. A merge the review-blocked judge decides after autofix exhaustion also goes through this gate (outside security-exhaustion mode): a clean audit of the head merges, otherwise the judge's merge is held (`judge_action=security_hold`) while the audit runs, and the judge decides again when the audit re-runs the review. In security-exhaustion mode the judge additionally requires a completed audit matching `RB_JUDGED_HEAD_SHA`. `review_single_issue_security_pass.sh status` evaluates the gate without side effects and prints `SINGLE_ISSUE_SECURITY_PASS_STATE=` and, for an exhausted audited head, `SINGLE_ISSUE_SECURITY_PASS_AUDITED_HEAD=`. A failed audit dispatch at any cycle (for example a consumer wrapper without the `pr_number` input) logs a warning and holds the merge for a later review retry. The audit workflow needs `pull-requests: read` to verify the PR and `actions: write` to re-dispatch review using `github.token` when `GH_PAT` is absent. Logs `SINGLE_ISSUE_SECURITY_PASS mode= pr= head= outcome= reason= cycle=`; a disabled pass logs `outcome=skip reason=disabled`. |
 | `SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS` | No | `2` | review_autofix | Maximum trusted pending attempts to audit the current PR head with cycle numbers above the single-issue cycle cap. Earlier pending attempts do not consume this extra retry budget. Must be a positive integer; invalid values fall back to `2`. At the limit, hold and label the PR instead of permitting an unaudited security-exhaustion merge. |
 | `SECURITY_PASS_PENDING_STALE_HOURS` | No | `6` | review_autofix | Hours a same-head pending single-issue audit holds auto-merge before the next clean review re-dispatches the audit. Must be a positive integer; invalid values fall back to `6`. |
 | `MAX_SECURITY_PASS_FIX_REISSUES` | No | `2` | orchestrate_poll | Maximum times one consolidated security-fix issue that ended in `ai:implementation-failed` is closed and re-issued within a fix cycle before the pass fails as `ai:security-pass-failed` (recoverable via `/re-security-pass`). |
@@ -1066,8 +1076,9 @@ preserves today's behavior of installing every wrapper template.
 - `standard` installs `core` plus the orchestrator/validation additions listed
   in
   [`workflow-templates/profiles/standard.txt`](workflow-templates/profiles/standard.txt):
-  `ai-orchestrate.yml`, `ai-orchestrate-poll.yml`, `ai-validate.yml`, and
-  `review_rb_judge_dispatch.yml`.
+  `ai-orchestrate.yml`, `ai-orchestrate-poll.yml`,
+  `ai-validate.yml`,
+  `review_rb_judge_dispatch.yml`, and `unblock_judge_dispatch.yml`.
   The standard manifest also includes the optional `ai-sync-labels.yml`
   wrapper so stable-channel syncs can auto-install the label-sync entrypoint.
 - `full` installs every top-level wrapper listed in
@@ -1126,7 +1137,9 @@ not delete wrappers that are already present in `.github/workflows/`.
 > (`hooks/pr_watch_guard.py`, §25). The former post-push PR status check-in
 > reminder, the permission-prompt logger and their helper scripts were retired
 > (see the retired-files paragraph below). Nothing to configure in the
-> consumer. The merged-PR guard requests confirmation for any unparsable
+> consumer. The merged-PR guard checks a numeric push refspec even when output
+> is redirected; only an adjacent, unquoted descriptor is removed from the
+> parsed command. It requests confirmation for any unparsable
 > Bash command, since an earlier complete line may execute even if a later
 > line has an unmatched quote. This also covers quoted or escaped `git` names.
 > For `>|`, an adjacent numeric prefix is a file descriptor, not a push refspec;
@@ -1938,7 +1951,7 @@ through `clarify → plan → implement → review`.
 | `OPENCODE_VERSION` | `1.18.23` | Exact OpenCode CLI pin used by the dispatchable `opencode-live-smoke.yml` rollout gate and the complete production review/autofix model pipeline. |
 | `ENABLE_SECURITY_PASS` | `true` | Enable the scheduled poller's mandatory current-head project security pass before validation or finalization. Set to `false` for the immediate operator kill switch. |
 | `MAX_SECURITY_PASS_CYCLES` | `5` | Maximum completed consolidated security-fix cycles before terminal `ai:security-pass-failed`. |
-| `SINGLE_ISSUE_SECURITY_PASS_ENABLED` | `true` | Hold a clean standalone PR's auto-merge until a security audit of its head is clean (see the repository variables table) |
+| `SINGLE_ISSUE_SECURITY_PASS_ENABLED` | `false` | Opt-in: hold a clean standalone PR's auto-merge until a security audit of its head is clean (see the repository variables table) |
 | `SECURITY_PASS_PENDING_STALE_HOURS` | `6` | Hours before a pending single-issue audit is considered stale and retried on the next review run. |
 | `MAX_SECURITY_PASS_FIX_REISSUES` | `2` | Maximum re-issues of one `ai:implementation-failed` security-fix issue per fix cycle before terminal `ai:security-pass-failed`. |
 | `SECURITY_PASS_CONFIDENCE_GATE` | `8` | Minimum 1-10 confidence score for findings that block the project security pass. |
@@ -2833,6 +2846,150 @@ This does **not** reset the total `judge_cycle` counter (which is informational 
 Use this after manual intervention (e.g. fixing a problematic issue, merging a stuck PR, or adjusting `MAX_JUDGE_CYCLES`/`MAX_RECOVERY_ATTEMPTS` variables). There is no limit on how many times `/judge_resume` can be used.
 
 > **Note:** `/judge_resume` only applies to judge/recovery failures. For validation failures (`ai:validation-failed`), use `/revalidate` instead.
+
+### Unblock judge
+
+Every stop that used to wait for a person (`ai:blocked`, `ai:needs-human`,
+the scope and destructive latches, `ai:*-failed`, the escalated triage, heal
+and resolver chains, a failed project) now goes to the unblock judge
+(Phase 7 of `docs/plans/replace-claude-sessions-with-cli-engine-plan.md`).
+
+- **Scan.** On ticks with active projects, after the per-project loop,
+  `run_unblock_scan` in `scripts/orchestrate_poll_process.sh` makes one REST
+  search for open issues and pull requests with a block label
+  (`scripts/unblock_ledger.py labels`), one batched GraphQL query for their
+  label events and last comments, and one list of recent
+  `unblock_judge_dispatch.yml` runs. On ticks with no open tracking issue,
+  `Run unblock scan without active projects` runs the scan on its own with
+  `UNBLOCK_SCAN_SWEEP_ONLY=true`. `scripts/unblock_scan.py` picks items
+  blocked for at least `UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES`, with no trusted
+  `ai:unblock` marker younger than `UNBLOCK_JUDGE_RETRY_HOURS` and no judge
+  running, oldest first, at most one per tick. The scan waits for an active
+  judge; `UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK=0` disables dispatch.
+  Failed projects are added from the poller's own state and take priority in
+  the 30-item details batch. When more than 30 projects have failed, that
+  batch rotates each five-minute tick so none is permanently left out. A
+  incomplete comment window defers dispatch rather than risk an early repeat
+  of a marker edited outside the creation-ordered last 30 comments. The scan
+  checks the full paginated comment history for one rotating candidate per tick
+  before dispatching; a failed or partial history read defers that candidate
+  to another tick. This adds one conditional paginated REST read to the scan.
+- **Judge.** `unblock_judge_dispatch.yml` (from `workflow-templates/` in a
+  consumer) calls `.github/workflows/unblock_judge.yml`, which runs
+  `scripts/unblock_judge.sh` with the UNBLOCK_JUDGE role
+  (`prompts/mode-judge-unblock.txt`). It reads the item, its comments, the
+  verified failing run's log tail (omitted when the run cannot be bound to the
+  item by PR head/number, item branch or tracking run name; a matching issue
+  title alone is insufficient), the PR diff and, for a project, its state and
+  specification, and picks one verdict: `retry_budget`, `auto_answer`,
+  `descope`, `override_guard`, `reissue`, `accept_with_followup`,
+  `operator_step` or `close`.
+- **Hard limits** (`scripts/unblock_ledger.py`). A verdict is never repeated
+  for the same failure fingerprint; at most 2 rounds per item and 6 per
+  project; `override_guard` only for the scope and destructive latches on an
+  issue, never for `.github/**`, `.claude/**` or `workflow-templates/**` in
+  any repository, nor for `scripts/**` in this repository, and never for
+  deleting a canonical workflow source;
+  `accept_with_followup` never for a failed security pass or validation. The
+  model's output is validated before anything happens. Codex runs in a
+  network-isolated container with the OpenRouter key held by a host-side broker;
+  literal or encoded credentials in verdicts are rejected before GitHub writes.
+  Isolation failures do not fall back to host Codex. Claude uses the read-only tool profile.
+  A failed ledger-history read skips action for that run. The item verdict
+  is recorded before action; a failed project marker is repaired if the item
+  remains blocked for a later run. An unlabeled tracking issue is judged as a
+  failed project only while its latest trusted V2 state is `failed`. That state
+  is rechecked before recording the verdict and before applying the terminal
+  `ai:unblock-closed` label; a newer incomplete or malformed V2 write cannot
+  fall back to an older `failed` state for this decision. A failed read or late
+  resume withholds the label, though a resume after verdict recording can leave
+  an unacted-on verdict.
+  The poller accepts V1/V2 project state only from comments by its authenticated
+  `GH_PAT` login. It ignores state-shaped comments from other authors and skips
+  a tracking issue for that tick if the login cannot be resolved. A
+  `/judge_resume`, `/revalidate` or `/re-security-pass` reset requires either
+  that login or a human `OWNER`, `MEMBER` or `COLLABORATOR`; outside commenters
+  and other bots cannot clear project failure counters.
+  An unavailable identity also sends one CRITICAL Telegram alert per poll tick
+  when Telegram is configured; no unauthenticated state is acted on.
+  Scope overrides must match the trusted guard rejection exactly. Bulk-delete
+  overrides may approve a non-empty subset of its rejected paths only when the
+  failed implement run's matching Actions artifact verifies the same issue,
+  run and attempt; the next implement run rechecks the artifact before spending
+  the one-shot override. Missing or expired evidence keeps the guard in force.
+- **Acting** (`scripts/unblock_actions.py`). The verdict is recorded first,
+  then carried out with the existing commands: on a tracking issue
+  `/re-security-pass`, `/revalidate` or `/judge_resume --reset-recovery`; on
+  an issue `/approved` (after `ai:awaiting-approval`), `/answer` or
+  `/reclarify`; on a pull request a review dispatch. `descope` and
+  `operator_step` file a fix-up issue (for a project's item, the poller files
+  it into the current wave and resumes a failed project); once the fix-up
+  is closed with `ai:merged`, the next judge run posts the resume command.
+  A malformed pipeline-authored project fix-up request is skipped with
+  `UNBLOCK_PROJECT action=fixup comment=<id> outcome=invalid_request` in the
+  poll log; a failed request-list parse logs `outcome=request_parse_failed`.
+  A failed fix-up lookup or resume write leaves the wait marker pending for
+  another run; closing a fix-up without a merge does not resume its parent.
+  A failed review dispatch leaves the PR's block label in place for the next
+  scan. For `/approved`, the judge adds `ai:awaiting-approval`, removes the
+  block label, then posts the command so the implementation gate sees no
+  guard label. If posting fails, it restores the block label even when the
+  deletion returned 404 because another actor had already removed it;
+  a failed restoration sends a CRITICAL alert. Other issue and project resume
+  paths keep their old block label until the required phase label and command
+  are posted. If a standalone fix-up's wait marker cannot be posted, the judge
+  closes the newly created fix-up instead of leaving an untracked open issue;
+  a failed close is logged for recovery. A failed scope edit cannot be followed by `/approved`. A PR `reissue`
+  creates a standalone replacement before closing the PR;
+  a standalone `ai:security` issue reissue copies its finding marker and label
+  to the replacement before closing the original. If the marker is malformed,
+  no replacement is created and the original stays open. If the marker is
+  missing, or the issue belongs to a project, the original finding stays open.
+  PR project fix-ups and verdict history use the GitHub-reported
+  `orchestrator/project-<n>` base. Issue project fix-ups require the
+  `ai:orchestrator-managed` label and membership in the project's state;
+  missing or unverifiable state skips actuation until it can be confirmed.
+  For PRs with an untrusted author or head, issue-creating verdicts create
+  no issue: the judge explains the rejection, closes the PR, and warns via
+  Telegram. A fork PR targeting a project is never bound to project state;
+  its non-issue-creating, non-close verdicts are skipped. If the explanation write fails,
+  closure still proceeds and a failed close sends a failure WARNING.
+  `operator_step` also writes the `ai:operator-step` issue and sends a
+  Telegram WARNING. New operator steps are appended as keyed comments, never
+  written back into the shared issue body. The newest trusted comment for a
+  key is authoritative; older comments and legacy body entries remain as
+  history. A missing or stale tracker listing fails closed after bounded
+  retries rather than posting to a potentially non-canonical issue. Concurrent
+  first-time creation can leave duplicate tracker issues for reconciliation;
+  this writer does not close one containing entries it has not migrated.
+  `override_guard` extends the issue's `files_touched` block, or, for the
+  destructive latch, leaves a one-shot `override=bulk_delete` marker that
+  `implement.yml` spends on the issue's next run. The bulk-delete exception
+  applies only when every staged deletion is one of the approved paths;
+  missing or malformed path evidence leaves the normal threshold in force.
+- **Terminal.** When the caps are spent, or the item is still blocked 24
+  hours after the last round, the judge closes it as not planned with a
+  report, `ai:unblock-closed` and one Telegram CRITICAL. For a project the
+  poller then sets the state to `abandoned` and closes the tracking issue
+  only when its newest pipeline-authored verdict marker for that project is
+  `close`, no newer pipeline-authored state write supersedes it, and it still
+  matches a `failed` project state and the stop label when present (or it is
+  already `abandoned` and the close needs retrying). A label without that
+  authorization cannot hide a still-failed project from the unblock scan.
+  An `ai:security` finding instead remains open with its block label and
+  `ai:unblock-closed`, receives an explanation and a CRITICAL alert; the scan
+  skips it until a linked fix is verified merged or a person triages it.
+  For an issue or PR, a failed close leaves the terminal label unset so a
+  later scan can retry. If the close succeeds but adding the label fails,
+  the judge logs the failure and still sends the CRITICAL alert; the closed
+  item cannot be rediscovered by the open-item scan. If a project's label
+  write fails, it remains blocked and a CRITICAL alert reports that closure
+  is pending; the poller cannot abandon it without the label. An already-absent
+  block label does not prevent the judge from posting the resume command.
+
+A person can still act on any blocked item at any time; the judge only
+picks up what is still blocked. `UNBLOCK_JUDGE_ENABLED=false` turns all of
+it off.
 
 ### Validation Controls
 
