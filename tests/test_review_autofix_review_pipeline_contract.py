@@ -8063,6 +8063,7 @@ def main() -> int:
 	test_review_isolation_wiring_and_model_relay()
 	test_review_isolation_workspace_transfer_and_hostile_paths()
 	test_review_isolation_transfer_failure_evidence()
+	test_review_other_sandbox_transfer_failure_evidence()
 	test_review_isolation_traverses_only_allowed_github_directories()
 	test_review_isolation_unsafe_directory_reports_path_free_category()
 	test_review_isolation_rejection_line_drops_unknown_tokens()
@@ -8417,6 +8418,45 @@ def test_review_isolation_transfer_failure_evidence() -> None:
 		result = subprocess.run(["bash", "-c", "set -eu\n" + block], env=base_env,
 			capture_output=True, text=True, check=False)
 		assert result.returncode == 0 and not result.stderr
+
+
+def test_review_other_sandbox_transfer_failure_evidence() -> None:
+	rb_function = re.search(r"(?ms)^_review_rb_consume_transfer_marker\(\)\n\{.*?^\}", _rb_judge_text())
+	assert rb_function
+	resolver_function = re.search(r"(?ms)^_resolver_sandbox_opencode_attempt\(\)\n\{.*?^\}",
+		(REPO_ROOT / "scripts/review_conflict_resolve.sh").read_text())
+	assert resolver_function
+	branch_start = '  if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then'
+	resolver_branch = branch_start + resolver_function.group(0).split(branch_start, 1)[1].split('\n  if [ "${_codex_exit}" -eq 2 ]; then', 1)[0]
+	for diagnostic, expected in (
+		("symlink_in_path", " reason=symlink_in_path"),
+		("size_limit", " reason=size_limit"),
+		("result_conflicts_host", " reason=result_conflicts_host"),
+		("unsafe_directory category=dot_github_subtree depth=3+", " reason=unsafe_directory category=dot_github_subtree depth=3+"),
+		("unsafe_directory category=symlink depth=1", " reason=unsafe_directory category=symlink depth=1"),
+		("unsafe_directory category=evil depth=2", ""),
+		("unsafe_directory category=symlink depth=2 extra=path", ""),
+		("unsafe_directory dir=.claude/commands", " reason=unsafe_directory"),
+		("transfer_rollback_failed", " reason=transfer_rollback_failed"),
+	):
+		with tempfile.TemporaryDirectory() as td:
+			root = Path(td)
+			marker = root / "review_sandbox_transfer_failed"
+			marker.touch()
+			(root / "review_sandbox_transfer_reason_attempt-output").write_text(
+				f"::error::Review isolation snapshot or transfer rejected (ValueError) reason={diagnostic}\n"
+			)
+			base_env = {**os.environ, "RUNTIME_DIR": str(root), "tmp_output": str(root / "attempt-output")}
+			rb_result = subprocess.run(["bash", "-c", "set -eu\n" + rb_function.group(0) + '\n_review_rb_consume_transfer_marker "$tmp_output"'],
+				env=base_env, capture_output=True, text=True, check=False)
+			assert rb_result.returncode == 0, rb_result.stderr
+			assert rb_result.stderr == f"::error::Review-blocked judge sandbox transfer failed; refusing to commit the fix.{expected}\n"
+			marker.touch()
+			resolver_result = subprocess.run(["bash", "-c", 'set -eu\n_resolver_fail_closed() { echo "$1"; exit 7; }\nresolver_transfer_reason=""\nresolver_transfer_reason_file="${RUNTIME_DIR}/review_sandbox_transfer_reason_${tmp_output##*/}"\n' + resolver_branch],
+				env=base_env, capture_output=True, text=True, check=False)
+			assert resolver_result.returncode == 7, resolver_result.stderr
+			assert resolver_result.stderr == f"::error::Conflict resolver sandbox transfer failed; refusing to accept output.{expected}\n"
+			assert resolver_result.stdout == ("transfer_rollback_failed\n" if diagnostic == "transfer_rollback_failed" else "sandbox_transfer_failed\n")
 
 
 def test_review_isolation_traverses_only_allowed_github_directories() -> None:
