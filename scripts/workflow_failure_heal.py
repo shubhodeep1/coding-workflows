@@ -515,6 +515,9 @@ def build_issue_payload(
 	now = now or _utc_now()
 	body = sanitize_text(issue.get("body"))
 	markers = parse_heal_markers(body)
+	# The intake re-verifies lineage even for labelled reports: consumers may
+	# still run older pinned reporters that emit markers from ordinary issues.
+	is_heal_issue = HEAL_LABEL in _labels_of(issue)
 	comment_texts = [sanitize_text(comment.get("body")) for comment in comments if isinstance(comment, dict)]
 	run_refs = extract_run_refs([body, *comment_texts], repo)
 	if len(run_refs) < MAX_RUN_REFS:
@@ -537,8 +540,8 @@ def build_issue_payload(
 		"labels": _labels_of(issue)[:50],
 		"run_refs": run_refs,
 		"wrapper_sha": wrapper_sha if is_valid_sha(wrapper_sha) else None,
-		"source_gen": _positive_int(markers.get("gen")),
-		"source_root": markers.get("root") if re.fullmatch(r"[0-9a-f]{64}", markers.get("root") or "") else None,
+		"source_gen": _positive_int(markers.get("gen")) if is_heal_issue else None,
+		"source_root": markers.get("root") if is_heal_issue and re.fullmatch(r"[0-9a-f]{64}", markers.get("root") or "") else None,
 		"issue_excerpt": sanitize_text(body, ISSUE_EXCERPT_LIMIT),
 		"comments_excerpt": _build_recent_comments_excerpt(comment_texts),
 		"workflow_name": None,
@@ -805,6 +808,9 @@ def build_phase_failure_payload(
 		raise ValueError("run_id must be a positive integer")
 	body = sanitize_text(issue.get("body"))
 	markers = parse_heal_markers(body)
+	# The intake re-verifies lineage even for labelled reports: consumers may
+	# still run older pinned reporters that emit markers from ordinary issues.
+	is_heal_issue = HEAL_LABEL in _labels_of(issue)
 	comment_texts = [sanitize_text(comment.get("body")) for comment in comments if isinstance(comment, dict)]
 	streak = phase_failure_streak(comments, phase=phase, repo=repo, run_id=run_number, trusted_author=trusted_author)
 	run_refs = [{"repo": repo, "run_id": str(run_number), "url": f"https://github.com/{repo}/actions/runs/{run_number}"}]
@@ -821,8 +827,8 @@ def build_phase_failure_payload(
 		"labels": _labels_of(issue)[:50],
 		"run_refs": run_refs,
 		"wrapper_sha": wrapper_sha if is_valid_sha(wrapper_sha) else None,
-		"source_gen": _positive_int(markers.get("gen")),
-		"source_root": markers.get("root") if re.fullmatch(r"[0-9a-f]{64}", markers.get("root") or "") else None,
+		"source_gen": _positive_int(markers.get("gen")) if is_heal_issue else None,
+		"source_root": markers.get("root") if is_heal_issue and re.fullmatch(r"[0-9a-f]{64}", markers.get("root") or "") else None,
 		"issue_excerpt": sanitize_text(body, ISSUE_EXCERPT_LIMIT),
 		"comments_excerpt": _build_recent_comments_excerpt(comment_texts),
 		"workflow_name": single_line(workflow_name, 200),
@@ -1637,6 +1643,8 @@ def budget_decision(
 	now: datetime | None = None,
 	source_key: str | None = None,
 	linked_heal_issue: int | None = None,
+	source_issue: str | None = None,
+	trusted_author: str | None = None,
 ) -> dict[str, Any]:
 	"""Decide what to do with a fingerprinted failure given the heal issue list.
 
@@ -1655,8 +1663,9 @@ def budget_decision(
 	``heal_fix_branch_issue``), looked up in ``source_key``'s repository in
 	any state; the report continues that issue's lineage, so a heal fix PR
 	whose own review keeps failing reaches the lineage cap instead of opening
-	a fresh generation-1 heal issue each round. Neither changes the decision
-	when ``source_gen`` is given.
+	a fresh generation-1 heal issue each round. A reported ``source_gen`` /
+	``source_root`` takes precedence only when ``source_issue`` identifies a
+	listed heal issue authored by ``trusted_author`` with matching markers.
 	"""
 	now = now or _utc_now()
 	day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1670,6 +1679,9 @@ def budget_decision(
 	source_key_match = _SOURCE_KEY_RE.match(str(source_key or ""))
 	source_key = source_key if source_key_match else None
 	linked_heal_repo = source_key_match.group("repo") if source_key_match else ""
+	source_issue_match = _SOURCE_KEY_RE.fullmatch(str(source_issue or ""))
+	source_issue_number = _positive_int(str(source_issue).rsplit("#", 1)[-1]) if source_issue_match else None
+	verified_source_record: dict[str, Any] | None = None
 	if not source_key:
 		linked_heal_issue = None
 
@@ -1692,8 +1704,13 @@ def budget_decision(
 		number = _positive_int(issue.get("number"))
 		if number is None:
 			continue
-		markers = parse_heal_markers(issue.get("body"))
 		issue_repository = issue.get("repository") if is_valid_repo_slug(issue.get("repository")) else ""
+		if source_issue_number == number and source_issue_match and (
+			issue_repository == source_issue_match.group("repo")
+			or (not issue_repository and source_issue_match.group("repo") == preferred_repo)
+		):
+			verified_source_record = issue
+		markers = parse_heal_markers(issue.get("body"))
 		state = str(issue.get("state") or "").lower()
 		created = _parse_iso(issue.get("created_at"))
 		if created is not None and created >= day_start:
@@ -1735,14 +1752,44 @@ def budget_decision(
 	root = fp
 	prior_issue: int | None = None
 	prior_repo = ""
+	lineage_source = "none"
+	lineage_ignored_reason: str | None = None
 	if source_gen is not None:
-		gen = source_gen + 1
-		root = source_root or fp
-	elif prior_same_fp or prior_source_lineage:
+		if source_issue_number is None:
+			lineage_ignored_reason = "no_source_issue"
+		elif not trusted_author:
+			lineage_ignored_reason = "no_trusted_author"
+		elif verified_source_record is None:
+			lineage_ignored_reason = "not_heal_issue"
+		else:
+			recorded_user = verified_source_record.get("user")
+			recorded_author = verified_source_record.get("author") or (recorded_user.get("login") if isinstance(recorded_user, dict) else None)
+			recorded_markers = parse_heal_markers(verified_source_record.get("body"))
+			recorded_gen = _positive_int(recorded_markers.get("gen"))
+			if recorded_author != trusted_author:
+				lineage_ignored_reason = "untrusted_author"
+			elif recorded_gen is None or recorded_gen != _positive_int(source_gen):
+				lineage_ignored_reason = "gen_mismatch"
+			elif source_root and recorded_markers.get("root") != source_root:
+				lineage_ignored_reason = "root_mismatch"
+			else:
+				gen = recorded_gen + 1
+				root = recorded_markers.get("root") or fp
+				lineage_source = "verified_source_issue"
+				prior_issue = source_issue_number
+				prior_repo = source_issue_match.group("repo")
+		if lineage_ignored_reason:
+			lineage_source = "source_marker_ignored"
+	if lineage_source != "verified_source_issue" and (prior_same_fp or prior_source_lineage):
 		prior_lineage = sorted(prior_same_fp + prior_source_lineage)
 		prior_gen, prior_issue, prior_root, prior_repo = prior_lineage[-1]
 		gen = prior_gen + 1
 		root = prior_root
+		if not lineage_ignored_reason:
+			lineage_source = "fingerprint" if prior_lineage[-1] in prior_same_fp else "source"
+	lineage_metadata = {"lineage_source": lineage_source}
+	if lineage_ignored_reason:
+		lineage_metadata["lineage_ignored_reason"] = lineage_ignored_reason
 	if gen > max_depth:
 		return {
 			"action": "escalate",
@@ -1753,12 +1800,13 @@ def budget_decision(
 			"prior_repo": prior_repo,
 			"open_count": len(open_issues),
 			"today_count": created_today,
+			**lineage_metadata,
 		}
 	if len(open_issues) >= max_open:
-		return {"action": "budget_exhausted", "reason": "max_open_issues", "gen": gen, "root": root, "open_count": len(open_issues), "today_count": created_today}
+		return {"action": "budget_exhausted", "reason": "max_open_issues", "gen": gen, "root": root, "open_count": len(open_issues), "today_count": created_today, **lineage_metadata}
 	if created_today >= max_per_day:
-		return {"action": "budget_exhausted", "reason": "max_issues_per_day", "gen": gen, "root": root, "open_count": len(open_issues), "today_count": created_today}
-	return {"action": "open", "gen": gen, "root": root, "open_count": len(open_issues), "today_count": created_today}
+		return {"action": "budget_exhausted", "reason": "max_issues_per_day", "gen": gen, "root": root, "open_count": len(open_issues), "today_count": created_today, **lineage_metadata}
+	return {"action": "open", "gen": gen, "root": root, "open_count": len(open_issues), "today_count": created_today, **lineage_metadata}
 
 
 # ---------------------------------------------------------------------------
@@ -2452,6 +2500,8 @@ def _cmd_budget(args: argparse.Namespace) -> int:
 		max_per_day=args.max_per_day,
 		source_key=args.source_key or None,
 		linked_heal_issue=heal_fix_branch_issue(args.source_head_branch),
+		source_issue=args.source_issue or None,
+		trusted_author=args.trusted_author or None,
 	)
 	_write_json(decision)
 	return 0
@@ -2673,6 +2723,8 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--preferred-repo", default="")
 	p.add_argument("--source-gen", type=int)
 	p.add_argument("--source-root", default="")
+	p.add_argument("--source-issue", default="", help="owner/repo#N of the issue carrying the reported lineage")
+	p.add_argument("--trusted-author", default="", help="authenticated intake account that created heal issues")
 	p.add_argument("--max-depth", type=int, default=DEFAULT_MAX_LINEAGE_DEPTH)
 	p.add_argument("--max-open", type=int, default=DEFAULT_MAX_OPEN_ISSUES)
 	p.add_argument("--max-per-day", type=int, default=DEFAULT_MAX_ISSUES_PER_DAY)

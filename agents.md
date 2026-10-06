@@ -209,6 +209,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
     intake's authenticated account. Mismatches, self-repo identity failures and
     read failures skip
     with `WORKFLOW_HEAL skip reason=phase_report_unverified` and a WARNING.
+    Payload `source_gen` / `source_root` lineage is honoured only when the
+    listed `ai:workflow-heal` source issue was authored by the intake's current
+    authenticated account and its markers match; an account rotation makes
+    older heal issues' payload markers unverified (fingerprint lineage remains).
     Its comment streak trusts only the authenticated
     workflow account; cancellations and successful implementation break the
     streak, and unavailable identity or comment history reports the current
