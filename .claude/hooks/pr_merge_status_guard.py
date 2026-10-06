@@ -542,6 +542,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				invocations.append(_GitInvocation(checkout, {}, "push", [], "unparsed env wrapper", config_uncertain="unparsed env wrapper"))
 			continue
 		env_cwd = working_directory
+		env_directory_unresolved = False
 		env_chdir_seen = False
 		if index != env_index:
 			for position in range(env_index + 1, index):
@@ -1778,9 +1779,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
-		if invocation.subcommand == "commit" and invocation.warning == (
-			"could not resolve git command directory (env -C/--chdir); cannot check checkout PR history"
-		):
+		if invocation.subcommand == "commit" and invocation.env_directory_unresolved:
 			unknown_destination_reasons.append("could not resolve git commit directory; no checkout was checked; cannot verify its PR history")
 			continue
 		if invocation.subcommand == "push" and invocation.warning == "unparsed env wrapper":
@@ -1791,9 +1790,6 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			continue
 		if invocation.subcommand == "push" and invocation.warning:
 			uncertain_push_reasons.append(invocation.warning)
-		if invocation.subcommand == "commit" and invocation.env_directory_unresolved:
-			_request_confirmation("could not resolve env chdir for git commit; the session checkout may not be the committed repository")
-			continue
 		targets = (
 			_push_targets(invocation, checkout) if invocation.subcommand == "push" else
 			[_GuardTarget(invocation.cwd, invocation.environment, "", "HEAD", False, invocation.warning)]

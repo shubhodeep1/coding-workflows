@@ -2915,8 +2915,33 @@ is_valid_orchestrator_state_json() {
   ' >/dev/null 2>&1
 }
 
+UNBLOCK_TRUSTED_LOGIN=""
+UNBLOCK_TRUSTED_LOGIN_STATE="unset"
+ORCH_STATE_IDENTITY_ALERT_SENT="false"
+
+# The pipeline's own login (the GH_PAT user), resolved at most once per tick
+# with one `user` read; empty when it cannot be resolved.
+unblock_trusted_login() {
+  if [ "${UNBLOCK_TRUSTED_LOGIN_STATE}" = "unset" ]; then
+    UNBLOCK_TRUSTED_LOGIN="$(gh_retry _safe_gh_jq "user" --jq '.login // ""' 2>/dev/null || true)"
+    if [[ "${UNBLOCK_TRUSTED_LOGIN}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+      UNBLOCK_TRUSTED_LOGIN_STATE="ok"
+    else
+      UNBLOCK_TRUSTED_LOGIN=""
+      UNBLOCK_TRUSTED_LOGIN_STATE="failed"
+      if [ "${ORCH_STATE_IDENTITY_ALERT_SENT}" != "true" ]; then
+        tg_send_msg "Orchestrator cannot verify its GitHub identity for ${GITHUB_REPOSITORY}; tracking projects are paused. Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID:-unknown}")" "CRITICAL" >/dev/null 2>&1 || true
+        ORCH_STATE_IDENTITY_ALERT_SENT="true"
+      fi
+    fi
+  fi
+  printf '%s' "${UNBLOCK_TRUSTED_LOGIN}"
+}
+
 extract_latest_valid_orchestrator_state() {
   local comments_json="$1"
+  local trusted_comments_json
+  local ignored_count
   local candidate
   local candidate_body
   local candidate_state
@@ -2926,6 +2951,28 @@ extract_latest_valid_orchestrator_state() {
   EXTRACTED_STATE_JSON=""
   EXTRACTED_STATE_FALLBACK_USED="false"
   EXTRACTED_STATE_COMMENT_COUNT=0
+  EXTRACTED_STATE_IDENTITY_UNAVAILABLE="false"
+  EXTRACTED_STATE_UNTRUSTED_IGNORED=0
+
+  unblock_trusted_login >/dev/null
+  if [ -z "${UNBLOCK_TRUSTED_LOGIN}" ]; then
+    EXTRACTED_STATE_IDENTITY_UNAVAILABLE="true"
+    echo "::warning::ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=${TRACKING_NUM:-?} outcome=identity_unavailable" >&2
+    return 1
+  fi
+  if ! trusted_comments_json="$(printf '%s' "${comments_json}" | jq -c --arg login "${UNBLOCK_TRUSTED_LOGIN}" '[.[]? | select((.user.login // "") == $login)]' 2>/dev/null)"; then
+    # Do not mistake a failed author-filter parse for an empty, verified
+    # thread: the latter can trigger destructive state reconstruction.
+    trusted_comments_json='[]'
+    EXTRACTED_STATE_IDENTITY_UNAVAILABLE="true"
+    echo "::warning::ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=${TRACKING_NUM:-?} outcome=identity_unavailable reason=filter_failed" >&2
+    return 1
+  fi
+  ignored_count="$(printf '%s' "${comments_json}" | jq -r --arg login "${UNBLOCK_TRUSTED_LOGIN}" '[.[]? | select((.user.login // "") != $login and ((.body // "") | (contains("ORCHESTRATOR_STATE_V1") or contains("ORCHESTRATOR_STATE_V2"))))] | length' 2>/dev/null)" || ignored_count=0
+  EXTRACTED_STATE_UNTRUSTED_IGNORED="${ignored_count}"
+  if [ "${EXTRACTED_STATE_UNTRUSTED_IGNORED}" -gt 0 ]; then
+    echo "::warning::ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=${TRACKING_NUM:-?} outcome=filtered ignored=${EXTRACTED_STATE_UNTRUSTED_IGNORED}" >&2
+  fi
 
   # Try the V2 chunked-chain reader first.  If a complete V2 chain is
   # present (newest write wins), use it; otherwise fall through to the
@@ -2935,7 +2982,7 @@ extract_latest_valid_orchestrator_state() {
   local _v2_comments_file _v2_payload_file _v2_rc
   _v2_comments_file="$(mktemp "${TMPDIR:-/tmp}/orch_state_v2_comments.XXXXXX")"
   _v2_payload_file="$(mktemp "${TMPDIR:-/tmp}/orch_state_v2_payload.XXXXXX")"
-  printf '%s' "${comments_json}" > "${_v2_comments_file}"
+  printf '%s' "${trusted_comments_json}" > "${_v2_comments_file}"
   python3 scripts/orchestrate_state_v2.py extract \
     --comments-json "${_v2_comments_file}" > "${_v2_payload_file}" 2>/dev/null
   _v2_rc=$?
@@ -2984,7 +3031,7 @@ extract_latest_valid_orchestrator_state() {
       fi
       return 0
     fi
-  done < <(printf '%s' "${comments_json}" | jq -c '[.[] | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] | reverse | .[]?' 2>/dev/null || true)
+  done < <(printf '%s' "${trusted_comments_json}" | jq -c '[.[] | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] | reverse | .[]?' 2>/dev/null || true)
 
   return 1
 }
@@ -4681,6 +4728,7 @@ resolve_active_orchestrator_context_for_issue() {
   local tracking_state_json
 
   RESOLVED_ORCHESTRATOR_OWNED="false"
+  RESOLVED_ORCHESTRATOR_STATE_IDENTITY_UNAVAILABLE="false"
   RESOLVED_TRACKING_ISSUE=""
   RESOLVED_INTEGRATION_BRANCH=""
   RESOLVED_INTEGRATION_BRANCH_EXISTS="false"
@@ -4723,6 +4771,10 @@ resolve_active_orchestrator_context_for_issue() {
 
     tracking_state_json=""
     if ! extract_latest_valid_orchestrator_state "${tracking_comments}"; then
+      if [ "${EXTRACTED_STATE_IDENTITY_UNAVAILABLE}" = "true" ]; then
+        RESOLVED_ORCHESTRATOR_STATE_IDENTITY_UNAVAILABLE="true"
+        return 0
+      fi
       continue
     fi
     tracking_state_json="${EXTRACTED_STATE_JSON}"
@@ -13119,8 +13171,11 @@ prime_phase_concurrency_snapshot() {
 # the rare recovery-push path (the PR-named lookup below adds its own paged
 # calls only when $2 is given and the branch listing matched nothing).
 #
-# Args: $1 = head branch.  Echoes the databaseId of the freshest matching
-# in_progress/queued/pending review run younger than REVIEW_RUN_MAX_RUNTIME_MINUTES,
+# Args: $1 = head branch, $2 = optional PR number. Echoes the databaseId of
+# the freshest matching branch run or PR-named dispatch run; an unavailable
+# listing with a PR number returns "listing-incomplete" to defer the push.
+# Without a PR number the original branch-only, fail-open behavior remains.
+# Matches in_progress/queued/pending review runs younger than REVIEW_RUN_MAX_RUNTIME_MINUTES,
 # else nothing.  Freshness mirrors build_active_issue_set's review-run window
 # so a review still legitimately editing past STALL_THRESHOLD_MINUTES is not
 # clobbered, while a genuinely hung run older than the review budget does not
@@ -13188,6 +13243,9 @@ _direct_inflight_review_run_on_branch()
 	if [ "${_di_rc}" -ne 0 ] || [ -z "${_di_runs_json}" ] \
 		|| ! printf '%s' "${_di_runs_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
 		echo "STALL_INFLIGHT_DIRECT_CHECK branch=${_di_branch} rc=${_di_rc} runs=${_di_runs_total} live=${_di_runs_live} matched=0 outcome=listing_unavailable" >&2
+		if [[ "${_di_pr}" =~ ^[1-9][0-9]*$ ]]; then
+			printf '%s\n' "listing-incomplete"
+		fi
 		return 0
 	fi
 	_di_runs_total="$(printf '%s' "${_di_runs_json}" | jq -r 'length' 2>/dev/null || echo "invalid")"
@@ -14361,16 +14419,22 @@ STALL_EOF
               _rtr_wf_conclusion="${_rtr_wf_row}"
               _rtr_wf_created_at=""
             fi
-            if [ -n "${_rtr_wf_created_at}" ] && [[ "${_rtr_wf_created_at}" > "${_rtr_newest_completed_at}" ]]; then
+            # A tied failure must not be lost because the workflows were listed
+            # in a different order; completed run timestamps have second precision.
+            if [ -n "${_rtr_wf_created_at}" ] && { [[ "${_rtr_wf_created_at}" > "${_rtr_newest_completed_at}" ]] ||
+                 { [ "${_rtr_wf_created_at}" = "${_rtr_newest_completed_at}" ] &&
+                   [ -z "${_rtr_failed_conclusion}" ] &&
+                   [[ "${_rtr_wf_conclusion}" =~ ^(failure|cancelled|timed_out)$ ]]; }; }; then
               _rtr_newest_completed_at="${_rtr_wf_created_at}"
-            fi
-            case "${_rtr_wf_conclusion}" in
-              failure|cancelled|timed_out)
+              _rtr_failed_conclusion=""
+              _rtr_failed_wf=""
+              case "${_rtr_wf_conclusion}" in
+                failure|cancelled|timed_out)
                 _rtr_failed_conclusion="${_rtr_wf_conclusion}"
                 _rtr_failed_wf="${wf_candidate}"
-                break
                 ;;
-            esac
+              esac
+            fi
           done
           # Default-branch dispatches (issue #4701): a review run that
           # _dispatch_review_for_conflicts or the sweep dispatched is named
@@ -14378,10 +14442,10 @@ STALL_EOF
           # branch lookups above never see it. When they found no failed
           # run, look at the newest PR-named dispatch run (one paged lookup,
           # §15; see _pr_named_review_dispatch_runs for its call budget):
-          # it counts when it completed with a failure and is newer than
-          # every completed head-branch run seen. A missing createdAt counts
-          # as older, so this path only adds a redispatch when the failure
-          # is definitely the newest run.
+          # it counts when it completed with a failure and is no older than
+          # every completed head-branch run seen (ties prefer failure). A missing
+          # createdAt counts as older, so this path only adds a redispatch when
+          # the failure is newest or tied for newest.
           # An incomplete listing (issue #4927) can neither show the newest
           # PR-named run nor rule out a live one, so this cycle neither
           # redispatches nor pushes; the next poll cycle retries.
@@ -14411,7 +14475,7 @@ STALL_EOF
               _rtr_pr_named_created_at="${_rtr_pr_named_row#*$'\t'}"
               case "${_rtr_pr_named_conclusion}" in
                 failure|cancelled|timed_out)
-                  if [ -n "${_rtr_pr_named_created_at}" ] && [[ "${_rtr_pr_named_created_at}" > "${_rtr_newest_completed_at}" ]]; then
+                  if [ -n "${_rtr_pr_named_created_at}" ] && [[ "${_rtr_pr_named_created_at}" > "${_rtr_newest_completed_at}" || "${_rtr_pr_named_created_at}" = "${_rtr_newest_completed_at}" ]]; then
                     _rtr_failed_conclusion="${_rtr_pr_named_conclusion}"
                     _rtr_failed_wf="review run dispatched for PR #${pr_num}"
                   fi
@@ -14494,15 +14558,17 @@ STALL_EOF
               --argjson now "${_rtr_now_epoch}" \
               --argjson threshold "${_rtr_stall_secs}" '
               [.workflow_runs[]?
-               | select((.status // "") == "in_progress" or (.status // "") == "queued")
+               | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
                | select(
                    ((.head_branch // "") == $br)
                    or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
-                   # A default-branch dispatch (issues #4618, #4701) is named
-                   # for its PR; its head_branch is the default branch.
-                   or ($pr != "" and (.event // "") == "workflow_dispatch"
-                       and ((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
-                            or (.display_title // "") == ("AI Review [pr:" + $pr + "]")))
+                    # A default-branch dispatch (issues #4618, #4701) is named
+                    # for its PR; its head_branch is the default branch.
+                    or ($pr != "" and (.event // "") == "workflow_dispatch"
+                        and (((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+                              and ((.path // "") | test("(^|/)internal-review\\.yml(@.*)?$")))
+                             or ((.display_title // "") == ("AI Review [pr:" + $pr + "]")
+                              and ((.path // "") | test("(^|/)ai-review\\.yml(@.*)?$")))))
                  )
                | select(
                    (.name // "") == "AI Review"
@@ -14510,9 +14576,7 @@ STALL_EOF
                    or (.name // "") == "Review Autofix"
                    or (.name // "") == "Internal: AI Review & Autofix"
                    or (.name // "") == "Codex PR Self-Healing Semantic Agent"
-                   or ((.path // "") | endswith("ai-review.yml"))
-                   or ((.path // "") | endswith("internal-review.yml"))
-                   or ((.path // "") | endswith("review_autofix.yml"))
+                   or ((.path // "") | test("(^|/)(ai-review|internal-review|review_autofix)\\.yml(@.*)?$"))
                  )
                | ([.run_started_at, .created_at]
                   | map(select(type == "string" and . != ""))[0] // "") as $ts
@@ -14952,14 +15016,14 @@ invoke_stall_judge() {
                or (.name // "") == "Review Autofix"
                or (.name // "") == "Internal: AI Review & Autofix"
                or (.name // "") == "Codex PR Self-Healing Semantic Agent"
-               or (.path // "" | endswith("ai-review.yml"))
-               or (.path // "" | endswith("internal-review.yml"))
-               or (.path // "" | endswith("review_autofix.yml")))
-      | select(($head_ref != "" and (.head_branch // "") == $head_ref) or ($head_sha != "" and (.head_sha // "") == $head_sha)
-               or ($pr != ""
-                   and (.event // "") == "workflow_dispatch"
-                   and ((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
-                        or (.display_title // "") == ("AI Review [pr:" + $pr + "]"))))
+               or (.path // "" | test("(^|/)(ai-review|internal-review|review_autofix)\\.yml(@.*)?$")))
+       | select(($head_ref != "" and (.head_branch // "") == $head_ref) or ($head_sha != "" and (.head_sha // "") == $head_sha)
+                or ($pr != ""
+                    and (.event // "") == "workflow_dispatch"
+                    and (((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+                          and ((.path // "") | test("(^|/)internal-review\\.yml(@.*)?$")))
+                         or ((.display_title // "") == ("AI Review [pr:" + $pr + "]")
+                          and ((.path // "") | test("(^|/)ai-review\\.yml(@.*)?$"))))))
       | {id: .id, workflow: (.name // ""), conclusion: (.conclusion // ""), status: (.status // ""), head_branch: (.head_branch // ""), created_at: (.created_at // "")}
     ]
     | sort_by(.created_at)
@@ -16191,25 +16255,7 @@ _reconcile_merged_pr_issue() {
 # written by the per-project loop and read by run_unblock_scan. No API call.
 UNBLOCK_FAILED_PROJECTS_FILE="$(mktemp "${RUNNER_TEMP:-/tmp}/unblock_failed_projects.XXXXXX" 2>/dev/null || echo "${RUNNER_TEMP:-/tmp}/unblock_failed_projects.txt")"
 : > "${UNBLOCK_FAILED_PROJECTS_FILE}" 2>/dev/null || true
-UNBLOCK_TRUSTED_LOGIN=""
-UNBLOCK_TRUSTED_LOGIN_STATE="unset"
-
-# The pipeline's own login (the GH_PAT user), resolved at most once per tick
-# with one `user` read; empty when it cannot be resolved.
-unblock_trusted_login() {
-  if [ "${UNBLOCK_TRUSTED_LOGIN_STATE}" = "unset" ]; then
-    UNBLOCK_TRUSTED_LOGIN="$(gh_retry _safe_gh_jq "user" --jq '.login // ""' 2>/dev/null || true)"
-    if [[ "${UNBLOCK_TRUSTED_LOGIN}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
-      UNBLOCK_TRUSTED_LOGIN_STATE="ok"
-    else
-      UNBLOCK_TRUSTED_LOGIN=""
-      UNBLOCK_TRUSTED_LOGIN_STATE="failed"
-      # A failed identity probe stops every project; alert once, not per issue.
-      tg_send_msg "Orchestrator cannot verify its GitHub identity for ${GITHUB_REPOSITORY}; tracking projects are paused. Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID:-unknown}")" "CRITICAL" >/dev/null 2>&1 || true
-    fi
-  fi
-  printf '%s' "${UNBLOCK_TRUSTED_LOGIN}"
-}
+# unblock_trusted_login and its cache are defined above the state extractor.
 
 # Per project, before any command handler. Returns 10 only when the
 # ai:unblock-closed label has the newest trusted close verdict for this project
@@ -16854,6 +16900,10 @@ run_standalone_stall_recovery() {
       t_state_json=""
       if extract_latest_valid_orchestrator_state "${t_comments}"; then
         t_state_json="${EXTRACTED_STATE_JSON}"
+      fi
+      if [ "${EXTRACTED_STATE_IDENTITY_UNAVAILABLE}" = "true" ]; then
+        echo "::warning::Pipeline identity unavailable; skipping standalone stall recovery this tick (managed issue set cannot be verified)."
+        return 0
       fi
       managed_nums="$(printf '%s' "${t_state_json}" | jq -r '.waves[]?.issues[]?.github_issue // empty' 2>/dev/null || true)"
       if [ -n "${managed_nums}" ]; then
@@ -17655,15 +17705,17 @@ STALL_EOF
                 --argjson now "${_std_rtr_now_epoch}" \
                 --argjson threshold "${_std_rtr_stall_secs}" '
                 [.workflow_runs[]?
-                 | select((.status // "") == "in_progress" or (.status // "") == "queued")
+                 | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
                  | select(
                      ((.head_branch // "") == $br)
                      or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
-                     # A default-branch dispatch (issues #4618, #4701) is named
-                     # for its PR; its head_branch is the default branch.
-                     or ($pr != "" and (.event // "") == "workflow_dispatch"
-                         and ((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
-                              or (.display_title // "") == ("AI Review [pr:" + $pr + "]")))
+                      # A default-branch dispatch (issues #4618, #4701) is named
+                      # for its PR; its head_branch is the default branch.
+                      or ($pr != "" and (.event // "") == "workflow_dispatch"
+                          and (((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+                                and ((.path // "") | test("(^|/)internal-review\\.yml(@.*)?$")))
+                               or ((.display_title // "") == ("AI Review [pr:" + $pr + "]")
+                                and ((.path // "") | test("(^|/)ai-review\\.yml(@.*)?$")))))
                    )
                  | select(
                      (.name // "") == "AI Review"
@@ -17671,9 +17723,7 @@ STALL_EOF
                      or (.name // "") == "Review Autofix"
                      or (.name // "") == "Internal: AI Review & Autofix"
                      or (.name // "") == "Codex PR Self-Healing Semantic Agent"
-                     or ((.path // "") | endswith("ai-review.yml"))
-                     or ((.path // "") | endswith("internal-review.yml"))
-                     or ((.path // "") | endswith("review_autofix.yml"))
+                     or ((.path // "") | test("(^|/)(ai-review|internal-review|review_autofix)\\.yml(@.*)?$"))
                    )
                  | ([.run_started_at, .created_at]
                     | map(select(type == "string" and . != ""))[0] // "") as $ts
@@ -19006,21 +19056,12 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   fi
   rm -f "${_comments_raw}"
 
-  # State is executable pipeline control data, not issue discussion. Reuse
-  # the same authenticated GH_PAT identity as the unblock ledger/scan.
-  unblock_trusted_login >/dev/null
-  if [ -z "${UNBLOCK_TRUSTED_LOGIN}" ]; then
-    echo "::warning::Cannot verify state comment author for tracking issue #${TRACKING_NUM}; skipping this tick."
-    continue
-  fi
-  TRUSTED_STATE_COMMENTS="$(printf '%s' "${COMMENTS}" | jq -c --arg login "${UNBLOCK_TRUSTED_LOGIN}" '[.[] | select((.user.login // "") == $login)]' 2>/dev/null)" || {
-    echo "::warning::Cannot filter state comments for tracking issue #${TRACKING_NUM}; skipping this tick."
-    continue
-  }
+  # State is executable pipeline control data; the extractor verifies every
+  # comment's author before either V1 or V2 parsing.
   STATE_JSON=""
   STATE_COMMENT_COUNT=0
   STATE_FALLBACK_USED="false"
-  if extract_latest_valid_orchestrator_state "${TRUSTED_STATE_COMMENTS}"; then
+  if extract_latest_valid_orchestrator_state "${COMMENTS}"; then
     STATE_JSON="${EXTRACTED_STATE_JSON}"
     STATE_COMMENT_COUNT="${EXTRACTED_STATE_COMMENT_COUNT}"
     STATE_FALLBACK_USED="${EXTRACTED_STATE_FALLBACK_USED}"
@@ -19054,6 +19095,10 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     # later poll cycle read the real state.
     if [ "${COMMENTS_FETCH_OK}" != "true" ]; then
       echo "::warning::Comments fetch failed for tracking issue #${TRACKING_NUM}; cannot confirm orchestrator state is missing. Skipping state reconstruction this cycle (will retry next poll)."
+      continue
+    fi
+    if [ "${EXTRACTED_STATE_IDENTITY_UNAVAILABLE}" = "true" ]; then
+      echo "::warning::Pipeline identity unavailable; cannot verify state-comment authors for #${TRACKING_NUM}; skipping this tracking issue and state reconstruction this cycle."
       continue
     fi
     if [ "${STATE_COMMENT_COUNT}" -gt 0 ]; then
@@ -21910,7 +21955,11 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
           ORCH_FOLLOWUP_INTEGRATION_BRANCH="${RESOLVED_INTEGRATION_BRANCH}"
           ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS="${RESOLVED_INTEGRATION_BRANCH_EXISTS}"
 
-          if [ "${ORCH_FOLLOWUP_OWNED}" = "true" ]; then
+          if [ "${RESOLVED_ORCHESTRATOR_STATE_IDENTITY_UNAVAILABLE}" = "true" ]; then
+            FOLLOWUP_PR_BLOCKED="true"
+            FOLLOWUP_BLOCK_REASON="Orchestrator state author cannot be verified (pipeline identity unavailable); not retargeting follow-up PR for issue #${rb_issue} this tick."
+            echo "::warning::${FOLLOWUP_BLOCK_REASON}"
+          elif [ "${ORCH_FOLLOWUP_OWNED}" = "true" ]; then
             if [ "${ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${ORCH_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
               BASE_REF="${ORCH_FOLLOWUP_INTEGRATION_BRANCH}"
               echo "  Follow-up PR for issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}). Retargeting base to ${BASE_REF}."
