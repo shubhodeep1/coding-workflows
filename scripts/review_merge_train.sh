@@ -292,7 +292,7 @@ _mt_find_marker_comment()
 	local pr="$1" marker="$2"
 	[ -n "${MT_AUTOMATION_LOGIN}" ] || return 1
 	gh_retry gh api --paginate "repos/${MT_REPO}/issues/${pr}/comments?per_page=100" \
-		--jq ".[] | select((.user.login // \"\" | ascii_downcase) == \"${MT_AUTOMATION_LOGIN}\" and ((.body // \"\") | startswith(\"${marker}\"))) | \"\\(.id) \\(.created_at)\"" 2>/dev/null | tail -n 1
+		--jq ".[] | select((.user.login // \"\" | ascii_downcase) == \"${MT_AUTOMATION_LOGIN}\" and ((.body // \"\") | startswith(\"${marker}\"))) | \"\\(.id) \\(.created_at)\"" 2>/dev/null | LC_ALL=C sort -k2,2r -k1,1nr | sed -n '1p'
 }
 
 _mt_find_marker_comment_id()
@@ -317,7 +317,12 @@ _mt_bypass_authorized()
 		echo events_unavailable
 		return 1
 	fi
-	last_event="$(printf '%s\n' "${events}" | awk -F '\t' -v l="${MT_LABEL}" '$2==l {last=$0} END {print last}')"
+	# Pagination order is not an authority for which label cycle is current.
+	# A same-second tie cannot establish which actor removed the label last.
+	if ! last_event="$(printf '%s\n' "${events}" | awk -F '\t' -v l="${MT_LABEL}" '$2==l {if ($3 > newest) {newest=$3; last=$0; tied=0} else if ($3 == newest) tied=1} END {if (tied) exit 1; print last}')"; then
+		echo events_unavailable
+		return 1
+	fi
 	IFS=$'\t' read -r action event_label timestamp actor <<< "${last_event}"
 	if [ "${action}" != "unlabeled" ] || [ "${event_label}" != "${MT_LABEL}" ]; then
 		echo no_label_removal
