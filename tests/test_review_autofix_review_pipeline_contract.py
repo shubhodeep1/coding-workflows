@@ -8423,6 +8423,110 @@ def test_review_isolation_transfers_into_active_work_tree() -> None:
 		assert changed.stdout.split() == ["scripts/app.py"]
 
 
+def test_review_blocked_fix_sandbox_prepare_accepts_per_pr_workspace() -> None:
+	"""The judge selects the sandbox target without replacing the checkout's .git."""
+	judge = RB_JUDGE.read_text(encoding="utf-8")
+	assert 'GITHUB_WORKSPACE="${RB_OPENCODE_WORKSPACE}"' not in judge
+	assert '"GITHUB_WORKSPACE=${RB_OPENCODE_WORKSPACE}"' not in judge
+	selection = judge.split('      rb_fix_checkout_real=', 1)[1].split('      if ! env "${rb_fix_sandbox_workspace_env[@]}"', 1)[0]
+	prepare_line = judge.split('      if ! env "${rb_fix_sandbox_workspace_env[@]}"', 1)[1].splitlines()[0]
+	prepare_command = 'env "${rb_fix_sandbox_workspace_env[@]}"' + prepare_line.removesuffix('; then')
+	judge_prepare = 'RB_OPENCODE_WORKSPACE="$(pwd)"\nrb_fix_checkout_real=' + selection + prepare_command
+
+	with tempfile.TemporaryDirectory(prefix="rb-fix-iso-") as td:
+		root = Path(td)
+		checkout = root / "checkout"
+		work_tree = root / "workspaces" / "run"
+		stub_bin = root / "bin"
+		for path in (checkout / "scripts", work_tree / "scripts", stub_bin, root / "runtime"):
+			path.mkdir(parents=True)
+		(checkout / "scripts/app.py").write_text("before\n")
+		(work_tree / "scripts/app.py").write_text("before\n")
+		subprocess.run(["git", "init", "-q", str(checkout)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", "scripts"], cwd=checkout, env=_git_clean_env(), check=True)
+		subprocess.run(
+			["git", "-c", "user.name=t", "-c", "user.email=t@invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "base"],
+			cwd=checkout, env=_git_clean_env(), check=True,
+		)
+		docker_stub = stub_bin / "docker"
+		docker_stub.write_text(textwrap.dedent("""\
+			#!/usr/bin/env bash
+			case "$1" in
+				build) echo "sha256:$(printf '0%.0s' $(seq 1 64))"; exit 0 ;;
+				rm) exit 0 ;;
+				esac
+				source_dir=""
+				editor=false
+				for arg in "$@"; do
+					case "$arg" in
+						type=bind,src=*,dst=/source) source_dir="${arg#type=bind,src=}"; source_dir="${source_dir%,dst=/source}" ;;
+						review-editor-*) editor=true ;;
+					 esac
+				done
+				if [ "$editor" = true ]; then printf 'after\\n' > "${source_dir}/scripts/app.py"; fi
+				"""))
+		docker_stub.chmod(0o755)
+		github_env = root / "github_env"
+		github_env.write_text("")
+		env = _git_clean_env({
+			"PATH": f"{stub_bin}:{os.environ['PATH']}",
+			"GIT_DIR": str(checkout / ".git"),
+			"GIT_WORK_TREE": str(work_tree),
+			"WORKSPACE_PATH": str(work_tree),
+			"GITHUB_WORKSPACE": str(checkout),
+			"rb_fix_sandbox_env": str(github_env),
+			"RUNNER_TEMP": str(root),
+			"RUNTIME_DIR": str(root / "runtime"),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"OPENROUTER_API_KEY": "test-only-key",
+			"PYTHONDONTWRITEBYTECODE": "1",
+		})
+		sandbox = str(REPO_ROOT / "scripts/review_untrusted_sandbox.sh")
+		old_call = subprocess.run(
+			["bash", sandbox, "prepare"], cwd=work_tree,
+			env={**env, "GITHUB_WORKSPACE": str(work_tree), "GITHUB_ENV": str(github_env)},
+			capture_output=True, text=True, timeout=120,
+		)
+		assert old_call.returncode != 0 and "Review workspace path rejected" in old_call.stderr
+		prepared = subprocess.run(
+			["bash", "-c", judge_prepare], cwd=work_tree, env=env,
+			capture_output=True, text=True, timeout=120,
+		)
+		assert prepared.returncode == 0, prepared.stdout + prepared.stderr
+		sandbox_root = github_env.read_text().split("REVIEW_SANDBOX_ROOT=", 1)[1].strip()
+		assert (Path(sandbox_root) / "workspace").read_text().strip() == str(work_tree)
+		prompt = root / "prompt.txt"
+		prompt.write_text("fix it\n")
+		config = root / "config.json"
+		config.write_text(json.dumps({
+			"model": "openrouter/openai/gpt-6-sol",
+			"provider": {"openrouter": {"options": {"baseURL": "https://openrouter.ai/api/v1"}}},
+		}))
+		ran = subprocess.run(
+			["bash", sandbox, "run", str(prompt), str(root / "editor_output.txt"), "openai/gpt-6-sol", "high", str(config)],
+			cwd=work_tree, env={**env, "REVIEW_SANDBOX_ROOT": sandbox_root},
+			capture_output=True, text=True, timeout=120,
+		)
+		assert ran.returncode == 0, ran.stdout + ran.stderr
+		assert (work_tree / "scripts/app.py").read_text() == "after\n"
+		assert (checkout / "scripts/app.py").read_text() == "before\n"
+
+		# The checkout layout must ignore a stale inherited per-PR target.
+		github_env.write_text("")
+		legacy = subprocess.run(
+			["bash", "-c", judge_prepare], cwd=checkout, env=env,
+			capture_output=True, text=True, timeout=120,
+		)
+		assert legacy.returncode == 0, legacy.stdout + legacy.stderr
+		legacy_root = github_env.read_text().split("REVIEW_SANDBOX_ROOT=", 1)[1].strip()
+		assert (Path(legacy_root) / "workspace").read_text().strip() == str(checkout)
+		for sandbox_root_to_clean in (sandbox_root, legacy_root):
+			subprocess.run(
+				["bash", sandbox, "cleanup"], env={**env, "REVIEW_SANDBOX_ROOT": sandbox_root_to_clean},
+				check=True, capture_output=True, text=True, timeout=120,
+			)
+
+
 def test_review_relay_accepts_only_configured_chat_model() -> None:
 	spec = importlib.util.spec_from_file_location("review_broker", REPO_ROOT / "scripts/clarify_openrouter_broker.py")
 	assert spec and spec.loader

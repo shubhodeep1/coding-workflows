@@ -247,8 +247,11 @@ def test_poller_file_editing_judges_use_worktrees_and_trusted_push():
 
 def test_review_blocked_fix_writer_runs_in_the_review_sandbox():
 	text = (SCRIPTS / "review_rb_judge.sh").read_text(encoding="utf-8")
-	assert 'GITHUB_ENV="${rb_fix_sandbox_env}" bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare' in text
+	assert 'env "${rb_fix_sandbox_workspace_env[@]}" GITHUB_ENV="${rb_fix_sandbox_env}" bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare' in text
 	assert 'GITHUB_WORKSPACE="${RB_OPENCODE_WORKSPACE}"' not in text
+	assert '"GITHUB_WORKSPACE=${RB_OPENCODE_WORKSPACE}"' not in text
+	assert 'rb_fix_sandbox_workspace_env=(-u WORKSPACE_PATH)' in text
+	assert 'rb_fix_sandbox_workspace_env=("WORKSPACE_PATH=${RB_OPENCODE_WORKSPACE}")' in text
 	assert 'workspace="$(< "${root}/workspace")"' in (SCRIPTS / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
 	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run' in text
 	fix_block = text[text.index("rb_fix_opencode_cmd=("):]
