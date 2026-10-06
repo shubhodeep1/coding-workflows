@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6494,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6494\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6502\",\"pr_number\":6502,\"branch\":\"ai/issue-6494\",\"run_id\":\"37418454006\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37418454006\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"agents.md\",\"changelog.d/6494-claude-sandbox-egress-lockdown.md\",\"scripts/ai_engine.sh\",\"scripts/claude_anthropic_relay.py\",\"scripts/claude_engine.py\",\"scripts/review_untrusted_sandbox.sh\",\"tests/test_ai_engine.py\",\"tests/test_claude_anthropic_relay.py\",\"tests/test_codex_isolated_exec_claude_contract.py\"]}",
+  "fingerprint": "2829bdbe55618df901e0f68faecff82c42158ccaef11dd16b9b4419d155914dd",
+  "lineage": {
+    "issue_number": 6494,
+    "parent_ids": [],
+    "pr_number": 6502,
+    "run_id": "37418454006",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37418454006",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6502"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261006054223_afbc1cccb6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6494,
+    "level": "run",
+    "pr_number": 6502,
+    "run_id": "37418454006"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6494: https://github.com/shubhodeep1/coding-workflows/pull/6502",
+  "timestamps": {
+    "created_at": "2026-10-06T05:42:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
