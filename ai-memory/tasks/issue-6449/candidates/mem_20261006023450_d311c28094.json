@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6449,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6449\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6460\",\"pr_number\":6460,\"branch\":\"ai/issue-6449\",\"run_id\":\"37403344845\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37403344845\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/ai/claude_engine.json\",\"README.md\",\"agents.md\",\"changelog.d/6449-wave-judge-read-profile.md\",\"prompts/_templates/mode-orchestrate-poll-judge.txt\",\"prompts/mode-orchestrate-poll-judge.txt\",\"scripts/claude_engine.py\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_claude_engine.py\",\"tests/test_orchestrator_judges_claude_engine.py\"]}",
+  "fingerprint": "2175444b57a2906f430e04daefb20c4b8702d7e9ee218c90444e2efbee1bd18d",
+  "lineage": {
+    "issue_number": 6449,
+    "parent_ids": [],
+    "pr_number": 6460,
+    "run_id": "37403344845",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37403344845",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6460"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261006023450_d311c28094",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6449,
+    "level": "run",
+    "pr_number": 6460,
+    "run_id": "37403344845"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6449: https://github.com/shubhodeep1/coding-workflows/pull/6460",
+  "timestamps": {
+    "created_at": "2026-10-06T02:34:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
