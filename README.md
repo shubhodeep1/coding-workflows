@@ -75,7 +75,11 @@ a failed dry run blocks deployment. Only the matching site's Cloudflare credenti
 is passed to the deploy process in an allowlisted environment; other session
 credentials are not inherited by Wrangler build hooks. The provided tokens
 are account-owned, not Worker-scoped; obtaining a narrower token requires
-operator provisioning.
+operator provisioning. If protection, pinning, worktree verification or
+pre-deploy checks cannot be confirmed, `/deploy-activate` blocks the Worker
+step rather than supplying manual deploy instructions. A missing or rejected
+Cloudflare session credential also blocks that step; it is not a manual
+deployment fallback.
 
 #### Variables
 

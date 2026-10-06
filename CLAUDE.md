@@ -1406,7 +1406,8 @@ Constraints that ride along:
   the GitHub API, fetch it, and deploy from a clean detached worktree pinned
   to that SHA, not a PR checkout or moving ref. Verify the worktree HEAD and
   cleanliness and recheck the API branch tip and protection immediately
-  before deploying. If any check fails, do not self-deploy.
+  before deploying. If any check fails or cannot be verified, block the
+  deploy; do not offer a manual Worker deploy as a workaround.
 - **Validate without credentials.** Prefer GitHub check-runs for the pinned
   SHA; do not deploy while checks are failing or pending. Run local checks
   (typecheck, tests, `wrangler deploy --dry-run` where available) only in a

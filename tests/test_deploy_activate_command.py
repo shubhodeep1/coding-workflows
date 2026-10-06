@@ -42,6 +42,9 @@ def test_cloudflare_preflight_and_deploy_boundaries(command: Path):
 	assert "a failed dry run blocks deployment" in cloudflare
 	assert "If no such isolation is available, skip local checks and rely on the check-runs" in cloudflare
 	assert "env -u FUNTOKEN_IO_CF" not in cloudflare
+	assert "fall back to guide-and-paste" not in cloudflare
+	assert "mark the Cloudflare step BLOCKED in the activation log and give only a corrective verification step" in cloudflare
+	assert "Never emit a Worker deploy command, including one for the operator to run" in cloudflare
 
 
 def test_shared_cloudflare_deploy_boundary():
@@ -63,7 +66,7 @@ def test_shared_cloudflare_deploy_boundary():
 	):
 		assert required.lower() in shared_rule.lower(), required
 	assert "do not add an extra approval round" in shared_rule
-	assert "do not self-deploy" in shared_rule
+	assert "do not offer a manual Worker deploy as a workaround" in shared_rule
 	assert "### D) Destructive & Account-Level Writes" in shared_document
 
 COMMAND_PATHS = COMMANDS
@@ -103,7 +106,9 @@ def test_worker_secrets_remain_operator_only(cloudflare_steps: str) -> None:
 def test_credential_failure_falls_back_without_token_leak(cloudflare_steps: str) -> None:
 	assert "If the matching credential is unset" in cloudflare_steps
 	assert "`workers/scripts` list) returns 401/403" in cloudflare_steps
-	assert "default mode: exact `wrangler` / `curl` commands for me to run" in cloudflare_steps
+	assert "mark the Cloudflare step BLOCKED in the activation log" in cloudflare_steps
+	assert "Do not give manual Cloudflare API or deploy commands or ask me to run them" in cloudflare_steps
+	assert "resume only when the matching session credential works and all deploy preconditions above have been verified" in cloudflare_steps
 	assert "Do not diagnose the credential from `GET /client/v4/user/tokens/verify`" in cloudflare_steps
 	assert "Never print the credential or either half" in cloudflare_steps
 
