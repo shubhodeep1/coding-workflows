@@ -5,13 +5,26 @@
   "entry_id": "processed_command_6504_6011090438_approved",
   "issue_number": 6504,
   "metadata": {
+    "branch": "ai/issue-6504",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/implement.yml",
+      "agents.md",
+      "changelog.d/6504-implement-issue-body-github-env-injection.md",
+      "tests/test_implement_post_codex_recovery.py"
+    ],
+    "issue_number": 6504,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6504",
+    "pr_number": 6510,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6510",
+    "run_attempt": "1",
+    "run_id": "37426712447",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37426712447"
   },
   "run_attempt": 1,
   "run_id": "37426712447",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-06T07:01:16Z",
+  "status": "completed",
+  "timestamp": "2026-10-06T07:19:58Z",
   "workflow": "implement"
 }
