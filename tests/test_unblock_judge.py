@@ -529,13 +529,16 @@ def test_project_retry_posts_the_existing_resume_command(stop: str, command: str
 
 def test_issue_retry_reapproves_when_a_plan_exists_else_reanswers() -> None:
 	with_plan = actions.plan(_verdict("retry_budget", instructions="x"), _ctx(has_plan=True))
-	assert {"op": "remove_label", "issue": 7, "label": "ai:blocked"} in with_plan
-	assert {"op": "add_labels", "issue": 7, "labels": ["ai:awaiting-approval"]} in with_plan
+	assert [op["op"] for op in with_plan] == ["comment", "add_labels", "comment", "remove_label"]
+	assert with_plan[-1] == {"op": "remove_label", "issue": 7, "label": "ai:blocked"}
 	assert _bodies(with_plan)[-1] == "/approved"
 	without = actions.plan(_verdict("retry_budget", instructions="use the cache"), _ctx())
 	assert _bodies(without)[-1] == "/answer use the cache"
 	needs_human = actions.plan(_verdict("retry_budget", instructions="x"), _ctx(stop="needs-human"))
 	assert _bodies(needs_human)[-1] == "/reclarify"
+	assert [op["op"] for op in needs_human][-2:] == ["comment", "remove_label"]
+	project = actions.reset_ops(_ctx("project", "blocked"), "retry")
+	assert [op["op"] for op in project] == ["comment", "remove_label"]
 
 
 def test_pr_retry_clears_the_label_and_dispatches_review() -> None:
@@ -691,7 +694,7 @@ def test_issue_issue_creating_verdicts_have_no_pr_provenance() -> None:
 def test_scope_override_extends_files_touched_and_reapproves() -> None:
 	ops = actions.plan(_verdict("override_guard", paths=["src/a.py"]), _ctx(stop="scope-blocked", has_plan=True))
 	assert ops[0] == {"op": "edit_files_touched", "issue": 7, "paths": ["src/a.py"]}
-	assert {"op": "remove_label", "issue": 7, "label": "ai:scope-blocked"} in ops
+	assert ops[-1] == {"op": "remove_label", "issue": 7, "label": "ai:scope-blocked"}
 	assert _bodies(ops)[-1] == "/approved"
 	destructive = actions.plan(_verdict("override_guard", paths=["a.md"], override="bulk_delete"), _ctx(stop="destructive-blocked", has_plan=True))
 	assert all(op["op"] != "edit_files_touched" for op in destructive)
@@ -743,19 +746,19 @@ def test_security_close_labels_but_keeps_the_issue_open() -> None:
 
 def test_auto_answer_records_an_ad_entry_then_answers() -> None:
 	ops = actions.plan(_verdict("auto_answer", answer="Q1: A"), _ctx())
-	assert [op["op"] for op in ops] == ["remove_label", "add_labels", "auto_decision", "comment"]
-	assert ops[0]["label"] == "ai:blocked"
-	assert ops[1]["labels"] == ["ai:clarification"]
-	assert ops[2]["decision"]["pick"] == "Q1: A" and ops[3]["body"] == "/answer Q1: A"
+	assert [op["op"] for op in ops] == ["add_labels", "auto_decision", "comment", "remove_label"]
+	assert ops[0]["labels"] == ["ai:clarification"]
+	assert ops[1]["decision"]["pick"] == "Q1: A" and ops[2]["body"] == "/answer Q1: A"
+	assert ops[3]["label"] == "ai:blocked"
 
 
 @pytest.mark.parametrize("stop", ["needs-human", "clarify-failed", "clarify-respond-failed", "plan-failed"])
 def test_auto_answer_enters_a_phase_the_plan_workflow_accepts(stop: str) -> None:
 	ops = actions.plan(_verdict("auto_answer", answer="Q1: A"), _ctx(stop=stop))
-	assert [op["op"] for op in ops] == ["remove_label", "add_labels", "auto_decision", "comment"]
-	assert ops[0]["label"] == f"ai:{stop}"
-	assert ops[1]["labels"] == ["ai:clarification"]
-	assert ops[-1]["body"] == "/answer Q1: A"
+	assert [op["op"] for op in ops] == ["add_labels", "auto_decision", "comment", "remove_label"]
+	assert ops[0]["labels"] == ["ai:clarification"]
+	assert ops[-2]["body"] == "/answer Q1: A"
+	assert ops[-1]["label"] == f"ai:{stop}"
 
 
 def test_followup_posts_the_reset_for_the_stop() -> None:
@@ -827,7 +830,7 @@ if method == "POST" and endpoint.endswith("/comments"):
 	if os.environ.get("FAKE_GH_FAIL_PROJECT_RECORD") and endpoint == "repos/o/r/issues/40/comments" and f.get("body", "").startswith("Unblock judge verdict"):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
-	if os.environ.get("FAKE_GH_FAIL_RESUME") and f.get("body", "").startswith("/answer"):
+	if os.environ.get("FAKE_GH_FAIL_RESUME") and f.get("body", "").startswith(("/answer", "/approved", "/reclarify", "/judge_resume")):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
 	state["comments"].append({"endpoint": endpoint, "body": f.get("body", "")})
@@ -1774,17 +1777,59 @@ def test_failed_close_does_not_add_terminal_label(tmp_path: Path) -> None:
 	assert state["labels_added"] == []
 
 
-@pytest.mark.parametrize("delete_status,should_approve", [("404", True), ("500", False)])
-def test_label_removed_concurrently_does_not_block_approval(tmp_path: Path, delete_status: str, should_approve: bool) -> None:
+@pytest.mark.parametrize("delete_status,successful", [("404", True), ("500", False)])
+def test_label_removed_concurrently_does_not_block_approval(tmp_path: Path, delete_status: str, successful: bool) -> None:
 	blocked = dict(ISSUE, labels=[{"name": "ai:scope-blocked"}])
 	plan = _comment("Implementation plan", created_at="2026-10-04T10:00:00Z")
 	plan["author_association"] = "OWNER"
 	result, state = _judge(tmp_path, blocked, comments=[plan],
 		verdict={"verdict": "retry_budget", "reason": "retry safely", "instructions": "try once more"},
 		FAKE_GH_FAIL_DELETE=delete_status)
-	assert ("reason=actuation_failed" not in result.stdout) == should_approve
-	assert any(comment["body"] == "/approved" for comment in state["comments"]) == should_approve
-	assert any(label == "ai:awaiting-approval" for _, label in state["labels_added"]) == should_approve
+	assert ("reason=actuation_failed" not in result.stdout) == successful
+	assert any(comment["body"] == "/approved" for comment in state["comments"])
+	assert any(label == "ai:awaiting-approval" for _, label in state["labels_added"])
+
+
+@pytest.mark.parametrize("stop,has_plan,verdict", [
+	("scope-blocked", True, "retry_budget"),
+	("needs-human", False, "retry_budget"),
+	("blocked", False, "auto_answer"),
+])
+def test_failed_issue_resume_keeps_scan_visible_block(tmp_path: Path, stop: str, has_plan: bool, verdict: str) -> None:
+	issue = dict(ISSUE, labels=[{"name": f"ai:{stop}"}])
+	comments = [_comment("Implementation plan", created_at="2026-10-04T10:00:00Z")] if has_plan else []
+	if comments:
+		comments[0]["author_association"] = "OWNER"
+	response = {"verdict": verdict, "reason": "retry safely", "instructions": "try once more", "answer": "Q1: A"}
+	result, state = _judge(tmp_path, issue, comments=comments, verdict=response, FAKE_GH_FAIL_RESUME="1")
+	assert "reason=actuation_failed" in result.stdout
+	assert state["labels_removed"] == []
+	assert not any(entry["body"].startswith(("/answer", "/approved", "/reclarify")) for entry in state["comments"])
+
+
+@pytest.mark.parametrize("stop,has_plan,verdict", [
+	("scope-blocked", True, "retry_budget"),
+	("blocked", False, "auto_answer"),
+])
+def test_failed_phase_label_keeps_scan_visible_block(tmp_path: Path, stop: str, has_plan: bool, verdict: str) -> None:
+	issue = dict(ISSUE, labels=[{"name": f"ai:{stop}"}])
+	comments = [_comment("Implementation plan")] if has_plan else []
+	if comments:
+		comments[0]["author_association"] = "OWNER"
+	response = {"verdict": verdict, "reason": "retry safely", "instructions": "try once more", "answer": "Q1: A"}
+	result, state = _judge(tmp_path, issue, comments=comments, verdict=response, FAKE_GH_FAIL_LABEL="1")
+	assert "reason=actuation_failed" in result.stdout
+	assert state["labels_removed"] == []
+	assert not any(entry["body"].startswith(("/answer", "/approved")) for entry in state["comments"])
+
+
+def test_failed_project_resume_keeps_scan_visible_block(tmp_path: Path) -> None:
+	project = dict(ISSUE, labels=ISSUE["labels"] + [{"name": "ai:orchestrator-tracking"}])
+	result, state = _judge(tmp_path, project, verdict={"verdict": "retry_budget", "reason": "retry", "instructions": "try once more"},
+		FAKE_GH_FAIL_RESUME="1")
+	assert "reason=actuation_failed" in result.stdout
+	assert state["labels_removed"] == []
+	assert not any(entry["body"].startswith("/judge_resume") for entry in state["comments"])
 
 
 def test_closed_item_still_alerts_when_terminal_label_fails(tmp_path: Path) -> None:

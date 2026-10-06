@@ -219,11 +219,12 @@ def _is_security_issue(ctx: dict) -> bool:
 
 
 def _approve(issue: int, labels: list[str], drop: str) -> list[dict]:
-	ops: list[dict] = []
+	ops: list[dict] = [
+		{"op": "add_labels", "issue": issue, "labels": ["ai:awaiting-approval"]},
+		{"op": "comment", "issue": issue, "body": "/approved"},
+	]
 	if drop:
 		ops.append({"op": "remove_label", "issue": issue, "label": drop})
-	ops.append({"op": "add_labels", "issue": issue, "labels": ["ai:awaiting-approval"]})
-	ops.append({"op": "comment", "issue": issue, "body": "/approved"})
 	return ops
 
 
@@ -237,10 +238,9 @@ def reset_ops(ctx: dict, note: str) -> list[dict]:
 			return [{"op": "comment", "issue": item, "body": "/re-security-pass"}]
 		if stop in PROJECT_VALIDATION_STOPS:
 			return [{"op": "comment", "issue": item, "body": f"/revalidate unblock judge: {text}".rstrip()}]
-		ops = []
+		ops = [{"op": "comment", "issue": item, "body": "/judge_resume --reset-recovery"}]
 		if stop in ("needs-human", "blocked") and label in ctx["labels"]:
 			ops.append({"op": "remove_label", "issue": item, "label": label})
-		ops.append({"op": "comment", "issue": item, "body": "/judge_resume --reset-recovery"})
 		return ops
 	if kind == "pr":
 		ops = [{"op": "dispatch_review", "pr": item}]
@@ -251,8 +251,8 @@ def reset_ops(ctx: dict, note: str) -> list[dict]:
 	if stop in GUARD_STOPS or stop == "implement-diagnose-failed":
 		if ctx["has_plan"]:
 			return _approve(item, ctx["labels"], present)
-		ops = [{"op": "remove_label", "issue": item, "label": present}] if present else []
-		return ops + [{"op": "comment", "issue": item, "body": "/reclarify"}]
+		ops = [{"op": "comment", "issue": item, "body": "/reclarify"}]
+		return ops + ([{"op": "remove_label", "issue": item, "label": present}] if present else [])
 	if stop == "blocked":
 		if ctx["has_plan"]:
 			return _approve(item, ctx["labels"], present)
@@ -260,11 +260,11 @@ def reset_ops(ctx: dict, note: str) -> list[dict]:
 	if stop == "needs-human":
 		if ctx["has_plan"]:
 			return _approve(item, ctx["labels"], present)
-		ops = [{"op": "remove_label", "issue": item, "label": present}] if present else []
-		return ops + [{"op": "comment", "issue": item, "body": "/reclarify"}]
+		ops = [{"op": "comment", "issue": item, "body": "/reclarify"}]
+		return ops + ([{"op": "remove_label", "issue": item, "label": present}] if present else [])
 	if stop in CLARIFY_STOPS:
-		ops = [{"op": "remove_label", "issue": item, "label": present}] if present else []
-		return ops + [{"op": "comment", "issue": item, "body": "/reclarify"}]
+		ops = [{"op": "comment", "issue": item, "body": "/reclarify"}]
+		return ops + ([{"op": "remove_label", "issue": item, "label": present}] if present else [])
 	# A side pipeline's dead end on an issue (escalated triage or heal chain,
 	# a failed log analysis): clearing the label lets the pipeline that set it
 	# try again, with the judge's instructions on record.
@@ -321,8 +321,6 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 		ops += reset_ops(ctx, verdict["instructions"])
 	elif name == "auto_answer":
 		if "ai:clarification" not in ctx["labels"] and "ai:planning" not in ctx["labels"]:
-			if _stop_label(ctx["stop"]) in ctx["labels"]:
-				ops.append({"op": "remove_label", "issue": item, "label": _stop_label(ctx["stop"])})
 			ops.append({"op": "add_labels", "issue": item, "labels": ["ai:clarification"]})
 		ops.append(
 			{
@@ -337,6 +335,8 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 			}
 		)
 		ops.append({"op": "comment", "issue": item, "body": f"/answer {verdict['answer']}"})
+		if "ai:clarification" not in ctx["labels"] and "ai:planning" not in ctx["labels"] and _stop_label(ctx["stop"]) in ctx["labels"]:
+			ops.append({"op": "remove_label", "issue": item, "label": _stop_label(ctx["stop"])})
 	elif name == "descope":
 		ops += _fixup_ops(ctx, verdict, "descope")
 	elif name == "operator_step":
