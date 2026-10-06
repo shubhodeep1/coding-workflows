@@ -112,7 +112,7 @@ _poller_rb_judge_sandbox_attempt()
         exit 1
       fi
     fi
-    if ! rb_sandbox_root="$(GITHUB_WORKSPACE="${judge_workspace_override}" SUPPORT_SCRIPTS_DIR="${rb_support_dir}" bash "${rb_support_dir}/review_untrusted_sandbox.sh" prepare-ephemeral 2>>"${log_file}")" || [ -z "${rb_sandbox_root}" ]; then
+    if ! rb_sandbox_root="$(GITHUB_WORKSPACE="${judge_workspace_override}" SUPPORT_SCRIPTS_DIR="${rb_support_dir}" bash "${rb_support_dir}/review_untrusted_sandbox.sh" prepare-ephemeral "${rb_engine}" 2>>"${log_file}")" || [ -z "${rb_sandbox_root}" ]; then
       [ -z "${rb_untracked_before_file}" ] || rm -f -- "${rb_untracked_before_file}"
       [ -z "${rb_untracked_hash_file}" ] || rm -f -- "${rb_untracked_hash_file}"
       : > "${output_file}"

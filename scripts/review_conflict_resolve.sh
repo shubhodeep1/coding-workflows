@@ -577,7 +577,7 @@ _resolver_sandbox_attempt()
   local sandbox_attempt_engine="$1" sandbox_attempt_root="" sandbox_attempt_config=/dev/null
   local sandbox_attempt_rc=0
   resolver_sandbox_failure_reason=""
-  if ! sandbox_attempt_root="$(bash "${resolver_sandbox_sh}" prepare-ephemeral)" || [ -z "${sandbox_attempt_root}" ]; then
+  if ! sandbox_attempt_root="$(bash "${resolver_sandbox_sh}" prepare-ephemeral "${sandbox_attempt_engine}")" || [ -z "${sandbox_attempt_root}" ]; then
     resolver_sandbox_failure_reason=sandbox_prepare_failed
     if [ -n "${sandbox_attempt_root}" ]; then
       REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" bash "${resolver_sandbox_sh}" cleanup || true

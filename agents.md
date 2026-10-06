@@ -121,10 +121,13 @@ Phases of the unattended pipeline (each is a separate workflow file under
    The in-workflow judge's OpenCode verdict and fix passes also use fresh
    credential-free sandboxes; missing isolation defers with
    `judge_skip_reason=isolation_unavailable`, never a host writer. For the poller's judge,
-   missing isolation defers and escalates after three failures on the same
-   head (configurable with `RB_JUDGE_ISOLATION_MAX_FAILURES`); unavailable
-   Claude retries OpenCode in a fresh sandbox, never host Codex. Failed transfer discards the
-   verdict and removes only newly untracked files. Cleanup/inventory failures
+    missing isolation defers and escalates after three failures on the same
+    head (configurable with `RB_JUDGE_ISOLATION_MAX_FAILURES`); unavailable
+    Claude retries OpenCode in a fresh sandbox, never host Codex. Failed transfer discards the
+    verdict and removes only newly untracked files. Ephemeral OpenCode attempts
+    build the OpenCode-only image independently of Claude support files or CLI
+    installation; a failed OpenCode image build still defers without host fallback.
+    Cleanup/inventory failures
    stop the tick so another issue cannot stage a partial transfer. Lost comment
    responses are reconciled from trusted history; uncleared human latches
    block the judge even on a new head. The
@@ -794,6 +797,82 @@ sync: `.claude/commands/` is not part of the synced surface, and the
 template copies under `workflow-templates/.claude/commands/` have never
 carried frontmatter.
 
+### Live `.claude/` copies and their templates
+
+This repo runs its own `.claude/` copy of the files it ships to consumers
+under `workflow-templates/.claude/`. The pipeline's editors cannot edit
+`.claude/**`, so an AI fix that changes only the template leaves the live copy
+behind; #6133 (the merged-PR guard hook) and #6176 (four command files) broke
+`main` that way. Three pieces keep the pairs in step:
+
+- `tests/test_claude_template_live_parity.py` (own `ci.yml` step) fails when a
+  template and its live copy differ in content or executable bits, unless the
+  file is listed in `.github/ai/claude_template_divergence.json` with a reason.
+  Six command files are listed today; both copies of those are edited by hand.
+- `scripts/sync_claude_live_copies.py` runs from
+  `.github/workflows/sync-claude-live-copies.yml` on every push to `main` that
+  touches `workflow-templates/.claude/**`. When the push changed a template
+  but not its live copy, it copies the template over, pushes
+  `ai/sync-claude-live-copies` and opens a PR (or refreshes the open one). It
+  also carries forward still-drifted live copies from the existing sync branch
+  only when that branch's copy matches the current template; a live copy
+  changed on `main` since the earlier sync is left for the parity test.
+  The auto-merge-eligible branch accepts a path only when every template
+  commit since the last live-copy edit is associated with a merged PR from a
+  non-`ai/*`, non-`orchestrator/*`, non-`auto/*` branch targeting the sync base
+  from a same-repository head, authored by an OWNER/MEMBER/COLLABORATOR
+  non-bot account, and neither its subject nor any PR commit subject carries
+  a pipeline marker or a squash `(#N)` suffix. A trusted collaborator's
+  account or session can still submit AI-written content.
+  Unverifiable paths instead go to `ai/sync-claude-live-copies-held` as a draft
+  PR for human review, with a Telegram WARNING listing their source commits.
+  Malformed merge timestamps also fail authorization and hold the path.
+  A ready held PR is converted back to draft before a refresh pushes content.
+  Logs add `CLAUDE_LIVE_SYNC authorized`, `held`, and `converted_to_draft`;
+  the history cap defaults to 30 distinct commits per run
+  (`CLAUDE_LIVE_SYNC_MAX_PROVENANCE_COMMITS`).
+  Branch replacement is lease-checked; push or PR API failures fail the job
+  with a structured `CLAUDE_LIVE_SYNC error` line, leaving the branch for a
+  later sync attempt.
+  Its existing-PR lookup accepts only an open PR from this repository's sync
+  branch into the configured base branch, even when other PRs are returned.
+  It fails open on an unusable `before` commit: no sync is attempted, and
+  the parity test still reports the drift. Provenance and open-PR reads use
+  GraphQL: one aliased association lookup covers up to 30 distinct template
+  commits, followed by 1-3 pages per distinct merged PR and one sync-PR lookup
+  per nonempty group.
+  Only PR creation uses REST, at most once for each of the authorized and held
+  groups (two REST calls total). `GH_PAT` remains broad to trigger CI/review;
+  branch names and commit subjects are not proof of human authorship, and
+  marking a held PR ready between conversion and push is a residual race. Log
+  prefix `CLAUDE_LIVE_SYNC`.
+- A push that changed only the live copy is left to the parity test.
+
+For PRs targeting `main`, the `tests-hooks-and-orchestrator` CI job runs
+`sync_claude_live_copies.py sync --dry-run` in its disposable checkout,
+using the PR base SHA and full git history. This prepares only eligible
+template-only command changes for the tests without committing or pushing live
+files. Security hooks under `.claude/hooks/**` and `.claude/settings.json` are
+never prepared: their committed live copies must match the templates for CI
+to pass, even when the editor cannot write the live file.
+Changes to both halves that still differ remain test failures. Push CI and
+PRs targeting `stable` check the committed tree without preparation, so drift
+on `main` is still reported while the post-merge sync PR is pending.
+Both release gates' `validate-scripts` jobs also run
+`tests/test_claude_template_live_parity.py` on the committed tree: drift,
+including a pending or held sync PR, blocks the `stable` release until both
+copies match or the file is allowlisted.
+
+New templates without a live copy are also treated as drift and copied into
+`.claude/` (including new subdirectories) with their executable permissions.
+Template symlinks (including directory links) and symlinks anywhere in a live
+destination path fail the sync/parity check rather than being followed; the
+workflow must not copy checkout-local credential files into a PR.
+A later template push recovers an earlier failed or superseded sync only if
+the template's most recent change is newer than the live file's; an equal or
+newer live edit is left untouched.
+An unusable `before` commit still skips the sync, so CI reports any drift.
+
 ---
 
 ## Repo-specific batching helpers
@@ -1269,7 +1348,8 @@ and shipped:
 - `CLAUDE_POOL` (`scripts/ai_engine.sh` and the sandbox Claude branches: `run role= account= outcome= reason= exit_code=`, `account_skipped account= reason=`)
 - `AI_ENGINE_PROJECT_LABEL` (`orchestrate.yml` "Ensure orchestrator labels exist": `label=`, `none` when unset; the label the tracking and wave-1 issues get)
 - `AI_ENGINE_PR_LABEL` (`implement.yml` "Create Pull Request": `issue= label=`; the engine label copied from the issue to its PR)
-- `SINGLE_ISSUE_SECURITY_PASS` (`scripts/review_single_issue_security_pass.sh`: `mode=gate|report pr= head= outcome=clean|hold|dispatched|skip|findings|failed reason= cycle=`; clean markers require the authenticated pipeline author and an exact audited PR head. Missing/disabled audits report failed, and an unverifiable marker source holds auto-merge. If result publication fails, report skips review re-dispatch so it cannot run without the marker.)
+- `SINGLE_ISSUE_SECURITY_PASS` (`scripts/review_single_issue_security_pass.sh`: `mode=gate|status|report pr= head= outcome=clean|hold|dispatched|skip|findings|failed|exhausted reason= cycle=`; clean markers require the authenticated pipeline author and an exact audited PR head. Missing/disabled audits report failed, and an unverifiable marker source holds auto-merge. If result publication fails, report skips review re-dispatch so it cannot run without the marker. `mode=status` writes no GitHub state or step output, but may fetch missing Git history to verify extension ancestry before the review-blocked judge chooses its mode; failed verification reports `unverifiable`. `outcome=hold reason=cycles_exhausted` writes `exhausted=true` only for completed current-head findings, and status also emits `SINGLE_ISSUE_SECURITY_PASS_AUDITED_HEAD`. Without a completed audit the gate retries a bounded number of times per head before reporting `exhausted_unaudited` and holding without the judge bypass. The judge re-verifies the audited head before a security-mode merge. Cycles available = `MAX_SECURITY_PASS_CYCLES` plus one per distinct fix SHA in a trusted `ai:single-issue-security-pass-extension:v1` marker whose commit is reachable from the audited head; duplicate comments for one SHA count once, and a mismatched checkout holds the gate and skips report publication.)
+- `RB_JUDGE_SECURITY_PASS` (`scripts/review_rb_judge_security_pass.sh`, sourced by `review_rb_judge.sh`: `mode=detect|findings|merge_gate|extension|severity_block pr= outcome= reason=`; `severity_block` converts merges to fixes while retries remain and holds any final-round action, including `close_and_reissue`, when high/critical/unrated findings remain. For blocking findings the judge withdraws prior auto-merge enrollment even if the live head moved, then refuses to act on a mismatched head; an unreadable enrollment or failed disable stops the judge. Unavailable hold-comment history fails closed to avoid duplicate comments and alerts. `merge_gate outcome=hold` means a judge merge waited for the single-issue security pass and the judge step output `judge_action=security_hold`. A final-retry `fix` is treated as a merge without creating a fix commit only when no blocking findings remain.)
 - `ACTIVATION_VERIFY` (`scripts/activation_verify.sh`: `mode=pr|project item= verdict=LIVE|DORMANT code_gaps= operator_gaps= outcome=posted|skip reason=`)
 - `JUDGE_INTERIM_PASS_OK`
 - `JUDGE_INTERIM_PASS_FAIL`
@@ -1792,8 +1872,9 @@ depend on it.
 | `REVIEW_DIATAXIS_LENS_ENABLED` | `true` | Documentation-only contract row for the advisory `DOCS COVERAGE (DIATAXIS)` consolidator lens. Current branch behavior is prompt-defined only (no separate workflow toggle yet): keep it `low` severity and name only still-missing `Reference` / `How-to` / `Tutorial` / `Explanation` updates. |
 | `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` | `true` | Enable the consolidator-side companion `AGENTS.md` materiality finding. Unlike `AGENTS_MD_MATERIALITY_ENABLED`, which controls the separate advisory comment helper, this flag only controls whether `review_consolidate.sh` passes the helper JSON into Lens 7 (`NAMING / BACKWARD COMPATIBILITY`). |
 | `ENABLE_SECURITY_PASS` | `true` | Enable the scheduled poller's mandatory current-integration-head security gate before validation or finalization. Set to `false` for the immediate operator kill switch and legacy completion behavior. |
-| `MAX_SECURITY_PASS_CYCLES` | `5` | Maximum completed consolidated security-fix cycles before persistent findings terminalize as `ai:security-pass-failed`. Resets to `0` when an advancing integration head invalidates a recorded clean pass. Re-audits after a merged fix are delta audits, so the budget bounds persisting findings rather than fresh samples of unchanged code. |
-| `SINGLE_ISSUE_SECURITY_PASS_ENABLED` | `true` | When enabled, hold eligible standalone PRs into the default branch until a security audit of the current head is clean. A missing or unwritable `GITHUB_OUTPUT` fails the gate step closed; dispatch failure retains the documented fail-open path. Disabling the flag restores the pre-pass review-gate and deterministic-skip merge behavior. Only a sole verified automation follow-up is exempt; see `README.md` for dispatch and failure modes. |
+| `MAX_SECURITY_PASS_CYCLES` | `5` | Maximum completed consolidated security-fix cycles before persistent findings terminalize as `ai:security-pass-failed`. Resets to `0` when an advancing integration head invalidates a recorded clean pass. Re-audits after a merged fix are delta audits, so the budget bounds persisting findings rather than fresh samples of unchanged code. For standalone PRs, a completed current-head audit is required to enter judge exhaustion mode. |
+| `SINGLE_ISSUE_SECURITY_PASS_ENABLED` | `true` | When enabled, hold eligible standalone PRs into the default branch until a security audit of the current head is clean. At the cycle cap an unaudited head gets bounded retries, then remains held without judge exhaustion mode; a completed findings audit for the same head still qualifies if a later attempt fails. A missing or unwritable `GITHUB_OUTPUT` fails the gate step closed; dispatch failure at any cycle holds the merge for a later review retry. Disabling the flag restores the pre-pass review-gate and deterministic-skip merge behavior. Only a sole verified automation follow-up is exempt; see `README.md` for dispatch and failure modes. |
+| `SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS` | `2` | Maximum trusted pending audit attempts per head with a cycle number above the standalone pass's cycle cap. Pre-cap pending markers do not consume these extra attempts. Invalid or non-positive values fall back to `2`; a failed exhausted retry dispatch holds the merge. |
 | `SECURITY_PASS_PENDING_STALE_HOURS` | `6` | A pending single-issue audit holds auto-merge until its marker is this many hours old; the next review run re-dispatches. Invalid or non-positive values fall back to `6`. Only a sole verified automation-linked issue skips the pass; multiple linked issues are audited. When `GH_PAT` is absent, both gate and reporter trust only `github-actions[bot]` markers. |
 | `MAX_SECURITY_PASS_FIX_REISSUES` | `2` | Maximum re-issues of one `ai:implementation-failed` consolidated security-fix issue per fix cycle before the pass terminalizes as `ai:security-pass-failed`. |
 | `SECURITY_PASS_CONFIDENCE_GATE` | `8` | Minimum 1-10 confidence score for findings that block the project security pass. |
@@ -1907,6 +1988,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/review_autofix_sweep.yml
 .github/workflows/review_rb_judge_dispatch.yml
 .github/workflows/security-audit.yml
+.github/workflows/sync-claude-live-copies.yml
 .github/workflows/sync_ai_labels.yml
 .github/workflows/test-and-mark-stable.yml
 .github/workflows/update_workflows.yml

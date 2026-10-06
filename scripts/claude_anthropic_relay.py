@@ -102,6 +102,10 @@ class Relay(http.server.BaseHTTPRequestHandler):
 
 	def _reject(self, status):
 		try:
+			self.connection.settimeout(1)
+		except OSError:
+			pass
+		try:
 			self.send_error(status, "Request rejected")
 		except (ConnectionError, TimeoutError):
 			pass  # The rejection is terminal even when its response cannot be delivered.
@@ -130,21 +134,25 @@ class Relay(http.server.BaseHTTPRequestHandler):
 			or not 0 < int(length) <= MAX_BODY
 			or headers is None
 		):
-			# Consume only bounded, declared bodies so an early rejection does not
-			# close the socket while the client is still writing it.
-			if length.isascii() and length.isdecimal() and 0 < int(length) <= MAX_BODY:
-				rejected_deadline = time.monotonic() + 1
-				rejected_remaining = int(length)
+			# Consume a bounded, declared body before closing so a rejected
+			# client still sending it can receive the 400 instead of EPIPE.
+			if len(length) <= 8 and length.isascii() and length.isdecimal() and 0 < int(length) <= MAX_BODY:
+				drain_deadline = time.monotonic() + 1
+				drain_remaining = int(length)
 				try:
-					while rejected_remaining and (rejected_wait := rejected_deadline - time.monotonic()) > 0:
-						self.connection.settimeout(rejected_wait)
-						rejected_chunk = self.rfile.read1(min(rejected_remaining, 65536))
-						if not rejected_chunk:
+					while drain_remaining and (drain_wait := drain_deadline - time.monotonic()) > 0:
+						self.connection.settimeout(drain_wait)
+						drain_chunk = self.rfile.read1(min(drain_remaining, 65536))
+						if not drain_chunk:
 							break
-						rejected_remaining -= len(rejected_chunk)
+						drain_remaining -= len(drain_chunk)
 				except OSError:
 					pass
-				self.connection.settimeout(5)
+				# Give the rejection write its own bounded timeout even if draining failed.
+				try:
+					self.connection.settimeout(1)
+				except OSError:
+					pass
 			return self._reject(400)
 		body = self.rfile.read(int(length))
 		if len(body) != int(length):
