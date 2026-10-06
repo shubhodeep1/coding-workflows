@@ -5214,6 +5214,8 @@ run_reviewer_pass() {
         reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "openai/gpt-6-luna"
       elif [ "${sf_status}" = "skipped_budget" ]; then
         pass_budget_skipped=1
+        # A sole-slot context overflow is deferrable when GPT cannot start.
+        pass_hard_failures=0
       fi
     fi
   fi

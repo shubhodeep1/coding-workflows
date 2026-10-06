@@ -4708,9 +4708,10 @@ def test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer(
 				text=True,
 				check=True,
 			)
-			assert (len((root / "calls.txt").read_text(encoding="utf-8").splitlines()) if (root / "calls.txt").exists() else 0) == expected_count, (mistral_status, mistral_health_decision, fallback_status, proc.stdout, proc.stderr)
+			called_reviewers = (root / "calls.txt").read_text(encoding="utf-8").splitlines() if (root / "calls.txt").exists() else []
+			assert len(called_reviewers) == expected_count, (mistral_status, mistral_health_decision, fallback_status, proc.stdout, proc.stderr)
 			assert f"RESULT={expected_success}" in proc.stdout
-			assert partial_request_file.exists() == (fallback_status == "skipped_budget" and (mistral_status in ("skipped_unmapped", "skipped_open") or mistral_health_decision == "skip_open"))
+			assert partial_request_file.exists() == (fallback_status == "skipped_budget" and "openai/gpt-6-luna" in called_reviewers), (mistral_status, mistral_health_decision, fallback_status, proc.stdout, proc.stderr)
 			if partial_request_file.exists():
 				assert partial_request_file.read_text(encoding="utf-8") == "soft_deadline\n"
 			if expected_success:
