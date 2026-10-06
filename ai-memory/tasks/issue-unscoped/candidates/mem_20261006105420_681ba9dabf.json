@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Dispatch all three from the default branch using a validated positive PR number... The forward-merge-stable-to-main.yml fallback: dispatches at a branch the workflow cut from stable.\"\n  expected_change_site: forward-merge-stable-to-main.yml\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR description and the linked issue #4701 identify `forward-merge-stable-to-main.yml` as one of the three sites that need to be updated to dispatch from the default branch without using `--ref`. The PR diff modifies `scripts/orchestrate_poll_process.sh` and `scripts/review_merge_train.sh`, but `forward-merge-stable-to-main.yml` is missing from the PR diff.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Dispatch all three from the default branch using a validated positive PR number... The forward-merge-stable-to-main.yml fallback: dispatches at a branch the workflow cut from stable.\"\n  Expected change site: forward-merge-stable-to-main.yml\n  Evidence of absence: The PR description and the linked issue #4701 identify `forward-merge-stable-to-main.yml` as one of the three sites that need to be updated to dispatch from the default branch without using `--ref`. The PR diff modifies `scripts/orchestrate_poll_process.sh` and `scripts/review_merge_train.sh`, but `forward-merge-stable-to-main.yml` is missing from the PR diff.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "04c237f52b298331932a44a2a515e1eac241b954bcc3a84793f8924fa0167b9a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6136,
+    "run_id": "37445129114",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37445129114",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006105420_681ba9dabf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6136,
+    "run_id": "37445129114"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T10:54:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
