@@ -139,7 +139,11 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 	)
 	for name in ("SINGLE_ISSUE_SECURITY_PASS_ENABLED", "MAX_SECURITY_PASS_CYCLES", "ORCH_INTEGRATION_BRANCH_PATTERN", "SECURITY_PASS_PENDING_STALE_HOURS", "SECURITY_PASS_AUTHOR_LOGIN_FALLBACK", "FAKE_GIT_ANCESTORS", "FAKE_GIT_SHALLOW", "FAKE_GIT_FETCH_FAIL", "FAKE_GIT_UNSHALLOW_MARKER", "FAKE_GIT_INCOMPLETE_ANCESTRY"):
 		run_env.pop(name, None)
+	# The pass defaults to off; tests that exercise it opt in, and None unsets a name.
+	run_env["SINGLE_ISSUE_SECURITY_PASS_ENABLED"] = "true"
 	run_env.update(env or {})
+	for name in [key for key, value in run_env.items() if value is None]:
+		run_env.pop(name)
 	result = subprocess.run(["bash", str(SCRIPT), mode], capture_output=True, text=True, env=run_env, check=False)
 	calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line]
 	return result, calls, output.read_text(encoding="utf-8")
@@ -149,6 +153,8 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 	"pr, env, skip, reason",
 	[
 		(_pr(), {"SINGLE_ISSUE_SECURITY_PASS_ENABLED": "false"}, False, "disabled"),
+		(_pr(), {"SINGLE_ISSUE_SECURITY_PASS_ENABLED": None}, False, "disabled"),
+		(_pr(), {"SINGLE_ISSUE_SECURITY_PASS_ENABLED": ""}, False, "disabled"),
 		(_pr(base="orchestrator/project-9"), {}, False, "not_standalone"),
 		(_pr(head_ref="orchestrator/project-9"), {}, False, "not_standalone"),
 		(_pr(head_repo="fork/r"), {}, False, "not_standalone"),
@@ -658,7 +664,7 @@ def test_review_wiring() -> None:
 		assert steps[name]["if"].endswith("&& steps.single_issue_security_pass.outputs.hold != 'true'")
 	assert "review_single_issue_security_pass.sh" in STAGE.read_text(encoding="utf-8")
 	gate = _steps(REVIEW, "gate")["Evaluate review gate"]
-	assert gate["env"]["SINGLE_ISSUE_SECURITY_PASS_ENABLED"] == "${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'true' }}"
+	assert gate["env"]["SINGLE_ISSUE_SECURITY_PASS_ENABLED"] == "${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}"
 	assert "SECURITY_PASS_SKIP_SUPPRESSED=\"true\"" in gate["run"]
 	assert '[ "${SECURITY_PASS_SKIP_SUPPRESSED}" != "true" ]' in gate["run"]
 	assert '[ "${pr_base_ref}" = "${DEFAULT_BRANCH}" ]' in gate["run"]

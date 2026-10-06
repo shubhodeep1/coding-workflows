@@ -61,6 +61,7 @@ def test_profile_manifests_match_contracts() -> None:
 		"ai-validate.yml",
 		"ai-sync-labels.yml",
 		"review_rb_judge_dispatch.yml",
+		"unblock_judge_dispatch.yml",
 	]
 	full = sorted(path.name for path in WORKFLOW_TEMPLATES_DIR.glob("*.yml"))
 
@@ -263,7 +264,7 @@ def test_wrapper_ref_renderer_contract() -> None:
 
 def test_every_wrapper_template_renders_to_an_immutable_ref() -> None:
 	templates = sorted(WORKFLOW_TEMPLATES_DIR.glob("*.yml"))
-	assert len(templates) == 17
+	assert len(templates) == 18
 	for template_path in templates:
 		rendered_text = pin_reusable_workflow_refs(
 			template_path.read_text(encoding="utf-8"),
