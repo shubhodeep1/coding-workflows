@@ -1,5 +1,5 @@
 <!-- changelog: changed -->
-- **Review sandbox rejections now say which rule fired, without printing the path.** When the review editor's disposable workspace is refused at snapshot, refresh or transfer, the `::error::Review isolation snapshot or transfer rejected (ValueError)` line now ends with a fixed `reason=` token. An unsafe directory also gets a `category=` token and a bucketed `depth=`. The rejection is exactly as strict as before: no directory, symlink or file that was refused is accepted now. Before this change, the failure behind issue #6424 (PR #6288, run 37264822053) could not be traced to a rule, because the line deliberately omitted the path.
+- **Review sandbox rejections now say which rule fired, without printing the path.** For annotated checks during snapshot, refresh or transfer, the `::error::Review isolation snapshot or transfer rejected (ValueError)` line now ends with a fixed `reason=` token. An unsafe directory also gets a `category=` token and a bucketed `depth=`. Unannotated errors retain their legacy reason or `unknown`. The rejection is exactly as strict as before: no directory, symlink or file that was refused is accepted now. Before this change, the failure behind issue #6424 (PR #6288, run 37264822053) could not be traced to a rule, because the line deliberately omitted the path.
 
   | Field | Values |
   |---|---|

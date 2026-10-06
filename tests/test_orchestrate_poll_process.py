@@ -18910,6 +18910,7 @@ def test_state_identity_failure_skips_reconstruction_and_state_writes():
 		state=_base_state(status="in_progress"),
 		enable_validation="false",
 		max_validate_cycles="3",
+		env_overrides={"UNBLOCK_JUDGE_ENABLED": "false"},
 		mock_store_extra={"fail_user_lookup": True},
 	)
 	assert "ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=192 outcome=identity_unavailable" in result["stderr"]

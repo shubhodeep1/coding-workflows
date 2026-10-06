@@ -305,12 +305,12 @@ def _check_destination_parents(host, name, deleted_names):
 		except FileNotFoundError:
 			return
 		except NotADirectoryError:
-			raise ValueError("new result conflicts with host path") from None
+			raise _rejection("new result conflicts with host path", "result_conflicts_host") from None
 		if stat.S_ISDIR(info.st_mode):
 			continue
 		if stat.S_ISREG(info.st_mode) and parent.relative_to(host).as_posix() in deleted_names:
 			return
-		raise ValueError("new result conflicts with host path")
+		raise _rejection("new result conflicts with host path", "result_conflicts_host")
 
 
 def transfer(host, workspace, manifest):
@@ -347,16 +347,16 @@ def transfer(host, workspace, manifest):
 		except NotADirectoryError:
 			# Only a baseline file scheduled for deletion may become a directory.
 			if not any(name.startswith(deleted + "/") for deleted in deleted_names):
-				raise ValueError("new result conflicts with host path") from None
+				raise _rejection("new result conflicts with host path", "result_conflicts_host") from None
 		else:
 			if not stat.S_ISREG(info.st_mode):
-				raise ValueError("new result conflicts with host path")
+				raise _rejection("new result conflicts with host path", "result_conflicts_host")
 	backups = {}
 	for name, host_file, _ in changes:
 		if name in baseline:
 			backups[name] = read_regular(host_file)
 			if [hashlib.sha256(backups[name][0]).hexdigest(), backups[name][1]] != baseline[name]:
-				raise ValueError("host baseline changed")
+				raise _rejection("host baseline changed", "host_baseline_changed")
 	stage = Path(tempfile.mkdtemp(dir=host, prefix=".review-isolated-stage-"))
 	journal = []
 	try:
@@ -525,7 +525,7 @@ def main():
 		else:
 			transfer(host, workspace, manifest)
 	except (OSError, ValueError, UnicodeError, subprocess.CalledProcessError) as exc:
-		if getattr(exc, "review_reason", None) == "unsafe_directory":
+		if getattr(exc, "review_reason", None) in _REJECTION_REASONS:
 			print(_rejection_line(exc), file=sys.stderr)
 		else:
 			# Only fixed, path-free transfer reasons may cross into workflow logs.
