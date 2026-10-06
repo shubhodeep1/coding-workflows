@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -463,6 +464,118 @@ def test_reviewer_majority_is_progress_only() -> None:
 	assert 'if [ "$RUN_CONCLUSION" = "success" ]; then' in job
 	assert 'echo "status=success" >> "$GITHUB_OUTPUT"' in job
 	assert 'if [ "${PR_HEAD}" = "${BAIT_SHA}" ]; then' in job
+
+
+def _run_phase4_wait_review(
+	checked_out: str | None, *, compare_status: str = "behind", fail_first_log: bool = False,
+	run_status: str = "completed", run_conclusion: str = "success",
+) -> tuple[subprocess.CompletedProcess[str], str, int]:
+	workflow = _read_workflow()
+	step = _slice_between(workflow, '      - name: "Phase 4: Wait for review & autofix to complete"', '      # Per-phase soft-error analysis: review_autofix.')
+	body = textwrap.dedent(step.split("        run: |\n", 1)[1])
+	stub = textwrap.dedent('''\
+	date() { printf '%s\\n' "$(<"${RUNNER_TEMP}/clock")"; }
+	sleep() { printf '%s\\n' "$(( $(<"${RUNNER_TEMP}/clock") + $1 ))" > "${RUNNER_TEMP}/clock"; }
+	gh_api_safe_quiet_print() {
+	  local response=""
+	  case "$1" in
+	    */actions/runs?branch=*)
+	      if [ -n "$BAIT_UNCOVERED_RUN_IDS" ]; then
+	        response="$(<"${RUNNER_TEMP}/after.json")"
+	      else
+	        response="$(<"${RUNNER_TEMP}/before.json")"
+	      fi ;;
+	    */actions/runs/10/jobs?*) response='{"total_count":1,"jobs":[{"id":100,"status":"completed","conclusion":"success","steps":[{"conclusion":"failure"}]}]}' ;;
+	    */actions/jobs/100/logs)
+	      local count
+	      count=$(wc -l < "${RUNNER_TEMP}/log_reads")
+	      echo x >> "${RUNNER_TEMP}/log_reads"
+	      if [ "${FAIL_FIRST_LOG}" = 1 ] && [ "$count" = 0 ]; then return 1; fi
+	      response="$(<"${RUNNER_TEMP}/job.log")" ;;
+	    */compare/*) response="{\\"status\\":\\"${COMPARE_STATUS}\\"}" ;;
+	    *) echo "Unexpected API read: $1" >&2; return 1 ;;
+	  esac
+	  if [ "${2:-}" = --jq ]; then
+	    printf '%s' "$response" | jq -cr "$3"
+	  else
+	    printf '%s' "$response"
+	  fi
+	}
+	''')
+	body = body.replace('. ./scripts/comprehensive_test_and_release_gh_api.sh', stub, 1)
+	bait = "a" * 40
+	pre_bait = "b" * 40
+	base_run = {"id": 10, "name": "Internal Review", "path": "internal-review.yml", "event": "pull_request",
+		"head_sha": pre_bait, "created_at": "2026-10-06T00:00:00Z", "updated_at": "2026-10-06T00:02:00Z",
+		"status": run_status, "conclusion": run_conclusion}
+	bait_run = {**base_run, "id": 20, "head_sha": bait, "created_at": "2026-10-06T00:03:00Z",
+		"updated_at": "2026-10-06T00:04:00Z", "status": "queued", "conclusion": None}
+	with tempfile.TemporaryDirectory() as temp:
+		root = Path(temp)
+		(root / "clock").write_text("1000\n", encoding="utf-8")
+		(root / "before.json").write_text(json.dumps({"workflow_runs": [base_run, bait_run]}), encoding="utf-8")
+		(root / "after.json").write_text(json.dumps({"workflow_runs": [{**bait_run, "status": "completed", "conclusion": "success"}]}), encoding="utf-8")
+		(root / "job.log").write_text(f"Captured INITIAL_HEAD_SHA={checked_out} for stale-base detection.\n" if checked_out else "No checkout performed\n", encoding="utf-8")
+		(root / "log_reads").touch()
+		env = os.environ.copy()
+		env.update({"RUNNER_TEMP": temp, "GITHUB_OUTPUT": str(root / "output"), "TEST_REPO": "owner/repo",
+			"ISSUE_NUMBER": "12", "PR_NUMBER": "13", "BAIT_SHA": bait, "BAIT_CREATED_AT": "2026-10-06T00:01:00Z",
+			"REVIEW_TIMEOUT": "60", "REVIEW_STEP_TIMEOUT": "75", "REVIEW_PHASE_HANDOFF_BUDGET_MINUTES": "15",
+			"POLL_INTERVAL": "10", "COMPARE_STATUS": compare_status, "FAIL_FIRST_LOG": "1" if fail_first_log else "0"})
+		result = subprocess.run(["bash", "-c", body], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=30)
+		return result, (root / "output").read_text(encoding="utf-8") if (root / "output").exists() else "", len((root / "log_reads").read_text(encoding="utf-8").splitlines())
+
+
+def test_phase4_pre_bait_success_does_not_beat_queued_bait_review() -> None:
+	result, output, reads = _run_phase4_wait_review("b" * 40)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "review_run_id=10" not in output
+	assert output.splitlines() == ["status=success", "review_run_id=20"]
+	assert "E2E_BAIT_REVIEW_COVERAGE run=10 verdict=not_covered" in result.stdout
+	assert reads == 1
+
+
+def test_phase4_valid_inflight_checkout_is_accepted() -> None:
+	for checked, status in (("a" * 40, "behind"), ("c" * 40, "ahead")):
+		result, output, reads = _run_phase4_wait_review(checked, compare_status=status)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert output.splitlines() == ["status=success", "review_run_id=10"]
+		assert "verdict=covered" in result.stdout
+		assert reads == 1
+
+
+def test_phase4_unavailable_log_retries_without_accepting() -> None:
+	result, output, reads = _run_phase4_wait_review("b" * 40, fail_first_log=True)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "verdict=unknown" in result.stdout
+	assert "verdict=not_covered" in result.stdout
+	assert output.splitlines() == ["status=success", "review_run_id=20"]
+	assert reads == 2
+
+
+def test_phase4_no_checkout_marker_excludes_run() -> None:
+	result, output, _ = _run_phase4_wait_review(None)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "reason=no_checkout_marker" in result.stdout
+	assert output.splitlines() == ["status=success", "review_run_id=20"]
+
+
+def test_phase4_failure_and_early_failed_steps_are_not_accepted_without_bait() -> None:
+	for status, conclusion in (("completed", "failure"), ("in_progress", None)):
+		result, output, _ = _run_phase4_wait_review("b" * 40, run_status=status, run_conclusion=conclusion)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert output.splitlines() == ["status=success", "review_run_id=20"]
+		assert "verdict=not_covered" in result.stdout
+
+
+def test_phase4_checkout_marker_and_every_early_exit_are_covered() -> None:
+	workflow = _read_workflow()
+	phase4 = _slice_between(workflow, '      - name: "Phase 4: Wait for review & autofix to complete"', '      # Per-phase soft-error analysis: review_autofix.')
+	assert 'Captured INITIAL_HEAD_SHA=${INITIAL_HEAD_SHA}' in (REPO_ROOT / ".github/workflows/review_autofix.yml").read_text(encoding="utf-8")
+	assert "Captured INITIAL_HEAD_SHA=[0-9a-fA-F]{40}" in phase4
+	assert "BAIT_UNCOVERED_RUN_IDS" in phase4
+	assert phase4.count('if ! require_bait_review_coverage; then') == 4
+	assert phase4.count('review_run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"') == 4
 
 
 def test_success_transitions_and_unconditional_cleanup_are_preserved() -> None:
