@@ -52,10 +52,14 @@ esac
 	# A failed removal is not a successful finish; it may never authorize restore.
 	(tmp_path / "survivor").touch()
 	assert invoke("finish", isolation_root).returncode != 0
-	(tmp_path / "survivor").unlink()
-	assert invoke("finish", isolation_root).returncode == 0
-	assert invoke("cleanup", isolation_root).returncode == 0
+	assert invoke("cleanup", isolation_root).returncode != 0
 	assert not Path(isolation_root).exists()
+	(tmp_path / "survivor").unlink()
+	prepared_again = invoke("prepare", "read", "codex")
+	assert prepared_again.returncode == 0, prepared_again.stderr
+	second_isolation_root = prepared_again.stdout.strip()
+	assert invoke("cleanup", second_isolation_root).returncode == 0
+	assert not Path(second_isolation_root).exists()
 
 
 def test_launch_contracts_are_isolated_and_reaped_before_restore() -> None:

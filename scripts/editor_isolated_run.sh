@@ -103,8 +103,10 @@ finish)
 	;;
 cleanup)
 	root="${1:-}"; valid_root "${root}"
-	reap "${root}"
+	cleanup_reap_rc=0
+	(reap "${root}") || cleanup_reap_rc=$?
 	rm -rf -- "${root}"
+	exit "${cleanup_reap_rc}"
 	;;
 codex-exec)
 	root="${1:-}"; shift || true; valid_root "${root}"
