@@ -1952,6 +1952,38 @@ def test_history_fallback_uses_push_destination_remote(merge_commit_repo, monkey
 	assert "origin/main" not in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("rebuilt", [False, True])
+def test_github_destination_history_fallback_uses_matching_remote(merge_commit_repo, monkeypatch, capsys, rebuilt: bool) -> None:
+	repo, _, _, _ = merge_commit_repo
+	bare = repo.parent / "origin.git"
+	_git(repo, "remote", "add", "other", "https://github.com/p/q.git")
+	_git(repo, "config", f"url.{bare}.insteadOf", "https://github.com/p/q.git")
+	_git(repo, "fetch", "other", "main", "feature/x")
+	if rebuilt:
+		_git(repo, "checkout", "-q", "-B", "feature/x", "origin/main")
+	# The fixture rewrites GitHub URLs to a local bare repo for offline fetches.
+	# Model the GitHub push URL separately to reach the PR/history fallback path.
+	monkeypatch.setattr(guard, "_resolve_push_destination", lambda *_: guard._PushDestination("other", ("p/q",), "other", ""))
+	monkeypatch.setattr(guard, "_read_cache", lambda *_: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *_: (_ for _ in ()).throw(guard.LookupUnavailable("offline")))
+	observed: list[list[str]] = []
+	original_run = guard._run
+	def record_history_call(argv, cwd, timeout):
+		observed.append(argv)
+		return original_run(argv, cwd, timeout)
+	monkeypatch.setattr(guard, "_run", record_history_call)
+	code, message = guard.evaluate(_bash_payload("git push other feature/x") | {"cwd": str(repo)})
+	assert code == (0 if rebuilt else 2), message
+	assert any(argv[:6] == ["env", "GIT_TERMINAL_PROMPT=0", "git", "ls-remote", "--heads", "other"] for argv in observed)
+	assert any(argv[:6] == ["env", "GIT_TERMINAL_PROMPT=0", "git", "fetch", "--quiet", "other"] for argv in observed)
+	if rebuilt:
+		decision_output = capsys.readouterr().out
+		assert "inconclusive" in decision_output
+		assert json.loads(decision_output)["hookSpecificOutput"]["permissionDecision"] == "ask"
+	else:
+		assert "fully contained in other/main" in message
+
+
 def test_raw_url_without_remote_asks_when_api_unavailable(merged_branch_repo, monkeypatch, capsys) -> None:
 	repo, _ = merged_branch_repo
 	monkeypatch.setattr(guard, "_read_cache", lambda *args: None)

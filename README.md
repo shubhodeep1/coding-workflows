@@ -2017,8 +2017,12 @@ and credential steps use the released `@stable` action refs, like its
 `setup-runtime@stable` step.
 The poller's `WAVE_JUDGE` is a read-only exception: Claude evaluates untrusted
 PR diffs in the network-isolated snapshot, and its Codex fallback drops the
-poller's GitHub and Telegram tokens. Trusted poller code parses the verdict
-and performs the state transitions; if Claude isolation cannot start, exit
+poller's GitHub, Telegram, Actions and Anthropic credentials and uses Codex's
+read-only sandbox. Codex still needs `OPENROUTER_API_KEY` for model access, but
+its shell environment policy excludes that key from model-launched commands;
+unlike Claude's isolated path, the fallback is not a credential-free container.
+Trusted poller code parses the verdict and performs the state transitions; if
+Claude isolation cannot start, exit
 `75` selects the token-stripped Codex fallback.
 
 **Claude-fixer mode** (Phase 5c, Q19/Q35) is the review write roles on
