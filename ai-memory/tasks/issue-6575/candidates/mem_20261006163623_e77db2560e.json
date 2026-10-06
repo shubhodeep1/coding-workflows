@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6575,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6575\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6577\",\"pr_number\":6577,\"branch\":\"ai/issue-6575\",\"run_id\":\"37495045109\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37495045109\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"agents.md\",\"changelog.d/6575-conflict-manifest-delete-modify.md\",\"scripts/review_conflict_prepare.sh\",\"scripts/review_untrusted_workspace.py\",\"tests/test_conflict_manifest_union_contract.py\"]}",
+  "fingerprint": "ad968b9dcbb0fe21346a1664bc818daaeae2ac320af32d13d535d557403f9e9c",
+  "lineage": {
+    "issue_number": 6575,
+    "parent_ids": [],
+    "pr_number": 6577,
+    "run_id": "37495045109",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37495045109",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6577"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261006163623_e77db2560e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6575,
+    "level": "run",
+    "pr_number": 6577,
+    "run_id": "37495045109"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6575: https://github.com/shubhodeep1/coding-workflows/pull/6577",
+  "timestamps": {
+    "created_at": "2026-10-06T16:36:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
