@@ -388,6 +388,17 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Prepare template-only PR live copies for parity tests
+        if: github.event_name == 'pull_request' && github.base_ref == 'main'
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          python3 scripts/sync_claude_live_copies.py sync --dry-run --before "${PR_BASE_SHA}" --after HEAD --keep-committed-security-paths
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -458,6 +469,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_pr_merge_status_guard.py
+
+      - name: Live .claude/ copies match their templates
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_template_live_parity.py
 
       - name: Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)
         # Drives scripts/review_merge_train.sh through a fake `gh` and pins
