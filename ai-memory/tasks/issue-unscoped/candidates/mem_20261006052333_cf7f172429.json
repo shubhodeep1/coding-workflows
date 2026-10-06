@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Heal-evidence implementations now derive their scope lock only from concrete files in the approved plan\" and changelog fragment files are only deleted by `scripts/assemble_changelog.py` at release time.\n  expected_change_site: `changelog.d/6221-heal-evidence-editor-isolation.md`\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `last_run_diff.patch` shows the previous autofix run deleting all 6 lines of `changelog.d/6221-heal-evidence-editor-isolation.md`, including content about unrelated issue #6221; the file currently exists in the working tree (4 lines, the merge-commit version), but the LAST RUN attempted the deletion.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Heal-evidence implementations now derive their scope lock only from concrete files in the approved plan\" and the underlying contract that changelog fragment files are only deleted by `scripts/assemble_changelog.py` at release time (CLAUDE.md \u00a720: \"scripts/assemble_changelog.py folds fragments into CHANGELOG.md and deletes them. It runs from automation only (\u00a718.A/\u00a718.B) \u2014 never by hand\").\n  Expected change site: `changelog.d/6221-heal-evidence-editor-isolation.md` (which the merge commit `a196dd1` just added with `4 +` and whose deletion the LAST RUN attempted).\n  Evidence of absence: `last_run_diff.patch` shows the previous autofix run deleting all 6 lines of `changelog.d/6221-heal-evidence-editor-isolation.md` \u2014 including content about a separate issue (#6221 heal-evidence editor isolation) that is unrelated to this PR (#6443 scope lock). Per CLAUDE.md \u00a720, fragment deletion is the assembler's job at release time, not a PR-level autofix action; the cross-pollination consensus from `qwen_qwen3_7-plus` and the advisory note from `minimax_minimax-m3` flag the same deletion. The file currently exists in the working tree (4 lines, the merge-commit version), so the deletion may not have stuck, but the LAST RUN's action attempted to bypass the assembler-only delete contract. The PR scope (`Closes #6443`) does not authorize removing #6221's fragment.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- HARDENING_SUGGESTION\n  File: scripts/workflow_failure_heal_evidence.py\n  Location: _cmd_scope_allowlist (lines 1620-1666), specifically the `try/except (ImportError, OSError, ValueError)` block\n  Issue: When the plan file is unreadable or imports fail, the function silently falls back to `{\"source\": \"none\", \"allowlist\": []}`. This is fail-closed for the implement guard (which blocks the run), but operators have no log line tying the empty result back to a parse/read failure. The `reasons` dict and `log(...)` call sit inside the `try`; the `except` branch returns early without logging why.\n  Suggested minimal fix: Add a one-line `log(f\"scope_allowlist source=none kept=0 rejected=0 reason=exception\")` in the `except` branch before assigning `result`, so an `ImportError`/`OSError` from a missing module or unreadable plan file is observable in the workflow log instead of appearing as a silent \"none\" source.\n  Estimated lines changed: 1\n  HARDENING_RISK_SCORE: 2\n- HARDENING_SUGGESTION\n  File: scripts/workflow_failure_heal_evidence.py\n  Location: _cmd_scope_allowlist, JSON output\n  Issue: The `log` line in the success path emits the keep/reject counts and reason breakdown but never logs the surviving allowlist itself. Operators triaging a blocked heal run have to find the plan file and re-run extraction to see what survived the filter.\n  Suggested minimal fix: Append ` entries={','.join(result['allowlist'])}` to the existing `log(...)` format string so the final allowlist is observable next to the rejection breakdown.\n  Estimated lines changed: 1\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "cb29bb29bd39f0814c6fbdcc52ef3521cfffc642315ab77b51cf7f589966fc95",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6451,
+    "run_id": "37415967354",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37415967354",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006052333_cf7f172429",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6451,
+    "run_id": "37415967354"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-06T05:23:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
