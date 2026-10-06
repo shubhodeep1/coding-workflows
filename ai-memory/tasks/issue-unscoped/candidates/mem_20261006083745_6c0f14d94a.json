@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:538-543, 1563-1567 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, openai_gpt-6-luna]\n  PROBLEM: An unresolved `env -C` directory falls through to querying the session checkout\u2019s PR status instead of requesting confirmation.\n  WHY: The `env -C /does-not-exist git commit -m x` test fails because `query_pull_requests` is called; both reviewers rate this MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/hooks/pr_merge_status_guard.py: _evaluate_bash, around line 1566 in the query_pull_requests fallback path | severity=high | confidence=5\n  PROBLEM: An unresolved env -C directory falls through to query_pull_requests on the session checkout rather than short-circuiting to the ask-confirmation path.\n  WHY: The test mock forbids query_pull_requests, and calling it causes CI failure in tests-hooks-and-orchestrator.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/pr_merge_status_guard.py: Lines 538-543 and 1563-1567 | severity=high | confidence=5\n  PROBLEM: An unresolved `env -C` directory is replaced with the session checkout, and the commit path queries that checkout\u2019s PR status instead of requesting confirmation.\n  WHY: CI failed in `test_env_unresolved_commit_directory_asks_instead_of_checking_checkout` because `query_pull_requests` was called for `env -C /does-not-exist git commit -m x`. The `tests-hooks-and-orchestrator` job fails as a result. This issue is outside the PR diff.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "d4e444344593f4346ee1fa89acb952fc7f7b62c8a72e8f893afe67d2f7332f7e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6522,
+    "run_id": "37432953686",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37432953686",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006083745_6c0f14d94a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6522,
+    "run_id": "37432953686"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T08:37:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
