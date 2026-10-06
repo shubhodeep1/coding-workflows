@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:541-1503 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: `_evaluate_bash` relies on an exact string match with the warning generated in `_guarded_git_invocations` to identify unresolved `env -C` commits.\n  WHY: If the warning wording changes at only one site, the guard may fall through to querying PR history against the session checkout.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cWorker deploys run after the operator approves the emitted step (with a dry run first).\u201d\n  expected_change_site: `.claude/commands/deploy-activate.md` and `workflow-templates/.claude/commands/deploy-activate.md`, with coverage in `tests/test_deploy_activate_command.py`.\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: Both command copies describe local checks, including `wrangler deploy --dry-run`, as optional in the pre-deploy checks; the test only checks that the dry-run command is mentioned.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/hooks/pr_merge_status_guard.py:1499-1503 | severity=low | confidence=2\n  PROBLEM: The commit-handling branch matches the generated warning with exact string equality.\n  WHY: If the warning text in `_guarded_git_invocations` line 544 drifts from the string literal in `_evaluate_bash` line 1499, the guard no longer intercepts unresolved env -C commits and they re-enter the session-checkout query path that the regression fix was built to stop.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/hooks/pr_merge_status_guard.py:1499-1503 | severity=low | confidence=2\n  PROBLEM: The logic that identifies and skips commits where the directory cannot be resolved due to `env -C` depends on an exact string equality check against a warning message generated elsewhere in the same file.\n  WHY: If the warning message in `_guarded_git_invocations` (line 541-549) is refactored or its wording adjusted without also updating this exact string match, the guard will fail to correctly skip these git commit invocations. Instead, it will fall back to querying PR history against the session checkout, which can lead to incorrect behavior for commit commands using `env -C` or `--chdir`.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: \u201cWorker deploys run after the operator approves the emitted step (with a dry run first).\u201d\n  Expected change site: `.claude/commands/deploy-activate.md` and `workflow-templates/.claude/commands/deploy-activate.md`, with coverage in `tests/test_deploy_activate_command.py`.\n  Evidence of absence: Both command copies describe local checks, including `wrangler deploy --dry-run`, as optional in the pre-deploy checks. They do not require a dry run before deployment when an isolated sandbox is available. The test only checks that the dry-run command is mentioned.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/hooks/pr_merge_status_guard.py:1499-1503 (consumer) and 541-546 (producer) | severity=low | confidence=3\n  PROBLEM: The commit-handling branch in `_evaluate_bash` matches the warning string from `_guarded_git_invocations` with exact string equality. The warning text is constructed inline at line 544 and consumed at line 1499 as a literal match.\n  WHY: The guard is load-bearing for the unresolved-directory case. A wording drift re-enables silent PR-history lookups against the wrong checkout for `env -C` commands pointing at nonexistent directories.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0a56e1c44143d19cf2172ab8e0d438abee18a9bfcc79d7c1d144cba94f4cf000",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6435,
+    "run_id": "37421162016",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37421162016",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006063317_db4ad723a6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6435,
+    "run_id": "37421162016"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T06:33:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
