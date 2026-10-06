@@ -104,7 +104,7 @@ _POLLER_AI_ENGINE_SH="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && p
 poller_claude_judge()
 {
   local role="$1" prompt_file="$2" output_file="$3" log_file="$4" model_hint="${5:-${MODEL_EDITOR:-}}" judge_workdir="${6:-${PWD}}"
-  local judge_engine="codex" judge_rc=0 judge_read_only=false
+  local judge_engine="codex" judge_rc=0 judge_read_only="${AI_ENGINE_READ_ONLY:-false}"
   [ -f "${_POLLER_AI_ENGINE_SH}" ] || return 75
   # shellcheck source=ai_engine.sh
   source "${_POLLER_AI_ENGINE_SH}" || return 75
@@ -23971,19 +23971,37 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
 
       echo "Attempting auto-recovery (budget used after this cycle: $((RECOVERY_COUNT + RECOVERY_BUDGET_CHARGE))/${MAX_RECOVERY_ATTEMPTS})..."
 
-      # Revert problematic PRs if judge requested
+      # Revert only merged implementation PRs of issues in this wave. A
+      # judge-provided issue number or a mention-only cross-reference cannot
+      # authorize a write to another project's PR.
       if [ "${REVERT_COUNT}" -gt 0 ]; then
         echo "Reverting ${REVERT_COUNT} PR(s)..."
-        echo "${JUDGE_JSON}" | jq -r '.issues_to_revert[]?' | while read -r revert_issue; do
+        JUDGE_REVERT_TARGET_BASE="${INTEGRATION_BRANCH_TRACKING:-${DEFAULT_BRANCH}}"
+        echo "${JUDGE_JSON}" | jq -r --slurpfile revert_state "${STATE_FILE}" --argjson wave_idx "${WAVE_IDX}" '
+          [(.issues_to_revert | if type == "array" then . else [] end)[]
+          | select(type == "string" or type == "number") | tostring
+          | select(test("^[1-9][0-9]*$"))
+          | . as $requested | select(any($revert_state[0].waves[$wave_idx].issues[]?;
+              (.github_issue | tostring) == $requested and .status == "merged"))] | unique[]
+        ' | while IFS= read -r revert_issue; do
           # Find PR linked to this issue
           PR_TO_REVERT="$(_issue_cross_ref_pr_number_last "${revert_issue}" 2>/dev/null || echo "")"
           if [[ "${PR_TO_REVERT}" =~ ^[0-9]+$ ]]; then
+            # The timeline cache contains only the PR number; this one payload
+            # read is required to verify the head, merged state, and base.
+            PR_REVERT_JSON="$(_fetch_pr_json "${PR_TO_REVERT}")"
+            if ! _pr_json_is_issue_implementation_pr "${revert_issue}" "${PR_REVERT_JSON}" ||
+               ! printf '%s' "${PR_REVERT_JSON}" | jq -e --arg base "${JUDGE_REVERT_TARGET_BASE}" \
+                 '(.merged_at != null) and (.base.ref == $base)' >/dev/null 2>&1; then
+              echo "::warning::Skipping unverified judge revert target: issue #${revert_issue}, PR #${PR_TO_REVERT}." >&2
+              continue
+            fi
             echo "  Reverting PR #${PR_TO_REVERT} (issue #${revert_issue})..."
             # Create revert PR via gh
             gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls" \
               -f title="Revert PR #${PR_TO_REVERT} (orchestrator auto-recovery)" \
               -f head="revert-${PR_TO_REVERT}-$(date +%s)" \
-              -f base="${DEFAULT_BRANCH}" \
+              -f base="${JUDGE_REVERT_TARGET_BASE}" \
               -f body="Automated revert of PR #${PR_TO_REVERT} by orchestrator judge.
 
 **Reason:** ${JUDGE_JUSTIFICATION}" >/dev/null 2>&1 || {
@@ -23992,7 +24010,7 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
               MERGE_SHA="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${PR_TO_REVERT}" --jq '.merge_commit_sha' || echo "")"
               if [ -n "${MERGE_SHA}" ] && [ "${MERGE_SHA}" != "null" ]; then
                 REVERT_BRANCH="revert-${PR_TO_REVERT}-$(date +%s)"
-                git checkout -b "${REVERT_BRANCH}" "${DEFAULT_BRANCH}"
+                git checkout -b "${REVERT_BRANCH}" "${JUDGE_REVERT_TARGET_BASE}"
                 if git revert --no-edit "${MERGE_SHA}"; then
                   git push -u origin "${REVERT_BRANCH}"
                   mapfile -t _engine_label_args < <(engine_label_create_args)
@@ -24002,12 +24020,12 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
                     --body "Automated revert of PR #${PR_TO_REVERT} by orchestrator judge.
 
 **Reason:** ${JUDGE_JUSTIFICATION}" \
-                    --base "${DEFAULT_BRANCH}" \
+                    --base "${JUDGE_REVERT_TARGET_BASE}" \
                     --head "${REVERT_BRANCH}"
                 else
                   echo "::warning::Git revert of ${MERGE_SHA} failed (conflicts). Manual revert needed."
                 fi
-                git checkout "${DEFAULT_BRANCH}" 2>/dev/null || true
+                git checkout "${JUDGE_REVERT_TARGET_BASE}" 2>/dev/null || true
               fi
             }
           fi

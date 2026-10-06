@@ -400,6 +400,10 @@ fi
 }
 
 WORKFLOW_SUPPORT_SOURCE_REPO_DEFAULT="shubhodeep1/coding-workflows"
+# Directory of this helper. Callers run it from a trusted support checkout
+# (validate.yml clones the default branch; review_autofix.yml verifies
+# .codex-workflow-src), so its sibling scripts match its own CLI flags.
+STAGE_SUPPORT_HELPER_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P || true)"
 
 usage()
 {
@@ -843,8 +847,17 @@ run_overlay_loader()
 	if [ -f "${SUPPORT_PRIMARY_ROOT}/ai-memory/schemas/workflow_overlay.v1.json" ]; then
 		overlay_schema_path="${SUPPORT_PRIMARY_ROOT}/ai-memory/schemas/workflow_overlay.v1.json"
 	fi
+	# Run the loader that ships with this helper, not the target checkout's
+	# copy: in the source repo SUPPORT_PRIMARY_ROOT is the target checkout,
+	# and a target branch older than the helper rejects the trusted-overlay
+	# flags below (#6031: unrecognized --trusted-source-repo, exit 2). The
+	# relative path stays as the fallback when the sibling copy is absent.
+	local overlay_loader_path="scripts/load_workflow_overlay.py"
+	if [ -n "${STAGE_SUPPORT_HELPER_DIR:-}" ] && [ -f "${STAGE_SUPPORT_HELPER_DIR}/load_workflow_overlay.py" ]; then
+		overlay_loader_path="${STAGE_SUPPORT_HELPER_DIR}/load_workflow_overlay.py"
+	fi
 	# The default-branch copy must outlive SUPPORT_STAGE_ROOT's EXIT cleanup.
-	PYTHONDONTWRITEBYTECODE=1 python3 scripts/load_workflow_overlay.py \
+	PYTHONDONTWRITEBYTECODE=1 python3 "${overlay_loader_path}" \
 		--repo-root "${REPO_ROOT}" \
 		--trusted-source-repo "${GITHUB_REPOSITORY}" \
 		--trusted-root "${RUNNER_TEMP}/workflow-overlay-trusted-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \

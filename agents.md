@@ -15,8 +15,10 @@ its consumer template) recognizes guarded git commands after nested control
 words, shell negation (`!`), and simple `case` arms. Since their effective
 directory is uncertain, pushes check the session checkout and request
 confirmation unless blocked; commits in that context remain warning-only
-when not blocked. An unresolved `env -C` commit instead requests confirmation
-without looking up PRs for the session checkout.
+when not blocked.
+An env-wrapped commit whose directory cannot be resolved instead asks for
+confirmation without querying PRs for the session checkout, which may be a
+different repository.
 
 ---
 
@@ -284,7 +286,7 @@ Git metadata is omitted. Session reuse mounts only the selected session ID's
 transcript directory.
 The merged-PR push guard preserves whitespace-separated numeric refspecs before
 output redirects; only attached numeric file-descriptor prefixes are removed.
-For pushes it checks Git's effective push URL (including URL rewrites and inline config) before looking up the destination PR; non-GitHub raw remotes rewritten to GitHub are accepted. Unresolvable config, including `env -S` / `--split-string` commands, asks for confirmation.
+For pushes it checks Git's effective push URL (including URL rewrites and inline config) before looking up the destination PR; non-GitHub raw remotes rewritten to GitHub are accepted, while empty configured push URLs are rejected. Unresolvable config and split-string pushes ask for confirmation; literal `env -S` commits are checked against their selected checkout.
 Git writes with process substitution (for example a dynamic `GIT_CONFIG_GLOBAL` file) ask for confirmation before the guard trusts any parsed destination.
 Deletion and tag-only pushes validate the effective destination too, but do not query PR history for a branch commit.
 The Bash guard also recognizes absolute `env` and `git` executable paths when resolving these inline overrides.
@@ -791,7 +793,9 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   does not trust its stored URL or PR history for that push. Wrapped commits
   are checked in the directory selected by `env -C` or `GIT_DIR`; a commit
   from an ambiguous directory and an unparseable `env -S` command ask for
-  confirmation. A push from an unresolved directory (including an appended
+  confirmation. When `env -C` cannot resolve its directory, the commit guard
+  asks without querying the session checkout's PR history. A push from an
+  unresolved directory (including an appended
   `GIT_DIR+=` / `GIT_WORK_TREE+=`, whose value is never applied) is checked
   against the session checkout, which can still block, and otherwise asks.
   Leading redirections, including those after environment assignments, do
@@ -939,8 +943,8 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
 
 The **Engine · Claude role** column names today's engine and the role name
 `scripts/ai_engine.sh` resolves for that row (README "Claude engine").
-Host read-profile Claude runs (including SECURITY_AUDIT, SECURITY_JUDGE and
-WORKFLOW_HEAL) use an exact-command PreToolUse Bash guard and temporarily
+Host read-profile Claude runs (including WAVE_JUDGE, SECURITY_AUDIT, SECURITY_JUDGE
+and WORKFLOW_HEAL) use an exact-command PreToolUse Bash guard and temporarily
 remove write bits from trusted support while recording hashes and directory
 entries. Verification precedes unlock; lock failures and mismatches return 86
 without a codex fallback. The security-audit report, heal intake and poller
@@ -982,9 +986,11 @@ fallback still fails preflight if its configuration is unavailable.
 Missing isolation returns exit 75, never host Claude.
 The poller's `WAVE_JUDGE` verdict uses `AI_ENGINE_READ_ONLY=true` so untrusted
 PR diffs are evaluated in the isolated container, not by a host write-profile
-model with the poller's GitHub token. Its Codex fallback runs through the
-existing `clarify_isolated_run.sh` container and OpenRouter broker, not host
-Codex, so it cannot read the runner's Claude token pool. The poll workflow
+model with the poller's GitHub token. `poller_claude_judge` preserves the same
+caller override for `STALL_JUDGE` and the `RB_JUDGE` verdict. The wave judge's
+Codex fallback runs through the existing `clarify_isolated_run.sh` container
+and OpenRouter broker, not host Codex, so it cannot read the runner's Claude
+token pool. The poll workflow
 stages the runner, broker and catalog from verified support. Missing Docker or
 snapshots exceeding 5,000 files/64 MiB fail the judge attempt closed rather
 than running on the host; trusted poller code still applies the validated

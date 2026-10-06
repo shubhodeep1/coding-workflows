@@ -62,6 +62,7 @@ def _run_helper(
 	tracking_labels: str | None = '["bug","ai:engine-claude"]',
 	judge_role: str = "WAVE_JUDGE",
 	judge_workspace: Path | None = None,
+	read_only: str = "false",
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
 	scripts = tmp_path / "scripts"
 	scripts.mkdir(parents=True, exist_ok=True)
@@ -82,7 +83,7 @@ def _run_helper(
 		+ (f' {judge_workspace}' if judge_workspace is not None else '') + ' || rc=$?\n'
 		+ 'echo "rc=${rc}"\n'
 	)
-	env = dict(os.environ, CALLS=str(calls), FAKE_ENGINE=engine, FAKE_CLAUDE_MODE=claude_mode)
+	env = dict(os.environ, CALLS=str(calls), FAKE_ENGINE=engine, FAKE_CLAUDE_MODE=claude_mode, AI_ENGINE_READ_ONLY=read_only)
 	for key in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
 		env.pop(key, None)
 	proc = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60, check=False)
@@ -103,6 +104,13 @@ def test_judge_on_claude_runs_claude_run_with_the_tracking_labels(tmp_path: Path
 	assert _read(Path(f"{calls}.resolve")).splitlines() == ['WAVE_JUDGE|["bug","ai:engine-claude"]']
 	assert _read(Path(f"{calls}.profile")).splitlines() == ["true"]
 	assert "AI_ENGINE_SELECTED role=WAVE_JUDGE engine=claude" in _read(tmp_path / "judge_log.txt")
+
+
+@pytest.mark.parametrize("judge_role", ("STALL_JUDGE", "RB_JUDGE"))
+def test_read_only_verdict_callers_keep_the_read_profile(tmp_path: Path, judge_role: str) -> None:
+	proc, calls = _run_helper(tmp_path, engine="claude", judge_role=judge_role, read_only="true")
+	assert "rc=0" in proc.stdout, proc.stderr
+	assert _read(Path(f"{calls}.profile")).splitlines() == ["true"]
 
 
 def test_judge_on_codex_returns_75_without_running_claude(tmp_path: Path) -> None:
@@ -273,6 +281,8 @@ def test_each_judge_tries_claude_then_runs_the_unchanged_codex_command() -> None
 		assert text.index(codex_call, start) > text.index(gate, start), role
 		assert text.count(codex_call) == 1, role
 	assert len(re.findall(r"^\s+(?:AI_ENGINE_READ_ONLY=true )?poller_claude_judge [A-Z_]+ ", text, re.M)) == len(SITES)
+	assert 'AI_ENGINE_READ_ONLY=true poller_claude_judge STALL_JUDGE ' in text
+	assert 'AI_ENGINE_READ_ONLY=true poller_claude_judge RB_JUDGE ' in text
 	assert "codex --ask-for-approval" not in SITES["WAVE_JUDGE"][2]
 	assert 'MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT_JUDGE:-high}"' in text
 	fallback = REPO_ROOT / "scripts" / "clarify_isolated_run.sh"

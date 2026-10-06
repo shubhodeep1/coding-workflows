@@ -799,7 +799,7 @@ def test_read_isolation_missing_support_falls_back(sandbox: dict) -> None:
 	args = " ".join(shlex.quote(str(part)) for part in ("SECURITY_AUDIT", sandbox["prompt"], sandbox["tmp"] / "out.txt", sandbox["work"]))
 	result = _bash(sandbox, f'_AI_ENGINE_DIR={shlex.quote(str(support_scripts))}; rc=0; claude_run {args} || rc=$?; echo "RC=${{rc}}"')
 	assert _rc(result) == 75
-	assert "reason=isolation_support_missing" in result.stderr
+	assert "reason=policy_unavailable" in result.stderr
 	assert _calls(sandbox) == []
 
 
@@ -1316,3 +1316,24 @@ def test_write_role_reuses_the_prepared_implement_sandbox(sandbox: dict) -> None
 	assert _rc(result) == 0, result.stderr
 	run = docker_runs(sandbox["bin"].parent / "fake-docker.jsonl")[-1]
 	assert f"coding-workflows.codex-isolated.root={root}" not in run["argv"]
+
+
+def test_every_workflow_staging_ai_engine_also_stages_its_stall_guard() -> None:
+	"""claude_run calls ${_AI_ENGINE_DIR}/codex_stall_guard.sh with --engine.
+
+	A workflow that stages ai_engine.sh from the support ref but leaves the
+	stall guard to the checkout runs whatever guard the checked-out branch
+	carries. A heal issue plans against `stable`, whose older guard rejected
+	`--engine` and crashed every Claude planning attempt (runs 37389550162,
+	37389524799, 37389535878).
+	"""
+	workflows = sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml"))
+	staging_lists = []
+	for path in workflows:
+		for line in path.read_text(encoding="utf-8").splitlines():
+			stripped = line.strip()
+			if stripped.startswith("for f in ") and stripped.endswith("; do") and " ai_engine.sh " in f" {stripped} ":
+				staging_lists.append((path.name, stripped.split()))
+	assert {name for name, _ in staging_lists} >= {"plan.yml", "clarify.yml", "orchestrate_clarify_respond.yml", "implement.yml"}
+	missing = [name for name, names in staging_lists if "codex_stall_guard.sh" not in names]
+	assert not missing, f"stage codex_stall_guard.sh beside ai_engine.sh in: {missing}"

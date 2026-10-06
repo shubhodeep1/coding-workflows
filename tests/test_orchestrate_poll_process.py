@@ -14841,6 +14841,44 @@ def test_judge_non_array_new_issues_is_treated_as_empty_without_aborting_cycle()
 	assert "RECOVERY_BUDGET_ACCOUNTING tracking_issue=192 charge=0" in result["stdout"]
 
 
+@pytest.mark.parametrize(
+	("revert_targets", "pr_head", "pr_base", "pr_merged", "integration_branch", "expect_revert"),
+	[
+		(["10", "999", "10\n999", {"number": 10}], "ai/issue-10", "main", True, "", True),
+		(["10"], "ai/issue-10", "orchestrator/project-192", True, "orchestrator/project-192", True),
+		(["999", "10\n999", {"number": 10}], "ai/issue-10", "main", True, "", False),
+		(["10"], "ai/issue-999", "main", True, "", False),
+		(["10"], "ai/issue-10", "other-branch", True, "", False),
+		(["10"], "ai/issue-10", "main", False, "", False),
+	],
+)
+def test_wave_judge_revert_only_targets_merged_current_wave_implementation_pr(
+	revert_targets: list, pr_head: str, pr_base: str, pr_merged: bool,
+	integration_branch: str, expect_revert: bool,
+) -> None:
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"][0]["status"] = "merged"
+	state["integration_branch"] = integration_branch
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		enable_clean_wave_judge_skip="false", issue_labels={10: ["ai:merged"]},
+		issue_linked_prs={10: 77, 999: 78},
+		prs=[
+			{"number": 77, "state": "closed", "merged": pr_merged, "headRefName": pr_head, "baseRefName": pr_base},
+			{"number": 78, "state": "closed", "merged": True, "headRefName": "ai/issue-999", "baseRefName": "main"},
+		],
+		codex_json={
+			"status": "failed", "justification": "broken build", "assessment": "needs revert",
+			"new_issues": [], "issues_to_revert": revert_targets,
+		},
+	)
+	output = result["stdout"] + result["stderr"]
+	assert ("Reverting PR #77 (issue #10)" in output) is expect_revert
+	assert "Reverting PR #78" not in output
+	assert result.get("pr_get_calls", {}).get("78", 0) == 0
+	assert result["latest_state"]["status"] == "in_progress"
+
+
 def _backpressure_3928_shape_prs() -> list[dict]:
 	return [
 		{
