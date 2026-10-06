@@ -435,7 +435,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			index += 1
 		if index == len(tokens) and assignment_only_config:
 			config_mutated = True
-		if index < len(tokens) and tokens[index] == "env":
+		if index < len(tokens) and (tokens[index] == "env" or tokens[index].endswith("/env")):
 			index += 1
 			while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
 				name, value = tokens[index].split("=", 1)
@@ -448,7 +448,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				index += 1
 			if index < len(tokens) and tokens[index].startswith("-"):
 				config_uncertain = "env options may change git configuration"
-				while index < len(tokens) and tokens[index] != "git":
+				while index < len(tokens) and tokens[index] != "git" and not tokens[index].endswith("/git"):
 					index += 1
 		if index >= len(tokens) or (tokens[index] != "git" and not tokens[index].endswith("/git")):
 			continue
@@ -767,7 +767,7 @@ def git_subcommands(command: str) -> set[str]:
 		index = 0
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
 			index += 1
-		if index < len(tokens) and tokens[index] == "env":
+		if index < len(tokens) and (tokens[index] == "env" or tokens[index].endswith("/env")):
 			index += 1
 			# Options make the environment uncertain, but the guard must still
 			# detect a push after e.g. `env -u VAR git push` and ask.
