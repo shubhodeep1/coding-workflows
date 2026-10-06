@@ -126,7 +126,6 @@ ai_pipeline.md
 analysis/last_collection_timestamp.txt
 analysis/recommendation-processing-report.md
 analysis/validation-selftest-status.json
-analysis/workflow-optimization-2026-09-03.md
 analysis/workflow-optimization-2026-09-06.md
 analysis/workflow-optimization-2026-09-07.md
 analysis/workflow-optimization-2026-09-08.md
@@ -162,6 +161,7 @@ analysis/workflow-optimization-2026-10-01.md
 analysis/workflow-optimization-2026-10-02.md
 analysis/workflow-optimization-2026-10-03-2.md
 analysis/workflow-optimization-2026-10-03.md
+analysis/workflow-optimization-2026-10-06.md
 changelog.d/.gitkeep
 changelog.d/3965-validation-run-attribution.md
 changelog.d/4618-sweep-dispatch-default-branch.md
@@ -210,10 +210,13 @@ changelog.d/6118-phase-8c-activation-verification.md
 changelog.d/6118-phase-8d-retarget-merged-base.md
 changelog.d/6133-pr-merge-guard-live-copy-sync.md
 changelog.d/6181-review-transfer-failure-evidence.md
+changelog.d/6187-isolated-codex-agents.md
 changelog.d/6193-claude-write-role-tool-list.md
 changelog.d/6202-claude-md-25-scheduled-status-checks.md
 changelog.d/6204-review-sandbox-audit-plans-parity.md
 changelog.d/6222-review-command-isolation.md
+changelog.d/6230-security-audit-oversized-scoped-files.md
+changelog.d/6231-integration-judge-scope-guard.md
 changelog.d/6248-static-context-symlink-guard.md
 changelog.d/6249-merge-guard-ampersand-redirect.md
 changelog.d/6262-clarify-respond-standalone.md
@@ -222,10 +225,21 @@ changelog.d/6293-numeric-push-refspec-redirect.md
 changelog.d/6304-pr-merge-guard-spaced-numeric-refspec.md
 changelog.d/6321-merge-guard-empty-quote-fd.md
 changelog.d/6322-pr-merge-guard-single-json-output.md
+changelog.d/6324-review-blocked-fix-scope-guard.md
+changelog.d/6325-review-blocked-fix-target-provenance.md
+changelog.d/6347-security-audit-full-scan-oversized-chunks.md
+changelog.d/6348-dependency-registry-proxy.md
+changelog.d/6360-integration-judge-protected-provenance.md
+changelog.d/6362-deps-network-without-source.md
 changelog.d/6375-claude-live-sync-provenance-hold.md
+changelog.d/6388-review-blocked-pr-head-identity.md
+changelog.d/6389-review-blocked-fix-scope-pr-files-only.md
 changelog.d/6391-sync-pr-lookup-verifies-base.md
+changelog.d/6400-rb-judge-security-severity-block.md
+changelog.d/6401-single-issue-security-pass-completed-audit.md
 changelog.d/6404-claude-live-sync-pr-provenance.md
 changelog.d/6413-phase-failure-heal-reports.md
+changelog.d/6420-release-gate-claude-parity.md
 changelog.d/autofix-cap-and-security-exhaustion-judge.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/release-smoke-run-lookup.md
@@ -475,6 +489,8 @@ scripts/claude_pool_token.sh
 scripts/claude_settings.json.tmpl
 scripts/codex_heartbeat.sh
 scripts/codex_helpers.sh
+scripts/codex_isolated_exec.sh
+scripts/codex_isolated_workspace.py
 scripts/codex_model_catalog.json
 scripts/codex_model_catalog_overrides.yaml
 scripts/codex_stall_guard.sh
@@ -485,6 +501,7 @@ scripts/compare_issue_timeline_parity.sh
 scripts/comprehensive_test_and_release_gh_api.sh
 scripts/consolidate_soft_error_reports.py
 scripts/cost_audit.py
+scripts/dependency_registry_proxy.py
 scripts/detect_editor_changes_lost.sh
 scripts/dev/replay_review_pipeline.sh
 scripts/dev/test_codex_helpers.sh
@@ -636,6 +653,7 @@ scripts/write_codex_config.sh
 scripts/write_guard.sh
 scripts/write_opencode_config.sh
 test_file.txt
+tests/codex_isolation_fakes.py
 tests/conftest.py
 tests/e2e_smoke_canary.txt
 tests/e2e_smoke_canary_b.txt
@@ -776,7 +794,11 @@ tests/test_claude_md_section_numbers.py
 tests/test_claude_pool_token.py
 tests/test_claude_settings_policy.py
 tests/test_claude_template_live_parity.py
+tests/test_codex_agent_isolation_contract.py
 tests/test_codex_heartbeat.py
+tests/test_codex_isolated_exec.py
+tests/test_codex_isolated_exec_docker_e2e.py
+tests/test_codex_isolated_workspace.py
 tests/test_codex_skip_git_repo_check_contract.py
 tests/test_codex_stall_guard_poller.py
 tests/test_codex_stall_guard_scripts.py
@@ -789,6 +811,7 @@ tests/test_consolidate_soft_error_reports.py
 tests/test_consumer_artifact_cleanup_preserves_tracked.py
 tests/test_cost_audit_semble_metrics.py
 tests/test_cost_audit_serena_metrics.py
+tests/test_dependency_registry_proxy.py
 tests/test_detect_editor_changes_lost.py
 tests/test_drift_audit_job.py
 tests/test_e2e_editor_smoke_canary.py
@@ -815,6 +838,7 @@ tests/test_implement_blocked_verdict_terminalizes.py
 tests/test_implement_post_codex_recovery.py
 tests/test_implement_pr_body_tracking_refs.py
 tests/test_implement_semble_contract.py
+tests/test_integration_judge_scope_guard.py
 tests/test_internal_review_push_pr_grace.py
 tests/test_issue_pr_status_payload_fallback_contract.py
 tests/test_judge_semble_prefetch_contract.py

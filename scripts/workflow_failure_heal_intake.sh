@@ -765,9 +765,21 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 	fi
 } > "${PROMPT_FILE}"
 
+# The failed-run logs, issue and comment excerpts are untrusted, so the
+# agent runs in the credential-free, network-isolated container
+# (scripts/codex_isolated_exec.sh, read-only): beyond the env -u below it
+# never holds the OpenRouter key or a checkout's .git. The two source
+# worktrees the prompt names are mounted read-only at their own paths.
+heal_isolated_args=(run --mode read-only)
+for heal_include_dir in "${HEAL_SOURCE_DIR}" "${HEAL_BRANCH_TIP_DIR}"; do
+	if [ -d "${heal_include_dir}" ]; then
+		heal_isolated_args+=(--include "${heal_include_dir}")
+	fi
+done
 if command -v codex >/dev/null 2>&1; then
 	if env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID \
-		codex --ask-for-approval never \
+		bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex_isolated_exec.sh" "${heal_isolated_args[@]}" -- \
+		--ask-for-approval never \
 		-c model_verbosity="${MODEL_VERBOSITY:-low}" \
 		-c include_apply_patch_tool=false \
 		-c 'shell_environment_policy.ignore_default_excludes=false' \
