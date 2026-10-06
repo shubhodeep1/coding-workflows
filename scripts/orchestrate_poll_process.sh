@@ -8877,9 +8877,7 @@ try:
         sides = stages[path]
         indexed = git("ls-files", "-s", "-z", "--", ":(literal)" + os.fsdecode(path))
         if not indexed:
-            if b"2" in sides and b"3" in sides:
-                raise ValueError("deleted both present sides")
-            continue
+            raise ValueError("deleted protected conflict")
         entries = [item for item in indexed.split(b"\0") if item]
         if len(entries) != 1:
             raise ValueError("invalid staged entry")
@@ -8900,6 +8898,11 @@ try:
         resolved_lines = git("cat-file", "blob", blob.decode()).splitlines(keepends=True)
         if not set(resolved_lines) <= allowed:
             raise ValueError("invented protected line")
+        if len(side_counts) == 2:
+            resolved_counts = Counter(resolved_lines)
+            for shared_line, shared_count in (side_counts[0] & side_counts[1]).items():
+                if resolved_counts[shared_line] < shared_count:
+                    raise ValueError("removed shared protected line")
         base_counts = (Counter(git("cat-file", "blob", sides[b"1"][1].decode()).splitlines(keepends=True))
                        if b"1" in sides else Counter())
         for resolved_line, resolved_count in Counter(resolved_lines).items():
@@ -21465,7 +21468,7 @@ ${FOLLOWUP_BLOCK_REASON}"
         # .claude/* contains Claude Code hooks and settings.
         # workflow-templates/* syncs workflows and .claude hooks to consumers.
         case "$1" in
-          .github/workflows/*|.github/actions/*|.github/ai/*|scripts/*|prompts/*|.claude/*|workflow-templates/*) return 0 ;;
+          .github/*|scripts/*|prompts/*|.claude/*|workflow-templates/*) return 0 ;;
         esac
         return 1
       }

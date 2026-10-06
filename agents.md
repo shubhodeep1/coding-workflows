@@ -602,8 +602,10 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   agent-instruction files, and build, dependency, config and script files)
   may contain only lines from either side, retaining each side's line order
   and duplicate counts when combining them.
-  Lines inherited unchanged from the common base cannot be duplicated; a
-  provenance check that exceeds its fixed work limit rejects the resolution.
+  Lines shared by both sides must also remain at their minimum shared count;
+  deleting a conflicted protected file is rejected. Lines inherited unchanged
+  from the common base cannot be duplicated; a provenance check that exceeds
+  its fixed work limit rejects the resolution without pushing.
   Its push uses a one-shot credential helper instead of storing `GH_TOKEN` in
   the shared Git config of the judge worktree.
   A failed publication logs a warning but counts as a completed judge
@@ -619,17 +621,19 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   warn via Telegram, and consume a review-blocked retry without a push. Empty
   staged sets also reject; listing failures report the unverified staged paths.
   When `ALLOW_WORKFLOW_EDITS=false`, staged edits to `scripts/`, `prompts/`,
-  `.github/ai/`, `.github/workflows/`, `.github/actions/`, `.claude/`, or
-  `workflow-templates/` reject through that same path even if present in the
-  PR's file list; `.github/prompts/` and `.github/scripts/` remain excluded
-  from staging and forbidden when pre-staged.
+  `.github/`, `workflow-templates/`, or `.claude/` reject through that same path
+  even if present in the PR's file list; `.github/prompts/` and
+  `.github/scripts/` remain excluded from staging and forbidden when pre-staged.
   The review-blocked poller rejects a selected PR whose head repository is
   not the origin before its diff reaches the judge. For open PRs, branch
   preparation also requires the fetched origin tip to match the PR head SHA;
   identity, ref, or fetch failures defer the judge without consuming a fix
   retry, so the next poll tick can check again.
   The review-blocked judge's OpenCode fix writer runs in
-  `scripts/review_untrusted_sandbox.sh`.
+  `scripts/review_untrusted_sandbox.sh`. The sandbox keeps `GITHUB_WORKSPACE`
+  pointed at the checkout containing `.git` and snapshots/transfers the
+  separately validated per-PR `WORKSPACE_PATH`; invalid paths fail before the
+  writer runs.
 - **Sites.** plan, implement (attempts, post-Codex repair, diagnose, PR issue
   summary), validate discover / diagnose / self-heal, the validation discovery
   bootstrap, the orchestrate decomposer, the poller's wave / stall /
