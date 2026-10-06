@@ -5,13 +5,26 @@
   "entry_id": "processed_command_6573_6020018285_approved",
   "issue_number": 6573,
   "metadata": {
+    "branch": "ai/issue-6573",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/orchestrate.yml",
+      ".github/workflows/orchestrate_poll.yml",
+      "changelog.d/6573-claude-relay-standalone-judge-preflight.md",
+      "tests/test_orchestrator_judges_claude_engine.py"
+    ],
+    "issue_number": 6573,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6573",
+    "pr_number": 6576,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6576",
+    "run_attempt": "1",
+    "run_id": "37490723434",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37490723434"
   },
   "run_attempt": 1,
   "run_id": "37490723434",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-06T15:53:07Z",
+  "status": "completed",
+  "timestamp": "2026-10-06T16:10:29Z",
   "workflow": "implement"
 }
