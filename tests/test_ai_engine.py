@@ -253,12 +253,18 @@ def test_no_credential_falls_back_with_one_telegram_note(sandbox: dict) -> None:
 
 def test_missing_cli_falls_back(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_OK")
+	# The fake runner executes the image CLI from its own path, not the host PATH.
+	image_claude = sandbox["tmp"] / "image-claude"
+	shutil.copy2(sandbox["bin"] / "claude", image_claude)
+	install_fake_docker(sandbox["bin"], sandbox["bin"].parent / "fake-docker.jsonl", {
+		"FAKE_CLAUDE_BIN": str(image_claude), "FAKE_CLAUDE_LOG": sandbox["env"]["FAKE_CLAUDE_LOG"],
+	})
 	(sandbox["bin"] / "claude").unlink()
 	env_path = ":".join(part for part in sandbox["env"]["PATH"].split(":") if not (Path(part) / "claude").exists())
 	result = _claude_run(sandbox, PATH=env_path)
-	# Claude is installed inside the image, not looked up on the runner.
-	assert _rc(result) != 75
-	assert "reason=cli_missing" not in result.stderr
+	assert _rc(result) == 0, result.stderr
+	assert [call["container_token"] for call in _calls(sandbox)] == ["isolated-placeholder"]
+	assert "AI_ENGINE_FALLBACK" not in result.stderr
 
 
 @pytest.mark.parametrize("symlink", (False, True))

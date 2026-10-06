@@ -108,7 +108,7 @@ if agent == "claude" and socket_dir:
 			with open(token_path, encoding="utf-8") as handle:
 				env["FAKE_RELAY_TOKEN"] = handle.read().strip()
 			break
-proc = subprocess.run([agent, *codex_args], cwd=host_cwd, env=env)
+proc = subprocess.run([PASSTHROUGH.get("FAKE_CLAUDE_BIN", agent) if agent == "claude" else agent, *codex_args], cwd=host_cwd, env=env)
 sys.exit(proc.returncode)
 '''
 
@@ -204,7 +204,7 @@ def enable_fake_isolation(bin_dir: Path, scripts_dir: Path, env: dict, passthrou
 	return updated
 
 
-SECRET_ENV = ("GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "OPENROUTER_API_KEY", "TG_BOT_SECRET")
+SECRET_ENV = ("GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "TG_BOT_SECRET")
 
 
 def assert_no_secret_env(env: dict) -> None:
