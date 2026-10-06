@@ -11,13 +11,21 @@ on:
           issues with a dependency DAG and dispatch them through the AI pipeline.
         required: true
         type: string
+      engine:
+        description: "Optional model engine for every role of the project: claude, codex, or empty for the repository default."
+        required: false
+        type: string
+        default: ""
 permissions:
   contents: write
   issues: write
   pull-requests: write
+  # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
 jobs:
   orchestrate:
     uses: shubhodeep1/coding-workflows/.github/workflows/orchestrate.yml@stable
     with:
       project_description: ${{ inputs.project_description }}
+      engine: ${{ inputs.engine }}
     secrets: inherit

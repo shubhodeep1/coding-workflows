@@ -58,6 +58,8 @@ permissions:
   contents: write
   actions: read
   issues: write
+  # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
 
 concurrency:
   group: workflow-log-analysis-${{ github.repository }}-${{ github.ref_name }}
@@ -68,6 +70,9 @@ jobs:
     if: ${{ github.event_name != 'schedule' || ((vars.WORKFLOW_RETRO_ENABLED || 'true') == 'true' && github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    permissions:
+      contents: read
+      actions: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -390,10 +395,12 @@ jobs:
               sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
             fi
             set +e
+            # The agent reads workflow logs from every consumer repo; it runs in the
+            # credential-free, network-isolated container (scripts/codex_isolated_exec.sh).
             bash scripts/codex_heartbeat.sh \
               --phase workflow_weekly_retro \
               --stdout-file "${RETRO_BODY_FILE}" \
-              -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_RETRO_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-weekly-retro-codex.log >&2)
+              -- bash scripts/codex_isolated_exec.sh run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_RETRO_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-weekly-retro-codex.log >&2)
             RETRO_EXIT=$?
             set -e
             if [ "${RETRO_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${RETRO_BODY_FILE}"; then
@@ -1104,10 +1111,12 @@ jobs:
               sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
             fi
             set +e
+            # The agent reads workflow logs from every consumer repo; it runs in the
+            # credential-free, network-isolated container (scripts/codex_isolated_exec.sh).
             bash scripts/codex_heartbeat.sh \
               --phase workflow_log_analysis \
               --stdout-file "${REPORT_FILE}" \
-              -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-analysis-codex.log >&2)
+              -- bash scripts/codex_isolated_exec.sh run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-analysis-codex.log >&2)
             ANALYZE_EXIT=$?
             set -e
             if [ "${ANALYZE_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${REPORT_FILE}"; then
@@ -1683,10 +1692,12 @@ jobs:
               sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
             fi
             set +e
+            # The agent reads workflow logs from every consumer repo; it runs in the
+            # credential-free, network-isolated container (scripts/codex_isolated_exec.sh).
             bash scripts/codex_heartbeat.sh \
               --phase workflow_deep_audit \
               --stdout-file "${SECTION_FILE}" \
-              -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-audit-codex.log >&2)
+              -- bash scripts/codex_isolated_exec.sh run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-audit-codex.log >&2)
             AUDIT_EXIT=$?
             set -e
             if [ "${AUDIT_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${SECTION_FILE}"; then
@@ -2186,10 +2197,12 @@ jobs:
               sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
             fi
             set +e
+            # The agent reads workflow logs from every consumer repo; it runs in the
+            # credential-free, network-isolated container (scripts/codex_isolated_exec.sh).
             bash scripts/codex_heartbeat.sh \
               --phase workflow_api_redundancy \
               --stdout-file "${SECTION_FILE}" \
-              -- codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-api-redundancy-codex.log >&2)
+              -- bash scripts/codex_isolated_exec.sh run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${WORKFLOW_EDITOR_MODEL}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" 2> >(tee -a /tmp/workflow-api-redundancy-codex.log >&2)
             API_EXIT=$?
             set -e
             if [ "${API_EXIT}" -eq 0 ] && grep -q '[^[:space:]]' "${SECTION_FILE}"; then

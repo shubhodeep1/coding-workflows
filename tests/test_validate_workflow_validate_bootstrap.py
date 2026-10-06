@@ -121,13 +121,82 @@ def test_validate_workflow_bootstrap_lists_prompt_assembly_assets() -> None:
 
 def test_stage_workflow_support_helper_runs_overlay_loader_for_validate() -> None:
 	helper = _helper_text()
+	fetch_step = _workflow_text().split("      - name: Fetch workflow support files\n", 1)[1].split("      - name:", 1)[0]
+	assert 'GH_TOKEN: ${{ secrets.GH_PAT }}' in fetch_step
+	assert '${GITHUB_REPOSITORY}' in fetch_step
+	assert 'WORKFLOW_SUPPORT_REF="${support_sha}" bash "${helper_stage_dir}/scripts/stage_workflow_support.sh" validate' in fetch_step
 	for snippet in (
-		"WORKFLOW.md overlay is opt-in by file presence",
-		"python3 scripts/load_workflow_overlay.py",
-		'--schema-path "ai-memory/schemas/workflow_overlay.v1.json"',
+		"The default-branch copy must outlive SUPPORT_STAGE_ROOT",
+		'local overlay_loader_path="scripts/load_workflow_overlay.py"',
+		'overlay_loader_path="${STAGE_SUPPORT_HELPER_DIR}/load_workflow_overlay.py"',
+		'python3 "${overlay_loader_path}"',
+		'--trusted-source-repo "${GITHUB_REPOSITORY}"',
+		'--trusted-root "${RUNNER_TEMP}/workflow-overlay-trusted-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
+		'overlay_schema_path="${SUPPORT_PRIMARY_ROOT}/ai-memory/schemas/workflow_overlay.v1.json"',
+		'--schema-path "${overlay_schema_path}"',
 		'--github-env "${GITHUB_ENV}"',
 	):
 		assert snippet in helper
+
+
+def test_overlay_loader_runs_helper_copy_not_older_target_copy() -> None:
+	# #6031: the source repo's target checkout can predate the helper, and an
+	# older target loader rejects the trusted-overlay flags with exit 2.
+	helper = _helper_text()
+	assert 'STAGE_SUPPORT_HELPER_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P || true)"' in helper
+	function_text = re.search(r"^run_overlay_loader\(\)\n\{\n.*?^\}\n", helper, re.M | re.S)
+	assert function_text is not None
+	with tempfile.TemporaryDirectory(prefix="overlay-loader-") as td:
+		root = Path(td)
+		target = root / "target"
+		helper_dir = root / "helper" / "scripts"
+		(target / "scripts").mkdir(parents=True)
+		helper_dir.mkdir(parents=True)
+		calls = root / "calls.log"
+		old_loader = (
+			"import sys\n"
+			f"open({str(calls)!r}, 'a').write('target\\n')\n"
+			"sys.exit(2 if '--trusted-source-repo' in sys.argv else 0)\n"
+		)
+		new_loader = (
+			"import sys\n"
+			f"open({str(calls)!r}, 'a').write('helper ' + ' '.join(sys.argv[1:]) + '\\n')\n"
+		)
+		(target / "scripts" / "load_workflow_overlay.py").write_text(old_loader, encoding="utf-8")
+		helper_loader = helper_dir / "load_workflow_overlay.py"
+		env = {
+			"PATH": os.environ.get("PATH", ""),
+			"GITHUB_ENV": str(root / "github.env"),
+			"RUNNER_TEMP": str(root / "tmp"),
+			"GITHUB_RUN_ID": "1",
+			"GITHUB_RUN_ATTEMPT": "1",
+			"GITHUB_REPOSITORY": "owner/repo",
+			"REPO_ROOT": str(target),
+			"SUPPORT_PRIMARY_ROOT": str(target),
+		}
+
+		def run(helper_dir_value: str) -> subprocess.CompletedProcess[str]:
+			calls.write_text("", encoding="utf-8")
+			script = f"set -euo pipefail\n{function_text.group(0)}run_overlay_loader\n"
+			return subprocess.run(
+				["bash", "-c", script], cwd=target, capture_output=True, text=True, timeout=30,
+				env={**env, "STAGE_SUPPORT_HELPER_DIR": helper_dir_value},
+			)
+
+		helper_loader.write_text(new_loader, encoding="utf-8")
+		result = run(str(helper_dir))
+		assert result.returncode == 0, result.stderr
+		recorded = calls.read_text(encoding="utf-8")
+		assert recorded.startswith("helper "), recorded
+		assert "target" not in recorded.splitlines()
+		assert "--trusted-source-repo owner/repo" in recorded
+
+		# Without a sibling copy the target copy still runs, so its exit
+		# status keeps surfacing instead of being silently skipped.
+		helper_loader.unlink()
+		result = run(str(helper_dir))
+		assert result.returncode == 2
+		assert calls.read_text(encoding="utf-8") == "target\n"
 
 
 def test_stage_workflow_support_helper_uses_portable_copy_guard_and_optional_main_checkout() -> None:
@@ -420,7 +489,7 @@ def test_renderer_dependency_step_runs_after_unrelated_earlier_failure() -> None
 	condition_match = re.search(r"\n        if: (?P<cond>.+)\n", prep)
 	assert condition_match is not None
 	condition = condition_match.group("cond")
-	assert condition.startswith("always()")
+	assert condition.startswith("always() && !cancelled()")
 	assert "steps.runtime.outcome == 'success'" in condition
 	assert "steps.support_staging.outcome == 'success'" in condition
 	assert "steps.workspace_after_create_hook.outcome != 'failure'" in condition
@@ -634,6 +703,7 @@ def main() -> int:
 	test_validate_workflow_bootstrap_uses_shared_helper_and_lists_template_assets()
 	test_validate_workflow_bootstrap_lists_prompt_assembly_assets()
 	test_stage_workflow_support_helper_runs_overlay_loader_for_validate()
+	test_overlay_loader_runs_helper_copy_not_older_target_copy()
 	test_stage_workflow_support_helper_uses_portable_copy_guard_and_optional_main_checkout()
 	test_validate_workflow_passes_template_default_env()
 	test_renderer_dependency_step_isolates_workspace_imports_and_shell_startup()

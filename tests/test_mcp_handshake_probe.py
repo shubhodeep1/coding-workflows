@@ -279,6 +279,12 @@ def test_probe_cli_happy_path() -> None:
 	assert "server_name=mock-serena" in result.stderr
 
 
+def test_probe_cli_does_not_pass_safe_path_to_server() -> None:
+	result = _run_probe([sys.executable, str(FIXTURES_DIR / "mock_mcp_happy.py")], env={"PYTHONSAFEPATH": "1"})
+
+	assert result.returncode == 0, result.stderr
+
+
 def test_probe_cli_rejects_invalid_json() -> None:
 	result = _run_probe([sys.executable, str(FIXTURES_DIR / "mock_mcp_invalid_json.py")])
 

@@ -610,7 +610,7 @@
     {
       "slug": "openai/gpt-5.6-luna",
       "display_name": "GPT-5.6 Luna",
-      "description": "OpenAI GPT-5.6 Luna - 1.05M context, fastest/cheapest gpt-5.6 tier ($0.20/$1.20 per M, $0.02/M cached input read). Former default for the lightweight utility roles (log analyser, retro/summary, consensus summariser, materiality fallback, behavioural smoke), which moved to gpt-6-luna; retained for operator overrides. Fields mirror gpt-5.6-sol (same family); verify before relying on editor behavior.",
+      "description": "OpenAI GPT-5.6 Luna - 1.05M context, fastest/cheapest gpt-5.6 tier ($0.20/$1.20 per M, $0.02/M cached input read). Former default for the lightweight utility roles (log analyser, retro/summary, consensus summariser, materiality fallback, behavioural smoke), which moved to gpt-6-luna; retained for operator overrides and as the reviewer failback target for openai/gpt-6-luna. Fields mirror gpt-5.6-sol (same family); verify before relying on editor behavior.",
       "supported_reasoning_levels": [
         {"effort": "low", "description": "Fast with minimal reasoning"},
         {"effort": "medium", "description": "Balanced reasoning"},
@@ -641,7 +641,7 @@
     {
       "slug": "openai/gpt-6-luna",
       "display_name": "GPT-6 Luna",
-      "description": "OpenAI GPT-6 Luna - 1.05M context (128K max output), fastest/cheapest gpt-6 tier ($0.10/$0.50 per M, $0.01/M cached input read; $0.20/$0.75 above 272K prompt tokens). Default for the lightweight utility roles (log analyser, retro/summary, consensus summariser, materiality fallback, behavioural smoke, AI-memory keyword extraction), previously on gpt-5.6-luna (and gpt-5.4-nano for keyword extraction). Fields mirror gpt-6-sol (same family); verify before relying on editor behavior.",
+      "description": "OpenAI GPT-6 Luna - 1.05M context (128K max output), fastest/cheapest gpt-6 tier ($0.10/$0.50 per M, $0.01/M cached input read; $0.20/$0.75 above 272K prompt tokens). Default for the lightweight utility roles (log analyser, retro/summary, consensus summariser, materiality fallback, behavioural smoke, AI-memory keyword extraction), previously on gpt-5.6-luna (and gpt-5.4-nano for keyword extraction). Also the review-autofix reviewer slot that replaced x-ai/grok-4.20 (2026-09-29), failing back to openai/gpt-5.6-luna. Fields mirror gpt-6-sol (same family); verify before relying on editor behavior.",
       "supported_reasoning_levels": [
         {"effort": "low", "description": "Fast with minimal reasoning"},
         {"effort": "medium", "description": "Balanced reasoning"},
@@ -792,7 +792,7 @@
     {
       "slug": "x-ai/grok-4.20",
       "display_name": "Grok 4.20",
-      "description": "xAI Grok 4.20 - 2M context, multimodal (text/image), reasoning + tool calling. xAI's pitch: 'industry-leading speed and agentic tool calling capabilities... lowest hallucination rate on the market with strict prompt adherence' ($1.25/$2.50 per M, $0.20/M cached input read). Replaces dead-slug grok-4.1-fast which has zero active OpenRouter endpoints.",
+      "description": "xAI Grok 4.20 - 2M context, multimodal (text/image), reasoning + tool calling. xAI's pitch: 'industry-leading speed and agentic tool calling capabilities... lowest hallucination rate on the market with strict prompt adherence' ($1.25/$2.50 per M, $0.20/M cached input read). Replaces dead-slug grok-4.1-fast which has zero active OpenRouter endpoints. Removed from the default reviewer roster on 2026-09-29 after repeated single-tool-call loops (up to 2,205 turns and 746M tokens in one reviewer pass); retained for operator overrides.",
       "supported_reasoning_levels": [
         {"effort": "medium", "description": "Balanced reasoning"},
         {"effort": "high", "description": "Thorough reasoning"},
@@ -973,6 +973,36 @@
       "slug": "google/gemini-3.1-flash-lite",
       "display_name": "Gemini 3.1 Flash Lite",
       "description": "Google Gemini 3.1 Flash Lite - 1M context, multimodal (text/image), reasoning + tool calling ($0.25/$1.50 per M, $0.025/M cached input read). Reviewer-roster replacement for mistralai/mistral-small-2603 (2026-09 cost refresh): the 262K Mistral window overflowed on most reviewer prompts and its shared OpenRouter capacity was rate-limited upstream, so the slot succeeded in roughly 1 of 8 runs. Fails back to google/gemini-3-flash-preview.",
+      "supported_reasoning_levels": [
+        {"effort": "medium", "description": "Balanced reasoning"},
+        {"effort": "high", "description": "Thorough reasoning"},
+        {"effort": "xhigh", "description": "Maximum reasoning depth"}
+      ],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 10,
+      "upgrade": null,
+      "base_instructions": "You are a senior software engineer acting as an AI code reviewer and editor. You have access to shell commands for reading files and exploring the repository. Use them to understand the codebase before making changes. Be precise, minimal, and correct.",
+      "model_messages": null,
+      "supports_reasoning_summaries": false,
+      "default_reasoning_summary": "auto",
+      "support_verbosity": false,
+      "default_verbosity": null,
+      "apply_patch_tool_type": "freeform",
+      "truncation_policy": {"mode": "bytes", "limit": 1000000},
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": false,
+      "context_window": 1000000,
+      "auto_compact_token_limit": 720000,
+      "effective_context_window_percent": 90,
+      "experimental_supported_tools": [],
+      "input_modalities": ["text", "image"]
+    },
+    {
+      "slug": "google/gemini-3.8-flash",
+      "display_name": "Gemini 3.8 Flash",
+      "description": "Google Gemini 3.8 Flash - 1M context (65K max output), multimodal (text/image), reasoning + tool calling ($0.75/$3.75 per M, $0.075/M cached input read). Review-autofix reviewer slot that replaced google/gemini-3.1-flash-lite (2026-09-29); fails back to google/gemini-3.1-flash-lite.",
       "supported_reasoning_levels": [
         {"effort": "medium", "description": "Balanced reasoning"},
         {"effort": "high", "description": "Thorough reasoning"},

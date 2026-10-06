@@ -1,0 +1,170 @@
+{
+  "cli_version": "2.1.289",
+  "broker_url": "https://claude-pool-broker.shubhodeep.workers.dev/v1/pool",
+  "oidc_audience": "coding-workflows-claude-pool",
+  "gate_utilization": 0.9,
+  "probe_model": "claude-haiku-4-5-20251001",
+  "default_model": "claude-opus-5-5",
+  "utility_model": "claude-sonnet-5-5",
+  "default_effort": "high",
+  "hide_claude_md": false,
+  "utility_roles": [
+    "LOG_SUMMARY",
+    "RETRO",
+    "MATERIALITY",
+    "SUMMARISER",
+    "BEHAVIOURAL_SMOKE"
+  ],
+  "role_defaults": {
+    "CLARIFY": {
+      "engine": "claude",
+      "claude_model": "claude-opus-5-5",
+      "profile": "read"
+    },
+    "CLARIFY_RESPOND": {
+      "engine": "claude",
+      "claude_model": "claude-opus-5-5",
+      "profile": "read"
+    },
+    "PLAN": {
+      "engine": "claude",
+      "claude_model": "claude-opus-5-5",
+      "profile": "write"
+    },
+    "IMPLEMENT": {
+      "engine": "claude",
+      "claude_model": "claude-opus-5-5",
+      "profile": "write"
+    },
+    "IMPLEMENT_REPAIR": {
+      "engine": "claude",
+      "claude_model": "claude-opus-5-5",
+      "profile": "write"
+    },
+    "IMPLEMENT_DIAGNOSE": {
+      "engine": "claude",
+      "claude_model": "claude-opus-5-5",
+      "profile": "write"
+    },
+    "ORCHESTRATE": {
+      "engine": "claude",
+      "claude_model": "claude-opus-5-5",
+      "profile": "write"
+    },
+    "WAVE_JUDGE": {
+      "engine": "claude",
+      "claude_model": "claude-opus-5-5",
+      "profile": "write"
+    },
+    "STALL_JUDGE": {
+      "engine": "claude",
+      "claude_model": "claude-opus-5-5",
+      "profile": "write"
+    },
+    "INTEGRATION_JUDGE": {
+      "engine": "claude",
+      "claude_model": "claude-opus-5-5",
+      "profile": "write"
+    },
+    "SECURITY_JUDGE": {
+      "engine": "claude",
+      "claude_model": "claude-opus-5-5",
+      "profile": "read"
+    },
+    "UNBLOCK_JUDGE": {
+      "engine": "codex",
+      "claude_model": "claude-opus-5-5",
+      "profile": "read"
+    },
+    "REVIEW_EDITOR": {
+      "engine": "claude",
+      "claude_model": "claude-opus-5-5",
+      "profile": "write"
+    },
+    "REVIEW_CONSOLIDATOR": {
+      "engine": "claude",
+      "claude_model": "claude-opus-5-5",
+      "profile": "write"
+    },
+    "CONFLICT_RESOLVER": {
+      "engine": "claude",
+      "claude_model": "claude-opus-5-5",
+      "profile": "write"
+    },
+    "RB_JUDGE": {
+      "engine": "claude",
+      "claude_model": "claude-opus-5-5",
+      "profile": "write"
+    },
+    "VALIDATE": {
+      "engine": "codex",
+      "claude_model": "claude-opus-5-5",
+      "profile": "write"
+    },
+    "VALIDATE_SELF_HEAL": {
+      "engine": "codex",
+      "claude_model": "claude-opus-5-5",
+      "profile": "write"
+    },
+    "VALIDATION_REFRESH": {
+      "engine": "codex",
+      "claude_model": "claude-opus-5-5",
+      "profile": "write"
+    },
+    "SECURITY_AUDIT": {
+      "engine": "codex",
+      "claude_model": "claude-opus-5-5",
+      "profile": "read"
+    },
+    "CHECK_TRIAGE": {
+      "engine": "codex",
+      "claude_model": "claude-opus-5-5",
+      "profile": "write"
+    },
+    "WORKFLOW_HEAL": {
+      "engine": "codex",
+      "claude_model": "claude-opus-5-5",
+      "profile": "read"
+    },
+    "ACTIVATION_VERIFY": {
+      "engine": "codex",
+      "claude_model": "claude-opus-5-5",
+      "profile": "write"
+    },
+    "LOG_ANALYSIS": {
+      "engine": "codex",
+      "claude_model": "claude-opus-5-5",
+      "profile": "write"
+    },
+    "LOG_AUDIT": {
+      "engine": "codex",
+      "claude_model": "claude-opus-5-5",
+      "profile": "write"
+    },
+    "LOG_SUMMARY": {
+      "engine": "codex",
+      "claude_model": "claude-sonnet-5-5",
+      "profile": "write"
+    },
+    "RETRO": {
+      "engine": "codex",
+      "claude_model": "claude-sonnet-5-5",
+      "profile": "write"
+    },
+    "MATERIALITY": {
+      "engine": "codex",
+      "claude_model": "claude-sonnet-5-5",
+      "profile": "write"
+    },
+    "SUMMARISER": {
+      "engine": "codex",
+      "claude_model": "claude-sonnet-5-5",
+      "profile": "write"
+    },
+    "BEHAVIOURAL_SMOKE": {
+      "engine": "codex",
+      "claude_model": "claude-sonnet-5-5",
+      "profile": "write"
+    }
+  }
+}

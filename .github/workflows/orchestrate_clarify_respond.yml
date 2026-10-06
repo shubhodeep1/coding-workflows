@@ -1,14 +1,26 @@
 ---
 name: AI Orchestrate Clarify Respond (Reusable)
 
-# Automatically answers clarification questions on orchestrator-managed issues
-# so the orchestrator pipeline can run fully unattended.
+# Automatically answers clarification questions so the pipeline can run
+# unattended: on orchestrator-managed issues, and on standalone issues whose
+# questions clarify.yml posted (security-audit findings, workflow heals and
+# ordinary issues; issue #6262 follow-up).
 #
 # Trigger: issue_comment.created (fires when clarify.yml posts questions).
-# Guard:   only runs when the comment contains "Clarification required",
+# Guard:   only runs when the comment contains "Clarification required" and
 #          is authored by a trusted actor (github-actions[bot] or repository
-#          owner/member/collaborator), and the issue body contains the
-#          "Managed by: AI Orchestrator" metadata marker.
+#          owner/member/collaborator). The "Check orchestrator metadata" step
+#          then picks the mode:
+#          - orchestrator: the issue body contains the "Managed by: AI
+#            Orchestrator" metadata marker;
+#          - standalone: the comment is clarify.yml's questions comment
+#            (first line <!-- ai:clarification-questions -->), the issue is
+#            open and not ai:orchestrator-managed, no human asked to answer
+#            (<!-- ai:clarification-human-answer -->, posted after
+#            /reclarify), and neither STANDALONE_AUTO_DECIDE_ENABLED nor
+#            STANDALONE_CLARIFY_RESPOND_ENABLED is false.
+#          Every later step runs only when steps.check_orchestrator.outputs.
+#          respond is true.
 
 "on":
   workflow_call:
@@ -64,6 +76,9 @@ jobs:
         id: check_orchestrator
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          CLARIFY_RESPOND_COMMENT_BODY: ${{ github.event.comment.body }}
+          STANDALONE_AUTO_DECIDE_ENABLED: ${{ vars.STANDALONE_AUTO_DECIDE_ENABLED || 'true' }}
+          STANDALONE_CLARIFY_RESPOND_ENABLED: ${{ vars.STANDALONE_CLARIFY_RESPOND_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           EARLY_CACHE_DIR="${RUNNER_TEMP}/orchestrate-clarify-respond-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -80,10 +95,41 @@ jobs:
           ISSUE_TITLE="$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.title // ""')"
           if printf '%s' "${ISSUE_BODY}" | grep -qF 'Managed by: AI Orchestrator'; then
             echo "is_orchestrator=true" >> "$GITHUB_OUTPUT"
+            echo "mode=orchestrator" >> "$GITHUB_OUTPUT"
+            echo "respond=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Issue #${ISSUE_NUMBER} is not orchestrator-managed. Skipping."
+            echo "Issue #${ISSUE_NUMBER} is not orchestrator-managed."
             echo "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=orchestrator_metadata reason=not_orchestrator_managed outcome=skip issue=${ISSUE_NUMBER}"
             echo "is_orchestrator=false" >> "$GITHUB_OUTPUT"
+            # Standalone mode: answer the questions clarify.yml posted, in
+            # place of its RECOMMENDED-only auto-decide (which delegates here).
+            STANDALONE_SKIP_REASON=""
+            STANDALONE_FIRST_LINE="$(printf '%s\n' "${CLARIFY_RESPOND_COMMENT_BODY}" | head -n1 | tr -d '\r' | sed -e 's/[[:space:]]*$//')"
+            if [ "${STANDALONE_AUTO_DECIDE_ENABLED}" = "false" ] || [ "${STANDALONE_CLARIFY_RESPOND_ENABLED}" = "false" ]; then
+              STANDALONE_SKIP_REASON="disabled"
+            elif [ "${STANDALONE_FIRST_LINE}" != "<!-- ai:clarification-questions -->" ]; then
+              STANDALONE_SKIP_REASON="not_clarify_questions"
+            elif printf '%s' "${CLARIFY_RESPOND_COMMENT_BODY}" | grep -qF '<!-- ai:clarification-human-answer -->'; then
+              STANDALONE_SKIP_REASON="human_answer_requested"
+            elif [ "$(printf '%s' "${ISSUE_PAYLOAD}" | jq -r '.state // "open"')" != "open" ]; then
+              STANDALONE_SKIP_REASON="issue_closed"
+            elif printf '%s' "${ISSUE_PAYLOAD}" | jq -e '[(.labels // [])[]?.name] | index("ai:orchestrator-managed") != null' >/dev/null; then
+              STANDALONE_SKIP_REASON="orchestrator_label_without_metadata"
+            fi
+            if [ -n "${STANDALONE_SKIP_REASON}" ]; then
+              echo "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=standalone reason=${STANDALONE_SKIP_REASON} outcome=skip issue=${ISSUE_NUMBER}"
+              echo "mode=skip" >> "$GITHUB_OUTPUT"
+              echo "respond=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "AI_PHASE_GATE_V1 phase=orchestrate_clarify_respond gate=standalone reason=clarify_questions outcome=run issue=${ISSUE_NUMBER}"
+              echo "mode=standalone" >> "$GITHUB_OUTPUT"
+              echo "respond=true" >> "$GITHUB_OUTPUT"
+              # Same release-gate fixture silencing as clarify.yml: the gate
+              # sends one combined notification at the end.
+              if printf '%s' "${ISSUE_TITLE}" | grep -qiE '^\[E2E '; then
+                echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"
+              fi
+            fi
           fi
           # Suppress per-phase Telegram alerts when the orchestrator
           # tracking parent of this child is the test-and-mark-stable
@@ -108,7 +154,7 @@ jobs:
           fi
 
       - name: Resolve integration ref
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        if: steps.check_orchestrator.outputs.respond == 'true'
         id: refctx
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -183,7 +229,7 @@ jobs:
           fi
 
       - name: Checkout repository
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        if: steps.check_orchestrator.outputs.respond == 'true'
         uses: actions/checkout@v5
         with:
           ref: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
@@ -192,7 +238,7 @@ jobs:
           persist-credentials: false
 
       - name: Log checkout ref
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        if: steps.check_orchestrator.outputs.respond == 'true'
         env:
           ORCHESTRATE_CLARIFY_RESOLVED_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}
         run: |
@@ -206,7 +252,7 @@ jobs:
           fi
 
       - name: Configure git auth for memory helper clones
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        if: steps.check_orchestrator.outputs.respond == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -218,13 +264,13 @@ jobs:
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
 
       - name: Install Codex CLI
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        if: steps.check_orchestrator.outputs.respond == 'true'
         uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
       - name: Resolve workflow support ref
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        if: steps.check_orchestrator.outputs.respond == 'true'
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
@@ -235,7 +281,7 @@ jobs:
           fi
 
       - name: Checkout workflow support source
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        if: steps.check_orchestrator.outputs.respond == 'true'
         id: checkout_support_source
         continue-on-error: true
         uses: actions/checkout@v5
@@ -247,7 +293,7 @@ jobs:
           fetch-depth: 1
 
       - name: Checkout workflow support source fallback
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && steps.checkout_support_source.outcome == 'failure'
+        if: steps.check_orchestrator.outputs.respond == 'true' && steps.checkout_support_source.outcome == 'failure'
         uses: actions/checkout@v5
         with:
           repository: shubhodeep1/coding-workflows
@@ -257,7 +303,7 @@ jobs:
           fetch-depth: 1
 
       - name: Ensure workflow support source checkout
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        if: steps.check_orchestrator.outputs.respond == 'true'
         run: |
           set -euo pipefail
           if [ ! -d .codex-workflow-src ]; then
@@ -266,7 +312,7 @@ jobs:
           fi
 
       - name: Checkout workflow support source main snapshot
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && env.SCRIPT_REF != 'main'
+        if: steps.check_orchestrator.outputs.respond == 'true' && env.SCRIPT_REF != 'main'
         continue-on-error: true
         uses: actions/checkout@v5
         with:
@@ -277,14 +323,14 @@ jobs:
           fetch-depth: 1
 
       - name: Stage workflow support files
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        if: steps.check_orchestrator.outputs.respond == 'true'
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
 
           _fetched_scripts=()
-          for f in gh_helpers.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh orchestrate_parse_and_post_answer.sh clarify_isolated_run.sh clarify_openrouter_broker.py; do
+          for f in gh_helpers.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_stall_guard.sh orchestrate_parse_and_post_answer.sh clarify_isolated_run.sh clarify_openrouter_broker.py ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl auto_decisions.py clarify_github_facts.py clarify_data_provision_guard.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -424,7 +470,7 @@ jobs:
           rm -rf .codex-workflow-src-main
 
       - name: Record memory run-start event
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        if: steps.check_orchestrator.outputs.respond == 'true'
         run: |
           set -euo pipefail
 
@@ -453,7 +499,7 @@ jobs:
             --metadata-json "${METADATA_JSON}"
 
       - name: Create runtime workspace
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        if: steps.check_orchestrator.outputs.respond == 'true'
         run: |
           set -euo pipefail
           RUNTIME_DIR="/tmp/codex-clarify-respond-${GITHUB_RUN_ID}"
@@ -469,7 +515,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Fetch issue and tracking context
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        if: steps.check_orchestrator.outputs.respond == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           CLARIFICATION_COMMENT: ${{ github.event.comment.body }}
@@ -478,6 +524,7 @@ jobs:
           CLARIFICATION_COMMENT_CREATED_AT: ${{ github.event.comment.created_at }}
           SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
           SEMANTIC_CACHE_MAX_CANONICAL_CHARS: ${{ vars.SEMANTIC_CACHE_MAX_CANONICAL_CHARS || '50000' }}
+          CLARIFY_RESPOND_MODE: ${{ steps.check_orchestrator.outputs.mode }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
@@ -517,12 +564,23 @@ jobs:
           printf '%s' "${TRACKING_BODY}" > "${RUNTIME_DIR}/tracking_body.txt"
           printf '%s' "${CLARIFICATION_COMMENT}" > "${RUNTIME_DIR}/clarification_comment.txt"
 
-          if [ "${SEMANTIC_CACHE_BACKEND}" != "none" ]; then
+          # Standalone mode always needs the full thread: the answer poster's
+          # backup loop guard counts prior auto-answers in it, and the
+          # auto-decisions comment is found and numbered from it. One
+          # paginated read serves both, and the semantic cache when enabled.
+          if [ "${SEMANTIC_CACHE_BACKEND}" != "none" ] || [ "${CLARIFY_RESPOND_MODE}" = "standalone" ]; then
             if ISSUE_COMMENTS_JSON="$(gh_retry gh api --paginate --slurp "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?sort=created&direction=asc&per_page=100")" \
               && printf '%s' "${ISSUE_COMMENTS_JSON}" | jq -r 'add // [] | .[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' > "${THREAD_HISTORY_FILE}"; then
               if ! printf '%s' "${ISSUE_COMMENTS_JSON}" | jq -e --arg cid "${CLARIFICATION_COMMENT_ID}" 'add // [] | any((.id | tostring) == $cid)' >/dev/null 2>&1; then
                 printf '[%s] @%s:\n%s\n' "${CLARIFICATION_COMMENT_CREATED_AT}" "${CLARIFICATION_COMMENT_AUTHOR}" "${CLARIFICATION_COMMENT}" >> "${THREAD_HISTORY_FILE}"
               fi
+              printf '%s' "${ISSUE_COMMENTS_JSON}" | jq 'add // []' > "${RUNTIME_DIR}/issue_all_comments.json"
+            elif [ "${CLARIFY_RESPOND_MODE}" = "standalone" ]; then
+              # Without the thread the loop guard cannot count prior
+              # auto-answers; stop before the model runs, as clarify.yml's
+              # auto-decide did. The stall-ladder auto-answer is the backstop.
+              echo "::error::Could not read the comments of standalone issue #${ISSUE_NUMBER}; not auto-answering."
+              exit 1
             else
               echo "::warning::Semantic cache thread-history fetch failed; forcing cache bypass for this run (fail-open)"
               MAX_CHARS="${SEMANTIC_CACHE_MAX_CANONICAL_CHARS}"
@@ -541,14 +599,14 @@ jobs:
           fi
 
       - name: Install Redis Python client
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && vars.SEMANTIC_CACHE_BACKEND == 'redis'
+        if: steps.check_orchestrator.outputs.respond == 'true' && vars.SEMANTIC_CACHE_BACKEND == 'redis'
         continue-on-error: true
         run: |
           set -euo pipefail
           python3 -m pip install --user --disable-pip-version-check "redis>=5,<6"
 
       - name: Restore semantic cache SQLite
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec'
+        if: steps.check_orchestrator.outputs.respond == 'true' && steps.check_orchestrator.outputs.mode != 'standalone' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec'
         continue-on-error: true
         uses: actions/cache/restore@v4
         with:
@@ -558,7 +616,9 @@ jobs:
             semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}-
       - name: Semantic cache lookup
         id: semantic_cache_lookup
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        # Standalone decisions can depend on live PR, branch and run state,
+        # which is not part of the semantic cache key.
+        if: steps.check_orchestrator.outputs.respond == 'true' && steps.check_orchestrator.outputs.mode != 'standalone'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
@@ -598,13 +658,44 @@ jobs:
             fi
           fi
 
+      # The model runs network-isolated with no GitHub credential, so the
+      # state of the PRs, issues, branches and runs the issue and questions
+      # reference is read here, on the host, and given to it as GITHUB FACTS
+      # (issue #6262 follow-up). One GraphQL call plus at most 5 run reads
+      # (CLAUDE.md §15); fail-open, the prompt then just has no facts block.
+      - name: Fetch GitHub facts for the questions
+        if: steps.check_orchestrator.outputs.respond == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          : > "${RUNTIME_DIR}/github_facts.txt"
+          if [ ! -f scripts/clarify_github_facts.py ]; then
+            echo "::notice::clarify_github_facts.py not staged; continuing without GitHub facts."
+            exit 0
+          fi
+          CONSUMER_REPOS_ARGS=()
+          if [ -f .github/ai/consumer_repos.json ]; then
+            CONSUMER_REPOS_ARGS=(--consumer-repos-file .github/ai/consumer_repos.json)
+          fi
+          python3 scripts/clarify_github_facts.py \
+            --repo "${{ github.repository }}" \
+            --issue-number "${ISSUE_NUMBER}" \
+            --text-file "${RUNTIME_DIR}/issue_body.txt" \
+            --text-file "${RUNTIME_DIR}/clarification_comment.txt" \
+            "${CONSUMER_REPOS_ARGS[@]}" \
+            --output "${RUNTIME_DIR}/github_facts.txt" \
+            || echo "::warning::GitHub facts fetch failed (fail-open); continuing without them."
+
       - name: Setup uv
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && env.SEMBLE_ENABLED == 'true'
+        if: steps.check_orchestrator.outputs.respond == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && env.SEMBLE_ENABLED == 'true'
         continue-on-error: true
         uses: astral-sh/setup-uv@v7
 
       - name: Install semble
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && env.SEMBLE_ENABLED == 'true'
+        if: steps.check_orchestrator.outputs.respond == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && env.SEMBLE_ENABLED == 'true'
         # Defense-in-depth: install_semble.sh is fail-soft already (writes
         # SEMBLE_AVAILABLE=false on any error), but the step-level guard
         # ensures a syntax regression / filesystem error / missing-script
@@ -616,7 +707,7 @@ jobs:
           bash scripts/install_semble.sh
 
       - name: Build semble index
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && env.SEMBLE_ENABLED == 'true'
+        if: steps.check_orchestrator.outputs.respond == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && env.SEMBLE_ENABLED == 'true'
         # Defense-in-depth: the shared script is fail-soft already, but the
         # step-level guard ensures a future wrapper regression still
         # degrades to SEMBLE_INDEX_AVAILABLE=false instead of hard-failing.
@@ -636,7 +727,7 @@ jobs:
           fi
 
       - name: Create Codex config
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        if: steps.check_orchestrator.outputs.respond == 'true'
         run: |
           set -euo pipefail
           # Centralised in scripts/write_codex_config.sh — see that
@@ -648,14 +739,24 @@ jobs:
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
       - name: Pre-assemble static context (cacheable across runs)
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        if: steps.check_orchestrator.outputs.respond == 'true'
         run: |
           set -euo pipefail
 
+          if [ -L unattended_system_instructions.md ] || [ -L ai_pipeline.md ]; then
+            echo "::error::Required static context input is a symbolic link; refusing to assemble the prompt." >&2
+            exit 1
+          fi
           if [ ! -s unattended_system_instructions.md ] || [ ! -s ai_pipeline.md ]; then
             echo "Missing or empty required codex input file(s): unattended_system_instructions.md and/or ai_pipeline.md"
             exit 1
           fi
+          if [ -L ./pre_assembled_static.txt ] || { [ -e ./pre_assembled_static.txt ] && [ ! -f ./pre_assembled_static.txt ]; }; then
+            echo "::error::Checkout contains a non-regular pre_assembled_static.txt; refusing to assemble static context." >&2
+            exit 1
+          fi
+          clarify_respond_readme_context="$(mktemp "${RUNNER_TEMP}/clarify-respond-readme.XXXXXX")"
+          bash scripts/build_static_context.sh readme "${clarify_respond_readme_context}"
 
           # Keep an identical static prefix at the start of every request so
           # provider-side prompt prefix caching can be reused across runs.
@@ -666,29 +767,34 @@ jobs:
             echo "=== AI PIPELINE ==="
             cat ai_pipeline.md
             echo
-            if [ -f AGENTS.md ]; then
+            if [ -L AGENTS.md ]; then
+              echo "::warning::AGENTS.md is a symbolic link; omitted from the static context." >&2
+            fi
+            if [ -L agents.md ]; then
+              echo "::warning::agents.md is a symbolic link; omitted from the static context." >&2
+            fi
+            if [ -f AGENTS.md ] && [ ! -L AGENTS.md ]; then
               echo "=== AGENTS.MD ==="
               cat AGENTS.md
               echo
-            elif [ -f agents.md ]; then
+            elif [ -f agents.md ] && [ ! -L agents.md ]; then
               echo "=== AGENTS.MD ==="
               cat agents.md
               echo
             fi
-            if [ -f README.md ]; then
-              echo "=== README.MD ==="
-              cat README.md
-              echo
-            fi
-            if [ -f probably_unnecessary_but_read_if_stuck.md ]; then
+            cat "${clarify_respond_readme_context}"
+            if [ -f probably_unnecessary_but_read_if_stuck.md ] && [ ! -L probably_unnecessary_but_read_if_stuck.md ]; then
               echo "=== OVERFLOW REFERENCE ==="
               echo "If you cannot make progress without operator-runbook details (env var reference, autofix retrigger/dedup internals, orchestrator integration-sync auto-heal, validation self-healing, workflow log analysis pipeline, semantic cache scope, wrapper pin policy), read ./probably_unnecessary_but_read_if_stuck.md from the working tree before bailing."
               echo
+            elif [ -L probably_unnecessary_but_read_if_stuck.md ]; then
+              echo "::warning::probably_unnecessary_but_read_if_stuck.md is a symbolic link; omitted from the static context." >&2
             fi
           } > ./pre_assembled_static.txt
+          rm -f "${clarify_respond_readme_context}"
 
       - name: Retrieve issue memory context
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        if: steps.check_orchestrator.outputs.respond == 'true'
         run: |
           set -euo pipefail
 
@@ -707,20 +813,66 @@ jobs:
             --issue-body-file "${RUNTIME_DIR}/issue_body.txt"
 
       - name: Remove git auth before Codex execution
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        if: steps.check_orchestrator.outputs.respond == 'true'
         run: |
           set -euo pipefail
           if [ -d .git ]; then
             git remote set-url origin "${{ github.server_url }}/${{ github.repository }}"
           fi
 
+      # Claude engine (replace-claude-sessions plan Phase 5a): the
+      # CLARIFY_RESPOND role (answer, self-critique and revision) runs on
+      # Claude unless the issue's labels, AI_ENGINE_CLARIFY_RESPOND or
+      # AI_ENGINE say codex. The CLI and the pool credential are fetched only
+      # when it resolves to Claude; any Claude failure to start falls back to
+      # the unchanged codex calls below (exit 75, plan D1).
+      - name: Resolve AI engine
+        id: ai_engine
+        if: steps.check_orchestrator.outputs.respond == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_CLARIFY_RESPOND: ${{ vars.AI_ENGINE_CLARIFY_RESPOND || '' }}
+          AI_ENGINE_MODEL_HINT: ${{ env.MODEL_EDITOR }}
+          AI_ENGINE_EFFORT_HINT: ${{ env.MODEL_REASONING_EFFORT }}
+        run: |
+          set -euo pipefail
+          engine="codex"
+          if [ -f scripts/ai_engine.sh ]; then
+            # shellcheck disable=SC1091
+            source scripts/ai_engine.sh
+            AI_ENGINE_LABELS="$(jq -c '[.labels[]?.name]' "${ISSUE_PAYLOAD_FILE}")"
+            export AI_ENGINE_LABELS
+            engine="$(ai_engine_for_role CLARIFY_RESPOND || echo codex)"
+          fi
+          [ "${engine}" = "claude" ] || engine="codex"
+          echo "engine=${engine}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/install-claude
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/claude-pool-token
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
       - name: Build prompt and run Codex
         id: run_codex
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        if: steps.check_orchestrator.outputs.respond == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true'
+        # Standalone mode falls back to the RECOMMENDED options when the
+        # worker fails ("Standalone RECOMMENDED fallback" below), so a failure
+        # here must not end the job; orchestrator mode keeps failing loudly.
+        continue-on-error: ${{ steps.check_orchestrator.outputs.mode == 'standalone' }}
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_CLARIFY_RESPOND || '25' }}
           CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          CLARIFY_RESPOND_ENGINE: ${{ steps.ai_engine.outputs.engine || 'codex' }}
         run: |
           set -euo pipefail
 
@@ -750,6 +902,11 @@ jobs:
             echo
             echo "=== CLARIFICATION QUESTIONS ==="
             cat "${RUNTIME_DIR}/clarification_comment.txt"
+            if [ -s "${RUNTIME_DIR}/github_facts.txt" ]; then
+              echo
+              echo "=== GITHUB FACTS ==="
+              cat "${RUNTIME_DIR}/github_facts.txt"
+            fi
           } > "${CODEX_PROMPT_FILE}"
 
           # Inject prior clarify-cycle context if available.
@@ -772,18 +929,30 @@ jobs:
 
           max_attempts=3
           for attempt in $(seq 1 "${max_attempts}"); do
-            echo "Codex clarify-respond attempt ${attempt}/${max_attempts}..."
+            echo "Codex clarify-respond attempt ${attempt}/${max_attempts} (engine ${CLARIFY_RESPOND_ENGINE})..."
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
             fi
-            if bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"; then
+            rc=0
+            if [ "${CLARIFY_RESPOND_ENGINE}" = "claude" ]; then
+              bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" claude CLARIFY_RESPOND || rc=$?
+              if [ "${rc}" -eq 75 ]; then
+                # Claude unavailable (logged as AI_ENGINE_FALLBACK): this
+                # attempt and the rest run the codex path (plan D1).
+                CLARIFY_RESPOND_ENGINE="codex"
+                rc=0
+              fi
+            fi
+            if [ "${CLARIFY_RESPOND_ENGINE}" != "claude" ]; then
+              bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" || rc=$?
+            fi
+            if [ "${rc}" -eq 0 ]; then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
                 echo "Codex clarify-respond succeeded on attempt ${attempt}."
                 break
               fi
               echo "::warning::Codex returned empty output on attempt ${attempt}."
             else
-              rc=$?
               echo "::warning::Codex exited with code $rc on attempt ${attempt}."
             fi
             if [ "${attempt}" -lt "${max_attempts}" ]; then
@@ -795,12 +964,14 @@ jobs:
               exit 1
             fi
           done
+          echo "engine=${CLARIFY_RESPOND_ENGINE}" >> "$GITHUB_OUTPUT"
 
       - name: Self-critique pass for non-letter decisions
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success'
+        if: steps.check_orchestrator.outputs.respond == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          CLARIFY_RESPOND_ENGINE: ${{ steps.run_codex.outputs.engine || steps.ai_engine.outputs.engine || 'codex' }}
         run: |
           set -euo pipefail
 
@@ -845,7 +1016,18 @@ jobs:
             if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
               sanitize_codex_prompt_file "${RUNTIME_DIR}/critic_prompt.txt"
             fi
-            if bash scripts/clarify_isolated_run.sh "${RUNTIME_DIR}/critic_prompt.txt" "${RUNTIME_DIR}/critic_output.txt" "${RUNTIME_DIR}/codex_log.txt"; then
+            critic_rc=0
+            if [ "${CLARIFY_RESPOND_ENGINE}" = "claude" ]; then
+              bash scripts/clarify_isolated_run.sh "${RUNTIME_DIR}/critic_prompt.txt" "${RUNTIME_DIR}/critic_output.txt" "${RUNTIME_DIR}/codex_log.txt" claude CLARIFY_RESPOND || critic_rc=$?
+              if [ "${critic_rc}" -eq 75 ]; then
+                CLARIFY_RESPOND_ENGINE="codex"
+                critic_rc=0
+              fi
+            fi
+            if [ "${CLARIFY_RESPOND_ENGINE}" != "claude" ]; then
+              bash scripts/clarify_isolated_run.sh "${RUNTIME_DIR}/critic_prompt.txt" "${RUNTIME_DIR}/critic_output.txt" "${RUNTIME_DIR}/codex_log.txt" || critic_rc=$?
+            fi
+            if [ "${critic_rc}" -eq 0 ]; then
               if grep -q 'VERDICT: REJECT' "${RUNTIME_DIR}/critic_output.txt"; then
                 echo "::warning::Self-critique rejected the decision. Appending critique and re-running."
                 CRITIC_REASON="$(grep -A5 'REASON:' "${RUNTIME_DIR}/critic_output.txt" || echo "No reason provided")"
@@ -860,7 +1042,18 @@ jobs:
                 if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
                   sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}.v2"
                 fi
-                if bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}.v2" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"; then
+                revise_rc=0
+                if [ "${CLARIFY_RESPOND_ENGINE}" = "claude" ]; then
+                  bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}.v2" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" claude CLARIFY_RESPOND || revise_rc=$?
+                  if [ "${revise_rc}" -eq 75 ]; then
+                    CLARIFY_RESPOND_ENGINE="codex"
+                    revise_rc=0
+                  fi
+                fi
+                if [ "${CLARIFY_RESPOND_ENGINE}" != "claude" ]; then
+                  bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}.v2" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" || revise_rc=$?
+                fi
+                if [ "${revise_rc}" -eq 0 ]; then
                   echo "Revised decision produced after self-critique."
                 else
                   echo "::warning::Revised Codex call failed; using original output."
@@ -874,7 +1067,7 @@ jobs:
           fi
 
       - name: Semantic cache store
-        if: always() && steps.check_orchestrator.outputs.is_orchestrator == 'true' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success'
+        if: always() && steps.check_orchestrator.outputs.respond == 'true' && steps.check_orchestrator.outputs.mode != 'standalone' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'success'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SEMANTIC_CACHE_BACKEND: ${{ vars.SEMANTIC_CACHE_BACKEND || 'none' }}
@@ -902,15 +1095,57 @@ jobs:
           fi
 
       - name: Save semantic cache SQLite
-        if: always() && steps.check_orchestrator.outputs.is_orchestrator == 'true' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec' && steps.run_codex.outcome == 'success'
+        if: always() && steps.check_orchestrator.outputs.respond == 'true' && steps.check_orchestrator.outputs.mode != 'standalone' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec' && steps.run_codex.outcome == 'success'
         continue-on-error: true
         uses: actions/cache/save@v4
         with:
           path: ${{ vars.SEMANTIC_CACHE_SQLITE_PATH || '/tmp/semantic_cache.sqlite3' }}
           key: semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}-${{ github.run_id }}-${{ github.run_attempt }}
 
+      # Standalone mode only: when the worker could not answer (every engine
+      # attempt failed), post each question's RECOMMENDED option instead, the
+      # behaviour clarify.yml's auto-decide had before it delegated here. If a
+      # question has no RECOMMENDED option, nothing is posted and a human is
+      # paged, which is the alert clarify.yml left to this workflow.
+      - name: Standalone RECOMMENDED fallback
+        id: standalone_fallback
+        if: steps.check_orchestrator.outputs.mode == 'standalone' && steps.semantic_cache_lookup.outputs.cache_hit != 'true' && steps.run_codex.outcome == 'failure'
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          FALLBACK_FILE="${RUNTIME_DIR}/standalone_fallback.json"
+          FALLBACK_COUNT=0
+          FALLBACK_UNDECIDED="parse_failed"
+          if python3 scripts/auto_decisions.py parse --questions-file "${RUNTIME_DIR}/clarification_comment.txt" > "${FALLBACK_FILE}"; then
+            FALLBACK_COUNT="$(jq -r '.decisions | length' "${FALLBACK_FILE}")"
+            FALLBACK_UNDECIDED="$(jq -r '.undecided | join(",")' "${FALLBACK_FILE}")"
+          fi
+          if [ "${FALLBACK_COUNT}" -gt 0 ] && [ -z "${FALLBACK_UNDECIDED}" ]; then
+            jq -r '.answers' "${FALLBACK_FILE}" > "${CODEX_OUTPUT_FILE}"
+            echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=fallback reason=worker_failed decisions=${FALLBACK_COUNT}"
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=skip reason=worker_failed_undecided decisions=${FALLBACK_COUNT} undecided=${FALLBACK_UNDECIDED:-none}"
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+          source scripts/tg_helpers.sh
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          MSG="Clarification required for #${ISSUE_NUMBER}: ${ISSUE_TITLE:-}"
+          MSG+=$'\n'
+          MSG+="The clarify-respond worker failed and the questions have no RECOMMENDED fallback."
+          MSG+=$'\n'
+          MSG+="Issue: ${ISSUE_URL}"
+          MSG+=$'\n'
+          MSG+="Run: ${RUN_URL}"
+          tg_send_phase_tracked "${ISSUE_NUMBER}" "clarify" "${MSG}" "CRITICAL"
+
       - name: Data-provision guard
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && (steps.run_codex.outcome == 'success' || steps.semantic_cache_lookup.outputs.cache_hit == 'true')
+        if: steps.check_orchestrator.outputs.respond == 'true' && (steps.run_codex.outcome == 'success' || steps.semantic_cache_lookup.outputs.cache_hit == 'true' || steps.standalone_fallback.outputs.ready == 'true')
         env:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -942,7 +1177,9 @@ jobs:
           fi
 
       - name: Parse and post answer
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        # A standalone worker failure without a RECOMMENDED fallback posts
+        # nothing (the fallback step paged a human instead).
+        if: steps.check_orchestrator.outputs.respond == 'true' && (steps.run_codex.outcome != 'failure' || steps.standalone_fallback.outputs.ready == 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
@@ -954,8 +1191,60 @@ jobs:
           set -euo pipefail
           bash scripts/orchestrate_parse_and_post_answer.sh
 
+      # Standalone mode: record every decision, with who took it and any
+      # placeholder setup items, in the issue's single trusted
+      # <!-- ai:auto-decisions:v1 --> comment, which implement.yml repeats in
+      # the PR body. The comment snapshot is the one read above; no extra
+      # read. Never fails the run: the answer is already posted.
+      - name: Record standalone auto-decisions
+        if: steps.check_orchestrator.outputs.mode == 'standalone' && env.SKIP_AUTO_ANSWER == 'false'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+          CLARIFICATION_COMMENT_ID: ${{ github.event.comment.id }}
+          CLARIFY_RESPOND_FALLBACK_READY: ${{ steps.standalone_fallback.outputs.ready || 'false' }}
+          CLARIFY_RESPOND_CACHE_HIT: ${{ steps.semantic_cache_lookup.outputs.cache_hit || 'false' }}
+          CLARIFY_RESPOND_ENGINE: ${{ steps.run_codex.outputs.engine || steps.ai_engine.outputs.engine || 'codex' }}
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          if [ "${CLARIFY_RESPOND_FALLBACK_READY}" = "true" ]; then
+            AD_DECIDER="RECOMMENDED fallback"
+          elif [ "${CLARIFY_RESPOND_CACHE_HIT}" = "true" ]; then
+            AD_DECIDER="clarify-respond, semantic cache"
+          else
+            AD_DECIDER="clarify-respond on ${CLARIFY_RESPOND_ENGINE}"
+          fi
+          AD_DECISIONS_FILE="${RUNTIME_DIR}/standalone_decisions.json"
+          if ! python3 scripts/auto_decisions.py from-answers \
+            --questions-file "${RUNTIME_DIR}/clarification_comment.txt" \
+            --answers-file "${CODEX_OUTPUT_FILE}" > "${AD_DECISIONS_FILE}"; then
+            echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=answered reason=ad_parse_failed"
+            exit 0
+          fi
+          AD_RENDER_FILE="${RUNTIME_DIR}/standalone_decisions_comment.json"
+          if ! python3 scripts/auto_decisions.py render --comments-file "${RUNTIME_DIR}/issue_all_comments.json" \
+            --decisions-file "${AD_DECISIONS_FILE}" \
+            --source "clarify comment ${CLARIFICATION_COMMENT_ID}, ${AD_DECIDER}" > "${AD_RENDER_FILE}"; then
+            echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=answered reason=ad_render_failed"
+            exit 0
+          fi
+          AD_EXISTING_ID="$(jq -r '.comment_id // empty' "${AD_RENDER_FILE}")"
+          if [[ "${AD_EXISTING_ID}" =~ ^[1-9][0-9]*$ ]]; then
+            gh_retry gh api -X PATCH "repos/${{ github.repository }}/issues/comments/${AD_EXISTING_ID}" \
+              -f body="$(jq -r '.body' "${AD_RENDER_FILE}")" >/dev/null \
+              || echo "::warning::Could not update the auto-decisions comment ${AD_EXISTING_ID} on issue #${ISSUE_NUMBER}"
+          else
+            gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+              -f body="$(jq -r '.body' "${AD_RENDER_FILE}")" >/dev/null \
+              || echo "::warning::Could not post the auto-decisions comment on issue #${ISSUE_NUMBER}"
+          fi
+          echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=answered decider=$(printf '%s' "${AD_DECIDER}" | tr ' ,' '_') decisions=$(jq -r '.decisions | length' "${AD_DECISIONS_FILE}") ad_total=$(jq -r '.total' "${AD_RENDER_FILE}") setup_total=$(jq -r '.setup_total' "${AD_RENDER_FILE}")"
+
       - name: Reconfigure git auth for memory helper clones
-        if: always() && steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        if: always() && steps.check_orchestrator.outputs.respond == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -971,7 +1260,10 @@ jobs:
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@${SERVER_HOST}/${GITHUB_REPOSITORY}"
 
       - name: Record memory candidate after auto-answer
-        if: steps.check_orchestrator.outputs.is_orchestrator == 'true' && env.SKIP_AUTO_ANSWER != 'true'
+        # SKIP_AUTO_ANSWER is false only after the poster posted an answer;
+        # it is unset when nothing was posted (a standalone worker failure
+        # with no RECOMMENDED fallback).
+        if: steps.check_orchestrator.outputs.respond == 'true' && env.SKIP_AUTO_ANSWER == 'false'
         run: |
           set -euo pipefail
 
@@ -1003,7 +1295,7 @@ jobs:
             --source-refs "${ISSUE_URL}"
 
       - name: Write run summary
-        if: always() && steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        if: always() && steps.check_orchestrator.outputs.respond == 'true'
         env:
           TOKEN_WARN_THRESHOLD: ${{ vars.TOKEN_WARN_THRESHOLD_CLARIFY_RESPOND || '80000' }}
         run: |
@@ -1029,7 +1321,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Record memory run-end success event
-        if: success() && steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        if: success() && steps.check_orchestrator.outputs.respond == 'true'
         run: |
           set -euo pipefail
 
@@ -1056,7 +1348,7 @@ jobs:
             --metadata-json "${METADATA_JSON}"
 
       - name: Record memory run-end failure event
-        if: failure() && steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        if: failure() && steps.check_orchestrator.outputs.respond == 'true'
         run: |
           set -euo pipefail
 
@@ -1083,7 +1375,7 @@ jobs:
             --metadata-json "${METADATA_JSON}"
 
       - name: Comment on issue failure
-        if: failure() && steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        if: failure() && steps.check_orchestrator.outputs.respond == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
@@ -1095,7 +1387,7 @@ jobs:
             -f body="Orchestrator clarify-respond workflow failed for ${ISSUE_URL}. Run: ${RUN_URL}"
 
       - name: Telegram failure notification
-        if: failure() && steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        if: failure() && steps.check_orchestrator.outputs.respond == 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -1114,7 +1406,7 @@ jobs:
           tg_send_tracked "${ISSUE_NUMBER}" "${MSG}" "ERROR"
 
       - name: Cleanup git auth remote
-        if: always() && steps.check_orchestrator.outputs.is_orchestrator == 'true'
+        if: always() && steps.check_orchestrator.outputs.respond == 'true'
         run: |
           set -euo pipefail
           if [ -d .git ]; then

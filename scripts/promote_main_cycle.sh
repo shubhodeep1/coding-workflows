@@ -48,7 +48,8 @@
 #
 # Non-code paths (do not count as a change): analysis/**, ai-memory/**,
 # docs/**, tests/e2e_smoke_canary.txt, CHANGELOG.md and every *.md — except
-# any CLAUDE.md and anything under .claude/, which consumers receive and
+# any CLAUDE.md and anything under a .claude/ directory (the root tree and the
+# workflow-templates/.claude/ twin the @stable sync ships to consumers), which
 # therefore count as code.
 #
 # Environment (all optional unless stated):
@@ -148,7 +149,7 @@ is_code_path()
 {
 	local p="$1"
 	case "${p}" in
-		CLAUDE.md|*/CLAUDE.md|.claude/*) return 0 ;;
+		CLAUDE.md|*/CLAUDE.md|.claude/*|*/.claude/*) return 0 ;;
 	esac
 	case "${p}" in
 		analysis/*|ai-memory/*|docs/*|tests/e2e_smoke_canary.txt|CHANGELOG.md|*.md) return 1 ;;

@@ -29,6 +29,9 @@ name: Workflow Failure Heal Intake
       - "Promote main to stable"
       - "Auto release stable"
       - "Forward-merge stable to main"
+      # CI on pushes to main (Q51); the job skips CI runs for pull requests
+      # and other branches, which check-failure triage covers.
+      - "CI"
     types:
       - completed
   workflow_dispatch:
@@ -42,6 +45,8 @@ permissions:
   contents: read
   issues: write
   actions: read
+  # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
 
 # Serialise every intake so the fingerprint dedup and the open-issue / per-day
 # budgets are evaluated against a consistent issue list.
@@ -58,7 +63,10 @@ jobs:
     if: >-
       !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED) &&
       (github.event_name != 'workflow_run' ||
-       contains(fromJson('["failure","timed_out"]'), github.event.workflow_run.conclusion))
+       (contains(fromJson('["failure","timed_out"]'), github.event.workflow_run.conclusion) &&
+        (github.event.workflow_run.name != 'CI' ||
+         (github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == github.event.repository.default_branch))))
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -153,6 +161,9 @@ jobs:
           codex_config_assemble "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "low"
 
       - name: Run workflow failure heal intake
+        env:
+          # Codex version baked into the isolated diagnosis agent's image (scripts/codex_isolated_exec.sh).
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
         run: |
           set -euo pipefail
           bash scripts/workflow_failure_heal_intake.sh
