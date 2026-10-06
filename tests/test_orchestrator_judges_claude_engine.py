@@ -235,9 +235,9 @@ def test_combined_rb_judge_uses_verified_engine_and_its_worktree(
 		f'RB_JUDGE_PROMPT_FILE="{tmp_path / "prompt.txt"}"\nRB_JUDGE_OUTPUT_FILE="{tmp_path / "verdict.txt"}"\n'
 		'MODEL_EDITOR=openai/gpt-6-sol\nRB_COMBINED_MODE=true\nrb_issue=10\n'
 		f'_current_wave_details_json=\'{{"10":{{"labels":[{issue_labels}],"labels_complete":true}}}}\'\nTRACKING_LABELS=\'["ai:engine-claude"]\'\n'
-		'RB_JUDGE_ENGINE_LABELS_JSON=' + branch + 'done\n'
+		'RB_JUDGE_ENGINE_LABELS_JSON=' + branch + '          break\n        done\n'
 	)
-	# The test runs only the attempt, not the outer poller success/retry loop.
+	# The production loop breaks after the first nonempty verdict.
 	proc = subprocess.run(["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True,
 		env={**os.environ, "FAKE_ENGINE": "claude", "FAKE_CLAUDE_MODE": "success", "CALLS": str(tmp_path / "calls"),
 			"FAKE_SANDBOX_ROOT": str(tmp_path / "sandbox-root"), "WORKSPACE_PATH": str(tmp_path / "wrong-workspace")}, check=False)
@@ -897,7 +897,7 @@ def test_poll_job_stages_the_engine_and_fetches_the_pool_only_when_needed() -> N
 	assert opencode["with"]["opencode_version"] == "${{ vars.OPENCODE_VERSION || '1.18.23' }}"
 	assert names.index("Install OpenCode CLI for isolated review-blocked judge") < names.index("Process each tracking issue")
 	stage = steps[names.index("Stage workflow support files")]["run"]
-	assert "security_dependency.py ai_engine.sh claude_engine.py claude_settings.json.tmpl codex_stall_guard.sh; do" in stage
+	assert "security_dependency.py ai_engine.sh claude_engine.py claude_settings.json.tmpl codex_stall_guard.sh codex_isolated_exec.sh" in stage
 	resolve = steps[names.index("Resolve AI engine")]
 	assert resolve["id"] == "ai_engine"
 	assert resolve["env"]["AI_ENGINE_LABELS"] == ""
