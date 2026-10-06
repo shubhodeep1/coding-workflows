@@ -24,6 +24,8 @@ VALIDATE_PROCESS = REPO_ROOT / "scripts" / "validate_process.sh"
 def _base_env() -> dict[str, str]:
 	env = os.environ.copy()
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	for name in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
+		env.pop(name, None)
 	return env
 
 
@@ -538,7 +540,7 @@ def test_implement_workflow_contains_thread_reuse_wiring() -> None:
 	assert "mode-implement-repair-continuation.txt mode-implement-diagnose-continuation.txt mode-validate-self-heal-continuation.txt" in text
 	assert "mode-implement-repair-continuation.yml mode-implement-diagnose-continuation.yml mode-validate-self-heal-continuation.yml" in text
 	assert "name: Probe Codex thread-reuse support" in text
-	assert 'bash "${IMPLEMENT_SANDBOX_SUPPORT_DIR}/scripts/codex_thread_reuse.sh" direct-run || cmd_rc=$?' in text
+	assert 'bash "${EDITOR_ISOLATION_SUPPORT_DIR}/codex_thread_reuse.sh" direct-run || cmd_rc=$?' in text
 	assert 'CODEX_THREAD_REUSE_MARKER_START="=== CAPTURED SYNTAX DIAGNOSTICS (FULL) ==="' in text
 	assert "codex_thread_reuse_install_wrapper" in text
 	assert "=== IMPLEMENT FAILURE DIAGNOSIS TASK ===" in text
@@ -716,6 +718,25 @@ mkdir -p "$CODEX_THREAD_REUSE_CLAUDE_HOME/.claude/projects/x"
 		assert _claude_calls(env) == []
 
 
+def test_editor_isolation_claude_runner_receives_session_not_workdir() -> None:
+	with tempfile.TemporaryDirectory(prefix="codex_thread_claude_") as td:
+		root = Path(td)
+		env, helper = _claude_env(root, "success")
+		isolation_root = root / "editor-isolated-test"
+		(isolation_root / "home").mkdir(parents=True)
+		(root / "scripts/editor_isolated_run.sh").write_text('''#!/usr/bin/env bash
+set -eu
+[ "$#" -eq 6 ] && [ "$1" = claude-exec ] && [ "$2" = "$EDITOR_ISOLATION_ROOT" ] && [ "$3" = IMPLEMENT ]
+[[ "$6" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
+printf 'isolated output\\n' > "$5"
+''', encoding="utf-8")
+		env.update({"EDITOR_ISOLATION_ROOT": str(isolation_root), "EDITOR_ISOLATION_SUPPORT_DIR": str(root / "scripts"), "RUNNER_TEMP": str(root)})
+		proc, output = _run_claude_direct(env, helper, prompt_text="isolate me\n")
+		assert proc.returncode == 0, proc.stderr
+		assert output == "isolated output\n"
+		assert _claude_calls(env) == []
+
+
 def test_missing_explicit_codex_shim_never_runs_host_codex() -> None:
 	with tempfile.TemporaryDirectory(prefix="codex_thread_isolation_") as td:
 		env, helper = _claude_env(Path(td), "success")
@@ -817,6 +838,7 @@ def main() -> int:
 	test_validate_process_contains_thread_reuse_wiring()
 	test_validate_workflow_contains_thread_reuse_bootstrap()
 	test_claude_engine_runs_claude_and_resumes_its_session()
+	test_editor_isolation_claude_runner_receives_session_not_workdir()
 	test_claude_unavailable_runs_the_unchanged_codex_path()
 	test_claude_repair_uses_the_repair_effort_hint()
 	test_claude_unavailable_drops_session_and_stays_on_codex()

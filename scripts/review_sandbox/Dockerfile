@@ -13,6 +13,10 @@ RUN if [ -n "${CODEX_VERSION}" ]; then \
 # runs with --network none; only the fixed-path model relay is reachable.
 RUN npm install --prefix /opt/opencode-provider @openrouter/ai-sdk-provider@3.1.0 --no-audit --no-fund
 ENV NODE_PATH=/opt/opencode-provider/node_modules
+RUN if [ -n "${CODEX_VERSION}" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends python3-pytest jq shellcheck \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
 # Claude engine (scripts/ai_engine.sh): installed only when `prepare claude`
 # passes a version; the OpenCode image is unchanged without it.
 ARG CLAUDE_CLI_VERSION=

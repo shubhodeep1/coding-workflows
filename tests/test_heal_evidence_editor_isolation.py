@@ -608,19 +608,19 @@ def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
 	assert 'cd "${WORKSPACE_PATH}"' in implementation.split('source scripts/gh_helpers.sh', 1)[0]
 	assert 'env -u BASH_ENV -u ENV bash -c "${EDITOR_GIT_CREDENTIALS_SCRIPT}"' in (ROOT / "scripts" / "run_plan_codex.sh").read_text()
 	assert "--format structured" in implement
-	assert "--format structured" in (ROOT / "scripts" / "run_plan_codex.sh").read_text()
+	assert 'editor_isolated_run.sh" claude-exec' in (ROOT / "scripts" / "run_plan_codex.sh").read_text()
 	assert "--format structured" not in (WORKFLOWS / "clarify.yml").read_text()
 	implementation = implement.split("      - name: Run Codex implementation\n", 1)[1].split("      - name: ", 1)[0]
 	assert "GH_TOKEN: ${{ github.token }}" in implementation
 	repair = implement.split("      - name: Attempt post-Codex syntax repair\n", 1)[1].split("      - name: ", 1)[0]
 	assert "GH_TOKEN: ${{ github.token }}" in repair
-	assert repair.count('editor_git_credentials restore') == 2
+	assert repair.count('editor_git_credentials restore') == 3  # Exit trap and both attempt outcomes.
 	assert repair.index('editor_git_credentials restore') < repair.index('echo "::warning::Post-Codex repair attempt')
 	assert implement.count('env -u GH_TOKEN -u GH_PAT') == 2
 	assert implement.count('-u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH \\') == 2
 	plan_runner = (ROOT / "scripts" / "run_plan_codex.sh").read_text()
 	assert 'ACTIONS_ID_TOKEN_REQUEST_URL HEAL_EVIDENCE_DIR GITHUB_ENV GITHUB_PATH' in plan_runner
-	assert '-u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH codex' in plan_runner
+	assert '-u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH "${EDITOR_ISOLATION_ROOT}/bin/codex"' in plan_runner
 	assert "GIT_CONFIG_GLOBAL=/dev/null git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.attributesFile=/dev/null commit" in (ROOT / "scripts" / "implement_commit_changes.sh").read_text()
 	assert implement.count('git -c core.hooksPath=/dev/null push') == 2
 	preflight = implement.split("      - name: Preflight destructive-commit guard\n", 1)[1].split("      - name: ", 1)[0]

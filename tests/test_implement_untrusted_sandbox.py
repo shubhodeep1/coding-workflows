@@ -95,10 +95,9 @@ def test_runner_preflight_fails_closed(tmp_path: Path) -> None:
 def test_workflow_isolates_both_launches_and_cleans_up() -> None:
 	text = WORKFLOW.read_text()
 	assert text.index("name: Prepare implement editor isolation") < text.index("name: Run Codex implementation")
-	assert text.count('CODEX_THREAD_REUSE_REAL_CODEX="${IMPLEMENT_SANDBOX_ROOT}/bin/codex"') == 2
-	assert text.count('CODEX_THREAD_REUSE_CLAUDE_RUNNER="${IMPLEMENT_SANDBOX_SUPPORT_DIR}/scripts/implement_untrusted_sandbox.sh"') == 2
-	assert text.count('CODEX_THREAD_REUSE_CLAUDE_HOME="${IMPLEMENT_SANDBOX_ROOT}/home"') == 2
-	assert text.count('bash "${IMPLEMENT_SANDBOX_SUPPORT_DIR}/scripts/codex_thread_reuse.sh" direct-run') == 2
+	assert text.count('CODEX_THREAD_REUSE_REAL_CODEX="${EDITOR_ISOLATION_ROOT}/bin/codex"') == 2
+	assert 'CODEX_THREAD_REUSE_CLAUDE_RUNNER=' not in text
+	assert text.count('bash "${EDITOR_ISOLATION_SUPPORT_DIR}/codex_thread_reuse.sh" direct-run') == 2
 	assert text.count('[ -f "${RUNTIME_DIR}/implement_sandbox_transfer_failed" ]') >= 2
 	assert "if: always() && env.IMPLEMENT_SANDBOX_ROOT != ''" in text
 	assert "bash scripts/codex_thread_reuse.sh direct-run" not in text

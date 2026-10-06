@@ -33,9 +33,16 @@ Phases of the unattended pipeline (each is a separate workflow file under
    absent from the cache key. Orchestrator mode keeps the existing cache path.
 3. **plan** (`plan.yml`, `internal-plan.yml`) — read the clarified issue and
    emit a structured implementation plan with files-to-change and a
-   per-issue ≤60-minute time budget.
+   per-issue ≤60-minute time budget. The model runs against a read-only
+   disposable snapshot through `scripts/editor_isolated_run.sh`.
 4. **implement** (`implement.yml`, `internal-implement.yml`) — execute the
-   plan with codex-cli; write the actual files.
+   plan with codex-cli; write the actual files. Both editor launch sites run
+   in a tokenless container against a checked snapshot (including exclusion
+   of nested `.ssh`, `.aws` and `.gnupg` directories); the host verifies
+   container removal before transferring edits and restoring Git credentials.
+   Exit cleanup is still attempted if credential restoration fails. A failed
+   reap retains the root so the later credential-restore step retries container
+   removal rather than restoring credentials without verification.
 5. **implement-diagnose** (`scripts/implement_diagnose_post_codex_failure.sh`,
    driven by `MODEL_DIAGNOSE`) — analyse a post-Codex validation failure and
    emit JSON fix-up issue proposals.
@@ -1541,6 +1548,7 @@ and shipped:
 - `WORKFLOW_HEAL_EVIDENCE`
 - `HEAL_EVIDENCE_SCOPE_LOCK`
 - `EDITOR_GIT_CREDENTIALS`
+- `EDITOR_ISOLATION`
 - `IMPLEMENT_ISOLATION`
 - `AUTOFIX_FINGERPRINT`
 - `AUTOFIX_FINGERPRINT_CAP_TRIPPED`
@@ -1747,6 +1755,7 @@ LOG_PREFIX.name=WORKFLOW_HEAL
 LOG_PREFIX.name=WORKFLOW_HEAL_EVIDENCE
 LOG_PREFIX.name=HEAL_EVIDENCE_SCOPE_LOCK
 LOG_PREFIX.name=EDITOR_GIT_CREDENTIALS
+LOG_PREFIX.name=EDITOR_ISOLATION
 LOG_PREFIX.name=IMPLEMENT_ISOLATION
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_TRIPPED

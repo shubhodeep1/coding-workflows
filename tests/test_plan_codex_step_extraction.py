@@ -200,6 +200,26 @@ case "${MOCK_CODEX_SCENARIO}" in
 esac
 """,
 	)
+	# The runner calls the trusted isolation shim, not the host codex binary.
+	_write_executable(scripts_dir / "editor_isolated_run.sh", """#!/usr/bin/env bash
+case "$1" in
+prepare)
+  mkdir -p "${MOCK_LOG_DIR}/isolated/bin"
+  cp "${MOCK_BIN_DIR}/codex" "${MOCK_LOG_DIR}/isolated/bin/codex"
+  echo "${MOCK_LOG_DIR}/isolated"
+  ;;
+snapshot|finish|reap|cleanup) exit 0 ;;
+claude-exec)
+  printf '%s|%s|%s|%s|%s|%s\\n' "$3" "$4" "$5" "${GITHUB_WORKSPACE}" "${AI_ENGINE_MODEL_HINT:-}" "${AI_ENGINE_EFFORT_HINT:-}" >> "${MOCK_LOG_DIR}/claude-run.log"
+  case "${MOCK_CLAUDE_SCENARIO}" in
+    success) printf 'claude plan output\\n' > "$5" ;;
+    unavailable) echo "AI_ENGINE_FALLBACK role=$3 reason=no_credential" >&2; exit 75 ;;
+    *) exit 1 ;;
+  esac
+  ;;
+*) exit 2 ;;
+esac
+""")
 
 	if engine:
 		# A stand-in for scripts/ai_engine.sh: claude_run logs its arguments
@@ -243,6 +263,8 @@ esac
 			"GITHUB_WORKSPACE": str(root),
 			"MOCK_CODEX_SCENARIO": scenario,
 			"MOCK_LOG_DIR": str(runtime_dir),
+			"MOCK_BIN_DIR": str(mock_bin_dir),
+			"EDITOR_ISOLATION_SUPPORT_DIR": str(scripts_dir),
 			"MODEL_EDITOR": "primary/model",
 			"MODEL_EDITOR_FALLBACK": "fallback/model",
 			"PATH": f"{mock_bin_dir}{os.pathsep}{environment['PATH']}",
@@ -296,7 +318,7 @@ def test_primary_success_preserves_prompt_order_and_outputs() -> None:
 	assert _read_lines(runtime_dir / "codex-args.log") == [
 		"--ask-for-approval never -c model_verbosity=low "
 		"-c include_apply_patch_tool=true exec --skip-git-repo-check "
-		"--model primary/model --sandbox danger-full-access"
+		"--model primary/model --sandbox read-only"
 	]
 	assert (runtime_dir / "codex_log.txt").is_file()
 	assert _read_lines(runtime_dir / "gh.log") == [
@@ -390,7 +412,7 @@ def test_editor_cannot_change_running_runner_or_pinned_restore() -> None:
 CODEX_ARGS = (
 	"--ask-for-approval never -c model_verbosity=low "
 	"-c include_apply_patch_tool=true exec --skip-git-repo-check "
-	"--model primary/model --sandbox danger-full-access"
+	"--model primary/model --sandbox read-only"
 )
 
 
@@ -433,7 +455,7 @@ def test_a_claude_crash_retries_on_claude_and_never_reaches_codex() -> None:
 	assert not (runtime_dir / "codex-args.log").exists()
 
 
-def test_codex_engine_runs_the_unchanged_codex_call() -> None:
+def test_codex_engine_runs_the_isolated_codex_call() -> None:
 	result, root, _temporary_directory = _run_runner("success", engine="codex")
 	runtime_dir = root / "runtime"
 
@@ -442,10 +464,23 @@ def test_codex_engine_runs_the_unchanged_codex_call() -> None:
 	assert not (runtime_dir / "claude-run.log").exists()
 	runner = PLAN_RUNNER.read_text(encoding="utf-8")
 	assert (
-		'env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_CHAT_ID -u TG_ADMIN_CHAT_ID -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true '
-		'exec --skip-git-repo-check --model "${attempt_model}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" '
+		'env -u GH_TOKEN -u GH_PAT -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_CHAT_ID -u TG_ADMIN_CHAT_ID -u ACTIONS_RUNTIME_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL -u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH "${EDITOR_ISOLATION_ROOT}/bin/codex" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true '
+		'exec --skip-git-repo-check --model "${attempt_model}" --sandbox read-only < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" '
 		'2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || plan_rc=$?'
 	) in runner
+
+
+def test_implement_editor_attempts_use_isolated_snapshot_and_verified_transfer() -> None:
+	workflow_text = (REPO_ROOT / ".github/workflows/implement.yml").read_text(encoding="utf-8")
+	for step_name in ("Run Codex implementation", "Attempt post-Codex syntax repair"):
+		step = _workflow_step(workflow_text, step_name)
+		assert step.count('CODEX_THREAD_REUSE_REAL_CODEX=') == 1
+		assert 'CODEX_THREAD_REUSE_REAL_CODEX="${EDITOR_ISOLATION_ROOT}/bin/codex"' in step
+		assert 'CODEX_THREAD_REUSE_CLAUDE_RUNNER=' not in step
+		assert 'bash "${EDITOR_ISOLATION_SUPPORT_DIR}/codex_thread_reuse.sh" direct-run' in step
+		assert step.index('editor_isolated_run.sh" snapshot') < step.index('editor_git_credentials hide')
+		assert step.index('editor_isolated_run.sh" finish') < step.index('editor_git_credentials restore', step.index('editor_isolated_run.sh" finish'))
+		assert 'editor_isolated_run.sh" reap "${EDITOR_ISOLATION_ROOT}" && editor_git_credentials restore' in step
 
 
 def main() -> int:
