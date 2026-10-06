@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/sync_claude_live_copies.py:115-118 | severity=critical | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_2]\n  PROBLEM: The divergent allowlist `continue` runs before the per-path symlink guard, allowing allowlisted live files that are symlinks to bypass validation.\n  WHY: `mismatched()` can accept an allowlisted symlink, while the allowlist parity test uses `Path.is_file()` and follows symlinks; severity ranged from MAJOR to BLOCKER, using the highest rating.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Template or live-path symlinks fail the sync/parity check instead of being followed, preventing copies from reading credentials or writing outside .claude/.\"\n  expected_change_site: scripts/sync_claude_live_copies.py mismatched()\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: scripts/sync_claude_live_copies.py:114-118 places `if relative in divergent: continue` ahead of the per-file symlink guard; tests/test_claude_template_live_parity.py:292-303 only exercises a non-allowlisted path; tests/test_claude_template_live_parity.py:50 uses Path.is_file() which follows symlinks\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/sync_claude_live_copies.py:115 | severity=MAJOR | confidence=4\n  PROBLEM: The allowlist `continue` (`if relative in divergent: continue`) executes before the symlink check on line 117, so an allowlisted live file that is a symlink bypasses the symlink rejection entirely.\n  WHY: A symlink from `.claude/commands/analyze-log.md` to a regular file outside the checkout would pass `mismatched()` and CI without raising `ValueError`; the parity test also accepts it because `Path.is_file()` follows symlinks.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/sync_claude_live_copies.py:mismatched() | severity=BLOCKER | confidence=4\n  PROBLEM: The allowlist check (`if relative in divergent: continue`) skips subsequent symlink checks for live paths.\n  WHY: A live file listed in `.github/ai/claude_template_divergence.json` is not validated for symlinks, so an allowlisted live command can point to a sensitive system file or an arbitrary file outside the intended path and `mismatched()` would pass without flagging the unsafe symlink.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/sync_claude_live_copies.py:lines 114-118 inside mismatched() | severity=MAJOR | confidence=4\n  PROBLEM: Any live file under an allowlisted template path skips the per-file symlink check; `test_allowlist_names_real_divergent_pairs` only asserts `.is_file()`, which follows symlinks.\n  WHY: A symlink planted in an allowlisted live command file survives CI parity and ships to consumers via the @stable sync.\n- TASK_GAP\n  Requirement: \"Template or live-path symlinks fail the sync/parity check instead of being followed, preventing copies from reading credentials or writing outside .claude/.\"\n  Expected change site: scripts/sync_claude_live_copies.py mismatched() \u2014 the per-file symlink guard at line 117 must run before the divergent skip at lines 115-116, not after.\n  Evidence of absence: scripts/sync_claude_live_copies.py:114-118 places `if relative in divergent: continue` ahead of `if any((root / LIVE_PREFIX / part).is_symlink() ...)`; tests/test_claude_template_live_parity.py:292-303 (test_sync_refuses_symlinked_live_root) only exercises a non-allowlisted commands/new.md path, so the allowlist bypass is not covered by a regression test; tests/test_claude_template_live_parity.py:50 uses Path.is_file() which follows symlinks and would accept a symlinked allowlisted live file as \"has live copy.\"\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/sync_claude_live_copies.py:line 115 | severity=MAJOR | confidence=4\n  PROBLEM: Allowlisted paths are skipped before the live-path symlink check at lines 117\u2013118.\n  WHY: If an allowlisted live command is a symlink to a regular file, `mismatched()` accepts it without checking the target; the parity test\u2019s allowlist check uses `Path.is_file()`, which follows symlinks.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n- scripts/sync_claude_live_copies.py:115-116 | severity=MAJOR | confidence=4\n  PROBLEM: The allowlist check (`if relative in divergent: continue`) runs before the per-path symlink safety check (lines 117-118), so all six allowlisted live command files bypass symlink validation entirely.\n  WHY: A symlinked allowlisted command file passes `mismatched()`, and `Path.is_file()` follows symlinks, so CI can pass with a live command file whose contents come from outside its intended path.\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "0f0a74060647e45b98ac19def8fba4f4acf8514879c6865a2bd4b084649723c2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6288,
+    "run_id": "37390688134",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37390688134",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006003521_30650220e0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6288,
+    "run_id": "37390688134"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T00:35:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
