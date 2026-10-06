@@ -1732,9 +1732,11 @@ Limits that shape every analysis (verified 2026-10-06):
 - **Per-key spend is totals only.** `/keys` gives each key's daily, weekly
   and calendar-month USD totals with no model breakdown. `usage_monthly` is
   the current calendar month, not a rolling 30 days.
-- No pipeline request sets `HTTP-Referer`, `X-Title`, or a `user` field
-  (`scripts/write_opencode_config.sh`), so OpenRouter cannot split usage by
-  workflow, phase, or consumer repo.
+- Some direct OpenRouter calls set attribution headers: `scripts/analyze_soft_errors.py`
+  sets `HTTP-Referer` and `X-Title`, and `scripts/summarize_unselected_runs.py`
+  sets `X-Title`. The management API's account-wide `/activity` and `/keys`
+  totals do not provide a workflow, phase, or consumer-repo breakdown; do not
+  infer one from these headers or from a model slug shared by multiple callers.
 
 Write downloaded responses under the session scratchpad, not the repo
 (§13).
