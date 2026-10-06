@@ -21,6 +21,29 @@ MAX_FILES = 5000
 EXCLUDED = {".git", ".ai", ".codex", ".opencode", ".serena", ".venv", ".review-venv", "venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".cache", ".tox", ".nox", "dist", "build", "coverage", ".next", ".turbo", ".codex-workflow-src", ".codex-workflow-src-main", "secrets", "credentials"}
 ROOT_FILES = {"README.md", "agents.md", "AGENTS.md", "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "pyproject.toml", "requirements.txt", "setup.cfg", "pytest.ini", "tox.ini", "go.mod", "Cargo.toml"}
 SUFFIXES = {".py", ".sh", ".js", ".jsx", ".cjs", ".mjs", ".ts", ".tsx", ".cts", ".mts", ".go", ".rs", ".java", ".json", ".md", ".yml", ".yaml", ".toml", ".txt", ".css", ".html", ".sql", ".lock", ".cfg", ".ini"}
+def write_rejection_reason(line):
+	"""Write the rejection line for the editor wrapper; optional, never fatal."""
+	target = os.environ.get("REVIEW_SANDBOX_TRANSFER_REASON_FILE", "")
+	if not target:
+		return
+	tmp = None
+	try:
+		directory = os.path.dirname(os.path.abspath(target))
+		fd, tmp = tempfile.mkstemp(dir=directory, prefix=".review-transfer-reason-")
+		with os.fdopen(fd, "w", encoding="utf-8") as out:
+			out.write(line + "\n")
+		os.replace(tmp, target)
+		tmp = None
+	except OSError:
+		pass  # Diagnostics only: the exit status must not depend on this write.
+	finally:
+		if tmp is not None:
+			try:
+				os.unlink(tmp)
+			except OSError:
+				pass
+
+
 KEY_MATERIAL_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".keystore")
 
 # Rejections carry fixed tokens only (issue #6424). Paths come from the
@@ -148,12 +171,14 @@ def enumerate_workspace(root):
 			if entries > 10000:
 				raise _rejection("workspace entry limit exceeded", "entry_limit")
 			name = (rel / child).as_posix()
-			if child in EXCLUDED or child.endswith((".egg-info", ".dist-info")) or (rel == Path(".") and child.startswith(".") and child != ".github"):
+			child_is_symlink = (Path(directory) / child).is_symlink()
+			if child_is_symlink:
+				raise _rejection("unsafe workspace directory", "unsafe_directory", _directory_category(name, True), _directory_depth(name))
+			if (child in EXCLUDED and child not in ("secrets", "credentials")) or child.endswith((".egg-info", ".dist-info")) or (rel == Path(".") and child.startswith(".") and child != ".github"):
 				dirs.remove(child)
 				continue
-			child_is_symlink = (Path(directory) / child).is_symlink()
-			if (name != ".github" and not allowed(name + "/placeholder.py")) or child_is_symlink:
-				raise _rejection("unsafe workspace directory", "unsafe_directory", _directory_category(name, child_is_symlink), _directory_depth(name))
+			if name != ".github" and not allowed(name + "/placeholder.py"):
+				raise _rejection("unsafe workspace directory", "unsafe_directory", _directory_category(name, False), _directory_depth(name))
 		for child in files:
 			entries += 1
 			if entries > 10000:
@@ -281,7 +306,9 @@ def main():
 		else:
 			transfer(host, workspace, manifest)
 	except (OSError, ValueError, UnicodeError, subprocess.CalledProcessError) as exc:
-		print(_rejection_line(exc), file=sys.stderr)
+		line = _rejection_line(exc)
+		print(line, file=sys.stderr)
+		write_rejection_reason(line.partition(") ")[2] or "reason=other")
 		raise SystemExit(1) from None
 
 

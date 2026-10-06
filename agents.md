@@ -69,6 +69,15 @@ Phases of the unattended pipeline (each is a separate workflow file under
    validated transfer. Its isolation helpers must already exist in the
    verified workflow support commit; a PR's own copies are review data,
    not executable support, so review fails closed until that commit lands.
+   A rejected transfer names its cause without printing untrusted paths:
+   known rejections carry a fixed `reason=<r>` token, and unsafe directories
+   also carry `category=<c> depth=<d>` in the helper's and editor wrapper's
+   `::error::` lines. The reason is written to
+   `${RUNTIME_DIR}/review_sandbox_transfer_reason` and archived per
+   attempt as `review_sandbox_transfer_reason_<attempt>.txt` with that
+   attempt's `editor_attempt_<attempt>.err` (#6413). Exact excluded build
+   and cache directories are pruned; case variants, directory symlinks and
+   other unsafe directories fail closed.
    **Claude-fixer mode** (`CLAUDE_FIXER_ENABLED`, default on): on every
    PR-backed `claude/*` head (`/implement-plan-claude` stages and any Claude
    session's PR, CLAUDE.md §26.H) the reviewer panel runs as
