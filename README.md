@@ -1348,12 +1348,18 @@ through `clarify → plan → implement → review`.
   ref (`stable` in consumers, the run's commit here) and runs
   `scripts/workflow_failure_heal_phase_report.sh`. Running as its own job means
   the phase job has finished, so the intake reads its complete log. The reporter
-  reads the issue and its comments (one read each), counts the phase's failed
+  reads the issue, the authenticated reporter identity, and its comments (one
+  read each, with pagination for comments), counts the phase's failed
   runs in a row from the failure comments the phase posts (`AI planning
   workflow failed.`, `AI clarification workflow failed for …`, `AI
-  implementation workflow failed for …`; posted clarification questions, `The
-  task appears clear.`, a posted `Implementation Plan`, or another phase's
-  failure end the streak) and, at `WORKFLOW_HEAL_PHASE_FAILURE_STREAK`
+  implementation workflow failed for …`; only comments authored by the
+  authenticated account count. Cancelled runs, posted clarification questions,
+  `The task appears clear.`, a posted `Implementation Plan`, an implementation
+  completion marker, or another phase's failure end the streak; an unreadable
+  comment history or identity reports this run without applying a higher
+  threshold; if the completion marker cannot be posted, a warning is logged
+  and later implement streaks may span that success) and, at
+  `WORKFLOW_HEAL_PHASE_FAILURE_STREAK`
   (default 1), dispatches a `phase_failure` report: the failed run first in
   `run_refs`, then the earlier runs of the streak. Implement does not report a
   run that ended in a deliberate terminal state: a guard block (its

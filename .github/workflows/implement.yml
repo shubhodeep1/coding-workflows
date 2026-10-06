@@ -5250,6 +5250,8 @@ jobs:
             2>/dev/null || true
           gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
             --add-label 'ai:done' --remove-label 'ai:implementing' >/dev/null 2>&1 || true
+          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="<!-- ai:implementation-completed -->" >/dev/null 2>&1 || echo "::warning::Could not record implementation completion on issue #${ISSUE_NUMBER}."
 
       - name: Force orchestrate poll after implementation PR
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''

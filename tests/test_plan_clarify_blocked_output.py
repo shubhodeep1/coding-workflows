@@ -519,9 +519,7 @@ ENGINE_WORKFLOWS = (
 
 def _steps(workflow: str) -> list[dict]:
 	data = yaml.safe_load(_read(REPO_ROOT / ".github" / "workflows" / workflow))
-	# The phase job; heal-report (workflow failure heal) runs after it fails.
-	(job,) = [job for name, job in data["jobs"].items() if name != "heal-report"]
-	return job["steps"]
+	return data["jobs"]["respond" if workflow == "orchestrate_clarify_respond.yml" else workflow.removesuffix(".yml")]["steps"]
 
 
 def test_engine_steps_resolve_the_role_and_guard_the_credential() -> None:

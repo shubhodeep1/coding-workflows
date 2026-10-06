@@ -196,7 +196,7 @@ def test_prompt_declares_classification_tokens() -> None:
 
 def test_stable_log_prefixes_are_registered() -> None:
 	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
-	for prefix in ("WORKFLOW_HEAL_REPORT", "WORKFLOW_HEAL_AUTOFIX_REPORT", "WORKFLOW_HEAL_PR_RECONCILE", "WORKFLOW_HEAL"):
+	for prefix in ("WORKFLOW_HEAL_REPORT", "WORKFLOW_HEAL_AUTOFIX_REPORT", "WORKFLOW_HEAL_PHASE_REPORT", "WORKFLOW_HEAL_PR_RECONCILE", "WORKFLOW_HEAL"):
 		assert f"- `{prefix}`" in agents_text
 		assert f"LOG_PREFIX.name={prefix}" in agents_text
 
@@ -861,6 +861,8 @@ if args[:1] == ["api"]:
 	rest = [a for a in args[1:]]
 	method = inferred_method(rest)
 	path = next((a for a in rest if a.startswith("repos/")), "")
+	if "user" in rest:
+		out("workflow-bot")
 	if "--input" in rest:
 		body = json.loads(Path(rest[rest.index("--input") + 1]).read_text())
 		state.setdefault("dispatches", []).append({"path": path, "body": body})
@@ -3437,6 +3439,28 @@ def test_phase_failure_streak_counts_the_trailing_failures_of_one_phase() -> Non
 		pass
 	else:
 		raise AssertionError("an unknown phase must be rejected")
+	# Cancelled runs and completed implementations separate consecutive failures.
+	for cancelled in (
+		{"body": "AI planning workflow failed.\nRun: https://github.com/shubhodeep1/example-consumer/actions/runs/80\n<!-- ai:plan-cancelled -->"},
+		{"body": "AI clarification workflow was cancelled/timed out for issue. Run: https://github.com/shubhodeep1/example-consumer/actions/runs/80"},
+		{"body": "AI implementation workflow was cancelled/timed out for issue. Run: https://github.com/shubhodeep1/example-consumer/actions/runs/80"},
+		{"body": "<!-- ai:implementation-completed -->"},
+	):
+		assert heal.phase_failure_streak([_plan_failed_comment(CONSUMER_REPO, 79), cancelled], phase="plan", repo=CONSUMER_REPO, run_id=81) == {"streak": 1, "run_ids": []}
+	# A commenter who does not own the pipeline token cannot reset its streak.
+	assert heal.phase_failure_streak([
+		{**_plan_failed_comment(CONSUMER_REPO, 79), "user": {"login": "workflow-bot"}},
+		{"body": "The task appears clear.", "user": {"login": "other-user"}},
+		{**_plan_failed_comment(CONSUMER_REPO, 81), "user": {"login": "workflow-bot"}},
+	], phase="plan", repo=CONSUMER_REPO, run_id=81, trusted_author="workflow-bot") == {"streak": 2, "run_ids": ["79"]}
+	for phase, failure, cancellation in (
+		("clarify", "AI clarification workflow failed for ", "AI clarification workflow was cancelled/timed out for "),
+		("implement", "AI implementation workflow failed for ", "AI implementation workflow was cancelled/timed out for "),
+	):
+		assert heal.phase_failure_streak([
+			{"body": f"{failure}issue. Run: https://github.com/{CONSUMER_REPO}/actions/runs/79"},
+			{"body": f"{cancellation}issue. Run: https://github.com/{CONSUMER_REPO}/actions/runs/80"},
+		], phase=phase, repo=CONSUMER_REPO, run_id=81) == {"streak": 1, "run_ids": []}
 
 
 def test_phase_failure_comment_markers_match_the_workflows() -> None:
@@ -3447,8 +3471,10 @@ def test_phase_failure_comment_markers_match_the_workflows() -> None:
 	assert 'REASON="AI implementation workflow failed for ${ISSUE_URL}. Run: ${RUN_URL}"' in workflows["implement"]
 	assert 'REASON="AI implementation workflow was cancelled/timed out for ${ISSUE_URL}. Run: ${RUN_URL}"' in workflows["implement"]
 	assert heal.PHASE_FAILURE_COMMENT_PREFIXES["plan"] == ("AI planning workflow failed.",)
-	assert heal.PHASE_FAILURE_COMMENT_PREFIXES["clarify"] == ("AI clarification workflow failed for ", "AI clarification workflow was cancelled/timed out for ")
-	assert heal.PHASE_FAILURE_COMMENT_PREFIXES["implement"] == ("AI implementation workflow failed for ", "AI implementation workflow was cancelled/timed out for ")
+	assert heal.PHASE_FAILURE_COMMENT_PREFIXES["clarify"] == ("AI clarification workflow failed for ",)
+	assert heal.PHASE_FAILURE_COMMENT_PREFIXES["implement"] == ("AI implementation workflow failed for ",)
+	assert '<!-- ai:plan-cancelled -->' in workflows["plan"]
+	assert '<!-- ai:implementation-completed -->' in workflows["implement"]
 	# The success comments that end a streak.
 	assert 'echo "<!-- ai:clarification-questions -->"' in workflows["clarify"] and 'echo "Clarification required"' in workflows["clarify"]
 	assert "-f body=$'The task appears clear.\\n" in workflows["clarify"]
@@ -3496,7 +3522,7 @@ def _stage_phase_report(tmp: Path, *, comments: list[dict], issue: dict | None =
 	work, state_file, env = _stage(tmp, with_codex=False)
 	shutil.copy(PHASE_REPORT_SCRIPT, work / "scripts" / PHASE_REPORT_SCRIPT.name)
 	state_file.write_text(
-		json.dumps({"issues": {"42": issue or _issue(labels=["ai:clarification"])}, "comments": {f"repos/{CONSUMER_REPO}/issues/42/comments": comments}}),
+		json.dumps({"issues": {"42": issue or _issue(labels=["ai:clarification"])}, "comments": {f"repos/{CONSUMER_REPO}/issues/42/comments": [{**{"user": {"login": "workflow-bot"}}, **comment} for comment in comments]}}),
 		encoding="utf-8",
 	)
 	env.update(
@@ -3528,9 +3554,9 @@ def test_phase_report_dispatches_the_first_failed_run() -> None:
 		assert payload["source_kind"] == "phase_failure" and payload["failure_reason"] == "plan_failed"
 		assert [ref["run_id"] for ref in payload["run_refs"]] == ["500", "102", "101"]
 		assert payload["wrapper_sha"] == SHA_A and payload["issue_number"] == 42
-		# One issue read and one comment read, both GET; then the dispatch.
+		# One issue, identity and comment read, all GET; then the dispatch.
 		reads = [call for call in state["calls"] if call[:1] == ["api"] and "--input" not in call]
-		assert len(reads) == 2 and all(call[call.index("--method") + 1] == "GET" for call in reads)
+		assert len(reads) == 3 and all(call[call.index("--method") + 1] == "GET" for call in reads)
 
 
 def test_phase_report_skip_paths() -> None:
@@ -3568,6 +3594,17 @@ def test_phase_report_skip_paths() -> None:
 			work, state_file, env = _stage_phase_report(tmp, comments=first, flags={"WORKFLOW_HEAL_PHASE_FAILURE_STREAK": value})
 			result = _run(work / "scripts" / PHASE_REPORT_SCRIPT.name, work, env)
 			assert "dispatched issue=42 phase=plan streak=1" in result.stdout, (value, result.stdout)
+	# Only comments authored by the authenticated workflow account count toward
+	# a non-default streak; untrusted text cannot terminate it either.
+	with tempfile.TemporaryDirectory(prefix="heal-phase-author-") as tmp_name:
+		work, state_file, env = _stage_phase_report(Path(tmp_name), comments=[
+			_plan_failed_comment(CONSUMER_REPO, 499),
+			{"body": "The task appears clear.", "user": {"login": "other-user"}},
+			_plan_failed_comment(CONSUMER_REPO, 500),
+		], flags={"WORKFLOW_HEAL_PHASE_FAILURE_STREAK": "2"})
+		result = _run(work / "scripts" / PHASE_REPORT_SCRIPT.name, work, env)
+		assert "dispatched issue=42 phase=plan streak=2" in result.stdout
+		assert len(_state(state_file)["dispatches"]) == 1
 
 
 PLAN_JOB_LOG = (
@@ -3612,6 +3649,12 @@ def test_intake_phase_failure_deduplicates_on_source_issue_and_falls_back_withou
 	assert result.returncode == 0, result.stderr + result.stdout
 	expected_fp = heal.fingerprint("AI Plan", "", "phase:plan_failed")
 	assert f"fingerprint fp={expected_fp} workflow=AI Plan step=none runs=0" in result.stdout
+	# Jobs can be listed even when the job-log endpoint returns 404. Its
+	# placeholder should appear in the diagnosis, not in the fingerprint input.
+	result, _state_after, _ = _run_intake(_phase_payload(), _plan_intake_state(job_logs={}), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "warn job_log_fetch_failed" in result.stdout
+	assert f"fingerprint fp={heal.fingerprint('AI Plan', 'Run Codex planning', 'phase:plan_failed')} workflow=AI Plan step=Run Codex planning runs=1" in result.stdout
 
 
 def test_intake_escalates_a_heal_issue_that_fails_its_own_run() -> None:
@@ -3629,6 +3672,14 @@ def test_intake_escalates_a_heal_issue_that_fails_its_own_run() -> None:
 	assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
 	assert "issues_created" not in state_after
 	assert any(c["path"] == f"repos/{SELF_REPO}/issues/42/comments" for c in state_after["comments_posted"])
+	# A source-key duplicate with a different fingerprint is only an occurrence,
+	# not evidence that the heal issue cannot progress through its own pipeline.
+	self_sourced = _sourced_heal_issue(42, state="open", fp="9" * 64, source=f"{SELF_REPO}#42")
+	result, state_after, _ = _run_intake(payload, _plan_intake_state(heal_issues=[self_sourced]), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL duplicate existing_issue=42" in result.stdout and "match=source" in result.stdout
+	assert "reason=heal_issue_failed_itself" not in result.stdout
+	assert "issue_edits" not in state_after
 
 
 def test_phase_workflows_wire_the_heal_report_job() -> None:

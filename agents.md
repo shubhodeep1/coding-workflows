@@ -188,7 +188,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
     marker, and a heal issue whose own run fails with its own fingerprint is
     escalated (`reason=heal_issue_failed_itself`). Implement skips guard
     blocks, diagnosed fix-up failures and `BLOCKED` verdicts through the job
-    output `heal_report`. A failed
+    output `heal_report`. Its comment streak trusts only the authenticated
+    workflow account; cancellations and successful implementation break the
+    streak, and unavailable identity or comment history reports the current
+    failure without applying a higher threshold. A failed
     `Run reviewer models` step (the editor never ran) is reported as
     `reviewers_failed` with per-slot / summariser exit codes
     (`reviewers_failure_evidence.txt`, `AUTOFIX_REVIEWERS_FAILED=true`) rather
@@ -1367,6 +1370,7 @@ and shipped:
 - `CHECK_TRIAGE`
 - `WORKFLOW_HEAL_REPORT`
 - `WORKFLOW_HEAL_AUTOFIX_REPORT`
+- `WORKFLOW_HEAL_PHASE_REPORT`
 - `WORKFLOW_HEAL_PR_RECONCILE`
 - `WORKFLOW_HEAL`
 - `AUTOFIX_FINGERPRINT`
@@ -1569,6 +1573,7 @@ LOG_PREFIX.name=drift-audit:
 LOG_PREFIX.name=CHECK_TRIAGE
 LOG_PREFIX.name=WORKFLOW_HEAL_REPORT
 LOG_PREFIX.name=WORKFLOW_HEAL_AUTOFIX_REPORT
+LOG_PREFIX.name=WORKFLOW_HEAL_PHASE_REPORT
 LOG_PREFIX.name=WORKFLOW_HEAL_PR_RECONCILE
 LOG_PREFIX.name=WORKFLOW_HEAL
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT

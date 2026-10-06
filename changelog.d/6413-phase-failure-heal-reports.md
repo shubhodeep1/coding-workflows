@@ -7,11 +7,11 @@ Until now a failed clarify, plan or implement run reached workflow failure heal 
 | --- | --- |
 | `WORKFLOW_HEAL_PHASE_FAILURE_STREAK` (new) | default `1` |
 | `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` | default `2` → `1` |
-| API calls per phase report | 1 issue read, 1 paginated comment read, 1 dispatch |
+| API calls per phase report | 1 issue read, 1 identity read, 1 paginated comment read, 1 dispatch |
 | Planning attempts lost per run before the fix | 3 of 3 (`exit_code=2`, `reason=no_transcript`) |
 
 What this means for operators: expect a heal issue (or an occurrence comment on an open one) after the first failed clarify, plan, implement or review/autofix run. To leave the first failures to the stall poller as before, set `WORKFLOW_HEAL_PHASE_FAILURE_STREAK` or `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` to `2`; `WORKFLOW_HEAL_ENABLED=false` still turns heal off for a repository. Implement does not report a guard block (its label already reports), a failure turned into fix-up issues, or a `BLOCKED` verdict, and a cancelled run is never reported.
 
 ### For contributors
 
-The reporter is `scripts/workflow_failure_heal_phase_report.sh` (log prefix `WORKFLOW_HEAL_PHASE_REPORT`); the streak and payload live in `scripts/workflow_failure_heal.py` (`phase_failure_streak`, `build_phase_failure_payload`, `build-phase-payload`). The job runs separately because the intake cannot read the log of a job that is still running. It declares `permissions: {}` so it stays inside any caller's grant. `tests/test_ai_engine.py` fails when a workflow stages `ai_engine.sh` without the guard.
+The reporter is `scripts/workflow_failure_heal_phase_report.sh` (log prefix `WORKFLOW_HEAL_PHASE_REPORT`); the streak and payload live in `scripts/workflow_failure_heal.py` (`phase_failure_streak`, `build_phase_failure_payload`, `build-phase-payload`). Streaks exclude untrusted comments, cancellations and successful implementation. The job runs separately because the intake cannot read the log of a job that is still running. It declares `permissions: {}` so it stays inside any caller's grant. `tests/test_ai_engine.py` fails when a workflow stages `ai_engine.sh` without the guard.

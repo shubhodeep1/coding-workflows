@@ -124,18 +124,18 @@ AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS: tuple[str, ...] = (
 # clarify.yml, plan.yml and implement.yml). Each phase's failure path posts one
 # of these comments on the issue; keep them in sync with the "Comment on issue
 # failure" steps (tests pin the parity). The streak counter reads them newest
-# first; a comment opening with a PHASE_SUCCESS_COMMENT_PREFIXES entry (a
-# clarify or plan run that finished) or another phase's failure ends it.
+# first; a success, cancellation or another phase's failure ends it.
 PHASE_FAILURE_COMMENT_PREFIXES: dict[str, tuple[str, ...]] = {
-	"clarify": ("AI clarification workflow failed for ", "AI clarification workflow was cancelled/timed out for "),
+	"clarify": ("AI clarification workflow failed for ",),
 	"plan": ("AI planning workflow failed.",),
-	"implement": ("AI implementation workflow failed for ", "AI implementation workflow was cancelled/timed out for "),
+	"implement": ("AI implementation workflow failed for ",),
 }
 PHASE_SUCCESS_COMMENT_PREFIXES: tuple[str, ...] = (
 	"<!-- ai:clarification-questions",
 	"Clarification required",
 	"The task appears clear.",
 	"Implementation Plan\n",
+	"<!-- ai:implementation-completed -->",
 )
 # failure_reason of a phase_failure report: `<phase>_failed`.
 PHASE_FAILURE_REASONS: tuple[str, ...] = tuple(f"{phase}_failed" for phase in PHASE_FAILURE_COMMENT_PREFIXES)
@@ -655,13 +655,13 @@ def _autofix_failure_run_refs(
 	return refs[:MAX_RUN_REFS]
 
 
-def phase_failure_streak(comments: Iterable[dict[str, Any]], *, phase: str, repo: str, run_id: Any) -> dict[str, Any]:
+def phase_failure_streak(comments: Iterable[dict[str, Any]], *, phase: str, repo: str, run_id: Any, trusted_author: str | None = None) -> dict[str, Any]:
 	"""Count the trailing failed runs of one pipeline phase on an issue.
 
 	``comments`` is the issue-comment list, oldest first. Scanning from the
-	newest comment, every failure comment of ``phase`` adds one; a success
-	comment (PHASE_SUCCESS_COMMENT_PREFIXES) or another phase's failure comment
-	ends the streak; anything else (stall-recovery ``/answer`` comments,
+	newest comment by ``trusted_author``, every failure comment of ``phase`` adds
+	one; a success, cancellation or another phase's failure ends the streak;
+	anything else (stall-recovery ``/answer`` comments,
 	markers) is skipped. The reporting run posted its own failure comment
 	before the report ran; when no counted comment links ``run_id`` (the
 	comment step failed) the run is added on top.
@@ -680,7 +680,14 @@ def phase_failure_streak(comments: Iterable[dict[str, Any]], *, phase: str, repo
 	for comment in reversed(list(comments)):
 		if not isinstance(comment, dict):
 			continue
+		if trusted_author is not None and (comment.get("user") or {}).get("login") != trusted_author:
+			continue
 		body = sanitize_text(comment.get("body")).lstrip()
+		if (body.startswith("AI planning workflow failed.") and "<!-- ai:plan-cancelled -->" in body) or body.startswith((
+			"AI clarification workflow was cancelled/timed out for ",
+			"AI implementation workflow was cancelled/timed out for ",
+		)):
+			break
 		if body.startswith(own):
 			streak += 1
 			for ref in extract_run_refs([body], repo, limit=1):
@@ -707,6 +714,7 @@ def build_phase_failure_payload(
 	wrapper_sha: str | None,
 	reporter_run_url: str | None,
 	now: datetime | None = None,
+	trusted_author: str | None = None,
 ) -> dict[str, Any]:
 	"""Build the dispatch payload for a failed clarify / plan / implement run on an issue.
 
@@ -722,7 +730,7 @@ def build_phase_failure_payload(
 	body = sanitize_text(issue.get("body"))
 	markers = parse_heal_markers(body)
 	comment_texts = [sanitize_text(comment.get("body")) for comment in comments if isinstance(comment, dict)]
-	streak = phase_failure_streak(comments, phase=phase, repo=repo, run_id=run_number)
+	streak = phase_failure_streak(comments, phase=phase, repo=repo, run_id=run_number, trusted_author=trusted_author)
 	run_refs = [{"repo": repo, "run_id": str(run_number), "url": f"https://github.com/{repo}/actions/runs/{run_number}"}]
 	for earlier in streak["run_ids"][: MAX_RUN_REFS - 1]:
 		run_refs.append({"repo": repo, "run_id": earlier, "url": f"https://github.com/{repo}/actions/runs/{earlier}"})
@@ -2168,6 +2176,7 @@ def _cmd_build_phase_payload(args: argparse.Namespace) -> int:
 		run_id=args.run_id,
 		wrapper_sha=args.wrapper_sha or None,
 		reporter_run_url=args.reporter_run_url or None,
+		trusted_author=args.comment_author,
 	)
 	validate_payload(payload)
 	if len(json.dumps(payload).encode("utf-8")) > MAX_PAYLOAD_BYTES:
@@ -2485,6 +2494,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--run-id", required=True)
 	p.add_argument("--wrapper-sha", default="")
 	p.add_argument("--reporter-run-url", default="")
+	p.add_argument("--comment-author", required=True)
 	p.set_defaults(func=_cmd_build_phase_payload)
 
 	p = sub.add_parser("classify-crash-ownership", help="Print pr / base / none: who changed the file a review/autofix run crashed in")
