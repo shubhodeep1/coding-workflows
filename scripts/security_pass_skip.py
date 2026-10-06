@@ -186,12 +186,16 @@ def decide_security_pass_skip(
 	labels = _label_names(issue)
 	candidates = [label for label in SKIP_LABEL_MARKERS if label in labels]
 	if not candidates:
+		if "ai:workflow-heal" in labels and CI_HEAL_CONTEXT_RE.search(issue.get("body") or ""):
+			return {"skip": False, "label": None, "reason": "CI workflow heal requires security pass"}
 		return {"skip": False, "label": None, "reason": "no skip label"}
 	# The intake writes this header from the failed run, before the untrusted
 	# diagnosis. CI logs can be influenced by PRs, so an owner-filed heal issue
 	# is not sufficient proof that its fix can bypass the security audit.
 	if "ai:workflow-heal" in labels and CI_HEAL_CONTEXT_RE.search(issue.get("body") or ""):
 		return {"skip": False, "label": None, "reason": "CI workflow heal requires security pass"}
+	if "ai:workflow-heal" in labels:
+		return {"skip": False, "label": None, "reason": "workflow heal requires security pass"}
 	if "pull_request" in issue:
 		return {"skip": False, "label": None, "reason": "not an issue"}
 	if not _is_automation_author(issue):
@@ -236,8 +240,7 @@ def check_issue(repo: str, number: int) -> dict[str, Any]:
 		raise ReadError(f"issue #{number} returned non-object JSON")
 	issue_labels = _label_names(issue)
 	if (not any(label in SKIP_LABEL_MARKERS for label in issue_labels) or "pull_request" in issue
-			or not _is_automation_author(issue) or
-			("ai:workflow-heal" in issue_labels and CI_HEAL_CONTEXT_RE.search(issue.get("body") or ""))):
+			or not _is_automation_author(issue) or "ai:workflow-heal" in issue_labels):
 		# Decided from the issue alone; the events and tracker are never read.
 		return decide_security_pass_skip(issue, [], lambda _number: None)
 	events = _gh_get_json(f"repos/{repo}/issues/{number}/events?per_page={EVENTS_PAGE_SIZE}")

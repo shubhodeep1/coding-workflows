@@ -115,6 +115,14 @@ def test_release_workflow_heal_requires_security_pass():
 	}
 
 
+def test_release_heal_with_verified_security_label_requires_pass():
+	body = MARKERS["ai:security"] + MARKERS["ai:workflow-heal"] + "\n- **Failed workflow:** `Mark Stable Release` (conclusion: `failure`)\n"
+	issue = _issue("ai:workflow-heal", body=body, labels=["ai:workflow-heal", "ai:security"])
+	assert _decide(issue, [_labeled("ai:workflow-heal"), _labeled("ai:security")], _tracker()) == {
+		"skip": False, "label": None, "reason": "workflow heal requires security pass",
+	}
+
+
 def test_generated_ci_heal_issue_requires_security_pass():
 	module_spec = importlib.util.spec_from_file_location("workflow_failure_heal", SCRIPTS / "workflow_failure_heal.py")
 	heal_module = importlib.util.module_from_spec(module_spec)
@@ -261,11 +269,11 @@ def test_tracker_is_only_read_for_security():
 def test_heal_label_does_not_block_verified_security_label():
 	issue = _issue("ai:security", labels=["ai:workflow-heal", "ai:security"])
 	result = _decide(issue, [_labeled("ai:security")], _tracker())
-	assert result["skip"] is True and result["label"] == "ai:security"
+	assert result == {"skip": False, "label": None, "reason": "workflow heal requires security pass"}
 
 
 def test_every_failed_label_is_reported():
-	issue = _issue("ai:security", labels=["ai:security", "ai:workflow-heal"])
+	issue = _issue("ai:security", labels=["ai:security"])
 	result = _decide(issue, [_labeled("ai:security", actor="triager")])
 	assert result["skip"] is False
 	assert result["reason"].startswith("ai:security: ai:security was applied by triager")
@@ -319,7 +327,7 @@ def test_cli_ci_workflow_heal_costs_one_call(monkeypatch, capsys):
 	body = MARKERS["ai:workflow-heal"] + "\n- **Failed workflow:** `CI` (conclusion: `failure`)\n"
 	calls = _stub_gh(monkeypatch, {"repos/o/r/issues/4623": _issue("ai:workflow-heal", body=body)})
 	assert skip.main(["--repo", REPO, "--issue", "4623"]) == 0
-	assert json.loads(capsys.readouterr().out) == {"skip": False, "label": None, "reason": "no skip label"}
+	assert json.loads(capsys.readouterr().out) == {"skip": False, "label": None, "reason": "CI workflow heal requires security pass"}
 	assert calls == ["repos/o/r/issues/4623"]
 
 
@@ -335,6 +343,14 @@ def test_cli_release_workflow_heal_costs_one_call(monkeypatch, capsys):
 	calls = _stub_gh(monkeypatch, {"repos/o/r/issues/4623": _issue("ai:workflow-heal")})
 	assert skip.main(["--repo", REPO, "--issue", "4623"]) == 0
 	assert json.loads(capsys.readouterr().out) == {"skip": False, "label": None, "reason": "no skip label"}
+	assert calls == ["repos/o/r/issues/4623"]
+
+
+def test_cli_release_heal_with_security_label_costs_one_call(monkeypatch, capsys):
+	body = MARKERS["ai:security"] + MARKERS["ai:workflow-heal"] + "\n- **Failed workflow:** `Mark Stable Release` (conclusion: `failure`)\n"
+	calls = _stub_gh(monkeypatch, {"repos/o/r/issues/4623": _issue("ai:workflow-heal", body=body, labels=["ai:workflow-heal", "ai:security"])})
+	assert skip.main(["--repo", REPO, "--issue", "4623"]) == 0
+	assert json.loads(capsys.readouterr().out) == {"skip": False, "label": None, "reason": "workflow heal requires security pass"}
 	assert calls == ["repos/o/r/issues/4623"]
 
 
