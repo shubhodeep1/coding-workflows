@@ -1526,7 +1526,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			unverified_destinations.add("unparsed env-wrapped Git command")
 			continue
 		if invocation.subcommand == "commit" and invocation.warning and invocation.env_wrapped:
-			_request_confirmation("could not resolve env-wrapped git commit directory; the session checkout may not be the commit target")
+			_request_confirmation("could not resolve git commit directory (env-wrapped); the session checkout may not be the commit target")
 			continue
 		if invocation.subcommand == "commit" and invocation.warning and invocation.explicit_git_directory:
 			_request_confirmation("could not resolve git commit directory; PR status cannot be checked for the intended checkout")
@@ -1552,9 +1552,6 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 				unknown_destination_reasons.append(target.warning)
 				continue
 			if target.warning:
-				if invocation.subcommand != "push" and invocation.config_override:
-					unverified_destinations.add("could not resolve git command directory; no checkout was checked")
-					continue  # An env-wrapped commit may use a different checkout.
 				_warn(target.warning)
 			if target.remote and target.remote != "origin":
 				# Even a matching explicit URL may be rewritten by url.*.insteadOf.

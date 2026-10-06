@@ -80,6 +80,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
   pull-requests: read
   actions: write
 
@@ -378,3 +379,13 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
           CI_CANCELLED_PR_SNAPSHOT: ${{ runner.temp }}/ci-cancelled-pr-snapshot.json
         run: PYTHONDONTWRITEBYTECODE=1 python3 .ci-rerun-support/scripts/ci_cancelled_rerun.py
+
+      - name: Re-dispatch stale security holds
+        if: github.event_name == 'schedule' && vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
+          SECURITY_PASS_FOLLOWUP_STALE_HOURS: ${{ vars.SECURITY_PASS_FOLLOWUP_STALE_HOURS || '24' }}
+          SECURITY_HOLD_REVIEW_WORKFLOW: review_autofix.yml
+        run: PYTHONDONTWRITEBYTECODE=1 python3 .ci-rerun-support/scripts/review_security_hold_sweep.py

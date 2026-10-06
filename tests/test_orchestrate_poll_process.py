@@ -18600,24 +18600,24 @@ def test_state_extraction_with_special_chars_in_comment_bodies():
 	assert final_state["status"] == "in_progress"
 
 
-@pytest.mark.parametrize("forged_version", ["v1", "v2"])
-def test_state_extraction_ignores_newer_forged_state(forged_version: str):
-	state = _base_state(status="in_progress")
-	forged = dict(state, status="complete")
-	if forged_version == "v1":
-		forged_bodies = [_state_comment(forged)]
-	else:
-		forged_bodies = [entry["body"] for entry in _build_v2_state_comment_chain(json.dumps(forged), chunk_size=20000)]
-	result = _run_poller(
-		state=state,
-		enable_validation="false",
-		max_validate_cycles="3",
-		tracking_comments=[{"body": body, "user": {"login": "attacker"}} for body in forged_bodies],
-		issue_labels={10: ["ai:implementing"]},
-	)
-	assert result["latest_state"]["status"] == "in_progress"
-	assert "ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=192 outcome=filtered ignored=" in result["stderr"]
-	assert "State reconstructed and posted" not in result["stdout"]
+def test_state_extraction_ignores_newer_forged_state():
+	for forged_version in ("v1", "v2"):
+		state = _base_state(status="in_progress")
+		forged = dict(state, status="complete")
+		if forged_version == "v1":
+			forged_bodies = [_state_comment(forged)]
+		else:
+			forged_bodies = [entry["body"] for entry in _build_v2_state_comment_chain(json.dumps(forged), chunk_size=20000)]
+		result = _run_poller(
+			state=state,
+			enable_validation="false",
+			max_validate_cycles="3",
+			tracking_comments=[{"body": body, "user": {"login": "attacker"}} for body in forged_bodies],
+			issue_labels={10: ["ai:implementing"]},
+		)
+		assert result["latest_state"]["status"] == "in_progress", forged_version
+		assert "ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=192 outcome=filtered ignored=" in result["stderr"], forged_version
+		assert "State reconstructed and posted" not in result["stdout"], forged_version
 
 
 def test_state_extraction_skips_mixed_author_v2_chain():

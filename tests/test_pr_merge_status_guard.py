@@ -1439,6 +1439,7 @@ def test_env_wrapped_commit_checks_selected_repo(merged_branch_repo, monkeypatch
 
 @pytest.mark.parametrize("command", [
 	"env -C /does-not-exist git commit -m x",
+	"env GIT_DIR=/does-not-exist git commit -m x",
 	"git -C /does-not-exist commit -m x",
 	"GIT_DIR=/does-not-exist git commit -m x",
 	"GIT_DIR+=/does-not-exist git commit -m x",
@@ -1461,6 +1462,8 @@ def test_env_unresolved_commit_directory_asks_instead_of_checking_checkout(merge
 	if command.startswith("env -C"):
 		assert "no checkout was checked" in decision["hookSpecificOutput"]["permissionDecisionReason"]
 		assert "merged-PR guard needs confirmation" in decision["systemMessage"]
+	if command.startswith("env GIT_DIR="):
+		assert "could not resolve git commit directory" in decision["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_env_chdir_commit_still_asks_when_warning_text_changes(merged_branch_repo, monkeypatch, capsys) -> None:
@@ -1524,6 +1527,17 @@ def test_ambiguous_non_env_config_commit_warns_without_asking(merged_branch_repo
 	response = json.loads(capsys.readouterr().out.splitlines()[-1])
 	assert "could not resolve git command directory" in response["systemMessage"]
 	assert "hookSpecificOutput" not in response
+
+
+def test_ambiguous_config_commit_still_checks_merged_pr(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	monkeypatch.setattr(guard, "_read_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: [dict(MERGED_PR, headRefOid=merged_sha)])
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "if true; then git -c user.name=bot commit -m x; fi"}})
+	assert code == 2 and "Branch `feature/x`" in message
 
 
 def test_matching_refspec_on_unverified_remote_does_not_check_origin(merged_branch_repo, monkeypatch, capsys) -> None:
