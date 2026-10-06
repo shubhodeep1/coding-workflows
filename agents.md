@@ -192,9 +192,34 @@ Phases of the unattended pipeline (each is a separate workflow file under
     third reporter lives in the failure path of `review_autofix.yml`
     (`scripts/workflow_failure_heal_autofix_report.sh`, payload kind
     `autofix_failure`): it reports a failed review/autofix run on a pull
-    request once `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` (default 2) runs in a
-    row failed on that PR, counted from the workflow's own failure comments,
-    so the stall poller's single retry is not pre-empted. A failed
+    request once `WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK` (default 1, so every
+    failed run) runs in a row failed on that PR, counted from the workflow's
+    own failure comments. A fourth reporter is the `heal-report` job of
+    `clarify.yml`, `plan.yml` and `implement.yml`
+    (`scripts/workflow_failure_heal_phase_report.sh`, payload kind
+    `phase_failure`): after the phase job ends in `failure` it reports the run
+    once `WORKFLOW_HEAL_PHASE_FAILURE_STREAK` (default 1) runs of that phase in
+    a row failed on the issue; duplicate comments for one run count once. The
+    intake fingerprints only the current run's log, uses earlier streak logs
+    for diagnosis context, and keys the report on the issue's `source=`
+    marker, and a heal issue whose own run fails with its own fingerprint is
+    escalated (`reason=heal_issue_failed_itself`). Implement skips guard
+    blocks, diagnosed fix-up failures and `BLOCKED` verdicts through the job
+    output `heal_report`. Before fingerprinting or mutation, the intake verifies
+    phase reports against the GitHub-read run, failed phase job and a linking
+    comment from a GitHub-reported trusted source-issue author (OWNER, MEMBER,
+    COLLABORATOR or `github-actions[bot]`); self-repo reports also require the
+    intake's authenticated account. Mismatches, self-repo identity failures and
+    read failures skip
+    with `WORKFLOW_HEAL skip reason=phase_report_unverified` and a WARNING.
+    Payload `source_gen` / `source_root` lineage is honoured only when the
+    listed `ai:workflow-heal` source issue was authored by the intake's current
+    authenticated account and its markers match; an account rotation makes
+    older heal issues' payload markers unverified (fingerprint lineage remains).
+    Its comment streak trusts only the authenticated
+    workflow account; cancellations and successful implementation break the
+    streak, and unavailable identity or comment history reports the current
+    failure without applying a higher threshold. A failed
     `Run reviewer models` step (the editor never ran) is reported as
     `reviewers_failed` with per-slot / summariser exit codes
     (`reviewers_failure_evidence.txt`, `AUTOFIX_REVIEWERS_FAILED=true`) rather
@@ -215,8 +240,21 @@ Phases of the unattended pipeline (each is a separate workflow file under
     the first 300 characters of the API error. On by
     default; disable per repo via `WORKFLOW_HEAL_ENABLED=false`; never pushes
     code itself. Stable log prefixes: `WORKFLOW_HEAL_REPORT`,
-    `WORKFLOW_HEAL_AUTOFIX_REPORT`, `WORKFLOW_HEAL_PR_RECONCILE`,
-    `WORKFLOW_HEAL`.
+    `WORKFLOW_HEAL_AUTOFIX_REPORT`, `WORKFLOW_HEAL_PHASE_REPORT`,
+    `WORKFLOW_HEAL_PR_RECONCILE`, `WORKFLOW_HEAL`.
+    Before reading logs for phase, autofix or release reports, the intake
+    checks referenced runs' repository, failure status and workflow path;
+    phase and autofix runs must also be linked to the issue or PR. Self-repo
+    phase failure comments must come from the intake token's account; consumer
+    phase comments require a trusted GitHub-reported author association or
+    `github-actions[bot]`, and phase run events are checked before job reads.
+    Rejections log `WORKFLOW_HEAL provenance_rejected` and fail closed, so a
+    missing phase failure comment prevents intake. A holder of the shared
+    `GH_PAT` can still read registered repositories' logs directly or report a genuinely
+    linked failed run. Label-escalation `issue` and `pull_request` reports are
+    outside this gate even when their issue/comment-derived `run_refs` are
+    present; those reports can still fetch unverified job logs with the shared
+    `GH_PAT`.
     A report whose failure reason is `identical_failure_cap`, or a generation
     > 1 of its lineage, is deterministic (`is_deterministic_failure`): the
     intake never files it as `transient` (remaps to `inconclusive`,
@@ -1255,6 +1293,8 @@ dashboard without producing a fresh comment per tick.
 | `<!-- ORCHESTRATOR_STATE_V2 part=N/N manifest=<sha> -->` … `<!-- ORCHESTRATOR_STATE_V2 -->` | `post_state_comment` / `_post_state_comment_v2_chunk` | Canonical machine-readable orchestrator state snapshot. Multi-chunk so it can carry state blobs >65 KiB. Reader: `extract_latest_valid_orchestrator_state`. Reader falls back to the legacy V1 marker `<!-- ORCHESTRATOR_STATE_V1 -->` for issues that have not yet been re-written. |
 | `<!-- orchestrator:completion-status -->` | `update_completion_status_comment` | Human-readable "what is blocking completion" summary. Second-line tag `<!-- status:<token> -->` exposes the canonical status token (`in-progress` \| `waiting` \| `ready` \| `validated` \| `failed`) for grep-friendly downstream parsing. Idempotent — skips the API call when the rendered body already matches, and persists `.completion_status_comment_id` + `.completion_status_comment_body_hash` in the state file so edit-in-place fallback survives the next cron invocation. |
 
+V1 and V2 state comments are read only when every selected comment is authored by the current `GH_PAT` login; an unavailable identity skips project processing rather than reconstructing state. Integration-sync conflict preparation also rejects an unavailable login before invoking the resolver, so the review run fails and retries on a later trigger instead of resolving without verified state. After rotating `GH_PAT` to a different account, re-post legacy state using the new account (or retain the original account) before polling resumes.
+
 When `ENABLE_SECURITY_PASS=true` (default `true`), every completion route
 enters `security-pass` before validation or finalization. A pass is valid only
 when `security_pass_status == "passed"` and `security_pass_head_sha` exactly
@@ -1684,6 +1724,7 @@ and shipped:
 - `DRIFT_SCAN_OK`
 - `DRIFT_SCAN_ERROR`
 - `SECURITY_PASS_STARTED`
+- `ORCHESTRATOR_STATE_AUTHOR_FILTER` (`tracking_issue= outcome=identity_unavailable|filtered ignored=<count>` when filtered)
 - `SECURITY_PASS_SCOPE`
 - `SECURITY_PASS_CLEAN`
 - `SECURITY_PASS_BLOCKED`
@@ -1730,6 +1771,7 @@ and shipped:
 - `CHECK_TRIAGE`
 - `WORKFLOW_HEAL_REPORT`
 - `WORKFLOW_HEAL_AUTOFIX_REPORT`
+- `WORKFLOW_HEAL_PHASE_REPORT`
 - `WORKFLOW_HEAL_PR_RECONCILE`
 - `WORKFLOW_HEAL`
 - `AUTOFIX_FINGERPRINT`
@@ -1902,6 +1944,7 @@ LOG_PREFIX.name=DRIFT_SCAN_DIFF
 LOG_PREFIX.name=DRIFT_SCAN_OK
 LOG_PREFIX.name=DRIFT_SCAN_ERROR
 LOG_PREFIX.name=SECURITY_PASS_STARTED
+LOG_PREFIX.name=ORCHESTRATOR_STATE_AUTHOR_FILTER
 LOG_PREFIX.name=SECURITY_PASS_SCOPE
 LOG_PREFIX.name=SECURITY_PASS_CLEAN
 LOG_PREFIX.name=SECURITY_PASS_BLOCKED
@@ -1947,6 +1990,7 @@ LOG_PREFIX.name=drift-audit:
 LOG_PREFIX.name=CHECK_TRIAGE
 LOG_PREFIX.name=WORKFLOW_HEAL_REPORT
 LOG_PREFIX.name=WORKFLOW_HEAL_AUTOFIX_REPORT
+LOG_PREFIX.name=WORKFLOW_HEAL_PHASE_REPORT
 LOG_PREFIX.name=WORKFLOW_HEAL_PR_RECONCILE
 LOG_PREFIX.name=WORKFLOW_HEAL
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT

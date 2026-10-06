@@ -263,9 +263,11 @@ changelog.d/6391-sync-pr-lookup-verifies-base.md
 changelog.d/6400-rb-judge-security-severity-block.md
 changelog.d/6401-single-issue-security-pass-completed-audit.md
 changelog.d/6404-claude-live-sync-pr-provenance.md
+changelog.d/6413-phase-failure-heal-reports.md
 changelog.d/6420-release-gate-claude-parity.md
 changelog.d/6435-prompt-audit-claude-config.md
 changelog.d/6455-rb-fix-sandbox-workspace.md
+changelog.d/6467-phase-report-provenance.md
 changelog.d/autofix-cap-and-security-exhaustion-judge.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/release-smoke-run-lookup.md
@@ -671,6 +673,7 @@ scripts/watchdog_helpers.sh
 scripts/workflow_failure_heal.py
 scripts/workflow_failure_heal_autofix_report.sh
 scripts/workflow_failure_heal_intake.sh
+scripts/workflow_failure_heal_phase_report.sh
 scripts/workflow_failure_heal_pr_reconcile.sh
 scripts/workflow_failure_heal_report.sh
 scripts/workflow_retro.py
