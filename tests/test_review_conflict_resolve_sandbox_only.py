@@ -27,6 +27,12 @@ def _failure_helper() -> str:
 	return match.group()
 
 
+def _persistence_helper() -> str:
+	match = re.search(r"^_persist_resolver_retry_state_from_current_failure\(\)\n\{\n.*?\n\}\n", _source(), re.M | re.S)
+	assert match is not None
+	return match.group()
+
+
 def _launch() -> str:
 	src = _source()
 	return src[src.index('  if [ "${_run_codex}" = "true" ]; then\n'):src.index('  resolver_clean_output="${tmp_output}.ansi-clean"')]
@@ -201,6 +207,37 @@ _persist_resolver_retry_state_from_current_failure() {{ printf '%s\\n' "$RESOLVE
 	assert "reason=sandbox_support_missing" in result.stderr
 	assert "sandbox_path_unsupported" not in result.stderr
 	assert (tmp_path / "persisted_reason").read_text().strip() == "sandbox_support_missing"
+
+
+@pytest.mark.parametrize("reason,integration,should_build", [
+	("sandbox_path_unsupported", "true", True),
+	("sandbox_support_missing", "true", True),
+	("sandbox_cleanup_failed", "true", True),
+	("transfer_rollback_failed", "true", True),
+	("", "true", False),
+	("sandbox_path_unsupported", "false", False),
+])
+def test_isolation_failure_reaches_real_retry_state_gate(tmp_path, reason, integration, should_build):
+	pr_payload = tmp_path / "pr.json"
+	pr_payload.write_text('{"head":{"sha":"test-head"}}', encoding="utf-8")
+	build_marker = tmp_path / "retry_builder_called"
+	program = f'''set -euo pipefail
+_build_resolver_retry_state_artifact() {{ printf '%s\\n' "$RESOLVER_ISOLATION_FAILURE_REASON" > "$BUILD_MARKER"; return 1; }}
+{_persistence_helper()}
+_persist_resolver_retry_state_from_current_failure
+'''
+	env = dict(os.environ, IS_INTEGRATION_SYNC=integration, RESOLVER_ISOLATION_FAILURE_REASON=reason,
+		RESOLVER_FP_EXIT="0", RESOLVER_FP_VERIFICATION_TIER="strict", PR_NUMBER="123",
+		GITHUB_REPOSITORY="owner/repo", PR_PAYLOAD_FILE=str(pr_payload), RUNTIME_DIR=str(tmp_path),
+		RESOLVER_RETRY_STATE_ARTIFACT_FILE=str(tmp_path / "retry.json"), BUILD_MARKER=str(build_marker),
+		SUPPORT_SCRIPTS_DIR=str(SCRIPT.parent))
+	env.pop("BASH_ENV", None)
+	env.pop("ENV", None)
+	result = subprocess.run(["bash", "-c", program], env=env, capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	assert build_marker.exists() is should_build
+	if should_build:
+		assert build_marker.read_text(encoding="utf-8").strip() == reason
 
 
 def test_no_host_model_launch_or_private_host_index_in_launch():
