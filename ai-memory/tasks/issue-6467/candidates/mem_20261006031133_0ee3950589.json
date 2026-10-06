@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\nQ3: A\nQ4: A\n\nRATIONALE:\nQ1: Option A is the only choice that ties the run to the claimed issue. The other options can be beaten by pointing at any real failed run in the same repository. The issue link reuses the evidence `phase_failure_streak` (`scripts/workflow_failure_heal.py:658`) already counts: phase-failure comments that link `actions/runs/<id>`. Two adjustments are needed for the checks to work:\n- **Check the phase job, not the whole run.** The `heal-report` job sends its dispatch while its own run is still in progress. At that point the run-level `conclusion` is usually null. The intake should therefore require that a non-`heal-report` job in that run concluded `failure`, using the jobs list it already fetches at `workflow_failure_heal_intake.sh:222`. If the run has completed, it should also require a run-level `conclusion` of `failure`.\n- **Accept the right workflow paths and comment authors.** The intake cannot know the consumer's workflow account, so it should accept comments from `github-actions[bot]` or from authors whose `author_association` is OWNER, MEMBER or COLLABORATOR. It should accept the consumer wrapper paths `ai-clarify.yml` / `ai-plan.yml` / `ai-implement.yml`, plus `internal-clarify.yml` / `internal-plan.yml` / `internal-implement.yml` when `SOURCE_REPO` is this repository.\n\nQ2: Option A fails closed, as required for a security-sensitive trust boundary. If verification fails, the report is dropped: it never files or escalates a heal issue. A real failure that is wrongly dropped still has backstops: the stall poller and the label-escalation reporter.\n\nQ3: Option A works because a `repository_dispatch` only reveals `sender`, and consumers dispatch with the same owner's `GH_PAT`. Per-sender binding (options B/C) would add little beyond verifying evidence in the claimed repository. Option C would also break the format of `.github/ai/consumer_repos.json`.\n\nQ4: Option A matches the finding's cited location (`validate_payload`, line 998) and keeps the change minimal. Autofix and `workflow_run` provenance would each need their own association checks (PR head, release workflow names), which is a separate scope.\n\nEXECUTION PLAN (required for any non-letter decision):\nNo non-letter decisions. Implementation notes for the planner, which apply to the letter picks above:\n\n- **Where the check goes.** Add the provenance check to the intake for `SOURCE_KIND=phase_failure` only. Run it after the payload is validated and after the existing jobs fetch, before the fingerprint, dedup, budget, escalation and issue-creation logic. Pure decision logic goes in a new helper in `scripts/workflow_failure_heal.py`. That helper takes the run JSON, the jobs JSON and the issue comments JSON, and returns `{verified, reason}`. It makes no API calls.\n- **GitHub API calls.** Before adding any call, check `workflow_failure_heal_intake.sh` for an existing read of the same data and reuse it if one exists. Expect two new reads:\n  - `GET repos/<SOURCE_REPO>/actions/runs/<first run_id>`, one call;\n  - `GET repos/<SOURCE_REPO>/issues/<n>/comments` with pagination.\n  Add a comment above each one saying which existing calls were checked.\n- **Checks.** All of the following must hold:\n  - the run's `repository.full_name` equals `SOURCE_REPO`;\n  - `event` is `issues` or `issue_comment`;\n  - the workflow `path`, with any `@ref` suffix removed, is the wrapper that matches `failure_reason` (`clarify_failed`, `plan_failed` or `implement_failed`);\n  - a phase job in the run concluded `failure`, and the run-level `conclusion` is `failure` if the run has completed;\n  - a trusted comment on the issue starts with that phase's prefix from `PHASE_FAILURE_COMMENT_PREFIXES` and links that exact run ID.\n- **On any failure or API error:** log `WORKFLOW_HEAL ... outcome=skip reason=phase_report_unverified detail=<check>`, send a Telegram WARNING, and exit 0. Add `phase_report_unverified` to the stable log documentation.\n- **Tests:** add pytest coverage for each check:\n  - a run from another repository;\n  - a wrong workflow path;\n  - a successful run;\n  - no linking comment;\n  - a linking comment from an untrusted author;\n  - a still-running run whose phase job failed, which must be accepted;\n  - an API failure, which must fail closed.\n- **Known gap:** if the phase's failure-comment step itself failed, the report will be dropped (the reporter already handles that case by adding the run on top). Accept this as fail-closed behaviour and document it in the PR.\n- **Credential binding:** state in the PR that per-credential sender binding is out of scope (Q3).\n- **Environment variables:** none needed. If a kill switch is added anyway, it must default to enforcing the check (`true`).",
+  "fingerprint": "130430dc41199689006612580e94dca88643fc0f6038eae2381120f4d03ea41f",
+  "lineage": {
+    "issue_number": 6467,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37407143131",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37407143131",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6467"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261006031133_0ee3950589",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6467,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37407143131"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6467",
+  "timestamps": {
+    "created_at": "2026-10-06T03:11:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
