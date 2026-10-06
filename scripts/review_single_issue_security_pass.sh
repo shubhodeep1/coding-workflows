@@ -38,7 +38,8 @@
 #           audit_pending or awaiting_followups when matching open follow-ups
 #           are younger than the limit; followups_missing,
 #           followups_unverifiable, followups_stalled, markers_unverifiable,
-#           extensions_unverifiable, label_write_failed, cycles_exhausted,
+#           extensions_unverifiable, label_write_failed, pending_marker_failed,
+#           cycles_exhausted,
 #           exhausted_without_completed_audit or dispatch_failed otherwise.
 #           review_rb_judge.sh passes it on so a judge merge held here alerts
 #           only when a human is needed.
@@ -67,7 +68,9 @@
 # at most 3 GETs for the skip check and one /user identity read (the gate
 # job's /user result is not exported), plus one paginated open ai:security
 # issue listing only for current-head findings in gate mode, then one dispatch
-# and one comment (or one label write). report: one PR read to bind the audit inputs, one /user
+# and up to SECURITY_PASS_PENDING_MARKER_ATTEMPTS pending-marker POSTs (default 3,
+# valid range 1-10; backoff base defaults to 5s, range 0-30s), or one label
+# write. report: one PR read to bind the audit inputs, one /user
 # identity read, one paginated comments read, one comment and at most one dispatch.
 #
 # Log: SINGLE_ISSUE_SECURITY_PASS mode= pr= head= outcome= reason= cycle=
@@ -127,6 +130,34 @@ single_pass_state()
 single_pass_marker()
 {
 	printf '<!-- ai:single-issue-security-pass:v1 status=%s head=%s cycle=%s -->' "$1" "$2" "$3"
+}
+
+# Confirm the created comment carries the pending marker before claiming the
+# dispatched audit can publish its result. Keep retries local: sourcing a
+# helper from the PR checkout would execute untrusted code in the review job.
+single_pass_post_pending_marker()
+{
+	local body="$1" marker="${1##*$'\n'}" attempts="${SECURITY_PASS_PENDING_MARKER_ATTEMPTS:-3}"
+	local delay="${SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS:-5}" attempt response
+	[[ "${attempts}" =~ ^[1-9][0-9]*$ ]] || attempts=3
+	[[ "${delay}" =~ ^[0-9]+$ ]] || delay=5
+	# Invalid or out-of-range attempts (1-10) and delay (0-30s) use defaults.
+	if [ "${#attempts}" -gt 2 ]; then attempts=3; else attempts=$((10#${attempts})); fi
+	if [ "${#delay}" -gt 2 ]; then delay=5; else delay=$((10#${delay})); fi
+	if [ "${attempts}" -gt 10 ]; then attempts=3; fi
+	if [ "${delay}" -gt 30 ]; then delay=5; fi
+	SINGLE_PASS_PENDING_MARKER_ATTEMPTS_USED="${attempts}"
+	for ((attempt = 1; attempt <= attempts; attempt++)); do
+		if [ "${attempt}" -gt 1 ] && [ "${delay}" -gt 0 ]; then
+			sleep "$((delay * (attempt - 1)))"
+		fi
+		if response="$(gh api "repos/${REPOSITORY}/issues/${PR_NUMBER:-}/comments" -f body="${body}" 2>/dev/null)" \
+			&& jq -e --arg m "${marker}" '(.id | type == "number") and ((.body // "") | type == "string") and (.body | contains($m))' <<< "${response}" >/dev/null 2>&1; then
+			return 0
+		fi
+		single_pass_log "mode=gate pr=${PR_NUMBER} outcome=marker_retry attempt=${attempt}"
+	done
+	return 1
 }
 
 # Prints the pipeline's markers as TSV: created_at, id, status, head, cycle.
@@ -399,7 +430,7 @@ single_pass_gate()
 	fi
 	if [ "${cycles_used}" -ge "${effective_max}" ]; then
 		if [ -z "${completed_findings}" ]; then
-			head_attempts="$(printf '%s\n' "${markers}" | awk -F'\t' -v h="${head_sha}" -v cap="${effective_max}" '$3 == "pending" && $4 == h && $5 + 0 > cap { n++ } END { print n + 0 }')"
+			head_attempts="$(printf '%s\n' "${markers}" | awk -F'\t' -v h="${head_sha}" -v cap="${effective_max}" '$3 == "pending" && $4 == h && $5 + 0 > cap && !seen[$5]++ { n++ } END { print n + 0 }')"
 			if [ "${head_attempts}" -lt "${exhausted_head_limit}" ]; then
 				exhausted_retry="true"
 			fi
@@ -474,8 +505,12 @@ Auto-merge waits for the security audit of \`${head_sha}\` (cycle ${next_cycle} 
 
 $(single_pass_marker pending "${head_sha}" "${next_cycle}")"
 	fi
-	gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${body}" >/dev/null 2>&1 \
-		|| echo "::warning::Could not post the pending security-pass marker on PR #${PR_NUMBER}."
+	if ! single_pass_post_pending_marker "${body}"; then
+		echo "::error::Could not post the pending security-pass marker on PR #${PR_NUMBER} after ${SINGLE_PASS_PENDING_MARKER_ATTEMPTS_USED} attempt(s); the dispatched audit cannot publish its result. Holding the merge and failing closed so workflow recovery retries."
+		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=pending_marker_failed cycle=${next_cycle} workflow=${workflow}"
+		single_pass_output true pending_marker_failed
+		return 1
+	fi
 	single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=dispatched cycle=${next_cycle} workflow=${workflow}$([ "${exhausted_retry}" = "true" ] && printf ' reason=exhausted_retry')"
 	single_pass_output true audit_dispatched
 }

@@ -42,12 +42,26 @@ if args[:2] == ["api", "repos/o/r/pulls/42"]:
 	sys.exit(0)
 if args[:2] == ["api", "repos/o/r/issues/42/labels"] and "label" in fail:
 	sys.exit(1)
-if args[:2] == ["api", "repos/o/r/issues/42/comments"] and "comment_write" in fail:
-	sys.exit(1)
 if "repos/o/r/issues?labels=ai:security&state=open&per_page=100" in args:
 	if "followups" in fail:
 		sys.exit(1)
 	print(open(os.environ["FAKE_GH_SECURITY_ISSUES"]).read(), end="")
+	sys.exit(0)
+if args[:2] == ["api", "repos/o/r/issues/42/comments"]:
+	if "comment_write" in fail and (fail != "comment_write_once" or sum(
+		json.loads(line)[:2] == args[:2] for line in open(os.environ["FAKE_GH_LOG"])
+	) == 1):
+		sys.exit(1)
+	if "comment_bad_json" in fail:
+		print("not json")
+		sys.exit(0)
+	if "comment_missing_id" in fail:
+		print(json.dumps({"body": next((arg[5:] for arg in args if arg.startswith("body=")), "")}))
+		sys.exit(0)
+	if "comment_wrong_body" in fail:
+		print(json.dumps({"id": 17, "body": "not the pending marker"}))
+		sys.exit(0)
+	print(json.dumps({"id": 17, "body": next((arg[5:] for arg in args if arg.startswith("body=")), "")}))
 	sys.exit(0)
 if args[0] == "api" and "--paginate" in args:
 	if "comments_once" in fail and sum('"--paginate"' in line for line in open(os.environ["FAKE_GH_LOG"])) == 1:
@@ -146,8 +160,9 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 		SUPPORT_SCRIPTS_DIR=str(support),
 		GITHUB_WORKSPACE=str(tmp_path),
 	)
-	for name in ("SINGLE_ISSUE_SECURITY_PASS_ENABLED", "MAX_SECURITY_PASS_CYCLES", "ORCH_INTEGRATION_BRANCH_PATTERN", "SECURITY_PASS_PENDING_STALE_HOURS", "SECURITY_PASS_FOLLOWUP_STALE_HOURS", "SECURITY_PASS_AUTHOR_LOGIN_FALLBACK", "FAKE_GIT_ANCESTORS", "FAKE_GIT_SHALLOW", "FAKE_GIT_FETCH_FAIL", "FAKE_GIT_UNSHALLOW_MARKER", "FAKE_GIT_INCOMPLETE_ANCESTRY"):
+	for name in ("SINGLE_ISSUE_SECURITY_PASS_ENABLED", "MAX_SECURITY_PASS_CYCLES", "ORCH_INTEGRATION_BRANCH_PATTERN", "SECURITY_PASS_PENDING_STALE_HOURS", "SECURITY_PASS_FOLLOWUP_STALE_HOURS", "SECURITY_PASS_PENDING_MARKER_ATTEMPTS", "SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS", "SECURITY_PASS_AUTHOR_LOGIN_FALLBACK", "FAKE_GIT_ANCESTORS", "FAKE_GIT_SHALLOW", "FAKE_GIT_FETCH_FAIL", "FAKE_GIT_UNSHALLOW_MARKER", "FAKE_GIT_INCOMPLETE_ANCESTRY"):
 		run_env.pop(name, None)
+	run_env["SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS"] = "0"
 	run_env.update(env or {})
 	result = subprocess.run(["bash", str(SCRIPT), mode], capture_output=True, text=True, env=run_env, check=False)
 	calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line]
@@ -227,6 +242,36 @@ def test_first_clean_review_dispatches_the_audit(tmp_path: Path) -> None:
 	assert ["workflow", "run", "ai-security-audit.yml", "-R", "o/r", "--ref", "main", "-f", "ref=ai/issue-7", "-f", "pr_number=42"] in calls
 	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
 	assert posted and posted[0][-1].endswith(_marker("pending", HEAD, 2))
+
+
+def test_pending_marker_write_failure_fails_closed_with_distinct_reason(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", env={"FAKE_GH_FAIL": "comment_write"})
+	assert result.returncode == 1 and output == "hold=true\nhold_reason=pending_marker_failed\n"
+	assert "reason=pending_marker_failed" in result.stdout and "::error::" in result.stdout
+	assert "audit_dispatched" not in result.stdout and "audit_dispatched" not in output
+	assert len([call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]) == 3
+	assert calls.index(["workflow", "run", "ai-security-audit.yml", "-R", "o/r", "--ref", "main", "-f", "ref=ai/issue-7", "-f", "pr_number=42"]) < next(i for i, call in enumerate(calls) if call[:2] == ["api", "repos/o/r/issues/42/comments"])
+
+
+def test_pending_marker_retry_recovers(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", env={"FAKE_GH_FAIL": "comment_write_once"})
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert len([call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]) == 2
+
+
+@pytest.mark.parametrize("response_failure", ["comment_bad_json", "comment_missing_id", "comment_wrong_body"])
+def test_unconfirmed_marker_response_is_not_audit_dispatched(tmp_path: Path, response_failure: str) -> None:
+	result, calls, output = _run(tmp_path, "gate", env={"FAKE_GH_FAIL": response_failure})
+	assert result.returncode == 1 and output == "hold=true\nhold_reason=pending_marker_failed\n"
+	assert len([call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]) == 3
+
+
+@pytest.mark.parametrize("attempts, expected", [("0", 3), ("abc", 3), ("2", 2), ("999999999999999999999", 3)])
+def test_pending_marker_attempts_is_validated(tmp_path: Path, attempts: str, expected: int) -> None:
+	result, calls, output = _run(tmp_path, "gate", env={"FAKE_GH_FAIL": "comment_write", "SECURITY_PASS_PENDING_MARKER_ATTEMPTS": attempts})
+	assert result.returncode == 1 and output == "hold=true\nhold_reason=pending_marker_failed\n"
+	assert f"after {expected} attempt(s)" in result.stdout
+	assert len([call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]) == expected
 
 
 @pytest.mark.parametrize("status", ["pending", "findings"])
@@ -401,6 +446,15 @@ def test_stale_pending_at_cap_does_not_consume_post_cap_budget(tmp_path: Path) -
 	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
 	assert "head attempt 1 of 2" in posted[-1][-1]
 	assert any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+def test_duplicate_pending_markers_count_one_exhausted_attempt(tmp_path: Path) -> None:
+	comments = [_comment(_marker("failed", OLD, 5), comment_id=1)]
+	comments.extend(_comment(_marker("pending", HEAD, 6), comment_id=n, age_hours=7) for n in (2, 3))
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=audit_dispatched\n"
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert "head attempt 2 of 2" in posted[-1][-1]
 
 
 @pytest.mark.parametrize("limit, should_retry", [("1", False), ("not-a-number", True), ("0", True), ("3", True)])

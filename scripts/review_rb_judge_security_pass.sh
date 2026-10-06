@@ -289,7 +289,8 @@ Open high/critical/unrated security findings (${RB_SECURITY_BLOCKING_ISSUES:-unk
 # security-exhaustion merge without blocking findings may reach it.
 # Returns 0 when a judge merge may proceed, 1 when the security gate holds it.
 # A hold sets RB_SECURITY_HOLD_REASON: the gate's hold_reason (audit_dispatched,
-# audit_pending and awaiting_followups resolve without a human), or
+# audit_pending and awaiting_followups resolve without a human; a failed
+# pending-marker write must keep pending_marker_failed even on a nonzero exit), or
 # security_mode_unverified, gate_failed or unknown.
 rb_security_merge_gate()
 {
@@ -331,8 +332,10 @@ rb_security_merge_gate()
 	if [ "${gate_rc}" -ne 0 ] || [ -z "${hold}" ]; then
 		echo "::warning::Single-issue security gate failed (exit ${gate_rc}); holding the judge's merge."
 		RB_SECURITY_HOLD_REASON="gate_failed"
-		if [ "${hold}" = "true" ] && [ "${hold_reason}" = "label_write_failed" ]; then
-			RB_SECURITY_HOLD_REASON="label_write_failed"
+		if [ "${hold}" = "true" ]; then
+			case "${hold_reason}" in
+				label_write_failed|pending_marker_failed) RB_SECURITY_HOLD_REASON="${hold_reason}" ;;
+			esac
 		fi
 		rb_security_log "mode=merge_gate pr=${PR_NUMBER:-} outcome=hold reason=gate_failed rc=${gate_rc} hold_reason=${RB_SECURITY_HOLD_REASON}"
 		return 1
