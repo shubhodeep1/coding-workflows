@@ -4,7 +4,7 @@ $ARGUMENTS
 
 ## Procedure
 
-1. **Read project context.** Read the relevant sections of `README.md` and `agents.md` (`CLAUDE.md` is already loaded) so "value" and "implemented" are judged against how this repo actually works.
+1. **Read project context.** `CLAUDE.md` is already loaded; search `README.md` and `agents.md` for sections relevant to the plans being audited, and read those instead of both files end to end, so "value" and "implemented" are judged against how this repo actually works.
 
 2. **Enumerate the plans.** List `docs/plans/*.md` (the open plans) and `docs/completed/*.md` (already-shipped plans, used for dedup and to catch regressions). Include other plan-like docs under `docs/` only if they read as plans (e.g. `*-plan.md`, `*-improvements.md`). Honor any `$ARGUMENTS` filter. Record the full list up front.
 

@@ -29,6 +29,24 @@ def test_template_parity():
 	assert TEMPLATE_COMMAND.read_text(encoding="utf-8") == COMMAND.read_text(encoding="utf-8")
 
 
+def test_command_context_reads_follow_claude_md():
+	# CLAUDE.md PRE-TASK: search README.md / agents.md for relevant sections;
+	# CLAUDE.md itself is already loaded, so commands do not re-read it.
+	live = ROOT / ".claude" / "commands"
+	template = ROOT / "workflow-templates" / ".claude" / "commands"
+	targets = [
+		live / f"{name}.md"
+		for name in ("apply-analysis", "apply-url", "audit-plans", "implement-plan-ai", "validate-consumer-issue", "write-plan")
+	] + [template / f"{name}.md" for name in ("apply-analysis", "audit-plans", "implement-plan-ai", "write-plan")]
+	for path in targets:
+		command_text = path.read_text(encoding="utf-8")
+		assert "search `README.md` and `agents.md`" in command_text, path
+		assert "read those instead of both files end to end" in command_text, path
+		assert "`CLAUDE.md` is already loaded" in command_text or "CLAUDE.md (already loaded)" in command_text, path
+		assert "and `CLAUDE.md` at the repo root" not in command_text, path
+		assert "read `README.md`, `agents.md`, and `CLAUDE.md`" not in command_text, path
+
+
 def test_gate_enumerates_orchestrator_projects(step6):
 	assert "label `ai:orchestrator-tracking`" in step6
 	assert "`^orchestrator/project-`" in step6
