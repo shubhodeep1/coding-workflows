@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_resolve.sh:_resolver_sandbox_opencode_attempt | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Unexpected runtime failures during sandboxed conflict resolution may bypass cleanup and leave orphaned Docker containers or artifacts.\n  WHY: The reviewer identifies cleanup as guaranteed only for explicit exit status 75, creating a risk of resource exhaustion or unexpected state in subsequent runs.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cWhen a poller judge\u2019s Claude call is unavailable, the caller then runs its unchanged codex command.\u201d\n  expected_change_site: scripts/orchestrate_poll_process.sh, poller_judge_isolated\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: `scripts/orchestrate_poll_process.sh:232-235` retries `_poller_rb_judge_sandbox_attempt` with `codex`; Gemini and OpenAI describe this as invoking isolated OpenCode instead of the unchanged Codex command. deepseek, minimax, qwen, and glm dispute this gap, citing the documented sandbox-only fallback, including `README.md:2032` and `agents.md:661`.\n- requirement: Align the PR description\u2019s \u201cunchanged codex command\u201d wording with the implemented poller-judge fallback.\n  expected_change_site: PR description, \u201cPoller judges\u201d bullet\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `scripts/orchestrate_poll_process.sh:232-235` and `README.md:1981-2056` document isolated OpenCode fallback; minimax states the PR description should reflect that behavior.\n- requirement: Exercise the failed-transfer path advertised by `test_resolver_selected_engine_and_failed_transfer`, rather than only success modes.\n  expected_change_site: tests/test_review_autofix_claude_fixer_mode.py, `test_resolver_selected_engine_and_failed_transfer`\n  confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: Both cases use `mode=\"success\"`; minimax notes this is a pre-existing test design limitation and says broader test coverage handles failure paths.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_conflict_resolve.sh:_resolver_sandbox_opencode_attempt | severity=MAJOR | confidence=3\n  PROBLEM: The new sandboxed conflict resolution flow does not consistently guarantee that cleanup is triggered if unexpected runtime failures (other than explicit exit status 75) occur during the execution phase.\n  WHY: An unhandled failure could leave orphaned Docker containers or artifacts in the isolated review sandbox, leading to resource exhaustion or unexpected state in subsequent runs on the same runner.\n- TASK_GAP\n  Requirement: \"When a poller judge\u2019s Claude call is unavailable, the caller then runs its unchanged codex command.\"\n  Expected change site: scripts/orchestrate_poll_process.sh, poller_judge_isolated (and similar poller judge paths).\n  Evidence of absence: On Claude exit 75, the implementation retries _poller_rb_judge_sandbox_attempt codex, which invokes the isolated OpenCode runner, not the host-based codex command as described in the PR intent.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  File: tests/test_review_autofix_claude_fixer_mode.py\n  Line or code reference: test_resolver_selected_engine_and_failed_transfer (LAST RUN DIFF)\n  Problem: The LAST RUN DIFF is a clean test refactor that aligns the test with the post-Phase 5c behavior. The new assertions correctly reflect that both engines (Claude and Codex) now run in isolated sandboxes instead of Codex touching the host. The test name still implies \"failed_transfer\" testing, but only success modes are exercised (mode=\"success\" for both cases). This is a pre-existing test design limitation, not a new defect from this run.\n  Why it fails at runtime: The test does not exercise the failed-transfer path its name advertises, so a regression in the failed-transfer branch (e.g. a future change to `_resolver_sandbox_attempt` or `_resolver_sandbox_opencode_attempt` that mishandles a failed transfer) would not be caught by this test. Not a blocker; the broader test suite covers the failure paths elsewhere.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n- TASK_GAP\n  Requirement: \"It returns 75 when the role is on codex or Claude is unavailable, and the caller then runs its unchanged codex command.\" (PR description, \"Poller judges\" section)\n  Expected change site: scripts/orchestrate_poll_process.sh, poller_judge_isolated (lines around 232-235 in the PR DIFF)\n  Evidence of absence: The PR description states the caller runs the \"unchanged codex command\" on Claude exit 75, but the implementation in `poller_judge_isolated` (PR DIFF lines 232-235) instead invokes `_poller_rb_judge_sandbox_attempt codex` to retry OpenCode in a fresh isolated sandbox. The host-Codex fallback path described in the PR is not implemented. The README at lines 1981-2056 explicitly states \"Poller judges retry OpenCode in a fresh isolated sandbox, never host Codex\" and the Phase 5c security contract (CLAUDE.md \u00a712/\u00a720-equivalent rules) requires PR-derived judge prompts to never run on the credentialed host. The implementation is correct per the security contract and matches the README; the PR description's \"Poller judges\" bullet is inconsistent with both the implementation and the README and should be updated to reflect the actual behavior (e.g., \"on Claude exit 75 the caller retries OpenCode in a fresh isolated sandbox\").\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: The PR description says that when a poller judge\u2019s Claude call is unavailable, \u201cthe caller then runs its unchanged codex command.\u201d\n  Expected change site: `scripts/orchestrate_poll_process.sh`, `poller_judge_isolated`.\n  Evidence of absence: Lines 232\u2013235 retry `_poller_rb_judge_sandbox_attempt` with `codex`; that helper runs the isolated OpenCode runner, not the unchanged Codex command. The described poller-judge Codex fallback is absent.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "e515e87ff9ad2bd1a2435317adb5803cb38628e9c839ab09437169ba87ed981b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6208,
+    "run_id": "37409916194",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37409916194",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261006043629_a2484d28a4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6208,
+    "run_id": "37409916194"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-06T04:36:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
