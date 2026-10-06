@@ -114,6 +114,10 @@ codex_thread_reuse_real_codex()
 		printf '%s\n' "${CODEX_THREAD_REUSE_REAL_CODEX}"
 		return 0
 	fi
+	# An explicitly selected isolation shim must never fall back to host codex.
+	if [ -n "${CODEX_THREAD_REUSE_REAL_CODEX:-}" ]; then
+		return 1
+	fi
 
 	if [ -n "${CODEX_THREAD_REUSE_WRAPPER_DIR:-}" ]; then
 		wrapper_path="${CODEX_THREAD_REUSE_WRAPPER_DIR}/codex"
@@ -272,7 +276,7 @@ codex_thread_reuse_record_session_from_marker()
 	local session_root="${CODEX_THREAD_REUSE_SESSION_ROOT:-${HOME:-}/.codex/sessions}"
 	local session_id=""
 
-	session_id="$(python3 - "${marker_file}" "${session_root}" "$(pwd)" <<'PY'
+	session_id="$(python3 - "${marker_file}" "${session_root}" "${CODEX_THREAD_REUSE_SESSION_CWD:-$(pwd)}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -617,7 +621,7 @@ codex_thread_reuse_claude_direct_run()
 		claude_session_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 		printf '%s\n' "${claude_session_id}" > "${id_file}"
 	fi
-	if [ -n "${continuation_file}" ] && compgen -G "${HOME}/.claude/projects/*/${claude_session_id}.jsonl" >/dev/null; then
+	if [ -n "${continuation_file}" ] && compgen -G "${CODEX_THREAD_REUSE_CLAUDE_HOME:-${HOME}}/.claude/projects/*/${claude_session_id}.jsonl" >/dev/null; then
 		claude_prompt="$(mktemp /tmp/codex_thread_reuse_claude_prompt.XXXXXX)"
 		if codex_thread_reuse_transform_prompt \
 			"${transform_mode}" \
@@ -633,6 +637,13 @@ codex_thread_reuse_claude_direct_run()
 	[ -n "${log_file}" ] && tee_targets+=("${log_file}")
 	[ -n "${cumulative_log_file}" ] && tee_targets+=("${cumulative_log_file}")
 	claude_cmd=(bash -c 'source "$1"; shift; claude_run "$@"' _ "${engine_dir}/ai_engine.sh")
+	if [ -n "${CODEX_THREAD_REUSE_CLAUDE_RUNNER:-}" ]; then
+		if [[ "${CODEX_THREAD_REUSE_CLAUDE_RUNNER}" != /* ]] || [ ! -x "${CODEX_THREAD_REUSE_CLAUDE_RUNNER}" ]; then
+			echo "::error::Invalid Claude isolation runner" >&2
+			return 1
+		fi
+		claude_cmd=(bash "${CODEX_THREAD_REUSE_CLAUDE_RUNNER}" claude)
+	fi
 	if [ -n "${timeout_secs}" ]; then
 		if command -v timeout >/dev/null 2>&1; then
 			claude_cmd=(timeout --signal=TERM --kill-after=5s "${timeout_secs}s" "${claude_cmd[@]}")
