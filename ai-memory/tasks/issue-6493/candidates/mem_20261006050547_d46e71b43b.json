@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: B\nQ3: A\n\nRATIONALE:\nQ1: Every consumer's workflows already hold the shared `GH_PAT`, which can read every registered repo's logs directly (\u00a719). Forging a dispatch therefore gains a caller little that the token does not already give. A per-repo HMAC key (B) or per-repo App tokens (C) would add secrets and onboarding for every consumer for a small security gain, and the HMAC check would do nothing until every consumer has the key set up. Option A closes the actual defect cheaply and fails closed. Today `normalize_report` in `scripts/workflow_failure_heal.py` (around line 987) only checks that `ref[\"repo\"] == repo` and that the run ID has a valid format. A adds a GitHub-side check before any logs are read: the run belongs to the claimed repo, it failed, its workflow path is the expected one, and it is tied to the reported issue or PR. The shared-PAT residual risk gets written down.\nQ2: The `run_refs` loop is shared by every report kind, so `autofix_failure` and `workflow_run` lead to the same log reads that `phase_failure` does. Fixing only the cited kind would leave the same defect open on the other two. The label-escalation `issue` / `pull_request` kinds are left out because they do not come with run references.\nQ3: This reuses the trust rule that already exists: `phase_failure_streak(..., trusted_author=...)` (line 658) only counts failure comments written by the authenticated workflow account. One paginated read of the issue's comments ties the run to the issue strongly, and that history is the same data the streak count already uses. Option B's display-title match is weaker and could wrongly reject real reports. The run's event and workflow path are already checked under Q1-A.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Every decision is a lettered option. These notes are for the planner:\n- In `scripts/workflow_failure_heal.py`, add one provenance step to the intake, run after `normalize_report` and before any log fetch. For each kept run reference it calls `GET repos/{repo}/actions/runs/{run_id}`, at most `MAX_RUN_REFS` calls. It checks four things:\n  - the response's `repository.full_name` equals `repo`;\n  - `conclusion` is in the failure set (for `workflow_run`, use the existing `REPORTABLE_CONCLUSIONS`);\n  - `path` matches the expected workflow for the kind: the phase wrapper for `phase_failure`, the review wrapper (`internal-review.yml` / `ai-review.yml` / `review_autofix.yml`) for `autofix_failure`, and one of the five release/promotion workflows for `workflow_run`;\n  - the run is tied to the reported issue or PR:\n    - `phase_failure`: a failure comment on the issue, written by the `GH_PAT` account (the same trusted-author rule as `phase_failure_streak`), links this run ID. That account is resolved with one `/user` read.\n    - `autofix_failure`: a `review-autofix-failure:v1` marker or failure comment from the same trusted account on the PR links the run, or the run's `pull_requests` / `head_branch` matches the PR.\n    - `workflow_run`: the path check alone.\n- Runs that fail the check are dropped. If the current run fails it, or no references are left, the report is rejected.\n- If the API or the comment history cannot be read, the step fails closed.\n- Each rejection logs a line under the existing `WORKFLOW_HEAL` prefix, for example `WORKFLOW_HEAL provenance_rejected repo= kind= run_id= reason=`.\n- Add contract tests in `tests/` covering: a forged repo or run pair, the wrong workflow path, a run with no linked comment, a comment from an untrusted author, and an unreadable API (fail closed).\n- Document the remaining shared-`GH_PAT` risk in the `agents.md` workflow-failure-heal bullet.\n- Known trade-off: if the phase run's own failure-comment step also failed, its report is now rejected (fail closed) instead of being added to the streak.\n\nESCALATION (required for any ESCALATE decision):\nNone.",
+  "fingerprint": "62fe86c9d3099344c83356e7a97178734113007949dab7de6a33dff9fe1637f7",
+  "lineage": {
+    "issue_number": 6493,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37416057174",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37416057174",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6493"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261006050547_d46e71b43b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6493,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37416057174"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6493",
+  "timestamps": {
+    "created_at": "2026-10-06T05:05:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
