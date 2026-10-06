@@ -377,6 +377,25 @@ _resolver_exit_trap() {
 }
 trap _resolver_exit_trap EXIT
 
+# The prepare step includes fingerprint-only paths in this final set. Report
+# rejected paths before either isolated model starts, without relaxing the
+# sandbox's own admission check or printing file contents. Keep this after the
+# EXIT trap so an integration-sync rejection still dispatches the judge.
+if [ -s "${CONFLICTED_PATHS_FILE}" ]; then
+  resolver_report_manifest_args=()
+  if [ -n "${REVIEW_SANDBOX_ROOT:-}" ]; then
+    resolver_report_manifest_args=("${REVIEW_SANDBOX_ROOT}/baseline.json")
+  fi
+  if PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/review_untrusted_workspace.py" \
+      report-rejections "${WORKSPACE_PATH:-${GITHUB_WORKSPACE:-$PWD}}" "${CONFLICTED_PATHS_FILE}" \
+      "${resolver_report_manifest_args[@]}"; then
+    :
+  else
+    echo "::error::Conflict resolver path admission failed; refusing model execution." >&2
+    exit 1
+  fi
+fi
+
 # ----------------------------------------------------------------------
 # Retry-loop hardening (fix for the recurring integration-sync
 # "fingerprint verification FAILED" class of run failures).

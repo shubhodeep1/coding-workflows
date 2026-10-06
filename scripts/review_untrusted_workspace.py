@@ -51,6 +51,69 @@ def allowed(name, host=None, commands=None):
 	return name in ROOT_FILES or PurePosixPath(name).suffix.lower() in SUFFIXES or parts[-1] == "Dockerfile"
 
 
+REJECTION_REPORT_LIMIT = 10
+LOG_PATH_MAX = 200
+
+
+def rejection_rule(name, commands=None):
+	"""Label why allowed() refuses a path; None when it is admitted.
+
+	Mirrors allowed() check by check for diagnostics only; allowed() stays
+	the admission decision (#6575).
+	"""
+	parts = PurePosixPath(name).parts
+	if not parts or name.startswith("/") or ".." in parts or "\\" in name or "\n" in name or "\r" in name:
+		return "unsafe_path"
+	if name == "tests/test_audit_plans_command.py":
+		return "excluded_input"
+	for part in parts:
+		lowered = part.lower()
+		if lowered in EXCLUDED:
+			return "excluded_dir"
+		if lowered.startswith(".env") or "secret" in lowered or "credential" in lowered or lowered.endswith((".pem", ".key", ".p12", ".pfx", ".keystore", ".egg-info", ".dist-info")):
+			return "credential_like"
+	if name in (".github/ai/claude_engine.json", ".claude/hooks/gh_api_write_guard.py", ".claude/hooks/pr_merge_status_guard.py", "scripts/claude_settings.json.tmpl"):
+		return None
+	if len(parts) == 3 and parts[:2] == (".claude", "commands") and parts[2].endswith(".md") and not parts[2].startswith("."):
+		return None if commands is not None and name in commands else "command_not_admitted"
+	if parts[0].startswith(".") and (len(parts) < 3 or parts[:2] not in ((".github", "workflows"), (".github", "actions"))):
+		return "hidden_dir"
+	if name in ROOT_FILES or PurePosixPath(name).suffix.lower() in SUFFIXES or parts[-1] == "Dockerfile":
+		return None
+	return "unsupported_type"
+
+
+def sanitize_log_path(name):
+	"""Printable-ASCII, single-token, length-bounded form of an untrusted path."""
+	cleaned = "".join(ch if 0x21 <= ord(ch) <= 0x7E else "?" for ch in name)
+	if len(cleaned) > LOG_PATH_MAX:
+		cleaned = cleaned[:LOG_PATH_MAX - 3] + "..."
+	return cleaned
+
+
+def report_rejections(host, names, commands=None, out=None):
+	"""Write one sanitized line per refused path to stderr; return the count.
+
+	Never reads or prints file contents. Output is capped at
+	REJECTION_REPORT_LIMIT lines plus one truncation line.
+	"""
+	out = out if out is not None else sys.stderr
+	rejected = []
+	for name in names:
+		if allowed(name, commands=commands):
+			try:
+				checked_path(host, name)
+			except ValueError:
+				rejected.append((name, "symlink"))
+			continue
+		rejected.append((name, rejection_rule(name, commands) or "unclassified"))
+	for name, rule in rejected[:REJECTION_REPORT_LIMIT]:
+		print(f"REVIEW_UNTRUSTED_PATH_REJECTED path={sanitize_log_path(name)} rule={rule}", file=out)
+	if len(rejected) > REJECTION_REPORT_LIMIT:
+		print(f"REVIEW_UNTRUSTED_PATH_REJECTED_TRUNCATED omitted={len(rejected) - REJECTION_REPORT_LIMIT}", file=out)
+	return len(rejected)
+
+
 def checked_path(root, name):
 	path = root
 	for part in PurePosixPath(name).parts:
@@ -305,6 +368,19 @@ def main():
 			print("::error::Review static README output failed", file=sys.stderr)
 			raise SystemExit(1) from None
 		return
+	if sys.argv[1:2] == ["report-rejections"]:
+		# report-rejections <host> <path-file> [<manifest>]: newline-separated
+		# paths; exit 3 when any is refused, 0 when all are admitted.
+		if len(sys.argv) not in (4, 5):
+			raise SystemExit(2)
+		try:
+			names = [line for line in Path(sys.argv[3]).read_text(encoding="utf-8", errors="replace").split("\n") if line]
+			commands = load_admitted_commands(Path(sys.argv[4])) if len(sys.argv) == 5 else None
+			refused = report_rejections(Path(sys.argv[2]), names, commands)
+		except (OSError, ValueError, UnicodeError):
+			print("::error::Review isolation path report failed", file=sys.stderr)
+			raise SystemExit(1) from None
+		raise SystemExit(3 if refused else 0)
 	# snapshot alone takes an optional fifth argument: the host Git dir.
 	if sys.argv[1:2] not in (["snapshot"], ["refresh"], ["transfer"]) or not (len(sys.argv) == 5 or (len(sys.argv) == 6 and sys.argv[1] == "snapshot")):
 		raise SystemExit(2)

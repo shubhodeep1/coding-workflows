@@ -225,10 +225,14 @@ fi
 #     resolver working set after this point, so the early-commit
 #     decision here would be premature; the intent-aware resolver
 #     keeps full custody of those runs.
-#   - Only a two-sided content conflict (index stages 2 AND 3 both
-#     present) is handled; base stage 1 absent is the add/add case,
-#     where the set algebra degenerates to plain union.  Delete/modify
-#     shapes fall through to the Codex resolver untouched.
+#   - A two-sided content conflict (index stages 2 AND 3 both
+#     present) is set-merged; base stage 1 absent is the add/add case,
+#     where the set algebra degenerates to plain union.  A delete/modify
+#     shape (only stage 2 or only stage 3 present) keeps the surviving
+#     side, sorted and deduplicated: the model resolver's sandbox never
+#     admits .ai paths, so handing it this shape failed closed with
+#     sandbox_path_unsupported (PR #6209, run 37487619837, issue #6575).
+#     Any other shape (no stage 2 or 3) still falls through.
 # LC_ALL=C for sort/comm matches Python's str sort in
 # materialize_source_tree() (bytewise over UTF-8 == code-point order),
 # so the merged file satisfies the manifest-sorting contract.
@@ -242,8 +246,9 @@ if [ "${CONFLICT_MANIFEST_UNION_ENABLED:-true}" = "true" ] \
       ;;
     *)
       _mu_stages="$(git ls-files -u -- "${MANIFEST_UNION_PATH}" | awk '{print $3}' | sort -u | tr '\n' ' ')"
+      _mu_resolution=""
       case " ${_mu_stages}" in
-        *' 2 '*' 3 '*)
+        *' 2 3 '*)
           _mu_dir="$(mktemp -d)"
           git show ":1:${MANIFEST_UNION_PATH}" > "${_mu_dir}/base" 2>/dev/null || : > "${_mu_dir}/base"
           git show ":2:${MANIFEST_UNION_PATH}" > "${_mu_dir}/ours"
@@ -259,9 +264,37 @@ if [ "${CONFLICT_MANIFEST_UNION_ENABLED:-true}" = "true" ] \
           cp "${_mu_dir}/merged" "${MANIFEST_UNION_PATH}"
           rm -rf "${_mu_dir}"
           git add -- "${MANIFEST_UNION_PATH}"
+          _mu_resolution="deterministically (set-merge of base/ours/theirs)"
+          ;;
+        *' 2 '*|*' 3 '*)
+          # Delete/modify: exactly one of stages 2 (ours) / 3 (theirs)
+          # survives.  Keep the surviving side, normalised like the
+          # set-merge output.  Before #6575 this shape fell through to the
+          # model resolver, whose sandbox always refuses .ai paths, so the
+          # run failed closed with sandbox_path_unsupported (PR #6209,
+          # run 37487619837).  .ai stays excluded from the sandbox.
+          case " ${_mu_stages}" in
+            *' 2 '*) _mu_keep=2 ;;
+            *) _mu_keep=3 ;;
+          esac
+          _mu_stage_tmp="$(mktemp)"
+          git show ":${_mu_keep}:${MANIFEST_UNION_PATH}" > "${_mu_stage_tmp}"
+          mkdir -p "$(dirname "${MANIFEST_UNION_PATH}")"
+          sed '/^[[:space:]]*$/d' "${_mu_stage_tmp}" | LC_ALL=C sort -u > "${MANIFEST_UNION_PATH}"
+          rm -f "${_mu_stage_tmp}"
+          # -f: .ai/ may be gitignored while the path is absent from HEAD
+          # (stage-3-only); it only applies to this one explicit path.
+          git add -f -- "${MANIFEST_UNION_PATH}"
+          _mu_resolution="delete/modify (kept stage ${_mu_keep})"
+          ;;
+        *)
+          echo "Manifest union-merge: ${MANIFEST_UNION_PATH} conflict is not a two-sided content conflict (index stages: ${_mu_stages:-none}); leaving it to the Codex resolver."
+          ;;
+      esac
+      if [ -n "${_mu_resolution}" ]; then
           git diff --name-only --diff-filter=U | sort -u > "${RESOLVER_ALLOWLIST_FILE}" || true
           _resolver_allowlist_count="$(wc -l < "${RESOLVER_ALLOWLIST_FILE}" | tr -d '[:space:]')"
-          echo "Manifest union-merge: resolved ${MANIFEST_UNION_PATH} deterministically (set-merge of base/ours/theirs); ${_resolver_allowlist_count} unmerged path(s) remain."
+          echo "Manifest union-merge: resolved ${MANIFEST_UNION_PATH} ${_mu_resolution}; ${_resolver_allowlist_count} unmerged path(s) remain."
           if [ "${_resolver_allowlist_count}" -eq 0 ]; then
             # The manifest was the only conflict.  Commit the merge NOW,
             # while MERGE_HEAD is still in place, so this is a real
@@ -294,11 +327,7 @@ if [ "${CONFLICT_MANIFEST_UNION_ENABLED:-true}" = "true" ] \
             echo "Manifest union-merge: no other unmerged paths — committed deterministic merge resolution (push deferred); Codex resolver will be skipped."
             exit 0
           fi
-          ;;
-        *)
-          echo "Manifest union-merge: ${MANIFEST_UNION_PATH} conflict is not a two-sided content conflict (index stages: ${_mu_stages:-none}); leaving it to the Codex resolver."
-          ;;
-      esac
+      fi
       ;;
   esac
 fi

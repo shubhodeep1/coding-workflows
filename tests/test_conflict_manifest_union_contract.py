@@ -42,6 +42,7 @@ These tests pin the load-bearing pieces of that contract:
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import re
 import subprocess
@@ -137,9 +138,283 @@ def test_prepare_excludes_integration_sync_branches() -> None:
 
 def test_prepare_requires_two_sided_content_conflict() -> None:
 	block = _union_block(_prepare_text())
-	assert "git ls-files -u --" in block and "*' 2 '*' 3 '*" in block, (
-		"union-merge must require index stages 2 AND 3 (two-sided content conflict); "
-		"delete/modify shapes fall through to the Codex resolver"
+	assert "git ls-files -u --" in block and "*' 2 3 '*" in block, (
+		"union-merge must set-merge only when index stages 2 AND 3 are both present "
+		"(two-sided content conflict); delete/modify shapes keep the surviving side"
+	)
+
+
+def test_prepare_delete_modify_arm_placement() -> None:
+	block = _union_block(_prepare_text())
+	two_sided = block.index("*' 2 3 '*)")
+	delete_modify = block.index("*' 2 '*|*' 3 '*)")
+	assert block.index("orchestrator/project-*)") < two_sided < delete_modify, (
+		"the delete/modify arm must follow the integration-sync exclusion and the "
+		"two-sided set-merge arm"
+	)
+	assert 'git add -f -- "${MANIFEST_UNION_PATH}"' in block
+	assert "leaving it to the Codex resolver." in block, (
+		"shapes without stage 2 or 3 must still fall through"
+	)
+
+
+def _scratch_env() -> dict[str, str]:
+	return {
+		env_name: env_value
+		for env_name, env_value in os.environ.items()
+		if not env_name.startswith("GIT_") and env_name != "BASH_ENV"
+	}
+
+
+def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+	return subprocess.run(
+		["git", *args], cwd=repo, env=_scratch_env(), check=check,
+		text=True, capture_output=True,
+	)
+
+
+def _delete_modify_fixture(repo: Path, *, ours_deletes: bool, other_conflict: bool, ignore_ai: bool) -> None:
+	"""One side deletes the manifest, the other modifies it."""
+	_git(repo, "init", "-q", "-b", "main")
+	_git(repo, "config", "user.name", "t")
+	_git(repo, "config", "user.email", "t@t")
+	manifest = repo / MANIFEST_PATH
+	manifest.parent.mkdir(parents=True)
+	manifest.write_text("a.py\nm.py\nz.py\n", encoding="utf-8")
+	(repo / "src").mkdir()
+	(repo / "src" / "app.py").write_text("base\n", encoding="utf-8")
+	if ignore_ai:
+		(repo / ".gitignore").write_text(".ai/\n", encoding="utf-8")
+	_git(repo, "add", "-f", "-A")
+	_git(repo, "commit", "-qm", "base")
+	_git(repo, "checkout", "-q", "-b", "deleter")
+	_git(repo, "rm", "-q", "--", MANIFEST_PATH)
+	if other_conflict:
+		(repo / "src" / "app.py").write_text("deleter\n", encoding="utf-8")
+		_git(repo, "add", "--", "src/app.py")
+	_git(repo, "commit", "-qm", "delete manifest")
+	_git(repo, "checkout", "-q", "main")
+	_git(repo, "checkout", "-q", "-b", "modifier")
+	manifest.write_text("z.py\nm.py\n\nb.py\na.py\na.py\n", encoding="utf-8")
+	if other_conflict:
+		(repo / "src" / "app.py").write_text("modifier\n", encoding="utf-8")
+	_git(repo, "add", "-f", "-A")
+	_git(repo, "commit", "-qm", "modify manifest")
+	ours, theirs = ("deleter", "modifier") if ours_deletes else ("modifier", "deleter")
+	_git(repo, "checkout", "-q", ours)
+	merge = _git(repo, "merge", "--no-commit", "--no-ff", theirs, check=False)
+	assert merge.returncode != 0, "fixture must produce a conflict"
+
+
+def _run_union_block(repo: Path, tmp: Path, block: str, **env_overrides: str) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
+	allowlist = tmp / "allowlist.txt"
+	github_env = tmp / "github.env"
+	github_env.write_text("", encoding="utf-8")
+	stash = tmp / "stash"
+	stash.mkdir(exist_ok=True)
+	allowlist.write_text(
+		_git(repo, "diff", "--name-only", "--diff-filter=U").stdout, encoding="utf-8"
+	)
+	script = f"""set -euo pipefail
+RESOLVER_ALLOWLIST_FILE={allowlist!s}
+GITHUB_ENV={github_env!s}
+RESOLVE_STASH={stash!s}
+_merge_stderr_file={tmp / "merge_stderr.txt"!s}
+_resolver_allowlist_count="$(wc -l < "${{RESOLVER_ALLOWLIST_FILE}}" | tr -d '[:space:]')"
+{block}
+"""
+	env = _scratch_env()
+	env.update({"TARGET_BRANCH": "ai/issue-1", "IS_WORKFLOW_SOURCE_REPO": "true"})
+	env.update(env_overrides)
+	result = subprocess.run(["bash", "-c", script], cwd=repo, env=env, text=True, capture_output=True)
+	return result, allowlist, github_env
+
+
+def _check_delete_modify_with_other_conflict(block: str) -> None:
+	with tempfile.TemporaryDirectory() as raw_tmp:
+		tmp = Path(raw_tmp)
+		repo = tmp / "repo"
+		repo.mkdir()
+		_delete_modify_fixture(repo, ours_deletes=True, other_conflict=True, ignore_ai=False)
+		result, allowlist, github_env = _run_union_block(repo, tmp, block)
+		assert result.returncode == 0, result.stderr
+		assert _git(repo, "ls-files", "-u", "--", MANIFEST_PATH).stdout == "", (
+			"delete/modify manifest conflict must be resolved before the model resolver"
+		)
+		assert allowlist.read_text(encoding="utf-8").splitlines() == ["src/app.py"], (
+			"only the non-manifest conflict may reach the resolver; no .ai path is admitted"
+		)
+		assert (repo / MANIFEST_PATH).read_text(encoding="utf-8") == "a.py\nb.py\nm.py\nz.py\n"
+		assert "CONFLICT_RESOLVED=true" not in github_env.read_text(encoding="utf-8")
+		assert "delete/modify (kept stage 3)" in result.stdout
+
+
+def test_manifest_delete_modify_resolved_with_other_conflict() -> None:
+	"""Regression for #6575: the shape that reached the sandbox and failed closed."""
+	_check_delete_modify_with_other_conflict(_union_block(_prepare_text()))
+
+
+def test_manifest_modify_delete_stage2_only() -> None:
+	with tempfile.TemporaryDirectory() as raw_tmp:
+		tmp = Path(raw_tmp)
+		repo = tmp / "repo"
+		repo.mkdir()
+		_delete_modify_fixture(repo, ours_deletes=False, other_conflict=False, ignore_ai=True)
+		result, _allowlist, github_env = _run_union_block(repo, tmp, _union_block(_prepare_text()))
+		assert result.returncode == 0, result.stderr
+		assert "delete/modify (kept stage 2)" in result.stdout
+		parents = _git(repo, "rev-list", "--parents", "-n", "1", "HEAD").stdout.split()
+		assert len(parents) == 3, "manifest-only resolution must be a two-parent merge commit"
+		assert _git(repo, "log", "-1", "--format=%s").stdout.strip() == MERGE_RESOLVE_COMMIT_MESSAGE
+		env_text = github_env.read_text(encoding="utf-8")
+		assert "CONFLICT_RESOLVED=true" in env_text
+		assert "MERGE_CONFLICT=false" not in env_text
+		assert _git(repo, "show", f"HEAD:{MANIFEST_PATH}").stdout == "a.py\nb.py\nm.py\nz.py\n"
+
+
+def test_manifest_delete_modify_respects_kill_switch() -> None:
+	with tempfile.TemporaryDirectory() as raw_tmp:
+		tmp = Path(raw_tmp)
+		repo = tmp / "repo"
+		repo.mkdir()
+		_delete_modify_fixture(repo, ours_deletes=True, other_conflict=True, ignore_ai=False)
+		result, allowlist, _github_env = _run_union_block(
+			repo, tmp, _union_block(_prepare_text()), CONFLICT_MANIFEST_UNION_ENABLED="false"
+		)
+		assert result.returncode == 0, result.stderr
+		assert _git(repo, "ls-files", "-u", "--", MANIFEST_PATH).stdout != ""
+		assert MANIFEST_PATH in allowlist.read_text(encoding="utf-8").splitlines()
+
+
+def test_manifest_add_add_keeps_both_sides() -> None:
+	with tempfile.TemporaryDirectory() as raw_tmp:
+		tmp = Path(raw_tmp)
+		repo = tmp / "repo"
+		repo.mkdir()
+		_git(repo, "init", "-q", "-b", "main")
+		_git(repo, "config", "user.name", "t")
+		_git(repo, "config", "user.email", "t@t")
+		(repo / "src").mkdir()
+		(repo / "src" / "app.py").write_text("base\n", encoding="utf-8")
+		_git(repo, "add", "-A")
+		_git(repo, "commit", "-qm", "base")
+		_git(repo, "checkout", "-q", "-b", "ours")
+		manifest = repo / MANIFEST_PATH
+		manifest.parent.mkdir(parents=True)
+		manifest.write_text("a.py\nc.py\n", encoding="utf-8")
+		(repo / "src" / "app.py").write_text("ours\n", encoding="utf-8")
+		_git(repo, "add", "-A")
+		_git(repo, "commit", "-qm", "ours")
+		_git(repo, "checkout", "-q", "main")
+		_git(repo, "checkout", "-q", "-b", "theirs")
+		manifest.parent.mkdir(parents=True, exist_ok=True)
+		manifest.write_text("a.py\nb.py\n", encoding="utf-8")
+		(repo / "src" / "app.py").write_text("theirs\n", encoding="utf-8")
+		_git(repo, "add", "-A")
+		_git(repo, "commit", "-qm", "theirs")
+		_git(repo, "checkout", "-q", "ours")
+		assert _git(repo, "merge", "--no-commit", "--no-ff", "theirs", check=False).returncode != 0
+		result, allowlist, _github_env = _run_union_block(repo, tmp, _union_block(_prepare_text()))
+		assert result.returncode == 0, result.stderr
+		assert manifest.read_text(encoding="utf-8") == "a.py\nb.py\nc.py\n"
+		assert _git(repo, "ls-files", "-u", "--", MANIFEST_PATH).stdout == ""
+		assert allowlist.read_text(encoding="utf-8").splitlines() == ["src/app.py"]
+		assert "set-merge of base/ours/theirs" in result.stdout
+
+
+def _workspace_module():
+	spec = importlib.util.spec_from_file_location(
+		"review_untrusted_workspace_under_test", REPO_ROOT / "scripts" / "review_untrusted_workspace.py"
+	)
+	module = importlib.util.module_from_spec(spec)
+	assert spec.loader is not None
+	spec.loader.exec_module(module)
+	return module
+
+
+def test_rejection_rule_mirrors_allowed_and_keeps_ai_excluded() -> None:
+	workspace = _workspace_module()
+	assert workspace.allowed(".ai/other.txt") is False
+	assert workspace.rejection_rule(".ai/other.txt") == "excluded_dir"
+	assert workspace.allowed(MANIFEST_PATH) is False
+	for name in (
+		"README.md", "scripts/a.sh", ".ai/x.txt", "../x", "a\nb.py", ".env.local",
+		"foo.pem", ".hidden/x.py", ".github/workflows/ci.yml", "bin/tool",
+		"tests/test_audit_plans_command.py",
+	):
+		assert workspace.allowed(name) == (workspace.rejection_rule(name) is None), name
+
+
+def test_sanitize_log_path_bounds_untrusted_names() -> None:
+	workspace = _workspace_module()
+	cleaned = workspace.sanitize_log_path("a\n::error::x")
+	assert "\n" not in cleaned and cleaned == "a?::error::x"
+	long_name = workspace.sanitize_log_path("x" * 500)
+	assert len(long_name) == 200 and long_name.endswith("...")
+
+
+def test_report_rejections_names_refused_path_without_contents() -> None:
+	with tempfile.TemporaryDirectory() as raw_tmp:
+		tmp = Path(raw_tmp)
+		host = tmp / "host"
+		(host / ".ai").mkdir(parents=True)
+		(host / "src").mkdir()
+		(host / ".ai" / "other.txt").write_text("SECRET-CONTENT\n", encoding="utf-8")
+		(host / "src" / "ok.py").write_text("print(1)\n", encoding="utf-8")
+		(host / "src" / "link.py").symlink_to("ok.py")
+		paths = tmp / "paths.txt"
+		paths.write_text(".ai/other.txt\nsrc/link.py\nsrc/ok.py\n", encoding="utf-8")
+		result = subprocess.run(
+			["python3", str(REPO_ROOT / "scripts" / "review_untrusted_workspace.py"),
+			 "report-rejections", str(host), str(paths)],
+			env={**_scratch_env(), "PYTHONDONTWRITEBYTECODE": "1"}, text=True, capture_output=True,
+		)
+		assert result.returncode == 3, result.stderr
+		lines = [line for line in result.stderr.splitlines() if line.startswith("REVIEW_UNTRUSTED_PATH_REJECTED")]
+		assert lines == [
+			"REVIEW_UNTRUSTED_PATH_REJECTED path=.ai/other.txt rule=excluded_dir",
+			"REVIEW_UNTRUSTED_PATH_REJECTED path=src/link.py rule=symlink",
+		]
+		assert "SECRET-CONTENT" not in result.stderr + result.stdout
+		many = tmp / "many.txt"
+		many.write_text("".join(f".ai/f{i}.txt\n" for i in range(12)), encoding="utf-8")
+		capped = subprocess.run(
+			["python3", str(REPO_ROOT / "scripts" / "review_untrusted_workspace.py"),
+			 "report-rejections", str(host), str(many)],
+			env={**_scratch_env(), "PYTHONDONTWRITEBYTECODE": "1"}, text=True, capture_output=True,
+		)
+		assert capped.returncode == 3
+		capped_lines = capped.stderr.splitlines()
+		assert len([line for line in capped_lines if line.startswith("REVIEW_UNTRUSTED_PATH_REJECTED path=")]) == 10
+		assert "REVIEW_UNTRUSTED_PATH_REJECTED_TRUNCATED omitted=2" in capped_lines
+
+
+def test_resolver_reports_final_rejections_and_stops_before_model() -> None:
+	text = RESOLVE.read_text(encoding="utf-8")
+	start = text.index('if [ -s "${CONFLICTED_PATHS_FILE}" ]; then', text.index('RESOLVER_ALLOWLIST_FILE="${RUNTIME_DIR}/resolver_unmerged_allowlist.txt"'))
+	end = text.index('# ----------------------------------------------------------------------', start)
+	assert start < text.index('emit_conflict_resolver_substate "LaunchingAgentProcess"', end)
+	with tempfile.TemporaryDirectory() as raw_tmp:
+		tmp = Path(raw_tmp)
+		host = tmp / "host"
+		host.mkdir()
+		paths = tmp / "conflicted_paths.txt"
+		paths.write_text(".ai/.workspace_source_manifest.txt\n", encoding="utf-8")
+		env = {**_scratch_env(), "PYTHONDONTWRITEBYTECODE": "1", "CONFLICTED_PATHS_FILE": str(paths),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"), "WORKSPACE_PATH": str(host)}
+		result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + text[start:end]],
+			env=env, text=True, capture_output=True)
+		assert result.returncode == 1
+		assert "path=.ai/.workspace_source_manifest.txt rule=excluded_dir" in result.stderr
+		paths.write_text("src/ok.py\n", encoding="utf-8")
+		assert subprocess.run(["bash", "-c", "set -euo pipefail\n" + text[start:end]],
+			env=env, capture_output=True).returncode == 0
+
+
+def test_resolver_rejection_preserves_integration_judge_escalation() -> None:
+	text = RESOLVE.read_text(encoding="utf-8")
+	assert text.index('trap _resolver_exit_trap EXIT') < text.index('report-rejections "${WORKSPACE_PATH:-'), (
+		"an unsupported resolver path must still trigger the integration-judge EXIT trap"
 	)
 
 
