@@ -5175,6 +5175,22 @@ run_reviewer_pass() {
     esac
   done
 
+  # A context overflow on the sole lite reviewer must not strand a PR whose
+  # larger-window reviewer is available. Keep other failures fail-closed.
+  if [ "${REVIEW_TIER:-}" = "lite" ] && [ "${#pass_models[@]}" -eq 1 ] \
+    && [ "${pass_models[0]}" = "mistralai/mistral-small-2603" ] && [ "${pass_successful}" -eq 0 ] \
+    && [ -f "${pass_status_files[0]}" ] && [ "$(cat "${pass_status_files[0]}")" = "failed" ] \
+    && grep -Eiq 'context.{0,50}(exceed|overflow|too long)|exceed.{0,50}context|too many (input )?tokens|prompt (is )?too long' "${pass_log_files[0]}" \
+    && normalize_reviewer_model_list "${REVIEWER_MODELS}" | grep -Fxq 'openai/gpt-6-luna' \
+    && [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+    echo "::warning::Lite reviewer Mistral exceeded its context window; retrying with live openai/gpt-6-luna." >&2
+    run_reviewer "openai/gpt-6-luna" "openai_gpt-6-luna" "${pass_prefix}" "${pass_prompt}" "${pass_reasoning}" >&2
+    if [ "$(cat "${PREVIOUS_REVIEWS_DIR}/status_${pass_prefix}_openai_gpt-6-luna.txt" 2>/dev/null || true)" = "success" ]; then
+      pass_successful=1
+      reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "openai/gpt-6-luna"
+    fi
+  fi
+
   if [ "${pass_budget_skipped}" -ne 0 ] && [ "${pass_hard_failures}" -eq 0 ]; then
     reviewer_request_partial_finalize "soft_deadline"
   fi

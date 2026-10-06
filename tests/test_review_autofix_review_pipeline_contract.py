@@ -4600,6 +4600,68 @@ def test_review_tier_lite_draws_from_standard_list_and_defaults_use_whole_panel(
 	assert pinned_lite["active_models"] == ["mistralai/mistral-small-2603"]
 
 
+def test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer() -> None:
+	reviewer_text = REVIEWERS.read_text(encoding="utf-8")
+	pass_function = reviewer_text.split("run_reviewer_pass() {", 1)[1].split("# Wrap a consolidated pass-1 ledger", 1)[0]
+	script = "run_reviewer_pass() {" + pass_function + textwrap.dedent("""\
+		get_active_reviewer_models_text() { cat "$REVIEWER_ACTIVE_MODELS_FILE"; }
+		reviewer_write_model_list_file() { printf '%s\\n' "${@:2}" > "$1"; }
+		reviewer_resume_should_reuse_success_slot() { return 1; }
+		reviewer_circuit_breaker_enabled() { return 1; }
+		emit_run_budget_gate_note() { :; }
+		codex_run_budget_phase_may_start() { return 0; }
+		normalize_reviewer_model_list() { printf '%s\\n' "$1" | tr ',' '\\n'; }
+		run_reviewer() {
+		  printf '%s\\n' "$1" >> "$CALLS_FILE"
+		  model_safe="$2"
+		  if [ "$1" = 'mistralai/mistral-small-2603' ]; then
+		    printf 'failed\\n' > "$PREVIOUS_REVIEWS_DIR/status_$3_$model_safe.txt"
+		    printf '%s\\n' "$MISTRAL_ERROR" > "$PREVIOUS_REVIEWS_DIR/$3_$model_safe.log"
+		  else
+		    printf '%s\\n' "$FALLBACK_STATUS" > "$PREVIOUS_REVIEWS_DIR/status_$3_$model_safe.txt"
+		  fi
+		}
+		result="$(run_reviewer_pass review "$PROMPT_FILE" high)"
+		printf 'RESULT=%s\\nACTIVE=%s\\n' "$result" "$(cat "$REVIEWER_ACTIVE_MODELS_FILE")"
+		""")
+	for error, roster, fallback_status, expected_count in (
+		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2),
+		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "failed", 2),
+		("HTTP 401 unauthorized", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 1),
+		("maximum context length exceeded", "mistralai/mistral-small-2603", "success", 1),
+	):
+		with tempfile.TemporaryDirectory(prefix="lite-mistral-overflow-") as temp_dir:
+			root = Path(temp_dir)
+			active_file = root / "active.txt"
+			active_file.write_text("mistralai/mistral-small-2603\n", encoding="utf-8")
+			prompt_file = root / "prompt.txt"
+			prompt_file.write_text("review this\n", encoding="utf-8")
+			proc = subprocess.run(
+				["bash", "-c", "set -euo pipefail\n" + script],
+				env={
+					**os.environ,
+					"PREVIOUS_REVIEWS_DIR": temp_dir,
+					"REVIEWER_ACTIVE_MODELS_FILE": str(active_file),
+					"PROMPT_FILE": str(prompt_file),
+					"CALLS_FILE": str(root / "calls.txt"),
+					"MISTRAL_ERROR": error,
+					"REVIEWER_MODELS": roster,
+					"FALLBACK_STATUS": fallback_status,
+					"REVIEW_TIER": "lite",
+					"PR_NUMBER": "6438",
+				},
+				capture_output=True,
+				text=True,
+				check=True,
+			)
+			assert len((root / "calls.txt").read_text(encoding="utf-8").splitlines()) == expected_count
+			assert f"RESULT={1 if expected_count == 2 and fallback_status == 'success' else 0}" in proc.stdout
+			if fallback_status == "success" and expected_count == 2:
+				assert "ACTIVE=openai/gpt-6-luna" in proc.stdout
+			else:
+				assert "ACTIVE=mistralai/mistral-small-2603" in proc.stdout
+
+
 def test_review_tier_disabled_keeps_risk_tier_selection_and_pick_guards_short_args() -> None:
 	"""Turning the size tiers off leaves the panel to the risk-tier resolver."""
 	reviewer_models = _workflow_reviewer_models()

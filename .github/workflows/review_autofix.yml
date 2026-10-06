@@ -2381,14 +2381,12 @@ jobs:
       #     trail of cancelled in-progress runs that cancel-in-progress=true
       #     used to cause. Hung runs are bounded by the timeout-minutes above.
       #
-      #   * No-PR claude/** reviewer-comment mode: cancel-in-progress=true.
-      #     With no PR/autofix loop to preserve, a new push makes the in-flight
-      #     reviewer panel stale; cancel it so only the latest SHA gets a
-      #     commit comment.
+      #   * Explicit no-PR reviewer-comment mode: cancel-in-progress=true.
+      #     With no PR/autofix loop to preserve, a newer explicit run cancels
+      #     the in-flight reviewer panel for the same branch.
       #
-      # Group key fallback to inputs.head_ref_override covers the no-PR
-      # claude-branch push path (review-claude-branch-push in
-      # internal-review.yml): PR_NUMBER is empty and inputs.pr_number is "",
+      # Group key fallback to inputs.head_ref_override covers an explicit
+      # no-PR review invocation: PR_NUMBER is empty and inputs.pr_number is "",
       # so without the head_ref_override fallback the group would collapse
       # to github.run_id (unique per run) and cancel-in-progress could never
       # match a prior run on the same branch. Using the branch name keeps
@@ -2477,12 +2475,12 @@ jobs:
       # reviewer panel + summariser, posts the consensus ledger as a PR
       # commit comment via scripts/post_review_comment.sh, and exits without
       # invoking the editor / commit / push / rb_judge / auto-merge tail.
-      # This is only for claude/** pushes with no open PR; PR-backed claude/**
-      # branches take the normal PR review path. Sourced from the gate output.
+      # The former claude/** push caller was removed; only an explicit
+      # invocation can enable this mode. PR-backed branches use the normal path.
       # See gate.
       CLAUDE_BRANCH_REVIEW_MODE: ${{ needs.gate.outputs.claude_branch_review }}
-      # No-PR claude-branch-review path overrides (push events on claude/**
-      # without an open PR).  Read by "Collect PR metadata" and
+      # No-PR claude-branch-review overrides for an explicit invocation.
+      # Read by "Collect PR metadata" and
       # "Checkout PR head branch" to synthesize PR_META_FILE / TARGET_BRANCH
       # without calling the GitHub PR API.  Empty strings are treated as
       # "not in no-PR mode" — the standard PR-API path runs instead.

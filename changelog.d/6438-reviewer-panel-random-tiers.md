@@ -11,7 +11,7 @@
 | Runs where mistral-small produced findings | 59% of 1,279 (minimax-m3: 63%, deepseek-v4-pro: 53%) |
 | Panel size by tier (unchanged) | lite 1, standard 4, full 6 |
 
-What this means for operators: review spend per run drops, and every panel model now sees small and mid-sized PRs. A repo that sets `vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS` keeps its pinned list, and a list naming `z-ai/glm-5.2` now fails open to the full panel with a warning, because glm is no longer on the panel. Mistral's context window is 262K tokens, against 1M for the rest of the panel. A review prompt larger than that fails mistral's slot only. The round still completes when at least half the active reviewers succeed, and mistral has no failback chain. `CLAUDE_BRANCH_PUSH_PR_GRACE_SECONDS` is no longer read.
+What this means for operators: review spend per run drops, and every panel model now sees small and mid-sized PRs. A repo that sets `vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS` keeps its pinned list, and a list naming `z-ai/glm-5.2` now fails open to the full panel with a warning, because glm is no longer on the panel. Mistral's context window is 262K tokens, against 1M for the rest of the panel. A context overflow fails its slot on standard/full tiers; if it was the only lite reviewer, the round retries with the live `openai/gpt-6-luna` slot and still requires a successful review. Without that model or if the retry fails, the round fails rather than silently passing without a reviewer. Mistral has no same-family failback chain. `CLAUDE_BRANCH_PUSH_PR_GRACE_SECONDS` is no longer read.
 
 ### For contributors
 
