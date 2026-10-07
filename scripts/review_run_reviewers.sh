@@ -1734,10 +1734,10 @@ resolve_review_tier_active_models() {
   # names (validated below).
   if [ -z "$(normalize_reviewer_model_list "${selected_raw}")" ]; then
     # Pool for the random pick: the whole live panel, except that an unpinned
-    # lite tier draws from the standard tier's reviewer list when that list is
-    # set and every slug in it is on the panel. With the defaults, lite then
-    # never picks a model the standard tier leaves out (the most expensive
-    # ones). A standard list naming an unknown slug falls back to the panel.
+    # lite tier draws from the standard tier's reviewer list when a repo sets
+    # that list and every slug in it is on the panel. The default list is
+    # empty, so both tiers draw from the whole panel. A standard list naming
+    # an unknown slug falls back to the panel.
     pick_pool_models=("${live_models[@]}")
     if [ "${tier}" = "lite" ] && [ -n "$(normalize_reviewer_model_list "${REVIEW_TIER_STANDARD_REVIEWER_SLUGS:-}")" ]; then
       while IFS= read -r pool_model; do
@@ -5262,6 +5262,35 @@ run_reviewer_pass() {
     esac
   done
 
+  # A skipped sole Mistral slot or a context overflow needs a successful
+  # larger-window reviewer before the PR can continue.
+  if [ "${#pass_models[@]}" -eq 1 ] \
+    && [ "${pass_models[0]}" = "mistralai/mistral-small-2603" ] && [ "${pass_successful}" -eq 0 ] \
+    && [ -f "${pass_status_files[0]}" ] \
+    && { [ "${sf_status}" = "skipped_unmapped" ] || [ "${sf_status}" = "skipped_open" ] || {
+      [ "${sf_status}" = "failed" ] \
+        && grep -Eiq 'context.{0,50}(exceed|overflow|too long|length is [0-9]+ tokens|window full)|exceed.{0,50}context|too many (input )?tokens|prompt (is )?too long' "${pass_log_files[0]}"
+    }; } \
+    && normalize_reviewer_model_list "${REVIEWER_MODELS}" | grep -Fxq 'openai/gpt-6-luna' \
+    && [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+    if ! reviewer_circuit_breaker_enabled || {
+      reviewer_health_dispatch_prepare "openai/gpt-6-luna"
+      [ "${REVIEWER_HEALTH_DISPATCH_DECISION}" != "skip_open" ]
+    }; then
+      echo "::warning::Sole reviewer Mistral was skipped or exceeded its context window; retrying with live openai/gpt-6-luna." >&2
+      run_reviewer "openai/gpt-6-luna" "openai_gpt-6-luna" "${pass_prefix}" "${pass_prompt}" "${pass_reasoning}" >&2
+      sf_status="$(cat "${PREVIOUS_REVIEWS_DIR}/status_${pass_prefix}_openai_gpt-6-luna.txt" 2>/dev/null || true)"
+      if [ "${sf_status}" = "success" ]; then
+        pass_successful=1
+        reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "openai/gpt-6-luna"
+      elif [ "${sf_status}" = "skipped_budget" ]; then
+        pass_budget_skipped=1
+        # A sole-slot context overflow is deferrable when GPT cannot start.
+        pass_hard_failures=0
+      fi
+    fi
+  fi
+
   if [ "${pass_budget_skipped}" -ne 0 ] && [ "${pass_hard_failures}" -eq 0 ]; then
     reviewer_request_partial_finalize "soft_deadline"
   fi
@@ -5643,7 +5672,7 @@ if [ "${reviewers_successful}" -eq 0 ]; then
         ;;
     esac
   done
-  if [ "${review_skip_only_statuses}" -gt 0 ] && [ "${review_hard_failures}" -eq 0 ]; then
+  if [ "$(wc -l < "${REVIEWER_ACTIVE_MODELS_FILE}" 2>/dev/null || echo 0)" -gt 1 ] && [ "${review_skip_only_statuses}" -gt 0 ] && [ "${review_hard_failures}" -eq 0 ]; then
     echo "::warning::Reviewer pass produced no successful findings; all review slots were skipped fail-open (cached-open or unmapped). Continuing with REVIEWERS_SUCCESSFUL=0."
     echo "REVIEWERS_SUCCESSFUL=0" >> "$GITHUB_ENV"
     exit 0

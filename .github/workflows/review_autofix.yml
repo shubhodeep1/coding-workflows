@@ -104,6 +104,7 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   UNATTENDED_PHASE: review_autofix
+  REVIEW_HEAD_GATE_STATUS_ENABLED: ${{ vars.REVIEW_HEAD_GATE_STATUS_ENABLED || 'true' }}
   # Resolve base-branch conflicts BEFORE the reviewer/editor spend when the
   # pre-review merge-topology gate sees a content conflict (default on).
   PRE_REVIEW_CONFLICT_RESOLVE_ENABLED: ${{ vars.PRE_REVIEW_CONFLICT_RESOLVE_ENABLED || 'true' }}
@@ -116,7 +117,7 @@ env:
   UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}
   REVIEWER_MODELS: |
     minimax/minimax-m3
-    z-ai/glm-5.2
+    mistralai/mistral-small-2603
     deepseek/deepseek-v4-pro
     google/gemini-3.1-flash-lite
     qwen/qwen3.7-plus
@@ -155,15 +156,15 @@ env:
   # Review tiers (scripts/review_run_reviewers.sh classify_review_tier): a diff
   # of <= REVIEW_TIER_LITE_MAX_LOC lines touching no protected path gets one
   # reviewer, any diff of <= REVIEW_TIER_STANDARD_MAX_LOC lines gets four, the
-  # rest the full panel. The standard tier defaults to four panel models
-  # (google/gemini-3.1-flash-lite and z-ai/glm-5.2 run only on the full
-  # panel). An empty lite slug draws one reviewer from the
-  # standard list, seeded by the PR number; set either variable to pin reviewers.
+  # rest the full panel. With both slug variables empty (the default), the
+  # lite and standard tiers draw their reviewers at random from the whole
+  # REVIEWER_MODELS panel, seeded by the PR number, so a PR keeps the same
+  # reviewers on every autofix round. Set either variable to pin reviewers.
   REVIEW_TIER_RESOLVER_ENABLED: ${{ vars.REVIEW_TIER_RESOLVER_ENABLED || 'true' }}
   REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}
   REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || '' }}
   REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}
-  REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna' }}
+  REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || '' }}
   REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}
   REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}
   REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}
@@ -466,6 +467,49 @@ jobs:
           fi
           echo "RETARGET_HELPER_VERIFIED=true" >> "$GITHUB_ENV"
 
+      - name: Checkout head-gate helper
+        id: checkout_head_gate_helper
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ steps.resolve_support.outputs.review_support_sha }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-head-gate-src
+          fetch-depth: 1
+          sparse-checkout: |
+            scripts/review_head_gate.sh
+            scripts/gh_helpers.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Verify head-gate helper identity
+        env:
+          WORKFLOW_REPOSITORY: ${{ steps.resolve_support.outputs.review_support_repo }}
+          WORKFLOW_REF: ${{ steps.resolve_support.outputs.review_support_ref }}
+          WORKFLOW_SHA: ${{ steps.resolve_support.outputs.review_support_sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED: ${{ vars.REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED || 'true' }}
+          CHECKOUT_OUTCOME: ${{ steps.checkout_head_gate_helper.outcome }}
+        run: |
+          set -euo pipefail
+          if [ "${CHECKOUT_OUTCOME}" != "success" ] || [ ! -f .codex-head-gate-src/scripts/review_head_gate.sh ] || [ ! -f .codex-head-gate-src/scripts/gh_helpers.sh ]; then
+            if [ "${EVENT_NAME}" = "pull_request" ] && [ "${EVENT_ACTION}" = "synchronize" ] && [ "${REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED}" != "false" ]; then
+              echo "::error::Required head-gate helper unavailable on synchronize."
+              exit 1
+            fi
+            echo "::warning::Head-gate helper unavailable; status publication skipped."
+            exit 0
+          fi
+          if [ "${WORKFLOW_REPOSITORY}" != "shubhodeep1/coding-workflows" ] ||
+             [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
+             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$ ]] ||
+             [ "$(git -C .codex-head-gate-src rev-parse HEAD 2>/dev/null)" != "${WORKFLOW_SHA}" ]; then
+            echo "::error::Unverified head-gate support checkout."
+            exit 1
+          fi
+          echo "HEAD_GATE_HELPER_VERIFIED=true" >> "$GITHUB_ENV"
+
       - name: Evaluate review gate
         id: evaluate
         env:
@@ -478,6 +522,8 @@ jobs:
           EVENT_ACTION: ${{ github.event.action }}
           PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED: ${{ vars.REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED || 'true' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           PR_IS_DRAFT: ${{ inputs.pr_is_draft }}
           PR_SKIP_AI: ${{ inputs.pr_skip_ai }}
           PR_TITLE: ${{ inputs.pr_title }}
@@ -570,6 +616,7 @@ jobs:
           pr_head_ref=""
           pr_base_ref=""
           pr_head_repo=""
+          pr_auto_merge_enabled=""
           pr_labels=""
           pr_additions=""
           pr_deletions=""
@@ -609,7 +656,7 @@ jobs:
             # suppression below), and changed_files (to verify the paginated
             # path list before either skip branch can run).
             if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
-              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), head_repo: (.head.repo.full_name // ""), head_sha: (.head.sha // ""), updated_at: (.updated_at // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
+              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), head_repo: (.head.repo.full_name // ""), head_sha: (.head.sha // ""), auto_merge_enabled: (if has("auto_merge") then (.auto_merge != null) else null end), updated_at: (.updated_at // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
               2>/dev/null)"; then
               pr_state="$(printf '%s' "${_pr_gate}" | jq -r '.state // ""' 2>/dev/null || echo "")"
               pr_merged="$(printf '%s' "${_pr_gate}" | jq -r 'if (.merged // false) then "true" else "false" end' 2>/dev/null || echo "false")"
@@ -617,6 +664,7 @@ jobs:
               pr_base_ref="$(printf '%s' "${_pr_gate}" | jq -r '.base_ref // ""' 2>/dev/null || echo "")"
               pr_head_repo="$(printf '%s' "${_pr_gate}" | jq -r '.head_repo // ""' 2>/dev/null || echo "")"
               pr_head_sha_gate="$(printf '%s' "${_pr_gate}" | jq -r '.head_sha // ""' 2>/dev/null || echo "")"
+              pr_auto_merge_enabled="$(printf '%s' "${_pr_gate}" | jq -r 'if .auto_merge_enabled == null then "" else (.auto_merge_enabled | tostring) end' 2>/dev/null || echo "")"
               pr_head_repo_gate="${pr_head_repo}"
               pr_base_ref_gate="$(printf '%s' "${_pr_gate}" | jq -r '.base_ref // ""' 2>/dev/null || echo "")"
               pr_updated_at_gate="$(printf '%s' "${_pr_gate}" | jq -r '.updated_at // ""' 2>/dev/null || echo "")"
@@ -631,6 +679,15 @@ jobs:
               fi
               if [ -z "$(printf '%s' "${pr_body_cached}" | tr -d '[:space:]')" ]; then
                 pr_body_cached="$(printf '%s' "${_pr_gate}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+              fi
+              # Withdraw an enrolled head before the rest of gate evaluation,
+              # reusing this PR read rather than fetching the PR a second time.
+              if [ "${HEAD_GATE_HELPER_VERIFIED:-false}" = "true" ] && [ "${EVENT_NAME}" = "pull_request" ] \
+                && { [ "${EVENT_ACTION}" = "opened" ] || [ "${EVENT_ACTION}" = "synchronize" ]; }; then
+                PR_EVENT_HEAD_SHA="${PR_HEAD_SHA:-}" GATE_HEAD_SHA="${pr_head_sha_gate}" \
+                  GATE_AUTO_MERGE_ENABLED="${pr_auto_merge_enabled}" DETERMINISTIC_SKIP=false \
+                  bash .codex-head-gate-src/scripts/review_head_gate.sh gate
+                echo "HEAD_GATE_EARLY_DONE=true" >> "${GITHUB_ENV}"
               fi
             fi
           fi
@@ -1631,6 +1688,7 @@ jobs:
           # exact head evaluated by this gate. Consumers fail closed when the
           # authenticated PR metadata did not provide a head SHA.
           echo "head_sha=${pr_head_sha_gate}" >> "${GITHUB_OUTPUT}"
+          echo "auto_merge_enabled=${pr_auto_merge_enabled}" >> "${GITHUB_OUTPUT}"
           echo "review_checkout_sha=${review_checkout_sha}" >> "${GITHUB_OUTPUT}"
           echo "retargeted_base_ref=${pr_base_ref_gate}" >> "${GITHUB_OUTPUT}"
           echo "retargeted_base_updated_at=${pr_updated_at_gate}" >> "${GITHUB_OUTPUT}"
@@ -1646,6 +1704,32 @@ jobs:
           echo "fingerprint_cap_already_applied=${FINGERPRINT_CAP_ALREADY_APPLIED}" >> "${GITHUB_OUTPUT}"
           echo "fingerprint_cap_marker_author_login=${gate_marker_author_login}" >> "${GITHUB_OUTPUT}"
 
+      - name: Withdraw stale auto-merge and publish head-gate status
+        id: head_gate
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
+          PR_EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GATE_HEAD_SHA: ${{ steps.evaluate.outputs.head_sha }}
+          GATE_AUTO_MERGE_ENABLED: ${{ steps.evaluate.outputs.auto_merge_enabled }}
+          DETERMINISTIC_SKIP: ${{ steps.evaluate.outputs.deterministic_skip }}
+          REVIEW_HEAD_GATE_STATUS_ENABLED: ${{ vars.REVIEW_HEAD_GATE_STATUS_ENABLED || 'true' }}
+          REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED: ${{ vars.REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED || 'true' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "${HEAD_GATE_HELPER_VERIFIED:-false}" != "true" ]; then
+            echo "::warning::Verified head-gate helper unavailable; skipping status publication."
+            exit 0
+          fi
+          if [ "${HEAD_GATE_EARLY_DONE:-false}" = "true" ]; then
+            # The first PR read already posted pending and withdrew enrollment.
+            # The late gate call now only publishes deterministic-skip success.
+            export EVENT_NAME=workflow_dispatch
+          fi
+          bash .codex-head-gate-src/scripts/review_head_gate.sh gate
       - name: Record GH_PAT budget at review gate end
         if: always()
         env:
@@ -2590,14 +2674,12 @@ jobs:
       #     trail of cancelled in-progress runs that cancel-in-progress=true
       #     used to cause. Hung runs are bounded by the timeout-minutes above.
       #
-      #   * No-PR claude/** reviewer-comment mode: cancel-in-progress=true.
-      #     With no PR/autofix loop to preserve, a new push makes the in-flight
-      #     reviewer panel stale; cancel it so only the latest SHA gets a
-      #     commit comment.
+      #   * Explicit no-PR reviewer-comment mode: cancel-in-progress=true.
+      #     With no PR/autofix loop to preserve, a newer explicit run cancels
+      #     the in-flight reviewer panel for the same branch.
       #
-      # Group key fallback to inputs.head_ref_override covers the no-PR
-      # claude-branch push path (review-claude-branch-push in
-      # internal-review.yml): PR_NUMBER is empty and inputs.pr_number is "",
+      # Group key fallback to inputs.head_ref_override covers an explicit
+      # no-PR review invocation: PR_NUMBER is empty and inputs.pr_number is "",
       # so without the head_ref_override fallback the group would collapse
       # to github.run_id (unique per run) and cancel-in-progress could never
       # match a prior run on the same branch. Using the branch name keeps
@@ -2645,7 +2727,7 @@ jobs:
       REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}
       REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || '' }}
       REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}
-      REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna' }}
+      REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || '' }}
       REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}
       REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}
       REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}
@@ -2690,12 +2772,12 @@ jobs:
       # reviewer panel + summariser, posts the consensus ledger as a PR
       # commit comment via scripts/post_review_comment.sh, and exits without
       # invoking the editor / commit / push / rb_judge / auto-merge tail.
-      # This is only for claude/** pushes with no open PR; PR-backed claude/**
-      # branches take the normal PR review path. Sourced from the gate output.
+      # The former claude/** push caller was removed; only an explicit
+      # invocation can enable this mode. PR-backed branches use the normal path.
       # See gate.
       CLAUDE_BRANCH_REVIEW_MODE: ${{ needs.gate.outputs.claude_branch_review }}
-      # No-PR claude-branch-review path overrides (push events on claude/**
-      # without an open PR).  Read by "Collect PR metadata" and
+      # No-PR claude-branch-review overrides for an explicit invocation.
+      # Read by "Collect PR metadata" and
       # "Checkout PR head branch" to synthesize PR_META_FILE / TARGET_BRANCH
       # without calling the GitHub PR API.  Empty strings are treated as
       # "not in no-PR mode" — the standard PR-API path runs instead.

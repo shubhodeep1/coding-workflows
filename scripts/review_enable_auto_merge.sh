@@ -25,6 +25,17 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=/dev/null
 source "${SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
 
+# shellcheck source=/dev/null
+if [ -f "${SCRIPT_DIR}/review_head_gate.sh" ]; then
+	source "${SCRIPT_DIR}/review_head_gate.sh" || true
+fi
+if ! type review_head_gate_post_status >/dev/null 2>&1; then
+	review_head_gate_post_status()
+	{
+		echo "::warning::review_head_gate.sh unavailable; leaving review status pending."
+	}
+fi
+
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
 record_auto_merge_ready_labels_allowed()
@@ -58,6 +69,7 @@ reviewed_head_is_current_for_labels()
 
 if [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
 	if reviewed_head_is_current_for_labels; then
+		review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success "review and security gate passed"
 		record_auto_merge_ready_labels_allowed "true"
 	fi
 	echo "Auto-merge disabled (set ENABLE_AUTO_MERGE=true to enable)."
@@ -103,6 +115,7 @@ if PR_LABELS_RAW="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issue
 	[ "${_label_err_file}" = /dev/null ] || rm -f "${_label_err_file}"
 	if printf '%s\n' "${PR_LABELS_RAW}" | grep -qx 'e2e-smoke-test'; then
 		if reviewed_head_is_current_for_labels; then
+			review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success "review and security gate passed"
 			record_auto_merge_ready_labels_allowed "true"
 		fi
 		echo "PR #${PR_NUMBER} carries 'e2e-smoke-test' label — auto-merge suppressed for the e2e gate's lifecycle."
@@ -230,6 +243,10 @@ fresh_merge_checks_ready()
 	fi
 	return 0
 }
+
+# This step runs only after a clean review tail and a non-holding security
+# pass; post for the verified head before any merge or manual-merge path.
+review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success "review and security gate passed"
 
 # Scoped opt-out for forward-merge fallback PRs opened by
 # forward-merge-stable-to-main.yml — these are routed AWAY from the

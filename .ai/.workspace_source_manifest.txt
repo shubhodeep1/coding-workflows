@@ -290,6 +290,8 @@ changelog.d/6413-phase-failure-heal-reports.md
 changelog.d/6420-release-gate-claude-parity.md
 changelog.d/6435-prompt-audit-claude-config.md
 changelog.d/6436-triage-omit-pr-agent-instructions.md
+changelog.d/6438-openrouter-mgmt-key-reads.md
+changelog.d/6438-reviewer-panel-random-tiers.md
 changelog.d/6455-rb-fix-sandbox-workspace.md
 changelog.d/6461-consolidator-opencode-sandbox.md
 changelog.d/6467-phase-report-provenance.md
@@ -903,7 +905,6 @@ tests/test_implement_pr_body_tracking_refs.py
 tests/test_implement_semble_contract.py
 tests/test_install_claude_action.py
 tests/test_integration_judge_scope_guard.py
-tests/test_internal_review_push_pr_grace.py
 tests/test_issue_pr_status_payload_fallback_contract.py
 tests/test_judge_semble_prefetch_contract.py
 tests/test_label_helpers_phase_transition_contract.py
