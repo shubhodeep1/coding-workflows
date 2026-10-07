@@ -509,7 +509,9 @@ def resolve_log_summary_engine(engine_script: Path | None, model_hint: str) -> s
 			timeout=CLAUDE_ENGINE_RESOLVE_TIMEOUT_SECONDS,
 			check=False,
 		)
-	except (OSError, subprocess.TimeoutExpired):
+	except (OSError, subprocess.TimeoutExpired) as exc:
+		reason = "resolve_timeout" if isinstance(exc, subprocess.TimeoutExpired) else "resolve_failed"
+		print(f"AI_ENGINE_FALLBACK role={LOG_SUMMARY_ROLE} reason={reason}", file=sys.stderr)
 		return "codex"
 	lines = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
 	if result.returncode == 0 and lines and lines[-1] == "claude":
