@@ -210,3 +210,50 @@ Projected distinct primary files or new modules—not files changed by this audi
 | Code modularization | ≈8 | Large |
 | Expression size reduction | ≈3 | Medium |
 | Medium/Low fixes | ≈7 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-10-07)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is authorized for direct implementation; `NEEDS_VERIFICATION` requires the stated checks; `RISKY_SKIP` must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+No findings.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **REUSE-001 — `RISKY_SKIP`**
+  - **Calls and endpoint:** `scripts/orchestrate_poll_process.sh:3256-3272` (`unblock_trusted_login`) and `scripts/orchestrate_poll_process.sh:26015-26030` (noop-cap identity check) both read `GET /user` for the authenticated login.
+  - **Current → proposed call count:** **2 → 1**, only on a tick where the first read succeeded before the noop-cap check; otherwise retain the existing call.
+  - **Evidence:** `UNBLOCK_TRUSTED_LOGIN_STATE="ok"` records a validated login, while the noop-cap path independently fetches `.login` and lowercases it.
+  - **Proposed fix:** Have the noop-cap path use a lowercased `UNBLOCK_TRUSTED_LOGIN` when its cache state is `ok`; retain its current `/user` lookup when the cache is unset or failed.
+  - **Safety rationale:** Both calls serve identity verification, an explicit `RISKY_SKIP` trigger; a cached failure must not suppress the later probe or change its dispatch decision.
+  - **Downstream signal:** Do not auto-implement. Manually verify token scope throughout the tick, call ordering, transient-failure recovery, and the noop-cap skip and warning outcomes before changing either probe.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: `RISKY_SKIP` — The proposed classifier change is inside a retry and rate-limit-aware path.
+- API-002: `RISKY_SKIP` — Marker discovery is paginated; replacing the fresh body GET also needs concurrency review.
+- API-003: `RISKY_SKIP` — The proposed replacement spans paginated comment and review reads with distinct artifact contracts.
+- BATCH-001: `RISKY_SKIP` — The calls sit in the poller’s merge-follow-up path, which defends against races; its comment read is paginated.
+- BATCH-002: `NEEDS_VERIFICATION` — Batched writes need partial-success and label-node-ID checks before replacing per-issue POSTs.
+- BATCH-003: `NEEDS_VERIFICATION` — Cross-repository selection must preserve the bounded list’s fields, ordering, and fallback behavior.
+
+### Summary Counts
+
+*Net-new findings only; Deep Audit cross-references are excluded.*
+
+| Tag | Count | IDs |
+|---|---:|---|
+| `SAFE_TO_MERGE` | 0 | — |
+| `NEEDS_VERIFICATION` | 0 | — |
+| `RISKY_SKIP` | 1 | REUSE-001 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
