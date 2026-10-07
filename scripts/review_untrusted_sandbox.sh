@@ -224,10 +224,20 @@ esac
 # closed (AI_ENGINE_FALLBACK_POLICY=capacity, the default; plan item 3e, D1).
 # AI_ENGINE_FALLBACK_POLICY=always keeps exit 75 for every reason.
 if [ "${engine}" = claude ]; then
+	# Mirror ai_engine_fallback's record so the job's report step sees it.
+	unsourced_fallback_record()
+	{
+		local rec_role rec_policy=capacity rec_action=refused rec_file="${AI_ENGINE_FALLBACK_RECORDS_FILE:-${RUNNER_TEMP:-/tmp}/ai-engine-fallback-records.tsv}"
+		rec_role="$(printf '%s' "$1" | tr -c 'A-Z0-9_' '_' | cut -c1-40)"
+		[[ "${rec_role}" =~ ^[A-Z] ]] || rec_role="UNKNOWN"
+		[ "${AI_ENGINE_FALLBACK_POLICY:-capacity}" = always ] && { rec_policy=always; rec_action=codex; }
+		[ -L "${rec_file}" ] || printf 'v1\t%s\t%s\t%s\tnon_capacity\t%s\t%s\n' "$(date -u +%s)" "${rec_role}" "$2" "${rec_action}" "${rec_policy}" >> "${rec_file}" 2>/dev/null || true
+	}
 	# Before ai_engine.sh is sourced the policy is decided inline.
 	sandbox_refuse_unsourced()
 	{
 		echo "AI_ENGINE_FALLBACK role=${claude_role} reason=$1" >&2
+		unsourced_fallback_record "${claude_role}" "$1"
 		[ "${AI_ENGINE_FALLBACK_POLICY:-capacity}" = always ] && exit 75
 		echo "::error::AI_ENGINE_FALLBACK_REFUSED role=${claude_role} reason=$1" >&2
 		exit 76

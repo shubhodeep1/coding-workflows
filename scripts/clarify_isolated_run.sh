@@ -160,10 +160,20 @@ fi
 # D1). AI_ENGINE_FALLBACK_POLICY=always keeps exit 75 for every reason.
 if [ "${engine}" = claude ]; then
 	engine_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	# Mirror ai_engine_fallback's record so the job's report step sees it.
+	unsourced_fallback_record()
+	{
+		local rec_role rec_policy=capacity rec_action=refused rec_file="${AI_ENGINE_FALLBACK_RECORDS_FILE:-${RUNNER_TEMP:-/tmp}/ai-engine-fallback-records.tsv}"
+		rec_role="$(printf '%s' "$1" | tr -c 'A-Z0-9_' '_' | cut -c1-40)"
+		[[ "${rec_role}" =~ ^[A-Z] ]] || rec_role="UNKNOWN"
+		[ "${AI_ENGINE_FALLBACK_POLICY:-capacity}" = always ] && { rec_policy=always; rec_action=codex; }
+		[ -L "${rec_file}" ] || printf 'v1\t%s\t%s\t%s\tnon_capacity\t%s\t%s\n' "$(date -u +%s)" "${rec_role}" "$2" "${rec_action}" "${rec_policy}" >> "${rec_file}" 2>/dev/null || true
+	}
 	for required in ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl; do
 		if [ ! -f "${engine_dir}/${required}" ]; then
 			# ai_engine.sh cannot be sourced: decide the policy inline.
 			echo "AI_ENGINE_FALLBACK role=${engine_role} reason=support_missing" >&2
+			unsourced_fallback_record "${engine_role}" support_missing
 			[ "${AI_ENGINE_FALLBACK_POLICY:-capacity}" = always ] && exit 75
 			echo "::error::AI_ENGINE_FALLBACK_REFUSED role=${engine_role} reason=support_missing" >&2
 			exit 76
