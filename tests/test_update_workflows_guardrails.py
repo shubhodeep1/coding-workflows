@@ -52,14 +52,16 @@ def test_profile_manifests_match_contracts() -> None:
 		"ai-review.yml",
 		"ai-issue-pr-status.yml",
 		"ai-cancel-on-pr-close.yml",
+		"ai-orchestrate-clarify-respond.yml",
 	]
-	standard = core + [
+	standard = core[:-1] + [
 		"ai-orchestrate.yml",
 		"ai-orchestrate-poll.yml",
-		"ai-orchestrate-clarify-respond.yml",
+		core[-1],
 		"ai-validate.yml",
 		"ai-sync-labels.yml",
 		"review_rb_judge_dispatch.yml",
+		"unblock_judge_dispatch.yml",
 	]
 	full = sorted(path.name for path in WORKFLOW_TEMPLATES_DIR.glob("*.yml"))
 
@@ -72,6 +74,9 @@ def test_profile_manifests_match_contracts() -> None:
 
 def test_install_profile_docs_and_agents_contracts() -> None:
 	readme = README_MD.read_text(encoding="utf-8")
+	manual_bootstrap = readme.split("### 2. Create wrapper workflows", 1)[1].split("#### Optional wrappers", 1)[0]
+	assert "ai-orchestrate-clarify-respond.yml" in manual_bootstrap
+	assert "STANDALONE_CLARIFY_RESPOND_ENABLED=false" in manual_bootstrap
 	assert "#### Install profiles" in readme
 	assert "`WORKFLOW_PROFILE` repository variable" in readme
 	assert "[`workflow-templates/profiles/core.txt`](workflow-templates/profiles/core.txt)" in readme
@@ -259,7 +264,7 @@ def test_wrapper_ref_renderer_contract() -> None:
 
 def test_every_wrapper_template_renders_to_an_immutable_ref() -> None:
 	templates = sorted(WORKFLOW_TEMPLATES_DIR.glob("*.yml"))
-	assert len(templates) == 17
+	assert len(templates) == 18
 	for template_path in templates:
 		rendered_text = pin_reusable_workflow_refs(
 			template_path.read_text(encoding="utf-8"),

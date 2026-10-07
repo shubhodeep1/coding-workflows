@@ -256,6 +256,7 @@ def test_consumer_sync_notification_predicate_matches_commit_predicate() -> None
 		"steps.update.outputs.has_updates == 'true'",
 		"steps.audit_gate.outputs.status == 'applied'",
 		"steps.claude_sync.outputs.claude_has_changes == 'true'",
+		"steps.retired_files.outputs.retired_has_changes == 'true'",
 		"steps.claude_md_sync.outputs.claude_md_changed == 'true'",
 		"steps.changelog_sync.outputs.changelog_assets_has_changes == 'true'",
 		"steps.changelog_assemble.outputs.changelog_assembled == 'true'",

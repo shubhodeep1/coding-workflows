@@ -22,6 +22,42 @@
 # SEMBLE_*_AVAILABLE env keys this script writes to GITHUB_ENV.
 
 set -euo pipefail
+SEMBLE_BUILD_START_MS="$(date +%s%3N)"
+SEMBLE_BUILD_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "${SEMBLE_BUILD_SCRIPT_DIR}/emit_event.sh" ]; then
+	source "${SEMBLE_BUILD_SCRIPT_DIR}/emit_event.sh"
+fi
+
+semble_bootstrap_event()
+{
+	local state="$1" reason="${2:-}" line run_field="" event_mode index_ms
+	event_mode="$(printf '%s' "${SEMBLE_BOOTSTRAP_MODE:-eager}" | tr '[:upper:]' '[:lower:]')"
+	case "${event_mode}" in lazy|eager) ;; *) event_mode=eager ;; esac
+	index_ms="$(( $(date +%s%3N) - SEMBLE_BUILD_START_MS ))"
+	if [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]] && [[ "${GITHUB_RUN_ATTEMPT:-1}" =~ ^[0-9]+$ ]]; then
+		run_field=" run=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT:-1}"
+	fi
+	line="SEMBLE_BOOTSTRAP mode=${event_mode} state=${state} install_ms=${SEMBLE_INSTALL_MS:-0} index_ms=${index_ms}${run_field}"
+	if [ -n "${reason}" ]; then
+		reason="$(printf '%s' "${reason%%:*}" | tr -c '[:alnum:]._-' '-')"
+		line="${line} reason=${reason}"
+	fi
+	printf '%s\n' "${line}" >&2
+	if declare -F emit_event >/dev/null 2>&1; then
+		local -a event_fields=("mode=${event_mode}" "state=${state}" "install_ms=${SEMBLE_INSTALL_MS:-0}" "index_ms=${index_ms}")
+		[ -z "${run_field}" ] || event_fields+=("${run_field# }")
+		[ -z "${reason}" ] || event_fields+=("reason=${reason}")
+		emit_event SEMBLE_BOOTSTRAP "${event_fields[@]}" || true
+	fi
+}
+
+semble_neutral_dir=""
+
+semble_python()
+(
+	cd -- "${semble_neutral_dir}" || return 1
+	PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 "${semble_python_path}" "$@"
+)
 
 log()
 {
@@ -97,6 +133,7 @@ mark_unavailable()
 	write_env_kv "SEMBLE_AVAILABLE" "false"
 	write_env_kv "SEMBLE_INDEX_AVAILABLE" "false"
 	write_env_kv "SEMBLE_INDEX_PATH" "${index_path}"
+	semble_bootstrap_event failed "${reason}"
 	exit 0
 }
 
@@ -113,7 +150,7 @@ build_index()
 	rm -rf "${index_path}" || true
 	mkdir -p "${wrapper_dir}" || true
 
-	if ! "${semble_python_path}" - "${repo_root}" "${index_path}" <<'PY'
+	if ! semble_python - "${repo_root}" "${index_path}" <<'PY'
 import pickle
 import sys
 from pathlib import Path
@@ -277,6 +314,21 @@ main()
 	local semble_python_path=""
 
 	resolve_paths
+	if ! repo_root="$(cd -- "${repo_root}" 2>/dev/null && pwd)"; then
+		mark_unavailable "repo-root-unavailable"
+	fi
+	semble_neutral_dir="$(mktemp -d 2>/dev/null || true)"
+	if [ -z "${semble_neutral_dir}" ]; then
+		mark_unavailable "neutral-cwd-unavailable"
+	fi
+	trap 'rm -rf -- "${semble_neutral_dir}"' EXIT
+	# The interpreter runs from the neutral cwd, including when the index
+	# destination was supplied relative to the original workspace.
+	if ! index_path="$(realpath -m -- "${index_path}")" ||
+	   ! wrapper_dir="$(realpath -m -- "${wrapper_dir}")"; then
+		mark_unavailable "path-resolution-failed"
+	fi
+	wrapper_path="${wrapper_dir}/semble"
 
 	# Resolve the python interpreter once so build_index() and the generated
 	# wrapper agree with whatever install_semble.sh used. SEMBLE_PYTHON_BIN
@@ -288,10 +340,10 @@ main()
 		mark_unavailable "python-interpreter-missing:${semble_python_bin}"
 	fi
 
-	if ! "${semble_python_path}" -c "import semble" >/dev/null 2>&1; then
+	if ! semble_python -c "import semble" >/dev/null 2>&1; then
 		mark_unavailable "semble-python-module-missing"
 	fi
-	if ! "${semble_python_path}" -c "import bm25s" >/dev/null 2>&1; then
+	if ! semble_python -c "import bm25s" >/dev/null 2>&1; then
 		mark_unavailable "bm25s-missing"
 	fi
 	# Validate the import the *generated wrapper* needs at query time.
@@ -301,7 +353,7 @@ main()
 	# the index would build successfully and `SEMBLE_INDEX_AVAILABLE=true`
 	# would be written, only for `semble query` to ModuleNotFoundError at
 	# runtime. Catching it here keeps the build/query contract honest.
-	if ! "${semble_python_path}" -c "from semble.search import search_bm25" >/dev/null 2>&1; then
+	if ! semble_python -c "from semble.search import search_bm25" >/dev/null 2>&1; then
 		mark_unavailable "semble-search-import-missing"
 	fi
 
@@ -314,6 +366,7 @@ main()
 	write_env_kv "SEMBLE_INDEX_PATH" "${index_path}"
 	write_env_kv "SEMBLE_BIN" "${wrapper_path}"
 	log "Semble wrapper ready at ${wrapper_path} (index=${index_path})."
+	semble_bootstrap_event ready
 }
 
 main "$@"

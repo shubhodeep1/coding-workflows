@@ -3,7 +3,7 @@
 
 Catches three categories of references:
 
-  1. Explicit ``scripts/<name>.<ext>`` substrings (sh, py, json, txt, md).
+  1. Explicit ``scripts/<name>.<ext>`` substrings (sh, py, json, txt, md, tmpl).
   2. ``${SUPPORT_SCRIPTS_DIR}/<name>.<ext>`` substrings.
   3. Bare names enumerated inside a ``for f in … ; do … done`` block whose
      body actually fetches/uses ``scripts/${f}``.  This is the bootstrap
@@ -40,11 +40,11 @@ from typing import Iterable
 OPTIONAL_REFS = frozenset({"render_prompt.py"})
 EXTRA_REF_HOLDER_FILES = (pathlib.Path("scripts") / "stage_workflow_support.sh",)
 
-EXPLICIT_REF = re.compile(r"scripts/([a-zA-Z0-9_.\-]+\.(?:sh|py|json|txt|md))")
+EXPLICIT_REF = re.compile(r"scripts/([a-zA-Z0-9_.\-]+\.(?:sh|py|json|txt|md|tmpl))")
 SCRIPTS_VAR_REF = re.compile(
-	r"\$\{SUPPORT_SCRIPTS_DIR\}/([a-zA-Z0-9_.\-]+\.(?:sh|py|json|txt|md))"
+	r"\$\{SUPPORT_SCRIPTS_DIR\}/([a-zA-Z0-9_.\-]+\.(?:sh|py|json|txt|md|tmpl))"
 )
-BARE_NAME = re.compile(r"^[a-zA-Z0-9_.\-]+\.(?:sh|py|json|txt|md)$")
+BARE_NAME = re.compile(r"^[a-zA-Z0-9_.\-]+\.(?:sh|py|json|txt|md|tmpl)$")
 SHELL_ASSIGNMENT = re.compile(r'^\s*([A-Z0-9_]+)="([^"\n]*)"', re.MULTILINE)
 VARIABLE_REF = re.compile(r"^\$(?:\{([A-Z0-9_]+)\}|([A-Z0-9_]+))$")
 FOR_LOOP = re.compile(

@@ -17,6 +17,9 @@ aggregates token usage per workflow. Four patterns are recognised:
   4. Serena / generic MCP telemetry (`SERENA_QUERY`, `SERENA_FALLBACK`,
      `SERENA_PROBE`, plus `<NAME>_QUERY|FALLBACK|PROBE` for other MCP
      servers).
+  5. Claude Code CLI stream-json `result` events (`{"type":"result", ...,
+     "total_cost_usd": N, "usage": {...}, "modelUsage": {...}}`) — the usage
+     line `scripts/ai_engine.sh` `claude_run` prints for each Claude run.
 
 Output: stdout markdown table + per-run JSON file.
 
@@ -82,8 +85,55 @@ OPENROUTER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Claude Code CLI stream-json `result` event (pattern 5). The JSON object
+# starts at the first `{` of the line, after the Actions timestamp.
+CLAUDE_RESULT_MARKER_RE = re.compile(r'"type"\s*:\s*"result"')
+CLAUDE_USAGE_FIELDS = (
+    ("input_tokens", "claude_input_tokens"),
+    ("output_tokens", "claude_output_tokens"),
+    ("cache_creation_input_tokens", "claude_cache_write_tokens"),
+    ("cache_read_input_tokens", "claude_cache_read_tokens"),
+)
+CLAUDE_COUNT_KEYS = (
+    "claude_calls",
+    "claude_input_tokens",
+    "claude_output_tokens",
+    "claude_cache_write_tokens",
+    "claude_cache_read_tokens",
+)
+
+
+def parse_claude_result_line(line: str) -> Optional[dict[str, Any]]:
+    """The stream-json `result` event on one log line, or None.
+
+    Only a JSON object whose `type` is `result` and that carries a `usage`
+    object counts; any other JSON (or text) on the line is ignored.
+    """
+    if not CLAUDE_RESULT_MARKER_RE.search(line):
+        return None
+    start = line.find("{")
+    if start < 0:
+        return None
+    try:
+        event = json.loads(line[start:])
+    except ValueError:
+        return None
+    if not isinstance(event, dict) or event.get("type") != "result":
+        return None
+    if not isinstance(event.get("usage"), dict):
+        return None
+    return event
+
+
+def _claude_cost(value: Any) -> float:
+    """A non-negative, finite USD cost; anything else counts as 0."""
+    cost = _to_float(value, 0.0)
+    return cost if cost == cost and 0.0 <= cost < float("inf") else 0.0
+
+
 SEMBLE_QUERY_RE = re.compile(r"(?:^|\s)SEMBLE_QUERY(?:\s|$)")
 SEMBLE_FALLBACK_RE = re.compile(r"(?:^|\s)SEMBLE_FALLBACK(?:\s|$)")
+SEMBLE_BOOTSTRAP_RE = re.compile(r"(?:^|\s)SEMBLE_BOOTSTRAP(?:\s|$)")
 SERENA_QUERY_RE = re.compile(r"(?:^|\s)SERENA_QUERY(?:\s|$)")
 SERENA_FALLBACK_RE = re.compile(r"(?:^|\s)SERENA_FALLBACK(?:\s|$)")
 SERENA_PROBE_RE = re.compile(r"(?:^|\s)SERENA_PROBE(?:\s|$)")
@@ -125,6 +175,13 @@ RUN_COST_TELEMETRY_FIELDS = (
     "semble_fallbacks",
     "semble_contract_test_fallbacks",
     "semble_runtime_fallbacks",
+    "semble_bootstraps",
+    "semble_bootstraps_failed",
+    "semble_bootstraps_unused",
+    "semble_bootstrap_ms_total",
+    "semble_sources_total",
+    "semble_static_dup_bytes_total",
+    "semble_echo_lines_dropped",
     "serena_query_calls",
     "serena_query_response_bytes",
     "serena_query_tool_calls",
@@ -155,6 +212,13 @@ AGGREGATABLE_COST_FIELDS = (
     "semble_fallbacks",
     "semble_contract_test_fallbacks",
     "semble_runtime_fallbacks",
+    "semble_bootstraps",
+    "semble_bootstraps_failed",
+    "semble_bootstraps_unused",
+    "semble_bootstrap_ms_total",
+    "semble_sources_total",
+    "semble_static_dup_bytes_total",
+    "semble_echo_lines_dropped",
     "serena_query_calls",
     "serena_query_response_bytes",
     "serena_query_tool_calls",
@@ -180,6 +244,13 @@ def _is_valid_mcp_numeric_field(line: str, field: str) -> bool:
 
 def _validated_mcp_telemetry_event(line: str) -> Optional[tuple[str, str]]:
     """Return the canonical MCP server/event pair, or None for malformed text."""
+    if SEMBLE_BOOTSTRAP_RE.search(line):
+        if (_extract_log_field(line, "mode") in ("lazy", "eager")
+                and _extract_log_field(line, "state") in ("ready", "failed")
+                and _is_valid_mcp_numeric_field(line, "install_ms")
+                and _is_valid_mcp_numeric_field(line, "index_ms")):
+            return ("SEMBLE", "bootstrap")
+        return None
     if SEMBLE_QUERY_RE.search(line):
         if (
             _extract_log_field(line, "target")
@@ -488,8 +559,8 @@ def build_context_budget_warn_line_for_file(
     return format_context_budget_warn_line(warning)
 
 
-def build_run_cost_telemetry(log: str, *, fallback_wall_clock_ms: int | None = None) -> dict[str, Any]:
-    parsed = parse_log(log, fallback_wall_clock_ms=fallback_wall_clock_ms)
+def build_run_cost_telemetry(log: str, *, fallback_wall_clock_ms: int | None = None, run_key: str | None = None) -> dict[str, Any]:
+    parsed = parse_log(log, fallback_wall_clock_ms=fallback_wall_clock_ms, run_key=run_key)
     telemetry = {field: parsed[field] for field in RUN_COST_TELEMETRY_FIELDS}
     telemetry["log_parsed"] = True
     return telemetry
@@ -553,7 +624,7 @@ def list_runs(repo: str, workflow: str, limit: int, since: Optional[str]) -> Lis
         "--workflow", workflow,
         "--limit", str(limit),
         "--json",
-        "databaseId,workflowName,createdAt,startedAt,updatedAt,conclusion,event,headBranch,status",
+        "databaseId,attempt,workflowName,createdAt,startedAt,updatedAt,conclusion,event,headBranch,status",
     ])
     if not out:
         return []
@@ -563,11 +634,18 @@ def list_runs(repo: str, workflow: str, limit: int, since: Optional[str]) -> Lis
     return runs
 
 
-def parse_log(log: str, *, fallback_wall_clock_ms: int | None = None) -> dict:
+def parse_log(log: str, *, fallback_wall_clock_ms: int | None = None, run_key: str | None = None) -> dict:
     """Return aggregated token counts and per-call breakdown for one run."""
     out = {
         "codex_tokens_used": 0,
         "codex_calls": 0,
+        "claude_calls": 0,
+        "claude_input_tokens": 0,
+        "claude_output_tokens": 0,
+        "claude_cache_write_tokens": 0,
+        "claude_cache_read_tokens": 0,
+        "claude_cost_usd": 0.0,
+        "claude_models": defaultdict(lambda: defaultdict(float)),
         "or_prompt_tokens": 0,
         "or_completion_tokens": 0,
         "or_total_tokens": 0,
@@ -582,6 +660,13 @@ def parse_log(log: str, *, fallback_wall_clock_ms: int | None = None) -> dict:
         "semble_fallbacks": 0,
         "semble_contract_test_fallbacks": 0,
         "semble_runtime_fallbacks": 0,
+        "semble_bootstraps": 0,
+        "semble_bootstraps_failed": 0,
+        "semble_bootstraps_unused": 0,
+        "semble_bootstrap_ms_total": 0,
+        "semble_sources_total": 0,
+        "semble_static_dup_bytes_total": 0,
+        "semble_echo_lines_dropped": 0,
         "semble_targets": defaultdict(lambda: defaultdict(int)),
         "serena_query_calls": 0,
         "serena_query_response_bytes": 0,
@@ -637,6 +722,32 @@ def parse_log(log: str, *, fallback_wall_clock_ms: int | None = None) -> dict:
         out["or_phases"][phase]["calls"] += 1
 
     for line in log.splitlines():
+        if run_key and (SEMBLE_QUERY_RE.search(line) or SEMBLE_FALLBACK_RE.search(line) or SEMBLE_BOOTSTRAP_RE.search(line) or SERENA_QUERY_RE.search(line) or SERENA_FALLBACK_RE.search(line) or SERENA_PROBE_RE.search(line)):
+            line_run = _extract_log_field(line, "run")
+            if line_run is not None and line_run != run_key:
+                out["semble_echo_lines_dropped"] += 1
+                continue
+        claude_event = parse_claude_result_line(line)
+        if claude_event is not None:
+            usage = claude_event["usage"]
+            out["claude_calls"] += 1
+            for field, key in CLAUDE_USAGE_FIELDS:
+                out[key] += _to_int(usage.get(field), 0)
+            out["claude_cost_usd"] += _claude_cost(claude_event.get("total_cost_usd"))
+            model_usage = claude_event.get("modelUsage")
+            if isinstance(model_usage, dict):
+                for model, vals in model_usage.items():
+                    if not isinstance(vals, dict):
+                        continue
+                    bucket = out["claude_models"][str(model)]
+                    bucket["calls"] += 1
+                    bucket["input_tokens"] += _to_int(vals.get("inputTokens"), 0)
+                    bucket["output_tokens"] += _to_int(vals.get("outputTokens"), 0)
+                    bucket["cache_read_tokens"] += _to_int(vals.get("cacheReadInputTokens"), 0)
+                    bucket["cache_write_tokens"] += _to_int(vals.get("cacheCreationInputTokens"), 0)
+                    bucket["cost_usd"] += _claude_cost(vals.get("costUSD"))
+            continue
+
         if BREAK_GLASS_RE.search(line):
             out["break_glass_count"] += 1
 
@@ -649,8 +760,14 @@ def parse_log(log: str, *, fallback_wall_clock_ms: int | None = None) -> dict:
             logged_bytes = _to_int(_extract_log_field(line, "bytes") or "0")
             out["semble_query_calls"] += 1
             out["semble_query_bytes"] += logged_bytes
+            out["semble_sources_total"] += _to_int(_extract_log_field(line, "sources") or "0")
+            out["semble_static_dup_bytes_total"] += _to_int(_extract_log_field(line, "static_dup_bytes") or "0")
             out["semble_targets"][target]["query_calls"] += 1
             out["semble_targets"][target]["bytes"] += logged_bytes
+        elif validated_mcp_event == ("SEMBLE", "bootstrap"):
+            out["semble_bootstraps"] += 1
+            out["semble_bootstraps_failed"] += int(_extract_log_field(line, "state") == "failed")
+            out["semble_bootstrap_ms_total"] += _to_int(_extract_log_field(line, "install_ms") or "0") + _to_int(_extract_log_field(line, "index_ms") or "0")
         elif validated_mcp_event == ("SEMBLE", "fallback"):
             target = _extract_log_field(line, "target") or "unknown"
             out["semble_fallbacks"] += 1
@@ -712,11 +829,15 @@ def parse_log(log: str, *, fallback_wall_clock_ms: int | None = None) -> dict:
     if fallback_wall_clock_ms and fallback_wall_clock_ms > 0:
         wall_clock_samples_ms.append(fallback_wall_clock_ms)
 
+    if out["semble_query_calls"] == 0:
+        out["semble_bootstraps_unused"] = out["semble_bootstraps"]
     out["cache_hit_rate"] = compute_cache_hit_rate(out)
     out["wall_clock_p50_ms"] = _percentile_int(wall_clock_samples_ms, 50)
     out["wall_clock_p99_ms"] = _percentile_int(wall_clock_samples_ms, 99)
 
     out["or_phases"] = {p: dict(v) for p, v in out["or_phases"].items()}
+    out["claude_cost_usd"] = round(out["claude_cost_usd"], 6)
+    out["claude_models"] = {m: dict(v) for m, v in out["claude_models"].items()}
     out["semble_targets"] = {p: dict(v) for p, v in out["semble_targets"].items()}
     out["serena_targets"] = {p: dict(v) for p, v in out["serena_targets"].items()}
     out["serena_tools"] = {p: dict(v) for p, v in out["serena_tools"].items()}
@@ -773,6 +894,13 @@ def main() -> int:
             "runs_with_data": 0,
             "codex_tokens_used": 0,
             "codex_calls": 0,
+            "claude_calls": 0,
+            "claude_input_tokens": 0,
+            "claude_output_tokens": 0,
+            "claude_cache_write_tokens": 0,
+            "claude_cache_read_tokens": 0,
+            "claude_cost_usd": 0.0,
+            "claude_models": defaultdict(lambda: defaultdict(float)),
             "or_prompt_tokens": 0,
             "or_completion_tokens": 0,
             "or_total_tokens": 0,
@@ -787,6 +915,13 @@ def main() -> int:
             "semble_fallbacks": 0,
             "semble_contract_test_fallbacks": 0,
             "semble_runtime_fallbacks": 0,
+            "semble_bootstraps": 0,
+            "semble_bootstraps_failed": 0,
+            "semble_bootstraps_unused": 0,
+            "semble_bootstrap_ms_total": 0,
+            "semble_sources_total": 0,
+            "semble_static_dup_bytes_total": 0,
+            "semble_echo_lines_dropped": 0,
             "semble_targets": defaultdict(lambda: defaultdict(int)),
             "serena_query_calls": 0,
             "serena_query_response_bytes": 0,
@@ -819,12 +954,16 @@ def main() -> int:
                 sys.stderr.write("skip (log unavailable)\n")
                 continue
             fallback_wall_clock_ms = _duration_ms_from_run(r)
-            parsed = parse_log(log, fallback_wall_clock_ms=fallback_wall_clock_ms)
+            attempt = r.get("attempt")
+            run_key = f"{rid}-{attempt}" if type(attempt) is int and attempt > 0 else None
+            parsed = parse_log(log, fallback_wall_clock_ms=fallback_wall_clock_ms, run_key=run_key)
             if (
                 parsed["codex_tokens_used"]
+                or parsed["claude_calls"]
                 or parsed["or_calls"]
                 or parsed["semble_query_calls"]
                 or parsed["semble_fallbacks"]
+                or parsed["semble_bootstraps"]
                 or parsed["serena_query_calls"]
                 or parsed["serena_fallbacks"]
                 or parsed["serena_probe_ok"]
@@ -844,12 +983,21 @@ def main() -> int:
                       "or_usage_unavailable_calls", "semble_query_calls",
                       "semble_query_bytes", "semble_fallbacks",
                       "semble_contract_test_fallbacks", "semble_runtime_fallbacks",
+                      "semble_bootstraps", "semble_bootstraps_failed", "semble_bootstraps_unused",
+                      "semble_bootstrap_ms_total", "semble_sources_total",
+                      "semble_static_dup_bytes_total", "semble_echo_lines_dropped",
                       "serena_query_calls", "serena_query_response_bytes",
                       "serena_query_tool_calls", "serena_query_ms",
                       "serena_fallbacks", "serena_probe_ok",
                       "serena_probe_failed", "serena_probe_skipped",
                       "break_glass_count", "context_budget_warn_count"):
                 agg[k] += parsed[k]
+            for k in CLAUDE_COUNT_KEYS:
+                agg[k] += parsed[k]
+            agg["claude_cost_usd"] += parsed["claude_cost_usd"]
+            for model, vals in parsed["claude_models"].items():
+                for k, v in vals.items():
+                    agg["claude_models"][model][k] += v
             for phase, vals in parsed["or_phases"].items():
                 for k, v in vals.items():
                     agg["or_phases"][phase][k] += v
@@ -880,6 +1028,9 @@ def main() -> int:
                     "or_usage_available_calls", "or_usage_unavailable_calls",
                     "semble_query_calls", "semble_query_bytes", "semble_fallbacks",
                     "semble_contract_test_fallbacks", "semble_runtime_fallbacks",
+                    "semble_bootstraps", "semble_bootstraps_failed", "semble_bootstraps_unused",
+                    "semble_bootstrap_ms_total", "semble_sources_total",
+                    "semble_static_dup_bytes_total", "semble_echo_lines_dropped",
                     "serena_query_calls", "serena_query_response_bytes",
                     "serena_query_tool_calls", "serena_query_ms",
                     "serena_fallbacks", "serena_probe_ok",
@@ -887,6 +1038,9 @@ def main() -> int:
                     "break_glass_count", "context_budget_warn_count",
                     "cache_hit_rate", "wall_clock_p50_ms", "wall_clock_p99_ms",
                 )},
+                **{k: parsed[k] for k in CLAUDE_COUNT_KEYS},
+                "claude_cost_usd": parsed["claude_cost_usd"],
+                "claude_models": parsed["claude_models"],
                 "semble_targets": parsed["semble_targets"],
                 "serena_targets": parsed["serena_targets"],
                 "serena_tools": parsed["serena_tools"],
@@ -914,6 +1068,8 @@ def main() -> int:
         agg["wall_clock_p99_ms"] = _percentile_int(agg["wall_clock_samples_ms"], 99)
         agg.pop("wall_clock_samples_ms", None)
         agg["or_phases"] = {p: dict(v) for p, v in agg["or_phases"].items()}
+        agg["claude_cost_usd"] = round(agg["claude_cost_usd"], 6)
+        agg["claude_models"] = {m: dict(v) for m, v in agg["claude_models"].items()}
         agg["semble_targets"] = {p: dict(v) for p, v in agg["semble_targets"].items()}
         agg["serena_targets"] = {p: dict(v) for p, v in agg["serena_targets"].items()}
         agg["serena_tools"] = {p: dict(v) for p, v in agg["serena_tools"].items()}
@@ -945,6 +1101,20 @@ def main() -> int:
             f"{fmt(a['context_budget_warn_count'])} |"
         )
 
+    claude_workflows = [wf for wf, a in per_wf.items() if a["claude_calls"]]
+    if claude_workflows:
+        print("\n## Claude engine usage\n")
+        print("| Workflow | claude_calls | input | output | cache_write | cache_read | cost_usd |")
+        print("|---|---:|---:|---:|---:|---:|---:|")
+        for wf in claude_workflows:
+            a = per_wf[wf]
+            print(
+                f"| {wf} | {fmt(a['claude_calls'])} | {fmt(a['claude_input_tokens'])} | "
+                f"{fmt(a['claude_output_tokens'])} | {fmt(a['claude_cache_write_tokens'])} | "
+                f"{fmt(a['claude_cache_read_tokens'])} | {a['claude_cost_usd']:.4f} |"
+            )
+        print()
+
     # OpenRouter phase breakdown (review_autofix only emits phases)
     or_workflows = [wf for wf, a in per_wf.items() if a["or_phases"]]
     if or_workflows:
@@ -964,7 +1134,7 @@ def main() -> int:
 
     semble_workflows = [
         wf for wf, a in per_wf.items()
-        if a["semble_query_calls"] or a["semble_fallbacks"]
+        if a["semble_query_calls"] or a["semble_fallbacks"] or a["semble_bootstraps"]
     ]
     if semble_workflows:
         print("\n## Semble telemetry breakdown\n")
@@ -977,6 +1147,15 @@ def main() -> int:
                 f"{fmt(a['semble_query_bytes'])} | {fmt(a['semble_fallbacks'])} | "
                 f"{fmt(a['semble_contract_test_fallbacks'])} | {fmt(a['semble_runtime_fallbacks'])} |"
             )
+
+        print("\n| Workflow | bootstraps | failed | unused | bootstrap_ms | sources | static_dup_bytes | echo_lines_dropped |")
+        print("|---|---:|---:|---:|---:|---:|---:|---:|")
+        for wf in semble_workflows:
+            a = per_wf[wf]
+            print(f"| {wf} | {fmt(a['semble_bootstraps'])} | {fmt(a['semble_bootstraps_failed'])} | "
+                  f"{fmt(a['semble_bootstraps_unused'])} | {fmt(a['semble_bootstrap_ms_total'])} | "
+                  f"{fmt(a['semble_sources_total'])} | {fmt(a['semble_static_dup_bytes_total'])} | "
+                  f"{fmt(a['semble_echo_lines_dropped'])} |")
 
         print()
         for wf in semble_workflows:

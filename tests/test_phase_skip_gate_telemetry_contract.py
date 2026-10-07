@@ -18,7 +18,6 @@ PLAN_WF = REPO_ROOT / ".github" / "workflows" / "plan.yml"
 IMPLEMENT_WF = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 ORCH_CLARIFY_RESPOND_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate_clarify_respond.yml"
 ORCH_PARSE_ANSWER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_parse_and_post_answer.sh"
-WORKSPACE_SOURCE_MANIFEST = REPO_ROOT / ".ai" / ".workspace_source_manifest.txt"
 CI_WF = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 AGENTS_MD = REPO_ROOT / "agents.md"
 
@@ -88,7 +87,9 @@ def test_clarify_opened_route_checks_fetched_provenance() -> None:
 			("issue_comment", "created", "User", "NONE", "outsider", False, "open", False, False),
 		]
 		for event_name, event_action, user_type, association, login, orchestrator, state, skip, fast_path in cases:
-			payload = {"state": state, "user": {"type": user_type, "login": login}, "labels": [], "author_association": association}
+			# The fetched issue carries its number and repository_url; the
+			# security dependency check (issue #4934) verifies both.
+			payload = {"number": 123, "repository_url": "https://api.github.com/repos/o/r", "state": state, "user": {"type": user_type, "login": login}, "labels": [], "author_association": association}
 			if orchestrator:
 				payload["labels"] = [{"name": "ai:orchestrator-managed"}]
 			meta_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -104,8 +105,12 @@ def test_clarify_opened_route_checks_fetched_provenance() -> None:
 				"COMMENT_BODY": "/reclarify" if event_name == "issue_comment" else "",
 				"RUN_ID": "1",
 				"ISSUE_NUMBER": "123",
+				# The step env sets it from vars.AI_ISSUE_IMPLEMENTER (empty when unset).
+				"AI_ISSUE_IMPLEMENTER": "",
 			})
-			result = subprocess.run(["bash", "-c", step["run"]], env=env, text=True, capture_output=True, check=True)
+			# Actions substitutes the expression before bash runs the step.
+			script = step["run"].replace("${{ github.repository }}", "o/r")
+			result = subprocess.run(["bash", "-c", script], env=env, text=True, capture_output=True, check=True, cwd=REPO_ROOT)
 			outputs = output_path.read_text(encoding="utf-8")
 			assert f"skip_codex={str(skip).lower()}" in outputs, result.stdout
 			assert f"orchestrator_fast_path={str(fast_path).lower()}" in outputs, result.stdout
@@ -210,7 +215,11 @@ def test_orchestrate_clarify_respond_reuses_cached_issue_payloads_before_live_fa
 	assert "ISSUE_META=\"$(gh_retry gh api \"repos/${{ github.repository }}/issues/${ISSUE_NUMBER}\")\"" in fetch_block
 	assert 'if [ -n "${TRACKING_PAYLOAD_FILE:-}" ] && [ -s "${TRACKING_PAYLOAD_FILE}" ] && jq -e --arg tracking_num "${TRACKING_NUM}"' in fetch_block
 	assert "TRACKING_BODY=\"$(gh_retry gh api \"repos/${{ github.repository }}/issues/${TRACKING_NUM}\" --jq '.body // \"\"')\"" in fetch_block
-	assert "scripts/orchestrate_parse_and_post_answer.sh" in _read(WORKSPACE_SOURCE_MANIFEST)
+	assert ORCH_PARSE_ANSWER_SCRIPT.is_file()
+	assert subprocess.run(
+		["git", "ls-files", "--error-unmatch", "--", "scripts/orchestrate_parse_and_post_answer.sh"],
+		cwd=REPO_ROOT, capture_output=True, check=False,
+	).returncode == 0
 
 
 def test_agents_and_ci_register_phase_gate_contract() -> None:

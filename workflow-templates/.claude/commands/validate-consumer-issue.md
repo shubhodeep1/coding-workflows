@@ -6,7 +6,7 @@ $ARGUMENTS
 
 1. **Parse `$ARGUMENTS`.** Separate the **reported issue** (symptom, where it surfaced) from the **proposed fix** (a diff, a `file:line` pointer, or prose). Fetch any referenced issue / PR via `mcp__github__issue_read` / `pull_request_read` (or `gh`). If either half is missing, stop and ask. Determine **`THIS_REPO`** — the `owner/repo` the command runs in (the SessionStart hook prints the resolved slug).
 
-2. **Read project context.** Read this repo's `README.md`, `agents.md`, and `CLAUDE.md` (and `/db/contracts/*.yml` if a MongoDB collection is implicated). Read the actual code the report points at — never reason from the report's description alone.
+2. **Read project context.** `CLAUDE.md` is already loaded; search `README.md` and `agents.md` (or `AGENTS.md`, whichever casing this repo uses) for the sections relevant to the report and read those instead of both files end to end. If a MongoDB collection is implicated, read the relevant `/db/contracts/*.yml`. Read the actual code the report points at — never reason from the report's description alone.
 
 3. **Classify the side that owns the root cause.**
    - **`[CONSUMER-INTERNAL]`** — the defect is in this repo's own code / config / wrapper workflows. Validate at `THIS_REPO@main`. A valid fix lands **here** (read-write: this session can push).

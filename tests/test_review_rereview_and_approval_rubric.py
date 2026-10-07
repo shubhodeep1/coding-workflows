@@ -8,6 +8,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 from pathlib import Path
@@ -22,6 +23,8 @@ REVIEW_AUTOFIX_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.
 REVIEW_CONSOLIDATOR_PROMPT = REPO_ROOT / "prompts" / "review-consolidator.txt"
 REVIEW_BLOCKED_PROMPT = REPO_ROOT / "prompts" / "mode-judge-review-blocked.txt"
 GH_HELPERS = REPO_ROOT / "scripts" / "gh_helpers.sh"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from test_review_autofix_claude_fixer_mode import install_consolidator_mock_support  # noqa: E402
 
 
 def _install_mock_opencode(mock_bin_dir: Path, output_fixture: Path, *, exit_code: int = 0) -> tuple[Path, Path]:
@@ -68,9 +71,7 @@ def _run_consolidator(
 		ledger_path.write_text(ledger_text, encoding="utf-8")
 	mock_bin = tmp_dir / "mock_bin"
 	mock_output, mock_config_writer = _install_mock_opencode(mock_bin, FIXTURES / output_fixture_name, exit_code=codex_exit_code)
-	effective_support_dir = support_scripts_dir or (REPO_ROOT / "scripts")
-	if support_scripts_dir is not None:
-		shutil.copy2(REPO_ROOT / "scripts" / "opencode_helpers.sh", effective_support_dir / "opencode_helpers.sh")
+	effective_support_dir = install_consolidator_mock_support(tmp_dir, support_dir=support_scripts_dir)
 
 	env = os.environ.copy()
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -82,6 +83,9 @@ def _run_consolidator(
 	env["REVIEW_LEDGER_REREVIEW_ENABLED"] = "1"
 	env["REVIEW_LEDGER_PATH"] = str(ledger_path)
 	env["MOCK_OPENCODE_OUTPUT_FILE"] = str(mock_output)
+	env["MOCK_CONSOLIDATOR_ROOT"] = str(tmp_dir / "isolated")
+	env["MOCK_CONSOLIDATOR_CALLS"] = str(tmp_dir / "calls")
+	env["MOCK_CONSOLIDATOR_RUN_RC"] = str(codex_exit_code)
 	env["OPENCODE_CONFIG_WRITER_PATH"] = str(mock_config_writer)
 	env["PATH"] = f"{mock_bin}:{env.get('PATH', '')}"
 	for key in ("BASH_ENV", "ENV", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "WORKSPACE_PATH"):

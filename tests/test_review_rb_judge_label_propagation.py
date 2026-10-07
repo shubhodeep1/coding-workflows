@@ -2108,6 +2108,7 @@ ensure_label_exists() {{ printf '%s\\n' "$1" >> "${{ENSURE_LABELS_FILE}}"; }}
 _resilient_phase_swap() {{ :; }}
 _safe_gh_jq() {{ gh api "$@"; }}
 sleep() {{ :; }}
+review_head_gate_post_status() {{ :; }}
 source "{pr_checks_lib_path}"
 
 GITHUB_OUTPUT="{github_output}"
