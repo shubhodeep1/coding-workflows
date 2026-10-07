@@ -186,6 +186,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           PR_MERGED: ${{ github.event.pull_request.merged }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body || '' }}
@@ -194,9 +195,22 @@ jobs:
           source scripts/gh_helpers.sh 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
+          # The default branch comes from the event payload (consumer repos
+          # do not all use `main`); fall back to `main` only when the payload
+          # lacks the field, which keeps the previous behaviour (#5776).
+          REPO_DEFAULT_BRANCH="${PR_DEFAULT_BRANCH:-}"
+          if [ -z "${REPO_DEFAULT_BRANCH}" ]; then
+            echo "::warning::Event payload has no repository.default_branch; assuming main."
+            REPO_DEFAULT_BRANCH="main"
+          fi
+
           TRACKING_ISSUES=""
           MANAGED_ISSUES=""
           ORCHESTRATOR_CLASSIFICATION_COMPLETE="true"
+          # Issues this PR close actually completes (closed unmerged, merged
+          # into the default branch, or an orchestrator-managed child merged
+          # into its integration branch). Only these get lineage finalized.
+          LINEAGE_FINALIZE_ISSUE_NUMBERS=""
 
           export_orchestrator_issue_classification() {
             echo "LINKED_ISSUE_NUMBERS<<EOF" >> "$GITHUB_ENV"
@@ -209,6 +223,9 @@ jobs:
             printf '%s\n' "${MANAGED_ISSUES:-}" >> "$GITHUB_ENV"
             echo "EOF" >> "$GITHUB_ENV"
             echo "ORCHESTRATOR_CLASSIFICATION_COMPLETE=${ORCHESTRATOR_CLASSIFICATION_COMPLETE}" >> "$GITHUB_ENV"
+            echo "LINEAGE_FINALIZE_ISSUE_NUMBERS<<EOF" >> "$GITHUB_ENV"
+            printf '%s\n' "${LINEAGE_FINALIZE_ISSUE_NUMBERS:-}" >> "$GITHUB_ENV"
+            echo "EOF" >> "$GITHUB_ENV"
           }
 
           classify_orchestrator_issues_from_payload() {
@@ -331,8 +348,6 @@ jobs:
                 || echo "::warning::Fallback label add failed for #${issue_number}."
             }
           fi
-          ensure_label_exists "${FINAL_LABEL}" "${REPOSITORY}"
-
           # Classify each linked issue into one of three buckets so the
           # label/close path applies the right policy:
           #
@@ -435,30 +450,47 @@ jobs:
           while IFS= read -r issue_number; do
             [ -n "${issue_number}" ] || continue
 
-            if [ -n "${TRACKING_ISSUES}" ] && printf '%s\n' "${TRACKING_ISSUES}" | grep -qxF "${issue_number}"; then
-              echo "Skipping orchestrator-tracking issue #${issue_number} — terminal phase label and close are owned by orchestrate_poll_process.sh; PR-close path must not mutate it."
-              continue
-            fi
-
             is_managed_child=false
             if [ -n "${MANAGED_ISSUES}" ] && printf '%s\n' "${MANAGED_ISSUES}" | grep -qxF "${issue_number}"; then
               is_managed_child=true
             fi
 
+            # A real completion is a close without merge (ai:closed), a merge
+            # into the default branch, or an orchestrator-managed child merged
+            # into its integration branch. A merge into any other branch must
+            # not mark the issue ai:merged or finalize its lineage (#5776:
+            # PR #5649 merged into a claude/* project branch relabelled #4867).
+            issue_is_completion=false
+            if [ "${PR_MERGED}" != "true" ] || [ "${PR_BASE_REF}" = "${REPO_DEFAULT_BRANCH}" ] || [ "${is_managed_child}" = "true" ]; then
+              issue_is_completion=true
+              LINEAGE_FINALIZE_ISSUE_NUMBERS="$(merge_issue_number_list "${LINEAGE_FINALIZE_ISSUE_NUMBERS}" "${issue_number}")"
+            fi
+
+            if [ -n "${TRACKING_ISSUES}" ] && printf '%s\n' "${TRACKING_ISSUES}" | grep -qxF "${issue_number}"; then
+              echo "Skipping orchestrator-tracking issue #${issue_number} — terminal phase label and close are owned by orchestrate_poll_process.sh; PR-close path must not mutate it."
+              continue
+            fi
+
+            if [ "${issue_is_completion}" != "true" ]; then
+              echo "PR #${PR_NUMBER} merged into ${PR_BASE_REF} (default branch: ${REPO_DEFAULT_BRANCH}); issue #${issue_number} labels, state and lineage left unchanged."
+              continue
+            fi
+
+            if [ "${FINAL_LABEL_ENSURED:-false}" != "true" ]; then
+              ensure_label_exists "${FINAL_LABEL}" "${REPOSITORY}"
+              FINAL_LABEL_ENSURED=true
+            fi
+
             echo "Updating issue #${issue_number} with label ${FINAL_LABEL}"
             set_issue_phase_label_resilient "${issue_number}" "${FINAL_LABEL}" "${REPOSITORY}"
 
-            if [ "${PR_MERGED}" != "true" ] || [ "${PR_BASE_REF}" = "main" ] || [ "${is_managed_child}" = "true" ]; then
-              if [ "${is_managed_child}" = "true" ] && [ "${PR_MERGED}" = "true" ] && [ "${PR_BASE_REF}" != "main" ]; then
-                echo "Closing orchestrator-managed child issue #${issue_number} after PR #${PR_NUMBER} merged into ${PR_BASE_REF} (integration branch)."
-              else
-                echo "Closing issue #${issue_number} after PR #${PR_NUMBER} close event."
-              fi
-              if ! gh_retry gh issue close "${issue_number}" -R "${REPOSITORY}"; then
-                echo "::warning::Failed to close issue #${issue_number}."
-              fi
+            if [ "${is_managed_child}" = "true" ] && [ "${PR_MERGED}" = "true" ] && [ "${PR_BASE_REF}" != "${REPO_DEFAULT_BRANCH}" ]; then
+              echo "Closing orchestrator-managed child issue #${issue_number} after PR #${PR_NUMBER} merged into ${PR_BASE_REF} (integration branch)."
             else
-              echo "PR merged into ${PR_BASE_REF}; issue #${issue_number} remains open."
+              echo "Closing issue #${issue_number} after PR #${PR_NUMBER} close event."
+            fi
+            if ! gh_retry gh issue close "${issue_number}" -R "${REPOSITORY}"; then
+              echo "::warning::Failed to close issue #${issue_number}."
             fi
           done <<< "${ISSUE_NUMBERS}"
 
@@ -506,6 +538,12 @@ jobs:
             exit 0
           fi
 
+          if [ -z "${LINEAGE_FINALIZE_ISSUE_NUMBERS:-}" ]; then
+            echo "No linked issue completed by this PR; skipping lineage finalization."
+            echo "AI_MEMORY_TELEMETRY: {\"op\":\"finalize-task\",\"ok\":true,\"enabled\":${AI_MEMORY_ENABLED_NORMALIZED},\"fail_open\":true,\"reason\":\"non_completion_merge\",\"source\":\"issue_pr_status.yml\"}"
+            exit 0
+          fi
+
           if [ "${MEMORY_HELPERS_READY:-0}" != "1" ]; then
             echo "Missing required memory helper scripts; cannot finalize lineage." >&2
             exit 1
@@ -539,7 +577,7 @@ jobs:
               --actor "${ACTOR}" \
               --pr-number "${PR_NUMBER}" \
               --pr-url "${PR_URL}"
-          done <<< "${LINKED_ISSUE_NUMBERS}"
+          done <<< "${LINEAGE_FINALIZE_ISSUE_NUMBERS}"
 
       - name: Send PR merged Telegram alert
         if: github.event.pull_request.merged == true
