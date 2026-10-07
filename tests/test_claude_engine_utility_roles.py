@@ -387,6 +387,12 @@ def test_triage_job_permissions_and_staging() -> None:
 	assert ".claude/hooks/gh_api_write_guard.py" in stage
 	assert "scripts/claude_anthropic_relay.py" in stage
 	assert "! -name claude-pool-token" in stage
+	# The engine preflight sees the PR labels the diagnosis stage reads, taken
+	# from the prerequisite's existing PR payload (no extra API call).
+	derive = data["jobs"]["derive_check_name_key"]
+	assert derive["outputs"]["pr_labels"] == "${{ steps.hash_check_name.outputs.pr_labels }}"
+	resolve = job["steps"][names.index("Resolve AI engine")]
+	assert resolve["env"]["AI_ENGINE_LABELS"] == "${{ needs.derive_check_name_key.outputs.pr_labels || '' }}"
 
 
 def test_activation_verify_job_adds_no_permissions_and_poller_resolves_the_role() -> None:

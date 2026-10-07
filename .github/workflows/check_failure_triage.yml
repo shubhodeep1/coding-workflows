@@ -63,6 +63,7 @@ jobs:
       check_name_key: ${{ steps.hash_check_name.outputs.check_name_key }}
       same_repo: ${{ steps.hash_check_name.outputs.same_repo }}
       smoke_pr: ${{ steps.hash_check_name.outputs.smoke_pr }}
+      pr_labels: ${{ steps.hash_check_name.outputs.pr_labels }}
     steps:
       - name: Validate inputs, hash check name, and verify PR origin
         id: hash_check_name
@@ -151,6 +152,13 @@ jobs:
           else
             echo "smoke_pr=false" >> "$GITHUB_OUTPUT"
           fi
+          # The PR's labels, from the same payload (no extra API call), let the
+          # triage job's engine preflight see the labels the diagnosis stage
+          # reads, so an ai:engine-claude / ai:codex label decides both the
+          # same way. jq -c keeps the value on one line; failure means no labels.
+          pr_labels="$(jq -c '[.labels[]?.name | select(type == "string")]' "${pr_payload}" 2>/dev/null || echo '[]')"
+          [ -n "${pr_labels}" ] || pr_labels='[]'
+          echo "pr_labels=${pr_labels}" >> "$GITHUB_OUTPUT"
           if [ "${head_repo}" != "${REPOSITORY}" ]; then
             echo "same_repo=false" >> "$GITHUB_OUTPUT"
             echo "::notice::Skipping check-failure triage for fork PR #${PR_NUMBER} (head repo: ${head_repo})."
@@ -280,7 +288,8 @@ jobs:
         env:
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
           AI_ENGINE_CHECK_TRIAGE: ${{ vars.AI_ENGINE_CHECK_TRIAGE || '' }}
-          AI_ENGINE_LABELS: ""
+          # Same labels scripts/check_failure_triage.sh reads from pr_payload.json.
+          AI_ENGINE_LABELS: ${{ needs.derive_check_name_key.outputs.pr_labels || '' }}
         run: |
           set -uo pipefail
           engine="codex"
