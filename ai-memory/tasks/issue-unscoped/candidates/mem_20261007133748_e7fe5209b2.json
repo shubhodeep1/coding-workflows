@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Several merged changes updated untrusted-workspace sandboxing, editor isolation, or tests enforcing those boundaries. When adding review, conflict-resolution, or editor steps that process untrusted content, use the isolated execution path and test that data or commands cannot escape into trusted state.",
+  "fingerprint": "69f818103404de8403711eea956f542af4bd4cb7209f77bac795f401b976031e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37629129479",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37629129479",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/5504",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6210",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6441",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6458",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6608",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6137",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6212",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6475",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6545",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6612"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261007133748_e7fe5209b2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Keep operations on untrusted workspaces and editor evidence isolated from trusted workflow state.",
+  "timestamps": {
+    "created_at": "2026-10-07T13:37:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
