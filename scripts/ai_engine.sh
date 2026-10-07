@@ -43,7 +43,9 @@
 #       hit its usage limit or was rejected), after logging
 #       AI_ENGINE_FALLBACK, so the caller runs the codex path (D1); 124 on a
 #       timeout; any other non-zero status on a crash, which follows the
-#       role's existing retry rules.
+#       role's existing retry rules. Returns 1 without starting the CLI
+#       when the account pool directory overlaps <workdir> or an
+#       AI_ENGINE_INCLUDE_PATHS entry (logged `CLAUDE_POOL ... reason=pool_overlap`).
 #       AI_ENGINE_LAST_RUN_DIR names the run directory afterwards; it holds
 #       transcript-<NAME>.jsonl and stderr-<NAME>.txt for each account tried.
 #
@@ -179,6 +181,38 @@ ai_engine_accounts()
 	done < "${pool_dir}/order"
 }
 
+_ai_engine_path_within()
+{
+	# 0 when <path> is <dir> or lies beneath it; both already resolved.
+	local path="${1:-}" dir="${2%/}"
+	[ -n "${path}" ] || return 1
+	[ "${path}" = "${dir}" ] && return 0
+	case "${path}/" in "${dir}/"*) return 0 ;; esac
+	return 1
+}
+
+_ai_engine_pool_isolated()
+{
+	# 0 when the account pool <pool_dir> neither contains nor lies inside
+	# <workdir> (the model's snapshot) or any AI_ENGINE_INCLUDE_PATHS entry
+	# (a read-only mount). Symlinks are resolved; an unresolvable pool or
+	# workdir counts as an overlap, so the caller fails closed (issue #6642).
+	local pool workdir include_path include_real
+	pool="$(realpath -e -- "${1:-}" 2>/dev/null)" || return 1
+	workdir="$(realpath -e -- "${2:-}" 2>/dev/null)" || return 1
+	if _ai_engine_path_within "${pool}" "${workdir}" || _ai_engine_path_within "${workdir}" "${pool}"; then
+		return 1
+	fi
+	while IFS= read -r include_path; do
+		[ -n "${include_path}" ] || continue
+		include_real="$(realpath -m -- "${include_path}" 2>/dev/null)" || return 1
+		if _ai_engine_path_within "${include_real}" "${pool}" || _ai_engine_path_within "${pool}" "${include_real}"; then
+			return 1
+		fi
+	done <<< "${AI_ENGINE_INCLUDE_PATHS:-}"
+	return 0
+}
+
 _ai_engine_json_field()
 {
 	python3 -I -c 'import json,sys; print(json.loads(sys.argv[1])[sys.argv[2]])' "$1" "$2"
@@ -272,6 +306,16 @@ claude_run()
 	if [ "${#accounts[@]}" -eq 0 ]; then
 		ai_engine_fallback "${role}" no_credential
 		return "${_AI_ENGINE_EXIT_FALLBACK}"
+	fi
+	# The pool's token files must never reach the model's copy of <workdir>
+	# or an --include mount. CLAUDE_ENGINE_POOL_DIR and RUNNER_TEMP are
+	# configurable, so the resolved paths are checked before any snapshot.
+	# This fails closed with status 1, not the codex-fallback status 75: a
+	# misconfigured pool is not ordinary Claude unavailability.
+	if ! _ai_engine_pool_isolated "${pool_dir}" "${workdir}"; then
+		echo "::error::claude_run: the Claude account pool overlaps the model workdir or an include path; refusing to run ${role}." >&2
+		echo "CLAUDE_POOL run role=${role} account=none outcome=refused reason=pool_overlap exit_code=1" >&2
+		return 1
 	fi
 
 	local run_dir
