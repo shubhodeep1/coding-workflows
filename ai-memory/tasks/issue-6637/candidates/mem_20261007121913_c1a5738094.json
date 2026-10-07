@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\nQ2: A\n\nRATIONALE:\nQ1: The isolation the finding asked for is already in place. All four analysis and retro Codex launches in `.github/workflows/workflow-log-analysis.yml` (lines 430, 1146, 1727, 2232) and the consumer fan-out (`scripts/workflow_retro_fanout.sh:180`) run through `codex_isolated_exec.sh run --mode read-only`. That container has no credentials and no network. What is still missing is the fork-origin check. `scripts/collect_workflow_logs.py` has no `head_repository` or fork filter anywhere, so fork-written log text can still reach the model as prompt input. B closes that gap and adds a contract test for the isolation. C is not taken because, inside the isolated container, the agent never sees `GH_TOKEN`. C would only add churn and risk hitting the workflow size limit.\nQ2: Both log selectors read their input from one function, `_eligible_runs_for_log_selection` (lines 1141, 1164, 1251). Filtering there removes fork log text from notable-run selection and from the categorized export in one place. Run-level metadata such as counts and conclusions can stay, because it holds no text a fork author wrote. Option B would still pass fork-written text to the model. Option C would also drop same-repository PR runs, which are trusted and useful for diagnosis.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1 / Q2 (combined; decisions are lettered, steps given so the planner has concrete targets):\n  strategy: derive_from_repo\n  inputs:\n    - scripts/collect_workflow_logs.py: `_run_snapshot_for_cache` (lines 288-302), run normalization (around lines 1000-1045), `_eligible_runs_for_log_selection` (lines 1141-1146), `select_notable_runs_for_logs` (line 1156), `select_runs_for_log_export_categories` (line 1243), `export_categorized_logs` (line 1635)\n    - tests/test_collect_workflow_logs.py\n    - .github/workflows/workflow-log-analysis.yml (the 4 `codex_isolated_exec.sh run --mode read-only` launches), scripts/workflow_retro_fanout.sh\n  steps:\n    - In run normalization, carry two new fields: `event` (from `run[\"event\"]`) and `head_repository` (from `run[\"head_repository\"][\"full_name\"]`, or None when absent). Add both keys to the `_run_snapshot_for_cache` keys so cached rows keep them. Before adding the names, check that neither already exists in the normalized dict.\n    - Add a helper (unique name, e.g. `_run_origin_trust`) that returns `trusted`, `fork` or `origin_unknown`:\n      - `fork` when `head_repository` is set and differs (case-insensitive) from `repository`.\n      - `origin_unknown` when `head_repository` is missing and `event` is missing or starts with `pull_request`. This fails closed for older cached rows written before the new fields existed.\n      - `trusted` otherwise (push, schedule, workflow_dispatch and other in-repository events).\n    - In `_eligible_runs_for_log_selection`, keep only `trusted` runs. For each excluded run, print one stderr line, e.g. `WORKFLOW_LOG_FORK_EXCLUDED repository=<r> run_id=<id> reason=fork|origin_unknown`, with no log text. Keep excluded runs in the aggregate run lists and counts so totals and conclusions are unchanged. Set their `log_download_status` to a distinct value such as `excluded_untrusted_origin` so reports show why no log is present.\n    - Tests in tests/test_collect_workflow_logs.py:\n      - A fork-origin failed run is absent from both `select_notable_runs_for_logs` and `select_runs_for_log_export_categories` output.\n      - A same-repository `pull_request` run and a `push` run are still selected.\n      - A `pull_request` run with no `head_repository` is excluded.\n      - Aggregate counts include the excluded run.\n    - Add a contract test (in an existing contract test module, or a new `tests/test_workflow_log_analysis_isolation_contract.py`) asserting that every `exec` launch in `workflow-log-analysis.yml` and `scripts/workflow_retro_fanout.sh` goes through `codex_isolated_exec.sh run --mode read-only`, and that no direct `codex exec` exists. Reuse `tests/test_codex_agent_isolation_contract.py` patterns if it already covers these files; extend it rather than duplicating.\n    - Add a changelog fragment `changelog.d/<issue>-fork-ci-logs-excluded.md`. Use `Refs #3576` (tracker) and never an auto-close keyword against it.\n  replaces_acceptance_criterion: The finding's recommendation to \"perform authenticated reporting in a separate job\"\n  equivalence_argument: The agent already runs without credentials and without network access, so moving the reporting into a separate job adds no protection for the token. What remains open is untrusted fork text steering the model's report content. Removing fork-origin logs at the single selection point closes that injection path, and the contract test keeps the isolation from regressing.\n  reversibility: The filter sits in one function. A human who wants fork logs back can relax `_run_origin_trust`, or swap in the labelling of Q2 option B, without touching the workflow. The job split of Q1 option C can still land later as a separate change.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- None.",
+  "fingerprint": "12573a3f0cd40a846bc32684163d0328684d5d537112cb26ebaecf3d89b4946f",
+  "lineage": {
+    "issue_number": 6637,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37618555665",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37618555665",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6637"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261007121913_c1a5738094",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6637,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37618555665"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6637",
+  "timestamps": {
+    "created_at": "2026-10-07T12:19:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
