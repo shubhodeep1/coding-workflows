@@ -1627,12 +1627,19 @@ def test_absolute_chdir_inside_shell_control_checks_selected_repo(merged_branch_
 
 
 def test_non_env_uncertain_configured_commit_keeps_warning_only_behavior(merged_branch_repo, monkeypatch, capsys) -> None:
+	"""Per-command config on an unresolved commit asks (author decision Q30 = A).
+
+	The name predates that decision and is kept per CLAUDE.md §6. The commit
+	is not blocked (no merged PR), but it asks for confirmation.
+	"""
 	repo, _ = merged_branch_repo
 	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: [])
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
 		"tool_input": {"command": "if true; then git -c user.name=bot commit -m x"}})
 	assert code == 0 and message == ""
-	assert "permissionDecision" not in capsys.readouterr().out
+	response = json.loads(capsys.readouterr().out.splitlines()[-1])
+	assert "could not resolve git commit directory" in response["hookSpecificOutput"]["permissionDecisionReason"]
+	assert response["hookSpecificOutput"]["permissionDecision"] == "ask"
 
 
 def test_env_chdir_does_not_change_subsequent_command_directory(merged_branch_repo, monkeypatch) -> None:
