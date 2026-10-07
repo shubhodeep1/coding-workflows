@@ -159,8 +159,10 @@ analysis/workflow-optimization-2026-09-26-2.md
 analysis/workflow-optimization-2026-09-26-3.md
 analysis/workflow-optimization-2026-09-26.md
 changelog.d/.gitkeep
+changelog.d/6413-review-sandbox-transfer-reject-diagnostics.md
 changelog.d/6424-review-sandbox-unsafe-directory-category.md
 changelog.d/6521-validate-renderer-prep-always.md
+changelog.d/6578-validate-trusted-harness-templates.md
 codex.md
 docs/INVENTORY.md
 docs/ai-tools-future-improvements.md

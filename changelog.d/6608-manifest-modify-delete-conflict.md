@@ -1,0 +1,6 @@
+<!-- changelog: fixed -->
+- **A delete/modify conflict on the workspace manifest no longer blocks review/autofix.** When one side of a merge deleted or untracked `.ai/.workspace_source_manifest.txt` and the other side changed it, the conflict-resolver preparation step used to pass the file to the resolver. A resolver sandbox that excludes `.ai/` then refused the whole run (`sandbox_path_unsupported`), and every retry failed the same way until the identical-failure cap tripped (PRs #6594, #6209, #6146). Preparation now keeps the deletion (`git rm --cached`), but only when the merged `.gitignore` ignores the manifest. When the manifest was the only conflict, preparation commits the `[ai-merge-resolve]` merge itself and the resolver model is skipped.
+
+  Any manifest conflict preparation still leaves for the resolver now logs one line, `Manifest union-merge: unhandled reason=<disabled|integration_sync|stage_shape|not_gitignored> stages=<…>`, which names the guard that applied. The `CONFLICT_MANIFEST_UNION_ENABLED` kill switch and the integration-sync exclusion are unchanged.
+
+  What this means for operators: review runs execute the support scripts from `main`, so affected PRs recover once this fix reaches `main`.
