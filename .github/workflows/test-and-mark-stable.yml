@@ -523,6 +523,16 @@ jobs:
         id: hot-poller-guard
         run: |
           set -euo pipefail
+          # tests/test_orchestrate_poll_process.py imports pytest since #6187
+          # (fba7ed5), and the runner image has none: gate run 37554001238
+          # failed here with `ModuleNotFoundError: No module named 'pytest'`
+          # before any phase ran. Install it the way Phase 4b does.
+          if ! python3 -c 'import pytest' >/dev/null 2>&1 \
+            && ! python3 -m pip install --quiet pytest; then
+            echo "::error::Could not install pytest for the hot orchestrate-poll regression guard."
+            echo "status=pytest_install_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
           echo "Running hot orchestrate-poll regression guard..."
           if PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py test_implementation_failed_reissue_preserves_dependency_gates_and_pending_defs; then
             echo "status=success" >> "$GITHUB_OUTPUT"
