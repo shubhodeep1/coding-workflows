@@ -15,11 +15,20 @@ name: Security Audit
         required: false
         default: ""
         type: string
+      pr_number:
+        description: "Pull request whose head branch `ref` is (single-issue security pass, port P1). The result is posted on the PR and its review re-runs. Empty = no PR."
+        required: false
+        default: ""
+        type: string
   # Consumer repos run this workflow through the synced
   # workflow-templates/ai-security-audit.yml wrapper (called @stable).
   workflow_call:
     inputs:
       ref:
+        required: false
+        default: ""
+        type: string
+      pr_number:
         required: false
         default: ""
         type: string
@@ -32,6 +41,10 @@ name: Security Audit
 permissions:
   contents: read
   issues: write
+  pull-requests: read
+  actions: write
+  # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
 
 # The consumer wrapper (workflow-templates/ai-security-audit.yml) already
 # serialises runs under `security-audit-<repo>`. A called workflow that
@@ -263,12 +276,15 @@ jobs:
           echo "SECURITY_AUDIT_FP_EXCLUSIONS=${catalog_path}" >> "$GITHUB_ENV"
 
       - name: Run security audit
+        id: run_security_audit
         working-directory: ./audit-data
         env:
           SECURITY_AUDIT_SUPPORT_DIR: ${{ github.workspace }}
           GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Codex version baked into the isolated audit agent's image (scripts/codex_isolated_exec.sh).
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
           PYTHONDONTWRITEBYTECODE: "1"
           SECURITY_AUDIT_ENABLED: ${{ vars.SECURITY_AUDIT_ENABLED || 'true' }}
           SECURITY_AUDIT_CONFIDENCE_GATE: ${{ vars.SECURITY_AUDIT_CONFIDENCE_GATE || '8' }}
@@ -276,4 +292,39 @@ jobs:
           SECURITY_AUDIT_INCREMENTAL: ${{ vars.SECURITY_AUDIT_INCREMENTAL || 'true' }}
         run: |
           set -euo pipefail
-          bash "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/security_audit.sh"
+          # The single-issue security pass reads the summary line from this log.
+          bash "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/security_audit.sh" 2>&1 | tee "${RUNNER_TEMP}/security_audit_run.log"
+
+      - name: Report single-issue security pass
+        # Port P1 (replace-claude-sessions plan, Phase 8a): an audit dispatched
+        # for a standalone PR posts its result on the PR (clean, findings or
+        # failed, for the audited commit) and re-runs that PR's review on
+        # clean, failed or unverifiable finding IDs. Never fails the run.
+        if: always() && inputs.pr_number != '' && env.AUDIT_DATA_SHA != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ env.AUDIT_DEFAULT_BRANCH }}
+          SECURITY_PASS_PR_NUMBER: ${{ inputs.pr_number }}
+          SECURITY_PASS_AUDIT_OUTCOME: ${{ steps.run_security_audit.outcome }}
+          SECURITY_PASS_AUDIT_BRANCH: ${{ env.AUDIT_BRANCH }}
+          SECURITY_PASS_AUTHOR_LOGIN_FALLBACK: ${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}
+          MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
+        run: |
+          set -uo pipefail
+          SECURITY_PASS_HEAD_SHA="${AUDIT_DATA_SHA}"
+          SECURITY_PASS_FINDINGS=""
+          SECURITY_PASS_FINDING_IDS_B64=""
+          audit_log="${RUNNER_TEMP}/security_audit_run.log"
+          if [ -s "${audit_log}" ]; then
+            audit_summary="$(sed -n '/^security-audit: tracker=#[0-9]* findings=[0-9][0-9]* followups_created=/p' "${audit_log}" | tail -n 1)"
+            SECURITY_PASS_FINDINGS="$(printf '%s\n' "${audit_summary}" | sed -n 's/^security-audit: tracker=#[0-9]* findings=\([0-9][0-9]*\) followups_created=.*$/\1/p')"
+            SECURITY_PASS_FINDING_IDS_B64="$(printf '%s\n' "${audit_summary}" | sed -n 's/^security-audit: tracker=#[0-9]* findings=[0-9][0-9]* followups_created=[0-9][0-9]* finding_ids_b64=\([A-Za-z0-9+/=]*\)$/\1/p')"
+          fi
+          export SECURITY_PASS_HEAD_SHA SECURITY_PASS_FINDINGS SECURITY_PASS_FINDING_IDS_B64
+          if [ ! -f "${GITHUB_WORKSPACE}/scripts/review_single_issue_security_pass.sh" ]; then
+            echo "::warning::review_single_issue_security_pass.sh is not in the audit support checkout; PR #${SECURITY_PASS_PR_NUMBER} gets no result."
+            exit 0
+          fi
+          bash "${GITHUB_WORKSPACE}/scripts/review_single_issue_security_pass.sh" report

@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""Contract for review_autofix.yml Claude-fixer mode.
+"""Contract: Claude-fixer mode is the Claude engine of the review write roles.
 
-Every PR-backed `claude/*` head (/implement-plan-claude stages and any
-session's PR under CLAUDE.md §26) keeps the reviewer panel, but the GPT editor, conflict resolver, push / re-trigger tail
-and review-blocked judge do not run: the findings (or the pre-review
-conflict) are handed to the Claude session that owns the PR, and a
-`claude_fixer_converged_head` dispatch re-reviews a bot-authenticated ledger
-verdict. Only the fresh clean review can auto-merge, and the
-MAX_AUTOFIX_ITERATIONS cap still applies, counting `[claude-autofix]` rounds.
+The session hand-off is retired (docs/plans/replace-claude-sessions-with-cli-
+engine-plan.md, Phase 2): PR-backed `claude/*` heads take the normal review
+path like every other PR. The `claude_fixer_converged_head` input stays
+declared and ignored because pinned consumer wrappers still pass it, and the
+`claude-fixer-auto-merge` job id is kept but never runs.
+
+Phase 5c (Q19/Q35) gives `CLAUDE_FIXER_ENABLED` (default `true`) its new
+meaning: the review editor, consolidator, conflict resolver and RB judge run
+through the Claude engine inside the review job, and `false` keeps all four
+on their unchanged OpenCode commands, ahead of the labels and AI_ENGINE.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -31,48 +33,12 @@ from review_autofix_step_scripts import (  # noqa: E402
 	expanded_review_autofix_text,
 )
 
-HANDOFF_SCRIPT = REPO_ROOT / "scripts" / "review_autofix_step_claude_fixer_handoff.sh"
 TOPOLOGY_SCRIPT = REPO_ROOT / "scripts" / "review_autofix_step_merge_topology_gate.sh"
+COUNT_ITERATIONS_SCRIPT = REPO_ROOT / "scripts" / "review_autofix_step_count_iterations.sh"
 WRAPPERS = (REPO_ROOT / "workflow-templates" / "ai-review.yml",)
-INTERNAL_REVIEW = REPO_ROOT / ".github" / "workflows" / "internal-review.yml"
 HEAD = "c" * 40
 AUTHOR = "workflow-bot"
-FIXER_BOT = "dedicated-fixer[bot]"
-DIGEST = "a" * 64
-
-EDITOR_TAIL_STEPS = (
-	"Pre-editor stale-base gate",
-	"Install project dependencies (best-effort)",
-	"Switch reasoning effort for editor",
-	"Setup Serena for editor",
-	"Apply fixes with editor model",
-	"Decide partial-finalize validation/push safety",
-	"Commit changes",
-	"Run interim judge",
-	"Synthesize behavioural smoke",
-	"Post editor summary comment",
-	"Clear Serena after editor",
-	"Detect editor-claimed-but-uncommitted changes",
-	"Validate editor no-op disposition",
-	"Detect merge conflicts",
-	"Prepare merge-conflict resolver prompt and pre-snapshot",
-	"Run Codex resolver, validate, stage, commit",
-	"Telegram conflict resolution message",
-	"Push all pending commits",
-	"Resolve addressed PR review threads",
-	"Re-trigger review via workflow_dispatch",
-	"Post partial finalize comment and persist runtime marker",
-	"Stage review-issue ledger for partial finalize cache save",
-	"Save review-issue ledger after partial finalize",
-	"Telegram success",
-	"Re-dispatch review on editor-changes-lost",
-	"Telegram editor-changes-lost warning",
-	"Telegram editor-noop-suspicious warning",
-	# Q20: the review-blocked judge would have GPT edit the PR.
-	"Detect review-blocked break-glass override",
-	"Review-blocked judge decision",
-	"Telegram review-blocked judge decision",
-)
+RETIRED_HANDOFF = f"<!-- ai:claude-fixer-handoff:v1 kind=findings head={HEAD} round=1 -->"
 
 
 def _load(path: Path) -> dict:
@@ -90,78 +56,68 @@ WORKFLOW = _load(REVIEW_AUTOFIX_WORKFLOW_PATH)
 AGENT_STEPS = _steps(WORKFLOW, "codex-agent")
 
 
-def test_converged_head_input_on_every_entry_point():
+def test_converged_head_input_is_kept_and_marked_deprecated():
 	for trigger in ("workflow_call", "workflow_dispatch"):
 		spec = WORKFLOW["on"][trigger]["inputs"]["claude_fixer_converged_head"]
 		assert spec["default"] == "" and spec["type"] == "string" and spec["required"] is False
+		assert spec["description"].startswith("Deprecated; ignored")
+	gate_env = _steps(WORKFLOW, "gate")["Evaluate review gate"]["env"]
+	assert "CLAUDE_FIXER_CONVERGED_HEAD" not in gate_env
+	assert "CLAUDE_FIXER_VERDICT_BOT_LOGIN" not in gate_env
+	assert gate_env["CLAUDE_FIXER_ENABLED"] == "${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}"
+
+
+def test_wrappers_accept_but_no_longer_pass_the_retired_input():
 	for wrapper in WRAPPERS:
 		workflow = _load(wrapper)
-		assert workflow["on"]["workflow_dispatch"]["inputs"]["claude_fixer_converged_head"]["default"] == ""
-		assert workflow["jobs"]["review"]["with"]["claude_fixer_converged_head"] == (
-			"${{ github.event_name == 'workflow_dispatch' && github.event.inputs.claude_fixer_converged_head || '' }}"
-		)
+		spec = workflow["on"]["workflow_dispatch"]["inputs"]["claude_fixer_converged_head"]
+		assert spec["description"].startswith("Deprecated; ignored"), wrapper
+		assert "claude_fixer_converged_head" not in workflow["jobs"]["review"]["with"], wrapper
 
 
-def test_internal_review_does_not_forward_the_converged_input():
-	"""internal-review.yml calls review_autofix.yml@main, so on the PR that adds
-	an input to review_autofix.yml, forwarding it from internal-review.yml makes
-	every run a zero-job startup_failure (run 36095647423: `input
-	"claude_fixer_converged_head" is not defined`). This library dispatches
-	review_autofix.yml directly for the convergence run instead."""
-	workflow = _load(INTERNAL_REVIEW)
-	assert "claude_fixer_converged_head" not in workflow["on"]["workflow_dispatch"]["inputs"]
-	for job in workflow["jobs"].values():
-		assert "claude_fixer_converged_head" not in (job.get("with") or {})
-
-
-def test_gate_exports_fixer_outputs_and_mode():
+def test_handoff_machinery_is_gone():
+	text = REVIEW_AUTOFIX_WORKFLOW_PATH.read_text(encoding="utf-8")
+	for needle in (
+		"CLAUDE_FIXER_MODE",
+		"CLAUDE_FIXER_VERIFICATION",
+		"CLAUDE_FIXER_ZERO_FINDINGS",
+		"claude_fixer_awaiting_session",
+		"gate_claude_handoff_on_head",
+		"review_autofix_step_claude_fixer_handoff.sh",
+		"Hand review round to Claude session",
+		"Label Claude-fixer PR review-blocked",
+	):
+		assert needle not in text, needle
+	# The only ai:claude-fixer-* marker left is the review-skipped notice for
+	# claude/* PRs (issue #4985), which is not part of the hand-off.
+	assert set(re.findall(r"ai:claude-fixer-[a-z-]+", text)) <= {"ai:claude-fixer-review-skipped"}
+	assert "ai:claude-fixer-handoff" not in expanded_review_autofix_text()
+	assert not (REPO_ROOT / "scripts" / "review_autofix_step_claude_fixer_handoff.sh").exists()
 	outputs = WORKFLOW["jobs"]["gate"]["outputs"]
-	assert outputs["claude_fixer"] == "${{ steps.evaluate.outputs.claude_fixer }}"
-	assert outputs["claude_fixer_converged"] == "${{ steps.evaluate.outputs.claude_fixer_converged }}"
-	assert outputs["claude_fixer_verify"] == "${{ steps.evaluate.outputs.claude_fixer_verify }}"
+	for name in ("claude_fixer", "claude_fixer_converged", "claude_fixer_verify"):
+		assert name not in outputs, name
+
+
+def test_legacy_auto_merge_job_is_kept_but_never_runs():
+	job = WORKFLOW["jobs"]["claude-fixer-auto-merge"]
+	assert job["if"] == "${{ needs.gate.outputs.skip_reason == 'claude_fixer_auto_merge_retired' }}"
 	gate_run = _steps(WORKFLOW, "gate")["Evaluate review gate"]["run"]
-	assert "claude/*) CLAUDE_FIXER=\"true\" ;;" in gate_run
-	assert "claude/implement-plan-*) CLAUDE_FIXER" not in gate_run
-	assert 'SKIP_REASON="claude_fixer_awaiting_session"' in gate_run
-	assert 'CLAUDE_FIXER_VERIFY="true"' in gate_run
-	assert "${{" not in gate_run.split("# ----- Claude-fixer mode", 1)[1].split("# ----- Terminal same-head skip", 1)[0]
-	gate_env = _steps(WORKFLOW, "gate")["Evaluate review gate"]["env"]
-	assert gate_env["CLAUDE_FIXER_ENABLED"] == "${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}"
-	assert gate_env["CLAUDE_FIXER_VERDICT_BOT_LOGIN"] == "${{ vars.CLAUDE_FIXER_VERDICT_BOT_LOGIN || '' }}"
-	assert WORKFLOW["jobs"]["codex-agent"]["env"]["CLAUDE_FIXER_MODE"] == "${{ needs.gate.outputs.claude_fixer }}"
-	assert WORKFLOW["jobs"]["codex-agent"]["env"]["CLAUDE_FIXER_VERIFICATION"] == "${{ needs.gate.outputs.claude_fixer_verify }}"
+	assert "claude_fixer_auto_merge_retired" not in gate_run
 
 
-def test_editor_tail_and_judge_are_skipped_in_fixer_mode():
-	for name in EDITOR_TAIL_STEPS:
-		assert "env.CLAUDE_FIXER_MODE != 'true'" in AGENT_STEPS[name]["if"], name
+def test_editor_tail_and_auto_merge_no_longer_depend_on_fixer_mode():
+	for name in ("Apply fixes with editor model", "Detect merge conflicts", "Enable auto-merge on PR", "Review-blocked judge decision"):
+		assert "CLAUDE_FIXER" not in AGENT_STEPS[name]["if"], name
 
 
-def test_zero_findings_rounds_still_auto_merge():
-	for name in ("Enable auto-merge on PR", "Mark linked issues ready to merge"):
-		assert "(env.CLAUDE_FIXER_MODE != 'true' || env.CLAUDE_FIXER_ZERO_FINDINGS == 'true')" in AGENT_STEPS[name]["if"], name
-
-
-def test_handoff_step_runs_after_reviewers_and_before_the_editor():
-	names = list(AGENT_STEPS)
-	handoff = "Hand review round to Claude session (Claude-fixer mode)"
-	assert names.index("Run reviewer models") < names.index(handoff) < names.index("Apply fixes with editor model")
-	step = AGENT_STEPS[handoff]
-	assert "env.CLAUDE_FIXER_MODE == 'true'" in step["if"]
-	assert "max_iterations_reached != 'true'" in step["if"]
-	# Runs for a pre-review conflict too (reviewers are skipped then).
-	assert "AUTOFIX_PRE_REVIEW_RESOLVE" not in step["if"]
-	assert step["env"]["CLAUDE_FIXER_ROUND_INDEX"] == "${{ steps.retrigger_guard.outputs.autofix_iteration }}"
-
-
-def test_cap_labels_the_pr_itself_in_fixer_mode():
-	step = AGENT_STEPS["Label Claude-fixer PR review-blocked (autofix exhaustion)"]
-	assert "max_iterations_reached == 'true'" in step["if"] and "env.CLAUDE_FIXER_MODE == 'true'" in step["if"]
-	assert 'issues/${PR_NUMBER}/labels" -f "labels[]=ai:review-blocked"' in step["run"]
+def test_topology_gate_has_no_claude_branch():
+	text = TOPOLOGY_SCRIPT.read_text(encoding="utf-8")
+	assert "CLAUDE_FIXER_MODE" not in text
+	assert "claude_fixer_handoff" not in text
 
 
 def test_iteration_counter_counts_claude_autofix_rounds():
-	run = AGENT_STEPS["Count autofix iterations"]["run"]
+	run = COUNT_ITERATIONS_SCRIPT.read_text(encoding="utf-8")
 	pattern = re.search(r"grep -Eq '(\^\\\[\(ai\|claude\)-autofix\\\])'", run)
 	assert pattern, run
 	regex = re.compile(r"^\[(ai|claude)-autofix\]")
@@ -170,287 +126,6 @@ def test_iteration_counter_counts_claude_autofix_rounds():
 	for subject in ("[claude-intervention] unblock", "[claude-merge-resolve] merge main", "[judge-fix] x"):
 		assert not regex.match(subject)
 
-
-def test_converged_dispatch_cannot_merge_without_fresh_review():
-	assert WORKFLOW["jobs"]["claude-fixer-auto-merge"]["if"] == "${{ needs.gate.outputs.claude_fixer_verify == 'legacy_disabled' }}"
-	assert "CLAUDE_FIXER_VERIFICATION_FAILED == 'true'" in AGENT_STEPS["Label Claude-fixer PR review-blocked (autofix exhaustion)"]["if"]
-	assert "CLAUDE_FIXER_ZERO_FINDINGS == 'true'" in AGENT_STEPS["Enable auto-merge on PR"]["if"]
-
-
-def test_topology_gate_hands_conflicts_to_claude_regardless_of_resolver_toggle():
-	text = TOPOLOGY_SCRIPT.read_text(encoding="utf-8")
-	block = text.split('if [ "${CLAUDE_FIXER_MODE:-false}" = "true" ]; then', 1)[1].split("fi\n", 1)[0]
-	assert 'echo "AUTOFIX_PRE_REVIEW_RESOLVE=true" >> "$GITHUB_ENV"' in block
-	assert "CAN_PUSH" not in block
-	assert "action=claude_fixer_handoff" in block
-
-
-# ---- gate jq predicates, executed against sample comment payloads ----
-
-def _gate_jq(label: str) -> str:
-	gate_run = _steps(WORKFLOW, "gate")["Evaluate review gate"]["run"]
-	block = gate_run.split("# ----- Claude-fixer mode", 1)[1].split("# ----- Terminal same-head skip", 1)[0]
-	programs = re.findall(r"jq -e --arg head \"\$\{pr_head_sha_gate\}\" --arg author \"\$\{gate_marker_author_login\}\"(?: --arg bot \"\$\{CLAUDE_FIXER_VERDICT_BOT_LOGIN\}\")? '(.*?)'", block, re.S)
-	assert len(programs) == 3, programs
-	return programs[1] if label == "converged" else programs[2]
-
-
-def _jq_true(program: str, comments: list[dict]) -> bool:
-	with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
-		json.dump([{"id": index, **comment} for index, comment in enumerate(comments, 1)], handle)
-	try:
-		proc = subprocess.run(["jq", "-e", "--arg", "head", HEAD, "--arg", "author", AUTHOR, "--arg", "bot", FIXER_BOT, program, handle.name], capture_output=True, text=True)
-	finally:
-		os.unlink(handle.name)
-	return proc.returncode == 0
-
-
-def _c(body: str, author: str = AUTHOR, association: str = "OWNER") -> dict:
-	# The workflow's hand-off step owns the comment header as well as its
-	# marker; a marker echoed inside another GH_PAT-authored comment is not it.
-	match = re.match(r"<!-- ai:claude-fixer-handoff:v1 kind=(findings|conflict) head=[0-9a-f]{40} round=([0-9]+) -->", body)
-	if match:
-		kind = "findings handed" if match.group(1) == "findings" else "merge conflict, handed"
-		body = f"## Review round {match.group(2)}: {kind} to the Claude session\n" + body
-	return {"body": body, "author_login": author, "author_type": "Bot" if author.endswith("[bot]") else "User", "author_association": association}
-
-
-HANDOFF = f"<!-- ai:claude-fixer-handoff:v1 kind=findings head={HEAD} round=1 -->"
-LEDGER_HANDOFF = f"<!-- ai:claude-fixer-handoff:v2 head={HEAD} round=1 ledger={DIGEST} -->"
-CONFLICT = f"<!-- ai:claude-fixer-handoff:v1 kind=conflict head={HEAD} round=1 -->"
-VERDICT = f"<!-- ai:claude-fixer-verdict:v1 head={HEAD} -->"
-LEDGER_VERDICT = f"<!-- ai:claude-fixer-verdict:v2 head={HEAD} round=1 ledger={DIGEST} -->"
-
-
-def test_converged_requires_workflow_handoff_and_trusted_verdict():
-	program = _gate_jq("converged")
-	assert _jq_true(program, [_c(HANDOFF + "\n" + LEDGER_HANDOFF), _c(VERDICT + "\n" + LEDGER_VERDICT, author=FIXER_BOT)])
-	# Verdict from an untrusted author does not count.
-	assert not _jq_true(program, [_c(HANDOFF + "\n" + LEDGER_HANDOFF), _c(VERDICT + "\n" + LEDGER_VERDICT, author="someone", association="COLLABORATOR")])
-	# A hand-off posted by anyone but the workflow identity does not count.
-	assert not _jq_true(program, [_c(HANDOFF + "\n" + LEDGER_HANDOFF, author="someone"), _c(VERDICT + "\n" + LEDGER_VERDICT, author=FIXER_BOT)])
-	# A conflict hand-off is not a reviewed head.
-	assert not _jq_true(program, [_c(CONFLICT + "\n" + LEDGER_HANDOFF), _c(VERDICT + "\n" + LEDGER_VERDICT, author=FIXER_BOT)])
-	# Markers for another head do not count.
-	assert not _jq_true(program, [_c(HANDOFF.replace(HEAD, "d" * 40) + "\n" + LEDGER_HANDOFF), _c(VERDICT + "\n" + LEDGER_VERDICT, author=FIXER_BOT)])
-	# The workflow's handoff instruction used to embed a literal verdict marker.
-	assert not _jq_true(program, [_c(HANDOFF + "\n" + LEDGER_HANDOFF + "\nReply with `" + VERDICT + "`.")])
-	# A force-review of the same head creates a new handoff requiring a new reply.
-	assert not _jq_true(program, [_c(HANDOFF + "\n" + LEDGER_HANDOFF), _c(VERDICT + "\n" + LEDGER_VERDICT, author=FIXER_BOT), _c(HANDOFF.replace("round=1", "round=2"))])
-	assert not _jq_true(program, [_c(HANDOFF + "\n" + LEDGER_HANDOFF), _c(VERDICT + "\n" + LEDGER_VERDICT, author=FIXER_BOT), _c(CONFLICT)])
-	assert not _jq_true(program, [_c(HANDOFF + "\n" + LEDGER_HANDOFF), _c(VERDICT + "\n" + LEDGER_VERDICT.replace(DIGEST, "b" * 64), author=FIXER_BOT)])
-	assert not _jq_true(program, [_c(HANDOFF + "\n" + LEDGER_HANDOFF), _c(VERDICT + "\n" + LEDGER_VERDICT.replace("round=1", "round=2"), author=FIXER_BOT)])
-	assert not _jq_true(program, [_c("Other GH_PAT comment\n" + HANDOFF + "\n" + LEDGER_HANDOFF), _c(VERDICT + "\n" + LEDGER_VERDICT, author=FIXER_BOT)])
-
-
-def test_dispatch_rerun_is_skipped_once_a_handoff_names_the_head():
-	program = _gate_jq("awaiting")
-	assert _jq_true(program, [_c(HANDOFF)])
-	assert _jq_true(program, [_c(CONFLICT)])
-	assert not _jq_true(program, [_c(HANDOFF.replace(HEAD, "d" * 40))])
-	assert not _jq_true(program, [_c(HANDOFF, author="someone")])
-
-
-def test_marker_comment_fetch_keeps_fixer_markers_and_association():
-	gate_run = _steps(WORKFLOW, "gate")["Evaluate review gate"]["run"]
-	assert '($b | contains("<!-- ai:claude-fixer-"))' in gate_run
-	assert 'author_association: (.author_association // "")' in gate_run
-	assert 'author_type: (.user.type // "")' in gate_run
-
-
-# ---- hand-off script, executed with a stubbed gh ----
-
-LEDGER_WITH_FINDINGS = """=== CONSENSUS FINDINGS ===
-- scripts/a.sh:10-12 | severity=high | confidence=4
-  flagged_by: [minimax, glm]
-  PROBLEM: unquoted expansion
-  WHY: word splitting
-=== END CONSENSUS FINDINGS ===
-
-=== CONSENSUS TASK GAPS ===
-(No task gaps reported.)
-=== END CONSENSUS TASK GAPS ===
-
-=== FINDINGS FROM minimax ===
-- scripts/a.sh:10 | severity=high
-  PROBLEM: unquoted expansion
-=== END FINDINGS FROM minimax ===
-"""
-
-LEDGER_EMPTY = """=== CONSENSUS FINDINGS ===
-(No findings reported.)
-=== END CONSENSUS FINDINGS ===
-
-=== CONSENSUS TASK GAPS ===
-(No task gaps reported.)
-=== END CONSENSUS TASK GAPS ===
-
-=== FINDINGS FROM minimax ===
-(No findings reported.)
-=== END FINDINGS FROM minimax ===
-"""
-
-
-def _run_handoff(tmp: Path, *, ledger: str | None, check_context: str = "", pre_review_resolve: bool = False, unmerged: str = "", fresh_status: str = "ready", verification: bool = False):
-	support = tmp / "support"
-	support.mkdir()
-	calls = tmp / "calls.jsonl"
-	(support / "post_review_comment.sh").write_text(
-		f"#!/usr/bin/env bash\necho post_review_comment \"$REVIEWER_CONSENSUS_FILE\" \"$PR_NUMBER\" >> {tmp / 'posts.log'}\n",
-		encoding="utf-8",
-	)
-	(support / "collect_pr_check_runs_context.py").write_text(
-		"import os\nfrom pathlib import Path\n"
-		f"Path(os.environ['PR_CHECK_RUNS_CONTEXT_FILE']).write_text('PR_CHECK_RUNS_CONTEXT\\nhead_sha: {HEAD}\\ncollection_status: {fresh_status}\\ntotal_check_runs: 1\\nfailed_count: 0\\nincomplete_count: 0\\n')\n",
-		encoding="utf-8",
-	)
-	bin_dir = tmp / "bin"
-	bin_dir.mkdir()
-	gh = bin_dir / "gh"
-	gh.write_text(
-		"#!/usr/bin/env python3\n"
-		"import json, sys\n"
-		"args = sys.argv[1:]\n"
-		"payload = None\n"
-		"if '--input' in args:\n"
-		"\tpayload = json.load(open(args[args.index('--input') + 1]))\n"
-		f"open({str(calls)!r}, 'a').write(json.dumps({{'args': args, 'payload': payload}}) + '\\n')\n",
-		encoding="utf-8",
-	)
-	gh.chmod(0o755)
-	ledger_path = tmp / "reviewer_consensus.txt"
-	if ledger is not None:
-		ledger_path.write_text(ledger, encoding="utf-8")
-	checks_path = tmp / "checks.txt"
-	checks_path.write_text(check_context, encoding="utf-8")
-	github_env = tmp / "github_env"
-	github_env.write_text("", encoding="utf-8")
-	env = {
-		**os.environ,
-		"PATH": os.pathsep.join((str(bin_dir), os.environ.get("PATH", ""))),
-		"PR_NUMBER": "42",
-		"GH_TOKEN": "t",
-		"GITHUB_REPOSITORY": "o/r",
-		"HEAD_SHA": HEAD,
-		"HEAD_REF": "claude/implement-plan-demo-phase-1",
-		"CLAUDE_FIXER_ROUND_INDEX": "1",
-		"AUTOFIX_PRE_REVIEW_RESOLVE": "true" if pre_review_resolve else "false",
-		"AUTOFIX_PRE_REVIEW_RESOLVE_UNMERGED": unmerged,
-		"REVIEWER_CONSENSUS_FILE": str(ledger_path),
-		"PR_CHECK_RUNS_CONTEXT_FILE": str(checks_path),
-		"SUPPORT_SCRIPTS_DIR": str(support),
-		"GITHUB_RUN_ID": "99",
-		"RUNTIME_DIR": str(tmp),
-		"GITHUB_ENV": str(github_env),
-		"CLAUDE_FIXER_VERIFICATION": "true" if verification else "false",
-		"REVIEWERS_SUCCESSFUL": "2",
-	}
-	proc = subprocess.run(["bash", "-c", f'source "{HANDOFF_SCRIPT}"'], env=env, capture_output=True, text=True)
-	gh_calls = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
-	posts = (tmp / "posts.log").read_text() if (tmp / "posts.log").exists() else ""
-	return proc, gh_calls, posts, github_env.read_text()
-
-
-def test_handoff_posts_findings_ledger_then_marker():
-	with tempfile.TemporaryDirectory() as td:
-		proc, calls, posts, github_env = _run_handoff(Path(td), ledger=LEDGER_WITH_FINDINGS)
-	assert proc.returncode == 0, proc.stderr
-	assert "post_review_comment" in posts
-	assert len(calls) == 1
-	body = calls[0]["payload"]["body"]
-	assert calls[0]["args"][:4] == ["api", "-X", "POST", "repos/o/r/issues/42/comments"]
-	assert f"<!-- ai:claude-fixer-handoff:v1 kind=findings head={HEAD} round=2 -->" in body
-	assert f"<!-- ai:claude-fixer-handoff:v2 head={HEAD} round=2 ledger={hashlib.sha256(LEDGER_WITH_FINDINGS.encode()).hexdigest()} -->" in body
-	assert "Reviewer ledger entries: 2" in body
-	assert "ai:claude-fixer-verdict:v1" in body
-	assert f"<!-- ai:claude-fixer-verdict:v1 head={HEAD} -->" not in body
-	assert f"claude_fixer_converged_head={HEAD}" in body
-	assert "[claude-autofix]" in body
-	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
-	assert "kind=findings findings=2" in proc.stdout
-
-
-def test_handoff_zero_findings_exports_auto_merge_flag_without_comments():
-	with tempfile.TemporaryDirectory() as td:
-		proc, calls, posts, github_env = _run_handoff(Path(td), ledger=LEDGER_EMPTY)
-	assert proc.returncode == 0, proc.stderr
-	assert calls == [] and posts == ""
-	assert "CLAUDE_FIXER_ZERO_FINDINGS=true" in github_env
-
-
-def test_handoff_does_not_merge_without_fresh_ready_checks():
-	for status in ("timeout", "disabled", "api_error"):
-		with tempfile.TemporaryDirectory() as td:
-			proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=LEDGER_EMPTY, fresh_status=status)
-		assert proc.returncode == 0, proc.stderr
-		assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
-		assert len(calls) == 1
-
-
-def test_handoff_does_not_treat_unparseable_zero_ledger_as_clean():
-	broken = LEDGER_EMPTY.replace("(No findings reported.)", "(No findings reported.)\nUnexpected content", 1)
-	with tempfile.TemporaryDirectory() as td:
-		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=broken)
-	assert proc.returncode == 0, proc.stderr
-	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
-	assert len(calls) == 1
-
-
-def test_verification_with_remaining_findings_blocks_instead_of_merging():
-	with tempfile.TemporaryDirectory() as td:
-		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=LEDGER_WITH_FINDINGS, verification=True)
-	assert proc.returncode == 0, proc.stderr
-	assert len(calls) == 1
-	assert "CLAUDE_FIXER_VERIFICATION_FAILED=true" in github_env
-	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
-	assert f"<!-- ai:claude-fixer-verification:v1 head={HEAD} result=unresolved -->" in calls[0]["payload"]["body"]
-
-
-def test_handoff_failed_checks_alone_are_handed_off():
-	context = "failed[0].name: ci / lint\nfailed[0].status: completed\n"
-	with tempfile.TemporaryDirectory() as td:
-		proc, calls, _posts, github_env = _run_handoff(Path(td), ledger=LEDGER_EMPTY, check_context=context)
-	assert proc.returncode == 0, proc.stderr
-	assert "Failing check runs on this head: `ci / lint`" in calls[0]["payload"]["body"]
-	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
-
-
-def test_handoff_missing_ledger_fails_closed():
-	with tempfile.TemporaryDirectory() as td:
-		proc, calls, posts, github_env = _run_handoff(Path(td), ledger=None)
-	assert proc.returncode == 0, proc.stderr
-	assert posts == ""
-	assert "consensus ledger was not produced" in calls[0]["payload"]["body"]
-	assert "kind=findings" in calls[0]["payload"]["body"]
-	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
-
-
-def test_handoff_conflict_posts_conflict_marker_only():
-	with tempfile.TemporaryDirectory() as td:
-		proc, calls, posts, github_env = _run_handoff(Path(td), ledger=None, pre_review_resolve=True, unmerged="a.py,b.py")
-	assert proc.returncode == 0, proc.stderr
-	assert posts == "" and len(calls) == 1
-	body = calls[0]["payload"]["body"]
-	assert f"<!-- ai:claude-fixer-handoff:v1 kind=conflict head={HEAD} round=2 -->" in body
-	assert "`a.py`, `b.py`" in body
-	assert "[claude-merge-resolve]" in body
-	assert "CLAUDE_FIXER_ZERO_FINDINGS" not in github_env
-
-
-def test_handoff_rejects_malformed_head():
-	with tempfile.TemporaryDirectory() as td:
-		tmp = Path(td)
-		proc = subprocess.run(
-			["bash", "-c", f'source "{HANDOFF_SCRIPT}"'],
-			env={**os.environ, "PR_NUMBER": "42", "HEAD_SHA": "nothex", "SUPPORT_SCRIPTS_DIR": str(tmp), "GITHUB_ENV": str(tmp / "e")},
-			capture_output=True,
-			text=True,
-		)
-	assert proc.returncode == 1 and "40-hex HEAD_SHA" in proc.stdout
-
-
-def test_expanded_workflow_carries_the_handoff_body():
-	assert "ai:claude-fixer-handoff:v1 kind=findings" in expanded_review_autofix_text()
 
 
 # ---- the real "Evaluate review gate" script, end to end with a stubbed gh ----
@@ -475,9 +150,11 @@ if args[:1] != ["api"]:
 if path == "user":
 	emit({"login": state["login"]})
 elif path.endswith("/comments"):
+	if state.get("comments_fail"):
+		sys.exit(1)
 	emit(state["comments"])
 elif path.endswith("/files"):
-	emit([{"filename": "scripts/big_change.sh"}])
+	emit(state.get("files") or [{"filename": "scripts/big_change.sh"}])
 elif "/pulls/" in path:
 	emit(state["pr"])
 else:
@@ -485,7 +162,7 @@ else:
 '''
 
 
-def _run_gate(tmp: Path, *, head_ref: str, comments: list[dict], event_name: str = "workflow_dispatch", converged_head: str = "", extra_env: dict | None = None, marker_author: str = AUTHOR):
+def _run_gate(tmp: Path, *, head_ref: str, comments: list[dict], event_name: str = "workflow_dispatch", converged_head: str = "", extra_env: dict | None = None, marker_author: str = AUTHOR, files: list[dict] | None = None, pr_overrides: dict | None = None, comments_fail: bool = False):
 	gate_run = _steps(WORKFLOW, "gate")["Evaluate review gate"]["run"]
 	bin_dir = tmp / "bin"
 	bin_dir.mkdir()
@@ -498,7 +175,9 @@ def _run_gate(tmp: Path, *, head_ref: str, comments: list[dict], event_name: str
 			{"id": i, "user": {"login": c["author_login"], "type": c["author_type"]}, "author_association": c["author_association"], "created_at": "2026-09-25T00:00:00Z", "body": c["body"]}
 			for i, c in enumerate(comments, 1)
 		],
-		"pr": {"state": "open", "merged": False, "head": {"ref": head_ref, "sha": HEAD}, "labels": [], "additions": 400, "deletions": 50, "mergeable": True, "mergeable_state": "clean", "title": "Demo — phase 1/2: x", "body": "Refs #1"},
+		"pr": {"state": "open", "merged": False, "head": {"ref": head_ref, "sha": HEAD, "repo": {"full_name": "o/r"}}, "labels": [], "additions": 400, "deletions": 50, "mergeable": True, "mergeable_state": "clean", "title": "Demo — phase 1/2: x", "body": "Refs #1", **(pr_overrides or {})},
+		"files": files,
+		"comments_fail": comments_fail,
 	}), encoding="utf-8")
 	output_file = tmp / "out.txt"
 	output_file.write_text("", encoding="utf-8")
@@ -522,7 +201,8 @@ def _run_gate(tmp: Path, *, head_ref: str, comments: list[dict], event_name: str
 		"FORCE_RB_JUDGE": "false",
 		"REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED": "false",
 		"CLAUDE_FIXER_ENABLED": "true",
-		"CLAUDE_FIXER_VERDICT_BOT_LOGIN": FIXER_BOT,
+		# Retired inputs a stale caller might still export; the gate must ignore them.
+		"CLAUDE_FIXER_VERDICT_BOT_LOGIN": "dedicated-fixer[bot]",
 		"CLAUDE_FIXER_CONVERGED_HEAD": converged_head,
 	}
 	env.update(extra_env or {})
@@ -533,127 +213,757 @@ def _run_gate(tmp: Path, *, head_ref: str, comments: list[dict], event_name: str
 	return proc, outputs
 
 
-FIXER_REF = "claude/implement-plan-demo-phase-1"
+CLAUDE_REF = "claude/quirky-wozniak-e9t88m"
 
 
-def test_gate_marks_fixer_prs_and_runs_the_first_round():
-	with tempfile.TemporaryDirectory() as td:
-		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[], event_name="pull_request")
-	assert proc.returncode == 0, proc.stderr
-	assert out["claude_fixer"] == "true" and out["should_run"] == "true" and out["claude_fixer_converged"] == "false"
+def _c(body: str, author: str = AUTHOR) -> dict:
+	return {"body": body, "author_login": author, "author_type": "User", "author_association": "OWNER"}
 
 
-def test_gate_marks_every_claude_head_as_a_fixer_pr():
-	"""CLAUDE.md §26: a session's ad-hoc claude/* PR is fixed by Claude too."""
-	for head_ref in ("claude/quirky-wozniak-e9t88m", "claude/verify-activation-demo-fix-1"):
+def test_gate_runs_claude_prs_like_any_other_pr():
+	for head_ref in (CLAUDE_REF, "claude/implement-plan-demo-phase-1", "ai/issue-7"):
 		with tempfile.TemporaryDirectory() as td:
 			proc, out = _run_gate(Path(td), head_ref=head_ref, comments=[], event_name="pull_request")
 		assert proc.returncode == 0, proc.stderr
-		assert out["claude_fixer"] == "true" and out["should_run"] == "true", head_ref
+		assert out["should_run"] == "true", head_ref
+		assert "claude_fixer" not in out, head_ref
+		assert "AUTOFIX_GATE_CLAUDE_FIXER" not in proc.stdout, head_ref
 
 
-def test_gate_kill_switch_returns_claude_heads_to_the_gpt_path():
+def test_gate_ignores_a_leftover_handoff_comment_on_dispatch():
+	"""A hand-off comment left by the retired flow no longer parks the PR."""
 	with tempfile.TemporaryDirectory() as td:
-		proc, out = _run_gate(Path(td), head_ref="claude/quirky-wozniak-e9t88m", comments=[], event_name="pull_request",
-			extra_env={"CLAUDE_FIXER_ENABLED": "false"})
+		proc, out = _run_gate(Path(td), head_ref=CLAUDE_REF, comments=[_c(RETIRED_HANDOFF)])
 	assert proc.returncode == 0, proc.stderr
-	assert out["claude_fixer"] == "false"
+	assert out["should_run"] == "true"
+	assert out.get("skip_reason", "") != "claude_fixer_awaiting_session"
 
 
-def test_gate_leaves_other_prs_alone():
+def test_gate_ignores_the_deprecated_converged_head_input():
 	with tempfile.TemporaryDirectory() as td:
-		proc, out = _run_gate(Path(td), head_ref="ai/issue-7", comments=[_c(HANDOFF)])
+		proc, out = _run_gate(Path(td), head_ref=CLAUDE_REF, comments=[], converged_head=HEAD)
 	assert proc.returncode == 0, proc.stderr
-	assert out["claude_fixer"] == "false" and out["should_run"] == "true"
+	assert out["should_run"] == "true"
+	assert "AUTOFIX_GATE_CLAUDE_FIXER_CONVERGED" not in proc.stdout
 
 
-def test_gate_skips_dispatch_rerun_while_the_session_owns_the_round():
+DOCS_FILES = [{"filename": "docs/deploy-activation/pr-1.md", "status": "modified"}, {"filename": "notes.md", "status": "added"}]
+
+
+def test_docs_only_claude_pr_takes_the_deterministic_skip_even_with_a_leftover_handoff():
 	with tempfile.TemporaryDirectory() as td:
-		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[_c(HANDOFF)])
+		proc, out = _run_gate(Path(td), head_ref=CLAUDE_REF, comments=[_c(RETIRED_HANDOFF)], event_name="pull_request",
+			files=DOCS_FILES, pr_overrides={"changed_files": 2})
 	assert proc.returncode == 0, proc.stderr
-	assert out["should_run"] == "false" and out["skip_reason"] == "claude_fixer_awaiting_session"
+	assert out["deterministic_skip"] == "true" and out["det_skip_reason"] == "docs_only"
+	assert "claude_handoff_suppressed" not in proc.stdout
 
 
-def test_gate_accepts_a_verified_convergence_dispatch():
+def test_small_diff_claude_pr_takes_the_deterministic_skip():
 	with tempfile.TemporaryDirectory() as td:
-		proc, out = _run_gate(
-			Path(td),
-			head_ref=FIXER_REF,
-			comments=[_c(HANDOFF + "\n" + LEDGER_HANDOFF), _c(VERDICT + "\n" + LEDGER_VERDICT, author=FIXER_BOT)],
-			converged_head=HEAD,
-		)
+		proc, out = _run_gate(Path(td), head_ref=CLAUDE_REF, comments=[], event_name="pull_request",
+			files=[{"filename": "src/app.py", "status": "modified"}],
+			pr_overrides={"changed_files": 1, "additions": 3, "deletions": 2})
 	assert proc.returncode == 0, proc.stderr
-	assert out["claude_fixer_converged"] == "true"
-	assert out["claude_fixer_verify"] == "true"
-	assert out["should_run"] == "true" and out["skip_reason"] == ""
-	assert out["deterministic_skip"] == "false"
-	assert out["head_sha"] == HEAD
+	assert out["deterministic_skip"] == "true" and out["det_skip_reason"] == "small_diff"
 
 
-def test_gate_rejects_unconfigured_bot_and_human_verdict():
-	for env, verdict in (
-		({"CLAUDE_FIXER_VERDICT_BOT_LOGIN": ""}, _c(VERDICT + "\n" + LEDGER_VERDICT, author=FIXER_BOT)),
-		({"CLAUDE_FIXER_VERDICT_BOT_LOGIN": AUTHOR}, _c(VERDICT + "\n" + LEDGER_VERDICT, author=AUTHOR)),
-		({}, _c(VERDICT + "\n" + LEDGER_VERDICT, author="dev", association="COLLABORATOR")),
+def test_unverified_pr_head_never_enters_deterministic_merge():
+	assert WORKFLOW["jobs"]["codex-agent"]["if"] == "${{ needs.gate.outputs.should_run == 'true' }}"
+	assert WORKFLOW["jobs"]["deterministic-skip-merge"]["if"] == "${{ needs.gate.outputs.deterministic_skip == 'true' }}"
+	for head_repo, head_sha in (("other/repo", HEAD), ("", HEAD), ("o/r", "bad-sha")):
+		with tempfile.TemporaryDirectory() as td:
+			proc, out = _run_gate(Path(td), head_ref=CLAUDE_REF, comments=[],
+				files=DOCS_FILES, pr_overrides={"changed_files": 2,
+					"head": {"ref": CLAUDE_REF, "sha": head_sha, "repo": {"full_name": head_repo}}})
+		assert proc.returncode == 0, proc.stderr
+		assert out["should_run"] == "false" and out["deterministic_skip"] == "false"
+		assert out["skip_reason"] == "review_checkout_unverified"
+		assert out["review_checkout_sha"] == ""
+
+
+def test_claude_pr_skip_keeps_the_protected_path_and_size_guards():
+	for files, overrides in (
+		([{"filename": "CLAUDE.md", "status": "modified"}], {"changed_files": 1, "additions": 2, "deletions": 1}),
+		([{"filename": "src/app.py", "status": "modified"}], {"changed_files": 1, "additions": 40, "deletions": 2}),
 	):
 		with tempfile.TemporaryDirectory() as td:
-			proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[_c(HANDOFF + "\n" + LEDGER_HANDOFF), verdict], converged_head=HEAD, extra_env=env)
+			proc, out = _run_gate(Path(td), head_ref=CLAUDE_REF, comments=[], event_name="pull_request",
+				files=files, pr_overrides=overrides)
 		assert proc.returncode == 0, proc.stderr
-		assert out["should_run"] == "false" and out["claude_fixer_verify"] == "false"
-	with tempfile.TemporaryDirectory() as td:
-		proc, out = _run_gate(Path(td), head_ref=FIXER_REF,
-			comments=[_c(HANDOFF + "\n" + LEDGER_HANDOFF, author=FIXER_BOT), _c(VERDICT + "\n" + LEDGER_VERDICT, author=FIXER_BOT)],
-			converged_head=HEAD, marker_author=FIXER_BOT)
-	assert proc.returncode == 0, proc.stderr
-	assert out["claude_fixer_verify"] == "false"  # GH_PAT and fixer must differ.
+		assert out["deterministic_skip"] == "false" and out["should_run"] == "true", files
 
 
-def test_gate_rejects_failed_comment_fetch():
-	with tempfile.TemporaryDirectory() as td:
-		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=None, converged_head=HEAD)
-	assert proc.returncode == 0, proc.stderr
-	assert out["should_run"] == "false" and out["claude_fixer_verify"] == "false"
+# ---- reviewer budget slots (unchanged by the retirement) ----
+
+REVIEWERS_SCRIPT = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
 
 
-def test_gate_does_not_repeat_a_failed_same_head_verification():
-	marker = f"<!-- ai:claude-fixer-verification:v1 head={HEAD} result=unresolved -->"
-	with tempfile.TemporaryDirectory() as td:
-		proc, out = _run_gate(Path(td), head_ref=FIXER_REF,
-			comments=[_c(HANDOFF + "\n" + LEDGER_HANDOFF), _c(marker), _c(VERDICT + "\n" + LEDGER_VERDICT, author=FIXER_BOT)],
-			converged_head=HEAD)
-	assert proc.returncode == 0, proc.stderr
-	assert out["claude_fixer_verify"] == "false" and out["should_run"] == "false"
+def _reviewers_block(start_marker: str, end_marker: str) -> str:
+	text = REVIEWERS_SCRIPT.read_text(encoding="utf-8")
+	start = text.index(start_marker)
+	return text[start:text.index(end_marker, start)]
 
 
-def test_gate_rejects_an_embedded_or_stale_verdict_for_current_head():
-	for comments in (
-		[_c(HANDOFF + "\nReply with `" + VERDICT + "`.")],
-		[_c(HANDOFF), _c(VERDICT), _c(HANDOFF.replace("round=1", "round=2"))],
-	):
-		with tempfile.TemporaryDirectory() as td:
-			proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=comments, converged_head=HEAD)
-		assert proc.returncode == 0, proc.stderr
-		assert out["claude_fixer_converged"] == "false"
-		assert out["skip_reason"] == "claude_fixer_converged_unverified"
+def _run_reviewer_pass_with_statuses(td: Path, statuses: list[str]) -> tuple[subprocess.CompletedProcess, Path]:
+	"""Run the real `run_reviewer_pass` with each slot ending in the given status.
 
-
-def test_gate_rejects_convergence_without_verdict_stale_head_or_non_fixer_pr():
-	cases = (
-		(FIXER_REF, [_c(HANDOFF)], HEAD),
-		(FIXER_REF, [_c(HANDOFF), _c(VERDICT)], "d" * 40),
-		("ai/issue-7", [_c(HANDOFF), _c(VERDICT)], HEAD),
-		(FIXER_REF, [_c(HANDOFF), _c(VERDICT, association="NONE")], HEAD),
+	`run_reviewer` is stubbed to write the slot's status file and output, so
+	the pass's own tally and partial-finalize decision run unchanged.
+	"""
+	partial_block = _reviewers_block(
+		'REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE="${RUNTIME_DIR:-.}/reviewers_partial_finalize_request.txt"',
+		"resolve_ledger_substate_helper() {",
 	)
-	for head_ref, comments, converged in cases:
-		with tempfile.TemporaryDirectory() as td:
-			proc, out = _run_gate(Path(td), head_ref=head_ref, comments=comments, converged_head=converged)
-		assert proc.returncode == 0, proc.stderr
-		assert out["claude_fixer_converged"] == "false", (head_ref, converged)
-		assert out["should_run"] == "false" and out["skip_reason"] == "claude_fixer_converged_unverified"
+	pass_block = _reviewers_block("run_reviewer_pass() {", "# Wrap a consolidated pass-1 ledger")
+	reviews = td / "reviews"
+	runtime = td / "runtime"
+	reviews.mkdir()
+	runtime.mkdir()
+	models = "".join(f"vendor/model{index}\\n" for index in range(len(statuses)))
+	status_cases = "".join(f'\t\tvendor/model{index}) echo "{status}" ;;\n' for index, status in enumerate(statuses))
+	script = (
+		"set -euo pipefail\n"
+		f"{partial_block}\n"
+		"emit_run_budget_gate_note() { :; }\n"
+		"codex_run_budget_phase_may_start() { return 0; }\n"
+		"reviewer_resume_should_reuse_success_slot() { return 1; }\n"
+		"reviewer_circuit_breaker_enabled() { return 1; }\n"
+		f"get_active_reviewer_models_text() {{ printf '{models}'; }}\n"
+		"slot_status_for() {\n"
+		'\tcase "$1" in\n'
+		f"{status_cases}"
+		"\tesac\n"
+		"}\n"
+		"run_reviewer() {\n"
+		'\tlocal model="$1" safe_name="$2" prefix="$3"\n'
+		'\tslot_status_for "${model}" > "${PREVIOUS_REVIEWS_DIR}/status_${prefix}_${safe_name}.txt"\n'
+		'\tprintf "(No findings reported.)\\n" > "${PREVIOUS_REVIEWS_DIR}/${prefix}_${safe_name}.txt"\n'
+		"}\n"
+		f"{pass_block}\n"
+		'run_reviewer_pass review "prompt" ""\n'
+	)
+	env = {
+		**os.environ,
+		"PREVIOUS_REVIEWS_DIR": str(reviews),
+		"RUNTIME_DIR": str(runtime),
+		"GITHUB_ENV": str(td / "github_env"),
+	}
+	proc = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+	return proc, runtime / "reviewers_partial_finalize_request.txt"
 
 
-def test_gate_disabled_by_repo_var():
-	with tempfile.TemporaryDirectory() as td:
-		proc, out = _run_gate(Path(td), head_ref=FIXER_REF, comments=[_c(HANDOFF)], extra_env={"CLAUDE_FIXER_ENABLED": "false"})
+def test_budget_skip_only_pass_still_requests_partial_finalize(tmp_path):
+	"""Q47: A. A pass whose only non-success slot is `skipped_budget` still
+	requests a partial finalize before the summariser, so no ledger is written.
+	"""
+	proc, request = _run_reviewer_pass_with_statuses(tmp_path, ["success"] * 3 + ["skipped_budget"])
 	assert proc.returncode == 0, proc.stderr
-	assert out["claude_fixer"] == "false" and out["should_run"] == "true"
+	assert proc.stdout.strip().splitlines()[-1] == "3"
+	assert request.exists()
+	assert "AUTOFIX_PARTIAL_FINALIZE_REASON=soft_deadline" in request.read_text(encoding="utf-8")
+
+
+def test_budget_skip_beside_a_hard_failure_reaches_the_summariser(tmp_path):
+	proc, request = _run_reviewer_pass_with_statuses(tmp_path, ["success"] * 3 + ["failed", "skipped_budget", "skipped_unmapped"])
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout.strip().splitlines()[-1] == "3"
+	assert not request.exists()
+
+
+
+# ---- Phase 5c: Claude-fixer mode is the review write roles' Claude engine ----
+
+FIXER_ROLES = ("REVIEW_EDITOR", "REVIEW_CONSOLIDATOR", "CONFLICT_RESOLVER", "RB_JUDGE")
+
+
+def _run_resolve_step(tmp: Path, **env_overrides: str) -> dict[str, str]:
+	step = AGENT_STEPS["Resolve AI engine"]
+	github_env = tmp / "github_env"
+	github_output = tmp / "github_output"
+	env = {
+		"PATH": os.environ.get("PATH", ""),
+		"HOME": str(tmp),
+		"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+		"GITHUB_ENV": str(github_env),
+		"GITHUB_OUTPUT": str(github_output),
+		"AI_ENGINE": "",
+		"CLAUDE_FIXER_ENABLED": "true",
+		**{f"AI_ENGINE_{role}": "" for role in FIXER_ROLES},
+		**env_overrides,
+	}
+	proc = subprocess.run(["bash", "-c", step["run"]], cwd=tmp, env=env, capture_output=True, text=True)
+	assert proc.returncode == 0, proc.stderr
+	values = {}
+	for path in (github_env, github_output):
+		for line in path.read_text(encoding="utf-8").splitlines():
+			key, _, value = line.partition("=")
+			values[key] = value
+	return values
+
+
+def test_resolve_step_wiring():
+	step = AGENT_STEPS["Resolve AI engine"]
+	assert step["id"] == "ai_engine"
+	assert step["env"]["CLAUDE_FIXER_ENABLED"] == "${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}"
+	state = AGENT_STEPS["Check PR state (defense-in-depth)"]["run"]
+	assert 'pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" || echo \'null\')"' in state
+	assert 'echo "AI_ENGINE_LABELS=${AI_ENGINE_LABELS}" >> "$GITHUB_ENV"' in state
+	assert '["ai:codex"]' in state
+	for role in FIXER_ROLES:
+		assert step["env"][f"AI_ENGINE_{role}"] == f"${{{{ vars.AI_ENGINE_{role} || '' }}}}"
+	names = list(AGENT_STEPS)
+	for name, uses in (
+		("Install Claude Code CLI", "./.codex-workflow-src/.github/actions/install-claude"),
+		("Resolve Claude credential", "./.codex-workflow-src/.github/actions/claude-pool-token"),
+	):
+		assert AGENT_STEPS[name]["uses"] == uses
+		assert AGENT_STEPS[name]["continue-on-error"] is True
+		assert AGENT_STEPS[name]["if"] == "env.PR_CLOSED != 'true' && steps.ai_engine.outputs.any_claude == 'true'"
+		assert names.index("Resolve AI engine") < names.index(name) < names.index("Install project dependencies (best-effort)")
+
+
+def test_fixer_mode_on_puts_the_four_roles_on_claude(tmp_path):
+	values = _run_resolve_step(tmp_path)
+	assert values["any_claude"] == "true"
+	for role in FIXER_ROLES:
+		assert values[f"AI_ENGINE_RESOLVED_{role}"] == "claude", role
+
+
+def test_fixer_mode_off_beats_ai_engine_and_role_variables(tmp_path):
+	values = _run_resolve_step(tmp_path, CLAUDE_FIXER_ENABLED="false", AI_ENGINE="claude", AI_ENGINE_RB_JUDGE="claude")
+	assert values["any_claude"] == "false"
+	for role in FIXER_ROLES:
+		assert values[f"AI_ENGINE_RESOLVED_{role}"] == "codex", role
+
+
+def test_a_role_variable_still_moves_one_role_to_codex(tmp_path):
+	values = _run_resolve_step(tmp_path, AI_ENGINE_CONFLICT_RESOLVER="codex")
+	assert values["AI_ENGINE_RESOLVED_CONFLICT_RESOLVER"] == "codex"
+	assert values["AI_ENGINE_RESOLVED_REVIEW_EDITOR"] == "claude"
+
+
+def test_pr_labels_take_precedence_over_engine_variables(tmp_path):
+	values = _run_resolve_step(tmp_path, AI_ENGINE_LABELS='["ai:codex"]', AI_ENGINE="claude")
+	assert {values[f"AI_ENGINE_RESOLVED_{role}"] for role in FIXER_ROLES} == {"codex"}
+	values = _run_resolve_step(tmp_path, AI_ENGINE_LABELS='["ai:engine-claude"]', AI_ENGINE="codex")
+	assert {values[f"AI_ENGINE_RESOLVED_{role}"] for role in FIXER_ROLES} == {"claude"}
+
+
+def test_pr_state_label_snapshot_fails_closed_on_unavailable_metadata(tmp_path):
+	state = AGENT_STEPS["Check PR state (defense-in-depth)"]["run"]
+	label_line = next(line.strip() for line in state.splitlines() if line.strip().startswith('AI_ENGINE_LABELS="$('))
+	for metadata, expected in (
+		('{"labels":[{"name":"ai:engine-claude"},{"name":"other"}]}', '["ai:engine-claude","other"]'),
+		('null', '["ai:codex"]'),
+		('{"labels":"malformed"}', '["ai:codex"]'),
+	):
+		result = subprocess.run(
+			["bash", "-c", 'set -euo pipefail\npr_meta="$PR_META"\n' + label_line + '\nprintf "%s\\n" "$AI_ENGINE_LABELS"'],
+			env={**os.environ, "PR_META": metadata},
+			cwd=tmp_path,
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert result.stdout.strip() == expected
+
+
+def test_missing_engine_keeps_every_role_on_codex(tmp_path):
+	values = _run_resolve_step(tmp_path, SUPPORT_SCRIPTS_DIR=str(tmp_path))
+	assert values["any_claude"] == "false"
+	assert {values[f"AI_ENGINE_RESOLVED_{role}"] for role in FIXER_ROLES} == {"codex"}
+
+
+def test_sandbox_prepare_follows_both_roles_with_an_opencode_fallback():
+	run = AGENT_STEPS["Install project dependencies (best-effort)"]["run"]
+	assert 'review_untrusted_sandbox.sh" prepare claude; then' in run
+	assert '[ "${AI_ENGINE_RESOLVED_REVIEW_CONSOLIDATOR:-codex}" = "claude" ]' in run
+	assert 'for role in REVIEW_EDITOR REVIEW_CONSOLIDATOR; do' in run
+	assert 'echo "${resolved}=codex" >> "$GITHUB_ENV"' in run
+	assert run.count('bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare\n') == 2
+
+
+def test_engine_files_ride_the_optional_bootstrap():
+	text = (REPO_ROOT / "scripts" / "stage_workflow_support.sh").read_text(encoding="utf-8")
+	line = next(l for l in text.splitlines() if l.startswith("OPTIONAL_BOOTSTRAP_SCRIPTS="))
+	for name in ("ai_engine.sh", "claude_engine.py", "claude_anthropic_relay.py", "claude_settings.json.tmpl"):
+		assert name in line.split("=", 1)[1].strip("\"").split(), name
+
+
+# Each review script: the Claude branch, the 75 gate, and the OpenCode
+# command after it (G4); consolidation uses a fresh sandbox.
+REVIEW_SITES = {
+	"review_apply_fixes.sh": (
+		'if [ "${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex}" = "claude" ]; then',
+		'[ "${editor_claude_rc}" -eq 75 ] || return "${editor_claude_rc}"',
+		'      -- "${editor_opencode_cmd[@]}" < "${prompt_file}" 2>"${stderr_target}"',
+	),
+	"review_consolidate.sh": (
+		'claude REVIEW_CONSOLIDATOR read \\',
+		'elif consolidator_opencode_sandbox_prepare; then',
+		'				-- "${consolidator_cmd[@]}" < "${CONSOLIDATOR_PROMPT_FILE}"; then',
+	),
+	"review_conflict_resolve.sh": (
+		'_resolver_sandbox_attempt claude || resolver_claude_rc=$?',
+		'if [ "${resolver_claude_rc}" -eq 75 ]; then',
+		'_resolver_sandbox_attempt codex || resolver_claude_rc=$?',
+	),
+	"review_rb_judge.sh": (
+		'review_rb_claude_run read "${RB_JUDGE_PROMPT}" "${RB_JUDGE_OUTPUT}" "${JUDGE_STDERR_FILE}" "${level}" || rb_judge_claude_rc=$?',
+		'if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then',
+		'      -- "${judge_codex_cmd[@]}" < "${RB_JUDGE_PROMPT}" || rc=$?',
+	),
+}
+
+
+def test_each_review_role_tries_claude_then_opencode():
+	for script, (claude_call, gate, opencode_call) in REVIEW_SITES.items():
+		text = (REPO_ROOT / "scripts" / script).read_text(encoding="utf-8")
+		assert text.count(claude_call) == 1, script
+		start = text.index(claude_call)
+		gate_at = text.index(gate, start)
+		assert text.index(opencode_call, gate_at) > gate_at, script
+	rb = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
+	assert 'review_rb_claude_run write "${RB_FIX_PROMPT}" "${RB_FIX_OUTPUT}" "${RB_FIX_STDERR}" "${JUDGE_EFFECTIVE_REASONING_EFFORT}" || rb_fix_claude_rc=$?' in rb
+
+
+FAKE_SANDBOX = r'''#!/usr/bin/env bash
+case "$1" in
+  prepare-ephemeral)
+    [ "${MODE}" != prepare_failed ] || exit 1
+    if [ "${MODE}" = prepare_partial_cleanup_failed ]; then echo "${FAKE_ROOT}"; exit 1; fi
+    count=0
+    [ ! -f "${CALLS}" ] || count=$(grep -c '^prepare-ephemeral' "${CALLS}" || true)
+    [ "${MODE}" != prepare_second_failed ] || [ "${count}" -eq 0 ] || exit 1
+    if [ "${RESOLVER_TEST:-false}" = true ] || [ "${MODE}" = claude_unavailable_then_success ]; then
+      echo "${FAKE_ROOT}-${count}"
+    else
+      echo "${FAKE_ROOT}"
+    fi
+    echo prepare-ephemeral >> "${CALLS}"
+    ;;
+  run)
+    [ "$#" -eq 9 ] || exit 2
+    printf 'run|%s|%s|%s|%s\n' "$7" "$8" "$9" "${REVIEW_SANDBOX_ROOT}" >> "${CALLS}"
+    case "${MODE}" in
+      success) printf 'verdict\n' > "$3" ;;
+      claude_unavailable_then_success|prepare_second_failed)
+        [ "$7" != claude ] || exit 75
+        printf 'verdict\n' > "$3" ;;
+      transfer_failed) : > "${RUNTIME_DIR}/review_sandbox_transfer_failed"; exit 1 ;;
+      unsafe_directory) printf '::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category=other depth=2\n' > "${RUNTIME_DIR}/review_sandbox_transfer_reason_${3##*/}"; : > "${RUNTIME_DIR}/review_sandbox_transfer_failed"; exit 1 ;;
+      marker_on_success) : > "${RUNTIME_DIR}/review_sandbox_transfer_failed" ;;
+      unavailable) exit 75 ;;
+      claude_unavailable) if [ "$7" = claude ]; then printf 'stale\n' > "$3"; exit 75; fi ;;
+      outdated) exit 2 ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  cleanup) echo cleanup >> "${CALLS}"; case "${MODE}" in cleanup_failed|prepare_partial_cleanup_failed) exit 1 ;; esac ;;
+esac
+'''
+
+
+FAKE_CONSOLIDATOR_SANDBOX = r'''#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  prepare-ephemeral)
+    [ "$#" -eq 2 ] && [ "$2" = codex ] || exit 2
+    printf 'prepare-ephemeral\n' >> "${MOCK_CONSOLIDATOR_CALLS}"
+    [ "${MOCK_SANDBOX_MODE:-}" != prepare_failed ] || exit 1
+    printf '%s\n' "${MOCK_CONSOLIDATOR_ROOT}"
+    ;;
+  run)
+    [ "$#" -eq 9 ] || exit 2
+    printf 'run|%s|%s|%s|%s\n' "$7" "$8" "$9" "${REVIEW_SANDBOX_ROOT}" >> "${MOCK_CONSOLIDATOR_CALLS}"
+    if [ "$7" = claude ]; then
+      [ "${MOCK_CLAUDE_RC:-0}" -eq 0 ] || exit "${MOCK_CLAUDE_RC}"
+    elif [ "${MOCK_SANDBOX_MODE:-}" = run_outdated ] || [ "${MOCK_SANDBOX_MODE:-}" = run_outdated_cleanup_failed ]; then
+      exit 2
+    fi
+    [ -z "${MOCK_CONSOLIDATOR_PROMPT_CAPTURE:-}" ] || cp "$2" "${MOCK_CONSOLIDATOR_PROMPT_CAPTURE}"
+    cp "${MOCK_OPENCODE_OUTPUT_FILE}" "$3"
+    exit "${MOCK_CONSOLIDATOR_RUN_RC:-0}"
+    ;;
+  cleanup)
+    printf 'cleanup\n' >> "${MOCK_CONSOLIDATOR_CALLS}"
+    case "${MOCK_SANDBOX_MODE:-}" in cleanup_failed|run_outdated_cleanup_failed) exit 1 ;; esac
+    ;;
+  *) exit 2 ;;
+esac
+'''
+
+
+def install_consolidator_mock_support(tmp: Path, *, sandbox: bool = True, support_dir: Path | None = None) -> Path:
+	"""Use real trusted helpers, replacing only the sandbox with a recording stub."""
+	support_dir = support_dir or tmp / "consolidator_support"
+	support_dir.mkdir(exist_ok=True)
+	for script in (REPO_ROOT / "scripts").iterdir():
+		if script.is_file() and script.name != "review_untrusted_sandbox.sh":
+			if not (support_dir / script.name).exists():
+				(support_dir / script.name).symlink_to(script)
+	if sandbox:
+		(support_dir / "review_untrusted_sandbox.sh").write_text(FAKE_CONSOLIDATOR_SANDBOX, encoding="utf-8")
+	return support_dir
+
+
+def _run_consolidator_sandbox_case(tmp: Path, *, mode: str = "success", engine: str = "codex", claude_rc: int = 0, sandbox: bool = True):
+	support = install_consolidator_mock_support(tmp, sandbox=sandbox)
+	runtime = tmp / "runtime"
+	runtime.mkdir()
+	(runtime / "reviewer_bundle.txt").write_text("Finding in src/a.py\n", encoding="utf-8")
+	fixture = tmp / "fixture.txt"
+	fixture.write_text("=== ISSUE example ===\nFILE: src/a.py\n=== END ISSUE example ===\n", encoding="utf-8")
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	(bin_dir / "opencode").write_text('#!/bin/sh\nif [ "$1" = --version ]; then echo 1.18.23; else touch "$HOST_WRITER_MARKER"; fi\n', encoding="utf-8")
+	(bin_dir / "opencode").chmod(0o755)
+	config_writer = tmp / "config_writer.sh"
+	config_writer.write_text('#!/bin/sh\nwhile [ "$#" -gt 0 ]; do if [ "$1" = --config-path ]; then printf "{}\\n" > "$2"; fi; shift; done\n', encoding="utf-8")
+	env = dict(os.environ, SUPPORT_SCRIPTS_DIR=str(support), SUPPORT_PROMPTS_DIR=str(REPO_ROOT / "prompts"),
+		RUNTIME_DIR=str(runtime), OPENCODE_CONFIG_WRITER_PATH=str(config_writer),
+		MOCK_CONSOLIDATOR_ROOT=str(tmp / "isolated"), MOCK_CONSOLIDATOR_CALLS=str(tmp / "calls"),
+		MOCK_OPENCODE_OUTPUT_FILE=str(fixture), MOCK_SANDBOX_MODE=mode, MOCK_CLAUDE_RC=str(claude_rc),
+		HOST_WRITER_MARKER=str(tmp / "host_writer"), AI_ENGINE_RESOLVED_REVIEW_CONSOLIDATOR=engine,
+		PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}", PYTHONDONTWRITEBYTECODE="1",
+		AI_MEMORY_ENABLED="false", CODEX_HEARTBEAT_ENABLED="0")
+	if engine == "claude":
+		env["REVIEW_SANDBOX_ROOT"] = str(tmp / "shared")
+	for inherited in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "TG_BOT_SECRET", "TG_ADMIN_CHAT_ID"):
+		env.pop(inherited, None)
+	proc = subprocess.run(["bash", str(REPO_ROOT / "scripts" / "review_consolidate.sh")],
+		cwd=tmp, env=env, capture_output=True, text=True)
+	calls = (tmp / "calls").read_text(encoding="utf-8").splitlines() if (tmp / "calls").exists() else []
+	return proc, calls, runtime / "consolidator_raw.txt"
+
+
+def test_consolidator_default_and_claude_unavailable_use_fresh_read_only_sandbox(tmp_path):
+	for engine, claude_rc in (("codex", 0), ("claude", 75)):
+		work = tmp_path / engine
+		work.mkdir()
+		proc, calls, output = _run_consolidator_sandbox_case(work, engine=engine, claude_rc=claude_rc)
+		assert proc.returncode == 0, proc.stderr
+		assert calls[-3:] == ["prepare-ephemeral", f"run|codex|REVIEW_CONSOLIDATOR|read|{work / 'isolated'}", "cleanup"]
+		assert output.read_text(encoding="utf-8").startswith("=== ISSUE example ===")
+		assert not (work / "host_writer").exists()
+
+
+def test_consolidator_isolation_failures_skip_without_host_writer(tmp_path):
+	for index, (mode, sandbox, reason) in enumerate((
+		("prepare_failed", True, "sandbox_prepare_failed"),
+		("run_outdated", True, "sandbox_helper_outdated"),
+		("run_outdated_cleanup_failed", True, "sandbox_helper_outdated"),
+		("success", False, "sandbox_support_missing"),
+		("cleanup_failed", True, "sandbox_cleanup_failed"),
+	)):
+		work = tmp_path / str(index)
+		work.mkdir()
+		proc, calls, output = _run_consolidator_sandbox_case(work, mode=mode, sandbox=sandbox)
+		assert proc.returncode == 0, proc.stderr
+		assert output.read_text(encoding="utf-8") == ""
+		assert f"CONSOLIDATOR_ISOLATION outcome=skipped reason={reason}" in proc.stderr
+		assert not (work / "host_writer").exists()
+		if mode in ("run_outdated", "run_outdated_cleanup_failed", "cleanup_failed"):
+			assert "cleanup" in calls
+		if mode == "run_outdated_cleanup_failed":
+			assert "::warning::Consolidator sandbox cleanup failed" in proc.stderr
+			assert "CONSOLIDATOR_ISOLATION outcome=skipped reason=sandbox_cleanup_failed" not in proc.stderr
+
+
+def _resolver_claude_sections() -> str:
+	text = (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
+	functions = ""
+	for name in ("_resolver_disable_opencode_snapshot", "_resolver_fail_closed", "_resolver_fail_closed_for_conflict_paths", "_resolver_sandbox_attempt", "_resolver_sandbox_opencode_attempt"):
+		match = re.search(rf"^{name}\(\)\n\{{\n.*?^\}}\n", text, re.M | re.S)
+		assert match, name
+		functions += match.group(0) + "\n"
+	call = text[text.index('    resolver_claude_rc=75\n'):text.index('  resolver_clean_output="${tmp_output}.ansi-clean"')]
+	return functions + "\n" + call
+
+
+def _run_resolver_claude_section(tmp: Path, *, mode: str, engine: str = "claude", path: str = "scripts/a.py", config_fail: bool = False, helpers: bool = True):
+	scripts = tmp / "scripts"
+	scripts.mkdir()
+	if helpers:
+		(scripts / "review_untrusted_sandbox.sh").write_text(FAKE_SANDBOX, encoding="utf-8")
+		(scripts / "review_untrusted_workspace.py").write_bytes((REPO_ROOT / "scripts" / "review_untrusted_workspace.py").read_bytes())
+	config_writer = scripts / "config_writer.sh"
+	config_writer.write_text('#!/usr/bin/env bash\n[ "${CONFIG_FAIL:-false}" != true ] || exit 1\n'
+		'while [ "$#" -gt 0 ]; do\n'
+		'  if [ "$1" = --config-path ]; then printf \'{}\\n\' > "$2"; fi\n'
+		'  printf "%s\\n" "$1" >> "${CONFIG_ARGS}"\n  shift\ndone\n', encoding="utf-8")
+	(tmp / "paths.txt").write_text(path + "\n", encoding="utf-8")
+	(tmp / "prompt.txt").write_text("Resolve this conflict\n", encoding="utf-8")
+	if mode == "output_unavailable":
+		(tmp / "output.txt").symlink_to(scripts, target_is_directory=True)
+	# The call site is run after setup, with the host branch intact as a sentinel.
+	functions, call = _resolver_claude_sections().split('    resolver_claude_rc=75\n', 1)
+	script = ("set -euo pipefail\n" + functions + '\nemit_conflict_resolver_substate() { :; }\n'
+		'attempt=1\ntmp_output="${RUNTIME_DIR}/output.txt"\n_stall_status_file="${RUNTIME_DIR}/status.txt"\n'
+		'_effective_prompt_file="${RUNTIME_DIR}/prompt.txt"\n_current_reasoning_effort=high\n'
+		'CONFLICTED_PATHS_FILE="${RUNTIME_DIR}/paths.txt"\nCONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=5\n'
+		'CODEX_STALL_GUARD_HELPER=/not/staged\nCODEX_HEARTBEAT_HELPER=/not/staged\n'
+		'RESOLVER_OPENCODE_CONFIG="${RUNTIME_DIR}/resolver_sandbox_opencode.json"\n'
+		'resolver_opencode_cmd=(bash -c \'echo host >> "$RUNTIME_DIR/host"\')\n_codex_exit=0\n'
+		'if true; then\n' + '    resolver_claude_rc=75\n' + call + '\n'
+		'printf "codex_exit=%s\\n" "${_codex_exit}"\n')
+	env = dict(os.environ, SUPPORT_SCRIPTS_DIR=str(scripts), OPENCODE_CONFIG_WRITER_PATH=str(config_writer),
+		MODEL_EDITOR="openai/gpt-6-sol", AI_ENGINE_RESOLVED_CONFLICT_RESOLVER=engine,
+		MODE=mode, RESOLVER_TEST="true", FAKE_ROOT=str(tmp / "root"), RUNTIME_DIR=str(tmp),
+		CONFIG_FAIL="true" if config_fail else "false", CONFIG_ARGS=str(tmp / "config_args"), CALLS=str(tmp / "calls"))
+	for inherited in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+		env.pop(inherited, None)
+	proc = subprocess.run(["bash", "-c", script], cwd=tmp, env=env, capture_output=True, text=True)
+	return proc, (tmp / "calls").read_text(encoding="utf-8").splitlines() if (tmp / "calls").exists() else []
+
+
+def test_resolver_claude_isolation_failures_never_call_host(tmp_path):
+	for index, (mode, path, helpers, config_fail, reason) in enumerate((
+		("prepare_failed", "scripts/a.py", True, False, "sandbox_prepare_failed"),
+		("prepare_partial_cleanup_failed", "scripts/a.py", True, False, "sandbox_prepare_failed"),
+		("success", ".github/ai/WORKFLOW.md", True, False, "sandbox_path_host_only"),
+		("success", "scripts/a.py", False, False, "sandbox_prepare_failed"),
+		("outdated", "scripts/a.py", True, False, "sandbox_helper_outdated"),
+		("cleanup_failed", "scripts/a.py", True, False, "sandbox_cleanup_failed"),
+		("transfer_failed", "scripts/a.py", True, False, "sandbox_transfer_failed"),
+		("output_unavailable", "scripts/a.py", True, False, "sandbox_output_unavailable"),
+		("claude_unavailable", "scripts/a.py", True, True, "opencode_config_failed"),
+		("unavailable", "scripts/a.py", True, False, "sandbox_opencode_unavailable"),
+	)):
+		work = tmp_path / str(index)
+		work.mkdir()
+		proc, calls = _run_resolver_claude_section(work, mode=mode, path=path, helpers=helpers, config_fail=config_fail)
+		assert proc.returncode == 1, (reason, proc.stderr)
+		assert f"reason={reason} action=fail_closed" in proc.stderr
+		assert not (work / "host").exists()
+		if reason == "sandbox_path_host_only":
+			assert calls == []
+			assert "need a manual merge: .github/ai/WORKFLOW.md" in proc.stderr
+		if reason == "opencode_config_failed":
+			assert calls[-1] == "cleanup"
+		if reason == "sandbox_output_unavailable":
+			assert calls == ["prepare-ephemeral", "cleanup"]
+		if reason == "sandbox_transfer_failed":
+			assert (work / "review_sandbox_transfer_failed").exists()
+
+
+def test_resolver_claude_retry_uses_distinct_sandboxes_and_no_host(tmp_path):
+	proc, calls = _run_resolver_claude_section(tmp_path, mode="claude_unavailable")
+	assert proc.returncode == 0, proc.stderr
+	assert "codex_exit=0" in proc.stdout
+	assert "reason=claude_unavailable action=sandbox_opencode" in proc.stderr
+	assert calls == ["prepare-ephemeral", f"run|claude|CONFLICT_RESOLVER|write|{tmp_path / 'root-0'}", "cleanup",
+		"prepare-ephemeral", f"run|codex|CONFLICT_RESOLVER|write|{tmp_path / 'root-1'}", "cleanup"]
+	assert not (tmp_path / "host").exists()
+	assert (tmp_path / "output.txt").read_text(encoding="utf-8") == ""
+	assert (tmp_path / "config_args").read_text(encoding="utf-8").splitlines()[-2:] == ["--serena", "off"]
+	assert json.loads((tmp_path / "resolver_sandbox_opencode.json").read_text(encoding="utf-8"))["snapshot"] is False
+
+
+def test_resolver_selected_engine_and_failed_transfer(tmp_path):
+	for mode, engine in (("success", "claude"), ("success", "codex")):
+		work = tmp_path / (mode + engine)
+		work.mkdir()
+		proc, calls = _run_resolver_claude_section(work, mode=mode, engine=engine)
+		assert proc.returncode == 0, proc.stderr
+		assert "codex_exit=0" in proc.stdout
+		assert not (work / "host").exists()
+		assert calls == ["prepare-ephemeral", f"run|{engine}|CONFLICT_RESOLVER|write|{work / 'root-0'}", "cleanup"]
+
+
+def _rb_helper() -> str:
+	text = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
+	return text[text.index("review_rb_claude_run()\n{"):text.index("# Fallback: if gh_helpers.sh")]
+
+
+def _run_rb_helper(tmp: Path, *, engine: str, mode: str, access: str = "read", stage: bool = True):
+	scripts = tmp / "scripts"
+	scripts.mkdir()
+	if stage:
+		(scripts / "review_untrusted_sandbox.sh").write_text(FAKE_SANDBOX, encoding="utf-8")
+	(tmp / "prompt.txt").write_text("judge\n", encoding="utf-8")
+	calls = tmp / "calls"
+	script = _rb_helper() + f'rc=0; review_rb_claude_run {access} prompt.txt out.txt err.txt high || rc=$?; echo "rc=$rc flag=${{RB_SANDBOX_TRANSFER_FAILED:-false}}"\n'
+	env = dict(os.environ, SUPPORT_SCRIPTS_DIR=str(scripts), RB_OPENCODE_WORKSPACE=str(tmp), MODEL_EDITOR="openai/gpt-6-sol",
+		AI_ENGINE_RESOLVED_RB_JUDGE=engine, MODE=mode, CALLS=str(calls), FAKE_ROOT=str(tmp / "fake-root"), RUNTIME_DIR=str(tmp))
+	for inherited in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+		env.pop(inherited, None)
+	proc = subprocess.run(["bash", "-c", script], cwd=tmp, env=env, capture_output=True, text=True)
+	return proc, (calls.read_text(encoding="utf-8") if calls.exists() else "")
+
+
+def test_rb_verdict_pass_runs_claude_read_only(tmp_path):
+	proc, calls = _run_rb_helper(tmp_path, engine="claude", mode="success")
+	assert "rc=0" in proc.stdout, proc.stderr
+	assert calls.splitlines() == ["prepare-ephemeral", f"run|claude|RB_JUDGE|read|{tmp_path / 'fake-root'}", "cleanup"]
+	assert (tmp_path / "out.txt").read_text(encoding="utf-8") == "verdict\n"
+
+
+def test_rb_fix_pass_keeps_the_write_profile(tmp_path):
+	_proc, calls = _run_rb_helper(tmp_path, engine="claude", mode="success", access="write")
+	assert calls.splitlines()[1] == f"run|claude|RB_JUDGE|write|{tmp_path / 'fake-root'}"
+
+
+def test_rb_helper_returns_75_off_claude_unavailable_or_unstaged(tmp_path):
+	for index, (engine, mode, stage) in enumerate((("codex", "success", True), ("claude", "unavailable", True), ("claude", "success", False), ("claude", "outdated", True), ("claude", "prepare_failed", True))):
+		work = tmp_path / str(index)
+		work.mkdir()
+		proc, recorded = _run_rb_helper(work, engine=engine, mode=mode, stage=stage)
+		assert "rc=75" in proc.stdout, (engine, mode, stage, proc.stderr)
+		if mode in ("unavailable", "outdated"):
+			assert recorded.splitlines()[-1] == "cleanup"
+	crash = tmp_path / "crash"
+	crash.mkdir()
+	proc, _calls = _run_rb_helper(crash, engine="claude", mode="crash")
+	assert "rc=1" in proc.stdout
+
+
+def test_rb_helper_keeps_transfer_failure_after_cleanup(tmp_path):
+	for mode in ("transfer_failed", "marker_on_success"):
+		work = tmp_path / mode
+		work.mkdir()
+		# A stale marker must not count as a failure of this attempt.
+		(work / "review_sandbox_transfer_failed").touch()
+		proc, calls = _run_rb_helper(work, engine="claude", mode=mode, access="write")
+		assert "rc=1 flag=true" in proc.stdout, proc.stderr
+		assert calls.splitlines()[-1] == "cleanup"
+		assert not (work / "review_sandbox_transfer_failed").exists()
+	clean = tmp_path / "clean"
+	clean.mkdir()
+	(clean / "review_sandbox_transfer_failed").touch()
+	proc, _ = _run_rb_helper(clean, engine="claude", mode="success", access="write")
+	assert "rc=0 flag=false" in proc.stdout, proc.stderr
+
+
+def test_rb_helper_reports_unsafe_directory_without_repeating_path(tmp_path):
+	proc, calls = _run_rb_helper(tmp_path, engine="claude", mode="unsafe_directory", access="write")
+	assert "rc=1 flag=true" in proc.stdout, proc.stderr
+	assert "sandbox transfer failed; refusing to commit the fix. reason=unsafe_directory category=other depth=2" in proc.stderr
+	assert "dir=.claude/commands" not in proc.stderr
+	assert calls.splitlines()[-1] == "cleanup"
+
+
+def _run_rb_isolated_fallback(tmp: Path, *, engine: str, mode: str, access: str = "read", stage: bool = True):
+	scripts = tmp / "scripts"
+	scripts.mkdir()
+	if stage:
+		(scripts / "review_untrusted_sandbox.sh").write_text(FAKE_SANDBOX, encoding="utf-8")
+	(tmp / "prompt.txt").write_text("judge\n", encoding="utf-8")
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	(bin_dir / "opencode").write_text('#!/bin/sh\ntouch "${HOST_WRITER_MARKER}"\n', encoding="utf-8")
+	(bin_dir / "opencode").chmod(0o755)
+	calls = tmp / "calls"
+	script = (_rb_helper() + '''
+review_rb_prepare_opencode_config() {
+  [ "$MODE" != config_failed ] || return 1
+  printf '%s' "$1" > "$3"
+}
+rb_claude_rc=0
+review_rb_claude_run "$ACCESS" prompt.txt out.txt err.txt high || rb_claude_rc=$?
+rc="$rb_claude_rc"
+if [ "$rb_claude_rc" -eq 75 ]; then
+  if review_rb_opencode_sandbox_prepare config.json "$RB_TEST_PHASE" err.txt off; then
+    cmd=(env "REVIEW_SANDBOX_ROOT=${RB_OC_SANDBOX_ROOT}" bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run prompt.txt out.txt "${MODEL_EDITOR}" high config.json codex RB_JUDGE "$ACCESS")
+    rc=0
+    "${cmd[@]}" || rc=$?
+    review_rb_opencode_sandbox_finish "$rc" out.txt err.txt || rc=$?
+  else
+    rc=$?
+  fi
+fi
+printf 'claude=%s rc=%s reason=%s flag=%s\\n' "$rb_claude_rc" "$rc" "${RB_OC_ISOLATION_REASON:-}" "${RB_SANDBOX_TRANSFER_FAILED:-false}"
+''')
+	env = dict(os.environ, SUPPORT_SCRIPTS_DIR=str(scripts), RB_OPENCODE_WORKSPACE=str(tmp), MODEL_EDITOR="openai/gpt-6-sol",
+		AI_ENGINE_RESOLVED_RB_JUDGE=engine, MODE=mode, ACCESS=access, CALLS=str(calls), FAKE_ROOT=str(tmp / "fake-root"),
+		RUNTIME_DIR=str(tmp), RB_TEST_PHASE="review_rb_judge" if access == "read" else "review_rb_fix",
+		PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}", HOST_WRITER_MARKER=str(tmp / "host-writer"))
+	for inherited in ("BASH_ENV", "ENV", "WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+		env.pop(inherited, None)
+	proc = subprocess.run(["bash", "-c", script], cwd=tmp, env=env, capture_output=True, text=True)
+	return proc, (calls.read_text(encoding="utf-8") if calls.exists() else ""), tmp / "host-writer"
+
+
+def test_rb_codex_off_uses_isolated_opencode_for_both_access_modes(tmp_path):
+	for access in ("read", "write"):
+		work = tmp_path / access
+		work.mkdir()
+		proc, calls, host_writer = _run_rb_isolated_fallback(work, engine="codex", mode="success", access=access)
+		assert "claude=75 rc=0" in proc.stdout, proc.stderr
+		assert calls.splitlines() == ["prepare-ephemeral", f"run|codex|RB_JUDGE|{access}|{work / 'fake-root'}", "cleanup"]
+		assert (work / "config.json").read_text(encoding="utf-8") == ("reviewer" if access == "read" else "writer")
+		assert not host_writer.exists()
+
+
+def test_rb_claude_unavailable_tries_new_isolated_root(tmp_path):
+	proc, calls, host_writer = _run_rb_isolated_fallback(tmp_path, engine="claude", mode="claude_unavailable_then_success")
+	assert "claude=75 rc=0" in proc.stdout, proc.stderr
+	assert calls.splitlines() == ["prepare-ephemeral", f"run|claude|RB_JUDGE|read|{tmp_path / 'fake-root-0'}", "cleanup",
+		"prepare-ephemeral", f"run|codex|RB_JUDGE|read|{tmp_path / 'fake-root-1'}", "cleanup"]
+	assert not host_writer.exists()
+
+
+def test_rb_isolation_failure_defers_without_host_writer(tmp_path):
+	for index, (engine, mode, stage, reason) in enumerate((
+		("codex", "prepare_failed", True, "sandbox_prepare_failed"),
+		("claude", "prepare_second_failed", True, "sandbox_prepare_failed"),
+		("codex", "success", False, "support_missing"),
+		("codex", "config_failed", True, "opencode_config_failed"),
+		("codex", "outdated", True, "sandbox_helper_outdated"),
+	)):
+		work = tmp_path / str(index)
+		work.mkdir()
+		proc, calls, host_writer = _run_rb_isolated_fallback(work, engine=engine, mode=mode, stage=stage)
+		assert f"rc=77 reason={reason}" in proc.stdout, proc.stderr
+		assert not host_writer.exists()
+		if mode == "outdated":
+			assert calls.count("run|codex") == 1
+		else:
+			assert not any(line.startswith("run|codex") for line in calls.splitlines())
+
+
+def test_rb_opencode_transfer_failure_blocks_a_fix(tmp_path):
+	proc, calls, host_writer = _run_rb_isolated_fallback(tmp_path, engine="codex", mode="transfer_failed", access="write")
+	assert "rc=1 reason= flag=true" in proc.stdout, proc.stderr
+	assert "run|codex|RB_JUDGE|write" in calls
+	assert calls.splitlines()[-1] == "cleanup"
+	assert not host_writer.exists()
+
+
+def test_rb_fix_refuses_failed_claude_transfer_before_commit_or_merge():
+	text = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
+	block = text.split('  fix)\n', 1)[1].split('  merge_with_followup)', 1)[0]
+	gate = block.index('if [ "${rb_fix_rc}" -ne 0 ] || [ "${RB_SANDBOX_TRANSFER_FAILED:-false}" = "true" ]; then')
+	for needle in ('git status --porcelain', 'git commit -m "[judge-fix]', 'Treating as merge.'):
+		assert gate < block.index(needle), needle
+	assert 'judge_skip_reason=fix_transfer_failed' in block
+	assert 'judge_skip_reason=fix_failed' in block
+	assert 'judge_skip_reason=isolation_unavailable' in block
+	assert 'failed isolated fix' in block
+	helper = _rb_helper()
+	assert helper.index('RB_SANDBOX_TRANSFER_FAILED=true') < helper.index('rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"', helper.index('RB_SANDBOX_TRANSFER_FAILED=true'))
+
+
+def test_rb_judge_never_runs_opencode_on_host_and_defers_before_retry():
+	text = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
+	assert "opencode_run_cmd" not in text
+	assert 'local rb_oc_role=writer' in text
+	assert '[ "${rb_oc_phase}" != review_rb_judge ] || rb_oc_role=reviewer' in text
+	assert 'RB_JUDGE_SANDBOX_OPENCODE_CONFIG="${RB_JUDGE_OPENCODE_CONFIG}"' in text
+	assert 'review_rb_prepare_opencode_config reviewer review_rb_judge "${RB_JUDGE_OPENCODE_CONFIG}" off' not in text
+	verdict = text.split('for attempt_idx in "${!JUDGE_ATTEMPT_LEVELS[@]}"; do', 1)[1].split('if [ "${JUDGE_SUCCESS}" != "true" ]; then', 1)[0]
+	assert verdict.index('RB_JUDGE_ISOLATION_DEFERRED=true') < verdict.index('break', verdict.index('RB_JUDGE_ISOLATION_DEFERRED=true')) < verdict.index('sleep 10')
+	assert 'judge_skip_reason=isolation_unavailable' in verdict
+	assert 'rb_fix_claude_rc}" -ne 75 ] &&' not in text
+	step = AGENT_STEPS["Post review-blocked comment on PR (autofix exhaustion)"]["run"]
+	assert 'isolation_unavailable)' in step
+	assert 'AI review/autofix — judge deferred: isolation unavailable' in step
+
+
+def test_sandbox_reports_progress_while_claude_streams():
+	text = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert 'echo "CLAUDE_ENGINE progress role=${claude_role} transcript_bytes=${size}" >&2' in text
+	assert 'wait "${progress_sleep_pid}" || break' in text
+	assert text.count('kill "${progress_pid}"') == 2

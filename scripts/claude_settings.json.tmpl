@@ -1,0 +1,44 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(gh pr merge*)",
+      "Bash(gh api * -X DELETE*)",
+      "Bash(gh api -X DELETE*)",
+      "Bash(gh api * --method DELETE*)",
+      "Bash(gh api --method DELETE*)",
+      "Bash(git push --force*)",
+      "Bash(git push * --force*)",
+      "Bash(git push -f*)",
+      "Bash(git push * -f*)",
+      "Bash(git push * --delete*)",
+      "Bash(git push --delete*)",
+      "Edit(//__CHECKOUT__/.github/workflows/**)",
+      "Write(//__CHECKOUT__/.github/workflows/**)",
+      "NotebookEdit(//__CHECKOUT__/.github/workflows/**)",
+      "Edit(//__CHECKOUT__/.claude/**)",
+      "Write(//__CHECKOUT__/.claude/**)",
+      "NotebookEdit(//__CHECKOUT__/.claude/**)"
+    ],
+    "allow": []
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"__GUARD_HOOK__\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  },
+  "env": {
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "DISABLE_AUTOUPDATER": "1",
+    "DISABLE_ERROR_REPORTING": "1",
+    "DISABLE_TELEMETRY": "1"
+  }
+}

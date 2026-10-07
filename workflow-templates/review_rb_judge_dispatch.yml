@@ -42,6 +42,8 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
+  # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
 jobs:
   judge:
     uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable

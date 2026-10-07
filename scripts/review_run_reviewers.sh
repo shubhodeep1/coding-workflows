@@ -13,6 +13,9 @@ fi
 if ! command -v gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
+if ! command -v gh_review_pr_state >/dev/null 2>&1; then
+  gh_review_pr_state() { gh_retry gh api "repos/${1}/pulls/${2}" --jq .state 2>/dev/null | grep -xE 'open|closed|merged' || echo open; }
+fi
 
 # _embed_input_file + _init_prompt_budget / _cleanup_prompt_budget live
 # in scripts/gh_helpers.sh which is sourced above.  If gh_helpers.sh
@@ -56,6 +59,10 @@ if [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
   opencode_emit_failure_alert review_run_reviewers reviewer "${reviewer_helpers_alert_model}" 1 config_writer_missing || true
   exit 1
 fi
+if [[ "${SUPPORT_ROOT_DIR:-}" != /* || "${SUPPORT_SCRIPTS_DIR:-}" != /* ]]; then
+  echo '::error::Reviewer Python requires absolute trusted support paths.' >&2
+  exit 1
+fi
 
 WATCHDOG_HELPERS="${SUPPORT_SCRIPTS_DIR:-scripts}/watchdog_helpers.sh"
 if [ -f "${WATCHDOG_HELPERS}" ]; then
@@ -82,8 +89,8 @@ emit_context_budget_warn_for_prompt() {
 
   warn_line="$({
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}" \
-    python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
+    PYTHONPATH="${SUPPORT_SCRIPTS_DIR}" \
+    PYTHONSAFEPATH=1 python3 - "${phase}" "${prompt_path}" "${model}" <<'PY' 2>/dev/null || true
 import sys
 
 try:
@@ -108,6 +115,82 @@ PY
 
 CODEX_HEARTBEAT_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_heartbeat.sh"
 CODEX_STALL_GUARD_HELPER="${SUPPORT_SCRIPTS_DIR:-scripts}/codex_stall_guard.sh"
+
+# Print $1 when it is an integer >= $3, else warn and print the default $2.
+reviewer_positive_int_or_default() {
+  local raw_value="${1:-}"
+  local default_value="$2"
+  local minimum_value="$3"
+  local setting_name="$4"
+
+  if [ -z "${raw_value}" ]; then
+    printf '%s\n' "${default_value}"
+    return 0
+  fi
+  if [[ "${raw_value}" =~ ^[0-9]{1,6}$ ]] && [ "${raw_value}" -ge "${minimum_value}" ]; then
+    printf '%s\n' "$((10#${raw_value}))"
+    return 0
+  fi
+  echo "::warning::${setting_name}='${raw_value}' is not an integer >= ${minimum_value}; using ${default_value}." >&2
+  printf '%s\n' "${default_value}"
+}
+
+# Reviewer loop guards, enforced by the per-attempt watchdog.
+# REVIEWER_MAX_STEPS hard-stops an attempt once it starts more than that many
+# OpenCode turns and fails the slot without a retry. REVIEWER_TOOL_REPEAT_LIMIT
+# ends an attempt once that many consecutive tool calls are identical (same
+# tool, same input) as a retryable failure. Real reviewer passes peaked at 101
+# turns; x-ai/grok-4.20 looped for 2,205 turns on one repeated grep (run
+# 35949371968). OpenCode's own agent `steps` setting only asks the model to
+# stop and keeps offering tools, so it is not used.
+REVIEWER_MAX_STEPS_EFFECTIVE="$(reviewer_positive_int_or_default "${REVIEWER_MAX_STEPS:-}" 120 1 REVIEWER_MAX_STEPS)"
+REVIEWER_TOOL_REPEAT_LIMIT_EFFECTIVE="$(reviewer_positive_int_or_default "${REVIEWER_TOOL_REPEAT_LIMIT:-}" 10 2 REVIEWER_TOOL_REPEAT_LIMIT)"
+
+# Print how many turns (OpenCode `step_start` events) the JSON event stream $1
+# has started; 0 when the file is missing or empty. The match tolerates
+# whitespace around the colon so a serializer change cannot zero the count.
+reviewer_turn_count() {
+  local structured_file="$1"
+  local turn_count=""
+
+  [ -s "${structured_file}" ] || { printf '0\n'; return 0; }
+  turn_count="$(grep -cE '"type"[[:space:]]*:[[:space:]]*"step_start"' "${structured_file}" 2>/dev/null || true)"
+  printf '%s\n' "${turn_count:-0}"
+}
+
+# Succeeds (and prints the tool name) when the last $2 completed tool calls in
+# the OpenCode JSON event stream $1 are identical: same tool, same input. The
+# input comparison mirrors OpenCode's own doom-loop check, which only looks
+# inside a single model response and so missed one-call-per-turn loops.
+# Unreadable or partial event lines are skipped: they never count toward a
+# repeat and never hide the valid calls around them. The tail reads twice the
+# limit so a few skipped lines still leave a full window of valid calls.
+reviewer_tool_repeat_detected() {
+  local structured_file="$1"
+  local repeat_limit="$2"
+
+  [ -s "${structured_file}" ] || return 1
+  grep -E '"type"[[:space:]]*:[[:space:]]*"tool_use"' "${structured_file}" 2>/dev/null \
+    | tail -n "$((repeat_limit * 2))" \
+    | PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 -c '
+import json
+import sys
+
+limit = int(sys.argv[1])
+keys = []
+for raw_line in sys.stdin:
+	try:
+		event = json.loads(raw_line)
+		part = event["part"]
+		keys.append((part["tool"], json.dumps(part["state"].get("input"), sort_keys=True)))
+	except (ValueError, KeyError, TypeError, AttributeError):
+		continue
+window = keys[-limit:]
+if len(window) < limit or len(set(window)) != 1:
+	sys.exit(1)
+print(window[0][0])
+' "${repeat_limit}"
+}
 
 emit_run_budget_gate_note() {
   local budget_scope="$1"
@@ -370,7 +453,16 @@ fi
 # Safe to skip on local/manual invocation where PR_NUMBER or REPOSITORY are
 # unset — downstream watchdog polling remains the fallback.
 if [ -n "${PR_NUMBER:-}" ] && [ -n "${REPOSITORY:-}" ] && command -v gh >/dev/null 2>&1; then
-  preflight_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
+  preflight_state=""
+  if [ -s "${PR_PAYLOAD_FILE:-/dev/null}" ]; then
+    preflight_age=$(( $(date +%s) - $(stat -c %Y "${PR_PAYLOAD_FILE}" 2>/dev/null || echo 0) ))
+    if [ "${preflight_age}" -ge 0 ] && [ "${preflight_age}" -le 120 ]; then
+      preflight_state="$(jq -r '.state // ""' "${PR_PAYLOAD_FILE}" 2>/dev/null || true)"
+    fi
+  fi
+  if [[ ! "${preflight_state}" =~ ^(open|closed|merged)$ ]]; then
+    preflight_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
+  fi
   if [ "${preflight_state}" != "open" ]; then
     echo "Pre-flight: PR #${PR_NUMBER} is ${preflight_state} — skipping reviewer fan-out."
     mkdir -p "${PREVIOUS_REVIEWS_DIR}"
@@ -387,7 +479,7 @@ normalize_openrouter_usage() {
   local phase_label="$2"
   local call_label="$3"
   local model_name="$4"
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - "$log_file" "$phase_label" "$call_label" "$model_name" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_SCRIPTS_DIR}" python3 - "$log_file" "$phase_label" "$call_label" "$model_name" <<'PY'
 import json
 import os
 import sys
@@ -707,7 +799,7 @@ reviewer_materialize_opencode_json_text() {
   local structured_output_file="$1"
   local reviewer_text_file="$2"
 
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${structured_output_file}" "${reviewer_text_file}" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${structured_output_file}" "${reviewer_text_file}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -784,7 +876,7 @@ filter_reviewer_paths_file_against_skips() {
   local output_file="$2"
   local skipped_file="$3"
 
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR}:${SUPPORT_SCRIPTS_DIR}" python3 - \
     "$input_file" "$output_file" "$skipped_file" <<'PY'
 from pathlib import Path
 import sys
@@ -818,7 +910,7 @@ filter_reviewer_stat_file_against_skips() {
   local output_file="$2"
   local skipped_file="$3"
 
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR}:${SUPPORT_SCRIPTS_DIR}" python3 - \
     "$input_file" "$output_file" "$skipped_file" <<'PY'
 from pathlib import Path
 import sys
@@ -917,7 +1009,7 @@ emit_reviewer_filter_skip_logs() {
   local pr_skipped_file="$1"
   local last_run_skipped_file="$2"
 
-  PYTHONDONTWRITEBYTECODE=1 python3 - "$pr_skipped_file" "$last_run_skipped_file" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "$pr_skipped_file" "$last_run_skipped_file" <<'PY'
 from pathlib import Path
 import sys
 
@@ -1076,7 +1168,7 @@ reviewer_count_diff_loc() {
 reviewer_count_paths_file() {
   local paths_file="$1"
 
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR}:${SUPPORT_SCRIPTS_DIR}" python3 - \
     "$paths_file" <<'PY'
 from pathlib import Path
 import sys
@@ -1099,7 +1191,7 @@ reviewer_any_path_matches_regex() {
   local paths_file="$1"
   local pattern="$2"
 
-  PYTHONDONTWRITEBYTECODE=1 python3 - "$paths_file" "$pattern" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "$paths_file" "$pattern" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -1344,9 +1436,11 @@ classify_reviewer_risk_tier() {
 
 reviewer_collect_review_tier_path_metadata() {
   local paths_file="$1"
+  local diff_file="${2:-}"
 
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
-    "$paths_file" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR}:${SUPPORT_SCRIPTS_DIR}" python3 - \
+    "$paths_file" "$diff_file" <<'PY'
+from fnmatch import fnmatchcase
 from pathlib import Path
 import sys
 
@@ -1355,7 +1449,66 @@ try:
 except ModuleNotFoundError:
 	from scripts.targeted_file_context import parse_paths_file
 
+# Protected paths: the same filename rules as the deterministic pre-review
+# skip gate in .github/workflows/review_autofix.yml (PROTECTED_SKIP_SUPPRESSED).
+# A diff touching one of them never drops to the one-reviewer lite tier.
+# tests/test_review_autofix_review_pipeline_contract.py keeps the lists in sync.
+PROTECTED_BASENAMES = (
+	"agents.md|claude.md|unattended_system_instructions.md"
+).split("|")
+PROTECTED_PATH_GLOBS = (
+	".github/*|.claude/*|scripts/*|prompts/*|workflow-templates/*|validation/*|ai-memory/*|db/contracts/*"
+).split("|")
+PROTECTED_BASENAME_GLOBS = (
+	"dockerfile|dockerfile.*|dockerfile-*|*.dockerfile|*.dockerfile.*|*.dockerfile-*|containerfile|containerfile.*|containerfile-*|*.containerfile|*.containerfile.*|*.containerfile-*|.dockerignore|.containerignore|compose.yml|compose.yaml|compose.*.yml|compose.*.yaml|compose-*.yml|compose-*.yaml|docker-compose.yml|docker-compose.yaml|docker-compose.*.yml|docker-compose.*.yaml|docker-compose-*.yml|docker-compose-*.yaml|makefile|makefile.*|gnumakefile|gnumakefile.*|justfile|justfile.*|taskfile|taskfile.*|rakefile|rakefile.*|jenkinsfile|jenkinsfile.*|cmakelists.txt|meson.build|meson_options.txt|pom.xml|build.xml|build.gradle*|settings.gradle*|gradlew|gradlew.bat|gulpfile.*|gruntfile.*|package.json|build|build.bazel|workspace|workspace.bazel|module.bazel|*.bazel|*.bzl|*.mk|*.cmake|*.gradle|*.gradle.kts|requirements*.txt|constraints*.txt|go.mod|go.sum|pipfile|pipfile.lock|*.lock|*.lockb|config|*.config|*.config.*|*.conf|*.ini|*.toml|*.yaml|*.yml|*.json|*.jsonc|*.properties|*.xml|*.tf|*.hcl|.*rc|.*rc.*|.env|.env.*|*.sh|*.bash|*.zsh|*.ps1|*.cmd|*.bat"
+).split("|")
+PROTECTED_ROOT_BASENAME_GLOBS = (
+	"package.json|pyproject.toml|cargo.toml|go.mod|go.work|makefile|.editorconfig|turbo.json|pytest.ini|tox.ini|noxfile.py|*.config.js|*.config.cjs|*.config.mjs|*.config.ts|package-lock.json|bun.lock|bun.lockb|yarn.lock|pnpm-lock.yaml|cargo.lock|poetry.lock|uv.lock|go.sum|pipfile|pipfile.lock|requirements*.txt|constraints*.txt|.eslintrc*|eslint.config.*|.prettierrc*|.stylelintrc*|stylelint.config.*|ruff.toml|.ruff.toml|.flake8|pylintrc|biome.json|biome.jsonc"
+).split("|")
+
+
+# fnmatchcase is not path-aware: its "*" also matches "/" (unlike glob or
+# pathlib), the same as the gate's bash `case`, so "scripts/*" covers nested
+# paths such as scripts/sub/README.md. The parity test checks this against the
+# gate's own patterns.
+def is_protected_path(path):
+	lower_path = path.lower()
+	lower_base = lower_path.rsplit("/", 1)[-1]
+	if lower_base in PROTECTED_BASENAMES:
+		return True
+	if any(fnmatchcase(lower_path, glob) for glob in PROTECTED_PATH_GLOBS):
+		return True
+	if any(fnmatchcase(lower_base, glob) for glob in PROTECTED_BASENAME_GLOBS):
+		return True
+	if lower_path == lower_base and any(
+		fnmatchcase(lower_base, glob) for glob in PROTECTED_ROOT_BASENAME_GLOBS
+	):
+		return True
+	return False
+
+
+def diff_side_paths(diff_path):
+	# Both sides of every file header, so a rename away from a protected
+	# path still counts as protected (the changed-files list only carries
+	# the destination).
+	side_paths = []
+	if not diff_path or not Path(diff_path).is_file():
+		return side_paths
+	with open(diff_path, encoding="utf-8", errors="replace") as handle:
+		for line in handle:
+			line = line.rstrip("\r\n")
+			# git wraps paths with special characters in double quotes
+			# ("--- \"a/x y\"", "rename from \"x y\""); drop them so the
+			# globs still see the path.
+			for prefix in ('--- "a/', '+++ "b/', "--- a/", "+++ b/", "rename from ", "rename to ", "copy from ", "copy to "):
+				if line.startswith(prefix):
+					side_paths.append(line[len(prefix):].strip('"'))
+					break
+	return side_paths
+
+
 paths_file = Path(sys.argv[1])
+diff_file = sys.argv[2] if len(sys.argv) > 2 else ""
 if not paths_file.is_file():
 	print("paths_state=unavailable")
 	sys.exit(0)
@@ -1367,7 +1520,15 @@ if not paths:
 	print("scope_state=empty")
 	print("scope_value=")
 	print("unsupported_path=")
+	print("protected=false")
+	print("protected_path=")
 	sys.exit(0)
+
+protected_path = ""
+for candidate in list(paths) + diff_side_paths(diff_file):
+	if candidate and is_protected_path(candidate):
+		protected_path = candidate
+		break
 
 doc_only = True
 scopes = set()
@@ -1414,7 +1575,52 @@ print(f"doc_only={'true' if doc_only else 'false'}")
 print(f"scope_state={scope_state}")
 print(f"scope_value={scope_value}")
 print(f"unsupported_path={unsupported_path}")
+print(f"protected={'true' if protected_path else 'false'}")
+print(f"protected_path={protected_path}")
 PY
+}
+
+# Deterministic "random" reviewer pick for the review tiers: rank every live
+# panel model by sha256("<seed>:<model>") and keep the lowest <count>. The
+# seed is the PR number, so a PR keeps the same reviewers on every round and
+# on reruns, while different PRs spread evenly across the panel. Output keeps
+# the panel's REVIEWER_MODELS order.
+reviewer_pick_seeded_models() {
+  # Fewer than <count> and <seed> prints nothing, like a broken hash, so the
+  # caller's count check fails open instead of "$1: unbound variable" (set -u)
+  # or a failed `shift 2` aborting the classifier.
+  if [ "$#" -lt 2 ]; then
+    return 0
+  fi
+  local count="$1"
+  local seed="$2"
+  shift 2
+  local model
+  local model_hash
+  local ranked_rows=""
+  local -A picked_map=()
+
+  # Every hash must be a real sha256 digest; anything else (sha256sum
+  # missing or failing) prints nothing, and the caller's count check then
+  # fails open to the full panel.
+  for model in "$@"; do
+    model_hash="$(printf '%s:%s' "${seed}" "${model}" | sha256sum 2>/dev/null | cut -c1-64)" || model_hash=""
+    if [[ ! "${model_hash}" =~ ^[0-9a-f]{64}$ ]]; then
+      return 0
+    fi
+    ranked_rows+="${model_hash} ${model}"$'\n'
+  done
+
+  while IFS= read -r model; do
+    [ -z "${model}" ] && continue
+    picked_map["${model}"]=1
+  done < <(printf '%s' "${ranked_rows}" | LC_ALL=C sort | awk -v limit="${count}" 'NR <= limit { print $2 }')
+
+  for model in "$@"; do
+    if [ -n "${picked_map["${model}"]:-}" ]; then
+      printf '%s\n' "${model}"
+    fi
+  done
 }
 
 resolve_review_tier_active_models() {
@@ -1423,10 +1629,16 @@ resolve_review_tier_active_models() {
   local selected_display=""
   local model
   local invalid_model=""
+  local random_count=0
+  local pool_model
+  local pool_invalid_model=""
   local -A live_models_map=()
   local -A resolved_models_seen=()
+  local -A pool_models_seen=()
   local -a live_models=()
   local -a resolved_models=()
+  local -a pick_pool_models=()
+  local -a standard_pool_models=()
 
   REVIEW_TIER_ACTIVE_MODELS_SOURCE="full"
 
@@ -1444,10 +1656,12 @@ resolve_review_tier_active_models() {
 
   case "${tier}" in
     lite)
-      selected_raw="${REVIEW_TIER_LITE_REVIEWER_SLUG:-qwen/qwen3.7-plus}"
+      selected_raw="${REVIEW_TIER_LITE_REVIEWER_SLUG:-}"
+      random_count=1
       ;;
     standard)
-      selected_raw="${REVIEW_TIER_STANDARD_REVIEWER_SLUGS:-minimax/minimax-m3,deepseek/deepseek-v4-pro,x-ai/grok-4.20}"
+      selected_raw="${REVIEW_TIER_STANDARD_REVIEWER_SLUGS:-}"
+      random_count=4
       ;;
     *)
       reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${live_models[@]}"
@@ -1455,6 +1669,55 @@ resolve_review_tier_active_models() {
       return 0
       ;;
   esac
+
+  # An empty slug variable draws the tier's reviewers at random, seeded by the
+  # PR number. A repo that sets the variable keeps exactly the reviewers it
+  # names (validated below).
+  if [ -z "$(normalize_reviewer_model_list "${selected_raw}")" ]; then
+    # Pool for the random pick: the whole live panel, except that an unpinned
+    # lite tier draws from the standard tier's reviewer list when a repo sets
+    # that list and every slug in it is on the panel. The default list is
+    # empty, so both tiers draw from the whole panel. A standard list naming
+    # an unknown slug falls back to the panel.
+    pick_pool_models=("${live_models[@]}")
+    if [ "${tier}" = "lite" ] && [ -n "$(normalize_reviewer_model_list "${REVIEW_TIER_STANDARD_REVIEWER_SLUGS:-}")" ]; then
+      while IFS= read -r pool_model; do
+        [ -z "${pool_model}" ] && continue
+        if [ -z "${live_models_map["${pool_model}"]:-}" ]; then
+          pool_invalid_model="${pool_model}"
+          break
+        fi
+        if [ -n "${pool_models_seen["${pool_model}"]:-}" ]; then
+          continue
+        fi
+        standard_pool_models+=("${pool_model}")
+        pool_models_seen["${pool_model}"]=1
+      done <<< "$(normalize_reviewer_model_list "${REVIEW_TIER_STANDARD_REVIEWER_SLUGS:-}")"
+      if [ -n "${pool_invalid_model}" ]; then
+        echo "::warning::Unknown review-tier model '${pool_invalid_model}' in REVIEW_TIER_STANDARD_REVIEWER_SLUGS. The lite tier draws its reviewer from the full panel instead." >&2
+      elif [ "${#standard_pool_models[@]}" -gt 0 ]; then
+        pick_pool_models=("${standard_pool_models[@]}")
+      fi
+    fi
+    while IFS= read -r model; do
+      [ -z "${model}" ] && continue
+      resolved_models+=("${model}")
+    done < <(reviewer_pick_seeded_models "${random_count}" "${PR_NUMBER:-0}" "${pick_pool_models[@]}")
+    # A broken pick (e.g. no sha256sum) must never leave the tier with fewer
+    # reviewers than asked for: fail open to the full panel.
+    if [ "${random_count}" -gt "${#pick_pool_models[@]}" ]; then
+      random_count="${#pick_pool_models[@]}"
+    fi
+    if [ "${#resolved_models[@]}" -ne "${random_count}" ]; then
+      echo "::warning::Review tier ${tier} random reviewer pick returned ${#resolved_models[@]} of ${random_count} models. Failing open to full reviewer set." >&2
+      reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${live_models[@]}"
+      REVIEW_TIER_ACTIVE_MODELS_SOURCE="fallback_full_random_pick_failed"
+      return 0
+    fi
+    reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "${resolved_models[@]}"
+    REVIEW_TIER_ACTIVE_MODELS_SOURCE="random_${tier}"
+    return 0
+  fi
 
   while IFS= read -r model; do
     [ -z "${model}" ] && continue
@@ -1505,6 +1768,8 @@ classify_review_tier() {
   local scope_state="empty"
   local scope_value=""
   local unsupported_path=""
+  local protected="false"
+  local protected_path=""
   local reviewer_count=0
   local classified_tier=""
 
@@ -1529,6 +1794,12 @@ classify_review_tier() {
     if reviewer_env_is_truthy "${FORCE_FULL_REVIEW_TIER:-false}"; then
       REVIEW_TIER_FORCED_FULL=true
       REVIEW_TIER_REASON="force_review_marker"
+    elif [ "${REVIEWER_RISK_TIER_FORCED_FULL:-false}" = "true" ]; then
+      # classify_reviewer_risk_tier (REVIEWER_RISK_TIER_ENABLED) already
+      # forced the full panel, e.g. REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX
+      # matched; a size tier must not shrink it again.
+      REVIEW_TIER_FORCED_FULL=true
+      REVIEW_TIER_REASON="risk_tier_forced_full"
     elif [ -z "${PR_NUMBER:-}" ]; then
       REVIEW_TIER_REASON="no_pr_number"
     elif [ ! -s "${RAW_REVIEWER_PR_CHANGED_FILES_FILE:-}" ]; then
@@ -1543,7 +1814,7 @@ classify_review_tier() {
 		echo "::warning::Invalid review-tier diff line count '${REVIEW_TIER_LOC}'. Failing closed to full tier." >&2
 		REVIEW_TIER_LOC=999999
 	  fi
-	  if ! path_metadata="$(reviewer_collect_review_tier_path_metadata "${RAW_REVIEWER_PR_CHANGED_FILES_FILE}")"; then
+	  if ! path_metadata="$(reviewer_collect_review_tier_path_metadata "${RAW_REVIEWER_PR_CHANGED_FILES_FILE}" "${RAW_REVIEWER_PR_DIFF_FILE}")"; then
 		echo "::warning::Failed to classify review-tier paths from ${RAW_REVIEWER_PR_CHANGED_FILES_FILE}; failing open to full reviewer set." >&2
 		REVIEW_TIER_REASON="raw_changed_files_parse_failed"
       else
@@ -1554,18 +1825,35 @@ classify_review_tier() {
             scope_state) scope_state="${value}" ;;
             scope_value) scope_value="${value}" ;;
             unsupported_path) unsupported_path="${value}" ;;
+            protected) protected="${value}" ;;
+            protected_path) protected_path="${value}" ;;
           esac
         done <<< "${path_metadata}"
 
         case "${paths_state}" in
           available)
-            if [ "${doc_only}" = "true" ] && [ "${REVIEW_TIER_LOC}" -le "${lite_loc}" ]; then
+            # lite (one reviewer): any diff up to lite_loc that touches no
+            # protected path. standard (four reviewers): any diff up to
+            # standard_loc, in any folder, including small protected diffs.
+            if [ "${protected}" != "true" ] && [ "${REVIEW_TIER_LOC}" -le "${lite_loc}" ]; then
               REVIEW_TIER="lite"
-              REVIEW_TIER_REASON="doc_only_<=${lite_loc}_loc"
-            elif [ "${scope_state}" = "single" ] && [ -n "${scope_value}" ] && [ "${REVIEW_TIER_LOC}" -le "${standard_loc}" ]; then
+              if [ "${doc_only}" = "true" ]; then
+                REVIEW_TIER_REASON="doc_only_<=${lite_loc}_loc"
+              else
+                REVIEW_TIER_REASON="code_<=${lite_loc}_loc_unprotected"
+              fi
+            elif [ "${REVIEW_TIER_LOC}" -le "${standard_loc}" ]; then
               REVIEW_TIER="standard"
-              REVIEW_TIER_REASON="code_<=${standard_loc}_loc_single_dir"
-              REVIEW_TIER_SCOPE="${scope_value}"
+              if [ "${protected}" = "true" ] && [ "${REVIEW_TIER_LOC}" -le "${lite_loc}" ]; then
+                REVIEW_TIER_REASON="protected_path_<=${lite_loc}_loc"
+              elif [ "${scope_state}" = "single" ] && [ -n "${scope_value}" ]; then
+                REVIEW_TIER_REASON="code_<=${standard_loc}_loc_single_dir"
+              else
+                REVIEW_TIER_REASON="code_<=${standard_loc}_loc"
+              fi
+              if [ "${scope_state}" = "single" ] && [ -n "${scope_value}" ]; then
+                REVIEW_TIER_SCOPE="${scope_value}"
+              fi
             else
               REVIEW_TIER="full"
               REVIEW_TIER_REASON="default"
@@ -1602,6 +1890,11 @@ classify_review_tier() {
           *) REVIEW_TIER_REASON="empty_review_tier_subset" ;;
         esac
         ;;
+      fallback_full_random_pick_failed)
+        REVIEW_TIER="full"
+        REVIEW_TIER_FORCED_FULL=true
+        REVIEW_TIER_REASON="random_reviewer_pick_failed"
+        ;;
       empty_live)
         REVIEW_TIER="full"
         REVIEW_TIER_FORCED_FULL=true
@@ -1622,11 +1915,11 @@ classify_review_tier() {
 
   reviewer_count="$(wc -l < "${REVIEWER_ACTIVE_MODELS_FILE}" 2>/dev/null || echo 0)"
   if [ -n "${unsupported_path}" ]; then
-    echo "REVIEW_TIER: tier=${REVIEW_TIER} loc=${REVIEW_TIER_LOC} forced_full=${REVIEW_TIER_FORCED_FULL} reviewers=${reviewer_count} enabled=${enabled} reason=${REVIEW_TIER_REASON} models_source=${REVIEW_TIER_ACTIVE_MODELS_SOURCE} unsupported_path=${unsupported_path}"
+    echo "REVIEW_TIER: tier=${REVIEW_TIER} loc=${REVIEW_TIER_LOC} forced_full=${REVIEW_TIER_FORCED_FULL} reviewers=${reviewer_count} enabled=${enabled} reason=${REVIEW_TIER_REASON} models_source=${REVIEW_TIER_ACTIVE_MODELS_SOURCE} protected=${protected}${protected_path:+ protected_path=${protected_path}} unsupported_path=${unsupported_path}"
   elif [ -n "${REVIEW_TIER_SCOPE}" ]; then
-    echo "REVIEW_TIER: tier=${REVIEW_TIER} loc=${REVIEW_TIER_LOC} forced_full=${REVIEW_TIER_FORCED_FULL} reviewers=${reviewer_count} enabled=${enabled} reason=${REVIEW_TIER_REASON} models_source=${REVIEW_TIER_ACTIVE_MODELS_SOURCE} scope=${REVIEW_TIER_SCOPE}"
+    echo "REVIEW_TIER: tier=${REVIEW_TIER} loc=${REVIEW_TIER_LOC} forced_full=${REVIEW_TIER_FORCED_FULL} reviewers=${reviewer_count} enabled=${enabled} reason=${REVIEW_TIER_REASON} models_source=${REVIEW_TIER_ACTIVE_MODELS_SOURCE} protected=${protected}${protected_path:+ protected_path=${protected_path}} scope=${REVIEW_TIER_SCOPE}"
   else
-    echo "REVIEW_TIER: tier=${REVIEW_TIER} loc=${REVIEW_TIER_LOC} forced_full=${REVIEW_TIER_FORCED_FULL} reviewers=${reviewer_count} enabled=${enabled} reason=${REVIEW_TIER_REASON} models_source=${REVIEW_TIER_ACTIVE_MODELS_SOURCE}"
+    echo "REVIEW_TIER: tier=${REVIEW_TIER} loc=${REVIEW_TIER_LOC} forced_full=${REVIEW_TIER_FORCED_FULL} reviewers=${reviewer_count} enabled=${enabled} reason=${REVIEW_TIER_REASON} models_source=${REVIEW_TIER_ACTIVE_MODELS_SOURCE} protected=${protected}${protected_path:+ protected_path=${protected_path}}"
   fi
 }
 # ── End reviewer risk-tier helpers ───────────────────────────────────
@@ -1654,7 +1947,7 @@ build_reviewer_iteration_scope_artifacts() {
   local output_paths_file="$3"
   local output_summary_file="$4"
 
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR:-.}:${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - \
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_ROOT_DIR}:${SUPPORT_SCRIPTS_DIR}" python3 - \
     "$changed_files_file" "$ledger_status_file" "$output_paths_file" "$output_summary_file" <<'PY'
 from pathlib import Path
 import sys
@@ -1966,17 +2259,20 @@ if [ ! -f "${SUMMARISER_SCRIPT}" ]; then
   exit 1
 fi
 
+# Reviewers run with the reviewer-role OpenCode config, which rejects reads
+# outside the checkout. PREVIOUS_REVIEWS_DIR and RUNTIME_CONTEXT_DIR live under
+# /tmp, so a reviewer told to read them has the read rejected and can end its
+# turn with no output (runs 36656409877, 36666750539, 36678296691).
 PROMPT_ARTIFACT_PATH_HINT="$(printf '%s\n' \
   'WORKING DIRECTORY + ARTIFACT PATH (MANDATORY)' \
   'The workflow runs from the repository root.' \
-  "All transient reviewer artifacts are under ${PREVIOUS_REVIEWS_DIR}." \
+  'Other reviewers'"'"' outputs are not files you can read: they sit outside the checkout, where reads are rejected.' \
   'Do not use .github/workflows/previous_reviews/ because that path is invalid in this workflow.' \
-  "Example file to read: ${PREVIOUS_REVIEWS_DIR}/review_<model>.txt")"
+  'Review from this prompt and the repository files.')"
 PROMPT_RUNTIME_CONTEXT_HINT="$(printf '%s\n' \
-  'RUNTIME CONTEXT FILES (READ-ONLY)' \
-  "Runtime context is stored under ${RUNTIME_CONTEXT_DIR}." \
-  'Useful files include git_status.txt, git_diff_stat.txt, shallow_tree.txt, environment_sorted.txt, recent_commits.txt, branches.txt, workflow_snapshot.yml, and run_logs_best_effort.txt.' \
-  "Example file to read: ${RUNTIME_CONTEXT_DIR}/git_status.txt")"
+  'RUNTIME CONTEXT FILES (NOT READABLE)' \
+  'The workflow keeps runtime context files outside the checkout, where reads are rejected.' \
+  'Do not try to open them; use the context inlined in this prompt and the repository files.')"
 
 # Detect whether this is the first review iteration (no prior AI autofix run).
 # Two conditions cover all first-run states:
@@ -2268,8 +2564,8 @@ fi
 # codex-cli's `turn/start` imposes a hard 1,048,576-character stdin cap on
 # the WHOLE prompt.  The assembled reviewer prompt (see
 # assemble_reviewer_prompt) is `pre_assembled_static.txt` (unattended
-# system instructions + agents.md + trimmed README — ~190KB today and
-# growing) PLUS this reviewer template, the checklist, and memory/semble
+# system instructions + agents.md) plus a separately framed README,
+# this reviewer template, the checklist, and memory/semble
 # context, all wrapped OUTSIDE the _embed_input_file budget, PLUS the
 # budgeted body.  The historical flat 800KB embed budget was sized against
 # a stale "static prefix ~10k tokens (~40KB)" assumption; once the static
@@ -2299,9 +2595,13 @@ fi
 if [ "${reviewer_static_prefix_bytes}" -le 0 ]; then
   reviewer_static_prefix_bytes=200000
 fi
-reviewer_embed_budget_bytes=$(( REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES - reviewer_static_prefix_bytes - REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES ))
+reviewer_readme_context_bytes=0
+if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/static_readme_trimmed.txt" ]; then
+  reviewer_readme_context_bytes=$(( $(wc -c < "${RUNTIME_DIR}/static_readme_trimmed.txt") + 16 * $(wc -l < "${RUNTIME_DIR}/static_readme_trimmed.txt") + 200 ))
+fi
+reviewer_embed_budget_bytes=$(( REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES - reviewer_static_prefix_bytes - reviewer_readme_context_bytes - REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES ))
 if [ "${reviewer_embed_budget_bytes}" -lt 0 ]; then
-  echo "::warning::Reviewer prompt static prefix (${reviewer_static_prefix_bytes}) plus scaffold reserve (${REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES}) leaves negative embed headroom (${reviewer_embed_budget_bytes}) under codex stdin cap ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}; forcing embed budget to 0." >&2
+  echo "::warning::Reviewer prompt static prefix (${reviewer_static_prefix_bytes}) plus framed README (${reviewer_readme_context_bytes}) and scaffold reserve (${REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES}) leaves negative embed headroom (${reviewer_embed_budget_bytes}) under codex stdin cap ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}; forcing embed budget to 0." >&2
   reviewer_embed_budget_bytes=0
 elif [ "${reviewer_embed_budget_bytes}" -lt "${REVIEWER_PROMPT_EMBED_BUDGET_FLOOR_BYTES}" ]; then
   echo "::warning::Reviewer embed budget floor ${REVIEWER_PROMPT_EMBED_BUDGET_FLOOR_BYTES} exceeds cap-safe headroom ${reviewer_embed_budget_bytes}; continuing with reduced embed budget to stay under codex stdin cap." >&2
@@ -2309,7 +2609,7 @@ fi
 if [ "${reviewer_embed_budget_bytes}" -gt "${_PROMPT_BUDGET_TOTAL_BYTES}" ]; then
   reviewer_embed_budget_bytes="${_PROMPT_BUDGET_TOTAL_BYTES}"
 fi
-echo "Reviewer prompt embed budget: ${reviewer_embed_budget_bytes} bytes (codex stdin cap ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}, measured static prefix ${reviewer_static_prefix_bytes}, scaffold reserve ${REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES})."
+echo "Reviewer prompt embed budget: ${reviewer_embed_budget_bytes} bytes (codex stdin cap ${REVIEWER_PROMPT_CODEX_STDIN_CAP_BYTES}, measured static prefix ${reviewer_static_prefix_bytes}, framed README ${reviewer_readme_context_bytes}, scaffold reserve ${REVIEWER_PROMPT_SCAFFOLD_RESERVE_BYTES})."
 _init_prompt_budget "${reviewer_embed_budget_bytes}"
 {
   cat <<__REVIEWER_PROMPT__
@@ -2523,18 +2823,10 @@ Identify issues that would only appear during runtime execution rather than stat
 Verify proposed issues against end-to-end system behavior, not only static text patterns.
 Confirm whether each issue can realistically reproduce in CI runtime with current script flow and guards.
 
-USING RUNTIME CONTEXT FILES
-Runtime diagnostics are available under ${RUNTIME_CONTEXT_DIR}.
-Use these files when needed to validate runtime assumptions:
-- git_status.txt
-- git_diff_stat.txt
-- shallow_tree.txt
-- environment_sorted.txt
-- recent_commits.txt
-- branches.txt
-- workflow_snapshot.yml
-- run_logs_best_effort.txt
-Example file to read: ${RUNTIME_CONTEXT_DIR}/git_status.txt
+USING RUNTIME CONTEXT
+Runtime diagnostics files are kept outside the checkout, where reads are rejected.
+Do not try to open them. Validate runtime assumptions against the inlined
+context in this prompt and the repository files.
 
 Avoid reviewing unrelated areas of the repository.
 Do not suggest repository-wide refactors.
@@ -2602,9 +2894,8 @@ unless the original task explicitly requires them.
 Web search is strictly forbidden.
 Do not access the internet.
 All required context is already provided.
-reviewer artifacts are stored under ${PREVIOUS_REVIEWS_DIR}
+reviewer artifacts are kept outside the checkout, where reads are rejected; do not try to open them
 do not use .github/workflows/previous_reviews/ because that path is invalid in this workflow
-use the read tool for files such as ${PREVIOUS_REVIEWS_DIR}/review_<model>.txt
 use read, grep, and glob tools only for repository inspection
 do not modify repository files
 do not create new files except your assigned reviewer output/log files managed by the workflow
@@ -2875,6 +3166,14 @@ assemble_reviewer_prompt() {
   {
     cat ./pre_assembled_static.txt
     echo
+    if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/static_readme_trimmed.txt" ]; then
+      echo "=== BEGIN UNTRUSTED PR README.MD (trimmed) ==="
+      while IFS= read -r review_readme_line || [ -n "${review_readme_line}" ]; do
+        printf 'UNTRUSTED_DATA: %s\n' "${review_readme_line}"
+      done < "${RUNTIME_DIR}/static_readme_trimmed.txt"
+      echo "=== END UNTRUSTED PR README.MD (trimmed) ==="
+      echo
+    fi
     if [ -n "${TOOL_CALL_BUDGET_JUDGE:-}" ]; then
       echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
       echo
@@ -2990,7 +3289,7 @@ reviewer_slot_backoff_cap_secs() {
 
 reviewer_slot_backoff_budget_ratio() {
   local raw="${REVIEWER_SLOT_BACKOFF_BUDGET_RATIO:-0.05}"
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${raw}" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${raw}" <<'PY'
 import re
 import sys
 
@@ -3024,7 +3323,7 @@ reviewer_slot_backoff_budget_secs() {
   local total_secs="${1:-0}"
   local ratio=""
   ratio="$(reviewer_slot_backoff_budget_ratio)"
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${total_secs}" "${ratio}" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${total_secs}" "${ratio}" <<'PY'
 import math
 import sys
 
@@ -3092,7 +3391,7 @@ reviewer_random_int_upto() {
 
 reviewer_cache_status_for_model() {
   local model_name="$1"
-  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_SCRIPTS_DIR:-scripts}${PYTHONPATH:+:$PYTHONPATH}" python3 - "${model_name}" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="${SUPPORT_SCRIPTS_DIR}" python3 - "${model_name}" <<'PY'
 import sys
 
 try:
@@ -3168,7 +3467,7 @@ reviewer_catalog_declares_model() {
   if [ ! -s "${REVIEWER_MODEL_CATALOG_FILE}" ]; then
     return 0
   fi
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${REVIEWER_MODEL_CATALOG_FILE}" "${model}" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${REVIEWER_MODEL_CATALOG_FILE}" "${model}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -3208,7 +3507,7 @@ reviewer_failback_target_for_model() {
       printf '%s\n' "${candidate}"
       return 0
     fi
-  done < <(PYTHONDONTWRITEBYTECODE=1 python3 - "${REVIEWER_FAILBACK_CHAINS_FILE}" "${model}" <<'PY'
+  done < <(PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${REVIEWER_FAILBACK_CHAINS_FILE}" "${model}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -3244,7 +3543,7 @@ reviewer_health_state_action() {
   shift || true
   [ -n "${REVIEWER_HEALTH_STATE_FILE:-}" ] || return 0
 
-  PYTHONDONTWRITEBYTECODE=1 python3 - "${action}" "${REVIEWER_HEALTH_STATE_FILE}" "$@" <<'PY'
+  PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${action}" "${REVIEWER_HEALTH_STATE_FILE}" "$@" <<'PY'
 import json
 import os
 import sys
@@ -3588,6 +3887,11 @@ reviewer_classify_retryable_failure() {
   local stderr_file="$3"
   local stall_state="${4:-}"
 
+  # The reviewer turn cap is a final stop: never retried or failed back.
+  if [ "${wd_reason}" = "max_steps" ]; then
+    return 1
+  fi
+
   if [ "${stall_state}" = "killed" ]; then
     printf 'stall_guard\n'
     return 0
@@ -3596,6 +3900,10 @@ reviewer_classify_retryable_failure() {
   case "${wd_reason}" in
     idle_timeout|max_wall)
       printf 'timeout\n'
+      return 0
+      ;;
+    tool_repeat)
+      printf 'tool_repeat\n'
       return 0
       ;;
   esac
@@ -3904,10 +4212,27 @@ execute_reviewer_attempt() {
         rm -f "${hb_file}"
         exit 143
       fi
+      turns_started="$(reviewer_turn_count "${tmp_structured_output}")"
+      if [ "${turns_started}" -gt "${REVIEWER_MAX_STEPS_EFFECTIVE}" ] 2>/dev/null; then
+        echo "Reviewer ${effective_model} killed — started turn ${turns_started}, over the turn limit of ${REVIEWER_MAX_STEPS_EFFECTIVE}." | tee -a "${log_file}" >&2
+        printf 'max_steps' > "${wd_reason_file}"
+        cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
+        _reviewer_kill_pid "${cpid}"
+        rm -f "${hb_file}"
+        exit 146
+      fi
+      if repeat_tool="$(reviewer_tool_repeat_detected "${tmp_structured_output}" "${REVIEWER_TOOL_REPEAT_LIMIT_EFFECTIVE}")"; then
+        echo "Reviewer ${effective_model} killed — ${REVIEWER_TOOL_REPEAT_LIMIT_EFFECTIVE} consecutive identical '${repeat_tool}' tool calls (repeat limit: ${REVIEWER_TOOL_REPEAT_LIMIT_EFFECTIVE})." | tee -a "${log_file}" >&2
+        printf 'tool_repeat' > "${wd_reason_file}"
+        cpid="$(cat "${codex_pid_file}" 2>/dev/null || true)"
+        _reviewer_kill_pid "${cpid}"
+        rm -f "${hb_file}"
+        exit 145
+      fi
 
       wd_iter=$((wd_iter + 1))
       if [ $((wd_iter % 9)) -eq 0 ]; then
-        pr_state="$({ gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open"; } 2>/dev/null)"
+        pr_state="$({ gh_review_pr_state "${REPOSITORY}" "${PR_NUMBER}" || echo "open"; } 2>/dev/null)"
         if [ "${pr_state}" != "open" ]; then
           echo "Reviewer ${effective_model} aborted — PR #${PR_NUMBER} is ${pr_state}." | tee -a "${log_file}" >&2
           printf 'pr_closed_api' > "${wd_reason_file}"
@@ -4014,6 +4339,13 @@ execute_reviewer_attempt() {
     wd_reason="$(cat "${wd_reason_file}" 2>/dev/null || true)"
   fi
   rm -f "${wd_reason_file}"
+  # A loop-guard kill must never be read as a clean exit, even if OpenCode
+  # handled SIGTERM and left partial text behind.
+  case "${wd_reason}" in
+    max_steps|tool_repeat)
+      [ "${cmd_rc}" -ne 0 ] || cmd_rc=143
+      ;;
+  esac
   if stall_state="$(read_codex_stall_guard_state "${stall_status_file}" 2>/dev/null)"; then
     :
   elif [ -s "${stall_status_file}" ]; then
@@ -4104,6 +4436,12 @@ execute_reviewer_attempt() {
         max_wall)
           echo "Reviewer slot ${slot_model} (${effective_model}) killed by watchdog on ${attempt_label} (max wall ${reviewer_max_wall}s, exit=${cmd_rc})." | tee -a "${log_file}"
           ;;
+        tool_repeat)
+          echo "Reviewer slot ${slot_model} (${effective_model}) killed by watchdog on ${attempt_label} (tool repeat limit ${REVIEWER_TOOL_REPEAT_LIMIT_EFFECTIVE}, exit=${cmd_rc})." | tee -a "${log_file}"
+          ;;
+        max_steps)
+          echo "Reviewer slot ${slot_model} (${effective_model}) killed by watchdog on ${attempt_label} (turn limit ${REVIEWER_MAX_STEPS_EFFECTIVE}, exit=${cmd_rc}); not retried." | tee -a "${log_file}"
+          ;;
         *)
           echo "Reviewer slot ${slot_model} (${effective_model}) execution failed on ${attempt_label} (exit=${cmd_rc})." | tee -a "${log_file}"
           ;;
@@ -4126,10 +4464,10 @@ execute_reviewer_attempt() {
   REVIEWER_ATTEMPT_WD_REASON="${wd_reason}"
   REVIEWER_ATTEMPT_CMD_RC="${cmd_rc}"
   case "${stall_state}:${wd_reason}:${cmd_rc}" in
-    killed:*:*|*:idle_timeout:*|*:*:137)
+    killed:*:*|*:idle_timeout:*|*:tool_repeat:*|*:*:137)
       emit_reviewer_substate "Stalled" "${attempt_number}" "${tmp_stderr}"
       ;;
-    *:max_wall:*|*:*:124|*:*:143)
+    *:max_wall:*|*:max_steps:*|*:*:124|*:*:143)
       emit_reviewer_substate "TimedOut" "${attempt_number}" "${tmp_stderr}"
       ;;
     *)
@@ -4865,6 +5203,35 @@ run_reviewer_pass() {
     esac
   done
 
+  # A skipped sole Mistral slot or a context overflow needs a successful
+  # larger-window reviewer before the PR can continue.
+  if [ "${#pass_models[@]}" -eq 1 ] \
+    && [ "${pass_models[0]}" = "mistralai/mistral-small-2603" ] && [ "${pass_successful}" -eq 0 ] \
+    && [ -f "${pass_status_files[0]}" ] \
+    && { [ "${sf_status}" = "skipped_unmapped" ] || [ "${sf_status}" = "skipped_open" ] || {
+      [ "${sf_status}" = "failed" ] \
+        && grep -Eiq 'context.{0,50}(exceed|overflow|too long|length is [0-9]+ tokens|window full)|exceed.{0,50}context|too many (input )?tokens|prompt (is )?too long' "${pass_log_files[0]}"
+    }; } \
+    && normalize_reviewer_model_list "${REVIEWER_MODELS}" | grep -Fxq 'openai/gpt-6-luna' \
+    && [ ! -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
+    if ! reviewer_circuit_breaker_enabled || {
+      reviewer_health_dispatch_prepare "openai/gpt-6-luna"
+      [ "${REVIEWER_HEALTH_DISPATCH_DECISION}" != "skip_open" ]
+    }; then
+      echo "::warning::Sole reviewer Mistral was skipped or exceeded its context window; retrying with live openai/gpt-6-luna." >&2
+      run_reviewer "openai/gpt-6-luna" "openai_gpt-6-luna" "${pass_prefix}" "${pass_prompt}" "${pass_reasoning}" >&2
+      sf_status="$(cat "${PREVIOUS_REVIEWS_DIR}/status_${pass_prefix}_openai_gpt-6-luna.txt" 2>/dev/null || true)"
+      if [ "${sf_status}" = "success" ]; then
+        pass_successful=1
+        reviewer_write_model_list_file "${REVIEWER_ACTIVE_MODELS_FILE}" "openai/gpt-6-luna"
+      elif [ "${sf_status}" = "skipped_budget" ]; then
+        pass_budget_skipped=1
+        # A sole-slot context overflow is deferrable when GPT cannot start.
+        pass_hard_failures=0
+      fi
+    fi
+  fi
+
   if [ "${pass_budget_skipped}" -ne 0 ] && [ "${pass_hard_failures}" -eq 0 ]; then
     reviewer_request_partial_finalize "soft_deadline"
   fi
@@ -4890,9 +5257,9 @@ build_cross_pollination_summary() {
     echo ""
     echo "The consolidated ledger below was produced by ${XPOLL_SUMMARISER_MODEL:-openai/gpt-6-luna}"
     echo "from all pass-1 reviewer outputs (CONSENSUS FINDINGS + CONSENSUS TASK GAPS blocks + per-reviewer sections)."
-    echo "The raw per-reviewer outputs remain on disk at:"
-    echo "  ${PREVIOUS_REVIEWS_DIR}/pass1_<safe_model_name>.txt"
-    echo "Read a raw file only if a ledger entry is ambiguous or lacks detail."
+    echo "This ledger is the only pass-1 input you get. Do not try to open the raw"
+    echo "pass-1 outputs: they sit outside the checkout, where reads are rejected."
+    echo "If a ledger entry is ambiguous, verify it against the code instead."
     echo ""
     if [ -s "${ledger_file}" ]; then
       cat "${ledger_file}"
@@ -4969,8 +5336,8 @@ if [ "${TWO_PASS_ENABLED}" = "true" ]; then
   # "primary review target" — most recent AI-generated changes).
   #
   # Both PASS2_REASONING_SMALL and PASS2_REASONING_LARGE fall back to
-  # xhigh here (reviewer slots are non-GPT models, outside the gpt-6-sol
-  # `high` default), so the size gate is a no-op at script-default settings. The gate structure is retained so
+  # xhigh here (reviewer slots, including openai/gpt-6-luna, sit outside the
+  # gpt-6-sol editor `high` default), so the size gate is a no-op at script-default settings. The gate structure is retained so
   # operators can override REVIEWER_PASS2_REASONING_SMALL and/or
   # REVIEWER_PASS2_REASONING_LARGE per-repo to differentiate small vs
   # large diffs (e.g. drop small-diff effort to medium for cost).
@@ -5090,7 +5457,7 @@ if [ "${reviewers_successful}" -eq 0 ]; then
         ;;
     esac
   done
-  if [ "${review_skip_only_statuses}" -gt 0 ] && [ "${review_hard_failures}" -eq 0 ]; then
+  if [ "$(wc -l < "${REVIEWER_ACTIVE_MODELS_FILE}" 2>/dev/null || echo 0)" -gt 1 ] && [ "${review_skip_only_statuses}" -gt 0 ] && [ "${review_hard_failures}" -eq 0 ]; then
     echo "::warning::Reviewer pass produced no successful findings; all review slots were skipped fail-open (cached-open or unmapped). Continuing with REVIEWERS_SUCCESSFUL=0."
     echo "REVIEWERS_SUCCESSFUL=0" >> "$GITHUB_ENV"
     exit 0

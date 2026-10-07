@@ -4,7 +4,7 @@ set -euo pipefail
 usage()
 {
 	cat >&2 <<'EOF'
-Usage: codex_stall_guard.sh --phase <phase> [--stdout-file <path>] [--stderr-file <path>] [--activity-file <path>] [--status-file <path>] -- <command> [args...]
+Usage: codex_stall_guard.sh --phase <phase> [--engine <codex|claude>] [--stdout-file <path>] [--stderr-file <path>] [--activity-file <path>] [--status-file <path>] -- <command> [args...]
 EOF
 }
 
@@ -22,6 +22,7 @@ run_without_guard()
 }
 
 phase="unknown"
+engine=""
 stdout_file=""
 stderr_file=""
 activity_file=""
@@ -31,6 +32,10 @@ while [ "$#" -gt 0 ]; do
 	case "$1" in
 		--phase)
 			phase="${2:-}"
+			shift 2
+			;;
+		--engine)
+			engine="${2:-}"
 			shift 2
 			;;
 		--stdout-file)
@@ -131,7 +136,16 @@ if ! command -v python3 >/dev/null 2>&1; then
 	run_without_guard "$@"
 fi
 
+case "${engine}" in
+	""|codex|claude)
+		;;
+	*)
+		echo "::warning::Invalid --engine '${engine}'; omitting the engine log field." >&2
+		engine=""
+		;;
+esac
 export CODEX_STALL_GUARD_PHASE="${phase}"
+export CODEX_STALL_GUARD_ENGINE="${engine}"
 export CODEX_STALL_GUARD_STDOUT_FILE="${stdout_file}"
 export CODEX_STALL_GUARD_STDERR_FILE="${stderr_file}"
 export CODEX_STALL_GUARD_ACTIVITY_FILE="${activity_file}"
@@ -145,7 +159,7 @@ export CODEX_STALL_HEARTBEAT_DIR_EFFECTIVE="${stall_heartbeat_dir}"
 export CODEX_STALL_RUN_ID="${stall_run_id}"
 export CODEX_STALL_ISSUE="${stall_issue}"
 
-exec python3 -c "$(cat <<'PY'
+exec env PYTHONSAFEPATH=1 python3 -c "$(cat <<'PY'
 from __future__ import annotations
 
 import errno
@@ -161,6 +175,8 @@ from pathlib import Path
 
 
 PHASE = os.environ.get("CODEX_STALL_GUARD_PHASE", "unknown")
+# `--engine` only adds a log field; without it every line is unchanged.
+ENGINE_SUFFIX = f" engine={os.environ['CODEX_STALL_GUARD_ENGINE']}" if os.environ.get("CODEX_STALL_GUARD_ENGINE") else ""
 STDOUT_FILE = os.environ.get("CODEX_STALL_GUARD_STDOUT_FILE", "")
 STDERR_FILE = os.environ.get("CODEX_STALL_GUARD_STDERR_FILE", "")
 ACTIVITY_FILE = os.environ.get("CODEX_STALL_GUARD_ACTIVITY_FILE", "")
@@ -406,7 +422,7 @@ try:
 		now = time.monotonic()
 		if HEARTBEAT_ENABLED and now >= next_heartbeat_at:
 			elapsed = int(now - last_child_event_monotonic)
-			_emit_wrapper_stderr(f"CODEX_HEARTBEAT: phase={PHASE} elapsed_secs={elapsed}{_budget_suffix_for_now()}\n")
+			_emit_wrapper_stderr(f"CODEX_HEARTBEAT: phase={PHASE} elapsed_secs={elapsed}{_budget_suffix_for_now()}{ENGINE_SUFFIX}\n")
 			_write_activity_marker()
 			next_heartbeat_at += HEARTBEAT_INTERVAL_SECS
 			while next_heartbeat_at <= time.monotonic():
@@ -419,12 +435,12 @@ try:
 				if observed_signature != signature:
 					if STALL_GUARD_ENABLED:
 						_emit_wrapper_stderr(
-							f"codex_stall_killed pid={child.pid} mode={PHASE} idle_secs={idle_secs} last_event_kind={last_event_kind} signal=SIGTERM\n"
+							f"codex_stall_killed pid={child.pid} mode={PHASE} idle_secs={idle_secs} last_event_kind={last_event_kind} signal=SIGTERM{ENGINE_SUFFIX}\n"
 						)
 						_write_status("killed", idle_secs, "SIGTERM")
 					else:
 						_emit_wrapper_stderr(
-							f"codex_stall_observed pid={child.pid} mode={PHASE} idle_secs={idle_secs} last_event_kind={last_event_kind} enabled=false\n"
+							f"codex_stall_observed pid={child.pid} mode={PHASE} idle_secs={idle_secs} last_event_kind={last_event_kind} enabled=false{ENGINE_SUFFIX}\n"
 						)
 						_write_status("observed", idle_secs)
 					observed_signature = signature

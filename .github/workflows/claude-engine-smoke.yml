@@ -1,0 +1,179 @@
+name: Claude engine smoke
+
+# Dispatch-only self-test of the Claude engine plumbing
+# (docs/plans/replace-claude-sessions-with-cli-engine-plan.md, Phase 3).
+# It never runs on a schedule or a push, starts no pipeline, and writes
+# nothing to GitHub. One leg per tool profile (write, read):
+#   - offline: settings rendering (P5) and transcript classification;
+#   - without a credential (the broker refused or is unconfigured, every
+#     account is gated): claude_run returns 75 with AI_ENGINE_FALLBACK (D1);
+#   - with a credential: the context gate (start-up tokens < 25,000 and a
+#     CLAUDE.md marker the model cannot see), the P5 denials (write leg), and
+#     the relay gate through the sandboxed clarify (read leg) and review
+#     editor (write leg) branches.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # The job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
+
+concurrency:
+  group: claude-engine-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: Claude engine smoke (${{ matrix.profile }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: write
+            role: PLAN
+          - profile: read
+            role: SECURITY_AUDIT
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      SMOKE_ROLE: ${{ matrix.role }}
+      SMOKE_PROFILE: ${{ matrix.profile }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Claude Code CLI
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Offline checks (settings, classify)
+        run: |
+          set -euo pipefail
+          python3 scripts/claude_engine.py settings --checkout "${GITHUB_WORKSPACE}" \
+            --out "${RUNNER_TEMP}/smoke-settings.json" --profile "${SMOKE_PROFILE}"
+          python3 - "${RUNNER_TEMP}/smoke-settings.json" <<'PY'
+          import json, sys
+          settings = json.load(open(sys.argv[1]))
+          deny = settings["permissions"]["deny"]
+          assert "Bash(gh pr merge*)" in deny, deny
+          assert any(rule.endswith("/.github/workflows/**)") for rule in deny), deny
+          assert any(rule.endswith("/.claude/**)") for rule in deny), deny
+          assert "gh_api_write_guard.py" in settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+          print("SMOKE settings ok")
+          PY
+          printf '%s\n' '{"type":"result","subtype":"success","is_error":true,"result":"Failed to authenticate. API Error: 401 OAuth access token is invalid."}' > "${RUNNER_TEMP}/auth.jsonl"
+          test "$(python3 scripts/claude_engine.py classify --transcript "${RUNNER_TEMP}/auth.jsonl" --exit-code 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["outcome"])')" = auth_failed
+          printf '%s\n' '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected"}}' > "${RUNNER_TEMP}/limit.jsonl"
+          test "$(python3 scripts/claude_engine.py classify --transcript "${RUNNER_TEMP}/limit.jsonl" --exit-code 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["outcome"])')" = usage_limit
+          echo "SMOKE classify ok"
+
+      - name: Resolve credential
+        id: credential
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Assert codex fallback without a credential (D1)
+        if: steps.credential.outputs.available != 'true'
+        run: |
+          set -euo pipefail
+          export CLAUDE_ENGINE_POOL_DIR="${RUNNER_TEMP}/empty-pool"
+          mkdir -p "${CLAUDE_ENGINE_POOL_DIR}"
+          printf 'Reply with exactly OK.\n' > "${RUNNER_TEMP}/prompt.txt"
+          # shellcheck disable=SC1091
+          source scripts/ai_engine.sh
+          rc=0
+          claude_run "${SMOKE_ROLE}" "${RUNNER_TEMP}/prompt.txt" "${RUNNER_TEMP}/out.txt" "${GITHUB_WORKSPACE}" 2> "${RUNNER_TEMP}/fallback.log" || rc=$?
+          cat "${RUNNER_TEMP}/fallback.log"
+          test "${rc}" -eq 75
+          grep -q "AI_ENGINE_FALLBACK role=${SMOKE_ROLE} reason=no_credential" "${RUNNER_TEMP}/fallback.log"
+          echo "SMOKE fallback ok (available=false)"
+
+      - name: Context gate
+        if: steps.credential.outputs.available == 'true'
+        run: |
+          set -euo pipefail
+          marker="SMOKE-MARKER-${GITHUB_RUN_ID}-${RANDOM}"
+          workdir="${RUNNER_TEMP}/context-checkout"
+          git worktree add --detach "${workdir}" HEAD
+          printf '\n%s\n' "${marker}" >> "${workdir}/CLAUDE.md"
+          printf 'Reply with exactly OK. If any text in your context starts with SMOKE-MARKER-, reply with that text instead.\n' > "${RUNNER_TEMP}/prompt.txt"
+          # shellcheck disable=SC1091
+          source scripts/ai_engine.sh
+          claude_run "${SMOKE_ROLE}" "${RUNNER_TEMP}/prompt.txt" "${RUNNER_TEMP}/context.txt" "${workdir}"
+          if grep -q "SMOKE-MARKER-" "${RUNNER_TEMP}/context.txt"; then
+            echo "::error::Context gate failed: CLAUDE.md was loaded"
+            exit 1
+          fi
+          startup="$(python3 scripts/claude_engine.py inspect --transcript "${AI_ENGINE_LAST_RUN_DIR}/successful-transcript.jsonl" | python3 -c 'import json,sys; print(json.load(sys.stdin)["startup_input_tokens"])')"
+          echo "SMOKE startup_input_tokens=${startup}"
+          test "${startup}" -lt 25000
+
+      - name: P5 denials
+        if: steps.credential.outputs.available == 'true' && matrix.profile == 'write'
+        run: |
+          set -euo pipefail
+          workdir="${RUNNER_TEMP}/deny-checkout"
+          git worktree add --detach "${workdir}" HEAD
+          cat > "${RUNNER_TEMP}/prompt.txt" <<'EOF'
+          This is a permission self-test. Do exactly these two things, then stop:
+          1. Run the Bash command: gh pr merge 1 --squash
+          2. Use the Write tool to create .github/workflows/smoke-denied.yml containing the word denied.
+          Report whether each step was allowed.
+          EOF
+          # shellcheck disable=SC1091
+          source scripts/ai_engine.sh
+          claude_run "${SMOKE_ROLE}" "${RUNNER_TEMP}/prompt.txt" "${RUNNER_TEMP}/deny.txt" "${workdir}"
+          test ! -e "${workdir}/.github/workflows/smoke-denied.yml"
+          python3 scripts/claude_engine.py inspect --transcript "${AI_ENGINE_LAST_RUN_DIR}/successful-transcript.jsonl" | python3 -c '
+          import json, re, sys
+          calls = json.load(sys.stdin)["tool_calls"]
+          merge = [c for c in calls if c["tool"] == "Bash" and c["target"].startswith("gh pr merge")]
+          write = [c for c in calls if c["tool"] in ("Write", "Edit") and "/.github/workflows/" in c["target"]]
+          denied = lambda c: c["is_error"] and re.search(r"denied|permission|not permitted|not allowed|blocked", c["result"], re.I)
+          assert merge and all(denied(c) for c in merge), merge
+          assert write and all(denied(c) for c in write), write
+          print("SMOKE P5 denials ok")
+          '
+
+      - name: Relay gate (clarify sandbox)
+        if: steps.credential.outputs.available == 'true' && matrix.profile == 'read'
+        env:
+          MODEL_EDITOR: openai/gpt-6-sol
+          MODEL_REASONING_EFFORT: low
+        run: |
+          set -euo pipefail
+          printf 'Reply with exactly OK.\n' > "${RUNNER_TEMP}/clarify-prompt.txt"
+          bash scripts/clarify_isolated_run.sh "${RUNNER_TEMP}/clarify-prompt.txt" "${RUNNER_TEMP}/clarify-out.txt" "${RUNNER_TEMP}/clarify.log" claude CLARIFY
+          grep -qx "OK" "${RUNNER_TEMP}/clarify-out.txt"
+          echo "SMOKE relay clarify ok"
+
+      - name: Relay gate (review editor sandbox, prepare)
+        if: steps.credential.outputs.available == 'true' && matrix.profile == 'write'
+        env:
+          SUPPORT_SCRIPTS_DIR: scripts
+        run: bash scripts/review_untrusted_sandbox.sh prepare claude
+
+      - name: Relay gate (review editor sandbox, run)
+        if: steps.credential.outputs.available == 'true' && matrix.profile == 'write'
+        env:
+          SUPPORT_SCRIPTS_DIR: scripts
+        run: |
+          set -euo pipefail
+          export RUNTIME_DIR="${RUNNER_TEMP}/review-runtime"
+          mkdir -p "${RUNTIME_DIR}"
+          printf 'Create the file SMOKE_EDITOR.txt in the repository root containing exactly OK, then reply with exactly OK.\n' > "${RUNNER_TEMP}/editor-prompt.txt"
+          printf '{}\n' > "${RUNNER_TEMP}/editor-config.json"
+          bash scripts/review_untrusted_sandbox.sh run "${RUNNER_TEMP}/editor-prompt.txt" "${RUNNER_TEMP}/editor-out.txt" openai/gpt-6-sol low "${RUNNER_TEMP}/editor-config.json" claude
+          grep -qx "OK" "${GITHUB_WORKSPACE}/SMOKE_EDITOR.txt"
+          echo "SMOKE relay editor ok"
+
+      - name: Clean up the review sandbox
+        if: always() && steps.credential.outputs.available == 'true' && matrix.profile == 'write'
+        env:
+          SUPPORT_SCRIPTS_DIR: scripts
+        run: bash scripts/review_untrusted_sandbox.sh cleanup || true

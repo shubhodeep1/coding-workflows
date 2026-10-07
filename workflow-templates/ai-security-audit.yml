@@ -12,9 +12,18 @@ on:
         required: false
         default: ""
         type: string
+      pr_number:
+        description: "Pull request whose head branch `ref` is (single-issue security pass); empty = no PR"
+        required: false
+        default: ""
+        type: string
 permissions:
   contents: read
   issues: write
+  pull-requests: read
+  actions: write
+  # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
 concurrency:
   group: security-audit-${{ github.repository }}
   cancel-in-progress: false
@@ -23,4 +32,5 @@ jobs:
     uses: shubhodeep1/coding-workflows/.github/workflows/security-audit.yml@stable
     with:
       ref: ${{ inputs.ref || '' }}
+      pr_number: ${{ inputs.pr_number || '' }}
     secrets: inherit

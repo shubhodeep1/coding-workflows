@@ -151,14 +151,75 @@ def test_prepare_requires_two_sided_content_conflict() -> None:
 		"one-sided delete/modify manifest conflicts must be handled only behind a "
 		"gitignore guard"
 	)
-	assert "git ls-files -u --" in block and "*' 2 '*' 3 '*" in block, (
-		"the set-algebra arm must require index stages 2 AND 3 (two-sided content "
-		"conflict); one-sided delete/modify shapes have their own gitignore-guarded arm"
+	assert "git ls-files -u --" in block and "*' 2 3 '*" in block, (
+		"union-merge must require index stages 2 AND 3 (two-sided content conflict); "
+		"delete/modify shapes fall through to the Codex resolver"
 	)
 	assert "::error::Manifest union-merge: unhandled reason=" in block and "exit 1" in block, (
 		"unsupported manifest conflicts must fail before the resolver sandbox receives "
 		"the excluded .ai/ path"
 	)
+	# PR #6438: `*' 2 '*' 3 '*` can never match the space-joined stage list.
+	assert "*' 2 '*' 3 '*" not in block
+
+
+def _stage_gate(block: str) -> tuple[str, str]:
+	stages_line = next(line.strip() for line in block.splitlines() if line.strip().startswith('_mu_stages="$(git ls-files -u'))
+	pattern = re.search(r"^\s*(\*' 2[^)]*)\)\s*$", block, re.M)
+	assert pattern is not None, "stage case pattern not found"
+	return stages_line, pattern.group(1)
+
+
+def test_prepare_stage_gate_matches_real_index_stages() -> None:
+	"""Run the live stage probe and case pattern against real conflicted indexes.
+
+	PR #6438 regression: the old pattern rejected the 3-stage content
+	conflict (`1 2 3`) and the add/add conflict (`2 3`), so the manifest
+	union-merge never ran. Delete/modify (`1 2`) must still fall through.
+	"""
+	stages_line, pattern = _stage_gate(_union_block(_prepare_text()))
+	probe = (
+		f'set -euo pipefail\nMANIFEST_UNION_PATH="{MANIFEST_PATH}"\n{stages_line}\n'
+		f'case " ${{_mu_stages}}" in\n  {pattern}) echo two_sided ;;\n  *) echo other ;;\nesac\n'
+	)
+	scratch_git_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k != "BASH_ENV"}
+	for shape, expected in (("content", "two_sided"), ("add_add", "two_sided"), ("delete_modify", "other")):
+		with tempfile.TemporaryDirectory() as tmp:
+			repo = Path(tmp)
+
+			def git(*args: str, check: bool = True) -> None:
+				subprocess.run(["git", *args], cwd=repo, check=check, env=scratch_git_env,
+					stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+			manifest = repo / MANIFEST_PATH
+			git("init", "-q", "-b", "main")
+			git("config", "user.name", "t")
+			git("config", "user.email", "t@t")
+			(repo / "seed.txt").write_text("seed\n", encoding="utf-8")
+			if shape != "add_add":
+				manifest.parent.mkdir(parents=True)
+				manifest.write_text("a.py\nm.py\n", encoding="utf-8")
+			git("add", "-A")
+			git("commit", "-qm", "base")
+			git("checkout", "-q", "-b", "ours")
+			manifest.parent.mkdir(parents=True, exist_ok=True)
+			manifest.write_text("a.py\nb.py\nm.py\n", encoding="utf-8")
+			git("add", "-A")
+			git("commit", "-qm", "ours")
+			git("checkout", "-q", "main")
+			git("checkout", "-q", "-b", "theirs")
+			if shape == "delete_modify":
+				git("rm", "-q", MANIFEST_PATH)
+			else:
+				manifest.parent.mkdir(parents=True, exist_ok=True)
+				manifest.write_text("a.py\nc.py\nm.py\n", encoding="utf-8")
+				git("add", "-A")
+			git("commit", "-qm", "theirs")
+			git("checkout", "-q", "ours")
+			git("merge", "--no-commit", "--no-ff", "theirs", check=False)
+			result = subprocess.run(["bash", "-c", probe], cwd=repo, env=scratch_git_env,
+				capture_output=True, text=True, check=True)
+			assert result.stdout.strip() == expected, (shape, result.stdout, result.stderr)
 
 
 def test_prepare_early_commit_branch_contract() -> None:

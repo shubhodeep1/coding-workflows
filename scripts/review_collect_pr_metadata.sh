@@ -210,19 +210,19 @@ else
 	issue_comments_raw="${TMP_RUNTIME_DIR}/gh_issue_comments_raw.json"
 	reviews_raw="${TMP_RUNTIME_DIR}/gh_reviews_raw.json"
 	review_comments_raw="${TMP_RUNTIME_DIR}/gh_review_comments_raw.json"
-	gh_retry "${issue_comments_raw}" api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments"
+	gh_retry "${issue_comments_raw}" api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100"
 	jq -s 'add // []' "${issue_comments_raw}" > "${PR_ISSUE_COMMENTS_FILE}"
 	printf '[]\n' > "${PR_REVIEWS_FILE}"
 	case "$(printf '%s' "${REVIEW_BREAK_GLASS_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" in
 		1|true|yes|on)
-			if gh_retry "${reviews_raw}" api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews"; then
+			if gh_retry "${reviews_raw}" api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100"; then
 				jq -s 'add // []' "${reviews_raw}" > "${PR_REVIEWS_FILE}"
 			else
 				echo "::warning::Optional top-level PR reviews fetch failed; continuing with PR_REVIEWS_FILE=[] for break-glass/advisory consumers."
 			fi
 			;;
 	esac
-	gh_retry "${review_comments_raw}" api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments"
+	gh_retry "${review_comments_raw}" api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments?per_page=100"
 	jq -s 'add // []' "${review_comments_raw}" > "${PR_REVIEW_COMMENTS_FILE}"
 
 	jq '{
@@ -309,7 +309,7 @@ fi
 # Build linked issue context file for reviewer/editor prompts.
 _linked_json_file="$(mktemp)"
 printf '%s' "${_linked_context_raw}" > "${_linked_json_file}"
-PYTHONDONTWRITEBYTECODE=1 python3 - "${_linked_json_file}" "${LINKED_ISSUE_CONTEXT_FILE}" <<'PYLINKED'
+PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - "${_linked_json_file}" "${LINKED_ISSUE_CONTEXT_FILE}" <<'PYLINKED'
 import json
 import sys
 
@@ -341,7 +341,7 @@ PYLINKED
 rm -f "${_linked_json_file}"
 echo "Linked issue context bytes: $(wc -c < "${LINKED_ISSUE_CONTEXT_FILE}" | tr -d '[:space:]')"
 
-PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
 import json
 import os
 from datetime import datetime, timezone

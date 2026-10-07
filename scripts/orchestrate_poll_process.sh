@@ -19,6 +19,76 @@ if [ -f "scripts/gh_helpers.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/gh_helpers.sh
 fi
+
+# Cron entry point, including ticks with no active tracking project. Only a
+# trusted Actions marker AND its original live trusted User command may cause
+# a replay. The marker is data, not authorization. One bounded issue listing,
+# then one comments listing and live issue read per queued issue; no calls on
+# the usual idle path beyond the rate-limit snapshot and issue listing.
+replay_failed_reclarify_commands() {
+  local budget queued issue_num issue_json comments_json source_id source_ts trusted_login
+  budget="$(gh api rate_limit --jq '.resources.core.remaining' 2>/dev/null)" || return 0
+  [[ "${budget}" =~ ^[0-9]+$ ]] && [ "${budget}" -ge 500 ] || return 0
+  queued="$(gh_retry gh issue list --repo "${GITHUB_REPOSITORY}" --state open \
+    --label ai:reclarify-requeue --json number --limit 1000 2>/dev/null)" || return 0
+  [ "$(printf '%s' "${queued}" | jq 'length' 2>/dev/null)" -gt 0 ] 2>/dev/null || return 0
+  # Existing issue/comment listings identify authors, not the PAT account;
+  # this one identity read is shared by all queued issues in the poll tick.
+  trusted_login="$(gh_retry gh api user --jq .login 2>/dev/null)" || trusted_login=""
+  [[ "${trusted_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]] || return 0
+  while IFS= read -r issue_num; do
+    [[ "${issue_num}" =~ ^[1-9][0-9]*$ ]] || continue
+    issue_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" 2>/dev/null)" || continue
+    printf '%s' "${issue_json}" | jq -e --argjson n "${issue_num}" \
+      '.number == $n and .state == "open" and (.pull_request? == null) and any(.labels[]?; .name == "ai:reclarify-requeue")' >/dev/null 2>&1 || continue
+    comments_json="$(gh_retry gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?per_page=100" 2>/dev/null)" || continue
+    # Incomplete or malformed comment history never authorizes replay.
+    comments_json="$(printf '%s' "${comments_json}" | jq -ce 'if type == "array" and all(.[]; type == "array") then add // [] else error("invalid pages") end' 2>/dev/null)" || continue
+    source_id="$(printf '%s' "${comments_json}" | jq -r '
+      [.[] | select(.user.login == "github-actions[bot]" and .user.type == "Bot" and
+        ((.body // "") | test("^<!-- ai:reclarify-requeue:v1 source=[1-9][0-9]* -->$")))]
+      | max_by(.id) | .body // "" | capture("source=(?<source>[1-9][0-9]*)").source // ""' 2>/dev/null)" || continue
+    [[ "${source_id}" =~ ^[1-9][0-9]*$ ]] || continue
+    source_ts="$(printf '%s' "${comments_json}" | jq -r --argjson id "${source_id}" '
+      [.[] | select(.id == $id and .user.type == "User" and
+        (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")) and
+        ((.body // "") | startswith("/reclarify")))] | first | .created_at // ""' 2>/dev/null)" || continue
+    [ -n "${source_ts}" ] || continue
+    printf '%s' "${comments_json}" | jq -e --argjson id "${source_id}" --arg ts "${source_ts}" '
+      any(.[]; .id > $id and .created_at >= $ts and .user.login == "github-actions[bot]" and
+        .user.type == "Bot" and .body == ("<!-- ai:reclarify-requeue:v1 source=" + ($id | tostring) + " -->"))' >/dev/null 2>&1 || continue
+    # A previous replay POST may have succeeded even when label removal
+    # failed. A newer trusted outcome also makes the failed run obsolete.
+    if printf '%s' "${comments_json}" | jq -e --argjson id "${source_id}" --arg ts "${source_ts}" --arg login "${trusted_login}" '
+      any(.[]; .id > $id and .created_at >= $ts and
+        ((.user.login == $login and ((.body // "") | contains("<!-- ai:reclarify-replay:v1 source=" + ($id | tostring) + " -->"))) or
+         ($login != "" and .user.login == $login and
+           ((.body // "") | startswith("/answer [auto-answered-by-clarify]") or contains("<!-- ai:clarification-questions -->") or contains("<!-- ai:claude-issue-routed:v1 -->")))))' >/dev/null 2>&1; then
+      gh_retry gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels/ai%3Areclarify-requeue" >/dev/null 2>&1 || true
+      continue
+    fi
+    # A newer human request is in flight: do not replay the older command,
+    # but retain the label until the newer run succeeds or marks its failure.
+    if printf '%s' "${comments_json}" | jq -e --argjson id "${source_id}" '
+      any(.[]; .id > $id and .user.type == "User" and
+        (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")) and
+        ((.body // "") | startswith("/reclarify") and (contains("<!-- ai:reclarify-replay:v1 source=") | not)))' >/dev/null 2>&1; then
+      continue
+    fi
+    # A failed POST is left labelled for the next tick. A successful POST
+    # has an immutable source marker to deduplicate after a removal failure.
+    if gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+      -f body="/reclarify [auto-requeued-by-poller]
+<!-- ai:reclarify-replay:v1 source=${source_id} -->" >/dev/null 2>&1; then
+      echo "RECLARIFY_REQUEUED issue=${issue_num} source=${source_id}"
+      gh_retry gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels/ai%3Areclarify-requeue" >/dev/null 2>&1 || true
+    fi
+  done < <(printf '%s' "${queued}" | jq -r '.[] | .number // empty' 2>/dev/null)
+}
+if [ "${RECLARIFY_REQUEUE_SWEEP_ONLY:-false}" = "true" ]; then
+  replay_failed_reclarify_commands
+  exit 0
+fi
 if ! type emit_event >/dev/null 2>&1; then
   emit_event() { return 0; }
 fi
@@ -43,6 +113,29 @@ if [ -f "scripts/nag_reminder.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/nag_reminder.sh 2>/dev/null || true
 fi
+
+# Every judge Codex run reads untrusted text (issue bodies, comments, PR
+# diffs), so it goes through the credential-free, network-isolated container
+# (scripts/codex_isolated_exec.sh). Resolved once here, as an absolute path,
+# before any judge runs. The two judges that edit files (review-blocked fix,
+# integration conflict) work in separate git worktrees under RUNTIME_DIR, so
+# agent output never lands in this checkout, whose scripts the poller keeps
+# running.
+ORCH_SCRIPTS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "$(pwd)/scripts")"
+ORCH_CODEX_ISOLATED_EXEC="${ORCH_SCRIPTS_ROOT}/codex_isolated_exec.sh"
+# Fingerprint verifier for the integration judge's resolution: the staged
+# copy when there is one, else the trusted support checkout.
+ORCH_FINGERPRINT_VERIFIER=""
+for _orch_fp_candidate in \
+  "${ORCH_SCRIPTS_ROOT}/verify_integration_fingerprints.py" \
+  "$(pwd)/.codex-workflow-src/scripts/verify_integration_fingerprints.py" \
+  "$(pwd)/.codex-workflow-src-main/scripts/verify_integration_fingerprints.py"; do
+  if [ -f "${_orch_fp_candidate}" ]; then
+    ORCH_FINGERPRINT_VERIFIER="${_orch_fp_candidate}"
+    break
+  fi
+done
+unset _orch_fp_candidate
 # shellcheck source=pr_checks_lib.sh
 # Shared PR check-runs merge gate (_pr_checks_completed /
 # _pr_required_check_names_for_base). Single source of truth shared with
@@ -62,6 +155,319 @@ elif [ -f "scripts/pr_checks_lib.sh" ]; then
   source scripts/pr_checks_lib.sh
 fi
 unset _OPP_LIB_DIR
+# Claude engine (replace-claude-sessions plan Phase 5c): the orchestrator
+# judges run through scripts/ai_engine.sh next to this script, or the staged
+# CWD copy.
+_POLLER_AI_ENGINE_SH="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo scripts)/ai_engine.sh"
+[ -f "${_POLLER_AI_ENGINE_SH}" ] || _POLLER_AI_ENGINE_SH="scripts/ai_engine.sh"
+
+# poller_claude_judge <ROLE> <prompt_file> <output_file> <log_file> [model_hint]
+# All five poller judges run in the credential-free review sandbox. Engine
+# selection uses cached tracking labels for project judges and verified issue
+# labels for per-issue judges; 77 never permits a credentialed host fallback.
+poller_claude_judge()
+{
+  local role="$1" prompt_file="$2" output_file="$3" log_file="$4" model_hint="${5:-${MODEL_EDITOR:-}}"
+  poller_judge_isolated "${role}" "${prompt_file}" "${output_file}" "${log_file}" "${model_hint}"
+}
+
+# Each attempt owns a fresh snapshot; never reuse a root after Claude returns
+# 75, because even a failed model may have written into its private copy.
+_poller_rb_judge_sandbox_attempt()
+{
+    local rb_engine="$1" prompt_file="$2" output_file="$3" log_file="$4" rb_support_dir="$5"
+    local judge_role="${6:-RB_JUDGE}" rb_access="${7:-}" judge_reason_file="${RUNTIME_DIR:?}/judge_isolation_reason"
+    local judge_workspace_override="${POLLER_JUDGE_WORKSPACE_OVERRIDE:-${GITHUB_WORKSPACE:-$PWD}}"
+    local rb_config=/dev/null rb_effort="${MODEL_REASONING_EFFORT_JUDGE:-high}" judge_rc=0
+    # PR diffs and comments are untrusted. This role may not run with host
+    # credentials; use the verified support checkout's isolated review runner.
+    local rb_sandbox_root=""
+    local rb_untracked_before_file="" rb_untracked_after_file="" rb_untracked_hash_file="" rb_untracked_path="" rb_cleanup_rc=0
+    if [ "${judge_role}" = RB_JUDGE ]; then
+      judge_reason_file="${RUNTIME_DIR}/rb_judge_isolation_reason"
+      rb_access="read"
+      if [ "${RB_COMBINED_MODE:-false}" = true ]; then
+        rb_access="write"
+        judge_workspace_override="$(pwd -P)"
+      fi
+    else
+      rb_access="read"
+      judge_workspace_override="$(pwd -P)"
+    fi
+    if [ "${rb_access}" = write ]; then
+      rb_untracked_before_file="$(mktemp "${RUNTIME_DIR:?}/rb-claude-untracked-before-XXXXXXXX")" || { echo '::error::Cannot inventory review-blocked workspace before Claude transfer.' >&2; exit 1; }
+      if ! git ls-files --others --exclude-standard -z > "${rb_untracked_before_file}"; then
+        rm -f -- "${rb_untracked_before_file}"
+        echo '::error::Cannot inventory review-blocked workspace before Claude transfer.' >&2
+        exit 1
+      fi
+      rb_untracked_hash_file="$(mktemp "${RUNTIME_DIR}/rb-claude-untracked-hash-XXXXXXXX")" || { echo '::error::Cannot fingerprint review-blocked workspace.' >&2; exit 1; }
+      if ! xargs -0 -r sha256sum -z -- < "${rb_untracked_before_file}" > "${rb_untracked_hash_file}" ||
+         ! xargs -0 -r stat -c '%a %n' -- < "${rb_untracked_before_file}" >> "${rb_untracked_hash_file}"; then
+        echo '::error::Cannot fingerprint review-blocked workspace before Claude transfer.' >&2
+        exit 1
+      fi
+    fi
+    if ! rb_sandbox_root="$(WORKSPACE_PATH="" GITHUB_WORKSPACE="${judge_workspace_override}" SUPPORT_SCRIPTS_DIR="${rb_support_dir}" bash "${rb_support_dir}/review_untrusted_sandbox.sh" prepare-ephemeral "${rb_engine}" 2>>"${log_file}")" || [ -z "${rb_sandbox_root}" ]; then
+      [ -z "${rb_untracked_before_file}" ] || rm -f -- "${rb_untracked_before_file}"
+      [ -z "${rb_untracked_hash_file}" ] || rm -f -- "${rb_untracked_hash_file}"
+      : > "${output_file}"
+      # PR content can cause preparation to fail (#3576); never let it select
+      # the credentialed host Codex fallback.
+      if [ "${log_file}" = /dev/null ]; then
+        echo "::warning::${judge_role} sandbox preparation failed (reason=sandbox_prepare_failed); refusing host fallback, will retry on a later poll tick." >&2
+      else
+        echo "::warning::${judge_role} sandbox preparation failed (reason=sandbox_prepare_failed); refusing host fallback, will retry on a later poll tick." | tee -a "${log_file}" >&2
+      fi
+      printf '%s\n' sandbox_prepare_failed > "${judge_reason_file}"
+      return 77
+    fi
+    if [ "${rb_engine}" = codex ]; then
+      rb_config="${RUNTIME_DIR}/rb_judge_opencode.json"
+      if [ "${judge_role}" != RB_JUDGE ]; then rb_config="${RUNTIME_DIR}/poller_judge_opencode.json"; fi
+      if ! bash "${rb_support_dir}/write_opencode_config.sh" --role writer --model "${POLLER_JUDGE_MODEL_HINT:-${MODEL_EDITOR}}" \
+        --project-path "$PWD" --config-path "${rb_config}" --serena off 2>>"${log_file}"; then
+        # Cleanup is mandatory before any later issue or attempt may run.
+        if ! SUPPORT_SCRIPTS_DIR="${rb_support_dir}" REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" \
+          bash "${rb_support_dir}/review_untrusted_sandbox.sh" cleanup 2>>"${log_file}"; then
+          echo '::error::Review-blocked sandbox cleanup failed; stopping the poller.' >&2
+          exit 1
+        fi
+        [ -z "${rb_untracked_before_file}" ] || rm -f -- "${rb_untracked_before_file}" "${rb_untracked_hash_file}"
+        printf '%s\n' opencode_config_failed > "${judge_reason_file}"
+        return 77
+      fi
+    fi
+    [ "${rb_effort}" != minimal ] || rb_effort=low
+    : > "${output_file}"
+    WORKSPACE_PATH="" GITHUB_WORKSPACE="${judge_workspace_override}" SUPPORT_SCRIPTS_DIR="${rb_support_dir}" REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" \
+      bash "${rb_support_dir}/review_untrusted_sandbox.sh" run "${prompt_file}" "${output_file}" \
+        "${POLLER_JUDGE_MODEL_HINT:-${MODEL_EDITOR}}" "${rb_effort}" "${rb_config}" "${rb_engine}" "${judge_role}" "${rb_access}" 2>>"${log_file}" || judge_rc=$?
+    SUPPORT_SCRIPTS_DIR="${rb_support_dir}" REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" \
+      bash "${rb_support_dir}/review_untrusted_sandbox.sh" cleanup 2>>"${log_file}" || rb_cleanup_rc=$?
+    if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ] || [ "${rb_cleanup_rc}" -ne 0 ]; then
+      echo '::error::Review-blocked judge sandbox transfer or cleanup failed; refusing its verdict.' >&2
+      rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
+      if [ -n "${rb_untracked_before_file}" ]; then
+        rb_untracked_after_file="$(mktemp "${RUNTIME_DIR}/rb-claude-untracked-after-XXXXXXXX")" || { echo '::error::Cannot inventory rejected review-blocked transfer.' >&2; exit 1; }
+        if ! git ls-files --others --exclude-standard -z > "${rb_untracked_after_file}"; then
+          echo '::error::Cannot inventory review-blocked workspace after rejected transfer.' >&2
+          exit 1
+        fi
+        while IFS= read -r -d '' rb_untracked_path; do
+          if ! git clean -f -- ":(literal)${rb_untracked_path}" >/dev/null; then
+            echo '::error::Cannot remove file added by rejected review-blocked transfer.' >&2
+            exit 1
+          fi
+        done < <(LC_ALL=C comm -z -13 <(LC_ALL=C sort -z "${rb_untracked_before_file}") <(LC_ALL=C sort -z "${rb_untracked_after_file}"))
+        if ! git ls-files --others --exclude-standard -z > "${rb_untracked_after_file}" || ! cmp -s "${rb_untracked_before_file}" "${rb_untracked_after_file}"; then
+          echo '::error::Review-blocked workspace still has untracked changes after rejected transfer.' >&2
+          exit 1
+        fi
+        if ! { xargs -0 -r sha256sum -z -- < "${rb_untracked_before_file}" &&
+               xargs -0 -r stat -c '%a %n' -- < "${rb_untracked_before_file}"; } | cmp -s "${rb_untracked_hash_file}" -; then
+          echo '::error::Rejected review-blocked transfer modified a pre-existing untracked file; stopping this poll tick.' >&2
+          exit 1
+        fi
+      fi
+      judge_rc=76
+    fi
+    if [ "${rb_cleanup_rc}" -ne 0 ]; then
+      echo '::error::Review-blocked sandbox cleanup failed; stopping the poller before another issue uses this workspace.' >&2
+      exit 1
+    fi
+    if [ -n "${rb_untracked_before_file}" ]; then
+      rm -f -- "${rb_untracked_before_file}"
+      rm -f -- "${rb_untracked_hash_file}"
+      [ -z "${rb_untracked_after_file}" ] || rm -f -- "${rb_untracked_after_file}"
+    fi
+    [ "${judge_rc}" -eq 0 ] || : > "${output_file}"
+    if [ "${judge_rc}" -eq 2 ]; then
+      printf '%s\n' sandbox_helper_outdated > "${judge_reason_file}"
+      return 77
+    fi
+    return "${judge_rc}"
+}
+
+poller_judge_engine_labels_json()
+{
+  local scope="$1" issue_labels_json="${2:-}"
+  printf '%s' "${issue_labels_json}" | jq -ec --arg scope "${scope}" --arg tracking "${TRACKING_LABELS:-[]}" '
+    def names: map(if type == "object" then .name else . end);
+    select(type == "array" and all(.[]; type == "string" or (type == "object" and (.name | type) == "string")))
+    | names
+    | select(if $scope == "standalone" then true
+             elif $scope == "managed" then index("ai:orchestrator-managed") != null
+             else false end)
+    | if $scope == "managed" then
+        . + (try ($tracking | fromjson | if type == "array" then names | map(select(type == "string")) else [] end) catch []) | unique
+      else . end
+  ' 2>/dev/null
+}
+
+poller_judge_isolated()
+{
+  local judge_role="$1" prompt_file="$2" output_file="$3" log_file="$4" model_hint="${5:-${MODEL_EDITOR:-}}"
+  local rb_support_dir="${GITHUB_WORKSPACE:-$PWD}/.codex-workflow-src/scripts" judge_reason_file="${RUNTIME_DIR:?}/judge_isolation_reason"
+  local rb_engine=codex rb_rc=0 judge_engine_labels="${TRACKING_LABELS:-[]}" judge_engine_labels_valid=true
+  [ "${judge_role}" != RB_JUDGE ] || judge_reason_file="${RUNTIME_DIR}/rb_judge_isolation_reason"
+  : > "${judge_reason_file}"
+  : > "${output_file}"
+  if [ "${POLLER_JUDGE_ENGINE_LABELS+set}" = set ]; then
+    judge_engine_labels="${POLLER_JUDGE_ENGINE_LABELS}"
+    if ! printf '%s' "${judge_engine_labels}" | jq -e 'type == "array" and all(.[]; type == "string")' >/dev/null 2>&1; then
+      judge_engine_labels_valid=false
+      if [ "${log_file}" = /dev/null ]; then
+        echo "JUDGE_ENGINE_LABELS role=${judge_role} outcome=forced_codex reason=issue_labels_unavailable" >&2
+      else
+        echo "JUDGE_ENGINE_LABELS role=${judge_role} outcome=forced_codex reason=issue_labels_unavailable" | tee -a "${log_file}" >&2
+      fi
+    fi
+  fi
+  if [ "${judge_engine_labels_valid}" = true ] && [ -f "${_POLLER_AI_ENGINE_SH}" ]; then
+    # shellcheck source=ai_engine.sh
+    if source "${_POLLER_AI_ENGINE_SH}"; then
+      if [ "${log_file}" = /dev/null ]; then
+        rb_engine="$(AI_ENGINE_LABELS="${judge_engine_labels}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
+          ai_engine_for_role "${judge_role}" 2>/dev/null || echo codex)"
+      else
+        rb_engine="$(AI_ENGINE_LABELS="${judge_engine_labels}" AI_ENGINE_MODEL_HINT="${model_hint}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT_JUDGE:-high}" \
+          ai_engine_for_role "${judge_role}" 2> >(tee -a "${log_file}" >&2) || echo codex)"
+      fi
+    fi
+  fi
+  [ "${rb_engine}" = claude ] || rb_engine=codex
+  [ -f "${rb_support_dir}/review_untrusted_sandbox.sh" ] || rb_support_dir="${GITHUB_WORKSPACE:-$PWD}/.codex-workflow-src-main/scripts"
+  if [ ! -f "${rb_support_dir}/review_untrusted_sandbox.sh" ]; then
+    printf '%s\n' support_missing > "${judge_reason_file}"
+    echo "${judge_role}_ISOLATION outcome=deferred reason=support_missing" >&2
+    return 77
+  fi
+  # An older verified support commit ignores arg 9 for OpenCode and would
+  # transfer verdict-only edits. Wait for the support update instead.
+  if ! grep -Fq '# Arg 9 (read) applies to both engines; read-only roles never transfer edits back.' "${rb_support_dir}/review_untrusted_sandbox.sh" ||
+     [ "$(grep -Fc 'if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then' "${rb_support_dir}/review_untrusted_sandbox.sh")" -lt 2 ] ||
+     { [ "${judge_role}" != RB_JUDGE ] && ! grep -Fq '# Poller judges (WAVE/STALL/INTEGRATION/SECURITY) are read-only sandbox roles; never transfer.' "${rb_support_dir}/review_untrusted_sandbox.sh"; }; then
+    printf '%s\n' sandbox_helper_outdated > "${judge_reason_file}"
+    return 77
+  fi
+  POLLER_JUDGE_MODEL_HINT="${model_hint}" _poller_rb_judge_sandbox_attempt "${rb_engine}" "${prompt_file}" "${output_file}" "${log_file}" "${rb_support_dir}" "${judge_role}" || rb_rc=$?
+  if [ "${rb_rc}" -eq 75 ] && [ "${rb_engine}" = claude ]; then
+    # Claude unavailable inside isolation: retry OpenCode in a NEW root.
+    rb_rc=0
+    POLLER_JUDGE_MODEL_HINT="${model_hint}" _poller_rb_judge_sandbox_attempt codex "${prompt_file}" "${output_file}" "${log_file}" "${rb_support_dir}" "${judge_role}" || rb_rc=$?
+  fi
+  if [ "${rb_rc}" -eq 75 ]; then
+    printf '%s\n' sandbox_helper_outdated > "${judge_reason_file}"
+    rb_rc=77
+  fi
+  [ "${rb_rc}" -eq 0 ] || : > "${output_file}"
+  return "${rb_rc}"
+}
+poller_rb_judge_isolated()
+{
+  poller_judge_isolated RB_JUDGE "$1" "$2" "$3"
+}
+
+JUDGE_ISOLATION_MAX_FAILURES="${JUDGE_ISOLATION_MAX_FAILURES:-3}"
+if ! [[ "${JUDGE_ISOLATION_MAX_FAILURES}" =~ ^[0-9]{1,9}$ ]] || [ "${JUDGE_ISOLATION_MAX_FAILURES}" -lt 1 ]; then
+  echo '::warning::Invalid JUDGE_ISOLATION_MAX_FAILURES; using 3.' >&2
+  JUDGE_ISOLATION_MAX_FAILURES=3
+fi
+
+# The labels argument is the current issue's cycle-local snapshot, not the
+# model's output. A missing snapshot must never unlock an escalated judge.
+# judge-isolation-latch-cleared-on-label-fetch-failure: as in the RB-judge
+# gate, a cycle snapshot may skip a judge but cannot prove a human cleared a latch.
+_judge_isolation_should_run()
+{
+  local role="$1" state_file="$2" issue="$3" labels="$4" entry escalated tracking_ref="-" fresh_labels_json live_has_label
+  [ "${issue}" != "${TRACKING_NUM:-}" ] || tracking_ref="${issue}"
+  entry="$(jq -c --arg role "${role}" 'if (.judge_isolation_state | type) == "object" then .judge_isolation_state[$role] // {} else {} end' "${state_file}" 2>/dev/null)" || return 1
+  escalated="$(printf '%s' "${entry}" | jq -r '.escalated // false')"
+  [ "${escalated}" = true ] || return 0
+  if printf '%s' "${labels}" | jq -e 'if type == "array" then any(.[]; . == "ai:needs-human") else false end' >/dev/null 2>&1; then
+    echo "JUDGE_ISOLATION role=${role} tracking_issue=${tracking_ref} issue=${issue:--} outcome=skip reason=escalated count=$(printf '%s' "${entry}" | jq -r '.count // 0') max=${JUDGE_ISOLATION_MAX_FAILURES}"
+    return 1
+  fi
+  if [[ "${issue}" =~ ^[0-9]+$ ]]; then
+    # TRACKING_LABELS / STALL_JUDGE_LABELS can contain [] after a failed fetch;
+    # candidate-details and linked-PR caches cannot prove label removal either.
+    # Read the full issue object (not the paginated /labels endpoint) before reset.
+    fresh_labels_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue}" --jq '{labels: (if (.labels | type) == "array" then [.labels[].name] else null end)}' 2>/dev/null || true)"
+  else
+    fresh_labels_json=''
+  fi
+  if ! printf '%s' "${fresh_labels_json}" | jq -e '(.labels | type == "array" and all(.[]; type == "string"))' >/dev/null 2>&1; then
+    echo "JUDGE_ISOLATION role=${role} tracking_issue=${tracking_ref} issue=${issue:--} outcome=skip reason=labels_unavailable count=$(printf '%s' "${entry}" | jq -r '.count // 0') max=${JUDGE_ISOLATION_MAX_FAILURES}"
+    return 1
+  fi
+  live_has_label="$(printf '%s' "${fresh_labels_json}" | jq -r '.labels | index("ai:needs-human") != null')"
+  if [ "${live_has_label}" = true ]; then
+    echo "JUDGE_ISOLATION role=${role} tracking_issue=${tracking_ref} issue=${issue:--} outcome=skip reason=escalated count=$(printf '%s' "${entry}" | jq -r '.count // 0') max=${JUDGE_ISOLATION_MAX_FAILURES}"
+    return 1
+  fi
+  _clear_judge_isolation_state "${role}" "${state_file}" "label_cleared" "${issue}"
+}
+
+_clear_judge_isolation_state()
+{
+  local role="$1" state_file="$2" reason="${3:-verdict}" issue="${4:-}" count tracking_ref="-"
+  [ "${issue}" != "${TRACKING_NUM:-}" ] || tracking_ref="${issue}"
+  count="$(jq -r --arg role "${role}" '.judge_isolation_state[$role].count // 0' "${state_file}" 2>/dev/null || echo 0)"
+  [ "${count}" != 0 ] || return 0
+  jq --arg role "${role}" '.judge_isolation_state = (if (.judge_isolation_state | type) == "object" then .judge_isolation_state else {} end | del(.[$role]))' "${state_file}" > "${state_file}.tmp" && mv "${state_file}.tmp" "${state_file}"
+  echo "JUDGE_ISOLATION role=${role} tracking_issue=${tracking_ref} issue=${issue:--} outcome=reset reason=${reason} count=0 max=${JUDGE_ISOLATION_MAX_FAILURES}"
+}
+
+_judge_isolation_checkpoint()
+{
+  # The tracking comment, not the runner's transient STATE_FILE, is the
+  # authoritative state across cron ticks. Standalone state is published by
+  # its existing stall-recovery caller.
+  if [ "$1" = "${STATE_FILE:-}" ] && [ "$2" = "${TRACKING_NUM:-}" ]; then
+    post_state_comment || true
+  fi
+}
+
+_record_judge_isolation_failure()
+{
+  local role="$1" state_file="$2" issue="$3" labels="$4" reason count comment comment_id owned_label=false tracking_ref="-"
+  [ "${issue}" != "${TRACKING_NUM:-}" ] || tracking_ref="${issue}"
+  reason="$(cat "${RUNTIME_DIR}/judge_isolation_reason" 2>/dev/null || true)"
+  case "${reason}" in support_missing|sandbox_prepare_failed|opencode_config_failed|sandbox_helper_outdated) ;; *) reason=unknown ;; esac
+  count="$(jq -r --arg role "${role}" 'if (.judge_isolation_state | type) == "object" then .judge_isolation_state[$role].count // 0 else 0 end' "${state_file}" 2>/dev/null || echo 0)"
+  [[ "${count}" =~ ^[0-9]{1,9}$ ]] || count=0
+  count=$((count + 1))
+  jq --arg role "${role}" --arg reason "${reason}" --argjson count "${count}" \
+    '.judge_isolation_state = (if (.judge_isolation_state | type) == "object" then .judge_isolation_state else {} end) | .judge_isolation_state[$role] = {count:$count, reason:$reason, escalated:false, owned_label:false, comment_id:null}' \
+    "${state_file}" > "${state_file}.tmp" && mv "${state_file}.tmp" "${state_file}" || return 1
+  echo "JUDGE_ISOLATION role=${role} tracking_issue=${tracking_ref} issue=${issue:--} outcome=deferred reason=${reason} count=${count} max=${JUDGE_ISOLATION_MAX_FAILURES}"
+  if [ "${count}" -ge "${JUDGE_ISOLATION_MAX_FAILURES}" ]; then
+    # No ownership is claimed for a pre-existing human latch. An unknown
+    # label snapshot cannot authorise escalation; retry next tick instead.
+    if ! printf '%s' "${labels}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+      _judge_isolation_checkpoint "${state_file}" "${issue}"
+      return 0
+    fi
+    if ! printf '%s' "${labels}" | jq -e 'index("ai:needs-human") != null' >/dev/null 2>&1; then
+      ensure_label_exists 'ai:needs-human'
+      gh_retry gh issue edit "${issue}" --repo "${GITHUB_REPOSITORY}" --add-label 'ai:needs-human' >/dev/null || {
+        _judge_isolation_checkpoint "${state_file}" "${issue}"
+        return 0
+      }
+      owned_label=true
+    fi
+    comment="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue}/comments" -f body="$(printf '## Judge isolation unavailable\n\nRole: %s. Reason: %s. Failures: %s. Remove `ai:needs-human` after isolation is restored to retry.\n\n<!-- ai:judge-isolation-escalated role=%s reason=%s -->' "${role}" "${reason}" "${count}" "${role}" "${reason}")" 2>/dev/null || true)"
+    comment_id="$(printf '%s' "${comment}" | jq -r '.id // empty' 2>/dev/null || true)"
+    jq --arg role "${role}" --arg id "${comment_id}" --argjson owned "${owned_label}" \
+      '.judge_isolation_state[$role] |= (.escalated = true | .owned_label = $owned | .comment_id = ($id | tonumber?))' \
+      "${state_file}" > "${state_file}.tmp" && mv "${state_file}.tmp" "${state_file}" || return 1
+    echo "JUDGE_ISOLATION role=${role} tracking_issue=${tracking_ref} issue=${issue:--} outcome=escalated reason=${reason} count=${count} max=${JUDGE_ISOLATION_MAX_FAILURES}"
+    tg_notify "Judge isolation unavailable for issue #${issue} (${role}); escalated after ${count} failures. Reason: ${reason}." "CRITICAL"
+  fi
+  _judge_isolation_checkpoint "${state_file}" "${issue}"
+}
 # shellcheck source=scripts/semble_helpers.sh
 SEMBLE_HELPERS_AVAILABLE="false"
 JUDGE_SEMBLE_MAX_CHUNKS="4"
@@ -554,6 +960,70 @@ lesson_event_json_for_stall() {
 # (phase orchestrator_completion, kind project_retrospective). Record ids are
 # deterministic, so a repeated completion tick writes nothing new. Honors
 # AI_MEMORY_ENABLED / LESSONS_LEARNED_ENABLED; fail-open; no GitHub API calls.
+# run_project_activation_verify: activation verification at project
+# completion (port P4, docs/plans/replace-claude-sessions-with-cli-engine-plan.md
+# Phase 8c). Called right after emit_orchestrator_completion_lessons on every
+# completion path and, for recent partial verdicts, on subsequent ticks.
+# Runs scripts/activation_verify.sh in `project` mode against
+# a detached worktree of the default branch; a terminal verdict
+# comment on the tracking issue carries
+# <!-- ai:activation:v1 verdict=... source=project-<n> -->, and COMMENTS
+# (already fetched for this tracking issue) is checked for it, so the guard
+# costs no API call. Gated by ACTIVATION_VERIFY_ENABLED (default true); every
+# failure is logged and ignored, never failing the poll.
+run_project_activation_verify() {
+  local verify_default verify_dir
+  if [ "${ACTIVATION_VERIFY_ENABLED:-true}" = "false" ] || ! [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
+    return 0
+  fi
+  if [ ! -f scripts/activation_verify.sh ] || [ ! -f prompts/mode-activation-verify.txt ]; then
+    echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=support_missing"
+    return 0
+  fi
+  if [ "${COMMENTS_FETCH_OK:-false}" != "true" ]; then
+    echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=comments_unavailable"
+    return 0
+  fi
+  if printf '%s' "${COMMENTS:-[]}" | jq -e --arg src "project-${TRACKING_NUM}" \
+    '[.[]? | select((.user.login // "") == "github-actions[bot]" or ((.author_association // "") as $association | ["OWNER", "MEMBER", "COLLABORATOR"] | index($association) != null)) | (.body // "" | sub("[[:space:]]+$"; "")) | (endswith("<!-- ai:activation:v1 verdict=LIVE source=" + $src + " -->") or endswith("<!-- ai:activation:v1 verdict=DORMANT source=" + $src + " -->"))] | any' >/dev/null 2>&1; then
+    echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=already_verified"
+    return 0
+  fi
+  verify_default="${FINAL_DEFAULT_BRANCH:-${DEFAULT_BRANCH_TRACKING:-}}"
+  if [ -z "${verify_default}" ]; then
+    # `|| true`: under the poller's `set -euo pipefail` a failing command
+    # substitution in an assignment would end the whole tick.
+    verify_default="$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)"
+  fi
+  [ -n "${verify_default}" ] || verify_default="main"
+  if ! verify_dir="$(mktemp -d "${RUNTIME_DIR:-/tmp}/activation-verify-project-${TRACKING_NUM}-XXXXXX")"; then
+    echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=worktree_failed"
+    return 0
+  fi
+  if ! git fetch --quiet origin "${verify_default}" 2>/dev/null \
+    || ! git worktree add --quiet --detach "${verify_dir}" FETCH_HEAD 2>/dev/null; then
+    rmdir "${verify_dir}" 2>/dev/null || true
+    echo "ACTIVATION_VERIFY mode=project item=${TRACKING_NUM} outcome=skip reason=worktree_failed"
+    return 0
+  fi
+  ACTIVATION_VERIFY_TIMEOUT_SECS="${ACTIVATION_VERIFY_TIMEOUT_SECS:-900}" \
+  SUPPORT_DIR="${PWD}" \
+  TARGET_DIR="${verify_dir}" \
+  RUNTIME_DIR="${verify_dir}-runtime" \
+  REPOSITORY="${GITHUB_REPOSITORY}" \
+  TRACKING_NUM="${TRACKING_NUM}" \
+  PROJECT_TITLE="$(jq -r '.project_title // ""' "${STATE_FILE}" 2>/dev/null || echo "")" \
+  PROJECT_BODY="$(jq -r '.project_body_snapshot // ""' "${STATE_FILE}" 2>/dev/null || echo "")" \
+  FINAL_PR="$(jq -r '.final_merge_pr // ""' "${STATE_FILE}" 2>/dev/null || echo "")" \
+  PROJECT_FILES_JSON="$(jq -c '[.waves[]?.issues[]?.files_touched[]? | select(type == "string")] | unique' "${STATE_FILE}" 2>/dev/null || echo '[]')" \
+    bash scripts/activation_verify.sh project || true
+  git worktree remove --force "${verify_dir}" >/dev/null 2>&1 \
+    || echo "::warning::Activation worktree cleanup failed for project #${TRACKING_NUM}."
+  rm -rf -- "${verify_dir}-runtime" \
+    || echo "::warning::Activation runtime cleanup failed for project #${TRACKING_NUM}."
+  return 0
+}
+
 emit_orchestrator_completion_lessons() {
   local telemetry_json=""
 
@@ -724,6 +1194,7 @@ write_state_snapshot_tracker_export() {
 assemble_judge_static_context() {
   local out_file="$1"
   local missing=""
+  local judge_readme_context=""
 
   if [ ! -s unattended_system_instructions.md ]; then
     missing="unattended_system_instructions.md"
@@ -733,6 +1204,11 @@ assemble_judge_static_context() {
   fi
   if [ -n "${missing}" ]; then
     echo "::error::Required file(s) missing or empty: ${missing}" >&2
+    return 1
+  fi
+  judge_readme_context="$(mktemp "${RUNTIME_DIR:-/tmp}/judge-readme.XXXXXX")"
+  if ! bash scripts/build_static_context.sh readme "${judge_readme_context}"; then
+    rm -f "${judge_readme_context}"
     return 1
   fi
 
@@ -752,17 +1228,14 @@ assemble_judge_static_context() {
       cat agents.md
       echo
     fi
-    if [ -f README.md ]; then
-      echo "=== README.MD ==="
-      cat README.md
-      echo
-    fi
+    cat "${judge_readme_context}"
     if [ -f probably_unnecessary_but_read_if_stuck.md ]; then
       echo "=== OVERFLOW REFERENCE ==="
       echo "If you cannot make progress without operator-runbook details (env var reference, autofix retrigger/dedup internals, orchestrator integration-sync auto-heal, validation self-healing, workflow log analysis pipeline, semantic cache scope, wrapper pin policy), read ./probably_unnecessary_but_read_if_stuck.md from the working tree before bailing."
       echo
     fi
   } > "${out_file}"
+  rm -f "${judge_readme_context}"
 }
 
 # ---------------------------------------------------------------
@@ -1563,15 +2036,10 @@ if ! [[ "${MAX_SECURITY_PASS_JUDGE_ROUNDS}" =~ ^[0-9]+$ ]]; then
   echo "::warning::MAX_SECURITY_PASS_JUDGE_ROUNDS must be a non-negative integer; defaulting to 0 (unbounded)"
   MAX_SECURITY_PASS_JUDGE_ROUNDS="0"
 fi
-# MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS bounds how many judge rounds per project
-# may end in `keep_fixing`.  From the next round on, every keep_fixing
-# decision is converted to accept_with_followup (the finding becomes a
-# tracked, non-blocking advisory filed after the merge) so the loop converges
-# without a human; `fail` is untouched.  Project #3965 ran 7 fix cycles on a
-# 5-cycle budget because rounds 1 and 2 each granted "one more" cycle and
-# nothing bounded the sequence.  Unlike MAX_SECURITY_PASS_JUDGE_ROUNDS, which
-# terminalizes for a human, this cap keeps the project unattended.  0 =
-# unbounded (legacy behaviour).
+# MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS bounds additional judge-granted fix
+# cycles. After the cap, low/medium keep_fixing becomes a tracked advisory;
+# high/critical/unrated keep_fixing terminalizes instead of granting another
+# cycle or waiving a blocking finding. 0 = unbounded (legacy behaviour).
 MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS="${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS:-2}"
 if ! [[ "${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}" =~ ^[0-9]+$ ]]; then
   echo "::warning::MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS must be a non-negative integer; defaulting to 2"
@@ -1686,7 +2154,8 @@ resolve_orchestrator_engine_sha() {
   source="env"
   if ! [[ "${candidate}" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
     candidate=""
-    if [ -d .codex-workflow-src ]; then
+    # A plain support directory inherits the consumer checkout's HEAD from git.
+    if [ ! -L .codex-workflow-src ] && [ -e .codex-workflow-src/.git ]; then
       candidate="$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)"
       source="support_checkout"
     fi
@@ -1719,6 +2188,9 @@ if ! [[ "${STALL_THRESHOLD_MINUTES}" =~ ^[0-9]+$ ]] || [ "${STALL_THRESHOLD_MINU
   echo "::warning::STALL_THRESHOLD_MINUTES must be a positive integer; defaulting to 120"
   STALL_THRESHOLD_MINUTES="120"
 fi
+# Strip leading zeros: bash arithmetic reads "0120" as octal and fails on
+# "08", while `[ -lt ]` reads both as decimal.
+STALL_THRESHOLD_MINUTES="$(( 10#${STALL_THRESHOLD_MINUTES} ))"
 
 # Review-run freshness window for the in-flight / zombie guards.
 #
@@ -1746,6 +2218,8 @@ if ! [[ "${REVIEW_RUN_MAX_RUNTIME_MINUTES}" =~ ^[0-9]+$ ]] || [ "${REVIEW_RUN_MA
   echo "::warning::REVIEW_RUN_MAX_RUNTIME_MINUTES must be a positive integer; defaulting to 250"
   REVIEW_RUN_MAX_RUNTIME_MINUTES="250"
 fi
+# Decimal, as for STALL_THRESHOLD_MINUTES above.
+REVIEW_RUN_MAX_RUNTIME_MINUTES="$(( 10#${REVIEW_RUN_MAX_RUNTIME_MINUTES} ))"
 if [ "${REVIEW_RUN_MAX_RUNTIME_MINUTES}" -lt "${STALL_THRESHOLD_MINUTES}" ]; then
   echo "::warning::REVIEW_RUN_MAX_RUNTIME_MINUTES (${REVIEW_RUN_MAX_RUNTIME_MINUTES}) is below STALL_THRESHOLD_MINUTES (${STALL_THRESHOLD_MINUTES}); raising it to the stall threshold so review runs are never treated as zombies sooner than other runs."
   REVIEW_RUN_MAX_RUNTIME_MINUTES="${STALL_THRESHOLD_MINUTES}"
@@ -1928,6 +2402,15 @@ JUDGE_REPEAT_FINGERPRINT_MAX="${JUDGE_REPEAT_FINGERPRINT_MAX:-2}"
 if ! [[ "${JUDGE_REPEAT_FINGERPRINT_MAX}" =~ ^[0-9]+$ ]] || [ "${JUDGE_REPEAT_FINGERPRINT_MAX}" -lt 1 ]; then
   echo "::warning::JUDGE_REPEAT_FINGERPRINT_MAX must be a positive integer; defaulting to 2"
   JUDGE_REPEAT_FINGERPRINT_MAX="2"
+fi
+# Consecutive project-judge runs with no usable output (the model failed, or
+# its output did not parse) before the project fails with ai:blocked and goes
+# to the unblock judge (plan Phase 7, Q13). Before, this exit retried every
+# tick forever with a CRITICAL alert each time.
+JUDGE_OUTPUT_FAILURE_MAX="${JUDGE_OUTPUT_FAILURE_MAX:-3}"
+if ! [[ "${JUDGE_OUTPUT_FAILURE_MAX}" =~ ^[0-9]+$ ]] || [ "${JUDGE_OUTPUT_FAILURE_MAX}" -lt 1 ]; then
+  echo "::warning::JUDGE_OUTPUT_FAILURE_MAX must be a positive integer; defaulting to 3"
+  JUDGE_OUTPUT_FAILURE_MAX="3"
 fi
 
 # Byte budgets for the PR diffs embedded in the wave judge prompt. codex's
@@ -2766,8 +3249,33 @@ is_valid_orchestrator_state_json() {
   ' >/dev/null 2>&1
 }
 
+UNBLOCK_TRUSTED_LOGIN=""
+UNBLOCK_TRUSTED_LOGIN_STATE="unset"
+ORCH_STATE_IDENTITY_ALERT_SENT="false"
+
+# The pipeline's own login (the GH_PAT user), resolved at most once per tick
+# with one `user` read; empty when it cannot be resolved.
+unblock_trusted_login() {
+  if [ "${UNBLOCK_TRUSTED_LOGIN_STATE}" = "unset" ]; then
+    UNBLOCK_TRUSTED_LOGIN="$(gh_retry _safe_gh_jq "user" --jq '.login // ""' 2>/dev/null || true)"
+    if [[ "${UNBLOCK_TRUSTED_LOGIN}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+      UNBLOCK_TRUSTED_LOGIN_STATE="ok"
+    else
+      UNBLOCK_TRUSTED_LOGIN=""
+      UNBLOCK_TRUSTED_LOGIN_STATE="failed"
+      if [ "${ORCH_STATE_IDENTITY_ALERT_SENT}" != "true" ]; then
+        tg_send_msg "Orchestrator cannot verify its GitHub identity for ${GITHUB_REPOSITORY}; tracking projects are paused. Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID:-unknown}")" "CRITICAL" >/dev/null 2>&1 || true
+        ORCH_STATE_IDENTITY_ALERT_SENT="true"
+      fi
+    fi
+  fi
+  printf '%s' "${UNBLOCK_TRUSTED_LOGIN}"
+}
+
 extract_latest_valid_orchestrator_state() {
   local comments_json="$1"
+  local trusted_comments_json
+  local ignored_count
   local candidate
   local candidate_body
   local candidate_state
@@ -2777,6 +3285,28 @@ extract_latest_valid_orchestrator_state() {
   EXTRACTED_STATE_JSON=""
   EXTRACTED_STATE_FALLBACK_USED="false"
   EXTRACTED_STATE_COMMENT_COUNT=0
+  EXTRACTED_STATE_IDENTITY_UNAVAILABLE="false"
+  EXTRACTED_STATE_UNTRUSTED_IGNORED=0
+
+  unblock_trusted_login >/dev/null
+  if [ -z "${UNBLOCK_TRUSTED_LOGIN}" ]; then
+    EXTRACTED_STATE_IDENTITY_UNAVAILABLE="true"
+    echo "::warning::ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=${TRACKING_NUM:-?} outcome=identity_unavailable" >&2
+    return 1
+  fi
+  if ! trusted_comments_json="$(printf '%s' "${comments_json}" | jq -c --arg login "${UNBLOCK_TRUSTED_LOGIN}" '[.[]? | select((.user.login // "") == $login)]' 2>/dev/null)"; then
+    # Do not mistake a failed author-filter parse for an empty, verified
+    # thread: the latter can trigger destructive state reconstruction.
+    trusted_comments_json='[]'
+    EXTRACTED_STATE_IDENTITY_UNAVAILABLE="true"
+    echo "::warning::ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=${TRACKING_NUM:-?} outcome=identity_unavailable reason=filter_failed" >&2
+    return 1
+  fi
+  ignored_count="$(printf '%s' "${comments_json}" | jq -r --arg login "${UNBLOCK_TRUSTED_LOGIN}" '[.[]? | select((.user.login // "") != $login and ((.body // "") | (contains("ORCHESTRATOR_STATE_V1") or contains("ORCHESTRATOR_STATE_V2"))))] | length' 2>/dev/null)" || ignored_count=0
+  EXTRACTED_STATE_UNTRUSTED_IGNORED="${ignored_count}"
+  if [ "${EXTRACTED_STATE_UNTRUSTED_IGNORED}" -gt 0 ]; then
+    echo "::warning::ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=${TRACKING_NUM:-?} outcome=filtered ignored=${EXTRACTED_STATE_UNTRUSTED_IGNORED}" >&2
+  fi
 
   # Try the V2 chunked-chain reader first.  If a complete V2 chain is
   # present (newest write wins), use it; otherwise fall through to the
@@ -2786,7 +3316,7 @@ extract_latest_valid_orchestrator_state() {
   local _v2_comments_file _v2_payload_file _v2_rc
   _v2_comments_file="$(mktemp "${TMPDIR:-/tmp}/orch_state_v2_comments.XXXXXX")"
   _v2_payload_file="$(mktemp "${TMPDIR:-/tmp}/orch_state_v2_payload.XXXXXX")"
-  printf '%s' "${comments_json}" > "${_v2_comments_file}"
+  printf '%s' "${trusted_comments_json}" > "${_v2_comments_file}"
   python3 scripts/orchestrate_state_v2.py extract \
     --comments-json "${_v2_comments_file}" > "${_v2_payload_file}" 2>/dev/null
   _v2_rc=$?
@@ -2835,7 +3365,7 @@ extract_latest_valid_orchestrator_state() {
       fi
       return 0
     fi
-  done < <(printf '%s' "${comments_json}" | jq -c '[.[] | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] | reverse | .[]?' 2>/dev/null || true)
+  done < <(printf '%s' "${trusted_comments_json}" | jq -c '[.[] | select((.body // "") | contains("ORCHESTRATOR_STATE_V1"))] | reverse | .[]?' 2>/dev/null || true)
 
   return 1
 }
@@ -3177,6 +3707,8 @@ PY
 #
 # Fail-open contract:
 # - Any failed batch is skipped (its issues are omitted from the cache).
+# - Incomplete label pages are omitted as well; a partial list cannot be
+#   used as evidence that an engine-override label is absent.
 # - Callers must treat missing keys as cache misses and fall back to the
 #   legacy per-issue REST labels lookup for those specific issues.
 _fetch_issue_labels_batch_graphql() {
@@ -3211,7 +3743,7 @@ _fetch_issue_labels_batch_graphql() {
       [[ "${n}" =~ ^[0-9]+$ ]] || continue
       fragment+=$'\n'"        i${i}: issue(number: ${n}) {
           number
-          labels(first: 50) { nodes { name } }
+          labels(first: 100) { nodes { name } pageInfo { hasNextPage } }
         }"
     done
 
@@ -3232,7 +3764,9 @@ _fetch_issue_labels_batch_graphql() {
 
     batch_transformed="$(printf '%s' "${batch_resp}" | jq -c '
       (.data.repository // {}) | to_entries | map(
-        select(.value != null and (.value.number? != null)) | {
+        select(.value != null and (.value.number? != null)
+          and .value.labels.pageInfo.hasNextPage == false
+          and (.value.labels.nodes | type) == "array") | {
           key: (.value.number | tostring),
           value: [(.value.labels.nodes // [])[]?.name]
         }
@@ -4532,6 +5066,7 @@ resolve_active_orchestrator_context_for_issue() {
   local tracking_state_json
 
   RESOLVED_ORCHESTRATOR_OWNED="false"
+  RESOLVED_ORCHESTRATOR_STATE_IDENTITY_UNAVAILABLE="false"
   RESOLVED_TRACKING_ISSUE=""
   RESOLVED_INTEGRATION_BRANCH=""
   RESOLVED_INTEGRATION_BRANCH_EXISTS="false"
@@ -4574,6 +5109,10 @@ resolve_active_orchestrator_context_for_issue() {
 
     tracking_state_json=""
     if ! extract_latest_valid_orchestrator_state "${tracking_comments}"; then
+      if [ "${EXTRACTED_STATE_IDENTITY_UNAVAILABLE}" = "true" ]; then
+        RESOLVED_ORCHESTRATOR_STATE_IDENTITY_UNAVAILABLE="true"
+        return 0
+      fi
       continue
     fi
     tracking_state_json="${EXTRACTED_STATE_JSON}"
@@ -4871,7 +5410,8 @@ ensure_security_pass_repair_branch() {
 ensure_security_pass_state_fields() {
   [ -f "${STATE_FILE}" ] || return 1
   jq '
-    .security_pass_cycle = (
+    .judge_isolation_state = (if (.judge_isolation_state | type) == "object" then .judge_isolation_state else {} end)
+    | .security_pass_cycle = (
       if (.security_pass_cycle | type) == "number"
         and (.security_pass_cycle | floor) == .security_pass_cycle
         and .security_pass_cycle >= 0
@@ -5348,6 +5888,21 @@ Security-pass fix issue #${issue_number} ended in \`ai:implementation-failed\` a
 # plus reissue guidance, bounded by MAX_SECURITY_PASS_FIX_REISSUES.
 #
 # Always returns 0; the caller continues the tracking-issue loop.
+# engine_label_create_args [labels_json] — the engine label (plan Phase 6, D2)
+# a new project issue or PR inherits, as `--label` / `<name>` lines for
+# `mapfile`. Reads the tracking issue's cached TRACKING_LABELS (or the given
+# label-name JSON list); ai:codex wins over ai:engine-claude. No API call.
+engine_label_create_args()
+{
+  local labels_json="${1:-${TRACKING_LABELS:-[]}}"
+  local engine_label
+  engine_label="$(printf '%s' "${labels_json}" | jq -r 'if (type == "array") then (map(if type == "object" then .name else . end) | if index("ai:codex") then "ai:codex" elif index("ai:engine-claude") then "ai:engine-claude" else "" end) else "" end' 2>/dev/null || true)"
+  if [ -n "${engine_label}" ]; then
+    printf '%s\n%s\n' "--label" "${engine_label}"
+  fi
+  return 0
+}
+
 security_pass_handle_failed_fix_issue() {
   local issue_number="$1"
   local comments_json="$2"
@@ -5529,7 +6084,8 @@ REISSUE_EOF
     # the whole pass on a transient API error.
     ensure_label_exists "ai:clarification"
     ensure_label_exists "ai:orchestrator-managed"
-    new_issue_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
+    mapfile -t _engine_label_args < <(engine_label_create_args)
+    new_issue_url="$(gh_retry gh issue create "${_engine_label_args[@]}" --repo "${GITHUB_REPOSITORY}" \
       --title "${issue_title}" \
       --body "${new_body}" \
       --label "ai:clarification" \
@@ -5698,7 +6254,8 @@ PY
   else
     ensure_label_exists "ai:clarification"
     ensure_label_exists "ai:orchestrator-managed"
-    issue_url="$(gh_retry gh issue create \
+    mapfile -t _engine_label_args < <(engine_label_create_args)
+    issue_url="$(gh_retry gh issue create "${_engine_label_args[@]}" \
       --repo "${GITHUB_REPOSITORY}" \
       --title "[security-pass] Project #${TRACKING_NUM} fix cycle $((completed_cycles + 1))" \
       --body-file "${issue_body_file}" \
@@ -5783,8 +6340,9 @@ security_pass_findings_rows_json() {
 #
 # Poller-side enforcement of security_pass_waived_findings on an engine
 # result: drops re-reports of accepted findings (exact finding_id, or the
-# same file and category within SECURITY_AUDIT_WAIVER_LINE_WINDOW lines of
-# the waived line) and rewrites the findings file in place with the kept
+# same file, category, severity and exploit scenario within
+# SECURITY_AUDIT_WAIVER_LINE_WINDOW lines of the waived line) and rewrites the
+# findings file in place with the kept
 # rows and an updated counts.kept / counts.suppressed_waived.  The engine
 # applies the same rule when it receives SECURITY_AUDIT_WAIVED_FINDINGS; this
 # keeps an older staged engine honest.  Fail-open: any error leaves the file
@@ -5819,14 +6377,24 @@ def waiver_for(finding: dict) -> str | None:
 	finding_id = str(finding.get("finding_id") or "")
 	for waiver in waivers:
 		waived_id = str(waiver.get("finding_id") or "")
-		if waived_id and waived_id == finding_id:
+		waived_finding = waiver.get("finding")
+		waived_scenario = norm_category(waiver.get("exploit_scenario") or (waived_finding.get("exploit_scenario") if isinstance(waived_finding, dict) else ""))
+		waived_severity = norm_category(waiver.get("severity"))
+		waived_category = norm_category(waiver.get("owasp_or_stride_category"))
+		if (waived_id and waived_id == finding_id
+			and (not waived_scenario or waived_scenario == norm_category(finding.get("exploit_scenario")))
+			and (not waived_severity or waived_severity == norm_category(finding.get("severity")))
+			and (not waived_category or waived_category == norm_category(finding.get("owasp_or_stride_category")))):
 			return waived_id
 		waived_line = waiver.get("line")
 		if (
 			str(waiver.get("file") or "")
 			and str(waiver.get("file") or "") == str(finding.get("file") or "")
-			and norm_category(waiver.get("owasp_or_stride_category"))
-			and norm_category(waiver.get("owasp_or_stride_category")) == norm_category(finding.get("owasp_or_stride_category"))
+			and waived_category
+			and waived_category == norm_category(finding.get("owasp_or_stride_category"))
+			and waived_severity == norm_category(finding.get("severity"))
+			and waived_scenario
+			and waived_scenario == norm_category(finding.get("exploit_scenario"))
 			and isinstance(waived_line, int)
 			and not isinstance(waived_line, bool)
 			and abs(int(waived_line) - int(finding.get("line") or 0)) <= line_window
@@ -6029,7 +6597,8 @@ PY
   ensure_label_exists "ai:security"
   # Do not retry this non-idempotent mutation. If GitHub accepts the create but
   # the response is lost, the marker search above reconciles it next poll.
-  issue_url="$(gh issue create \
+  mapfile -t _engine_label_args < <(engine_label_create_args)
+  issue_url="$(gh issue create "${_engine_label_args[@]}" \
     --repo "${GITHUB_REPOSITORY}" \
     --title "${title}" \
     --body-file "${body_file}" \
@@ -6293,8 +6862,8 @@ security_pass_exhaustion_judge() {
     return 1
   fi
   judge_round=$((judge_rounds + 1))
-  # keep_fixing is available for the first MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS
-  # rounds; later rounds convert it to accept_with_followup (see below).
+  # The cap applies to low/medium findings only; high/critical/unrated
+  # findings must not be converted into non-blocking waivers.
   keep_fixing_capped="false"
   if [ "${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}" -gt 0 ] && [ "${judge_round}" -gt "${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}" ]; then
     keep_fixing_capped="true"
@@ -6382,12 +6951,18 @@ security_pass_exhaustion_judge() {
       printf '%s\n' "${MOCK_SECURITY_PASS_JUDGE_JSON}" > "${output_file}"
     else
       sanitize_codex_prompt_file "${prompt_file}"
-      bash scripts/codex_heartbeat.sh \
-        --phase "orchestrate-security-pass-judge" \
-        --stdout-file "${output_file}" \
-        --stderr-file "${error_file}" \
-        -- codex --ask-for-approval never -c model_verbosity=low exec --skip-git-repo-check \
-          --model "${effective_judge_model}" --sandbox read-only < "${prompt_file}" || true
+      local security_judge_rc=0
+      if ! _judge_isolation_should_run SECURITY_JUDGE "${STATE_FILE}" "${TRACKING_NUM}" "${TRACKING_LABELS:-}"; then
+        SECURITY_PASS_JUDGE_OUTCOME=deferred
+        return 0
+      fi
+      poller_claude_judge SECURITY_JUDGE "${prompt_file}" "${output_file}" "${error_file}" "${effective_judge_model}" || security_judge_rc=$?
+      if [ "${security_judge_rc}" -eq 77 ]; then
+        _record_judge_isolation_failure SECURITY_JUDGE "${STATE_FILE}" "${TRACKING_NUM}" "${TRACKING_LABELS:-}" || true
+        SECURITY_PASS_JUDGE_OUTCOME=deferred
+        echo '::warning::Security-pass judge isolation unavailable; deferring to the next poll.' >&2
+        return 0
+      fi
     fi
     judge_json="$(_robust_parse_json_file "${output_file}")"
     if [ -n "${judge_json}" ] && printf '%s' "${judge_json}" | jq -e --slurpfile audit "${findings_file}" '
@@ -6403,6 +6978,7 @@ security_pass_exhaustion_judge() {
       )
     ' >/dev/null 2>&1; then
       judge_success="true"
+      _clear_judge_isolation_state SECURITY_JUDGE "${STATE_FILE}" verdict "${TRACKING_NUM}" || true
       break
     fi
     echo "::warning::Security-pass exhaustion judge attempt ${attempt} for tracking issue #${TRACKING_NUM} returned no usable verdict (every remaining finding needs exactly one valid decision, and fail cannot be mixed with non-fail actions)."
@@ -6436,21 +7012,18 @@ security_pass_exhaustion_judge() {
   ' > "${verdict_file}" 2>/dev/null || { echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=verdict_normalize_failed"; return 1; }
   jq --argjson round "${judge_round}" '.security_pass_judge_rounds = $round' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
 
-  # Convergence backstop: once the judge has had MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS
-  # rounds that could grant another cycle, a keep_fixing decision is converted
-  # to accept_with_followup so the finding becomes a deferred advisory and the
-  # project completes unattended.  A project-wide `fail` verdict never reaches
-  # here with keep_fixing rows (mixed verdicts are rejected above).
+  # Convergence backstop for medium/low findings only. High or unknown
+  # severity must stay blocking even when the judge's fix budget is spent.
   keep_fixing_converted=0
   capped_suffix=""
   if [ "${keep_fixing_capped}" = "true" ]; then
-    keep_fixing_converted="$(jq -r '[.decisions[] | select(.action == "keep_fixing")] | length' "${verdict_file}")"
+    keep_fixing_converted="$(jq -r '[.decisions[] | select(.action == "keep_fixing" and ((.finding.severity // "" | ascii_downcase) == "medium" or (.finding.severity // "" | ascii_downcase) == "low"))] | length' "${verdict_file}")"
     [[ "${keep_fixing_converted}" =~ ^[0-9]+$ ]] || keep_fixing_converted=0
     if [ "${keep_fixing_converted}" -gt 0 ]; then
       if ! jq --arg note "[keep_fixing capped after ${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS} judge round(s); converted to advisory follow-up] " '
         .decisions = [
           .decisions[]
-          | if .action == "keep_fixing" then (.action = "accept_with_followup" | .justification = ($note + .justification)) else . end
+          | if .action == "keep_fixing" and ((.finding.severity // "" | ascii_downcase) == "medium" or (.finding.severity // "" | ascii_downcase) == "low") then (.action = "accept_with_followup" | .justification = ($note + .justification)) else . end
         ]
       ' "${verdict_file}" > "${verdict_file}.tmp" || ! mv "${verdict_file}.tmp" "${verdict_file}"; then
         rm -f "${verdict_file}.tmp"
@@ -6465,6 +7038,19 @@ security_pass_exhaustion_judge() {
   accepted_count="$(jq -r '[.decisions[] | select(.action == "accept_with_followup")] | length' "${verdict_file}")"
   fixing_count="$(jq -r '[.decisions[] | select(.action == "keep_fixing")] | length' "${verdict_file}")"
   failed_count="$(jq -r '[.decisions[] | select(.action == "fail")] | length' "${verdict_file}")"
+  if [ "${keep_fixing_capped}" = "true" ] && [ "${fixing_count}" -gt 0 ]; then
+    decisions_table="$(render_security_pass_judge_decisions_table "${verdict_file}" 2>/dev/null || true)"
+    summary="$(jq -r '.summary' "${verdict_file}")"
+    post_tracking_comment "## ⚖️ Security-pass exhaustion judge (round ${judge_round})
+
+The extra fix-cycle budget (\`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS}\`) is spent. ${fixing_count} blocking finding(s) still need \`keep_fixing\`, so the pass is terminalized as \`ai:security-pass-failed\` without recording any new waivers or follow-ups.
+
+**Summary:** $(security_pass_prose "${summary}")
+${decisions_table:+
+${decisions_table}}"
+    echo "SECURITY_PASS_JUDGE_FAILED tracking_issue=${TRACKING_NUM} reason=blocking_findings_after_cap round=${judge_round}"
+    return 1
+  fi
   summary="$(jq -r '.summary' "${verdict_file}")"
   echo "SECURITY_PASS_JUDGE_DECIDED tracking_issue=${TRACKING_NUM} round=${judge_round} head_sha=${head_sha} accepted=${accepted_count} keep_fixing=${fixing_count} failed=${failed_count}"
 
@@ -6498,6 +7084,7 @@ ${decisions_table}}"
         line: .finding.line,
         owasp_or_stride_category: .finding.owasp_or_stride_category,
         severity: .finding.severity,
+        exploit_scenario: .finding.exploit_scenario,
         justification: .justification,
         source: "judge",
         waived_by: "security-pass-exhaustion-judge",
@@ -7072,6 +7659,9 @@ run_security_pass_inline() {
         fixing)
           return 1
           ;;
+        deferred)
+          return 1
+          ;;
       esac
     fi
     security_pass_terminal_failure "${current_head_sha}" "${finding_count}" "${completed_cycles}" "${findings_file}"
@@ -7438,7 +8028,8 @@ create_judge_fixup_issues_from_verdict() {
 
           ensure_label_exists "ai:clarification"
           ensure_label_exists "ai:orchestrator-managed"
-          FIX_URL="$(gh_retry gh issue create \
+          mapfile -t _engine_label_args < <(engine_label_create_args)
+          FIX_URL="$(gh_retry gh issue create "${_engine_label_args[@]}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${FIX_TITLE}" \
             --body "${FULL_FIX_BODY}" \
@@ -7951,7 +8542,8 @@ ensure_eager_final_pr() {
 
   if [ -z "${discovered}" ]; then
     local pr_url
-    pr_url="$(gh_retry gh pr create \
+    mapfile -t _engine_label_args < <(engine_label_create_args)
+    pr_url="$(gh_retry gh pr create "${_engine_label_args[@]}" \
       --repo "${GITHUB_REPOSITORY}" \
       --draft \
       --base "${default_branch}" \
@@ -8417,21 +9009,26 @@ EOF
 	return 0
 }
 
-# Build a prompt for the judge and run codex exec to resolve a
+# Build a prompt for the judge to diagnose a
 # final-merge conflict that has survived INTEGRATION_CONFLICT_MAX_RETRIES
 # automated dispatches. Mirrors the codex setup used by the
 # review-blocked judge block (~L3700-3720) but is PR-scoped rather
 # than issue-scoped.
 #
 # Usage: invoke_judge_for_integration_conflict <final_pr> <integration_branch> <default_branch>
-# Returns: 0 on successful invocation (not necessarily successful resolution),
-#          1 on setup/dispatch failure.
+# Returns: 0 on successful resolver dispatch, 1 on failure, 2 on isolation deferral,
+#          3 when an existing resolver run already owns this PR,
+#          4 when guidance could not be published for the resolver.
 invoke_judge_for_integration_conflict() {
   local final_pr="$1"
   local integration_branch="$2"
   local default_branch="$3"
 
   [ -n "${final_pr}" ] || return 1
+  : > "${RUNTIME_DIR:?}/judge_isolation_reason"
+  if ! _judge_isolation_should_run INTEGRATION_JUDGE "${STATE_FILE}" "${TRACKING_NUM}" "${TRACKING_LABELS:-}"; then
+    return 2
+  fi
 
   echo "  [integration-heal] Escalating to judge for final PR #${final_pr} (${integration_branch} -> ${default_branch})."
 
@@ -8442,6 +9039,43 @@ invoke_judge_for_integration_conflict() {
     --model "${MODEL_EDITOR:-openai/gpt-6-sol}" \
     --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}"
 
+  # The poller, not the agent, fetches both branches and starts the merge
+  # in a separate worktree (never this checkout, whose scripts the poller
+  # keeps running). The judge diagnoses conflicts in a read-only snapshot;
+  # the existing review workflow performs the isolated resolution. A clean
+  # local merge can still be published by _integration_judge_commit_and_push.
+  local judge_wt="${RUNTIME_DIR:-/tmp}/integration-judge-wt-${final_pr}"
+  local judge_conflicts=""
+  local baseline_dir=""
+  _integration_judge_remove_worktree "${judge_wt}"
+  if ! git fetch --no-tags origin \
+      "+refs/heads/${default_branch}:refs/remotes/origin/${default_branch}" \
+      "+refs/heads/${integration_branch}:refs/remotes/origin/${integration_branch}" >/dev/null 2>&1 \
+    || ! git worktree add --force --detach "${judge_wt}" "refs/remotes/origin/${integration_branch}" >/dev/null 2>&1; then
+    echo "::warning::[integration-heal] Could not fetch ${default_branch}/${integration_branch} or create the judge worktree for PR #${final_pr}."
+    _integration_judge_remove_worktree "${judge_wt}"
+    return 1
+  fi
+  local merge_rc=0
+  git -C "${judge_wt}" -c user.name="codex-bot" -c user.email="codex@users.noreply.github.com" \
+    merge --no-ff --no-commit "refs/remotes/origin/${default_branch}" >/dev/null 2>&1 || merge_rc=$?
+  judge_conflicts="$(git -C "${judge_wt}" diff --name-only --diff-filter=U 2>/dev/null || true)"
+  if [ "${merge_rc}" -ne 0 ] && [ -z "${judge_conflicts}" ]; then
+    echo "::warning::[integration-heal] Merge failed without conflicts for PR #${final_pr}; refusing an unmerged judge worktree."
+    _integration_judge_remove_worktree "${judge_wt}"
+    return 1
+  fi
+  baseline_dir="$(mktemp -d "${RUNTIME_DIR:-/tmp}/integration-judge-baseline-${final_pr}.XXXXXX")" || {
+    _integration_judge_remove_worktree "${judge_wt}"
+    return 1
+  }
+  if ! _integration_judge_capture_baseline "${judge_wt}" "${baseline_dir}"; then
+    echo "::warning::[integration-heal] Judge baseline unavailable for PR #${final_pr}; nothing pushed."
+    _integration_judge_remove_worktree "${judge_wt}"
+    rm -rf -- "${baseline_dir}"
+    return 1
+  fi
+
   local prompt_file
   local output_file
   local judge_static_file
@@ -8451,6 +9085,8 @@ invoke_judge_for_integration_conflict() {
 
   if ! assemble_judge_static_context "${judge_static_file}"; then
     rm -f "${prompt_file}" "${output_file}" "${judge_static_file}"
+    _integration_judge_remove_worktree "${judge_wt}"
+    rm -rf -- "${baseline_dir}"
     return 1
   fi
 
@@ -8512,12 +9148,22 @@ invoke_judge_for_integration_conflict() {
     echo "mergeable state. Final PR #${final_pr} (${integration_branch} -> ${default_branch})"
     echo "is currently unmergeable."
     echo
-    echo "Your task: fetch both branches, resolve the merge conflicts in a"
-    echo "way that preserves the intent of every sub-issue already merged"
-    echo "into ${integration_branch}, push the resolution to"
-    echo "${integration_branch}, and then verify GitHub reports the final"
-    echo "PR as mergeable=true. Do NOT merge the PR yourself — the poller"
-    echo "will do that once mergeability is restored."
+    echo "Your working directory is a read-only snapshot of \`${integration_branch}\`"
+    echo "with \`${default_branch}\` merged without committing. Inspect the"
+    echo "conflicted files; do not edit files or run git commands. Diagnose"
+    echo "how the isolated resolver should preserve merged sub-issue intent."
+    echo 'Return only JSON: {"action":"redispatch_resolver","diagnosis":"...","resolution_guidance":"..."}.'
+    echo 'Use action "fail" or "unknown" if a safe resolution cannot be identified.'
+    echo
+    echo "Conflicted files:"
+    printf '%s\n' "${judge_conflicts}"
+    echo
+    echo 'The resolver may edit only the conflicted files listed above. Changes'
+    echo 'to other paths or invented lines in protected paths will be rejected.'
+    echo 'Protected paths include .github/,'
+    echo '.claude/, scripts/, prompts/, workflow-templates/, validation/,'
+    echo 'ai-memory/, db/contracts/, agent-instruction files, and build,'
+    echo 'dependency, config and script files.'
     echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
@@ -8540,40 +9186,399 @@ invoke_judge_for_integration_conflict() {
     echo "Each entry is keyed by GitHub issue number; \`must_contain\`"
     echo "patterns are regexes that MUST match in the post-resolve tree,"
     echo "\`must_not_contain\` patterns are regexes that MUST NOT match."
-    echo "After you push, \`scripts/verify_integration_fingerprints.py\`"
-    echo "is run against this exact JSON — every violation is a hard"
-    echo "rejection that returns the project to this judge cycle.  Use"
-    echo "this as the authoritative spec when reconciling conflicts;"
+    echo "The resolver checks this JSON — every violation is a hard"
+    echo "rejection. Use it as the authoritative spec in your guidance;"
     echo "the truncated PR diff above is context, the fingerprints are"
     echo "the test."
     echo '```json'
     printf '%s\n' "${intent_fingerprints}"
     echo '```'
     echo
-    echo "Rules:"
-    echo "1. Preserve all intent from merged sub-issues — every"
+    echo "Guidance must preserve all intent from merged sub-issues — every"
     echo "   \`must_contain\` regex must still match the post-resolve"
     echo "   working tree, every \`must_not_contain\` regex must not."
-    echo "2. Do not rewrite history of ${default_branch}."
-    echo "3. Prefer merge commits over rebase for the integration branch."
-    echo "4. When a hunk has both ${default_branch} content and merged"
+    echo "Do not rewrite history of ${default_branch}."
+    echo "When a hunk has both ${default_branch} content and merged"
     echo "   sub-issue content, synthesize rather than pick a side —"
     echo "   wholesale reverts to \`${default_branch}\`'s version are"
     echo "   the dominant failure mode the fingerprint contract is"
     echo "   designed to catch."
-    echo "5. If conflicts are semantic rather than textual, surface a"
-    echo "   short diagnosis in the commit message."
+    echo "If conflicts are semantic, explain them in resolution_guidance."
   } > "${prompt_file}"
 
   sanitize_codex_prompt_file "${prompt_file}"
-  if cat "${prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR:-openai/gpt-6-sol}" --sandbox danger-full-access > "${output_file}" 2>> "${RUNTIME_DIR}/integration_judge.log"; then
-    echo "  [integration-heal] Judge exec completed for PR #${final_pr}."
-    rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+  if [ -z "${judge_conflicts}" ]; then
+    echo "  [integration-heal] ${default_branch} merges into ${integration_branch} without conflicts locally; skipping the judge agent for PR #${final_pr}."
+    local expected_conflict_count
+    expected_conflict_count="$(tr -cd '\000' < "${baseline_dir}/conflicted.z" | wc -c)"
+    _integration_judge_commit_and_push "${judge_wt}" "${final_pr}" "${integration_branch}" "${default_branch}" "${baseline_dir}" "${expected_conflict_count}" || {
+      rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+      _integration_judge_remove_worktree "${judge_wt}"
+      rm -rf -- "${baseline_dir}"
+      return 1
+    }
+  else
+    local integration_judge_rc=0 integration_judge_verdict integration_diagnosis integration_guidance integration_dispatch_rc=0
+    local integration_guidance_marker="" guidance_head_sha="" guidance_base_sha=""
+    if ! pushd "${judge_wt}" >/dev/null; then
+      rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+      _integration_judge_remove_worktree "${judge_wt}"
+      rm -rf -- "${baseline_dir}"
+      return 1
+    fi
+    poller_claude_judge INTEGRATION_JUDGE "${prompt_file}" "${output_file}" "${RUNTIME_DIR}/integration_judge.log" "${MODEL_EDITOR:-openai/gpt-6-sol}" || integration_judge_rc=$?
+    popd >/dev/null
+    if [ "${integration_judge_rc}" -eq 77 ]; then
+      rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+      _integration_judge_remove_worktree "${judge_wt}"
+      rm -rf -- "${baseline_dir}"
+      return 2
+    fi
+    if [ "${integration_judge_rc}" -ne 0 ] || ! integration_judge_verdict="$(_robust_parse_json_file "${output_file}")" ||
+       ! printf '%s' "${integration_judge_verdict}" | jq -e 'type == "object" and (.action | IN("redispatch_resolver", "fail", "unknown")) and (.diagnosis | type == "string" and length <= 2000) and (.resolution_guidance | type == "string" and length <= 2000)' >/dev/null 2>&1; then
+      echo "::warning::Integration judge did not return a valid diagnosis for PR #${final_pr}." >&2
+      rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+      _integration_judge_remove_worktree "${judge_wt}"
+      rm -rf -- "${baseline_dir}"
+      return 1
+    fi
+    _clear_judge_isolation_state INTEGRATION_JUDGE "${STATE_FILE}" verdict "${TRACKING_NUM}" || true
+    integration_diagnosis="$(printf '%s' "${integration_judge_verdict}" | jq -r '.diagnosis | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;")')"
+    integration_guidance="$(printf '%s' "${integration_judge_verdict}" | jq -r '.resolution_guidance | gsub("&"; "&amp;") | gsub("<"; "&lt;") | gsub(">"; "&gt;")')"
+    if [ "$(printf '%s' "${integration_judge_verdict}" | jq -r '.action')" = redispatch_resolver ]; then
+      if ! guidance_head_sha="$(git -C "${judge_wt}" rev-parse --verify HEAD 2>/dev/null)" ||
+         ! guidance_base_sha="$(git -C "${judge_wt}" rev-parse --verify "refs/remotes/origin/${default_branch}" 2>/dev/null)" ||
+         ! [[ "${guidance_head_sha}" =~ ^[0-9a-f]{40}$ && "${guidance_base_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "::warning::Integration judge guidance refs unavailable for PR #${final_pr}; deferring resolver dispatch." >&2
+        rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+        _integration_judge_remove_worktree "${judge_wt}"
+        rm -rf -- "${baseline_dir}"
+        return 4
+      fi
+      integration_guidance_marker="
+
+<!-- ai:integration-judge-guidance:v1 pr=${final_pr} head=${guidance_head_sha} base=${guidance_base_sha} -->"
+    fi
+    local integration_comment_body="## Integration conflict diagnosis
+
+Final PR #${final_pr}: ${integration_diagnosis}
+
+Resolver guidance: ${integration_guidance}${integration_guidance_marker}"
+    if [ -n "${integration_guidance_marker}" ]; then
+      local integration_comment_result=""
+      integration_comment_result="$(post_issue_comment_json "${TRACKING_NUM}" "${integration_comment_body}")" || true
+      if ! printf '%s' "${integration_comment_result}" | jq -e '.id | type == "number"' >/dev/null 2>&1; then
+        echo "::warning::Integration judge guidance could not be published for PR #${final_pr}; deferring resolver dispatch." >&2
+        rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+        _integration_judge_remove_worktree "${judge_wt}"
+        rm -rf -- "${baseline_dir}"
+        return 4
+      fi
+    else
+      post_tracking_comment "${integration_comment_body}" || true
+    fi
+    if [ "$(printf '%s' "${integration_judge_verdict}" | jq -r '.action')" != redispatch_resolver ]; then
+      rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+      _integration_judge_remove_worktree "${judge_wt}"
+      rm -rf -- "${baseline_dir}"
+      return 1
+    fi
+    _dispatch_review_for_conflicts "${final_pr}" "${integration_branch}" || integration_dispatch_rc=$?
+    if [ "${integration_dispatch_rc}" -eq 2 ]; then
+      rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+      _integration_judge_remove_worktree "${judge_wt}"
+      rm -rf -- "${baseline_dir}"
+      return 3
+    fi
+    if [ "${integration_dispatch_rc}" -ne 0 ]; then
+      echo "::warning::Integration resolver redispatch failed for PR #${final_pr}." >&2
+      rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+      _integration_judge_remove_worktree "${judge_wt}"
+      rm -rf -- "${baseline_dir}"
+      return 1
+    fi
+  fi
+  echo "  [integration-heal] Judge diagnosis/dispatch completed for PR #${final_pr}."
+  rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+  _integration_judge_remove_worktree "${judge_wt}"
+  rm -rf -- "${baseline_dir}"
+  return 0
+}
+
+# _integration_judge_remove_worktree <path> — drop a judge worktree and
+# its administrative entry; quiet when it does not exist.
+_integration_judge_remove_worktree() {
+  local wt="$1"
+  git worktree remove --force "${wt}" >/dev/null 2>&1 || true
+  rm -rf -- "${wt}"
+  git worktree prune >/dev/null 2>&1 || true
+}
+
+# Record the trusted merge index before the isolated judge edits the worktree.
+# Removing unmerged entries from a private index makes both trees comparable.
+_integration_judge_capture_baseline() {
+  local wt="$1" baseline_dir="$2" index_path
+  git -C "${wt}" diff --name-only -z --diff-filter=U > "${baseline_dir}/conflicted.z" || return 1
+  git -C "${wt}" ls-files -u -z > "${baseline_dir}/unmerged.z" || return 1
+  index_path="$(git -C "${wt}" rev-parse --git-path index)" || return 1
+  case "${index_path}" in /*) ;; *) index_path="${wt}/${index_path}" ;; esac
+  cp -- "${index_path}" "${baseline_dir}/index" || return 1
+  GIT_INDEX_FILE="${baseline_dir}/index" git -C "${wt}" update-index -z --force-remove --stdin < "${baseline_dir}/conflicted.z" || return 1
+  GIT_INDEX_FILE="${baseline_dir}/index" git -C "${wt}" write-tree > "${baseline_dir}/tree" || return 1
+}
+
+# Print the validated staged tree only after checking all agent-controlled changes.
+_integration_judge_verify_scope() {
+  local wt="$1" baseline_dir="$2" final_pr="$3"
+  PYTHONDONTWRITEBYTECODE=1 python3 - "${wt}" "${baseline_dir}" "${final_pr}" <<'PY'
+import bisect
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from collections import Counter
+from fnmatch import fnmatchcase
+
+wt, baseline_dir, final_pr = sys.argv[1:]
+git_env = os.environ.copy()
+for git_var_name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"):
+    git_env.pop(git_var_name, None)
+
+# Keep these four pattern groups in sync with PROTECTED_SKIP_SUPPRESSED in
+# review_autofix.yml; tests/test_integration_judge_scope_guard.py pins parity.
+PROTECTED_BASENAMES = (
+    "agents.md|claude.md|unattended_system_instructions.md"
+).split("|")
+PROTECTED_PATH_GLOBS = (
+    ".github/*|.claude/*|scripts/*|prompts/*|workflow-templates/*|validation/*|ai-memory/*|db/contracts/*"
+).split("|")
+PROTECTED_BASENAME_GLOBS = (
+    "dockerfile|dockerfile.*|dockerfile-*|*.dockerfile|*.dockerfile.*|*.dockerfile-*|containerfile|containerfile.*|containerfile-*|*.containerfile|*.containerfile.*|*.containerfile-*|.dockerignore|.containerignore|compose.yml|compose.yaml|compose.*.yml|compose.*.yaml|compose-*.yml|compose-*.yaml|docker-compose.yml|docker-compose.yaml|docker-compose.*.yml|docker-compose.*.yaml|docker-compose-*.yml|docker-compose-*.yaml|makefile|makefile.*|gnumakefile|gnumakefile.*|justfile|justfile.*|taskfile|taskfile.*|rakefile|rakefile.*|jenkinsfile|jenkinsfile.*|cmakelists.txt|meson.build|meson_options.txt|pom.xml|build.xml|build.gradle*|settings.gradle*|gradlew|gradlew.bat|gulpfile.*|gruntfile.*|package.json|build|build.bazel|workspace|workspace.bazel|module.bazel|*.bazel|*.bzl|*.mk|*.cmake|*.gradle|*.gradle.kts|requirements*.txt|constraints*.txt|go.mod|go.sum|pipfile|pipfile.lock|*.lock|*.lockb|config|*.config|*.config.*|*.conf|*.ini|*.toml|*.yaml|*.yml|*.json|*.jsonc|*.properties|*.xml|*.tf|*.hcl|.*rc|.*rc.*|.env|.env.*|*.sh|*.bash|*.zsh|*.ps1|*.cmd|*.bat"
+).split("|")
+PROTECTED_ROOT_BASENAME_GLOBS = (
+    "package.json|pyproject.toml|cargo.toml|go.mod|go.work|makefile|.editorconfig|turbo.json|pytest.ini|tox.ini|noxfile.py|*.config.js|*.config.cjs|*.config.mjs|*.config.ts|package-lock.json|bun.lock|bun.lockb|yarn.lock|pnpm-lock.yaml|cargo.lock|poetry.lock|uv.lock|go.sum|pipfile|pipfile.lock|requirements*.txt|constraints*.txt|.eslintrc*|eslint.config.*|.prettierrc*|.stylelintrc*|stylelint.config.*|ruff.toml|.ruff.toml|.flake8|pylintrc|biome.json|biome.jsonc"
+).split("|")
+
+def is_protected_conflict_path(path):
+    lower = os.fsdecode(path).lower()
+    base = lower.rsplit("/", 1)[-1]
+    return (base in PROTECTED_BASENAMES
+            or any(fnmatchcase(lower, glob) for glob in PROTECTED_PATH_GLOBS)
+            or any(fnmatchcase(base, glob) for glob in PROTECTED_BASENAME_GLOBS)
+            or (lower == base and any(fnmatchcase(base, glob) for glob in PROTECTED_ROOT_BASENAME_GLOBS)))
+
+def log(outcome, reason, paths=()):
+    print(f"INTEGRATION_JUDGE_SCOPE pr={final_pr} outcome={outcome} reason={reason} paths={len(paths)}", file=sys.stderr)
+    for path in paths[:20]:
+        print(f"  path={ascii(os.fsdecode(path))}", file=sys.stderr)
+
+def git(*args, index=None):
+    env = git_env.copy()
+    if index is not None:
+        env["GIT_INDEX_FILE"] = index
+    return subprocess.run(("git", "-C", wt, *args), env=env, check=True, stdout=subprocess.PIPE).stdout
+
+try:
+    with open(os.path.join(baseline_dir, "tree"), "rb") as tree_file:
+        baseline_tree = tree_file.read().strip()
+    if not re.fullmatch(rb"[0-9a-f]{40,64}", baseline_tree):
+        raise ValueError("missing baseline tree")
+    with open(os.path.join(baseline_dir, "conflicted.z"), "rb") as conflicts_file:
+        conflicts = [path for path in conflicts_file.read().split(b"\0") if path]
+    with open(os.path.join(baseline_dir, "unmerged.z"), "rb") as unmerged_file:
+        unmerged = unmerged_file.read()
+    index_path = os.fsdecode(git("rev-parse", "--git-path", "index").strip())
+    if not os.path.isabs(index_path):
+        index_path = os.path.join(wt, index_path)
+    with tempfile.TemporaryDirectory(dir=baseline_dir) as scratch:
+        post_index = os.path.join(scratch, "index")
+        shutil.copyfile(index_path, post_index)
+        subprocess.run(("git", "-C", wt, "update-index", "-z", "--force-remove", "--stdin"),
+                       input=b"\0".join(conflicts) + (b"\0" if conflicts else b""),
+                       env={**git_env, "GIT_INDEX_FILE": post_index}, check=True, stdout=subprocess.PIPE)
+        post_tree = git("write-tree", index=post_index).strip()
+    changed = [path for path in git("diff-tree", "-r", "-z", "--no-renames", "--name-only",
+                                   baseline_tree.decode(), post_tree.decode()).split(b"\0") if path]
+    if changed:
+        log("rejected", "out_of_scope", changed)
+        sys.exit(1)
+except (OSError, ValueError, subprocess.CalledProcessError, UnicodeError):
+    log("rejected", "baseline_unavailable")
+    sys.exit(1)
+
+try:
+    stages = {}
+    current_path = None
+    for entry in unmerged.split(b"\0"):
+        if not entry:
+            continue
+        header, path = entry.split(b"\t", 1)
+        mode, blob, stage = header.split(b" ")
+        stages.setdefault(path, {})[stage] = (mode, blob)
+    if set(stages) != set(conflicts) or len(conflicts) != len(set(conflicts)):
+        raise ValueError("conflict metadata mismatch")
+    work = 0
+    for path in conflicts:
+        current_path = path
+        if not is_protected_conflict_path(path):
+            continue
+        sides = stages[path]
+        indexed = git("ls-files", "-s", "-z", "--", ":(literal)" + os.fsdecode(path))
+        if not indexed:
+            raise ValueError("deleted protected conflict")
+        entries = [item for item in indexed.split(b"\0") if item]
+        if len(entries) != 1:
+            raise ValueError("invalid staged entry")
+        header, indexed_path = entries[0].split(b"\t", 1)
+        mode, blob, stage = header.split(b" ")
+        if indexed_path != path or stage != b"0" or mode not in (b"100644", b"100755"):
+            raise ValueError("invalid protected mode")
+        if mode not in {side[0] for side in sides.values() if side}:
+            raise ValueError("changed protected mode")
+        allowed = set()
+        side_lines = []
+        side_counts = []
+        for side_stage in (b"2", b"3"):
+            if side_stage in sides:
+                side_lines.append(git("cat-file", "blob", sides[side_stage][1].decode()).splitlines(keepends=True))
+                allowed.update(side_lines[-1])
+                side_counts.append(Counter(side_lines[-1]))
+        resolved_lines = git("cat-file", "blob", blob.decode()).splitlines(keepends=True)
+        if not set(resolved_lines) <= allowed:
+            raise ValueError("invented protected line")
+        if len(side_counts) == 2:
+            resolved_counts = Counter(resolved_lines)
+            for shared_line, shared_count in (side_counts[0] & side_counts[1]).items():
+                if resolved_counts[shared_line] < shared_count:
+                    raise ValueError("removed shared protected line")
+        base_counts = (Counter(git("cat-file", "blob", sides[b"1"][1].decode()).splitlines(keepends=True))
+                       if b"1" in sides else Counter())
+        for resolved_line, resolved_count in Counter(resolved_lines).items():
+            base_count = base_counts[resolved_line]
+            if resolved_count > base_count + sum(max(0, counts[resolved_line] - base_count) for counts in side_counts):
+                raise ValueError("duplicated unchanged protected line")
+        if resolved_lines not in side_lines:
+            # Assign each occurrence to one side, preserving order on that side.
+            side_indexes = []
+            for source_lines in side_lines:
+                line_positions = {}
+                for line_index, source_line in enumerate(source_lines):
+                    line_positions.setdefault(source_line, []).append(line_index)
+                side_indexes.append(line_positions)
+            while len(side_indexes) < 2:
+                side_indexes.append({})
+            frontier = {(0, 0)}
+            for resolved_line in resolved_lines:
+                work += len(frontier)
+                if work > 100000:
+                    raise ValueError("protected line provenance work limit exceeded")
+                next_frontier = set()
+                for first_pos, second_pos in frontier:
+                    for side_num, source_pos in enumerate((first_pos, second_pos)):
+                        positions = side_indexes[side_num].get(resolved_line, ())
+                        match_index = bisect.bisect_left(positions, source_pos)
+                        if match_index < len(positions):
+                            if side_num == 0:
+                                next_frontier.add((positions[match_index] + 1, second_pos))
+                            else:
+                                next_frontier.add((first_pos, positions[match_index] + 1))
+                if not next_frontier:
+                    raise ValueError("reordered or duplicated protected line")
+                # A state with both cursors further along cannot enable a later match.
+                frontier = set()
+                best_second = float("inf")
+                for first_pos, second_pos in sorted(next_frontier):
+                    if second_pos < best_second:
+                        frontier.add((first_pos, second_pos))
+                        best_second = second_pos
+    validated_tree = git("write-tree").strip()
+    if not re.fullmatch(rb"[0-9a-f]{40,64}", validated_tree):
+        raise ValueError("invalid staged tree")
+except (OSError, ValueError, subprocess.CalledProcessError, UnicodeError):
+    log("rejected", "protected_path_provenance", [current_path] if current_path else [])
+    sys.exit(1)
+log("accepted", "none", conflicts)
+print(validated_tree.decode())
+PY
+}
+
+# _integration_judge_commit_and_push <worktree> <final_pr> <integration_branch> <default_branch> <baseline_dir> <expected_conflict_count>
+#
+# Trusted half of a clean integration merge: this stages the worktree,
+# refuses to push while unmerged paths or conflict markers remain or while
+# the merged sub-issue intent fingerprints are violated, then commits the
+# merge and pushes it to <integration_branch>. Returns 0 after a push, 1
+# when nothing was pushed (the next poll tick re-evaluates mergeability).
+_integration_judge_commit_and_push() {
+  local wt="$1"
+  local final_pr="$2"
+  local integration_branch="$3"
+  local default_branch="$4"
+  local baseline_dir="$5"
+  local expected_conflict_count="$6"
+  local fp_file fp_exit=0 validated_tree
+
+  if ! git -C "${wt}" add -A -- . >/dev/null 2>&1; then
+    echo "::warning::[integration-heal] Could not stage the judge resolution for PR #${final_pr}; nothing pushed."
+    return 1
+  fi
+  if [ -n "$(git -C "${wt}" diff --name-only --diff-filter=U 2>/dev/null)" ]; then
+    echo "::warning::[integration-heal] Judge left unmerged paths for PR #${final_pr}; nothing pushed."
+    return 1
+  fi
+  validated_tree="$(_integration_judge_verify_scope "${wt}" "${baseline_dir}" "${final_pr}")" || {
+    echo "::warning::[integration-heal] Judge scope check rejected PR #${final_pr} (expected conflicts: ${expected_conflict_count}); nothing pushed."
+    return 1
+  }
+  if git -C "${wt}" diff --cached 2>/dev/null | grep -Eq '^\+(<<<<<<<|>>>>>>>)( |$)'; then
+    echo "::warning::[integration-heal] Conflict markers remain in the judge resolution for PR #${final_pr}; nothing pushed."
+    return 1
+  fi
+  fp_file="$(mktemp "${TMPDIR:-/tmp}/integration_judge_fp.XXXXXX")"
+  if ! jq -ce '(.merged_issue_fingerprints // {}) | if type == "object" then . else error("invalid fingerprints") end' "${STATE_FILE}" > "${fp_file}" 2>/dev/null; then
+    rm -f "${fp_file}"
+    echo "::warning::[integration-heal] Fingerprint state unavailable for PR #${final_pr}; nothing pushed."
+    return 1
+  fi
+  # jq -c writes a trailing newline: an empty object is three bytes.
+  if [ "$(wc -c < "${fp_file}" 2>/dev/null || echo 0)" -gt 3 ]; then
+    if [ -z "${ORCH_FINGERPRINT_VERIFIER}" ]; then
+      fp_exit=2
+      echo "::warning::[integration-heal] Fingerprint verifier unavailable; refusing to push an unverified judge resolution."
+    else
+      (cd "${wt}" && INTEGRATION_BRANCH_NAME="${integration_branch}" python3 "${ORCH_FINGERPRINT_VERIFIER}" "${fp_file}") || fp_exit=$?
+    fi
+  fi
+  rm -f "${fp_file}"
+  if [ "${fp_exit}" -ne 0 ]; then
+    echo "::warning::[integration-heal] Judge resolution for PR #${final_pr} violates the merged sub-issue fingerprints (exit ${fp_exit}); nothing pushed."
+    return 1
+  fi
+  if ! git -C "${wt}" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 \
+      && git -C "${wt}" diff --cached --quiet; then
+    echo "  [integration-heal] No merge or judge changes to commit for PR #${final_pr}; mergeability will be rechecked on the next tick."
+    return 1
+  fi
+  if ! git -C "${wt}" -c user.name="codex-bot" -c user.email="codex@users.noreply.github.com" -c commit.gpgsign=false \
+      commit --no-verify -q -m "Merge ${default_branch} into ${integration_branch} (integration judge, PR #${final_pr})" >/dev/null 2>&1; then
+    echo "::warning::[integration-heal] Could not commit the judge resolution for PR #${final_pr}; nothing pushed."
+    return 1
+  fi
+  if [ "$(git -C "${wt}" rev-parse 'HEAD^{tree}' 2>/dev/null)" != "${validated_tree}" ]; then
+    echo "::warning::[integration-heal] Committed tree differs from validated judge tree for PR #${final_pr}; nothing pushed."
+    return 1
+  fi
+  # Worktrees share the poller's Git config; use a one-shot credential helper
+  # instead of persisting the token in origin's URL.
+  if git -C "${wt}" -c credential.helper= \
+      -c 'credential.helper=!f() { printf "username=x-access-token\npassword=%s\n" "$GH_TOKEN"; }; f' \
+      push "https://github.com/${GITHUB_REPOSITORY}" "HEAD:refs/heads/${integration_branch}" >/dev/null 2>&1; then
+    echo "  [integration-heal] Pushed the judge resolution to ${integration_branch} for PR #${final_pr}."
     return 0
   fi
-
-  echo "::warning::Judge exec failed for integration conflict on PR #${final_pr}."
-  rm -f "${prompt_file}" "${output_file}" "${judge_static_file}" "${judge_semble_query_file}"
+  echo "::warning::[integration-heal] Push of the judge resolution to ${integration_branch} failed for PR #${final_pr}."
   return 1
 }
 
@@ -10054,9 +11059,33 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
   # Circuit breaker: after MAX retries, escalate to judge instead of
   # dispatching one more resolver run.
   if [ "${unresolved_ticks}" -ge "${effective_max_retries}" ]; then
-    if invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}"; then
+    local integration_judge_result=0
+    # A resolver can span several ticks. Check before spending a judge call;
+    # the dispatch helper checks again afterward to cover a concurrent start.
+    if grep -qx "${final_pr}" "${_CONFLICT_DISPATCH_TRACKER}" 2>/dev/null || \
+       _has_active_autofix_run "${final_pr}" "${integration_branch}"; then
+      echo '  [integration-heal] Resolver already in flight; deferring judge dispatch accounting.'
+      return 0
+    fi
+    invoke_judge_for_integration_conflict "${final_pr}" "${integration_branch}" "${default_branch}" || integration_judge_result=$?
+    if [ "${integration_judge_result}" -eq 3 ]; then
+      echo '  [integration-heal] Resolver already in flight; deferring judge dispatch accounting.'
+      return 0
+    fi
+    if [ "${integration_judge_result}" -eq 4 ]; then
+      echo '::warning::Integration judge guidance unavailable; deferring without consuming conflict dispatch budget.' >&2
+      return 0
+    fi
+    if [ "${integration_judge_result}" -eq 2 ]; then
+      if [ -s "${RUNTIME_DIR}/judge_isolation_reason" ]; then
+        _record_judge_isolation_failure INTEGRATION_JUDGE "${STATE_FILE}" "${TRACKING_NUM}" "${TRACKING_LABELS:-}" || true
+      fi
+      echo '::warning::Integration judge isolation unavailable; deferring without consuming conflict dispatch budget.' >&2
+      return 0
+    fi
+    if [ "${integration_judge_result}" -eq 0 ]; then
       # Reset unresolved ticks so the resolver loop can resume after
-      # the judge's push. Keep dispatch_count as audit trail.
+      # the judge's dispatch. Keep dispatch_count as audit trail.
       # integration_conflict_total_dispatches counts judge invocations
       # too — they share the lifetime cap with resolver dispatches.
       total_dispatches=$((total_dispatches + 1))
@@ -10069,7 +11098,7 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
       post_state_comment || true
       post_tracking_comment "## 🛠️ Integration judge invoked
 
-Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) did not become mergeable after ${effective_max_retries} automated resolver attempts. The judge has been invoked with full PR context to resolve conflicts. The poller will retry merge on the next tick."
+Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) did not become mergeable after ${effective_max_retries} automated resolver attempts. The judge diagnosed the conflict and requested isolated resolver review. The poller will retry merge on the next tick."
       return 0
     fi
     jq --arg err "judge escalation failed: ${error_msg}" \
@@ -10903,7 +11932,7 @@ comprehensive_forward_merge_pr_verified() {
 # Mirrors scripts/promote_main_cycle.sh: 0 when the path counts as code.
 comprehensive_cycle_is_code_path() {
   case "$1" in
-    CLAUDE.md|*/CLAUDE.md|.claude/*) return 0 ;;
+    CLAUDE.md|*/CLAUDE.md|.claude/*|*/.claude/*) return 0 ;;
   esac
   case "$1" in
     analysis/*|ai-memory/*|docs/*|tests/e2e_smoke_canary.txt|CHANGELOG.md|*.md) return 1 ;;
@@ -11485,17 +12514,48 @@ get_last_validation_run_info() {
   fi
 
   # Select the most recent run created after our last dispatch timestamp
+  # that belongs to this project. The validate wrappers name each run
+  # "... [tracking:N]" (run-name), so the listing above attributes runs
+  # without an extra API call. A run marked for another tracking issue is
+  # never used, and a success counts only from a run marked for this one:
+  # project #3965 was marked validated by a standalone run (tracking 0)
+  # that happened to finish after its dispatch. A run without the marker
+  # (a consumer wrapper not yet synced) may still report a failure, which
+  # at worst re-runs validation instead of skipping it.
+  # Each candidate is classified once; the selection and the
+  # VALIDATION_RUN_ATTRIBUTION counts both read that classification, so they
+  # cannot disagree. TRACKING_NUM must name the polled project: with it
+  # unset every marked run counts as foreign and only an unmarked failure
+  # can be selected, which fails closed (validation re-runs, never promotes).
   local selected_run
-  selected_run="$(echo "${runs_json}" | jq -c --argjson ts "${last_dispatch_ts}" '
+  local attribution_tracking="${TRACKING_NUM:-}"
+  local attribution_json
+  local attribution_summary
+  attribution_json="$(echo "${runs_json}" | jq -c --argjson ts "${last_dispatch_ts}" --arg tracking "${attribution_tracking}" '
     [.[]
       | . + {
-          _created_ts: (((.created_at // "") | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601?) // 0)
+          _created_ts: (((.created_at // "") | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601?) // 0),
+          _tracking: (((.display_title // "") | capture("\\[tracking:(?<n>[0-9]+)\\]")? | .n) // "")
         }
       | select(._created_ts >= $ts)
-    ]
-    | sort_by(.created_at // "")
-    | last // {}
-  ' 2>/dev/null || echo '{}')"
+      | . + {
+          _attribution: (
+            if ._tracking != "" then (if $tracking != "" and ._tracking == $tracking then "eligible" else "foreign" end)
+            elif (.conclusion // "") == "success" then "unmarked_success"
+            else "eligible" end
+          )
+        }
+    ] as $candidates
+    | ([$candidates[] | select(._attribution == "eligible")] | sort_by(.created_at // "") | last // {}) as $selected
+    | {
+        selected: $selected,
+        summary: "tracking=\($tracking) candidates=\($candidates | length) eligible=\([$candidates[] | select(._attribution == "eligible")] | length) skipped_foreign=\([$candidates[] | select(._attribution == "foreign")] | length) skipped_unmarked_success=\([$candidates[] | select(._attribution == "unmarked_success")] | length) selected_run=\(($selected.id // "none") | tostring)"
+      }
+  ' 2>/dev/null || echo '')"
+  selected_run="$(printf '%s' "${attribution_json}" | jq -c '.selected // {}' 2>/dev/null || echo '{}')"
+  attribution_summary="$(printf '%s' "${attribution_json}" | jq -r '.summary // empty' 2>/dev/null || true)"
+  [ -n "${attribution_summary}" ] || attribution_summary="tracking=${attribution_tracking} summary=unavailable"
+  echo "VALIDATION_RUN_ATTRIBUTION ${attribution_summary}" >&2
   if [ -z "${selected_run}" ] || [ "${selected_run}" = "null" ] || [ "${selected_run}" = "{}" ]; then
     echo '{"run_id":"","run_attempt":0,"conclusion":"","raw_status":"","run_url":"","run_timestamp":""}'
     return 0
@@ -12000,6 +13060,7 @@ Manual intervention required: resolve the blocking condition on the final PR (me
     "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   post_state_comment || true
   emit_orchestrator_completion_lessons
+  run_project_activation_verify
   _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
   handle_comprehensive_release_callback_if_needed "complete" "${_tracking_labels}" "${COMMENTS:-[]}"
   set_tracking_phase_label "ai:validated"
@@ -12539,11 +13600,15 @@ prime_phase_concurrency_snapshot() {
 # cannot observe an in_progress/queued run.  This therefore issues a single
 # branch-scoped `gh run list` (server-side --branch filter, so it is NOT subject
 # to the global 50-item listing cap the cached blob is) rather than the 3-call
-# per-workflow loop, keeping the added cost to one REST request on the rare
-# recovery-push path.
+# per-workflow loop, keeping the branch listing's cost to one REST request on
+# the rare recovery-push path (the PR-named lookup below adds its own paged
+# calls only when $2 is given and the branch listing matched nothing).
 #
-# Args: $1 = head branch.  Echoes the databaseId of the freshest matching
-# in_progress/queued/pending review run younger than REVIEW_RUN_MAX_RUNTIME_MINUTES,
+# Args: $1 = head branch, $2 = optional PR number. Echoes the databaseId of
+# the freshest matching branch run or PR-named dispatch run; an unavailable
+# listing with a PR number returns "listing-incomplete" to defer the push.
+# Without a PR number the original branch-only, fail-open behavior remains.
+# Matches in_progress/queued/pending review runs younger than REVIEW_RUN_MAX_RUNTIME_MINUTES,
 # else nothing.  Freshness mirrors build_active_issue_set's review-run window
 # so a review still legitimately editing past STALL_THRESHOLD_MINUTES is not
 # clobbered, while a genuinely hung run older than the review budget does not
@@ -12559,10 +13624,30 @@ prime_phase_concurrency_snapshot() {
 # proceeds) — no worse than the pre-fix behaviour, and the cached scan's own
 # path-based match still covers that case whenever the cache itself hits (in
 # which case this fallback is never reached).  Fails open (echoes nothing) on any
-# gh/jq/date error so a transient API failure never blocks recovery.
+# gh/jq/date error in the branch listing so a transient API failure never blocks
+# recovery; the PR-named lookup below does not (issue #4927).
+#
+# Optional $2 = PR number (issue #4701).  A review run dispatched from the
+# default branch has the default branch as its head, so the branch listing
+# never returns it.  When the listing matched no fresh review run and $2 is
+# a valid PR number, one more lookup (_pr_named_review_dispatch_runs; its
+# header documents the per-page call budget) checks
+# the workflow_dispatch runs named for that PR, with the same status and
+# freshness filters, and echoes the freshest match's databaseId.  One-argument
+# callers keep the branch-only behaviour and make no extra call.
+#
+# When that PR-named listing is incomplete (issue #4927: a page failed, or
+# more runs than it could read), the helper echoes the sentinel
+# `listing-incomplete` instead of a run id and logs
+# outcome=pr_named_listing_incomplete.  Both push sites treat any non-empty
+# result as "skip the empty-commit push", so a listing that cannot prove the
+# absence of a live review run never authorises the push; the next poll
+# cycle retries.  The branch listing above keeps its fail-open contract: it
+# is scoped to the PR's own branch, so unrelated dispatches cannot crowd it.
 _direct_inflight_review_run_on_branch()
 {
 	local _di_branch="$1"
+	local _di_pr="${2:-}"
 	local _di_now_epoch _di_stall_secs _di_runs_json
 	[ -n "${_di_branch}" ] || return 0
 	_di_now_epoch="$(date +%s 2>/dev/null || echo "")"
@@ -12574,12 +13659,14 @@ _direct_inflight_review_run_on_branch()
 	# threshold — see REVIEW_RUN_MAX_RUNTIME_MINUTES.
 	_di_stall_secs=$(( REVIEW_RUN_MAX_RUNTIME_MINUTES * 60 ))
 	# Diagnostics (CLAUDE.md §8): this helper is the last guard before the
-	# destructive empty-commit push and fails open on any error.  Poller
+	# destructive empty-commit push.  The branch listing fails open on any
+	# error; the PR-named lookup below fails closed with the
+	# `listing-incomplete` sentinel (issue #4927).  Poller
 	# run 35230465327 (tele-funtoken-msg-scoring#4367) pushed onto a
 	# branch whose review run 35226455269 was live, with no trace of why
 	# both the cached scan and this listing came back empty.  Report the
 	# listing outcome on stderr (stdout is the return value) so the next
-	# miss is attributable; the fail-open contract itself is unchanged.
+	# miss is attributable; logging does not change either contract.
 	local _di_rc=0 _di_runs_total="invalid" _di_runs_live="invalid" _di_match=""
 	_di_runs_json="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
 		--branch "${_di_branch}" \
@@ -12589,6 +13676,9 @@ _direct_inflight_review_run_on_branch()
 	if [ "${_di_rc}" -ne 0 ] || [ -z "${_di_runs_json}" ] \
 		|| ! printf '%s' "${_di_runs_json}" | jq -e 'type == "array"' >/dev/null 2>&1; then
 		echo "STALL_INFLIGHT_DIRECT_CHECK branch=${_di_branch} rc=${_di_rc} runs=${_di_runs_total} live=${_di_runs_live} matched=0 outcome=listing_unavailable" >&2
+		if [[ "${_di_pr}" =~ ^[1-9][0-9]*$ ]]; then
+			printf '%s\n' "listing-incomplete"
+		fi
 		return 0
 	fi
 	_di_runs_total="$(printf '%s' "${_di_runs_json}" | jq -r 'length' 2>/dev/null || echo "invalid")"
@@ -12612,6 +13702,31 @@ _direct_inflight_review_run_on_branch()
 			| select(($now - $start_epoch) < $threshold)
 		  ] | (.[0].databaseId // empty)
 	' 2>/dev/null || echo "")"
+	if [ -z "${_di_match}" ] && [[ "${_di_pr}" =~ ^[1-9][0-9]*$ ]]; then
+		local _di_pr_named_json="" _di_pr_named_rc=0
+		_di_pr_named_json="$(_pr_named_review_dispatch_runs "${_di_pr}")" || _di_pr_named_rc=$?
+		if [ "${_di_pr_named_rc}" -ne 0 ]; then
+			echo "STALL_INFLIGHT_DIRECT_CHECK branch=${_di_branch} pr=${_di_pr} rc=${_di_pr_named_rc} runs=${_di_runs_total} live=${_di_runs_live} matched=0 outcome=pr_named_listing_incomplete" >&2
+			printf '%s\n' "listing-incomplete"
+			return 0
+		fi
+		_di_match="$(printf '%s' "${_di_pr_named_json}" | jq -r \
+			--argjson now "${_di_now_epoch}" \
+			--argjson threshold "${_di_stall_secs}" '
+			(if type == "array" then . else [] end)
+			| [ .[]?
+				| select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
+				| ([.startedAt, .createdAt] | map(select(type == "string" and . != ""))[0] // "") as $ts
+				| (if $ts != ""
+				   then (try ($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch $now)
+				   else $now end) as $start_epoch
+				| select(($now - $start_epoch) < $threshold)
+			  ] | (.[0].databaseId // empty)
+		' 2>/dev/null || echo "")"
+		if [ -n "${_di_match}" ]; then
+			echo "STALL_INFLIGHT_DIRECT_CHECK branch=${_di_branch} pr=${_di_pr} rc=${_di_rc} runs=${_di_runs_total} live=${_di_runs_live} matched=1 outcome=pr_named_review_run" >&2
+		fi
+	fi
 	if [ -z "${_di_match}" ]; then
 		echo "STALL_INFLIGHT_DIRECT_CHECK branch=${_di_branch} rc=${_di_rc} runs=${_di_runs_total} live=${_di_runs_live} matched=0 outcome=no_fresh_review_run" >&2
 		return 0
@@ -13717,23 +14832,90 @@ STALL_EOF
           # already-dispatched/active (rc=2) as success.
           local _rtr_failed_conclusion=""
           local _rtr_failed_wf=""
+          # Newest createdAt among the completed head-branch runs seen, so a
+          # PR-named failure (below) that a later head-branch run already
+          # superseded is not acted on.
+          local _rtr_newest_completed_at=""
           for wf_candidate in ai-review.yml internal-review.yml review_autofix.yml; do
-            local _rtr_wf_conclusion
-            _rtr_wf_conclusion="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
+            local _rtr_wf_row _rtr_wf_conclusion _rtr_wf_created_at
+            _rtr_wf_row="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
               --workflow "${wf_candidate}" \
               --branch "${head_ref}" \
               --limit 1 \
-              --json status,conclusion \
-              --jq '[.[] | select(.status == "completed")] | .[0].conclusion // empty' \
+              --json status,conclusion,createdAt \
+              --jq '[.[] | select(.status == "completed")] | .[0] // empty | "\(.conclusion // "")\t\(.createdAt // "")"' \
               2>/dev/null || echo "")"
-            case "${_rtr_wf_conclusion}" in
-              failure|cancelled|timed_out)
+            if [[ "${_rtr_wf_row}" == *$'\t'* ]]; then
+              _rtr_wf_conclusion="${_rtr_wf_row%%$'\t'*}"
+              _rtr_wf_created_at="${_rtr_wf_row#*$'\t'}"
+            else
+              _rtr_wf_conclusion="${_rtr_wf_row}"
+              _rtr_wf_created_at=""
+            fi
+            # A tied failure must not be lost because the workflows were listed
+            # in a different order; completed run timestamps have second precision.
+            if [ -n "${_rtr_wf_created_at}" ] && { [[ "${_rtr_wf_created_at}" > "${_rtr_newest_completed_at}" ]] ||
+                 { [ "${_rtr_wf_created_at}" = "${_rtr_newest_completed_at}" ] &&
+                   [ -z "${_rtr_failed_conclusion}" ] &&
+                   [[ "${_rtr_wf_conclusion}" =~ ^(failure|cancelled|timed_out)$ ]]; }; }; then
+              _rtr_newest_completed_at="${_rtr_wf_created_at}"
+              _rtr_failed_conclusion=""
+              _rtr_failed_wf=""
+              case "${_rtr_wf_conclusion}" in
+                failure|cancelled|timed_out)
                 _rtr_failed_conclusion="${_rtr_wf_conclusion}"
                 _rtr_failed_wf="${wf_candidate}"
-                break
                 ;;
-            esac
+              esac
+            fi
           done
+          # Default-branch dispatches (issue #4701): a review run that
+          # _dispatch_review_for_conflicts or the sweep dispatched is named
+          # for the PR and has the default branch as its head, so the
+          # branch lookups above never see it. When they found no failed
+          # run, look at the newest PR-named dispatch run (one paged lookup,
+          # §15; see _pr_named_review_dispatch_runs for its call budget):
+          # it counts when it completed with a failure and is no older than
+          # every completed head-branch run seen (ties prefer failure). A missing
+          # createdAt counts as older, so this path only adds a redispatch when
+          # the failure is newest or tied for newest.
+          # An incomplete listing (issue #4927) can neither show the newest
+          # PR-named run nor rule out a live one, so this cycle neither
+          # redispatches nor pushes; the next poll cycle retries.
+          # The lookback is the review budget plus one stall threshold, not
+          # the in-flight guards' REVIEW_RUN_MAX_RUNTIME_MINUTES: a review run
+          # that hit the codex-agent job's 240-minute timeout ends only
+          # minutes before it would leave that window, so a later poll cycle
+          # would miss the failure and push an empty commit instead of
+          # redispatching. Both terms are positive decimal integers by now:
+          # the startup block validates them, strips leading zeros, and
+          # floors REVIEW_RUN_MAX_RUNTIME_MINUTES at STALL_THRESHOLD_MINUTES.
+          if [ -z "${_rtr_failed_conclusion}" ]; then
+            local _rtr_pr_named_row _rtr_pr_named_conclusion _rtr_pr_named_created_at
+            local _rtr_pr_named_json="" _rtr_pr_named_rc=0
+            local _rtr_pr_named_lookback_min=$(( REVIEW_RUN_MAX_RUNTIME_MINUTES + STALL_THRESHOLD_MINUTES ))
+            _rtr_pr_named_json="$(_pr_named_review_dispatch_runs "${pr_num}" "${_rtr_pr_named_lookback_min}")" || _rtr_pr_named_rc=$?
+            if [ "${_rtr_pr_named_rc}" -ne 0 ]; then
+              echo "  Issue #${issue_num} PR #${pr_num} review dispatch run listing incomplete (PR-named lookup); skipping redispatch and empty-commit push this cycle, the next poll cycle retries."
+              STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
+              return 1
+            fi
+            _rtr_pr_named_row="$(printf '%s' "${_rtr_pr_named_json}" \
+              | jq -r '.[0] // empty | select(.status == "completed") | "\(.conclusion // "")\t\(.createdAt // "")"' \
+              2>/dev/null || echo "")"
+            if [[ "${_rtr_pr_named_row}" == *$'\t'* ]]; then
+              _rtr_pr_named_conclusion="${_rtr_pr_named_row%%$'\t'*}"
+              _rtr_pr_named_created_at="${_rtr_pr_named_row#*$'\t'}"
+              case "${_rtr_pr_named_conclusion}" in
+                failure|cancelled|timed_out)
+                  if [ -n "${_rtr_pr_named_created_at}" ] && [[ "${_rtr_pr_named_created_at}" > "${_rtr_newest_completed_at}" || "${_rtr_pr_named_created_at}" = "${_rtr_newest_completed_at}" ]]; then
+                    _rtr_failed_conclusion="${_rtr_pr_named_conclusion}"
+                    _rtr_failed_wf="review run dispatched for PR #${pr_num}"
+                  fi
+                  ;;
+              esac
+            fi
+          fi
           if [ -n "${_rtr_failed_conclusion}" ]; then
             echo "  Issue #${issue_num} PR #${pr_num} last ${_rtr_failed_wf} run concluded '${_rtr_failed_conclusion}' — dispatching review workflow directly instead of pushing an empty commit."
             local _rtr_dispatch_rc=0
@@ -13805,13 +14987,21 @@ STALL_EOF
             _rtr_inflight_id="$(printf '%s' "${_rtr_inflight_blob}" | jq -r \
               --arg br "${head_ref}" \
               --arg sha "${_rtr_head_sha}" \
+              --arg pr "${pr_num}" \
               --argjson now "${_rtr_now_epoch}" \
               --argjson threshold "${_rtr_stall_secs}" '
               [.workflow_runs[]?
-               | select((.status // "") == "in_progress" or (.status // "") == "queued")
+               | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
                | select(
                    ((.head_branch // "") == $br)
                    or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
+                    # A default-branch dispatch (issues #4618, #4701) is named
+                    # for its PR; its head_branch is the default branch.
+                    or ($pr != "" and (.event // "") == "workflow_dispatch"
+                        and (((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+                              and ((.path // "") | test("(^|/)internal-review\\.yml(@.*)?$")))
+                             or ((.display_title // "") == ("AI Review [pr:" + $pr + "]")
+                              and ((.path // "") | test("(^|/)ai-review\\.yml(@.*)?$")))))
                  )
                | select(
                    (.name // "") == "AI Review"
@@ -13819,9 +15009,7 @@ STALL_EOF
                    or (.name // "") == "Review Autofix"
                    or (.name // "") == "Internal: AI Review & Autofix"
                    or (.name // "") == "Codex PR Self-Healing Semantic Agent"
-                   or ((.path // "") | endswith("ai-review.yml"))
-                   or ((.path // "") | endswith("internal-review.yml"))
-                   or ((.path // "") | endswith("review_autofix.yml"))
+                   or ((.path // "") | test("(^|/)(ai-review|internal-review|review_autofix)\\.yml(@.*)?$"))
                  )
                | ([.run_started_at, .created_at]
                   | map(select(type == "string" and . != ""))[0] // "") as $ts
@@ -13846,7 +15034,12 @@ STALL_EOF
           # Before the destructive empty-commit push, confirm against an
           # authoritative branch-scoped run listing; a false negative here
           # discards a full in-flight review pass (RC1 of the #11/#12 incident).
-          _rtr_direct_inflight_id="$(_direct_inflight_review_run_on_branch "${head_ref}")"
+          _rtr_direct_inflight_id="$(_direct_inflight_review_run_on_branch "${head_ref}" "${pr_num}")"
+          if [ "${_rtr_direct_inflight_id}" = "listing-incomplete" ]; then
+            echo "  Issue #${issue_num} PR #${pr_num} review dispatch run listing incomplete (direct check); cannot rule out an in-flight review run on ${head_ref}, skipping empty-commit push. The next poll cycle retries."
+            STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
+            return 1
+          fi
           if [ -n "${_rtr_direct_inflight_id}" ]; then
             echo "  Issue #${issue_num} PR #${pr_num} has in-flight review run #${_rtr_direct_inflight_id} on ${head_ref} (direct check — cached scan missed it); skipping empty-commit push to avoid invalidating its stale-base gate."
             STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
@@ -13963,7 +15156,8 @@ REISSUE_EOF
       local new_url new_url_clean new_num
       ensure_label_exists "ai:clarification"
       ensure_label_exists "ai:orchestrator-managed"
-      new_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
+      mapfile -t _engine_label_args < <(engine_label_create_args)
+      new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" --repo "${GITHUB_REPOSITORY}" \
         --title "${orig_title}" \
         --body "${new_body}" \
         --label "ai:clarification" \
@@ -14243,17 +15437,26 @@ invoke_stall_judge() {
   local workflows_json
   local workflow_outcomes
   workflows_json="$(_load_actions_runs_cached)"
-  workflow_outcomes="$(printf '%s' "${workflows_json}" | jq -c --arg head_ref "${head_ref}" --arg head_sha "${head_sha}" '
+  # A review run dispatched from the default branch (issues #4618, #4701)
+  # has the default branch as head_branch/head_sha, so it is matched by
+  # the run name the review wrappers give a workflow_dispatch run for its
+  # PR instead. The cached blob carries event and display_title, so this
+  # adds no API call (§15).
+  workflow_outcomes="$(printf '%s' "${workflows_json}" | jq -c --arg head_ref "${head_ref}" --arg head_sha "${head_sha}" --arg pr "${target_pr}" '
     [.workflow_runs[]?
       | select((.name // "") == "AI Review"
                or (.name // "") == "Internal Review"
                or (.name // "") == "Review Autofix"
                or (.name // "") == "Internal: AI Review & Autofix"
                or (.name // "") == "Codex PR Self-Healing Semantic Agent"
-               or (.path // "" | endswith("ai-review.yml"))
-               or (.path // "" | endswith("internal-review.yml"))
-               or (.path // "" | endswith("review_autofix.yml")))
-      | select(($head_ref != "" and (.head_branch // "") == $head_ref) or ($head_sha != "" and (.head_sha // "") == $head_sha))
+               or (.path // "" | test("(^|/)(ai-review|internal-review|review_autofix)\\.yml(@.*)?$")))
+       | select(($head_ref != "" and (.head_branch // "") == $head_ref) or ($head_sha != "" and (.head_sha // "") == $head_sha)
+                or ($pr != ""
+                    and (.event // "") == "workflow_dispatch"
+                    and (((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+                          and ((.path // "") | test("(^|/)internal-review\\.yml(@.*)?$")))
+                         or ((.display_title // "") == ("AI Review [pr:" + $pr + "]")
+                          and ((.path // "") | test("(^|/)ai-review\\.yml(@.*)?$"))))))
       | {id: .id, workflow: (.name // ""), conclusion: (.conclusion // ""), status: (.status // ""), head_branch: (.head_branch // ""), created_at: (.created_at // "")}
     ]
     | sort_by(.created_at)
@@ -14441,7 +15644,24 @@ invoke_stall_judge() {
         printf '%s\n' "${MOCK_STALL_JUDGE_JSON}" > "${stall_judge_output_file}"
       else
         sanitize_codex_prompt_file "${stall_judge_prompt_file}"
-        codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${stall_judge_prompt_file}" > "${stall_judge_output_file}" 2>> "${RUNTIME_DIR}/stall_judge.log" || true
+        local stall_judge_rc=0
+        local stall_isolation_labels="${STALL_JUDGE_LABELS:-${TRACKING_LABELS:-}}"
+        local stall_escalate_issue="${issue_num}"
+        if [ -n "${local_id}" ]; then stall_escalate_issue="${TRACKING_NUM}"; fi
+        if ! _judge_isolation_should_run STALL_JUDGE "${_judge_state_file}" "${stall_escalate_issue}" "${stall_isolation_labels}"; then
+          rm -f "${stall_judge_semble_query_file}"
+          return 1
+        fi
+        local stall_judge_engine_scope=standalone stall_judge_engine_labels_json=unavailable
+        if [ -n "${local_id}" ]; then stall_judge_engine_scope=managed; fi
+        stall_judge_engine_labels_json="$(poller_judge_engine_labels_json "${stall_judge_engine_scope}" "${STALL_JUDGE_ISSUE_LABELS-}")" || stall_judge_engine_labels_json=unavailable
+        POLLER_JUDGE_ENGINE_LABELS="${stall_judge_engine_labels_json}" poller_claude_judge STALL_JUDGE "${stall_judge_prompt_file}" "${stall_judge_output_file}" "${RUNTIME_DIR}/stall_judge.log" || stall_judge_rc=$?
+        if [ "${stall_judge_rc}" -eq 77 ]; then
+          _record_judge_isolation_failure STALL_JUDGE "${_judge_state_file}" "${stall_escalate_issue}" "${stall_isolation_labels}" || true
+          echo "::warning::Stall judge isolation unavailable for issue #${issue_num}; deferring recovery." >&2
+          rm -f "${stall_judge_semble_query_file}"
+          return 1
+        fi
       fi
       if grep -q '[^[:space:]]' "${stall_judge_output_file}"; then
         judge_success="true"
@@ -14466,6 +15686,7 @@ invoke_stall_judge() {
     execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
     return $?
   fi
+  _clear_judge_isolation_state STALL_JUDGE "${_judge_state_file}" verdict "${issue_num}" || true
 
   local judge_action
   local judge_justification
@@ -14663,6 +15884,8 @@ _fetch_standalone_marker_issues_graphql() {
 # Comment shape mirrors the REST response (.id / .body / .created_at)
 # so existing parsers (e.g. _extract_standalone_state_comment_id_from_comments)
 # keep working unchanged.
+# `labels_complete` is true only for a full issue-label page; the per-issue
+# judges must use it before accepting this cached snapshot for engine selection.
 #
 # `linked_pr` is derived from the most recent CrossReferencedEvent
 # whose source is a pull request AND whose `willCloseTarget` flag is
@@ -14716,7 +15939,8 @@ _fetch_candidate_issue_details_graphql() {
       fragment+=$'\n'"        i${i}: issue(number: ${n}) {
           number
           state
-          labels(first: 50) { nodes { name } }
+          body
+          labels(first: 100) { nodes { name } pageInfo { hasNextPage } }
           comments(last: 100) { nodes { databaseId body createdAt authorAssociation author { login } } }
           timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT]) {
             nodes {
@@ -14767,7 +15991,9 @@ _fetch_candidate_issue_details_graphql() {
           key: (.value.number | tostring),
           value: {
             state: (((.value.state // "OPEN") | ascii_downcase) | if . == "closed" then "closed" else "open" end),
+            body: .value.body,
             labels: [(.value.labels.nodes // [])[]?.name],
+            labels_complete: ((.value.labels.pageInfo.hasNextPage == false) and ((.value.labels.nodes | type) == "array")),
             comments_available: ((.value.comments.nodes? | type) == "array"),
             comments: [(.value.comments.nodes // [])[]? | {
               id: .databaseId,
@@ -15060,6 +16286,22 @@ _pr_json_is_issue_implementation_pr() {
     return 0
   fi
   return 1
+}
+
+# Issue #6325: a fork can give its head the name of a branch in this repo.
+# Never use a PR's head ref as a write target without verifying its owner.
+_pr_json_head_is_same_repo() {
+  local _pr_head_repo
+  _pr_head_repo="$(printf '%s' "$1" | jq -er '.head.repo.full_name | select(type == "string" and length > 0)' 2>/dev/null)" || return 1
+  [ -n "${GITHUB_REPOSITORY:-}" ] && [ "${_pr_head_repo,,}" = "${GITHUB_REPOSITORY,,}" ]
+}
+
+# A branch name alone does not identify the repository that owns a PR head.
+# Reuse the already-fetched pulls/N payload before preparing a writable branch.
+_pr_json_head_repo_is_origin() {
+  local _head_repo_name
+  _head_repo_name="$(printf '%s' "$1" | jq -r 'if (.head.repo.full_name | type) == "string" then .head.repo.full_name else "" end' 2>/dev/null)" || return 1
+  [ -n "${_head_repo_name}" ] && [ -n "${GITHUB_REPOSITORY:-}" ] && [ "${_head_repo_name,,}" = "${GITHUB_REPOSITORY,,}" ]
 }
 
 # _resolve_issue_implementation_pr — resolve the ISSUE'S OWN implementation
@@ -15455,6 +16697,424 @@ _reconcile_merged_pr_issue() {
   fi
 }
 
+# ---------------------------------------------------------------
+# Unblock judge (docs/plans/replace-claude-sessions-with-cli-engine-plan.md,
+# Phase 7): the once-per-tick scan and the per-project hooks.
+# ---------------------------------------------------------------
+# Tracking issues of projects in state `failed` this tick, one per line,
+# written by the per-project loop and read by run_unblock_scan. No API call.
+UNBLOCK_FAILED_PROJECTS_FILE="$(mktemp "${RUNNER_TEMP:-/tmp}/unblock_failed_projects.XXXXXX" 2>/dev/null || echo "${RUNNER_TEMP:-/tmp}/unblock_failed_projects.txt")"
+: > "${UNBLOCK_FAILED_PROJECTS_FILE}" 2>/dev/null || true
+# unblock_trusted_login and its cache are defined above the state extractor.
+
+# Per project, before any command handler. Returns 10 only when the
+# ai:unblock-closed label has the newest trusted close verdict for this project
+# bound to its current blocked state: the state becomes `abandoned`, the
+# tracking issue is closed through the API (no auto-close keyword, §19) and
+# the caller moves on. A refused label is logged and ignored. Otherwise files
+# every pending trusted
+# `<!-- ai:unblock-fixup-request:v1 item=<n> id=<local id> -->` comment as a
+# fix-up issue in the current wave (the same way judge fix-ups are filed),
+# posts the wait marker on item <n>, and resumes a `failed` project so the
+# wave runs. Reads COMMENTS, STATE_FILE, TRACKING_NUM, TRACKING_LABELS,
+# PROJECT_STATUS. Project/issue items need no extra API call; other items
+# require at most one pulls/<n> GET per pending request per tick to verify a
+# same-repository ai/issue-<n> head whose issue is in the project state.
+# Membership for both issue and PR items uses already-fetched, author-filtered
+# tracking comments, never the potentially forged working STATE_FILE.
+# Definitive rejections are recorded so they are not read again. No batched
+# cache in this path holds a PR's head repo or ref; _fetch_pr_json is the
+# smallest existing call that supplies both (§14).
+handle_unblock_judge_project_hooks() {
+  local login requests count idx request req_item req_id req_title req_body full_body wave_idx new_url new_num
+  local binding_pr_json binding_head_issue binding_reason binding_trusted_state_json="" binding_trusted_state_status="unset"
+  local close_reason close_marker close_stop
+  if has_label "${TRACKING_LABELS}" "ai:unblock-closed"; then
+    # Finish a previously issued verdict even if UNBLOCK_JUDGE_ENABLED was switched off.
+    close_reason=""
+    unblock_trusted_login >/dev/null
+    login="${UNBLOCK_TRUSTED_LOGIN}"
+    if [ -z "${login}" ]; then
+      close_reason="login_unavailable"
+    elif [ "${COMMENTS_FETCH_OK:-false}" != "true" ]; then
+      close_reason="comments_unavailable"
+    else
+      if ! close_marker="$(printf '%s' "${COMMENTS}" | jq -c --arg login "${login}" --arg item "${TRACKING_NUM}" '
+        . as $comments
+        | [ .[] | select((.user.login // "") == $login and (.id | type) == "number" and .id > 0 and .id == (.id | floor))
+          | ((.body // "") | split("\n") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)) | last // "") as $last
+          | ($last | capture("^<!-- ai:unblock:v1 item=(?<item>[1-9][0-9]*) stop=(?<stop>[a-z-]+) fingerprint=[0-9a-f]{12} verdict=(?<verdict>[a-z_]+) round=[1-9][0-9]*(?: override=[a-z_]+)? -->$")?) as $marker
+          | select($marker.item == $item)
+          | {id: .id, stop: $marker.stop, verdict: $marker.verdict} ]
+        | sort_by(.id) | last // empty
+        | . as $verdict
+        # A new state write after the verdict can represent a resume and a later failure.
+        | . + {state_after: any($comments[]; (.user.login // "") == $login and (.id | type) == "number" and .id > $verdict.id
+          and ((.body // "") | test("^<!-- ORCHESTRATOR_STATE_V(1\\r?\\n|2 part=[0-9]+/[0-9]+ manifest=[0-9a-f]{64} -->)")))}' 2>/dev/null)"; then
+        close_reason="comments_unavailable"
+      elif [ -z "${close_marker}" ]; then
+        close_reason="no_trusted_marker"
+      elif [ "$(printf '%s' "${close_marker}" | jq -r '.verdict')" != "close" ]; then
+        close_reason="stale_marker"
+      elif [ "${PROJECT_STATUS}" != "abandoned" ] && [ "$(printf '%s' "${close_marker}" | jq -r '.state_after')" != "false" ]; then
+        close_reason="stale_marker"
+      elif [ "${PROJECT_STATUS}" != "abandoned" ]; then
+        close_stop="$(printf '%s' "${close_marker}" | jq -r '.stop')"
+        if [ "${close_stop}" = "project-failed" ]; then
+          [ "${PROJECT_STATUS}" = "failed" ] || close_reason="state_mismatch"
+        elif [ "${PROJECT_STATUS}" != "failed" ] \
+          || ! printf '%s' "${TRACKING_LABELS}" | jq -e --arg label "ai:${close_stop}" 'type == "array" and index($label) != null' >/dev/null 2>&1; then
+          close_reason="state_mismatch"
+        fi
+      fi
+    fi
+    if [ -n "${close_reason}" ]; then
+      echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=abandoned outcome=refused reason=${close_reason}"
+    else
+      if [ "${PROJECT_STATUS}" != "abandoned" ]; then
+        jq '.status = "abandoned"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        post_state_comment || true
+      fi
+      if gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" -f state=closed -f state_reason=not_planned >/dev/null 2>&1; then
+        echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=abandoned outcome=closed"
+      else
+        echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=abandoned outcome=close_failed"
+      fi
+      return 10
+    fi
+  fi
+  if [ "${UNBLOCK_JUDGE_ENABLED:-true}" = "false" ] \
+    || ! printf '%s' "${COMMENTS:-[]}" | jq -e 'any(.[]?; (.body // "") | startswith("<!-- ai:unblock-fixup-request:v1 "))' >/dev/null 2>&1; then
+    return 0
+  fi
+  unblock_trusted_login >/dev/null
+  login="${UNBLOCK_TRUSTED_LOGIN}"
+  [ -n "${login}" ] || return 0
+  if ! requests="$(printf '%s' "${COMMENTS}" | jq -c --arg login "${login}" '
+    [.[]? | select((.user.login // "") == $login) | . as $comment
+      | (.body // "" | split("\n") | map(rtrimstr("\r"))) as $lines
+      | select(($lines[0] // "") | startswith("<!-- ai:unblock-fixup-request:v1 "))
+      | (($lines[0] | capture("^<!-- ai:unblock-fixup-request:v1 item=(?<item>[1-9][0-9]*) id=(?<id>unblock-[0-9]+-r[0-9]+) -->$")?) // {}) as $m
+      | {comment_id: $comment.id, item: $m.item, id: $m.id,
+         title: (($lines[1] // "") | sub("^###\\s*"; "")),
+         body: ($lines[2:] | join("\n"))}]' 2>/dev/null)"; then
+    echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup outcome=request_parse_failed"
+    return 0
+  fi
+  count="$(printf '%s' "${requests}" | jq 'length' 2>/dev/null || echo 0)"
+  for ((idx = 0; idx < count; idx++)); do
+    request="$(printf '%s' "${requests}" | jq -c ".[${idx}]" 2>/dev/null || true)"
+    req_item="$(jq -r '.item // ""' <<< "${request}" 2>/dev/null || true)"
+    req_id="$(jq -r '.id // ""' <<< "${request}" 2>/dev/null || true)"
+    req_title="$(jq -r '.title // ""' <<< "${request}" 2>/dev/null || true)"
+    req_body="$(jq -r '.body // ""' <<< "${request}" 2>/dev/null || true)"
+    if [[ ! "${req_item}" =~ ^[1-9][0-9]*$ ]] || [ -z "${req_id}" ]; then
+      echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup comment=$(jq -r 'if (.comment_id | type) == "number" then .comment_id else "unknown" end' <<< "${request}") outcome=invalid_request"
+      continue
+    fi
+    if [ -n "$(jq -r --arg id "${req_id}" '.issue_number_map[$id] // empty' "${STATE_FILE}" 2>/dev/null || echo unreadable)" ]; then
+      continue
+    fi
+    if jq -e --arg id "${req_id}" '(.unblock_fixup_rejected_ids // []) | index($id) != null' "${STATE_FILE}" >/dev/null 2>&1; then
+      continue
+    fi
+    if [ "${req_item}" != "${TRACKING_NUM}" ]; then
+      if [ "${binding_trusted_state_status}" = "unset" ]; then
+        if binding_trusted_state_json="$(printf '%s' "${COMMENTS}" | jq -c --arg login "${login}" '[.[] | select((.user.login // "") == $login)]' | PYTHONDONTWRITEBYTECODE=1 python3 scripts/orchestrate_state_v2.py extract --comments-json /dev/stdin 2>/dev/null)" \
+          && jq -e 'type == "object"' <<< "${binding_trusted_state_json}" >/dev/null 2>&1; then
+          binding_trusted_state_status="ok"
+        else
+          binding_trusted_state_status="unavailable"
+        fi
+      fi
+      if [ "${binding_trusted_state_status}" != "ok" ]; then
+        echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} outcome=binding_unavailable reason=trusted_state"
+        continue
+      fi
+    fi
+    if [ "${req_item}" != "${TRACKING_NUM}" ] \
+      && ! jq -e --argjson issue "${req_item}" 'any((.issue_number_map // {})[]; . == $issue) or any(.waves[]?.issues[]?; .github_issue == $issue) or any(.security_pass_active_fix_issues[]?; . == $issue) or any(.validation_active_fix_issues[]?; . == $issue)' <<< "${binding_trusted_state_json}" >/dev/null 2>&1; then
+      binding_pr_json="$(_fetch_pr_json "${req_item}")"
+      if ! jq -e '.number | type == "number"' <<< "${binding_pr_json}" >/dev/null 2>&1; then
+        echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} outcome=binding_unavailable reason=pr_read"
+        continue
+      fi
+      binding_reason=""
+      if ! jq -e --argjson issue "${req_item}" --arg base "orchestrator/project-${TRACKING_NUM}" \
+        --argjson trusted_state "${binding_trusted_state_json}" \
+        '.number == $issue and .base.ref == $base and .base.ref == ($trusted_state.integration_branch // "")' <<< "${binding_pr_json}" >/dev/null 2>&1; then
+        binding_reason="base"
+      elif ! jq -e --arg base "orchestrator/project-${TRACKING_NUM}" '.integration_branch == $base' "${STATE_FILE}" >/dev/null 2>&1; then
+        echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} outcome=binding_unavailable reason=state_drift"
+        continue
+      elif ! jq -e --arg repo "${GITHUB_REPOSITORY}" '(.head.repo.full_name // "" | ascii_downcase) == ($repo | ascii_downcase)' <<< "${binding_pr_json}" >/dev/null 2>&1; then
+        binding_reason="head_repo"
+      else
+        binding_head_issue="$(jq -r '.head.ref // ""' <<< "${binding_pr_json}" 2>/dev/null || true)"
+        if [[ "${binding_head_issue}" =~ ^ai/issue-([1-9][0-9]*)$ ]]; then
+          binding_head_issue="${BASH_REMATCH[1]}"
+          if ! jq -e --argjson issue "${binding_head_issue}" 'any((.issue_number_map // {})[]; . == $issue) or any(.waves[]?.issues[]?; .github_issue == $issue) or any(.security_pass_active_fix_issues[]?; . == $issue) or any(.validation_active_fix_issues[]?; . == $issue)' <<< "${binding_trusted_state_json}" >/dev/null 2>&1; then
+            binding_reason="not_member"
+          fi
+        else
+          binding_reason="head_ref"
+        fi
+      fi
+      if [ -n "${binding_reason}" ]; then
+        jq --arg id "${req_id}" '.unblock_fixup_rejected_ids = (((.unblock_fixup_rejected_ids // []) + [$id] | reduce .[] as $entry ([]; if index($entry) == null then . + [$entry] else . end)) | .[-50:])' \
+          "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}" && post_state_comment || true
+        echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} outcome=binding_unverified reason=${binding_reason}"
+        continue
+      fi
+    fi
+    [ -n "${req_title}" ] || req_title="Unblock fix-up for #${req_item}"
+    wave_idx="$(jq -r '((.current_wave // 1) | tonumber) - 1 | if . < 0 then 0 else . end' "${STATE_FILE}" 2>/dev/null || echo 0)"
+    full_body="${req_body}
+
+---
+**Orchestrator metadata** (do not edit)
+- Tracking issue: #${TRACKING_NUM}
+- Integration branch: $(jq -r '.integration_branch // ""' "${STATE_FILE}")
+- Local ID: \`${req_id}\`
+- Type: unblock-judge fix-up (item #${req_item})
+- Managed by: AI Orchestrator"
+    ensure_label_exists "ai:clarification"
+    ensure_label_exists "ai:orchestrator-managed"
+    mapfile -t _engine_label_args < <(engine_label_create_args)
+    new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" \
+      --repo "${GITHUB_REPOSITORY}" \
+      --title "${req_title}" \
+      --body "${full_body}" \
+      --label "ai:clarification" \
+      --label "ai:orchestrator-managed" 2>/dev/null || true)"
+    new_url="$(printf '%s\n' "${new_url}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
+    new_num="$(basename "${new_url%%[?#]*}")"
+    if ! [[ "${new_num}" =~ ^[0-9]+$ ]]; then
+      echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} outcome=create_failed"
+      continue
+    fi
+    jq --arg id "${req_id}" --argjson num "${new_num}" --argjson wave_idx "${wave_idx}" \
+      '.issue_number_map[$id] = $num
+       | if (.waves | length) > $wave_idx then .waves[$wave_idx].issues += [{"id": $id, "github_issue": $num, "status": "pending"}] else . end
+       | if .status == "failed" then .status = "in_progress" else . end' \
+      "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment || true
+    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${req_item}/comments" \
+      -f body="Waiting for fix-up #${new_num} to merge; the unblock judge resumes this item afterwards.
+
+<!-- ai:unblock-wait:v1 item=${req_item} fixup=${new_num} -->" >/dev/null 2>&1 || true
+    if [ "${PROJECT_STATUS}" = "failed" ]; then
+      post_tracking_comment "## Unblock judge fix-up filed
+
+Fix-up #${new_num} (\`${req_id}\`) was added to the current wave for #${req_item}. Status: failed -> in_progress." || true
+      PROJECT_STATUS="in_progress"
+    fi
+    echo "UNBLOCK_PROJECT tracking_issue=${TRACKING_NUM} action=fixup id=${req_id} item=${req_item} issue=${new_num} outcome=filed"
+  done
+  return 0
+}
+
+# Hand-over (plan Phase 7, Q13): the merge deferral cap used to end in a
+# Telegram WARNING only, repeated every tick. When the cap is first reached the
+# PR gets ai:needs-human and one comment saying why, so the unblock scan picks
+# it up (its PR retry is a review dispatch, whose conflict resolver handles
+# the conflict). Two writes, once per PR.
+unblock_handover_merge_deferral() {
+  local pr="$1" issue="$2" why="$3"
+  [[ "${pr}" =~ ^[0-9]+$ ]] || return 0
+  ensure_label_exists "ai:needs-human"
+  if ! printf '%s' "${_rtm_pr_json:-{}}" | jq -e 'any(.labels[]?; .name == "ai:needs-human")' >/dev/null 2>&1; then
+    gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${pr}/labels" -f "labels[]=ai:needs-human" >/dev/null 2>&1 \
+      || echo "::warning::Could not add ai:needs-human to PR #${pr} after MAX_MERGE_DEFERRALS."
+  fi
+  if [ "${4:-}" = "${MAX_MERGE_DEFERRALS}" ]; then
+    gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${pr}/comments" \
+      -f body="Merge deferred ${MAX_MERGE_DEFERRALS} times for issue #${issue} because of persistent ${why}; handed to the unblock judge." >/dev/null 2>&1 || true
+  fi
+}
+
+# Hand-over (plan Phase 7, Q13): counts consecutive project-judge runs with
+# no usable output in the state (judge_output_failures, reset on the next
+# parsed verdict). At JUDGE_OUTPUT_FAILURE_MAX the project fails with
+# ai:blocked, the same terminal as the repeat-fingerprint breaker, so the
+# unblock scan picks it up and `/judge_resume` resumes it. One state comment
+# per failure, plus one tracking comment at the cap.
+unblock_handover_judge_output() {
+  local why="$1" failures
+  failures="$(jq -r '(.judge_output_failures // 0) + 1' "${STATE_FILE}" 2>/dev/null || echo 1)"
+  [[ "${failures}" =~ ^[0-9]+$ ]] || failures=1
+  if [ "${failures}" -ge "${JUDGE_OUTPUT_FAILURE_MAX}" ]; then
+    jq --argjson n "${failures}" '.judge_output_failures = $n | .status = "failed"' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment || true
+    set_tracking_phase_label "ai:blocked"
+    post_tracking_comment "## Judge gave no usable verdict
+
+The project judge produced no usable output (${why}) ${failures} time(s) in a row (JUDGE_OUTPUT_FAILURE_MAX=${JUDGE_OUTPUT_FAILURE_MAX}). The project is marked failed for the unblock judge; \`/judge_resume\` resumes it." || true
+    echo "${TRACKING_NUM}" >> "${UNBLOCK_FAILED_PROJECTS_FILE}" 2>/dev/null || true
+    echo "UNBLOCK_HANDOVER tracking_issue=${TRACKING_NUM} stop=judge_output reason=${why} failures=${failures} outcome=failed"
+  else
+    jq --argjson n "${failures}" '.judge_output_failures = $n' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+    post_state_comment || true
+    echo "UNBLOCK_HANDOVER tracking_issue=${TRACKING_NUM} stop=judge_output reason=${why} failures=${failures} outcome=counted"
+  fi
+}
+
+# Once per tick, after the per-project loop: find blocked items and dispatch
+# unblock_judge_dispatch.yml for at most UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK
+# of them (scripts/unblock_scan.py decides).
+# API budget (§15): one REST search for open issues and PRs with a block
+# label (oldest update first, at most 30); when it returns candidates, one
+# batched GraphQL query (labeled events and the last 30 comments of each),
+# one list of the dispatch workflow's recent runs, the `user` read once per
+# tick, and one dispatch per chosen item. An incomplete comment window may
+# need one paginated REST history read for the oldest eligible item; GraphQL
+# cannot order comments by edit time, so its last 30 cannot prove whether an
+# older wait marker was refreshed. Failed reads never dispatch on partial data.
+run_unblock_scan() {
+  local labels_q search_items numbers_json count query fragment i n details_resp details runs now_iso selection verify_item verified_details
+  local work_dir="${RUNNER_TEMP:-/tmp}/unblock-scan"
+  if [ "${UNBLOCK_JUDGE_ENABLED:-true}" = "false" ]; then
+    echo "UNBLOCK_SCAN outcome=skip reason=disabled"
+    return 0
+  fi
+  # Optional helpers, staged by orchestrate_poll.yml when the support
+  # checkout has them: a missing file skips the scan, never the tick.
+  if ! { [ -f scripts/unblock_scan.py ] && [ -f scripts/unblock_ledger.py ]; }; then
+    echo "UNBLOCK_SCAN outcome=skip reason=support_missing"
+    return 0
+  fi
+  mkdir -p "${work_dir}"
+  labels_q="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/unblock_ledger.py labels 2>/dev/null | jq -r '.labels | map("\"" + . + "\"") | join(",")' 2>/dev/null || true)"
+  if [ -z "${labels_q}" ]; then
+    echo "UNBLOCK_SCAN outcome=skip reason=labels_unavailable"
+    return 0
+  fi
+  if ! search_items="$(gh_retry gh api --method GET "search/issues" \
+    -f q="repo:${GITHUB_REPOSITORY} is:open label:${labels_q}" \
+    -f sort=updated -f order=asc -f per_page=30 \
+    --jq '[.items[]? | {number, labels: [.labels[]?.name], pull_request: (.pull_request != null), created_at, updated_at}]' 2>/dev/null)"; then
+    echo "UNBLOCK_SCAN outcome=skip reason=search_failed"
+    return 0
+  fi
+  printf '%s' "${search_items}" > "${work_dir}/search.json"
+  sort -u "${UNBLOCK_FAILED_PROJECTS_FILE}" 2>/dev/null | jq -R 'select(test("^[0-9]+$")) | tonumber' | jq -s '.' > "${work_dir}/failed_projects.json" 2>/dev/null \
+    || echo '[]' > "${work_dir}/failed_projects.json"
+  numbers_json="$(jq -c --slurpfile failed "${work_dir}/failed_projects.json" '
+    ($failed[0] | unique) as $all_projects
+    | ($all_projects | if length > 30 then
+        ((now / 300 | floor) % ($all_projects | length)) as $offset
+        | .[$offset:] + .[:$offset]
+      else . end | .[:30]) as $projects
+    | $projects + ([.[].number] | unique | map(select(. as $number | $projects | index($number) == null)) | .[:(30 - ($projects | length))])
+  ' "${work_dir}/search.json" 2>/dev/null || echo '[]')"
+  count="$(printf '%s' "${numbers_json}" | jq 'length' 2>/dev/null || echo 0)"
+  [[ "${count}" =~ ^[0-9]+$ ]] || count=0
+  if [ "${count}" -eq 0 ]; then
+    echo "UNBLOCK_SCAN candidates=0 dispatched=0 outcome=idle"
+    return 0
+  fi
+  unblock_trusted_login >/dev/null
+  if [ -z "${UNBLOCK_TRUSTED_LOGIN}" ]; then
+    echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=login_unavailable"
+    return 0
+  fi
+  fragment=""
+  for ((i = 0; i < count; i++)); do
+    n="$(printf '%s' "${numbers_json}" | jq -r ".[${i}]" 2>/dev/null || true)"
+    [[ "${n}" =~ ^[0-9]+$ ]] || continue
+    fragment+=$'\n'"    i${n}: issueOrPullRequest(number: ${n}) {
+      ... on Issue {
+        timelineItems(last: 30, itemTypes: [LABELED_EVENT]) { nodes { ... on LabeledEvent { createdAt label { name } } } }
+        comments(last: 30) { totalCount nodes { body createdAt updatedAt author { login } } }
+      }
+      ... on PullRequest {
+        timelineItems(last: 30, itemTypes: [LABELED_EVENT]) { nodes { ... on LabeledEvent { createdAt label { name } } } }
+        comments(last: 30) { totalCount nodes { body createdAt updatedAt author { login } } }
+      }
+    }"
+  done
+  query="query {
+  repository(owner: \"${GITHUB_REPOSITORY%%/*}\", name: \"${GITHUB_REPOSITORY##*/}\") {${fragment}
+  }
+}"
+  if ! details_resp="$(gh_retry gh api graphql -f query="${query}" 2>/dev/null)"; then
+    echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=details_failed"
+    return 0
+  fi
+  # Wait markers are refreshed in place, so a comment counts from its last edit.
+  details="$(printf '%s' "${details_resp}" | jq -c '
+    (.data.repository // {}) | to_entries
+    | map(select(.value != null) | {key: (.key | ltrimstr("i")), value: {
+        labeled: [.value.timelineItems.nodes[]? | select(.label != null) | {label: .label.name, created_at: .createdAt}],
+        comments: [.value.comments.nodes[]? | {login: (.author.login // ""), body: (.body // ""), created_at: ((.updatedAt // .createdAt) // "")}],
+        comment_count: .value.comments.totalCount,
+        history_incomplete: ((.value.comments.totalCount | type) != "number" or (.value.comments.nodes | type) != "array" or .value.comments.totalCount > (.value.comments.nodes | length))
+      }})
+    | from_entries' 2>/dev/null || echo '{}')"
+  printf '%s' "${details}" > "${work_dir}/details.json"
+  if ! runs="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/unblock_judge_dispatch.yml/runs?per_page=50" \
+    --jq '[.workflow_runs[]? | {display_title, name, status, created_at}]' 2>/dev/null)"; then
+    echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=dispatch_workflow_unavailable"
+    return 0
+  fi
+  printf '%s' "${runs}" > "${work_dir}/runs.json"
+  now_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  if ! selection="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/unblock_scan.py select \
+    --search-file "${work_dir}/search.json" --details-file "${work_dir}/details.json" \
+    --runs-file "${work_dir}/runs.json" --failed-projects-file "${work_dir}/failed_projects.json" \
+    --trusted-login "${UNBLOCK_TRUSTED_LOGIN}" --now "${now_iso}" \
+    --min-blocked-minutes "${UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES:-30}" \
+    --marker-hours "${UNBLOCK_JUDGE_RETRY_HOURS:-6}" \
+    --inflight-minutes "${UNBLOCK_JUDGE_INFLIGHT_MINUTES:-60}" \
+    --max "${UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK:-5}")"; then
+    echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=select_failed"
+    return 0
+  fi
+  verify_item="$(printf '%s' "${selection}" | jq -r '.verify_history // empty')"
+  if [[ "${verify_item}" =~ ^[1-9][0-9]*$ ]]; then
+    # No complete history exists in the batched GraphQL response. Verify only
+    # one rotating candidate per tick; never treat a partial REST read as clear.
+    if gh_retry gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${verify_item}/comments?per_page=100" > "${work_dir}/full_comments.json" 2>/dev/null &&
+      jq -e --argjson expected "$(printf '%s' "${details}" | jq -r --arg id "${verify_item}" '.[$id].comment_count // -1')" '
+        type == "array" and $expected >= 0 and
+        all(.[]; type == "array" and all(.[]; type == "object" and (.body | type) == "string" and (.created_at | type) == "string")) and
+        ([.[][]] | length >= $expected)
+      ' "${work_dir}/full_comments.json" >/dev/null 2>&1; then
+      verified_details="$(jq -c --arg id "${verify_item}" --slurpfile pages "${work_dir}/full_comments.json" '
+        .[$id].comments = [$pages[0][][] | {login: (.user.login // ""), body: .body, created_at: (.updated_at // .created_at)}]
+        | .[$id].history_incomplete = false
+      ' "${work_dir}/details.json" 2>/dev/null || true)"
+      if [ -n "${verified_details}" ]; then
+        printf '%s' "${verified_details}" > "${work_dir}/details.json"
+        selection="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/unblock_scan.py select \
+          --search-file "${work_dir}/search.json" --details-file "${work_dir}/details.json" \
+          --runs-file "${work_dir}/runs.json" --failed-projects-file "${work_dir}/failed_projects.json" \
+          --trusted-login "${UNBLOCK_TRUSTED_LOGIN}" --now "${now_iso}" \
+          --min-blocked-minutes "${UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES:-30}" \
+          --marker-hours "${UNBLOCK_JUDGE_RETRY_HOURS:-6}" \
+          --inflight-minutes "${UNBLOCK_JUDGE_INFLIGHT_MINUTES:-60}" \
+          --max "${UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK:-5}")" || {
+          echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=reselect_failed"
+          return 0
+        }
+      fi
+    else
+      echo "UNBLOCK_SCAN item=${verify_item} outcome=skip reason=full_history_unavailable"
+    fi
+  fi
+  local dispatched=0 item kind
+  while IFS=$'\t' read -r item kind; do
+    [[ "${item}" =~ ^[0-9]+$ ]] || continue
+    if gh_retry gh workflow run unblock_judge_dispatch.yml --repo "${GITHUB_REPOSITORY}" -f item="${item}" >/dev/null 2>&1; then
+      dispatched=$((dispatched + 1))
+      echo "UNBLOCK_SCAN item=${item} kind=${kind} outcome=dispatched"
+    else
+      echo "UNBLOCK_SCAN item=${item} kind=${kind} outcome=dispatch_failed"
+    fi
+  done < <(printf '%s' "${selection}" | jq -r '.dispatch[]? | "\(.item)\t\(.kind)"')
+  echo "UNBLOCK_SCAN candidates=${count} dispatched=${dispatched} skipped=$(printf '%s' "${selection}" | jq -c '.skipped // {}') outcome=done"
+}
+
 # release_staged_support_needs_human_latches
 #
 # Release the ai:needs-human latch that implement.yml's staged-support
@@ -15691,6 +17351,10 @@ run_standalone_stall_recovery() {
       if extract_latest_valid_orchestrator_state "${t_comments}"; then
         t_state_json="${EXTRACTED_STATE_JSON}"
       fi
+      if [ "${EXTRACTED_STATE_IDENTITY_UNAVAILABLE}" = "true" ]; then
+        echo "::warning::Pipeline identity unavailable; skipping standalone stall recovery this tick (managed issue set cannot be verified)."
+        return 0
+      fi
       managed_nums="$(printf '%s' "${t_state_json}" | jq -r '.waves[]?.issues[]?.github_issue // empty' 2>/dev/null || true)"
       if [ -n "${managed_nums}" ]; then
         orchestrator_managed_set="${orchestrator_managed_set}"$'\n'"${managed_nums}"
@@ -15755,6 +17419,9 @@ run_standalone_stall_recovery() {
   local _standalone_staged_support_latch_rc
   local _standalone_staged_support_cache_available
   local _standalone_staged_support_comments_unavailable
+  local _security_dependency_issue_file="${RUNTIME_DIR}/standalone_security_dependency_issue.json"
+  local _security_dependency_verdict
+  local _security_dependency_status
 
   for ((c_idx=0; c_idx<c_count; c_idx++)); do
     issue_num="$(echo "${candidates}" | jq -r ".[${c_idx}].number")"
@@ -15792,14 +17459,54 @@ run_standalone_stall_recovery() {
       continue
     fi
 
-    # Claude-claimed issues (ai:claude without an ai:codex switch) are driven
-    # by the Claude issue flow's own check-in chain; re-issuing a Codex phase
-    # here would start a competing implementation.
-    if echo "${labels_json}" | jq -e 'index("ai:claude") != null and index("ai:codex") == null' >/dev/null 2>&1; then
-      echo "STALL_SKIP issue=${issue_num} reason=claude_routed action=none"
+    # A generated security follow-up waits for the previous same-file fix.
+    # The candidate batch already carries body/labels/comments; only an
+    # uncached target or declared prerequisite requires an issue read.
+    if ! printf '%s' "${_candidate_details_json}" | jq -e --arg n "${issue_num}" '.[$n].body | type == "string"' >/dev/null 2>&1; then
+      if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" > "${_security_dependency_issue_file}" 2>/dev/null; then
+        echo "STALL_SKIP issue=${issue_num} reason=security_dependency_target_unavailable action=none"
+        continue
+      fi
+    else
+      printf '%s' "${_candidate_details_json}" | jq -c --arg n "${issue_num}" --arg repo "${GITHUB_REPOSITORY}" '
+        .[$n] | {number: ($n | tonumber), body, labels,
+          repository_url: ("https://api.github.com/repos/" + $repo)}' > "${_security_dependency_issue_file}"
+    fi
+    _security_dependency_verdict="$(python3 scripts/security_dependency.py security-dependency \
+      --issue-json "${_security_dependency_issue_file}" --repo "${GITHUB_REPOSITORY}" \
+      --issue-number "${issue_num}" 2>/dev/null || echo '{"status":"held"}')"
+    _security_dependency_status="$(printf '%s' "${_security_dependency_verdict}" | jq -r '.status // "held"' 2>/dev/null || echo held)"
+    if [ "${_security_dependency_status}" = "held" ]; then
+      case "$(printf '%s' "${_security_dependency_verdict}" | jq -r '.reason // empty' 2>/dev/null)" in
+        'dependency open') _security_dependency_status="open" ;;
+        'dependency closed without ai:merged') _security_dependency_status="closed_without_ai_merged" ;;
+        *) _security_dependency_status="unverified" ;;
+      esac
+      echo "STALL_SKIP issue=${issue_num} reason=security_dependency_held detail=${_security_dependency_status} action=none"
       continue
     fi
-
+    if [ "${_security_dependency_status}" = "ready" ]; then
+      # An unavailable or full comment window cannot prove the release
+      # marker absent. Fetch complete history only on that rare path.
+      if [ "${_standalone_staged_support_cache_available}" != "true" ] || [ "$(printf '%s' "${comments_json}" | jq 'length' 2>/dev/null || echo 100)" -ge 100 ]; then
+        if ! comments_json="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?per_page=100" 2>/dev/null | jq -s 'add // []' 2>/dev/null)"; then
+          echo "STALL_SKIP issue=${issue_num} reason=security_dependency_comments_unavailable action=none"
+          continue
+        fi
+      fi
+      if ! printf '%s' "${comments_json}" | jq -e --arg marker "<!-- ai:security-dependency-released:${issue_num} -->" '
+        any(.[]; ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+          and ((.body // "") | startswith("/reclarify\n" + $marker)))' >/dev/null 2>&1; then
+        if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+          -f body="/reclarify
+<!-- ai:security-dependency-released:${issue_num} -->" >/dev/null; then
+          echo "STALL_SKIP issue=${issue_num} reason=security_dependency_released action=reclarify"
+        else
+          echo "STALL_SKIP issue=${issue_num} reason=security_dependency_retrigger_failed action=none"
+        fi
+        continue
+      fi
+    fi
     # Resolve both values through the shared Python predicates in one call so
     # the standalone path cannot drift from managed stall detection.  Safe
     # defaults first: under `set -euo pipefail` an empty read (python
@@ -16261,13 +17968,18 @@ PY
           echo "::warning::[standalone-stall] could not seed standalone judge state file for issue #${issue_num}; judge streak persistence may be skipped this cycle." >&2
         fi
         STALL_JUDGE_STATE_FILE_OVERRIDE="${_std_judge_state_file}"
-        if invoke_stall_judge "${issue_num}" "${phase}" "${recovery_count}" "${elapsed_minutes}" ""; then
+        if STALL_JUDGE_LABELS="${labels_json}" STALL_JUDGE_ISSUE_LABELS="$(printf '%s' "${_candidate_details_json}" | jq -ec --arg n "${issue_num}" 'select(.[$n].labels_complete == true) | .[$n].labels' 2>/dev/null || true)" invoke_stall_judge "${issue_num}" "${phase}" "${recovery_count}" "${elapsed_minutes}" ""; then
           took_action="true"
           action="${STALL_RECOVERY_EFFECTIVE_ACTION:-run_stall_judge}"
         fi
         unset STALL_JUDGE_STATE_FILE_OVERRIDE
         if [ -f "${_std_judge_state_file}" ]; then
-          updated_state="$(printf '%s' "${updated_state}" | jq -c --slurpfile judge_state "${_std_judge_state_file}" '.judge_escalate_streak = (($judge_state[0].judge_escalate_streak // {}) | if type == "object" then . else {} end)' 2>/dev/null || echo "${updated_state}")"
+          updated_state="$(printf '%s' "${updated_state}" | jq -c --slurpfile judge_state "${_std_judge_state_file}" '
+            .judge_escalate_streak = (($judge_state[0].judge_escalate_streak // {}) | if type == "object" then . else {} end)
+            | if ($judge_state[0] | has("judge_isolation_state")) then
+                .judge_isolation_state = (($judge_state[0].judge_isolation_state // {}) | if type == "object" then . else {} end)
+              else . end
+          ' 2>/dev/null || echo "${updated_state}")"
           rm -f "${_std_judge_state_file}" 2>/dev/null || true
         fi
         ;;
@@ -16444,13 +18156,21 @@ STALL_EOF
 			  _std_rtr_inflight_id="$(printf '%s' "${_std_rtr_inflight_blob}" | jq -r \
 			    --arg br "${head_ref}" \
                 --arg sha "${head_sha}" \
+                --arg pr "${pr_num}" \
                 --argjson now "${_std_rtr_now_epoch}" \
                 --argjson threshold "${_std_rtr_stall_secs}" '
                 [.workflow_runs[]?
-                 | select((.status // "") == "in_progress" or (.status // "") == "queued")
+                 | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
                  | select(
                      ((.head_branch // "") == $br)
                      or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
+                      # A default-branch dispatch (issues #4618, #4701) is named
+                      # for its PR; its head_branch is the default branch.
+                      or ($pr != "" and (.event // "") == "workflow_dispatch"
+                          and (((.display_title // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+                                and ((.path // "") | test("(^|/)internal-review\\.yml(@.*)?$")))
+                               or ((.display_title // "") == ("AI Review [pr:" + $pr + "]")
+                                and ((.path // "") | test("(^|/)ai-review\\.yml(@.*)?$")))))
                    )
                  | select(
                      (.name // "") == "AI Review"
@@ -16458,9 +18178,7 @@ STALL_EOF
                      or (.name // "") == "Review Autofix"
                      or (.name // "") == "Internal: AI Review & Autofix"
                      or (.name // "") == "Codex PR Self-Healing Semantic Agent"
-                     or ((.path // "") | endswith("ai-review.yml"))
-                     or ((.path // "") | endswith("internal-review.yml"))
-                     or ((.path // "") | endswith("review_autofix.yml"))
+                     or ((.path // "") | test("(^|/)(ai-review|internal-review|review_autofix)\\.yml(@.*)?$"))
                    )
                  | ([.run_started_at, .created_at]
                     | map(select(type == "string" and . != ""))[0] // "") as $ts
@@ -16481,11 +18199,14 @@ STALL_EOF
             # cache-miss path so the steady state adds zero API calls.
             _std_rtr_direct_inflight_id=""
             if [ -z "${_std_rtr_inflight_id}" ]; then
-              _std_rtr_direct_inflight_id="$(_direct_inflight_review_run_on_branch "${head_ref}")"
+              _std_rtr_direct_inflight_id="$(_direct_inflight_review_run_on_branch "${head_ref}" "${pr_num}")"
             fi
 			if [ -n "${_std_rtr_inflight_id}" ]; then
 			  echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} has in-flight review run #${_std_rtr_inflight_id} on ${head_ref} (fresh, <${REVIEW_RUN_MAX_RUNTIME_MINUTES}m); skipping empty-commit push to avoid invalidating its stale-base gate."
 			  STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
+			elif [ "${_std_rtr_direct_inflight_id}" = "listing-incomplete" ]; then
+              echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} review dispatch run listing incomplete (direct check); cannot rule out an in-flight review run on ${head_ref}, skipping empty-commit push. The next poll cycle retries."
+              STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
 			elif [ -n "${_std_rtr_direct_inflight_id}" ]; then
               echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} has in-flight review run #${_std_rtr_direct_inflight_id} on ${head_ref} (direct check — cached scan missed it); skipping empty-commit push to avoid invalidating its stale-base gate."
               STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_skipped_inflight"
@@ -16645,7 +18366,8 @@ ${orig_body}
 REISSUE_EOF
 )"
         ensure_label_exists "ai:clarification"
-        new_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" --title "${orig_title}" --body "${new_body}" --label "ai:clarification" 2>/dev/null || echo "")"
+        mapfile -t _engine_label_args < <(engine_label_create_args "${labels_json:-[]}")
+        new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" --repo "${GITHUB_REPOSITORY}" --title "${orig_title}" --body "${new_body}" --label "ai:clarification" 2>/dev/null || echo "")"
         new_url_clean="$(printf '%s\n' "${new_url}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
         new_num="$(basename "${new_url_clean%%[?#]*}")"
         if [[ "${new_num}" =~ ^[0-9]+$ ]]; then
@@ -16743,6 +18465,13 @@ REISSUE_EOF
         echo "::warning::Unknown standalone stall action ${action} for issue #${issue_num}"
         ;;
     esac
+
+    # An isolated judge can defer without taking a recovery action. Persist
+    # its counter/latch independently of stall_recovery_count so the next
+    # scheduled tick sees the failure and can escalate at the configured cap.
+    if [ "${took_action}" != "true" ] && [ "${action}" = "run_stall_judge" ] && [ "${updated_state}" != "${state_json}" ]; then
+      write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+    fi
 
 	    if [ "${took_action}" = "true" ] && [ "${action}" != "close_and_reissue" ]; then
 	      updated_state="$(printf '%s' "${updated_state}" | jq -c --arg phase "${phase}" --arg should_increment "${STALL_RECOVERY_SHOULD_INCREMENT}" --argjson now "$(date +%s)" '
@@ -17198,7 +18927,7 @@ recover_stalled_issue() {
   fi
 
   if [ "${action}" = "run_stall_judge" ]; then
-    invoke_stall_judge "${issue_num}" "${phase}" "${recovery_count}" "${stall_minutes}" "${local_id}"
+    STALL_JUDGE_LABELS="${TRACKING_LABELS:-}" STALL_JUDGE_ISSUE_LABELS="$(printf '%s' "${_current_wave_details_json:-}" | jq -ec --arg n "${issue_num}" 'select(.[$n].labels_complete == true) | .[$n].labels' 2>/dev/null || true)" invoke_stall_judge "${issue_num}" "${phase}" "${recovery_count}" "${stall_minutes}" "${local_id}"
     return $?
   fi
   execute_stall_recovery_action "${issue_num}" "${phase}" "${action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
@@ -17231,8 +18960,17 @@ _CONFLICT_DISPATCH_TRACKER="${TMPDIR:-/tmp}/.conflict_dispatch_$$"
 # dispatch, so every poll cycle re-dispatched — each new run replaced
 # the pending predecessor and re-fired the conflict Telegram warning.
 #
+# Default-branch dispatches: review_autofix_sweep.yml (issue #4618),
+# _dispatch_review_for_conflicts and the merge train (issue #4701) dispatch
+# from the default branch, so the guard also counts active workflow_dispatch
+# runs named for the PR (_pr_named_review_dispatch_runs: one paged lookup,
+# whose header documents its call budget, only when the head-branch lookups
+# found nothing).
+#
 # Usage: _has_active_autofix_run <pr_number> <head_ref>
-# Returns 0 if an active run exists (skip dispatch), 1 otherwise.
+# Returns 0 if an active run exists, or if the PR-named listing is
+# incomplete and so cannot rule one out (issue #4927) (skip dispatch);
+# 1 otherwise.
 _has_active_autofix_run()
 {
 	local pr_number="$1"
@@ -17254,7 +18992,218 @@ _has_active_autofix_run()
 		fi
 	done
 
+	# Review runs dispatched from the default branch (the sweep since issue
+	# #4618, _dispatch_review_for_conflicts and the merge train since issue
+	# #4701) never match the head-branch lookups above: they filter by
+	# --branch and cannot return a default-branch run. The review wrappers
+	# name each dispatched run for its PR; _pr_named_review_dispatch_runs
+	# matches those names in this repo and in consumer repos. One extra
+	# lookup, issued only when the head-branch lookups found nothing (§15).
+	# An incomplete listing (issue #4927) cannot prove that no review run is
+	# active, so it counts as one: the dispatch is skipped and the next poll
+	# cycle retries.
+	if [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then
+		local pr_named_active pr_named_json="" pr_named_rc=0
+		pr_named_json="$(_pr_named_review_dispatch_runs "${pr_number}")" || pr_named_rc=$?
+		if [ "${pr_named_rc}" -ne 0 ]; then
+			echo "  ${log_prefix} Review dispatch run listing incomplete (PR-named lookup); treating a review run as possibly active. Skipping; the next poll cycle retries."
+			return 0
+		fi
+		pr_named_active="$(printf '%s' "${pr_named_json}" \
+			| jq -r '[.[] | select(.status == "in_progress" or .status == "queued" or .status == "pending")] | length' \
+			2>/dev/null || echo "0")"
+		if [ "${pr_named_active:-0}" -gt 0 ] 2>/dev/null; then
+			echo "  ${log_prefix} Active autofix run found (workflow_dispatch run named for PR #${pr_number}, count=${pr_named_active}). Skipping dispatch."
+			return 0
+		fi
+	fi
+
 	return 1
+}
+
+# ---------------------------------------------------------------
+# Helper: list the review dispatch runs named for one PR
+# ---------------------------------------------------------------
+# A review run dispatched from the default branch has head_branch (and
+# head_sha) of the default branch, so no head-branch lookup can see it.
+# The review wrappers name every workflow_dispatch run for its PR:
+#   internal-review.yml (this repo):  "Internal: AI Review & Autofix [pr:<N>]"
+#   ai-review.yml (consumer repos):   "AI Review [pr:<N>]"
+# A workflow_dispatch run's name is evaluated from the dispatched ref's
+# workflow file, which is always the default branch now (issues #4618,
+# #4701), never from PR text, so an exact match on the name identifies
+# the PR.
+#
+# Listing (security, issue #4927): only the two wrappers' own
+# workflow_dispatch runs are read, page by page, back to the review-run
+# window. The previous single page of the newest 100 workflow_dispatch runs
+# of every workflow covered under 3.5 hours in coding-workflows (153
+# internal-review.yml dispatches in 5 hours, 2026-09-29), so a burst of
+# unrelated dispatches could push a live review run off it; the stall
+# recovery then pushed an empty commit under that run and discarded it.
+#
+# Input:     $1 = PR number. Anything but ^[1-9][0-9]*$ prints [] with no call.
+#            $2 = optional lookback in minutes (default and fallback for
+#            anything but ^[1-9][0-9]*$: REVIEW_RUN_MAX_RUNTIME_MINUTES,
+#            itself replaced by 250 when it is not ^[1-9][0-9]*$).
+#            The in-flight guards keep the default, which is the poller's
+#            own active-run window. The failed-autofix redispatch passes
+#            REVIEW_RUN_MAX_RUNTIME_MINUTES + STALL_THRESHOLD_MINUTES: a run
+#            that used its whole 240-minute job budget and then failed would
+#            otherwise leave the default window minutes after it ended.
+# Output:    one JSON array on stdout, newest first, of the matching runs:
+#            [{databaseId, event, status, conclusion, displayTitle, createdAt, startedAt}]
+# Returns:   0 = the listing is complete: an empty array means no run named
+#            for the PR was created inside the window.
+#            1 = the listing is incomplete. Stdout still carries the matches
+#            read so far, but a missing run proves nothing: callers skip
+#            their dispatch or empty-commit push, and the next poll cycle
+#            retries.
+# API calls: for each wrapper (internal-review.yml, ai-review.yml), one
+#            `GET actions/workflows/<wrapper>/runs?event=workflow_dispatch&created=>=<cutoff>&per_page=100&page=<p>`
+#            per page, where <cutoff> is now minus the lookback ($2, else
+#            REVIEW_RUN_MAX_RUNTIME_MINUTES, default 250; older active review
+#            runs are zombies to the poller).
+#            Pages continue until the distinct runs read reach the listing's
+#            total_count, at most 10 pages (GitHub serves at most 1,000
+#            results for a filtered run listing). A wrapper this repo does
+#            not have answers 404 on its first page and counts as complete
+#            and empty. In coding-workflows that is 3 calls (two
+#            internal-review.yml pages, one ai-review.yml 404), and 4 with the
+#            redispatch's 370-minute lookback (measured 2026-09-29). REST only;
+#            callers issue it only after their head-branch lookups found
+#            nothing (§15).
+# Incomplete: a page that failed after gh_retry (other than that first-page
+#            404), a malformed page, a cutoff that cannot be computed, a
+#            short page before total_count was reached (the listing shifted
+#            while it was read), or more runs than 10 pages hold. Each is
+#            logged once on stderr (CLAUDE.md §8):
+#            PR_NAMED_REVIEW_RUNS pr=<N> outcome=incomplete reason=<cutoff_unavailable|page_failed|malformed_page|listing_shifted|truncated|filter_failed> wrapper=<file> page=<p> read=<n> total=<n>
+#
+# Usage: _pr_named_review_dispatch_runs <pr_number> [lookback_minutes]
+_pr_named_review_dispatch_runs()
+{
+	local pr_number="$1"
+	local _pnr_window_min="${2:-}"
+	[[ "${_pnr_window_min}" =~ ^[1-9][0-9]*$ ]] || _pnr_window_min="${REVIEW_RUN_MAX_RUNTIME_MINUTES:-250}"
+	# The env fallback gets the same check: anything but a positive integer
+	# (0, negative, non-numeric, a leading zero) becomes the 250 default.
+	[[ "${_pnr_window_min}" =~ ^[1-9][0-9]*$ ]] || _pnr_window_min=250
+	local _pnr_max_pages=10
+	local _pnr_now="" _pnr_cutoff="" _pnr_err_file="" _pnr_reason=""
+	local _pnr_wrapper="" _pnr_page=0 _pnr_page_json="" _pnr_page_rc=0 _pnr_page_len=0
+	local _pnr_total=0 _pnr_read=0 _pnr_wrapper_runs='[]' _pnr_runs='[]' _pnr_matches=""
+	if ! [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then
+		printf '[]\n'
+		return 0
+	fi
+	_pnr_now="$(date +%s 2>/dev/null || echo "")"
+	if [[ "${_pnr_now}" =~ ^[0-9]+$ ]]; then
+		_pnr_cutoff="$(jq -nr --argjson t "$(( _pnr_now - _pnr_window_min * 60 ))" '$t | todate' 2>/dev/null || echo "")"
+	fi
+	if ! [[ "${_pnr_cutoff}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+		echo "PR_NAMED_REVIEW_RUNS pr=${pr_number} outcome=incomplete reason=cutoff_unavailable wrapper=none page=0 read=0 total=0" >&2
+		printf '[]\n'
+		return 1
+	fi
+	# When this mktemp fails, the 404 check below cannot run and a failed
+	# first page counts as page_failed (incomplete), even for an absent
+	# wrapper. That is the intended result, not a lost 404: gh_retry
+	# (scripts/gh_helpers.sh, a required bootstrap script of the poller)
+	# makes its own mktemp in the same TMPDIR and, when that fails, returns 1
+	# without running gh, so no response was read and the listing is unknown.
+	_pnr_err_file="$(mktemp "${TMPDIR:-/tmp}/pr_named_review_runs.XXXXXX" 2>/dev/null || echo "")"
+	for _pnr_wrapper in internal-review.yml ai-review.yml; do
+		_pnr_page=1
+		_pnr_total=0
+		_pnr_read=0
+		_pnr_wrapper_runs='[]'
+		while :; do
+			if [ "${_pnr_page}" -gt "${_pnr_max_pages}" ]; then
+				_pnr_reason="truncated"
+				break 2
+			fi
+			_pnr_page_rc=0
+			# Not a pipe: gh applies --jq itself, so a failed call is this
+			# command's exit status. The printf | jq pipes below run under
+			# the script-wide `set -euo pipefail` (top of this file), which
+			# this function and its command substitutions inherit.
+			_pnr_page_json="$(gh_retry gh api -X GET \
+				"repos/${GITHUB_REPOSITORY}/actions/workflows/${_pnr_wrapper}/runs?event=workflow_dispatch&created=>=${_pnr_cutoff}&per_page=100&page=${_pnr_page}" \
+				--jq '{total_count: .total_count, workflow_runs: [(.workflow_runs // [])[]? | select(type == "object") | {databaseId: .id, event: .event, status: .status, conclusion: .conclusion, displayTitle: .display_title, createdAt: .created_at, startedAt: .run_started_at}]}' \
+				2>"${_pnr_err_file:-/dev/null}")" || _pnr_page_rc=$?
+			if [ "${_pnr_page_rc}" -ne 0 ]; then
+				# A wrapper this repo does not have: complete and empty.
+				if [ "${_pnr_page}" -eq 1 ] && [ -n "${_pnr_err_file}" ] \
+					&& grep -q 'HTTP 404' "${_pnr_err_file}" 2>/dev/null; then
+					break
+				fi
+				if [ -n "${_pnr_err_file}" ]; then
+					cat "${_pnr_err_file}" >&2 2>/dev/null || true
+				fi
+				_pnr_reason="page_failed"
+				break 2
+			fi
+			if ! printf '%s' "${_pnr_page_json}" \
+				| jq -e '(.total_count | type == "number" and . >= 0) and (.workflow_runs | type == "array")' >/dev/null 2>&1; then
+				_pnr_reason="malformed_page"
+				break 2
+			fi
+			# Accumulate through stdin, never --argjson: 1,000 runs exceed
+			# the kernel's single-argument limit (MAX_ARG_STRLEN, 128 KiB).
+			if ! _pnr_total="$(printf '%s' "${_pnr_page_json}" | jq -r '.total_count | floor' 2>/dev/null)" \
+				|| ! _pnr_page_len="$(printf '%s' "${_pnr_page_json}" | jq -r '.workflow_runs | length' 2>/dev/null)" \
+				|| ! _pnr_wrapper_runs="$(printf '%s\n%s\n' "${_pnr_wrapper_runs}" "${_pnr_page_json}" \
+					| jq -cs '(.[0] + .[1].workflow_runs) | unique_by(.databaseId)' 2>/dev/null)" \
+				|| ! _pnr_read="$(printf '%s' "${_pnr_wrapper_runs}" | jq -r 'length' 2>/dev/null)" \
+				|| ! [[ "${_pnr_total}" =~ ^[0-9]+$ && "${_pnr_page_len}" =~ ^[0-9]+$ && "${_pnr_read}" =~ ^[0-9]+$ ]]; then
+				_pnr_wrapper_runs='[]'
+				_pnr_reason="malformed_page"
+				break 2
+			fi
+			if [ "${_pnr_read}" -ge "${_pnr_total}" ]; then
+				break
+			fi
+			if [ "${_pnr_page_len}" -lt 100 ]; then
+				_pnr_reason="listing_shifted"
+				break 2
+			fi
+			_pnr_page=$(( _pnr_page + 1 ))
+		done
+		if ! _pnr_runs="$(printf '%s\n%s\n' "${_pnr_runs}" "${_pnr_wrapper_runs}" | jq -cs '.[0] + .[1]' 2>/dev/null)"; then
+			_pnr_runs='[]'
+			_pnr_wrapper_runs='[]'
+			_pnr_reason="filter_failed"
+			break
+		fi
+	done
+	if [ -n "${_pnr_err_file}" ]; then
+		rm -f "${_pnr_err_file}" 2>/dev/null || true
+	fi
+	# An incomplete listing still prints the matches it read (the wrapper
+	# it stopped in included); callers do not act on them.
+	if [ -n "${_pnr_reason}" ]; then
+		_pnr_runs="$(printf '%s\n%s\n' "${_pnr_runs}" "${_pnr_wrapper_runs}" | jq -cs '.[0] + .[1]' 2>/dev/null)" \
+			|| _pnr_runs='[]'
+	fi
+	_pnr_matches="$(printf '%s' "${_pnr_runs}" | jq -c --arg pr "${pr_number}" '
+		(if type == "array" then . else [] end)
+		| [ .[]? | select(type == "object") ]
+		| unique_by(.databaseId)
+		| [ .[]
+			| select((.event // "workflow_dispatch") == "workflow_dispatch")
+			| select((.displayTitle // "") == ("Internal: AI Review & Autofix [pr:" + $pr + "]")
+				or (.displayTitle // "") == ("AI Review [pr:" + $pr + "]"))
+		  ]
+		| sort_by(.createdAt // "")
+		| reverse
+	' 2>/dev/null)" || { _pnr_matches="[]"; [ -n "${_pnr_reason}" ] || _pnr_reason="filter_failed"; }
+	printf '%s\n' "${_pnr_matches:-[]}"
+	if [ -n "${_pnr_reason}" ]; then
+		echo "PR_NAMED_REVIEW_RUNS pr=${pr_number} outcome=incomplete reason=${_pnr_reason} wrapper=${_pnr_wrapper} page=${_pnr_page} read=${_pnr_read} total=${_pnr_total}" >&2
+		return 1
+	fi
+	return 0
 }
 
 # Helper: Dispatch review workflow for merge conflict resolution
@@ -17265,17 +19214,33 @@ _has_active_autofix_run()
 # runner with a clean checkout — more reliable than the shared
 # orchestrator environment.
 #
-# workflow_dispatch resolves from the target ref (the PR branch),
-# which always exists, bypassing the unbuildable merge-ref problem
-# that affects pull_request synchronize events.
+# workflow_dispatch needs no merge ref, bypassing the unbuildable
+# merge-ref problem that affects pull_request synchronize events.
+#
+# Dispatch ref (security, issue #4701): the dispatch always runs the
+# default branch's workflow file and passes only a validated PR number.
+# Dispatching `--ref <head_ref>` ran the PR branch's own unmerged copy of
+# the review workflow with `secrets: inherit` and write permissions, the
+# same finding issue #4618 fixed in review_autofix_sweep.yml.
+# review_autofix.yml checks out the PR head from the PR's metadata either
+# way, and its concurrency group is keyed by PR number, not by ref. The
+# dispatched run is named for its PR, which is how _has_active_autofix_run
+# still sees it (the PR #3895 duplicate-dispatch loop stays closed).
 #
 # Usage: _dispatch_review_for_conflicts <pr_number> <head_ref>
-# Returns: 0 = dispatched, 1 = dispatch failed, 2 = skipped (active run exists).
+# Returns: 0 = dispatched, 1 = dispatch failed or invalid PR number,
+#          2 = skipped (active run exists).
 _dispatch_review_for_conflicts()
 {
 	local pr_number="$1"
 	local head_ref="$2"
 	local log_prefix="[conflict-dispatch] PR #${pr_number}"
+
+	# The PR number is the only PR data the dispatch carries (issue #4701).
+	if ! [[ "${pr_number}" =~ ^[1-9][0-9]*$ ]]; then
+		echo "::warning::${log_prefix} invalid pr_number; skipping review dispatch (head_ref=${head_ref})."
+		return 1
+	fi
 
 	# Guard 1: skip if already dispatched in this poll cycle.
 	# Multiple code paths (ready-to-merge loop, in-progress loop,
@@ -17306,13 +19271,15 @@ _dispatch_review_for_conflicts()
 	# edits even when the repo variable allows them. See
 	# review_autofix.yml:51 and internal-review.yml:15.
 	local allow_workflow_edits_flag="${ALLOW_WORKFLOW_EDITS:-true}"
+	# No --ref: the run executes the default branch's workflow file (issue
+	# #4701). review_autofix.yml is the last resort and has no PR run name,
+	# so only the wrapper dispatches are visible to the PR-named lookups.
 	for wf_candidate in ai-review.yml internal-review.yml review_autofix.yml; do
 		if gh_retry gh workflow run "${wf_candidate}" \
 			--repo "${GITHUB_REPOSITORY}" \
-			--ref "${head_ref}" \
 			-f pr_number="${pr_number}" \
 			-f allow_workflow_edits="${allow_workflow_edits_flag}" 2>/dev/null; then
-			echo "  ${log_prefix} Dispatched ${wf_candidate} on ${head_ref} (allow_workflow_edits=${allow_workflow_edits_flag})."
+			echo "  ${log_prefix} Dispatched ${wf_candidate} from the default branch for head ${head_ref} (allow_workflow_edits=${allow_workflow_edits_flag})."
 			# Record in cycle-local tracker to prevent duplicate dispatches
 			echo "${pr_number}" >> "${_CONFLICT_DISPATCH_TRACKER}"
 			return 0
@@ -17497,6 +19464,14 @@ if _is_truthy "${STAGED_SUPPORT_LATCH_SWEEP_ONLY:-false}"; then
   exit 0
 fi
 
+# With no tracking issue, the workflow skips the full poller; this is the
+# only path that scans blocked standalone items on those ticks. The workflow's
+# complementary has_work gates keep it exclusive with the post-loop scan.
+if _is_truthy "${UNBLOCK_SCAN_SWEEP_ONLY:-false}"; then
+  run_unblock_scan || echo "UNBLOCK_SCAN outcome=skip reason=error rc=$?"
+  exit 0
+fi
+
 # ---------------------------------------------------------------
 # Process each tracking issue
 # ---------------------------------------------------------------
@@ -17543,6 +19518,8 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   fi
   rm -f "${_comments_raw}"
 
+  # State is executable pipeline control data; the extractor verifies every
+  # comment's author before either V1 or V2 parsing.
   STATE_JSON=""
   STATE_COMMENT_COUNT=0
   STATE_FALLBACK_USED="false"
@@ -17580,6 +19557,10 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
     # later poll cycle read the real state.
     if [ "${COMMENTS_FETCH_OK}" != "true" ]; then
       echo "::warning::Comments fetch failed for tracking issue #${TRACKING_NUM}; cannot confirm orchestrator state is missing. Skipping state reconstruction this cycle (will retry next poll)."
+      continue
+    fi
+    if [ "${EXTRACTED_STATE_IDENTITY_UNAVAILABLE}" = "true" ]; then
+      echo "::warning::Pipeline identity unavailable; cannot verify state-comment authors for #${TRACKING_NUM}; skipping this tracking issue and state reconstruction this cycle."
       continue
     fi
     if [ "${STATE_COMMENT_COUNT}" -gt 0 ]; then
@@ -17676,6 +19657,17 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
   TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
   DEFAULT_BRANCH_TRACKING=""
   INTEGRATION_BRANCH_TRACKING="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
+  # Unblock judge (plan Phase 7): a project it closed is abandoned here; its
+  # fix-up requests join the current wave; a failed project is offered to
+  # this tick's unblock scan.
+  unblock_hook_rc=0
+  handle_unblock_judge_project_hooks || unblock_hook_rc=$?
+  if [ "${unblock_hook_rc}" -eq 10 ]; then
+    continue
+  fi
+  if [ "${PROJECT_STATUS}" = "failed" ]; then
+    echo "${TRACKING_NUM}" >> "${UNBLOCK_FAILED_PROJECTS_FILE}" 2>/dev/null || true
+  fi
 	if [ "${ENABLE_SECURITY_PASS}" != "true" ] \
 		&& { [ "${PROJECT_STATUS}" = "security-pass" ] \
 			|| [ "${PROJECT_STATUS}" = "security-pass-fixing" ] \
@@ -17772,6 +19764,7 @@ The \`/security-pass-waive\` comment by \`${SECURITY_PASS_WAIVE_AUTHOR}\` was no
                   line: ($known.line // 0),
                   owasp_or_stride_category: ($known.owasp_or_stride_category // ""),
                   severity: ($known.severity // ""),
+                  exploit_scenario: ($known.exploit_scenario // ""),
                   justification: ("Accepted as a known risk by " + $by + " via /security-pass-waive."),
                   source: "operator",
                   waived_by: $by,
@@ -18161,6 +20154,7 @@ Security-pass fix issue #${SECURITY_FIX_ISSUE} was closed by orchestrator stall 
           security_pass_file_deferred_advisory_followups "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING:-main}" "${_orch_extfin_pr}"
           post_state_comment || true
           emit_orchestrator_completion_lessons
+          run_project_activation_verify
           handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
           set_tracking_phase_label "ai:merged"
           post_tracking_comment "## ✅ Project complete — integration PR #${_orch_extfin_pr} merged externally
@@ -18259,6 +20253,7 @@ The orchestrator detected that the integration PR was squash-merged outside the 
     jq '.status = "complete" | .judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment || true
     emit_orchestrator_completion_lessons
+    run_project_activation_verify
     handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
     set_tracking_phase_label "ai:merged"
     post_tracking_comment "Project completed successfully. Issue kept open for manual review."
@@ -18581,17 +20576,20 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
   # /re-security-pass — manual reset from security-pass exhaustion
   # ---------------------------------------------------------------
   if [ "${PROJECT_STATUS}" = "failed" ] && has_label "${TRACKING_LABELS}" "ai:security-pass-failed"; then
-    RE_SECURITY_PASS_COMMENT_JSON="$(echo "${COMMENTS}" | jq -c '
-      (to_entries
-        | map(select((.value.body // "") | (
-            startswith("<!-- ORCHESTRATOR_STATE_V1")
-            or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->")
-            or startswith("<!-- re-security-pass-dedup:")
-        )))
+    RE_SECURITY_PASS_COMMENT_JSON="$(echo "${COMMENTS}" | jq -c --arg login "${UNBLOCK_TRUSTED_LOGIN}" '
+       (to_entries
+        | map(select((.value.user.login // "") == $login and ((.value.body // "") | (
+             startswith("<!-- ORCHESTRATOR_STATE_V1")
+             or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->")
+             or startswith("<!-- re-security-pass-dedup:")
+        ))))
         | last
         | .key // -1) as $last_security_pass_boundary_idx |
       [to_entries[]
-        | select(.key > $last_security_pass_boundary_idx and ((.value.body // "") | test("^\\s*/re-security-pass(\\s|$)"; "m")))
+        | select(.key > $last_security_pass_boundary_idx and ((.value.body // "") | test("^\\s*/re-security-pass(\\s|$)"; "m"))
+          and (((.value.user.login // "") == $login) or
+            (((.value.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+              and ((.value.user.type // "") != "Bot") and (((.value.user.login // "") | endswith("[bot]")) | not))))
         | .value
       ]
       | last // empty
@@ -18715,17 +20713,20 @@ The security pass that parked this project ran on workflow engine \`${SP_AUTO_RE
   # the latest state comment resets counters and re-dispatches validation.
   if [ "${PROJECT_STATUS}" = "failed" ] \
     && (has_label "${TRACKING_LABELS}" "ai:validation-failed" || has_label "${TRACKING_LABELS}" "ai:validate-failed"); then
-    REVALIDATE_COMMENT_JSON="$(echo "${COMMENTS}" | jq -c '
-      (to_entries
-        | map(select((.value.body // "") | (
-            startswith("<!-- ORCHESTRATOR_STATE_V1")
-            or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->")
-            or startswith("<!-- revalidate-dedup:")
-        )))
+    REVALIDATE_COMMENT_JSON="$(echo "${COMMENTS}" | jq -c --arg login "${UNBLOCK_TRUSTED_LOGIN}" '
+       (to_entries
+        | map(select((.value.user.login // "") == $login and ((.value.body // "") | (
+             startswith("<!-- ORCHESTRATOR_STATE_V1")
+             or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->")
+             or startswith("<!-- revalidate-dedup:")
+        ))))
         | last
         | .key // -1) as $last_revalidate_boundary_idx |
       [to_entries[]
-        | select(.key > $last_revalidate_boundary_idx and ((.value.body // "") | test("^\\s*/revalidate(\\s|$)"; "m")))
+        | select(.key > $last_revalidate_boundary_idx and ((.value.body // "") | test("^\\s*/revalidate(\\s|$)"; "m"))
+          and (((.value.user.login // "") == $login) or
+            (((.value.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+              and ((.value.user.type // "") != "Bot") and (((.value.user.login // "") | endswith("[bot]")) | not))))
         | .value
       ]
       | last // empty
@@ -18897,10 +20898,13 @@ All validation counters cleared. Re-dispatching validation (cycle 1)."
   if [ "${PROJECT_STATUS}" = "failed" ] \
     && ! has_label "${TRACKING_LABELS}" "ai:validation-failed" \
     && ! has_label "${TRACKING_LABELS}" "ai:validate-failed"; then
-    JUDGE_RESUME_BODY="$(echo "${COMMENTS}" | jq -r '
-      (to_entries | map(select((.value.body // "") | (startswith("<!-- ORCHESTRATOR_STATE_V1") or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->")))) | last | .key // -1) as $last_state_idx |
+    JUDGE_RESUME_BODY="$(echo "${COMMENTS}" | jq -r --arg login "${UNBLOCK_TRUSTED_LOGIN}" '
+      (to_entries | map(select((.value.user.login // "") == $login and ((.value.body // "") | (startswith("<!-- ORCHESTRATOR_STATE_V1") or test("^<!-- ORCHESTRATOR_STATE_V2 part=([0-9]+)/\\1 manifest=[0-9a-f]{64} -->"))))) | last | .key // -1) as $last_state_idx |
       [to_entries[]
-        | select(.key > $last_state_idx and (.value.body | test("^\\s*/judge_resume(\\s|$)"; "m")))
+        | select(.key > $last_state_idx and ((.value.body // "") | test("^\\s*/judge_resume(\\s|$)"; "m"))
+          and (((.value.user.login // "") == $login) or
+            (((.value.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))
+              and ((.value.user.type // "") != "Bot") and (((.value.user.login // "") | endswith("[bot]")) | not))))
       ]
       | last
       | .value.body // ""
@@ -18968,6 +20972,19 @@ The poller will resume processing on the next cycle."
 
   if [ "${PROJECT_STATUS}" = "complete" ] || [ "${PROJECT_STATUS}" = "failed" ] || [ "${PROJECT_STATUS}" = "validation-failed" ]; then
     handle_comprehensive_release_callback_if_needed "${PROJECT_STATUS}" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
+    # Retry only a trusted, comment-backed partial verdict while its first
+    # occurrence is recent. Failed writes without a marker never start an
+    # unbounded expensive verification loop on completed projects.
+    if [ "${PROJECT_STATUS}" = "complete" ] && [ "${COMMENTS_FETCH_OK:-false}" = "true" ] &&
+      printf '%s' "${COMMENTS:-[]}" | jq -e --arg src "project-${TRACKING_NUM}" '
+        [.[]? | select((.user.login // "") == "github-actions[bot]" or
+          ((.author_association // "") as $association | ["OWNER", "MEMBER", "COLLABORATOR"] | index($association) != null))
+          | select((.body // "" | sub("[[:space:]]+$"; "")) | endswith("<!-- ai:activation:v1 partial=true source=" + $src + " -->"))
+          | .created_at | fromdateiso8601? | select(. != null)] as $partials
+        | ($partials | length) > 0 and ($partials | length) < 3 and (now - ($partials | min)) < 1800
+      ' >/dev/null 2>&1; then
+      run_project_activation_verify
+    fi
     if [ "${PROJECT_STATUS}" = "failed" ] || [ "${PROJECT_STATUS}" = "validation-failed" ]; then
       if completion_status_comment_failed_state_observation; then
         _completion_status_failed_observation_rc=0
@@ -19291,7 +21308,8 @@ The poller will resume processing on the next cycle."
 
       ensure_label_exists "ai:clarification"
       ensure_label_exists "ai:orchestrator-managed"
-      NEW_URL="$(gh_retry gh issue create \
+      mapfile -t _engine_label_args < <(engine_label_create_args)
+      NEW_URL="$(gh_retry gh issue create "${_engine_label_args[@]}" \
         --repo "${GITHUB_REPOSITORY}" \
         --title "${DEF_TITLE}" \
         --body "${FULL_BODY}" \
@@ -19781,6 +21799,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
               echo "  [merge-probe] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue} (defer ${_rtm_defer_count}/${MAX_MERGE_DEFERRALS}) — sibling conflict detected."
               if [ "${_rtm_defer_count}" -ge "${MAX_MERGE_DEFERRALS}" ]; then
                 tg_notify "PR #${RTM_PR} (issue #${rtm_issue}) has exceeded MAX_MERGE_DEFERRALS=${MAX_MERGE_DEFERRALS} with persistent sibling merge-tree conflicts. Human review required."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")" "WARNING"
+                unblock_handover_merge_deferral "${RTM_PR}" "${rtm_issue}" "sibling merge-tree conflicts" "${_rtm_defer_count}"
 		      fi
 		      continue
 		    fi
@@ -19816,6 +21835,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 		        echo "  [premerge-rebase] Deferring merge of PR #${RTM_PR} for issue #${rtm_issue} (defer ${_rtm_defer_count}/${MAX_MERGE_DEFERRALS}) — pre-merge rebase conflicts."
 		        if [ "${_rtm_defer_count}" -ge "${MAX_MERGE_DEFERRALS}" ]; then
 		          tg_notify "PR #${RTM_PR} (issue #${rtm_issue}) has exceeded MAX_MERGE_DEFERRALS=${MAX_MERGE_DEFERRALS} with persistent pre-merge rebase conflicts. Human review required."$'\n'"PR: $(_gh_url "pull/${RTM_PR}")"$'\n'"Issue: $(_gh_url "issues/${rtm_issue}")" "WARNING"
+		          unblock_handover_merge_deferral "${RTM_PR}" "${rtm_issue}" "pre-merge rebase conflicts" "${_rtm_defer_count}"
 		        fi
 		        continue
 		        ;;
@@ -20019,6 +22039,11 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       --reasoning "${MODEL_REASONING_EFFORT_JUDGE:-high}"
 
     MAX_REVIEW_BLOCKED_RETRIES="${MAX_REVIEW_BLOCKED_RETRIES:-2}"
+    RB_JUDGE_ISOLATION_MAX_FAILURES="${RB_JUDGE_ISOLATION_MAX_FAILURES:-3}"
+    if ! [[ "${RB_JUDGE_ISOLATION_MAX_FAILURES}" =~ ^[0-9]+$ ]] || [ "${RB_JUDGE_ISOLATION_MAX_FAILURES}" -lt 1 ]; then
+      echo '::warning::Invalid RB_JUDGE_ISOLATION_MAX_FAILURES; using 3.' >&2
+      RB_JUDGE_ISOLATION_MAX_FAILURES=3
+    fi
     REVIEW_BLOCKED_STATE_CHANGED=false
 
     while read -r rb_issue; do
@@ -20068,6 +22093,18 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         else
           echo "  PR #${RB_PR} is already merged. Judge fixes will target a follow-up PR against ${DEFAULT_BRANCH:-main}."
         fi
+      fi
+
+      # A cross-reference does not prove the selected PR belongs to this repo.
+      # Reject fork heads before their diff can drive a judge merge or close.
+      _rb_selected_head_repo="$(printf '%s' "${_rb_pr_json}" | jq -r '.head.repo.full_name // empty | strings' 2>/dev/null || true)"
+      if ! _pr_json_head_repo_is_origin "${_rb_pr_json}"; then
+        _rb_selected_identity_reason="cross_repository"
+        [ -n "${_rb_selected_head_repo}" ] || _rb_selected_identity_reason="head_repo_unavailable"
+        _rb_safe_selected_repo="$(printf '%s' "${_rb_selected_head_repo:-none}" | LC_ALL=C tr -c '[:alnum:]/_.-' '?' | cut -c1-100)"
+        echo "::warning::Review-blocked PR #${RB_PR} head identity rejected (${_rb_selected_identity_reason}); judge skipped."
+        echo "REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=${rb_issue} pr=${RB_PR} reason=${_rb_selected_identity_reason} head_repo=${_rb_safe_selected_repo}"
+        continue
       fi
 
       # ------------------------------------------------------------------
@@ -20185,6 +22222,87 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         fi
       fi
 
+      RB_ISOLATION_HEAD="$(printf '%s' "${_rb_pr_json}" | jq -r '.head.sha // "unknown"' 2>/dev/null || echo unknown)"
+      [[ "${RB_ISOLATION_HEAD}" =~ ^[0-9a-f]{40}$ ]] || RB_ISOLATION_HEAD=unknown
+      RB_ISOLATION_ENTRY="$(jq -c --arg key "${rb_issue}" '.review_blocked_isolation_state[$key] // {}' "${STATE_FILE}")"
+      RB_ISOLATION_OLD_HEAD="$(printf '%s' "${RB_ISOLATION_ENTRY}" | jq -r '.head_sha // empty')"
+      RB_ISOLATION_ESCALATED="$(printf '%s' "${RB_ISOLATION_ENTRY}" | jq -r '.escalated // false')"
+      if [ "${RB_ISOLATION_ESCALATED}" = true ]; then
+        # LABELS_JSON is a cycle snapshot, not evidence that a human has
+        # cleared a latch since the snapshot. The PR JSON has no issue labels;
+        # this rare escalated path needs a live issue read before retrying.
+        RB_ISOLATION_ISSUE_JSON="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}" --jq '{labels: [.labels[]?.name]}' 2>/dev/null || true)"
+        if ! printf '%s' "${RB_ISOLATION_ISSUE_JSON}" | jq -e '.labels | type == "array"' >/dev/null 2>&1; then
+          echo "RB_JUDGE_ISOLATION issue=${rb_issue} pr=${RB_PR} head=${RB_ISOLATION_HEAD} outcome=skip reason=labels_unavailable"
+          continue
+        fi
+        RB_ISOLATION_HAS_LABEL="$(printf '%s' "${RB_ISOLATION_ISSUE_JSON}" | jq -r '.labels | index("ai:needs-human") != null')"
+        if [ "${RB_ISOLATION_OLD_HEAD}" = "${RB_ISOLATION_HEAD}" ] && [ "${RB_ISOLATION_HAS_LABEL}" = true ]; then
+          if [ "$(printf '%s' "${RB_ISOLATION_ENTRY}" | jq -r '.comment_id // empty')" = '' ]; then
+            RB_ISOLATION_ACTOR="$(gh_retry _safe_gh_jq user --jq '.id' 2>/dev/null || true)"
+            RB_ISOLATION_COMMENTS="$(gh_retry gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}/comments?per_page=100" 2>/dev/null || true)"
+            if [[ "${RB_ISOLATION_ACTOR}" =~ ^[0-9]+$ ]] && printf '%s' "${RB_ISOLATION_COMMENTS}" | jq -e 'type == "array" and all(.[]; type == "array")' >/dev/null 2>&1; then
+              RB_ISOLATION_COMMENT_ID="$(printf '%s' "${RB_ISOLATION_COMMENTS}" | jq -r --argjson actor "${RB_ISOLATION_ACTOR}" --arg marker "<!-- ai:rb-judge-isolation-escalated head=${RB_ISOLATION_HEAD} " '[.[][] | select(.user.id == $actor and (.body | type == "string") and (.body | contains($marker)))] | last | .id // empty')"
+              if ! [[ "${RB_ISOLATION_COMMENT_ID}" =~ ^[0-9]+$ ]]; then
+                RB_ISOLATION_COMMENT="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}/comments" -f body="$(printf '## Review-blocked judge isolation unavailable\n\nReason: %s. Failures: %s. Head: %s. The judge will not run on this head again; push a new commit or remove `ai:needs-human` to retry.\n\n<!-- ai:rb-judge-isolation-escalated head=%s reason=%s -->' "$(printf '%s' "${RB_ISOLATION_ENTRY}" | jq -r '.reason')" "$(printf '%s' "${RB_ISOLATION_ENTRY}" | jq -r '.count')" "${RB_ISOLATION_HEAD:0:7}" "${RB_ISOLATION_HEAD}" "$(printf '%s' "${RB_ISOLATION_ENTRY}" | jq -r '.reason')")" 2>/dev/null || true)"
+                RB_ISOLATION_COMMENT_ID="$(printf '%s' "${RB_ISOLATION_COMMENT}" | jq -r '.id // empty' 2>/dev/null || true)"
+              fi
+              if [[ "${RB_ISOLATION_COMMENT_ID}" =~ ^[0-9]+$ ]]; then
+                jq --arg key "${rb_issue}" --argjson id "${RB_ISOLATION_COMMENT_ID}" '.review_blocked_isolation_state[$key].comment_id = $id' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+                REVIEW_BLOCKED_STATE_CHANGED=true
+              fi
+            fi
+          fi
+          echo "RB_JUDGE_ISOLATION issue=${rb_issue} pr=${RB_PR} head=${RB_ISOLATION_HEAD} outcome=skip reason=escalated"
+          continue
+        fi
+        if [ "${RB_ISOLATION_OLD_HEAD}" != "${RB_ISOLATION_HEAD}" ] && [ "${RB_ISOLATION_HAS_LABEL}" = true ] && \
+           [ "$(printf '%s' "${RB_ISOLATION_ENTRY}" | jq -r '.owned_label // false')" = true ]; then
+          # Only clear a latch whose most recent isolation marker is our
+          # recorded comment. Do not clear an unrelated human gate.
+          RB_ISOLATION_COMMENT_ID="$(printf '%s' "${RB_ISOLATION_ENTRY}" | jq -r '.comment_id // empty')"
+          RB_ISOLATION_ACTOR="$(gh_retry _safe_gh_jq user --jq '.id' 2>/dev/null || true)"
+          RB_ISOLATION_COMMENTS="$(gh_retry gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}/comments?per_page=100" 2>/dev/null || true)"
+          if ! [[ "${RB_ISOLATION_COMMENT_ID}" =~ ^[0-9]+$ ]] && [[ "${RB_ISOLATION_ACTOR}" =~ ^[0-9]+$ ]] && \
+             printf '%s' "${RB_ISOLATION_COMMENTS}" | jq -e 'type == "array" and all(.[]; type == "array")' >/dev/null 2>&1; then
+            # The POST may have succeeded while its response was lost. Recover
+            # its ID from the already-fetched trusted comment history.
+            RB_ISOLATION_COMMENT_ID="$(printf '%s' "${RB_ISOLATION_COMMENTS}" | jq -r --argjson actor "${RB_ISOLATION_ACTOR}" \
+              --arg marker "<!-- ai:rb-judge-isolation-escalated head=${RB_ISOLATION_OLD_HEAD} " \
+              '[.[][] | select((.body | type == "string") and .user.id == $actor and (.body | startswith("## Review-blocked judge isolation unavailable") and contains($marker)))] | last | .id // empty')"
+          fi
+          # The PR/issue snapshots contain no label-event history. Only
+          # clear our own latch if the last label event is ours and predates
+          # our marker; a subsequent human latch must survive a head push.
+          if [[ "${RB_ISOLATION_COMMENT_ID}" =~ ^[0-9]+$ ]]; then
+            RB_ISOLATION_EVENTS="$(gh_retry gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}/events?per_page=100" 2>/dev/null || true)"
+            if [[ "${RB_ISOLATION_ACTOR}" =~ ^[0-9]+$ ]] && printf '%s' "${RB_ISOLATION_COMMENTS}" | jq -e \
+              --argjson id "${RB_ISOLATION_COMMENT_ID}" --argjson actor "${RB_ISOLATION_ACTOR}" \
+              --arg marker "<!-- ai:rb-judge-isolation-escalated head=${RB_ISOLATION_OLD_HEAD} " \
+              '[.[][] | select((.body | type == "string") and (.body | startswith("## Review-blocked judge isolation unavailable")) and (.body | contains("<!-- ai:rb-judge-isolation-escalated head=")))] | last | .id == $id and .user.id == $actor and (.body | contains($marker))' >/dev/null 2>&1 && \
+              printf '%s' "${RB_ISOLATION_EVENTS}" | jq -e --argjson actor "${RB_ISOLATION_ACTOR}" \
+                --argjson id "${RB_ISOLATION_COMMENT_ID}" --argjson comments "${RB_ISOLATION_COMMENTS}" \
+                '($comments | [.[][] | select(.id == $id)] | last | .created_at) as $marker_at | $marker_at != null and ([.[][] | select(.event == "labeled" and .label.name == "ai:needs-human")] | last | .actor.id == $actor and .created_at <= $marker_at)' >/dev/null 2>&1; then
+              gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" --remove-label 'ai:needs-human' >/dev/null || {
+                echo '::warning::Could not clear review-blocked isolation latch; deferring.' >&2
+                continue
+              }
+              RB_ISOLATION_HAS_LABEL=false
+            fi
+          fi
+        fi
+        if [ "${RB_ISOLATION_OLD_HEAD}" != "${RB_ISOLATION_HEAD}" ] && [ "${RB_ISOLATION_HAS_LABEL}" = true ]; then
+          echo "RB_JUDGE_ISOLATION issue=${rb_issue} pr=${RB_PR} head=${RB_ISOLATION_HEAD} outcome=skip reason=latch_not_cleared"
+          continue
+        fi
+      fi
+      if [ -n "${RB_ISOLATION_OLD_HEAD}" ] && { [ "${RB_ISOLATION_OLD_HEAD}" != "${RB_ISOLATION_HEAD}" ] || [ "${RB_ISOLATION_ESCALATED}" = true ]; }; then
+        jq --arg key "${rb_issue}" '.review_blocked_isolation_state |= del(.[$key])' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        REVIEW_BLOCKED_STATE_CHANGED=true
+        echo "RB_JUDGE_ISOLATION issue=${rb_issue} pr=${RB_PR} head=${RB_ISOLATION_HEAD} outcome=reset reason=$([ "${RB_ISOLATION_OLD_HEAD}" = "${RB_ISOLATION_HEAD}" ] && echo label_cleared || echo head_changed)"
+        RB_ISOLATION_ESCALATED=false
+      fi
+
       # Collect full PR context for the judge. Apply the same byte cap as the
       # wave judge because minified single-line diffs defeat the line cap used
       # when this prompt is rendered below.
@@ -20272,9 +22390,16 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
       #                              could not determine a target branch.
       RB_COMBINED_MODE="false"
       RB_COMBINED_BRANCH_INFO=""
+      # Combined mode works in its own worktree, never in this checkout
+      # (the poller keeps running scripts/ from here after the agent edits).
+      RB_COMBINED_WORKDIR="${RUNTIME_DIR:-/tmp}/rb-judge-wt-${rb_issue}"
+      _integration_judge_remove_worktree "${RB_COMBINED_WORKDIR}"
       RB_TARGET_MERGED="false"
       HEAD_REF=""
       BASE_REF=""
+      RB_FIX_TARGET_OK="false"
+      RB_FIX_TARGET_REASON="head_repo_unknown"
+      RB_FIX_TARGET_HEAD_SHA=""
       FOLLOWUP_BRANCH=""
       ORCH_FOLLOWUP_OWNED="false"
       ORCH_FOLLOWUP_TRACKING_NUM=""
@@ -20305,8 +22430,10 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
         # with RB_PR_STATE/RB_PR_MERGED regardless of which path we take.
         _rb_prev_pr_state="${RB_PR_STATE:-}"
         _rb_prev_pr_merged="${RB_PR_MERGED:-false}"
+        _rb_fix_refreshed="false"
         _rb_pr_json_refetched="$(_fetch_pr_json "${RB_PR}")"
         if printf '%s' "${_rb_pr_json_refetched}" | jq -e 'type == "object" and ((.state // "") | IN("open","closed","merged"))' >/dev/null 2>&1; then
+          _rb_fix_refreshed="true"
           _rb_pr_json="${_rb_pr_json_refetched}"
           RB_PR_STATE="$(_jq_field "${_rb_pr_json}" '.state' 'open|closed|merged')"
           RB_PR_MERGED="$(_jq_field "${_rb_pr_json}" '.merged_at != null' 'true|false')"
@@ -20323,7 +22450,53 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
         fi
         unset _rb_prev_pr_state _rb_prev_pr_merged _rb_pr_json_refetched
 
-        if [ "${RB_PR_MERGED}" = "true" ]; then
+        # The refresh is mandatory for a write target, even if an earlier
+        # snapshot is still good enough for the judge's read-only context.
+        if [ "${_rb_fix_refreshed}" != "true" ]; then
+          RB_FIX_TARGET_REASON="head_repo_unknown"
+        elif ! _pr_json_head_is_same_repo "${_rb_pr_json}"; then
+          _rb_head_repo="$(printf '%s' "${_rb_pr_json}" | jq -r '.head.repo.full_name // empty' 2>/dev/null || true)"
+          if [ -n "${_rb_head_repo}" ]; then
+            RB_FIX_TARGET_REASON="head_repo_mismatch"
+          else
+            RB_FIX_TARGET_REASON="head_repo_unknown"
+          fi
+        elif ! _pr_json_is_issue_implementation_pr "${rb_issue}" "${_rb_pr_json}"; then
+          RB_FIX_TARGET_REASON="not_implementation_pr"
+        else
+          _rb_refreshed_head_ref="$(printf '%s' "${_rb_pr_json}" | jq -r '.head.ref // empty' 2>/dev/null || true)"
+          RB_FIX_TARGET_HEAD_SHA="$(printf '%s' "${_rb_pr_json}" | jq -r '.head.sha // empty' 2>/dev/null || true)"
+          if [ "${HEAD_REF}" != "${_rb_refreshed_head_ref}" ] || [ -z "${HEAD_REF}" ] || [ "${HEAD_REF}" = "null" ]; then
+            RB_FIX_TARGET_REASON="head_ref_changed"
+          elif [ "${RB_PR_MERGED}" != "true" ] && ! [[ "${RB_FIX_TARGET_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            RB_FIX_TARGET_REASON="head_sha_missing"
+          else
+            RB_FIX_TARGET_OK="true"
+            # Merged follow-ups do not need the old SHA, but never print an
+            # unvalidated value from a PR payload into the Actions log.
+            _rb_log_head_sha="unknown"
+            if [[ "${RB_FIX_TARGET_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+              _rb_log_head_sha="${RB_FIX_TARGET_HEAD_SHA}"
+            fi
+            echo "REVIEW_BLOCKED_FIX_TARGET_VERIFIED issue=${rb_issue} pr=${RB_PR} head_sha=${_rb_log_head_sha}"
+            unset _rb_log_head_sha
+          fi
+        fi
+        unset _rb_fix_refreshed _rb_head_repo _rb_refreshed_head_ref
+        if [ "${RB_FIX_TARGET_OK}" != "true" ]; then
+          echo "REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=${rb_issue} pr=${RB_PR} reason=${RB_FIX_TARGET_REASON}"
+          tg_notify "Review-blocked fix target rejected for issue #${rb_issue} (PR #${RB_PR}): ${RB_FIX_TARGET_REASON}." "WARNING"
+          case "${RB_FIX_TARGET_REASON}" in
+            head_ref_changed) _rb_identity_reason="head_ref_mismatch" ;;
+            head_sha_missing) _rb_identity_reason="head_sha_unavailable" ;;
+            *) _rb_identity_reason="" ;;
+          esac
+          if [ -n "${_rb_identity_reason}" ]; then
+            echo "REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=${rb_issue} pr=${RB_PR} reason=${_rb_identity_reason}"
+          fi
+          rm -f -- "${RB_JUDGE_SEMBLE_QUERY_FILE}"
+          continue
+        elif [ "${RB_PR_MERGED}" = "true" ]; then
           RB_TARGET_MERGED="true"
           resolve_active_orchestrator_context_for_issue "${rb_issue}" "${TRACKING_NUM:-}"
           ORCH_FOLLOWUP_OWNED="${RESOLVED_ORCHESTRATOR_OWNED}"
@@ -20331,7 +22504,11 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
           ORCH_FOLLOWUP_INTEGRATION_BRANCH="${RESOLVED_INTEGRATION_BRANCH}"
           ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS="${RESOLVED_INTEGRATION_BRANCH_EXISTS}"
 
-          if [ "${ORCH_FOLLOWUP_OWNED}" = "true" ]; then
+          if [ "${RESOLVED_ORCHESTRATOR_STATE_IDENTITY_UNAVAILABLE}" = "true" ]; then
+            FOLLOWUP_PR_BLOCKED="true"
+            FOLLOWUP_BLOCK_REASON="Orchestrator state author cannot be verified (pipeline identity unavailable); not retargeting follow-up PR for issue #${rb_issue} this tick."
+            echo "::warning::${FOLLOWUP_BLOCK_REASON}"
+          elif [ "${ORCH_FOLLOWUP_OWNED}" = "true" ]; then
             if [ "${ORCH_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${ORCH_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
               BASE_REF="${ORCH_FOLLOWUP_INTEGRATION_BRANCH}"
               echo "  Follow-up PR for issue #${rb_issue} is orchestrator-managed (tracking #${ORCH_FOLLOWUP_TRACKING_NUM}). Retargeting base to ${BASE_REF}."
@@ -20395,14 +22572,14 @@ ${FOLLOWUP_BLOCK_REASON}"
               echo "::warning::Could not fetch or locate base ref '${BASE_REF}' for issue #${rb_issue}; creating follow-up branch from current HEAD as a best-effort fallback. The resulting PR diff may be larger than intended."
             fi
             if [ -n "${_rb_co_src}" ] \
-              && git checkout -B "${FOLLOWUP_BRANCH}" "${_rb_co_src}" 2>/dev/null; then
+              && git worktree add --force -B "${FOLLOWUP_BRANCH}" "${RB_COMBINED_WORKDIR}" "${_rb_co_src}" >/dev/null 2>&1; then
               RB_COMBINED_MODE="true"
               # Reflect the actual checkout source in the judge prompt
               # context. When the HEAD fallback fires, the follow-up branch
               # is not based on ${BASE_REF}; saying otherwise misleads the
               # judge into applying fixes on a wrong base.
               RB_COMBINED_BRANCH_INFO="You are on a follow-up branch (${FOLLOWUP_BRANCH}) based on ${_rb_co_src_desc}. The original PR #${RB_PR} was already merged. If you choose action=\"fix\", apply ONLY the fixes identified during review — do not re-apply the original PR's changes."
-            elif git checkout -B "${FOLLOWUP_BRANCH}" 2>/dev/null; then
+            elif git worktree add --force -B "${FOLLOWUP_BRANCH}" "${RB_COMBINED_WORKDIR}" >/dev/null 2>&1; then
               # Fallback: if checkout with the computed source ref fails,
               # keep the follow-up path alive by branching from local HEAD.
               # The follow-up PR still targets ${BASE_REF}; only local start
@@ -20416,34 +22593,127 @@ ${FOLLOWUP_BLOCK_REASON}"
             unset _rb_co_src _rb_co_src_desc
           fi
         elif [ -n "${HEAD_REF}" ] && [ "${HEAD_REF}" != "null" ]; then
-          if git fetch --no-tags origin "+refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF}" 2>/dev/null \
-            && git checkout -B "${HEAD_REF}" "refs/remotes/origin/${HEAD_REF}" 2>/dev/null; then
-            RB_COMBINED_MODE="true"
-            RB_COMBINED_BRANCH_INFO="You are now on the PR branch (${HEAD_REF})."
-          elif git checkout -B "${HEAD_REF}" 2>/dev/null; then
-            # Fallback: same rationale as the merged-PR fallback above —
-            # keep the combined-mode fix path alive when the initial fetch
-            # can't reach origin, at the cost of starting the branch from
-            # the local HEAD instead of origin/${HEAD_REF}.
-            echo "::warning::git fetch for ${HEAD_REF} failed; reusing local HEAD as PR branch base."
-            RB_COMBINED_MODE="true"
-            RB_COMBINED_BRANCH_INFO="You are now on the PR branch (${HEAD_REF}), derived from the local checkout (a fresh fetch of ${HEAD_REF} failed)."
+          # Never fall back to local HEAD: it is not the verified PR head and
+          # could create or overwrite an unrelated branch on push.
+          if ! git fetch --no-tags origin "+refs/heads/${HEAD_REF}:refs/remotes/origin/${HEAD_REF}" 2>/dev/null; then
+            RB_FIX_TARGET_REASON="fetch_failed"
           else
-            echo "::warning::Could not check out PR branch ${HEAD_REF} for issue #${rb_issue}; combined-mode fix not possible."
+            _rb_fetched_head_sha="$(git rev-parse --verify "refs/remotes/origin/${HEAD_REF}^{commit}" 2>/dev/null || true)"
+            if [ "${_rb_fetched_head_sha}" != "${RB_FIX_TARGET_HEAD_SHA}" ]; then
+              RB_FIX_TARGET_REASON="head_sha_mismatch"
+            elif git worktree add --force -B "${HEAD_REF}" "${RB_COMBINED_WORKDIR}" "${RB_FIX_TARGET_HEAD_SHA}" >/dev/null 2>&1; then
+              RB_COMBINED_MODE="true"
+              RB_COMBINED_BRANCH_INFO="You are now on the PR branch (${HEAD_REF})."
+            else
+              RB_FIX_TARGET_REASON="fetch_failed"
+            fi
+          fi
+          unset _rb_fetched_head_sha
+          if [ "${RB_COMBINED_MODE}" != "true" ]; then
+            echo "REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=${rb_issue} pr=${RB_PR} reason=${RB_FIX_TARGET_REASON}"
+            tg_notify "Review-blocked fix target rejected for issue #${rb_issue} (PR #${RB_PR}): ${RB_FIX_TARGET_REASON}." "WARNING"
+            echo "REVIEW_BLOCKED_HEAD_IDENTITY_REJECTED issue=${rb_issue} pr=${RB_PR} reason=${RB_FIX_TARGET_REASON}"
+            rm -f -- "${RB_JUDGE_SEMBLE_QUERY_FILE}"
+            continue
           fi
         else
           echo "::warning::Cannot determine PR head branch for #${RB_PR}; combined-mode fix not possible."
         fi
+        unset _rb_api_head_repo _rb_api_head_ref _rb_api_head_sha _rb_identity_reason _rb_safe_head_repo _rb_verified_head_sha _rb_log_api_head_sha _rb_log_fetched_head_sha
       fi
 
-      # Reset workspace state (tracked files only) after a combined judge
-      # call whose decision was NOT fix. Untracked files are left alone so
-      # pre-fetched scripts and artifacts are not swept.
+      # Drop the combined-mode worktree after a judge call whose decision
+      # was NOT fix (or once a fix was pushed). This checkout never left its
+      # branch, so its pre-fetched scripts and artifacts are untouched.
       rb_cleanup_combined_workspace() {
-        if [ "${RB_COMBINED_MODE}" = "true" ]; then
-          git reset --hard HEAD 2>/dev/null || true
-          git checkout "${DEFAULT_BRANCH:-main}" 2>/dev/null || git checkout - 2>/dev/null || true
+        _integration_judge_remove_worktree "${RB_COMBINED_WORKDIR}"
+      }
+
+      _rb_fix_scope_is_protected() {
+        # Refs #6390: shared protected-path and ALLOW_WORKFLOW_EDITS opt-out set.
+        # .github/actions/* contains workflow-executed composite actions.
+        # .claude/* contains Claude Code hooks and settings.
+        # workflow-templates/* syncs workflows and .claude hooks to consumers.
+        case "$1" in
+          .github/*|scripts/*|prompts/*|.claude/*|workflow-templates/*) return 0 ;;
+        esac
+        return 1
+      }
+
+      rb_fix_scope_check() {
+        local workdir="$1" pr="$2" judge_json="$3"
+        # Refs #6389: judge_json remains an argument for call compatibility,
+        # but model output must never authorize writes outside the PR file list.
+        local staged_file pr_response pr_listing pr_changed_file_count path
+        local -a staged_paths=() pr_paths=()
+        local -A pr_set=()
+        RB_FIX_SCOPE_REASON=accepted
+        RB_FIX_SCOPE_REJECTED_PATHS=()
+        RB_FIX_SCOPE_PR_COUNT=0
+        RB_FIX_SCOPE_CITED_COUNT=0 # Citations no longer count toward authorization.
+        RB_FIX_SCOPE_STAGED_COUNT=0
+
+        staged_file="$(mktemp "${RUNTIME_DIR}/rb_fix_scope_${pr}.XXXXXX")" || { RB_FIX_SCOPE_REASON=staging_unavailable; return 1; }
+        if ! git -C "${workdir}" diff --cached --name-only --no-renames -z > "${staged_file}"; then
+          rm -f -- "${staged_file}"
+          RB_FIX_SCOPE_REASON=staging_unavailable
+          return 1
         fi
+        mapfile -d '' -t staged_paths < "${staged_file}"
+        rm -f -- "${staged_file}"
+        RB_FIX_SCOPE_STAGED_COUNT=${#staged_paths[@]}
+        [ "${RB_FIX_SCOPE_STAGED_COUNT}" -gt 0 ] || { RB_FIX_SCOPE_REASON=no_staged_changes; return 1; }
+        for path in "${staged_paths[@]}"; do
+          case "${path}" in
+            .github/prompts/*|.github/scripts/*)
+              RB_FIX_SCOPE_REASON=forbidden_artifact
+              RB_FIX_SCOPE_REJECTED_PATHS+=("${path}")
+              ;;
+            *)
+              if [ "${ALLOW_WORKFLOW_EDITS:-true}" != "true" ] && _rb_fix_scope_is_protected "${path}"; then
+                [ "${RB_FIX_SCOPE_REASON}" = forbidden_artifact ] || RB_FIX_SCOPE_REASON=workflow_edits_disabled
+                RB_FIX_SCOPE_REJECTED_PATHS+=("${path}")
+              fi
+              ;;
+          esac
+        done
+        [ "${#RB_FIX_SCOPE_REJECTED_PATHS[@]}" -eq 0 ] || return 1
+        RB_FIX_SCOPE_REJECTED_PATHS=("${staged_paths[@]}")
+
+        # §14: _fetch_pr_json/PR_META have no file list; the superseded-check
+        # listing covers other PRs and is not cached on this fix path.
+        if ! pr_response="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${pr}/files?per_page=100" 2>/dev/null)" \
+          || ! pr_listing="$(printf '%s\n' "${pr_response}" | jq -sc '
+            if length > 0 and all(.[]; type == "array") and
+               all(.[][]; type == "object" and (.filename | type == "string" and length > 0))
+            then [ .[][] ] | {count: length, files: [.[] | .filename, (.previous_filename | select(type == "string" and length > 0))] | unique}
+            else error("incomplete PR file listing") end
+          ' 2>/dev/null)"; then
+          RB_FIX_SCOPE_REASON=pr_files_unavailable
+          return 1
+        fi
+        RB_FIX_SCOPE_PR_COUNT="$(printf '%s' "${pr_listing}" | jq -r '.count')"
+        pr_changed_file_count="$(printf '%s' "${_rb_recheck_json}" | jq -er '.changed_files | select(type == "number" and . >= 0 and . == floor) | tostring' 2>/dev/null)"
+        if [ "${RB_FIX_SCOPE_PR_COUNT}" -eq 0 ] || [ "${RB_FIX_SCOPE_PR_COUNT}" -ge 3000 ] \
+          || [ -z "${pr_changed_file_count}" ] || [ "${RB_FIX_SCOPE_PR_COUNT}" -ne "${pr_changed_file_count}" ]; then
+          RB_FIX_SCOPE_REASON=pr_files_unavailable
+          return 1
+        fi
+        RB_FIX_SCOPE_REJECTED_PATHS=()
+        mapfile -d '' -t pr_paths < <(printf '%s' "${pr_listing}" | jq -j '.files[] | ., "\u0000"')
+        for path in "${pr_paths[@]}"; do pr_set["${path}"]=1; done
+
+        for path in "${staged_paths[@]}"; do
+          if [ -z "${pr_set["${path}"]:-}" ]; then
+            if _rb_fix_scope_is_protected "${path}"; then
+              RB_FIX_SCOPE_REASON=protected_not_in_pr
+            else
+              [ "${RB_FIX_SCOPE_REASON}" = protected_not_in_pr ] || RB_FIX_SCOPE_REASON=out_of_scope
+            fi
+            RB_FIX_SCOPE_REJECTED_PATHS+=("${path}")
+          fi
+        done
+        [ "${#RB_FIX_SCOPE_REJECTED_PATHS[@]}" -eq 0 ]
       }
 
       # Build the judge prompt for review-blocked evaluation
@@ -20520,6 +22790,10 @@ ${FOLLOWUP_BLOCK_REASON}"
 
       # Run the judge
       RB_JUDGE_SUCCESS=false
+      # Reuse the selected PR's already fetched labels. A missing snapshot
+      # cannot turn an explicit ai:codex override into a Claude run.
+      RB_JUDGE_LABELS="$(printf '%s' "${_rb_pr_json}" | jq -ce 'if (.labels | type) == "array" then [.labels[] | .name | select(type == "string")] else error("labels unavailable") end' 2>/dev/null || printf '%s' '["ai:codex"]')"
+      RB_JUDGE_ISOLATION_FAILED=false
       sanitize_codex_prompt_file "${RB_JUDGE_PROMPT_FILE}"
       RB_JUDGE_PROMPT_BYTES="$(wc -c < "${RB_JUDGE_PROMPT_FILE}" 2>/dev/null | tr -cd '0-9' || true)"
       [[ "${RB_JUDGE_PROMPT_BYTES}" =~ ^[0-9]+$ ]] || RB_JUDGE_PROMPT_BYTES=0
@@ -20529,9 +22803,26 @@ ${FOLLOWUP_BLOCK_REASON}"
       if [ "${RB_JUDGE_PROMPT_CHARS}" -gt 1048576 ]; then
         echo "::error::Review-blocked judge prompt for issue #${rb_issue} exceeds codex's 1048576-character stdin cap; skipping 2 attempts that would fail before the model runs."
       else
+        RB_JUDGE_ENGINE_LABELS_JSON="$(poller_judge_engine_labels_json managed "$(printf '%s' "${_current_wave_details_json:-}" | jq -ec --arg n "${rb_issue}" 'select(.[$n].labels_complete == true) | .[$n].labels' 2>/dev/null || true)")" || RB_JUDGE_ENGINE_LABELS_JSON=unavailable
         for attempt in 1 2; do
           echo "  Review-blocked judge attempt ${attempt}/2..."
-          cat "${RB_JUDGE_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${RB_JUDGE_OUTPUT_FILE}" 2>/dev/null || true
+          RB_JUDGE_ENGINE_RC=0
+          if [ "${RB_COMBINED_MODE}" = "true" ]; then
+            pushd "${RB_COMBINED_WORKDIR}" >/dev/null || { echo '::error::Review-blocked judge worktree unavailable; stopping the poller.' >&2; exit 1; }
+            POLLER_JUDGE_ENGINE_LABELS="${RB_JUDGE_ENGINE_LABELS_JSON}" poller_claude_judge RB_JUDGE "${RB_JUDGE_PROMPT_FILE}" "${RB_JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/rb_judge_${rb_issue}.log" || RB_JUDGE_ENGINE_RC=$?
+            popd >/dev/null || exit 1
+          else
+            POLLER_JUDGE_ENGINE_LABELS="${RB_JUDGE_ENGINE_LABELS_JSON}" poller_claude_judge RB_JUDGE "${RB_JUDGE_PROMPT_FILE}" "${RB_JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/rb_judge_${rb_issue}.log" || RB_JUDGE_ENGINE_RC=$?
+          fi
+          if [ "${RB_JUDGE_ENGINE_RC}" -eq 77 ] || [ "${RB_JUDGE_ENGINE_RC}" -eq 75 ]; then
+            RB_JUDGE_ISOLATION_FAILED=true
+            break
+          fi
+          # A rejected write transfer may have touched the combined-mode
+          # checkout before failing. Do not retry it in the same tick.
+          if [ "${RB_JUDGE_ENGINE_RC}" -eq 76 ]; then
+            break
+          fi
           if grep -q '[^[:space:]]' "${RB_JUDGE_OUTPUT_FILE}"; then
             RB_JUDGE_SUCCESS=true
             break
@@ -20543,8 +22834,51 @@ ${FOLLOWUP_BLOCK_REASON}"
       fi
 
       if [ "${RB_JUDGE_SUCCESS}" != "true" ]; then
+        RB_ISOLATION_REASON="$(cat "${RUNTIME_DIR}/rb_judge_isolation_reason" 2>/dev/null || true)"
+        case "${RB_ISOLATION_REASON}" in
+          support_missing|sandbox_prepare_failed|opencode_config_failed|sandbox_helper_outdated) ;;
+          *) RB_ISOLATION_REASON=unknown ;;
+        esac
+        if [ "${RB_JUDGE_ISOLATION_FAILED}" = true ]; then
+          RB_ISOLATION_PREV_COUNT="$(jq -r --arg key "${rb_issue}" --arg head "${RB_ISOLATION_HEAD}" 'if .review_blocked_isolation_state[$key].head_sha == $head then .review_blocked_isolation_state[$key].count // 0 else 0 end' "${STATE_FILE}")"
+          [[ "${RB_ISOLATION_PREV_COUNT}" =~ ^[0-9]+$ ]] || RB_ISOLATION_PREV_COUNT=0
+          RB_ISOLATION_COUNT=$((RB_ISOLATION_PREV_COUNT + 1))
+          jq --arg key "${rb_issue}" --arg head "${RB_ISOLATION_HEAD}" --arg reason "${RB_ISOLATION_REASON}" --argjson count "${RB_ISOLATION_COUNT}" \
+            '.review_blocked_isolation_state //= {} | .review_blocked_isolation_state[$key] = {head_sha: $head, count: $count, escalated: false, reason: $reason}' \
+            "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+          REVIEW_BLOCKED_STATE_CHANGED=true
+          echo "RB_JUDGE_ISOLATION issue=${rb_issue} pr=${RB_PR} head=${RB_ISOLATION_HEAD} outcome=deferred reason=${RB_ISOLATION_REASON} count=${RB_ISOLATION_COUNT} max=${RB_JUDGE_ISOLATION_MAX_FAILURES}"
+          if [ "${RB_ISOLATION_COUNT}" -ge "${RB_JUDGE_ISOLATION_MAX_FAILURES}" ]; then
+            # Do not claim ownership of a pre-existing human latch: a later
+            # head change must not remove a label placed for another reason.
+            RB_ISOLATION_LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}" --jq '[.labels[]?.name]' 2>/dev/null || true)"
+            RB_ISOLATION_OWNED_LABEL=false
+            if printf '%s' "${RB_ISOLATION_LABELS}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+              if ! printf '%s' "${RB_ISOLATION_LABELS}" | jq -e 'index("ai:needs-human") != null' >/dev/null; then
+                ensure_label_exists 'ai:needs-human'
+                if gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" --add-label 'ai:needs-human' >/dev/null; then
+                  RB_ISOLATION_OWNED_LABEL=true
+                else
+                  RB_ISOLATION_LABELS=''
+                fi
+              fi
+            fi
+            if [ -n "${RB_ISOLATION_LABELS}" ]; then
+              RB_ISOLATION_COMMENT="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${rb_issue}/comments" -f body="$(printf '## Review-blocked judge isolation unavailable\n\nReason: %s. Failures: %s. Head: %s. The judge will not run on this head again; push a new commit or remove `ai:needs-human` to retry.\n\n<!-- ai:rb-judge-isolation-escalated head=%s reason=%s -->' "${RB_ISOLATION_REASON}" "${RB_ISOLATION_COUNT}" "${RB_ISOLATION_HEAD:0:7}" "${RB_ISOLATION_HEAD}" "${RB_ISOLATION_REASON}")" 2>/dev/null || true)"
+              RB_ISOLATION_COMMENT_ID="$(printf '%s' "${RB_ISOLATION_COMMENT}" | jq -r '.id // empty' 2>/dev/null || true)"
+              if [[ "${RB_ISOLATION_COMMENT_ID}" =~ ^[0-9]+$ ]] || [ "${RB_ISOLATION_OWNED_LABEL}" = true ] || printf '%s' "${RB_ISOLATION_LABELS}" | jq -e 'index("ai:needs-human") != null' >/dev/null 2>&1; then
+                jq --arg key "${rb_issue}" --arg id "${RB_ISOLATION_COMMENT_ID}" --argjson owned "${RB_ISOLATION_OWNED_LABEL}" '.review_blocked_isolation_state[$key] |= (.escalated = true | .comment_id = (if ($id | test("^[0-9]+$")) then ($id | tonumber) else null end) | .owned_label = $owned)' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+                RB_ISOLATION_ESCALATED=true
+                echo "RB_JUDGE_ISOLATION issue=${rb_issue} pr=${RB_PR} head=${RB_ISOLATION_HEAD} outcome=escalated reason=${RB_ISOLATION_REASON} count=${RB_ISOLATION_COUNT} max=${RB_JUDGE_ISOLATION_MAX_FAILURES}"
+                tg_notify "Review-blocked judge isolation unavailable for issue #${rb_issue} (PR #${RB_PR}); escalated after ${RB_ISOLATION_COUNT} failures. Reason: ${RB_ISOLATION_REASON}." "CRITICAL"
+              fi
+            fi
+          fi
+        fi
         echo "::warning::Review-blocked judge failed for issue #${rb_issue}"
-        tg_notify "Review-blocked judge failed for issue #${rb_issue} (PR #${RB_PR}). Will retry next poll cycle."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
+        if [ "${RB_ISOLATION_ESCALATED}" != true ]; then
+          tg_notify "Review-blocked judge failed for issue #${rb_issue} (PR #${RB_PR}). Will retry next poll cycle. Reason: ${RB_ISOLATION_REASON}."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
+        fi
         # Reset worktree + switch back to default branch if we entered
         # combined mode — otherwise the next rb_issue iteration could
         # fail to check out its target branch.
@@ -20552,6 +22886,10 @@ ${FOLLOWUP_BLOCK_REASON}"
         continue
       fi
 
+      if jq -e --arg key "${rb_issue}" '.review_blocked_isolation_state // {} | has($key)' "${STATE_FILE}" >/dev/null; then
+        jq --arg key "${rb_issue}" '.review_blocked_isolation_state |= del(.[$key])' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+        REVIEW_BLOCKED_STATE_CHANGED=true
+      fi
       # Parse judge output
       RB_JUDGE_JSON="$(python3 -c "
 import json, re, sys
@@ -20784,6 +23122,21 @@ sys.exit(1)
                   STATE_FOLLOWUP_INTEGRATION_BRANCH_EXISTS="true"
                 fi
               fi
+            else
+              # This is the same pulls/N read used by the merge-race check;
+              # an absent or moved head cannot authorize a write to HEAD_REF.
+              _rb_recheck_target_reason=""
+              if ! _pr_json_head_is_same_repo "${_rb_recheck_json}"; then
+                _rb_recheck_target_reason="head_repo_mismatch"
+              else
+                _rb_recheck_head_ref="$(printf '%s' "${_rb_recheck_json}" | jq -r '.head.ref // empty' 2>/dev/null || true)"
+                _rb_recheck_head_sha="$(printf '%s' "${_rb_recheck_json}" | jq -r '.head.sha // empty' 2>/dev/null || true)"
+                if [ "${_rb_recheck_head_ref}" != "${HEAD_REF}" ]; then
+                  _rb_recheck_target_reason="head_ref_changed"
+                elif [ "${_rb_recheck_head_sha}" != "${RB_FIX_TARGET_HEAD_SHA}" ]; then
+                  _rb_recheck_target_reason="head_moved"
+                fi
+              fi
             fi
             if [ "${RB_COMBINED_MODE}" = "true" ] \
                && [ "${RB_TARGET_MERGED}" != "true" ] \
@@ -20792,9 +23145,15 @@ sys.exit(1)
               rb_cleanup_combined_workspace
               REVIEW_BLOCKED_STATE_CHANGED=true
               RB_SKIP_RETRY_INCREMENT="true"
+            elif [ "${RB_COMBINED_MODE}" = "true" ] && [ "${RB_TARGET_MERGED}" != "true" ] \
+              && [ -n "${_rb_recheck_target_reason}" ]; then
+              echo "REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=${rb_issue} pr=${RB_PR} reason=${_rb_recheck_target_reason}"
+              rb_cleanup_combined_workspace
+              RB_SKIP_RETRY_INCREMENT="true"
+              REVIEW_BLOCKED_STATE_CHANGED=true
             elif [ "${RB_COMBINED_MODE}" != "true" ]; then
               echo "::warning::Combined-mode branch prep did not succeed for PR #${RB_PR}; cannot apply judge fixes this tick."
-              git checkout "${DEFAULT_BRANCH:-main}" 2>/dev/null || git checkout - 2>/dev/null || true
+              rb_cleanup_combined_workspace
               REVIEW_BLOCKED_STATE_CHANGED=true
             else
               # Remove workflow-generated/fetched artifacts so they are never
@@ -20811,7 +23170,7 @@ sys.exit(1)
               # fail-closed: skip cleanup (strictly safer — at worst a
               # commit carries a few extra untracked fetched files that
               # downstream path excludes already block from staging).
-              _orig_origin_url="$(git config --get remote.origin.url 2>/dev/null || true)"
+              _orig_origin_url="$(git -C "${RB_COMBINED_WORKDIR}" config --get remote.origin.url 2>/dev/null || true)"
               case "${_orig_origin_url}" in
                 ""|*/coding-workflows|*/coding-workflows.git|*/coding-workflows/|*/coding-workflows.git/)
                   : # self-repo or unknown — keep files; consumer-repo-only cleanup
@@ -20835,17 +23194,17 @@ sys.exit(1)
                     scripts/codex_model_catalog.json \
                     .github/prompts .github/scripts \
                     .github/ai/orchestrate_schema.v1.json; do
-                    if git ls-files --error-unmatch -- "${_orch_cleanup_artifact}" >/dev/null 2>&1; then
+                    if git -C "${RB_COMBINED_WORKDIR}" ls-files --error-unmatch -- "${_orch_cleanup_artifact}" >/dev/null 2>&1; then
                       echo "Preserving repo-tracked path during artifact cleanup: ${_orch_cleanup_artifact}"
                       case "${_orch_cleanup_artifact}" in
                         scripts/git_ref_health_check.sh|scripts/tg_helpers.sh|scripts/codex_model_catalog.json|.github/ai/orchestrate_schema.v1.json)
                           # Bootstrap overwrites these paths before the judge runs.
-                          git restore --source=HEAD --worktree -- "${_orch_cleanup_artifact}"
+                          git -C "${RB_COMBINED_WORKDIR}" restore --source=HEAD --worktree -- "${_orch_cleanup_artifact}"
                           ;;
                       esac
                       continue
                     fi
-                    rm -rf -- "${_orch_cleanup_artifact}"
+                    rm -rf -- "${RB_COMBINED_WORKDIR:?}/${_orch_cleanup_artifact}"
                   done
                   unset _orch_cleanup_artifact
                   ;;
@@ -20853,45 +23212,24 @@ sys.exit(1)
               unset _orig_origin_url
 
               # Check if there are changes to commit
-              if [ -n "$(git status --porcelain)" ]; then
-                git config user.name "codex-bot"
-                git config user.email "codex@users.noreply.github.com"
-                if [ "${ALLOW_WORKFLOW_EDITS:-true}" = "true" ]; then
-                  # Use a single add call so empty/minimal repos do not fail on
-                  # exclude-only pathspecs.
-                  # NOTE: do not list .gitignored directories (node_modules)
-                  # as `:!` exclude pathspecs here. `git add -A -- . ':!<dir>'`
-                  # treats the exclude path as an explicit name and fails with
-                  # "The following paths are ignored by one of your .gitignore
-                  # files" + exit 1 when that dir exists on disk. .gitignore
-                  # already excludes them; the pathspec exclude is redundant
-                  # and turns into a hard failure once a step creates
-                  # node_modules/.
-                  git add -A -- . ':!.github/prompts' ':!.github/scripts'
-                else
-                  # Keep workflow-edit guard exclusions while avoiding brittle
-                  # tracked/untracked split staging pathspec failures. Same
-                  # gitignore-dir exclusion caveat as above applies.
-                  git add -A -- . ':!scripts' ':!prompts' ':!.github/ai' ':!.github/workflows' ':!.github/prompts' ':!.github/scripts'
-                fi
+              if [ -n "$(git -C "${RB_COMBINED_WORKDIR}" status --porcelain)" ]; then
+                git -C "${RB_COMBINED_WORKDIR}" config user.name "codex-bot"
+                git -C "${RB_COMBINED_WORKDIR}" config user.email "codex@users.noreply.github.com"
+                # Stage before enforcing ALLOW_WORKFLOW_EDITS so excluded edits
+                # cannot hide behind an otherwise allowed fix. Do not list
+                # .gitignored directories (node_modules) as exclude pathspecs:
+                # git add treats them as explicit names and fails if present.
+                git -C "${RB_COMBINED_WORKDIR}" add -A -- . ':!.github/prompts' ':!.github/scripts'
                 echo "Staged files before commit:"
-                git diff --cached --name-only | sed 's/^/ - /' || true
-                if [ "${ALLOW_WORKFLOW_EDITS:-true}" != "true" ] && git diff --cached --name-only | grep -E '^(scripts/|prompts/|\.github/ai/|\.github/workflows/)'; then
-                  echo "Error: scripts/, prompts/, .github/ai/, or .github/workflows is staged while ALLOW_WORKFLOW_EDITS=false"
-                  exit 1
-                fi
-                if git diff --cached --name-only | grep -E '^\.github/(prompts|scripts)/'; then
-                  echo "Error: .github/prompts or .github/scripts is staged"
-                  exit 1
-                fi
-                git commit -m "[orchestrator-fix] address review-blocked issues for #${rb_issue}
+                git -C "${RB_COMBINED_WORKDIR}" diff --cached --name-only | sed 's/^/ - /' || true
+                if rb_fix_scope_check "${RB_COMBINED_WORKDIR}" "${RB_PR}" "${RB_JUDGE_JSON}"; then
+                  echo "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=${rb_issue} pr=${RB_PR} staged=${RB_FIX_SCOPE_STAGED_COUNT} pr_files=${RB_FIX_SCOPE_PR_COUNT} judge_cited=${RB_FIX_SCOPE_CITED_COUNT}"
+                git -C "${RB_COMBINED_WORKDIR}" commit -m "[orchestrator-fix] address review-blocked issues for #${rb_issue}
 
 Orchestrator judge applied fixes to unblock the review pipeline.
 Retry $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}.
 
 ${RB_FIX_DESC}" || true
-
-                git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}"
 
                 if [ "${RB_TARGET_MERGED}" = "true" ]; then
                   # Push follow-up branch and create a new PR
@@ -20901,7 +23239,9 @@ ${RB_FIX_DESC}" || true
                     tg_notify "Refused merged follow-up PR creation for review-blocked issue #${rb_issue} (PR #${RB_PR}): integration branch '${RB_INTEGRATION_BRANCH}' is active but computed base was '${BASE_REF}'."$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
                     RB_FOLLOWUP_REFUSED="true"
                     REVIEW_BLOCKED_STATE_CHANGED=true
-                  elif git push origin "HEAD:${FOLLOWUP_BRANCH}" 2>/dev/null; then
+                  elif git -C "${RB_COMBINED_WORKDIR}" -c credential.helper= \
+                      -c 'credential.helper=!f() { printf "username=x-access-token\npassword=%s\n" "$GH_TOKEN"; }; f' \
+                      push "https://github.com/${GITHUB_REPOSITORY}" "HEAD:${FOLLOWUP_BRANCH}" 2>/dev/null; then
                     echo "  Pushed follow-up branch ${FOLLOWUP_BRANCH}."
 
                     if [ "${STATE_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${STATE_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
@@ -20932,7 +23272,8 @@ ${FOLLOWUP_GUARD_REASON}"
                       RB_FOLLOWUP_REFUSED="true"
                       REVIEW_BLOCKED_STATE_CHANGED=true
                     else
-                      FOLLOWUP_PR_URL="$(gh_retry gh pr create \
+                      mapfile -t _engine_label_args < <(engine_label_create_args)
+                      FOLLOWUP_PR_URL="$(gh_retry gh pr create "${_engine_label_args[@]}" \
                       --repo "${GITHUB_REPOSITORY}" \
                       --base "${BASE_REF}" \
                       --head "${FOLLOWUP_BRANCH}" \
@@ -20962,7 +23303,9 @@ ${RB_FIX_DESC}
                   fi
                 else
                   # Push to existing open PR branch
-                  if git push origin "HEAD:${HEAD_REF}" 2>/dev/null; then
+                  if git -C "${RB_COMBINED_WORKDIR}" -c credential.helper= \
+                      -c 'credential.helper=!f() { printf "username=x-access-token\npassword=%s\n" "$GH_TOKEN"; }; f' \
+                      push "https://github.com/${GITHUB_REPOSITORY}" "HEAD:${HEAD_REF}" 2>/dev/null; then
                     echo "  Pushed [orchestrator-fix] commit to ${HEAD_REF}."
                     # Remove review-blocked label — the push triggers synchronize
                     # which re-runs review_autofix with a reset autofix counter.
@@ -20972,6 +23315,25 @@ ${RB_FIX_DESC}
                   else
                     echo "::warning::Failed to push orchestrator fix for PR #${RB_PR}."
                   fi
+                fi
+                else
+                  # Filenames are untrusted: render only printable ASCII after
+                  # a fixed prefix so neither logs nor alerts can be injected.
+                  _rb_scope_log_paths=()
+                  _rb_scope_alert_paths=()
+                  for _rb_scope_path in "${RB_FIX_SCOPE_REJECTED_PATHS[@]:0:20}"; do
+                    _rb_scope_safe_path="$(printf '%s' "${_rb_scope_path}" | LC_ALL=C tr -c '\040-\176' '?')"
+                    _rb_scope_log_paths+=("${_rb_scope_safe_path}")
+                    if [ "${#_rb_scope_alert_paths[@]}" -lt 10 ]; then
+                      _rb_scope_alert_paths+=("${_rb_scope_safe_path}")
+                    fi
+                  done
+                  _rb_scope_log_join="$(IFS=,; echo "${_rb_scope_log_paths[*]}")"
+                  _rb_scope_alert_join="$(IFS=,; echo "${_rb_scope_alert_paths[*]}")"
+                  echo "::warning::Review-blocked fix scope rejected for issue #${rb_issue}: ${RB_FIX_SCOPE_REASON}"
+                  echo "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=${rb_issue} pr=${RB_PR} reason=${RB_FIX_SCOPE_REASON} rejected=${#RB_FIX_SCOPE_REJECTED_PATHS[@]} paths=${_rb_scope_log_join}"
+                  tg_notify "Review-blocked fix scope rejected for issue #${rb_issue} (PR #${RB_PR}): ${RB_FIX_SCOPE_REASON}; paths: ${_rb_scope_alert_join}"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "WARNING"
+                  REVIEW_BLOCKED_STATE_CHANGED=true
                 fi
               else
                 echo "  Judge produced no file changes."
@@ -21005,9 +23367,8 @@ ${RB_FIX_DESC}
                 fi
               fi
 
-              # Switch back to default branch for remaining processing,
-              # discarding any unstaged tracked edits that were not
-              # included in the fix commit (e.g., excluded paths).
+              # Drop the worktree, discarding any edits that were not included
+              # in the fix commit (e.g., excluded paths).
               rb_cleanup_combined_workspace
             fi
 
@@ -21184,7 +23545,8 @@ ${RB_FIX_DESC}
               # merged but the deferred gap has no durable tracking.
               FOLLOWUP_URL=""
               FOLLOWUP_NUM=""
-              if FOLLOWUP_URL="$(gh_retry gh issue create \
+              mapfile -t _engine_label_args < <(engine_label_create_args)
+              if FOLLOWUP_URL="$(gh_retry gh issue create "${_engine_label_args[@]}" \
                   --repo "${GITHUB_REPOSITORY}" \
                   --title "${FOLLOWUP_TITLE}" \
                   --body "${FULL_FOLLOWUP_BODY}" \
@@ -21252,7 +23614,8 @@ ${RB_FIX_DESC}
 
             ensure_label_exists "ai:clarification"
             ensure_label_exists "ai:orchestrator-managed"
-            NEW_URL="$(gh_retry gh issue create \
+            mapfile -t _engine_label_args < <(engine_label_create_args)
+            NEW_URL="$(gh_retry gh issue create "${_engine_label_args[@]}" \
               --repo "${GITHUB_REPOSITORY}" \
               --title "${NEW_ISSUE_TITLE}" \
               --body "${FULL_NEW_BODY}" \
@@ -21670,7 +24033,8 @@ REISSUE_EOF
 
     ensure_label_exists "ai:clarification"
     ensure_label_exists "ai:orchestrator-managed"
-    NEW_ISSUE_URL="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
+    mapfile -t _engine_label_args < <(engine_label_create_args)
+    NEW_ISSUE_URL="$(gh_retry gh issue create "${_engine_label_args[@]}" --repo "${GITHUB_REPOSITORY}" \
       --title "${IF_TITLE}" \
       --body "${NEW_BODY}" \
       --label "ai:clarification" \
@@ -22404,6 +24768,8 @@ ${PR_DIFF}
   # Run judge via Codex
   JUDGE_SUCCESS=false
   JUDGE_JSON=""
+  wave_isolation_skipped=false
+  wave_judge_rc=0
   judge_silent_rounds=0
   max_attempts=2
   if nag_reminder_enabled; then
@@ -22440,8 +24806,20 @@ ${PR_DIFF}
     # The pipeline may return 141 (SIGPIPE) when the prompt is larger
     # than the OS pipe buffer and codex closes stdin before cat finishes.
     # This is harmless — check the output file regardless of exit code.
-    cat "${judge_effective_prompt_file}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access > "${JUDGE_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/judge_log.txt" >&2) || true
+    wave_judge_rc=0
+    if ! _judge_isolation_should_run WAVE_JUDGE "${STATE_FILE}" "${TRACKING_NUM}" "${TRACKING_LABELS:-}"; then
+      wave_judge_rc=77
+      wave_isolation_skipped=true
+    else
+      poller_claude_judge WAVE_JUDGE "${judge_effective_prompt_file}" "${JUDGE_OUTPUT_FILE}" "${RUNTIME_DIR}/judge_log.txt" || wave_judge_rc=$?
+    fi
     rm -f "${judge_attempt_prompt_file}"
+    if [ "${wave_judge_rc}" -eq 77 ]; then
+      if [ "${wave_isolation_skipped:-false}" != true ]; then
+        _record_judge_isolation_failure WAVE_JUDGE "${STATE_FILE}" "${TRACKING_NUM}" "${TRACKING_LABELS:-}" || true
+      fi
+      break
+    fi
     judge_json_candidate="$(extract_judge_json_with_status "${JUDGE_OUTPUT_FILE}")"
     if [ -n "${judge_json_candidate}" ]; then
       JUDGE_JSON="${judge_json_candidate}"
@@ -22455,11 +24833,18 @@ ${PR_DIFF}
     fi
   done
 
+	  if [ "${wave_judge_rc:-0}" -eq 77 ]; then
+	    echo "::warning::Wave judge isolation unavailable for #${TRACKING_NUM}; deferring without changing wave state." >&2
+	    [ "${wave_isolation_skipped:-false}" = true ] || tg_notify "Wave judge isolation unavailable for #${TRACKING_NUM}; retrying next poll." "WARNING"
+	    continue
+	  fi
 	  if [ "${JUDGE_SUCCESS}" != "true" ]; then
 	    echo "::error::Judge failed for tracking issue #${TRACKING_NUM}"
 	    tg_notify "Orchestrator Judge failed for #${TRACKING_NUM}. Manual review needed." "CRITICAL"
+	    unblock_handover_judge_output "llm_failed"
 	    continue
 	  fi
+	  _clear_judge_isolation_state WAVE_JUDGE "${STATE_FILE}" verdict "${TRACKING_NUM}" || true
 	  archive_transcript "${GITHUB_RUN_ID:-local-run}" "judge" "${JUDGE_OUTPUT_FILE}"
 
 	  # ---------------------------------------------------------------
@@ -22468,7 +24853,11 @@ ${PR_DIFF}
   if [ -z "${JUDGE_JSON}" ]; then
     echo "::error::Could not parse judge output for #${TRACKING_NUM}"
     tg_notify "Orchestrator Judge output unparseable for #${TRACKING_NUM}. Manual review needed." "CRITICAL"
+    unblock_handover_judge_output "unparseable"
     continue
+  fi
+  if [ "$(jq -r '.judge_output_failures // 0' "${STATE_FILE}" 2>/dev/null || echo 0)" != "0" ]; then
+    jq '.judge_output_failures = 0' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
   fi
 
   emit_judge_lessons_learned_records "orchestrate_judge" "${TRACKING_NUM}" "" "${JUDGE_JSON}"
@@ -22586,6 +24975,7 @@ PRs to revert: ${REVERT_COUNT}"
         jq '.status = "complete" | .judge_cycle += 1' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
         post_state_comment || true
         emit_orchestrator_completion_lessons
+        run_project_activation_verify
         handle_comprehensive_release_callback_if_needed "complete" "${TRACKING_LABELS}" "${COMMENTS:-[]}"
 
         set_tracking_phase_label "ai:merged"
@@ -22762,7 +25152,8 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
                 git checkout -b "${REVERT_BRANCH}" "${DEFAULT_BRANCH}"
                 if git revert --no-edit "${MERGE_SHA}"; then
                   git push -u origin "${REVERT_BRANCH}"
-                  gh_retry gh pr create \
+                  mapfile -t _engine_label_args < <(engine_label_create_args)
+                  gh_retry gh pr create "${_engine_label_args[@]}" \
                     --repo "${GITHUB_REPOSITORY}" \
                     --title "Revert PR #${PR_TO_REVERT} (orchestrator auto-recovery)" \
                     --body "Automated revert of PR #${PR_TO_REVERT} by orchestrator judge.
@@ -22849,7 +25240,8 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
 
           ensure_label_exists "ai:clarification"
           ensure_label_exists "ai:orchestrator-managed"
-          NEW_URL="$(gh_retry gh issue create \
+          mapfile -t _engine_label_args < <(engine_label_create_args)
+          NEW_URL="$(gh_retry gh issue create "${_engine_label_args[@]}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${NEW_TITLE}" \
             --body "${FULL_NEW_BODY}" \
@@ -23088,7 +25480,8 @@ ${_gate_violations:-(no violation lines parsed — see workflow run log for the 
 
           ensure_label_exists "ai:clarification"
           ensure_label_exists "ai:orchestrator-managed"
-          NEW_URL="$(gh_retry gh issue create \
+          mapfile -t _engine_label_args < <(engine_label_create_args)
+          NEW_URL="$(gh_retry gh issue create "${_engine_label_args[@]}" \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${DEF_TITLE}" \
             --body "${FULL_BODY}" \
@@ -23161,6 +25554,9 @@ run_standalone_stall_recovery
 
 release_staged_support_needs_human_latches
 
+# Never ends the tick: a failure inside is logged and the sweeps below run.
+run_unblock_scan || echo "UNBLOCK_SCAN outcome=skip reason=error rc=$?"
+
 close_merged_issues_sweep
 
 # ---------------------------------------------------------------
@@ -23181,14 +25577,13 @@ echo "========================================"
 echo "Standalone PR conflict sweep"
 echo "========================================"
 
-# Collect open PR candidates with their refs.
-# gh pr list does not expose mergeable, so we fetch the full list and
-# then query each candidate via the REST API.
+# Collect the complete open-PR snapshot; drafts are excluded before any
+# per-PR API work. gh pr list's default 30 / old 100 limit missed live PRs.
 STANDALONE_PRS="$(gh_retry gh pr list \
 	--repo "${GITHUB_REPOSITORY}" \
 	--state open \
-	--json number,headRefName,baseRefName \
-	--limit 100 2>/dev/null || echo "[]")"
+	--json number,headRefName,headRefOid,baseRefName,isDraft \
+	--limit 3000 2>/dev/null || echo "[]")"
 
 STANDALONE_COUNT="$(echo "${STANDALONE_PRS}" | jq 'length')"
 echo "Found ${STANDALONE_COUNT} open PR(s) to scan."
@@ -23196,10 +25591,63 @@ echo "Found ${STANDALONE_COUNT} open PR(s) to scan."
 CONFLICT_SWEEP_FIXED=0
 DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
 
+# Input: the open-PR snapshot, in bounded 30-PR batches. Output: numbers
+# mapped to a verified CLEAN state at the snapshot head. One GraphQL request
+# per batch; errors, missing aliases, unknown state or changed head fail open
+# to the legacy live REST read. DIRTY candidates always get a fresh REST
+# payload before update-branch/dispatch (including expected-head guard).
+declare -A _STANDALONE_CLEAN_PRS=()
+declare -A _STANDALONE_NOOP_CLEAR_PRS=()
+if [[ "${GITHUB_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+	_standalone_owner="${GITHUB_REPOSITORY%%/*}"
+	_standalone_name="${GITHUB_REPOSITORY#*/}"
+	for (( _standalone_offset=0; _standalone_offset<STANDALONE_COUNT; _standalone_offset+=30 )); do
+		_standalone_aliases=""
+		for (( _standalone_i=_standalone_offset; _standalone_i<_standalone_offset+30 && _standalone_i<STANDALONE_COUNT; _standalone_i++ )); do
+			_standalone_ref="$(printf '%s' "${STANDALONE_PRS}" | jq -r ".[${_standalone_i}].headRefName // \"\"")"
+			_standalone_base="$(printf '%s' "${STANDALONE_PRS}" | jq -r ".[${_standalone_i}].baseRefName // \"\"")"
+			_standalone_draft="$(printf '%s' "${STANDALONE_PRS}" | jq -r ".[${_standalone_i}].isDraft // false")"
+			if [[ "${_standalone_ref}" == orchestrator/project-* || "${_standalone_base}" == orchestrator/project-* ]] ||
+			   { [[ "${_standalone_ref}" == claude/* ]] && [ "${_standalone_draft}" = "true" ]; }; then
+				continue
+			fi
+			_standalone_num="$(printf '%s' "${STANDALONE_PRS}" | jq -r ".[${_standalone_i}].number // empty")"
+			[[ "${_standalone_num}" =~ ^[1-9][0-9]*$ ]] || continue
+			_standalone_aliases+="p${_standalone_num}: pullRequest(number: ${_standalone_num}) { number state headRefName headRefOid isDraft mergeStateStatus comments(last: 100) { pageInfo { hasPreviousPage } nodes { body } } } "
+		done
+		[ -n "${_standalone_aliases}" ] || continue
+		_standalone_query="query { repository(owner: \"${_standalone_owner}\", name: \"${_standalone_name}\") { ${_standalone_aliases} } }"
+		# Existing PR-list and per-PR REST calls lack a merge-state batch;
+		# this is one GraphQL request for up to 30 candidates, not per PR.
+		if _standalone_response="$(gh_retry gh api graphql -f query="${_standalone_query}" 2>/dev/null)" &&
+			printf '%s' "${_standalone_response}" | jq -e '((.errors? // []) | length) == 0 and (.data.repository | type) == "object"' >/dev/null 2>&1; then
+			while IFS= read -r _standalone_num; do
+				[[ "${_standalone_num}" =~ ^[1-9][0-9]*$ ]] || continue
+				_standalone_head="$(printf '%s' "${STANDALONE_PRS}" | jq -r --argjson num "${_standalone_num}" '.[] | select(.number == $num) | .headRefName // ""' | head -n 1)"
+				_standalone_list_oid="$(printf '%s' "${STANDALONE_PRS}" | jq -r --argjson num "${_standalone_num}" '.[] | select(.number == $num) | .headRefOid // ""' | head -n 1)"
+				if printf '%s' "${_standalone_response}" | jq -e --arg key "p${_standalone_num}" --arg ref "${_standalone_head}" --arg oid "${_standalone_list_oid}" --argjson num "${_standalone_num}" \
+					'.data.repository[$key] | .number == $num and .headRefName == $ref and .headRefOid == $oid and ($oid | test("^[0-9a-f]{40}$")) and .state == "OPEN" and .isDraft == false and .mergeStateStatus == "CLEAN"' >/dev/null 2>&1; then
+					_STANDALONE_CLEAN_PRS["${_standalone_num}"]="${_standalone_list_oid}"
+				fi
+				# Only a complete comment connection can prove no workflow warning
+				# exists. Otherwise the original REST history check still runs.
+				if printf '%s' "${_standalone_response}" | jq -e --arg key "p${_standalone_num}" --arg ref "${_standalone_head}" --arg oid "${_standalone_list_oid}" --argjson num "${_standalone_num}" \
+					'.data.repository[$key] | .number == $num and .headRefName == $ref and .headRefOid == $oid and ($oid | test("^[0-9a-f]{40}$")) and .state == "OPEN" and
+					 (.comments.pageInfo.hasPreviousPage == false) and (.comments.nodes | type) == "array" and
+					 (any(.comments.nodes[]; (.body // "") | contains("Editor no-op suspicious")) | not)' >/dev/null 2>&1; then
+					_STANDALONE_NOOP_CLEAR_PRS["${_standalone_num}"]="${_standalone_list_oid}"
+				fi
+			done < <(printf '%s' "${_standalone_response}" | jq -r '.data.repository | keys[] | select(test("^p[1-9][0-9]*$")) | ltrimstr("p")' 2>/dev/null)
+		fi
+	done
+fi
+
 for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	S_PR="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].number")"
 	S_HEAD="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].headRefName")"
+	S_HEAD_OID="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].headRefOid // \"\"")"
 	S_BASE="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].baseRefName")"
+	S_DRAFT="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].isDraft // false")"
 	if [ -z "${S_PR}" ] || [ "${S_PR}" = "null" ]; then
 		continue
 	fi
@@ -23218,6 +25666,13 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	fi
 
 	if [[ "${S_BASE}" == orchestrator/project-* ]]; then
+		continue
+	fi
+	if [[ "${S_HEAD}" == claude/* ]] && [ "${S_DRAFT}" = "true" ]; then
+		echo "  PR #${S_PR} is a draft claude/* PR; skipping standalone conflict recovery."
+		continue
+	fi
+	if [[ "${S_HEAD_OID}" =~ ^[0-9a-f]{40}$ ]] && [ "${_STANDALONE_CLEAN_PRS["${S_PR}"]:-}" = "${S_HEAD_OID}" ]; then
 		continue
 	fi
 
@@ -23400,12 +25855,22 @@ fi
 for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	N_PR="$(echo "${STANDALONE_PRS}" | jq -r ".[${nidx}].number")"
 	N_HEAD="$(echo "${STANDALONE_PRS}" | jq -r ".[${nidx}].headRefName")"
+	N_HEAD_OID="$(echo "${STANDALONE_PRS}" | jq -r ".[${nidx}].headRefOid // \"\"")"
 	N_BASE="$(echo "${STANDALONE_PRS}" | jq -r ".[${nidx}].baseRefName")"
+	N_DRAFT="$(echo "${STANDALONE_PRS}" | jq -r ".[${nidx}].isDraft // false")"
 
 	if [ -z "${N_PR}" ] || [ "${N_PR}" = "null" ]; then
 		continue
 	fi
 	if [ -z "${N_HEAD}" ] || [ "${N_HEAD}" = "null" ]; then
+		continue
+	fi
+	# A draft claude/* integration PR is owned by its project chain; do
+	# not scan its comments or attempt a noop recovery on every tick.
+	if [[ "${N_HEAD}" == claude/* ]] && [ "${N_DRAFT}" = "true" ]; then
+		continue
+	fi
+	if [[ "${N_HEAD_OID}" =~ ^[0-9a-f]{40}$ ]] && [ "${_STANDALONE_NOOP_CLEAR_PRS["${N_PR}"]:-}" = "${N_HEAD_OID}" ]; then
 		continue
 	fi
 	# Skip integration / orchestrator-managed branches — those have

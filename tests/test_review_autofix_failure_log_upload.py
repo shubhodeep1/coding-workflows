@@ -200,6 +200,17 @@ def test_review_autofix_failure_log_artifact_upload_contract() -> None:
 			f"distinguish 'editor saw bad input' from 'codex empty turn'"
 		)
 
+	# Consensus-summariser logs (summarize_reviewer_consensus.sh writes
+	# ${RUNTIME_DIR}/summariser_<prefix>.log with every attempt's stderr
+	# tail; review_run_reviewers.sh uses the pass1 and review prefixes).
+	# Issue #4653: all ten pass-1 attempts exited 0 with empty stdout and
+	# the artifact carried no trace of why.
+	for f in ("summariser_pass1.log", "summariser_review.log"):
+		assert f in stage_block, (
+			f"Staging step must copy {f} so a summariser failure is "
+			f"diagnosable from the artifact"
+		)
+
 	# Reviewer-fanout / two-pass / consensus artefacts. The codex
 	# stderr for each reviewer is preserved as ${PREVIOUS_REVIEWS_DIR}/
 	# review_<model>.log by review_run_reviewers.sh:736 BEFORE the

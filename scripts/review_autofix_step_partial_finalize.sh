@@ -276,6 +276,7 @@ validation_tail_can_complete=${validation_tail_can_complete}
 edits_withheld_for_safety=${edits_withheld_for_safety}
 withheld_reason=${withheld_reason}
 head_sha=${current_head_sha}
+base_ref=${RETARGETED_BASE_REF:-}
 resume_round=${resume_round}
 resume_round_limit=${resume_round_limit}
 resume_state=${RESUME_STATE}
@@ -389,6 +390,7 @@ payload = {
     "reason": os.environ.get("AUTOFIX_PARTIAL_FINALIZE_REASON", "").strip() or "unknown",
     "phase": os.environ.get("AUTOFIX_PARTIAL_FINALIZE_PHASE", "").strip() or "unknown",
     "head_sha": os.environ.get("CURRENT_HEAD_SHA", "").strip(),
+    "base_ref": os.environ.get("RETARGETED_BASE_REF", "").strip(),
     "completed_scope": parse_csv("COMPLETED_SCOPE_CSV"),
     "incomplete_scope": parse_csv("INCOMPLETE_SCOPE_CSV"),
     "validated_edits_committed": parse_bool("VALIDATED_EDITS_COMMITTED"),

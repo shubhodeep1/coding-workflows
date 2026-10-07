@@ -53,6 +53,10 @@
       "color": "e11d48",
       "description": "Clarify workflow failed before producing a valid response"
     },
+    "ai:reclarify-requeue": {
+      "color": "fbca04",
+      "description": "Trusted /reclarify failed before routing; poller will retry after PAT budget recovers"
+    },
     "ai:clarify-respond-failed": {
       "color": "e11d48",
       "description": "Orchestrator clarify-respond workflow failed before posting an answer"
@@ -209,33 +213,21 @@
       "color": "b60205",
       "description": "Workflow failure heal chain hit the lineage cap; needs human attention"
     },
-    "ai:claude": {
-      "color": "7057ff",
-      "description": "Standalone issue implemented by Claude Code (claimed by the Claude issue implementer)"
+    "ai:operator-step": {
+      "color": "fbca04",
+      "description": "Steps only a person can take; the pipeline continues and the gated work stays off until they are done"
+    },
+    "ai:unblock-closed": {
+      "color": "5c5c5c",
+      "description": "Closed by the unblock judge after every verdict was spent; a closed project is marked abandoned"
     },
     "ai:codex": {
       "color": "0e8a16",
       "description": "Per-issue switch: implement this standalone issue with the Codex pipeline instead of Claude"
     },
-    "ai:claude-handoff-failed": {
-      "color": "b60205",
-      "description": "Claude issue handoff failed; comment /reclarify to retry or add ai:codex to switch"
-    },
-    "ai:claude-blocked": {
-      "color": "b60205",
-      "description": "Claude issue session stopped on a hard blocker; see the latest issue comment"
-    },
-    "ai:claude-issue-queue": {
-      "color": "5319e7",
-      "description": "Queue item for the Claude issue pickup (coding-workflows only; opened by the intake, closed by the pickup)"
-    },
-    "ai:claude-issue-queue-stale": {
-      "color": "b60205",
-      "description": "Claude issue queue item nobody picked up in time; restart the pickup with /claude-issue-pickup start — restart"
-    },
-    "ai:permission-prompt": {
-      "color": "c5def5",
-      "description": "A Claude Code session stopped at a permission prompt or Auto-mode denial (coding-workflows only; filed by permission_prompts.py)"
+    "ai:engine-claude": {
+      "color": "d4c5f9",
+      "description": "Run every model role of this work on Claude (Opus 5.5, high effort); ai:codex wins when both are set"
     }
   },
   "phase_groups": [
@@ -279,5 +271,13 @@
         "ai:memory-maintenance-failed"
       ]
     }
+  ],
+  "retired_labels": [
+    "ai:claude",
+    "ai:claude-handoff-failed",
+    "ai:claude-blocked",
+    "ai:claude-issue-queue",
+    "ai:claude-issue-queue-stale",
+    "ai:permission-prompt"
   ]
 }

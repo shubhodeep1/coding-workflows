@@ -254,9 +254,32 @@ if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
 fi
 
+# The planner reads the issue body, clarification answers and the whole
+# comment thread, so it runs in the credential-free, network-isolated
+# container (read-only snapshot of the checkout's tracked files): it never
+# holds GH_TOKEN, the OpenRouter key or the checkout's .git. Model traffic,
+# including the provider-hosted web_search tool, goes through the host-side
+# broker. Isolation failures fail the attempt; Codex never runs on the host.
+CODEX_ISOLATED_EXEC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex_isolated_exec.sh"
+
+# Claude engine (replace-claude-sessions plan Phase 5a). PLAN_ENGINE comes
+# from the workflow's "Resolve AI engine" step; anything but `claude` runs the
+# codex path unchanged. When Claude cannot start (claude_run exits 75, logged
+# as AI_ENGINE_FALLBACK) the attempt and the rest run codex (plan D1).
+PLAN_ENGINE="${PLAN_ENGINE:-codex}"
+if [ "${PLAN_ENGINE}" = "claude" ]; then
+  if [ -f scripts/ai_engine.sh ]; then
+    # shellcheck source=ai_engine.sh
+    source scripts/ai_engine.sh
+  else
+    echo "AI_ENGINE_FALLBACK role=PLAN reason=support_missing" >&2
+    PLAN_ENGINE="codex"
+  fi
+fi
+
 max_attempts=3
 for attempt in $(seq 1 "${max_attempts}"); do
-  echo "Codex planning attempt ${attempt}/${max_attempts}..."
+  echo "Codex planning attempt ${attempt}/${max_attempts} (engine ${PLAN_ENGINE})..."
   # Capacity-fallback: on the final attempt switch the editor model
   # to MODEL_EDITOR_FALLBACK (a different OpenRouter/OpenAI per-model
   # TPM bucket) so a sustained saturation of the primary editor model
@@ -270,7 +293,19 @@ for attempt in $(seq 1 "${max_attempts}"); do
     attempt_model="${MODEL_EDITOR_FALLBACK}"
     echo "Final attempt: switching editor model to fallback ${attempt_model} (primary ${MODEL_EDITOR} capacity-limited)."
   fi
-  if cat "${CODEX_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${attempt_model}" --sandbox danger-full-access > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
+  plan_rc=0
+  if [ "${PLAN_ENGINE}" = "claude" ]; then
+    AI_ENGINE_MODEL_HINT="${MODEL_EDITOR}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT:-}" \
+      claude_run PLAN "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${PWD}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || plan_rc=$?
+    if [ "${plan_rc}" -eq 75 ]; then
+      PLAN_ENGINE="codex"
+      plan_rc=0
+    fi
+  fi
+  if [ "${PLAN_ENGINE}" != "claude" ]; then
+    bash "${CODEX_ISOLATED_EXEC}" run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${attempt_model}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || plan_rc=$?
+  fi
+  if [ "${plan_rc}" -eq 0 ]; then
     if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
       PLAN_LINES="$(wc -l < "${CODEX_OUTPUT_FILE}")"
       echo "Codex planning succeeded on attempt ${attempt} (${PLAN_LINES} lines of output)."
@@ -278,8 +313,7 @@ for attempt in $(seq 1 "${max_attempts}"); do
     fi
     echo "::warning::Codex returned empty output on attempt ${attempt}."
   else
-    rc=$?
-    echo "::warning::Codex exited with code $rc on attempt ${attempt}."
+    echo "::warning::Codex exited with code ${plan_rc} on attempt ${attempt}."
   fi
   if [ "${attempt}" -lt "${max_attempts}" ]; then
     sleep_secs=$((10 * (2 ** (attempt - 1))))
