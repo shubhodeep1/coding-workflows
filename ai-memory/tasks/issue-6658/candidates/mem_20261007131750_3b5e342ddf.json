@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should implementation handle the \"restore workflow-templates/CLAUDE.md\" gap? It is probably a false positive from a sandbox that skips symlinks, and the sandboxed editor cannot create a symlink.\nChoices:\nA) First check the host checkout's git index for a tracked symlink at `workflow-templates/CLAUDE.md`. If it is there and points to `../CLAUDE.md`, treat the gap as already satisfied and fix only the guard drift. If it is really missing, emit `BLOCKED:` naming the symlink as a human-only step, because the editor sandbox cannot transfer symlinks. (RECOMMENDED)\nB) Create `workflow-templates/CLAUDE.md` as a regular-file copy of the root `CLAUDE.md`. This passes the text-equality assert at `tests/test_pr_merge_status_guard.py:2171`, but it fails the `resolve()` identity test at `tests/test_claude_md_section_numbers.py:36`, and the two files can drift later.\n**Note:** B leaves one Claude asset test failing, so the release gate stays blocked.\nC) Extend `scripts/codex_isolated_workspace.py` transfer so it accepts this one symlink (`workflow-templates/CLAUDE.md` -> `../CLAUDE.md`). This widens scope into the isolation trust boundary; it would need its own contract tests and a security review.\nD) Fix only the guard drift and leave the CLAUDE.md gap untouched, with no check and no `BLOCKED:` note.",
+  "fingerprint": "5665660c4b86bda4f7bf9883b65bd018bf86f0004eba996d9568d5021b034b70",
+  "lineage": {
+    "issue_number": 6658,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37626089365",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37626089365",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261007131750_3b5e342ddf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6658,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37626089365"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6658 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-07T13:17:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
