@@ -2513,6 +2513,9 @@ jobs:
 
           if type tg_send_msg >/dev/null 2>&1; then
             MSG="⚠️ Review/autofix stopped: identical failure repeated ${FINGERPRINT_CAP_COUNT}x on #${PR_NUMBER}"
+            if [ "${FINGERPRINT_CAP_NON_RETRYABLE:-false}" = "true" ]; then
+              MSG="⚠️ Review/autofix stopped: non-retryable failure on #${PR_NUMBER}"
+            fi
             MSG+=$'\n'
             MSG+="Reason: ${FINGERPRINT_CAP_REASON} — labeled ai:review-blocked (${labeled_summary})"
             MSG+=$'\n'
