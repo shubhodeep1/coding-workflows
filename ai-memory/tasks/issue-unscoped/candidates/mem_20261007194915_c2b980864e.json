@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_conflict_prepare.sh:263-284, 333-367, 619-701 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The manifest-only exception commits and exits before integration fingerprint verification, allowing auto-merged files that violate captured sub-issue fingerprints to be silently reverted.\n  WHY: For final-wave projects, the poller\u2019s separate fingerprint gate does not cover this case; severity is the highest reported, with disagreement between BLOCKER and MAJOR.\n- tests/test_pr_merge_status_guard.py:1632-1635 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: `test_non_env_uncertain_configured_commit_keeps_warning_only_behavior` fails because the guard emits `permissionDecision: ask` for a configured commit when the test expects no permission decision.\n  WHY: The failing assertion causes the `tests-hooks-and-orchestrator` check to fail; severity is the highest reported, with disagreement between BLOCKER and MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"When the manifest is the only unmerged path there is no resolver run to widen, so orchestrator/project-* resolves it deterministically like any other branch\" \u2014 the PR's stated intent includes preserving the safety properties of the integration-sync exclusion (no auto-merged file fingerprint violations reach main).\n  expected_change_site: tests/test_conflict_manifest_union_contract.py \u2014 test_manifest_only_conflict_on_integration_sync_branch_is_resolved\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: test_manifest_only_conflict_on_integration_sync_branch_is_resolved only asserts stdout strings, the two-parent merge commit, and the manifest removed from ls-files; it does not set up fingerprints or auto-merged file content, so the regression in the first lens is not regression-tested.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_conflict_prepare.sh: lines 263-284 (in patch) | severity=MAJOR | confidence=4\n  PROBLEM: The new logic deterministically resolves manifest conflicts on integration-sync branches when it is the only unmerged path, but this skips critical fingerprint validation.\n  WHY: If other auto-merged files contain fingerprint violations (which are not git-merge conflicts), this logic commits the merge and exits before the fingerprint verification gate can run, leading to silent reversion of merged sub-issue intent in those files.\n- tests/test_pr_merge_status_guard.py: line 1635 | severity=BLOCKER | confidence=5\n  PROBLEM: Test failure `test_non_env_uncertain_configured_commit_keeps_warning_only_behavior` in CI job `tests-hooks-and-orchestrator`.\n  WHY: The test asserts that `git -c user.name=bot commit -m x` does not trigger a permission decision, but the guard now emits `permissionDecision: ask`. This indicates a regression or incompatibility in the test contract with the current guard configuration.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_conflict_prepare.sh: Lines 266-280 (new exception) and 337-367 (early-exit); the bypassed verifier in scripts/review_conflict_resolve.sh at lines 99-102 (CONFLICT_RESOLVED=true short-circuit) and 2861-2886 (post-resolve verification gate) | severity=MAJOR | confidence=5\n  PROBLEM: The new exception treats \"manifest is the only unmerged path\" as proof that no safety check is needed, then exits at line 367 before the integration fingerprint verifier ever runs.\n  WHY: The verifier at `verify_integration_fingerprints.py` inspects the FULL post-resolve tree, including auto-merged files that lost no conflict markers; for final-wave projects, the poller's wave-dispatch gate at orchestrate_poll_process.sh:25340+ is only reached for non-final waves, so the merge can land without fingerprint checking.\n- TASK_GAP\n  Requirement: \"When the manifest is the only unmerged path there is no resolver run to widen, so orchestrator/project-* resolves it deterministically like any other branch\" \u2014 the PR's stated intent includes preserving the safety properties of the integration-sync exclusion (no auto-merged file fingerprint violations reach main).\n  Expected change site: tests/test_conflict_manifest_union_contract.py \u2014 test_manifest_only_conflict_on_integration_sync_branch_is_resolved \u2014 needs an assertion (or a sibling test) that exercises fingerprint violations in auto-merged files alongside the manifest-only conflict, and verifies the union block refuses or that prepare.sh invokes the verifier before the line 357 commit.\n  Evidence of absence: test_manifest_only_conflict_on_integration_sync_branch_is_resolved only asserts stdout strings, the two-parent merge commit, and the manifest removed from ls-files; it does not set up fingerprints or auto-merged file content, so the regression in the first lens is not regression-tested.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_conflict_prepare.sh: 267-277, 333-367; the fingerprint expansion follows at 619-701. | severity=BLOCKER | confidence=5\n  PROBLEM: The new exception treats one unmerged path as proof that no integration fingerprint checks are needed.\n  WHY: It commits and exits before loading fingerprint state or running the expansion, which also means the resolver\u2019s fingerprint verification is skipped; for a final-wave project, the poller\u2019s separate fingerprint gate is inside next-wave dispatch (`scripts/orchestrate_poll_process.sh:25323-25355`), so merged sub-issue intent can be silently reverted.\n- tests/test_pr_merge_status_guard.py: 1632-1635; `.claude/hooks/pr_merge_status_guard.py:1726-1731`. | severity=MAJOR | confidence=5\n  PROBLEM: The `tests-hooks-and-orchestrator` check fails because this test expects no permission decision for a configured commit, while the current guard requests confirmation for that case.\n  WHY: Running `if true; then git -c user.name=bot commit -m x` emits `permissionDecision: ask`; the test asserts that the output does not contain `permissionDecision`. The supplied CI log records this assertion failure, causing the aggregate `lint` check to fail.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "68a73697a4569c258dc0994c7bc848d10014a6030803b5d0d3af53e4e980f42a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6695,
+    "run_id": "37672532201",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37672532201",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007194915_c2b980864e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6695,
+    "run_id": "37672532201"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-07T19:49:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
