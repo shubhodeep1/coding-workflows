@@ -173,10 +173,52 @@ jobs:
           source scripts/codex_helpers.sh
           codex_config_assemble "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "low"
 
+      # The WORKFLOW_HEAL diagnosis runs on Claude unless AI_ENGINE_WORKFLOW_HEAL
+      # or AI_ENGINE say codex (scripts/ai_engine.sh from this checkout). The
+      # CLI and the pool credential are fetched only for Claude; when Claude
+      # cannot start (exit 75) the intake runs its unchanged isolated codex
+      # command, so these steps never fail the job.
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_WORKFLOW_HEAL: ${{ vars.AI_ENGINE_WORKFLOW_HEAL || '' }}
+          AI_ENGINE_LABELS: ""
+        run: |
+          set -uo pipefail
+          engine="codex"
+          if [ -f scripts/ai_engine.sh ] && [ ! -L scripts/ai_engine.sh ]; then
+            # shellcheck source=/dev/null
+            if source scripts/ai_engine.sh; then
+              engine="$(ai_engine_for_role WORKFLOW_HEAL || echo codex)"
+            else
+              echo "::warning::Failed to source scripts/ai_engine.sh; the heal diagnosis stays on codex." >&2
+            fi
+          fi
+          [ "${engine}" = "claude" ] || engine="codex"
+          echo "engine=${engine}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
+
       - name: Run workflow failure heal intake
         env:
           # Codex version baked into the isolated diagnosis agent's image (scripts/codex_isolated_exec.sh).
           CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_WORKFLOW_HEAL: ${{ vars.AI_ENGINE_WORKFLOW_HEAL || '' }}
+          SUPPORT_INSTRUCTIONS_FILE: ${{ github.workspace }}/unattended_system_instructions.md
         run: |
           set -euo pipefail
           bash scripts/workflow_failure_heal_intake.sh

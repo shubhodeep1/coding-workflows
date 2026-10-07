@@ -234,10 +234,29 @@ activation_main()
 		# credential-free, network-isolated container (read-only snapshot of the
 		# target's tracked files): no GH_TOKEN, no OpenRouter key and no .git
 		# reach it; model calls go through the host-side broker.
-		(cd "${TARGET_DIR}" && env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET timeout "${ACTIVATION_VERIFY_TIMEOUT_SECS:-1500}" \
-			bash "${SUPPORT_DIR}/scripts/codex_isolated_exec.sh" run --mode read-only --workdir "${TARGET_DIR}" --reasoning "${reasoning}" -- \
-			--ask-for-approval never -c model_verbosity=low exec \
-			--skip-git-repo-check --model "${model}" --sandbox read-only < "${prompt_file}" > "${output_file}" 2>"${RUNTIME_DIR}/activation_codex.err") || true
+		# The ACTIVATION_VERIFY role picks its engine with claude_run_selected
+		# from the trusted support checkout: on codex, or when Claude is
+		# unavailable (exit 75), it runs the unchanged isolated codex command;
+		# the Claude engine runs read-only in the same credential-free container.
+		# Without the engine helper the codex command runs as before.
+		local activation_engine_helper="${SUPPORT_DIR}/scripts/ai_engine.sh"
+		if [ -f "${activation_engine_helper}" ] && [ ! -L "${activation_engine_helper}" ] \
+			&& bash -c 'source "$0" >/dev/null 2>&1 && declare -F claude_run_selected >/dev/null' "${activation_engine_helper}" 2>/dev/null; then
+			(cd "${TARGET_DIR}" && env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET \
+				AI_ENGINE_MODEL_HINT="${model}" AI_ENGINE_EFFORT_HINT="${reasoning}" \
+				timeout "${ACTIVATION_VERIFY_TIMEOUT_SECS:-1500}" \
+				bash -c 'source "$0"; claude_run_selected "$@"' "${activation_engine_helper}" \
+				ACTIVATION_VERIFY "${prompt_file}" "${output_file}" "${TARGET_DIR}" --codex-stdio -- \
+				bash "${SUPPORT_DIR}/scripts/codex_isolated_exec.sh" run --mode read-only --workdir "${TARGET_DIR}" --reasoning "${reasoning}" -- \
+				--ask-for-approval never -c model_verbosity=low exec \
+				--skip-git-repo-check --model "${model}" --sandbox read-only 2>"${RUNTIME_DIR}/activation_codex.err") || true
+		else
+			echo "AI_ENGINE_FALLBACK role=ACTIVATION_VERIFY reason=engine_support_missing" >&2
+			(cd "${TARGET_DIR}" && env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET timeout "${ACTIVATION_VERIFY_TIMEOUT_SECS:-1500}" \
+				bash "${SUPPORT_DIR}/scripts/codex_isolated_exec.sh" run --mode read-only --workdir "${TARGET_DIR}" --reasoning "${reasoning}" -- \
+				--ask-for-approval never -c model_verbosity=low exec \
+				--skip-git-repo-check --model "${model}" --sandbox read-only < "${prompt_file}" > "${output_file}" 2>"${RUNTIME_DIR}/activation_codex.err") || true
+		fi
 	fi
 	if ! activation_normalise_verdict "${output_file}" > "${verdict_file}" 2>/dev/null || [ ! -s "${verdict_file}" ]; then
 		activation_log "mode=${mode} item=${item} outcome=skip reason=invalid_verdict"

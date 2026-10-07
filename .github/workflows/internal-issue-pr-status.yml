@@ -6,6 +6,8 @@ on:
 
 permissions:
   issues: write
+  # The activation-verify job fetches the Claude pool credential with OIDC.
+  id-token: write
 
 jobs:
   sync-status:

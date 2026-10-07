@@ -755,6 +755,7 @@ jobs:
           AI_ENGINE_SECURITY_JUDGE: ${{ vars.AI_ENGINE_SECURITY_JUDGE || '' }}
           AI_ENGINE_RB_JUDGE: ${{ vars.AI_ENGINE_RB_JUDGE || '' }}
           AI_ENGINE_SECURITY_AUDIT: ${{ vars.AI_ENGINE_SECURITY_AUDIT || '' }}
+          AI_ENGINE_ACTIVATION_VERIFY: ${{ vars.AI_ENGINE_ACTIVATION_VERIFY || '' }}
           CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
           AI_ENGINE_LABELS: ""
         run: |
@@ -766,7 +767,7 @@ jobs:
           if [ -f scripts/ai_engine.sh ] && jq -e 'any(.[]; all(.labels[]?; .name != "ai:codex"))' "${RUNTIME_DIR}/tracking_issues.json" >/dev/null; then
             # shellcheck source=/dev/null
             if source scripts/ai_engine.sh; then
-              for role in WAVE_JUDGE STALL_JUDGE INTEGRATION_JUDGE SECURITY_JUDGE RB_JUDGE SECURITY_AUDIT; do
+              for role in WAVE_JUDGE STALL_JUDGE INTEGRATION_JUDGE SECURITY_JUDGE RB_JUDGE SECURITY_AUDIT ACTIVATION_VERIFY; do
                 if [ "$(ai_engine_for_role "${role}" || echo codex)" = "claude" ]; then
                   any_claude=true
                 fi
@@ -822,6 +823,7 @@ jobs:
           AI_ENGINE_SECURITY_JUDGE: ${{ vars.AI_ENGINE_SECURITY_JUDGE || '' }}
           AI_ENGINE_RB_JUDGE: ${{ vars.AI_ENGINE_RB_JUDGE || '' }}
           AI_ENGINE_SECURITY_AUDIT: ${{ vars.AI_ENGINE_SECURITY_AUDIT || '' }}
+          AI_ENGINE_ACTIVATION_VERIFY: ${{ vars.AI_ENGINE_ACTIVATION_VERIFY || '' }}
           CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
           ACTIVATION_VERIFY_ENABLED: ${{ vars.ACTIVATION_VERIFY_ENABLED || 'true' }}
           ACTIVATION_VERIFY_MODEL: ${{ vars.ACTIVATION_VERIFY_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}

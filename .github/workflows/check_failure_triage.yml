@@ -162,6 +162,8 @@ jobs:
     needs: derive_check_name_key
     permissions:
       contents: read
+      # Only the Claude pool credential step uses OIDC; both callers grant it.
+      id-token: write
     # Cost gate: enabled by default; a consumer opts OUT via
     # CHECK_FAILURE_TRIAGE_ENABLED=false. Only genuine failure conclusions on a
     # real PR proceed. The job is skipped (no checkout / no codex install) when
@@ -267,7 +269,50 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      # The CHECK_TRIAGE diagnosis runs on Claude unless AI_ENGINE_CHECK_TRIAGE
+      # or AI_ENGINE say codex. The engine policy is read only from the
+      # support checkout (never the PR head). The CLI and the pool credential
+      # are fetched only for Claude, before staging removes the support
+      # checkout; when Claude cannot start (exit 75) the diagnosis runs its
+      # unchanged isolated codex command, so these steps never fail the job.
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_CHECK_TRIAGE: ${{ vars.AI_ENGINE_CHECK_TRIAGE || '' }}
+          AI_ENGINE_LABELS: ""
+        run: |
+          set -uo pipefail
+          engine="codex"
+          engine_helper="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/ai_engine.sh"
+          if [ -f "${engine_helper}" ] && [ ! -L "${engine_helper}" ]; then
+            # shellcheck source=/dev/null
+            if source "${engine_helper}"; then
+              engine="$(ai_engine_for_role CHECK_TRIAGE || echo codex)"
+            else
+              echo "::warning::Failed to source the trusted ai_engine.sh; triage stays on codex." >&2
+            fi
+          fi
+          [ "${engine}" = "claude" ] || engine="codex"
+          echo "engine=${engine}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/install-claude
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/claude-pool-token
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
       - name: Stage workflow support files
+        env:
+          CHECK_TRIAGE_ENGINE: ${{ steps.ai_engine.outputs.engine }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
@@ -365,9 +410,38 @@ jobs:
             install -m 0755 .codex-workflow-src/scripts/render_prompt.py "${trusted_dir}/scripts/render_prompt.py"
           fi
           install -m 0755 .codex-workflow-src/scripts/assemble_prompt.sh "${trusted_dir}/scripts/assemble_prompt.sh"
+          # Claude engine support for the isolated helper's Claude branch (the
+          # same files clarify stages). Missing or non-regular files keep
+          # triage on codex; they never fail staging.
+          engine_files_ok=true
+          for engine_file in scripts/ai_engine.sh scripts/claude_engine.py scripts/claude_anthropic_relay.py scripts/claude_settings.json.tmpl .github/ai/claude_engine.json .claude/hooks/gh_api_write_guard.py; do
+            if [ ! -f ".codex-workflow-src/${engine_file}" ] || [ -L ".codex-workflow-src/${engine_file}" ]; then
+              engine_files_ok=false
+              break
+            fi
+          done
+          if [ "${engine_files_ok}" = "true" ]; then
+            for engine_file in scripts/ai_engine.sh scripts/claude_engine.py scripts/claude_anthropic_relay.py scripts/claude_settings.json.tmpl .github/ai/claude_engine.json .claude/hooks/gh_api_write_guard.py; do
+              engine_mode=0644
+              case "${engine_file}" in *.sh) engine_mode=0755 ;; esac
+              install -D -m "${engine_mode}" ".codex-workflow-src/${engine_file}" "${trusted_dir}/${engine_file}"
+            done
+          else
+            echo "::warning::Claude engine support files are missing from the support ref; check-failure triage stays on codex."
+          fi
           echo "CHECK_TRIAGE_TRUSTED_SUPPORT_DIR=${trusted_dir}" >> "$GITHUB_ENV"
 
-          rm -rf .codex-workflow-src
+          # The Claude credential step's post action (token cleanup) runs from
+          # the support checkout at job end, so keep only that action
+          # directory. The sandbox snapshot never includes .codex-workflow-src.
+          if [ "${CHECK_TRIAGE_ENGINE:-codex}" = "claude" ] && [ -d .codex-workflow-src/.github/actions/claude-pool-token ] &&
+             [ ! -L .codex-workflow-src/.github/actions/claude-pool-token ]; then
+            find .codex-workflow-src -mindepth 1 -maxdepth 1 ! -name .github -exec rm -rf {} +
+            find .codex-workflow-src/.github -mindepth 1 -maxdepth 1 ! -name actions -exec rm -rf {} +
+            find .codex-workflow-src/.github/actions -mindepth 1 -maxdepth 1 ! -name claude-pool-token -exec rm -rf {} +
+          else
+            rm -rf .codex-workflow-src
+          fi
 
       - name: Create Codex config
         run: |
@@ -407,6 +481,8 @@ jobs:
           CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
           CHECK_TRIAGE_STAGE: diagnose
           CHECK_TRIAGE_PREPARE_ONLY: "true"
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_CHECK_TRIAGE: ${{ vars.AI_ENGINE_CHECK_TRIAGE || '' }}
           CHECK_TRIAGE_PR_NUMBER: ${{ inputs.pr_number }}
           CHECK_TRIAGE_CHECK_RUN_ID: ${{ inputs.check_run_id }}
           CHECK_TRIAGE_CHECK_NAME: ${{ inputs.check_name }}

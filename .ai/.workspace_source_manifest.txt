@@ -227,6 +227,7 @@ changelog.d/6187-isolated-codex-agents.md
 changelog.d/6193-claude-write-role-tool-list.md
 changelog.d/6202-claude-md-25-scheduled-status-checks.md
 changelog.d/6204-review-sandbox-audit-plans-parity.md
+changelog.d/6213-single-issue-security-pass-dispatch-failure-holds.md
 changelog.d/6222-review-command-isolation.md
 changelog.d/6224-unblock-override-protected-paths.md
 changelog.d/6225-unblock-judge-broker-isolation.md
@@ -300,6 +301,7 @@ changelog.d/6436-triage-omit-pr-agent-instructions.md
 changelog.d/6438-openrouter-mgmt-key-reads.md
 changelog.d/6438-resolver-host-only-paths-failure-cap.md
 changelog.d/6438-reviewer-panel-random-tiers.md
+changelog.d/6453-release-gate-bait-review-coverage.md
 changelog.d/6454-integration-judge-shared-protected-lines.md
 changelog.d/6455-rb-fix-sandbox-workspace.md
 changelog.d/6461-consolidator-opencode-sandbox.md
@@ -328,10 +330,12 @@ changelog.d/6578-validate-trusted-harness-templates.md
 changelog.d/6606-smoke-gate-pytest-and-queue-time.md
 changelog.d/6608-manifest-modify-delete-conflict.md
 changelog.d/6610-security-audit-claude-engine.md
+changelog.d/6638-explicit-push-override-asks.md
 changelog.d/autofix-cap-and-security-exhaustion-judge.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/claude-busy-ride-2ezayb-single-issue-security-pass-default-off.md
 changelog.d/claude-elegant-mendel-editor-audit-count-labels.md
+changelog.d/claude-elegant-mendel-guard-copy-parity-2.md
 changelog.d/claude-elegant-mendel-guard-copy-parity.md
 changelog.d/conflict-resolver-sandbox-fail-closed.md
 changelog.d/merged-pr-guard-pipe-heredoc-false-prompts.md
@@ -339,6 +343,7 @@ changelog.d/release-smoke-run-lookup.md
 changelog.d/review-tier-random-reviewers.md
 changelog.d/reviewer-panel-gemini-3-1-flash-lite.md
 changelog.d/summariser-inline-inputs-only.md
+changelog.d/validate-roles-claude-engine.md
 codex.md
 docs/INVENTORY.md
 docs/ai-tools-future-improvements.md
@@ -894,6 +899,7 @@ tests/test_clarify_informal_detect.py
 tests/test_clarify_respond_standalone.py
 tests/test_claude_anthropic_relay.py
 tests/test_claude_engine.py
+tests/test_claude_engine_utility_roles.py
 tests/test_claude_md_section_numbers.py
 tests/test_claude_pool_token.py
 tests/test_claude_settings_policy.py

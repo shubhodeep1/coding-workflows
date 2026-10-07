@@ -495,9 +495,36 @@ if [ -f "${ISOLATED_HELPER}" ] && [ ! -L "${ISOLATED_HELPER}" ] &&
 	# the PR checkout is only the source of snapshot data.
 	# triage-pr-agents-instruction-injection: only trusted support supplies instructions;
 	# PR-head agent files are diagnostic data, not sandbox instructions.
-	if (cd "${TRUSTED_SUPPORT_DIR}" &&
+	# The CHECK_TRIAGE role picks its engine from the trusted support copy of
+	# scripts/ai_engine.sh only (never the PR checkout). The Claude engine runs
+	# in the same isolated container (the helper's Claude branch, token kept in
+	# the host relay); exit 75 (Claude unavailable) runs the unchanged codex call.
+	triage_engine="codex"
+	triage_engine_helper="${TRUSTED_SUPPORT_DIR}/scripts/ai_engine.sh"
+	if [ -f "${triage_engine_helper}" ] && [ ! -L "${triage_engine_helper}" ]; then
+		triage_engine="$(cd "${TRUSTED_SUPPORT_DIR}" && SUPPORT_ROOT_DIR="${TRUSTED_SUPPORT_DIR}" bash -c 'source "$0" && ai_engine_for_role CHECK_TRIAGE' "${triage_engine_helper}" 2>/dev/null || echo codex)"
+	fi
+	[ "${triage_engine}" = "claude" ] || triage_engine="codex"
+	triage_rc=0
+	if [ "${triage_engine}" = "claude" ]; then
+		(cd "${TRUSTED_SUPPORT_DIR}" &&
+			env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID CLARIFY_SOURCE_ROOT="${SOURCE_ROOT}" CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS=true \
+			SUPPORT_ROOT_DIR="${TRUSTED_SUPPORT_DIR}" SUPPORT_INSTRUCTIONS_FILE="${TRUSTED_SUPPORT_DIR}/unattended_system_instructions.md" \
+			MODEL_EDITOR="${MODEL_EDITOR:-openai/gpt-6-sol}" MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-high}" \
+			bash "${ISOLATED_HELPER}" "${PROMPT_FILE}" "${DIAG_FILE}" "${RUNTIME_DIR}/codex_log.txt" claude CHECK_TRIAGE) || triage_rc=$?
+		if [ "${triage_rc}" -eq 75 ]; then
+			triage_engine="claude->codex"
+			: > "${DIAG_FILE}"
+		fi
+	fi
+	log "engine=${triage_engine}"
+	if [ "${triage_engine}" != "claude" ]; then
+		triage_rc=0
+		(cd "${TRUSTED_SUPPORT_DIR}" &&
 		env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID CLARIFY_SOURCE_ROOT="${SOURCE_ROOT}" CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS=true \
-		bash "${ISOLATED_HELPER}" "${PROMPT_FILE}" "${DIAG_FILE}" "${RUNTIME_DIR}/codex_log.txt"); then
+		bash "${ISOLATED_HELPER}" "${PROMPT_FILE}" "${DIAG_FILE}" "${RUNTIME_DIR}/codex_log.txt") || triage_rc=$?
+	fi
+	if [ "${triage_rc}" -eq 0 ]; then
 		:
 	else
 		log "warn isolated_diagnosis_failed"
