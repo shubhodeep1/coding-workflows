@@ -264,7 +264,56 @@ def test_review_blocked_fix_writer_runs_in_the_review_sandbox():
 	assert "opencode_run_cmd" not in fix_block
 
 
+POLLER_JUDGE_ROLES = {"WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE", "RB_JUDGE"}
+POLLER_JUDGE_DECISION = (
+	"The poller judges intentionally stay on review_untrusted_sandbox.sh via "
+	"poller_claude_judge -> poller_judge_isolated (#6607); see agents.md "
+	"'Isolated Codex agents' -> 'Poller judges' before changing this."
+)
+
+
+def test_poller_judges_stay_on_the_review_sandbox():
+	text = (SCRIPTS / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	called_roles = set(re.findall(r"\bpoller_claude_judge ([A-Za-z_][A-Za-z0-9_]*)", text))
+	assert called_roles == POLLER_JUDGE_ROLES, POLLER_JUDGE_DECISION
+
+	wrapper = text[text.index("poller_claude_judge()\n"):]
+	wrapper = wrapper[: wrapper.index("\n}\n")]
+	assert "poller_judge_isolated " in wrapper, POLLER_JUDGE_DECISION
+	for launcher in ("codex_isolated_exec", "ORCH_CODEX_ISOLATED_EXEC", "claude_run", "opencode run", "codex exec"):
+		assert launcher not in wrapper, POLLER_JUDGE_DECISION
+
+	attempt = text[text.index("_poller_rb_judge_sandbox_attempt()\n"):text.index("\npoller_judge_engine_labels_json()\n")]
+	assert 'review_untrusted_sandbox.sh" prepare-ephemeral' in attempt, POLLER_JUDGE_DECISION
+	assert 'review_untrusted_sandbox.sh" run' in attempt, POLLER_JUDGE_DECISION
+	assert "write_opencode_config.sh" in attempt, POLLER_JUDGE_DECISION
+	assert "codex_isolated_exec" not in attempt, POLLER_JUDGE_DECISION
+	assert "ORCH_CODEX_ISOLATED_EXEC" not in attempt, POLLER_JUDGE_DECISION
+
+	isolated = text[text.index("poller_judge_isolated()\n"):text.index("\npoller_rb_judge_isolated()\n")]
+	assert "_poller_rb_judge_sandbox_attempt codex " in isolated, POLLER_JUDGE_DECISION
+	assert "return 77" in isolated, POLLER_JUDGE_DECISION
+	assert "codex_isolated_exec" not in isolated, POLLER_JUDGE_DECISION
+
+	assert text.count("ORCH_CODEX_ISOLATED_EXEC") == 1, POLLER_JUDGE_DECISION
+
+	agents = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	section = agents[agents.index("## Isolated Codex agents"):]
+	section = section[: section.index("\n## ")]
+	assert "review_untrusted_sandbox.sh" in section
+	assert "poller_judge_isolated" in section
+	assert "**Poller judges.**" in section
+	sites = section[section.index("- **Sites.**"):]
+	sites = sites[: sites.index("\n- **")]
+	assert "wave / stall" not in sites
+
+
 def test_review_sandbox_admits_the_merge_guard_for_ci_repairs():
+	"""Despite its historical name, this now asserts the merge guard is EXCLUDED.
+
+	#6208 reversed #6187's admission: the hook runs on the host, so CI failures
+	in it go to an interactive session (agents.md, README "Isolated Codex agents").
+	"""
 	import importlib.util
 
 	spec = importlib.util.spec_from_file_location("review_untrusted_workspace", SCRIPTS / "review_untrusted_workspace.py")

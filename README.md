@@ -1153,7 +1153,8 @@ not delete wrappers that are already present in `.github/workflows/`.
 > `Sync .claude/ assets from upstream` step ships three `PreToolUse` hooks with
 > their `settings.json` wiring, each documented in the root `CLAUDE.md` that
 > syncs alongside them: the merged-PR commit guard
-> (`hooks/pr_merge_status_guard.py`, §21), the `gh api` permission guard
+> (`hooks/pr_merge_status_guard.py`, §21; review autofix cannot edit it, see
+> "Isolated Codex agents"), the `gh api` permission guard
 > (`hooks/gh_api_write_guard.py`, §23.H: prompts only for `gh api` writes
 > that are not §23.B routine writes, replacing the former `gh api`
 > `permissions.ask` rules), and the PR-watch guard
@@ -1344,13 +1345,31 @@ Every Codex agent that reads untrusted text runs in a credential-free,
 network-isolated Docker container (`scripts/codex_isolated_exec.sh`), the same
 way clarify already did. That covers plan, implement (attempts, post-Codex
 repair, diagnose and the PR issue summary), validate, the validation discovery
-bootstrap, the orchestrator's decomposer and judges, workflow log analysis and
+bootstrap, the orchestrator's decomposer, workflow log analysis and
 the retro fan-out, check-failure triage, the security audit, the workflow
 failure heal intake and the activation verifier. A prompt injection in an issue, comment, PR diff or log
 can no longer read `GH_PAT`, the OpenRouter key, the Telegram secrets or the
 checkout's `.git`: none of them is inside the container, the container has no
 network, and model calls go through a host-side broker that holds the key and
 forwards one fixed endpoint for one model.
+
+The five orchestrator poller judges (wave, stall, integration, security-pass
+and review-blocked) are the exception: they run in the review sandbox
+(`scripts/review_untrusted_sandbox.sh`), the same credential-free sandbox the
+review editor, consolidator, conflict resolver and review-blocked judge use.
+For them the codex engine is OpenCode in a fresh sandbox, never the Codex CLI,
+and a sandbox failure defers the judge instead of falling back to the host.
+Their failures log under `JUDGE_ISOLATION` / `RB_JUDGE_ISOLATION`, not
+`CODEX_ISOLATION`. This split is deliberate (#6607, `agents.md` "Isolated
+Codex agents" → "Poller judges"); a fix to one isolation stack does not cover
+the other.
+
+The merged-PR guard (`.claude/hooks/pr_merge_status_guard.py`) is excluded
+from the review sandbox because it runs on the host with credentials, so
+review autofix cannot repair a CI failure in that hook (as it did in #6481).
+Route such a failure to an interactive session, and change the hook and its
+`workflow-templates/.claude/hooks/` twin together; the two must stay
+byte-identical.
 
 | The numbers that matter | Value |
 | --- | --- |
