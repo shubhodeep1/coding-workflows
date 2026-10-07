@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\nQ3: A\n\nRATIONALE:\nQ1: The failing review run executed `main` @ `6cd42c0fcd85`, because `review_autofix.yml@main` takes its support scripts from the verified workflow SHA. The poller also runs from `main`. A fix committed only to `ai/issue-5152` would not run until PR #6147 merges, and that PR is the one blocked by this conflict, so option C cannot work. The local checkout shows how far that branch is behind: it has no `workflow-templates/retired_files.txt` and no host-only check in `scripts/review_conflict_resolve.sh`, both of which the diagnosis cites on `main`. Option B unblocks only one PR and leaves the gap the issue asks to fix: automatic recovery plus a regression test. Change the target branch to `main` and let the new recovery pick up PR #6147 once it lands.\nQ2: This is the issue's own suggested fix. It reuses the `close_and_reissue` branches already present in `scripts/orchestrate_poll_process.sh`, at lines 13931 (`execute_stall_recovery_action`) and 16624 (`run_standalone_stall_recovery`). It keeps the resolver's fail-closed sandbox check unchanged. Option B would silently drop the PR's edits to the retired file without anyone looking at them, and the diagnosis says the logs cannot show whether those edits still matter. Option C leaves a person in the loop with no automatic way out, which goes against \u00a720.\nQ3: Both stall-recovery entry points already have a `close_and_reissue` arm. Issue #5152 / PR #6147 are standalone (`ai/issue-*`), while orchestrator wave PRs can hit the same retired-path conflict. Covering only one path would leave the same defect open on the other.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - GitHub facts: run 37602002687 ran on `main` @ 6cd42c0fcd85; PR #6147 is open with base `main`.\n    - agents.md \"Review self-repo support staging runs under main's workflow YAML\": support runs from the verified workflow commit, not PR-head scripts.\n  steps:\n    - Set the plan's base/target branch to `main`. Treat the `Target branch: ai/issue-5152` line as superseded by this decision.\n    - Implement the recovery in `scripts/orchestrate_poll_process.sh` on `main`, with tests in `tests/test_orchestrate_poll_process.py`.\n    - Make no manual edits to `ai/issue-5152`. After the change lands, the next poll tick handles PR #6147 through the Q2 path.\n  replaces_acceptance_criterion: The fix ships to the `main` branch instead of `ai/issue-5152`.\n  equivalence_argument: Only `main` supplies the poller and resolver scripts that actually run, so this is the only branch where the fix takes effect, and it covers PR #6147 along with any future PR.\n  reversibility: Revert the commit on `main`. PR #6147 then returns to its current blocked state.\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - `scripts/orchestrate_poll_process.sh` `close_and_reissue` arms (lines 13931, 16624).\n    - `workflow-templates/retired_files.txt` on `main`. This is the trusted manifest; read it from the engine checkout (`.codex-workflow-src`), never from the PR head.\n    - The resolver's error line `Conflict resolver: host-only conflicted path(s) need a manual merge: <paths>` and `AI_ENGINE_FALLBACK ... reason=sandbox_path_host_only`.\n  steps:\n    - Trigger the reissue only when all of these hold:\n      - the trusted failure evidence names `sandbox_path_host_only` and lists the conflicted paths;\n      - every listed path appears in the trusted retired-file manifest;\n      - every listed path is absent on the PR's current base.\n      If any check fails or cannot be read, keep the existing blocked or fail-closed behaviour and do not reissue.\n    - Create the replacement issue against the current base from the original issue's requirements. Close the original PR only after the replacement issue has been created and confirmed.\n    - Leave `scripts/review_untrusted_workspace.py::allowed` and the resolver's fail-closed check unchanged.\n    - Add regression tests: a retired, absent-on-base host-only path triggers a reissue; an unlisted host-only path stays blocked; a manifest read failure stays blocked.\n  replaces_acceptance_criterion: none\n  equivalence_argument: Matches the issue's suggested fix while keeping the sandbox boundary unchanged.\n  reversibility: Drop the new routing branch. Matching conflicts then go back to the current non-retryable failure.\nQ3:\n  strategy: derive_from_repo\n  inputs:\n    - `execute_stall_recovery_action` (line 13474) and `run_standalone_stall_recovery` (line 15693) in `scripts/orchestrate_poll_process.sh`.\n  steps:\n    - Put the retired-path check in one shared helper and call it from both stall-recovery paths before their action is chosen. Each path then routes to its own existing `close_and_reissue` arm.\n    - Keep the existing no-op ancestor caps and the `MAX_STALL_RECOVERIES_PER_ISSUE` budget in force on both paths.\n    - Test both a managed issue and a standalone issue.\n  replaces_acceptance_criterion: none\n  equivalence_argument: The same defect class can occur on either path, and both already support reissue.\n  reversibility: Remove the helper call from either path on its own.\n\nAssumptions: #5152 / PR #6147 go through the standalone stall-recovery path. Before its tests rely on the manifest and resolver error line, the planner should confirm on `main` that both exist as the diagnosis describes, because this checkout does not contain them.",
+  "fingerprint": "52e8b17bae4aba62fac99550c7b4a342d77447dacbfe02a5bebf7ffbd26100ff",
+  "lineage": {
+    "issue_number": 6623,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37603889461",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37603889461",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6623"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261007100345_f9c11b7ff9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6623,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37603889461"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6623",
+  "timestamps": {
+    "created_at": "2026-10-07T10:03:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
