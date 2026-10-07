@@ -189,3 +189,52 @@ No literal `TODO`, `FIXME`, or `HACK` markers were found in the scoped workflow 
 | Code modularization | 8–12 | Large |
 | Expression size reduction | 5–9 | Large |
 | Medium/Low fixes | 6–10 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-10-07)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` meets the stated equivalence and failure-handling checks; `NEEDS_VERIFICATION` requires the specified checks first; `RISKY_SKIP` touches a protected path and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — NEEDS_VERIFICATION.** **Calls:** `.github/workflows/issue_pr_status.yml:258-263` and `.github/workflows/issue_pr_status.yml:367-378`. **Current → proposed:** 2 → 1 GraphQL calls when branch- or body-derived issue numbers require the second batch and the combined query succeeds; retain existing fallback calls on incomplete results. **Endpoints:** GitHub GraphQL `repository.pullRequest.closingIssuesReferences` and aliased `repository.issue`.
+  **Evidence:** The first query returns closing issues with `number`, `body`, and labels. The later query requests `number`, `body`, and labels again for `LOOKUP_ISSUE_NUMBERS`, which can also include branch- or body-derived numbers (`.github/workflows/issue_pr_status.yml:265-309`).
+  **Proposed fix:** In the “Update linked issue labels when PR closes” step, derive branch/body candidate numbers before the first query and add their `issue` aliases to it. Populate the existing classification variables from that response; retain the second batch for unresolved numbers and the existing REST fallback.
+  **Safety rationale:** The queries run in one step with the same token, but their issue sets differ and `ensure_label_exists` runs between them; response and failure-path equivalence is not statically proven.
+  **Downstream signal:** Verify classification against closing-only, branch/body-only, overlapping, truncated, and partial-error responses; confirm that moving candidate derivation preserves every fallback and label/close disposition before combining queries.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **REUSE-001 — RISKY_SKIP.** **Calls:** `scripts/review_merge_train.sh:321-326` and `scripts/review_merge_train.sh:392-404`; gate caller `scripts/review_merge_train.sh:478-519`. **Current → proposed:** for an existing marker, *P* paginated comment-list pages plus 1 comment GET → *P* pages; writes remain unchanged. **Endpoints:** REST `GET /repos/{owner}/{repo}/issues/{pr}/comments` and `GET /repos/{owner}/{repo}/issues/comments/{id}`.
+  **Evidence:** `_mt_find_marker_comment` reads each candidate’s body to match the marker but returns only its ID and creation time. `_mt_upsert_comment` then fetches that ID’s body to test whether a PATCH is needed.
+  **Proposed fix:** If manually approved, extend `_mt_find_marker_comment` to return the selected body alongside ID and creation time, and pass it through the gate caller to `_mt_upsert_comment`; preserve its existing lookup for callers without that data.
+  **Safety rationale:** The first read is paginated, and a queue-label write intervenes before the body GET; the fresh read can detect a concurrent comment edit.
+  **Downstream signal:** Do not auto-implement. Manually test pagination, latest-marker selection, concurrent marker edits, and queue-label transitions before deciding whether the fresh GET may be removed.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: RISKY_SKIP — Changes retry-loop handling; manually verify permanent-error classification and rate-limit behavior.
+- API-002: RISKY_SKIP — Changes curl backoff; manually verify HTTP-status and rate-limit branches.
+- API-003: RISKY_SKIP — Poller cache change must preserve independently fail-open label retrieval.
+- BATCH-001: RISKY_SKIP — Poller blocker reads need snapshot and unknown-state parity review.
+- BATCH-002: RISKY_SKIP — Paginated file reads require completeness and path-parity review.
+- BATCH-003: NEEDS_VERIFICATION — Per-thread mutation results and reply-before-resolution ordering need verification.
+
+### Summary Counts
+
+Net-new findings only; cross-references are excluded.
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 1 | MERGE-001 |
+| RISKY_SKIP | 1 | REUSE-001 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
