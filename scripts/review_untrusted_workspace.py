@@ -23,20 +23,80 @@ MAX_FILES = 5000
 EXCLUDED = {".git", ".ai", ".codex", ".opencode", ".serena", ".venv", ".review-venv", "venv", "node_modules", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".cache", ".tox", ".nox", "dist", "build", "coverage", ".next", ".turbo", ".codex-workflow-src", ".codex-workflow-src-main", "secrets", "credentials"}
 ROOT_FILES = {"README.md", "agents.md", "AGENTS.md", "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "pyproject.toml", "requirements.txt", "setup.cfg", "pytest.ini", "tox.ini", "go.mod", "Cargo.toml"}
 SUFFIXES = {".py", ".sh", ".js", ".jsx", ".cjs", ".mjs", ".ts", ".tsx", ".cts", ".mts", ".go", ".rs", ".java", ".json", ".md", ".yml", ".yaml", ".toml", ".txt", ".css", ".html", ".sql", ".lock", ".cfg", ".ini"}
+_REJECTION_REASONS = frozenset({
+	"unsafe_directory", "entry_limit", "size_limit", "unsafe_result_path",
+	"symlink_in_path", "unsafe_file", "file_changed", "host_baseline_changed",
+	"result_conflicts_host",
+})
+_DIRECTORY_CATEGORIES = frozenset({
+	"symlink", "invalid_name", "dot_github_subtree", "env_like", "sensitive_name",
+	"key_material_suffix", "excluded_name_variant", "other",
+})
+_DIRECTORY_DEPTHS = frozenset({"1", "2", "3+"})
+
+
+def _rejection(message, reason, category=None, depth=None):
+	exc = ValueError(message)
+	exc.review_reason = reason
+	exc.review_category = category
+	exc.review_depth = depth
+	return exc
+
+
+def _rejection_line(exc):
+	line = f"::error::Review isolation snapshot or transfer rejected ({type(exc).__name__})"
+	reason = getattr(exc, "review_reason", None)
+	if not isinstance(reason, str) or reason not in _REJECTION_REASONS:
+		return line
+	line += f" reason={reason}"
+	category = getattr(exc, "review_category", None)
+	if isinstance(category, str) and category in _DIRECTORY_CATEGORIES:
+		line += f" category={category}"
+	depth = getattr(exc, "review_depth", None)
+	if isinstance(depth, str) and depth in _DIRECTORY_DEPTHS:
+		line += f" depth={depth}"
+	return line
 COMMAND_TWIN_DIR = "workflow-templates/.claude/commands"
 
 
+def _unsafe_directory_category(name, *, is_symlink=False):
+	if is_symlink:
+		return "symlink"
+	parts = PurePosixPath(name).parts
+	if not parts or not re.fullmatch(r"[A-Za-z0-9._/-]+", name) or any(not part or part in (".", "..") for part in parts):
+		return "invalid_name"
+	lower_parts = tuple(part.lower() for part in parts)
+	if any(part.startswith(".env") for part in lower_parts):
+		return "env_like"
+	if any("secret" in part or "credential" in part for part in lower_parts):
+		return "sensitive_name"
+	if any(part.endswith((".pem", ".key", ".p12", ".pfx", ".keystore")) for part in lower_parts):
+		return "key_material_suffix"
+	if any(part in EXCLUDED and original != part for original, part in zip(parts, lower_parts)):
+		return "excluded_name_variant"
+	if len(parts) > 1 and lower_parts[0] == ".github" and lower_parts[:2] not in ((".github", "workflows"), (".github", "actions")):
+		return "dot_github_subtree"
+	return "other"
+
+
+def _directory_depth_bucket(name):
+	depth = len(PurePosixPath(name).parts)
+	return "3+" if depth >= 3 else str(max(depth, 1))
+
+
 class UnsafeWorkspaceDirectory(ValueError):
-	def __init__(self, rejected_dir):
+	def __init__(self, rejected_dir, *, is_symlink=False):
 		super().__init__("unsafe workspace directory")
 		self.rejected_dir = rejected_dir
+		self.category = _unsafe_directory_category(rejected_dir, is_symlink=is_symlink)
+		self.depth = _directory_depth_bucket(rejected_dir)
 
 
 def _log_safe_dir(name):
 	if not re.fullmatch(r"[A-Za-z0-9._-][A-Za-z0-9._/-]{0,63}", name):
 		return "redacted"
 	parts = name.split("/")
-	if any(not part or part in (".", "..") or "secret" in part.lower() or "credential" in part.lower() or part.lower().startswith(".env") for part in parts):
+	if any(not part or part in (".", "..") or "secret" in part.lower() or "credential" in part.lower() or part.lower().startswith(".env") or part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore", ".egg-info", ".dist-info")) for part in parts):
 		return "redacted"
 	return name
 
@@ -162,7 +222,9 @@ def enumerate_workspace(root, host=None, commands=None):
 			if child in EXCLUDED or child.endswith((".egg-info", ".dist-info")) or (rel == Path(".") and child.startswith(".") and child not in (".github", ".claude")):
 				dirs.remove(child)
 				continue
-			if (name not in (".github", ".github/ai", ".claude", ".claude/hooks") and not (name == ".claude/commands" and commands) and not allowed(name + "/placeholder.py")) or (Path(directory) / child).is_symlink():
+			if (Path(directory) / child).is_symlink():
+				raise UnsafeWorkspaceDirectory(name, is_symlink=True)
+			if name not in (".github", ".github/ai", ".claude", ".claude/hooks") and not (name == ".claude/commands" and commands) and not allowed(name + "/placeholder.py"):
 				raise UnsafeWorkspaceDirectory(name)
 		for child in files:
 			entries += 1
@@ -238,12 +300,12 @@ def _check_destination_parents(host, name, deleted_names):
 		except FileNotFoundError:
 			return
 		except NotADirectoryError:
-			raise ValueError("new result conflicts with host path") from None
+			raise _rejection("new result conflicts with host path", "result_conflicts_host") from None
 		if stat.S_ISDIR(info.st_mode):
 			continue
 		if stat.S_ISREG(info.st_mode) and parent.relative_to(host).as_posix() in deleted_names:
 			return
-		raise ValueError("new result conflicts with host path")
+		raise _rejection("new result conflicts with host path", "result_conflicts_host")
 
 
 def transfer(host, workspace, manifest):
@@ -263,7 +325,7 @@ def transfer(host, workspace, manifest):
 		if new is not None and old == [hashlib.sha256(new[0]).hexdigest(), new[1]]:
 			continue
 		if not allowed(name, None, commands):
-			raise ValueError("unsafe result path")
+			raise _rejection("unsafe result path", "unsafe_result_path")
 		host_file = checked_path(host, name)
 		if old is None and (host_file.exists() or host_file.is_symlink()):
 			raise ValueError("new result conflicts with host path")
@@ -280,16 +342,16 @@ def transfer(host, workspace, manifest):
 		except NotADirectoryError:
 			# Only a baseline file scheduled for deletion may become a directory.
 			if not any(name.startswith(deleted + "/") for deleted in deleted_names):
-				raise ValueError("new result conflicts with host path") from None
+				raise _rejection("new result conflicts with host path", "result_conflicts_host") from None
 		else:
 			if not stat.S_ISREG(info.st_mode):
-				raise ValueError("new result conflicts with host path")
+				raise _rejection("new result conflicts with host path", "result_conflicts_host")
 	backups = {}
 	for name, host_file, _ in changes:
 		if name in baseline:
 			backups[name] = read_regular(host_file)
 			if [hashlib.sha256(backups[name][0]).hexdigest(), backups[name][1]] != baseline[name]:
-				raise ValueError("host baseline changed")
+				raise _rejection("host baseline changed", "host_baseline_changed")
 	stage = Path(tempfile.mkdtemp(dir=host, prefix=".review-isolated-stage-"))
 	journal = []
 	try:
@@ -379,7 +441,7 @@ def refresh(host, workspace, manifest):
 	for name, old in baseline.items():
 		host_file = checked_path(host, name)
 		if not host_file.exists() or fingerprint(host_file) != old:
-			raise ValueError("host baseline changed before editor")
+			raise _rejection("host baseline changed before editor", "host_baseline_changed")
 	# Excluded command writes are not in results, but must not survive a retry.
 	command_dir = checked_path(workspace, ".claude/commands")
 	if command_dir.is_dir():
@@ -458,25 +520,29 @@ def main():
 		else:
 			transfer(host, workspace, manifest)
 	except (OSError, ValueError, UnicodeError, subprocess.CalledProcessError) as exc:
-		# Only fixed reasons cross into logs, except one bounded, redacted relative
-		# directory name. The first rejected directory in walk order is reported.
-		reason_code = {
-			"admitted command inventory missing": "admitted_inventory_missing",
-			"symlink in workspace path": "symlink_path",
-			"unsafe file type or size": "unsafe_file",
-			"file changed during read": "file_changed",
-			"workspace entry limit exceeded": "entry_limit",
-			"unsafe workspace directory": "unsafe_directory",
-			"unsafe workspace result path": "unsafe_result_path",
-			"workspace size limit exceeded": "workspace_size_limit",
-			"host baseline changed": "host_baseline_changed",
-			"new result conflicts with host path": "host_path_conflict",
-			"transfer rollback failed": "transfer_rollback_failed",
-			"unsafe result path": "unsafe_result_path",
-		}.get(str(exc), "unknown") if sys.argv[1] == "transfer" and isinstance(exc, ValueError) else "unknown"
-		directory_detail = f" dir={_log_safe_dir(exc.rejected_dir)}" if sys.argv[1] == "transfer" and isinstance(exc, UnsafeWorkspaceDirectory) else ""
-		error_type = "ValueError" if isinstance(exc, UnsafeWorkspaceDirectory) else type(exc).__name__
-		print(f"::error::Review isolation snapshot or transfer rejected ({error_type}) reason={reason_code}{directory_detail}", file=sys.stderr)
+		if isinstance(exc, UnsafeWorkspaceDirectory):
+			category = exc.category if exc.category in _DIRECTORY_CATEGORIES else "other"
+			depth = exc.depth if exc.depth in _DIRECTORY_DEPTHS else "3+"
+			print(f"::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category={category} depth={depth}", file=sys.stderr)
+		elif getattr(exc, "review_reason", None) in _REJECTION_REASONS:
+			print(_rejection_line(exc), file=sys.stderr)
+		else:
+			# Only fixed, path-free transfer reasons may cross into workflow logs.
+			reason_code = {
+				"admitted command inventory missing": "admitted_inventory_missing",
+				"symlink in workspace path": "symlink_path",
+				"unsafe file type or size": "unsafe_file",
+				"file changed during read": "file_changed",
+				"workspace entry limit exceeded": "entry_limit",
+				"unsafe workspace directory": "unsafe_directory",
+				"unsafe workspace result path": "unsafe_result_path",
+				"workspace size limit exceeded": "size_limit",
+				"host baseline changed": "host_baseline_changed",
+				"new result conflicts with host path": "result_conflicts_host",
+				"transfer rollback failed": "transfer_rollback_failed",
+				"unsafe result path": "unsafe_result_path",
+			}.get(str(exc), "unknown") if sys.argv[1] == "transfer" and isinstance(exc, ValueError) else "size_limit" if sys.argv[1] == "snapshot" and str(exc) == "snapshot size limit exceeded" else "unknown"
+			print(f"::error::Review isolation snapshot or transfer rejected ({type(exc).__name__}) reason={reason_code}", file=sys.stderr)
 		raise SystemExit(1) from None
 
 

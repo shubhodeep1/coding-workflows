@@ -54,6 +54,20 @@ jobs:
             echo "Note: If a previous clarify run was in progress, it has been cancelled by this run (cancel-in-progress: true)."
           fi
 
+      - name: Record GH_PAT budget at clarify start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_clarify
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=clarify job=clarify remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       - name: Resolve integration ref
         id: refctx
         env:
@@ -1427,6 +1441,7 @@ jobs:
             --issue-number "${ISSUE_NUMBER}"
 
       - name: Post clear-to-proceed comment
+        id: post_clear
         if: steps.clarify_route.outputs.skip_codex != 'true' && steps.parse_codex.outputs.blocked != 'true' && steps.parse_codex.outputs.needs_clarification != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1579,6 +1594,42 @@ jobs:
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
             -f body="${REASON}"
 
+      # A token-created marker does not start a new workflow; the scheduled
+      # poller replays this command with the PAT once the budget recovers.
+      - name: Queue failed reclarify for poller
+        if: ${{ failure() && github.event_name == 'issue_comment' && github.event.comment.user.type == 'User' && steps.parse_codex.outputs.blocked != 'true' && steps.clarify_route.outputs.is_closed != 'true' && steps.clarify_route.outputs.skip_codex != 'true' && steps.post_questions.outcome != 'success' && steps.post_clear.outcome != 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
+          SOURCE_COMMENT_BODY: ${{ github.event.comment.body }}
+          SOURCE_ASSOCIATION: ${{ github.event.comment.author_association }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [[ "${ISSUE_NUMBER}" =~ ^[1-9][0-9]*$ && "${SOURCE_COMMENT_ID}" =~ ^[1-9][0-9]*$ ]] || exit 1
+          [[ "${SOURCE_COMMENT_BODY}" == /reclarify* ]] || exit 1
+          case "${SOURCE_ASSOCIATION}" in OWNER|MEMBER|COLLABORATOR) ;; *) exit 1 ;; esac
+          gh api -X POST "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="<!-- ai:reclarify-requeue:v1 source=${SOURCE_COMMENT_ID} -->" >/dev/null
+          # The marker alone is undiscoverable by the poller. Retry transient
+          # label failures with the independent job token before failing visibly.
+          for requeue_label_attempt in 1 2 3; do
+            if gh api -X POST "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/labels" \
+              -f 'labels[]=ai:reclarify-requeue' >/dev/null; then
+              exit 0
+            fi
+            if [ "${requeue_label_attempt}" -eq 1 ]; then
+              # A newly deployed consumer may not have synced this label yet.
+              gh label create 'ai:reclarify-requeue' --repo "${REPOSITORY}" \
+                --color fbca04 \
+                --description 'Trusted /reclarify failed before routing; poller will retry after PAT budget recovers' \
+                >/dev/null 2>&1 || true
+            fi
+            [ "${requeue_label_attempt}" -eq 3 ] || sleep 2
+          done
+          echo '::error::Failed to label reclarify request for poller replay.'
+          exit 1
+
       - name: Telegram failure notification
         if: failure() || cancelled()
         env:
@@ -1602,6 +1653,18 @@ jobs:
           MSG+="Run: ${RUN_URL}"
           tg_send_phase_failure clarify "${MSG}" "ERROR" "${ISSUE_NUMBER}"
 
+      - name: Record GH_PAT budget at clarify end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_clarify
+        run: |
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget end clarify clarify "${GH_PAT_BUDGET_FILE}"
+          else
+            echo 'GH_PAT_BUDGET phase=end workflow=clarify job=clarify remaining=unknown reset=unknown used_in_job=unknown'
+          fi
   heal-report:
     # Workflow failure heal (README "Workflow Failure Heal"): report a failed
     # clarify run to coding-workflows' heal intake, which diagnoses it and opens
@@ -1625,6 +1688,19 @@ jobs:
       WORKFLOW_HEAL_ISSUE_NUMBER: ${{ github.event.issue.number }}
       REPORT_WORKFLOW_NAME: ${{ github.workflow }}
     steps:
+      - name: Record GH_PAT budget at heal-report start
+        env:
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_heal_report
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=clarify job=heal-report remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       - name: Resolve workflow support ref
         run: |
           set -euo pipefail
@@ -1658,3 +1734,21 @@ jobs:
           REPORT_WRAPPER_SHA="$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" \
             RUNTIME_DIR="${RUNNER_TEMP}/workflow-heal-phase-report" \
             bash "${reporter}"
+
+      - name: Record GH_PAT budget at heal-report end
+        if: always()
+        env:
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_heal_report
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          remaining=unknown; reset=unknown; used=unknown
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r remaining reset <<< "${reading}"
+            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
+              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
+              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
+                used=$((initial - remaining))
+              fi
+            fi
+          fi
+          echo "GH_PAT_BUDGET phase=end workflow=clarify job=heal-report remaining=${remaining} reset=${reset} used_in_job=${used}"

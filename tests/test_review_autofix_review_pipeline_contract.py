@@ -8063,7 +8063,12 @@ def main() -> int:
 	test_review_isolation_wiring_and_model_relay()
 	test_review_isolation_workspace_transfer_and_hostile_paths()
 	test_review_isolation_transfer_failure_evidence()
+	test_review_other_sandbox_transfer_failure_evidence()
 	test_review_isolation_traverses_only_allowed_github_directories()
+	test_review_isolation_unsafe_directory_reports_path_free_category()
+	test_review_isolation_rejection_line_drops_unknown_tokens()
+	test_review_isolation_reports_snapshot_refresh_and_transfer_reasons()
+	test_review_isolation_reports_result_conflicts_host()
 	test_review_isolation_transfers_into_active_work_tree()
 	test_review_relay_accepts_only_configured_chat_model()
 	test_review_relay_main_preserves_invoked_mode()
@@ -8246,7 +8251,7 @@ def test_review_transfer_rejects_extensionless_parent_before_writes(tmp_path):
 		result = subprocess.run([sys.executable, str(REPO_ROOT / "scripts/review_untrusted_workspace.py"),
 			"transfer", str(host), str(source), str(manifest)], capture_output=True, text=True)
 		assert result.returncode == 1
-		assert result.stderr.strip().endswith("reason=host_path_conflict")
+		assert result.stderr.strip().endswith("reason=result_conflicts_host")
 		assert (host / "a.py").read_bytes() == b"before"
 		assert manifest.read_bytes() == before
 		assert not list(host.glob(".review-isolated-*"))
@@ -8311,18 +8316,19 @@ def test_review_isolation_unsafe_directory_names_bounded_dir() -> None:
 				capture_output=True, text=True, check=False,
 			)
 		assert run("snapshot").returncode == 0
-		for directory, expected in (
-			(".claude/commands", ".claude/commands"),
-			(".github/ai/::set-output name=x::y", "redacted"),
-			(".github/ai/" + "a" * 100, "redacted"),
-			(".github/ai/secrets_backup", "redacted"),
+		for directory, category, depth in (
+			(".claude/commands", "other", "2"),
+			(".github/ai/::set-output name=x::y", "invalid_name", "3+"),
+			(".github/ai/" + "a" * 100, "dot_github_subtree", "3+"),
+			(".github/ai/secrets_backup", "sensitive_name", "3+"),
 		):
 			bad_dir = source / directory
 			bad_dir.mkdir(parents=True)
 			(bad_dir / "audit-plans.md").write_text("untrusted\n")
 			rejection = run("transfer")
 			assert rejection.returncode == 1
-			assert rejection.stderr == f"::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir={expected}\n"
+			assert rejection.stderr == f"::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category={category} depth={depth}\n"
+			assert directory not in rejection.stderr
 			assert (host / "scripts/app.py").read_text() == "before\n"
 			assert not (host / directory).exists()
 			(bad_dir / "audit-plans.md").unlink()
@@ -8330,9 +8336,9 @@ def test_review_isolation_unsafe_directory_names_bounded_dir() -> None:
 		(source / "scripts/link").symlink_to(host, target_is_directory=True)
 		rejection = run("transfer")
 		assert rejection.returncode == 1
-		assert rejection.stderr == "::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=scripts/link\n"
+		assert rejection.stderr == "::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category=symlink depth=2\n"
 		assert not (host / "scripts/link").exists()
-		assert run("refresh").stderr == "::error::Review isolation snapshot or transfer rejected (ValueError) reason=unknown\n"
+		assert run("refresh").stderr == "::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category=symlink depth=2\n"
 
 
 def test_review_editor_prompt_explains_sandbox_limits() -> None:
@@ -8372,7 +8378,16 @@ def test_review_isolation_transfer_failure_evidence() -> None:
 		valid_reason = "::error::Review isolation snapshot or transfer rejected (ValueError) reason=host_baseline_changed\n"
 		for diagnostic, expected in (
 			(valid_reason, "host_baseline_changed"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=size_limit\n", "size_limit"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=symlink_in_path\n", "symlink_in_path"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=result_conflicts_host\n", "result_conflicts_host"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category=dot_github_subtree depth=3+\n", "unsafe_directory category=dot_github_subtree depth=3+"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category=symlink depth=1\n", "unsafe_directory category=symlink depth=1"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category=unknown depth=2\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category=symlink depth=2 extra=path\n", "unknown"),
 			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=transfer_rollback_failed\n", "transfer_rollback_failed"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category=symlink depth=2\n", "unsafe_directory category=symlink depth=2"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category=excluded_name_variant depth=3+\n", "unsafe_directory category=excluded_name_variant depth=3+"),
 			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=.claude/commands\n", "unsafe_directory dir=.claude/commands"),
 			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=redacted\n", "unsafe_directory dir=redacted"),
 			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=../x\n", "unknown"),
@@ -8382,6 +8397,8 @@ def test_review_isolation_transfer_failure_evidence() -> None:
 			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=.env-private\n", "unknown"),
 			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=secrets_backup\n", "unknown"),
 			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=host_baseline_changed dir=x\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category=forged depth=2\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category=symlink depth=4\n", "unknown"),
 			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=admitted_inventory_missing\n", "admitted_inventory_missing"),
 			(None, "unknown"),
 			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=forged\n", "unknown"),
@@ -8399,12 +8416,57 @@ def test_review_isolation_transfer_failure_evidence() -> None:
 			assert (root / "review_sandbox_transfer_failed").exists()
 			assert result.stderr == f"::error::Review sandbox result transfer was incomplete; refusing editor fallback. reason={expected}\n"
 			assert (archive / "editor_attempt_2.err").read_text() == "existing editor stderr\n" + result.stderr
+			archived_reason = archive / "review_sandbox_transfer_reason_2.txt"
+			if expected == "unknown":
+				assert not archived_reason.exists()
+			else:
+				assert archived_reason.read_text() == diagnostic
+			archived_reason.unlink(missing_ok=True)
 			assert "secret" not in result.stderr
 		# A successful transfer removes the marker, so even a stale reason is ignored.
 		(root / "review_sandbox_transfer_failed").unlink()
 		result = subprocess.run(["bash", "-c", "set -eu\n" + block], env=base_env,
 			capture_output=True, text=True, check=False)
 		assert result.returncode == 0 and not result.stderr
+
+
+def test_review_other_sandbox_transfer_failure_evidence() -> None:
+	rb_function = re.search(r"(?ms)^_review_rb_consume_transfer_marker\(\)\n\{.*?^\}", _rb_judge_text())
+	assert rb_function
+	resolver_function = re.search(r"(?ms)^_resolver_sandbox_opencode_attempt\(\)\n\{.*?^\}",
+		(REPO_ROOT / "scripts/review_conflict_resolve.sh").read_text())
+	assert resolver_function
+	branch_start = '  if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then'
+	resolver_branch = branch_start + resolver_function.group(0).split(branch_start, 1)[1].split('\n  if [ "${_codex_exit}" -eq 2 ]; then', 1)[0]
+	for diagnostic, expected in (
+		("symlink_in_path", " reason=symlink_in_path"),
+		("size_limit", " reason=size_limit"),
+		("result_conflicts_host", " reason=result_conflicts_host"),
+		("unsafe_directory category=dot_github_subtree depth=3+", " reason=unsafe_directory category=dot_github_subtree depth=3+"),
+		("unsafe_directory category=symlink depth=1", " reason=unsafe_directory category=symlink depth=1"),
+		("unsafe_directory category=evil depth=2", ""),
+		("unsafe_directory category=symlink depth=2 extra=path", ""),
+		("unsafe_directory dir=.claude/commands", " reason=unsafe_directory"),
+		("transfer_rollback_failed", " reason=transfer_rollback_failed"),
+	):
+		with tempfile.TemporaryDirectory() as td:
+			root = Path(td)
+			marker = root / "review_sandbox_transfer_failed"
+			marker.touch()
+			(root / "review_sandbox_transfer_reason_attempt-output").write_text(
+				f"::error::Review isolation snapshot or transfer rejected (ValueError) reason={diagnostic}\n"
+			)
+			base_env = {**os.environ, "RUNTIME_DIR": str(root), "tmp_output": str(root / "attempt-output")}
+			rb_result = subprocess.run(["bash", "-c", "set -eu\n" + rb_function.group(0) + '\n_review_rb_consume_transfer_marker "$tmp_output"'],
+				env=base_env, capture_output=True, text=True, check=False)
+			assert rb_result.returncode == 0, rb_result.stderr
+			assert rb_result.stderr == f"::error::Review-blocked judge sandbox transfer failed; refusing to commit the fix.{expected}\n"
+			marker.touch()
+			resolver_result = subprocess.run(["bash", "-c", 'set -eu\n_resolver_fail_closed() { echo "$1"; exit 7; }\nresolver_transfer_reason=""\nresolver_transfer_reason_file="${RUNTIME_DIR}/review_sandbox_transfer_reason_${tmp_output##*/}"\n' + resolver_branch],
+				env=base_env, capture_output=True, text=True, check=False)
+			assert resolver_result.returncode == 7, resolver_result.stderr
+			assert resolver_result.stderr == f"::error::Conflict resolver sandbox transfer failed; refusing to accept output.{expected}\n"
+			assert resolver_result.stdout == ("transfer_rollback_failed\n" if diagnostic == "transfer_rollback_failed" else "sandbox_transfer_failed\n")
 
 
 def test_review_isolation_traverses_only_allowed_github_directories() -> None:
@@ -8768,6 +8830,246 @@ def test_review_blocked_fix_sandbox_prepare_accepts_per_pr_workspace() -> None:
 				["bash", sandbox, "cleanup"], env={**env, "REVIEW_SANDBOX_ROOT": sandbox_root_to_clean},
 				check=True, capture_output=True, text=True, timeout=120,
 			)
+
+
+def _review_isolation_transfer_case(mutate, *, with_reason_env: bool = True, host_mutate=None):
+	"""Snapshot a small host tree, let `mutate` edit the sandbox, then transfer (#6413)."""
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host = root / "host"
+		source = root / "isolated" / "source"
+		source.mkdir(parents=True)
+		(host / "scripts").mkdir(parents=True)
+		(host / "scripts/app.py").write_text("before\n")
+		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", "scripts"], cwd=host, env=_git_clean_env(), check=True)
+		manifest = root / "isolated" / "baseline.json"
+		reason_file = root / "runtime" / "review_sandbox_transfer_reason"
+		reason_file.parent.mkdir()
+		env = {k: v for k, v in os.environ.items() if k != "REVIEW_SANDBOX_TRANSFER_REASON_FILE"}
+		def run(action: str, extra_env=None) -> subprocess.CompletedProcess[str]:
+			return subprocess.run(
+				[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest)],
+				env={**env, **(extra_env or {})}, capture_output=True, text=True, check=False,
+			)
+		assert run("snapshot").returncode == 0
+		assert run("refresh").returncode == 0
+		mutate(source, root)
+		if host_mutate is not None:
+			host_mutate(host)
+		host_before = sorted(str(p.relative_to(host)) for p in host.rglob("*") if ".git" not in p.relative_to(host).parts)
+		result = run("transfer", {"REVIEW_SANDBOX_TRANSFER_REASON_FILE": str(reason_file)} if with_reason_env else None)
+		host_after = sorted(str(p.relative_to(host)) for p in host.rglob("*") if ".git" not in p.relative_to(host).parts)
+		reason = reason_file.read_text() if reason_file.exists() else None
+		leftovers = sorted(p.name for p in reason_file.parent.iterdir())
+		return result, reason, host_before, host_after, leftovers
+
+
+def test_review_isolation_transfer_rejection_names_path_and_rule() -> None:
+	def make_dir(rel: str):
+		def mutate(source: Path, _root: Path) -> None:
+			(source / rel).mkdir(parents=True)
+			(source / rel / "x.py").write_text("x\n")
+		return mutate
+
+	def make_symlink(source: Path, root: Path) -> None:
+		target = root / "elsewhere"
+		target.mkdir()
+		(target / "x.py").write_text("x\n")
+		(source / "scripts/link").symlink_to(target, target_is_directory=True)
+
+	def make_root_file(source: Path, _root: Path) -> None:
+		(source / "Makefile").write_text("all:\n")
+
+	cases = [
+		(make_dir(".github/ai_SENTINEL"), "reason=unsafe_directory category=dot_github_subtree depth=2"),
+		(make_dir("scripts/my_secret"), "reason=unsafe_directory category=sensitive_name depth=2"),
+		(make_dir("scripts/Secrets"), "reason=unsafe_directory category=sensitive_name depth=2"),
+		(make_dir("scripts/Credentials"), "reason=unsafe_directory category=sensitive_name depth=2"),
+		(make_dir("scripts/.envx"), "reason=unsafe_directory category=env_like depth=2"),
+		(make_symlink, "reason=unsafe_directory category=symlink depth=2"),
+		(make_root_file, "reason=unsafe_result_path"),
+		(make_dir("scripts/bad\nname::add-mask::%0A"), "reason=unsafe_directory category=invalid_name depth=2"),
+	]
+	for mutate, expected in cases:
+		result, reason, host_before, host_after, leftovers = _review_isolation_transfer_case(mutate)
+		assert result.returncode == 1, (expected, result.stderr)
+		assert result.stderr == f"::error::Review isolation snapshot or transfer rejected (ValueError) {expected}\n", result.stderr
+		# Only fixed classification tokens reach the log.
+		assert result.stderr.count("::") == 2 and result.stderr.count("\n") == 1
+		assert reason is None
+		assert host_after == host_before
+		assert leftovers == []
+		assert "my_secret" not in result.stderr and ".envx" not in result.stderr
+		assert "path=" not in result.stderr
+
+
+def test_review_isolation_transfer_prunes_root_dot_and_case_variant_build_dirs() -> None:
+	# Exact excluded build names are pruned; case variants fail closed.
+	def mutate(source: Path, _root: Path) -> None:
+		for rel in ("build", "scripts/dist", "scripts/nested/coverage"):
+			(source / rel).mkdir(parents=True)
+			(source / rel / "x.py").write_text("x\n")
+
+	result, reason, host_before, host_after, _leftovers = _review_isolation_transfer_case(mutate)
+	assert result.returncode == 0, result.stderr
+	assert reason is None
+	assert host_after == host_before
+	assert not any(path.endswith("/x.py") for path in host_after)
+	for variant in ("Build", "scripts/Dist", "scripts/nested/Coverage"):
+		result, reason, host_before, host_after, _leftovers = _review_isolation_transfer_case(
+			lambda source, _root: (source / variant).mkdir(parents=True),
+		)
+		assert result.returncode == 1
+		depth = "1" if variant == "Build" else "3+" if variant.count("/") == 2 else "2"
+		assert f"reason=unsafe_directory category=excluded_name_variant depth={depth}" in result.stderr
+		assert reason is None
+		assert host_before == host_after
+
+
+def test_review_isolation_transfer_plain_rejection_reports_fixed_detail() -> None:
+	def host_mutate(host: Path) -> None:
+		(host / "scripts/app.py").write_text("host changed\n")
+
+	def noop(_source: Path, _root: Path) -> None:
+		return None
+
+	expected = "reason=host_baseline_changed"
+	result, reason, _before, _after, _leftovers = _review_isolation_transfer_case(noop, host_mutate=host_mutate)
+	assert result.returncode == 1
+	assert result.stderr == f"::error::Review isolation snapshot or transfer rejected (ValueError) {expected}\n"
+	assert reason is None
+	result, reason, _before, _after, leftovers = _review_isolation_transfer_case(noop, host_mutate=host_mutate, with_reason_env=False)
+	assert result.returncode == 1
+	assert reason is None and leftovers == []
+
+
+def test_review_sandbox_transfer_reason_is_reported_and_archived() -> None:
+	helper = (REPO_ROOT / "scripts/review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert helper.count('2> "${RUNTIME_DIR}/review_sandbox_transfer_reason_${output##*/}"') == 2
+	apply_fixes = _apply_fixes_text()
+	start = apply_fixes.index('if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then')
+	block = apply_fixes[start:apply_fixes.index("exit 1", start)]
+	assert 'cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err"' in block
+	assert 'cp "${transfer_reason_file}" "${PREVIOUS_REVIEWS_DIR}/review_sandbox_transfer_reason_${attempt}.txt"' in block
+	assert "::error::Review sandbox result transfer was incomplete; refusing editor fallback. reason=${transfer_reason}" in block
+	assert 'transfer_reason_file="${RUNTIME_DIR}/review_sandbox_transfer_reason_${tmp_output##*/}"' in block
+	assert "including selected .claude/commands/ files, .claude/hooks/gh_api_write_guard.py" in apply_fixes
+	assert "sandbox-excluded path" in apply_fixes
+
+
+def test_review_isolation_unsafe_directory_reports_path_free_category() -> None:
+	"""An unsafe_directory rejection only names fixed classification tokens.
+
+	The rejection itself is unchanged: the whole transfer still fails before
+	the first host write, including the legitimate edit beside the directory.
+	"""
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	cases = (
+		(".github/ai_SENTINEL", "dot_github_subtree", "2"),
+		("scripts/secret_store_SENTINEL", "sensitive_name", "2"),
+		("scripts/.envdir_SENTINEL", "env_like", "2"),
+		("scripts/Build", "excluded_name_variant", "2"),
+		("scripts/nested/Coverage", "excluded_name_variant", "3+"),
+		("scripts/certs_SENTINEL.pem", "key_material_suffix", "2"),
+		("scripts/back\\slash_SENTINEL", "invalid_name", "2"),
+		("scripts/linkdir_SENTINEL", "symlink", "2"),
+	)
+	for rel, category, depth in cases:
+		with tempfile.TemporaryDirectory() as td:
+			root = Path(td)
+			host = root / "host"
+			source = root / "isolated" / "source"
+			source.mkdir(parents=True)
+			(host / "scripts/nested").mkdir(parents=True)
+			(host / ".github/workflows").mkdir(parents=True)
+			(host / "scripts/app.py").write_text("before\n")
+			(host / "scripts/nested/keep.py").write_text("keep\n")
+			(host / ".github/workflows/example.yml").write_text("before\n")
+			subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+			subprocess.run(["git", "add", "scripts", ".github"], cwd=host, env=_git_clean_env(), check=True)
+			manifest = root / "isolated" / "baseline.json"
+			def run(action: str) -> subprocess.CompletedProcess[str]:
+				return subprocess.run(
+					[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest)],
+					capture_output=True, text=True, check=False,
+				)
+			assert run("snapshot").returncode == 0
+			assert run("refresh").returncode == 0
+			(source / "scripts/app.py").write_text("after\n")
+			offending = source / rel
+			if rel == "scripts/linkdir_SENTINEL":
+				outside = root / "outside"
+				outside.mkdir()
+				(outside / "inner.py").write_text("outside\n")
+				offending.symlink_to(outside, target_is_directory=True)
+			else:
+				offending.mkdir(parents=True)
+				(offending / "inner.py").write_text("untrusted\n")
+			result = run("transfer")
+			assert result.returncode != 0, rel
+			assert f"(ValueError) reason=unsafe_directory category={category} depth={depth}" in result.stderr, (rel, result.stderr)
+			assert "SENTINEL" not in result.stderr, rel
+			assert (host / "scripts/app.py").read_text() == "before\n", rel
+			assert not (host / rel / "inner.py").exists(), rel
+
+
+def test_review_isolation_rejection_line_drops_unknown_tokens() -> None:
+	spec = importlib.util.spec_from_file_location("review_untrusted_workspace", REPO_ROOT / "scripts/review_untrusted_workspace.py")
+	assert spec and spec.loader
+	workspace_module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(workspace_module)
+	assert workspace_module._log_safe_dir("scripts/safe-name") == "scripts/safe-name"
+	for forged in ("../etc", "scripts/evil\n::error::y", "a//b", "scripts/my_secret", "scripts/.env-private", "scripts/private.pem", "scripts/private.key", "scripts/private.dist-info", "a" * 65):
+		assert workspace_module._log_safe_dir(forged) == "redacted"
+
+
+def test_review_isolation_reports_snapshot_refresh_and_transfer_reasons() -> None:
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host, source, manifest = _review_transfer_fixture(root, {"a.py": b"before"})
+		(host / "a.py").write_bytes(b"changed")
+		refresh_result = subprocess.run(
+			[sys.executable, str(workspace_helper), "refresh", str(host), str(source), str(manifest)],
+			capture_output=True, text=True, check=False,
+		)
+		assert refresh_result.returncode == 1
+		assert refresh_result.stderr == "::error::Review isolation snapshot or transfer rejected (ValueError) reason=host_baseline_changed\n"
+		(host / "a.py").write_bytes(b"before")
+		spec = importlib.util.spec_from_file_location("workspace_rejection_test", workspace_helper)
+		assert spec and spec.loader
+		workspace_module = importlib.util.module_from_spec(spec)
+		spec.loader.exec_module(workspace_module)
+		with mock.patch.object(workspace_module, "MAX_TOTAL", 0):
+			for action in ("snapshot", "transfer"):
+				output_source = source if action == "transfer" else root / "snapshot-source"
+				output_source.mkdir(exist_ok=True)
+				error_output = io.StringIO()
+				with mock.patch.object(sys, "argv", [str(workspace_helper), action, str(host), str(output_source), str(manifest)]), \
+						contextlib.redirect_stderr(error_output), pytest.raises(SystemExit) as error:
+					workspace_module.main()
+				assert error.value.code == 1
+				assert error_output.getvalue() == "::error::Review isolation snapshot or transfer rejected (ValueError) reason=size_limit\n"
+		assert (host / "a.py").read_bytes() == b"before"
+
+
+def test_review_isolation_reports_result_conflicts_host() -> None:
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	with tempfile.TemporaryDirectory() as td:
+		host, source, manifest = _review_transfer_fixture(Path(td), {"a.py": b"before"})
+		(host / "b.py").write_bytes(b"host")
+		(source / "a.py").write_bytes(b"edited")
+		(source / "b.py").write_bytes(b"container")
+		result = subprocess.run(
+			[sys.executable, str(workspace_helper), "transfer", str(host), str(source), str(manifest)],
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 1
+		assert result.stderr == "::error::Review isolation snapshot or transfer rejected (ValueError) reason=result_conflicts_host\n"
+		assert (host / "a.py").read_bytes() == b"before"
+		assert (host / "b.py").read_bytes() == b"host"
 
 
 def test_review_relay_accepts_only_configured_chat_model() -> None:

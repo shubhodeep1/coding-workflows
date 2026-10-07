@@ -18911,6 +18911,7 @@ def test_state_identity_failure_skips_reconstruction_and_state_writes():
 		enable_validation="false",
 		max_validate_cycles="3",
 		mock_store_extra={"fail_user_lookup": True},
+		env_overrides={"UNBLOCK_JUDGE_ENABLED": "false"},
 	)
 	assert "ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=192 outcome=identity_unavailable" in result["stderr"]
 	assert "skipping this tracking issue and state reconstruction" in result["stdout"]
