@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/semble_helpers.sh:34-36 | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_SEMBLE_BOOTSTRAP_FALLBACK_LOGGED` can suppress fallback logs for subsequent `semble_query_block` calls in the same process.\n  WHY: If multiple calls fail bootstrap, a flag set by the first call causes later fallback events to be skipped, resulting in under-counting.\n- scripts/semble_helpers.sh:33-35 | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `semble_query_block` can skip its fallback log when `semble_ensure_ready` fails even though the bootstrap fallback event was not successfully logged.\n  WHY: If `_semble_log_event` fails, the set flag can cause the query to return 1 without recording any fallback event.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Implement Phase 4 (Contribution telemetry) for Semble queries.\n  expected_change_site: scripts/semble_helpers.sh\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The diff hunk in `scripts/semble_helpers.sh` added `sources` and `static_dup_bytes` fields to `SEMBLE_QUERY` in `semble_query_block`, but did not add the same fields to the `SEMBLE_FALLBACK` events when they occur in `_semble_log_event`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/semble_helpers.sh | Line: 34-36 | confidence=3\n  PROBLEM: The use of `_SEMBLE_BOOTSTRAP_FALLBACK_LOGGED` to deduplicate fallback logs depends on subshell/process execution and `source` order, which is unreliable across the recursive calls of `semble_query_block`.\n  WHY: If multiple `semble_query_block` calls are made in the same process, `_SEMBLE_BOOTSTRAP_FALLBACK_LOGGED` might be set by the first call, causing subsequent calls that also fail the bootstrap to skip logging their fallback event, resulting in under-counting.\n- scripts/semble_helpers.sh | Line: 33-35 (semble_query_block) | confidence=3\n  PROBLEM: The logic to skip the second `SEMBLE_FALLBACK` log when `semble_ensure_ready` fails uses `_SEMBLE_BOOTSTRAP_FALLBACK_LOGGED=true` set in the bootstrap event handler, but `semble_ensure_ready` does not guarantee that the fallback event was successfully logged before returning 1.\n  WHY: If `_semble_log_event` fails for any reason, `semble_query_block` will mistakenly return 1 without logging its own fallback, leading to no fallback event being recorded at all for that query.\n- Requirement: Implement Phase 4 (Contribution telemetry) for Semble queries.\n  Expected change site: scripts/semble_helpers.sh\n  Evidence of absence: The diff hunk in `scripts/semble_helpers.sh` added `sources` and `static_dup_bytes` fields to `SEMBLE_QUERY` in `semble_query_block`, but did not add the same fields to the `SEMBLE_FALLBACK` events when they occur in `_semble_log_event`.\n  ISSUE_CONFIDENCE: 4\n- scripts/semble_helpers.sh | Location: semble_ensure_ready | Issue: The function lacks explicit handling for cases where `timeout` is missing from the environment, which could cause the bootstrap process to hang indefinitely. Suggested minimal fix: Check for `timeout` with `command -v` and fail closed if not found. Lines changed: ~2. HARDENING_RISK_SCORE (0-5): 2\n- scripts/semble_helpers.sh | Location: _semble_state_write | Issue: `mktemp` usage without verifying the destination file's permissions, which could potentially be created with overly permissive settings depending on the environment umask. Suggested minimal fix: Explicitly set permissions with `chmod 0600` after creating the temporary state file. Lines changed: ~1. HARDENING_RISK_SCORE (0-5): 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "d2b92073d17d9d18a788b3a9d9d80e692d45e0c8d4a2c51fccaabc692978662f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6417,
+    "run_id": "37661366272",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37661366272",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007180352_2834304420",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6417,
+    "run_id": "37661366272"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-07T18:03:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
