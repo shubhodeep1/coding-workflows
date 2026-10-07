@@ -169,6 +169,7 @@ Copy this block when adding a new entry:
 - **Removal preflight checks:**
   - `rg -n 'check_failure_triage\.sh' .github/workflows/check_failure_triage.yml` shows the reusable workflow still stages and invokes the script.
   - `rg -n 'check_failure_triage\.yml' .github/workflows/internal-check-failure-triage.yml workflow-templates/ai-check-failure-triage.yml` shows both the self-hosting (`@main`) and consumer (`@stable`) wrappers still call the reusable workflow.
+  - `PYTHONDONTWRITEBYTECODE=1 pytest -q tests/test_check_failure_triage_workflow_security.py` confirms trusted prompt staging, credential-free diagnosis, and fine-grained-token issue posting remain separated.
   - `PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py` returns `All workflow script references resolve to existing files.`
   - The feature is on by default, so removal requires confirming no consumer still wants it: for every consumer in `.github/ai/consumer_repos.json`, `gh variable list --repo <consumer>` shows `CHECK_FAILURE_TRIAGE_ENABLED` is explicitly `false` (the repo has opted out) before removing it.
 - **Owner:** @shubhodeep1
@@ -225,4 +226,3 @@ Copy this block when adding a new entry:
   - `rg -n 'write_opencode_config\.sh' .github/workflows scripts --glob '!scripts/write_opencode_config.sh'` returns no matches.
   - `rg -n 'opencode|OPENCODE_' .github/workflows .github/actions scripts` confirms no remaining OpenCode runtime references before the helper is removed.
 - **Owner:** @shubhodeep1
-

@@ -16,8 +16,8 @@
 #      the PR comments the run fetched at its start. Editor summaries paired
 #      with a later failure comment from the same run do not end the streak.
 #      The reporter adds one for this run and makes zero API reads (CLAUDE.md
-#      §15). A single failure stays with the stall poller's retry; only a streak of at least
-#      WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK (default 2) is reported.
+#      §15). A streak of at least WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK
+#      (default 1, so every failed run) is reported.
 #   3. Builds the `autofix_failure` payload (scripts/workflow_failure_heal.py
 #      build-autofix-payload) with the run summary line and the tail of the
 #      run's own log files as evidence, and sends one `repository_dispatch`
@@ -35,7 +35,7 @@
 #
 # Optional env (have defaults):
 #   WORKFLOW_HEAL_ENABLED                  "false" to disable; default on
-#   WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK   consecutive failed runs before reporting (default 2)
+#   WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK   consecutive failed runs before reporting (default 1)
 #   WORKFLOW_HEAL_UPSTREAM_REPO            dispatch target (default shubhodeep1/coding-workflows)
 #   WORKFLOW_HEAL_PY                       path of workflow_failure_heal.py
 #   RUNTIME_DIR                            the run's scratch dir (evidence + log tails)
@@ -88,9 +88,9 @@ RUN_ID="${GITHUB_RUN_ID:-}"
 RUN_URL="${REPORT_RUN_URL:-${GITHUB_SERVER_URL:-https://github.com}/${REPO}/actions/runs/${RUN_ID}}"
 WORKFLOW_NAME="${REPORT_WORKFLOW_NAME:-${GITHUB_WORKFLOW:-review_autofix}}"
 WRAPPER_SHA="$(printf '%s' "${REPORT_WRAPPER_SHA:-}" | tr '[:upper:]' '[:lower:]')"
-STREAK_THRESHOLD="${WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK:-2}"
+STREAK_THRESHOLD="${WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK:-1}"
 case "${STREAK_THRESHOLD}" in
-	''|*[!0-9]*|0) STREAK_THRESHOLD=2 ;;
+	''|*[!0-9]*|0) STREAK_THRESHOLD=1 ;;
 esac
 export PYTHONDONTWRITEBYTECODE=1
 

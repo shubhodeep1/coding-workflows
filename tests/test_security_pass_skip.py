@@ -34,6 +34,7 @@ MARKERS = {
 	"ai:check-triage": "<!-- check-failure-triage:fp=abc123 -->\n<!-- check-failure-triage:gen=1 -->\n",
 	"ai:workflow-heal": "<!-- workflow-failure-heal:fp=def456 -->\n<!-- workflow-failure-heal:gen=1 -->\n",
 }
+SKIPPABLE = ("ai:security",)
 
 
 def _issue(label="ai:security", login=OWNER, user_type="User", association="OWNER", body=None, labels=None, **extra):
@@ -66,16 +67,75 @@ def _decide(issue, events, tracker=None, calls=None):
 	return skip.decide_security_pass_skip(issue, events, fetch_tracker)
 
 
-@pytest.mark.parametrize("label", list(MARKERS))
+@pytest.mark.parametrize("label", SKIPPABLE)
 def test_automation_issue_skips(label):
 	result = _decide(_issue(label), [_labeled(label)], _tracker())
 	assert result == {"skip": True, "label": label, "reason": f"{label}: created and labelled by the issue automation"}
 
 
+@pytest.mark.parametrize(
+	("login", "user_type", "association"),
+	[(OWNER, "User", "OWNER"), ("github-actions[bot]", "Bot", "NONE")],
+)
+def test_check_triage_issue_never_skips(login, user_type, association):
+	issue = _issue("ai:check-triage", login=login, user_type=user_type, association=association)
+	result = _decide(issue, [_labeled("ai:check-triage", actor=login)])
+	assert result == {"skip": False, "label": None, "reason": "no skip label"}
+
+
+@pytest.mark.parametrize(
+	("login", "user_type", "association"),
+	[(OWNER, "User", "OWNER"), ("github-actions[bot]", "Bot", "NONE")],
+)
+def test_workflow_heal_issue_never_skips(login, user_type, association):
+	issue = _issue("ai:workflow-heal", login=login, user_type=user_type, association=association)
+	result = _decide(issue, [_labeled("ai:workflow-heal", actor=login)])
+	assert result == {"skip": False, "label": None, "reason": "no skip label"}
+	assert "ai:workflow-heal" not in skip.SKIP_LABEL_MARKERS
+
+
 def test_github_actions_bot_is_automation():
-	issue = _issue("ai:check-triage", login="github-actions[bot]", user_type="Bot", association="NONE")
-	result = _decide(issue, [_labeled("ai:check-triage", actor="github-actions[bot]")])
+	issue = _issue("ai:security", login="github-actions[bot]", user_type="Bot", association="NONE")
+	result = _decide(issue, [_labeled("ai:security", actor="github-actions[bot]")], _tracker(login="github-actions[bot]"))
 	assert result["skip"] is True
+
+
+@pytest.mark.parametrize("conclusion", ["failure", "timed_out"])
+def test_ci_workflow_heal_does_not_skip_security_pass(conclusion):
+	body = MARKERS["ai:security"] + MARKERS["ai:workflow-heal"] + f"\n- **Failed workflow:** `CI` (conclusion: `{conclusion}`)\n"
+	issue = _issue("ai:workflow-heal", body=body, labels=["ai:workflow-heal", "ai:security"])
+	result = _decide(issue, [_labeled("ai:workflow-heal"), _labeled("ai:security")], _tracker())
+	assert result == {"skip": False, "label": None, "reason": "CI workflow heal requires security pass"}
+
+
+def test_release_workflow_heal_requires_security_pass():
+	body = MARKERS["ai:workflow-heal"] + "\n- **Failed workflow:** `Mark Stable Release` (conclusion: `failure`)\n"
+	assert _decide(_issue("ai:workflow-heal", body=body), [_labeled("ai:workflow-heal")]) == {
+		"skip": False, "label": None, "reason": "no skip label",
+	}
+
+
+def test_release_heal_with_verified_security_label_requires_pass():
+	body = MARKERS["ai:security"] + MARKERS["ai:workflow-heal"] + "\n- **Failed workflow:** `Mark Stable Release` (conclusion: `failure`)\n"
+	issue = _issue("ai:workflow-heal", body=body, labels=["ai:workflow-heal", "ai:security"])
+	assert _decide(issue, [_labeled("ai:workflow-heal"), _labeled("ai:security")], _tracker()) == {
+		"skip": False, "label": None, "reason": "workflow heal requires security pass",
+	}
+
+
+def test_generated_ci_heal_issue_requires_security_pass():
+	module_spec = importlib.util.spec_from_file_location("workflow_failure_heal", SCRIPTS / "workflow_failure_heal.py")
+	heal_module = importlib.util.module_from_spec(module_spec)
+	module_spec.loader.exec_module(heal_module)
+	payload = heal_module.validate_payload(heal_module.build_workflow_run_payload(
+		repo="o/r", workflow_run={"id": 7, "name": "CI", "conclusion": "failure", "head_sha": "a" * 40, "head_branch": "main"},
+	))
+	body = heal_module.compose_issue_body(
+		payload=payload, diagnosis="PR-controlled CI log context", fp="f" * 64, gen=1, root="f" * 64,
+		classification="workflow-defect", target_branch="main", max_depth=3,
+		intake_run_url="https://github.com/o/r/actions/runs/8", run_summaries=[],
+	)
+	assert _decide(_issue("ai:workflow-heal", body=body), [_labeled("ai:workflow-heal")])["skip"] is False
 
 
 def test_no_skip_label_runs():
@@ -163,7 +223,7 @@ def test_full_event_page_is_not_verifiable():
 	assert result["skip"] is False and "not verifiable" in result["reason"]
 
 
-@pytest.mark.parametrize("label", list(MARKERS))
+@pytest.mark.parametrize("label", SKIPPABLE)
 def test_missing_marker_runs(label):
 	result = _decide(_issue(label, body="Refs #3576\nno marker here\n"), [_labeled(label)], _tracker())
 	assert result["skip"] is False and f"body has no {label} automation marker" in result["reason"]
@@ -206,19 +266,18 @@ def test_tracker_is_only_read_for_security():
 	assert calls == []
 
 
-def test_second_label_can_verify_when_first_does_not():
-	issue = _issue("ai:workflow-heal", labels=["ai:security", "ai:workflow-heal"])
-	events = [_labeled("ai:security", actor="triager", at="2026-09-28T00:00:00Z"), _labeled("ai:workflow-heal")]
-	result = _decide(issue, events)
-	assert result["skip"] is True and result["label"] == "ai:workflow-heal"
+def test_heal_label_does_not_block_verified_security_label():
+	issue = _issue("ai:security", labels=["ai:workflow-heal", "ai:security"])
+	result = _decide(issue, [_labeled("ai:security")], _tracker())
+	assert result == {"skip": False, "label": None, "reason": "workflow heal requires security pass"}
 
 
 def test_every_failed_label_is_reported():
-	issue = _issue("ai:check-triage", labels=["ai:check-triage", "ai:workflow-heal"])
-	result = _decide(issue, [_labeled("ai:check-triage", actor="triager")])
+	issue = _issue("ai:security", labels=["ai:security"])
+	result = _decide(issue, [_labeled("ai:security", actor="triager")])
 	assert result["skip"] is False
-	assert result["reason"].startswith("ai:check-triage: ai:check-triage was applied by triager")
-	assert "; ai:workflow-heal: no labeled event for ai:workflow-heal" in result["reason"]
+	assert result["reason"].startswith("ai:security: ai:security was applied by triager")
+	assert "ai:workflow-heal" not in result["reason"]
 
 
 def test_pull_request_is_not_an_issue():
@@ -254,6 +313,44 @@ def test_cli_no_skip_label_costs_one_call(monkeypatch, capsys):
 	calls = _stub_gh(monkeypatch, {"repos/o/r/issues/4623": _issue(labels=["bug"])})
 	assert skip.main(["--repo", REPO, "--issue", "4623"]) == 0
 	assert json.loads(capsys.readouterr().out) == {"skip": False, "label": None, "reason": "no skip label"}
+	assert calls == ["repos/o/r/issues/4623"]
+
+
+def test_cli_check_triage_costs_one_call(monkeypatch, capsys):
+	calls = _stub_gh(monkeypatch, {"repos/o/r/issues/4623": _issue("ai:check-triage")})
+	assert skip.main(["--repo", REPO, "--issue", "4623"]) == 0
+	assert json.loads(capsys.readouterr().out) == {"skip": False, "label": None, "reason": "no skip label"}
+	assert calls == ["repos/o/r/issues/4623"]
+
+
+def test_cli_ci_workflow_heal_costs_one_call(monkeypatch, capsys):
+	body = MARKERS["ai:workflow-heal"] + "\n- **Failed workflow:** `CI` (conclusion: `failure`)\n"
+	calls = _stub_gh(monkeypatch, {"repos/o/r/issues/4623": _issue("ai:workflow-heal", body=body)})
+	assert skip.main(["--repo", REPO, "--issue", "4623"]) == 0
+	assert json.loads(capsys.readouterr().out) == {"skip": False, "label": None, "reason": "CI workflow heal requires security pass"}
+	assert calls == ["repos/o/r/issues/4623"]
+
+
+def test_cli_ci_workflow_heal_with_security_label_costs_one_call(monkeypatch, capsys):
+	body = MARKERS["ai:security"] + MARKERS["ai:workflow-heal"] + "\n- **Failed workflow:** `CI` (conclusion: `failure`)\n"
+	calls = _stub_gh(monkeypatch, {"repos/o/r/issues/4623": _issue("ai:workflow-heal", body=body, labels=["ai:workflow-heal", "ai:security"])})
+	assert skip.main(["--repo", REPO, "--issue", "4623"]) == 0
+	assert json.loads(capsys.readouterr().out) == {"skip": False, "label": None, "reason": "CI workflow heal requires security pass"}
+	assert calls == ["repos/o/r/issues/4623"]
+
+
+def test_cli_release_workflow_heal_costs_one_call(monkeypatch, capsys):
+	calls = _stub_gh(monkeypatch, {"repos/o/r/issues/4623": _issue("ai:workflow-heal")})
+	assert skip.main(["--repo", REPO, "--issue", "4623"]) == 0
+	assert json.loads(capsys.readouterr().out) == {"skip": False, "label": None, "reason": "no skip label"}
+	assert calls == ["repos/o/r/issues/4623"]
+
+
+def test_cli_release_heal_with_security_label_costs_one_call(monkeypatch, capsys):
+	body = MARKERS["ai:security"] + MARKERS["ai:workflow-heal"] + "\n- **Failed workflow:** `Mark Stable Release` (conclusion: `failure`)\n"
+	calls = _stub_gh(monkeypatch, {"repos/o/r/issues/4623": _issue("ai:workflow-heal", body=body, labels=["ai:workflow-heal", "ai:security"])})
+	assert skip.main(["--repo", REPO, "--issue", "4623"]) == 0
+	assert json.loads(capsys.readouterr().out) == {"skip": False, "label": None, "reason": "workflow heal requires security pass"}
 	assert calls == ["repos/o/r/issues/4623"]
 
 
@@ -310,7 +407,8 @@ def test_cli_bad_arguments_exit_1(argv, capsys):
 
 def test_skip_labels_are_the_automation_labels():
 	skip = _load()
-	assert tuple(skip.SKIP_LABEL_MARKERS) == ("ai:security", "ai:check-triage", "ai:workflow-heal")
+	assert tuple(skip.SKIP_LABEL_MARKERS) == SKIPPABLE
+	assert "ai:check-triage" not in skip.SKIP_LABEL_MARKERS
 
 
 def test_retired_session_copies_are_gone():

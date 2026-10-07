@@ -174,8 +174,8 @@ def test_implement_workflow_stages_and_guards_all_codex_launches() -> None:
 	summary_block = _step_run_text(IMPLEMENT_WORKFLOW, "Generate AI issue summary for PR comment")
 
 	assert "workspace_safety_check.sh" in stage_block
-	assert "bash scripts/workspace_safety_check.sh" in implement_block
-	assert "bash scripts/workspace_safety_check.sh" in repair_block
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/workspace_safety_check.sh"' in implement_block
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/workspace_safety_check.sh"' in repair_block
 	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/workspace_safety_check.sh"' in summary_block
 
 

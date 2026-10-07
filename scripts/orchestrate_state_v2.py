@@ -23,7 +23,8 @@ extract
     stitched payload sha256-matching the manifest).  Print the stitched
     state JSON to stdout.  Exit non-zero when no complete V2 chain is
     found, so the bash caller can fall back to the legacy V1 single-
-    comment extractor.
+    comment extractor.  --require-latest refuses to fall back to a prior
+    manifest when the newest V2 write is incomplete or malformed.
 
 Framing
 -------
@@ -241,15 +242,24 @@ def cmd_extract(args: argparse.Namespace) -> int:
 	# start at part=total so a newer partial write cannot blend with an older
 	# complete chain that happened to use different chunk slicing.
 	active_chain_by_key: dict[tuple[str, int], dict[str, Any]] = {}
+	latest_chain_key: tuple[str, int] | None = None
 	for c in reversed(comments):
 		body = (c or {}).get("body") or ""
 		if "ORCHESTRATOR_STATE_V2" not in body:
 			continue
 		parsed = _try_parse_v2_chunk(body)
+		if args.require_latest and latest_chain_key is None:
+			# A terminal decision cannot rely on an older complete write while
+			# the newest trusted state is still being posted.
+			if parsed is None:
+				return 1
+			latest_chain_key = (parsed[2], parsed[1])
 		if parsed is None:
 			continue
 		part, total, manifest, chunk = parsed
 		chain_key = (manifest, total)
+		if args.require_latest and chain_key != latest_chain_key:
+			continue
 		candidate = active_chain_by_key.get(chain_key)
 		if part == total:
 			candidate = {
@@ -290,7 +300,8 @@ def cmd_extract(args: argparse.Namespace) -> int:
 			# this manifest and keep walking older comments for an
 			# earlier intact chain.
 			active_chain_by_key.pop(chain_key, None)
-	# No complete chain.  Caller falls back to V1 extraction.
+	# No eligible complete chain. General readers may fall back to V1;
+	# --require-latest callers must fail closed instead.
 	return 1
 
 
@@ -310,6 +321,7 @@ def main() -> int:
 		help="Find the latest complete V2 chain in a paginated comments JSON array",
 	)
 	p_extract.add_argument("--comments-json", required=True)
+	p_extract.add_argument("--require-latest", action="store_true", help="Reject older state if the newest V2 write is incomplete")
 	p_extract.set_defaults(func=cmd_extract)
 	args = p.parse_args()
 	return args.func(args)

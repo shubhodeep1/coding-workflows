@@ -327,8 +327,8 @@ is_self_repo="false"
 if [ "${GITHUB_REPOSITORY:-}" = "${wf_source}" ]; then
   is_self_repo="true"
 fi
-add_u_excludes=(':!node_modules' ':!.codex-workflow-src' ':!.codex-workflow-src-main')
-add_o_excludes=(':!node_modules' ':!.github/ai' ':!.codex-workflow-src' ':!.codex-workflow-src-main')
+add_u_excludes=(':!node_modules' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.ai/.workspace_source_manifest.txt')
+add_o_excludes=(':!node_modules' ':!.github/ai' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.ai/.workspace_source_manifest.txt')
 if [ "${is_self_repo}" = "false" ]; then
   # Build per-file exclusions from the runtime-generated scripts/.gitignore
   # instead of a blanket ':!scripts'.  The blanket exclusion previously
@@ -354,6 +354,10 @@ if [ "${is_self_repo}" = "false" ]; then
   add_o_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
 fi
 git add -u -- "${add_u_excludes[@]}"
+if git ls-files --error-unmatch -- .ai/.workspace_source_manifest.txt >/dev/null 2>&1 && [ ! -e .ai/.workspace_source_manifest.txt ] && [ ! -L .ai/.workspace_source_manifest.txt ]; then
+  git rm --cached --quiet -- .ai/.workspace_source_manifest.txt
+  echo "IMPLEMENT_GENERATED_MANIFEST_UNTRACKED path=.ai/.workspace_source_manifest.txt"
+fi
 git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}" | xargs -0 -r git add --
 if [ "${is_self_repo}" = "false" ] && [ -f scripts/.gitignore ]; then
   while IFS= read -r fetched_script; do
@@ -396,6 +400,9 @@ fi
 #       unattended_system_instructions.md) remain covered by
 #       the canonical-source check above regardless of the
 #       threshold.
+# The unblock judge's one-shot bulk-delete override cannot bypass the
+# threshold for deletions under .github/, .claude/ or workflow-templates/,
+# in any repository, even when its marker predates the validator denylist.
 #
 # On rejection, `destructive_commit_blocked` is written to the
 # step output with the reason ('canonical-source' or
@@ -410,6 +417,7 @@ if [ -n "${deleted_staged}" ]; then
   canonical_deletions="$(printf '%s\n' "${deleted_staged}" \
     | grep -E '^(agents\.md|ai_pipeline\.md|unattended_system_instructions\.md|CLAUDE\.md|prompts/|scripts/|\.github/ai/|\.github/scripts/)' \
     || true)"
+  unblock_protected_deletions="$(printf '%s\n' "${deleted_staged}" | grep -iE '^(\.github|\.claude|workflow-templates)(/|$)' || true)"
   total_deletions="$(printf '%s\n' "${deleted_staged}" | sed '/^$/d' | wc -l | tr -d ' ')"
   if ! [[ "${total_deletions}" =~ ^[0-9]+$ ]]; then
     echo "::warning::Non-numeric staged deletion count '${total_deletions}'; forcing fail-closed bulk-delete handling."
@@ -461,7 +469,20 @@ if [ -n "${deleted_staged}" ]; then
     exit 1
   fi
 
-  if [ "${total_deletions}" -gt "${effective_threshold}" ] && [ "${ALLOW_BULK_DELETE:-false}" != "true" ]; then
+  # The unblock judge's one-shot override (plan Phase 7, Q12) lifts the
+  # bulk-delete threshold for this run only, and never when a canonical
+  # workflow source or protected automation path is among the deletions.
+  unblock_bulk_override_applies="false"
+  if [ "${UNBLOCK_BULK_DELETE_OVERRIDE:-false}" = "true" ] && [ -z "${canonical_deletions}" ] &&
+    [ -z "${unblock_protected_deletions}" ] &&
+    printf '%s\n' "${deleted_staged}" | jq -R -s -e --argjson paths "${UNBLOCK_BULK_DELETE_PATHS:-null}" 'all(split("\n")[] | select(length > 0); . as $path | $paths | index($path) != null)' >/dev/null 2>&1; then
+    unblock_bulk_override_applies="true"
+    echo "UNBLOCK_BULK_DELETE_OVERRIDE applied deletions=${total_deletions}"
+  fi
+  if [ "${UNBLOCK_BULK_DELETE_OVERRIDE:-false}" = "true" ] && [ -n "${unblock_protected_deletions}" ]; then
+    echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=protected_automation_paths"
+  fi
+  if [ "${total_deletions}" -gt "${effective_threshold}" ] && [ "${ALLOW_BULK_DELETE:-false}" != "true" ] && [ "${unblock_bulk_override_applies}" != "true" ]; then
     echo "::error::Refusing to commit: ${total_deletions} staged deletions exceeds ${threshold_label}=${effective_threshold} (non-md deletions=${non_md_count}) and ALLOW_BULK_DELETE is not 'true'."
     echo "Deletions blocked by bulk-delete threshold:"
     printf '%s\n' "${deleted_staged}" | sed 's/^/  - /'

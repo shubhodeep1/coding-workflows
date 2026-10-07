@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 import zipfile
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -91,6 +92,23 @@ STRUCTURED_COST_TELEMETRY_PATTERNS = (
     CONTEXT_BUDGET_WARN_RE,
 )
 DIAGNOSTIC_FAILURE_CONCLUSIONS = frozenset({"failure", "startup_failure"})
+PAT_BUDGET_WORKFLOWS = {
+    "clarify.yml": "clarify",
+    "internal-clarify.yml": "clarify",
+    "orchestrate_poll.yml": "orchestrate_poll",
+    "internal-orchestrate-poll.yml": "orchestrate_poll",
+    "review_autofix.yml": "review_autofix",
+    "internal-review.yml": "review_autofix",
+    "review_autofix_sweep.yml": "review_autofix_sweep",
+    "workflow-failure-heal-intake.yml": "workflow-failure-heal-intake",
+    "validation-improvements-intake.yml": "validation-improvements-intake",
+}
+PAT_BUDGET_LINE = re.compile(
+    r"^(?:(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z) )?"
+    r"GH_PAT_BUDGET phase=end workflow=([a-z_-]+) job=([a-z_-]+) "
+    r"remaining=(?:[0-9]+|unknown) reset=(?:[0-9]+|unknown) used_in_job=([0-9]+|unknown)$"
+)
+PAT_BUDGET_MAX_RUN_ARCHIVES = 1500
 
 
 def _parse_iso8601(value: str | None) -> datetime | None:
@@ -414,6 +432,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional directory path for categorized full-log export artifacts.",
     )
+    parser.add_argument("--pat-budget-day", help="UTC day (YYYY-MM-DD) to rank PAT usage for.")
+    parser.add_argument("--pat-budget-output", help="Markdown output for the UTC-day PAT budget ranking.")
     return parser
 
 
@@ -578,16 +598,23 @@ def normalize_workflow_family(workflow_name: str | None, workflow_path: str | No
     return "other"
 
 
-def _build_runs_endpoint(repo: str, since_utc: datetime, per_page: int, page: int) -> str:
+def _build_runs_endpoint(
+    repo: str, since_utc: datetime, per_page: int, page: int,
+    workflow_file: str | None = None, until_utc: datetime | None = None,
+) -> str:
     query = urlencode(
         {
             "status": "completed",
-            "created": f">={_format_iso8601(since_utc)}",
+            "created": (
+                f"{_format_iso8601(since_utc)}..{_format_iso8601(until_utc)}"
+                if until_utc else f">={_format_iso8601(since_utc)}"
+            ),
             "per_page": str(per_page),
             "page": str(page),
         }
     )
-    return f"repos/{repo}/actions/runs?{query}"
+    path = f"actions/workflows/{workflow_file}/runs" if workflow_file else "actions/runs"
+    return f"repos/{repo}/{path}?{query}"
 
 
 def list_runs_for_repo(
@@ -599,6 +626,8 @@ def list_runs_for_repo(
     max_runs: int,
     token: str,
     etag: str | None = None,
+    workflow_file: str | None = None,
+    until_utc: datetime | None = None,
 ) -> tuple[list[dict[str, Any]], bool, dict[str, Any]]:
     runs: list[dict[str, Any]] = []
     capped = False
@@ -614,7 +643,7 @@ def list_runs_for_repo(
             request_headers = {"If-None-Match": etag}
 
         payload_obj, meta = gh_api_json(
-            _build_runs_endpoint(repo, since_utc, per_page, page),
+            _build_runs_endpoint(repo, since_utc, per_page, page, workflow_file, until_utc),
             token=token,
             request_headers=request_headers,
             include_response_meta=True,
@@ -630,6 +659,8 @@ def list_runs_for_repo(
             return [], False, response_meta
 
         page_runs = payload.get("workflow_runs") or []
+        if _to_int(payload.get("total_count"), 0) >= 1000:
+            response_meta["page_limit_reached"] = True
         if not page_runs:
             break
 
@@ -643,6 +674,9 @@ def list_runs_for_repo(
             if max_runs > 0 and len(runs) >= max_runs:
                 capped = True
                 return runs, capped, response_meta
+
+        if page == max_pages and len(page_runs) >= per_page:
+            response_meta["page_limit_reached"] = True
 
     return runs, capped, response_meta
 
@@ -1347,11 +1381,20 @@ def _full_logs_to_text(full_logs: list[dict[str, str]]) -> str:
     return "\n".join(parts)
 
 
-def _structured_cost_telemetry_line_key(line: str) -> str | None:
+def _foreign_mcp_telemetry_line(line: str, run_key: str | None) -> bool:
+    if not run_key or not re.search(r"(?:^|\s)(?:SEMBLE|SERENA)_(?:QUERY|FALLBACK|BOOTSTRAP|PROBE)(?:\s|$)", line):
+        return False
+    run_match = re.search(r"(?:^|\s)run=([^\s]+)", line)
+    return run_match is not None and run_match.group(1) != run_key
+
+
+def _structured_cost_telemetry_line_key(line: str, run_key: str | None = None) -> str | None:
     if not isinstance(line, str):
         return None
     line_text = line.rstrip()
     if not line_text:
+        return None
+    if _foreign_mcp_telemetry_line(line_text, run_key):
         return None
     if (
         validated_mcp_telemetry_event(line_text) is not None
@@ -1395,7 +1438,7 @@ def _step_name_has_descendant_match(step_name: str, candidate_step_names: set[st
     return False
 
 
-def _dedupe_structured_cost_telemetry_full_logs(full_logs: list[dict[str, str]]) -> list[dict[str, str]]:
+def _dedupe_structured_cost_telemetry_full_logs(full_logs: list[dict[str, str]], run_key: str | None = None) -> list[dict[str, str]]:
     if not isinstance(full_logs, list):
         return []
 
@@ -1411,7 +1454,7 @@ def _dedupe_structured_cost_telemetry_full_logs(full_logs: list[dict[str, str]])
         if not content:
             continue
         for line in content.splitlines(keepends=True):
-            line_key = _structured_cost_telemetry_line_key(line)
+            line_key = _structured_cost_telemetry_line_key(line, run_key)
             if line_key is None:
                 continue
             structured_line_step_names.setdefault(line_key, set()).add(step_name)
@@ -1426,7 +1469,9 @@ def _dedupe_structured_cost_telemetry_full_logs(full_logs: list[dict[str, str]])
 
         filtered_lines: list[str] = []
         for line in content.splitlines(keepends=True):
-            line_key = _structured_cost_telemetry_line_key(line)
+            if _foreign_mcp_telemetry_line(line, run_key):
+                continue
+            line_key = _structured_cost_telemetry_line_key(line, run_key)
             if line_key is not None and _step_name_has_descendant_match(
                 step_name,
                 structured_line_step_names.get(line_key, set()),
@@ -1441,8 +1486,8 @@ def _dedupe_structured_cost_telemetry_full_logs(full_logs: list[dict[str, str]])
     return deduped_full_logs
 
 
-def _cost_telemetry_text_from_full_logs(full_logs: list[dict[str, str]]) -> str:
-    return _full_logs_to_text(_dedupe_structured_cost_telemetry_full_logs(full_logs))
+def _cost_telemetry_text_from_full_logs(full_logs: list[dict[str, str]], run_key: str | None = None) -> str:
+    return _full_logs_to_text(_dedupe_structured_cost_telemetry_full_logs(full_logs, run_key))
 
 
 def _run_wall_clock_ms(run: dict[str, Any]) -> int | None:
@@ -1453,10 +1498,19 @@ def _run_wall_clock_ms(run: dict[str, Any]) -> int | None:
 
 
 def _apply_cost_telemetry_from_full_logs(run: dict[str, Any], full_logs: list[dict[str, str]]) -> None:
+    run_id = run.get("run_id")
+    run_attempt = run.get("run_attempt")
+    run_key = f"{run_id}-{run_attempt}" if type(run_id) is int and run_id > 0 and type(run_attempt) is int and run_attempt > 0 else None
     telemetry = build_run_cost_telemetry(
-        _cost_telemetry_text_from_full_logs(full_logs),
+        _cost_telemetry_text_from_full_logs(full_logs, run_key),
         fallback_wall_clock_ms=_run_wall_clock_ms(run),
+        run_key=run_key,
     )
+    if run_key:
+        telemetry["semble_echo_lines_dropped"] += sum(
+            _foreign_mcp_telemetry_line(line, run_key)
+            for step in full_logs for line in str(step.get("content") or "").splitlines()
+        )
     run["cost_telemetry"] = telemetry
 
 
@@ -1475,6 +1529,105 @@ def _write_json_atomic(path: Path, payload: Any) -> None:
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(payload, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
     tmp_path.replace(path)
+
+
+def build_pat_budget_report(
+    runs: list[dict[str, Any]], day: datetime, token: str,
+    archive_cache: dict[tuple[str, int], bytes | Exception] | None,
+    *, incomplete_listing: bool = False,
+) -> str:
+    """Rank yesterday's job-end quota deltas using the existing run listing.
+
+    Input is one repository's completed run rows; output is a bounded Markdown
+    report. Fetch at most one log archive per eligible run (up to 1500 API
+    reads), reusing already-fetched archives; missing logs/partial listings
+    produce a labelled partial report rather than an invented total.
+    """
+    day_end = day + timedelta(days=1)
+    eligible = [
+        run for run in runs
+        if _to_int(run.get("run_id"), 0) > 0
+        and any(
+            re.search(r"(?:^|/)\.github/workflows/" + re.escape(filename) + r"(?:@.*)?$", str(run.get("workflow_path") or ""))
+            for filename in PAT_BUDGET_WORKFLOWS
+        )
+        and (end_time := _parse_iso8601(run.get("updated_at"))) is not None
+        and end_time >= day
+        and (start_time := _parse_iso8601(run.get("created_at"))) is not None
+        and start_time < day_end
+    ]
+    eligible.sort(key=lambda run: (_to_int(run.get("run_id"), 0), _to_int(run.get("run_attempt"), 1)))
+    totals: dict[tuple[str, str, str], list[int]] = defaultdict(lambda: [0, 0])
+    missing = 0
+    unmeasured = 0
+    unknown = 0
+    fallback_times = 0
+    for run in eligible[:PAT_BUDGET_MAX_RUN_ARCHIVES]:
+        repository = str(run.get("repository") or "")
+        run_id = _to_int(run.get("run_id"), 0)
+        filename = str(run.get("workflow_path") or "").split("@", 1)[0].rsplit("/", 1)[-1]
+        identity = (repository, run_id)
+        try:
+            archive = _fetch_run_log_archive(
+                repository, run_id, token=token,
+                cache=archive_cache if archive_cache is not None and identity in archive_cache else None,
+            )
+            # Read only budget lines, not arbitrary raw workflow output into the report.
+            with zipfile.ZipFile(io.BytesIO(archive)) as log_zip:
+                measured: dict[str, tuple[datetime, int | None, bool]] = {}
+                for member in log_zip.infolist():
+                    if member.is_dir() or member.file_size > 64 * 1024 * 1024:
+                        continue
+                    with log_zip.open(member) as log_file:
+                        for raw_line in log_file:
+                            if b"GH_PAT_BUDGET phase=end" not in raw_line:
+                                continue
+                            match = PAT_BUDGET_LINE.fullmatch(raw_line.decode("utf-8", "replace").strip())
+                            if match is None or match.group(2) != PAT_BUDGET_WORKFLOWS[filename]:
+                                continue
+                            timestamp = _parse_iso8601(match.group(1)) if match.group(1) else None
+                            end_time = timestamp or _parse_iso8601(run.get("updated_at"))
+                            if end_time is None or not day <= end_time < day_end:
+                                continue
+                            amount = int(match.group(4)) if match.group(4) != "unknown" else None
+                            measured[match.group(3)] = (end_time, amount, timestamp is None)
+                if not measured:
+                    unmeasured += 1
+                for job, (end_time, amount, used_fallback) in measured.items():
+                    if amount is None:
+                        unknown += 1
+                        continue
+                    hour = end_time.strftime("%Y-%m-%d %H:00")
+                    totals[(hour, PAT_BUDGET_WORKFLOWS[filename], job)][0] += amount
+                    totals[(hour, PAT_BUDGET_WORKFLOWS[filename], job)][1] += 1
+                    fallback_times += int(used_fallback)
+        except Exception as exc:  # noqa: BLE001
+            missing += 1
+            print(f"::warning::PAT budget archive unavailable for run {run_id}: {type(exc).__name__}", file=sys.stderr)
+
+    incomplete = incomplete_listing or len(eligible) > PAT_BUDGET_MAX_RUN_ARCHIVES or missing > 0 or unmeasured > 0 or unknown > 0
+    lines = [
+        f"## GH_PAT budget by hour (UTC, {day:%Y-%m-%d})",
+        "",
+        "Job-end core quota deltas are shared-account estimates, not attributable request counts.",
+        f"Coverage: {min(len(eligible), PAT_BUDGET_MAX_RUN_ARCHIVES)} of {len(eligible)} eligible runs inspected; "
+        f"{missing} archives unavailable, {unmeasured} runs without job-end readings, {unknown} jobs with unknown deltas, "
+        f"{fallback_times} jobs bucketed by run completion time. "
+        f"{'Partial (ranking may omit consumers).' if incomplete else 'All listed runs inspected.'}",
+        "",
+        "| UTC hour | Rank | Workflow / job | Estimated calls | Measured jobs |",
+        "| --- | ---: | --- | ---: | ---: |",
+    ]
+    for hour in sorted({key[0] for key in totals}):
+        entries = sorted(
+            ((workflow, job, totals[(hour, workflow, job)]) for h, workflow, job in totals if h == hour),
+            key=lambda item: (-item[2][0], item[0], item[1]),
+        )
+        for rank, (workflow, job, (amount, count)) in enumerate(entries, start=1):
+            lines.append(f"| {hour} | {rank} | {workflow} / {job} | {amount} | {count} |")
+    if not totals:
+        lines.append("| No measured job-end deltas | | | | |")
+    return "\n".join(lines) + "\n"
 
 
 def _write_run_log_bundle(
@@ -1626,6 +1779,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
+    if bool(args.pat_budget_day) != bool(args.pat_budget_output):
+        print("ERROR: --pat-budget-day and --pat-budget-output must be specified together", file=sys.stderr)
+        return 2
+    pat_budget_day_utc = None
+    if args.pat_budget_day:
+        try:
+            pat_budget_day_utc = datetime.strptime(args.pat_budget_day, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            print("ERROR: --pat-budget-day must be YYYY-MM-DD", file=sys.stderr)
+            return 2
+
     token = os.getenv("GH_TOKEN", "") or os.getenv("GITHUB_TOKEN", "")
     repo_root = REPO_ROOT
     memory_branch = str(os.getenv("AI_MEMORY_BRANCH", "ai-memory")).strip() or "ai-memory"
@@ -1650,6 +1814,7 @@ def main(argv: list[str] | None = None) -> int:
     run_rows: list[dict[str, Any]] = []
     successful_repo_queries = 0
     log_archive_cache: dict[tuple[str, int], bytes | Exception] | None = {} if args.log_output_dir else None
+    pat_budget_listing_incomplete = False
 
     for repo in repositories:
         repo_cache = cached_repositories.get(repo) if isinstance(cached_repositories, dict) else None
@@ -1671,30 +1836,60 @@ def main(argv: list[str] | None = None) -> int:
             cached_etag = None
 
         try:
-            runs, capped, run_meta = list_runs_for_repo(
-                repo,
-                since_utc=effective_since,
-                per_page=args.per_page,
-                max_pages=args.max_pages,
-                max_runs=args.max_runs,
-                token=token,
-                etag=cached_etag,
-            )
-            used_cached_runs = bool(run_meta.get("not_modified"))
-            if used_cached_runs:
-                if cached_runs_snapshot:
-                    runs = [dict(item) for item in cached_runs_snapshot]
-                else:
-                    runs, capped, run_meta = list_runs_for_repo(
-                        repo,
-                        since_utc=effective_since,
-                        per_page=args.per_page,
-                        max_pages=args.max_pages,
-                        max_runs=args.max_runs,
-                        token=token,
-                        etag=None,
-                    )
+            if pat_budget_day_utc is not None:
+                # The unfiltered created search can hit GitHub's 1,000-run
+                # ceiling in a day. Split the two-day window by day and query
+                # only the nine instrumented workflow paths; dedupe boundaries.
+                budget_window_edges = (effective_since, pat_budget_day_utc, pat_budget_day_utc + timedelta(days=1))
+                budget_runs_by_id: dict[int, dict[str, Any]] = {}
+                budget_listing_successes = 0
+                for budget_workflow_file in PAT_BUDGET_WORKFLOWS:
+                    for budget_window_start, budget_window_end in zip(budget_window_edges, budget_window_edges[1:]):
+                        try:
+                            budget_runs, budget_capped, budget_meta = list_runs_for_repo(
+                                repo, since_utc=budget_window_start, until_utc=budget_window_end,
+                                workflow_file=budget_workflow_file, per_page=args.per_page,
+                                max_pages=args.max_pages, max_runs=args.max_runs, token=token,
+                            )
+                        except Exception as exc:  # noqa: BLE001
+                            pat_budget_listing_incomplete = True
+                            errors.append({"repository": repo, "scope": "runs", "message": str(exc)})
+                            continue
+                        budget_listing_successes += 1
+                        pat_budget_listing_incomplete |= bool(budget_capped or budget_meta.get("page_limit_reached"))
+                        for budget_run in budget_runs:
+                            budget_runs_by_id[_to_int(budget_run.get("id"), 0)] = budget_run
+                if budget_listing_successes == 0:
+                    raise RuntimeError("PAT budget run listings unavailable")
+                runs = list(budget_runs_by_id.values())
+                capped = False
+                run_meta = {}
+            else:
+                runs, capped, run_meta = list_runs_for_repo(
+                    repo,
+                    since_utc=effective_since,
+                    per_page=args.per_page,
+                    max_pages=args.max_pages,
+                    max_runs=args.max_runs,
+                    token=token,
+                    etag=cached_etag,
+                )
+                used_cached_runs = bool(run_meta.get("not_modified"))
+                if used_cached_runs:
+                    if cached_runs_snapshot:
+                        runs = [dict(item) for item in cached_runs_snapshot]
+                    else:
+                        runs, capped, run_meta = list_runs_for_repo(
+                            repo,
+                            since_utc=effective_since,
+                            per_page=args.per_page,
+                            max_pages=args.max_pages,
+                            max_runs=args.max_runs,
+                            token=token,
+                            etag=None,
+                        )
             successful_repo_queries += 1
+            pat_budget_listing_incomplete |= bool(capped or run_meta.get("page_limit_reached"))
             if capped:
                 errors.append(
                     {
@@ -1704,6 +1899,7 @@ def main(argv: list[str] | None = None) -> int:
                     }
                 )
         except Exception as exc:  # noqa: BLE001
+            pat_budget_listing_incomplete = True
             errors.append(
                 {
                     "repository": repo,
@@ -1905,6 +2101,12 @@ def main(argv: list[str] | None = None) -> int:
             _append_log_error(errors, repository, run_id, exc)
 
     run_rows.sort(key=lambda item: (item.get("created_at") or ""), reverse=True)
+    if pat_budget_day_utc is not None:
+        budget_report = build_pat_budget_report(
+            run_rows, pat_budget_day_utc, token, log_archive_cache,
+            incomplete_listing=pat_budget_listing_incomplete,
+        )
+        Path(args.pat_budget_output).write_text(budget_report, encoding="utf-8")
     if args.log_output_dir:
         try:
             export_categorized_logs(

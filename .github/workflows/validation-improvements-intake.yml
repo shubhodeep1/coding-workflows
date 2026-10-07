@@ -39,6 +39,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Record GH_PAT budget at intake start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_validation_intake
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=validation-improvements-intake job=intake remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       - name: Checkout
         uses: actions/checkout@v5
         with:
@@ -494,3 +508,16 @@ jobs:
           source scripts/tg_helpers.sh
           msg="Validation self-heal intake: ${APPLIED} patch(es) from ${CONSUMER_REPO} (skipped: ${SKIPPED}). Draft PR awaiting manual review (label ai:needs-prompt-review). Consumer run: ${RUN_URL:-(unknown)}"
           tg_send_msg "${msg}" "WARNING" >/dev/null || true
+
+      - name: Record GH_PAT budget at intake end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_validation_intake
+        run: |
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget end validation-improvements-intake intake "${GH_PAT_BUDGET_FILE}"
+          else
+            echo 'GH_PAT_BUDGET phase=end workflow=validation-improvements-intake job=intake remaining=unknown reset=unknown used_in_job=unknown'
+          fi
