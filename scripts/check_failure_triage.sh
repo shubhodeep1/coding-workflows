@@ -296,7 +296,10 @@ if [ -n "${PARENT_ISSUE}" ]; then
 		GEN=$((PGEN + 1))
 		[ -n "${PROOT}" ] && ROOT="${PROOT}"
 		log "lineage parent_issue=${PARENT_ISSUE} parent_gen=${PGEN} gen=${GEN} root=${ROOT}"
-	elif ! printf '%s' "${PARENT_BODY}" | grep -qF "${MARKER_PREFIX}gen="; then
+	elif ! printf '%s' "${PARENT_BODY}" | grep -qE "^[[:space:]]*<!-- ${MARKER_PREFIX}gen="; then
+		# Only a line-leading HTML-comment marker (the shape this script
+		# writes) counts as a triage marker; prose or inline code that merely
+		# mentions check-failure-triage:gen= does not.
 		# The source issue carries no triage lineage marker: this is an
 		# ordinary pipeline PR (clarify/plan/implement, activation gaps, an
 		# orchestrator wave, a heal issue), not a fix PR for an earlier

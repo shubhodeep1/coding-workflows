@@ -1228,6 +1228,15 @@ class CheckFailureTriageLineageTests(unittest.TestCase):
 		self.assertEqual(metadata.get("generation"), "1")
 		self.assertEqual(metadata.get("head_ref"), "ai/issue-41")
 
+	def test_source_issue_mentioning_marker_in_prose_starts_generation_one(self) -> None:
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body="The triage marker `<!-- check-failure-triage:gen=N -->` is missing here.\n",
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("reason=source_issue_not_triage", proc.stdout)
+		self.assertEqual(outputs.get("ready"), "true")
+		self.assertEqual(metadata.get("generation"), "1")
+
 	def test_source_issue_with_triage_marker_increments_generation(self) -> None:
 		root = "b" * 64
 		proc, outputs, metadata = _run_collect_stage(
