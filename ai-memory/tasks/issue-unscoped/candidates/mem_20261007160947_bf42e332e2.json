@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/check_failure_triage.sh:296-299 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The substring check treats prose mentioning `check-failure-triage:gen=` as a malformed triage marker, preventing a non-triage source issue from starting a generation-1 lineage.\n  WHY: When the marker text is present without a numeric generation, `PGEN` remains empty but the substring check matches, so execution reaches the malformed-marker error instead of the new-lineage branch.\n- scripts/check_failure_triage.sh:300 | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `GEN` and `ROOT` are not initialized before being used in the log command in the new elif block.\n  WHY: When the script executes the new elif block, `GEN` and `ROOT` will be unset (empty), resulting in incorrect log output (gen= and root=). Any subsequent code that depends on `GEN` or `ROOT` will also receive incorrect or empty values.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A failing CI run on an ai/issue-<N> PR whose source issue is not a triage issue now starts a new lineage at generation 1\"\n  expected_change_site: scripts/check_failure_triage.sh in the new elif block\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The logic to explicitly set GEN=1 and ROOT to the parent issue identifier (or a new root ID) is entirely missing from the implementation, meaning the requirement to start a new lineage at generation 1 is not fulfilled at the code level, regardless of the test output.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/check_failure_triage.sh:300 | confidence=4\n  PROBLEM: GEN and ROOT are not initialized before being used in the log command in the new elif block.\n  WHY: When the script executes the new elif block, GEN and ROOT will be unset (empty), resulting in incorrect log output (gen= and root=). Any subsequent code that depends on GEN or ROOT will also receive incorrect or empty values.\n- scripts/check_failure_triage.sh:296 | confidence=4\n  PROBLEM: The grep check `! printf '%s' \"${PARENT_BODY}\" | grep -qF \"${MARKER_PREFIX}gen=\";` is overly broad.\n  WHY: It incorrectly identifies any issue body containing the string \"check-failure-triage:gen=\" as having a triage marker, even if it is just part of a code example or ordinary prose discussion about the marker. This will cause such issues to erroneously bypass the new lineage-start logic, leading to unexpected failures when they fall into the final error case (the else block).\n- TASK_GAP\n  Requirement: \"A failing CI run on an ai/issue-<N> PR whose source issue is not a triage issue now starts a new lineage at generation 1\"\n  Expected change site: scripts/check_failure_triage.sh in the new elif block\n  Evidence of absence: The logic to explicitly set GEN=1 and ROOT to the parent issue identifier (or a new root ID) is entirely missing from the implementation, meaning the requirement to start a new lineage at generation 1 is not fulfilled at the code level, regardless of the test output.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/check_failure_triage.sh:299 | severity=NIT | confidence=4\n  PROBLEM: The fallback distinguishes a missing marker from a malformed marker by searching for the marker text anywhere in the source issue body.\n  WHY: A non-triage source issue that mentions the marker format in prose, such as `check-failure-triage:gen=N`, has no numeric `PGEN`, but this check still matches. Collection then exits with `parent_generation_missing_or_malformed` instead of starting the requested generation-1 lineage.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/check_failure_triage.sh:299 | severity=NIT | confidence=4\n  PROBLEM: The missing-marker check uses `grep -qF \"${MARKER_PREFIX}gen=\"` which is a plain substring match. A non-triage source issue whose body mentions the literal text `check-failure-triage:gen=` followed by non-digits (for example in documentation, a code example, or a malformed marker) will pass the grep test, causing the code to skip the new elif branch and fall into the else branch at line 309, which exits 1 with `parent_generation_missing_or_malformed`.\n  WHY: The sed at line 293 extracts PGEN only when followed by digits (`[0-9]\\{1,\\}`), so a body containing `check-failure-triage:gen=abc` leaves PGEN empty. The first branch at line 295 fails (empty PGEN doesn't match `^[0-9]+$`). The elif at line 299 succeeds because grep finds the substring, so the negation is false and the elif body is skipped. The else branch exits 1. A non-triage issue mentioning the marker text in prose is incorrectly treated as having a malformed marker rather than starting a new lineage at generation 1.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "75783bf1b869d0eb3ce0a30d9c1a27b5d122f941ceb0aed755e27368cbef0f16",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6678,
+    "run_id": "37647109415",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37647109415",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007160947_bf42e332e2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6678,
+    "run_id": "37647109415"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-07T16:09:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
