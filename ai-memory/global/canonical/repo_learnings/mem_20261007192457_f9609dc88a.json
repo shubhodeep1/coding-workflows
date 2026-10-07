@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow behavior is guarded by focused contract tests, so changes to workflow YAML or its helper scripts should be checked against the corresponding tests.",
   "timestamps": {
     "created_at": "2026-10-07T19:24:57Z",
