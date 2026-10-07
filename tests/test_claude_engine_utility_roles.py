@@ -333,6 +333,9 @@ def test_check_triage_uses_the_isolated_helpers_claude_branch() -> None:
 	assert 'bash "${ISOLATED_HELPER}" "${PROMPT_FILE}" "${DIAG_FILE}" "${RUNTIME_DIR}/codex_log.txt") || triage_rc=$?' in text
 	assert "SOURCE_ROOT}/scripts/ai_engine.sh" not in text
 	assert "log \"warn isolation_unavailable\"" in text
+	# The PR's labels come from the already fetched payload, so ai:codex keeps codex.
+	assert '"${RUNTIME_DIR}/pr_payload.json"' in text
+	assert 'AI_ENGINE_LABELS="${triage_engine_labels:-${AI_ENGINE_LABELS:-}}"' in text
 	helper = CLARIFY_ISOLATED.read_text(encoding="utf-8")
 	assert helper.count("^(CLARIFY|CLARIFY_RESPOND|UNBLOCK_JUDGE|CHECK_TRIAGE)$") == 2
 

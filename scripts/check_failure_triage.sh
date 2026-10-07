@@ -501,8 +501,13 @@ if [ -f "${ISOLATED_HELPER}" ] && [ ! -L "${ISOLATED_HELPER}" ] &&
 	# the host relay); exit 75 (Claude unavailable) runs the unchanged codex call.
 	triage_engine="codex"
 	triage_engine_helper="${TRUSTED_SUPPORT_DIR}/scripts/ai_engine.sh"
+	# An ai:codex label on the PR keeps the role on codex. The labels come from
+	# the PR payload the collect stage already fetched (no extra API call);
+	# a missing or malformed payload means no labels (the configured default).
+	triage_engine_labels="$(jq -c '[.labels[]?.name | select(type == "string")]' "${RUNTIME_DIR}/pr_payload.json" 2>/dev/null || true)"
+	printf '%s' "${triage_engine_labels}" | jq -e 'type == "array"' >/dev/null 2>&1 || triage_engine_labels=""
 	if [ -f "${triage_engine_helper}" ] && [ ! -L "${triage_engine_helper}" ]; then
-		triage_engine="$(cd "${TRUSTED_SUPPORT_DIR}" && SUPPORT_ROOT_DIR="${TRUSTED_SUPPORT_DIR}" bash -c 'source "$0" && ai_engine_for_role CHECK_TRIAGE' "${triage_engine_helper}" 2>/dev/null || echo codex)"
+		triage_engine="$(cd "${TRUSTED_SUPPORT_DIR}" && SUPPORT_ROOT_DIR="${TRUSTED_SUPPORT_DIR}" AI_ENGINE_LABELS="${triage_engine_labels:-${AI_ENGINE_LABELS:-}}" bash -c 'source "$0" && ai_engine_for_role CHECK_TRIAGE' "${triage_engine_helper}" 2>/dev/null || echo codex)"
 	fi
 	[ "${triage_engine}" = "claude" ] || triage_engine="codex"
 	triage_rc=0
