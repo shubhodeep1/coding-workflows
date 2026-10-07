@@ -1744,6 +1744,7 @@ jobs:
           PIN_SHA="${BAIT_SHA:-}"
           BAIT_UNCOVERED_RUN_IDS=""
           declare -A BAIT_REVIEW_COVERAGE_CACHE=()
+          declare -A BAIT_REVIEW_UNKNOWN_COUNTS=()
 
           . ./scripts/comprehensive_test_and_release_gh_api.sh
 
@@ -1826,6 +1827,16 @@ jobs:
               BAIT_UNCOVERED_RUN_IDS="${BAIT_UNCOVERED_RUN_IDS:+${BAIT_UNCOVERED_RUN_IDS},}${RUN_ID}"
               LAST_ACTIVITY=$NOW
               PREV_STATE=""
+            elif [ "$RUN_STATUS" = "completed" ]; then
+              # A completed run outranks the queued bait-head run in the
+              # selector, so persistently unverifiable coverage must not pin
+              # Phase 4 to it. Exclude it (never accept it) after 3 unknowns.
+              BAIT_REVIEW_UNKNOWN_COUNTS[$RUN_ID]=$(( ${BAIT_REVIEW_UNKNOWN_COUNTS[$RUN_ID]:-0} + 1 ))
+              if [ "${BAIT_REVIEW_UNKNOWN_COUNTS[$RUN_ID]}" -ge 3 ]; then
+                echo "::warning::Review run ${RUN_ID} bait coverage stayed unverifiable; waiting for a bait-head review instead"
+                BAIT_UNCOVERED_RUN_IDS="${BAIT_UNCOVERED_RUN_IDS:+${BAIT_UNCOVERED_RUN_IDS},}${RUN_ID}"
+                PREV_STATE=""
+              fi
             fi
             sleep "$POLL_INTERVAL"
             ELAPSED=$((ELAPSED + POLL_INTERVAL))

@@ -526,6 +526,7 @@ def test_reviewer_majority_is_progress_only() -> None:
 
 def _run_phase4_wait_review(
 	checked_out: str | None, *, compare_status: str = "behind", fail_first_log: bool = False,
+	fail_all_logs: bool = False,
 	run_status: str = "completed", run_conclusion: str = "success",
 ) -> tuple[subprocess.CompletedProcess[str], str, int]:
 	workflow = _read_workflow()
@@ -549,6 +550,7 @@ def _run_phase4_wait_review(
 	      count=$(wc -l < "${RUNNER_TEMP}/log_reads")
 	      echo x >> "${RUNNER_TEMP}/log_reads"
 	      if [ "${FAIL_FIRST_LOG}" = 1 ] && [ "$count" = 0 ]; then return 1; fi
+	      if [ "${FAIL_ALL_LOGS}" = 1 ]; then return 1; fi
 	      response="$(<"${RUNNER_TEMP}/job.log")" ;;
 	    */compare/*) response="{\\"status\\":\\"${COMPARE_STATUS}\\"}" ;;
 	    *) echo "Unexpected API read: $1" >&2; return 1 ;;
@@ -579,7 +581,8 @@ def _run_phase4_wait_review(
 		env.update({"RUNNER_TEMP": temp, "GITHUB_OUTPUT": str(root / "output"), "TEST_REPO": "owner/repo",
 			"ISSUE_NUMBER": "12", "PR_NUMBER": "13", "BAIT_SHA": bait, "BAIT_CREATED_AT": "2026-10-06T00:01:00Z",
 			"REVIEW_TIMEOUT": "60", "REVIEW_STEP_TIMEOUT": "75", "REVIEW_PHASE_HANDOFF_BUDGET_MINUTES": "15",
-			"POLL_INTERVAL": "10", "COMPARE_STATUS": compare_status, "FAIL_FIRST_LOG": "1" if fail_first_log else "0"})
+			"POLL_INTERVAL": "10", "COMPARE_STATUS": compare_status, "FAIL_FIRST_LOG": "1" if fail_first_log else "0",
+			"FAIL_ALL_LOGS": "1" if fail_all_logs else "0"})
 		result = subprocess.run(["bash", "-c", body], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=30)
 		return result, (root / "output").read_text(encoding="utf-8") if (root / "output").exists() else "", len((root / "log_reads").read_text(encoding="utf-8").splitlines())
 
@@ -609,6 +612,14 @@ def test_phase4_unavailable_log_retries_without_accepting() -> None:
 	assert "verdict=not_covered" in result.stdout
 	assert output.splitlines() == ["status=success", "review_run_id=20"]
 	assert reads == 2
+
+
+def test_phase4_persistently_unavailable_log_falls_through_to_bait_review() -> None:
+	result, output, reads = _run_phase4_wait_review("a" * 40, fail_all_logs=True)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "verdict=covered" not in result.stdout
+	assert output.splitlines() == ["status=success", "review_run_id=20"]
+	assert reads == 3
 
 
 def test_phase4_no_checkout_marker_excludes_run() -> None:
