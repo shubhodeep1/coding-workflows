@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should the required change to the live hook land, given that the pipeline cannot write `.claude/hooks/pr_merge_status_guard.py`?\nChoices:\nA) The pipeline changes the template hook, the tests, `agents.md` and a changelog fragment, and opens the PR. A person then pushes one commit to the same `ai/issue-<n>` branch that copies the template over the live hook. Until then the identity test in `tests/test_pr_merge_status_guard.py` stays red, which blocks auto-merge. (RECOMMENDED)\nB) Close this issue and have a person make the whole change in an interactive Claude Code session, where `.claude/**` can be edited directly.\nC) Merge the template-only change with the identity test changed or skipped for this file, and sync the live copy afterwards through `sync-claude-live-copies.yml`. **Note:** this weakens a security-hook parity check, and the sync PR from an `ai/*` source is held as a draft for human review anyway.\nQ2: What should `UNRESOLVED_GIT_OVERRIDE_PUSH_ENABLED` do in each state? The flag covers pushes whose explicit Git-directory override cannot be resolved. In both options below, uncertainty that comes only from shell control flow keeps its current handling.\nChoices:\nA) Follow the issue as written. Off (the default) blocks these pushes. On asks for confirmation without checking PR history in the session checkout. (RECOMMENDED)\nB) Off (the default) keeps today's behaviour: the push is checked against the session checkout, which can block, and otherwise asks. On asks for confirmation without checking the checkout.\nC) Off (the default) asks for confirmation without checking the checkout. On blocks these pushes.\nActions taken: I read the template hook's handling of unresolved directory overrides and the identity assertion in `tests/test_pr_merge_status_guard.py`. I couldn't find `.github/ai/write_guards.v1.json`, `.github/ai/claude_template_divergence.json` or the live `.claude/hooks/pr_merge_status_guard.py` in the files I could read. That's probably because those paths are filtered out, not because they're missing from the repository.\nAssumptions: the \"operator step\" in the issue means a person copies the template hook to the live path.\nMissing context: I don't know which existing behaviour of #6638 set off the original stop, beyond what the fix-up issue says.",
+  "fingerprint": "47780b4fadfdb7812bb90c2e4dd636c738eaea4edc8f0d211a892ba2cac28a19",
+  "lineage": {
+    "issue_number": 6663,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37629183444",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37629183444",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261007133734_ae61a6e998",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6663,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37629183444"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6663 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-07T13:37:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
