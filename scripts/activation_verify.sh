@@ -113,6 +113,7 @@ activation_main()
 	local mode="${1:-}" key item target_issue context_file prompt_file output_file verdict_file
 	local verdict code_gaps operator_gaps model reasoning comment_body fix_body steps_file tg_level item_label
 	local activation_files_json activation_files_response activation_existing_fix activation_fix_lookup_ok
+	local activation_engine_labels=""
 	if [ "${ACTIVATION_VERIFY_ENABLED:-true}" = "false" ]; then
 		activation_log "mode=${mode} outcome=skip reason=disabled"
 		return 0
@@ -183,6 +184,18 @@ activation_main()
 			item="${TRACKING_NUM}"
 			item_label="project #${TRACKING_NUM}"
 			target_issue="${TRACKING_NUM}"
+			# Engine selection: an ai:codex label on the tracking issue keeps the
+			# ACTIVATION_VERIFY role on codex. The poller does not pass the labels
+			# (orchestrate_poll_process.sh is out of scope for this change) and no
+			# other project-mode read returns them, so read them once per completed
+			# project. Fails open to no labels (the configured default engine).
+			activation_engine_labels="${AI_ENGINE_LABELS:-}"
+			if [ -z "${activation_engine_labels}" ]; then
+				activation_engine_labels="$(gh_retry gh api "repos/${REPOSITORY}/issues/${TRACKING_NUM}/labels?per_page=100" --jq '[.[].name]' 2>/dev/null || true)"
+				if ! printf '%s' "${activation_engine_labels}" | jq -e 'type == "array" and all(.[]; type == "string")' >/dev/null 2>&1; then
+					activation_engine_labels=""
+				fi
+			fi
 			# The final PR's file list is the complete project diff; the planned
 			# files from state are only hints when a final PR is not available.
 			# The poller's existing PR metadata read has no filenames to reuse.
@@ -244,6 +257,7 @@ activation_main()
 			&& bash -c 'source "$0" >/dev/null 2>&1 && declare -F claude_run_selected >/dev/null' "${activation_engine_helper}" 2>/dev/null; then
 			(cd "${TARGET_DIR}" && env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET \
 				AI_ENGINE_MODEL_HINT="${model}" AI_ENGINE_EFFORT_HINT="${reasoning}" \
+				AI_ENGINE_LABELS="${activation_engine_labels:-${AI_ENGINE_LABELS:-}}" \
 				timeout "${ACTIVATION_VERIFY_TIMEOUT_SECS:-1500}" \
 				bash -c 'source "$0"; claude_run_selected "$@"' "${activation_engine_helper}" \
 				ACTIVATION_VERIFY "${prompt_file}" "${output_file}" "${TARGET_DIR}" --codex-stdio -- \

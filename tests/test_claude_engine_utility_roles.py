@@ -312,6 +312,9 @@ def test_activation_verify_routes_through_the_trusted_selector() -> None:
 	assert 'local activation_engine_helper="${SUPPORT_DIR}/scripts/ai_engine.sh"' in text
 	assert 'ACTIVATION_VERIFY "${prompt_file}" "${output_file}" "${TARGET_DIR}" --codex-stdio --' in text
 	assert "AI_ENGINE_FALLBACK role=ACTIVATION_VERIFY reason=engine_support_missing" in text
+	# Project mode reads the tracking issue's labels so ai:codex keeps codex.
+	assert 'repos/${REPOSITORY}/issues/${TRACKING_NUM}/labels?per_page=100' in text
+	assert 'AI_ENGINE_LABELS="${activation_engine_labels:-${AI_ENGINE_LABELS:-}}"' in text
 	assert text.count(
 		'bash "${SUPPORT_DIR}/scripts/codex_isolated_exec.sh" run --mode read-only --workdir "${TARGET_DIR}" --reasoning "${reasoning}" --'
 	) == 2
