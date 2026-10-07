@@ -315,8 +315,8 @@ is_self_repo="false"
 if [ "${GITHUB_REPOSITORY:-}" = "${wf_source}" ]; then
   is_self_repo="true"
 fi
-add_u_excludes=(':!node_modules' ':!.codex-workflow-src' ':!.codex-workflow-src-main')
-add_o_excludes=(':!node_modules' ':!.github/ai' ':!.codex-workflow-src' ':!.codex-workflow-src-main')
+add_u_excludes=(':!node_modules' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.ai/.workspace_source_manifest.txt')
+add_o_excludes=(':!node_modules' ':!.github/ai' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.ai/.workspace_source_manifest.txt')
 if [ "${is_self_repo}" = "false" ]; then
   # Build per-file exclusions from the runtime-generated scripts/.gitignore
   # instead of a blanket ':!scripts'.  The blanket exclusion previously
@@ -342,6 +342,10 @@ if [ "${is_self_repo}" = "false" ]; then
   add_o_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
 fi
 git add -u -- "${add_u_excludes[@]}"
+if git ls-files --error-unmatch -- .ai/.workspace_source_manifest.txt >/dev/null 2>&1 && [ ! -e .ai/.workspace_source_manifest.txt ] && [ ! -L .ai/.workspace_source_manifest.txt ]; then
+  git rm --cached --quiet -- .ai/.workspace_source_manifest.txt
+  echo "IMPLEMENT_GENERATED_MANIFEST_UNTRACKED path=.ai/.workspace_source_manifest.txt"
+fi
 git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}" | xargs -0 -r git add --
 if [ "${is_self_repo}" = "false" ] && [ -f scripts/.gitignore ]; then
   while IFS= read -r fetched_script; do
