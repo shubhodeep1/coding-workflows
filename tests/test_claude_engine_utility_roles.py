@@ -166,6 +166,9 @@ def test_validation_refresh_gates_claude_steps_on_the_engine() -> None:
 	assert "uses: ./.github/actions/claude-pool-token" in text
 	assert "ai_engine_for_role VALIDATION_REFRESH" in text
 	assert "uses: ./.github/actions/install-codex" in text  # codex stays as the fallback
+	# Only a schedule run or a default-branch dispatch may stage Claude support.
+	assert 'if [ "${trusted_ref}" = "true" ] && [ -n "${checkout_head}" ]' in text
+	assert '[ "${GITHUB_REF}" = "refs/heads/${DEFAULT_BRANCH}" ]' in text
 
 
 # --- discovery bootstrap Claude branch --------------------------------------------

@@ -96,6 +96,7 @@ jobs:
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
           AI_ENGINE_VALIDATION_REFRESH: ${{ vars.AI_ENGINE_VALIDATION_REFRESH || '' }}
           CLAUDE_ENGINE_SUPPORT_DEST: ${{ runner.temp }}/claude-engine-support
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || '' }}
         run: |
           set -euo pipefail
           # Discovery (role VALIDATION_REFRESH) runs Claude through the engine
@@ -103,12 +104,20 @@ jobs:
           # above stays installed as the fallback. No work item, so no labels.
           # This workflow is not reusable (schedule + dispatch only): its YAML,
           # the runner script and this checkout are one commit, so the checkout
-          # is the verified support source once HEAD is pinned to GITHUB_SHA.
+          # is the verified support source once HEAD is pinned to GITHUB_SHA
+          # and the run is on the default branch (schedule, or a dispatch of
+          # the default branch). A dispatch of any other ref runs codex, so
+          # unmerged engine support never fetches the Claude pool credential.
           engine="codex"
+          trusted_ref="false"
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ] ||
+             { [ -n "${DEFAULT_BRANCH}" ] && [ "${GITHUB_REF}" = "refs/heads/${DEFAULT_BRANCH}" ]; }; then
+            trusted_ref="true"
+          fi
           if [ "${VALIDATION_DISCOVERY_ENABLED}" = "true" ] && [ "${VALIDATION_DISCOVERY_DRY_RUN}" != "true" ]; then
             checkout_head="$(git -C "${GITHUB_WORKSPACE}" rev-parse HEAD 2>/dev/null || true)"
             # shellcheck disable=SC1091
-            if [ -n "${checkout_head}" ] && [ "${checkout_head}" = "${GITHUB_SHA}" ] &&
+            if [ "${trusted_ref}" = "true" ] && [ -n "${checkout_head}" ] && [ "${checkout_head}" = "${GITHUB_SHA}" ] &&
                source scripts/ai_engine.sh && ai_engine_stage_support "${GITHUB_WORKSPACE}" "${CLAUDE_ENGINE_SUPPORT_DEST}"; then
               echo "CLAUDE_ENGINE_SUPPORT_DIR=${CLAUDE_ENGINE_SUPPORT_DEST}" >> "$GITHUB_ENV"
               engine="$(ai_engine_for_role VALIDATION_REFRESH || echo codex)"
