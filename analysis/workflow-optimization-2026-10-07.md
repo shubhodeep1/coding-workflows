@@ -216,3 +216,48 @@ No TODO/FIXME/HACK markers were found in the scoped files, and this sweep establ
 | Code modularization | Two workflows, two new helpers, staging/contract tests: ~5–7 | Large |
 | Expression size reduction | `implement.yml`, trusted helpers, staging/contract tests: ~4–6 | Medium |
 | Medium/Low fixes | Existing scripts, `review_autofix.yml`, CI gate, and tests: ~5–7 | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-10-07)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is ready for implementation; `NEEDS_VERIFICATION` requires the stated checks first; `RISKY_SKIP` must not be auto-implemented because it touches a protected safety path.
+
+### Consolidation Candidates (MERGE-###)
+
+No findings.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **ID:** REUSE-001 · **Safety tag:** `RISKY_SKIP` · **Calls:** `scripts/workflow_failure_heal_intake.sh:221-224` and `scripts/workflow_failure_heal_intake.sh:471-479` · **Endpoint:** REST `GET /user` · **Current → proposed:** 2 → 1 logical reads *only* when both conditional reads execute; otherwise unchanged.
+  - **Evidence:** The provenance path saves the authenticated login in `PROVENANCE_LOGIN`; the later lineage path fetches `/user` again when `PHASE_COMMENT_AUTHOR` is empty. Both reads can execute for a qualifying report with numeric `SOURCE_GEN`.
+  - **Proposed fix:** After manual approval, let the `HEAL_TRUSTED_AUTHOR` assignment reuse a nonempty, verified `PROVENANCE_LOGIN`; retain its existing live-read fallback when that value is absent.
+  - **Safety rationale:** `RISKY_SKIP` applies because both reads establish trusted identity in an authentication/provenance flow, where freshness and failure behavior matter.
+  - **Downstream signal:** Do not auto-implement. Manually verify that both reads use the same unchanged token and that provenance verification permits reuse of its login for lineage authorization; retain the second read on any uncertainty.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: `RISKY_SKIP` — Both reads are in `orchestrate_poll_process.sh`; review the final-merge race and distinct failure outcomes before consolidating.
+- API-002: `RISKY_SKIP` — The source is paginated and authenticates a marker; preserve complete listing and comment-body checks.
+- API-003: `RISKY_SKIP` — Changing a retry loop requires manual review of permanent-error classification versus rate-limit backoff.
+- BATCH-001: `RISKY_SKIP` — The poller’s blocker-state reads must retain unknown-state deferral on incomplete batches.
+- BATCH-002: `RISKY_SKIP` — Paginated comment history is authorization evidence; a partial GraphQL response cannot replace it.
+- BATCH-003: `RISKY_SKIP` — Paginated changed-file reads must retain complete path coverage and the cycle-local cache contract.
+
+### Summary Counts
+
+*Counts cover net-new findings only; Deep Audit cross-references are excluded.*
+
+| Tag | Count | IDs |
+| --- | ---: | --- |
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 0 | — |
+| RISKY_SKIP | 1 | REUSE-001 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
