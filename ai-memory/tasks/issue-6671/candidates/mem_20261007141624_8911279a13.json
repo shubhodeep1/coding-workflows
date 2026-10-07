@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\n**DECISIONS:**\nQ1: A\nQ2: A\n\n**RATIONALE:**\nQ1: Option A matches the requested change: keep #6624 and #6628 blocked, and treat `LIVE_MERGED_PR_HOOK_PARITY_UNSET_OPERATOR_STEP` as a pending-operator marker, not a runtime gate. The operator step is already recorded. When the unblock judge reached its `operator_step` verdict, it wrote the step to the `ai:operator-step` issue (`scripts/unblock_judge.sh` lines 305-310, via `operator_step_issue.py upsert`). So this fix-up has no repository change to make.\n- A doc-only change (B) would hurt. Per `scripts/unblock_judge.sh` lines 10-13, when a fix-up issue merges the judge posts the resume command for the blocked item. Merging B would resume #6628 before the live `.claude/hooks/pr_merge_status_guard.py` exists. That hook is missing from this snapshot (no files under `.claude/hooks/`), so the parity test would fail and the #6624 \u2192 #6628 \u2192 #6656 chain would loop again.\n- C would add a code path that reads the flag, which is the runtime gate the issue rules out.\n- D waives the parity check, which the issue forbids.\n\nQ2: Only applies if Q1 is C. Since Q1 is A, nothing reads this flag. A is given only so the answer parses.\n\n**EXECUTION PLAN:**\nQ1:\n  strategy: no repository change (lettered option A)\n  inputs:\n    - scripts/unblock_judge.sh (lines 10-13: fix-up wait and resume-on-merge; lines 305-310: operator step written to the `ai:operator-step` issue)\n    - .claude/hooks/ (the live `pr_merge_status_guard.py` is missing from the snapshot)\n  steps:\n    - Do not edit `.claude/**`, `workflow-templates/.claude/**`, `.github/ai/claude_template_divergence.json`, `tests/test_claude_template_live_parity.py` or `scripts/sync_claude_live_copies.py`.\n    - Close this issue without merging a PR. The implement no-op path closes it as `ai:closed` once its ancestry threshold is reached. Do not post a resume command for #6624 or #6628.\n    - Leave the existing `ai:operator-step` entry as the record of the pending human action.\n    - Resume #6628, and then #6624, only after an authorized person commits the live hook matching `workflow-templates/.claude/hooks/pr_merge_status_guard.py`, and `tests/test_claude_template_live_parity.py` plus all required checks pass.\n  replaces_acceptance_criterion: The fix-up's merged PR is replaced by a recorded operator step. The parity check still decides when work resumes.\n  equivalence_argument: The intended work is a human edit to `.claude/**`, which the pipeline editors cannot write. Recording it and not merging anything keeps the blocked items blocked and leaves every check in force, which is what the issue asks for.\n  reversibility: If a human wants the flag-gated marker, they can `/reclarify` and pick C. No code is shipped now that would need reverting.\n\n**SETUP REQUIRED:**\n- LIVE_MERGED_PR_HOOK_PARITY_UNSET_OPERATOR_STEP (variable): an operator commits `.claude/hooks/pr_merge_status_guard.py` byte-identical to its `workflow-templates/` template, with the same executable bits. No code reads this variable. Until the hook is committed, #6624 and #6628 stay blocked and the parity test keeps failing.",
+  "fingerprint": "609f4ebec3816bb89bf0376b8e3f7637fa4911143e1af9ccf3f9231c21ae4e01",
+  "lineage": {
+    "issue_number": 6671,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37634048817",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37634048817",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6671"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261007141624_8911279a13",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6671,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37634048817"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6671",
+  "timestamps": {
+    "created_at": "2026-10-07T14:16:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
