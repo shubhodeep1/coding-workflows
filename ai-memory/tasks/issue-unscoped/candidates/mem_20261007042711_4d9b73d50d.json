@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The manifest `.ai/.workspace_source_manifest.txt` must track all source tree assets, including `docs/plans/claude-actions-worker-pool-plan.md`.\n  expected_change_site: `.ai/.workspace_source_manifest.txt`\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: `docs/plans/claude-actions-worker-pool-plan.md` exists in the repository but is absent from the sorted inventory in `.ai/.workspace_source_manifest.txt`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: The manifest `.ai/.workspace_source_manifest.txt` must track all source tree assets, including `docs/plans/claude-actions-worker-pool-plan.md`.\n  Expected change site: `.ai/.workspace_source_manifest.txt`\n  Evidence of absence: The file `docs/plans/claude-actions-worker-pool-plan.md` exists in the repository but is absent from the sorted inventory in `.ai/.workspace_source_manifest.txt`.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "49877411acd81981fca83dd72ce13acadfc8512cf0863db65c71ab688f8c4756",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6043,
+    "run_id": "37570512745",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37570512745",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007042711_4d9b73d50d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6043,
+    "run_id": "37570512745"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-07T04:27:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
