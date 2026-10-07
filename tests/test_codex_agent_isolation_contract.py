@@ -6,8 +6,9 @@ security-audit and failure-heal agents read issue bodies, comments, PR diffs
 or CI / workflow logs. A prompt injection there must not be able to read
 GH_PAT (GH_TOKEN), the OpenRouter key, or the checkout's .git (whose config
 carries the GH_PAT remote URL and checkout extraheader). They therefore run
-through scripts/codex_isolated_exec.sh: a credential-free, network-isolated
-container that reaches the model only through the host-side broker
+through scripts/codex_isolated_exec.sh or, for triage, through
+scripts/clarify_isolated_run.sh: credential-free, network-isolated containers
+that reach the model only through the host-side broker
 (scripts/clarify_openrouter_broker.py). These checks pin that wiring; the
 behaviour is covered by tests/test_codex_isolated_exec.py.
 """
@@ -89,7 +90,7 @@ def test_thread_reuse_launches_through_the_isolated_launcher():
 		("scripts/self_heal_validation.sh", 'self_heal_codex_cmd=(bash "${CODEX_ISOLATED_EXEC}" run --mode read-only --)'),
 		("scripts/implement_diagnose_post_codex_failure.sh", 'diagnose_codex_cmd=(bash "${CODEX_ISOLATED_EXEC}" run --mode read-only --)'),
 		("scripts/workflow_retro_fanout.sh", 'codex_isolated_exec.sh" run --mode read-only --workdir "${REPO_ROOT}"'),
-		("scripts/check_failure_triage.sh", 'codex_isolated_exec.sh" run --mode read-only --'),
+		("scripts/check_failure_triage.sh", 'bash "${ISOLATED_HELPER}" "${PROMPT_FILE}" "${DIAG_FILE}" "${RUNTIME_DIR}/codex_log.txt"'),
 		("scripts/security_audit.sh", 'codex_isolated_exec.sh" run --mode read-only ${audit_isolated_args[@]+"${audit_isolated_args[@]}"} --'),
 		("scripts/workflow_failure_heal_intake.sh", 'heal_isolated_args=(run --mode read-only)'),
 		("scripts/validation_discovery_bootstrap.py", 'CODEX_ISOLATED_EXEC = Path(__file__).resolve().parent / "codex_isolated_exec.sh"'),
@@ -196,7 +197,10 @@ def test_isolated_runs_carry_no_serena_hints():
 )
 def test_workflows_stage_the_isolation_support_files(workflow):
 	text = (WORKFLOWS / workflow).read_text(encoding="utf-8")
-	for name in ("codex_isolated_exec.sh", "codex_isolated_workspace.py", "clarify_openrouter_broker.py"):
+	names = (("clarify_isolated_run.sh", "clarify_sandbox/Dockerfile", "clarify_openrouter_broker.py")
+		if workflow == "check_failure_triage.yml" else
+		("codex_isolated_exec.sh", "codex_isolated_workspace.py", "clarify_openrouter_broker.py"))
+	for name in names:
 		assert name in text, f"{workflow} must stage {name}"
 
 

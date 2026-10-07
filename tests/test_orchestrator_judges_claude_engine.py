@@ -231,7 +231,7 @@ def test_combined_rb_judge_uses_verified_engine_and_its_worktree(
 		'set -euo pipefail\n' + _helper_source() + '\n'
 		f'_POLLER_AI_ENGINE_SH="{engine_dir / "ai_engine.sh"}"\n'
 		f'RB_COMBINED_WORKDIR="{worktree}"\n'
-		f'RUNTIME_DIR="{tmp_path}"\nGITHUB_WORKSPACE="{tmp_path}"\n'
+		f'export RUNTIME_DIR="{tmp_path}"\nGITHUB_WORKSPACE="{tmp_path}"\n'
 		f'RB_JUDGE_PROMPT_FILE="{tmp_path / "prompt.txt"}"\nRB_JUDGE_OUTPUT_FILE="{tmp_path / "verdict.txt"}"\n'
 		'MODEL_EDITOR=openai/gpt-6-sol\nRB_COMBINED_MODE=true\nrb_issue=10\n'
 		f'_current_wave_details_json=\'{{"10":{{"labels":[{issue_labels}],"labels_complete":true}}}}\'\nTRACKING_LABELS=\'["ai:engine-claude"]\'\n'

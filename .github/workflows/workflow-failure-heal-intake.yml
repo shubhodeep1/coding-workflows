@@ -29,6 +29,9 @@ name: Workflow Failure Heal Intake
       - "Promote main to stable"
       - "Auto release stable"
       - "Forward-merge stable to main"
+      # CI on pushes to main (Q51); the job skips CI runs for pull requests
+      # and other branches, which check-failure triage covers.
+      - "CI"
     types:
       - completed
   workflow_dispatch:
@@ -60,7 +63,10 @@ jobs:
     if: >-
       !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED) &&
       (github.event_name != 'workflow_run' ||
-       contains(fromJson('["failure","timed_out"]'), github.event.workflow_run.conclusion))
+       (contains(fromJson('["failure","timed_out"]'), github.event.workflow_run.conclusion) &&
+        (github.event.workflow_run.name != 'CI' ||
+         (github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == github.event.repository.default_branch))))
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
