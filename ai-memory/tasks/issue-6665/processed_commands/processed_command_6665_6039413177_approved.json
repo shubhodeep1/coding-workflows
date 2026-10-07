@@ -5,13 +5,35 @@
   "entry_id": "processed_command_6665_6039413177_approved",
   "issue_number": 6665,
   "metadata": {
+    "branch": "ai/issue-6665",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/ai/claude_engine.json",
+      ".github/workflows/ci.yml",
+      ".github/workflows/validate.yml",
+      ".github/workflows/validation-refresh.yml",
+      "agents.md",
+      "changelog.d/validate-roles-claude-engine.md",
+      "scripts/ai_engine.sh",
+      "scripts/self_heal_validation.sh",
+      "scripts/validate_process.sh",
+      "scripts/validation_discovery_bootstrap.py",
+      "tests/test_ai_engine.py",
+      "tests/test_claude_engine.py",
+      "tests/test_claude_engine_utility_roles.py"
+    ],
+    "issue_number": 6665,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6665",
+    "pr_number": 6673,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6673",
+    "run_attempt": "1",
+    "run_id": "37631912467",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37631912467"
   },
   "run_attempt": 1,
   "run_id": "37631912467",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-07T13:55:01Z",
+  "status": "completed",
+  "timestamp": "2026-10-07T14:21:01Z",
   "workflow": "implement"
 }
