@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1442-1467 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The lint aggregate reports `tests-promote-stall-and-review` and `orchestrate-poll` failed, blocking the PR from merging.\n  WHY: The aggregate fails when either dependency is unsuccessful; Gemini and OpenAI flag the current check state, while Qwen and MiniMax attribute the failures to pre-existing sandbox issues.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cPropagate static-context paths\u201d so Semble contribution telemetry can report `static_dup_bytes` when a static prefix is present.\n  expected_change_site: `scripts/validate_process.sh::append_validate_semble_context` and `scripts/self_heal_validation.sh::append_self_heal_semble_context`\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: `validate_process.sh` builds and embeds `STATIC_CONTEXT_FILE` in its prompts, then calls `semble_query_block` without setting `SEMBLE_STATIC_CONTEXT_FILE`; the self-heal path also receives and embeds `STATIC_CONTEXT_FILE`, but its Semble query call does not pass that path. Neither expected site is changed in the PR diff.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:1446-1448 | confidence=5\n  PROBLEM: The lint aggregate reports `tests-promote-stall-and-review` and `orchestrate-poll` CI jobs failed.\n  WHY: These failures block the PR from being merged. While the editor investigation suggests these may be pre-existing environment failures in the sandbox, they must be resolved or confirmed as pre-existing before this PR can be merged to maintain a clean CI state.\n- scripts/semble_helpers.sh (`semble_ensure_ready`)\n  PROBLEM: The use of `flock` and temporary files assumes `/tmp` or the provided `RUNNER_TEMP` is writable and not shared in a way that allows race conditions, though it's protected by `flock`.\n  WHY: Suggested minimal fix: Ensure `SEMBLE_BOOTSTRAP_STATE_FILE` is always in a secure, job-scoped directory and ensure permissions are 0600. Estimated lines changed: 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:1442-1467, `lint` aggregate | severity=BLOCKER | confidence=5\n  PROBLEM: The check-run context reports `tests-promote-stall-and-review` and `orchestrate-poll` failed for the current PR head.\n  WHY: The current head cannot pass the required CI aggregate. The provided job log tails do not identify the underlying test failures, so their cause remains undetermined.\n- TASK_GAP\n  Requirement: \u201cPropagate static-context paths\u201d so Semble contribution telemetry can report `static_dup_bytes` when a static prefix is present.\n  Expected change site: `scripts/validate_process.sh::append_validate_semble_context` and `scripts/self_heal_validation.sh::append_self_heal_semble_context`.\n  Evidence of absence: `validate_process.sh` builds and embeds `STATIC_CONTEXT_FILE` in its prompts, then calls `semble_query_block` without setting `SEMBLE_STATIC_CONTEXT_FILE`. The self-heal path also receives and embeds `STATIC_CONTEXT_FILE`, but its Semble query call does not pass that path. Neither expected site is changed in the PR diff, so validation and self-heal query telemetry omits known static-prefix duplication.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "902f0592da6e04042daaa83b71f3e5fb729a582ffdf70396e7e5c68924f15d96",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6417,
+    "run_id": "37656947336",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37656947336",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007173459_fa0fce81fe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6417,
+    "run_id": "37656947336"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-07T17:34:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
