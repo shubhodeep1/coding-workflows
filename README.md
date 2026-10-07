@@ -47,7 +47,9 @@ Get AI-powered issue-to-PR automation running in your repository in a few minute
 > wrapper workflows plus `ai-update-workflows.yml` with the immutable commit behind `@stable`, copies
 > the `.claude/` command/hook assets and root `CLAUDE.md` from that release into the target repo via a seed PR, sets the `WORKFLOW_PROFILE` repo
 > variable (after asking), and registers the repo in `.github/ai/consumer_repos.json` (CLAUDE.md §14).
-> Secrets (step 1 below) still have to be added by you.
+> Secrets (step 1 below) are copied into the new repo by the `Propagate consumer secrets` workflow once
+> its registration merges (see [Consumer secrets propagation](#consumer-secrets-propagation)); add them
+> by hand only if that run fails or the repo is not registered.
 
 ### 1. Add secrets and variables
 

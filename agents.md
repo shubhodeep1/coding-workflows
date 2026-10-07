@@ -2532,6 +2532,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/orchestrate_poll.yml
 .github/workflows/plan.yml
 .github/workflows/promote-main-to-stable.yml
+.github/workflows/propagate-consumer-secrets.yml
 .github/workflows/review_autofix.yml
 .github/workflows/review_autofix_sweep.yml
 .github/workflows/review_rb_judge_dispatch.yml
