@@ -1114,11 +1114,11 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
 | validate generate, diagnose | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; codex fallback) · `VALIDATE` |
 | validate discover | `openai/gpt-6-sol` | `high` (per-phase override via `MODEL_REASONING_EFFORT_DISCOVER`) | `low` | Claude (Opus 5.5; codex fallback) · `VALIDATE` |
 | validate fix-harness, self-heal | `openai/gpt-6-sol` | `high` | `low` | Claude (Opus 5.5; codex fallback) · `VALIDATE_SELF_HEAL` |
-| workflow log analyze | `openai/gpt-6-sol` | `xhigh` | `low` | codex · `LOG_ANALYSIS` |
-| workflow audit | `openai/gpt-6-sol` | `xhigh` (hardcoded in `.github/workflows/workflow-log-analysis.yml:716-717`) | `low` | codex · `LOG_AUDIT` |
-| workflow api-redundancy | `openai/gpt-6-sol` | `high` (default of `THINKING_LEVEL_ANALYSIS`) | `low` | codex · `LOG_ANALYSIS` |
-| workflow log summary | `openai/gpt-6-luna` | default | `low` | OpenCode · `LOG_SUMMARY` |
-| reviewer consensus summariser | `openai/gpt-6-luna` | `medium` (`XPOLL_SUMMARISER_REASONING`) | `low` | OpenCode · `SUMMARISER` |
+| workflow log analyze | `openai/gpt-6-sol` | `xhigh` | `low` | Claude (Opus 5.5; codex fallback) · `LOG_ANALYSIS` |
+| workflow audit | `openai/gpt-6-sol` | `xhigh` (hardcoded in `.github/workflows/workflow-log-analysis.yml:716-717`) | `low` | Claude (Opus 5.5; codex fallback) · `LOG_AUDIT` |
+| workflow api-redundancy | `openai/gpt-6-sol` | `high` (default of `THINKING_LEVEL_ANALYSIS`) | `low` | Claude (Opus 5.5; codex fallback) · `LOG_ANALYSIS` |
+| workflow log summary | `openai/gpt-6-luna` | default | `low` | Claude (Sonnet 5.5; OpenRouter fallback) · `LOG_SUMMARY` |
+| reviewer consensus summariser | `openai/gpt-6-luna` | `medium` (`XPOLL_SUMMARISER_REASONING`) | `low` | Claude (Sonnet 5.5; sandboxed OpenCode fallback) · `SUMMARISER` |
 
 The **Engine · Claude role** column names today's engine and the role name
 `scripts/ai_engine.sh` resolves for that row (README "Claude engine").

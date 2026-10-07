@@ -769,12 +769,118 @@ behavioural_smoke_opencode_cmd=(
 	"${BEHAVIOURAL_SMOKE_OPENCODE_WORKSPACE}"
 )
 
-if timeout --signal=TERM --kill-after=30s -- "${BEHAVIOURAL_SMOKE_TIMEOUT_S}" \
-	"${behavioural_smoke_opencode_cmd[@]}" \
-	< "${PROMPT_FILE}" > "${RAW_OUTPUT_FILE}" 2> "${STDERR_FILE}"; then
-	cmd_rc=0
-else
-	cmd_rc=$?
+# ── Engine selection (role BEHAVIOURAL_SMOKE, plan item 3d) ──────────────
+# The synthesiser reads PR-derived diffs and findings, so Claude runs only in
+# the network-isolated review sandbox (review_untrusted_sandbox.sh, read-only,
+# credential-free relay), like the consolidator; host claude_run refuses
+# review roles. Order: Claude in a fresh sandbox; on exit 75 (Claude
+# unavailable) or 2 (outdated helper) OpenCode in a fresh sandbox; when the
+# sandbox cannot be prepared, the unchanged read-only reviewer-agent command
+# below. A codex selection (AI_ENGINE_BEHAVIOURAL_SMOKE=codex, AI_ENGINE=codex,
+# the ai:codex label) runs only that unchanged command. Every input has a
+# default here because review_autofix.yml does not export one (unattended §8).
+behavioural_smoke_sandbox_sh="${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh"
+behavioural_smoke_sandbox_root=""
+behavioural_smoke_sandbox_unavailable=false
+behavioural_smoke_sandbox_cleanup()
+{
+	[ -n "${behavioural_smoke_sandbox_root:-}" ] || return 0
+	if ! REVIEW_SANDBOX_ROOT="${behavioural_smoke_sandbox_root}" timeout --signal=TERM --kill-after=10s -- 30s \
+		bash "${behavioural_smoke_sandbox_sh}" cleanup >/dev/null 2>&1; then
+		echo "::warning::behavioural smoke: review sandbox cleanup failed." >&2
+	fi
+	behavioural_smoke_sandbox_root=""
+}
+trap behavioural_smoke_sandbox_cleanup EXIT
+behavioural_smoke_engine_resolve()
+{
+	local engine_script="${SUPPORT_SCRIPTS_DIR}/ai_engine.sh" resolved_engine accounts
+	if [ ! -f "${engine_script}" ] || [ -L "${engine_script}" ]; then
+		printf 'codex\n'
+		return 0
+	fi
+	resolved_engine="$(AI_ENGINE_MODEL_HINT="${BEHAVIOURAL_SMOKE_MODEL}" AI_ENGINE_EFFORT_HINT=low \
+		bash -c 'source "$0" >/dev/null 2>&1 || exit 2; ai_engine_for_role BEHAVIOURAL_SMOKE' "${engine_script}" || true)"
+	if [ "${resolved_engine}" != "claude" ]; then
+		printf 'codex\n'
+		return 0
+	fi
+	# Without a pool credential the sandboxed Claude run can only exit 75
+	# (no_credential) before any model call; skip the image build and keep
+	# the unchanged read-only command.
+	accounts="$(bash -c 'source "$0" >/dev/null 2>&1 || exit 2; ai_engine_accounts' "${engine_script}" 2>/dev/null || true)"
+	if [ -z "${accounts}" ]; then
+		echo "AI_ENGINE_FALLBACK role=BEHAVIOURAL_SMOKE reason=no_credential" >&2
+		printf 'codex\n'
+		return 0
+	fi
+	printf 'claude\n'
+}
+# One sandboxed attempt on <engine> (claude|codex); sets
+# behavioural_smoke_sandbox_unavailable=true when the sandbox could not be prepared.
+behavioural_smoke_sandbox_attempt()
+{
+	local sandbox_engine="$1" attempt_rc=0
+	behavioural_smoke_sandbox_unavailable=false
+	if [ ! -f "${behavioural_smoke_sandbox_sh}" ] || [ -L "${behavioural_smoke_sandbox_sh}" ]; then
+		behavioural_smoke_sandbox_unavailable=true
+		return 1
+	fi
+	if ! behavioural_smoke_sandbox_root="$(timeout --signal=TERM --kill-after=10s -- "${BEHAVIOURAL_SMOKE_TIMEOUT_S}" \
+		bash "${behavioural_smoke_sandbox_sh}" prepare-ephemeral "${sandbox_engine}" 2>>"${STDERR_FILE}")" || [ -z "${behavioural_smoke_sandbox_root}" ]; then
+		behavioural_smoke_sandbox_root=""
+		behavioural_smoke_sandbox_unavailable=true
+		return 1
+	fi
+	REVIEW_SANDBOX_ROOT="${behavioural_smoke_sandbox_root}" timeout --signal=TERM --kill-after=30s -- "${BEHAVIOURAL_SMOKE_TIMEOUT_S}" \
+		bash "${behavioural_smoke_sandbox_sh}" run "${PROMPT_FILE}" "${RAW_OUTPUT_FILE}" \
+		"${BEHAVIOURAL_SMOKE_MODEL}" low "${BEHAVIOURAL_SMOKE_OPENCODE_CONFIG}" \
+		"${sandbox_engine}" BEHAVIOURAL_SMOKE read \
+		< "${PROMPT_FILE}" >/dev/null 2>>"${STDERR_FILE}" || attempt_rc=$?
+	behavioural_smoke_sandbox_cleanup
+	return "${attempt_rc}"
+}
+
+: > "${RAW_OUTPUT_FILE}"
+: > "${STDERR_FILE}"
+behavioural_smoke_engine_state="legacy"
+if [ "$(behavioural_smoke_engine_resolve)" = "claude" ]; then
+	behavioural_smoke_engine_state="claude"
+fi
+cmd_rc=0
+if [ "${behavioural_smoke_engine_state}" = "claude" ]; then
+	behavioural_smoke_sandbox_attempt claude || cmd_rc=$?
+	if [ "${behavioural_smoke_sandbox_unavailable}" = "true" ]; then
+		echo "AI_ENGINE_FALLBACK role=BEHAVIOURAL_SMOKE reason=sandbox_unavailable" >&2
+		behavioural_smoke_engine_state="legacy"
+		cmd_rc=0
+	elif [ "${cmd_rc}" -eq 75 ] || [ "${cmd_rc}" -eq 2 ]; then
+		grep -E '^(AI_ENGINE_[A-Z_]+|CLAUDE_POOL) ' "${STDERR_FILE}" >&2 || true
+		if [ "${cmd_rc}" -eq 2 ]; then
+			echo "AI_ENGINE_FALLBACK role=BEHAVIOURAL_SMOKE reason=sandbox_helper_outdated" >&2
+		fi
+		behavioural_smoke_engine_state="sandbox_opencode"
+		: > "${RAW_OUTPUT_FILE}"
+		cmd_rc=0
+	fi
+fi
+if [ "${behavioural_smoke_engine_state}" = "sandbox_opencode" ]; then
+	behavioural_smoke_sandbox_attempt codex || cmd_rc=$?
+	if [ "${behavioural_smoke_sandbox_unavailable}" = "true" ] || [ "${cmd_rc}" -eq 2 ]; then
+		echo "AI_ENGINE_FALLBACK role=BEHAVIOURAL_SMOKE reason=sandbox_unavailable" >&2
+		behavioural_smoke_engine_state="legacy"
+		: > "${RAW_OUTPUT_FILE}"
+		cmd_rc=0
+	fi
+fi
+if [ "${behavioural_smoke_engine_state}" = "legacy" ]; then
+	if timeout --signal=TERM --kill-after=30s -- "${BEHAVIOURAL_SMOKE_TIMEOUT_S}" \
+		"${behavioural_smoke_opencode_cmd[@]}" \
+		< "${PROMPT_FILE}" > "${RAW_OUTPUT_FILE}" 2> "${STDERR_FILE}"; then
+		cmd_rc=0
+	else
+		cmd_rc=$?
+	fi
 fi
 
 behavioural_smoke_clean_output="${RAW_OUTPUT_FILE}.ansi-clean"

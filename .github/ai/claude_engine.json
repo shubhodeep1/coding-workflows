@@ -132,37 +132,37 @@
       "profile": "write"
     },
     "LOG_ANALYSIS": {
-      "engine": "codex",
+      "engine": "claude",
       "claude_model": "claude-opus-5-5",
       "profile": "write"
     },
     "LOG_AUDIT": {
-      "engine": "codex",
+      "engine": "claude",
       "claude_model": "claude-opus-5-5",
       "profile": "write"
     },
     "LOG_SUMMARY": {
-      "engine": "codex",
+      "engine": "claude",
       "claude_model": "claude-sonnet-5-5",
       "profile": "write"
     },
     "RETRO": {
-      "engine": "codex",
+      "engine": "claude",
       "claude_model": "claude-sonnet-5-5",
       "profile": "write"
     },
     "MATERIALITY": {
-      "engine": "codex",
+      "engine": "claude",
       "claude_model": "claude-sonnet-5-5",
       "profile": "write"
     },
     "SUMMARISER": {
-      "engine": "codex",
+      "engine": "claude",
       "claude_model": "claude-sonnet-5-5",
       "profile": "write"
     },
     "BEHAVIOURAL_SMOKE": {
-      "engine": "codex",
+      "engine": "claude",
       "claude_model": "claude-sonnet-5-5",
       "profile": "write"
     }

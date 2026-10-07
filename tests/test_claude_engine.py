@@ -62,6 +62,7 @@ CUTOVER_ROLES |= {"ORCHESTRATE", "WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE
 CUTOVER_ROLES |= {"SECURITY_AUDIT"}  # security audit on Claude, codex fallback
 CUTOVER_ROLES |= {"VALIDATE", "VALIDATE_SELF_HEAL", "VALIDATION_REFRESH"}  # validate roles (plan item 3a)
 CUTOVER_ROLES |= {"WORKFLOW_HEAL", "CHECK_TRIAGE", "ACTIVATION_VERIFY", "UNBLOCK_JUDGE"}  # plan item 3c
+CUTOVER_ROLES |= {"LOG_ANALYSIS", "LOG_AUDIT", "LOG_SUMMARY", "RETRO", "MATERIALITY", "SUMMARISER", "BEHAVIOURAL_SMOKE"}  # plan item 3d
 
 
 def test_checked_in_config_is_valid_and_inert() -> None:
