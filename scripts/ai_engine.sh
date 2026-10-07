@@ -59,6 +59,10 @@
 #                           holds each token (0600)
 #   ALLOW_WORKFLOW_EDITS    `true` lifts the .github/workflows deny rules (P5)
 #   AI_ENGINE_READ_ONLY     `true` runs a write role with the read profile
+#   AI_ENGINE_INCLUDE_PATHS newline-separated trusted runtime paths the prompt
+#                           names, passed to the container as --include
+#                           (default empty; the security audit's oversized-
+#                           file export)
 #   SUPPORT_INSTRUCTIONS_FILE   unattended_system_instructions.md
 #
 # The OAuth token never reaches the CLI: scripts/claude_anthropic_relay.py
@@ -302,6 +306,12 @@ claude_run()
 	# The container copy leaves CLAUDE.md out and never writes one back; the
 	# host file is never moved (answer Q19 A).
 	[ "${hide_claude_md}" = "true" ] && isolation_args+=(--hide-claude-md)
+	local include_path
+	while IFS= read -r include_path; do
+		if [ -n "${include_path}" ]; then
+			isolation_args+=(--include "${include_path}")
+		fi
+	done <<< "${AI_ENGINE_INCLUDE_PATHS:-}"
 	# Implement prepares one workspace sandbox per job with the project's
 	# dependencies preinstalled (codex_isolated_exec.sh prepare --deps); a
 	# write role in that job reuses it, as the codex attempts do.

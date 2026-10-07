@@ -7519,6 +7519,7 @@ run_security_pass_inline() {
     SECURITY_AUDIT_SKIP_IF_UNCHANGED="false" \
     SECURITY_AUDIT_INCREMENTAL="true" \
     WORKFLOW_EDITOR_MODEL="${effective_security_model}" \
+    AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" \
     bash scripts/codex_heartbeat.sh \
       --phase "orchestrate-security-pass" \
       --stderr-file "${audit_error_file}" \
