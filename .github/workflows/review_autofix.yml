@@ -587,6 +587,8 @@ jobs:
           # evaluating the cap (failure comments keep their marker).
           REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED || 'true' }}
           REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL: ${{ vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL || '3' }}
+          # #6625: markers from other support versions are not counted.
+          REVIEW_SUPPORT_SHA: ${{ steps.resolve_support.outputs.review_support_sha }}
         run: |
           set -euo pipefail
 
@@ -1174,7 +1176,8 @@ jobs:
                 if ! fingerprint_cap_decision="$(PYTHONDONTWRITEBYTECODE=1 python3 "${fingerprint_cap_helper}" autofix-identical-failure-count \
                   --comments-json "${gate_marker_comments_file}" \
                   --head-sha "${pr_head_sha_gate}" \
-                  --author-login "${gate_marker_author_login}" 2>/dev/null)"; then
+                  --author-login "${gate_marker_author_login}" \
+                  --support-sha "${REVIEW_SUPPORT_SHA:-}" 2>/dev/null)"; then
                   fingerprint_cap_decision=""
                 fi
                 fingerprint_cap_count="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "count" { print $2 }' | tail -n 1)"
@@ -1195,9 +1198,9 @@ jobs:
                     FINGERPRINT_CAP="true"
                     SHOULD_RUN="false"
                     SKIP_REASON="fingerprint_cap"
-                    echo "AUTOFIX_FINGERPRINT_CAP_TRIPPED pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} count=${FINGERPRINT_CAP_COUNT} max=${FINGERPRINT_CAP_MAX} already_applied=${FINGERPRINT_CAP_ALREADY_APPLIED} non_retryable=${FINGERPRINT_CAP_NON_RETRYABLE}"
+                    echo "AUTOFIX_FINGERPRINT_CAP_TRIPPED pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} count=${FINGERPRINT_CAP_COUNT} max=${FINGERPRINT_CAP_MAX} already_applied=${FINGERPRINT_CAP_ALREADY_APPLIED} non_retryable=${FINGERPRINT_CAP_NON_RETRYABLE} support=${REVIEW_SUPPORT_SHA:-none}"
                   else
-                    echo "AUTOFIX_FINGERPRINT cap=not_tripped pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP:-none} reason=${FINGERPRINT_CAP_REASON:-none} count=${FINGERPRINT_CAP_COUNT} max=${FINGERPRINT_CAP_MAX}"
+                    echo "AUTOFIX_FINGERPRINT cap=not_tripped pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP:-none} reason=${FINGERPRINT_CAP_REASON:-none} count=${FINGERPRINT_CAP_COUNT} max=${FINGERPRINT_CAP_MAX} support=${REVIEW_SUPPORT_SHA:-none}"
                   fi
                 fi
               fi
@@ -2394,6 +2397,7 @@ jobs:
       FINGERPRINT_CAP_ALREADY_APPLIED: ${{ needs.gate.outputs.fingerprint_cap_already_applied }}
       FINGERPRINT_CAP_NON_RETRYABLE: ${{ needs.gate.outputs.fingerprint_cap_non_retryable }}
       FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN: ${{ needs.gate.outputs.fingerprint_cap_marker_author_login }}
+      REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}
       WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
       REPORT_WORKFLOW_NAME: ${{ github.workflow }}
       REPORT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -2506,8 +2510,11 @@ jobs:
             echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=${PR_HEAD_SHA} reason=fresh_cap_marker_lookup_failed"
             exit 0
           fi
-          if jq -e --arg author "${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}" --arg head "${PR_HEAD_SHA}" \
-            'any(.[]; ((.author_login // "" | ascii_downcase) == ($author | ascii_downcase)) and ((.body // "") | contains("<!-- review-autofix-failure-cap:v1 head=" + $head + " ")))' \
+          # #6625: a cap marker of another support version does not count.
+          cap_support=""
+          [[ "${REVIEW_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]] && cap_support="${REVIEW_SUPPORT_SHA}"
+          if jq -e --arg author "${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}" --arg head "${PR_HEAD_SHA}" --arg support "${cap_support}" \
+            'any(.[]; ((.author_login // "" | ascii_downcase) == ($author | ascii_downcase)) and ((.body // "") | contains("<!-- review-autofix-failure-cap:v1 head=" + $head + " ")) and ($support == "" or ((.body // "") | contains(" support=" + $support + " "))))' \
             "${fresh_cap_comments_file}" >/dev/null; then
             echo "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=${PR_NUMBER} head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP} count=${FINGERPRINT_CAP_COUNT}"
             exit 0
@@ -2558,7 +2565,7 @@ jobs:
             labeled_summary="this pull request (no linked issue found)"
           fi
 
-          cap_marker="<!-- review-autofix-failure-cap:v1 head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} count=${FINGERPRINT_CAP_COUNT} -->"
+          cap_marker="<!-- review-autofix-failure-cap:v1 head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} count=${FINGERPRINT_CAP_COUNT}${cap_support:+ support=${cap_support}} -->"
           cap_title="identical failure repeated"
           cap_first_error=""
           cap_lead="The last ${FINGERPRINT_CAP_COUNT} review/autofix runs on head \`${PR_HEAD_SHA:0:12}\` failed the same way"
@@ -2718,6 +2725,8 @@ jobs:
 
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      # #6625: failure markers record support= for the version-aware cap.
+      REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}
       # Issue #6308: host Python must not import modules from the PR checkout
       # (or its workspace copy) when running -c, -, or -m.
       PYTHONSAFEPATH: "1"
@@ -5465,6 +5474,7 @@ jobs:
                 --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
                 --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
                 --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
+                --support-sha "${REVIEW_SUPPORT_SHA:-}" \
                 --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null | sed -n 's/^marker=//p' | head -n 1 || true)"
               if [ -n "${autofix_failure_marker_line}" ]; then
                 AUTOFIX_FAILURE_MARKER_SUFFIX=$'\n\n'"${autofix_failure_marker_line}"
@@ -6894,6 +6904,7 @@ jobs:
               --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
               --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
               --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
+              --support-sha "${REVIEW_SUPPORT_SHA:-}" \
               --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null | sed -n 's/^marker=//p' | head -n 1 || true)"
             if [ -n "${autofix_failure_marker_line}" ]; then
               AUTOFIX_FAILURE_MARKER_SUFFIX=$'\n\n'"${autofix_failure_marker_line}"
@@ -6983,6 +6994,7 @@ jobs:
               --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
               --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
               --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
+              --support-sha "${REVIEW_SUPPORT_SHA:-}" \
               --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null | sed -n 's/^marker=//p' | head -n 1 || true)"
             if [ -n "${autofix_failure_marker_line}" ]; then
               AUTOFIX_FAILURE_MARKER_SUFFIX=$'\n\n'"${autofix_failure_marker_line}"
@@ -7260,6 +7272,7 @@ jobs:
             --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
             --evidence-out "${evidence_out}" \
             --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
+            --support-sha "${REVIEW_SUPPORT_SHA:-}" \
             --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null || true)"
           failure_fp="$(printf '%s\n' "${fingerprint_out}" | sed -n 's/^fp=//p' | head -n 1)"
           failure_degraded="$(printf '%s\n' "${fingerprint_out}" | sed -n 's/^degraded=//p' | head -n 1)"

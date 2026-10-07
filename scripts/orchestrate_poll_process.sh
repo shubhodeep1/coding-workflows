@@ -25855,6 +25855,19 @@ echo "Standalone conflict sweep complete. Fixed: ${CONFLICT_SWEEP_FIXED}."
 # most one `GET /user` per poll cycle, issued lazily only when some PR's
 # current head carries a cap marker; its result is cached for the rest
 # of the sweep.
+# Version-aware cap skip (issue #6625): the gate ignores failure and cap
+# markers written by another review-support version, so a cap marker only
+# means "the gate will stop this run" when its `support=` field equals the
+# review support SHA. `_noop_cap_review_support_sha` resolves that SHA once
+# per cycle without any API call: in this repository the poller's engine
+# SHA (internal-review.yml reviews with the protected main SHA, which is
+# also the poller's checkout); in a consumer repository the SHA pin of
+# review_autofix.yml in the local `.github/workflows/ai-review.yml`. When it
+# resolves, only a trusted cap marker carrying that support SHA skips the
+# PR; a cap marker of another or no support version logs
+# NOOP_RECOVERY_FINGERPRINT_CAP_STALE_SUPPORT and the PR is re-dispatched.
+# When it does not resolve, any trusted cap marker for the head skips (the
+# pre-#6625 rule), so the #4332 dispatch + WARNING loop cannot return.
 # ---------------------------------------------------------------
 echo ""
 echo "========================================"
@@ -25870,6 +25883,27 @@ NOOP_RECOVERY_CAP_SKIPPED=0
 # (one GET /user per cycle, only when a cap marker is seen) and cached.
 NOOP_CAP_TRUSTED_LOGIN=""
 NOOP_CAP_TRUSTED_LOGIN_STATE="unset"
+# Review-support SHA the cap marker must carry (issue #6625). Resolved
+# lazily once per cycle from local data only; empty means unresolved.
+NOOP_CAP_REVIEW_SUPPORT_SHA=""
+NOOP_CAP_REVIEW_SUPPORT_STATE="unset"
+_noop_cap_review_support_sha() {
+	[ "${NOOP_CAP_REVIEW_SUPPORT_STATE}" = "unset" ] || return 0
+	NOOP_CAP_REVIEW_SUPPORT_STATE="unresolved"
+	NOOP_CAP_REVIEW_SUPPORT_SHA=""
+	local _ncs_candidate=""
+	if [ "${GITHUB_REPOSITORY:-}" = "shubhodeep1/coding-workflows" ]; then
+		_ncs_candidate="${ORCHESTRATOR_ENGINE_SHA:-}"
+	elif [ -f .github/workflows/ai-review.yml ] && [ ! -L .github/workflows/ai-review.yml ]; then
+		_ncs_candidate="$(grep -oE 'review_autofix\.yml@[0-9a-f]{40}' .github/workflows/ai-review.yml 2>/dev/null \
+			| sed 's/^review_autofix\.yml@//' | sort -u || true)"
+	fi
+	if [[ "${_ncs_candidate}" =~ ^[0-9a-f]{40}$ ]]; then
+		NOOP_CAP_REVIEW_SUPPORT_SHA="${_ncs_candidate}"
+		NOOP_CAP_REVIEW_SUPPORT_STATE="ok"
+	fi
+	return 0
+}
 NOOP_MAX_RETRIES=3
 # Operator-facing opt-outs. `e2e-smoke-test` mirrors the workflow's
 # own auto-merge suppression so the smoke-test bait-removal race
@@ -26016,6 +26050,17 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 				--arg marker "<!-- review-autofix-failure-cap:v1 head=${N_NOOP_CAP_HEAD_SHA} " \
 				'[.[] | select((.body // "") | contains($marker)) | (.user.login // "" | ascii_downcase)] | unique | .[]' \
 				2>/dev/null || echo "")"
+			N_NOOP_CAP_SUPPORT_AUTHORS=""
+			if [ -n "${N_NOOP_CAP_AUTHORS}" ]; then
+				_noop_cap_review_support_sha
+				if [ "${NOOP_CAP_REVIEW_SUPPORT_STATE}" = "ok" ]; then
+					N_NOOP_CAP_SUPPORT_AUTHORS="$(echo "${N_COMMENTS_JSON}" | jq -r \
+						--arg marker "<!-- review-autofix-failure-cap:v1 head=${N_NOOP_CAP_HEAD_SHA} " \
+						--arg support " support=${NOOP_CAP_REVIEW_SUPPORT_SHA} " \
+						'[.[] | select((.body // "") | (contains($marker) and contains($support))) | (.user.login // "" | ascii_downcase)] | unique | .[]' \
+						2>/dev/null || echo "")"
+				fi
+			fi
 			if [ -n "${N_NOOP_CAP_AUTHORS}" ] && [ "${NOOP_CAP_TRUSTED_LOGIN_STATE}" = "unset" ]; then
 				NOOP_CAP_TRUSTED_LOGIN="$(gh_retry _safe_gh_jq "user" --jq '.login // ""' 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")"
 				if [ -n "${NOOP_CAP_TRUSTED_LOGIN}" ]; then
@@ -26027,9 +26072,17 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 			fi
 			if [ -n "${N_NOOP_CAP_AUTHORS}" ] && [ "${NOOP_CAP_TRUSTED_LOGIN_STATE}" = "ok" ] \
 				&& printf '%s\n' "${N_NOOP_CAP_AUTHORS}" | grep -Fxq -- "${NOOP_CAP_TRUSTED_LOGIN}"; then
-				echo "NOOP_RECOVERY_SKIP_FINGERPRINT_CAP pr=${N_PR} head=${N_NOOP_CAP_HEAD_SHA} count=${N_NOOP_COUNT} max=${NOOP_MAX_RETRIES}"
-				NOOP_RECOVERY_CAP_SKIPPED=$((NOOP_RECOVERY_CAP_SKIPPED + 1))
-				continue
+				if [ "${NOOP_CAP_REVIEW_SUPPORT_STATE}" != "ok" ]; then
+					echo "NOOP_RECOVERY_SKIP_FINGERPRINT_CAP pr=${N_PR} head=${N_NOOP_CAP_HEAD_SHA} count=${N_NOOP_COUNT} max=${NOOP_MAX_RETRIES} support=unresolved"
+					NOOP_RECOVERY_CAP_SKIPPED=$((NOOP_RECOVERY_CAP_SKIPPED + 1))
+					continue
+				elif [ -n "${N_NOOP_CAP_SUPPORT_AUTHORS}" ] \
+					&& printf '%s\n' "${N_NOOP_CAP_SUPPORT_AUTHORS}" | grep -Fxq -- "${NOOP_CAP_TRUSTED_LOGIN}"; then
+					echo "NOOP_RECOVERY_SKIP_FINGERPRINT_CAP pr=${N_PR} head=${N_NOOP_CAP_HEAD_SHA} count=${N_NOOP_COUNT} max=${NOOP_MAX_RETRIES} support=${NOOP_CAP_REVIEW_SUPPORT_SHA}"
+					NOOP_RECOVERY_CAP_SKIPPED=$((NOOP_RECOVERY_CAP_SKIPPED + 1))
+					continue
+				fi
+				echo "NOOP_RECOVERY_FINGERPRINT_CAP_STALE_SUPPORT pr=${N_PR} head=${N_NOOP_CAP_HEAD_SHA} support=${NOOP_CAP_REVIEW_SUPPORT_SHA}"
 			fi
 		fi
 		_noop_dispatch_rc=0

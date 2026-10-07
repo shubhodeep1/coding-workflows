@@ -2369,7 +2369,7 @@ def test_render_failure_marker_is_log_safe_and_rejects_bad_input() -> None:
 	assert heal.render_failure_marker("abc", "editor_empty_noop", fp, False) == ""
 	assert heal.render_failure_marker(SHA_A, "editor_empty_noop", "not-a-fingerprint", False) == ""
 	parsed = heal.parse_failure_markers([{"id": 9, "author_login": CAP_AUTHOR, "body": "x\n" + marker}], head_sha=SHA_A, author_login=CAP_AUTHOR)
-	assert parsed == [{"fp": fp, "reason": "editor_empty_noop", "degraded": False, "run": "35713627310", "comment_id": "9"}]
+	assert parsed == [{"fp": fp, "reason": "editor_empty_noop", "degraded": False, "run": "35713627310", "support": "", "comment_id": "9"}]
 	assert heal.parse_failure_markers([{"author_login": "someone-else", "body": marker}], head_sha=SHA_A, author_login=CAP_AUTHOR) == []
 	assert heal.parse_failure_markers([{"user": {"login": CAP_AUTHOR}, "body": marker}], head_sha=SHA_B, author_login=CAP_AUTHOR) == []
 
@@ -2437,6 +2437,56 @@ def test_count_identical_failures_flags_non_retryable_reasons() -> None:
 	assert heal.count_identical_failures(retryable, head_sha=SHA_A, author_login=CAP_AUTHOR)["non_retryable"] is False
 
 
+SUPPORT_NEW = "5" * 40
+SUPPORT_OLD = "6" * 40
+
+
+def _support_marker_comment(text: str, *, run: str, support: str = "", author: str = CAP_AUTHOR, reason: str = "editor_empty_noop") -> dict:
+	marker = heal.render_failure_marker(SHA_A, reason, _cap_fp(reason), False, run, support or None)
+	assert marker
+	return {"id": int(run), "author_login": author, "body": f"{text}\n\n{marker}"}
+
+
+def test_failure_markers_are_support_version_aware() -> None:
+	"""Issue #6625: failures recorded by an older review-support version do not
+	count toward (or keep applied) the cap of a review on updated support."""
+	fp = _cap_fp()
+	marker = heal.render_failure_marker(SHA_A, "editor_empty_noop", fp, False, "7", SUPPORT_NEW.upper())
+	assert marker == f"<!-- review-autofix-failure:v1 head={SHA_A} reason=editor_empty_noop fp={fp} degraded=0 run=7 support={SUPPORT_NEW} -->"
+	# An invalid support SHA is omitted, so the marker is byte-identical to the legacy one.
+	assert heal.render_failure_marker(SHA_A, "editor_empty_noop", fp, False, "7", "abc") == heal.render_failure_marker(SHA_A, "editor_empty_noop", fp, False, "7")
+	current = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), support=SUPPORT_NEW) for run in (1, 2, 3)]
+	older = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), support=SUPPORT_OLD) for run in (4, 5, 6)]
+	legacy = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run)) for run in (7, 8, 9)]
+	count = heal.count_identical_failures
+	assert count(current, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 3
+	assert count(older, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW) == {"count": 0, "fp": "", "reason": "", "cap_applied": False, "non_retryable": False}
+	assert count(legacy, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 0
+	# Older markers interleaved with current ones neither count nor end the scan.
+	mixed = [current[0], older[0], legacy[0], current[1], older[1]]
+	assert count(mixed, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 2
+	# Without a support SHA the legacy rules count every version.
+	assert count([*older, *current], head_sha=SHA_A, author_login=CAP_AUTHOR)["count"] == 6
+	# An untrusted author carrying the current support SHA is still ignored.
+	forged = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), support=SUPPORT_NEW, author="attacker") for run in (10, 11, 12)]
+	assert count(forged, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 0
+	# A non-retryable failure of an older version does not trip the new one.
+	old_host_only = [_support_marker_comment(AUTOFIX_FAILED_COMMENT, run="13", support=SUPPORT_OLD, reason="conflict_resolver_sandbox_path_host_only")]
+	assert count(old_host_only, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["non_retryable"] is False
+	# Cap markers: only the same head and support version count as applied.
+	def cap(support: str) -> dict:
+		field = f" support={support}" if support else ""
+		return {"author_login": CAP_AUTHOR, "body": f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={fp} reason=editor_empty_noop count=3{field} -->"}
+	assert count([*current, cap(SUPPORT_OLD)], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is False
+	assert count([*current, cap("")], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is False
+	assert count([*current, cap(SUPPORT_NEW)], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is True
+	assert count([*current, cap(SUPPORT_OLD)], head_sha=SHA_A, author_login=CAP_AUTHOR)["cap_applied"] is True
+	# parse_failure_markers applies the same filter and reports the version.
+	parsed = heal.parse_failure_markers([*older, *current], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)
+	assert [marker["run"] for marker in parsed] == ["1", "2", "3"] and {marker["support"] for marker in parsed} == {SUPPORT_NEW}
+	assert len(heal.parse_failure_markers([*older, *current], head_sha=SHA_A, author_login=CAP_AUTHOR)) == 6
+
+
 def test_fingerprint_cli_subcommands_print_log_safe_key_values() -> None:
 	with tempfile.TemporaryDirectory(prefix="heal-fp-cli-") as tmp_name:
 		tmp = Path(tmp_name)
@@ -2463,7 +2513,20 @@ def test_fingerprint_cli_subcommands_print_log_safe_key_values() -> None:
 			["python3", str(LIB_PATH), "autofix-identical-failure-count", "--comments-json", str(tmp / "comments.json"), "--head-sha", SHA_A, "--author-login", CAP_AUTHOR],
 			capture_output=True, text=True, check=True, env=env,
 		)
-		assert result.stdout.splitlines() == ["count=3", f"fp={fp}", "reason=editor_empty_noop", "cap_applied=false", "non_retryable=false"]
+		assert result.stdout.splitlines() == ["count=3", f"fp={fp}", "reason=editor_empty_noop", "cap_applied=false", "non_retryable=false", "support="]
+		# Issue #6625: --support-sha ignores markers of other support versions.
+		result = subprocess.run(
+			["python3", str(LIB_PATH), "autofix-identical-failure-count", "--comments-json", str(tmp / "comments.json"), "--head-sha", SHA_A, "--author-login", CAP_AUTHOR, "--support-sha", SUPPORT_NEW],
+			capture_output=True, text=True, check=True, env=env,
+		)
+		assert result.stdout.splitlines()[0] == "count=0" and result.stdout.splitlines()[-1] == f"support={SUPPORT_NEW}"
+		result = subprocess.run(
+			["python3", str(LIB_PATH), "autofix-failure-fingerprint", "--evidence-file", str(tmp / "editor_stage_stderr.txt"),
+				"--head-sha", SHA_A, "--run-id", "42", "--support-sha", SUPPORT_NEW],
+			capture_output=True, text=True, check=True, env=env,
+		)
+		assert f"marker={heal.render_failure_marker(SHA_A, 'editor_empty_noop', fp, False, '42', SUPPORT_NEW)}" in result.stdout.splitlines()
+		assert f" run=42 support={SUPPORT_NEW} -->" in result.stdout
 		(tmp / "comments.json").write_text("{}", encoding="utf-8")
 		bad = subprocess.run(
 			["python3", str(LIB_PATH), "autofix-identical-failure-count", "--comments-json", str(tmp / "comments.json"), "--head-sha", SHA_A, "--author-login", CAP_AUTHOR],
@@ -3058,6 +3121,50 @@ def test_fingerprint_cap_block_pr_label_idempotency_and_head_moved() -> None:
 		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", head=SHA_B)
 		assert "reason=head_moved" in result.stdout
 		assert "labels_set" not in state and "comments_posted" not in state and "dispatches" not in state
+
+
+def test_gate_cap_ignores_markers_from_other_support_versions() -> None:
+	"""Issue #6625: a review on updated support retries a head capped by an older one."""
+	older = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), support=SUPPORT_OLD) for run in (101, 102, 103)]
+	legacy = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run)) for run in (104, 105, 106)]
+	for comments in (older, legacy):
+		with tempfile.TemporaryDirectory(prefix="heal-gate-cap-support-old-") as tmp_name:
+			result, outputs, _state = _run_gate(Path(tmp_name), comments=comments, extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
+			assert result.returncode == 0, result.stderr + result.stdout
+			assert outputs["fingerprint_cap"] == "false" and outputs["should_run"] == "true", result.stdout
+			assert f"count=0 max=3 support={SUPPORT_NEW}" in result.stdout
+	current = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), support=SUPPORT_NEW) for run in (107, 108, 109)]
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-support-new-") as tmp_name:
+		result, outputs, _state = _run_gate(Path(tmp_name), comments=[*older, *current], extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
+		assert outputs["fingerprint_cap"] == "true" and outputs["skip_reason"] == "fingerprint_cap", result.stdout
+		assert f"non_retryable=false support={SUPPORT_NEW}" in result.stdout
+
+
+def test_fingerprint_cap_block_marker_records_support_version() -> None:
+	"""The cap marker carries support=, and a cap from an older version does not block a new one."""
+	old_cap = {"author_login": CAP_AUTHOR, "body": f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={FP_HEX} reason=editor_empty_noop count=3 support={SUPPORT_OLD} -->"}
+	with tempfile.TemporaryDirectory(prefix="heal-cap-job-support-") as tmp_name:
+		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", extra_comments=[old_cap], extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert len(state["comments_posted"]) == 1, result.stdout
+		comment = state["comments_posted"][0]
+		assert f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={FP_HEX} reason=editor_empty_noop count=3 support={SUPPORT_NEW} -->" in comment
+		assert heal.count_identical_failures([{"author_login": CAP_AUTHOR, "body": comment}], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is True
+	same_cap = {**old_cap, "body": old_cap["body"].replace(SUPPORT_OLD, SUPPORT_NEW)}
+	with tempfile.TemporaryDirectory(prefix="heal-cap-job-support-same-") as tmp_name:
+		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", extra_comments=[same_cap], extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
+		assert "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED" in result.stdout
+		assert "comments_posted" not in state
+
+
+def test_review_autofix_passes_support_sha_to_every_marker_site() -> None:
+	"""Issue #6625: the gate and all four failure-marker sites use the verified support SHA."""
+	wf = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+	assert wf.count('--support-sha "${REVIEW_SUPPORT_SHA:-}"') == 5
+	assert wf.count("autofix-failure-fingerprint \\\n") == 4
+	assert "REVIEW_SUPPORT_SHA: ${{ steps.resolve_support.outputs.review_support_sha }}" in wf
+	assert wf.count("REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}") == 2
+	assert "count=${FINGERPRINT_CAP_COUNT}${cap_support:+ support=${cap_support}} -->" in wf
 
 
 # ---------------------------------------------------------------------------

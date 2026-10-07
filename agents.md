@@ -96,6 +96,12 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP` instead of sending the "retry N/3"
    Telegram WARNING. A push clears the skip, and an unresolvable head SHA or
    token identity keeps the old re-dispatch.
+   Failure and cap markers carry `support=<sha>`, the gate's verified review
+   support SHA (#6625); the gate, the cap job and the sweep ignore markers of
+   another or no support version, so a support fix lets the scheduled sweep
+   retry a capped head (`NOOP_RECOVERY_FINGERPRINT_CAP_STALE_SUPPORT`). The
+   sweep takes the support SHA from its engine SHA here and from the
+   `ai-review.yml` pin in consumers; unresolved, any cap marker still skips.
    The gate runs `scripts/review_head_gate.sh` from its verified support SHA:
    `pull_request.synchronize` withdraws stale auto-merge (failure fails the
    gate), and opened/synchronize events mark their SHA `pending` immediately
@@ -1933,6 +1939,7 @@ and shipped:
 - `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`
 - `AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED`
 - `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP`
+- `NOOP_RECOVERY_FINGERPRINT_CAP_STALE_SUPPORT`
 - `REVIEW_EDITOR_PREFLIGHT`
 - `STAGE_MAIN_PINNED_DIVERGENCE`
 - `WORKTREE_REGISTER`
@@ -2158,6 +2165,7 @@ LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_TRIPPED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED
 LOG_PREFIX.name=NOOP_RECOVERY_SKIP_FINGERPRINT_CAP
+LOG_PREFIX.name=NOOP_RECOVERY_FINGERPRINT_CAP_STALE_SUPPORT
 LOG_PREFIX.name=REVIEW_EDITOR_PREFLIGHT
 LOG_PREFIX.name=STAGE_MAIN_PINNED_DIVERGENCE
 LOG_PREFIX.name=WORKTREE_REGISTER

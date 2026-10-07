@@ -164,6 +164,7 @@ analysis/workflow-optimization-2026-10-03-2.md
 analysis/workflow-optimization-2026-10-03.md
 analysis/workflow-optimization-2026-10-06-2.md
 analysis/workflow-optimization-2026-10-06.md
+analysis/workflow-optimization-2026-10-07-2.md
 analysis/workflow-optimization-2026-10-07.md
 changelog.d/.gitkeep
 changelog.d/37432054768-merge-guard-env-chdir.md
@@ -296,6 +297,7 @@ changelog.d/6424-review-sandbox-unsafe-directory-category.md
 changelog.d/6435-prompt-audit-claude-config.md
 changelog.d/6436-triage-omit-pr-agent-instructions.md
 changelog.d/6438-openrouter-mgmt-key-reads.md
+changelog.d/6438-resolver-host-only-paths-failure-cap.md
 changelog.d/6438-reviewer-panel-random-tiers.md
 changelog.d/6454-integration-judge-shared-protected-lines.md
 changelog.d/6455-rb-fix-sandbox-workspace.md
@@ -305,6 +307,9 @@ changelog.d/6468-heal-lineage-source-marker-trust.md
 changelog.d/6469-deploy-activate-credential-free-checks.md
 changelog.d/6472-security-audit-partial-coverage-marker.md
 changelog.d/6477-integration-judge-provenance-all-paths.md
+changelog.d/6478-review-blocked-judge-protected-path-fix.md
+changelog.d/6482-security-pass-pending-marker-confirmed.md
+changelog.d/6483-security-hold-followups-alert.md
 changelog.d/6486-workflow-heal-security-pass.md
 changelog.d/6491-poller-judge-issue-engine-labels.md
 changelog.d/6493-heal-intake-run-provenance.md
@@ -318,9 +323,11 @@ changelog.d/6512-heal-evidence-routing-neutralize.md
 changelog.d/6521-validate-renderer-prep-always.md
 changelog.d/6524-det-skip-integration-pr-exclusion.md
 changelog.d/6528-review-head-gate-status.md
+changelog.d/6606-smoke-gate-pytest-and-queue-time.md
 changelog.d/autofix-cap-and-security-exhaustion-judge.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/claude-busy-ride-2ezayb-single-issue-security-pass-default-off.md
+changelog.d/claude-elegant-mendel-editor-audit-count-labels.md
 changelog.d/conflict-resolver-sandbox-fail-closed.md
 changelog.d/release-smoke-run-lookup.md
 changelog.d/review-tier-random-reviewers.md
@@ -392,6 +399,7 @@ docs/plans/review-blocked-approval-gate-trust-scope-plan.md
 docs/plans/security-pass-convergence-plan.md
 docs/plans/semble-overflow-off-lazy-bootstrap-plan.md
 docs/plans/symphony-inspired-improvements-plan.md
+docs/plans/unattended-claude-pipeline-completion-plan.md
 docs/postmortems/2026-05-18-project-2734-stall.md
 docs/scripts-pending-removal.md
 examples/ai-validate-hints.yml
@@ -679,6 +687,7 @@ scripts/review_resolve_review_threads_plan.py
 scripts/review_run_judge_interim.sh
 scripts/review_run_reviewers.sh
 scripts/review_sandbox/Dockerfile
+scripts/review_security_hold_sweep.py
 scripts/review_single_issue_security_pass.sh
 scripts/review_synthesise_smoke.sh
 scripts/review_untrusted_sandbox.sh
@@ -1045,6 +1054,7 @@ tests/test_review_rereview_and_approval_rubric.py
 tests/test_review_resolve_review_threads.py
 tests/test_review_reviewer_attempt_prompt_isolation.py
 tests/test_review_sandbox_claude_roles.py
+tests/test_review_security_hold_sweep.py
 tests/test_review_semble_contract.py
 tests/test_review_static_context_readme.py
 tests/test_review_surface_prompt_hardening.py

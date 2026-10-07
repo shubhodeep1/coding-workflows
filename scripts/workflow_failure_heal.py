@@ -1596,11 +1596,20 @@ def autofix_failure_fingerprint(*, failure_reason: str, evidence_text: str) -> d
 	}
 
 
-def render_failure_marker(head_sha: str, failure_reason: str, fp: str, degraded: bool, run_id: str | None = None) -> str:
+def _normalized_support_sha(support_sha: Any) -> str:
+	"""Return ``support_sha`` lowercased when it is a 40-hex SHA, else ``""``."""
+	value = str(support_sha or "").strip().lower()
+	return value if is_valid_sha(value) else ""
+
+
+def render_failure_marker(head_sha: str, failure_reason: str, fp: str, degraded: bool, run_id: str | None = None, support_sha: str | None = None) -> str:
 	"""Render the ``review-autofix-failure:v1`` marker appended to a failure comment.
 
 	``run`` lets the counter treat two failure comments of one run as a single
-	failure. Returns an empty string when the head or fingerprint is malformed.
+	failure. ``support`` (issue #6625) records the verified review-support SHA
+	that ran, so a later review on updated support can ignore failures from an
+	older support version; it is omitted when ``support_sha`` is not a 40-hex
+	SHA. Returns an empty string when the head or fingerprint is malformed.
 	"""
 	head = str(head_sha or "").strip().lower()
 	if not is_valid_sha(head) or not _FP_HEX_RE.match(str(fp or "")):
@@ -1609,6 +1618,9 @@ def render_failure_marker(head_sha: str, failure_reason: str, fp: str, degraded:
 	run = safe_token(run_id, 20)
 	if run.isdigit():
 		fields.append(f"run={run}")
+	support = _normalized_support_sha(support_sha)
+	if support:
+		fields.append(f"support={support}")
 	return f"<!-- {FAILURE_MARKER_TAG} " + " ".join(fields) + " -->"
 
 
@@ -1739,12 +1751,15 @@ def verify_run_provenance(
 	return result
 
 
-def parse_failure_markers(comments: Iterable[dict[str, Any]], *, head_sha: str, author_login: str) -> list[dict[str, Any]]:
+def parse_failure_markers(comments: Iterable[dict[str, Any]], *, head_sha: str, author_login: str, support_sha: str | None = None) -> list[dict[str, Any]]:
 	"""Return the trusted failure markers for ``head_sha``, oldest first.
 
 	A marker is trusted only when its comment was written by ``author_login``
 	(the identity the workflow posts as); markers from anyone else are ignored.
+	With a valid ``support_sha`` only markers carrying that ``support`` value
+	are returned (markers without one come from older support versions).
 	"""
+	support = _normalized_support_sha(support_sha)
 	head = str(head_sha or "").strip().lower()
 	author = str(author_login or "").strip().lower()
 	markers: list[dict[str, Any]] = []
@@ -1756,19 +1771,22 @@ def parse_failure_markers(comments: Iterable[dict[str, Any]], *, head_sha: str, 
 		fields = _marker_fields(_FAILURE_MARKER_RE.search(sanitize_text(comment.get("body"))))
 		if fields.get("head", "").lower() != head or not _FP_HEX_RE.match(fields.get("fp", "")):
 			continue
+		if support and fields.get("support", "").lower() != support:
+			continue
 		markers.append(
 			{
 				"fp": fields["fp"],
 				"reason": fields.get("reason") or "unknown",
 				"degraded": fields.get("degraded") == "1",
 				"run": fields.get("run", ""),
+				"support": fields.get("support", "").lower() if is_valid_sha(fields.get("support", "").lower()) else "",
 				"comment_id": safe_token(comment.get("id"), 20),
 			}
 		)
 	return markers
 
 
-def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: str, author_login: str) -> dict[str, Any]:
+def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: str, author_login: str, support_sha: str | None = None) -> dict[str, Any]:
 	"""Count the trailing identical failures on ``head_sha``.
 
 	``comments`` is the PR's issue-comment list, oldest first. Scanning from the
@@ -1782,7 +1800,15 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 	``review-autofix-failure-cap:v1`` marker already exists for the head.
 	``non_retryable`` is true when the newest marker's reason is in
 	NON_RETRYABLE_FAILURE_REASONS.
+
+	With a valid ``support_sha`` (the verified review-support SHA of the
+	evaluating run, issue #6625), failure and cap markers whose ``support``
+	field is missing or different come from an older support version: they are
+	skipped like markers for another head, so they neither count nor end the
+	scan, and an older cap marker does not set ``cap_applied``. Without
+	``support_sha`` the legacy rules apply unchanged.
 	"""
+	support = _normalized_support_sha(support_sha)
 	head = str(head_sha or "").strip().lower()
 	author = str(author_login or "").strip().lower()
 	ordered = [comment for comment in comments if isinstance(comment, dict)]
@@ -1793,7 +1819,7 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 		if _comment_author(comment) != author:
 			continue
 		cap_fields = _marker_fields(_FAILURE_CAP_MARKER_RE.search(sanitize_text(comment.get("body"))))
-		if cap_fields.get("head", "").lower() == head:
+		if cap_fields.get("head", "").lower() == head and (not support or cap_fields.get("support", "").lower() == support):
 			result["cap_applied"] = True
 			break
 	seen_runs: set[str] = set()
@@ -1804,6 +1830,8 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 		if match is not None:
 			fields = _marker_fields(match)
 			if _comment_author(comment) != author or fields.get("head", "").lower() != head or not _FP_HEX_RE.match(fields.get("fp", "")):
+				continue
+			if support and fields.get("support", "").lower() != support:
 				continue
 			skip_paired_summary = any(marker in body for marker in AUTOFIX_POST_SUMMARY_FAILURE_COMMENT_MARKERS)
 			run = fields.get("run", "")
@@ -2606,7 +2634,7 @@ def _cmd_autofix_failure_fingerprint(args: argparse.Namespace) -> int:
 	sys.stdout.write(f"degraded={1 if result['degraded'] else 0}\n")
 	sys.stdout.write(f"reason={safe_token(reason)}\n")
 	if args.head_sha:
-		sys.stdout.write("marker=" + render_failure_marker(args.head_sha, reason, result["fp"], result["degraded"], args.run_id or None) + "\n")
+		sys.stdout.write("marker=" + render_failure_marker(args.head_sha, reason, result["fp"], result["degraded"], args.run_id or None, args.support_sha or None) + "\n")
 	return 0
 
 
@@ -2636,12 +2664,13 @@ def _cmd_autofix_identical_failure_count(args: argparse.Namespace) -> int:
 	comments = _load_json_file(args.comments_json)
 	if not isinstance(comments, list):
 		raise ValueError("comments JSON must be a list")
-	result = count_identical_failures(comments, head_sha=args.head_sha, author_login=args.author_login)
+	result = count_identical_failures(comments, head_sha=args.head_sha, author_login=args.author_login, support_sha=args.support_sha or None)
 	sys.stdout.write(f"count={int(result['count'])}\n")
 	sys.stdout.write(f"fp={safe_token(result['fp'], 64)}\n")
 	sys.stdout.write(f"reason={safe_token(result['reason'])}\n")
 	sys.stdout.write(f"cap_applied={'true' if result['cap_applied'] else 'false'}\n")
 	sys.stdout.write(f"non_retryable={'true' if result['non_retryable'] else 'false'}\n")
+	sys.stdout.write(f"support={_normalized_support_sha(args.support_sha)}\n")
 	return 0
 
 
@@ -2915,6 +2944,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--evidence-out", default="", help="also write the joined evidence tail to this file")
 	p.add_argument("--head-sha", default="")
 	p.add_argument("--run-id", default="")
+	p.add_argument("--support-sha", default="", help="verified review-support SHA; recorded as support= in the marker (issue #6625)")
 	p.set_defaults(func=_cmd_autofix_failure_fingerprint)
 
 	p = sub.add_parser("reviewer-failure-evidence", help="Summarise a failed reviewer step (slot / summariser exit codes, self-named script errors) from its logs")
@@ -2925,6 +2955,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--comments-json", required=True)
 	p.add_argument("--head-sha", required=True)
 	p.add_argument("--author-login", required=True)
+	p.add_argument("--support-sha", default="", help="verified review-support SHA; markers from other support versions are ignored (issue #6625)")
 	p.set_defaults(func=_cmd_autofix_identical_failure_count)
 
 	p = sub.add_parser("build-run-payload", help="Build the payload for a failed workflow_run event")
