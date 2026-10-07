@@ -93,6 +93,9 @@ def test_workflow_wiring_uses_existing_schedules() -> None:
 	# A job-level permissions block replaces the workflow-level one.
 	sweep_job = yaml.safe_load(source_sweep)["jobs"]["sweep"]
 	assert sweep_job["permissions"]["issues"] == "write"
+	# The consumer sweep job must not inherit the review job's write grants.
+	consumer_job = yaml.safe_load(template)["jobs"]["security-hold-sweep"]
+	assert consumer_job["permissions"] == {"actions": "write", "contents": "read", "pull-requests": "read", "issues": "write"}
 	assert "force_rb_judge" in yaml.safe_load(internal_review)[True]["workflow_dispatch"]["inputs"]
 
 

@@ -68,6 +68,13 @@ jobs:
   security-hold-sweep:
     if: ${{ github.event_name == 'schedule' && vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED == 'true' }}
     runs-on: ubuntu-latest
+    # Least privilege for the github.token fallback: list PRs and comments,
+    # post the dedup marker, dispatch the judge. Replaces the workflow block.
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+      issues: write
     steps:
       - name: Check out trusted security-hold sweep support
         uses: actions/checkout@v5
