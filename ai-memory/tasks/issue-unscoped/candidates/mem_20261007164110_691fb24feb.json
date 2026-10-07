@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/check_failure_triage.sh:293-299 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The generation parser accepts numeric triage markers anywhere in the source issue body, so inline prose mentions incorrectly increment the lineage instead of starting at generation 1.\n  WHY: The primary parser runs before the stricter fallback check, allowing ordinary issues to inherit a generation and potentially reach the lineage cap without filing a triage issue.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Start a new lineage at generation 1\" for source issues that are not triage issues (i.e., those missing the triage marker).\n  expected_change_site: scripts/check_failure_triage.sh\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR implementation tightens the marker check only in the fallback `elif` branch; the primary `if` branch still treats inline prose mentions as valid lineage markers.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/check_failure_triage.sh:293-294 (inferred) | confidence=4\n  PROBLEM: The condition identifying triage markers in the `if [ -n \"${PARENT_ISSUE}\" ]` block remains loose.\n  WHY: Inline prose mentions of the triage marker still trigger the generation-incrementing `if` block instead of being caught by the strict `elif` check, causing ordinary issues to incorrectly inherit generations.\n\n- Requirement: \"Start a new lineage at generation 1\" for source issues that are not triage issues (i.e., those missing the triage marker).\n  Expected change site: scripts/check_failure_triage.sh\n  Evidence of absence: The PR implementation of the marker check is only tightened in the fallback `elif` branch; the primary `if` branch remains loose, meaning inline prose mentions of the triage marker are still erroneously treated as valid lineage markers, violating the intent to treat those issues as new lineages.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/check_failure_triage.sh:293-299 | severity=MAJOR | confidence=5\n  PROBLEM: The generation parser accepts a numeric marker anywhere in the source issue body before checking whether the marker is on its own line.\n  WHY: An ordinary source issue mentioning the marker in prose or inline code gets generation 3 instead of starting at generation 1; repeated failures can reach the lineage cap and be escalated without filing a triage issue.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/check_failure_triage.sh:293-295 | severity=MAJOR | confidence=4\n  PROBLEM: The generation parser extracts a numeric marker from anywhere in the source issue body, so inline mentions set PGEN and increment the generation before the line-leading marker check runs.\n  WHY: An ordinary issue with a numeric inline mention inherits generation 3 instead of starting at generation 1; repeated failures can hit the lineage cap and escalate without filing a triage issue. The existing prose test uses `gen=N` and does not cover numeric inline mentions.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "72f2a8a9045ca5c6c6aefa5990fc5924dd40ba74cf6343e3eb46440a091d9661",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6678,
+    "run_id": "37650167617",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37650167617",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007164110_691fb24feb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6678,
+    "run_id": "37650167617"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-07T16:41:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
