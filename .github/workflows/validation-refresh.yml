@@ -101,10 +101,15 @@ jobs:
           # Discovery (role VALIDATION_REFRESH) runs Claude through the engine
           # root staged here from this workflow's own checkout; the codex CLI
           # above stays installed as the fallback. No work item, so no labels.
+          # This workflow is not reusable (schedule + dispatch only): its YAML,
+          # the runner script and this checkout are one commit, so the checkout
+          # is the verified support source once HEAD is pinned to GITHUB_SHA.
           engine="codex"
           if [ "${VALIDATION_DISCOVERY_ENABLED}" = "true" ] && [ "${VALIDATION_DISCOVERY_DRY_RUN}" != "true" ]; then
+            checkout_head="$(git -C "${GITHUB_WORKSPACE}" rev-parse HEAD 2>/dev/null || true)"
             # shellcheck disable=SC1091
-            if source scripts/ai_engine.sh && ai_engine_stage_support "${GITHUB_WORKSPACE}" "${CLAUDE_ENGINE_SUPPORT_DEST}"; then
+            if [ -n "${checkout_head}" ] && [ "${checkout_head}" = "${GITHUB_SHA}" ] &&
+               source scripts/ai_engine.sh && ai_engine_stage_support "${GITHUB_WORKSPACE}" "${CLAUDE_ENGINE_SUPPORT_DEST}"; then
               echo "CLAUDE_ENGINE_SUPPORT_DIR=${CLAUDE_ENGINE_SUPPORT_DEST}" >> "$GITHUB_ENV"
               engine="$(ai_engine_for_role VALIDATION_REFRESH || echo codex)"
             else

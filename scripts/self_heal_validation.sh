@@ -377,6 +377,8 @@ run_self_heal_codex()
 		run_self_heal_codex_direct "${stderr_tmp}"
 		return $?
 	fi
+	# claude_run_selected runs the codex fallback in this shell ("$@"), so the
+	# function run_self_heal_codex_direct must stay defined in this script.
 	AI_ENGINE_MODEL_HINT="${MODEL_EDITOR:-}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT:-}" \
 		claude_run_selected VALIDATE_SELF_HEAL "${SELF_HEAL_PROMPT_FILE}" "${SELF_HEAL_OUTPUT_FILE}" "${PWD}" -- \
 		run_self_heal_codex_direct "${stderr_tmp}" 2>> "${stderr_tmp}" || rc=$?
