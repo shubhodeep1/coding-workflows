@@ -584,7 +584,7 @@ def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
 		assert "HEAL_EVIDENCE_SCOPE_LOCK: ${{ steps.heal_evidence_gate.outputs.enabled" in block
 		assert "HEAL_EVIDENCE_SCOPE_ALLOWLIST: ${{ steps.heal_evidence_scope.outputs.allowlist }}" in block
 	assert implement.count('editor_git_credentials hide') == 2
-	assert implement.count('editor_git_credentials restore') >= 4
+	assert implement.count('editor_git_credentials restore') >= 3
 	assert "if: always() && env.SKIP_IMPLEMENT != 'true' && steps.post_codex_syntax_repair.outcome != 'skipped'" in implement
 	for workflow in (implement, plan):
 		stage = workflow.split("      - name: Stage workflow support files\n", 1)[1].split("      - name: ", 1)[0]
@@ -613,9 +613,19 @@ def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
 	implementation = implement.split("      - name: Run Codex implementation\n", 1)[1].split("      - name: ", 1)[0]
 	assert "GH_TOKEN: ${{ github.token }}" in implementation
 	repair = implement.split("      - name: Attempt post-Codex syntax repair\n", 1)[1].split("      - name: ", 1)[0]
-	assert "GH_TOKEN: ${{ github.token }}" in repair
-	assert repair.count('editor_git_credentials restore') == 3  # Exit trap and both attempt outcomes.
-	assert repair.index('editor_git_credentials restore') < repair.index('echo "::warning::Post-Codex repair attempt')
+	assert "secrets.GH_PAT" not in repair
+	assert "TG_BOT_SECRET: ${{" not in repair
+	assert "GITHUB_TOKEN: ${{" not in repair
+	assert "unset GH_TOKEN GH_PAT GITHUB_TOKEN 2>/dev/null || true" in repair
+	assert 'editor_git_credentials restore' not in repair
+	assert repair.count('editor_git_credentials hide') == 1
+	assert 'repair_credentials_hidden' not in repair
+	assert 'reap "${EDITOR_ISOLATION_ROOT}" || isolation_exit_rc=1' in repair
+	assert 'cleanup "${EDITOR_ISOLATION_ROOT}" || isolation_exit_rc=1' in repair
+	assert repair.index('editor_git_credentials hide') < repair.index('source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh"')
+	restore = implement.split("      - name: Restore git credentials after syntax repair\n", 1)[1].split("      - name: ", 1)[0]
+	assert "GH_TOKEN: ${{ github.token }}" in restore
+	assert 'editor_git_credentials restore' in restore
 	assert implement.count('env -u GH_TOKEN -u GH_PAT') == 2
 	assert implement.count('-u HEAL_EVIDENCE_DIR -u GITHUB_ENV -u GITHUB_PATH \\') == 2
 	plan_runner = (ROOT / "scripts" / "run_plan_codex.sh").read_text()
@@ -645,6 +655,29 @@ def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
 	assert '[ "${recovery_inventory_head_ref}" = "${TARGET_BRANCH}" ]' in create_pr
 	assert '[ "${recovery_inventory_head_owner,,}" = "${recovery_repo_owner,,}" ]' in create_pr
 	assert create_pr.index('gh workflow run "${recovery_review_workflow}"') < create_pr.index('echo "pr_url=${EXISTING_PR}"')
+
+
+def test_syntax_repair_step_holds_no_github_token(tmp_path: Path) -> None:
+	workflow = (WORKFLOWS / "implement.yml").read_text()
+	step = workflow.split("      - name: Attempt post-Codex syntax repair\n", 1)[1].split("      - name: ", 1)[0]
+	source_line = 'source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true'
+	script = textwrap.dedent(step.split("        run: |\n", 1)[1].split(source_line, 1)[0] + source_line + "\n")
+	_git(tmp_path, "init", "-q")
+	_git(tmp_path, "remote", "add", "origin", "https://x-access-token:oldsecret@github.com/owner/repo.git")
+	scripts = tmp_path / "scripts"
+	scripts.mkdir()
+	(scripts / "editor_git_credentials.sh").write_bytes(HELPER.read_bytes())
+	(scripts / "gh_helpers.sh").write_text('printf "%s\\n" "${GH_TOKEN:-<unset>}" "$(git config --local remote.origin.url)" > "${TOKEN_SENTINEL}"\n')
+	sentinel = tmp_path / "token.txt"
+	env = dict(os.environ, WORKSPACE_PATH=str(tmp_path), GITHUB_OUTPUT=str(tmp_path / "output.txt"),
+		EDITOR_GIT_CREDENTIALS_SHA256=hashlib.sha256(HELPER.read_bytes()).hexdigest(),
+		TOKEN_SENTINEL=str(sentinel), GH_TOKEN="leak", RUNTIME_DIR=str(tmp_path),
+		GITHUB_WORKSPACE=str(tmp_path), GITHUB_REPOSITORY="owner/repo")
+	env.pop("IMPLEMENT_STAGED_SUPPORT_RUN_DIR", None)
+	result = subprocess.run(["bash", "-e", "-c", script], cwd=tmp_path, env=env,
+		capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	assert sentinel.read_text().splitlines() == ["<unset>", "https://github.com/owner/repo.git"]
 
 
 def test_stage_pin_and_in_memory_loader_hash_the_same_bytes() -> None:

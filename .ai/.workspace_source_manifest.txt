@@ -213,6 +213,7 @@ changelog.d/6181-review-transfer-failure-evidence.md
 changelog.d/6193-claude-write-role-tool-list.md
 changelog.d/6202-claude-md-25-scheduled-status-checks.md
 changelog.d/6204-review-sandbox-audit-plans-parity.md
+changelog.d/6221-heal-evidence-editor-isolation.md
 changelog.d/6262-clarify-respond-standalone.md
 changelog.d/6286-pr-merge-guard-appended-git-dir.md
 changelog.d/6293-numeric-push-refspec-redirect.md
@@ -225,6 +226,9 @@ changelog.d/6400-rb-judge-security-severity-block.md
 changelog.d/6401-single-issue-security-pass-completed-audit.md
 changelog.d/6404-claude-live-sync-pr-provenance.md
 changelog.d/6420-release-gate-claude-parity.md
+changelog.d/6440-implement-editor-isolation.md
+changelog.d/6442-editor-credential-restore-pinned.md
+changelog.d/6443-heal-scope-lock-plan-only.md
 changelog.d/autofix-cap-and-security-exhaustion-judge.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/release-smoke-run-lookup.md
@@ -474,6 +478,8 @@ scripts/claude_pool_token.sh
 scripts/claude_settings.json.tmpl
 scripts/codex_heartbeat.sh
 scripts/codex_helpers.sh
+scripts/codex_isolated_exec.sh
+scripts/codex_isolated_workspace.py
 scripts/codex_model_catalog.json
 scripts/codex_model_catalog_overrides.yaml
 scripts/codex_stall_guard.sh
@@ -484,6 +490,7 @@ scripts/compare_issue_timeline_parity.sh
 scripts/comprehensive_test_and_release_gh_api.sh
 scripts/consolidate_soft_error_reports.py
 scripts/cost_audit.py
+scripts/dependency_registry_proxy.py
 scripts/detect_editor_changes_lost.sh
 scripts/dev/replay_review_pipeline.sh
 scripts/dev/test_codex_helpers.sh
@@ -517,6 +524,7 @@ scripts/implement_commit_changes.sh
 scripts/implement_diagnose_post_codex_failure.sh
 scripts/implement_handle_guard_block.sh
 scripts/implement_staged_support_workspace.sh
+scripts/implement_untrusted_sandbox.sh
 scripts/install_semble.sh
 scripts/issue_attachment_bundle.py
 scripts/label_helpers.sh
@@ -816,6 +824,7 @@ tests/test_implement_blocked_verdict_terminalizes.py
 tests/test_implement_post_codex_recovery.py
 tests/test_implement_pr_body_tracking_refs.py
 tests/test_implement_semble_contract.py
+tests/test_implement_untrusted_sandbox.py
 tests/test_internal_review_push_pr_grace.py
 tests/test_issue_pr_status_payload_fallback_contract.py
 tests/test_judge_semble_prefetch_contract.py
