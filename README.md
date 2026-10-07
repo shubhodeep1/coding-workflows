@@ -389,6 +389,26 @@ only comments from a user whose `author_association` is `OWNER`, `MEMBER`, or `C
 the predicate verbatim — a wrapper without it still runs the reusable workflow's own job-level gate,
 but fires a skipped run for every other comment.
 
+If a trusted `/reclarify` run fails before posting questions or an answer, clarify posts a
+source-comment marker and retries adding `ai:reclarify-requeue` up to three times with
+`github.token`, creating the label on the first failed add if it has not been synced yet.
+The scheduled orchestrator poller replays marked, still-current requests
+after the PAT's core quota reaches 500 remaining. A persistent label-write failure leaves
+the marker undiscoverable by the poller and fails the clarify run visibly; it must not be
+treated as a successfully queued request.
+
+`workflow-log-analysis.yml` runs a source-repository PAT-budget report daily at
+06:00 UTC. Its existing collector inspects completed high-volume workflow runs
+from the preceding UTC day (plus the prior day for runs crossing midnight),
+reads their job-end `GH_PAT_BUDGET` logs, and ranks estimated core-quota deltas
+per workflow/job for each UTC hour. The result is in the run's job summary and
+the `gh-pat-budget-day` artifact (30-day retention). It identifies skipped,
+unavailable, or truncated log coverage rather than reporting absent samples as
+zero usage. The daily source-repo reads use the job-scoped `github.token`, not
+the measured PAT. Shared-PAT deltas include concurrent jobs and cannot be used as
+exact per-job API request counts; unknown deltas and incomplete listings are
+excluded from the rankings and called out in the report. No credentials change.
+
 **`.github/workflows/ai-clarify.yml`** — Triages new issues automatically
 ```yaml
 name: AI Clarify

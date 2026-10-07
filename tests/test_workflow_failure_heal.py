@@ -4322,7 +4322,7 @@ def test_phase_workflows_wire_the_heal_report_job() -> None:
 		checkout = next(step for step in job["steps"] if step.get("uses") == "actions/checkout@v5")
 		assert checkout["with"]["repository"] == "shubhodeep1/coding-workflows" and checkout["with"]["ref"] == "${{ env.SCRIPT_REF }}"
 		assert checkout["with"]["persist-credentials"] is False and checkout["continue-on-error"] is True
-		report = job["steps"][-1]["run"]
+		report = next(step["run"] for step in job["steps"] if step.get("name") == "Report the failed run to workflow failure heal")
 		assert ".codex-workflow-src/scripts/workflow_failure_heal_phase_report.sh" in report and "reason=reporter_missing" in report
 		assert "${{" not in report
 	implement = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "implement.yml").read_text(encoding="utf-8"))

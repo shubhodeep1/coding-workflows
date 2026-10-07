@@ -60,7 +60,7 @@ def test_weekly_retro_path_is_schedule_gated_and_default_on() -> None:
 	assert "WORKFLOW_RETRO_SKIP_IF_NO_ACTIVITY: ${{ vars.WORKFLOW_RETRO_SKIP_IF_NO_ACTIVITY || 'true' }}" in wf
 	assert "github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1')" in wf
 	assert "(vars.WORKFLOW_RETRO_ENABLED || 'true') == 'true'" in wf
-	assert "github.event_name != 'schedule' || ((vars.WORKFLOW_RETRO_ENABLED || 'true') == 'true' && github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1'))" in wf
+	assert "github.event_name != 'schedule' || github.event.schedule == '0 6 * * *' || ((vars.WORKFLOW_RETRO_ENABLED || 'true') == 'true' && github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1'))" in wf
 	assert "github.event_name == 'schedule' && (vars.WORKFLOW_RETRO_ENABLED || 'true') == 'true' && github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1')" in wf
 	assert "retro_gate=skip_no_activity" in wf
 	assert "retro_gate=run" in wf
@@ -70,7 +70,8 @@ def test_weekly_retro_path_is_schedule_gated_and_default_on() -> None:
 	assert "WORKFLOW_RETRO_SKIP_V1:" in wf
 	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in wf
 	assert 'REPO_REGISTRY_PATH=".github/ai/consumer_repos.json"' in wf
-	assert 'if [ -n "${OVERRIDE_INPUT//[[:space:]]/}" ]; then' in wf
+	assert 'if [ "${PAT_BUDGET_DAILY}" = "true" ]; then' in wf
+	assert 'elif [ -n "${OVERRIDE_INPUT//[[:space:]]/}" ]; then' in wf
 	assert 'if [ "${GITHUB_EVENT_NAME}" = "schedule" ]; then' not in wf
 	assert '--json number,title,body,state,updatedAt,url > "${TRACKER_CANDIDATES_JSON}"' in wf
 	assert "selected_candidates.sort(" in wf

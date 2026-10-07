@@ -735,6 +735,19 @@ def test_release_dispatches_only_unblocked_queued_prs(tmp_path: Path) -> None:
 	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=2 released=1 base_filter=main" in result.stdout
 
 
+def test_release_does_not_read_actions_without_queued_prs(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([_pr(1, "ai/issue-1"), _pr(2, "ai/issue-2")]))
+	result, calls, _ = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=0 released=0" in result.stdout
+	assert "actions/runs" not in calls
+	(fixtures / "pulls.json").write_text(json.dumps([_pr(1, "ai/issue-1", labels=["ai:merge-queued"])]))
+	result, calls, _ = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "actions/runs" in calls
+
+
 def test_release_ignores_forged_marker_and_resolves_identity_once(tmp_path: Path) -> None:
 	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
 	(fixtures / "pulls.json").write_text(json.dumps([

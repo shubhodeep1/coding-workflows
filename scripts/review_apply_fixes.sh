@@ -28,6 +28,9 @@ fi
 if ! command -v gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
+if ! command -v gh_review_pr_state >/dev/null 2>&1; then
+  gh_review_pr_state() { gh_retry gh api "repos/${1}/pulls/${2}" --jq .state 2>/dev/null | grep -xE 'open|closed|merged' || echo open; }
+fi
 
 # _embed_input_file + _init_prompt_budget / _cleanup_prompt_budget live
 # in scripts/gh_helpers.sh which is sourced above.  If gh_helpers.sh
@@ -2069,7 +2072,7 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
       # PR state check — abort if PR was merged/closed (~every 2 min)
       wd_iter=$((wd_iter + 1))
       if [ $((wd_iter % 8)) -eq 0 ]; then
-        pr_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
+        pr_state="$(gh_review_pr_state "${REPOSITORY}" "${PR_NUMBER}" || echo "open")"
         if [ "${pr_state}" != "open" ]; then
           echo "Editor aborted — PR #${PR_NUMBER} is ${pr_state} (attempt ${attempt})." >&2
           touch "/tmp/pr_closed_sentinel_${PR_NUMBER}"
