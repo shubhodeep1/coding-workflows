@@ -474,11 +474,14 @@ def seed(host, workspace, manifest, name, payload):
 	baseline = json.loads(manifest.read_text(encoding="utf-8"))
 	if not allowed(name) or name not in baseline:
 		raise _rejection("unsafe result path", "unsafe_result_path")
-	host_file = checked_path(host, name)
+	try:
+		host_file = checked_path(host, name)
+		target = checked_path(workspace, name)
+	except ValueError:
+		raise _rejection("symlink in workspace path", "symlink_in_path") from None
 	if not host_file.exists() or fingerprint(host_file) != baseline[name]:
 		raise _rejection("host baseline changed", "host_baseline_changed")
 	data, _ = read_regular(payload)
-	target = checked_path(workspace, name)
 	if target.is_symlink() or (target.exists() and not stat.S_ISREG(target.lstat().st_mode)):
 		raise _rejection("new result conflicts with host path", "result_conflicts_host")
 	target.parent.mkdir(parents=True, exist_ok=True)
@@ -562,6 +565,14 @@ def main():
 			sys.stdout.buffer.write(readme_data)
 		except Exception:
 			print("::error::Review static README output failed", file=sys.stderr)
+			raise SystemExit(1) from None
+		return
+	# check-paths takes an optional fourth argument: the rejection report.
+	if sys.argv[1:2] == ["check-paths"] and len(sys.argv) in (4, 5):
+		try:
+			check_paths(Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4]) if len(sys.argv) == 5 else None)
+		except (OSError, UnicodeError):
+			print("unsupported path", file=sys.stderr)
 			raise SystemExit(1) from None
 		return
 	if sys.argv[1:2] == ["seed"]:

@@ -175,7 +175,7 @@ Phases of the unattended pipeline (each is a separate workflow file under
     unsupported path is refused and, for integration-sync PRs, counted toward
     the existing resolver retry-state escalation. `check-paths` writes a
     per-path report: when every rejected path is a plainly named file the
-     sandbox policy keeps on the host, the resolver logs one
+    sandbox policy keeps on the host, the resolver logs one
     `::error::Conflict resolver: host-only conflicted path(s) need a manual
     merge: <paths>` line and fails closed with `sandbox_path_host_only`;
     symlinks and odd names keep the nameless `sandbox_path_unsupported`. No

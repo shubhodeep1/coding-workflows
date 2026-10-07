@@ -9332,12 +9332,12 @@ def test_review_isolation_seed_rejects_host_drift_symlinks_and_unknown_paths() -
 
 def test_review_isolation_seed_wiring() -> None:
 	helper = (REPO_ROOT / "scripts/review_untrusted_sandbox.sh").read_text(encoding="utf-8")
-	assert 'case "${action}" in prepare|run|cleanup|seed) ;; *) exit 2 ;; esac' in helper
+	assert 'case "${action}" in prepare|prepare-ephemeral|run|cleanup|seed) ;; *) exit 2 ;; esac' in helper
 	seed_call = 'review_untrusted_workspace.py" seed "${workspace}" "${root}/source" "${root}/baseline.json" "$2" "$3"'
 	assert seed_call in helper
 	# The seed branch only runs on a validated, prepared root.
 	assert helper.index("echo '::error::Review sandbox not prepared'") < helper.index(seed_call)
-	assert helper.index(seed_call) < helper.index('[ "$#" -eq 6 ] || exit 2')
+	assert helper.index(seed_call) < helper.index('[ "$#" -ge 6 ] && [ "$#" -le 9 ] || exit 2')
 
 def test_review_relay_accepts_only_configured_chat_model() -> None:
 	spec = importlib.util.spec_from_file_location("review_broker", REPO_ROOT / "scripts/clarify_openrouter_broker.py")
