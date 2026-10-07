@@ -97,17 +97,17 @@
       "profile": "write"
     },
     "VALIDATE": {
-      "engine": "codex",
+      "engine": "claude",
       "claude_model": "claude-opus-5-5",
       "profile": "write"
     },
     "VALIDATE_SELF_HEAL": {
-      "engine": "codex",
+      "engine": "claude",
       "claude_model": "claude-opus-5-5",
       "profile": "write"
     },
     "VALIDATION_REFRESH": {
-      "engine": "codex",
+      "engine": "claude",
       "claude_model": "claude-opus-5-5",
       "profile": "write"
     },

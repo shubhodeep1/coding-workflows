@@ -88,6 +88,47 @@ jobs:
         # workflow's behavior identical across schedule + dispatch runs.
         uses: ./.github/actions/install-codex
 
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          VALIDATION_DISCOVERY_ENABLED: ${{ github.event.inputs.discovery_enabled || vars.VALIDATION_DISCOVERY_ENABLED || 'true' }}
+          VALIDATION_DISCOVERY_DRY_RUN: ${{ github.event.inputs.discovery_dry_run || vars.VALIDATION_DISCOVERY_DRY_RUN || 'false' }}
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_VALIDATION_REFRESH: ${{ vars.AI_ENGINE_VALIDATION_REFRESH || '' }}
+          CLAUDE_ENGINE_SUPPORT_DEST: ${{ runner.temp }}/claude-engine-support
+        run: |
+          set -euo pipefail
+          # Discovery (role VALIDATION_REFRESH) runs Claude through the engine
+          # root staged here from this workflow's own checkout; the codex CLI
+          # above stays installed as the fallback. No work item, so no labels.
+          engine="codex"
+          if [ "${VALIDATION_DISCOVERY_ENABLED}" = "true" ] && [ "${VALIDATION_DISCOVERY_DRY_RUN}" != "true" ]; then
+            # shellcheck disable=SC1091
+            if source scripts/ai_engine.sh && ai_engine_stage_support "${GITHUB_WORKSPACE}" "${CLAUDE_ENGINE_SUPPORT_DEST}"; then
+              echo "CLAUDE_ENGINE_SUPPORT_DIR=${CLAUDE_ENGINE_SUPPORT_DEST}" >> "$GITHUB_ENV"
+              engine="$(ai_engine_for_role VALIDATION_REFRESH || echo codex)"
+            else
+              echo "::warning::Trusted Claude engine support is unavailable; discovery runs codex."
+            fi
+          fi
+          [ "${engine}" = "claude" ] || engine="codex"
+          echo "engine=${engine}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        id: claude_pool
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
+
       - name: Run validation refresh
         id: refresh
         env:
@@ -115,6 +156,8 @@ jobs:
           VALIDATION_DISCOVERY_BUDGET_SECS: ${{ vars.VALIDATION_DISCOVERY_BUDGET_SECS || '2100' }}
           VALIDATION_DISCOVERY_MODEL: ${{ vars.VALIDATION_DISCOVERY_MODEL || 'openai/gpt-6-sol' }}
           VALIDATION_DISCOVERY_REASONING_EFFORT: ${{ vars.VALIDATION_DISCOVERY_REASONING_EFFORT || 'high' }}
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_VALIDATION_REFRESH: ${{ vars.AI_ENGINE_VALIDATION_REFRESH || '' }}
           VALIDATION_DISCOVERY_PR_BRANCH_PREFIX: ${{ vars.VALIDATION_DISCOVERY_PR_BRANCH_PREFIX || 'automation/validate-discovery' }}
           VALIDATION_DISCOVERY_PR_LABEL: ${{ vars.VALIDATION_DISCOVERY_PR_LABEL || 'automation:validate-bootstrap' }}
           VALIDATION_REFRESH_REPOS_FILE_INPUT: ${{ github.event.inputs.repos_file || '.github/ai/consumer_repos.json' }}

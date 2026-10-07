@@ -46,6 +46,25 @@
 #       role's existing retry rules.
 #       AI_ENGINE_LAST_RUN_DIR names the run directory afterwards; it holds
 #       transcript-<NAME>.jsonl and stderr-<NAME>.txt for each account tried.
+#   claude_run_selected <role> <prompt_file> <out_file> <workdir> [--codex-stdio] -- <codex command...>
+#       Resolves the role's engine (ai_engine_for_role). On codex it runs the
+#       caller's codex command unchanged (as given, or with
+#       `< prompt_file > out_file` under --codex-stdio) and returns its
+#       status. On claude it runs claude_run read-only (AI_ENGINE_READ_ONLY)
+#       with SUPPORT_ROOT_DIR / SUPPORT_INSTRUCTIONS_FILE pointing at the
+#       directory this file was sourced from, wrapped in codex_heartbeat.sh
+#       when present; exit 75 (Claude unavailable) runs the codex command,
+#       any other status is returned as is. Sets AI_ENGINE_LAST_SELECTED to
+#       `codex`, `claude` or `claude->codex`.
+#   ai_engine_stage_support <source_root> <dest_root>
+#       Copies the fixed list of engine support files (this file, the
+#       policy, relay, isolation helper and its support files, the stall
+#       guard, heartbeat, guard hook, engine config and instructions) from a
+#       verified checkout into <dest_root>, keeping the repository layout.
+#       A missing required file, a symlink or a non-regular file fails the
+#       whole copy and removes <dest_root>. Callers source ai_engine.sh only
+#       from such a root (default ${RUNNER_TEMP}/claude-engine-support,
+#       CLAUDE_ENGINE_SUPPORT_DIR), never from the checkout being worked on.
 #
 # Inputs (environment):
 #   AI_ENGINE_LABELS        work-item labels (comma/space list or JSON list)
@@ -395,6 +414,132 @@ claude_run()
 	fi
 	if [ "${rc}" -eq "${_AI_ENGINE_EXIT_FALLBACK}" ]; then
 		ai_engine_fallback "${role}" all_accounts_failed
+	fi
+	return "${rc}"
+}
+
+# Engine support files a trusted root needs (ai_engine_stage_support). The
+# isolation helper resolves its own support files from its directory, so they
+# sit next to it.
+readonly -a _AI_ENGINE_SUPPORT_REQUIRED=(
+	scripts/ai_engine.sh
+	scripts/claude_engine.py
+	scripts/claude_anthropic_relay.py
+	scripts/claude_settings.json.tmpl
+	scripts/codex_isolated_exec.sh
+	scripts/codex_isolated_workspace.py
+	scripts/clarify_openrouter_broker.py
+	scripts/write_codex_config.sh
+	scripts/codex_model_catalog.json
+	scripts/codex_stall_guard.sh
+	scripts/codex_heartbeat.sh
+	.claude/hooks/gh_api_write_guard.py
+	.github/ai/claude_engine.json
+	unattended_system_instructions.md
+)
+readonly -a _AI_ENGINE_SUPPORT_OPTIONAL=(
+	scripts/dependency_registry_proxy.py
+	scripts/tg_helpers.sh
+)
+
+ai_engine_stage_support()
+{
+	local source_root="${1:-}" dest_root="${2:-}" rel src mode optional
+	if [ -z "${source_root}" ] || [ -z "${dest_root}" ] || [ ! -d "${source_root}" ]; then
+		echo "::warning::AI engine: support staging failed reason=usage file=" >&2
+		return 1
+	fi
+	if [ -L "${dest_root}" ]; then
+		echo "::warning::AI engine: support staging failed reason=symlink file=<dest_root>" >&2
+		return 1
+	fi
+	rm -rf -- "${dest_root}"
+	for optional in false true; do
+		local -a list=("${_AI_ENGINE_SUPPORT_REQUIRED[@]}")
+		[ "${optional}" = "true" ] && list=("${_AI_ENGINE_SUPPORT_OPTIONAL[@]}")
+		for rel in "${list[@]}"; do
+			src="${source_root}/${rel}"
+			if [ -L "${src}" ]; then
+				echo "::warning::AI engine: support staging failed reason=symlink file=${rel}" >&2
+				rm -rf -- "${dest_root}"
+				return 1
+			fi
+			if [ ! -e "${src}" ] && [ "${optional}" = "true" ]; then
+				continue
+			fi
+			if [ ! -f "${src}" ]; then
+				echo "::warning::AI engine: support staging failed reason=missing file=${rel}" >&2
+				rm -rf -- "${dest_root}"
+				return 1
+			fi
+			mode=0644
+			case "${rel}" in *.sh) mode=0755 ;; esac
+			if ! install -D -m "${mode}" "${src}" "${dest_root}/${rel}"; then
+				echo "::warning::AI engine: support staging failed reason=copy file=${rel}" >&2
+				rm -rf -- "${dest_root}"
+				return 1
+			fi
+		done
+	done
+	return 0
+}
+
+claude_run_selected()
+{
+	local usage="claude_run_selected <role> <prompt_file> <out_file> <workdir> [--codex-stdio] -- <codex command...>"
+	if [ "$#" -lt 5 ]; then
+		echo "::error::claude_run_selected: usage: ${usage}" >&2
+		return 2
+	fi
+	local role="$1" prompt_file="$2" out_file="$3" workdir="$4" codex_stdio="false"
+	shift 4
+	if [ "${1:-}" = "--codex-stdio" ]; then
+		codex_stdio="true"
+		shift
+	fi
+	if [ "${1:-}" != "--" ]; then
+		echo "::error::claude_run_selected: usage: ${usage}" >&2
+		return 2
+	fi
+	shift
+	if [ "$#" -eq 0 ] || ! _ai_engine_valid_role "${role}" || [ ! -s "${prompt_file}" ] || [ -z "${out_file}" ] || [ ! -d "${workdir}" ]; then
+		echo "::error::claude_run_selected: usage: ${usage}" >&2
+		return 2
+	fi
+	# The trusted root this file was sourced from supplies the engine config,
+	# guard hook and instructions for both the selection and the run.
+	local engine_root engine rc=0
+	engine_root="$(cd "${_AI_ENGINE_DIR}/.." && pwd)" || return 2
+	engine="$(SUPPORT_ROOT_DIR="${engine_root}" ai_engine_for_role "${role}")" || engine="codex"
+	AI_ENGINE_LAST_SELECTED="codex"
+	if [ "${engine}" = "claude" ]; then
+		AI_ENGINE_LAST_SELECTED="claude"
+		local instructions="${engine_root}/unattended_system_instructions.md"
+		[ -f "${instructions}" ] || instructions="${SUPPORT_INSTRUCTIONS_FILE:-}"
+		local heartbeat="${_AI_ENGINE_DIR}/codex_heartbeat.sh"
+		case "${CODEX_HEARTBEAT_ENABLED:-1}" in
+			0|false|FALSE|no|off) heartbeat="" ;;
+		esac
+		if [ -n "${heartbeat}" ] && [ -f "${heartbeat}" ] && [ ! -L "${heartbeat}" ]; then
+			AI_ENGINE_READ_ONLY=true SUPPORT_ROOT_DIR="${engine_root}" SUPPORT_INSTRUCTIONS_FILE="${instructions}" \
+				bash "${heartbeat}" --phase "${role,,}" --engine claude -- \
+				bash -c 'source "$0"; claude_run "$@"' "${_AI_ENGINE_DIR}/ai_engine.sh" \
+				"${role}" "${prompt_file}" "${out_file}" "${workdir}" || rc=$?
+		else
+			AI_ENGINE_READ_ONLY=true SUPPORT_ROOT_DIR="${engine_root}" SUPPORT_INSTRUCTIONS_FILE="${instructions}" \
+				claude_run "${role}" "${prompt_file}" "${out_file}" "${workdir}" || rc=$?
+		fi
+		if [ "${rc}" -ne "${_AI_ENGINE_EXIT_FALLBACK}" ]; then
+			return "${rc}"
+		fi
+		# claude_run already logged AI_ENGINE_FALLBACK: run the codex command.
+		AI_ENGINE_LAST_SELECTED="claude->codex"
+		rc=0
+	fi
+	if [ "${codex_stdio}" = "true" ]; then
+		"$@" < "${prompt_file}" > "${out_file}" || rc=$?
+	else
+		"$@" || rc=$?
 	fi
 	return "${rc}"
 }

@@ -701,3 +701,137 @@ def test_every_workflow_staging_ai_engine_also_stages_its_stall_guard() -> None:
 	assert {name for name, _ in staging_lists} >= {"plan.yml", "clarify.yml", "orchestrate_clarify_respond.yml", "implement.yml"}
 	missing = [name for name, names in staging_lists if "codex_stall_guard.sh" not in names]
 	assert not missing, f"stage codex_stall_guard.sh beside ai_engine.sh in: {missing}"
+
+
+# --- claude_run_selected / ai_engine_stage_support (plan item 3a) -----------------
+
+
+def _selected(sandbox: dict, claude_rc: int, extra: str = "", stdio: bool = False, **extra_env: str) -> subprocess.CompletedProcess:
+	"""claude_run_selected with a fake claude_run that records its environment."""
+	out = sandbox["tmp"] / "selected-out.txt"
+	record = sandbox["tmp"] / "selected-claude.txt"
+	codex_log = sandbox["tmp"] / "selected-codex.txt"
+	fake = (
+		"claude_run() { "
+		f'printf "%s|%s|%s|%s\\n" "$1" "${{AI_ENGINE_READ_ONLY:-}}" "${{SUPPORT_ROOT_DIR:-}}" "$4" >> {shlex.quote(str(record))}; '
+		f'printf "claude-out\\n" > "$3"; return {claude_rc}; }}; '
+		f'fake_codex() {{ printf "codex %s\\n" "$*" >> {shlex.quote(str(codex_log))}; echo codex-stdout; return 7; }}; '
+	)
+	flag = "--codex-stdio " if stdio else ""
+	script = (
+		fake
+		+ f"rc=0; claude_run_selected PLAN {shlex.quote(str(sandbox['prompt']))} {shlex.quote(str(out))} {shlex.quote(str(sandbox['work']))} {flag}-- fake_codex a 'b c' || rc=$?; "
+		+ 'echo "RC=${rc}"; echo "SELECTED=${AI_ENGINE_LAST_SELECTED:-}"'
+		+ extra
+	)
+	return _bash(sandbox, script, CODEX_HEARTBEAT_ENABLED="0", **extra_env)
+
+
+def _selected_value(result: subprocess.CompletedProcess) -> str:
+	for line in result.stdout.splitlines():
+		if line.startswith("SELECTED="):
+			return line[len("SELECTED="):]
+	raise AssertionError(result.stdout + result.stderr)
+
+
+def test_selected_codex_runs_the_command_verbatim(sandbox: dict) -> None:
+	result = _selected(sandbox, 0, AI_ENGINE_PLAN="codex")
+	assert _rc(result) == 7
+	assert _selected_value(result) == "codex"
+	assert (sandbox["tmp"] / "selected-codex.txt").read_text(encoding="utf-8") == "codex a b c\n"
+	assert not (sandbox["tmp"] / "selected-claude.txt").exists()
+	assert "AI_ENGINE_SELECTED role=PLAN engine=codex" in result.stderr
+
+
+def test_selected_codex_stdio_redirects_prompt_and_output(sandbox: dict) -> None:
+	result = _selected(sandbox, 0, stdio=True, AI_ENGINE_PLAN="codex")
+	assert _rc(result) == 7
+	assert (sandbox["tmp"] / "selected-out.txt").read_text(encoding="utf-8") == "codex-stdout\n"
+
+
+def test_selected_claude_success_skips_codex_and_is_read_only(sandbox: dict) -> None:
+	result = _selected(sandbox, 0, AI_ENGINE_PLAN="claude")
+	assert _rc(result) == 0
+	assert _selected_value(result) == "claude"
+	assert not (sandbox["tmp"] / "selected-codex.txt").exists()
+	role, read_only, support_root, workdir = (sandbox["tmp"] / "selected-claude.txt").read_text(encoding="utf-8").strip().split("|")
+	assert (role, read_only, workdir) == ("PLAN", "true", str(sandbox["work"]))
+	# The engine root is the directory ai_engine.sh was sourced from.
+	assert Path(support_root) == sandbox["ai_engine"].parent.parent
+	assert (sandbox["tmp"] / "selected-out.txt").read_text(encoding="utf-8") == "claude-out\n"
+
+
+def test_selected_claude_unavailable_runs_codex(sandbox: dict) -> None:
+	result = _selected(sandbox, 75, AI_ENGINE_PLAN="claude")
+	assert _rc(result) == 7
+	assert _selected_value(result) == "claude->codex"
+	assert (sandbox["tmp"] / "selected-codex.txt").read_text(encoding="utf-8") == "codex a b c\n"
+
+
+@pytest.mark.parametrize("claude_rc", [1, 124])
+def test_selected_claude_failure_is_returned_without_codex(sandbox: dict, claude_rc: int) -> None:
+	result = _selected(sandbox, claude_rc, AI_ENGINE_PLAN="claude")
+	assert _rc(result) == claude_rc
+	assert not (sandbox["tmp"] / "selected-codex.txt").exists()
+
+
+@pytest.mark.parametrize(
+	"args",
+	["PLAN", "PLAN /nonexistent out work -- true", "'bad role' PROMPT OUT WORK -- true", "PLAN PROMPT OUT WORK true"],
+)
+def test_selected_usage_errors_return_2(sandbox: dict, args: str) -> None:
+	args = args.replace("PROMPT", shlex.quote(str(sandbox["prompt"]))).replace("WORK", shlex.quote(str(sandbox["work"])))
+	result = _bash(sandbox, f'rc=0; claude_run_selected {args} || rc=$?; echo "RC=${{rc}}"')
+	assert _rc(result) == 2
+	assert "claude_run_selected: usage" in result.stderr
+
+
+def _engine_source_tree(root: Path) -> None:
+	for rel in (
+		"scripts/ai_engine.sh", "scripts/claude_engine.py", "scripts/claude_anthropic_relay.py",
+		"scripts/claude_settings.json.tmpl", "scripts/codex_isolated_exec.sh", "scripts/codex_isolated_workspace.py",
+		"scripts/clarify_openrouter_broker.py", "scripts/write_codex_config.sh", "scripts/codex_model_catalog.json",
+		"scripts/codex_stall_guard.sh", "scripts/codex_heartbeat.sh", ".claude/hooks/gh_api_write_guard.py",
+		".github/ai/claude_engine.json", "unattended_system_instructions.md",
+	):
+		target = root / rel
+		target.parent.mkdir(parents=True, exist_ok=True)
+		shutil.copyfile(REPO_ROOT / rel, target)
+
+
+def test_stage_support_copies_the_fixed_list_with_modes(sandbox: dict) -> None:
+	source = sandbox["tmp"] / "src"
+	_engine_source_tree(source)
+	dest = sandbox["tmp"] / "engine-root"
+	result = _bash(sandbox, f"ai_engine_stage_support {shlex.quote(str(source))} {shlex.quote(str(dest))}")
+	assert result.returncode == 0, result.stderr
+	assert stat.S_IMODE((dest / "scripts" / "ai_engine.sh").stat().st_mode) == 0o755
+	assert stat.S_IMODE((dest / "scripts" / "claude_engine.py").stat().st_mode) == 0o644
+	assert (dest / ".github" / "ai" / "claude_engine.json").is_file()
+	assert (dest / ".claude" / "hooks" / "gh_api_write_guard.py").is_file()
+	# Optional files may be absent.
+	assert not (dest / "scripts" / "dependency_registry_proxy.py").exists()
+
+
+def test_stage_support_refuses_a_symlink_and_removes_the_partial_root(sandbox: dict) -> None:
+	source = sandbox["tmp"] / "src"
+	_engine_source_tree(source)
+	relay = source / "scripts" / "claude_anthropic_relay.py"
+	relay.unlink()
+	relay.symlink_to(REPO_ROOT / "scripts" / "claude_anthropic_relay.py")
+	dest = sandbox["tmp"] / "engine-root"
+	result = _bash(sandbox, f"rc=0; ai_engine_stage_support {shlex.quote(str(source))} {shlex.quote(str(dest))} || rc=$?; echo RC=$rc")
+	assert _rc(result) == 1
+	assert "reason=symlink file=scripts/claude_anthropic_relay.py" in result.stderr
+	assert not dest.exists()
+
+
+def test_stage_support_refuses_a_missing_file(sandbox: dict) -> None:
+	source = sandbox["tmp"] / "src"
+	_engine_source_tree(source)
+	(source / "scripts" / "codex_heartbeat.sh").unlink()
+	dest = sandbox["tmp"] / "engine-root"
+	result = _bash(sandbox, f"rc=0; ai_engine_stage_support {shlex.quote(str(source))} {shlex.quote(str(dest))} || rc=$?; echo RC=$rc")
+	assert _rc(result) == 1
+	assert "reason=missing file=scripts/codex_heartbeat.sh" in result.stderr
+	assert not dest.exists()
