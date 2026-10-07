@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: update `tests/e2e_smoke_canary_b.txt` (smoke run 37584198174)\n\n**Planning ref:** `orchestrator/project-6618` at `fa60c40d079284241185bb9d12803a5089512cb5`. This matches the issue's integration branch, so there is no mismatch.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: The issue asks for an exact two-line change to one file and forbids touching anything else. The file already exists on the ref with two lines (`status: ok` and `decompose-run: 25567947079`) and a trailing newline. No helper, pattern or new code is needed, and there is no wider scope to pick up.\n\n### 1. Files likely to change\n- `tests/e2e_smoke_canary_b.txt` (it already exists, so nothing needs creating).\n\n### 2. Functions or modules to implement\nNone. This is a data-file edit only.\n\n### 3. Data structures affected\nThe plain-text canary file. Its final content must be exactly these two lines, followed by one trailing newline:\n```\nstatus: ok\ndecompose-run: 37584198174\n```\nLine 1 is already correct. Only line 2 changes: `decompose-run: 25567947079` becomes `decompose-run: 37584198174`.\n\n### 4. API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Replace line 2 in place rather than rewriting the file's structure\n- Chosen: Replace the existing second line with `decompose-run: 37584198174`, keep line 1, and keep exactly one trailing newline.\n- Alternatives considered: Appending a third line; regenerating the file with extra metadata.\n- Why: The issue says to replace an existing second line, and the file currently has one, so this is the smallest change that meets all three acceptance criteria.\n\n## Security considerations\n- **Trust boundaries:** none touched. The file is a test fixture and no code reads it at runtime.\n- **Authorization or new surfaces:** none.\n- **External input:** the run ID comes from the issue body. It is a fixed literal that is copied verbatim, never evaluated.\n- **Abuse cases:** none. The file contains no secrets and no money state.\n\n### 5. Risks and edge cases\n- **Missing or extra trailing newline:** either one would change the byte content. Check it with `tail -c1` or `cat -A`.\n- **Parallel sibling issue:** another issue owns `tests/e2e_smoke_canary.txt`. That file must not be edited, and it is a separate path, so there is no merge-conflict risk.\n- **Other runs editing this file:** no other run touches it on this branch, so there is no conflict risk.\n- **Changelog fragment:** none is needed. This is a smoke-test fixture with no user-visible change, and the issue restricts edits to one file.\n\n### 6. Testing considerations\nRun the acceptance checks:\n- `head -n1 tests/e2e_smoke_canary_b.txt` should print `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary_b.txt` should print `decompose-run: 37584198174`.\n- `wc -l` should print `2`, and `tail -c1 | xxd` should show `0a` (a single trailing newline).\n- `git diff --stat` should list only `tests/e2e_smoke_canary_b.txt`.\n\nNo other test suites are affected.\n\n### 7. Pre-execution self-check\n- The plan meets all three acceptance criteria.\n- It touches one file only, which matches the issue's scope.\n- I read the current file content directly (`cat -A`) to confirm the two existing lines and the trailing newline.\n\n**Assumptions:** none beyond what the issue states.\n**Missing context:** none.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "96caab90c889b82efae7cde9c2b72d90112f185b6b661c27e6584517edfc4f68",
+  "lineage": {
+    "issue_number": 6620,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37585423331",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37585423331",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6620"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261007071457_5b50d6bbdc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6620,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37585423331"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6620",
+  "timestamps": {
+    "created_at": "2026-10-07T07:14:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
