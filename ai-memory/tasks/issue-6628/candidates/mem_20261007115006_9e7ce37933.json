@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should the live hook `.claude/hooks/pr_merge_status_guard.py` actually be updated to match the template?\nChoices:\nA. Through the existing live-copy sync. A person merges the open `ai/sync-claude-live-copies` PR or the `ai/sync-claude-live-copies-held` draft PR, or re-runs `sync-claude-live-copies.yml`, or copies the template by hand. This issue then becomes an operator-step tracker: the pipeline makes no code change, and the issue closes once the parity test passes. (RECOMMENDED)\nB. Change pipeline policy so the implement editor may write `.claude/hooks/pr_merge_status_guard.py`. This widens the editor's write access to a security hook. **Note:** this is a security-boundary change and needs its own reviewed issue.\nC. Close this issue as a duplicate of #6624 and keep #6624 blocked until a person updates the live copy.\nQ2: The issue asks for the change to be gated behind `LIVE_MERGED_PR_HOOK_PARITY_UNSET_OPERATOR_STEP`, but a byte-identical copy can't contain a gate. What should happen to that requirement?\nChoices:\nA. Drop the gate. The live hook is an exact copy of the template with the same file mode, and no new flag or env var is added. (RECOMMENDED)\nB. Add the gate to both the template and the live hook so they stay identical. This changes how the shipped merged-PR guard behaves for every consumer repo. **Note:** this still needs Q1:A or Q1:B to deliver the live copy.\nC. Use the flag only as a label or marker on the tracking issue, not in any code.",
+  "fingerprint": "2a3c432cae97310c9fa7f3739531a3de802b9172c91588bf2f72c50257e2b954",
+  "lineage": {
+    "issue_number": 6628,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37616126479",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37616126479",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261007115006_9e7ce37933",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6628,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37616126479"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6628 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-07T11:50:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
