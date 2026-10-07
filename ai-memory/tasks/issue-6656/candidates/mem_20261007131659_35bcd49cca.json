@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The required edit is in a path the pipeline is not allowed to write. How should this issue finish?\nChoices:\nA) Treat it as a step only a person can do. The pipeline makes no code change and opens no PR for it. A person copies the template over the live hook, with matching content and executable bit, in a human-authored commit. Until then, #6624 and #6628 stay blocked, and this issue is recorded as an `ai:operator-step` entry. (RECOMMENDED)\nB) Rely on the existing sync workflow (`sync-claude-live-copies.yml`). When template changes can't be verified as human-authored, it puts the live-copy update on the draft PR `ai/sync-claude-live-copies-held`. A person reviews and merges that draft. This only applies if a held or authorized sync PR for this file already exists or comes from the next template push.\nC) Let the implementer's sandbox write this one `.claude/hooks/` file. This weakens a deliberate security boundary and is not advised.\n**Note:** if you pick A or B, Q2 is moot under its option A, because nothing gets implemented.\nQ2: How should `LIVE_MERGED_PR_HOOK_PARITY_UNSET_OPERATOR_STEP` be handled, given that the issue also forbids a runtime gate in either hook and forbids waiving failing checks?\nChoices:\nA) Don't add the flag anywhere. The fix is a byte-for-byte copy and both hooks must stay identical, so ignore the placeholder. (RECOMMENDED)\nB) Add the flag outside the hooks only, for example so the parity test (`tests/test_claude_template_live_parity.py`) skips the hook while the flag is unset. This counts as waiving a failing check, which the issue forbids.\nC) Add the flag inside both hooks the same way. That keeps them identical but breaks the \"no runtime gate\" rule.",
+  "fingerprint": "14e7dcb5edda515e4521e3ea69e7a70e5704a7b6d44228750deafda706cd682a",
+  "lineage": {
+    "issue_number": 6656,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37625727475",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37625727475",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261007131659_35bcd49cca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6656,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37625727475"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6656 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-07T13:16:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
