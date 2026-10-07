@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- workflow-templates/ai-review.yml:68-86 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The `security-hold-sweep` job inherits broad workflow-level write permissions despite only needing permissions for its declared work.\n  WHY: When `GH_PAT` is unset, `github.token` receives inherited `contents: write`, `pull-requests: write`, and `id-token: write` grants beyond the sweep's needs.\n- scripts/review_single_issue_security_pass.sh:350-357 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `single_pass_open_followups` assumes `gh api --paginate --slurp` returns a JSON array of arrays, which may cause incorrect follow-up counts if the response structure differs.\n  WHY: A mismatched response shape can make `.[][0]` fail or select the wrong data, suppressing security hold alerts when legitimate follow-ups exist.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- workflow-templates/ai-review.yml:68-86 | severity=high | confidence=4\n  PROBLEM: The `security-hold-sweep` job inherits broad workflow-level permissions (`contents: write`, `pull-requests: write`, `id-token: write`) despite only requiring `issues: write` for its specific tasks.\n  WHY: If the `GH_PAT` secret is missing or unconfigured, the job falls back to the job-level `github.token`, which then carries these excessive privileges. This violates the principle of least privilege, as the sweep job does not need write access to contents, PRs, or OIDC token generation.\n- scripts/review_single_issue_security_pass.sh:350-357 | severity=high | confidence=3\n  PROBLEM: The follow-up counting logic in `single_pass_open_followups` assumes that `gh api --paginate --slurp` returns a JSON array of arrays of issues (pages), which may misalign if the API response structure changes or if the `jq` filter is too brittle.\n  WHY: If the response is not consistently an array of arrays, `.[][0]` will fail or select wrong data, causing the count of found issues to be incorrect, which may lead to missing legitimate follow-ups and suppressing security hold alerts when they should be firing.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- workflow-templates/ai-review.yml:45-51; the new `security-hold-sweep` job at lines 68-86 has no `permissions:` block | severity=high | confidence=4\n  PROBLEM: The new `security-hold-sweep` job inherits the workflow-level grants `actions: write`, `contents: write`, `pull-requests: write`, `issues: write`, `checks: write`, `deployments: write`, and `id-token: write`.\n  WHY: The step sets `GH_TOKEN: ${{ secrets.GH_PAT || github.token }}`, so on consumer repos without `GH_PAT` the fallback `github.token` is granted the entire inherited permission set, including write-capable grants the sweep's logic never exercises.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- workflow-templates/ai-review.yml: Workflow-level permissions at lines 45-51; `security-hold-sweep` at lines 68-85 has no job-level permissions and passes `${{ secrets.GH_PAT || github.token }}` as `GH_TOKEN` at line 81. | severity=high | confidence=4\n  PROBLEM: The scheduled sweep inherits `contents: write`, `pull-requests: write`, and `id-token: write`, although it only needs read access, issue-comment writes, and workflow dispatch.\n  WHY: When `GH_PAT` is unset, the fallback `github.token` receives those inherited grants, giving the sweep code/PR write and OIDC token-request capabilities beyond its declared work.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "bd985ff66fc39b5454ab64a93c103150a357be13e6abca7cc5f9828967e0cd1b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6462,
+    "run_id": "37572998716",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37572998716",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007052158_9660265f22",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6462,
+    "run_id": "37572998716"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-07T05:21:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
