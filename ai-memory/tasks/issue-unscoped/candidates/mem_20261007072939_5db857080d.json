@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.79,
+  "details": "Separate merged changes addressed conflict-manifest union behavior and modify/delete conflicts, both with focused contract tests. When changing conflict preparation or resolution, test how manifest entries are combined and retained across conflicting file operations.",
+  "fingerprint": "9faf2340b82647696fb60a268918178968c34b76841e2d38ee9689eca8fb8b83",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37586783122",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37586783122",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/5504",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6441",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6458",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6596",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6608",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6137",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6475",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6545",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6598",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6612"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261007072939_5db857080d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Protect conflict-manifest behavior with contract tests, especially for modify/delete cases.",
+  "timestamps": {
+    "created_at": "2026-10-07T07:29:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
