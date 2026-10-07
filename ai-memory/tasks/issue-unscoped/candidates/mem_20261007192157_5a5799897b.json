@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.9,
+  "details": "For security-sensitive Git hooks, an unresolved explicit directory override should lead to asking rather than checking a different checkout. Keep this distinct from uncertainty caused by shell control flow or an unknown `cd`, for which existing fallback behavior may differ.",
+  "fingerprint": "be77219e737b1f852a39af78e06456aa6ca718becf765d0a9d674fc0fdf6080c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37672841342",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37672841342",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6416",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6508",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6638",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6665",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6669",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6417",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6515",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6673",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6676",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6677"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261007192157_5a5799897b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "When a Git operation's explicit checkout override cannot be resolved, do not substitute the session checkout's PR history.",
+  "timestamps": {
+    "created_at": "2026-10-07T19:21:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
