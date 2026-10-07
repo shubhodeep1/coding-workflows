@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_security_hold_sweep.py:109-123 | severity=low | confidence=2\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: _has_current_head_result can suppress the full-history REST fallback when a current-head non-findings marker is in the latest 100 comments and a stale findings marker is beyond them.\n  WHY: If the pending audit silently failed and the stale findings marker aged beyond the window, the sweep skips the fallback and misses re-dispatch; this requires both conditions and no occurrence was observed.\n- scripts/review_security_hold_sweep.py:200-208 | severity=low | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The sweep fetches full comment history on every scheduled run when the current-head findings marker has aged out of the latest 100 comments, even after dispatching and posting its dedup marker.\n  WHY: _has_current_head_result does not recognize the sweep marker, so each tick paginates the history before stale_candidate finds that marker, repeatedly consuming REST requests for a still-held PR with a large comment history.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/review_security_hold_sweep.py:109-123 (_has_current_head_result) | severity=NIT | confidence=2\n  PROBLEM: _has_current_head_result returns True when any current-head result (pending, clean, findings, or failed) exists in the latest 100 comments, which can suppress the full-history REST fallback when the only current-head marker in the window is non-findings and the stale findings marker sits beyond 100 comments.\n  WHY: In the specific scenario where a pending marker is within the latest 100 comments and a stale findings marker is beyond them, stale_candidate returns None (latest is pending, not findings), _has_current_head_result returns True (there is a current-head pending), the REST fallback is skipped, and the stale findings never trigger a re-dispatch. This is narrow: a pending within 100 means an in-flight audit already dispatched for that head, so the findings has been addressed. A concrete missed-dispatch requires the pending audit to have silently failed (no result comment posted) AND a findings marker to sit beyond the 100-comment window, which requires both the audit to be broken and the findings to have aged off \u2014 a compound edge case with no observed occurrence.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_security_hold_sweep.py:200-208 | severity=NIT | confidence=5\n  PROBLEM: The full comment history is fetched on every scheduled sweep for a PR whose current-head findings marker has aged out of the latest 100 comments, even after the sweep has already dispatched and posted its dedup marker.\n  WHY: _has_current_head_result only recognizes security-pass result markers, not the recent sweep marker. The sweep therefore paginates all comments again each tick, then discovers the dedup marker only in stale_candidate. A still-held PR with a large comment history repeatedly consumes one REST request per page on the 30-minute source schedule or hourly consumer schedule.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "df2a64d9d7e8a02c5d2e9883795cb2a07175be7c82c6c8887e045aede7fece10",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6462,
+    "run_id": "37570882216",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37570882216",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007044324_3f75fb4a6a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6462,
+    "run_id": "37570882216"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-07T04:43:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
