@@ -20,6 +20,11 @@ if [ -f "scripts/gh_helpers.sh" ]; then
   source scripts/gh_helpers.sh
 fi
 
+# Same rule as clarify.yml's jobs.clarify.if (issue #6630): /reclarify on the
+# first line, or on a later line of a comment without an automation marker or
+# the plan-comment trailer. Case-insensitive like GitHub's startsWith/contains.
+RECLARIFY_COMMAND_JQ_DEF='def is_reclarify_command: (. // "" | ascii_downcase) as $b | ($b | startswith("/reclarify")) or ((("\n" + $b) | contains("\n/reclarify")) and ($b | contains("<!-- ai:") | not) and ($b | contains("to restart clarification reply:") | not));'
+
 # Cron entry point, including ticks with no active tracking project. Only a
 # trusted Actions marker AND its original live trusted User command may cause
 # a replay. The marker is data, not authorization. One bounded issue listing,
@@ -49,10 +54,10 @@ replay_failed_reclarify_commands() {
         ((.body // "") | test("^<!-- ai:reclarify-requeue:v1 source=[1-9][0-9]* -->$")))]
       | max_by(.id) | .body // "" | capture("source=(?<source>[1-9][0-9]*)").source // ""' 2>/dev/null)" || continue
     [[ "${source_id}" =~ ^[1-9][0-9]*$ ]] || continue
-    source_ts="$(printf '%s' "${comments_json}" | jq -r --argjson id "${source_id}" '
+    source_ts="$(printf '%s' "${comments_json}" | jq -r --argjson id "${source_id}" "${RECLARIFY_COMMAND_JQ_DEF}"'
       [.[] | select(.id == $id and .user.type == "User" and
         (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")) and
-        ((.body // "") | startswith("/reclarify")))] | first | .created_at // ""' 2>/dev/null)" || continue
+        ((.body // "") | is_reclarify_command))] | first | .created_at // ""' 2>/dev/null)" || continue
     [ -n "${source_ts}" ] || continue
     printf '%s' "${comments_json}" | jq -e --argjson id "${source_id}" --arg ts "${source_ts}" '
       any(.[]; .id > $id and .created_at >= $ts and .user.login == "github-actions[bot]" and
@@ -69,10 +74,10 @@ replay_failed_reclarify_commands() {
     fi
     # A newer human request is in flight: do not replay the older command,
     # but retain the label until the newer run succeeds or marks its failure.
-    if printf '%s' "${comments_json}" | jq -e --argjson id "${source_id}" '
+    if printf '%s' "${comments_json}" | jq -e --argjson id "${source_id}" "${RECLARIFY_COMMAND_JQ_DEF}"'
       any(.[]; .id > $id and .user.type == "User" and
         (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")) and
-        ((.body // "") | startswith("/reclarify") and (contains("<!-- ai:reclarify-replay:v1 source=") | not)))' >/dev/null 2>&1; then
+        ((.body // "") | is_reclarify_command and (contains("<!-- ai:reclarify-replay:v1 source=") | not)))' >/dev/null 2>&1; then
       continue
     fi
     # A failed POST is left labelled for the next tick. A successful POST
@@ -85,8 +90,116 @@ replay_failed_reclarify_commands() {
     fi
   done < <(printf '%s' "${queued}" | jq -r '.[] | .number // empty' 2>/dev/null)
 }
+# Batched GraphQL read for detect_unrouted_blocked_comments (issue #6630).
+# Batching contract (unattended_system_instructions.md §14):
+#   Input:  $1 = JSON array of issue numbers; $2 = output file.
+#   Output: $2 holds one JSON object keyed by issue number (string), each value
+#           the GraphQL issue: number, labels.nodes[].name, the last 20
+#           comments (databaseId, body, createdAt, authorAssociation,
+#           author{login,__typename}) and the last 20 LabeledEvents.
+#   Calls:  ceil(N/25) GraphQL calls through gh_retry; no per-issue REST read.
+#   Fail-open: returns 1 on any API or parse failure; the caller skips the tick.
+# Audited before adding: _fetch_candidate_issue_details_graphql and
+# _fetch_linked_pr_status_graphql are defined after the sweep-only exit (so they
+# are unavailable on idle ticks) and fetch cross-reference / PR timelines this
+# check does not need.
+_fetch_blocked_issue_routing_graphql() {
+  local numbers_json="$1" out_file="$2" owner name aliases query n page_dir i=0
+  local -a all_numbers=()
+  owner="${GITHUB_REPOSITORY%%/*}"
+  name="${GITHUB_REPOSITORY#*/}"
+  [[ "${owner}" =~ ^[A-Za-z0-9_.-]+$ && "${name}" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
+  mapfile -t all_numbers < <(printf '%s' "${numbers_json}" | jq -r '.[]' 2>/dev/null)
+  [ "${#all_numbers[@]}" -gt 0 ] || return 1
+  page_dir="$(mktemp -d "${TMPDIR:-/tmp}/reclarify_unrouted.XXXXXX")" || return 1
+  while [ "${i}" -lt "${#all_numbers[@]}" ]; do
+    aliases=""
+    for n in "${all_numbers[@]:i:25}"; do
+      if ! [[ "${n}" =~ ^[1-9][0-9]*$ ]]; then rm -rf "${page_dir}"; return 1; fi
+      aliases+=" i${n}: issue(number: ${n}) { number labels(first: 100) { nodes { name } } comments(last: 20) { nodes { databaseId body createdAt authorAssociation author { login __typename } } } timelineItems(last: 20, itemTypes: [LABELED_EVENT]) { nodes { ... on LabeledEvent { createdAt label { name } } } } }"
+    done
+    query="query(\$owner: String!, \$name: String!) { repository(owner: \$owner, name: \$name) {${aliases} } }"
+    if ! gh_retry gh api graphql -f query="${query}" -f owner="${owner}" -f name="${name}" > "${page_dir}/page_${i}.json" 2>/dev/null; then
+      rm -rf "${page_dir}"; return 1
+    fi
+    i=$((i + 25))
+  done
+  if ! jq -cs 'map(if (.data.repository | type) == "object" then .data.repository else error("no repository") end
+      | to_entries[] | select(.value != null) | {key: (.value.number | tostring), value: .value})
+      | from_entries' "${page_dir}"/page_*.json > "${out_file}" 2>/dev/null; then
+    rm -rf "${page_dir}"; return 1
+  fi
+  rm -rf "${page_dir}"
+}
+
+# Defence in depth for issue #6630: flag an open ai:blocked issue whose newest
+# trusted human comment never resumed the pipeline within the grace period (a
+# /reclarify the intake skipped, or an answer without a command). One advisory
+# comment per human comment; its marker is the dedup key, so later ticks stay
+# quiet. Fails open on every path; never exits non-zero. One rate-limit read,
+# one issue listing, then ceil(N/25) GraphQL calls; a comment POST and a
+# Telegram WARNING only for flagged issues.
+detect_unrouted_blocked_comments() {
+  [ "${RECLARIFY_UNROUTED_DETECT_ENABLED:-true}" = "true" ] || return 0
+  local grace="${RECLARIFY_UNROUTED_GRACE_MINUTES:-15}" max_age="${RECLARIFY_UNROUTED_MAX_AGE_HOURS:-168}"
+  local budget blocked numbers work_dir lib_py issue_num comment_id reason age body msg
+  [[ "${grace}" =~ ^[0-9]{1,5}$ ]] || grace=15
+  [[ "${max_age}" =~ ^[1-9][0-9]{0,4}$ ]] || max_age=168
+  budget="$(gh api rate_limit --jq '.resources.core.remaining' 2>/dev/null)" || budget=""
+  if ! [[ "${budget}" =~ ^[0-9]+$ ]] || [ "${budget}" -lt 500 ]; then
+    echo "RECLARIFY_UNROUTED outcome=skip reason=budget_low remaining=${budget:-unknown}"
+    return 0
+  fi
+  blocked="$(gh_retry gh issue list --repo "${GITHUB_REPOSITORY}" --state open \
+    --label ai:blocked --json number,labels --limit 1000 2>/dev/null)" || {
+    echo "RECLARIFY_UNROUTED outcome=skip reason=issue_list_unavailable"
+    return 0
+  }
+  numbers="$(printf '%s' "${blocked}" | jq -c '[.[]? | select(any(.labels[]?; .name == "ai:orchestrator-tracking" or .name == "ai:reclarify-requeue") | not)
+    | .number | select(type == "number" and . > 0)] | unique' 2>/dev/null)" || numbers="[]"
+  [ "$(printf '%s' "${numbers}" | jq 'length' 2>/dev/null || echo 0)" -gt 0 ] 2>/dev/null || return 0
+  work_dir="$(mktemp -d "${TMPDIR:-/tmp}/reclarify_unrouted_work.XXXXXX")" || return 0
+  if ! _fetch_blocked_issue_routing_graphql "${numbers}" "${work_dir}/details.json"; then
+    echo "RECLARIFY_UNROUTED outcome=skip reason=graphql_unavailable"
+    rm -rf "${work_dir}"; return 0
+  fi
+  lib_py="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)/orchestrate_lib.py"
+  if ! PYTHONDONTWRITEBYTECODE=1 python3 "${lib_py}" unrouted-blocked-comments \
+    --grace-minutes "${grace}" --max-age-hours "${max_age}" < "${work_dir}/details.json" > "${work_dir}/flagged.json" 2>/dev/null; then
+    echo "::warning::RECLARIFY_UNROUTED classifier failed; skipping this tick."
+    echo "RECLARIFY_UNROUTED outcome=skip reason=classifier_failed"
+    rm -rf "${work_dir}"; return 0
+  fi
+  while IFS=$'\t' read -r issue_num comment_id reason age; do
+    [[ "${issue_num}" =~ ^[1-9][0-9]*$ && "${comment_id}" =~ ^[1-9][0-9]*$ && "${age}" =~ ^[0-9]+$ ]] || continue
+    case "${reason}" in
+      command_unrouted)
+        body="This issue is still blocked: the reply posted ${age} minutes ago (comment ${comment_id}) contains a reclarify command that did not start clarification. To resume, post a new comment whose first line is \`/reclarify\`." ;;
+      no_command)
+        body="This issue is still blocked: the reply posted ${age} minutes ago (comment ${comment_id}) did not resume the pipeline. To resume, post a new comment whose first line is \`/reclarify\`." ;;
+      *) continue ;;
+    esac
+    body+=$'\n\n'"<!-- ai:reclarify-unrouted:v1 comment=${comment_id} -->"
+    if gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${body}" >/dev/null 2>&1; then
+      echo "RECLARIFY_UNROUTED issue=${issue_num} comment=${comment_id} reason=${reason} age_minutes=${age} outcome=flagged"
+      if ! type tg_send_msg >/dev/null 2>&1 && [ -f "scripts/tg_helpers.sh" ]; then
+        # shellcheck disable=SC1091
+        source scripts/tg_helpers.sh 2>/dev/null || true
+      fi
+      if type tg_send_msg >/dev/null 2>&1; then
+        msg="Blocked issue #${issue_num} has an unrouted reply (${reason}, ${age} min): https://github.com/${GITHUB_REPOSITORY}/issues/${issue_num}"
+        tg_send_msg "${msg}" "WARNING" >/dev/null 2>&1 || true
+      fi
+    else
+      echo "RECLARIFY_UNROUTED issue=${issue_num} comment=${comment_id} reason=${reason} age_minutes=${age} outcome=post_failed"
+    fi
+  done < <(jq -r '.[]? | [.issue, .comment_id, .reason, .age_minutes] | @tsv' "${work_dir}/flagged.json" 2>/dev/null)
+  rm -rf "${work_dir}"
+  return 0
+}
 if [ "${RECLARIFY_REQUEUE_SWEEP_ONLY:-false}" = "true" ]; then
   replay_failed_reclarify_commands
+  detect_unrouted_blocked_comments || true
   exit 0
 fi
 if ! type emit_event >/dev/null 2>&1; then

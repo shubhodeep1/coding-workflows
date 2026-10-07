@@ -2036,6 +2036,11 @@ jobs:
             echo "To restart clarification reply:"
             echo
             echo "/reclarify"
+            echo
+            # Automation marker (issue #6630): clarify's intake accepts
+            # /reclarify on a later line only in comments without one, so this
+            # comment's own /reclarify line never restarts clarification.
+            echo "<!-- ai:plan-proposal:v1 -->"
           } > "${PLAN_COMMENT_FILE}"
 
           PLAN_COMMENT_LEN="$(wc -c < "${PLAN_COMMENT_FILE}")"
