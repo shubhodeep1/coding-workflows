@@ -38,6 +38,8 @@ These tests pin the load-bearing pieces of that contract:
    run against a real scratch-repo merge conflict, keeps both sides'
    additions, honours either side's deletions, and emits a sorted,
    deduplicated, LC_ALL=C-collated file.
+5. An unhandled manifest conflict fails preparation before the sandbox
+   receives an unsupported .ai/ path.
 """
 
 from __future__ import annotations
@@ -144,6 +146,10 @@ def test_prepare_requires_two_sided_content_conflict() -> None:
 	assert "git ls-files -u --" in block and "*' 2 '*' 3 '*" in block, (
 		"the set-algebra arm must require index stages 2 AND 3 (two-sided content "
 		"conflict); one-sided delete/modify shapes have their own gitignore-guarded arm"
+	)
+	assert "::error::Manifest union-merge: unhandled reason=" in block and "exit 1" in block, (
+		"unsupported manifest conflicts must fail before the resolver sandbox receives "
+		"the excluded .ai/ path"
 	)
 
 
@@ -446,7 +452,7 @@ def _make_one_sided_manifest_conflict(
 
 
 def _run_live_union_block(
-	repo: Path, tmp: Path, *, enabled: str | None = None,
+	repo: Path, tmp: Path, *, enabled: str | None = None, head_ref: str = "feat",
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
 	"""Run the whole live union-merge block from the prepare script."""
 	runtime_dir = tmp / "runtime"
@@ -462,7 +468,7 @@ GITHUB_ENV={github_env!s}
 RESOLVE_STASH={stash!s}
 _merge_stderr_file="$(mktemp)"
 IS_WORKFLOW_SOURCE_REPO=true
-HEAD_REF=feat
+HEAD_REF={head_ref}
 RESOLVER_ALLOWLIST_FILE={allowlist!s}
 git diff --name-only --diff-filter=U | sort -u > "${{RESOLVER_ALLOWLIST_FILE}}"
 _resolver_allowlist_count="$(wc -l < "${{RESOLVER_ALLOWLIST_FILE}}" | tr -d '[:space:]')"
@@ -538,8 +544,9 @@ def test_manifest_modify_delete_not_gitignored_is_left_with_diagnostic() -> None
 		repo.mkdir()
 		_make_one_sided_manifest_conflict(repo, gitignored=False)
 		result, github_env, allowlist = _run_live_union_block(repo, tmp)
-		assert result.returncode == 0, result.stdout + result.stderr
-		assert "Manifest union-merge: unhandled reason=not_gitignored stages=1 2" in result.stdout, result.stdout
+		assert result.returncode != 0, result.stdout + result.stderr
+		assert "::error::Manifest union-merge: unhandled reason=not_gitignored stages=1 2" in result.stdout, result.stdout
+		assert "refusing to dispatch resolver" in result.stdout, result.stdout
 		assert MANIFEST_PATH in allowlist.read_text(encoding="utf-8").splitlines()
 		assert not github_env.exists()
 
@@ -551,12 +558,27 @@ def test_manifest_union_kill_switch_diagnostic() -> None:
 		repo.mkdir()
 		_make_one_sided_manifest_conflict(repo)
 		result, github_env, allowlist = _run_live_union_block(repo, tmp, enabled="false")
-		assert result.returncode == 0, result.stdout + result.stderr
-		assert "unhandled reason=disabled" in result.stdout, result.stdout
+		assert result.returncode != 0, result.stdout + result.stderr
+		assert "::error::Manifest union-merge: unhandled reason=disabled stages=1 2" in result.stdout, result.stdout
 		assert "CONFLICT_MANIFEST_UNION_ENABLED=false" in result.stdout, result.stdout
 		assert allowlist.read_text(encoding="utf-8") == f"{MANIFEST_PATH}\n"
 		assert not github_env.exists()
 		assert _git_out(repo, "diff", "--name-only", "--diff-filter=U", "--").strip() == MANIFEST_PATH
+
+
+def test_manifest_union_integration_sync_fails_before_resolver() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp = Path(tmp_name)
+		repo = tmp / "repo"
+		repo.mkdir()
+		_make_one_sided_manifest_conflict(repo)
+		result, github_env, allowlist = _run_live_union_block(
+			repo, tmp, head_ref="orchestrator/project-123",
+		)
+		assert result.returncode != 0, result.stdout + result.stderr
+		assert "::error::Manifest union-merge: unhandled reason=integration_sync stages=1 2" in result.stdout
+		assert allowlist.read_text(encoding="utf-8") == f"{MANIFEST_PATH}\n"
+		assert not github_env.exists()
 
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

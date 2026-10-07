@@ -29,6 +29,7 @@
 #
 # Failure modes:
 #   - Exits 1 if merge replay fails for non-conflict reasons, or template missing.
+#   - Exits 1 if a manifest conflict cannot be resolved before sandbox dispatch.
 #   - Exits 0 + clears MERGE_CONFLICT when merge replay produces no unmerged paths.
 
 set -euo pipefail
@@ -222,8 +223,7 @@ fi
 #   - Integration-sync branches (orchestrator/project-*) are excluded:
 #     their fingerprint-violation expansion below can widen the
 #     resolver working set after this point, so the early-commit
-#     decision here would be premature; the intent-aware resolver
-#     keeps full custody of those runs.
+#     decision here would be premature.
 #   - A two-sided content conflict (index stages 2 AND 3 both present)
 #     is resolved with the set algebra above; base stage 1 absent is
 #     the add/add case, where the set algebra degenerates to plain
@@ -240,10 +240,8 @@ fi
 #     (`sandbox_path_unsupported`), so every retry failed identically
 #     (PR #6594 / #6209 / #6146, heal issue #6608).
 #   - Every other shape (kill switch off, integration-sync branch,
-#     unknown stage set, manifest not gitignored) still goes to the
-#     resolver as before, but logs one
-#     `Manifest union-merge: unhandled reason=<…> stages=<…>` line naming
-#     the guard that sent it there.
+#     unknown stage set, manifest not gitignored) fails before resolver
+#     dispatch: the resolver sandbox cannot access .ai/.
 # LC_ALL=C for sort/comm matches Python's str sort in
 # materialize_source_tree() (bytewise over UTF-8 == code-point order),
 # so the merged file satisfies the manifest-sorting contract.
@@ -259,7 +257,7 @@ if [ "${_resolver_allowlist_count}" -gt 0 ] \
   else
     case "${TARGET_BRANCH:-${HEAD_REF:-}}" in
       orchestrator/project-*)
-        echo "Manifest union-merge: skipped on integration-sync branch (fingerprint expansion may widen the resolver working set; Codex resolver keeps custody)."
+        echo "Manifest union-merge: skipped on integration-sync branch (fingerprint expansion may widen the resolver working set)."
         _mu_unhandled_reason="integration_sync"
         ;;
       *)
@@ -295,7 +293,6 @@ if [ "${_resolver_allowlist_count}" -gt 0 ] \
             fi
             ;;
           *)
-            echo "Manifest union-merge: ${MANIFEST_UNION_PATH} conflict is not a two-sided content conflict (index stages: ${_mu_stages:-none}); leaving it to the Codex resolver."
             _mu_unhandled_reason="stage_shape"
             ;;
         esac
@@ -340,7 +337,8 @@ if [ "${_resolver_allowlist_count}" -gt 0 ] \
     fi
   elif [ -n "${_mu_unhandled_reason}" ]; then
     _mu_stages_trimmed="${_mu_stages% }"
-    echo "Manifest union-merge: unhandled reason=${_mu_unhandled_reason} stages=${_mu_stages_trimmed:-none} CONFLICT_MANIFEST_UNION_ENABLED=${CONFLICT_MANIFEST_UNION_ENABLED:-true}; ${MANIFEST_UNION_PATH} stays in the resolver working set (a resolver sandbox that excludes .ai/ cannot edit it)."
+    echo "::error::Manifest union-merge: unhandled reason=${_mu_unhandled_reason} stages=${_mu_stages_trimmed:-none} CONFLICT_MANIFEST_UNION_ENABLED=${CONFLICT_MANIFEST_UNION_ENABLED:-true}; refusing to dispatch resolver for ${MANIFEST_UNION_PATH} because the sandbox excludes .ai/."
+    exit 1
   fi
 fi
 
