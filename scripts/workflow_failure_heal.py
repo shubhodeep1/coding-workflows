@@ -263,6 +263,19 @@ _SIGNATURE_PATTERNS: tuple[re.Pattern[str], ...] = (
 _STEP_HEADER_OPEN_RE = re.compile(r"^##\[group\]Run ")
 _STEP_HEADER_CLOSE_RE = re.compile(r"^##\[endgroup\]")
 _STEP_SCRIPT_LINE_PREFIX = "\x1b[36;1m"
+# The `env:` block of a step header prints every variable's value, and values
+# the runner does not know to be secrets (tokens minted in an earlier step,
+# derived credentials) are not masked. filter_log keeps only the names: an
+# entry keeps `NAME:` and gets `[redacted]` for its value, any other line in
+# the block (a multi-line value, an unparseable shape) is replaced whole, and
+# the block ends only at the header close or the next header key.
+_STEP_ENV_OPEN_RE = re.compile(r"^env:\s*$")
+_STEP_ENV_ENTRY_RE = re.compile(r"^(\s+[A-Za-z_][A-Za-z0-9_.-]*:)(\s*)(.*)$")
+_STEP_HEADER_KEY_RE = re.compile(r"^(?:shell|with|env):(?:\s|$)")
+_STEP_ENV_REDACTED_LINE = "  [redacted]"
+# A header that never closes (truncated log) cannot be bounded, so everything
+# from its open line to the end of the job log is replaced by this line.
+_STEP_ENV_UNTERMINATED_MARKER = "[env block omitted: unterminated step header]"
 # Test & Mark Stable Release runs dispatched by a promote cycle carry the
 # cycle's run id in their run name (`run-name: ... [cycle:<id>]`, which
 # scripts/promote_main_cycle.sh matches on). The id is unique per cycle, so it
@@ -1297,14 +1310,78 @@ def _drop_step_script_lines(text: str) -> str:
 	return "\n".join(kept)
 
 
+def _strip_step_env_values(text: str) -> str:
+	"""Redact the values of a step header's ``env:`` block in raw job-log text.
+
+	Inside a ``##[group]Run`` header, each ``NAME: value`` entry of the
+	``env:`` block keeps its name and gets ``[redacted]`` for its value; any
+	other non-empty line of the block is replaced with ``  [redacted]``
+	(fail closed). The block ends at ``##[endgroup]`` or at the next header
+	key (``shell:`` / ``with:`` / ``env:``). Lines outside the env block and
+	outside step headers are unchanged, so text without a Run header comes
+	back byte-for-byte. A header that is still open when the text ends is
+	dropped from its open line onwards and replaced by one marker line.
+	Timestamps are compared without their prefix and kept in the output.
+	"""
+	kept: list[str] = []
+	header_lines: list[str] = []
+	in_header = False
+	in_env = False
+	for line in text.split("\n"):
+		content = _LOG_TIMESTAMP_RE.sub("", line)
+		stamp = line[: len(line) - len(content)]
+		if not in_header:
+			if _STEP_HEADER_OPEN_RE.match(content):
+				in_header = True
+				in_env = False
+				header_lines = [line]
+			else:
+				kept.append(line)
+			continue
+		if _STEP_HEADER_CLOSE_RE.match(content):
+			kept.extend(header_lines)
+			kept.append(line)
+			header_lines = []
+			in_header = False
+			in_env = False
+			continue
+		if _STEP_HEADER_OPEN_RE.match(content):
+			in_env = False
+			header_lines.append(line)
+			continue
+		if _STEP_ENV_OPEN_RE.match(content):
+			in_env = True
+			header_lines.append(line)
+			continue
+		if in_env and _STEP_HEADER_KEY_RE.match(content):
+			in_env = False
+		if not in_env or not content.strip():
+			header_lines.append(line)
+			continue
+		entry = _STEP_ENV_ENTRY_RE.match(content)
+		if entry and not entry.group(3):
+			header_lines.append(line)
+		elif entry:
+			header_lines.append(f"{stamp}{entry.group(1)} [redacted]")
+		else:
+			header_lines.append(f"{stamp}{_STEP_ENV_REDACTED_LINE}")
+	if in_header:
+		kept.append(_STEP_ENV_UNTERMINATED_MARKER)
+	return "\n".join(kept)
+
+
 def filter_log(text: str, *, max_lines: int = 400, max_bytes: int = 60_000) -> str:
 	"""Keep the high-signal lines plus the tail of a job log, bounded.
 
 	The echoed step script is dropped first (it has to be, before ANSI codes
 	are stripped), so the tail and the high-signal matches cover what the
-	steps printed rather than their source.
+	steps printed rather than their source. Step ``env:`` values are then
+	redacted (an unterminated header is dropped), and credential shapes are
+	masked with ``redact_secrets`` on the whole text before the tail and byte
+	cut, so a cut can never leave a token without its recognisable prefix.
+	The output feeds the diagnosis prompt and the heal issue evidence.
 	"""
-	lines = sanitize_text(_drop_step_script_lines(text)).split("\n")
+	lines = redact_secrets(sanitize_text(_strip_step_env_values(_drop_step_script_lines(text)))).split("\n")
 	kept: list[str] = []
 	seen: set[int] = set()
 	tail_start = max(0, len(lines) - max_lines)
@@ -1518,7 +1595,8 @@ _ERROR_LINE_RE = re.compile(r"^\s*(?:::error(?: [^:]*)?::|##\[error\])\s*(?P<msg
 _GENERIC_ERROR_RE = re.compile(r"^(?:Process completed with exit code [0-9]+\.?|.*\bAborting\.?)$", re.IGNORECASE)
 _SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 	(re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@"), r"\1[redacted]@"),
-	(re.compile(r"([Aa]uthorization:\s*)(?:(?:[Bb]earer|[Bb]asic|[Tt]oken)\s+)?\S+"), r"\1[redacted]"),
+	# HTTP header names are case-insensitive (`curl -v` prints `authorization:`).
+	(re.compile(r"(authorization:\s*)(?:(?:bearer|basic|token)\s+)?\S+", re.IGNORECASE), r"\1[redacted]"),
 	(re.compile(r"([Bb]earer\s+)\S+"), r"\1[redacted]"),
 	(re.compile(r"(github_pat_|gh[pousr]_)[A-Za-z0-9_]+"), r"\1[redacted]"),
 	(re.compile(r"(sk-(?:or|ant)-)[A-Za-z0-9_-]+"), r"\1[redacted]"),
