@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_pr_merge_status_guard.py:tests-hooks-and-orchestrator CI job failures | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The aggregate CI job failed with 9 failing tests related to heredoc parsing and push-directory handling.\n  WHY: The `tests-hooks-and-orchestrator` check exited with a non-zero exit code, preventing the PR from passing CI requirements.\n- .claude/hooks/pr_merge_status_guard.py:145, 445\u2013468 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The heredoc delimiter parser accepts only alphanumeric and underscore characters, so it can parse a valid delimiter such as `EOF-TEXT` as `EOF` and consume the remaining command when there is no exact `EOF` terminator.\n  WHY: A `git push` after that heredoc can be stripped from the parsed command, bypassing the merged-PR push guard; the current `tests-hooks-and-orchestrator` check also reports failures in heredoc parsing tests.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cMake Phase 4 accept a review as covering bait only when its checked-out head is verified to include the bait commit.\u201d\n  expected_change_site: `.github/workflows/test-and-mark-stable.yml`, `require_bait_review_coverage`\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: At line 1822, the helper accepts a run when its `head_sha` equals `PIN_SHA` or `BAIT_SHA` without verifying its checkout log. The review workflow separately obtains the live PR head in `.github/workflows/review_autofix.yml` and checks out that SHA at line 2868, so the run\u2019s trigger SHA does not establish which commit it checked out. The added coverage tests do not exercise a bait-triggered run whose checkout is pre-bait.\n\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_pr_merge_status_guard.py:tests-hooks-and-orchestrator CI job failures | severity=critical | confidence=5\n  PROBLEM: The aggregate CI job failed with 9 failing tests related to heredoc parsing and push-directory handling.\n  WHY: The CI check tests-hooks-and-orchestrator exited with a non-zero exit code due to these test failures, preventing the PR from passing CI requirements.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/pr_merge_status_guard.py: `_HEREDOC_OPERATOR_RE` at line 145 and heredoc handling at lines 445\u2013468 | severity=high | confidence=5\n  PROBLEM: The delimiter parser accepts only alphanumeric and underscore characters. For a valid Bash delimiter such as `EOF-TEXT`, it matches the prefix `EOF`; when no exact `EOF` terminator exists, the parser consumes the remaining command instead of preserving it for inspection.\n  WHY: `cat <<EOF-TEXT\\npayload\\nEOF-TEXT\\ngit push origin feature/x` executes the push in Bash, but the guard strips it from the parsed command. This bypasses the merged-PR push guard. The current `tests-hooks-and-orchestrator` check also reports failures in the heredoc parsing tests, including `test_heredoc_that_hides_an_executed_push_still_blocks`.\n\n- Requirement: \u201cMake Phase 4 accept a review as covering bait only when its checked-out head is verified to include the bait commit.\u201d\n  Expected change site: `.github/workflows/test-and-mark-stable.yml`, `require_bait_review_coverage`\n  Evidence of absence: At line 1822, the helper accepts a run when its `head_sha` equals `PIN_SHA` or `BAIT_SHA` without verifying its checkout log. The review workflow separately obtains the live PR head in `.github/workflows/review_autofix.yml` and checks out that SHA at line 2868, so the run\u2019s trigger SHA does not establish which commit it checked out. The added coverage tests do not exercise a bait-triggered run whose checkout is pre-bait.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "8abca450e9aa59ebcd95b9e2513ca9934e09b82fa7c76f8345fb3106c3ff53a6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6464,
+    "run_id": "37636620243",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37636620243",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007155029_4667260312",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6464,
+    "run_id": "37636620243"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-07T15:50:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
