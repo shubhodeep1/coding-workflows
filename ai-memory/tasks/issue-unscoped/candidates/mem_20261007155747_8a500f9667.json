@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:749, 759 | severity=low | confidence=[3]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The condition `explicit_directory_unresolved or (env_chdir_seen and env_cwd is None)` is redundant because the second disjunct is already implied by the first.\n  WHY: It does not fail at runtime; the redundancy is harmless but could be simplified for clarity.\n- tests/test_pr_merge_status_guard.py:1005 | severity=low | confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The test name `test_appended_git_override_falls_back_without_using_rhs` is misleading because the hook no longer falls back to the session checkout for this case.\n  WHY: It does not fail at runtime; the test is correct, but the name could mislead future readers.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- File: .claude/hooks/pr_merge_status_guard.py\n  Line or code reference: 749, 759\n  Problem: The condition `explicit_directory_unresolved or (env_chdir_seen and env_cwd is None)` is redundant. When `env_chdir_seen` is True, line 684 already sets `explicit_directory_unresolved |= env_cwd is None`, so the second disjunct is always implied by the first.\n  Why it fails at runtime: It does not \u2014 the code is correct. The redundancy is harmless but could be simplified to `explicit_directory_unresolved` for clarity.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- File: tests/test_pr_merge_status_guard.py\n  Line or code reference: 1005 (test_appended_git_override_falls_back_without_using_rhs)\n  Problem: The test was rewritten to verify the push asks without checking the session checkout, but the name still says \"falls_back_without_using_rhs\". The hook no longer falls back to the session checkout for this case.\n  Why it fails at runtime: It does not \u2014 the test is correct. The name is misleading for future readers.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "c4165bf338c73d0c120275e4b306befb16512cc8c6b4a14ca80bb1a2531605be",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6677,
+    "run_id": "37645484375",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37645484375",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007155747_8a500f9667",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6677,
+    "run_id": "37645484375"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-07T15:57:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
