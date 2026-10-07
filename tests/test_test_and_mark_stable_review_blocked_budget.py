@@ -453,7 +453,9 @@ def test_phase0a_installs_pytest_before_running_the_hot_poller_test() -> None:
 	step = _slice_between(_read_workflow(), '      - name: "Phase 0a: Hot orchestrate-poll regression guard"', "      # ── Phase 0:")
 	assert "python3 -m pip install --quiet pytest" in step
 	assert step.index("pip install --quiet pytest") < step.index("python3 tests/test_orchestrate_poll_process.py")
-	assert 'echo "status=pytest_install_failed" >> "$GITHUB_OUTPUT"' in step
+	# The merged step (#6669) reports the pip + apt fallback failure as
+	# pytest_unavailable, the same status Phase 4b uses.
+	assert 'echo "status=pytest_unavailable" >> "$GITHUB_OUTPUT"' in step
 
 
 def test_phase6_registers_once_and_polls_only_the_pinned_run() -> None:
