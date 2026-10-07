@@ -251,3 +251,160 @@ def test_discovery_codex_branch_keeps_the_command_line(tmp_path: Path, monkeypat
 		sleep_fn=lambda _seconds: None,
 	)
 	assert seen[0][:5] == ["bash", str(SCRIPTS / "codex_isolated_exec.sh"), "run", "--mode", "read-only"]
+
+
+# --- Item 3c: workflow heal, check triage, activation verify, unblock judge ---
+
+HEAL_TRIAGE_ROLES = ("WORKFLOW_HEAL", "CHECK_TRIAGE", "ACTIVATION_VERIFY", "UNBLOCK_JUDGE")
+HEAL_INTAKE = SCRIPTS / "workflow_failure_heal_intake.sh"
+ACTIVATION_VERIFY = SCRIPTS / "activation_verify.sh"
+CHECK_TRIAGE = SCRIPTS / "check_failure_triage.sh"
+CLARIFY_ISOLATED = SCRIPTS / "clarify_isolated_run.sh"
+UNBLOCK_JUDGE = SCRIPTS / "unblock_judge.sh"
+
+
+@pytest.mark.parametrize("role", HEAL_TRIAGE_ROLES)
+def test_heal_triage_role_defaults_to_claude(role: str) -> None:
+	result = _resolve(role)
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.strip() == "claude"
+	assert f"AI_ENGINE_SELECTED role={role} engine=claude" in result.stderr
+
+
+@pytest.mark.parametrize("role", HEAL_TRIAGE_ROLES)
+def test_heal_triage_role_variable_rolls_back_to_codex(role: str) -> None:
+	result = _resolve(role, **{f"AI_ENGINE_{role}": "codex"})
+	assert result.stdout.strip() == "codex"
+	assert f"source=var:AI_ENGINE_{role}" in result.stderr
+
+
+@pytest.mark.parametrize("role", HEAL_TRIAGE_ROLES)
+def test_heal_triage_role_codex_label_wins(role: str) -> None:
+	result = _resolve(role, AI_ENGINE_LABELS="ai:engine-claude,ai:codex")
+	assert result.stdout.strip() == "codex"
+	assert "source=label:ai:codex" in result.stderr
+
+
+def test_heal_intake_routes_through_the_selector_from_its_own_directory() -> None:
+	text = HEAL_INTAKE.read_text(encoding="utf-8")
+	assert 'heal_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"' in text
+	assert 'heal_engine_helper="${heal_script_dir}/ai_engine.sh"' in text
+	assert "bash -c 'source \"$0\"; claude_run_selected \"$@\"' \"${heal_engine_helper}\"" in text
+	assert 'WORKFLOW_HEAL "${PROMPT_FILE}" "${DIAG_FILE}" "${PWD}" --codex-stdio -- "${heal_codex_cmd[@]}"' in text
+	assert 'AI_ENGINE_INCLUDE_PATHS="${heal_include_paths}"' in text
+	assert "AI_ENGINE_FALLBACK role=WORKFLOW_HEAL reason=engine_support_missing" in text
+	# The codex command line is unchanged: the isolated launcher and its arguments.
+	assert 'heal_codex_cmd=(bash "${heal_script_dir}/codex_isolated_exec.sh" "${heal_isolated_args[@]}" --' in text
+	for needle in (
+		"--ask-for-approval never",
+		"-c include_apply_patch_tool=false",
+		"-c 'shell_environment_policy.filters.OPENROUTER_API_KEY=\"exclude\"'",
+		'--model "${MODEL_EDITOR:-openai/gpt-6-sol}"',
+		"--sandbox read-only)",
+	):
+		assert needle in text
+	assert "source scripts/ai_engine.sh" not in text
+	assert text.count("env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID") == 2
+
+
+def test_activation_verify_routes_through_the_trusted_selector() -> None:
+	text = ACTIVATION_VERIFY.read_text(encoding="utf-8")
+	assert 'local activation_engine_helper="${SUPPORT_DIR}/scripts/ai_engine.sh"' in text
+	assert 'ACTIVATION_VERIFY "${prompt_file}" "${output_file}" "${TARGET_DIR}" --codex-stdio --' in text
+	assert "AI_ENGINE_FALLBACK role=ACTIVATION_VERIFY reason=engine_support_missing" in text
+	# Project mode reads the tracking issue's labels so ai:codex keeps codex.
+	assert 'repos/${REPOSITORY}/issues/${TRACKING_NUM}/labels?per_page=100' in text
+	assert 'AI_ENGINE_LABELS="${activation_engine_labels:-${AI_ENGINE_LABELS:-}}"' in text
+	assert text.count(
+		'bash "${SUPPORT_DIR}/scripts/codex_isolated_exec.sh" run --mode read-only --workdir "${TARGET_DIR}" --reasoning "${reasoning}" --'
+	) == 2
+	# The model key redaction of GitHub-bound text is unchanged.
+	assert 'api_key = os.environ.get("OPENROUTER_API_KEY", "")' in text
+	assert 'text = text.replace(api_key, "[redacted]")' in text
+
+
+def test_check_triage_uses_the_isolated_helpers_claude_branch() -> None:
+	text = CHECK_TRIAGE.read_text(encoding="utf-8")
+	assert 'triage_engine_helper="${TRUSTED_SUPPORT_DIR}/scripts/ai_engine.sh"' in text
+	assert "ai_engine_for_role CHECK_TRIAGE" in text
+	assert '"${RUNTIME_DIR}/codex_log.txt" claude CHECK_TRIAGE) || triage_rc=$?' in text
+	assert 'if [ "${triage_rc}" -eq 75 ]; then' in text
+	# The unchanged three-argument codex call still runs on codex and after exit 75.
+	assert 'bash "${ISOLATED_HELPER}" "${PROMPT_FILE}" "${DIAG_FILE}" "${RUNTIME_DIR}/codex_log.txt") || triage_rc=$?' in text
+	assert "SOURCE_ROOT}/scripts/ai_engine.sh" not in text
+	assert "log \"warn isolation_unavailable\"" in text
+	# The PR's labels come from the already fetched payload, so ai:codex keeps codex.
+	assert '"${RUNTIME_DIR}/pr_payload.json"' in text
+	assert 'AI_ENGINE_LABELS="${triage_engine_labels:-${AI_ENGINE_LABELS:-}}"' in text
+	helper = CLARIFY_ISOLATED.read_text(encoding="utf-8")
+	assert helper.count("^(CLARIFY|CLARIFY_RESPOND|UNBLOCK_JUDGE|CHECK_TRIAGE)$") == 2
+
+
+def test_unblock_judge_engine_paths_are_unchanged() -> None:
+	text = UNBLOCK_JUDGE.read_text(encoding="utf-8")
+	assert "ai_engine_for_role UNBLOCK_JUDGE" in text
+	assert "claude UNBLOCK_JUDGE" in text
+	assert "codex UNBLOCK_JUDGE" in text
+
+
+def _job_steps(workflow: str, job: str) -> list[dict]:
+	yaml = pytest.importorskip("yaml")
+
+	data = yaml.safe_load((WORKFLOWS / workflow).read_text(encoding="utf-8"))
+	return data["jobs"][job]["steps"]
+
+
+@pytest.mark.parametrize(
+	"workflow, job, action_prefix",
+	[
+		("workflow-failure-heal-intake.yml", "intake", "./.github/actions/"),
+		("check_failure_triage.yml", "triage", "./.codex-workflow-src/.github/actions/"),
+		("issue_pr_status.yml", "activation-verify", "./.codex-workflow-src/.github/actions/"),
+	],
+)
+def test_heal_triage_workflows_gate_claude_steps_on_the_engine(workflow: str, job: str, action_prefix: str) -> None:
+	steps = _job_steps(workflow, job)
+	names = [step.get("name", "") for step in steps]
+	resolve = names.index("Resolve AI engine")
+	for name, action in (("Install Claude Code CLI", "install-claude"), ("Resolve Claude credential", "claude-pool-token")):
+		index = names.index(name)
+		assert index > resolve
+		step = steps[index]
+		assert step["uses"] == action_prefix + action
+		assert step["if"] == "steps.ai_engine.outputs.engine == 'claude'"
+		assert step["continue-on-error"] is True
+
+
+def test_triage_job_permissions_and_staging() -> None:
+	yaml = pytest.importorskip("yaml")
+
+	data = yaml.safe_load((WORKFLOWS / "check_failure_triage.yml").read_text(encoding="utf-8"))
+	job = data["jobs"]["triage"]
+	assert job["permissions"] == {"contents": "read", "id-token": "write"}
+	names = [step.get("name", "") for step in job["steps"]]
+	assert names.index("Resolve Claude credential") < names.index("Stage workflow support files")
+	stage = job["steps"][names.index("Stage workflow support files")]["run"]
+	assert ".claude/hooks/gh_api_write_guard.py" in stage
+	assert "scripts/claude_anthropic_relay.py" in stage
+	assert "! -name claude-pool-token" in stage
+	# The engine preflight sees the PR labels the diagnosis stage reads, taken
+	# from the prerequisite's existing PR payload (no extra API call).
+	derive = data["jobs"]["derive_check_name_key"]
+	assert derive["outputs"]["pr_labels"] == "${{ steps.hash_check_name.outputs.pr_labels }}"
+	resolve = job["steps"][names.index("Resolve AI engine")]
+	assert resolve["env"]["AI_ENGINE_LABELS"] == "${{ needs.derive_check_name_key.outputs.pr_labels || '' }}"
+
+
+def test_activation_verify_job_adds_no_permissions_and_poller_resolves_the_role() -> None:
+	yaml = pytest.importorskip("yaml")
+
+	data = yaml.safe_load((WORKFLOWS / "issue_pr_status.yml").read_text(encoding="utf-8"))
+	assert "permissions" not in data["jobs"]["activation-verify"]
+	# The merged PR's labels reach both the preflight resolve and the verifier.
+	labels_expr = "${{ toJSON(github.event.pull_request.labels.*.name) }}"
+	for step in data["jobs"]["activation-verify"]["steps"]:
+		if step.get("name") in ("Resolve AI engine", "Verify activation"):
+			assert step["env"]["AI_ENGINE_LABELS"] == labels_expr
+	poll = (WORKFLOWS / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	assert "SECURITY_AUDIT ACTIVATION_VERIFY; do" in poll
+	assert poll.count("AI_ENGINE_ACTIVATION_VERIFY: ${{ vars.AI_ENGINE_ACTIVATION_VERIFY || '' }}") == 2

@@ -113,6 +113,7 @@ activation_main()
 	local mode="${1:-}" key item target_issue context_file prompt_file output_file verdict_file
 	local verdict code_gaps operator_gaps model reasoning comment_body fix_body steps_file tg_level item_label
 	local activation_files_json activation_files_response activation_existing_fix activation_fix_lookup_ok
+	local activation_engine_labels=""
 	if [ "${ACTIVATION_VERIFY_ENABLED:-true}" = "false" ]; then
 		activation_log "mode=${mode} outcome=skip reason=disabled"
 		return 0
@@ -183,6 +184,18 @@ activation_main()
 			item="${TRACKING_NUM}"
 			item_label="project #${TRACKING_NUM}"
 			target_issue="${TRACKING_NUM}"
+			# Engine selection: an ai:codex label on the tracking issue keeps the
+			# ACTIVATION_VERIFY role on codex. The poller does not pass the labels
+			# (orchestrate_poll_process.sh is out of scope for this change) and no
+			# other project-mode read returns them, so read them once per completed
+			# project. Fails open to no labels (the configured default engine).
+			activation_engine_labels="${AI_ENGINE_LABELS:-}"
+			if [ -z "${activation_engine_labels}" ]; then
+				activation_engine_labels="$(gh_retry gh api "repos/${REPOSITORY}/issues/${TRACKING_NUM}/labels?per_page=100" --jq '[.[].name]' 2>/dev/null || true)"
+				if ! printf '%s' "${activation_engine_labels}" | jq -e 'type == "array" and all(.[]; type == "string")' >/dev/null 2>&1; then
+					activation_engine_labels=""
+				fi
+			fi
 			# The final PR's file list is the complete project diff; the planned
 			# files from state are only hints when a final PR is not available.
 			# The poller's existing PR metadata read has no filenames to reuse.
@@ -234,10 +247,30 @@ activation_main()
 		# credential-free, network-isolated container (read-only snapshot of the
 		# target's tracked files): no GH_TOKEN, no OpenRouter key and no .git
 		# reach it; model calls go through the host-side broker.
-		(cd "${TARGET_DIR}" && env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET timeout "${ACTIVATION_VERIFY_TIMEOUT_SECS:-1500}" \
-			bash "${SUPPORT_DIR}/scripts/codex_isolated_exec.sh" run --mode read-only --workdir "${TARGET_DIR}" --reasoning "${reasoning}" -- \
-			--ask-for-approval never -c model_verbosity=low exec \
-			--skip-git-repo-check --model "${model}" --sandbox read-only < "${prompt_file}" > "${output_file}" 2>"${RUNTIME_DIR}/activation_codex.err") || true
+		# The ACTIVATION_VERIFY role picks its engine with claude_run_selected
+		# from the trusted support checkout: on codex, or when Claude is
+		# unavailable (exit 75), it runs the unchanged isolated codex command;
+		# the Claude engine runs read-only in the same credential-free container.
+		# Without the engine helper the codex command runs as before.
+		local activation_engine_helper="${SUPPORT_DIR}/scripts/ai_engine.sh"
+		if [ -f "${activation_engine_helper}" ] && [ ! -L "${activation_engine_helper}" ] \
+			&& bash -c 'source "$0" >/dev/null 2>&1 && declare -F claude_run_selected >/dev/null' "${activation_engine_helper}" 2>/dev/null; then
+			(cd "${TARGET_DIR}" && env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET \
+				AI_ENGINE_MODEL_HINT="${model}" AI_ENGINE_EFFORT_HINT="${reasoning}" \
+				AI_ENGINE_LABELS="${activation_engine_labels:-${AI_ENGINE_LABELS:-}}" \
+				timeout "${ACTIVATION_VERIFY_TIMEOUT_SECS:-1500}" \
+				bash -c 'source "$0"; claude_run_selected "$@"' "${activation_engine_helper}" \
+				ACTIVATION_VERIFY "${prompt_file}" "${output_file}" "${TARGET_DIR}" --codex-stdio -- \
+				bash "${SUPPORT_DIR}/scripts/codex_isolated_exec.sh" run --mode read-only --workdir "${TARGET_DIR}" --reasoning "${reasoning}" -- \
+				--ask-for-approval never -c model_verbosity=low exec \
+				--skip-git-repo-check --model "${model}" --sandbox read-only 2>"${RUNTIME_DIR}/activation_codex.err") || true
+		else
+			echo "AI_ENGINE_FALLBACK role=ACTIVATION_VERIFY reason=engine_support_missing" >&2
+			(cd "${TARGET_DIR}" && env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET timeout "${ACTIVATION_VERIFY_TIMEOUT_SECS:-1500}" \
+				bash "${SUPPORT_DIR}/scripts/codex_isolated_exec.sh" run --mode read-only --workdir "${TARGET_DIR}" --reasoning "${reasoning}" -- \
+				--ask-for-approval never -c model_verbosity=low exec \
+				--skip-git-repo-check --model "${model}" --sandbox read-only < "${prompt_file}" > "${output_file}" 2>"${RUNTIME_DIR}/activation_codex.err") || true
+		fi
 	fi
 	if ! activation_normalise_verdict "${output_file}" > "${verdict_file}" 2>/dev/null || [ ! -s "${verdict_file}" ]; then
 		activation_log "mode=${mode} item=${item} outcome=skip reason=invalid_verdict"

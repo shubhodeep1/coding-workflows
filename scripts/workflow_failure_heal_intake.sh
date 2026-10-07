@@ -865,19 +865,52 @@ for heal_include_dir in "${HEAL_SOURCE_DIR}" "${HEAL_BRANCH_TIP_DIR}"; do
 		heal_isolated_args+=(--include "${heal_include_dir}")
 	fi
 done
+# The WORKFLOW_HEAL role picks its engine with claude_run_selected from this
+# script's own (trusted) directory: on codex, or when Claude is unavailable
+# (exit 75), it runs the unchanged isolated codex command below; the Claude
+# engine runs in the same credential-free container with the source worktrees
+# mounted read-only (AI_ENGINE_INCLUDE_PATHS). Without the engine helper the
+# codex command runs as before.
+heal_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+heal_codex_cmd=(bash "${heal_script_dir}/codex_isolated_exec.sh" "${heal_isolated_args[@]}" --
+	--ask-for-approval never
+	-c model_verbosity="${MODEL_VERBOSITY:-low}"
+	-c include_apply_patch_tool=false
+	-c 'shell_environment_policy.ignore_default_excludes=false'
+	-c 'shell_environment_policy.filters.OPENROUTER_API_KEY="exclude"'
+	exec --skip-git-repo-check
+	--model "${MODEL_EDITOR:-openai/gpt-6-sol}"
+	--sandbox read-only)
+heal_engine_helper="${heal_script_dir}/ai_engine.sh"
+heal_include_paths=""
+heal_include_newline=$'\n'
+for heal_include_dir in "${HEAL_SOURCE_DIR}" "${HEAL_BRANCH_TIP_DIR}"; do
+	if [ -d "${heal_include_dir}" ]; then
+		heal_include_paths="${heal_include_paths:+${heal_include_paths}${heal_include_newline}}${heal_include_dir}"
+	fi
+done
+heal_engine_ready=false
+if [ -f "${heal_engine_helper}" ] && [ ! -L "${heal_engine_helper}" ] \
+	&& bash -c 'source "$0" >/dev/null 2>&1 && declare -F claude_run_selected >/dev/null' "${heal_engine_helper}" 2>/dev/null; then
+	heal_engine_ready=true
+fi
 if command -v codex >/dev/null 2>&1; then
-	if env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID \
-		bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex_isolated_exec.sh" "${heal_isolated_args[@]}" -- \
-		--ask-for-approval never \
-		-c model_verbosity="${MODEL_VERBOSITY:-low}" \
-		-c include_apply_patch_tool=false \
-		-c 'shell_environment_policy.ignore_default_excludes=false' \
-		-c 'shell_environment_policy.filters.OPENROUTER_API_KEY="exclude"' \
-		exec --skip-git-repo-check \
-		--model "${MODEL_EDITOR:-openai/gpt-6-sol}" \
-		--sandbox read-only \
-		< "${PROMPT_FILE}" \
-		> "${DIAG_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2); then
+	heal_model_rc=0
+	if [ "${heal_engine_ready}" = "true" ]; then
+		env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID \
+			AI_ENGINE_INCLUDE_PATHS="${heal_include_paths}" \
+			AI_ENGINE_MODEL_HINT="${MODEL_EDITOR:-}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT:-}" \
+			bash -c 'source "$0"; claude_run_selected "$@"' "${heal_engine_helper}" \
+			WORKFLOW_HEAL "${PROMPT_FILE}" "${DIAG_FILE}" "${PWD}" --codex-stdio -- "${heal_codex_cmd[@]}" \
+			2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || heal_model_rc=$?
+	else
+		echo "AI_ENGINE_FALLBACK role=WORKFLOW_HEAL reason=engine_support_missing" >&2
+		env -u GH_TOKEN -u GITHUB_TOKEN -u TG_BOT_SECRET -u TG_ADMIN_CHAT_ID -u TG_CHAT_ID \
+			"${heal_codex_cmd[@]}" \
+			< "${PROMPT_FILE}" \
+			> "${DIAG_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || heal_model_rc=$?
+	fi
+	if [ "${heal_model_rc}" -eq 0 ]; then
 		:
 	else
 		log "warn codex_exec_nonzero"
