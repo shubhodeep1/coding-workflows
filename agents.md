@@ -1859,6 +1859,8 @@ and shipped:
 - `VALIDATION_DISCOVERY_SKIPPED_DISABLED`
 - `VALIDATION_DISCOVERY_SKIPPED_BUDGET`
 - `VALIDATION_DISCOVERY_DRY_RUN`
+- `VALIDATE_TRUSTED_TEMPLATE_OVERRIDE`
+- `VALIDATE_TRUSTED_TEMPLATES`
 - `REVIEWER_RISK_TIER`
 - `REVIEWER_FILTER_SKIP`
 - `REVIEWER_FAILBACK`
@@ -2085,6 +2087,8 @@ LOG_PREFIX.name=VALIDATION_DISCOVERY_SKIPPED_DEDUP
 LOG_PREFIX.name=VALIDATION_DISCOVERY_SKIPPED_DISABLED
 LOG_PREFIX.name=VALIDATION_DISCOVERY_SKIPPED_BUDGET
 LOG_PREFIX.name=VALIDATION_DISCOVERY_DRY_RUN
+LOG_PREFIX.name=VALIDATE_TRUSTED_TEMPLATE_OVERRIDE
+LOG_PREFIX.name=VALIDATE_TRUSTED_TEMPLATES
 LOG_PREFIX.name=REVIEWER_RISK_TIER
 LOG_PREFIX.name=REVIEWER_FILTER_SKIP
 LOG_PREFIX.name=REVIEWER_FAILBACK
@@ -2320,7 +2324,7 @@ depend on it.
 | `REVIEW_APPROVAL_RUBRIC_ENABLED` | `false` | Enable logical review-state output from the review-blocked judge and outbound PR-review mapping through `post_review_comment.sh --review-state`. |
 | `REVIEW_BREAK_GLASS_ENABLED` | `false` | Enable the anchored `@codex break-glass` override scan; when active it downgrades only the outbound `REQUEST_CHANGES` event to comment-only. |
 | `CI_POLL_TEST_SHARDS` | `4` | Parallel local shards for the orchestrate-poll module in each group of CI's `orchestrate-poll` matrix and in the release gates' `validate-scripts` job. `1` is sequential; invalid values warn and fall back to `1`. |
-| `CONFLICT_MANIFEST_UNION_ENABLED` | `true` | Deterministically resolve two-sided `.ai/.workspace_source_manifest.txt` content conflicts (index stages `1 2 3` or add/add `2 3`) before the model resolver; manifest-only conflicts are committed as `[ai-merge-resolve]` and skip the model. Integration-sync branches and delete/modify conflicts remain model-resolved. Before PR #6438 the stage check never matched, so the manifest always reached the resolver, whose sandbox cannot carry `.ai/`. |
+| `CONFLICT_MANIFEST_UNION_ENABLED` | `true` | Resolve two-sided `.ai/.workspace_source_manifest.txt` content conflicts (index stages `1 2 3` or add/add `2 3`) and gitignored one-sided delete/modify conflicts before the model resolver; manifest-only conflicts are committed as `[ai-merge-resolve]`. Other manifest conflicts, including disabled and integration-sync cases, fail preparation with `Manifest union-merge: unhandled reason=...` instead of dispatching a resolver whose sandbox excludes `.ai/`. Before PR #6438 the stage check never matched, so the manifest always reached the resolver, whose sandbox cannot carry `.ai/`. |
 | `REVIEW_RESOLVE_THREADS_ENABLED` | `true` | Resolve PR review threads the editor audited in its `PR comment audit:` section. Keyed on comment id, so two comments at one path cannot resolve each other; `ignored` entries get the editor's reason as a reply before resolving. |
 | `REVIEW_RESOLVE_THREADS_MAX` | `50` | Per-run cap on resolved review threads; anything above it is warned about and left open. |
 | `SWEEP_STALE_QUEUED_MINUTES` | `120` | Age past which a still-`queued` review run stops suppressing a sweep dispatch (wedged-run recovery). `in_progress` runs are never discounted; `0` disables the cutoff. |

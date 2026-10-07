@@ -318,6 +318,7 @@ changelog.d/6512-heal-evidence-routing-neutralize.md
 changelog.d/6521-validate-renderer-prep-always.md
 changelog.d/6524-det-skip-integration-pr-exclusion.md
 changelog.d/6528-review-head-gate-status.md
+changelog.d/6578-validate-trusted-harness-templates.md
 changelog.d/autofix-cap-and-security-exhaustion-judge.md
 changelog.d/claude-branch-push-pr-grace-window.md
 changelog.d/claude-busy-ride-2ezayb-single-issue-security-pass-default-off.md
