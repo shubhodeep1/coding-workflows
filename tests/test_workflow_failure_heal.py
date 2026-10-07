@@ -2378,7 +2378,7 @@ def test_count_identical_failures_rules() -> None:
 	fp = _cap_fp()
 	three = [_failure_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run)) for run in (1, 2, 3)]
 	result = heal.count_identical_failures(three, head_sha=SHA_A, author_login=CAP_AUTHOR)
-	assert result == {"count": 3, "fp": fp, "reason": "editor_empty_noop", "cap_applied": False}
+	assert result == {"count": 3, "fp": fp, "reason": "editor_empty_noop", "cap_applied": False, "non_retryable": False}
 	# Unrelated comments, markers for another head and forged markers are skipped.
 	mixed = [
 		three[0],
@@ -2407,11 +2407,34 @@ def test_count_identical_failures_rules() -> None:
 	assert heal.count_identical_failures(legacy, head_sha=SHA_A, author_login=CAP_AUTHOR)["count"] == 2
 	# The cap marker is detected per head and per trusted author.
 	cap = {"author_login": CAP_AUTHOR, "body": f"**AI review/autofix stopped: identical failure repeated**\n\n<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={fp} reason=editor_empty_noop count=3 -->"}
-	assert heal.count_identical_failures([*three, cap], head_sha=SHA_A, author_login=CAP_AUTHOR) == {"count": 3, "fp": fp, "reason": "editor_empty_noop", "cap_applied": True}
+	assert heal.count_identical_failures([*three, cap], head_sha=SHA_A, author_login=CAP_AUTHOR) == {"count": 3, "fp": fp, "reason": "editor_empty_noop", "cap_applied": True, "non_retryable": False}
 	assert heal.count_identical_failures([*three, cap], head_sha=SHA_B, author_login=CAP_AUTHOR)["cap_applied"] is False
 	assert heal.count_identical_failures([*three, {**cap, "author_login": "attacker"}], head_sha=SHA_A, author_login=CAP_AUTHOR)["cap_applied"] is False
 	# No authenticated author: nothing is trusted.
 	assert heal.count_identical_failures(three, head_sha=SHA_A, author_login="")["count"] == 0
+
+
+def test_count_identical_failures_flags_non_retryable_reasons() -> None:
+	"""PR #6438: one non-retryable resolver failure is enough to stop the head."""
+	assert heal.NON_RETRYABLE_FAILURE_REASONS == {
+		"conflict_resolver_sandbox_path_host_only",
+		"conflict_resolver_sandbox_path_unsupported",
+		"conflict_resolver_sandbox_support_missing",
+	}
+	for reason in sorted(heal.NON_RETRYABLE_FAILURE_REASONS):
+		assert heal._FAILURE_REASON_RE.match(reason)
+		one = [_failure_marker_comment(AUTOFIX_FAILED_COMMENT, run="11", reason=reason)]
+		result = heal.count_identical_failures(one, head_sha=SHA_A, author_login=CAP_AUTHOR)
+		assert result["count"] == 1 and result["reason"] == reason and result["non_retryable"] is True
+		# Only the newest marker decides: a later retryable failure clears the flag.
+		later = [*one, _failure_marker_comment(AUTOFIX_FAILED_COMMENT, run="12", reason="workflow_failure")]
+		assert heal.count_identical_failures(later, head_sha=SHA_A, author_login=CAP_AUTHOR)["non_retryable"] is False
+		# Another head, or an untrusted author, never trips it.
+		assert heal.count_identical_failures(one, head_sha=SHA_B, author_login=CAP_AUTHOR)["non_retryable"] is False
+		forged = [_failure_marker_comment(AUTOFIX_FAILED_COMMENT, run="13", reason=reason, author="attacker")]
+		assert heal.count_identical_failures(forged, head_sha=SHA_A, author_login=CAP_AUTHOR)["non_retryable"] is False
+	retryable = [_failure_marker_comment(AUTOFIX_FAILED_COMMENT, run="14", reason="conflict_resolver_sandbox_prepare_failed")]
+	assert heal.count_identical_failures(retryable, head_sha=SHA_A, author_login=CAP_AUTHOR)["non_retryable"] is False
 
 
 def test_fingerprint_cli_subcommands_print_log_safe_key_values() -> None:
@@ -2440,7 +2463,7 @@ def test_fingerprint_cli_subcommands_print_log_safe_key_values() -> None:
 			["python3", str(LIB_PATH), "autofix-identical-failure-count", "--comments-json", str(tmp / "comments.json"), "--head-sha", SHA_A, "--author-login", CAP_AUTHOR],
 			capture_output=True, text=True, check=True, env=env,
 		)
-		assert result.stdout.splitlines() == ["count=3", f"fp={fp}", "reason=editor_empty_noop", "cap_applied=false"]
+		assert result.stdout.splitlines() == ["count=3", f"fp={fp}", "reason=editor_empty_noop", "cap_applied=false", "non_retryable=false"]
 		(tmp / "comments.json").write_text("{}", encoding="utf-8")
 		bad = subprocess.run(
 			["python3", str(LIB_PATH), "autofix-identical-failure-count", "--comments-json", str(tmp / "comments.json"), "--head-sha", SHA_A, "--author-login", CAP_AUTHOR],
@@ -2892,7 +2915,7 @@ def _cap_job_script() -> str:
 	return next(step for step in job["steps"] if step.get("name") == "Apply identical-failure cap outcome")["run"]
 
 
-def _run_cap_job(tmp: Path, *, pr_body: str, already_applied: str = "false", head: str = SHA_A, fresh_cap_marker: bool = False) -> tuple[subprocess.CompletedProcess[str], dict]:
+def _run_cap_job(tmp: Path, *, pr_body: str, already_applied: str = "false", head: str = SHA_A, fresh_cap_marker: bool = False, extra_comments: list | None = None, extra_env: dict | None = None) -> tuple[subprocess.CompletedProcess[str], dict]:
 	work = tmp / "work"
 	scripts = work / ".codex-workflow-src" / "scripts"
 	scripts.mkdir(parents=True)
@@ -2905,6 +2928,7 @@ def _run_cap_job(tmp: Path, *, pr_body: str, already_applied: str = "false", hea
 	state_file = tmp / "cap_state.json"
 	pr = {"number": 4259, "state": "open", "title": "AI implementation for issue #4255", "body": pr_body, "html_url": f"https://github.com/{SELF_REPO}/pull/4259", "labels": [], "head": {"ref": "ai/issue-4255", "sha": head}}
 	comments = [{"author_login": CAP_AUTHOR, "body": f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={FP_HEX} reason=editor_empty_noop count=3 -->"}] if fresh_cap_marker else []
+	comments += extra_comments or []
 	state_file.write_text(json.dumps({"pr": pr, "comments": comments}), encoding="utf-8")
 	(tmp / "runner_temp").mkdir()
 	summary = tmp / "summary.md"
@@ -2935,6 +2959,7 @@ def _run_cap_job(tmp: Path, *, pr_body: str, already_applied: str = "false", hea
 		"TG_BOT_SECRET": "",
 		"TG_CHAT_ID": "",
 	}
+	env.update(extra_env or {})
 	script = tmp / "cap_job.sh"
 	script.write_text(_cap_job_script(), encoding="utf-8")
 	result = subprocess.run(["bash", str(script)], cwd=work, env=env, capture_output=True, text=True, check=False)
@@ -2959,6 +2984,56 @@ def test_fingerprint_cap_block_labels_comments_and_reports() -> None:
 		assert "identical_failure_cap: 3 identical review/autofix failures" in report["failure_evidence"]
 		assert f"AUTOFIX_FINGERPRINT cap=applied pr=4259 head={SHA_A} fp={FP_HEX} count=3" in result.stdout
 		assert "WORKFLOW_HEAL_AUTOFIX_REPORT dispatched pr=4259 failure=identical_failure_cap streak=1" in result.stdout
+
+
+HOST_ONLY_REASON = "conflict_resolver_sandbox_path_host_only"
+HOST_ONLY_FIRST_ERROR = "Conflict resolver: host-only conflicted path(s) need a manual merge: .claude/hooks/pr_merge_status_guard.py"
+
+
+def _host_only_failure_comment(*, run: str = "501", head: str = SHA_A, author: str = CAP_AUTHOR) -> dict:
+	comment = _failure_marker_comment(AUTOFIX_FAILED_COMMENT, run=run, head=head, author=author, reason=HOST_ONLY_REASON)
+	comment["body"] = comment["body"].replace("\n\n<!--", f"\n\n**First error:** `{HOST_ONLY_FIRST_ERROR}`\n\n<!--", 1)
+	return comment
+
+
+def test_gate_stops_a_head_on_its_first_non_retryable_failure() -> None:
+	"""PR #6438: ~28 sweep dispatches each re-ran the same fail-closed resolver."""
+	fp = _cap_fp(HOST_ONLY_REASON)
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-nonretryable-") as tmp_name:
+		result, outputs, _state = _run_gate(Path(tmp_name), comments=[_host_only_failure_comment()])
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"AUTOFIX_FINGERPRINT_CAP_TRIPPED pr=4259 head={SHA_A} fp={fp} reason={HOST_ONLY_REASON} count=1 max=3 already_applied=false non_retryable=true" in result.stdout
+		assert outputs["should_run"] == "false" and outputs["skip_reason"] == "fingerprint_cap"
+		assert outputs["fingerprint_cap"] == "true" and outputs["fingerprint_cap_non_retryable"] == "true"
+	# A retryable reason still needs the full threshold.
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-retryable-") as tmp_name:
+		_result, outputs, _state = _run_gate(Path(tmp_name), comments=[_failure_marker_comment(AUTOFIX_FAILED_COMMENT, run="502", reason="workflow_failure")])
+		assert outputs["fingerprint_cap"] == "false" and outputs["fingerprint_cap_non_retryable"] == "false"
+	# The kill switch still disables the whole cap.
+	with tempfile.TemporaryDirectory(prefix="heal-gate-cap-nonretryable-off-") as tmp_name:
+		_result, outputs, _state = _run_gate(Path(tmp_name), comments=[_host_only_failure_comment()], extra_env={"REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED": "false"})
+		assert outputs["fingerprint_cap"] == "false" and outputs["should_run"] == "true"
+
+
+def test_fingerprint_cap_block_names_the_non_retryable_first_error() -> None:
+	cap_env = {"FINGERPRINT_CAP_NON_RETRYABLE": "true", "FINGERPRINT_CAP_REASON": HOST_ONLY_REASON, "FINGERPRINT_CAP_COUNT": "1"}
+	with tempfile.TemporaryDirectory(prefix="heal-cap-job-nonretryable-") as tmp_name:
+		forged = _host_only_failure_comment(run="499", author="attacker")
+		forged["body"] = forged["body"].replace(".claude/hooks/pr_merge_status_guard.py", "forged/path.py")
+		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", extra_comments=[_host_only_failure_comment(), forged], extra_env=cap_env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		comment = state["comments_posted"][0]
+		assert comment.startswith("**AI review/autofix stopped: non-retryable failure**")
+		assert f"The last review/autofix run on head `{SHA_A[:12]}` failed with a non-retryable reason (failure reason `{HOST_ONLY_REASON}`" in comment
+		assert f"**First error:** `{HOST_ONLY_FIRST_ERROR}`" in comment
+		assert "forged/path.py" not in comment
+		assert f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={FP_HEX} reason={HOST_ONLY_REASON} count=1 -->" in comment
+		assert state["labels_set"] == [["4255", ["ai:review-blocked"]]]
+	# Without a quotable failure comment the cap comment still posts, with no First error line.
+	with tempfile.TemporaryDirectory(prefix="heal-cap-job-nonretryable-bare-") as tmp_name:
+		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", extra_env=cap_env)
+		assert result.returncode == 0, result.stderr
+		assert "non-retryable failure" in state["comments_posted"][0] and "First error" not in state["comments_posted"][0]
 
 
 def test_fingerprint_cap_block_pr_label_idempotency_and_head_moved() -> None:

@@ -14,9 +14,11 @@ Each guarded Bash git invocation is checked in its own effective repository:
 a preceding resolvable cd, git -C, and git-directory/work-tree overrides are
 applied without executing the Bash text. Pushes with explicit branch refspecs
 are checked against the destination branch and the source commit, including
-when the source is a detached HEAD. Unknown directories warn and fall back to
-the session checkout check; unresolved directory-changing commands also require
-commit confirmation. Unresolvable explicit push targets require confirmation.
+when the source is a detached HEAD. Unresolved env-wrapped commit directories
+require confirmation rather than checking the wrong repository. Other unknown
+directories warn and check the session checkout; unresolved directory-changing
+commits and pushes then require confirmation. Unresolvable explicit push targets
+also require confirmation.
 Repeated targets share a PR snapshot
 per repository and branch, while different source tips are checked separately.
 A `cd` or `exit` with a redirect that might fail (anything but a plain
@@ -206,6 +208,7 @@ class _GitInvocation(NamedTuple):
 	arguments: list[str]
 	warning: str = ""
 	config_override: bool = False
+	env_wrapped: bool = False
 	env_directory_unresolved: bool = False
 	explicit_git_directory: bool = False
 
@@ -615,6 +618,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 		index = 0
 		environment: dict[str, str] = {}
 		config_override = False
+		appended_git_selector = False
 		# A prior unresolved cd/pushd may select another repository.
 		explicit_git_directory = unresolved_directory_change
 		# Bash append assignments are prefixes too; keep the following git visible.
@@ -626,6 +630,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				if name in ("GIT_DIR", "GIT_WORK_TREE"):
 					working_directory = None
 					explicit_git_directory = True
+					appended_git_selector = True
 			elif name in ("GIT_DIR", "GIT_WORK_TREE"):
 				environment[name] = value
 				explicit_git_directory = True
@@ -638,11 +643,12 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			if any("git" in word or "$" in word for word in tokens[env_index + 1:]):
 				invocations.append(_GitInvocation(checkout, {}, "push", [], "unparsed env wrapper", True))
 			continue
+		env_wrapped = index != env_index
 		env_cwd = working_directory
 		explicit_directory_unresolved = False
 		env_directory_unresolved = False
 		env_chdir_seen = False
-		if index != env_index:
+		if env_wrapped:
 			config_override = True
 			for position in range(env_index + 1, index):
 				word = tokens[position]
@@ -650,7 +656,9 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 					env_chdir_seen = True
 					env_word_value = (tokens[position + 1] if word in ("-C", "--chdir") else
 						word.split("=", 1)[1] if word.startswith("--chdir=") else word[2:])
-					env_cwd = _literal_guard_path(env_word_value, env_cwd) if env_cwd else None
+					# An absolute -C path does not depend on the (possibly unknown) cwd.
+					env_cwd = (_literal_guard_path(env_word_value, env_cwd or checkout)
+						if env_cwd or os.path.isabs(env_word_value) else None)
 					explicit_directory_unresolved |= env_cwd is None
 					env_directory_unresolved |= env_cwd is None
 				elif re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", word):
@@ -661,7 +669,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			continue
 		index += 1
 		git_cwd = env_cwd
-		uncertain = git_cwd is None
+		uncertain = git_cwd is None or appended_git_selector
 		while index < len(tokens) and tokens[index].startswith("-"):
 			option = tokens[index]
 			if option.startswith(("-C", "--git-dir", "--work-tree")):
@@ -684,9 +692,13 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				config_override = True
 			if value is not None:
 				if option.startswith("-C"):
-					git_cwd = _literal_guard_path(value, git_cwd) if git_cwd else None
-					uncertain |= git_cwd is None
-					explicit_directory_unresolved |= git_cwd is None
+					# Git applies an absolute -C on its own, even after an unknown cd.
+					git_cwd = (_literal_guard_path(value, git_cwd or checkout)
+						if git_cwd or os.path.isabs(value) else None)
+					# An appended GIT_DIR+=/GIT_WORK_TREE+= value is never applied, so
+					# the directory stays unresolved whatever -C selects.
+					uncertain = git_cwd is None or appended_git_selector
+					explicit_directory_unresolved |= uncertain
 				elif option.startswith("--git-dir"):
 					environment["GIT_DIR"] = value
 				elif option.startswith("--work-tree"):
@@ -713,6 +725,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				if explicit_directory_unresolved and tokens[index] == "commit" else
 				"could not resolve git command directory; checking the session checkout instead") if uncertain else "",
 			config_override,
+			env_wrapped,
 			env_directory_unresolved,
 			explicit_git_directory,
 		))
@@ -1675,9 +1688,19 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		if invocation.subcommand == "push" and invocation.warning == "unparsed env wrapper":
 			unverified_destinations.add("unparsed env-wrapped Git command")
 			continue
-		if invocation.subcommand == "commit" and invocation.warning and (invocation.config_override or invocation.explicit_git_directory):
+		if invocation.subcommand == "commit" and invocation.warning and invocation.env_wrapped:
+			_request_confirmation("could not resolve git commit directory (env-wrapped); the session checkout may not be the commit target")
+			continue
+		if invocation.subcommand == "commit" and invocation.warning and invocation.explicit_git_directory:
 			_request_confirmation("could not resolve git commit directory; PR status cannot be checked for the intended checkout")
 			continue
+		if invocation.subcommand == "commit" and invocation.warning and invocation.config_override:
+			# Author decision Q30 = A: per-command configuration (git -c, --config-env,
+			# GIT_CONFIG_*) may select another checkout, e.g. via core.worktree, so
+			# the commit asks. The session checkout is still checked and can block.
+			unknown_destination_reasons.append(
+				"could not resolve git commit directory; per-command Git configuration may select another checkout"
+			)
 		if invocation.subcommand == "push" and invocation.warning:
 			uncertain_push_reasons.append(invocation.warning)
 		if invocation.subcommand == "push" and invocation.config_override:

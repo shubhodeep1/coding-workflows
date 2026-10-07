@@ -34,6 +34,15 @@
 #             audited too.
 #           A dispatch that fails (for example a consumer wrapper without the
 #           `pr_number` input) holds the merge for a later retry.
+#           Every hold=true also writes `hold_reason=<reason>`: audit_dispatched,
+#           audit_pending or awaiting_followups when matching open follow-ups
+#           are younger than the limit; followups_missing,
+#           followups_unverifiable, followups_stalled, markers_unverifiable,
+#           extensions_unverifiable, label_write_failed, pending_marker_failed,
+#           cycles_exhausted,
+#           exhausted_without_completed_audit or dispatch_failed otherwise.
+#           review_rb_judge.sh passes it on so a judge merge held here alerts
+#           only when a human is needed.
 #   status  Runs the gate's checks with no label, comment, dispatch or
 #           GITHUB_OUTPUT write. May fetch missing Git history to verify
 #           extension ancestry; prints
@@ -44,21 +53,28 @@
 #   report  Run by security-audit.yml after an audit dispatched with
 #           `pr_number`. Posts the `status=clean|findings|failed` marker for
 #           the audited commit. On clean, failed or final-cycle findings it
-#           re-dispatches review, so the next review merges or escalates.
+#           re-dispatches review (also for findings with missing ID metadata),
+#           so the next review merges or escalates.
 #           Findings become follow-up issues that target
 #           the PR branch; their merges push to the PR and start a new review.
 #
 # Marker (last non-empty line of a comment by the pipeline account; any other
 # author is ignored):
 #   <!-- ai:single-issue-security-pass:v1 status=<s> head=<40 hex> cycle=<n> -->
+# The findings comment carries a base64-encoded JSON array of current finding
+# IDs above that unchanged final marker; old comments without IDs still hold
+# the merge but cannot silence a missing-follow-up alert.
 # Extension marker, same trust rule, posted by review_rb_judge.sh:
 #   <!-- ai:single-issue-security-pass-extension:v1 head=<40 hex> -->
 #
 # API budget (CLAUDE.md §15). gate: none for an ineligible PR; for an eligible
 # one, reuses the PR payload and comments the review job already fetched, plus
 # at most 3 GETs for the skip check and one /user identity read (the gate
-# job's /user result is not exported), then one dispatch and one comment (or
-# one label write). report: one PR read to bind the audit inputs, one /user
+# job's /user result is not exported), plus one paginated open ai:security
+# issue listing only for current-head findings in gate mode, then one dispatch
+# and up to SECURITY_PASS_PENDING_MARKER_ATTEMPTS pending-marker POSTs (default 3,
+# valid range 1-10; backoff base defaults to 5s, range 0-30s), or one label
+# write. report: one PR read to bind the audit inputs, one /user
 # identity read, one paginated comments read, one comment and at most one dispatch.
 #
 # Log: SINGLE_ISSUE_SECURITY_PASS mode= pr= head= outcome= reason= cycle=
@@ -85,7 +101,12 @@ single_pass_output()
 		echo "::error::GITHUB_OUTPUT is unset; cannot record the security-pass decision." >&2
 		exit 1
 	fi
-	if ! printf 'hold=%s\n' "$1" >> "${GITHUB_OUTPUT}"; then
+	local decision="hold=$1"
+	# hold_reason=<reason> (see the header) accompanies every hold=true.
+	if [ "$1" = "true" ] && [ -n "${2:-}" ]; then
+		decision+=$'\n'"hold_reason=$2"
+	fi
+	if ! printf '%s\n' "${decision}" >> "${GITHUB_OUTPUT}"; then
 		echo "::error::Could not record the security-pass decision; failing closed." >&2
 		exit 1
 	fi
@@ -113,6 +134,34 @@ single_pass_state()
 single_pass_marker()
 {
 	printf '<!-- ai:single-issue-security-pass:v1 status=%s head=%s cycle=%s -->' "$1" "$2" "$3"
+}
+
+# Confirm the created comment carries the pending marker before claiming the
+# dispatched audit can publish its result. Keep retries local: sourcing a
+# helper from the PR checkout would execute untrusted code in the review job.
+single_pass_post_pending_marker()
+{
+	local body="$1" marker="${1##*$'\n'}" attempts="${SECURITY_PASS_PENDING_MARKER_ATTEMPTS:-3}"
+	local delay="${SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS:-5}" attempt response
+	[[ "${attempts}" =~ ^[1-9][0-9]*$ ]] || attempts=3
+	[[ "${delay}" =~ ^[0-9]+$ ]] || delay=5
+	# Invalid or out-of-range attempts (1-10) and delay (0-30s) use defaults.
+	if [ "${#attempts}" -gt 2 ]; then attempts=3; else attempts=$((10#${attempts})); fi
+	if [ "${#delay}" -gt 2 ]; then delay=5; else delay=$((10#${delay})); fi
+	if [ "${attempts}" -gt 10 ]; then attempts=3; fi
+	if [ "${delay}" -gt 30 ]; then delay=5; fi
+	SINGLE_PASS_PENDING_MARKER_ATTEMPTS_USED="${attempts}"
+	for ((attempt = 1; attempt <= attempts; attempt++)); do
+		if [ "${attempt}" -gt 1 ] && [ "${delay}" -gt 0 ]; then
+			sleep "$((delay * (attempt - 1)))"
+		fi
+		if response="$(gh api "repos/${REPOSITORY}/issues/${PR_NUMBER:-}/comments" -f body="${body}" 2>/dev/null)" \
+			&& jq -e --arg m "${marker}" '(.id | type == "number") and ((.body // "") | type == "string") and (.body | contains($m))' <<< "${response}" >/dev/null 2>&1; then
+			return 0
+		fi
+		single_pass_log "mode=gate pr=${PR_NUMBER} outcome=marker_retry attempt=${attempt}"
+	done
+	return 1
 }
 
 # Prints the pipeline's markers as TSV: created_at, id, status, head, cycle.
@@ -212,16 +261,66 @@ single_pass_review_workflow()
 	fi
 }
 
+# Input: PR head ref and JSON array of current finding IDs. Output: integer
+# count of IDs covered by matching open follow-ups. The PR
+# payload and cached PR comments lack issue state, and LINKED_ISSUES_JSON lists
+# issues the PR closes, not audit follow-ups. Only gate-mode current-head
+# findings call this: one paginated issues listing (one API call per page).
+# An incomplete or malformed listing returns 1 so the gate holds and pages.
+single_pass_open_followups()
+{
+	local followup_ref="$1" expected_ids="$2" followup_file followup_total
+	followup_file="$(mktemp)" || return 1
+	if ! { if type gh_retry >/dev/null 2>&1; then
+		gh_retry gh api --paginate --slurp "repos/${REPOSITORY}/issues?labels=ai:security&state=open&per_page=100"
+	else
+		gh api --paginate --slurp "repos/${REPOSITORY}/issues?labels=ai:security&state=open&per_page=100"
+	fi; } > "${followup_file}" 2>/dev/null \
+		|| [ ! -s "${followup_file}" ] \
+		|| ! jq -e 'type == "array" and all(.[]; type == "array")' "${followup_file}" >/dev/null 2>&1; then
+		rm -f "${followup_file}"
+		return 1
+	fi
+	if ! followup_total="$(jq -r --arg ref "${followup_ref}" --arg author "${SECURITY_PASS_AUTHOR_LOGIN}" --argjson ids "${expected_ids}" '
+		[.[][] | select(type == "object" and .pull_request == null and .user.login == $author and .state == "open")
+		| select((.body | type) == "string")
+		| select(.body | split("\n") | any(.[];
+			gsub("^\\s+|\\s+$"; "") | sub("^-\\s*"; "")
+			| if startswith("Integration branch:") then ltrimstr("Integration branch:")
+			  elif startswith("**Integration branch:**") then ltrimstr("**Integration branch:**")
+			  else "" end
+			| gsub("^\\s+|\\s+$"; "") | sub("^`"; "") | sub("`$"; "")
+			| gsub("^\\s+|\\s+$"; "") | . == $ref))
+		| .body | split("\n")[0]] as $issue_markers
+		| [$ids[] | select(. as $id | any($issue_markers[]; . == ("<!-- ai:security-finding:" + $id + " -->")))] | length
+	' "${followup_file}" 2>/dev/null)"; then
+		rm -f "${followup_file}"
+		return 1
+	fi
+	rm -f "${followup_file}"
+	printf '%s\n' "${followup_total}"
+}
+
+single_pass_marker_age_hours()
+{
+	local created_at="$1" marker_hours
+	marker_hours="$(python3 -c 'import datetime,sys; t=datetime.datetime.fromisoformat(sys.argv[1].replace("Z","+00:00")); assert t.tzinfo is not None; print(int((datetime.datetime.now(datetime.timezone.utc)-t).total_seconds()//3600))' "${created_at}" 2>/dev/null)" || marker_hours=""
+	# A missing or invalid date cannot justify silencing a security hold.
+	printf '%s\n' "${marker_hours:-999999}"
+}
+
 single_pass_gate()
 {
 	local pr_json="${PR_PAYLOAD_FILE:-}" comments="${PR_ISSUE_COMMENTS_FILE:-}" default_branch="${DEFAULT_BRANCH:-}"
 	local max_cycles="${MAX_SECURITY_PASS_CYCLES:-5}" stale_hours="${SECURITY_PASS_PENDING_STALE_HOURS:-6}"
+	local followup_stale_hours="${SECURITY_PASS_FOLLOWUP_STALE_HOURS:-24}" followup_count followup_age followup_ids followup_expected
 	local exhausted_head_limit="${SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS:-2}" exhausted_retry="false" head_attempts=0
 	local pattern="${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}"
 	local state base head_ref head_sha head_repo labels linked skip_json markers latest latest_status latest_head latest_created
 	local cycles_used next_cycle age_hours workflow body extensions effective_max completed_findings
 	[[ "${max_cycles}" =~ ^[1-9][0-9]*$ ]] || max_cycles=5
 	[[ "${stale_hours}" =~ ^[1-9][0-9]*$ ]] || stale_hours=6
+	[[ "${followup_stale_hours}" =~ ^[1-9][0-9]*$ ]] || followup_stale_hours=24
 	[[ "${exhausted_head_limit}" =~ ^[1-9][0-9]*$ ]] || exhausted_head_limit=2
 	if [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-false}" = "false" ]; then
 		single_pass_log "mode=gate pr=${PR_NUMBER:-} outcome=skip reason=disabled"
@@ -270,20 +369,20 @@ single_pass_gate()
 		|| ! jq -e 'type == "array"' "${comments}" >/dev/null 2>&1; then
 		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=markers_unverifiable"
 		single_pass_state unverifiable
-		single_pass_output true
+		single_pass_output true markers_unverifiable
 		return 0
 	fi
 	if ! markers="$(single_pass_markers "${comments}")"; then
 		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=markers_unverifiable"
 		single_pass_state unverifiable
-		single_pass_output true
+		single_pass_output true markers_unverifiable
 		return 0
 	fi
 	cycles_used="$(printf '%s\n' "${markers}" | awk -F'\t' 'NF >= 5 && $5 + 0 > m { m = $5 + 0 } END { print m + 0 }')"
 	if ! extensions="$(single_pass_extensions "${comments}" "${head_sha}" . "${head_ref}")"; then
 		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=extensions_unverifiable"
 		single_pass_state unverifiable
-		single_pass_output true
+		single_pass_output true extensions_unverifiable
 		return 0
 	fi
 	effective_max=$((max_cycles + extensions))
@@ -306,21 +405,56 @@ single_pass_gate()
 		if [ "${age_hours}" -lt "${stale_hours}" ]; then
 			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=audit_pending cycle=${cycles_used}"
 			single_pass_state pending
-			single_pass_output true
+			single_pass_output true audit_pending
 			return 0
 		fi
 	fi
 	if [ "${latest_status}" = "findings" ] && [ "${latest_head}" = "${head_sha}" ] && [ "${cycles_used}" -lt "${effective_max}" ]; then
 		# The follow-up fixes merge into this branch and change the head; the
 		# next cycle audits that head.
+		if [ "${SINGLE_PASS_STATUS_ONLY}" != "true" ]; then
+			# The trusted result comment, not just the branch, binds the open
+			# issues to every finding from this particular head and cycle.
+			followup_ids="$(jq -r --argjson id "$(printf '%s' "${latest}" | cut -f2)" --arg author "${SECURITY_PASS_AUTHOR_LOGIN}" --arg marker "$(single_pass_marker findings "${head_sha}" "$(printf '%s' "${latest}" | cut -f5)")" '
+				[.[] | select(.id == $id and .user.login == $author and (.body | type) == "string")
+				| .body | split("\n") | map(select(test("\\S")))
+				| select(.[-1] == $marker)
+				| map(select(startswith("Finding IDs (base64 JSON): ")))]
+				| if length == 1 and (.[0] | length) == 1 then .[0][0] | ltrimstr("Finding IDs (base64 JSON): ") else empty end
+			' "${comments}" 2>/dev/null)" || followup_ids=""
+			followup_ids="$(printf '%s' "${followup_ids}" | base64 -d 2>/dev/null)" || followup_ids=""
+			if ! followup_expected="$(jq -er '
+				select(type == "array" and length > 0 and (unique | length) == length and all(.[]; type == "string" and length > 0 and test("^[^<>\\r\\n]+$"))) | length
+			' <<< "${followup_ids}" 2>/dev/null)"; then
+				single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=followups_unverifiable cycle=${cycles_used}"
+				single_pass_output true followups_unverifiable
+				return 0
+			fi
+			if ! followup_count="$(single_pass_open_followups "${head_ref}" "${followup_ids}")"; then
+				single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=followups_unverifiable cycle=${cycles_used}"
+				single_pass_output true followups_unverifiable
+				return 0
+			fi
+			if [ "${followup_count}" -ne "${followup_expected}" ]; then
+				single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=followups_missing cycle=${cycles_used}"
+				single_pass_output true followups_missing
+				return 0
+			fi
+			followup_age="$(single_pass_marker_age_hours "${latest_created}")"
+			if [ "${followup_age}" = "999999" ] || [ "${followup_age}" -ge "${followup_stale_hours}" ]; then
+				single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=followups_stalled cycle=${cycles_used} followups=${followup_count} age_hours=${followup_age}"
+				single_pass_output true followups_stalled
+				return 0
+			fi
+		fi
 		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=awaiting_followups cycle=${cycles_used}"
 		single_pass_state findings
-		single_pass_output true
+		single_pass_output true awaiting_followups
 		return 0
 	fi
 	if [ "${cycles_used}" -ge "${effective_max}" ]; then
 		if [ -z "${completed_findings}" ]; then
-			head_attempts="$(printf '%s\n' "${markers}" | awk -F'\t' -v h="${head_sha}" -v cap="${effective_max}" '$3 == "pending" && $4 == h && $5 + 0 > cap { n++ } END { print n + 0 }')"
+			head_attempts="$(printf '%s\n' "${markers}" | awk -F'\t' -v h="${head_sha}" -v cap="${effective_max}" '$3 == "pending" && $4 == h && $5 + 0 > cap && !seen[$5]++ { n++ } END { print n + 0 }')"
 			if [ "${head_attempts}" -lt "${exhausted_head_limit}" ]; then
 				exhausted_retry="true"
 			fi
@@ -340,7 +474,7 @@ single_pass_gate()
 				if ! gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" -f 'labels[]=ai:security-pass-failed' >/dev/null 2>&1; then
 					echo "::error::Could not label PR #${PR_NUMBER} ai:security-pass-failed; failing closed so workflow recovery can retry."
 					single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=failed reason=label_write_failed cycle=${cycles_used}"
-					single_pass_output true
+					single_pass_output true label_write_failed
 					return 1
 				fi
 				if [ -n "${completed_findings}" ]; then
@@ -357,11 +491,11 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 			fi
 			if [ -n "${completed_findings}" ]; then
 				single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=cycles_exhausted cycle=${cycles_used}"
-				single_pass_output true
+				single_pass_output true cycles_exhausted
 				single_pass_exhausted_output
 			else
 				single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=exhausted_without_completed_audit cycle=${cycles_used} head_attempts=${head_attempts}"
-				single_pass_output true
+				single_pass_output true exhausted_without_completed_audit
 			fi
 			return 0
 		fi
@@ -379,7 +513,7 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=dispatch_failed workflow=${workflow} cycle=${next_cycle}"
 		fi
 		echo "::warning::Could not dispatch ${workflow} for PR #${PR_NUMBER}; holding the merge until an audit can run."
-		single_pass_output true
+		single_pass_output true dispatch_failed
 		return 0
 	fi
 	if [ "${exhausted_retry}" = "true" ]; then
@@ -395,16 +529,20 @@ Auto-merge waits for the security audit of \`${head_sha}\` (cycle ${next_cycle} 
 
 $(single_pass_marker pending "${head_sha}" "${next_cycle}")"
 	fi
-	gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${body}" >/dev/null 2>&1 \
-		|| echo "::warning::Could not post the pending security-pass marker on PR #${PR_NUMBER}."
+	if ! single_pass_post_pending_marker "${body}"; then
+		echo "::error::Could not post the pending security-pass marker on PR #${PR_NUMBER} after ${SINGLE_PASS_PENDING_MARKER_ATTEMPTS_USED} attempt(s); the dispatched audit cannot publish its result. Holding the merge and failing closed so workflow recovery retries."
+		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=pending_marker_failed cycle=${next_cycle} workflow=${workflow}"
+		single_pass_output true pending_marker_failed
+		return 1
+	fi
 	single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=dispatched cycle=${next_cycle} workflow=${workflow}$([ "${exhausted_retry}" = "true" ] && printf ' reason=exhausted_retry')"
-	single_pass_output true
+	single_pass_output true audit_dispatched
 }
 
 single_pass_report()
 {
 	local pr_number="${SECURITY_PASS_PR_NUMBER:-}" head_sha="${SECURITY_PASS_HEAD_SHA:-}" outcome="${SECURITY_PASS_AUDIT_OUTCOME:-}"
-	local findings="${SECURITY_PASS_FINDINGS:-}" default_branch="${DEFAULT_BRANCH:-}" comments_file status cycle body review_workflow pr_head
+	local findings="${SECURITY_PASS_FINDINGS:-}" default_branch="${DEFAULT_BRANCH:-}" comments_file status cycle body review_workflow pr_head report_ids report_ids_invalid="false"
 	local extensions=0
 	local max_cycles="${MAX_SECURITY_PASS_CYCLES:-5}"
 	[[ "${max_cycles}" =~ ^[1-9][0-9]*$ ]] || max_cycles=5
@@ -483,7 +621,14 @@ single_pass_report()
 The audit of \`${head_sha}\` found nothing to fix. The review re-runs and merges this head." ;;
 		findings) body="## Single-issue security pass: ${findings} finding(s)
 
-The audit of \`${head_sha}\` filed follow-up issues against this branch. Their merges start a new review, and the next cycle audits the new head." ;;
+The audit of \`${head_sha}\` filed follow-up issues against this branch. Their merges start a new review, and the next cycle audits the new head."
+			report_ids="${SECURITY_PASS_FINDING_IDS_B64:-}"
+			if [ -n "${report_ids}" ] && [ "$(printf '%s' "${report_ids}" | base64 -d 2>/dev/null | jq -er --argjson count "${findings}" 'select(type == "array" and length == $count and (unique | length) == length and all(.[]; type == "string" and length > 0 and test("^[^<>\\r\\n]+$"))) | length' 2>/dev/null)" = "${findings}" ]; then
+				body+=$'\n\n'"Finding IDs (base64 JSON): ${report_ids}"
+			else
+				report_ids_invalid="true"
+				echo "::warning::Audit finding IDs are missing or invalid; re-dispatching review so the gate can alert instead of silencing these findings."
+			fi ;;
 		*) body="## Single-issue security pass: audit failed
 
 The audit of \`${head_sha}\` did not finish. The review re-runs and starts the next cycle." ;;
@@ -494,7 +639,7 @@ The audit of \`${head_sha}\` did not finish. The review re-runs and starts the n
 		single_pass_log "mode=report pr=${pr_number} head=${head_sha} outcome=skip reason=comment_write_failed cycle=${cycle}"
 		return 0
 	fi
-	if { [ "${status}" != "findings" ] || [ "${cycle}" -ge "$((max_cycles + extensions))" ]; } && [ -n "${default_branch}" ]; then
+	if { [ "${status}" != "findings" ] || [ "${report_ids_invalid}" = "true" ] || [ "${cycle}" -ge "$((max_cycles + extensions))" ]; } && [ -n "${default_branch}" ]; then
 		review_workflow="$(single_pass_review_workflow)"
 		gh workflow run "${review_workflow}" -R "${REPOSITORY}" --ref "${default_branch}" -f pr_number="${pr_number}" >/dev/null 2>&1 \
 			|| echo "::warning::Could not re-dispatch ${review_workflow} for PR #${pr_number}; the next review event picks the result up."

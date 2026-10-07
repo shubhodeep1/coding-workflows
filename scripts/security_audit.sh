@@ -528,6 +528,15 @@ if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ]; then
 		# shellcheck disable=SC1091
 		source "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/gh_helpers.sh"
 	fi
+	if [ -f "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/tg_helpers.sh" ]; then
+		# tg_helpers.sh sources gh_helpers.sh relative to cwd. Never let the
+		# audited checkout supply executable support to the trusted runner.
+		if pushd "${SECURITY_AUDIT_SUPPORT_DIR}" >/dev/null; then
+			# shellcheck disable=SC1091
+			source scripts/tg_helpers.sh || true
+			popd >/dev/null
+		fi
+	fi
 
 	ensure_label_exists "ai:security-audit" "${GITHUB_REPOSITORY}"
 	ensure_label_exists "ai:security" "${GITHUB_REPOSITORY}"
@@ -537,6 +546,7 @@ TRACKER_TITLE="AI Security Audit Tracker"
 TRACKER_MARKER="<!-- ai:security-audit-tracker:v1 -->"
 FOLLOWUP_MARKER_PREFIX="<!-- ai:security-finding:"
 LAST_SHA_MARKER_PREFIX="<!-- ai:security-audit-last-sha:"
+PARTIAL_COVERAGE_MARKER="<!-- ai:security-audit-partial-coverage:v1 -->"
 # Past this many changed files an incremental diff stops being cheaper than a
 # full audit, so the scope resolver falls back to the full default-branch scope.
 SECURITY_AUDIT_INCREMENTAL_MAX_FILES="200"
@@ -602,6 +612,7 @@ if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 fi
 
 LAST_AUDITED_SHA=""
+TRACKER_PARTIAL_COVERAGE="false"
 TRACKER_NUMBER=""
 TRACKER_STATE=""
 
@@ -625,7 +636,7 @@ gh_retry gh issue list \
 	--limit 50 \
 		--json number,title,body,state,url > "${TRACKER_CANDIDATES_JSON}"
 
-python3 - "${TRACKER_CANDIDATES_JSON}" "${TRACKER_MARKER}" "${LAST_SHA_MARKER_PREFIX}" > "${TRACKER_SELECTION_ENV}" <<'PY'
+python3 - "${TRACKER_CANDIDATES_JSON}" "${TRACKER_MARKER}" "${LAST_SHA_MARKER_PREFIX}" "${PARTIAL_COVERAGE_MARKER}" > "${TRACKER_SELECTION_ENV}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -637,6 +648,7 @@ from pathlib import Path
 candidates_path = Path(sys.argv[1])
 marker = sys.argv[2]
 last_sha_marker_prefix = sys.argv[3]
+partial_coverage_marker = sys.argv[4]
 
 try:
 	candidates = json.loads(candidates_path.read_text(encoding="utf-8"))
@@ -657,6 +669,7 @@ for candidate in candidates:
 number = ""
 state = ""
 last_audited_sha = ""
+partial_coverage = False
 if isinstance(selected, dict):
 	number = str(selected.get("number") or "").strip()
 	state = str(selected.get("state") or "").strip()
@@ -668,10 +681,12 @@ if isinstance(selected, dict):
 	)
 	if last_sha_match is not None:
 		last_audited_sha = last_sha_match.group(1).strip().lower()
+	partial_coverage = partial_coverage_marker in str(selected.get("body") or "")
 
 print(f"TRACKER_NUMBER={shlex.quote(number)}")
 print(f"TRACKER_STATE={shlex.quote(state)}")
 print(f"LAST_AUDITED_SHA={shlex.quote(last_audited_sha)}")
+print(f"TRACKER_PARTIAL_COVERAGE={'true' if partial_coverage else 'false'}")
 PY
 
 # shellcheck disable=SC1090
@@ -763,6 +778,8 @@ if [ -n "${SECURITY_AUDIT_DIFF_BASE}" ]; then
 	fi
 elif [ -z "${HEAD_SHA}" ]; then
 	AUDIT_SCOPE_REASON="checkout is not a git repository; scope gates fail open to a full audit"
+elif [ "${TRACKER_PARTIAL_COVERAGE}" = "true" ]; then
+	AUDIT_SCOPE_REASON="previous default-branch full scan skipped over-cap text; repeating the full audit"
 elif [ -n "${LAST_AUDITED_SHA}" ]; then
 	if [ "${LAST_AUDITED_SHA}" = "${HEAD_SHA}" ]; then
 		if security_audit_flag_enabled "${SECURITY_AUDIT_SKIP_IF_UNCHANGED}"; then
@@ -1280,6 +1297,9 @@ scoped = manifest["scoped"]
 unscoped = manifest["unscoped_oversized_count"]
 if manifest["schema_version"] != "oversized_readonly_export.v1" or not isinstance(scoped, list) or not isinstance(unscoped, int) or unscoped < 0:
 	raise ValueError("invalid oversized manifest")
+text_capped = manifest.get("unscoped_text_capped_count", unscoped)
+if type(text_capped) is not int or not 0 <= text_capped <= unscoped:
+	raise ValueError("invalid oversized text coverage count")
 if manifest.get("scope_mode", "explicit") not in ("explicit", "all"):
 	raise ValueError("invalid oversized manifest scope mode")
 lines = []
@@ -1297,15 +1317,35 @@ if scoped:
 if unscoped:
 	lines.append(f"Coverage note: {unscoped} tracked files over 2 MiB were not inspected (outside the explicit scope, binary, or over the export caps).")
 Path(sys.argv[3]).write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-print(len(scoped), unscoped)
+print(len(scoped), unscoped, text_capped)
 PY
-)" || ! [[ "${OVERSIZED_COUNTS}" =~ ^[0-9]+\ [0-9]+$ ]]; then
+)" || ! [[ "${OVERSIZED_COUNTS}" =~ ^[0-9]+\ [0-9]+\ [0-9]+$ ]]; then
 	security_audit_emit_path_diagnostic "${OVERSIZED_ERROR_FILE}"
 	security_audit_emit_failure "oversized-scope" "${REPO_ROOT}" "oversized manifest could not be processed"
 	exit 1
 fi
-read -r OVERSIZED_SCOPED_COUNT OVERSIZED_UNSCOPED_COUNT <<< "${OVERSIZED_COUNTS}"
-echo "security-audit: oversized scoped=${OVERSIZED_SCOPED_COUNT} unscoped=${OVERSIZED_UNSCOPED_COUNT}"
+read -r OVERSIZED_SCOPED_COUNT OVERSIZED_UNSCOPED_COUNT OVERSIZED_TEXT_CAPPED_COUNT <<< "${OVERSIZED_COUNTS}"
+echo "security-audit: oversized scoped=${OVERSIZED_SCOPED_COUNT} unscoped=${OVERSIZED_UNSCOPED_COUNT} text_capped=${OVERSIZED_TEXT_CAPPED_COUNT}"
+
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] \
+		&& [ -z "${SECURITY_AUDIT_TARGET_REF}" ] \
+		&& [ "${OVERSIZED_TEXT_CAPPED_COUNT}" -gt 0 ]; then
+	# Persist incomplete coverage before invoking the model or publishing
+	# findings, so any later failure still forces the next default-branch run
+	# back through the full repository.
+	{
+		cat "${TRACKER_BODY_FILE}"
+		echo
+		if [ -n "${LAST_AUDITED_SHA}" ]; then
+			echo "Last audited commit (managed automatically; do not edit):"
+			echo "${LAST_SHA_MARKER_PREFIX}${LAST_AUDITED_SHA} -->"
+		fi
+		echo "${PARTIAL_COVERAGE_MARKER}"
+	} > "${TRACKER_BODY_WITH_SHA_FILE}"
+	gh_retry gh issue edit "${TRACKER_NUMBER}" \
+		--repo "${GITHUB_REPOSITORY}" \
+		--body-file "${TRACKER_BODY_WITH_SHA_FILE}"
+fi
 
 SECURITY_AUDIT_RENDER_HELPER="${SECURITY_AUDIT_SUPPORT_DIR}/scripts/render_prompt.sh"
 SECURITY_AUDIT_PROMPT_PATH="${SECURITY_AUDIT_SUPPORT_DIR}/prompts/mode-security-audit.txt"
@@ -1776,6 +1816,7 @@ payload["coverage"] = {
 	"scoped_oversized_chunked": [item["path"] for item in oversized_manifest["scoped"]],
 	"unscoped_oversized_skipped": [item["path"] for item in oversized_manifest["unscoped_oversized"]],
 	"unscoped_oversized_skipped_count": oversized_manifest["unscoped_oversized_count"],
+	"unscoped_text_capped_count": oversized_manifest.get("unscoped_text_capped_count", oversized_manifest["unscoped_oversized_count"]),
 }
 
 temporary_path: Path | None = None
@@ -1846,6 +1887,7 @@ python3 - \
 	"${OVERSIZED_EXPORT_DIR}/manifest.json" <<'PY'
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import re
@@ -1940,12 +1982,27 @@ elif audit_scope_mode == "incremental" and last_audited_sha:
 else:
 	scope_line = "- Audit scope: full default-branch checkout"
 
+text_capped_count = oversized_manifest.get("unscoped_text_capped_count", oversized_manifest["unscoped_oversized_count"])
+text_capped_files = oversized_manifest.get("unscoped_text_capped", [])
+partial_coverage_line = ""
+if text_capped_count:
+	partial_coverage_line = f"- Coverage: partial — {text_capped_count} tracked text files over the export caps were not inspected"
+	if text_capped_files:
+		partial_coverage_line += ": " + ", ".join(
+			f"`{item['path']}` ({item['size']} bytes, {item['reason']})" for item in text_capped_files
+		)
+	if text_capped_count > len(text_capped_files):
+		partial_coverage_line += f" (+{text_capped_count - len(text_capped_files)} more)"
+	if not target_ref:
+		partial_coverage_line += "; the last-audited-commit marker was not moved, so the next run audits the full repository"
+
 comment_lines = [
 	f"## {now_utc.date().isoformat()} Security audit",
 	"",
 	scope_line,
 	f"- Audited commit: `{head_sha or 'n/a'}`",
 	*([f"- Oversized scoped files read in chunks: {len(oversized_manifest['scoped'])}"] if oversized_manifest["scoped"] else []),
+	*([partial_coverage_line] if partial_coverage_line else []),
 	*([f"- Coverage note: {oversized_manifest['unscoped_oversized_count']} tracked files over 2 MiB were not inspected (outside the explicit scope, binary, or over the export caps): " + ", ".join(f"`{item['path']}`" for item in oversized_manifest["unscoped_oversized"]) + (f" (+{oversized_manifest['unscoped_oversized_count'] - len(oversized_manifest['unscoped_oversized'])} more)" if oversized_manifest['unscoped_oversized_count'] > len(oversized_manifest['unscoped_oversized']) else "")] if oversized_manifest["unscoped_oversized_count"] else []),
 	f"- Confidence gate: `>= {confidence_gate}`",
 	f"- Exclusion catalog: `{exclusions_path}`",
@@ -2015,10 +2072,14 @@ for idx, finding in enumerate(findings):
 	index_lines.append(f"{body_path}\t{title}\t{file_key}\t0\n")
 
 followup_index_path.write_text("".join(index_lines), encoding="utf-8")
+finding_ids_b64 = base64.b64encode(
+	json.dumps([finding["finding_id"] for finding in findings], ensure_ascii=True).encode("ascii")
+).decode("ascii")
 followup_summary_env_path.write_text(
 	"\n".join(
 		[
 			f"SURVIVING_FINDINGS_COUNT={shlex.quote(str(len(findings)))}",
+			f"SURVIVING_FINDING_IDS_B64={shlex.quote(finding_ids_b64)}",
 			f"FOLLOWUP_CREATE_COUNT={shlex.quote(str(len(planned_followups)))}",
 		]
 	)
@@ -2071,6 +2132,12 @@ if [ -n "${SECURITY_AUDIT_TARGET_REF}" ]; then
 	# A branch audit covers a range that is not on the default branch; the
 	# marker records default-branch progress only, so leave it untouched.
 	echo "security-audit: target_ref=${SECURITY_AUDIT_TARGET_REF}; leaving the tracker's last-audited-commit marker unchanged."
+elif [ "${OVERSIZED_TEXT_CAPPED_COUNT:-0}" -gt 0 ]; then
+	echo "security-audit: coverage=partial skipped_text=${OVERSIZED_TEXT_CAPPED_COUNT}; leaving the last-audited-commit marker unchanged."
+	echo "::warning::Security audit coverage is partial: ${OVERSIZED_TEXT_CAPPED_COUNT} tracked text files over export caps were not inspected; last-audited-commit marker unchanged."
+	if declare -F tg_send_msg >/dev/null; then
+		tg_send_msg "${GITHUB_REPOSITORY}: security audit coverage partial — ${OVERSIZED_TEXT_CAPPED_COUNT} text files over export caps not inspected; marker unchanged (tracker #${TRACKER_NUMBER})" WARNING >/dev/null 2>&1 || true
+	fi
 elif [ -n "${HEAD_SHA}" ]; then
 	# Persist the audited HEAD SHA on the tracker body so the next run can
 	# skip when unchanged or diff-scope against it. One extra `gh issue edit`
@@ -2092,4 +2159,4 @@ fi
 # shellcheck disable=SC1090
 source "${FOLLOWUP_SUMMARY_ENV}"
 
-echo "security-audit: tracker=#${TRACKER_NUMBER} findings=${SURVIVING_FINDINGS_COUNT} followups_created=${FOLLOWUP_CREATE_COUNT}"
+echo "security-audit: tracker=#${TRACKER_NUMBER} findings=${SURVIVING_FINDINGS_COUNT} followups_created=${FOLLOWUP_CREATE_COUNT} finding_ids_b64=${SURVIVING_FINDING_IDS_B64}"

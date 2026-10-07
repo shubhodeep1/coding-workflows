@@ -9158,12 +9158,14 @@ invoke_judge_for_integration_conflict() {
     echo "Conflicted files:"
     printf '%s\n' "${judge_conflicts}"
     echo
-    echo 'The resolver may edit only the conflicted files listed above. Changes'
-    echo 'to other paths or invented lines in protected paths will be rejected.'
-    echo 'Protected paths include .github/,'
-    echo '.claude/, scripts/, prompts/, workflow-templates/, validation/,'
-    echo 'ai-memory/, db/contracts/, agent-instruction files, and build,'
-    echo 'dependency, config and script files.'
+    echo 'Edit only the conflicted files listed above. Every conflicted file'
+    echo 'may contain only lines taken from either merge side. Keep each side'
+    echo 'in order, and keep every line both merge sides contain at least as'
+    echo 'many times as the side with fewer copies. Do not duplicate lines'
+    echo 'inherited unchanged from the common base. Changes to other paths'
+    echo 'or lines from neither side reject the resolution without a push.'
+    echo 'Do not use a file mode from neither side or delete a file present'
+    echo 'on both sides; a one-sided delete/modify conflict may resolve to deletion.'
     echo
     echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_JUDGE}"
     echo
@@ -9348,6 +9350,8 @@ for git_var_name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_D
 
 # Keep these four pattern groups in sync with PROTECTED_SKIP_SUPPRESSED in
 # review_autofix.yml; tests/test_integration_judge_scope_guard.py pins parity.
+# Security finding integration-judge-unverified-source-resolution: provenance
+# applies to every conflicted path, not just paths matching these patterns.
 PROTECTED_BASENAMES = (
     "agents.md|claude.md|unattended_system_instructions.md"
 ).split("|")
@@ -9422,21 +9426,27 @@ try:
     work = 0
     for path in conflicts:
         current_path = path
-        if not is_protected_conflict_path(path):
-            continue
         sides = stages[path]
         indexed = git("ls-files", "-s", "-z", "--", ":(literal)" + os.fsdecode(path))
         if not indexed:
-            raise ValueError("deleted protected conflict")
+            if b"2" in sides and b"3" in sides:
+                raise ValueError("deleted protected conflict")
+            continue
         entries = [item for item in indexed.split(b"\0") if item]
         if len(entries) != 1:
             raise ValueError("invalid staged entry")
         header, indexed_path = entries[0].split(b"\t", 1)
         mode, blob, stage = header.split(b" ")
-        if indexed_path != path or stage != b"0" or mode not in (b"100644", b"100755"):
+        if indexed_path != path or stage != b"0" or mode not in (b"100644", b"100755", b"120000", b"160000"):
             raise ValueError("invalid protected mode")
         if mode not in {side[0] for side in sides.values() if side}:
             raise ValueError("changed protected mode")
+        if mode in (b"120000", b"160000"):
+            # A symlink target or gitlink must be selected intact from a side;
+            # a gitlink points to a commit, not a blob of text to interleave.
+            if (mode, blob) not in (sides.get(b"2"), sides.get(b"3")):
+                raise ValueError("invented conflict target")
+            continue
         allowed = set()
         side_lines = []
         side_counts = []
@@ -9448,14 +9458,16 @@ try:
         resolved_lines = git("cat-file", "blob", blob.decode()).splitlines(keepends=True)
         if not set(resolved_lines) <= allowed:
             raise ValueError("invented protected line")
+        resolved_counts = Counter(resolved_lines)
         if len(side_counts) == 2:
-            resolved_counts = Counter(resolved_lines)
+            # integration-judge-can-delete-shared-security-controls: no deletion override;
+            # fail closed even when both sides added the same line independently.
             for shared_line, shared_count in (side_counts[0] & side_counts[1]).items():
                 if resolved_counts[shared_line] < shared_count:
                     raise ValueError("removed shared protected line")
         base_counts = (Counter(git("cat-file", "blob", sides[b"1"][1].decode()).splitlines(keepends=True))
                        if b"1" in sides else Counter())
-        for resolved_line, resolved_count in Counter(resolved_lines).items():
+        for resolved_line, resolved_count in resolved_counts.items():
             base_count = base_counts[resolved_line]
             if resolved_count > base_count + sum(max(0, counts[resolved_line] - base_count) for counts in side_counts):
                 raise ValueError("duplicated unchanged protected line")
@@ -9497,6 +9509,7 @@ try:
     if not re.fullmatch(rb"[0-9a-f]{40,64}", validated_tree):
         raise ValueError("invalid staged tree")
 except (OSError, ValueError, subprocess.CalledProcessError, UnicodeError):
+    # Keep this reason token for consumers of existing INTEGRATION_JUDGE_SCOPE logs.
     log("rejected", "protected_path_provenance", [current_path] if current_path else [])
     sys.exit(1)
 log("accepted", "none", conflicts)
@@ -22630,7 +22643,9 @@ ${FOLLOWUP_BLOCK_REASON}"
       }
 
       _rb_fix_scope_is_protected() {
-        # Refs #6390: shared protected-path and ALLOW_WORKFLOW_EDITS opt-out set.
+        # Refs #6390: shared protected-path set. Refs #6478: rb_fix_scope_check
+        # rejects these paths unconditionally; ALLOW_WORKFLOW_EDITS only selects
+        # the reported reason (workflow_edits_disabled vs protected_path_forbidden).
         # .github/actions/* contains workflow-executed composite actions.
         # .claude/* contains Claude Code hooks and settings.
         # workflow-templates/* syncs workflows and .claude hooks to consumers.
@@ -22670,8 +22685,19 @@ ${FOLLOWUP_BLOCK_REASON}"
               RB_FIX_SCOPE_REJECTED_PATHS+=("${path}")
               ;;
             *)
-              if [ "${ALLOW_WORKFLOW_EDITS:-true}" != "true" ] && _rb_fix_scope_is_protected "${path}"; then
-                [ "${RB_FIX_SCOPE_REASON}" = forbidden_artifact ] || RB_FIX_SCOPE_REASON=workflow_edits_disabled
+              # Refs #6478: protected automation paths are never writable by this
+              # judge (untrusted PR comments drive it; filename-only scope checks
+              # cannot vouch for content). Protected repairs go through
+              # merge_with_followup / close_and_reissue and the normal
+              # implement -> review pipeline.
+              if _rb_fix_scope_is_protected "${path}"; then
+                if [ "${RB_FIX_SCOPE_REASON}" != forbidden_artifact ]; then
+                  if [ "${ALLOW_WORKFLOW_EDITS:-true}" != "true" ]; then
+                    RB_FIX_SCOPE_REASON=workflow_edits_disabled
+                  else
+                    RB_FIX_SCOPE_REASON=protected_path_forbidden
+                  fi
+                fi
                 RB_FIX_SCOPE_REJECTED_PATHS+=("${path}")
               fi
               ;;
@@ -22705,6 +22731,7 @@ ${FOLLOWUP_BLOCK_REASON}"
 
         for path in "${staged_paths[@]}"; do
           if [ -z "${pr_set["${path}"]:-}" ]; then
+            # Defence in depth: protected paths are already rejected above.
             if _rb_fix_scope_is_protected "${path}"; then
               RB_FIX_SCOPE_REASON=protected_not_in_pr
             else
@@ -22756,6 +22783,7 @@ ${FOLLOWUP_BLOCK_REASON}"
         echo "=== ORCHESTRATOR CONTEXT ==="
         echo "Review-blocked retry: $((RETRY_COUNT + 1)) of ${MAX_REVIEW_BLOCKED_RETRIES}"
         echo "Retries exhausted: ${IS_FINAL}"
+        echo "Protected-path fixes: unavailable (the orchestrator rejects any fix that stages a path under .github/, scripts/, prompts/, .claude/ or workflow-templates/)"
         if [ "${IS_FINAL}" = "true" ]; then
           echo
           echo "IMPORTANT: This is the FINAL attempt. You MUST choose 'merge',"
@@ -22780,6 +22808,10 @@ ${FOLLOWUP_BLOCK_REASON}"
           echo "  that blocked the review. Do not create new files unless absolutely required."
           echo "  After applying fixes, emit the JSON with action=\"fix\" and fix_description"
           echo "  describing what you changed."
+          echo "- Do not modify files under .github/, scripts/, prompts/, .claude/ or"
+          echo "  workflow-templates/: the orchestrator rejects any fix that stages them. If a"
+          echo "  blocking issue needs such a change, choose action=\"merge_with_followup\""
+          echo "  (when the PR is shippable) or action=\"close_and_reissue\" instead."
           echo "- If you choose action=\"merge\", action=\"merge_with_followup\", or"
           echo "  action=\"close_and_reissue\": DO NOT modify any files. Emit the JSON with"
           echo "  the chosen action and an empty fix_description. For merge_with_followup,"
