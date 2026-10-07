@@ -7,7 +7,7 @@ Since #6273 routed every failed `CI` run on a pull request through `scripts/chec
 | --- | --- |
 | Lineage generation for a non-triage source issue | 1 (new root) |
 | Lineage generation for a triage source issue at `gen=N` | N + 1 |
-| Tests added | 6 (`CheckFailureTriageLineageTests` in `tests/test_check_failure_triage_workflow_security.py`) |
+| Tests added | 7 (`CheckFailureTriageLineageTests` in `tests/test_check_failure_triage_workflow_security.py`) |
 
 What this means for operators: CI failures on pipeline PRs reach the diagnosis and posting steps again, so the check-failure auto-fix loop works for every PR, not only for fix PRs of earlier triage issues. The posting step still needs the `CHECK_TRIAGE_ISSUES_TOKEN` repository secret (README secrets table); without it the run fails at `gh issue create` after diagnosis.
 

@@ -315,14 +315,16 @@ sys.stdout.write("\n".join(kept))
 	fi
 	# Read only line-leading HTML-comment markers (the shape this script
 	# writes), so a prose or inline-code mention such as
-	# `<!-- check-failure-triage:gen=2 -->` cannot set the lineage.
-	PGEN="$(printf '%s' "${PARENT_MARKER_BODY}" | sed -n "s/^[[:space:]]*<!-- ${MARKER_PREFIX}gen=\([0-9]\{1,\}\)[[:space:]]*-->.*/\1/p" | head -1)"
-	PROOT="$(printf '%s' "${PARENT_MARKER_BODY}" | sed -n "s/^[[:space:]]*<!-- ${MARKER_PREFIX}root=\([0-9a-f]\{64\}\)[[:space:]]*-->.*/\1/p" | head -1)"
+	# `<!-- check-failure-triage:gen=2 -->` cannot set the lineage. At most
+	# three leading spaces are allowed: four spaces or a tab start an
+	# indented Markdown code block, whose example markers are not lineage.
+	PGEN="$(printf '%s' "${PARENT_MARKER_BODY}" | sed -n "s/^ \{0,3\}<!-- ${MARKER_PREFIX}gen=\([0-9]\{1,\}\)[[:space:]]*-->.*/\1/p" | head -1)"
+	PROOT="$(printf '%s' "${PARENT_MARKER_BODY}" | sed -n "s/^ \{0,3\}<!-- ${MARKER_PREFIX}root=\([0-9a-f]\{64\}\)[[:space:]]*-->.*/\1/p" | head -1)"
 	if [[ "${PGEN}" =~ ^[0-9]+$ ]]; then
 		GEN=$((PGEN + 1))
 		[ -n "${PROOT}" ] && ROOT="${PROOT}"
 		log "lineage parent_issue=${PARENT_ISSUE} parent_gen=${PGEN} gen=${GEN} root=${ROOT}"
-	elif ! printf '%s' "${PARENT_MARKER_BODY}" | grep -qE "^[[:space:]]*<!-- ${MARKER_PREFIX}gen="; then
+	elif ! printf '%s' "${PARENT_MARKER_BODY}" | grep -qE "^ {0,3}<!-- ${MARKER_PREFIX}gen="; then
 		# Only a line-leading HTML-comment marker (the shape this script
 		# writes) counts as a triage marker; prose or inline code that merely
 		# mentions check-failure-triage:gen= does not.
