@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan: issue-2 (E2E orchestrator smoke run 37554001238)\n\nPlanning ref: `orchestrator/project-6601` @ `9a06a679723dd59f89c67588a0fc2596f59e324b`. The integration branch metadata matches the checkout, so there is no mismatch.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: The issue names one file and two exact lines. The file is already on the branch. Line 1 is already `status: ok`. Line 2 is `decompose-run: 25567947079`, left over from an earlier smoke run. The only change needed is to set line 2 to the current run ID. No helper, pattern or new code applies, and widening the scope would break the issue's requirement that only this file changes.\n\n1. Files likely to change\n- `tests/e2e_smoke_canary_b.txt`: this is the only file.\n\n2. Functions or modules to implement\n- None. This is a data-file edit. The finished file must be exactly these two lines, each ending with a newline, and nothing else:\n  ```\n  status: ok\n  decompose-run: 37554001238\n  ```\n\n3. Data structures affected\n- None.\n\n4. API or interface changes\n- None. Two places mention this file, and neither checks what is in it:\n  - `tests/test_review_conflict_resolve_smoke_deterministic.py` only mentions the filename in a comment.\n  - `.github/workflows/test-and-mark-stable.yml` refers to the filename only.\n\n## Decisions\n### D1 \u2014 Overwrite line 2 in place\n- Chosen: Rewrite the file so it holds exactly the two required lines.\n- Alternatives considered: Add a new line, which would leave the stale run ID in the file. Delete the file and create it again, which gives the same result with more churn.\n- Why: The acceptance criteria require exactly two lines with this content. A full overwrite meets that whether or not the earlier content was correct.\n\n## Security considerations\n- No trust boundaries, endpoints, external inputs or money state are involved. The file holds plain text with no secrets.\n\nRisks and edge cases\n- The file has no trailing blank line today. The rewrite must also avoid adding one, so the file stays exactly two lines.\n- A sibling issue edits `tests/e2e_smoke_canary.txt` at the same time. That file must not be touched, to avoid merge conflicts on the integration branch.\n- `tests/e2e_smoke_canary_spec.txt` must not be touched either.\n\nTesting considerations\n- `head -n1 tests/e2e_smoke_canary_b.txt` should print `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary_b.txt` should print `decompose-run: 37554001238`.\n- `wc -l` on the file should print `2`.\n- `git diff --stat` should list only `tests/e2e_smoke_canary_b.txt`.\n- No pytest run is needed, because no test checks the file's content.\n\nPre-execution self-check: the target file exists and its current content was read, the fix is a one-line value change, nothing else references the content, and the issue's scope is respected.\n\nAssumptions: none. The task is fully specified.\nMissing context: none.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "6074ecdf126716728f67c5ee0cd25cacba1ccc6008f5f62d29a7c2046c432e42",
+  "lineage": {
+    "issue_number": 6603,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37554605208",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37554605208",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6603"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261007010312_774fdfb8b1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6603,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37554605208"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6603",
+  "timestamps": {
+    "created_at": "2026-10-07T01:03:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
