@@ -1059,7 +1059,11 @@ if [ -n "${_targeted_paths_source}" ]; then
       --semble-fallback marker
     )
   fi
-  "${targeted_file_context_args[@]}" || \
+  # The editor prompt is prefixed with pre_assembled_static.txt; overflow
+  # Semble telemetry counts static_dup_bytes against it.
+  _targeted_static_file=""
+  [ ! -s ./pre_assembled_static.txt ] || _targeted_static_file="${PWD}/pre_assembled_static.txt"
+  SEMBLE_STATIC_CONTEXT_FILE="${_targeted_static_file}" "${targeted_file_context_args[@]}" || \
     echo "::warning::targeted_file_context.py failed; continuing without targeted-context block"
 fi
 

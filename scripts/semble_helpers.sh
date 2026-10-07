@@ -193,7 +193,7 @@ semble_should_query()
 semble_ensure_ready()
 {
 	local target="${1:-semble}" bootstrap_root timeout_secs deadline remaining index_path wrapper_path install_result start_ms install_ms=0 workspace_root build_log="" build_rc=1
-	local state_status=0
+	local state_status=0 build_start_ms="" failed_index_ms=0
 	if [ "${SEMBLE_AVAILABLE:-false}" = "true" ] && [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ]; then return 0; fi
 	_semble_bootstrap_mode
 	[ "${_SEMBLE_RESOLVED_BOOTSTRAP_MODE}" = "lazy" ] && [ "${SEMBLE_ENABLED:-false}" = "true" ] || return 1
@@ -205,7 +205,13 @@ semble_ensure_ready()
 	timeout_secs="${SEMBLE_LAZY_BOOTSTRAP_TIMEOUT_SECS:-180}"
 	[[ "${timeout_secs}" =~ ^[0-9]+$ ]] && [ "${timeout_secs}" -gt 0 ] && [ "${timeout_secs}" -le 3600 ] || timeout_secs=180
 	deadline="$(($(date +%s) + timeout_secs))"
-	if ! mkdir -p -- "${bootstrap_root}" "$(dirname "${SEMBLE_BOOTSTRAP_STATE_FILE}")" || ! command -v flock >/dev/null 2>&1; then return 1; fi
+	if ! mkdir -p -- "${bootstrap_root}" "$(dirname "${SEMBLE_BOOTSTRAP_STATE_FILE}")"; then return 1; fi
+	if ! command -v flock >/dev/null 2>&1; then
+		# Record the failure so later queries do not retry, and name the cause.
+		_semble_state_write failed '' "$(_semble_index_path)" || true
+		_semble_log_event "SEMBLE_FALLBACK" "target=${target}" "reason=flock-unavailable"
+		return 1
+	fi
 	local lock_fd
 	exec {lock_fd}>"${SEMBLE_BOOTSTRAP_STATE_FILE}.lock" || return 1
 	if ! flock -w "${timeout_secs}" "${lock_fd}"; then
@@ -229,6 +235,7 @@ semble_ensure_ready()
 		remaining="$((deadline - $(date +%s)))"
 		build_log="$(mktemp "${bootstrap_root}/semble-build.XXXXXX")" || true
 		if [ -n "${build_log}" ] && [ "${remaining}" -gt 0 ] && [ -f "${_SEMBLE_HELPERS_SCRIPT_DIR}/build_semble_wrapper.sh" ]; then
+			build_start_ms="$(date +%s%3N)"
 			(cd "${bootstrap_root}" && GITHUB_WORKSPACE="${workspace_root}" SEMBLE_INDEX_PATH="${index_path}" env -u BASH_ENV -u ENV timeout "${remaining}" bash "${_SEMBLE_HELPERS_SCRIPT_DIR}/build_semble_wrapper.sh") 2> "${build_log}" && build_rc=0
 			cat "${build_log}" >&2
 		fi
@@ -240,7 +247,9 @@ semble_ensure_ready()
 			return 0
 		fi
 		if [ -z "${build_log}" ] || ! grep -q '^SEMBLE_BOOTSTRAP ' "${build_log}"; then
-			_semble_log_event "SEMBLE_BOOTSTRAP" "mode=lazy" "state=failed" "install_ms=${install_ms}" "index_ms=0" "reason=lazy-bootstrap-failed"
+			# A killed or silent builder still spent index time; report it.
+			[ -z "${build_start_ms}" ] || failed_index_ms="$(_semble_elapsed_ms "${build_start_ms}")"
+			_semble_log_event "SEMBLE_BOOTSTRAP" "mode=lazy" "state=failed" "install_ms=${install_ms}" "index_ms=${failed_index_ms}" "reason=lazy-bootstrap-failed"
 		fi
 	else
 		install_ms="$(_semble_elapsed_ms "${start_ms}")"

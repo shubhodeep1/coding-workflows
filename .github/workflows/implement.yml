@@ -2478,7 +2478,7 @@ jobs:
               tfc_args+=(--semble-bin "$(command -v semble 2>/dev/null || true)"
                 --semble-index "${SEMBLE_INDEX_PATH}" --semble-max-chunks "6" --semble-fallback "marker")
             fi
-            "${tfc_args[@]}" || \
+            SEMBLE_STATIC_CONTEXT_FILE="${PWD}/pre_assembled_static.txt" "${tfc_args[@]}" || \
               echo "::warning::targeted_file_context.py failed; continuing without targeted-context block"
           fi
 

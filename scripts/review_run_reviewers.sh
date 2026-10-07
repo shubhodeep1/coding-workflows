@@ -2102,7 +2102,11 @@ prepare_reviewer_scoped_context() {
       --semble-fallback marker
     )
   fi
-  if ! "${targeted_file_context_args[@]}" || [ ! -s "${REVIEWER_SCOPED_FILES_CONTEXT_FILE}" ]; then
+  # Reviewer prompts are prefixed with pre_assembled_static.txt; overflow
+  # Semble telemetry counts static_dup_bytes against it.
+  local targeted_static_file=""
+  [ ! -s ./pre_assembled_static.txt ] || targeted_static_file="${PWD}/pre_assembled_static.txt"
+  if ! SEMBLE_STATIC_CONTEXT_FILE="${targeted_static_file}" "${targeted_file_context_args[@]}" || [ ! -s "${REVIEWER_SCOPED_FILES_CONTEXT_FILE}" ]; then
     write_reviewer_scope_summary "full-diff" "failed to render scoped reviewer file context"
     return 1
   fi

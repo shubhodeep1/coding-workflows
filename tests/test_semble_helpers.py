@@ -172,6 +172,8 @@ def test_lazy_build_timeout_records_one_failed_bootstrap() -> None:
 		assert result.returncode == 0, result.stderr
 		assert (root / "bootstrap.state").read_text().startswith("state=failed\n")
 		assert result.stderr.count("SEMBLE_BOOTSTRAP mode=lazy state=failed") == 1
+		# The killed builder's elapsed time is reported, not a hard-coded zero.
+		assert "index_ms=0 " not in result.stderr
 
 
 def test_eager_builder_emits_bootstrap_failure_without_index() -> None:
