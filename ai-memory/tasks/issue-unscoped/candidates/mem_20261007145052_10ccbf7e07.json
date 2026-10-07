@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:478-480 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: `_strip_data_heredoc_bodies` removes a quoted heredoc body when its line ends in `|&` and the shell reader appears on the next line, so a `git push` in that body is not inspected by the merged-PR guard.\n  WHY: The suffix ` |&` does not match the same-line shell-reader check or the `endswith(\"|\")` check; severity is critical based on the BLOCKER rating from google_gemini-3_1-flash-lite, though minimax_minimax-m3 and openai_gpt-6-luna rated it MAJOR.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description states: \"The live copy is now byte-identical to the template, which carries the reviewed heredoc-reader narrowing and the `|&` operator from that autofix round.\"\n  expected_change_site: .claude/hooks/pr_merge_status_guard.py\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The addition of `|&` support is incomplete in the heredoc-body stripping logic for commands ending in a `|&` pipe, failing the parity requirement stated in the PR description.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .claude/hooks/pr_merge_status_guard.py:478-480 | severity=BLOCKER | confidence=5\n  PROBLEM: The logic to determine if a heredoc is executed as a shell command does not correctly account for the `|&` pipe operator when it appears at the end of a line as the only pipe operator.\n  WHY: If a heredoc delimiter is immediately followed by `|&` on the same line without a subsequent shell command (e.g., `cat <<'EOF' |&`), the `runs_as_shell` condition will evaluate to `False` (assuming no other shell indicators like `$(` or backticks are present), causing the heredoc body (potentially containing sensitive Git commands) to be stripped out rather than inspected, allowing an unauthorized `git push` to a merged branch to bypass the guard.\n- TASK_GAP\n  Requirement: The PR description states: \"The live copy is now byte-identical to the template, which carries the reviewed heredoc-reader narrowing and the `|&` operator from that autofix round.\"\n  Expected change site: .claude/hooks/pr_merge_status_guard.py\n  Evidence of absence: The addition of `|&` support is incomplete. While added to the pipeline operator check and redirection parser, it is missing from the heredoc-body stripping logic for commands ending in a `|&` pipe, failing the parity requirement stated in the PR description.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/pr_merge_status_guard.py:479 | severity=MAJOR | confidence=5\n  PROBLEM: `_strip_data_heredoc_bodies` only treats a same-line `|` as a pipeline indicator and does not retain a heredoc body piped with `|&` to a shell consumer on the next line.\n  WHY: For `cat <<'EOF' |&\\nbash\\ngit push origin feature/x\\nEOF`, the suffix on the heredoc line is ` |&`; `suffix.rstrip().endswith(\"|\")` is False and the quoted delimiter prevents the body-substitution check from retaining the body, so the push is invisible to the merged-PR guard.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/hooks/pr_merge_status_guard.py:478-480 | severity=MAJOR | confidence=5\n  PROBLEM: The heredoc filter does not retain a quoted body when `|&` is followed by a newline and the shell reader appears on the next line.\n  WHY: For `cat <<'EOF' |&\\nbash\\ngit push origin feature/x\\nEOF`, the suffix is ` |&`. It contains no same-line shell reader and does not end in `|`, so the filter removes the heredoc body. The later Git-command scan never sees the push, allowing the merged-PR guard to miss a push that should be checked.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "9e3773d542c05d91ac017da947affde648e87b2899bdc6f662194ad3508dab1d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6675,
+    "run_id": "37636759596",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37636759596",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007145052_10ccbf7e07",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6675,
+    "run_id": "37636759596"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-07T14:50:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
