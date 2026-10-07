@@ -1,0 +1,35 @@
+name: "Internal: Unblock Judge Dispatch"
+run-name: "Unblock judge #${{ inputs.item }}"
+
+# Thin wrapper around unblock_judge.yml for one blocked item (an issue, a pull
+# request or an orchestrator project's tracking issue). The orchestrator
+# poller's unblock scan (run_unblock_scan in scripts/orchestrate_poll_process.sh,
+# plan Phase 7) dispatches it with `gh workflow run unblock_judge_dispatch.yml
+# -f item=<n>`. The run name `Unblock judge #<n>` is load-bearing: the scan
+# reads it to skip items whose judge is already running. The filename is
+# load-bearing too: the poller dispatches by exact filename.
+#
+# workflow_dispatch only on purpose; it is not an event handler.
+
+on:
+  workflow_dispatch:
+    inputs:
+      item:
+        description: "Issue, pull request or tracking issue number to judge"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  actions: write
+  # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
+
+jobs:
+  judge:
+    uses: shubhodeep1/coding-workflows/.github/workflows/unblock_judge.yml@main
+    with:
+      item: ${{ inputs.item }}
+    secrets: inherit

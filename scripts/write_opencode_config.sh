@@ -108,7 +108,7 @@ fi
 config_dir="$(dirname "${config_path}")"
 mkdir -p "${config_dir}"
 
-python3 - "${role}" "${model_slug}" "${project_path}" "${config_path}" \
+PYTHONSAFEPATH=1 python3 - "${role}" "${model_slug}" "${project_path}" "${config_path}" \
 	"${catalog_path}" "${models_path}" "${serena_bin}" <<'PY'
 import json
 import os

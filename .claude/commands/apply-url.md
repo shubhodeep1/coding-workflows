@@ -6,7 +6,7 @@ $ARGUMENTS
 
 1. **Parse `$ARGUMENTS`.** Extract every `https?://...` token as a source URL; treat all remaining (non-URL) text as the user's free-form focus. Save the focus verbatim — it shapes prioritisation in steps 5–6 (which sections to weight, what the repo cares about) but never invents applicability that the repo + source don't support. If `$ARGUMENTS` contains **zero URLs**, stop and ask the user for at least one URL (§0/§2) — this command is seed-URL-driven, not open-ended research (for that, use `/deep-research`; for a GitHub issue/PR/run reference, use `/investigate-issue`).
 
-2. **Load repo context first — this is the "linked to the repo" half.** Read `README.md`, `agents.md`, and `CLAUDE.md` at the repo root, plus any `/db/contracts/*.yml` relevant if the source touches data/collections (§10). Build a working model of **what this repo actually is**: its purpose, stack, conventions, and the capabilities it already has. Without this you cannot say what is applicable — a recommendation that is not anchored to something this repo does (or could plausibly do) is noise. Do this **before** mapping, so every later finding lands against real code, not a guess.
+2. **Load repo context first — this is the "linked to the repo" half.** `CLAUDE.md` is already loaded; search `README.md` and `agents.md` at the repo root for the relevant sections and read those instead of both files end to end, plus any `/db/contracts/*.yml` relevant if the source touches data/collections (§10). Build a working model of **what this repo actually is**: its purpose, stack, conventions, and the capabilities it already has. Without this you cannot say what is applicable — a recommendation that is not anchored to something this repo does (or could plausibly do) is noise. Do this **before** mapping, so every later finding lands against real code, not a guess.
 
 3. **Fetch the seed URL(s).** Pick the tool by page type (§17 Preferred Tools):
    - **Public, text-ish pages** → `WebFetch` (free, text-only) — the default.
@@ -20,7 +20,7 @@ $ARGUMENTS
 
 6. **Map each idea onto the repo.** For every extracted idea, classify it against the repo model from step 2 using the [Classification](#classification) buckets below, grounding each in **both** the source (page/section) **and** the repo (`file:line`). Rank the actionable ones by §1 priority order (security & correctness before compatibility, clarity, performance, speed), then by value-vs-effort. Apply the §6/§10/§18 framing in [Rules](#rules) as you write each recommendation.
 
-7. **Report — read-only.** Emit the [Output Format](#output-format). Make **no** edits, write **no** files, open **no** PR, make **no** commits. Point the user at the natural next step (`/write-plan` to turn a recommendation into a plan; then `/implement-plan-claude` or `/apply-analysis` to ship it).
+7. **Report — read-only.** Emit the [Output Format](#output-format). Make **no** edits, write **no** files, open **no** PR, make **no** commits. Point the user at the natural next step (`/write-plan` to turn a recommendation into a plan; then `/implement-plan-claude` or `/apply-analysis` to hand it to the orchestrator).
 
 ## Classification
 
@@ -57,7 +57,7 @@ Already present (skip):
 Not applicable:
 - <idea> — <one-line why: wrong stack / out of scope / conflicts with convention>
 
-Next step: <e.g. "/write-plan on rec #1 to turn it into a plan", then "/implement-plan-claude" to ship it>
+Next step: <e.g. "/write-plan on rec #1 to turn it into a plan", then "/implement-plan-claude" to hand it to the orchestrator>
 ```
 
 ## Tool Access
@@ -71,7 +71,7 @@ Next step: <e.g. "/write-plan on rec #1 to turn it into a plan", then "/implemen
 
 ## Rules
 
-- **Read-only — no edits, no files, no PR, no commits.** The deliverable is the chat report. Turning a recommendation into code is a separate, explicit step (`/write-plan` → `/implement-plan-claude`, or the `/apply-analysis` orchestrator hand-off). If you find yourself editing source or opening a PR, you are in the wrong command.
+- **Read-only — no edits, no files, no PR, no commits.** The deliverable is the chat report. Turning a recommendation into code is a separate, explicit step (`/write-plan` → `/implement-plan-claude` on the Claude engine, or the `/apply-analysis` orchestrator hand-off). If you find yourself editing source or opening a PR, you are in the wrong command.
 - **Every recommendation is anchored to THIS repo.** Cite a concrete `file:line` for what to improve, or the place a new feature would land. A source idea with no repo anchor goes under **Not applicable**, never as a floating suggestion. No repo citation → no recommendation.
 - **Full grasp before mapping.** Follow pagination / multi-part content to depth 2, same registrable domain, until coverage plateaus or the ~15-page cap is hit. Do not recommend from a partial read; if you stopped early, say so and why.
 - **Bounded crawl.** Same registrable domain, depth ≤2, ~15-page cap, dedupe, stop on diminishing returns. Off-domain: at most one essential fetch, no deep crawl. Respect auth walls / obvious ToS-robots gates — do not brute past them.

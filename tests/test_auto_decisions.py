@@ -168,8 +168,104 @@ def test_clarify_wiring() -> None:
 	assert "auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh" in text
 
 
+def test_clarify_inline_prompt_never_blocks_on_credentials() -> None:
+	text = CLARIFY.read_text(encoding="utf-8")
+	start = text.index("          cat > \"${PROMPT_TEMPLATE_FILE}\" <<'PROMPT'\n")
+	end = text.index("\n          PROMPT\n", start)
+	inline_prompt = text[start:end]
+	assert "Credentials and setup never block" in inline_prompt
+	assert "Choose undecided branch names from repository conventions" in inline_prompt
+	assert "a private credential, a not-yet-existing commit SHA" not in inline_prompt
+	assert "task depends on the content of an auth-walled or" in inline_prompt
+
+
 def test_implement_appends_the_section_before_the_lint() -> None:
 	text = IMPLEMENT.read_text(encoding="utf-8")
 	assert "security_dependency.py auto_decisions.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do" in text
 	section = text.index("auto_decisions.py\" pr-section")
 	assert text.index('printf \'Refs #%s\\n\' "${TRACKING_ISSUE_NUMBER}"') < section < text.index('printf \'%s\\n\\n\' "${PR_TITLE}" > "${PR_LINT_FILE}"')
+
+
+def _run_clarify_tg_alert(tmp_path: Path, answered: str, orchestrator_managed: str = "false", delegated: str = "false") -> str:
+	"""Run the Telegram clarification step with a stub sender; return what it sent."""
+	step = _steps(CLARIFY, _job(CLARIFY))["Telegram clarification notification"]
+	script = step["run"]
+	for expression, value in {
+		"${{ github.server_url }}": "https://github.com",
+		"${{ github.repository }}": "owner/repo",
+		"${{ github.run_id }}": "1",
+		"${{ steps.clarify_route.outputs.is_orchestrator_managed }}": orchestrator_managed,
+		"${{ steps.clarify_route.outputs.is_forced_reclarify }}": "false",
+	}.items():
+		script = script.replace(expression, value)
+	assert "${{" not in script
+	sent = tmp_path / "sent.txt"
+	(tmp_path / "scripts").mkdir(exist_ok=True)
+	(tmp_path / "scripts" / "tg_helpers.sh").write_text(
+		f'tg_send_phase_tracked() {{ printf "%s|%s\\n" "$4" "$3" >> "{sent}"; }}\n', encoding="utf-8"
+	)
+	env = {
+		"PATH": "/usr/bin:/bin",
+		"ISSUE_NUMBER": "6262",
+		"ISSUE_TITLE": "title",
+		"ISSUE_URL": "https://github.com/owner/repo/issues/6262",
+		"CLARIFY_AUTO_DECIDE_ANSWERED": answered,
+		"CLARIFY_AUTO_DECIDE_DELEGATED": delegated,
+	}
+	result = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	return (sent.read_text(encoding="utf-8") if sent.exists() else "") + result.stdout
+
+
+def test_clarify_tg_alert_skips_auto_answered_questions(tmp_path: Path) -> None:
+	# Issue #6262: the alert fired after the auto-decide step had already answered.
+	steps = _steps(CLARIFY, _job(CLARIFY))
+	assert steps["Standalone auto-decide"]["id"] == "standalone_auto_decide"
+	assert 'echo "answered=true" >> "$GITHUB_OUTPUT"' in steps["Standalone auto-decide"]["run"]
+	run = steps["Standalone auto-decide"]["run"]
+	assert run.index('grep -q "^Posted auto-answer on issue #${ISSUE_NUMBER}$"') < run.index('echo "answered=true"')
+	env = steps["Telegram clarification notification"]["env"]
+	assert env["CLARIFY_AUTO_DECIDE_ANSWERED"] == "${{ steps.standalone_auto_decide.outputs.answered || 'false' }}"
+	skipped = _run_clarify_tg_alert(tmp_path, "true")
+	assert "CRITICAL" not in skipped
+	assert "AI_PHASE_GATE_V1 phase=clarify gate=tg_alert reason=auto_answered outcome=skip issue=6262" in skipped
+	paged = _run_clarify_tg_alert(tmp_path, "false")
+	assert "CRITICAL|Clarification required for #6262: title" in paged
+
+
+def test_clarify_delegates_standalone_questions_to_the_clarify_respond_worker(tmp_path: Path) -> None:
+	steps = _steps(CLARIFY, _job(CLARIFY))
+	auto_step = steps["Standalone auto-decide"]
+	assert auto_step["env"]["STANDALONE_CLARIFY_RESPOND_ENABLED"] == "${{ vars.STANDALONE_CLARIFY_RESPOND_ENABLED || 'true' }}"
+	run = auto_step["run"]
+	delegate = run.index('if [ "${STANDALONE_CLARIFY_RESPOND_ENABLED}" != "false" ]; then')
+	# The kill switch and the comment-id check still come first; the
+	# RECOMMENDED path below only runs when delegation is turned off.
+	assert run.index('if [ "${STANDALONE_AUTO_DECIDE_ENABLED}" = "false" ]; then') < delegate
+	assert run.index("reason=no_question_comment_id") < delegate < run.index("auto_decisions.py parse")
+	assert 'echo "delegated=true" >> "$GITHUB_OUTPUT"' in run
+	assert "reason=delegated_to_clarify_respond" in run
+	env = steps["Telegram clarification notification"]["env"]
+	assert env["CLARIFY_AUTO_DECIDE_DELEGATED"] == "${{ steps.standalone_auto_decide.outputs.delegated || 'false' }}"
+	delegated = _run_clarify_tg_alert(tmp_path, "false", delegated="true")
+	assert "CRITICAL" not in delegated
+	assert "AI_PHASE_GATE_V1 phase=clarify gate=tg_alert reason=delegated_to_clarify_respond outcome=skip issue=6262" in delegated
+
+
+def test_clarify_marks_a_human_requested_reclarify_for_the_worker(tmp_path: Path) -> None:
+	step = _steps(CLARIFY, _job(CLARIFY))["Post clarification questions"]
+	assert step["env"]["CLARIFY_HUMAN_ANSWER_REQUESTED"] == "${{ steps.clarify_route.outputs.is_forced_reclarify }}"
+	block = step["run"].split("} > \"${RUNTIME_DIR}/clarification_comment.md\"", 1)[0]
+	block = block[block.index("{\n"):] + "}"
+	questions = tmp_path / "questions.txt"
+	questions.write_text("**Q1: x**\n- **A** — y (RECOMMENDED)\n", encoding="utf-8")
+	for requested, marked in (("true", True), ("false", False)):
+		result = subprocess.run(
+			["bash", "-c", block],
+			env={"PATH": "/usr/bin:/bin", "QUESTIONS_FILE": str(questions), "CLARIFY_HUMAN_ANSWER_REQUESTED": requested},
+			capture_output=True,
+			text=True,
+			check=True,
+		)
+		assert result.stdout.startswith("<!-- ai:clarification-questions -->\nClarification required\n")
+		assert ("<!-- ai:clarification-human-answer -->" in result.stdout) is marked

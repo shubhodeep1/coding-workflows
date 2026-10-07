@@ -11,6 +11,12 @@ name: AI Check Failure Triage
 on:
   check_run:
     types: [completed]
+  # GitHub Actions CI (see the triage-workflow-run job). The wildcard listens
+  # to every workflow; the job skips the pipeline's own workflow paths and
+  # anything that is not a failed pull-request run.
+  workflow_run:
+    workflows: ["*"]
+    types: [completed]
 permissions:
   contents: read
   issues: write
@@ -20,6 +26,7 @@ permissions:
 jobs:
   triage:
     if: >-
+      github.event_name == 'check_run' &&
       !contains(fromJson('["false"]'), vars.CHECK_FAILURE_TRIAGE_ENABLED) &&
       (github.event.check_run.conclusion == 'failure' ||
        github.event.check_run.conclusion == 'timed_out') &&
@@ -33,4 +40,38 @@ jobs:
       check_conclusion: ${{ github.event.check_run.conclusion }}
       head_sha: ${{ github.event.check_run.head_sha }}
       details_url: ${{ github.event.check_run.details_url }}
-    secrets: inherit
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      CHECK_TRIAGE_ISSUES_TOKEN: ${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+
+  # GitHub never sends check_run events for checks created by GitHub Actions
+  # ("to prevent recursive workflows"), so the job above never fires for
+  # Actions CI. This job triages the failed workflow run instead (any
+  # workflow but the pipeline's own wrapper paths): the check name is the
+  # workflow name, so repeated failures share one open issue per PR and
+  # workflow. The diagnosis reads every failing check on the PR head.
+  triage-workflow-run:
+    if: >-
+      github.event_name == 'workflow_run' &&
+      !contains(fromJson('["false"]'), vars.CHECK_FAILURE_TRIAGE_ENABLED) &&
+      (github.event.workflow_run.conclusion == 'failure' ||
+       github.event.workflow_run.conclusion == 'timed_out') &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.pull_requests[0] != null &&
+      github.event.workflow.path != null &&
+      !contains(fromJson('[".github/workflows/ai-cancel-on-pr-close.yml",".github/workflows/ai-check-failure-triage.yml",".github/workflows/ai-clarify.yml",".github/workflows/ai-implement.yml",".github/workflows/ai-issue-pr-status.yml",".github/workflows/ai-memory-maintenance.yml",".github/workflows/ai-orchestrate-clarify-respond.yml",".github/workflows/ai-orchestrate-poll.yml",".github/workflows/ai-orchestrate.yml",".github/workflows/ai-plan.yml",".github/workflows/ai-review.yml",".github/workflows/ai-security-audit.yml",".github/workflows/ai-sync-labels.yml",".github/workflows/ai-update-workflows.yml",".github/workflows/ai-validate.yml",".github/workflows/ai-workflow-failure-heal.yml",".github/workflows/review_rb_judge_dispatch.yml",".github/workflows/unblock_judge_dispatch.yml"]'), github.event.workflow.path)
+    uses: shubhodeep1/coding-workflows/.github/workflows/check_failure_triage.yml@stable
+    with:
+      pr_number: ${{ github.event.workflow_run.pull_requests[0].number }}
+      check_run_id: ""
+      check_name: ${{ github.event.workflow_run.name }}
+      check_conclusion: ${{ github.event.workflow_run.conclusion }}
+      head_sha: ${{ github.event.workflow_run.head_sha }}
+      details_url: ${{ github.event.workflow_run.html_url }}
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      CHECK_TRIAGE_ISSUES_TOKEN: ${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}

@@ -283,11 +283,14 @@ def probe_initialize(command: Sequence[str], *, server_name: str = "mcp", timeou
 
 	proc: subprocess.Popen[bytes] | None = None
 	try:
+		server_process_env = os.environ.copy()
+		server_process_env.pop("PYTHONSAFEPATH", None)
 		proc = subprocess.Popen(
 			list(command),
 			stdin=subprocess.PIPE,
 			stdout=subprocess.PIPE,
 			stderr=subprocess.PIPE,
+			env=server_process_env,
 		)
 	except FileNotFoundError as exc:
 		raise ProbeError("spawn-failed", f"unable to spawn MCP server: {exc}") from exc
