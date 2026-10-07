@@ -6,7 +6,7 @@ action="${1:-}"
 support="${SUPPORT_SCRIPTS_DIR:-scripts}"
 root="${REVIEW_SANDBOX_ROOT:-}"
 workspace="${GITHUB_WORKSPACE:-$PWD}"
-case "${action}" in prepare|run|cleanup) ;; *) exit 2 ;; esac
+case "${action}" in prepare|run|cleanup|seed) ;; *) exit 2 ;; esac
 command -v docker >/dev/null && command -v python3 >/dev/null || { echo '::error::Review isolation requires Docker and Python' >&2; exit 1; }
 [ -f "${support}/review_untrusted_workspace.py" ] && [ -f "${support}/clarify_openrouter_broker.py" ] && [ -f "${support}/review_sandbox/Dockerfile" ] || { echo '::error::Review isolation support missing' >&2; exit 1; }
 
@@ -97,6 +97,15 @@ if [ "${action}" = cleanup ]; then
 	fi
 	rm -rf -- "${root}"
 	exit 0
+fi
+# seed <relative-path> <payload-file>: trusted host content (the smoke canary
+# pre-write) goes into the disposable source after the snapshot, so the
+# validated transfer publishes it. Writing the host instead trips
+# host_baseline_changed (runs 37669315093 / 37674139451).
+if [ "${action}" = seed ]; then
+	[ "$#" -eq 3 ] || exit 2
+	PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" seed "${workspace}" "${root}/source" "${root}/baseline.json" "$2" "$3"
+	exit $?
 fi
 
 [ "$#" -eq 6 ] || exit 2

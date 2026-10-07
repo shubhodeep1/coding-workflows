@@ -78,6 +78,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
    attempt's `editor_attempt_<attempt>.err` (#6413). Exact excluded build
    and cache directories are pruned; case variants, directory symlinks and
    other unsafe directories fail closed.
+   The smoke-only canary pre-write (`IS_SMOKE_TEST=true`) is seeded into the
+   sandbox source with `review_untrusted_sandbox.sh seed`, not written to the
+   host, so the validated transfer publishes it; a host write after the
+   snapshot is refused as `host_baseline_changed` (run 37669315093).
    **Claude-fixer mode** (`CLAUDE_FIXER_ENABLED`, default on): on every
    PR-backed `claude/*` head (`/implement-plan-claude` stages and any Claude
    session's PR, CLAUDE.md §26.H) the reviewer panel runs as

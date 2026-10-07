@@ -294,12 +294,44 @@ def refresh(host, workspace, manifest):
 			os.chmod(target, mode)
 
 
+def seed(host, workspace, manifest, name, payload):
+	"""Write trusted host content into the disposable source after snapshot.
+
+	Used by the smoke-only canary pre-write: writing the host after the
+	snapshot makes transfer refuse with host_baseline_changed (runs
+	37669315093 / 37674139451). Seeding the source instead lets the normal
+	validated transfer publish the file. The host and manifest are never
+	written, and a host that drifted from the baseline is still refused.
+	"""
+	baseline = json.loads(manifest.read_text(encoding="utf-8"))
+	if not allowed(name) or name not in baseline:
+		raise _rejection("unsafe result path", "unsafe_result_path")
+	host_file = checked_path(host, name)
+	if not host_file.exists() or fingerprint(host_file) != baseline[name]:
+		raise _rejection("host baseline changed", "host_baseline_changed")
+	data, _ = read_regular(payload)
+	target = checked_path(workspace, name)
+	if target.is_symlink() or (target.exists() and not stat.S_ISREG(target.lstat().st_mode)):
+		raise _rejection("new result conflicts with host path", "result_conflicts_host")
+	target.parent.mkdir(parents=True, exist_ok=True)
+	if target.exists():
+		target.unlink()
+	with target.open("xb") as out:
+		out.write(data)
+	os.chmod(target, baseline[name][1])
+
+
 def main():
-	if len(sys.argv) != 5 or sys.argv[1] not in ("snapshot", "refresh", "transfer"):
+	if sys.argv[1:2] == ["seed"]:
+		if len(sys.argv) != 7:
+			raise SystemExit(2)
+	elif len(sys.argv) != 5 or sys.argv[1] not in ("snapshot", "refresh", "transfer"):
 		raise SystemExit(2)
-	host, workspace, manifest = map(Path, sys.argv[2:])
+	host, workspace, manifest = map(Path, sys.argv[2:5])
 	try:
-		if sys.argv[1] == "snapshot":
+		if sys.argv[1] == "seed":
+			seed(host, workspace, manifest, sys.argv[5], Path(sys.argv[6]))
+		elif sys.argv[1] == "snapshot":
 			snapshot(host, workspace, manifest)
 		elif sys.argv[1] == "refresh":
 			refresh(host, workspace, manifest)
