@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Treat workflow-healing provenance and scope as explicit contracts.",
   "timestamps": {
     "created_at": "2026-10-07T07:26:56Z",
