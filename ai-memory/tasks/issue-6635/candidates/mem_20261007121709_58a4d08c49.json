@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: Current `main` already covers the exploit scenario. In `.github/workflows/check_failure_triage.yml`, every checkout sets `persist-credentials: false` (lines 230, 257, 268). The \"Diagnose check failure\" step (lines 402-419) gets only `OPENROUTER_API_KEY`, with no `GH_TOKEN`, `GH_PAT` or posting token, and the model runs through the trusted `clarify_isolated_run.sh` container. The \"Post check-failure triage issue\" step (lines 423-426) is the only one that receives `CHECK_TRIAGE_ISSUES_TOKEN`. So the remaining work is to pin these four facts with tests and fix runtime code only where a test finds a gap. Option B splits the jobs and changes the consumer wrapper and its secret pass-through, which adds risk for little gain. Option C would leave the fix unprotected against regressions, and an implement run with no changes would simply close as a no-op.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo (lettered choice A; plan given so the implementer has concrete steps)\n  inputs:\n    - .github/workflows/check_failure_triage.yml (checkouts at lines 230/257/268; steps \"Collect check-failure context\" 385-400, \"Diagnose check failure\" 402-419, \"Post check-failure triage issue\" 423+)\n    - scripts/check_failure_triage.sh (finding cited line 329; the `CHECK_TRIAGE_STAGE=diagnose` / `CHECK_TRIAGE_PREPARE_ONLY` path)\n    - scripts/clarify_isolated_run.sh\n    - tests/test_check_failure_triage_workflow_security.py (existing tests include `test_triage_checkouts_do_not_persist_credentials` at line 326 and `test_workflow_contract_gates_secrets_behind_minimal_prerequisite` at line 863)\n  steps:\n    - Read the existing tests and record which of these four facts are already asserted: (1) every `actions/checkout` in the triage job has `persist-credentials: false`; (2) the \"Diagnose check failure\" step's `env:` has no `GH_TOKEN`, `GITHUB_TOKEN`, `secrets.GH_PAT` or `secrets.CHECK_TRIAGE_ISSUES_TOKEN`, and no earlier step writes a token into `$GITHUB_ENV`; (3) the diagnose stage of `scripts/check_failure_triage.sh` starts the model only through `clarify_isolated_run.sh` and never calls `codex` on the host; (4) `secrets.CHECK_TRIAGE_ISSUES_TOKEN` appears only in the \"Post check-failure triage issue\" step.\n    - Add assertions to `tests/test_check_failure_triage_workflow_security.py` for any of the four that are missing, parsing the workflow YAML by step name rather than by line number.\n    - Change `check_failure_triage.yml` or `scripts/check_failure_triage.sh` only if a new assertion fails against current code, and make the smallest change that fixes it.\n    - Add a changelog fragment `changelog.d/<issue>-triage-credential-isolation-tests.md`. Do not use an auto-close keyword for #3576 (the tracker); use `Refs #3576`.\n  replaces_acceptance_criterion: \"Run diagnosis in a separate least-privilege job\" is replaced by \"the diagnosis step runs with no GitHub credential in its environment or checkout, inside a network-isolated container, and a contract test enforces this\"\n  equivalence_argument: The exploit needs a reachable GitHub credential, either a persisted checkout extraheader or a token in the environment, plus network access from the model. Both are already gone at step level: there are no persisted credentials, no token in the diagnose step's env, and the model runs in a `--network none` container with a host-side broker. Splitting into separate jobs would not remove any credential the diagnose step can still reach. The tests prevent a regression.\n  reversibility: Only tests and possibly small fixes are added. If a human later wants the full job split (option B), it can be built on top of these tests without undoing anything.\n\n---\n- Assumption: the existing tests may already cover some of the four facts. The implementer must fill gaps, not duplicate assertions.\n- Missing context: I read only the step headers and env of the workflow and the list of test names, not the test bodies or the diagnose path in `scripts/check_failure_triage.sh`. Which facts are already tested must be checked during implementation.",
+  "fingerprint": "998045a86cd36493cceac771c9bf68b5630a7d04d604ea23d1cad2ff0ef2a8df",
+  "lineage": {
+    "issue_number": 6635,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37618482148",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37618482148",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6635"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261007121709_58a4d08c49",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6635,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37618482148"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6635",
+  "timestamps": {
+    "created_at": "2026-10-07T12:17:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
