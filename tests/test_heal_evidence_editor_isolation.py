@@ -617,10 +617,11 @@ def test_workflows_pin_scope_before_editor_and_restore_credentials() -> None:
 	assert "TG_BOT_SECRET: ${{" not in repair
 	assert "GITHUB_TOKEN: ${{" not in repair
 	assert "unset GH_TOKEN GH_PAT GITHUB_TOKEN 2>/dev/null || true" in repair
-	assert repair.count('editor_git_credentials restore') == 1
+	assert 'editor_git_credentials restore' not in repair
 	assert repair.count('editor_git_credentials hide') == 1
-	assert 'repair_credentials_hidden=false' in repair
-	assert 'if [ "${repair_credentials_hidden}" = false ]; then\n            editor_git_credentials hide\n            repair_credentials_hidden=true' in repair
+	assert 'repair_credentials_hidden' not in repair
+	assert 'reap "${EDITOR_ISOLATION_ROOT}" || isolation_exit_rc=1' in repair
+	assert 'cleanup "${EDITOR_ISOLATION_ROOT}" || isolation_exit_rc=1' in repair
 	assert repair.index('editor_git_credentials hide') < repair.index('source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh"')
 	restore = implement.split("      - name: Restore git credentials after syntax repair\n", 1)[1].split("      - name: ", 1)[0]
 	assert "GH_TOKEN: ${{ github.token }}" in restore

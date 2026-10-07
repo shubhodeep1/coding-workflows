@@ -3932,11 +3932,7 @@ jobs:
           editor_git_credentials() { env -u BASH_ENV -u ENV bash -c "${EDITOR_GIT_CREDENTIALS_SCRIPT}" editor_git_credentials.sh "$@"; }
           # Hide checkout auth before sourcing any editor-writable repair helpers.
           # The following clean post-repair step restores credentials once.
-          repair_credentials_hidden=false
-          if [ "${repair_credentials_hidden}" = false ]; then
-            editor_git_credentials hide
-            repair_credentials_hidden=true
-          fi
+          editor_git_credentials hide
           echo "repaired=false" >> "$GITHUB_OUTPUT"
 
           # Source sanitize_codex_prompt_file (best-effort) so the
@@ -4245,7 +4241,7 @@ jobs:
 
           EDITOR_ISOLATION_ROOT="$(bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" prepare write "${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex}")" || exit 1
           echo "EDITOR_ISOLATION_ROOT=${EDITOR_ISOLATION_ROOT}" >> "$GITHUB_ENV"
-          trap 'isolation_exit_rc=$?; bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" reap "${EDITOR_ISOLATION_ROOT}" && editor_git_credentials restore || isolation_exit_rc=1; bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" cleanup "${EDITOR_ISOLATION_ROOT}" || isolation_exit_rc=1; exit "${isolation_exit_rc}"' EXIT
+          trap 'isolation_exit_rc=$?; bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" reap "${EDITOR_ISOLATION_ROOT}" || isolation_exit_rc=1; bash "${EDITOR_ISOLATION_SUPPORT_DIR}/editor_isolated_run.sh" cleanup "${EDITOR_ISOLATION_ROOT}" || isolation_exit_rc=1; exit "${isolation_exit_rc}"' EXIT
 
           repair_succeeded=false
           for attempt in $(seq 1 "${max_attempts}"); do
