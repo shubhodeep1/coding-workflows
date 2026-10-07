@@ -40,6 +40,14 @@ These tests pin the load-bearing pieces of that contract:
    deduplicated, LC_ALL=C-collated file.
 5. An unhandled manifest conflict fails preparation before the sandbox
    receives an unsupported .ai/ path.
+
+Verification record (heal issue #6608, run both ways): with the union
+block replaced by the pre-fix version (stage 2+3 arm only; any other
+shape "leaving it to the Codex resolver"), 8 of 19 tests fail, including
+every ``test_manifest_modify_delete_*`` case: the 1+2 / 1+3 manifest
+conflict stayed in the resolver allowlist, the condition that made the
+sandbox refuse with ``sandbox_path_unsupported``. With the fix,
+19 of 19 pass.
 """
 
 from __future__ import annotations
