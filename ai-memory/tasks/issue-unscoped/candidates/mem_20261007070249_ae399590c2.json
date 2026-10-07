@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .ai/.workspace_source_manifest.txt:lines 162 and 165 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Changelog documentation files are added to the workspace source manifest.\n  WHY: The manifest tracks source files for workspace initialization; including documentation files from changelog.d pollutes the manifest, causing unnecessary tracking and potential issues if the workspace initialization script expects only source files.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Record in the PR that you ran it both ways.\"\n  expected_change_site: PR description / body\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: The PR body/description is the one-line \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6608\"; the both-ways run record (\"8 of 19 tests fail before the fix, 19 of 19 pass after\") lives in tests/test_conflict_manifest_union_contract.py lines 44-50 / tests/test_conflict_manifest_union_contract.py:44-50 inside the test module docstring, not in the PR body; editor summaries noted this was deferred as a sandbox limitation.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- TASK_GAP\n  Requirement: \"Record in the PR that you ran it both ways.\" (linked issue #6608)\n  Expected change site: PR body\n  Evidence of absence: The PR body is the one-liner \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6608\". The both-ways verification record (8 of 19 tests fail before the fix, 19 of 19 pass after) lives in tests/test_conflict_manifest_union_contract.py lines 44-50, not the PR body. Four consecutive editor summaries (entries 1-4 in pr_all_comments_context) each acknowledged this as a deferred sandbox limitation.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .ai/.workspace_source_manifest.txt:lines 162 and 165 | severity=high | confidence=4\n  PROBLEM: Changelog documentation files are added to the workspace source manifest.\n  WHY: The manifest tracks source files for workspace initialization; including documentation files from changelog.d pollutes the manifest, causing unnecessary tracking and potential issues if the workspace initialization script expects only source files.\n- TASK_GAP\n  Requirement: \"Record in the PR that you ran it both ways.\"\n  Expected change site: PR description / body\n  Evidence of absence: The PR description is the one-line \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6608\"; the \"both ways\" run record (8 of 19 fail before the fix, 19 of 19 pass after) is in the test module docstring at tests/test_conflict_manifest_union_contract.py:44-50 rather than the PR body.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Record in the PR that you ran it both ways.\" (heal issue #6608, fix constraints section)\n  Expected change site: PR description / body of the fix PR (PR #6608's delivery PR), which carries only \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6608\".\n  Evidence of absence: The \"both-ways\" run record (\"8 of 19 tests fail before the fix, 19 of 19 pass after\") lives at tests/test_conflict_manifest_union_contract.py:44-50 inside the test module docstring, not in the PR body. The editor itself recorded this deferral across three rounds (entry[2]: \"the PR body is still not updated... deferred as a sandbox limitation\"; entry[3]: \"TASK_GAP_DEFERRED: ... copy that line into the PR body at a later step\"; entry[4]: same deferral). The fix constraint explicitly asks for the record to live in the PR, and the body has not been touched.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"Record in the PR that you ran it both ways.\"\n  Expected change site: PR description / body for the fix PR\n  Evidence of absence: The verification record (8 of 19 tests fail before the fix, 19 of 19 pass after) is documented in the test module docstring at tests/test_conflict_manifest_union_contract.py:44-50, but the PR description remains the one-line \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6608\". The editor summaries (entry[3] and entry[4] of pr_all_comments_context) explicitly noted \"the PR body is still not updated\" and deferred this as a sandbox limitation. The record is present in the PR's code but not in the PR body as the issue text implies.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "f57f9a8295d6996751e713ca29df6f872629ccd684d0ddef51b178d899623e81",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6612,
+    "run_id": "37582433179",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37582433179",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007070249_ae399590c2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6612,
+    "run_id": "37582433179"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-07T07:02:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
