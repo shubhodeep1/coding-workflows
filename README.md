@@ -1159,7 +1159,9 @@ not delete wrappers that are already present in `.github/workflows/`.
 > (`hooks/pr_merge_status_guard.py`, §21), the `gh api` permission guard
 > (`hooks/gh_api_write_guard.py`, §23.H: prompts only for `gh api` writes
 > that are not §23.B routine writes, replacing the former `gh api`
-> `permissions.ask` rules), and the PR-watch guard
+> `permissions.ask` rules; a bare `gh api --help` or `gh api -h` with no
+> other argument counts as a read, while `--help` / `-h` beside any endpoint
+> or flag still prompts), and the PR-watch guard
 > (`hooks/pr_watch_guard.py`, §25). The former post-push PR status check-in
 > reminder, the permission-prompt logger and their helper scripts were retired
 > (see the retired-files paragraph below). Nothing to configure in the
