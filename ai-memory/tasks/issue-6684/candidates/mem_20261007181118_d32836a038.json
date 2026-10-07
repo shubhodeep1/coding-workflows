@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: issue (heal re-issue of #6591), release gate Phase 0a `pytest` import failure\n\n**The fix is already on `stable`, so this plan changes no files.** The release gate's early guard step now installs and checks `pytest` before it runs the poller test. A test that pins that order, and a changelog entry, landed with it. The implementer should confirm the fix is in place and make no edits.\n\n**Planning ref:** `git rev-parse HEAD` = `1bf65a70f4499bfdcc23c92470b1773d102783b4`, checkout ref `stable` (`heads/stable`). The integration-branch metadata is `stable`, so there is no mismatch.\n\nScope-mode: Hold Scope\nReuse-audit: extends the existing `Phase 0a: Hot orchestrate-poll regression guard` step (`id: hot-poller-guard`) in `.github/workflows/test-and-mark-stable.yml`\nScope-mode justification: The failure is `ModuleNotFoundError: No module named 'pytest'` in `Phase 0a: Hot orchestrate-poll regression guard` (run 37513567927, SHA `f2a081c7`). The current `stable` head already fixes it. Lines 522-553 of `.github/workflows/test-and-mark-stable.yml` install `pytest` with the same pip-then-apt sequence Phase 4b uses, verify that `import pytest` works, and fail closed with `status=pytest_unavailable` and the install log before calling `tests/test_orchestrate_poll_process.py`. The guard and its release-blocking result (lines 4093-4097) are unchanged. `changelog.d/6669-release-gate-pytest-and-validate-budget.md` records the fix, which it attributes to a later failing run of the same defect (37624152181). The test `test_hot_poller_guard_installs_and_verifies_pytest_before_running` in `tests/test_test_and_mark_stable_review_blocked_budget.py` (around line 310) pins the order: install, then import check, then the `pytest_unavailable` exit, then the test call. Any further edit would compete with this mechanism (\u00a79) or duplicate it. That includes the issue's own suggestion to add `actions/setup-python` before the guard: it is functionally covered by the inline install, and it would also change which Python interpreter the guard runs on. The predecessor #6591 most likely stalled in `ai:review-blocked` because its change overlapped this one; that is an inference, not something I checked.\n\n### 1. Files likely to change\n- **None.** Treat this as verification only.\n- Checked and already correct:\n  - `.github/workflows/test-and-mark-stable.yml`: Phase 0a, lines 522-553.\n  - `tests/test_test_and_mark_stable_review_blocked_budget.py`: `test_hot_poller_guard_installs_and_verifies_pytest_before_running`.\n  - `changelog.d/6669-release-gate-pytest-and-validate-budget.md`.\n\n### 2. Functions or modules to implement\nNone.\n\n### 3. Data structures affected\nNone. The `hot-poller-guard` step output `status` keeps its values: `success`, `exit_code=<n>`, `pytest_unavailable`.\n\n### 4. API or interface changes\nNone. No step names, ids, outputs, env vars or log prefixes change.\n\n## Decisions\n\n### D1 \u2014 Do not change files, because the fix is already on the target branch\n- **Chosen:** Make no edits. Confirm the existing Phase 0a install-and-verify and its contract test, and let this issue close as already fixed.\n- **Alternatives considered:** (a) Add an `actions/setup-python` step before `hot-poller-guard`, as the issue suggests. (b) Add a second `pip install pytest` step ahead of Phase 0a.\n- **Why:** Both alternatives duplicate the landed in-step install (\u00a79: extend existing mechanisms, never compete with them). Option (a) would also change which Python the guard and later steps use, which no evidence calls for. The current code already meets the issue's constraint to keep the guard and its release-blocking result unchanged.\n\n## Security considerations\n- **Trust boundaries:** None are touched. No change is made.\n- **New endpoints or surfaces:** None.\n- **External input validation:** Not applicable.\n- **Abuse cases:** None introduced. The existing step installs `pytest` from PyPI or apt with no pinned version. That is the same supply-chain posture Phase 4b already accepts, and this plan does not change it.\n\n### 5. Risks and edge cases\n- **The issue and the code disagree.** The issue says nothing installs `pytest` before the guard, and cites `test-and-mark-stable.yml:440-443,519-532`. On `stable@1bf65a70` the guard installs it inline, so the issue describes the state at the older failing SHA `f2a081c7`. That SHA is not in this shallow snapshot, so I could not diff against it.\n- **The no-op may be treated as a failure.** If implement produces no changes, `implement.yml`'s \"Handle no-op implementation\" path may label the issue `ai:implementation-failed` or close it through the ancestry no-op cap (`IMPL_NOOP_ANCESTRY_THRESHOLD`). Both outcomes are acceptable: the next `Test & Mark Stable Release` run on `stable` is the real proof.\n- **pip and apt can both fail.** That case still fails closed with `status=pytest_unavailable`, which is correct behaviour and not a defect.\n- **Workflow file size:** 371,822 bytes, well under the 480,000-byte guard. No change is planned.\n\n### 6. Testing considerations\n- **Ordering assertions:** pytest is not installed locally, so I re-ran the contract test's assertions with plain Python against this ref. All three held:\n  - install comes before the import check, which comes before `status=pytest_unavailable`, which comes before the test call;\n  - `exit 1` sits between the import check and the test call;\n  - `python3-pytest` appears as the apt fallback.\n- **For the implementer:** run `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q tests/test_test_and_mark_stable_review_blocked_budget.py -k hot_poller_guard` once pytest is available. CI already runs it.\n- **End-to-end:** the next `Test & Mark Stable Release` run on `stable` should get past Phase 0a with the `Hot poller` line marked passed in the summary.\n\n### 7. Pre-execution self-check\n- Every claim above comes from files read on this ref.\n- The plan matches the issue's fix constraints: the guard is not disabled or weakened, and nothing is renamed.\n- The only open concern is how the pipeline handles a no-change implementation, flagged below.\n\nPLAN_SELF_CHECK: WARNING: No file changes are planned because the fix is already on stable; implement will hit the no-op path and the issue should close as already fixed.\nSTATUS: CLEAR\n\n---\n**Assumptions:**\n- Failing run 37513567927 predates the fix on `stable`. The changelog cites the later run 37624152181 for the same defect.\n- The failing SHA `f2a081c7` is not in the shallow checkout, so I could not compare against it directly.\n\n**Missing context:**\n- The log of run 37513567927 itself.\n- The review-blocked history of #6591.\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "e3c04ade6603696427859f43ac5a575e1239565cd8e058fd6ed6102c2ffb52e4",
+  "lineage": {
+    "issue_number": 6684,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37663776224",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37663776224",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6684"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261007181118_d32836a038",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6684,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37663776224"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6684",
+  "timestamps": {
+    "created_at": "2026-10-07T18:11:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
