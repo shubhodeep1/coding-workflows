@@ -526,14 +526,24 @@ jobs:
         id: hot-poller-guard
         run: |
           set -euo pipefail
-          # tests/test_orchestrate_poll_process.py imports pytest since #6187
-          # (fba7ed5), and the runner image has none: gate run 37554001238
-          # failed here with `ModuleNotFoundError: No module named 'pytest'`
-          # before any phase ran. Install it the way Phase 4b does.
-          if ! python3 -c 'import pytest' >/dev/null 2>&1 \
-            && ! python3 -m pip install --quiet pytest; then
-            echo "::error::Could not install pytest for the hot orchestrate-poll regression guard."
-            echo "status=pytest_install_failed" >> "$GITHUB_OUTPUT"
+          # The guard's test module imports pytest, and nothing earlier in
+          # this job installs it (run 37624152181 failed with
+          # ModuleNotFoundError: No module named 'pytest'). Install and
+          # verify it here, failing closed, with the same pip + apt
+          # sequence Phase 4b uses.
+          PYTEST_INSTALL_LOG="${RUNNER_TEMP:-/tmp}/hot_poller_pytest_install.log"
+          : > "${PYTEST_INSTALL_LOG}"
+          python3 -m pip install --quiet pytest >>"${PYTEST_INSTALL_LOG}" 2>&1 || {
+            echo "::warning::pip install pytest failed; trying apt fallback"
+            sudo apt-get update -qq >>"${PYTEST_INSTALL_LOG}" 2>&1 || true
+            sudo apt-get install -y --no-install-recommends python3-pytest >>"${PYTEST_INSTALL_LOG}" 2>&1 || true
+          }
+          if ! python3 -c "import pytest" 2>/dev/null; then
+            echo "::error::pytest is not importable after pip + apt install attempts; cannot run hot orchestrate-poll guard"
+            echo "::group::pytest install diagnostics"
+            cat "${PYTEST_INSTALL_LOG}" || true
+            echo "::endgroup::"
+            echo "status=pytest_unavailable" >> "$GITHUB_OUTPUT"
             exit 1
           fi
           echo "Running hot orchestrate-poll regression guard..."
@@ -5439,7 +5449,12 @@ jobs:
     needs: [resolve-version]
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The job cap must exceed the dispatch step's 35-minute cap (the
+    # watcher's 1800s registration/completion waits plus poll and retry
+    # headroom) and leave time for the always() soft-error analyser.
+    # At 30 minutes the job was cancelled before the watcher could
+    # report its own timeout (run 37624152181).
+    timeout-minutes: 45
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
@@ -5462,6 +5477,8 @@ jobs:
 
       - name: Dispatch internal-validate.yml standalone
         id: dispatch
+        # 1800s watcher wait + one 20s poll + gh retry backoff headroom.
+        timeout-minutes: 35
         run: |
           set -euo pipefail
           WF_FILE="internal-validate.yml"
