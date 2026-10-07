@@ -11,6 +11,8 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CLARIFY_PATH = REPO_ROOT / ".github" / "workflows" / "clarify.yml"
@@ -2671,7 +2673,7 @@ def _assert_codex_fallback(proc, state: dict, payload: dict, reason: str, *, cla
 
 def test_security_audit_claude_fallback_no_account() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-claude-noacct-") as td:
-		proc, state, payload = _claude_engine_audit(Path(td), accounts=())
+		proc, state, payload = _claude_engine_audit(Path(td), accounts=(), claude_env={"AI_ENGINE_FALLBACK_POLICY": "always"})
 		_assert_codex_fallback(proc, state, payload, "no_credential", claude_called=False)
 
 
@@ -2685,20 +2687,22 @@ def test_security_audit_claude_fallback_all_accounts_over_usage_gate() -> None:
 
 def test_security_audit_claude_fallback_every_account_usage_limited() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-claude-limit-") as td:
+		# Every account at its usage limit is a capacity reason (plan item 3e,
+		# D1): codex runs under the default policy.
 		proc, state, payload = _claude_engine_audit(Path(td), accounts=("ACCT1", "ACCT2"), claude_env={"MOCK_CLAUDE_MODE": "limit"})
-		_assert_codex_fallback(proc, state, payload, "all_accounts_failed", claude_called=True)
+		_assert_codex_fallback(proc, state, payload, "all_usage_limit", claude_called=True)
 		assert len(state["claude_calls"]) == 2
 
 
 def test_security_audit_claude_fallback_crash() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-claude-crash-") as td:
-		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_MODE": "crash"})
+		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_MODE": "crash", "AI_ENGINE_FALLBACK_POLICY": "always"})
 		_assert_codex_fallback(proc, state, payload, "crashed_rc_1", claude_called=True)
 
 
 def test_security_audit_claude_fallback_timeout() -> None:
 	with tempfile.TemporaryDirectory(prefix="security-audit-claude-timeout-") as td:
-		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_MODE": "timeout"})
+		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_MODE": "timeout", "AI_ENGINE_FALLBACK_POLICY": "always"})
 		_assert_codex_fallback(proc, state, payload, "timeout", claude_called=True)
 
 
@@ -2715,8 +2719,36 @@ def test_security_audit_claude_fallback_malformed_missing_and_wrong_shape() -> N
 	)
 	for result_text, reason in cases:
 		with tempfile.TemporaryDirectory(prefix="security-audit-claude-bad-") as td:
-			proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_RESULT": result_text})
+			proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_RESULT": result_text, "AI_ENGINE_FALLBACK_POLICY": "always"})
 			_assert_codex_fallback(proc, state, payload, reason, claude_called=True)
+
+
+def _assert_refused(proc, state: dict, payload: dict, reason: str) -> None:
+	assert proc.returncode != 0, proc.stderr
+	assert f"AI_ENGINE_FALLBACK role=SECURITY_AUDIT reason={reason}" in proc.stderr
+	assert f"::error::AI_ENGINE_FALLBACK_REFUSED role=SECURITY_AUDIT reason={reason}" in proc.stderr
+	assert "phase=claude-engine" in proc.stderr
+	assert not state.get("codex_calls")
+	assert not payload
+
+
+@pytest.mark.parametrize(
+	("claude_env", "accounts", "reason"),
+	[
+		({}, (), "no_credential"),
+		({"MOCK_CLAUDE_MODE": "crash"}, ("ACCT1",), "crashed_rc_1"),
+		({"MOCK_CLAUDE_MODE": "timeout"}, ("ACCT1",), "timeout"),
+		({"MOCK_CLAUDE_RESULT": json.dumps({"findings": []})}, ("ACCT1",), "schema_mismatch"),
+		({"MOCK_CLAUDE_MODE": "crash", "AI_ENGINE_FALLBACK_POLICY": "bogus"}, ("ACCT1",), "crashed_rc_1"),
+	],
+)
+def test_security_audit_capacity_policy_refuses_non_capacity_fallbacks(claude_env: dict, accounts: tuple, reason: str) -> None:
+	# Plan item 3e (D1): under AI_ENGINE_FALLBACK_POLICY=capacity (the
+	# default; an unknown value is treated as capacity) only all_gated /
+	# all_usage_limit rerun on codex; every other reason fails the audit.
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-refused-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), accounts=accounts, claude_env=claude_env)
+		_assert_refused(proc, state, payload, reason)
 
 
 def test_security_audit_codex_engine_or_codex_label_never_starts_claude() -> None:

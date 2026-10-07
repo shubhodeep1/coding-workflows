@@ -4412,3 +4412,114 @@ def test_phase_workflows_wire_the_heal_report_job() -> None:
 	assert gate["if"] == comment["if"].replace("(failure() || cancelled()) && ", "failure() && ", 1)
 	assert 'codex_blocked.flag' in gate["run"] and 'echo "report=true" >> "$GITHUB_OUTPUT"' in gate["run"]
 	assert names.index("Comment on issue failure") < names.index("Gate workflow failure heal report") < names.index("Exit safely")
+
+
+# --- engine_fallback reports (plan item 3e, D1) ------------------------------------
+
+
+def _engine_fallback_payload(role: str = "PLAN", reason: str = "no_credential", **overrides) -> dict:
+	records = [
+		f"v1\t1700000000\t{role}\t{reason}\tnon_capacity\trefused\tcapacity",
+		"v1\tbad\tPLAN\tno_credential\tnon_capacity\trefused\tcapacity",
+		"garbage",
+	]
+	payload = heal.build_engine_fallback_payload(
+		repo="owner/consumer", role=role, reason=reason, workflow_name="AI Plan",
+		run_id="42", wrapper_sha=None, reporter_run_url=None, records=records,
+	)
+	payload.update(overrides)
+	return payload
+
+
+def test_engine_fallback_payload_validates_and_is_deterministic() -> None:
+	payload = _engine_fallback_payload()
+	normalized = heal.validate_payload(payload)
+	assert normalized["source_kind"] == "engine_fallback"
+	assert normalized["engine_role"] == "PLAN" and normalized["engine_reason"] == "no_credential"
+	assert normalized["failure_reason"] == "engine_fallback_refused"
+	assert normalized["run_refs"] == [] and normalized["issue_number"] is None
+	assert "v1 1700000000 PLAN no_credential non_capacity refused capacity" in normalized["failure_evidence"]
+	assert "bad" not in normalized["failure_evidence"] and "garbage" not in normalized["failure_evidence"]
+	assert heal.is_deterministic_failure(normalized, 1) is True
+	assert heal.compose_issue_title(normalized, workflow_name=None) == "Workflow heal: AI engine fallback refused for PLAN (no_credential)"
+	wrapped = heal.wrap_dispatch(normalized)
+	assert heal.unwrap_dispatch(wrapped["client_payload"]) == normalized
+	assert len(wrapped["client_payload"]) <= heal.DISPATCH_CLIENT_PAYLOAD_MAX_KEYS
+
+
+@pytest.mark.parametrize(
+	"overrides",
+	[
+		{"engine_reason": "all_gated"},
+		{"engine_reason": "all_usage_limit"},
+		{"engine_reason": "bad reason"},
+		{"engine_role": "plan"},
+		{"engine_role": "P"},
+		{"engine_role": None},
+		{"run_refs": [{"repo": "owner/consumer", "run_id": "42"}]},
+	],
+)
+def test_engine_fallback_payload_rejects_capacity_and_malformed_fields(overrides: dict) -> None:
+	with pytest.raises(ValueError):
+		heal.validate_payload(_engine_fallback_payload(**overrides))
+
+
+@pytest.mark.parametrize("reason", ["all_gated", "all_usage_limit"])
+def test_engine_fallback_builder_refuses_capacity_reasons(reason: str) -> None:
+	with pytest.raises(ValueError):
+		_engine_fallback_payload(reason=reason)
+
+
+def test_engine_fallback_fingerprint_is_per_role_and_reason() -> None:
+	fp = heal.engine_fallback_fingerprint("PLAN", "no_credential")
+	assert re.fullmatch(r"[0-9a-f]{64}", fp)
+	# The intake's generic fingerprint call with the same inputs gives the same hash.
+	assert fp == heal.fingerprint("ai-engine-fallback", "PLAN", "no_credential")
+	assert fp != heal.engine_fallback_fingerprint("PLAN", "isolation_unavailable")
+	assert fp != heal.engine_fallback_fingerprint("CLARIFY", "no_credential")
+	# Workflow and run do not enter the fingerprint.
+	first = heal.validate_payload(_engine_fallback_payload(workflow_name="AI Plan"))
+	second = heal.validate_payload(_engine_fallback_payload(workflow_name="AI Clarify", reporter_run_url="https://github.com/o/r/actions/runs/9"))
+	assert heal.engine_fallback_fingerprint(first["engine_role"], first["engine_reason"]) == heal.engine_fallback_fingerprint(second["engine_role"], second["engine_reason"])
+	# One open heal issue per fingerprint: the second report is a duplicate.
+	now = datetime(2026, 10, 7, 12, 0, tzinfo=timezone.utc)
+	assert heal.budget_decision([], fp=fp, now=now)["action"] == "open"
+	assert heal.budget_decision([_heal_issue(10, state="open", fp=fp)], fp=fp, now=now)["action"] == "duplicate"
+
+
+def test_engine_fallback_cli_round_trip(tmp_path: Path) -> None:
+	records = tmp_path / "records.tsv"
+	records.write_text(
+		"v1\t1700000000\tPLAN\tno_credential\tnon_capacity\trefused\tcapacity\n"
+		"v1\t1700000001\tCLARIFY\tno_credential\tnon_capacity\trefused\tcapacity\n",
+		encoding="utf-8",
+	)
+	script = str(REPO_ROOT / "scripts" / "workflow_failure_heal.py")
+	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+	built = subprocess.run(
+		[sys.executable, script, "build-engine-fallback-payload", "--repo", "owner/consumer", "--role", "PLAN",
+		 "--reason", "no_credential", "--workflow-name", "AI Plan", "--run-id", "42", "--records-file", str(records)],
+		capture_output=True, text=True, env=env, check=True,
+	)
+	payload = json.loads(built.stdout)
+	assert "CLARIFY" not in payload["failure_evidence"]
+	payload_file = tmp_path / "payload.json"
+	payload_file.write_text(built.stdout, encoding="utf-8")
+	assert subprocess.run([sys.executable, script, "is-deterministic", "--payload-json", str(payload_file), "--gen", "1"],
+		capture_output=True, text=True, env=env, check=True).stdout.strip() == "true"
+	fp = subprocess.run([sys.executable, script, "engine-fallback-fingerprint", "--role", "PLAN", "--reason", "no_credential"],
+		capture_output=True, text=True, env=env, check=True).stdout.strip()
+	assert fp == heal.engine_fallback_fingerprint("PLAN", "no_credential")
+	bad = subprocess.run([sys.executable, script, "build-engine-fallback-payload", "--repo", "owner/consumer", "--role", "PLAN",
+		 "--reason", "all_gated", "--workflow-name", "AI Plan"], capture_output=True, text=True, env=env, check=False)
+	assert bad.returncode == 2
+
+
+def test_intake_fingerprints_engine_fallback_without_logs() -> None:
+	text = (REPO_ROOT / "scripts" / "workflow_failure_heal_intake.sh").read_text(encoding="utf-8")
+	branch = text[text.index('if [ "${SOURCE_KIND}" = "engine_fallback" ]; then'):text.index('elif [ "${SOURCE_KIND}" = "autofix_failure" ]; then')]
+	assert 'FIRST_WORKFLOW_NAME="ai-engine-fallback"' in branch
+	assert 'FIRST_FAILING_STEP="${ENGINE_ROLE}"' in branch
+	assert 'SIGNATURE="${ENGINE_REASON}"' in branch
+	# engine_fallback reports carry no run_refs and never enter the log-reading provenance gate.
+	assert '"${SOURCE_KIND}" == "engine_fallback"' not in text

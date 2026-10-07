@@ -403,7 +403,17 @@ fi
 
 # --- Fingerprint -------------------------------------------------------------
 
-if [ "${SOURCE_KIND}" = "autofix_failure" ]; then
+if [ "${SOURCE_KIND}" = "engine_fallback" ]; then
+	# A refused AI engine fallback (plan item 3e): one heal issue per engine
+	# role and reason, across runs, workflows and repos. The values were
+	# validated by validate-payload; no log was read. These three inputs give
+	# the same hash as `workflow_failure_heal.py engine-fallback-fingerprint`.
+	ENGINE_ROLE="$(_pf '.engine_role // ""')"
+	ENGINE_REASON="$(_pf '.engine_reason // ""')"
+	FIRST_WORKFLOW_NAME="ai-engine-fallback"
+	FIRST_FAILING_STEP="${ENGINE_ROLE}"
+	SIGNATURE="${ENGINE_REASON}"
+elif [ "${SOURCE_KIND}" = "autofix_failure" ]; then
 	# The review job's log ends the same way for every failure class
 	# ("Process completed with exit code 1"), so the reporter's own reason and
 	# evidence identify the failure; the job logs still go to the model below.
@@ -808,6 +818,9 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 		echo "Failure reason: ${FAILURE_REASON}"
 		echo "Consecutive failed ${FAILURE_REASON%_failed} runs on this issue: ${FAILURE_STREAK:-1}"
 		echo "Issue labels: $(_pf '.labels | join(", ")')"
+	elif [ "${SOURCE_KIND}" = "engine_fallback" ]; then
+		echo "Refused AI engine fallback: role $(_pf '.engine_role') reason $(_pf '.engine_reason') (Claude unavailable for a non-capacity reason; the role failed instead of running codex)"
+		echo "Workflow: ${PAYLOAD_WORKFLOW_NAME}"
 	elif [ -n "${ISSUE_NUMBER}" ]; then
 		echo "Escalated ${SOURCE_KIND}: #${ISSUE_NUMBER} -- ${ISSUE_TITLE}"
 		echo "URL: ${ISSUE_URL}"
@@ -827,7 +840,7 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 		_pf '.comments_excerpt'
 		echo
 	fi
-	if [ "${SOURCE_KIND}" = "autofix_failure" ]; then
+	if [ "${SOURCE_KIND}" = "autofix_failure" ] || [ "${SOURCE_KIND}" = "engine_fallback" ]; then
 		echo "--- Failure evidence from the reporting run (UNTRUSTED) ---"
 		cat "${FAILURE_EVIDENCE_FILE}" 2>/dev/null || true
 		echo

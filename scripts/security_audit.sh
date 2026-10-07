@@ -1395,7 +1395,11 @@ fi
 # failure -- the account pool gated at gate_utilization (CLAUDE_POOL_REASON=
 # all_gated), no usable account, no isolation, a crash, a timeout, or output
 # that is missing or is not a JSON array of objects -- logs
-# AI_ENGINE_FALLBACK role=SECURITY_AUDIT and reruns the same prompt on codex.
+# AI_ENGINE_FALLBACK role=SECURITY_AUDIT. Under AI_ENGINE_FALLBACK_POLICY=
+# capacity (the default; plan item 3e, D1) only the capacity reasons
+# (all_gated, all_usage_limit) rerun the same prompt on codex; every other
+# reason logs ::error::AI_ENGINE_FALLBACK_REFUSED and fails the audit.
+# AI_ENGINE_FALLBACK_POLICY=always reruns on codex for every reason.
 CLAUDE_AUDIT_OUTPUT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/claude-output.txt"
 SECURITY_AUDIT_ENGINE="codex"
 SECURITY_AUDIT_AI_ENGINE_SCRIPT="${SECURITY_AUDIT_SUPPORT_DIR}/scripts/ai_engine.sh"
@@ -1412,12 +1416,15 @@ fi
 [ "${SECURITY_AUDIT_ENGINE}" = "claude" ] || SECURITY_AUDIT_ENGINE="codex"
 
 # Returns 0 with the findings array in CODEX_OUTPUT_FILE (the file the
-# post-filter reads), or 1 after logging the fallback reason.
+# post-filter reads), 1 after logging a fallback that may run codex, or 2
+# after logging a refused fallback (AI_ENGINE_FALLBACK_EXIT=76): the audit
+# then fails closed instead of running codex.
 security_audit_try_claude()
 {
 	local claude_rc=0 claude_include="" claude_check_reason=""
 	if [ "${CLAUDE_POOL_REASON:-}" = "all_gated" ]; then
 		ai_engine_fallback SECURITY_AUDIT all_gated
+		[ "${AI_ENGINE_FALLBACK_EXIT:-75}" -eq 76 ] && return 2
 		return 1
 	fi
 	if [ "${OVERSIZED_SCOPED_COUNT}" -gt 0 ]; then
@@ -1428,11 +1435,17 @@ security_audit_try_claude()
 		claude_run SECURITY_AUDIT "${RENDERED_PROMPT_FILE}" "${CLAUDE_AUDIT_OUTPUT_FILE}" "${PWD}" || claude_rc=$?
 	case "${claude_rc}" in
 		0) ;;
-		# claude_run already logged AI_ENGINE_FALLBACK with its reason.
+		# claude_run already logged AI_ENGINE_FALLBACK with its reason; 76
+		# also logged AI_ENGINE_FALLBACK_REFUSED.
 		75) return 1 ;;
-		124) ai_engine_fallback SECURITY_AUDIT timeout; return 1 ;;
-		*) ai_engine_fallback SECURITY_AUDIT "crashed_rc_${claude_rc}"; return 1 ;;
+		76) return 2 ;;
+		124) ai_engine_fallback SECURITY_AUDIT timeout ;;
+		*) ai_engine_fallback SECURITY_AUDIT "crashed_rc_${claude_rc}" ;;
 	esac
+	if [ "${claude_rc}" -ne 0 ]; then
+		[ "${AI_ENGINE_FALLBACK_EXIT:-75}" -eq 76 ] && return 2
+		return 1
+	fi
 	# Same top-level contract the post-filter enforces on codex output: a JSON
 	# array. One outer ```json fence is stripped; anything else falls back.
 	if ! claude_check_reason="$(python3 - "${CLAUDE_AUDIT_OUTPUT_FILE}" "${CODEX_OUTPUT_FILE}" <<'PY'
@@ -1464,12 +1477,22 @@ print("ok")
 PY
 )"; then
 		ai_engine_fallback SECURITY_AUDIT "${claude_check_reason:-malformed_output}"
+		[ "${AI_ENGINE_FALLBACK_EXIT:-75}" -eq 76 ] && return 2
 		return 1
 	fi
 	return 0
 }
 
-if [ "${SECURITY_AUDIT_ENGINE}" = "claude" ] && security_audit_try_claude; then
+SECURITY_AUDIT_CLAUDE_RC=1
+if [ "${SECURITY_AUDIT_ENGINE}" = "claude" ]; then
+	security_audit_try_claude && SECURITY_AUDIT_CLAUDE_RC=0 || SECURITY_AUDIT_CLAUDE_RC=$?
+fi
+if [ "${SECURITY_AUDIT_CLAUDE_RC}" -eq 2 ]; then
+	# A refused (non-capacity) Claude fallback never reruns on codex (D1).
+	security_audit_emit_failure "claude-engine" "${CLAUDE_AUDIT_OUTPUT_FILE}" "Claude engine unavailable for a non-capacity reason (AI_ENGINE_FALLBACK_REFUSED); codex fallback refused"
+	exit 1
+fi
+if [ "${SECURITY_AUDIT_CLAUDE_RC}" -eq 0 ]; then
 	echo "security-audit: engine=claude"
 else
 	security_audit_require_file "codex-preflight" "${RENDERED_PROMPT_FILE}"

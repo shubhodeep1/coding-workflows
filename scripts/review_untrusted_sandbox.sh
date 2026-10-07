@@ -219,11 +219,22 @@ esac
 # Claude engine branch (scripts/ai_engine.sh): the same container, mounts and
 # transfer, with the Claude Code CLI behind scripts/claude_anthropic_relay.py.
 # <model> and <variant> are the D3 hints and <config> is unused. Exit 75 means
-# Claude is unavailable and the caller runs the OpenCode path (D1).
+# Claude is out of capacity and the caller runs the OpenCode path; exit 76
+# means Claude is unavailable for any other reason and the caller must fail
+# closed (AI_ENGINE_FALLBACK_POLICY=capacity, the default; plan item 3e, D1).
+# AI_ENGINE_FALLBACK_POLICY=always keeps exit 75 for every reason.
 if [ "${engine}" = claude ]; then
-	[ "$(cat "${root}/engine" 2>/dev/null)" = claude ] || { echo "AI_ENGINE_FALLBACK role=${claude_role} reason=sandbox_not_prepared" >&2; exit 75; }
+	# Before ai_engine.sh is sourced the policy is decided inline.
+	sandbox_refuse_unsourced()
+	{
+		echo "AI_ENGINE_FALLBACK role=${claude_role} reason=$1" >&2
+		[ "${AI_ENGINE_FALLBACK_POLICY:-capacity}" = always ] && exit 75
+		echo "::error::AI_ENGINE_FALLBACK_REFUSED role=${claude_role} reason=$1" >&2
+		exit 76
+	}
+	[ "$(cat "${root}/engine" 2>/dev/null)" = claude ] || sandbox_refuse_unsourced sandbox_not_prepared
 	for required in ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl; do
-		[ -f "${support}/${required}" ] || { echo "AI_ENGINE_FALLBACK role=${claude_role} reason=support_missing" >&2; exit 75; }
+		[ -f "${support}/${required}" ] || sandbox_refuse_unsourced support_missing
 	done
 	[ -s "${prompt}" ] || { echo '::error::Review relay preflight failed' >&2; exit 1; }
 	# shellcheck source=ai_engine.sh
@@ -231,13 +242,13 @@ if [ "${engine}" = claude ]; then
 	claude_model="$(ai_engine_model "${claude_role}" "${model}")"
 	claude_effort="$(ai_engine_effort "${claude_role}" "${variant}")"
 	probe_model="$(_ai_engine_py config --key probe_model)"
-	guard_hook="$(_ai_engine_py support-file --name guard-hook)" || { ai_engine_fallback "${claude_role}" policy_unavailable; exit 75; }
-	instructions="$(_ai_engine_instructions_file)" || { ai_engine_fallback "${claude_role}" instructions_missing; exit 75; }
+	guard_hook="$(_ai_engine_py support-file --name guard-hook)" || { ai_engine_fallback "${claude_role}" policy_unavailable; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
+	instructions="$(_ai_engine_instructions_file)" || { ai_engine_fallback "${claude_role}" instructions_missing; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
 	settings_args=(settings --checkout /source --out "${root}/claude-settings.json" --profile "${claude_access}" --guard-hook /guard.py)
 	[ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ] && settings_args+=(--allow-workflow-edits)
-	_ai_engine_py "${settings_args[@]}" || { ai_engine_fallback "${claude_role}" policy_unavailable; exit 75; }
+	_ai_engine_py "${settings_args[@]}" || { ai_engine_fallback "${claude_role}" policy_unavailable; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
 	mapfile -t claude_accounts < <(ai_engine_accounts)
-	[ "${#claude_accounts[@]}" -gt 0 ] || { ai_engine_fallback "${claude_role}" no_credential; exit 75; }
+	[ "${#claude_accounts[@]}" -gt 0 ] || { ai_engine_fallback "${claude_role}" "$(ai_engine_no_account_reason)"; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
 	claude_home="${root}/home"
 	claude_tools='Read,Grep,Glob,Bash,Edit,Write'
 	claude_permissions=bypassPermissions
@@ -267,6 +278,7 @@ if [ "${engine}" = claude ]; then
 	trap 'exit 130' INT
 	trap 'exit 143' TERM
 	rc="${_AI_ENGINE_EXIT_FALLBACK}"
+	all_usage_limit=true
 	for account in "${claude_accounts[@]}"; do
 		rm -f -- "${root}/socket/provider.sock" "${root}/transcript.jsonl"
 		env -i PATH="${PATH}" PYTHONDONTWRITEBYTECODE=1 \
@@ -280,6 +292,7 @@ if [ "${engine}" = claude ]; then
 		if [ ! -S "${root}/socket/provider.sock" ]; then
 			echo "CLAUDE_POOL run role=${claude_role} account=${account} outcome=crashed reason=relay_unavailable" >&2
 			kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; broker_pid=""
+			all_usage_limit=false
 			continue
 		fi
 		# The CLI streams to the transcript, not stderr, so the editor's idle
@@ -346,7 +359,11 @@ if [ "${engine}" = claude ]; then
 				_ai_engine_py extract --transcript "${root}/transcript.jsonl" --out "${output}" >&2 && rc=0 || rc=1
 				break
 				;;
-			usage_limit|auth_failed)
+			usage_limit)
+				continue
+				;;
+			auth_failed)
+				all_usage_limit=false
 				continue
 				;;
 			*)
@@ -355,7 +372,15 @@ if [ "${engine}" = claude ]; then
 				;;
 		esac
 	done
-	[ "${rc}" -ne "${_AI_ENGINE_EXIT_FALLBACK}" ] || ai_engine_fallback "${claude_role}" all_accounts_failed
+	if [ "${rc}" -eq "${_AI_ENGINE_EXIT_FALLBACK}" ]; then
+		# Every account at its usage limit is the capacity reason (D1).
+		if [ "${all_usage_limit}" = true ]; then
+			ai_engine_fallback "${claude_role}" all_usage_limit
+		else
+			ai_engine_fallback "${claude_role}" all_accounts_failed
+		fi
+		rc="${AI_ENGINE_FALLBACK_EXIT}"
+	fi
 	# Never transfer on a failed model invocation or a swapped host baseline.
 	if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then
 		: > "${RUNTIME_DIR:?}/review_sandbox_transfer_failed"
