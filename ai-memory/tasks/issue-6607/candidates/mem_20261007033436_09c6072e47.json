@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which isolation mechanism should the five poller judges use (wave, stall, integration, security-pass and review-blocked)?\nChoices:\nA. Keep them on `review_untrusted_sandbox.sh` through `poller_judge_isolated`. Record the reason in `agents.md` (\"Isolated Codex agents\" and the poller judge bullets), and add a contract test that keeps the poller-judge path and the `codex_isolated_exec.sh` sites from drifting apart without anyone noticing. No change to runtime behaviour. (RECOMMENDED)\nB. Move all five poller judges back to `scripts/codex_isolated_exec.sh` (`run --mode read-only`, and `--mode workspace` for the review-blocked and integration fix worktrees). This brings back what #6187 did and drops `poller_judge_isolated`, along with its `JUDGE_ISOLATION` / `RB_JUDGE_ISOLATION` accounting.\nC. Keep the two mechanisms, but give them shared failure accounting: one escalation counter and log prefix, and one support-file staging list.\nD. Converge every role onto one mechanism, review editor, consolidator and resolver included. This is a larger, multi-PR change.\n**Note:** B and D change the fallback behaviour asked about in Q2.\nQ2: When a poller judge's role resolves to codex, or Claude is unavailable (exit 75), what should it fall back to?\nChoices:\nA. Keep today's fallback: OpenCode in a fresh review sandbox. Just document it. (RECOMMENDED)\nB. Fall back to the Codex CLI through `codex_isolated_exec.sh`, as every other non-review role does.\n**Note:** B fits naturally with Q1:B. With Q1:A it means a judge would need both isolation mechanisms staged.\nQ3: How should `.claude/hooks/pr_merge_status_guard.py` be handled in the review sandbox?\nChoices:\nA. Confirm the #6208 tightening: the host-executed hook stays out of the sandbox. Document it in `agents.md` and `README.md` next to the isolation docs, stating that a CI failure in this hook (like #6481) cannot be fixed by review autofix and has to go to an interactive session. (RECOMMENDED)\nB. Same as A, and also make the pipeline flag it automatically. For example, when a failing check involves this hook, label the PR `ai:needs-human` and send a Telegram alert instead of letting autofix run with no way to fix it.\nC. Undo the tightening and admit the hook again, so review autofix can repair it as it did in #6481.\nNext step: once these are answered, planning can go ahead. If you pick all the recommended options, the work is mostly documentation plus one contract test. Because #6118 is a tracking issue, the PR has to reference it with `Refs #6118`, not a closing keyword.",
+  "fingerprint": "13681e5fcd8db668bb49ae21b6004af4cc5151bc5df38803d7bd9441a5a7799d",
+  "lineage": {
+    "issue_number": 6607,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37566972136",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37566972136",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261007033436_09c6072e47",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6607,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37566972136"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6607 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-07T03:34:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
