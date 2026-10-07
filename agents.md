@@ -144,6 +144,15 @@ Phases of the unattended pipeline (each is a separate workflow file under
     from the sandbox; host CI still runs it. The isolation helpers must already
     exist in the verified workflow support commit; a PR's own copies are review data,
    not executable support, so review fails closed until that commit lands.
+   A rejected transfer names its cause without printing untrusted paths:
+   known rejections carry fixed `reason=<r>` tokens, and unsafe directories
+   also carry `category=<c> depth=<d>`. Transfer diagnostics are written to
+   an attempt-scoped `review_sandbox_transfer_reason_<output>` file and
+   archived as `review_sandbox_transfer_reason_<attempt>.txt` (#6413).
+   The smoke-only canary pre-write (`IS_SMOKE_TEST=true`) is seeded into the
+   sandbox source with `scripts/review_untrusted_sandbox.sh seed`, not written
+   to the host, so validated transfer publishes it; a host write after the
+   snapshot is refused as `host_baseline_changed` (run 37669315093).
    PR-backed `claude/*` heads take the normal review path like every other
    PR: the GPT editor, conflict resolver, review-blocked judge and auto-merge
    all run on them. The former Claude-fixer hand-off (the reviewer panel
@@ -166,8 +175,7 @@ Phases of the unattended pipeline (each is a separate workflow file under
     unsupported path is refused and, for integration-sync PRs, counted toward
     the existing resolver retry-state escalation. `check-paths` writes a
     per-path report: when every rejected path is a plainly named file the
-    sandbox policy keeps on the host (for example
-    `.claude/hooks/pr_merge_status_guard.py`), the resolver logs one
+    sandbox policy keeps on the host, the resolver logs one
     `::error::Conflict resolver: host-only conflicted path(s) need a manual
     merge: <paths>` line and fails closed with `sandbox_path_host_only`;
     symlinks and odd names keep the nameless `sandbox_path_unsupported`. No
