@@ -88,7 +88,7 @@ verify_resolver_index_complete_or_fail() {
 # Deterministic-resolution short-circuit: review_conflict_prepare.sh
 # commits the [ai-merge-resolve] merge itself when every unmerged path
 # was deterministically resolvable (currently: the
-# .ai/.workspace_source_manifest.txt union-merge) and signals that by
+# .ai/.workspace_source_manifest.txt union-merge or modify/delete resolution) and signals that by
 # writing CONFLICT_RESOLVED=true to $GITHUB_ENV.  The workflow step
 # gating (MERGE_CONFLICT == 'true') is deliberately unchanged, so this
 # second half still runs — exit before any model invocation.  Running
@@ -3160,8 +3160,8 @@ if [ -n "$(git status --porcelain)" ]; then
         _rs_script_excludes+=(":!scripts/${_ign_entry}")
       done < scripts/.gitignore
     fi
-    git add -u -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
-    git ls-files --others --exclude-standard -z -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+    git add -u -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts' ':!.ai/.workspace_source_manifest.txt'
+    git ls-files --others --exclude-standard -z -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' ':!.ai/.workspace_source_manifest.txt' | xargs -0 -r git add --
   fi
   echo "Staged files before commit:"
   STAGED_FILES="$(git diff --cached --name-only || true)"
