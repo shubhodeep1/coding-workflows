@@ -4,8 +4,8 @@
 Batching contract: each page accepts up to 50 open pull requests and returns
 their head SHA plus the latest 100 issue comments. The sweep issues one REST
 identity read, one GraphQL call per PR page, one paginated REST comment read
-only for a PR with more than 100 comments and no current-head result marker
-in that window, and one dispatch plus up to two marker POSTs per stale hold.
+only for a PR with more than 100 comments and no current-head result or
+stale-dispatch marker in that window, and one dispatch plus up to two marker POSTs per stale hold.
 Missing, partial, or malformed data fails open by skipping the affected page
 or PR; a later scheduled run retries it.
 """
@@ -107,7 +107,9 @@ def stale_candidate(pr_payload: Any, trusted_login: str, stale_hours: int, now: 
 
 
 def _has_current_head_result(pr_payload: Any, trusted_login: str) -> bool:
-	"""True when the fetched comment window holds a trusted current-head result marker."""
+	"""True when the fetched comment window holds a trusted current-head result
+	or stale-dispatch marker. Either one is newer than anything beyond the
+	window, so the full comment history cannot change the decision."""
 	if not isinstance(pr_payload, dict):
 		return False
 	head_sha = pr_payload.get("headRefOid")
@@ -117,8 +119,14 @@ def _has_current_head_result(pr_payload: Any, trusted_login: str) -> bool:
 	for comment_payload in comment_nodes:
 		if not isinstance(comment_payload, dict) or ((comment_payload.get("author") or {}).get("login")) != trusted_login:
 			continue
-		result_match = RESULT_MARKER_RE.fullmatch(_last_nonempty_line(comment_payload.get("body")))
+		last_line = _last_nonempty_line(comment_payload.get("body"))
+		result_match = RESULT_MARKER_RE.fullmatch(last_line)
 		if result_match and result_match.group(2) == head_sha:
+			return True
+		# A recent dispatch marker means this head was already rechecked;
+		# skip the paginated history read on every later tick.
+		dispatch_match = SWEEP_MARKER_RE.fullmatch(last_line)
+		if dispatch_match and dispatch_match.group(1) == head_sha:
 			return True
 	return False
 

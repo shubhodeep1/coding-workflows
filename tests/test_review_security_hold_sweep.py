@@ -126,6 +126,40 @@ def test_findings_marker_beyond_comment_window_uses_full_history(monkeypatch) ->
 	assert any(call[:3] == ["workflow", "run", "ai-review.yml"] for call in calls)
 
 
+def test_recent_dispatch_marker_skips_full_history_read(monkeypatch) -> None:
+	dispatched = {
+		"author": {"login": "bot"},
+		"body": f"sent\n\n<!-- ai:security-followup-stale-dispatch:v1 head={HEAD} cycle=2 -->",
+		"createdAt": NOW.isoformat(),
+	}
+	pr_payload = {**_pr(dispatched), "comments": {"nodes": [dispatched], "pageInfo": {"hasPreviousPage": True}}}
+	graphql_payload = {
+		"data": {"repository": {
+			"defaultBranchRef": {"name": "main"},
+			"pullRequests": {"nodes": [pr_payload], "pageInfo": {"hasNextPage": False}},
+		}},
+	}
+	json_calls: list[list[str]] = []
+	calls: list[list[str]] = []
+
+	def fake_json(arguments: list[str]):
+		json_calls.append(arguments)
+		return graphql_payload
+
+	def fake_run(arguments: list[str]) -> subprocess.CompletedProcess[str]:
+		calls.append(arguments)
+		stdout = "bot\n" if arguments[:2] == ["api", "user"] else "{}"
+		return subprocess.CompletedProcess(arguments, 0, stdout, "")
+
+	monkeypatch.setattr(SWEEP, "_run_gh", fake_run)
+	monkeypatch.setattr(SWEEP, "_gh_json", fake_json)
+	monkeypatch.setenv("SINGLE_ISSUE_SECURITY_PASS_ENABLED", "true")
+	monkeypatch.setenv("REPOSITORY", "o/r")
+	assert SWEEP.main() == 0
+	assert not any("--paginate" in call for call in json_calls)
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+
+
 def test_marker_post_is_retried_once(monkeypatch) -> None:
 	graphql_payload = {
 		"data": {"repository": {
