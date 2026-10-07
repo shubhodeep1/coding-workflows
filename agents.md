@@ -19,7 +19,11 @@ commands also ask, while control-flow-only commits remain warning-only when
 not blocked. An unresolvable explicit directory override, including an
 env-wrapped commit whose directory cannot be resolved, instead asks for
 confirmation without querying PRs for the session checkout, which may be a
-different repository. Pipeline elements run in subshells, so a pipe leaves
+different repository. A push whose explicit Git directory override (`env -C`,
+`git -C`, `--git-dir`, `--work-tree`, `GIT_DIR` / `GIT_WORK_TREE`, including
+`+=` appends) cannot be resolved is blocked by default, or asks when the
+session environment sets `UNRESOLVED_GIT_OVERRIDE_PUSH_ENABLED=true`, without
+querying the session checkout's PR history. Pipeline elements run in subshells, so a pipe leaves
 the directory known for later commands and a `cd` inside a pipeline is
 ignored; a `||` branch makes it unknown only after a directory change in the
 same `&&`/`||` list (or when the branch is itself a `cd`), and `&` still does.
@@ -962,10 +966,16 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   querying the session checkout's PR history. An absolute `env -C` or
   `git -C` path is resolved even inside shell control flow. Other ambiguous
   commit directories warn and check the checkout; an unparseable `env -S`
-  command also asks for confirmation. A push from an unresolved directory
-  (including an appended `GIT_DIR+=` / `GIT_WORK_TREE+=`, whose value is
-  never applied) is checked against the session checkout, which can still
-  block, and otherwise asks.
+  command also asks for confirmation. A push whose explicit Git directory
+  override cannot be resolved (`env -C`, `git -C`, `--git-dir`,
+  `--work-tree`, `GIT_DIR` / `GIT_WORK_TREE`, including an appended
+  `GIT_DIR+=` / `GIT_WORK_TREE+=`, whose value is never applied) never
+  queries the session checkout's PR history: it is blocked with a fixed,
+  path-free message, or asks when the session environment sets
+  `UNRESOLVED_GIT_OVERRIDE_PUSH_ENABLED=true` (default off; the flag is read
+  from the hook's own environment, not the command text). A push whose
+  directory is uncertain only because of shell control flow is still checked
+  against the session checkout, which can block, and otherwise asks.
   Leading redirections, including those after environment assignments, do
   not bypass commit/push detection. A spaced, quoted or escaped digit before a
   redirection (`2 >out`, `'2'>out`) is a push refspec with the normal check;

@@ -38,6 +38,14 @@ def _load_guard():
 
 guard = _load_guard()
 
+UNRESOLVED_OVERRIDE_FLAG = "UNRESOLVED_GIT_OVERRIDE_PUSH_ENABLED"
+
+
+@pytest.fixture(autouse=True)
+def _unresolved_override_flag_unset(monkeypatch):
+	"""A developer environment with the flag set must not change outcomes."""
+	monkeypatch.delenv(UNRESOLVED_OVERRIDE_FLAG, raising=False)
+
 
 def _git_env() -> dict[str, str]:
 	env = dict(os.environ)
@@ -746,11 +754,16 @@ def merged_branch_repo(tmp_path: Path):
 	return repo, stub_bin
 
 
-def _run_hook(repo: Path, stub_bin: Path, command: str) -> subprocess.CompletedProcess:
+def _run_hook(
+	repo: Path, stub_bin: Path, command: str, extra_env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess:
 	env = _git_env()
 	env["PATH"] = f"{stub_bin}{os.pathsep}{env.get('PATH', '')}"
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	env.pop("CLAUDE_PR_MERGE_GUARD", None)
+	env.pop(UNRESOLVED_OVERRIDE_FLAG, None)
+	if extra_env:
+		env.update(extra_env)
 	# A cold cache per run: the guard keys its TTL cache on slug+branch, which
 	# every case in this fixture shares.
 	env["TMPDIR"] = str(repo.parent / "cache")
@@ -970,10 +983,12 @@ def test_commit_in_merged_worktree_is_not_judged_from_main_checkout(merged_branc
 	assert "Branch `feature/x`" in proc.stderr
 
 
-def test_unresolvable_worktree_falls_back_to_checkout_with_warning(merged_branch_repo) -> None:
-	"""Legacy name: unresolved worktrees now require confirmation, not checkout fallback."""
+@pytest.mark.parametrize("flag", [None, "true"])
+def test_unresolvable_worktree_falls_back_to_checkout_with_warning(merged_branch_repo, flag) -> None:
+	"""Control-flow-only uncertainty keeps the checkout check whatever the flag says."""
 	repo, stub_bin = merged_branch_repo
-	proc = _run_hook(repo, stub_bin, "cd $WT && git push origin HEAD:feature/open")
+	extra_env = {UNRESOLVED_OVERRIDE_FLAG: flag} if flag else None
+	proc = _run_hook(repo, stub_bin, "cd $WT && git push origin HEAD:feature/open", extra_env)
 	assert proc.returncode == 2, proc.stdout + proc.stderr
 	assert "Branch `feature/x`" in proc.stderr
 	response = json.loads(proc.stdout)
@@ -981,10 +996,12 @@ def test_unresolvable_worktree_falls_back_to_checkout_with_warning(merged_branch
 	assert "hookSpecificOutput" not in response
 
 
-def test_unresolvable_worktree_push_asks_when_checkout_is_main(merged_branch_repo) -> None:
+@pytest.mark.parametrize("flag", [None, "true"])
+def test_unresolvable_worktree_push_asks_when_checkout_is_main(merged_branch_repo, flag) -> None:
 	repo, stub_bin = merged_branch_repo
 	_git(repo, "checkout", "main")
-	proc = _run_hook(repo, stub_bin, "cd $WT && git push origin HEAD")
+	extra_env = {UNRESOLVED_OVERRIDE_FLAG: flag} if flag else None
+	proc = _run_hook(repo, stub_bin, "cd $WT && git push origin HEAD", extra_env)
 	assert proc.returncode == 0, proc.stdout + proc.stderr
 	response = json.loads(proc.stdout)
 	assert response["hookSpecificOutput"]["permissionDecision"] == "ask"
@@ -992,8 +1009,19 @@ def test_unresolvable_worktree_push_asks_when_checkout_is_main(merged_branch_rep
 	assert "could not resolve git push repository" in response["systemMessage"]
 
 
+def _forbid_pr_lookup(monkeypatch) -> None:
+	"""An unresolved explicit override must never consult the session checkout."""
+	def _fail(*args, **kwargs):
+		pytest.fail("unexpected session-checkout lookup")
+	monkeypatch.setattr(guard, "query_pull_requests", _fail)
+	monkeypatch.setattr(guard, "repo_slug", _fail)
+	monkeypatch.setattr(guard, "_run", _fail)
+
+
 @pytest.mark.parametrize("override", ["GIT_DIR", "GIT_WORK_TREE"])
-def test_appended_git_override_falls_back_without_using_rhs(merged_branch_repo, monkeypatch, override: str) -> None:
+def test_appended_git_override_push_blocks_without_checkout_lookup(merged_branch_repo, monkeypatch, override: str) -> None:
+	# #6305 / #6638: the appended value is never applied, and the session
+	# checkout's PR history must not stand in for the pushed repository's.
 	repo, _ = merged_branch_repo
 	worktree = repo.parent / "open"
 	_git(repo, "worktree", "add", "-b", "feature/open", str(worktree), "main")
@@ -1002,31 +1030,122 @@ def test_appended_git_override_falls_back_without_using_rhs(merged_branch_repo, 
 	invocations = guard._guarded_git_invocations(command, str(repo))
 	assert len(invocations) == 1
 	assert invocations[0].environment == {}
-	assert invocations[0].warning == "could not resolve git command directory; checking the session checkout instead"
-	merged_sha = _git(repo, "rev-parse", "HEAD")
-	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
-	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
-	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, branch, cwd:
-		[dict(MERGED_PR, headRefOid=merged_sha)] if branch == "feature/x" else [])
+	assert invocations[0].explicit_override_unresolved is True
+	_forbid_pr_lookup(monkeypatch)
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
 		"tool_input": {"command": command}})
 	assert code == 2, message
-	assert "Branch `feature/x`" in message
+	assert UNRESOLVED_OVERRIDE_FLAG in message
+	assert "Branch `feature/x`" not in message
+	assert str(worktree) not in message
 
 
 @pytest.mark.parametrize("override", ["GIT_DIR", "GIT_WORK_TREE"])
-def test_appended_git_override_asks_when_checkout_is_not_merged(merged_branch_repo, override: str) -> None:
+def test_appended_git_override_push_blocks_by_default_and_asks_with_flag(merged_branch_repo, override: str) -> None:
 	repo, stub_bin = merged_branch_repo
 	worktree = repo.parent / "merged"
 	_git(repo, "checkout", "main")
 	_git(repo, "worktree", "add", str(worktree), "feature/x")
 	value = worktree / ".git" if override == "GIT_DIR" else worktree
-	proc = _run_hook(repo, stub_bin, f"{override}+={value} git push origin HEAD")
+	command = f"{override}+={value} git push origin HEAD"
+	proc = _run_hook(repo, stub_bin, command)
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert UNRESOLVED_OVERRIDE_FLAG in proc.stderr
+	proc = _run_hook(repo, stub_bin, command, {UNRESOLVED_OVERRIDE_FLAG: "true"})
 	assert proc.returncode == 0, proc.stdout + proc.stderr
 	response = json.loads(proc.stdout)
 	assert response["hookSpecificOutput"]["permissionDecision"] == "ask"
-	assert "could not resolve git command directory" in response["systemMessage"]
-	assert "could not resolve git push repository" in response["systemMessage"]
+	assert "could not resolve the explicit Git directory override" in response["systemMessage"]
+	assert "checked the session checkout instead" not in response["systemMessage"]
+
+
+@pytest.mark.parametrize("command", [
+	"GIT_DIR+=x git push origin HEAD",
+	"GIT_WORK_TREE+=x git push origin HEAD",
+	"env -C /does-not-exist git push origin HEAD",
+	'env -C "$OTHER" git push origin HEAD',
+	"GIT_DIR=$OTHER/.git git push origin HEAD",
+	"GIT_WORK_TREE=$OTHER git push origin HEAD",
+	"git --git-dir=$X push origin HEAD",
+	"cd $WT && git -C sub push origin HEAD",
+])
+def test_unresolved_explicit_override_push_is_flagged(command: str, tmp_path: Path) -> None:
+	invocations = guard._guarded_git_invocations(command, str(tmp_path))
+	assert [invocation.explicit_override_unresolved for invocation in invocations] == [True]
+
+
+def test_resolvable_or_control_flow_only_push_is_not_flagged(merged_branch_repo) -> None:
+	repo, _ = merged_branch_repo
+	for command in (
+		"cd $WT && git push origin HEAD",
+		"if true; then git push origin HEAD; fi",
+		f"git -C {repo} push origin HEAD",
+		f"GIT_DIR={repo}/.git GIT_WORK_TREE={repo} git push origin HEAD",
+	):
+		invocations = guard._guarded_git_invocations(command, str(repo))
+		assert [invocation.explicit_override_unresolved for invocation in invocations] == [False], command
+
+
+_UNRESOLVED_OVERRIDE_PUSHES = [
+	"GIT_DIR+=/x git push origin HEAD",
+	'env -C "$OTHER" git push origin HEAD',
+	"git --git-dir=$X push origin HEAD",
+	"GIT_WORK_TREE=$X git push origin HEAD",
+	"cd $WT && git -C rel push origin HEAD",
+	"if true; then env -C /does-not-exist git push origin HEAD; fi",
+]
+
+
+@pytest.mark.parametrize("flag", [None, "false", "1", "", "yes"])
+@pytest.mark.parametrize("command", _UNRESOLVED_OVERRIDE_PUSHES)
+def test_unresolved_override_push_blocks_unless_flag_is_true(
+	monkeypatch, tmp_path: Path, capsys, command: str, flag
+) -> None:
+	if flag is not None:
+		monkeypatch.setenv(UNRESOLVED_OVERRIDE_FLAG, flag)
+	_forbid_pr_lookup(monkeypatch)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(tmp_path),
+		"tool_input": {"command": command}})
+	assert code == 2, message
+	assert UNRESOLVED_OVERRIDE_FLAG in message
+	assert "did not check the session checkout" in message
+	assert str(tmp_path) not in message
+	assert "$OTHER" not in message and "$X" not in message
+	out = capsys.readouterr().out
+	assert "hookSpecificOutput" not in out
+
+
+@pytest.mark.parametrize("flag", ["true", " TRUE "])
+@pytest.mark.parametrize("command", _UNRESOLVED_OVERRIDE_PUSHES)
+def test_unresolved_override_push_asks_when_flag_is_true(
+	monkeypatch, tmp_path: Path, capsys, command: str, flag: str
+) -> None:
+	monkeypatch.setenv(UNRESOLVED_OVERRIDE_FLAG, flag)
+	_forbid_pr_lookup(monkeypatch)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(tmp_path),
+		"tool_input": {"command": command}})
+	assert (code, message) == (0, "")
+	response = json.loads(capsys.readouterr().out)
+	assert response["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "could not resolve the explicit Git directory override" in response["systemMessage"]
+	assert "checked the session checkout instead" not in response["systemMessage"]
+	assert str(tmp_path) not in response["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_flag_in_command_text_cannot_enable_the_ask_path(monkeypatch, tmp_path: Path) -> None:
+	_forbid_pr_lookup(monkeypatch)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(tmp_path),
+		"tool_input": {"command": f"{UNRESOLVED_OVERRIDE_FLAG}=true GIT_DIR+=x git push origin HEAD"}})
+	assert code == 2, message
+	assert UNRESOLVED_OVERRIDE_FLAG in message
+
+
+def test_multiple_unresolved_override_pushes_yield_one_block(monkeypatch, tmp_path: Path) -> None:
+	_forbid_pr_lookup(monkeypatch)
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(tmp_path),
+		"tool_input": {"command": "GIT_DIR+=a git push origin HEAD; env -C \"$B\" git push origin HEAD"}})
+	assert code == 2, message
+	assert message.count("BLOCKED") == 1
 
 
 def test_explicit_source_tip_and_multiple_destinations(merged_branch_repo) -> None:
@@ -1299,20 +1418,24 @@ def test_unresolved_push_source_asks_without_checkout_lookup(merged_branch_repo,
 
 
 @pytest.mark.parametrize("prefix", ["GIT_DIR+=other", "GIT_WORK_TREE+=other"])
-def test_appended_git_directory_push_asks_when_checkout_is_safe(merged_branch_repo, monkeypatch, capsys, prefix: str) -> None:
-	# The appended value is never applied; the session checkout is checked
-	# (it may block, see test_appended_git_override_falls_back_without_using_rhs)
-	# and otherwise the push still asks.
+def test_appended_git_directory_push_blocks_even_when_checkout_is_safe(merged_branch_repo, monkeypatch, capsys, prefix: str) -> None:
+	# The appended value is never applied, and a safe session checkout cannot
+	# vouch for the pushed repository: the push blocks by default and asks only
+	# with UNRESOLVED_GIT_OVERRIDE_PUSH_ENABLED=true, never querying PR history.
 	repo, _ = merged_branch_repo
-	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
-	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
-	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: [])
-	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
-		"tool_input": {"command": f"{prefix} git push origin HEAD:feature/x"}})
+	_forbid_pr_lookup(monkeypatch)
+	payload = {"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": f"{prefix} git push origin HEAD:feature/x"}}
+	code, message = guard.evaluate(payload)
+	assert code == 2, message
+	assert UNRESOLVED_OVERRIDE_FLAG in message
+	capsys.readouterr()
+	monkeypatch.setenv(UNRESOLVED_OVERRIDE_FLAG, "true")
+	code, message = guard.evaluate(payload)
 	assert code == 0 and message == ""
 	decision = json.loads(capsys.readouterr().out.splitlines()[-1])
 	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
-	assert "could not resolve git push repository" in decision["systemMessage"]
+	assert "could not resolve the explicit Git directory override" in decision["systemMessage"]
 
 
 @pytest.mark.parametrize("command", [

@@ -15,10 +15,14 @@ a preceding resolvable cd, git -C, and git-directory/work-tree overrides are
 applied without executing the Bash text. Pushes with explicit branch refspecs
 are checked against the destination branch and the source commit, including
 when the source is a detached HEAD. Unresolved env-wrapped commit directories
-require confirmation rather than checking the wrong repository. Other unknown
-directories warn and check the session checkout; unresolved directory-changing
-commits and pushes then require confirmation. Unresolvable explicit push targets
-also require confirmation.
+require confirmation rather than checking the wrong repository. A push whose
+explicit Git directory override (env -C, git -C, --git-dir/--work-tree or
+GIT_DIR/GIT_WORK_TREE, including `+=` appends) cannot be resolved never checks
+the session checkout: it is blocked, or asks for confirmation when the session
+environment sets UNRESOLVED_GIT_OVERRIDE_PUSH_ENABLED=true. Other unknown
+directories (shell control flow alone) warn and check the session checkout;
+unresolved directory-changing commits and pushes then require confirmation.
+Unresolvable explicit push targets also require confirmation.
 Repeated targets share a PR snapshot
 per repository and branch, while different source tips are checked separately.
 A `cd` or `exit` with a redirect that might fail (anything but a plain
@@ -217,6 +221,9 @@ class _GitInvocation(NamedTuple):
 	env_wrapped: bool = False
 	env_directory_unresolved: bool = False
 	explicit_git_directory: bool = False
+	# The command itself names a Git directory (env -C, git -C, --git-dir,
+	# --work-tree, GIT_DIR/GIT_WORK_TREE incl. `+=`) that could not be resolved.
+	explicit_override_unresolved: bool = False
 
 
 class _GuardTarget(NamedTuple):
@@ -637,6 +644,9 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 		appended_git_selector = False
 		# A prior unresolved cd/pushd may select another repository.
 		explicit_git_directory = unresolved_directory_change
+		# Unlike explicit_git_directory, set only by a selector in this segment,
+		# never by earlier control flow.
+		invocation_override_selector = False
 		# Bash append assignments are prefixes too; keep the following git visible.
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
 			name, value = tokens[index].split("=", 1)
@@ -647,9 +657,11 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 					working_directory = None
 					explicit_git_directory = True
 					appended_git_selector = True
+					invocation_override_selector = True
 			elif name in ("GIT_DIR", "GIT_WORK_TREE"):
 				environment[name] = value
 				explicit_git_directory = True
+				invocation_override_selector = True
 			if name == "GIT_CONFIG" or name.startswith("GIT_CONFIG_"):
 				config_override = True
 			index += 1
@@ -670,6 +682,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				word = tokens[position]
 				if word in ("-C", "--chdir") or word.startswith(("-C", "--chdir=")):
 					env_chdir_seen = True
+					invocation_override_selector = True
 					env_word_value = (tokens[position + 1] if word in ("-C", "--chdir") else
 						word.split("=", 1)[1] if word.startswith("--chdir=") else word[2:])
 					# An absolute -C path does not depend on the (possibly unknown) cwd.
@@ -681,6 +694,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 					env_name, env_word_value = word.split("=", 1)
 					if env_name in ("GIT_DIR", "GIT_WORK_TREE"):
 						environment[env_name] = env_word_value
+						invocation_override_selector = True
 		if index >= len(tokens) or (tokens[index] != "git" and not tokens[index].endswith("/git")):
 			continue
 		index += 1
@@ -690,6 +704,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			option = tokens[index]
 			if option.startswith(("-C", "--git-dir", "--work-tree")):
 				explicit_git_directory = True
+				invocation_override_selector = True
 			value = None
 			if option in GIT_GLOBAL_OPTS_WITH_VALUE:
 				if index + 1 >= len(tokens):
@@ -744,6 +759,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			env_wrapped,
 			env_directory_unresolved,
 			explicit_git_directory,
+			uncertain and invocation_override_selector,
 		))
 	return invocations
 
@@ -1616,6 +1632,31 @@ def _guard_disabled() -> bool:
 	return os.environ.get("CLAUDE_PR_MERGE_GUARD", "").strip().lower() == "off"
 
 
+def _unresolved_override_push_enabled() -> bool:
+	"""Whether an unresolved explicit Git directory push asks instead of blocking.
+
+	Read only from the hook's own (human-controlled) environment, never from the
+	command text; unset or any value other than `true` keeps the safe default.
+	"""
+	return os.environ.get("UNRESOLVED_GIT_OVERRIDE_PUSH_ENABLED", "").strip().lower() == "true"
+
+
+# Fixed texts: never include paths, remote URLs or command fragments.
+_UNRESOLVED_OVERRIDE_PUSH_BLOCK = (
+	"BLOCKED: merged-PR guard (CLAUDE.md §21): this `git push` sets an explicit Git "
+	"directory (env -C, git -C, --git-dir/--work-tree, or GIT_DIR/GIT_WORK_TREE, "
+	"including `+=` appends) that the guard cannot resolve, so it cannot check the "
+	"pushed repository's PR history and did not check the session checkout instead. "
+	"Rerun the push with a literal, resolvable directory (or from that repository's "
+	"directory), or set UNRESOLVED_GIT_OVERRIDE_PUSH_ENABLED=true in the session "
+	"environment to be asked instead."
+)
+_UNRESOLVED_OVERRIDE_PUSH_REASON = (
+	"could not resolve the explicit Git directory override of `git push`; the session "
+	"checkout was not checked and may not be the pushed repository"
+)
+
+
 def _unreachable_outcome(
 	api_failure: str,
 	tip: str,
@@ -1694,6 +1735,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	bulk_reasons: list[str] = []
 	unverified_destinations: set[str] = set()
 	uncertain_push_reasons: list[str] = []
+	unresolved_override_push_reasons: list[str] = []
 	unknown_destination_reasons: list[str] = []
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
@@ -1703,6 +1745,15 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			continue
 		if invocation.subcommand == "push" and invocation.warning == "unparsed env wrapper":
 			unverified_destinations.add("unparsed env-wrapped Git command")
+			continue
+		if invocation.subcommand == "push" and invocation.explicit_override_unresolved:
+			# The push names a repository the guard could not apply; checking the
+			# session checkout instead would judge the wrong repository (#6638).
+			if _unresolved_override_push_enabled():
+				if _UNRESOLVED_OVERRIDE_PUSH_REASON not in unresolved_override_push_reasons:
+					unresolved_override_push_reasons.append(_UNRESOLVED_OVERRIDE_PUSH_REASON)
+			elif _UNRESOLVED_OVERRIDE_PUSH_BLOCK not in blocks:
+				blocks.append(_UNRESOLVED_OVERRIDE_PUSH_BLOCK)
 			continue
 		if invocation.subcommand == "commit" and invocation.warning and invocation.env_wrapped:
 			_request_confirmation("could not resolve git commit directory (env-wrapped); the session checkout may not be the commit target")
@@ -1832,6 +1883,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			"could not determine the directory `git push` runs in (shell control flow or redirection); "
 			"checked the session checkout instead"
 		)
+	confirmation_reasons.extend(unresolved_override_push_reasons)
 	confirmation_reasons.extend(unresolved_push_sources)
 	confirmation_reasons.extend(unresolved_push_destinations)
 	confirmation_reasons.extend(unknown_destination_reasons)

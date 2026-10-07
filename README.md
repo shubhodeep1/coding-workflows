@@ -1170,10 +1170,14 @@ not delete wrappers that are already present in `.github/workflows/`.
 > line has an unmatched quote. This also covers quoted or escaped `git` names.
 > For `>|`, an adjacent numeric prefix is a file descriptor, not a push refspec;
 > the guard checks the current branch for a default `git push origin`.
-> For an unresolved `GIT_DIR+=` or `GIT_WORK_TREE+=` push override,
-> the merged-PR guard ignores the unresolved value and checks the session checkout.
-> If that check does not block, it asks for confirmation because the pushed
-> repository may differ. Other unresolved push directories follow the same rule.
+> For an unresolved `GIT_DIR+=` or `GIT_WORK_TREE+=` push override, or any
+> other explicit Git directory override (`env -C`, `git -C`, `--git-dir`,
+> `--work-tree`, `GIT_DIR`, `GIT_WORK_TREE`) the merged-PR guard cannot
+> resolve, the guard does not check the session checkout. It blocks the push,
+> or asks for confirmation when the session environment sets
+> `UNRESOLVED_GIT_OVERRIDE_PUSH_ENABLED=true`. Push directories that are
+> uncertain only because of shell control flow are still checked against the
+> session checkout, which can block, and otherwise ask.
 > Shell control words such as `if`, `then`, `do`, and `!` (including repeated
 > prefixes) no longer hide a nested `git push`: the guard checks the session
 > checkout and, if it does not block, asks for confirmation because the
@@ -1424,8 +1428,12 @@ per-command configuration (for example, shell control with `env FOO=bar` or
 checkout; a plain commit with an unresolved directory only warns after checking
 the session checkout. If the directory is unknown, even an absolute
 `-c core.worktree=` value does not identify the Git directory, so a commit asks.
-A push from a directory the guard cannot resolve (including an appended
-`GIT_DIR+=` or `GIT_WORK_TREE+=`, whose value is never applied) is checked
+A push whose explicit Git directory override cannot be resolved (`env -C`,
+`git -C`, `--git-dir`, `--work-tree`, `GIT_DIR` or `GIT_WORK_TREE`, including
+an appended `GIT_DIR+=` or `GIT_WORK_TREE+=`, whose value is never applied) is
+never checked against the session checkout: it is blocked, or asks when the
+session environment sets `UNRESOLVED_GIT_OVERRIDE_PUSH_ENABLED=true`. A push
+whose directory is uncertain only because of shell control flow is checked
 against the session checkout, which can still block, and otherwise asks.
 Leading shell redirections, including those following environment assignments,
 do not bypass the merged-PR check. A spaced, quoted or escaped digit before a
