@@ -6,6 +6,8 @@ import importlib.util
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "review_security_hold_sweep.py"
@@ -83,9 +85,73 @@ def test_workflow_wiring_uses_existing_schedules() -> None:
 	assert "force_rb_judge: ${{ github.event_name == 'workflow_dispatch'" in template
 	assert "review_security_hold_sweep.py" in template
 	assert "review_security_hold_sweep.py" in source_sweep
-	assert "SECURITY_HOLD_REVIEW_WORKFLOW: review_autofix.yml" in source_sweep
+	assert "SECURITY_HOLD_REVIEW_WORKFLOW: internal-review.yml" in source_sweep
 	assert "actions: write" in template
-	assert "issues: write" in source_sweep
+	internal_review = (ROOT / ".github" / "workflows" / "internal-review.yml").read_text(encoding="utf-8")
+	assert "force_rb_judge: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force_rb_judge == 'true' }}" in internal_review
+	yaml = pytest.importorskip("yaml")
+	# A job-level permissions block replaces the workflow-level one.
+	sweep_job = yaml.safe_load(source_sweep)["jobs"]["sweep"]
+	assert sweep_job["permissions"]["issues"] == "write"
+	assert "force_rb_judge" in yaml.safe_load(internal_review)[True]["workflow_dispatch"]["inputs"]
+
+
+def test_findings_marker_beyond_comment_window_uses_full_history(monkeypatch) -> None:
+	filler = [{"author": {"login": "bot"}, "body": "noise", "createdAt": NOW.isoformat()}]
+	pr_payload = {**_pr(*filler), "comments": {"nodes": filler, "pageInfo": {"hasPreviousPage": True}}}
+	graphql_payload = {
+		"data": {"repository": {
+			"defaultBranchRef": {"name": "main"},
+			"pullRequests": {"nodes": [pr_payload], "pageInfo": {"hasNextPage": False}},
+		}},
+	}
+	old = _comment("findings", 25)
+	rest_pages = [[{"user": {"login": "bot"}, "body": old["body"], "created_at": old["createdAt"]}]]
+	calls: list[list[str]] = []
+
+	def fake_run(arguments: list[str]) -> subprocess.CompletedProcess[str]:
+		calls.append(arguments)
+		stdout = "bot\n" if arguments[:2] == ["api", "user"] else "{}"
+		return subprocess.CompletedProcess(arguments, 0, stdout, "")
+
+	monkeypatch.setattr(SWEEP, "_run_gh", fake_run)
+	monkeypatch.setattr(SWEEP, "_gh_json", lambda arguments: rest_pages if "--paginate" in arguments else graphql_payload)
+	monkeypatch.setattr(SWEEP.dt, "datetime", type("FixedDateTime", (dt.datetime,), {
+		"now": classmethod(lambda cls, tz=None: NOW),
+	}))
+	monkeypatch.setenv("SINGLE_ISSUE_SECURITY_PASS_ENABLED", "true")
+	monkeypatch.setenv("REPOSITORY", "o/r")
+	monkeypatch.setenv("SECURITY_HOLD_REVIEW_WORKFLOW", "ai-review.yml")
+	assert SWEEP.main() == 0
+	assert any(call[:3] == ["workflow", "run", "ai-review.yml"] for call in calls)
+
+
+def test_marker_post_is_retried_once(monkeypatch) -> None:
+	graphql_payload = {
+		"data": {"repository": {
+			"defaultBranchRef": {"name": "main"},
+			"pullRequests": {"nodes": [_pr(_comment("findings", 25))], "pageInfo": {"hasNextPage": False}},
+		}},
+	}
+	marker_posts: list[list[str]] = []
+
+	def fake_run(arguments: list[str]) -> subprocess.CompletedProcess[str]:
+		if arguments[:2] == ["api", "repos/o/r/issues/42/comments"]:
+			marker_posts.append(arguments)
+			return subprocess.CompletedProcess(arguments, 1 if len(marker_posts) == 1 else 0, "{}", "")
+		stdout = "bot\n" if arguments[:2] == ["api", "user"] else "{}"
+		return subprocess.CompletedProcess(arguments, 0, stdout, "")
+
+	monkeypatch.setattr(SWEEP, "_run_gh", fake_run)
+	monkeypatch.setattr(SWEEP, "_gh_json", lambda arguments: graphql_payload)
+	monkeypatch.setattr(SWEEP.time, "sleep", lambda seconds: None)
+	monkeypatch.setattr(SWEEP.dt, "datetime", type("FixedDateTime", (dt.datetime,), {
+		"now": classmethod(lambda cls, tz=None: NOW),
+	}))
+	monkeypatch.setenv("SINGLE_ISSUE_SECURITY_PASS_ENABLED", "true")
+	monkeypatch.setenv("REPOSITORY", "o/r")
+	assert SWEEP.main() == 0
+	assert len(marker_posts) == 2
 
 
 def test_script_syntax() -> None:

@@ -3,9 +3,11 @@
 
 Batching contract: each page accepts up to 50 open pull requests and returns
 their head SHA plus the latest 100 issue comments. The sweep issues one REST
-identity read, one GraphQL call per PR page, and one dispatch plus one marker
-comment per stale hold. Missing, partial, or malformed data fails open by
-skipping the affected page or PR; a later scheduled run retries it.
+identity read, one GraphQL call per PR page, one paginated REST comment read
+only for a PR with more than 100 comments and no current-head result marker
+in that window, and one dispatch plus up to two marker POSTs per stale hold.
+Missing, partial, or malformed data fails open by skipping the affected page
+or PR; a later scheduled run retries it.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from typing import Any
 
 
@@ -36,6 +39,7 @@ query($owner:String!,$name:String!,$cursor:String){
         headRefOid
         comments(last:100){
           nodes{author{login}body createdAt}
+          pageInfo{hasPreviousPage}
         }
       }
       pageInfo{hasNextPage endCursor}
@@ -102,6 +106,34 @@ def stale_candidate(pr_payload: Any, trusted_login: str, stale_hours: int, now: 
 	return pr_number, head_sha, cycle
 
 
+def _has_current_head_result(pr_payload: Any, trusted_login: str) -> bool:
+	"""True when the fetched comment window holds a trusted current-head result marker."""
+	if not isinstance(pr_payload, dict):
+		return False
+	head_sha = pr_payload.get("headRefOid")
+	comment_nodes = (pr_payload.get("comments") or {}).get("nodes") if isinstance(pr_payload.get("comments"), dict) else None
+	if not isinstance(comment_nodes, list):
+		return False
+	for comment_payload in comment_nodes:
+		if not isinstance(comment_payload, dict) or ((comment_payload.get("author") or {}).get("login")) != trusted_login:
+			continue
+		result_match = RESULT_MARKER_RE.fullmatch(_last_nonempty_line(comment_payload.get("body")))
+		if result_match and result_match.group(2) == head_sha:
+			return True
+	return False
+
+
+def _full_comment_nodes(repository: str, pr_number: int) -> list[dict] | None:
+	"""Every issue comment on the PR in the GraphQL node shape, or None on failure."""
+	pages = _gh_json(["api", "--paginate", "--slurp", f"repos/{repository}/issues/{pr_number}/comments?per_page=100"])
+	if not isinstance(pages, list) or not all(isinstance(page, list) for page in pages):
+		return None
+	return [
+		{"author": {"login": (comment.get("user") or {}).get("login")}, "body": comment.get("body"), "createdAt": comment.get("created_at")}
+		for page in pages for comment in page if isinstance(comment, dict)
+	]
+
+
 def _run_gh(arguments: list[str]) -> subprocess.CompletedProcess[str]:
 	return subprocess.run(["gh", *arguments], capture_output=True, text=True, check=False)
 
@@ -138,7 +170,7 @@ def main() -> int:
 		return 0
 	owner, repo_name = repository.split("/", 1)
 	workflow_name = os.environ.get("SECURITY_HOLD_REVIEW_WORKFLOW", "") or (
-		"review_autofix.yml" if repository == "shubhodeep1/coding-workflows" else "ai-review.yml"
+		"internal-review.yml" if repository == "shubhodeep1/coding-workflows" else "ai-review.yml"
 	)
 	now = dt.datetime.now(dt.timezone.utc)
 	cursor = ""
@@ -164,6 +196,16 @@ def main() -> int:
 			return 0
 		for pr_payload in pull_requests.get("nodes") or []:
 			candidate = stale_candidate(pr_payload, trusted_login, stale_hours, now)
+			comments_page = (pr_payload.get("comments") or {}).get("pageInfo") if isinstance(pr_payload, dict) and isinstance(pr_payload.get("comments"), dict) else None
+			if (candidate is None and isinstance(pr_payload, dict) and isinstance(pr_payload.get("number"), int)
+				and isinstance(comments_page, dict) and comments_page.get("hasPreviousPage") is True
+				and not _has_current_head_result(pr_payload, trusted_login)):
+				# The findings marker may sit beyond the latest 100 comments.
+				full_nodes = _full_comment_nodes(repository, pr_payload["number"])
+				if full_nodes is None:
+					_log(f"pr={pr_payload['number']} outcome=skip reason=comment_history_unavailable")
+					continue
+				candidate = stale_candidate({**pr_payload, "comments": {"nodes": full_nodes}}, trusted_login, stale_hours, now)
 			if candidate is None:
 				continue
 			pr_number, head_sha, cycle = candidate
@@ -173,12 +215,17 @@ def main() -> int:
 			])
 			if dispatch_result.returncode != 0:
 				_log(f"pr={pr_number} head={head_sha} cycle={cycle} outcome=dispatch_failed")
+				print(f"::warning::Could not dispatch {workflow_name} for stale security hold on PR #{pr_number}; the next scheduled sweep retries.", flush=True)
 				continue
 			marker_body = (
 				"Scheduled a review-blocked judge recheck because this head's security follow-ups exceeded "
 				f"{stale_hours} hour(s).\n\n<!-- ai:security-followup-stale-dispatch:v1 head={head_sha} cycle={cycle} -->"
 			)
 			comment_result = _run_gh(["api", f"repos/{repository}/issues/{pr_number}/comments", "-f", f"body={marker_body}"])
+			if comment_result.returncode != 0:
+				# One retry: a lost marker costs a duplicate judge run on the next tick.
+				time.sleep(2)
+				comment_result = _run_gh(["api", f"repos/{repository}/issues/{pr_number}/comments", "-f", f"body={marker_body}"])
 			if comment_result.returncode != 0:
 				_log(f"pr={pr_number} head={head_sha} cycle={cycle} outcome=dispatched marker=failed")
 			else:
