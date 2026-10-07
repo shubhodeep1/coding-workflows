@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "Merged changes repeatedly pair `.github/workflows` edits with targeted tests for workflow contracts, recovery behavior, or release gates. Before altering automation, locate and extend the narrowest relevant test rather than relying only on end-to-end workflow execution.",
+  "fingerprint": "3f404c8aaae86d8ff7011681b6474ffb47c8a8ac34fd588f9f41117f3f1b8aa7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37672841342",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37672841342",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6416",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6508",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6638",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6665",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6669",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6417",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6515",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6673",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6676",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6677"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261007192457_f9609dc88a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow behavior is guarded by focused contract tests, so changes to workflow YAML or its helper scripts should be checked against the corresponding tests.",
+  "timestamps": {
+    "created_at": "2026-10-07T19:24:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
