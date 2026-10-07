@@ -123,24 +123,234 @@ def test_workflows_register_manifest_union_contract_test() -> None:
 
 
 def test_prepare_excludes_integration_sync_branches() -> None:
+	"""Integration-sync branches resolve the manifest but defer the commit.
+
+	Heal of PR #6043: skipping the manifest on orchestrator/project-* left
+	an `.ai/` path the resolver sandbox refuses, failing every run.
+	"""
 	block = _union_block(_prepare_text())
 	assert "orchestrator/project-*)" in block, (
-		"union-merge must exclude orchestrator/project-* integration-sync branches: "
+		"union-merge must recognise orchestrator/project-* integration-sync branches: "
 		"their fingerprint-violation expansion widens the resolver working set after "
-		"this decision point"
+		"this decision point, so their manifest-only commit is deferred"
 	)
-	# The exclusion must precede the set-algebra pipeline within the block.
+	# The branch classification must precede the set-algebra pipeline.
 	assert block.index("orchestrator/project-*)") < block.index("comm -12"), (
-		"integration-sync exclusion must come before the union-merge pipeline"
+		"integration-sync classification must come before the union-merge pipeline"
 	)
+	arm = block[block.index("orchestrator/project-*)"):block.index("esac")]
+	assert "_mu_integration_sync=true" in arm
+	assert "skipped on integration-sync branch" not in block
+	assert "_mu_deferred_commit=true" in block
+
+
+def test_prepare_defers_integration_commit_until_fingerprints_verified() -> None:
+	text = _prepare_text()
+	empty_check = text.index("# When the allowlist is empty there is nothing for Codex to")
+	empty_if = text[empty_check:text.index("\n  if [ \"${_merge_exit}\" -eq 0 ]; then", empty_check)]
+	assert '"${_mu_deferred_commit:-false}" != "true"' in empty_if, (
+		"the empty-allowlist exit must not treat a deferred manifest-only "
+		"integration merge as a failed merge replay"
+	)
+	finalizer = _shell_function(text, "manifest_union_finalize_deferred_commit")
+	assert "MERGE_CONFLICT=false" not in finalizer
+	call = text.index('if ! manifest_union_finalize_deferred_commit; then')
+	assert text.index("--list-violated-files") < call
+	assert call < text.index('CONFLICT_RESOLVER_SEMBLE_QUERY_FILE="${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-')
+	assert "_fp_list_verified=true" in text
+
+
+def _scratch_env() -> dict[str, str]:
+	return {
+		env_name: env_value
+		for env_name, env_value in os.environ.items()
+		if not env_name.startswith("GIT_") and env_name != "BASH_ENV"
+	}
+
+
+def _make_delete_conflict_repo(root: Path, *, ignored: bool, other_conflict: bool) -> Path:
+	"""Base branch untracks the manifest; this branch still tracks it (stages 1 2)."""
+	repo = root / "repo"
+	repo.mkdir()
+	env = _scratch_env()
+
+	def git(*args: str) -> subprocess.CompletedProcess[str]:
+		return subprocess.run(
+			["git", *args], cwd=repo, env=env, text=True, capture_output=True,
+		)
+
+	assert git("init", "-q", "-b", "main").returncode == 0
+	git("config", "user.name", "t")
+	git("config", "user.email", "t@t")
+	manifest = repo / MANIFEST_PATH
+	manifest.parent.mkdir(parents=True)
+	manifest.write_text("a.py\nb.py\n", encoding="utf-8")
+	(repo / "other.txt").write_text("base\n", encoding="utf-8")
+	git("add", "-A")
+	git("commit", "-qm", "base")
+	git("checkout", "-q", "-b", "orchestrator/project-1")
+	manifest.write_text("a.py\nb.py\nc.py\n", encoding="utf-8")
+	if other_conflict:
+		(repo / "other.txt").write_text("ours\n", encoding="utf-8")
+	git("commit", "-aqm", "ours")
+	git("checkout", "-q", "main")
+	git("rm", "-q", "--", MANIFEST_PATH)
+	if ignored:
+		(repo / ".gitignore").write_text(MANIFEST_PATH + "\n", encoding="utf-8")
+		git("add", ".gitignore")
+	if other_conflict:
+		(repo / "other.txt").write_text("theirs\n", encoding="utf-8")
+		git("add", "other.txt")
+	git("commit", "-qm", "untrack manifest")
+	git("checkout", "-q", "orchestrator/project-1")
+	merge = git("merge", "--no-commit", "--no-ff", "main")
+	assert merge.returncode != 0, "fixture must produce a conflict"
+	stages = git("ls-files", "-u", "--", MANIFEST_PATH).stdout.split()
+	assert stages[2::4] == ["1", "2"], f"fixture must produce stages 1 2: {stages}"
+	return repo
+
+
+def _run_union_block(repo: Path, tmp: Path) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
+	block = _union_block(_prepare_text())
+	allowlist = tmp / "allowlist.txt"
+	github_env = tmp / "github.env"
+	github_env.write_text("", encoding="utf-8")
+	env = _scratch_env()
+	allowlist.write_text(
+		subprocess.run(
+			["git", "diff", "--name-only", "--diff-filter=U"], cwd=repo, env=env,
+			text=True, capture_output=True, check=True,
+		).stdout,
+		encoding="utf-8",
+	)
+	script = f"""set -euo pipefail
+GITHUB_ENV={github_env!s}
+RESOLVER_ALLOWLIST_FILE={allowlist!s}
+RESOLVE_STASH={tmp / "stash"!s}
+_merge_stderr_file={tmp / "stderr"!s}
+TARGET_BRANCH=orchestrator/project-1
+_resolver_allowlist_count="$(wc -l < "${{RESOLVER_ALLOWLIST_FILE}}" | tr -d '[:space:]')"
+{block}
+echo "DEFERRED=${{_mu_deferred_commit}} COUNT=${{_resolver_allowlist_count}} RESOLUTION=${{_mu_resolution}}"
+"""
+	result = subprocess.run(["bash", "-c", script], cwd=repo, env=env, text=True, capture_output=True)
+	return result, allowlist, github_env
+
+
+def _git_out(repo: Path, *args: str) -> str:
+	return subprocess.run(
+		["git", *args], cwd=repo, env=_scratch_env(), text=True, capture_output=True,
+	).stdout.strip()
+
+
+def test_integration_sync_deletion_with_other_conflict_regression() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp = Path(tmp_name)
+		repo = _make_delete_conflict_repo(tmp, ignored=True, other_conflict=True)
+		before_head = _git_out(repo, "rev-parse", "HEAD")
+		result, allowlist, github_env = _run_union_block(repo, tmp)
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert "RESOLUTION=deletion" in result.stdout
+		assert "DEFERRED=false COUNT=1" in result.stdout
+		assert _git_out(repo, "ls-files", "-u", "--", MANIFEST_PATH) == ""
+		assert allowlist.read_text(encoding="utf-8").split() == ["other.txt"]
+		assert _git_out(repo, "diff", "--name-only", "--diff-filter=U") == "other.txt"
+		assert _git_out(repo, "rev-parse", "HEAD") == before_head
+		assert (repo / MANIFEST_PATH).exists(), "ignored working copy is kept"
+		assert github_env.read_text(encoding="utf-8") == ""
+
+
+def _run_finalizer(repo: Path, tmp: Path, *, verified: bool, violated: str) -> tuple[subprocess.CompletedProcess[str], Path]:
+	finalizer = _shell_function(_prepare_text(), "manifest_union_finalize_deferred_commit")
+	github_env = tmp / "github.env"
+	support = tmp / "support"
+	support.mkdir(exist_ok=True)
+	(support / "verify_integration_fingerprints.py").write_text("", encoding="utf-8")
+	fingerprints = tmp / "fp.json"
+	fingerprints.write_text("{}", encoding="utf-8")
+	script = f"""set -euo pipefail
+GITHUB_ENV={github_env!s}
+SUPPORT_SCRIPTS_DIR={support!s}
+INTEGRATION_FINGERPRINTS_FILE={fingerprints!s}
+IS_INTEGRATION_SYNC=true
+_mu_deferred_commit=true
+_fp_list_verified={"true" if verified else "false"}
+FP_VIOLATED_FILES_LIST={violated!r}
+{finalizer}
+rc=0
+manifest_union_finalize_deferred_commit || rc=$?
+echo "RC=${{rc}} COMMITTED=${{_mu_deferred_committed}}"
+"""
+	result = subprocess.run(["bash", "-c", script], cwd=repo, env=_scratch_env(), text=True, capture_output=True)
+	return result, github_env
+
+
+def test_integration_sync_manifest_only_defers_then_commits_when_verified() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp = Path(tmp_name)
+		repo = _make_delete_conflict_repo(tmp, ignored=True, other_conflict=False)
+		before_head = _git_out(repo, "rev-parse", "HEAD")
+		result, _allowlist, github_env = _run_union_block(repo, tmp)
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert "DEFERRED=true COUNT=0" in result.stdout
+		assert _git_out(repo, "rev-parse", "HEAD") == before_head, "no premature commit"
+		assert (repo / ".git" / "MERGE_HEAD").exists()
+		assert "CONFLICT_RESOLVED" not in github_env.read_text(encoding="utf-8")
+
+		fin, github_env = _run_finalizer(repo, tmp, verified=True, violated="")
+		assert "RC=0 COMMITTED=true" in fin.stdout, fin.stdout + fin.stderr
+		assert _git_out(repo, "log", "-1", "--format=%s") == MERGE_RESOLVE_COMMIT_MESSAGE
+		assert len(_git_out(repo, "log", "-1", "--format=%P").split()) == 2
+		assert "CONFLICT_RESOLVED=true" in github_env.read_text(encoding="utf-8")
+		assert "MERGE_CONFLICT" not in github_env.read_text(encoding="utf-8")
+
+
+def test_integration_sync_deferred_commit_fails_closed_when_unverified() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp = Path(tmp_name)
+		repo = _make_delete_conflict_repo(tmp, ignored=True, other_conflict=False)
+		before_head = _git_out(repo, "rev-parse", "HEAD")
+		_run_union_block(repo, tmp)
+		fin, github_env = _run_finalizer(repo, tmp, verified=False, violated="")
+		assert "RC=1 COMMITTED=false" in fin.stdout, fin.stdout + fin.stderr
+		assert "reason=verifier_failed" in fin.stdout
+		assert _git_out(repo, "rev-parse", "HEAD") == before_head
+		assert "CONFLICT_RESOLVED" not in github_env.read_text(encoding="utf-8")
+
+
+def test_integration_sync_deferred_commit_skipped_when_fingerprints_violated() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp = Path(tmp_name)
+		repo = _make_delete_conflict_repo(tmp, ignored=True, other_conflict=False)
+		before_head = _git_out(repo, "rev-parse", "HEAD")
+		_run_union_block(repo, tmp)
+		fin, github_env = _run_finalizer(repo, tmp, verified=True, violated="scripts/x.sh")
+		assert "RC=0 COMMITTED=false" in fin.stdout, fin.stdout + fin.stderr
+		assert _git_out(repo, "rev-parse", "HEAD") == before_head
+		assert (repo / ".git" / "MERGE_HEAD").exists()
+		assert "CONFLICT_RESOLVED" not in github_env.read_text(encoding="utf-8")
+
+
+def test_manifest_delete_conflict_not_ignored_falls_through() -> None:
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp = Path(tmp_name)
+		repo = _make_delete_conflict_repo(tmp, ignored=False, other_conflict=False)
+		result, allowlist, _github_env = _run_union_block(repo, tmp)
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert "RESOLUTION=none" in result.stdout
+		assert "DEFERRED=false" in result.stdout
+		assert _git_out(repo, "ls-files", "-u", "--", MANIFEST_PATH) != ""
+		assert MANIFEST_PATH in allowlist.read_text(encoding="utf-8")
 
 
 def test_prepare_requires_two_sided_content_conflict() -> None:
 	block = _union_block(_prepare_text())
 	assert "git ls-files -u --" in block and "*' 2 '*' 3 '*" in block, (
 		"union-merge must require index stages 2 AND 3 (two-sided content conflict); "
-		"delete/modify shapes fall through to the Codex resolver"
+		"delete/modify shapes resolve only as a gitignored deletion"
 	)
+	assert "' 1 2 '|' 1 3 ')" in block
+	assert 'git check-ignore -q --no-index -- "${MANIFEST_UNION_PATH}"' in block
 
 
 def test_prepare_early_commit_branch_contract() -> None:
