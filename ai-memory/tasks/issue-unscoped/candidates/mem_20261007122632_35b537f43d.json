@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nThe LAST RUN DIFF is a single-line test data fix in `tests/test_review_autofix_review_pipeline_contract.py:3746-3751` shifting check-run IDs from `idx` to `idx + 1`. The change is correct: `scripts/collect_pr_check_runs_context.py::_strict_merge_runs` rejects `run_id <= 0`, and the test was previously emitting ID 0 (from `range(4)` indexing). The cross-pollination summary contains no findings from any reviewer, CI is clean (28 check-runs, 0 failed, 0 incomplete), the worktree is clean, and prior rounds have converged on no actionable defects.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\nReviewing the single-line change in the last run diff. The change modifies test fixture data in `test_collect_pr_check_runs_helper_retry_drops_failed_attempt_stdout` at line 3799, changing check-run IDs from `\"id\": idx` (starting at 0) to `\"id\": idx + 1` (starting at 1). This fix is correct and necessary. The strict snapshot validator in `scripts/collect_pr_check_runs_context.py:80` rejects check-run IDs where `run_id <= 0`:\n\n```python\nif type(run_id) is not int or run_id <= 0 or run_id in seen_ids:\n    return None\n```\n\nThe original test fixture created check-runs with IDs 0, 1, 2, 3 (when idx ranges from 0 to 3), which would fail validation at ID=0. The fix makes IDs start at 1, producing valid IDs 1, 2, 3, 4.\n\nI verified there are no other similar issues in the test file:\n- Line 3555 already uses `\"id\": idx + 1`\n- No instances of `\"id\": 0` in check-run fixtures\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "fd6597fafee10bdb66f89ed20711b837c7b3b7f1e2233bde1d75a4b64bb3fb73",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6043,
+    "run_id": "37618233151",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37618233151",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007122632_35b537f43d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6043,
+    "run_id": "37618233151"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-07T12:26:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
