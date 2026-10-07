@@ -136,13 +136,19 @@ _SHELL_WORD_DELIMITERS = frozenset(" \t\r" + _SHELL_PUNCTUATION_CHARS)
 _SHELL_HEREDOC_READERS = frozenset(
 	{
 		"bash", "sh", "zsh", "dash", "ksh", "fish", "eval", "source", ".", "ssh", "su", "sudo", "doas",
-		"xargs", "parallel", "watch", "timeout", "nice", "nohup", "env", "exec", "command", "stdbuf", "script",
+		"xargs", "parallel", "script",
 	}
 )
+# Wrappers such as `env`, `timeout` or `nohup` are not listed: they run the
+# next word, so `env bash <<EOF` still matches `bash`, while `env cat <<EOF`
+# stays data.
 _SHELL_HEREDOC_READER_RE = re.compile(
-	r"(?:^|[\s;&|(`])(?:\S*/)?(?:" + "|".join(re.escape(word) for word in sorted(_SHELL_HEREDOC_READERS)) + r")(?:\s|$)"
+	r"(?:^|[\s;&|(`'\"])(?:\S*/)?(?:" + "|".join(re.escape(word) for word in sorted(_SHELL_HEREDOC_READERS)) + r")(?:[\s;&|)`'\"]|$)"
 )
 _HEREDOC_OPERATOR_RE = re.compile(r"<<(-?)[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
+# Characters that may end a heredoc delimiter word; anything else (`<<EOF-1`,
+# `<<E"OF"`) means the delimiter was not fully read.
+_HEREDOC_DELIMITER_END = frozenset(" \t;|&<>()`")
 
 _API_WRITE_METHODS = frozenset({"PUT", "POST", "PATCH"})
 _API_WRITE_URL_PREFIXES = (
@@ -295,7 +301,7 @@ def _shell_segments_with_redirects(command: str) -> list[tuple[str, list[str], b
 	for raw_token in lexer:
 		if raw_token and set(raw_token) <= set(_SHELL_PUNCTUATION_CHARS):
 			part_end = lexer.instream.tell() - len(raw_token)
-			for part in re.findall(r"&>>|&>|&&|\|\||>>|>\||>&|<&|<<<|<<|<>|[;<>&|\n]", raw_token):
+			for part in re.findall(r"&>>|&>|&&|\|\||\|&|>>|>\||>&|<&|<<<|<<|<>|[;<>&|\n]", raw_token):
 				part_end += len(part)
 				tokens.append((part, part_end))
 		else:
@@ -361,11 +367,14 @@ def _strip_data_heredoc_bodies(command: str) -> str:
 	delimiter is unquoted and the body holds a `$(...)` or backtick
 	substitution, because Bash runs that text and git commands in it must
 	still be checked. Quote, `$(...)`, `${...}` and arithmetic context is
-	tracked so a `<<` inside quotes is not read as a heredoc.
+	tracked so a `<<` inside quotes is not read as a heredoc. A shell reader
+	after the operator on the same line (`cat <<EOF | bash`) also keeps the
+	body. A delimiter this parser cannot read in full, or a heredoc line
+	continued with `\\`, returns the command unchanged.
 	"""
 	lines = command.split("\n")
 	output: list[str] = []
-	pending: list[tuple[str, bool, bool, str]] = []
+	pending: list[tuple[str, bool, bool, str, str]] = []
 	# Each context is [mode, open quote, nesting depth]; a nested $(...) has
 	# its own quoting rules, even inside "...".
 	contexts: list[list] = [["shell", None, 0]]
@@ -444,14 +453,19 @@ def _strip_data_heredoc_bodies(command: str) -> str:
 					break
 				elif line.startswith("<<", position) and not line.startswith("<<<", position) and (position == 0 or line[position - 1] != "<"):
 					match = _HEREDOC_OPERATOR_RE.match(line, position)
-					if match:
-						pending.append((match.group(3), match.group(1) == "-", bool(match.group(2)), line[:position]))
-						position = match.end()
-						continue
+					# A partly read delimiter (`<<EOF-1`, `<<\\EOF`) cannot be matched
+					# to its closing line, so keep every line visible.
+					if match is None or (match.end() < len(line) and line[match.end()] not in _HEREDOC_DELIMITER_END):
+						return command
+					pending.append((match.group(3), match.group(1) == "-", bool(match.group(2)), line[:position], line[match.end():]))
+					position = match.end()
+					continue
 			position += 1
 		index += 1
 		while pending:
-			delimiter, strip_tabs, quoted, prefix = pending.pop(0)
+			delimiter, strip_tabs, quoted, prefix, suffix = pending.pop(0)
+			if suffix.rstrip().endswith("\\"):
+				return command
 			body: list[str] = []
 			closing: list[str] = []
 			while index < len(lines):
@@ -461,7 +475,8 @@ def _strip_data_heredoc_bodies(command: str) -> str:
 					closing.append(body_line)
 					break
 				body.append(body_line)
-			runs_as_shell = bool(_SHELL_HEREDOC_READER_RE.search(prefix)) or (
+			# The rest of the line may pipe the body on (`cat <<EOF | bash`).
+			runs_as_shell = bool(_SHELL_HEREDOC_READER_RE.search(prefix) or _SHELL_HEREDOC_READER_RE.search(suffix)) or suffix.rstrip().endswith("|") or (
 				not quoted and any("$(" in body_line or "`" in body_line for body_line in body)
 			)
 			if runs_as_shell:
@@ -580,13 +595,14 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 		next_operator = segments[segment_position + 1][0] if segment_position + 1 < len(segments) else ""
 		# Each pipeline element runs in its own subshell: a directory change
 		# inside one ends with it, and every element starts where the list is.
-		in_pipeline = operator == "|" or next_operator == "|"
+		# `|&` pipes stderr too and is a pipeline separator like `|`.
+		in_pipeline = operator in ("|", "|&") or next_operator in ("|", "|&")
 		if operator == "||" and tokens[0] == "exit" and working_directory is not None and not redirect_may_fail:
 			# If this exit runs the following git cannot; otherwise cd succeeded.
 			# A failed builtin redirect means exit did not run (#6289).
 			conditional_cd = False
 			continue
-		if operator not in ("", "&&", "|") and conditional_cd:
+		if operator not in ("", "&&", "|", "|&") and conditional_cd:
 			working_directory = None
 			unresolved_directory_change = True
 			conditional_cd = False
