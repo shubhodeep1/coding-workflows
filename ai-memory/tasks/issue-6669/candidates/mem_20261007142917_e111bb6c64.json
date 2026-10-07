@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6669,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6669\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6676\",\"pr_number\":6676,\"branch\":\"ai/issue-6669\",\"run_id\":\"37634532087\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37634532087\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\".github/workflows/test-and-mark-stable.yml\",\"changelog.d/6669-release-gate-pytest-and-validate-budget.md\",\"tests/test_test_and_mark_stable_review_blocked_budget.py\"]}",
+  "fingerprint": "a437ad74fcaa212b37098d4a998c562ef98dfabb6fb20ac79f34de107595db3a",
+  "lineage": {
+    "issue_number": 6669,
+    "parent_ids": [],
+    "pr_number": 6676,
+    "run_id": "37634532087",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37634532087",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6676"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261007142917_e111bb6c64",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6669,
+    "level": "run",
+    "pr_number": 6676,
+    "run_id": "37634532087"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6669: https://github.com/shubhodeep1/coding-workflows/pull/6676",
+  "timestamps": {
+    "created_at": "2026-10-07T14:29:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
