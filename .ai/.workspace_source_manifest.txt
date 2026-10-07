@@ -302,6 +302,8 @@ changelog.d/6461-consolidator-opencode-sandbox.md
 changelog.d/6467-phase-report-provenance.md
 changelog.d/6468-heal-lineage-source-marker-trust.md
 changelog.d/6469-deploy-activate-credential-free-checks.md
+changelog.d/6482-security-pass-pending-marker-confirmed.md
+changelog.d/6483-security-hold-followups-alert.md
 changelog.d/6486-workflow-heal-security-pass.md
 changelog.d/6491-poller-judge-issue-engine-labels.md
 changelog.d/6493-heal-intake-run-provenance.md
@@ -676,6 +678,7 @@ scripts/review_resolve_review_threads_plan.py
 scripts/review_run_judge_interim.sh
 scripts/review_run_reviewers.sh
 scripts/review_sandbox/Dockerfile
+scripts/review_security_hold_sweep.py
 scripts/review_single_issue_security_pass.sh
 scripts/review_synthesise_smoke.sh
 scripts/review_untrusted_sandbox.sh
@@ -1042,6 +1045,7 @@ tests/test_review_rereview_and_approval_rubric.py
 tests/test_review_resolve_review_threads.py
 tests/test_review_reviewer_attempt_prompt_isolation.py
 tests/test_review_sandbox_claude_roles.py
+tests/test_review_security_hold_sweep.py
 tests/test_review_semble_contract.py
 tests/test_review_static_context_readme.py
 tests/test_review_surface_prompt_hardening.py
