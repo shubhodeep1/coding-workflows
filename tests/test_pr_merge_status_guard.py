@@ -1488,12 +1488,18 @@ def test_env_chdir_commit_still_asks_when_warning_text_changes(merged_branch_rep
 	"if true; then GIT_CONFIG_COUNT=0 git commit -m x; fi",
 ])
 def test_unrelated_override_does_not_prompt_for_shell_control_commit(merged_branch_repo, command: str) -> None:
+	"""Per-command config on an unresolved commit asks (author decision Q30 = A).
+
+	The name predates that decision and is kept per CLAUDE.md §6. Per-command
+	configuration can select another checkout, so the guard asks instead of
+	checking the session checkout's PR history.
+	"""
 	repo, stub_bin = merged_branch_repo
 	_git(repo, "checkout", "main")
 	proc = _run_hook(repo, stub_bin, command)
 	assert proc.returncode == 0, proc.stdout + proc.stderr
-	assert "could not resolve git command directory" in proc.stdout
-	assert _ask_decision(proc) is None
+	assert "could not resolve git commit directory" in proc.stdout
+	assert _ask_decision(proc) is not None
 
 
 def test_unresolved_env_directory_inside_shell_control_still_asks(merged_branch_repo) -> None:

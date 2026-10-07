@@ -1412,8 +1412,10 @@ assignments and to `env`-wrapped pushes; the guard does not use origin PR
 history to authorize those pushes. Wrapped commits still receive the normal
 merged-PR check in the worktree selected by `env -C` or `GIT_DIR`; if that
 selector cannot be resolved, the commit asks, and an unparseable `env -S`
-command asks. Other commits with an unresolved directory (for example, shell
-control with `env FOO=bar` or `git -c user.name=bot`) only warn after checking
+command asks. A commit with an unresolved directory that also carries
+per-command configuration (for example, shell control with `env FOO=bar` or
+`git -c user.name=bot`) asks, because that configuration may select another
+checkout; a plain commit with an unresolved directory only warns after checking
 the session checkout. If the directory is unknown, even an absolute
 `-c core.worktree=` value does not identify the Git directory, so a commit asks.
 A push from a directory the guard cannot resolve (including an appended
