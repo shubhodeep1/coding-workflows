@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/check_failure_triage.sh:327 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: Under `set -o pipefail`, the negated `printf | grep -qE` pipeline can misclassify a present malformed generation marker as absent when `grep` exits early and `printf` receives SIGPIPE.\n  WHY: The script may start a new generation-1 lineage instead of failing with `parent_generation_missing_or_malformed`, bypassing the malformed-marker handling.\n- scripts/check_failure_triage.sh:304 | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The fence-stripping regex matches only fences with 0-3 leading spaces, leaving markers inside fences indented by 4 or more spaces in `PARENT_MARKER_BODY`.\n  WHY: Those markers can cause false-positive lineage tracking, contrary to the PR's intent to strip them.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A marker that is present but not numeric still fails the run with `parent_generation_missing_or_malformed`.\"\n  expected_change_site: scripts/check_failure_triage.sh line 327 (the `elif` line the LAST RUN DIFF edits).\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The line still uses `printf | grep -qE` under `set -euo pipefail`; no contract test exercises the failure mode with a body large enough for `grep -q` to win the SIGPIPE race, and the existing malformed-marker test body is one line and does not trigger it.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- File: scripts/check_failure_triage.sh\n  Line or code reference: 327\n  Problem: `printf '%s' \"${PARENT_MARKER_BODY}\" | grep -qE \"^ {0,3}<!-- ${MARKER_PREFIX}gen=\";` under `set -o pipefail` (line 52) can misclassify a present malformed marker as absent if `grep -q` exits early and `printf` receives SIGPIPE.\n  Why it fails at runtime: A sufficiently large source issue body with a line-leading malformed marker can start a new generation-1 lineage instead of reaching the `parent_generation_missing_or_malformed` exit.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- File: scripts/check_failure_triage.sh\n  Line or code reference: 304\n  Problem: The fence stripping logic only matches fences with 0-3 leading spaces because `re.match(r\" {0,3}(`{3,}|~{3,})\", line)` anchors to the start of the line.\n  Why it fails at runtime: Markdown fences indented by 4 or more spaces (which constitute indented code blocks) will not be stripped by this regex, leaving markers inside indented code blocks in `PARENT_MARKER_BODY` and causing false-positive lineage tracking.\n  ISSUE_CONFIDENCE: 4\n- File: scripts/check_failure_triage.sh\n  Line or code reference: 327\n  Problem: The use of `! printf ... | grep -qE ...` within a pipeline under `set -o pipefail` is fragile.\n  Why it fails at runtime: If `grep` finds the marker and exits early, `printf` may receive SIGPIPE, causing the pipeline to fail and the `elif` branch to run even when a marker was found.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: scripts/check_failure_triage.sh\n  Line or code reference: line 327 \u2014 `elif ! printf '%s' \"${PARENT_MARKER_BODY}\" | grep -qE \"^ {0,3}<!-- ${MARKER_PREFIX}gen=\"; then`\n  Problem: Under `set -euo pipefail` (set at line 52), the pipeline can trigger SIGPIPE after `grep -q` finds a match and exits early, causing the `elif` branch to enter rather than falling through to the malformed-marker error branch.\n  Why it fails at runtime: A sufficiently large source issue body with a malformed marker can be misclassified as having no marker, starting a new generation-1 lineage and allowing the auto-fix loop to continue past its intended cap.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- Requirement: \"A marker that is present but not numeric still fails the run with `parent_generation_missing_or_malformed`.\"\n  Expected change site: scripts/check_failure_triage.sh line 327 (the `elif` line the LAST RUN DIFF edits).\n  Evidence of absence: The line still uses `printf | grep -qE` under `set -euo pipefail`. No contract test exercises the failure mode with a body large enough for `grep -q` to win the SIGPIPE race; the existing malformed-marker test body is one line and does not trigger it.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- File: scripts/check_failure_triage.sh\n  Line or code reference: Line 327; the script enables `pipefail` at line 52.\n  Problem: The negated `grep -qE` pipeline can treat a malformed generation marker as absent when `grep -q` exits before `printf` finishes writing and `printf` receives SIGPIPE.\n  Why it fails at runtime: The run starts a new lineage at generation 1 instead of failing with `parent_generation_missing_or_malformed`, bypassing the documented handling for a present but nonnumeric marker.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- File: scripts/check_failure_triage.sh\n  Line or code reference: 327\n  Problem: The `printf '%s' \"${PARENT_MARKER_BODY}\" | grep -qE \"...\"` pipeline can return a SIGPIPE exit status (141) instead of grep's actual match result when the issue body exceeds the pipe buffer (~64KB) and contains a malformed marker near the top.\n  Why it fails at runtime: With `set -o pipefail` (line 52), `printf` can exit 141 after `grep -q` finds the marker and exits, making the `elif` branch run and starting generation 1 instead of logging `parent_generation_missing_or_malformed` and exiting 1.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "3d189189198672da5228fa10ffba2c7c6f82942beaad2ce01b3dc3657e5117db",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6678,
+    "run_id": "37663225276",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37663225276",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007183339_95250e4efe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6678,
+    "run_id": "37663225276"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-07T18:33:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
