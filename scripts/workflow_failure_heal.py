@@ -771,7 +771,7 @@ def build_autofix_failure_payload(
 		"head_sha": head_sha if is_valid_sha(head_sha) else None,
 		"conclusion": "failure",
 		"failure_reason": single_line(failure_reason, 80),
-		"failure_evidence": sanitize_text(failure_evidence, FAILURE_EVIDENCE_LIMIT),
+		"failure_evidence": redact_secrets(sanitize_text(failure_evidence, FAILURE_EVIDENCE_LIMIT)),
 		"failure_streak": max(1, _positive_int(failure_streak) or 1),
 		"reporter_run_url": sanitize_text(reporter_run_url, 300) or None,
 		"reported_at": _iso(now),
@@ -1210,7 +1210,9 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		"head_sha": head_sha,
 		"conclusion": single_line(payload.get("conclusion"), 40) or None,
 		"failure_reason": failure_reason,
-		"failure_evidence": sanitize_text(payload.get("failure_evidence"), FAILURE_EVIDENCE_LIMIT) if kind == "autofix_failure" else "",
+		# Runtime log tails can carry Basic headers or encoded PATs; redact here
+		# so they reach neither disk nor the diagnosis prompt (#6463).
+		"failure_evidence": redact_secrets(sanitize_text(payload.get("failure_evidence"), FAILURE_EVIDENCE_LIMIT)) if kind == "autofix_failure" else "",
 		"failure_streak": failure_streak,
 		"failure_fingerprint": failure_fingerprint,
 		"reporter_run_url": sanitize_text(payload.get("reporter_run_url"), 300) or None,
@@ -1556,7 +1558,9 @@ def _redact_encoded_credential(match: re.Match[str]) -> str:
 			decoded = base64.b64decode(value[offset:] + "=" * (-len(value[offset:]) % 4), altchars=b"-_", validate=True)
 		except (ValueError, base64.binascii.Error):
 			continue
-		if b"x-access-token:" in decoded.lower() or re.search(rb":.{36,}", decoded):
+		# A user:token pair decodes to printable ASCII; random hex (SHAs,
+		# fingerprints) decodes to binary and must not be redacted.
+		if b"x-access-token:" in decoded.lower() or (all(0x20 <= byte < 0x7F for byte in decoded) and re.search(rb"[^:\s]:\S{36,}", decoded)):
 			return "[redacted]"
 	return value
 
@@ -2800,7 +2804,7 @@ def _cmd_skip_reason(args: argparse.Namespace) -> int:
 def _cmd_redact_stream(args: argparse.Namespace) -> int:
 	values = [os.environ.get(name, "") for name in args.secret_env.split(",")]
 	for line in sys.stdin:
-		sys.stdout.write(redact_known_secrets(line, values))
+		sys.stdout.write(redact_known_secrets(_ANSI_RE.sub("", line), values))
 	return 0
 
 
@@ -2816,10 +2820,13 @@ def select_evidence_jobs(jobs: dict[str, Any], *, kind: str, limit: int) -> list
 	return []
 
 
-def verify_run(run_json: dict[str, Any], *, repo: str, kind: str, head_sha: str = "", target_repo: str = "") -> dict[str, Any]:
+def verify_run(run_json: dict[str, Any], *, repo: str, kind: str, head_sha: str = "", target_repo: str = "", allow_pending: bool = False) -> dict[str, Any]:
 	if not isinstance(run_json, dict) or (run_json.get("repository") or {}).get("full_name") != repo or not isinstance(run_json.get("id"), int) or run_json["id"] < 1:
 		raise ValueError("run identity mismatch")
-	if run_json.get("conclusion") not in (("failure", "timed_out", "cancelled", "success") if kind == "autofix_failure" else ("failure", "timed_out", "cancelled")):
+	# A phase reporter dispatches while its own run is still in progress; the
+	# caller passes allow_pending only for the run provenance accepted as such.
+	pending = allow_pending and run_json.get("conclusion") is None and run_json.get("status") in ("queued", "in_progress", "pending")
+	if not pending and run_json.get("conclusion") not in (("failure", "timed_out", "cancelled", "success") if kind == "autofix_failure" else ("failure", "timed_out", "cancelled")):
 		raise ValueError("run not completed with expected conclusion")
 	if head_sha and run_json.get("head_sha") != head_sha:
 		raise ValueError("run head mismatch")
@@ -2839,7 +2846,7 @@ def _cmd_select_evidence_jobs(args: argparse.Namespace) -> int:
 
 
 def _cmd_verify_run(args: argparse.Namespace) -> int:
-	_write_json(verify_run(_load_json_file(args.run_json), repo=args.repo, kind=args.kind, head_sha=args.head_sha, target_repo=args.target_repo))
+	_write_json(verify_run(_load_json_file(args.run_json), repo=args.repo, kind=args.kind, head_sha=args.head_sha, target_repo=args.target_repo, allow_pending=args.allow_pending))
 	return 0
 
 
@@ -3169,6 +3176,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--target-repo", default="")
 	p.add_argument("--kind", default="issue")
 	p.add_argument("--head-sha", default="")
+	p.add_argument("--allow-pending", action="store_true")
 	p.set_defaults(func=_cmd_verify_run)
 
 	p = sub.add_parser("heal-route")

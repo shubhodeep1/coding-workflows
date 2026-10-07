@@ -93,6 +93,43 @@ def test_heal_run_verification_and_successful_review_job_fallback() -> None:
 		raise AssertionError("foreign run was trusted")
 
 
+def test_verify_run_accepts_pending_run_only_when_allowed() -> None:
+	run = {"id": 500, "repository": {"full_name": SELF_REPO}, "status": "in_progress", "conclusion": None, "path": ".github/workflows/internal-plan.yml"}
+	assert heal.verify_run(run, repo=SELF_REPO, kind="phase_failure", allow_pending=True)["run_id"] == 500
+	for kwargs in ({}, {"allow_pending": False}):
+		try:
+			heal.verify_run(run, repo=SELF_REPO, kind="phase_failure", **kwargs)
+		except ValueError:
+			pass
+		else:
+			raise AssertionError("pending run accepted without allow_pending")
+	# allow_pending never admits a completed run with a non-failure conclusion.
+	try:
+		heal.verify_run(dict(run, status="completed", conclusion="success"), repo=SELF_REPO, kind="phase_failure", allow_pending=True)
+	except ValueError:
+		pass
+	else:
+		raise AssertionError("successful phase run accepted")
+
+
+def test_autofix_failure_evidence_is_redacted_in_payload() -> None:
+	secret = "github_pat_" + "E" * 60
+	encoded = base64.b64encode(("x-access-token:" + secret).encode()).decode()
+	evidence = f"finalize_reason=editor_empty_noop\nAUTHORIZATION: basic {encoded}\nconfig={encoded}\ntoken {secret}\n"
+	payload = heal.validate_payload(_autofix_payload(failure_evidence=evidence))
+	assert secret not in payload["failure_evidence"] and encoded not in payload["failure_evidence"]
+	assert "finalize_reason=editor_empty_noop" in payload["failure_evidence"]
+	# 64-hex fingerprints in the evidence are not mistaken for credentials.
+	assert heal.redact_secrets("fp=" + "ab" * 32) == "fp=" + "ab" * 32
+
+
+def test_redact_stream_matches_credentials_split_by_ansi_escapes() -> None:
+	encoded = base64.b64encode(("x-access-token:github_pat_" + "F" * 60).encode()).decode()
+	line = f"AUTHORIZATION: ba\x1b[31msic {encoded[:20]}\x1b[0m{encoded[20:]}\n"
+	result = subprocess.run([sys.executable, str(LIB_PATH), "redact-stream"], input=line, capture_output=True, text=True, check=True, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+	assert encoded[20:] not in result.stdout and encoded[:20] not in result.stdout
+
+
 def test_intake_never_passes_basic_credentials_to_model_or_issue() -> None:
 	secret = "github_pat_" + "Z" * 60
 	encoded = base64.b64encode(("x-access-token:" + secret).encode()).decode()
@@ -1205,7 +1242,9 @@ if args[:1] == ["api"]:
 			fail("HTTP 503")
 		items = state.get("comments", {}).get(path, [])
 		if "--jq" in rest:
-			items = [{"body": item.get("body", ""), "created_at": item.get("created_at", ""), "author": item.get("user", {}).get("login", "")} for item in items]
+			# Keep every field the real projections read (user, author_association,
+			# id) and add the reporter's flattened author login.
+			items = [dict(item, author=(item.get("user") or {}).get("login", "")) for item in items]
 		out("".join(json.dumps(item) + "\n" for item in items))
 	if path.endswith("/issues") and "--paginate" in rest:
 		if method != "GET":
@@ -1228,12 +1267,6 @@ if args[:1] == ["api"]:
 		if method != "GET":
 			fail("HTTP method must be GET for runs list")
 		out(json.dumps({"workflow_runs": state.get("runs", [])}))
-	if "/actions/runs/" in path and path.split("/")[-1].isdigit():
-		run_id = path.split("/")[-1]
-		details = state.get("run_details", {}).get(run_id)
-		if details is None:
-			fail("HTTP 404")
-		out(json.dumps(details))
 	if "/actions/runs/" in path and path.endswith("/jobs"):
 		if method != "GET":
 			fail("HTTP method must be GET for jobs list")
@@ -1381,7 +1414,7 @@ def test_reporter_does_not_reheal_pipeline_scope_refusal() -> None:
 		work, state_file, env = _stage(tmp, with_codex=False, wrapper_pin=SHA_A)
 		state = _report_state()
 		state["issues"]["42"]["labels"].append({"name": heal.HEAL_LABEL})
-		state["comments"][f"repos/{CONSUMER_REPO}/issues/42/comments"].append({"body": "<!-- ai:workflow-heal-scope-unverified:v1 reason=missing -->", "user": {"login": "pipeline"}, "created_at": "2026-09-20T00:00:00Z"})
+		state["comments"][f"repos/{CONSUMER_REPO}/issues/42/comments"].append({"body": "<!-- ai:workflow-heal-scope-unverified:v1 reason=missing -->", "user": {"login": "workflow-bot"}, "created_at": "2026-09-20T00:00:00Z"})
 		state_file.write_text(json.dumps(state), encoding="utf-8")
 		env.update({"GITHUB_REPOSITORY": CONSUMER_REPO, "WORKFLOW_HEAL_ISSUE_NUMBER": "42", "WORKFLOW_HEAL_LABEL": "ai:needs-human"})
 		result = _run(REPORT_SCRIPT, work, env)
@@ -1885,7 +1918,8 @@ def _autofix_payload(**overrides) -> dict:
 def test_autofix_intake_reads_successful_review_job_when_no_job_failed() -> None:
 	payload = _autofix_payload()
 	state = _intake_state(jobs={"500": [{"id": 9001, "name": "review / codex-agent", "workflow_name": "AI Review", "conclusion": "success", "steps": []}]}, job_logs={"9001": JOB_LOG})
-	state["run_details"] = {"500": {"id": 500, "repository": {"full_name": CONSUMER_REPO}, "head_sha": payload["head_sha"], "conclusion": "success", "path": ".github/workflows/ai-review.yml"}}
+	# The default run fixture (a failed run linked to the PR) passes provenance;
+	# none of its jobs failed, so the review-job fallback must be selected.
 	result, _, prompt = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
 	assert result.returncode == 0, result.stderr
 	assert "runs=1" in result.stdout and "Run codex" in prompt

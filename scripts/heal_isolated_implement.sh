@@ -4,6 +4,9 @@ set -euo pipefail
 
 prompt="${1:?prompt required}"
 output="${2:?output required}"
+# The prompt is bind-mounted into the container: refuse a symlink so it cannot
+# expose another runner-readable file.
+[ -f "${prompt}" ] && [ ! -L "${prompt}" ] || { echo 'HEAL_ISOLATED_EDITOR phase=prepare engine=codex outcome=failed reason=prompt_not_regular' >&2; exit 1; }
 scope="${HEAL_SCOPE_FILE:-${RUNNER_TEMP:-/tmp}/heal-scope-${GITHUB_RUN_ID:-local}.txt}"
 support="${HEAL_TRUSTED_SUPPORT_DIR:-${GITHUB_WORKSPACE:-.}/.codex-workflow-src/scripts}"
 [ -s "${scope}" ] && [ -f "${support}/review_untrusted_workspace.py" ] || { echo 'HEAL_ISOLATED_EDITOR phase=prepare engine=codex outcome=failed reason=scope_or_support_missing' >&2; exit 1; }
@@ -31,7 +34,7 @@ snapshot_args=()
 [ -z "${host_git_dir}" ] || snapshot_args+=("${host_git_dir}")
 PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" snapshot "${WORKSPACE_PATH:-${PWD}}" "${root}/source" "${root}/manifest.json" "${snapshot_args[@]}"
 image="$(env -i PATH="${PATH}" docker build -q -f "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/clarify_sandbox/Dockerfile" "${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/clarify_sandbox")"
-[ -n "${image}" ] || exit 1
+[ -n "${image}" ] || { echo 'HEAL_ISOLATED_EDITOR phase=prepare engine=codex outcome=failed reason=image_build_failed' >&2; exit 1; }
 env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY:?}" CLARIFY_MODEL="${MODEL_EDITOR:-openai/gpt-6-sol}" PYTHONDONTWRITEBYTECODE=1 \
 	python3 "${support}/clarify_openrouter_broker.py" broker "${root}/socket/provider.sock" &
 broker_pid=$!
@@ -96,6 +99,13 @@ validate_snapshot()
 		echo 'HEAL_ISOLATED_EDITOR phase=validate engine=codex outcome=container_survived' >&2
 		exit 1
 	fi
+	# timeout/docker failures are not syntax errors: never hand them to repair.
+	case "${validation_rc}" in
+		124|125|126|127|137)
+			echo "HEAL_ISOLATED_EDITOR phase=validate engine=codex outcome=failed reason=validator_unavailable rc=${validation_rc}" >&2
+			exit 1
+			;;
+	esac
 	return "${validation_rc}"
 }
 repair_limit="${MAX_POST_CODEX_REPAIR_ATTEMPTS:-3}"

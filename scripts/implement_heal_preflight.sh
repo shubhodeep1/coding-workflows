@@ -11,10 +11,18 @@ refuse()
 	echo "HEAL_SCOPE_REFUSED issue=${ISSUE_NUMBER:-unknown} reason=${reason}"
 	# Never allow another editor path to run after a failed authorization read.
 	echo 'SKIP_IMPLEMENT=true' >> "${GITHUB_ENV}"
-	gh issue comment "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body "Workflow heal scope verification failed (${reason}); implementation was refused. <!-- ai:workflow-heal-scope-unverified:v1 reason=${reason} -->" >/dev/null
+	# errexit is suspended in a function reached through `|| refuse`, so each
+	# write is checked: a missing marker or latch must fail the job, not pass.
+	if ! gh issue comment "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body "Workflow heal scope verification failed (${reason}); implementation was refused. <!-- ai:workflow-heal-scope-unverified:v1 reason=${reason} -->" >/dev/null; then
+		echo "::error::HEAL_SCOPE_REFUSED issue=${ISSUE_NUMBER:-unknown} reason=${reason} outcome=comment_failed" >&2
+		exit 1
+	fi
 	# Comment first: the label event starts the reporter immediately, which
 	# must already see the authenticated refusal marker to skip re-healing.
-	gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --add-label 'ai:needs-human' >/dev/null
+	if ! gh issue edit "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --add-label 'ai:needs-human' >/dev/null; then
+		echo "::error::HEAL_SCOPE_REFUSED issue=${ISSUE_NUMBER:-unknown} reason=${reason} outcome=label_failed" >&2
+		exit 1
+	fi
 	exit 0
 }
 

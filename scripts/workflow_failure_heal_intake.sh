@@ -278,8 +278,20 @@ while IFS=$'\t' read -r run_id run_url; do
 		break
 	fi
 	RUN_INFO_FILE="${LOG_DIR}/run-${run_id}-info.json"
-	if ! gh_api_json_to_file "${RUN_INFO_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${run_id}" \
-		|| ! python3 "${HEAL_PY}" verify-run --run-json "${RUN_INFO_FILE}" --repo "${SOURCE_REPO}" --target-repo "${SELF_REPO}" --kind "${SOURCE_KIND}" \
+	# Reuse the run already read by the provenance gate (§14); only label
+	# escalation reports, which skip that gate, read the run here.
+	run_info_ready=false
+	if [ -n "${PROVENANCE_DIR:-}" ] && [ -s "${PROVENANCE_DIR}/run-${run_id}.json" ] && cp "${PROVENANCE_DIR}/run-${run_id}.json" "${RUN_INFO_FILE}"; then
+		run_info_ready=true
+	elif gh_api_json_to_file "${RUN_INFO_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${run_id}"; then
+		run_info_ready=true
+	fi
+	verify_pending_args=()
+	if [ -n "${PENDING_CURRENT_RUN}" ] && [ "${run_id}" = "${PENDING_CURRENT_RUN}" ]; then
+		verify_pending_args=(--allow-pending)
+	fi
+	if [ "${run_info_ready}" != true ] \
+		|| ! python3 "${HEAL_PY}" verify-run --run-json "${RUN_INFO_FILE}" --repo "${SOURCE_REPO}" --target-repo "${SELF_REPO}" --kind "${SOURCE_KIND}" "${verify_pending_args[@]}" \
 			--head-sha "$({ [ "${SOURCE_KIND}" = autofix_failure ] || [ "${SOURCE_KIND}" = workflow_run ]; } && printf '%s' "${HEAD_SHA}" || true)" > "${RUN_INFO_FILE}.verified" 2>/dev/null \
 		|| ! jq -e --argjson id "${run_id}" '.run_id == $id' "${RUN_INFO_FILE}.verified" >/dev/null; then
 		log "run_ref_rejected run=${run_id} reason=unverified"

@@ -338,7 +338,10 @@ def transfer(host, workspace, manifest, scope=None):
 		if scope is not None:
 			from files_touched_scope_guard import entry_matches
 
-			if name.startswith((".github/ai/", ".claude/")) or name in (".gitattributes", ".gitmodules") or not any(entry_matches(entry, name) for entry in scope):
+			# Git attribute/module files at any depth can name filters or drivers
+			# the credentialed host commit would honour; never transfer them.
+			git_control = any(part.lower() in (".git", ".gitattributes", ".gitmodules") for part in name.split("/"))
+			if name.startswith((".github/ai/", ".claude/")) or git_control or not any(entry_matches(entry, name) for entry in scope):
 				raise ValueError("out of heal scope")
 			if new is not None and old is not None and new[1] != old[1]:
 				raise ValueError("out of heal scope")

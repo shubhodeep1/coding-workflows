@@ -53,10 +53,12 @@ while IFS= read -r ref; do
 	done < <(jq -r '.[].id' "${scratch}/selected.json")
 done < <(printf '%s' "${verification}" | jq -r '.runs[]')
 [ "${jobs_count}" -gt 0 ] || stub logs_unavailable
+# A log line that repeats a fence delimiter must not close the evidence fence.
+sed -E 's/={3}([[:space:]]*(BEGIN|END)[[:space:]]+UNTRUSTED)/= = =\1/Ig' "${scratch}/content" > "${scratch}/fenced"
 {
 	echo '=== BEGIN UNTRUSTED WORKFLOW FAILURE EVIDENCE ==='
 	# Bounded before publication; filtered content was already redacted before disk.
-	head -c "$((max_bytes - 128))" "${scratch}/content"
+	head -c "$((max_bytes - 128))" "${scratch}/fenced"
 	echo
 	echo '=== END UNTRUSTED WORKFLOW FAILURE EVIDENCE ==='
 } > "${out}"
