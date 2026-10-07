@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: On `main` the silent pass is already gone. In `workflow-templates/.claude/hooks/pr_merge_status_guard.py`, lines 552-555 mark an appended `GIT_DIR+=` / `GIT_WORK_TREE+=` as unresolved. A push with one is still checked against the session checkout, though (line 580: \"checking the session checkout instead\"). The test `tests/test_pr_merge_status_guard.py:996-1014` relies on that: it expects a block when the session checkout's branch is merged. That block comes from evidence about the wrong repository. It is the same \"do not substitute the session checkout\" problem the finding's recommendation names. Commits with an unresolvable explicit override already ask without querying the session checkout's PR history. Option A gives pushes the same rule, and \"ask\" is the fail-closed answer when the target is unknown. Option B leaves that substitution in place. Option C relies on the hook's environment matching the shell's environment, which the hook cannot verify, so it breaks the repository's fail-closed rule.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo (letter A; scoping detail from current code)\n  inputs:\n    - workflow-templates/.claude/hooks/pr_merge_status_guard.py (lines 549-585: `appended_git_selector`, `explicit_directory_unresolved`, the \"uncertain\" warning text; lines 1663-1672: how unresolved pushes are turned into confirmation reasons)\n    - .claude/hooks/pr_merge_status_guard.py (live copy; must stay byte-identical, `tests/test_claude_template_live_parity.py`)\n    - tests/test_pr_merge_status_guard.py:994-1029 (`test_appended_git_override_falls_back_without_using_rhs`, `test_appended_git_override_asks_when_checkout_is_not_merged`)\n    - agents.md \"Merged-PR guard\" bullet (the sentence \"A push from an unresolved directory (including an appended `GIT_DIR+=` / `GIT_WORK_TREE+=`, whose value is never applied) is checked against the session checkout, which can still block, and otherwise asks\")\n  steps:\n    - Limit the change to pushes whose directory is unresolved because of an explicit override: an appended `GIT_DIR+=` / `GIT_WORK_TREE+=`, or an explicit `-C` / `env -C` / `GIT_DIR` that cannot be resolved. For these, never query the session checkout's PR history. Return an \"ask\" decision with a fixed reason. A suggested wording, modelled on the existing commit message: \"could not resolve explicit git push directory; cannot check checkout PR history\". Keep today's session-checkout fallback for pushes that are uncertain only because of shell control flow or an unknown `cd`.\n    - Fix the comment at lines 552-553. It should say that Git applies the appended value but the hook cannot resolve it, not that the value is \"never applied\".\n    - Rewrite `test_appended_git_override_falls_back_without_using_rhs`. With a merged session checkout and an appended override, assert the result is \"ask\", not a block, and that `query_pull_requests` is never called for the session checkout. Keep the asks-when-not-merged test, and update its expected message if the wording changes.\n    - Add a regression test for the exact #6305 exploit: `GIT_DIR+=<merged repo .git> git push origin HEAD` with a default-branch session checkout. Assert the result is \"ask\", not an allow.\n    - Make the same edit to the template and the live hook so they stay byte-identical. Update the agents.md Merged-PR guard sentence to match. Add a `changelog.d/` fragment.\n    - Implementer risk: the pipeline's editors may not be able to write `.claude/**`. If the live copy cannot be written, the parity test fails on the PR. Do not hand-edit around this. Report it as `BLOCKED: live .claude/hooks copy not writable` so an operator can sync it.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: Taking the finding's own recommendation, an unresolved override is now refused deterministically by asking, and the session checkout is no longer used in its place. This matches what commits with an unresolved override already do.\n  reversibility: The change only affects one branch of logic in one hook and its twin, and the tests pin it. Reverting the PR restores the current fall-back-to-session-checkout behaviour.",
+  "fingerprint": "fb5c325b003bba1b0700f0a64bc9950d953f4260a4fae0ee8753fa4e7867c03f",
+  "lineage": {
+    "issue_number": 6638,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37618545984",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37618545984",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6638"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261007121615_7358749ebd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6638,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37618545984"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6638",
+  "timestamps": {
+    "created_at": "2026-10-07T12:16:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
