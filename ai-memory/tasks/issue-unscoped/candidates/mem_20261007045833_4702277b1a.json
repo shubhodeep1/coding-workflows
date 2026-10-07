@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/collect_pr_check_runs_context.py:34 | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `_merge_self_incomplete` check may misclassify a self-run if GitHub changes the app slug or `details_url` pattern.\n  WHY: Such a misclassification could block the integration merge; the reviewer identified this as a maintenance risk based on the current GitHub API.\n- scripts/orchestrate_poll_process.sh:736 | severity=medium | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `semple_attempt_marker` can remain after a partial Docker build or `build_index` failure, causing future poll cycles to skip Semble installation and index building.\n  WHY: The marker may leave the system in a permanent Semble failure state until the runtime directory is cleared.\n- tests/test_review_autofix_review_pipeline_contract.py: test_collect_pr_check_runs_helper_retry_drops_failed_attempt_stdout (line ~3746-3750) | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The test fixture's check-run ID starting at `0` is rejected by the strict snapshot validator, causing the test to retry until timeout; changing IDs to `idx + 1` makes them valid.\n  WHY: `scripts/collect_pr_check_runs_context.py:67-68` rejects run IDs `<= 0`, so the first fixture run makes `_strict_merge_runs` return `invalid_snapshot` and the test reaches retry exhaustion.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR Description names \"Eagerly created... sync...\".\n  expected_change_site: .github/workflows/implement.yml, .github/workflows/orchestrate_poll.yml\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The changes in this PR seem consistent with the stated intent of enabling continuous drift resolution rather than only at finalization.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/collect_pr_check_runs_context.py:34 | confidence=2\n  PROBLEM: The `_merge_self_incomplete` function checks whether a run is a GitHub Actions job using the slug `github-actions` and a specific URL pattern; a GitHub change to either could cause a self-run to be incorrectly classified as incomplete.\n  WHY: That misclassification could block the integration merge; the reviewer identifies this as a maintenance risk based on the current GH API.\n- scripts/orchestrate_poll_process.sh:736 | confidence=3\n  PROBLEM: The `semple_attempt_marker` is created using `: >` to prevent repeated install attempts, but can remain if the Docker build or `build_index` step partially completes and crashes.\n  WHY: Future poll cycles will skip Semble installation/build because the marker exists, potentially leaving a permanent Semble failure state until the runtime directory is cleared.\n- Requirement: PR Description names \"Eagerly created... sync...\".\n  Expected change site: .github/workflows/implement.yml, .github/workflows/orchestrate_poll.yml\n  Evidence of absence: The changes in this PR seem consistent with the stated intent of enabling continuous drift resolution rather than only at finalization.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_autofix_review_pipeline_contract.py: test_collect_pr_check_runs_helper_retry_drops_failed_attempt_stdout (line ~3746-3750) | severity=MAJOR | confidence=5\n  PROBLEM: The test fixture previously created check-runs with `id: idx` starting at 0. The strict snapshot validator introduced in `scripts/collect_pr_check_runs_context.py:67-68` rejects any run whose `id` is `<= 0` (`if type(run_id) is not int or run_id <= 0 or run_id in seen_ids: return None`). The previous fixture's first run (id=0) was therefore rejected as malformed, causing the CI timeout/assertion failure reported in the last run. The new `idx + 1` ensures all four check-runs carry positive integer IDs.\n  WHY: Without the fix, the `_strict_merge_runs` helper short-circuits to `invalid_snapshot` on the first iteration because id=0 fails the positivity check, and the regular collector's `total_count != len(runs)` check (or a similar validation) rejects the page as malformed. The test then times out on retry exhaustion. The corrected fixture makes all IDs valid while preserving the same iteration count, name pattern, and retry-drop semantics the test was designed to exercise.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "c80b83b90d0357c760e506ab49d96ece248a49585a0f80ba263178c08196e760",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6043,
+    "run_id": "37572747774",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37572747774",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007045833_4702277b1a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6043,
+    "run_id": "37572747774"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-07T04:58:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
