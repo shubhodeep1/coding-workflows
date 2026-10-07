@@ -994,6 +994,9 @@ def test_unresolvable_worktree_push_asks_when_checkout_is_main(merged_branch_rep
 
 @pytest.mark.parametrize("override", ["GIT_DIR", "GIT_WORK_TREE"])
 def test_appended_git_override_falls_back_without_using_rhs(merged_branch_repo, monkeypatch, override: str) -> None:
+	# Finding #6305 (re-issue #6638): the appended value selects a repository
+	# the hook cannot see, so the push asks and the session checkout's PR
+	# history is never consulted, even though that checkout is merged.
 	repo, _ = merged_branch_repo
 	worktree = repo.parent / "open"
 	_git(repo, "worktree", "add", "-b", "feature/open", str(worktree), "main")
@@ -1002,16 +1005,53 @@ def test_appended_git_override_falls_back_without_using_rhs(merged_branch_repo, 
 	invocations = guard._guarded_git_invocations(command, str(repo))
 	assert len(invocations) == 1
 	assert invocations[0].environment == {}
-	assert invocations[0].warning == "could not resolve git command directory; checking the session checkout instead"
-	merged_sha = _git(repo, "rev-parse", "HEAD")
-	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
-	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
-	monkeypatch.setattr(guard, "query_pull_requests", lambda slug, branch, cwd:
-		[dict(MERGED_PR, headRefOid=merged_sha)] if branch == "feature/x" else [])
+	assert invocations[0].explicit_directory_unresolved
+	assert invocations[0].warning == "could not resolve explicit git push directory; cannot check checkout PR history"
+	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: pytest.fail("must not check the session checkout"))
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("must not check the session checkout"))
+	ask: list[str] = []
+	monkeypatch.setattr(guard, "_request_confirmation", lambda reason, prompt_reason=None: ask.append(reason))
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
 		"tool_input": {"command": command}})
-	assert code == 2, message
-	assert "Branch `feature/x`" in message
+	assert (code, message) == (0, "")
+	assert ask and "could not resolve explicit git push directory" in ask[0]
+	assert "checking the session checkout instead" not in ask[0]
+
+
+@pytest.mark.parametrize("override", ["GIT_DIR", "GIT_WORK_TREE"])
+def test_appended_git_override_exploit_asks_from_default_branch_checkout(merged_branch_repo, monkeypatch, override: str) -> None:
+	"""The exact #6305 command: a default-branch session checkout, an appended
+	override naming the merged repository. Before the fix the session checkout
+	(clean, on main) was checked in place of the override and the push passed."""
+	repo, _ = merged_branch_repo
+	_git(repo, "checkout", "main")
+	value = repo / ".git" if override == "GIT_DIR" else repo
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("must not check the session checkout"))
+	ask: list[str] = []
+	monkeypatch.setattr(guard, "_request_confirmation", lambda reason, prompt_reason=None: ask.append(reason))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": f"{override}+={value} git push origin HEAD"}})
+	assert (code, message) == (0, "")
+	assert ask, "the push must ask, never pass silently"
+	assert "could not resolve explicit git push directory" in ask[0]
+
+
+@pytest.mark.parametrize("command", [
+	"if true; then git -C relative-dir push origin HEAD; fi",
+	"env -C relative-dir git push origin HEAD",
+	"GIT_DIR=relative.git git push origin HEAD",
+])
+def test_unresolved_explicit_push_override_asks_without_checking_checkout(merged_branch_repo, monkeypatch, command: str) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "checkout", "main")
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("must not check the session checkout"))
+	ask: list[str] = []
+	monkeypatch.setattr(guard, "_request_confirmation", lambda reason, prompt_reason=None: ask.append(reason))
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": command}})
+	assert (code, message) == (0, "")
+	assert ask, command
+	assert "could not resolve explicit git push directory" in ask[0], ask[0]
 
 
 @pytest.mark.parametrize("override", ["GIT_DIR", "GIT_WORK_TREE"])
@@ -1025,8 +1065,8 @@ def test_appended_git_override_asks_when_checkout_is_not_merged(merged_branch_re
 	assert proc.returncode == 0, proc.stdout + proc.stderr
 	response = json.loads(proc.stdout)
 	assert response["hookSpecificOutput"]["permissionDecision"] == "ask"
-	assert "could not resolve git command directory" in response["systemMessage"]
-	assert "could not resolve git push repository" in response["systemMessage"]
+	assert "could not resolve explicit git push directory" in response["systemMessage"]
+	assert "checking the session checkout instead" not in response["systemMessage"]
 
 
 def test_explicit_source_tip_and_multiple_destinations(merged_branch_repo) -> None:
@@ -1300,19 +1340,17 @@ def test_unresolved_push_source_asks_without_checkout_lookup(merged_branch_repo,
 
 @pytest.mark.parametrize("prefix", ["GIT_DIR+=other", "GIT_WORK_TREE+=other"])
 def test_appended_git_directory_push_asks_when_checkout_is_safe(merged_branch_repo, monkeypatch, capsys, prefix: str) -> None:
-	# The appended value is never applied; the session checkout is checked
-	# (it may block, see test_appended_git_override_falls_back_without_using_rhs)
-	# and otherwise the push still asks.
+	# Git applies the appended value on top of a shell state the hook cannot
+	# read, so the push asks without checking the session checkout (finding
+	# #6305, see test_appended_git_override_falls_back_without_using_rhs).
 	repo, _ = merged_branch_repo
-	monkeypatch.setattr(guard, "_read_cache", lambda slug, branch: None)
-	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
-	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: [])
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("must not check the session checkout"))
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
 		"tool_input": {"command": f"{prefix} git push origin HEAD:feature/x"}})
 	assert code == 0 and message == ""
 	decision = json.loads(capsys.readouterr().out.splitlines()[-1])
 	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
-	assert "could not resolve git push repository" in decision["systemMessage"]
+	assert "could not resolve explicit git push directory" in decision["systemMessage"]
 
 
 @pytest.mark.parametrize("command", [
@@ -2593,3 +2631,132 @@ def test_claude_md_documents_the_history_fallback() -> None:
 	assert "first-parent" in text
 	assert "git history" in text
 	assert "permissionDecision" in text or "asks" in text
+
+
+# Pipes and data heredocs must not make a command unreadable or its directory
+# unknown (false prompts reported after #6133 / #6135).
+
+
+def _open_feature_checkout(repo: Path, stub_bin: Path) -> None:
+	"""Check out `feature/open`, which the stub answers with an open PR."""
+	_worktree_pr_stub(stub_bin, _git(repo, "rev-parse", "HEAD"))
+	_git(repo, "checkout", "-b", "feature/open")
+
+
+@pytest.mark.parametrize("command", [
+	"git log --oneline -3 | head -3; git push origin feature/open",
+	(
+		"git fetch -q origin feature/open && git log --oneline HEAD..origin/feature/open | head -3; "
+		"git push origin feature/open 2>&1 | tail -1"
+	),
+	"git status | head -1 && git push origin feature/open",
+	"cd /tmp | true; git push origin feature/open",
+	"git fetch -q origin || true; git push origin feature/open",
+	"true |& cd /tmp; git push origin feature/open",
+])
+def test_pipe_or_unrelated_or_list_keeps_push_directory_known(merged_branch_repo, command: str) -> None:
+	repo, stub_bin = merged_branch_repo
+	_open_feature_checkout(repo, stub_bin)
+	proc = _run_hook(repo, stub_bin, command)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert _ask_decision(proc) is None, proc.stdout
+	assert "could not resolve git" not in proc.stdout
+
+
+def test_pipe_before_push_still_blocks_merged_branch(merged_branch_repo) -> None:
+	repo, stub_bin = merged_branch_repo
+	proc = _run_hook(repo, stub_bin, "git log --oneline -3 | head -3; git push origin feature/x")
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "Branch `feature/x`" in proc.stderr
+	assert "could not resolve git" not in proc.stdout
+
+
+@pytest.mark.parametrize("command", [
+	"true || cd /tmp; git push origin feature/open",
+	"cd /tmp && true || git push origin feature/open",
+	"sleep 1 & git push origin feature/open",
+])
+def test_conditional_directory_change_still_asks_for_push(merged_branch_repo, command: str) -> None:
+	repo, stub_bin = merged_branch_repo
+	_open_feature_checkout(repo, stub_bin)
+	proc = _run_hook(repo, stub_bin, command)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert _ask_decision(proc) is not None, proc.stdout
+
+
+@pytest.mark.parametrize("command", [
+	"cat <<'EOF'\nit's fine\nEOF",
+	(
+		"python3 - <<'EOF'\nold = '''def f():\n\t\"\"\"the checkout's PR\"\"\"\n'''\nEOF\n"
+		"python3 -m pytest -q tests 2>&1 | tail -5"
+	),
+	(
+		"python3 - <<'EOF'\nnew = '''# the security audit's export\n\t\tisolation_args+=(--include \"${p}\")\n'''\nEOF\n"
+		"bash -n scripts/ai_engine.sh && echo ok"
+	),
+	(
+		"git commit -q -F - <<'EOF'\nFollow main's rule\nEOF\n"
+		"git log --oneline HEAD..origin/feature/open | head -3; git push origin feature/open 2>&1 | tail -1"
+	),
+	"git commit -m \"$(cat <<'EOF'\nsay \"hi\", it's done\nEOF\n)\"",
+	"cat <<-EOF\n\tit's indented\n\tEOF",
+	"env cat <<'EOF'\nit's data\nEOF",
+	"timeout 5 cat <<'EOF' | tail -1\nit's data\nEOF",
+])
+def test_data_heredoc_with_unbalanced_quotes_does_not_prompt(merged_branch_repo, command: str) -> None:
+	repo, stub_bin = merged_branch_repo
+	_open_feature_checkout(repo, stub_bin)
+	proc = _run_hook(repo, stub_bin, command)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert _ask_decision(proc) is None, proc.stdout
+
+
+def test_data_heredoc_commit_on_merged_branch_is_still_blocked(merged_branch_repo) -> None:
+	repo, stub_bin = merged_branch_repo
+	proc = _run_hook(repo, stub_bin, "git commit -q -F - <<'EOF'\nFollow main's rule\nEOF")
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "Branch `feature/x`" in proc.stderr
+
+
+@pytest.mark.parametrize("command", [
+	"bash <<'EOF'\ngit push origin feature/x\nit's\nEOF",
+	"sudo sh <<'EOF'\ngit push origin feature/x\nit's\nEOF",
+	"cat <<EOF\n$(git push origin feature/x)\nit's\nEOF",
+	"cat <<'EOF'\nfine\nEOF\ngit status\n\"unterminated",
+	"cat <<'EOF' | bash\ngit push origin feature/x\nit's\nEOF",
+	"env bash <<'EOF'\ngit push origin feature/x\nit's\nEOF",
+])
+def test_heredoc_run_as_shell_is_still_parsed(merged_branch_repo, command: str) -> None:
+	repo, stub_bin = merged_branch_repo
+	_open_feature_checkout(repo, stub_bin)
+	proc = _run_hook(repo, stub_bin, command)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert _ask_decision(proc) is not None, proc.stdout
+
+
+@pytest.mark.parametrize("command", [
+	# The delimiter is `EOF-TEXT`, not `EOF`: the push runs after the heredoc.
+	"cat <<EOF-TEXT\npayload\nEOF-TEXT\ngit push origin feature/x",
+	"cat <<'EOF' | bash\ngit push origin feature/x\nEOF",
+	"cat <<'EOF' |\ngit push origin feature/x\nEOF\nbash",
+])
+def test_heredoc_that_hides_an_executed_push_still_blocks(merged_branch_repo, command: str) -> None:
+	repo, stub_bin = merged_branch_repo
+	proc = _run_hook(repo, stub_bin, command)
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "Branch `feature/x`" in proc.stderr
+
+
+def test_strip_data_heredoc_bodies_keeps_operator_and_shell_bodies() -> None:
+	assert guard._strip_data_heredoc_bodies("cat <<'EOF'\nit's\nEOF\ngit status") == "cat <<'EOF'\ngit status"
+	assert guard._strip_data_heredoc_bodies('echo "<<EOF"\nit\'s\nEOF') == 'echo "<<EOF"\nit\'s\nEOF'
+	shell_body = "bash <<'EOF'\ngit push\nEOF"
+	assert guard._strip_data_heredoc_bodies(shell_body) == shell_body
+	substitution = "cat <<EOF\n$(git push)\nEOF"
+	assert guard._strip_data_heredoc_bodies(substitution) == substitution
+	assert guard._strip_data_heredoc_bodies("cat <<\\EOF\n$(x)\nEOF") == "cat <<\\EOF\n$(x)\nEOF"
+	partial_delimiter = "cat <<EOF-1\nx\nEOF-1\ngit push"
+	assert guard._strip_data_heredoc_bodies(partial_delimiter) == partial_delimiter
+	piped = "cat <<'EOF' | bash\ngit push\nEOF"
+	assert guard._strip_data_heredoc_bodies(piped) == piped
+	assert guard._strip_data_heredoc_bodies("env cat <<'EOF'\nit's\nEOF") == "env cat <<'EOF'"
