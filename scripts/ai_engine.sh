@@ -77,7 +77,7 @@ readonly -a _AI_ENGINE_SANDBOX_ONLY_ROLES=(REVIEW_EDITOR REVIEW_CONSOLIDATOR RB_
 
 _ai_engine_py()
 {
-	PYTHONDONTWRITEBYTECODE=1 python3 "${_AI_ENGINE_DIR}/claude_engine.py" "$@"
+	PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${_AI_ENGINE_DIR}/claude_engine.py" "$@"
 }
 
 _ai_engine_valid_role()
@@ -99,8 +99,8 @@ ai_engine_for_role()
 		printf 'codex\n'
 		return 0
 	fi
-	engine="$(printf '%s' "${resolved}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["engine"])')" || engine="codex"
-	printf '%s' "${resolved}" | python3 -c '
+	engine="$(printf '%s' "${resolved}" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["engine"])')" || engine="codex"
+	printf '%s' "${resolved}" | python3 -I -c '
 import json, sys
 r = json.load(sys.stdin)
 print("AI_ENGINE_SELECTED role={role} engine={engine} model={model} effort={effort} source={source}".format(**r))
@@ -177,7 +177,7 @@ ai_engine_accounts()
 
 _ai_engine_json_field()
 {
-	python3 -c 'import json,sys; print(json.loads(sys.argv[1])[sys.argv[2]])' "$1" "$2"
+	python3 -I -c 'import json,sys; print(json.loads(sys.argv[1])[sys.argv[2]])' "$1" "$2"
 }
 
 _ai_engine_instructions_file()

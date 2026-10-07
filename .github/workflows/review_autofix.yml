@@ -310,6 +310,20 @@ jobs:
       fingerprint_cap_already_applied: ${{ steps.evaluate.outputs.fingerprint_cap_already_applied }}
       fingerprint_cap_marker_author_login: ${{ steps.evaluate.outputs.fingerprint_cap_marker_author_login }}
     steps:
+      - name: Record GH_PAT budget at review gate start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_gate
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=review_autofix job=gate remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       - name: Resolve trusted review support commit
         id: resolve_support
         env:
@@ -1700,6 +1714,24 @@ jobs:
             exit 0
           fi
           bash .codex-head-gate-src/scripts/review_head_gate.sh gate
+      - name: Record GH_PAT budget at review gate end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_gate
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          remaining=unknown; reset=unknown; used=unknown
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r remaining reset <<< "${reading}"
+            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
+              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
+              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
+                used=$((initial - remaining))
+              fi
+            fi
+          fi
+          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=gate remaining=${remaining} reset=${reset} used_in_job=${used}"
 
   post-merge-validate-dispatch:
     needs: gate
@@ -1717,6 +1749,20 @@ jobs:
       POST_MERGE_PR_TEXT_JSON: ${{ needs.gate.outputs.post_merge_pr_text_json }}
       POST_MERGE_LINKED_ISSUES_JSON: ${{ needs.gate.outputs.post_merge_linked_issues_json }}
     steps:
+      - name: Record GH_PAT budget at post-merge-validate-dispatch start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_post-merge-validate-dispatch
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=review_autofix job=post-merge-validate-dispatch remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       - name: Checkout workflow support source
         uses: actions/checkout@v5
         with:
@@ -1886,6 +1932,25 @@ jobs:
             echo "::warning::No standalone validation workflow could be dispatched for merged PR #${PR_NUMBER}."
           fi
 
+      - name: Record GH_PAT budget at post-merge-validate-dispatch end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_post-merge-validate-dispatch
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          remaining=unknown; reset=unknown; used=unknown
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r remaining reset <<< "${reading}"
+            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
+              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
+              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
+                used=$((initial - remaining))
+              fi
+            fi
+          fi
+          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=post-merge-validate-dispatch remaining=${remaining} reset=${reset} used_in_job=${used}"
+
   post-merge-force-poll:
     needs: gate
     runs-on: ubuntu-latest
@@ -1895,6 +1960,20 @@ jobs:
       REPOSITORY: ${{ github.repository }}
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
     steps:
+      - name: Record GH_PAT budget at post-merge-force-poll start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_post-merge-force-poll
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=review_autofix job=post-merge-force-poll remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       - name: Checkout workflow support source
         uses: actions/checkout@v5
         with:
@@ -1945,6 +2024,25 @@ jobs:
   # after a normal clean review. Reviewer panel, editor, summarizer, and
   # merge-conflict resolver are all skipped — if a conflict exists,
   # auto-merge will block and the orchestrator stall cron re-dispatches.
+      - name: Record GH_PAT budget at post-merge-force-poll end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_post-merge-force-poll
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          remaining=unknown; reset=unknown; used=unknown
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r remaining reset <<< "${reading}"
+            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
+              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
+              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
+                used=$((initial - remaining))
+              fi
+            fi
+          fi
+          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=post-merge-force-poll remaining=${remaining} reset=${reset} used_in_job=${used}"
+
   deterministic-skip-merge:
     needs: gate
     runs-on: ubuntu-latest
@@ -1970,6 +2068,20 @@ jobs:
       # merge-capable path below is bound to it and refuses an empty value.
       PR_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
     steps:
+      - name: Record GH_PAT budget at deterministic-skip-merge start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_deterministic-skip-merge
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=review_autofix job=deterministic-skip-merge remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       - name: Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge
         run: |
           set -euo pipefail
@@ -2197,6 +2309,25 @@ jobs:
           # 4) Workflow run summary
           write_deterministic_skip_summary
 
+      - name: Record GH_PAT budget at deterministic-skip-merge end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_deterministic-skip-merge
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          remaining=unknown; reset=unknown; used=unknown
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r remaining reset <<< "${reading}"
+            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
+              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
+              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
+                used=$((initial - remaining))
+              fi
+            fi
+          fi
+          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=deterministic-skip-merge remaining=${remaining} reset=${reset} used_in_job=${used}"
+
   # Retain the legacy job identifier for workflow consumers (a required
   # check that names it keeps reporting "skipped"). The Claude-fixer
   # hand-off it belonged to is retired, so it never runs: the gate never
@@ -2244,6 +2375,20 @@ jobs:
       TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
       TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
     steps:
+      - name: Record GH_PAT budget at fingerprint-cap-block start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_fingerprint-cap-block
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=review_autofix job=fingerprint-cap-block remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       - name: Checkout workflow support source
         uses: actions/checkout@v5
         with:
@@ -2459,6 +2604,25 @@ jobs:
             echo "- **Reviewer panel + editor cycle:** SKIPPED"
           } >> "${GITHUB_STEP_SUMMARY}"
 
+      - name: Record GH_PAT budget at fingerprint-cap-block end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_fingerprint-cap-block
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          remaining=unknown; reset=unknown; used=unknown
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r remaining reset <<< "${reading}"
+            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
+              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
+              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
+                used=$((initial - remaining))
+              fi
+            fi
+          fi
+          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=fingerprint-cap-block remaining=${remaining} reset=${reset} used_in_job=${used}"
+
   codex-agent:
     needs: gate
     # Display name surfaces the gate's no-PR claude_branch_review decision in
@@ -2606,6 +2770,20 @@ jobs:
       BASE_REF_OVERRIDE_INPUT: ${{ inputs.base_ref_override }}
 
     steps:
+      - name: Record GH_PAT budget at codex-agent start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_codex-agent
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=review_autofix job=codex-agent remaining=${remaining} reset=${reset} used_in_job=unknown"
+
 
       # Reclaim ~25–28 GB on ubuntu-latest before any checkout/LLM
       # work runs.  The codex-agent job has historically died mid-step on
@@ -7515,3 +7693,21 @@ jobs:
             rm -rf prompts
             rm -f .github/ai/orchestrate_schema.v1.json
           fi
+      - name: Record GH_PAT budget at codex-agent end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_codex-agent
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          remaining=unknown; reset=unknown; used=unknown
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r remaining reset <<< "${reading}"
+            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
+              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
+              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
+                used=$((initial - remaining))
+              fi
+            fi
+          fi
+          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=codex-agent remaining=${remaining} reset=${reset} used_in_job=${used}"

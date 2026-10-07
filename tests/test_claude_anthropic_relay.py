@@ -304,6 +304,95 @@ def test_oversized_content_length_is_rejected_without_integer_conversion(chain) 
 	assert _Upstream.seen == []
 
 
+def test_rejection_does_not_wait_indefinitely_for_a_missing_body(chain) -> None:
+	connection = relay.UnixHTTPConnection(chain["socket"])
+	connection.putrequest("POST", "/v1/messages")
+	connection.putheader("Authorization", "Bearer mine")
+	connection.putheader("Content-Length", "5")
+	connection.endheaders()
+	connection.sock.settimeout(3)
+	assert connection.getresponse().status == 400
+	connection.close()
+
+
+@pytest.mark.parametrize("sent_body", (b"", b"{"))
+def test_valid_headers_with_incomplete_body_release_the_relay(chain, monkeypatch: pytest.MonkeyPatch, sent_body: bytes) -> None:
+	monkeypatch.setattr(relay, "BODY_READ_TIMEOUT", 0.1)
+	connection = http.client.HTTPConnection("127.0.0.1", chain["bridge_port"], timeout=3)
+	connection.putrequest("POST", "/v1/messages")
+	connection.putheader("Authorization", "Bearer isolated-placeholder")
+	connection.putheader("Content-Type", "application/json")
+	connection.putheader("Content-Length", "5")
+	connection.endheaders(sent_body)
+	assert connection.getresponse().status == 400
+	connection.close()
+	assert _Upstream.seen == []
+	assert _post(chain["bridge_port"])[0] == 200
+
+
+def test_rejection_handles_an_oversized_length_header(chain) -> None:
+	connection = relay.UnixHTTPConnection(chain["socket"])
+	connection.putrequest("POST", "/v1/messages")
+	connection.putheader("Authorization", "Bearer mine")
+	connection.putheader("Content-Length", "9" * 5000)
+	connection.endheaders()
+	connection.sock.settimeout(3)
+	assert connection.getresponse().status == 400
+	connection.close()
+
+
+def test_rejection_drain_has_a_total_deadline_and_restores_socket_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+	handler = relay.Relay.__new__(relay.Relay)
+	handler.command = "POST"
+	handler._request_body_consumed = False
+	handler.headers = {"Content-Length": "100"}
+	handler.connection = Mock()
+	handler.connection.gettimeout.return_value = 30
+	handler.rfile = Mock()
+	handler.rfile.read1.return_value = b"x"
+	handler.send_error = Mock()
+	monkeypatch.setattr(relay, "time", Mock(monotonic=Mock(side_effect=[0, 0, .3, .6, 1.01])))
+
+	handler._reject(400)
+
+	assert handler.rfile.read1.call_count == 3
+	assert handler.connection.settimeout.call_args_list[-2].args == (30,)
+	assert handler.connection.settimeout.call_args_list[-1].args == (1,)
+	handler.send_error.assert_called_once_with(400, "Request rejected")
+
+
+def test_rejection_drains_only_the_unread_body_after_partial_read() -> None:
+	handler = relay.Relay.__new__(relay.Relay)
+	handler.command = "POST"
+	handler.server = Mock(mode="bridge")
+	handler.path = "/v1/messages"
+	handler.headers = {
+		"Host": "localhost", "Authorization": "Bearer isolated-placeholder",
+		"Content-Type": "application/json", "Content-Length": "5",
+	}
+	handler.connection = Mock()
+	handler.rfile = Mock()
+	handler.rfile.read1.side_effect = [b"ab", b"", b"xyz"]
+	handler.send_error = Mock()
+
+	handler.do_POST()
+
+	assert handler.rfile.read1.call_args_list[-1].args == (3,)
+	assert handler.rfile.read1.call_count == 3
+	handler.send_error.assert_called_once_with(400, "Request rejected")
+
+
+def test_bridge_rejects_an_oversized_length_with_valid_other_headers(chain) -> None:
+	connection = http.client.HTTPConnection("127.0.0.1", chain["bridge_port"], timeout=3)
+	connection.putrequest("POST", "/v1/messages")
+	connection.putheader("Authorization", "Bearer isolated-placeholder")
+	connection.putheader("Content-Type", "application/json")
+	connection.putheader("Content-Length", "9" * 5000)
+	connection.endheaders()
+	assert connection.getresponse().status == 400
+	connection.close()
+
+
 def test_broker_rejection_does_not_wait_for_an_unfinished_body(chain, monkeypatch: pytest.MonkeyPatch) -> None:
 	rejected_timeouts = []
 	original_reject = relay.Relay._reject

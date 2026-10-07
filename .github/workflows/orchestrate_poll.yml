@@ -82,6 +82,22 @@ jobs:
             echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"
           } >> "$GITHUB_ENV"
 
+      - name: Record GH_PAT budget at poll start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_poll
+        run: |
+          # The support helper is not staged yet; snapshot before the first
+          # PAT checkout so the initial calls are included.
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=orchestrate_poll job=poll remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       - name: Resolve workflow support ref for gh retry
         run: |
           set -euo pipefail
@@ -621,6 +637,22 @@ jobs:
 
           rm -rf .codex-workflow-src-main
 
+      # Run on every cron tick, even with no active orchestrator project.
+      - name: Replay failed trusted reclarify commands
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RECLARIFY_REQUEUE_SWEEP_ONLY: "true"
+        run: |
+          set -euo pipefail
+          # Consumers pinned to older support commits may not have this
+          # sweep-only mode yet; never launch the full poller from here.
+          if ! grep -q '^replay_failed_reclarify_commands()' scripts/orchestrate_poll_process.sh; then
+            echo '::warning::Reclarify replay support is not yet staged.'
+            exit 0
+          fi
+          bash scripts/orchestrate_poll_process.sh
+
       - name: setup-uv
         if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
         continue-on-error: true
@@ -1153,3 +1185,16 @@ jobs:
           msg+=$'\n'"Run: ${run_url}"
 
           tg_send_msg "${msg}" "ERROR" >/dev/null || true
+
+      - name: Record GH_PAT budget at poll end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_poll
+        run: |
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget end orchestrate_poll poll "${GH_PAT_BUDGET_FILE}"
+          else
+            echo 'GH_PAT_BUDGET phase=end workflow=orchestrate_poll job=poll remaining=unknown reset=unknown used_in_job=unknown'
+          fi

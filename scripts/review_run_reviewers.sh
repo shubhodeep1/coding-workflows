@@ -13,6 +13,9 @@ fi
 if ! command -v gh_retry >/dev/null 2>&1; then
   gh_retry() { "$@"; }
 fi
+if ! command -v gh_review_pr_state >/dev/null 2>&1; then
+  gh_review_pr_state() { gh_retry gh api "repos/${1}/pulls/${2}" --jq .state 2>/dev/null | grep -xE 'open|closed|merged' || echo open; }
+fi
 
 # _embed_input_file + _init_prompt_budget / _cleanup_prompt_budget live
 # in scripts/gh_helpers.sh which is sourced above.  If gh_helpers.sh
@@ -450,7 +453,16 @@ fi
 # Safe to skip on local/manual invocation where PR_NUMBER or REPOSITORY are
 # unset — downstream watchdog polling remains the fallback.
 if [ -n "${PR_NUMBER:-}" ] && [ -n "${REPOSITORY:-}" ] && command -v gh >/dev/null 2>&1; then
-  preflight_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
+  preflight_state=""
+  if [ -s "${PR_PAYLOAD_FILE:-/dev/null}" ]; then
+    preflight_age=$(( $(date +%s) - $(stat -c %Y "${PR_PAYLOAD_FILE}" 2>/dev/null || echo 0) ))
+    if [ "${preflight_age}" -ge 0 ] && [ "${preflight_age}" -le 120 ]; then
+      preflight_state="$(jq -r '.state // ""' "${PR_PAYLOAD_FILE}" 2>/dev/null || true)"
+    fi
+  fi
+  if [[ ! "${preflight_state}" =~ ^(open|closed|merged)$ ]]; then
+    preflight_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
+  fi
   if [ "${preflight_state}" != "open" ]; then
     echo "Pre-flight: PR #${PR_NUMBER} is ${preflight_state} — skipping reviewer fan-out."
     mkdir -p "${PREVIOUS_REVIEWS_DIR}"
@@ -4220,7 +4232,7 @@ execute_reviewer_attempt() {
 
       wd_iter=$((wd_iter + 1))
       if [ $((wd_iter % 9)) -eq 0 ]; then
-        pr_state="$({ gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open"; } 2>/dev/null)"
+        pr_state="$({ gh_review_pr_state "${REPOSITORY}" "${PR_NUMBER}" || echo "open"; } 2>/dev/null)"
         if [ "${pr_state}" != "open" ]; then
           echo "Reviewer ${effective_model} aborted — PR #${PR_NUMBER} is ${pr_state}." | tee -a "${log_file}" >&2
           printf 'pr_closed_api' > "${wd_reason_file}"

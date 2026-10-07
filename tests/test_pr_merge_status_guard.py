@@ -1445,6 +1445,7 @@ def test_env_wrapped_commit_checks_selected_repo(merged_branch_repo, monkeypatch
 	"env --chdir=/does-not-exist git commit -m x",
 	"env GIT_DIR=/does-not-exist git commit -m x",
 	"git -C /does-not-exist commit -m x",
+	'env -C "$OTHER_REPO" git commit -m x',
 	"GIT_DIR=/does-not-exist git commit -m x",
 	"GIT_DIR+=/does-not-exist git commit -m x",
 	"GIT_WORK_TREE+=/does-not-exist git commit -m x",
@@ -1465,7 +1466,7 @@ def test_env_unresolved_commit_directory_asks_instead_of_checking_checkout(merge
 	if "GIT_DIR=" in command:
 		assert "could not resolve git commit directory" in decision["hookSpecificOutput"]["permissionDecisionReason"]
 	assert "checking the session checkout instead" not in json.dumps(decision)
-	if command.startswith("env -C"):
+	if command.startswith("env -C") and " git -C " not in command:
 		assert "no checkout was checked" in decision["hookSpecificOutput"]["permissionDecisionReason"]
 		assert "merged-PR guard needs confirmation" in decision["systemMessage"]
 
