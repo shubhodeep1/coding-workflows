@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "When a Git operation's explicit checkout override cannot be resolved, do not substitute the session checkout's PR history.",
   "timestamps": {
     "created_at": "2026-10-07T19:21:57Z",
