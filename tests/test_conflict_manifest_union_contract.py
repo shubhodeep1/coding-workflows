@@ -563,13 +563,13 @@ def _git_out(repo: Path, *args: str) -> str:
 	).stdout
 
 
-def _assert_manifest_only_conflict_committed(reverse: bool) -> None:
+def _assert_manifest_only_conflict_committed(reverse: bool, head_ref: str = "feat") -> str:
 	with tempfile.TemporaryDirectory() as tmp_name:
 		tmp = Path(tmp_name)
 		repo = tmp / "repo"
 		repo.mkdir()
 		_make_one_sided_manifest_conflict(repo, reverse=reverse)
-		result, github_env, _ = _run_live_union_block(repo, tmp)
+		result, github_env, _ = _run_live_union_block(repo, tmp, head_ref=head_ref)
 		assert result.returncode == 0, result.stdout + result.stderr
 		assert "honoured one-sided deletion" in result.stdout, result.stdout
 		assert github_env.is_file(), (
@@ -582,6 +582,7 @@ def _assert_manifest_only_conflict_committed(reverse: bool) -> None:
 		assert _git_out(repo, "log", "-1", "--format=%s").strip() == MERGE_RESOLVE_COMMIT_MESSAGE
 		assert MANIFEST_PATH not in _git_out(repo, "ls-files").splitlines()
 		assert _git_out(repo, "diff", "--name-only", "--diff-filter=U", "--").strip() == ""
+		return result.stdout
 
 
 def test_manifest_modify_delete_conflict_is_resolved_deterministically() -> None:
@@ -638,18 +639,35 @@ def test_manifest_union_kill_switch_diagnostic() -> None:
 
 
 def test_manifest_union_integration_sync_fails_before_resolver() -> None:
+	"""With another unmerged path, an integration-sync branch still refuses:
+	resolving the manifest here would change the resolver's working set."""
 	with tempfile.TemporaryDirectory() as tmp_name:
 		tmp = Path(tmp_name)
 		repo = tmp / "repo"
 		repo.mkdir()
-		_make_one_sided_manifest_conflict(repo)
+		_make_one_sided_manifest_conflict(repo, other_conflict=True)
 		result, github_env, allowlist = _run_live_union_block(
 			repo, tmp, head_ref="orchestrator/project-123",
 		)
 		assert result.returncode != 0, result.stdout + result.stderr
 		assert "::error::Manifest union-merge: unhandled reason=integration_sync stages=1 2" in result.stdout
-		assert allowlist.read_text(encoding="utf-8") == f"{MANIFEST_PATH}\n"
+		assert "only unmerged path" not in result.stdout, result.stdout
+		assert allowlist.read_text(encoding="utf-8") == f"{MANIFEST_PATH}\nother.txt\n"
 		assert not github_env.exists()
+		assert MANIFEST_PATH in _git_out(repo, "ls-files").splitlines()
+
+
+def test_manifest_only_conflict_on_integration_sync_branch_is_resolved() -> None:
+	"""Tracking issue #6664 / final PR #6667: when the manifest is the only
+	unmerged path there is no resolver run to widen, so orchestrator/project-*
+	resolves it deterministically like any other branch."""
+	for reverse in (False, True):
+		stdout = _assert_manifest_only_conflict_committed(
+			reverse=reverse, head_ref="orchestrator/project-123",
+		)
+		assert "integration-sync branch, but" in stdout, stdout
+		assert "only unmerged path; resolving it deterministically" in stdout, stdout
+		assert "unhandled reason=integration_sync" not in stdout, stdout
 
 def test_manifest_modify_delete_with_conflicted_gitignore_fails_closed() -> None:
 	"""A conflicted .gitignore cannot prove the resolved tree ignores the manifest."""

@@ -263,7 +263,22 @@ if [ "${_resolver_allowlist_count}" -gt 0 ] \
   if [ "${CONFLICT_MANIFEST_UNION_ENABLED:-true}" != "true" ]; then
     _mu_unhandled_reason="disabled"
   else
-    case "${TARGET_BRANCH:-${HEAD_REF:-}}" in
+    _mu_branch_class="${TARGET_BRANCH:-${HEAD_REF:-}}"
+    if [ "${_resolver_allowlist_count}" -eq 1 ]; then
+      # The manifest is the only unmerged path, so no resolver run follows
+      # and there is no working set the integration-sync exclusion below
+      # protects. Resolve it deterministically on orchestrator/project-*
+      # too: the resolver sandbox excludes .ai/, so leaving the manifest
+      # to it only burns INTEGRATION_CONFLICT_LIFETIME_MAX and fails the
+      # project (tracking issue #6664, final PR #6667).
+      case "${_mu_branch_class}" in
+        orchestrator/project-*)
+          echo "Manifest union-merge: integration-sync branch, but ${MANIFEST_UNION_PATH} is the only unmerged path; resolving it deterministically (no resolver working set to widen)."
+          _mu_branch_class="integration-sync-manifest-only"
+          ;;
+      esac
+    fi
+    case "${_mu_branch_class}" in
       orchestrator/project-*)
         echo "Manifest union-merge: skipped on integration-sync branch (fingerprint expansion may widen the resolver working set)."
         _mu_unhandled_reason="integration_sync"
