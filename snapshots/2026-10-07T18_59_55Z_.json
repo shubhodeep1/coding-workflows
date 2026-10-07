@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-10-06T14:41:31Z",
+  "tick_at": "2026-10-07T18:59:55Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -27,10 +27,10 @@
         "review_blocked": 0,
         "skipped": 0
       },
-      "number": 6031,
+      "number": 6664,
       "project_complete": false,
       "status": "in-progress",
-      "title": "[Orchestrator] Apply still-valid recommendations from the September 3 workflow analysis",
+      "title": "[Orchestrator] Unattended Claude pipeline completion: Claude in every role (phase 3) and blocker reduction (phase 4)",
       "total_waves": 0,
       "wave_complete": false
     }
