@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nCheckpoint:\n- Read `scripts/review_untrusted_workspace.py`: `allowed()` refuses `.claude/hooks/pr_merge_status_guard.py` at lines 120-122, with the comment \"host-executed safety hook\".\n- Read `scripts/orchestrate_poll_process.sh`: all five judges go through `poller_claude_judge` \u2192 `poller_judge_isolated` \u2192 `review_untrusted_sandbox.sh prepare-ephemeral/run`. The codex engine there runs OpenCode (`write_opencode_config.sh`). A sandbox failure returns 77, which never falls back to the host. `ORCH_CODEX_ISOLATED_EXEC` is defined at line 125 and referenced nowhere else.\n- Read `tests/test_codex_agent_isolation_contract.py`: `test_poller_file_editing_judges_use_worktrees_and_trusted_push` (line 220) and `test_review_sandbox_admits_the_merge_guard_for_ci_repairs` (line 267). The second keeps its old name but now asserts the hook is excluded.\n\nDECISIONS:\nQ1: A\nQ2: A\nQ3: A\n\nRATIONALE:\nQ1: The issue says nothing is broken: CI on main is green and both paths keep agents away from host credentials. The repo shows the review-sandbox path is the more hardened of the two for judges. It has fresh per-attempt snapshots, untracked-file rollback after a rejected transfer, mandatory cleanup, a 77 \"refuse host fallback\" exit, and per-role escalation. Moving the judges back (B) or converging every role (D) would undo work that merged a day ago in #6208, for no correctness gain. C is a refactor with no defect behind it. Recording the reason and adding a drift-guard test is the smallest safe change, and it is reversible.\nQ2: Today's fallback (OpenCode in a fresh review sandbox) is consistent with the Q1 choice. It needs only one staged mechanism, and the sandbox already refuses host fallback. B only makes sense together with Q1:B, and with Q1:A it would require staging both isolation stacks for each judge.\nQ3: The exclusion is deliberate and correct on security grounds. The hook runs on the host with credentials, so letting the untrusted review editor write it would let PR-derived text alter a host safety control. `agents.md` already states \"the merged-PR safety hook stays excluded from snapshot and transfer\", so what is missing is the consequence for CI failures and the routing to an interactive session. B adds new automation (detection, labelling, an alert) for a rare event that the existing failure-heal and `ai:review-blocked` \u2192 unblock-judge paths already surface. C would reopen the trust gap.\n\nEXECUTION PLAN (required for any non-letter decision):\n(All decisions are lettered. Notes for the planner, binding:)\n- Change type: documentation plus contract tests only. No runtime behaviour changes, no new scripts, no scheduler wiring, no supervisor, no DB work, and no `docs/scripts-pending-removal.md` entry.\n- `agents.md`, in \"Isolated Codex agents\" and the poller-judge text under \"review autofix\" / \"orchestrate\":\n  - State that all five poller judges (wave, stall, integration, security-pass, review-blocked) intentionally run on `scripts/review_untrusted_sandbox.sh` via `poller_claude_judge` \u2192 `poller_judge_isolated`, not on `codex_isolated_exec.sh`.\n  - Give the reasons: per-attempt fresh snapshots, validated transfer with untracked-file rollback for the review-blocked/integration write paths, one OpenCode fallback stack shared with the review write roles, and accounting through `JUDGE_ISOLATION` / `RB_JUDGE_ISOLATION` rather than `CODEX_ISOLATION`.\n  - State that the codex engine for these judges means OpenCode in a fresh sandbox, never the Codex CLI and never the host.\n  - Note that a fix to one isolation stack does not cover the other.\n  - Correct the \"Sites.\" bullet, which today lists the poller's wave / stall / security-pass / review-blocked / integration-conflict judges under `codex_isolated_exec.sh`. That contradicts the code.\n- `agents.md` and `README.md`, next to the isolation docs (review-editor admission paragraph; README near line 1153, where `hooks/pr_merge_status_guard.py` is mentioned):\n  - Confirm that `.claude/hooks/pr_merge_status_guard.py` is excluded from the review sandbox because it runs on the host. That exclusion is the #6208 tightening, and it reverses #6187's admission.\n  - State the consequence: review autofix cannot repair a CI failure in this hook (as it did in #6481), so the fix needs an interactive session. Its `workflow-templates/` twin must change in lockstep (byte-identical parity).\n- `tests/test_codex_agent_isolation_contract.py`:\n  - Add a drift-guard test asserting that every poller judge call site in `scripts/orchestrate_poll_process.sh` goes through `poller_claude_judge` / `poller_judge_isolated` \u2192 `review_untrusted_sandbox.sh`, and that no judge invokes `codex_isolated_exec.sh` or bare `codex`. A future change then has to update the documented decision deliberately.\n  - Optionally assert that the `agents.md` text names both mechanisms.\n  - Rename nothing: the existing test `test_review_sandbox_admits_the_merge_guard_for_ci_repairs` keeps its name (\u00a710). A docstring clarifying that it now asserts exclusion is fine.\n- `changelog.d/<issue>-<slug>.md` fragment per CLAUDE.md \u00a720.\n- The PR body must use `Refs #6118` (tracking), never a closing keyword against it (\u00a721).\n- Reversibility: if a human later prefers convergence (Q1:B/D) or re-admission (Q3:C), these docs and the drift-guard test are the only things to revise. No runtime state changes.",
+  "fingerprint": "6da3c3c83901f984983441294d6d4d5e035c1e9217d4d714d96c871e642d6a26",
+  "lineage": {
+    "issue_number": 6607,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37567299156",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37567299156",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6607"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261007034135_71e42cdb55",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6607,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37567299156"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6607",
+  "timestamps": {
+    "created_at": "2026-10-07T03:41:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
