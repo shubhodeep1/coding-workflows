@@ -665,9 +665,24 @@ DIAGNOSE_SUCCESS=false
 if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}"
 fi
+# The diagnose agent reads the source issue body and captured validation
+# output, so it runs in the credential-free, network-isolated container
+# (read-only snapshot). The helper is the trusted copy next to this script
+# (implement.yml runs it from IMPLEMENT_STAGED_SUPPORT_RUN_DIR). When the
+# thread-reuse wrapper is first on PATH it routes through the same helper
+# (codex_thread_reuse_launcher reads the exported CODEX_ISOLATED_* values).
+CODEX_ISOLATED_EXEC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex_isolated_exec.sh"
+CODEX_ISOLATED_MODE="read-only"
+export CODEX_ISOLATED_EXEC CODEX_ISOLATED_MODE
+unset CODEX_ISOLATED_ROOT
+diagnose_codex_cmd=(bash "${CODEX_ISOLATED_EXEC}" run --mode read-only --)
+diagnose_codex_path="$(command -v codex 2>/dev/null || true)"
+if [ -n "${diagnose_codex_path}" ] && head -c 4096 "${diagnose_codex_path}" 2>/dev/null | grep -q 'codex_thread_reuse.sh.* wrapper-main'; then
+  diagnose_codex_cmd=(codex)
+fi
 # Claude engine (replace-claude-sessions plan Phase 5b): the workflow exports
 # AI_ENGINE_RESOLVED_IMPLEMENT_DIAGNOSE. On Claude the diagnosis runs through
-# claude_run; exit 75 (Claude unavailable) runs the unchanged codex call.
+# claude_run; exit 75 (Claude unavailable) runs the isolated codex call.
 diagnose_rc=75
 if [ "${AI_ENGINE_RESOLVED_IMPLEMENT_DIAGNOSE:-codex}" = "claude" ]; then
   if [ -f "${IMPLEMENT_DIAGNOSE_SCRIPTS_DIR}/ai_engine.sh" ]; then
@@ -684,7 +699,7 @@ if [ "${AI_ENGINE_RESOLVED_IMPLEMENT_DIAGNOSE:-codex}" = "claude" ]; then
 fi
 if [ "${diagnose_rc}" -eq 75 ]; then
   diagnose_rc=0
-  timeout "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${DIAGNOSE_MODEL}" --sandbox danger-full-access \
+  timeout "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s "${diagnose_codex_cmd[@]}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${DIAGNOSE_MODEL}" --sandbox danger-full-access \
     < "${IMPLEMENT_DIAGNOSE_PROMPT_FILE}" > "${IMPLEMENT_DIAGNOSE_OUTPUT_FILE}" \
     2> >(tee -a "${IMPLEMENT_DIAGNOSE_LOG_FILE}" >&2) || diagnose_rc=$?
 fi

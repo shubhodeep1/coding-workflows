@@ -254,6 +254,14 @@ if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   sanitize_codex_prompt_file "${CODEX_PROMPT_FILE}"
 fi
 
+# The planner reads the issue body, clarification answers and the whole
+# comment thread, so it runs in the credential-free, network-isolated
+# container (read-only snapshot of the checkout's tracked files): it never
+# holds GH_TOKEN, the OpenRouter key or the checkout's .git. Model traffic,
+# including the provider-hosted web_search tool, goes through the host-side
+# broker. Isolation failures fail the attempt; Codex never runs on the host.
+CODEX_ISOLATED_EXEC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex_isolated_exec.sh"
+
 # Claude engine (replace-claude-sessions plan Phase 5a). PLAN_ENGINE comes
 # from the workflow's "Resolve AI engine" step; anything but `claude` runs the
 # codex path unchanged. When Claude cannot start (claude_run exits 75, logged
@@ -295,7 +303,7 @@ for attempt in $(seq 1 "${max_attempts}"); do
     fi
   fi
   if [ "${PLAN_ENGINE}" != "claude" ]; then
-    cat "${CODEX_PROMPT_FILE}" | codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${attempt_model}" --sandbox danger-full-access > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || plan_rc=$?
+    bash "${CODEX_ISOLATED_EXEC}" run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${attempt_model}" --sandbox danger-full-access < "${CODEX_PROMPT_FILE}" > "${CODEX_OUTPUT_FILE}" 2> >(tee -a "${RUNTIME_DIR}/codex_log.txt" >&2) || plan_rc=$?
   fi
   if [ "${plan_rc}" -eq 0 ]; then
     if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then

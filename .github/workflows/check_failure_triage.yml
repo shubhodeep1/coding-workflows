@@ -37,6 +37,8 @@ name: AI Check Failure Triage (Reusable)
     secrets:
       GH_PAT:
         required: true
+      CHECK_TRIAGE_ISSUES_TOKEN:
+        required: true
       OPENROUTER_API_KEY:
         required: true
       TG_BOT_SECRET:
@@ -158,6 +160,8 @@ jobs:
 
   triage:
     needs: derive_check_name_key
+    permissions:
+      contents: read
     # Cost gate: enabled by default; a consumer opts OUT via
     # CHECK_FAILURE_TRIAGE_ENABLED=false. Only genuine failure conclusions on a
     # real PR proceed. The job is skipped (no checkout / no codex install) when
@@ -182,16 +186,15 @@ jobs:
       group: ai-check-triage-${{ github.repository }}-${{ inputs.pr_number }}-${{ needs.derive_check_name_key.outputs.check_name_key || inputs.check_run_id || inputs.check_name || github.run_id }}
       cancel-in-progress: false
     env:
-      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-      GH_TOKEN: ${{ secrets.GH_PAT }}
       GITHUB_REPOSITORY: ${{ github.repository }}
       MODEL_EDITOR: ${{ vars.WORKFLOW_CHECK_TRIAGE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
       MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CHECK_TRIAGE || 'high' }}
       MODEL_VERBOSITY: ${{ vars.VERBOSITY_CHECK_TRIAGE || 'low' }}
+      # Codex version baked into the isolated triage agent's image (scripts/codex_isolated_exec.sh).
+      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
       CHECK_FAILURE_TRIAGE_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_ENABLED || 'true' }}
       CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH: ${{ vars.CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH || '3' }}
-      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
       TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
       TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
       # Job-level override of the workflow-level default: a PR carrying the
@@ -209,9 +212,11 @@ jobs:
           HEAD_SHA: ${{ inputs.head_sha }}
         run: |
           set -euo pipefail
-          safe_check_name="${CHECK_NAME//$'\r'/ }"
-          safe_check_name="${safe_check_name//$'\n'/ }"
-          safe_check_name="${safe_check_name:0:200}"
+          safe_check_name="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c '
+          import sys, unicodedata
+          check_name_text = "".join(" " if unicodedata.category(char).startswith("C") or unicodedata.category(char) in ("Zl", "Zp") else char for char in sys.argv[1])
+          print(" ".join(check_name_text.split()).replace("`", "\u0027").replace("<", "&lt;")[:200] or "(unnamed check)")
+          ' "${CHECK_NAME}")"
           printf 'Check-failure triage for %s PR #%s\n' "${GITHUB_REPOSITORY}" "${PR_NUMBER}"
           printf 'Check: %s (conclusion: %s)\n' "${safe_check_name}" "${CHECK_CONCLUSION}"
           printf 'Head SHA: %s\n' "${HEAD_SHA}"
@@ -221,7 +226,8 @@ jobs:
         with:
           ref: ${{ inputs.head_sha || github.sha }}
           fetch-depth: 1
-          token: ${{ secrets.GH_PAT }}
+          token: ${{ github.token }}
+          persist-credentials: false
 
       - name: Install Codex CLI
         uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
@@ -248,6 +254,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Checkout workflow support source fallback
         if: ${{ steps.checkout_support_source.outcome == 'failure' }}
@@ -258,6 +265,7 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           path: .codex-workflow-src
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Stage workflow support files
         run: |
@@ -271,7 +279,7 @@ jobs:
           mkdir -p scripts
 
           _fetched=()
-          for f in gh_helpers.sh tg_helpers.sh render_prompt.sh render_prompt.py write_codex_config.sh codex_helpers.sh collect_pr_check_runs_context.py check_failure_triage.sh; do
+          for f in gh_helpers.sh tg_helpers.sh emit_event.sh emit_event.py render_prompt.sh render_prompt.py write_codex_config.sh codex_helpers.sh collect_pr_check_runs_context.py check_failure_triage.sh clarify_isolated_run.sh clarify_openrouter_broker.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ]; then
               if [ "${f}" = "render_prompt.py" ]; then
@@ -286,12 +294,17 @@ jobs:
           done
 
           catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"
-          if [ -f "${catalog_src}" ]; then
-            install -m 0644 "${catalog_src}" scripts/codex_model_catalog.json
-            _fetched+=(codex_model_catalog.json)
-          else
-            echo "::warning::Codex model catalog not found; apply_patch may not be registered for non-built-in models"
-          fi
+          sandbox_src=".codex-workflow-src/scripts/clarify_sandbox/Dockerfile"
+          for required_src in "${catalog_src}" "${sandbox_src}"; do
+            if [ ! -f "${required_src}" ]; then
+              echo "::error::Missing required isolation support ${required_src}"
+              exit 1
+            fi
+          done
+          install -m 0644 "${catalog_src}" scripts/codex_model_catalog.json
+          mkdir -p scripts/clarify_sandbox
+          install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile
+          _fetched+=(codex_model_catalog.json clarify_sandbox/)
 
           # Canonical repo-architecture facts for the diagnosis prompt.
           if [ -f ".codex-workflow-src/agents.md" ]; then
@@ -299,6 +312,7 @@ jobs:
           fi
 
           for f in unattended_system_instructions.md; do
+            # These workspace copies only serve older, unset-directory callers.
             if [ ! -f "${f}" ] && [ -f ".codex-workflow-src/${f}" ]; then
               install -m 0644 ".codex-workflow-src/${f}" "${f}"
             fi
@@ -320,6 +334,39 @@ jobs:
             } > scripts/.gitignore
           fi
 
+          # Never render instructions from the PR checkout (including prompt
+          # includes, personas and identity files). Keep it visible as code data.
+          trusted_dir="${RUNNER_TEMP}/check-triage-trusted-support"
+          if [ ! -f .codex-workflow-src/unattended_system_instructions.md ] ||
+             [ ! -f .codex-workflow-src/prompts/mode-check-failure-triage.txt ]; then
+            echo "::error::Required trusted triage instructions are missing from the support ref"
+            exit 1
+          fi
+          rm -rf "${trusted_dir}"
+          mkdir -p "${trusted_dir}/scripts" "${trusted_dir}/prompts"
+          cp -R .codex-workflow-src/prompts/. "${trusted_dir}/prompts/"
+          install -m 0644 .codex-workflow-src/unattended_system_instructions.md "${trusted_dir}/unattended_system_instructions.md"
+          if [ -f .codex-workflow-src/agents.md ]; then
+            install -m 0644 .codex-workflow-src/agents.md "${trusted_dir}/agents_canonical.md"
+          fi
+          for trusted_helper_file in gh_helpers.sh tg_helpers.sh emit_event.sh emit_event.py; do
+            install -m 0755 ".codex-workflow-src/scripts/${trusted_helper_file}" "${trusted_dir}/scripts/${trusted_helper_file}"
+          done
+          install -m 0755 .codex-workflow-src/scripts/check_failure_triage.sh "${trusted_dir}/scripts/check_failure_triage.sh"
+          install -m 0755 .codex-workflow-src/scripts/collect_pr_check_runs_context.py "${trusted_dir}/scripts/collect_pr_check_runs_context.py"
+          install -m 0755 .codex-workflow-src/scripts/clarify_isolated_run.sh "${trusted_dir}/scripts/clarify_isolated_run.sh"
+          install -m 0755 .codex-workflow-src/scripts/clarify_openrouter_broker.py "${trusted_dir}/scripts/clarify_openrouter_broker.py"
+          install -m 0755 .codex-workflow-src/scripts/write_codex_config.sh "${trusted_dir}/scripts/write_codex_config.sh"
+          install -m 0644 "${catalog_src}" "${trusted_dir}/scripts/codex_model_catalog.json"
+          mkdir -p "${trusted_dir}/scripts/clarify_sandbox"
+          install -m 0644 "${sandbox_src}" "${trusted_dir}/scripts/clarify_sandbox/Dockerfile"
+          install -m 0755 .codex-workflow-src/scripts/render_prompt.sh "${trusted_dir}/scripts/render_prompt.sh"
+          if [ -f .codex-workflow-src/scripts/render_prompt.py ]; then
+            install -m 0755 .codex-workflow-src/scripts/render_prompt.py "${trusted_dir}/scripts/render_prompt.py"
+          fi
+          install -m 0755 .codex-workflow-src/scripts/assemble_prompt.sh "${trusted_dir}/scripts/assemble_prompt.sh"
+          echo "CHECK_TRIAGE_TRUSTED_SUPPORT_DIR=${trusted_dir}" >> "$GITHUB_ENV"
+
           rm -rf .codex-workflow-src
 
       - name: Create Codex config
@@ -335,8 +382,12 @@ jobs:
           mkdir -p "${RUNTIME_DIR}"
           echo "RUNTIME_DIR=${RUNTIME_DIR}" >> "$GITHUB_ENV"
 
-      - name: Run check-failure triage
+      - name: Collect check-failure context
+        id: collect_triage
         env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          CHECK_TRIAGE_STAGE: collect
           CHECK_TRIAGE_PR_NUMBER: ${{ inputs.pr_number }}
           CHECK_TRIAGE_CHECK_RUN_ID: ${{ inputs.check_run_id }}
           CHECK_TRIAGE_CHECK_NAME: ${{ inputs.check_name }}
@@ -345,20 +396,116 @@ jobs:
           CHECK_TRIAGE_DETAILS_URL: ${{ inputs.details_url }}
         run: |
           set -euo pipefail
+          cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"
           bash scripts/check_failure_triage.sh
+
+      - name: Diagnose check failure
+        if: ${{ steps.collect_triage.outputs.ready == 'true' }}
+        id: diagnose_triage
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          CHECK_TRIAGE_STAGE: diagnose
+          CHECK_TRIAGE_PREPARE_ONLY: "true"
+          CHECK_TRIAGE_PR_NUMBER: ${{ inputs.pr_number }}
+          CHECK_TRIAGE_CHECK_RUN_ID: ${{ inputs.check_run_id }}
+          CHECK_TRIAGE_CHECK_NAME: ${{ inputs.check_name }}
+          CHECK_TRIAGE_CHECK_CONCLUSION: ${{ inputs.check_conclusion }}
+          CHECK_TRIAGE_HEAD_SHA: ${{ inputs.head_sha }}
+          CHECK_TRIAGE_DETAILS_URL: ${{ inputs.details_url }}
+        run: |
+          set -euo pipefail
+          cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"
+          bash scripts/check_failure_triage.sh
+
+      # A fine-grained PAT with Issues: write (and Metadata: read) keeps
+      # issues:opened dispatching clarify; github.token would suppress it.
+      - name: Post check-failure triage issue
+        if: ${{ steps.diagnose_triage.outputs.ready == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          CHECK_NAME: ${{ inputs.check_name }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"
+          source scripts/gh_helpers.sh
+          body_file="${RUNTIME_DIR}/issue_body.md"
+          test -s "${body_file}"
+          PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${body_file}" <<'PY'
+          import json
+          import os
+          import pathlib
+          import re
+          import sys
+
+          issue_body_path = pathlib.Path(sys.argv[1])
+          issue_body_text = issue_body_path.read_text(encoding="utf-8")
+          for posting_token_value in {os.environ.get("GH_TOKEN", ""), os.environ.get("GITHUB_TOKEN", ""), os.environ.get("TG_BOT_SECRET", "")}:
+              if len(posting_token_value) >= 8:
+                  issue_body_text = issue_body_text.replace(posting_token_value, "[redacted]")
+          expected_fingerprint = json.loads((issue_body_path.parent / "triage_metadata.json").read_text(encoding="utf-8"))["fingerprint"]
+          first_line = issue_body_text.split("\n", 1)[0]
+          if not isinstance(expected_fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_fingerprint) or first_line != f"<!-- check-failure-triage:fp={expected_fingerprint} -->":
+              sys.exit("::error::Invalid check-failure triage issue marker")
+          truncation_note = "\n\n_[triage body truncated]_"
+          if len(issue_body_text) > 60000:
+              issue_body_text = issue_body_text[:60000 - len(truncation_note)] + truncation_note
+          issue_body_path.write_text(issue_body_text, encoding="utf-8")
+          PY
+          triage_post_fp="$(jq -er '.fingerprint' "${RUNTIME_DIR}/triage_metadata.json")"
+          triage_post_gen="$(jq -er '.generation' "${RUNTIME_DIR}/triage_metadata.json")"
+          triage_post_root="$(jq -er '.root' "${RUNTIME_DIR}/triage_metadata.json")"
+          # The script's existing issue-create call serves direct callers; this
+          # workflow must post from its own token-scoped step instead.
+          triage_post_check_name="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c '
+          import sys
+          import re
+          import unicodedata
+          value = "".join(" " if unicodedata.category(char).startswith("C") or unicodedata.category(char) in ("Zl", "Zp") else char for char in sys.argv[1])
+          value = " ".join(value.split()).replace("`", "\u0027").replace("<", "&lt;")
+          keys = ("integration branch", "target branch", "tracking issue", "depends on",
+              "local id", "managed by", "prior_pr_baseline_branch", "files_touched")
+          key_pattern = re.compile(r"\b(" + "|".join(re.escape(key).replace(r"\ ", r"\s+") for key in keys) + r")(\s*\**\s*):", re.IGNORECASE)
+          value = key_pattern.sub(r"\1 (untrusted)\2:", value)
+          value = re.sub(r"Re-issued from\s*#", "Re-issued from (untrusted) #", value, flags=re.IGNORECASE)
+          value = re.sub(r"review-blocked-reissue", "review-blocked (untrusted) reissue", value, flags=re.IGNORECASE)
+          print(value[:200] or "(unnamed check)")
+          ' "${CHECK_NAME}")"
+          triage_issue_url="$(gh_retry gh issue create --repo "${GITHUB_REPOSITORY}" \
+            --title "CI failure: ${triage_post_check_name} on PR #${PR_NUMBER}" \
+            --body-file "${body_file}" --label "ai:check-triage")"
+          test -n "${triage_issue_url}"
+          printf 'CHECK_TRIAGE created issue=%s fp=%s gen=%s root=%s pr=%s check=%s\n' \
+            "${triage_issue_url}" "${triage_post_fp}" "${triage_post_gen}" "${triage_post_root}" "${PR_NUMBER}" "${triage_post_check_name}"
+          source scripts/tg_helpers.sh 2>/dev/null || true
+          type tg_send_msg >/dev/null 2>&1 && tg_send_msg \
+            "Check-failure auto-triage opened ${triage_issue_url} for ${GITHUB_REPOSITORY} PR #${PR_NUMBER} (check '${triage_post_check_name}', generation ${triage_post_gen}/${CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH}). The pipeline will pick it up." \
+            "DEBUG" >/dev/null 2>&1 || true
 
       - name: Notify on triage workflow failure
         if: ${{ failure() }}
         env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           PR_NUMBER: ${{ inputs.pr_number }}
           CHECK_NAME: ${{ inputs.check_name }}
         run: |
           set -euo pipefail
-          source scripts/tg_helpers.sh 2>/dev/null || true
-          type tg_send_msg >/dev/null 2>&1 || exit 0
-          safe_check_name="${CHECK_NAME//$'\r'/ }"
-          safe_check_name="${safe_check_name//$'\n'/ }"
-          safe_check_name="${safe_check_name:0:160}"
+          safe_check_name="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c '
+          import sys, unicodedata
+          check_name_text = "".join(" " if unicodedata.category(char).startswith("C") or unicodedata.category(char) in ("Zl", "Zp") else char for char in sys.argv[1])
+          print(" ".join(check_name_text.split()).replace("`", "\u0027").replace("<", "&lt;")[:160] or "(unnamed check)")
+          ' "${CHECK_NAME}")"
           RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           notification="AI Check Failure Triage workflow itself failed for ${GITHUB_REPOSITORY} PR #${PR_NUMBER} (check '${safe_check_name}')."
-          tg_send_msg "${notification}"$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+          if [ -n "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:-}" ] && [ -f "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR}/scripts/tg_helpers.sh" ]; then
+            cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR}" || exit 0
+            source scripts/tg_helpers.sh 2>/dev/null || true
+            type tg_send_msg >/dev/null 2>&1 && tg_send_msg "${notification}"$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+          elif [[ "${ALERT_MSG_LEVEL:-DEBUG}" != [sS][iI][lL][eE][nN][tT] ]] && [ -n "${TG_BOT_SECRET:-}" ] && [ -n "${TG_ADMIN_CHAT_ID:-${TG_CHAT_ID:-}}" ]; then
+            # No PR-checkout helper may run when trusted support staging failed.
+            curl -fsS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
+              -d "chat_id=${TG_ADMIN_CHAT_ID:-${TG_CHAT_ID:-}}" -d 'disable_web_page_preview=true' \
+              --data-urlencode "text=CRITICAL: ${notification}"$'\n'"Run: ${RUN_URL}" >/dev/null 2>&1 || true
+          fi

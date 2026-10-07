@@ -63,7 +63,13 @@ P3_REVIEW_SCRIPTS = (
 # mention the `codex` binary, the `exec` subcommand, and both `--model` and
 # `--sandbox`. Requiring `--model` and `--sandbox` keeps comments and prose
 # that merely mention "codex exec" from matching.
-_INVOCATION = re.compile(r"\bcodex\b.*\bexec\b.*--model\b.*--sandbox\b")
+# Since the isolation fix, most calls launch Codex through
+# scripts/codex_isolated_exec.sh (`bash …/codex_isolated_exec.sh run … --
+# <codex args>` or `"${CODEX_ISOLATED_EXEC}" …`); the Codex arguments, and
+# so the flag, still sit on the same logical line.
+_INVOCATION = re.compile(
+	r"(?:\bcodex\b|codex_isolated_exec\.sh|CODEX_ISOLATED_EXEC\b).*\bexec\b.*--model\b.*--sandbox\b"
+)
 
 # The shared runner builds its codex command line conditionally across several
 # array-append lines, so it is validated by the default-value assertion below
@@ -150,7 +156,7 @@ def test_python_discovery_helper_skips_git_repo_check() -> None:
 	"""The production Python discovery helper must carry the same flag."""
 	text = DISCOVERY_BOOTSTRAP.read_text(encoding="utf-8")
 	assert re.search(
-		r'command = \[\s*"codex",.*?"exec",\s*"--skip-git-repo-check",\s*"--model",.*?"--sandbox",',
+		r'command = \[\s*(?:"codex",|"bash",\s*str\(CODEX_ISOLATED_EXEC\),).*?"exec",\s*"--skip-git-repo-check",\s*"--model",.*?"--sandbox",',
 		text,
 		re.S,
 	), (

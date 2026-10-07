@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import datetime as dt
 import json
 import os
@@ -42,8 +43,27 @@ if args[:2] == ["api", "repos/o/r/pulls/42"]:
 	sys.exit(0)
 if args[:2] == ["api", "repos/o/r/issues/42/labels"] and "label" in fail:
 	sys.exit(1)
-if args[:2] == ["api", "repos/o/r/issues/42/comments"] and "comment_write" in fail:
-	sys.exit(1)
+if "repos/o/r/issues?labels=ai:security&state=open&per_page=100" in args:
+	if "followups" in fail:
+		sys.exit(1)
+	print(open(os.environ["FAKE_GH_SECURITY_ISSUES"]).read(), end="")
+	sys.exit(0)
+if args[:2] == ["api", "repos/o/r/issues/42/comments"]:
+	if "comment_write" in fail and (fail != "comment_write_once" or sum(
+		json.loads(line)[:2] == args[:2] for line in open(os.environ["FAKE_GH_LOG"])
+	) == 1):
+		sys.exit(1)
+	if "comment_bad_json" in fail:
+		print("not json")
+		sys.exit(0)
+	if "comment_missing_id" in fail:
+		print(json.dumps({"body": next((arg[5:] for arg in args if arg.startswith("body=")), "")}))
+		sys.exit(0)
+	if "comment_wrong_body" in fail:
+		print(json.dumps({"id": 17, "body": "not the pending marker"}))
+		sys.exit(0)
+	print(json.dumps({"id": 17, "body": next((arg[5:] for arg in args if arg.startswith("body=")), "")}))
+	sys.exit(0)
 if args[0] == "api" and "--paginate" in args:
 	if "comments_once" in fail and sum('"--paginate"' in line for line in open(os.environ["FAKE_GH_LOG"])) == 1:
 		sys.exit(1)
@@ -81,8 +101,16 @@ sys.exit(1)
 '''
 
 
-def _marker(status: str, head: str, cycle: int) -> str:
-	return f"<!-- ai:single-issue-security-pass:v1 status={status} head={head} cycle={cycle} -->"
+def _marker(status: str, head: str, cycle: int, finding_ids: tuple[str, ...] = ("F-1",)) -> str:
+	marker = f"<!-- ai:single-issue-security-pass:v1 status={status} head={head} cycle={cycle} -->"
+	if status == "findings" and finding_ids:
+		encoded_ids = base64.b64encode(json.dumps(list(finding_ids)).encode("ascii")).decode("ascii")
+		return f"Finding IDs (base64 JSON): {encoded_ids}\n\n{marker}"
+	return marker
+
+
+def _followup_body(branch: str = "ai/issue-7", finding_id: str = "F-1") -> str:
+	return f"<!-- ai:security-finding:{finding_id} -->\n- Integration branch: `{branch}`"
 
 
 def _comment(body: str, association: str = "OWNER", login: str = "owner", age_hours: float = 0.1, comment_id: int = 1) -> dict:
@@ -99,7 +127,7 @@ def _pr(base: str = "main", head_ref: str = "ai/issue-7", head_repo: str = "o/r"
 	}
 
 
-def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | None = None, env: dict | None = None, skip: bool = False):
+def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | None = None, env: dict | None = None, skip: bool = False, security_issues: list | str | None = None):
 	bin_dir = tmp_path / "bin"
 	bin_dir.mkdir(exist_ok=True)
 	gh = bin_dir / "gh"
@@ -115,6 +143,9 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 	)
 	(tmp_path / "pr.json").write_text(json.dumps(pr or _pr()), encoding="utf-8")
 	(tmp_path / "comments.json").write_text(json.dumps(comments or []), encoding="utf-8")
+	if security_issues is None:
+		security_issues = [[{"state": "open", "body": _followup_body(), "user": {"login": login}} for login in ("owner", "github-actions[bot]")]]
+	(tmp_path / "security_issues.json").write_text(security_issues if isinstance(security_issues, str) else json.dumps(security_issues), encoding="utf-8")
 	log = tmp_path / "calls.log"
 	log.write_text("", encoding="utf-8")
 	output = tmp_path / "output"
@@ -124,6 +155,7 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 		PATH=f"{bin_dir}:{os.environ['PATH']}",
 		FAKE_GH_LOG=str(log),
 		FAKE_GH_COMMENTS=str(tmp_path / "comments.json"),
+		FAKE_GH_SECURITY_ISSUES=str(tmp_path / "security_issues.json"),
 		FAKE_GH_PR=str(tmp_path / "pr.json"),
 		FAKE_GIT_HEAD=HEAD,
 		GITHUB_OUTPUT=str(output),
@@ -137,9 +169,14 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 		SUPPORT_SCRIPTS_DIR=str(support),
 		GITHUB_WORKSPACE=str(tmp_path),
 	)
-	for name in ("SINGLE_ISSUE_SECURITY_PASS_ENABLED", "MAX_SECURITY_PASS_CYCLES", "ORCH_INTEGRATION_BRANCH_PATTERN", "SECURITY_PASS_PENDING_STALE_HOURS", "SECURITY_PASS_AUTHOR_LOGIN_FALLBACK", "FAKE_GIT_ANCESTORS", "FAKE_GIT_SHALLOW", "FAKE_GIT_FETCH_FAIL", "FAKE_GIT_UNSHALLOW_MARKER", "FAKE_GIT_INCOMPLETE_ANCESTRY"):
+	for name in ("SINGLE_ISSUE_SECURITY_PASS_ENABLED", "MAX_SECURITY_PASS_CYCLES", "ORCH_INTEGRATION_BRANCH_PATTERN", "SECURITY_PASS_PENDING_STALE_HOURS", "SECURITY_PASS_FOLLOWUP_STALE_HOURS", "SECURITY_PASS_PENDING_MARKER_ATTEMPTS", "SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS", "SECURITY_PASS_AUTHOR_LOGIN_FALLBACK", "FAKE_GIT_ANCESTORS", "FAKE_GIT_SHALLOW", "FAKE_GIT_FETCH_FAIL", "FAKE_GIT_UNSHALLOW_MARKER", "FAKE_GIT_INCOMPLETE_ANCESTRY"):
 		run_env.pop(name, None)
+	run_env["SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS"] = "0"
+	# The pass defaults to off; tests that exercise it opt in, and None unsets a name.
+	run_env["SINGLE_ISSUE_SECURITY_PASS_ENABLED"] = "true"
 	run_env.update(env or {})
+	for name in [key for key, value in run_env.items() if value is None]:
+		run_env.pop(name)
 	result = subprocess.run(["bash", str(SCRIPT), mode], capture_output=True, text=True, env=run_env, check=False)
 	calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line]
 	return result, calls, output.read_text(encoding="utf-8")
@@ -149,6 +186,8 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 	"pr, env, skip, reason",
 	[
 		(_pr(), {"SINGLE_ISSUE_SECURITY_PASS_ENABLED": "false"}, False, "disabled"),
+		(_pr(), {"SINGLE_ISSUE_SECURITY_PASS_ENABLED": None}, False, "disabled"),
+		(_pr(), {"SINGLE_ISSUE_SECURITY_PASS_ENABLED": ""}, False, "disabled"),
 		(_pr(base="orchestrator/project-9"), {}, False, "not_standalone"),
 		(_pr(head_ref="orchestrator/project-9"), {}, False, "not_standalone"),
 		(_pr(head_repo="fork/r"), {}, False, "not_standalone"),
@@ -177,13 +216,13 @@ def test_only_pipeline_author_and_latest_head_result_can_authorize_merge(tmp_pat
 		_comment(_marker(last_status, HEAD, 1), comment_id=3),
 	]
 	result, calls, output = _run(tmp_path, "gate", comments=comments)
-	assert output == "hold=true\n" and f"outcome={expected}" in result.stdout
+	assert output == f"hold=true\nhold_reason={'audit_dispatched' if expected == 'dispatched' else 'awaiting_followups'}\n" and f"outcome={expected}" in result.stdout
 	assert any(call[:2] == ["workflow", "run"] for call in calls) is (last_status == "failed")
 
 
 def test_pipeline_identity_failure_holds_instead_of_authorizing(tmp_path: Path) -> None:
 	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("clean", HEAD, 1))], env={"FAKE_GH_FAIL": "identity"})
-	assert output == "hold=true\n" and "reason=markers_unverifiable" in result.stdout
+	assert output == "hold=true\nhold_reason=markers_unverifiable\n" and "reason=markers_unverifiable" in result.stdout
 	assert not any(call[:2] == ["workflow", "run"] for call in calls)
 
 
@@ -201,29 +240,179 @@ def test_installation_token_accepts_only_its_bot_marker(tmp_path: Path) -> None:
 	result, calls, output = _run(tmp_path, "gate", comments=comments, env={
 		"FAKE_GH_FAIL": "identity", "SECURITY_PASS_AUTHOR_LOGIN_FALLBACK": "github-actions[bot]",
 	})
-	assert output == "hold=true\n" and "reason=awaiting_followups" in result.stdout
-	assert calls == [["api", "user", "--jq", '.login // ""']]
+	assert output == "hold=true\nhold_reason=awaiting_followups\n" and "reason=awaiting_followups" in result.stdout
+	assert calls == [["api", "user", "--jq", '.login // ""'], ["api", "--paginate", "--slurp", "repos/o/r/issues?labels=ai:security&state=open&per_page=100"]]
 
 
 def test_mixed_linked_issues_cannot_skip_security_audit(tmp_path: Path) -> None:
 	result, calls, output = _run(tmp_path, "gate", skip=True, env={"LINKED_ISSUES_JSON": '[{"number":7},{"number":99}]'})
-	assert output == "hold=true\n" and "outcome=dispatched" in result.stdout
+	assert output == "hold=true\nhold_reason=audit_dispatched\n" and "outcome=dispatched" in result.stdout
 	assert any(call[:2] == ["workflow", "run"] for call in calls)
 
 
 def test_first_clean_review_dispatches_the_audit(tmp_path: Path) -> None:
 	stale = [_comment(_marker("clean", OLD, 1)), _comment(_marker("clean", HEAD, 1), association="NONE", login="someone")]
 	result, calls, output = _run(tmp_path, "gate", comments=stale)
-	assert output == "hold=true\n" and "outcome=dispatched cycle=2" in result.stdout
+	assert output == "hold=true\nhold_reason=audit_dispatched\n" and "outcome=dispatched cycle=2" in result.stdout
 	assert ["workflow", "run", "ai-security-audit.yml", "-R", "o/r", "--ref", "main", "-f", "ref=ai/issue-7", "-f", "pr_number=42"] in calls
 	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
 	assert posted and posted[0][-1].endswith(_marker("pending", HEAD, 2))
 
 
+def test_pending_marker_write_failure_fails_closed_with_distinct_reason(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", env={"FAKE_GH_FAIL": "comment_write"})
+	assert result.returncode == 1 and output == "hold=true\nhold_reason=pending_marker_failed\n"
+	assert "reason=pending_marker_failed" in result.stdout and "::error::" in result.stdout
+	assert "audit_dispatched" not in result.stdout and "audit_dispatched" not in output
+	assert len([call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]) == 3
+	assert calls.index(["workflow", "run", "ai-security-audit.yml", "-R", "o/r", "--ref", "main", "-f", "ref=ai/issue-7", "-f", "pr_number=42"]) < next(i for i, call in enumerate(calls) if call[:2] == ["api", "repos/o/r/issues/42/comments"])
+
+
+def test_pending_marker_retry_recovers(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", env={"FAKE_GH_FAIL": "comment_write_once"})
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert len([call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]) == 2
+
+
+@pytest.mark.parametrize("response_failure", ["comment_bad_json", "comment_missing_id", "comment_wrong_body"])
+def test_unconfirmed_marker_response_is_not_audit_dispatched(tmp_path: Path, response_failure: str) -> None:
+	result, calls, output = _run(tmp_path, "gate", env={"FAKE_GH_FAIL": response_failure})
+	assert result.returncode == 1 and output == "hold=true\nhold_reason=pending_marker_failed\n"
+	assert len([call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]) == 3
+
+
+@pytest.mark.parametrize("attempts, expected", [("0", 3), ("abc", 3), ("2", 2), ("999999999999999999999", 3)])
+def test_pending_marker_attempts_is_validated(tmp_path: Path, attempts: str, expected: int) -> None:
+	result, calls, output = _run(tmp_path, "gate", env={"FAKE_GH_FAIL": "comment_write", "SECURITY_PASS_PENDING_MARKER_ATTEMPTS": attempts})
+	assert result.returncode == 1 and output == "hold=true\nhold_reason=pending_marker_failed\n"
+	assert f"after {expected} attempt(s)" in result.stdout
+	assert len([call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]) == expected
+
+
 @pytest.mark.parametrize("status", ["pending", "findings"])
 def test_a_running_audit_or_open_followups_hold_without_a_new_dispatch(tmp_path: Path, status: str) -> None:
 	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker(status, HEAD, 1))])
-	assert output == "hold=true\n" and calls == [["api", "user", "--jq", '.login // ""']]
+	assert output == f"hold=true\nhold_reason={'audit_pending' if status == 'pending' else 'awaiting_followups'}\n"
+	assert calls == [["api", "user", "--jq", '.login // ""']] + (
+		[["api", "--paginate", "--slurp", "repos/o/r/issues?labels=ai:security&state=open&per_page=100"]] if status == "findings" else []
+	)
+
+
+@pytest.mark.parametrize("issues", [
+	[[]],
+	[[{"state": "closed", "body": "- Integration branch: `ai/issue-7`", "user": {"login": "owner"}}]],
+	[[{"state": "open", "body": "- Integration branch: `other`", "user": {"login": "owner"}}]],
+	[[{"state": "open", "body": "- Integration branch: `ai/issue-7`", "user": {"login": "owner"}, "pull_request": {"url": "pr"}}]],
+	[[{"state": "open", "body": "- Integration branch: `ai/issue-7`", "user": {"login": "other"}}]],
+	[[{"state": "open", "body": "- Integration branch: `ai/issue-7`", "user": {"login": "owner"}}]],
+])
+def test_missing_pipeline_followups_page_without_mutating(tmp_path: Path, issues: list) -> None:
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("findings", HEAD, 1))], security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=followups_missing\n"
+	assert "outcome=hold reason=followups_missing" in result.stdout
+	assert len([call for call in calls if "repos/o/r/issues?labels=ai:security&state=open&per_page=100" in call]) == 1
+	assert not any(call[:2] in (["workflow", "run"], ["api", "repos/o/r/issues/42/comments"], ["api", "repos/o/r/issues/42/labels"]) for call in calls)
+
+
+@pytest.mark.parametrize("line", [
+	"- Integration branch: ai/issue-7", "- Integration branch: `ai/issue-7`",
+	"Integration branch: ai/issue-7", "- **Integration branch:** `ai/issue-7`",
+])
+def test_matching_open_pipeline_followups_keep_waiting(tmp_path: Path, line: str) -> None:
+	issues = [[{"state": "open", "body": "<!-- ai:security-finding:F-1 -->\nOther text\n" + line, "user": {"login": "owner"}}]]
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("findings", HEAD, 1))], security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=awaiting_followups\n"
+	assert len([call for call in calls if "repos/o/r/issues?labels=ai:security&state=open&per_page=100" in call]) == 1
+
+
+def test_old_branch_followup_does_not_silence_new_findings(tmp_path: Path) -> None:
+	issues = [[{"state": "open", "body": _followup_body(finding_id="F-old"), "user": {"login": "owner"}}]]
+	result, _, output = _run(tmp_path, "gate", comments=[_comment(_marker("findings", HEAD, 2))], security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=followups_missing\n"
+
+
+def test_latest_trusted_result_controls_followup_ids(tmp_path: Path) -> None:
+	issues = [[{"state": "open", "body": _followup_body(finding_id="F-old"), "user": {"login": "owner"}}]]
+	comments = [
+		_comment(_marker("findings", HEAD, 1, ("F-old",)), comment_id=1, age_hours=1),
+		_comment(_marker("findings", HEAD, 2), comment_id=2),
+		_comment(_marker("findings", HEAD, 2, ("F-old",)), comment_id=3, login="other"),
+	]
+	result, _, output = _run(tmp_path, "gate", comments=comments, security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=followups_missing\n"
+
+
+def test_every_current_finding_needs_a_matching_open_followup(tmp_path: Path) -> None:
+	issues = [[{"state": "open", "body": _followup_body(finding_id="F-1"), "user": {"login": "owner"}}]]
+	comments = [_comment(_marker("findings", HEAD, 2, ("F-1", "F-2")))]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=followups_missing\n"
+	issues.append([{"state": "open", "body": _followup_body(finding_id="F-2"), "user": {"login": "owner"}}])
+	result, calls, output = _run(tmp_path, "gate", comments=comments, security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=awaiting_followups\n"
+	assert len([call for call in calls if "repos/o/r/issues?labels=ai:security&state=open&per_page=100" in call]) == 1
+
+
+@pytest.mark.parametrize("body", [
+	_marker("findings", HEAD, 1, ()),
+	"Finding IDs (base64 JSON): invalid!\n\n" + _marker("findings", HEAD, 1, ()),
+	"Finding IDs (base64 JSON): W10=\n\n" + _marker("findings", HEAD, 1, ()),
+	_marker("findings", HEAD, 1, ("F-1\nspoof",)),
+])
+def test_legacy_or_invalid_findings_ids_page_instead_of_silencing(tmp_path: Path, body: str) -> None:
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(body)])
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=followups_unverifiable\n"
+	assert not any("repos/o/r/issues?labels=ai:security&state=open&per_page=100" in call for call in calls)
+
+
+def test_followups_across_paginated_pages(tmp_path: Path) -> None:
+	issues = [[], [{"state": "open", "body": _followup_body(), "user": {"login": "owner"}}]]
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("findings", HEAD, 1))], security_issues=issues)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=awaiting_followups\n"
+	assert len([call for call in calls if "repos/o/r/issues?labels=ai:security&state=open&per_page=100" in call]) == 1
+
+
+@pytest.mark.parametrize("issues, fail", [("{}", ""), ("[{}]", ""), ("", ""), ("[[]]", "followups")])
+def test_followup_listing_failure_or_bad_shape_pages(tmp_path: Path, issues: str, fail: str) -> None:
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("findings", HEAD, 1))], security_issues=issues, env={"FAKE_GH_FAIL": fail})
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=followups_unverifiable\n"
+	assert "outcome=hold reason=followups_unverifiable" in result.stdout
+	assert len([call for call in calls if "repos/o/r/issues?labels=ai:security&state=open&per_page=100" in call]) == 1
+
+
+@pytest.mark.parametrize("age_hours, override, reason", [
+	(23, "", "awaiting_followups"), (25, "", "followups_stalled"),
+	(3, "2", "followups_stalled"), (3, "0", "awaiting_followups"),
+	(25, "abc", "followups_stalled"),
+])
+def test_followup_stale_limit(tmp_path: Path, age_hours: int, override: str, reason: str) -> None:
+	result, _, output = _run(tmp_path, "gate", comments=[_comment(_marker("findings", HEAD, 1), age_hours=age_hours)], env={"SECURITY_PASS_FOLLOWUP_STALE_HOURS": override})
+	assert result.returncode == 0 and output == f"hold=true\nhold_reason={reason}\n"
+
+
+def test_bad_findings_timestamp_pages(tmp_path: Path) -> None:
+	comment = _comment(_marker("findings", HEAD, 1))
+	comment["created_at"] = "bad-time"
+	result, _, output = _run(tmp_path, "gate", comments=[comment])
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=followups_stalled\n"
+
+
+def test_status_findings_never_lists_followups(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "status", comments=[_comment(_marker("findings", HEAD, 1))], env={"FAKE_GH_FAIL": "followups"})
+	assert result.returncode == 0 and output == ""
+	assert "SINGLE_ISSUE_SECURITY_PASS_STATE=findings" in result.stdout
+	assert not any("repos/o/r/issues?labels=ai:security&state=open&per_page=100" in call for call in calls)
+
+
+def test_branch_name_is_matched_literally(tmp_path: Path) -> None:
+	branch_ref = "ai/issue-7.x+"
+	issues = [[{"state": "open", "body": _followup_body("ai/issue-7axxx"), "user": {"login": "owner"}}]]
+	comments = [_comment(_marker("findings", HEAD, 1))]
+	result, _, output = _run(tmp_path, "gate", pr=_pr(head_ref=branch_ref), comments=comments, security_issues=issues)
+	assert output == "hold=true\nhold_reason=followups_missing\n"
+	issues[0][0]["body"] = _followup_body(branch_ref)
+	result, _, output = _run(tmp_path, "gate", pr=_pr(head_ref=branch_ref), comments=comments, security_issues=issues)
+	assert output == "hold=true\nhold_reason=awaiting_followups\n"
 
 
 def test_a_stale_pending_audit_is_dispatched_again(tmp_path: Path) -> None:
@@ -233,14 +422,14 @@ def test_a_stale_pending_audit_is_dispatched_again(tmp_path: Path) -> None:
 
 def test_pending_timeout_uses_operator_override(tmp_path: Path) -> None:
 	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("pending", HEAD, 1), age_hours=3)], env={"SECURITY_PASS_PENDING_STALE_HOURS": "2"})
-	assert output == "hold=true\n" and "outcome=dispatched cycle=2" in result.stdout
+	assert output == "hold=true\nhold_reason=audit_dispatched\n" and "outcome=dispatched cycle=2" in result.stdout
 	assert any(call[:2] == ["workflow", "run"] for call in calls)
 
 
 def test_cycles_exhausted_labels_the_pr_for_the_unblock_judge(tmp_path: Path) -> None:
 	comments = [_comment(_marker("findings", HEAD if n == 5 else f"{n:040x}", n), comment_id=n) for n in range(1, 6)]
 	result, calls, output = _run(tmp_path, "gate", comments=comments)
-	assert output == "hold=true\nexhausted=true\n" and "reason=cycles_exhausted" in result.stdout
+	assert output == "hold=true\nhold_reason=cycles_exhausted\nexhausted=true\n" and "reason=cycles_exhausted" in result.stdout
 	assert ["api", "repos/o/r/issues/42/labels", "-f", "labels[]=ai:security-pass-failed"] in calls
 	assert not any(call[:2] == ["workflow", "run"] for call in calls)
 
@@ -248,13 +437,13 @@ def test_cycles_exhausted_labels_the_pr_for_the_unblock_judge(tmp_path: Path) ->
 def test_last_cycle_findings_escalate_on_the_same_head(tmp_path: Path) -> None:
 	comments = [_comment(_marker("findings", HEAD, 5))]
 	result, calls, output = _run(tmp_path, "gate", comments=comments)
-	assert output == "hold=true\nexhausted=true\n" and "reason=cycles_exhausted" in result.stdout
+	assert output == "hold=true\nhold_reason=cycles_exhausted\nexhausted=true\n" and "reason=cycles_exhausted" in result.stdout
 	assert any(call[:2] == ["api", "repos/o/r/issues/42/labels"] for call in calls)
 
 
 def test_failed_exhaustion_label_fails_closed_for_workflow_recovery(tmp_path: Path) -> None:
 	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("findings", HEAD, 5))], env={"FAKE_GH_FAIL": "label"})
-	assert result.returncode == 1 and output == "hold=true\n"
+	assert result.returncode == 1 and output == "hold=true\nhold_reason=label_write_failed\n"
 	assert "reason=label_write_failed" in result.stdout
 	assert not any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
 
@@ -262,7 +451,7 @@ def test_failed_exhaustion_label_fails_closed_for_workflow_recovery(tmp_path: Pa
 def test_two_digit_cycle_limit_is_counted_numerically(tmp_path: Path) -> None:
 	comments = [_comment(_marker("failed", OLD, 9), comment_id=1), _comment(_marker("failed", OLD, 10), comment_id=2)]
 	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"MAX_SECURITY_PASS_CYCLES": "10"})
-	assert output == "hold=true\n" and "outcome=dispatched cycle=11" in result.stdout
+	assert output == "hold=true\nhold_reason=audit_dispatched\n" and "outcome=dispatched cycle=11" in result.stdout
 	assert "reason=exhausted_retry" in result.stdout
 	assert any(call[:2] == ["workflow", "run"] for call in calls)
 
@@ -273,7 +462,7 @@ def test_failed_cycles_do_not_authorize_exhaustion_merge(tmp_path: Path) -> None
 		for n in range(1, 6) for status in ("pending", "failed")
 	]
 	result, calls, output = _run(tmp_path, "gate", comments=comments)
-	assert output == "hold=true\n" and "reason=exhausted_retry" in result.stdout
+	assert output == "hold=true\nhold_reason=audit_dispatched\n" and "reason=exhausted_retry" in result.stdout
 	assert any(call[:2] == ["workflow", "run"] for call in calls)
 	assert not any(call[:2] == ["api", "repos/o/r/issues/42/labels"] for call in calls)
 	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
@@ -290,7 +479,7 @@ def test_two_failed_head_audits_stop_without_judge_exhaustion(tmp_path: Path) ->
 		_comment(_marker("failed", HEAD, 7), comment_id=5),
 	]
 	result, calls, output = _run(tmp_path, "gate", comments=comments)
-	assert output == "hold=true\n" and "reason=exhausted_without_completed_audit cycle=7 head_attempts=2" in result.stdout
+	assert output == "hold=true\nhold_reason=exhausted_without_completed_audit\n" and "reason=exhausted_without_completed_audit cycle=7 head_attempts=2" in result.stdout
 	assert ["api", "repos/o/r/issues/42/labels", "-f", "labels[]=ai:security-pass-failed"] in calls
 	assert not any(call[:2] == ["workflow", "run"] for call in calls)
 	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
@@ -303,29 +492,38 @@ def test_unaudited_exhaustion_label_already_present_does_not_recomment(tmp_path:
 		tmp_path, "gate", pr=_pr(labels=("ai:security-pass-failed",)), comments=comments,
 		env={"SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS": "1"},
 	)
-	assert output == "hold=true\n" and "reason=exhausted_without_completed_audit" in result.stdout
+	assert output == "hold=true\nhold_reason=exhausted_without_completed_audit\n" and "reason=exhausted_without_completed_audit" in result.stdout
 	assert not any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
 
 
 def test_stale_pending_at_cap_does_not_consume_post_cap_budget(tmp_path: Path) -> None:
 	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("pending", HEAD, 5), age_hours=7)])
-	assert output == "hold=true\n" and "reason=exhausted_retry" in result.stdout
+	assert output == "hold=true\nhold_reason=audit_dispatched\n" and "reason=exhausted_retry" in result.stdout
 	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
 	assert "head attempt 1 of 2" in posted[-1][-1]
 	assert any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+def test_duplicate_pending_markers_count_one_exhausted_attempt(tmp_path: Path) -> None:
+	comments = [_comment(_marker("failed", OLD, 5), comment_id=1)]
+	comments.extend(_comment(_marker("pending", HEAD, 6), comment_id=n, age_hours=7) for n in (2, 3))
+	result, calls, output = _run(tmp_path, "gate", comments=comments)
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=audit_dispatched\n"
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert "head attempt 2 of 2" in posted[-1][-1]
 
 
 @pytest.mark.parametrize("limit, should_retry", [("1", False), ("not-a-number", True), ("0", True), ("3", True)])
 def test_exhausted_head_attempt_limit_is_validated(tmp_path: Path, limit: str, should_retry: bool) -> None:
 	comments = [_comment(_marker("failed", OLD, 5)), _comment(_marker("pending", HEAD, 6), comment_id=2, age_hours=7)]
 	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS": limit})
-	assert output == "hold=true\n" and ("reason=exhausted_retry" in result.stdout) is should_retry
+	assert output == f"hold=true\nhold_reason={'audit_dispatched' if should_retry else 'exhausted_without_completed_audit'}\n" and ("reason=exhausted_retry" in result.stdout) is should_retry
 	assert any(call[:2] == ["workflow", "run"] for call in calls) is should_retry
 
 
 def test_findings_on_old_head_retry_after_head_moves(tmp_path: Path) -> None:
 	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("findings", OLD, 5))])
-	assert output == "hold=true\n" and "reason=exhausted_retry" in result.stdout
+	assert output == "hold=true\nhold_reason=audit_dispatched\n" and "reason=exhausted_retry" in result.stdout
 	assert any(call[:2] == ["workflow", "run"] for call in calls)
 
 
@@ -335,7 +533,7 @@ def test_later_failed_audit_preserves_completed_findings_on_head(tmp_path: Path)
 		_comment(_marker("failed", HEAD, 6), comment_id=2),
 	]
 	result, calls, output = _run(tmp_path, "gate", comments=comments)
-	assert output == "hold=true\nexhausted=true\n" and "reason=cycles_exhausted" in result.stdout
+	assert output == "hold=true\nhold_reason=cycles_exhausted\nexhausted=true\n" and "reason=cycles_exhausted" in result.stdout
 	assert not any(call[:2] == ["workflow", "run"] for call in calls)
 	status, _, _ = _run(tmp_path, "status", comments=comments)
 	assert f"SINGLE_ISSUE_SECURITY_PASS_AUDITED_HEAD={HEAD}" in status.stdout
@@ -347,13 +545,13 @@ def test_stale_pending_after_completed_findings_does_not_erase_audit(tmp_path: P
 		_comment(_marker("pending", HEAD, 6), comment_id=2, age_hours=7),
 	]
 	result, calls, output = _run(tmp_path, "gate", comments=comments)
-	assert output == "hold=true\nexhausted=true\n" and "reason=cycles_exhausted" in result.stdout
+	assert output == "hold=true\nhold_reason=cycles_exhausted\nexhausted=true\n" and "reason=cycles_exhausted" in result.stdout
 	assert not any(call[:2] == ["workflow", "run"] for call in calls)
 
 
 def test_exhausted_retry_dispatch_failure_holds(tmp_path: Path) -> None:
 	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("failed", HEAD, 5))], env={"FAKE_GH_FAIL": "dispatch"})
-	assert output == "hold=true\n" and "reason=dispatch_failed_exhausted" in result.stdout
+	assert output == "hold=true\nhold_reason=dispatch_failed\n" and "reason=dispatch_failed_exhausted" in result.stdout
 	assert any(call[:2] == ["workflow", "run"] for call in calls)
 
 
@@ -365,7 +563,7 @@ def test_judge_extension_marker_grants_one_more_audit_cycle(tmp_path: Path) -> N
 	comments = [_comment(_marker("findings", f"{n:040x}", n), comment_id=n) for n in range(1, 6)]
 	comments.append(_comment("Judge pushed a fix.\n\n" + _extension(OLD), comment_id=9))
 	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GIT_ANCESTORS": OLD})
-	assert output == "hold=true\n" and "outcome=dispatched cycle=6" in result.stdout
+	assert output == "hold=true\nhold_reason=audit_dispatched\n" and "outcome=dispatched cycle=6" in result.stdout
 	assert not any(call[:2] == ["api", "repos/o/r/issues/42/labels"] for call in calls)
 	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
 	assert "(cycle 6 of 6)" in posted[-1][-1]
@@ -375,7 +573,7 @@ def test_duplicate_extension_markers_grant_only_one_cycle(tmp_path: Path) -> Non
 	comments = [_comment(_marker("findings", f"{n:040x}", n), comment_id=n) for n in range(1, 6)]
 	comments.extend([_comment(_extension(OLD), comment_id=9), _comment(_extension(OLD), comment_id=10)])
 	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GIT_ANCESTORS": OLD})
-	assert output == "hold=true\n" and "outcome=dispatched cycle=6" in result.stdout
+	assert output == "hold=true\nhold_reason=audit_dispatched\n" and "outcome=dispatched cycle=6" in result.stdout
 	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
 	assert "(cycle 6 of 6)" in posted[-1][-1]
 
@@ -383,7 +581,7 @@ def test_duplicate_extension_markers_grant_only_one_cycle(tmp_path: Path) -> Non
 def test_unpushed_extension_does_not_hold_exhausted_pass(tmp_path: Path) -> None:
 	comments = [_comment(_marker("findings", HEAD, 5)), _comment(_extension(OLD), comment_id=9)]
 	result, calls, output = _run(tmp_path, "gate", comments=comments)
-	assert result.returncode == 0 and output == "hold=true\nexhausted=true\n"
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=cycles_exhausted\nexhausted=true\n"
 	assert "reason=cycles_exhausted" in result.stdout
 	assert not any(call[:2] == ["workflow", "run"] for call in calls)
 
@@ -391,7 +589,7 @@ def test_unpushed_extension_does_not_hold_exhausted_pass(tmp_path: Path) -> None
 def test_extension_checkout_mismatch_holds_without_granting_or_merging(tmp_path: Path) -> None:
 	comments = [_comment(_marker("findings", HEAD, 5)), _comment(_extension(OLD), comment_id=9)]
 	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GIT_HEAD": OLD, "FAKE_GIT_ANCESTORS": OLD})
-	assert result.returncode == 0 and output == "hold=true\n"
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=extensions_unverifiable\n"
 	assert "reason=extensions_unverifiable" in result.stdout
 	assert not any(call[:2] in (["workflow", "run"], ["api", "repos/o/r/issues/42/labels"]) for call in calls)
 
@@ -399,7 +597,7 @@ def test_extension_checkout_mismatch_holds_without_granting_or_merging(tmp_path:
 def test_missing_extension_in_shallow_checkout_holds_if_history_unavailable(tmp_path: Path) -> None:
 	comments = [_comment(_marker("findings", HEAD, 5)), _comment(_extension(OLD), comment_id=9)]
 	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GIT_SHALLOW": "true", "FAKE_GIT_FETCH_FAIL": "true"})
-	assert result.returncode == 0 and output == "hold=true\n"
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=extensions_unverifiable\n"
 	assert "reason=extensions_unverifiable" in result.stdout
 	assert not any(call[:2] == ["workflow", "run"] for call in calls)
 
@@ -434,7 +632,7 @@ def test_shallow_existing_extension_unshallows_before_exhaustion(tmp_path: Path)
 		"FAKE_GIT_SHALLOW": "true", "FAKE_GIT_ANCESTORS": OLD,
 		"FAKE_GIT_INCOMPLETE_ANCESTRY": "true", "FAKE_GIT_UNSHALLOW_MARKER": str(marker_file),
 	})
-	assert marker_file.exists() and output == "hold=true\n"
+	assert marker_file.exists() and output == "hold=true\nhold_reason=audit_dispatched\n"
 	assert "outcome=dispatched cycle=6" in result.stdout
 	assert not any(call[:2] == ["api", "repos/o/r/issues/42/labels"] for call in calls)
 
@@ -442,7 +640,7 @@ def test_shallow_existing_extension_unshallows_before_exhaustion(tmp_path: Path)
 def test_extension_does_not_reaudit_head_with_findings(tmp_path: Path) -> None:
 	comments = [_comment(_marker("findings", HEAD, 5)), _comment(_extension(OLD), comment_id=9)]
 	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GIT_ANCESTORS": OLD})
-	assert output == "hold=true\n" and "reason=awaiting_followups" in result.stdout
+	assert output == "hold=true\nhold_reason=awaiting_followups\n" and "reason=awaiting_followups" in result.stdout
 	assert not any(call[:2] == ["workflow", "run"] for call in calls)
 
 
@@ -465,14 +663,14 @@ def test_incomplete_shallow_extension_never_grants_or_denies_a_cycle(tmp_path: P
 		assert "SINGLE_ISSUE_SECURITY_PASS_STATE=unverifiable" in result.stdout
 		assert output == ""
 	else:
-		assert output == ("hold=true\n" if mode == "gate" else "")
+		assert output == ("hold=true\nhold_reason=extensions_unverifiable\n" if mode == "gate" else "")
 
 
 def test_extension_marker_from_another_author_is_ignored(tmp_path: Path) -> None:
 	comments = [_comment(_marker("findings", HEAD if n == 5 else f"{n:040x}", n), comment_id=n) for n in range(1, 6)]
 	comments.append(_comment(_extension(OLD), login="other[bot]", comment_id=9))
 	result, calls, output = _run(tmp_path, "gate", comments=comments)
-	assert output == "hold=true\nexhausted=true\n"
+	assert output == "hold=true\nhold_reason=cycles_exhausted\nexhausted=true\n"
 
 
 @pytest.mark.parametrize(
@@ -497,7 +695,7 @@ def test_status_mode_reports_state_without_side_effects(tmp_path: Path, comments
 
 def test_status_only_cannot_be_forced_on_the_gate_from_the_environment(tmp_path: Path) -> None:
 	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("pending", HEAD, 1))], env={"SINGLE_PASS_STATUS_ONLY": "true"})
-	assert output == "hold=true\n"
+	assert output == "hold=true\nhold_reason=audit_pending\n"
 	assert "SINGLE_ISSUE_SECURITY_PASS_STATE=" not in result.stdout
 
 
@@ -517,16 +715,18 @@ def test_status_attests_only_completed_current_head(tmp_path: Path) -> None:
 @pytest.mark.parametrize("comments", [[], [_comment(_marker("failed", HEAD, 1))]])
 def test_failed_dispatch_holds_unaudited_head(tmp_path: Path, comments: list) -> None:
 	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GH_FAIL": "dispatch"})
-	assert output == "hold=true\n" and "outcome=hold reason=dispatch_failed" in result.stdout
+	assert output == "hold=true\nhold_reason=dispatch_failed\n" and "outcome=hold reason=dispatch_failed" in result.stdout
 	assert any(call[:2] == ["workflow", "run"] for call in calls)
 
 
 def _report(tmp_path: Path, outcome: str, findings: str, cycle: int = 3, extra_comments: list | None = None):
+	encoded_ids = base64.b64encode(json.dumps([f"F-{n}" for n in range(1, int(findings or 0) + 1)]).encode("ascii")).decode("ascii")
 	env = {
 		"SECURITY_PASS_PR_NUMBER": "42",
 		"SECURITY_PASS_HEAD_SHA": HEAD,
 		"SECURITY_PASS_AUDIT_OUTCOME": outcome,
 		"SECURITY_PASS_FINDINGS": findings,
+		"SECURITY_PASS_FINDING_IDS_B64": encoded_ids,
 	}
 	comments = [_comment(_marker("pending", HEAD, cycle))] + list(extra_comments or [])
 	return _run(tmp_path, "report", comments=comments, env=env)
@@ -539,9 +739,22 @@ def _report(tmp_path: Path, outcome: str, findings: str, cycle: int = 3, extra_c
 def test_report_posts_the_result_and_reruns_the_review(tmp_path: Path, outcome: str, findings: str, status: str, redispatch: bool) -> None:
 	result, calls, _ = _report(tmp_path, outcome, findings)
 	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
-	assert posted[-1][-1].endswith(_marker(status, HEAD, 3))
+	assert posted[-1][-1].endswith(_marker(status, HEAD, 3, tuple(f"F-{n}" for n in range(1, int(findings or 0) + 1))))
 	review = ["workflow", "run", "ai-review.yml", "-R", "o/r", "--ref", "main", "-f", "pr_number=42"]
 	assert (review in calls) is redispatch
+
+
+def test_report_without_matching_ids_keeps_findings_alertable(tmp_path: Path) -> None:
+	result, calls, _ = _run(tmp_path, "report", comments=[_comment(_marker("pending", HEAD, 3))], env={
+		"SECURITY_PASS_PR_NUMBER": "42", "SECURITY_PASS_HEAD_SHA": HEAD,
+		"SECURITY_PASS_AUDIT_OUTCOME": "success", "SECURITY_PASS_FINDINGS": "2",
+		"SECURITY_PASS_FINDING_IDS_B64": base64.b64encode(b'["F-1"]').decode("ascii"),
+	})
+	assert result.returncode == 0
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert posted[-1][-1].endswith(_marker("findings", HEAD, 3, ()))
+	assert "Finding IDs (base64 JSON):" not in posted[-1][-1]
+	assert ["workflow", "run", "ai-review.yml", "-R", "o/r", "--ref", "main", "-f", "pr_number=42"] in calls
 
 
 def test_report_does_not_rerun_review_without_a_persisted_result(tmp_path: Path) -> None:
@@ -601,10 +814,14 @@ def test_last_cycle_findings_redispatch_for_exhaustion(tmp_path: Path) -> None:
 
 
 def test_report_counts_judge_extensions_before_escalating(tmp_path: Path) -> None:
+	# Valid finding IDs keep the report off the missing-IDs re-dispatch, so
+	# only the extension-aware cycle cap decides.
 	result, calls, _ = _run(tmp_path, "report", comments=[_comment(_marker("pending", HEAD, 5)), _comment(_extension(OLD), comment_id=99)], env={
 		"SECURITY_PASS_PR_NUMBER": "42", "SECURITY_PASS_HEAD_SHA": HEAD, "SECURITY_PASS_AUDIT_OUTCOME": "success", "SECURITY_PASS_FINDINGS": "2", "FAKE_GIT_ANCESTORS": OLD,
+		"SECURITY_PASS_FINDING_IDS_B64": base64.b64encode(b'["F-1", "F-2"]').decode("ascii"),
 	})
 	assert "outcome=findings cycle=5" in result.stdout
+	assert "Audit finding IDs are missing or invalid" not in result.stdout
 	assert ["workflow", "run", "ai-review.yml", "-R", "o/r", "--ref", "main", "-f", "pr_number=42"] not in calls
 
 
@@ -651,14 +868,20 @@ def test_review_wiring() -> None:
 	assert gate["id"] == "single_issue_security_pass"
 	assert gate["env"]["SECURITY_PASS_PENDING_STALE_HOURS"] == "${{ vars.SECURITY_PASS_PENDING_STALE_HOURS || '6' }}"
 	assert gate["env"]["SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS"] == "${{ vars.SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS || '2' }}"
+	assert gate["env"]["SECURITY_PASS_PENDING_MARKER_ATTEMPTS"] == "${{ vars.SECURITY_PASS_PENDING_MARKER_ATTEMPTS || '3' }}"
+	assert gate["env"]["SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS"] == "${{ vars.SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS || '5' }}"
+	assert gate["env"]["SECURITY_PASS_FOLLOWUP_STALE_HOURS"] == "${{ vars.SECURITY_PASS_FOLLOWUP_STALE_HOURS || '24' }}"
 	assert _steps(REVIEW, "codex-agent")["Review-blocked judge decision"]["env"]["SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS"] == gate["env"]["SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS"]
+	assert _steps(REVIEW, "codex-agent")["Review-blocked judge decision"]["env"]["SECURITY_PASS_PENDING_MARKER_ATTEMPTS"] == gate["env"]["SECURITY_PASS_PENDING_MARKER_ATTEMPTS"]
+	assert _steps(REVIEW, "codex-agent")["Review-blocked judge decision"]["env"]["SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS"] == gate["env"]["SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS"]
+	assert _steps(REVIEW, "codex-agent")["Review-blocked judge decision"]["env"]["SECURITY_PASS_FOLLOWUP_STALE_HOURS"] == gate["env"]["SECURITY_PASS_FOLLOWUP_STALE_HOURS"]
 	assert gate["env"]["SECURITY_PASS_AUTHOR_LOGIN_FALLBACK"] == "${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}"
 	assert gate["if"] == steps["Enable auto-merge on PR"]["if"].replace(" && steps.single_issue_security_pass.outputs.hold != 'true'", "")
 	for name in ("Enable auto-merge on PR", "Mark linked issues ready to merge"):
 		assert steps[name]["if"].endswith("&& steps.single_issue_security_pass.outputs.hold != 'true'")
 	assert "review_single_issue_security_pass.sh" in STAGE.read_text(encoding="utf-8")
 	gate = _steps(REVIEW, "gate")["Evaluate review gate"]
-	assert gate["env"]["SINGLE_ISSUE_SECURITY_PASS_ENABLED"] == "${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'true' }}"
+	assert gate["env"]["SINGLE_ISSUE_SECURITY_PASS_ENABLED"] == "${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}"
 	assert "SECURITY_PASS_SKIP_SUPPRESSED=\"true\"" in gate["run"]
 	assert '[ "${SECURITY_PASS_SKIP_SUPPRESSED}" != "true" ]' in gate["run"]
 	assert '[ "${pr_base_ref}" = "${DEFAULT_BRANCH}" ]' in gate["run"]
@@ -679,6 +902,10 @@ def test_audit_wiring() -> None:
 	assert report["env"]["DEFAULT_BRANCH"] == "${{ env.AUDIT_DEFAULT_BRANCH }}"
 	assert report["env"]["SECURITY_PASS_AUDIT_BRANCH"] == "${{ env.AUDIT_BRANCH }}"
 	assert report["env"]["SECURITY_PASS_AUTHOR_LOGIN_FALLBACK"] == "${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}"
+	assert "SECURITY_PASS_FINDING_IDS_B64=" in report["run"]
+	assert "finding_ids_b64=" in report["run"]
+	assert "export SECURITY_PASS_HEAD_SHA SECURITY_PASS_FINDINGS SECURITY_PASS_FINDING_IDS_B64" in report["run"]
+	assert "finding_ids_b64=${SURVIVING_FINDING_IDS_B64}" in (ROOT / "scripts" / "security_audit.sh").read_text(encoding="utf-8")
 	assert workflow["permissions"]["actions"] == "write"
 	assert workflow["permissions"]["pull-requests"] == "read"
 	template = AUDIT_TEMPLATE.read_text(encoding="utf-8")

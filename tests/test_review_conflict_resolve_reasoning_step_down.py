@@ -90,8 +90,8 @@ def test_apply_helper_defined_and_selects_opencode_variant() -> None:
 		"applied to CONFLICT_RESOLVER_REASONING_EFFORT at startup."
 	)
 	command_idx = src.index("resolver_opencode_cmd=(")
-	command_body = src[command_idx:command_idx + 600]
-	assert "writer" in command_body
+	command_body = src[command_idx:command_idx + 350]
+	assert "CONFLICT_RESOLVER write" in command_body
 	assert '"${_current_reasoning_effort}"' in command_body
 	assert '"${RESOLVER_OPENCODE_CONFIG}"' in command_body
 	assert ".codex/config.toml" not in body

@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -44,6 +45,30 @@ for i, a in enumerate(args):
 	if a == "-f":
 		k, _, v = args[i + 1].partition("=")
 		fields.setdefault(k, v)
+if args[:3] == ["label", "create", "ai:operator-step"]:
+	error = os.environ.get("FAKE_GH_LABEL_CREATE_ERROR", "")
+	if not error and state.get("operator_label_exists"):
+		error = "label already exists"
+	if error:
+		if "label already exists" in error or "already_exists" in error:
+			state["operator_label_exists"] = True  # Concurrent creator won the race.
+		json.dump(state, open(state_path, "w"))
+		print(error, file=sys.stderr)
+		sys.exit(1)
+	state["operator_label_exists"] = True
+	done()
+method = args[args.index("-X") + 1] if "-X" in args else ("POST" if "-f" in args else "GET")
+if "user" in args:
+	done("pipeline-bot")
+if endpoint.endswith("/labels/ai%3Aoperator-step"):
+	if state.get("label_missing"):
+		json.dump(state, open(state_path, "w"))
+		print("HTTP 404: Not Found", file=sys.stderr)
+		sys.exit(1)
+	done(json.dumps({"name": "ai:operator-step"}))
+if endpoint == "repos/o/r/labels" and fields.get("name") == "ai:operator-step":
+	state["label_missing"] = False
+	done(json.dumps({"name": "ai:operator-step"}))
 if "issues?labels=ai:operator-step" in endpoint:
 	if state.get("stale_operator_lists", 0) and state.get("created"):
 		state["stale_operator_lists"] -= 1
@@ -51,6 +76,9 @@ if "issues?labels=ai:operator-step" in endpoint:
 	if os.environ.get("FAKE_GH_CRLF_LIST") == "1":
 		done(json.dumps([{**listed_issue, "body": listed_issue["body"].replace("\n", "\r\n")} for listed_issue in state.get("operator_issues", [])]))
 	done(json.dumps(state.get("operator_issues", [])))
+if endpoint.endswith("/comments?per_page=100") and method == "GET":
+	comment_endpoint = endpoint.split("?", 1)[0]
+	done(json.dumps([[comment for comment in state["comments"] if comment["endpoint"] == comment_endpoint]]))
 if endpoint.endswith("/files?per_page=100"):
 	if os.environ.get("FAKE_GH_FAIL_FILES") == "1":
 		sys.exit(1)
@@ -71,10 +99,16 @@ if "-X" in args and "PATCH" in args:
 				issue["body"] = fields.get("body", "")
 	done("{}")
 if endpoint.endswith("/comments"):
-	state["comments"].append({"endpoint": endpoint, "body": fields.get("body", "")})
-	done("{}")
+	comment = {"id": state.get("next_comment_id", 100), "endpoint": endpoint, "body": fields.get("body", ""), "user": {"login": "pipeline-bot"}}
+	state["next_comment_id"] = comment["id"] + 1
+	state["comments"].append(comment)
+	done(json.dumps(comment))
 if endpoint == "repos/o/r/issues" and "title" in fields:
 	if os.environ.get("FAKE_GH_FAIL_CREATE") == "1":
+		sys.exit(1)
+	if fields.get("labels[]") == "ai:operator-step" and not state.get("operator_label_exists"):
+		json.dump(state, open(state_path, "w"))
+		print("label does not exist", file=sys.stderr)
 		sys.exit(1)
 	state["created"].append(fields)
 	created = {"number": 900 + len(state["created"]), "html_url": "u"}
@@ -98,7 +132,7 @@ def _setup(tmp_path: Path, **state) -> tuple[dict, Path]:
 	gh.write_text(FAKE_GH, encoding="utf-8")
 	gh.chmod(0o755)
 	state_file = tmp_path / "state.json"
-	base = {"calls": [], "comments": [], "created": [], "closed": [], "operator_issues": [], "linked": {}}
+	base = {"calls": [], "comments": [], "created": [], "closed": [], "operator_issues": [], "linked": {}, "next_comment_id": 100}
 	base.update(state)
 	state_file.write_text(json.dumps(base), encoding="utf-8")
 	env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", FAKE_GH_STATE=str(state_file), PYTHONDONTWRITEBYTECODE="1")
@@ -144,6 +178,10 @@ DORMANT = {
 def test_dormant_verdict_posts_marker_opens_fix_issue_and_records_operator_step(tmp_path: Path) -> None:
 	result, state = _verify(tmp_path, DORMANT)
 	assert result.returncode == 0
+	assert state["operator_label_exists"] is True
+	label_call = next(i for i, call in enumerate(state["calls"]) if call[:3] == ["label", "create", "ai:operator-step"])
+	issue_call = next(i for i, call in enumerate(state["calls"]) if call[:2] == ["api", "repos/o/r/issues"] and "-f" in call and "title=Operator steps waiting" in call)
+	assert label_call < issue_call
 	assert "ACTIVATION_VERIFY mode=pr item=42 verdict=DORMANT code_gaps=1 operator_gaps=1 outcome=posted" in result.stdout
 	verdict_comment = state["comments"][-1]
 	assert verdict_comment["endpoint"] == "repos/o/r/issues/7/comments"
@@ -153,8 +191,8 @@ def test_dormant_verdict_posts_marker_opens_fix_issue_and_records_operator_step(
 	assert fix_issue["body"].startswith("<!-- ai:activation-fix:v1 source=pr-42 -->")
 	operator_issue = state["created"][1]
 	assert operator_issue["labels[]"] == "ai:operator-step"
-	assert "<!-- ai:operator-step:entry key=pr-42 -->" in operator_issue["body"]
-	assert "Stays off until then: `NIGHTLY_REPORT_ENABLED`." in operator_issue["body"]
+	operator_entry = next(comment for comment in state["comments"] if comment["body"].startswith("<!-- ai:operator-step:entry key=pr-42 -->"))
+	assert "Stays off until then: `NIGHTLY_REPORT_ENABLED`." in operator_entry["body"]
 
 
 def test_live_verdict_only_posts_the_marker(tmp_path: Path) -> None:
@@ -163,10 +201,32 @@ def test_live_verdict_only_posts_the_marker(tmp_path: Path) -> None:
 	assert state["comments"][-1]["body"].endswith("<!-- ai:activation:v1 verdict=LIVE source=pr-42 -->")
 
 
+def test_operator_tracker_creates_missing_label(tmp_path: Path) -> None:
+	# Core-profile consumers have no label-sync workflow.
+	env, state_file = _setup(tmp_path, label_missing=True)
+	steps = tmp_path / "steps.json"
+	steps.write_text(json.dumps([{"title": "Set flag", "instructions": "Enable after deployment"}]), encoding="utf-8")
+	result = subprocess.run(
+		[sys.executable, str(WRITER), "upsert", "--repo", "o/r", "--key", "pr-1", "--source", "PR #1", "--steps-file", str(steps)],
+		capture_output=True, text=True, env=env, check=False,
+	)
+	assert result.returncode == 0, result.stdout
+	state = json.loads(state_file.read_text(encoding="utf-8"))
+	assert any(call[:3] == ["label", "create", "ai:operator-step"] for call in state["calls"])
+	assert state["created"][0]["labels[]"] == "ai:operator-step"
+
+
 def test_merge_of_an_activation_fix_is_not_verified_again(tmp_path: Path) -> None:
 	linked = {"number": 7, "title": "t", "body": "<!-- ai:activation-fix:v1 source=pr-41 -->\r\nfix", "author_association": "OWNER"}
 	result, state = _verify(tmp_path, DORMANT, linked=linked)
 	assert "reason=activation_fix_merge" in result.stdout and state["comments"] == []
+
+
+def test_untrusted_issue_cannot_suppress_activation(tmp_path: Path) -> None:
+	linked = {"number": 7, "title": "t", "body": "<!-- ai:activation-fix:v1 source=pr-41 -->", "user": {"login": "someone"}}
+	result, state = _verify(tmp_path, {"verdict": "LIVE", "summary": "Runs.", "gaps": []}, linked=linked)
+	assert "activation_fix_merge" not in result.stdout
+	assert state["comments"][-1]["body"].endswith("source=pr-42 -->")
 
 
 def test_untrusted_or_quoted_fix_marker_does_not_skip(tmp_path: Path) -> None:
@@ -187,9 +247,9 @@ def test_project_mode_posts_verdict_to_tracking_issue(tmp_path: Path) -> None:
 
 def test_project_without_final_pr_uses_planned_file_hints(tmp_path: Path) -> None:
 	result, state = _verify(tmp_path, {"verdict": "LIVE", "trigger": "push", "summary": "Running.", "gaps": []},
-		env_extra={"TRACKING_NUM": "77", "PROJECT_FILES_JSON": '["scripts/report.sh"]'}, mode="project")
+		env_extra={"TRACKING_NUM": "77", "PROJECT_FILES_JSON": '["scripts/activation_verify.sh"]'}, mode="project")
 	assert "outcome=posted" in result.stdout
-	assert json.loads((tmp_path / "rt" / "activation_context.json").read_text())["changed_files"] == ["scripts/report.sh"]
+	assert json.loads((tmp_path / "rt" / "activation_context.json").read_text())["changed_files"] == ["scripts/activation_verify.sh"]
 	assert state["comments"]
 
 
@@ -305,13 +365,15 @@ def test_writer_replaces_its_own_entry_and_keeps_others(tmp_path: Path) -> None:
 		return json.loads(state_file.read_text(encoding="utf-8"))
 
 	state = run("pr-2")
-	assert state["patched"]["endpoint"] == "repos/o/r/issues/5"
-	assert [key for key, _ in writer.parse_entries(state["patched"]["body"])] == ["pr-1", "pr-2"]
+	assert [key for key, _ in writer.parse_entries(state["operator_issues"][0]["body"])] == ["pr-1"]
 	state = run("pr-1")
-	body = state["patched"]["body"]
-	assert [key for key, _ in writer.parse_entries(body)] == ["pr-1", "pr-2"]
-	assert "**B**" in body and "**A**" not in body
+	assert [comment["body"].split("\n", 1)[0] for comment in state["comments"]] == [
+		"<!-- ai:operator-step:entry key=pr-2 -->", "<!-- ai:operator-step:entry key=pr-1 -->",
+	]
+	assert "**B**" in state["comments"][-1]["body"]
+	assert "**A**" in state["operator_issues"][0]["body"]  # Legacy entry is immutable.
 	assert state["created"] == []
+	assert not any(call[:2] == ["label", "create"] for call in state["calls"])
 
 
 def test_writer_reconciles_duplicate_trackers_without_losing_entries(tmp_path: Path) -> None:
@@ -326,8 +388,10 @@ def test_writer_reconciles_duplicate_trackers_without_losing_entries(tmp_path: P
 	)
 	assert result.returncode == 0, result.stdout
 	state = json.loads(state_file.read_text(encoding="utf-8"))
-	assert state["closed"] == [6]
-	assert [key for key, _ in writer.parse_entries(state["operator_issues"][0]["body"])] == ["pr-1", "pr-2", "pr-3"]
+	assert state["closed"] == []  # Do not close an issue whose legacy entries have not been migrated.
+	assert [key for key, _ in writer.parse_entries(state["operator_issues"][0]["body"])] == ["pr-1"]
+	assert [key for key, _ in writer.parse_entries(state["operator_issues"][1]["body"])] == ["pr-2"]
+	assert state["comments"][-1]["body"].startswith("<!-- ai:operator-step:entry key=pr-3 -->")
 
 
 def test_writer_upserts_against_crlf_tracker_body(tmp_path: Path) -> None:
@@ -343,8 +407,8 @@ def test_writer_upserts_against_crlf_tracker_body(tmp_path: Path) -> None:
 	)
 	state = json.loads(state_file.read_text(encoding="utf-8"))
 	assert result.returncode == 0, result.stdout
-	assert [key for key, _ in writer.parse_entries(state["operator_issues"][0]["body"])] == ["pr-1", "pr-2"]
-	assert "\r" not in state["operator_issues"][0]["body"]
+	assert [key for key, _ in writer.parse_entries(state["operator_issues"][0]["body"])] == ["pr-1"]
+	assert state["comments"][-1]["body"].startswith("<!-- ai:operator-step:entry key=pr-2 -->")
 
 
 def test_writer_does_not_recreate_when_label_listing_lags_create(tmp_path: Path) -> None:
@@ -358,7 +422,63 @@ def test_writer_does_not_recreate_when_label_listing_lags_create(tmp_path: Path)
 	state = json.loads(state_file.read_text(encoding="utf-8"))
 	assert result.returncode == 0, result.stdout
 	assert len(state["created"]) == 1
-	assert [key for key, _ in writer.parse_entries(state["operator_issues"][0]["body"])] == ["pr-7"]
+	assert state["comments"][-1]["body"].startswith("<!-- ai:operator-step:entry key=pr-7 -->")
+
+
+def test_writer_uses_registered_label_metadata(tmp_path: Path) -> None:
+	registration = json.loads((ROOT / ".github/ai/label_contract.v1.json").read_text(encoding="utf-8"))["labels"]["ai:operator-step"]
+	helpers = (ROOT / "scripts/label_helpers.sh").read_text(encoding="utf-8")
+	assert registration["color"] == re.search(r'\["ai:operator-step"\]="([0-9a-f]{6})"', helpers).group(1)
+	assert registration["description"] == re.search(r'\["ai:operator-step"\]="([^"]+)"', helpers[helpers.index("declare -A _AI_LABEL_DESCS="):]).group(1)
+	assert len(registration["description"]) <= 100
+	env, state_file = _setup(tmp_path)
+	steps = tmp_path / "steps.json"
+	steps.write_text('[{"title":"Set a variable"}]', encoding="utf-8")
+	result = subprocess.run([sys.executable, str(WRITER), "upsert", "--repo", "o/r", "--key", "pr-7",
+		"--source", "seven", "--steps-file", str(steps)], capture_output=True, text=True, env=env, check=False)
+	assert result.returncode == 0, result.stdout
+	label_call = next(call for call in json.loads(state_file.read_text(encoding="utf-8"))["calls"] if call[:2] == ["label", "create"])
+	assert label_call == ["label", "create", "ai:operator-step", "--repo", "o/r", "--color", registration["color"],
+		"--description", registration["description"]]
+
+
+@pytest.mark.parametrize(("error", "preexisting", "expected_code"), [
+	("", True, 0),
+	("label already exists", False, 0),
+	("Validation Failed: already_exists", False, 0),
+	("Validation Failed", False, 2),
+	("description already exists", False, 2),
+	("forbidden", False, 2),
+	("rate limit exceeded", False, 2),
+])
+def test_writer_label_create_race_or_failure(tmp_path: Path, error: str, preexisting: bool, expected_code: int) -> None:
+	env, state_file = _setup(tmp_path, operator_label_exists=preexisting)
+	if error:
+		env["FAKE_GH_LABEL_CREATE_ERROR"] = error
+	steps = tmp_path / "steps.json"
+	steps.write_text('[{"title":"Set a variable"}]', encoding="utf-8")
+	result = subprocess.run([sys.executable, str(WRITER), "upsert", "--repo", "o/r", "--key", "pr-7",
+		"--source", "seven", "--steps-file", str(steps)], capture_output=True, text=True, env=env, check=False)
+	assert result.returncode == expected_code, result.stdout
+	state = json.loads(state_file.read_text(encoding="utf-8"))
+	assert len(state["created"]) == (1 if expected_code == 0 else 0)
+	assert sum(call[:2] == ["label", "create"] for call in state["calls"]) == 1
+
+
+@pytest.mark.parametrize("registration", [
+	None,
+	{"labels": {"ai:operator-step": {"color": "not-hex", "description": "short"}}},
+	{"labels": {"ai:operator-step": {"color": "fbca04", "description": "x" * 101}}},
+])
+def test_writer_fails_closed_without_valid_label_registration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, registration: dict | None) -> None:
+	if registration is not None:
+		contract_path = tmp_path / ".github/ai/label_contract.v1.json"
+		contract_path.parent.mkdir(parents=True)
+		contract_path.write_text(json.dumps(registration), encoding="utf-8")
+	monkeypatch.setattr(writer, "__file__", str(tmp_path / "scripts" / "operator_step_issue.py"))
+	monkeypatch.setattr(writer, "_gh", lambda *args, **kwargs: pytest.fail("unexpected GitHub call"))
+	with pytest.raises(writer.ApiError, match="(invalid operator-step label registration|operator-step label registration unavailable)"):
+		writer._ensure_operator_label("o/r")
 
 
 def test_writer_trims_oldest_entries_to_fit() -> None:

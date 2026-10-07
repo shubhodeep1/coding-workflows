@@ -12,6 +12,7 @@ import tempfile
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 
@@ -2428,6 +2429,96 @@ print(json.dumps({}))
 		assert store_after["log_call_counts"] == {"201": 1, "202": 1}
 
 
+def test_pat_budget_daily_ranking_is_hourly_deduped_and_discloses_gaps():
+	day = datetime(2026, 10, 5, tzinfo=timezone.utc)
+	runs = [
+		{"repository": "owner/repo", "run_id": run_id, "run_attempt": 1,
+			"workflow_path": ".github/workflows/internal-clarify.yml" if run_id != 3 else ".github/workflows/internal-review.yml",
+			"created_at": "2026-10-05T09:00:00Z",
+			"updated_at": "2026-10-05T10:49:00Z"}
+		for run_id in (1, 2, 3)
+	]
+	def archive_for(run_id: int) -> bytes:
+		text = {
+			1: "2026-10-05T10:20:00Z GH_PAT_BUDGET phase=end workflow=clarify job=clarify remaining=10 reset=500 used_in_job=4\n",
+			2: "GH_PAT_BUDGET phase=end workflow=clarify job=clarify remaining=8 reset=500 used_in_job=unknown\n",
+			3: "2026-10-05T10:30:00Z GH_PAT_BUDGET phase=end workflow=review_autofix job=gate remaining=4 reset=500 used_in_job=12\n",
+		}[run_id]
+		buffer = io.BytesIO()
+		with zipfile.ZipFile(buffer, mode="w") as zipped:
+			zipped.writestr("job/step.log", text)
+			zipped.writestr("job.log", text)  # GitHub bundles both parent and step logs.
+		return buffer.getvalue()
+
+	with patch.object(collector, "_fetch_run_log_archive", side_effect=lambda repo, run_id, **kwargs: archive_for(run_id)) as fetch:
+		report = collector.build_pat_budget_report(runs, day, "test-token", None, incomplete_listing=True)
+	assert fetch.call_count == 3
+	assert "| 2026-10-05 10:00 | 1 | review_autofix / gate | 12 | 1 |" in report
+	assert "| 2026-10-05 10:00 | 2 | clarify / clarify | 4 | 1 |" in report
+	assert "1 jobs with unknown deltas" in report
+	assert "Partial (ranking may omit consumers)" in report
+	with patch.object(collector, "_fetch_run_log_archive", return_value=archive_for(1)):
+		cross_midnight = collector.build_pat_budget_report([
+		{**runs[0], "updated_at": "2026-10-06T00:01:00Z"}
+		], day, "test-token", None)
+	assert "| 2026-10-05 10:00 | 1 | clarify / clarify | 4 | 1 |" in cross_midnight
+
+	with patch.object(collector, "_fetch_run_log_archive", side_effect=RuntimeError("unavailable")):
+		missing_report = collector.build_pat_budget_report(runs[:1], day, "test-token", None)
+	assert "1 archives unavailable" in missing_report
+	assert "No measured job-end deltas" in missing_report
+
+
+def test_pat_budget_workflow_listing_marks_api_ceiling_incomplete():
+	day = datetime(2026, 10, 5, tzinfo=timezone.utc)
+	with patch.object(collector, "gh_api_json", return_value=(
+		{"workflow_runs": [{"id": 1, "name": "Internal Review", "path": ".github/workflows/internal-review.yml"}],
+		 "total_count": 1000},
+		{"status_code": 200, "headers": {}},
+	)) as api:
+		runs, capped, metadata = collector.list_runs_for_repo(
+			"owner/repo", since_utc=day, until_utc=day, workflow_file="internal-review.yml",
+			per_page=100, max_pages=1, max_runs=0, token="token",
+		)
+	assert not capped and len(runs) == 1
+	assert metadata["page_limit_reached"] is True
+	assert "actions/workflows/internal-review.yml/runs?" in api.call_args.args[0]
+	assert "created=2026-10-05T00%3A00%3A00Z..2026-10-05T00%3A00%3A00Z" in api.call_args.args[0]
+
+
+def test_pat_budget_daily_main_collects_wrapper_runs_without_duplicate_archives(tmp_path: Path):
+	output = tmp_path / "daily.md"
+	buffer = io.BytesIO()
+	with zipfile.ZipFile(buffer, mode="w") as zipped:
+		zipped.writestr("job/end.log", "2026-10-05T12:00:00Z GH_PAT_BUDGET phase=end workflow=review_autofix job=gate remaining=10 reset=500 used_in_job=8\n")
+	row = {"id": 7, "name": "Internal Review", "path": ".github/workflows/internal-review.yml",
+		"created_at": "2026-10-05T09:00:00Z", "updated_at": "2026-10-05T12:01:00Z",
+		"status": "completed", "conclusion": "success", "run_attempt": 1,
+		"_workflow_family": "review_autofix"}
+	def listing(repo: str, **kwargs):
+		return ([row] if kwargs["workflow_file"] == "internal-review.yml" else [], False, {})
+
+	with patch.object(collector, "_cache_read_context", return_value=({"repositories": {}}, None, None)), \
+		patch.object(collector, "_cache_write_context"), \
+		patch.object(collector, "list_runs_for_repo", side_effect=listing) as listings, \
+		patch.object(collector, "_fetch_run_log_archive", return_value=buffer.getvalue()) as archives:
+		rc = collector.main(["--repo", "owner/repo", "--since", "2026-10-04T00:00:00Z",
+			"--pat-budget-day", "2026-10-05", "--pat-budget-output", str(output),
+			"--output", str(tmp_path / "report.json"), "--max-log-runs", "0"])
+	assert rc == 0 and listings.call_count == len(collector.PAT_BUDGET_WORKFLOWS) * 2
+	assert archives.call_count == 1
+	assert "| 2026-10-05 12:00 | 1 | review_autofix / gate | 8 | 1 |" in output.read_text()
+
+
+def test_daily_pat_budget_report_is_scheduled_on_existing_log_collector():
+	workflow = (REPO_ROOT / ".github/workflows/workflow-log-analysis.yml").read_text(encoding="utf-8")
+	assert 'cron: "0 6 * * *"' in workflow
+	assert '--pat-budget-output "${RUNNER_TEMP}/gh-pat-budget.md"' in workflow
+	assert '--max-pages 50 --max-log-runs 0' in workflow
+	assert "github.event.schedule == '0 6 * * *') && github.token || secrets.GH_PAT" in workflow
+	assert 'cat "${RUNNER_TEMP}/gh-pat-budget.md" >> "${GITHUB_STEP_SUMMARY}"' in workflow
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -2440,7 +2531,11 @@ def main() -> int:
 	for func in test_funcs:
 		name = func.__name__
 		try:
-			func()
+			if func is test_pat_budget_daily_main_collects_wrapper_runs_without_duplicate_archives:
+				with tempfile.TemporaryDirectory() as test_dir:
+					func(Path(test_dir))
+			else:
+				func()
 			print(f"  PASS  {name}")
 			passed += 1
 		except Exception as exc:  # noqa: BLE001

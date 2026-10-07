@@ -1,4 +1,4 @@
-Hand **one standalone GitHub issue** to the Actions pipeline with the Claude engine label: add `ai:engine-claude` and restart its clarify → plan → implement → review flow with `/reclarify`. This command does **not** implement the issue in this session and opens no PR. `$ARGUMENTS` names the issue: a URL (`https://github.com/<owner>/<repo>/issues/<N>`), `<owner>/<repo>#<N>`, or `#<N>` for this repo.
+Hand **one standalone GitHub issue** to the Actions pipeline with the Claude engine label: add `ai:engine-claude` and restart its clarify → plan → implement → review flow with `/reclarify`. Claude is selected only for roles whose call sites support it; review still runs on OpenCode. This command does **not** implement the issue in this session and opens no PR. `$ARGUMENTS` names the issue: a URL (`https://github.com/<owner>/<repo>/issues/<N>`), `<owner>/<repo>#<N>`, or `#<N>` for this repo.
 
 The session-driven issue implementer (queue, pickup, dispatcher routine, issue-mode chain) was retired on 2026-10-03 (`docs/plans/replace-claude-sessions-with-cli-engine-plan.md`). Standalone issues run through the Actions pipeline; this label is carried to the issue's PR for the separate role cutovers.
 
@@ -17,7 +17,7 @@ $ARGUMENTS
 
 ```
 Issue: <owner>/<repo>#<N> — <title>
-Engine label: ai:engine-claude added (engine selection awaits role cutovers)
+Engine label: ai:engine-claude added (Claude for cut-over roles; review on OpenCode)
 Restarted: /reclarify posted (<comment url>)
 Note: the Actions pipeline implements the issue; this session opened no PR.
 ```
