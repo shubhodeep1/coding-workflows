@@ -472,6 +472,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 		index = 0
 		environment: dict[str, str] = {}
 		config_override = False
+		appended_git_selector = False
 		# A prior unresolved cd/pushd may select another repository.
 		explicit_git_directory = unresolved_directory_change
 		# Bash append assignments are prefixes too; keep the following git visible.
@@ -483,6 +484,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				if name in ("GIT_DIR", "GIT_WORK_TREE"):
 					working_directory = None
 					explicit_git_directory = True
+					appended_git_selector = True
 			elif name in ("GIT_DIR", "GIT_WORK_TREE"):
 				environment[name] = value
 				explicit_git_directory = True
@@ -508,7 +510,9 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 					env_chdir_seen = True
 					env_word_value = (tokens[position + 1] if word in ("-C", "--chdir") else
 						word.split("=", 1)[1] if word.startswith("--chdir=") else word[2:])
-					env_cwd = _literal_guard_path(env_word_value, env_cwd) if env_cwd else None
+					# An absolute -C path does not depend on the (possibly unknown) cwd.
+					env_cwd = (_literal_guard_path(env_word_value, env_cwd or checkout)
+						if env_cwd or os.path.isabs(env_word_value) else None)
 					explicit_directory_unresolved |= env_cwd is None
 					env_directory_unresolved |= env_cwd is None
 				elif re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", word):
@@ -519,7 +523,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			continue
 		index += 1
 		git_cwd = env_cwd
-		uncertain = git_cwd is None
+		uncertain = git_cwd is None or appended_git_selector
 		while index < len(tokens) and tokens[index].startswith("-"):
 			option = tokens[index]
 			if option.startswith(("-C", "--git-dir", "--work-tree")):
@@ -542,9 +546,13 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				config_override = True
 			if value is not None:
 				if option.startswith("-C"):
-					git_cwd = _literal_guard_path(value, git_cwd) if git_cwd else None
-					uncertain |= git_cwd is None
-					explicit_directory_unresolved |= git_cwd is None
+					# Git applies an absolute -C on its own, even after an unknown cd.
+					git_cwd = (_literal_guard_path(value, git_cwd or checkout)
+						if git_cwd or os.path.isabs(value) else None)
+					# An appended GIT_DIR+=/GIT_WORK_TREE+= value is never applied, so
+					# the directory stays unresolved whatever -C selects.
+					uncertain = git_cwd is None or appended_git_selector
+					explicit_directory_unresolved |= uncertain
 				elif option.startswith("--git-dir"):
 					environment["GIT_DIR"] = value
 				elif option.startswith("--work-tree"):

@@ -297,11 +297,14 @@ changelog.d/6435-prompt-audit-claude-config.md
 changelog.d/6436-triage-omit-pr-agent-instructions.md
 changelog.d/6438-openrouter-mgmt-key-reads.md
 changelog.d/6438-reviewer-panel-random-tiers.md
+changelog.d/6454-integration-judge-shared-protected-lines.md
 changelog.d/6455-rb-fix-sandbox-workspace.md
 changelog.d/6461-consolidator-opencode-sandbox.md
 changelog.d/6467-phase-report-provenance.md
 changelog.d/6468-heal-lineage-source-marker-trust.md
 changelog.d/6469-deploy-activate-credential-free-checks.md
+changelog.d/6472-security-audit-partial-coverage-marker.md
+changelog.d/6477-integration-judge-provenance-all-paths.md
 changelog.d/6486-workflow-heal-security-pass.md
 changelog.d/6491-poller-judge-issue-engine-labels.md
 changelog.d/6493-heal-intake-run-provenance.md
