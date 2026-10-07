@@ -1531,7 +1531,11 @@ def test_absolute_core_worktree_cannot_identify_repo_inside_shell_control(merged
 	repo, _ = merged_branch_repo
 	other = repo.parent / "open-worktree"
 	_git(repo, "worktree", "add", "-b", "feature/open", str(other), "main")
-	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: pytest.fail("must not check the session checkout"))
+	# The session checkout (an open branch) is still checked, but cannot
+	# authorize the commit: the configured worktree may be another checkout.
+	monkeypatch.setattr(guard, "_read_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: [])
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(other),
 		"tool_input": {"command": f"if true; then git -c core.worktree={repo} commit -m x; fi"}})
 	assert code == 0 and message == ""
@@ -1623,6 +1627,11 @@ def test_per_command_config_commit_keeps_the_merged_pr_check(merged_branch_repo,
 	"if true; then GIT_CONFIG_COUNT=0 git commit -m x; fi",
 ])
 def test_ambiguous_non_env_config_commit_warns_without_asking(merged_branch_repo, monkeypatch, capsys, command: str) -> None:
+	"""Per-command config on an unresolved commit asks (author decision Q30 = A).
+
+	The name predates that decision and is kept per CLAUDE.md §6. The warning
+	that the session checkout was checked is still emitted alongside the ask.
+	"""
 	repo, _ = merged_branch_repo
 	_git(repo, "checkout", "main")
 	monkeypatch.setattr(guard, "_read_cache", lambda *args: None)
@@ -1631,7 +1640,8 @@ def test_ambiguous_non_env_config_commit_warns_without_asking(merged_branch_repo
 	assert code == 0 and message == ""
 	response = json.loads(capsys.readouterr().out.splitlines()[-1])
 	assert "could not resolve git command directory" in response["systemMessage"]
-	assert "hookSpecificOutput" not in response
+	assert "could not resolve git commit directory" in response["systemMessage"]
+	assert response["hookSpecificOutput"]["permissionDecision"] == "ask"
 
 
 def test_ambiguous_config_commit_still_checks_merged_pr(merged_branch_repo, monkeypatch) -> None:

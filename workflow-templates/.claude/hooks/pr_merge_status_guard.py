@@ -1545,6 +1545,13 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		if invocation.subcommand == "commit" and invocation.warning and invocation.explicit_git_directory:
 			_request_confirmation("could not resolve git commit directory; PR status cannot be checked for the intended checkout")
 			continue
+		if invocation.subcommand == "commit" and invocation.warning and invocation.config_override:
+			# Author decision Q30 = A: per-command configuration (git -c, --config-env,
+			# GIT_CONFIG_*) may select another checkout, e.g. via core.worktree, so
+			# the commit asks. The session checkout is still checked and can block.
+			unknown_destination_reasons.append(
+				"could not resolve git commit directory; per-command Git configuration may select another checkout"
+			)
 		if invocation.subcommand == "push" and invocation.warning:
 			uncertain_push_reasons.append(invocation.warning)
 		if invocation.subcommand == "push" and invocation.config_override:
