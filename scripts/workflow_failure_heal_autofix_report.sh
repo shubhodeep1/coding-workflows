@@ -155,6 +155,13 @@ elif [ -n "${FINALIZE_REASON}" ] && [[ "${FINALIZE_REASON}" =~ ^[a-z][a-z0-9_:-]
 else
 	FAILURE_REASON="workflow_failure"
 fi
+# A confirmed model-provider outage (scripts/provider_outage.py) is a
+# repo-wide event with its own tracker and alert, not a PR defect: no per-PR
+# heal issue (issue #6633).
+if [ "${FAILURE_REASON}" = "provider_unavailable" ]; then
+	log "skip reason=provider_unavailable pr=${PR}"
+	exit 0
+fi
 
 # --- Streak ------------------------------------------------------------------
 

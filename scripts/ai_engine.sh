@@ -138,6 +138,11 @@ ai_engine_fallback()
 	echo "AI_ENGINE_FALLBACK role=${role} reason=${reason}" >&2
 	local marker="${RUNNER_TEMP:-/tmp}/ai-engine-fallback-notified"
 	[ -e "${marker}" ] && return 0
+	# Claude pool capacity (issue #6633): the "Record Claude pool capacity"
+	# step already sent the one deduplicated capacity alert for this event.
+	if [ "${CLAUDE_POOL_REASON:-}" = "all_gated" ] && [ "${PROVIDER_OUTAGE_CAPACITY_ALERTED:-false}" = "true" ]; then
+		return 0
+	fi
 	: > "${marker}" 2>/dev/null || return 0
 	(
 		if ! type tg_send_msg >/dev/null 2>&1 && [ -f "${_AI_ENGINE_DIR}/tg_helpers.sh" ]; then

@@ -217,6 +217,10 @@
       "color": "fbca04",
       "description": "Steps only a person can take; the pipeline continues and the gated work stays off until they are done"
     },
+    "ai:provider-outage": {
+      "color": "b60205",
+      "description": "Model provider outage tracker (automation); the review sweep resumes and closes it on recovery"
+    },
     "ai:unblock-closed": {
       "color": "5c5c5c",
       "description": "Closed by the unblock judge after every verdict was spent; a closed project is marked abandoned"

@@ -401,6 +401,35 @@ if [ "${SOURCE_KIND}" = "workflow_run" ] && [ "${#LOG_FILES[@]}" -gt 0 ]; then
 	esac
 fi
 
+# A release / default-branch run of this repository that failed only because
+# the model provider was unavailable (evidence in its logs confirmed by a live
+# probe, scripts/provider_outage.py) is recorded on the repo-wide provider
+# outage tracker instead of filing a heal issue; the scheduled sweep reports
+# or (opt-in, PROVIDER_OUTAGE_RELEASE_RERUN_ENABLED) re-runs it on recovery
+# (issue #6633). Fail-open: without the helper the run is triaged as before.
+PROVIDER_OUTAGE_PY="$(dirname "${HEAL_PY}")/provider_outage.py"
+if [ "${SOURCE_KIND}" = "workflow_run" ] && [ "${SOURCE_REPO}" = "${SELF_REPO}" ] && [ "${#LOG_FILES[@]}" -gt 0 ] && [ -f "${PROVIDER_OUTAGE_PY}" ]; then
+	OUTAGE_ARGS=()
+	for f in "${LOG_FILES[@]}"; do
+		OUTAGE_ARGS+=(--log-file "${f}")
+	done
+	OUTAGE_CLASS="$(PYTHONDONTWRITEBYTECODE=1 python3 "${PROVIDER_OUTAGE_PY}" classify "${OUTAGE_ARGS[@]}" 2>/dev/null | head -n 1 || true)"
+	if [[ "${OUTAGE_CLASS}" == reason=provider_unavailable* ]]; then
+		OUTAGE_STATUS="$(printf '%s\n' "${OUTAGE_CLASS}" | sed -n 's/.* status=\([a-z0-9_]*\).*/\1/p')"
+		OUTAGE_RUN_ID="$(jq -r '.run_refs[0].run_id // ""' "${PAYLOAD_FILE}" 2>/dev/null || true)"
+		OUTAGE_WORKFLOW="$(printf '%s' "${PAYLOAD_WORKFLOW_NAME:-unknown}" | tr -c 'A-Za-z0-9_.-' '_' | cut -c1-80)"
+		OUTAGE_ALERT_FILE="$(mktemp)"
+		OUTAGE_OPEN="$(PYTHONDONTWRITEBYTECODE=1 python3 "${PROVIDER_OUTAGE_PY}" open --repo "${SELF_REPO}" --kind outage --provider openrouter \
+			--status "${OUTAGE_STATUS:-unknown}" --release-run "${OUTAGE_RUN_ID}" --release-workflow "${OUTAGE_WORKFLOW}" --alert-out "${OUTAGE_ALERT_FILE}" 2>/dev/null | tail -n 1 || true)"
+		if [ -s "${OUTAGE_ALERT_FILE}" ]; then
+			tg_send_msg "$(cat "${OUTAGE_ALERT_FILE}")" "CRITICAL" >/dev/null 2>&1 || true
+		fi
+		rm -f -- "${OUTAGE_ALERT_FILE}"
+		log "skip reason=provider_unavailable workflow=${OUTAGE_WORKFLOW} run=${OUTAGE_RUN_ID:-none} status=${OUTAGE_STATUS:-unknown} ${OUTAGE_OPEN}"
+		exit 0
+	fi
+fi
+
 # --- Fingerprint -------------------------------------------------------------
 
 if [ "${SOURCE_KIND}" = "autofix_failure" ]; then
