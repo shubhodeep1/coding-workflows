@@ -13,4 +13,4 @@ What this means for operators: PRs that were stuck on the `editor no-op suspicio
 
 ### For contributors
 
-Tests: `tests/test_review_apply_fixes_reviewer_manifest_validation.py` (`test_short_count_labels_from_claude_editor_are_accepted`, `test_short_labels_still_need_all_four_counts`, `test_prompt_spells_out_the_audit_bullet_shape`) and `tests/test_validate_editor_audit.py` (`test_short_labels_from_claude_editor_balance`, `test_short_labels_mismatch_still_fails`).
+Tests: `tests/test_review_apply_fixes_reviewer_manifest_validation.py` (`test_short_count_labels_from_claude_editor_are_accepted`, `test_short_labels_still_need_all_four_counts`, `test_prompt_spells_out_the_audit_bullet_shape`) and `tests/test_validate_editor_audit.py` (`test_short_labels_from_claude_editor_balance`, `test_short_labels_mismatch_still_fails`, `test_short_total_label_needs_its_own_number`).
