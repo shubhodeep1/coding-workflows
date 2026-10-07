@@ -296,6 +296,16 @@ if [ -n "${PARENT_ISSUE}" ]; then
 		GEN=$((PGEN + 1))
 		[ -n "${PROOT}" ] && ROOT="${PROOT}"
 		log "lineage parent_issue=${PARENT_ISSUE} parent_gen=${PGEN} gen=${GEN} root=${ROOT}"
+	elif ! printf '%s' "${PARENT_BODY}" | grep -qF "${MARKER_PREFIX}gen="; then
+		# The source issue carries no triage lineage marker: this is an
+		# ordinary pipeline PR (clarify/plan/implement, activation gaps, an
+		# orchestrator wave, a heal issue), not a fix PR for an earlier
+		# triage issue. Its failure starts a new lineage at generation 1,
+		# exactly like a PR on any other branch. Until #6273 routed every
+		# failed CI run through this script, only triage-born
+		# ai/issue-<N> PRs reached this branch, so a missing marker was
+		# treated as an error and every ordinary PR's triage crashed here.
+		log "lineage parent_issue=${PARENT_ISSUE} parent_gen=none gen=${GEN} root=${ROOT} reason=source_issue_not_triage"
 	else
 		log "error parent_generation_missing_or_malformed issue=${PARENT_ISSUE}"
 		exit 1
