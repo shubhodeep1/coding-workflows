@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should implementation do with `workflow-templates/CLAUDE.md`, given that our snapshot hides symlinks and the implement sandbox won't write them back?\nChoices:\nA) Check on the host first, with `git ls-files -s workflow-templates/CLAUDE.md` (mode `120000`, target `../CLAUDE.md`) and `pytest tests/test_claude_md_section_numbers.py`. If the symlink is already tracked and the test passes, close the issue as a verifier false positive with no code change. Only if it really is missing, create it in a deterministic host-side step, not through the sandboxed editor. (RECOMMENDED)\nB) Always (re)create `workflow-templates/CLAUDE.md` as a symlink to `../CLAUDE.md` without checking first. **Note:** the implement sandbox rejects new or changed symlinks during write-back, so this may fail or produce an empty commit.\nC) Replace the symlink with a regular-file copy of `CLAUDE.md`. **Note:** this breaks `test_template_claude_md_is_the_same_file` (it compares resolved paths) and means keeping two copies in sync by hand.\nQ2: If Q1 confirms a false positive, should this issue also stop the activation verifier from reporting symlinked paths as absent?\nChoices:\nA) No. Keep this issue to the CLAUDE.md gap and log the verifier false positive as a separate follow-up issue. (RECOMMENDED)\nB) Yes. In the same change, make `scripts/activation_verify.sh` and its prompt treat files left out of the snapshot (symlinks) as \"not verifiable\" instead of \"absent\".\nC) No, and file no follow-up.",
+  "fingerprint": "a2a484eae9bfc01c3465fa66e67df747dedb5a1854ecd313e45f0abd04a29220",
+  "lineage": {
+    "issue_number": 6609,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37568843899",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37568843899",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261007035853_4a3323ed9a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6609,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37568843899"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6609 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-07T03:58:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
