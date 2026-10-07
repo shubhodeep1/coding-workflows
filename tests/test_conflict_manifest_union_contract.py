@@ -52,6 +52,7 @@ sandbox refuse with ``sandbox_path_unsupported``. With the fix,
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -563,13 +564,13 @@ def _git_out(repo: Path, *args: str) -> str:
 	).stdout
 
 
-def _assert_manifest_only_conflict_committed(reverse: bool) -> None:
+def _assert_manifest_only_conflict_committed(reverse: bool, head_ref: str = "feat") -> str:
 	with tempfile.TemporaryDirectory() as tmp_name:
 		tmp = Path(tmp_name)
 		repo = tmp / "repo"
 		repo.mkdir()
 		_make_one_sided_manifest_conflict(repo, reverse=reverse)
-		result, github_env, _ = _run_live_union_block(repo, tmp)
+		result, github_env, _ = _run_live_union_block(repo, tmp, head_ref=head_ref)
 		assert result.returncode == 0, result.stdout + result.stderr
 		assert "honoured one-sided deletion" in result.stdout, result.stdout
 		assert github_env.is_file(), (
@@ -582,6 +583,7 @@ def _assert_manifest_only_conflict_committed(reverse: bool) -> None:
 		assert _git_out(repo, "log", "-1", "--format=%s").strip() == MERGE_RESOLVE_COMMIT_MESSAGE
 		assert MANIFEST_PATH not in _git_out(repo, "ls-files").splitlines()
 		assert _git_out(repo, "diff", "--name-only", "--diff-filter=U", "--").strip() == ""
+		return result.stdout
 
 
 def test_manifest_modify_delete_conflict_is_resolved_deterministically() -> None:
@@ -638,18 +640,150 @@ def test_manifest_union_kill_switch_diagnostic() -> None:
 
 
 def test_manifest_union_integration_sync_fails_before_resolver() -> None:
+	"""With another unmerged path, an integration-sync branch still refuses:
+	resolving the manifest here would change the resolver's working set."""
 	with tempfile.TemporaryDirectory() as tmp_name:
 		tmp = Path(tmp_name)
 		repo = tmp / "repo"
 		repo.mkdir()
-		_make_one_sided_manifest_conflict(repo)
+		_make_one_sided_manifest_conflict(repo, other_conflict=True)
 		result, github_env, allowlist = _run_live_union_block(
 			repo, tmp, head_ref="orchestrator/project-123",
 		)
 		assert result.returncode != 0, result.stdout + result.stderr
 		assert "::error::Manifest union-merge: unhandled reason=integration_sync stages=1 2" in result.stdout
-		assert allowlist.read_text(encoding="utf-8") == f"{MANIFEST_PATH}\n"
+		assert "only unmerged path" not in result.stdout, result.stdout
+		assert allowlist.read_text(encoding="utf-8") == f"{MANIFEST_PATH}\nother.txt\n"
 		assert not github_env.exists()
+		assert MANIFEST_PATH in _git_out(repo, "ls-files").splitlines()
+
+
+def _fingerprint_and_deferred_block(text: str) -> str:
+	"""Fingerprint-violation expansion plus the deferred manifest-only commit."""
+	start = text.index("# Fingerprint-violation expansion of the resolver working set.")
+	end = text.index('CONFLICT_RESOLVER_SEMBLE_QUERY_FILE="${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-', start)
+	return text[start:end]
+
+
+def _run_integration_sync_manifest_only(
+	repo: Path, tmp: Path, *, fingerprints: dict, support_dir: Path | None = None,
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+	"""Run the live union block, then the live fingerprint expansion and the
+	deferred manifest-only commit, on an orchestrator/project-* branch."""
+	runtime_dir = tmp / "runtime"
+	runtime_dir.mkdir()
+	github_env = tmp / "github.env"
+	stash = tmp / "stash"
+	stash.mkdir()
+	allowlist = runtime_dir / "resolver_unmerged_allowlist.txt"
+	fp_file = runtime_dir / "integration_fingerprints.json"
+	fp_file.write_text(json.dumps(fingerprints), encoding="utf-8")
+	text = _prepare_text()
+	script = f"""set -euo pipefail
+RUNTIME_DIR={runtime_dir!s}
+GITHUB_ENV={github_env!s}
+RESOLVE_STASH={stash!s}
+_merge_stderr_file="$(mktemp)"
+IS_WORKFLOW_SOURCE_REPO=true
+HEAD_REF=orchestrator/project-123
+TARGET_BRANCH=orchestrator/project-123
+RESOLVER_ALLOWLIST_FILE={allowlist!s}
+RESOLVER_FINGERPRINT_ONLY_PATHS_FILE={runtime_dir / "resolver_fingerprint_only_paths.txt"!s}
+git diff --name-only --diff-filter=U | sort -u > "${{RESOLVER_ALLOWLIST_FILE}}"
+_resolver_allowlist_count="$(wc -l < "${{RESOLVER_ALLOWLIST_FILE}}" | tr -d '[:space:]')"
+{_union_block(text)}
+CONFLICTED_FILES_RAW=""
+IS_INTEGRATION_SYNC=true
+INTEGRATION_FINGERPRINTS_FILE={fp_file!s}
+SUPPORT_SCRIPTS_DIR={(support_dir or REPO_ROOT / "scripts")!s}
+{_fingerprint_and_deferred_block(text)}
+echo "DEFERRED_BLOCK_FELL_THROUGH"
+"""
+	env = _scrubbed_git_env()
+	env.pop("CONFLICT_MANIFEST_UNION_ENABLED", None)
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	result = subprocess.run(
+		["bash", "-c", script], cwd=repo, env=env, text=True, capture_output=True,
+	)
+	return result, github_env
+
+
+def _fingerprints_on_other(regex: str) -> dict:
+	return {"1500": {"issue": 1500, "pr": 1501, "must_contain": [{"file": "other.txt", "regex": regex}], "must_not_contain": []}}
+
+
+def test_prepare_skips_empty_allowlist_abort_for_deferred_commit() -> None:
+	text = _prepare_text()
+	assert 'if [ "${_resolver_allowlist_count}" -eq 0 ] && [ "${_mu_defer_commit}" != "true" ]; then' in text
+	assert text.index("# Fingerprint-violation expansion of the resolver working set.") < text.index(
+		'if [ "${_mu_defer_commit}" = "true" ]; then'
+	)
+
+
+def test_manifest_only_conflict_on_integration_sync_branch_is_resolved() -> None:
+	"""Tracking issue #6664 / final PR #6667: when the manifest is the only
+	unmerged path there is no resolver run to widen, so orchestrator/project-*
+	resolves it deterministically, committing once the fingerprint check passes."""
+	for reverse in (False, True):
+		with tempfile.TemporaryDirectory() as tmp_name:
+			tmp = Path(tmp_name)
+			repo = tmp / "repo"
+			repo.mkdir()
+			_make_one_sided_manifest_conflict(repo, reverse=reverse)
+			result, github_env = _run_integration_sync_manifest_only(
+				repo, tmp, fingerprints=_fingerprints_on_other("^base$"),
+			)
+			out = result.stdout + result.stderr
+			assert result.returncode == 0, out
+			assert "integration-sync branch, but" in result.stdout, out
+			assert "only unmerged path; resolving it deterministically" in result.stdout, out
+			assert "integration fingerprints verified" in result.stdout, out
+			assert "unhandled reason=integration_sync" not in result.stdout, out
+			assert "DEFERRED_BLOCK_FELL_THROUGH" not in result.stdout, out
+			assert "CONFLICT_RESOLVED=true" in github_env.read_text(encoding="utf-8").splitlines()
+			parents = _git_out(repo, "rev-list", "--parents", "-n", "1", "HEAD").split()
+			assert len(parents) == 3, parents
+			assert _git_out(repo, "log", "-1", "--format=%s").strip() == MERGE_RESOLVE_COMMIT_MESSAGE
+			assert MANIFEST_PATH not in _git_out(repo, "ls-files").splitlines()
+
+
+def test_manifest_only_integration_sync_refuses_fingerprint_violation() -> None:
+	"""An auto-merged file that violates a merged sub-issue fingerprint must
+	block the deferred commit: the merge stays uncommitted and preparation fails."""
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp = Path(tmp_name)
+		repo = tmp / "repo"
+		repo.mkdir()
+		_make_one_sided_manifest_conflict(repo)
+		head_before = _git_out(repo, "rev-parse", "HEAD").strip()
+		result, github_env = _run_integration_sync_manifest_only(
+			repo, tmp, fingerprints=_fingerprints_on_other("NEEDED_PATTERN_NOT_PRESENT"),
+		)
+		out = result.stdout + result.stderr
+		assert result.returncode != 0, out
+		assert "unhandled reason=integration_sync detail=fingerprint_violations" in result.stdout, out
+		assert _git_out(repo, "rev-parse", "HEAD").strip() == head_before
+		assert not github_env.exists() or "CONFLICT_RESOLVED=true" not in github_env.read_text(encoding="utf-8")
+
+
+def test_manifest_only_integration_sync_refuses_without_fingerprint_check() -> None:
+	"""A verifier that cannot run must not let the deferred commit through."""
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp = Path(tmp_name)
+		repo = tmp / "repo"
+		repo.mkdir()
+		_make_one_sided_manifest_conflict(repo)
+		head_before = _git_out(repo, "rev-parse", "HEAD").strip()
+		empty_support = tmp / "empty-support"
+		empty_support.mkdir()
+		result, github_env = _run_integration_sync_manifest_only(
+			repo, tmp, fingerprints=_fingerprints_on_other("^base$"), support_dir=empty_support,
+		)
+		out = result.stdout + result.stderr
+		assert result.returncode != 0, out
+		assert "unhandled reason=integration_sync detail=fingerprint_unverified" in result.stdout, out
+		assert _git_out(repo, "rev-parse", "HEAD").strip() == head_before
+		assert not github_env.exists() or "CONFLICT_RESOLVED=true" not in github_env.read_text(encoding="utf-8")
 
 def test_manifest_modify_delete_with_conflicted_gitignore_fails_closed() -> None:
 	"""A conflicted .gitignore cannot prove the resolved tree ignores the manifest."""

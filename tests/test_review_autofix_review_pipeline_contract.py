@@ -9241,6 +9241,106 @@ def test_review_isolation_reports_result_conflicts_host() -> None:
 		assert (host / "b.py").read_bytes() == b"host"
 
 
+
+_SMOKE_CANARY_BAIT = (
+	"status: BROKEN_BY_E2E_BAIT_123\n"
+	"run_id: WRONG_VALUE_SHOULD_BE_123\n"
+	"updated-by: e2e-bait-injector\n"
+	"# E2E_EDITOR_BAIT_123: canary corrupted; restore to linked issue spec (smoke gate)\n"
+)
+_SMOKE_CANARY_SPEC = "status: ok\nrun_id: 123\nupdated-by: ai-pipeline\n"
+
+
+def _seed_fixture(root: Path):
+	"""Snapshot a host with a baited smoke canary; return (host, source, run)."""
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	host = root / "host"
+	source = root / "isolated" / "source"
+	source.mkdir(parents=True)
+	(host / "tests").mkdir(parents=True)
+	(host / "tests/e2e_smoke_canary.txt").write_text(_SMOKE_CANARY_BAIT)
+	subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+	subprocess.run(["git", "add", "tests"], cwd=host, env=_git_clean_env(), check=True)
+	manifest = root / "isolated" / "baseline.json"
+	payload = root / "payload.txt"
+	payload.write_text(_SMOKE_CANARY_SPEC)
+
+	def run(action: str, *extra: str) -> subprocess.CompletedProcess[str]:
+		return subprocess.run(
+			[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest), *extra],
+			env={**os.environ, "GIT_DIR": str(host / ".git"), "GIT_WORK_TREE": str(host)},
+			capture_output=True, text=True, check=False,
+		)
+
+	assert run("snapshot").returncode == 0
+	return host, source, payload, run
+
+
+def test_review_isolation_seed_publishes_smoke_canary_through_transfer() -> None:
+	"""Regression for release gate run 37669315093 (review run 37674139451)."""
+	with tempfile.TemporaryDirectory() as td:
+		host, source, payload, run = _seed_fixture(Path(td))
+		canary = "tests/e2e_smoke_canary.txt"
+		seeded = run("seed", canary, str(payload))
+		assert seeded.returncode == 0, seeded.stderr
+		# Seeding never touches the host before the validated transfer.
+		assert (host / canary).read_text() == _SMOKE_CANARY_BAIT
+		assert (source / canary).read_text() == _SMOKE_CANARY_SPEC
+		transferred = run("transfer")
+		assert transferred.returncode == 0, transferred.stderr
+		assert (host / canary).read_text() == _SMOKE_CANARY_SPEC
+		spec_path = REPO_ROOT / "tests/e2e_smoke_canary_spec.txt"
+		if spec_path.exists():
+			for key in ("status: ok", "run_id:", "updated-by: ai-pipeline"):
+				assert key in spec_path.read_text(encoding="utf-8")
+	# The old order (host write after the snapshot) is still refused.
+	with tempfile.TemporaryDirectory() as td:
+		host, source, _payload, run = _seed_fixture(Path(td))
+		(host / "tests/e2e_smoke_canary.txt").write_text(_SMOKE_CANARY_SPEC)
+		refused = run("transfer")
+		assert refused.returncode != 0
+		assert "reason=host_baseline_changed" in refused.stderr
+
+
+def test_review_isolation_seed_rejects_host_drift_symlinks_and_unknown_paths() -> None:
+	canary = "tests/e2e_smoke_canary.txt"
+	with tempfile.TemporaryDirectory() as td:
+		host, source, payload, run = _seed_fixture(Path(td))
+		(host / canary).write_text("host drifted\n")
+		drift = run("seed", canary, str(payload))
+		assert drift.returncode != 0
+		assert "reason=host_baseline_changed" in drift.stderr
+		assert (source / canary).read_text() == _SMOKE_CANARY_BAIT
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host, source, payload, run = _seed_fixture(root)
+		outside = root / "outside.txt"
+		outside.write_text("outside\n")
+		(source / canary).unlink()
+		(source / canary).symlink_to(outside)
+		linked = run("seed", canary, str(payload))
+		assert linked.returncode != 0
+		assert "reason=symlink_in_path" in linked.stderr
+		assert outside.read_text() == "outside\n"
+	with tempfile.TemporaryDirectory() as td:
+		host, source, payload, run = _seed_fixture(Path(td))
+		for name in ("tests/other.txt", "../escape.txt", ".github/x.txt", ".env.txt"):
+			rejected = run("seed", name, str(payload))
+			assert rejected.returncode != 0, name
+			assert "reason=unsafe_result_path" in rejected.stderr, name
+		assert not (source / "tests/other.txt").exists()
+		assert run("seed", canary).returncode == 2
+
+
+def test_review_isolation_seed_wiring() -> None:
+	helper = (REPO_ROOT / "scripts/review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert 'case "${action}" in prepare|prepare-ephemeral|run|cleanup|seed) ;; *) exit 2 ;; esac' in helper
+	seed_call = 'review_untrusted_workspace.py" seed "${workspace}" "${root}/source" "${root}/baseline.json" "$2" "$3"'
+	assert seed_call in helper
+	# The seed branch only runs on a validated, prepared root.
+	assert helper.index("echo '::error::Review sandbox not prepared'") < helper.index(seed_call)
+	assert helper.index(seed_call) < helper.index('[ "$#" -ge 6 ] && [ "$#" -le 9 ] || exit 2')
+
 def test_review_relay_accepts_only_configured_chat_model() -> None:
 	spec = importlib.util.spec_from_file_location("review_broker", REPO_ROOT / "scripts/clarify_openrouter_broker.py")
 	assert spec and spec.loader

@@ -6,7 +6,7 @@ action="${1:-}"
 support="${SUPPORT_SCRIPTS_DIR:-scripts}"
 root="${REVIEW_SANDBOX_ROOT:-}"
 workspace="${GITHUB_WORKSPACE:-$PWD}"
-case "${action}" in prepare|prepare-ephemeral|run|cleanup) ;; *) exit 2 ;; esac
+case "${action}" in prepare|prepare-ephemeral|run|cleanup|seed) ;; *) exit 2 ;; esac
 prepare_engine="${2:-codex}"
 if [ "${action}" = prepare-ephemeral ]; then
 	prepare_engine="${2:-claude}"
@@ -227,6 +227,15 @@ fi
 [ -f "${root}/workspace" ] || { echo '::error::Review sandbox not prepared' >&2; exit 1; }
 workspace="$(< "${root}/workspace")"
 [ -d "${workspace}" ] || { echo '::error::Review workspace path rejected' >&2; exit 1; }
+# seed <relative-path> <payload-file>: trusted host content (the smoke canary
+# pre-write) goes into the disposable source after the snapshot, so the
+# validated transfer publishes it. Writing the host instead trips
+# host_baseline_changed (runs 37669315093 / 37674139451).
+if [ "${action}" = seed ]; then
+	[ "$#" -eq 3 ] || exit 2
+	PYTHONDONTWRITEBYTECODE=1 python3 "${support}/review_untrusted_workspace.py" seed "${workspace}" "${root}/source" "${root}/baseline.json" "$2" "$3"
+	exit $?
+fi
 
 [ "$#" -ge 6 ] && [ "$#" -le 9 ] || exit 2
 prompt="$2"
