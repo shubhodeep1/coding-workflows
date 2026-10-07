@@ -723,7 +723,7 @@ manifest_union_finalize_deferred_commit() {
   return 0
 }
 _mu_deferred_committed=false
-if [ "${_mu_deferred_commit}" = "true" ]; then
+if [ "${_mu_deferred_commit:-false}" = "true" ]; then
   if ! manifest_union_finalize_deferred_commit; then
     exit 1
   fi
