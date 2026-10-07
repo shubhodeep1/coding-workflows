@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Multiple merged changes touched the review sandbox, isolated editor runs, conflict resolution, and tests for sandbox-only behavior. When changing review or conflict workflows, preserve the isolation boundary and add coverage for attempts to run commands or transfer changes outside the sandbox.",
+  "fingerprint": "5ef6120e181f17b0f87533ef802c0126c83e64bffed0ae659d557da140793d7c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37586783122",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37586783122",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/5504",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6441",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6458",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6596",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6608",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6137",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6475",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6545",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6598",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6612"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261007072409_9ae5a3a664",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Keep untrusted review and editor operations isolated from the trusted workspace.",
+  "timestamps": {
+    "created_at": "2026-10-07T07:24:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
