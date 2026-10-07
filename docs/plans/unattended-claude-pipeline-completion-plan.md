@@ -311,8 +311,13 @@ mergeable.
 3. Read each consumer's last `AI Update Workflows` run; report any
    `ALLOW_WORKFLOW_EDITS=false` or failed sync.
 4. Add the OpenRouter spend-per-model table to the weekly retro
-   (`scripts/workflow_retro.py`) from `GET /api/v1/activity`, keyed by the
-   existing `OPENROUTER_API_KEY`'s account (read-only; no new secret).
+   (`scripts/workflow_retro.py`) from `GET /api/v1/activity`. That endpoint
+   needs an OpenRouter management key, not the `OPENROUTER_API_KEY`
+   inference key, and the session-only `OR_MGMT_KEY` is not available to
+   Actions, so this step needs a new Actions secret holding a management
+   key (named and added by the operator; one §23.C ask). The retro section
+   is read-only and fails open, omitting the table, when the secret is
+   absent.
 
 ## Tests
 

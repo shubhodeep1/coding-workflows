@@ -1621,7 +1621,7 @@ Under Review file issue audit: include one bullet per manifest file with:
 - issues ignored
 Write every audit bullet in exactly this shape, with the four count labels
 spelled out in full (do NOT shorten them to "total", "applied" or
-"ignored"; the validator looks for the full labels):
+"ignored"; the full labels are the canonical form):
 - <exact file path> — total issues listed: N; issues applied: N; issues already applied: N; issues ignored: N
 The four counts on every audit bullet MUST balance:
 total issues listed == issues applied + issues already applied + issues ignored.
@@ -2351,12 +2351,14 @@ while [ "${attempt}" -le "${editor_max_attempts}" ]; do
             # ignored 5", PR #6605 run 37565800725), which carry the same
             # four counts. "applied" is checked on a copy with the
             # "already applied N" phrase removed so it cannot satisfy both.
-            has_total = normalized ~ /total issues listed[^0-9]*[0-9]+/ || normalized ~ /total[^0-9]*[0-9]+/
-            has_already = normalized ~ /issues already applied[^0-9]*[0-9]+/ || normalized ~ /already applied[^0-9]*[0-9]+/
+            # A short label must be a whole word followed directly by its
+            # number, so a reviewer file name cannot supply a count.
+            has_total = normalized ~ /total issues listed[^0-9]*[0-9]+/ || normalized ~ /(^|[^a-z0-9_])total[ \t:=]*[0-9]+/
+            has_already = normalized ~ /issues already applied[^0-9]*[0-9]+/ || normalized ~ /(^|[^a-z0-9_])already applied[ \t:=]*[0-9]+/
             without_already = normalized
             gsub(/already applied[^0-9]*[0-9]+/, "", without_already)
-            has_applied = without_already ~ /issues applied[^0-9]*[0-9]+/ || without_already ~ /applied[^0-9]*[0-9]+/
-            has_ignored = normalized ~ /issues ignored[^0-9]*[0-9]+/ || normalized ~ /ignored[^0-9]*[0-9]+/
+            has_applied = without_already ~ /issues applied[^0-9]*[0-9]+/ || without_already ~ /(^|[^a-z0-9_])applied[ \t:=]*[0-9]+/
+            has_ignored = normalized ~ /issues ignored[^0-9]*[0-9]+/ || normalized ~ /(^|[^a-z0-9_])ignored[ \t:=]*[0-9]+/
             if (path_found && has_total && has_applied && has_already && has_ignored) {
               count++
             }
