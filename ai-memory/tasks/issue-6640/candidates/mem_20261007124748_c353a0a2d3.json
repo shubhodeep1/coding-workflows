@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6640,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6640\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6651\",\"pr_number\":6651,\"branch\":\"ai/issue-6640\",\"run_id\":\"37621095245\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37621095245\",\"changed_files\":[\".ai/.workspace_source_manifest.txt\",\"changelog.d/6640-heal-log-env-redaction.md\",\"scripts/workflow_failure_heal.py\",\"tests/test_workflow_failure_heal.py\"]}",
+  "fingerprint": "5523d3ead74d07a437be1f95934bca5dd3c9dfc4f4589416287a2199378a63cd",
+  "lineage": {
+    "issue_number": 6640,
+    "parent_ids": [],
+    "pr_number": 6651,
+    "run_id": "37621095245",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37621095245",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6651"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261007124748_c353a0a2d3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6640,
+    "level": "run",
+    "pr_number": 6651,
+    "run_id": "37621095245"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6640: https://github.com/shubhodeep1/coding-workflows/pull/6651",
+  "timestamps": {
+    "created_at": "2026-10-07T12:47:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
