@@ -1517,7 +1517,13 @@ the way to a fix PR without human action.
 - **Loop bound:** each triage issue records a generation counter
   (`<!-- check-failure-triage:gen=N -->`) and a stable lineage root. A fix PR's
   failure links back to its source issue (branch `ai/issue-<N>`) and increments
-  the generation; once it exceeds `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH`
+  the generation when that issue carries the marker; an `ai/issue-<N>` PR whose
+  source issue is not a triage issue (clarify/plan/implement, activation gaps,
+  an orchestrator wave) starts a new lineage at generation 1, logged as
+  `lineage … parent_gen=none gen=1 … reason=source_issue_not_triage`. A marker
+  that is present but not numeric still fails the run
+  (`parent_generation_missing_or_malformed`). Once the generation exceeds
+  `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH`
   (default 3) the chain stops opening issues and instead labels the PR
   `ai:check-triage-escalated` and sends a Telegram CRITICAL for human
   attention. The triage workflow also skips its own check-run by name to
