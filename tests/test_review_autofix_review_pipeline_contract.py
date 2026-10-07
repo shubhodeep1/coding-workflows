@@ -72,6 +72,10 @@ def test_head_gate_is_verified_and_binds_merge_status_to_evaluated_head() -> Non
 	assert 'git -C .codex-head-gate-src rev-parse HEAD' in workflow
 	assert 'bash .codex-head-gate-src/scripts/review_head_gate.sh gate' in workflow
 	assert 'auto_merge_enabled: (if has("auto_merge")' in workflow
+	assert 'if .auto_merge_enabled == null then "" else (.auto_merge_enabled | tostring) end' in workflow
+	assert workflow.index('if _pr_gate=') < workflow.index('GATE_AUTO_MERGE_ENABLED="${pr_auto_merge_enabled}"') < workflow.index('# Port P6: retarget')
+	assert 'echo "HEAD_GATE_EARLY_DONE=true" >> "${GITHUB_ENV}"' in workflow
+	assert 'export EVENT_NAME=workflow_dispatch' in workflow
 	for key in ("PR_EVENT_HEAD_SHA", "GATE_HEAD_SHA", "GATE_AUTO_MERGE_ENABLED", "DETERMINISTIC_SKIP", "REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED"):
 		assert f"{key}:" in workflow
 	assert 'review_head_gate.sh' in stage.split('REQUIRED_BOOTSTRAP_SCRIPTS="', 1)[1].split('"', 1)[0].split()

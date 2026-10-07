@@ -91,7 +91,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
    token identity keeps the old re-dispatch.
    The gate runs `scripts/review_head_gate.sh` from its verified support SHA:
    `pull_request.synchronize` withdraws stale auto-merge (failure fails the
-   gate), and opened/synchronize events mark their SHA `pending` in the fixed
+   gate), and opened/synchronize events mark their SHA `pending` immediately
+   after the first PR read, before the rest of the gate evaluation, in the fixed
    commit-status context `ai-review/head-gate`. Deterministic skips and clean
    review/security tails post `success` on the evaluated head before their
    head-bound merge; the review-blocked judge does likewise after its security

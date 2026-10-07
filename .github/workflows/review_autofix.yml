@@ -522,6 +522,8 @@ jobs:
           EVENT_ACTION: ${{ github.event.action }}
           PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED: ${{ vars.REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED || 'true' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           PR_IS_DRAFT: ${{ inputs.pr_is_draft }}
           PR_SKIP_AI: ${{ inputs.pr_skip_ai }}
           PR_TITLE: ${{ inputs.pr_title }}
@@ -662,7 +664,7 @@ jobs:
               pr_base_ref="$(printf '%s' "${_pr_gate}" | jq -r '.base_ref // ""' 2>/dev/null || echo "")"
               pr_head_repo="$(printf '%s' "${_pr_gate}" | jq -r '.head_repo // ""' 2>/dev/null || echo "")"
               pr_head_sha_gate="$(printf '%s' "${_pr_gate}" | jq -r '.head_sha // ""' 2>/dev/null || echo "")"
-              pr_auto_merge_enabled="$(printf '%s' "${_pr_gate}" | jq -r '.auto_merge_enabled // "" | tostring' 2>/dev/null || echo "")"
+              pr_auto_merge_enabled="$(printf '%s' "${_pr_gate}" | jq -r 'if .auto_merge_enabled == null then "" else (.auto_merge_enabled | tostring) end' 2>/dev/null || echo "")"
               pr_head_repo_gate="${pr_head_repo}"
               pr_base_ref_gate="$(printf '%s' "${_pr_gate}" | jq -r '.base_ref // ""' 2>/dev/null || echo "")"
               pr_updated_at_gate="$(printf '%s' "${_pr_gate}" | jq -r '.updated_at // ""' 2>/dev/null || echo "")"
@@ -677,6 +679,15 @@ jobs:
               fi
               if [ -z "$(printf '%s' "${pr_body_cached}" | tr -d '[:space:]')" ]; then
                 pr_body_cached="$(printf '%s' "${_pr_gate}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+              fi
+              # Withdraw an enrolled head before the rest of gate evaluation,
+              # reusing this PR read rather than fetching the PR a second time.
+              if [ "${HEAD_GATE_HELPER_VERIFIED:-false}" = "true" ] && [ "${EVENT_NAME}" = "pull_request" ] \
+                && { [ "${EVENT_ACTION}" = "opened" ] || [ "${EVENT_ACTION}" = "synchronize" ]; }; then
+                PR_EVENT_HEAD_SHA="${PR_HEAD_SHA:-}" GATE_HEAD_SHA="${pr_head_sha_gate}" \
+                  GATE_AUTO_MERGE_ENABLED="${pr_auto_merge_enabled}" DETERMINISTIC_SKIP=false \
+                  bash .codex-head-gate-src/scripts/review_head_gate.sh gate
+                echo "HEAD_GATE_EARLY_DONE=true" >> "${GITHUB_ENV}"
               fi
             fi
           fi
@@ -1712,6 +1723,11 @@ jobs:
           if [ "${HEAD_GATE_HELPER_VERIFIED:-false}" != "true" ]; then
             echo "::warning::Verified head-gate helper unavailable; skipping status publication."
             exit 0
+          fi
+          if [ "${HEAD_GATE_EARLY_DONE:-false}" = "true" ]; then
+            # The first PR read already posted pending and withdrew enrollment.
+            # The late gate call now only publishes deterministic-skip success.
+            export EVENT_NAME=workflow_dispatch
           fi
           bash .codex-head-gate-src/scripts/review_head_gate.sh gate
       - name: Record GH_PAT budget at review gate end
