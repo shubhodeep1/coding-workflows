@@ -109,17 +109,32 @@ validate_editor_audit_arithmetic()
 		ig=""
 		line_without_already="${line_lower}"
 
+		# Canonical labels first. The short labels the Claude editor emits
+		# ("total 5; applied 0; already applied 0; ignored 5", PR #6605 run
+		# 37565800725) carry the same four counts and are accepted as
+		# aliases; "applied" is read from a copy of the line with the
+		# "already applied N" phrase removed so one phrase cannot satisfy
+		# both counts.
 		if [[ "${line_lower}" =~ total[[:space:]]+issues[[:space:]]+listed[^0-9]*([0-9]+) ]]; then
+			t="${BASH_REMATCH[1]}"
+		elif [[ "${line_lower}" =~ total[^0-9]*([0-9]+) ]]; then
 			t="${BASH_REMATCH[1]}"
 		fi
 		if [[ "${line_lower}" =~ issues[[:space:]]+already[[:space:]]+applied[^0-9]*([0-9]+) ]]; then
 			aa="${BASH_REMATCH[1]}"
 			line_without_already="${line_lower/${BASH_REMATCH[0]}/}"
+		elif [[ "${line_lower}" =~ already[[:space:]]+applied[^0-9]*([0-9]+) ]]; then
+			aa="${BASH_REMATCH[1]}"
+			line_without_already="${line_lower/${BASH_REMATCH[0]}/}"
 		fi
 		if [[ "${line_without_already}" =~ issues[[:space:]]+applied[^0-9]*([0-9]+) ]]; then
 			a="${BASH_REMATCH[1]}"
+		elif [[ "${line_without_already}" =~ applied[^0-9]*([0-9]+) ]]; then
+			a="${BASH_REMATCH[1]}"
 		fi
 		if [[ "${line_lower}" =~ issues[[:space:]]+ignored[^0-9]*([0-9]+) ]]; then
+			ig="${BASH_REMATCH[1]}"
+		elif [[ "${line_lower}" =~ ignored[^0-9]*([0-9]+) ]]; then
 			ig="${BASH_REMATCH[1]}"
 		fi
 

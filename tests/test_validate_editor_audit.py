@@ -412,3 +412,34 @@ def main() -> int:
 
 if __name__ == "__main__":
 	raise SystemExit(main())
+
+
+def test_short_labels_from_claude_editor_balance(tmp_path):
+	"""The Claude editor shortens the labels (PR #6605 run 37565800725:
+	`total 5; applied 0; already applied 0; ignored 5`). The counts still
+	balance, so the audit is healthy."""
+	summary = textwrap.dedent(
+		"""\
+		Review file issue audit:
+		- /tmp/x/previous_reviews/review_deepseek_deepseek-v4-pro.txt — total 5; applied 0; already applied 0; ignored 5
+		- /tmp/x/previous_reviews/review_qwen_qwen3_7-plus.txt — total 3, applied 1, already applied 2, ignored 0
+
+		PR comment audit:
+		- none
+		"""
+	)
+	result = _run(summary, "6", tmp_path=tmp_path)
+	assert result.returncode == 0, result.stderr
+
+
+def test_short_labels_mismatch_still_fails(tmp_path):
+	"""Short labels get the same arithmetic check as the full ones."""
+	summary = textwrap.dedent(
+		"""\
+		Review file issue audit:
+		- review_a.md — total 5; applied 1; already applied 0; ignored 5
+		"""
+	)
+	result = _run(summary, "1", tmp_path=tmp_path)
+	assert result.returncode == 2
+	assert "Audit entry arithmetic mismatch: total=5 but applied(1)+already_applied(0)+ignored(5)=6" in result.stderr
