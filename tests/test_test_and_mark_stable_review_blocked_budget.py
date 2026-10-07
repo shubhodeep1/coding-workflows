@@ -307,6 +307,44 @@ def test_success_transitions_and_unconditional_cleanup_are_preserved() -> None:
 	assert 'issues/${TRACKING_NUMBER}' in cleanup
 
 
+def test_hot_poller_guard_installs_and_verifies_pytest_before_running() -> None:
+	job = _e2e_job(_read_workflow())
+	step = _slice_between(
+		job,
+		'- name: "Phase 0a: Hot orchestrate-poll regression guard"',
+		"- name: Create E2E test issue",
+	)
+	test_call = step.index("tests/test_orchestrate_poll_process.py")
+	install = step.find("python3 -m pip install --quiet pytest")
+	import_check = step.find('python3 -c "import pytest"')
+	unavailable = step.find("status=pytest_unavailable")
+	assert -1 < install < import_check < unavailable < test_call
+	assert "exit 1" in step[import_check:test_call]
+	assert "python3-pytest" in step[install:import_check]
+
+
+def test_validate_standalone_job_budget_exceeds_watcher_wait() -> None:
+	workflow = _read_workflow()
+	job = _slice_between(workflow, "  validate-standalone-test:\n", "  clarify-rejects-unsolvable-test:\n")
+	job_match = re.search(r"^    timeout-minutes:\s+(\d+)\s*$", job, re.MULTILINE)
+	assert job_match is not None
+	job_timeout = int(job_match.group(1))
+	step = _slice_between(
+		job,
+		"- name: Dispatch internal-validate.yml standalone",
+		'- name: "Soft-error analyser (validate-standalone)"',
+	)
+	step_match = re.search(r"^        timeout-minutes:\s+(\d+)\s*$", step, re.MULTILINE)
+	assert step_match is not None, "dispatch step must carry its own timeout-minutes"
+	step_timeout = int(step_match.group(1))
+	reg = re.search(r"--registration-timeout-secs\s+(\d+)", step)
+	completion = re.search(r"--completion-timeout-secs\s+(\d+)", step)
+	assert reg is not None and completion is not None
+	watcher_wait = max(int(reg.group(1)), int(completion.group(1)))
+	assert step_timeout * 60 >= watcher_wait + 180
+	assert job_timeout >= step_timeout + 10
+
+
 def main() -> int:
 	tests = [value for name, value in sorted(globals().items()) if name.startswith("test_") and callable(value)]
 	for test in tests:
