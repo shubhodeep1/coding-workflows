@@ -30,7 +30,14 @@ if [ "${1:-}" = refuse ] && [ "${2:-}" = out_of_heal_scope ]; then
 	refuse out_of_heal_scope
 fi
 echo 'HEAL_ROUTE=false' >> "${GITHUB_ENV:?}"
-if [ "$(PYTHONDONTWRITEBYTECODE=1 python3 "${heal_py}" heal-route --issue-json "${issue_json}")" != true ]; then
+# Capture the classifier's exit status: a crash must not read as "not a heal
+# issue" and send a heal issue down the ordinary host-editor route.
+if ! heal_route="$(PYTHONDONTWRITEBYTECODE=1 python3 "${heal_py}" heal-route --issue-json "${issue_json}")"; then
+	echo "::error::HEAL_SCOPE_REFUSED issue=${ISSUE_NUMBER:-unknown} reason=classification_failed" >&2
+	echo 'SKIP_IMPLEMENT=true' >> "${GITHUB_ENV}"
+	exit 1
+fi
+if [ "${heal_route}" != true ]; then
 	exit 0
 fi
 

@@ -6088,12 +6088,14 @@ REISSUE_EOF
 )"
     fi
 
+    local -a _heal_reissue_label_args=()
     if [ "${issue_is_heal}" = true ] || printf '%s' "${issue_body}" | grep -q 'workflow-failure-heal:fp='; then
       # The existing issue read cannot attest lastEditedAt or author. The
       # helper re-reads both with GraphQL and authenticates the PAT account;
       # no model-provided marker may be copied without that check.
       new_body="$(printf '%s' "${new_body}" | PYTHONDONTWRITEBYTECODE=1 python3 "${HEAL_SUPPORT_HELPER}" heal-scope carry --body-file /dev/stdin --parent-repo "${GITHUB_REPOSITORY}" --parent-issue "${issue_number}" --pipeline-login "${NOOP_CAP_TRUSTED_LOGIN:-}")" || return 1
       ensure_label_exists 'ai:workflow-heal'
+      _heal_reissue_label_args=(--label 'ai:workflow-heal')
     fi
     # Create the successor before closing the failed issue: a create failure
     # then leaves state untouched for a retry, whereas closing first would
@@ -6102,10 +6104,7 @@ REISSUE_EOF
     ensure_label_exists "ai:clarification"
     ensure_label_exists "ai:orchestrator-managed"
     mapfile -t _engine_label_args < <(engine_label_create_args)
-    if [ "${issue_is_heal}" = true ] || printf '%s' "${issue_body}" | grep -q 'workflow-failure-heal:fp='; then
-      _engine_label_args+=(--label 'ai:workflow-heal')
-    fi
-    new_issue_url="$(gh_retry gh issue create "${_engine_label_args[@]}" --repo "${GITHUB_REPOSITORY}" \
+    new_issue_url="$(gh_retry gh issue create "${_engine_label_args[@]}" ${_heal_reissue_label_args[@]+"${_heal_reissue_label_args[@]}"} --repo "${GITHUB_REPOSITORY}" \
       --title "${issue_title}" \
       --body "${new_body}" \
       --label "ai:clarification" \
@@ -15192,13 +15191,14 @@ REISSUE_EOF
       local new_url new_url_clean new_num
       ensure_label_exists "ai:clarification"
       ensure_label_exists "ai:orchestrator-managed"
-      mapfile -t _engine_label_args < <(engine_label_create_args)
+      local -a _heal_reissue_label_args=()
       if [ "${orig_issue_is_heal}" = true ] || printf '%s' "${orig_body}" | grep -q 'workflow-failure-heal:fp='; then
         new_body="$(printf '%s' "${new_body}" | PYTHONDONTWRITEBYTECODE=1 python3 "${HEAL_SUPPORT_HELPER}" heal-scope carry --body-file /dev/stdin --parent-repo "${GITHUB_REPOSITORY}" --parent-issue "${issue_num}" --pipeline-login "${NOOP_CAP_TRUSTED_LOGIN:-}")" || return 1
         ensure_label_exists 'ai:workflow-heal'
-        _engine_label_args+=(--label 'ai:workflow-heal')
+        _heal_reissue_label_args=(--label 'ai:workflow-heal')
       fi
-      new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" --repo "${GITHUB_REPOSITORY}" \
+      mapfile -t _engine_label_args < <(engine_label_create_args)
+      new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" ${_heal_reissue_label_args[@]+"${_heal_reissue_label_args[@]}"} --repo "${GITHUB_REPOSITORY}" \
         --title "${orig_title}" \
         --body "${new_body}" \
         --label "ai:clarification" \
@@ -18410,13 +18410,14 @@ ${orig_body}
 REISSUE_EOF
 )"
         ensure_label_exists "ai:clarification"
-        mapfile -t _engine_label_args < <(engine_label_create_args "${labels_json:-[]}")
+        local -a _heal_reissue_label_args=()
         if [ "${orig_issue_is_heal}" = true ] || printf '%s' "${orig_body}" | grep -q 'workflow-failure-heal:fp=' || printf '%s' "${labels_json:-[]}" | jq -e 'index("ai:workflow-heal") != null' >/dev/null 2>&1; then
           new_body="$(printf '%s' "${new_body}" | PYTHONDONTWRITEBYTECODE=1 python3 "${HEAL_SUPPORT_HELPER}" heal-scope carry --body-file /dev/stdin --parent-repo "${GITHUB_REPOSITORY}" --parent-issue "${issue_num}" --pipeline-login "${NOOP_CAP_TRUSTED_LOGIN:-}")" || return 1
           ensure_label_exists 'ai:workflow-heal'
-          _engine_label_args+=(--label 'ai:workflow-heal')
+          _heal_reissue_label_args=(--label 'ai:workflow-heal')
         fi
-        new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" --repo "${GITHUB_REPOSITORY}" --title "${orig_title}" --body "${new_body}" --label "ai:clarification" 2>/dev/null || echo "")"
+        mapfile -t _engine_label_args < <(engine_label_create_args "${labels_json:-[]}")
+        new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" ${_heal_reissue_label_args[@]+"${_heal_reissue_label_args[@]}"} --repo "${GITHUB_REPOSITORY}" --title "${orig_title}" --body "${new_body}" --label "ai:clarification" 2>/dev/null || echo "")"
         new_url_clean="$(printf '%s\n' "${new_url}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
         new_num="$(basename "${new_url_clean%%[?#]*}")"
         if [[ "${new_num}" =~ ^[0-9]+$ ]]; then

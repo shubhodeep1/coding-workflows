@@ -1166,6 +1166,8 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_PLAN || '40' }}
           PLAN_ENGINE: ${{ steps.ai_engine.outputs.engine || 'codex' }}
+          WORKFLOW_HEAL_EVIDENCE_MAX_BYTES: ${{ vars.WORKFLOW_HEAL_EVIDENCE_MAX_BYTES || '' }}
+          WORKFLOW_HEAL_EVIDENCE_MAX_RUNS: ${{ vars.WORKFLOW_HEAL_EVIDENCE_MAX_RUNS || '' }}
         run: |
           if [ "$(python3 scripts/workflow_failure_heal.py heal-route --issue-json "${ISSUE_META_FILE}")" = true ]; then
             echo 'HEAL_ROUTE=true' >> "${GITHUB_ENV}"

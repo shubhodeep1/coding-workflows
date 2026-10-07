@@ -88,6 +88,19 @@ def test_missing_trusted_scope_refuses_before_editor(tmp_path: Path) -> None:
 	assert gh_calls.read_text().index("issue comment") < gh_calls.read_text().index("issue edit")
 
 
+def test_preflight_fails_closed_when_heal_classification_fails(tmp_path: Path) -> None:
+	# A classifier crash must not read as "not a heal issue" (empty output).
+	issue = tmp_path / "issue.json"
+	issue.write_text("{not json")
+	env_file = tmp_path / "env"
+	env = dict(os.environ, ISSUE_META_FILE=str(issue), ISSUE_NUMBER="42", GITHUB_REPOSITORY="owner/repo", GITHUB_ENV=str(env_file), WORKFLOW_HEAL_PY=str(ROOT / "scripts/workflow_failure_heal.py"), PYTHONDONTWRITEBYTECODE="1")
+	result = subprocess.run(["bash", str(ROOT / "scripts/implement_heal_preflight.sh")], env=env, capture_output=True, text=True, check=False)
+	assert result.returncode == 1, result.stdout + result.stderr
+	assert "reason=classification_failed" in result.stderr
+	assert "SKIP_IMPLEMENT=true" in env_file.read_text()
+	assert "HEAL_ROUTE=true" not in env_file.read_text()
+
+
 @pytest.mark.parametrize("repair_needed", [False, True])
 def test_isolated_editor_does_not_pass_pat_to_container_or_run_host_edits(tmp_path: Path, repair_needed: bool) -> None:
 	host = tmp_path / "host"

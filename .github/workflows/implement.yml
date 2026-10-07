@@ -1790,6 +1790,8 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          WORKFLOW_HEAL_EVIDENCE_MAX_BYTES: ${{ vars.WORKFLOW_HEAL_EVIDENCE_MAX_BYTES || '' }}
+          WORKFLOW_HEAL_EVIDENCE_MAX_RUNS: ${{ vars.WORKFLOW_HEAL_EVIDENCE_MAX_RUNS || '' }}
         run: |
           bash scripts/implement_heal_preflight.sh
 
@@ -2265,6 +2267,7 @@ jobs:
           # timeout below continues to honor it.
           EDITOR_IDLE_TIMEOUT: ${{ vars.EDITOR_IDLE_TIMEOUT || '1200' }}
           EDITOR_MAX_WALL: ${{ vars.EDITOR_MAX_WALL || '7800' }}
+          HEAL_ISOLATED_EDITOR_WALL_SECS: ${{ vars.HEAL_ISOLATED_EDITOR_WALL_SECS || '' }}
           CODEX_HEARTBEAT_ENABLED: ${{ vars.CODEX_HEARTBEAT_ENABLED || '1' }}
           CODEX_HEARTBEAT_INTERVAL_SECS: ${{ vars.CODEX_HEARTBEAT_INTERVAL_SECS || '30' }}
           CODEX_STALL_GUARD_ENABLED: ${{ vars.CODEX_STALL_GUARD_ENABLED || 'false' }}
