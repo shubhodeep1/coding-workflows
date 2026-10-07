@@ -201,11 +201,11 @@ if [ "${_resolver_allowlist_count}" -gt 0 ]; then
   sed 's/^/ - /' "${RESOLVER_ALLOWLIST_FILE}" || true
 fi
 
-# Deterministic union-merge for the generated workspace manifest.
+# Deterministic resolution for the generated workspace manifest.
 # .ai/.workspace_source_manifest.txt is a sorted, unique-line file
 # inventory written by workspace_init.sh's materialize_source_tree();
-# every AI PR that adds files appends lines to it, so any two
-# concurrently-open sibling PRs merging into a shared base conflict on
+# older branches may still track it, so two
+# concurrently-open sibling PRs merging into a shared base could conflict on
 # adjacent insertions with near-certainty (observed on PR #3909: three
 # resolver invocations in one day, each with the manifest as the ONLY
 # conflicted path).  For a sorted set-of-lines file the exact 3-way
@@ -216,7 +216,8 @@ fi
 # check: when it was the only conflicted path the merge is committed
 # below without any model invocation, and when other conflicts remain
 # the manifest is already staged in the merge index and drops out of
-# the resolver prompt/allowlist/snapshot naturally.
+# the resolver prompt/allowlist/snapshot naturally. When only one side
+# tracks it, remove it from the index but keep its generated worktree copy.
 #
 # Guards:
 #   - CONFLICT_MANIFEST_UNION_ENABLED (default true) is the kill

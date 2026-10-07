@@ -1050,7 +1050,7 @@ if [ -n "${_targeted_paths_source}" ]; then
     --header-text "These files were modified by the previous autofix iteration (or by this PR overall, on the first iteration). Their current contents are inlined so you can apply reviewer findings without re-reading them. If a file is included verbatim below, prefer editing it directly over wide exploration. Files marked \"would overflow total budget\" must be read with the read tool — never assume their content is in this block."
     --output "${TARGETED_FILES_CONTEXT_FILE}"
   )
-  if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -s "${EDITOR_SEMBLE_QUERY_FILE}" ]; then
+  if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -s "${EDITOR_SEMBLE_QUERY_FILE}" ] && [ "$(printf '%s' "${TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
     targeted_file_context_args+=(
       --semble-bin "${SEMBLE_BIN:-}"
       --semble-index "${SEMBLE_INDEX_PATH:-}"
@@ -1059,7 +1059,11 @@ if [ -n "${_targeted_paths_source}" ]; then
       --semble-fallback marker
     )
   fi
-  "${targeted_file_context_args[@]}" || \
+  # The editor prompt is prefixed with pre_assembled_static.txt; overflow
+  # Semble telemetry counts static_dup_bytes against it.
+  _targeted_static_file=""
+  [ ! -s ./pre_assembled_static.txt ] || _targeted_static_file="${PWD}/pre_assembled_static.txt"
+  SEMBLE_STATIC_CONTEXT_FILE="${_targeted_static_file}" "${targeted_file_context_args[@]}" || \
     echo "::warning::targeted_file_context.py failed; continuing without targeted-context block"
 fi
 
