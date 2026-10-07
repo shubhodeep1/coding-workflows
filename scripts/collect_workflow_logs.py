@@ -296,6 +296,11 @@ def _run_snapshot_for_cache(run: dict[str, Any]) -> dict[str, Any]:
         "created_at",
         "run_started_at",
         "updated_at",
+        # Origin fields (issue #6637): kept so the HTTP 304 snapshot path can
+        # still classify fork-origin runs. head_repository stays the raw
+        # API object, the shape _run_origin_trust reads.
+        "event",
+        "head_repository",
     )
     snapshot = {key: run.get(key) for key in keys}
     snapshot["_workflow_family"] = run.get("_workflow_family")
@@ -801,6 +806,7 @@ def _ensure_run_diagnostics(run: dict[str, Any]) -> dict[str, Any]:
         "failure",
         "not_selected",
         "cached",
+        "excluded_untrusted_origin",
     }:
         run["log_download_status"] = "not_selected"
     if not isinstance(run.get("observed_job_conclusions"), list):
@@ -825,6 +831,67 @@ def _ensure_run_diagnostics(run: dict[str, Any]) -> dict[str, Any]:
         run["diagnostic_failure_reason"] = _bound_diagnostic_reason_parts(normalized_parts)
     run["workflow_validation_annotations_status"] = WORKFLOW_VALIDATION_ANNOTATIONS_STATUS
     return run
+
+
+def _run_head_repository_name(run_payload: dict[str, Any]) -> str | None:
+    head_repository = run_payload.get("head_repository")
+    if isinstance(head_repository, dict):
+        full_name = head_repository.get("full_name")
+        if isinstance(full_name, str) and full_name.strip():
+            return full_name.strip()
+    return None
+
+
+def _run_origin_trust(run_payload: dict[str, Any], repository: str) -> str:
+    """Classify a raw API run payload as trusted, fork or origin_unknown.
+
+    Issue #6637: a fork PR controls the text in its CI logs and its own
+    workflow's job/step names. Such text must never reach the log-analysis
+    model. Runs without origin data whose event is a pull_request variant (or
+    missing, e.g. older cache snapshots) fail closed as origin_unknown.
+    """
+    head_name = _run_head_repository_name(run_payload)
+    if head_name is not None:
+        if head_name.lower() != str(repository or "").strip().lower():
+            return "fork"
+        return "trusted"
+    event = run_payload.get("event")
+    event_text = str(event).strip() if event is not None else ""
+    if not event_text or event_text.startswith("pull_request"):
+        return "origin_unknown"
+    return "trusted"
+
+
+def _apply_untrusted_origin_exclusion(row: dict[str, Any]) -> bool:
+    """Strip log-derived and fork-controlled text from an untrusted-origin row.
+
+    Run metadata (conclusion, status, retries, durations, timestamps, job
+    conclusions) is kept so report totals stay unchanged. Returns True when
+    the row was excluded.
+    """
+    if row.get("origin_trust", "trusted") == "trusted":
+        return False
+    row["log_download_status"] = "excluded_untrusted_origin"
+    for key in ("log_excerpts", "cost_telemetry", "log_summary", "log_summary_meta", "full_logs"):
+        row.pop(key, None)
+    row["failure_point"] = {"job_name": None, "step_name": None}
+    _set_diagnostic_failure_reason(row, "logs", None)
+    return True
+
+
+def _stamp_run_origin(row: dict[str, Any], run_payload: dict[str, Any], repository: str) -> None:
+    """Stamp origin fields from the live run payload and exclude untrusted rows."""
+    row["event"] = run_payload.get("event")
+    row["head_repository"] = _run_head_repository_name(run_payload)
+    row["origin_trust"] = _run_origin_trust(run_payload, repository)
+    if _apply_untrusted_origin_exclusion(row):
+        # Only repository, run id and reason: no log text, workflow name or
+        # head-repository name, which a fork author controls.
+        print(
+            f"WORKFLOW_LOG_FORK_EXCLUDED repository={_sanitize_diagnostic_text(repository)} "
+            f"run_id={_to_int(row.get('run_id'), 0)} reason={row['origin_trust']}",
+            file=sys.stderr,
+        )
 
 
 def _sanitize_missing_log_archive_detail(detail: str) -> str:
@@ -1042,6 +1109,10 @@ def compute_run_metrics(
     }
     if diagnostic_failure_reason is not None:
         _set_diagnostic_failure_reason(row, "jobs", diagnostic_failure_reason)
+    row["event"] = run.get("event")
+    row["head_repository"] = _run_head_repository_name(run)
+    row["origin_trust"] = _run_origin_trust(run, repository)
+    _apply_untrusted_origin_exclusion(row)
     return row
 
 
@@ -1139,10 +1210,18 @@ def _run_identity(run: dict[str, Any]) -> tuple[str, int]:
 
 
 def _eligible_runs_for_log_selection(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # Issue #6637: untrusted-origin runs (fork PRs, unknown PR origin) never
+    # feed log download, excerpts, or the categorized export. Rows without an
+    # origin stamp are treated as trusted; every production row is stamped
+    # in main().
     return [
         run
         for run in runs
-        if isinstance(run, dict) and bool(run.get("repository")) and _to_int(run.get("run_id"), 0) > 0
+        if isinstance(run, dict)
+        and bool(run.get("repository"))
+        and _to_int(run.get("run_id"), 0) > 0
+        and run.get("origin_trust", "trusted") == "trusted"
+        and run.get("log_download_status") != "excluded_untrusted_origin"
     ]
 
 
@@ -1910,11 +1989,18 @@ def main(argv: list[str] | None = None) -> int:
                 row_copy = _ensure_run_diagnostics(dict(reused_row))
                 if (run.get("conclusion") or "").lower() in {"failure", "cancelled"}:
                     row_copy["jobs_fetch_status"] = "cached"
+                # Re-stamp origin from the live run, never from the cached row,
+                # so a fork row cached before #6637 cannot re-emit its excerpts.
+                _stamp_run_origin(row_copy, run, repo)
                 cached_log_data_available = (
                     _cached_log_excerpts(row_copy) is not None
                     and _cached_cost_telemetry(row_copy) is not None
                 )
-                if cached_log_data_available:
+                if row_copy.get("origin_trust") != "trusted":
+                    # Excluded: _stamp_run_origin already stripped the log data
+                    # and set log_download_status=excluded_untrusted_origin.
+                    pass
+                elif cached_log_data_available:
                     row_copy["log_download_status"] = "cached"
                     _set_diagnostic_failure_reason(row_copy, "logs", None)
                 elif row_copy.get("log_download_status") not in {
@@ -1969,6 +2055,7 @@ def main(argv: list[str] | None = None) -> int:
                 jobs_fetch_status=jobs_fetch_status,
                 diagnostic_failure_reason=jobs_failure_reason,
             )
+            _stamp_run_origin(row, run, repo)
             run_rows.append(row)
             collected_rows_for_repo.append(dict(row))
 

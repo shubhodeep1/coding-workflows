@@ -1931,6 +1931,7 @@ and shipped:
 - `WORKFLOW_HEAL_PHASE_REPORT`
 - `WORKFLOW_HEAL_PR_RECONCILE`
 - `WORKFLOW_HEAL`
+- `WORKFLOW_LOG_FORK_EXCLUDED` (`scripts/collect_workflow_logs.py`: `repository= run_id= reason=fork|origin_unknown`; a fork-origin or unknown-origin pull-request run keeps its counts and conclusion but its log text, cost telemetry and job/step names are dropped, and neither the collector nor `scripts/summarize_unselected_runs.py` fetches its log archive, so the workflow-log-analysis model never sees fork-written text; `log_download_status=excluded_untrusted_origin`)
 - `AUTOFIX_FINGERPRINT`
 - `AUTOFIX_FINGERPRINT_CAP_TRIPPED`
 - `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`
@@ -2158,6 +2159,7 @@ LOG_PREFIX.name=WORKFLOW_HEAL_AUTOFIX_REPORT
 LOG_PREFIX.name=WORKFLOW_HEAL_PHASE_REPORT
 LOG_PREFIX.name=WORKFLOW_HEAL_PR_RECONCILE
 LOG_PREFIX.name=WORKFLOW_HEAL
+LOG_PREFIX.name=WORKFLOW_LOG_FORK_EXCLUDED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_TRIPPED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED
