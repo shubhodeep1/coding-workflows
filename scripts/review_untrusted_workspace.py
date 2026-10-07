@@ -462,19 +462,55 @@ def refresh(host, workspace, manifest):
 			os.chmod(target, mode)
 
 
-def check_paths(host, paths_file):
+# Names the conflict-path report may echo: plain relative paths only, so a
+# rejected name can never carry a workflow command, markup or a newline.
+REPORTABLE_PATH_RE = re.compile(r"[A-Za-z0-9_.][A-Za-z0-9._/-]{0,199}")
+
+
+def check_paths(host, paths_file, report_file=None):
+	"""Exit 1 when any conflicted path cannot enter the review sandbox.
+
+	Without ``report_file`` the first rejected path stops the check (the
+	original contract). With it, every path is checked and each rejection is
+	written as one line: ``host_only<TAB><path>`` when ``allowed()`` refuses a
+	plainly named path that sits on the host checkout as a regular file or is
+	absent (the sandbox policy keeps it out, so only a human can resolve it),
+	``unsafe`` with no name otherwise (symlinks, odd names, unreadable
+	entries). Unsafe names are never echoed.
+	"""
 	with paths_file.open(encoding="utf-8", newline="") as handle:
 		path_lines = handle.read().split("\n")
+	rejections = []
 	for name in path_lines:
 		if not name:
 			continue
 		try:
 			if not allowed(name):
-				raise ValueError("unsupported path")
+				raise LookupError("policy")
 			checked_path(host, name)
+		except LookupError:
+			rejections.append(_host_only_or_unsafe(host, name))
 		except (ValueError, OSError):
-			print("unsupported path", file=sys.stderr)
-			raise SystemExit(1) from None
+			rejections.append("unsafe")
+		if rejections and report_file is None:
+			break
+	if report_file is not None:
+		report_file.write_text("".join(entry + "\n" for entry in rejections), encoding="utf-8")
+	if rejections:
+		print("unsupported path", file=sys.stderr)
+		raise SystemExit(1)
+
+
+def _host_only_or_unsafe(host, name):
+	if not REPORTABLE_PATH_RE.fullmatch(name) or ".." in PurePosixPath(name).parts or "//" in name:
+		return "unsafe"
+	try:
+		target = checked_path(host, name)
+		if target.exists() and not target.is_file():
+			return "unsafe"
+	except (ValueError, OSError):
+		return "unsafe"
+	return "host_only\t" + name
 
 
 def main():
@@ -502,9 +538,10 @@ def main():
 			raise SystemExit(1) from None
 		return
 	# snapshot alone takes an optional fifth argument: the host Git dir.
-	if sys.argv[1:2] == ["check-paths"] and len(sys.argv) == 4:
+	# check-paths takes an optional fourth argument: the rejection report.
+	if sys.argv[1:2] == ["check-paths"] and len(sys.argv) in (4, 5):
 		try:
-			check_paths(Path(sys.argv[2]), Path(sys.argv[3]))
+			check_paths(Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4]) if len(sys.argv) == 5 else None)
 		except (OSError, UnicodeError):
 			print("unsupported path", file=sys.stderr)
 			raise SystemExit(1) from None

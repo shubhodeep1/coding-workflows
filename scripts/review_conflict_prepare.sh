@@ -228,7 +228,13 @@ fi
 #   - Only a two-sided content conflict (index stages 2 AND 3 both
 #     present) is handled; base stage 1 absent is the add/add case,
 #     where the set algebra degenerates to plain union.  Delete/modify
-#     shapes fall through to the Codex resolver untouched.
+#     shapes fall through to the Codex resolver untouched.  The stage
+#     list is sorted and space-joined ("1 2 3 " or "2 3 "), so the
+#     match is the single adjacent pair " 2 3 ".  The former
+#     `*' 2 '*' 3 '*` pattern needed two separate spaces around the
+#     2 and never matched, so this merge never ran (PR #6438: the
+#     manifest reached the sandbox path check and failed the resolver
+#     closed on every run).
 # LC_ALL=C for sort/comm matches Python's str sort in
 # materialize_source_tree() (bytewise over UTF-8 == code-point order),
 # so the merged file satisfies the manifest-sorting contract.
@@ -243,7 +249,7 @@ if [ "${CONFLICT_MANIFEST_UNION_ENABLED:-true}" = "true" ] \
     *)
       _mu_stages="$(git ls-files -u -- "${MANIFEST_UNION_PATH}" | awk '{print $3}' | sort -u | tr '\n' ' ')"
       case " ${_mu_stages}" in
-        *' 2 '*' 3 '*)
+        *' 2 3 '*)
           _mu_dir="$(mktemp -d)"
           git show ":1:${MANIFEST_UNION_PATH}" > "${_mu_dir}/base" 2>/dev/null || : > "${_mu_dir}/base"
           git show ":2:${MANIFEST_UNION_PATH}" > "${_mu_dir}/ours"

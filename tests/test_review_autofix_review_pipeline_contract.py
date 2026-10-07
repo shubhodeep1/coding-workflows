@@ -7717,7 +7717,7 @@ def test_identical_failure_fingerprint_cap_gate_wiring() -> None:
 	deterministic = gate.index("# Deterministic pre-review skip (last gate check):")
 	assert terminal < cap < deterministic
 	assert 'if [ "${FORCE_RB_JUDGE:-false}" = "true" ]; then' in gate
-	for output in ("fingerprint_cap", "fingerprint_cap_fp", "fingerprint_cap_reason", "fingerprint_cap_count", "fingerprint_cap_max", "fingerprint_cap_already_applied", "fingerprint_cap_marker_author_login"):
+	for output in ("fingerprint_cap", "fingerprint_cap_fp", "fingerprint_cap_reason", "fingerprint_cap_count", "fingerprint_cap_max", "fingerprint_cap_already_applied", "fingerprint_cap_non_retryable", "fingerprint_cap_marker_author_login"):
 		assert f'echo "{output}=${{' in gate, output
 		assert f"{output}: ${{{{ steps.evaluate.outputs.{output} }}}}" in _job_block("gate"), output
 	gate_job = _job_block("gate")
@@ -7752,7 +7752,11 @@ def test_identical_failure_fingerprint_cap_block_job_wiring() -> None:
 	assert "extract_repo_scoped_issue_refs_from_text" in job
 	assert 'set_issue_phase_label_resilient "${issue_number}" "ai:review-blocked" "${REPOSITORY}"' in job
 	assert '"repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:review-blocked"' in job
-	assert "**AI review/autofix stopped: identical failure repeated**" in job
+	assert "**AI review/autofix stopped: ${cap_title}**" in job
+	assert 'cap_title="identical failure repeated"' in job and 'cap_title="non-retryable failure"' in job
+	assert "FINGERPRINT_CAP_NON_RETRYABLE: ${{ needs.gate.outputs.fingerprint_cap_non_retryable }}" in job
+	# The quoted First error comes from the comments already fetched (§15).
+	assert job.count('"${fresh_cap_comments_file}" 2>/dev/null || true)"') == 1
 	assert "<!-- review-autofix-failure-cap:v1 head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP}" in job
 	assert 'AUTOFIX_FAILURE_REASON="identical_failure_cap"' in job
 	assert 'WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK="1"' in job

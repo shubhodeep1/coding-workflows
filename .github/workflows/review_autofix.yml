@@ -308,6 +308,7 @@ jobs:
       fingerprint_cap_count: ${{ steps.evaluate.outputs.fingerprint_cap_count }}
       fingerprint_cap_max: ${{ steps.evaluate.outputs.fingerprint_cap_max }}
       fingerprint_cap_already_applied: ${{ steps.evaluate.outputs.fingerprint_cap_already_applied }}
+      fingerprint_cap_non_retryable: ${{ steps.evaluate.outputs.fingerprint_cap_non_retryable }}
       fingerprint_cap_marker_author_login: ${{ steps.evaluate.outputs.fingerprint_cap_marker_author_login }}
     steps:
       - name: Record GH_PAT budget at review gate start
@@ -1119,7 +1120,9 @@ jobs:
           # fingerprint-cap-block job, which labels the linked issues (or the
           # PR) ai:review-blocked, posts one cap comment and reports the
           # failure to workflow failure heal. A push (new head) resets the
-          # count by construction.
+          # count by construction. A reason the helper reports as
+          # non_retryable=true (NON_RETRYABLE_FAILURE_REASONS) trips the cap on
+          # its first marker (PR #6438: ~28 identical resolver runs).
           #
           # Scope and fail-open rules:
           #   * Every event (pull_request and workflow_dispatch) of a PR with
@@ -1139,6 +1142,7 @@ jobs:
           FINGERPRINT_CAP_REASON=""
           FINGERPRINT_CAP_COUNT="0"
           FINGERPRINT_CAP_ALREADY_APPLIED="false"
+          FINGERPRINT_CAP_NON_RETRYABLE="false"
           FINGERPRINT_CAP_MAX="${REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL:-3}"
           case "${FINGERPRINT_CAP_MAX}" in
             ''|*[!0-9]*|0) FINGERPRINT_CAP_MAX=3 ;;
@@ -1184,11 +1188,14 @@ jobs:
                     FINGERPRINT_CAP_ALREADY_APPLIED="true"
                     echo "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP} count=${FINGERPRINT_CAP_COUNT}"
                   fi
-                  if [ "${FINGERPRINT_CAP_COUNT}" -ge "${FINGERPRINT_CAP_MAX}" ]; then
+                  if [ "${FINGERPRINT_CAP_COUNT}" -ge 1 ] && [ "$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "non_retryable" { print $2 }' | tail -n 1)" = "true" ]; then
+                    FINGERPRINT_CAP_NON_RETRYABLE="true"
+                  fi
+                  if [ "${FINGERPRINT_CAP_COUNT}" -ge "${FINGERPRINT_CAP_MAX}" ] || [ "${FINGERPRINT_CAP_NON_RETRYABLE}" = "true" ]; then
                     FINGERPRINT_CAP="true"
                     SHOULD_RUN="false"
                     SKIP_REASON="fingerprint_cap"
-                    echo "AUTOFIX_FINGERPRINT_CAP_TRIPPED pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} count=${FINGERPRINT_CAP_COUNT} max=${FINGERPRINT_CAP_MAX} already_applied=${FINGERPRINT_CAP_ALREADY_APPLIED}"
+                    echo "AUTOFIX_FINGERPRINT_CAP_TRIPPED pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} count=${FINGERPRINT_CAP_COUNT} max=${FINGERPRINT_CAP_MAX} already_applied=${FINGERPRINT_CAP_ALREADY_APPLIED} non_retryable=${FINGERPRINT_CAP_NON_RETRYABLE}"
                   else
                     echo "AUTOFIX_FINGERPRINT cap=not_tripped pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP:-none} reason=${FINGERPRINT_CAP_REASON:-none} count=${FINGERPRINT_CAP_COUNT} max=${FINGERPRINT_CAP_MAX}"
                   fi
@@ -1702,6 +1709,7 @@ jobs:
           echo "fingerprint_cap_count=${FINGERPRINT_CAP_COUNT}" >> "${GITHUB_OUTPUT}"
           echo "fingerprint_cap_max=${FINGERPRINT_CAP_MAX}" >> "${GITHUB_OUTPUT}"
           echo "fingerprint_cap_already_applied=${FINGERPRINT_CAP_ALREADY_APPLIED}" >> "${GITHUB_OUTPUT}"
+          echo "fingerprint_cap_non_retryable=${FINGERPRINT_CAP_NON_RETRYABLE}" >> "${GITHUB_OUTPUT}"
           echo "fingerprint_cap_marker_author_login=${gate_marker_author_login}" >> "${GITHUB_OUTPUT}"
 
       - name: Withdraw stale auto-merge and publish head-gate status
@@ -2384,6 +2392,7 @@ jobs:
       FINGERPRINT_CAP_COUNT: ${{ needs.gate.outputs.fingerprint_cap_count }}
       FINGERPRINT_CAP_MAX: ${{ needs.gate.outputs.fingerprint_cap_max }}
       FINGERPRINT_CAP_ALREADY_APPLIED: ${{ needs.gate.outputs.fingerprint_cap_already_applied }}
+      FINGERPRINT_CAP_NON_RETRYABLE: ${{ needs.gate.outputs.fingerprint_cap_non_retryable }}
       FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN: ${{ needs.gate.outputs.fingerprint_cap_marker_author_login }}
       WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
       REPORT_WORKFLOW_NAME: ${{ github.workflow }}
@@ -2550,10 +2559,26 @@ jobs:
           fi
 
           cap_marker="<!-- review-autofix-failure-cap:v1 head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} count=${FINGERPRINT_CAP_COUNT} -->"
+          cap_title="identical failure repeated"
+          cap_first_error=""
+          cap_lead="The last ${FINGERPRINT_CAP_COUNT} review/autofix runs on head \`${PR_HEAD_SHA:0:12}\` failed the same way"
+          if [ "${FINGERPRINT_CAP_NON_RETRYABLE:-false}" = "true" ]; then
+            # One non-retryable failure is enough (PR #6438). Quote the
+            # failed run's "First error" line, which names e.g. the host-only
+            # conflicted paths, from the trusted author's newest failure
+            # comment for this head (already fetched above, §15).
+            cap_title="non-retryable failure"
+            cap_lead="The last review/autofix run on head \`${PR_HEAD_SHA:0:12}\` failed with a non-retryable reason"
+            cap_first_error="$(jq -r --arg author "${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}" --arg head "${PR_HEAD_SHA}" \
+              '[.[] | select((.author_login // "" | ascii_downcase) == ($author | ascii_downcase)) | (.body // "") | select(contains("<!-- review-autofix-failure:v1 head=" + $head + " "))] | last // "" | (capture("[*][*]First error:[*][*] `(?<e>[^`\n]{1,400})`")? // {e: ""}).e' \
+              "${fresh_cap_comments_file}" 2>/dev/null || true)"
+          fi
           BODY="$(cat <<EOF
-          **AI review/autofix stopped: identical failure repeated**
+          **AI review/autofix stopped: ${cap_title}**
 
-          The last ${FINGERPRINT_CAP_COUNT} review/autofix runs on head \`${PR_HEAD_SHA:0:12}\` failed the same way (failure reason \`${FINGERPRINT_CAP_REASON}\`, fingerprint \`${FINGERPRINT_CAP_FP:0:16}\`). Another run on this head would fail again, so this run stopped in the gate before any reviewer or editor model call.
+          ${cap_lead} (failure reason \`${FINGERPRINT_CAP_REASON}\`, fingerprint \`${FINGERPRINT_CAP_FP:0:16}\`). Another run on this head would fail again, so this run stopped in the gate before any reviewer or editor model call.${cap_first_error:+
+
+          **First error:** \`${cap_first_error}\`}
 
           - Labeled \`ai:review-blocked\`: ${labeled_summary}.
           - This failure is also sent to workflow failure heal (run log line \`WORKFLOW_HEAL_AUTOFIX_REPORT\`).
@@ -2572,6 +2597,9 @@ jobs:
 
           if type tg_send_msg >/dev/null 2>&1; then
             MSG="⚠️ Review/autofix stopped: identical failure repeated ${FINGERPRINT_CAP_COUNT}x on #${PR_NUMBER}"
+            if [ "${FINGERPRINT_CAP_NON_RETRYABLE:-false}" = "true" ]; then
+              MSG="⚠️ Review/autofix stopped: non-retryable failure on #${PR_NUMBER}"
+            fi
             MSG+=$'\n'
             MSG+="Reason: ${FINGERPRINT_CAP_REASON} — labeled ai:review-blocked (${labeled_summary})"
             MSG+=$'\n'
