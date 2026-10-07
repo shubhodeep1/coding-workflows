@@ -290,8 +290,11 @@ if [ -n "${PARENT_ISSUE}" ]; then
 		log "error parent_body_parse_failed issue=${PARENT_ISSUE}"
 		exit 1
 	fi
-	PGEN="$(printf '%s' "${PARENT_BODY}" | sed -n "s/.*${MARKER_PREFIX}gen=\([0-9]\{1,\}\).*/\1/p" | head -1)"
-	PROOT="$(printf '%s' "${PARENT_BODY}" | sed -n "s/.*${MARKER_PREFIX}root=\([0-9a-f]\{64\}\).*/\1/p" | head -1)"
+	# Read only line-leading HTML-comment markers (the shape this script
+	# writes), so a prose or inline-code mention such as
+	# `<!-- check-failure-triage:gen=2 -->` cannot set the lineage.
+	PGEN="$(printf '%s' "${PARENT_BODY}" | sed -n "s/^[[:space:]]*<!-- ${MARKER_PREFIX}gen=\([0-9]\{1,\}\)[[:space:]]*-->.*/\1/p" | head -1)"
+	PROOT="$(printf '%s' "${PARENT_BODY}" | sed -n "s/^[[:space:]]*<!-- ${MARKER_PREFIX}root=\([0-9a-f]\{64\}\)[[:space:]]*-->.*/\1/p" | head -1)"
 	if [[ "${PGEN}" =~ ^[0-9]+$ ]]; then
 		GEN=$((PGEN + 1))
 		[ -n "${PROOT}" ] && ROOT="${PROOT}"
