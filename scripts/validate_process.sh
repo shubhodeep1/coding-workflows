@@ -3018,6 +3018,47 @@ run_validate_codex_attempt() {
   bash "${CODEX_ISOLATED_EXEC}" run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" > "${output_file}" 2> >(tee -a "${log_file}" >&2)
 }
 
+# Engine selection for the validate agents (role VALIDATE): Claude by default
+# through the trusted engine root validate.yml stages from the verified
+# support clone (CLAUDE_ENGINE_SUPPORT_DIR, default
+# ${RUNNER_TEMP}/claude-engine-support), the unchanged
+# run_validate_codex_attempt otherwise (AI_ENGINE_VALIDATE=codex, the ai:codex
+# label, Claude unavailable, or no trusted root). ai_engine.sh is never sourced
+# from the checkout. The Claude run is read-only, like every codex attempt.
+run_validate_engine_attempt() {
+  local role="$1"
+  local phase_name="$2"
+  local prompt_file="$3"
+  local output_file="$4"
+  local log_file="$5"
+  local status_file="$6"
+  local effort_hint="${7:-${MODEL_REASONING_EFFORT:-}}"
+  local engine_root="${CLAUDE_ENGINE_SUPPORT_DIR:-${RUNNER_TEMP:-/tmp}/claude-engine-support}"
+  local engine_script="${engine_root}/scripts/ai_engine.sh"
+
+  if [ ! -f "${engine_script}" ] || [ -L "${engine_script}" ]; then
+    echo "AI_ENGINE_FALLBACK role=${role} reason=engine_support_missing" >&2
+    run_validate_codex_attempt "${phase_name}" "${prompt_file}" "${output_file}" "${log_file}" "${status_file}"
+    return $?
+  fi
+
+  if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
+    bash "${WORKSPACE_SAFETY_CHECK_HELPER}" || return $?
+  fi
+
+  (
+    # shellcheck source=/dev/null
+    if ! source "${engine_script}"; then
+      echo "AI_ENGINE_FALLBACK role=${role} reason=engine_support_missing" >&2
+      run_validate_codex_attempt "${phase_name}" "${prompt_file}" "${output_file}" "${log_file}" "${status_file}"
+      exit $?
+    fi
+    AI_ENGINE_MODEL_HINT="${MODEL_EDITOR:-}" AI_ENGINE_EFFORT_HINT="${effort_hint}" \
+      claude_run_selected "${role}" "${prompt_file}" "${output_file}" "${PWD}" -- \
+      run_validate_codex_attempt "${phase_name}" "${prompt_file}" "${output_file}" "${log_file}" "${status_file}"
+  )
+}
+
 export PATH="${HOME}/.local/bin:${PATH}"
 
 
@@ -3211,7 +3252,7 @@ else
   emit_validate_substate "validate_discover" "discover" "InitializingSession" "${attempt}"
   emit_validate_substate "validate_discover" "discover" "StreamingTurn" "${attempt}"
   set +e
-  run_validate_codex_attempt "validate_discover" "${DISCOVER_PROMPT_FILE}" "${DISCOVER_OUTPUT_FILE}" "${DISCOVER_LOG_FILE}" "${discover_stall_status_file}"
+  run_validate_engine_attempt "VALIDATE" "validate_discover" "${DISCOVER_PROMPT_FILE}" "${DISCOVER_OUTPUT_FILE}" "${DISCOVER_LOG_FILE}" "${discover_stall_status_file}" "${MODEL_REASONING_EFFORT_DISCOVER:-${MODEL_REASONING_EFFORT:-}}"
   DISCOVER_EXIT=$?
   set -e
   emit_validate_substate "validate_discover" "discover" "Finishing" "${attempt}" "${DISCOVER_LOG_FILE}"
@@ -3968,7 +4009,7 @@ for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
   emit_validate_substate "validate_diagnose" "diagnose" "InitializingSession" "${attempt}"
   emit_validate_substate "validate_diagnose" "diagnose" "StreamingTurn" "${attempt}"
   set +e
-  run_validate_codex_attempt "validate_diagnose" "${DIAGNOSE_PROMPT_FILE}" "${DIAGNOSE_OUTPUT_FILE}" "${DIAGNOSE_LOG_FILE}" "${diagnose_stall_status_file}"
+  run_validate_engine_attempt "VALIDATE" "validate_diagnose" "${DIAGNOSE_PROMPT_FILE}" "${DIAGNOSE_OUTPUT_FILE}" "${DIAGNOSE_LOG_FILE}" "${diagnose_stall_status_file}" "${MODEL_REASONING_EFFORT:-}"
   DIAGNOSE_EXIT=$?
   set -e
   emit_validate_substate "validate_diagnose" "diagnose" "Finishing" "${attempt}" "${DIAGNOSE_LOG_FILE}"
