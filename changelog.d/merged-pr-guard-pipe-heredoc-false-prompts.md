@@ -9,6 +9,8 @@ A pipe anywhere before a `git push` (`git log ... | head -3; git push origin <br
 | `cat <<'EOF'` with `it's` in the body | asks | allowed |
 | `git commit -F - <<'EOF'` with `main's` in the body, on a merged branch | asks | blocked, as for any commit there |
 | `bash <<'EOF'` body, or an unquoted body with `$(...)` | parsed as shell | parsed as shell (unchanged) |
+| `cat <<'EOF' \| bash` body, or a delimiter such as `EOF-1` | parsed as shell | parsed as shell (unchanged) |
+| `env cat <<'EOF'` with `it's` in the body | asks | allowed |
 | `cd "$VAR" && git commit`, `sleep 1 & git push` | asks | asks (unchanged) |
 
 CLAUDE.md §23.D now leads with the rule to type IDs literally into `gh api` endpoint paths, since an unquoted `$VAR` or `$(...)` there prompts in every permission mode.

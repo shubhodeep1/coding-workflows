@@ -2605,6 +2605,7 @@ def _open_feature_checkout(repo: Path, stub_bin: Path) -> None:
 	"git status | head -1 && git push origin feature/open",
 	"cd /tmp | true; git push origin feature/open",
 	"git fetch -q origin || true; git push origin feature/open",
+	"true |& cd /tmp; git push origin feature/open",
 ])
 def test_pipe_or_unrelated_or_list_keeps_push_directory_known(merged_branch_repo, command: str) -> None:
 	repo, stub_bin = merged_branch_repo
@@ -2652,6 +2653,8 @@ def test_conditional_directory_change_still_asks_for_push(merged_branch_repo, co
 	),
 	"git commit -m \"$(cat <<'EOF'\nsay \"hi\", it's done\nEOF\n)\"",
 	"cat <<-EOF\n\tit's indented\n\tEOF",
+	"env cat <<'EOF'\nit's data\nEOF",
+	"timeout 5 cat <<'EOF' | tail -1\nit's data\nEOF",
 ])
 def test_data_heredoc_with_unbalanced_quotes_does_not_prompt(merged_branch_repo, command: str) -> None:
 	repo, stub_bin = merged_branch_repo
@@ -2673,6 +2676,8 @@ def test_data_heredoc_commit_on_merged_branch_is_still_blocked(merged_branch_rep
 	"sudo sh <<'EOF'\ngit push origin feature/x\nit's\nEOF",
 	"cat <<EOF\n$(git push origin feature/x)\nit's\nEOF",
 	"cat <<'EOF'\nfine\nEOF\ngit status\n\"unterminated",
+	"cat <<'EOF' | bash\ngit push origin feature/x\nit's\nEOF",
+	"env bash <<'EOF'\ngit push origin feature/x\nit's\nEOF",
 ])
 def test_heredoc_run_as_shell_is_still_parsed(merged_branch_repo, command: str) -> None:
 	repo, stub_bin = merged_branch_repo
@@ -2680,6 +2685,19 @@ def test_heredoc_run_as_shell_is_still_parsed(merged_branch_repo, command: str) 
 	proc = _run_hook(repo, stub_bin, command)
 	assert proc.returncode == 0, proc.stdout + proc.stderr
 	assert _ask_decision(proc) is not None, proc.stdout
+
+
+@pytest.mark.parametrize("command", [
+	# The delimiter is `EOF-TEXT`, not `EOF`: the push runs after the heredoc.
+	"cat <<EOF-TEXT\npayload\nEOF-TEXT\ngit push origin feature/x",
+	"cat <<'EOF' | bash\ngit push origin feature/x\nEOF",
+	"cat <<'EOF' |\ngit push origin feature/x\nEOF\nbash",
+])
+def test_heredoc_that_hides_an_executed_push_still_blocks(merged_branch_repo, command: str) -> None:
+	repo, stub_bin = merged_branch_repo
+	proc = _run_hook(repo, stub_bin, command)
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "Branch `feature/x`" in proc.stderr
 
 
 def test_strip_data_heredoc_bodies_keeps_operator_and_shell_bodies() -> None:
@@ -2690,3 +2708,8 @@ def test_strip_data_heredoc_bodies_keeps_operator_and_shell_bodies() -> None:
 	substitution = "cat <<EOF\n$(git push)\nEOF"
 	assert guard._strip_data_heredoc_bodies(substitution) == substitution
 	assert guard._strip_data_heredoc_bodies("cat <<\\EOF\n$(x)\nEOF") == "cat <<\\EOF\n$(x)\nEOF"
+	partial_delimiter = "cat <<EOF-1\nx\nEOF-1\ngit push"
+	assert guard._strip_data_heredoc_bodies(partial_delimiter) == partial_delimiter
+	piped = "cat <<'EOF' | bash\ngit push\nEOF"
+	assert guard._strip_data_heredoc_bodies(piped) == piped
+	assert guard._strip_data_heredoc_bodies("env cat <<'EOF'\nit's\nEOF") == "env cat <<'EOF'"
