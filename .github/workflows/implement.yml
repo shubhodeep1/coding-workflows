@@ -31,6 +31,8 @@ env:
   CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
   REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
+  SEMBLE_BOOTSTRAP_MODE: ${{ vars.SEMBLE_BOOTSTRAP_MODE || 'lazy' }}
+  TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED: ${{ vars.TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED || 'false' }}
   SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
   WORKSPACE_HOOK_TIMEOUT_SECONDS: ${{ vars.WORKSPACE_HOOK_TIMEOUT_SECONDS || '600' }}
   WORKSPACE_REUSE_ENABLED: ${{ vars.WORKSPACE_REUSE_ENABLED || 'false' }}
@@ -1545,12 +1547,12 @@ jobs:
           fi
 
       - name: setup-uv
-        if: env.SKIP_IMPLEMENT != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')
+        if: env.SKIP_IMPLEMENT != 'true' && ((env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy') || env.SERENA_ENABLED == 'true')
         continue-on-error: true
         uses: astral-sh/setup-uv@v7
 
       - name: Install semble
-        if: env.SKIP_IMPLEMENT != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')
+        if: env.SKIP_IMPLEMENT != 'true' && env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -1573,7 +1575,7 @@ jobs:
           fi
 
       - name: Build semble index
-        if: env.SKIP_IMPLEMENT != 'true' && (env.SEMBLE_ENABLED == 'true')
+        if: env.SKIP_IMPLEMENT != 'true' && env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -2459,7 +2461,7 @@ jobs:
           # section so the editor's first turn is a write rather than a
           # read. A file that would push the cumulative byte count over
           # TARGETED_FILE_CONTEXT_MAX_BYTES is NOT head-truncated — it
-          # gets a "read with read tool" marker so the model uses its
+          # gets a "read with read tool" marker by default so the model uses its
           # native read flow. Fail-open: script errors fall through to
           # an empty output file, the rest of the prompt assembly still
           # works, and the model falls back to the previous read-then-
@@ -2467,15 +2469,16 @@ jobs:
           TARGETED_FILES_CONTEXT_FILE="${RUNTIME_DIR}/targeted_files_context.txt"
           : > "${TARGETED_FILES_CONTEXT_FILE}"
           if [ -s "${PLAN_FILE}" ]; then
-            python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/targeted_file_context.py" \
-              --plan-file "${PLAN_FILE}" \
-              --repo-root "${WORKSPACE_PATH:-${GITHUB_WORKSPACE}}" \
-              --semble-bin "$(command -v semble 2>/dev/null || true)" \
-              --semble-index "${SEMBLE_INDEX_PATH}" \
-              --semble-max-chunks "6" \
-              --semble-fallback "marker" \
-              --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES}" \
-              --output "${TARGETED_FILES_CONTEXT_FILE}" || \
+            tfc_args=(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/targeted_file_context.py"
+              --plan-file "${PLAN_FILE}"
+              --repo-root "${WORKSPACE_PATH:-${GITHUB_WORKSPACE}}"
+              --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES}"
+              --output "${TARGETED_FILES_CONTEXT_FILE}")
+            if [ "$(printf '%s' "${TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ] && [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ]; then
+              tfc_args+=(--semble-bin "$(command -v semble 2>/dev/null || true)"
+                --semble-index "${SEMBLE_INDEX_PATH}" --semble-max-chunks "6" --semble-fallback "marker")
+            fi
+            SEMBLE_STATIC_CONTEXT_FILE="${PWD}/pre_assembled_static.txt" "${tfc_args[@]}" || \
               echo "::warning::targeted_file_context.py failed; continuing without targeted-context block"
           fi
 
@@ -3579,8 +3582,8 @@ jobs:
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
             is_self_repo="true"
           fi
-          add_u_excludes=(':!node_modules' ':!.codex-workflow-src' ':!.codex-workflow-src-main')
-          add_o_excludes=(':!node_modules' ':!.github/ai' ':!.codex-workflow-src' ':!.codex-workflow-src-main')
+          add_u_excludes=(':!node_modules' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.ai/.workspace_source_manifest.txt')
+          add_o_excludes=(':!node_modules' ':!.github/ai' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.ai/.workspace_source_manifest.txt')
           if [ "${is_self_repo}" = "false" ]; then
             # Build per-file exclusions from the runtime-generated scripts/.gitignore
             # instead of a blanket ':!scripts'.  The blanket exclusion previously
@@ -3606,6 +3609,10 @@ jobs:
             add_o_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
           fi
           git add -u -- "${add_u_excludes[@]}"
+          if git ls-files --error-unmatch -- .ai/.workspace_source_manifest.txt >/dev/null 2>&1 && [ ! -e .ai/.workspace_source_manifest.txt ] && [ ! -L .ai/.workspace_source_manifest.txt ]; then
+            git rm --cached --quiet -- .ai/.workspace_source_manifest.txt
+            echo "IMPLEMENT_GENERATED_MANIFEST_UNTRACKED path=.ai/.workspace_source_manifest.txt"
+          fi
           while IFS= read -r -d '' untracked_candidate; do
             [ -n "${untracked_candidate}" ] || continue
             if is_virtual_cleanup_path "${untracked_candidate}"; then
@@ -4233,7 +4240,7 @@ jobs:
               done < "${ALLOW_LIST_FILE}"
               echo
               if [ -s "${REPAIR_SEMBLE_QUERY_FILE}" ] && declare -F semble_query_block >/dev/null 2>&1; then
-                semble_query_block "$(cat "${REPAIR_SEMBLE_QUERY_FILE}")" 6 "Implement Repair Context" || true
+                SEMBLE_STATIC_CONTEXT_FILE=./pre_assembled_static.txt semble_query_block "$(cat "${REPAIR_SEMBLE_QUERY_FILE}")" 6 "Implement Repair Context" || true
               fi
             } > "${REPAIR_PROMPT_FILE}"
             emit_implement_substate "implement_repair" "implement_repair" "BuildingPrompt" "${attempt}"
@@ -5669,6 +5676,7 @@ jobs:
           # backward compatibility.
           MODEL_DIAGNOSE: ${{ env.MODEL_DIAGNOSE }}
           MODEL_DIAGNOSE_REASONING_EFFORT: ${{ env.MODEL_DIAGNOSE_REASONING_EFFORT }}
+          SEMBLE_STATIC_CONTEXT_FILE: ./pre_assembled_static.txt
         run: |
           set -euo pipefail
           diagnose_path="${PATH}"

@@ -19,7 +19,19 @@ commands also ask, while control-flow-only commits remain warning-only when
 not blocked. An unresolvable explicit directory override, including an
 env-wrapped commit whose directory cannot be resolved, instead asks for
 confirmation without querying PRs for the session checkout, which may be a
-different repository.
+different repository. Pipeline elements run in subshells, so a pipe leaves
+the directory known for later commands and a `cd` inside a pipeline is
+ignored; a `||` branch makes it unknown only after a directory change in the
+same `&&`/`||` list (or when the branch is itself a `cd`), and `&` still does.
+Heredoc bodies that Bash passes on as data (to `cat`, `python3`,
+`git commit -F -`, ...) are removed before parsing, so prose such as `it's`
+cannot make the whole command unparseable; a body fed to a shell reader
+(`bash`, `sh`, `eval`, `ssh`, `sudo`, ..., also through a pipe on the
+operator's line such as `cat <<EOF | bash`) or an unquoted-delimiter body
+holding `$(...)` or a backtick is still parsed and checked. Wrappers such
+as `env` or `timeout` count only through the command they run, `|&` is a
+pipe like `|`, and a delimiter the hook cannot read in full (`<<EOF-1`,
+`<<\EOF`) leaves every line parsed.
 
 ---
 
@@ -64,7 +76,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
    model reviewer + consolidator + editor loop on PR changes. Two pre-review
    gates run first: the merge train (`scripts/review_merge_train.sh gate`,
    `MERGE_TRAIN_ENABLED`) queues an `ai/issue-*` PR behind older open
-   same-repository `ai/issue-*` PRs on the same base that edit the same files (the queued marker is verified against the `GH_PAT` account before it can authorize a bypass; label
+   same-repository `ai/issue-*` PRs on the same base that edit the same non-ignored files
+   (`MERGE_TRAIN_IGNORE_PATHS` defaults to the generated manifest; the queued
+   marker is verified against the `GH_PAT` account before it can authorize a bypass; label
    `ai:merge-queued`; released by `cancel_on_pr_close.yml` on close and by
    `orchestrate_poll.yml` every tick; managed/standalone conflict and stall
    recovery treat the label as an intentional wait). The one-shot bypass
@@ -950,10 +964,15 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   querying the session checkout's PR history. An absolute `env -C` or
   `git -C` path is resolved even inside shell control flow. Other ambiguous
   commit directories warn and check the checkout; an unparseable `env -S`
-  command also asks for confirmation. A push from an unresolved directory
-  (including an appended `GIT_DIR+=` / `GIT_WORK_TREE+=`, whose value is
-  never applied) is checked against the session checkout, which can still
-  block, and otherwise asks.
+  command also asks for confirmation. A push whose directory is unresolved
+  because of an explicit override (an appended `GIT_DIR+=` /
+  `GIT_WORK_TREE+=`, which Git applies on top of a shell state the hook
+  cannot read, or an unresolvable `-C`, `env -C`, `GIT_DIR` or `--git-dir`
+  path) asks for confirmation without querying the session checkout's PR
+  history, since that checkout is not the pushed repository. A push whose
+  directory is unknown only because of shell control flow or an unresolved
+  `cd` is still checked against the session checkout, which can block, and
+  otherwise asks.
   Leading redirections, including those after environment assignments, do
   not bypass commit/push detection. A spaced, quoted or escaped digit before a
   redirection (`2 >out`, `'2'>out`) is a push refspec with the normal check;
@@ -1783,7 +1802,7 @@ and shipped:
 - `CLAUDE_POOL` (`scripts/ai_engine.sh` and the sandbox Claude branches: `run role= account= outcome= reason= exit_code=`, `account_skipped account= reason=`)
 - `AI_ENGINE_PROJECT_LABEL` (`orchestrate.yml` "Ensure orchestrator labels exist": `label=`, `none` when unset; the label the tracking and wave-1 issues get)
 - `AI_ENGINE_PR_LABEL` (`implement.yml` "Create Pull Request": `issue= label=`; the engine label copied from the issue to its PR)
-- `SINGLE_ISSUE_SECURITY_PASS` (`scripts/review_single_issue_security_pass.sh`: `mode=gate|status|report pr= head= outcome=clean|hold|dispatched|skip|findings|failed|exhausted reason= cycle=`; clean markers require the authenticated pipeline author and an exact audited PR head. Missing/disabled audits report failed, and an unverifiable marker source holds auto-merge. If result publication fails, report skips review re-dispatch so it cannot run without the marker. After dispatch the gate confirms the pending-marker comment response with bounded retries and fails closed with `reason=pending_marker_failed` if none is confirmed. `mode=status` writes no GitHub state or step output, but may fetch missing Git history to verify extension ancestry before the review-blocked judge chooses its mode; failed verification reports `unverifiable`. `outcome=hold reason=cycles_exhausted` writes `exhausted=true` only for completed current-head findings, and status also emits `SINGLE_ISSUE_SECURITY_PASS_AUDITED_HEAD`. Without a completed audit the gate retries a bounded number of times per head before reporting `exhausted_unaudited` and holding without the judge bypass. The judge re-verifies the audited head before a security-mode merge. Cycles available = `MAX_SECURITY_PASS_CYCLES` plus one per distinct fix SHA in a trusted `ai:single-issue-security-pass-extension:v1` marker whose commit is reachable from the audited head; duplicate comments for one SHA count once, and a mismatched checkout holds the gate and skips report publication. On a current-head findings marker before exhaustion, `awaiting_followups` requires an open `ai:security` issue authored by the pipeline account for that branch and a findings marker younger than `SECURITY_PASS_FOLLOWUP_STALE_HOURS`; otherwise the gate holds with `followups_missing`, `followups_unverifiable` or `followups_stalled`.)
+- `SINGLE_ISSUE_SECURITY_PASS` (`scripts/review_single_issue_security_pass.sh`: `mode=gate|status|report pr= head= outcome=clean|hold|dispatched|skip|findings|failed|exhausted reason= cycle=`; clean markers require the authenticated pipeline author and an exact audited PR head. Missing/disabled audits report failed, and an unverifiable marker source holds auto-merge. A failed dispatch logs `outcome=hold reason=dispatch_failed` and posts a `failed` marker for the used cycle (past the cap, `reason=dispatch_failed_exhausted` and the marker counts as a used head attempt). If result publication fails, report skips review re-dispatch so it cannot run without the marker. After dispatch the gate confirms the pending-marker comment response with bounded retries and fails closed with `reason=pending_marker_failed` if none is confirmed. `mode=status` writes no GitHub state or step output, but may fetch missing Git history to verify extension ancestry before the review-blocked judge chooses its mode; failed verification reports `unverifiable`. `outcome=hold reason=cycles_exhausted` writes `exhausted=true` only for completed current-head findings, and status also emits `SINGLE_ISSUE_SECURITY_PASS_AUDITED_HEAD`. Without a completed audit the gate retries a bounded number of times per head before reporting `exhausted_unaudited` and holding without the judge bypass. The judge re-verifies the audited head before a security-mode merge. Cycles available = `MAX_SECURITY_PASS_CYCLES` plus one per distinct fix SHA in a trusted `ai:single-issue-security-pass-extension:v1` marker whose commit is reachable from the audited head; duplicate comments for one SHA count once, and a mismatched checkout holds the gate and skips report publication. On a current-head findings marker before exhaustion, `awaiting_followups` requires an open `ai:security` issue authored by the pipeline account for that branch and a findings marker younger than `SECURITY_PASS_FOLLOWUP_STALE_HOURS`; otherwise the gate holds with `followups_missing`, `followups_unverifiable` or `followups_stalled`.)
 - `SECURITY_HOLD_SWEEP` (`scripts/review_security_hold_sweep.py`: `pr= head= cycle= outcome=dispatch_failed|dispatched marker=posted|failed`, `pr= outcome=skip reason=comment_history_unavailable`, final `outcome=complete dispatched=`; the source 30-minute review sweep and consumer `ai-review.yml` hourly schedule batch open PRs, trust only the pipeline account's current-head findings marker (reading the full comment history only when a PR has more than 100 comments and none of the latest 100 carries a current-head result), and dispatch the judge once per stale head/cycle through the PR-named wrapper (`internal-review.yml` with `force_rb_judge=true` in this repo, `ai-review.yml` in consumers) so the active-run guards see it. Marker `<!-- ai:security-followup-stale-dispatch:v1 ... -->` deduplicates successful dispatches.)
 - `RB_JUDGE_SECURITY_PASS` (`scripts/review_rb_judge_security_pass.sh`, sourced by `review_rb_judge.sh`: `mode=detect|findings|merge_gate|extension|severity_block pr= outcome= reason=`; `severity_block` converts merges to fixes while retries remain and holds any final-round action, including `close_and_reissue`, when high/critical/unrated findings remain. For blocking findings the judge withdraws prior auto-merge enrollment even if the live head moved, then refuses to act on a mismatched head; an unreadable enrollment or failed disable stops the judge. Unavailable hold-comment history fails closed to avoid duplicate comments and alerts. `merge_gate outcome=hold` means a judge merge waited for the single-issue security pass and the judge step output `judge_action=security_hold` with `judge_skip_reason=security_hold_<hold_reason>`; the log line carries `hold_reason=`. The Telegram judge alert is suppressed only for `audit_dispatched`, `audit_pending` and `awaiting_followups` and sent as CRITICAL, naming the reason, for any other hold, including `followups_missing`, `followups_unverifiable` and `followups_stalled`; a failed gate that wrote `pending_marker_failed` retains that reason instead of reporting `gate_failed`. A final-retry `fix` is treated as a merge without creating a fix commit only when no blocking findings remain.)
 - `ACTIVATION_VERIFY` (`scripts/activation_verify.sh`: `mode=pr|project item= verdict=LIVE|DORMANT code_gaps= operator_gaps= outcome=posted|skip reason=`)
@@ -1914,6 +1933,7 @@ and shipped:
 
 - `SEMBLE_QUERY`
 - `SEMBLE_FALLBACK`
+- `SEMBLE_BOOTSTRAP`
 - `SERENA_QUERY`
 - `SERENA_FALLBACK`
 - `SERENA_PROBE`
@@ -2141,6 +2161,7 @@ LOG_PREFIX.name=VALIDATION_RUN_ATTRIBUTION
 LOG_PREFIX.name=CI_CANCELLED_RERUN
 LOG_PREFIX.name=SEMBLE_QUERY
 LOG_PREFIX.name=SEMBLE_FALLBACK
+LOG_PREFIX.name=SEMBLE_BOOTSTRAP
 LOG_PREFIX.name=SERENA_QUERY
 LOG_PREFIX.name=SERENA_FALLBACK
 LOG_PREFIX.name=SERENA_PROBE
@@ -2325,6 +2346,7 @@ depend on it.
 | `REVIEW_BREAK_GLASS_ENABLED` | `false` | Enable the anchored `@codex break-glass` override scan; when active it downgrades only the outbound `REQUEST_CHANGES` event to comment-only. |
 | `CI_POLL_TEST_SHARDS` | `4` | Parallel local shards for the orchestrate-poll module in each group of CI's `orchestrate-poll` matrix and in the release gates' `validate-scripts` job. `1` is sequential; invalid values warn and fall back to `1`. |
 | `CONFLICT_MANIFEST_UNION_ENABLED` | `true` | Resolve two-sided `.ai/.workspace_source_manifest.txt` content conflicts (index stages `1 2 3` or add/add `2 3`) and gitignored one-sided delete/modify conflicts before the model resolver; manifest-only conflicts are committed as `[ai-merge-resolve]`. Other manifest conflicts, including disabled and integration-sync cases, fail preparation with `Manifest union-merge: unhandled reason=...` instead of dispatching a resolver whose sandbox excludes `.ai/`. Before PR #6438 the stage check never matched, so the manifest always reached the resolver, whose sandbox cannot carry `.ai/`. |
+| `MERGE_TRAIN_IGNORE_PATHS` | `.ai/.workspace_source_manifest.txt` | Exact repo-relative paths excluded from merge-train overlap checks in gate and release. Comma/newline-separated; `none` (or an empty helper env value) restores legacy behavior. Glob entries are rejected. |
 | `REVIEW_RESOLVE_THREADS_ENABLED` | `true` | Resolve PR review threads the editor audited in its `PR comment audit:` section. Keyed on comment id, so two comments at one path cannot resolve each other; `ignored` entries get the editor's reason as a reply before resolving. |
 | `REVIEW_RESOLVE_THREADS_MAX` | `50` | Per-run cap on resolved review threads; anything above it is warned about and left open. |
 | `SWEEP_STALE_QUEUED_MINUTES` | `120` | Age past which a still-`queued` review run stops suppressing a sweep dispatch (wedged-run recovery). `in_progress` runs are never discounted; `0` disables the cutoff. |
@@ -2363,7 +2385,7 @@ depend on it.
 | `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` | `true` | Enable the consolidator-side companion `AGENTS.md` materiality finding. Unlike `AGENTS_MD_MATERIALITY_ENABLED`, which controls the separate advisory comment helper, this flag only controls whether `review_consolidate.sh` passes the helper JSON into Lens 7 (`NAMING / BACKWARD COMPATIBILITY`). |
 | `ENABLE_SECURITY_PASS` | `true` | Enable the scheduled poller's mandatory current-integration-head security gate before validation or finalization. Set to `false` for the immediate operator kill switch and legacy completion behavior. |
 | `MAX_SECURITY_PASS_CYCLES` | `5` | Maximum completed consolidated security-fix cycles before persistent findings terminalize as `ai:security-pass-failed`. Resets to `0` when an advancing integration head invalidates a recorded clean pass. Re-audits after a merged fix are delta audits, so the budget bounds persisting findings rather than fresh samples of unchanged code. For standalone PRs, a completed current-head audit is required to enter judge exhaustion mode. |
-| `SINGLE_ISSUE_SECURITY_PASS_ENABLED` | `false` | Off by default (opt in with `true`); orchestrator projects keep their own pass under `ENABLE_SECURITY_PASS`. When enabled, hold eligible standalone PRs into the default branch until a security audit of the current head is clean. At the cycle cap an unaudited head gets bounded retries, then remains held without judge exhaustion mode; a completed findings audit for the same head still qualifies if a later attempt fails. A missing or unwritable `GITHUB_OUTPUT` fails the gate step closed; dispatch failure at any cycle holds the merge for a later review retry. With the flag off (the default) the pre-pass review-gate and deterministic-skip merge behavior applies. Only a sole verified `ai:security` follow-up is exempt; see `README.md` for dispatch and failure modes. |
+| `SINGLE_ISSUE_SECURITY_PASS_ENABLED` | `false` | Off by default (opt in with `true`); orchestrator projects keep their own pass under `ENABLE_SECURITY_PASS`. When enabled, hold eligible standalone PRs into the default branch until a security audit of the current head is clean. At the cycle cap an unaudited head gets bounded retries, then remains held without judge exhaustion mode; a completed findings audit for the same head still qualifies if a later attempt fails. A missing or unwritable `GITHUB_OUTPUT` fails the gate step closed; dispatch failure at any cycle holds the merge for a later review retry, and records a failed cycle (past the cap, a failed head attempt). With the flag off (the default) the pre-pass review-gate and deterministic-skip merge behavior applies. Only a sole verified `ai:security` follow-up is exempt; see `README.md` for dispatch and failure modes. |
 | `SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS` | `2` | Maximum trusted pending audit attempts per head with a cycle number above the standalone pass's cycle cap. Pre-cap pending markers do not consume these extra attempts. Invalid or non-positive values fall back to `2`; a failed exhausted retry dispatch holds the merge. |
 | `SECURITY_PASS_PENDING_STALE_HOURS` | `6` | A pending single-issue audit holds auto-merge until its marker is this many hours old; the next review run re-dispatches. Invalid or non-positive values fall back to `6`. Only a sole verified `ai:security` issue skips the pass; multiple linked issues are audited. When `GH_PAT` is absent, both gate and reporter trust only `github-actions[bot]` markers. |
 | `SECURITY_PASS_FOLLOWUP_STALE_HOURS` | `24` | A findings hold pages CRITICAL after this many hours without a new head, even if matching pipeline-created follow-ups are still open. The audit log carries base64 JSON finding IDs into the pipeline-authored findings comment (before the unchanged final marker); the gate reads that comment from its cached PR history and requires open pipeline-authored `ai:security` issues for each ID on this branch. Older results without IDs or unparseable IDs page as `followups_unverifiable`, and uncovered IDs page as `followups_missing`. Missing, invalid or unverifiable timestamps also page. The source 30-minute review sweep and consumer `ai-review.yml` hourly schedule dispatch one judge-only recheck per stale head/cycle. Invalid or non-positive settings fall back to `24`. |

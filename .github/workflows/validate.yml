@@ -62,6 +62,7 @@ name: AI Validate (Reusable)
         value: ${{ jobs.validate.outputs.metadata_file }}
 
 env:
+  SEMBLE_BOOTSTRAP_MODE: ${{ vars.SEMBLE_BOOTSTRAP_MODE || 'lazy' }}
   UNATTENDED_PHASE: validate
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
   UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}
@@ -855,7 +856,10 @@ jobs:
               ;;
           esac
 
-          if [ "${enabled}" = "true" ] || [ "${serena_enabled}" = "true" ]; then
+          if [ "${enabled}" = "true" ] && [ "$(printf '%s' "${SEMBLE_BOOTSTRAP_MODE:-eager}" | tr '[:upper:]' '[:lower:]')" = "lazy" ]; then
+            echo "SEMBLE_ENABLED=true" >> "$GITHUB_ENV"
+          fi
+          if { [ "${enabled}" = "true" ] && [ "$(printf '%s' "${SEMBLE_BOOTSTRAP_MODE:-eager}" | tr '[:upper:]' '[:lower:]')" != "lazy" ]; } || [ "${serena_enabled}" = "true" ]; then
             bootstrap_enabled="true"
           fi
 
@@ -883,7 +887,7 @@ jobs:
         uses: astral-sh/setup-uv@v7
 
       - name: Install semble
-        if: steps.semble_gate.outputs.bootstrap_enabled == 'true'
+        if: steps.semble_gate.outputs.enabled == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'
         # Defense-in-depth: install_semble.sh + the file-existence guard
         # below are both fail-soft already (script writes
         # SEMBLE_AVAILABLE=false on any error; missing-script branch
@@ -920,7 +924,7 @@ jobs:
           fi
 
       - name: Build semble index
-        if: (steps.semble_gate.outputs.enabled == 'true')
+        if: steps.semble_gate.outputs.enabled == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'
         # Defense-in-depth: the file-existence guard and shared script are
         # both fail-soft already, but `continue-on-error: true` makes the
         # contract explicit at the step boundary — matches the pattern in

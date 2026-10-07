@@ -111,7 +111,7 @@ def test_prepare_preserves_separate_resolver_path_classes() -> None:
 	fingerprint_snapshot = 'RESOLVER_FINGERPRINT_ONLY_PATHS_FILE="${RUNTIME_DIR}/resolver_fingerprint_only_paths.txt"'
 	assert initial_snapshot in text
 	assert fingerprint_snapshot in text
-	assert text.index(initial_snapshot) < text.index("# Deterministic union-merge")
+	assert text.index(initial_snapshot) < text.index("# Deterministic resolution for the generated workspace manifest")
 	assert 'cp "${_fp_new_tmp}" "${RESOLVER_FINGERPRINT_ONLY_PATHS_FILE}"' in text
 	assert initial_snapshot in resolve_text
 	assert fingerprint_snapshot in resolve_text
@@ -161,6 +161,8 @@ def test_prepare_requires_two_sided_content_conflict() -> None:
 	)
 	# PR #6438: `*' 2 '*' 3 '*` can never match the space-joined stage list.
 	assert "*' 2 '*' 3 '*" not in block
+	assert "' 1 2 '|' 1 3 ')" in block
+	assert 'git rm -q --cached -- "${MANIFEST_UNION_PATH}"' in block
 
 
 def _stage_gate(block: str) -> tuple[str, str]:
