@@ -153,7 +153,7 @@ def test_prepare_requires_two_sided_content_conflict() -> None:
 	)
 	assert "git ls-files -u --" in block and "*' 2 3 '*" in block, (
 		"union-merge must require index stages 2 AND 3 (two-sided content conflict); "
-		"delete/modify shapes fall through to the Codex resolver"
+		"other shapes fail closed before the resolver sandbox"
 	)
 	assert "::error::Manifest union-merge: unhandled reason=" in block and "exit 1" in block, (
 		"unsupported manifest conflicts must fail before the resolver sandbox receives "

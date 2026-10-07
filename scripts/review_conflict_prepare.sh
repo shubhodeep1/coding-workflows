@@ -354,7 +354,7 @@ if [ "${_resolver_allowlist_count}" -gt 0 ] \
     _mu_stages_trimmed="${_mu_stages% }"
     echo "::error::Manifest union-merge: unhandled reason=${_mu_unhandled_reason} stages=${_mu_stages_trimmed:-none} CONFLICT_MANIFEST_UNION_ENABLED=${CONFLICT_MANIFEST_UNION_ENABLED:-true}; refusing to dispatch resolver for ${MANIFEST_UNION_PATH} because the sandbox excludes .ai/."
     if [ "${_mu_unhandled_reason}" = "disabled" ]; then
-      echo "Manifest union-merge: CONFLICT_MANIFEST_UNION_ENABLED no longer routes manifest conflicts to the resolver; set it to true to enable safe deterministic resolution, or resolve the conflict in the branch."
+      echo "Manifest union-merge: CONFLICT_MANIFEST_UNION_ENABLED=false disables deterministic manifest resolution, and the resolver sandbox cannot access .ai/; set it to true to enable safe deterministic resolution, or resolve the conflict in the branch."
     fi
     exit 1
   fi
