@@ -215,6 +215,21 @@ Phases of the unattended pipeline (each is a separate workflow file under
    and the poller remove workflow-generated root files before committing but
    keep any path HEAD tracks (a consumer-owned `agents.md`), logging
    `Preserving repo-tracked path during artifact cleanup: <path>`.
+   Stall recovery (managed `resolve_merge_conflict`, the managed open-PR
+   guard and the standalone conflict guard) first runs
+   `_stall_retired_host_only_conflict_check` (`scripts/orchestrate_poll_process.sh`,
+   classifier `orchestrate_lib.py retired-conflict-check`): when every
+   host-only conflicted path of the PR (one `review_untrusted_workspace.allowed()`
+   refuses) is listed in the verified support checkout's
+   `workflow-templates/retired_files.txt` and absent from the base, it runs
+   `close_and_reissue` instead of re-dispatching a resolver that can only fail
+   closed. The replacement issue names the retired paths and the closed PR's
+   changed files, and the PR branch is kept. Conflicts are read locally with
+   `git merge-tree` and the head tip must equal the PR head SHA; any other
+   case, including probe or trust failures, keeps the resolver dispatch, and
+   the resolver's own `sandbox_path_host_only` check is unchanged. Kill switch
+   `STALL_RETIRED_CONFLICT_REISSUE_ENABLED` (default `true`); log prefix
+   `STALL_RETIRED_CONFLICT_REISSUE` (issue #6680).
 9. **orchestrate** (`orchestrate.yml`, `orchestrate_poll.yml`) — issue
    decomposition + judge polling, including the default-on, current-head
    project security-pass gate before validation/finalization. The poller's
@@ -291,9 +306,13 @@ Phases of the unattended pipeline (each is a separate workflow file under
     and sends a `repository_dispatch` (`workflow-failure-heal`) to this repo;
     the intake fetches the failed job logs, diagnoses against the source at
     that SHA, classifies (`workflow-defect` / `inconclusive` → issue here with
-    `Target branch: stable`, or the PR's head branch when a review/autofix
-    failure comes from a PR in this repo, since that run executed the PR's
-    own workflow code; `consumer-app-defect` → issue in the consumer;
+    `Target branch: stable`; a review/autofix failure from a PR in this repo
+    targets the PR's head branch only when the run staged that PR head's own
+    scripts (payload `script_ref` equal to the head SHA), and otherwise
+    writes no Target branch so the fix ships on the default branch
+    (`target_branch_source=shared_workflow`, issue #6680), because review
+    runs the verified workflow-support commit, not the PR's copies;
+    `consumer-app-defect` → issue in the consumer;
     `consumer-config` / `transient` → Telegram + comment only;
     `already-fixed` → Telegram + comment only, honoured only when its
     `## Fixed by` section cites a commit that landed after the failing SHA,
@@ -1953,6 +1972,7 @@ and shipped:
 - `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`
 - `AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED`
 - `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP`
+- `STALL_RETIRED_CONFLICT_REISSUE` (`scripts/orchestrate_poll_process.sh`: `issue= pr= outcome=reissue|skip reason= retired_paths=`)
 - `REVIEW_EDITOR_PREFLIGHT`
 - `STAGE_MAIN_PINNED_DIVERGENCE`
 - `WORKTREE_REGISTER`
@@ -2180,6 +2200,7 @@ LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_TRIPPED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED
 LOG_PREFIX.name=NOOP_RECOVERY_SKIP_FINGERPRINT_CAP
+LOG_PREFIX.name=STALL_RETIRED_CONFLICT_REISSUE
 LOG_PREFIX.name=REVIEW_EDITOR_PREFLIGHT
 LOG_PREFIX.name=STAGE_MAIN_PINNED_DIVERGENCE
 LOG_PREFIX.name=WORKTREE_REGISTER

@@ -41,9 +41,11 @@
 #          (label ai:workflow-heal, `Target branch: stable` so the fix is a
 #          hotfix on the stable line; a failed release run targets the branch it
 #          failed on; a failed review/autofix run on a pull request in this
-#          repo targets that pull request's head branch, because the run
-#          executed the PR's own workflow code — falling back to stable when
-#          the branch no longer exists)
+#          repo targets that pull request's head branch only when the run
+#          staged the PR's own scripts (script_ref == head SHA), falling back
+#          to stable when the branch no longer exists; otherwise the run hit
+#          the shared workflow support and the issue carries no Target
+#          branch, so the fix ships on the default branch)
 #        consumer-app-defect           -> issue in the source repository
 #        consumer-config               -> Telegram ERROR + comment, no issue
 #        transient                     -> Telegram DEBUG + comment, no issue
@@ -1047,17 +1049,26 @@ case "${CLASSIFICATION}" in
 		if [ "${SOURCE_KIND}" = "workflow_run" ] && [ -n "${HEAD_BRANCH}" ]; then
 			TARGET_BRANCH="${HEAD_BRANCH}"
 			TARGET_BRANCH_SOURCE="failed_run_branch"
-		elif [ "${SOURCE_KIND}" = "autofix_failure" ] && [ "${SOURCE_REPO}" = "${SELF_REPO}" ] && [ -n "${HEAD_BRANCH}" ]; then
-			# A review/autofix run in this repo executes the pull request's own
-			# workflow code (review_autofix.yml resolves SCRIPT_REF to
-			# github.sha here), so the defect it hit lives on that PR's branch
-			# and may not exist on the stable line at all. A fix aimed at
-			# stable cannot unblock the PR and would drag the PR's unreleased
-			# changes into stable, so the fix targets the PR's head branch.
-			TARGET_BRANCH="${HEAD_BRANCH}"
-			TARGET_BRANCH_SOURCE="source_pr_head"
+		elif [ "${SOURCE_KIND}" = "autofix_failure" ] && [ "${SOURCE_REPO}" = "${SELF_REPO}" ]; then
+			# A review/autofix run in this repo normally executes the verified
+			# workflow-support commit (main's shared scripts), not the pull
+			# request's own copies: PR-head scripts are review data. A defect in
+			# that shared code must be fixed on the default branch; aiming the
+			# fix at the blocked PR's head branch strands it there (issue #6623
+			# was filed against ai/issue-5152 and could not be planned). Only a
+			# run that provably staged the PR head's own scripts (script_ref
+			# equal to the PR head SHA) routes the fix to that head branch.
+			# Otherwise no Target-branch header is written and the issue
+			# follows the default branch (`shared_workflow`).
+			if [ -n "${HEAD_BRANCH}" ] && [[ "${PAYLOAD_SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "${PAYLOAD_SCRIPT_REF}" = "${HEAD_SHA}" ]; then
+				TARGET_BRANCH="${HEAD_BRANCH}"
+				TARGET_BRANCH_SOURCE="source_pr_head"
+			else
+				TARGET_BRANCH=""
+				TARGET_BRANCH_SOURCE="shared_workflow"
+			fi
 		fi
-		if ! _branch_exists "${SELF_REPO}" "${TARGET_BRANCH}"; then
+		if [ -n "${TARGET_BRANCH}" ] && ! _branch_exists "${SELF_REPO}" "${TARGET_BRANCH}"; then
 			if [ "${TARGET_BRANCH_SOURCE}" = "source_pr_head" ]; then
 				log "warn source_pr_branch_missing branch=${TARGET_BRANCH}; falling back to ${TARGET_BRANCH_DEFAULT}"
 				TARGET_BRANCH="${TARGET_BRANCH_DEFAULT}"
@@ -1078,6 +1089,8 @@ case "${CLASSIFICATION}" in
 			HOTFIX_NOTE=" on this pull request's own branch \`${TARGET_BRANCH}\`"
 		elif [ -n "${TARGET_BRANCH}" ]; then
 			HOTFIX_NOTE=" as a hotfix on \`${TARGET_BRANCH}\`"
+		elif [ "${TARGET_BRANCH_SOURCE}" = "shared_workflow" ]; then
+			HOTFIX_NOTE=" on the default branch, because the failing code is the shared workflow support this pull request's review ran, not this pull request's own changes"
 		fi
 		{
 			echo "<!-- workflow-failure-heal:outcome -->"

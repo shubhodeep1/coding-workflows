@@ -23707,3 +23707,18 @@ def test_integration_judge_non_redispatch_verdict_keeps_terminal_path():
 
 if __name__ == "__main__":
 	raise SystemExit(main())
+
+
+def test_stall_retired_conflict_reissue_is_wired_and_registered():
+	# Issue #6680: both stall-recovery paths consult the retired host-only
+	# conflict check before dispatching the conflict resolver; the helper's
+	# behaviour against a scratch origin is covered in
+	# tests/test_stall_retired_conflict_reissue.py.
+	poller_text = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	assert poller_text.count("_stall_retired_host_only_conflict_check \"${issue_num}\"") == 3
+	assert 'STALL_RETIRED_CONFLICT_REISSUE_ENABLED:-true' in poller_text
+	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	assert "LOG_PREFIX.name=STALL_RETIRED_CONFLICT_REISSUE" in agents_text
+	assert "- `STALL_RETIRED_CONFLICT_REISSUE`" in agents_text
+	readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+	assert "| `STALL_RETIRED_CONFLICT_REISSUE_ENABLED` | `true` |" in readme_text
