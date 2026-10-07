@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Validate workflow-heal provenance and lineage, and constrain recovery to evidence-backed file scope.",
   "timestamps": {
     "created_at": "2026-10-07T01:15:57Z",
