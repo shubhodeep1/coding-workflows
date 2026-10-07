@@ -42,7 +42,7 @@ ARTIFACT_DIR=".ai/review_runtime/pr-${PR_NUMBER}/round-${CURRENT_ROUND}"
 ARTIFACT_PATH="${ARTIFACT_DIR}/verified_rejections.json"
 mkdir -p "${ARTIFACT_DIR}"
 
-if ! PYTHONDONTWRITEBYTECODE=1 python3 - \
+if ! PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - \
 	"${REVIEW_ISSUES_FILE}" \
 	"${PR_DIFF_FILE}" \
 	"${LINKED_ISSUE_CONTEXT_FILE}" \

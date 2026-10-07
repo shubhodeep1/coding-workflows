@@ -8,18 +8,21 @@ contract is validated against workflow behavior, not reimplemented logic.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
-from pathlib import Path
+import sys
 import tempfile
 import textwrap
-
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 IMPLEMENT_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
 IMPLEMENT_STAGED_SUPPORT_WORKSPACE_SCRIPT = REPO_ROOT / "scripts" / "implement_staged_support_workspace.sh"
@@ -141,6 +144,7 @@ def _run_shell_script(script: str, *, cwd: Path, env: dict[str, str]) -> subproc
 		text=True,
 		capture_output=True,
 		timeout=60,
+		check=False,
 	)
 
 
@@ -512,8 +516,12 @@ def _run_diagnose_step(
 	issue_meta_payload: object | None = None,
 	write_issue_body_file: bool = True,
 	issue_api_failures_remaining: int = 0,
+	fake_ai_engine: str | None = None,
+	extra_env: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict, Path, dict[str, str]]:
 	repo_dir = _prepare_diagnose_repo(tmp_path)
+	if fake_ai_engine is not None:
+		(repo_dir / "scripts" / "ai_engine.sh").write_text(fake_ai_engine, encoding="utf-8")
 	runtime_dir = tmp_path / "runtime"
 	bin_dir = tmp_path / "bin"
 	runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -592,7 +600,12 @@ def _run_diagnose_step(
 			"TMPDIR": str(runtime_dir),
 		}
 	)
+	if extra_env:
+		env.update(extra_env)
 
+	# The diagnose agent now runs through scripts/codex_isolated_exec.sh; the
+	# fake docker runs the mock codex inside the fake container.
+	env = enable_fake_isolation(bin_dir, repo_dir / "scripts", env)
 	proc = _run_shell_script(script, cwd=repo_dir, env=env)
 	state = _read_gh_state(gh_state_file)
 	paths = {
@@ -627,6 +640,30 @@ def _parse_github_output(path: Path) -> dict[str, str]:
 		key, value = line.split("=", 1)
 		parsed[key] = value
 	return parsed
+
+
+def _parse_github_env_text(text: str) -> tuple[dict[str, str], list[str]]:
+	"""Parse runner-style single-line and multiline GITHUB_ENV entries."""
+	parsed: dict[str, str] = {}
+	delimiters: list[str] = []
+	lines = text.splitlines()
+	index = 0
+	while index < len(lines):
+		line = lines[index]
+		index += 1
+		if "<<" in line:
+			key, delimiter = line.split("<<", 1)
+			delimiters.append(delimiter)
+			start = index
+			while index < len(lines) and lines[index] != delimiter:
+				index += 1
+			assert index < len(lines), f"Unterminated GITHUB_ENV value for {key}"
+			parsed[key] = "\n".join(lines[start:index])
+			index += 1
+		else:
+			key, value = line.split("=", 1)
+			parsed[key] = value
+	return parsed, delimiters
 
 
 def _run_resolve_checkout_ref_step(
@@ -1207,6 +1244,48 @@ def test_fetch_issue_metadata_reuses_matching_cache_without_api_call() -> None:
 		assert "PR_BASE_BRANCH=orchestrator/project-829" in github_env_text
 
 
+def test_fetch_issue_metadata_does_not_let_issue_text_close_env_values() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_fetch_issue_env_delimiter_") as td:
+		issue_body = "Description\nEOF\nUNSAFE_BODY=enabled\nmore detail"
+		issue_title = "Title\nEOF\nUNSAFE_TITLE=enabled"
+		fetch_script = _extract_run_script("Fetch issue metadata")
+		start = fetch_script.index('printf \'%s\\n\' "${ISSUE_BODY}" > "${ISSUE_BODY_FILE}"')
+		end = fetch_script.index('write_untrusted_multiline_env ISSUE_TITLE "${ISSUE_TITLE}"', start) + len('write_untrusted_multiline_env ISSUE_TITLE "${ISSUE_TITLE}"')
+		github_env_file = Path(td) / "github_env.txt"
+		body_file = Path(td) / "issue_body.txt"
+		proc = subprocess.run(
+			["bash", "-c", "set -euo pipefail\n" + fetch_script[start:end]],
+			env={**os.environ, "ISSUE_BODY": issue_body, "ISSUE_TITLE": issue_title,
+				"ISSUE_BODY_FILE": str(body_file), "ISSUE_SCOPE_LOCK_GLOB": "EOF\nUNSAFE_SCOPE=enabled",
+				"ISSUE_NUMBER_JSON": "948", "ISSUE_URL_JSON": "https://github.com/owner/repo/issues/948",
+				"PR_BASE_BRANCH": "main", "GITHUB_ENV": str(github_env_file)},
+			capture_output=True, text=True, check=False,
+		)
+		assert proc.returncode == 0, proc.stderr
+		assert body_file.read_text(encoding="utf-8") == issue_body + "\n"
+		github_env_text = github_env_file.read_text(encoding="utf-8")
+		for name, value in (("ISSUE_TITLE", issue_title), ("ISSUE_SCOPE_LOCK_GLOB", "EOF\nUNSAFE_SCOPE=enabled")):
+			match = re.search(rf"(?m)^{name}<<(ghadelimiter_[0-9a-f]{{32}})$", github_env_text)
+			assert match is not None
+			delimiter = match.group(1)
+			assert f"{name}<<{delimiter}\n{value}\n{delimiter}\n" in github_env_text
+		assert "ISSUE_BODY<<" not in github_env_text
+		assert github_env_text.count("<<EOF") == 0
+		collision = "ghadelimiter_" + "a" * 32
+		blocked_github_env_file = Path(td) / "blocked_github_env.txt"
+		blocked = subprocess.run(
+			["bash", "-c", "set -euo pipefail\nod() { printf '%s\\n' '" + "a" * 32 + "'; }\n" + fetch_script[start:end]],
+			env={**os.environ, "ISSUE_BODY": issue_body, "ISSUE_TITLE": collision + "\nmore detail",
+				"ISSUE_BODY_FILE": str(body_file), "ISSUE_SCOPE_LOCK_GLOB": "",
+				"ISSUE_NUMBER_JSON": "948", "ISSUE_URL_JSON": "https://github.com/owner/repo/issues/948",
+				"PR_BASE_BRANCH": "main", "GITHUB_ENV": str(blocked_github_env_file)},
+			capture_output=True, text=True, check=False,
+		)
+		assert blocked.returncode != 0
+		assert "GITHUB_ENV delimiter collision for ISSUE_TITLE" in blocked.stdout
+		assert "ISSUE_TITLE<<" not in blocked_github_env_file.read_text(encoding="utf-8")
+
+
 def test_fetch_issue_metadata_refetches_invalid_or_mismatched_cache() -> None:
 	for case_name, issue_meta_payload in (
 		(
@@ -1238,6 +1317,105 @@ def test_fetch_issue_metadata_refetches_invalid_or_mismatched_cache() -> None:
 			assert files["issue_body"] == issue_body, f"case={case_name}"
 			assert json.loads(files["issue_meta"])["number"] == 948, f"case={case_name}"
 			assert f"ISSUE_URL={issue_url}" in github_env_text, f"case={case_name}"
+
+
+def test_fetch_issue_metadata_cannot_inject_guard_env_from_issue_text() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_fetch_issue_env_injection_") as td:
+		body = (
+			"Task\nEOF\nALLOW_BULK_DELETE=true\nENFORCE_FILES_TOUCHED=false\n"
+			"ISSUE_BODY<<EOF\nghadelimiter_0123456789abcdef0123456789abcdef\nEnd"
+		)
+		title = "Original title\nALLOW_OUT_OF_SCOPE_FILES=true\n-n"
+		proc, _, github_env_text, files = _run_fetch_issue_metadata_step(
+			Path(td), issue_body=body, issue_title=title,
+		)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		exports, delimiters = _parse_github_env_text(github_env_text)
+		assert not {"ALLOW_BULK_DELETE", "ENFORCE_FILES_TOUCHED", "ALLOW_OUT_OF_SCOPE_FILES", "ISSUE_BODY"} & exports.keys()
+		assert exports["ISSUE_TITLE"] == title
+		assert exports["ISSUE_SCOPE_LOCK_GLOB"] == ""
+		assert len(delimiters) == 2
+		assert len(set(delimiters)) == 2
+		assert all(re.fullmatch(r"ghadelimiter_[0-9a-f]{32}", delimiter) for delimiter in delimiters)
+		assert files["issue_body"] == body + "\n"
+
+
+def test_fetch_issue_metadata_preserves_echo_option_titles() -> None:
+	for title in ("-n", "-e"):
+		with tempfile.TemporaryDirectory(prefix="test_fetch_issue_title_") as td:
+			proc, _, github_env_text, _ = _run_fetch_issue_metadata_step(
+				Path(td), issue_body="Task", issue_title=title,
+			)
+			assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+			exports, _ = _parse_github_env_text(github_env_text)
+			assert exports["ISSUE_TITLE"] == title
+
+
+def test_implement_issue_text_env_and_guard_wiring_contract() -> None:
+	metadata_script = _extract_run_script("Fetch issue metadata")
+	assert "ISSUE_BODY<<" not in metadata_script
+	assert 'write_untrusted_multiline_env ISSUE_TITLE "${ISSUE_TITLE}"' in metadata_script
+	assert 'write_untrusted_multiline_env ISSUE_SCOPE_LOCK_GLOB "${ISSUE_SCOPE_LOCK_GLOB}"' in metadata_script
+	for step_name in ("Detect smoke test and silence Telegram alerts", "Build implementation context"):
+		script = _extract_run_script(step_name)
+		assert '"${ISSUE_BODY}"' not in script
+		assert "ISSUE_BODY_FILE" in script
+
+	wf = _workflow_text()
+	assert not re.search(r"\b[A-Za-z_][A-Za-z0-9_]*<<EOF\b", wf)
+	guard_keys = (
+		"ALLOW_BULK_DELETE", "BULK_DELETE_THRESHOLD", "BULK_DELETE_THRESHOLD_MD",
+		"ENFORCE_FILES_TOUCHED", "ALLOW_OUT_OF_SCOPE_FILES", "ALLOW_WORKFLOW_EDITS",
+		"WRITE_GUARDS_ENABLED", "SCOPE_LOCK_LABEL_ENABLED",
+	)
+	workflow_env = wf.split("\nenv:\n", 1)[1].split("\njobs:\n", 1)[0]
+	for step_name in (
+		"Preflight destructive-commit guard",
+		"Protect workflow files from implementation edits",
+		"Commit changes",
+		"Destructive-commit guard — label + alert on rejection",
+	):
+		step = _step_block_text(step_name)
+		step_env = step.split("\n        env:\n", 1)[1].split("\n        run: |", 1)[0]
+		for key in guard_keys:
+			pattern = rf"^\s+{key}: (.+)$"
+			workflow_value = re.search(pattern, workflow_env, re.MULTILINE)
+			step_value = re.search(pattern, step_env, re.MULTILINE)
+			assert workflow_value is not None and step_value is not None, (step_name, key)
+			assert step_value.group(1) == workflow_value.group(1), (step_name, key)
+
+
+def test_implementation_context_reads_body_file_and_fails_if_missing() -> None:
+	script = _render_github_expressions(_extract_run_script("Build implementation context"))
+	with tempfile.TemporaryDirectory(prefix="test_implementation_context_") as td:
+		root = Path(td)
+		body_file = root / "issue_body.txt"
+		context_file = root / "implementation_context.txt"
+		answers_file = root / "answers.txt"
+		plan_file = root / "plan.txt"
+		comments_file = root / "comments.json"
+		answers_file.write_text("None\n", encoding="utf-8")
+		plan_file.write_text("Plan\n", encoding="utf-8")
+		comments_file.write_text("[]", encoding="utf-8")
+		env = {
+			**os.environ,
+			"ISSUE_BODY_FILE": str(body_file),
+			"IMPLEMENTATION_CONTEXT_FILE": str(context_file),
+			"CLARIFICATION_ANSWERS_FILE": str(answers_file),
+			"PLAN_FILE": str(plan_file),
+			"ISSUE_COMMENTS_FILE": str(comments_file),
+		}
+		missing = _run_shell_script(script, cwd=root, env=env)
+		assert missing.returncode != 0
+		assert "::error::ISSUE_BODY_FILE is not a regular file." in missing.stderr
+		assert not context_file.exists()
+		body = "Issue description\nEOF\nALLOW_BULK_DELETE=true\n"
+		body_file.write_text(body, encoding="utf-8")
+		# The context builder must never consult an inherited issue-body env value.
+		env["ISSUE_BODY"] = "Wrong issue"
+		result = _run_shell_script(script, cwd=root, env=env)
+		assert result.returncode == 0, f"stdout:\n{result.stdout}\n\nstderr:\n{result.stderr}"
+		assert context_file.read_text(encoding="utf-8").startswith("ISSUE DESCRIPTION\n" + body + "\nCLARIFICATION ANSWERS\n")
 
 
 def test_noop_failure_labeling_is_gated_on_non_destructive_failures() -> None:
@@ -1344,6 +1522,40 @@ def test_preflight_destructive_guard_fails_without_touching_the_real_index() -> 
 			text=True,
 		).stdout.strip()
 		assert cached == "", "preflight guard must not dirty the real git index when it rejects"
+
+
+def test_preflight_bulk_override_cannot_approve_workflow_deletions() -> None:
+	script = _render_github_expressions(_extract_run_script("Preflight destructive-commit guard"))
+	for directory, protected in ((".github/workflows", True), ("src", False)):
+		with tempfile.TemporaryDirectory(prefix="test_preflight_bulk_override_") as td:
+			repo_dir = Path(td)
+			_bootstrap_git_repo(repo_dir)
+			deletion_dir = repo_dir / directory
+			deletion_dir.mkdir(parents=True)
+			paths = [f"{directory}/file{i}.{'yml' if protected else 'py'}" for i in range(4)]
+			for path in paths:
+				(repo_dir / path).write_text("test\n", encoding="utf-8")
+			_git(["git", "add", directory], cwd=repo_dir)
+			_git(["git", "commit", "-m", "add files"], cwd=repo_dir)
+			for path in paths:
+				(repo_dir / path).unlink()
+			github_output = repo_dir / "github_output.txt"
+			proc = _run_shell_script(script, cwd=repo_dir, env={
+				"GITHUB_OUTPUT": str(github_output),
+				"GITHUB_REPOSITORY": "owner/repo",
+				"ALLOW_WORKFLOW_EDITS": "true",
+				"ALLOW_BULK_DELETE": "false",
+				"UNBLOCK_BULK_DELETE_OVERRIDE": "true",
+				"UNBLOCK_BULK_DELETE_PATHS": json.dumps(paths),
+				"ENFORCE_FILES_TOUCHED": "false",
+			})
+			if protected:
+				assert proc.returncode != 0, proc.stdout + proc.stderr
+				assert "destructive_commit_blocked=bulk-delete" in github_output.read_text(encoding="utf-8")
+				assert "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=protected_automation_paths" in proc.stdout
+			else:
+				assert proc.returncode == 0, proc.stdout + proc.stderr
+				assert "UNBLOCK_BULK_DELETE_OVERRIDE applied deletions=4" in proc.stdout
 
 
 def test_commit_helper_fails_closed_on_unsafe_fetched_manifest_paths() -> None:
@@ -1939,7 +2151,8 @@ def test_staged_support_workspace_fails_closed_on_unsafe_path_or_missing_base() 
 
 def test_implement_workflow_wires_staged_support_workspace_helper() -> None:
 	stage_block = _step_block_text("Stage workflow support files")
-	assert "lint_pr_body_auto_close.py implement_staged_support_workspace.sh; do" in stage_block
+	assert "codex_thread_reuse.sh codex_isolated_exec.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py" in stage_block
+	assert "lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do" in stage_block
 	assert 'echo "STAGED_SUPPORT_EDITOR_HEAD_LEDGER=${RUNTIME_DIR}/staged_support_editor_head.txt"' in stage_block
 	implement_run = _extract_run_script("Run Codex implementation")
 	helper_line = 'STAGED_SUPPORT_WORKSPACE_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_staged_support_workspace.sh"'
@@ -1951,10 +2164,10 @@ def test_implement_workflow_wires_staged_support_workspace_helper() -> None:
 	assert '--repo-root "${WORKSPACE_PATH:-${GITHUB_WORKSPACE}}"' in implement_run
 	# restore precedes the pre-Codex baseline capture and the attempt loop;
 	# reinstall follows the loop and precedes the transcript archive.
-	assert implement_run.index(restore_call) < implement_run.index("python3 scripts/targeted_file_context.py")
+	assert implement_run.index(restore_call) < implement_run.index('python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/targeted_file_context.py"')
 	assert implement_run.index(restore_call) < implement_run.index('CODEX_PRE_BASELINE="${RUNTIME_DIR}/codex_pre_baseline.txt"')
 	assert implement_run.index(restore_call) < implement_run.index('for attempt in $(seq 1 "${max_attempts}"); do')
-	assert implement_run.rindex("bash scripts/codex_thread_reuse.sh direct-run") < implement_run.index(reinstall_call)
+	assert implement_run.rindex('bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run') < implement_run.index(reinstall_call)
 	assert implement_run.index(reinstall_call) < implement_run.index('if [ "${implement_succeeded}" = "true" ]; then')
 	repair_run = _extract_run_script("Attempt post-Codex syntax repair")
 	assert repair_run.count(restore_call) == 1
@@ -1984,8 +2197,8 @@ def test_editor_launches_drop_staged_support_ledger_env() -> None:
 	conftest.py, so the launch line has to scrub them itself.
 	"""
 	for step_name, launch_line in (
-		("Run Codex implementation", "bash scripts/codex_thread_reuse.sh direct-run || cmd_rc=$?"),
-		("Attempt post-Codex syntax repair", "bash scripts/codex_thread_reuse.sh direct-run; then"),
+		("Run Codex implementation", 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run || cmd_rc=$?'),
+		("Attempt post-Codex syntax repair", 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run; then'),
 	):
 		script_lines = _extract_run_script(step_name).splitlines()
 		launch_indexes = [idx for idx, line in enumerate(script_lines) if line.strip() == launch_line]
@@ -2206,7 +2419,7 @@ def test_preflight_scope_guard_projects_only_untouched_staged_support_files() ->
 def test_validate_step_uses_reusable_validator_with_continue_on_error() -> None:
 	validate_block = _step_block_text("Validate syntax of changed files")
 	assert "continue-on-error: true" in validate_block
-	assert "bash scripts/validate_changed_files_syntax.sh" in validate_block
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/validate_changed_files_syntax.sh"' in validate_block
 
 
 def test_post_codex_syntax_repair_step_contract() -> None:
@@ -2216,16 +2429,17 @@ def test_post_codex_syntax_repair_step_contract() -> None:
 	repair_block = _step_block_text("Attempt post-Codex syntax repair")
 	assert "steps.validate_syntax_changed_files.outcome == 'failure'" in repair_block
 	assert "prompts/mode-implement-repair.txt" in repair_block
-	assert "scripts/validate_changed_files_syntax.sh" in repair_block
+	assert "/validate_changed_files_syntax.sh\"" in repair_block
 	assert "MAX_POST_CODEX_REPAIR_ATTEMPTS" in repair_block
 	assert "[ \"${max_attempts_raw}\" -lt 0 ]" in repair_block
 	assert "if [ \"${max_attempts}\" -eq 0 ]; then" in repair_block
 	assert "BASELINE_COMMIT=\"$(git stash create" in repair_block
 	assert "PRE_UNTRACKED_FILE=\"${RUNTIME_DIR}/post_codex_pre_untracked_attempt_" in repair_block
 	assert "Required repair artifacts are missing from repair-prompt-and-validator-split dependency." in repair_block
-	assert 'SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh "${REPAIR_PROMPT_TEMPLATE}"' in repair_block
+	assert 'SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/render_prompt.sh" "${REPAIR_PROMPT_TEMPLATE}"' in repair_block
 	assert 'Failed to render repair prompt template ${REPAIR_PROMPT_TEMPLATE}; using raw prompt.' in repair_block
-	assert "Keep apply_patch as the primary write path for repository edits" in repair_block
+	# The repair agent runs isolated (no MCP server), so the step renders no Serena hints.
+	assert "Serena MCP is available in this run" not in repair_block
 
 
 def test_syntax_failure_requires_successful_repair_before_commit_path() -> None:
@@ -2270,6 +2484,7 @@ def _run_guard_handler_case(
 	staged_support_reason: str = "",
 	staged_support_auto_release_safe: bool = False,
 	mock_issue_edit_failure: bool = False,
+	guard_overrides: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict, list[list[str]]]:
 	repo_dir = tmp_path / "repo"
 	runtime_dir = tmp_path / "runtime"
@@ -2302,6 +2517,9 @@ def _run_guard_handler_case(
 			"MOCK_CURL_CALLS_FILE": str(curl_calls_file),
 			"GITHUB_REPOSITORY": repository,
 			"GITHUB_RUN_ID": "777",
+			"GITHUB_RUN_ATTEMPT": "1",
+			"GITHUB_OUTPUT": str(runtime_dir / "step_output.txt"),
+			"RUNTIME_DIR": str(runtime_dir),
 			"GITHUB_SERVER_URL": "https://github.example.test",
 			"ISSUE_NUMBER": "948",
 			"GH_TOKEN": "test-token",
@@ -2323,6 +2541,7 @@ def _run_guard_handler_case(
 		},
 		cwd=repo_dir,
 	)
+	env.update(guard_overrides or {})
 	proc = subprocess.run(
 		["bash", str(runtime_helper)],
 		cwd=str(repo_dir),
@@ -2342,7 +2561,8 @@ def test_guard_handler_executes_all_rejection_modes_after_support_cleanup() -> N
 	cases = (
 		("canonical", "shubhodeep1/coding-workflows", "canonical-source", "", "", "ai:destructive-blocked", "canonical workflow-source file deletion"),
 		("unsafe-manifest", "owner/consumer", "unsafe-fetched-manifest", "", "", "ai:destructive-blocked", "artifact-cleanup manifest contained unsafe path(s)"),
-		("files-touched", "shubhodeep1/coding-workflows", "", "files-touched", "", "ai:scope-blocked", "files_touched scope guard rejected"),
+		("bulk-delete", "owner/consumer", "bulk-delete", "", "", "ai:destructive-blocked", "bulk deletion exceeded"),
+		("files-touched", "shubhodeep1/coding-workflows", "", "out-of-scope", "", "ai:scope-blocked", "files_touched scope guard rejected"),
 		("scope-lock", "owner/consumer", "", "scope-lock-label", "", "ai:scope-blocked", "Issue scope-lock rejected"),
 		("staged-support", "shubhodeep1/coding-workflows", "", "", "true", "ai:needs-human", "Staged-support restore failed"),
 	)
@@ -2367,6 +2587,15 @@ def test_guard_handler_executes_all_rejection_modes_after_support_cleanup() -> N
 			}], f"case={case_name}"
 			assert gh_state["issue_comments"][0]["repo"] == repository, f"case={case_name}"
 			assert expected_comment in gh_state["issue_comments"][0]["body"], f"case={case_name}"
+			comment_lines = gh_state["issue_comments"][0]["body"].splitlines()
+			if case_name != "staged-support":
+				assert comment_lines[-1].startswith("<!-- ai:guard-rejection:v1 item=948 ")
+				assert " run=777 count=1 truncated=false paths=" in comment_lines[-1]
+				assert f"guard={'scope-lock' if case_name == 'scope-lock' else 'scope' if case_name == 'files-touched' else 'destructive'}" in comment_lines[-1]
+				assert json.loads(base64.b64decode(comment_lines[-1].split("paths=")[1].split(" -->")[0])) == (
+					["README.md"] if scope_reason else ["agents.md"])
+			else:
+				assert "ai:guard-rejection:v1" not in gh_state["issue_comments"][0]["body"]
 			assert len(curl_calls) == 1, f"case={case_name}"
 			curl_text = " ".join(curl_calls[0])
 			assert "CRITICAL:" in curl_text, f"case={case_name}"
@@ -2374,6 +2603,62 @@ def test_guard_handler_executes_all_rejection_modes_after_support_cleanup() -> N
 			assert f"run: https://github.example.test/{repository}/actions/runs/777" in curl_text, f"case={case_name}"
 		finally:
 			shutil.rmtree(case_dir)
+
+
+def test_bulk_delete_handler_records_snapshot_only_for_bulk_rejection() -> None:
+	for reason in ("bulk-delete", "canonical-source", ""):
+		with tempfile.TemporaryDirectory(prefix="test_bulk_delete_snapshot_") as td:
+			case_dir = Path(td)
+			proc, state, _ = _run_guard_handler_case(case_dir, repository="owner/consumer",
+				destructive_reason=reason, scope_reason="files-touched" if not reason else "")
+			assert proc.returncode != 0
+			snapshot_path = case_dir / "runtime/destructive_rejection/destructive_rejection.json"
+			assert snapshot_path.exists() == (reason == "bulk-delete")
+			if reason == "bulk-delete":
+				assert json.loads(snapshot_path.read_text()) == {
+					"schema": "destructive_rejection.v1", "issue": 948, "run_id": 777,
+					"run_attempt": 1, "reason": "bulk-delete", "paths": ["agents.md"],
+				}
+				assert "rejection_snapshot=true" in (case_dir / "runtime/step_output.txt").read_text()
+				assert "<!-- ai:destructive-rejection:v1 item=948 run=777 attempt=1 -->" in state["issue_comments"][0]["body"]
+			else:
+				assert not (case_dir / "runtime/step_output.txt").exists()
+
+
+def test_destructive_snapshot_upload_wiring() -> None:
+	handler = _step_block_text("Destructive-commit guard — label + alert on rejection")
+	upload = _step_block_text("Upload destructive-rejection snapshot")
+	assert "id: handle_guard_block" in handler
+	assert "always() && steps.handle_guard_block.outputs.rejection_snapshot == 'true'" in upload
+	assert "uses: actions/upload-artifact@v6" in upload
+	assert "name: destructive-rejection-issue-${{ env.ISSUE_NUMBER }}" in upload
+	assert "path: ${{ env.RUNTIME_DIR }}/destructive_rejection/destructive_rejection.json" in upload
+	assert "retention-days: 30" in upload and "continue-on-error: true" in upload
+	assert "unblock_ledger.py" in _step_block_text("Stage workflow support files")
+
+
+def test_guard_handler_omits_marker_for_incomplete_path_list() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_partial_rejection_") as td:
+		proc, gh_state, _ = _run_guard_handler_case(Path(td), repository="owner/consumer", scope_reason="out-of-scope",
+			guard_overrides={"SVB_COUNT": "2"})
+		assert proc.returncode != 0
+		assert "ai:guard-rejection:v1" not in gh_state["issue_comments"][0]["body"]
+
+
+def test_guard_handler_marks_capped_and_unidentified_rejections() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_capped_rejection_") as td:
+		paths = [f"src/{index}.py" for index in range(100)]
+		proc, gh_state, _ = _run_guard_handler_case(Path(td), repository="owner/consumer", scope_reason="out-of-scope",
+			guard_overrides={"SVB_COUNT": "100", "SVB_FILES": "\n".join(paths)})
+		assert proc.returncode != 0
+		marker_line = gh_state["issue_comments"][0]["body"].splitlines()[-1]
+		assert "count=100 truncated=true" in marker_line
+		assert json.loads(base64.b64decode(marker_line.split("paths=")[1].split(" -->")[0])) == paths
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_missing_run_") as td:
+		proc, gh_state, _ = _run_guard_handler_case(Path(td), repository="owner/consumer", scope_reason="out-of-scope",
+			guard_overrides={"GITHUB_RUN_ID": "unknown"})
+		assert proc.returncode != 0
+		assert "ai:guard-rejection:v1" not in gh_state["issue_comments"][0]["body"]
 
 
 def test_staged_support_guard_reports_failed_human_latch() -> None:
@@ -2566,7 +2851,7 @@ def test_scope_lock_workflow_wiring_contracts_present() -> None:
 	scope_alert_block = _implement_guard_handler_text()
 	assert "SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}" in wf
 	assert 'select(startswith("ai:scope:"))' in wf
-	assert "ISSUE_SCOPE_LOCK_GLOB<<EOF" in wf
+	assert 'write_untrusted_multiline_env ISSUE_SCOPE_LOCK_GLOB "${ISSUE_SCOPE_LOCK_GLOB}"' in wf
 	assert "ACTIVE ISSUE SCOPE LOCK" in build_context_block
 	assert "Issue label: ai:scope:" in build_context_block
 	assert "scope-lock-label" in scope_alert_block
@@ -3982,7 +4267,7 @@ def test_codex_blocked_verdict_bail_and_flag() -> None:
 	)
 	# The reason must be logged so the workflow log names WHY the loop
 	# stopped without the operator opening codex_output.txt.
-	escape_helper_source_idx = codex_block.find("source scripts/gh_helpers.sh")
+	escape_helper_source_idx = codex_block.find('source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh"')
 	assert 0 <= escape_helper_source_idx < blocked_idx, (
 		"the GitHub Actions annotation escaper must be sourced before the BLOCKED bail"
 	)
@@ -5193,6 +5478,7 @@ def _run_smoke_detection_step(
 	issue_title: str,
 	issue_body: str,
 	default_model: str = "openai/gpt-5.4",
+	missing_body_file: bool = False,
 ) -> dict[str, str]:
 	"""Run the implement.yml "Detect smoke test ..." step in isolation
 	and return the GITHUB_ENV exports it produced.
@@ -5208,11 +5494,14 @@ def _run_smoke_detection_step(
 		tmp_path = Path(tmp)
 		github_env = tmp_path / "github_env"
 		github_env.write_text("", encoding="utf-8")
+		issue_body_file = tmp_path / "issue_body.txt"
+		if not missing_body_file:
+			issue_body_file.write_text(issue_body + "\n", encoding="utf-8")
 		env = os.environ.copy()
 		env.update(
 			{
 				"ISSUE_TITLE": issue_title,
-				"ISSUE_BODY": issue_body,
+				"ISSUE_BODY_FILE": str(issue_body_file),
 				"MODEL_EDITOR": default_model,
 				"SKIP_IMPLEMENT": "false",
 				"GITHUB_ENV": str(github_env),
@@ -5290,6 +5579,16 @@ def test_alt_model_override_inert_on_production_title() -> None:
 	)
 
 
+def test_alt_model_override_falls_back_when_body_file_is_missing() -> None:
+	exports = _run_smoke_detection_step(
+		issue_title="[E2E Smoke Test alt-model] update canary",
+		issue_body="Note: this run uses `anthropic/claude-sonnet-4-6` as the editor model override.",
+		missing_body_file=True,
+	)
+	assert exports.get("IS_SMOKE_TEST") == "true"
+	assert "MODEL_EDITOR" not in exports
+
+
 def test_alt_model_override_falls_back_on_malformed_body() -> None:
 	"""Alt-model title with a body that fails the shape regex (shell
 	metacharacters, missing slash, oversized) leaves MODEL_EDITOR alone
@@ -5334,6 +5633,126 @@ def test_review_pipeline_integration_chain_module_runs_clean() -> None:
 		f"stdout:\n{result.stdout}\n"
 		f"stderr:\n{result.stderr}"
 	)
+
+# Phase 5b (replace-claude-sessions plan): a stand-in for scripts/ai_engine.sh
+# whose claude_run records its arguments and plays the scenario in
+# MOCK_CLAUDE_MODE: success writes MOCK_CODEX_OUTPUT, unavailable returns 75,
+# crash returns 1.
+FAKE_DIAGNOSE_AI_ENGINE = r"""claude_run() {
+  printf '%s|%s|%s|%s|%s\n' "$1" "$(basename "$2")" "$(basename "$3")" "${AI_ENGINE_MODEL_HINT:-}" "${AI_ENGINE_EFFORT_HINT:-}" >> "${MOCK_CLAUDE_CALLS_FILE}"
+  case "${MOCK_CLAUDE_MODE:-success}" in
+    success) printf '%s\n' "${MOCK_CODEX_OUTPUT}" > "$3"; return 0 ;;
+    unavailable) echo "AI_ENGINE_FALLBACK role=$1 reason=no_credential" >&2; return 75 ;;
+    *) return 1 ;;
+  esac
+}
+"""
+
+_DIAGNOSE_OK_OUTPUT = {
+	"status": "needs_fixes",
+	"diagnosis": "diag",
+	"evidence_trace": [
+		{"file": "broken.yml", "line": 1, "function": "document", "observation": "error"},
+	],
+	"hypothesis": "diag hypothesis",
+	"fix_issues": [{"id": "fix-1", "title": "Fix 1", "body": "Body", "priority": 1, "depends_on": []}],
+	"harness_fixes": "",
+}
+
+
+def _run_diagnose_on_engine(tmp_path: Path, engine: str, claude_mode: str) -> tuple[subprocess.CompletedProcess[str], dict[str, str], str]:
+	claude_calls = tmp_path / "claude_calls.log"
+	proc, _state, _runtime_dir, paths = _run_diagnose_step(
+		tmp_path,
+		issue_labels=["ai:implementing"],
+		capture_contents="===== broken.yml =====\nerror\n",
+		codex_mode="success",
+		codex_output=_DIAGNOSE_OK_OUTPUT,
+		failed_step_name="Validate syntax of changed files",
+		issue_body="Tracking issue: #829\n",
+		fake_ai_engine=FAKE_DIAGNOSE_AI_ENGINE,
+		extra_env={
+			"AI_ENGINE_RESOLVED_IMPLEMENT_DIAGNOSE": engine,
+			"MODEL_DIAGNOSE_REASONING_EFFORT": "high",
+			"MOCK_CLAUDE_MODE": claude_mode,
+			"MOCK_CLAUDE_CALLS_FILE": str(claude_calls),
+		},
+	)
+	return proc, paths, _read_file(str(claude_calls))
+
+
+def test_diagnose_on_claude_runs_claude_and_never_codex() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		proc, paths, claude_calls = _run_diagnose_on_engine(Path(td), "claude", "success")
+		assert proc.returncode == 0, proc.stderr
+		assert claude_calls.splitlines() == [
+			"IMPLEMENT_DIAGNOSE|implement_diagnose_prompt.txt|implement_diagnose_output.txt|openai/gpt-5.4|high",
+		]
+		assert _read_file(paths["calls_file"]).strip() == ""
+		assert "handled=true" in _read_file(paths["github_output"])
+		assert json.loads(_read_file(paths["result_file"]))["status"] == "needs_fixes"
+
+
+def test_diagnose_claude_uses_role_specific_effort_and_timeout() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		claude_calls = Path(td) / "claude_calls.log"
+		proc, _state, _runtime_dir, paths = _run_diagnose_step(
+			Path(td),
+			issue_labels=["ai:implementing"],
+			capture_contents="===== broken.yml =====\nerror\n",
+			codex_mode="success",
+			codex_output=_DIAGNOSE_OK_OUTPUT,
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+			fake_ai_engine=FAKE_DIAGNOSE_AI_ENGINE,
+			extra_env={
+				"AI_ENGINE_RESOLVED_IMPLEMENT_DIAGNOSE": "claude",
+				"MODEL_DIAGNOSE_REASONING_EFFORT": "medium",
+				"MOCK_CLAUDE_MODE": "success",
+				"MOCK_CLAUDE_CALLS_FILE": str(claude_calls),
+			},
+		)
+		assert proc.returncode == 0, proc.stderr
+		assert claude_calls.read_text(encoding="utf-8").strip().endswith("|medium")
+		assert _read_file(paths["calls_file"]).strip() == ""
+		diagnose = (REPO_ROOT / "scripts" / "implement_diagnose_post_codex_failure.sh").read_text(encoding="utf-8")
+		assert 'timeout --signal=TERM --kill-after=5s "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s bash -c' in diagnose
+
+
+def test_diagnose_claude_unavailable_runs_the_unchanged_codex_call() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		proc, paths, claude_calls = _run_diagnose_on_engine(Path(td), "claude", "unavailable")
+		assert proc.returncode == 0, proc.stderr
+		assert len(claude_calls.splitlines()) == 1
+		call_lines = [line for line in _read_file(paths["calls_file"]).splitlines() if line.strip()]
+		assert len(call_lines) == 1
+		assert "exec" in json.loads(call_lines[0])
+		assert "handled=true" in _read_file(paths["github_output"])
+		assert json.loads(_read_file(paths["result_file"]))["status"] == "needs_fixes"
+
+
+def test_diagnose_claude_crash_does_not_fall_back_to_codex() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		_proc, paths, claude_calls = _run_diagnose_on_engine(Path(td), "claude", "crash")
+		assert len(claude_calls.splitlines()) == 1
+		assert _read_file(paths["calls_file"]).strip() == ""
+
+
+def test_diagnose_on_codex_never_touches_claude() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		proc, paths, claude_calls = _run_diagnose_on_engine(Path(td), "codex", "success")
+		assert proc.returncode == 0, proc.stderr
+		assert claude_calls == ""
+		assert len([line for line in _read_file(paths["calls_file"]).splitlines() if line.strip()]) == 1
+
+
+def test_diagnose_codex_command_is_unchanged() -> None:
+	diagnose = (REPO_ROOT / "scripts" / "implement_diagnose_post_codex_failure.sh").read_text(encoding="utf-8")
+	assert (
+		'timeout "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s "${diagnose_codex_cmd[@]}" --ask-for-approval never -c model_verbosity=low '
+		'-c include_apply_patch_tool=true exec --skip-git-repo-check --model "${DIAGNOSE_MODEL}" --sandbox danger-full-access'
+	) in diagnose
+
 
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

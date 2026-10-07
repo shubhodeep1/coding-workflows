@@ -39,6 +39,7 @@ REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Append review pipeline iteration summary": ("review_autofix_step_iteration_summary.sh", "warning"),
 	"Re-trigger review via workflow_dispatch": ("review_autofix_step_post_commit_retrigger.sh", "error"),
 	"Re-dispatch review on editor-changes-lost": ("review_autofix_step_changes_lost_redispatch.sh", "error"),
+	"Count autofix iterations": ("review_autofix_step_count_iterations.sh", "error"),
 }
 
 _WRAPPER_START_RE = re.compile(

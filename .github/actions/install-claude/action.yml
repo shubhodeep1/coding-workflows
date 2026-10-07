@@ -45,6 +45,16 @@ runs:
 
         version="${CLAUDE_VERSION_INPUT}"
         if [ -z "${version}" ]; then
+          # A relative config_path is relative to GITHUB_WORKSPACE, where the
+          # caller's `uses:` path and hashFiles() resolve it. The step's own
+          # cwd is not: implement.yml's BASH_ENV cds every bash step,
+          # including this one, into the materialized WORKSPACE_PATH copy,
+          # which has no .codex-workflow-src, so a cwd-relative read missed
+          # the file and every IMPLEMENT run fell back to codex (cli_missing).
+          case "${CLAUDE_ENGINE_CONFIG_PATH}" in
+            /*) ;;
+            *) CLAUDE_ENGINE_CONFIG_PATH="${GITHUB_WORKSPACE:-${PWD}}/${CLAUDE_ENGINE_CONFIG_PATH}" ;;
+          esac
           if [ ! -f "${CLAUDE_ENGINE_CONFIG_PATH}" ]; then
             echo "::error::install-claude: no claude_version input and ${CLAUDE_ENGINE_CONFIG_PATH} is missing" >&2
             exit 2

@@ -53,6 +53,19 @@ Copy this block when adding a new entry:
 
 ## Entries
 
+### `scripts/sync_claude_live_copies.py` + `.github/workflows/sync-claude-live-copies.yml`
+
+- **Introduced in:** #6118 (2026-10-05)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `gh api 'repos/shubhodeep1/coding-workflows/actions/workflows/sync-claude-live-copies.yml/runs?status=in_progress&per_page=1' --jq '.total_count'` returns `0` (no live-copy sync run is still active).
+  - `gh api 'repos/shubhodeep1/coding-workflows/pulls?state=open&head=shubhodeep1:ai/sync-claude-live-copies&per_page=100'` returns `[]` (no unmerged live-copy sync PR).
+  - `PYTHONDONTWRITEBYTECODE=1 python3 scripts/sync_claude_live_copies.py check` exits 0 on the default branch (no template/live drift at removal time).
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_template_live_parity.py` passes (the parity guard remains effective or has a tested replacement).
+  - `rg -n 'sync_claude_live_copies\.py' .github/workflows scripts --glob '!scripts/sync_claude_live_copies.py'` shows no remaining caller after a replacement for the push-to-main sync has been wired in and verified.
+- **Owner:** @shubhodeep1
+
 ### `scripts/workflow_failure_heal_report.sh` + `scripts/workflow_failure_heal_autofix_report.sh` + `scripts/workflow_failure_heal_intake.sh` + `scripts/workflow_failure_heal.py` + `.github/workflows/workflow_failure_heal.yml` + `.github/workflows/workflow-failure-heal-intake.yml`
 
 - **Introduced in:** #4165 (2026-09-20)
@@ -156,6 +169,7 @@ Copy this block when adding a new entry:
 - **Removal preflight checks:**
   - `rg -n 'check_failure_triage\.sh' .github/workflows/check_failure_triage.yml` shows the reusable workflow still stages and invokes the script.
   - `rg -n 'check_failure_triage\.yml' .github/workflows/internal-check-failure-triage.yml workflow-templates/ai-check-failure-triage.yml` shows both the self-hosting (`@main`) and consumer (`@stable`) wrappers still call the reusable workflow.
+  - `PYTHONDONTWRITEBYTECODE=1 pytest -q tests/test_check_failure_triage_workflow_security.py` confirms trusted prompt staging, credential-free diagnosis, and fine-grained-token issue posting remain separated.
   - `PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py` returns `All workflow script references resolve to existing files.`
   - The feature is on by default, so removal requires confirming no consumer still wants it: for every consumer in `.github/ai/consumer_repos.json`, `gh variable list --repo <consumer>` shows `CHECK_FAILURE_TRIAGE_ENABLED` is explicitly `false` (the repo has opted out) before removing it.
 - **Owner:** @shubhodeep1
@@ -212,4 +226,3 @@ Copy this block when adding a new entry:
   - `rg -n 'write_opencode_config\.sh' .github/workflows scripts --glob '!scripts/write_opencode_config.sh'` returns no matches.
   - `rg -n 'opencode|OPENCODE_' .github/workflows .github/actions scripts` confirms no remaining OpenCode runtime references before the helper is removed.
 - **Owner:** @shubhodeep1
-

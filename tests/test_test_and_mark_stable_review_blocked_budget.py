@@ -235,7 +235,7 @@ def test_phase4b_dispatches_only_without_active_work_and_pins_one_run() -> None:
 
 def _run_phase4b_with_pr_states(
 	states: list[str], *, reset: str = "retry-after: 1", probe: str = "",
-	run_states: list[str] | None = None, adopt: bool = True,
+	run_states: list[str] | None = None, adopt: bool = True, extra_env: dict[str, str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], str, str]:
 	workflow = _read_workflow()
 	step = _slice_between(workflow, '      - name: "Phase 4b: Verify editor restored canary (pytest + retry)"', '      # ── Phase 5:')
@@ -287,11 +287,18 @@ def _run_phase4b_with_pr_states(
 	      local run_count
 	      run_count=$(wc -l < "${RUNNER_TEMP}/run_reads")
 	      echo x >> "${RUNNER_TEMP}/run_reads"
-	      if [ "$(sed -n "$((run_count + 1))p" "${RUNNER_TEMP}/run_states")" = limit ]; then
+	      local run_state
+	      run_state=$(sed -n "$((run_count + 1))p" "${RUNNER_TEMP}/run_states")
+	      if [ "${run_state}" = limit ]; then
 	        printf 'HTTP/2 403\\n%s\\n\\n{"message":"API rate limit exceeded"}\\n' "${RESET_HEADER}"
 	        echo 'gh: API rate limit exceeded (HTTP 403)' >&2
 	        return 1
 	      fi
+	      case "${run_state}" in
+	        queued|in_progress)
+	          printf 'HTTP/2 200\\n\\n{"id":20,"status":"%s","conclusion":null}\\n' "${run_state}"
+	          return 0 ;;
+	      esac
 	      printf 'HTTP/2 200\\n\\n{"id":20,"status":"completed","conclusion":"success"}\\n' ;;
 	    */pulls/*)
 	      echo pr >> "${RUNNER_TEMP}/requests"
@@ -335,6 +342,8 @@ def _run_phase4b_with_pr_states(
 			"BAIT_SHA": "a" * 40, "FIX_SHA": "b" * 40, "EDITOR_RETRY_BUDGET_MINUTES": "25",
 			"REVIEW_WORKFLOW_FILE": "internal-review.yml", "RESET_HEADER": reset, "PROBE_RESET": probe,
 			"ADOPT": "1" if adopt else "0"})
+		env.pop("E2E_JOB_STARTED_EPOCH", None)
+		env.update(extra_env or {})
 		result = subprocess.run(["bash", "-c", body], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=30)
 		return result, (root / "output").read_text(encoding="utf-8"), (root / "requests").read_text(encoding="utf-8") if (root / "requests").exists() else ""
 
@@ -395,6 +404,55 @@ def test_phase4b_four_ordinary_state_failures_still_break() -> None:
 	assert result.returncode != 0
 	assert "status=pr_state_check_failed" in output
 	assert "run" not in requests
+
+
+_QUEUE_BUDGET_ENV = {"E2E_JOB_TIMEOUT_MINUTES": "300", "PHASE_TIMEOUT": "30",
+	"PHASE7_WAIT_BUDGET_MINUTES": "10", "E2E_FINALIZATION_RESERVE_MINUTES": "20"}
+
+
+def test_phase4b_queued_retry_run_extends_the_deadline() -> None:
+	# Gate run 37395952357: the retry run waited for a runner most of its
+	# 25 minutes. 110 queued polls (~27 min) then completion must pass.
+	result, output, _ = _run_phase4b_with_pr_states(
+		["open"] * 400, run_states=["queued"] * 110 + ["completed"],
+		extra_env={**_QUEUE_BUDGET_ENV, "E2E_JOB_STARTED_EPOCH": "1000"},
+	)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "status=success_after_retry" in output
+
+
+def test_phase4b_queue_extension_needs_a_recorded_job_start() -> None:
+	result, output, _ = _run_phase4b_with_pr_states(
+		["open"] * 400, run_states=["queued"] * 110 + ["completed"], extra_env=_QUEUE_BUDGET_ENV,
+	)
+	assert result.returncode != 0
+	assert "status=retry_timeout" in output
+	assert "deadline extended by 0s (cap 0s)" in result.stdout
+
+
+def test_phase4b_queue_extension_stops_at_the_job_budget_ceiling() -> None:
+	# Ceiling = start + (105 - 30 - 10 - 20) min = 2700 on the fake clock,
+	# which starts at 1000: about 200 s beyond the 25-minute base deadline.
+	result, output, _ = _run_phase4b_with_pr_states(
+		["open"] * 400, run_states=["queued"] * 300,
+		extra_env={**_QUEUE_BUDGET_ENV, "E2E_JOB_TIMEOUT_MINUTES": "105", "E2E_JOB_STARTED_EPOCH": "0"},
+	)
+	assert result.returncode != 0
+	assert "status=retry_timeout" in output
+	match = re.search(r"deadline extended by (\d+)s \(cap (\d+)s\)", result.stdout)
+	assert match, result.stdout
+	extended, cap = int(match.group(1)), int(match.group(2))
+	assert 0 < cap <= 200
+	assert extended == cap
+
+
+def test_phase0a_installs_pytest_before_running_the_hot_poller_test() -> None:
+	# tests/test_orchestrate_poll_process.py imports pytest (#6187); gate run
+	# 37554001238 failed Phase 0a with ModuleNotFoundError before any phase ran.
+	step = _slice_between(_read_workflow(), '      - name: "Phase 0a: Hot orchestrate-poll regression guard"', "      # ── Phase 0:")
+	assert "python3 -m pip install --quiet pytest" in step
+	assert step.index("pip install --quiet pytest") < step.index("python3 tests/test_orchestrate_poll_process.py")
+	assert 'echo "status=pytest_install_failed" >> "$GITHUB_OUTPUT"' in step
 
 
 def test_phase6_registers_once_and_polls_only_the_pinned_run() -> None:
