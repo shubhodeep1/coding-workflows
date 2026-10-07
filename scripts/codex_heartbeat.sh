@@ -4,7 +4,7 @@ set -euo pipefail
 usage()
 {
 	cat >&2 <<'EOF'
-Usage: codex_heartbeat.sh --phase <phase> [--stdout-file <path>] [--stderr-file <path>] [--activity-file <path>] -- <command> [args...]
+Usage: codex_heartbeat.sh --phase <phase> [--engine <codex|claude>] [--stdout-file <path>] [--stderr-file <path>] [--activity-file <path>] -- <command> [args...]
 EOF
 }
 
@@ -22,6 +22,7 @@ run_without_heartbeat()
 }
 
 phase="unknown"
+engine=""
 stdout_file=""
 stderr_file=""
 activity_file=""
@@ -30,6 +31,10 @@ while [ "$#" -gt 0 ]; do
 	case "$1" in
 		--phase)
 			phase="${2:-}"
+			shift 2
+			;;
+		--engine)
+			engine="${2:-}"
 			shift 2
 			;;
 		--stdout-file)
@@ -94,14 +99,23 @@ if ! command -v python3 >/dev/null 2>&1; then
 	run_without_heartbeat "$@"
 fi
 
+case "${engine}" in
+	""|codex|claude)
+		;;
+	*)
+		echo "::warning::Invalid --engine '${engine}'; omitting the engine log field." >&2
+		engine=""
+		;;
+esac
 export CODEX_HEARTBEAT_PHASE="${phase}"
+export CODEX_HEARTBEAT_ENGINE="${engine}"
 export CODEX_HEARTBEAT_ENABLED_EFFECTIVE="${heartbeat_enabled}"
 export CODEX_HEARTBEAT_STDOUT_FILE="${stdout_file}"
 export CODEX_HEARTBEAT_STDERR_FILE="${stderr_file}"
 export CODEX_HEARTBEAT_ACTIVITY_FILE="${activity_file}"
 export CODEX_HEARTBEAT_INTERVAL_SECS_EFFECTIVE="${heartbeat_interval_raw}"
 
-exec python3 -c "$(cat <<'PY'
+exec env PYTHONSAFEPATH=1 python3 -c "$(cat <<'PY'
 from __future__ import annotations
 
 import os
@@ -116,6 +130,8 @@ from pathlib import Path
 
 
 PHASE = os.environ.get("CODEX_HEARTBEAT_PHASE", "unknown")
+# `--engine` only adds a log field; without it every line is unchanged.
+ENGINE_SUFFIX = f" engine={os.environ['CODEX_HEARTBEAT_ENGINE']}" if os.environ.get("CODEX_HEARTBEAT_ENGINE") else ""
 HEARTBEAT_ENABLED = os.environ.get("CODEX_HEARTBEAT_ENABLED_EFFECTIVE", "true") == "true"
 STDOUT_FILE = os.environ.get("CODEX_HEARTBEAT_STDOUT_FILE", "")
 STDERR_FILE = os.environ.get("CODEX_HEARTBEAT_STDERR_FILE", "")
@@ -270,7 +286,7 @@ try:
 			# Descendants can outlive the direct child briefly; gating on
 			# child.poll() would let next_heartbeat_at go stale and busy-spin.
 			elapsed = int(time.monotonic() - last_output_at)
-			os.write(2, f"CODEX_HEARTBEAT: phase={PHASE} elapsed_secs={elapsed}{_budget_suffix_for_now()}\n".encode("utf-8"))
+			os.write(2, f"CODEX_HEARTBEAT: phase={PHASE} elapsed_secs={elapsed}{_budget_suffix_for_now()}{ENGINE_SUFFIX}\n".encode("utf-8"))
 			_write_activity_marker()
 			next_heartbeat_at += INTERVAL_SECS
 			while next_heartbeat_at <= time.monotonic():

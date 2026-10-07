@@ -123,7 +123,7 @@ assert_workspace_path_under_root()
 	local workspace_root="$1"
 	local workspace_path="$2"
 
-	PYTHONDONTWRITEBYTECODE=1 python3 - "${workspace_root}" "${workspace_path}" <<'PY'
+	PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${workspace_root}" "${workspace_path}" <<'PY'
 from pathlib import Path
 import sys
 
@@ -269,7 +269,7 @@ materialize_source_tree()
 	local workspace_path="$2"
 	local manifest_path="${workspace_path}/.ai/.workspace_source_manifest.txt"
 
-	PYTHONDONTWRITEBYTECODE=1 python3 - "${source_path}" "${workspace_path}" "${manifest_path}" <<'PY'
+	PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${source_path}" "${workspace_path}" "${manifest_path}" <<'PY'
 from __future__ import annotations
 
 import os

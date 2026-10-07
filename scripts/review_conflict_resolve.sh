@@ -41,6 +41,11 @@
 
 set -euo pipefail
 
+# Stages one accepted resolver path into the real merge index, which the
+# [ai-merge-resolve] commit is written from.  Never call it with
+# GIT_INDEX_FILE pointing at the model's private copy
+# (RESOLVER_MODEL_INDEX_FILE, #5627): that copy is discarded, so the real
+# index would keep its unmerged entries and the commit would carry nothing.
 stage_resolver_touched_path_or_fail() {
   local resolver_staging_path="$1"
   local resolver_staging_exit_code=0
@@ -316,14 +321,8 @@ PRE_RESOLVER_STATE_FILE="${RUNTIME_DIR}/pre_resolver_state.tsv"
 CONFLICTED_PATHS_FILE="${RUNTIME_DIR}/conflicted_paths.txt"
 RESOLVER_ALLOWLIST_FILE="${RUNTIME_DIR}/resolver_unmerged_allowlist.txt"
 CONFLICT_RESOLVER_SEMBLE_QUERY_FILE="${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-${RUNTIME_DIR}/conflict_resolver_semble_query.txt}"
-RESOLVER_SERENA_TOOL_HINTS="$({
-  if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
-    printf '%s\n' \
-      'Resolver Serena hints:' \
-      '- Serena MCP is available in this run. Prefer Serena read/navigation tools when they materially reduce shell reads while resolving a conflict (for example: activate_project, get_symbols_overview, find_symbol, find_referencing_symbols, search_for_pattern).' \
-      '- Use Serena for lookup/navigation only; keep repository writes in the normal apply_patch/shell paths rather than a broad symbol-write workflow.'
-  fi
-}; )"
+# The isolated resolver has no MCP access; never advertise host Serena tools.
+RESOLVER_SERENA_TOOL_HINTS=""
 
 _RESOLVER_DISPATCH_FIRED=0
 _dispatch_integration_judge_now() {
@@ -469,15 +468,49 @@ _apply_resolver_reasoning_effort "${_current_reasoning_effort}"
 RESOLVER_OPENCODE_CONFIG="${RUNTIME_DIR}/resolver_opencode.json"
 RESOLVER_OPENCODE_WORKSPACE="$(pwd)"
 resolver_opencode_serena="off"
-if [ "${SERENA_AVAILABLE:-false}" = "true" ]; then
-  resolver_opencode_serena="on"
-fi
 if ! bash "${OPENCODE_CONFIG_WRITER_PATH}" \
   --role writer \
   --model "${MODEL_EDITOR}" \
   --project-path "${RESOLVER_OPENCODE_WORKSPACE}" \
   --config-path "${RESOLVER_OPENCODE_CONFIG}" \
   --serena "${resolver_opencode_serena}"; then
+  opencode_emit_failure_alert review_conflict_resolve writer "${MODEL_EDITOR}" 1 config_generation || true
+  exit 1
+fi
+
+# Retain the source-repo private-index compatibility helper (#5627). The
+# model now uses the sandbox's Git snapshot, not the host's merge index.
+_resolver_disable_opencode_snapshot()
+{
+  PYTHONDONTWRITEBYTECODE=1 python3 - "${1:-${RESOLVER_OPENCODE_CONFIG}}" <<'PY'
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+
+path = Path(sys.argv[1])
+temp_name = None
+try:
+	config = json.loads(path.read_text(encoding="utf-8"))
+	if not isinstance(config, dict):
+		raise ValueError("resolver OpenCode config is not a JSON object")
+	config["snapshot"] = False
+	with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as temp:
+		temp_name = temp.name
+		json.dump(config, temp, indent=2)
+		temp.write("\n")
+	os.chmod(temp_name, path.stat().st_mode & 0o777)
+	os.replace(temp_name, path)
+except (OSError, ValueError) as exc:
+	if temp_name is not None:
+		Path(temp_name).unlink(missing_ok=True)
+	print(f"::error::Cannot disable OpenCode snapshots in the resolver config ({type(exc).__name__}).", file=sys.stderr)
+	sys.exit(1)
+PY
+}
+
+if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ] && ! _resolver_disable_opencode_snapshot; then
   opencode_emit_failure_alert review_conflict_resolve writer "${MODEL_EDITOR}" 1 config_generation || true
   exit 1
 fi
@@ -497,6 +530,130 @@ RESOLVER_FP_BASELINE_STATE_FILE="${RUNTIME_DIR}/resolver_fp_baseline_state.json"
 RESOLVER_RETRY_STATE_ARTIFACT_FILE="${RUNTIME_DIR}/resolver_retry_state_artifact.json"
 RESOLVER_SCOPE_SNAPSHOT_DIR="${RUNTIME_DIR}/resolver_scope_snapshot"
 RESOLVER_SCOPE_VIOLATIONS_FILE="${RUNTIME_DIR}/resolver_scope_violations.txt"
+RESOLVER_MODEL_INDEX_FILE="${RUNTIME_DIR}/resolver_model_index"
+
+# Source-repo only (#5627): the model shares the checkout but gets a private
+# copy of the captured merge index through GIT_INDEX_FILE, so a `git add` of
+# the file it resolved never changes the real index, which both attempt-scope
+# guards require to stay unchanged. The copy is refreshed before every attempt
+# and never read back: the script stages the accepted resolution itself. A
+# model that bypasses the copy still changes the real index and fails closed.
+_resolver_model_index_prepare()
+{
+  local _real_index
+  case "${RESOLVER_MODEL_INDEX_FILE}" in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  _real_index="$(git rev-parse --path-format=absolute --git-path index)" || return 1
+  [ -f "${_real_index}" ] || return 1
+  # An inherited GIT_INDEX_FILE makes --git-path index return it; never let
+  # the copy step delete the index the scope guards read.
+  if [ "${_real_index}" = "${RESOLVER_MODEL_INDEX_FILE}" ] || [ "${_real_index}" -ef "${RESOLVER_MODEL_INDEX_FILE}" ]; then
+    return 1
+  fi
+  rm -f -- "${RESOLVER_MODEL_INDEX_FILE}" "${RESOLVER_MODEL_INDEX_FILE}.lock" || return 1
+  cp -- "${_real_index}" "${RESOLVER_MODEL_INDEX_FILE}" || return 1
+  cmp -s -- "${_real_index}" "${RESOLVER_MODEL_INDEX_FILE}"
+}
+
+_resolver_fail_closed()
+{
+  echo "AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=$1 action=fail_closed" >&2
+  echo "::error::Conflict resolver isolation unavailable (reason=$1); refusing host fallback." >&2
+  # Name the failure for the review-autofix-failure:v1 marker ("Assemble
+  # failure evidence" reads AUTOFIX_FAILURE_REASON). The gate's identical-
+  # failure cap stops a head on the first marker whose reason
+  # workflow_failure_heal.py lists in NON_RETRYABLE_FAILURE_REASONS
+  # (PR #6438: ~28 identical sandbox_path_unsupported runs on one head).
+  # Integration-sync PRs keep the generic reason: their failures must keep
+  # counting toward the resolver retry-state escape threshold, whose
+  # escalation drives the orchestrator's automatic branch rebuild.
+  if [ -n "${GITHUB_ENV:-}" ] && [ "${IS_INTEGRATION_SYNC:-false}" != "true" ] &&
+     [[ "$1" =~ ^[a-z][a-z0-9_]{0,60}$ ]]; then
+    echo "AUTOFIX_FAILURE_REASON=conflict_resolver_$1" >> "${GITHUB_ENV}" || true
+  fi
+  if type _persist_resolver_retry_state_from_current_failure >/dev/null 2>&1; then
+    RESOLVER_ISOLATION_FAILURE_REASON="$1" _persist_resolver_retry_state_from_current_failure || true
+  fi
+  emit_conflict_resolver_substate "Failed" "${attempt:-0}"
+  if [ -n "${tmp_output:-}" ]; then rm -f -- "${tmp_output}"; fi
+  if [ -n "${_stall_status_file:-}" ]; then rm -f -- "${_stall_status_file}"; fi
+  exit 1
+}
+
+# Fail closed on a rejected conflict path set (check-paths exit 1).
+# $1 is the report check-paths wrote: `host_only<TAB><path>` per path the
+# sandbox policy keeps on the host (generated files under .ai/, host-executed
+# hooks such as .claude/hooks/pr_merge_status_guard.py, unsupported file
+# types), `unsafe` for symlinks and odd names. When every rejection is
+# host_only the merge needs a human, so name the paths once in one ::error::
+# line (the failure comment's "First error") and stop with
+# sandbox_path_host_only; the model never sees any of the conflict set,
+# because a merge commit needs every path resolved. Anything else keeps the
+# nameless sandbox_path_unsupported.
+_resolver_fail_closed_for_conflict_paths()
+{
+  local conflict_path_report="$1" conflict_host_only_paths=""
+  if [ -s "${conflict_path_report}" ] && [ ! -L "${conflict_path_report}" ] &&
+     ! grep -qv $'^host_only\t[A-Za-z0-9_.][A-Za-z0-9._/-]*$' "${conflict_path_report}"; then
+    conflict_host_only_paths="$(awk -F'\t' 'NR <= 20 { printf "%s%s", (NR > 1 ? ", " : ""), $2 } NR == 21 { printf ", ..." }' "${conflict_path_report}")" || conflict_host_only_paths=""
+  fi
+  if [ -n "${conflict_host_only_paths}" ]; then
+    echo "::error::Conflict resolver: host-only conflicted path(s) need a manual merge: ${conflict_host_only_paths}" >&2
+    _resolver_fail_closed sandbox_path_host_only
+  fi
+  _resolver_fail_closed sandbox_path_unsupported
+}
+
+# Each invocation prepares its own snapshot: a failed Claude run may have
+# modified its copy, so the OpenCode retry must never reuse that root.
+_resolver_sandbox_attempt()
+{
+  local sandbox_attempt_engine="$1" sandbox_attempt_root="" sandbox_attempt_config=/dev/null
+  local sandbox_attempt_rc=0
+  resolver_sandbox_failure_reason=""
+  if ! sandbox_attempt_root="$(bash "${resolver_sandbox_sh}" prepare-ephemeral "${sandbox_attempt_engine}")" || [ -z "${sandbox_attempt_root}" ]; then
+    resolver_sandbox_failure_reason=sandbox_prepare_failed
+    if [ -n "${sandbox_attempt_root}" ]; then
+      REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" bash "${resolver_sandbox_sh}" cleanup || true
+    fi
+    return 77
+  fi
+  if [ "${sandbox_attempt_engine}" = codex ]; then
+    sandbox_attempt_config="${RUNTIME_DIR}/resolver_sandbox_opencode.json"
+    if ! bash "${OPENCODE_CONFIG_WRITER_PATH}" --role writer --model "${MODEL_EDITOR}" \
+      --project-path "$(pwd)" --config-path "${sandbox_attempt_config}" --serena off ||
+      ! _resolver_disable_opencode_snapshot "${sandbox_attempt_config}"; then
+      resolver_sandbox_failure_reason=opencode_config_failed
+      REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" bash "${resolver_sandbox_sh}" cleanup || true
+      return 77
+    fi
+  fi
+  if ! : > "${tmp_output}"; then
+    resolver_sandbox_failure_reason=sandbox_output_unavailable
+    REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" bash "${resolver_sandbox_sh}" cleanup || true
+    return 77
+  fi
+  REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" \
+    timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+    bash "${resolver_sandbox_sh}" run "${_effective_prompt_file}" "${tmp_output}" \
+    "${MODEL_EDITOR}" "${_current_reasoning_effort}" "${sandbox_attempt_config}" "${sandbox_attempt_engine}" CONFLICT_RESOLVER write \
+    || sandbox_attempt_rc=$?
+  if ! REVIEW_SANDBOX_ROOT="${sandbox_attempt_root}" bash "${resolver_sandbox_sh}" cleanup; then
+    resolver_sandbox_failure_reason=sandbox_cleanup_failed
+    return 77
+  fi
+  if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then
+    resolver_sandbox_failure_reason=sandbox_transfer_failed
+    return 77
+  fi
+  if [ "${sandbox_attempt_rc}" -eq 2 ]; then
+    resolver_sandbox_failure_reason=sandbox_helper_outdated
+    return 77
+  fi
+  return "${sandbox_attempt_rc}"
+}
 
 # Source-repo only: the final touched-set gate compares against the prepare
 # step's pre-resolver tree. Snapshot each attempt as well, since the allowlist
@@ -1193,7 +1350,7 @@ _build_retry_prompt() {
     FINGERPRINT_VIOLATION_DETAILS="${_fp_details}" \
     SERENA_TOOL_HINTS_RESOLVER="${RESOLVER_SERENA_TOOL_HINTS:-}" \
     PER_ATTEMPT_TIMEOUT_SECS="${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS:-3000}" \
-    python3 -c "import os,re,sys; tpl=open(os.environ['PRELUDE_TPL'],encoding='utf-8',errors='replace').read(); tpl=re.sub(r'\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}', lambda m: os.environ.get(m.group(1).upper(), ''), tpl); orig=open(os.environ['ORIGINAL_PROMPT_FILE'],encoding='utf-8',errors='replace').read(); sys.stdout.write(tpl + orig)" \
+    PYTHONSAFEPATH=1 python3 -c "import os,re,sys; tpl=open(os.environ['PRELUDE_TPL'],encoding='utf-8',errors='replace').read(); tpl=re.sub(r'\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}', lambda m: os.environ.get(m.group(1).upper(), ''), tpl); orig=open(os.environ['ORIGINAL_PROMPT_FILE'],encoding='utf-8',errors='replace').read(); sys.stdout.write(tpl + orig)" \
     > "${RESOLVER_RETRY_PROMPT_FILE}"
   if [ "${_failure_kind}" = "timeout" ]; then
     _retry_prompt_outcome="timeout-prelude"
@@ -1364,6 +1521,12 @@ def select_verification_tier_from_pr_payload(pr_payload: dict[str, Any], thresho
     if retry_state_head_sha != head_sha:
         return {"tier": "strict", "reason": "retry_state_head_sha_mismatch", "consecutive_failure_count": 0}
     consecutive_failure_count = _parse_nonnegative_int(retry_state.get("consecutive_failure_count"), 0)
+    if str(retry_state.get("isolation_failure_reason", "") or "").strip():
+        return {
+            "tier": "strict",
+            "reason": f"isolation_failure_count={consecutive_failure_count}",
+            "consecutive_failure_count": consecutive_failure_count,
+        }
     return {
         "tier": select_verification_tier(consecutive_failure_count, threshold),
         "reason": f"retry_state_count={consecutive_failure_count}",
@@ -1598,6 +1761,7 @@ def build_resolver_retry_state_artifact(
     run_url: str,
     verifier_module: Any,
     max_items: int = 10,
+    isolation_failure_reason: str = "",
 ) -> dict[str, Any]:
     body = str(pr_payload.get("body", "") or "")
     head = pr_payload.get("head") or {}
@@ -1605,11 +1769,21 @@ def build_resolver_retry_state_artifact(
     if not head_sha:
         return {"ok": False, "reason": "missing PR head SHA in PR_PAYLOAD_FILE"}
 
-    regressed_by_resolver, pre_existing_drift = compute_failure_sets(
-        fingerprints,
-        baseline_state,
-        verifier_module,
-    )
+    if isolation_failure_reason:
+        regressed_by_resolver = [{
+            "issue": "",
+            "pr": pr_number,
+            "kind": "isolation_failure",
+            "path": "",
+            "fp_key": ["isolation_failure", isolation_failure_reason],
+        }]
+        pre_existing_drift = []
+    else:
+        regressed_by_resolver, pre_existing_drift = compute_failure_sets(
+            fingerprints,
+            baseline_state,
+            verifier_module,
+        )
     if not regressed_by_resolver and not pre_existing_drift:
         return {"ok": False, "reason": "no fingerprint failures detected for retry-state persistence"}
 
@@ -1640,15 +1814,18 @@ def build_resolver_retry_state_artifact(
     max_items = max(1, _parse_positive_int(max_items, 10))
     now_iso = _utc_now_iso()
     previous_verification_tier = "strict"
-    if previous_head_sha == head_sha and previous_signature == failure_signature_sha256:
-        previous_verification_tier = select_verification_tier(previous_count, threshold)
-    verification_tier = select_verification_tier(consecutive_failure_count, threshold)
-    tier_downgrade_marker = build_tier_downgrade_marker(
-        previous_verification_tier,
-        verification_tier,
-        consecutive_failure_count,
-        threshold,
-    )
+    verification_tier = "strict"
+    tier_downgrade_marker = ""
+    if not isolation_failure_reason:
+        if previous_head_sha == head_sha and previous_signature == failure_signature_sha256:
+            previous_verification_tier = select_verification_tier(previous_count, threshold)
+        verification_tier = select_verification_tier(consecutive_failure_count, threshold)
+        tier_downgrade_marker = build_tier_downgrade_marker(
+            previous_verification_tier,
+            verification_tier,
+            consecutive_failure_count,
+            threshold,
+        )
     escalated = consecutive_failure_count >= escalation_threshold
     if (
         escalated
@@ -1680,6 +1857,8 @@ def build_resolver_retry_state_artifact(
         "escalated_at": escalated_at,
         "updated_at": now_iso,
     }
+    if isolation_failure_reason:
+        retry_state["isolation_failure_reason"] = isolation_failure_reason
 
     return {
         "ok": True,
@@ -1712,12 +1891,14 @@ def build_resolver_retry_state_artifact(
 
 def main() -> int:
     support_scripts_dir = os.environ.get("SUPPORT_SCRIPTS_DIR", "scripts")
+    isolation_failure_reason = os.environ.get("RESOLVER_ISOLATION_FAILURE_REASON", "").strip()
     verifier_module = None
-    try:
-        verifier_module = load_verifier_module(support_scripts_dir)
-    except Exception as exc:  # noqa: BLE001 - fail-open in shell caller
-        print(json.dumps({"ok": False, "reason": f"failed to load verifier module: {exc}"}, ensure_ascii=True))
-        return 0
+    if not isolation_failure_reason:
+        try:
+            verifier_module = load_verifier_module(support_scripts_dir)
+        except Exception as exc:  # noqa: BLE001 - fail-open in shell caller
+            print(json.dumps({"ok": False, "reason": f"failed to load verifier module: {exc}"}, ensure_ascii=True))
+            return 0
 
     pr_payload, pr_payload_err = _load_json_path(
         os.environ.get("PR_PAYLOAD_FILE", ""),
@@ -1737,23 +1918,26 @@ def main() -> int:
         print(json.dumps({"ok": False, "reason": pr_issue_comments_err}, ensure_ascii=True))
         return 0
 
-    fingerprints, fingerprints_err = _load_json_path(
-        os.environ.get("INTEGRATION_FINGERPRINTS_FILE", ""),
-        dict,
-        {},
-    )
-    if fingerprints_err is not None:
-        print(json.dumps({"ok": False, "reason": fingerprints_err}, ensure_ascii=True))
-        return 0
+    fingerprints = {}
+    baseline_state = {}
+    if not isolation_failure_reason:
+        fingerprints, fingerprints_err = _load_json_path(
+            os.environ.get("INTEGRATION_FINGERPRINTS_FILE", ""),
+            dict,
+            {},
+        )
+        if fingerprints_err is not None:
+            print(json.dumps({"ok": False, "reason": fingerprints_err}, ensure_ascii=True))
+            return 0
 
-    baseline_state, baseline_err = _load_json_path(
-        os.environ.get("RESOLVER_FP_BASELINE_STATE_FILE", ""),
-        dict,
-        {},
-    )
-    if baseline_err is not None:
-        print(json.dumps({"ok": False, "reason": baseline_err}, ensure_ascii=True))
-        return 0
+        baseline_state, baseline_err = _load_json_path(
+            os.environ.get("RESOLVER_FP_BASELINE_STATE_FILE", ""),
+            dict,
+            {},
+        )
+        if baseline_err is not None:
+            print(json.dumps({"ok": False, "reason": baseline_err}, ensure_ascii=True))
+            return 0
 
     run_url = ""
     repository = os.environ.get("GITHUB_REPOSITORY", "")
@@ -1773,6 +1957,7 @@ def main() -> int:
         run_url=run_url,
         verifier_module=verifier_module,
         max_items=_parse_positive_int(os.environ.get("RESOLVER_RETRY_STATE_MAX_ITEMS"), 10),
+        isolation_failure_reason=isolation_failure_reason,
     )
     print(json.dumps(result, sort_keys=True, ensure_ascii=True))
     return 0
@@ -1802,10 +1987,13 @@ _sync_local_pr_body_from_file()
 
 _persist_resolver_retry_state_from_current_failure()
 {
+  local _resolver_isolation_failure_reason="${RESOLVER_ISOLATION_FAILURE_REASON:-}"
   if [ "${IS_INTEGRATION_SYNC:-false}" != "true" ]; then
     return 0
   fi
-  if [ "${RESOLVER_FP_EXIT:-0}" -ne 1 ] && [ "${RESOLVER_FP_VERIFICATION_TIER:-strict}" != "warn_only" ]; then
+  if [ -z "${_resolver_isolation_failure_reason}" ] \
+    && [ "${RESOLVER_FP_EXIT:-0}" -ne 1 ] \
+    && [ "${RESOLVER_FP_VERIFICATION_TIER:-strict}" != "warn_only" ]; then
     return 0
   fi
   if ! [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]]; then
@@ -1820,7 +2008,8 @@ _persist_resolver_retry_state_from_current_failure()
     echo "::warning::Resolver retry-state persistence skipped: PR_PAYLOAD_FILE is missing."
     return 0
   fi
-  if [ ! -f "${INTEGRATION_FINGERPRINTS_FILE:-/nonexistent}" ]; then
+  if [ -z "${_resolver_isolation_failure_reason}" ] \
+    && [ ! -f "${INTEGRATION_FINGERPRINTS_FILE:-/nonexistent}" ]; then
     echo "::warning::Resolver retry-state persistence skipped: INTEGRATION_FINGERPRINTS_FILE is missing."
     return 0
   fi
@@ -1834,7 +2023,8 @@ _persist_resolver_retry_state_from_current_failure()
     echo "::warning::Resolver retry-state persistence continuing without baseline fingerprints state; treating current failures as regressed for retry-state accounting."
     _retry_state_baseline_file=""
   fi
-  if [ ! -f "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" ]; then
+  if [ -z "${_resolver_isolation_failure_reason}" ] \
+    && [ ! -f "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" ]; then
     echo "::warning::Resolver retry-state persistence skipped: verify_integration_fingerprints.py unavailable."
     return 0
   fi
@@ -2082,6 +2272,76 @@ if [ "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" -gt "${CONFLICT_RESOLVER_PE
   CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS="${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_MAX_SECS}"
 fi
 
+# Reject unsupported conflict paths for both engines before starting any model.
+resolver_sandbox_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_sandbox.sh"
+resolver_workspace_py="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_workspace.py"
+if [ ! -f "${resolver_sandbox_sh}" ] || [ ! -f "${resolver_workspace_py}" ]; then
+  _resolver_fail_closed sandbox_support_missing
+fi
+resolver_conflict_path_report="${RUNTIME_DIR}/resolver_conflict_path_report.txt"
+rm -f -- "${resolver_conflict_path_report}"
+if ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}" "${resolver_conflict_path_report}" >/dev/null 2>&1; then
+  _resolver_fail_closed_for_conflict_paths "${resolver_conflict_path_report}"
+fi
+
+_resolver_sandbox_opencode_attempt()
+{
+  local resolver_opencode_root="" resolver_transfer_reason="" resolver_transfer_reason_file="${RUNTIME_DIR}/review_sandbox_transfer_reason_${tmp_output##*/}"
+  if ! resolver_opencode_root="$(bash "${resolver_sandbox_sh}" prepare-ephemeral codex)" || [ -z "${resolver_opencode_root}" ]; then
+    echo '::warning::Conflict resolver sandbox preparation failed (reason=sandbox_prepare_failed); refusing host fallback.' >&2
+    _resolver_fail_closed sandbox_prepare_failed
+  fi
+  resolver_opencode_cmd=(env "REVIEW_SANDBOX_ROOT=${resolver_opencode_root}" bash "${resolver_sandbox_sh}" run
+    "${_effective_prompt_file}" "${tmp_output}" "${MODEL_EDITOR}" "${_current_reasoning_effort}"
+    "${RESOLVER_OPENCODE_CONFIG}" codex CONFLICT_RESOLVER write)
+  rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed" "${resolver_transfer_reason_file}"
+  if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+    timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+      "${CODEX_STALL_GUARD_HELPER}" \
+      --phase review_conflict_resolve \
+      --stdout-file "${tmp_output}" \
+      --status-file "${_stall_status_file}" \
+      -- "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" \
+      || _codex_exit=$?
+  elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+    timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+      "${CODEX_HEARTBEAT_HELPER}" \
+      --phase review_conflict_resolve \
+      --stdout-file "${tmp_output}" \
+      -- "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" \
+      || _codex_exit=$?
+  else
+    timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
+      "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" > "${tmp_output}" \
+      || _codex_exit=$?
+  fi
+  if ! REVIEW_SANDBOX_ROOT="${resolver_opencode_root}" bash "${resolver_sandbox_sh}" cleanup; then
+    echo '::error::Conflict resolver sandbox cleanup failed; refusing to retry or commit.' >&2
+    _resolver_fail_closed sandbox_cleanup_failed
+  fi
+  if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then
+    if [ -f "${resolver_transfer_reason_file}" ] && [ ! -L "${resolver_transfer_reason_file}" ] &&
+       [ "$(wc -c < "${resolver_transfer_reason_file}")" -le 240 ] &&
+       [[ "$(< "${resolver_transfer_reason_file}")" =~ ^::error::Review\ isolation\ snapshot\ or\ transfer\ rejected\ \(ValueError\)\ reason=(admitted_inventory_missing|symlink_path|symlink_in_path|unsafe_file|file_changed|entry_limit|unsafe_directory(\ category=(symlink|invalid_name|dot_github_subtree|env_like|sensitive_name|key_material_suffix|excluded_name_variant|other)\ depth=(1|2|3[+])|\ dir=[A-Za-z0-9._/-]{1,64})?|unsafe_result_path|workspace_size_limit|size_limit|host_baseline_changed|host_path_conflict|result_conflicts_host|transfer_rollback_failed)$ ]]; then
+       resolver_transfer_reason=" reason=${BASH_REMATCH[1]%% *}"
+       if [ -n "${BASH_REMATCH[3]:-}" ]; then
+         resolver_transfer_reason+=" category=${BASH_REMATCH[3]} depth=${BASH_REMATCH[4]}"
+      fi
+    fi
+    echo "::error::Conflict resolver sandbox transfer failed; refusing to accept output.${resolver_transfer_reason}" >&2
+    rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
+    # Any transfer failure may leave partial host edits; never retry or commit.
+    if [ "${resolver_transfer_reason}" = " reason=transfer_rollback_failed" ]; then
+      _resolver_fail_closed transfer_rollback_failed
+    fi
+    _resolver_fail_closed sandbox_transfer_failed
+  fi
+  if [ "${_codex_exit}" -eq 2 ]; then
+    echo '::warning::Conflict resolver sandbox helper outdated (reason=sandbox_helper_outdated); refusing host fallback.' >&2
+    _resolver_fail_closed sandbox_helper_outdated
+  fi
+}
+
 attempt=1
 while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   emit_conflict_resolver_substate "PreparingWorkspace" "${attempt}"
@@ -2223,18 +2483,6 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
     sanitize_codex_prompt_file "${_effective_prompt_file}"
   fi
-  resolver_opencode_cmd=(
-    bash -c
-    # shellcheck disable=SC2016
-    'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
-    opencode-conflict-resolver
-    "${OPENCODE_HELPERS_PATH}"
-    writer
-    "${MODEL_EDITOR}"
-    "${_current_reasoning_effort}"
-    "${RESOLVER_OPENCODE_CONFIG}"
-    "${RESOLVER_OPENCODE_WORKSPACE}"
-  )
   _run_codex=true
   if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
     if ! bash "${WORKSPACE_SAFETY_CHECK_HELPER}"; then
@@ -2246,25 +2494,38 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     emit_conflict_resolver_substate "LaunchingAgentProcess" "${attempt}"
     emit_conflict_resolver_substate "InitializingSession" "${attempt}"
     emit_conflict_resolver_substate "StreamingTurn" "${attempt}"
-    if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
-      timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-        "${CODEX_STALL_GUARD_HELPER}" \
-        --phase review_conflict_resolve \
-        --stdout-file "${tmp_output}" \
-        --status-file "${_stall_status_file}" \
-        -- "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" \
-        || _codex_exit=$?
-    elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-      timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-        "${CODEX_HEARTBEAT_HELPER}" \
-        --phase review_conflict_resolve \
-        --stdout-file "${tmp_output}" \
-        -- "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" \
-        || _codex_exit=$?
-    else
-      timeout --signal=TERM --kill-after=30s -- "${CONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS}" \
-        "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}" > "${tmp_output}" \
-        || _codex_exit=$?
+    # Claude engine (replace-claude-sessions plan Phase 5c): the workflow
+    # exports AI_ENGINE_RESOLVED_CONFLICT_RESOLVER (CLAUDE_FIXER_ENABLED=false
+    # keeps it on codex). Both engines use fresh isolated snapshots.
+    resolver_claude_rc=75
+    resolver_sandbox_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_sandbox.sh"
+    resolver_workspace_py="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_workspace.py"
+    if [ "${AI_ENGINE_RESOLVED_CONFLICT_RESOLVER:-codex}" = "claude" ]; then
+      rm -f -- "${RUNTIME_DIR}/resolver_conflict_path_report.txt"
+      if [ ! -f "${resolver_sandbox_sh}" ] || [ ! -f "${resolver_workspace_py}" ]; then
+        _resolver_fail_closed sandbox_prepare_failed
+      elif ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}" "${RUNTIME_DIR}/resolver_conflict_path_report.txt"; then
+        _resolver_fail_closed_for_conflict_paths "${RUNTIME_DIR}/resolver_conflict_path_report.txt"
+      fi
+      rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
+      resolver_claude_rc=0
+      _resolver_sandbox_attempt claude || resolver_claude_rc=$?
+      if [ "${resolver_claude_rc}" -eq 75 ]; then
+        echo 'AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=claude_unavailable action=sandbox_opencode' >&2
+        rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
+        resolver_claude_rc=0
+        _resolver_sandbox_attempt codex || resolver_claude_rc=$?
+      fi
+      if [ "${resolver_claude_rc}" -eq 75 ]; then
+        _resolver_fail_closed sandbox_opencode_unavailable
+      elif [ "${resolver_claude_rc}" -eq 77 ]; then
+        _resolver_fail_closed "${resolver_sandbox_failure_reason}"
+      fi
+      _codex_exit="${resolver_claude_rc}"
+      resolver_claude_rc=0
+    fi
+    if [ "${resolver_claude_rc}" -eq 75 ]; then
+      _resolver_sandbox_opencode_attempt
     fi
   fi
   resolver_clean_output="${tmp_output}.ansi-clean"
@@ -2867,6 +3128,9 @@ if [ -n "$(git status --porcelain)" ]; then
     # replaces the unmerged index entries with the editor's
     # resolved content.  Auto-merged paths the editor did not
     # touch stay in the index as git merged them.
+    # This staging runs on the real index on purpose: the model's
+    # private copy (RESOLVER_MODEL_INDEX_FILE, #5627) is never read
+    # back, so GIT_INDEX_FILE must not be set here.
     git rm -r --cached --ignore-unmatch -- node_modules 2>/dev/null || true
     while IFS= read -r touched_path; do
       [ -z "${touched_path}" ] && continue

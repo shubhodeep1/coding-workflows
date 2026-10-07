@@ -1,0 +1,64 @@
+---
+name: Sync live .claude copies
+
+# The pipeline's editors cannot edit .claude/**, so a merged change to a
+# workflow-templates/.claude/ file leaves this repo's own copy behind and
+# breaks the parity tests on every PR (#6133, #6176). On each push to main that
+# touches a template, this opens (or refreshes) a PR that copies template-only
+# changes to the live copy. Files kept different on purpose are listed in
+# .github/ai/claude_template_divergence.json. See agents.md "Live .claude/
+# copies and their templates".
+"on":
+  push:
+    branches: [main]
+    paths:
+      - "workflow-templates/.claude/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-claude-live-copies
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          # GH_PAT remains broad so sync PRs trigger CI/review; provenance is
+          # checked before the auto-merge-eligible branch receives a push.
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Sync template-only .claude changes to the live copy
+        id: sync
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          python3 scripts/sync_claude_live_copies.py sync --before "${PUSH_BEFORE}" --after "${PUSH_AFTER}"
+
+      - name: Alert on held .claude live-copy sync
+        if: always() && steps.sync.outputs.held == 'true'
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          HELD_PR: ${{ steps.sync.outputs.held_pr }}
+          HELD_SUMMARY: ${{ steps.sync.outputs.held_summary }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REPO_NAME: ${{ github.repository }}
+        run: |
+          source scripts/tg_helpers.sh
+          tg_send_msg "${REPO_NAME}: .claude live-copy sync held for human merge (draft PR #${HELD_PR}). ${HELD_SUMMARY} ${RUN_URL}" "WARNING" >/dev/null || true

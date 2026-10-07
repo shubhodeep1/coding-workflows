@@ -3,7 +3,12 @@
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import subprocess
+import tempfile
+import textwrap
 from pathlib import Path
 from runpy import run_path
 
@@ -229,6 +234,228 @@ def test_phase4b_dispatches_only_without_active_work_and_pins_one_run() -> None:
 	assert 'echo "status=pr_state_check_failed" >> "$GITHUB_OUTPUT"' in retry
 
 
+def _run_phase4b_with_pr_states(
+	states: list[str], *, reset: str = "retry-after: 1", probe: str = "",
+	run_states: list[str] | None = None, adopt: bool = True, extra_env: dict[str, str] | None = None,
+) -> tuple[subprocess.CompletedProcess[str], str, str]:
+	workflow = _read_workflow()
+	step = _slice_between(workflow, '      - name: "Phase 4b: Verify editor restored canary (pytest + retry)"', '      # ── Phase 5:')
+	body = textwrap.dedent(step.split("        run: |\n", 1)[1])
+	# Keep the actual API wrapper, retry selection and poll loop; substitute
+	# only the dependency install and pytest invocation (not the gate logic).
+	begin = body.index("PYTEST_INSTALL_LOG=")
+	end = body.index("# gh api wrapper", begin)
+	body = body[:begin] + body[end:]
+	begin = body.index("run_pytest() {")
+	end = body.index("# When pytest fails", begin)
+	body = body[:begin] + textwrap.dedent("""\
+	run_pytest() {
+	  if [ ! -f "${RUNNER_TEMP}/pytest_first" ]; then
+	    touch "${RUNNER_TEMP}/pytest_first"
+	    echo 'FAILED tests/test_e2e_editor_smoke_canary.py::test_canary_matches_issue_spec_byte_for_byte'
+	    return 1
+	  fi
+	  return 0
+	}
+	""") + body[end:]
+	stub = textwrap.dedent("""\
+	date() { cat "${RUNNER_TEMP}/clock"; }
+	sleep() {
+	  echo "$1" >> "${RUNNER_TEMP}/sleeps"
+	  echo $(( $(cat "${RUNNER_TEMP}/clock") + $1 )) > "${RUNNER_TEMP}/clock"
+	}
+	gh() {
+	  if [ "$1" = workflow ]; then return 0; fi
+	  if [ "$1" = api ] && [ "$2" = /rate_limit ]; then
+	    echo probe >> "${RUNNER_TEMP}/requests"
+	    printf '%s\\n' "${PROBE_RESET}"
+	    return 0
+	  fi
+	  if [ "$1" != api ] || [ "$2" != -i ]; then return 1; fi
+	  case "$3" in
+	    */contents/*)
+	      printf 'HTTP/2 200\\n\\n{"content":"%s"}\\n' "$(printf 'restored' | base64 -w0)" ;;
+	    */git/refs/heads/*)
+	      printf 'HTTP/2 200\\n\\n%s\\n' "${BAIT_SHA}" ;;
+	    */actions/workflows/*/runs?*)
+	      if [ "${ADOPT}" = 1 ]; then
+	        printf 'HTTP/2 200\\n\\n{"workflow_runs":[{"id":20,"head_sha":"%s","status":"in_progress","created_at":"2026-10-03T00:00:00Z","conclusion":null}]}\\n' "${BAIT_SHA}"
+	      else
+	        printf 'HTTP/2 200\\n\\n{"workflow_runs":[]}\\n'
+	      fi ;;
+	    */actions/runs/20)
+	      echo run >> "${RUNNER_TEMP}/requests"
+	      local run_count
+	      run_count=$(wc -l < "${RUNNER_TEMP}/run_reads")
+	      echo x >> "${RUNNER_TEMP}/run_reads"
+	      local run_state
+	      run_state=$(sed -n "$((run_count + 1))p" "${RUNNER_TEMP}/run_states")
+	      if [ "${run_state}" = limit ]; then
+	        printf 'HTTP/2 403\\n%s\\n\\n{"message":"API rate limit exceeded"}\\n' "${RESET_HEADER}"
+	        echo 'gh: API rate limit exceeded (HTTP 403)' >&2
+	        return 1
+	      fi
+	      case "${run_state}" in
+	        queued|in_progress)
+	          printf 'HTTP/2 200\\n\\n{"id":20,"status":"%s","conclusion":null}\\n' "${run_state}"
+	          return 0 ;;
+	      esac
+	      printf 'HTTP/2 200\\n\\n{"id":20,"status":"completed","conclusion":"success"}\\n' ;;
+	    */pulls/*)
+	      echo pr >> "${RUNNER_TEMP}/requests"
+	      local count
+	      count=$(wc -l < "${RUNNER_TEMP}/pr_reads")
+	      echo x >> "${RUNNER_TEMP}/pr_reads"
+	      local state
+	      state=$(sed -n "$((count + 1))p" "${RUNNER_TEMP}/states")
+	      case "${state}" in
+	        limit)
+	          printf 'HTTP/2 403\\n%s\\n\\n{"message":"API rate limit exceeded"}\\n' "${RESET_HEADER}"
+	          echo 'gh: API rate limit exceeded (HTTP 403)' >&2
+	          return 1 ;;
+	        unknown)
+	          printf 'HTTP/2 403\\n\\n{"message":"Forbidden"}\\n'
+	          echo 'gh: Forbidden (HTTP 403)' >&2
+	          return 1 ;;
+	        open|closed)
+	          if [ "${4:-}" = --jq ]; then
+	            printf 'HTTP/2 200\\n\\n%s\\n' "${state}"
+	          else
+	            printf 'HTTP/2 200\\n\\n{"head":{"sha":"%s"}}\\n' "${FIX_SHA}"
+	          fi ;;
+	        *) return 1 ;;
+	      esac ;;
+	    *) return 1 ;;
+	  esac
+	}
+	""")
+	body = body.replace('PYTEST_OUTPUT="${RUNNER_TEMP:-/tmp}/e2e_pytest_output.txt"', 'PYTEST_OUTPUT="${RUNNER_TEMP:-/tmp}/e2e_pytest_output.txt"\n' + stub, 1)
+	with tempfile.TemporaryDirectory() as temp:
+		root = Path(temp)
+		(root / "clock").write_text("1000\n", encoding="utf-8")
+		(root / "states").write_text("\n".join(states) + "\n", encoding="utf-8")
+		(root / "pr_reads").touch()
+		(root / "run_states").write_text("\n".join(run_states or []) + "\n", encoding="utf-8")
+		(root / "run_reads").touch()
+		env = os.environ.copy()
+		env.update({"RUNNER_TEMP": temp, "GITHUB_OUTPUT": str(root / "output"), "GITHUB_RUN_ID": "1",
+			"TEST_REPO": "owner/repo", "ISSUE_NUMBER": "12", "PR_NUMBER": "13", "PRIOR_REVIEW_RUN": "10",
+			"BAIT_SHA": "a" * 40, "FIX_SHA": "b" * 40, "EDITOR_RETRY_BUDGET_MINUTES": "25",
+			"REVIEW_WORKFLOW_FILE": "internal-review.yml", "RESET_HEADER": reset, "PROBE_RESET": probe,
+			"ADOPT": "1" if adopt else "0"})
+		env.pop("E2E_JOB_STARTED_EPOCH", None)
+		env.update(extra_env or {})
+		result = subprocess.run(["bash", "-c", body], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=30)
+		return result, (root / "output").read_text(encoding="utf-8"), (root / "requests").read_text(encoding="utf-8") if (root / "requests").exists() else ""
+
+
+def test_phase4b_rate_limits_recheck_pr_before_accepting_adopted_run() -> None:
+	result, output, requests = _run_phase4b_with_pr_states(["limit", "limit", "open", "open"])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "status=success_after_retry" in output
+	assert requests.splitlines() == ["pr", "pr", "pr", "run", "pr"]
+	assert "PR state unresolvable" not in result.stderr
+
+
+def test_phase4b_rate_limit_wait_catches_closed_pr() -> None:
+	result, output, requests = _run_phase4b_with_pr_states(["limit", "closed"])
+	assert result.returncode != 0
+	assert "status=pr_closed_during_retry" in output
+	assert "run" not in requests
+
+
+def test_phase4b_run_rate_limit_rechecks_pr_before_accepting_run() -> None:
+	result, output, requests = _run_phase4b_with_pr_states(["open", "closed"], run_states=["limit"])
+	assert result.returncode != 0
+	assert "status=pr_closed_during_retry" in output
+	assert requests.splitlines() == ["pr", "run", "pr"]
+
+
+def test_phase4b_registration_rate_limit_keeps_ninety_second_bound() -> None:
+	result, output, requests = _run_phase4b_with_pr_states(["limit"], reset="x-ratelimit-reset: 99999", adopt=False)
+	assert result.returncode != 0
+	assert "status=retry_dispatch_failed" in output
+	assert "run" not in requests
+
+
+def test_phase4b_unknown_state_cannot_authorize_completed_run() -> None:
+	result, output, requests = _run_phase4b_with_pr_states(["limit", "unknown", "open", "open"])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "status=success_after_retry" in output
+	assert requests.splitlines() == ["pr", "pr", "pr", "run", "pr"]
+
+
+def test_phase4b_reset_beyond_deadline_fails_closed() -> None:
+	result, output, requests = _run_phase4b_with_pr_states(["limit"], reset="x-ratelimit-reset: 99999")
+	assert result.returncode != 0
+	assert "status=retry_timeout" in output
+	assert "run" not in requests
+
+
+def test_phase4b_malformed_reset_probes_once_and_waits_before_retrying() -> None:
+	result, output, requests = _run_phase4b_with_pr_states(["limit", "limit", "open", "open"], reset="retry-after: invalid", probe="bad-reset")
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "status=success_after_retry" in output
+	assert requests.splitlines().count("probe") == 1
+	assert "waiting 60s" in result.stderr
+
+
+def test_phase4b_four_ordinary_state_failures_still_break() -> None:
+	result, output, requests = _run_phase4b_with_pr_states(["unknown"] * 12)
+	assert result.returncode != 0
+	assert "status=pr_state_check_failed" in output
+	assert "run" not in requests
+
+
+_QUEUE_BUDGET_ENV = {"E2E_JOB_TIMEOUT_MINUTES": "300", "PHASE_TIMEOUT": "30",
+	"PHASE7_WAIT_BUDGET_MINUTES": "10", "E2E_FINALIZATION_RESERVE_MINUTES": "20"}
+
+
+def test_phase4b_queued_retry_run_extends_the_deadline() -> None:
+	# Gate run 37395952357: the retry run waited for a runner most of its
+	# 25 minutes. 110 queued polls (~27 min) then completion must pass.
+	result, output, _ = _run_phase4b_with_pr_states(
+		["open"] * 400, run_states=["queued"] * 110 + ["completed"],
+		extra_env={**_QUEUE_BUDGET_ENV, "E2E_JOB_STARTED_EPOCH": "1000"},
+	)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "status=success_after_retry" in output
+
+
+def test_phase4b_queue_extension_needs_a_recorded_job_start() -> None:
+	result, output, _ = _run_phase4b_with_pr_states(
+		["open"] * 400, run_states=["queued"] * 110 + ["completed"], extra_env=_QUEUE_BUDGET_ENV,
+	)
+	assert result.returncode != 0
+	assert "status=retry_timeout" in output
+	assert "deadline extended by 0s (cap 0s)" in result.stdout
+
+
+def test_phase4b_queue_extension_stops_at_the_job_budget_ceiling() -> None:
+	# Ceiling = start + (105 - 30 - 10 - 20) min = 2700 on the fake clock,
+	# which starts at 1000: about 200 s beyond the 25-minute base deadline.
+	result, output, _ = _run_phase4b_with_pr_states(
+		["open"] * 400, run_states=["queued"] * 300,
+		extra_env={**_QUEUE_BUDGET_ENV, "E2E_JOB_TIMEOUT_MINUTES": "105", "E2E_JOB_STARTED_EPOCH": "0"},
+	)
+	assert result.returncode != 0
+	assert "status=retry_timeout" in output
+	match = re.search(r"deadline extended by (\d+)s \(cap (\d+)s\)", result.stdout)
+	assert match, result.stdout
+	extended, cap = int(match.group(1)), int(match.group(2))
+	assert 0 < cap <= 200
+	assert extended == cap
+
+
+def test_phase0a_installs_pytest_before_running_the_hot_poller_test() -> None:
+	# tests/test_orchestrate_poll_process.py imports pytest (#6187); gate run
+	# 37554001238 failed Phase 0a with ModuleNotFoundError before any phase ran.
+	step = _slice_between(_read_workflow(), '      - name: "Phase 0a: Hot orchestrate-poll regression guard"', "      # ── Phase 0:")
+	assert "python3 -m pip install --quiet pytest" in step
+	assert step.index("pip install --quiet pytest") < step.index("python3 tests/test_orchestrate_poll_process.py")
+	assert 'echo "status=pytest_install_failed" >> "$GITHUB_OUTPUT"' in step
+
+
 def test_phase6_registers_once_and_polls_only_the_pinned_run() -> None:
 	phase6 = _phase6(_read_workflow())
 	branch_query = "runs?event=workflow_dispatch&branch=${POLLER_DISPATCH_REF}&per_page=10"
@@ -295,6 +522,129 @@ def test_reviewer_majority_is_progress_only() -> None:
 	assert 'if [ "$RUN_CONCLUSION" = "success" ]; then' in job
 	assert 'echo "status=success" >> "$GITHUB_OUTPUT"' in job
 	assert 'if [ "${PR_HEAD}" = "${BAIT_SHA}" ]; then' in job
+
+
+def _run_phase4_wait_review(
+	checked_out: str | None, *, compare_status: str = "behind", fail_first_log: bool = False,
+	fail_all_logs: bool = False,
+	run_status: str = "completed", run_conclusion: str = "success",
+) -> tuple[subprocess.CompletedProcess[str], str, int]:
+	workflow = _read_workflow()
+	step = _slice_between(workflow, '      - name: "Phase 4: Wait for review & autofix to complete"', '      # Per-phase soft-error analysis: review_autofix.')
+	body = textwrap.dedent(step.split("        run: |\n", 1)[1])
+	stub = textwrap.dedent('''\
+	date() { printf '%s\\n' "$(<"${RUNNER_TEMP}/clock")"; }
+	sleep() { printf '%s\\n' "$(( $(<"${RUNNER_TEMP}/clock") + $1 ))" > "${RUNNER_TEMP}/clock"; }
+	gh_api_safe_quiet_print() {
+	  local response=""
+	  case "$1" in
+	    */actions/runs?branch=*)
+	      if [ -n "$BAIT_UNCOVERED_RUN_IDS" ]; then
+	        response="$(<"${RUNNER_TEMP}/after.json")"
+	      else
+	        response="$(<"${RUNNER_TEMP}/before.json")"
+	      fi ;;
+	    */actions/runs/10/jobs?*) response='{"total_count":1,"jobs":[{"id":100,"status":"completed","conclusion":"success","steps":[{"conclusion":"failure"}]}]}' ;;
+	    */actions/jobs/100/logs)
+	      local count
+	      count=$(wc -l < "${RUNNER_TEMP}/log_reads")
+	      echo x >> "${RUNNER_TEMP}/log_reads"
+	      if [ "${FAIL_FIRST_LOG}" = 1 ] && [ "$count" = 0 ]; then return 1; fi
+	      if [ "${FAIL_ALL_LOGS}" = 1 ]; then return 1; fi
+	      response="$(<"${RUNNER_TEMP}/job.log")" ;;
+	    */compare/*) response="{\\"status\\":\\"${COMPARE_STATUS}\\"}" ;;
+	    *) echo "Unexpected API read: $1" >&2; return 1 ;;
+	  esac
+	  if [ "${2:-}" = --jq ]; then
+	    printf '%s' "$response" | jq -cr "$3"
+	  else
+	    printf '%s' "$response"
+	  fi
+	}
+	''')
+	body = body.replace('. ./scripts/comprehensive_test_and_release_gh_api.sh', stub, 1)
+	bait = "a" * 40
+	pre_bait = "b" * 40
+	base_run = {"id": 10, "name": "Internal Review", "path": "internal-review.yml", "event": "pull_request",
+		"head_sha": pre_bait, "created_at": "2026-10-06T00:00:00Z", "updated_at": "2026-10-06T00:02:00Z",
+		"status": run_status, "conclusion": run_conclusion}
+	bait_run = {**base_run, "id": 20, "head_sha": bait, "created_at": "2026-10-06T00:03:00Z",
+		"updated_at": "2026-10-06T00:04:00Z", "status": "queued", "conclusion": None}
+	with tempfile.TemporaryDirectory() as temp:
+		root = Path(temp)
+		(root / "clock").write_text("1000\n", encoding="utf-8")
+		(root / "before.json").write_text(json.dumps({"workflow_runs": [base_run, bait_run]}), encoding="utf-8")
+		(root / "after.json").write_text(json.dumps({"workflow_runs": [{**bait_run, "status": "completed", "conclusion": "success"}]}), encoding="utf-8")
+		(root / "job.log").write_text(f"Captured INITIAL_HEAD_SHA={checked_out} for stale-base detection.\n" if checked_out else "No checkout performed\n", encoding="utf-8")
+		(root / "log_reads").touch()
+		env = os.environ.copy()
+		env.update({"RUNNER_TEMP": temp, "GITHUB_OUTPUT": str(root / "output"), "TEST_REPO": "owner/repo",
+			"ISSUE_NUMBER": "12", "PR_NUMBER": "13", "BAIT_SHA": bait, "BAIT_CREATED_AT": "2026-10-06T00:01:00Z",
+			"REVIEW_TIMEOUT": "60", "REVIEW_STEP_TIMEOUT": "75", "REVIEW_PHASE_HANDOFF_BUDGET_MINUTES": "15",
+			"POLL_INTERVAL": "10", "COMPARE_STATUS": compare_status, "FAIL_FIRST_LOG": "1" if fail_first_log else "0",
+			"FAIL_ALL_LOGS": "1" if fail_all_logs else "0"})
+		result = subprocess.run(["bash", "-c", body], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=30)
+		return result, (root / "output").read_text(encoding="utf-8") if (root / "output").exists() else "", len((root / "log_reads").read_text(encoding="utf-8").splitlines())
+
+
+def test_phase4_pre_bait_success_does_not_beat_queued_bait_review() -> None:
+	result, output, reads = _run_phase4_wait_review("b" * 40)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "review_run_id=10" not in output
+	assert output.splitlines() == ["status=success", "review_run_id=20"]
+	assert "E2E_BAIT_REVIEW_COVERAGE run=10 verdict=not_covered" in result.stdout
+	assert reads == 1
+
+
+def test_phase4_valid_inflight_checkout_is_accepted() -> None:
+	for checked, status in (("a" * 40, "behind"), ("c" * 40, "ahead")):
+		result, output, reads = _run_phase4_wait_review(checked, compare_status=status)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert output.splitlines() == ["status=success", "review_run_id=10"]
+		assert "verdict=covered" in result.stdout
+		assert reads == 1
+
+
+def test_phase4_unavailable_log_retries_without_accepting() -> None:
+	result, output, reads = _run_phase4_wait_review("b" * 40, fail_first_log=True)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "verdict=unknown" in result.stdout
+	assert "verdict=not_covered" in result.stdout
+	assert output.splitlines() == ["status=success", "review_run_id=20"]
+	assert reads == 2
+
+
+def test_phase4_persistently_unavailable_log_falls_through_to_bait_review() -> None:
+	result, output, reads = _run_phase4_wait_review("a" * 40, fail_all_logs=True)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "verdict=covered" not in result.stdout
+	assert output.splitlines() == ["status=success", "review_run_id=20"]
+	assert reads == 3
+
+
+def test_phase4_no_checkout_marker_excludes_run() -> None:
+	result, output, _ = _run_phase4_wait_review(None)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "reason=no_checkout_marker" in result.stdout
+	assert output.splitlines() == ["status=success", "review_run_id=20"]
+
+
+def test_phase4_failure_and_early_failed_steps_are_not_accepted_without_bait() -> None:
+	for status, conclusion in (("completed", "failure"), ("in_progress", None)):
+		result, output, _ = _run_phase4_wait_review("b" * 40, run_status=status, run_conclusion=conclusion)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert output.splitlines() == ["status=success", "review_run_id=20"]
+		assert "verdict=not_covered" in result.stdout
+
+
+def test_phase4_checkout_marker_and_every_early_exit_are_covered() -> None:
+	workflow = _read_workflow()
+	phase4 = _slice_between(workflow, '      - name: "Phase 4: Wait for review & autofix to complete"', '      # Per-phase soft-error analysis: review_autofix.')
+	assert 'Captured INITIAL_HEAD_SHA=${INITIAL_HEAD_SHA}' in (REPO_ROOT / ".github/workflows/review_autofix.yml").read_text(encoding="utf-8")
+	assert "Captured INITIAL_HEAD_SHA=[0-9a-fA-F]{40}" in phase4
+	assert "BAIT_UNCOVERED_RUN_IDS" in phase4
+	assert phase4.count('if ! require_bait_review_coverage; then') == 4
+	assert phase4.count('review_run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"') == 4
 
 
 def test_success_transitions_and_unconditional_cleanup_are_preserved() -> None:

@@ -1,20 +1,18 @@
 name: "Internal: AI Review & Autofix"
+# Dispatched runs carry their PR in the run name. review_autofix_sweep.yml
+# dispatches from the default branch only (issue #4618: never an unmerged
+# head ref), so the run's head_branch no longer identifies the PR; the sweep's
+# active-run snapshot and the poller's _has_active_autofix_run match this
+# exact name instead. Every other event gets an empty expression, which GitHub
+# replaces with its event-specific default (PR title / commit message).
+run-name: "${{ github.event_name == 'workflow_dispatch' && format('Internal: AI Review & Autofix [pr:{0}]', inputs.pr_number) || '' }}"
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, closed]
-  # Push to claude/** triggers the no-PR claude-branch-review path: the
-  # resolve-claude-branch-pr job below first checks whether an open PR
-  # already exists for the head branch (in which case the parallel
-  # pull_request:synchronize trigger handles it and this leg exits to
-  # avoid double-firing).  When no PR exists, the review-claude-branch-push
-  # job calls review_autofix.yml with force_claude_branch_review=true and
-  # the head/sha/base overrides so the codex-agent runs the reviewer panel
-  # + summariser and posts the consensus ledger as a commit comment via
-  # scripts/post_review_comment.sh.
-  push:
-    branches:
-      - 'claude/**'
+  # No push trigger: a claude/** branch is reviewed once it has a PR, like
+  # every other branch. The no-PR claude-branch-review push route (commit
+  # comment with the consensus ledger) was removed in PR #6438.
   workflow_dispatch:
     inputs:
       pr_number:
@@ -26,20 +24,23 @@ on:
         required: false
         default: true
         type: boolean
+      force_rb_judge:
+        description: "Skip reviewers/editor and run only the review-blocked judge (stale security-hold sweep)"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
   pull-requests: write
   issues: write
+  # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
 
-# De-duplicate review runs on the same branch. A push to claude/** and
-# a pull_request:opened/synchronize event for the same head ref can both
-# arrive around PR creation time. PR-backed claude/** branches now use the
+# De-duplicate review runs on the same branch. claude/** branches use the
 # same full autofix loop as every other PR, so do not cancel in-progress PR
 # runs on autofix pushes; otherwise the [ai-autofix] synchronize event can
-# kill the run before its continuation dispatch. Keep push and pull_request
-# events in separate concurrency groups so the no-PR push route only cancels
-# stale in-flight reviewer-comment runs.
+# kill the run before its continuation dispatch.
 #
 # workflow_dispatch is keyed separately on inputs.pr_number, because on
 # manual dispatch head_ref is empty and ref_name is the workflow's ref
@@ -47,11 +48,11 @@ permissions:
 # re-triggers for different PRs would cancel each other.
 concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && format('internal-review-dispatch-pr-{0}', github.event.inputs.pr_number) || format('internal-review-{0}-{1}', github.event_name, github.head_ref || github.ref_name) }}
-  cancel-in-progress: ${{ github.event_name == 'push' && startsWith(github.ref_name, 'claude/') }}
+  cancel-in-progress: false
 
 jobs:
   review:
-    if: ${{ github.event_name != 'push' && (github.event.action != 'closed' || github.event.pull_request.merged == true) }}
+    if: ${{ github.event.action != 'closed' || github.event.pull_request.merged == true }}
     uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@main
     with:
       pr_number: ${{ github.event.inputs.pr_number || github.event.pull_request.number || '' }}
@@ -63,79 +64,5 @@ jobs:
         ${{ github.event_name != 'workflow_dispatch' && format('{0}', github.event.pull_request.body) || '' }}
       pr_skip_ai: false
       allow_workflow_edits: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true'))) }}
-    secrets: inherit
-
-  # Push to claude/** path:
-  # On every push to a claude/** branch, look up whether an open PR
-  # already exists for the branch.  If yes, skip — the parallel
-  # pull_request:synchronize trigger handles the review and double-firing
-  # would waste LLM budget.  If no PR exists, emit the head ref / SHA /
-  # base ref so review-claude-branch-push can dispatch review_autofix.yml
-  # in the no-PR claude-branch-review path (commit-comment route).
-  resolve-claude-branch-pr:
-    if: ${{ github.event_name == 'push' }}
-    runs-on: ubuntu-latest
-    outputs:
-      proceed: ${{ steps.resolve.outputs.proceed }}
-      head_ref: ${{ steps.resolve.outputs.head_ref }}
-      head_sha: ${{ steps.resolve.outputs.head_sha }}
-      base_ref: ${{ steps.resolve.outputs.base_ref }}
-    steps:
-      - name: Resolve PR for head branch
-        id: resolve
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          REPOSITORY: ${{ github.repository }}
-          HEAD_REF: ${{ github.ref_name }}
-          HEAD_SHA: ${{ github.sha }}
-          EVENT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch || '' }}
-        run: |
-          set -euo pipefail
-          base_ref=""
-          encoded_head_ref="$(jq -nr --arg ref "${HEAD_REF}" '$ref | @uri')"
-          # Look up open PRs for this exact head branch.  Filter to PRs
-          # whose head ref matches the pushed branch — `gh pr list --head`
-          # already does this — and consider only OPEN PRs (closed/merged
-          # PRs do not double-fire, but the API call returns them too if
-          # state filter is omitted).
-          existing_pr="$(gh api \
-            "repos/${REPOSITORY}/pulls?state=open&head=${REPOSITORY%/*}:${encoded_head_ref}" \
-            --jq '[.[] | .number] | first // empty' 2>/dev/null || echo "")"
-          if [ -n "${existing_pr}" ]; then
-            echo "RESOLVE_CLAUDE_BRANCH_PR_SKIP head_ref=${HEAD_REF} existing_pr=${existing_pr} reason=pull_request_synchronize_handles"
-            {
-              echo "proceed=false"
-              echo "head_ref=${HEAD_REF}"
-              echo "head_sha=${HEAD_SHA}"
-              echo "base_ref=${base_ref}"
-            } >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          base_ref="${EVENT_DEFAULT_BRANCH:-}"
-          if [ -z "${base_ref}" ]; then
-            base_ref="$(gh api "repos/${REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo 'main')"
-          fi
-          echo "RESOLVE_CLAUDE_BRANCH_PR_PROCEED head_ref=${HEAD_REF} head_sha=${HEAD_SHA} base_ref=${base_ref} reason=no_open_pr"
-          {
-            echo "proceed=true"
-            echo "head_ref=${HEAD_REF}"
-            echo "head_sha=${HEAD_SHA}"
-            echo "base_ref=${base_ref}"
-          } >> "${GITHUB_OUTPUT}"
-
-  review-claude-branch-push:
-    needs: resolve-claude-branch-pr
-    if: ${{ github.event_name == 'push' && needs.resolve-claude-branch-pr.outputs.proceed == 'true' }}
-    uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@main
-    with:
-      pr_number: ""
-      pr_is_draft: false
-      pr_title: ""
-      pr_body: ""
-      pr_skip_ai: false
-      allow_workflow_edits: false
-      force_claude_branch_review: true
-      head_ref_override: ${{ needs.resolve-claude-branch-pr.outputs.head_ref }}
-      head_sha_override: ${{ needs.resolve-claude-branch-pr.outputs.head_sha }}
-      base_ref_override: ${{ needs.resolve-claude-branch-pr.outputs.base_ref }}
+      force_rb_judge: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force_rb_judge == 'true' }}
     secrets: inherit

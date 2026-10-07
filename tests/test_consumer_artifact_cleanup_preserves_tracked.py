@@ -122,7 +122,9 @@ def test_cleanup_preserves_tracked_agents_md() -> None:
 				cwd=repo,
 				check=True,
 				capture_output=True,
-				env=_temp_repo_env(),
+				# The poller's loop runs against its review-blocked judge
+				# worktree (RB_COMBINED_WORKDIR), not its own checkout.
+				env={**_temp_repo_env(), "RB_COMBINED_WORKDIR": str(repo)},
 				text=True,
 			)
 
@@ -148,7 +150,7 @@ def test_cleanup_block_guards_every_path() -> None:
 	"""Each cleanup block routes every removal through the tracked-path guard."""
 	for script_rel, loop_var, _tracked_artifact, _untracked_artifact in CLEANUP_SITES:
 		block = _extract_cleanup_block(script_rel, loop_var)
-		assert "git ls-files --error-unmatch" in block, (
+		assert re.search(r'git (?:-C "\$\{[A-Z_]+\}" )?ls-files --error-unmatch', block), (
 			f"{script_rel}: cleanup loop lost its tracked-path guard"
 		)
 		removals = re.findall(r"^[ \t]*rm[ \t]+-[a-zA-Z]+[ \t]", block, flags=re.M)
@@ -190,7 +192,9 @@ def test_poller_restores_bootstrap_overwrite() -> None:
 				cwd=repo,
 				check=True,
 				capture_output=True,
-				env=_temp_repo_env(),
+				# The poller's loop runs against its review-blocked judge
+				# worktree (RB_COMBINED_WORKDIR), not its own checkout.
+				env={**_temp_repo_env(), "RB_COMBINED_WORKDIR": str(repo)},
 				text=True,
 			)
 
@@ -257,7 +261,9 @@ def test_review_cleanup_restores_tracked_static_context() -> None:
 				cwd=repo,
 				check=True,
 				capture_output=True,
-				env=_temp_repo_env(),
+				# The poller's loop runs against its review-blocked judge
+				# worktree (RB_COMBINED_WORKDIR), not its own checkout.
+				env={**_temp_repo_env(), "RB_COMBINED_WORKDIR": str(repo)},
 				text=True,
 			)
 
