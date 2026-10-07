@@ -423,6 +423,20 @@ def test_short_total_label_needs_its_own_number(tmp_path):
 	assert "unparseable audit line" in result.stderr, result.stderr
 
 
+def test_short_total_label_glued_to_a_digit_is_not_a_count(tmp_path):
+	"""A short label needs a space, ":" or "=" before its number, so a
+	file name such as `total5.txt` must not be read as `total 5`."""
+	summary = textwrap.dedent(
+		"""\
+		Review file issue audit:
+		- /tmp/x/total5.txt — applied 3; already applied 0; ignored 0
+		"""
+	)
+	result = _run(summary, "1", tmp_path=tmp_path)
+	assert result.returncode == 2, result.stderr
+	assert "unparseable audit line" in result.stderr, result.stderr
+
+
 def main() -> int:
 	# Direct `python3 tests/<file>.py` entrypoint — the repo's CI runs
 	# tests via that pattern rather than pytest discovery, so this file
