@@ -763,7 +763,9 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 			echo "--- run ${run_url} | workflow: ${workflow_name} | job: ${job_name} | failing step: ${failing_step:-unknown} ---"
 			cat "${log_file}" 2>/dev/null || echo "(log unavailable)"
 			echo
-		done < <(jq -r '.[] | [.url, .job_name, .workflow_name, .failing_step, .log_file] | @tsv' "${SUMMARIES_FILE}")
+		# Tab is whitespace to `read`: an empty field (a job with no failed
+		# step) would collapse and shift the log path into failing_step.
+		done < <(jq -r '.[] | [.url, .job_name, .workflow_name, .failing_step, .log_file] | map(if . == "" then "unknown" else . end) | @tsv' "${SUMMARIES_FILE}")
 	else
 		echo "(no failed run could be linked to this escalation; diagnose from the issue context and the escalation label semantics)"
 	fi
