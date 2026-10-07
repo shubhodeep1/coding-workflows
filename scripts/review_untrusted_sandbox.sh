@@ -168,16 +168,60 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 	exit 0
 fi
 
-[[ "${root}" == "${RUNNER_TEMP:-/tmp}"/review-isolated-* ]] && \
-	[ "$(dirname "$(realpath -e -- "${root}" 2>/dev/null || echo /invalid)")" = "$(realpath -e -- "${RUNNER_TEMP:-/tmp}")" ] && \
-	[ -f "${root}/image" ] && [ -f "${root}/baseline.json" ] || { echo '::error::Review sandbox not prepared' >&2; exit 1; }
+# The first failing check is named for cleanup only (fixed, path-free token;
+# issue #6484); the run path keeps its original output.
+sandbox_root_reason=""
+if [[ "${root}" != "${RUNNER_TEMP:-/tmp}"/review-isolated-* ]]; then
+	sandbox_root_reason=root_pattern_mismatch
+elif [ "$(dirname "$(realpath -e -- "${root}" 2>/dev/null || echo /invalid)")" != "$(realpath -e -- "${RUNNER_TEMP:-/tmp}")" ]; then
+	sandbox_root_reason=root_outside_runner_temp
+elif [ ! -f "${root}/image" ]; then
+	sandbox_root_reason=image_marker_missing
+elif [ ! -f "${root}/baseline.json" ]; then
+	sandbox_root_reason=baseline_missing
+fi
+if [ -n "${sandbox_root_reason}" ]; then
+	echo '::error::Review sandbox not prepared' >&2
+	if [ "${action}" = cleanup ]; then
+		echo "::error::REVIEW_SANDBOX_CLEANUP reason=${sandbox_root_reason}" >&2
+	fi
+	exit 1
+fi
 if [ "${action}" = cleanup ]; then
 	if [ -f "${root}/active-container" ]; then
 		active_container="$(< "${root}/active-container")"
 		[[ "${active_container}" =~ ^review-editor-[0-9]+$ ]] && env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker rm -f "${active_container}" >/dev/null 2>&1 || true
 	fi
-	rm -rf -- "${root}"
-	exit 0
+	# rm's stderr carries PR/sandbox paths: classify it, never print it. The
+	# capture file lives outside the root being removed.
+	cleanup_err="$(mktemp "${RUNNER_TEMP:-/tmp}/review-cleanup-err-XXXXXXXX" 2>/dev/null)" || cleanup_err=/dev/null
+	cleanup_rc=0
+	LC_ALL=C rm -rf -- "${root}" 2>"${cleanup_err}" || cleanup_rc=$?
+	if [ "${cleanup_rc}" -ne 0 ]; then
+		# Directories the sandbox left without owner rwx (dependency caches)
+		# block a non-root rm. Repair them once inside the validated root;
+		# find -P never follows symlinks out of it. Still fatal if rm fails again.
+		find -P "${root}" -type d ! -perm -u=rwx -exec chmod u+rwx -- {} + 2>/dev/null || true
+		if LC_ALL=C rm -rf -- "${root}" 2>"${cleanup_err}"; then
+			echo 'REVIEW_SANDBOX_CLEANUP reason=remove_permission_repaired' >&2
+			cleanup_rc=0
+		else
+			cleanup_cause=other
+			if grep -q 'Permission denied' "${cleanup_err}" 2>/dev/null; then
+				cleanup_cause=permission_denied
+			elif grep -q 'Directory not empty' "${cleanup_err}" 2>/dev/null; then
+				cleanup_cause=not_empty
+			elif grep -q 'Device or resource busy' "${cleanup_err}" 2>/dev/null; then
+				cleanup_cause=busy
+			fi
+			echo "::error::REVIEW_SANDBOX_CLEANUP reason=remove_failed cause=${cleanup_cause}" >&2
+			cleanup_rc=1
+		fi
+	fi
+	if [ "${cleanup_err}" != /dev/null ]; then
+		rm -f -- "${cleanup_err}" 2>/dev/null || true
+	fi
+	exit "${cleanup_rc}"
 fi
 # Transfer only into the workspace prepare validated and recorded.
 [ -f "${root}/workspace" ] || { echo '::error::Review sandbox not prepared' >&2; exit 1; }

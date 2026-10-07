@@ -1980,6 +1980,7 @@ and shipped:
 - `CLAUDE_FIXER_AUTO_MERGE`
 - `RB_JUDGE_ISOLATION`
 - `CONSOLIDATOR_ISOLATION`
+- `REVIEW_SANDBOX_CLEANUP` (`scripts/review_untrusted_sandbox.sh cleanup`, run after `Commit changes`: `reason=root_pattern_mismatch|root_outside_runner_temp|image_marker_missing|baseline_missing|remove_permission_repaired|remove_failed cause=permission_denied|not_empty|busy|other`; path-free, teed into `editor_stage_stderr.txt`)
 - `JUDGE_ISOLATION`
 - `JUDGE_ENGINE_LABELS` (`scripts/orchestrate_poll_process.sh`: `role= outcome=forced_codex reason=issue_labels_unavailable` when a per-issue label snapshot cannot be verified).
 - `SECURITY_AUDIT_TARGET`
@@ -2211,6 +2212,7 @@ LOG_PREFIX.name=AUTOFIX_FAILURE_HEADLINE
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
 LOG_PREFIX.name=RB_JUDGE_ISOLATION
 LOG_PREFIX.name=CONSOLIDATOR_ISOLATION
+LOG_PREFIX.name=REVIEW_SANDBOX_CLEANUP
 LOG_PREFIX.name=JUDGE_ISOLATION
 LOG_PREFIX.name=JUDGE_ENGINE_LABELS
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
