@@ -33,6 +33,15 @@ if [ "${1:-}" = refuse ] && [ "${2:-}" = out_of_heal_scope ]; then
 	refuse out_of_heal_scope
 fi
 echo 'HEAL_ROUTE=false' >> "${GITHUB_ENV:?}"
+# The checkout-context step empties ISSUE_META_FILE when its metadata fetch
+# fails transiently (and continues). Re-read the issue once here so ordinary
+# issues are not refused for a blip; a failed re-read still fails closed below.
+if [ ! -s "${issue_json}" ] && [[ "${ISSUE_NUMBER:-}" =~ ^[1-9][0-9]*$ ]] && [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+	refetched_issue_json="$(mktemp "${RUNNER_TEMP:-/tmp}/heal-issue-meta.XXXXXXXX")"
+	if gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}" > "${refetched_issue_json}" 2>/dev/null; then
+		issue_json="${refetched_issue_json}"
+	fi
+fi
 # Capture the classifier's exit status: a crash must not read as "not a heal
 # issue" and send a heal issue down the ordinary host-editor route.
 if ! heal_route="$(PYTHONDONTWRITEBYTECODE=1 python3 "${heal_py}" heal-route --issue-json "${issue_json}")"; then
@@ -66,7 +75,11 @@ support="${GITHUB_WORKSPACE:?}/.codex-workflow-src"
 support_head="$(git -C "${support}" rev-parse HEAD 2>/dev/null)" || refuse unavailable
 expected_ref="${SCRIPT_REF:-main}"
 case "${expected_ref}" in
-	main|stable) expected_head="$(git -C "${support}" rev-parse "${expected_ref}^{commit}" 2>/dev/null)" || refuse unavailable ;;
+	# `stable` is both a branch and a release tag in coding-workflows, and
+	# actions/checkout fetches both; a bare `stable` resolves to the tag
+	# (refs/tags precedes refs/heads), which lags the checked-out branch tip.
+	# Resolve the local branch actions/checkout created, unambiguously.
+	main|stable) expected_head="$(git -C "${support}" rev-parse --verify -q "refs/heads/${expected_ref}^{commit}" 2>/dev/null)" || refuse unavailable ;;
 	*) [[ "${expected_ref}" =~ ^[0-9a-f]{40}$ ]] || refuse unavailable; expected_head="${expected_ref}" ;;
 esac
 [ "${support_head}" = "${expected_head}" ] || refuse unavailable

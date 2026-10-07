@@ -314,6 +314,56 @@ def test_preflight_scope_ignores_files_touched_in_issue_and_evidence(tmp_path: P
 			os.chmod(dirpath, 0o755)
 
 
+def test_preflight_accepts_stable_branch_when_stable_tag_lags(tmp_path: Path) -> None:
+	# Consumers stage support from SCRIPT_REF=stable. actions/checkout fetches
+	# both the `stable` branch and the older `stable` release tag; a bare
+	# `stable` would resolve to the tag and refuse every consumer heal.
+	if not shutil.which("jq"):
+		pytest.skip("jq is required by the heal preflight")
+	support = tmp_path / "workspace/.codex-workflow-src"
+	(support / "scripts").mkdir(parents=True)
+	for name in ("workflow_failure_heal.py", "workflow_failure_heal_evidence.sh"):
+		shutil.copy(ROOT / "scripts" / name, support / "scripts" / name)
+	git_env = dict(os.environ, GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_NOSYSTEM="1")
+	commit = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q"]
+	subprocess.run(["git", "init", "-q", "-b", "stable", str(support)], check=True, env=git_env)
+	subprocess.run(["git", "add", "--all"], cwd=support, check=True, env=git_env)
+	subprocess.run(commit + ["-m", "release"], cwd=support, check=True, env=git_env)
+	subprocess.run(["git", "tag", "stable"], cwd=support, check=True, env=git_env)
+	subprocess.run(commit + ["--allow-empty", "-m", "hotfix ahead of the tag"], cwd=support, check=True, env=git_env)
+	issue = tmp_path / "issue.json"
+	issue.write_text(json.dumps({"body": "", "labels": [{"name": "ai:workflow-heal"}]}))
+	state = {"login": "pipeline", "live": _heal_live_issue(_SCOPE_MARKER), "jobs": [{"id": 9001, "name": "implement", "conclusion": "failure"}], "logs": {"9001": "##[error]boom\n"}}
+	env_file = tmp_path / "github-env"
+	env = _fake_gh_env(tmp_path, state)
+	env.update(ISSUE_META_FILE=str(issue), ISSUE_NUMBER="42", GITHUB_REPOSITORY="owner/repo", GITHUB_ENV=str(env_file), GITHUB_RUN_ID="78", RUNNER_TEMP=str(tmp_path), RUNTIME_DIR=str(tmp_path), GITHUB_WORKSPACE=str(tmp_path / "workspace"), SCRIPT_REF="stable", WORKFLOW_HEAL_PY=str(ROOT / "scripts/workflow_failure_heal.py"))
+	try:
+		result = subprocess.run(["bash", str(ROOT / "scripts/implement_heal_preflight.sh")], env=env, capture_output=True, text=True, check=False)
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert "HEAL_SCOPE_REFUSED" not in result.stdout
+		assert "HEAL_ROUTE=true" in env_file.read_text()
+	finally:
+		for dirpath, _dirs, _files in os.walk(tmp_path):
+			os.chmod(dirpath, 0o755)
+
+
+def test_preflight_refetches_empty_issue_metadata_for_ordinary_issue(tmp_path: Path) -> None:
+	# The checkout-context step empties ISSUE_META_FILE on a transient fetch
+	# failure; an ordinary issue must not be refused for that.
+	issue = tmp_path / "issue.json"
+	issue.write_text("")
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	gh = bin_dir / "gh"
+	gh.write_text("#!/bin/bash\nif [ \"$1 $2\" = 'api repos/owner/repo/issues/42' ]; then echo '" + json.dumps({"number": 42, "body": "ordinary", "labels": []}) + "'; exit 0; fi\nexit 1\n")
+	gh.chmod(0o755)
+	env_file = tmp_path / "env"
+	env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", ISSUE_META_FILE=str(issue), ISSUE_NUMBER="42", GITHUB_REPOSITORY="owner/repo", GITHUB_ENV=str(env_file), RUNNER_TEMP=str(tmp_path), WORKFLOW_HEAL_PY=str(ROOT / "scripts/workflow_failure_heal.py"), PYTHONDONTWRITEBYTECODE="1")
+	result = subprocess.run(["bash", str(ROOT / "scripts/implement_heal_preflight.sh")], env=env, capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert env_file.read_text().splitlines() == ["HEAL_ROUTE=false"]
+
+
 def _scoped_snapshot(tmp_path: Path) -> tuple[Path, Path, Path]:
 	host = tmp_path / "host"
 	copy = tmp_path / "copy"
