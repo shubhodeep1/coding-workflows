@@ -1017,6 +1017,24 @@ _comment_on_source()
 		|| log "warn source_comment_failed source=${SOURCE_LABEL}"
 }
 
+# Fetch the consumer commit a heal issue will be implemented against (the
+# failing head when known, else its default branch) into a private bare repo.
+# No credential prompt; any failure leaves the consumer scope unresolved.
+_git_fetch_consumer_scope_ref()
+{
+	local consumer_repo="$1" scope_dir="$2" consumer_ref="HEAD" consumer_auth_header=""
+	[[ "${consumer_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 1
+	if [[ "${HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then consumer_ref="${HEAD_SHA}"; fi
+	rm -rf -- "${scope_dir}"
+	GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git init --bare -q "${scope_dir}" >/dev/null 2>&1 || return 1
+	if [ -n "${GH_TOKEN:-}" ]; then
+		consumer_auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+	fi
+	GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+		GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="${consumer_auth_header}" \
+		timeout 120 git --git-dir "${scope_dir}" fetch --quiet --depth 1 "https://github.com/${consumer_repo}.git" "${consumer_ref}" >/dev/null 2>&1
+}
+
 _open_issue()
 {
 	local repo="$1" target_branch="$2" integration_branch="${3:-}"
@@ -1039,12 +1057,26 @@ _open_issue()
 		_git_fetch_ownership_refs "+refs/heads/${checkout_ref}:refs/remotes/origin/${checkout_ref}" || true
 		scope_ref="refs/remotes/origin/${checkout_ref}"
 	fi
-	if [ -n "${scope_ref}" ] && git rev-parse --verify "${scope_ref}^{commit}" >/dev/null 2>&1; then
+	local scope_checkout="." scope_workflows_filter='[.[] | .referenced_paths[]?] | unique'
+	if [ "${repo}" != "${SELF_REPO}" ]; then
+		# The issue is implemented in the consumer checkout, so its scope must be
+		# checked against the consumer's own tree, never coding-workflows'. Only
+		# the run's own workflow path applies there (referenced_paths name
+		# coding-workflows files). An unreadable consumer tree leaves the scope
+		# unresolved, which implement refuses at ai:needs-human (fail closed).
+		scope_checkout="${RUNTIME_DIR}/consumer-scope.git"
+		scope_workflows_filter='[.[] | .path | select(type == "string" and . != "")] | unique'
+		scope_ref=""
+		if _git_fetch_consumer_scope_ref "${repo}" "${scope_checkout}"; then
+			scope_ref="$(git --git-dir "${scope_checkout}" rev-parse --verify 'FETCH_HEAD^{commit}' 2>/dev/null || true)"
+		fi
+	fi
+	if [ -n "${scope_ref}" ] && git -C "${scope_checkout}" rev-parse --verify "${scope_ref}^{commit}" >/dev/null 2>&1; then
 		jq -n --arg crash "${PAYLOAD_CRASH_FILE}" --argjson runs "$(jq -s '[.[] | select(.run_id != null) | "'"${SOURCE_REPO}"'" + ":" + (.run_id | tostring)] | unique' "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
-			--argjson workflows "$(jq -s '[.[] | .referenced_paths[]?] | unique' "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
+			--argjson workflows "$(jq -s "${scope_workflows_filter}" "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
 			--argjson changed "$(if [ "${CRASH_OWNERSHIP}" = pr ]; then jq '.changed_files // []' "${PAYLOAD_FILE}"; elif [ "${CRASH_OWNERSHIP}" = base ]; then jq -R -s 'split("\n") | map(select(. != ""))' "${BASE_CHANGED_FILES_FILE}"; else echo '[]'; fi)" \
 			'{crash_file: $crash, runs: $runs, workflow_paths: $workflows, changed_files: $changed}' > "${RUNTIME_DIR}/scope_inputs.json"
-		python3 "${HEAL_PY}" heal-scope render --input-json "${RUNTIME_DIR}/scope_inputs.json" --checkout "." --ref "${scope_ref}" > "${scope_marker_file}" || : > "${scope_marker_file}"
+		python3 "${HEAL_PY}" heal-scope render --input-json "${RUNTIME_DIR}/scope_inputs.json" --checkout "${scope_checkout}" --ref "${scope_ref}" > "${scope_marker_file}" || : > "${scope_marker_file}"
 	fi
 	log "scope paths=$(grep -o 'paths=[^ ]*' "${scope_marker_file}" | tr ',' '\n' | wc -l | tr -d ' ') runs=${SUMMARY_COUNT} outcome=$([ -s "${scope_marker_file}" ] && grep -q '<!--' "${scope_marker_file}" && echo written || echo unresolved)"
 	rm -f "${title_file}" "${body_file}"
