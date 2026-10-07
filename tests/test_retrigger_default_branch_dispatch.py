@@ -448,6 +448,37 @@ def test_peer_check_counts_pending_and_rejects_wrong_default_branch_or_wrapper()
 	assert proc.returncode == 0, (proc.stdout, proc.stderr)
 
 
+def test_peer_check_accepts_a_null_head_branch_dispatch_run() -> None:
+	"""Issue #6629 (Q2): GitHub can report a null head_branch on a real
+	default-branch dispatch (#4928); a branch-copy spoof never does."""
+	for head_branch in (None, ""):
+		run = _pr_named(116, "in_progress", None, PUSH_EPOCH)
+		run["head_branch"] = head_branch
+		proc, _ = _run_probe(PEER, [], [run], PR, BRANCH, CURRENT_RUN)
+		assert proc.returncode == 0, (head_branch, proc.stdout, proc.stderr)
+		assert "peer_run=116" in proc.stdout
+
+
+def test_peer_check_rejects_spoofed_dispatch_runs() -> None:
+	"""Issue #6629: (a) a non-default branch, (b) a title on the wrong wrapper
+	path, (c) another event: none of them is a peer."""
+	spoofs = []
+	branch_copy = _pr_named(117, "in_progress", None, PUSH_EPOCH)
+	branch_copy["head_branch"] = "attacker/branch"
+	spoofs.append(branch_copy)
+	wrong_path = _pr_named(118, "in_progress", None, PUSH_EPOCH)
+	wrong_path["path"] = ".github/workflows/review_autofix.yml"
+	spoofs.append(wrong_path)
+	swapped = _pr_named(119, "in_progress", None, PUSH_EPOCH, wrapper="ai-review.yml")
+	swapped["display_title"] = f"Internal: AI Review & Autofix [pr:{PR}]"
+	spoofs.append(swapped)
+	other_event = _pr_named(120, "in_progress", None, PUSH_EPOCH)
+	other_event["event"] = "pull_request"
+	spoofs.append(other_event)
+	proc, _ = _run_probe(PEER, [], spoofs, PR, BRANCH, CURRENT_RUN)
+	assert proc.returncode == 1, (proc.stdout, proc.stderr)
+
+
 def test_peer_check_reads_all_wrapper_pages() -> None:
 	older_runs = [_pr_named(1000 + idx, "completed", "success", PUSH_EPOCH, pr="1") for idx in range(100)]
 	proc, calls = _run_probe(PEER, [], older_runs + [_pr_named(2000, "queued", None, PUSH_EPOCH)], PR, BRANCH, CURRENT_RUN)

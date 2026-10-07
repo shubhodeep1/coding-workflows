@@ -171,6 +171,20 @@ jobs:
             exit 0
           fi
 
+          # Provenance (issue #6629): a dispatched run's title comes from the
+          # dispatched ref's workflow file, so a branch copy of
+          # internal-review.yml can name a run for any PR. Only a run that
+          # GitHub reports on the default branch (or with a null head_branch,
+          # #4928) is keyed by its PR below. One read per tick with at least
+          # one candidate, and no fallback: a failed read skips every dispatch
+          # this tick rather than risk replacing a pending review.
+          sweep_default_branch="$(GH_TOKEN="${READ_TOKEN}" gh api "repos/${REPOSITORY}" --jq .default_branch 2>/dev/null || true)"
+          if ! [[ "${sweep_default_branch}" =~ ^[A-Za-z0-9._/-]+$ ]] || [ "${sweep_default_branch}" = "null" ]; then
+            echo "::warning::AUTOFIX_SWEEP_SKIPPED reason=default_branch_unavailable — review dispatch runs cannot be verified; no dispatch this tick."
+            echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} failures=${failures} candidates=${total}"
+            exit 0
+          fi
+
           # Snapshot active review-family runs once per workflow, then do
           # per-PR lookups locally so the sweep avoids N×2 workflow-run API
           # fanout while preserving the existing active-run skip semantics.
@@ -213,7 +227,7 @@ jobs:
                   -f status="${status}" \
                   -f per_page=100 \
                   2>/dev/null || true
-              done | jq -c -s --argjson cutoff "${stale_cutoff_epoch}" '
+              done | jq -c -s --argjson cutoff "${stale_cutoff_epoch}" --arg default_branch "${sweep_default_branch}" '
                   def created_epoch:
                     (.created_at // "")
                     | if . == "" then null
@@ -235,8 +249,16 @@ jobs:
                   # marker cannot claim another PR key. Git refs cannot
                   # contain ":", so a "pr:<N>" key never collides with a
                   # branch key. Everything else stays keyed by head branch.
+                  # Provenance (issue #6629): the run must also come from the
+                  # default branch (or report a null head_branch, #4928) and
+                  # from internal-review.yml itself; a branch copy's run keeps
+                  # its own head-branch key, which never matches a pr: key.
                   def dispatch_pr:
-                    if (.event // "") == "workflow_dispatch" then
+                    if (.event // "") == "workflow_dispatch"
+                      and ($default_branch != "")
+                      and (.head_branch == null or .head_branch == "" or .head_branch == $default_branch)
+                      and (((.path // "") | if type == "string" then . else "" end | sub("@.*$"; "")) == ".github/workflows/internal-review.yml")
+                    then
                       ((.display_title // "")
                         | [match("^Internal: AI Review & Autofix \\[pr:([1-9][0-9]*)\\]$").captures[0].string]
                         | first // "")

@@ -712,6 +712,7 @@ def _run_poller(
 	fail_validation_dispatch: bool = False,
 	fail_release_dispatch: bool = False,
 	fail_search_issues: bool = False,
+	default_branch_fail: bool = False,
 	search_issue_items: list[dict] | None = None,
 	prs: list[dict] | None = None,
 	pr_files_fail: bool = False,
@@ -1223,6 +1224,7 @@ esac
 			"fail_search_issues": bool(fail_search_issues),
 			"search_issue_items": list(search_issue_items or []),
 			"default_branch": "main",
+			"default_branch_fail": bool(default_branch_fail),
 			"prs": prs,
 			"pr_commits": {str(k): list(v) for k, v in pr_commits.items()},
 			"pr_api_sequence": {str(k): list(v) for k, v in pr_api_sequence.items()},
@@ -2653,6 +2655,11 @@ if args[0] == 'api':
 		sys.exit(0)
 
 	if re.search(r'^repos/[^/]+/[^/]+$', path):
+		# Issue #6629: 'default_branch_fail' fails the read, so the
+		# PR-named review-run matchers fail closed.
+		if store.get('default_branch_fail'):
+			print('gh: Server Error (HTTP 502)', file=sys.stderr)
+			sys.exit(1)
 		if jq == '.default_branch':
 			print(store.get('default_branch', 'main'))
 		else:
@@ -2818,6 +2825,9 @@ if args[0] == 'api':
 					'display_title': run.get('displayTitle', ''),
 					'created_at': run.get('createdAt', ''),
 					'run_started_at': run.get('startedAt', run.get('createdAt', '')),
+					# Issue #6629: the provenance fields the trust rule checks.
+					'head_branch': run.get('headBranch', store.get('default_branch', 'main')),
+					'path': run.get('path', f'.github/workflows/{m.group(1)}'),
 				})
 			result = {'workflow_runs': runs[(page - 1) * per_page:page * per_page], 'total_count': len(runs)}
 			save()
@@ -17973,6 +17983,91 @@ def test_retrigger_review_ignores_pr_named_dispatch_run_of_another_pr():
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 1, issue_entry
 	assert result.get("git_push_calls", []), "expected the empty-commit push to proceed"
+
+
+def _retrigger_review_spoof_run(pr_number: int, **overrides) -> dict:
+	run = {
+		"id": 26088869000 + pr_number,
+		"name": "Internal: AI Review & Autofix",
+		"display_title": f"Internal: AI Review & Autofix [pr:{pr_number}]",
+		"event": "workflow_dispatch",
+		"path": ".github/workflows/internal-review.yml",
+		"status": "in_progress",
+		"head_branch": "main",
+		"head_sha": "c" * 40,
+		"run_started_at": "2999-01-01T00:00:00Z",
+	}
+	run.update(overrides)
+	return run
+
+
+@pytest.mark.parametrize("overrides", [
+	# (a) the same title on a branch copy of internal-review.yml.
+	{"head_branch": "attacker/branch"},
+	# (b) the title on the wrong wrapper path.
+	{"path": ".github/workflows/ai-review.yml"},
+	{"path": "other/repo/.github/workflows/internal-review.yml"},
+	# (c) the right title and path from another event.
+	{"event": "push", "head_branch": "main"},
+])
+def test_retrigger_review_pushes_past_spoofed_pr_named_run(overrides):
+	# Issue #6629: a run that fails the provenance rule must not hold the
+	# empty-commit push (an availability stall with nothing to show why).
+	state, prs = _retrigger_review_pr_state(93, "claude/retrigger-review-pr-named-spoof")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 93},
+		prs=prs,
+		actions_runs_workflow_runs=[_retrigger_review_spoof_run(93, **overrides)],
+		mock_git_push_success=True,
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 1, issue_entry
+	assert result.get("git_push_calls", []), "expected the empty-commit push to proceed"
+
+
+def test_retrigger_review_null_head_branch_pr_named_run_still_blocks_push():
+	# Issue #6629 (Q2): GitHub can report a null head_branch on a real
+	# default-branch dispatch (#4928); such a run stays trusted.
+	state, prs = _retrigger_review_pr_state(94, "claude/retrigger-review-pr-named-null")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 94},
+		prs=prs,
+		actions_runs_workflow_runs=[_retrigger_review_spoof_run(94, head_branch=None)],
+		mock_git_push_success=True,
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 0, issue_entry
+	assert result.get("git_push_calls", []) == [], result.get("git_push_calls", [])
+
+
+def test_retrigger_review_skips_push_when_default_branch_is_unavailable():
+	# Issue #6629 (d): without the default branch no PR-named run can be
+	# ruled out, so the push is skipped (no `main` fallback).
+	state, prs = _retrigger_review_pr_state(95, "claude/retrigger-review-pr-named-no-default")
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]},
+		issue_linked_prs={10: 95},
+		prs=prs,
+		actions_runs_workflow_runs=[],
+		mock_git_push_success=True,
+		default_branch_fail=True,
+	)
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 0, issue_entry
+	assert result.get("git_push_calls", []) == [], result.get("git_push_calls", [])
+	combined = result.get("stdout", "") + result.get("stderr", "")
+	assert "REVIEW_RUN_DEFAULT_BRANCH outcome=unavailable" in combined
 
 
 def test_retrigger_review_redispatches_when_pr_named_dispatch_run_failed():
