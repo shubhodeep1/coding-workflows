@@ -1182,6 +1182,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mark_stable_release_tag_refspec_contract.py
 
+      - name: Consumer secrets propagation contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_propagate_consumer_secrets.py
+
       - name: Soft-error report consolidator unit tests
         run: |
           set -euo pipefail
