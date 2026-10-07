@@ -462,6 +462,36 @@ def refresh(host, workspace, manifest):
 			os.chmod(target, mode)
 
 
+def seed(host, workspace, manifest, name, payload):
+	"""Write trusted host content into the disposable source after snapshot.
+
+	Used by the smoke-only canary pre-write: writing the host after the
+	snapshot makes transfer refuse with host_baseline_changed (runs
+	37669315093 / 37674139451). Seeding the source instead lets the normal
+	validated transfer publish the file. The host and manifest are never
+	written, and a host that drifted from the baseline is still refused.
+	"""
+	baseline = json.loads(manifest.read_text(encoding="utf-8"))
+	if not allowed(name) or name not in baseline:
+		raise _rejection("unsafe result path", "unsafe_result_path")
+	try:
+		host_file = checked_path(host, name)
+		target = checked_path(workspace, name)
+	except ValueError:
+		raise _rejection("symlink in workspace path", "symlink_in_path") from None
+	if not host_file.exists() or fingerprint(host_file) != baseline[name]:
+		raise _rejection("host baseline changed", "host_baseline_changed")
+	data, _ = read_regular(payload)
+	if target.is_symlink() or (target.exists() and not stat.S_ISREG(target.lstat().st_mode)):
+		raise _rejection("new result conflicts with host path", "result_conflicts_host")
+	target.parent.mkdir(parents=True, exist_ok=True)
+	if target.exists():
+		target.unlink()
+	with target.open("xb") as out:
+		out.write(data)
+	os.chmod(target, baseline[name][1])
+
+
 # Names the conflict-path report may echo: plain relative paths only, so a
 # rejected name can never carry a workflow command, markup or a newline.
 REPORTABLE_PATH_RE = re.compile(r"[A-Za-z0-9_.][A-Za-z0-9._/-]{0,199}")
@@ -537,7 +567,6 @@ def main():
 			print("::error::Review static README output failed", file=sys.stderr)
 			raise SystemExit(1) from None
 		return
-	# snapshot alone takes an optional fifth argument: the host Git dir.
 	# check-paths takes an optional fourth argument: the rejection report.
 	if sys.argv[1:2] == ["check-paths"] and len(sys.argv) in (4, 5):
 		try:
@@ -546,11 +575,18 @@ def main():
 			print("unsupported path", file=sys.stderr)
 			raise SystemExit(1) from None
 		return
-	if sys.argv[1:2] not in (["snapshot"], ["refresh"], ["transfer"]) or not (len(sys.argv) == 5 or (len(sys.argv) == 6 and sys.argv[1] == "snapshot")):
-		raise SystemExit(2)
+	if sys.argv[1:2] == ["seed"]:
+		if len(sys.argv) != 7:
+			raise SystemExit(2)
+	else:
+		# snapshot alone takes an optional fifth argument: the host Git dir.
+		if sys.argv[1:2] not in (["snapshot"], ["refresh"], ["transfer"]) or not (len(sys.argv) == 5 or (len(sys.argv) == 6 and sys.argv[1] == "snapshot")):
+			raise SystemExit(2)
 	host, workspace, manifest = map(Path, sys.argv[2:5])
 	try:
-		if sys.argv[1] == "snapshot":
+		if sys.argv[1] == "seed":
+			seed(host, workspace, manifest, sys.argv[5], Path(sys.argv[6]))
+		elif sys.argv[1] == "snapshot":
 			snapshot(host, workspace, manifest, Path(sys.argv[5]) if len(sys.argv) == 6 else None)
 		elif sys.argv[1] == "refresh":
 			refresh(host, workspace, manifest)
