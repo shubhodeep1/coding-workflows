@@ -127,6 +127,20 @@ _SHELL_PUNCTUATION_CHARS = ";&|\n<>"
 _FD_PREFIX_REDIRECT_OPERATORS = frozenset({"<", ">", ">>", ">|", "<>", ">&", "<&", "<<", "<<<"})
 _SHELL_CONTROL_PREFIXES = frozenset({"if", "then", "elif", "else", "do", "while", "until", "{", "(", "!"})
 _SHELL_WORD_DELIMITERS = frozenset(" \t\r" + _SHELL_PUNCTUATION_CHARS)
+# Commands that run a heredoc body as shell text; such a body stays visible to
+# the git parser. Any other heredoc body (cat, python3, `git commit -F -`) is
+# data and is removed before parsing, so prose such as `it's` cannot make the
+# whole command unparseable.
+_SHELL_HEREDOC_READERS = frozenset(
+	{
+		"bash", "sh", "zsh", "dash", "ksh", "fish", "eval", "source", ".", "ssh", "su", "sudo", "doas",
+		"xargs", "parallel", "watch", "timeout", "nice", "nohup", "env", "exec", "command", "stdbuf", "script",
+	}
+)
+_SHELL_HEREDOC_READER_RE = re.compile(
+	r"(?:^|[\s;&|(`])(?:\S*/)?(?:" + "|".join(re.escape(word) for word in sorted(_SHELL_HEREDOC_READERS)) + r")(?:\s|$)"
+)
+_HEREDOC_OPERATOR_RE = re.compile(r"<<(-?)[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
 
 _API_WRITE_METHODS = frozenset({"PUT", "POST", "PATCH"})
 _API_WRITE_URL_PREFIXES = (
@@ -335,6 +349,123 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	return [(operator, tokens) for operator, tokens, _ in _shell_segments_with_redirects(command)]
 
 
+def _strip_data_heredoc_bodies(command: str) -> str:
+	"""Remove heredoc bodies that Bash passes on as data, not as shell text.
+
+	The `<<WORD` operator stays, so the command keeps its structure; the body
+	and its closing delimiter line are dropped. A body stays when the command
+	before `<<` is a shell reader (`bash`, `eval`, `ssh`, ...) or when its
+	delimiter is unquoted and the body holds a `$(...)` or backtick
+	substitution, because Bash runs that text and git commands in it must
+	still be checked. Quote, `$(...)`, `${...}` and arithmetic context is
+	tracked so a `<<` inside quotes is not read as a heredoc.
+	"""
+	lines = command.split("\n")
+	output: list[str] = []
+	pending: list[tuple[str, bool, bool, str]] = []
+	# Each context is [mode, open quote, nesting depth]; a nested $(...) has
+	# its own quoting rules, even inside "...".
+	contexts: list[list] = [["shell", None, 0]]
+	index = 0
+	while index < len(lines):
+		line = lines[index]
+		output.append(line)
+		position = 0
+		while position < len(line):
+			character = line[position]
+			mode, quote, depth = contexts[-1]
+			if character == "\\" and quote != "'":
+				position += 2
+				continue
+			if quote == "'":
+				if character == "'":
+					contexts[-1][1] = None
+				position += 1
+				continue
+			if character == quote:
+				contexts[-1][1] = None
+				position += 1
+				continue
+			if line.startswith("$((", position):
+				contexts.append(["arithmetic", None, 2])
+				position += 3
+				continue
+			if line.startswith("$(", position):
+				contexts.append(["shell", None, 0])
+				position += 2
+				continue
+			if line.startswith("${", position):
+				contexts.append(["parameter", None, 1])
+				position += 2
+				continue
+			if mode == "parameter":
+				if character == "{":
+					contexts[-1][2] += 1
+				elif character == "}":
+					contexts[-1][2] -= 1
+					if contexts[-1][2] == 0:
+						contexts.pop()
+				position += 1
+				continue
+			if mode == "arithmetic":
+				if character == "(":
+					contexts[-1][2] += 1
+				elif character == ")":
+					contexts[-1][2] -= 1
+					if contexts[-1][2] == 0:
+						contexts.pop()
+				position += 1
+				continue
+			if character == "'" and quote is None:
+				contexts[-1][1] = "'"
+			elif character == '"':
+				contexts[-1][1] = '"' if quote is None else None
+			elif quote is None:
+				if character == "`":
+					if mode == "backtick":
+						contexts.pop()
+					else:
+						contexts.append(["backtick", None, 0])
+				elif mode == "shell" and len(contexts) > 1 and character == ")":
+					if depth == 0:
+						contexts.pop()
+					else:
+						contexts[-1][2] -= 1
+				elif mode == "shell" and len(contexts) > 1 and character == "(":
+					contexts[-1][2] += 1
+				elif line.startswith("((", position) and (position == 0 or line[position - 1] in " \t;|&("):
+					contexts.append(["arithmetic", None, 2])
+					position += 2
+					continue
+				elif character == "#" and (position == 0 or line[position - 1] in " \t;|&()<>"):
+					break
+				elif line.startswith("<<", position) and not line.startswith("<<<", position) and (position == 0 or line[position - 1] != "<"):
+					match = _HEREDOC_OPERATOR_RE.match(line, position)
+					if match:
+						pending.append((match.group(3), match.group(1) == "-", bool(match.group(2)), line[:position]))
+						position = match.end()
+						continue
+			position += 1
+		index += 1
+		while pending:
+			delimiter, strip_tabs, quoted, prefix = pending.pop(0)
+			body: list[str] = []
+			closing: list[str] = []
+			while index < len(lines):
+				body_line = lines[index]
+				index += 1
+				if (body_line.lstrip("\t") if strip_tabs else body_line) == delimiter:
+					closing.append(body_line)
+					break
+				body.append(body_line)
+			runs_as_shell = bool(_SHELL_HEREDOC_READER_RE.search(prefix)) or (
+				not quoted and any("$(" in body_line or "`" in body_line for body_line in body)
+			)
+			if runs_as_shell:
+				output.extend(body + closing)
+	return "\n".join(output)
+
+
 def _command_after_control_prefix(tokens: list[str]) -> tuple[list[str], bool]:
 	"""Expose a command behind shell control words without trusting its cwd."""
 	control_prefix_seen = False
@@ -431,24 +562,39 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 	working_directory: str | None = checkout
 	conditional_cd = False
 	unresolved_directory_change = False
+	# A cd/pushd/popd earlier in the current `&&`/`||` list: a later `||`
+	# branch may run with or without that directory change.
+	list_changed_directory = False
 	invocations: list[_GitInvocation] = []
-	for operator, tokens, redirect_may_fail in segments:
+	for segment_position, (operator, tokens, redirect_may_fail) in enumerate(segments):
 		tokens, control_prefix = _command_after_control_prefix(tokens)
 		if control_prefix:
 			working_directory = None
+		if operator in ("", ";", "\n", "&"):
+			list_changed_directory = False
 		if not tokens:
 			continue
+		next_operator = segments[segment_position + 1][0] if segment_position + 1 < len(segments) else ""
+		# Each pipeline element runs in its own subshell: a directory change
+		# inside one ends with it, and every element starts where the list is.
+		in_pipeline = operator == "|" or next_operator == "|"
 		if operator == "||" and tokens[0] == "exit" and working_directory is not None and not redirect_may_fail:
 			# If this exit runs the following git cannot; otherwise cd succeeded.
 			# A failed builtin redirect means exit did not run (#6289).
 			conditional_cd = False
 			continue
-		if operator not in ("", "&&") and conditional_cd:
+		if operator not in ("", "&&", "|") and conditional_cd:
 			working_directory = None
 			unresolved_directory_change = True
 			conditional_cd = False
-		if operator not in ("", "&&", ";", "\n"):
+		# `&` backgrounds the whole previous list. A `||` branch is unknown only
+		# after a directory change in its own list, or when it is itself a cd.
+		if operator == "&" or (operator == "||" and (list_changed_directory or (tokens[0] == "cd" and not in_pipeline))):
 			working_directory = None
+		if in_pipeline and tokens[0] in ("cd", "pushd", "popd"):
+			continue
+		if tokens[0] in ("cd", "pushd", "popd"):
+			list_changed_directory = True
 		# A cd after a condition may not have happened when a later list starts.
 		if tokens[0] == "cd":
 			operand = tokens[1:]
@@ -1486,7 +1632,10 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
 	if not isinstance(command, str) or not command.strip():
 		return 0, ""
-	guarded_git_subcommands = git_subcommands(command) & GUARDED_SUBCOMMANDS
+	# Git parsing ignores heredoc bodies that Bash passes on as data; the
+	# API-write check below still reads the raw command.
+	git_view_command = _strip_data_heredoc_bodies(command)
+	guarded_git_subcommands = git_subcommands(git_view_command) & GUARDED_SUBCOMMANDS
 	if _api_write_requires_confirmation(command):
 		if guarded_git_subcommands:
 			return 2, (
@@ -1502,7 +1651,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		# Bash may execute earlier lines before a later unmatched quote. Raw-text
 		# searches miss quoted/escaped spellings of git and its subcommands.
 		try:
-			_shell_segments_with_operators(command)
+			_shell_segments_with_operators(git_view_command)
 		except ValueError:
 			_request_confirmation("Cannot parse the Bash command; an earlier git commit/push may still execute.")
 		return 0, ""
@@ -1519,7 +1668,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	unknown_destination_reasons: list[str] = []
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
-	for invocation in _guarded_git_invocations(command, checkout):
+	for invocation in _guarded_git_invocations(git_view_command, checkout):
 		if invocation.subcommand == "commit" and invocation.env_directory_unresolved:
 			unknown_destination_reasons.append("could not resolve git commit directory; no checkout was checked; cannot verify its PR history")
 			continue

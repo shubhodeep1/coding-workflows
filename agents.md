@@ -19,7 +19,15 @@ commands also ask, while control-flow-only commits remain warning-only when
 not blocked. An unresolvable explicit directory override, including an
 env-wrapped commit whose directory cannot be resolved, instead asks for
 confirmation without querying PRs for the session checkout, which may be a
-different repository.
+different repository. Pipeline elements run in subshells, so a pipe leaves
+the directory known for later commands and a `cd` inside a pipeline is
+ignored; a `||` branch makes it unknown only after a directory change in the
+same `&&`/`||` list (or when the branch is itself a `cd`), and `&` still does.
+Heredoc bodies that Bash passes on as data (to `cat`, `python3`,
+`git commit -F -`, ...) are removed before parsing, so prose such as `it's`
+cannot make the whole command unparseable; a body fed to a shell reader
+(`bash`, `sh`, `eval`, `ssh`, `sudo`, ...) or an unquoted-delimiter body
+holding `$(...)` or a backtick is still parsed and checked.
 
 ---
 

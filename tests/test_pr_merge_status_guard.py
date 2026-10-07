@@ -2444,3 +2444,109 @@ def test_claude_md_documents_the_history_fallback() -> None:
 	assert "first-parent" in text
 	assert "git history" in text
 	assert "permissionDecision" in text or "asks" in text
+
+
+# Pipes and data heredocs must not make a command unreadable or its directory
+# unknown (false prompts reported after #6133 / #6135).
+
+
+def _open_feature_checkout(repo: Path, stub_bin: Path) -> None:
+	"""Check out `feature/open`, which the stub answers with an open PR."""
+	_worktree_pr_stub(stub_bin, _git(repo, "rev-parse", "HEAD"))
+	_git(repo, "checkout", "-b", "feature/open")
+
+
+@pytest.mark.parametrize("command", [
+	"git log --oneline -3 | head -3; git push origin feature/open",
+	(
+		"git fetch -q origin feature/open && git log --oneline HEAD..origin/feature/open | head -3; "
+		"git push origin feature/open 2>&1 | tail -1"
+	),
+	"git status | head -1 && git push origin feature/open",
+	"cd /tmp | true; git push origin feature/open",
+	"git fetch -q origin || true; git push origin feature/open",
+])
+def test_pipe_or_unrelated_or_list_keeps_push_directory_known(merged_branch_repo, command: str) -> None:
+	repo, stub_bin = merged_branch_repo
+	_open_feature_checkout(repo, stub_bin)
+	proc = _run_hook(repo, stub_bin, command)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert _ask_decision(proc) is None, proc.stdout
+	assert "could not resolve git" not in proc.stdout
+
+
+def test_pipe_before_push_still_blocks_merged_branch(merged_branch_repo) -> None:
+	repo, stub_bin = merged_branch_repo
+	proc = _run_hook(repo, stub_bin, "git log --oneline -3 | head -3; git push origin feature/x")
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "Branch `feature/x`" in proc.stderr
+	assert "could not resolve git" not in proc.stdout
+
+
+@pytest.mark.parametrize("command", [
+	"true || cd /tmp; git push origin feature/open",
+	"cd /tmp && true || git push origin feature/open",
+	"sleep 1 & git push origin feature/open",
+])
+def test_conditional_directory_change_still_asks_for_push(merged_branch_repo, command: str) -> None:
+	repo, stub_bin = merged_branch_repo
+	_open_feature_checkout(repo, stub_bin)
+	proc = _run_hook(repo, stub_bin, command)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert _ask_decision(proc) is not None, proc.stdout
+
+
+@pytest.mark.parametrize("command", [
+	"cat <<'EOF'\nit's fine\nEOF",
+	(
+		"python3 - <<'EOF'\nold = '''def f():\n\t\"\"\"the checkout's PR\"\"\"\n'''\nEOF\n"
+		"python3 -m pytest -q tests 2>&1 | tail -5"
+	),
+	(
+		"python3 - <<'EOF'\nnew = '''# the security audit's export\n\t\tisolation_args+=(--include \"${p}\")\n'''\nEOF\n"
+		"bash -n scripts/ai_engine.sh && echo ok"
+	),
+	(
+		"git commit -q -F - <<'EOF'\nFollow main's rule\nEOF\n"
+		"git log --oneline HEAD..origin/feature/open | head -3; git push origin feature/open 2>&1 | tail -1"
+	),
+	"git commit -m \"$(cat <<'EOF'\nsay \"hi\", it's done\nEOF\n)\"",
+	"cat <<-EOF\n\tit's indented\n\tEOF",
+])
+def test_data_heredoc_with_unbalanced_quotes_does_not_prompt(merged_branch_repo, command: str) -> None:
+	repo, stub_bin = merged_branch_repo
+	_open_feature_checkout(repo, stub_bin)
+	proc = _run_hook(repo, stub_bin, command)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert _ask_decision(proc) is None, proc.stdout
+
+
+def test_data_heredoc_commit_on_merged_branch_is_still_blocked(merged_branch_repo) -> None:
+	repo, stub_bin = merged_branch_repo
+	proc = _run_hook(repo, stub_bin, "git commit -q -F - <<'EOF'\nFollow main's rule\nEOF")
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "Branch `feature/x`" in proc.stderr
+
+
+@pytest.mark.parametrize("command", [
+	"bash <<'EOF'\ngit push origin feature/x\nit's\nEOF",
+	"sudo sh <<'EOF'\ngit push origin feature/x\nit's\nEOF",
+	"cat <<EOF\n$(git push origin feature/x)\nit's\nEOF",
+	"cat <<'EOF'\nfine\nEOF\ngit status\n\"unterminated",
+])
+def test_heredoc_run_as_shell_is_still_parsed(merged_branch_repo, command: str) -> None:
+	repo, stub_bin = merged_branch_repo
+	_open_feature_checkout(repo, stub_bin)
+	proc = _run_hook(repo, stub_bin, command)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert _ask_decision(proc) is not None, proc.stdout
+
+
+def test_strip_data_heredoc_bodies_keeps_operator_and_shell_bodies() -> None:
+	assert guard._strip_data_heredoc_bodies("cat <<'EOF'\nit's\nEOF\ngit status") == "cat <<'EOF'\ngit status"
+	assert guard._strip_data_heredoc_bodies('echo "<<EOF"\nit\'s\nEOF') == 'echo "<<EOF"\nit\'s\nEOF'
+	shell_body = "bash <<'EOF'\ngit push\nEOF"
+	assert guard._strip_data_heredoc_bodies(shell_body) == shell_body
+	substitution = "cat <<EOF\n$(git push)\nEOF"
+	assert guard._strip_data_heredoc_bodies(substitution) == substitution
+	assert guard._strip_data_heredoc_bodies("cat <<\\EOF\n$(x)\nEOF") == "cat <<\\EOF\n$(x)\nEOF"
