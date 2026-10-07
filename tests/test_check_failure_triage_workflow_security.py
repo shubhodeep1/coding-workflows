@@ -1248,6 +1248,23 @@ class CheckFailureTriageLineageTests(unittest.TestCase):
 		self.assertEqual(metadata.get("generation"), "1")
 		self.assertNotEqual(metadata.get("root"), "c" * 64)
 
+	def test_source_issue_with_marker_inside_fenced_block_starts_generation_one(self) -> None:
+		for fenced in ("<!-- check-failure-triage:gen=3 -->", "<!-- check-failure-triage:gen=abc -->"):
+			with self.subTest(fenced=fenced):
+				proc, outputs, metadata = _run_collect_stage(
+					parent_body=(
+						"## Example\n```markdown\n" + fenced + "\n"
+						"<!-- check-failure-triage:root=" + "d" * 64 + " -->\n```\n"
+						"~~~~\n" + fenced + "\n~~~\nstill fenced\n~~~~\n"
+					),
+				)
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertIn("parent_gen=none gen=1", proc.stdout)
+				self.assertIn("reason=source_issue_not_triage", proc.stdout)
+				self.assertEqual(outputs.get("ready"), "true")
+				self.assertEqual(metadata.get("generation"), "1")
+				self.assertNotEqual(metadata.get("root"), "d" * 64)
+
 	def test_source_issue_with_triage_marker_increments_generation(self) -> None:
 		root = "b" * 64
 		proc, outputs, metadata = _run_collect_stage(

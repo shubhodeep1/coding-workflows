@@ -290,16 +290,39 @@ if [ -n "${PARENT_ISSUE}" ]; then
 		log "error parent_body_parse_failed issue=${PARENT_ISSUE}"
 		exit 1
 	fi
+	# Drop fenced code blocks (``` / ~~~, CommonMark closing rules) so a
+	# marker quoted as an example inside a fence cannot set or break the
+	# lineage. The markers this script writes sit outside any fence.
+	if ! PARENT_MARKER_BODY="$(printf '%s' "${PARENT_BODY}" | PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c '
+import re
+import sys
+
+fence = None
+kept = []
+for line in sys.stdin.read().split("\n"):
+	match = re.match(r" {0,3}(`{3,}|~{3,})", line)
+	if fence is None:
+		if match:
+			fence = match.group(1)
+			continue
+		kept.append(line)
+	elif match and match.group(1)[0] == fence[0] and len(match.group(1)) >= len(fence) and not line[match.end():].strip():
+		fence = None
+sys.stdout.write("\n".join(kept))
+')"; then
+		log "error parent_body_fence_strip_failed issue=${PARENT_ISSUE}"
+		exit 1
+	fi
 	# Read only line-leading HTML-comment markers (the shape this script
 	# writes), so a prose or inline-code mention such as
 	# `<!-- check-failure-triage:gen=2 -->` cannot set the lineage.
-	PGEN="$(printf '%s' "${PARENT_BODY}" | sed -n "s/^[[:space:]]*<!-- ${MARKER_PREFIX}gen=\([0-9]\{1,\}\)[[:space:]]*-->.*/\1/p" | head -1)"
-	PROOT="$(printf '%s' "${PARENT_BODY}" | sed -n "s/^[[:space:]]*<!-- ${MARKER_PREFIX}root=\([0-9a-f]\{64\}\)[[:space:]]*-->.*/\1/p" | head -1)"
+	PGEN="$(printf '%s' "${PARENT_MARKER_BODY}" | sed -n "s/^[[:space:]]*<!-- ${MARKER_PREFIX}gen=\([0-9]\{1,\}\)[[:space:]]*-->.*/\1/p" | head -1)"
+	PROOT="$(printf '%s' "${PARENT_MARKER_BODY}" | sed -n "s/^[[:space:]]*<!-- ${MARKER_PREFIX}root=\([0-9a-f]\{64\}\)[[:space:]]*-->.*/\1/p" | head -1)"
 	if [[ "${PGEN}" =~ ^[0-9]+$ ]]; then
 		GEN=$((PGEN + 1))
 		[ -n "${PROOT}" ] && ROOT="${PROOT}"
 		log "lineage parent_issue=${PARENT_ISSUE} parent_gen=${PGEN} gen=${GEN} root=${ROOT}"
-	elif ! printf '%s' "${PARENT_BODY}" | grep -qE "^[[:space:]]*<!-- ${MARKER_PREFIX}gen="; then
+	elif ! printf '%s' "${PARENT_MARKER_BODY}" | grep -qE "^[[:space:]]*<!-- ${MARKER_PREFIX}gen="; then
 		# Only a line-leading HTML-comment marker (the shape this script
 		# writes) counts as a triage marker; prose or inline code that merely
 		# mentions check-failure-triage:gen= does not.
