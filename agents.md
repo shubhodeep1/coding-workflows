@@ -81,7 +81,14 @@ Phases of the unattended pipeline (each is a separate workflow file under
    the linked issues (or the PR) `ai:review-blocked`, posts one
    `review-autofix-failure-cap:v1` comment and sends an
    `identical_failure_cap` heal report (`REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED`;
-   force_rb_judge dispatches bypass it). The poller's noop-suspicious
+   force_rb_judge dispatches bypass it). A reason listed in
+   `NON_RETRYABLE_FAILURE_REASONS` (`scripts/workflow_failure_heal.py`:
+   `conflict_resolver_sandbox_path_host_only`,
+   `conflict_resolver_sandbox_path_unsupported`,
+   `conflict_resolver_sandbox_support_missing`) trips the cap on its first
+   marker (`non_retryable=true` in `AUTOFIX_FINGERPRINT_CAP_TRIPPED`); the cap
+   comment is then titled "non-retryable failure" and quotes the failed run's
+   **First error** line (PR #6438: ~28 identical resolver runs on one head). The poller's noop-suspicious
    recovery sweep (`scripts/orchestrate_poll_process.sh`) does not
    re-dispatch a PR whose current head already has a
    `review-autofix-failure-cap:v1` comment by the `GH_PAT` account, because
@@ -131,7 +138,19 @@ Phases of the unattended pipeline (each is a separate workflow file under
     Host `claude_run` refuses all four review roles. The resolver checks its
     conflicted paths against sandbox admission before either engine runs; an
     unsupported path is refused and, for integration-sync PRs, counted toward
-    the existing resolver retry-state escalation. Its OpenCode runs (including
+    the existing resolver retry-state escalation. `check-paths` writes a
+    per-path report: when every rejected path is a plainly named file the
+    sandbox policy keeps on the host (for example
+    `.claude/hooks/pr_merge_status_guard.py`), the resolver logs one
+    `::error::Conflict resolver: host-only conflicted path(s) need a manual
+    merge: <paths>` line and fails closed with `sandbox_path_host_only`;
+    symlinks and odd names keep the nameless `sandbox_path_unsupported`. No
+    model runs in either case, because a merge commit needs every path
+    resolved. Outside integration-sync PRs every fail-closed reason is
+    exported as `AUTOFIX_FAILURE_REASON=conflict_resolver_<reason>`, so the
+    failure marker names it; integration-sync PRs keep the generic reason so
+    their failures still reach the retry-state escape threshold that drives
+    the orchestrator's branch rebuild. Its OpenCode runs (including
     Claude fallback)
     use fresh isolated snapshots and validated transfer, never the host writer.
     A Claude-selected resolver retries OpenCode in a fresh sandbox only when
@@ -2269,7 +2288,7 @@ depend on it.
 | `REVIEW_APPROVAL_RUBRIC_ENABLED` | `false` | Enable logical review-state output from the review-blocked judge and outbound PR-review mapping through `post_review_comment.sh --review-state`. |
 | `REVIEW_BREAK_GLASS_ENABLED` | `false` | Enable the anchored `@codex break-glass` override scan; when active it downgrades only the outbound `REQUEST_CHANGES` event to comment-only. |
 | `CI_POLL_TEST_SHARDS` | `4` | Parallel local shards for the orchestrate-poll module in each group of CI's `orchestrate-poll` matrix and in the release gates' `validate-scripts` job. `1` is sequential; invalid values warn and fall back to `1`. |
-| `CONFLICT_MANIFEST_UNION_ENABLED` | `true` | Deterministically resolve two-sided `.ai/.workspace_source_manifest.txt` content conflicts before the model resolver; manifest-only conflicts are committed as `[ai-merge-resolve]` and skip the model. Integration-sync branches and delete/modify conflicts remain model-resolved. |
+| `CONFLICT_MANIFEST_UNION_ENABLED` | `true` | Deterministically resolve two-sided `.ai/.workspace_source_manifest.txt` content conflicts (index stages `1 2 3` or add/add `2 3`) before the model resolver; manifest-only conflicts are committed as `[ai-merge-resolve]` and skip the model. Integration-sync branches and delete/modify conflicts remain model-resolved. Before PR #6438 the stage check never matched, so the manifest always reached the resolver, whose sandbox cannot carry `.ai/`. |
 | `REVIEW_RESOLVE_THREADS_ENABLED` | `true` | Resolve PR review threads the editor audited in its `PR comment audit:` section. Keyed on comment id, so two comments at one path cannot resolve each other; `ignored` entries get the editor's reason as a reply before resolving. |
 | `REVIEW_RESOLVE_THREADS_MAX` | `50` | Per-run cap on resolved review threads; anything above it is warned about and left open. |
 | `SWEEP_STALE_QUEUED_MINUTES` | `120` | Age past which a still-`queued` review run stops suppressing a sweep dispatch (wedged-run recovery). `in_progress` runs are never discounted; `0` disables the cutoff. |

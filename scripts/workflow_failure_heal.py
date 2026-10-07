@@ -167,6 +167,18 @@ FAILURE_CAP_MARKER_TAG = "review-autofix-failure-cap:v1"
 FAILURE_FINGERPRINT_WORKFLOW = "review_autofix"
 FAILURE_EVIDENCE_TAIL_BYTES = 65_536
 DEFAULT_FAILURE_FINGERPRINT_MAX_IDENTICAL = 3
+# Failure reasons another run on the same head cannot fix: the cap stops the
+# head on the first such marker instead of after
+# REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL. review_conflict_resolve.sh writes
+# them as ``conflict_resolver_<fail-closed reason>`` (PR #6438: a conflict set
+# the resolver sandbox cannot carry failed ~28 identical runs on one head).
+NON_RETRYABLE_FAILURE_REASONS = frozenset(
+	{
+		"conflict_resolver_sandbox_path_host_only",
+		"conflict_resolver_sandbox_path_unsupported",
+		"conflict_resolver_sandbox_support_missing",
+	}
+)
 
 ISSUE_EXCERPT_LIMIT = 4000
 COMMENTS_EXCERPT_LIMIT = 6000
@@ -1768,11 +1780,13 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 	``count_autofix_failure_streak``). Markers for another head or from another
 	author are skipped. ``cap_applied`` reports whether a trusted
 	``review-autofix-failure-cap:v1`` marker already exists for the head.
+	``non_retryable`` is true when the newest marker's reason is in
+	NON_RETRYABLE_FAILURE_REASONS.
 	"""
 	head = str(head_sha or "").strip().lower()
 	author = str(author_login or "").strip().lower()
 	ordered = [comment for comment in comments if isinstance(comment, dict)]
-	result: dict[str, Any] = {"count": 0, "fp": "", "reason": "", "cap_applied": False}
+	result: dict[str, Any] = {"count": 0, "fp": "", "reason": "", "cap_applied": False, "non_retryable": False}
 	if not head or not author:
 		return result
 	for comment in ordered:
@@ -1811,6 +1825,7 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 				skip_paired_summary = False
 				continue
 			break
+	result["non_retryable"] = result["count"] > 0 and result["reason"] in NON_RETRYABLE_FAILURE_REASONS
 	return result
 
 
@@ -2626,6 +2641,7 @@ def _cmd_autofix_identical_failure_count(args: argparse.Namespace) -> int:
 	sys.stdout.write(f"fp={safe_token(result['fp'], 64)}\n")
 	sys.stdout.write(f"reason={safe_token(result['reason'])}\n")
 	sys.stdout.write(f"cap_applied={'true' if result['cap_applied'] else 'false'}\n")
+	sys.stdout.write(f"non_retryable={'true' if result['non_retryable'] else 'false'}\n")
 	return 0
 
 
@@ -2905,7 +2921,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--log-file", action="append", default=[], help="reviewer slot or summariser log; repeatable, unreadable files are skipped")
 	p.set_defaults(func=_cmd_reviewer_failure_evidence)
 
-	p = sub.add_parser("autofix-identical-failure-count", help="Print count= / fp= / reason= / cap_applied= for the trailing identical failures on a head")
+	p = sub.add_parser("autofix-identical-failure-count", help="Print count= / fp= / reason= / cap_applied= / non_retryable= for the trailing identical failures on a head")
 	p.add_argument("--comments-json", required=True)
 	p.add_argument("--head-sha", required=True)
 	p.add_argument("--author-login", required=True)
