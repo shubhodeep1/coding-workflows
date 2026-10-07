@@ -19,6 +19,76 @@ if [ -f "scripts/gh_helpers.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/gh_helpers.sh
 fi
+
+# Cron entry point, including ticks with no active tracking project. Only a
+# trusted Actions marker AND its original live trusted User command may cause
+# a replay. The marker is data, not authorization. One bounded issue listing,
+# then one comments listing and live issue read per queued issue; no calls on
+# the usual idle path beyond the rate-limit snapshot and issue listing.
+replay_failed_reclarify_commands() {
+  local budget queued issue_num issue_json comments_json source_id source_ts trusted_login
+  budget="$(gh api rate_limit --jq '.resources.core.remaining' 2>/dev/null)" || return 0
+  [[ "${budget}" =~ ^[0-9]+$ ]] && [ "${budget}" -ge 500 ] || return 0
+  queued="$(gh_retry gh issue list --repo "${GITHUB_REPOSITORY}" --state open \
+    --label ai:reclarify-requeue --json number --limit 1000 2>/dev/null)" || return 0
+  [ "$(printf '%s' "${queued}" | jq 'length' 2>/dev/null)" -gt 0 ] 2>/dev/null || return 0
+  # Existing issue/comment listings identify authors, not the PAT account;
+  # this one identity read is shared by all queued issues in the poll tick.
+  trusted_login="$(gh_retry gh api user --jq .login 2>/dev/null)" || trusted_login=""
+  [[ "${trusted_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]] || return 0
+  while IFS= read -r issue_num; do
+    [[ "${issue_num}" =~ ^[1-9][0-9]*$ ]] || continue
+    issue_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" 2>/dev/null)" || continue
+    printf '%s' "${issue_json}" | jq -e --argjson n "${issue_num}" \
+      '.number == $n and .state == "open" and (.pull_request? == null) and any(.labels[]?; .name == "ai:reclarify-requeue")' >/dev/null 2>&1 || continue
+    comments_json="$(gh_retry gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?per_page=100" 2>/dev/null)" || continue
+    # Incomplete or malformed comment history never authorizes replay.
+    comments_json="$(printf '%s' "${comments_json}" | jq -ce 'if type == "array" and all(.[]; type == "array") then add // [] else error("invalid pages") end' 2>/dev/null)" || continue
+    source_id="$(printf '%s' "${comments_json}" | jq -r '
+      [.[] | select(.user.login == "github-actions[bot]" and .user.type == "Bot" and
+        ((.body // "") | test("^<!-- ai:reclarify-requeue:v1 source=[1-9][0-9]* -->$")))]
+      | max_by(.id) | .body // "" | capture("source=(?<source>[1-9][0-9]*)").source // ""' 2>/dev/null)" || continue
+    [[ "${source_id}" =~ ^[1-9][0-9]*$ ]] || continue
+    source_ts="$(printf '%s' "${comments_json}" | jq -r --argjson id "${source_id}" '
+      [.[] | select(.id == $id and .user.type == "User" and
+        (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")) and
+        ((.body // "") | startswith("/reclarify")))] | first | .created_at // ""' 2>/dev/null)" || continue
+    [ -n "${source_ts}" ] || continue
+    printf '%s' "${comments_json}" | jq -e --argjson id "${source_id}" --arg ts "${source_ts}" '
+      any(.[]; .id > $id and .created_at >= $ts and .user.login == "github-actions[bot]" and
+        .user.type == "Bot" and .body == ("<!-- ai:reclarify-requeue:v1 source=" + ($id | tostring) + " -->"))' >/dev/null 2>&1 || continue
+    # A previous replay POST may have succeeded even when label removal
+    # failed. A newer trusted outcome also makes the failed run obsolete.
+    if printf '%s' "${comments_json}" | jq -e --argjson id "${source_id}" --arg ts "${source_ts}" --arg login "${trusted_login}" '
+      any(.[]; .id > $id and .created_at >= $ts and
+        ((.user.login == $login and ((.body // "") | contains("<!-- ai:reclarify-replay:v1 source=" + ($id | tostring) + " -->"))) or
+         ($login != "" and .user.login == $login and
+           ((.body // "") | startswith("/answer [auto-answered-by-clarify]") or contains("<!-- ai:clarification-questions -->") or contains("<!-- ai:claude-issue-routed:v1 -->")))))' >/dev/null 2>&1; then
+      gh_retry gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels/ai%3Areclarify-requeue" >/dev/null 2>&1 || true
+      continue
+    fi
+    # A newer human request is in flight: do not replay the older command,
+    # but retain the label until the newer run succeeds or marks its failure.
+    if printf '%s' "${comments_json}" | jq -e --argjson id "${source_id}" '
+      any(.[]; .id > $id and .user.type == "User" and
+        (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")) and
+        ((.body // "") | startswith("/reclarify") and (contains("<!-- ai:reclarify-replay:v1 source=") | not)))' >/dev/null 2>&1; then
+      continue
+    fi
+    # A failed POST is left labelled for the next tick. A successful POST
+    # has an immutable source marker to deduplicate after a removal failure.
+    if gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+      -f body="/reclarify [auto-requeued-by-poller]
+<!-- ai:reclarify-replay:v1 source=${source_id} -->" >/dev/null 2>&1; then
+      echo "RECLARIFY_REQUEUED issue=${issue_num} source=${source_id}"
+      gh_retry gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels/ai%3Areclarify-requeue" >/dev/null 2>&1 || true
+    fi
+  done < <(printf '%s' "${queued}" | jq -r '.[] | .number // empty' 2>/dev/null)
+}
+if [ "${RECLARIFY_REQUEUE_SWEEP_ONLY:-false}" = "true" ]; then
+  replay_failed_reclarify_commands
+  exit 0
+fi
 if ! type emit_event >/dev/null 2>&1; then
   emit_event() { return 0; }
 fi
@@ -25539,14 +25609,13 @@ echo "========================================"
 echo "Standalone PR conflict sweep"
 echo "========================================"
 
-# Collect open PR candidates with their refs.
-# gh pr list does not expose mergeable, so we fetch the full list and
-# then query each candidate via the REST API.
+# Collect the complete open-PR snapshot; drafts are excluded before any
+# per-PR API work. gh pr list's default 30 / old 100 limit missed live PRs.
 STANDALONE_PRS="$(gh_retry gh pr list \
 	--repo "${GITHUB_REPOSITORY}" \
 	--state open \
-	--json number,headRefName,baseRefName \
-	--limit 100 2>/dev/null || echo "[]")"
+	--json number,headRefName,headRefOid,baseRefName,isDraft \
+	--limit 3000 2>/dev/null || echo "[]")"
 
 STANDALONE_COUNT="$(echo "${STANDALONE_PRS}" | jq 'length')"
 echo "Found ${STANDALONE_COUNT} open PR(s) to scan."
@@ -25554,10 +25623,63 @@ echo "Found ${STANDALONE_COUNT} open PR(s) to scan."
 CONFLICT_SWEEP_FIXED=0
 DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
 
+# Input: the open-PR snapshot, in bounded 30-PR batches. Output: numbers
+# mapped to a verified CLEAN state at the snapshot head. One GraphQL request
+# per batch; errors, missing aliases, unknown state or changed head fail open
+# to the legacy live REST read. DIRTY candidates always get a fresh REST
+# payload before update-branch/dispatch (including expected-head guard).
+declare -A _STANDALONE_CLEAN_PRS=()
+declare -A _STANDALONE_NOOP_CLEAR_PRS=()
+if [[ "${GITHUB_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+	_standalone_owner="${GITHUB_REPOSITORY%%/*}"
+	_standalone_name="${GITHUB_REPOSITORY#*/}"
+	for (( _standalone_offset=0; _standalone_offset<STANDALONE_COUNT; _standalone_offset+=30 )); do
+		_standalone_aliases=""
+		for (( _standalone_i=_standalone_offset; _standalone_i<_standalone_offset+30 && _standalone_i<STANDALONE_COUNT; _standalone_i++ )); do
+			_standalone_ref="$(printf '%s' "${STANDALONE_PRS}" | jq -r ".[${_standalone_i}].headRefName // \"\"")"
+			_standalone_base="$(printf '%s' "${STANDALONE_PRS}" | jq -r ".[${_standalone_i}].baseRefName // \"\"")"
+			_standalone_draft="$(printf '%s' "${STANDALONE_PRS}" | jq -r ".[${_standalone_i}].isDraft // false")"
+			if [[ "${_standalone_ref}" == orchestrator/project-* || "${_standalone_base}" == orchestrator/project-* ]] ||
+			   { [[ "${_standalone_ref}" == claude/* ]] && [ "${_standalone_draft}" = "true" ]; }; then
+				continue
+			fi
+			_standalone_num="$(printf '%s' "${STANDALONE_PRS}" | jq -r ".[${_standalone_i}].number // empty")"
+			[[ "${_standalone_num}" =~ ^[1-9][0-9]*$ ]] || continue
+			_standalone_aliases+="p${_standalone_num}: pullRequest(number: ${_standalone_num}) { number state headRefName headRefOid isDraft mergeStateStatus comments(last: 100) { pageInfo { hasPreviousPage } nodes { body } } } "
+		done
+		[ -n "${_standalone_aliases}" ] || continue
+		_standalone_query="query { repository(owner: \"${_standalone_owner}\", name: \"${_standalone_name}\") { ${_standalone_aliases} } }"
+		# Existing PR-list and per-PR REST calls lack a merge-state batch;
+		# this is one GraphQL request for up to 30 candidates, not per PR.
+		if _standalone_response="$(gh_retry gh api graphql -f query="${_standalone_query}" 2>/dev/null)" &&
+			printf '%s' "${_standalone_response}" | jq -e '((.errors? // []) | length) == 0 and (.data.repository | type) == "object"' >/dev/null 2>&1; then
+			while IFS= read -r _standalone_num; do
+				[[ "${_standalone_num}" =~ ^[1-9][0-9]*$ ]] || continue
+				_standalone_head="$(printf '%s' "${STANDALONE_PRS}" | jq -r --argjson num "${_standalone_num}" '.[] | select(.number == $num) | .headRefName // ""' | head -n 1)"
+				_standalone_list_oid="$(printf '%s' "${STANDALONE_PRS}" | jq -r --argjson num "${_standalone_num}" '.[] | select(.number == $num) | .headRefOid // ""' | head -n 1)"
+				if printf '%s' "${_standalone_response}" | jq -e --arg key "p${_standalone_num}" --arg ref "${_standalone_head}" --arg oid "${_standalone_list_oid}" --argjson num "${_standalone_num}" \
+					'.data.repository[$key] | .number == $num and .headRefName == $ref and .headRefOid == $oid and ($oid | test("^[0-9a-f]{40}$")) and .state == "OPEN" and .isDraft == false and .mergeStateStatus == "CLEAN"' >/dev/null 2>&1; then
+					_STANDALONE_CLEAN_PRS["${_standalone_num}"]="${_standalone_list_oid}"
+				fi
+				# Only a complete comment connection can prove no workflow warning
+				# exists. Otherwise the original REST history check still runs.
+				if printf '%s' "${_standalone_response}" | jq -e --arg key "p${_standalone_num}" --arg ref "${_standalone_head}" --arg oid "${_standalone_list_oid}" --argjson num "${_standalone_num}" \
+					'.data.repository[$key] | .number == $num and .headRefName == $ref and .headRefOid == $oid and ($oid | test("^[0-9a-f]{40}$")) and .state == "OPEN" and
+					 (.comments.pageInfo.hasPreviousPage == false) and (.comments.nodes | type) == "array" and
+					 (any(.comments.nodes[]; (.body // "") | contains("Editor no-op suspicious")) | not)' >/dev/null 2>&1; then
+					_STANDALONE_NOOP_CLEAR_PRS["${_standalone_num}"]="${_standalone_list_oid}"
+				fi
+			done < <(printf '%s' "${_standalone_response}" | jq -r '.data.repository | keys[] | select(test("^p[1-9][0-9]*$")) | ltrimstr("p")' 2>/dev/null)
+		fi
+	done
+fi
+
 for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	S_PR="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].number")"
 	S_HEAD="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].headRefName")"
+	S_HEAD_OID="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].headRefOid // \"\"")"
 	S_BASE="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].baseRefName")"
+	S_DRAFT="$(echo "${STANDALONE_PRS}" | jq -r ".[${sidx}].isDraft // false")"
 	if [ -z "${S_PR}" ] || [ "${S_PR}" = "null" ]; then
 		continue
 	fi
@@ -25576,6 +25698,13 @@ for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ )); do
 	fi
 
 	if [[ "${S_BASE}" == orchestrator/project-* ]]; then
+		continue
+	fi
+	if [[ "${S_HEAD}" == claude/* ]] && [ "${S_DRAFT}" = "true" ]; then
+		echo "  PR #${S_PR} is a draft claude/* PR; skipping standalone conflict recovery."
+		continue
+	fi
+	if [[ "${S_HEAD_OID}" =~ ^[0-9a-f]{40}$ ]] && [ "${_STANDALONE_CLEAN_PRS["${S_PR}"]:-}" = "${S_HEAD_OID}" ]; then
 		continue
 	fi
 
@@ -25758,12 +25887,22 @@ fi
 for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 	N_PR="$(echo "${STANDALONE_PRS}" | jq -r ".[${nidx}].number")"
 	N_HEAD="$(echo "${STANDALONE_PRS}" | jq -r ".[${nidx}].headRefName")"
+	N_HEAD_OID="$(echo "${STANDALONE_PRS}" | jq -r ".[${nidx}].headRefOid // \"\"")"
 	N_BASE="$(echo "${STANDALONE_PRS}" | jq -r ".[${nidx}].baseRefName")"
+	N_DRAFT="$(echo "${STANDALONE_PRS}" | jq -r ".[${nidx}].isDraft // false")"
 
 	if [ -z "${N_PR}" ] || [ "${N_PR}" = "null" ]; then
 		continue
 	fi
 	if [ -z "${N_HEAD}" ] || [ "${N_HEAD}" = "null" ]; then
+		continue
+	fi
+	# A draft claude/* integration PR is owned by its project chain; do
+	# not scan its comments or attempt a noop recovery on every tick.
+	if [[ "${N_HEAD}" == claude/* ]] && [ "${N_DRAFT}" = "true" ]; then
+		continue
+	fi
+	if [[ "${N_HEAD_OID}" =~ ^[0-9a-f]{40}$ ]] && [ "${_STANDALONE_NOOP_CLEAR_PRS["${N_PR}"]:-}" = "${N_HEAD_OID}" ]; then
 		continue
 	fi
 	# Skip integration / orchestrator-managed branches — those have
