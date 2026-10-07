@@ -22,8 +22,13 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import math
 import os
+import shutil
+import stat
+import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -59,6 +64,26 @@ DEFAULT_PER_STEP_HEAD_CHARS = 1_000
 DEFAULT_PER_STEP_TAIL_CHARS = 4_000
 
 SUMMARIZER_TELEMETRY_OP = "summarize_unselected_runs"
+
+# Claude engine (plan item 3d). The LOG_SUMMARY role is resolved through the
+# trusted engine support the workflow stages (CLAUDE_ENGINE_SUPPORT_DIR, empty
+# by default = the OpenRouter path below). claude_run starts the CLI in the
+# credential-free isolated container, which needs more time than one HTTP
+# call, so its per-run timeout never drops below this floor.
+LOG_SUMMARY_ROLE = "LOG_SUMMARY"
+CLAUDE_ENGINE_EXIT_FALLBACK = 75
+CLAUDE_ENGINE_MIN_TIMEOUT_SECONDS = 300
+CLAUDE_ENGINE_RESOLVE_TIMEOUT_SECONDS = 60
+# Never passed to the Claude child process (the host relay holds the Claude
+# credential; the model needs neither GitHub nor OpenRouter nor Telegram).
+CLAUDE_ENGINE_SCRUBBED_ENV = (
+	"GH_TOKEN",
+	"GITHUB_TOKEN",
+	"OPENROUTER_API_KEY",
+	"TG_BOT_SECRET",
+	"TG_ADMIN_CHAT_ID",
+	"TG_CHAT_ID",
+)
 
 
 SYSTEM_PROMPT = (
@@ -438,6 +463,126 @@ class OpenRouterSummarizer:
 		return content, tokens_used
 
 
+class ClaudeEngineUnavailable(RuntimeError):
+	"""claude_run exited 75: Claude is unavailable, use the OpenRouter path."""
+
+
+def resolve_engine_script(support_dir: str | None) -> Path | None:
+	"""The trusted ``scripts/ai_engine.sh`` under ``support_dir``, or None.
+
+	A missing, empty, non-regular or symlinked path is None (the OpenRouter
+	path runs, as before the Claude engine).
+	"""
+	support_dir = (support_dir or "").strip()
+	if not support_dir:
+		return None
+	candidate = Path(support_dir) / "scripts" / "ai_engine.sh"
+	try:
+		mode = candidate.lstat().st_mode
+	except OSError:
+		return None
+	if not stat.S_ISREG(mode):
+		return None
+	return candidate
+
+
+def _claude_child_env(engine_script: Path, model_hint: str) -> dict[str, str]:
+	env = {key: value for key, value in os.environ.items() if key not in CLAUDE_ENGINE_SCRUBBED_ENV}
+	env["SUPPORT_ROOT_DIR"] = str(engine_script.parent.parent)
+	env["AI_ENGINE_READ_ONLY"] = "true"
+	env["AI_ENGINE_MODEL_HINT"] = model_hint
+	env["AI_ENGINE_EFFORT_HINT"] = ""
+	return env
+
+
+def resolve_log_summary_engine(engine_script: Path | None, model_hint: str) -> str:
+	"""``claude`` or ``codex`` for the LOG_SUMMARY role; any failure is ``codex``."""
+	if engine_script is None:
+		return "codex"
+	try:
+		result = subprocess.run(
+			["bash", "-c", 'source "$0" >/dev/null 2>&1 || exit 2; ai_engine_for_role "$1"', str(engine_script), LOG_SUMMARY_ROLE],
+			env=_claude_child_env(engine_script, model_hint),
+			stdout=subprocess.PIPE,
+			stderr=None,
+			text=True,
+			timeout=CLAUDE_ENGINE_RESOLVE_TIMEOUT_SECONDS,
+			check=False,
+		)
+	except (OSError, subprocess.TimeoutExpired):
+		return "codex"
+	lines = [line.strip() for line in (result.stdout or "").splitlines() if line.strip()]
+	if result.returncode == 0 and lines and lines[-1] == "claude":
+		return "claude"
+	return "codex"
+
+
+class ClaudeEngineSummarizer:
+	"""Summaries through ``claude_run`` (role LOG_SUMMARY), read-only and isolated.
+
+	Same ``summarize(run, logs_text) -> (text, tokens)`` interface as
+	``OpenRouterSummarizer``. The prompt sits in a private temporary
+	directory (mode 0700, file 0600) next to an empty work directory, so the
+	container copies nothing but that empty directory. Token use is estimated
+	at four characters per token so ``--token-budget`` still bounds the work.
+	"""
+
+	def __init__(self, engine_script: Path, *, model: str, timeout_seconds: int) -> None:
+		self.engine_script = engine_script
+		self.model = model
+		self.timeout_seconds = max(int(timeout_seconds), CLAUDE_ENGINE_MIN_TIMEOUT_SECONDS)
+
+	def summarize(self, run: dict[str, Any], logs_text: str) -> tuple[str, int]:
+		prompt = f"{SYSTEM_PROMPT}\n{_format_user_message(run, logs_text)}\n"
+		tmp_root = tempfile.mkdtemp(prefix="log-summary-claude-")
+		try:
+			os.chmod(tmp_root, 0o700)
+			workdir = Path(tmp_root) / "work"
+			workdir.mkdir(mode=0o700)
+			prompt_path = Path(tmp_root) / "prompt.txt"
+			out_path = Path(tmp_root) / "summary.md"
+			fd = os.open(prompt_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+			with os.fdopen(fd, "w", encoding="utf-8") as handle:
+				handle.write(prompt)
+			try:
+				result = subprocess.run(
+					[
+						"bash",
+						"-c",
+						'source "$0" || exit 2; claude_run "$@"',
+						str(self.engine_script),
+						LOG_SUMMARY_ROLE,
+						str(prompt_path),
+						str(out_path),
+						str(workdir),
+					],
+					env=_claude_child_env(self.engine_script, self.model),
+					stdin=subprocess.DEVNULL,
+					stdout=subprocess.DEVNULL,
+					stderr=None,
+					timeout=self.timeout_seconds,
+					check=False,
+				)
+			except subprocess.TimeoutExpired as exc:
+				raise RuntimeError(f"claude_run timed out after {self.timeout_seconds}s") from exc
+			except OSError as exc:
+				raise RuntimeError(f"claude_run could not start: {exc}") from exc
+			if result.returncode == CLAUDE_ENGINE_EXIT_FALLBACK:
+				raise ClaudeEngineUnavailable("claude_run exited 75")
+			if result.returncode != 0:
+				raise RuntimeError(f"claude_run exited {result.returncode}")
+			try:
+				content = out_path.read_text(encoding="utf-8", errors="replace").strip()
+			except OSError as exc:
+				raise RuntimeError(f"claude_run output unreadable: {exc}") from exc
+			if not content:
+				raise RuntimeError("claude_run empty output")
+			tokens_used = max(math.ceil((len(prompt) + len(content)) / 4), 1)
+			return content, tokens_used
+		finally:
+			shutil.rmtree(tmp_root, ignore_errors=True)
+
+
 def _write_json_atomic(path: Path, payload: Any) -> None:
 	path.parent.mkdir(parents=True, exist_ok=True)
 	tmp_path = path.with_suffix(path.suffix + ".tmp")
@@ -533,7 +678,11 @@ def main(argv: list[str] | None = None) -> int:
 		os.getenv("WORKFLOW_LOG_SUMMARY_MODEL"), args.model, DEFAULT_MODEL
 	) or DEFAULT_MODEL
 
+	engine_script = resolve_engine_script(os.getenv("CLAUDE_ENGINE_SUPPORT_DIR", ""))
+	engine = resolve_log_summary_engine(engine_script, model)
+
 	stats: dict[str, Any] = {
+		"engine": engine,
 		"targeted": 0,
 		"summarized": 0,
 		"skipped_fetch_error": 0,
@@ -546,7 +695,7 @@ def main(argv: list[str] | None = None) -> int:
 		"started_at": datetime.now(timezone.utc).isoformat(),
 	}
 
-	if not api_key:
+	if not api_key and engine != "claude":
 		_warn("OPENROUTER_API_KEY not set; skipping summarization (fail-open)")
 		stats["skipped_disabled"] = 1
 		_emit_telemetry(stats)
@@ -586,13 +735,21 @@ def main(argv: list[str] | None = None) -> int:
 		_emit_telemetry(stats)
 		return 0
 
-	summarizer = OpenRouterSummarizer(
-		api_key,
-		model=model,
-		base_url=args.base_url,
-		timeout_seconds=args.timeout_seconds,
-		max_output_tokens=args.max_output_tokens,
-	)
+	def _openrouter_summarizer() -> Any:
+		return OpenRouterSummarizer(
+			api_key,
+			model=model,
+			base_url=args.base_url,
+			timeout_seconds=args.timeout_seconds,
+			max_output_tokens=args.max_output_tokens,
+		)
+
+	if engine == "claude" and engine_script is not None:
+		summarizer: Any = ClaudeEngineSummarizer(
+			engine_script, model=model, timeout_seconds=args.timeout_seconds
+		)
+	else:
+		summarizer = _openrouter_summarizer()
 	# No archive cache: this script visits each (repo, run_id) at most once,
 	# so the collector's payload-bytes cache (collect_workflow_logs.py:777-779)
 	# would only retain hundreds of MB of log archives for no benefit. A
@@ -637,7 +794,22 @@ def main(argv: list[str] | None = None) -> int:
 			stats["skipped_budget_exhausted"] += len(targets) - index
 			break
 		try:
-			summary, tokens_used = summarizer.summarize(run, logs_text)
+			try:
+				summary, tokens_used = summarizer.summarize(run, logs_text)
+			except ClaudeEngineUnavailable:
+				# Claude is unavailable (exit 75): this run and the rest go
+				# through OpenRouter, which still needs its key.
+				print(
+					f"AI_ENGINE_FALLBACK role={LOG_SUMMARY_ROLE} reason=claude_unavailable",
+					file=sys.stderr,
+				)
+				stats["engine"] = "claude->codex"
+				if not api_key:
+					_warn("OPENROUTER_API_KEY not set; skipping the remaining summaries (fail-open)")
+					stats["skipped_disabled"] += len(targets) - index
+					break
+				summarizer = _openrouter_summarizer()
+				summary, tokens_used = summarizer.summarize(run, logs_text)
 		except Exception as exc:  # noqa: BLE001 — fail-open per run
 			_warn(f"mini summary failed for {repository}#{run_id}: {exc}")
 			stats["skipped_summary_error"] += 1

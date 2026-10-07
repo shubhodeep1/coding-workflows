@@ -279,7 +279,8 @@ summariser_opencode_dir="$(mktemp -d "${summariser_opencode_root}/${PREFIX}.XXXX
 }
 summariser_opencode_config="${summariser_opencode_dir}/opencode.json"
 summariser_workspace="${GITHUB_WORKSPACE:-$(pwd)}"
-trap 'rm -rf "${summariser_opencode_dir}" "${prompt_file}" 2>/dev/null || true' EXIT
+summariser_sandbox_root=""
+trap '{ ! declare -F summariser_sandbox_cleanup >/dev/null || summariser_sandbox_cleanup; }; rm -rf "${summariser_opencode_dir}" "${prompt_file}" 2>/dev/null || true' EXIT
 
 if ! bash "${OPENCODE_CONFIG_WRITER_PATH}" \
 	--role reviewer \
@@ -307,6 +308,118 @@ summariser_opencode_cmd=(
 	"${summariser_opencode_config}"
 	"${summariser_workspace}"
 )
+
+# ── Engine selection (role SUMMARISER, plan item 3d) ─────────────────────
+# The summariser reads PR-derived reviewer output, so Claude runs only in the
+# network-isolated review sandbox (review_untrusted_sandbox.sh, read-only,
+# credential-free relay), like the consolidator; host claude_run refuses
+# review roles. Order: Claude in a fresh sandbox; on exit 75 (Claude
+# unavailable) or 2 (outdated helper) OpenCode in a fresh sandbox; when the
+# sandbox cannot be prepared, the unchanged read-only reviewer-agent command
+# below. A codex selection (AI_ENGINE_SUMMARISER=codex, AI_ENGINE=codex, the
+# ai:codex label) runs only that unchanged command. The engine root is the
+# verified support directory (SUPPORT_SCRIPTS_DIR); every input has a default
+# here because review_autofix.yml does not export one (unattended §8).
+summariser_sandbox_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_sandbox.sh"
+summariser_sandbox_unavailable=false
+summariser_sandbox_cleanup()
+{
+	[ -n "${summariser_sandbox_root:-}" ] || return 0
+	if ! REVIEW_SANDBOX_ROOT="${summariser_sandbox_root}" timeout --signal=TERM --kill-after=10s -- 30s \
+		bash "${summariser_sandbox_sh}" cleanup >/dev/null 2>&1; then
+		echo "::warning::summariser (${PREFIX}): review sandbox cleanup failed." >&2
+	fi
+	summariser_sandbox_root=""
+}
+summariser_engine_resolve()
+{
+	local engine_script="${SUPPORT_SCRIPTS_DIR:-scripts}/ai_engine.sh" resolved_engine accounts
+	if [ ! -f "${engine_script}" ] || [ -L "${engine_script}" ]; then
+		printf 'codex\n'
+		return 0
+	fi
+	resolved_engine="$(AI_ENGINE_MODEL_HINT="${SUMMARISER_MODEL}" AI_ENGINE_EFFORT_HINT="${SUMMARISER_REASONING}" \
+		bash -c 'source "$0" >/dev/null 2>&1 || exit 2; ai_engine_for_role SUMMARISER' "${engine_script}" || true)"
+	if [ "${resolved_engine}" != "claude" ]; then
+		printf 'codex\n'
+		return 0
+	fi
+	# Without a pool credential the sandboxed Claude run can only exit 75
+	# (no_credential) before any model call; skip the image build and keep
+	# the unchanged read-only command.
+	accounts="$(bash -c 'source "$0" >/dev/null 2>&1 || exit 2; ai_engine_accounts' "${engine_script}" 2>/dev/null || true)"
+	if [ -z "${accounts}" ]; then
+		echo "AI_ENGINE_FALLBACK role=SUMMARISER reason=no_credential" >&2
+		printf 'codex\n'
+		return 0
+	fi
+	printf 'claude\n'
+}
+# One sandboxed attempt on <engine> (claude|codex); sets
+# summariser_sandbox_unavailable=true when the sandbox could not be prepared.
+summariser_sandbox_attempt()
+{
+	local sandbox_engine="$1" attempt_out="$2" attempt_err="$3" attempt_rc=0
+	summariser_sandbox_unavailable=false
+	if [ ! -f "${summariser_sandbox_sh}" ] || [ -L "${summariser_sandbox_sh}" ]; then
+		summariser_sandbox_unavailable=true
+		return 1
+	fi
+	if ! summariser_sandbox_root="$(timeout --signal=TERM --kill-after=10s -- "${SUMMARISER_CALL_TIMEOUT}" \
+		bash "${summariser_sandbox_sh}" prepare-ephemeral "${sandbox_engine}" 2>>"${attempt_err}")" || [ -z "${summariser_sandbox_root}" ]; then
+		summariser_sandbox_root=""
+		summariser_sandbox_unavailable=true
+		return 1
+	fi
+	REVIEW_SANDBOX_ROOT="${summariser_sandbox_root}" timeout --signal=TERM --kill-after=30s -- "${SUMMARISER_CALL_TIMEOUT}" \
+		bash "${summariser_sandbox_sh}" run "${prompt_file}" "${attempt_out}" \
+		"${SUMMARISER_MODEL}" "${SUMMARISER_REASONING}" "${summariser_opencode_config}" \
+		"${sandbox_engine}" SUMMARISER read \
+		< "${prompt_file}" >/dev/null 2>>"${attempt_err}" || attempt_rc=$?
+	summariser_sandbox_cleanup
+	return "${attempt_rc}"
+}
+summariser_engine_state="legacy"
+if [ "$(summariser_engine_resolve)" = "claude" ]; then
+	summariser_engine_state="claude"
+fi
+# One model attempt through the selected engine; output to <out>, stderr to <err>.
+summariser_run_attempt()
+{
+	local attempt_out="$1" attempt_err="$2" attempt_rc=0
+	if [ "${summariser_engine_state}" = "claude" ]; then
+		summariser_sandbox_attempt claude "${attempt_out}" "${attempt_err}" || attempt_rc=$?
+		if [ "${summariser_sandbox_unavailable}" = "true" ]; then
+			echo "AI_ENGINE_FALLBACK role=SUMMARISER reason=sandbox_unavailable" | tee -a "${log_file}" >&2
+			summariser_engine_state="legacy"
+		elif [ "${attempt_rc}" -eq 75 ] || [ "${attempt_rc}" -eq 2 ]; then
+			grep -E '^(AI_ENGINE_[A-Z_]+|CLAUDE_POOL) ' "${attempt_err}" >&2 || true
+			if [ "${attempt_rc}" -eq 2 ]; then
+				echo "AI_ENGINE_FALLBACK role=SUMMARISER reason=sandbox_helper_outdated" | tee -a "${log_file}" >&2
+			fi
+			summariser_engine_state="sandbox_opencode"
+		else
+			return "${attempt_rc}"
+		fi
+		: > "${attempt_out}"
+		attempt_rc=0
+	fi
+	if [ "${summariser_engine_state}" = "sandbox_opencode" ]; then
+		summariser_sandbox_attempt codex "${attempt_out}" "${attempt_err}" || attempt_rc=$?
+		if [ "${summariser_sandbox_unavailable}" != "true" ] && [ "${attempt_rc}" -ne 2 ]; then
+			return "${attempt_rc}"
+		fi
+		echo "AI_ENGINE_FALLBACK role=SUMMARISER reason=sandbox_unavailable" | tee -a "${log_file}" >&2
+		summariser_engine_state="legacy"
+		: > "${attempt_out}"
+		attempt_rc=0
+	fi
+	timeout --signal=KILL "${SUMMARISER_CALL_TIMEOUT}" \
+		"${summariser_opencode_cmd[@]}" < "${prompt_file}" \
+		> "${attempt_out}" 2> "${attempt_err}" \
+		|| attempt_rc=$?
+	return "${attempt_rc}"
+}
 
 # ── Retry loop (10 attempts, exponential backoff 5s→1280s, hard-fail) ────
 # Backoff base=5s doubles each failure (5,10,20,40,80,160,320,640,1280); no
@@ -358,10 +471,7 @@ while [ "${attempt}" -le "${SUMMARISER_MAX_ATTEMPTS}" ]; do
 	if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
 		sanitize_codex_prompt_file "${prompt_file}"
 	fi
-	timeout --signal=KILL "${SUMMARISER_CALL_TIMEOUT}" \
-		"${summariser_opencode_cmd[@]}" < "${prompt_file}" \
-		> "${tmp_stdout}" 2> "${tmp_stderr}" \
-		|| last_rc=$?
+	summariser_run_attempt "${tmp_stdout}" "${tmp_stderr}" || last_rc=$?
 
 	clean_stdout="${tmp_stdout}.ansi-clean"
 	if opencode_strip_ansi < "${tmp_stdout}" > "${clean_stdout}"; then
