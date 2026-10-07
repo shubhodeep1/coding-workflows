@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which area of the repository should this issue change?\nChoices:\nA) The review/autofix pipeline (`review_autofix.yml`, reviewer/editor/consolidator scripts)\nB) The orchestrator poller and judges (`orchestrate_poll.yml`, `scripts/orchestrate_poll_process.sh`)\nC) The clarify/plan/implement phases (`clarify.yml`, `plan.yml`, `implement.yml`)\nD) Documentation only (`README.md`, `agents.md`, `docs/`)\nE) None of these. Describe the specific file(s) or component in your answer, or close this issue and open a new one with a concrete problem statement (RECOMMENDED)\nQ2: What kind of improvement is wanted?\nChoices:\nA) Fix a specific observed bug or failure. Include the run ID, PR, or log line (RECOMMENDED)\nB) Reduce cost or runtime (model spend, API calls, CI minutes) for a named workflow\nC) Improve reliability or alerting for a named failure mode\nD) Add a new feature. Describe the expected behaviour and acceptance criteria\nQ3: How should the finished work be judged complete?\nChoices:\nA) A concrete acceptance criterion you supply (for example: a test that passes, a metric threshold, or a failure that no longer recurs) (RECOMMENDED)\nB) No acceptance criterion: close this issue as too vague to implement",
+  "fingerprint": "5c59a46397649fd38400cd882dfe0f8885e98a35b9917150ee5922ba1a2092b7",
+  "lineage": {
+    "issue_number": 6657,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37625763682",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37625763682",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261007131650_ce2c2c0dd1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6657,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37625763682"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6657 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-07T13:16:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
