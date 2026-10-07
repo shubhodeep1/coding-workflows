@@ -250,6 +250,7 @@ changelog.d/6275-security-reissue-metadata.md
 changelog.d/6276-bulk-delete-override-rejection-binding.md
 changelog.d/6277-unblock-judge-stale-project.md
 changelog.d/6286-pr-merge-guard-appended-git-dir.md
+changelog.d/6288-security-hold-alert.md
 changelog.d/6289-merge-guard-redirected-cd-exit.md
 changelog.d/6290-review-overlay-trusted-source.md
 changelog.d/6293-numeric-push-refspec-redirect.md

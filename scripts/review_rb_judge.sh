@@ -1937,6 +1937,8 @@ post_review_blocked_assessment \
 # gate dispatches or waits for the audit and the merge is held. The audit's
 # report re-runs the review, and the still-capped review brings the judge
 # back. `fix` on the final attempt is treated as a merge without a fix commit.
+# judge_skip_reason=security_hold_<gate hold_reason> tells the Telegram step
+# whether the hold resolves by itself or needs a human.
 RB_MERGE_ACTION="false"
 case "${RB_ACTION}" in
   merge|merge_with_followup) RB_MERGE_ACTION="true" ;;
@@ -1954,6 +1956,7 @@ if [ "${RB_MERGE_ACTION}" = "true" ] && [ "${PR_ALREADY_MERGED:-false}" != "true
 The judge chose **${RB_ACTION}**. ${RB_SECURITY_FINAL_FIX_NOTE}This PR's single-issue security audit has not passed for its current head, so the merge waits. The audit result re-runs the review, and the judge decides again then." >/dev/null 2>&1 || true
   echo "judge_handled=true" >> "$GITHUB_OUTPUT"
   echo "judge_action=security_hold" >> "$GITHUB_OUTPUT"
+  echo "judge_skip_reason=security_hold_${RB_SECURITY_HOLD_REASON:-unknown}" >> "$GITHUB_OUTPUT"
   exit 0
 fi
 
@@ -2346,6 +2349,7 @@ ${RB_FIX_DESC}"
           if [ "${PR_ALREADY_MERGED:-false}" != "true" ] && ! rb_security_merge_gate; then
             echo "judge_handled=true" >> "$GITHUB_OUTPUT"
             echo "judge_action=security_hold" >> "$GITHUB_OUTPUT"
+            echo "judge_skip_reason=security_hold_${RB_SECURITY_HOLD_REASON:-unknown}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
@@ -2367,6 +2371,7 @@ ${RB_FIX_DESC}"
         if [ "${PR_ALREADY_MERGED:-false}" != "true" ] && ! rb_security_merge_gate; then
           echo "judge_handled=true" >> "$GITHUB_OUTPUT"
           echo "judge_action=security_hold" >> "$GITHUB_OUTPUT"
+          echo "judge_skip_reason=security_hold_${RB_SECURITY_HOLD_REASON:-unknown}" >> "$GITHUB_OUTPUT"
           exit 0
         fi
         review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"

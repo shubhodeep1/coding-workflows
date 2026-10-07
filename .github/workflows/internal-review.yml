@@ -24,6 +24,11 @@ on:
         required: false
         default: true
         type: boolean
+      force_rb_judge:
+        description: "Skip reviewers/editor and run only the review-blocked judge (stale security-hold sweep)"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -59,4 +64,5 @@ jobs:
         ${{ github.event_name != 'workflow_dispatch' && format('{0}', github.event.pull_request.body) || '' }}
       pr_skip_ai: false
       allow_workflow_edits: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true'))) }}
+      force_rb_judge: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force_rb_judge == 'true' }}
     secrets: inherit
