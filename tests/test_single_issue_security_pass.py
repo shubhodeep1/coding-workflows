@@ -814,10 +814,14 @@ def test_last_cycle_findings_redispatch_for_exhaustion(tmp_path: Path) -> None:
 
 
 def test_report_counts_judge_extensions_before_escalating(tmp_path: Path) -> None:
+	# Valid finding IDs keep the report off the missing-IDs re-dispatch, so
+	# only the extension-aware cycle cap decides.
 	result, calls, _ = _run(tmp_path, "report", comments=[_comment(_marker("pending", HEAD, 5)), _comment(_extension(OLD), comment_id=99)], env={
 		"SECURITY_PASS_PR_NUMBER": "42", "SECURITY_PASS_HEAD_SHA": HEAD, "SECURITY_PASS_AUDIT_OUTCOME": "success", "SECURITY_PASS_FINDINGS": "2", "FAKE_GIT_ANCESTORS": OLD,
+		"SECURITY_PASS_FINDING_IDS_B64": base64.b64encode(b'["F-1", "F-2"]').decode("ascii"),
 	})
 	assert "outcome=findings cycle=5" in result.stdout
+	assert "Audit finding IDs are missing or invalid" not in result.stdout
 	assert ["workflow", "run", "ai-review.yml", "-R", "o/r", "--ref", "main", "-f", "pr_number=42"] not in calls
 
 
