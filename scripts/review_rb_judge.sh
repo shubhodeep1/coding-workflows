@@ -854,10 +854,12 @@ render_review_rb_semble_prefetch() {
   local query_text=""
   local prefetch_text=""
 
-  if [ "${REVIEW_RB_SEMBLE_HELPERS_AVAILABLE}" != "true" ] \
-    || [ "${SEMBLE_AVAILABLE:-false}" != "true" ] \
-    || [ "${SEMBLE_INDEX_AVAILABLE:-false}" != "true" ] \
-    || [ ! -s "${query_file}" ]; then
+  if [ "${REVIEW_RB_SEMBLE_HELPERS_AVAILABLE}" != "true" ] || [ ! -s "${query_file}" ]; then
+    return 0
+  fi
+  if declare -F semble_should_query >/dev/null 2>&1; then
+    semble_should_query || return 0
+  elif [ "${SEMBLE_AVAILABLE:-false}" != "true" ] || [ "${SEMBLE_INDEX_AVAILABLE:-false}" != "true" ]; then
     return 0
   fi
 
@@ -865,7 +867,10 @@ render_review_rb_semble_prefetch() {
   query_text="${query_text:0:${REVIEW_RB_SEMBLE_QUERY_MAX_BYTES}}"
   [ -n "${query_text}" ] || return 0
 
-  prefetch_text="$(semble_query_block "${query_text}" "${REVIEW_RB_SEMBLE_MAX_CHUNKS}" "${header_label}" || true)"
+  # The judge prompt is prefixed with pre_assembled_static.txt; count overlap with it.
+  local static_file=""
+  [ ! -s ./pre_assembled_static.txt ] || static_file=./pre_assembled_static.txt
+  prefetch_text="$(SEMBLE_STATIC_CONTEXT_FILE="${static_file}" semble_query_block "${query_text}" "${REVIEW_RB_SEMBLE_MAX_CHUNKS}" "${header_label}" || true)"
   [ -n "${prefetch_text}" ] || return 0
 
   printf '%s\n' "${prefetch_text:0:${REVIEW_RB_SEMBLE_CONTEXT_MAX_BYTES}}"

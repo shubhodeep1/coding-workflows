@@ -13,7 +13,7 @@ You will receive telemetry assembled from workflow-log folders, including:
 - Cross-repo run, job, and step metrics (durations, outcomes, retries, queue/wait time)
 - Token and model usage data (prompt/completion/total, cache creation/read where available)
 - Additive review-telemetry metrics (`cache_hit_rate`, `wall_clock_p50_ms`, `wall_clock_p99_ms`, `break_glass_count`, `context_budget_warn_count`) when collector coverage is available
-- Semble and Serena telemetry (`SEMBLE_QUERY`, `SEMBLE_FALLBACK`, `SERENA_QUERY`, `SERENA_FALLBACK`, `SERENA_PROBE`) including logged prompt/response bytes where available
+- Semble and Serena telemetry (`SEMBLE_QUERY`, `SEMBLE_FALLBACK`, `SEMBLE_BOOTSTRAP`, `SERENA_QUERY`, `SERENA_FALLBACK`, `SERENA_PROBE`) including logged prompt/response bytes where available
 - GitHub API usage signals (call counts, hotspots, rate-limit events, retry behavior)
 - Prompt/cache/memory and orchestrator-state indicators
 - Deep-dive log excerpts for notable failures, regressions, and outliers
@@ -82,7 +82,7 @@ Rules:
 - Prefer safe, backward-compatible changes; do not recommend breaking interfaces or behavior.
 - Do not recommend adding external services or new infrastructure.
 - Do not invent data. If evidence is incomplete, state the exact gap, keep analysis bounded, and provide concrete next collection steps.
-- If `SEMBLE_QUERY` / `SEMBLE_FALLBACK` / `SERENA_QUERY` / `SERENA_FALLBACK` / `SERENA_PROBE` appear in deep-dive excerpts or `log_summary`, treat them as first-class evidence: cite the workflow/job/step and target, quantify logged bytes and fallback/probe counts/rates, and avoid assuming a universal `phase=` field when the logs only provide `target=`.
+- If `SEMBLE_QUERY` / `SEMBLE_FALLBACK` / `SEMBLE_BOOTSTRAP` / `SERENA_QUERY` / `SERENA_FALLBACK` / `SERENA_PROBE` appear in deep-dive excerpts or `log_summary`, treat them as first-class evidence: cite the workflow/job/step and target, quantify logged bytes, bootstrap/unused-bootstrap times, contribution (`sources` and `static_dup_bytes`) and fallback/probe counts/rates; avoid assuming a universal `phase=` field when logs only provide `target=`.
 - If unknown MCP-server telemetry appears as `<NAME>_QUERY`, `<NAME>_FALLBACK`, or `<NAME>_PROBE`, apply the same evidence rules conservatively: cite the exact prefix, workflow/job/step, target, and any logged `bytes=`, `response_bytes=`, `reason=`, `result=`, or `tool=` fields; count occurrences per server, surface the names under the Metrics Appendix as `Other MCP servers observed`, flag the analyst-coverage gap, and do not assume known-system semantics beyond what the line supports.
 - If `insufficient_data` is true, explicitly state that the current window is insufficient before presenting best-effort findings.
 - Use markdown code blocks only when showing concrete config/code-level changes.
