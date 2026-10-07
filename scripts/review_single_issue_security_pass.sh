@@ -35,7 +35,9 @@
 #           A dispatch that fails (for example a consumer wrapper without the
 #           `pr_number` input) holds the merge for a later retry. Below the
 #           cycle cap it also records a failed cycle, so later review runs
-#           retry until the cycle budget is exhausted.
+#           retry until the cycle budget is exhausted. Past the cap a failed
+#           retry dispatch records a failed head attempt, so repeated failures
+#           still reach the ai:security-pass-failed label.
 #           Every hold=true also writes `hold_reason=<reason>`: audit_dispatched,
 #           audit_pending or awaiting_followups when matching open follow-ups
 #           are younger than the limit; followups_missing,
@@ -456,7 +458,7 @@ single_pass_gate()
 	fi
 	if [ "${cycles_used}" -ge "${effective_max}" ]; then
 		if [ -z "${completed_findings}" ]; then
-			head_attempts="$(printf '%s\n' "${markers}" | awk -F'\t' -v h="${head_sha}" -v cap="${effective_max}" '$3 == "pending" && $4 == h && $5 + 0 > cap && !seen[$5]++ { n++ } END { print n + 0 }')"
+			head_attempts="$(printf '%s\n' "${markers}" | awk -F'\t' -v h="${head_sha}" -v cap="${effective_max}" '($3 == "pending" || $3 == "failed") && $4 == h && $5 + 0 > cap && !seen[$5]++ { n++ } END { print n + 0 }')"
 			if [ "${head_attempts}" -lt "${exhausted_head_limit}" ]; then
 				exhausted_retry="true"
 			fi
@@ -510,6 +512,16 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 	workflow="$(single_pass_audit_workflow)"
 	if ! gh workflow run "${workflow}" -R "${REPOSITORY}" --ref "${default_branch}" -f ref="${head_ref}" -f pr_number="${PR_NUMBER}" >/dev/null 2>&1; then
 		if [ "${exhausted_retry}" = "true" ]; then
+			# Record the failed retry as a used head attempt (head_attempts counts
+			# failed markers above the cap), so repeated dispatch failures reach
+			# the ai:security-pass-failed label instead of retrying forever.
+			body="## Single-issue security pass: retry audit
+
+The retry audit of \`${head_sha}\` could not be dispatched (\`${workflow}\`). Auto-merge stays off, and this counts as head attempt $((head_attempts + 1)) of ${exhausted_head_limit}. Once the head attempts are used up, the PR is labelled \`ai:security-pass-failed\`.
+
+$(single_pass_marker failed "${head_sha}" "${next_cycle}")"
+			gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${body}" >/dev/null 2>&1 \
+				|| echo "::warning::Could not post the failed security-pass marker on PR #${PR_NUMBER}; the head attempt is not recorded and the next review run retries."
 			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=dispatch_failed_exhausted cycle=${next_cycle}"
 		else
 			# Below the cycle cap, record the failed dispatch as a used cycle so

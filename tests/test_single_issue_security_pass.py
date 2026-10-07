@@ -585,6 +585,16 @@ def test_exhausted_retry_dispatch_failure_holds(tmp_path: Path) -> None:
 	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("failed", HEAD, 5))], env={"FAKE_GH_FAIL": "dispatch"})
 	assert output == "hold=true\nhold_reason=dispatch_failed\n" and "reason=dispatch_failed_exhausted" in result.stdout
 	assert any(call[:2] == ["workflow", "run"] for call in calls)
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert len(posted) == 1 and posted[0][-1].endswith(_marker("failed", HEAD, 6))
+
+
+def test_repeated_exhausted_dispatch_failures_reach_the_label(tmp_path: Path) -> None:
+	comments = [_comment(_marker("failed", HEAD, cycle), comment_id=cycle) for cycle in range(1, 8)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GH_FAIL": "dispatch"})
+	assert output == "hold=true\nhold_reason=exhausted_without_completed_audit\n" and "head_attempts=2" in result.stdout
+	assert ["api", "repos/o/r/issues/42/labels", "-f", "labels[]=ai:security-pass-failed"] in calls
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
 
 
 def _extension(head: str) -> str:
