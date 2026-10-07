@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: update `tests/e2e_smoke_canary_b.txt`\n\nPlanning ref: `b1608e5b9f2f31cbe017210035b7b22d3d49ea6b` on `orchestrator/project-6660`. This matches the integration branch metadata.\n\nThe file already exists on this ref and holds exactly two lines, with a trailing newline:\n```\nstatus: ok\ndecompose-run: 25567947079\n```\nLine 1 is already correct. Line 2 needs a new run ID.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: The issue asks for a one-line edit to a single file that already exists and pins the exact target content, so there is no scope to widen or narrow. Under \u00a76 (Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed), the full fix and the shortcut are the same one-line replacement.\n\n1. **Files likely to change**\n   - `tests/e2e_smoke_canary_b.txt`: modify the existing file. Nothing needs to be created.\n\n2. **Functions or modules to implement**\n   - None. The only change is to replace line 2, `decompose-run: 25567947079`, with `decompose-run: 37624152181`. Line 1, `status: ok`, stays as it is, and the file keeps its single trailing newline.\n\n3. **Data structures affected**\n   - None.\n\n4. **API or interface changes**\n   - None.\n\n## Decisions\n### D1 \u2014 Edit line 2 in place\n- Chosen: Replace only line 2 of the existing file, keep line 1, and keep the single trailing newline.\n- Alternatives considered: Rewrite the whole file. This gives the same bytes but produces a noisier edit.\n- Why: The issue asks for the minimal edit, and this produces a diff of one line.\n\n## Security considerations\n- No trust boundaries, endpoints, external input, secrets or money handling are involved. The only content is a fixed text fixture, so there are no abuse cases.\n\n5. **Risks and edge cases**\n   - Do not touch the sibling file `tests/e2e_smoke_canary.txt`.\n   - Make sure the file ends with exactly one newline and has no CRLF line endings.\n   - No conflicts were found between the issue and the codebase.\n\n6. **Testing considerations**\n   - `head -n1 tests/e2e_smoke_canary_b.txt` should print `status: ok`.\n   - `sed -n 2p tests/e2e_smoke_canary_b.txt` should print `decompose-run: 37624152181`.\n   - `git diff --stat` should list only `tests/e2e_smoke_canary_b.txt`.\n\n7. **Pre-execution self-check**\n   - The plan meets all three acceptance criteria and keeps the change inside the one allowed file.\n\nAssumptions: none. Missing context: none.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "8b055e2160d29aa1645eca35c142981500a71af77284a0e50e9e837b75b4ac94",
+  "lineage": {
+    "issue_number": 6662,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37627112309",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37627112309",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6662"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261007132311_bbd7fc30c8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6662,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37627112309"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6662",
+  "timestamps": {
+    "created_at": "2026-10-07T13:23:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
