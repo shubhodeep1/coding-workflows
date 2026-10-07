@@ -185,3 +185,43 @@ No `TODO`, `FIXME`, or `HACK` markers matched in the scoped workflows or scripts
 | Code modularization | Two release workflows, `review_autofix.yml`, triage workflow/script, staged-support registry, and new shared helpers | Large |
 | Expression size reduction | `.github/workflows/implement.yml` and extracted trusted scripts | Medium |
 | Medium/Low fixes | Triage creation paths, `workflow_retro_fanout.sh`, `gh_helpers.sh`, `workflow_retro.py`, and review workflow size reduction | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-10-07)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` authorizes implementation without further review; `NEEDS_VERIFICATION` requires the specified checks; `RISKY_SKIP` identifies a possible reduction that must not be auto-implemented because it touches a protected retry, pagination, race, or freshness path. Counts below are logical calls before retries and pagination.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — RISKY_SKIP.** **Calls:** `scripts/orchestrate_poll_process.sh:11470-11471`, in `finalize_integration_merge_if_needed`. **Current → proposed:** 2 → 1 when the recorded final PR lacks a matching snapshot. **Endpoint:** `GET /repos/{repo}/pulls/{final_pr}` for both calls. **Evidence:** consecutive reads extract `.state` and `.merged_at != null` from the same PR; their results jointly control the closed-and-merged branch at `scripts/orchestrate_poll_process.sh:11473-11509`. **Proposed fix:** manually assess fetching one PR JSON object and extracting both fields from it, while retaining the existing matching-snapshot path and conservative handling of missing fields. **Safety rationale:** `RISKY_SKIP` is mandatory for this poller path; the branch explicitly rechecks integration drift, and one failed combined read may not behave like two independently failed reads. **Downstream signal:** Do not auto-implement; manually test either read failing, a PR changing state between reads, and integration-branch drift before changing final-merge decisions.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **REUSE-001 — RISKY_SKIP.** **Calls:** `_mt_find_marker_comment` at `scripts/review_merge_train.sh:290-295`, called by the gate at `scripts/review_merge_train.sh:445-451`; `_mt_upsert_comment` at `scripts/review_merge_train.sh:361-373`, called at `scripts/review_merge_train.sh:479-486`. **Current → proposed:** 1 paginated comments listing + 1 comment GET → 1 paginated listing, for an existing marker on the queued gate path; conditional PATCH remains unchanged. **Endpoints:** `GET /repos/{repo}/issues/{pr}/comments?per_page=100`; `GET /repos/{repo}/issues/comments/{id}`. **Evidence:** the listing filters comments using `.body` but returns only ID and creation time; `_mt_upsert_comment` then fetches the selected comment’s body to compare it with the proposed body. **Proposed fix:** assess extending `_mt_find_marker_comment` to carry the selected body through its gate caller into `_mt_upsert_comment`, without breaking the existing ID/time output used for bypass decisions; retain the individual GET when that body cannot be trusted. **Safety rationale:** `RISKY_SKIP` is mandatory because the first read is paginated, and removing the later read changes how concurrent comment edits are observed. **Downstream signal:** Do not auto-implement; manually verify complete-page selection, the marker helper’s output contract, and behavior when the comment changes between listing and upsert.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: RISKY_SKIP — The duplicate reads are in `orchestrate_poll_process.sh`; reissue decisions need manual race and failure-path review.
+- API-002: RISKY_SKIP — The proposed reduction changes retry and rate-limit handling in `gh_api_json_to_file` and `curl_gh_api`.
+- BATCH-001: RISKY_SKIP — Poller replay authorization depends on live reads and complete paginated comment history.
+- BATCH-002: RISKY_SKIP — Poller blocker decisions require freshness and must preserve unknown-as-defer behavior.
+- BATCH-003: RISKY_SKIP — Replacing paginated REST comment and review reads requires manual completeness and field-parity review.
+
+### Summary Counts
+
+| Tag | Count | IDs |
+| --- | ---: | --- |
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 0 | — |
+| RISKY_SKIP | 2 | MERGE-001, REUSE-001 |
+
+Counts cover net-new findings; the five cross-references are not counted again.
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
