@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Protect conflict-manifest behavior with contract tests, especially for modify/delete cases.",
   "timestamps": {
     "created_at": "2026-10-07T07:29:39Z",
