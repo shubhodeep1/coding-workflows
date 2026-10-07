@@ -2614,6 +2614,8 @@ def test_security_audit_claude_fallback_malformed_missing_and_wrong_shape() -> N
 		("not json at all", "malformed_output"),
 		("Here are the findings:\n```json\n[]\n```", "malformed_output"),
 		("```json\n[]\n```\n```json\n[]\n```", "malformed_output"),
+		# Only a ```json fence is stripped; an unlabeled fence falls back.
+		("```\n[]\n```", "malformed_output"),
 		("", "missing_output"),
 		(json.dumps({"findings": []}), "schema_mismatch"),
 		(json.dumps(["not an object"]), "schema_mismatch"),

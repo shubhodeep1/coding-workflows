@@ -1366,6 +1366,8 @@ if [ -f "${SECURITY_AUDIT_AI_ENGINE_SCRIPT}" ]; then
 	else
 		echo "security-audit: ai_engine.sh could not be loaded; running codex" >&2
 	fi
+else
+	echo "security-audit: ai_engine.sh not found in the support tree; running codex" >&2
 fi
 [ "${SECURITY_AUDIT_ENGINE}" = "claude" ] || SECURITY_AUDIT_ENGINE="codex"
 
@@ -1406,7 +1408,7 @@ except OSError:
 if not text:
 	print("missing_output")
 	sys.exit(1)
-fenced = re.fullmatch(r"```(?:json)?[ \t]*\n(.*)\n```", text, re.S)
+fenced = re.fullmatch(r"```json[ \t]*\n(.*)\n```", text, re.S)
 if fenced:
 	text = fenced.group(1).strip()
 try:
