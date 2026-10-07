@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The poller's four review-run matchers on current `main` don't check `head_branch == <default branch>`. `_pr_named_review_dispatch_runs` doesn't even ask GitHub for `head_branch`, and there's no default-branch cache to reuse. Should this issue harden them too?\nChoices:\nA) Yes. Harden the merge train, the sweep and the four poller matchers. Add one default-branch read per poller tick (or reuse an existing repo-metadata read) and fail closed with a warning when it can't be resolved. `_autofix_pr_named_review_runs` already complies and only gets spoof tests. (RECOMMENDED)\nB) No. Harden only `_mt_inflight_review_branches` and the sweep's `dispatch_pr` matcher, plus spoof tests for `_autofix_pr_named_review_runs`. File a separate issue for the poller.\nC) Harden only the poller's four matchers here, and file the merge train and sweep as a follow-up.\nQ2: GitHub can report `head_branch: null` on a real default-branch `workflow_dispatch` review run (issue #4928). The sweep keeps such runs by their `pr:<N>` title on purpose, because dropping them let the next tick dispatch again and replace the pending review. How should every hardened matcher treat a null `head_branch`?\nChoices:\nA) Accept `head_branch` equal to the resolved default branch **or** null/empty, but only if `event == workflow_dispatch` and the exact title matches its own wrapper path. Reject any other non-empty branch. This keeps the #4928 fix and still rejects a branch-copy spoof. (RECOMMENDED)\nB) Strict: require `head_branch` to equal the default branch and drop null runs. This reverts the #4928 protection, so the sweep may dispatch duplicates again.\nC) Strict match, but a null `head_branch` makes the listing \"incomplete\". Each caller then uses its existing fail-closed path (skip dispatch or hold release this tick).\nQ3: In `_mt_inflight_review_branches`, any review-path `workflow_dispatch` run without a PR-named title currently marks the whole listing `unattributed_run` and holds every merge-train release. After hardening, what happens to a review-wrapper dispatch run on a non-default branch, or one whose title and path don't pair?\nChoices:\nA) Ignore it: it's not a trusted review run, so it neither keys a PR nor holds the train. Keep today's `unattributed_run` handling for default-branch dispatches without a PR title, such as `review_autofix.yml` self-dispatches. (RECOMMENDED)\nB) Keep treating it as `unattributed_run`, which marks the listing incomplete and holds every release this tick. That keeps the availability stall the issue is trying to remove.",
+  "fingerprint": "78b3016851d3a37de7f7a7501ec0944762325dea22dd585b24f6d497ef70d585",
+  "lineage": {
+    "issue_number": 6629,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37617830751",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37617830751",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261007120528_4ab02413d6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6629,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37617830751"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6629 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-07T12:05:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
