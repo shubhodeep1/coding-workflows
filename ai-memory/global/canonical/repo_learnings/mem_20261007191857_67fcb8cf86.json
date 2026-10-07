@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Conflict handling for `.ai/.workspace_source_manifest.txt` has special semantics; do not resolve its conflicts as ordinary generated-file conflicts.",
   "timestamps": {
     "created_at": "2026-10-07T19:18:57Z",
