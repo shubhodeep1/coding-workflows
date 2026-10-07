@@ -29,6 +29,7 @@
 #
 # Failure modes:
 #   - Exits 1 if merge replay fails for non-conflict reasons, or template missing.
+#   - Exits 1 if a manifest conflict cannot be resolved before sandbox dispatch.
 #   - Exits 0 + clears MERGE_CONFLICT when merge replay produces no unmerged paths.
 
 set -euo pipefail
@@ -222,84 +223,135 @@ fi
 #   - Integration-sync branches (orchestrator/project-*) are excluded:
 #     their fingerprint-violation expansion below can widen the
 #     resolver working set after this point, so the early-commit
-#     decision here would be premature; the intent-aware resolver
-#     keeps full custody of those runs.
-#   - Only a two-sided content conflict (index stages 2 AND 3 both
-#     present) is handled; base stage 1 absent is the add/add case,
-#     where the set algebra degenerates to plain union.  Delete/modify
-#     shapes fall through to the Codex resolver untouched.
+#     decision here would be premature.
+#   - A two-sided content conflict (index stages 2 AND 3 both present)
+#     is resolved with the set algebra above; base stage 1 absent is
+#     the add/add case, where the set algebra degenerates to plain
+#     union.
+#   - A one-sided delete/modify conflict (index stages exactly 1+2 or
+#     1+3: one side deleted or untracked the manifest, the other
+#     changed it) honours the deletion with `git rm --cached`, but only
+#     when the merged tree's .gitignore ignores the path
+#     (`git check-ignore --no-index`) and no .gitignore is itself
+#     unmerged, i.e. it is the generated
+#     inventory workspace_init.sh rebuilds at runtime.  The worktree
+#     copy stays behind as an ignored, untracked file.  Without this,
+#     the manifest stayed in the resolver allowlist and a resolver
+#     sandbox that excludes `.ai/` refused the whole run
+#     (`sandbox_path_unsupported`), so every retry failed identically
+#     (PR #6594 / #6209 / #6146, heal issue #6608).
+#   - Every other shape (kill switch off, integration-sync branch,
+#     unknown stage set, manifest not gitignored) fails before resolver
+#     dispatch: the resolver sandbox cannot access .ai/.
 # LC_ALL=C for sort/comm matches Python's str sort in
 # materialize_source_tree() (bytewise over UTF-8 == code-point order),
 # so the merged file satisfies the manifest-sorting contract.
 MANIFEST_UNION_PATH=".ai/.workspace_source_manifest.txt"
-if [ "${CONFLICT_MANIFEST_UNION_ENABLED:-true}" = "true" ] \
-   && [ "${_resolver_allowlist_count}" -gt 0 ] \
+_mu_resolved=false
+_mu_unhandled_reason=""
+_mu_stages=""
+if [ "${_resolver_allowlist_count}" -gt 0 ] \
    && grep -Fxq "${MANIFEST_UNION_PATH}" "${RESOLVER_ALLOWLIST_FILE}"; then
-  case "${TARGET_BRANCH:-${HEAD_REF:-}}" in
-    orchestrator/project-*)
-      echo "Manifest union-merge: skipped on integration-sync branch (fingerprint expansion may widen the resolver working set; Codex resolver keeps custody)."
-      ;;
-    *)
-      _mu_stages="$(git ls-files -u -- "${MANIFEST_UNION_PATH}" | awk '{print $3}' | sort -u | tr '\n' ' ')"
-      case " ${_mu_stages}" in
-        *' 2 '*' 3 '*)
-          _mu_dir="$(mktemp -d)"
-          git show ":1:${MANIFEST_UNION_PATH}" > "${_mu_dir}/base" 2>/dev/null || : > "${_mu_dir}/base"
-          git show ":2:${MANIFEST_UNION_PATH}" > "${_mu_dir}/ours"
-          git show ":3:${MANIFEST_UNION_PATH}" > "${_mu_dir}/theirs"
-          LC_ALL=C sort -u -o "${_mu_dir}/base"   "${_mu_dir}/base"
-          LC_ALL=C sort -u -o "${_mu_dir}/ours"   "${_mu_dir}/ours"
-          LC_ALL=C sort -u -o "${_mu_dir}/theirs" "${_mu_dir}/theirs"
-          {
-            LC_ALL=C comm -12 "${_mu_dir}/ours" "${_mu_dir}/theirs"
-            LC_ALL=C comm -13 "${_mu_dir}/base" "${_mu_dir}/ours"
-            LC_ALL=C comm -13 "${_mu_dir}/base" "${_mu_dir}/theirs"
-          } | sed '/^[[:space:]]*$/d' | LC_ALL=C sort -u > "${_mu_dir}/merged"
-          cp "${_mu_dir}/merged" "${MANIFEST_UNION_PATH}"
-          rm -rf "${_mu_dir}"
-          git add -- "${MANIFEST_UNION_PATH}"
-          git diff --name-only --diff-filter=U | sort -u > "${RESOLVER_ALLOWLIST_FILE}" || true
-          _resolver_allowlist_count="$(wc -l < "${RESOLVER_ALLOWLIST_FILE}" | tr -d '[:space:]')"
-          echo "Manifest union-merge: resolved ${MANIFEST_UNION_PATH} deterministically (set-merge of base/ours/theirs); ${_resolver_allowlist_count} unmerged path(s) remain."
-          if [ "${_resolver_allowlist_count}" -eq 0 ]; then
-            # The manifest was the only conflict.  Commit the merge NOW,
-            # while MERGE_HEAD is still in place, so this is a real
-            # two-parent merge commit (same requirement as the resolver's
-            # commit tail — see the PR #908 note in
-            # review_conflict_resolve.sh) and the merge index's
-            # auto-merged base content flows through unchanged.  Mirror
-            # the resolver's end state exactly: CONFLICT_RESOLVED=true
-            # (push + Telegram + legacy re-dispatch fire as usual) and
-            # MERGE_CONFLICT left at true (the ready-to-merge gate must
-            # keep treating this run as a resolver run so the resolver
-            # commit still gets reviewed before merge).  The resolver
-            # step's if: gate still passes, so
-            # review_conflict_resolve.sh short-circuits on
-            # CONFLICT_RESOLVED=true before any model invocation.
-            git rm -r --cached --ignore-unmatch -- node_modules 2>/dev/null || true
-            if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
-              git reset -q HEAD -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
-              git checkout -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' 2>/dev/null || true
+  _mu_stages="$(git ls-files -u -- "${MANIFEST_UNION_PATH}" | awk '{print $3}' | sort -u | tr '\n' ' ')"
+  if [ "${CONFLICT_MANIFEST_UNION_ENABLED:-true}" != "true" ]; then
+    _mu_unhandled_reason="disabled"
+  else
+    case "${TARGET_BRANCH:-${HEAD_REF:-}}" in
+      orchestrator/project-*)
+        echo "Manifest union-merge: skipped on integration-sync branch (fingerprint expansion may widen the resolver working set)."
+        _mu_unhandled_reason="integration_sync"
+        ;;
+      *)
+        case " ${_mu_stages}" in
+          *' 2 '*' 3 '*)
+            _mu_dir="$(mktemp -d)"
+            git show ":1:${MANIFEST_UNION_PATH}" > "${_mu_dir}/base" 2>/dev/null || : > "${_mu_dir}/base"
+            git show ":2:${MANIFEST_UNION_PATH}" > "${_mu_dir}/ours"
+            git show ":3:${MANIFEST_UNION_PATH}" > "${_mu_dir}/theirs"
+            LC_ALL=C sort -u -o "${_mu_dir}/base"   "${_mu_dir}/base"
+            LC_ALL=C sort -u -o "${_mu_dir}/ours"   "${_mu_dir}/ours"
+            LC_ALL=C sort -u -o "${_mu_dir}/theirs" "${_mu_dir}/theirs"
+            {
+              LC_ALL=C comm -12 "${_mu_dir}/ours" "${_mu_dir}/theirs"
+              LC_ALL=C comm -13 "${_mu_dir}/base" "${_mu_dir}/ours"
+              LC_ALL=C comm -13 "${_mu_dir}/base" "${_mu_dir}/theirs"
+            } | sed '/^[[:space:]]*$/d' | LC_ALL=C sort -u > "${_mu_dir}/merged"
+            cp "${_mu_dir}/merged" "${MANIFEST_UNION_PATH}"
+            rm -rf "${_mu_dir}"
+            git add -- "${MANIFEST_UNION_PATH}"
+            _mu_resolved=true
+            echo "Manifest union-merge: resolved ${MANIFEST_UNION_PATH} deterministically (set-merge of base/ours/theirs)."
+            ;;
+          ' 1 2 '|' 1 3 ')
+            _mu_ignored_rc=0
+            # A still-conflicted .gitignore carries both sides' rules (plus
+            # markers) in the worktree, so check-ignore cannot prove the
+            # *resolved* .gitignore ignores the manifest: fail closed.
+            if git diff --name-only --diff-filter=U -- | grep -Eq '(^|/)\.gitignore$'; then
+              echo "Manifest union-merge: a .gitignore is itself unmerged; cannot verify the resolved ignore rules for ${MANIFEST_UNION_PATH}."
+              _mu_ignored_rc=1
+            else
+              git check-ignore -q --no-index -- "${MANIFEST_UNION_PATH}" || _mu_ignored_rc=$?
             fi
-            git commit -m "[ai-merge-resolve] resolve merge conflicts"
-            for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
-              if [ -d "${RESOLVE_STASH}/${d}" ]; then
-                cp -a "${RESOLVE_STASH}/${d}/." "${d}/" 2>/dev/null || cp -a "${RESOLVE_STASH}/${d}" "${d}"
-              fi
-            done
-            rm -rf "${RESOLVE_STASH}"
-            rm -f "${_merge_stderr_file}"
-            echo "CONFLICT_RESOLVED=true" >> "$GITHUB_ENV"
-            echo "Manifest union-merge: no other unmerged paths — committed deterministic merge resolution (push deferred); Codex resolver will be skipped."
-            exit 0
-          fi
-          ;;
-        *)
-          echo "Manifest union-merge: ${MANIFEST_UNION_PATH} conflict is not a two-sided content conflict (index stages: ${_mu_stages:-none}); leaving it to the Codex resolver."
-          ;;
-      esac
-      ;;
-  esac
+            if [ "${_mu_ignored_rc}" -eq 0 ]; then
+              git rm -q --cached -- "${MANIFEST_UNION_PATH}"
+              _mu_resolved=true
+              echo "Manifest union-merge: honoured one-sided deletion of ${MANIFEST_UNION_PATH} (index stages: ${_mu_stages% }; generated inventory is gitignored)."
+            else
+              _mu_unhandled_reason="not_gitignored"
+            fi
+            ;;
+          *)
+            _mu_unhandled_reason="stage_shape"
+            ;;
+        esac
+        ;;
+    esac
+  fi
+  if [ "${_mu_resolved}" = "true" ]; then
+    git diff --name-only --diff-filter=U | sort -u > "${RESOLVER_ALLOWLIST_FILE}" || true
+    _resolver_allowlist_count="$(wc -l < "${RESOLVER_ALLOWLIST_FILE}" | tr -d '[:space:]')"
+    echo "Manifest union-merge: ${_resolver_allowlist_count} unmerged path(s) remain."
+    if [ "${_resolver_allowlist_count}" -eq 0 ]; then
+      # The manifest was the only conflict.  Commit the merge NOW,
+      # while MERGE_HEAD is still in place, so this is a real
+      # two-parent merge commit (same requirement as the resolver's
+      # commit tail — see the PR #908 note in
+      # review_conflict_resolve.sh) and the merge index's
+      # auto-merged base content flows through unchanged.  Mirror
+      # the resolver's end state exactly: CONFLICT_RESOLVED=true
+      # (push + Telegram + legacy re-dispatch fire as usual) and
+      # MERGE_CONFLICT left at true (the ready-to-merge gate must
+      # keep treating this run as a resolver run so the resolver
+      # commit still gets reviewed before merge).  The resolver
+      # step's if: gate still passes, so
+      # review_conflict_resolve.sh short-circuits on
+      # CONFLICT_RESOLVED=true before any model invocation.
+      git rm -r --cached --ignore-unmatch -- node_modules 2>/dev/null || true
+      if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
+        git reset -q HEAD -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
+        git checkout -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' 2>/dev/null || true
+      fi
+      git commit -m "[ai-merge-resolve] resolve merge conflicts"
+      for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main; do
+        if [ -d "${RESOLVE_STASH}/${d}" ]; then
+          cp -a "${RESOLVE_STASH}/${d}/." "${d}/" 2>/dev/null || cp -a "${RESOLVE_STASH}/${d}" "${d}"
+        fi
+      done
+      rm -rf "${RESOLVE_STASH}"
+      rm -f "${_merge_stderr_file}"
+      echo "CONFLICT_RESOLVED=true" >> "$GITHUB_ENV"
+      echo "Manifest union-merge: no other unmerged paths — committed deterministic merge resolution (push deferred); Codex resolver will be skipped."
+      exit 0
+    fi
+  elif [ -n "${_mu_unhandled_reason}" ]; then
+    _mu_stages_trimmed="${_mu_stages% }"
+    echo "::error::Manifest union-merge: unhandled reason=${_mu_unhandled_reason} stages=${_mu_stages_trimmed:-none} CONFLICT_MANIFEST_UNION_ENABLED=${CONFLICT_MANIFEST_UNION_ENABLED:-true}; refusing to dispatch resolver for ${MANIFEST_UNION_PATH} because the sandbox excludes .ai/."
+    if [ "${_mu_unhandled_reason}" = "disabled" ]; then
+      echo "Manifest union-merge: CONFLICT_MANIFEST_UNION_ENABLED no longer routes manifest conflicts to the resolver; set it to true to enable safe deterministic resolution, or resolve the conflict in the branch."
+    fi
+    exit 1
+  fi
 fi
 
 # When the allowlist is empty there is nothing for Codex to
