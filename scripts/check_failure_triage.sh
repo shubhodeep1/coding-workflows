@@ -324,7 +324,9 @@ sys.stdout.write("\n".join(kept))
 		GEN=$((PGEN + 1))
 		[ -n "${PROOT}" ] && ROOT="${PROOT}"
 		log "lineage parent_issue=${PARENT_ISSUE} parent_gen=${PGEN} gen=${GEN} root=${ROOT}"
-	elif ! printf '%s' "${PARENT_MARKER_BODY}" | grep -qE "^ {0,3}<!-- ${MARKER_PREFIX}gen="; then
+	# grep reads a here-string (not a pipeline) so set -o pipefail cannot
+	# turn printf's SIGPIPE after grep -q's early exit into "no marker".
+	elif ! grep -qE "^ {0,3}<!-- ${MARKER_PREFIX}gen=" <<<"${PARENT_MARKER_BODY}"; then
 		# Only a line-leading HTML-comment marker (the shape this script
 		# writes) counts as a triage marker; prose or inline code that merely
 		# mentions check-failure-triage:gen= does not.

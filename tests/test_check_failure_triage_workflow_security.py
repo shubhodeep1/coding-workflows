@@ -1294,13 +1294,19 @@ class CheckFailureTriageLineageTests(unittest.TestCase):
 		self.assertEqual(metadata.get("root"), root)
 
 	def test_source_issue_with_malformed_triage_marker_still_fails(self) -> None:
-		proc, outputs, metadata = _run_collect_stage(
-			parent_body="<!-- check-failure-triage:gen=abc -->\n",
-		)
-		self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
-		self.assertIn("CHECK_TRIAGE error parent_generation_missing_or_malformed issue=41", proc.stdout)
-		self.assertNotIn("ready", outputs)
-		self.assertEqual(metadata, {})
+		# The large body (well past the pipe buffer) guards against the marker
+		# check misreading a SIGPIPE under pipefail as "no marker".
+		for parent_body in (
+			"<!-- check-failure-triage:gen=abc -->\n",
+			"<!-- check-failure-triage:gen=abc -->\n" + "filler line\n" * 40000,
+		):
+			with self.subTest(body_bytes=len(parent_body)):
+				proc, outputs, metadata = _run_collect_stage(parent_body=parent_body)
+				self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+				self.assertIn("CHECK_TRIAGE error parent_generation_missing_or_malformed issue=41", proc.stdout)
+				self.assertNotIn("source_issue_not_triage", proc.stdout)
+				self.assertNotIn("ready", outputs)
+				self.assertEqual(metadata, {})
 
 
 if __name__ == "__main__":
