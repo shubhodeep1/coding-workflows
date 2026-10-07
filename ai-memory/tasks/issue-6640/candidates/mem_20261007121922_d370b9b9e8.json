@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The cited file isn't in this checkout. Under `scripts/`, the only heal module is `scripts/workflow_failure_heal.py`. That file's `filter_log` (line 1300) keeps each `##[group]Run` header's `env:` block on purpose; the `_drop_step_script_lines` docstring at line 1282 says so. `filter_log` also never calls `redact_secrets` (line 1529), and `scripts/workflow_failure_heal_intake.sh:322` writes its output straight to `FILTERED_LOG` without redacting it. So the finding's leak exists on `main` through this path, even though the `_SECRET_PATTERNS` Authorization rule at line 1521 already matches `Basic`. That rules out C. D would wait on #6463, the rebuild of evidence delivery, which is still open. The finding's own blocker, #6457, is already closed, so D would stall the issue with no end date. B touches a different consumer outside this finding's scope; it can be filed separately.\nQ2: Stripping runs on the full raw log before the tail and high-signal lines are selected. So a header with no closing line is a real truncation, not a slicing artefact. The safe, bounded choice is to drop everything from that header to the end of the job's text and say so with a marker. The other jobs' logs and the earlier part of this one stay available for diagnosis, which B would throw away. C keeps the lines and relies on pattern redaction alone, which doesn't meet the finding's fail-closed requirement.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/workflow_failure_heal.py (`_drop_step_script_lines` around lines 1278-1297, `filter_log` lines 1300-1321, `_SECRET_PATTERNS` / `redact_secrets` lines 1519-1539, `_STEP_HEADER_OPEN_RE` / `_STEP_HEADER_CLOSE_RE` / `_STEP_SCRIPT_LINE_PREFIX` around lines 258-264)\n    - scripts/workflow_failure_heal_intake.sh line 322 (the only caller of `filter-log`)\n    - tests/test_workflow_failure_heal.py\n  steps:\n    - Add a helper named `_strip_step_env_values` (check the name is unused in the module first). Inside a `##[group]Run` header block, it keeps the `env:` key line and each env variable's name, replaces the value with `[redacted]`, and leaves step output outside the header untouched. Match the indentation shape the file already handles, comparing on timestamp-stripped content like `_drop_step_script_lines` does.\n    - In `filter_log`, run env stripping on the raw text together with `_drop_step_script_lines`, before `sanitize_text` and before any tail or pattern selection. Then pass the final bounded result through `redact_secrets` before returning, so `Authorization: Basic <b64>`, Bearer values, URL userinfo, GitHub tokens and provider tokens are masked in everything the intake writes to `FILTERED_LOG`.\n    - Apply the Q2 rule for a header that is never closed.\n    - Add regression tests to tests/test_workflow_failure_heal.py: (1) an `Authorization: Basic dXNlcjpwYXNz` line in step output is redacted by `filter_log`; (2) a `##[group]Run` header with an `env:` block containing `GH_TOKEN: ghp_x` and `FOO: plainvalue` keeps the names and redacts both values; (3) the unterminated-header case from Q2; (4) existing behaviour is unchanged: script lines are still dropped and non-header output is kept.\n    - Leave the CLI (`_cmd_filter_log`) and the intake script's interface unchanged, so `workflow_failure_heal_intake.sh` needs no edit.\n  replaces_acceptance_criterion: The fix location `scripts/workflow_failure_heal_evidence.py:154` becomes `scripts/workflow_failure_heal.py` `filter_log`, the live path that delivers agent-readable logs on `main`.\n  equivalence_argument: The finding says sliced logs keep the step env block and `Basic` auth headers, and the agent reads them. On `main`, `filter_log` is that slicer: its output feeds the diagnosis prompt and the issue evidence. Redacting env values and secrets at that point closes the same disclosure path.\n  reversibility: The change is local to one function plus tests. When #6463 lands an evidence module, it can call the same helpers; reverting them only restores env-value visibility.\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/workflow_failure_heal.py `_STEP_HEADER_OPEN_RE`, `_STEP_HEADER_CLOSE_RE`\n  steps:\n    - In `_strip_step_env_values` (or the combined pass), if the text ends while still inside a `##[group]Run` header, drop every line from that header's open line to the end of the input and append one line: `[env block omitted: unterminated step header]`.\n    - Apply this per raw job log, which is what the intake passes per `--log-file` call, so other jobs are not affected.\n    - Test: a log ending inside an unclosed header with an env value shows neither the value nor the lines after the header, and shows the marker exactly once.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: The finding asks the code to fail closed when sensitive fields can't be safely reduced. Dropping the part that can't be bounded does that while keeping the rest of the evidence usable for diagnosis.\n  reversibility: The marker makes the omission visible. If a human later prefers B, widening the drop to the whole job log is a one-line change.\n\n**Note:** #6457 is closed as completed, but `scripts/workflow_failure_heal_evidence.py` isn't in this checkout and #6463 is still open. If the dependency hold requires `ai:merged` on #6457 and #6457 doesn't carry it, this issue will stay held. The fix above doesn't depend on #6457's code.",
+  "fingerprint": "c6edf31119572aea24d58ef61af70559b95b7300e1cacaf9d5fd54b931af36aa",
+  "lineage": {
+    "issue_number": 6640,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37618529979",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37618529979",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6640"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261007121922_d370b9b9e8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6640,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37618529979"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6640",
+  "timestamps": {
+    "created_at": "2026-10-07T12:19:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
