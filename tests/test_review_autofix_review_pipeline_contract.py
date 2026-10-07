@@ -40,6 +40,7 @@ RB_JUDGE = REPO_ROOT / "scripts" / "review_rb_judge.sh"
 AGENTS_MD_MATERIALITY = REPO_ROOT / "scripts" / "review_agents_md_materiality.sh"
 METADATA_HELPER = REPO_ROOT / "scripts" / "review_collect_pr_metadata.sh"
 AUTO_MERGE_HELPER = REPO_ROOT / "scripts" / "review_enable_auto_merge.sh"
+HEAD_GATE_HELPER = REPO_ROOT / "scripts" / "review_head_gate.sh"
 CHECK_RUNS_HELPER = REPO_ROOT / "scripts" / "collect_pr_check_runs_context.py"
 REVIEWER_FAILBACK_CHAINS = REPO_ROOT / "scripts" / "reviewer_failback_chains.json"
 MODEL_CATALOG = REPO_ROOT / "scripts" / "codex_model_catalog.json"
@@ -58,6 +59,39 @@ PHASE_H_CONTEXT_BUDGET_FIXTURE = FIXTURES_DIR / "phase-h-context-budget-overflow
 def _workflow_text() -> str:
 	# Moved step bodies (scripts/review_autofix_step_*.sh) inlined again.
 	return expanded_review_autofix_text()
+
+
+def test_head_gate_is_verified_and_binds_merge_status_to_evaluated_head() -> None:
+	workflow = _workflow_text()
+	stage = STAGE_HELPER.read_text(encoding="utf-8")
+	auto_merge = AUTO_MERGE_HELPER.read_text(encoding="utf-8")
+	judge = RB_JUDGE.read_text(encoding="utf-8")
+	assert workflow.index('name: Verify retarget helper identity') < workflow.index('name: Checkout head-gate helper')
+	assert workflow.index('name: Verify head-gate helper identity') < workflow.index('name: Evaluate review gate') < workflow.index('name: Withdraw stale auto-merge and publish head-gate status')
+	assert 'ref: ${{ steps.resolve_support.outputs.review_support_sha }}' in workflow
+	assert 'git -C .codex-head-gate-src rev-parse HEAD' in workflow
+	assert 'bash .codex-head-gate-src/scripts/review_head_gate.sh gate' in workflow
+	assert 'auto_merge_enabled: (if has("auto_merge")' in workflow
+	assert 'if .auto_merge_enabled == null then "" else (.auto_merge_enabled | tostring) end' in workflow
+	assert workflow.index('if _pr_gate=') < workflow.index('GATE_AUTO_MERGE_ENABLED="${pr_auto_merge_enabled}"') < workflow.index('# Port P6: retarget')
+	assert 'echo "HEAD_GATE_EARLY_DONE=true" >> "${GITHUB_ENV}"' in workflow
+	assert 'export EVENT_NAME=workflow_dispatch' in workflow
+	for key in ("PR_EVENT_HEAD_SHA", "GATE_HEAD_SHA", "GATE_AUTO_MERGE_ENABLED", "DETERMINISTIC_SKIP", "REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED"):
+		assert f"{key}:" in workflow
+	assert 'review_head_gate.sh' in stage.split('REQUIRED_BOOTSTRAP_SCRIPTS="', 1)[1].split('"', 1)[0].split()
+	assert 'REVIEW_HEAD_GATE_CONTEXT="ai-review/head-gate"' in HEAD_GATE_HELPER.read_text(encoding="utf-8")
+	assert auto_merge.index('review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success "review and security gate passed"', auto_merge.index('_orch_pr_head_sha=')) < auto_merge.index('gh_retry gh pr merge')
+	judge_lines = judge.splitlines()
+	for index, merge_line in enumerate(judge_lines):
+		if 'if gh pr merge "${PR_NUMBER}"' in merge_line and ('--match-head-commit "${RB_JUDGED_HEAD_SHA}"' in merge_line or '"${_match_head_arg[@]}"' in merge_line):
+			assert 'review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success' in judge_lines[index - 1]
+	assert judge.index('rb_security_merge_gate; then') < judge.index('review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success')
+	manual_status = 'review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"'
+	assert f'else\n        {manual_status}\n        RB_MERGE_READY_LABEL_ALLOWED="true"' in judge
+	assert f'elif [ "${{ENABLE_AUTO_MERGE}}" != "true" ]; then\n        if [ "${{PR_STATE}}" = "open" ]; then\n          {manual_status}\n        fi\n        RB_MERGE_READY_LABEL_ALLOWED="true"' in judge
+	assert f'          else\n            {manual_status}\n            echo "::warning::PR #${{PR_NUMBER}} is mergeable but ENABLE_AUTO_MERGE=false' in judge
+	assert f'          {manual_status}\n          ensure_label_exists "ai:ready-to-merge"' in judge
+	assert f'        {manual_status}\n        ensure_label_exists "ai:ready-to-merge"' in judge
 
 
 def _stage_helper_text() -> str:
@@ -2374,13 +2408,15 @@ def _run_reviewer_health_dispatch_logging_harness() -> dict[str, str]:
 		}
 
 
-def _run_reviewer_zero_success_guard_harness(*, statuses: list[str]) -> dict[str, object]:
+def _run_reviewer_zero_success_guard_harness(*, statuses: list[str], review_tier: str = "standard") -> dict[str, object]:
 	guard_block = _reviewer_zero_success_guard_block()
 	with tempfile.TemporaryDirectory(prefix="reviewer-zero-success-") as td:
 		tmp = Path(td)
 		reviews = tmp / "reviews"
 		reviews.mkdir()
 		github_env_file = tmp / "github_env.txt"
+		active_models_file_for_guard = tmp / "active_models.txt"
+		active_models_file_for_guard.write_text("".join(f"model{idx}\n" for idx in range(1, len(statuses) + 1)), encoding="utf-8")
 
 		for idx, status in enumerate(statuses, 1):
 			(reviews / f"status_review_model{idx}.txt").write_text(f"{status}\n", encoding="utf-8")
@@ -2399,6 +2435,8 @@ def _run_reviewer_zero_success_guard_harness(*, statuses: list[str]) -> dict[str
 				**os.environ,
 				"PREVIOUS_REVIEWS_DIR": str(reviews),
 				"PR_NUMBER": "123",
+				"REVIEW_TIER": review_tier,
+				"REVIEWER_ACTIVE_MODELS_FILE": str(active_models_file_for_guard),
 				"GITHUB_ENV": str(github_env_file),
 			},
 			capture_output=True,
@@ -2702,7 +2740,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}",
 		"REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || '' }}",
 		"REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}",
-		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna' }}",
+		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || '' }}",
 		"REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}",
@@ -2763,7 +2801,7 @@ def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
 		"REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}",
 		"REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || '' }}",
 		"REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}",
-		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna' }}",
+		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || '' }}",
 		"REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}",
 		"REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}",
@@ -4513,35 +4551,51 @@ def test_review_tier_random_pick_is_seeded_by_pr_number_and_pinned_by_variables(
 	# A repo that sets the variables keeps exactly those reviewers.
 	pinned_result = _run_review_tier_harness(
 		diff_text=standard_diff,
-		extra_env={"PR_NUMBER": "4242", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "z-ai/glm-5.2"},
+		extra_env={"PR_NUMBER": "4242", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "mistralai/mistral-small-2603"},
 	)
 	assert pinned_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "configured_standard"
-	assert pinned_result["active_models"] == ["z-ai/glm-5.2"]
+	assert pinned_result["active_models"] == ["mistralai/mistral-small-2603"]
 
 
-def test_review_tier_lite_draws_from_standard_list_and_defaults_skip_expensive_models() -> None:
-	"""Reduced tiers leave out the two full-panel-only models by default."""
+def test_review_tier_lite_draws_from_standard_list_and_defaults_use_whole_panel() -> None:
+	"""By default every tier draws from the whole panel; a pinned standard list
+	becomes the lite pool (PR #6438: the panel models now cost about the same,
+	so no model is reserved for the full tier)."""
 	reviewer_models = _workflow_reviewer_models()
-	expensive = {"google/gemini-3.1-flash-lite", "z-ai/glm-5.2"}
-	default_standard = ["minimax/minimax-m3", "deepseek/deepseek-v4-pro", "qwen/qwen3.7-plus", "openai/gpt-6-luna"]
-	assert expensive <= set(reviewer_models)
-	assert set(default_standard) <= set(reviewer_models)
-	assert set(default_standard) == set(reviewer_models) - expensive
+	assert len(reviewer_models) == 6
 
 	workflow_text = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
-	default_line = (
-		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || '"
-		+ ",".join(default_standard)
-		+ "' }}"
-	)
+	default_line = "REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || '' }}"
 	assert workflow_text.count(default_line) == 2
 
 	lite_diff = _numbered_code_diff({"src/app.py": 5})
 	standard_diff = _numbered_code_diff({"src/app.py": 120})
-	defaults = {"REVIEW_TIER_LITE_REVIEWER_SLUG": "", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": ",".join(default_standard)}
+	empty_defaults = {"REVIEW_TIER_LITE_REVIEWER_SLUG": "", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": ""}
 
 	def expected_lite(pr_number: str, pool: list[str]) -> list[str]:
 		return [min(pool, key=lambda model: hashlib.sha256(f"{pr_number}:{model}".encode("utf-8")).hexdigest())]
+
+	# With the defaults, every panel model shows up as a lite and a standard reviewer.
+	default_lite_picks: set[str] = set()
+	default_standard_picks: set[str] = set()
+	for pr_number in [str(n) for n in range(1, 41)]:
+		lite_result = _run_review_tier_harness(diff_text=lite_diff, extra_env={**empty_defaults, "PR_NUMBER": pr_number})
+		assert lite_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "random_lite"
+		assert lite_result["active_models"] == expected_lite(pr_number, reviewer_models)
+		default_lite_picks.update(lite_result["active_models"])
+		standard_result = _run_review_tier_harness(diff_text=standard_diff, extra_env={**empty_defaults, "PR_NUMBER": pr_number})
+		assert standard_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "random_standard"
+		assert len(standard_result["active_models"]) == 4
+		default_standard_picks.update(standard_result["active_models"])
+	assert default_lite_picks == set(reviewer_models)
+	assert default_standard_picks == set(reviewer_models)
+
+	# A repo that pins the standard list: lite draws from that list only.
+	pinned_standard = ["minimax/minimax-m3", "deepseek/deepseek-v4-pro", "qwen/qwen3.7-plus", "openai/gpt-6-luna"]
+	assert set(pinned_standard) < set(reviewer_models)
+	excluded = set(reviewer_models) - set(pinned_standard)
+	defaults = {"REVIEW_TIER_LITE_REVIEWER_SLUG": "", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": ",".join(pinned_standard)}
+	default_standard = pinned_standard
 
 	lite_picks: set[str] = set()
 	for pr_number in [str(n) for n in range(1, 41)]:
@@ -4549,9 +4603,9 @@ def test_review_tier_lite_draws_from_standard_list_and_defaults_skip_expensive_m
 		assert lite_result["REVIEW_TIER"] == "lite"
 		assert lite_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "random_lite"
 		assert lite_result["active_models"] == expected_lite(pr_number, default_standard)
-		assert not set(lite_result["active_models"]) & expensive
+		assert not set(lite_result["active_models"]) & excluded
 		lite_picks.update(lite_result["active_models"])
-	# Lite spreads across the standard list rather than always one model.
+	# Lite spreads across the pinned list rather than always one model.
 	assert lite_picks == set(default_standard)
 
 	# Standard runs exactly the four configured reviewers, in the given order.
@@ -4560,7 +4614,7 @@ def test_review_tier_lite_draws_from_standard_list_and_defaults_skip_expensive_m
 	assert standard_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "configured_standard"
 	assert standard_result["active_models"] == default_standard
 
-	# The full panel still runs every model, the expensive ones included.
+	# The full panel still runs every model.
 	full_result = _run_review_tier_harness(
 		diff_text=_numbered_code_diff({"src/app.py": 150, "lib/util.py": 60}),
 		extra_env={**defaults, "PR_NUMBER": "77"},
@@ -4590,10 +4644,106 @@ def test_review_tier_lite_draws_from_standard_list_and_defaults_skip_expensive_m
 	# A pinned lite slug still wins over the standard pool.
 	pinned_lite = _run_review_tier_harness(
 		diff_text=lite_diff,
-		extra_env={**defaults, "REVIEW_TIER_LITE_REVIEWER_SLUG": "z-ai/glm-5.2", "PR_NUMBER": "9"},
+		extra_env={**defaults, "REVIEW_TIER_LITE_REVIEWER_SLUG": "mistralai/mistral-small-2603", "PR_NUMBER": "9"},
 	)
 	assert pinned_lite["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "configured_lite"
-	assert pinned_lite["active_models"] == ["z-ai/glm-5.2"]
+	assert pinned_lite["active_models"] == ["mistralai/mistral-small-2603"]
+
+
+def test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer(review_tier: str = "lite") -> None:
+	reviewer_text = REVIEWERS.read_text(encoding="utf-8")
+	pass_function = reviewer_text.split("run_reviewer_pass() {", 1)[1].split("# Wrap a consolidated pass-1 ledger", 1)[0]
+	script = "run_reviewer_pass() {" + pass_function + textwrap.dedent("""\
+		get_active_reviewer_models_text() { cat "$REVIEWER_ACTIVE_MODELS_FILE"; }
+		reviewer_write_model_list_file() { printf '%s\\n' "${@:2}" > "$1"; }
+		reviewer_resume_should_reuse_success_slot() { return 1; }
+		reviewer_circuit_breaker_enabled() { [ -n "${TEST_HEALTH_DECISION:-}" ]; }
+		reviewer_health_dispatch_prepare() {
+		  REVIEWER_HEALTH_DISPATCH_DECISION=run
+		  if [ "$1" = 'mistralai/mistral-small-2603' ]; then
+		    REVIEWER_HEALTH_DISPATCH_DECISION="$TEST_MISTRAL_HEALTH_DECISION"
+		  elif [ "$1" = 'openai/gpt-6-luna' ]; then
+		    REVIEWER_HEALTH_DISPATCH_DECISION="$TEST_HEALTH_DECISION"
+		  fi
+		}
+		emit_run_budget_gate_note() { :; }
+		codex_run_budget_phase_may_start() { return 0; }
+		reviewer_request_partial_finalize() { printf '%s\\n' "$1" > "$PARTIAL_REQUEST_FILE"; }
+		normalize_reviewer_model_list() { printf '%s\\n' "$1" | tr ',' '\\n'; }
+		run_reviewer() {
+		  printf '%s\\n' "$1" >> "$CALLS_FILE"
+		  model_safe="$2"
+		  if [ "$1" = 'mistralai/mistral-small-2603' ]; then
+		    printf '%s\\n' "$MISTRAL_STATUS" > "$PREVIOUS_REVIEWS_DIR/status_$3_$model_safe.txt"
+		    printf '%s\\n' "$MISTRAL_ERROR" > "$PREVIOUS_REVIEWS_DIR/$3_$model_safe.log"
+		  else
+		    printf '%s\\n' "$FALLBACK_STATUS" > "$PREVIOUS_REVIEWS_DIR/status_$3_$model_safe.txt"
+		  fi
+		}
+		result="$(run_reviewer_pass review "$PROMPT_FILE" high)"
+		printf 'RESULT=%s\\nACTIVE=%s\\n' "$result" "$(cat "$REVIEWER_ACTIVE_MODELS_FILE")"
+		""")
+	for error, roster, fallback_status, expected_count, health_decision, mistral_status, mistral_health_decision, expected_success in (
+		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2, "", "failed", "", 1),
+		("maximum context length is 262144 tokens, however you requested 300000 tokens", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2, "", "failed", "", 1),
+		("model context window full", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2, "", "failed", "", 1),
+		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "failed", 2, "", "failed", "", 0),
+		("HTTP 401 unauthorized", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 1, "", "failed", "", 0),
+		("maximum context length exceeded", "mistralai/mistral-small-2603", "success", 1, "", "failed", "", 0),
+		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 1, "skip_open", "failed", "", 0),
+		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2, "run", "failed", "", 1),
+		("HTTP 429 rate limit", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2, "", "skipped_unmapped", "", 1),
+		("HTTP 429 rate limit", "mistralai/mistral-small-2603,openai/gpt-6-luna", "failed", 2, "", "skipped_unmapped", "", 0),
+		("HTTP 429 rate limit", "mistralai/mistral-small-2603", "success", 1, "", "skipped_unmapped", "", 0),
+		("", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 1, "run", "failed", "skip_open", 1),
+		("", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 0, "skip_open", "failed", "skip_open", 0),
+		("", "mistralai/mistral-small-2603,openai/gpt-6-luna", "skipped_budget", 2, "", "skipped_unmapped", "", 0),
+		("", "mistralai/mistral-small-2603,openai/gpt-6-luna", "skipped_budget", 1, "run", "failed", "skip_open", 0),
+		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "skipped_budget", 2, "", "failed", "", 0),
+	):
+		with tempfile.TemporaryDirectory(prefix="lite-mistral-overflow-") as temp_dir:
+			root = Path(temp_dir)
+			partial_request_file = root / "partial.txt"
+			active_file = root / "active.txt"
+			active_file.write_text("mistralai/mistral-small-2603\n", encoding="utf-8")
+			prompt_file = root / "prompt.txt"
+			prompt_file.write_text("review this\n", encoding="utf-8")
+			proc = subprocess.run(
+				["bash", "-c", "set -euo pipefail\n" + script],
+				env={
+					**os.environ,
+					"PREVIOUS_REVIEWS_DIR": temp_dir,
+					"REVIEWER_ACTIVE_MODELS_FILE": str(active_file),
+					"PROMPT_FILE": str(prompt_file),
+					"CALLS_FILE": str(root / "calls.txt"),
+					"PARTIAL_REQUEST_FILE": str(partial_request_file),
+					"MISTRAL_ERROR": error,
+					"MISTRAL_STATUS": mistral_status,
+					"TEST_MISTRAL_HEALTH_DECISION": mistral_health_decision,
+					"REVIEWER_MODELS": roster,
+					"FALLBACK_STATUS": fallback_status,
+					"TEST_HEALTH_DECISION": health_decision,
+					"REVIEW_TIER": review_tier,
+					"PR_NUMBER": "6438",
+				},
+				capture_output=True,
+				text=True,
+				check=True,
+			)
+			called_reviewers = (root / "calls.txt").read_text(encoding="utf-8").splitlines() if (root / "calls.txt").exists() else []
+			assert len(called_reviewers) == expected_count, (mistral_status, mistral_health_decision, fallback_status, proc.stdout, proc.stderr)
+			assert f"RESULT={expected_success}" in proc.stdout
+			assert partial_request_file.exists() == (fallback_status == "skipped_budget" and "openai/gpt-6-luna" in called_reviewers), (mistral_status, mistral_health_decision, fallback_status, proc.stdout, proc.stderr)
+			if partial_request_file.exists():
+				assert partial_request_file.read_text(encoding="utf-8") == "soft_deadline\n"
+			if expected_success:
+				assert "ACTIVE=openai/gpt-6-luna" in proc.stdout
+			else:
+				assert "ACTIVE=mistralai/mistral-small-2603" in proc.stdout
+
+
+def test_risk_tier_sole_mistral_retries_with_live_larger_window_reviewer() -> None:
+	test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer("disabled")
 
 
 def test_review_tier_disabled_keeps_risk_tier_selection_and_pick_guards_short_args() -> None:
@@ -4953,17 +5103,18 @@ def test_reviewer_failback_mapping_covers_live_reviewer_roster() -> None:
 		"minimax/minimax-m3",
 		"openai/gpt-6-luna",
 		"qwen/qwen3.7-plus",
-		"z-ai/glm-5.2",
 	]
-	assert sorted(unmapped) == []
+	# The catalog ships no other Mistral slug, so mistral-small has no chain:
+	# a prompt over its 262K window is one failed, non-blocking slot (PR #6438).
+	assert sorted(unmapped) == ["mistralai/mistral-small-2603"]
 	assert chains["deepseek/deepseek-v4-pro"] == ["deepseek/deepseek-v3.2"]
 	assert chains["google/gemini-3.1-flash-lite"] == ["google/gemini-3-flash-preview"]
 	assert chains["google/gemini-3.8-flash"] == ["google/gemini-3.1-flash-lite"]
 	assert chains["minimax/minimax-m3"] == ["minimax/minimax-m2.5"]
 	assert chains["openai/gpt-6-luna"] == ["openai/gpt-5.6-luna"]
 	assert chains["qwen/qwen3.7-plus"] == ["qwen/qwen3.6-plus"]
-	assert chains["z-ai/glm-5.2"] == ["z-ai/glm-5.3-flashx"]
 	# Retired-roster mappings stay for operator overrides (CLAUDE.md §6).
+	assert chains["z-ai/glm-5.2"] == ["z-ai/glm-5.3-flashx"]
 	assert chains["moonshotai/kimi-k3"] == ["moonshotai/kimi-k2.7-code"]
 	assert chains["x-ai/grok-4.6"] == ["x-ai/grok-4.20"]
 	assert chains["x-ai/grok-4.20"] == ["x-ai/grok-4.3"]
@@ -5249,6 +5400,15 @@ def test_reviewer_zero_success_guard_fails_open_when_every_review_slot_was_skipp
 	assert result["returncode"] == 0
 	assert "REVIEWERS_SUCCESSFUL=0\n" == result["github_env"]
 	assert "all review slots were skipped fail-open" in result["stdout"]
+
+
+def test_reviewer_zero_success_guard_fails_closed_for_lite_without_a_successful_reviewer() -> None:
+	for review_tier in ("lite", "disabled", "trivial", "standard", "full"):
+		for status in ("skipped_open", "skipped_unmapped", "failed"):
+			result = _run_reviewer_zero_success_guard_harness(statuses=[status], review_tier=review_tier)
+			assert result["returncode"] == 1
+			assert result["github_env"] == ""
+			assert "All reviewers failed." in result["stdout"]
 
 
 def test_reviewer_filter_harness_strips_low_signal_paths_and_preserves_exemptions() -> None:
@@ -7982,6 +8142,7 @@ def main() -> int:
 	test_reviewer_soft_deadline_fallback_requests_partial_finalize_and_exits_green()
 	test_reviewer_health_dispatch_logs_to_stderr_only()
 	test_reviewer_zero_success_guard_fails_open_when_every_review_slot_was_skipped()
+	test_reviewer_zero_success_guard_fails_closed_for_lite_without_a_successful_reviewer()
 	test_reviewer_filter_harness_strips_low_signal_paths_and_preserves_exemptions()
 	test_reviewer_filter_script_preserves_nested_exempt_paths()
 	test_reviewer_filter_script_preserves_root_level_migration_exempt_paths()
@@ -8022,7 +8183,9 @@ def main() -> int:
 	test_reviewer_and_consolidator_slop_scan_context_is_wired()
 	test_review_tier_resolver_routes_lite_standard_and_full_and_handles_overrides()
 	test_review_tier_random_pick_is_seeded_by_pr_number_and_pinned_by_variables()
-	test_review_tier_lite_draws_from_standard_list_and_defaults_skip_expensive_models()
+	test_review_tier_lite_draws_from_standard_list_and_defaults_use_whole_panel()
+	test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer("lite")
+	test_risk_tier_sole_mistral_retries_with_live_larger_window_reviewer()
 	test_review_tier_disabled_keeps_risk_tier_selection_and_pick_guards_short_args()
 	test_review_tier_protected_paths_match_deterministic_skip_gate()
 	test_auto_merge_guard_honours_configured_orchestrator_branch_pattern()

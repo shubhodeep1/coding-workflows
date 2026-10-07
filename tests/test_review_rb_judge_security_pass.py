@@ -314,6 +314,18 @@ def test_disable_auto_merge_retries_transient_failure(tmp_path: Path) -> None:
 	assert calls.count(["pr", "merge", "42", "--repo", "o/r", "--disable-auto"]) == 2
 
 
+def test_disable_auto_merge_fails_closed_without_shared_helper(tmp_path: Path) -> None:
+	isolated = tmp_path / "isolated"
+	isolated.mkdir()
+	copy = isolated / HELPER.name
+	copy.write_bytes(HELPER.read_bytes())
+	result = subprocess.run(
+		["bash", "-c", f'set -euo pipefail; source "{copy}"; REPOSITORY=o/r; PR_NUMBER=42; rb_security_disable_auto_merge {HEAD}'],
+		capture_output=True, text=True, check=False,
+	)
+	assert result.returncode != 0
+
+
 @pytest.mark.parametrize("env", [
 	{"FAKE_GH_FAIL": "pr_read"},
 	{"FAKE_GH_AUTO_MERGE": "1", "FAKE_GH_FAIL": "disable_auto"},
