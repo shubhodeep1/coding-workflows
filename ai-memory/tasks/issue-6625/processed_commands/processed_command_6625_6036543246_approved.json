@@ -5,13 +5,29 @@
   "entry_id": "processed_command_6625_6036543246_approved",
   "issue_number": 6625,
   "metadata": {
+    "branch": "ai/issue-6625",
+    "changed_files": [
+      ".ai/.workspace_source_manifest.txt",
+      ".github/workflows/review_autofix.yml",
+      "agents.md",
+      "changelog.d/6625-failure-cap-support-version.md",
+      "scripts/orchestrate_poll_process.sh",
+      "scripts/workflow_failure_heal.py",
+      "tests/test_orchestrate_poll_noop_suspicious_recovery.py",
+      "tests/test_workflow_failure_heal.py"
+    ],
+    "issue_number": 6625,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6625",
+    "pr_number": 6627,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6627",
+    "run_attempt": "1",
+    "run_id": "37611367842",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37611367842"
   },
   "run_attempt": 1,
   "run_id": "37611367842",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-07T11:06:33Z",
+  "status": "completed",
+  "timestamp": "2026-10-07T11:29:55Z",
   "workflow": "implement"
 }
