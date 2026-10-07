@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_review_pipeline_contract.py:test_head_gate_is_verified_and_binds_merge_status_to_evaluated_head (assertion line for PR #$6438) | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The test assertion allegedly uses literal `PR #$6438` instead of the expected `${PR_NUMBER}` syntax.\n  WHY: The reviewer says this causes an AssertionError; other reviewers report that the escaped f-string produces `${PR_NUMBER}` and matches the judge script.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description should document all included changelog fragments; it lists two fragments, while the PR diff includes a third, `changelog.d/6528-review-head-gate-status.md`.\n  expected_change_site: PR description\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  EVIDENCE: The PR description lists `changelog.d/6438-openrouter-mgmt-key-reads.md` and `changelog.d/6438-reviewer-panel-random-tiers.md`, but the PR diff also includes `changelog.d/6528-review-head-gate-status.md`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_autofix_review_pipeline_contract.py:test_head_gate_is_verified_and_binds_merge_status_to_evaluated_head (assertion line for PR #$6438) | severity=BLOCKER | confidence=5\n  PROBLEM: The test assertion uses a literal shell variable syntax `PR #$6438` inside a Python f-string, which does not expand to the expected shell variable `${PR_NUMBER}` used in the target script `scripts/review_rb_judge.sh`.\n  WHY: The test will raise an AssertionError because the actual output from the script contains `PR #${PR_NUMBER}` (or the expanded value), not the literal string `PR #$6438`.\n\n- Requirement: PR description must document all included changelog fragments.\n  Expected change site: PR description or changelog.d/\n  Evidence of absence: The PR description lists only two changelog fragments (`changelog.d/6438-openrouter-mgmt-key-reads.md` and `changelog.d/6438-reviewer-panel-random-tiers.md`), but the PR diff includes a third fragment `changelog.d/6528-review-head-gate-status.md`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: The PR description's \"Testing\" section claims \"Two fragments for one PR follows the precedent of #5558\" and only lists `changelog.d/6438-openrouter-mgmt-key-reads.md` and `changelog.d/6438-reviewer-panel-random-tiers.md`.\n  Expected change site: PR description (title or summary) at `https://github.com/shubhodeep1/coding-workflows/pull/6438`.\n  Evidence of absence: A third fragment `changelog.d/6528-review-head-gate-status.md` is present in the PR diff (security-classified, head-gate commit-status publication + auto-merge withdrawal). The PR title and body never mention this feature, so a reviewer reading the description cannot anticipate the head-gate gate, the two new env vars (`REVIEW_HEAD_GATE_STATUS_ENABLED`, `REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED`), the new `scripts/review_head_gate.sh` helper, the new `tests/test_review_head_gate.py` test, or the security-pass/judge/auto-merge helper changes that call it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: PR description states \"Two fragments for one PR follows the precedent of #5558\" and lists `changelog.d/6438-openrouter-mgmt-key-reads.md` and `changelog.d/6438-reviewer-panel-random-tiers.md`.\n  Expected change site: PR description\n  Evidence of absence: The PR diff includes a third changelog fragment `changelog.d/6528-review-head-gate-status.md` for the head-gate status feature (auto-merge withdrawal and commit status publication), but this fragment is not mentioned in the PR description. The head-gate status feature is a substantial security-relevant addition that ships user-visible behavior (stale auto-merge withdrawal, SHA-bound commit status), yet the PR description does not document it. Reviewers reading the PR description would not anticipate this feature.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===\n\n=== FINDINGS FROM z-ai_glm-5_2 ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_2 ===",
+  "fingerprint": "dd4350a91ba6339d98c59f69ef0d95ed86e3ef01355f2e018fcfc5c8fe5556f7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6438,
+    "run_id": "37566596583",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37566596583",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261007034706_3cf358a63a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6438,
+    "run_id": "37566596583"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-07T03:47:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
