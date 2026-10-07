@@ -217,6 +217,12 @@ class _GitInvocation(NamedTuple):
 	env_wrapped: bool = False
 	env_directory_unresolved: bool = False
 	explicit_git_directory: bool = False
+	# True when the directory is unknown because of an explicit override the
+	# hook could not resolve (an appended GIT_DIR+=/GIT_WORK_TREE+=, an
+	# unresolvable -C / env -C, GIT_DIR or --git-dir path), as opposed to shell
+	# control flow or an unknown cd. Such a write never falls back to the
+	# session checkout: the override names another repository.
+	explicit_directory_unresolved: bool = False
 
 
 class _GuardTarget(NamedTuple):
@@ -686,6 +692,9 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 		index += 1
 		git_cwd = env_cwd
 		uncertain = git_cwd is None or appended_git_selector
+		# Git applies an appended GIT_DIR+=/GIT_WORK_TREE+= value, but the hook
+		# cannot know the prior value, so the selected repository is unknown.
+		explicit_directory_unresolved |= appended_git_selector
 		while index < len(tokens) and tokens[index].startswith("-"):
 			option = tokens[index]
 			if option.startswith(("-C", "--git-dir", "--work-tree")):
@@ -711,8 +720,9 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 					# Git applies an absolute -C on its own, even after an unknown cd.
 					git_cwd = (_literal_guard_path(value, git_cwd or checkout)
 						if git_cwd or os.path.isabs(value) else None)
-					# An appended GIT_DIR+=/GIT_WORK_TREE+= value is never applied, so
-					# the directory stays unresolved whatever -C selects.
+					# Git applies an appended GIT_DIR+=/GIT_WORK_TREE+= value on top
+					# of the shell's, which the hook cannot read, so the directory
+					# stays unresolved whatever -C selects.
 					uncertain = git_cwd is None or appended_git_selector
 					explicit_directory_unresolved |= uncertain
 				elif option.startswith("--git-dir"):
@@ -735,7 +745,9 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			checkout if uncertain else git_cwd or checkout,
 			{} if uncertain else environment,
 			tokens[index], tokens[index + 1:],
-			("could not resolve git command directory (env -C/--chdir); cannot check checkout PR history"
+			("could not resolve explicit git push directory; cannot check checkout PR history"
+				if (explicit_directory_unresolved or (env_chdir_seen and env_cwd is None)) and tokens[index] == "push" else
+			 "could not resolve git command directory (env -C/--chdir); cannot check checkout PR history"
 				if env_chdir_seen and env_cwd is None else
 			 "could not resolve explicit git command directory"
 				if explicit_directory_unresolved and tokens[index] == "commit" else
@@ -744,6 +756,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			env_wrapped,
 			env_directory_unresolved,
 			explicit_git_directory,
+			explicit_directory_unresolved or (env_chdir_seen and env_cwd is None),
 		))
 	return invocations
 
@@ -1717,6 +1730,13 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			unknown_destination_reasons.append(
 				"could not resolve git commit directory; per-command Git configuration may select another checkout"
 			)
+		if invocation.subcommand == "push" and invocation.warning and invocation.explicit_directory_unresolved:
+			# Finding #6305: an unresolvable explicit override (GIT_DIR+=, an
+			# unresolved -C / env -C / GIT_DIR) selects a repository this hook
+			# cannot see. The session checkout's PR history says nothing about
+			# it, so the push asks without querying it.
+			unknown_destination_reasons.append(invocation.warning)
+			continue
 		if invocation.subcommand == "push" and invocation.warning:
 			uncertain_push_reasons.append(invocation.warning)
 		if invocation.subcommand == "push" and invocation.config_override:

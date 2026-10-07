@@ -962,10 +962,15 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   querying the session checkout's PR history. An absolute `env -C` or
   `git -C` path is resolved even inside shell control flow. Other ambiguous
   commit directories warn and check the checkout; an unparseable `env -S`
-  command also asks for confirmation. A push from an unresolved directory
-  (including an appended `GIT_DIR+=` / `GIT_WORK_TREE+=`, whose value is
-  never applied) is checked against the session checkout, which can still
-  block, and otherwise asks.
+  command also asks for confirmation. A push whose directory is unresolved
+  because of an explicit override (an appended `GIT_DIR+=` /
+  `GIT_WORK_TREE+=`, which Git applies on top of a shell state the hook
+  cannot read, or an unresolvable `-C`, `env -C`, `GIT_DIR` or `--git-dir`
+  path) asks for confirmation without querying the session checkout's PR
+  history, since that checkout is not the pushed repository. A push whose
+  directory is unknown only because of shell control flow or an unresolved
+  `cd` is still checked against the session checkout, which can block, and
+  otherwise asks.
   Leading redirections, including those after environment assignments, do
   not bypass commit/push detection. A spaced, quoted or escaped digit before a
   redirection (`2 >out`, `'2'>out`) is a push refspec with the normal check;
