@@ -2772,7 +2772,10 @@ jobs:
           # (PHASE7_WAIT_BUDGET_MINUTES) and the finalization reserve inside
           # E2E_JOB_TIMEOUT_MINUTES, so the serial budget checked in
           # "Validate prerequisites" still holds. Without a recorded job
-          # start there is no extension.
+          # start there is no extension. The cap bounds only the extension:
+          # the base deadline above is never shortened (pre-#6606 behaviour),
+          # so a Phase 4b that starts after the cap gets no extension, not a
+          # smaller budget.
           RETRY_BASE_DEADLINE="${DEADLINE}"
           RETRY_DEADLINE_CEILING="${DEADLINE}"
           if [[ "${E2E_JOB_STARTED_EPOCH:-}" =~ ^[0-9]+$ ]]; then

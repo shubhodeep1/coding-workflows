@@ -7,7 +7,7 @@
 | --- | --- |
 | Seconds into the 2026-10-07 gate when Phase 0a failed | 10 |
 | Retry run queued time in the 2026-10-06 gate | about 24 of 25 minutes |
-| Latest retry deadline with default budgets | 240 minutes after the job starts (300 − 30 − 10 − 20) |
+| Latest point a queue-time extension can reach, default budgets | 240 minutes after the job starts (300 − 30 − 10 − 20); the base 25-minute retry budget is never shortened |
 | Change to `E2E_JOB_TIMEOUT_MINUTES` or any job timeout | none |
 
 What this means for operators: the nightly `promote-main-to-stable.yml` cycle can get past the smoke gate again, so consumer repos can receive the work merged since 2026-10-03 once a proving cycle completes. A Phase 4b `retry_timeout` now logs how many seconds the run spent queued and how far the deadline was extended.
