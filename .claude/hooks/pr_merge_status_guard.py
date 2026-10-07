@@ -14,9 +14,11 @@ Each guarded Bash git invocation is checked in its own effective repository:
 a preceding resolvable cd, git -C, and git-directory/work-tree overrides are
 applied without executing the Bash text. Pushes with explicit branch refspecs
 are checked against the destination branch and the source commit, including
-when the source is a detached HEAD. Unknown directories warn and fall back to
-the session checkout check; unresolved directory-changing commands also require
-commit confirmation. Unresolvable explicit push targets require confirmation.
+when the source is a detached HEAD. Unresolved env-wrapped commit directories
+require confirmation rather than checking the wrong repository. Other unknown
+directories warn and check the session checkout; unresolved directory-changing
+commits and pushes then require confirmation. Unresolvable explicit push targets
+also require confirmation.
 Repeated targets share a PR snapshot
 per repository and branch, while different source tips are checked separately.
 A `cd` or `exit` with a redirect that might fail (anything but a plain
@@ -192,6 +194,7 @@ class _GitInvocation(NamedTuple):
 	arguments: list[str]
 	warning: str = ""
 	config_override: bool = False
+	env_wrapped: bool = False
 	env_directory_unresolved: bool = False
 	explicit_git_directory: bool = False
 
@@ -494,11 +497,12 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			if any("git" in word or "$" in word for word in tokens[env_index + 1:]):
 				invocations.append(_GitInvocation(checkout, {}, "push", [], "unparsed env wrapper", True))
 			continue
+		env_wrapped = index != env_index
 		env_cwd = working_directory
 		explicit_directory_unresolved = False
 		env_directory_unresolved = False
 		env_chdir_seen = False
-		if index != env_index:
+		if env_wrapped:
 			config_override = True
 			for position in range(env_index + 1, index):
 				word = tokens[position]
@@ -575,6 +579,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				if explicit_directory_unresolved and tokens[index] == "commit" else
 				"could not resolve git command directory; checking the session checkout instead") if uncertain else "",
 			config_override,
+			env_wrapped,
 			env_directory_unresolved,
 			explicit_git_directory,
 		))
@@ -1534,7 +1539,10 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		if invocation.subcommand == "push" and invocation.warning == "unparsed env wrapper":
 			unverified_destinations.add("unparsed env-wrapped Git command")
 			continue
-		if invocation.subcommand == "commit" and invocation.warning and (invocation.config_override or invocation.explicit_git_directory):
+		if invocation.subcommand == "commit" and invocation.warning and invocation.env_wrapped:
+			_request_confirmation("could not resolve git commit directory (env-wrapped); the session checkout may not be the commit target")
+			continue
+		if invocation.subcommand == "commit" and invocation.warning and invocation.explicit_git_directory:
 			_request_confirmation("could not resolve git commit directory; PR status cannot be checked for the intended checkout")
 			continue
 		if invocation.subcommand == "push" and invocation.warning:

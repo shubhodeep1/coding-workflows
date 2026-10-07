@@ -1439,6 +1439,8 @@ def test_env_wrapped_commit_checks_selected_repo(merged_branch_repo, monkeypatch
 
 @pytest.mark.parametrize("command", [
 	"env -C /does-not-exist git commit -m x",
+	"env GIT_DIR=$REPO git commit -m x",
+	"env -C . git -C $REPO commit -m x",
 	"env -C/does-not-exist git commit -m x",
 	"env --chdir=/does-not-exist git commit -m x",
 	"env GIT_DIR=/does-not-exist git commit -m x",
@@ -1464,9 +1466,11 @@ def test_env_unresolved_commit_directory_asks_instead_of_checking_checkout(merge
 	if "GIT_DIR=" in command:
 		assert "could not resolve git commit directory" in decision["hookSpecificOutput"]["permissionDecisionReason"]
 	assert "checking the session checkout instead" not in json.dumps(decision)
-	if command.startswith("env -C"):
+	if command.startswith("env -C") and " git -C " not in command:
 		assert "no checkout was checked" in decision["hookSpecificOutput"]["permissionDecisionReason"]
 		assert "merged-PR guard needs confirmation" in decision["systemMessage"]
+	if command.startswith("env GIT_DIR="):
+		assert "could not resolve git commit directory" in decision["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_env_chdir_commit_still_asks_when_warning_text_changes(merged_branch_repo, monkeypatch, capsys) -> None:
@@ -1610,6 +1614,34 @@ def test_per_command_config_commit_keeps_the_merged_pr_check(merged_branch_repo,
 	monkeypatch.setattr(guard, "query_pull_requests", listing)
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
 		"tool_input": {"command": "git -c user.name=bot commit -m x"}})
+	assert code == 2 and "Branch `feature/x`" in message
+
+
+@pytest.mark.parametrize("command", [
+	"if true; then git -c user.name=bot commit -m x; fi",
+	"if true; then git --config-env=user.name=BOT_NAME commit -m x; fi",
+	"if true; then GIT_CONFIG_COUNT=0 git commit -m x; fi",
+])
+def test_ambiguous_non_env_config_commit_warns_without_asking(merged_branch_repo, monkeypatch, capsys, command: str) -> None:
+	repo, _ = merged_branch_repo
+	_git(repo, "checkout", "main")
+	monkeypatch.setattr(guard, "_read_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: [])
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": command}})
+	assert code == 0 and message == ""
+	response = json.loads(capsys.readouterr().out.splitlines()[-1])
+	assert "could not resolve git command directory" in response["systemMessage"]
+	assert "hookSpecificOutput" not in response
+
+
+def test_ambiguous_config_commit_still_checks_merged_pr(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	merged_sha = _git(repo, "rev-parse", "HEAD")
+	monkeypatch.setattr(guard, "_read_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "_write_cache", lambda *args: None)
+	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: [dict(MERGED_PR, headRefOid=merged_sha)])
+	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "if true; then git -c user.name=bot commit -m x; fi"}})
 	assert code == 2 and "Branch `feature/x`" in message
 
 

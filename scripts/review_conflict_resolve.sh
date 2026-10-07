@@ -561,6 +561,18 @@ _resolver_fail_closed()
 {
   echo "AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=$1 action=fail_closed" >&2
   echo "::error::Conflict resolver isolation unavailable (reason=$1); refusing host fallback." >&2
+  # Name the failure for the review-autofix-failure:v1 marker ("Assemble
+  # failure evidence" reads AUTOFIX_FAILURE_REASON). The gate's identical-
+  # failure cap stops a head on the first marker whose reason
+  # workflow_failure_heal.py lists in NON_RETRYABLE_FAILURE_REASONS
+  # (PR #6438: ~28 identical sandbox_path_unsupported runs on one head).
+  # Integration-sync PRs keep the generic reason: their failures must keep
+  # counting toward the resolver retry-state escape threshold, whose
+  # escalation drives the orchestrator's automatic branch rebuild.
+  if [ -n "${GITHUB_ENV:-}" ] && [ "${IS_INTEGRATION_SYNC:-false}" != "true" ] &&
+     [[ "$1" =~ ^[a-z][a-z0-9_]{0,60}$ ]]; then
+    echo "AUTOFIX_FAILURE_REASON=conflict_resolver_$1" >> "${GITHUB_ENV}" || true
+  fi
   if type _persist_resolver_retry_state_from_current_failure >/dev/null 2>&1; then
     RESOLVER_ISOLATION_FAILURE_REASON="$1" _persist_resolver_retry_state_from_current_failure || true
   fi
@@ -568,6 +580,30 @@ _resolver_fail_closed()
   if [ -n "${tmp_output:-}" ]; then rm -f -- "${tmp_output}"; fi
   if [ -n "${_stall_status_file:-}" ]; then rm -f -- "${_stall_status_file}"; fi
   exit 1
+}
+
+# Fail closed on a rejected conflict path set (check-paths exit 1).
+# $1 is the report check-paths wrote: `host_only<TAB><path>` per path the
+# sandbox policy keeps on the host (generated files under .ai/, host-executed
+# hooks such as .claude/hooks/pr_merge_status_guard.py, unsupported file
+# types), `unsafe` for symlinks and odd names. When every rejection is
+# host_only the merge needs a human, so name the paths once in one ::error::
+# line (the failure comment's "First error") and stop with
+# sandbox_path_host_only; the model never sees any of the conflict set,
+# because a merge commit needs every path resolved. Anything else keeps the
+# nameless sandbox_path_unsupported.
+_resolver_fail_closed_for_conflict_paths()
+{
+  local conflict_path_report="$1" conflict_host_only_paths=""
+  if [ -s "${conflict_path_report}" ] && [ ! -L "${conflict_path_report}" ] &&
+     ! grep -qv $'^host_only\t[A-Za-z0-9_.][A-Za-z0-9._/-]*$' "${conflict_path_report}"; then
+    conflict_host_only_paths="$(awk -F'\t' 'NR <= 20 { printf "%s%s", (NR > 1 ? ", " : ""), $2 } NR == 21 { printf ", ..." }' "${conflict_path_report}")" || conflict_host_only_paths=""
+  fi
+  if [ -n "${conflict_host_only_paths}" ]; then
+    echo "::error::Conflict resolver: host-only conflicted path(s) need a manual merge: ${conflict_host_only_paths}" >&2
+    _resolver_fail_closed sandbox_path_host_only
+  fi
+  _resolver_fail_closed sandbox_path_unsupported
 }
 
 # Each invocation prepares its own snapshot: a failed Claude run may have
@@ -2242,8 +2278,10 @@ resolver_workspace_py="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_workspac
 if [ ! -f "${resolver_sandbox_sh}" ] || [ ! -f "${resolver_workspace_py}" ]; then
   _resolver_fail_closed sandbox_support_missing
 fi
-if ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}" >/dev/null 2>&1; then
-  _resolver_fail_closed sandbox_path_unsupported
+resolver_conflict_path_report="${RUNTIME_DIR}/resolver_conflict_path_report.txt"
+rm -f -- "${resolver_conflict_path_report}"
+if ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}" "${resolver_conflict_path_report}" >/dev/null 2>&1; then
+  _resolver_fail_closed_for_conflict_paths "${resolver_conflict_path_report}"
 fi
 
 _resolver_sandbox_opencode_attempt()
@@ -2463,10 +2501,11 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     resolver_sandbox_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_sandbox.sh"
     resolver_workspace_py="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_workspace.py"
     if [ "${AI_ENGINE_RESOLVED_CONFLICT_RESOLVER:-codex}" = "claude" ]; then
+      rm -f -- "${RUNTIME_DIR}/resolver_conflict_path_report.txt"
       if [ ! -f "${resolver_sandbox_sh}" ] || [ ! -f "${resolver_workspace_py}" ]; then
         _resolver_fail_closed sandbox_prepare_failed
-      elif ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}"; then
-        _resolver_fail_closed sandbox_path_unsupported
+      elif ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}" "${RUNTIME_DIR}/resolver_conflict_path_report.txt"; then
+        _resolver_fail_closed_for_conflict_paths "${RUNTIME_DIR}/resolver_conflict_path_report.txt"
       fi
       rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
       resolver_claude_rc=0
