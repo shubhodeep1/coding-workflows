@@ -580,6 +580,52 @@ def test_manifest_union_integration_sync_fails_before_resolver() -> None:
 		assert allowlist.read_text(encoding="utf-8") == f"{MANIFEST_PATH}\n"
 		assert not github_env.exists()
 
+def test_manifest_modify_delete_with_conflicted_gitignore_fails_closed() -> None:
+	"""A conflicted .gitignore cannot prove the resolved tree ignores the manifest."""
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp = Path(tmp_name)
+		repo = tmp / "repo"
+		repo.mkdir()
+		env = _scrubbed_git_env()
+
+		def git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+			return subprocess.run(
+				["git", *args], cwd=repo, env=env, check=check,
+				text=True, capture_output=True,
+			)
+
+		manifest = repo / MANIFEST_PATH
+		gitignore = repo / ".gitignore"
+		git("init", "-q", "-b", "main")
+		git("config", "user.name", "t")
+		git("config", "user.email", "t@t")
+		manifest.parent.mkdir(parents=True)
+		manifest.write_text("a.py\n", encoding="utf-8")
+		gitignore.write_text("base.log\n", encoding="utf-8")
+		git("add", "-A")
+		git("commit", "-qm", "base")
+		git("checkout", "-q", "-b", "feat")
+		manifest.write_text("a.py\nb.py\n", encoding="utf-8")
+		gitignore.write_text("feat.log\n", encoding="utf-8")
+		git("commit", "-qam", "modify manifest and gitignore")
+		git("checkout", "-q", "main")
+		git("rm", "-q", "--", MANIFEST_PATH)
+		gitignore.write_text(f"{MANIFEST_PATH}\n", encoding="utf-8")
+		git("add", "--", ".gitignore")
+		git("commit", "-qm", "untrack manifest")
+		git("checkout", "-q", "feat")
+		assert git("merge", "--no-commit", "--no-ff", "main", check=False).returncode != 0
+		unmerged = git("diff", "--name-only", "--diff-filter=U", "--").stdout.split()
+		assert sorted(unmerged) == sorted([".gitignore", MANIFEST_PATH]), unmerged
+		result, github_env, allowlist = _run_live_union_block(repo, tmp)
+		assert result.returncode != 0, result.stdout + result.stderr
+		assert "a .gitignore is itself unmerged" in result.stdout, result.stdout
+		assert "::error::Manifest union-merge: unhandled reason=not_gitignored stages=1 2" in result.stdout, result.stdout
+		assert MANIFEST_PATH in allowlist.read_text(encoding="utf-8").splitlines()
+		assert not github_env.exists()
+		assert MANIFEST_PATH in _git_out(repo, "diff", "--name-only", "--diff-filter=U", "--").split()
+
+
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0

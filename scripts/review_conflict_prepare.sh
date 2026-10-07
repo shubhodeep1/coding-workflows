@@ -232,7 +232,8 @@ fi
 #     1+3: one side deleted or untracked the manifest, the other
 #     changed it) honours the deletion with `git rm --cached`, but only
 #     when the merged tree's .gitignore ignores the path
-#     (`git check-ignore --no-index`), i.e. it is the generated
+#     (`git check-ignore --no-index`) and no .gitignore is itself
+#     unmerged, i.e. it is the generated
 #     inventory workspace_init.sh rebuilds at runtime.  The worktree
 #     copy stays behind as an ignored, untracked file.  Without this,
 #     the manifest stayed in the resolver allowlist and a resolver
@@ -283,7 +284,15 @@ if [ "${_resolver_allowlist_count}" -gt 0 ] \
             ;;
           ' 1 2 '|' 1 3 ')
             _mu_ignored_rc=0
-            git check-ignore -q --no-index -- "${MANIFEST_UNION_PATH}" || _mu_ignored_rc=$?
+            # A still-conflicted .gitignore carries both sides' rules (plus
+            # markers) in the worktree, so check-ignore cannot prove the
+            # *resolved* .gitignore ignores the manifest: fail closed.
+            if git diff --name-only --diff-filter=U -- | grep -Eq '(^|/)\.gitignore$'; then
+              echo "Manifest union-merge: a .gitignore is itself unmerged; cannot verify the resolved ignore rules for ${MANIFEST_UNION_PATH}."
+              _mu_ignored_rc=1
+            else
+              git check-ignore -q --no-index -- "${MANIFEST_UNION_PATH}" || _mu_ignored_rc=$?
+            fi
             if [ "${_mu_ignored_rc}" -eq 0 ]; then
               git rm -q --cached -- "${MANIFEST_UNION_PATH}"
               _mu_resolved=true
