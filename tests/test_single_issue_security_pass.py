@@ -560,8 +560,8 @@ def test_a_failed_dispatch_holds_and_records_a_failed_cycle(tmp_path: Path) -> N
 
 def test_a_failed_dispatch_without_a_marker_still_holds(tmp_path: Path) -> None:
 	result, calls, output = _run(tmp_path, "gate", env={"FAKE_GH_FAIL": "dispatch,comment_write"})
-	assert result.returncode == 0 and output == "hold=true\nhold_reason=dispatch_failed\n"
-	assert "Could not post the failed security-pass marker" in result.stdout
+	assert result.returncode == 1 and output == "hold=true\nhold_reason=dispatch_failed\n"
+	assert "::error::Could not post the failed security-pass marker" in result.stdout
 	assert any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
 
 
@@ -587,6 +587,12 @@ def test_exhausted_retry_dispatch_failure_holds(tmp_path: Path) -> None:
 	assert any(call[:2] == ["workflow", "run"] for call in calls)
 	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
 	assert len(posted) == 1 and posted[0][-1].endswith(_marker("failed", HEAD, 6))
+
+
+def test_exhausted_retry_dispatch_failure_without_a_marker_fails_closed(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("failed", HEAD, 5))], env={"FAKE_GH_FAIL": "dispatch,comment_write"})
+	assert result.returncode == 1 and output == "hold=true\nhold_reason=dispatch_failed\n"
+	assert "reason=dispatch_failed_exhausted" in result.stdout and "the head attempt is not recorded" in result.stdout
 
 
 def test_repeated_exhausted_dispatch_failures_reach_the_label(tmp_path: Path) -> None:

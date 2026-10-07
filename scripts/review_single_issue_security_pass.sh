@@ -37,7 +37,9 @@
 #           cycle cap it also records a failed cycle, so later review runs
 #           retry until the cycle budget is exhausted. Past the cap a failed
 #           retry dispatch records a failed head attempt, so repeated failures
-#           still reach the ai:security-pass-failed label.
+#           still reach the ai:security-pass-failed label. If that failed
+#           marker cannot be posted, the step still holds but exits 1 so the
+#           unrecorded failure surfaces through the review failure path.
 #           Every hold=true also writes `hold_reason=<reason>`: audit_dispatched,
 #           audit_pending or awaiting_followups when matching open follow-ups
 #           are younger than the limit; followups_missing,
@@ -321,7 +323,7 @@ single_pass_gate()
 	local exhausted_head_limit="${SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS:-2}" exhausted_retry="false" head_attempts=0
 	local pattern="${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}"
 	local state base head_ref head_sha head_repo labels linked skip_json markers latest latest_status latest_head latest_created
-	local cycles_used next_cycle age_hours workflow body extensions effective_max completed_findings
+	local cycles_used next_cycle age_hours workflow body extensions effective_max completed_findings failed_marker_unrecorded="false"
 	[[ "${max_cycles}" =~ ^[1-9][0-9]*$ ]] || max_cycles=5
 	[[ "${stale_hours}" =~ ^[1-9][0-9]*$ ]] || stale_hours=6
 	[[ "${followup_stale_hours}" =~ ^[1-9][0-9]*$ ]] || followup_stale_hours=24
@@ -520,8 +522,10 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 The retry audit of \`${head_sha}\` could not be dispatched (\`${workflow}\`). Auto-merge stays off, and this counts as head attempt $((head_attempts + 1)) of ${exhausted_head_limit}. Once the head attempts are used up, the PR is labelled \`ai:security-pass-failed\`.
 
 $(single_pass_marker failed "${head_sha}" "${next_cycle}")"
-			gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${body}" >/dev/null 2>&1 \
-				|| echo "::warning::Could not post the failed security-pass marker on PR #${PR_NUMBER}; the head attempt is not recorded and the next review run retries."
+			if ! gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${body}" >/dev/null 2>&1; then
+				echo "::error::Could not post the failed security-pass marker on PR #${PR_NUMBER}; the head attempt is not recorded. Holding the merge and failing closed so workflow recovery retries."
+				failed_marker_unrecorded="true"
+			fi
 			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=dispatch_failed_exhausted cycle=${next_cycle}"
 		else
 			# Below the cycle cap, record the failed dispatch as a used cycle so
@@ -532,12 +536,20 @@ $(single_pass_marker failed "${head_sha}" "${next_cycle}")"
 The audit of \`${head_sha}\` could not be dispatched (\`${workflow}\`). A consumer \`ai-security-audit.yml\` that predates the \`pr_number\` input fails this way; syncing the wrapper fixes it. Auto-merge stays off, and this counts as cycle ${next_cycle} of ${effective_max}. A later review run retries the dispatch. Once the cycles are used up, the PR is labelled \`ai:security-pass-failed\`.
 
 $(single_pass_marker failed "${head_sha}" "${next_cycle}")"
-			gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${body}" >/dev/null 2>&1 \
-				|| echo "::warning::Could not post the failed security-pass marker on PR #${PR_NUMBER}; the cycle is not recorded and the next review run retries."
+			if ! gh api "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${body}" >/dev/null 2>&1; then
+				echo "::error::Could not post the failed security-pass marker on PR #${PR_NUMBER}; the cycle is not recorded. Holding the merge and failing closed so workflow recovery retries."
+				failed_marker_unrecorded="true"
+			fi
 			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=dispatch_failed workflow=${workflow} cycle=${next_cycle}"
 		fi
 		echo "::warning::Could not dispatch ${workflow} for PR #${PR_NUMBER}; holding the merge until an audit can run."
 		single_pass_output true dispatch_failed
+		# An unrecorded failure cannot count toward exhaustion; fail the step
+		# (hold already written) so the review failure path surfaces it and its
+		# identical-failure cap escalates instead of retrying silently forever.
+		if [ "${failed_marker_unrecorded}" = "true" ]; then
+			return 1
+		fi
 		return 0
 	fi
 	if [ "${exhausted_retry}" = "true" ]; then
