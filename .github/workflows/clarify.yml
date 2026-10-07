@@ -844,7 +844,11 @@ jobs:
           WORKFLOW_HEAL_EVIDENCE_MAX_BYTES: ${{ vars.WORKFLOW_HEAL_EVIDENCE_MAX_BYTES || '' }}
           WORKFLOW_HEAL_EVIDENCE_MAX_RUNS: ${{ vars.WORKFLOW_HEAL_EVIDENCE_MAX_RUNS || '' }}
         run: |
-          if [ "$(python3 scripts/workflow_failure_heal.py heal-route --issue-json "${ISSUE_META_FILE}")" = true ]; then
+          if ! heal_route="$(python3 scripts/workflow_failure_heal.py heal-route --issue-json "${ISSUE_META_FILE}")"; then
+            echo '::error::Heal route classification failed' >&2
+            exit 1
+          fi
+          if [ "${heal_route}" = true ]; then
             echo 'HEAL_ROUTE=true' >> "${GITHUB_ENV}"
             bash scripts/workflow_failure_heal_evidence.sh
           fi

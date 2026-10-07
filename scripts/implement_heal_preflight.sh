@@ -9,10 +9,13 @@ refuse()
 {
 	local reason="$1"
 	echo "HEAL_SCOPE_REFUSED issue=${ISSUE_NUMBER:-unknown} reason=${reason}"
-	# Never allow another editor path to run after a failed authorization read.
-	echo 'SKIP_IMPLEMENT=true' >> "${GITHUB_ENV}"
 	# errexit is suspended in a function reached through `|| refuse`, so each
-	# write is checked: a missing marker or latch must fail the job, not pass.
+	# write is checked: a missing skip flag, marker or latch must fail the job.
+	# Never allow another editor path to run after a failed authorization read.
+	if ! echo 'SKIP_IMPLEMENT=true' >> "${GITHUB_ENV}"; then
+		echo "::error::HEAL_SCOPE_REFUSED issue=${ISSUE_NUMBER:-unknown} reason=${reason} outcome=skip_flag_failed" >&2
+		exit 1
+	fi
 	if ! gh issue comment "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body "Workflow heal scope verification failed (${reason}); implementation was refused. <!-- ai:workflow-heal-scope-unverified:v1 reason=${reason} -->" >/dev/null; then
 		echo "::error::HEAL_SCOPE_REFUSED issue=${ISSUE_NUMBER:-unknown} reason=${reason} outcome=comment_failed" >&2
 		exit 1
