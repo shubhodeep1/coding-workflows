@@ -486,7 +486,9 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider \
             tests/test_review_merge_train.py \
             tests/test_gh_helpers_parse_reset_header.py \
-            tests/test_gh_retry_stdout_isolation.py
+            tests/test_gh_retry_stdout_isolation.py \
+            tests/test_gh_api_retry.py \
+            tests/test_gh_api_retry_py.py
 
       - name: PR-watch guard hook tests (CLAUDE.md §25)
         run: |

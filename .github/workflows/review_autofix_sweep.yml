@@ -132,6 +132,13 @@ jobs:
           SWEEP_STALE_QUEUED_MINUTES: ${{ vars.SWEEP_STALE_QUEUED_MINUTES || '120' }}
         run: |
           set -euo pipefail
+          # Classified retry for the active-run snapshot (issue #6634): the
+          # checked-out default-branch helper, the same copy the budget step uses.
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_api_retry()' scripts/gh_helpers.sh; then
+            source scripts/gh_helpers.sh
+          fi
+          source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+          type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
 
           # Fetch all open PRs, then filter to non-draft client-side.
           # `gh` rejects `--slurp` combined with `--jq`, so pipe the
@@ -175,6 +182,9 @@ jobs:
           # per-PR lookups locally so the sweep avoids N×2 workflow-run API
           # fanout while preserving the existing active-run skip semantics.
           declare -A active_review_runs=()
+          # Set when a run listing failed: an incomplete snapshot is not "no
+          # active runs", so every dispatch waits for the next tick.
+          active_snapshot_incomplete=false
 
           snapshot_active_review_runs() {
             local workflow="$1"
@@ -207,13 +217,23 @@ jobs:
             # duplicate, so every tick re-dispatched and each new run
             # replaced the pending predecessor. A pending run never counts
             # as stale — it is bounded by its running peer's job timeout.
+            # Listings run outside the $(...) so a failure is visible (exit 2,
+            # the workflow file is absent, counts as no runs).
+            local snap_raw="${RUNNER_TEMP:-/tmp}/sweep-active-runs-${workflow}.json" snap_rc
+            : > "${snap_raw}"
+            for status in queued in_progress pending; do
+              snap_rc=0
+              GH_TOKEN="${READ_TOKEN}" gh_api_retry --paginate -X GET "repos/${REPOSITORY}/actions/workflows/${workflow}/runs" \
+                -f status="${status}" \
+                -f per_page=100 \
+                >> "${snap_raw}" || snap_rc=$?
+              if [ "${snap_rc}" -ne 0 ] && [ "${snap_rc}" -ne 2 ]; then
+                active_snapshot_incomplete=true
+                echo "::warning::AUTOFIX_SWEEP_SNAPSHOT_INCOMPLETE workflow=${workflow} status=${status} rc=${snap_rc}"
+              fi
+            done
             if snapshot_json="$(
-              for status in queued in_progress pending; do
-                GH_TOKEN="${READ_TOKEN}" gh api --paginate -X GET "repos/${REPOSITORY}/actions/workflows/${workflow}/runs" \
-                  -f status="${status}" \
-                  -f per_page=100 \
-                  2>/dev/null || true
-              done | jq -c -s --argjson cutoff "${stale_cutoff_epoch}" '
+              cat "${snap_raw}" | jq -c -s --argjson cutoff "${stale_cutoff_epoch}" '
                   def created_epoch:
                     (.created_at // "")
                     | if . == "" then null
@@ -334,6 +354,11 @@ jobs:
             # for this branch on either workflow, or a dispatched run is named
             # for this PR (the `pr:<N>` key, issue #4618). In-progress and
             # pending runs always suppress dispatch; only queued runs can age out.
+            if [ "${active_snapshot_incomplete}" = "true" ]; then
+              echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=active_snapshot_incomplete head_ref=${head_ref}"
+              skipped_active=$((skipped_active + 1))
+              continue
+            fi
             active=0
             for wf in internal-review.yml review_autofix.yml; do
               for dedupe_ref in "${head_ref}" "pr:${pr_number}"; do
@@ -383,7 +408,7 @@ jobs:
             fi
           done
 
-          echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} failures=${failures} candidates=${total}"
+          echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} failures=${failures} candidates=${total} snapshot_incomplete=${active_snapshot_incomplete}"
 
       - name: Record GH_PAT budget at sweep end
         if: always()

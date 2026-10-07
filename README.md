@@ -2980,6 +2980,18 @@ Any workflow or script that routes GitHub API calls through `scripts/gh_helpers.
 
 **Disabling:** unset `TG_BOT_SECRET` or `TG_ADMIN_CHAT_ID` — the helper no-ops silently. You can also set `ALERT_MSG_LEVEL=ERROR` (or higher) to suppress the rate-limit alert while keeping other ERROR/CRITICAL Telegram notifications. There is no way to disable the feature per-caller; if you need to skip alerting for a specific bootstrap probe (e.g. a `gh api /labels/<name>` existence check where 404 is the expected normal case), call `gh` directly instead of via `gh_retry`. See `ensure_label_exists` in `scripts/orchestrate_poll_process.sh` for an example.
 
+### Classified GitHub API retry (`gh_api_retry`)
+
+`gh_api_retry [--idempotent] [--optional] <gh api args>` in `scripts/gh_helpers.sh` (Python twin: `scripts/gh_api_retry.py`) retries a GitHub API call by failure class and prints only a successful body. A primary rate limit waits for the reset of the limited bucket, a secondary limit waits `retry-after` (60 s when absent), 5xx and network errors back off, and other 4xx responses are not retried. Exit codes: `0` ok, `1` transient failure, `2` permanent failure, `75` rate-limited (gave up) or an `--optional` call skipped while the breaker is active. A POST create makes one attempt in every retry helper unless it is marked `--idempotent` or prefixed `GH_RETRY_IDEMPOTENT=true`. Log prefix: `GH_API_RETRY`.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `GH_RETRY_IDEMPOTENT` | `false` | `true` lets a POST create through `gh_retry`, `gh_retry_to_file`, `gh_api_json_to_file` or `gh_api_retry` retry. |
+| `GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS` | `600` | A rate-limit wait longer than this gives up at once with exit 75. |
+| `GH_RETRY_BACKOFF_CAP_SECS` | `120` | Cap on the exponential backoff for 5xx and network errors. |
+| `GH_API_RETRY_LOW_BUDGET_REMAINING` | `100` | A successful call reporting fewer remaining requests records a `low` breaker line until the reset. |
+| `GH_API_RETRY_HELPERS` | set by the `Bootstrap GitHub API retry helper` step | Path of the trusted `gh_helpers.sh` copy; empty means the steps call plain `gh api`. |
+
 ### GitHub API rate-limit circuit breaker
 
 When any `gh_retry`, `gh_retry_to_file`, `gh_api_json_to_file`, or `curl_gh_api` call in `scripts/gh_helpers.sh` detects a GitHub API rate limit (403/429), it touches a flag file (`/tmp/.gh_rate_limit_circuit_breaker`, overridable via `GH_RATE_LIMIT_BREAKER_FILE`). The poller's inline retry helper in the "Find active tracking issues" step also writes this flag on rate-limit detection.

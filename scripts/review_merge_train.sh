@@ -470,7 +470,7 @@ _mt_gate() {
 	queue_label_persisted="true"
 	if ! _mt_has_label "${own_labels}"; then
 		queue_label_persisted="false"
-		if gh_retry gh api -X POST "repos/${MT_REPO}/issues/${pr}/labels" -f "labels[]=${MT_LABEL}" >/dev/null 2>&1; then
+		if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${MT_REPO}/issues/${pr}/labels" -f "labels[]=${MT_LABEL}" >/dev/null 2>&1; then
 			queue_label_persisted="true"
 		else
 			_mt_warn "merge-train gate: could not add ${MT_LABEL} to PR #${pr}; the run still soft-exits and no bypass marker will be armed."
@@ -798,7 +798,7 @@ _mt_release() {
 			_mt_log "MERGE_TRAIN_RELEASED pr=${num} source=release"
 		else
 			release_label_restored="false"
-			if gh_retry gh api -X POST "repos/${MT_REPO}/issues/${num}/labels" -f "labels[]=${MT_LABEL}" >/dev/null 2>&1; then
+			if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${MT_REPO}/issues/${num}/labels" -f "labels[]=${MT_LABEL}" >/dev/null 2>&1; then
 				release_label_restored="true"
 			else
 				_mt_warn "merge-train release: dispatch and ${MT_LABEL} restoration both failed for PR #${num}; a later PR event must re-evaluate it."

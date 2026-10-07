@@ -487,7 +487,7 @@ jobs:
             # Retain the issue in the scheduled standalone poller's existing
             # candidate set; it releases this label once the fix merges.
             source scripts/gh_helpers.sh
-            if ! gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f 'labels[]=ai:clarification' >/dev/null; then
+            if ! GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f 'labels[]=ai:clarification' >/dev/null; then
               echo "::error::Could not mark security follow-up #${ISSUE_NUMBER} as waiting"
               exit 1
             fi
@@ -584,7 +584,7 @@ jobs:
               --remove-label 'ai:planning' --remove-label 'ai:awaiting-approval' \
               --remove-label 'ai:implementing' --remove-label 'ai:done' >/dev/null 2>&1 || true
           else
-            gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
+            GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/labels" -f labels[]='ai:clarification' >/dev/null
           fi
 
       - name: Orchestrator-managed fast path
