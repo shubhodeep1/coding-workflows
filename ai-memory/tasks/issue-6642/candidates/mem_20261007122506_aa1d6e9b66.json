@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n# Implementation plan \u2014 issue #6642\n\nThe clarification answers are **Q1: A** (retain the existing Claude isolation path and protect it with contract tests) and **Q2: A** (run the decomposer with the read-only profile).\n\nPlanning context reports `main` at `9534275555ccaa0408fce963a931cc568300109a`. The available checkout is instead `isolated` at `69564959c1129aaeee25205824f26ca0c5484a22`; no integration branch was specified. Recheck the proposed edits against the stated planning ref before implementation.\n\nScope-mode: Hold Scope  \nReuse-audit: extends `claude_run` / `codex_isolated_exec.sh` and `tests/test_codex_agent_isolation_contract.py`  \nScope-mode justification: The decomposer already uses the credential-free container and host relay; replacing it with the review sandbox would add another boundary without an identified benefit. Keep that path, remove unnecessary model tools, and make its credential separation testable. The small additional path guard below closes a configuration edge case rather than assuming the normal runner layout. This follows \u00a76\u2019s Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed priority.\n\n## Automation wiring\n\n- **Change type:** Extend an existing workflow and helper; add tests and a changelog fragment. No new runtime script.\n- **Entry point:** `.github/workflows/internal-orchestrate.yml` on `workflow_dispatch` calls `.github/workflows/orchestrate.yml`, whose decomposer step remains the execution site.\n- **Supervisor:** None. **Database gate:** Not applicable. **Future-removal registry:** No entry needed.\n\n## Files likely to change\n\n- `.github/workflows/orchestrate.yml` \u2014 set `AI_ENGINE_READ_ONLY=true` on the Claude decomposer invocation. Set `AI_ENGINE_INCLUDE_PATHS=` there so an inherited include list cannot carry a pool path into this read-only run. Preserve the isolated Codex fallback.\n- `scripts/ai_engine.sh` \u2014 before launching the container, fail closed if the resolved pool directory falls within the decomposer\u2019s workdir. The current default places the pool under runner temp, but `CLAUDE_ENGINE_POOL_DIR` and `RUNNER_TEMP` are configurable; a test of the default alone cannot establish \u201cnever inside the workdir.\u201d\n- `tests/test_codex_agent_isolation_contract.py` \u2014 extend its existing Claude-launch, relay, and token-mount contracts with decomposer-specific assertions and a focused overlap regression.\n- `changelog.d/6642-orchestrate-decomposer-isolation.md` \u2014 security fragment; do not edit `CHANGELOG.md`.\n\n## Functions and interfaces\n\nKeep `claude_run ORCHESTRATE` as the only Claude launch in the decomposer branch. Its existing `AI_ENGINE_READ_ONLY` handling selects `Read,Grep,Glob`, `dontAsk`, and `read-only` isolation; no role-default change is needed. Preserve `--claude-token-file` as a host-helper argument, not a CLI argument or container mount, and preserve transcript extraction into `CODEX_OUTPUT_FILE`.\n\nNo new endpoint, API call, public identifier, state field, or phase transition is planned.\n\n## Decisions\n\n### D1 \u2014 Retain the existing isolation boundary\n\n- **Chosen:** Keep `codex_isolated_exec.sh --engine claude` and its host token relay; add contracts and a fail-closed pool/workdir overlap check.\n- **Alternatives considered:** Move to `review_untrusted_sandbox.sh`; close the finding without a regression guard.\n- **Why:** Q1 selects the already-operating boundary. Inspection found a configurable pool-location edge case that static default-path assertions alone would not cover.\n\n### D2 \u2014 Narrow only this decomposer invocation\n\n- **Chosen:** Pass `AI_ENGINE_READ_ONLY=true` and an empty include list at the call site.\n- **Alternatives considered:** Add `ORCHESTRATE` to the global read-only role defaults; retain its write profile.\n- **Why:** Q2 selects read-only execution. A call-site setting avoids changing other uses of the role and matches the existing read-only Codex fallback.\n\n## Security considerations\n\nThe trust boundary is the project description entering the decomposer. Its model process must have neither runner credentials nor a route to pool-token files through the workspace snapshot or includes. Tests should pin the four token-related `env -u` removals, isolated launch, host-only relay token handling, absence of a token mount, empty decomposer include list, and read-only profile. Reject a pool/workdir overlap **before** snapshot or model launch without printing a token or token-file contents. No new authorized surface is introduced.\n\n## Risks and edge cases\n\n- An inherited include list is currently forwarded by `claude_run`; clearing it for this invocation must not remove context the decomposer requires. Its prompt and workdir arguments remain unchanged.\n- Compare resolved paths, including symlink aliases, for the pool/workdir guard. A rejected configuration must fail rather than run Claude with an unsafe snapshot or silently claim success.\n- Preserve exit-75 Codex fallback behavior and its `--mode read-only` setting; an unsafe-path rejection must not be mistaken for ordinary Claude unavailability.\n- **Ref conflict:** the supplied planning ref and available checkout differ. Four helper files in the available checkout also have pre-existing mode-only changes; implementation must not overwrite or revert them. The cited workflow branch and helper behavior were found in this checkout, but must be reverified on `9534275\u2026`.\n\n## Testing\n\nExtend the representative isolation-contract module rather than creating a competing test suite. Assert the scoped workflow branch uses `claude_run ORCHESTRATE`, carries the read-only and empty-include assignments through the invocation, removes the four named credential variables, and retains the isolated Codex fallback. Retain its existing no-host-Claude and host-only-relay checks; add a regression for pool/workdir overlap, including a symlink alias. Run the focused tests, then relevant workflow and shell checks on the repository\u2019s pinned tooling. No validator was run during planning.\n\n## Pre-execution self-check\n\nThe answers map unambiguously to Q1 and Q2; the plan names its existing trigger, trust boundary, files, tests, and failure behavior. No credential or external API detail is needed to implement it.\n\nPLAN_SELF_CHECK: WARNING: Planning context names `main` at `9534275\u2026`, but the available checkout is `isolated` at `6956495\u2026`; verify the targeted code on the intended ref before editing.  \nSTATUS: CLEAR\n\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "fdccf0eb66a57e70577158bd0fc432c4c593082b984c108b63eb5670286b2b53",
+  "lineage": {
+    "issue_number": 6642,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37619882141",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37619882141",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6642"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261007122506_aa1d6e9b66",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6642,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37619882141"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6642",
+  "timestamps": {
+    "created_at": "2026-10-07T12:25:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
