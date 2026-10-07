@@ -833,7 +833,8 @@ jobs:
         env:
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
           AI_ENGINE_ACTIVATION_VERIFY: ${{ vars.AI_ENGINE_ACTIVATION_VERIFY || '' }}
-          AI_ENGINE_LABELS: ""
+          # The merged PR is the work item: its ai:codex label keeps the role on codex.
+          AI_ENGINE_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
           set -uo pipefail
           engine="codex"
@@ -885,6 +886,7 @@ jobs:
           CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
           AI_ENGINE_ACTIVATION_VERIFY: ${{ vars.AI_ENGINE_ACTIVATION_VERIFY || '' }}
+          AI_ENGINE_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           SUPPORT_INSTRUCTIONS_FILE: ${{ github.workspace }}/.codex-workflow-src/unattended_system_instructions.md
         run: |
           SUPPORT_DIR="${GITHUB_WORKSPACE}/.codex-workflow-src" \

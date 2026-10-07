@@ -388,6 +388,11 @@ def test_activation_verify_job_adds_no_permissions_and_poller_resolves_the_role(
 
 	data = yaml.safe_load((WORKFLOWS / "issue_pr_status.yml").read_text(encoding="utf-8"))
 	assert "permissions" not in data["jobs"]["activation-verify"]
+	# The merged PR's labels reach both the preflight resolve and the verifier.
+	labels_expr = "${{ toJSON(github.event.pull_request.labels.*.name) }}"
+	for step in data["jobs"]["activation-verify"]["steps"]:
+		if step.get("name") in ("Resolve AI engine", "Verify activation"):
+			assert step["env"]["AI_ENGINE_LABELS"] == labels_expr
 	poll = (WORKFLOWS / "orchestrate_poll.yml").read_text(encoding="utf-8")
 	assert "SECURITY_AUDIT ACTIVATION_VERIFY; do" in poll
 	assert poll.count("AI_ENGINE_ACTIVATION_VERIFY: ${{ vars.AI_ENGINE_ACTIVATION_VERIFY || '' }}") == 2
