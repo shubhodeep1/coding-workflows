@@ -3661,6 +3661,23 @@ def cmd_print_integration_ref(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_extract_integration_branch(args: argparse.Namespace) -> int:
+	"""Print the integration branch an issue body declares, or nothing.
+
+	Reads the issue body from stdin and applies extract_integration_branch
+	(canonical ``Integration branch:`` line first, ``Target branch:`` alias
+	otherwise). Issue #6631: close_merged_issues_sweep and
+	issue_pr_status.yml use it to decide whether a merged PR's base is the
+	issue's own target branch, so the parser stays in one place.
+	"""
+	del args
+	body = sys.stdin.read()
+	branch = extract_integration_branch(body)
+	if branch:
+		print(branch)
+	return 0
+
+
 def cmd_check_stalls(args: argparse.Namespace) -> int:
 	"""Detect stalled issues and return recommended recovery actions."""
 	path = Path(args.state_file).resolve()
@@ -3916,6 +3933,12 @@ def build_parser() -> argparse.ArgumentParser:
 	p_completion_lessons.add_argument("--state-file", required=True)
 	p_completion_lessons.add_argument("--tracking-issue", required=True)
 	p_completion_lessons.set_defaults(func=cmd_completion_lessons)
+
+	p_extract_branch = subparsers.add_parser(
+		"extract-integration-branch",
+		help="Print the integration branch declared in an issue body read from stdin",
+	)
+	p_extract_branch.set_defaults(func=cmd_extract_integration_branch)
 
 	return parser
 

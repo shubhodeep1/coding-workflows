@@ -3097,3 +3097,41 @@ def main() -> int:
 
 if __name__ == "__main__":
 	raise SystemExit(main())
+
+
+def _run_extract_integration_branch_cli(body: str) -> subprocess.CompletedProcess:
+	env = os.environ.copy()
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	return subprocess.run(
+		["python3", str(REPO_ROOT / "scripts" / "orchestrate_lib.py"), "extract-integration-branch"],
+		input=body,
+		check=False,
+		capture_output=True,
+		text=True,
+		env=env,
+		cwd=str(REPO_ROOT),
+	)
+
+
+def test_extract_integration_branch_cli_reads_body_from_stdin() -> None:
+	"""Issue #6631: close_merged_issues_sweep and issue_pr_status.yml parse an
+	issue's declared integration branch through this subcommand."""
+	cases = [
+		("Body\n- Integration branch: orchestrator/project-7\n", "orchestrator/project-7"),
+		("Body\n- **Integration branch:** `orchestrator/project-7`\n", "orchestrator/project-7"),
+		("Body\nIntegration branch: `orchestrator/project-7`\n", "orchestrator/project-7"),
+		("**Target branch:** `orchestrator/project-3965` (integration branch)\n", "orchestrator/project-3965"),
+		("Target branch: feature/x\n", "feature/x"),
+		(
+			"- Target branch: feature/alias\n- Integration branch: orchestrator/project-8\n",
+			"orchestrator/project-8",
+		),
+		("No branch metadata here.\n", ""),
+		("", ""),
+	]
+	for body, expected in cases:
+		proc = _run_extract_integration_branch_cli(body)
+		assert proc.returncode == 0, proc.stderr
+		assert proc.stdout.strip() == expected, (body, proc.stdout)
+		if not expected:
+			assert proc.stdout == ""
