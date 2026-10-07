@@ -56,9 +56,16 @@ EXPECTED_STEP_DECLARATIONS = {
 	# 4 = the three clarify notification steps + "Standalone auto-decide"
 	# (replace-claude-sessions Phase 8b), whose answer poster's loop guard can
 	# alert. The Claude issue handoff step was retired in Phase 2.
-	"clarify.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 4,
-	"plan.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 4,
-	"implement.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 2,
+	# The last entry of clarify, plan, implement and clarify-respond is the
+	# engine-fallback-report job's "Report Claude engine fallbacks" step: in its
+	# own job env.ALERT_MSG_LEVEL is unset, so the phase job's exported level
+	# (SILENT on a smoke run) comes next.
+	"clarify.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 4
+	+ ["${{ env.ALERT_MSG_LEVEL || needs.clarify.outputs.engine_fallback_alert_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"],
+	"plan.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 4
+	+ ["${{ env.ALERT_MSG_LEVEL || needs.plan.outputs.engine_fallback_alert_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"],
+	"implement.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 2
+	+ ["${{ env.ALERT_MSG_LEVEL || needs.implement.outputs.engine_fallback_alert_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"],
 	"review_autofix.yml": [
 		"${{ env.ALERT_MSG_LEVEL || vars.CONFLICT_RESOLVED_ALERT_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}",
 		"${{ env.ALERT_MSG_LEVEL || vars.PR_PROCESSED_ALERT_LEVEL || 'SILENT' }}",
@@ -69,7 +76,8 @@ EXPECTED_STEP_DECLARATIONS = {
 	"orchestrate_poll.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 2,
 	# 3 = "Standalone RECOMMENDED fallback" (pages when the standalone worker
 	# fails with no fallback), "Parse and post answer", the failure alert.
-	"orchestrate_clarify_respond.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 3,
+	"orchestrate_clarify_respond.yml": ["${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"] * 3
+	+ ["${{ env.ALERT_MSG_LEVEL || needs.respond.outputs.engine_fallback_alert_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}"],
 }
 
 STEP_DECL_RE = re.compile(r"^\s+ALERT_MSG_LEVEL:\s*(\$\{\{.*\}\})\s*$")

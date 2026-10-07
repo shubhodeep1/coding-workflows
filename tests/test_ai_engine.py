@@ -24,6 +24,7 @@ from pathlib import Path
 import sys
 
 import pytest
+import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -579,3 +580,101 @@ def test_write_role_reuses_the_prepared_implement_sandbox(sandbox: dict) -> None
 	assert _rc(result) == 0, result.stderr
 	run = docker_runs(sandbox["bin"].parent / "fake-docker.jsonl")[-1]
 	assert f"coding-workflows.codex-isolated.root={root}" not in run["argv"]
+
+
+# --- Claude engine fallback reports -------------------------------------------
+
+ENGINE_FALLBACK_WORKFLOWS = {
+	# workflow file -> phase job
+	"clarify.yml": "clarify",
+	"plan.yml": "plan",
+	"implement.yml": "implement",
+	"orchestrate_clarify_respond.yml": "respond",
+}
+
+
+def _fallback_record(sandbox: dict) -> list[str]:
+	path = sandbox["runner_temp"] / "ai-engine-fallbacks.txt"
+	return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+
+
+def test_fallback_is_recorded_and_reporter_jobs_own_the_telegram_note(sandbox: dict) -> None:
+	notes = sandbox["tmp"] / "tg.txt"
+	script = (
+		f'tg_send_msg() {{ printf "%s|%s\\n" "$1" "$2" >> {shlex.quote(str(notes))}; }}; '
+		f"rc=0; claude_run PLAN {shlex.quote(str(sandbox['prompt']))} out1 {shlex.quote(str(sandbox['work']))} || rc=$?; "
+		'echo "RC=${rc}"'
+	)
+	result = _bash(sandbox, script, AI_ENGINE_FALLBACK_REPORTER="true")
+	assert _rc(result) == 75, result.stderr
+	assert "AI_ENGINE_FALLBACK role=PLAN reason=no_credential" in result.stderr
+	assert _fallback_record(sandbox) == ["role=PLAN reason=no_credential class="]
+	# The engine-fallback-report job sends the alert instead.
+	assert not notes.exists()
+
+
+def test_fallback_record_file_can_be_overridden(sandbox: dict) -> None:
+	record = sandbox["tmp"] / "custom-record.txt"
+	result = _bash(sandbox, "ai_engine_fallback IMPLEMENT cli_missing; ai_engine_fallback IMPLEMENT all_accounts_failed capacity; ai_engine_fallback PLAN x bogus", AI_ENGINE_FALLBACK_RECORD_FILE=str(record))
+	assert result.returncode == 0, result.stderr
+	assert record.read_text(encoding="utf-8").splitlines() == [
+		"role=IMPLEMENT reason=cli_missing class=",
+		"role=IMPLEMENT reason=all_accounts_failed class=capacity",
+		"role=PLAN reason=x class=",
+	]
+	assert _fallback_record(sandbox) == []
+
+
+def test_all_accounts_over_their_limit_is_a_capacity_fallback(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_LIMIT_a", B="TOK_LIMIT_b")
+	result = _claude_run(sandbox)
+	assert _rc(result) == 75, result.stderr
+	assert _fallback_record(sandbox) == ["role=PLAN reason=all_accounts_failed class=capacity"]
+
+
+def test_a_rejected_token_makes_all_accounts_failed_a_defect(sandbox: dict) -> None:
+	_accounts(sandbox, A="TOK_LIMIT", B="TOK_AUTH")
+	result = _claude_run(sandbox)
+	assert _rc(result) == 75, result.stderr
+	assert _fallback_record(sandbox) == ["role=PLAN reason=all_accounts_failed class="]
+
+
+def test_every_bare_fallback_line_is_also_recorded() -> None:
+	# Scripts that print AI_ENGINE_FALLBACK themselves (ai_engine.sh missing)
+	# must append to the record, or the engine-fallback-report job never sees it.
+	for path in sorted((REPO_ROOT / "scripts").glob("*.sh")):
+		if path.name in ("ai_engine.sh", "review_untrusted_sandbox.sh", "ai_engine_fallback_report.sh"):
+			continue
+		lines = path.read_text(encoding="utf-8").splitlines()
+		for index, line in enumerate(lines):
+			if 'echo "AI_ENGINE_FALLBACK role=' not in line:
+				continue
+			window = "\n".join(lines[index:index + 5])
+			assert "ai-engine-fallbacks.txt" in window and "AI_ENGINE_FALLBACK_RECORD_FILE" in window, f"{path.name}:{index + 1}"
+
+
+def test_engine_fallback_report_is_wired_into_every_cut_over_workflow() -> None:
+	for name, job in ENGINE_FALLBACK_WORKFLOWS.items():
+		doc = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8"))
+		phase = doc["jobs"][job]
+		assert phase["env"]["AI_ENGINE_FALLBACK_REPORTER"] == "true", name
+		assert phase["outputs"]["engine_fallbacks"] == "${{ steps.engine_fallbacks.outputs.fallbacks }}", name
+		assert phase["outputs"]["engine_fallback_alert_level"] == "${{ steps.engine_fallbacks.outputs.alert_msg_level }}", name
+		pool = [step for step in phase["steps"] if step.get("name") == "Resolve Claude credential"]
+		assert len(pool) == 1 and pool[0]["id"] == "claude_pool", name
+		last = phase["steps"][-1]
+		assert last["name"] == "Collect AI engine fallbacks" and last["id"] == "engine_fallbacks", name
+		# clarify-respond gates every later step on its orchestrator metadata check.
+		assert last["if"] in ("always()", "always() && steps.check_orchestrator.outputs.respond == 'true'"), name
+		assert last["if"].startswith("always()") and last["continue-on-error"] is True, name
+		assert last["env"]["CLAUDE_POOL_REASON"] == "${{ steps.claude_pool.outputs.reason }}", name
+		assert '.codex-workflow-src/scripts/claude_engine.py"' in last["run"] and '"${engine_py}" fallbacks --record-file' in last["run"], name
+		report = doc["jobs"]["engine-fallback-report"]
+		assert report["needs"] == job and report["permissions"] == {}, name
+		assert f"needs.{job}.outputs.engine_fallbacks != '[]'" in report["if"] and report["if"].startswith("always()"), name
+		assert report["env"]["ENGINE_FALLBACK_PHASE"] == {"respond": "clarify_respond"}.get(job, job), name
+		assert report["env"]["TG_BOT_SECRET"] == "${{ secrets.TG_BOT_SECRET }}", name
+		steps = {step["name"]: step for step in report["steps"]}
+		assert "ai_engine_fallback_report.sh" in steps["Report Claude engine fallbacks"]["run"], name
+		assert steps["Report Claude engine fallbacks"]["env"]["ALERT_MSG_LEVEL"].startswith(f"${{{{ env.ALERT_MSG_LEVEL || needs.{job}.outputs.engine_fallback_alert_level ||"), name
+	assert (REPO_ROOT / "scripts" / "ai_engine_fallback_report.sh").is_file()

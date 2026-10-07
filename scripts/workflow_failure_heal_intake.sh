@@ -8,12 +8,16 @@
 # sent by scripts/workflow_failure_heal_report.sh from a consumer (or from this
 # repo's own internal wrapper), by workflow_failure_heal_autofix_report.sh from a
 # failed review/autofix run, or by workflow_failure_heal_phase_report.sh from a
-# failed clarify / plan / implement run (`phase_failure`), a failed release /
-# promotion `workflow_run`, or a manual `workflow_dispatch` re-run. It:
+# failed clarify / plan / implement run (`phase_failure`), by
+# ai_engine_fallback_report.sh from a run that fell back from Claude to codex
+# (`engine_fallback`), a failed release / promotion `workflow_run`, or a manual
+# `workflow_dispatch` re-run. It:
 #
 #   1. Validates the payload (every field is re-checked; phase_failure reports
 #      also require GitHub-read run, job and issue-comment provenance before
-#      dedup or escalation; the body, comments, and logs stay untrusted data
+#      dedup or escalation, engine_fallback reports GitHub-read run provenance
+#      and the claimed AI_ENGINE_FALLBACK line in a job's own log; the body,
+#      comments, and logs stay untrusted data
 #      for the model; an `autofix_failure` report from
 #      the review/autofix workflow carries its own evidence text) and applies the skip gates:
 #      kill switch, unregistered source repo, smoke-test fixture, self run,
@@ -212,6 +216,11 @@ SUMMARIES_FILE="${RUNTIME_DIR}/run_summaries.json"
 printf '[]' > "${SUMMARIES_FILE}"
 LOG_FILES=()
 RUN_COUNT=0
+ENGINE_ROLE="$(_pf '.engine_role // ""')"
+ENGINE_PHASE="$(_pf '.engine_phase // ""')"
+ENGINE_DETAIL="$(_pf '.engine_detail // ""')"
+ENGINE_FALLBACK_LOG_MATCH="false"
+ENGINE_FALLBACK_REPORTER_JOB="engine-fallback-report"
 
 while IFS=$'\t' read -r run_id run_url; do
 	[ -n "${run_id}" ] || continue
@@ -248,12 +257,28 @@ while IFS=$'\t' read -r run_id run_url; do
 				log "warn job_log_filter_failed source=${SOURCE_REPO} run=${run_id} job=${job_id}"
 				: > "${FILTERED_LOG}"
 			fi
+			if [ "${SOURCE_KIND}" = "engine_fallback" ]; then
+				# The run succeeded on codex: only the job whose own log holds the
+				# claimed fallback line is evidence (provenance below).
+				ENGINE_EXCERPT_FILE="${LOG_DIR}/run-${run_id}-job-${job_id}.engine.txt"
+				if [ "$(python3 "${HEAL_PY}" engine-fallback-log --log-file "${RAW_LOG}" --role "${ENGINE_ROLE}" --reason "${FAILURE_REASON}" --excerpt-out "${ENGINE_EXCERPT_FILE}" 2>/dev/null)" = "match=true" ]; then
+					ENGINE_FALLBACK_LOG_MATCH="true"
+					{
+						echo "--- Claude engine lines of this job ---"
+						cat "${ENGINE_EXCERPT_FILE}" 2>/dev/null || true
+					} >> "${FILTERED_LOG}"
+				else
+					rm -f "${RAW_LOG}" "${FILTERED_LOG}" "${ENGINE_EXCERPT_FILE}"
+					continue
+				fi
+			fi
 			rm -f "${RAW_LOG}"
 			if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${RUN_COUNT}" -eq 1 ] && [ -s "${FILTERED_LOG}" ]; then
 				LOG_FILES+=("${FILTERED_LOG}")
 			fi
 		else
 			log "warn job_log_fetch_failed source=${SOURCE_REPO} run=${run_id} job=${job_id}"
+			[ "${SOURCE_KIND}" != "engine_fallback" ] || continue
 			printf '(job log unavailable)\n' > "${FILTERED_LOG}"
 		fi
 		if [ "${SOURCE_KIND}" != "phase_failure" ]; then
@@ -263,7 +288,11 @@ while IFS=$'\t' read -r run_id run_url; do
 			--arg workflow_name "${workflow_name}" --arg failing_step "${failing_step}" --arg log_file "${FILTERED_LOG}" \
 			'. + [{run_id: $run_id, url: $url, job_id: $job_id, job_name: $job_name, workflow_name: $workflow_name, failing_step: $failing_step, log_file: $log_file}]' \
 			"${SUMMARIES_FILE}" > "${SUMMARIES_FILE}.tmp" && mv "${SUMMARIES_FILE}.tmp" "${SUMMARIES_FILE}"
-	done < <(jq -r '.jobs[] | select((.conclusion // "") | IN("failure","timed_out","cancelled"))
+	done < <(jq -r --arg kind "${SOURCE_KIND}" --arg reporter "${ENGINE_FALLBACK_REPORTER_JOB}" '.jobs[]
+		# A fallback run usually succeeds: every job but the reporter may hold the fallback line.
+		| select(if $kind == "engine_fallback"
+			then ((.name // "") as $name | ($name != $reporter and ($name | endswith("/ " + $reporter) | not)))
+			else ((.conclusion // "") | IN("failure","timed_out","cancelled")) end)
 		| [(.id|tostring), (.name // ""), (.workflow_name // ""), ((.steps // []) | map(select((.conclusion // "") | IN("failure","timed_out","cancelled"))) | first | .name // "")]
 		| map(gsub("[\\t\\n\\r]"; " ")) | @tsv' "${JOBS_FILE}")
 done < <(jq -r '.run_refs[] | [.run_id, .url] | @tsv' "${PAYLOAD_FILE}")
@@ -331,6 +360,31 @@ if [ "${SOURCE_KIND}" = "phase_failure" ]; then
 	log "phase_report_verified source=${SOURCE_REPO} issue=${ISSUE_NUMBER} run=${PHASE_RUN_ID}"
 fi
 
+if [ "${SOURCE_KIND}" = "engine_fallback" ]; then
+	ENGINE_RUN_ID="$(_pf '.run_refs[0].run_id // ""')"
+	ENGINE_RUN_FILE="${RUNTIME_DIR}/engine_fallback_run.json"
+	ENGINE_PROVENANCE_FILE="${RUNTIME_DIR}/engine_fallback_provenance.json"
+	# §15 audit: the jobs list has no run event, path or repository, and the
+	# job logs and heal-issue lists carry no run metadata. One read of the
+	# claimed run in the registered source repository.
+	if ! gh_api_json_to_file "${ENGINE_RUN_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${ENGINE_RUN_ID}"; then
+		log "warn engine_fallback_provenance_fetch_failed evidence=run source=${SOURCE_REPO} run=${ENGINE_RUN_ID}"
+		rm -f "${ENGINE_RUN_FILE}"
+	fi
+	if ! python3 "${HEAL_PY}" verify-engine-fallback-provenance --payload-json "${PAYLOAD_FILE}" \
+		--run-json "${ENGINE_RUN_FILE}" --log-match "${ENGINE_FALLBACK_LOG_MATCH}" --self-repo "${SELF_REPO}" > "${ENGINE_PROVENANCE_FILE}" \
+		|| ! jq -e 'type == "object" and (.verified | type == "boolean") and (.reason | type == "string")' "${ENGINE_PROVENANCE_FILE}" >/dev/null 2>&1; then
+		printf '{"verified":false,"reason":"verifier_error"}\n' > "${ENGINE_PROVENANCE_FILE}"
+	fi
+	if ! jq -e '.verified == true and .reason == "ok"' "${ENGINE_PROVENANCE_FILE}" >/dev/null 2>&1; then
+		ENGINE_PROVENANCE_REASON="$(jq -r '.reason' "${ENGINE_PROVENANCE_FILE}")"
+		log "skip reason=engine_fallback_unverified detail=${ENGINE_PROVENANCE_REASON} outcome=skip source=${SOURCE_REPO} run=${ENGINE_RUN_ID} role=${ENGINE_ROLE} fallback_reason=${FAILURE_REASON}"
+		tg_send_msg "Workflow failure heal intake dropped an engine_fallback report from ${SOURCE_REPO}: run ${ENGINE_RUN_ID} (${ENGINE_ROLE} ${FAILURE_REASON}) could not be verified (${ENGINE_PROVENANCE_REASON})."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		exit 0
+	fi
+	log "engine_fallback_verified source=${SOURCE_REPO} run=${ENGINE_RUN_ID} role=${ENGINE_ROLE} fallback_reason=${FAILURE_REASON} detail=${ENGINE_DETAIL:-none}"
+fi
+
 # A failed promote / auto-release run whose only failure is "the smoke gate
 # failed" duplicates the gate run's own report; the gate run carries the logs.
 if [ "${SOURCE_KIND}" = "workflow_run" ] && [ "${#LOG_FILES[@]}" -gt 0 ]; then
@@ -346,7 +400,13 @@ fi
 
 # --- Fingerprint -------------------------------------------------------------
 
-if [ "${SOURCE_KIND}" = "autofix_failure" ]; then
+if [ "${SOURCE_KIND}" = "engine_fallback" ]; then
+	# One heal issue per role + reason (+ pool reason) across workflows and
+	# repositories (answer Q2 A): every field is a validated token, never log text.
+	FIRST_WORKFLOW_NAME="AI engine fallback"
+	FIRST_FAILING_STEP="engine:${ENGINE_ROLE}"
+	SIGNATURE="engine-fallback:${ENGINE_ROLE}:${FAILURE_REASON}${ENGINE_DETAIL:+:${ENGINE_DETAIL}}"
+elif [ "${SOURCE_KIND}" = "autofix_failure" ]; then
 	# The review job's log ends the same way for every failure class
 	# ("Process completed with exit code 1"), so the reporter's own reason and
 	# evidence identify the failure; the job logs still go to the model below.
@@ -723,6 +783,13 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 		echo "Failure reason: ${FAILURE_REASON}"
 		echo "Consecutive failed ${FAILURE_REASON%_failed} runs on this issue: ${FAILURE_STREAK:-1}"
 		echo "Issue labels: $(_pf '.labels | join(", ")')"
+	elif [ "${SOURCE_KIND}" = "engine_fallback" ]; then
+		echo "Claude engine fallback: role ${ENGINE_ROLE} (${ENGINE_PHASE} phase) ran on codex because Claude could not start."
+		echo "AI_ENGINE_FALLBACK reason: ${FAILURE_REASON}"
+		echo "Account pool step reason (claude_pool_token.sh): ${ENGINE_DETAIL:-none}"
+		echo "Workflow: ${PAYLOAD_WORKFLOW_NAME} (run conclusion: $(_pf '.conclusion // "unknown"'))"
+		[ -z "${ISSUE_NUMBER}" ] || echo "The run was working on issue #${ISSUE_NUMBER} -- ${ISSUE_TITLE} (context only; the fallback is not that issue's fault)"
+		echo "Find why Claude could not start and fix that cause so the role runs on Claude. Running on codex is the fallback, not the fix."
 	elif [ -n "${ISSUE_NUMBER}" ]; then
 		echo "Escalated ${SOURCE_KIND}: #${ISSUE_NUMBER} -- ${ISSUE_TITLE}"
 		echo "URL: ${ISSUE_URL}"
@@ -906,6 +973,8 @@ _comment_on_source()
 {
 	local body_file="$1"
 	[ -n "${ISSUE_NUMBER}" ] || return 0
+	# The fallback is not the source issue's fault; its thread stays clean.
+	[ "${SOURCE_KIND}" != "engine_fallback" ] || return 0
 	gh_retry gh api "repos/${SOURCE_REPO}/issues/${ISSUE_NUMBER}/comments" -F body=@"${body_file}" >/dev/null 2>&1 \
 		|| log "warn source_comment_failed source=${SOURCE_LABEL}"
 }

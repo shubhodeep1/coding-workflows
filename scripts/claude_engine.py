@@ -38,6 +38,11 @@ stdout, diagnostics to stderr):
     probe transcript to a usage record (spike S8).
   * ``choose [--gate G] < probes.json`` — the least-used account under the
     gate (ties to the alphabetically first name), or why none is usable.
+  * ``fallbacks --record-file F [--pool-reason R]`` — the job's codex
+    fallbacks as a JSON list of ``{role, reason, detail, class}``, read from
+    the lines ``ai_engine_fallback`` appends to F. ``class`` is ``capacity``
+    (every account over its usage limit: Telegram only) or ``defect`` (a
+    setup or code fault: reported to workflow failure heal).
 
 Exit codes: 0 success; 1 the input describes a failure (``extract`` found
 no result); 2 invalid arguments or input.
@@ -779,6 +784,58 @@ def choose_account(probes: list[dict[str, Any]], gate: float) -> dict[str, Any]:
 	return verdict
 
 
+# --- fallback classification ---------------------------------------------------
+
+# One line per `ai_engine_fallback` call: `role=<ROLE> reason=<reason> class=<class>`
+# (class may be empty). Written by the job itself, but parsed strictly anyway.
+FALLBACK_RECORD_RE = re.compile(r"^role=(?P<role>[A-Z][A-Z_]{0,39}) reason=(?P<reason>[a-z][a-z0-9_]{0,59})(?: class=(?P<cls>[a-z]*))?$")
+FALLBACK_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]{0,59}$")
+FALLBACK_CLASSES: tuple[str, ...] = ("capacity", "defect")
+# Pool-token verdicts that mean "every account is over its usage limit": the
+# only no_credential cause that is not a setup or code fault (answer Q1 A).
+CAPACITY_POOL_REASONS: tuple[str, ...] = ("all_gated",)
+FALLBACK_RECORD_LIMIT = 10
+
+
+def collect_fallbacks(record_text: str, pool_reason: str = "") -> list[dict[str, str]]:
+	"""Classify the codex fallbacks one job recorded.
+
+	``no_credential`` (the pool step left no usable account) takes its class
+	and ``detail`` from the pool step's ``reason`` output: ``all_gated`` is
+	capacity, anything else (``cli_missing``, ``broker_refused_…``, an empty
+	reason when the step never ran) is a defect. ``all_accounts_failed`` keeps
+	the class ``claude_run`` recorded: capacity only when every account hit
+	its usage limit. Every other reason is a defect. Entries are deduplicated
+	on (role, reason, detail) in first-seen order, at most
+	``FALLBACK_RECORD_LIMIT``.
+	"""
+	pool = pool_reason.strip()
+	pool = pool if FALLBACK_TOKEN_RE.match(pool) else ""
+	seen: set[tuple[str, str, str]] = set()
+	entries: list[dict[str, str]] = []
+	for raw in record_text.splitlines():
+		match = FALLBACK_RECORD_RE.match(raw.strip())
+		if not match or match.group("role") not in ROLES:
+			continue
+		role, reason = match.group("role"), match.group("reason")
+		detail = ""
+		if reason == "no_credential":
+			detail = pool or "pool_unresolved"
+			cls = "capacity" if pool in CAPACITY_POOL_REASONS else "defect"
+		elif reason == "all_accounts_failed":
+			cls = "capacity" if match.group("cls") == "capacity" else "defect"
+		else:
+			cls = "defect"
+		key = (role, reason, detail)
+		if key in seen:
+			continue
+		seen.add(key)
+		entries.append({"role": role, "reason": reason, "detail": detail, "class": cls})
+		if len(entries) >= FALLBACK_RECORD_LIMIT:
+			break
+	return entries
+
+
 # --- command line ------------------------------------------------------------
 
 
@@ -941,6 +998,11 @@ def cmd_choose(args: argparse.Namespace) -> int:
 	return 0
 
 
+def cmd_fallbacks(args: argparse.Namespace) -> int:
+	print(json.dumps(collect_fallbacks(_read_text(args.record_file), args.pool_reason), separators=(",", ":"), sort_keys=True))
+	return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 	sub = parser.add_subparsers(dest="command", required=True)
@@ -999,6 +1061,11 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--gate", type=float, default=None)
 	p.add_argument("--config", default="")
 	p.set_defaults(func=cmd_choose)
+
+	p = sub.add_parser("fallbacks")
+	p.add_argument("--record-file", required=True)
+	p.add_argument("--pool-reason", default="")
+	p.set_defaults(func=cmd_fallbacks)
 	return parser
 
 

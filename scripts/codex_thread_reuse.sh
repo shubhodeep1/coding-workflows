@@ -647,6 +647,9 @@ codex_thread_reuse_claude_direct_run()
 	engine_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 	if ! [[ "${role}" =~ ^[A-Z][A-Z_]{0,39}$ ]] || [ ! -f "${engine_dir}/ai_engine.sh" ]; then
 		echo "AI_ENGINE_FALLBACK role=${role:-unknown} reason=support_missing" >&2
+		# No ai_engine.sh to record it: the engine-fallback-report job reads this line.
+		[ -z "${RUNNER_TEMP:-}${AI_ENGINE_FALLBACK_RECORD_FILE:-}" ] \
+			|| printf 'role=%s reason=support_missing class=\n' "${role:-unknown}" >> "${AI_ENGINE_FALLBACK_RECORD_FILE:-${RUNNER_TEMP}/ai-engine-fallbacks.txt}" 2>/dev/null || true
 		return 75
 	fi
 	# shellcheck source=ai_engine.sh

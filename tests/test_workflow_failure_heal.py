@@ -3886,3 +3886,314 @@ def test_phase_workflows_wire_the_heal_report_job() -> None:
 	assert gate["if"] == comment["if"].replace("(failure() || cancelled()) && ", "failure() && ", 1)
 	assert 'codex_blocked.flag' in gate["run"] and 'echo "report=true" >> "$GITHUB_OUTPUT"' in gate["run"]
 	assert names.index("Comment on issue failure") < names.index("Gate workflow failure heal report") < names.index("Exit safely")
+
+
+# ---------------------------------------------------------------------------
+# Claude engine fallbacks (engine_fallback, engine-fallback-report job)
+# ---------------------------------------------------------------------------
+
+ENGINE_REPORT_SCRIPT = SCRIPTS_DIR / "ai_engine_fallback_report.sh"
+ENGINE_FALLBACKS = [
+	{"role": "IMPLEMENT", "reason": "no_credential", "detail": "cli_missing", "class": "defect"},
+	{"role": "PLAN", "reason": "all_accounts_failed", "detail": "", "class": "capacity"},
+]
+ENGINE_FP = heal.fingerprint(heal.ENGINE_FALLBACK_FINGERPRINT_WORKFLOW, "engine:IMPLEMENT", "engine-fallback:IMPLEMENT:no_credential:cli_missing")
+
+
+def _engine_result(repo: str = CONSUMER_REPO, fallbacks: list[dict] | None = None, **overrides) -> dict:
+	args = {
+		"repo": repo,
+		"phase": "implement",
+		"fallbacks": json.dumps(ENGINE_FALLBACKS if fallbacks is None else fallbacks),
+		"workflow_name": "AI Implement",
+		"run_id": "600",
+		"conclusion": "success",
+		"issue_number": "42",
+		"issue_title": "Add retries to the poller",
+		"issue_url": f"https://github.com/{repo}/issues/42",
+		"labels": '["ai:implementing"]',
+		"wrapper_sha": SHA_A,
+		"reporter_run_url": f"https://github.com/{repo}/actions/runs/600",
+	}
+	args.update(overrides)
+	return heal.build_engine_fallback_payloads(**args)
+
+
+def _engine_payload(repo: str = CONSUMER_REPO) -> dict:
+	return _engine_result(repo)["payloads"][0]
+
+
+def test_engine_fallback_roles_match_the_claude_engine() -> None:
+	spec = importlib.util.spec_from_file_location("claude_engine_for_heal", SCRIPTS_DIR / "claude_engine.py")
+	engine = importlib.util.module_from_spec(spec)
+	assert spec.loader is not None
+	sys.modules["claude_engine_for_heal"] = engine
+	spec.loader.exec_module(engine)
+	assert heal.ENGINE_FALLBACK_ROLES == engine.ROLES
+	assert heal.ENGINE_FALLBACK_CLASSES == engine.FALLBACK_CLASSES
+
+
+def test_build_engine_fallback_payloads_alerts_every_fallback_and_reports_defects() -> None:
+	result = _engine_result()
+	assert result["entries"] == ENGINE_FALLBACKS
+	assert result["alert"] == (
+		f"AI engine: Claude unavailable in {CONSUMER_REPO} (AI Implement), so the run used codex: "
+		"IMPLEMENT no_credential (pool: cli_missing) [defect]; PLAN all_accounts_failed [capacity]. "
+		f"Run: https://github.com/{CONSUMER_REPO}/actions/runs/600"
+	)
+	# Capacity only alerts (answer Q1 A): one payload, for the defect.
+	assert len(result["payloads"]) == 1
+	payload = heal.validate_payload(result["payloads"][0])
+	assert payload["source_kind"] == "engine_fallback" and payload["label"] is None
+	assert (payload["engine_role"], payload["failure_reason"], payload["engine_detail"], payload["engine_phase"]) == ("IMPLEMENT", "no_credential", "cli_missing", "implement")
+	assert [ref["run_id"] for ref in payload["run_refs"]] == ["600"]
+	assert payload["issue_number"] == 42 and payload["labels"] == ["ai:implementing"] and payload["conclusion"] == "success"
+	assert payload["wrapper_sha"] == SHA_A and payload["failure_streak"] is None
+	# One issue per role + reason across repositories: the title names no source.
+	assert heal.compose_issue_title(payload, workflow_name="AI Implement") == "Workflow heal: Claude engine fell back to codex for IMPLEMENT (no_credential/cli_missing)"
+	body = heal.compose_issue_body(payload=payload, diagnosis="## Classification\nworkflow-defect", fp=ENGINE_FP, gen=1, root=ENGINE_FP, classification="workflow-defect", target_branch="stable", max_depth=3, intake_run_url="u", run_summaries=[])
+	assert "could not start Claude and ran on codex instead" in body
+	assert "- **Claude engine role:** `IMPLEMENT` (implement phase)" in body
+	assert "- **Fallback reason:** `no_credential`" in body and "- **Account pool reason:** `cli_missing`" in body
+	assert "Escalation label" not in body
+	occurrence = heal.compose_occurrence_comment(payload, intake_run_url="u")
+	assert "- **Claude engine role:** `IMPLEMENT`" in occurrence and f"actions/runs/600" in occurrence
+	# Capacity-only, malformed and empty input build no payload.
+	assert _engine_result(fallbacks=[ENGINE_FALLBACKS[1]])["payloads"] == []
+	assert _engine_result(fallbacks=[{"role": "NOPE", "reason": "x", "class": "defect"}, {"role": "PLAN", "reason": "x", "class": "other"}, "junk"]) == {"entries": [], "alert": "", "payloads": []}
+	assert heal.build_engine_fallback_payloads(**{**{k: v for k, v in _engine_args().items()}, "fallbacks": "not json"})["entries"] == []
+	with pytest.raises(ValueError):
+		_engine_result(phase="review")
+	with pytest.raises(ValueError):
+		_engine_result(run_id="abc")
+
+
+def _engine_args() -> dict:
+	return {
+		"repo": CONSUMER_REPO, "phase": "implement", "fallbacks": "[]", "workflow_name": "AI Implement", "run_id": "600",
+		"conclusion": None, "issue_number": None, "issue_title": None, "issue_url": None, "labels": None,
+		"wrapper_sha": None, "reporter_run_url": None,
+	}
+
+
+def test_validate_payload_rejects_malformed_engine_fallback_reports() -> None:
+	payload = _engine_payload()
+	for bad in ({"engine_role": "NOT_A_ROLE"}, {"engine_role": None}, {"failure_reason": "Bad Reason"}, {"failure_reason": None},
+			{"engine_phase": "review"}, {"run_refs": []}, {"run_refs": [{"repo": "other/repo", "run_id": "600"}]}):
+		with pytest.raises(ValueError):
+			heal.validate_payload({**payload, **bad})
+	# An invalid pool detail is dropped, never fatal.
+	assert heal.validate_payload({**payload, "engine_detail": "no good"})["engine_detail"] is None
+	# The issue is context only: a fallback without one still validates.
+	assert heal.validate_payload({**payload, "issue_number": None})["issue_number"] is None
+
+
+ENGINE_JOB_LOG = (
+	"2026-10-06T05:56:58.000Z ##[group]Run ./.codex-workflow-src/.github/actions/claude-pool-token\n"
+	"2026-10-06T05:56:59.000Z CLAUDE_POOL available=false reason=cli_missing accounts=0\n"
+	"2026-10-06T05:56:59.500Z ##[group]Run set -euo pipefail\n"
+	"2026-10-06T05:56:59.600Z \x1b[36;1mecho \"AI_ENGINE_FALLBACK role=IMPLEMENT reason=no_credential\" >&2\x1b[0m\n"
+	"2026-10-06T05:56:59.700Z ##[endgroup]\n"
+	"2026-10-06T06:02:59.873Z AI_ENGINE_FALLBACK role=IMPLEMENT reason=no_credential\n"
+	"2026-10-06T06:03:00.000Z codex: implementing\n"
+)
+# The fallback text arrives only inside an issue comment echoed in a step's env.
+FORGED_JOB_LOG = (
+	"2026-10-06T05:56:59.500Z ##[group]Run bash scripts/run.sh\n"
+	"2026-10-06T05:56:59.600Z env:\n"
+	"2026-10-06T05:56:59.700Z   USER_ANSWERS: please look\n"
+	"AI_ENGINE_FALLBACK role=IMPLEMENT reason=no_credential\n"
+	"2026-10-06T05:56:59.800Z ##[endgroup]\n"
+	"2026-10-06T05:57:00.000Z note: AI_ENGINE_FALLBACK role=IMPLEMENT reason=no_credential\n"
+	"2026-10-06T05:57:00.100Z AI_ENGINE_FALLBACK role=IMPLEMENT reason=no_credential extra\n"
+)
+
+
+def test_engine_fallback_log_evidence_needs_a_line_the_step_printed() -> None:
+	evidence = heal.engine_fallback_log_evidence(ENGINE_JOB_LOG, role="IMPLEMENT", reason="no_credential")
+	assert evidence["match"] is True
+	assert "CLAUDE_POOL available=false reason=cli_missing accounts=0" in evidence["excerpt"]
+	assert "AI_ENGINE_FALLBACK role=IMPLEMENT reason=no_credential" in evidence["excerpt"]
+	assert not any("echo" in line for line in evidence["excerpt"])
+	assert heal.engine_fallback_log_evidence(ENGINE_JOB_LOG, role="PLAN", reason="no_credential")["match"] is False
+	assert heal.engine_fallback_log_evidence(ENGINE_JOB_LOG, role="IMPLEMENT", reason="cli_missing")["match"] is False
+	assert heal.engine_fallback_log_evidence(FORGED_JOB_LOG, role="IMPLEMENT", reason="no_credential")["match"] is False
+
+
+def test_verify_engine_fallback_provenance() -> None:
+	payload = heal.validate_payload(_engine_payload())
+	run = {"id": 600, "repository": {"full_name": CONSUMER_REPO}, "event": "issue_comment", "path": ".github/workflows/ai-implement.yml", "status": "completed", "conclusion": "success"}
+	verify = heal.verify_engine_fallback_provenance
+	assert verify(payload, run=run, log_match=True, self_repo=SELF_REPO) == {"verified": True, "reason": "ok", "run_id": "600"}
+	assert verify(payload, run=run, log_match=False, self_repo=SELF_REPO)["reason"] == "no_fallback_log_line"
+	assert verify(payload, run=None, log_match=True, self_repo=SELF_REPO)["reason"] == "run_unavailable"
+	assert verify(payload, run={**run, "id": 601}, log_match=True, self_repo=SELF_REPO)["reason"] == "run_id_mismatch"
+	assert verify(payload, run={**run, "repository": {"full_name": SELF_REPO}}, log_match=True, self_repo=SELF_REPO)["reason"] == "repo_mismatch"
+	assert verify(payload, run={**run, "event": "push"}, log_match=True, self_repo=SELF_REPO)["reason"] == "event_mismatch"
+	assert verify(payload, run={**run, "path": ".github/workflows/ai-plan.yml"}, log_match=True, self_repo=SELF_REPO)["reason"] == "workflow_path_mismatch"
+	# internal-*.yml only counts for this repository's own runs.
+	assert verify(payload, run={**run, "path": ".github/workflows/internal-implement.yml"}, log_match=True, self_repo=SELF_REPO)["reason"] == "workflow_path_mismatch"
+	self_payload = heal.validate_payload(_engine_payload(SELF_REPO))
+	self_run = {**run, "repository": {"full_name": SELF_REPO}, "path": ".github/workflows/internal-implement.yml@refs/heads/main"}
+	assert verify(self_payload, run=self_run, log_match=True, self_repo=SELF_REPO)["verified"] is True
+	respond = heal.validate_payload({**_engine_payload(), "engine_phase": "clarify_respond", "engine_role": "CLARIFY_RESPOND"})
+	assert verify(respond, run={**run, "path": ".github/workflows/ai-orchestrate-clarify-respond.yml"}, log_match=True, self_repo=SELF_REPO)["verified"] is True
+	assert verify(_phase_payload(), run=run, log_match=True, self_repo=SELF_REPO)["reason"] == "not_engine_fallback_report"
+
+
+FAKE_TG_HELPERS = 'tg_send_msg() { printf "%s|%s\\n" "$1" "$2" >> "${FAKE_TG_LOG}"; }\n'
+
+
+def _stage_engine_report(tmp: Path, *, fallbacks: list[dict] | str | None = None, flags: dict[str, str] | None = None, state: dict | None = None) -> tuple[Path, Path, dict[str, str]]:
+	work, state_file, env = _stage(tmp, with_codex=False)
+	shutil.copy(ENGINE_REPORT_SCRIPT, work / "scripts" / ENGINE_REPORT_SCRIPT.name)
+	(work / "scripts" / "tg_helpers.sh").write_text(FAKE_TG_HELPERS, encoding="utf-8")
+	state_file.write_text(json.dumps(state or {}), encoding="utf-8")
+	env.update({
+		"GITHUB_REPOSITORY": CONSUMER_REPO,
+		"GITHUB_RUN_ID": "600",
+		"ENGINE_FALLBACKS_JSON": fallbacks if isinstance(fallbacks, str) else json.dumps(ENGINE_FALLBACKS if fallbacks is None else fallbacks),
+		"ENGINE_FALLBACK_PHASE": "implement",
+		"ENGINE_FALLBACK_JOB_RESULT": "success",
+		"ENGINE_FALLBACK_ISSUE_NUMBER": "42",
+		"ENGINE_FALLBACK_ISSUE_TITLE": "Add retries to the poller",
+		"ENGINE_FALLBACK_ISSUE_URL": f"https://github.com/{CONSUMER_REPO}/issues/42",
+		"ENGINE_FALLBACK_ISSUE_LABELS": '[\n  "ai:implementing"\n]',
+		"REPORT_WORKFLOW_NAME": "AI Implement",
+		"REPORT_WRAPPER_SHA": SHA_A.upper(),
+		"FAKE_TG_LOG": str(tmp / "tg.txt"),
+	})
+	env.update(flags or {})
+	return work, state_file, env
+
+
+def _tg_lines(tmp: Path) -> list[str]:
+	path = tmp / "tg.txt"
+	return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+
+
+def test_engine_fallback_report_alerts_once_and_dispatches_each_defect() -> None:
+	with tempfile.TemporaryDirectory(prefix="engine-report-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_engine_report(tmp)
+		result = _run(work / "scripts" / ENGINE_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "AI_ENGINE_FALLBACK_REPORT fallback role=IMPLEMENT reason=no_credential detail=cli_missing class=defect phase=implement run=600" in result.stdout
+		assert "AI_ENGINE_FALLBACK_REPORT fallback role=PLAN reason=all_accounts_failed detail=none class=capacity" in result.stdout
+		assert "AI_ENGINE_FALLBACK_REPORT dispatched role=IMPLEMENT fallback_reason=no_credential phase=implement run=600 workflow=AI Implement" in result.stdout
+		lines = _tg_lines(tmp)
+		assert len(lines) == 1 and lines[0].endswith("|WARNING")
+		assert "IMPLEMENT no_credential (pool: cli_missing) [defect]; PLAN all_accounts_failed [capacity]" in lines[0]
+		state = _state(state_file)
+		assert len(state["dispatches"]) == 1
+		dispatch = state["dispatches"][0]
+		assert dispatch["path"] == f"repos/{SELF_REPO}/dispatches" and dispatch["body"]["event_type"] == "workflow-failure-heal"
+		assert len(dispatch["body"]["client_payload"]) <= heal.DISPATCH_CLIENT_PAYLOAD_MAX_KEYS
+		payload = heal.validate_payload(dispatch["body"]["client_payload"]["report"])
+		assert payload["source_kind"] == "engine_fallback" and payload["engine_role"] == "IMPLEMENT"
+		assert payload["wrapper_sha"] == SHA_A and payload["labels"] == ["ai:implementing"]
+		# The dispatch is the only API call (CLAUDE.md §15).
+		assert [call for call in state["calls"] if call[:1] == ["api"]] == [call for call in state["calls"] if "--input" in call]
+
+
+def test_engine_fallback_report_skip_paths() -> None:
+	capacity = [ENGINE_FALLBACKS[1]]
+	cases = [
+		("capacity_only", capacity, {}, "skip reason=capacity_only phase=implement run=600", 1),
+		("heal_disabled", None, {"WORKFLOW_HEAL_ENABLED": "FALSE"}, "skip reason=heal_disabled", 1),
+		("smoke", None, {"ENGINE_FALLBACK_ISSUE_TITLE": "[E2E Smoke Test] implement"}, "skip reason=smoke_test_fixture role=IMPLEMENT", 1),
+		("garbage", "not json", {}, "skip reason=no_valid_fallbacks phase=implement run=600", 0),
+		("unknown_phase", None, {"ENGINE_FALLBACK_PHASE": "review"}, "skip reason=unknown_phase phase=review", 0),
+		("missing_run", None, {"GITHUB_RUN_ID": ""}, "skip reason=missing_context", 0),
+	]
+	for name, fallbacks, flags, expected, alerts in cases:
+		with tempfile.TemporaryDirectory(prefix=f"engine-report-{name}-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage_engine_report(tmp, fallbacks=fallbacks, flags=flags)
+			result = _run(work / "scripts" / ENGINE_REPORT_SCRIPT.name, work, env)
+			assert result.returncode == 0, (name, result.stderr, result.stdout)
+			assert expected in result.stdout, (name, result.stdout)
+			assert "dispatches" not in _state(state_file), name
+			assert len(_tg_lines(tmp)) == alerts, name
+	# A rejected dispatch is logged and never fails the job.
+	with tempfile.TemporaryDirectory(prefix="engine-report-denied-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_engine_report(tmp, state={"dispatch_fail": True})
+		result = _run(work / "scripts" / ENGINE_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "skip reason=dispatch_denied role=IMPLEMENT fallback_reason=no_credential upstream=shubhodeep1/coding-workflows detail=HTTP 422" in result.stdout
+
+
+def _engine_intake_state(*, repo: str = CONSUMER_REPO, log: str = ENGINE_JOB_LOG, **overrides) -> dict:
+	jobs = {"600": [
+		{"id": 9201, "name": "implement / implement", "workflow_name": "AI Implement", "conclusion": "success", "steps": [{"name": "Run Codex implementation", "conclusion": "success"}]},
+		{"id": 9202, "name": "implement / engine-fallback-report", "workflow_name": "AI Implement", "conclusion": "success", "steps": []},
+	]}
+	return _intake_state(**{
+		"jobs": jobs,
+		# The reporter's own log quotes the fallback too; it must never count.
+		"job_logs": {"9201": log, "9202": "2026-10-06T06:10:00.000Z AI_ENGINE_FALLBACK role=IMPLEMENT reason=no_credential\n"},
+		"run_details": {"600": {"id": 600, "repository": {"full_name": repo}, "event": "issue_comment",
+			"path": ".github/workflows/internal-implement.yml" if repo == SELF_REPO else ".github/workflows/ai-implement.yml",
+			"status": "completed", "conclusion": "success"}},
+		**overrides,
+	})
+
+
+def test_intake_engine_fallback_opens_one_issue_per_role_and_reason() -> None:
+	result, state, prompt = _run_intake(_engine_payload(), _engine_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "kind=engine_fallback" in result.stdout
+	assert f"WORKFLOW_HEAL engine_fallback_verified source={CONSUMER_REPO} run=600 role=IMPLEMENT fallback_reason=no_credential detail=cli_missing" in result.stdout
+	assert f"fingerprint fp={ENGINE_FP} workflow=AI engine fallback step=engine:IMPLEMENT" in result.stdout
+	created = state["issues_created"][0]
+	assert created["repo"] == SELF_REPO and created["label"] == heal.HEAL_LABEL
+	assert created["title"] == "Workflow heal: Claude engine fell back to codex for IMPLEMENT (no_credential/cli_missing)"
+	assert f"{heal.MARKER_PREFIX}fp={ENGINE_FP}" in created["body"]
+	assert "Claude engine fallback: role IMPLEMENT (implement phase)" in prompt
+	assert "Account pool step reason (claude_pool_token.sh): cli_missing" in prompt
+	assert "CLAUDE_POOL available=false reason=cli_missing accounts=0" in prompt
+	# A job with no failed step keeps its log in the prompt (an empty TSV field
+	# used to collapse and shift the log path into `failing step`).
+	assert "| job: implement / implement | failing step: unknown ---" in prompt and "(log unavailable)" not in prompt
+	# The source issue's thread stays clean: the fallback is not its fault.
+	assert not any(c["path"] == f"repos/{CONSUMER_REPO}/issues/42/comments" for c in state.get("comments_posted", []))
+	# Only the phase job's log was read as evidence, not the reporter's.
+	assert "job: implement / engine-fallback-report" not in prompt
+	run_reads = [call for call in state["calls"] if call[:1] == ["api"] and f"repos/{CONSUMER_REPO}/actions/runs/600" in call]
+	assert len(run_reads) == 1 and run_reads[0][run_reads[0].index("--method") + 1] == "GET"
+
+
+def test_intake_engine_fallback_repeats_become_occurrences_across_repositories() -> None:
+	# The open issue was filed from another repository's run: same role +
+	# reason, so this report is an occurrence (answer Q2 A).
+	open_issue = _sourced_heal_issue(77, state="open", fp=ENGINE_FP, source=f"{SELF_REPO}#9")
+	state = _engine_intake_state(heal_issues=[open_issue])
+	result, after, _ = _run_intake(_engine_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL duplicate existing_issue=77" in result.stdout and "match=fingerprint" in result.stdout
+	assert "issues_created" not in after and "issue_edits" not in after
+	occurrences = [c for c in after["comments_posted"] if c["path"] == f"repos/{SELF_REPO}/issues/77/comments"]
+	assert len(occurrences) == 1 and "- **Claude engine role:** `IMPLEMENT`" in occurrences[0]["body"]
+
+
+@pytest.mark.parametrize("case,reason", [
+	("no_line", "no_fallback_log_line"),
+	("forged", "no_fallback_log_line"),
+	("wrong_path", "workflow_path_mismatch"),
+	("run_missing", "run_unavailable"),
+	("other_repo", "repo_mismatch"),
+])
+def test_intake_engine_fallback_unverified_reports_have_no_mutations(case: str, reason: str) -> None:
+	state = _engine_intake_state(log={"no_line": PLAN_JOB_LOG, "forged": FORGED_JOB_LOG}.get(case, ENGINE_JOB_LOG))
+	if case == "wrong_path":
+		state["run_details"]["600"]["path"] = ".github/workflows/ai-plan.yml"
+	elif case == "run_missing":
+		state["run_details"] = {}
+	elif case == "other_repo":
+		state["run_details"]["600"]["repository"]["full_name"] = SELF_REPO
+	result, after, _ = _run_intake(_engine_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL skip reason=engine_fallback_unverified detail={reason} outcome=skip" in result.stdout
+	assert "fingerprint fp=" not in result.stdout
+	assert not any(key in after for key in ("issues_created", "comments_posted", "issue_edits"))

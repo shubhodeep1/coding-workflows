@@ -116,7 +116,13 @@ PY
 if [ "${engine}" = claude ]; then
 	engine_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 	for required in ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl; do
-		[ -f "${engine_dir}/${required}" ] || { echo "AI_ENGINE_FALLBACK role=${engine_role} reason=support_missing" >&2; exit 75; }
+		if [ ! -f "${engine_dir}/${required}" ]; then
+			echo "AI_ENGINE_FALLBACK role=${engine_role} reason=support_missing" >&2
+			# ai_engine.sh may be the missing file: record the fallback here.
+			[ -z "${RUNNER_TEMP:-}${AI_ENGINE_FALLBACK_RECORD_FILE:-}" ] \
+				|| printf 'role=%s reason=support_missing class=\n' "${engine_role}" >> "${AI_ENGINE_FALLBACK_RECORD_FILE:-${RUNNER_TEMP}/ai-engine-fallbacks.txt}" 2>/dev/null || true
+			exit 75
+		fi
 	done
 	# shellcheck source=ai_engine.sh
 	source "${engine_dir}/ai_engine.sh"
@@ -135,6 +141,8 @@ if [ "${engine}" = claude ]; then
 		exit 75
 	fi
 	[ -n "${image}" ] || { ai_engine_fallback "${engine_role}" image_build_failed; exit 75; }
+	# Capacity only when every account hit its usage limit (answer Q1 A).
+	claude_fallback_class="capacity"
 	for account in "${claude_accounts[@]}"; do
 		rm -f -- "${run_root}/results/transcript.jsonl" "${run_root}/results/stderr" "${run_root}/socket/provider.sock"
 		env -i PATH="${PATH}" PYTHONDONTWRITEBYTECODE=1 \
@@ -147,6 +155,7 @@ if [ "${engine}" = claude ]; then
 		done
 		if [ ! -S "${run_root}/socket/provider.sock" ]; then
 			echo "CLAUDE_POOL run role=${engine_role} account=${account} outcome=crashed reason=relay_unavailable" >&2
+			claude_fallback_class=""
 			kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; broker_pid=""
 			continue
 		fi
@@ -196,6 +205,7 @@ if [ "${engine}" = claude ]; then
 				exit 0
 				;;
 			usage_limit|auth_failed)
+				[ "${outcome}" = usage_limit ] || claude_fallback_class=""
 				continue
 				;;
 			*)
@@ -203,7 +213,7 @@ if [ "${engine}" = claude ]; then
 				;;
 		esac
 	done
-	ai_engine_fallback "${engine_role}" all_accounts_failed
+	ai_engine_fallback "${engine_role}" all_accounts_failed "${claude_fallback_class}"
 	exit 75
 fi
 

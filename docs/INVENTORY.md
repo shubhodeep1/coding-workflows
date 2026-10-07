@@ -100,6 +100,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/activation_verify.sh` — Grade merged work LIVE or DORMANT, post the verdict, open one issue for code gaps and record operator steps (port P4).
 - `scripts/ai_context_utils.py` — Python helper for ai context utils.
 - `scripts/ai_engine.sh` — Sourceable helpers that choose a role's engine (codex or Claude), run `claude -p` in the isolated container (`claude_run` via `codex_isolated_exec.sh --engine claude`), and fall back to codex (D1).
+- `scripts/ai_engine_fallback_report.sh` — Alert once on a run's Claude engine fallbacks to codex and report each setup or code fault (not capacity) to coding-workflows' heal intake from the workflow's `engine-fallback-report` job.
 - `scripts/ai_labels.py` — AI label contract utilities for workflow phase transitions and repair.
 - `scripts/ai_memory.py` — CLI for AI memory operations used by GitHub workflows.
 - `scripts/ai_memory_lib.py` — Shared AI memory helpers for GitHub workflows.

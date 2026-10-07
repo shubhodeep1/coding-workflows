@@ -591,3 +591,55 @@ def test_an_unusable_payload_means_no_labels(tmp_path: Path, content: str) -> No
 	event.write_text(content, encoding="utf-8")
 	assert ce.work_item_labels({"GITHUB_EVENT_PATH": str(event)}) == []
 	assert ce.work_item_labels({"GITHUB_EVENT_PATH": str(tmp_path / "absent.json")}) == []
+
+
+# --- fallback classification (engine-fallback-report) ---------------------------
+
+
+def test_collect_fallbacks_classifies_capacity_and_defects() -> None:
+	record = "\n".join([
+		"role=PLAN reason=no_credential class=",
+		"role=PLAN reason=no_credential class=",  # duplicate
+		"role=IMPLEMENT reason=all_accounts_failed class=capacity",
+		"role=IMPLEMENT_DIAGNOSE reason=all_accounts_failed class=",
+		"role=CLARIFY reason=image_build_failed class=",
+		"role=NOT_A_ROLE reason=cli_missing class=",  # unknown role
+		"role=PLAN reason=Bad-Reason class=",  # malformed
+		"garbage",
+	])
+	assert ce.collect_fallbacks(record, "all_gated") == [
+		{"role": "PLAN", "reason": "no_credential", "detail": "all_gated", "class": "capacity"},
+		{"role": "IMPLEMENT", "reason": "all_accounts_failed", "detail": "", "class": "capacity"},
+		{"role": "IMPLEMENT_DIAGNOSE", "reason": "all_accounts_failed", "detail": "", "class": "defect"},
+		{"role": "CLARIFY", "reason": "image_build_failed", "detail": "", "class": "defect"},
+	]
+
+
+@pytest.mark.parametrize("pool_reason,detail", [
+	("cli_missing", "cli_missing"),
+	("broker_refused_unregistered_repo", "broker_refused_unregistered_repo"),
+	("oidc_request_failed_503", "oidc_request_failed_503"),
+	("auth_failed", "auth_failed"),
+	("", "pool_unresolved"),
+	("Bad Reason!", "pool_unresolved"),
+])
+def test_no_credential_is_a_defect_unless_every_account_is_gated(pool_reason: str, detail: str) -> None:
+	assert ce.collect_fallbacks("role=IMPLEMENT reason=no_credential class=", pool_reason) == [
+		{"role": "IMPLEMENT", "reason": "no_credential", "detail": detail, "class": "defect"},
+	]
+
+
+def test_collect_fallbacks_is_bounded() -> None:
+	record = "\n".join(f"role=PLAN reason=reason_{index} class=" for index in range(25))
+	assert len(ce.collect_fallbacks(record)) == ce.FALLBACK_RECORD_LIMIT
+
+
+def test_fallbacks_cli_prints_one_json_line(tmp_path: Path) -> None:
+	record = tmp_path / "record.txt"
+	record.write_text("role=PLAN reason=no_credential class=\n", encoding="utf-8")
+	result = _run("fallbacks", "--record-file", str(record), "--pool-reason", "cli_missing")
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.count("\n") == 1
+	assert json.loads(result.stdout) == [{"class": "defect", "detail": "cli_missing", "reason": "no_credential", "role": "PLAN"}]
+	missing = _run("fallbacks", "--record-file", str(tmp_path / "absent.txt"))
+	assert missing.returncode == 0 and json.loads(missing.stdout) == []

@@ -18,9 +18,14 @@
 #       when it starts with `claude-`.
 #   ai_engine_cli_version
 #       The pinned @anthropic-ai/claude-code version.
-#   ai_engine_fallback <role> <reason>
+#   ai_engine_fallback <role> <reason> [class]
 #       Logs `AI_ENGINE_FALLBACK role= reason=` and sends at most one
-#       Telegram note per job (plan D1). The caller then runs codex.
+#       Telegram note per job (plan D1). The caller then runs codex. It also
+#       appends `role= reason= class=` to AI_ENGINE_FALLBACK_RECORD_FILE,
+#       which the job's "Collect AI engine fallbacks" step classifies
+#       (claude_engine.py fallbacks) for the engine-fallback-report job. With
+#       AI_ENGINE_FALLBACK_REPORTER=true that job sends the Telegram note, so
+#       none is sent here. `class` is `capacity` or empty.
 #   ai_engine_pool_dir
 #       The account pool directory (CLAUDE_ENGINE_POOL_DIR below).
 #   ai_engine_claude_home
@@ -55,6 +60,11 @@
 #                           lists account names, best first; `tokens/<NAME>`
 #                           holds each token (0600)
 #   ALLOW_WORKFLOW_EDITS    `true` lifts the .github/workflows deny rules (P5)
+#   AI_ENGINE_FALLBACK_RECORD_FILE   fallback record (default
+#                           ${RUNNER_TEMP}/ai-engine-fallbacks.txt; nothing is
+#                           recorded without RUNNER_TEMP)
+#   AI_ENGINE_FALLBACK_REPORTER      `true` when the job has an
+#                           engine-fallback-report job (default `false`)
 #   SUPPORT_INSTRUCTIONS_FILE   unattended_system_instructions.md
 #
 # The OAuth token never reaches the CLI: scripts/claude_anthropic_relay.py
@@ -122,11 +132,30 @@ ai_engine_cli_version()
 	_ai_engine_py config --key cli_version
 }
 
+ai_engine_fallback_record_file()
+{
+	if [ -n "${AI_ENGINE_FALLBACK_RECORD_FILE:-}" ]; then
+		printf '%s\n' "${AI_ENGINE_FALLBACK_RECORD_FILE}"
+	elif [ -n "${RUNNER_TEMP:-}" ]; then
+		printf '%s\n' "${RUNNER_TEMP}/ai-engine-fallbacks.txt"
+	fi
+}
+
 ai_engine_fallback()
 {
-	local role="${1:-unknown}" reason="${2:-unknown}"
+	local role="${1:-unknown}" reason="${2:-unknown}" fallback_class="${3:-}"
 	reason="$(printf '%s' "${reason}" | tr -c 'A-Za-z0-9_.-' '_' | cut -c1-60)"
 	echo "AI_ENGINE_FALLBACK role=${role} reason=${reason}" >&2
+	local record_file
+	record_file="$(ai_engine_fallback_record_file)"
+	case "${fallback_class}" in
+		capacity) ;;
+		*) fallback_class="" ;;
+	esac
+	if [ -n "${record_file}" ]; then
+		printf 'role=%s reason=%s class=%s\n' "${role}" "${reason}" "${fallback_class}" >> "${record_file}" 2>/dev/null || true
+	fi
+	[ "${AI_ENGINE_FALLBACK_REPORTER:-false}" != "true" ] || return 0
 	local marker="${RUNNER_TEMP:-/tmp}/ai-engine-fallback-notified"
 	[ -e "${marker}" ] && return 0
 	: > "${marker}" 2>/dev/null || return 0
@@ -334,6 +363,7 @@ claude_run()
 					;;
 				73)
 					echo "CLAUDE_POOL run role=${role} account=${name} outcome=crashed reason=relay_unavailable exit_code=${attempt_rc}" >&2
+					echo crashed >> "${run_dir}/account-outcomes"
 					continue
 					;;
 			esac
@@ -348,6 +378,7 @@ claude_run()
 					exit 0
 					;;
 				usage_limit|auth_failed)
+					echo "${outcome}" >> "${run_dir}/account-outcomes"
 					continue
 					;;
 				timeout)
@@ -367,7 +398,13 @@ claude_run()
 		return "${_AI_ENGINE_EXIT_FALLBACK}"
 	fi
 	if [ "${rc}" -eq "${_AI_ENGINE_EXIT_FALLBACK}" ]; then
-		ai_engine_fallback "${role}" all_accounts_failed
+		# Capacity only when every account tried hit its usage limit; a
+		# rejected token or a dead relay is a fault to fix (answer Q1 A).
+		local fallback_class=""
+		if [ -s "${run_dir}/account-outcomes" ] && ! grep -qvx usage_limit "${run_dir}/account-outcomes"; then
+			fallback_class="capacity"
+		fi
+		ai_engine_fallback "${role}" all_accounts_failed "${fallback_class}"
 	fi
 	return "${rc}"
 }

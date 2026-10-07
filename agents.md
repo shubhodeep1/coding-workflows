@@ -212,7 +212,19 @@ Phases of the unattended pipeline (each is a separate workflow file under
     Its comment streak trusts only the authenticated
     workflow account; cancellations and successful implementation break the
     streak, and unavailable identity or comment history reports the current
-    failure without applying a higher threshold. A failed
+    failure without applying a higher threshold. A fifth reporter is the
+    `engine-fallback-report` job of `clarify.yml`, `plan.yml`, `implement.yml`
+    and `orchestrate_clarify_respond.yml`
+    (`scripts/ai_engine_fallback_report.sh`, payload kind `engine_fallback`):
+    when the phase job ran a Claude role on codex (`AI_ENGINE_FALLBACK`), it
+    sends one Telegram WARNING and dispatches each `defect` fallback; a
+    `capacity` fallback (every account over its usage limit) only alerts. The
+    intake verifies the GitHub-read run (registered repo, issue event, the
+    phase's wrapper path) and a timestamped `AI_ENGINE_FALLBACK role= reason=`
+    line in a non-reporter job log (skip reason `engine_fallback_unverified`),
+    fingerprints on role + reason + pool reason only (one open heal issue
+    across workflows and repositories; repeats are occurrence comments) and
+    never comments on the run's source issue. A failed
     `Run reviewer models` step (the editor never ran) is reported as
     `reviewers_failed` with per-slot / summariser exit codes
     (`reviewers_failure_evidence.txt`, `AUTOFIX_REVIEWERS_FAILED=true`) rather
@@ -234,7 +246,7 @@ Phases of the unattended pipeline (each is a separate workflow file under
     default; disable per repo via `WORKFLOW_HEAL_ENABLED=false`; never pushes
     code itself. Stable log prefixes: `WORKFLOW_HEAL_REPORT`,
     `WORKFLOW_HEAL_AUTOFIX_REPORT`, `WORKFLOW_HEAL_PHASE_REPORT`,
-    `WORKFLOW_HEAL_PR_RECONCILE`, `WORKFLOW_HEAL`.
+    `WORKFLOW_HEAL_PR_RECONCILE`, `WORKFLOW_HEAL`, `AI_ENGINE_FALLBACK_REPORT`.
     A report whose failure reason is `identical_failure_cap`, or a generation
     > 1 of its lineage, is deterministic (`is_deterministic_failure`): the
     intake never files it as `transient` (remaps to `inconclusive`,
@@ -932,7 +944,16 @@ model variable only when that value starts with `claude-`, else Opus 5.5
 `RETRO`, `MATERIALITY`, `SUMMARISER` and `BEHAVIOURAL_SMOKE`; the reasoning
 column is the effort (`none` / `minimal` → `low`). The reviewer rows have no
 engine switch. When Claude is unavailable (`claude_run` exit 75,
-`AI_ENGINE_FALLBACK`), the run uses the codex/OpenCode path unchanged. The
+`AI_ENGINE_FALLBACK`), the run uses the codex/OpenCode path unchanged. Each
+fallback is also appended to `AI_ENGINE_FALLBACK_RECORD_FILE` (default
+`$RUNNER_TEMP/ai-engine-fallbacks.txt`); in clarify, plan, implement and
+clarify-respond the job's last step ("Collect AI engine fallbacks",
+`claude_engine.py fallbacks`) classifies them as `capacity` (`no_credential`
+with pool reason `all_gated`, or `all_accounts_failed` with every account at
+`usage_limit`) or `defect`, and the `engine-fallback-report` job alerts and
+reports defects to workflow failure heal. Those jobs set
+`AI_ENGINE_FALLBACK_REPORTER=true`, so `ai_engine_fallback` sends no Telegram
+note of its own. The
 pinned CLI is `@anthropic-ai/claude-code` `cli_version` from the same file,
 installed by `.github/actions/install-claude`.
 
@@ -1586,6 +1607,8 @@ and shipped:
 - `STANDALONE_AUTO_DECIDE` (`clarify.yml` "Standalone auto-decide": `issue= outcome=answered|skip|failed reason= decisions=`, `reason=delegated_to_clarify_respond` when the worker answers; `orchestrate_clarify_respond.yml` "Standalone RECOMMENDED fallback" and "Record standalone auto-decisions": `issue= outcome=fallback|skip|answered reason=worker_failed|worker_failed_undecided decider= decisions= ad_total= setup_total=`)
 - `AI_ENGINE_SELECTED` (`scripts/ai_engine.sh`: `role= engine= model= effort= source=`)
 - `AI_ENGINE_FALLBACK` (`scripts/ai_engine.sh`: `role= reason=`; the run uses codex)
+- `AI_ENGINE_FALLBACK_COLLECTED` (clarify / plan / implement / clarify-respond "Collect AI engine fallbacks": `fallbacks=<JSON list of {role, reason, detail, class}>`)
+- `AI_ENGINE_FALLBACK_REPORT` (`scripts/ai_engine_fallback_report.sh`: `fallback role= reason= detail= class= phase= run=`, `alerted phase= run= fallbacks=`, `dispatched role= fallback_reason= phase= run= workflow= wrapper_sha= upstream=`, `skip reason=capacity_only|heal_disabled|no_valid_fallbacks|unknown_phase|missing_context|payload_build_failed|dispatch_denied|…`)
 - `CLAUDE_POOL` (`scripts/ai_engine.sh` and the sandbox Claude branches: `run role= account= outcome= reason= exit_code=`, `account_skipped account= reason=`)
 - `AI_ENGINE_PROJECT_LABEL` (`orchestrate.yml` "Ensure orchestrator labels exist": `label=`, `none` when unset; the label the tracking and wave-1 issues get)
 - `AI_ENGINE_PR_LABEL` (`implement.yml` "Create Pull Request": `issue= label=`; the engine label copied from the issue to its PR)
@@ -1801,6 +1824,8 @@ LOG_PREFIX.name=RETARGET_MERGED_BASE
 LOG_PREFIX.name=STANDALONE_AUTO_DECIDE
 LOG_PREFIX.name=AI_ENGINE_SELECTED
 LOG_PREFIX.name=AI_ENGINE_FALLBACK
+LOG_PREFIX.name=AI_ENGINE_FALLBACK_COLLECTED
+LOG_PREFIX.name=AI_ENGINE_FALLBACK_REPORT
 LOG_PREFIX.name=CLAUDE_POOL
 LOG_PREFIX.name=AI_ENGINE_PROJECT_LABEL
 LOG_PREFIX.name=AI_ENGINE_PR_LABEL

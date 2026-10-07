@@ -14,6 +14,11 @@ Two shell drivers use this module through its CLI:
     job of ``clarify.yml``, ``plan.yml`` and ``implement.yml`` after the phase
     job failed. It counts the phase's failed runs in a row on the issue and,
     at the streak threshold, reports the failed run.
+  * ``scripts/ai_engine_fallback_report.sh`` runs in the
+    ``engine-fallback-report`` job of the same workflows (and
+    ``orchestrate_clarify_respond.yml``) when the phase job ran a Claude role
+    on codex. It alerts once and reports each setup or code fault
+    (``engine_fallback``); capacity fallbacks only alert.
   * ``scripts/workflow_failure_heal_intake.sh`` runs in coding-workflows. It
     validates the payload, fingerprints the failure, applies the dedup / lineage
     / budget gates, and composes the heal issue body.
@@ -66,7 +71,7 @@ RELEASE_WORKFLOW_NAMES: tuple[str, ...] = (
 	"Forward-merge stable to main",
 )
 
-SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure")
+SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure", "engine_fallback")
 REPORTABLE_CONCLUSIONS = ("failure", "timed_out")
 
 # `already-fixed` opens no issue, but only when check_heal_already_fixed_claim
@@ -144,6 +149,36 @@ PHASE_REPORT_RUN_EVENTS = ("issues", "issue_comment")
 PHASE_REPORT_TRUSTED_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
 PHASE_REPORT_TRUSTED_BOT_LOGINS = ("github-actions[bot]",)
 PHASE_REPORT_REPORTER_JOB = "heal-report"
+
+# Claude engine fallbacks (the `engine-fallback-report` job of clarify.yml,
+# plan.yml, implement.yml and orchestrate_clarify_respond.yml). A run that
+# fell back from Claude to codex succeeds, so it never reaches the phase
+# failure path; the job's own fallback record does. Phase -> wrapper slug of
+# `ai-<slug>.yml` / `internal-<slug>.yml`.
+ENGINE_FALLBACK_PHASES: dict[str, str] = {
+	"clarify": "clarify",
+	"plan": "plan",
+	"implement": "implement",
+	"clarify_respond": "orchestrate-clarify-respond",
+}
+# Keep in sync with scripts/claude_engine.py ROLES (tests pin the parity).
+ENGINE_FALLBACK_ROLES: tuple[str, ...] = (
+	"CLARIFY", "CLARIFY_RESPOND", "PLAN", "IMPLEMENT", "IMPLEMENT_REPAIR", "IMPLEMENT_DIAGNOSE",
+	"ORCHESTRATE", "WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE", "UNBLOCK_JUDGE",
+	"REVIEW_EDITOR", "REVIEW_CONSOLIDATOR", "CONFLICT_RESOLVER", "RB_JUDGE", "VALIDATE",
+	"VALIDATE_SELF_HEAL", "VALIDATION_REFRESH", "SECURITY_AUDIT", "CHECK_TRIAGE", "WORKFLOW_HEAL",
+	"ACTIVATION_VERIFY", "LOG_ANALYSIS", "LOG_AUDIT", "LOG_SUMMARY", "RETRO", "MATERIALITY",
+	"SUMMARISER", "BEHAVIOURAL_SMOKE",
+)
+ENGINE_FALLBACK_CLASSES = ("capacity", "defect")
+ENGINE_FALLBACK_REPORTER_JOB = "engine-fallback-report"
+ENGINE_FALLBACK_REPORT_LIMIT = 10
+ENGINE_FALLBACK_EXCERPT_LINES = 80
+# The workflow name every engine_fallback fingerprint uses, so one role +
+# reason maps to one heal issue across workflows and repositories (answer Q2 A).
+ENGINE_FALLBACK_FINGERPRINT_WORKFLOW = "AI engine fallback"
+_ENGINE_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]{0,59}$")
+_ENGINE_EXCERPT_RE = re.compile(r"AI_ENGINE_|CLAUDE_POOL|install-claude|claude_engine\.py|claude_pool_token|##\[error\]|::error|##\[warning\]|::warning")
 
 # Identical-failure fingerprint cap (review_autofix.yml gate). Every failure
 # comment the review workflow posts ends with a failure marker; the gate counts
@@ -836,6 +871,192 @@ def build_phase_failure_payload(
 	}
 
 
+def parse_engine_fallbacks(value: Any) -> list[dict[str, str]]:
+	"""Validate the `engine_fallbacks` job output (claude_engine.py fallbacks).
+
+	Malformed entries are dropped, never fatal: the reporter alerts on what it
+	can read. Deduplicated on (role, reason, detail), at most
+	``ENGINE_FALLBACK_REPORT_LIMIT``.
+	"""
+	if isinstance(value, str):
+		try:
+			value = json.loads(value or "[]")
+		except ValueError:
+			return []
+	if not isinstance(value, list):
+		return []
+	entries: list[dict[str, str]] = []
+	seen: set[tuple[str, str, str]] = set()
+	for item in value:
+		if not isinstance(item, dict):
+			continue
+		role, reason, detail, cls = (item.get(key) for key in ("role", "reason", "detail", "class"))
+		detail = detail if isinstance(detail, str) and _ENGINE_TOKEN_RE.match(detail) else ""
+		if role not in ENGINE_FALLBACK_ROLES or not isinstance(reason, str) or not _ENGINE_TOKEN_RE.match(reason) or cls not in ENGINE_FALLBACK_CLASSES:
+			continue
+		key = (role, reason, detail)
+		if key in seen:
+			continue
+		seen.add(key)
+		entries.append({"role": role, "reason": reason, "detail": detail, "class": cls})
+		if len(entries) >= ENGINE_FALLBACK_REPORT_LIMIT:
+			break
+	return entries
+
+
+def describe_engine_fallback(entry: dict[str, str]) -> str:
+	detail = f" (pool: {entry['detail']})" if entry.get("detail") else ""
+	return f"{entry['role']} {entry['reason']}{detail} [{entry['class']}]"
+
+
+def build_engine_fallback_payloads(
+	*,
+	repo: str,
+	phase: str,
+	fallbacks: Any,
+	workflow_name: str,
+	run_id: str,
+	conclusion: str | None,
+	issue_number: Any,
+	issue_title: str | None,
+	issue_url: str | None,
+	labels: Any,
+	wrapper_sha: str | None,
+	reporter_run_url: str | None,
+	now: datetime | None = None,
+) -> dict[str, Any]:
+	"""Build the Telegram line and the heal payloads of one job's fallbacks.
+
+	Returns ``{"entries": [...], "alert": str, "payloads": [...]}``. Every
+	entry is in the alert; only ``defect`` entries get a payload (answer Q1
+	A: capacity fallbacks only alert). One payload per distinct role +
+	reason + pool detail; the intake keys its fingerprint on exactly that.
+	"""
+	if phase not in ENGINE_FALLBACK_PHASES:
+		raise ValueError(f"unknown phase {phase!r}")
+	run_number = _positive_int(run_id)
+	if run_number is None:
+		raise ValueError("run_id must be a positive integer")
+	now = now or _utc_now()
+	entries = parse_engine_fallbacks(fallbacks)
+	run_url = f"https://github.com/{repo}/actions/runs/{run_number}"
+	name = single_line(workflow_name, 200)
+	alert = ""
+	if entries:
+		alert = (
+			f"AI engine: Claude unavailable in {repo} ({name or phase}), so the run used codex: "
+			+ "; ".join(describe_engine_fallback(entry) for entry in entries)
+			+ f". Run: {run_url}"
+		)
+	label_names = labels
+	if isinstance(label_names, str):
+		try:
+			label_names = json.loads(label_names or "[]")
+		except ValueError:
+			label_names = []
+	label_names = [single_line(item, 100) for item in label_names if isinstance(item, str)][:50] if isinstance(label_names, list) else []
+	payloads = []
+	for entry in entries:
+		if entry["class"] != "defect":
+			continue
+		payloads.append({
+			"schema_version": SCHEMA_VERSION,
+			"source_repo": repo,
+			"source_kind": "engine_fallback",
+			"issue_number": _positive_int(issue_number),
+			"issue_title": single_line(issue_title, 300),
+			"issue_url": sanitize_text(issue_url, 300),
+			"label": None,
+			"labels": label_names,
+			"run_refs": [{"repo": repo, "run_id": str(run_number), "url": run_url}],
+			"wrapper_sha": wrapper_sha if is_valid_sha(wrapper_sha) else None,
+			"source_gen": None,
+			"source_root": None,
+			"issue_excerpt": "",
+			"comments_excerpt": "",
+			"workflow_name": name,
+			"head_branch": None,
+			"head_sha": None,
+			"conclusion": single_line(conclusion, 40) or None,
+			"failure_reason": entry["reason"],
+			"engine_role": entry["role"],
+			"engine_detail": entry["detail"] or None,
+			"engine_phase": phase,
+			"reporter_run_url": sanitize_text(reporter_run_url, 300) or None,
+			"reported_at": _iso(now),
+		})
+	return {"entries": entries, "alert": alert, "payloads": payloads}
+
+
+def engine_fallback_log_evidence(log_text: str, *, role: str, reason: str) -> dict[str, Any]:
+	"""Find the fallback a report claims in one raw job log.
+
+	``match`` is true only for a line the step itself printed:
+	``<timestamp> AI_ENGINE_FALLBACK role=<role> reason=<reason>`` with
+	nothing else on it. Echoed step scripts are dropped first, and continuation
+	lines of a multi-line env value carry no timestamp, so text quoted from an
+	issue or comment cannot forge the line. ``excerpt`` is the engine lines of
+	the log (pool, install, fallback, errors and warnings) for the diagnosis.
+	"""
+	wanted = f"AI_ENGINE_FALLBACK role={role} reason={reason}"
+	match = False
+	excerpt: list[str] = []
+	# Script lines are recognised by their ANSI colour, so drop them first.
+	for line in _drop_step_script_lines(log_text).split("\n"):
+		line = _ANSI_RE.sub("", line).rstrip("\r")
+		stamped = _LOG_TIMESTAMP_RE.match(line)
+		content = line[stamped.end():] if stamped else line
+		if stamped and content.strip() == wanted:
+			match = True
+		if stamped and _ENGINE_EXCERPT_RE.search(content) and len(excerpt) < ENGINE_FALLBACK_EXCERPT_LINES:
+			excerpt.append(sanitize_text(content, 400))
+	return {"match": match, "excerpt": excerpt}
+
+
+def engine_fallback_workflow_paths(phase: str, *, source_repo: str, self_repo: str) -> tuple[str, ...]:
+	slug = ENGINE_FALLBACK_PHASES.get(phase)
+	if not slug:
+		raise ValueError(f"unknown phase {phase!r}")
+	paths = (f".github/workflows/ai-{slug}.yml",)
+	if source_repo.casefold() == self_repo.casefold():
+		paths += (f".github/workflows/internal-{slug}.yml",)
+	return paths
+
+
+def verify_engine_fallback_provenance(payload: Any, *, run: Any, log_match: bool, self_repo: str) -> dict[str, Any]:
+	"""Check GitHub-read evidence before acting on an untrusted fallback report.
+
+	The run must exist in the source repository, come from that phase's
+	wrapper on an issue event, and one of its non-reporter job logs must hold
+	the claimed ``AI_ENGINE_FALLBACK`` line (``log_match``).
+	"""
+	refs = payload.get("run_refs") if isinstance(payload, dict) else None
+	run_id = refs[0].get("run_id") if isinstance(refs, list) and refs and isinstance(refs[0], dict) else None
+	run_id = str(run_id) if _positive_int(run_id) is not None else ""
+
+	def decision(verified: bool, why: str) -> dict[str, Any]:
+		return {"verified": verified, "reason": why, "run_id": run_id}
+
+	if not isinstance(payload, dict) or payload.get("source_kind") != "engine_fallback" or payload.get("engine_phase") not in ENGINE_FALLBACK_PHASES or not run_id:
+		return decision(False, "not_engine_fallback_report")
+	if not isinstance(run, dict):
+		return decision(False, "run_unavailable")
+	if str(run.get("id")) != run_id:
+		return decision(False, "run_id_mismatch")
+	source_repo = payload.get("source_repo")
+	repository = run.get("repository")
+	if not isinstance(source_repo, str) or not isinstance(repository, dict) or not isinstance(repository.get("full_name"), str) or repository["full_name"].casefold() != source_repo.casefold():
+		return decision(False, "repo_mismatch")
+	if run.get("event") not in PHASE_REPORT_RUN_EVENTS:
+		return decision(False, "event_mismatch")
+	path = run.get("path")
+	if not isinstance(path, str) or path.split("@", 1)[0] not in engine_fallback_workflow_paths(payload["engine_phase"], source_repo=source_repo, self_repo=self_repo):
+		return decision(False, "workflow_path_mismatch")
+	if not log_match:
+		return decision(False, "no_fallback_log_line")
+	return decision(True, "ok")
+
+
 def _normalize_script_ref(value: Any) -> str | None:
 	"""``script_ref`` is the coding-workflows ref the run staged: a SHA or ``stable``."""
 	ref = str(value or "").strip()
@@ -1048,6 +1269,15 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 			raise ValueError("failure_reason must be one of " + ", ".join(PHASE_FAILURE_REASONS) + " for phase_failure reports")
 		failure_streak = failure_streak or 1
 		failure_fingerprint = None
+	elif kind == "engine_fallback":
+		if failure_reason is None or not _ENGINE_TOKEN_RE.match(failure_reason):
+			raise ValueError("failure_reason (the AI_ENGINE_FALLBACK reason) is missing or malformed for engine_fallback reports")
+		if payload.get("engine_role") not in ENGINE_FALLBACK_ROLES:
+			raise ValueError("engine_role must be a Claude engine role for engine_fallback reports")
+		if payload.get("engine_phase") not in ENGINE_FALLBACK_PHASES:
+			raise ValueError("engine_phase must be one of " + ", ".join(ENGINE_FALLBACK_PHASES) + " for engine_fallback reports")
+		failure_streak = None
+		failure_fingerprint = None
 	else:
 		failure_reason = None
 		failure_streak = None
@@ -1073,6 +1303,8 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 	head_branch = head_branch if is_valid_branch(head_branch) else None
 	if kind == "phase_failure" and not run_refs:
 		raise ValueError("phase_failure reports need the failed run reference")
+	if kind == "engine_fallback" and not run_refs:
+		raise ValueError("engine_fallback reports need the run reference")
 	if kind == "workflow_run":
 		if not run_refs:
 			raise ValueError("workflow_run reports need the failed run reference")
@@ -1125,6 +1357,13 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 			"script_ref": script_ref,
 			"changed_files": changed_files,
 			"crash_file": crash_file,
+		})
+	if kind == "engine_fallback":
+		detail = payload.get("engine_detail")
+		normalized.update({
+			"engine_role": payload["engine_role"],
+			"engine_phase": payload["engine_phase"],
+			"engine_detail": detail if isinstance(detail, str) and _ENGINE_TOKEN_RE.match(detail) else None,
 		})
 	return normalized
 
@@ -1820,8 +2059,13 @@ def _context_lines(payload: dict[str, Any], *, run_summaries: list[dict[str, Any
 			phase = str(payload.get("failure_reason") or "").removesuffix("_failed") or "pipeline"
 			lines.append(f"- **Failure reason:** `{payload.get('failure_reason')}`")
 			lines.append(f"- **Consecutive failed {phase} runs on this issue:** {payload.get('failure_streak') or 1}")
-		else:
+		elif kind != "engine_fallback":
 			lines.append(f"- **Escalation label:** `{payload.get('label')}`")
+	if kind == "engine_fallback":
+		lines.append(f"- **Claude engine role:** `{payload.get('engine_role')}` ({payload.get('engine_phase')} phase)")
+		lines.append(f"- **Fallback reason:** `{payload.get('failure_reason')}`")
+		if payload.get("engine_detail"):
+			lines.append(f"- **Account pool reason:** `{payload['engine_detail']}`")
 	if payload.get("workflow_name"):
 		lines.append(f"- **Failed workflow:** `{payload['workflow_name']}` (conclusion: `{payload.get('conclusion') or 'unknown'}`)")
 	if payload.get("head_branch"):
@@ -1852,6 +2096,10 @@ def compose_issue_title(payload: dict[str, Any], *, workflow_name: str | None) -
 		target = f"{payload['source_repo']}#{payload.get('issue_number')}"
 		streak = payload.get("failure_streak") or 1
 		return f"Workflow heal: {name or 'pipeline phase'} failed {streak}x for {target} ({payload.get('failure_reason')})"
+	if payload.get("source_kind") == "engine_fallback":
+		# One issue per role + reason across repositories: no source in the title.
+		detail = f"/{payload['engine_detail']}" if payload.get("engine_detail") else ""
+		return f"Workflow heal: Claude engine fell back to codex for {payload.get('engine_role')} ({payload.get('failure_reason')}{detail})"
 	label = payload.get("label") or "escalation"
 	target = f"{payload['source_repo']}#{payload.get('issue_number')}"
 	if name:
@@ -1928,6 +2176,14 @@ def compose_issue_body(
 				"A clarify / plan / implement run failed on an issue. The diagnosis below attributes it to "
 				"the shared workflow source, so this issue was filed automatically for the clarify -> plan -> "
 				"implement -> review pipeline to fix it here."
+			)
+		elif payload.get("source_kind") == "engine_fallback":
+			intro = (
+				"A pipeline role that is set to run on the Claude engine could not start Claude and ran on "
+				"codex instead (`AI_ENGINE_FALLBACK`). The run itself went on, so nothing failed visibly. "
+				"This issue was filed automatically for the clarify -> plan -> implement -> review pipeline "
+				"to find and fix the root cause, so the role runs on Claude again. Later runs that fall back "
+				"for the same role and reason are recorded below as occurrence comments."
 			)
 		else:
 			intro = (
@@ -2407,6 +2663,51 @@ def _cmd_verify_phase_provenance(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _cmd_build_engine_fallback_payloads(args: argparse.Namespace) -> int:
+	result = build_engine_fallback_payloads(
+		repo=args.repo,
+		phase=args.phase,
+		fallbacks=args.fallbacks_json,
+		workflow_name=args.workflow_name,
+		run_id=args.run_id,
+		conclusion=args.conclusion or None,
+		issue_number=args.issue_number or None,
+		issue_title=args.issue_title,
+		issue_url=args.issue_url,
+		labels=args.labels_json,
+		wrapper_sha=args.wrapper_sha or None,
+		reporter_run_url=args.reporter_run_url or None,
+	)
+	for payload in result["payloads"]:
+		validate_payload(payload)
+	_write_json(result)
+	return 0
+
+
+def _cmd_engine_fallback_log(args: argparse.Namespace) -> int:
+	try:
+		text = Path(args.log_file).read_text(encoding="utf-8", errors="replace")
+	except OSError:
+		text = ""
+	evidence = engine_fallback_log_evidence(text, role=args.role, reason=args.reason)
+	if args.excerpt_out:
+		Path(args.excerpt_out).write_text("\n".join(evidence["excerpt"]) + ("\n" if evidence["excerpt"] else ""), encoding="utf-8")
+	sys.stdout.write(f"match={'true' if evidence['match'] else 'false'}\n")
+	return 0
+
+
+def _cmd_verify_engine_fallback_provenance(args: argparse.Namespace) -> int:
+	def read_optional(path: str) -> Any:
+		try:
+			return _load_json_file(path)
+		except (OSError, ValueError):
+			return None
+
+	_write_json(verify_engine_fallback_provenance(read_optional(args.payload_json), run=read_optional(args.run_json),
+		log_match=args.log_match == "true", self_repo=args.self_repo))
+	return 0
+
+
 def _cmd_wrap_dispatch(args: argparse.Namespace) -> int:
 	payload = _load_json_file(args.payload_json)
 	if not isinstance(payload, dict):
@@ -2641,6 +2942,35 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--self-repo", required=True)
 	p.add_argument("--comment-author", required=True)
 	p.set_defaults(func=_cmd_verify_phase_provenance)
+
+	p = sub.add_parser("build-engine-fallback-payloads", help="Build the Telegram line and heal payloads of one job's Claude engine fallbacks")
+	p.add_argument("--repo", required=True)
+	p.add_argument("--phase", required=True, choices=tuple(ENGINE_FALLBACK_PHASES))
+	p.add_argument("--fallbacks-json", required=True, help="the job's engine_fallbacks output (JSON text)")
+	p.add_argument("--workflow-name", required=True)
+	p.add_argument("--run-id", required=True)
+	p.add_argument("--conclusion", default="")
+	p.add_argument("--issue-number", default="")
+	p.add_argument("--issue-title", default="")
+	p.add_argument("--issue-url", default="")
+	p.add_argument("--labels-json", default="[]")
+	p.add_argument("--wrapper-sha", default="")
+	p.add_argument("--reporter-run-url", default="")
+	p.set_defaults(func=_cmd_build_engine_fallback_payloads)
+
+	p = sub.add_parser("engine-fallback-log", help="Print match=true|false for a claimed AI_ENGINE_FALLBACK line in a raw job log")
+	p.add_argument("--log-file", required=True)
+	p.add_argument("--role", required=True)
+	p.add_argument("--reason", required=True)
+	p.add_argument("--excerpt-out", default="", help="also write the log's engine lines to this file")
+	p.set_defaults(func=_cmd_engine_fallback_log)
+
+	p = sub.add_parser("verify-engine-fallback-provenance", help="Verify an engine fallback report against the GitHub-read run and its job logs")
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--run-json", required=True)
+	p.add_argument("--log-match", choices=("true", "false"), required=True)
+	p.add_argument("--self-repo", required=True)
+	p.set_defaults(func=_cmd_verify_engine_fallback_provenance)
 
 	p = sub.add_parser("wrap-dispatch", help="Print the repository_dispatch body with the report enveloped under client_payload.report")
 	p.add_argument("--payload-json", required=True)

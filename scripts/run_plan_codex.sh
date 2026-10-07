@@ -273,6 +273,9 @@ if [ "${PLAN_ENGINE}" = "claude" ]; then
     source scripts/ai_engine.sh
   else
     echo "AI_ENGINE_FALLBACK role=PLAN reason=support_missing" >&2
+    # No ai_engine.sh to record it: the engine-fallback-report job reads this line.
+    [ -z "${RUNNER_TEMP:-}${AI_ENGINE_FALLBACK_RECORD_FILE:-}" ] \
+      || printf 'role=PLAN reason=support_missing class=\n' >> "${AI_ENGINE_FALLBACK_RECORD_FILE:-${RUNNER_TEMP}/ai-engine-fallbacks.txt}" 2>/dev/null || true
     PLAN_ENGINE="codex"
   fi
 fi

@@ -695,6 +695,9 @@ if [ "${AI_ENGINE_RESOLVED_IMPLEMENT_DIAGNOSE:-codex}" = "claude" ]; then
       2> >(tee -a "${IMPLEMENT_DIAGNOSE_LOG_FILE}" >&2) || diagnose_rc=$?
   else
     echo "AI_ENGINE_FALLBACK role=IMPLEMENT_DIAGNOSE reason=support_missing" >&2
+    # No ai_engine.sh to record it: the engine-fallback-report job reads this line.
+    [ -z "${RUNNER_TEMP:-}${AI_ENGINE_FALLBACK_RECORD_FILE:-}" ] \
+      || printf 'role=IMPLEMENT_DIAGNOSE reason=support_missing class=\n' >> "${AI_ENGINE_FALLBACK_RECORD_FILE:-${RUNNER_TEMP}/ai-engine-fallbacks.txt}" 2>/dev/null || true
   fi
 fi
 if [ "${diagnose_rc}" -eq 75 ]; then

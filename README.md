@@ -1536,6 +1536,11 @@ through `clarify → plan → implement → review`.
   fails the job; log lines are prefixed `WORKFLOW_HEAL_PHASE_REPORT`. Issues
   #6413, #6373 and #6392 failed planning four times each on 2026-10-05 and
   never reached heal, because only escalation labels did.
+- **Trigger (Claude engine fallbacks):** the `engine-fallback-report` job of
+  `clarify.yml`, `plan.yml`, `implement.yml` and
+  `orchestrate_clarify_respond.yml` reports a run that ran a Claude role on
+  codex (`engine_fallback`, setup or code faults only; one open issue per role
+  and reason across repositories). See "Claude engine fallback reports".
 - **Reviewer failures name the failing phase:** if the `Run reviewer models`
   step fails, the editor never runs. `Post editor summary comment` names the failure `reviewers_failed` instead
   of `editor_empty_noop` (failure marker, fingerprint, cap reason, heal report
@@ -1986,7 +1991,7 @@ through `clarify → plan → implement → review`.
 | `REISSUE_PRESERVE_BASELINE_ENABLED` | `true` | Let the review-blocked judge's `spot-fix` reissue preserve the closed PR head as an `ai/reissue-baseline/*` branch that the next implement run starts from. `false` forces `redo` (start over from the base branch) |
 | `RETARGET_MERGED_BASE_ENABLED` | `true` | Retarget work stacked on a branch whose PR already merged to that PR's base (implement and the review gate; see the repository variables table) |
 | `RETARGET_MERGED_BASE_MAX_HOPS` | `3` | Positive integer cap on how many merged bases to follow when retargeting; invalid values fall back to `3`. |
-| `WORKFLOW_HEAL_ENABLED` | `true` | Switch for the workflow failure heal path. On by default: a human-needed escalation label (`ai:needs-human`, `ai:check-triage-escalated`, `ai:destructive-blocked`, `ai:scope-blocked`, `ai:harness-broken`, `ai:resolver-escalated`, `ai:security-pass-failed`) is reported to coding-workflows, whose intake diagnoses the failed runs and opens an `ai:workflow-heal` issue for the pipeline. Set to `false` per repo to disable the wrapper, the report, and (in coding-workflows) the intake. |
+| `WORKFLOW_HEAL_ENABLED` | `true` | Switch for the workflow failure heal path. On by default: a human-needed escalation label (`ai:needs-human`, `ai:check-triage-escalated`, `ai:destructive-blocked`, `ai:scope-blocked`, `ai:harness-broken`, `ai:resolver-escalated`, `ai:security-pass-failed`) is reported to coding-workflows, whose intake diagnoses the failed runs and opens an `ai:workflow-heal` issue for the pipeline. Set to `false` per repo to disable the wrapper, the report, and (in coding-workflows) the intake. Also drops the `engine_fallback` report of the `engine-fallback-report` job; its Telegram alert still goes out. |
 | `WORKFLOW_HEAL_MAX_LINEAGE_DEPTH` | `3` | coding-workflows only. Max heal generations for one failure fingerprint (or, for review/autofix reports, one pull request and the heal issue it fixes) before the chain is escalated (`ai:workflow-heal-escalated` + Telegram CRITICAL) instead of opening another issue. |
 | `WORKFLOW_HEAL_MAX_OPEN_ISSUES` | `10` | coding-workflows only. Max open `ai:workflow-heal` issues; further reports are logged with `skip reason=budget_exhausted` and a Telegram WARNING. |
 | `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY` | `20` | coding-workflows only. Max `ai:workflow-heal` issues opened per UTC day. |
@@ -2208,7 +2213,9 @@ writes (`CLAUDE_ENGINE_POOL_DIR`, default `$RUNNER_TEMP/claude-pool`: an
 When the isolation helper, Docker, the sandbox image, the policy, the
 instructions file or every account is unusable, it logs
 `AI_ENGINE_FALLBACK role= reason=` (`isolation_unavailable`, `support_missing`,
-`no_credential`, `all_accounts_failed`, …), sends at most one Telegram note per job,
+`no_credential`, `all_accounts_failed`, …), sends at most one Telegram note per job
+(none in a job wired to `engine-fallback-report`, which alerts instead; see
+"Claude engine fallback reports"),
 and returns `75`; the caller then runs its codex path unchanged. A crash
 returns non-zero and follows the role's existing retry rules; a timeout
 returns `124`. Runs are wrapped by `codex_stall_guard.sh --engine claude`,
@@ -2219,6 +2226,68 @@ predated `--engine` (issues #6413, #6373 and #6392 crashed every Claude
 planning attempt with `unknown option: --engine`). Every success prints the
 stream-json `result` usage line that `scripts/cost_audit.py` totals under
 "Claude engine usage".
+
+### Claude engine fallback reports
+
+A fallback to codex keeps the run going, so the run succeeds and nothing
+looks wrong. Before this report existed the only signal was the fallback's
+Telegram note, and the model steps that send it hold no Telegram secret, so it
+never arrived: from 2026-10-04 to 2026-10-06 all 129 implement jobs that
+selected Claude ran on codex (`cli_missing`; the fix is #6481) without an alert.
+`clarify.yml`, `plan.yml`, `implement.yml` and
+`orchestrate_clarify_respond.yml` now report every fallback:
+
+1. **Record.** `ai_engine_fallback` (and the scripts that print
+   `AI_ENGINE_FALLBACK` when `ai_engine.sh` itself is missing) append
+   `role= reason= class=` to `AI_ENGINE_FALLBACK_RECORD_FILE` (default
+   `$RUNNER_TEMP/ai-engine-fallbacks.txt`).
+2. **Classify.** The phase job's last step, "Collect AI engine fallbacks"
+   (`if: always()`), runs `claude_engine.py fallbacks` with the
+   "Resolve Claude credential" step's `reason` and sets the job outputs
+   `engine_fallbacks` (JSON list of `{role, reason, detail, class}`) and
+   `engine_fallback_alert_level`. `capacity` means every account was over its
+   usage limit: `no_credential` with pool reason `all_gated`, or
+   `all_accounts_failed` when every account tried returned `usage_limit`.
+   Everything else is a `defect`: `no_credential` keeps the pool step's reason
+   as `detail` (`cli_missing`, `broker_refused_…`, `oidc_request_failed_…`,
+   `pool_unresolved` when the step never ran), and a rejected token or dead
+   relay makes `all_accounts_failed` a defect.
+3. **Report.** The `engine-fallback-report` job (`permissions: {}`, GH_PAT)
+   runs when that output is non-empty, checks out the support ref (`stable`
+   in consumers) and runs `scripts/ai_engine_fallback_report.sh`. It sends one
+   Telegram WARNING listing every fallback of the run, and for each `defect`
+   dispatches an `engine_fallback` report to the workflow failure heal intake.
+   Capacity fallbacks only alert. `WORKFLOW_HEAL_ENABLED=false` keeps the alert
+   and drops the report. The phase jobs set
+   `AI_ENGINE_FALLBACK_REPORTER=true`, so `ai_engine_fallback` sends no note of
+   its own and each run alerts once.
+4. **Heal.** The intake reads the run (one GET), requires a registered repo,
+   an `issues` / `issue_comment` event and the phase's wrapper path
+   (`ai-<phase>.yml`, or `internal-<phase>.yml` here), and requires a
+   timestamped `AI_ENGINE_FALLBACK role=<role> reason=<reason>` line in a
+   non-reporter job's own log. Echoed step scripts and untimestamped
+   continuation lines don't count, so issue text quoted into a step's env
+   cannot forge it. Otherwise it skips with
+   `WORKFLOW_HEAL skip reason=engine_fallback_unverified` and a WARNING. The
+   fingerprint is built from role, reason and pool reason only (workflow
+   `AI engine fallback`, step `engine:<ROLE>`), so one open `ai:workflow-heal`
+   issue covers a cause across workflows and repositories, titled
+   `Workflow heal: Claude engine fell back to codex for <ROLE> (<reason>[/<pool reason>])`,
+   and later fallbacks become occurrence comments on it. The diagnosis gets the
+   job's engine lines (pool, install, fallback, errors) and is told that
+   running on codex is the fallback, not the fix. The run's source issue gets
+   no comment, because the fallback is not its fault.
+
+| The numbers that matter | Value |
+| --- | --- |
+| API calls per reported run | 1 dispatch per distinct defect (the issue comes from the event) |
+| Intake reads per report | 1 run GET + the run's jobs list and job logs |
+| Entries kept per job | 10 (`FALLBACK_RECORD_LIMIT`) |
+| Log prefixes | `AI_ENGINE_FALLBACK_COLLECTED`, `AI_ENGINE_FALLBACK_REPORT`, `WORKFLOW_HEAL` |
+
+Consumers get the jobs with the next `@stable` promotion. Until then, a
+consumer run on older support code records nothing and its report job is
+skipped.
 
 **Isolation.** `claude_run` never starts the CLI on the runner. Each account
 attempt runs `scripts/codex_isolated_exec.sh run --engine claude` (see

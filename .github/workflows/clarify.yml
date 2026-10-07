@@ -29,7 +29,14 @@ jobs:
       # failure" step does NOT fire for cancelled runs (only for failures).
       group: ai-clarify-${{ github.event.issue.number }}
       cancel-in-progress: true
+    outputs:
+      # Read by the engine-fallback-report job: the Claude engine fallbacks of
+      # this job (claude_engine.py fallbacks JSON) and its Telegram level.
+      engine_fallbacks: ${{ steps.engine_fallbacks.outputs.fallbacks }}
+      engine_fallback_alert_level: ${{ steps.engine_fallbacks.outputs.alert_msg_level }}
     env:
+      # ai_engine_fallback leaves the Telegram note to engine-fallback-report.
+      AI_ENGINE_FALLBACK_REPORTER: "true"
       ISSUE_NUMBER: ${{ github.event.issue.number }}
       ISSUE_URL: ${{ github.event.issue.html_url }}
       SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
@@ -854,6 +861,7 @@ jobs:
           config_path: .codex-workflow-src/.github/ai/claude_engine.json
 
       - name: Resolve Claude credential
+        id: claude_pool
         if: steps.ai_engine.outputs.engine == 'claude'
         continue-on-error: true
         uses: ./.codex-workflow-src/.github/actions/claude-pool-token
@@ -1602,6 +1610,31 @@ jobs:
           MSG+="Run: ${RUN_URL}"
           tg_send_phase_failure clarify "${MSG}" "ERROR" "${ISSUE_NUMBER}"
 
+      # Last step of the job: hand the Claude engine fallbacks this job
+      # recorded (scripts/ai_engine.sh ai_engine_fallback) to the
+      # engine-fallback-report job. Runs even when the job failed or was
+      # cancelled; a missing or older support checkout reports none.
+      - name: Collect AI engine fallbacks
+        id: engine_fallbacks
+        if: always()
+        continue-on-error: true
+        env:
+          CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason }}
+        run: |
+          set -uo pipefail
+          record="${AI_ENGINE_FALLBACK_RECORD_FILE:-${RUNNER_TEMP}/ai-engine-fallbacks.txt}"
+          engine_py="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/claude_engine.py"
+          fallbacks="[]"
+          if [ -s "${record}" ] && [ -f "${engine_py}" ]; then
+            fallbacks="$(PYTHONDONTWRITEBYTECODE=1 python3 "${engine_py}" fallbacks --record-file "${record}" --pool-reason "${CLAUDE_POOL_REASON:-}" 2>/dev/null)" || fallbacks="[]"
+          fi
+          [[ "${fallbacks}" == \[* ]] || fallbacks="[]"
+          echo "AI_ENGINE_FALLBACK_COLLECTED fallbacks=${fallbacks}"
+          {
+            echo "fallbacks=${fallbacks}"
+            echo "alert_msg_level=${ALERT_MSG_LEVEL:-}"
+          } >> "${GITHUB_OUTPUT}"
+
   heal-report:
     # Workflow failure heal (README "Workflow Failure Heal"): report a failed
     # clarify run to coding-workflows' heal intake, which diagnoses it and opens
@@ -1657,4 +1690,73 @@ jobs:
           fi
           REPORT_WRAPPER_SHA="$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" \
             RUNTIME_DIR="${RUNNER_TEMP}/workflow-heal-phase-report" \
+            bash "${reporter}"
+
+  engine-fallback-report:
+    # Claude engine fallback report (README "Claude engine fallback reports"):
+    # when the clarify job ran a Claude role on codex instead
+    # (AI_ENGINE_FALLBACK), send one Telegram WARNING and report each setup or
+    # code fault to coding-workflows' workflow failure heal intake, which
+    # keeps one ai:workflow-heal issue per role and reason. A capacity
+    # fallback (every account over its usage limit) only alerts. A separate
+    # job, so the intake reads the finished job's log. `permissions: {}`
+    # keeps the job inside any caller's grant; GH_PAT does the work. The
+    # reporter always exits 0.
+    needs: clarify
+    if: >-
+      always() && needs.clarify.outputs.engine_fallbacks != '' &&
+      needs.clarify.outputs.engine_fallbacks != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+      TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+      WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+      ENGINE_FALLBACKS_JSON: ${{ needs.clarify.outputs.engine_fallbacks }}
+      ENGINE_FALLBACK_PHASE: clarify
+      ENGINE_FALLBACK_JOB_RESULT: ${{ needs.clarify.result }}
+      ENGINE_FALLBACK_ISSUE_NUMBER: ${{ github.event.issue.number }}
+      ENGINE_FALLBACK_ISSUE_TITLE: ${{ github.event.issue.title }}
+      ENGINE_FALLBACK_ISSUE_URL: ${{ github.event.issue.html_url }}
+      ENGINE_FALLBACK_ISSUE_LABELS: ${{ toJSON(github.event.issue.labels.*.name) }}
+      REPORT_WORKFLOW_NAME: ${{ github.workflow }}
+    steps:
+      - name: Resolve workflow support ref
+        run: |
+          set -euo pipefail
+          wf_source="shubhodeep1/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+          else
+            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+          fi
+
+      - name: Checkout workflow support source
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ env.SCRIPT_REF }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: scripts
+
+      - name: Report Claude engine fallbacks
+        env:
+          # env.ALERT_MSG_LEVEL is unset in this job, so the clarify job's own
+          # level (SILENT on a smoke run) comes next, then the repo variable.
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || needs.clarify.outputs.engine_fallback_alert_level || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+        run: |
+          set -euo pipefail
+          reporter=".codex-workflow-src/scripts/ai_engine_fallback_report.sh"
+          if [ ! -f "${reporter}" ]; then
+            echo "AI_ENGINE_FALLBACK_REPORT skip reason=reporter_missing ref=${SCRIPT_REF}"
+            exit 0
+          fi
+          REPORT_WRAPPER_SHA="$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" \
+            RUNTIME_DIR="${RUNNER_TEMP}/ai-engine-fallback-report" \
             bash "${reporter}"
