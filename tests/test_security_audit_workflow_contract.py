@@ -144,6 +144,43 @@ sys.exit(int(os.environ.get("MOCK_CODEX_EXIT_CODE", "0")))
 	_write_exec(bin_dir / "codex", codex_script)
 
 
+def _install_mock_claude(bin_dir: Path) -> None:
+	"""The Claude CLI the fake container runs for claude_run (stream-json out).
+
+	MOCK_CLAUDE_MODE: ok (default), crash, timeout, limit. MOCK_CLAUDE_RESULT
+	is the final result text the audit reads as its findings output.
+	"""
+	claude_script = r'''#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+state_path = Path(os.environ["MOCK_GH_STATE_FILE"])
+state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+state.setdefault("claude_calls", []).append(sys.argv[1:])
+state.setdefault("claude_stdin", []).append(sys.stdin.read())
+state.setdefault("claude_mounts", []).append(json.loads(os.environ.get("FAKE_CONTAINER_MOUNTS", "[]")))
+state.setdefault("claude_secret_env", []).append(sorted(name for name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "TG_BOT_SECRET") if name in os.environ))
+state_path.write_text(json.dumps(state), encoding="utf-8")
+mode = os.environ.get("MOCK_CLAUDE_MODE", "ok")
+def emit(event):
+	print(json.dumps(event), flush=True)
+emit({"type": "system", "subtype": "init"})
+if mode == "crash":
+	print("boom", file=sys.stderr)
+	sys.exit(3)
+if mode == "timeout":
+	sys.exit(124)
+if mode == "limit":
+	emit({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}})
+	emit({"type": "result", "subtype": "error_during_execution", "is_error": True, "result": "API Error"})
+	sys.exit(1)
+emit({"type": "result", "subtype": "success", "is_error": False, "result": os.environ.get("MOCK_CLAUDE_RESULT", "[]"), "total_cost_usd": 0.01, "usage": {"input_tokens": 1, "output_tokens": 2}})
+'''
+	_write_exec(bin_dir / "claude", claude_script)
+
+
 def _install_security_audit_support_tree(base_dir: Path, *, failure_mode: str) -> Path:
 	support_dir = base_dir / "support"
 	scripts_dir = support_dir / "scripts"
@@ -181,6 +218,7 @@ def _run_security_audit(
 	cwd: Path | None = None,
 	support_failure_mode: str | None = None,
 	script_args: tuple[str, ...] = (),
+	claude_accounts: tuple[str, ...] = (),
 ) -> tuple[subprocess.CompletedProcess[str], dict]:
 	with tempfile.TemporaryDirectory(prefix="security-audit-test-") as td:
 		tmp_path = Path(td)
@@ -190,6 +228,16 @@ def _run_security_audit(
 		_install_mock_gh(bin_dir, state_file)
 		if codex_available:
 			_install_mock_codex(bin_dir, state_file)
+		_install_mock_claude(bin_dir)
+		# The Claude account pool claude_run reads (empty unless a test adds accounts).
+		pool_dir = tmp_path / "claude-pool"
+		(pool_dir / "tokens").mkdir(parents=True)
+		if claude_accounts:
+			(pool_dir / "order").write_text("".join(f"{name}\n" for name in claude_accounts), encoding="utf-8")
+			for name in claude_accounts:
+				token_path = pool_dir / "tokens" / name
+				token_path.write_text(f"tok-{name}\n", encoding="utf-8")
+				token_path.chmod(0o600)
 		state_file.write_text(json.dumps(state), encoding="utf-8")
 		codex_home = tmp_path / "codex-home"
 		codex_home.mkdir(parents=True, exist_ok=True)
@@ -199,6 +247,8 @@ def _run_security_audit(
 		env = os.environ.copy()
 		if Path(run_cwd) != REPO_ROOT:
 			env = {key: value for key, value in env.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+		# Engine selection must not leak in from the caller's environment.
+		env = {key: value for key, value in env.items() if not key.startswith(("AI_ENGINE", "CLAUDE_"))}
 		existing_path_entries = env.get("PATH", "").split(os.pathsep)
 		if not codex_available:
 			existing_path_entries = [
@@ -217,6 +267,9 @@ def _run_security_audit(
 				"PATH": os.pathsep.join((str(bin_dir), *existing_path_entries)),
 				"PYTHONDONTWRITEBYTECODE": "1",
 				"SECURITY_AUDIT_ENABLED": "true" if enabled else "false",
+				# The codex-path tests pin the engine; the Claude tests override it.
+				"AI_ENGINE_SECURITY_AUDIT": "codex",
+				"CLAUDE_ENGINE_POOL_DIR": str(pool_dir),
 			}
 		)
 		if support_failure_mode is not None:
@@ -1152,7 +1205,10 @@ def test_security_audit_success_path_retains_codex_and_tracker_behavior() -> Non
 	proc, final_state = _run_security_audit(state)
 
 	assert proc.returncode == 0, proc.stderr
-	assert proc.stderr == ""
+	# Only the engine selection line (scripts/ai_engine.sh) reaches stderr.
+	assert proc.stderr.splitlines() == [
+		"AI_ENGINE_SELECTED role=SECURITY_AUDIT engine=codex model=claude-opus-5-5 effort=high source=var:AI_ENGINE_SECURITY_AUDIT"
+	]
 	assert "codex-stderr-tail" not in proc.stdout
 	assert "tracker=#9000 findings=0 followups_created=0" in proc.stdout
 	assert len(final_state.get("codex_calls", [])) == 1
@@ -2438,6 +2494,184 @@ def test_security_audit_target_ref_requires_explicit_range_and_issues_mode() -> 
 	assert proc.returncode == 1
 	assert "SECURITY_AUDIT_TARGET_REF requires SECURITY_AUDIT_DIFF_BASE" in proc.stderr
 	assert not final_state.get("codex_calls")
+
+
+# --- Claude engine (SECURITY_AUDIT role) with codex fallback ----------------
+
+
+def _claude_engine_audit(tmp_path: Path, *, claude_env: dict | None = None, accounts: tuple[str, ...] = ("ACCT1",), fixture=None) -> tuple[subprocess.CompletedProcess[str], dict, dict]:
+	repo_dir, base_sha, head_sha = (fixture or _git_fixture_repo)(tmp_path)
+	output_path = tmp_path / "findings.json"
+	proc, state = _run_security_audit(
+		{},
+		cwd=repo_dir,
+		codex_output=json.dumps([_finding_payload("codex-finding", file_path="file_b.py")]),
+		claude_accounts=accounts,
+		extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+			"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+			"SECURITY_AUDIT_DIFF_BASE": base_sha,
+			"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+			"AI_ENGINE_SECURITY_AUDIT": "claude",
+			"MOCK_CLAUDE_RESULT": json.dumps([_finding_payload("claude-finding", file_path="file_b.py")]),
+			**(claude_env or {}),
+		},
+	)
+	payload = json.loads(state["security_audit_findings_output"]) if "security_audit_findings_output" in state else {}
+	return proc, state, payload
+
+
+def _kept_ids(payload: dict) -> list[str]:
+	return [finding["finding_id"] for finding in payload.get("findings", [])]
+
+
+def test_security_audit_claude_engine_success_skips_codex() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-ok-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td))
+		assert proc.returncode == 0, proc.stderr
+		assert "security-audit: engine=claude" in proc.stdout
+		assert "AI_ENGINE_SELECTED role=SECURITY_AUDIT engine=claude model=claude-opus-5-5 effort=high" in proc.stderr
+		assert "AI_ENGINE_FALLBACK" not in proc.stderr
+		assert not state.get("codex_calls")
+		assert len(state.get("claude_calls", [])) == 1
+		argv = state["claude_calls"][0]
+		assert argv[argv.index("--model") + 1] == "claude-opus-5-5"
+		assert argv[argv.index("--effort") + 1] == "high"
+		# Read profile: no shell and no edit tools.
+		assert argv[argv.index("--tools") + 1] == "Read,Grep,Glob"
+		assert "Audit scope" in state["claude_stdin"][0]
+		# The audited code is untrusted: no job credential reaches the agent.
+		assert state["claude_secret_env"] == [[]]
+		assert _kept_ids(payload) == ["claude-finding"]
+
+
+def test_security_audit_claude_engine_accepts_one_outer_json_fence() -> None:
+	fenced = "```json\n" + json.dumps([_finding_payload("fenced-finding", file_path="file_b.py")]) + "\n```"
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-fence-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_RESULT": fenced})
+		assert proc.returncode == 0, proc.stderr
+		assert "security-audit: engine=claude" in proc.stdout
+		assert not state.get("codex_calls")
+		assert _kept_ids(payload) == ["fenced-finding"]
+
+
+def test_security_audit_claude_engine_clean_result_is_clean_without_codex() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-clean-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_RESULT": "[]"})
+		assert proc.returncode == 0, proc.stderr
+		assert "security-audit: engine=claude" in proc.stdout
+		assert not state.get("codex_calls")
+		assert payload["findings"] == [] and payload["counts"]["kept"] == 0
+
+
+def _assert_codex_fallback(proc, state: dict, payload: dict, reason: str, *, claude_called: bool) -> None:
+	assert proc.returncode == 0, proc.stderr
+	assert f"AI_ENGINE_FALLBACK role=SECURITY_AUDIT reason={reason}" in proc.stderr
+	assert "security-audit: engine=codex" in proc.stdout
+	assert bool(state.get("claude_calls")) is claude_called
+	assert len(state.get("codex_calls", [])) == 1
+	assert "--model" in state["codex_calls"][0]
+	assert state["codex_calls"][0][state["codex_calls"][0].index("--model") + 1] == "openai/gpt-6-sol"
+	assert _kept_ids(payload) == ["codex-finding"]
+
+
+def test_security_audit_claude_fallback_no_account() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-noacct-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), accounts=())
+		_assert_codex_fallback(proc, state, payload, "no_credential", claude_called=False)
+
+
+def test_security_audit_claude_fallback_all_accounts_over_usage_gate() -> None:
+	# The pool step drops every account at or above gate_utilization (0.9)
+	# and reports all_gated; the audit must not start Claude at all.
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-gated-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"CLAUDE_POOL_REASON": "all_gated"})
+		_assert_codex_fallback(proc, state, payload, "all_gated", claude_called=False)
+
+
+def test_security_audit_claude_fallback_every_account_usage_limited() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-limit-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), accounts=("ACCT1", "ACCT2"), claude_env={"MOCK_CLAUDE_MODE": "limit"})
+		_assert_codex_fallback(proc, state, payload, "all_accounts_failed", claude_called=True)
+		assert len(state["claude_calls"]) == 2
+
+
+def test_security_audit_claude_fallback_crash() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-crash-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_MODE": "crash"})
+		_assert_codex_fallback(proc, state, payload, "crashed_rc_1", claude_called=True)
+
+
+def test_security_audit_claude_fallback_timeout() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-timeout-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_MODE": "timeout"})
+		_assert_codex_fallback(proc, state, payload, "timeout", claude_called=True)
+
+
+def test_security_audit_claude_fallback_malformed_missing_and_wrong_shape() -> None:
+	cases = (
+		("not json at all", "malformed_output"),
+		("Here are the findings:\n```json\n[]\n```", "malformed_output"),
+		("```json\n[]\n```\n```json\n[]\n```", "malformed_output"),
+		("", "missing_output"),
+		(json.dumps({"findings": []}), "schema_mismatch"),
+		(json.dumps(["not an object"]), "schema_mismatch"),
+	)
+	for result_text, reason in cases:
+		with tempfile.TemporaryDirectory(prefix="security-audit-claude-bad-") as td:
+			proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_RESULT": result_text})
+			_assert_codex_fallback(proc, state, payload, reason, claude_called=True)
+
+
+def test_security_audit_codex_engine_or_codex_label_never_starts_claude() -> None:
+	for claude_env in ({"AI_ENGINE_SECURITY_AUDIT": "codex"}, {"AI_ENGINE_SECURITY_AUDIT": "", "AI_ENGINE_LABELS": '["ai:codex"]'}):
+		with tempfile.TemporaryDirectory(prefix="security-audit-codex-engine-") as td:
+			proc, state, payload = _claude_engine_audit(Path(td), claude_env=claude_env)
+			assert proc.returncode == 0, proc.stderr
+			assert "security-audit: engine=codex" in proc.stdout
+			assert "AI_ENGINE_FALLBACK" not in proc.stderr
+			assert not state.get("claude_calls")
+			assert _kept_ids(payload) == ["codex-finding"]
+
+
+def test_security_audit_role_default_runs_claude() -> None:
+	# No AI_ENGINE_SECURITY_AUDIT override: the checked-in engine config decides.
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-default-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"AI_ENGINE_SECURITY_AUDIT": ""})
+		assert proc.returncode == 0, proc.stderr
+		assert "AI_ENGINE_SELECTED role=SECURITY_AUDIT engine=claude" in proc.stderr
+		assert "source=default" in proc.stderr
+		assert not state.get("codex_calls")
+		assert _kept_ids(payload) == ["claude-finding"]
+
+
+def test_security_audit_claude_engine_mounts_oversized_chunks() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-oversized-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), fixture=_oversized_fixture_repo, claude_env={"MOCK_CLAUDE_RESULT": "[]"})
+		assert proc.returncode == 0, proc.stderr
+		assert "security-audit: engine=claude" in proc.stdout
+		assert "large.py (" in state["claude_stdin"][0]
+		assert any(mount.get("dst", "").endswith("/oversized-chunks") for mount in state["claude_mounts"][0])
+		assert payload["coverage"]["scoped_oversized_chunked"] == ["large.py"]
+
+
+def test_security_audit_workflow_wires_claude_engine_with_codex_kept() -> None:
+	content = WORKFLOW_PATH.read_text(encoding="utf-8")
+	assert "id-token: write" in content
+	assert "ai_engine_for_role SECURITY_AUDIT" in content
+	assert "uses: ./.github/actions/install-claude" in content
+	assert "uses: ./.github/actions/claude-pool-token" in content
+	assert "AI_ENGINE_SECURITY_AUDIT: ${{ steps.ai_engine.outputs.engine || 'codex' }}" in content
+	assert "CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || '' }}" in content
+	# The codex fallback path stays intact.
+	assert "uses: ./.github/actions/install-codex" in content
+	assert '--model "openai/gpt-6-sol"' in content
+	poll = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	assert "SECURITY_JUDGE RB_JUDGE SECURITY_AUDIT; do" in poll
+	assert "CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || '' }}" in poll
+	process = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	assert 'AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" \\\n    bash scripts/codex_heartbeat.sh \\\n      --phase "orchestrate-security-pass"' in process
 
 
 def main() -> int:

@@ -59,6 +59,7 @@ def _jsonl(*events: dict) -> str:
 CUTOVER_ROLES = {"CLARIFY", "CLARIFY_RESPOND", "PLAN"}  # Phase 5a
 CUTOVER_ROLES |= {"IMPLEMENT", "IMPLEMENT_REPAIR", "IMPLEMENT_DIAGNOSE"}  # Phase 5b
 CUTOVER_ROLES |= {"ORCHESTRATE", "WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE", "REVIEW_EDITOR", "REVIEW_CONSOLIDATOR", "CONFLICT_RESOLVER", "RB_JUDGE"}  # Phase 5c
+CUTOVER_ROLES |= {"SECURITY_AUDIT"}  # security audit on Claude, codex fallback
 
 
 def test_checked_in_config_is_valid_and_inert() -> None:
