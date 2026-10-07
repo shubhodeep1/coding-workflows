@@ -6,6 +6,13 @@ set -euo pipefail
 SEMBLE_VERSION="0.1.3"
 SEMBLE_SPEC="semble==${SEMBLE_VERSION}"
 SEMBLE_PYTHON_BIN="${SEMBLE_PYTHON_BIN:-python3}"
+semble_neutral_dir=""
+
+semble_python()
+(
+	cd -- "${semble_neutral_dir}" || return 1
+	PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 "${SEMBLE_PYTHON_BIN}" "$@"
+)
 
 log()
 {
@@ -46,7 +53,7 @@ append_github_path()
 python_user_bin()
 {
 	if command -v "${SEMBLE_PYTHON_BIN}" >/dev/null 2>&1; then
-		"${SEMBLE_PYTHON_BIN}" - <<'PY'
+		semble_python - <<'PY'
 import site
 print(site.USER_BASE + "/bin")
 PY
@@ -70,7 +77,7 @@ current_semble_version()
 	# the CLI keeps detection working for hypothetical newer releases
 	# that re-introduce the flag.
 	if command -v "${SEMBLE_PYTHON_BIN}" >/dev/null 2>&1; then
-		module_version="$("${SEMBLE_PYTHON_BIN}" -c 'import semble.version as v; print(v.__version__)' 2>/dev/null || true)"
+		module_version="$(semble_python -c 'import semble.version as v; print(v.__version__)' 2>/dev/null || true)"
 		module_version="${module_version%%$'\n'*}"
 		if [ -n "${module_version}" ]; then
 			printf '%s\n' "${module_version}"
@@ -82,7 +89,7 @@ current_semble_version()
 	if [ -z "${semble_bin}" ]; then
 		return 1
 	fi
-	"${semble_bin}" --version 2>/dev/null || return 1
+	(cd -- "${semble_neutral_dir}" && "${semble_bin}" --version) 2>/dev/null || return 1
 }
 
 binary_matches_pin()
@@ -130,7 +137,7 @@ attempt_pip_install()
 		return 1
 	fi
 
-	if "${SEMBLE_PYTHON_BIN}" -m pip install \
+	if semble_python -m pip install \
 		--disable-pip-version-check \
 		--quiet \
 		--upgrade \
@@ -140,7 +147,7 @@ attempt_pip_install()
 		return 0
 	fi
 
-	if "${SEMBLE_PYTHON_BIN}" -m pip install \
+	if semble_python -m pip install \
 		--disable-pip-version-check \
 		--quiet \
 		--upgrade \
@@ -160,6 +167,14 @@ main()
 {
 	local user_bin=""
 	local existing_version=""
+
+	semble_neutral_dir="$(mktemp -d 2>/dev/null || true)"
+	if [ -z "${semble_neutral_dir}" ]; then
+		log "neutral cwd unavailable"
+		mark_unavailable
+		return 0
+	fi
+	trap 'rm -rf -- "${semble_neutral_dir}"' EXIT
 
 	user_bin="$(python_user_bin || true)"
 	append_github_path "${user_bin}"

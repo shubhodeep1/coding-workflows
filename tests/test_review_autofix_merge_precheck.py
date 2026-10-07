@@ -11,8 +11,15 @@ that failure classification is correct.
 from __future__ import annotations
 
 import re
+import json
+import os
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
+
+import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -52,15 +59,139 @@ def _section(start_marker: str, end_marker: str) -> str:
 # Fix 1: explicit removal of runtime-populated helper files before git reset/merge
 # ---------------------------------------------------------------------------
 
-def test_workflow_checks_out_pr_head_ref_for_judge_context():
-    """Review/autofix must evaluate PR context from the PR head ref."""
+def test_dispatched_review_checkout_uses_gate_head_sha():
+    """Dispatches must materialize the gate-verified PR head for file readers."""
     wf = _workflow()
     assert "uses: actions/checkout@v5" in wf, (
         "Expected review_autofix workflow to use actions/checkout@v5"
     )
-    assert "ref: ${{ github.event.pull_request.head.sha || github.sha }}" in wf, (
-        "Expected checkout ref to prefer pull_request.head.sha (PR head context)"
+    assert "ref: ${{ needs.gate.outputs.review_checkout_sha || github.sha }}" in wf, (
+        "Expected every PR checkout to use the authenticated gate head"
     )
+
+
+def test_dispatch_checkout_file_read_uses_head_not_default_branch():
+    """A reviewer reading GITHUB_WORKSPACE sees a file added by the PR."""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        repo = root / "source"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(["git", "-C", str(repo), "config", "user.name", "test"], check=True)
+        subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.invalid"], check=True)
+        (repo / "README.md").write_text("base\n")
+        subprocess.run(["git", "-C", str(repo), "add", "README.md"], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "base"], check=True)
+        base = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+        (repo / "added-only-on-pr.txt").write_text("review this head\n")
+        subprocess.run(["git", "-C", str(repo), "add", "added-only-on-pr.txt"], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "pr"], check=True)
+        head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
+        checkout = root / "checkout"
+        subprocess.run(["git", "clone", "-q", str(repo), str(checkout)], check=True)
+        subprocess.run(["git", "-C", str(checkout), "checkout", "-q", base], check=True)
+        assert not (checkout / "added-only-on-pr.txt").exists()
+        # This is the gate-validated SHA used by Checkout repo on dispatch.
+        subprocess.run(["git", "-C", str(checkout), "checkout", "-q", head], check=True)
+        assert (checkout / "added-only-on-pr.txt").read_text() == "review this head\n"
+        reviewers = (REPO_ROOT / "scripts" / "review_run_reviewers.sh").read_text()
+        assert 'reviewer_opencode_workspace="${GITHUB_WORKSPACE:-$(pwd)}"' in reviewers
+
+
+def test_review_head_mismatch_skips_before_agent_steps():
+    workflow = yaml.safe_load(REVIEW_AUTOFIX_WF.read_text())
+    steps = {step["name"]: step for step in workflow["jobs"]["codex-agent"]["steps"] if "name" in step}
+    checkout_step = steps["Checkout PR head branch"]["run"]
+    assert 'env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}" rev-parse HEAD' in checkout_step
+    assert '.head.sha // ""' in checkout_step
+    assert '"${review_source_sha}" != "${REVIEW_CHECKOUT_SHA}"' in checkout_step
+    assert '"${review_branch_sha}" != "${review_source_sha}"' in checkout_step
+    assert checkout_step.count('echo "AUTOFIX_STALE_BASE_SKIP=true" >> "$GITHUB_ENV"') >= 2
+    names = list(steps)
+    assert names.index("Checkout PR head branch") < names.index("Run reviewer models")
+    assert "env.AUTOFIX_STALE_BASE_SKIP != 'true'" in steps["Pre-review deterministic merge-topology gate"]["if"]
+    for name in ("Run reviewer models", "Apply fixes with editor model", "Enable auto-merge on PR"):
+        assert "env.AUTOFIX_STALE_BASE_SKIP != 'true'" in steps[name]["if"]
+    assert 'if [ -z "${WORKSPACE_PATH:-}" ] || [ ! -d "${WORKSPACE_PATH}" ]; then' in checkout_step
+
+
+def test_review_branch_fetch_movement_skips_the_older_source_tree():
+    """The branch fetch must not make a default/old workspace look current."""
+    workflow = yaml.safe_load(REVIEW_AUTOFIX_WF.read_text())
+    checkout_step = next(step["run"] for step in workflow["jobs"]["codex-agent"]["steps"] if step.get("name") == "Checkout PR head branch")
+    checkout_step = checkout_step.replace("${{ github.repository }}", "o/r")
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        seed = root / "seed"
+        seed.mkdir()
+        def git(*args, cwd=seed):
+            return subprocess.check_output(["git", "-C", str(cwd), *args], text=True).strip()
+        git("init", "-q", "-b", "main")
+        git("config", "user.name", "test")
+        git("config", "user.email", "test@example.invalid")
+        (seed / "README.md").write_text("base\n")
+        git("add", "README.md")
+        git("commit", "-qm", "base")
+        git("checkout", "-qb", "review/head")
+        (seed / "added-only-on-pr.txt").write_text("first reviewed head\n")
+        git("add", "added-only-on-pr.txt")
+        git("commit", "-qm", "first pr head")
+        reviewed_sha = git("rev-parse", "HEAD")
+        source = root / "source"
+        subprocess.run(["git", "clone", "-qb", "review/head", str(seed), str(source)], check=True)
+        split = root / "split"
+        shutil.copytree(source, split, ignore=shutil.ignore_patterns(".git"))
+        assert (source / "added-only-on-pr.txt").read_text() == "first reviewed head\n"
+        support = root / "support"
+        support.mkdir()
+        (support / "git_ref_health_check.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+        metadata = root / "meta.json"
+        metadata.write_text(json.dumps({"headRefName": "review/head", "headRepoFullName": "o/r"}))
+        payload = root / "payload.json"
+        payload.write_text(json.dumps({"head": {"sha": reviewed_sha}}))
+        def run_checkout():
+            github_env = root / "github_env"
+            github_env.write_text("")
+            env = {**os.environ, "GIT_DIR": str(source / ".git"), "GIT_WORK_TREE": str(split),
+                "PR_NUMBER": "42", "GITHUB_WORKSPACE": str(source), "WORKSPACE_PATH": str(split),
+                "PR_META_FILE": str(metadata), "PR_PAYLOAD_FILE": str(payload),
+                "SUPPORT_SCRIPTS_DIR": str(support), "GITHUB_ENV": str(github_env),
+                "REVIEW_CHECKOUT_SHA": reviewed_sha}
+            result = subprocess.run(["bash", "-c", checkout_step], cwd=split, env=env, capture_output=True, text=True)
+            assert result.returncode == 0, result.stderr
+            return github_env.read_text()
+        assert "TARGET_BRANCH=review/head" in run_checkout()
+        payload.write_text(json.dumps({"head": {"sha": "f" * 40}}))
+        assert "AUTOFIX_STALE_BASE_SKIP=true" in run_checkout()
+        payload.write_text(json.dumps({"head": {"sha": reviewed_sha}}))
+        # A newer branch ref arrives after gate checkout but before the
+        # working-copy fetch. The source files still belong to reviewed_sha.
+        (seed / "newer.txt").write_text("new head\n")
+        git("add", "newer.txt")
+        git("commit", "-qm", "advanced head")
+        assert "AUTOFIX_STALE_BASE_SKIP=true" in run_checkout()
+        assert not (source / "newer.txt").exists()
+
+
+def test_review_rejects_project_opencode_configuration_before_agent_setup():
+    workflow = yaml.safe_load(REVIEW_AUTOFIX_WF.read_text())
+    steps = {step["name"]: step for step in workflow["jobs"]["codex-agent"]["steps"] if "name" in step}
+    names = list(steps)
+    name = "Reject project OpenCode configuration before agent setup"
+    assert names.index("Checkout repo") < names.index(name) < names.index("Install OpenCode CLI")
+    guard = steps[name]["run"]
+    assert "set -euo pipefail" in guard
+    assert " .opencode opencode.json opencode.jsonc " in guard
+    assert "exit 1" in guard
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "added-file.txt").write_text("added on PR\n")
+        (root / ".opencode").mkdir()
+        (root / ".opencode" / "plugins").mkdir()
+        (root / ".opencode" / "plugins" / "untrusted.js").write_text("// never execute\n")
+        result = subprocess.run(["bash", "-c", guard], env={**os.environ, "GITHUB_WORKSPACE": str(root)}, capture_output=True, text=True)
+        assert result.returncode == 1
+        assert "refusing to start agents" in result.stdout
 
 
 def test_known_ci_artifacts_removed_before_git_reset_in_detect_step():

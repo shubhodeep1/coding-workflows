@@ -10,11 +10,10 @@ flag that defaults off, or a placeholder env var named `*_UNSET_OPERATOR_STEP`)
 until the operator acts.
 
 There is one open `ai:operator-step` issue per repository. Its body starts
-with `<!-- ai:operator-step:v1 -->` and holds one section per source, each
-opened by `<!-- ai:operator-step:entry key=<key> -->`. Writing a key that is
-already there replaces its section, so a re-run never duplicates steps; a new
-key is appended. When the body would pass GitHub's size limit, the oldest
-sections are dropped first.
+with `<!-- ai:operator-step:v1 -->`; each new entry is an immutable keyed
+comment. For a key, the highest comment id is authoritative. Older comments
+and legacy body sections remain visible as history, not overwritten by
+concurrent writers.
 
 Usage:
 
@@ -27,11 +26,11 @@ Usage:
 Output is one JSON line: `issue`, `url`, `created`, `entries`. Exit 0 on
 success, 1 on bad arguments, 2 when a GitHub call failed.
 
-GitHub API budget (CLAUDE.md §15): each bounded reconciliation attempt lists
-open `ai:operator-step` issues, performs one canonical update or create, then
-lists again to verify the source entry survived a concurrent writer. After a
-create, a stale label listing falls back to one direct read of the known
-issue number; failed verification retries with bounded backoff.
+GitHub API budget (CLAUDE.md §15): one identity read, bounded tracker list
+retries, a label lookup and issue create only when absent, and one paginated
+comment read before an entry append. The issue listing has no comments, so
+the paginated read cannot be folded into it. A stale post-create listing
+retries rather than posting an entry to a duplicate tracker.
 """
 
 from __future__ import annotations
@@ -154,6 +153,21 @@ def render_body(entries: list[tuple[str, str]]) -> str:
 		kept.pop(0)
 
 
+def load_entry_comments(repo: str, issue_number: int) -> list[dict]:
+	"""Read all comment pages before deduplicating an operator-step key."""
+	raw = _gh(["api", "--paginate", "--slurp", f"repos/{repo}/issues/{issue_number}/comments?per_page=100"])
+	try:
+		pages = json.loads(raw)
+	except ValueError as exc:
+		raise ApiError(f"unreadable operator-step comments: {exc}") from exc
+	if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+		raise ApiError("unreadable operator-step comments: expected pages of comments")
+	comments = [comment for page in pages for comment in page]
+	if any(not isinstance(comment, dict) for comment in comments):
+		raise ApiError("unreadable operator-step comments: malformed comment")
+	return comments
+
+
 def load_steps(path: str) -> list[dict]:
 	try:
 		steps = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -172,65 +186,73 @@ def upsert(repo: str, key: str, source: str, steps: list[dict]) -> dict:
 	if not KEY_RE.match(key):
 		raise UsageError(f"--key must be lower-case letters, digits and '-', got {key!r}")
 	entry = render_entry(key, source, steps)
+	# The tracker listing has no comment authors. Resolve the credential's
+	# identity once to avoid treating an unrelated user's marker as ours.
+	trusted_login = _gh(["api", "user", "--jq", ".login"]).strip()
+	if not trusted_login:
+		raise ApiError("operator-step writer identity is unavailable")
 	created_number: int | None = None
-	for _upsert_attempt in range(MAX_UPSERT_ATTEMPTS):
+	for _upsert_attempt in range(MAX_UPSERT_ATTEMPTS + 1):
 		listing = _gh(["api", f"repos/{repo}/issues?labels={LABEL}&state=open&per_page=30"])
 		try:
 			issues = json.loads(listing or "[]")
 		except ValueError as exc:
 			raise ApiError(f"unreadable issue list: {exc}") from exc
 		candidates = find_issues(issues)
-		if not candidates and created_number is not None:
-			# The label listing can lag behind a successful create. Read the
-			# known issue directly rather than posting a duplicate on retry.
+		# A direct read of a newly created tracker cannot prove that an older
+		# concurrent tracker is absent. Wait for the canonical label listing.
+		if not candidates:
+			if created_number is not None:
+				if _upsert_attempt < MAX_UPSERT_ATTEMPTS:
+					time.sleep(2 ** _upsert_attempt)
+					continue
+				raise ApiError("operator-step tracker listing did not converge after creation")
 			try:
-				created_issue = json.loads(_gh(["api", f"repos/{repo}/issues/{created_number}"]) or "{}")
-			except ValueError as exc:
-				raise ApiError(f"unreadable created issue #{created_number}: {exc}") from exc
-			candidates = find_issues([created_issue])
-			if not candidates:
-				raise ApiError(f"created issue #{created_number} is not a trusted operator tracker")
-		if candidates:
-			existing = candidates[0]
-			entries: list[tuple[str, str]] = []
-			for candidate_issue in candidates:
-				for entry_key, entry_text in parse_entries(str(candidate_issue.get("body") or "")):
-					entries = [(seen_key, entry_text if seen_key == entry_key else seen_text) for seen_key, seen_text in entries]
-					if not any(seen_key == entry_key for seen_key, _ in entries):
-						entries.append((entry_key, entry_text))
-			entries = [(entry_key, entry if entry_key == key else entry_text) for entry_key, entry_text in entries]
-			if not any(entry_key == key for entry_key, _ in entries):
-				entries.append((key, entry))
-			body = render_body(entries)
-			number = int(existing["number"])
-			_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", f"body={body}"])
-			for duplicate_issue in candidates[1:]:
-				_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{int(duplicate_issue['number'])}", "-f", "state=closed"])
-		else:
-			body = render_body([(key, entry)])
+				_gh(["api", f"repos/{repo}/labels/ai%3Aoperator-step"])
+			except ApiError as exc:
+				if "HTTP 404" not in str(exc):
+					raise
+				_gh(["api", f"repos/{repo}/labels", "-f", f"name={LABEL}", "-f", "color=fbca04", "-f", "description=Steps only a person can take; the pipeline continues and the gated work stays off until they are done"])
 			try:
-				created = json.loads(_gh(["api", f"repos/{repo}/issues", "-f", f"title={TITLE}", "-f", f"body={body}", "-f", f"labels[]={LABEL}"]) or "{}")
+				created = json.loads(_gh(["api", f"repos/{repo}/issues", "-f", f"title={TITLE}", "-f", f"body={render_body([])}", "-f", f"labels[]={LABEL}"]) or "{}")
 			except ValueError as exc:
 				raise ApiError(f"unreadable created issue: {exc}") from exc
 			created_number = int(created.get("number") or 0) or None
+			if created_number is None:
+				raise ApiError("operator-step issue creation returned no issue number")
+			continue
 
-		try:
-			verification = json.loads(_gh(["api", f"repos/{repo}/issues?labels={LABEL}&state=open&per_page=30"]) or "[]")
-		except ValueError as exc:
-			raise ApiError(f"unreadable verification issue list: {exc}") from exc
-		verified_issue = find_issue(verification)
-		if verified_issue:
-			verified_entries = dict(parse_entries(str(verified_issue.get("body") or "")))
-			if verified_entries.get(key) == entry and len(find_issues(verification)) == 1:
-				return {
-					"issue": int(verified_issue["number"]),
-					"url": verified_issue.get("html_url", ""),
-					"created": created_number == int(verified_issue["number"]),
-					"entries": len(verified_entries),
-				}
-		if _upsert_attempt + 1 < MAX_UPSERT_ATTEMPTS:
-			time.sleep(2 ** _upsert_attempt)
-	raise ApiError(f"operator-step upsert did not converge after {MAX_UPSERT_ATTEMPTS} attempts")
+		existing = candidates[0]
+		number = int(existing["number"])
+		comments = load_entry_comments(repo, number)
+		marker = f"<!-- ai:operator-step:entry key={key} -->"
+		matches = sorted(
+			(
+				comment for comment in comments
+				if (comment.get("user") or {}).get("login") == trusted_login
+				and str(comment.get("body") or "").split("\n", 1)[0].strip() == marker
+				and isinstance(comment.get("id"), int)
+			),
+			key=lambda comment: comment["id"],
+		)
+		legacy = dict(parse_entries(str(existing.get("body") or "")))
+		comment_keys = {
+			entry_match.group(1)
+			for comment in comments if (comment.get("user") or {}).get("login") == trusted_login
+			for entry_match in [ENTRY_RE.match(str(comment.get("body") or "").split("\n", 1)[0].strip())]
+			if entry_match
+		}
+		if (matches[-1]["body"] if matches else legacy.get(key, "")).replace("\r\n", "\n").rstrip() != entry:
+			_gh(["api", f"repos/{repo}/issues/{number}/comments", "-f", f"body={entry}"])
+		# Never patch the oldest comment with a proposal from a stale listing:
+		# a later writer's higher-id comment would otherwise be lost.
+		return {
+			"issue": number,
+			"url": existing.get("html_url", ""),
+			"created": created_number == number,
+			"entries": len(set(legacy) | comment_keys | {key}),
+		}
+	raise ApiError(f"operator-step tracker did not converge after {MAX_UPSERT_ATTEMPTS} attempts")
 
 
 def main(argv: list[str] | None = None) -> int:
