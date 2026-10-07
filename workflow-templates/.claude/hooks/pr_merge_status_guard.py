@@ -15,8 +15,9 @@ a preceding resolvable cd, git -C, and git-directory/work-tree overrides are
 applied without executing the Bash text. Pushes with explicit branch refspecs
 are checked against the destination branch and the source commit, including
 when the source is a detached HEAD. Unknown directories warn and fall back to
-the session checkout check; unresolvable explicit push targets require
-confirmation. Repeated targets share a PR snapshot
+the session checkout check; unresolved directory-changing commands also require
+commit confirmation. Unresolvable explicit push targets require confirmation.
+Repeated targets share a PR snapshot
 per repository and branch, while different source tips are checked separately.
 A `cd` or `exit` with a redirect that might fail (anything but a plain
 `/dev/null` target) makes the directory unknown. After checking the session
@@ -191,6 +192,8 @@ class _GitInvocation(NamedTuple):
 	arguments: list[str]
 	warning: str = ""
 	config_override: bool = False
+	env_directory_unresolved: bool = False
+	explicit_git_directory: bool = False
 
 
 class _GuardTarget(NamedTuple):
@@ -427,6 +430,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 		return []
 	working_directory: str | None = checkout
 	conditional_cd = False
+	unresolved_directory_change = False
 	invocations: list[_GitInvocation] = []
 	for operator, tokens, redirect_may_fail in segments:
 		tokens, control_prefix = _command_after_control_prefix(tokens)
@@ -441,6 +445,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			continue
 		if operator not in ("", "&&") and conditional_cd:
 			working_directory = None
+			unresolved_directory_change = True
 			conditional_cd = False
 		if operator not in ("", "&&", ";", "\n"):
 			working_directory = None
@@ -454,13 +459,18 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				_literal_guard_path(operand[0], working_directory, shell_cd=True)
 				if len(operand) == 1 and working_directory is not None and not redirect_may_fail else None
 			)
+			if working_directory is None:
+				unresolved_directory_change = True
 			conditional_cd = operator == "&&" or conditional_cd
 			continue
 		if tokens[0] in ("pushd", "popd", "eval", "source", ".", "(", "{"):
 			working_directory = None
+			unresolved_directory_change = True
 		index = 0
 		environment: dict[str, str] = {}
 		config_override = False
+		# A prior unresolved cd/pushd may select another repository.
+		explicit_git_directory = unresolved_directory_change
 		# Bash append assignments are prefixes too; keep the following git visible.
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
 			name, value = tokens[index].split("=", 1)
@@ -469,8 +479,10 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				name = name[:-1]
 				if name in ("GIT_DIR", "GIT_WORK_TREE"):
 					working_directory = None
+					explicit_git_directory = True
 			elif name in ("GIT_DIR", "GIT_WORK_TREE"):
 				environment[name] = value
+				explicit_git_directory = True
 			if name == "GIT_CONFIG" or name.startswith("GIT_CONFIG_"):
 				config_override = True
 			index += 1
@@ -481,14 +493,20 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				invocations.append(_GitInvocation(checkout, {}, "push", [], "unparsed env wrapper", True))
 			continue
 		env_cwd = working_directory
+		explicit_directory_unresolved = False
+		env_directory_unresolved = False
+		env_chdir_seen = False
 		if index != env_index:
 			config_override = True
 			for position in range(env_index + 1, index):
 				word = tokens[position]
 				if word in ("-C", "--chdir") or word.startswith(("-C", "--chdir=")):
+					env_chdir_seen = True
 					env_word_value = (tokens[position + 1] if word in ("-C", "--chdir") else
 						word.split("=", 1)[1] if word.startswith("--chdir=") else word[2:])
 					env_cwd = _literal_guard_path(env_word_value, env_cwd) if env_cwd else None
+					explicit_directory_unresolved |= env_cwd is None
+					env_directory_unresolved |= env_cwd is None
 				elif re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", word):
 					env_name, env_word_value = word.split("=", 1)
 					if env_name in ("GIT_DIR", "GIT_WORK_TREE"):
@@ -500,6 +518,8 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 		uncertain = git_cwd is None
 		while index < len(tokens) and tokens[index].startswith("-"):
 			option = tokens[index]
+			if option.startswith(("-C", "--git-dir", "--work-tree")):
+				explicit_git_directory = True
 			value = None
 			if option in GIT_GLOBAL_OPTS_WITH_VALUE:
 				if index + 1 >= len(tokens):
@@ -520,6 +540,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				if option.startswith("-C"):
 					git_cwd = _literal_guard_path(value, git_cwd) if git_cwd else None
 					uncertain |= git_cwd is None
+					explicit_directory_unresolved |= git_cwd is None
 				elif option.startswith("--git-dir"):
 					environment["GIT_DIR"] = value
 				elif option.startswith("--work-tree"):
@@ -533,14 +554,21 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				path = _literal_guard_path(value, git_cwd, git_file=name == "GIT_DIR")
 				if path is None:
 					uncertain = True
+					explicit_directory_unresolved = True
 					break
 				environment[name] = path
 		invocations.append(_GitInvocation(
 			checkout if uncertain else git_cwd or checkout,
 			{} if uncertain else environment,
 			tokens[index], tokens[index + 1:],
-			"could not resolve git command directory; checking the session checkout instead" if uncertain else "",
+			("could not resolve git command directory (env -C/--chdir); cannot check checkout PR history"
+				if env_chdir_seen and env_cwd is None else
+			 "could not resolve explicit git command directory"
+				if explicit_directory_unresolved and tokens[index] == "commit" else
+				"could not resolve git command directory; checking the session checkout instead") if uncertain else "",
 			config_override,
+			env_directory_unresolved,
+			explicit_git_directory,
 		))
 	return invocations
 
@@ -1492,11 +1520,14 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
 	for invocation in _guarded_git_invocations(command, checkout):
+		if invocation.subcommand == "commit" and invocation.env_directory_unresolved:
+			unknown_destination_reasons.append("could not resolve git commit directory; no checkout was checked; cannot verify its PR history")
+			continue
 		if invocation.subcommand == "push" and invocation.warning == "unparsed env wrapper":
 			unverified_destinations.add("unparsed env-wrapped Git command")
 			continue
-		if invocation.subcommand == "commit" and invocation.warning and invocation.config_override:
-			_request_confirmation("could not resolve env-wrapped git commit directory; the session checkout may not be the commit target")
+		if invocation.subcommand == "commit" and invocation.warning and (invocation.config_override or invocation.explicit_git_directory):
+			_request_confirmation("could not resolve git commit directory; PR status cannot be checked for the intended checkout")
 			continue
 		if invocation.subcommand == "push" and invocation.warning:
 			uncertain_push_reasons.append(invocation.warning)
@@ -1518,8 +1549,11 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			if target.warning.startswith("could not resolve git push"):
 				unknown_destination_reasons.append(target.warning)
 				continue
+			if target.warning.startswith("could not resolve explicit git command directory") and invocation.subcommand == "commit":
+				unverified_destinations.add("could not resolve git commit directory; the session checkout may differ")
+				continue
 			if target.warning:
-				_warn(target.warning)  # Unresolved directory: the session checkout is checked.
+				_warn(target.warning)  # Implicit uncertainty: check the session checkout.
 			if target.remote and target.remote != "origin":
 				# Even a matching explicit URL may be rewritten by url.*.insteadOf.
 				if "://" in target.remote or target.remote.startswith("git@"):

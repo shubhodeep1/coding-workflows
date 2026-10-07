@@ -309,7 +309,9 @@ def test_workspace_shell_context_activates_before_repo_sensitive_steps() -> None
 	assert teardown_step.get("if") == "always()"
 	assert teardown_step.get("run").strip() == 'echo "BASH_ENV=" >> "$GITHUB_ENV"'
 	assert implement_text.index("- name: Run workspace before_remove hook") < implement_text.index("- name: Cleanup temporary artifacts") < implement_text.index("- name: Clear workspace shell context for post-actions")
-	assert implement_text.rfind("- name:") == implement_text.index("- name: Clear workspace shell context for post-actions")
+	# Last step of the implement job; later jobs (heal-report) run on their own runner.
+	implement_job_text = implement_text.split("\n  heal-report:\n", 1)[0]
+	assert implement_job_text.rfind("- name:") == implement_job_text.index("- name: Clear workspace shell context for post-actions")
 
 
 def test_implement_shell_git_pin_is_not_inherited_by_checkout_post_actions(tmp_path: Path) -> None:

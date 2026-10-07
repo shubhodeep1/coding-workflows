@@ -34,6 +34,10 @@ contracts cover the failure modes that matter:
 from __future__ import annotations
 
 import re
+import json
+import os
+import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -44,6 +48,130 @@ HELPER = REPO_ROOT / "scripts" / "validate_editor_audit.sh"
 
 SWEEP_HEADER = "Standalone PR noop-suspicious recovery sweep"
 NOOP_WARNING_LITERAL = "⚠️ **Editor no-op suspicious**"
+
+
+def test_idle_poller_replays_only_trusted_failed_reclarify_once(tmp_path: Path) -> None:
+	"""A source command, not a bot marker alone, authorizes the PAT write."""
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	gh = bin_dir / "gh"
+	gh.write_text('''#!/usr/bin/env bash
+if [ "$1:$2" = "api:rate_limit" ]; then echo "${BUDGET}"; exit 0; fi
+if [ "$1:$2" = "api:user" ]; then echo owner; exit 0; fi
+if [ "$1:$2" = "issue:list" ]; then echo '[{"number":7}]'; exit 0; fi
+if [ "$1:$2" = "api:--paginate" ]; then cat "${COMMENTS}"; exit 0; fi
+if [ "$1:$2" = "api:repos/o/r/issues/7" ]; then
+  echo '{"number":7,"state":"open","labels":[{"name":"ai:reclarify-requeue"}]}'; exit 0
+fi
+if [ "$1:$2" = "api:-X" ]; then echo "$*" >> "${CALLS}"; exit 0; fi
+exit 1
+''')
+	gh.chmod(0o755)
+	comments = tmp_path / "comments.json"
+	calls = tmp_path / "calls"
+	source = {"id": 11, "created_at": "2026-10-03T01:00:00Z", "body": "/reclarify",
+		"user": {"type": "User", "login": "owner"}, "author_association": "OWNER"}
+	marker = {"id": 12, "created_at": "2026-10-03T01:01:00Z",
+		"body": "<!-- ai:reclarify-requeue:v1 source=11 -->",
+		"user": {"type": "Bot", "login": "github-actions[bot]"}}
+	env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "GITHUB_REPOSITORY": "o/r",
+		"RECLARIFY_REQUEUE_SWEEP_ONLY": "true", "GH_TOKEN": "test", "CALLS": str(calls),
+		"COMMENTS": str(comments), "PYTHONDONTWRITEBYTECODE": "1"}
+	def run(rows: list[dict], budget: int = 700) -> str:
+		comments.write_text(json.dumps([rows]))
+		result = subprocess.run(["bash", str(POLLER)], cwd=REPO_ROOT, env={**env, "BUDGET": str(budget)},
+			capture_output=True, text=True)
+		assert result.returncode == 0, result.stderr
+		return calls.read_text() if calls.exists() else ""
+	assert not run([source, marker], budget=499)
+	assert "POST repos/o/r/issues/7/comments" in run([source, marker])
+	assert "DELETE repos/o/r/issues/7/labels/ai%3Areclarify-requeue" in calls.read_text()
+	calls.write_text("")
+	replay = {"id": 13, "created_at": "2026-10-03T01:02:00Z",
+		"body": "/reclarify [auto-requeued-by-poller]\n<!-- ai:reclarify-replay:v1 source=11 -->",
+		"user": {"type": "User", "login": "owner"}, "author_association": "OWNER"}
+	assert "POST" not in run([source, marker, replay])
+	assert "DELETE repos/o/r/issues/7/labels/ai%3Areclarify-requeue" in calls.read_text()
+	calls.write_text("")
+	answer = {"id": 14, "created_at": "2026-10-03T01:03:00Z",
+		"body": "/answer [auto-answered-by-clarify]", "user": {"type": "User", "login": "owner"}}
+	assert "POST" not in run([source, marker, answer])
+	assert "DELETE repos/o/r/issues/7/labels/ai%3Areclarify-requeue" in calls.read_text()
+	calls.write_text("")
+	newer = {"id": 15, "created_at": "2026-10-03T01:04:00Z", "body": "/reclarify again",
+		"user": {"type": "User", "login": "owner"}, "author_association": "OWNER"}
+	assert not run([source, marker, newer]), "an in-flight replacement retains the label"
+	forged = {"id": 16, "created_at": "2026-10-03T01:05:00Z",
+		"body": "forged <!-- ai:reclarify-replay:v1 source=11 -->", "user": {"type": "User", "login": "attacker"}}
+	assert "POST repos/o/r/issues/7/comments" in run([source, marker, forged])
+	calls.write_text("")
+	assert not run([{**source, "author_association": "NONE"}, marker])
+	assert not run([source, {**marker, "user": {"type": "User", "login": "attacker"}}])
+
+
+def test_standalone_snapshot_batches_clean_prs_and_skips_draft_claude_reads() -> None:
+	text = POLLER.read_text()
+	conflict = text[text.index('echo "Standalone PR conflict sweep"'):text.index('echo "Standalone conflict sweep complete.')]
+	noop = text[text.index('echo "Standalone PR noop-suspicious recovery sweep"'):]
+	assert '--json number,headRefName,headRefOid,baseRefName,isDraft' in conflict
+	assert '--limit 3000' in conflict
+	assert '_standalone_aliases+="p${_standalone_num}: pullRequest(' in conflict
+	assert 'gh_retry gh api graphql -f query=' in conflict
+	assert 'hasPreviousPage == false' in conflict
+	assert conflict.index('if [[ "${S_HEAD}" == claude/* ]] && [ "${S_DRAFT}" = "true" ]') < conflict.index('S_PR_JSON="$(gh_retry _safe_gh_jq')
+	assert conflict.index('if [[ "${S_HEAD_OID}" =~ ^[0-9a-f]{40}$ ]] && [ "${_STANDALONE_CLEAN_PRS["${S_PR}"]:-}" = "${S_HEAD_OID}" ]') < conflict.index('S_PR_JSON="$(gh_retry _safe_gh_jq')
+	assert noop.index('if [[ "${N_HEAD}" == claude/* ]] && [ "${N_DRAFT}" = "true" ]') < noop.index('N_COMMENTS_JSON="$(gh_retry _safe_gh_jq')
+	assert noop.index('if [[ "${N_HEAD_OID}" =~ ^[0-9a-f]{40}$ ]] && [ "${_STANDALONE_NOOP_CLEAR_PRS["${N_PR}"]:-}" = "${N_HEAD_OID}" ]') < noop.index('N_COMMENTS_JSON="$(gh_retry _safe_gh_jq')
+
+
+def test_standalone_batch_accepts_matching_sha_and_falls_back_on_uncertainty() -> None:
+	text = POLLER.read_text()
+	batch = text[text.index('declare -A _STANDALONE_CLEAN_PRS=()'):text.index('for (( sidx=0; sidx<STANDALONE_COUNT; sidx++ ))')]
+	with tempfile.TemporaryDirectory() as test_dir:
+		root = Path(test_dir)
+		gh = root / "gh"
+		gh.write_text('''#!/usr/bin/env bash
+if [ "$1:$2" = "api:graphql" ]; then
+  printf 'called\\n' >> "$CALL_LOG"
+  cat "$GRAPHQL_RESPONSE"
+else
+  exit 1
+fi
+''')
+		gh.chmod(0o755)
+		response_file = root / "response.json"
+		call_log = root / "calls"
+		sha = "a" * 40
+		prs = [{"number": 7, "headRefName": "claude/a", "headRefOid": sha,
+			"baseRefName": "main", "isDraft": False},
+			{"number": 8, "headRefName": "ai/issue-8", "headRefOid": sha,
+				"baseRefName": "main", "isDraft": False}]
+		clean = {"number": 7, "headRefName": "claude/a", "headRefOid": sha,
+			"state": "OPEN", "isDraft": False, "mergeStateStatus": "CLEAN",
+			"comments": {"pageInfo": {"hasPreviousPage": False}, "nodes": []}}
+		run_script = ('gh_retry() { "$@"; }\n' + batch +
+			'printf "clean=%s noop=%s\\n" "${_STANDALONE_CLEAN_PRS[7]:-unset}" "${_STANDALONE_NOOP_CLEAR_PRS[7]:-unset}"\n')
+		env = {**os.environ, "PATH": f"{root}:{os.environ['PATH']}", "GITHUB_REPOSITORY": "o/r",
+			"STANDALONE_PRS": json.dumps(prs), "STANDALONE_COUNT": "2",
+			"GRAPHQL_RESPONSE": str(response_file), "CALL_LOG": str(call_log)}
+		def run(reply: dict) -> str:
+			response_file.write_text(json.dumps(reply))
+			call_log.write_text("")
+			result = subprocess.run(["bash", "-euo", "pipefail", "-c", run_script], env=env,
+				capture_output=True, text=True)
+			assert result.returncode == 0, result.stderr
+			assert call_log.read_text().count("called") == 1
+			return result.stdout
+		assert f"clean={sha} noop={sha}" in run({"data": {"repository": {"p7": clean, "p8": {
+			**clean, "number": 8, "headRefName": "ai/issue-8"}}}})
+		assert "clean=unset noop=unset" in run({"data": {"repository": {"p7": {
+			**clean, "headRefOid": "b" * 40}}}})
+		assert f"clean=unset noop={sha}" in run({"data": {"repository": {"p7": {
+			**clean, "mergeStateStatus": "DIRTY"}}}})
+		assert f"clean={sha} noop=unset" in run({"data": {"repository": {"p7": {
+			**clean, "comments": {"pageInfo": {"hasPreviousPage": True}, "nodes": []}}}}})
+		assert "clean=unset noop=unset" in run({"data": {"repository": {"p7": clean}},
+			"errors": [{"message": "incomplete"}]})
 
 
 def _poller_text() -> str:
@@ -516,7 +644,11 @@ def main() -> int:
 	for func in test_funcs:
 		name = func.__name__
 		try:
-			func()
+			if func is test_idle_poller_replays_only_trusted_failed_reclarify_once:
+				with tempfile.TemporaryDirectory() as test_dir:
+					func(Path(test_dir))
+			else:
+				func()
 			print(f"  PASS  {name}")
 			passed += 1
 		except AssertionError as e:

@@ -8,18 +8,21 @@ run end to end against a mock `gh` and a mock `codex`.
 
 from __future__ import annotations
 
+import argparse
+import ast
 import importlib.util
 import json
 import os
 import re
 import shutil
 import subprocess
-import tempfile
 import sys
+import tempfile
 import textwrap
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -136,7 +139,8 @@ def test_intake_workflow_triggers_and_release_names() -> None:
 	on = _on(intake)
 	assert on["repository_dispatch"]["types"] == [heal.DISPATCH_EVENT_TYPE]
 	assert on["workflow_run"]["types"] == ["completed"]
-	assert on["workflow_run"]["workflows"] == list(heal.RELEASE_WORKFLOW_NAMES)
+	assert on["workflow_run"]["workflows"] == list(heal.RELEASE_WORKFLOW_NAMES) + list(heal.MAIN_CI_WORKFLOW_NAMES)
+	assert _yaml(REPO_ROOT / ".github" / "workflows" / "ci.yml")["name"] in heal.MAIN_CI_WORKFLOW_NAMES
 	assert "payload_json" in on["workflow_dispatch"]["inputs"]
 	actual_names = {
 		_yaml(REPO_ROOT / ".github" / "workflows" / name)["name"]
@@ -197,7 +201,7 @@ def test_prompt_declares_classification_tokens() -> None:
 
 def test_stable_log_prefixes_are_registered() -> None:
 	agents_text = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
-	for prefix in ("WORKFLOW_HEAL_REPORT", "WORKFLOW_HEAL_AUTOFIX_REPORT", "WORKFLOW_HEAL_PR_RECONCILE", "WORKFLOW_HEAL"):
+	for prefix in ("WORKFLOW_HEAL_REPORT", "WORKFLOW_HEAL_AUTOFIX_REPORT", "WORKFLOW_HEAL_PHASE_REPORT", "WORKFLOW_HEAL_PR_RECONCILE", "WORKFLOW_HEAL"):
 		assert f"- `{prefix}`" in agents_text
 		assert f"LOG_PREFIX.name={prefix}" in agents_text
 
@@ -243,14 +247,19 @@ def _issue(number: int = 42, *, title: str = "Add retries to the poller", body: 
 
 
 def test_build_issue_payload_validates_and_carries_lineage() -> None:
-	body = f"<!-- {heal.MARKER_PREFIX}fp={FP_HEX} -->\n<!-- {heal.MARKER_PREFIX}gen=2 -->\n<!-- {heal.MARKER_PREFIX}root={FP_HEX} -->\nsome body"
+	body = (f"<!-- {heal.MARKER_PREFIX}fp={FP_HEX} -->\n<!-- {heal.MARKER_PREFIX}gen=2 -->\n"
+		f"<!-- {heal.MARKER_PREFIX}root={FP_HEX} -->\n<!-- {heal.MARKER_PREFIX}source={CONSUMER_REPO}#39 -->\n"
+		f"<!-- {heal.MARKER_PREFIX}classification=workflow-defect -->\nsome body")
 	comments = [{"body": f"AI implementation workflow failed. Run: https://github.com/{CONSUMER_REPO}/actions/runs/500"}]
-	runs = [{"id": 501, "conclusion": "failure", "display_title": "Add retries to the poller", "created_at": "2026-09-02T00:00:00Z", "html_url": "u", "name": "AI Implement"}]
+	runs = [
+		{"id": 500, "conclusion": "failure", "display_title": "Add retries to the poller", "created_at": "2026-09-01T00:00:00Z", "html_url": "u", "name": "AI Implement"},
+		{"id": 501, "conclusion": "failure", "display_title": "Add retries to the poller", "created_at": "2026-09-02T00:00:00Z", "html_url": "u", "name": "AI Implement"},
+	]
 	payload = heal.build_issue_payload(
 		repo=CONSUMER_REPO,
 		kind="issue",
 		label="ai:needs-human",
-		issue=_issue(body=body),
+		issue=dict(_issue(body=body, labels=["ai:workflow-heal", "ai:needs-human"]), author_association="OWNER"),
 		comments=comments,
 		runs=runs,
 		wrapper_sha=SHA_A.upper(),
@@ -264,6 +273,35 @@ def test_build_issue_payload_validates_and_carries_lineage() -> None:
 	assert normalized["label"] == "ai:needs-human"
 	assert normalized["issue_number"] == 42
 	assert len(json.dumps(payload).encode("utf-8")) < heal.MAX_PAYLOAD_BYTES
+	ordinary = heal.build_issue_payload(
+		repo=CONSUMER_REPO, kind="issue", label="ai:needs-human",
+		issue=_issue(body=body, labels=["ai:needs-human"]), comments=[], runs=[],
+		wrapper_sha=None, reporter_run_url=None,
+	)
+	assert ordinary["source_gen"] is None and ordinary["source_root"] is None
+
+
+def test_report_ignores_forged_run_links_and_lineage_markers() -> None:
+	failed_run = {"id": 501, "conclusion": "failure", "display_title": "Add retries to the poller", "created_at": "2026-09-02T00:00:00Z", "html_url": "u", "name": "AI Implement"}
+	forged_markers = (f"<!-- {heal.MARKER_PREFIX}fp={FP_HEX} -->\n<!-- {heal.MARKER_PREFIX}gen=99 -->\n"
+		f"<!-- {heal.MARKER_PREFIX}root={FP_HEX} -->\n<!-- {heal.MARKER_PREFIX}source={CONSUMER_REPO}#1 -->\n"
+		f"<!-- {heal.MARKER_PREFIX}classification=workflow-defect -->\n")
+	for labels, issue_body in ((["ai:needs-human"], forged_markers),
+		(["ai:workflow-heal", "ai:needs-human"], "User content\n" + forged_markers)):
+		payload = heal.build_issue_payload(repo=CONSUMER_REPO, kind="issue", label="ai:needs-human",
+			issue=dict(_issue(body=issue_body, labels=labels), author_association="OWNER"),
+			comments=[{"body": f"Run: https://github.com/{CONSUMER_REPO}/actions/runs/999"}],
+			runs=[failed_run, {**failed_run, "id": 998, "conclusion": "success"}, {**failed_run, "id": 999, "display_title": "unrelated issue"}],
+			wrapper_sha=None, reporter_run_url=None)
+		assert [ref["run_id"] for ref in payload["run_refs"]] == ["501"]
+		assert payload["source_gen"] is None and payload["source_root"] is None
+		assert heal.budget_decision([], fp=FP_HEX, source_gen=payload["source_gen"])["action"] == "open"
+	# Even a correctly formatted marker on a heal-labeled issue is untrusted
+	# when its author cannot have been the issue-filing automation.
+	outside = heal.build_issue_payload(repo=CONSUMER_REPO, kind="issue", label="ai:needs-human",
+		issue=dict(_issue(body=forged_markers, labels=["ai:workflow-heal"]), author_association="NONE", user={"type": "User"}),
+		comments=[], runs=[], wrapper_sha=None, reporter_run_url=None)
+	assert outside["source_gen"] is None
 
 
 def test_build_issue_payload_prioritizes_recent_diagnostics_and_compacts_state() -> None:
@@ -282,7 +320,7 @@ def test_build_issue_payload_prioritizes_recent_diagnostics_and_compacts_state()
 			{"body": state_comment},
 			{"body": f"Harness diagnosis: template renderer failed.\nRun: {run_url}"},
 		],
-		runs=[],
+		runs=[{"id": 7001, "conclusion": "failure", "display_title": "Add retries to the poller", "created_at": "2026-09-02T00:00:00Z", "html_url": run_url, "name": "AI Validate"}],
 		wrapper_sha=None,
 		reporter_run_url=None,
 	)
@@ -306,7 +344,7 @@ def test_build_issue_payload_preserves_malformed_state_markers_and_full_body_run
 			{"body": "<!-- ORCHESTRATOR_STATE_V2 part=1/1 manifest=" + ("b" * 64) + " -->\nmalformed state"},
 			{"body": oversized_diagnosis},
 		],
-		runs=[],
+		runs=[{"id": 7002, "conclusion": "failure", "display_title": "Add retries to the poller", "created_at": "2026-09-02T00:00:00Z", "html_url": run_url, "name": "AI Validate"}],
 		wrapper_sha=None,
 		reporter_run_url=None,
 	)
@@ -560,7 +598,7 @@ def test_budget_decision_matrix() -> None:
 	now = datetime(2026, 9, 20, 12, tzinfo=timezone.utc)
 	fp = "1" * 64
 	other = "2" * 64
-	assert heal.budget_decision([], fp=fp, now=now) == {"action": "open", "gen": 1, "root": fp, "open_count": 0, "today_count": 0}
+	assert heal.budget_decision([], fp=fp, now=now) == {"action": "open", "gen": 1, "root": fp, "open_count": 0, "today_count": 0, "lineage_source": "none"}
 
 	dup = heal.budget_decision([_heal_issue(10, state="open", fp=fp), _heal_issue(11, state="open", fp=fp, gen=2)], fp=fp, now=now)
 	assert dup["action"] == "duplicate" and dup["existing_issue"] == 11
@@ -577,7 +615,7 @@ def test_budget_decision_matrix() -> None:
 	assert cross_repo_dup["existing_repo"] == CONSUMER_REPO
 
 	lineage = heal.budget_decision([_heal_issue(5, state="closed", fp=fp, gen=1), _heal_issue(6, state="closed", fp=fp, gen=2, root=other)], fp=fp, now=now)
-	assert lineage == {"action": "open", "gen": 3, "root": other, "open_count": 0, "today_count": 0}
+	assert lineage == {"action": "open", "gen": 3, "root": other, "open_count": 0, "today_count": 0, "lineage_source": "fingerprint"}
 	cross_repo_lineage = heal.budget_decision(
 		[
 			dict(_heal_issue(500, state="closed", fp=fp, gen=1), repository=SELF_REPO),
@@ -593,8 +631,12 @@ def test_budget_decision_matrix() -> None:
 	capped = heal.budget_decision([_heal_issue(6, state="closed", fp=fp, gen=3)], fp=fp, now=now)
 	assert capped["action"] == "escalate" and capped["gen"] == 4 and capped["prior_issue"] == 6
 
-	inherited = heal.budget_decision([], fp=fp, source_gen=3, source_root=other, now=now)
+	trusted_source = dict(_heal_issue(42, state="closed", fp=other, gen=3, root=other), repository=SELF_REPO, author="workflow-bot")
+	inherited = heal.budget_decision([trusted_source], fp=fp, source_gen=3, source_root=other,
+		source_issue=f"{SELF_REPO}#42", trusted_author="workflow-bot", now=now)
 	assert inherited["action"] == "escalate" and inherited["root"] == other
+	assert inherited["lineage_source"] == "verified_source_issue"
+	assert inherited["prior_issue"] == 42 and inherited["prior_repo"] == SELF_REPO
 
 	many_open = [_heal_issue(100 + i, state="open", fp=f"{i:064x}") for i in range(10)]
 	assert heal.budget_decision(many_open, fp=fp, now=now)["action"] == "budget_exhausted"
@@ -650,7 +692,7 @@ def test_budget_decision_keys_review_failures_on_source_pr() -> None:
 	# Q3: a closed heal issue from the same PR continues its lineage.
 	closed_same_pr = _sourced_heal_issue(4392, state="closed", fp=other, source=key, gen=2, root=root, repository=SELF_REPO)
 	again = heal.budget_decision([closed_same_pr], fp=fp, source_key=key, now=now)
-	assert again == {"action": "open", "gen": 3, "root": root, "open_count": 0, "today_count": 0}
+	assert again == {"action": "open", "gen": 3, "root": root, "open_count": 0, "today_count": 0, "lineage_source": "source"}
 	capped = heal.budget_decision([dict(closed_same_pr, body=closed_same_pr["body"].replace("gen=2", "gen=3"))], fp=fp, source_key=key, now=now)
 	assert capped["action"] == "escalate" and capped["gen"] == 4 and capped["prior_issue"] == 4392 and capped["prior_repo"] == SELF_REPO
 
@@ -672,8 +714,54 @@ def test_budget_decision_keys_review_failures_on_source_pr() -> None:
 		_sourced_heal_issue(11, state="closed", fp=other, source=key, gen=2, root=root, repository=SELF_REPO),
 	]
 	assert heal.budget_decision(mixed, fp=fp, source_key=key, now=now)["gen"] == 3
-	# An inherited source generation (issue reports) still takes precedence.
-	assert heal.budget_decision(mixed, fp=fp, source_key=key, source_gen=1, source_root=other, now=now)["gen"] == 2
+	# A verified source issue's generation (issue reports) takes precedence.
+	verified = dict(_heal_issue(42, state="closed", fp=other, gen=1, root=other), repository=SELF_REPO, author="workflow-bot")
+	assert heal.budget_decision([*mixed, verified], fp=fp, source_key=key, source_gen=1, source_root=other,
+		source_issue=f"{SELF_REPO}#42", trusted_author="workflow-bot", now=now)["gen"] == 2
+
+
+def test_budget_ignores_unverified_source_lineage() -> None:
+	fp, other = "1" * 64, "2" * 64
+	key = f"{SELF_REPO}#42"
+	valid_record = dict(_heal_issue(42, state="closed", fp=other, gen=3, root=other), repository=SELF_REPO, user={"login": "workflow-bot"})
+	for record, source_issue, trusted_author, source_gen, source_root, reason in (
+		([], None, "workflow-bot", 3, other, "no_source_issue"),
+		([], key, "workflow-bot", 3, other, "not_heal_issue"),
+		([valid_record], key, None, 3, other, "no_trusted_author"),
+		([dict(valid_record, user={"login": "stranger"})], key, "workflow-bot", 3, other, "untrusted_author"),
+		([valid_record], key, "workflow-bot", 2, other, "gen_mismatch"),
+		([valid_record], key, "workflow-bot", 0, other, "gen_mismatch"),
+		([valid_record], key, "workflow-bot", 3, fp, "root_mismatch"),
+		([dict(valid_record, repository=CONSUMER_REPO)], key, "workflow-bot", 3, other, "not_heal_issue"),
+		([dict(valid_record, repository="")], key, "workflow-bot", 3, other, "not_heal_issue"),
+		([dict(valid_record, pull_request=True)], key, "workflow-bot", 3, other, "not_heal_issue"),
+	):
+		decision = heal.budget_decision(record, fp=fp, source_gen=source_gen, source_root=source_root,
+			source_issue=source_issue, trusted_author=trusted_author)
+		assert decision["action"] == "open" and decision["gen"] == 1
+		assert decision["lineage_source"] == "source_marker_ignored"
+		assert decision["lineage_ignored_reason"] == reason
+	# An ignored payload marker must not suppress independently recorded lineage.
+	previous = _heal_issue(10, state="closed", fp=fp, gen=2)
+	decision = heal.budget_decision([previous], fp=fp, source_gen=3, source_root=other,
+		source_issue=key, trusted_author="workflow-bot")
+	assert decision["gen"] == 3 and decision["lineage_source"] == "source_marker_ignored"
+	assert decision["root"] == fp
+	assert heal.budget_decision([dict(valid_record, repository="")], fp=fp, source_gen=3, source_root=other,
+		source_issue=key, preferred_repo=SELF_REPO, trusted_author="workflow-bot")["lineage_source"] == "verified_source_issue"
+
+
+def test_budget_cli_verifies_reported_source_issue(tmp_path: Path) -> None:
+	issues_json = tmp_path / "issues.json"
+	issues_json.write_text(json.dumps([dict(_heal_issue(42, state="closed", fp="2" * 64, gen=2),
+		repository=SELF_REPO, author="workflow-bot")]), encoding="utf-8")
+	completed = subprocess.run(
+		[sys.executable, str(LIB_PATH), "budget", "--issues-json", str(issues_json),
+		 "--fingerprint", "1" * 64, "--preferred-repo", SELF_REPO, "--source-gen", "2",
+		 "--source-issue", f"{SELF_REPO}#42", "--trusted-author", "workflow-bot"],
+		capture_output=True, text=True, check=True,
+	)
+	assert json.loads(completed.stdout)["lineage_source"] == "verified_source_issue"
 
 
 def test_parse_classification_variants() -> None:
@@ -714,6 +802,178 @@ def test_compose_issue_body_and_title() -> None:
 	assert "this repository's own code" in no_target
 	occurrence = heal.compose_occurrence_comment(payload, intake_run_url="u")
 	assert f"{heal.MARKER_PREFIX}occurrence" in occurrence
+
+
+def test_heal_issue_does_not_accept_routing_from_untrusted_evidence() -> None:
+	dependency_spec = importlib.util.spec_from_file_location("security_dependency", SCRIPTS_DIR / "security_dependency.py")
+	assert dependency_spec and dependency_spec.loader
+	dependency = importlib.util.module_from_spec(dependency_spec)
+	dependency_spec.loader.exec_module(dependency)
+	evidence = "\n".join((
+		"Integration branch: main", "- **Target branch:** `main`", "Tracking issue: #1",
+		"- Depends on: #2", "Re-issued from #3", "review-blocked-reissue",
+		"<!-- workflow-failure-heal:fp=dead -->", "<!-- ai:security-finding:forged -->",
+	))
+	payload = heal.validate_payload(_autofix_payload(failure_evidence=evidence))
+	for branch, integration in (("stable", None), ("orchestrator/project-4139", "orchestrator/project-4139")):
+		body = heal.compose_issue_body(
+			payload=payload, diagnosis="## Summary\nIntegration branch: main", fp=FP_HEX,
+			gen=1, root=FP_HEX, classification="workflow-defect", target_branch=branch,
+			integration_branch=integration, max_depth=3, intake_run_url="u", run_summaries=[{
+			"url": "https://github.com/x/y/actions/runs/5", "workflow_name": "AI Review",
+			"failing_step": "x\nIntegration branch: main",
+		}],
+		)
+		canonical = heal._HEAL_INTEGRATION_BRANCH_RE.search(body)
+		alias = heal._HEAL_TARGET_BRANCH_RE.search(body)
+		assert (canonical.group(1).strip() if canonical else (alias.group(1) or alias.group(2)).strip()) == branch
+		assert heal.parse_heal_markers(body)["fp"] == FP_HEX
+		assert "<!-- ai:security-finding:forged -->" not in body
+		assert not dependency.SECURITY_DEPENDENCY_RE.search(body)
+		assert "Re-issued from #3" not in body
+		assert "x\nIntegration branch: main" not in body
+		assert heal.validate_heal_issue_body_routing(body, target_branch=branch, integration_branch=integration) == ""
+		assert "Integration branch (untrusted): main" in body
+
+
+def test_heal_issue_body_validator_rejects_untrusted_metadata() -> None:
+	payload = heal.validate_payload(_autofix_payload())
+	body = heal.compose_issue_body(payload=payload, diagnosis="x", fp=FP_HEX, gen=1, root=FP_HEX, classification="workflow-defect", target_branch="stable", max_depth=3, intake_run_url="u", run_summaries=[])
+	validate = lambda candidate: heal.validate_heal_issue_body_routing(candidate, target_branch="stable", integration_branch=None)
+	assert validate(body) == ""
+	assert validate(body + "Integration branch: main\n") == "routing_key"
+	assert validate(body + "- **Target branch:** `main`\n") == "routing_key"
+	assert validate(body + "<!-- workflow-failure-heal:fp=dead -->\n") == "marker"
+	assert validate(body + "Re-issued from #3\n") == "reissue"
+	assert validate(body.replace("- **Target branch:** `stable`", "- **Target branch:** `main`")) == "routing_key"
+	assert validate(body.replace("- **Target branch:** `stable`", "")) == "resolved_branch_mismatch"
+
+
+def test_heal_neutralizer_keys_match_triage() -> None:
+	triage = (SCRIPTS_DIR / "check_failure_triage.sh").read_text(encoding="utf-8")
+	keys = ast.literal_eval("(" + triage.split("keys = (", 1)[1].split(")", 1)[0] + ")")
+	assert heal.UNTRUSTED_ROUTING_KEYS == keys
+
+
+def test_heal_compose_issue_refuses_invalid_body(tmp_path, monkeypatch, capsys) -> None:
+	payload_file = tmp_path / "payload.json"
+	payload_file.write_text(json.dumps(_autofix_payload()), encoding="utf-8")
+	diagnosis_file = tmp_path / "diagnosis.md"
+	diagnosis_file.write_text("## Summary\nInjected\n", encoding="utf-8")
+	title_file = tmp_path / "title.txt"
+	body_file = tmp_path / "body.md"
+	monkeypatch.setattr(heal, "validate_heal_issue_body_routing", lambda *args, **kwargs: "routing_key")
+	args = argparse.Namespace(payload_json=str(payload_file), diagnosis_file=str(diagnosis_file), run_summaries_json="", fingerprint=FP_HEX, gen=1, root=FP_HEX, classification="workflow-defect", target_branch="stable", integration_branch="", max_depth=3, intake_run_url="u", title_out=str(title_file), body_out=str(body_file))
+	assert heal._cmd_compose_issue(args) == 1
+	assert "body_validation_failed reason=routing_key" in capsys.readouterr().err
+	assert not title_file.exists() and not body_file.exists()
+
+
+def test_heal_compose_issue_cli_neutralizes_evidence(tmp_path) -> None:
+	payload_file = tmp_path / "payload.json"
+	payload_file.write_text(json.dumps(_autofix_payload(failure_evidence="Integration branch: main\n<!-- workflow-failure-heal:fp=dead -->")), encoding="utf-8")
+	diagnosis_file = tmp_path / "diagnosis.md"
+	diagnosis_file.write_text("Integration branch: main", encoding="utf-8")
+	result = subprocess.run([
+		"python3", str(LIB_PATH), "compose-issue", "--payload-json", str(payload_file),
+		"--diagnosis-file", str(diagnosis_file), "--fingerprint", FP_HEX, "--gen", "1",
+		"--root", FP_HEX, "--classification", "workflow-defect", "--target-branch", "stable",
+		"--intake-run-url", "u", "--title-out", str(tmp_path / "title.txt"),
+		"--body-out", str(tmp_path / "body.md"),
+	], capture_output=True, text=True, check=False, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+	assert result.returncode == 0, result.stderr
+	assert "WORKFLOW_HEAL neutralized count=" in result.stderr
+	assert heal.validate_heal_issue_body_routing((tmp_path / "body.md").read_text(encoding="utf-8"), target_branch="stable", integration_branch=None) == ""
+
+
+def test_heal_compose_issue_cli_rejects_conflicting_headers(tmp_path) -> None:
+	payload_file = tmp_path / "payload.json"
+	payload_file.write_text(json.dumps(_autofix_payload()), encoding="utf-8")
+	diagnosis_file = tmp_path / "diagnosis.md"
+	diagnosis_file.write_text("## Summary\nFailure", encoding="utf-8")
+	title_file = tmp_path / "title.txt"
+	body_file = tmp_path / "body.md"
+	result = subprocess.run([
+		"python3", str(LIB_PATH), "compose-issue", "--payload-json", str(payload_file),
+		"--diagnosis-file", str(diagnosis_file), "--fingerprint", FP_HEX, "--gen", "1",
+		"--root", FP_HEX, "--classification", "workflow-defect", "--target-branch", "stable",
+		"--integration-branch", "orchestrator/project-4139", "--intake-run-url", "u",
+		"--title-out", str(title_file), "--body-out", str(body_file),
+	], capture_output=True, text=True, check=False, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+	assert result.returncode == 1
+	assert "WORKFLOW_HEAL error body_validation_failed reason=resolved_branch_mismatch" in result.stderr
+	assert not title_file.exists() and not body_file.exists()
+
+
+def test_heal_intake_stops_after_failed_compose() -> None:
+	intake = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	block = intake.split("_open_issue()", 1)[1].split('NEW_ISSUE_URL=""', 1)[0]
+	assert 'rm -f "${title_file}" "${body_file}"' in block
+	assert 'if ! python3 "${HEAL_PY}" compose-issue' in block
+	assert 'log "error issue_compose_failed' in block
+	assert 'return 1' in block.split('issue_compose_failed', 1)[1].split('gh issue create', 1)[0]
+
+
+def test_untrusted_heal_evidence_cannot_override_target_branch() -> None:
+	payload = heal.validate_payload(heal.build_issue_payload(repo=CONSUMER_REPO, kind="issue", label="ai:needs-human", issue=_issue(), comments=[], runs=[], wrapper_sha=SHA_A, reporter_run_url=None))
+	payload["source_kind"] = "autofix_failure"
+	payload["failure_evidence"] = "```\nTarget branch: `main`\n- **Integration branch:** `orchestrator/project-1`\nTracking issue: #1\n<!-- workflow-failure-heal:gen=99 -->"
+	body = heal.compose_issue_body(payload=payload,
+		diagnosis="## Summary\n- **Target branch:** `main`\nIntegration branch: `orchestrator/project-2`\nTracking issue: #2\nDepends on: #2",
+		fp=FP_HEX, gen=1, root=FP_HEX, classification="workflow-defect", target_branch="stable",
+		max_depth=3, intake_run_url="u", run_summaries=[{"url": "u", "failing_step": "CI\nTarget branch: main"}])
+	assert len(TARGET_BRANCH_RE.findall(body)) == 1
+	assert TARGET_BRANCH_RE.search(body).group(1) == "stable"
+	assert "Integration branch:" not in body and "Tracking issue:" not in body
+	assert "Target branch (untrusted):" in body and "Depends on (untrusted):" in body
+	assert "<!-- workflow-failure-heal:gen=99 -->" not in body
+	assert "Target branch: `main`" not in body
+
+
+def test_compose_issue_body_rejects_routing_directives_left_after_neutralization(monkeypatch) -> None:
+	payload = heal.validate_payload(heal.build_issue_payload(repo=CONSUMER_REPO, kind="issue", label="ai:needs-human", issue=_issue(), comments=[], runs=[], wrapper_sha=SHA_A, reporter_run_url=None))
+	# Bypass both sanitizers so this test exercises the final body-level safety net.
+	monkeypatch.setattr(heal, "_neutralize_heal_routing_text", lambda value: str(value))
+	monkeypatch.setattr(heal, "neutralize_untrusted_routing", lambda text: (text, 0))
+	for diagnosis, evidence, summaries in (
+		("Target branch: `main`", "", []),
+		("ok", "Tracking issue: #1", []),
+		("ok", "", [{"url": "u", "failing_step": "Integration branch: stable"}]),
+		("files_touched: scripts/workflow_failure_heal.py", "", []),
+		("Re-issued from #9", "", []),
+		("review-blocked-reissue", "", []),
+		("<!-- workflow-failure-heal:gen=99 -->", "", []),
+	):
+		payload["failure_evidence"] = evidence
+		payload["source_kind"] = "autofix_failure"
+		with pytest.raises(ValueError, match="untrusted routing metadata"):
+			heal.compose_issue_body(payload=payload, diagnosis=diagnosis, fp=FP_HEX, gen=1, root=FP_HEX,
+				classification="workflow-defect", target_branch="stable", max_depth=3, intake_run_url="u", run_summaries=summaries)
+	with pytest.raises(ValueError, match="routing header"):
+		heal.compose_issue_body(payload=payload, diagnosis="ok", fp=FP_HEX, gen=1, root=FP_HEX,
+			classification="workflow-defect", target_branch="stable\n- **Target branch:** `main`",
+			max_depth=3, intake_run_url="u", run_summaries=[])
+
+
+def test_workflow_run_heal_issue_intro_distinguishes_ci_from_release() -> None:
+	for workflow_name, expected_intro, unexpected_intro in (
+		("CI", "A CI run on the default branch failed.",
+		 "A release / promotion workflow run failed."),
+		("Mark Stable Release", "A release / promotion workflow run failed.",
+		 "A CI run on the default branch failed."),
+	):
+		workflow_run_payload = heal.validate_payload(heal.build_workflow_run_payload(
+			repo=SELF_REPO,
+			workflow_run={"id": 7, "name": workflow_name, "conclusion": "failure", "head_sha": SHA_A, "head_branch": "main"},
+		))
+		for classification in ("workflow-defect", "inconclusive"):
+			issue_body = heal.compose_issue_body(
+				payload=workflow_run_payload, diagnosis="test diagnosis", fp=FP_HEX, gen=1,
+				root=FP_HEX, classification=classification, target_branch="main",
+				max_depth=3, intake_run_url="u", run_summaries=[],
+			)
+			assert expected_intro in issue_body
+			assert unexpected_intro not in issue_body
 
 
 def test_filter_log_keeps_signal_lines_and_bounds_size() -> None:
@@ -862,6 +1122,12 @@ if args[:1] == ["api"]:
 	rest = [a for a in args[1:]]
 	method = inferred_method(rest)
 	path = next((a for a in rest if a.startswith("repos/")), "")
+	if "user" in rest:
+		if state.get("user_fetch_fail"):
+			fail("HTTP 403")
+		if state.get("identity_read_fail"):
+			fail("HTTP 503")
+		out(state.get("user_login", "workflow-bot"))
 	if "--input" in rest:
 		body = json.loads(Path(rest[rest.index("--input") + 1]).read_text())
 		state.setdefault("dispatches", []).append({"path": path, "body": body})
@@ -879,6 +1145,10 @@ if args[:1] == ["api"]:
 	if "/issues/" in path and path.endswith("/comments"):
 		if method != "GET":
 			fail("HTTP method must be GET for comments list")
+		if state.get("comments_fetch_fail"):
+			fail("HTTP 403")
+		if state.get("comment_read_fail"):
+			fail("HTTP 503")
 		items = state.get("comments", {}).get(path, [])
 		out("".join(json.dumps(item) + "\n" for item in items))
 	if path.endswith("/issues") and "--paginate" in rest:
@@ -910,6 +1180,13 @@ if args[:1] == ["api"]:
 		if jobs is None:
 			fail("HTTP 404")
 		out(json.dumps({"jobs": jobs}))
+	if "/actions/runs/" in path and path.split("/")[-1].isdigit():
+		if method != "GET":
+			fail("HTTP method must be GET for run details")
+		item = state.get("run_details", {}).get(path, state.get("run_details", {}).get(path.split("/")[-1]))
+		if item is None:
+			fail("HTTP 404")
+		out(json.dumps(item))
 	if "/actions/jobs/" in path and path.endswith("/logs"):
 		# Real gh refuses a log body with ANSI escape sequences unless the
 		# caller opts in; job logs always contain them.
@@ -1027,6 +1304,7 @@ def _report_state(**overrides) -> dict:
 			]
 		},
 		"runs": [
+			{"id": 500, "conclusion": "failure", "display_title": issue["title"], "created_at": "2026-09-19T00:00:00Z", "html_url": f"https://github.com/{CONSUMER_REPO}/actions/runs/500", "name": "AI Implement"},
 			{"id": 501, "conclusion": "failure", "display_title": issue["title"], "created_at": "2026-09-19T01:00:00Z", "html_url": f"https://github.com/{CONSUMER_REPO}/actions/runs/501", "name": "AI Review & Autofix"},
 			{"id": 502, "conclusion": "success", "display_title": issue["title"], "created_at": "2026-09-19T02:00:00Z", "html_url": "x", "name": "AI Plan"},
 		],
@@ -1105,7 +1383,7 @@ def _consumer_payload(**overrides) -> dict:
 		label="ai:needs-human",
 		issue=_issue(),
 		comments=[{"body": f"Run: https://github.com/{CONSUMER_REPO}/actions/runs/500"}],
-		runs=[],
+		runs=[{"id": 500, "conclusion": "failure", "display_title": "Add retries to the poller", "created_at": "2026-09-19T00:00:00Z", "html_url": f"https://github.com/{CONSUMER_REPO}/actions/runs/500", "name": "AI Implement"}],
 		wrapper_sha=SHA_A,
 		reporter_run_url=None,
 	)
@@ -1123,6 +1401,12 @@ JOB_LOG = (
 
 def _intake_state(**overrides) -> dict:
 	state = {
+		"user_login": "workflow-bot",
+		"comments": {
+			f"repos/{repo}/issues/42/comments": [
+				{**_plan_failed_comment(repo, run_id), "user": {"login": "workflow-bot"}} for run_id in (499, 500)
+			] for repo in (SELF_REPO, CONSUMER_REPO)
+		},
 		"jobs": {
 			"500": [
 				{
@@ -1149,6 +1433,20 @@ def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[s
 		work, state_file, env = _stage(tmp, with_codex=True)
 		if setup_git is not None:
 			setup_git(tmp, work)
+		# Default run GET fixtures; an explicit run_details map can model 404s
+		# or mismatched identities without a permissive mock API fallback.
+		if "run_details" not in state:
+			workflow = ("test-and-mark-stable.yml" if payload.get("source_kind") == "workflow_run" else
+				"internal-plan.yml" if payload.get("source_kind") == "phase_failure" and payload.get("source_repo") == SELF_REPO else
+				"ai-plan.yml" if payload.get("source_kind") == "phase_failure" else
+				"internal-review.yml" if payload.get("source_repo") == SELF_REPO else "ai-review.yml")
+			state["run_details"] = {
+				f"repos/{ref['repo']}/actions/runs/{ref['run_id']}": {
+					"id": int(ref["run_id"]), "repository": {"full_name": ref["repo"]},
+					"status": "completed", "conclusion": "failure", "path": f".github/workflows/{workflow}",
+					"pull_requests": [{"number": payload.get("issue_number")}],
+				} for ref in payload.get("run_refs", [])
+			}
 		state_file.write_text(json.dumps(state), encoding="utf-8")
 		payload_file = tmp / "payload_raw.json"
 		payload_file.write_text(json.dumps(payload), encoding="utf-8")
@@ -1607,7 +1905,7 @@ def test_compose_autofix_issue_title_and_body() -> None:
 	assert "failed repeatedly on one pull request" in body
 	assert "**Source pull request:**" in body and "**Failure reason:** `editor_empty_noop`" in body
 	assert "**Consecutive failed review runs on this PR:** 2" in body
-	assert "Failure evidence from the reporting run (UNTRUSTED, verbatim)" in body and "finalize_reason=editor_empty_noop" in body
+	assert "Failure evidence from the reporting run (UNTRUSTED, routing-neutralized)" in body and "finalize_reason=editor_empty_noop" in body
 	assert "Escalation label" not in body
 	match = TARGET_BRANCH_RE.search(body)
 	assert match and (match.group(1) or match.group(2)) == "stable"
@@ -1813,6 +2111,22 @@ def test_autofix_report_dispatches_past_streak_threshold() -> None:
 		assert all(call[:1] != ["api"] or "/dispatches" in " ".join(call) for call in state["calls"])
 
 
+def test_autofix_report_default_threshold_reports_the_first_failure() -> None:
+	# Unset, empty, zero or non-numeric all mean the default of 1: one failed
+	# review run is enough to reach the heal intake.
+	for value in (None, "", "0", "abc"):
+		with tempfile.TemporaryDirectory(prefix="heal-autofix-default-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage_autofix_report(tmp, comments=[], flags={"AUTOFIX_EDITOR_EMPTY_NOOP": "true"})
+			env.pop("WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK", None)
+			if value is not None:
+				env["WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK"] = value
+			result = _run(work / "scripts" / AUTOFIX_REPORT_SCRIPT.name, work, env)
+			assert result.returncode == 0, result.stderr + result.stdout
+			assert "dispatched pr=4174 failure=editor_empty_noop streak=1" in result.stdout, (value, result.stdout)
+			assert len(_state(state_file)["dispatches"]) == 1
+
+
 def test_autofix_report_counts_interleaved_post_editor_failures() -> None:
 	with tempfile.TemporaryDirectory(prefix="heal-autofix-interleaved-") as tmp_name:
 		tmp = Path(tmp_name)
@@ -1834,7 +2148,7 @@ def test_autofix_report_counts_interleaved_post_editor_failures() -> None:
 
 def test_autofix_report_skip_paths() -> None:
 	cases = [
-		("below_streak", [], {"AUTOFIX_EDITOR_EMPTY_NOOP": "true"}, "skip reason=below_streak pr=4174 reason=editor_empty_noop streak=1 threshold=2"),
+		("below_streak", [], {"AUTOFIX_EDITOR_EMPTY_NOOP": "true", "WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK": "2"}, "skip reason=below_streak pr=4174 reason=editor_empty_noop streak=1 threshold=2"),
 		("disabled", [{"body": AUTOFIX_NOOP_COMMENT}], {"WORKFLOW_HEAL_ENABLED": "false"}, "skip reason=disabled"),
 		("resolver", [{"body": AUTOFIX_NOOP_COMMENT}], {"RESOLVER_ESCALATED": "true"}, "skip reason=resolver_escalated"),
 		("dispatch_denied", [{"body": AUTOFIX_NOOP_COMMENT}], {"MOCK_DISPATCH_FAIL": "1"}, "skip reason=dispatch_denied pr=4174 failure=editor_empty_noop streak=2 upstream=shubhodeep1/coding-workflows detail=HTTP 422"),
@@ -1892,7 +2206,7 @@ def test_review_autofix_workflow_wires_the_heal_reporter() -> None:
 	)
 	assert "WORKFLOW_HEAL_ENABLED" in step["if"] and "RESOLVER_ESCALATED" in step["if"]
 	assert "${{" not in step["run"]
-	assert step["env"]["WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK"] == "${{ vars.WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK || '2' }}"
+	assert step["env"]["WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK"] == "${{ vars.WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK || '1' }}"
 	assert step["env"]["REPORT_WORKFLOW_NAME"] == "${{ github.workflow }}"
 	assert "workflow_failure_heal_autofix_report.sh" in step["run"]
 	# The summary step body lives in scripts/review_autofix_step_iteration_summary.sh.
@@ -3370,3 +3684,656 @@ def test_review_autofix_failure_comment_names_the_failed_step_and_first_error() 
 	assert 'echo "AUTOFIX_FAILURE_FIRST_ERROR=${first_error}" >> "$GITHUB_ENV"' in wf
 	assert '"**Failed step:** \\`${AUTOFIX_FAILED_STEP//\\`/\\\'}\\`"' in wf
 	assert '"**First error:** \\`${AUTOFIX_FAILURE_FIRST_ERROR//\\`/\\\'}\\`"' in wf
+
+
+# ---------------------------------------------------------------------------
+# clarify / plan / implement failures (phase_failure, heal-report job)
+# ---------------------------------------------------------------------------
+
+PHASE_REPORT_SCRIPT = SCRIPTS_DIR / "workflow_failure_heal_phase_report.sh"
+
+
+def _plan_failed_comment(repo: str, run_id: int) -> dict:
+	# The body plan.yml's "Comment on issue failure" step posts.
+	return {
+		"body": (
+			"AI planning workflow failed.\n\nWorkflow: AI Plan\nIssue: #42\n"
+			f"Issue URL: https://github.com/{repo}/issues/42\n"
+			"Context: AI Plan phase failed before posting the implementation plan.\n"
+			"Hint: Check the AI Plan run logs and inspect the first failed step.\n"
+			f"Run: https://github.com/{repo}/actions/runs/{run_id}"
+		)
+	}
+
+
+def _trusted_plan_link(repo: str, run_id: int = 500) -> dict:
+	return {**_plan_failed_comment(repo, run_id), "user": {"login": "workflow-bot"}, "author_association": "OWNER"}
+
+
+def _phase_provenance_inputs(repo: str = CONSUMER_REPO) -> tuple[dict, dict, dict, list]:
+	return (
+		heal.validate_payload(_phase_payload(repo=repo)),
+		{"id": 500, "repository": {"full_name": repo}, "event": "issue_comment", "path": ".github/workflows/ai-plan.yml", "status": "in_progress", "conclusion": None},
+		{"jobs": [{"name": "plan / plan", "conclusion": "failure"}, {"name": "plan / heal-report", "conclusion": None}]},
+		[_trusted_plan_link(repo)],
+	)
+
+
+def test_verify_phase_report_provenance_checks_run_jobs_and_comment() -> None:
+	payload, run, jobs, comments = _phase_provenance_inputs()
+	def check(expected: str, *, report: dict = payload, run_data=run, job_data=jobs, comment_data=comments) -> None:
+		assert heal.verify_phase_report_provenance(report, run=run_data, jobs=job_data, comments=comment_data, self_repo=SELF_REPO, trusted_author="workflow-bot") == {
+			"verified": expected == "ok", "reason": expected, "run_id": "500",
+		}
+
+	check("ok")  # The reporter is still running; the phase job has failed.
+	check("repo_mismatch", run_data={**run, "repository": {"full_name": SELF_REPO}})
+	check("run_id_mismatch", run_data={**run, "id": 501})
+	check("event_mismatch", run_data={**run, "event": "push"})
+	for path in (".github/workflows/ci.yml", ".github/workflows/ai-implement.yml", ".github/workflows/internal-plan.yml"):
+		check("workflow_path_mismatch", run_data={**run, "path": path})
+	check("ok", run_data={**run, "path": run["path"] + "@refs/heads/main"})
+	check("run_not_failed", run_data={**run, "status": "completed", "conclusion": "success"})
+	check("ok", run_data={**run, "status": "completed", "conclusion": "failure"})
+	check("ok", job_data={"jobs": [{"name": "plan", "conclusion": "timed_out"}]})
+	check("no_failed_phase_job", job_data={"jobs": [{"name": "plan", "conclusion": "success"}, {"name": "plan / heal-report", "conclusion": "failure"}]})
+	check("no_linking_comment", comment_data=[])
+	check("no_linking_comment", comment_data=[_trusted_plan_link(CONSUMER_REPO, 501)])
+	check("untrusted_comment_author", comment_data=[{**comments[0], "user": {"login": "stranger"}, "author_association": "CONTRIBUTOR"}])
+	check("untrusted_comment_author", comment_data=[{**comments[0], "user": {"login": ""}, "author_association": "OWNER"}])
+	check("ok", comment_data=[{**comments[0], "user": {"login": "consumer-ci"}, "author_association": "OWNER"}])
+	check("ok", comment_data=[{**comments[0], "user": {"login": "github-actions[bot]"}, "author_association": "NONE"}])
+	assert heal.verify_phase_report_provenance(payload, run=run, jobs=jobs, comments=comments, self_repo=SELF_REPO, trusted_author=None)["verified"] is True
+	assert heal.verify_phase_report_provenance(payload, run=run, jobs=jobs, comments=[{**comments[0], "user": {"login": "github-actions[bot]"}, "author_association": "NONE"}], self_repo=SELF_REPO, trusted_author="github-actions[bot]")["verified"] is True
+	check("run_unavailable", run_data=None)
+	check("jobs_unavailable", job_data=None)
+	check("comments_unavailable", comment_data=None)
+	self_payload, self_run, self_jobs, self_comments = _phase_provenance_inputs(SELF_REPO)
+	check("ok", report=self_payload, run_data={**self_run, "path": ".github/workflows/internal-plan.yml"}, job_data=self_jobs, comment_data=self_comments)
+	assert heal.verify_phase_report_provenance(self_payload, run={**self_run, "path": ".github/workflows/internal-plan.yml"}, jobs=self_jobs, comments=self_comments, self_repo=SELF_REPO, trusted_author=None)["reason"] == "comment_author_unavailable"
+	check("untrusted_comment_author", report=self_payload, run_data={**self_run, "path": ".github/workflows/internal-plan.yml"}, job_data=self_jobs, comment_data=[{**self_comments[0], "user": {"login": "other-owner"}}])
+	assert heal.phase_report_workflow_paths("plan", source_repo=SELF_REPO.upper(), self_repo=SELF_REPO)[-1] == ".github/workflows/internal-plan.yml"
+	with pytest.raises(ValueError, match="unknown phase"):
+		heal.phase_report_workflow_paths("review", source_repo=SELF_REPO, self_repo=SELF_REPO)
+
+
+def test_verify_phase_provenance_cli_fails_closed_on_missing_or_invalid_evidence(tmp_path: Path, capsys) -> None:
+	payload, run, jobs, comments = _phase_provenance_inputs()
+	files = [tmp_path / f"{name}.json" for name in ("payload", "run", "jobs", "comments")]
+	for path, value in zip(files, (payload, run, jobs, comments)):
+		path.write_text(json.dumps(value), encoding="utf-8")
+	args = ["verify-phase-provenance", "--payload-json", str(files[0]), "--run-json", str(files[1]),
+		"--jobs-json", str(files[2]), "--comments-json", str(files[3]), "--self-repo", SELF_REPO,
+		"--comment-author", "workflow-bot"]
+	assert heal.main(args) == 0
+	assert json.loads(capsys.readouterr().out)["verified"] is True
+	assert heal.main([*args[:-1], ""]) == 0
+	assert json.loads(capsys.readouterr().out)["verified"] is True
+	files[1].write_text("not JSON", encoding="utf-8")
+	assert heal.main(args) == 0
+	assert json.loads(capsys.readouterr().out)["reason"] == "run_unavailable"
+	files[1].unlink()
+	assert heal.main(args) == 0
+	assert json.loads(capsys.readouterr().out)["reason"] == "run_unavailable"
+
+
+def _issue_6413_comments(repo: str) -> list[dict]:
+	# The comment trail of #6413: clarify finished, then plan failed again on
+	# every stall-recovery /answer.
+	return [
+		{"body": "<!-- ai:clarification-questions -->\nClarification required\n\nQ1: ..."},
+		{"body": "/answer [auto-answered-by-orchestrator]\n\nQ1: A"},
+		{"body": "<!-- ai:auto-decisions:v1 -->\n## Auto-decisions"},
+		_plan_failed_comment(repo, 101),
+		{"body": "<!-- tg_cleanup:9186,9217 -->"},
+		{"body": "<!-- AI_STANDALONE_STALL_STATE_V1\n{}\nAI_STANDALONE_STALL_STATE_V1 -->"},
+		{"body": "/answer\n\n_Standalone stall recovery: planning stalled. Re-triggering plan generation._"},
+		_plan_failed_comment(repo, 102),
+		{"body": "/answer [auto-answered-by-poller]\n\n_Standalone stall recovery: clarification stalled._"},
+	]
+
+
+def test_phase_failure_streak_counts_the_trailing_failures_of_one_phase() -> None:
+	comments = _issue_6413_comments(CONSUMER_REPO)
+	# The failed run's own comment is already on the issue.
+	result = heal.phase_failure_streak([*comments, _plan_failed_comment(CONSUMER_REPO, 103)], phase="plan", repo=CONSUMER_REPO, run_id="103")
+	assert result == {"streak": 3, "run_ids": ["102", "101"]}
+	# Its comment step failed: the run is counted on top.
+	assert heal.phase_failure_streak(comments, phase="plan", repo=CONSUMER_REPO, run_id=103) == {"streak": 3, "run_ids": ["102", "101"]}
+	# A retry of the failure-comment write must not count the same run twice.
+	assert heal.phase_failure_streak([
+		_plan_failed_comment(CONSUMER_REPO, 101),
+		_plan_failed_comment(CONSUMER_REPO, 101),
+		_plan_failed_comment(CONSUMER_REPO, 102),
+		_plan_failed_comment(CONSUMER_REPO, 102),
+	], phase="plan", repo=CONSUMER_REPO, run_id=102) == {"streak": 2, "run_ids": ["101"]}
+	assert heal.phase_failure_streak([
+		_plan_failed_comment(CONSUMER_REPO, 101),
+		_plan_failed_comment(CONSUMER_REPO, 101),
+	], phase="plan", repo=CONSUMER_REPO, run_id=102) == {"streak": 2, "run_ids": ["101"]}
+	# A finished plan ends an implement streak; another phase's failure ends one too.
+	implement_failed = {"body": f"AI implementation workflow failed for https://github.com/{CONSUMER_REPO}/issues/42. Run: https://github.com/{CONSUMER_REPO}/actions/runs/201"}
+	trail = [*comments, {"body": "Implementation Plan\n\n## Steps"}, implement_failed]
+	assert heal.phase_failure_streak(trail, phase="implement", repo=CONSUMER_REPO, run_id=202) == {"streak": 2, "run_ids": ["201"]}
+	assert heal.phase_failure_streak([*comments, implement_failed], phase="plan", repo=CONSUMER_REPO, run_id=104) == {"streak": 1, "run_ids": []}
+	# Run links to another repository are not this issue's runs.
+	assert heal.phase_failure_streak([_plan_failed_comment("other/repo", 9)], phase="plan", repo=CONSUMER_REPO, run_id=10) == {"streak": 2, "run_ids": []}
+	try:
+		heal.phase_failure_streak([], phase="review", repo=CONSUMER_REPO, run_id=1)
+	except ValueError:
+		pass
+	else:
+		raise AssertionError("an unknown phase must be rejected")
+	# Cancelled runs and completed implementations separate consecutive failures.
+	for cancelled in (
+		{"body": "AI planning workflow failed.\nRun: https://github.com/shubhodeep1/example-consumer/actions/runs/80\n<!-- ai:plan-cancelled -->"},
+		{"body": "AI clarification workflow was cancelled/timed out for issue. Run: https://github.com/shubhodeep1/example-consumer/actions/runs/80"},
+		{"body": "AI implementation workflow was cancelled/timed out for issue. Run: https://github.com/shubhodeep1/example-consumer/actions/runs/80"},
+		{"body": "<!-- ai:implementation-completed -->"},
+	):
+		assert heal.phase_failure_streak([_plan_failed_comment(CONSUMER_REPO, 79), cancelled], phase="plan", repo=CONSUMER_REPO, run_id=81) == {"streak": 1, "run_ids": []}
+	# A commenter who does not own the pipeline token cannot reset its streak.
+	assert heal.phase_failure_streak([
+		{**_plan_failed_comment(CONSUMER_REPO, 79), "user": {"login": "workflow-bot"}},
+		{"body": "The task appears clear.", "user": {"login": "other-user"}},
+		{**_plan_failed_comment(CONSUMER_REPO, 81), "user": {"login": "workflow-bot"}},
+	], phase="plan", repo=CONSUMER_REPO, run_id=81, trusted_author="workflow-bot") == {"streak": 2, "run_ids": ["79"]}
+	for phase, failure, cancellation in (
+		("clarify", "AI clarification workflow failed for ", "AI clarification workflow was cancelled/timed out for "),
+		("implement", "AI implementation workflow failed for ", "AI implementation workflow was cancelled/timed out for "),
+	):
+		assert heal.phase_failure_streak([
+			{"body": f"{failure}issue. Run: https://github.com/{CONSUMER_REPO}/actions/runs/79"},
+			{"body": f"{cancellation}issue. Run: https://github.com/{CONSUMER_REPO}/actions/runs/80"},
+		], phase=phase, repo=CONSUMER_REPO, run_id=81) == {"streak": 1, "run_ids": []}
+
+
+def test_phase_failure_comment_markers_match_the_workflows() -> None:
+	workflows = {name: (REPO_ROOT / ".github" / "workflows" / f"{name}.yml").read_text(encoding="utf-8") for name in ("plan", "clarify", "implement")}
+	assert "-f body=$'AI planning workflow failed.\\n" in workflows["plan"]
+	assert 'REASON="AI clarification workflow failed for ${ISSUE_URL}. Run: ${RUN_URL}"' in workflows["clarify"]
+	assert 'REASON="AI clarification workflow was cancelled/timed out for ${ISSUE_URL}. Run: ${RUN_URL}"' in workflows["clarify"]
+	assert 'REASON="AI implementation workflow failed for ${ISSUE_URL}. Run: ${RUN_URL}"' in workflows["implement"]
+	assert 'REASON="AI implementation workflow was cancelled/timed out for ${ISSUE_URL}. Run: ${RUN_URL}"' in workflows["implement"]
+	assert heal.PHASE_FAILURE_COMMENT_PREFIXES["plan"] == ("AI planning workflow failed.",)
+	assert heal.PHASE_FAILURE_COMMENT_PREFIXES["clarify"] == ("AI clarification workflow failed for ",)
+	assert heal.PHASE_FAILURE_COMMENT_PREFIXES["implement"] == ("AI implementation workflow failed for ",)
+	assert '<!-- ai:plan-cancelled -->' in workflows["plan"]
+	assert '<!-- ai:implementation-completed -->' in workflows["implement"]
+	# The success comments that end a streak.
+	assert 'echo "<!-- ai:clarification-questions -->"' in workflows["clarify"] and 'echo "Clarification required"' in workflows["clarify"]
+	assert "-f body=$'The task appears clear.\\n" in workflows["clarify"]
+	assert '            echo "Implementation Plan"\n            echo\n            cat "${CODEX_OUTPUT_FILE}"' in workflows["plan"]
+	assert heal.PHASE_FAILURE_REASONS == ("clarify_failed", "plan_failed", "implement_failed")
+
+
+def _phase_payload(*, repo: str = CONSUMER_REPO, issue: dict | None = None, comments: list[dict] | None = None, run_id: str = "500", workflow_name: str = "AI Plan") -> dict:
+	return heal.build_phase_failure_payload(
+		repo=repo,
+		phase="plan",
+		issue=issue or _issue(labels=["ai:clarification"]),
+		comments=comments if comments is not None else [_plan_failed_comment(repo, 499), _plan_failed_comment(repo, int(run_id))],
+		workflow_name=workflow_name,
+		run_id=run_id,
+		wrapper_sha=SHA_A,
+		reporter_run_url=f"https://github.com/{repo}/actions/runs/{run_id}",
+	)
+
+
+def _provenance_run(run_id: int = 500, *, repo: str = CONSUMER_REPO, path: str = "ai-plan.yml", status: str = "completed", conclusion: str | None = "failure", **extras) -> dict:
+	return {"id": run_id, "repository": {"full_name": repo}, "path": f".github/workflows/{path}", "status": status, "conclusion": conclusion, "event": "issue_comment", **extras}
+
+
+def test_verify_run_provenance_phase_trust_and_fail_closed() -> None:
+	payload = heal.validate_payload(_phase_payload())
+	linked = [{**_plan_failed_comment(CONSUMER_REPO, 500), "user": {"login": "workflow-bot"}, "author_association": "OWNER"}]
+	run = _provenance_run(status="in_progress", conclusion=None)
+	def check(run_details, comments=linked, login="workflow-bot"):
+		return heal.verify_run_provenance(payload, runs={"500": run_details}, comments=comments, trusted_login=login, self_repo=SELF_REPO)
+	assert check(run)["pending_current_run"] == "500"
+	for rejected_run, reason in (
+		(_provenance_run(repo=SELF_REPO), "repo_mismatch"),
+		(None, "run_lookup_failed"),
+		(_provenance_run(path="evil.yml"), "unexpected_workflow_path"),
+		(_provenance_run(path="../ai-plan.yml"), "unexpected_workflow_path"),
+		(_provenance_run(path="internal-plan.yml"), "unexpected_workflow_path"),
+		(_provenance_run(event="push"), "unexpected_run_event"),
+		(_provenance_run(conclusion="success"), "not_failed"),
+	):
+		verdict = check(rejected_run)
+		assert verdict["reason"] == f"current_run_rejected:{reason}"
+		assert {"run_id": "500", "reason": reason} in verdict["rejections"]
+	assert check(run, [])["reason"] == "current_run_rejected:not_linked_to_issue"
+	assert check(run, [{**linked[0], "user": {"login": "attacker"}, "author_association": "NONE"}])["reason"] == "current_run_rejected:not_linked_to_issue"
+	assert check(run, [{"body": "AI implementation workflow failed for x. " + linked[0]["body"], "user": {"login": "workflow-bot"}}])["reason"] == "current_run_rejected:not_linked_to_issue"
+	assert check(run, login="")["status"] == "ok"
+	assert check(run, [{**linked[0], "user": {"login": "consumer-ci"}, "author_association": "MEMBER"}], login="")["status"] == "ok"
+	assert check(run, [{**linked[0], "user": {"login": ""}}])["reason"] == "current_run_rejected:not_linked_to_issue"
+	assert check(run, comments=None)["reason"] == "comments_unavailable"
+	assert heal.verify_run_provenance(heal.validate_payload(_phase_payload(repo=SELF_REPO)), runs={"500": _provenance_run(repo=SELF_REPO, path="internal-plan.yml")}, comments=[{**_plan_failed_comment(SELF_REPO, 500), "user": {"login": "workflow-bot"}}], trusted_login="", self_repo=SELF_REPO)["reason"] == "identity_unavailable"
+	assert heal.verify_run_provenance(heal.validate_payload(_phase_payload(repo=SELF_REPO)), runs={"500": _provenance_run(repo=SELF_REPO, path="internal-plan.yml")}, comments=[{**_plan_failed_comment(SELF_REPO, 500), "user": {"login": "workflow-bot"}, "author_association": "NONE"}], trusted_login="workflow-bot", self_repo=SELF_REPO)["reason"] == "current_run_rejected:not_linked_to_issue"
+	assert check(_provenance_run(id=499))["reason"] == "current_run_rejected:run_id_mismatch"
+	verdict = heal.verify_run_provenance(payload, runs={"500": _provenance_run()}, comments=linked, trusted_login="workflow-bot", self_repo=SELF_REPO)
+	assert verdict["status"] == "ok" and [ref["run_id"] for ref in verdict["run_refs"]] == ["500"]
+	assert verdict["rejections"] == [{"run_id": "499", "reason": "run_lookup_failed"}]
+
+
+def test_verify_run_provenance_review_release_and_other_kinds() -> None:
+	pr_payload = heal.validate_payload(_autofix_payload())
+	review = _provenance_run(path="ai-review.yml")
+	for candidate, comment_list in (
+		(review, [{"body": f"<!-- review-autofix-failure:v1 run=500 head={SHA_A} fp={FP_HEX} -->", "user": {"login": "workflow-bot"}}]),
+		({**review, "pull_requests": [{"number": 4174}]}, []),
+		({**review, "event": "workflow_dispatch", "display_title": "AI Review [pr:4174]"}, []),
+	):
+		assert heal.verify_run_provenance(pr_payload, runs={"500": candidate}, comments=comment_list, trusted_login="workflow-bot", self_repo=SELF_REPO)["status"] == "ok"
+	assert heal.verify_run_provenance(pr_payload, runs={"500": review}, comments=[], trusted_login="workflow-bot", self_repo=SELF_REPO)["reason"] == "no_verified_runs"
+	assert heal.verify_run_provenance(pr_payload, runs={"500": review}, comments=[{"body": "AI review/autofix failed. Run: https://github.com/shubhodeep1/example-consumer/actions/runs/500", "user": {"login": "attacker"}}], trusted_login="workflow-bot", self_repo=SELF_REPO)["reason"] == "no_verified_runs"
+	cap_payload = dict(pr_payload, run_refs=[pr_payload["run_refs"][0], {**pr_payload["run_refs"][0], "run_id": "501"}])
+	cap = heal.verify_run_provenance(cap_payload, runs={"500": {**review, "pull_requests": [{"number": 4174}]}, "501": _provenance_run(501, path="ai-review.yml", conclusion="success")}, comments=[], trusted_login="workflow-bot", self_repo=SELF_REPO)
+	assert cap["status"] == "ok" and len(cap["run_refs"]) == 1 and cap["rejections"][0]["reason"] == "not_failed"
+	release_payload = heal.validate_payload(_gate_run_payload())
+	assert heal.verify_run_provenance(release_payload, runs={"500": _provenance_run(repo=SELF_REPO, path="test-and-mark-stable.yml")}, comments=None, trusted_login="", self_repo=SELF_REPO)["status"] == "ok"
+	assert heal.verify_run_provenance(release_payload, runs={"500": _provenance_run(repo=SELF_REPO, path="ai-plan.yml")}, comments=None, trusted_login="", self_repo=SELF_REPO)["reason"] == "current_run_rejected:unexpected_workflow_path"
+	assert heal.verify_run_provenance(release_payload, runs={}, comments=None, trusted_login="", self_repo=CONSUMER_REPO)["reason"] == "source_not_self"
+	for kind in ("issue", "pull_request"):
+		assert heal.verify_run_provenance({"source_kind": kind, "run_refs": pr_payload["run_refs"]}, runs={}, comments=None, trusted_login="", self_repo=SELF_REPO)["status"] == "not_applicable"
+
+
+def test_verify_run_provenance_cli_missing_comments_fails_closed(tmp_path) -> None:
+	payload_file = tmp_path / "payload.json"
+	runs_file = tmp_path / "runs.json"
+	payload_file.write_text(json.dumps(heal.validate_payload(_phase_payload())), encoding="utf-8")
+	runs_file.write_text(json.dumps({"500": _provenance_run()}), encoding="utf-8")
+	result = subprocess.run([sys.executable, str(LIB_PATH), "verify-run-provenance", "--payload-json", str(payload_file), "--runs-json", str(runs_file), "--comments-json", str(tmp_path / "missing.json"), "--trusted-login", "workflow-bot", "--self-repo", SELF_REPO], capture_output=True, text=True, check=True)
+	assert json.loads(result.stdout)["reason"] == "comments_unavailable"
+
+
+def test_build_phase_failure_payload_validates_and_carries_lineage() -> None:
+	body = f"<!-- {heal.MARKER_PREFIX}fp={FP_HEX} -->\n<!-- {heal.MARKER_PREFIX}gen=1 -->\n<!-- {heal.MARKER_PREFIX}root={FP_HEX} -->\nheal body"
+	payload = heal.validate_payload(_phase_payload(issue=_issue(body=body, labels=["ai:clarification", "ai:workflow-heal"])))
+	assert payload["source_kind"] == "phase_failure" and payload["label"] is None
+	assert payload["failure_reason"] == "plan_failed" and payload["failure_streak"] == 2
+	assert [ref["run_id"] for ref in payload["run_refs"]] == ["500", "499"]
+	assert payload["source_gen"] == 1 and payload["source_root"] == FP_HEX
+	ordinary = _phase_payload(issue=_issue(body=body, labels=["ai:clarification"]))
+	assert ordinary["source_gen"] is None and ordinary["source_root"] is None
+	assert payload["wrapper_sha"] == SHA_A and payload["workflow_name"] == "AI Plan" and payload["conclusion"] == "failure"
+	assert payload["failure_evidence"] == "" and payload["failure_fingerprint"] is None
+	assert heal.compose_issue_title(payload, workflow_name="Internal: AI Plan") == f"Workflow heal: Internal: AI Plan failed 2x for {CONSUMER_REPO}#42 (plan_failed)"
+	body_text = heal.compose_issue_body(payload=payload, diagnosis="## Classification\nworkflow-defect", fp=FP_HEX, gen=2, root=FP_HEX, classification="workflow-defect", target_branch="stable", max_depth=3, intake_run_url="u", run_summaries=[])
+	assert "A clarify / plan / implement run failed on an issue." in body_text
+	assert f"- **Source issue:** https://github.com/{CONSUMER_REPO}/issues/42 ({CONSUMER_REPO}#42)" in body_text
+	assert "- **Consecutive failed plan runs on this issue:** 2" in body_text
+	assert f"<!-- {heal.MARKER_PREFIX}source={CONSUMER_REPO}#42 -->" in body_text
+	for bad in ({"failure_reason": "review_failed"}, {"failure_reason": None}, {"run_refs": []}, {"issue_number": None}):
+		try:
+			heal.validate_payload({**payload, **bad})
+		except ValueError:
+			continue
+		raise AssertionError(f"accepted {bad}")
+
+
+def _stage_phase_report(tmp: Path, *, comments: list[dict], issue: dict | None = None, flags: dict[str, str] | None = None) -> tuple[Path, Path, dict[str, str]]:
+	work, state_file, env = _stage(tmp, with_codex=False)
+	shutil.copy(PHASE_REPORT_SCRIPT, work / "scripts" / PHASE_REPORT_SCRIPT.name)
+	state_file.write_text(
+		json.dumps({"issues": {"42": issue or _issue(labels=["ai:clarification"])}, "comments": {f"repos/{CONSUMER_REPO}/issues/42/comments": [{**{"user": {"login": "workflow-bot"}}, **comment} for comment in comments]}}),
+		encoding="utf-8",
+	)
+	env.update(
+		{
+			"GITHUB_REPOSITORY": CONSUMER_REPO,
+			"GITHUB_RUN_ID": "500",
+			"WORKFLOW_HEAL_PHASE": "plan",
+			"WORKFLOW_HEAL_ISSUE_NUMBER": "42",
+			"REPORT_WORKFLOW_NAME": "AI Plan",
+			"REPORT_WRAPPER_SHA": SHA_A.upper(),
+		}
+	)
+	env.update(flags or {})
+	return work, state_file, env
+
+
+def test_phase_report_dispatches_the_first_failed_run() -> None:
+	with tempfile.TemporaryDirectory(prefix="heal-phase-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_phase_report(tmp, comments=[*_issue_6413_comments(CONSUMER_REPO), _plan_failed_comment(CONSUMER_REPO, 500)])
+		result = _run(work / "scripts" / PHASE_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "WORKFLOW_HEAL_PHASE_REPORT dispatched issue=42 phase=plan streak=3 run=500 workflow=AI Plan" in result.stdout
+		state = _state(state_file)
+		assert len(state["dispatches"]) == 1
+		dispatch = state["dispatches"][0]
+		assert dispatch["path"] == f"repos/{SELF_REPO}/dispatches" and dispatch["body"]["event_type"] == "workflow-failure-heal"
+		payload = heal.validate_payload(dispatch["body"]["client_payload"]["report"])
+		assert payload["source_kind"] == "phase_failure" and payload["failure_reason"] == "plan_failed"
+		assert [ref["run_id"] for ref in payload["run_refs"]] == ["500", "102", "101"]
+		assert payload["wrapper_sha"] == SHA_A and payload["issue_number"] == 42
+		# One issue, identity and comment read, all GET; then the dispatch.
+		reads = [call for call in state["calls"] if call[:1] == ["api"] and "--input" not in call]
+		assert len(reads) == 3 and all(call[call.index("--method") + 1] == "GET" for call in reads)
+
+
+def test_phase_report_skip_paths() -> None:
+	first = [_plan_failed_comment(CONSUMER_REPO, 500)]
+	cases = [
+		("below_streak", first, None, {"WORKFLOW_HEAL_PHASE_FAILURE_STREAK": "2"}, "skip reason=below_streak issue=42 phase=plan streak=1 threshold=2"),
+		("disabled", first, None, {"WORKFLOW_HEAL_ENABLED": "false"}, "skip reason=disabled"),
+		("unknown_phase", first, None, {"WORKFLOW_HEAL_PHASE": "review"}, "skip reason=unknown_phase phase=review"),
+		("missing_issue", first, None, {"WORKFLOW_HEAL_ISSUE_NUMBER": ""}, "skip reason=missing_context"),
+		("closed", first, _issue(state="closed"), {}, "skip reason=issue_not_open issue=42 state=closed"),
+		("smoke", first, _issue(title="[E2E Smoke Test] plan"), {}, "skip reason=smoke_test_fixture issue=42 phase=plan"),
+	]
+	for name, comments, issue, flags, expected in cases:
+		with tempfile.TemporaryDirectory(prefix=f"heal-phase-{name}-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage_phase_report(tmp, comments=comments, issue=issue, flags=flags)
+			result = _run(work / "scripts" / PHASE_REPORT_SCRIPT.name, work, env)
+			assert result.returncode == 0, (name, result.stderr, result.stdout)
+			assert expected in result.stdout, (name, result.stdout)
+			assert "dispatches" not in _state(state_file), name
+	# A rejected dispatch is logged and never fails the job.
+	with tempfile.TemporaryDirectory(prefix="heal-phase-denied-") as tmp_name:
+		tmp = Path(tmp_name)
+		work, state_file, env = _stage_phase_report(tmp, comments=first)
+		state = _state(state_file)
+		state["dispatch_fail"] = True
+		state_file.write_text(json.dumps(state), encoding="utf-8")
+		result = _run(work / "scripts" / PHASE_REPORT_SCRIPT.name, work, env)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "skip reason=dispatch_denied issue=42 phase=plan streak=1 upstream=shubhodeep1/coding-workflows detail=HTTP 422" in result.stdout
+	# Unset, empty, zero and non-numeric thresholds mean the default of 1.
+	for value in ("", "0", "abc"):
+		with tempfile.TemporaryDirectory(prefix="heal-phase-default-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage_phase_report(tmp, comments=first, flags={"WORKFLOW_HEAL_PHASE_FAILURE_STREAK": value})
+			result = _run(work / "scripts" / PHASE_REPORT_SCRIPT.name, work, env)
+			assert "dispatched issue=42 phase=plan streak=1" in result.stdout, (value, result.stdout)
+	# Only comments authored by the authenticated workflow account count toward
+	# a non-default streak; untrusted text cannot terminate it either.
+	with tempfile.TemporaryDirectory(prefix="heal-phase-author-") as tmp_name:
+		work, state_file, env = _stage_phase_report(Path(tmp_name), comments=[
+			_plan_failed_comment(CONSUMER_REPO, 499),
+			{"body": "The task appears clear.", "user": {"login": "other-user"}},
+			_plan_failed_comment(CONSUMER_REPO, 500),
+		], flags={"WORKFLOW_HEAL_PHASE_FAILURE_STREAK": "2"})
+		result = _run(work / "scripts" / PHASE_REPORT_SCRIPT.name, work, env)
+		assert "dispatched issue=42 phase=plan streak=2" in result.stdout
+		assert len(_state(state_file)["dispatches"]) == 1
+
+
+PLAN_JOB_LOG = (
+	"2026-10-05T23:41:45.000Z ##[group]Run bash scripts/run_plan_codex.sh\n"
+	"2026-10-05T23:41:47.000Z codex_stall_guard.sh: unknown option: --engine\n"
+	"2026-10-05T23:42:19.000Z ##[error]Codex planning failed after 3 attempts.\n"
+	"2026-10-05T23:42:19.000Z ##[error]Process completed with exit code 1.\n"
+)
+
+
+def _plan_intake_state(*, repo: str = CONSUMER_REPO, **overrides) -> dict:
+	jobs = {"500": [{"id": 9101, "name": "plan / plan", "workflow_name": "AI Plan", "conclusion": "failure", "steps": [{"name": "Run Codex planning", "conclusion": "failure"}]}]}
+	return _intake_state(**{
+		"jobs": jobs, "job_logs": {"9101": PLAN_JOB_LOG},
+		"run_details": {"500": {"id": 500, "repository": {"full_name": repo}, "event": "issue_comment",
+			"path": ".github/workflows/internal-plan.yml" if repo == SELF_REPO else ".github/workflows/ai-plan.yml",
+			"status": "in_progress", "conclusion": None}},
+		"comments": {f"repos/{repo}/issues/42/comments": [_trusted_plan_link(repo)]},
+		**overrides,
+	})
+
+
+def test_intake_phase_failure_opens_issue_from_the_failed_job_log() -> None:
+	result, state, prompt = _run_intake(_phase_payload(), _plan_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "kind=phase_failure issue=42" in result.stdout
+	assert f"WORKFLOW_HEAL phase_report_verified source={CONSUMER_REPO} issue=42 run=500" in result.stdout
+	assert "workflow=AI Plan step=Run Codex planning runs=1" in result.stdout
+	created = state["issues_created"][0]
+	assert created["repo"] == SELF_REPO and created["label"] == heal.HEAL_LABEL
+	assert created["title"] == f"Workflow heal: AI Plan failed 2x for {CONSUMER_REPO}#42 (plan_failed)"
+	match = TARGET_BRANCH_RE.search(created["body"])
+	assert match and (match.group(1) or match.group(2)) == "stable"
+	assert f"{heal.MARKER_PREFIX}source={CONSUMER_REPO}#42" in created["body"]
+	assert "Failed plan run on issue #42" in prompt and "Consecutive failed plan runs on this issue: 2" in prompt
+	assert "codex planning failed after" in prompt.lower() and "failing step: Run Codex planning" in prompt
+	# The source issue got the outcome comment.
+	assert any(c["path"] == f"repos/{CONSUMER_REPO}/issues/42/comments" for c in state["comments_posted"])
+	for path in (f"repos/{CONSUMER_REPO}/actions/runs/500", f"repos/{CONSUMER_REPO}/issues/42/comments"):
+		calls = [call for call in state["calls"] if call[:1] == ["api"] and path in call and "--method" in call]
+		assert len(calls) == 1 and calls[0][calls[0].index("--method") + 1] == "GET"
+
+
+def test_intake_phase_failure_accepts_consumer_pipeline_account() -> None:
+	state = _plan_intake_state(identity_read_fail=True)
+	state["comments"][f"repos/{CONSUMER_REPO}/issues/42/comments"] = [
+		{**_trusted_plan_link(CONSUMER_REPO), "user": {"login": "consumer-ci"}, "author_association": "MEMBER"},
+	]
+	result, after, _ = _run_intake(_phase_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "phase_report_verified" in result.stdout
+	assert after["issues_created"][0]["repo"] == SELF_REPO
+	assert not any(call[:2] == ["api", "--method"] and "user" in call for call in after["calls"])
+
+
+def test_intake_phase_failure_rejects_spoofed_lineage() -> None:
+	body = f"<!-- {heal.MARKER_PREFIX}gen=3 -->\n<!-- {heal.MARKER_PREFIX}root={FP_HEX} -->"
+	# An older pinned reporter may still forward markers from a regular issue.
+	payload = _phase_payload(issue=_issue(body=body, labels=["ai:clarification"]))
+	payload.update(source_gen=3, source_root=FP_HEX)
+	for state in (_plan_intake_state(), _plan_intake_state(identity_read_fail=True)):
+		result, after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "lineage source=source_marker_ignored reason=" in result.stdout
+		assert "gen=1" in result.stdout
+		assert "issues_created" in after and "issue_edits" not in after
+		assert f"{heal.MARKER_PREFIX}gen=1" in after["issues_created"][0]["body"]
+		assert sum("user" in call for call in after["calls"] if call[:1] == ["api"]) == 1
+		if state.get("identity_read_fail"):
+			assert "warn heal_identity_unavailable" in result.stdout
+		else:
+			assert "reason=not_heal_issue" in result.stdout
+
+
+def test_intake_phase_failure_inherits_verified_heal_issue_lineage() -> None:
+	body = f"<!-- {heal.MARKER_PREFIX}gen=2 -->\n<!-- {heal.MARKER_PREFIX}root={FP_HEX} -->"
+	payload = _phase_payload(issue=_issue(body=body, labels=[heal.HEAL_LABEL]))
+	listed = dict(_heal_issue(42, state="closed", fp="9" * 64, gen=2, root=FP_HEX), user={"login": "workflow-bot"})
+	state = _plan_intake_state(heal_issues_by_repo={SELF_REPO: [], CONSUMER_REPO: [listed]})
+	result, after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "lineage source=verified_source_issue reason=none source_gen=2 gen=3" in result.stdout
+	assert f"{heal.MARKER_PREFIX}gen=3" in after["issues_created"][0]["body"]
+	assert sum("user" in call for call in after["calls"] if call[:1] == ["api"]) == 1
+
+
+@pytest.mark.parametrize("case,reason", [
+	("run_missing", "run_lookup_failed"),
+	("other_repo", "repo_mismatch"),
+	("wrong_path", "unexpected_workflow_path"),
+	("success", "not_failed"),
+	("no_comment", "not_linked_to_issue"),
+	("untrusted_comment", "not_linked_to_issue"),
+	("self_identity_error", "identity_unavailable"),
+	("comments_error", "comments_unavailable"),
+])
+def test_intake_phase_failure_unverified_reports_have_no_mutations(case: str, reason: str) -> None:
+	state = _plan_intake_state()
+	if case == "run_missing":
+		state["run_details"] = {}
+	elif case == "other_repo":
+		state["run_details"]["500"]["repository"]["full_name"] = SELF_REPO
+	elif case == "wrong_path":
+		state["run_details"]["500"]["path"] = ".github/workflows/ai-implement.yml"
+	elif case == "success":
+		state["run_details"]["500"].update(status="completed", conclusion="success")
+	elif case == "no_comment":
+		state["comments"] = {}
+	elif case == "untrusted_comment":
+		state["comments"][f"repos/{CONSUMER_REPO}/issues/42/comments"] = [
+			{**_trusted_plan_link(CONSUMER_REPO), "user": {"login": "stranger"}, "author_association": "NONE"},
+		]
+	elif case == "self_identity_error":
+		state = _plan_intake_state(repo=SELF_REPO, identity_read_fail=True)
+	elif case == "comments_error":
+		state["comment_read_fail"] = True
+	result, after, _ = _run_intake(_phase_payload(repo=SELF_REPO if case == "self_identity_error" else CONSUMER_REPO), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	expected_detail = reason if reason in ("identity_unavailable", "comments_unavailable") else f"current_run_rejected:{reason}"
+	assert "WORKFLOW_HEAL skip reason=provenance_rejected" in result.stdout and f"detail={expected_detail}" in result.stdout
+	assert not any("/jobs" in part or "/actions/jobs/" in part for call in after["calls"] for part in call)
+	assert "fingerprint fp=" not in result.stdout
+	assert not any(key in after for key in ("issues_created", "comments_posted", "issue_edits"))
+
+
+def test_intake_rejects_unverified_phase_runs_before_fetching_jobs() -> None:
+	payload = _phase_payload()
+	cases = (
+		(_plan_intake_state(run_details={}), "run_lookup_failed"),
+		(_plan_intake_state(comments_fetch_fail=True), "comments_unavailable"),
+		(_plan_intake_state(run_details={f"repos/{CONSUMER_REPO}/actions/runs/500": _provenance_run(repo=SELF_REPO)}), "repo_mismatch"),
+		(_plan_intake_state(run_details={f"repos/{CONSUMER_REPO}/actions/runs/500": _provenance_run(path="evil.yml")}), "unexpected_workflow_path"),
+		(_plan_intake_state(run_details={f"repos/{CONSUMER_REPO}/actions/runs/500": _provenance_run(event="push")}), "unexpected_run_event"),
+		(_plan_intake_state(comments={}), "not_linked_to_issue"),
+		(_plan_intake_state(comments={f"repos/{CONSUMER_REPO}/issues/42/comments": [
+			{**_plan_failed_comment(CONSUMER_REPO, 500), "user": {"login": "attacker"}}
+		]}), "not_linked_to_issue"),
+	)
+	for state, reason in cases:
+		result, after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "skip reason=provenance_rejected" in result.stdout and reason in result.stdout
+		assert not any("/jobs" in part or "/actions/jobs/" in part for call in after["calls"] for part in call)
+		assert not after.get("issues_created")
+
+
+def test_intake_phase_provenance_filters_earlier_refs_and_checks_pending_job() -> None:
+	payload = _phase_payload()
+	current = f"repos/{CONSUMER_REPO}/actions/runs/500"
+	state = _plan_intake_state(run_details={current: _provenance_run(status="in_progress", conclusion=None)})
+	result, after, prompt = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "provenance_verified" in result.stdout and "runs=1" in result.stdout
+	assert "Run Codex planning" in prompt
+	assert not any("/runs/499/jobs" in part for call in after["calls"] for part in call)
+	state = _plan_intake_state(jobs={}, run_details={current: _provenance_run(status="in_progress", conclusion=None)})
+	result, after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0 and "reason=current_run_jobs_unavailable" in result.stdout
+	assert not after.get("issues_created")
+	assert not any("/actions/jobs/" in part for call in after["calls"] for part in call)
+	state = _plan_intake_state(jobs={"500": []}, run_details={current: _provenance_run(status="in_progress", conclusion=None)})
+	result, after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0 and "reason=current_run_no_failed_job" in result.stdout
+	assert not after.get("issues_created")
+	assert not any("/actions/jobs/" in part for call in after["calls"] for part in call)
+	state = _plan_intake_state(jobs={"500": [{"id": 9101, "name": "plan / heal-report", "conclusion": "failure"}]}, run_details={current: _provenance_run()})
+	result, after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0 and "reason=current_run_no_failed_job" in result.stdout
+	assert not any("/actions/jobs/" in part for call in after["calls"] for part in call)
+
+
+def test_intake_phase_current_jobs_failure_does_not_fetch_older_logs() -> None:
+	payload = _phase_payload()
+	current = f"repos/{CONSUMER_REPO}/actions/runs/500"
+	previous = f"repos/{CONSUMER_REPO}/actions/runs/499"
+	for jobs in ({"499": [{"id": 9102, "name": "plan / plan", "conclusion": "failure"}]},
+		{"500": "invalid", "499": [{"id": 9102, "name": "plan / plan", "conclusion": "failure"}]}):
+		state = _plan_intake_state(
+			jobs=jobs,
+			run_details={current: _provenance_run(status="in_progress", conclusion=None), previous: _provenance_run(499)},
+			comments={f"repos/{CONSUMER_REPO}/issues/42/comments": [_trusted_plan_link(CONSUMER_REPO, 500), _trusted_plan_link(CONSUMER_REPO, 499)]},
+			job_logs={"9102": PLAN_JOB_LOG},
+		)
+		result, after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "detail=current_run_jobs_unavailable" in result.stdout
+		assert not any("/runs/499/jobs" in part or "/actions/jobs/" in part for call in after["calls"] for part in call)
+		assert not after.get("issues_created")
+
+
+def test_intake_phase_failure_deduplicates_on_source_issue_and_falls_back_without_logs() -> None:
+	state = _plan_intake_state()
+	state["heal_issues"] = [_sourced_heal_issue(31, state="open", fp="9" * 64, source=f"{CONSUMER_REPO}#42")]
+	result, state_after, _ = _run_intake(_phase_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL duplicate existing_issue=31" in result.stdout and "match=source" in result.stdout
+	assert "issues_created" not in state_after and "issue_edits" not in state_after
+	# Without a readable jobs list, the run's failure is unverified.
+	result, _state_after, _ = _run_intake(_phase_payload(), _plan_intake_state(jobs={}), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "skip reason=provenance_rejected" in result.stdout and "detail=current_run_jobs_unavailable" in result.stdout
+	assert "issues_created" not in _state_after
+	# Jobs can be listed even when the job-log endpoint returns 404. Its
+	# placeholder should appear in the diagnosis, not in the fingerprint input.
+	result, _state_after, _ = _run_intake(_phase_payload(), _plan_intake_state(job_logs={}), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "warn job_log_fetch_failed" in result.stdout
+	assert f"fingerprint fp={heal.fingerprint('AI Plan', 'Run Codex planning', 'phase:plan_failed')} workflow=AI Plan step=Run Codex planning runs=1" in result.stdout
+	# Older streak logs must not supply the current run's signature or step.
+	previous = {"id": 9102, "name": "plan / plan", "workflow_name": "AI Plan", "conclusion": "failure", "steps": [{"name": "Old planning error", "conclusion": "failure"}]}
+	result, _state_after, prompt = _run_intake(
+		_phase_payload(),
+		_plan_intake_state(jobs={"499": [previous]}, job_logs={"9102": PLAN_JOB_LOG}),
+		diagnosis=DIAG_WORKFLOW_DEFECT,
+	)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "skip reason=provenance_rejected" in result.stdout and "detail=current_run_jobs_unavailable" in result.stdout
+	assert "issues_created" not in _state_after
+
+
+def test_intake_escalates_a_heal_issue_that_fails_its_own_run() -> None:
+	# A heal issue (#6413-style, in this repository) whose plan run fails with
+	# the failure it was filed for: the pipeline cannot run its own fix.
+	first, _state_first, _ = _run_intake(_phase_payload(repo=SELF_REPO), _plan_intake_state(repo=SELF_REPO), diagnosis=DIAG_WORKFLOW_DEFECT)
+	fp = re.search(r"fingerprint fp=([0-9a-f]{64})", first.stdout).group(1)
+	heal_issue = _sourced_heal_issue(42, state="open", fp=fp, source=f"{SELF_REPO}#6208")
+	body = heal_issue["body"]
+	payload = _phase_payload(repo=SELF_REPO, issue=_issue(body=body, labels=["ai:planning", heal.HEAL_LABEL]))
+	state = _plan_intake_state(repo=SELF_REPO, heal_issues=[heal_issue])
+	result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL escalate reason=heal_issue_failed_itself issue=42 repo={SELF_REPO} fp={fp} failure=plan_failed" in result.stdout
+	assert ["42", "--repo", SELF_REPO, "--add-label", heal.ESCALATED_LABEL] in state_after["issue_edits"]
+	assert "issues_created" not in state_after
+	assert any(c["path"] == f"repos/{SELF_REPO}/issues/42/comments" for c in state_after["comments_posted"])
+	# A source-key duplicate with a different fingerprint is only an occurrence,
+	# not evidence that the heal issue cannot progress through its own pipeline.
+	self_sourced = _sourced_heal_issue(42, state="open", fp="9" * 64, source=f"{SELF_REPO}#42")
+	result, state_after, _ = _run_intake(payload, _plan_intake_state(repo=SELF_REPO, heal_issues=[self_sourced]), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL duplicate existing_issue=42" in result.stdout and "match=source" in result.stdout
+	assert "reason=heal_issue_failed_itself" not in result.stdout
+	assert "issue_edits" not in state_after
+
+
+def test_phase_workflows_wire_the_heal_report_job() -> None:
+	for name, job_name in (("plan", "plan"), ("clarify", "clarify"), ("implement", "implement")):
+		workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / f"{name}.yml").read_text(encoding="utf-8"))
+		job = workflow["jobs"]["heal-report"]
+		assert job["needs"] == job_name
+		condition = " ".join(job["if"].split())
+		assert condition.startswith(f"always() && needs.{job_name}.result == 'failure' &&")
+		assert "!contains(fromJson('[\"false\"]'), vars.WORKFLOW_HEAL_ENABLED)" in condition
+		assert job["permissions"] == {}
+		assert job["env"]["WORKFLOW_HEAL_PHASE"] == name
+		assert job["env"]["WORKFLOW_HEAL_PHASE_FAILURE_STREAK"] == "${{ vars.WORKFLOW_HEAL_PHASE_FAILURE_STREAK || '1' }}"
+		assert job["env"]["WORKFLOW_HEAL_ISSUE_NUMBER"] == "${{ github.event.issue.number }}"
+		assert job["env"]["GH_TOKEN"] == "${{ secrets.GH_PAT }}"
+		checkout = next(step for step in job["steps"] if step.get("uses") == "actions/checkout@v5")
+		assert checkout["with"]["repository"] == "shubhodeep1/coding-workflows" and checkout["with"]["ref"] == "${{ env.SCRIPT_REF }}"
+		assert checkout["with"]["persist-credentials"] is False and checkout["continue-on-error"] is True
+		report = next(step["run"] for step in job["steps"] if step.get("name") == "Report the failed run to workflow failure heal")
+		assert ".codex-workflow-src/scripts/workflow_failure_heal_phase_report.sh" in report and "reason=reporter_missing" in report
+		assert "${{" not in report
+	implement = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "implement.yml").read_text(encoding="utf-8"))
+	assert "needs.implement.outputs.heal_report == 'true'" in implement["jobs"]["heal-report"]["if"]
+	assert implement["jobs"]["implement"]["outputs"]["heal_report"] == "${{ steps.heal_report_gate.outputs.report }}"
+	steps = implement["jobs"]["implement"]["steps"]
+	names = [step.get("name") for step in steps]
+	gate = steps[names.index("Gate workflow failure heal report")]
+	comment = steps[names.index("Comment on issue failure")]
+	assert gate["id"] == "heal_report_gate"
+	# Same terminal-state exclusions as the failure comment, failures only.
+	assert gate["if"] == comment["if"].replace("(failure() || cancelled()) && ", "failure() && ", 1)
+	assert 'codex_blocked.flag' in gate["run"] and 'echo "report=true" >> "$GITHUB_OUTPUT"' in gate["run"]
+	assert names.index("Comment on issue failure") < names.index("Gate workflow failure heal report") < names.index("Exit safely")

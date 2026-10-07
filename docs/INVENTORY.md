@@ -20,6 +20,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `prompts/mode-judge-security-pass-exhaustion.txt` — Role: security-pass exhaustion judge. Goal: decide whether each remaining finding is accepted with follow-up, gets another fix cycle, or fails the project.
 - `prompts/mode-judge-review-blocked.txt` — Role: review-blocked judge. Goal: a PR linked to an orchestrator-managed issue has been labeled `ai:review-blocked` (the autofix cycle could not resolve all issues after exhausting its retry budget, or the editor/workflow failed entirely).
 - `prompts/mode-judge-stall-recovery.txt` — Role: stall-recovery judge. Goal: a single issue has stalled in one phase long enough that deterministic recovery actions are no longer sufficient.
+- `prompts/mode-judge-unblock.txt` — Role: unblock judge. Goal: pick one verdict from the fixed menu that gets a blocked item moving again (Phase 7).
 - `prompts/mode-judge.txt` — Role: judge. Goal: evaluate whether the project is progressing correctly after a wave of issues has been implemented and merged.
 - `prompts/mode-orchestrate-poll-judge.txt` — Role: orchestrate-poll judge. Goal: evaluate whether the current wave is progressing correctly.
 - `prompts/mode-orchestrate.txt` — Role: orchestrator. Goal: decompose a high-level project description into a set of well-scoped GitHub issues with an explicit dependency graph.
@@ -86,6 +87,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/sync-claude-live-copies.yml` — GitHub Actions workflow: Sync live .claude copies.
 - `.github/workflows/sync_ai_labels.yml` — GitHub Actions workflow: AI Sync Labels.
 - `.github/workflows/test-and-mark-stable.yml` — GitHub Actions workflow: Test & Mark Stable Release.
+- `.github/workflows/unblock_judge.yml` — GitHub Actions workflow: AI Unblock Judge (Reusable).
+- `.github/workflows/unblock_judge_dispatch.yml` — GitHub Actions workflow: Internal: Unblock Judge Dispatch.
 - `.github/workflows/update_workflows.yml` — GitHub Actions workflow: Update Workflow Wrappers.
 - `.github/workflows/validate.yml` — GitHub Actions workflow: AI Validate (Reusable).
 - `.github/workflows/validation-improvements-intake.yml` — GitHub Actions workflow: Validation Improvements Intake.
@@ -230,7 +233,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_filter_uninteresting_files.sh` — Shell helper for review filter uninteresting files.
 - `scripts/review_floor_rules.sh` — Shell helper for review floor rules.
 - `scripts/review_issue_ledger.sh` — Shell helper for review issue ledger.
-- `scripts/review_merge_train.sh` — merge train for review_autofix.yml: `gate` queues an ai/issue-* PR behind older open ai/issue-* PRs on the same base that edit the same files (label ai:merge-queued); `release` (cancel_on_pr_close.yml, orchestrate_poll.yml) re-dispatches review once the blockers are gone.
+- `scripts/review_merge_train.sh` — merge train for review_autofix.yml: `gate` queues an ai/issue-* PR behind older open same-repository ai/issue-* PRs on the same base that edit the same files (fork heads never block; label ai:merge-queued); `release` (cancel_on_pr_close.yml, orchestrate_poll.yml) re-dispatches review once the blockers are gone.
 - `scripts/review_parse_consolidator.sh` — Shell helper for review parse consolidator.
 - `scripts/review_rb_judge.sh` — Runs the review-blocked judge for PR merge, fix, or close-and-reissue decisions.
 - `scripts/review_rb_judge_security_pass.sh` — Security-pass helpers sourced by `review_rb_judge.sh`: security-exhaustion mode (judge decides with the open `[security-audit]` findings once the single-issue security pass is out of cycles), the security gate on judge merges, and the extension marker that grants one more audit cycle after a security-mode judge fix.
@@ -269,6 +272,10 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/tg_helpers.sh` — tg_helpers.sh — Telegram message tracking & cleanup helpers.
 - `scripts/transcript_archive.sh` — transcript_archive.sh — fail-open JSON archive helper for captured phase output.
 - `scripts/truncate_to_utf8_byte_cap.py` — Truncate stdin to a UTF-8 byte cap on a codepoint boundary.
+- `scripts/unblock_actions.py` — Turn an unblock verdict into the GitHub operations that carry it out, reusing the existing resume commands (Phase 7).
+- `scripts/unblock_judge.sh` — Judge one blocked issue, PR or project and carry out the verdict (Phase 7).
+- `scripts/unblock_ledger.py` — Never-repeat ledger and hard limits for the unblock judge (Phase 7).
+- `scripts/unblock_scan.py` — Pick the blocked items the unblock judge looks at each poll tick (Phase 7).
 - `scripts/validate_changed_files_syntax.sh` — Shell helper for validate changed files syntax.
 - `scripts/validate_driver.sh` — Shell helper for validate driver.
 - `scripts/validate_editor_audit.sh` — when the helper exits non-zero (caller-side).
@@ -284,6 +291,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/workflow_failure_heal.py` — Shared logic for the workflow failure heal pipeline: payload build/validation, fingerprinting, dedup/lineage/budget decisions, and heal issue composition.
 - `scripts/workflow_failure_heal_autofix_report.sh` — Report a repeated review/autofix failure on a pull request to coding-workflows' heal intake from the review workflow's failure path, with the run's own evidence.
 - `scripts/workflow_failure_heal_intake.sh` — Diagnose an escalated workflow failure report in coding-workflows, enforce heal dedup/lineage/budget rules, and open the heal issue.
+- `scripts/workflow_failure_heal_phase_report.sh` — Report a failed clarify / plan / implement run on an issue to coding-workflows' heal intake from the workflow's `heal-report` job, with the phase's failure streak on that issue.
 - `scripts/workflow_failure_heal_pr_reconcile.sh` — When a coding-workflows pull request closes, close the heal PRs stacked on its head branch (source not merged) or move their heal commits onto the source base and re-point them (source merged).
 - `scripts/workflow_failure_heal_report.sh` — Report a human-needed escalation from a consumer (or this repo) to coding-workflows with linked failed runs and the wrapper release pin.
 - `scripts/workflow_retro.py` — Build weekly workflow-retro context from workflow-log-analysis telemetry.
