@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.82,
+  "details": "Several merged changes updated workflow-failure healing around intake markers, lineage verification, run provenance, and touched-file scope. When modifying heal flows, use verifiable intake/run evidence to establish what may be changed, and test that evidence and scope boundaries are enforced.",
+  "fingerprint": "3fc0991254195d4a97fb20431e4517e782c371862ccf123279fc2fd2d124cd1c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37586783122",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37586783122",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/5504",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6441",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6458",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6596",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6608",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6137",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6475",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6545",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6598",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6612"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261007072656_bc2df6ca96",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Treat workflow-healing provenance and scope as explicit contracts.",
+  "timestamps": {
+    "created_at": "2026-10-07T07:26:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
