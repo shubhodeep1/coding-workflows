@@ -145,6 +145,34 @@ def test_check_paths(tmp_path, name, accepted):
 		assert "unsupported path" in proc.stderr
 
 
+def test_check_paths_report_names_only_plain_host_only_paths(tmp_path):
+	(tmp_path / "scripts").mkdir()
+	(tmp_path / "scripts/a.py").write_text("x = 1\n")
+	os.symlink("/etc/passwd", tmp_path / "scripts/link.py")
+	(tmp_path / ".claude/hooks/pr_merge_status_guard.py").parent.mkdir(parents=True)
+	(tmp_path / ".claude/hooks/pr_merge_status_guard.py").write_text("x = 1\n")
+	(tmp_path / "assets/x.svg").mkdir(parents=True)
+	names = ["scripts/a.py", ".ai/.workspace_source_manifest.txt", ".claude/hooks/pr_merge_status_guard.py",
+		"scripts/link.py", "assets/x.svg", "::error::x.svg", "docs/a b.png", "scripts/../a.png"]
+	paths = tmp_path / "paths.txt"
+	paths.write_text("".join(name + "\n" for name in names))
+	report = tmp_path / "report.txt"
+	proc = subprocess.run([sys.executable, str(WORKSPACE), "check-paths", str(tmp_path), str(paths), str(report)],
+		env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"), capture_output=True, text=True)
+	assert proc.returncode == 1 and "unsupported path" in proc.stderr
+	# assets/x.svg is a directory on the host, so it is unsafe rather than host-only.
+	assert report.read_text().splitlines() == [
+		"host_only\t.ai/.workspace_source_manifest.txt",
+		"host_only\t.claude/hooks/pr_merge_status_guard.py",
+		"unsafe", "unsafe", "unsafe", "unsafe", "unsafe",
+	]
+	ok = tmp_path / "ok.txt"
+	ok.write_text("scripts/a.py\n")
+	proc = subprocess.run([sys.executable, str(WORKSPACE), "check-paths", str(tmp_path), str(ok), str(report)],
+		env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"), capture_output=True, text=True)
+	assert proc.returncode == 0 and report.read_text() == ""
+
+
 def test_resolver_path_check_precedes_sandbox_and_does_not_pass_host_git_index():
 	text = (ROOT / "scripts/review_conflict_resolve.sh").read_text(encoding="utf-8")
 	guard = text[text.index('# Reject unsupported conflict paths for both engines'):text.index('attempt=1\nwhile ')]
@@ -210,8 +238,13 @@ def test_claude_resolver_isolation_failures_do_not_select_host_writer():
 	branch = text[text.index('resolver_claude_rc=75'):text.index('resolver_clean_output="${tmp_output}.ansi-clean"')]
 	assert branch.count('AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER') == 1
 	assert 'reason=claude_unavailable action=sandbox_opencode' in branch
-	for reason in ('sandbox_prepare_failed', 'sandbox_path_unsupported', 'sandbox_opencode_unavailable'):
+	for reason in ('sandbox_prepare_failed', 'sandbox_opencode_unavailable'):
 		assert f'_resolver_fail_closed {reason}' in branch
+	# Rejected conflict paths go through the shared helper (host-only or unsupported).
+	assert '_resolver_fail_closed_for_conflict_paths "${RUNTIME_DIR}/resolver_conflict_path_report.txt"' in branch
+	path_helper = text[text.index('_resolver_fail_closed_for_conflict_paths()'):].split('\n}\n', 1)[0]
+	assert '_resolver_fail_closed sandbox_path_host_only' in path_helper
+	assert path_helper.rstrip().endswith('_resolver_fail_closed sandbox_path_unsupported')
 	assert '_resolver_fail_closed "${resolver_sandbox_failure_reason}"' in branch
 	assert branch.index('resolver_claude_rc=0\n    fi') > branch.index('_codex_exit="${resolver_claude_rc}"')
 

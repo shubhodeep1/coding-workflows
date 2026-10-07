@@ -230,6 +230,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_conflict_resolve.sh` — create the [ai-merge-resolve] commit for review_autofix.yml.
 - `scripts/review_consolidate.sh` — Shell helper for review consolidate.
 - `scripts/review_enable_auto_merge.sh` — Shell helper for review enable auto merge.
+- `scripts/review_head_gate.sh` — Publishes SHA-bound review statuses and withdraws stale PR auto-merge on synchronize.
 - `scripts/review_filter_uninteresting_files.sh` — Shell helper for review filter uninteresting files.
 - `scripts/review_floor_rules.sh` — Shell helper for review floor rules.
 - `scripts/review_issue_ledger.sh` — Shell helper for review issue ledger.
@@ -244,6 +245,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_run_reviewers.sh` — Shell helper for review run reviewers.
 - `scripts/review_sandbox/Dockerfile` — Pinned, credential-free review dependency and editor image.
 - `scripts/review_single_issue_security_pass.sh` — Hold a standalone PR's auto-merge until a security audit of its head is clean, and report the audit result back (port P1).
+- `scripts/review_security_hold_sweep.py` — Re-dispatch the review-blocked judge once when current-head security follow-ups exceed their stale threshold.
 - `scripts/review_synthesise_smoke.sh` — Shell helper for review synthesise smoke.
 - `scripts/review_untrusted_sandbox.sh` — Prepare the disposable review workspace and run the OpenCode writer without host credentials.
 - `scripts/review_untrusted_workspace.py` — Validate review snapshot paths, baselines and editor changes before transfer.
