@@ -748,6 +748,10 @@ def test_security_audit_workflow_keeps_executable_support_outside_data_checkout(
 	assert "${{" not in steps("Resolve trusted security audit exclusions")["run"]
 	assert steps("Run security audit")["working-directory"] == "./audit-data"
 	assert steps("Run security audit")["env"]["SECURITY_AUDIT_SUPPORT_DIR"] == "${{ github.workspace }}"
+	assert workflow["on"]["workflow_call"]["secrets"]["TG_BOT_SECRET"]["required"] is False
+	assert steps("Run security audit")["env"]["TG_BOT_SECRET"] == "${{ secrets.TG_BOT_SECRET }}"
+	assert steps("Run security audit")["env"]["TG_ADMIN_CHAT_ID"] == "${{ vars.TG_ADMIN_CHAT_ID || '' }}"
+	assert steps("Run security audit")["env"]["ALERT_MSG_LEVEL"] == "${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}"
 
 
 def test_security_audit_consumer_template_calls_stable_reusable_workflow() -> None:
@@ -1770,12 +1774,12 @@ def test_security_audit_fix_cycle_diffs_fail_open() -> None:
 
 
 def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() -> None:
-	"""Accepted findings reach the prompt as accepted and never reach the output.
+	"""Accepted findings reach the prompt and only the same exploit is suppressed.
 
 	The orchestrator's security-pass exhaustion judge and the operator's
 	`/security-pass-waive` command persist waivers; the engine must drop a
-	re-report by exact id and by location (same file and category within the
-	line window), because the auditor mints a new id every run and fix commits
+	re-report by exact id and by location (same file, category, severity and
+	exploit within the line window), because the auditor mints a new id every run and fix commits
 	move the cited line.
 	"""
 	with tempfile.TemporaryDirectory(prefix="security-audit-waived-") as fixture_td:
@@ -1800,6 +1804,8 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 						"owasp_or_stride_category": "A04:2021-Insecure Design / STRIDE: Denial of Service",
 						"file": "./file_c.py",
 						"line": 1,
+						"severity": "high",
+						"exploit_scenario": "A concrete trust-boundary weakness can be exploited.",
 					},
 					{"finding_id": "waived-id-only"},
 				]
@@ -1807,12 +1813,15 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 			encoding="utf-8",
 		)
 		findings = [
-			_finding_payload("waived-exact", file_path="file_b.py", category="A01: Broken Access Control"),
+			_finding_payload("waived-exact", file_path="file_b.py", category="A04:2021-Insecure Design", severity="medium"),
 			_finding_payload(
 				"fresh-id-same-spot",
 				file_path="file_c.py",
 				category="a04:2021-insecure design / STRIDE: denial of service",
 			),
+			_finding_payload("new-exploit-same-category", file_path="file_c.py",
+				category="a04:2021-insecure design / STRIDE: denial of service",
+				exploit_scenario="A different credential leak is exploitable."),
 			_finding_payload("different-category-same-spot", file_path="file_c.py", category="A01: Broken Access Control"),
 			_finding_payload("waived-id-only", file_path="file_c.py"),
 		]
@@ -1832,8 +1841,8 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 
 	assert proc.returncode == 0, proc.stderr
 	payload = json.loads(final_state["security_audit_findings_output"])
-	assert [finding["finding_id"] for finding in payload["findings"]] == ["different-category-same-spot"]
-	assert payload["counts"]["kept"] == 1
+	assert [finding["finding_id"] for finding in payload["findings"]] == ["different-category-same-spot", "new-exploit-same-category"]
+	assert payload["counts"]["kept"] == 2
 	assert payload["counts"]["suppressed_waived"] == 3
 	assert "waived-findings=3 (line window 40)" in proc.stdout
 	prompt = final_state["codex_stdin"][0]
@@ -1844,11 +1853,37 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 	)[0]
 	assert "- `waived-exact` | A04:2021-Insecure Design | medium | file_b.py:1" in accepted_block
 	assert "Accepted because: Bounded blast radius; tracked [untrusted marker removed] [untrusted marker removed]" in accepted_block
-	assert "- `waived-by-location` | A04:2021-Insecure Design / STRIDE: Denial of Service | unknown | file_c.py:1" in accepted_block
+	assert "- `waived-by-location` | A04:2021-Insecure Design / STRIDE: Denial of Service | high | file_c.py:1" in accepted_block
 	assert "- `waived-id-only` | uncategorised | unknown | (location not recorded)" in accepted_block
 	assert "Rules for accepted findings:" not in accepted_block
-	assert "Never report an accepted finding again" in prompt
+	assert "Never re-report the same accepted exploit" in prompt
+	assert "Report a different exploit even when its file, category and line are near an accepted finding" in prompt
+	assert "Accepted exploit: A concrete trust-boundary weakness can be exploited." in accepted_block
 	assert "An acceptance covers one location." in prompt
+
+
+def test_security_audit_reused_waiver_id_cannot_hide_new_exploit() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-waived-id-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, first_sha, _, head_sha = _git_fixture_repo_three_commits(tmp_path)
+		waived_findings_path = tmp_path / "waived-findings.json"
+		waived_findings_path.write_text(json.dumps([{
+			"finding_id": "waived-exact", "owasp_or_stride_category": "A04:2021-Insecure Design",
+			"severity": "medium", "file": "file_b.py", "line": 1,
+			"exploit_scenario": "The original weakness is bounded.",
+		}]), encoding="utf-8")
+		changed = _finding_payload("waived-exact", file_path="file_b.py", category="A01: Broken Access Control",
+			exploit_scenario="A different exploit.")
+		result, state = _run_security_audit(
+			{}, codex_output=json.dumps([changed]), cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT), "SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"), "SECURITY_AUDIT_DIFF_BASE": first_sha,
+				"SECURITY_AUDIT_DIFF_HEAD": head_sha, "SECURITY_AUDIT_WAIVED_FINDINGS": str(waived_findings_path),
+			},
+		)
+		assert result.returncode == 0, result.stderr
+		assert [row["finding_id"] for row in json.loads(state["security_audit_findings_output"])["findings"]] == ["waived-exact"]
 
 
 def test_security_audit_waived_findings_fail_closed_on_malformed_input() -> None:
@@ -2048,6 +2083,7 @@ def test_security_audit_chunks_scoped_oversized_file_and_reports_coverage() -> N
 		assert payload["schema_version"] == "security_audit_findings.v1"
 		assert payload["findings"] == [] and payload["counts"]["kept"] == 0
 		assert payload["coverage"]["scoped_oversized_chunked"] == ["large.py"]
+		assert payload["coverage"]["unscoped_text_capped_count"] == 0
 
 
 def test_security_audit_oversized_cap_fails_before_codex() -> None:
@@ -2103,13 +2139,101 @@ def test_security_audit_full_scan_chunks_oversized_file() -> None:
 		assert "large.py (" in result["codex_stdin"][0]
 		assert any(mount.get("dst", "").endswith("/oversized-chunks") for mount in result["codex_mounts"][0])
 		assert any(head_sha in body for body in result["issue_edit_bodies"])
+		assert "Coverage: partial" not in result["issue_comment_bodies"][0]
 
 
 def test_security_audit_full_scan_oversized_cap_reports_coverage_note() -> None:
 	# Q24: in a full scan an unscoped file past the cap is listed as not
-	# inspected; it does not fail the audit.
+	# inspected; findings still post, but the audited marker does not move.
 	with tempfile.TemporaryDirectory(prefix="security-audit-oversized-full-cap-") as td:
 		repo_dir, _base_sha, _head_sha = _oversized_fixture_repo(Path(td))
+		state = _security_audit_tracker_state()
+		state["api_responses"] = [[[]]]
+		proc, result = _run_security_audit(state, codex_output=json.dumps([_finding_payload("over-cap", file_path="file_a.py")]), cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES": "1048576",
+		})
+		assert proc.returncode == 0, proc.stderr
+		assert "phase=oversized-scope" not in proc.stderr
+		assert result.get("codex_calls")
+		assert result.get("issue_create_bodies")
+		comment = result["issue_comment_bodies"][0]
+		assert "Coverage note: 1 tracked files over 2 MiB were not inspected" in comment and "`large.py`" in comment
+		assert "Coverage: partial — 1 tracked text files over the export caps were not inspected" in comment
+		assert "`large.py` (2400000 bytes, over_file_cap)" in comment
+		assert "the last-audited-commit marker was not moved" in comment
+		assert "oversized scoped=0 unscoped=1 text_capped=1" in proc.stdout
+		assert "coverage=partial skipped_text=1" in proc.stdout
+		assert any("ai:security-audit-partial-coverage:v1" in body for body in result["issue_edit_bodies"])
+		assert not any("ai:security-audit-last-sha:" in body for body in result["issue_edit_bodies"])
+
+
+def test_security_audit_partial_full_scan_forces_full_scope_until_complete() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-partial-repeat-") as td:
+		repo_dir, _base_sha, last_audited_sha = _oversized_fixture_repo(Path(td))
+		(repo_dir / "small.py").write_text("new = 1\n", encoding="utf-8")
+		subprocess.run(["git", "add", "small.py"], cwd=repo_dir, check=True)
+		subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "small"], cwd=repo_dir, check=True)
+		state = _security_audit_tracker_state()
+		state["issue_list_responses"][0][0]["body"] += f"<!-- ai:security-audit-last-sha:{last_audited_sha} -->\n"
+		state["api_responses"] = [[[]]]
+		audit_env = {
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES": "1048576",
+		}
+		first_run, first_result = _run_security_audit(state, cwd=repo_dir, extra_env={
+			**audit_env, "SECURITY_AUDIT_INCREMENTAL": "false",
+		})
+		assert first_run.returncode == 0, first_run.stderr
+		partial_body = first_result["issue_edit_bodies"][0]
+		assert f"<!-- ai:security-audit-last-sha:{last_audited_sha} -->" in partial_body
+		assert "<!-- ai:security-audit-partial-coverage:v1 -->" in partial_body
+
+		state = _security_audit_tracker_state()
+		state["issue_list_responses"][0][0]["body"] = partial_body
+		state["api_responses"] = [[[]]]
+		second_run, second_result = _run_security_audit(state, cwd=repo_dir, extra_env=audit_env)
+		assert second_run.returncode == 0, second_run.stderr
+		assert "scope=full (previous default-branch full scan skipped over-cap text" in second_run.stdout
+		assert "Coverage: partial" in second_result["issue_comment_bodies"][0]
+		assert f"<!-- ai:security-audit-last-sha:{last_audited_sha} -->" in second_result["issue_edit_bodies"][0]
+
+		subprocess.run(["git", "rm", "large.py"], cwd=repo_dir, check=True, capture_output=True)
+		subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "remove large"], cwd=repo_dir, check=True)
+		new_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_dir, text=True).strip()
+		state = _security_audit_tracker_state()
+		state["issue_list_responses"][0][0]["body"] = second_result["issue_edit_bodies"][0]
+		state["api_responses"] = [[[]]]
+		third_run, third_result = _run_security_audit(state, cwd=repo_dir, extra_env=audit_env)
+		assert third_run.returncode == 0, third_run.stderr
+		assert "scope=full (previous default-branch full scan skipped over-cap text" in third_run.stdout
+		assert f"<!-- ai:security-audit-last-sha:{new_sha} -->" in third_result["issue_edit_bodies"][0]
+		assert "ai:security-audit-partial-coverage:v1" not in third_result["issue_edit_bodies"][0]
+
+
+def test_security_audit_partial_state_persists_before_codex_failure() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-partial-codex-failure-") as td:
+		repo_dir, _base_sha, _head_sha = _oversized_fixture_repo(Path(td))
+		state = _security_audit_tracker_state()
+		state["api_responses"] = [[[]]]
+		proc, result = _run_security_audit(state, cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES": "1048576",
+			"MOCK_CODEX_EXIT_CODE": "1",
+		})
+		assert proc.returncode != 0
+		assert result.get("codex_calls")
+		assert any("ai:security-audit-partial-coverage:v1" in body for body in result["issue_edit_bodies"])
+		assert result.get("issue_comment_bodies", []) == []
+
+
+def test_security_audit_full_scan_binary_over_cap_still_advances_marker() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-oversized-binary-") as td:
+		repo_dir, _base_sha, _head_sha = _git_fixture_repo(Path(td))
+		(repo_dir / "photo.jpg").write_bytes(b"\x00" + b"x" * (3 * 1024 * 1024))
+		subprocess.run(["git", "add", "photo.jpg"], cwd=repo_dir, check=True)
+		subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "binary"], cwd=repo_dir, check=True)
+		head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_dir, text=True).strip()
 		state = _security_audit_tracker_state()
 		state["api_responses"] = [[[]]]
 		proc, result = _run_security_audit(state, cwd=repo_dir, extra_env={
@@ -2117,10 +2241,10 @@ def test_security_audit_full_scan_oversized_cap_reports_coverage_note() -> None:
 			"SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES": "1048576",
 		})
 		assert proc.returncode == 0, proc.stderr
-		assert "phase=oversized-scope" not in proc.stderr
-		assert result.get("codex_calls")
-		comment = result["issue_comment_bodies"][0]
-		assert "Coverage note: 1 tracked files over 2 MiB were not inspected" in comment and "`large.py`" in comment
+		assert "Coverage note: 1 tracked files over 2 MiB" in result["issue_comment_bodies"][0]
+		assert "Coverage: partial" not in result["issue_comment_bodies"][0]
+		assert "coverage=partial" not in proc.stdout
+		assert any(f"ai:security-audit-last-sha:{head_sha}" in body for body in result["issue_edit_bodies"])
 
 
 def test_security_audit_no_oversized_file_has_no_tracker_coverage_lines() -> None:

@@ -445,6 +445,9 @@ jobs:
       - name: Validate prerequisites
         run: |
           set -euo pipefail
+          # Phase 4b caps its queue-time deadline extension against the
+          # job's start, so the serial budget below still holds.
+          echo "E2E_JOB_STARTED_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
           if [ -z "${GH_TOKEN}" ]; then
             echo "::error::GH_PAT secret is required for E2E tests (GITHUB_TOKEN cannot trigger downstream workflows)"
             exit 1
@@ -523,6 +526,16 @@ jobs:
         id: hot-poller-guard
         run: |
           set -euo pipefail
+          # tests/test_orchestrate_poll_process.py imports pytest since #6187
+          # (fba7ed5), and the runner image has none: gate run 37554001238
+          # failed here with `ModuleNotFoundError: No module named 'pytest'`
+          # before any phase ran. Install it the way Phase 4b does.
+          if ! python3 -c 'import pytest' >/dev/null 2>&1 \
+            && ! python3 -m pip install --quiet pytest; then
+            echo "::error::Could not install pytest for the hot orchestrate-poll regression guard."
+            echo "status=pytest_install_failed" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
           echo "Running hot orchestrate-poll regression guard..."
           if PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py test_implementation_failed_reissue_preserves_dependency_gates_and_pending_defs; then
             echo "status=success" >> "$GITHUB_OUTPUT"
@@ -2750,6 +2763,29 @@ jobs:
           # genuine successful retries. 25 min keeps the upper bound below
           # the orchestrator phase budget while covering the observed P95).
           DEADLINE=$(( $(date +%s) + (EDITOR_RETRY_BUDGET_MINUTES * 60) ))
+          # Time the pinned retry run spends waiting for a runner is not
+          # editor time. Gate run 37395952357's retry run reported
+          # status=queued for about 24 of its 25 minutes and succeeded six
+          # minutes after this deadline. Queued time seen on two consecutive
+          # polls extends the deadline, never past the point that still
+          # leaves Phase 6 (PHASE_TIMEOUT), Phase 7
+          # (PHASE7_WAIT_BUDGET_MINUTES) and the finalization reserve inside
+          # E2E_JOB_TIMEOUT_MINUTES, so the serial budget checked in
+          # "Validate prerequisites" still holds. Without a recorded job
+          # start there is no extension. The cap bounds only the extension:
+          # the base deadline above is never shortened (pre-#6606 behaviour),
+          # so a Phase 4b that starts after the cap gets no extension, not a
+          # smaller budget.
+          RETRY_BASE_DEADLINE="${DEADLINE}"
+          RETRY_DEADLINE_CEILING="${DEADLINE}"
+          if [[ "${E2E_JOB_STARTED_EPOCH:-}" =~ ^[0-9]+$ ]]; then
+            RETRY_DEADLINE_CEILING=$(( E2E_JOB_STARTED_EPOCH + (E2E_JOB_TIMEOUT_MINUTES - PHASE_TIMEOUT - PHASE7_WAIT_BUDGET_MINUTES - E2E_FINALIZATION_RESERVE_MINUTES) * 60 ))
+            if [ "${RETRY_DEADLINE_CEILING}" -lt "${DEADLINE}" ]; then
+              RETRY_DEADLINE_CEILING="${DEADLINE}"
+            fi
+          fi
+          RETRY_QUEUED_SECS=0
+          RETRY_LAST_QUEUED_TS=""
           # Circuit breaker: if fetch_pr_state returns "unknown" (API
           # failure / parse failure) for too many consecutive iterations
           # we're effectively polling blind and the closed-PR guard
@@ -2898,9 +2934,26 @@ jobs:
             if [ "${RETRY_STATUS}" = "completed" ]; then
               break
             fi
+            RETRY_POLL_NOW=$(date +%s)
+            case "${RETRY_STATUS}" in
+              queued|waiting|pending|requested)
+                if [ -n "${RETRY_LAST_QUEUED_TS}" ]; then
+                  RETRY_QUEUED_SECS=$(( RETRY_QUEUED_SECS + RETRY_POLL_NOW - RETRY_LAST_QUEUED_TS ))
+                  DEADLINE=$(( RETRY_BASE_DEADLINE + RETRY_QUEUED_SECS ))
+                  if [ "${DEADLINE}" -gt "${RETRY_DEADLINE_CEILING}" ]; then
+                    DEADLINE="${RETRY_DEADLINE_CEILING}"
+                  fi
+                fi
+                RETRY_LAST_QUEUED_TS="${RETRY_POLL_NOW}"
+                ;;
+              *)
+                RETRY_LAST_QUEUED_TS=""
+                ;;
+            esac
           done
 
           if [ "$(date +%s)" -ge "${DEADLINE}" ] || [ -z "${RETRY_RUN_ID}" ] || [ "${RETRY_STATUS:-}" != "completed" ]; then
+            echo "Retry review run queued for ${RETRY_QUEUED_SECS}s; deadline extended by $(( DEADLINE - RETRY_BASE_DEADLINE ))s (cap $(( RETRY_DEADLINE_CEILING - RETRY_BASE_DEADLINE ))s)."
             echo "::error::Retry review run did not complete within ${EDITOR_RETRY_BUDGET_MINUTES} minutes"
             echo "status=retry_timeout" >> "$GITHUB_OUTPUT"
             exit 1
@@ -4673,7 +4726,8 @@ jobs:
             tests/test_update_workflows_retired_files.py \
             tests/test_security_pass_skip.py \
             tests/test_claude_md_section_numbers.py \
-            tests/test_audit_plans_command.py
+            tests/test_audit_plans_command.py \
+            tests/test_deploy_activate_command.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_session_start_extract_repo_slug.py
 
       - name: Prompt files integrity
