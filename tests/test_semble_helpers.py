@@ -95,6 +95,8 @@ printf 'unavailable\n' > "${SEMBLE_INSTALL_RESULT_FILE}"
 		assert (root / "bootstrap.state").read_text().startswith("state=failed\n")
 		assert "SEMBLE_BOOTSTRAP mode=lazy state=failed" in result.stderr
 		assert "SEMBLE_FALLBACK target=lazy-context reason=lazy-bootstrap-failed" in result.stderr
+		# One fallback per query: the failed bootstrap's, then the cached failure's.
+		assert result.stderr.count("SEMBLE_FALLBACK ") == 2
 
 
 def test_semble_should_query_respects_failed_lazy_state_and_eager_mode() -> None:

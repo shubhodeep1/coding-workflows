@@ -39,6 +39,8 @@ _semble_log_event()
 		printf ' run=%s-%s' "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT:-1}" >&2
 	fi
 	if [ "${prefix}" = "SEMBLE_FALLBACK" ]; then
+		# semble_query_block reads this so a failed lazy bootstrap is logged once.
+		_SEMBLE_BOOTSTRAP_FALLBACK_LOGGED=true
 		emit_fields+=("sources=0")
 		printf ' sources=0' >&2
 		if [ -f "${SEMBLE_STATIC_CONTEXT_FILE:-/dev/null/nonexistent}" ] && [ -r "${SEMBLE_STATIC_CONTEXT_FILE}" ]; then
@@ -292,7 +294,11 @@ semble_query_block()
 	max_chunks="$(_semble_normalize_max_chunks "${max_chunks}")"
 
 	target="$(_semble_target_slug "${header_label}")"
-	semble_ensure_ready "${target}" >/dev/null || true
+	_SEMBLE_BOOTSTRAP_FALLBACK_LOGGED=false
+	if ! semble_ensure_ready "${target}" >/dev/null && [ "${_SEMBLE_BOOTSTRAP_FALLBACK_LOGGED}" = "true" ]; then
+		# The bootstrap already logged this query's fallback; do not count it twice.
+		return 1
+	fi
 
 	if [ "${SEMBLE_AVAILABLE:-false}" != "true" ]; then
 		_semble_log_event "SEMBLE_FALLBACK" "target=${target}" "reason=binary-unavailable"
