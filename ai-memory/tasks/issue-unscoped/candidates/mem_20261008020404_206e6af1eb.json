@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cAdversarial tests show an editor child that remains running \u2026 cannot read or receive GH_PAT during any later step.\u201d\n  expected_change_site: `tests/test_heal_isolated_editor.py::test_real_docker_kills_background_editor_child_when_available` and the CI test setup\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The test launches a standalone BusyBox container and manually removes it; it does not run `heal_isolated_implement.sh` or verify that a surviving editor child cannot access GH_PAT during a later step. It also skips unless `busybox:1.36` is already cached, and the CI step runs pytest without arranging that image. Thus CI does not reliably exercise this acceptance criterion.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cAdversarial tests show an editor child that remains running \u2026 cannot read or receive GH_PAT during any later step.\u201d\n  Expected change site: `tests/test_heal_isolated_editor.py::test_real_docker_kills_background_editor_child_when_available` and the CI test setup.\n  Evidence of absence: The test launches a standalone BusyBox container and manually removes it; it does not run `heal_isolated_implement.sh` or verify that a surviving editor child cannot access GH_PAT during a later step. It also skips unless `busybox:1.36` is already cached, and the CI step runs pytest without arranging that image. Thus CI does not reliably exercise this acceptance criterion.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "e51b6627a17c13a5dd9decbdc27c0bfe686350b548c97fb60857dcd9007e66ad",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6484,
+    "run_id": "37712358541",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37712358541",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261008020404_206e6af1eb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6484,
+    "run_id": "37712358541"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-08T02:04:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
