@@ -2831,5 +2831,146 @@ def main() -> int:
 	return 0
 
 
+
+def _git_fixture_repo_line_ownership(base_dir: Path) -> tuple[Path, str, str]:
+	"""Base commit writes mod.py lines 1-3; the project commit rewrites line 2 only.
+
+	Returns (repo_dir, base_sha, head_sha).  mod.py changes in base..head, so
+	it stays in the explicit scope while line 1 and line 3 predate the project.
+	"""
+	repo_dir = base_dir / "audited-repo"
+	repo_dir.mkdir(parents=True, exist_ok=True)
+	git_env = {key: value for key, value in os.environ.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+	git_env.update(
+		{
+			"GIT_AUTHOR_NAME": "t",
+			"GIT_AUTHOR_EMAIL": "t@example.invalid",
+			"GIT_COMMITTER_NAME": "t",
+			"GIT_COMMITTER_EMAIL": "t@example.invalid",
+		}
+	)
+
+	def _git(*args: str) -> str:
+		return subprocess.run(
+			["git", *args],
+			cwd=repo_dir,
+			env=git_env,
+			check=True,
+			capture_output=True,
+			text=True,
+			encoding="utf-8",
+		).stdout.strip()
+
+	_git("init", "-q")
+	(repo_dir / "mod.py").write_text("BASE_ONE = 1\nBASE_TWO = 2\nBASE_THREE = 3\n", encoding="utf-8")
+	_git("add", "mod.py")
+	_git("commit", "-q", "-m", "base commit")
+	base_sha = _git("rev-parse", "HEAD")
+	(repo_dir / "mod.py").write_text("BASE_ONE = 1\nPROJECT_TWO = 22\nBASE_THREE = 3\n", encoding="utf-8")
+	_git("add", "mod.py")
+	_git("commit", "-q", "-m", "project commit")
+	head_sha = _git("rev-parse", "HEAD")
+	return repo_dir, base_sha, head_sha
+
+
+def _line_ownership_finding(finding_id: str, line: int) -> dict:
+	finding = _finding_payload(finding_id, file_path="mod.py")
+	finding["line"] = line
+	return finding
+
+
+def _run_line_ownership_audit(findings: list[dict], extra_env: dict | None = None) -> tuple[subprocess.CompletedProcess[str], dict]:
+	with tempfile.TemporaryDirectory(prefix="security-audit-line-ownership-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, base_sha, head_sha = _git_fixture_repo_line_ownership(tmp_path)
+		env = {
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+			"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"),
+			"SECURITY_AUDIT_DIFF_BASE": base_sha,
+			"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+		}
+		env.update(extra_env or {})
+		proc, final_state = _run_security_audit(
+			{},
+			codex_output=json.dumps(findings),
+			cwd=repo_dir,
+			extra_env=env,
+		)
+	payload = json.loads(final_state["security_audit_findings_output"]) if "security_audit_findings_output" in final_state else {}
+	return proc, payload
+
+
+def test_security_audit_line_ownership_project_written_line_blocks() -> None:
+	proc, payload = _run_line_ownership_audit([_line_ownership_finding("project-line", 2)])
+	assert proc.returncode == 0, proc.stderr
+	assert [finding["advisory"] for finding in payload["findings"]] == [False]
+	assert payload["line_ownership"] == {"mode": "project", "blocking": 1, "advisory": 0, "unknown": 0}
+	assert "security-audit: line_ownership mode=project blocking=1 advisory=0 unknown=0" in proc.stdout
+	assert payload["schema_version"] == "security_audit_findings.v1"
+	assert payload["counts"]["kept"] == 1
+
+
+def test_security_audit_line_ownership_base_only_line_is_advisory() -> None:
+	proc, payload = _run_line_ownership_audit(
+		[_line_ownership_finding("base-line", 1), _line_ownership_finding("project-line", 2)]
+	)
+	assert proc.returncode == 0, proc.stderr
+	by_id = {finding["finding_id"]: finding["advisory"] for finding in payload["findings"]}
+	assert by_id == {"base-line": True, "project-line": False}
+	assert payload["line_ownership"]["advisory"] == 1
+	assert payload["line_ownership"]["blocking"] == 1
+	# counts.kept still covers every surviving finding; the gate split is the poller's.
+	assert payload["counts"]["kept"] == 2
+	assert "line_ownership mode=project blocking=1 advisory=1 unknown=0" in proc.stdout
+
+
+def test_security_audit_line_ownership_blame_failure_blocks() -> None:
+	proc, payload = _run_line_ownership_audit(
+		[_line_ownership_finding("base-line", 1)],
+		extra_env={
+			"GIT_CONFIG_COUNT": "1",
+			"GIT_CONFIG_KEY_0": "blame.ignoreRevsFile",
+			"GIT_CONFIG_VALUE_0": "/nonexistent/ignore-revs",
+		},
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert [finding["advisory"] for finding in payload["findings"]] == [False]
+	assert payload["line_ownership"] == {"mode": "project", "blocking": 1, "advisory": 0, "unknown": 1}
+	assert "security-audit: line_ownership_unknown finding=base-line reason=blame_failed" in proc.stdout
+
+
+def test_security_audit_line_ownership_off_changes_nothing() -> None:
+	findings = [_line_ownership_finding("base-line", 1), _line_ownership_finding("project-line", 2)]
+	off_proc, off_payload = _run_line_ownership_audit(findings, extra_env={"SECURITY_AUDIT_LINE_OWNERSHIP": "off"})
+	on_proc, on_payload = _run_line_ownership_audit(findings)
+	assert off_proc.returncode == 0, off_proc.stderr
+	assert on_proc.returncode == 0, on_proc.stderr
+	assert "line_ownership" not in off_payload
+	assert all("advisory" not in finding for finding in off_payload["findings"])
+	assert "line_ownership" not in off_proc.stdout
+	stripped = dict(on_payload)
+	stripped.pop("line_ownership")
+	stripped["findings"] = [{k: v for k, v in finding.items() if k != "advisory"} for finding in on_payload["findings"]]
+	assert stripped == off_payload
+
+
+def test_security_audit_line_ownership_invalid_value_warns_and_uses_project() -> None:
+	proc, payload = _run_line_ownership_audit(
+		[_line_ownership_finding("base-line", 1)], extra_env={"SECURITY_AUDIT_LINE_OWNERSHIP": "bogus"}
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert "SECURITY_AUDIT_LINE_OWNERSHIP must be project or off" in proc.stdout
+	assert payload["findings"][0]["advisory"] is True
+
+
+def test_security_audit_line_ownership_skips_issues_mode() -> None:
+	script = SCRIPT_PATH.read_text(encoding="utf-8")
+	assert 'SECURITY_AUDIT_LINE_OWNERSHIP="$(printf \'%s\' "${SECURITY_AUDIT_LINE_OWNERSHIP:-project}"' in script
+	gate = script.split("SECURITY_AUDIT_LINE_OWNERSHIP_EFFECTIVE=\"off\"", 1)[1].split("fi\n", 1)[0]
+	assert '"${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json"' in gate
+	assert '-n "${SECURITY_AUDIT_DIFF_BASE}"' in gate
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())

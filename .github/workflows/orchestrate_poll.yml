@@ -818,6 +818,7 @@ jobs:
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           MAX_SECURITY_PASS_FIX_REISSUES: ${{ vars.MAX_SECURITY_PASS_FIX_REISSUES || '2' }}
           SECURITY_PASS_CONFIDENCE_GATE: ${{ vars.SECURITY_PASS_CONFIDENCE_GATE || '8' }}
+          SECURITY_AUDIT_LINE_OWNERSHIP: ${{ vars.SECURITY_AUDIT_LINE_OWNERSHIP || 'project' }}
           SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED: ${{ vars.SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED || 'true' }}
           # Claude engine (plan Phase 5c): the judges' engine, per tracking
           # issue (scripts/ai_engine.sh; CLAUDE_FIXER_ENABLED=false keeps

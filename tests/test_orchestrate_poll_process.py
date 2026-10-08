@@ -1111,6 +1111,7 @@ esac
 				"    if os.environ.get('SECURITY_AUDIT_FIX_CYCLE_DIFFS') else None\n"
 				"  ),\n"
 				"  'confidence_gate': os.environ.get('SECURITY_AUDIT_CONFIDENCE_GATE'),\n"
+				"  'line_ownership': os.environ.get('SECURITY_AUDIT_LINE_OWNERSHIP'),\n"
 				"  'model': os.environ.get('WORKFLOW_EDITOR_MODEL'),\n"
 				"  'tracking_body': json.loads(Path(os.environ['GH_MOCK_STORE']).read_text(encoding='utf-8'))['issues']['192']['body'],\n"
 				"}), encoding='utf-8')\n"
@@ -23821,6 +23822,253 @@ def test_needs_human_digest_park_never_triggers_the_staged_support_latch_release
 	park = _extract_bash_function(script, "needs_human_park_project() {")
 	assert "/approved" not in park and "ai:awaiting-approval" not in park
 
+
+# --- Line ownership (plan item 4b, decision D4) ------------------------------
+
+
+def _line_ownership_advisory_finding() -> dict:
+	return _security_pass_second_test_finding() | {"advisory": True}
+
+
+def _line_ownership_blocking_finding() -> dict:
+	return _security_pass_test_finding() | {"advisory": False}
+
+
+def test_security_pass_line_ownership_advisory_only_result_passes_and_files_followup() -> None:
+	state = _base_state()
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_line_ownership_advisory_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	capture = result["security_audit_capture"]
+	assert capture["line_ownership"] == "project"
+	assert latest_state["status"] == "complete"
+	assert latest_state["security_pass_status"] == "passed"
+	assert latest_state["security_pass_head_sha"] == capture["diff_head"]
+	assert latest_state.get("security_pass_cycle", 0) == 0
+	assert latest_state["security_pass_reported_findings"] == []
+	waived = latest_state["security_pass_waived_findings"]
+	assert [row["finding_id"] for row in waived] == ["SEC-TEST-2"]
+	assert waived[0]["source"] == "line_ownership"
+	assert waived[0]["waived_by"] == "security-pass-line-ownership"
+	created = result.get("created_issues", [])
+	# Only the advisory follow-up: no consolidated fix issue.
+	assert [issue["labels"] for issue in created] == [["ai:security"]]
+	advisory_body = result["issues"][str(created[0]["number"])]["body"]
+	assert "<!-- ai:security-finding:SEC-TEST-2 -->" in advisory_body
+	assert "<!-- security-pass-advisory:192:SEC-TEST-2 -->" in advisory_body
+	assert "Its cited line predates the project" in advisory_body
+	assert "after the consolidated fix-cycle budget was spent" not in advisory_body
+	assert waived[0]["issue"] == created[0]["number"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"SECURITY_PASS_CLEAN tracking_issue=192 head_sha={capture['diff_head']} advisory=1" in combined_log
+	assert "SECURITY_PASS_WAIVED tracking_issue=192 source=line_ownership ids=SEC-TEST-2" in combined_log
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED tracking_issue=192 finding=SEC-TEST-2 source=line_ownership" in combined_log
+	assert f"SECURITY_PASS_ADVISORY_FOLLOWUP_CREATED tracking_issue=192 finding=SEC-TEST-2 issue={created[0]['number']} source=line_ownership" in combined_log
+	advisory_comments = [
+		comment["body"]
+		for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## 🔐 Security-pass advisory findings (pre-existing code)")
+	]
+	assert len(advisory_comments) == 1
+	assert "`SEC-TEST-2`" in advisory_comments[0]
+
+
+def test_security_pass_line_ownership_mixed_result_blocks_only_on_project_findings() -> None:
+	state = _base_state()
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload(
+			[_line_ownership_blocking_finding(), _line_ownership_advisory_finding()]
+		),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	capture = result["security_audit_capture"]
+	assert latest_state["status"] == "security-pass-fixing"
+	assert latest_state["security_pass_status"] == "blocked"
+	assert [row["finding_id"] for row in latest_state["security_pass_reported_findings"]] == ["SEC-TEST-1"]
+	assert [row["finding_id"] for row in latest_state["security_pass_waived_findings"]] == ["SEC-TEST-2"]
+	fix_issues = [issue for issue in result.get("created_issues", []) if "ai:orchestrator-managed" in issue["labels"]]
+	assert len(fix_issues) == 1
+	fix_body = result["issues"][str(fix_issues[0]["number"])]["body"]
+	assert "| SEC-TEST-1 |" in fix_body
+	assert "SEC-TEST-2" not in fix_body
+	combined_log = result["stdout"] + result["stderr"]
+	assert f"SECURITY_PASS_BLOCKED tracking_issue=192 head_sha={capture['diff_head']} findings=1 cycle=0 advisory=1" in combined_log
+
+
+def test_security_pass_line_ownership_advisories_do_not_spend_cycle_budget() -> None:
+	result = _run_poller(
+		state=_security_pass_exhausted_state(),
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_line_ownership_advisory_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["security_pass_status"] == "passed"
+	assert latest_state["security_pass_cycle"] == 3
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_JUDGE_" not in combined_log
+	assert "SECURITY_PASS_FAILED" not in combined_log
+	assert "advisory=1" in combined_log
+
+
+def test_security_pass_line_ownership_rereported_advisory_is_not_refiled() -> None:
+	state = _base_state()
+	state["integration_branch"] = "orchestrator/project-192"
+	finding = _security_pass_second_test_finding()
+	state["security_pass_waived_findings"] = [
+		{
+			"finding_id": "SEC-TEST-2",
+			"file": finding["file"],
+			"line": finding["line"],
+			"owasp_or_stride_category": finding["owasp_or_stride_category"],
+			"severity": finding["severity"],
+			"exploit_scenario": finding["exploit_scenario"],
+			"justification": "Cited line predates the project.",
+			"source": "line_ownership",
+			"waived_by": "security-pass-line-ownership",
+			"waived_at_cycle": 1,
+			"issue": 850,
+		}
+	]
+	state["security_pass_followup_issues"] = [{"finding_id": "SEC-TEST-2", "issue": 850}]
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_line_ownership_advisory_finding()]),
+		issue_labels={10: ["ai:merged"], 850: ["ai:security", "ai:planning"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	latest_state = result["latest_state"]
+	assert latest_state["security_pass_status"] == "passed"
+	assert result.get("created_issues", []) == []
+	assert not any(
+		comment["body"].startswith("## 🔐 Security-pass advisory findings (pre-existing code)")
+		for comment in result["issues"]["192"]["comments"]
+	)
+	assert "advisory=0" in result["stdout"] + result["stderr"]
+
+
+def test_security_pass_line_ownership_non_boolean_advisory_fails_closed() -> None:
+	state = _base_state()
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding() | {"advisory": "yes"}]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+	)
+
+	assert result["latest_state"]["security_pass_status"] != "passed"
+	assert "SECURITY_PASS_FAILED reason=engine_unavailable" in result["stdout"] + result["stderr"]
+
+
+def test_security_pass_line_ownership_off_is_forwarded_and_keeps_findings_blocking() -> None:
+	state = _base_state()
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]},
+		existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"SECURITY_AUDIT_LINE_OWNERSHIP": "off"},
+	)
+
+	assert result["security_audit_capture"]["line_ownership"] == "off"
+	latest_state = result["latest_state"]
+	assert latest_state["security_pass_status"] == "blocked"
+	assert "security_pass_waived_findings" not in latest_state or latest_state["security_pass_waived_findings"] == []
+	assert "findings=1 cycle=0 advisory=0" in result["stdout"] + result["stderr"]
+
+
+
+def test_security_pass_waiver_cap_keeps_every_followup_pending_row() -> None:
+	"""The 100-row waiver cap drops only the oldest settled rows: a row still
+	awaiting its advisory follow-up (``followup_pending``) is never dropped,
+	in either ``security_pass_record_waivers`` or
+	``ensure_security_pass_state_fields``, and row order is preserved.  A
+	plain ``.[-100:]`` slice would drop pending line-ownership advisories that
+	the deferred filer then never sees."""
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	recorder = _extract_bash_function(script, "security_pass_record_waivers() {")
+	normalizer = _extract_bash_function(script, "ensure_security_pass_state_fields() {")
+	existing: list[dict] = []
+	for index in range(110):
+		existing.append({"finding_id": f"SETTLED-{index:03d}", "issue": 1000 + index})
+		if index in (0, 1, 50, 108):
+			existing.append({"finding_id": f"OLD-PENDING-{index:03d}", "issue": None, "followup_pending": True, "finding": {"finding_id": f"OLD-PENDING-{index:03d}"}})
+	new_waivers = [
+		{"finding_id": f"NEW-PENDING-{index}", "issue": None, "followup_pending": True, "finding": {"finding_id": f"NEW-PENDING-{index}"}}
+		for index in range(3)
+	]
+	with tempfile.TemporaryDirectory() as tmp:
+		state_file = Path(tmp) / "state.json"
+		state_file.write_text(json.dumps({"security_pass_waived_findings": existing}), encoding="utf-8")
+		waivers_file = Path(tmp) / "waivers.json"
+		waivers_file.write_text(json.dumps(new_waivers), encoding="utf-8")
+		snapshot_file = Path(tmp) / "after_record.json"
+		harness = Path(tmp) / "harness.sh"
+		harness.write_text(
+			"set -euo pipefail\n"
+			f"STATE_FILE={str(state_file)!r}\n"
+			+ recorder + "\n" + normalizer + "\n"
+			+ f'security_pass_record_waivers "$(cat {str(waivers_file)!r})"\n'
+			+ f'cp "$STATE_FILE" {str(snapshot_file)!r}\n'
+			+ "ensure_security_pass_state_fields\n",
+			encoding="utf-8",
+		)
+		result = subprocess.run(["bash", str(harness)], capture_output=True, text=True, check=False)
+		assert result.returncode == 0, result.stderr
+		after_record = json.loads(snapshot_file.read_text(encoding="utf-8"))["security_pass_waived_findings"]
+		after_normalize = json.loads(state_file.read_text(encoding="utf-8"))["security_pass_waived_findings"]
+
+	pending_ids = [row["finding_id"] for row in existing if row.get("followup_pending")] + [
+		row["finding_id"] for row in new_waivers
+	]
+	settled_kept = [f"SETTLED-{index:03d}" for index in range(10, 110)]
+	expected_ids = [
+		row["finding_id"]
+		for row in existing + new_waivers
+		if row.get("followup_pending") or row["finding_id"] in settled_kept
+	]
+	ids = [row["finding_id"] for row in after_record]
+	assert ids == expected_ids
+	assert [rid for rid in ids if rid in pending_ids] == pending_ids
+	assert sum(1 for row in after_record if not row.get("followup_pending")) == 100
+	# Normalization on the next tick keeps the same rows: no pending row lost.
+	assert after_normalize == after_record
 
 if __name__ == "__main__":
 	raise SystemExit(main())

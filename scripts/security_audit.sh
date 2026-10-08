@@ -418,6 +418,22 @@ if ! [[ "${SECURITY_AUDIT_FIX_DIFF_MAX_BYTES}" =~ ^[0-9]+$ ]]; then
 	echo "::warning::security-audit: SECURITY_AUDIT_FIX_DIFF_MAX_BYTES must be a non-negative integer; defaulting to 96000"
 	SECURITY_AUDIT_FIX_DIFF_MAX_BYTES="96000"
 fi
+# Line ownership (plan item 4b, decision D4; findings-json mode with an
+# explicit SECURITY_AUDIT_DIFF_BASE..SECURITY_AUDIT_DIFF_HEAD range only).
+# `project` (default) runs `git blame` over each finding's cited line at the
+# head and tags the finding `"advisory": true` when that line was not written
+# by a commit in base..head (it predates the project), `"advisory": false`
+# otherwise.  Any blame failure tags the finding blocking.  `off` restores the
+# previous payload exactly (no `advisory` field, no `line_ownership` key).
+SECURITY_AUDIT_LINE_OWNERSHIP="$(printf '%s' "${SECURITY_AUDIT_LINE_OWNERSHIP:-project}" | tr '[:upper:]' '[:lower:]')"
+case "${SECURITY_AUDIT_LINE_OWNERSHIP}" in
+	project|off)
+		;;
+	*)
+		echo "::warning::security-audit: SECURITY_AUDIT_LINE_OWNERSHIP must be project or off; defaulting to project"
+		SECURITY_AUDIT_LINE_OWNERSHIP="project"
+		;;
+esac
 SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES="${SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES:-16777216}"
 if ! [[ "${SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES}" =~ ^[0-9]+$ ]] || [ "${SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES}" -eq 0 ]; then
 	echo "::warning::security-audit: SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES must be a positive integer; defaulting to 16777216"
@@ -587,6 +603,8 @@ OVERSIZED_EXPORT_DIR="${SECURITY_AUDIT_RUNTIME_DIR}/oversized-chunks"
 OVERSIZED_SCOPE_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/oversized-scope.txt"
 OVERSIZED_PROMPT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/oversized-prompt.txt"
 OVERSIZED_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/oversized-error.txt"
+LINE_OWNERSHIP_SUMMARY_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/line-ownership-summary.json"
+LINE_OWNERSHIP_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/line-ownership-error.txt"
 
 if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 	if [ -z "${SECURITY_AUDIT_FINDINGS_OUT}" ]; then
@@ -1867,12 +1885,167 @@ summary_path.write_text(
 )
 PY
 
+# --- Line ownership (plan item 4b, decision D4) -----------------------------
+# Effective only for findings-json audits of an explicit range; otherwise the
+# mode is `off` and the payload is unchanged.  Blame always runs against the
+# explicit range base (the integration merge-base), never
+# SECURITY_AUDIT_DIFF_SINCE, so project code from earlier fix cycles stays
+# project-written.  Each finding cites exactly one line, so "every cited line"
+# (D4) and "any cited line" (issue wording) are the same test here.
+SECURITY_AUDIT_LINE_OWNERSHIP_EFFECTIVE="off"
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ] \
+		&& [ -n "${SECURITY_AUDIT_DIFF_BASE}" ] \
+		&& [ "${SECURITY_AUDIT_LINE_OWNERSHIP}" = "project" ]; then
+	SECURITY_AUDIT_LINE_OWNERSHIP_EFFECTIVE="project"
+fi
+if [ "${SECURITY_AUDIT_LINE_OWNERSHIP_EFFECTIVE}" = "project" ]; then
+	if LINE_OWNERSHIP_LOG="$(PYTHONDONTWRITEBYTECODE=1 python3 - \
+		"${REPO_ROOT}" \
+		"${FILTERED_FINDINGS_FILE}" \
+		"${LINE_OWNERSHIP_SUMMARY_FILE}" \
+		"${AUDIT_SCOPE_BASE_SHA}" \
+		"${AUDIT_SCOPE_HEAD_SHA}" 2> "${LINE_OWNERSHIP_ERROR_FILE}" <<'PY'
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+repo_root = Path(sys.argv[1])
+findings_path = Path(sys.argv[2])
+summary_path = Path(sys.argv[3])
+base_sha = sys.argv[4].strip()
+head_sha = sys.argv[5].strip()
+
+# Per-call bound on `git blame` (and the one-off rev-list); a timeout marks
+# the finding's ownership unknown, which keeps it blocking.
+LINE_OWNERSHIP_BLAME_TIMEOUT_SECS = 30
+LINE_OWNERSHIP_REVLIST_TIMEOUT_SECS = 120
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+def git(args: list[str], timeout: int) -> subprocess.CompletedProcess:
+	# List-form argv: finding data never reaches a shell.  core.fsmonitor is
+	# cleared so no repository-configured hook runs.
+	return subprocess.run(
+		["git", "-c", "core.fsmonitor=", *args],
+		cwd=repo_root,
+		capture_output=True,
+		text=True,
+		encoding="utf-8",
+		errors="replace",
+		timeout=timeout,
+		check=False,
+	)
+
+
+def safe_id(value: object) -> str:
+	return re.sub(r"[^A-Za-z0-9._:-]", "_", str(value or "?"))[:120] or "?"
+
+
+findings = json.loads(findings_path.read_text(encoding="utf-8"))
+if not isinstance(findings, list):
+	raise SystemExit("filtered findings must be a JSON array")
+
+global_reason = ""
+project_commits: set[str] = set()
+if not SHA_RE.match(base_sha) or not SHA_RE.match(head_sha):
+	global_reason = "range_unresolved"
+else:
+	try:
+		shallow = git(["rev-parse", "--is-shallow-repository"], LINE_OWNERSHIP_BLAME_TIMEOUT_SECS)
+		if shallow.returncode != 0 or shallow.stdout.strip() == "true":
+			global_reason = "shallow_history"
+		elif git(["merge-base", "--is-ancestor", base_sha, head_sha], LINE_OWNERSHIP_BLAME_TIMEOUT_SECS).returncode != 0:
+			global_reason = "base_not_ancestor"
+		else:
+			revlist = git(["rev-list", "--end-of-options", f"{base_sha}..{head_sha}"], LINE_OWNERSHIP_REVLIST_TIMEOUT_SECS)
+			if revlist.returncode != 0:
+				global_reason = "rev_list_failed"
+			else:
+				project_commits = {line.strip() for line in revlist.stdout.splitlines() if SHA_RE.match(line.strip())}
+	except subprocess.TimeoutExpired:
+		global_reason = "timeout"
+
+blocking = advisory = unknown = 0
+log_lines: list[str] = []
+annotated: list[object] = []
+for finding in findings:
+	if not isinstance(finding, dict):
+		annotated.append(finding)
+		continue
+	reason = global_reason
+	is_advisory = False
+	if not reason:
+		file_value = finding.get("file")
+		line_value = finding.get("line")
+		if (not isinstance(file_value, str) or not file_value
+			or isinstance(line_value, bool) or not isinstance(line_value, int) or line_value < 1):
+			reason = "missing_line"
+		else:
+			try:
+				blame = git(
+					["blame", "--porcelain", "--no-textconv", "-L", f"{line_value},{line_value}", head_sha, "--", file_value],
+					LINE_OWNERSHIP_BLAME_TIMEOUT_SECS,
+				)
+			except subprocess.TimeoutExpired:
+				reason = "timeout"
+			else:
+				if blame.returncode != 0:
+					reason = "missing_line" if "no such path" in blame.stderr or "has only" in blame.stderr else "blame_failed"
+				else:
+					first_line = blame.stdout.splitlines()[0] if blame.stdout else ""
+					commit = first_line.split(" ", 1)[0] if first_line else ""
+					if not SHA_RE.match(commit):
+						reason = "parse_failed"
+					else:
+						is_advisory = commit not in project_commits
+	finding = dict(finding)
+	finding["advisory"] = is_advisory
+	annotated.append(finding)
+	if reason:
+		unknown += 1
+		log_lines.append(f"security-audit: line_ownership_unknown finding={safe_id(finding.get('finding_id'))} reason={reason}")
+	if is_advisory:
+		advisory += 1
+	else:
+		blocking += 1
+
+with tempfile.NamedTemporaryFile(
+	mode="w", encoding="utf-8", dir=findings_path.parent, prefix=".line-ownership.", suffix=".tmp", delete=False
+) as temporary_file:
+	json.dump(annotated, temporary_file, ensure_ascii=True, indent=2, sort_keys=True)
+	temporary_file.write("\n")
+	temporary_name = temporary_file.name
+summary_path.write_text(
+	json.dumps({"mode": "project", "blocking": blocking, "advisory": advisory, "unknown": unknown}, sort_keys=True) + "\n",
+	encoding="utf-8",
+)
+os.replace(temporary_name, findings_path)
+log_lines.append(f"security-audit: line_ownership mode=project blocking={blocking} advisory={advisory} unknown={unknown}")
+print("\n".join(log_lines))
+PY
+	)"; then
+		printf '%s\n' "${LINE_OWNERSHIP_LOG}"
+	else
+		# Fail safe: the findings file is replaced only after a full pass, so
+		# it is untouched here and every finding stays blocking at the poller.
+		rm -f "${LINE_OWNERSHIP_SUMMARY_FILE}"
+		echo "::warning::security-audit: line_ownership annotation failed; all findings stay blocking"
+	fi
+fi
+
 if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
 	if python3 - \
 		"${FILTERED_FINDINGS_FILE}" \
 		"${FILTER_SUMMARY_FILE}" \
 		"${SECURITY_AUDIT_FINDINGS_OUT}" \
-		"${OVERSIZED_EXPORT_DIR}/manifest.json" 2> "${FINDINGS_PACKAGE_ERROR_FILE}" <<'PY'
+		"${OVERSIZED_EXPORT_DIR}/manifest.json" \
+		"${LINE_OWNERSHIP_SUMMARY_FILE}" 2> "${FINDINGS_PACKAGE_ERROR_FILE}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -1885,6 +2058,7 @@ findings_path = Path(sys.argv[1])
 summary_path = Path(sys.argv[2])
 output_path = Path(sys.argv[3])
 oversized_manifest_path = Path(sys.argv[4])
+line_ownership_summary_path = Path(sys.argv[5]) if len(sys.argv) > 5 else None
 count_keys = (
 	"kept",
 	"suppressed_excluded",
@@ -1929,6 +2103,14 @@ payload["coverage"] = {
 	"unscoped_oversized_skipped_count": oversized_manifest["unscoped_oversized_count"],
 	"unscoped_text_capped_count": oversized_manifest.get("unscoped_text_capped_count", oversized_manifest["unscoped_oversized_count"]),
 }
+# Additive (plan item 4b): present only when line ownership annotated the
+# findings; SECURITY_AUDIT_LINE_OWNERSHIP=off leaves the payload unchanged.
+if line_ownership_summary_path is not None and line_ownership_summary_path.is_file():
+	line_ownership = load_json(line_ownership_summary_path, label="line ownership summary")
+	if isinstance(line_ownership, dict):
+		payload["line_ownership"] = {
+			key: line_ownership.get(key) for key in ("mode", "blocking", "advisory", "unknown")
+		}
 
 temporary_path: Path | None = None
 try:
