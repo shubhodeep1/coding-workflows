@@ -719,6 +719,7 @@ def _run_poller(
 	pr_api_sequence: dict[int, list[dict]] | None = None,
 	existing_branches: list[str] | None = None,
 	merge_conflict_on_sync: bool = False,
+	mock_local_integration_content_conflict: bool = False,
 	blocked_check_shas: list[str] | None = None,
 	validation_workflow_runs: list[dict] | None = None,
 	issue_closed: dict[int, bool] | None = None,
@@ -759,6 +760,7 @@ def _run_poller(
 	branch_rebuild_threshold_hours: str = "24",
 	branch_rebuild_cooldown_hours: str = "48",
 	codex_touch_file: str | None = None,
+	mock_rb_judge_prompt_cap: int | None = None,
 	mock_orch_state_v2_pack_mode: str | None = None,
 	mock_git_push_success: bool = False,
 	mock_git_checkout_fail: bool = False,
@@ -879,6 +881,51 @@ def _run_poller(
 			_make_poller_sandbox(sandbox, sandbox_origin_url)
 		else:
 			_make_poller_sandbox(sandbox)
+		if mock_local_integration_content_conflict:
+			# The GitHub-side 409 alone does not make the local git merge conflict.
+			# Both branches must add different content at an admitted source path.
+			conflict_fixture_path = sandbox / "scripts" / "integration_conflict_fixture.txt"
+			for branch_name, branch_content in (("orchestrator/project-192", "integration"), ("main", "default")):
+				subprocess.run(["git", "-C", str(sandbox), "checkout", "-q", branch_name], check=True, env=_git_test_env())
+				conflict_fixture_path.write_text(branch_content + "\n", encoding="utf-8")
+				subprocess.run(["git", "-C", str(sandbox), "add", "scripts/integration_conflict_fixture.txt"], check=True, env=_git_test_env())
+				subprocess.run(["git", "-C", str(sandbox), "commit", "-qm", branch_name + " conflict"], check=True, env=_git_test_env())
+		if mock_rb_judge_prompt_cap is not None:
+			# Exercise the same skip branch without passing a >1 MiB issue
+			# body through the fixture's executable gh/jq wrappers (ARG_MAX).
+			poller_copy = sandbox / "scripts/orchestrate_poll_process.sh"
+			guard = 'if [ "${RB_JUDGE_PROMPT_CHARS}" -gt 1048576 ]; then'
+			poller_text = poller_copy.read_text(encoding="utf-8")
+			assert poller_text.count(guard) == 1
+			poller_copy.write_text(poller_text.replace(guard, f'if [ "${{RB_JUDGE_PROMPT_CHARS}}" -gt {mock_rb_judge_prompt_cap} ]; then'), encoding="utf-8")
+		# The poller's RB_JUDGE no longer invokes the host codex mock. Give
+		# review-blocked scenarios a credential-free sandbox stand-in that
+		# preserves the old verdict/combined-fix fixture semantics.
+		rb_support = sandbox / ".codex-workflow-src" / "scripts"
+		rb_support.mkdir(parents=True, exist_ok=True)
+		_write_exec(rb_support / "review_untrusted_sandbox.sh", '''#!/usr/bin/env bash
+# Poller judges (WAVE/STALL/INTEGRATION/SECURITY) are read-only sandbox roles; never transfer.
+# if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then
+case "$1" in
+  prepare-ephemeral) [ "${MOCK_JUDGE_SANDBOX_PREPARE_FAIL:-false}" != true ] || exit 1; printf '%s\\n' "$RUNTIME_DIR" ;;
+  cleanup) exit 0 ;;
+  run)
+    rc=0; claude_access="${9:-write}"
+    # Arg 9 (read) applies to both engines; read-only roles never transfer edits back.
+    if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then :; fi
+    case "${8:-}" in WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE) [ "$claude_access" = read ] || exit 2 ;; esac
+    printf '%s\\n' "$MOCK_CODEX_JSON" > "$3"
+    if [ "${9:-write}" = write ] && [ -n "${MOCK_CODEX_TOUCH_FILE:-}" ]; then
+      while IFS= read -r mock_touch_path; do
+        [ -n "${mock_touch_path}" ] || continue
+        mkdir -p -- "$(dirname -- "${mock_touch_path}")"
+        printf 'mock change\\n' >> "${mock_touch_path}"
+      done <<< "${MOCK_CODEX_TOUCH_FILE}"
+    fi ;;
+  *) exit 2 ;;
+esac
+''')
+		_write_exec(rb_support / "write_opencode_config.sh", '#!/usr/bin/env bash\nexit 0\n')
 		sandbox_sha_aliases = {
 			"@sandbox_head": subprocess.run(
 				["git", "-C", str(sandbox), "rev-parse", "HEAD"],
@@ -1538,6 +1585,9 @@ if args[0] == 'run' and len(args) >= 2 and args[1] == 'list':
 			event = args[i + 1]
 		if arg == '--jq' and i + 1 < len(args):
 			jq_query = args[i + 1]
+	if event == 'workflow_dispatch' and store.get('pr_named_listing_fail'):
+		print('dispatch run listing unavailable', file=sys.stderr)
+		sys.exit(1)
 	runs = []
 	for run in store.get('active_autofix_runs', []):
 		if workflow and run.get('workflow') != workflow:
@@ -1552,6 +1602,9 @@ if args[0] == 'run' and len(args) >= 2 and args[1] == 'list':
 		entry = {
 			'status': run.get('status', 'queued'),
 			'conclusion': run.get('conclusion', ''),
+			'createdAt': run.get('createdAt', '2999-01-01T00:00:00Z'),
+			'startedAt': run.get('startedAt', '2999-01-01T00:00:00Z'),
+			'databaseId': run.get('databaseId', 99),
 		}
 		for key in ('event', 'displayTitle', 'createdAt', 'startedAt', 'databaseId'):
 			if key in run:
@@ -1832,7 +1885,10 @@ if args[0] == 'api':
 	store.setdefault('api_calls', []).append(path)
 	if path == 'user':
 		save()
-		print(os.environ.get('MOCK_GH_USER_LOGIN', 'github-actions[bot]') if jq else json.dumps({'login': os.environ.get('MOCK_GH_USER_LOGIN', 'github-actions[bot]')}))
+		if store.get('fail_user_lookup'):
+			sys.exit(1)
+		login = store.get('authenticated_login', os.environ.get('MOCK_GH_USER_LOGIN', 'github-actions[bot]'))
+		print(login if jq else json.dumps({'login': login}))
 		sys.exit(0)
 
 	if path == 'graphql':
@@ -1886,7 +1942,11 @@ if args[0] == 'api':
 			if re.search(r'(?m)^\s*body\s*$', query):
 				issue_payload['body'] = issue.get('body', '')
 			if 'labels(first:' in query:
-				issue_payload['labels'] = {'nodes': [{'name': label} for label in labels]}
+				label_limit = int(re.search(r'labels\(first:\s*(\d+)\)', query).group(1))
+				issue_payload['labels'] = {
+					'nodes': [{'name': label} for label in labels[:label_limit]],
+					'pageInfo': {'hasNextPage': len(labels) > label_limit},
+				}
 			if 'comments(last:' in query and issue_num not in set(store.get('graphql_comments_unavailable_for', [])):
 				comment_nodes = []
 				for comment in issue.get('comments', [])[-100:]:
@@ -3443,6 +3503,7 @@ sys.exit(proc.returncode)
 				"GH_TOKEN": "test-token",
 				"OPENROUTER_API_KEY": "test-openrouter",
 				"GITHUB_REPOSITORY": "owner/repo",
+				"GITHUB_WORKSPACE": str(sandbox),
 				"MODEL_EDITOR": "openai/gpt-5.4",
 				"MODEL_REASONING_EFFORT_JUDGE": "xhigh",
 				"TG_BOT_SECRET": "",
@@ -4881,6 +4942,41 @@ def test_security_pass_failed_project_auto_reset_kill_switch_and_unresolved_engi
 	assert unresolved["security_audit_capture"] is None
 
 
+def test_engine_sha_requires_own_support_checkout() -> None:
+	"""A plain support directory must not inherit the consumer's Git HEAD."""
+	resolver = _extract_bash_function(POLLER_SCRIPT.read_text(encoding="utf-8"), "resolve_orchestrator_engine_sha() {")
+	with tempfile.TemporaryDirectory(prefix="poller-engine-sha-") as tmp:
+		parent = Path(tmp)
+		support_checkout = parent / ".codex-workflow-src"
+		git_env = _git_test_env()
+		for key in ("BASH_ENV", "ENV", "WORKSPACE_PATH"):
+			git_env.pop(key, None)
+		git_env["ORCHESTRATE_ENGINE_SHA"] = ""
+		def commit_empty(checkout: Path) -> str:
+			subprocess.run(["git", "-C", str(checkout), "init", "-q"], env=git_env, check=True)
+			subprocess.run([
+				"git", "-C", str(checkout), "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+				"commit", "--allow-empty", "-qm", f"initial {checkout.name}",
+			], env=git_env, check=True)
+			return subprocess.check_output(["git", "-C", str(checkout), "rev-parse", "HEAD"], env=git_env, text=True).strip()
+
+		parent_sha = commit_empty(parent)
+		def resolve() -> str:
+			result = subprocess.run([
+				"bash", "-c", 'ORCHESTRATOR_ENGINE_SHA=""\n' + resolver + "\nresolve_orchestrator_engine_sha",
+			], cwd=parent, env=git_env, capture_output=True, text=True, check=True)
+			return result.stdout.strip()
+
+		support_checkout.symlink_to(parent, target_is_directory=True)
+		assert resolve() == "ORCHESTRATOR_ENGINE_SHA sha=unknown source=unresolved"
+		support_checkout.unlink()
+		support_checkout.mkdir()
+		assert resolve() == "ORCHESTRATOR_ENGINE_SHA sha=unknown source=unresolved"
+		support_sha = commit_empty(support_checkout)
+		assert support_sha != parent_sha
+		assert resolve() == f"ORCHESTRATOR_ENGINE_SHA sha={support_sha} source=support_checkout"
+
+
 def test_manual_re_security_pass_takes_precedence_over_engine_auto_reset() -> None:
 	state = _security_pass_failed_state_for_auto_reset("a" * 40)
 	result = _run_failed_project_tick(
@@ -6163,24 +6259,26 @@ def test_security_pass_exhaustion_judge_keep_fixing_creates_consolidated_fix_iss
 
 
 def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_fail() -> None:
-	"""Past MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS (default 2), keep_fixing becomes fail.
+	"""Past MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS (default 2), medium/low keep_fixing becomes fail.
 
 	Regression for #3965: the judge was consulted twice on a 5-cycle budget
 	and granted "one more" consolidated cycle both times (cycles 6 and 7),
 	and nothing bounded the sequence.  The cap still stops that loop, but
-	per #6539 it must never accept a finding: round 3 converts every
+	per #6539 it must never accept a finding: round 3 converts a medium
 	keep_fixing decision to `fail`, the project terminalizes as
 	ai:security-pass-failed, and no waiver row or advisory is recorded,
 	not even for the finding the judge accepted in the same verdict.
+	High/critical/unrated keep_fixing is covered by
+	test_security_pass_cap_never_waives_a_high_finding.
 	"""
+	medium_finding = _security_pass_test_finding()
+	medium_finding["severity"] = "medium"
 	result = _run_poller(
 		state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
 		enable_validation="false",
 		max_validate_cycles="3",
 		enable_security_pass="true",
-		security_audit_payload=_security_audit_findings_payload(
-			[_security_pass_test_finding(), _security_pass_second_test_finding()]
-		),
+		security_audit_payload=_security_audit_findings_payload([medium_finding, _security_pass_second_test_finding()]),
 		capture_telegram_calls=True,
 		issue_labels={10: ["ai:merged"]},
 		existing_branches=["main", "orchestrator/project-192"],
@@ -6217,7 +6315,7 @@ def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_fail() -> No
 		"1 of them were `keep_fixing` decisions converted to `fail` because the keep_fixing round budget (`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=2`) is spent; no finding is accepted by the cap."
 		in judge_comments[0]
 	)
-	assert "| SEC-TEST-1 | high | scripts/example.py:1 | fail | [keep_fixing capped after 2 judge round(s); converted to fail" in judge_comments[0]
+	assert "| SEC-TEST-1 | medium | scripts/example.py:1 | fail | [keep_fixing capped after 2 judge round(s); converted to fail" in judge_comments[0]
 	assert any(body.startswith("## ❌ Project security pass exhausted") for body in comment_bodies)
 	assert any(
 		notification["issue"] == "192" and notification["level"] == "CRITICAL" and "security pass FAILED" in notification["message"]
@@ -6225,34 +6323,68 @@ def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_fail() -> No
 	)
 
 
-def test_security_pass_exhaustion_judge_keep_fixing_cap_high_finding_never_passes() -> None:
-	"""A capped keep_fixing on a single high-severity finding never records the pass (#6539)."""
+def test_security_pass_cap_never_waives_a_high_finding() -> None:
+	# The CI shard runner calls test functions directly, without pytest parametrization.
+	for severity in ("high", "critical"):
+		blocking_finding = _security_pass_test_finding()
+		blocking_finding["severity"] = severity
+		result = _run_poller(
+			state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
+			enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+			security_audit_payload=_security_audit_findings_payload([blocking_finding]),
+			issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+			env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing")))},
+		)
+		assert result["latest_state"]["status"] == "failed"
+		assert result["latest_state"]["security_pass_waived_findings"] == []
+		assert result.get("created_issues", []) == []
+		assert "ai:security-pass-failed" in result["tracking_labels"]
+		assert "reason=blocking_findings_after_cap" in result["stdout"] + result["stderr"]
+		assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED" not in result["stdout"] + result["stderr"]
+		judge_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]
+			if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 3)")]
+		assert len(judge_comments) == 1
+		assert "MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=2" in judge_comments[0]
+		assert "| SEC-TEST-1 |" in judge_comments[0]
+
+
+def test_security_pass_unrated_audit_output_fails_closed_before_judge() -> None:
+	blocking_finding = _security_pass_test_finding()
+	blocking_finding["severity"] = "unknown"
 	result = _run_poller(
 		state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
-		enable_validation="false",
-		max_validate_cycles="3",
-		enable_security_pass="true",
-		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
-		issue_labels={10: ["ai:merged"]},
-		existing_branches=["main", "orchestrator/project-192"],
-		env_overrides={
-			"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing"))),
-		},
+		enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([blocking_finding]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing")))},
 	)
-
-	latest_state = result["latest_state"]
-	assert latest_state["status"] == "failed"
-	assert latest_state["security_pass_status"] == "failed"
-	assert latest_state["security_pass_status"] != "passed"
-	assert latest_state["security_pass_waived_findings"] == []
-	assert not latest_state.get("security_pass_followup_issues")
+	assert result["latest_state"]["security_pass_status"] == "failed"
+	assert result["latest_state"]["security_pass_waived_findings"] == []
 	assert result.get("created_issues", []) == []
-	assert result["tracking_labels"] == ["ai:security-pass-failed"]
-	combined_log = result["stdout"] + result["stderr"]
-	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=192 round=3 cap=2 converted=1" in combined_log
-	assert "accepted=0 keep_fixing=0 failed=1" in combined_log
-	assert "SECURITY_PASS_CLEAN" not in combined_log
-	assert "SECURITY_PASS_ADVISORY_FOLLOWUP" not in combined_log
+	assert "SECURITY_PASS_FAILED reason=engine_unavailable" in result["stdout"] + result["stderr"]
+	assert not any(comment["body"].startswith("## ⚖️ Security-pass exhaustion judge")
+		for comment in result["issues"]["192"]["comments"])
+
+
+def test_security_pass_cap_does_not_record_advisories_before_terminal_failure() -> None:
+	result = _run_poller(
+		state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
+		enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding(), _security_pass_second_test_finding()]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(
+			_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing"), ("SEC-TEST-2", "accept_with_followup"))
+		)},
+	)
+	assert result["latest_state"]["status"] == "failed"
+	assert result["latest_state"]["security_pass_waived_findings"] == []
+	assert result.get("created_issues", []) == []
+	judge_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 3)")]
+	assert len(judge_comments) == 1
+	assert "without recording any new waivers or follow-ups" in judge_comments[0]
+	assert "| SEC-TEST-1 | high |" in judge_comments[0]
+	assert "| SEC-TEST-2 | medium |" in judge_comments[0]
 
 
 def test_security_pass_exhaustion_judge_keep_fixing_allowed_within_cap() -> None:
@@ -6659,6 +6791,8 @@ def test_security_pass_waived_findings_reach_engine_and_suppress_re_reports() ->
 				"file": "scripts/example.py",
 				"line": 30,
 				"owasp_or_stride_category": "a04:2021-insecure design / stride: denial of service",
+				"severity": "medium",
+				"exploit_scenario": _security_pass_second_test_finding()["exploit_scenario"],
 				"source": "operator",
 			},
 		],
@@ -6694,6 +6828,22 @@ def test_security_pass_waived_findings_reach_engine_and_suppress_re_reports() ->
 	assert "| SURVIVOR |" in fix_body
 	assert "| SEC-TEST-1 |" not in fix_body
 	assert "| NEW-DOS-ID |" not in fix_body
+
+
+def test_security_pass_waiver_does_not_suppress_a_nearby_new_exploit() -> None:
+	state = _security_pass_exhausted_state(security_pass_cycle=0, security_pass_waived_findings=[{
+		"finding_id": "OLD-DOS", "file": "scripts/example.py", "line": 1,
+		"owasp_or_stride_category": "A04:2021-Insecure Design / STRIDE: Denial of Service",
+		"severity": "medium", "exploit_scenario": "An authenticated caller can grow a bounded ledger.",
+	}])
+	nearby = _security_pass_second_test_finding()
+	nearby["finding_id"] = "NEW-DOS"
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([nearby]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+	)
+	assert [row["finding_id"] for row in result["latest_state"]["security_pass_reported_findings"]] == ["NEW-DOS"]
 
 
 def _security_pass_waive_failed_state() -> dict:
@@ -9589,7 +9739,8 @@ def test_review_blocked_judge_skips_codex_when_prompt_exceeds_character_cap():
 		enable_validation="false",
 		max_validate_cycles="3",
 		issue_labels={10: ["ai:review-blocked"]},
-		issue_bodies={10: "oversized-review-blocked-body-" + ("x" * 1_048_576)},
+		issue_bodies={10: "oversized-review-blocked-body-" + ("x" * 1000)},
+		mock_rb_judge_prompt_cap=1000,
 		issue_linked_prs={10: 77},
 		prs=[{
 			"number": 77,
@@ -10119,19 +10270,24 @@ def test_review_blocked_fix_scope_rejects_mixed_workflow_edit_opt_out():
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
 
 
-def test_review_blocked_fix_scope_accepts_template_pr_file_by_default():
+def test_review_blocked_fix_scope_rejects_template_pr_file_by_default():
+	# Refs #6478: protected paths are rejected even when listed in the PR.
 	result = _review_blocked_fix_scope_case(
 		touch="workflow-templates/ai-review.yml", files=["workflow-templates/ai-review.yml"],
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
-	assert any("HEAD:ai/issue-10" in call for call in result.get("git_push_calls", []))
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=workflow-templates/ai-review.yml" in result["stdout"]
+	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED" not in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
 
 
 def test_review_blocked_fix_scope_rejects_template_outside_pr():
 	result = _review_blocked_fix_scope_case(
 		touch="workflow-templates/ai-review.yml", files=["sandbox_fix.txt"],
 	)
-	assert "reason=protected_not_in_pr rejected=1 paths=workflow-templates/ai-review.yml" in result["stdout"]
+	assert "reason=protected_path_forbidden rejected=1 paths=workflow-templates/ai-review.yml" in result["stdout"]
 	assert result.get("git_push_calls", []) == []
 
 
@@ -10140,7 +10296,37 @@ def test_review_blocked_fix_scope_uses_shared_protected_predicate():
 	predicate = text.split("      _rb_fix_scope_is_protected() {", 1)[1].split("      rb_fix_scope_check() {", 1)[0]
 	check = text.split("      rb_fix_scope_check() {", 1)[1].split("      # Build the judge prompt", 1)[0]
 	assert "|workflow-templates/*) return 0 ;;" in predicate
-	assert 'if [ "${ALLOW_WORKFLOW_EDITS:-true}" != "true" ] && _rb_fix_scope_is_protected "${path}"; then' in check
+	# Refs #6478: the protected-path rejection no longer depends on ALLOW_WORKFLOW_EDITS.
+	assert '              if _rb_fix_scope_is_protected "${path}"; then' in check
+	assert '"${ALLOW_WORKFLOW_EDITS:-true}" != "true" ] && _rb_fix_scope_is_protected' not in check
+	assert "RB_FIX_SCOPE_REASON=workflow_edits_disabled" in check
+	assert "RB_FIX_SCOPE_REASON=protected_path_forbidden" in check
+	# The rejection happens before the paginated PR-files listing call.
+	assert check.index("RB_FIX_SCOPE_REASON=protected_path_forbidden") < check.index("pulls/${pr}/files")
+
+
+def test_review_blocked_fix_scope_rejects_protected_pr_file_with_default_env():
+	result = _review_blocked_fix_scope_case(
+		touch=".github/workflows/ci.yml", files=[".github/workflows/ci.yml"],
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=.github/workflows/ci.yml" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert not any("pulls/901/files" in path for path in result.get("api_calls", []))
+
+
+def test_review_blocked_judge_prompt_flags_protected_path_fixes_unavailable():
+	text = POLLER_SCRIPT.read_text(encoding="utf-8")
+	block = text.split('echo "=== ORCHESTRATOR CONTEXT ==="', 1)[1].split('} > "${RB_JUDGE_PROMPT_FILE}"', 1)[0]
+	assert 'echo "Protected-path fixes: unavailable (the orchestrator rejects any fix that stages a path under .github/, scripts/, prompts/, .claude/ or workflow-templates/)"' in block
+	assert block.index("Protected-path fixes: unavailable") < block.index('if [ "${IS_FINAL}" = "true" ]; then')
+	combined = block.split("=== COMBINED DECIDE + APPLY INSTRUCTIONS ===", 1)[1]
+	assert "Do not modify files under .github/, scripts/, prompts/, .claude/ or" in combined
+	rule = "If the ORCHESTRATOR CONTEXT says `Protected-path fixes: unavailable`, do"
+	for prompt in ("prompts/mode-judge-review-blocked.txt", "prompts/_templates/mode-judge-review-blocked.txt"):
+		assert rule in (REPO_ROOT / prompt).read_text(encoding="utf-8"), prompt
+	# The standalone judge never emits the flag, so its fix path is unchanged.
+	assert "Protected-path fixes: unavailable" not in (REPO_ROOT / "scripts/review_rb_judge.sh").read_text(encoding="utf-8")
 
 
 def test_review_blocked_fix_scope_reports_all_workflow_edit_opt_out_paths():
@@ -10213,7 +10399,7 @@ def test_review_blocked_fix_scope_rejects_protected_judge_citation():
 		touch="scripts/evil.sh", files=["other.txt"],
 		remaining=[{"file": "scripts/evil.sh"}],
 	)
-	assert "reason=protected_not_in_pr" in result["stdout"]
+	assert "reason=protected_path_forbidden" in result["stdout"]
 	assert result.get("git_push_calls", []) == []
 
 
@@ -10222,7 +10408,7 @@ def test_review_blocked_fix_scope_protected_reason_wins_for_mixed_rejections():
 		touch="docs/new.md", files=["other.txt"],
 		env_overrides={"MOCK_CODEX_TOUCH_FILE": "docs/new.md\nscripts/evil.sh"},
 	)
-	assert "reason=protected_not_in_pr rejected=2 paths=docs/new.md,scripts/evil.sh" in result["stdout"]
+	assert "reason=protected_path_forbidden rejected=1 paths=scripts/evil.sh" in result["stdout"]
 	assert result.get("git_push_calls", []) == []
 
 
@@ -10231,7 +10417,7 @@ def test_review_blocked_fix_scope_rejects_uncited_unrelated_workflow():
 		touch=".github/workflows/unrelated.yml", files=["sandbox_fix.txt"],
 		env_overrides={"ALLOW_WORKFLOW_EDITS": "true"},
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_not_in_pr rejected=1 paths=.github/workflows/unrelated.yml" in result["stdout"]
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=.github/workflows/unrelated.yml" in result["stdout"]
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
@@ -10244,7 +10430,7 @@ def test_review_blocked_fix_scope_rejects_uncited_unrelated_script():
 		touch="scripts/unrelated.sh", files=["sandbox_fix.txt"],
 		env_overrides={"ALLOW_WORKFLOW_EDITS": "true"},
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_not_in_pr rejected=1 paths=scripts/unrelated.sh" in result["stdout"]
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=scripts/unrelated.sh" in result["stdout"]
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
@@ -10260,7 +10446,7 @@ def test_review_blocked_fix_scope_rejects_unrelated_action_and_claude_hook():
 			"MOCK_CODEX_TOUCH_FILE": ".github/actions/x/action.yml\n.claude/hooks/x.py",
 		},
 	)
-	assert "reason=protected_not_in_pr rejected=2" in result["stdout"]
+	assert "reason=protected_path_forbidden rejected=2" in result["stdout"]
 	assert any(
 		".github/actions/x/action.yml" in line and ".claude/hooks/x.py" in line
 		for line in result["stdout"].splitlines() if "REVIEW_BLOCKED_FIX_SCOPE_REJECTED" in line
@@ -10279,25 +10465,37 @@ def test_review_blocked_fix_scope_rejects_mixed_in_scope_and_unrelated_workflow(
 			"MOCK_CODEX_TOUCH_FILE": "sandbox_fix.txt\n.github/workflows/unrelated.yml",
 		},
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_not_in_pr rejected=1 paths=.github/workflows/unrelated.yml" in result["stdout"]
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=.github/workflows/unrelated.yml" in result["stdout"]
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
 
 
-def test_review_blocked_fix_scope_accepts_protected_pr_file():
+def test_review_blocked_fix_scope_rejects_protected_pr_file():
 	result = _review_blocked_fix_scope_case(touch="scripts/foo.sh", files=["scripts/foo.sh"])
-	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
-	assert result.get("git_push_calls", [])
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=scripts/foo.sh" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
 
 
 def test_review_blocked_fix_scope_accepts_renamed_pr_source():
 	result = _review_blocked_fix_scope_case(
-		touch="scripts/old.sh",
-		files=[{"filename": "scripts/new.sh", "previous_filename": "scripts/old.sh"}],
+		touch="docs/old.md",
+		files=[{"filename": "docs/new.md", "previous_filename": "docs/old.md"}],
 	)
 	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
 	assert result.get("git_push_calls", [])
+
+
+def test_review_blocked_fix_scope_rejects_renamed_protected_pr_source():
+	result = _review_blocked_fix_scope_case(
+		touch="scripts/old.sh",
+		files=[{"filename": "scripts/new.sh", "previous_filename": "scripts/old.sh"}],
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=scripts/old.sh" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
 
 
 def test_review_blocked_fix_scope_rejects_capped_pr_listing():
@@ -10647,10 +10845,12 @@ def test_sync_conflict_escalates_to_judge_immediately_after_retry_budget_exhaust
 		issue_labels={10: ["ai:implementing"]},
 		existing_branches=["main", "orchestrator/project-192"],
 		merge_conflict_on_sync=True,
+		mock_local_integration_content_conflict=True,
+		codex_json={"action": "redispatch_resolver", "diagnosis": "conflict", "resolution_guidance": "preserve merged intent"},
 	)
 	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	assert any("Integration judge invoked" in body for body in tracking_bodies)
-	assert result["review_dispatches"] == []
+	assert result["review_dispatches"]
 
 def test_final_merge_conflict_sets_merge_conflict_status():
 	# Regression coverage for the self-healing flow introduced in PR #918
@@ -12744,9 +12944,26 @@ def test_standalone_conflict_sweep_handles_non_ai_branch_conflicts():
 	assert result["update_branch_calls"] == [411]
 	assert len(result["review_dispatches"]) == 1
 	assert result["review_dispatches"][0]["pr_number"] == 411
-	# Issue #4701: the conflict dispatch runs the default branch's workflow
-	# file (no --ref), never the PR head branch's own copy.
+	# The conflict dispatch executes the default-branch workflow, not the PR head.
 	assert result["review_dispatches"][0]["ref"] is None
+
+
+def test_standalone_conflict_sweep_sees_named_pending_dispatch():
+	state = _base_state(status="complete")
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		prs=[{"number": 411, "state": "open", "baseRefName": "main",
+		      "headRefName": "claude/issue-10", "headSha": "sha411",
+		      "mergeable": False, "mergeable_state": "dirty"}],
+		update_branch_fail_for_prs=[411],
+		active_autofix_runs=[{
+			"workflow": "internal-review.yml", "workflowName": "Internal: AI Review & Autofix",
+			"branch": "main", "event": "workflow_dispatch",
+			"displayTitle": "Internal: AI Review & Autofix [pr:411]", "status": "pending",
+		}],
+	)
+	assert result["review_dispatches"] == []
+	assert "Active autofix run found" in result["stdout"]
 
 
 def test_standalone_conflict_sweep_keeps_ai_issue_branch_behavior():
@@ -13056,6 +13273,33 @@ def test_standalone_retrigger_review_skips_empty_commit_when_review_run_has_blan
 		f"expected no standalone empty-commit push when a blank-head_branch run matches "
 		f"the PR head_sha; got push calls {result.get('git_push_calls', [])}"
 	)
+
+
+def test_standalone_retrigger_review_sees_pr_named_pending_run():
+	state = _base_state(status="complete")
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({"schema_version": 1, "last_seen_phase": "ai:done", "status_since_ts": 1, "stall_recovery_count": 0})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:done"]},
+		issue_comments={501: [standalone_state_comment]}, issue_linked_prs={501: 416},
+		mock_gh_issue_list_label_filter=True,
+		prs=[{"number": 416, "body": "Closes #501", "state": "open", "baseRefName": "main",
+		      "headRefName": "claude/issue-501", "headRefFromApi": "claude/issue-501",
+		      "headSha": "a" * 40, "mergeable": True, "mergeable_state": "clean"}],
+		actions_runs_workflow_runs=[{
+			"id": 26088864017, "name": "Internal: AI Review & Autofix",
+			"path": ".github/workflows/internal-review.yml@main", "event": "workflow_dispatch",
+			"display_title": "Internal: AI Review & Autofix [pr:416]",
+			"status": "pending", "head_branch": "main", "head_sha": "c" * 40,
+			"created_at": "2999-01-01T00:00:00Z",
+		}], mock_git_push_success=True,
+	)
+	assert result.get("git_push_calls", []) == []
+	assert _extract_latest_standalone_state(result["issues"]["501"]["comments"])["stall_recovery_count"] == 0
 
 
 def test_standalone_retrigger_review_skips_empty_commit_for_review_run_past_stall_threshold_but_within_budget():
@@ -15879,7 +16123,11 @@ def test_standalone_close_and_reissue_keeps_clarification_only_label():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	anchor = "This issue was re-created by standalone stall recovery."
 	assert anchor in script, "Could not locate standalone close_and_reissue guidance block"
-	window = script[script.index(anchor):script.index(anchor) + 1200]
+	# Bound the window by the reissue's own `gh issue create` line rather than
+	# a byte count: the heal-scope carry block (#6463) sits between them.
+	anchor_idx = script.index(anchor)
+	create_idx = script.index("gh issue create", anchor_idx)
+	window = script[anchor_idx:script.index("\n", create_idx)]
 	assert '--label "ai:clarification"' in window
 	assert '--label "ai:orchestrator-managed"' not in window
 
@@ -16820,7 +17068,7 @@ def test_missing_pipeline_login_alerts_once_per_tick():
 	poller_source = POLLER_SCRIPT.read_text(encoding="utf-8")
 	login_function = poller_source.split("unblock_trusted_login() {", 1)[1].split("\n}", 1)[0]
 	script = (
-		"set -euo pipefail\nUNBLOCK_TRUSTED_LOGIN=''\nUNBLOCK_TRUSTED_LOGIN_STATE=unset\n"
+		"set -euo pipefail\nUNBLOCK_TRUSTED_LOGIN=''\nUNBLOCK_TRUSTED_LOGIN_STATE=unset\nORCH_STATE_IDENTITY_ALERT_SENT=false\n"
 		"GITHUB_REPOSITORY=owner/repo\nGITHUB_RUN_ID=123\nalert_count=0\n"
 		"gh_retry() { return 1; }\n_gh_url() { printf 'https://github.test/run'; }\n"
 		"tg_send_msg() { alert_count=$((alert_count + 1)); }\n"
@@ -16835,7 +17083,7 @@ def test_missing_pipeline_login_alerts_once_per_tick():
 def test_project_state_and_reset_commands_require_authenticated_commenters():
 	poller = POLLER_SCRIPT.read_text(encoding="utf-8")
 	assert 'unblock_trusted_login >/dev/null\n  if [ -z "${UNBLOCK_TRUSTED_LOGIN}" ]; then' in poller
-	assert 'extract_latest_valid_orchestrator_state "${TRUSTED_STATE_COMMENTS}"' in poller
+	assert 'extract_latest_valid_orchestrator_state "${COMMENTS}"' in poller
 	assert 'select((.user.login // "") == $login)' in poller
 	for command in ("RE_SECURITY_PASS_COMMENT_JSON", "REVALIDATE_COMMENT_JSON", "JUDGE_RESUME_BODY"):
 		start = poller.index(f'{command}="$(echo "${{COMMENTS}}" | jq')
@@ -17299,6 +17547,24 @@ def test_retrigger_review_redispatches_when_last_autofix_concluded_failure():
 		f"expected review_autofix redispatch for PR 77 after last run concluded failure; "
 		f"got: {result.get('review_dispatches')}"
 	)
+
+
+def test_retrigger_review_redispatches_on_tied_head_branch_failure():
+	state, prs = _retrigger_review_pr_state(77, "claude/retrigger-review-tied-failure")
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 77}, prs=prs,
+		active_autofix_runs=[
+			{"workflow": "ai-review.yml", "branch": "claude/retrigger-review-tied-failure",
+			 "status": "completed", "conclusion": "success", "createdAt": "2026-09-28T01:00:00Z"},
+			{"workflow": "internal-review.yml", "branch": "claude/retrigger-review-tied-failure",
+			 "status": "completed", "conclusion": "failure", "createdAt": "2026-09-28T01:00:00Z"},
+		],
+		mock_git_push_success=True,
+	)
+	assert any(d.get("pr_number") == 77 for d in result["review_dispatches"]), result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert "last internal-review.yml run concluded 'failure'" in result["stdout"]
 
 
 def test_retrigger_review_skips_merge_train_queued_pr_without_consuming_stall_budget():
@@ -17892,6 +18158,26 @@ def test_retrigger_review_ignores_pr_named_failure_superseded_by_newer_head_bran
 	dispatches_for_pr = [d for d in result.get("review_dispatches", []) if str(d.get("pr_number")) == "93"]
 	assert dispatches_for_pr == [], dispatches_for_pr
 	assert result.get("git_push_calls", []), "expected the empty-commit push path"
+
+
+def test_retrigger_review_redispatches_pr_named_failure_tied_with_head_branch_success():
+	state, prs = _retrigger_review_pr_state(93, "claude/retrigger-review-pr-named-tied")
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:done"]}, issue_linked_prs={10: 93}, prs=prs,
+		active_autofix_runs=[
+			{"workflow": "internal-review.yml", "branch": "claude/retrigger-review-pr-named-tied",
+			 "event": "pull_request", "status": "completed", "conclusion": "success",
+			 "createdAt": "2026-09-28T01:00:00Z"},
+			{"workflow": "internal-review.yml", "branch": "main", "event": "workflow_dispatch",
+			 "displayTitle": "Internal: AI Review & Autofix [pr:93]",
+			 "status": "completed", "conclusion": "failure", "createdAt": "2026-09-28T01:00:00Z"},
+		],
+		mock_git_push_success=True,
+	)
+	assert any(d.get("pr_number") == 93 for d in result["review_dispatches"]), result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert "review run dispatched for PR #93" in result["stdout"]
 
 
 def test_retrigger_review_skips_push_and_redispatch_when_pr_named_listing_is_incomplete():
@@ -18617,6 +18903,100 @@ def test_state_extraction_with_special_chars_in_comment_bodies():
 	assert final_state["status"] == "in_progress"
 
 
+def test_state_extraction_ignores_newer_forged_state():
+	for forged_version in ("v1", "v2"):
+		state = _base_state(status="in_progress")
+		forged = dict(state, status="complete")
+		if forged_version == "v1":
+			forged_bodies = [_state_comment(forged)]
+		else:
+			forged_bodies = [entry["body"] for entry in _build_v2_state_comment_chain(json.dumps(forged), chunk_size=20000)]
+		result = _run_poller(
+			state=state,
+			enable_validation="false",
+			max_validate_cycles="3",
+			tracking_comments=[{"body": body, "user": {"login": "attacker"}} for body in forged_bodies],
+			issue_labels={10: ["ai:implementing"]},
+		)
+		assert result["latest_state"]["status"] == "in_progress", forged_version
+		assert "ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=192 outcome=filtered ignored=" in result["stderr"], forged_version
+		assert "State reconstructed and posted" not in result["stdout"], forged_version
+
+
+def test_state_extraction_skips_mixed_author_v2_chain():
+	state = _base_state(status="in_progress")
+	trusted = dict(state, author_filter_probe="trusted-v2")
+	trusted_chain = _build_v2_state_comment_chain(json.dumps(trusted), chunk_size=20000)
+	forged = dict(state, status="complete")
+	encoded_length = len(base64.b64encode(json.dumps(forged).encode("utf-8")))
+	mixed_chain = _build_v2_state_comment_chain(json.dumps(forged), chunk_size=encoded_length // 2)
+	assert len(mixed_chain) >= 2
+	comments = [
+		{"body": entry["body"], "user": {"login": "github-actions[bot]"}}
+		for entry in trusted_chain + mixed_chain[:-1]
+	]
+	comments.append({"body": mixed_chain[-1]["body"], "user": {"login": "attacker"}})
+	result = _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		tracking_comments=comments,
+		issue_labels={10: ["ai:implementing"]},
+	)
+	assert result["latest_state"]["author_filter_probe"] == "trusted-v2"
+	assert result["latest_state"]["status"] == "in_progress"
+	assert "outcome=filtered ignored=1" in result["stderr"]
+
+
+def test_state_identity_failure_skips_reconstruction_and_state_writes():
+	result = _run_poller(
+		state=_base_state(status="in_progress"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		mock_store_extra={"fail_user_lookup": True},
+		env_overrides={"UNBLOCK_JUDGE_ENABLED": "false"},
+	)
+	assert "ORCHESTRATOR_STATE_AUTHOR_FILTER tracking_issue=192 outcome=identity_unavailable" in result["stderr"]
+	assert "skipping this tracking issue and state reconstruction" in result["stdout"]
+	assert "search/issues" not in result["api_calls"]
+	assert len(result["issues"]["192"]["comments"]) == 1
+
+
+def test_state_author_filter_covers_all_extraction_callers():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	extractor = script.split("extract_latest_valid_orchestrator_state() {", 1)[1].split("\nensure_label_exists()", 1)[0]
+	assert extractor.index("unblock_trusted_login >/dev/null") < extractor.index("orchestrate_state_v2.py extract")
+	assert 'printf \'%s\' "${trusted_comments_json}" > "${_v2_comments_file}"' in extractor
+	assert 'printf \'%s\' "${trusted_comments_json}" | jq -c' in extractor
+	assert 'extract_latest_valid_orchestrator_state "${COMMENTS}"' in script
+	main = script.split('if [ -z "${STATE_JSON}" ] || [ "${STATE_JSON}" = "null" ]; then', 1)[1]
+	assert main.index('"${EXTRACTED_STATE_IDENTITY_UNAVAILABLE}"') < main.index('"${STATE_COMMENT_COUNT}"')
+	assert 'RESOLVED_ORCHESTRATOR_STATE_IDENTITY_UNAVAILABLE="true"' in script
+	assert 'FOLLOWUP_PR_BLOCKED="true"' in script.split('if [ "${RESOLVED_ORCHESTRATOR_STATE_IDENTITY_UNAVAILABLE}" = "true" ]; then', 1)[1]
+	assert 'skipping standalone stall recovery this tick' in script
+
+
+def test_state_identity_failure_alerts_once_without_tracking_issues():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	identity_helper = script.split('UNBLOCK_TRUSTED_LOGIN=""\nUNBLOCK_TRUSTED_LOGIN_STATE="unset"', 1)[1].split('\nextract_latest_valid_orchestrator_state() {', 1)[0]
+	harness = '''set -euo pipefail
+gh_retry() { return 1; }
+_gh_url() { printf 'https://example.test/run'; }
+alerts=0
+tg_send_msg() { [ "$2" = CRITICAL ]; alerts=$((alerts + 1)); }
+GITHUB_REPOSITORY=owner/repo
+UNBLOCK_TRUSTED_LOGIN=""
+UNBLOCK_TRUSTED_LOGIN_STATE="unset"
+''' + identity_helper + '''
+unblock_trusted_login >/dev/null
+unblock_trusted_login >/dev/null
+[ "$alerts" -eq 1 ]
+[ "$UNBLOCK_TRUSTED_LOGIN_STATE" = failed ]
+'''
+	result = subprocess.run(["bash", "-c", harness], capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+
+
 def test_malformed_latest_state_falls_back_to_older_valid_and_posts_healed_state():
 	state = _base_state(status="in_progress")
 	malformed_latest = '<!-- ORCHESTRATOR_STATE_V1\n{"schema_version":"orchestrate_state.v1",\nORCHESTRATOR_STATE_V1 -->'
@@ -18678,7 +19058,7 @@ def test_all_invalid_state_comments_trigger_reconstruction_path_without_heal():
 		state=invalid_state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		tracking_comments=[malformed_latest],
+		tracking_comments=[{"body": malformed_latest, "user": {"login": "github-actions[bot]"}}],
 		issue_labels={10: ["ai:implementing"]},
 	)
 	assert "No valid ORCHESTRATOR_STATE_V1 comment found for tracking issue #192. Attempting state reconstruction..." in result["stdout"]
@@ -18761,7 +19141,7 @@ def test_reconstruction_refused_when_body_has_completed_unmapped_issue():
 		state=invalid_state,
 		enable_validation="false",
 		max_validate_cycles="3",
-		tracking_comments=[malformed_latest],
+		tracking_comments=[{"body": malformed_latest, "user": {"login": "github-actions[bot]"}}],
 		tracking_body=rewindable_body,
 		issue_labels={10: ["ai:implementing"]},
 	)
@@ -19126,14 +19506,16 @@ def test_integration_sync_conflict_uses_sync_specific_retry_budget_default_one()
 		issue_labels={10: ["ai:implementing"]},
 		existing_branches=["main", "orchestrator/project-192"],
 		merge_conflict_on_sync=True,
+		mock_local_integration_content_conflict=True,
+		codex_json={"action": "redispatch_resolver", "diagnosis": "conflict", "resolution_guidance": "preserve merged intent"},
 	)
 	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	assert any("Integration judge invoked" in body for body in tracking_bodies), (
 		"expected integration judge invocation comment after a single unresolved tick "
 		"on an orchestrator/project-* branch (INTEGRATION_SYNC_CONFLICT_MAX_RETRIES=1)"
 	)
-	assert result["review_dispatches"] == [], (
-		"expected NO additional resolver dispatch when the sync-specific retry "
+	assert result["review_dispatches"], (
+		"expected resolver redispatch after read-only judge; sync-specific retry "
 		"budget is exhausted; got: " + str(result["review_dispatches"])
 	)
 
@@ -19182,6 +19564,8 @@ def test_integration_sync_conflict_existing_three_tick_test_still_escalates():
 		issue_labels={10: ["ai:implementing"]},
 		existing_branches=["main", "orchestrator/project-192"],
 		merge_conflict_on_sync=True,
+		mock_local_integration_content_conflict=True,
+		codex_json={"action": "redispatch_resolver", "diagnosis": "conflict", "resolution_guidance": "preserve merged intent"},
 	)
 	tracking_bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
 	assert any("Integration judge invoked" in body for body in tracking_bodies)
@@ -21840,7 +22224,8 @@ def test_review_autofix_workflow_wires_optional_verifier_bootstrap_and_gate():
 	# sync with review_autofix.yml and stage_workflow_support.sh.
 	assert (
 		'OPTIONAL_BOOTSTRAP_SCRIPTS="install_semble.sh build_semble_wrapper.sh semble_helpers.sh '
-		'workflow_failure_heal.py workflow_failure_heal_autofix_report.sh"'
+		'workflow_failure_heal.py workflow_failure_heal_autofix_report.sh '
+		'ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl"'
 	) in stage_helper_body
 	assert "for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do" in stage_helper_body
 	assert 'src=".codex-workflow-src/scripts/${f}"' in stage_helper_body
@@ -23201,6 +23586,119 @@ def test_stall_recovery_retrigger_implement_arms_swap_label_before_posting_appro
 		# prefix may already post it.
 		assert "gh api" not in arm_prefix, arm_prefix
 		assert "\n/approved\n" not in arm_prefix, arm_prefix
+
+
+def test_wave_judge_isolation_failure_defers_without_terminal_judge_failure():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		enable_clean_wave_judge_skip="false",
+		env_overrides={"MOCK_JUDGE_SANDBOX_PREPARE_FAIL": "true"},
+	)
+	assert result["latest_state"]["judge_isolation_state"]["WAVE_JUDGE"]["count"] == 1
+	assert result["latest_state"]["judge_cycle"] == state["judge_cycle"]
+	assert "Judge failed for tracking issue" not in result["stdout"] + result["stderr"]
+
+
+def test_wave_judge_isolation_cap_labels_tracking_issue_once():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["judge_isolation_state"] = {"WAVE_JUDGE": {
+		"count": 2, "reason": "sandbox_prepare_failed", "escalated": False,
+	}}
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		enable_clean_wave_judge_skip="false",
+		env_overrides={"MOCK_JUDGE_SANDBOX_PREPARE_FAIL": "true"},
+	)
+	assert "ai:needs-human" in result["tracking_labels"]
+	assert result["latest_state"]["judge_isolation_state"]["WAVE_JUDGE"]["escalated"] is True
+	comments = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	assert sum("<!-- ai:judge-isolation-escalated role=WAVE_JUDGE reason=sandbox_prepare_failed -->" in body for body in comments) == 1
+
+
+def test_security_judge_isolation_failure_keeps_pass_blocked():
+	result = _run_poller(
+		state=_security_pass_exhausted_state(), enable_validation="false", max_validate_cycles="3",
+		enable_security_pass="true", security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_JUDGE_SANDBOX_PREPARE_FAIL": "true"},
+	)
+	assert result["latest_state"]["judge_isolation_state"]["SECURITY_JUDGE"]["count"] == 1
+	assert result["latest_state"]["status"] != "failed"
+	assert "SECURITY_PASS_FAILED reason=cycle_exhausted" not in result["stdout"] + result["stderr"]
+
+
+def test_standalone_stall_judge_isolation_deferral_persists_without_recovery_action():
+	state_comment = "<!-- AI_STANDALONE_STALL_STATE_V1\n" + json.dumps({
+		"schema_version": 1, "last_seen_phase": "ai:awaiting-approval",
+		"status_since_ts": 1, "stall_recovery_count": 2,
+	}) + "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	result = _run_poller(
+		state=_base_state(status="complete"), enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
+		issue_comments={501: [state_comment]}, mock_gh_issue_list_label_filter=True,
+		env_overrides={"MOCK_JUDGE_SANDBOX_PREPARE_FAIL": "true"},
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state["judge_isolation_state"]["STALL_JUDGE"]["count"] == 1
+	assert standalone_state["stall_recovery_count"] == 2
+	assert "JUDGE_ISOLATION role=STALL_JUDGE tracking_issue=- issue=501 outcome=deferred" in result["stdout"]
+
+
+def test_integration_judge_redispatch_neutralises_trusted_comment_markers():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 3
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]}, existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True,
+		mock_local_integration_content_conflict=True,
+		codex_json={"action": "redispatch_resolver", "diagnosis": "<!-- ORCHESTRATOR_STATE_V2 -->", "resolution_guidance": "preserve code"},
+	)
+	comments = [c.get("body", "") for c in result["issues"]["192"]["comments"] if "## Integration conflict diagnosis" in c.get("body", "")]
+	assert len(comments) == 1
+	assert "<!-- ORCHESTRATOR_STATE_V2 -->" not in comments[0]
+	assert "&lt;!--" in comments[0]
+	assert result["review_dispatches"]
+
+
+def test_integration_judge_isolation_failure_does_not_consume_lifetime_budget():
+	state = _base_state(status="in_progress")
+	state["integration_branch"] = "orchestrator/project-192"
+	state["integration_conflict_unresolved_ticks"] = 3
+	state["integration_conflict_total_dispatches"] = 1
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]}, existing_branches=["main", "orchestrator/project-192"],
+		merge_conflict_on_sync=True, mock_local_integration_content_conflict=True,
+		env_overrides={"MOCK_JUDGE_SANDBOX_PREPARE_FAIL": "true"},
+	)
+	latest = result["latest_state"]
+	assert latest["judge_isolation_state"]["INTEGRATION_JUDGE"]["count"] == 1
+	assert latest["integration_conflict_total_dispatches"] == 1
+	assert latest["integration_conflict_unresolved_ticks"] == 3
+	assert latest["status"] != "failed"
+
+
+def test_integration_judge_non_redispatch_verdict_keeps_terminal_path():
+	for action in ("fail", "unknown"):
+		state = _base_state(status="in_progress")
+		state["integration_branch"] = "orchestrator/project-192"
+		state["integration_conflict_unresolved_ticks"] = 3
+		result = _run_poller(
+			state=state, enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:implementing"]}, existing_branches=["main", "orchestrator/project-192"],
+			merge_conflict_on_sync=True,
+			mock_local_integration_content_conflict=True,
+			codex_json={"action": action, "diagnosis": "cannot resolve", "resolution_guidance": ""},
+		)
+		assert result["latest_state"]["status"] == "failed"
+		assert result["review_dispatches"] == []
 
 
 if __name__ == "__main__":
