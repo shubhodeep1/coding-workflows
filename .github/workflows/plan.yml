@@ -283,7 +283,7 @@ jobs:
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh codex_isolated_exec.sh codex_isolated_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py ai_engine.sh claude_engine.py; do
+          for f in gh_helpers.sh run_plan_codex.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py build_static_context.sh install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_helpers.sh write_guard.sh codex_stall_guard.sh codex_isolated_exec.sh codex_isolated_workspace.py clarify_openrouter_broker.py claude_anthropic_relay.py ai_engine.sh claude_engine.py workflow_failure_heal.py workflow_failure_heal_evidence.sh clarify_isolated_run.sh; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -306,6 +306,14 @@ jobs:
           fi
           install -m 0644 "${src}" scripts/claude_settings.json.tmpl
           _fetched_scripts+=(claude_settings.json.tmpl)
+
+          mkdir -p scripts/clarify_sandbox
+          sandbox_src=".codex-workflow-src/scripts/clarify_sandbox/Dockerfile"
+          if [ ! -f "${sandbox_src}" ] && [ -f ".codex-workflow-src-main/scripts/clarify_sandbox/Dockerfile" ]; then
+            sandbox_src=".codex-workflow-src-main/scripts/clarify_sandbox/Dockerfile"
+          fi
+          [ -f "${sandbox_src}" ] || { echo '::error::Missing plan isolation Dockerfile' >&2; exit 1; }
+          install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile
 
           # render_prompt.py is the optional Python backend for the
           # render_prompt.sh shim adopted by branches that took the issue
@@ -996,43 +1004,6 @@ jobs:
             jq -r 'sort_by(.created_at)[] | "[" + (.created_at // "") + "] @" + (.user.login // "unknown") + ":\n" + (.body // "") + "\n"' "${ISSUE_COMMENTS_FILE}"
           } > "${PLANNING_CONTEXT_FILE}"
 
-      - name: Setup uv
-        if: env.SKIP_PLAN != 'true' && env.SEMBLE_ENABLED == 'true'
-        continue-on-error: true
-        uses: astral-sh/setup-uv@v7
-
-      - name: Install semble
-        if: env.SKIP_PLAN != 'true' && env.SEMBLE_ENABLED == 'true'
-        # Defense-in-depth: install_semble.sh is fail-soft already (writes
-        # SEMBLE_AVAILABLE=false on any error), but the step-level guard
-        # ensures a syntax regression / filesystem error / missing-script
-        # condition still degrades to SEMBLE_AVAILABLE=false instead of
-        # hard-failing under set -euo pipefail.
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          bash scripts/install_semble.sh
-
-      - name: Build semble index
-        if: env.SKIP_PLAN != 'true' && env.SEMBLE_ENABLED == 'true'
-        # Defense-in-depth: the shared script is fail-soft already, but the
-        # step-level guard ensures a future wrapper regression still
-        # degrades to SEMBLE_INDEX_AVAILABLE=false instead of hard-failing.
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          : "${SEMBLE_INDEX_PATH:?SEMBLE_INDEX_PATH is required}"
-          # Shared BM25 wrapper builder — see scripts/build_semble_wrapper.sh
-          # for the rationale (semble 0.1.3 lacks the index/query CLI).
-          # Fail-soft: writes SEMBLE_INDEX_AVAILABLE=false on any error and
-          # exits 0; missing-script case is handled the same way.
-          if [ -f scripts/build_semble_wrapper.sh ]; then
-            bash scripts/build_semble_wrapper.sh
-          else
-            echo "::notice::scripts/build_semble_wrapper.sh not staged; continuing without Semble index."
-            echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"
-          fi
-
       - name: Create Codex config
         if: env.SKIP_PLAN != 'true'
         run: |
@@ -1195,7 +1166,18 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_PLAN || '40' }}
           PLAN_ENGINE: ${{ steps.ai_engine.outputs.engine || 'codex' }}
+          WORKFLOW_HEAL_EVIDENCE_MAX_BYTES: ${{ vars.WORKFLOW_HEAL_EVIDENCE_MAX_BYTES || '' }}
+          WORKFLOW_HEAL_EVIDENCE_MAX_RUNS: ${{ vars.WORKFLOW_HEAL_EVIDENCE_MAX_RUNS || '' }}
         run: |
+          if ! heal_route="$(python3 scripts/workflow_failure_heal.py heal-route --issue-json "${ISSUE_META_FILE}")"; then
+            echo '::error::Heal route classification failed' >&2
+            exit 1
+          fi
+          if [ "${heal_route}" = true ]; then
+            echo 'HEAL_ROUTE=true' >> "${GITHUB_ENV}"
+            HEAL_ROUTE=true HEAL_EVIDENCE_FILE="${RUNTIME_DIR}/heal_evidence.md" bash scripts/workflow_failure_heal_evidence.sh
+            export HEAL_ROUTE=true HEAL_EVIDENCE_FILE="${RUNTIME_DIR}/heal_evidence.md"
+          fi
           bash scripts/run_plan_codex.sh
 
       - name: Enforce plan write guard
@@ -2319,8 +2301,12 @@ jobs:
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           FAILED_STEP_HINT="Check the AI Plan run logs and inspect the first failed step."
+          PLAN_CANCELLED_SUFFIX=""
+          if [ "${{ job.status }}" = "cancelled" ]; then
+            PLAN_CANCELLED_SUFFIX=$'\n<!-- ai:plan-cancelled -->'
+          fi
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
-            -f body=$'AI planning workflow failed.\n\nWorkflow: AI Plan\nIssue: #'"${ISSUE_NUMBER}"$'\nIssue URL: '"${ISSUE_URL}"$'\nContext: '"${PLAN_FAILURE_CONTEXT}"$'\nHint: '"${FAILED_STEP_HINT}"$'\nRun: '"${RUN_URL}"
+            -f body=$'AI planning workflow failed.\n\nWorkflow: AI Plan\nIssue: #'"${ISSUE_NUMBER}"$'\nIssue URL: '"${ISSUE_URL}"$'\nContext: '"${PLAN_FAILURE_CONTEXT}"$'\nHint: '"${FAILED_STEP_HINT}"$'\nRun: '"${RUN_URL}${PLAN_CANCELLED_SUFFIX}"
 
       - name: Telegram failure notification
         if: failure() || cancelled()
@@ -2353,3 +2339,60 @@ jobs:
       - name: Exit safely
         if: failure() || cancelled()
         run: exit 0
+
+  heal-report:
+    # Workflow failure heal (README "Workflow Failure Heal"): report a failed
+    # plan run to coding-workflows' heal intake, which diagnoses it and opens
+    # an ai:workflow-heal issue for the pipeline to fix. A separate job, so the
+    # plan job has finished and the intake reads its complete log. Only a
+    # `failure` result is reported: a cancelled run was superseded or timed
+    # out. `permissions: {}` keeps the job inside any caller's grant;
+    # GH_PAT does the work. The reporter always exits 0.
+    needs: plan
+    if: >-
+      always() && needs.plan.result == 'failure' &&
+      !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+      WORKFLOW_HEAL_PHASE_FAILURE_STREAK: ${{ vars.WORKFLOW_HEAL_PHASE_FAILURE_STREAK || '1' }}
+      WORKFLOW_HEAL_PHASE: plan
+      WORKFLOW_HEAL_ISSUE_NUMBER: ${{ github.event.issue.number }}
+      REPORT_WORKFLOW_NAME: ${{ github.workflow }}
+    steps:
+      - name: Resolve workflow support ref
+        run: |
+          set -euo pipefail
+          wf_source="shubhodeep1/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+          else
+            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+          fi
+
+      - name: Checkout workflow support source
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ env.SCRIPT_REF }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: scripts
+
+      - name: Report the failed run to workflow failure heal
+        run: |
+          set -euo pipefail
+          reporter=".codex-workflow-src/scripts/workflow_failure_heal_phase_report.sh"
+          if [ ! -f "${reporter}" ]; then
+            echo "WORKFLOW_HEAL_PHASE_REPORT skip reason=reporter_missing ref=${SCRIPT_REF}"
+            exit 0
+          fi
+          REPORT_WRAPPER_SHA="$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" \
+            RUNTIME_DIR="${RUNNER_TEMP}/workflow-heal-phase-report" \
+            bash "${reporter}"

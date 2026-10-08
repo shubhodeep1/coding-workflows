@@ -6,8 +6,9 @@ security-audit and failure-heal agents read issue bodies, comments, PR diffs
 or CI / workflow logs. A prompt injection there must not be able to read
 GH_PAT (GH_TOKEN), the OpenRouter key, or the checkout's .git (whose config
 carries the GH_PAT remote URL and checkout extraheader). They therefore run
-through scripts/codex_isolated_exec.sh: a credential-free, network-isolated
-container that reaches the model only through the host-side broker
+through scripts/codex_isolated_exec.sh or, for triage, through
+scripts/clarify_isolated_run.sh: credential-free, network-isolated containers
+that reach the model only through the host-side broker
 (scripts/clarify_openrouter_broker.py). These checks pin that wiring; the
 behaviour is covered by tests/test_codex_isolated_exec.py.
 """
@@ -24,9 +25,11 @@ SCRIPTS = REPO_ROOT / "scripts"
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 HELPER = SCRIPTS / "codex_isolated_exec.sh"
 
-# Files allowed to start the codex binary directly: the two container
+# Files allowed to start the codex binary directly: the container
 # entrypoints (Codex runs inside the isolated container there).
-CONTAINER_ENTRYPOINTS = {"codex_isolated_exec.sh", "clarify_isolated_run.sh"}
+# heal_isolated_implement.sh runs the workflow-heal editor in its own
+# credential-free `--network none --read-only --cap-drop ALL` container (#6463).
+CONTAINER_ENTRYPOINTS = {"codex_isolated_exec.sh", "clarify_isolated_run.sh", "heal_isolated_implement.sh"}
 
 RAW_CODEX = re.compile(r'''(?:^|[\s;&|(]|--\s)(?<!Usage: )codex\s+(?:--ask-for-approval|-c\s|exec\b|"\$@")''')
 PY_RAW_CODEX = re.compile(r'''\[\s*"codex"\s*,''')
@@ -89,13 +92,13 @@ def test_thread_reuse_launches_through_the_isolated_launcher():
 		("scripts/self_heal_validation.sh", 'self_heal_codex_cmd=(bash "${CODEX_ISOLATED_EXEC}" run --mode read-only --)'),
 		("scripts/implement_diagnose_post_codex_failure.sh", 'diagnose_codex_cmd=(bash "${CODEX_ISOLATED_EXEC}" run --mode read-only --)'),
 		("scripts/workflow_retro_fanout.sh", 'codex_isolated_exec.sh" run --mode read-only --workdir "${REPO_ROOT}"'),
-		("scripts/check_failure_triage.sh", 'codex_isolated_exec.sh" run --mode read-only --'),
+		("scripts/check_failure_triage.sh", 'bash "${ISOLATED_HELPER}" "${PROMPT_FILE}" "${DIAG_FILE}" "${RUNTIME_DIR}/codex_log.txt"'),
 		("scripts/security_audit.sh", 'codex_isolated_exec.sh" run --mode read-only ${audit_isolated_args[@]+"${audit_isolated_args[@]}"} --'),
 		("scripts/workflow_failure_heal_intake.sh", 'heal_isolated_args=(run --mode read-only)'),
 		("scripts/validation_discovery_bootstrap.py", 'CODEX_ISOLATED_EXEC = Path(__file__).resolve().parent / "codex_isolated_exec.sh"'),
 		("scripts/orchestrate_poll_process.sh", 'ORCH_CODEX_ISOLATED_EXEC="${ORCH_SCRIPTS_ROOT}/codex_isolated_exec.sh"'),
 		(".github/workflows/orchestrate.yml", "bash scripts/codex_isolated_exec.sh run --mode read-only --"),
-		(".github/workflows/workflow-log-analysis.yml", "bash scripts/codex_isolated_exec.sh run --mode read-only --"),
+		(".github/workflows/workflow-log-analysis.yml", 'bash scripts/codex_isolated_exec.sh run --mode read-only ${wla_run_logs_include_args[@]+"${wla_run_logs_include_args[@]}"} --'),
 		(".github/workflows/implement.yml", 'codex_isolated_exec.sh" run --mode read-only \\'),
 	],
 )
@@ -196,7 +199,10 @@ def test_isolated_runs_carry_no_serena_hints():
 )
 def test_workflows_stage_the_isolation_support_files(workflow):
 	text = (WORKFLOWS / workflow).read_text(encoding="utf-8")
-	for name in ("codex_isolated_exec.sh", "codex_isolated_workspace.py", "clarify_openrouter_broker.py"):
+	names = (("clarify_isolated_run.sh", "clarify_sandbox/Dockerfile", "clarify_openrouter_broker.py")
+		if workflow == "check_failure_triage.yml" else
+		("codex_isolated_exec.sh", "codex_isolated_workspace.py", "clarify_openrouter_broker.py"))
+	for name in names:
 		assert name in text, f"{workflow} must stage {name}"
 
 
@@ -219,20 +225,21 @@ def test_poller_file_editing_judges_use_worktrees_and_trusted_push():
 	assert 'git checkout -B "${FOLLOWUP_BRANCH}"' not in text
 	assert 'git checkout -B "${HEAD_REF}"' not in text
 	assert 'RB_COMBINED_WORKDIR="${RUNTIME_DIR:-/tmp}/rb-judge-wt-${rb_issue}"' in text
-	assert 'run --mode workspace --workdir "${RB_COMBINED_WORKDIR}"' in text
+	assert 'pushd "${RB_COMBINED_WORKDIR}" >/dev/null' in text
+	assert 'POLLER_JUDGE_ENGINE_LABELS="${RB_JUDGE_ENGINE_LABELS_JSON}" poller_claude_judge RB_JUDGE' in text
 	assert 'git -C "${RB_COMBINED_WORKDIR}" remote set-url origin "https://x-access-token:${GH_TOKEN}' not in text
 	assert 'push "https://github.com/${GITHUB_REPOSITORY}" "HEAD:${HEAD_REF}"' in text
 	assert 'push "https://github.com/${GITHUB_REPOSITORY}" "HEAD:${FOLLOWUP_BRANCH}"' in text
 	assert text.count("-c 'credential.helper=!f()") == 3
-	# Integration judge: the poller fetches, merges, verifies and pushes; the
-	# agent only resolves files and is told it has no network or credentials.
-	assert 'run --mode workspace --workdir "${judge_wt}"' in text
-	assert text.index('_integration_judge_capture_baseline "${judge_wt}"') < text.index('run --mode workspace --workdir "${judge_wt}"')
+	# Integration judge diagnoses in a read-only sandbox; only the clean
+	# merge path reaches the trusted scope check and push.
+	assert 'poller_claude_judge INTEGRATION_JUDGE' in text
+	assert text.index('_integration_judge_capture_baseline "${judge_wt}"') < text.index('poller_claude_judge INTEGRATION_JUDGE')
 	assert "fetch both branches" not in text
-	assert "Do NOT run git commit, git push or any" in text
+	assert 'the existing review workflow performs the isolated resolution' in text
 	assert '_integration_judge_commit_and_push "${judge_wt}"' in text
 	assert 'python3 "${ORCH_FINGERPRINT_VERIFIER}" "${fp_file}"' in text
-	assert '_integration_judge_commit_and_push "${judge_wt}" "${final_pr}" "${integration_branch}" "${default_branch}" "${baseline_dir}" "${expected_conflict_count}" || true' in text
+	assert '_integration_judge_commit_and_push "${judge_wt}" "${final_pr}" "${integration_branch}" "${default_branch}" "${baseline_dir}" "${expected_conflict_count}" || {' in text
 	commit_block = text[text.index('_integration_judge_commit_and_push() {'):text.index('# _refresh_integration_resolver_tooling')]
 	assert commit_block.index('_integration_judge_verify_scope "${wt}" "${baseline_dir}"') < commit_block.index('commit --no-verify')
 	assert "rev-parse 'HEAD^{tree}'" in commit_block
@@ -247,11 +254,11 @@ def test_poller_file_editing_judges_use_worktrees_and_trusted_push():
 
 def test_review_blocked_fix_writer_runs_in_the_review_sandbox():
 	text = (SCRIPTS / "review_rb_judge.sh").read_text(encoding="utf-8")
-	assert 'env "${rb_fix_sandbox_workspace_env[@]}" GITHUB_ENV="${rb_fix_sandbox_env}" bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare' in text
+	assert 'WORKSPACE_PATH="${rb_fix_workspace_path}" review_rb_opencode_sandbox_prepare' in text
 	assert 'GITHUB_WORKSPACE="${RB_OPENCODE_WORKSPACE}"' not in text
 	assert '"GITHUB_WORKSPACE=${RB_OPENCODE_WORKSPACE}"' not in text
-	assert 'rb_fix_sandbox_workspace_env=(-u WORKSPACE_PATH)' in text
-	assert 'rb_fix_sandbox_workspace_env=("WORKSPACE_PATH=${RB_OPENCODE_WORKSPACE}")' in text
+	assert 'rb_fix_workspace_path=""' in text
+	assert 'rb_fix_workspace_path="${RB_OPENCODE_WORKSPACE}"' in text
 	assert 'workspace="$(< "${root}/workspace")"' in (SCRIPTS / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
 	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run' in text
 	fix_block = text[text.index("rb_fix_opencode_cmd=("):]
@@ -266,7 +273,8 @@ def test_review_sandbox_admits_the_merge_guard_for_ci_repairs():
 	assert spec is not None and spec.loader is not None
 	module = importlib.util.module_from_spec(spec)
 	spec.loader.exec_module(module)
-	assert module.allowed(".claude/hooks/pr_merge_status_guard.py")
+	# The host-executed merge guard must not become editor-controlled output.
+	assert not module.allowed(".claude/hooks/pr_merge_status_guard.py")
 	assert not module.allowed(".claude/hooks/unrelated.py")
 
 

@@ -210,19 +210,19 @@ else
 	issue_comments_raw="${TMP_RUNTIME_DIR}/gh_issue_comments_raw.json"
 	reviews_raw="${TMP_RUNTIME_DIR}/gh_reviews_raw.json"
 	review_comments_raw="${TMP_RUNTIME_DIR}/gh_review_comments_raw.json"
-	gh_retry "${issue_comments_raw}" api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments"
+	gh_retry "${issue_comments_raw}" api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100"
 	jq -s 'add // []' "${issue_comments_raw}" > "${PR_ISSUE_COMMENTS_FILE}"
 	printf '[]\n' > "${PR_REVIEWS_FILE}"
 	case "$(printf '%s' "${REVIEW_BREAK_GLASS_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" in
 		1|true|yes|on)
-			if gh_retry "${reviews_raw}" api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews"; then
+			if gh_retry "${reviews_raw}" api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100"; then
 				jq -s 'add // []' "${reviews_raw}" > "${PR_REVIEWS_FILE}"
 			else
 				echo "::warning::Optional top-level PR reviews fetch failed; continuing with PR_REVIEWS_FILE=[] for break-glass/advisory consumers."
 			fi
 			;;
 	esac
-	gh_retry "${review_comments_raw}" api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments"
+	gh_retry "${review_comments_raw}" api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments?per_page=100"
 	jq -s 'add // []' "${review_comments_raw}" > "${PR_REVIEW_COMMENTS_FILE}"
 
 	jq '{
