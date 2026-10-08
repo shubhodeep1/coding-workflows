@@ -221,6 +221,27 @@ def test_no_waiver_for_security_or_validation(stop: str) -> None:
 	assert "accept_with_followup" not in ledger.decide(7, stop, FP, [], None, NOW)["allowed"]
 
 
+@pytest.mark.parametrize("stop", ["blocked", "needs-human", "scope-blocked"])
+def test_no_waiver_for_security_issue_menu(stop: str) -> None:
+	allowed = ledger.decide(7, stop, FP, [], None, NOW, security_issue=True)["allowed"]
+	assert "accept_with_followup" not in allowed
+	assert "reissue" in allowed and "close" in allowed
+	assert "accept_with_followup" in ledger.decide(7, stop, FP, [], None, NOW)["allowed"]
+	pr_allowed = ledger.decide(7, stop, FP, [], None, NOW, "pr", security_issue=True)["allowed"]
+	assert pr_allowed == ledger.decide(7, stop, FP, [], None, NOW, "pr")["allowed"]
+
+
+def test_decide_cli_security_issue_flag(tmp_path: Path) -> None:
+	comments = tmp_path / "comments.json"
+	comments.write_text("[]", encoding="utf-8")
+	base = ("decide", "--item", "7", "--stop", "blocked", "--fingerprint", FP, "--comments-file", str(comments),
+		"--trusted-login", "bot", "--now", "2026-10-04T12:00:00Z")
+	rc, flagged = _cli(*base, "--security-issue")
+	assert rc == 0 and "accept_with_followup" not in flagged["allowed"]
+	rc, plain = _cli(*base)
+	assert rc == 0 and "accept_with_followup" in plain["allowed"]
+
+
 def _decision(stop: str = "scope-blocked", paths: list[str] | None = None) -> dict:
 	return ledger.decide(7, stop, FP, [], None, NOW, rejection=_rejection(stop, paths) if stop in ledger.GUARD_STOPS else None)
 
@@ -570,14 +591,17 @@ def test_security_reissue_keeps_a_finding_open_or_transfers_its_marker() -> None
 	assert standalone[0]["body"].splitlines()[0] == "<!-- ai:security-finding:abc-1 -->"
 	assert standalone[1] == {"op": "close", "issue": 7, "reason": "not_planned", "pr": False}
 	missing = actions.plan(_verdict("reissue", instructions="correct spec"), _ctx(labels=security_labels))
-	assert [op["op"] for op in missing] == ["create_issue", "comment"]
-	assert missing[0]["labels"] == ["ai:security"]
-	assert missing[1]["issue"] == 7 and "stays open" in missing[1]["body"]
+	assert [op["op"] for op in missing] == ["comment", "telegram"]
+	assert missing[0]["issue"] == 7 and "stays open" in missing[0]["body"]
 	project_child = actions.plan(_verdict("reissue", instructions="correct spec"), _ctx(labels=security_labels, tracking=12, security_finding_id="abc-1"))
 	assert [op["op"] for op in project_child] == ["comment", "comment"]
 	assert project_child[0]["issue"] == 12 and project_child[1]["issue"] == 7
 	assert "re-issue request recorded on tracking issue #12" in project_child[1]["body"]
 	assert "newest issue" not in project_child[1]["body"]
+	assert "\n<!-- ai:security-finding:abc-1 -->\n" in project_child[0]["body"]
+	unbound = actions.plan(_verdict("reissue", instructions="correct spec"), _ctx(labels=security_labels, tracking=12))
+	assert [op["op"] for op in unbound] == ["comment", "telegram"]
+	assert unbound[0]["issue"] == 7 and "stays open" in unbound[0]["body"]
 
 
 def test_security_reissue_carries_canonical_metadata() -> None:
@@ -1464,6 +1488,36 @@ def test_security_reissue_transfers_marker_before_closing_original(tmp_path: Pat
 	result, state = _judge(tmp_path, item, verdict={"verdict": "reissue", "reason": "r", "instructions": "correct spec"}, FAKE_GH_FAIL_CREATE="1")
 	assert "reason=actuation_failed" in result.stdout
 	assert not any(fields.get("state") == "closed" for _, fields in state["patched"])
+
+
+@pytest.mark.parametrize("tracking", [None, 40])
+@pytest.mark.parametrize("stop", ["blocked", "needs-human"])
+def test_security_accept_with_followup_keeps_block(tracking: int | None, stop: str) -> None:
+	ctx = _ctx(stop=stop, labels=[f"ai:{stop}", "ai:security"], has_plan=True, tracking=tracking)
+	ops = actions.plan(_verdict("accept_with_followup", instructions="x", reason="/approved now"), ctx)
+	assert [op["op"] for op in ops] == ["comment", "telegram"]
+	body = _bodies(ops)[0]
+	assert body.startswith("This security finding stays open")
+	assert body.endswith("Why: /approved now")
+	assert not any(line.startswith(("/approved", "/answer", "/reclarify")) for line in body.splitlines())
+	assert ops[1]["level"] == "WARNING"
+
+
+def test_non_security_accept_with_followup_still_creates_followup() -> None:
+	ops = actions.plan(_verdict("accept_with_followup", instructions="x"), _ctx(has_plan=True))
+	assert ops[0]["op"] == "create_issue"
+	assert "/approved" in _bodies(ops)
+
+
+def test_security_accept_with_followup_is_refused_end_to_end(tmp_path: Path) -> None:
+	item = dict(ISSUE, labels=ISSUE["labels"] + [{"name": "ai:security"}])
+	result, state = _judge(tmp_path, item, verdict={"verdict": "accept_with_followup", "reason": "r", "instructions": "i"})
+	assert "reason=invalid_verdict" in result.stdout, result.stderr
+	assert state["created"] == []
+	assert not any(comment["body"].startswith("/approved") for comment in state["comments"])
+	assert not any(fields.get("state") == "closed" for _, fields in state["patched"])
+	decision = json.loads((tmp_path / "rt" / "decision.json").read_text(encoding="utf-8"))
+	assert "accept_with_followup" not in decision["allowed"]
 
 
 def test_non_security_issue_context_has_no_security_source_body(tmp_path: Path) -> None:
