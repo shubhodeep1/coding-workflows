@@ -219,7 +219,9 @@ def find_issues(issues: object) -> list[dict]:
 		and _trusted(issue)
 		and str(issue.get("body") or "").split("\n", 1)[0].strip() == MARKER
 	]
-	return sorted(candidates, key=lambda issue: int(issue.get("number") or 0))
+	# A non-integer number sorts first instead of raising ValueError, so tick's
+	# guard reports it as a controlled ApiError (exit 2).
+	return sorted(candidates, key=lambda issue: issue["number"] if type(issue.get("number")) is int else 0)
 
 
 def parse_entries(body: str) -> list[tuple[str, str]]:
