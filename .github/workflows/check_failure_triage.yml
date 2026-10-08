@@ -195,6 +195,8 @@ jobs:
       OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
       CHECK_FAILURE_TRIAGE_ENABLED: ${{ vars.CHECK_FAILURE_TRIAGE_ENABLED || 'true' }}
       CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH: ${{ vars.CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH || '3' }}
+      # Issue #6726: add a verified Integration branch line for orchestrator/project-<N> PR heads.
+      TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED: ${{ vars.TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED || 'false' }}
       TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
       TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
       # Job-level override of the workflow-level default: a PR carrying the

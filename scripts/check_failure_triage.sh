@@ -48,6 +48,11 @@
 #   CHECK_TRIAGE_TRUSTED_SUPPORT_DIR          trusted prompt root (required for diagnosis)
 #   CHECK_TRIAGE_STAGE                        all (default), collect, or diagnose
 #   CHECK_TRIAGE_PREPARE_ONLY                 true: write issue body without posting
+#   TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED    "true" adds an "Integration branch:" line
+#                                            when the failing PR's head is an existing
+#                                            orchestrator/project-<N> branch of this
+#                                            repository, verified via the GitHub API
+#                                            (default false; issue #6726)
 
 set -euo pipefail
 
@@ -132,6 +137,12 @@ TRIAGE_LABEL="ai:check-triage"
 ESCALATED_LABEL="ai:check-triage-escalated"
 MARKER_PREFIX="check-failure-triage:"
 SELF_FRAGMENT="${CHECK_TRIAGE_SELF_CHECK_NAME_FRAGMENT:-Check Failure Triage}"
+# Issue #6726: off by default until the operator step for #6710 is done.
+PR_HEAD_BRANCH_METADATA_ENABLED="${TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED:-false}"
+# The only branch shape this script will route a fix to. Digits only, so the
+# value cannot carry markdown, backticks, path segments or newlines.
+INTEGRATION_BRANCH_RE='^orchestrator/project-[1-9][0-9]*$'
+INTEGRATION_BRANCH=""
 
 REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 RUNTIME_DIR="${RUNTIME_DIR:-/tmp/check-triage-${GITHUB_RUN_ID:-local}}"
@@ -173,6 +184,18 @@ if [ "${TRIAGE_STAGE}" = "diagnose" ]; then
 	PR_TITLE="$(jq -r '.title' "${TRIAGE_METADATA_FILE}")"
 	PR_URL="$(jq -er '.url' "${TRIAGE_METADATA_FILE}")"
 	FP_MARKER="<!-- ${MARKER_PREFIX}fp=${FP} -->"
+	if ! INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${TRIAGE_METADATA_FILE}")"; then
+		INTEGRATION_BRANCH="__unparseable__"
+	fi
+	# The collect stage only writes an API-verified project branch, and only
+	# while the flag is on. Anything else is tampered or stale state: fail
+	# closed rather than route a fix to an unverified branch.
+	if [ -n "${INTEGRATION_BRANCH}" ] &&
+		{ [ "${PR_HEAD_BRANCH_METADATA_ENABLED,,}" != "true" ] || ! [[ "${INTEGRATION_BRANCH}" =~ ${INTEGRATION_BRANCH_RE} ]]; }; then
+		log "error integration_branch_metadata_invalid"
+		tg_send_msg "Check-failure auto-triage rejected invalid integration-branch metadata for ${REPO} PR #${PR_NUMBER}."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+		exit 1
+	fi
 fi
 
 if ! CHECK_NAME_DISPLAY="$(sanitize_check_name_display "${CHECK_NAME}")"; then
@@ -262,6 +285,42 @@ if [ -n "${HEAD_REPO_FULL_NAME}" ] && [ "${HEAD_REPO_FULL_NAME}" != "${REPO}" ];
 	exit 0
 fi
 printf '%s' "${PR_JSON}" | jq -r '.body // ""' > "${RUNTIME_DIR}/pr_body.txt" 2>/dev/null || : > "${RUNTIME_DIR}/pr_body.txt"
+
+# --- Verified integration branch (issue #6726) -----------------------------
+# The branch comes only from the API-reported PR head (head.ref and
+# head.repo.full_name of the payload above); logs, diagnosis text, the PR body
+# and issue prose are never read for it. Every skip leaves the line out, which
+# is the behaviour without the flag.
+if [ "${PR_HEAD_BRANCH_METADATA_ENABLED,,}" != "true" ]; then
+	log "integration_branch outcome=skip reason=disabled pr=${PR_NUMBER}"
+elif [ -z "${HEAD_REPO_FULL_NAME}" ] || [ "${HEAD_REPO_FULL_NAME}" != "${REPO}" ]; then
+	log "integration_branch outcome=skip reason=head_repo_mismatch pr=${PR_NUMBER}"
+elif ! [[ "${HEAD_REF}" =~ ${INTEGRATION_BRANCH_RE} ]]; then
+	log "integration_branch outcome=skip reason=not_project_branch pr=${PR_NUMBER}"
+else
+	# API audit (§14): the existing calls in this path are the PR fetch above
+	# (repos/<repo>/pulls/<n>) and the parent-issue fetch. The PR payload names
+	# the head ref but does not prove the branch still exists, so one
+	# git/ref/heads read is needed (same endpoint and 404 handling as
+	# branch_exists in scripts/resolve_integration_ref.sh). Cost: one call
+	# (plus retries on non-404 errors), only with the flag on and a
+	# same-repository project-branch head.
+	integration_ref_encoded="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "${HEAD_REF}")"
+	integration_ref_err_file="${RUNTIME_DIR}/integration_branch_lookup.err"
+	if gh api "repos/${REPO}/git/ref/heads/${integration_ref_encoded}" >/dev/null 2>"${integration_ref_err_file}"; then
+		INTEGRATION_BRANCH="${HEAD_REF}"
+	elif grep -Eq '404|Not Found' "${integration_ref_err_file}" 2>/dev/null; then
+		log "integration_branch outcome=skip reason=branch_missing pr=${PR_NUMBER}"
+	elif gh_retry gh api "repos/${REPO}/git/ref/heads/${integration_ref_encoded}" >/dev/null 2>&1; then
+		INTEGRATION_BRANCH="${HEAD_REF}"
+	else
+		log "integration_branch outcome=skip reason=lookup_failed pr=${PR_NUMBER}"
+	fi
+	rm -f "${integration_ref_err_file}"
+	if [ -n "${INTEGRATION_BRANCH}" ]; then
+		log "integration_branch outcome=added branch=${INTEGRATION_BRANCH} pr=${PR_NUMBER}"
+	fi
+fi
 
 # A fix PR opened by the pipeline uses branch ai/issue-<N>. If this failing PR
 # is such a branch, read its source issue's triage markers to derive the
@@ -403,7 +462,8 @@ if [ "${TRIAGE_STAGE}" = "collect" ]; then
 	jq -n --arg pr_number "${PR_NUMBER}" --arg check_name "${CHECK_NAME}" \
 		--arg fingerprint "${FP}" --arg generation "${GEN}" --arg root "${ROOT}" \
 		--arg head_ref "${HEAD_REF}" --arg title "${PR_TITLE}" --arg url "${PR_URL}" \
-		'{pr_number: $pr_number, check_name: $check_name, fingerprint: $fingerprint, generation: $generation, root: $root, head_ref: $head_ref, title: $title, url: $url}' > "${TRIAGE_METADATA_FILE}"
+		--arg integration_branch "${INTEGRATION_BRANCH}" \
+		'{pr_number: $pr_number, check_name: $check_name, fingerprint: $fingerprint, generation: $generation, root: $root, head_ref: $head_ref, title: $title, url: $url, integration_branch: $integration_branch}' > "${TRIAGE_METADATA_FILE}"
 	if [ -n "${GITHUB_OUTPUT:-}" ]; then
 		echo "ready=true" >> "${GITHUB_OUTPUT}"
 	fi
@@ -625,6 +685,11 @@ BODY_FILE="${RUNTIME_DIR}/issue_body.md"
 	echo
 	echo "- **Repository:** \`${REPO}\`"
 	echo "- **Pull request:** ${PR_URL_DISPLAY} (\`${HEAD_REF_DISPLAY}\`)"
+	if [ -n "${INTEGRATION_BRANCH}" ]; then
+		# The one routing line this body may carry: API-verified in collect,
+		# re-validated above, and parsed by scripts/resolve_integration_ref.sh.
+		echo "- **Integration branch:** \`${INTEGRATION_BRANCH}\`"
+	fi
 	echo "- **Failing check:** \`${CHECK_NAME_DISPLAY}\` (conclusion: \`${CHECK_CONCLUSION_DISPLAY}\`)"
 	if [ -n "${CHECK_RUN_ID}" ]; then
 		echo "- **Check run id:** \`${CHECK_RUN_ID_DISPLAY}\`"
@@ -664,7 +729,7 @@ then
 	exit 1
 fi
 
-if ! body_validation_reason="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${BODY_FILE}" "${FP_MARKER}" "${GEN}" "${ROOT}" "${PR_NUMBER}" <<'PY'
+if ! body_validation_reason="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${BODY_FILE}" "${FP_MARKER}" "${GEN}" "${ROOT}" "${PR_NUMBER}" "${INTEGRATION_BRANCH}" <<'PY'
 import pathlib
 import re
 import sys
@@ -686,7 +751,28 @@ else:
 	# Cover resolve_integration_ref.sh, security_dependency.py and
 	# orchestrate_lib.py's TARGET_BRANCH_LINE_RE, including Unicode newlines.
 	key = re.compile(r"^\s*(?:[-*>]\s*)*\**\s*(?:integration\s+branch|target\s+branch|tracking\s+issue|depends\s+on|local\s+id|managed\s+by|prior_pr_baseline_branch|files_touched)\s*\**\s*:", re.IGNORECASE)
-	print("routing_key" if any(key.match(line) for line in body.splitlines() + lines) else "")
+	integration_branch = sys.argv[6] if len(sys.argv) > 6 else ""
+	reason = ""
+	exempt_index = None
+	if integration_branch:
+		# Exactly one trusted line, in the header (before the first "---"),
+		# also counted across Unicode line separators.
+		trusted_line = f"- **Integration branch:** `{integration_branch}`"
+		header_end = lines.index("---") if "---" in lines else len(lines)
+		positions = [index for index, line in enumerate(lines) if line == trusted_line]
+		if (not re.fullmatch(r"orchestrator/project-[1-9][0-9]*", integration_branch)
+				or len(positions) != 1 or positions[0] >= header_end
+				or body.splitlines().count(trusted_line) != 1):
+			reason = "integration_branch"
+		else:
+			exempt_index = positions[0]
+	if not reason:
+		exempt_line = lines[exempt_index] if exempt_index is not None else None
+		checked = [line for index, line in enumerate(lines) if index != exempt_index]
+		checked += [line for line in body.splitlines() if exempt_line is None or line != exempt_line]
+		if any(key.match(line) for line in checked):
+			reason = "routing_key"
+	print(reason)
 PY
 )"; then
 	body_validation_reason="marker"

@@ -287,6 +287,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
     fine-grained PAT so `issues: opened` still fires without exposing `GH_PAT`.
     Fix PRs linked to triage issues run the single-issue security pass at their
     current head; the triage label and fingerprint do not exempt them.
+    With `TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED=true` (default `false`) the only
+    routing key the body validator accepts is one header line
+    `- **Integration branch:** \`orchestrator/project-<N>\``, written by the script
+    when the GitHub API reports a same-repository PR head of that shape and the
+    branch exists; it is never inferred from logs or issue prose.
 14. **workflow failure heal** (`workflow_failure_heal.yml`,
     `internal-workflow-failure-heal.yml`, `workflow-failure-heal-intake.yml`,
     `scripts/workflow_failure_heal_report.sh`,
