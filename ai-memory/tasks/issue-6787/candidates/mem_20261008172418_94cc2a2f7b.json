@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: Today the intake files the heal issue even when it can't build the scope marker. At `scripts/workflow_failure_heal_intake.sh:1092-1094`, a failed `heal-scope render` empties the marker file and logs `outcome=unresolved`, and the script then passes that empty file on (line 1106) and still files the issue. The code fix is closing that gap and adding tests for both the refusal and the verified path. A code PR can't rerun intake or seed answers into an issue that doesn't exist yet. The existing `workflow-failure-heal` dispatch path re-files #6779's failure once the fix is in place, and the new issue gets its own Q1:C / Q2:A answers from its own clarify cycle. Option B adds a new automatic re-dispatch, which would need its own \u00a720 registry entry and design work this issue doesn't call for. Option C would leave this issue blocked by work outside the PR.\nQ2: An unresolved marker can come from a transient cause, such as an unreadable consumer tree or a missing frozen snapshot. A refusal that ends green (option B) can go unnoticed, and a heal report would then be lost. A red job with a stable log line and a CRITICAL alert can be seen and rerun. That fits the repo's fail-closed habit for missing provenance. Option C adds an extra API write and posts on consumer repos, which nothing here needs.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Both decisions are lettered options.\n\nNotes for the planner and implementer:\n- Touch points:\n  - `scripts/workflow_failure_heal_intake.sh` around lines 1057-1106: the marker render, the `scope ... outcome=unresolved` log line, and the issue-creation call that receives `--scope-marker-file`.\n  - The existing `phase_report_unverified` skip at line 408 shows the log format to follow.\n- Before creating the issue, check that the marker file is non-empty and holds a marker comment. The check already exists in the `outcome=` expression on line 1094; reuse it.\n- If the check fails:\n  - log `WORKFLOW_HEAL skip reason=scope_unresolved` with the source, issue/PR and run fields;\n  - send a CRITICAL Telegram alert naming the source and run (no-op when Telegram isn't configured);\n  - exit non-zero;\n  - make sure no issue is created and no fingerprint or lineage state is written before the refusal.\n- Regression tests, alongside the existing heal intake tests:\n  1. When render fails or returns empty output, no issue is created, the log line appears and the exit is non-zero.\n  2. When the marker is verified, the issue is created with the marker in it, and `scripts/implement_heal_preflight.sh` accepts it.\n- No change to execution behaviour other than the refusal.\n- Reversibility: a revert brings back the old behaviour of filing issues without a marker.\n\nSETUP REQUIRED:\nNone.",
+  "fingerprint": "b16ce1b1c5cdf09b32f8ae3b3de6c1eef58739d7b9bd4f734a7516d0d9195d9a",
+  "lineage": {
+    "issue_number": 6787,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37815223152",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37815223152",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6787"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008172418_94cc2a2f7b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6787,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37815223152"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6787",
+  "timestamps": {
+    "created_at": "2026-10-08T17:24:18Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
