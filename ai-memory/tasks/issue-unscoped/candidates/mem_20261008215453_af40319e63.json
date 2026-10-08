@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Keep older-line findings blocking after guard deletions unless automated provenance analysis proves the deleted control cannot affect the cited operation.\"\n  expected_change_site: scripts/security_audit.sh, deletion_block_reason() and paths_mentioning()\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: `paths_mentioning` relies on static text search (`git grep`) for module names and does not perform full data-flow or dynamic analysis; deletion checks use module-name text searches and a shared-referrer check (`scripts/security_audit.sh:2233-2256`), then `deletion_block_reason()` returns the result of `changed_file_reference_reason()` (`scripts/security_audit.sh:2257`); a successful search with no recognized reference returns no block reason (`scripts/security_audit.sh:2172-2177`), leaving the pre-project finding advisory (`scripts/security_audit.sh:2291-2304`); text searches and shared-referrer checks cannot prove absence of indirect wiring such as dynamic imports, configuration-driven wiring, dependency injection, or multi-hop references.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Keep older-line findings blocking after guard deletions unless automated provenance analysis proves the deleted control cannot affect the cited operation.\"\n  Expected change site: scripts/security_audit.sh\n  Evidence of absence: The implemented `paths_mentioning` relies on static text search (`git grep`) for module names. This approach does not perform full data-flow or dynamic analysis to prove that the deleted control cannot affect the operation through indirect or dynamic wiring (e.g., via dynamic imports or dependency injection not captured by `git grep`). While this covers the identified finding classes, it falls short of formal automated provenance analysis.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cKeep older-line findings blocking after guard deletions unless automated provenance analysis proves the deleted control cannot affect the cited operation.\u201d\n  Expected change site: `scripts/security_audit.sh`, `deletion_block_reason()`.\n  Evidence of absence: The deletion checks use module-name text searches and a shared-referrer check (`scripts/security_audit.sh:2233-2256`). If those checks find no match, `deletion_block_reason()` returns the result of `changed_file_reference_reason()` (`scripts/security_audit.sh:2257`); a successful search with no recognized reference returns no block reason (`scripts/security_audit.sh:2172-2177`). The caller then leaves the pre-project finding advisory (`scripts/security_audit.sh:2291-2304`). The code does not perform provenance analysis to establish that a deleted control cannot affect the cited operation.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"Keep older-line findings blocking after guard deletions unless automated provenance analysis proves the deleted control cannot affect the cited operation.\"\n  Expected change site: scripts/security_audit.sh, paths_mentioning() and deletion_block_reason()\n  Evidence of absence: The implementation performs text-based module-name searches at base and head (via `paths_mentioning()`), checks for shared referrers, and checks if project-changed files reference the cited module. When these searches succeed without finding references, `deletion_block_reason()` returns `\"\", False`, marking the finding advisory. However, a successful `git grep` with no matches does not \"prove\" the deleted control cannot affect the operation\u2014it only proves there is no static text reference. Indirect wiring (dynamic imports via `importlib.import_module()`, configuration-driven wiring, dependency injection, or multi-hop indirect references) would not be detected by text search. The requirement uses the word \"proves,\" which implies a higher standard of certainty than text-based evidence provides. The implementation fails closed when searches fail (returns None), which is correct, but when searches succeed without matches, it marks findings advisory without exhaustive proof. This is a design limitation: text-based analysis is a practical heuristic but cannot rule out all possible indirect wiring paths.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "fb83ba0827cdb67d139cb8422c16f72879b56905b74f424a2ed27db4e71512de",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6805,
+    "run_id": "37846327262",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37846327262",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261008215453_af40319e63",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6805,
+    "run_id": "37846327262"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-08T21:54:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
