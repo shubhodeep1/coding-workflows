@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: Implement builds its automation-path grant only from a `files_touched:` block in the issue body, written by the pipeline login or by an OWNER, MEMBER or COLLABORATOR (`build_automation_grant` in `scripts/files_touched_scope_guard.py`, lines 177-199, called from `implement.yml` at line 1656). An `/answer` comment cannot supply that block. B is the exact path that rejected #6772 with `reason=no_allowlist`, and C takes the work out of the pipeline. So A is the only option that ships. The body edit is an operator setup step, listed under SETUP REQUIRED below. Until someone makes it, the existing guard fails closed.\nQ2: The issue's scope is hooks. The live-copy parity contract (`tests/test_claude_template_live_parity.py`, agents.md \"Live `.claude/` copies\") already requires each live `.claude/hooks/*` file to match its `workflow-templates/.claude/hooks/*` twin byte for byte, mode included, unless `.github/ai/claude_template_divergence.json` lists it (keys relative to `.claude/`, e.g. `hooks/own.py`). Copying the cleanly merged twin therefore produces the state the parity test already requires. B would also cover `settings.json` and commands, which is wider than the issue and includes six command files that are allowed to differ. C is narrower than A and adds nothing, because A already covers `pr_merge_status_guard.py`.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Both decisions are lettered. Constraints the planner must follow:\n- Q1 exact `files_touched` paths: `scripts/review_conflict_prepare.sh`, `tests/test_conflict_manifest_union_contract.py`, `changelog.d/6772-conflict-hook-template-resolve.md`, `README.md`.\n  - Put the regression tests in the existing `tests/test_conflict_manifest_union_contract.py`. CI already runs that file explicitly (`.github/workflows/ci.yml` line 1003). A new test file would need a `ci.yml` step, which is another automation path needing its own grant.\n  - `README.md` is listed only so the new flag can get a row in the variables table.\n- `scripts/review_conflict_prepare.sh` must default the flag inside the helper with `${CONFLICT_HOOK_TEMPLATE_RESOLVE_ENABLED:-false}`, per unattended \u00a78 (the helper runs from the verified support SHA). No workflow `env:` export is needed.\n- Q2 eligibility, all must hold:\n  - The conflicted path is a regular file directly under `.claude/hooks/`.\n  - `workflow-templates/.claude/hooks/<same name>` is a regular file, not a symlink, with no unmerged index entries.\n  - `hooks/<name>` is not a key of the `divergent` object in `.github/ai/claude_template_divergence.json`.\n  - Otherwise, or when the flag is off, keep the existing `sandbox_path_host_only` refusal.\n  - The hook is never added to the resolver's model working set.\n- Not changed: heal intake, `files_touched_scope_guard.py`, and the sandbox admission policy.\n\nESCALATION (required for any ESCALATE decision):\nNone.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- ISSUE_FILES_TOUCHED_GRANT (resource: edit to this issue's body):\n  - What to provision: before `/approved`, the GH_PAT pipeline account or an OWNER/MEMBER/COLLABORATOR adds this block to the issue body:\n    ```\n    files_touched:\n    - scripts/review_conflict_prepare.sh\n    - tests/test_conflict_manifest_union_contract.py\n    - changelog.d/6772-conflict-hook-template-resolve.md\n    - README.md\n    ```\n  - Until it is set: the implement automation-path guard refuses the staged script edit (`reason=no_allowlist`) and latches `ai:scope-blocked`. That is the existing fail-closed behaviour; no commit is created.\n- CONFLICT_HOOK_TEMPLATE_RESOLVE_ENABLED (variable):\n  - What to provision: set it to `true` once an operator has reviewed the merged change.\n  - Until it is set: the helper treats it as `false`, and conflicted hooks keep the host-only manual-merge refusal.",
+  "fingerprint": "e955eca4848b2909b8b6196619600a210f20bd463a2ea2cf4617f542ae257f34",
+  "lineage": {
+    "issue_number": 6784,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37812176351",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37812176351",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6784"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008165926_78df7156a5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6784,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37812176351"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6784",
+  "timestamps": {
+    "created_at": "2026-10-08T16:59:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
