@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The mismatch exists only on PR #6563's head branch `ai/issue-6557`. On the default branch the template and active prompt already match, so option B changes nothing and leaves PR #6563 red. Option C depends on the PR's own autofix loop, which may or may not fix it, and would close this issue with nothing done. Note that the branch has moved since the failing run: it is now at `9b71c866b554`, while the failing run was at `5f3ee43d7552`. The fix must therefore first check whether the mismatch still exists at the branch's current head.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - Branch `ai/issue-6557` (PR #6563, base `main`), current head `9b71c866b554` according to GITHUB FACTS\n    - `prompts/mode-judge-unblock.txt` (the active prompt on that branch; this is the version to match)\n    - `prompts/_templates/mode-judge-unblock.txt` (the template to fix; triage cites lines 14 and 31)\n    - `tests/test_assemble_prompt.py::test_assembled_templates_match_legacy_prompt_bytes` (lines 61-78)\n    - `scripts/unblock_ledger.py` lines 442-472 and 574-579 (the runtime close gate; do not change it)\n  steps:\n    - Target the fix PR at `ai/issue-6557` and work from its current tip.\n    - Run `tests/test_assemble_prompt.py` there. If it already passes because PR #6563's autofix fixed it, make no edit and close this issue as already resolved.\n    - If it still fails, edit only `prompts/_templates/mode-judge-unblock.txt`:\n      - Replace the `close` verdict description with the active prompt's wording that the model is never offered `close`.\n      - Add the comment-as-evidence rule from line 25 of the active prompt.\n      - Remove `close` from the verdict enum in the model-output JSON schema.\n      - Keep the template's existing include directives so that `scripts/assemble_prompt.sh` / `render_prompt.py --assemble-only` output matches `prompts/mode-judge-unblock.txt` byte for byte.\n    - Do not edit `prompts/mode-judge-unblock.txt` or `scripts/unblock_ledger.py`.\n    - Rerun `tests/test_assemble_prompt.py` and confirm it passes.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: The failing test asserts that the assembled template equals the active prompt. Making the template match the branch's active prompt satisfies that assertion directly. It keeps the behaviour PR #6563 intends (`close` is not offered to the model, and the runtime gate is unchanged).\n  reversibility: The change is one file of prompt-template text on a feature branch. If a human prefers to put `close` back, they can revert this commit and change both prompt files together.",
+  "fingerprint": "161fb7a4ef161a905d1859f1bdc72acde952e8235510a29c2a3195314b35f1ee",
+  "lineage": {
+    "issue_number": 6812,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37852928611",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37852928611",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6812"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008222916_d396bbadd0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6812,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37852928611"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6812",
+  "timestamps": {
+    "created_at": "2026-10-08T22:29:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
