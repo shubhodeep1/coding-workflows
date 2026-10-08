@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The grant guard only accepts an exact `files_touched` entry in the body of an issue written by a trusted author. This answer, a comment, or another retry cannot satisfy it, and the issue text itself says the work goes ahead \"after the operator clears the grant\". B would drop the routing behaviour the issue asks for. C would end in `ai:scope-blocked` again. So the answer is A, with the grant listed under setup required. The feature flag stays off by default, so nothing changes until the grant exists and the flag is turned on.\n\nQ2: Today the validator (`scripts/check_failure_triage.sh`, lines 667-698) requires the four fixed marker lines at `lines[:4]`. It then rejects any routing-key line anywhere, using the pattern at line 688. The issue requires the `Integration branch` line to be added before final body validation, which rules out B's validate-then-append order. C would remove a security control. A lets through exactly one line, built by the script, at a fixed position and with a verified value. Every other routing key stays blocked, and with the flag off the validator behaves exactly as it does today.\n\nEXECUTION PLAN (required for any non-letter decision):\n(none; both decisions are letter picks. Implementation notes for the planner:)\nQ2 notes:\n  - In the body builder (the block ending at line 643), write `- Integration branch: <head ref>` on the line straight after the four marker lines. Do this only when `CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED=true` and the PR passed every check: it is open, its head repo equals `REPO`, its head ref is a valid branch name, and the check's head SHA and the PR's head SHA are both nonempty and equal.\n  - If any of those checks fails while the flag is on, log `routing_unverified`, send a WARNING Telegram alert, and exit 0 without creating an issue.\n  - Pass the verified head ref to the validator as a new argument (argv[6], empty when the flag is off). When it is nonempty:\n    - `lines[4]` must equal `- Integration branch: <ref>` exactly.\n    - Remove that one line before running the existing `<!--` check and routing-key scan on the remaining lines.\n    - Any other routing-key match, including a second `Integration branch` line, is still `routing_key`.\n  - When argv[6] is empty, the validation logic must be unchanged.\n  - Tests in `tests/test_check_failure_triage*.py`:\n    - flag off: the body has no routing line;\n    - flag on with a verified PR: exactly one line, and validation passes;\n    - flag on with a closed PR, a fork head, an invalid ref, or mismatched or empty SHAs: `routing_unverified`, a WARNING, and no issue;\n    - an injected `Integration branch:` or `Target branch:` line in the diagnosis or evidence: still `routing_key`.\n  - Add the README row for `CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED` (default `false`) and a changelog fragment.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- Grant on this issue (issue-body edit by a trusted author: the GH_PAT login or an OWNER/MEMBER/COLLABORATOR): add a `files_touched` list that names `scripts/check_failure_triage.sh`, the `tests/test_check_failure_triage*.py` file being added or changed, `README.md`, and `changelog.d/<issue>-check-triage-pr-head-routing.md`. ALLOW_WORKFLOW_EDITS must stay `true`. Until the grant is added, implement refuses the commit to `scripts/` with `guard=automation-path`.\n- CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED (variable): an operator sets it to `true` once the change has merged and they want triage issues routed to the PR head branch. Until then the code adds no `Integration branch` line and validation is unchanged.",
+  "fingerprint": "8ed4588c8c75cd142852076114ab0f5f746aecbf1a94b5a1bf2ab6c01604b473",
+  "lineage": {
+    "issue_number": 6808,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37846167931",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37846167931",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6808"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008212948_859ae3f280",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6808,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37846167931"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6808",
+  "timestamps": {
+    "created_at": "2026-10-08T21:29:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
