@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"If work must be split, create a security-labelled successor bound to the original finding and retain the block until its fix is verified merged.\"\n  expected_change_site: `scripts/unblock_actions.py` tracked-issue `reissue` handling and `scripts/orchestrate_poll_process.sh` `handle_unblock_judge_project_hooks`\n  confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: `scripts/unblock_actions.py` lines 388-402 only comment on the tracking issue without creating a successor with the `ai:security` label; `scripts/orchestrate_poll_process.sh` lines 16955-16960 with `--label \"ai:clarification\" --label \"ai:orchestrator-managed\"` only; `unblock_actions.py` records a generic fix-up request without the finding marker or security label; the wait handler resumes the original item after that generic fix-up merges.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"If work must be split, create a security-labelled successor bound to the original finding and retain the block until its fix is verified merged.\" (linked issue #6541 recommendation)\n  Expected change site: `scripts/unblock_actions.py` lines 388-402 (the `reissue` branch when `ctx[\"tracking\"]` is set) and `scripts/orchestrate_poll_process.sh` lines 16955-16960 (`handle_unblock_judge_project_hooks` issuing `gh issue create` for the fix-up request)\n  Evidence of absence: For a tracked security finding that gets a `reissue` verdict, `scripts/unblock_actions.py` lines 377-381 only add the security finding marker, target-branch and depends-on metadata when `not ctx[\"tracking\"]`; lines 388-402 only comment on the tracking issue, never creating a successor issue with the `ai:security` label. The poller then materializes the fix-up at lines 16955-16960 with `--label \"ai:clarification\" --label \"ai:orchestrator-managed\"` only \u2014 no `ai:security` label and no finding marker carried over. The original stays blocked, but the successor is unlabelled and unbound, so a security finding can be split into a generic managed issue that the orchestrator can resolve without ever touching the security label.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cIf work must be split, create a security-labelled successor bound to the original finding and retain the block until its fix is verified merged.\u201d\n  Expected change site: `scripts/unblock_actions.py` tracked-issue `reissue` handling and `scripts/orchestrate_poll_process.sh` `handle_unblock_judge_project_hooks`.\n  Evidence of absence: For tracked issues, `unblock_actions.py` records a generic fix-up request without the finding marker or security label (lines 388-402). The poller creates that request with only `ai:clarification` and `ai:orchestrator-managed` (lines 16952-16960). The security-labelled, finding-bound replacement is implemented only for the standalone reissue path, so a tracked security finding split through `reissue` has no security-labelled successor bound to that finding.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"If work must be split, create a security-labelled successor bound to the original finding and retain the block until its fix is verified merged.\"\n  Expected change site: `scripts/unblock_actions.py` reissue handling for tracked-project issues and `scripts/orchestrate_poll_process.sh` `handle_unblock_judge_project_hooks` fix-up request creation\n  Evidence of absence: For a tracked-project `ai:security` issue, `unblock_actions.py` emits a generic fix-up request without the finding marker or `ai:security` label. The poller's `handle_unblock_judge_project_hooks` creates that request as an issue labeled only `ai:clarification` and `ai:orchestrator-managed`; the security-labelled successor behavior exists only on the standalone reissue path. The wait handler then resumes the original item after that generic fix-up merges. The editor deferred this as out of scope for #6541, noting the original finding stays open and is not waived, but the issue's recommendation explicitly calls for a security-labelled successor when work is split.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "afffcaf18130717a22a1130e3f6387be02f6c4b094fe9f4aa15a3cb6ddae4e4c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6550,
+    "run_id": "37811024191",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37811024191",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261008171902_abf14e4d26",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6550,
+    "run_id": "37811024191"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-08T17:19:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
