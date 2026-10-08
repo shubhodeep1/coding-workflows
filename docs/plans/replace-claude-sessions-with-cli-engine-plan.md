@@ -536,8 +536,8 @@ verdict-bot, claim and catch-all machinery are gone (Phase 2), so a
   - `descope`: revert the failing part, record it, and re-run the security pass
     and validation.
   - `override_guard`: scope/destructive guards only. Paths are audited and
-    never include `.github/workflows/**`, `.claude/**` or `scripts/**` in
-    coding-workflows.
+    never include `.github/**`, `.claude/**` or `workflow-templates/**` in any
+    repository, or `scripts/**` in coding-workflows.
   - `reissue`.
   - `accept_with_followup`: the existing waiver path.
   - `operator_step`: Q33.

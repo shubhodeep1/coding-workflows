@@ -35,6 +35,7 @@ on:
         type: string
   schedule:
     - cron: "0 9 * * 1"
+    - cron: "0 6 * * *"
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -67,9 +68,9 @@ concurrency:
 
 jobs:
   collect-logs:
-    if: ${{ github.event_name != 'schedule' || ((vars.WORKFLOW_RETRO_ENABLED || 'true') == 'true' && github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1')) }}
+    if: ${{ github.event_name != 'schedule' || github.event.schedule == '0 6 * * *' || ((vars.WORKFLOW_RETRO_ENABLED || 'true') == 'true' && github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1')) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 60
     permissions:
       contents: read
       actions: read
@@ -88,6 +89,7 @@ jobs:
         id: resolve_repos
         env:
           OVERRIDE_INPUT: ${{ github.event.inputs.repos_override || '' }}
+          PAT_BUDGET_DAILY: ${{ github.event_name == 'schedule' && github.event.schedule == '0 6 * * *' }}
         run: |
           set -euo pipefail
 
@@ -95,7 +97,9 @@ jobs:
 
           declare -a repos=()
 
-          if [ -n "${OVERRIDE_INPUT//[[:space:]]/}" ]; then
+          if [ "${PAT_BUDGET_DAILY}" = "true" ]; then
+            repos+=("${GITHUB_REPOSITORY}")
+          elif [ -n "${OVERRIDE_INPUT//[[:space:]]/}" ]; then
             IFS=',' read -r -a override_repos <<< "${OVERRIDE_INPUT}"
             for raw_repo in "${override_repos[@]}"; do
               repo="$(printf '%s' "${raw_repo}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
@@ -150,10 +154,12 @@ jobs:
       - name: Collect workflow logs
         id: collect
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          GH_TOKEN: ${{ (github.event_name == 'schedule' && github.event.schedule == '0 6 * * *') && github.token || secrets.GH_PAT || github.token }}
           PYTHONDONTWRITEBYTECODE: "1"
           SINCE_INPUT: ${{ github.event.inputs.since || '' }}
           LOOKBACK_DAYS_INPUT: ${{ github.event.inputs.lookback_days || '7' }}
+          PAT_BUDGET_DAILY: ${{ github.event_name == 'schedule' && github.event.schedule == '0 6 * * *' }}
+          AI_MEMORY_ENABLED: ${{ (github.event_name == 'schedule' && github.event.schedule == '0 6 * * *') && 'false' || vars.AI_MEMORY_ENABLED || 'true' }}
         run: |
           set -euo pipefail
 
@@ -169,7 +175,14 @@ jobs:
             --log-output-dir "${LOG_OUTPUT_DIR}"
           )
 
-          if [ -n "${SINCE_INPUT//[[:space:]]/}" ]; then
+          if [ "${PAT_BUDGET_DAILY}" = "true" ]; then
+            # Include runs that began the day before the report window but
+            # finished inside it. The report itself is limited to yesterday.
+            COLLECT_ARGS+=(--since "$(date -u -d '2 days ago 00:00' +%Y-%m-%dT%H:%M:%SZ)"
+              --max-pages 50 --max-log-runs 0
+              --pat-budget-day "$(date -u -d yesterday +%Y-%m-%d)"
+              --pat-budget-output "${RUNNER_TEMP}/gh-pat-budget.md")
+          elif [ -n "${SINCE_INPUT//[[:space:]]/}" ]; then
             COLLECT_ARGS+=(--since "${SINCE_INPUT}")
           else
             if ! [[ "${LOOKBACK_DAYS_INPUT}" =~ ^[0-9]+$ ]] || [ "${LOOKBACK_DAYS_INPUT}" -lt 1 ]; then
@@ -184,6 +197,20 @@ jobs:
           done
 
           python3 scripts/collect_workflow_logs.py "${COLLECT_ARGS[@]}"
+
+      - name: Publish daily PAT consumer ranking
+        if: ${{ github.event_name == 'schedule' && github.event.schedule == '0 6 * * *' }}
+        run: |
+          cat "${RUNNER_TEMP}/gh-pat-budget.md" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload daily PAT consumer ranking
+        if: ${{ github.event_name == 'schedule' && github.event.schedule == '0 6 * * *' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: gh-pat-budget-day
+          path: ${{ runner.temp }}/gh-pat-budget.md
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Upload workflow log report artifact
         uses: actions/upload-artifact@v6

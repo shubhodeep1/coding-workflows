@@ -41,6 +41,8 @@ env:
   CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
   MODEL_VERBOSITY_JUDGE: ${{ vars.VERBOSITY_JUDGE || 'low' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
+  SEMBLE_BOOTSTRAP_MODE: ${{ vars.SEMBLE_BOOTSTRAP_MODE || 'lazy' }}
+  TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED: ${{ vars.TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED || 'false' }}
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   # Targeted-file-context inlining limit — propagated to
   # scripts/review_conflict_resolve.sh (integration-sync conflict resolver
@@ -81,6 +83,22 @@ jobs:
             echo "SEMBLE_INDEX_AVAILABLE=false"
             echo "SEMBLE_INDEX_PATH=${RUNTIME_DIR}/.semble-index"
           } >> "$GITHUB_ENV"
+
+      - name: Record GH_PAT budget at poll start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_poll
+        run: |
+          # The support helper is not staged yet; snapshot before the first
+          # PAT checkout so the initial calls are included.
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=orchestrate_poll job=poll remaining=${remaining} reset=${reset} used_in_job=unknown"
 
       - name: Resolve workflow support ref for gh retry
         run: |
@@ -176,6 +194,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
           MERGE_TRAIN_MAX_OLDER_PRS: ${{ vars.MERGE_TRAIN_MAX_OLDER_PRS || '20' }}
+          MERGE_TRAIN_IGNORE_PATHS: ${{ vars.MERGE_TRAIN_IGNORE_PATHS || '.ai/.workspace_source_manifest.txt' }}
           MERGE_TRAIN_ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
         run: |
           set -euo pipefail
@@ -203,7 +222,7 @@ jobs:
             --repo "${{ github.repository }}" \
             --label "ai:orchestrator-tracking" \
             --state open \
-            --json number,title \
+            --json number,title,labels \
             --limit 20)"
 
           COUNT="$(echo "${TRACKING_ISSUES}" | jq 'length')"
@@ -270,6 +289,13 @@ jobs:
         uses: shubhodeep1/coding-workflows/.github/actions/install-codex@stable
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+
+      - name: Install OpenCode CLI for isolated review-blocked judge
+        if: steps.find_tracking.outputs.has_work == 'true'
+        continue-on-error: true
+        uses: shubhodeep1/coding-workflows/.github/actions/install-opencode@28f5134003514b5cf31fb8ae52778c2be79d8fde
+        with:
+          opencode_version: ${{ vars.OPENCODE_VERSION || '1.18.23' }}
 
       - name: Install OS-level core tools
         if: steps.find_tracking.outputs.has_work == 'true'
@@ -378,7 +404,7 @@ jobs:
           mkdir -p scripts prompts .github/ai
 
           _fetched_scripts=()
-          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py build_static_context.sh targeted_file_context.py write_codex_config.sh codex_heartbeat.sh security_audit.sh worktree_registry.sh worktree_gc.sh security_dependency.py codex_isolated_exec.sh codex_isolated_workspace.py clarify_openrouter_broker.py; do
+          for f in gh_helpers.sh pr_checks_lib.sh git_ref_health_check.sh ai_labels.py blocker_check.py build_state_snapshot.py check_integration_pr_readiness.py orchestrate_lib.py orchestrate_poll_process.sh orchestrate_state_v2.py task_state.py render_prompt.sh assemble_prompt.sh nag_reminder.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py openrouter_prompt_cache.py build_static_context.sh targeted_file_context.py write_codex_config.sh codex_heartbeat.sh security_audit.sh worktree_registry.sh worktree_gc.sh security_dependency.py ai_engine.sh claude_engine.py claude_settings.json.tmpl codex_stall_guard.sh codex_isolated_exec.sh codex_isolated_workspace.py clarify_openrouter_broker.py workflow_failure_heal.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -524,6 +550,19 @@ jobs:
             mkdir -p "$(dirname -- "${activation_asset}")"
             install -m 0644 "${asset_src}" "${activation_asset}"
           done
+          # Unblock scan (replace-claude-sessions plan Phase 7). Optional: a
+          # missing file only skips the scan, never the poll.
+          for unblock_asset in scripts/unblock_scan.py scripts/unblock_ledger.py; do
+            asset_src=".codex-workflow-src/${unblock_asset}"
+            if [ ! -f "${asset_src}" ] && [ -f ".codex-workflow-src-main/${unblock_asset}" ]; then
+              asset_src=".codex-workflow-src-main/${unblock_asset}"
+            fi
+            if [ ! -f "${asset_src}" ]; then
+              echo "::warning::Unblock scan support file ${unblock_asset} is missing; the unblock scan is skipped."
+              continue
+            fi
+            install -m 0644 "${asset_src}" "${unblock_asset}"
+          done
 
           security_exclusions_src=".codex-workflow-src/scripts/security_audit_fp_exclusions.json"
           if [ ! -f "${security_exclusions_src}" ] && [ -f ".codex-workflow-src-main/scripts/security_audit_fp_exclusions.json" ]; then
@@ -601,13 +640,29 @@ jobs:
 
           rm -rf .codex-workflow-src-main
 
+      # Run on every cron tick, even with no active orchestrator project.
+      - name: Replay failed trusted reclarify commands
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RECLARIFY_REQUEUE_SWEEP_ONLY: "true"
+        run: |
+          set -euo pipefail
+          # Consumers pinned to older support commits may not have this
+          # sweep-only mode yet; never launch the full poller from here.
+          if ! grep -q '^replay_failed_reclarify_commands()' scripts/orchestrate_poll_process.sh; then
+            echo '::warning::Reclarify replay support is not yet staged.'
+            exit 0
+          fi
+          bash scripts/orchestrate_poll_process.sh
+
       - name: setup-uv
-        if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
+        if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'
         continue-on-error: true
         uses: astral-sh/setup-uv@v7
 
       - name: Install semble
-        if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
+        if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -630,7 +685,7 @@ jobs:
           fi
 
       - name: Build semble index
-        if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true'
+        if: steps.find_tracking.outputs.has_work == 'true' && env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -654,8 +709,9 @@ jobs:
             # captured log on failure.
             SEMBLE_INDEX_PATH="${semble_index_path}" \
               bash scripts/build_semble_wrapper.sh > "${RUNTIME_DIR}/semble_index.log" 2>&1 || true
+            grep -m1 '^SEMBLE_BOOTSTRAP ' "${RUNTIME_DIR}/semble_index.log" || true
             if grep -q '^build_semble_wrapper: Semble wrapper unavailable:' "${RUNTIME_DIR}/semble_index.log" 2>/dev/null; then
-              tail -n 20 "${RUNTIME_DIR}/semble_index.log" 2>/dev/null | sed 's/^/semble index: /' || true
+              tail -n 20 "${RUNTIME_DIR}/semble_index.log" 2>/dev/null | grep -v '^SEMBLE_BOOTSTRAP ' | sed 's/^/semble index: /' || true
             fi
           else
             echo "::notice::scripts/build_semble_wrapper.sh not staged; leaving Semble disabled for this poll run."
@@ -686,6 +742,60 @@ jobs:
             --actor "${GITHUB_ACTOR}" \
             --metadata-json "{\"run_attempt\":\"${GITHUB_RUN_ATTEMPT}\",\"repository\":\"${GITHUB_REPOSITORY}\",\"has_work\":\"${{ steps.find_tracking.outputs.has_work || 'false' }}\"}" || true
 
+      # Claude engine (replace-claude-sessions plan Phase 5c): the orchestrator
+      # judges resolve their engine per tracking issue inside the poller
+      # (scripts/orchestrate_poll_process.sh poller_claude_judge). The CLI
+      # and the account pool are fetched only when a tick has work and at
+      # least one judge role resolves to Claude, or an active project label
+      # selects Claude. The per-project judge still resolves its own labels.
+      - name: Resolve AI engine
+        id: ai_engine
+        if: steps.find_tracking.outputs.has_work == 'true'
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_WAVE_JUDGE: ${{ vars.AI_ENGINE_WAVE_JUDGE || '' }}
+          AI_ENGINE_STALL_JUDGE: ${{ vars.AI_ENGINE_STALL_JUDGE || '' }}
+          AI_ENGINE_INTEGRATION_JUDGE: ${{ vars.AI_ENGINE_INTEGRATION_JUDGE || '' }}
+          AI_ENGINE_SECURITY_JUDGE: ${{ vars.AI_ENGINE_SECURITY_JUDGE || '' }}
+          AI_ENGINE_RB_JUDGE: ${{ vars.AI_ENGINE_RB_JUDGE || '' }}
+          AI_ENGINE_SECURITY_AUDIT: ${{ vars.AI_ENGINE_SECURITY_AUDIT || '' }}
+          CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
+          AI_ENGINE_LABELS: ""
+        run: |
+          set -euo pipefail
+          any_claude=false
+          if jq -e 'any(.[]; any(.labels[]?; .name == "ai:engine-claude") and (any(.labels[]?; .name == "ai:codex") | not))' "${RUNTIME_DIR}/tracking_issues.json" >/dev/null; then
+            any_claude=true
+          fi
+          if [ -f scripts/ai_engine.sh ] && jq -e 'any(.[]; all(.labels[]?; .name != "ai:codex"))' "${RUNTIME_DIR}/tracking_issues.json" >/dev/null; then
+            # shellcheck source=/dev/null
+            if source scripts/ai_engine.sh; then
+              for role in WAVE_JUDGE STALL_JUDGE INTEGRATION_JUDGE SECURITY_JUDGE RB_JUDGE SECURITY_AUDIT; do
+                if [ "$(ai_engine_for_role "${role}" || echo codex)" = "claude" ]; then
+                  any_claude=true
+                fi
+              done
+            else
+              echo "::warning::Failed to source scripts/ai_engine.sh; continuing with codex defaults." >&2
+            fi
+          fi
+          echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.find_tracking.outputs.has_work == 'true' && steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/install-claude
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        id: claude_pool
+        if: steps.find_tracking.outputs.has_work == 'true' && steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/claude-pool-token
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
       - name: Process each tracking issue
         if: steps.find_tracking.outputs.has_work == 'true'
         env:
@@ -700,13 +810,31 @@ jobs:
           RUNTIME_BLOCKER_CHECK_ENABLED: ${{ vars.RUNTIME_BLOCKER_CHECK_ENABLED || 'true' }}
           ENABLE_VALIDATION: ${{ vars.ENABLE_VALIDATION || 'true' }}
           ENABLE_SECURITY_PASS: ${{ vars.ENABLE_SECURITY_PASS || 'true' }}
+          # The security audit falls back to codex when every account is over the gate.
+          CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || '' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           MAX_SECURITY_PASS_FIX_REISSUES: ${{ vars.MAX_SECURITY_PASS_FIX_REISSUES || '2' }}
           SECURITY_PASS_CONFIDENCE_GATE: ${{ vars.SECURITY_PASS_CONFIDENCE_GATE || '8' }}
           SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED: ${{ vars.SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED || 'true' }}
+          # Claude engine (plan Phase 5c): the judges' engine, per tracking
+          # issue (scripts/ai_engine.sh; CLAUDE_FIXER_ENABLED=false keeps
+          # RB_JUDGE on codex).
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_WAVE_JUDGE: ${{ vars.AI_ENGINE_WAVE_JUDGE || '' }}
+          AI_ENGINE_STALL_JUDGE: ${{ vars.AI_ENGINE_STALL_JUDGE || '' }}
+          AI_ENGINE_INTEGRATION_JUDGE: ${{ vars.AI_ENGINE_INTEGRATION_JUDGE || '' }}
+          AI_ENGINE_SECURITY_JUDGE: ${{ vars.AI_ENGINE_SECURITY_JUDGE || '' }}
+          AI_ENGINE_RB_JUDGE: ${{ vars.AI_ENGINE_RB_JUDGE || '' }}
+          AI_ENGINE_SECURITY_AUDIT: ${{ vars.AI_ENGINE_SECURITY_AUDIT || '' }}
+          CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
           ACTIVATION_VERIFY_ENABLED: ${{ vars.ACTIVATION_VERIFY_ENABLED || 'true' }}
           ACTIVATION_VERIFY_MODEL: ${{ vars.ACTIVATION_VERIFY_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
           ACTIVATION_VERIFY_REASONING: ${{ vars.THINKING_LEVEL_ACTIVATION_VERIFY || 'high' }}
+          UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
+          UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK: ${{ vars.UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK || '5' }}
+          UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES: ${{ vars.UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES || '30' }}
+          UNBLOCK_JUDGE_RETRY_HOURS: ${{ vars.UNBLOCK_JUDGE_RETRY_HOURS || '6' }}
+          UNBLOCK_JUDGE_INFLIGHT_MINUTES: ${{ vars.UNBLOCK_JUDGE_INFLIGHT_MINUTES || '60' }}
           MAX_SECURITY_PASS_JUDGE_ROUNDS: ${{ vars.MAX_SECURITY_PASS_JUDGE_ROUNDS || '0' }}
           MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS: ${{ vars.MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS || '2' }}
           SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED: ${{ vars.SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED || 'true' }}
@@ -732,6 +860,8 @@ jobs:
           ORCH_TASK_FILES_ENABLED: ${{ vars.ORCH_TASK_FILES_ENABLED || 'false' }}
           ENABLE_CLEAN_WAVE_JUDGE_SKIP: ${{ vars.ENABLE_CLEAN_WAVE_JUDGE_SKIP || 'true' }}
           MAX_REVIEW_BLOCKED_RETRIES: ${{ vars.MAX_REVIEW_BLOCKED_RETRIES || '2' }}
+          RB_JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.RB_JUDGE_ISOLATION_MAX_FAILURES || '3' }}
+          JUDGE_ISOLATION_MAX_FAILURES: ${{ vars.JUDGE_ISOLATION_MAX_FAILURES || '3' }}
           STALL_THRESHOLD_MINUTES: ${{ vars.STALL_THRESHOLD_MINUTES || '120' }}
           # Freshness window (minutes) the in-flight / zombie guards use for
           # review-family runs (AI Review / Internal Review / Review Autofix),
@@ -768,6 +898,7 @@ jobs:
           CODEX_STALL_KILL_GRACE_SECONDS: ${{ vars.CODEX_STALL_KILL_GRACE_SECONDS || '30' }}
           MAX_RECOVERY_ATTEMPTS: ${{ vars.MAX_RECOVERY_ATTEMPTS || '3' }}
           JUDGE_REPEAT_FINGERPRINT_MAX: ${{ vars.JUDGE_REPEAT_FINGERPRINT_MAX || '2' }}
+          JUDGE_OUTPUT_FAILURE_MAX: ${{ vars.JUDGE_OUTPUT_FAILURE_MAX || '3' }}
           # Byte budgets for the PR diffs embedded in the wave judge prompt
           # (per PR, and shared across the whole prompt). codex rejects any
           # prompt over 1,048,576 characters before the model runs; the
@@ -832,6 +963,22 @@ jobs:
           STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED || 'true' }}
           STAGED_SUPPORT_LATCH_SWEEP_ONLY: "true"
         run: ALERT_MSG_LEVEL="${ALERT_MSG_LEVEL:-${STAGED_SUPPORT_LATCH_ALERT_MSG_LEVEL}}" bash scripts/orchestrate_poll_process.sh
+
+      - name: Run unblock scan without active projects
+        if: steps.find_tracking.outputs.has_work != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'DEBUG' }}
+          UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
+          UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK: ${{ vars.UNBLOCK_JUDGE_MAX_DISPATCH_PER_TICK || '5' }}
+          UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES: ${{ vars.UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES || '30' }}
+          UNBLOCK_JUDGE_RETRY_HOURS: ${{ vars.UNBLOCK_JUDGE_RETRY_HOURS || '6' }}
+          UNBLOCK_JUDGE_INFLIGHT_MINUTES: ${{ vars.UNBLOCK_JUDGE_INFLIGHT_MINUTES || '60' }}
+          UNBLOCK_SCAN_SWEEP_ONLY: "true"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: bash scripts/orchestrate_poll_process.sh
 
       - name: Run worktree registry GC
         run: bash scripts/worktree_gc.sh
@@ -1047,3 +1194,16 @@ jobs:
           msg+=$'\n'"Run: ${run_url}"
 
           tg_send_msg "${msg}" "ERROR" >/dev/null || true
+
+      - name: Record GH_PAT budget at poll end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_poll
+        run: |
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget end orchestrate_poll poll "${GH_PAT_BUDGET_FILE}"
+          else
+            echo 'GH_PAT_BUDGET phase=end workflow=orchestrate_poll job=poll remaining=unknown reset=unknown used_in_job=unknown'
+          fi

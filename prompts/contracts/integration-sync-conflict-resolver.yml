@@ -10,6 +10,7 @@ required_vars:
 optional_vars:
   INTENT_FINGERPRINTS_JSON: "{}"
   SERENA_TOOL_HINTS_RESOLVER: ""
+  JUDGE_GUIDANCE: ""
 forbidden_vars:
   - WORKFLOW_EDIT_RESTRICTION
   - SEMBLE_PREFETCH

@@ -538,12 +538,15 @@ start_epoch="$(date +%s)"
 tmp_out="$(mktemp)"
 tmp_err="$(mktemp)"
 tmp_cap="$(mktemp)"
+consolidator_wrapper_stdout="$(mktemp)"
 consolidator_opencode_dir=""
-trap 'rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}"; if [ -n "${consolidator_opencode_dir}" ]; then rm -rf "${consolidator_opencode_dir}"; fi' EXIT INT TERM
+consolidator_sandbox_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_sandbox.sh"
+consolidator_sandbox_root=""
+trap 'if [ -n "${consolidator_sandbox_root}" ]; then REVIEW_SANDBOX_ROOT="${consolidator_sandbox_root}" bash "${consolidator_sandbox_sh}" cleanup >/dev/null 2>&1 || true; fi; rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}" "${consolidator_wrapper_stdout}"; if [ -n "${consolidator_opencode_dir}" ]; then rm -rf "${consolidator_opencode_dir}"; fi' EXIT INT TERM
 
-if [ "${opencode_helpers_loaded}" != true ] || ! command -v opencode_run_cmd >/dev/null 2>&1; then
+if [ "${opencode_helpers_loaded}" != true ] || ! command -v opencode_strip_ansi >/dev/null 2>&1; then
 	: > "${CONSOLIDATOR_RAW_FILE}"
-	consolidator_helpers_missing_alert="opencode_agent_failure phase=review_consolidate role=writer model=${REVIEW_CONSOLIDATOR_MODEL} rc=1 failure_class=helpers_missing"
+	consolidator_helpers_missing_alert="opencode_agent_failure phase=review_consolidate role=reviewer model=${REVIEW_CONSOLIDATOR_MODEL} rc=1 failure_class=helpers_missing"
 	if ! type tg_send_msg >/dev/null 2>&1 && [ -r "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" ]; then
 		# shellcheck source=/dev/null
 		source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true
@@ -558,7 +561,7 @@ fi
 
 if [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
 	: > "${CONSOLIDATOR_RAW_FILE}"
-	opencode_emit_failure_alert review_consolidate writer "${REVIEW_CONSOLIDATOR_MODEL}" 1 config_writer_missing || true
+	opencode_emit_failure_alert review_consolidate reviewer "${REVIEW_CONSOLIDATOR_MODEL}" 1 config_writer_missing || true
 	review_log "model=${REVIEW_CONSOLIDATOR_MODEL} reasoning=${REVIEW_CONSOLIDATOR_REASONING} missing=opencode_config_writer failopen=1 output_bytes=0"
 	exit 0
 fi
@@ -570,60 +573,111 @@ consolidator_opencode_dir="$(mktemp -d "${RUNNER_TEMP:-${RUNTIME_DIR}}/opencode_
 consolidator_opencode_config="${consolidator_opencode_dir}/opencode.json"
 consolidator_workspace="$(pwd)"
 if ! bash "${OPENCODE_CONFIG_WRITER_PATH}" \
-	--role writer \
+	--role reviewer \
 	--model "${REVIEW_CONSOLIDATOR_MODEL}" \
 	--project-path "${consolidator_workspace}" \
 	--config-path "${consolidator_opencode_config}" \
 	--serena off; then
-	opencode_emit_failure_alert review_consolidate writer "${REVIEW_CONSOLIDATOR_MODEL}" 1 config_generation || true
+	opencode_emit_failure_alert review_consolidate reviewer "${REVIEW_CONSOLIDATOR_MODEL}" 1 config_generation || true
 	: > "${CONSOLIDATOR_RAW_FILE}"
 	review_log "model=${REVIEW_CONSOLIDATOR_MODEL} reasoning=${REVIEW_CONSOLIDATOR_REASONING} failopen=1 output_bytes=0"
 	exit 0
 fi
-if ! opencode_require_bootstrap review_consolidate writer "${REVIEW_CONSOLIDATOR_MODEL}" \
+if ! opencode_require_bootstrap review_consolidate reviewer "${REVIEW_CONSOLIDATOR_MODEL}" \
 	"${consolidator_opencode_config}" "${OPENCODE_VERSION:-1.18.23}" "${OPENCODE_CONFIG_WRITER_PATH}"; then
 	: > "${CONSOLIDATOR_RAW_FILE}"
 	review_log "model=${REVIEW_CONSOLIDATOR_MODEL} reasoning=${REVIEW_CONSOLIDATOR_REASONING} failopen=1 output_bytes=0"
 	exit 0
 fi
 
-cmd_rc=0
-consolidator_cmd=(
-	bash -c
-	# shellcheck disable=SC2016
-	'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
-	opencode-consolidator
-	"${OPENCODE_HELPERS_PATH}"
-	writer
-	"${REVIEW_CONSOLIDATOR_MODEL}"
-	"${REVIEW_CONSOLIDATOR_REASONING}"
-	"${consolidator_opencode_config}"
-	"${consolidator_workspace}"
-)
+consolidator_opencode_sandbox_prepare()
+{
+	if [ ! -f "${consolidator_sandbox_sh}" ]; then
+		consolidator_isolation_reason=sandbox_support_missing
+		return 1
+	fi
+	if ! consolidator_sandbox_root="$(timeout --signal=TERM --kill-after=10s -- "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" bash "${consolidator_sandbox_sh}" prepare-ephemeral codex 2>>"${tmp_err}")" || [ -z "${consolidator_sandbox_root}" ]; then
+		consolidator_isolation_reason=sandbox_prepare_failed
+		return 1
+	fi
+}
 
-# Strip any invalid UTF-8 from the consolidator prompt before piping it to
+cmd_rc=0
+consolidator_isolation_reason=""
+
+# Strip any invalid UTF-8 from the consolidator prompt before passing it to
 # OpenCode. See
 # sanitize_codex_prompt_file in scripts/gh_helpers.sh for the design.
 if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
 	sanitize_codex_prompt_file "${CONSOLIDATOR_PROMPT_FILE}"
 fi
 	emit_context_budget_warn_for_prompt "consolidator" "${CONSOLIDATOR_PROMPT_FILE}" "${REVIEW_CONSOLIDATOR_MODEL}"
-	if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
-		if timeout --signal=TERM --kill-after=30s -- "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" \
-			"${CODEX_HEARTBEAT_HELPER}" \
-			--phase review_consolidate \
-			--stdout-file "${tmp_out}" \
-			--stderr-file "${tmp_err}" \
-			-- "${consolidator_cmd[@]}" < "${CONSOLIDATOR_PROMPT_FILE}"; then
+	# Claude engine (replace-claude-sessions plan Phase 5c): the workflow
+	# exports AI_ENGINE_RESOLVED_REVIEW_CONSOLIDATOR (CLAUDE_FIXER_ENABLED=false
+	# keeps it on codex). On Claude, the prepared sandbox writes the answer to
+	# tmp_out; exit 75 (Claude unavailable) uses a fresh OpenCode sandbox below.
+	consolidator_claude_rc=75
+	if [ "${AI_ENGINE_RESOLVED_REVIEW_CONSOLIDATOR:-codex}" = "claude" ] && [ -f "${consolidator_sandbox_sh}" ] && [ -n "${REVIEW_SANDBOX_ROOT:-}" ]; then
+		consolidator_claude_rc=0
+		timeout --signal=TERM --kill-after=30s -- "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" \
+			bash "${consolidator_sandbox_sh}" run "${CONSOLIDATOR_PROMPT_FILE}" "${tmp_out}" \
+			"${REVIEW_CONSOLIDATOR_MODEL}" "${REVIEW_CONSOLIDATOR_REASONING}" "${consolidator_opencode_config}" \
+			claude REVIEW_CONSOLIDATOR read \
+			2> "${tmp_err}" || consolidator_claude_rc=$?
+		if [ "${consolidator_claude_rc}" -eq 2 ]; then
+			echo 'AI_ENGINE_FALLBACK role=REVIEW_CONSOLIDATOR reason=sandbox_helper_outdated' >&2
+			consolidator_claude_rc=75
+		fi
+		cmd_rc="${consolidator_claude_rc}"
+		if [ "${consolidator_claude_rc}" -eq 75 ]; then
+			grep -E '^(AI_ENGINE_[A-Z_]+|CLAUDE_POOL) ' "${tmp_err}" >&2 || true
+		fi
+	elif [ "${AI_ENGINE_RESOLVED_REVIEW_CONSOLIDATOR:-codex}" = "claude" ]; then
+		echo 'AI_ENGINE_FALLBACK role=REVIEW_CONSOLIDATOR reason=sandbox_unavailable' >&2
+	fi
+	if [ "${consolidator_claude_rc}" -ne 75 ]; then
+		:
+	elif consolidator_opencode_sandbox_prepare; then
+		consolidator_cmd=(
+			env "REVIEW_SANDBOX_ROOT=${consolidator_sandbox_root}" bash "${consolidator_sandbox_sh}" run
+			"${CONSOLIDATOR_PROMPT_FILE}" "${tmp_out}" "${REVIEW_CONSOLIDATOR_MODEL}"
+			"${REVIEW_CONSOLIDATOR_REASONING}" "${consolidator_opencode_config}" codex REVIEW_CONSOLIDATOR read
+		)
+		if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+			if timeout --signal=TERM --kill-after=30s -- "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" \
+				"${CODEX_HEARTBEAT_HELPER}" \
+				--phase review_consolidate \
+				--stdout-file "${consolidator_wrapper_stdout}" \
+				--stderr-file "${tmp_err}" \
+				-- "${consolidator_cmd[@]}" < "${CONSOLIDATOR_PROMPT_FILE}"; then
+				cmd_rc=0
+			else
+				cmd_rc=$?
+			fi
+		elif timeout --signal=TERM --kill-after=30s -- "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" \
+			"${consolidator_cmd[@]}" < "${CONSOLIDATOR_PROMPT_FILE}" > "${consolidator_wrapper_stdout}" 2> "${tmp_err}"; then
 			cmd_rc=0
 		else
 			cmd_rc=$?
 		fi
-	elif timeout --signal=TERM --kill-after=30s -- "${REVIEW_CONSOLIDATOR_TIMEOUT_SECS}" \
-		"${consolidator_cmd[@]}" < "${CONSOLIDATOR_PROMPT_FILE}" > "${tmp_out}" 2> "${tmp_err}"; then
-		cmd_rc=0
+		if [ "${cmd_rc}" -eq 2 ]; then
+			consolidator_isolation_reason=sandbox_helper_outdated
+		fi
+		if ! REVIEW_SANDBOX_ROOT="${consolidator_sandbox_root}" timeout --signal=TERM --kill-after=10s -- 30s bash "${consolidator_sandbox_sh}" cleanup 2>>"${tmp_err}"; then
+			printf '%s\n' '::warning::Consolidator sandbox cleanup failed' >&2
+			[ -n "${consolidator_isolation_reason}" ] || consolidator_isolation_reason=sandbox_cleanup_failed
+		else
+			consolidator_sandbox_root=""
+		fi
 	else
-		cmd_rc=$?
+		cmd_rc=1
+	fi
+	if [ -n "${consolidator_isolation_reason}" ]; then
+		printf 'CONSOLIDATOR_ISOLATION outcome=skipped reason=%s\n' "${consolidator_isolation_reason}" >&2
+		opencode_emit_failure_alert review_consolidate reviewer "${REVIEW_CONSOLIDATOR_MODEL}" 1 isolation_unavailable || true
+		: > "${tmp_out}"
+		: > "${CONSOLIDATOR_RAW_FILE}"
+		cmd_rc=1
 	fi
 	clean_output="${tmp_out}.ansi-clean"
 	if opencode_strip_ansi < "${tmp_out}" > "${clean_output}"; then
@@ -674,7 +728,7 @@ wall_secs="$(( $(date +%s) - start_epoch ))"
 failopen=0
 if [ "${cmd_rc}" -ne 0 ] || [ ! -s "${CONSOLIDATOR_RAW_FILE}" ]; then
 	failopen=1
-	opencode_emit_failure_alert review_consolidate writer "${REVIEW_CONSOLIDATOR_MODEL}" "${cmd_rc:-1}" "$([ "${cmd_rc}" -eq 0 ] && printf empty_output || printf invocation_failed)" || true
+	[ -n "${consolidator_isolation_reason}" ] || opencode_emit_failure_alert review_consolidate reviewer "${REVIEW_CONSOLIDATOR_MODEL}" "${cmd_rc:-1}" "$([ "${cmd_rc}" -eq 0 ] && printf empty_output || printf invocation_failed)" || true
 	if [ "${cmd_rc}" -ne 0 ]; then
 		: > "${CONSOLIDATOR_RAW_FILE}"
 		output_bytes=0
@@ -708,5 +762,5 @@ if [ -s "${tmp_err}" ]; then
 		"${tmp_err}" >&2 || true
 fi
 
-rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}"
+rm -f "${tmp_out}" "${tmp_err}" "${tmp_cap}" "${consolidator_wrapper_stdout}"
 exit 0

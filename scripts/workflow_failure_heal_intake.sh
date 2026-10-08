@@ -6,12 +6,15 @@
 # (.github/workflows/workflow-failure-heal-intake.yml) in coding-workflows.
 # Invoked once per report: a `repository_dispatch` (event `workflow-failure-heal`)
 # sent by scripts/workflow_failure_heal_report.sh from a consumer (or from this
-# repo's own internal wrapper), a failed release / promotion `workflow_run`, or a
-# manual `workflow_dispatch` re-run. It:
+# repo's own internal wrapper), by workflow_failure_heal_autofix_report.sh from a
+# failed review/autofix run, or by workflow_failure_heal_phase_report.sh from a
+# failed clarify / plan / implement run (`phase_failure`), a failed release /
+# promotion `workflow_run`, or a manual `workflow_dispatch` re-run. It:
 #
-#   1. Validates the payload (every field is re-checked; the body, comments, and
-#      logs stay untrusted data for the model; an `autofix_failure` report from
-#      the review/autofix workflow carries its own evidence text) and applies the skip gates:
+#   1. Validates the payload and verifies phase, autofix and release run
+#      provenance before reading their logs (label escalations are excluded)
+#      (the body, comments, and logs stay untrusted data for the model; an
+#      `autofix_failure` report carries its own evidence text), then applies the skip gates:
 #      kill switch, unregistered source repo, smoke-test fixture, self run,
 #      downstream release-gate failure already reported by the gate itself.
 #   2. Fetches the failed jobs + a filtered tail of their logs for the linked
@@ -21,7 +24,8 @@
 #      signature) and applies the dedup / lineage / budget decision against the
 #      open + closed `ai:workflow-heal` issues (see workflow_failure_heal.py):
 #      duplicate -> occurrence comment (an `autofix_failure` report also
-#      matches an open heal issue filed from the same pull request, and
+#      matches an open heal issue filed from the same pull request, a
+#      `phase_failure` report one filed from the same issue, and
 #      continues the lineage of a closed one or of the heal issue its
 #      `ai/issue-<N>` head branch fixes); lineage cap -> escalate;
 #      budget cap -> alert; otherwise continue.
@@ -199,6 +203,64 @@ fi
 SOURCE_LABEL="${SOURCE_REPO}#${ISSUE_NUMBER:-run}"
 log "received source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} label=${LABEL:-none} workflow=${PAYLOAD_WORKFLOW_NAME:-none}"
 
+# --- Provenance (before any log read) --------------------------------------
+
+PENDING_CURRENT_RUN=""
+if [[ "${SOURCE_KIND}" == "phase_failure" || "${SOURCE_KIND}" == "autofix_failure" || "${SOURCE_KIND}" == "workflow_run" ]]; then
+	PROVENANCE_DIR="${RUNTIME_DIR}/provenance"
+	mkdir -p "${PROVENANCE_DIR}"
+	PROVENANCE_RUNS="${PROVENANCE_DIR}/runs.json"
+	PROVENANCE_COMMENTS=""
+	PROVENANCE_RESULT="${PROVENANCE_DIR}/result.json"
+	PROVENANCE_LOGIN=""
+	printf '{}\n' > "${PROVENANCE_RUNS}"
+	# §14 API audit: the existing actions/runs/{id}/jobs call returns no run
+	# repository, workflow path, conclusion or PR association, and no issue/PR
+	# comments were read here before. At most one /user read, three run GETs,
+	# and one paginated comment read; failures reject rather than bypass this gate.
+	if [ "${SOURCE_KIND}" != "workflow_run" ]; then
+		if [ "${SOURCE_KIND}" != "phase_failure" ] || [ "${SOURCE_REPO,,}" = "${SELF_REPO,,}" ]; then
+			PROVENANCE_LOGIN="$(gh_retry gh api --method GET user --jq .login 2>/dev/null || true)"
+		fi
+		PROVENANCE_COMMENTS="${PROVENANCE_DIR}/comments.json"
+		if ! gh_retry gh api --method GET --paginate "repos/${SOURCE_REPO}/issues/${ISSUE_NUMBER}/comments" -F per_page=100 \
+			--jq '.[] | {id, body: (.body // ""), user: (.user // {}), author_association: (.author_association // "")}' 2>/dev/null \
+			| jq -s '.' > "${PROVENANCE_COMMENTS}" 2>/dev/null \
+			|| ! jq -e 'type == "array"' "${PROVENANCE_COMMENTS}" >/dev/null 2>&1; then
+			PROVENANCE_COMMENTS=""
+		fi
+	fi
+	while IFS= read -r provenance_run_id; do
+		PROVENANCE_RUN_FILE="${PROVENANCE_DIR}/run-${provenance_run_id}.json"
+		if gh_api_json_to_file "${PROVENANCE_RUN_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${provenance_run_id}" 2>/dev/null \
+			&& jq -e 'type == "object"' "${PROVENANCE_RUN_FILE}" >/dev/null 2>&1; then
+			jq --arg id "${provenance_run_id}" --slurpfile run "${PROVENANCE_RUN_FILE}" '. + {($id): $run[0]}' "${PROVENANCE_RUNS}" > "${PROVENANCE_RUNS}.tmp" \
+				&& mv "${PROVENANCE_RUNS}.tmp" "${PROVENANCE_RUNS}"
+		fi
+	done < <(jq -r '.run_refs[].run_id' "${PAYLOAD_FILE}")
+	if ! python3 "${HEAL_PY}" verify-run-provenance --payload-json "${PAYLOAD_FILE}" --runs-json "${PROVENANCE_RUNS}" \
+		--comments-json "${PROVENANCE_COMMENTS}" --trusted-login "${PROVENANCE_LOGIN}" --self-repo "${SELF_REPO}" > "${PROVENANCE_RESULT}" 2>/dev/null \
+		|| ! jq -e 'type == "object" and (.status == "ok" or .status == "rejected") and (.run_refs | type == "array") and (.rejections | type == "array")' "${PROVENANCE_RESULT}" >/dev/null 2>&1; then
+		printf '{"status":"rejected","reason":"verifier_error","rejections":[]}\n' > "${PROVENANCE_RESULT}"
+	fi
+	while IFS=$'\t' read -r provenance_run_id provenance_reason; do
+		log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${provenance_run_id} reason=${provenance_reason}"
+	done < <(jq -r '.rejections[] | [.run_id, .reason] | @tsv' "${PROVENANCE_RESULT}")
+	if [ "$(jq -r '.status' "${PROVENANCE_RESULT}")" != "ok" ]; then
+		PROVENANCE_REASON="$(jq -r '.reason // "verifier_error"' "${PROVENANCE_RESULT}")"
+		log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=${PROVENANCE_REASON}"
+		tg_send_msg "Workflow failure heal rejected run provenance for ${SOURCE_REPO} (${SOURCE_KIND}, issue ${ISSUE_NUMBER:-none}, reason ${PROVENANCE_REASON})."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		exit 0
+	fi
+	PENDING_CURRENT_RUN="$(jq -r '.pending_current_run // ""' "${PROVENANCE_RESULT}")"
+	if ! jq --slurpfile result "${PROVENANCE_RESULT}" '.run_refs = $result[0].run_refs' "${PAYLOAD_FILE}" > "${PAYLOAD_FILE}.tmp" \
+		|| ! mv "${PAYLOAD_FILE}.tmp" "${PAYLOAD_FILE}"; then
+		log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=verifier_error"
+		exit 0
+	fi
+	log "provenance_verified source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} runs=$(jq '.run_refs | length' "${PAYLOAD_FILE}")"
+fi
+
 # --- Collect failed jobs + logs --------------------------------------------
 
 LOG_DIR="${RUNTIME_DIR}/logs"
@@ -215,17 +277,57 @@ while IFS=$'\t' read -r run_id run_url; do
 	if [ "${RUN_COUNT}" -gt "${MAX_RUNS}" ]; then
 		break
 	fi
+	RUN_INFO_FILE="${LOG_DIR}/run-${run_id}-info.json"
+	# Reuse the run already read by the provenance gate (§14); only label
+	# escalation reports, which skip that gate, read the run here.
+	run_info_ready=false
+	if [ -n "${PROVENANCE_DIR:-}" ] && [ -s "${PROVENANCE_DIR}/run-${run_id}.json" ] && cp "${PROVENANCE_DIR}/run-${run_id}.json" "${RUN_INFO_FILE}"; then
+		run_info_ready=true
+	elif gh_api_json_to_file "${RUN_INFO_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${run_id}"; then
+		run_info_ready=true
+	fi
+	verify_pending_args=()
+	if [ -n "${PENDING_CURRENT_RUN}" ] && [ "${run_id}" = "${PENDING_CURRENT_RUN}" ]; then
+		verify_pending_args=(--allow-pending)
+	fi
+	if [ "${run_info_ready}" != true ] \
+		|| ! python3 "${HEAL_PY}" verify-run --run-json "${RUN_INFO_FILE}" --repo "${SOURCE_REPO}" --target-repo "${SELF_REPO}" --kind "${SOURCE_KIND}" "${verify_pending_args[@]}" \
+			--head-sha "$({ [ "${SOURCE_KIND}" = autofix_failure ] || [ "${SOURCE_KIND}" = workflow_run ]; } && printf '%s' "${HEAD_SHA}" || true)" > "${RUN_INFO_FILE}.verified" 2>/dev/null \
+		|| ! jq -e --argjson id "${run_id}" '.run_id == $id' "${RUN_INFO_FILE}.verified" >/dev/null; then
+		log "run_ref_rejected run=${run_id} reason=unverified"
+		continue
+	fi
 	JOBS_FILE="${LOG_DIR}/run-${run_id}-jobs.json"
 	if ! gh_api_json_to_file "${JOBS_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${run_id}/jobs" -F per_page=100; then
 		log "warn jobs_fetch_failed source=${SOURCE_REPO} run=${run_id}"
+		if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${RUN_COUNT}" -eq 1 ]; then
+			log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${run_id} reason=current_run_jobs_unavailable"
+			log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=current_run_jobs_unavailable"
+			exit 0
+		fi
 		continue
 	fi
 	if ! jq -e '.jobs | type == "array"' "${JOBS_FILE}" >/dev/null 2>&1; then
 		log "warn jobs_fetch_invalid source=${SOURCE_REPO} run=${run_id}"
+		if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${RUN_COUNT}" -eq 1 ]; then
+			log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${run_id} reason=current_run_jobs_unavailable"
+			log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=current_run_jobs_unavailable"
+			exit 0
+		fi
 		continue
 	fi
+	if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${RUN_COUNT}" -eq 1 ] \
+		&& ! jq -e 'any(.jobs[]; (.conclusion == "failure" or .conclusion == "timed_out")
+			and (.name | type == "string") and .name != "heal-report"
+			and (.name | endswith("/ heal-report") | not))' "${JOBS_FILE}" >/dev/null 2>&1; then
+		log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${run_id} reason=current_run_no_failed_job"
+		log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=current_run_no_failed_job"
+		exit 0
+	fi
+	SELECTED_JOBS_FILE="${LOG_DIR}/run-${run_id}-selected.json"
+	python3 "${HEAL_PY}" select-evidence-jobs --jobs-json "${JOBS_FILE}" --kind "${SOURCE_KIND}" --limit "${MAX_FAILED_JOBS}" > "${SELECTED_JOBS_FILE}"
 	JOB_COUNT=0
-	while IFS=$'\t' read -r job_id job_name workflow_name failing_step; do
+	while IFS=$'\t' read -r job_id job_name workflow_name failing_step selection; do
 		[ -n "${job_id}" ] || continue
 		[[ "${job_id}" =~ ^[0-9]+$ ]] || continue
 		JOB_COUNT=$((JOB_COUNT + 1))
@@ -238,29 +340,76 @@ while IFS=$'\t' read -r run_id run_url; do
 		# refuses the body ("the response contains terminal escape sequences")
 		# even when stdout is a file, and every job read as "(job log
 		# unavailable)": no error signature, no downstream-gate dedup.
-		if gh_retry gh api --allow-escape-sequences "repos/${SOURCE_REPO}/actions/jobs/${job_id}/logs" > "${RAW_LOG}" 2>/dev/null && [ -s "${RAW_LOG}" ]; then
-			python3 "${HEAL_PY}" filter-log --log-file "${RAW_LOG}" --max-lines "${LOG_TAIL_LINES}" --max-bytes "${MAX_LOG_BYTES}" > "${FILTERED_LOG}" || : > "${FILTERED_LOG}"
+		# gh_retry buffers stdout in an unredacted temp file. Fetch directly:
+		# the pipe redacts bytes before the first filesystem write.
+		if gh api --allow-escape-sequences "repos/${SOURCE_REPO}/actions/jobs/${job_id}/logs" 2>/dev/null \
+			| python3 "${HEAL_PY}" redact-stream > "${RAW_LOG}" && [ -s "${RAW_LOG}" ]; then
+			if ! python3 "${HEAL_PY}" filter-log --log-file "${RAW_LOG}" --max-lines "${LOG_TAIL_LINES}" --max-bytes "${MAX_LOG_BYTES}" > "${FILTERED_LOG}"; then
+				log "warn job_log_filter_failed source=${SOURCE_REPO} run=${run_id} job=${job_id}"
+				: > "${FILTERED_LOG}"
+			fi
 			rm -f "${RAW_LOG}"
+			if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${RUN_COUNT}" -eq 1 ] && [ -s "${FILTERED_LOG}" ]; then
+				LOG_FILES+=("${FILTERED_LOG}")
+			fi
 		else
 			log "warn job_log_fetch_failed source=${SOURCE_REPO} run=${run_id} job=${job_id}"
 			printf '(job log unavailable)\n' > "${FILTERED_LOG}"
 		fi
-		LOG_FILES+=("${FILTERED_LOG}")
-		jq --arg run_id "${run_id}" --arg url "${run_url}" --arg job_id "${job_id}" --arg job_name "${job_name}" \
+		if [ "${SOURCE_KIND}" != "phase_failure" ]; then
+			LOG_FILES+=("${FILTERED_LOG}")
+		fi
+		jq --arg run_id "${run_id}" --arg url "${run_url}" --arg job_id "${job_id}" --arg job_name "${job_name}" --arg selection "${selection}" \
 			--arg workflow_name "${workflow_name}" --arg failing_step "${failing_step}" --arg log_file "${FILTERED_LOG}" \
-			'. + [{run_id: $run_id, url: $url, job_id: $job_id, job_name: $job_name, workflow_name: $workflow_name, failing_step: $failing_step, log_file: $log_file}]' \
+			'. + [{run_id: $run_id, url: $url, job_id: $job_id, job_name: $job_name, workflow_name: $workflow_name, failing_step: $failing_step, log_file: $log_file, selection: $selection}]' \
 			"${SUMMARIES_FILE}" > "${SUMMARIES_FILE}.tmp" && mv "${SUMMARIES_FILE}.tmp" "${SUMMARIES_FILE}"
-	done < <(jq -r '.jobs[] | select((.conclusion // "") | IN("failure","timed_out","cancelled"))
-		| [(.id|tostring), (.name // ""), (.workflow_name // ""), ((.steps // []) | map(select((.conclusion // "") | IN("failure","timed_out","cancelled"))) | first | .name // "")]
-		| map(gsub("[\\t\\n\\r]"; " ")) | @tsv' "${JOBS_FILE}")
+	done < <(jq -r '.[] | [(.id|tostring), (.name // ""), (.workflow_name // ""), ((.steps // []) | map(select((.conclusion // "") | IN("failure","timed_out","cancelled"))) | first | .name // ""), .selection]
+		| map(gsub("[\\t\\n\\r]"; " ")) | @tsv' "${SELECTED_JOBS_FILE}")
 done < <(jq -r '.run_refs[] | [.run_id, .url] | @tsv' "${PAYLOAD_FILE}")
+
+if [ "${SOURCE_KIND}" = "phase_failure" ] && [ -n "${PENDING_CURRENT_RUN}" ] \
+	&& ! jq -e --arg run_id "${PENDING_CURRENT_RUN}" 'any(.[]; .run_id == $run_id)' "${SUMMARIES_FILE}" >/dev/null 2>&1; then
+	log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${PENDING_CURRENT_RUN} reason=current_run_no_failed_job"
+	log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=current_run_no_failed_job"
+	exit 0
+fi
 
 SUMMARY_COUNT="$(jq 'length' "${SUMMARIES_FILE}")"
 FIRST_WORKFLOW_NAME="$(jq -r 'map(select(.workflow_name != "")) | first | .workflow_name // ""' "${SUMMARIES_FILE}")"
 FIRST_FAILING_STEP="$(jq -r 'map(select(.failing_step != "")) | first | .failing_step // ""' "${SUMMARIES_FILE}")"
+if [ "${SOURCE_KIND}" = "phase_failure" ]; then
+	# Earlier streak runs provide diagnostic context, not the current run's identity.
+	PHASE_FAILED_RUN_ID="$(jq -r '.run_refs[0].run_id' "${PAYLOAD_FILE}")"
+	FIRST_WORKFLOW_NAME="$(jq -r --arg current "${PHASE_FAILED_RUN_ID}" 'map(select(.run_id == $current and .workflow_name != "")) | first | .workflow_name // ""' "${SUMMARIES_FILE}")"
+	FIRST_FAILING_STEP="$(jq -r --arg current "${PHASE_FAILED_RUN_ID}" 'map(select(.run_id == $current and .failing_step != "")) | first | .failing_step // ""' "${SUMMARIES_FILE}")"
+fi
 [ -n "${FIRST_WORKFLOW_NAME}" ] || FIRST_WORKFLOW_NAME="${PAYLOAD_WORKFLOW_NAME}"
 if [ -z "${FIRST_WORKFLOW_NAME}" ]; then
 	FIRST_WORKFLOW_NAME="label:${LABEL:-unknown}"
+fi
+
+if [ "${SOURCE_KIND}" = "phase_failure" ]; then
+	PHASE_RUN_ID="$(_pf '.run_refs[0].run_id // ""')"
+	PHASE_RUN_FILE="${PROVENANCE_DIR}/run-${PHASE_RUN_ID}.json"
+	PHASE_JOBS_FILE="${LOG_DIR}/run-${PHASE_RUN_ID}-jobs.json"
+	PHASE_COMMENTS_FILE="${PROVENANCE_COMMENTS}"
+	PHASE_PROVENANCE_FILE="${RUNTIME_DIR}/phase_provenance.json"
+	# Reuse the run, comment and account snapshots already checked before log reads.
+	PHASE_COMMENT_AUTHOR="${PROVENANCE_LOGIN}"
+	if ! python3 "${HEAL_PY}" verify-phase-provenance --payload-json "${PAYLOAD_FILE}" \
+		--run-json "${PHASE_RUN_FILE}" --jobs-json "${PHASE_JOBS_FILE}" \
+		--comments-json "${PHASE_COMMENTS_FILE}" --self-repo "${SELF_REPO}" \
+		--comment-author "${PHASE_COMMENT_AUTHOR}" > "${PHASE_PROVENANCE_FILE}" \
+		|| ! jq -e 'type == "object" and (.verified | type == "boolean") and (.reason | type == "string")' "${PHASE_PROVENANCE_FILE}" >/dev/null 2>&1; then
+		printf '{"verified":false,"reason":"verifier_error"}\n' > "${PHASE_PROVENANCE_FILE}"
+	fi
+	if ! jq -e '.verified == true and .reason == "ok"' "${PHASE_PROVENANCE_FILE}" >/dev/null 2>&1; then
+		PHASE_PROVENANCE_REASON="$(jq -r '.reason' "${PHASE_PROVENANCE_FILE}")"
+		log "skip reason=phase_report_unverified detail=${PHASE_PROVENANCE_REASON} outcome=skip source=${SOURCE_REPO} issue=${ISSUE_NUMBER} run=${PHASE_RUN_ID}"
+		tg_send_msg "Workflow failure heal intake dropped a phase_failure report for ${SOURCE_REPO}#${ISSUE_NUMBER}: run ${PHASE_RUN_ID} could not be verified (${PHASE_PROVENANCE_REASON})."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		exit 0
+	fi
+	log "phase_report_verified source=${SOURCE_REPO} issue=${ISSUE_NUMBER} run=${PHASE_RUN_ID}"
 fi
 
 # A failed promote / auto-release run whose only failure is "the smoke gate
@@ -304,6 +453,10 @@ elif [ "${#LOG_FILES[@]}" -gt 0 ]; then
 		SIG_ARGS+=(--log-file "${f}")
 	done
 	SIGNATURE="$(python3 "${HEAL_PY}" error-signature "${SIG_ARGS[@]}" 2>/dev/null || echo "no-error-lines")"
+elif [ "${SOURCE_KIND}" = "phase_failure" ]; then
+	# The failed run's logs could not be read: key on the phase instead of
+	# the (absent) escalation label.
+	SIGNATURE="phase:${FAILURE_REASON:-unknown}"
 else
 	SIGNATURE="label:${LABEL:-unknown}"
 fi
@@ -316,7 +469,7 @@ SELF_ISSUES_FILE="${RUNTIME_DIR}/heal_issues_self.json"
 SOURCE_ISSUES_FILE="${RUNTIME_DIR}/heal_issues_source.json"
 ISSUES_FILE="${RUNTIME_DIR}/heal_issues.json"
 if ! gh_retry gh api --method GET --paginate "repos/${SELF_REPO}/issues" -F state=all -F labels="${HEAL_LABEL}" -F per_page=100 \
-	--jq '.[] | {number, state, state_reason, title, body: (.body // ""), created_at, closed_at, html_url, pull_request: (.pull_request != null)}' 2>/dev/null \
+	--jq '.[] | {number, state, state_reason, title, body: (.body // ""), author: (.user.login // ""), created_at, closed_at, html_url, pull_request: (.pull_request != null)}' 2>/dev/null \
 	| jq -s --arg repository "${SELF_REPO}" 'map(. + {repository: $repository})' > "${SELF_ISSUES_FILE}" 2>/dev/null; then
 	log "error heal_issue_list_failed"
 	tg_send_msg "Workflow failure heal intake could not list ${HEAL_LABEL} issues; report from ${SOURCE_LABEL} not processed."$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
@@ -327,7 +480,7 @@ fi
 # repositories that can own the issue produced by this intake.
 if [ "${SOURCE_REPO}" != "${SELF_REPO}" ]; then
 	if ! gh_retry gh api --method GET --paginate "repos/${SOURCE_REPO}/issues" -F state=all -F labels="${HEAL_LABEL}" -F per_page=100 \
-		--jq '.[] | {number, state, state_reason, title, body: (.body // ""), created_at, closed_at, html_url, pull_request: (.pull_request != null)}' 2>/dev/null \
+		--jq '.[] | {number, state, state_reason, title, body: (.body // ""), author: (.user.login // ""), created_at, closed_at, html_url, pull_request: (.pull_request != null)}' 2>/dev/null \
 		| jq -s --arg repository "${SOURCE_REPO}" 'map(. + {repository: $repository})' > "${SOURCE_ISSUES_FILE}" 2>/dev/null; then
 		log "error heal_issue_list_failed repo=${SOURCE_REPO}"
 		tg_send_msg "Workflow failure heal intake could not list ${HEAL_LABEL} issues in ${SOURCE_REPO}; report from ${SOURCE_LABEL} not processed."$'\n'"Run: ${RUN_URL}" "ERROR" >/dev/null 2>&1 || true
@@ -339,16 +492,34 @@ fi
 jq -s 'add // []' "${SELF_ISSUES_FILE}" "${SOURCE_ISSUES_FILE}" > "${ISSUES_FILE}"
 jq -e 'type == "array"' "${ISSUES_FILE}" >/dev/null 2>&1 || printf '[]' > "${ISSUES_FILE}"
 
+HEAL_TRUSTED_AUTHOR=""
+if [[ "${SOURCE_GEN}" =~ ^[0-9]+$ ]]; then
+	HEAL_TRUSTED_AUTHOR="${PHASE_COMMENT_AUTHOR:-}"
+	if [ -z "${HEAL_TRUSTED_AUTHOR}" ]; then
+		# §14 audit: heal issue lists identify issue authors, not the token's
+		# account; the only other /user read is for self-repo phase reports.
+		HEAL_TRUSTED_AUTHOR="$(gh_retry gh api --method GET user --jq '.login // empty' 2>/dev/null || true)"
+	fi
+	if [ -z "${HEAL_TRUSTED_AUTHOR}" ]; then
+		log "warn heal_identity_unavailable source=${SOURCE_LABEL}"
+	fi
+fi
 BUDGET_ARGS=(--issues-json "${ISSUES_FILE}" --fingerprint "${FP}" --preferred-repo "${SOURCE_REPO}" --max-depth "${MAX_DEPTH}" --max-open "${MAX_OPEN}" --max-per-day "${MAX_PER_DAY}")
 if [[ "${SOURCE_GEN}" =~ ^[0-9]+$ ]]; then
 	BUDGET_ARGS+=(--source-gen "${SOURCE_GEN}" --source-root "${SOURCE_ROOT}")
+	if [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
+		BUDGET_ARGS+=(--source-issue "${SOURCE_REPO}#${ISSUE_NUMBER}" --trusted-author "${HEAL_TRUSTED_AUTHOR}")
+	fi
 fi
 # A review/autofix report is keyed on its pull request as well as its
 # fingerprint: the evidence (and so the fingerprint) differs run to run, which
 # let one PR open a new heal issue on every failed run. The PR's head branch
 # links the heal issue it fixes (ai/issue-<N>), so a heal fix PR whose own
-# review fails continues that issue's lineage and reaches the cap.
-if [ "${SOURCE_KIND}" = "autofix_failure" ] && [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
+# review fails continues that issue's lineage and reaches the cap. A
+# clarify / plan / implement report is keyed on its issue the same way (it has
+# no head branch; a heal issue's own failed run carries its gen / root markers
+# as source_gen / source_root instead).
+if { [ "${SOURCE_KIND}" = "autofix_failure" ] || [ "${SOURCE_KIND}" = "phase_failure" ]; } && [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
 	BUDGET_ARGS+=(--source-key "${SOURCE_REPO}#${ISSUE_NUMBER}" --source-head-branch "${HEAD_BRANCH}")
 fi
 DECISION_FILE="${RUNTIME_DIR}/decision.json"
@@ -357,6 +528,13 @@ ACTION="$(jq -r '.action' "${DECISION_FILE}")"
 GEN="$(jq -r '.gen // 1' "${DECISION_FILE}")"
 ROOT="$(jq -r '.root // ""' "${DECISION_FILE}")"
 [ -n "${ROOT}" ] || ROOT="${FP}"
+LINEAGE_IGNORED_REASON="$(jq -r '.lineage_ignored_reason // "none"' "${DECISION_FILE}")"
+log "lineage source=$(jq -r '.lineage_source // "none"' "${DECISION_FILE}") reason=${LINEAGE_IGNORED_REASON} source_gen=${SOURCE_GEN:-none} gen=${GEN}"
+case "${LINEAGE_IGNORED_REASON}" in
+	untrusted_author|not_heal_issue|gen_mismatch|root_mismatch)
+		tg_send_msg "Workflow failure heal ignored an unverified lineage marker from ${SOURCE_LABEL} (${LINEAGE_IGNORED_REASON}). Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		;;
+esac
 
 ensure_label_exists "${HEAL_LABEL}" "${SELF_REPO}" || true
 ensure_label_exists "${ESCALATED_LABEL}" "${SELF_REPO}" || true
@@ -375,6 +553,16 @@ case "${ACTION}" in
 		else
 			log "warn duplicate_comment_failed existing_issue=${EXISTING} existing_repo=${EXISTING_REPO} fp=${FP}"
 		fi
+		if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${DUPLICATE_MATCH}" = "fingerprint" ] && [ "${EXISTING}" = "${ISSUE_NUMBER}" ] && [ "${EXISTING_REPO}" = "${SOURCE_REPO}" ]; then
+			# The heal issue's own clarify / plan / implement run failed the way
+			# the issue was filed for: the pipeline cannot run the fix, and every
+			# retry would only add another occurrence here. Hand it to a human.
+			ensure_label_exists "${ESCALATED_LABEL}" "${EXISTING_REPO}" || true
+			gh_retry gh issue edit "${EXISTING}" --repo "${EXISTING_REPO}" --add-label "${ESCALATED_LABEL}" >/dev/null 2>&1 || log "warn escalation_label_failed issue=${EXISTING} repo=${EXISTING_REPO}"
+			log "escalate reason=heal_issue_failed_itself issue=${EXISTING} repo=${EXISTING_REPO} fp=${FP} failure=${FAILURE_REASON}"
+			tg_send_msg "Workflow failure heal: heal issue ${EXISTING_URL:-${EXISTING_REPO}#${EXISTING}} failed its own ${FAILURE_REASON%_failed} run with the failure it was filed for, so the pipeline cannot fix it; a human should look at this."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+			exit 0
+		fi
 		tg_send_msg "Workflow failure heal: ${SOURCE_LABEL} matches open heal issue ${EXISTING_URL:-#${EXISTING}} (recorded as another occurrence)." "DEBUG" >/dev/null 2>&1 || true
 		exit 0
 		;;
@@ -385,6 +573,12 @@ case "${ACTION}" in
 		if [[ "${PRIOR_ISSUE}" =~ ^[0-9]+$ ]]; then
 			ensure_label_exists "${ESCALATED_LABEL}" "${PRIOR_REPO}" || true
 			gh_retry gh issue edit "${PRIOR_ISSUE}" --repo "${PRIOR_REPO}" --add-label "${ESCALATED_LABEL}" >/dev/null 2>&1 || log "warn escalation_label_failed issue=${PRIOR_ISSUE} repo=${PRIOR_REPO}"
+		elif [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]] && [ -n "${SOURCE_REPO}" ]; then
+			# No prior heal issue to mark: label the failure report itself so
+			# the unblock scan (replace-claude-sessions plan Phase 7) picks the
+			# stopped chain up instead of it ending in a Telegram alert only.
+			ensure_label_exists "${ESCALATED_LABEL}" "${SOURCE_REPO}" || true
+			gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${SOURCE_REPO}" --add-label "${ESCALATED_LABEL}" >/dev/null 2>&1 || log "warn escalation_label_failed issue=${ISSUE_NUMBER} repo=${SOURCE_REPO}"
 		fi
 		log "escalate reason=lineage_cap gen=${GEN} max=${MAX_DEPTH} root=${ROOT} fp=${FP} source=${SOURCE_LABEL} prior_issue=${PRIOR_ISSUE:-none} prior_repo=${PRIOR_REPO}"
 		tg_send_msg "Workflow failure heal hit the lineage cap (generation ${GEN} > ${MAX_DEPTH}) for ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}'). The auto-heal chain has been stopped; a human should look at this."$'\n'"Source: ${ISSUE_URL:-${SOURCE_REPO}}"$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
@@ -513,9 +707,9 @@ _git_fetch_ownership_refs()
 		GIT_CONFIG_COUNT=1 \
 			GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" \
 			GIT_CONFIG_VALUE_0="${ownership_auth_header}" \
-			git fetch --quiet --depth 1 origin "$@" >/dev/null 2>&1
+		git fetch --quiet --depth "${HEAL_OWNERSHIP_FETCH_DEPTH:-1}" origin "$@" >/dev/null 2>&1
 	else
-		git fetch --quiet --depth 1 origin "$@" >/dev/null 2>&1
+		git fetch --quiet --depth "${HEAL_OWNERSHIP_FETCH_DEPTH:-1}" origin "$@" >/dev/null 2>&1
 	fi
 }
 
@@ -597,6 +791,20 @@ elif [ "${SELF_INFLICTED_ROUTING_ENABLED,,}" != "false" ] \
 	fi
 fi
 
+# Freeze the heal-scope inputs before the diagnosis prompt assembles any
+# untrusted evidence (#6463): only validated report fields, authenticated run metadata
+# and the ownership facts computed above. _open_issue reads this snapshot,
+# never the diagnosis, so neither evidence nor a model verdict can widen it.
+SCOPE_INPUTS_FROZEN="${RUNTIME_DIR}/scope_inputs_frozen.json"
+jq -n --arg crash "${PAYLOAD_CRASH_FILE}" \
+	--argjson runs "$(jq -s '[.[] | select(.run_id != null) | "'"${SOURCE_REPO}"'" + ":" + (.run_id | tostring)] | unique' "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
+	--argjson self_workflows "$(jq -s '[.[] | .referenced_paths[]?] | unique' "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
+	--argjson consumer_workflows "$(jq -s '[.[] | .path | select(type == "string" and . != "")] | unique' "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
+	--argjson changed "$(if [ "${CRASH_OWNERSHIP}" = pr ]; then jq '.changed_files // []' "${PAYLOAD_FILE}"; elif [ "${CRASH_OWNERSHIP}" = base ]; then jq -R -s 'split("\n") | map(select(. != ""))' "${BASE_CHANGED_FILES_FILE}"; else echo '[]'; fi)" \
+	'{crash_file: $crash, runs: $runs, self_workflows: $self_workflows, consumer_workflows: $consumer_workflows, changed_files: $changed}' > "${SCOPE_INPUTS_FROZEN}" \
+	&& jq -e '(.runs | type == "array") and (.changed_files | type == "array") and (.self_workflows | type == "array") and (.consumer_workflows | type == "array")' "${SCOPE_INPUTS_FROZEN}" >/dev/null 2>&1 \
+	&& chmod 0444 "${SCOPE_INPUTS_FROZEN}" || { rm -f "${SCOPE_INPUTS_FROZEN}"; log "warn scope_inputs_freeze_failed"; }
+
 # --- Run the diagnosis model -----------------------------------------------
 
 PROMPT_FILE="${RUNTIME_DIR}/codex_prompt.txt"
@@ -631,6 +839,13 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 		echo "Failure reason: ${FAILURE_REASON}"
 		echo "Consecutive failed review runs on this PR: ${FAILURE_STREAK:-1}"
 		echo "PR labels: $(_pf '.labels | join(", ")')"
+	elif [ "${SOURCE_KIND}" = "phase_failure" ]; then
+		echo "Failed ${FAILURE_REASON%_failed} run on issue #${ISSUE_NUMBER} -- ${ISSUE_TITLE}"
+		echo "URL: ${ISSUE_URL}"
+		echo "Workflow: ${PAYLOAD_WORKFLOW_NAME}"
+		echo "Failure reason: ${FAILURE_REASON}"
+		echo "Consecutive failed ${FAILURE_REASON%_failed} runs on this issue: ${FAILURE_STREAK:-1}"
+		echo "Issue labels: $(_pf '.labels | join(", ")')"
 	elif [ -n "${ISSUE_NUMBER}" ]; then
 		echo "Escalated ${SOURCE_KIND}: #${ISSUE_NUMBER} -- ${ISSUE_TITLE}"
 		echo "URL: ${ISSUE_URL}"
@@ -816,12 +1031,69 @@ _comment_on_source()
 		|| log "warn source_comment_failed source=${SOURCE_LABEL}"
 }
 
+# Fetch the consumer commit a heal issue will be implemented against (the
+# failing head when known, else its default branch) into a private bare repo.
+# No credential prompt; any failure leaves the consumer scope unresolved.
+_git_fetch_consumer_scope_ref()
+{
+	local consumer_repo="$1" scope_dir="$2" consumer_ref="HEAD" consumer_auth_header=""
+	[[ "${consumer_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 1
+	if [[ "${HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then consumer_ref="${HEAD_SHA}"; fi
+	rm -rf -- "${scope_dir}"
+	GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git init --bare -q "${scope_dir}" >/dev/null 2>&1 || return 1
+	if [ -n "${GH_TOKEN:-}" ]; then
+		consumer_auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 | tr -d '\n')"
+	fi
+	GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+		GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="http.https://github.com/.extraheader" GIT_CONFIG_VALUE_0="${consumer_auth_header}" \
+		timeout 120 git --git-dir "${scope_dir}" fetch --quiet --depth 1 "https://github.com/${consumer_repo}.git" "${consumer_ref}" >/dev/null 2>&1
+}
+
 _open_issue()
 {
 	local repo="$1" target_branch="$2" integration_branch="${3:-}"
 	local title_file="${RUNTIME_DIR}/issue_title.txt" body_file="${RUNTIME_DIR}/issue_body.md"
 	local label_args=(--label "${HEAL_LABEL}")
-	python3 "${HEAL_PY}" compose-issue \
+	local scope_marker_file="${RUNTIME_DIR}/scope_marker.txt"
+	: > "${scope_marker_file}"
+	# Scope is derived only from validated report fields and authenticated run
+	# metadata. The diagnosis and its files_touched prose are never inputs.
+	# This selection is fixed by the validated report, not the diagnosis's
+	# classification or target branch: a model verdict cannot expand scope.
+	local checkout_ref="${WRAPPER_SHA:-${TARGET_BRANCH_DEFAULT}}"
+	if [ "${SOURCE_KIND}" = workflow_run ]; then checkout_ref="${HEAD_SHA:-${TARGET_BRANCH_DEFAULT}}"; fi
+	if [ "${SOURCE_KIND}" = autofix_failure ] && [ -n "${PAYLOAD_SCRIPT_REF}" ]; then checkout_ref="${PAYLOAD_SCRIPT_REF}"; fi
+	local scope_ref=""
+	if [[ "${checkout_ref}" =~ ^[0-9a-f]{40}$ ]]; then
+		_git_fetch_ownership_refs "${checkout_ref}" || true
+		scope_ref="${checkout_ref}"
+	elif [[ "${checkout_ref}" =~ ^[A-Za-z0-9._/-]+$ ]] && git check-ref-format --branch "${checkout_ref}" >/dev/null 2>&1; then
+		_git_fetch_ownership_refs "+refs/heads/${checkout_ref}:refs/remotes/origin/${checkout_ref}" || true
+		scope_ref="refs/remotes/origin/${checkout_ref}"
+	fi
+	local scope_checkout="." scope_workflows_key=self_workflows
+	if [ "${repo}" != "${SELF_REPO}" ]; then
+		# The issue is implemented in the consumer checkout, so its scope must be
+		# checked against the consumer's own tree, never coding-workflows'. Only
+		# the run's own workflow path applies there (referenced_paths name
+		# coding-workflows files). An unreadable consumer tree leaves the scope
+		# unresolved, which implement refuses at ai:needs-human (fail closed).
+		scope_checkout="${RUNTIME_DIR}/consumer-scope.git"
+		scope_workflows_key=consumer_workflows
+		scope_ref=""
+		if _git_fetch_consumer_scope_ref "${repo}" "${scope_checkout}"; then
+			scope_ref="$(git --git-dir "${scope_checkout}" rev-parse --verify 'FETCH_HEAD^{commit}' 2>/dev/null || true)"
+		fi
+	fi
+	# A missing pre-diagnosis snapshot leaves the scope unresolved (fail closed).
+	if [ -n "${scope_ref}" ] && [ -s "${SCOPE_INPUTS_FROZEN:-}" ] && git -C "${scope_checkout}" rev-parse --verify "${scope_ref}^{commit}" >/dev/null 2>&1; then
+		jq --arg key "${scope_workflows_key}" '{crash_file: .crash_file, runs: .runs, workflow_paths: .[$key], changed_files: .changed_files}' \
+			"${SCOPE_INPUTS_FROZEN}" > "${RUNTIME_DIR}/scope_inputs.json"
+		python3 "${HEAL_PY}" heal-scope render --input-json "${RUNTIME_DIR}/scope_inputs.json" --checkout "${scope_checkout}" --ref "${scope_ref}" > "${scope_marker_file}" || : > "${scope_marker_file}"
+	fi
+	log "scope paths=$(grep -o 'paths=[^ ]*' "${scope_marker_file}" | tr ',' '\n' | wc -l | tr -d ' ') runs=${SUMMARY_COUNT} outcome=$([ -s "${scope_marker_file}" ] && grep -q '<!--' "${scope_marker_file}" && echo written || echo unresolved)"
+	rm -f "${title_file}" "${body_file}"
+	if ! python3 "${HEAL_PY}" compose-issue \
 		--payload-json "${PAYLOAD_FILE}" \
 		--diagnosis-file "${DIAG_FILE}" \
 		--run-summaries-json "${SUMMARIES_FILE}" \
@@ -831,10 +1103,15 @@ _open_issue()
 		--classification "${CLASSIFICATION}" \
 		--target-branch "${target_branch}" \
 		--integration-branch "${integration_branch}" \
+		--scope-marker-file "${scope_marker_file}" \
 		--max-depth "${MAX_DEPTH}" \
 		--intake-run-url "${RUN_URL}" \
 		--title-out "${title_file}" \
-		--body-out "${body_file}"
+		--body-out "${body_file}"; then
+		log "error issue_compose_failed repo=${repo} fp=${FP} source=${SOURCE_LABEL}"
+		tg_send_msg "Workflow failure heal FAILED to compose a safe issue in ${repo} for ${SOURCE_LABEL} (workflow '${FIRST_WORKFLOW_NAME}')."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+		return 1
+	fi
 	local title
 	title="$(head -1 "${title_file}")"
 	if [ "${repo}" != "${SELF_REPO}" ]; then
@@ -866,14 +1143,21 @@ case "${CLASSIFICATION}" in
 			TARGET_BRANCH="${HEAD_BRANCH}"
 			TARGET_BRANCH_SOURCE="failed_run_branch"
 		elif [ "${SOURCE_KIND}" = "autofix_failure" ] && [ "${SOURCE_REPO}" = "${SELF_REPO}" ] && [ -n "${HEAD_BRANCH}" ]; then
-			# A review/autofix run in this repo executes the pull request's own
-			# workflow code (review_autofix.yml resolves SCRIPT_REF to
-			# github.sha here), so the defect it hit lives on that PR's branch
-			# and may not exist on the stable line at all. A fix aimed at
-			# stable cannot unblock the PR and would drag the PR's unreleased
-			# changes into stable, so the fix targets the PR's head branch.
+			# Review/autofix stages support scripts from SCRIPT_REF, not
+			# necessarily this PR's head. Only a verified support ref on main
+			# (or stable) redirects the fix; an unknown ref retains the PR-head
+			# target instead of guessing a branch from untrusted report prose.
 			TARGET_BRANCH="${HEAD_BRANCH}"
 			TARGET_BRANCH_SOURCE="source_pr_head"
+			if [ "${PAYLOAD_SCRIPT_REF}" = stable ]; then
+				TARGET_BRANCH=stable
+				TARGET_BRANCH_SOURCE=support_ref
+			elif [[ "${PAYLOAD_SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "${PAYLOAD_SCRIPT_REF}" != "${HEAD_SHA}" ] \
+				&& HEAL_OWNERSHIP_FETCH_DEPTH=1024 _git_fetch_ownership_refs "+refs/heads/main:refs/remotes/origin/main" \
+				&& git merge-base --is-ancestor "${PAYLOAD_SCRIPT_REF}" refs/remotes/origin/main 2>/dev/null; then
+				TARGET_BRANCH=main
+				TARGET_BRANCH_SOURCE=support_ref
+			fi
 		fi
 		if ! _branch_exists "${SELF_REPO}" "${TARGET_BRANCH}"; then
 			if [ "${TARGET_BRANCH_SOURCE}" = "source_pr_head" ]; then
