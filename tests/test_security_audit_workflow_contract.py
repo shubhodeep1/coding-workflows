@@ -2852,6 +2852,8 @@ def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") ->
 	- ``delete_guard``: a guard line above an unchanged operation is deleted.
 	- ``insert_near``: one line is inserted after line 50 (no deletion).
 	- ``cross_file``: line 61 is appended to mod.py and auth.py loses a line.
+	- ``cross_file_import``: as ``cross_file``, but mod.py imports auth.
+	- ``cross_file_reverse``: as ``cross_file``, but auth.py names mod.
 	"""
 	repo_dir = base_dir / "audited-repo"
 	repo_dir.mkdir(parents=True, exist_ok=True)
@@ -2879,9 +2881,14 @@ def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") ->
 	base_lines = _line_ownership_base_text().splitlines(keepends=True)
 	if variant == "delete_guard":
 		base_lines = ["require_admin()\n", *base_lines]
+	elif variant == "cross_file_import":
+		base_lines = [*base_lines[:-1], "import auth\n"]
+	auth_base_text = "def check():\n\treturn require_admin()\n"
+	if variant == "cross_file_reverse":
+		auth_base_text = "import mod\n" + auth_base_text
 	_git("init", "-q")
 	(repo_dir / "mod.py").write_text("".join(base_lines), encoding="utf-8")
-	(repo_dir / "auth.py").write_text("def check():\n\treturn require_admin()\n", encoding="utf-8")
+	(repo_dir / "auth.py").write_text(auth_base_text, encoding="utf-8")
 	_git("add", "mod.py", "auth.py")
 	_git("commit", "-q", "-m", "base commit")
 	base_sha = _git("rev-parse", "HEAD")
@@ -2894,9 +2901,9 @@ def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") ->
 		project_lines = base_lines[1:]
 	elif variant == "insert_near":
 		project_lines = [*base_lines[:50], "PROJECT_BYPASS = 1\n", *base_lines[50:]]
-	elif variant == "cross_file":
+	elif variant in ("cross_file", "cross_file_import", "cross_file_reverse"):
 		project_lines = [*base_lines, f"PROJECT_{LINE_OWNERSHIP_PROJECT_LINE} = 1\n"]
-		(repo_dir / "auth.py").write_text("def check():\n", encoding="utf-8")
+		(repo_dir / "auth.py").write_text(auth_base_text.replace("\treturn require_admin()\n", ""), encoding="utf-8")
 	else:
 		raise AssertionError(f"unknown line ownership fixture variant {variant}")
 	(repo_dir / "mod.py").write_text("".join(project_lines), encoding="utf-8")
@@ -3038,6 +3045,22 @@ def test_security_audit_line_ownership_reference_to_file_with_deletions_blocks()
 	by_id = {finding["finding_id"]: finding["advisory"] for finding in payload["findings"]}
 	assert by_id == {"cross-file": False, "unrelated": True}
 	assert "security-audit: line_ownership_blocking finding=cross-file reason=references_file_with_deletions" in proc.stdout
+
+
+@pytest.mark.parametrize(
+	"variant, reason",
+	[
+		("cross_file_import", "cited_file_references_module_with_deletions"),
+		("cross_file_reverse", "module_with_deletions_references_cited_file"),
+	],
+)
+def test_security_audit_line_ownership_unnamed_module_with_deletions_blocks(variant: str, reason: str) -> None:
+	# The finding text never names auth.py; the module link alone keeps it blocking.
+	proc, payload = _run_line_ownership_audit([_line_ownership_finding("unnamed-guard", 1)], variant=variant)
+	assert proc.returncode == 0, proc.stderr
+	assert payload["findings"][0]["advisory"] is False
+	assert payload["line_ownership"] == {"mode": "project", "blocking": 1, "advisory": 0, "unknown": 0}
+	assert f"security-audit: line_ownership_blocking finding=unnamed-guard reason={reason}" in proc.stdout
 
 
 def test_security_audit_line_ownership_blame_failure_blocks() -> None:

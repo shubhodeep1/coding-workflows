@@ -429,8 +429,12 @@ fi
 # file lost or binary-changed lines in base..head (`deleted_lines_in_file`),
 # the project added lines within SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW
 # lines of it (`changed_hunk_within_window`), or the finding text names
-# another file that lost lines (`references_file_with_deletions`).  A failed
-# project diff or hunk read keeps the finding blocking too.  `off` restores
+# another file that lost lines (`references_file_with_deletions`), the
+# cited file names a module that lost lines
+# (`cited_file_references_module_with_deletions`), or a module that lost
+# lines names the cited module (`module_with_deletions_references_cited_file`).
+# A failed project diff, hunk read or module-reference read keeps the
+# finding blocking too.  `off` restores
 # the previous payload exactly (no `advisory` field, no `line_ownership` key).
 SECURITY_AUDIT_LINE_OWNERSHIP="$(printf '%s' "${SECURITY_AUDIT_LINE_OWNERSHIP:-project}" | tr '[:upper:]' '[:lower:]')"
 case "${SECURITY_AUDIT_LINE_OWNERSHIP}" in
@@ -1926,7 +1930,7 @@ import re
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 repo_root = Path(sys.argv[1])
 findings_path = Path(sys.argv[2])
@@ -2047,6 +2051,55 @@ def added_hunks(path: str) -> list[tuple[int, int]] | None:
 	return ranges
 
 
+# Basenames too generic to identify a module; the parent directory names it.
+LINE_OWNERSHIP_GENERIC_MODULE_STEMS = {"__init__", "index", "init", "main", "mod"}
+head_text_cache: dict[str, str | None] = {}
+base_mention_cache: dict[str, set[str] | None] = {}
+
+
+def module_stem(path: str) -> str:
+	pure = PurePosixPath(path)
+	stem = pure.stem
+	if stem.lower() in LINE_OWNERSHIP_GENERIC_MODULE_STEMS and pure.parent.name:
+		stem = pure.parent.name
+	return stem if len(stem) >= 3 else ""
+
+
+def head_file_text(path: str) -> str | None:
+	# The cited file at the audited head, or None when it cannot be read.
+	if path not in head_text_cache:
+		try:
+			shown = git(["show", f"{head_sha}:{path}"], LINE_OWNERSHIP_DIFF_TIMEOUT_SECS)
+		except subprocess.TimeoutExpired:
+			head_text_cache[path] = None
+		else:
+			head_text_cache[path] = shown.stdout if shown.returncode == 0 else None
+	return head_text_cache[path]
+
+
+def base_paths_mentioning(stem: str) -> set[str] | None:
+	# Paths whose base-commit text names `stem` as a word (one `git grep`
+	# per stem), or None when the search fails.
+	if stem not in base_mention_cache:
+		try:
+			grep = git(["grep", "-l", "-I", "-F", "-w", "-e", stem, base_sha, "--"], LINE_OWNERSHIP_DIFF_TIMEOUT_SECS)
+		except subprocess.TimeoutExpired:
+			base_mention_cache[stem] = None
+		else:
+			if grep.returncode == 1:
+				base_mention_cache[stem] = set()
+			elif grep.returncode != 0:
+				base_mention_cache[stem] = None
+			else:
+				prefix = f"{base_sha}:"
+				base_mention_cache[stem] = {
+					line[len(prefix):] if line.startswith(prefix) else line
+					for line in grep.stdout.splitlines()
+					if line
+				}
+	return base_mention_cache[stem]
+
+
 def finding_strings(value: object) -> list[str]:
 	if isinstance(value, str):
 		return [value]
@@ -2073,6 +2126,28 @@ def deletion_block_reason(finding: dict, path: str, line: int) -> tuple[str, boo
 	for other_path in files_with_deletions:
 		if other_path != path and any(other_path in text for text in texts):
 			return "references_file_with_deletions", False
+	# A guard can also live in a module the finding never names: the cited
+	# file imports or calls a module that lost lines, or a module that lost
+	# lines (at base, where the guard still was) names the cited module, as a
+	# router or middleware registration would.  Word matches on module names
+	# only ever add blocking; a failed read keeps the finding blocking.
+	other_paths = sorted(other for other in files_with_deletions if other != path)
+	if not other_paths:
+		return "", False
+	cited_text = head_file_text(path)
+	if cited_text is None:
+		return "module_reference_check_failed", True
+	for other_path in other_paths:
+		other_stem = module_stem(other_path)
+		if other_stem and re.search(rf"(?<![A-Za-z0-9_]){re.escape(other_stem)}(?![A-Za-z0-9_])", cited_text):
+			return "cited_file_references_module_with_deletions", False
+	cited_stem = module_stem(path)
+	if cited_stem:
+		referencing = base_paths_mentioning(cited_stem)
+		if referencing is None:
+			return "module_reference_check_failed", True
+		if any(other_path in referencing for other_path in other_paths):
+			return "module_with_deletions_references_cited_file", False
 	return "", False
 
 blocking = advisory = unknown = 0
