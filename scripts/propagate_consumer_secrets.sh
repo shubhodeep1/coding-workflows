@@ -30,8 +30,10 @@
 #                           name; an empty value is skipped (status=skipped_empty).
 #
 # Output: one `CONSUMER_SECRETS_PROPAGATE repo=<owner/repo> secret=<NAME>
-# status=<set|skipped_empty|failed|verify_missing>` line per secret and a
-# final `CONSUMER_SECRETS_PROPAGATE summary ...` line. Per-repo failures do
+# status=<set|skipped_empty|failed|verify_missing>` line per secret (plus
+# `repo=<owner/repo> status=verify_list_failed` when the post-write listing
+# itself fails) and a final `CONSUMER_SECRETS_PROPAGATE summary ...` line.
+# Per-repo failures do
 # not stop the loop (fail open across repos, like
 # scripts/workflow_retro_fanout.sh), but the exit status is 1 when any
 # secret could not be set or verified, so the workflow run goes red and the
@@ -76,6 +78,18 @@ type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 registry_has()
 {
 	printf '%s\n' "${REGISTRY}" | grep -Fxq -- "$1"
+}
+
+# set_consumer_secret NAME OWNER/REPO — one `gh secret set` attempt. The value
+# is read from the environment variable NAME and piped on stdin, so gh
+# encrypts it with the repository's public key and it never appears in an
+# argument or in gh_retry's retry diagnostics (which only echo the command
+# words). gh_retry invokes this function once per attempt, so every attempt
+# gets a fresh stdin; piping into `gh_retry gh secret set` directly would
+# hand attempt 2 an already-consumed pipe (review finding on PR #6709).
+set_consumer_secret()
+{
+	printf '%s' "${!1}" | gh secret set "$1" --repo "$2"
 }
 
 if [ -n "${PROPAGATE_TARGETS// /}" ]; then
@@ -129,10 +143,7 @@ while IFS= read -r target; do
 			skipped_count=$((skipped_count + 1))
 			continue
 		fi
-		# The value is piped on stdin: gh encrypts it with the repository's
-		# public key, so it never appears in an argument or in gh_retry's
-		# retry diagnostics (which only echo the command words).
-		if printf '%s' "${!secret_name}" | gh_retry gh secret set "${secret_name}" --repo "${target}" >/dev/null; then
+		if gh_retry set_consumer_secret "${secret_name}" "${target}" >/dev/null; then
 			log "repo=${target} secret=${secret_name} status=set"
 			set_count=$((set_count + 1))
 			set_names="${set_names} ${secret_name}"
@@ -150,7 +161,11 @@ while IFS= read -r target; do
 				fi
 			done
 		else
-			echo "::warning::propagate-consumer-secrets: could not list secrets on ${target} to verify; the set calls above succeeded."
+			# An unverifiable write counts as a failure: a green run must mean
+			# the names were seen on the consumer, not merely that the set
+			# calls returned 0 (review finding on PR #6709).
+			log "repo=${target} status=verify_list_failed"
+			failed_count=$((failed_count + 1))
 		fi
 	fi
 done <<< "${TARGETS}"

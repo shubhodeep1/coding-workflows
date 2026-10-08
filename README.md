@@ -3508,10 +3508,17 @@ makes that unattended:
   (`status=skipped_unregistered`); the script never writes to an
   unregistered repository. Per-repo failures do not stop the loop, but any
   failed or unverified write leaves the run red
-  (`CONSUMER_SECRETS_PROPAGATE … status=failed|verify_missing`) and a
-  Telegram CRITICAL goes out, so the workflow-failure heal intake sees it.
+  (`CONSUMER_SECRETS_PROPAGATE … status=failed|verify_missing|verify_list_failed`)
+  and a Telegram CRITICAL goes out, so the workflow-failure heal intake sees
+  it. The workflow deliberately has no concurrency group (GitHub would replace
+  an older pending run, and the survivor only diffs its own push) and diffs
+  the registry only against the push's own `before` tip, targeting every
+  entry when that commit is outside the shallow checkout; repeated writes of
+  the same value are harmless.
 - **Log keys:** `CONSUMER_SECRETS_PROPAGATE repo=<owner/repo> secret=<NAME>
-  status=<set|skipped_empty|failed|verify_missing>` per secret and
+  status=<set|skipped_empty|failed|verify_missing>` per secret,
+  `CONSUMER_SECRETS_PROPAGATE repo=<owner/repo> status=verify_list_failed`
+  when the post-write listing fails, and
   `CONSUMER_SECRETS_PROPAGATE summary targets=N set=N skipped=N failed=N`.
 
 ## Repository Structure

@@ -35,15 +35,22 @@ set -euo pipefail
 if [ "${1:-}" = "secret" ] && [ "${2:-}" = "set" ]; then
   name="$3"; repo="$5"
   digest="$(sha256sum | awk '{print $1}')"
+  attempts="$(grep -c "^set|${repo}|${name}|" "${MOCK_GH_LOG}" 2>/dev/null || true)"
   printf 'set|%s|%s|%s\n' "${repo}" "${name}" "${digest}" >> "${MOCK_GH_LOG}"
   case " ${MOCK_GH_FAIL_REPOS:-} " in
     *" ${repo} "*) echo "gh: HTTP 403 Resource not accessible by personal access token" >&2; exit 1 ;;
   esac
+  if [ "${MOCK_GH_FAIL_FIRST_ATTEMPT:-}" = "true" ] && [ "${attempts:-0}" -eq 0 ]; then
+    echo "gh: upstream failure (HTTP 502)" >&2; exit 1
+  fi
   exit 0
 fi
 if [ "${1:-}" = "secret" ] && [ "${2:-}" = "list" ]; then
   repo="$4"
   printf 'list|%s\n' "${repo}" >> "${MOCK_GH_LOG}"
+  case " ${MOCK_GH_LIST_FAIL_REPOS:-} " in
+    *" ${repo} "*) echo "gh: HTTP 500" >&2; exit 1 ;;
+  esac
   case " ${MOCK_GH_LIST_EMPTY_REPOS:-} " in
     *" ${repo} "*) exit 0 ;;
   esac
@@ -73,6 +80,9 @@ def _run(
 	names: str | None = None,
 	fail_repos: str = "",
 	list_empty_repos: str = "",
+	list_fail_repos: str = "",
+	fail_first_attempt: bool = False,
+	retry_attempts: str = "1",
 	token: str = "fixture-library-token",
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
 	with tempfile.TemporaryDirectory(prefix="propagate-consumer-") as tmp_name:
@@ -98,7 +108,9 @@ def _run(
 			"MOCK_GH_LOG": str(log),
 			"MOCK_GH_FAIL_REPOS": fail_repos,
 			"MOCK_GH_LIST_EMPTY_REPOS": list_empty_repos,
-			"GH_RETRY_MAX_ATTEMPTS": "1",
+			"MOCK_GH_LIST_FAIL_REPOS": list_fail_repos,
+			"MOCK_GH_FAIL_FIRST_ATTEMPT": "true" if fail_first_attempt else "",
+			"GH_RETRY_MAX_ATTEMPTS": retry_attempts,
 		})
 		if token:
 			env["GH_TOKEN"] = token
@@ -179,6 +191,27 @@ class PropagateConsumerSecretsScriptTests(unittest.TestCase):
 		self.assertEqual(proc.returncode, 1)
 		self.assertIn("repo=o/a secret=GH_PAT status=verify_missing", proc.stdout)
 
+	def test_listing_failure_counts_as_a_failure(self) -> None:
+		"""A write that cannot be verified must not leave the run green."""
+		proc, calls = _run(registry=["o/a"], values={"GH_PAT": "x"}, names="GH_PAT", list_fail_repos="o/a")
+		self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+		self.assertIn("repo=o/a secret=GH_PAT status=set", proc.stdout)
+		self.assertIn("repo=o/a status=verify_list_failed", proc.stdout)
+		self.assertIn("summary targets=1 set=1 skipped=0 failed=1", proc.stdout)
+		self.assertIn("list|o/a", calls)
+
+	def test_retry_pipes_the_value_again_on_every_attempt(self) -> None:
+		"""gh_retry re-invokes the set helper, so attempt 2 must receive the
+		full value on stdin, not an already-consumed pipe."""
+		proc, calls = _run(
+			registry=["o/a"], values={"GH_PAT": "retry-me"}, names="GH_PAT",
+			fail_first_attempt=True, retry_attempts="2",
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		sets = [c for c in calls if c.startswith("set|o/a|GH_PAT|")]
+		self.assertEqual(sets, ["set|o/a|GH_PAT|" + _sha("retry-me")] * 2, calls)
+		self.assertIn("repo=o/a secret=GH_PAT status=set", proc.stdout)
+
 	def test_secret_values_never_reach_stdout_or_stderr(self) -> None:
 		proc, _ = _run(registry=["o/a", "o/b"], values=FIXTURE_VALUES, fail_repos="o/b")
 		output = proc.stdout + proc.stderr
@@ -217,7 +250,9 @@ class PropagateConsumerSecretsWorkflowContractTests(unittest.TestCase):
 	def test_propagate_step_wires_every_secret_and_runs_the_script(self) -> None:
 		job = self.workflow["jobs"]["propagate"]
 		self.assertEqual(self.workflow["permissions"], {"contents": "read"})
-		self.assertEqual(self.workflow["concurrency"]["group"], "propagate-consumer-secrets")
+		# No concurrency group: a replaced pending run would lose the
+		# consumers its push added (review finding on PR #6709).
+		self.assertNotIn("concurrency", self.workflow)
 		step = next(s for s in job["steps"] if s.get("name") == "Propagate secrets")
 		self.assertEqual(step["env"]["GH_TOKEN"], "${{ secrets.GH_PAT }}")
 		for name in SECRET_NAMES:
@@ -231,6 +266,11 @@ class PropagateConsumerSecretsWorkflowContractTests(unittest.TestCase):
 		checkout = next(s for s in job["steps"] if str(s.get("uses", "")).startswith("actions/checkout"))
 		self.assertEqual(checkout["with"]["fetch-depth"], 2)
 		self.assertIs(checkout["with"]["persist-credentials"], False)
+		resolve = next(s for s in job["steps"] if s.get("id") == "targets")
+		# Only the push's own `before` tip is a valid diff base; HEAD~1 would
+		# miss consumers added by an earlier commit of a multi-commit push.
+		self.assertNotIn("HEAD~1", resolve["run"])
+		self.assertIn("github.event.before", resolve["env"]["EVENT_BEFORE"])
 
 	def test_no_secret_is_echoed_in_the_workflow(self) -> None:
 		for line in self.text.splitlines():
@@ -242,8 +282,10 @@ class PropagateConsumerSecretsWorkflowContractTests(unittest.TestCase):
 
 	def test_script_contract_lines(self) -> None:
 		script = SCRIPT.read_text(encoding="utf-8")
-		self.assertIn('gh_retry gh secret set "${secret_name}" --repo "${target}"', script)
+		self.assertIn('gh_retry set_consumer_secret "${secret_name}" "${target}"', script)
+		self.assertIn('printf \'%s\' "${!1}" | gh secret set "$1" --repo "$2"', script)
 		self.assertIn("status=skipped_unregistered", script)
+		self.assertIn("status=verify_list_failed", script)
 		self.assertNotIn("set -x", script)
 
 

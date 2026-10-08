@@ -8,10 +8,10 @@ Until now a `/seed-repo` run ended with a manual checklist: an operator had to o
 | Secrets copied per consumer | 4 |
 | Trigger path | `.github/ai/consumer_repos.json` on `main` |
 | Required `GH_PAT` scope on consumers | `repo` (unchanged; the `@stable` dispatch already needs it) |
-| Tests | 16 in `tests/test_propagate_consumer_secrets.py` (own `ci.yml` step) |
+| Tests | 18 in `tests/test_propagate_consumer_secrets.py` (own `ci.yml` step) |
 
 What this means for operators: issue the triage posting token once with "All repositories" access, store it in this repository, and never visit a consumer's secrets page again; the seed checklist now says so.
 
 ### For contributors
 
-Log keys are `CONSUMER_SECRETS_PROPAGATE repo=… secret=… status=<set|skipped_empty|failed|verify_missing>` plus a `summary` line. The script sources `scripts/gh_helpers.sh` for `gh_retry`; retry diagnostics echo only the command words, never the stdin value.
+Log keys are `CONSUMER_SECRETS_PROPAGATE repo=… secret=… status=<set|skipped_empty|failed|verify_missing>`, `repo=… status=verify_list_failed` when the post-write listing fails, plus a `summary` line. `gh_retry` re-invokes a small helper that pipes the value afresh on every attempt; retry diagnostics echo only the command words, never the stdin value. The workflow has no concurrency group (a replaced pending run would lose the consumers its push added) and diffs the registry only against the push's own `before` tip, targeting every entry when that commit is outside the shallow checkout.
