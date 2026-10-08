@@ -5,14 +5,23 @@
   "entry_id": "processed_command_6799_6067583694_answer",
   "issue_number": 6799,
   "metadata": {
+    "answer_hash": "ea4377604dae70fb259c9f3fc81ca3c7651520f047c1a5f0cee2f85744704d26",
     "clarify_comment_id": 6067583694,
+    "clarify_hash": "9d2baf7697e6aba4fabd43e504acb9c9ba99090e6bc27bd4acf02c52219eb4cb",
+    "cycle": 1,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6799",
+    "loop_block_reason": "none",
+    "loop_blocked": true,
+    "loop_break_comment_id": 6067670711,
+    "max_cycles": 3,
+    "previous_answer_comment_id": 0,
+    "previous_clarify_comment_id": 0,
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37833115759"
   },
   "run_attempt": 1,
   "run_id": "37833115759",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-08T19:40:00Z",
+  "status": "blocked_loop",
+  "timestamp": "2026-10-08T19:41:45Z",
   "workflow": "orchestrate_clarify_respond"
 }
