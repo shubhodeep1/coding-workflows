@@ -110,9 +110,22 @@ if args[:1] == ["checkout"]:
     state["git_head"] = args[-1]
 if args[:2] == ["rev-parse", "HEAD"]:
     sys.stdout.write(state.get("git_head", "1" * 40) + "\\n")
+if args[:2] == ["rev-parse", "--is-shallow-repository"]:
+    sys.stdout.write(state.get("git_shallow", "true") + "\\n")
 state_path.write_text(json.dumps(state))
 sys.exit(0)
 """
+
+# Stands in for scripts/operator_step_issue.py (PROMOTE_CYCLE_OPERATOR_STEP_HELPER).
+STUB_TICK_HELPER = r'''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ["STUB_TICK_ARGS_OUT"], "a", encoding="utf-8") as out:
+    out.write(json.dumps(sys.argv[1:]) + "\n")
+if os.environ.get("STUB_TICK_FAIL") == "1":
+    print(json.dumps({"error": "simulated tick failure"}))
+    sys.exit(2)
+print(json.dumps({"issue": 5, "ticked": ["pr-1"], "skipped": {}}))
+'''
 
 
 def _run(tmp: Path, state: dict, env: dict[str, str] | None = None) -> tuple[subprocess.CompletedProcess[str], dict, Path]:
@@ -128,6 +141,9 @@ def _run(tmp: Path, state: dict, env: dict[str, str] | None = None) -> tuple[sub
 	stub.write_text(STUB_DISPATCHER, encoding="utf-8")
 	stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
 	env_out = tmp / "dispatcher_env.txt"
+	tick_helper = tmp / "operator_step_stub.py"
+	tick_helper.write_text(STUB_TICK_HELPER, encoding="utf-8")
+	tick_args_out = tmp / "tick_args.jsonl"
 	state_file = tmp / "state.json"
 	base_state = {"main_tip": TIP, "tag_commit": TAG_COMMIT, "self_runs": [], "compares": {}}
 	base_state.update(state)
@@ -145,6 +161,8 @@ def _run(tmp: Path, state: dict, env: dict[str, str] | None = None) -> tuple[sub
 			"GITHUB_OUTPUT": str(output_file),
 			"APPLY_ANALYSIS_DISPATCHER": str(stub),
 			"STUB_ENV_OUT": str(env_out),
+			"PROMOTE_CYCLE_OPERATOR_STEP_HELPER": str(tick_helper),
+			"STUB_TICK_ARGS_OUT": str(tick_args_out),
 			"PROMOTE_CYCLE_GATE_POLL_SECS": "1",
 			"PROMOTE_CYCLE_GATE_WAIT_SECS": "6",
 			"PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS": "6",
@@ -158,6 +176,7 @@ def _run(tmp: Path, state: dict, env: dict[str, str] | None = None) -> tuple[sub
 	proc = subprocess.run(["bash", str(SCRIPT)], cwd=str(tmp), env=run_env, text=True, capture_output=True, timeout=120)
 	final = json.loads(state_file.read_text(encoding="utf-8"))
 	final["github_output"] = output_file.read_text(encoding="utf-8")
+	final["tick_calls"] = [json.loads(line) for line in tick_args_out.read_text(encoding="utf-8").splitlines()] if tick_args_out.exists() else []
 	return proc, final, env_out
 
 
@@ -536,3 +555,69 @@ def test_smoke_head_checkout_failure_fails_the_cycle() -> None:
 	# The smoke gate was dispatched (that is what moved main), but nothing else.
 	assert [d for d in final.get("dispatches", []) if d and d[0] != "test-and-mark-stable.yml"] == []
 	assert "outcome=failed:smoke_head_checkout_failed" in final["github_output"]
+
+
+# --- operator-step drain (plan item 4d) ---------------------------------------
+
+TICK_ARGS = ["tick", "--repo", "owner/repo", "--stable-sha", TAG_COMMIT, "--repo-dir", str(REPO_ROOT)]
+
+
+def test_operator_steps_are_ticked_before_the_no_code_changes_skip() -> None:
+	# Right after a promotion main equals the tag: the cycle skips, but only after ticking.
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["docs/a.md"])}})
+	assert proc.returncode == 0, proc.stderr
+	assert "PROMOTE_CYCLE_SKIPPED reason=no_code_changes" in proc.stdout
+	assert final["tick_calls"] == [TICK_ARGS]
+	assert '"ticked": ["pr-1"]' in proc.stdout
+	fetch = next(call for call in final["git_calls"] if call[:1] == ["fetch"])
+	assert "--filter=tree:0" in fetch and "--unshallow" in fetch
+	assert "+refs/tags/stable:refs/tags/stable" in fetch and fetch[-1] == "main"
+
+
+def test_operator_steps_are_ticked_on_a_cycle_that_continues() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), {"gate_runs_sequence": GATE_SUCCESS, "git_shallow": "false"})
+	assert "PROMOTE_CYCLE_DISPATCHED" in proc.stdout, (proc.stdout, proc.stderr)
+	assert final["tick_calls"] == [TICK_ARGS]
+	fetch = next(call for call in final["git_calls"] if call[:1] == ["fetch"])
+	assert "--unshallow" not in fetch  # A full clone rejects --unshallow.
+
+
+def test_operator_step_tick_failure_is_not_fatal() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["docs/a.md"])}}, env={"STUB_TICK_FAIL": "1"})
+	assert proc.returncode == 0, proc.stderr
+	assert "::warning::Operator-step tick failed (rc=2)" in proc.stdout
+	assert "PROMOTE_CYCLE_SKIPPED reason=no_code_changes" in proc.stdout
+	assert final["tick_calls"] == [TICK_ARGS]
+
+
+def test_operator_step_fetch_failure_still_ticks() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["docs/a.md"])}, "git_fetch_fail": True})
+	assert proc.returncode == 0, proc.stderr
+	assert "::warning::Operator-step tick: commit history fetch failed" in proc.stdout
+	assert final["tick_calls"] == [TICK_ARGS]
+
+
+def test_operator_step_missing_helper_is_not_fatal() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), {"compares": {TAG_COMMIT: _compare(["docs/a.md"])}},
+			env={"PROMOTE_CYCLE_OPERATOR_STEP_HELPER": str(Path(tmp) / "absent.py")})
+	assert proc.returncode == 0, proc.stderr
+	assert "::warning::Operator-step tick skipped" in proc.stdout
+	assert "PROMOTE_CYCLE_SKIPPED reason=no_code_changes" in proc.stdout
+	assert final["tick_calls"] == []
+
+
+def test_operator_steps_are_not_ticked_without_a_tag_or_when_disabled() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		_, final, _ = _run(Path(tmp), {"tag_missing": True, "gate_runs_sequence": GATE_SUCCESS})
+	assert final["tick_calls"] == []
+	with tempfile.TemporaryDirectory() as tmp:
+		_, final, _ = _run(Path(tmp), {"tag_lookup_error": True})
+	assert final["tick_calls"] == []
+	with tempfile.TemporaryDirectory() as tmp:
+		_, final, _ = _run(Path(tmp), {}, env={"PROMOTE_CYCLE_ENABLED": "false"})
+	assert final["tick_calls"] == []

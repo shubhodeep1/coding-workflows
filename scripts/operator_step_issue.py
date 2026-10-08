@@ -19,9 +19,39 @@ Usage:
 
   operator_step_issue.py upsert --repo OWNER/REPO --key KEY --source TEXT --steps-file PATH
 
+  operator_step_issue.py upsert ... [--source-sha SHA]
+
 `--steps-file` holds a JSON array of `{"title": str, "instructions": str,
 "dormant_until": str (optional)}`. `--key` is lower-case letters, digits and
-`-` (for example `pr-123`, `project-45`, `unblock-77`).
+`-` (for example `pr-123`, `project-45`, `unblock-77`). `--source-sha` (40
+lower-case hex, optional) is the merge commit the steps came from; it is
+written as the entry's second line, `<!-- ai:operator-step:source-sha=<sha> -->`.
+Without it the output is unchanged and the entry is never ticked automatically.
+
+Ticking entries once a release ships (plan item 4d of
+docs/plans/unattended-claude-pipeline-completion-plan.md):
+
+  operator_step_issue.py tick --repo OWNER/REPO --stable-sha SHA
+      [--repo-dir DIR] [--trusted-login LOGIN]
+
+The nightly promote cycle (scripts/promote_main_cycle.sh) runs it with the
+commit the `stable` tag points at. For each key, the highest-id entry comment
+written by the pipeline login is authoritative; comments by any other account
+are ignored. An entry is ticked when that comment has a source-sha line, has
+no `<!-- ai:operator-step:done stable=<sha> -->` line yet, and
+`git -C DIR merge-base --is-ancestor <source> <stable>` succeeds. Ticking
+appends one new comment for the key (every `- [ ]` becomes `- [x]`, plus the
+done marker); older comments are never edited. A commit git cannot find is
+not ticked, and `tick` never creates a tracker. Output is one JSON
+line: `issue`, `stable`, `ticked` (keys), `skipped` (`{reason: count}`).
+Each key logs `OPERATOR_STEP_TICK key= outcome=ticked|already_done|
+no_source_sha|not_ancestor|unknown_commit stable=` on stderr. The
+needs-human digest (below) is a different issue and is never touched.
+
+Tick API budget (CLAUDE.md §15): at most one identity read (none with
+`--trusted-login`), one tracker listing, one paginated comment read, and one
+comment write per ticked key. No per-entry reads and no compare calls: the
+ancestor check is local git.
 
 Output is one JSON line: `issue`, `url`, `created`, `entries`. Exit 0 on
 success, 1 on bad arguments, 2 when a GitHub call failed.
@@ -106,6 +136,10 @@ MAX_BODY = 60000
 MAX_STEPS = 20
 MAX_FIELD = 2000
 MAX_UPSERT_ATTEMPTS = 3
+SOURCE_SHA_RE = re.compile(r"^<!-- ai:operator-step:source-sha=([0-9a-f]{40}) -->$")
+DONE_RE = re.compile(r"^<!-- ai:operator-step:done stable=([0-9a-f]{40}) -->$")
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+GIT_ANCESTOR_TIMEOUT_SECS = 60
 INTRO = (
 	"The pipeline found steps only a person can take. The work they belong to keeps running "
 	"where it can and stays off where it must until each step is done. Tick a step when you "
@@ -185,7 +219,9 @@ def find_issues(issues: object) -> list[dict]:
 		and _trusted(issue)
 		and str(issue.get("body") or "").split("\n", 1)[0].strip() == MARKER
 	]
-	return sorted(candidates, key=lambda issue: int(issue.get("number") or 0))
+	# A non-integer number sorts first instead of raising ValueError, so tick's
+	# guard reports it as a controlled ApiError (exit 2).
+	return sorted(candidates, key=lambda issue: issue["number"] if type(issue.get("number")) is int else 0)
 
 
 def parse_entries(body: str) -> list[tuple[str, str]]:
@@ -200,8 +236,11 @@ def parse_entries(body: str) -> list[tuple[str, str]]:
 	return [(key, "\n".join(lines).rstrip()) for key, lines in entries]
 
 
-def render_entry(key: str, source: str, steps: list[dict]) -> str:
-	lines = [f"<!-- ai:operator-step:entry key={key} -->", f"### {_clean(source, 300) or key}", ""]
+def render_entry(key: str, source: str, steps: list[dict], source_sha: str | None = None) -> str:
+	lines = [f"<!-- ai:operator-step:entry key={key} -->"]
+	if source_sha:
+		lines.append(f"<!-- ai:operator-step:source-sha={source_sha} -->")
+	lines += [f"### {_clean(source, 300) or key}", ""]
 	for step in steps:
 		lines.append(f"- [ ] **{_clean(step.get('title'), 200) or 'Operator step'}**")
 		instructions = _clean(step.get("instructions"))
@@ -253,12 +292,14 @@ def load_steps(path: str) -> list[dict]:
 	return steps
 
 
-def upsert(repo: str, key: str, source: str, steps: list[dict]) -> dict:
+def upsert(repo: str, key: str, source: str, steps: list[dict], source_sha: str | None = None) -> dict:
 	if not REPO_RE.match(repo):
 		raise UsageError(f"--repo must be OWNER/REPO, got {repo!r}")
 	if not KEY_RE.match(key):
 		raise UsageError(f"--key must be lower-case letters, digits and '-', got {key!r}")
-	entry = render_entry(key, source, steps)
+	if source_sha and not SHA_RE.match(source_sha):
+		raise UsageError(f"--source-sha must be 40 lower-case hex characters, got {source_sha!r}")
+	entry = render_entry(key, source, steps, source_sha or None)
 	# The tracker listing has no comment authors. Resolve the credential's
 	# identity once to avoid treating an unrelated user's marker as ours.
 	trusted_login = _gh(["api", "user", "--jq", ".login"]).strip()
@@ -291,7 +332,10 @@ def upsert(repo: str, key: str, source: str, steps: list[dict]) -> dict:
 			continue
 
 		existing = candidates[0]
-		number = int(existing["number"])
+		number = existing.get("number")
+		# Same guard as tick: a malformed number is a controlled ApiError (exit 2).
+		if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
+			raise ApiError("unreadable issue list: operator-step tracker has no issue number")
 		comments = load_entry_comments(repo, number)
 		marker = f"<!-- ai:operator-step:entry key={key} -->"
 		matches = sorted(
@@ -321,6 +365,98 @@ def upsert(repo: str, key: str, source: str, steps: list[dict]) -> dict:
 			"entries": len(set(legacy) | comment_keys | {key}),
 		}
 	raise ApiError(f"operator-step tracker did not converge after {MAX_UPSERT_ATTEMPTS} attempts")
+
+
+# --- ticking entries after a release (plan item 4d) ----------------------------
+
+
+def _authoritative_entry_comments(comments: list[dict], trusted_login: str) -> dict[str, dict]:
+	"""The highest-id entry comment per key, written by the pipeline login only."""
+	latest: dict[str, dict] = {}
+	for comment in comments:
+		user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
+		if not trusted_login or user.get("login") != trusted_login or not isinstance(comment.get("id"), int):
+			continue
+		first = str(comment.get("body") or "").replace("\r\n", "\n").split("\n", 1)[0].strip()
+		match = ENTRY_RE.match(first)
+		if not match:
+			continue
+		key = match.group(1)
+		if key not in latest or comment["id"] > latest[key]["id"]:
+			latest[key] = comment
+	return latest
+
+
+def _is_ancestor(repo_dir: str, source_sha: str, stable_sha: str) -> str:
+	"""ancestor | not_ancestor | unknown_commit (git error, missing commit, timeout)."""
+	try:
+		result = subprocess.run(
+			["git", "-C", repo_dir, "merge-base", "--is-ancestor", source_sha, stable_sha],
+			capture_output=True, text=True, check=False, timeout=GIT_ANCESTOR_TIMEOUT_SECS,
+		)
+	except (OSError, subprocess.TimeoutExpired):
+		return "unknown_commit"
+	if result.returncode == 0:
+		return "ancestor"
+	if result.returncode == 1:
+		return "not_ancestor"
+	return "unknown_commit"
+
+
+def _render_ticked(body: str, stable_sha: str, source_sha: str) -> str:
+	lines = [
+		"- [x]" + line[len("- [ ]"):] if line.startswith("- [ ]") else line
+		for line in body.replace("\r\n", "\n").rstrip().split("\n")
+	]
+	lines += [
+		"",
+		f"<!-- ai:operator-step:done stable={stable_sha} -->",
+		f"Done: the `stable` tag (`{stable_sha[:7]}`) includes the merge `{source_sha[:7]}`; ticked by the promote cycle.",
+	]
+	return "\n".join(lines)
+
+
+def tick(repo: str, stable_sha: str, repo_dir: str = ".", trusted_login: str | None = None) -> dict:
+	if not REPO_RE.match(repo):
+		raise UsageError(f"--repo must be OWNER/REPO, got {repo!r}")
+	if not isinstance(stable_sha, str) or not SHA_RE.match(stable_sha):
+		raise UsageError(f"--stable-sha must be 40 lower-case hex characters, got {stable_sha!r}")
+	login = (trusted_login or "").strip() or _gh(["api", "user", "--jq", ".login"]).strip()
+	if not login:
+		raise ApiError("operator-step tick identity is unavailable")
+	result: dict = {"issue": None, "stable": stable_sha, "ticked": [], "skipped": {}}
+	listing = _gh(["api", f"repos/{repo}/issues?labels={LABEL}&state=open&per_page=30"])
+	try:
+		issues = json.loads(listing or "[]")
+	except ValueError as exc:
+		raise ApiError(f"unreadable issue list: {exc}") from exc
+	candidates = find_issues(issues)
+	if not candidates:
+		return result
+	number = candidates[0].get("number")
+	if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
+		raise ApiError("unreadable issue list: operator-step tracker has no issue number")
+	result["issue"] = number
+	latest = _authoritative_entry_comments(load_entry_comments(repo, number), login)
+	for key in sorted(latest):
+		body = str(latest[key].get("body") or "").replace("\r\n", "\n")
+		lines = [line.strip() for line in body.split("\n")]
+		source_match = SOURCE_SHA_RE.match(lines[1]) if len(lines) > 1 else None
+		if any(DONE_RE.match(line) for line in lines):
+			outcome = "already_done"
+		elif not source_match:
+			outcome = "no_source_sha"
+		else:
+			ancestry = _is_ancestor(repo_dir, source_match.group(1), stable_sha)
+			outcome = "ticked" if ancestry == "ancestor" else ancestry
+		if outcome == "ticked":
+			_gh(["api", f"repos/{repo}/issues/{number}/comments", "-f",
+				f"body={_render_ticked(body, stable_sha, source_match.group(1))}"])
+			result["ticked"].append(key)
+		else:
+			result["skipped"][outcome] = result["skipped"].get(outcome, 0) + 1
+		print(f"OPERATOR_STEP_TICK key={key} outcome={outcome} stable={stable_sha[:7]}", file=sys.stderr)
+	return result
 
 
 # --- needs-human digest (plan item 4a, D6) ------------------------------------
@@ -667,6 +803,12 @@ def main(argv: list[str] | None = None) -> int:
 	upsert_cmd.add_argument("--key", required=True)
 	upsert_cmd.add_argument("--source", required=True)
 	upsert_cmd.add_argument("--steps-file", required=True)
+	upsert_cmd.add_argument("--source-sha", default="")
+	tick_cmd = sub.add_parser("tick")
+	tick_cmd.add_argument("--repo", required=True)
+	tick_cmd.add_argument("--stable-sha", required=True)
+	tick_cmd.add_argument("--repo-dir", default=".")
+	tick_cmd.add_argument("--trusted-login", default="")
 	digest_cmd = sub.add_parser("needs-human")
 	digest_sub = digest_cmd.add_subparsers(dest="digest_command", required=True)
 	park_cmd = digest_sub.add_parser("park")
@@ -688,8 +830,10 @@ def main(argv: list[str] | None = None) -> int:
 				args.trusted_login or None, args.item_labeled)
 		elif args.command == "needs-human":
 			result = needs_human_prune(args.repo, args.trusted_login or None)
+		elif args.command == "tick":
+			result = tick(args.repo, args.stable_sha, args.repo_dir, args.trusted_login or None)
 		else:
-			result = upsert(args.repo, args.key, args.source, load_steps(args.steps_file))
+			result = upsert(args.repo, args.key, args.source, load_steps(args.steps_file), args.source_sha or None)
 	except UsageError as exc:
 		print(json.dumps({"error": str(exc)}))
 		return 1
