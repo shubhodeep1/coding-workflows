@@ -25,9 +25,11 @@ SCRIPTS = REPO_ROOT / "scripts"
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 HELPER = SCRIPTS / "codex_isolated_exec.sh"
 
-# Files allowed to start the codex binary directly: the two container
+# Files allowed to start the codex binary directly: the container
 # entrypoints (Codex runs inside the isolated container there).
-CONTAINER_ENTRYPOINTS = {"codex_isolated_exec.sh", "clarify_isolated_run.sh"}
+# heal_isolated_implement.sh runs the workflow-heal editor in its own
+# credential-free `--network none --read-only --cap-drop ALL` container (#6463).
+CONTAINER_ENTRYPOINTS = {"codex_isolated_exec.sh", "clarify_isolated_run.sh", "heal_isolated_implement.sh"}
 
 RAW_CODEX = re.compile(r'''(?:^|[\s;&|(]|--\s)(?<!Usage: )codex\s+(?:--ask-for-approval|-c\s|exec\b|"\$@")''')
 PY_RAW_CODEX = re.compile(r'''\[\s*"codex"\s*,''')

@@ -305,9 +305,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
     Claude by default through `claude_run_selected`, isolated codex when Claude
     is unavailable) against the source at
     that SHA, classifies (`workflow-defect` / `inconclusive` → issue here with
-    `Target branch: stable`, or the PR's head branch when a review/autofix
-    failure comes from a PR in this repo, since that run executed the PR's
-    own workflow code; `consumer-app-defect` → issue in the consumer;
+    `Target branch: stable`, or the verified support ref's branch for a
+    review/autofix failure from a PR in this repo (`stable` or main ancestor),
+    falling back to the PR head if unresolved; `consumer-app-defect` → issue in the consumer;
     `consumer-config` / `transient` → Telegram + comment only;
     `already-fixed` → Telegram + comment only, honoured only when its
     `## Fixed by` section cites a commit that landed after the failing SHA,
@@ -417,7 +417,13 @@ Phases of the unattended pipeline (each is a separate workflow file under
     linked failed run. Label-escalation `issue` and `pull_request` reports are
     outside this gate even when their issue/comment-derived `run_refs` are
     present; those reports can still fetch unverified job logs with the shared
-    `GH_PAT`.
+    `GH_PAT`. The intake redacts logs before disk, then writes a scope marker
+    derived from verified paths (or leaves it absent when unresolved). Heal
+    planning uses the read-only container; implementation verifies the PAT
+    author's unedited marker and runs an editor in a disposable container,
+    transferring only scoped paths. An unverifiable marker latches
+    `ai:needs-human`; the reporter skips that pipeline-authored refusal.
+    Ordinary issue editors remain unchanged.
     A report whose failure reason is `identical_failure_cap`, or a generation
     > 1 of its lineage, is deterministic (`is_deterministic_failure`): the
     intake never files it as `transient` (remaps to `inconclusive`,
@@ -2002,6 +2008,9 @@ and shipped:
 - `WORKFLOW_HEAL_PHASE_REPORT`
 - `WORKFLOW_HEAL_PR_RECONCILE`
 - `WORKFLOW_HEAL`
+- `HEAL_ISOLATED_EDITOR`
+- `HEAL_SCOPE_REFUSED`
+- `WORKFLOW_HEAL_EVIDENCE`
 - `AUTOFIX_FINGERPRINT`
 - `AUTOFIX_FINGERPRINT_CAP_TRIPPED`
 - `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`
@@ -2022,6 +2031,7 @@ and shipped:
 - `CLAUDE_FIXER_AUTO_MERGE`
 - `RB_JUDGE_ISOLATION`
 - `CONSOLIDATOR_ISOLATION`
+- `REVIEW_SANDBOX_CLEANUP` (`scripts/review_untrusted_sandbox.sh cleanup`, run after `Commit changes`: `reason=root_pattern_mismatch|root_outside_runner_temp|image_marker_missing|baseline_missing|remove_permission_repaired|remove_failed cause=permission_denied|not_empty|busy|other`; path-free, teed into `editor_stage_stderr.txt`)
 - `JUDGE_ISOLATION`
 - `JUDGE_ENGINE_LABELS` (`scripts/orchestrate_poll_process.sh`: `role= outcome=forced_codex reason=issue_labels_unavailable` when a per-issue label snapshot cannot be verified).
 - `SECURITY_AUDIT_TARGET`
@@ -2232,6 +2242,9 @@ LOG_PREFIX.name=WORKFLOW_HEAL_AUTOFIX_REPORT
 LOG_PREFIX.name=WORKFLOW_HEAL_PHASE_REPORT
 LOG_PREFIX.name=WORKFLOW_HEAL_PR_RECONCILE
 LOG_PREFIX.name=WORKFLOW_HEAL
+LOG_PREFIX.name=HEAL_ISOLATED_EDITOR
+LOG_PREFIX.name=HEAL_SCOPE_REFUSED
+LOG_PREFIX.name=WORKFLOW_HEAL_EVIDENCE
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_TRIPPED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED
@@ -2252,6 +2265,7 @@ LOG_PREFIX.name=AUTOFIX_FAILURE_HEADLINE
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
 LOG_PREFIX.name=RB_JUDGE_ISOLATION
 LOG_PREFIX.name=CONSOLIDATOR_ISOLATION
+LOG_PREFIX.name=REVIEW_SANDBOX_CLEANUP
 LOG_PREFIX.name=JUDGE_ISOLATION
 LOG_PREFIX.name=JUDGE_ENGINE_LABELS
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET

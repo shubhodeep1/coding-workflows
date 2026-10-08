@@ -16131,7 +16131,11 @@ def test_standalone_close_and_reissue_keeps_clarification_only_label():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	anchor = "This issue was re-created by standalone stall recovery."
 	assert anchor in script, "Could not locate standalone close_and_reissue guidance block"
-	window = script[script.index(anchor):script.index(anchor) + 1200]
+	# Bound the window by the reissue's own `gh issue create` line rather than
+	# a byte count: the heal-scope carry block (#6463) sits between them.
+	anchor_idx = script.index(anchor)
+	create_idx = script.index("gh issue create", anchor_idx)
+	window = script[anchor_idx:script.index("\n", create_idx)]
 	assert '--label "ai:clarification"' in window
 	assert '--label "ai:orchestrator-managed"' not in window
 

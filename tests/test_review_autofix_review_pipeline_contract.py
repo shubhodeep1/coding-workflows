@@ -8239,6 +8239,8 @@ def main() -> int:
 	test_review_isolation_transfers_into_active_work_tree()
 	test_review_relay_accepts_only_configured_chat_model()
 	test_review_relay_main_preserves_invoked_mode()
+	test_review_sandbox_cleanup_failure_cannot_skip_commit_or_fake_changes_lost()
+	test_review_sandbox_cleanup_reports_path_free_reason()
 	print("OK: review_autofix review-pipeline plumbing contract holds")
 	return 0
 
@@ -9404,6 +9406,157 @@ def test_review_relay_main_preserves_invoked_mode() -> None:
 				broker_module.main()
 			server = broker_class.return_value if mode.endswith("broker") else bridge_class.return_value
 			assert server.mode == mode
+
+
+def _review_step_runs_after_status(condition: object, job_failed: bool) -> bool:
+	"""Model GitHub's step status functions for an ``if:`` expression.
+
+	``always()`` and ``!cancelled()`` run regardless of an earlier failure,
+	``failure()`` runs only after one, and anything else (explicit
+	``success()`` or no status function) runs only while nothing has failed.
+	"""
+	text = str(condition or "")
+	if "always()" in text or "!cancelled()" in text:
+		return True
+	if "failure()" in text:
+		return job_failed
+	return not job_failed
+
+
+def test_review_sandbox_cleanup_failure_cannot_skip_commit_or_fake_changes_lost() -> None:
+	"""Reproduces #6484 / run 37666355049: cleanup exited 1 before ``Commit
+	changes``, the implicit ``success()`` skipped the commit and the
+	``!cancelled()`` detector reported the editor's work as editor_changes_lost.
+	"""
+	workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+	steps = workflow["jobs"]["codex-agent"]["steps"]
+	cleanup_name = "Clean up isolated review workspace"
+	by_name = {step.get("name"): step for step in steps}
+	cleanup = by_name[cleanup_name]
+	assert "always()" in str(cleanup.get("if")), "cleanup must still run after editor failures"
+	assert '"${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup' in cleanup["run"]
+	assert '>(tee -a "${RUNTIME_DIR}/editor_stage_stderr.txt" >&2)' in cleanup["run"]
+	job_failed = False
+	evaluated: dict[str, bool] = {}
+	for step in steps:
+		name = step.get("name")
+		runs = _review_step_runs_after_status(step.get("if"), job_failed)
+		evaluated[name] = runs
+		if name == cleanup_name:
+			assert runs
+			job_failed = True  # cleanup exits 1
+	names = [step.get("name") for step in steps]
+	assert names.index("Commit changes") < names.index(cleanup_name), "Commit changes must run before sandbox cleanup"
+	assert names.index("Remove slop-scan runtime artifact") < names.index("Commit changes")
+	assert evaluated["Commit changes"] is True, "a cleanup failure must not skip the commit"
+	assert evaluated["Push all pending commits"] is False, "a cleanup failure must still block the push"
+	detector = str(by_name["Detect editor-claimed-but-uncommitted changes"].get("if"))
+	# With did_commit=true (the commit ran) and the strict ledger flag unset,
+	# the detector is gated off, so editor_changes_lost is not reported.
+	assert "(steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true')" in detector
+
+
+def _run_review_sandbox_cleanup(runner_temp: Path, root: Path, stub_bin: Path) -> subprocess.CompletedProcess[str]:
+	env = {key: value for key, value in os.environ.items() if key not in {"REVIEW_SANDBOX_ROOT", "WORKSPACE_PATH"}}
+	env.update({
+		"PATH": f"{stub_bin}:{os.environ['PATH']}",
+		"RUNNER_TEMP": str(runner_temp),
+		"REVIEW_SANDBOX_ROOT": str(root),
+		"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+		"PYTHONDONTWRITEBYTECODE": "1",
+	})
+	return subprocess.run(
+		["bash", str(REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh"), "cleanup"],
+		env=env, capture_output=True, text=True, check=False, timeout=60,
+	)
+
+
+def _make_prepared_review_root(root: Path) -> None:
+	root.mkdir(parents=True)
+	(root / "image").write_text("sha256:" + "0" * 64 + "\n")
+	(root / "baseline.json").write_text("{}\n")
+
+
+def test_review_sandbox_cleanup_reports_path_free_reason() -> None:
+	assert 'LOG_PREFIX.name=REVIEW_SANDBOX_CLEANUP' in (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	with tempfile.TemporaryDirectory(prefix="review-cleanup-") as td:
+		runner_temp = Path(td).resolve()
+		stub_bin = runner_temp / "bin"
+		stub_bin.mkdir()
+		docker_stub = stub_bin / "docker"
+		docker_stub.write_text("#!/usr/bin/env bash\nexit 0\n")
+		docker_stub.chmod(0o755)
+		locked = runner_temp / "review-isolated-locked"
+		try:
+			# Read-only nested directory (dependency cache shape): repaired once.
+			_make_prepared_review_root(locked)
+			nested = locked / "source" / "cache"
+			nested.mkdir(parents=True)
+			(nested / "pkg.txt").write_text("x\n")
+			nested.chmod(0o555)
+			result = _run_review_sandbox_cleanup(runner_temp, locked, stub_bin)
+			assert result.returncode == 0, result.stderr
+			assert not locked.exists()
+			if os.geteuid() != 0:
+				assert "REVIEW_SANDBOX_CLEANUP reason=remove_permission_repaired" in result.stderr
+			assert "::error::" not in result.stderr
+			assert not list(runner_temp.glob("review-cleanup-err-*"))
+		finally:
+			if locked.exists():
+				for dirpath, _dirs, _files in os.walk(locked):
+					os.chmod(dirpath, 0o755)
+
+		# A clean root is removed silently, as before.
+		plain = runner_temp / "review-isolated-plain"
+		_make_prepared_review_root(plain)
+		result = _run_review_sandbox_cleanup(runner_temp, plain, stub_bin)
+		assert result.returncode == 0 and result.stderr == "" and not plain.exists(), result.stderr
+
+		missing_baseline = runner_temp / "review-isolated-nobaseline"
+		_make_prepared_review_root(missing_baseline)
+		(missing_baseline / "baseline.json").unlink()
+		result = _run_review_sandbox_cleanup(runner_temp, missing_baseline, stub_bin)
+		assert result.returncode == 1
+		assert "Review sandbox not prepared" in result.stderr
+		assert "::error::REVIEW_SANDBOX_CLEANUP reason=baseline_missing" in result.stderr
+		assert str(missing_baseline) not in result.stderr
+
+		missing_image = runner_temp / "review-isolated-noimage"
+		_make_prepared_review_root(missing_image)
+		(missing_image / "image").unlink()
+		result = _run_review_sandbox_cleanup(runner_temp, missing_image, stub_bin)
+		assert result.returncode == 1 and "REVIEW_SANDBOX_CLEANUP reason=image_marker_missing" in result.stderr
+
+		nested_root = runner_temp / "review-isolated-outer" / "review-isolated-inner"
+		_make_prepared_review_root(nested_root)
+		result = _run_review_sandbox_cleanup(runner_temp, nested_root, stub_bin)
+		assert result.returncode == 1 and "REVIEW_SANDBOX_CLEANUP reason=root_outside_runner_temp" in result.stderr
+		assert str(nested_root) not in result.stderr
+
+		elsewhere = runner_temp / "other" / "review-isolated-x"
+		_make_prepared_review_root(elsewhere)
+		result = _run_review_sandbox_cleanup(runner_temp, elsewhere, stub_bin)
+		assert result.returncode == 1 and "REVIEW_SANDBOX_CLEANUP reason=root_pattern_mismatch" in result.stderr
+
+		# rm keeps failing: classify its stderr, never echo its paths.
+		rm_bin = runner_temp / "rmbin"
+		rm_bin.mkdir()
+		rm_stub = rm_bin / "rm"
+		rm_stub.write_text("#!/usr/bin/env bash\necho \"rm: cannot remove '/secret/path': Permission denied\" >&2\nexit 1\n")
+		rm_stub.chmod(0o755)
+		(rm_bin / "docker").write_text(docker_stub.read_text())
+		(rm_bin / "docker").chmod(0o755)
+		stuck = runner_temp / "review-isolated-stuck"
+		_make_prepared_review_root(stuck)
+		result = _run_review_sandbox_cleanup(runner_temp, stuck, rm_bin)
+		assert result.returncode == 1
+		assert "::error::REVIEW_SANDBOX_CLEANUP reason=remove_failed cause=permission_denied" in result.stderr
+		assert "/secret/path" not in result.stderr
+		assert str(stuck) not in result.stderr
+
+	# The run path keeps its original single-line output.
+	helper = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert 'if [ "${action}" = cleanup ]; then\n\t\techo "::error::REVIEW_SANDBOX_CLEANUP reason=${sandbox_root_reason}" >&2' in helper
 
 
 if __name__ == "__main__":

@@ -5247,10 +5247,6 @@ jobs:
             fi
           fi
 
-      - name: Clean up isolated review workspace
-        if: always() && env.REVIEW_SANDBOX_ROOT != ''
-        run: bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup
-
       - name: Remove slop-scan runtime artifact
         if: always()
         run: |
@@ -5334,6 +5330,18 @@ jobs:
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_commit_changes.sh"
+
+      # Runs after the commit (#6484, run 37666355049): a failed cleanup must not
+      # skip the commit and be misreported as editor_changes_lost; push and the
+      # other success()-gated steps still stay blocked.
+      - name: Clean up isolated review workspace
+        if: always() && env.REVIEW_SANDBOX_ROOT != ''
+        run: |
+          if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ]; then
+            bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup 2> >(tee -a "${RUNTIME_DIR}/editor_stage_stderr.txt" >&2)
+          else
+            bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup
+          fi
 
       - name: Run interim judge
         if: env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
