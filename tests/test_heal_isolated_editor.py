@@ -174,6 +174,70 @@ esac
 		assert commands.read_text().count("--network none") >= 4
 
 
+def test_surviving_editor_container_blocks_transfer_and_later_steps(tmp_path: Path) -> None:
+	# Adversarial: the editor leaves a child running so its container survives
+	# `docker rm -f`. The runner must stop before validation, transfer or any
+	# host step, and no docker call (hence no container) ever receives GH_PAT.
+	host = tmp_path / "host"
+	host.mkdir()
+	(host / "scripts").mkdir()
+	(host / "scripts/fix.py").write_text("old\n")
+	subprocess.run(["git", "init", "-q", str(host)], check=True)
+	subprocess.run(["git", "add", "--all"], cwd=host, check=True)
+	support = tmp_path / "support"
+	support.mkdir()
+	for name in ("review_untrusted_workspace.py", "files_touched_scope_guard.py"):
+		shutil.copy(ROOT / "scripts" / name, support / name)
+	(support / "validate_changed_files_syntax.sh").write_text("#!/bin/bash\nexit 0\n")
+	(support / "clarify_openrouter_broker.py").write_text(
+		"import socket,sys,time\ns=socket.socket(socket.AF_UNIX)\ns.bind(sys.argv[2])\ns.listen(1)\ntime.sleep(30)\n"
+	)
+	trusted = tmp_path / ".codex-workflow-src/scripts/clarify_sandbox"
+	trusted.mkdir(parents=True)
+	(trusted / "Dockerfile").write_text("FROM scratch\n")
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	commands = tmp_path / "docker-commands"
+	docker = bin_dir / "docker"
+	docker.write_text("""#!/bin/bash
+printf '%s\\n' "$*" >> "__DOCKER_COMMANDS__"
+[ -z "${GH_PAT:-}" ] && [ -z "${GH_TOKEN:-}" ] || { echo leaked >> "__DOCKER_COMMANDS__"; exit 19; }
+case "$1" in
+  build) echo fake-image ;;
+  run)
+    for arg in "$@"; do
+      case "$arg" in
+        type=bind,src=*,dst=/source)
+          dest="${arg#type=bind,src=}"
+          printf 'new\\n' > "${dest%%,dst=*}/scripts/fix.py"
+          ;;
+      esac
+    done
+    ;;
+  ps) echo deadbeefcafe ;;
+  rm) ;;
+  *) exit 1 ;;
+esac
+""".replace("__DOCKER_COMMANDS__", str(commands)))
+	docker.chmod(0o755)
+	prompt = tmp_path / "prompt"
+	prompt.write_text("Edit the file")
+	scope = tmp_path / "scope"
+	scope.write_text("scripts/fix.py\ntests/**\nchangelog.d/*.md\n")
+	output = tmp_path / "output"
+	env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", GH_PAT="fake-private-pat", GH_TOKEN="fake-private-pat", OPENROUTER_API_KEY="fake-model-key", HEAL_SCOPE_FILE=str(scope), HEAL_TRUSTED_SUPPORT_DIR=str(support), RUNNER_TEMP=str(tmp_path), GITHUB_WORKSPACE=str(tmp_path), WORKSPACE_PATH=str(host), PYTHONDONTWRITEBYTECODE="1")
+	result = subprocess.run(["bash", str(ROOT / "scripts/heal_isolated_implement.sh"), str(prompt), str(output)], env=env, capture_output=True, text=True, check=False)
+	assert result.returncode != 0 and result.returncode != 42, result.stdout + result.stderr
+	assert "outcome=container_survived" in result.stderr
+	log = commands.read_text()
+	assert "leaked" not in log
+	# Nothing after the editor ran: no validator container, no transfer, no output.
+	assert "/validator.sh" not in log
+	assert (host / "scripts/fix.py").read_text() == "old\n"
+	assert not output.exists()
+	assert not list(tmp_path.glob("heal-isolated.*"))
+
+
 def test_real_docker_kills_background_editor_child_when_available() -> None:
 	if not shutil.which("docker") or subprocess.run(["docker", "image", "inspect", "busybox:1.36"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False).returncode != 0:
 		pytest.skip("busybox:1.36 is not cached locally")
