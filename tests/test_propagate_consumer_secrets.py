@@ -54,7 +54,12 @@ if [ "${1:-}" = "secret" ] && [ "${2:-}" = "list" ]; then
   case " ${MOCK_GH_LIST_EMPTY_REPOS:-} " in
     *" ${repo} "*) exit 0 ;;
   esac
-  grep -E "^set\|${repo}\|" "${MOCK_GH_LOG}" | cut -d'|' -f3 | sort -u
+  {
+    for entry in ${MOCK_GH_PRESENT_SECRETS:-}; do
+      case "${entry}" in "${repo}:"*) printf '%s\n' "${entry#"${repo}:"}" ;; esac
+    done
+    grep -E "^set\|${repo}\|" "${MOCK_GH_LOG}" | cut -d'|' -f3 || true
+  } | sort -u
   exit 0
 fi
 echo "unexpected gh call: $*" >&2
@@ -84,6 +89,8 @@ def _run(
 	fail_first_attempt: bool = False,
 	retry_attempts: str = "1",
 	token: str = "fixture-library-token",
+	only_missing: str | None = None,
+	present: str = "",
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
 	with tempfile.TemporaryDirectory(prefix="propagate-consumer-") as tmp_name:
 		tmp = Path(tmp_name)
@@ -111,7 +118,11 @@ def _run(
 			"MOCK_GH_LIST_FAIL_REPOS": list_fail_repos,
 			"MOCK_GH_FAIL_FIRST_ATTEMPT": "true" if fail_first_attempt else "",
 			"GH_RETRY_MAX_ATTEMPTS": retry_attempts,
+			"MOCK_GH_PRESENT_SECRETS": present,
 		})
+		env.pop("PROPAGATE_ONLY_MISSING", None)
+		if only_missing is not None:
+			env["PROPAGATE_ONLY_MISSING"] = only_missing
 		if token:
 			env["GH_TOKEN"] = token
 		if names is not None:
@@ -219,6 +230,65 @@ class PropagateConsumerSecretsScriptTests(unittest.TestCase):
 			self.assertNotIn(value, output)
 		self.assertNotIn("fixture-library-token", output)
 
+	def test_only_missing_skips_present_secrets_and_sets_the_rest(self) -> None:
+		proc, calls = _run(
+			registry=["o/a"], values=FIXTURE_VALUES, only_missing="true",
+			present="o/a:GH_PAT o/a:TG_BOT_SECRET o/b:OPENROUTER_API_KEY",
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		sets = {c.split("|")[2] for c in calls if c.startswith("set|o/a|")}
+		self.assertEqual(sets, {"CHECK_TRIAGE_ISSUES_TOKEN", "OPENROUTER_API_KEY"})
+		for name in ("GH_PAT", "TG_BOT_SECRET"):
+			self.assertIn(f"repo=o/a secret={name} status=skipped_present", proc.stdout)
+		# One presence listing before the writes, one verification after.
+		self.assertEqual(["list|o/a", "list|o/a"], [c for c in calls if c.startswith("list|")])
+		self.assertEqual(calls[0], "list|o/a")
+		self.assertIn("summary targets=1 set=2 skipped=2 failed=0", proc.stdout)
+
+	def test_only_missing_with_everything_present_writes_nothing(self) -> None:
+		present = " ".join(f"o/a:{name}" for name in SECRET_NAMES)
+		proc, calls = _run(registry=["o/a"], values=FIXTURE_VALUES, only_missing="true", present=present)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertEqual(calls, ["list|o/a"])
+		self.assertIn("summary targets=1 set=0 skipped=4 failed=0", proc.stdout)
+
+	def test_only_missing_listing_failure_writes_nothing_to_that_repo(self) -> None:
+		proc, calls = _run(
+			registry=["o/a", "o/b"], values={"GH_PAT": "x"}, names="GH_PAT",
+			only_missing="true", list_fail_repos="o/a",
+		)
+		self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+		self.assertNotIn("set|o/a|", "\n".join(calls))
+		self.assertIn("repo=o/a status=failed reason=presence_list_failed", proc.stdout)
+		self.assertIn("set|o/b|GH_PAT|" + _sha("x"), calls)
+		self.assertIn("summary targets=2 set=1 skipped=0 failed=1", proc.stdout)
+
+	def test_default_and_explicit_false_still_overwrite_present_secrets(self) -> None:
+		for mode in (None, "false"):
+			proc, calls = _run(
+				registry=["o/a"], values={"GH_PAT": "x"}, names="GH_PAT",
+				only_missing=mode, present="o/a:GH_PAT",
+			)
+			self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+			self.assertIn("set|o/a|GH_PAT|" + _sha("x"), calls)
+			self.assertEqual(["list|o/a"], [c for c in calls if c.startswith("list|")])
+			self.assertNotIn("skipped_present", proc.stdout)
+
+	def test_invalid_only_missing_value_fails_before_any_call(self) -> None:
+		proc, calls = _run(registry=["o/a"], values=FIXTURE_VALUES, only_missing="yes")
+		self.assertEqual(proc.returncode, 1)
+		self.assertIn("PROPAGATE_ONLY_MISSING must be true or false", proc.stdout)
+		self.assertEqual([], calls)
+
+	def test_only_missing_never_leaks_secret_values(self) -> None:
+		proc, _ = _run(
+			registry=["o/a", "o/b"], values=FIXTURE_VALUES, only_missing="true",
+			present="o/a:GH_PAT", list_fail_repos="o/b",
+		)
+		output = proc.stdout + proc.stderr
+		for value in FIXTURE_VALUES.values():
+			self.assertNotIn(value, output)
+
 	def test_missing_token_fails_before_any_call(self) -> None:
 		proc, calls = _run(registry=["o/a"], values=FIXTURE_VALUES, token="")
 		self.assertEqual(proc.returncode, 1)
@@ -246,6 +316,7 @@ class PropagateConsumerSecretsWorkflowContractTests(unittest.TestCase):
 		self.assertEqual(on["push"]["branches"], ["main"])
 		self.assertEqual(on["push"]["paths"], [".github/ai/consumer_repos.json"])
 		self.assertIn("targets", on["workflow_dispatch"]["inputs"])
+		self.assertTrue(on["schedule"][0]["cron"].strip())
 
 	def test_propagate_step_wires_every_secret_and_runs_the_script(self) -> None:
 		job = self.workflow["jobs"]["propagate"]
@@ -260,6 +331,14 @@ class PropagateConsumerSecretsWorkflowContractTests(unittest.TestCase):
 		self.assertEqual(step["env"]["PROPAGATE_TARGETS"], "${{ steps.targets.outputs.targets }}")
 		self.assertIn("bash scripts/propagate_consumer_secrets.sh", step["run"])
 		self.assertEqual(step["if"], "${{ steps.targets.outputs.skip != 'true' }}")
+		# Only the weekly backfill leaves existing consumer values alone.
+		self.assertEqual(step["env"]["PROPAGATE_ONLY_MISSING"], "${{ github.event_name == 'schedule' }}")
+
+	def test_dispatch_input_is_passed_through_env_only(self) -> None:
+		job = self.workflow["jobs"]["propagate"]
+		resolve = next(s for s in job["steps"] if s.get("id") == "targets")
+		self.assertIn("inputs.targets", resolve["env"]["DISPATCH_TARGETS"])
+		self.assertNotIn("${{", resolve["run"])
 
 	def test_checkout_has_history_for_the_registry_diff(self) -> None:
 		job = self.workflow["jobs"]["propagate"]
@@ -286,6 +365,8 @@ class PropagateConsumerSecretsWorkflowContractTests(unittest.TestCase):
 		self.assertIn('printf \'%s\' "${!1}" | gh secret set "$1" --repo "$2"', script)
 		self.assertIn("status=skipped_unregistered", script)
 		self.assertIn("status=verify_list_failed", script)
+		self.assertIn("status=skipped_present", script)
+		self.assertIn('PROPAGATE_ONLY_MISSING="${PROPAGATE_ONLY_MISSING:-false}"', script)
 		self.assertNotIn("set -x", script)
 
 

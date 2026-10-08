@@ -1,0 +1,6 @@
+<!-- changelog: fixed -->
+- **Consumer secrets propagation runs again, and a weekly run fills in secrets that consumers are missing.**
+
+The `Propagate consumer secrets` workflow was missing from the repository, so registering a consumer copied no secrets. It is back, with its push trigger on `.github/ai/consumer_repos.json`, its `workflow_dispatch` input and a Telegram CRITICAL on failure. A new weekly schedule checks every registered consumer and sets only the secrets it does not have yet (`PROPAGATE_ONLY_MISSING=true`); values a consumer already holds are left untouched, and a consumer whose secret list cannot be read gets no writes and turns the run red. Push and dispatch runs still overwrite, so a rotated library secret can be pushed out on purpose. `/seed-repo` now treats the registration and its propagation run as the normal way consumers get their secrets, and asks for manual setup only after a failed run or a `no-register` seed.
+
+What this means for operators: existing consumers receive any missing `CHECK_TRIAGE_ISSUES_TOKEN`, `GH_PAT`, `OPENROUTER_API_KEY` or `TG_BOT_SECRET` within a week without a manual dispatch. The library `GH_PAT` needs `repo` scope on every registered consumer, or the weekly run fails.

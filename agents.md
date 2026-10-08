@@ -437,7 +437,12 @@ Phases of the unattended pipeline (each is a separate workflow file under
     `OPENROUTER_API_KEY` and `TG_BOT_SECRET` from this repository's secrets
     into the newly registered consumers via `gh secret set` (value on
     stdin, never logged); `workflow_dispatch` with an empty `targets` input
-    backfills every registry entry. Unregistered targets are refused; a
+    backfills every registry entry. A weekly schedule (`23 5 * * 1`) runs
+    every registry entry with `PROPAGATE_ONLY_MISSING=true`: it lists each
+    consumer's secret names first and sets only the missing ones
+    (`status=skipped_present` for the rest; a failed listing writes nothing,
+    `status=failed reason=presence_list_failed`). Push and dispatch runs keep
+    overwriting. Unregistered targets are refused; a
     failed or unverified write leaves the run red and sends a Telegram
     CRITICAL. Tests: `tests/test_propagate_consumer_secrets.py`.
 
