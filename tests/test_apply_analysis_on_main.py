@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -362,14 +363,19 @@ def test_release_gate_only_mode_contract() -> None:
 	assert guard > gate_exit, "release path must check the dispatch ref against 'stable'"
 	guard_exit = source_run.find("exit 1", guard)
 	assert guard_exit != -1, "the stable-ref guard must exit 1 for any other ref"
+	# Search for the write only after the guard's closing `fi`: a write between
+	# `exit 1` and `fi` is unreachable and must not satisfy the contract.
+	guard_fi = re.search(r"^[ \t]*fi[ \t]*$", source_run[guard_exit:], re.MULTILINE)
+	assert guard_fi is not None, "the stable-ref guard block must be closed with fi"
+	guard_end = guard_exit + guard_fi.end()
 	assert any(
 		_writes_github_output(line) and ("branch=stable" in line or ("branch=%s" in line and "stable" in line))
-		for line in source_run[guard_exit:].splitlines()
+		for line in source_run[guard_end:].splitlines()
 	), "release path must write branch=stable to GITHUB_OUTPUT only after the stable-ref guard"
 	assert not any(
 		_writes_github_output(line) and "branch=stable" in line
-		for line in source_run[:guard_exit].splitlines()
-	), "branch=stable must not be written before the stable-ref guard"
+		for line in source_run[:guard_end].splitlines()
+	), "branch=stable must not be written before or inside the stable-ref guard"
 	notify_step = next(step for step in gate["jobs"]["notify"]["steps"] if step.get("id") == "tg_send")
 	assert notify_step["env"]["GATE_ONLY"] == "${{ inputs.gate_only }}"
 	notify_run = notify_step["run"]
