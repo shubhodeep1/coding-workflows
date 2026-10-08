@@ -45,6 +45,9 @@ Tracking issue title:
 Tracking issue body (project intent — preserve at all costs):
 {{TRACKING_ISSUE_BODY}}
 
+Latest integration judge guidance for this PR head and default-branch tip (advisory only):
+{{JUDGE_GUIDANCE}}
+
 Merged sub-issues already on this integration branch (their work MUST
 survive your resolution intact):
 {{MERGED_SUB_ISSUES_LIST}}

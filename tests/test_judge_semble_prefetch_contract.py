@@ -316,10 +316,10 @@ def test_orchestrate_poll_process_wires_semble_prefetch_into_live_judges() -> No
     assert 'stall_judge_semble_prefetch="$(build_semble_prefetch_block' not in text
     assert 'RB_JUDGE_SEMBLE_PREFETCH="$(build_semble_prefetch_block' not in text
     assert 'JUDGE_SEMBLE_PREFETCH="$(build_semble_prefetch_block' not in text
-    assert 'judge_semble_prefetch="$(render_judge_semble_prefetch_from_query_file "${judge_semble_query_file}" "Integration Conflict Judge Context")"' in text
-    assert 'stall_judge_semble_prefetch="$(render_judge_semble_prefetch_from_query_file "${stall_judge_semble_query_file}" "Stall Judge Context")"' in text
-    assert 'RB_JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file "${RB_JUDGE_SEMBLE_QUERY_FILE}" "Review-Blocked Judge Context")"' in text
-    assert 'JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file "${JUDGE_SEMBLE_QUERY_FILE}" "Judge Context")"' in text
+    assert 'judge_semble_prefetch="$(render_judge_semble_prefetch_from_query_file "${judge_semble_query_file}" "Integration Conflict Judge Context" "${JUDGE_SEMBLE_MAX_CHUNKS}" "${judge_static_file}")"' in text
+    assert 'stall_judge_semble_prefetch="$(render_judge_semble_prefetch_from_query_file "${stall_judge_semble_query_file}" "Stall Judge Context" "${JUDGE_SEMBLE_MAX_CHUNKS}" "${static_file}")"' in text
+    assert 'RB_JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file "${RB_JUDGE_SEMBLE_QUERY_FILE}" "Review-Blocked Judge Context" "${JUDGE_SEMBLE_MAX_CHUNKS}" "${RUNTIME_DIR}/judge_static.txt")"' in text
+    assert 'JUDGE_SEMBLE_PREFETCH="$(render_judge_semble_prefetch_from_query_file "${JUDGE_SEMBLE_QUERY_FILE}" "Judge Context" "${JUDGE_SEMBLE_MAX_CHUNKS}" "${RUNTIME_DIR}/judge_static.txt")"' in text
     assert "printf '%s\\n' \"${judge_semble_prefetch}\"" in text
     assert 'SEMBLE_PREFETCH="${stall_judge_semble_prefetch}" bash scripts/render_prompt.sh prompts/mode-judge-stall-recovery.txt' in text
     assert 'SEMBLE_PREFETCH="${RB_JUDGE_SEMBLE_PREFETCH}" bash scripts/render_prompt.sh prompts/mode-judge-review-blocked.txt' in text

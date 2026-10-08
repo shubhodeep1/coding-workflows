@@ -146,6 +146,49 @@ def test_count_tokens_path_is_allowed(chain) -> None:
 	assert status == 200
 
 
+@pytest.mark.parametrize("tool_type", (
+	"web_search_20250305", "web_fetch_20250910", "code_execution_20250522", "mcp_toolset",
+	"bash_code_execution_20250825", "text_editor_code_execution_20250728",
+	"computer_20250124", "future_provider_tool_20270101",
+))
+@pytest.mark.parametrize("path", ("/v1/messages", "/v1/messages/count_tokens"))
+def test_provider_egress_tool_is_rejected_by_host_broker(chain, tool_type: str, path: str) -> None:
+	status, _, _ = _post(chain["bridge_port"], path=path, body={"model": MODEL, "tools": [{"type": tool_type}]})
+	assert status == 400
+	assert _Upstream.seen == []
+
+
+@pytest.mark.parametrize("extra", (
+	{"mcp_servers": [{"url": "https://example.invalid"}]},
+	{"container": "x"},
+	{"tools": "x"},
+	{"tools": [1]},
+	{"tools": [{"type": 5}]},
+))
+@pytest.mark.parametrize("path", ("/v1/messages", "/v1/messages/count_tokens"))
+def test_malformed_or_egress_request_is_rejected(chain, extra: dict, path: str) -> None:
+	status, _, _ = _post(chain["bridge_port"], path=path, body={"model": MODEL, **extra})
+	assert status == 400
+	assert _Upstream.seen == []
+
+
+@pytest.mark.parametrize("tool", ({"name": "Bash", "input_schema": {}}, {"type": "custom", "name": "Bash", "input_schema": {}}))
+def test_client_executed_tool_is_forwarded(chain, tool: dict) -> None:
+	status, _, _ = _post(chain["bridge_port"], body={"model": MODEL, "tools": [tool]})
+	assert status == 200
+	assert len(_Upstream.seen) == 1
+	assert _Upstream.seen[0]["headers"]["authorization"] == "Bearer " + REAL_TOKEN
+
+
+def test_provider_egress_predicate() -> None:
+	assert relay.request_has_provider_egress({"tools": [{"type": "web_search_20250305"}]})
+	assert relay.request_has_provider_egress({"tools": [{"type": "bash_code_execution_20250825"}]})
+	assert relay.request_has_provider_egress({"tools": [{"type": "future_provider_tool_20270101"}]})
+	assert relay.request_has_provider_egress({"mcp_servers": []})
+	assert relay.request_has_provider_egress({"tools": [{"type": None}]})
+	assert not relay.request_has_provider_egress({"tools": [{"name": "Bash"}, {"type": "custom"}]})
+
+
 @pytest.mark.parametrize(
 	"kwargs",
 	[
@@ -261,6 +304,190 @@ def test_oversized_content_length_is_rejected_without_integer_conversion(chain) 
 	assert _Upstream.seen == []
 
 
+def test_rejection_does_not_wait_indefinitely_for_a_missing_body(chain) -> None:
+	connection = relay.UnixHTTPConnection(chain["socket"])
+	connection.putrequest("POST", "/v1/messages")
+	connection.putheader("Authorization", "Bearer mine")
+	connection.putheader("Content-Length", "5")
+	connection.endheaders()
+	connection.sock.settimeout(3)
+	assert connection.getresponse().status == 400
+	connection.close()
+
+
+@pytest.mark.parametrize("sent_body", (b"", b"{"))
+def test_valid_headers_with_incomplete_body_release_the_relay(chain, monkeypatch: pytest.MonkeyPatch, sent_body: bytes) -> None:
+	monkeypatch.setattr(relay, "BODY_READ_TIMEOUT", 0.1)
+	connection = http.client.HTTPConnection("127.0.0.1", chain["bridge_port"], timeout=3)
+	connection.putrequest("POST", "/v1/messages")
+	connection.putheader("Authorization", "Bearer isolated-placeholder")
+	connection.putheader("Content-Type", "application/json")
+	connection.putheader("Content-Length", "5")
+	connection.endheaders(sent_body)
+	assert connection.getresponse().status == 400
+	connection.close()
+	assert _Upstream.seen == []
+	assert _post(chain["bridge_port"])[0] == 200
+
+
+def test_rejection_handles_an_oversized_length_header(chain) -> None:
+	connection = relay.UnixHTTPConnection(chain["socket"])
+	connection.putrequest("POST", "/v1/messages")
+	connection.putheader("Authorization", "Bearer mine")
+	connection.putheader("Content-Length", "9" * 5000)
+	connection.endheaders()
+	connection.sock.settimeout(3)
+	assert connection.getresponse().status == 400
+	connection.close()
+
+
+def test_rejection_drain_has_a_total_deadline_and_restores_socket_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+	handler = relay.Relay.__new__(relay.Relay)
+	handler.command = "POST"
+	handler._request_body_consumed = False
+	handler.headers = {"Content-Length": "100"}
+	handler.connection = Mock()
+	handler.connection.gettimeout.return_value = 30
+	handler.rfile = Mock()
+	handler.rfile.read1.return_value = b"x"
+	handler.send_error = Mock()
+	monkeypatch.setattr(relay, "time", Mock(monotonic=Mock(side_effect=[0, 0, .3, .6, 1.01])))
+
+	handler._reject(400)
+
+	assert handler.rfile.read1.call_count == 3
+	assert handler.connection.settimeout.call_args_list[-2].args == (30,)
+	assert handler.connection.settimeout.call_args_list[-1].args == (1,)
+	handler.send_error.assert_called_once_with(400, "Request rejected")
+
+
+def test_rejection_drains_only_the_unread_body_after_partial_read() -> None:
+	handler = relay.Relay.__new__(relay.Relay)
+	handler.command = "POST"
+	handler.server = Mock(mode="bridge")
+	handler.path = "/v1/messages"
+	handler.headers = {
+		"Host": "localhost", "Authorization": "Bearer isolated-placeholder",
+		"Content-Type": "application/json", "Content-Length": "5",
+	}
+	handler.connection = Mock()
+	handler.rfile = Mock()
+	handler.rfile.read1.side_effect = [b"ab", b"", b"xyz"]
+	handler.send_error = Mock()
+
+	handler.do_POST()
+
+	assert handler.rfile.read1.call_args_list[-1].args == (3,)
+	assert handler.rfile.read1.call_count == 3
+	handler.send_error.assert_called_once_with(400, "Request rejected")
+
+
+def test_bridge_rejects_an_oversized_length_with_valid_other_headers(chain) -> None:
+	connection = http.client.HTTPConnection("127.0.0.1", chain["bridge_port"], timeout=3)
+	connection.putrequest("POST", "/v1/messages")
+	connection.putheader("Authorization", "Bearer isolated-placeholder")
+	connection.putheader("Content-Type", "application/json")
+	connection.putheader("Content-Length", "9" * 5000)
+	connection.endheaders()
+	assert connection.getresponse().status == 400
+	connection.close()
+
+
+def test_broker_rejection_does_not_wait_for_an_unfinished_body(chain, monkeypatch: pytest.MonkeyPatch) -> None:
+	rejected_timeouts = []
+	original_reject = relay.Relay._reject
+
+	def record_rejection(handler, status):
+		rejected_timeouts.append(handler.connection.gettimeout())
+		return original_reject(handler, status)
+
+	monkeypatch.setattr(relay.Relay, "_reject", record_rejection)
+	connection = relay.UnixHTTPConnection(chain["socket"])
+	connection.putrequest("POST", "/v1/messages")
+	connection.putheader("Content-Type", "application/json")
+	connection.putheader("Authorization", "Bearer mine")
+	connection.putheader("Content-Length", "1048576")
+	connection.endheaders()
+	connection.sock.settimeout(3)
+	response = connection.getresponse()
+	assert response.status == 400
+	response.read()
+	connection.close()
+	assert rejected_timeouts == [1]
+	assert _Upstream.seen == []
+
+
+def test_broker_rejection_ignores_peer_reset_during_response(chain, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+	def reset_on_write(_handler, _status, _message):
+		raise ConnectionResetError("peer disconnected")
+
+	monkeypatch.setattr(relay.Relay, "send_error", reset_on_write)
+	connection = relay.UnixHTTPConnection(chain["socket"])
+	connection.request("POST", "/v1/messages", b"{}", {"Content-Type": "application/json", "Authorization": "Bearer mine"})
+	with pytest.raises(http.client.RemoteDisconnected):
+		connection.getresponse()
+	connection.close()
+	assert "Traceback" not in capsys.readouterr().err
+	assert _Upstream.seen == []
+
+
+def test_broker_rejection_ignores_peer_abort_during_response(chain, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+	def abort_on_write(_handler, _status, _message):
+		raise ConnectionAbortedError("peer disconnected")
+
+	monkeypatch.setattr(relay.Relay, "send_error", abort_on_write)
+	connection = relay.UnixHTTPConnection(chain["socket"])
+	connection.request("POST", "/v1/messages", b"{}", {"Content-Type": "application/json", "Authorization": "Bearer mine"})
+	with pytest.raises(http.client.RemoteDisconnected):
+		connection.getresponse()
+	connection.close()
+	assert "Traceback" not in capsys.readouterr().err
+	assert _Upstream.seen == []
+
+
+def test_broker_rejection_reports_unexpected_write_error(chain, monkeypatch: pytest.MonkeyPatch) -> None:
+	def unexpected_write_error(_handler, _status, _message):
+		raise OSError("rejection write failed")
+
+	reported_write_error = threading.Event()
+	def record_error(_server, _request, _client_address):
+		reported_write_error.set()
+
+	monkeypatch.setattr(relay.Relay, "send_error", unexpected_write_error)
+	monkeypatch.setattr(relay.UnixHTTPServer, "handle_error", record_error)
+	connection = relay.UnixHTTPConnection(chain["socket"])
+	connection.request("POST", "/v1/messages", b"{}", {"Content-Type": "application/json", "Authorization": "Bearer mine"})
+	with pytest.raises(http.client.RemoteDisconnected):
+		connection.getresponse()
+	connection.close()
+	assert reported_write_error.wait(2)
+	assert _Upstream.seen == []
+
+
+@pytest.mark.parametrize("payload, extra_length", [
+	(b"not-json", 0),
+	(b'{"model":"claude-other-9"}', 0),
+	(b'{"model":"claude-opus-5-5"}', 10),
+])
+def test_broker_late_rejections_ignore_peer_disconnect(chain, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, payload: bytes, extra_length: int) -> None:
+	def abort_on_write(_handler, _status, _message):
+		raise ConnectionAbortedError("peer disconnected")
+
+	monkeypatch.setattr(relay.Relay, "send_error", abort_on_write)
+	connection = relay.UnixHTTPConnection(chain["socket"])
+	connection.putrequest("POST", "/v1/messages")
+	connection.putheader("Content-Type", "application/json")
+	connection.putheader("Content-Length", str(len(payload) + extra_length))
+	connection.endheaders()
+	connection.send(payload)
+	connection.sock.shutdown(socket.SHUT_WR)
+	with pytest.raises(http.client.RemoteDisconnected):
+		connection.getresponse()
+	connection.close()
+	assert "Traceback" not in capsys.readouterr().err
+	assert _Upstream.seen == []
+
+
 def test_broker_rejects_without_waiting_forever_for_body(chain) -> None:
 	with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
 		client.settimeout(3)
@@ -355,11 +582,17 @@ def test_rejected_body_drain_resets_timeout_after_read_error(monkeypatch) -> Non
 	assert connection.settimeout.call_count == 2
 
 
-def test_upstream_failure_is_a_bare_502(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("peer_error_type", [None, TimeoutError, ConnectionRefusedError])
+def test_upstream_failure_is_a_bare_502(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, peer_error_type: type[OSError] | None) -> None:
 	def refused(host, timeout=None, context=None):
 		return http.client.HTTPConnection("127.0.0.1", 9, timeout=2)
 
 	monkeypatch.setattr(http.client, "HTTPSConnection", refused)
+	if peer_error_type is not None:
+		def fail_on_write(_handler, _status, _message):
+			raise peer_error_type("peer stopped reading")
+
+		monkeypatch.setattr(relay.Relay, "send_error", fail_on_write)
 	sock = str(tmp_path / "s.sock")
 	broker = relay.UnixHTTPServer(sock, relay.Relay)
 	broker.mode = "broker"
@@ -369,10 +602,16 @@ def test_upstream_failure_is_a_bare_502(tmp_path: Path, monkeypatch: pytest.Monk
 	try:
 		connection = relay.UnixHTTPConnection(sock)
 		connection.request("POST", "/v1/messages", json.dumps({"model": MODEL}).encode(), {"Content-Type": "application/json"})
-		response = connection.getresponse()
-		body = response.read()
-		assert response.status == 502
-		assert REAL_TOKEN.encode() not in body
+		if peer_error_type is not None:
+			with pytest.raises(http.client.RemoteDisconnected):
+				connection.getresponse()
+			assert "Traceback" not in capsys.readouterr().err
+		else:
+			response = connection.getresponse()
+			body = response.read()
+			assert response.status == 502
+			assert REAL_TOKEN.encode() not in body
+		connection.close()
 	finally:
 		broker.shutdown()
 		broker.server_close()
