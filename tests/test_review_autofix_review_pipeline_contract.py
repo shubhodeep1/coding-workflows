@@ -2900,7 +2900,7 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'CONSOLIDATOR_ISOLATION outcome=skipped reason=%s' in consolidate
 	sandbox = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
 	assert '"RB_JUDGE", "REVIEW_CONSOLIDATOR"' in sandbox
-	assert 'RB_JUDGE|REVIEW_CONSOLIDATOR)' in sandbox
+	assert 'RB_JUDGE|REVIEW_CONSOLIDATOR|SUMMARISER|BEHAVIOURAL_SMOKE)' in sandbox
 	assert 'opencode_source_mount+=\',readonly\'' in sandbox
 	assert 'opencode_agent=reviewer' in sandbox
 	assert 'LOG_PREFIX.name=CONSOLIDATOR_ISOLATION' in (REPO_ROOT / "agents.md").read_text(encoding="utf-8")

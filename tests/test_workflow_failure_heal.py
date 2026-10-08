@@ -1573,6 +1573,12 @@ def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[s
 				"WORKFLOW_HEAL_SOURCE_CHECKOUT": "false",
 				"MOCK_DIAGNOSIS_FILE": str(diagnosis_file),
 				"MOCK_PROMPT_OUT": str(prompt_out),
+				# WORKFLOW_HEAL defaults to the Claude engine (plan item 3c) and
+				# refuses, rather than falls back, without a credential (plan
+				# item 3e, AI_ENGINE_FALLBACK_POLICY=capacity). These tests
+				# exercise the intake through the mock codex, so pin the role to
+				# codex the way an ai:codex label or repo var would.
+				"AI_ENGINE_WORKFLOW_HEAL": "codex",
 			}
 		)
 		env.update(extra_env or {})
