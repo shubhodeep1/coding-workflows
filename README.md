@@ -47,7 +47,9 @@ Get AI-powered issue-to-PR automation running in your repository in a few minute
 > wrapper workflows plus `ai-update-workflows.yml` with the immutable commit behind `@stable`, copies
 > the `.claude/` command/hook assets and root `CLAUDE.md` from that release into the target repo via a seed PR, sets the `WORKFLOW_PROFILE` repo
 > variable (after asking), and registers the repo in `.github/ai/consumer_repos.json` (CLAUDE.md §14).
-> Secrets (step 1 below) still have to be added by you.
+> Secrets (step 1 below) are copied into the new repo by the `Propagate consumer secrets` workflow once
+> its registration merges (see [Consumer secrets propagation](#consumer-secrets-propagation)); add them
+> by hand only if that run fails or the repo is not registered.
 
 ### 1. Add secrets and variables
 
@@ -58,7 +60,7 @@ In your consumer repository, go to **Settings → Secrets and variables → Acti
 | Secret | Required | Used By | Description |
 |---|---|---|---|
 | `GH_PAT` | **Yes** | All workflows | GitHub Personal Access Token with `repo` scope |
-| `CHECK_TRIAGE_ISSUES_TOKEN` | **Yes** | check_failure_triage | Fine-grained PAT scoped to this repository with Issues: write and Metadata: read, used only to post a triage issue. `GITHUB_TOKEN` cannot trigger the downstream `issues: opened` workflow, and the broader `GH_PAT` is never exposed to the posting step. |
+| `CHECK_TRIAGE_ISSUES_TOKEN` | **Yes** | check_failure_triage | Fine-grained PAT with Issues: write and Metadata: read, used only to post a triage issue; grant it "All repositories" so consumers seeded later are covered without re-issuing it (the `Propagate consumer secrets` workflow copies it to each consumer, see [Consumer secrets propagation](#consumer-secrets-propagation)). `GITHUB_TOKEN` cannot trigger the downstream `issues: opened` workflow, and the broader `GH_PAT` is never exposed to the posting step. |
 | `OPENROUTER_API_KEY` | **Yes** | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, issue_pr_status, memory_maintenance, security-audit (source repo only) | [OpenRouter](https://openrouter.ai) API key for LLM access and AI memory keyword extraction |
 | `TG_BOT_SECRET` | No | clarify, plan, implement, review_autofix, orchestrate, orchestrate_poll, orchestrate_clarify_respond, validate, issue_pr_status, security-audit | Telegram bot token for notifications and message cleanup; security-audit uses it to warn about partial text coverage when configured |
 | `DIGITALOCEAN_ACCESS_TOKEN` | No | Interactive Claude Code sessions only (CLAUDE.md §22) — no Actions workflow reads it | DigitalOcean API token. Set as an env var in the Claude Code session environment (not required as an Actions secret). Lets interactive sessions pull DigitalOcean data (app specs, deployed env vars, logs, deployment status) self-serve for verification and debugging; provisioning or mutating resources always requires asking the user first. Resource IDs per repo live in the `## DigitalOcean resources` section of `agents.md`/`AGENTS.md`. |
@@ -3476,6 +3478,48 @@ The refresh runner ALSO runs codex-driven discovery against each consumer's clon
 - The same run updates committed status file `analysis/validation-selftest-status.json` via `scripts/validation_selftest_status.py`.
 - Track `consecutive_green_runs`, `latest_run.overall_status`, `latest_run.generated_at`, and `latest_run.totals.{fixtures,passed,failed}`.
 - Streak semantics: a new passing run increments `consecutive_green_runs`; a failing run resets it to `0`; an identical rerun preserves the existing count.
+
+### Consumer secrets propagation
+
+Repository secrets on a personal account exist per repository, so every
+consumer needs its own copies of the four consumer-facing secrets. The
+`Propagate consumer secrets` workflow
+([`.github/workflows/propagate-consumer-secrets.yml`](.github/workflows/propagate-consumer-secrets.yml),
+script [`scripts/propagate_consumer_secrets.sh`](scripts/propagate_consumer_secrets.sh))
+makes that unattended:
+
+- **Trigger:** every push to `main` that changes
+  [`.github/ai/consumer_repos.json`](.github/ai/consumer_repos.json) (the
+  registration PR a `/seed-repo` run opens, CLAUDE.md §14) targets only the
+  entries that push added; `workflow_dispatch` takes a space-separated
+  `targets` input (registered entries only) or, left empty, every registry
+  entry (the backfill for consumers registered before this workflow existed).
+- **What is copied:** `CHECK_TRIAGE_ISSUES_TOKEN`, `GH_PAT`,
+  `OPENROUTER_API_KEY` and `TG_BOT_SECRET`, each from this repository's
+  secret of the same name, through `gh secret set --repo <consumer>` with the
+  value on stdin (gh performs the sealed-box encryption; the value never
+  appears in an argument, a log line or an annotation). An empty library
+  secret is skipped with a warning. After writing, `gh secret list` confirms
+  the names.
+- **Authentication:** `GH_PAT` (exported as `GH_TOKEN`), which must hold
+  `repo` scope on every consumer, the same requirement the `@stable`
+  `repository_dispatch` already has.
+- **Safety:** a target that is not in the registry is refused
+  (`status=skipped_unregistered`); the script never writes to an
+  unregistered repository. Per-repo failures do not stop the loop, but any
+  failed or unverified write leaves the run red
+  (`CONSUMER_SECRETS_PROPAGATE … status=failed|verify_missing|verify_list_failed`)
+  and a Telegram CRITICAL goes out, so the workflow-failure heal intake sees
+  it. The workflow deliberately has no concurrency group (GitHub would replace
+  an older pending run, and the survivor only diffs its own push) and diffs
+  the registry only against the push's own `before` tip, targeting every
+  entry when that commit is outside the shallow checkout; repeated writes of
+  the same value are harmless.
+- **Log keys:** `CONSUMER_SECRETS_PROPAGATE repo=<owner/repo> secret=<NAME>
+  status=<set|skipped_empty|failed|verify_missing>` per secret,
+  `CONSUMER_SECRETS_PROPAGATE repo=<owner/repo> status=verify_list_failed`
+  when the post-write listing fails, and
+  `CONSUMER_SECRETS_PROPAGATE summary targets=N set=N skipped=N failed=N`.
 
 ## Repository Structure
 
