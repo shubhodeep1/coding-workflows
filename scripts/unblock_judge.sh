@@ -648,6 +648,11 @@ unblock_main()
 	local -a decide_args=(decide --item "${ITEM}" --stop "${ITEM_STOP}" --fingerprint "${fp}" --comments-file "${RUNTIME_DIR}/item_comments.json"
 		--trusted-login "${UNBLOCK_LOGIN}" --now "${now}" --kind "${ITEM_KIND}" --rejection-file "${RUNTIME_DIR}/rejection.json")
 	[ -n "${last_activity}" ] && decide_args+=(--last-activity "${last_activity}")
+	# An ai:security issue never gets accept_with_followup on its menu (#6541);
+	# unblock_actions.py refuses it again if this flag is ever missing.
+	if [ "${ITEM_KIND}" = "issue" ] && jq -e 'index("ai:security") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1; then
+		decide_args+=(--security-issue)
+	fi
 	if [[ "${tracking}" =~ ^[0-9]+$ ]]; then
 		if [ "${tracking}" = "${ITEM}" ]; then
 			cp "${RUNTIME_DIR}/item_comments.json" "${RUNTIME_DIR}/project_comments.json"

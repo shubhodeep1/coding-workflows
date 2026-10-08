@@ -36,8 +36,9 @@ Rules enforced here:
   - `auto_answer` and `override_guard` are offered only for an issue, never for
     a pull request or a project;
   - `reissue` is never offered for a whole project;
-  - `accept_with_followup` is never offered for a failed security pass or a
-    failed validation (no waiver, no validation pass).
+  - `accept_with_followup` is never offered for a failed security pass, a
+    failed validation, or an `ai:security` issue (`decide --security-issue`)
+    (no waiver, no validation pass).
 
 Subcommands (one JSON line on stdout; exit 0 ok, 1 bad arguments or a refused
 verdict, 2 unreadable input):
@@ -52,6 +53,7 @@ verdict, 2 unreadable input):
   decide --item <n> --stop <id> --fingerprint <fp> --comments-file <path>
          [--project-comments-file <path>] --trusted-login <login>
          --now <iso8601> [--kind issue|pr|project] [--last-activity <iso8601>]
+         [--security-issue]
       Rounds used, the verdicts still allowed, and whether the item is
       terminal (and why).
   validate --verdict-file <path> --decision-file <path> --repo <owner/repo>
@@ -387,6 +389,8 @@ def decide(
 	kind: str = "issue",
 	last_activity: dt.datetime | None = None,
 	rejection: dict | None = None,
+	*,
+	security_issue: bool = False,
 ) -> dict:
 	"""What the judge may still do for this item."""
 	if kind not in ITEM_KINDS:
@@ -418,6 +422,11 @@ def decide(
 		or (stop == "destructive-blocked" and rejection.get("reason") not in OVERRIDABLE_DESTRUCTIVE_REASONS):
 		allowed = [verdict for verdict in allowed if verdict != "override_guard"]
 	if stop in NO_WAIVER_STOPS:
+		allowed = [verdict for verdict in allowed if verdict != "accept_with_followup"]
+	# An ai:security issue is a security finding: it is never waived with a
+	# follow-up, whatever stop it is blocked under (#6541). A split goes
+	# through `reissue`, which carries the finding marker and label.
+	if kind == "issue" and security_issue:
 		allowed = [verdict for verdict in allowed if verdict != "accept_with_followup"]
 	if kind != "issue":
 		allowed = [verdict for verdict in allowed if verdict not in ISSUE_ONLY_VERDICTS]
@@ -661,6 +670,7 @@ def build_parser() -> argparse.ArgumentParser:
 	decide_cmd.add_argument("--kind", default="issue")
 	decide_cmd.add_argument("--last-activity", default="")
 	decide_cmd.add_argument("--rejection-file")
+	decide_cmd.add_argument("--security-issue", action="store_true")
 	validate_cmd = sub.add_parser("validate")
 	validate_cmd.add_argument("--verdict-file", required=True)
 	validate_cmd.add_argument("--decision-file", required=True)
@@ -719,7 +729,10 @@ def run(argv: list[str] | None = None) -> dict:
 			project_entries = parse_markers(_read_json(args.project_comments_file, "--project-comments-file"), args.trusted_login)
 		last_activity = _parse_time(args.last_activity) if args.last_activity else None
 		rejection = _read_json(args.rejection_file, "--rejection-file") if args.rejection_file else None
-		return decide(item, stop, fp, item_entries, project_entries, _parse_time(args.now), args.kind, last_activity, rejection)
+		return decide(
+			item, stop, fp, item_entries, project_entries, _parse_time(args.now), args.kind, last_activity, rejection,
+			security_issue=args.security_issue,
+		)
 	if args.command == "validate":
 		return validate(
 			_read_json(args.verdict_file, "--verdict-file"),
