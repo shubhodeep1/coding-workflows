@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Treat untrusted review sandbox lifecycle and isolation as linked concerns.",
   "timestamps": {
     "created_at": "2026-10-08T01:18:09Z",
