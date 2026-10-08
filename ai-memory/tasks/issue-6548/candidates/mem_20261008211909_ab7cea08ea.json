@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which CI signal must succeed for the exact release SHA before tagging?\nChoices:\nA) The newest `ci.yml` workflow run for that SHA (`actions/workflows/ci.yml/runs?head_sha=<sha>`) must have conclusion `success`. Its aggregate `lint` job already requires every CI job to pass, and this takes one API call. No run, a failed run or a cancelled run fails the gate. (RECOMMENDED)\nB) The check run named `lint` from the `github-actions` app on that SHA must have conclusion `success`. Other workflows with a job named `lint` would need extra filtering.\nC) Every check run on the SHA must succeed. This would also block on checks unrelated to the repository's own CI, such as CodeQL, which agents.md notes can stay permanently red when code scanning is disabled.\nQ2: What should the gate do when CI on the release SHA is still queued or running? This is common right after a promote or hotfix pushes to `stable`.\nChoices:\nA) Poll until CI finishes, up to a time limit (for example 30 minutes, set by a new variable with a default). Fail closed if CI fails or the time limit runs out. (RECOMMENDED)\nB) Fail immediately whenever CI is not yet finished. This is strictest, but a release dispatched straight after a push to `stable` would fail until someone re-runs it.\nQ3: Should the strict CI check also block `gate_only` runs of `test-and-mark-stable.yml`? These are the promote cycle's test-only runs: they can be dispatched from any ref and never tag.\nChoices:\nA) Enforce the strict check in every mode. A `gate_only` run dispatched from a ref that CI does not run on (anything other than `main`/`stable`) would then always fail.\nB) Enforce it only when the run can release (`gate_only` is false, and always in `mark-stable.yml`). In `gate_only` mode, report the CI result as a `::warning::` only. The release run on `stable` still checks the same SHA before tagging. (RECOMMENDED)\nC) Enforce it in `gate_only` mode only when the dispatched ref is `main` or `stable`, and warn for any other ref.",
+  "fingerprint": "1bf721621825693e29506e8985c70d991a746953614b5a1f861e23ff10070609",
+  "lineage": {
+    "issue_number": 6548,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37845363921",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37845363921",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008211909_ab7cea08ea",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6548,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37845363921"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6548 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T21:19:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
