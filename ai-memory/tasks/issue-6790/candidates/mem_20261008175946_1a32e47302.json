@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should happen while `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` is off (the default)?\nChoices:\nA) Flag off: skip automatic `/approved` for any plan that lists a protected automation path; ordinary plans are unchanged. Flag on: auto-approve only when every protected path in the plan has a trusted exact grant, and report the ones that don't. (RECOMMENDED)\nB) Flag off: behave exactly as today, with no suppression. Flag on: do both the suppression and the grant check.\nC) Flag off: behave exactly as today. Flag on: suppress automatic approval only, with no grant check.\n**Note:** A is the literal reading of the issue and fails closed. B and C follow \"keep the new behaviour off\" and leave today's scope-block loop in place until the flag is turned on.\nQ2: This issue's body has no `files_touched:` block, and every file the change needs is protected. How should the implementation get its grant?\nChoices:\nA) Before `/approved`, a trusted author (the GH_PAT login or an OWNER/MEMBER/COLLABORATOR) edits this issue body to add an exact `files_touched:` block. It lists `.github/workflows/plan.yml`, `scripts/orchestrate_poll_process.sh` and any other protected path the plan names; test files are not protected. (RECOMMENDED)\nB) Go ahead without a grant and accept that implementation will be blocked again with `reason=no_allowlist`.\nC) Change the scope to unprotected files only. **Note:** this cannot meet the request, because every file it targets is protected.\nQ3: Which poller paths does \"both poller recovery paths\" cover?\nChoices:\nA) Only the two `auto_approve` stall-recovery actions: the managed one in `execute_stall_recovery_action` and the standalone one in `run_standalone_stall_recovery`. (RECOMMENDED)\nB) Those two, plus the staged-support latch release, which also posts `/approved [auto-approved-by-plan]`.\nC) Every place in the poller that posts `/approved`, including the unblock judge hand-offs.\nQ4: When the flag is on and a plan lists protected paths without a grant, how should those paths be reported and denied?\nChoices:\nA) Skip automatic `/approved`, post one comment on the issue listing the ungranted paths, and leave the issue in `ai:awaiting-approval` for a person. (RECOMMENDED)\nB) Skip automatic `/approved`, post the comment, and add `ai:scope-blocked`.\nC) Skip automatic `/approved` and only log it (`AI_PHASE_GATE_V1 ... reason=automation_path_ungranted`), with no issue comment.",
+  "fingerprint": "a7b05307d19b12c67fa454409dea209e32091f137f566dc5f51d0bce53044982",
+  "lineage": {
+    "issue_number": 6790,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37820092965",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37820092965",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008175946_1a32e47302",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6790,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37820092965"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6790 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T17:59:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
