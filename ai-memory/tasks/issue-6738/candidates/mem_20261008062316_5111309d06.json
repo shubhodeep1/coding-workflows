@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: C\nQ2: A\n\nRATIONALE:\nQ1: The current stop is deliberate. `scripts/review_untrusted_workspace.py:120-122` keeps `.claude/hooks/pr_merge_status_guard.py` out of the sandbox, and `scripts/review_conflict_resolve.sh:585-606` (`_resolver_fail_closed_for_conflict_paths`) stops the resolver on host-only conflicts by design. `scripts/workflow_failure_heal.py:176-182` already treats `conflict_resolver_sandbox_path_host_only` as non-retryable, but the autofix heal reporter still files heal issues for it. That is how #6727, #6733 and this generation-2 issue came about, so that is the actual defect. Option A was rejected because the template copy's PR-side content on an `ai/issue-*` branch can be AI-written. Copying even a clean Git merge of it into the host-executed hook skips the provenance hold in `scripts/sync_claude_live_copies.py`. That is the same risk as option B, just without a model at resolve time. Security comes first, so the conservative route is C.\nQ2: Under C the resolver keeps stopping with the current `::error::` line and the `sandbox_path_host_only` reason, so the hook is never changed automatically. Options B and C of this question would both write a safety hook without a person checking it.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: reframe (lettered option C, made concrete)\n  inputs:\n    - scripts/workflow_failure_heal.py (`NON_RETRYABLE_FAILURE_REASONS`, lines 176-182; the intake classification and routing that turns an `autofix_failure` report into an `inconclusive` / `workflow-defect` issue)\n    - scripts/workflow_failure_heal_autofix_report.sh (reporter in the `review_autofix.yml` failure path)\n    - scripts/review_conflict_resolve.sh `_resolver_fail_closed_for_conflict_paths` (lines 595-607)\n    - existing heal tests under tests/ (for example the files covering `workflow_failure_heal.py` intake routing and the autofix reporter)\n  steps:\n    - In the review/autofix failure path, add a short \"Conflict merge stages\" block to the failure comment when the reason is `conflict_resolver_sandbox_path_host_only`. Build it from the existing check-paths report plus `git ls-files -u -- <path>`: one row per stage with mode, blob SHA and stage number, for paths that pass the existing `^[A-Za-z0-9_.][A-Za-z0-9._/-]*$` filter, capped at 20 paths. Never print file contents.\n    - Route this reason to a person. Label the linked issue `ai:needs-human`, or the PR if no issue is linked. The labelling must be idempotent and fail-open on API errors. It should reuse the existing label helpers and the PR/issue data the failure path already fetched (\u00a714: no new per-item reads where a cached value exists).\n    - In the heal intake (`workflow_failure_heal.py`), when an `autofix_failure` report's failure reason is `conflict_resolver_sandbox_path_host_only`, skip filing a heal issue. Log `WORKFLOW_HEAL skip reason=host_only_conflict_needs_human` and send a WARNING Telegram message through the existing path. `conflict_resolver_sandbox_path_unsupported` and `conflict_resolver_sandbox_support_missing` keep their current routing.\n    - Keep `NON_RETRYABLE_FAILURE_REASONS`, the fingerprint cap, the `sandbox_path_host_only` fail-closed path, and every existing log prefix unchanged.\n    - Regression test: feed the intake an `autofix_failure` payload copied from this issue's evidence (failure_reason `conflict_resolver_sandbox_path_host_only`, the `::error::Conflict resolver: host-only conflicted path(s) need a manual merge: .claude/hooks/pr_merge_status_guard.py` line). Assert that no heal issue is created and that the skip log line is emitted. The test must fail on head `bb6c4412277d747b395407e8808fa768d55d1efb` / current `main`, where an `inconclusive` issue is filed, and pass with the fix. Record both runs in the PR.\n    - Add a reporter-side test asserting that the stage block (blob SHAs only, no contents) and the `ai:needs-human` label request are produced for this reason.\n    - Add a changelog fragment at `changelog.d/<issue>-host-only-conflict-needs-human.md`. Update the \"workflow failure heal\" paragraph in `agents.md` to describe the new routing.\n  replaces_acceptance_criterion: \"Fix the review/autofix failure on PR #6535\" is replaced by \"a host-only conflict produces one human-routed, evidence-rich stop instead of a chain of heal issues\". The template-merge change from option A is not used.\n  equivalence_argument: The failure cannot be fixed safely without a person, because both sides of a host-executed safety hook conflict and the sandbox correctly refuses to carry it. Removing the bogus heal lineage and handing the merge stages to a person removes the cause of the repeated deterministic heal issues. It does not weaken the guard, and no retry or backoff is involved.\n  reversibility: If maintainers later want automatic resolution, a fixed (no-model) rule like option A can be added separately behind a flag. The intake skip is one condition that can be reverted on its own.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- None.",
+  "fingerprint": "86a1d67a1a289f6a919d05d5667a93f7d65d5fbff7016f18492069b1c411bb8e",
+  "lineage": {
+    "issue_number": 6738,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37736533937",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37736533937",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6738"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008062316_5111309d06",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6738,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37736533937"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6738",
+  "timestamps": {
+    "created_at": "2026-10-08T06:23:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
