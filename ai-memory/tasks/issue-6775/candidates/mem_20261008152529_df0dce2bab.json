@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should the automation-path grant be supplied so implementation does not hit the same block again?\nChoices:\nA) The issue author (the pipeline account) or an OWNER/MEMBER/COLLABORATOR edits this issue's body to add the allowlist block shown below, at the start of a line on its own, then posts `/reclarify`. The guard checks the issue author and the current body, so an edit by a trusted maintainer is enough. The block (two-space indent, one path per line): (RECOMMENDED)\n```\nfiles_touched:\n  - .github/workflows/mark-stable.yml\n  - .github/workflows/test-and-mark-stable.yml\n  - .github/workflows/ci.yml\n  - scripts/release_ci_gate.sh\n  - tests/test_release_ci_gate.py\n```\nB) Close this issue and have an OWNER/MEMBER/COLLABORATOR open a new issue with the spec and the block above at the root of its body.\nC) Narrow the scope to the non-automation paths only (`tests/test_release_ci_gate.py`) and leave the release gate itself for a later issue.\n**Note:** C does not deliver the release gate the spec requires, and #6532 must stay paused either way. Going ahead without A or B repeats the #6770 rejection.",
+  "fingerprint": "6313c67afd9e7003e31122fc4c1c7f3afc63554498d4fc1874412ce5ad9bbe91",
+  "lineage": {
+    "issue_number": 6775,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37799827335",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37799827335",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008152529_df0dce2bab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6775,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37799827335"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6775 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T15:25:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
