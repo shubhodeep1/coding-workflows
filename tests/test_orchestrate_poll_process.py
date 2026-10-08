@@ -6258,14 +6258,18 @@ def test_security_pass_exhaustion_judge_keep_fixing_creates_consolidated_fix_iss
 	assert "| SEC-TEST-2 | medium | scripts/example.py:1 | accept_with_followup |" in judge_comments[0]
 
 
-def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_advisories() -> None:
-	"""Past the cap, medium/low keep_fixing becomes accept_with_followup.
+def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_fail() -> None:
+	"""Past MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS (default 2), medium/low keep_fixing becomes fail.
 
 	Regression for #3965: the judge was consulted twice on a 5-cycle budget
 	and granted "one more" consolidated cycle both times (cycles 6 and 7),
-	and nothing bounded the sequence. Round 3 converts low/medium
-	keep_fixing decisions to deferred advisories; blocking findings
-	instead terminalize without being waived.
+	and nothing bounded the sequence.  The cap still stops that loop, but
+	per #6539 it must never accept a finding: round 3 converts a medium
+	keep_fixing decision to `fail`, the project terminalizes as
+	ai:security-pass-failed, and no waiver row or advisory is recorded,
+	not even for the finding the judge accepted in the same verdict.
+	High/critical/unrated keep_fixing is covered by
+	test_security_pass_cap_never_waives_a_high_finding.
 	"""
 	medium_finding = _security_pass_test_finding()
 	medium_finding["severity"] = "medium"
@@ -6275,6 +6279,7 @@ def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_advisories()
 		max_validate_cycles="3",
 		enable_security_pass="true",
 		security_audit_payload=_security_audit_findings_payload([medium_finding, _security_pass_second_test_finding()]),
+		capture_telegram_calls=True,
 		issue_labels={10: ["ai:merged"]},
 		existing_branches=["main", "orchestrator/project-192"],
 		env_overrides={
@@ -6285,50 +6290,38 @@ def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_advisories()
 	)
 
 	latest_state = result["latest_state"]
-	assert latest_state["status"] == "complete"
-	assert latest_state["security_pass_status"] == "passed"
+	assert latest_state["status"] == "failed"
+	assert latest_state["security_pass_status"] == "failed"
 	assert latest_state["security_pass_judge_rounds"] == 3
-	assert latest_state["security_pass_reported_findings"] == []
-	assert latest_state["security_pass_active_fix_issues"] == []
-	waived = {row["finding_id"]: row for row in latest_state["security_pass_waived_findings"]}
-	assert set(waived) == {"SEC-TEST-1", "SEC-TEST-2"}
-	assert waived["SEC-TEST-1"]["justification"].startswith(
-		"[keep_fixing capped after 2 judge round(s); converted to advisory follow-up] SEC-TEST-1: keep_fixing"
-	)
-	assert waived["SEC-TEST-2"]["justification"].startswith("SEC-TEST-2: accept_with_followup")
-	# Both advisories are filed by the final-merge arm of the same tick; no
-	# consolidated fix issue is created.
-	created = result.get("created_issues", [])
-	assert sorted(issue["labels"] for issue in created) == [["ai:security"], ["ai:security"]]
-	assert {issue["title"] for issue in created} == {
-		"[security-pass] Advisory: SEC-TEST-1 (medium, scripts/example.py:1)",
-		"[security-pass] Advisory: SEC-TEST-2 (medium, scripts/example.py:1)",
-	}
-	assert "ai:security-pass-failed" not in result["tracking_labels"]
-	assert "ai:security-pass-fixing" not in result["tracking_labels"]
+	assert latest_state["security_pass_waived_findings"] == []
+	assert not latest_state.get("security_pass_followup_issues")
+	assert result.get("created_issues", []) == []
+	assert result["tracking_labels"] == ["ai:security-pass-failed"]
 	combined_log = result["stdout"] + result["stderr"]
 	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=192 round=3 cap=2 converted=1" in combined_log
 	assert "SECURITY_PASS_JUDGE_DECIDED tracking_issue=192 round=3" in combined_log
-	assert "accepted=2 keep_fixing=0 failed=0" in combined_log
-	assert "SECURITY_PASS_CLEAN tracking_issue=192" in combined_log
+	assert "accepted=0 keep_fixing=0 failed=2" in combined_log
+	assert "SECURITY_PASS_FAILED reason=cycle_exhausted" in combined_log
+	assert "SECURITY_PASS_CLEAN" not in combined_log
+	assert "SECURITY_PASS_WAIVED" not in combined_log
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED" not in combined_log
 	assert "SECURITY_PASS_FIX_ISSUE_CREATED" not in combined_log
-	assert "SECURITY_PASS_FAILED" not in combined_log
-	# Advisories filed by this tick's final-merge arm are recorded as
-	# merge-checked at creation, so no follow-up is read back.
-	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED" not in combined_log
-	assert sorted(latest_state["security_pass_followups_merge_checked"]) == sorted(issue["number"] for issue in created)
-	judge_comments = [
-		comment["body"]
-		for comment in result["issues"]["192"]["comments"]
-		if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 3)")
-	]
+	comment_bodies = [comment["body"] for comment in result["issues"]["192"]["comments"]]
+	judge_comments = [body for body in comment_bodies if body.startswith("## ⚖️ Security-pass exhaustion judge (round 3)")]
 	assert len(judge_comments) == 1
-	assert "The judge accepted every remaining finding as a known risk" in judge_comments[0]
+	assert "2 finding(s) cannot be accepted" in judge_comments[0]
+	assert "need a human" not in judge_comments[0]
 	assert (
-		"1 of them were `keep_fixing` decisions converted to advisories because the keep_fixing round budget (`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=2`) is spent."
+		"1 of them were `keep_fixing` decisions converted to `fail` because the keep_fixing round budget (`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=2`) is spent; no finding is accepted by the cap."
 		in judge_comments[0]
 	)
-	assert "| SEC-TEST-1 | medium | scripts/example.py:1 | accept_with_followup | [keep_fixing capped after 2 judge round(s); converted to advisory follow-up]" in judge_comments[0]
+	assert "| SEC-TEST-1 | medium | scripts/example.py:1 | fail | [keep_fixing capped after 2 judge round(s); converted to fail" in judge_comments[0]
+	assert "| SEC-TEST-2 | medium | scripts/example.py:1 | fail | [not accepted: the keep_fixing cap failed this verdict]" in judge_comments[0]
+	assert any(body.startswith("## ❌ Project security pass exhausted") for body in comment_bodies)
+	assert any(
+		notification["issue"] == "192" and notification["level"] == "CRITICAL" and "security pass FAILED" in notification["message"]
+		for notification in result["telegram_notifications"]
+	)
 
 
 def test_security_pass_cap_never_waives_a_high_finding() -> None:
