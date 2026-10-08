@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/implement.yml:1650-1654 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The new automation-grant preflight expands `${RUNTIME_DIR}` without a default, so the step aborts when the variable is unset.\n  WHY: Under `set -u`, Bash exits with `RUNTIME_DIR: unbound variable` before the guard can run; all reviewers rated this a blocker.\n- tests/test_implement_post_codex_recovery.py:828-841 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The `_run_fetch_issue_metadata_step` test helper does not define `RUNTIME_DIR` in the environment passed to the extracted step.\n  WHY: The extracted step expands `${RUNTIME_DIR}` under `set -u` and aborts with an unbound-variable error, causing CI test failures.\n- tests/test_implement_post_codex_recovery.py:1305-1311 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The manual subprocess environments for `test_fetch_issue_metadata_does_not_let_issue_text_close_env_values` omit `RUNTIME_DIR`.\n  WHY: The script fragment expands `${RUNTIME_DIR}` under `set -u` and aborts with an unbound-variable error, causing CI test failures.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_implement_post_codex_recovery.py:828-841 | severity=critical | confidence=5\n  PROBLEM: The `_run_fetch_issue_metadata_step` helper creates `runtime_dir` but never passes it as `RUNTIME_DIR` in the environment dictionary.\n  WHY: Four tests that call the helper fail under `set -u` when the extracted step expands `${RUNTIME_DIR}`.\n- tests/test_implement_post_codex_recovery.py:1305-1311 | severity=critical | confidence=5\n  PROBLEM: `test_fetch_issue_metadata_does_not_let_issue_text_close_env_values` runs a script slice whose environment dictionaries omit `RUNTIME_DIR`.\n  WHY: Under `set -euo pipefail`, the subprocess aborts with `RUNTIME_DIR: unbound variable`.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/implement.yml:1654 | severity=critical | confidence=5\n  PROBLEM: The workflow references `${RUNTIME_DIR}` without a default value.\n  WHY: When `RUNTIME_DIR` is unset, Bash aborts under `set -u`, causing CI test failures.\n- tests/test_implement_post_codex_recovery.py:828-841 | severity=critical | confidence=5\n  PROBLEM: The test helper environment does not define `RUNTIME_DIR`.\n  WHY: The code under test references `${RUNTIME_DIR}`, causing an unbound-variable error under CI's `set -u`.\n- tests/test_implement_post_codex_recovery.py:1307-1310 | severity=critical | confidence=5\n  PROBLEM: The manual subprocess environment does not include `RUNTIME_DIR`.\n  WHY: The script fragment references `${RUNTIME_DIR}`, causing an unbound-variable error under CI's `set -u`.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/implement.yml:1650-1653 | severity=critical | confidence=5\n  PROBLEM: The automation-grant preflight references `${RUNTIME_DIR}` with no default expansion.\n  WHY: Under `set -u`, the extracted step aborts before the guard can run; the test helpers do not seed the variable, and the CI run fails five tests.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- implement.yml:1654; test_implement_post_codex_recovery.py:828-840 and 1305-1310 | severity=critical | confidence=5\n  PROBLEM: The new grant-file path expands `${RUNTIME_DIR}` without a default, while both extracted-step test environments omit `RUNTIME_DIR`.\n  WHY: The step runs with `set -u`, so Bash exits with `RUNTIME_DIR: unbound variable`; the supplied CI log confirms five test failures.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "218a0deae1f1e4b66512f70230cfa51d0fdf7cfe6d907e1e15f4c40353a5cd1d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6535,
+    "run_id": "37762951061",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37762951061",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261008104511_11ad74bb71",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6535,
+    "run_id": "37762951061"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-08T10:45:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
