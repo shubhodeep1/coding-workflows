@@ -15,7 +15,13 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
-CONFIG_LIST = re.compile(r"(?:(?<=-c ')|\$\(|(?<![\w\"'\\(]))git\s+config\b[^\n]*?(?:--(?:list|get-regexp)\b|(?<!\S)-l\b)")
+# Multi-value queries always print values; a plain --get counts only for
+# credential-bearing keys so ordinary single-key lookups stay allowed.
+CONFIG_LIST = re.compile(
+	r"(?:(?<=-c ')|(?<=-c \")|\$\(|(?<![\w\"'\\(]))git\s+config\b[^\n]*?"
+	r"(?:--(?:list|get-regexp|get-all|get-urlmatch)\b|(?<!\S)-l\b"
+	r"|--get\b(?=[^\n]*?(?i:extraheader|\.url\b|credential|token|password|auth)))"
+)
 
 
 def _config_list_lines(text: str) -> list[str]:
@@ -93,6 +99,11 @@ def test_config_scanner_handles_wrappers_and_comments() -> None:
 	assert not _config_dumps_values('echo "unset_rc=skipped (git config --get-regexp failed)"')
 	assert _config_dumps_values('echo "$(git config --list)"')
 	assert not _config_dumps_values("AUTHOR=$(git config --get user.name)")
+	assert _config_dumps_values("git config --get-all http.https://github.com/.extraheader")
+	assert _config_dumps_values("git config --get-urlmatch http https://github.com")
+	assert _config_dumps_values("git config --get http.https://github.com/.extraheader")
+	assert _config_dumps_values("git config --get remote.origin.url")
+	assert _config_dumps_values('bash -c "git config --list --show-origin"')
 
 
 def test_release_job_does_not_run_checkout_diagnostic() -> None:
