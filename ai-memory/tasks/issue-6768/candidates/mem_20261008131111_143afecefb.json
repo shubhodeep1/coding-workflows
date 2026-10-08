@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: Both release workflows already pin this commit. `.github/workflows/mark-stable.yml:598` and `.github/workflows/test-and-mark-stable.yml:6193` set `RELEASE_TESTED_SHA`. The untested-head guard (`mark-stable.yml:808-814`, `test-and-mark-stable.yml:6391-6394`) already allows only one extra commit on top of it: its parent must be `RELEASE_TESTED_SHA` and it may change only `CHANGELOG.md` and `changelog.d/`. So requiring a successful `CI / lint` check-run on `RELEASE_TESTED_SHA` covers every line of code the tag can include. B would push to `stable` before CI is known and add a CI wait inside the release job, which is slower and riskier. C adds nothing, because a changelog-only commit does not change what CI checks. The CI check has to fail closed when the check-run is missing, pending, cancelled, failed or unreadable, and it has to run before the changelog commit is pushed.\nQ2: When the flag is off, the run should still run every validation and the new CI check, so the gates keep being tested while releases are off. Only the steps that change state are skipped: tagging/release, the consumer dispatch and sync-to-main. A failing run (B) would be counted as a failed attempt by `auto-release-stable.yml` (`AUTO_RELEASE_STABLE_MAX_ATTEMPTS`) and by the promote-cycle retry logic. It would also trigger the workflow-failure-heal reporter, which runs on failures of the release/promotion workflows, so every scheduled run would open a heal issue. C would stop checking the new gate until someone turns the flag on, and the issue asks for both gates to be tested.\n\nEXECUTION PLAN (required for any non-letter decision):\n(Not needed: both answers are lettered options. Notes for the planner:)\nQ1:\n  steps:\n    - In both `mark-stable.yml` and `test-and-mark-stable.yml`, after `RELEASE_TESTED_SHA` is exported and before the changelog-assembly push, call `scripts/release_ci_gate.sh` (as authorized by the issue). It reads the Actions check-runs for `RELEASE_TESTED_SHA` (paginated, `app.slug == github-actions`, name `lint` from the `CI` workflow, i.e. `CI / lint`). It requires the latest matching run to be `completed` with conclusion `success`. Missing, pending, cancelled, failed, API-error and malformed results all exit non-zero with a stable `::error::` line.\n    - Keep the existing `RELEASE_UNTESTED_HEAD` guard unchanged. It is what ties the tagged commit to the tested SHA.\n    - Add contract tests that pin the gate call in both workflows and the helper's fail-closed cases.\nQ2:\n  steps:\n    - Read `STABLE_RELEASE_ENABLED` with no default (`${{ vars.STABLE_RELEASE_ENABLED }}`); only the exact value `true` enables releases. When it is anything else, the tag/release, consumer-dispatch and sync-to-main steps log `::notice::STABLE_RELEASE_ENABLED is not true; skipping release` and the run ends green.\n    - Out of scope: `auto-release-stable.yml` will re-dispatch the gate every 6 hours while the `stable` tip is ahead of the tag. That only costs extra runs and is left as is.\n\nSETUP REQUIRED:\n- STABLE_RELEASE_ENABLED (variable): an operator sets it to `true` once the CI-gate fix is deployed and a release run has been checked against a commit with a passing `CI / lint`. Until then, both release workflows still run validation and the new CI check, but skip tagging, the consumer dispatch and sync-to-main, log a notice and end green.",
+  "fingerprint": "634ac2f629bebe64c9f8b14830ef471425cd16b61852228f118bd02e465aedbf",
+  "lineage": {
+    "issue_number": 6768,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37781347847",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37781347847",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6768"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008131111_143afecefb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6768,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37781347847"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6768",
+  "timestamps": {
+    "created_at": "2026-10-08T13:11:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
