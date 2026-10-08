@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6745,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6745\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6747\",\"pr_number\":6747,\"branch\":\"ai/issue-6745\",\"run_id\":\"37743806896\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37743806896\",\"changed_files\":[\"agents.md\",\"changelog.d/6745-heal-skip-host-only-conflict.md\",\"scripts/workflow_failure_heal.py\",\"scripts/workflow_failure_heal_autofix_report.sh\",\"scripts/workflow_failure_heal_report.sh\",\"tests/test_workflow_failure_heal.py\"]}",
+  "fingerprint": "f2f92fbc9c7bb3cf6688ebd7f6efe6c6c485d7812063768a9d100c81891f4a34",
+  "lineage": {
+    "issue_number": 6745,
+    "parent_ids": [],
+    "pr_number": 6747,
+    "run_id": "37743806896",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37743806896",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6747"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261008075116_a46abe0c54",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6745,
+    "level": "run",
+    "pr_number": 6747,
+    "run_id": "37743806896"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6745: https://github.com/shubhodeep1/coding-workflows/pull/6747",
+  "timestamps": {
+    "created_at": "2026-10-08T07:51:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
