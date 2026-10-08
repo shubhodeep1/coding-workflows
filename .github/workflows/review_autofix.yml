@@ -104,6 +104,7 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   UNATTENDED_PHASE: review_autofix
+  REVIEW_HEAD_GATE_STATUS_ENABLED: ${{ vars.REVIEW_HEAD_GATE_STATUS_ENABLED || 'true' }}
   # Resolve base-branch conflicts BEFORE the reviewer/editor spend when the
   # pre-review merge-topology gate sees a content conflict (default on).
   PRE_REVIEW_CONFLICT_RESOLVE_ENABLED: ${{ vars.PRE_REVIEW_CONFLICT_RESOLVE_ENABLED || 'true' }}
@@ -111,12 +112,13 @@ env:
   # the same base that edit the same files (scripts/review_merge_train.sh).
   MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
   MERGE_TRAIN_MAX_OLDER_PRS: ${{ vars.MERGE_TRAIN_MAX_OLDER_PRS || '20' }}
+  MERGE_TRAIN_IGNORE_PATHS: ${{ vars.MERGE_TRAIN_IGNORE_PATHS || '.ai/.workspace_source_manifest.txt' }}
   OPENCODE_VERSION: ${{ vars.OPENCODE_VERSION || '1.18.23' }}
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
   UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}
   REVIEWER_MODELS: |
     minimax/minimax-m3
-    z-ai/glm-5.2
+    mistralai/mistral-small-2603
     deepseek/deepseek-v4-pro
     google/gemini-3.1-flash-lite
     qwen/qwen3.7-plus
@@ -155,15 +157,15 @@ env:
   # Review tiers (scripts/review_run_reviewers.sh classify_review_tier): a diff
   # of <= REVIEW_TIER_LITE_MAX_LOC lines touching no protected path gets one
   # reviewer, any diff of <= REVIEW_TIER_STANDARD_MAX_LOC lines gets four, the
-  # rest the full panel. The standard tier defaults to four panel models
-  # (google/gemini-3.1-flash-lite and z-ai/glm-5.2 run only on the full
-  # panel). An empty lite slug draws one reviewer from the
-  # standard list, seeded by the PR number; set either variable to pin reviewers.
+  # rest the full panel. With both slug variables empty (the default), the
+  # lite and standard tiers draw their reviewers at random from the whole
+  # REVIEWER_MODELS panel, seeded by the PR number, so a PR keeps the same
+  # reviewers on every autofix round. Set either variable to pin reviewers.
   REVIEW_TIER_RESOLVER_ENABLED: ${{ vars.REVIEW_TIER_RESOLVER_ENABLED || 'true' }}
   REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}
   REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || '' }}
   REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}
-  REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna' }}
+  REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || '' }}
   REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}
   REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}
   REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}
@@ -253,6 +255,8 @@ env:
   CHECK_RUNS_LOG_TAIL_BYTES: ${{ vars.CHECK_RUNS_LOG_TAIL_BYTES || '16384' }}
   FINGERPRINT_QUARANTINE_RUNS_M: ${{ vars.FINGERPRINT_QUARANTINE_RUNS_M || '3' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
+  SEMBLE_BOOTSTRAP_MODE: ${{ vars.SEMBLE_BOOTSTRAP_MODE || 'lazy' }}
+  TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED: ${{ vars.TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED || 'false' }}
   SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
   UNATTENDED_NAG_REMINDER_ENABLED: ${{ vars.UNATTENDED_NAG_REMINDER_ENABLED || 'false' }}
   UNATTENDED_NAG_SILENT_ROUNDS: ${{ vars.UNATTENDED_NAG_SILENT_ROUNDS || '3' }}
@@ -307,8 +311,23 @@ jobs:
       fingerprint_cap_count: ${{ steps.evaluate.outputs.fingerprint_cap_count }}
       fingerprint_cap_max: ${{ steps.evaluate.outputs.fingerprint_cap_max }}
       fingerprint_cap_already_applied: ${{ steps.evaluate.outputs.fingerprint_cap_already_applied }}
+      fingerprint_cap_non_retryable: ${{ steps.evaluate.outputs.fingerprint_cap_non_retryable }}
       fingerprint_cap_marker_author_login: ${{ steps.evaluate.outputs.fingerprint_cap_marker_author_login }}
     steps:
+      - name: Record GH_PAT budget at review gate start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_gate
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=review_autofix job=gate remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       - name: Resolve trusted review support commit
         id: resolve_support
         env:
@@ -452,6 +471,49 @@ jobs:
           fi
           echo "RETARGET_HELPER_VERIFIED=true" >> "$GITHUB_ENV"
 
+      - name: Checkout head-gate helper
+        id: checkout_head_gate_helper
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ steps.resolve_support.outputs.review_support_sha }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-head-gate-src
+          fetch-depth: 1
+          sparse-checkout: |
+            scripts/review_head_gate.sh
+            scripts/gh_helpers.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Verify head-gate helper identity
+        env:
+          WORKFLOW_REPOSITORY: ${{ steps.resolve_support.outputs.review_support_repo }}
+          WORKFLOW_REF: ${{ steps.resolve_support.outputs.review_support_ref }}
+          WORKFLOW_SHA: ${{ steps.resolve_support.outputs.review_support_sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED: ${{ vars.REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED || 'true' }}
+          CHECKOUT_OUTCOME: ${{ steps.checkout_head_gate_helper.outcome }}
+        run: |
+          set -euo pipefail
+          if [ "${CHECKOUT_OUTCOME}" != "success" ] || [ ! -f .codex-head-gate-src/scripts/review_head_gate.sh ] || [ ! -f .codex-head-gate-src/scripts/gh_helpers.sh ]; then
+            if [ "${EVENT_NAME}" = "pull_request" ] && [ "${EVENT_ACTION}" = "synchronize" ] && [ "${REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED}" != "false" ]; then
+              echo "::error::Required head-gate helper unavailable on synchronize."
+              exit 1
+            fi
+            echo "::warning::Head-gate helper unavailable; status publication skipped."
+            exit 0
+          fi
+          if [ "${WORKFLOW_REPOSITORY}" != "shubhodeep1/coding-workflows" ] ||
+             [[ ! "${WORKFLOW_SHA}" =~ ^[0-9a-f]{40}$ ]] ||
+             [[ ! "${WORKFLOW_REF}" =~ ^(refs/heads/main|refs/tags/stable|[0-9a-f]{40})$ ]] ||
+             [ "$(git -C .codex-head-gate-src rev-parse HEAD 2>/dev/null)" != "${WORKFLOW_SHA}" ]; then
+            echo "::error::Unverified head-gate support checkout."
+            exit 1
+          fi
+          echo "HEAD_GATE_HELPER_VERIFIED=true" >> "$GITHUB_ENV"
+
       - name: Evaluate review gate
         id: evaluate
         env:
@@ -464,6 +526,8 @@ jobs:
           EVENT_ACTION: ${{ github.event.action }}
           PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED: ${{ vars.REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED || 'true' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           PR_IS_DRAFT: ${{ inputs.pr_is_draft }}
           PR_SKIP_AI: ${{ inputs.pr_skip_ai }}
           PR_TITLE: ${{ inputs.pr_title }}
@@ -508,16 +572,17 @@ jobs:
           AUTOFIX_SKIP_SUPPRESS_ON_CONFLICT: ${{ vars.AUTOFIX_SKIP_SUPPRESS_ON_CONFLICT }}
           AUTOFIX_SKIP_MAX_ADDITIONS: ${{ vars.AUTOFIX_SKIP_MAX_ADDITIONS }}
           AUTOFIX_SKIP_MAX_DELETIONS: ${{ vars.AUTOFIX_SKIP_MAX_DELETIONS }}
-          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'true' }}
+          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
           # No-PR claude-branch-review path inputs (push-without-PR caller).
           FORCE_CLAUDE_BRANCH_REVIEW: ${{ inputs.force_claude_branch_review }}
           HEAD_REF_OVERRIDE: ${{ inputs.head_ref_override }}
-          # Read but unused since the Claude-fixer hand-off was retired; the
-          # Claude CLI engine cutover (Phase 5c of
-          # docs/plans/replace-claude-sessions-with-cli-engine-plan.md) gives
-          # it its new meaning. Kept so the variable name stays reserved.
+          # Claude-fixer mode (Phase 5c of
+          # docs/plans/replace-claude-sessions-with-cli-engine-plan.md, Q35):
+          # `false` keeps the review write roles off the Claude engine. The
+          # codex-agent job's "Resolve AI engine" step applies it; the gate
+          # only reads it.
           CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
           # Identical-failure fingerprint cap (see the block below the
           # terminal same-head skip). Default on, three identical failures on
@@ -555,6 +620,7 @@ jobs:
           pr_head_ref=""
           pr_base_ref=""
           pr_head_repo=""
+          pr_auto_merge_enabled=""
           pr_labels=""
           pr_additions=""
           pr_deletions=""
@@ -594,7 +660,7 @@ jobs:
             # suppression below), and changed_files (to verify the paginated
             # path list before either skip branch can run).
             if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" \
-              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), head_repo: (.head.repo.full_name // ""), head_sha: (.head.sha // ""), updated_at: (.updated_at // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
+              --jq '{state: (.state // ""), merged: (.merged // false), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), head_repo: (.head.repo.full_name // ""), head_sha: (.head.sha // ""), auto_merge_enabled: (if has("auto_merge") then (.auto_merge != null) else null end), updated_at: (.updated_at // ""), labels: ((.labels // []) | map(.name)), additions: (.additions // 0), deletions: (.deletions // 0), changed_files: .changed_files, mergeable: (if (.mergeable == null) then "" else (.mergeable | tostring) end), mergeable_state: (.mergeable_state // ""), title: (.title // ""), body: (.body // "")}' \
               2>/dev/null)"; then
               pr_state="$(printf '%s' "${_pr_gate}" | jq -r '.state // ""' 2>/dev/null || echo "")"
               pr_merged="$(printf '%s' "${_pr_gate}" | jq -r 'if (.merged // false) then "true" else "false" end' 2>/dev/null || echo "false")"
@@ -602,6 +668,7 @@ jobs:
               pr_base_ref="$(printf '%s' "${_pr_gate}" | jq -r '.base_ref // ""' 2>/dev/null || echo "")"
               pr_head_repo="$(printf '%s' "${_pr_gate}" | jq -r '.head_repo // ""' 2>/dev/null || echo "")"
               pr_head_sha_gate="$(printf '%s' "${_pr_gate}" | jq -r '.head_sha // ""' 2>/dev/null || echo "")"
+              pr_auto_merge_enabled="$(printf '%s' "${_pr_gate}" | jq -r 'if .auto_merge_enabled == null then "" else (.auto_merge_enabled | tostring) end' 2>/dev/null || echo "")"
               pr_head_repo_gate="${pr_head_repo}"
               pr_base_ref_gate="$(printf '%s' "${_pr_gate}" | jq -r '.base_ref // ""' 2>/dev/null || echo "")"
               pr_updated_at_gate="$(printf '%s' "${_pr_gate}" | jq -r '.updated_at // ""' 2>/dev/null || echo "")"
@@ -616,6 +683,15 @@ jobs:
               fi
               if [ -z "$(printf '%s' "${pr_body_cached}" | tr -d '[:space:]')" ]; then
                 pr_body_cached="$(printf '%s' "${_pr_gate}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+              fi
+              # Withdraw an enrolled head before the rest of gate evaluation,
+              # reusing this PR read rather than fetching the PR a second time.
+              if [ "${HEAD_GATE_HELPER_VERIFIED:-false}" = "true" ] && [ "${EVENT_NAME}" = "pull_request" ] \
+                && { [ "${EVENT_ACTION}" = "opened" ] || [ "${EVENT_ACTION}" = "synchronize" ]; }; then
+                PR_EVENT_HEAD_SHA="${PR_HEAD_SHA:-}" GATE_HEAD_SHA="${pr_head_sha_gate}" \
+                  GATE_AUTO_MERGE_ENABLED="${pr_auto_merge_enabled}" DETERMINISTIC_SKIP=false \
+                  bash .codex-head-gate-src/scripts/review_head_gate.sh gate
+                echo "HEAD_GATE_EARLY_DONE=true" >> "${GITHUB_ENV}"
               fi
             fi
           fi
@@ -1047,7 +1123,9 @@ jobs:
           # fingerprint-cap-block job, which labels the linked issues (or the
           # PR) ai:review-blocked, posts one cap comment and reports the
           # failure to workflow failure heal. A push (new head) resets the
-          # count by construction.
+          # count by construction. A reason the helper reports as
+          # non_retryable=true (NON_RETRYABLE_FAILURE_REASONS) trips the cap on
+          # its first marker (PR #6438: ~28 identical resolver runs).
           #
           # Scope and fail-open rules:
           #   * Every event (pull_request and workflow_dispatch) of a PR with
@@ -1067,6 +1145,7 @@ jobs:
           FINGERPRINT_CAP_REASON=""
           FINGERPRINT_CAP_COUNT="0"
           FINGERPRINT_CAP_ALREADY_APPLIED="false"
+          FINGERPRINT_CAP_NON_RETRYABLE="false"
           FINGERPRINT_CAP_MAX="${REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL:-3}"
           case "${FINGERPRINT_CAP_MAX}" in
             ''|*[!0-9]*|0) FINGERPRINT_CAP_MAX=3 ;;
@@ -1112,11 +1191,14 @@ jobs:
                     FINGERPRINT_CAP_ALREADY_APPLIED="true"
                     echo "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP} count=${FINGERPRINT_CAP_COUNT}"
                   fi
-                  if [ "${FINGERPRINT_CAP_COUNT}" -ge "${FINGERPRINT_CAP_MAX}" ]; then
+                  if [ "${FINGERPRINT_CAP_COUNT}" -ge 1 ] && [ "$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "non_retryable" { print $2 }' | tail -n 1)" = "true" ]; then
+                    FINGERPRINT_CAP_NON_RETRYABLE="true"
+                  fi
+                  if [ "${FINGERPRINT_CAP_COUNT}" -ge "${FINGERPRINT_CAP_MAX}" ] || [ "${FINGERPRINT_CAP_NON_RETRYABLE}" = "true" ]; then
                     FINGERPRINT_CAP="true"
                     SHOULD_RUN="false"
                     SKIP_REASON="fingerprint_cap"
-                    echo "AUTOFIX_FINGERPRINT_CAP_TRIPPED pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} count=${FINGERPRINT_CAP_COUNT} max=${FINGERPRINT_CAP_MAX} already_applied=${FINGERPRINT_CAP_ALREADY_APPLIED}"
+                    echo "AUTOFIX_FINGERPRINT_CAP_TRIPPED pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} count=${FINGERPRINT_CAP_COUNT} max=${FINGERPRINT_CAP_MAX} already_applied=${FINGERPRINT_CAP_ALREADY_APPLIED} non_retryable=${FINGERPRINT_CAP_NON_RETRYABLE}"
                   else
                     echo "AUTOFIX_FINGERPRINT cap=not_tripped pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP:-none} reason=${FINGERPRINT_CAP_REASON:-none} count=${FINGERPRINT_CAP_COUNT} max=${FINGERPRINT_CAP_MAX}"
                   fi
@@ -1498,7 +1580,7 @@ jobs:
               # single-issue pass. Keep eligible default-branch PRs on the
               # codex-agent path, including tiny and documentation-only diffs.
               SECURITY_PASS_SKIP_SUPPRESSED="false"
-              if [ "${candidate_skip}" = "true" ] && [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-true}" != "false" ] \
+              if [ "${candidate_skip}" = "true" ] && [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-false}" != "false" ] \
                 && [ -n "${DEFAULT_BRANCH:-}" ] && [ "${pr_base_ref}" = "${DEFAULT_BRANCH}" ] \
                 && [ "${pr_head_repo}" = "${REPOSITORY}" ] \
                 && ! [[ "${pr_head_ref}" =~ ${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-} ]] \
@@ -1609,14 +1691,14 @@ jobs:
           # Propagate head ref so downstream jobs (deterministic-skip-merge)
           # can apply the same head-ref-keyed auto-merge suppressors without
           # repeating the /pulls/{n} fetch above (§15 API hygiene). May be
-          # empty on the invalid-PR-number branch; consumers must treat an
-          # empty value as "unknown" and fall through (the empty string
-          # never matches any suppressor regex, so auto-merge runs as before).
+          # empty on the invalid-PR-number branch; deterministic-skip-merge
+          # refuses merge authorization when the head ref is unavailable.
           echo "head_ref=${pr_head_ref}" >> "${GITHUB_OUTPUT}"
           # Bind downstream deterministic-skip merge authorization to the
           # exact head evaluated by this gate. Consumers fail closed when the
           # authenticated PR metadata did not provide a head SHA.
           echo "head_sha=${pr_head_sha_gate}" >> "${GITHUB_OUTPUT}"
+          echo "auto_merge_enabled=${pr_auto_merge_enabled}" >> "${GITHUB_OUTPUT}"
           echo "review_checkout_sha=${review_checkout_sha}" >> "${GITHUB_OUTPUT}"
           echo "retargeted_base_ref=${pr_base_ref_gate}" >> "${GITHUB_OUTPUT}"
           echo "retargeted_base_updated_at=${pr_updated_at_gate}" >> "${GITHUB_OUTPUT}"
@@ -1630,7 +1712,53 @@ jobs:
           echo "fingerprint_cap_count=${FINGERPRINT_CAP_COUNT}" >> "${GITHUB_OUTPUT}"
           echo "fingerprint_cap_max=${FINGERPRINT_CAP_MAX}" >> "${GITHUB_OUTPUT}"
           echo "fingerprint_cap_already_applied=${FINGERPRINT_CAP_ALREADY_APPLIED}" >> "${GITHUB_OUTPUT}"
+          echo "fingerprint_cap_non_retryable=${FINGERPRINT_CAP_NON_RETRYABLE}" >> "${GITHUB_OUTPUT}"
           echo "fingerprint_cap_marker_author_login=${gate_marker_author_login}" >> "${GITHUB_OUTPUT}"
+
+      - name: Withdraw stale auto-merge and publish head-gate status
+        id: head_gate
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
+          PR_EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GATE_HEAD_SHA: ${{ steps.evaluate.outputs.head_sha }}
+          GATE_AUTO_MERGE_ENABLED: ${{ steps.evaluate.outputs.auto_merge_enabled }}
+          DETERMINISTIC_SKIP: ${{ steps.evaluate.outputs.deterministic_skip }}
+          REVIEW_HEAD_GATE_STATUS_ENABLED: ${{ vars.REVIEW_HEAD_GATE_STATUS_ENABLED || 'true' }}
+          REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED: ${{ vars.REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED || 'true' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ "${HEAD_GATE_HELPER_VERIFIED:-false}" != "true" ]; then
+            echo "::warning::Verified head-gate helper unavailable; skipping status publication."
+            exit 0
+          fi
+          if [ "${HEAD_GATE_EARLY_DONE:-false}" = "true" ]; then
+            # The first PR read already posted pending and withdrew enrollment.
+            # The late gate call now only publishes deterministic-skip success.
+            export EVENT_NAME=workflow_dispatch
+          fi
+          bash .codex-head-gate-src/scripts/review_head_gate.sh gate
+      - name: Record GH_PAT budget at review gate end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_gate
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          remaining=unknown; reset=unknown; used=unknown
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r remaining reset <<< "${reading}"
+            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
+              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
+              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
+                used=$((initial - remaining))
+              fi
+            fi
+          fi
+          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=gate remaining=${remaining} reset=${reset} used_in_job=${used}"
 
   post-merge-validate-dispatch:
     needs: gate
@@ -1648,6 +1776,20 @@ jobs:
       POST_MERGE_PR_TEXT_JSON: ${{ needs.gate.outputs.post_merge_pr_text_json }}
       POST_MERGE_LINKED_ISSUES_JSON: ${{ needs.gate.outputs.post_merge_linked_issues_json }}
     steps:
+      - name: Record GH_PAT budget at post-merge-validate-dispatch start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_post-merge-validate-dispatch
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=review_autofix job=post-merge-validate-dispatch remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       - name: Checkout workflow support source
         uses: actions/checkout@v5
         with:
@@ -1817,6 +1959,25 @@ jobs:
             echo "::warning::No standalone validation workflow could be dispatched for merged PR #${PR_NUMBER}."
           fi
 
+      - name: Record GH_PAT budget at post-merge-validate-dispatch end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_post-merge-validate-dispatch
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          remaining=unknown; reset=unknown; used=unknown
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r remaining reset <<< "${reading}"
+            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
+              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
+              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
+                used=$((initial - remaining))
+              fi
+            fi
+          fi
+          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=post-merge-validate-dispatch remaining=${remaining} reset=${reset} used_in_job=${used}"
+
   post-merge-force-poll:
     needs: gate
     runs-on: ubuntu-latest
@@ -1826,6 +1987,20 @@ jobs:
       REPOSITORY: ${{ github.repository }}
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
     steps:
+      - name: Record GH_PAT budget at post-merge-force-poll start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_post-merge-force-poll
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=review_autofix job=post-merge-force-poll remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       - name: Checkout workflow support source
         uses: actions/checkout@v5
         with:
@@ -1876,6 +2051,25 @@ jobs:
   # after a normal clean review. Reviewer panel, editor, summarizer, and
   # merge-conflict resolver are all skipped — if a conflict exists,
   # auto-merge will block and the orchestrator stall cron re-dispatches.
+      - name: Record GH_PAT budget at post-merge-force-poll end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_post-merge-force-poll
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          remaining=unknown; reset=unknown; used=unknown
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r remaining reset <<< "${reading}"
+            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
+              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
+              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
+                used=$((initial - remaining))
+              fi
+            fi
+          fi
+          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=post-merge-force-poll remaining=${remaining} reset=${reset} used_in_job=${used}"
+
   deterministic-skip-merge:
     needs: gate
     runs-on: ubuntu-latest
@@ -1886,6 +2080,7 @@ jobs:
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
       DET_SKIP_REASON: ${{ needs.gate.outputs.det_skip_reason }}
       ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
+      ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
       # When 'true' (default), forward-merge fallback PRs (head ref
       # `^auto/forward-merge-stable-`) auto-merge via a real merge commit
       # (`gh pr merge --merge --auto`) instead of being left for a manual
@@ -1893,15 +2088,27 @@ jobs:
       # manual-merge-commit behaviour. See the auto-merge step below.
       FORWARD_MERGE_FALLBACK_AUTO_MERGE: ${{ vars.FORWARD_MERGE_FALLBACK_AUTO_MERGE || 'true' }}
       # Reused from the gate job's existing /pulls/{n} fetch (§15 API hygiene) —
-      # consumed by the forward-merge-fallback suppressor in the auto-merge
-      # step below. May be empty when the gate could not resolve the PR
-      # (invalid PR number); the suppressor treats empty as "unknown" and
-      # falls through to the regular auto-merge call.
+      # consumed by the integration and forward-merge suppressors below.
+      # An empty head ref refuses merge authorization.
       PR_HEAD_REF: ${{ needs.gate.outputs.head_ref }}
       # Exact PR head whose diff authorized this deterministic skip. Every
       # merge-capable path below is bound to it and refuses an empty value.
       PR_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
     steps:
+      - name: Record GH_PAT budget at deterministic-skip-merge start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_deterministic-skip-merge
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=review_autofix job=deterministic-skip-merge remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       - name: Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge
         run: |
           set -euo pipefail
@@ -1981,12 +2188,38 @@ jobs:
             return 0
           }
 
+          deterministic_skip_head_ref_is_integration_pr()
+          {
+            local deterministic_skip_pattern_match_rc
+            if [ -n "${ORCH_INTEGRATION_BRANCH_PATTERN}" ]; then
+              if printf '%s\n' "${PR_HEAD_REF}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN}"; then
+                return 0
+              else
+                deterministic_skip_pattern_match_rc=$?
+                if [ "${deterministic_skip_pattern_match_rc}" -gt 1 ]; then
+                  echo "::warning::ORCH_INTEGRATION_BRANCH_PATTERN is not a valid POSIX ERE (grep exit ${deterministic_skip_pattern_match_rc}); falling back to canonical '^orchestrator/project-([0-9]+)$' auto-merge suppressor for this run."
+                fi
+              fi
+            else
+              echo "::warning::ORCH_INTEGRATION_BRANCH_PATTERN is empty; falling back to canonical '^orchestrator/project-([0-9]+)$' auto-merge suppressor for this run."
+            fi
+            [[ "${PR_HEAD_REF}" =~ ^orchestrator/project-([0-9]+)$ ]]
+          }
+
           # 1) Authorize auto-merge for the exact head evaluated by the gate.
           # Merge-authorization labels are applied only after this succeeds, so
           # a concurrent push cannot leave ai:ready-to-merge on an unreviewed head.
           auto_merge_ready_labels_allowed="false"
           auto_merge_summary="disabled by ENABLE_AUTO_MERGE"
-          if [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
+          if [ -z "${PR_HEAD_REF}" ]; then
+            auto_merge_summary="REFUSED (gate-observed head ref unavailable)"
+            echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA:-unknown} action=refuse reason=head_ref_unavailable"
+            echo "::warning::Gate-observed head ref is unavailable for PR #${PR_NUMBER}; refusing deterministic-skip merge authorization."
+          elif deterministic_skip_head_ref_is_integration_pr; then
+            auto_merge_summary="SUPPRESSED (orchestrator integration PR head ref '${PR_HEAD_REF}'; orchestrator finalizes the merge)"
+            echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA:-unknown} action=refuse reason=orchestrator_integration_pr"
+            echo "PR #${PR_NUMBER} is an orchestrator integration PR — auto-merge suppressed on the deterministic-skip path. finalize_integration_merge_if_needed owns the final merge after project completion."
+          elif [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
             if deterministic_skip_head_is_current; then
               auto_merge_ready_labels_allowed="true"
             fi
@@ -2103,6 +2336,25 @@ jobs:
           # 4) Workflow run summary
           write_deterministic_skip_summary
 
+      - name: Record GH_PAT budget at deterministic-skip-merge end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_deterministic-skip-merge
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          remaining=unknown; reset=unknown; used=unknown
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r remaining reset <<< "${reading}"
+            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
+              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
+              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
+                used=$((initial - remaining))
+              fi
+            fi
+          fi
+          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=deterministic-skip-merge remaining=${remaining} reset=${reset} used_in_job=${used}"
+
   # Retain the legacy job identifier for workflow consumers (a required
   # check that names it keeps reporting "skipped"). The Claude-fixer
   # hand-off it belonged to is retired, so it never runs: the gate never
@@ -2143,6 +2395,7 @@ jobs:
       FINGERPRINT_CAP_COUNT: ${{ needs.gate.outputs.fingerprint_cap_count }}
       FINGERPRINT_CAP_MAX: ${{ needs.gate.outputs.fingerprint_cap_max }}
       FINGERPRINT_CAP_ALREADY_APPLIED: ${{ needs.gate.outputs.fingerprint_cap_already_applied }}
+      FINGERPRINT_CAP_NON_RETRYABLE: ${{ needs.gate.outputs.fingerprint_cap_non_retryable }}
       FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN: ${{ needs.gate.outputs.fingerprint_cap_marker_author_login }}
       WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
       REPORT_WORKFLOW_NAME: ${{ github.workflow }}
@@ -2150,6 +2403,20 @@ jobs:
       TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
       TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
     steps:
+      - name: Record GH_PAT budget at fingerprint-cap-block start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_fingerprint-cap-block
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=review_autofix job=fingerprint-cap-block remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       - name: Checkout workflow support source
         uses: actions/checkout@v5
         with:
@@ -2295,10 +2562,26 @@ jobs:
           fi
 
           cap_marker="<!-- review-autofix-failure-cap:v1 head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} count=${FINGERPRINT_CAP_COUNT} -->"
+          cap_title="identical failure repeated"
+          cap_first_error=""
+          cap_lead="The last ${FINGERPRINT_CAP_COUNT} review/autofix runs on head \`${PR_HEAD_SHA:0:12}\` failed the same way"
+          if [ "${FINGERPRINT_CAP_NON_RETRYABLE:-false}" = "true" ]; then
+            # One non-retryable failure is enough (PR #6438). Quote the
+            # failed run's "First error" line, which names e.g. the host-only
+            # conflicted paths, from the trusted author's newest failure
+            # comment for this head (already fetched above, §15).
+            cap_title="non-retryable failure"
+            cap_lead="The last review/autofix run on head \`${PR_HEAD_SHA:0:12}\` failed with a non-retryable reason"
+            cap_first_error="$(jq -r --arg author "${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}" --arg head "${PR_HEAD_SHA}" \
+              '[.[] | select((.author_login // "" | ascii_downcase) == ($author | ascii_downcase)) | (.body // "") | select(contains("<!-- review-autofix-failure:v1 head=" + $head + " "))] | last // "" | (capture("[*][*]First error:[*][*] `(?<e>[^`\n]{1,400})`")? // {e: ""}).e' \
+              "${fresh_cap_comments_file}" 2>/dev/null || true)"
+          fi
           BODY="$(cat <<EOF
-          **AI review/autofix stopped: identical failure repeated**
+          **AI review/autofix stopped: ${cap_title}**
 
-          The last ${FINGERPRINT_CAP_COUNT} review/autofix runs on head \`${PR_HEAD_SHA:0:12}\` failed the same way (failure reason \`${FINGERPRINT_CAP_REASON}\`, fingerprint \`${FINGERPRINT_CAP_FP:0:16}\`). Another run on this head would fail again, so this run stopped in the gate before any reviewer or editor model call.
+          ${cap_lead} (failure reason \`${FINGERPRINT_CAP_REASON}\`, fingerprint \`${FINGERPRINT_CAP_FP:0:16}\`). Another run on this head would fail again, so this run stopped in the gate before any reviewer or editor model call.${cap_first_error:+
+
+          **First error:** \`${cap_first_error}\`}
 
           - Labeled \`ai:review-blocked\`: ${labeled_summary}.
           - This failure is also sent to workflow failure heal (run log line \`WORKFLOW_HEAL_AUTOFIX_REPORT\`).
@@ -2317,6 +2600,9 @@ jobs:
 
           if type tg_send_msg >/dev/null 2>&1; then
             MSG="⚠️ Review/autofix stopped: identical failure repeated ${FINGERPRINT_CAP_COUNT}x on #${PR_NUMBER}"
+            if [ "${FINGERPRINT_CAP_NON_RETRYABLE:-false}" = "true" ]; then
+              MSG="⚠️ Review/autofix stopped: non-retryable failure on #${PR_NUMBER}"
+            fi
             MSG+=$'\n'
             MSG+="Reason: ${FINGERPRINT_CAP_REASON} — labeled ai:review-blocked (${labeled_summary})"
             MSG+=$'\n'
@@ -2365,6 +2651,25 @@ jobs:
             echo "- **Reviewer panel + editor cycle:** SKIPPED"
           } >> "${GITHUB_STEP_SUMMARY}"
 
+      - name: Record GH_PAT budget at fingerprint-cap-block end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_fingerprint-cap-block
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          remaining=unknown; reset=unknown; used=unknown
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r remaining reset <<< "${reading}"
+            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
+              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
+              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
+                used=$((initial - remaining))
+              fi
+            fi
+          fi
+          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=fingerprint-cap-block remaining=${remaining} reset=${reset} used_in_job=${used}"
+
   codex-agent:
     needs: gate
     # Display name surfaces the gate's no-PR claude_branch_review decision in
@@ -2400,14 +2705,12 @@ jobs:
       #     trail of cancelled in-progress runs that cancel-in-progress=true
       #     used to cause. Hung runs are bounded by the timeout-minutes above.
       #
-      #   * No-PR claude/** reviewer-comment mode: cancel-in-progress=true.
-      #     With no PR/autofix loop to preserve, a new push makes the in-flight
-      #     reviewer panel stale; cancel it so only the latest SHA gets a
-      #     commit comment.
+      #   * Explicit no-PR reviewer-comment mode: cancel-in-progress=true.
+      #     With no PR/autofix loop to preserve, a newer explicit run cancels
+      #     the in-flight reviewer panel for the same branch.
       #
-      # Group key fallback to inputs.head_ref_override covers the no-PR
-      # claude-branch push path (review-claude-branch-push in
-      # internal-review.yml): PR_NUMBER is empty and inputs.pr_number is "",
+      # Group key fallback to inputs.head_ref_override covers an explicit
+      # no-PR review invocation: PR_NUMBER is empty and inputs.pr_number is "",
       # so without the head_ref_override fallback the group would collapse
       # to github.run_id (unique per run) and cancel-in-progress could never
       # match a prior run on the same branch. Using the branch name keeps
@@ -2455,7 +2758,7 @@ jobs:
       REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}
       REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || '' }}
       REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}
-      REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || 'minimax/minimax-m3,deepseek/deepseek-v4-pro,qwen/qwen3.7-plus,openai/gpt-6-luna' }}
+      REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || '' }}
       REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}
       REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}
       REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}
@@ -2500,12 +2803,12 @@ jobs:
       # reviewer panel + summariser, posts the consensus ledger as a PR
       # commit comment via scripts/post_review_comment.sh, and exits without
       # invoking the editor / commit / push / rb_judge / auto-merge tail.
-      # This is only for claude/** pushes with no open PR; PR-backed claude/**
-      # branches take the normal PR review path. Sourced from the gate output.
+      # The former claude/** push caller was removed; only an explicit
+      # invocation can enable this mode. PR-backed branches use the normal path.
       # See gate.
       CLAUDE_BRANCH_REVIEW_MODE: ${{ needs.gate.outputs.claude_branch_review }}
-      # No-PR claude-branch-review path overrides (push events on claude/**
-      # without an open PR).  Read by "Collect PR metadata" and
+      # No-PR claude-branch-review overrides for an explicit invocation.
+      # Read by "Collect PR metadata" and
       # "Checkout PR head branch" to synthesize PR_META_FILE / TARGET_BRANCH
       # without calling the GitHub PR API.  Empty strings are treated as
       # "not in no-PR mode" — the standard PR-API path runs instead.
@@ -2514,6 +2817,20 @@ jobs:
       BASE_REF_OVERRIDE_INPUT: ${{ inputs.base_ref_override }}
 
     steps:
+      - name: Record GH_PAT budget at codex-agent start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_codex-agent
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=review_autofix job=codex-agent remaining=${remaining} reset=${reset} used_in_job=unknown"
+
 
       # Reclaim ~25–28 GB on ubuntu-latest before any checkout/LLM
       # work runs.  The codex-agent job has historically died mid-step on
@@ -2776,6 +3093,10 @@ jobs:
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
           pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" || echo 'null')"
+          # An unavailable label snapshot must not override an explicit ai:codex
+          # label by selecting Claude from the role default.
+          AI_ENGINE_LABELS="$(printf '%s\n' "${pr_meta}" | jq -ce 'if (.labels | type) == "array" then [.labels[] | .name | select(type == "string")] else error("labels unavailable") end' 2>/dev/null || printf '%s' '["ai:codex"]')"
+          echo "AI_ENGINE_LABELS=${AI_ENGINE_LABELS}" >> "$GITHUB_ENV"
           pr_state="$(printf '%s\n' "${pr_meta}" | jq -r 'if ((.merged_at != null) or (.merged == true)) then "merged" else (.state // "") end' | grep -xE 'open|closed|merged' || echo "")"
           if [ -z "${pr_state}" ]; then
             echo "::warning::Unable to determine PR #${PR_NUMBER} state; assuming open."
@@ -2790,6 +3111,51 @@ jobs:
         uses: shubhodeep1/coding-workflows/.github/actions/install-opencode@28f5134003514b5cf31fb8ae52778c2be79d8fde
         with:
           opencode_version: ${{ env.OPENCODE_VERSION }}
+
+      # Claude engine (replace-claude-sessions plan Phase 5c, Claude-fixer
+      # mode Q19/Q35): the editor, consolidator, conflict resolver and RB
+      # judge run on Claude unless CLAUDE_FIXER_ENABLED=false, the PR's
+      # ai:codex label, AI_ENGINE_<ROLE> or AI_ENGINE say codex. Each role's
+      # engine goes to AI_ENGINE_RESOLVED_<ROLE>; exit 75 (Claude
+      # unavailable) runs that role's unchanged OpenCode command (plan D1).
+      - name: Resolve AI engine
+        id: ai_engine
+        if: env.PR_CLOSED != 'true'
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_REVIEW_EDITOR: ${{ vars.AI_ENGINE_REVIEW_EDITOR || '' }}
+          AI_ENGINE_REVIEW_CONSOLIDATOR: ${{ vars.AI_ENGINE_REVIEW_CONSOLIDATOR || '' }}
+          AI_ENGINE_CONFLICT_RESOLVER: ${{ vars.AI_ENGINE_CONFLICT_RESOLVER || '' }}
+          AI_ENGINE_RB_JUDGE: ${{ vars.AI_ENGINE_RB_JUDGE || '' }}
+          CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
+        run: |
+          set -euo pipefail
+          any_claude=false
+          for role in REVIEW_EDITOR REVIEW_CONSOLIDATOR CONFLICT_RESOLVER RB_JUDGE; do
+            engine="codex"
+            if [ -f "${SUPPORT_SCRIPTS_DIR}/ai_engine.sh" ]; then
+              # shellcheck disable=SC1091
+              engine="$(source "${SUPPORT_SCRIPTS_DIR}/ai_engine.sh" && ai_engine_for_role "${role}" || echo codex)"
+            fi
+            [ "${engine}" = "claude" ] || engine="codex"
+            [ "${engine}" = "codex" ] || any_claude=true
+            echo "AI_ENGINE_RESOLVED_${role}=${engine}" >> "$GITHUB_ENV"
+          done
+          echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: env.PR_CLOSED != 'true' && steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/install-claude
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: env.PR_CLOSED != 'true' && steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/claude-pool-token
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
 
       - name: Install OS-level dependencies
         shell: bash
@@ -3000,12 +3366,12 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Setup uv for Semble
-        if: env.PR_CLOSED != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')
+        if: env.PR_CLOSED != 'true' && ((env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy') || env.SERENA_ENABLED == 'true')
         continue-on-error: true
         uses: astral-sh/setup-uv@v7
 
       - name: Install semble
-        if: env.PR_CLOSED != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')
+        if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -3036,7 +3402,7 @@ jobs:
           fi
 
       - name: Build semble index
-        if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true'
+        if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'
         # Defense-in-depth: the shared script is fail-soft already, but the
         # step-level guard ensures a future wrapper regression still
         # degrades to SEMBLE_INDEX_AVAILABLE=false instead of hard-failing.
@@ -3066,8 +3432,9 @@ jobs:
             # stderr before any cleanup runs, so it's always present in the
             # captured log on failure.
             bash "${wrapper_script}" > "${RUNTIME_DIR}/semble_index.log" 2>&1 || true
+            grep -m1 '^SEMBLE_BOOTSTRAP ' "${RUNTIME_DIR}/semble_index.log" || true
             if grep -q '^build_semble_wrapper: Semble wrapper unavailable:' "${RUNTIME_DIR}/semble_index.log" 2>/dev/null; then
-              tail -n 20 "${RUNTIME_DIR}/semble_index.log" 2>/dev/null | sed 's/^/semble index: /' || true
+              tail -n 20 "${RUNTIME_DIR}/semble_index.log" 2>/dev/null | grep -v '^SEMBLE_BOOTSTRAP ' | sed 's/^/semble index: /' || true
             fi
           else
             echo "::notice::build_semble_wrapper.sh not staged; continuing without Semble-backed prompt context."
@@ -3750,9 +4117,10 @@ jobs:
             # modifications in the worktree, mirroring the `reset --hard`
             # in the sibling branch above. The "Initialize/Finalize
             # workspace contents" steps materialize the source tree into
-            # this worktree and regenerate the gitignored-but-tracked
-            # runtime artifact .ai/.workspace_source_manifest.txt. Without
-            # -f, a plain `git checkout -B` aborts with "Your local changes
+            # this worktree and regenerate the gitignored runtime artifact
+            # .ai/.workspace_source_manifest.txt (still tracked on older
+            # branches). Without -f, a plain `git checkout -B` can abort on
+            # older branches with "Your local changes
             # to the following files would be overwritten by checkout"
             # whenever the target branch's committed copy of that manifest
             # differs from the index's (e.g. a cross-base PR whose base is
@@ -4664,7 +5032,21 @@ jobs:
         run: |
           set -euo pipefail
           # A failed install is best-effort; a failed isolation boundary is not.
-          bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare
+          # Both the editor and consolidator share the prepared sandbox.
+          if [ "${AI_ENGINE_RESOLVED_REVIEW_EDITOR:-codex}" = "claude" ] || [ "${AI_ENGINE_RESOLVED_REVIEW_CONSOLIDATOR:-codex}" = "claude" ]; then
+            if ! bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare claude; then
+              for role in REVIEW_EDITOR REVIEW_CONSOLIDATOR; do
+                resolved="AI_ENGINE_RESOLVED_${role}"
+                if [ "${!resolved:-codex}" = "claude" ]; then
+                  echo "AI_ENGINE_FALLBACK role=${role} reason=sandbox_prepare_failed"
+                  echo "${resolved}=codex" >> "$GITHUB_ENV"
+                fi
+              done
+              bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare
+            fi
+          else
+            bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" prepare
+          fi
 
       - name: Switch reasoning effort for editor
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
@@ -4865,10 +5247,6 @@ jobs:
             fi
           fi
 
-      - name: Clean up isolated review workspace
-        if: always() && env.REVIEW_SANDBOX_ROOT != ''
-        run: bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup
-
       - name: Remove slop-scan runtime artifact
         if: always()
         run: |
@@ -4952,6 +5330,18 @@ jobs:
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_commit_changes.sh"
+
+      # Runs after the commit (#6484, run 37666355049): a failed cleanup must not
+      # skip the commit and be misreported as editor_changes_lost; push and the
+      # other success()-gated steps still stay blocked.
+      - name: Clean up isolated review workspace
+        if: always() && env.REVIEW_SANDBOX_ROOT != ''
+        run: |
+          if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ]; then
+            bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup 2> >(tee -a "${RUNTIME_DIR}/editor_stage_stderr.txt" >&2)
+          else
+            bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup
+          fi
 
       - name: Run interim judge
         if: env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
@@ -5437,9 +5827,9 @@ jobs:
         if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          # Kill switch for the deterministic union-merge of the generated
-          # .ai/.workspace_source_manifest.txt (see the "Deterministic
-          # union-merge" block in scripts/review_conflict_prepare.sh).
+          # Kill switch for deterministic resolution of conflicts on the generated
+          # .ai/.workspace_source_manifest.txt (union-merge or deletion in
+          # scripts/review_conflict_prepare.sh).
           # Default true; set the repo var to 'false' to route manifest
           # conflicts back through the Codex resolver.
           CONFLICT_MANIFEST_UNION_ENABLED: ${{ vars.CONFLICT_MANIFEST_UNION_ENABLED || 'true' }}
@@ -5685,10 +6075,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           REPOSITORY: ${{ github.repository }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'true' }}
+          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS || '2' }}
           SECURITY_PASS_PENDING_STALE_HOURS: ${{ vars.SECURITY_PASS_PENDING_STALE_HOURS || '6' }}
+          SECURITY_PASS_PENDING_MARKER_ATTEMPTS: ${{ vars.SECURITY_PASS_PENDING_MARKER_ATTEMPTS || '3' }}
+          SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS: ${{ vars.SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS || '5' }}
+          SECURITY_PASS_FOLLOWUP_STALE_HOURS: ${{ vars.SECURITY_PASS_FOLLOWUP_STALE_HOURS || '24' }}
           SECURITY_PASS_AUTHOR_LOGIN_FALLBACK: ${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
         run: |
@@ -5901,10 +6294,13 @@ jobs:
           # the security gate on judge merges.
           SECURITY_PASS_EXHAUSTED: ${{ steps.single_issue_security_pass.outputs.exhausted }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'true' }}
+          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS || '2' }}
           SECURITY_PASS_PENDING_STALE_HOURS: ${{ vars.SECURITY_PASS_PENDING_STALE_HOURS || '6' }}
+          SECURITY_PASS_PENDING_MARKER_ATTEMPTS: ${{ vars.SECURITY_PASS_PENDING_MARKER_ATTEMPTS || '3' }}
+          SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS: ${{ vars.SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS || '5' }}
+          SECURITY_PASS_FOLLOWUP_STALE_HOURS: ${{ vars.SECURITY_PASS_FOLLOWUP_STALE_HOURS || '24' }}
           SECURITY_PASS_AUTHOR_LOGIN_FALLBACK: ${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}
         run: |
           set -euo pipefail
@@ -6075,6 +6471,10 @@ jobs:
           # actually happened. Empty reason = legacy / pre-fix script,
           # falls through to the original body.
           case "${JUDGE_SKIP_REASON:-}" in
+            isolation_unavailable)
+              BODY_HEADING="AI review/autofix — judge deferred: isolation unavailable"
+              BODY_DETAIL="The judge could not prepare its credential-free sandbox (for example, the PR snapshot exceeded the isolation size limit or support files are missing). It refused to run a host writer on PR content. Linked issues remain labelled \`ai:review-blocked\`; stall recovery will retry the judge. If this repeats on the same head, a human must review."
+              ;;
             missing_followup_details)
               BODY_HEADING="AI review/autofix — judge omitted follow-up issue details"
               BODY_DETAIL="The review-blocked judge chose \`merge_with_followup\` but returned an empty \`followup_issue.title\` and/or \`.body\`, so the workflow refused the action rather than merge code without durable tracking for the deferred gap. Stall recovery will re-fire the judge; if this repeats, inspect the judge output in the workflow log."
@@ -6747,6 +7147,18 @@ jobs:
               security_blocked_pending)
                 echo "Security findings already blocked this head; suppressing duplicate alert."
                 exit 0 ;;
+              security_hold)
+                # The single-issue security gate held the judge's merge;
+                # judge_skip_reason carries its hold_reason. A dispatched or
+                # pending audit, or open follow-ups, re-run the review and
+                # bring the judge back without a human: no alert.
+                case "${JUDGE_SKIP_REASON}" in
+                  security_hold_audit_dispatched|security_hold_audit_pending|security_hold_awaiting_followups)
+                    echo "Judge merge held while the single-issue security pass runs (${JUDGE_SKIP_REASON}); suppressing alert."
+                    exit 0 ;;
+                esac
+                HOLD_REASON="${JUDGE_SKIP_REASON#security_hold_}"
+                MSG="$(printf 'Review-blocked judge approved a merge, but the single-issue security pass holds it and will not clear on its own (%s)\nNeeds a human: check the security-pass comments on the PR, then re-run the audit or decide the merge' "${HOLD_REASON:-unknown}")" ;;
               merge)
                 MSG="Review-blocked judge merged PR as-is" ;;
               fix)
@@ -7292,9 +7704,10 @@ jobs:
         # failure alerts, hand a repeated review/autofix failure on this PR to
         # coding-workflows' heal intake so it is diagnosed and fixed through
         # the normal pipeline. The reporter counts consecutive failed runs from
-        # the PR comments fetched at run start and reports only past
-        # WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK (default 2); a single retryable
-        # failure stays with the stall poller. Resolver escalations are already
+        # the PR comments fetched at run start and reports once the streak
+        # reaches WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK (default 1, so every
+        # failed run is reported; the intake keys reports on the PR, so one PR
+        # keeps one open heal issue). Resolver escalations are already
         # reported through the ai:resolver-escalated label path. Fail-open by
         # construction: the script always exits 0 and the step never blocks
         # cleanup.
@@ -7303,7 +7716,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
-          WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK: ${{ vars.WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK || '2' }}
+          WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK: ${{ vars.WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK || '1' }}
           REPORT_WORKFLOW_NAME: ${{ github.workflow }}
           REPORT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           REPORT_WRAPPER_SHA: ${{ env.SCRIPT_REF }}
@@ -7355,3 +7768,21 @@ jobs:
             rm -rf prompts
             rm -f .github/ai/orchestrate_schema.v1.json
           fi
+      - name: Record GH_PAT budget at codex-agent end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_codex-agent
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          remaining=unknown; reset=unknown; used=unknown
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            read -r remaining reset <<< "${reading}"
+            if [ -r "${GH_PAT_BUDGET_FILE}" ]; then
+              read -r initial initial_reset < "${GH_PAT_BUDGET_FILE}" || true
+              if [[ "${initial:-}" =~ ^[0-9]+$ ]] && [ "${initial_reset:-}" = "${reset}" ] && [ "${initial}" -ge "${remaining}" ]; then
+                used=$((initial - remaining))
+              fi
+            fi
+          fi
+          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=codex-agent remaining=${remaining} reset=${reset} used_in_job=${used}"
