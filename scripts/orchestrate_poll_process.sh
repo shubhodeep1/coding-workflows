@@ -6503,8 +6503,10 @@ security_pass_record_waivers() {
 #     until the final merge when SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED=true.
 # Posts one tracking comment listing the advisories.  GitHub API cost: that
 # comment, plus (deferral off only) create_security_pass_advisory_followup's
-# own calls.  Fail-open: a failed state write warns and the advisories stay
-# out of the gate; the next audit re-reports them and recording is retried.
+# own calls.  Returns 1 when the waiver rows could not be built or written to
+# state: the caller then restores the unsplit findings so the advisories stay
+# blocking for this audit (otherwise an advisory-only result would record
+# `passed` at the head with no waiver row, and the advisory would be lost).
 security_pass_record_line_ownership_advisories() {
   local advisory_file="$1"
   local head_sha="$2"
@@ -6536,13 +6538,13 @@ security_pass_record_line_ownership_advisories() {
       issue: null
     } + {followup_pending: true, audited_head_sha: $head_sha, finding: (. | del(.advisory))}]
   ' "${advisory_file}" 2>/dev/null)" || [ -z "${waivers_json}" ]; then
-    echo "::warning::Could not build line-ownership advisory rows for tracking issue #${TRACKING_NUM}; the advisories stay out of the gate and are retried on the next audit."
-    return 0
+    echo "::warning::Could not build line-ownership advisory rows for tracking issue #${TRACKING_NUM}; the advisories stay blocking for this audit."
+    return 1
   fi
   ids="$(printf '%s' "${waivers_json}" | jq -r 'map(.finding_id) | join(",")' 2>/dev/null || true)"
   if ! security_pass_record_waivers "${waivers_json}"; then
-    echo "::warning::Could not record line-ownership advisories (${ids}) for tracking issue #${TRACKING_NUM}; they stay out of the gate and are retried on the next audit."
-    return 0
+    echo "::warning::Could not record line-ownership advisories (${ids}) for tracking issue #${TRACKING_NUM}; they stay blocking for this audit."
+    return 1
   fi
   echo "SECURITY_PASS_WAIVED tracking_issue=${TRACKING_NUM} source=line_ownership ids=${ids}"
   status_lines=""
@@ -7725,12 +7727,24 @@ run_security_pass_inline() {
     advisory_count="$(jq -r 'length' "${advisory_findings_file}" 2>/dev/null || echo 0)"
     [[ "${advisory_count}" =~ ^[0-9]+$ ]] || advisory_count=0
     if [ "${advisory_count}" -gt 0 ]; then
-      if jq '.findings = [.findings[] | select(.advisory != true)] | .counts.kept = (.findings | length)' \
+      if cp "${findings_file}" "${findings_file}.with_advisory" 2>/dev/null \
+        && jq '.findings = [.findings[] | select(.advisory != true)] | .counts.kept = (.findings | length)' \
         "${findings_file}" > "${findings_file}.blocking" 2>/dev/null \
         && mv "${findings_file}.blocking" "${findings_file}"; then
-        security_pass_record_line_ownership_advisories "${advisory_findings_file}" "${current_head_sha}" "${merge_base_sha}" "${integration_branch}"
+        if ! security_pass_record_line_ownership_advisories "${advisory_findings_file}" "${current_head_sha}" "${merge_base_sha}" "${integration_branch}"; then
+          # Recording failed: restore the unsplit result so the advisories
+          # stay blocking rather than vanishing behind a `passed` head.
+          if ! cp "${findings_file}.with_advisory" "${findings_file}" 2>/dev/null; then
+            rm -f "${findings_file}.with_advisory" "${advisory_findings_file}"
+            security_pass_fail_closed "engine_unavailable" "Could not restore the security-pass result after line-ownership advisories failed to record." "${prior_security_status}"
+            return 1
+          fi
+          advisory_count=0
+          echo "::warning::Line-ownership advisories were not recorded for tracking issue #${TRACKING_NUM}; every finding stays blocking for this audit."
+        fi
+        rm -f "${findings_file}.with_advisory"
       else
-        rm -f "${findings_file}.blocking" "${advisory_findings_file}"
+        rm -f "${findings_file}.blocking" "${findings_file}.with_advisory" "${advisory_findings_file}"
         advisory_count=0
         echo "::warning::Could not split line-ownership advisories from the security-pass result for tracking issue #${TRACKING_NUM}; every finding stays blocking."
       fi
