@@ -19,9 +19,23 @@
 #       when it starts with `claude-`.
 #   ai_engine_cli_version
 #       The pinned @anthropic-ai/claude-code version.
-#   ai_engine_fallback <role> <reason>
-#       Logs `AI_ENGINE_FALLBACK role= reason=` and sends at most one
-#       Telegram note per job (plan D1). The caller then runs codex.
+#   ai_engine_fallback <role> <reason> [class]
+#       Logs `AI_ENGINE_FALLBACK role= reason=`, appends one record to
+#       AI_ENGINE_FALLBACK_RECORDS_FILE and sets AI_ENGINE_FALLBACK_EXIT
+#       (plan D1, item 3e). Capacity reasons (`all_gated`, `all_usage_limit`)
+#       or AI_ENGINE_FALLBACK_POLICY=always give 75: the caller runs codex and
+#       at most one Telegram note is sent per job. Every other reason under
+#       the default policy `capacity` gives 76 and logs
+#       `::error::AI_ENGINE_FALLBACK_REFUSED role= reason=`: the caller must
+#       fail (never run codex). The optional class can only demote a reason
+#       to `non_capacity`. Always returns 0; callers use AI_ENGINE_FALLBACK_EXIT.
+#   ai_engine_fallback_policy
+#       `capacity` (default) or `always`; an unknown value is `capacity`.
+#   ai_engine_fallback_class <reason>
+#       `capacity` for all_gated / all_usage_limit, else `non_capacity`.
+#   ai_engine_no_account_reason
+#       `all_gated` when the pool step gated every account
+#       (CLAUDE_POOL_REASON or CLAUDE_POOL_REASON_FILE), else `no_credential`.
 #   ai_engine_pool_dir
 #       The account pool directory (CLAUDE_ENGINE_POOL_DIR below).
 #   ai_engine_claude_home
@@ -38,12 +52,15 @@
 #       a read-only copy of <workdir>, a write profile edits a copy whose
 #       changed regular files are copied back. Its session store is
 #       ${RUNNER_TEMP}/claude-isolated-home, kept across calls in a job.
-#       Returns 0 on success; 75 when Claude is unavailable (no isolation
-#       support, Docker or image, no credential, no policy, or every account
-#       hit its usage limit or was rejected), after logging
-#       AI_ENGINE_FALLBACK, so the caller runs the codex path (D1); 124 on a
-#       timeout; any other non-zero status on a crash, which follows the
-#       role's existing retry rules.
+#       Returns 0 on success; 75 when Claude is out of capacity (every
+#       account gated or at its usage limit, or any unavailability under
+#       AI_ENGINE_FALLBACK_POLICY=always), after logging AI_ENGINE_FALLBACK,
+#       so the caller runs the codex path (D1); 76 when Claude is unavailable
+#       for any other reason (no isolation support, Docker or image, no
+#       credential, no policy, a rejected token or dead relay) under the
+#       default policy `capacity`: the caller fails closed and never runs
+#       codex; 124 on a timeout; any other non-zero status on a crash, which
+#       follows the role's existing retry rules.
 #       AI_ENGINE_LAST_RUN_DIR names the run directory afterwards; it holds
 #       transcript-<NAME>.jsonl and stderr-<NAME>.txt for each account tried.
 #   claude_run_selected <role> <prompt_file> <out_file> <workdir> [--codex-stdio] -- <codex command...>
@@ -53,8 +70,8 @@
 #       status. On claude it runs claude_run read-only (AI_ENGINE_READ_ONLY)
 #       with SUPPORT_ROOT_DIR / SUPPORT_INSTRUCTIONS_FILE pointing at the
 #       directory this file was sourced from, wrapped in codex_heartbeat.sh
-#       when present; exit 75 (Claude unavailable) runs the codex command,
-#       any other status is returned as is. Sets AI_ENGINE_LAST_SELECTED to
+#       when present; exit 75 (Claude out of capacity) runs the codex command,
+#       any other status (including 76, a refused fallback) is returned as is. Sets AI_ENGINE_LAST_SELECTED to
 #       `codex`, `claude` or `claude->codex`.
 #   ai_engine_stage_support <source_root> <dest_root>
 #       Copies the fixed list of engine support files (this file, the
@@ -78,6 +95,12 @@
 #                           holds each token (0600)
 #   ALLOW_WORKFLOW_EDITS    `true` lifts the .github/workflows deny rules (P5)
 #   AI_ENGINE_READ_ONLY     `true` runs a write role with the read profile
+#   AI_ENGINE_FALLBACK_POLICY  `capacity` (default) | `always` (D1 rollback)
+#   AI_ENGINE_FALLBACK_RECORDS_FILE  fallback records the job's report step
+#                           reads (default
+#                           ${RUNNER_TEMP}/ai-engine-fallback-records.tsv)
+#   CLAUDE_POOL_REASON, CLAUDE_POOL_REASON_FILE  the pool step's outcome
+#                           (file default ${RUNNER_TEMP}/claude-pool-reason)
 #   AI_ENGINE_INCLUDE_PATHS newline-separated trusted runtime paths the prompt
 #                           names, passed to the container as --include
 #                           (default empty; the security audit's oversized-
@@ -96,6 +119,10 @@ _AI_ENGINE_LOADED="true"
 
 _AI_ENGINE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _AI_ENGINE_EXIT_FALLBACK=75
+# Public exit code of a refused (non-capacity) fallback (plan item 3e, D1).
+_AI_ENGINE_EXIT_REFUSED=76
+# Set by ai_engine_fallback: 75 (run codex) or 76 (refused, fail closed).
+AI_ENGINE_FALLBACK_EXIT="${_AI_ENGINE_EXIT_FALLBACK}"
 readonly -a _AI_ENGINE_SANDBOX_ONLY_ROLES=(REVIEW_EDITOR REVIEW_CONSOLIDATOR RB_JUDGE CONFLICT_RESOLVER)
 
 _ai_engine_py()
@@ -150,11 +177,72 @@ ai_engine_cli_version()
 	_ai_engine_py config --key cli_version
 }
 
+ai_engine_fallback_policy()
+{
+	case "${AI_ENGINE_FALLBACK_POLICY:-capacity}" in
+		capacity) printf 'capacity\n' ;;
+		always) printf 'always\n' ;;
+		*)
+			# Fail closed: an unknown value never widens the codex fallback.
+			echo "::warning::AI engine: unknown AI_ENGINE_FALLBACK_POLICY; using capacity." >&2
+			printf 'capacity\n'
+			;;
+	esac
+}
+
+ai_engine_fallback_class()
+{
+	case "${1:-}" in
+		all_gated|all_usage_limit) printf 'capacity\n' ;;
+		*) printf 'non_capacity\n' ;;
+	esac
+}
+
+ai_engine_no_account_reason()
+{
+	local reason_file="${CLAUDE_POOL_REASON_FILE:-${RUNNER_TEMP:-/tmp}/claude-pool-reason}" token=""
+	if [ "${CLAUDE_POOL_REASON:-}" = "all_gated" ]; then
+		printf 'all_gated\n'
+		return 0
+	fi
+	if [ -f "${reason_file}" ] && [ ! -L "${reason_file}" ]; then
+		token="$(head -c 64 -- "${reason_file}" 2>/dev/null | tr -d '[:space:]')" || token=""
+	fi
+	if [ "${token}" = "all_gated" ]; then
+		printf 'all_gated\n'
+	else
+		printf 'no_credential\n'
+	fi
+}
+
 ai_engine_fallback()
 {
-	local role="${1:-unknown}" reason="${2:-unknown}"
+	local role="${1:-unknown}" reason="${2:-unknown}" demote="${3:-}" class policy action record_role records_file
 	reason="$(printf '%s' "${reason}" | tr -c 'A-Za-z0-9_.-' '_' | cut -c1-60)"
 	echo "AI_ENGINE_FALLBACK role=${role} reason=${reason}" >&2
+	class="$(ai_engine_fallback_class "${reason}")"
+	# The caller's class can only demote a capacity reason (D3), never promote.
+	[ "${demote}" = "non_capacity" ] && class="non_capacity"
+	policy="$(ai_engine_fallback_policy)"
+	if [ "${policy}" = "always" ] || [ "${class}" = "capacity" ]; then
+		action="codex"
+		AI_ENGINE_FALLBACK_EXIT="${_AI_ENGINE_EXIT_FALLBACK}"
+	else
+		action="refused"
+		AI_ENGINE_FALLBACK_EXIT="${_AI_ENGINE_EXIT_REFUSED}"
+	fi
+	# One record per fallback for the job's report step; fail open.
+	record_role="$(printf '%s' "${role}" | tr -c 'A-Z0-9_' '_' | cut -c1-40)"
+	[[ "${record_role}" =~ ^[A-Z] ]] || record_role="UNKNOWN"
+	records_file="${AI_ENGINE_FALLBACK_RECORDS_FILE:-${RUNNER_TEMP:-/tmp}/ai-engine-fallback-records.tsv}"
+	if [ ! -L "${records_file}" ]; then
+		printf 'v1\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%s)" "${record_role}" "${reason}" "${class}" "${action}" "${policy}" \
+			>> "${records_file}" 2>/dev/null || true
+	fi
+	if [ "${action}" = "refused" ]; then
+		echo "::error::AI_ENGINE_FALLBACK_REFUSED role=${role} reason=${reason}" >&2
+		return 0
+	fi
 	local marker="${RUNNER_TEMP:-/tmp}/ai-engine-fallback-notified"
 	[ -e "${marker}" ] && return 0
 	: > "${marker}" 2>/dev/null || return 0
@@ -230,7 +318,7 @@ claude_run()
 	for sandbox_only_role in "${_AI_ENGINE_SANDBOX_ONLY_ROLES[@]}"; do
 		if [ "${role}" = "${sandbox_only_role}" ]; then
 			ai_engine_fallback "${role}" host_run_forbidden
-			return "${_AI_ENGINE_EXIT_FALLBACK}"
+			return "${AI_ENGINE_FALLBACK_EXIT}"
 		fi
 	done
 	# The run changes into <workdir>; every path must survive that.
@@ -247,13 +335,13 @@ claude_run()
 	local isolated_exec="${_AI_ENGINE_DIR}/codex_isolated_exec.sh"
 	if [ ! -f "${isolated_exec}" ] || [ -L "${isolated_exec}" ]; then
 		ai_engine_fallback "${role}" support_missing
-		return "${_AI_ENGINE_EXIT_FALLBACK}"
+		return "${AI_ENGINE_FALLBACK_EXIT}"
 	fi
 
 	local resolved model effort profile hide_claude_md instructions guard_hook cli_version probe_model
 	if ! resolved="$(_ai_engine_py resolve --role "${role}" --model-hint "${AI_ENGINE_MODEL_HINT:-}" --effort-hint "${AI_ENGINE_EFFORT_HINT:-}")"; then
 		ai_engine_fallback "${role}" resolve_failed
-		return "${_AI_ENGINE_EXIT_FALLBACK}"
+		return "${AI_ENGINE_FALLBACK_EXIT}"
 	fi
 	model="$(_ai_engine_json_field "${resolved}" model)"
 	effort="$(_ai_engine_json_field "${resolved}" effort)"
@@ -266,19 +354,19 @@ claude_run()
 	hide_claude_md="$(_ai_engine_py config --key hide_claude_md 2>/dev/null || echo false)"
 	if ! instructions="$(_ai_engine_instructions_file)"; then
 		ai_engine_fallback "${role}" instructions_missing
-		return "${_AI_ENGINE_EXIT_FALLBACK}"
+		return "${AI_ENGINE_FALLBACK_EXIT}"
 	fi
 	if ! guard_hook="$(_ai_engine_py support-file --name guard-hook)" \
 		|| ! cli_version="$(ai_engine_cli_version)" \
 		|| ! probe_model="$(_ai_engine_py config --key probe_model)"; then
 		ai_engine_fallback "${role}" policy_unavailable
-		return "${_AI_ENGINE_EXIT_FALLBACK}"
+		return "${AI_ENGINE_FALLBACK_EXIT}"
 	fi
 	# The helper accepts only an absolute, regular file (it copies it into
 	# the container as /support/instructions.md).
 	if ! instructions="$(realpath -e -- "${instructions}")" || [ ! -f "${instructions}" ]; then
 		ai_engine_fallback "${role}" instructions_missing
-		return "${_AI_ENGINE_EXIT_FALLBACK}"
+		return "${AI_ENGINE_FALLBACK_EXIT}"
 	fi
 
 	local pool_dir
@@ -289,8 +377,8 @@ claude_run()
 		accounts+=("${name}")
 	done < <(ai_engine_accounts)
 	if [ "${#accounts[@]}" -eq 0 ]; then
-		ai_engine_fallback "${role}" no_credential
-		return "${_AI_ENGINE_EXIT_FALLBACK}"
+		ai_engine_fallback "${role}" "$(ai_engine_no_account_reason)"
+		return "${AI_ENGINE_FALLBACK_EXIT}"
 	fi
 
 	local run_dir
@@ -304,7 +392,7 @@ claude_run()
 	[ "${ALLOW_WORKFLOW_EDITS:-false}" = "true" ] && settings_args+=(--allow-workflow-edits)
 	if ! _ai_engine_py "${settings_args[@]}"; then
 		ai_engine_fallback "${role}" policy_unavailable
-		return "${_AI_ENGINE_EXIT_FALLBACK}"
+		return "${AI_ENGINE_FALLBACK_EXIT}"
 	fi
 	local tools mode isolation_mode
 	case "${profile}" in
@@ -339,9 +427,13 @@ claude_run()
 	fi
 
 	local rc=0
+	# Subshell exit codes 76 (isolation unavailable) and 78 (every account
+	# failed, not all on usage limits) are private sentinels mapped below;
+	# they are not the public exit 76 of a refused fallback.
 	(
 		trap 'exit 130' INT
 		trap 'exit 143' TERM
+		all_usage_limit=true
 		for name in "${accounts[@]}"; do
 			token_file="${pool_dir}/tokens/${name}"
 			session_args=()
@@ -380,6 +472,7 @@ claude_run()
 					;;
 				73)
 					echo "CLAUDE_POOL run role=${role} account=${name} outcome=crashed reason=relay_unavailable exit_code=${attempt_rc}" >&2
+					all_usage_limit=false
 					continue
 					;;
 			esac
@@ -393,7 +486,11 @@ claude_run()
 					ln -s -- "transcript-${name}.jsonl" "${run_dir}/successful-transcript.jsonl" || exit 1
 					exit 0
 					;;
-				usage_limit|auth_failed)
+				usage_limit)
+					continue
+					;;
+				auth_failed)
+					all_usage_limit=false
 					continue
 					;;
 				timeout)
@@ -406,15 +503,24 @@ claude_run()
 					;;
 			esac
 		done
-		exit "${_AI_ENGINE_EXIT_FALLBACK}"
+		# Every account at its usage limit is the capacity reason (D1).
+		[ "${all_usage_limit}" = "true" ] && exit "${_AI_ENGINE_EXIT_FALLBACK}"
+		exit 78
 	) || rc=$?
-	if [ "${rc}" -eq 76 ]; then
-		ai_engine_fallback "${role}" isolation_unavailable
-		return "${_AI_ENGINE_EXIT_FALLBACK}"
-	fi
-	if [ "${rc}" -eq "${_AI_ENGINE_EXIT_FALLBACK}" ]; then
-		ai_engine_fallback "${role}" all_accounts_failed
-	fi
+	case "${rc}" in
+		76)
+			ai_engine_fallback "${role}" isolation_unavailable
+			return "${AI_ENGINE_FALLBACK_EXIT}"
+			;;
+		75)
+			ai_engine_fallback "${role}" all_usage_limit
+			return "${AI_ENGINE_FALLBACK_EXIT}"
+			;;
+		78)
+			ai_engine_fallback "${role}" all_accounts_failed
+			return "${AI_ENGINE_FALLBACK_EXIT}"
+			;;
+	esac
 	return "${rc}"
 }
 

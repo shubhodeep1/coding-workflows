@@ -71,7 +71,18 @@ RELEASE_WORKFLOW_NAMES: tuple[str, ...] = (
 # go to check-failure triage instead.
 MAIN_CI_WORKFLOW_NAMES: tuple[str, ...] = ("CI",)
 
-SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure")
+SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure", "engine_fallback")
+
+# A refused AI engine fallback (plan item 3e, D1): Claude was unavailable for a
+# non-capacity reason and the role failed instead of running codex. The report
+# comes from scripts/ai_engine_fallback_report.sh; it carries no run reference
+# (no log is read) and is keyed on the role and reason only, so every repo and
+# run that hits the same refusal joins one heal issue.
+ENGINE_FALLBACK_FAILURE_REASON = "engine_fallback_refused"
+ENGINE_FALLBACK_CAPACITY_REASONS: tuple[str, ...] = ("all_gated", "all_usage_limit")
+_ENGINE_ROLE_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,40}$")
+_ENGINE_REASON_RE = re.compile(r"^[A-Za-z0-9_.-]{1,60}$")
+ENGINE_FALLBACK_MAX_RECORDS = 20
 REPORTABLE_CONCLUSIONS = ("failure", "timed_out")
 
 # `already-fixed` opens no issue, but only when check_heal_already_fixed_claim
@@ -932,6 +943,77 @@ def build_phase_failure_payload(
 	}
 
 
+def engine_fallback_fingerprint(role: str, reason: str) -> str:
+	"""One fingerprint per refused (role, reason), across runs, workflows and repos."""
+	return fingerprint("ai-engine-fallback", role, reason)
+
+
+def build_engine_fallback_payload(
+	*,
+	repo: str,
+	role: str,
+	reason: str,
+	workflow_name: str,
+	run_id: str,
+	wrapper_sha: str | None,
+	reporter_run_url: str | None,
+	records: Iterable[str],
+	now: datetime | None = None,
+) -> dict[str, Any]:
+	"""Build the dispatch payload for a refused (non-capacity) AI engine fallback.
+
+	``run_refs`` stays empty: the evidence is the fixed-vocabulary fallback
+	records of the reporting job, never a log, so no untrusted text reaches
+	the heal prompt and no run provenance is needed.
+	"""
+	now = now or _utc_now()
+	if not _ENGINE_ROLE_RE.match(role or ""):
+		raise ValueError("role must be an upper-case engine role")
+	if not _ENGINE_REASON_RE.match(reason or "") or reason in ENGINE_FALLBACK_CAPACITY_REASONS:
+		raise ValueError("reason must be a non-capacity fallback reason token")
+	kept: list[str] = []
+	for line in records:
+		fields = str(line).rstrip("\n").split("\t")
+		if len(fields) != 7 or fields[0] != "v1" or not fields[1].isdigit():
+			continue
+		if not (_ENGINE_ROLE_RE.match(fields[2]) and _ENGINE_REASON_RE.match(fields[3])):
+			continue
+		if fields[4] not in ("capacity", "non_capacity") or fields[5] not in ("codex", "refused") or fields[6] not in ("capacity", "always"):
+			continue
+		kept.append(" ".join(fields))
+		if len(kept) >= ENGINE_FALLBACK_MAX_RECORDS:
+			break
+	run_number = _positive_int(run_id)
+	evidence = "\n".join(["AI engine fallback records (v1 epoch role reason class action policy):", *kept])
+	return {
+		"schema_version": SCHEMA_VERSION,
+		"source_repo": repo,
+		"source_kind": "engine_fallback",
+		"issue_number": None,
+		"issue_title": f"AI engine fallback refused for {role} ({reason})",
+		"issue_url": None,
+		"label": None,
+		"labels": [],
+		"run_refs": [],
+		"wrapper_sha": wrapper_sha if is_valid_sha(wrapper_sha) else None,
+		"source_gen": None,
+		"source_root": None,
+		"issue_excerpt": "",
+		"comments_excerpt": "",
+		"workflow_name": single_line(workflow_name, 200),
+		"head_branch": None,
+		"head_sha": None,
+		"conclusion": "failure",
+		"failure_reason": ENGINE_FALLBACK_FAILURE_REASON,
+		"failure_evidence": sanitize_text(evidence, FAILURE_EVIDENCE_LIMIT),
+		"failure_streak": 1,
+		"engine_role": role,
+		"engine_reason": reason,
+		"reporter_run_url": sanitize_text(reporter_run_url, 300) or (f"https://github.com/{repo}/actions/runs/{run_number}" if run_number else None),
+		"reported_at": _iso(now),
+	}
+
+
 def _normalize_script_ref(value: Any) -> str | None:
 	"""``script_ref`` is the coding-workflows ref the run staged: a SHA or ``stable``."""
 	ref = str(value or "").strip()
@@ -1137,6 +1219,21 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		if failure_reason is None:
 			raise ValueError("failure_reason is missing or malformed for autofix_failure reports")
 		failure_streak = failure_streak or 1
+	elif kind == "engine_fallback":
+		engine_role = payload.get("engine_role")
+		engine_reason = payload.get("engine_reason")
+		if not (isinstance(engine_role, str) and _ENGINE_ROLE_RE.match(engine_role)):
+			raise ValueError("engine_role is missing or malformed for engine_fallback reports")
+		if not (isinstance(engine_reason, str) and _ENGINE_REASON_RE.match(engine_reason)):
+			raise ValueError("engine_reason is missing or malformed for engine_fallback reports")
+		if engine_reason in ENGINE_FALLBACK_CAPACITY_REASONS:
+			raise ValueError("engine_fallback reports cover non-capacity reasons only")
+		if payload.get("run_refs"):
+			raise ValueError("engine_fallback reports carry no run references")
+		issue_number = None
+		failure_reason = ENGINE_FALLBACK_FAILURE_REASON
+		failure_streak = 1
+		failure_fingerprint = None
 	elif kind == "phase_failure":
 		if issue_number is None:
 			raise ValueError("issue_number is required for phase_failure reports")
@@ -1209,12 +1306,14 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		"head_sha": head_sha,
 		"conclusion": single_line(payload.get("conclusion"), 40) or None,
 		"failure_reason": failure_reason,
-		"failure_evidence": sanitize_text(payload.get("failure_evidence"), FAILURE_EVIDENCE_LIMIT) if kind == "autofix_failure" else "",
+		"failure_evidence": sanitize_text(payload.get("failure_evidence"), FAILURE_EVIDENCE_LIMIT) if kind in ("autofix_failure", "engine_fallback") else "",
 		"failure_streak": failure_streak,
 		"failure_fingerprint": failure_fingerprint,
 		"reporter_run_url": sanitize_text(payload.get("reporter_run_url"), 300) or None,
 		"reported_at": sanitize_text(payload.get("reported_at"), 40) or _iso(_utc_now()),
 	}
+	if kind == "engine_fallback":
+		normalized.update({"engine_role": payload["engine_role"], "engine_reason": payload["engine_reason"]})
 	if kind == "autofix_failure":
 		normalized.update({
 			"base_branch": base_branch,
@@ -2037,7 +2136,7 @@ def parse_classification(markdown: str) -> str:
 	return "inconclusive"
 
 
-DETERMINISTIC_FAILURE_REASONS: tuple[str, ...] = ("identical_failure_cap",)
+DETERMINISTIC_FAILURE_REASONS: tuple[str, ...] = ("identical_failure_cap", ENGINE_FALLBACK_FAILURE_REASON)
 
 
 def is_deterministic_failure(payload: dict[str, Any], gen: int) -> bool:
@@ -2074,6 +2173,9 @@ def _context_lines(payload: dict[str, Any], *, run_summaries: list[dict[str, Any
 			lines.append(f"- **Consecutive failed {phase} runs on this issue:** {payload.get('failure_streak') or 1}")
 		else:
 			lines.append(f"- **Escalation label:** `{payload.get('label')}`")
+	if kind == "engine_fallback":
+		lines.append(f"- **Engine role:** `{payload.get('engine_role')}`")
+		lines.append(f"- **Refused fallback reason:** `{payload.get('engine_reason')}` (non-capacity; AI_ENGINE_FALLBACK_POLICY=capacity)")
 	if payload.get("workflow_name"):
 		lines.append(f"- **Failed workflow:** `{neutralize_untrusted_routing(single_line(payload['workflow_name']))[0]}` (conclusion: `{payload.get('conclusion') or 'unknown'}`)")
 	if payload.get("head_branch"):
@@ -2102,6 +2204,8 @@ def compose_issue_title(payload: dict[str, Any], *, workflow_name: str | None) -
 		target = f"{payload['source_repo']}#{payload.get('issue_number')}"
 		streak = payload.get("failure_streak") or 1
 		return f"Workflow heal: {name or 'review/autofix'} failed {streak}x for {target} ({payload.get('failure_reason')})"
+	if payload.get("source_kind") == "engine_fallback":
+		return f"Workflow heal: AI engine fallback refused for {payload.get('engine_role')} ({payload.get('engine_reason')})"
 	if payload.get("source_kind") == "phase_failure":
 		target = f"{payload['source_repo']}#{payload.get('issue_number')}"
 		streak = payload.get("failure_streak") or 1
@@ -2543,6 +2647,33 @@ def _cmd_build_phase_payload(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _cmd_build_engine_fallback_payload(args: argparse.Namespace) -> int:
+	try:
+		records = Path(args.records_file).read_text(encoding="utf-8", errors="replace").splitlines() if args.records_file else []
+	except OSError:
+		records = []
+	payload = build_engine_fallback_payload(
+		repo=args.repo,
+		role=args.role,
+		reason=args.reason,
+		workflow_name=args.workflow_name,
+		run_id=args.run_id,
+		wrapper_sha=args.wrapper_sha or None,
+		reporter_run_url=args.reporter_run_url or None,
+		records=[line for line in records if f"\t{args.role}\t{args.reason}\t" in line],
+	)
+	validate_payload(payload)
+	_write_json(payload)
+	return 0
+
+
+def _cmd_engine_fallback_fingerprint(args: argparse.Namespace) -> int:
+	if not _ENGINE_ROLE_RE.match(args.role) or not _ENGINE_REASON_RE.match(args.reason):
+		raise ValueError("invalid engine role or reason")
+	print(engine_fallback_fingerprint(args.role, args.reason))
+	return 0
+
+
 def _read_path_list(path: str | None) -> list[str]:
 	"""One repo-relative path per line; a missing or unreadable file is an empty list."""
 	if not path:
@@ -2894,6 +3025,22 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--reporter-run-url", default="")
 	p.add_argument("--comment-author", required=True)
 	p.set_defaults(func=_cmd_build_phase_payload)
+
+	p = sub.add_parser("build-engine-fallback-payload", help="Build the payload for a refused (non-capacity) AI engine fallback")
+	p.add_argument("--repo", required=True)
+	p.add_argument("--role", required=True)
+	p.add_argument("--reason", required=True)
+	p.add_argument("--workflow-name", required=True)
+	p.add_argument("--run-id", default="")
+	p.add_argument("--wrapper-sha", default="")
+	p.add_argument("--reporter-run-url", default="")
+	p.add_argument("--records-file", default="")
+	p.set_defaults(func=_cmd_build_engine_fallback_payload)
+
+	p = sub.add_parser("engine-fallback-fingerprint", help="Print the dedup fingerprint of a refused AI engine fallback (role, reason)")
+	p.add_argument("--role", required=True)
+	p.add_argument("--reason", required=True)
+	p.set_defaults(func=_cmd_engine_fallback_fingerprint)
 
 	p = sub.add_parser("classify-crash-ownership", help="Print pr / base / none: who changed the file a review/autofix run crashed in")
 	p.add_argument("--payload-json", required=True)

@@ -243,6 +243,11 @@ _poller_rb_judge_sandbox_attempt()
     WORKSPACE_PATH="" GITHUB_WORKSPACE="${judge_workspace_override}" SUPPORT_SCRIPTS_DIR="${rb_support_dir}" REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" \
       bash "${rb_support_dir}/review_untrusted_sandbox.sh" run "${prompt_file}" "${output_file}" \
         "${POLLER_JUDGE_MODEL_HINT:-${MODEL_EDITOR}}" "${rb_effort}" "${rb_config}" "${rb_engine}" "${judge_role}" "${rb_access}" 2>>"${log_file}" || judge_rc=$?
+    # Raw sandbox exit 76 is a refused (non-capacity) Claude fallback (plan
+    # item 3e, D1); the rejected-transfer branch below reuses 76 internally,
+    # so keep the raw outcome apart and map it to the isolation deferral (77).
+    local rb_engine_refused=false rb_transfer_rejected=false
+    [ "${judge_rc}" -ne 76 ] || rb_engine_refused=true
     SUPPORT_SCRIPTS_DIR="${rb_support_dir}" REVIEW_SANDBOX_ROOT="${rb_sandbox_root}" \
       bash "${rb_support_dir}/review_untrusted_sandbox.sh" cleanup 2>>"${log_file}" || rb_cleanup_rc=$?
     if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ] || [ "${rb_cleanup_rc}" -ne 0 ]; then
@@ -271,6 +276,7 @@ _poller_rb_judge_sandbox_attempt()
         fi
       fi
       judge_rc=76
+      rb_transfer_rejected=true
     fi
     if [ "${rb_cleanup_rc}" -ne 0 ]; then
       echo '::error::Review-blocked sandbox cleanup failed; stopping the poller before another issue uses this workspace.' >&2
@@ -284,6 +290,10 @@ _poller_rb_judge_sandbox_attempt()
     [ "${judge_rc}" -eq 0 ] || : > "${output_file}"
     if [ "${judge_rc}" -eq 2 ]; then
       printf '%s\n' sandbox_helper_outdated > "${judge_reason_file}"
+      return 77
+    fi
+    if [ "${rb_engine_refused}" = true ] && [ "${rb_transfer_rejected}" = false ]; then
+      printf '%s\n' engine_fallback_refused > "${judge_reason_file}"
       return 77
     fi
     return "${judge_rc}"

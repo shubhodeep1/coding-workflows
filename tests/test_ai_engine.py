@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import shutil
 import stat
@@ -242,7 +243,7 @@ def test_no_credential_falls_back_with_one_telegram_note(sandbox: dict) -> None:
 		f"rc2=0; claude_run IMPLEMENT {shlex.quote(str(sandbox['prompt']))} out2 {shlex.quote(str(sandbox['work']))} || rc2=$?; "
 		'echo "RC=${rc1}${rc2}"'
 	)
-	result = _bash(sandbox, script)
+	result = _bash(sandbox, script, AI_ENGINE_FALLBACK_POLICY="always")
 	assert "RC=7575" in result.stdout, result.stderr
 	assert "AI_ENGINE_FALLBACK role=PLAN reason=no_credential" in result.stderr
 	assert "AI_ENGINE_FALLBACK role=IMPLEMENT reason=no_credential" in result.stderr
@@ -275,7 +276,7 @@ def test_missing_isolation_helper_falls_back(sandbox: dict, symlink: bool) -> No
 	helper.unlink()
 	if symlink:
 		helper.symlink_to(REPO_ROOT / "scripts" / "claude_engine.py")
-	result = _claude_run(sandbox, "IMPLEMENT")
+	result = _claude_run(sandbox, "IMPLEMENT", AI_ENGINE_FALLBACK_POLICY="always")
 	assert _rc(result) == 75
 	assert "AI_ENGINE_FALLBACK role=IMPLEMENT reason=support_missing" in result.stderr
 	assert _calls(sandbox) == []
@@ -286,7 +287,7 @@ def test_isolation_unavailable_falls_back(sandbox: dict) -> None:
 	# to codex once instead of trying every account (answer Q20 A).
 	_accounts(sandbox, A="TOK_OK", B="TOK_OK")
 	install_fake_docker(sandbox["bin"], sandbox["bin"].parent / "fake-docker.jsonl", {"FAKE_DOCKER_BUILD_FAIL": "1", "FAKE_CLAUDE_LOG": sandbox["env"]["FAKE_CLAUDE_LOG"]})
-	result = _claude_run(sandbox)
+	result = _claude_run(sandbox, AI_ENGINE_FALLBACK_POLICY="always")
 	assert _rc(result) == 75
 	assert "CODEX_ISOLATION unavailable engine=claude reason=image_build_failed" in result.stderr
 	assert "CLAUDE_POOL run role=PLAN account=A outcome=unavailable reason=isolation_unavailable exit_code=75" in result.stderr
@@ -330,7 +331,7 @@ def test_usage_limit_and_rejected_token_move_to_the_next_account(sandbox: dict) 
 
 def test_all_accounts_failing_falls_back(sandbox: dict) -> None:
 	_accounts(sandbox, A="TOK_LIMIT", B="TOK_AUTH")
-	result = _claude_run(sandbox)
+	result = _claude_run(sandbox, AI_ENGINE_FALLBACK_POLICY="always")
 	assert _rc(result) == 75
 	assert "AI_ENGINE_FALLBACK role=PLAN reason=all_accounts_failed" in result.stderr
 
@@ -436,7 +437,7 @@ def test_read_only_switch_narrows_a_write_role(sandbox: dict, value: str, tools:
 @pytest.mark.parametrize("role", ["REVIEW_EDITOR", "REVIEW_CONSOLIDATOR", "RB_JUDGE", "CONFLICT_RESOLVER"])
 def test_review_roles_cannot_run_host_claude(sandbox: dict, role: str) -> None:
 	_accounts(sandbox, A="TOK_OK")
-	result = _claude_run(sandbox, role)
+	result = _claude_run(sandbox, role, AI_ENGINE_FALLBACK_POLICY="always")
 	assert _rc(result) == 75, result.stderr
 	assert f"AI_ENGINE_FALLBACK role={role} reason=host_run_forbidden" in result.stderr
 	assert _calls(sandbox) == []
@@ -768,7 +769,7 @@ def test_selected_claude_unavailable_runs_codex(sandbox: dict) -> None:
 	assert (sandbox["tmp"] / "selected-codex.txt").read_text(encoding="utf-8") == "codex a b c\n"
 
 
-@pytest.mark.parametrize("claude_rc", [1, 124])
+@pytest.mark.parametrize("claude_rc", [1, 76, 124])
 def test_selected_claude_failure_is_returned_without_codex(sandbox: dict, claude_rc: int) -> None:
 	result = _selected(sandbox, claude_rc, AI_ENGINE_PLAN="claude")
 	assert _rc(result) == claude_rc
@@ -835,3 +836,310 @@ def test_stage_support_refuses_a_missing_file(sandbox: dict) -> None:
 	assert _rc(result) == 1
 	assert "reason=missing file=scripts/codex_heartbeat.sh" in result.stderr
 	assert not dest.exists()
+
+
+# --- fallback policy (plan item 3e, D1) ------------------------------------------
+
+CAPACITY_REASONS = ("all_gated", "all_usage_limit")
+NON_CAPACITY_REASONS = (
+	"host_run_forbidden", "support_missing", "resolve_failed", "instructions_missing", "policy_unavailable",
+	"no_credential", "isolation_unavailable", "all_accounts_failed", "image_build_failed", "sandbox_not_prepared",
+)
+POLICIES = (None, "capacity", "always", "bogus")
+
+
+def _records(sandbox: dict) -> list[list[str]]:
+	path = sandbox["runner_temp"] / "ai-engine-fallback-records.tsv"
+	if not path.exists():
+		return []
+	return [line.split("\t") for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def _policy_env(policy: str | None) -> dict:
+	return {} if policy is None else {"AI_ENGINE_FALLBACK_POLICY": policy}
+
+
+def _expected_exit(reason: str, policy: str | None) -> int:
+	return 75 if reason in CAPACITY_REASONS or policy == "always" else 76
+
+
+@pytest.mark.parametrize("policy", POLICIES)
+@pytest.mark.parametrize("reason", CAPACITY_REASONS + NON_CAPACITY_REASONS)
+def test_fallback_policy_sets_the_exit_code_for_every_reason(sandbox: dict, reason: str, policy: str | None) -> None:
+	notes = sandbox["tmp"] / "tg.txt"
+	script = (
+		f'tg_send_msg() {{ printf "%s|%s\\n" "$1" "$2" >> {shlex.quote(str(notes))}; }}; '
+		f'ai_engine_fallback PLAN {reason}; echo "RC=${{AI_ENGINE_FALLBACK_EXIT}}"'
+	)
+	result = _bash(sandbox, script, **_policy_env(policy))
+	expected = _expected_exit(reason, policy)
+	assert _rc(result) == expected, result.stderr
+	assert f"AI_ENGINE_FALLBACK role=PLAN reason={reason}" in result.stderr
+	refused_line = f"::error::AI_ENGINE_FALLBACK_REFUSED role=PLAN reason={reason}"
+	assert (refused_line in result.stderr) is (expected == 76)
+	effective_policy = "always" if policy == "always" else "capacity"
+	klass = "capacity" if reason in CAPACITY_REASONS else "non_capacity"
+	action = "codex" if expected == 75 else "refused"
+	[record] = _records(sandbox)
+	assert record[0] == "v1" and record[1].isdigit()
+	assert record[2:] == ["PLAN", reason, klass, action, effective_policy]
+	# Only a codex fallback sends ai_engine.sh's Telegram note; a refusal is
+	# reported by the job's report step.
+	assert notes.exists() is (expected == 75)
+	if policy == "bogus":
+		assert "unknown AI_ENGINE_FALLBACK_POLICY" in result.stderr
+
+
+def test_fallback_class_argument_can_only_demote(sandbox: dict) -> None:
+	result = _bash(sandbox, 'ai_engine_fallback PLAN no_credential capacity; echo "RC=${AI_ENGINE_FALLBACK_EXIT}"')
+	assert _rc(result) == 76
+	result = _bash(sandbox, 'ai_engine_fallback PLAN all_gated non_capacity; echo "RC=${AI_ENGINE_FALLBACK_EXIT}"')
+	assert _rc(result) == 76
+	assert _records(sandbox)[-1][4:6] == ["non_capacity", "refused"]
+
+
+def test_fallback_records_never_follow_a_symlink(sandbox: dict) -> None:
+	target = sandbox["tmp"] / "elsewhere.txt"
+	(sandbox["runner_temp"] / "ai-engine-fallback-records.tsv").symlink_to(target)
+	result = _bash(sandbox, 'ai_engine_fallback PLAN no_credential; echo "RC=${AI_ENGINE_FALLBACK_EXIT}"')
+	assert _rc(result) == 76
+	assert not target.exists()
+
+
+@pytest.mark.parametrize("policy", POLICIES)
+def test_claude_run_no_credential_policy(sandbox: dict, policy: str | None) -> None:
+	result = _claude_run(sandbox, **_policy_env(policy))
+	assert _rc(result) == _expected_exit("no_credential", policy), result.stderr
+	assert "AI_ENGINE_FALLBACK role=PLAN reason=no_credential" in result.stderr
+	assert _calls(sandbox) == []
+
+
+@pytest.mark.parametrize("policy", POLICIES)
+@pytest.mark.parametrize("source", ["env", "file"])
+def test_claude_run_all_gated_pool_is_capacity(sandbox: dict, policy: str | None, source: str) -> None:
+	extra = _policy_env(policy)
+	if source == "env":
+		extra["CLAUDE_POOL_REASON"] = "all_gated"
+	else:
+		(sandbox["runner_temp"] / "claude-pool-reason").write_text("all_gated\n", encoding="utf-8")
+	result = _claude_run(sandbox, **extra)
+	assert _rc(result) == 75, result.stderr
+	assert "AI_ENGINE_FALLBACK role=PLAN reason=all_gated" in result.stderr
+	assert "AI_ENGINE_FALLBACK_REFUSED" not in result.stderr
+
+
+def test_claude_run_stale_or_symlinked_pool_reason_is_not_capacity(sandbox: dict) -> None:
+	reason_file = sandbox["runner_temp"] / "claude-pool-reason"
+	reason_file.write_text("selected\n", encoding="utf-8")
+	assert _rc(_claude_run(sandbox)) == 76
+	reason_file.unlink()
+	gated = sandbox["tmp"] / "gated.txt"
+	gated.write_text("all_gated\n", encoding="utf-8")
+	reason_file.symlink_to(gated)
+	result = _claude_run(sandbox)
+	assert _rc(result) == 76
+	assert "reason=no_credential" in result.stderr
+
+
+@pytest.mark.parametrize("policy", POLICIES)
+def test_claude_run_every_account_at_usage_limit_is_capacity(sandbox: dict, policy: str | None) -> None:
+	_accounts(sandbox, A="TOK_LIMIT_a", B="TOK_LIMIT_b")
+	result = _claude_run(sandbox, **_policy_env(policy))
+	assert _rc(result) == 75, result.stderr
+	assert "AI_ENGINE_FALLBACK role=PLAN reason=all_usage_limit" in result.stderr
+	assert "AI_ENGINE_FALLBACK_REFUSED" not in result.stderr
+
+
+@pytest.mark.parametrize("policy", POLICIES)
+@pytest.mark.parametrize("tokens", [{"A": "TOK_LIMIT", "B": "TOK_AUTH"}, {"A": "TOK_AUTH"}, {"A": "TOK_RELAY"}])
+def test_claude_run_mixed_account_failures_are_not_capacity(sandbox: dict, policy: str | None, tokens: dict) -> None:
+	_accounts(sandbox, **tokens)
+	if "A" in tokens and tokens["A"] == "TOK_RELAY":
+		(sandbox["pool"] / "tokens" / "A").chmod(0o644)  # The relay refuses it (exit 73).
+	result = _claude_run(sandbox, **_policy_env(policy))
+	assert _rc(result) == _expected_exit("all_accounts_failed", policy), result.stderr
+	assert "AI_ENGINE_FALLBACK role=PLAN reason=all_accounts_failed" in result.stderr
+
+
+@pytest.mark.parametrize("policy", POLICIES)
+def test_claude_run_isolation_unavailable_policy(sandbox: dict, policy: str | None) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	install_fake_docker(sandbox["bin"], sandbox["bin"].parent / "fake-docker.jsonl", {"FAKE_DOCKER_BUILD_FAIL": "1", "FAKE_CLAUDE_LOG": sandbox["env"]["FAKE_CLAUDE_LOG"]})
+	result = _claude_run(sandbox, **_policy_env(policy))
+	assert _rc(result) == _expected_exit("isolation_unavailable", policy), result.stderr
+	assert "AI_ENGINE_FALLBACK role=PLAN reason=isolation_unavailable" in result.stderr
+
+
+@pytest.mark.parametrize("policy", POLICIES)
+@pytest.mark.parametrize("role", ["REVIEW_EDITOR", "RB_JUDGE"])
+def test_claude_run_host_run_forbidden_policy(sandbox: dict, policy: str | None, role: str) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	result = _claude_run(sandbox, role, **_policy_env(policy))
+	assert _rc(result) == _expected_exit("host_run_forbidden", policy), result.stderr
+	assert _calls(sandbox) == []
+
+
+@pytest.mark.parametrize("policy", POLICIES)
+def test_claude_run_support_missing_policy(sandbox: dict, policy: str | None) -> None:
+	_accounts(sandbox, A="TOK_OK")
+	(sandbox["ai_engine"].parent / "codex_isolated_exec.sh").unlink()
+	result = _claude_run(sandbox, "IMPLEMENT", **_policy_env(policy))
+	assert _rc(result) == _expected_exit("support_missing", policy), result.stderr
+
+
+def test_selected_refused_fallback_never_runs_codex(sandbox: dict) -> None:
+	# claude_run_selected runs codex only for 75; a refused fallback (76) is
+	# returned as is (plan item 3e, D1).
+	result = _selected(sandbox, 76, AI_ENGINE_PLAN="claude")
+	assert _rc(result) == 76
+	assert _selected_value(result) == "claude"
+	assert not (sandbox["tmp"] / "selected-codex.txt").exists()
+
+
+@pytest.mark.parametrize("path", ["scripts/clarify_isolated_run.sh", "scripts/review_untrusted_sandbox.sh"])
+def test_sandbox_claude_branches_exit_with_the_policy_code(path: str) -> None:
+	text = (REPO_ROOT / path).read_text(encoding="utf-8")
+	assert not re.search(r"ai_engine_fallback [^;\n]*; exit 75", text)
+	assert not re.search(r"ai_engine_fallback [^\n]*\n\s*exit 75\b", text)
+	assert 'exit "${AI_ENGINE_FALLBACK_EXIT}"' in text
+	assert "ai_engine_no_account_reason" in text
+	assert "all_usage_limit" in text
+	assert "::error::AI_ENGINE_FALLBACK_REFUSED role=" in text
+
+
+def test_pool_token_step_writes_the_reason_file() -> None:
+	text = (REPO_ROOT / "scripts" / "claude_pool_token.sh").read_text(encoding="utf-8")
+	assert 'CLAUDE_POOL_REASON_FILE:-${RUNNER_TEMP:-/tmp}/claude-pool-reason' in text
+
+
+def test_poller_maps_a_refused_sandbox_fallback_to_the_isolation_deferral() -> None:
+	text = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	start = text.index("_poller_rb_judge_sandbox_attempt()")
+	body = text[start:text.index("\n}\n", start)]
+	assert '[ "${judge_rc}" -ne 76 ] || rb_engine_refused=true' in body
+	assert "rb_transfer_rejected=true" in body
+	assert "printf '%s\\n' engine_fallback_refused > \"${judge_reason_file}\"" in body
+
+
+REPORT_WORKFLOWS = (
+	"clarify.yml", "plan.yml", "orchestrate.yml", "orchestrate_clarify_respond.yml",
+	"orchestrate_poll.yml", "security-audit.yml", "validate.yml",
+)
+
+
+@pytest.mark.parametrize("name", REPORT_WORKFLOWS)
+def test_phase_workflows_report_refused_fallbacks_from_trusted_support(name: str) -> None:
+	text = (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+	assert "AI_ENGINE_FALLBACK_POLICY: ${{ vars.AI_ENGINE_FALLBACK_POLICY || 'capacity' }}" in text
+	start = text.index("      - name: Report refused AI engine fallbacks\n")
+	step = text[start:]
+	assert "        if: always()\n" in step[:200]
+	assert "continue-on-error: true" in step[:300]
+	assert '/scripts/ai_engine_fallback_report.sh"' in step
+	assert '[ ! -L "${fallback_report}" ]' in step
+	# Never the PR / caller checkout's own scripts/ copy.
+	assert 'bash scripts/ai_engine_fallback_report.sh' not in step
+
+
+@pytest.mark.parametrize("name", ["implement.yml", "review_autofix.yml"])
+def test_implement_and_review_workflows_have_no_report_step(name: str) -> None:
+	text = (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+	assert "ai_engine_fallback_report.sh" not in text
+
+
+def _fake_gh(bin_dir: Path, log: Path, fail: bool = False) -> None:
+	gh = bin_dir / "gh"
+	gh.write_text(
+		"#!/usr/bin/env bash\n"
+		f'printf "%s\\n" "$*" >> {shlex.quote(str(log))}\n'
+		'for ((i=1;i<=$#;i++)); do if [ "${!i}" = "--input" ]; then j=$((i+1)); cat "${!j}" >> '
+		f'{shlex.quote(str(log))}.bodies; echo >> {shlex.quote(str(log))}.bodies; fi; done\n'
+		+ ("exit 1\n" if fail else "exit 0\n"),
+		encoding="utf-8",
+	)
+	gh.chmod(0o755)
+
+
+def _run_report(tmp_path: Path, records: str, **extra: str) -> tuple[subprocess.CompletedProcess, Path]:
+	bin_dir = tmp_path / "rbin"
+	bin_dir.mkdir(exist_ok=True)
+	log = tmp_path / "gh.log"
+	_fake_gh(bin_dir, log, fail=extra.pop("FAKE_GH_FAIL", "") == "1")
+	runner_temp = tmp_path / "rt-report"
+	runner_temp.mkdir(exist_ok=True)
+	(runner_temp / "ai-engine-fallback-records.tsv").write_text(records, encoding="utf-8")
+	env = {
+		"PATH": f"{bin_dir}:{os.environ['PATH']}",
+		"HOME": str(tmp_path),
+		"RUNNER_TEMP": str(runner_temp),
+		"GITHUB_REPOSITORY": "owner/consumer",
+		"GITHUB_RUN_ID": "42",
+		"REPORT_WORKFLOW_NAME": "Plan",
+		"PYTHONDONTWRITEBYTECODE": "1",
+		"GITHUB_STEP_SUMMARY": str(tmp_path / "summary.md"),
+		**extra,
+	}
+	result = subprocess.run(
+		["bash", str(REPO_ROOT / "scripts" / "ai_engine_fallback_report.sh")],
+		capture_output=True, text=True, env=env, cwd=tmp_path, timeout=120, check=False,
+	)
+	return result, log
+
+
+def _record(role: str, reason: str, klass: str, action: str, policy: str = "capacity") -> str:
+	return "\t".join(["v1", "1700000000", role, reason, klass, action, policy]) + "\n"
+
+
+def test_report_dispatches_once_per_refused_role_and_reason(tmp_path: Path) -> None:
+	records = (
+		_record("PLAN", "no_credential", "non_capacity", "refused")
+		+ _record("PLAN", "no_credential", "non_capacity", "refused")
+		+ _record("CLARIFY", "isolation_unavailable", "non_capacity", "refused")
+		+ _record("PLAN", "all_gated", "capacity", "codex")
+		+ "v1\tbad\tPLAN\tno_credential\tnon_capacity\trefused\tcapacity\n"
+		+ "v1\t1700000000\tplan\tx\tnon_capacity\trefused\tcapacity\n"
+		+ "garbage line\n"
+	)
+	result, log = _run_report(tmp_path, records)
+	assert result.returncode == 0, result.stderr
+	calls = log.read_text(encoding="utf-8").splitlines()
+	assert len(calls) == 2
+	assert all("repos/shubhodeep1/coding-workflows/dispatches" in call for call in calls)
+	bodies = [json.loads(line) for line in Path(f"{log}.bodies").read_text(encoding="utf-8").splitlines() if line.strip()]
+	reports = [body["client_payload"]["report"] for body in bodies]
+	assert {(r["engine_role"], r["engine_reason"]) for r in reports} == {("PLAN", "no_credential"), ("CLARIFY", "isolation_unavailable")}
+	assert all(body["event_type"] == "workflow-failure-heal" for body in bodies)
+	assert all(r["source_kind"] == "engine_fallback" and r["run_refs"] == [] for r in reports)
+	assert "AI_ENGINE_FALLBACK_REPORT outcome=reported pairs=2 dispatched=2" in result.stdout
+	assert "PLAN" in (tmp_path / "summary.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+	("records", "extra", "expected"),
+	[
+		(_record("PLAN", "all_gated", "capacity", "codex"), {}, "outcome=none"),
+		("", {}, "outcome=none"),
+		(_record("PLAN", "no_credential", "non_capacity", "refused"), {"WORKFLOW_HEAL_ENABLED": "false"}, "skip_dispatch reason=disabled"),
+		(_record("PLAN", "no_credential", "non_capacity", "refused"), {"FAKE_GH_FAIL": "1"}, "skip_dispatch reason=dispatch_denied"),
+	],
+)
+def test_report_skips_and_never_fails(tmp_path: Path, records: str, extra: dict, expected: str) -> None:
+	result, log = _run_report(tmp_path, records, **extra)
+	assert result.returncode == 0, result.stderr
+	assert expected in result.stdout
+	if expected == "outcome=none" or "disabled" in expected:
+		assert not log.exists()
+
+
+def test_report_refuses_symlinked_or_missing_records(tmp_path: Path) -> None:
+	_run_report(tmp_path, "")
+	records = tmp_path / "rt-report" / "ai-engine-fallback-records.tsv"
+	records.unlink()
+	env = {"PATH": os.environ["PATH"], "RUNNER_TEMP": str(tmp_path / "rt-report"), "PYTHONDONTWRITEBYTECODE": "1"}
+	missing = subprocess.run(["bash", str(REPO_ROOT / "scripts" / "ai_engine_fallback_report.sh")], capture_output=True, text=True, env=env, check=False)
+	assert missing.returncode == 0 and "skip reason=no_records" in missing.stdout
+	target = tmp_path / "target.tsv"
+	target.write_text(_record("PLAN", "no_credential", "non_capacity", "refused"), encoding="utf-8")
+	records.symlink_to(target)
+	linked = subprocess.run(["bash", str(REPO_ROOT / "scripts" / "ai_engine_fallback_report.sh")], capture_output=True, text=True, env=env, check=False)
+	assert linked.returncode == 0 and "skip reason=records_symlink" in linked.stdout

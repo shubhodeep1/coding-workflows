@@ -956,6 +956,33 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   `tests/test_codex_agent_isolation_contract.py` fails when `claude -p` is
   started outside a container entrypoint; the token step's fixed-prompt usage
   probe (`scripts/claude_pool_token.sh`) is the one listed exception.
+- **Fallback policy (plan item 3e, D1).** `ai_engine_fallback` records every
+  fallback (one `v1` TSV line in `AI_ENGINE_FALLBACK_RECORDS_FILE`, default
+  `${RUNNER_TEMP}/ai-engine-fallback-records.tsv`) and sets
+  `AI_ENGINE_FALLBACK_EXIT`. Under `AI_ENGINE_FALLBACK_POLICY=capacity` (the
+  default, also for unknown values) only the capacity reasons `all_gated`
+  (the pool step gated every account: `CLAUDE_POOL_REASON` or the
+  `CLAUDE_POOL_REASON_FILE` token `claude_pool_token.sh` writes, default
+  `${RUNNER_TEMP}/claude-pool-reason`) and `all_usage_limit` (every tried
+  account hit its usage limit) keep exit `75` and the codex/OpenCode path;
+  every other reason (including the helper's isolation exit 75 above, now
+  `isolation_unavailable`, and `all_accounts_failed`, which now means a mixed
+  or rejected-token failure) makes `claude_run`, the Claude branches of
+  `clarify_isolated_run.sh` and `review_untrusted_sandbox.sh` exit **`76`**
+  and log `::error::AI_ENGINE_FALLBACK_REFUSED role= reason=`. Exit 76 is a
+  failure everywhere: no caller runs codex for it, `security_audit.sh` fails
+  the audit, and the poller's `_poller_rb_judge_sandbox_attempt` maps a raw
+  sandbox 76 to the isolation deferral (77, reason `engine_fallback_refused`;
+  its own rejected-transfer 76 is kept apart). `AI_ENGINE_FALLBACK_POLICY=always`
+  restores exit 75 for every reason (rollback). The last step of each
+  Claude-calling job in clarify, plan, orchestrate, orchestrate_clarify_respond,
+  orchestrate_poll, security-audit and validate runs
+  `scripts/ai_engine_fallback_report.sh` from trusted support: one
+  `engine_fallback` heal dispatch per refused (role, reason), fingerprinted
+  on role and reason only (`workflow_failure_heal.py
+  engine-fallback-fingerprint`, deterministic reason `engine_fallback_refused`,
+  no run references or log reads), plus one Telegram WARNING. Implement and
+  review report refusals through their existing heal reporters.
 - **Merged-PR guard.** Both `.claude/hooks/pr_merge_status_guard.py` and its
   `workflow-templates/` copy check origin PR history only for pushes to origin.
   An explicit `--repo` or positional remote naming a different or unverified
@@ -1810,7 +1837,9 @@ and shipped:
 - `RETARGET_MERGED_BASE` (`scripts/retarget_merged_base.sh`: `mode=resolve|pr repo= pr= from= to= merged_pr= outcome=retargeted|unchanged reason=`)
 - `STANDALONE_AUTO_DECIDE` (`clarify.yml` "Standalone auto-decide": `issue= outcome=answered|skip|failed reason= decisions=`, `reason=delegated_to_clarify_respond` when the worker answers; `orchestrate_clarify_respond.yml` "Standalone RECOMMENDED fallback" and "Record standalone auto-decisions": `issue= outcome=fallback|skip|answered reason=worker_failed|worker_failed_undecided decider= decisions= ad_total= setup_total=`)
 - `AI_ENGINE_SELECTED` (`scripts/ai_engine.sh`: `role= engine= model= effort= source=`)
-- `AI_ENGINE_FALLBACK` (`scripts/ai_engine.sh`: `role= reason=`; the run uses codex)
+- `AI_ENGINE_FALLBACK` (`scripts/ai_engine.sh`: `role= reason=`; the run uses codex unless `AI_ENGINE_FALLBACK_REFUSED` follows)
+- `AI_ENGINE_FALLBACK_REFUSED` (`scripts/ai_engine.sh` and the sandbox Claude branches, as `::error::AI_ENGINE_FALLBACK_REFUSED role= reason=`: a non-capacity fallback under `AI_ENGINE_FALLBACK_POLICY=capacity`; exit 76, codex does not run)
+- `AI_ENGINE_FALLBACK_REPORT` (`scripts/ai_engine_fallback_report.sh`: `outcome=none|reported pairs= dispatched= records= codex_fallbacks=`, `dispatched role= fallback_reason=`, `skip_dispatch reason=`, `skip reason=no_records|records_symlink|records_oversized`)
 - `CLAUDE_POOL` (`scripts/ai_engine.sh` and the sandbox Claude branches: `run role= account= outcome= reason= exit_code=`, `account_skipped account= reason=`)
 - `AI_ENGINE_PROJECT_LABEL` (`orchestrate.yml` "Ensure orchestrator labels exist": `label=`, `none` when unset; the label the tracking and wave-1 issues get)
 - `AI_ENGINE_PR_LABEL` (`implement.yml` "Create Pull Request": `issue= label=`; the engine label copied from the issue to its PR)
@@ -2041,6 +2070,8 @@ LOG_PREFIX.name=RETARGET_MERGED_BASE
 LOG_PREFIX.name=STANDALONE_AUTO_DECIDE
 LOG_PREFIX.name=AI_ENGINE_SELECTED
 LOG_PREFIX.name=AI_ENGINE_FALLBACK
+LOG_PREFIX.name=AI_ENGINE_FALLBACK_REFUSED
+LOG_PREFIX.name=AI_ENGINE_FALLBACK_REPORT
 LOG_PREFIX.name=CLAUDE_POOL
 LOG_PREFIX.name=AI_ENGINE_PROJECT_LABEL
 LOG_PREFIX.name=AI_ENGINE_PR_LABEL
