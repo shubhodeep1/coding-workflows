@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan for the smoke canary update\n\nPlanning ref: `main` at `240842fa6ddc9a6c18cd7852f55814fa0a099103`. The issue has no integration-branch metadata, so the checked-out ref cannot mismatch one.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue names one file and its exact final content. The file already exists with three lines. Only the `run_id` line differs: it is `run_id: 26151428977` now and must become `run_id: alt-37734962202`. Nothing else needs changing, so there is nothing to extend or reduce. The work goes in the existing file and needs no new helper or structure.\n\n### 1. Files likely to change\n- `tests/e2e_smoke_canary.txt` (modify only)\n\n### 2. Functions or modules to implement\n- None. This is a data file edit.\n\n### 3. Data structures affected\n- None.\n\n### 4. API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Overwrite the whole file rather than editing one line\n- Chosen: Rewrite the file so it holds exactly `status: ok`, `run_id: alt-37734962202` and `updated-by: ai-pipeline`, each ending in LF.\n- Alternatives considered: Edit only the `run_id` line in place.\n- Why: Writing the whole file guarantees the content is exactly the three required lines, with no stray whitespace and no drift in the other two lines. The diff is the same either way.\n\n## Security considerations\n- Trust boundaries: none touched. This is a static test fixture.\n- Authorization: there are no new endpoints or surfaces.\n- External input: the issue specifies the content literally, and it contains nothing executable.\n- Abuse cases: none.\n\n### 5. Risks and edge cases\n- Line endings: the file currently ends each line with LF, including the last line. Keep LF on all three lines and add no extra blank line.\n- Scope: no other file may be staged.\n\n### 6. Testing considerations\n- Run `cat -A tests/e2e_smoke_canary.txt`. It should print exactly `status: ok$`, `run_id: alt-37734962202$` and `updated-by: ai-pipeline$`.\n- Run `git diff --stat`. It should show only `tests/e2e_smoke_canary.txt`, with 1 line inserted and 1 deleted.\n\n### 7. Pre-execution self-check\n- The plan covers every requirement in the issue and touches only the one allowed file.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "1029076351f357db03c8c518ee6cd07b8ee8ffe7f95daf4a0aa04d991de584fc",
+  "lineage": {
+    "issue_number": 6731,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37735453115",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37735453115",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6731"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261008060930_e52ba582ce",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6731,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37735453115"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6731",
+  "timestamps": {
+    "created_at": "2026-10-08T06:09:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
