@@ -7059,10 +7059,16 @@ security_pass_exhaustion_judge() {
     keep_fixing_converted="$(jq -r '[.decisions[] | select(.action == "keep_fixing" and ((.finding.severity // "" | ascii_downcase) == "medium" or (.finding.severity // "" | ascii_downcase) == "low"))] | length' "${verdict_file}")"
     [[ "${keep_fixing_converted}" =~ ^[0-9]+$ ]] || keep_fixing_converted=0
     if [ "${keep_fixing_converted}" -gt 0 ]; then
-      if ! jq --arg note "[keep_fixing capped after ${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS} judge round(s); converted to fail — needs a fix or a human waiver] " '
+      # `fail` is project-wide, so accept_with_followup rows in the same
+      # verdict are rewritten to `fail` too: the failed branch records no
+      # waiver for them, and the log counts and decision table must say so.
+      if ! jq --arg note "[keep_fixing capped after ${MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS} judge round(s); converted to fail — needs a fix or a human waiver] " \
+        --arg drop_note "[not accepted: the keep_fixing cap failed this verdict] " '
         .decisions = [
           .decisions[]
-          | if .action == "keep_fixing" and ((.finding.severity // "" | ascii_downcase) == "medium" or (.finding.severity // "" | ascii_downcase) == "low") then (.action = "fail" | .justification = ($note + .justification)) else . end
+          | if .action == "keep_fixing" and ((.finding.severity // "" | ascii_downcase) == "medium" or (.finding.severity // "" | ascii_downcase) == "low") then (.action = "fail" | .justification = ($note + .justification))
+            elif .action == "accept_with_followup" then (.action = "fail" | .justification = ($drop_note + .justification))
+            else . end
         ]
       ' "${verdict_file}" > "${verdict_file}.tmp" || ! mv "${verdict_file}.tmp" "${verdict_file}"; then
         rm -f "${verdict_file}.tmp"

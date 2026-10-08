@@ -6300,7 +6300,7 @@ def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_fail() -> No
 	combined_log = result["stdout"] + result["stderr"]
 	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=192 round=3 cap=2 converted=1" in combined_log
 	assert "SECURITY_PASS_JUDGE_DECIDED tracking_issue=192 round=3" in combined_log
-	assert "accepted=1 keep_fixing=0 failed=1" in combined_log
+	assert "accepted=0 keep_fixing=0 failed=2" in combined_log
 	assert "SECURITY_PASS_FAILED reason=cycle_exhausted" in combined_log
 	assert "SECURITY_PASS_CLEAN" not in combined_log
 	assert "SECURITY_PASS_WAIVED" not in combined_log
@@ -6309,13 +6309,14 @@ def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_fail() -> No
 	comment_bodies = [comment["body"] for comment in result["issues"]["192"]["comments"]]
 	judge_comments = [body for body in comment_bodies if body.startswith("## ⚖️ Security-pass exhaustion judge (round 3)")]
 	assert len(judge_comments) == 1
-	assert "1 finding(s) cannot be accepted" in judge_comments[0]
+	assert "2 finding(s) cannot be accepted" in judge_comments[0]
 	assert "need a human" not in judge_comments[0]
 	assert (
 		"1 of them were `keep_fixing` decisions converted to `fail` because the keep_fixing round budget (`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=2`) is spent; no finding is accepted by the cap."
 		in judge_comments[0]
 	)
 	assert "| SEC-TEST-1 | medium | scripts/example.py:1 | fail | [keep_fixing capped after 2 judge round(s); converted to fail" in judge_comments[0]
+	assert "| SEC-TEST-2 | medium | scripts/example.py:1 | fail | [not accepted: the keep_fixing cap failed this verdict]" in judge_comments[0]
 	assert any(body.startswith("## ❌ Project security pass exhausted") for body in comment_bodies)
 	assert any(
 		notification["issue"] == "192" and notification["level"] == "CRITICAL" and "security pass FAILED" in notification["message"]
