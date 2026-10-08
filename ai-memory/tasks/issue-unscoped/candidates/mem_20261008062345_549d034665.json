@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.83,
+  "details": "When changing GitHub Actions workflows or their supporting scripts, check for an existing contract test and extend it to cover the relevant workflow structure or security boundary. Recent merged changes repeatedly pair workflow and script edits with dedicated tests.",
+  "fingerprint": "8dd224462791ca5c46c65c85ac42523cd90a6d86f0910355522107655c34b486",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37737156345",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37737156345",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6463",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6492",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6705",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6706",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6711",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6484",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6496",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6707",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6708",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6719"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261008062345_549d034665",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow and shell-script changes are commonly protected by focused contract tests.",
+  "timestamps": {
+    "created_at": "2026-10-08T06:23:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
