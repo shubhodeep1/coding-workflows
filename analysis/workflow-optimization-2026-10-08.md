@@ -190,3 +190,41 @@ No `TODO`, `FIXME` or `HACK` marker was found in the scoped workflow/script file
 | Code modularization | 3 existing callers plus shared helper staging | Large |
 | Expression size reduction | `.github/workflows/implement.yml` plus 2 proposed scripts | Large |
 | Medium/Low fixes | 6 existing workflow/script files across triage, review, merge train, activation, poller and secret propagation | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-10-08)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is ready to implement; `NEEDS_VERIFICATION` requires the stated checks first; `RISKY_SKIP` must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — NEEDS_VERIFICATION.** Calls: `.github/workflows/issue_pr_status.yml:258-263` and `.github/workflows/issue_pr_status.yml:367-378`. **Current → proposed:** two logical calls → one when additional issue lookups are needed; one → one otherwise. **Endpoint:** GraphQL `/graphql`. **Evidence:** the first query reads a PR’s `closingIssuesReferences` with issue bodies and labels; the second queries issue bodies and labels by alias for references not classified by the first response. **Proposed fix:** extend the first query with aliases for independently identifiable PR-title/body and branch issue numbers, then update `classify_orchestrator_issues_from_payload` and the later classification to consume the combined response. Retain the existing REST fallback for incomplete classifications. **Safety rationale:** `SAFE_TO_MERGE` is unproven because the later lookup occurs after classification and `ensure_label_exists`; issue state may also change between the two reads. **Downstream signal:** Verify classification parity for closing references, body-only references, and branch references; test partial GraphQL responses, the 50-item field bounds, and issue changes between the current read points before combining queries.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **REUSE-001 — RISKY_SKIP.** Calls: `.github/workflows/test-and-mark-stable.yml:1441-1449` and `.github/workflows/test-and-mark-stable.yml:1471-1477`. **Current → proposed:** three PR GETs on a first-attempt stable-head path → two, by retaining full metadata from the second head read. **Endpoint:** REST `GET /repos/{owner}/{repo}/pulls/{pull_number}`. **Evidence:** `HEAD_B` is fetched from that PR immediately before `PR_META` fetches the same PR; the former proves head stability, while the latter guards against a PR closing before bait injection. **Proposed fix:** only after manual review, consider capturing the full `HEAD_B` response and deriving both its SHA and guard fields from it. **Safety rationale:** the head reads sit inside a retry loop, and removing the subsequent live guard weakens its defense against a close or merge after the stable-head check. **Downstream signal:** Do not auto-implement; manually review the race window and demonstrate that the close/merge guard remains live immediately before injection.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: RISKY_SKIP — Its comments listing uses `--paginate`; review page completeness and marker selection manually before removing the subsequent GET.
+- API-002: RISKY_SKIP — The proposed change affects a retry loop; review permanent-error classification and rate-limit backoff manually.
+- BATCH-001: RISKY_SKIP — This poller replay path uses paginated comments and live race guards; batching requires manual trust-and-freshness review.
+
+### Summary Counts
+
+*Counts cover net-new findings above; Deep Audit cross-references are excluded.*
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 1 | MERGE-001 |
+| RISKY_SKIP | 1 | REUSE-001 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
