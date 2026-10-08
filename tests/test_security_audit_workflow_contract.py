@@ -2868,6 +2868,10 @@ def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") ->
 	  naming mod.
 	- ``one_letter_deleted``: as ``cross_file``, but the guard is deleted
 	  from the one-letter module a.py, whose name cannot be searched.
+	- ``cross_file_chain``: as ``cross_file``, but middleware.py names auth
+	  and app.py names middleware and mod (a two-hop link).
+	- ``cross_file_long_chain``: as ``cross_file``, but mod is named by a
+	  five-file reference chain longer than the search bound.
 	"""
 	repo_dir = base_dir / "audited-repo"
 	repo_dir.mkdir(parents=True, exist_ok=True)
@@ -2906,6 +2910,16 @@ def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") ->
 	if variant == "cross_file_registry":
 		(repo_dir / "registry.py").write_text("import auth\nimport mod\n", encoding="utf-8")
 		_git("add", "registry.py")
+	if variant == "cross_file_chain":
+		(repo_dir / "middleware.py").write_text("import auth\n", encoding="utf-8")
+		(repo_dir / "app.py").write_text("import middleware\nimport mod\n", encoding="utf-8")
+		_git("add", "middleware.py", "app.py")
+	if variant == "cross_file_long_chain":
+		previous = "mod"
+		for index in range(1, 6):
+			(repo_dir / f"link{index}.py").write_text(f"import {previous}\n", encoding="utf-8")
+			_git("add", f"link{index}.py")
+			previous = f"link{index}"
 	db_base_text = "def guard():\n\treturn require_admin()\n"
 	if variant == "one_letter_deleted":
 		(repo_dir / "a.py").write_text(db_base_text, encoding="utf-8")
@@ -2929,7 +2943,15 @@ def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") ->
 	elif variant == "unrelated_change":
 		project_lines = list(base_lines)
 		(repo_dir / "other.py").write_text("OTHER = 1\n", encoding="utf-8")
-	elif variant in ("cross_file", "cross_file_import", "cross_file_reverse", "cross_file_registry", "head_router"):
+	elif variant in (
+		"cross_file",
+		"cross_file_import",
+		"cross_file_reverse",
+		"cross_file_registry",
+		"head_router",
+		"cross_file_chain",
+		"cross_file_long_chain",
+	):
 		project_lines = list(base_lines)
 		(repo_dir / "auth.py").write_text(auth_base_text.replace("\treturn require_admin()\n", ""), encoding="utf-8")
 		if variant == "head_router":
@@ -3121,6 +3143,7 @@ def test_security_audit_line_ownership_reference_to_file_with_deletions_blocks()
 		("cross_file_registry_short", "shared_referrer_links_module_with_deletions"),
 		("head_router", "shared_referrer_links_module_with_deletions"),
 		("head_override", "changed_file_references_cited_module"),
+		("cross_file_chain", "transitive_reference_links_module_with_deletions"),
 	],
 )
 def test_security_audit_line_ownership_unnamed_module_with_deletions_blocks(variant: str, reason: str) -> None:
@@ -3138,6 +3161,16 @@ def test_security_audit_line_ownership_project_test_file_naming_module_stays_adv
 	assert proc.returncode == 0, proc.stderr
 	assert payload["findings"][0]["advisory"] is True
 	assert "line_ownership_blocking" not in proc.stdout
+
+
+def test_security_audit_line_ownership_reference_search_limit_blocks() -> None:
+	# A reference chain longer than the search bound cannot be ruled out, so
+	# the finding stays blocking (finding security-pass-deleted-guard-advisory).
+	proc, payload = _run_line_ownership_audit([_line_ownership_finding("base-line", 1)], variant="cross_file_long_chain")
+	assert proc.returncode == 0, proc.stderr
+	assert payload["findings"][0]["advisory"] is False
+	assert payload["line_ownership"] == {"mode": "project", "blocking": 1, "advisory": 0, "unknown": 1}
+	assert "security-audit: line_ownership_unknown finding=base-line reason=reference_search_limit" in proc.stdout
 
 
 def test_security_audit_line_ownership_one_letter_module_with_deletions_blocks() -> None:

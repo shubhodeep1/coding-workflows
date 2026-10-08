@@ -434,7 +434,11 @@ fi
 # (`cited_file_references_module_with_deletions`), or a module that lost
 # lines names the cited module (`module_with_deletions_references_cited_file`),
 # or a non-documentation file names both the cited module and a module that
-# lost lines (`shared_referrer_links_module_with_deletions`).  Module
+# lost lines (`shared_referrer_links_module_with_deletions`), or a chain of
+# references of any length links them through a common referrer
+# (`transitive_reference_links_module_with_deletions`; a search past
+# LINE_OWNERSHIP_REFERENCE_MAX_HOPS / _MAX_STEMS keeps it blocking as
+# `reference_search_limit`).  Module
 # references are read at both the base and the head, so a router the project
 # adds is seen too.  Any project addition in the cited file keeps the finding
 # blocking (finding security-pass-distant-override-advisory): within the
@@ -2177,6 +2181,45 @@ def changed_file_reference_reason(path: str) -> tuple[str, bool]:
 	return "", False
 
 
+# Bounds on the transitive referrer search in deletion_block_reason.  A
+# search that cannot finish inside them proves nothing, so it keeps the
+# finding blocking (`reference_search_limit`, counted unknown).
+LINE_OWNERSHIP_REFERENCE_MAX_HOPS = 4
+LINE_OWNERSHIP_REFERENCE_MAX_STEMS = 32
+
+
+def referrer_closure(start_paths: set[str], searched_stems: set[str]) -> tuple[set[str], str]:
+	# Files that reach any of `start_paths` through a chain of module-name
+	# references at base or head.  Documentation and test files are not
+	# wiring and are not followed.  Returns (closure, reason); a non-empty
+	# reason means the search could not complete and the caller must keep
+	# the finding blocking (fail closed).
+	closure = set(start_paths)
+	frontier = set(start_paths)
+	for _ in range(LINE_OWNERSHIP_REFERENCE_MAX_HOPS):
+		next_frontier: set[str] = set()
+		for node in sorted(frontier):
+			stem = module_stem(node)
+			if not stem:
+				return closure, "module_name_too_short"
+			if stem not in searched_stems:
+				if len(searched_stems) >= LINE_OWNERSHIP_REFERENCE_MAX_STEMS:
+					return closure, "reference_search_limit"
+				searched_stems.add(stem)
+			referrers = paths_mentioning(stem)
+			if referrers is None:
+				return closure, "module_reference_check_failed"
+			for referrer in referrers:
+				if referrer in closure or is_doc_path(referrer) or is_test_path(referrer):
+					continue
+				closure.add(referrer)
+				next_frontier.add(referrer)
+		if not next_frontier:
+			return closure, ""
+		frontier = next_frontier
+	return closure, "reference_search_limit"
+
+
 def finding_strings(value: object) -> list[str]:
 	if isinstance(value, str):
 		return [value]
@@ -2254,6 +2297,24 @@ def deletion_block_reason(finding: dict, path: str, line: int) -> tuple[str, boo
 					return "module_reference_check_failed", True
 				if any(referrer != other_path and referrer in cited_referrers for referrer in other_referrers):
 					return "shared_referrer_links_module_with_deletions", False
+	# Several hops: follow referrer chains up from the cited file and
+	# from every source file that lost lines (a guard cannot live in
+	# documentation or tests).  A shared ancestor (an app entry point that
+	# imports a middleware which imports the guard module, and the cited
+	# module) can wire the removed control to the cited operation, so only a
+	# search that completes inside its bounds without one leaves the finding advisory
+	# (finding security-pass-deleted-guard-advisory).
+	guard_paths = {other for other in other_paths if not is_doc_path(other) and not is_test_path(other)}
+	if guard_paths:
+		searched_stems: set[str] = set()
+		cited_closure, closure_reason = referrer_closure({path}, searched_stems)
+		if closure_reason:
+			return closure_reason, True
+		guard_closure, closure_reason = referrer_closure(guard_paths, searched_stems)
+		if closure_reason:
+			return closure_reason, True
+		if cited_closure & guard_closure:
+			return "transitive_reference_links_module_with_deletions", False
 	return changed_file_reference_reason(path)
 
 blocking = advisory = unknown = 0

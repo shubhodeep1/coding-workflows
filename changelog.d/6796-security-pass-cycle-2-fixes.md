@@ -3,10 +3,11 @@
 
 The wrapper the synthesiser writes now runs its body only when `BEHAVIOURAL_SMOKE_SANDBOXED=1`, so an older driver reports it instead of running it. `scripts/validate_process.sh` copies only files named `synth_round_<n>_<slug>.sh` and `synth_round_<n>_manifest.json`, and never a symlink, so a poisoned manifest cannot plant a host-run test or overwrite the canary. It also starts the whole validation harness without `GH_TOKEN`, `GITHUB_TOKEN`, `GH_PAT`, `OPENROUTER_API_KEY`, `TG_BOT_SECRET`, `CHECK_TRIAGE_ISSUES_TOKEN` or the Actions OIDC request variables.
 
-- **Line ownership in the project security pass marks fewer findings advisory.** A finding on a line older than the project now stays blocking in four more cases:
+- **Line ownership in the project security pass marks fewer findings advisory.** A finding on a line older than the project now stays blocking in five more cases:
   - the project added lines anywhere in the cited file (`reason=added_lines_in_file`), because an override appended far from the line can still change how it runs;
   - a file that links the cited module to a module that lost lines exists only at the head, such as a router the project added (module references are now read at both base and head);
-  - a file the project changed, other than documentation or tests, names the cited module at the head (`reason=changed_file_references_cited_module`).
+  - a file the project changed, other than documentation or tests, names the cited module at the head (`reason=changed_file_references_cited_module`);
+  - a chain of files naming each other's modules links the cited module to a source file that lost lines through a common referrer, such as an app that imports a middleware that imports the guard module (`reason=transitive_reference_links_module_with_deletions`); a search that needs more than 4 hops or 32 module names cannot rule the link out and also keeps the finding blocking (`line_ownership_unknown reason=reference_search_limit`);
   - the cited module, or a module that lost lines, has a one-letter name such as `x.py`, which cannot be searched reliably (`line_ownership_unknown reason=module_name_too_short`).
 
 `SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW` is still accepted, but it now only picks the logged reason (`changed_hunk_within_window` or `added_lines_in_file`).
@@ -14,6 +15,7 @@ The wrapper the synthesiser writes now runs its body only when `BEHAVIOURAL_SMOK
 | The numbers that matter | Value |
 | --- | --- |
 | Extra `git grep` calls per module stem | 1 (head, alongside base) |
+| Most module names searched per finding by the reference-chain check | 32 |
 | Default synthesised-test timeout (`VALIDATION_SYNTH_SANDBOX_TIMEOUT_SECS`) | 300 s |
 | Extra GitHub API calls | 0 |
 
