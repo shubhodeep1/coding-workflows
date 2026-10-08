@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which of the issue's steps belong in this issue's PR?\nChoices:\nA) Only the preflight work: a separate, secret-safe diagnostic for each `unavailable` check, fixes for causes the code shows, and tests for both the success and refusal paths. Reissuing the heal through intake and adding the `prepare-ephemeral` fallback (non-empty sandbox root required, with tests for fallback and fatal isolation failure) go to a follow-up heal issue once preflight passes after merge. (RECOMMENDED)\nB) Everything in one PR: the preflight diagnostics and fix, plus the `prepare-ephemeral` fallback in the workflow. The heal is reissued through intake after merge.\nC) Only the diagnostics and tests. No change to any check's logic until a production run shows which check failed.\n**Note:** B means building the fallback before preflight has been shown to pass against the unchanged intake-authored scope. The issue says to wait for that.\nQ2: There are no failing-run logs. How should this PR handle the \"fix the evidenced cause\" step?\nChoices:\nA) Fix only causes that reading the code and the existing tests clearly prove, each with a regression test. If nothing is proven, ship only the diagnostics and keep every refusal fail-closed. Either way, identity, edit-status, scope and checkout checks stay as strict as they are. (RECOMMENDED)\nB) Ship only the diagnostics now, and file the real fix as a separate issue after the next refused run shows which check failed.\nC) Let the planner fix every plausible cause it finds (for example, a `SCRIPT_REF` that is a branch name rather than `main`, `stable` or a 40-character SHA, which line 83 refuses), even without run evidence.\n**Note:** C is not compatible with Q1:C. Q1:C allows no logic change, and C loosens checks without evidence, which may conflict with \"do not bypass \u2026 checkout verification\".",
+  "fingerprint": "b1dd333b02aa45fc85a1423751401c6fa5134aa4046f3fd8ed180b34e28c3893",
+  "lineage": {
+    "issue_number": 6778,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37805997906",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37805997906",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008161008_dde6e8aa16",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6778,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37805997906"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6778 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T16:10:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
