@@ -123,8 +123,12 @@ fi
 
 COMMENTS_JSON_FILE="${RUNTIME_DIR}/comments.json"
 if ! gh_retry gh api --method GET --paginate "repos/${REPO}/issues/${ISSUE_NUMBER}/comments" -F per_page=100 \
-	--jq '.[] | {body: (.body // ""), created_at: (.created_at // "")}' 2>/dev/null \
+	--jq '.[] | {body: (.body // ""), created_at: (.created_at // ""), author: (.user.login // "")}' 2>/dev/null \
 	| jq -s '.' > "${COMMENTS_JSON_FILE}" 2>/dev/null; then
+	if [ "${LABEL}" = 'ai:needs-human' ] && jq -e '[.labels[]?.name] | index("ai:workflow-heal") != null' "${ISSUE_JSON_FILE}" >/dev/null; then
+		log 'error refusal_comment_history_unavailable; not dispatching another heal'
+		exit 1
+	fi
 	log "warn comments_fetch_failed issue=${ISSUE_NUMBER}; continuing without comments"
 	printf '[]' > "${COMMENTS_JSON_FILE}"
 fi
@@ -173,7 +177,20 @@ if ! python3 "${HEAL_PY}" build-issue-payload \
 	exit 1
 fi
 
-SKIP_REASON="$(python3 "${HEAL_PY}" skip-reason --payload-json "${PAYLOAD_FILE}" --self-repo "${REPO}" 2>/dev/null || echo "")"
+HEAL_SCOPE_SKIP_ARGS=()
+if [ "${LABEL}" = "ai:needs-human" ] && jq -e '[.labels[]?.name] | index("ai:workflow-heal") != null' "${ISSUE_JSON_FILE}" >/dev/null; then
+	# The comments are already fetched above. Only the authenticated account's
+	# refusal marker may suppress a new heal generation.
+	HEAL_REPORTER_LOGIN="$(gh_retry gh api user --jq .login 2>/dev/null || true)"
+	if [ -z "${HEAL_REPORTER_LOGIN}" ]; then
+		log 'error refusal_marker_author_unavailable; not dispatching another heal'
+		exit 1
+	fi
+	if [ -n "${HEAL_REPORTER_LOGIN}" ] && jq -e --arg login "${HEAL_REPORTER_LOGIN}" 'any(.[]; .author == $login and (.body | contains("<!-- ai:workflow-heal-scope-unverified:v1")))' "${COMMENTS_JSON_FILE}" >/dev/null; then
+		HEAL_SCOPE_SKIP_ARGS=(--heal-scope-unverified)
+	fi
+fi
+SKIP_REASON="$(python3 "${HEAL_PY}" skip-reason --payload-json "${PAYLOAD_FILE}" --self-repo "${REPO}" "${HEAL_SCOPE_SKIP_ARGS[@]}" 2>/dev/null || echo "")"
 if [ -n "${SKIP_REASON}" ]; then
 	log "skip reason=${SKIP_REASON} issue=${ISSUE_NUMBER} label=${LABEL}"
 	exit 0

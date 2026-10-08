@@ -143,6 +143,10 @@ def admitted_commands_path(manifest):
 	return manifest.with_name(manifest.name + ".admitted_commands.json")
 
 
+def synthetic_git_config_path(manifest):
+	return manifest.with_name(manifest.name + ".git_config.sha256")
+
+
 def template_command_inventory(host):
 	try:
 		directory = checked_path(host, COMMAND_TWIN_DIR)
@@ -208,7 +212,7 @@ def fingerprint(path):
 	return [hashlib.sha256(data).hexdigest(), mode]
 
 
-def enumerate_workspace(root, host=None, commands=None):
+def enumerate_workspace(root, host=None, commands=None, strict=False):
 	count = 0
 	total = 0
 	entries = 0
@@ -232,6 +236,8 @@ def enumerate_workspace(root, host=None, commands=None):
 				raise ValueError("workspace entry limit exceeded")
 			name = (rel / child).as_posix()
 			if not allowed(name, commands=commands):
+				if strict and name.startswith((".github/ai/", ".claude/")):
+					raise ValueError("out of heal scope")
 				# Build products and cached dependencies are not editor output.
 				if name in ROOT_FILES or rel == Path("."):
 					raise ValueError("unsafe workspace result path")
@@ -289,6 +295,7 @@ def snapshot(host, workspace, manifest, host_git_dir=None):
 	(workspace / ".git/info/exclude").write_text(".review-venv/\nnode_modules/\n.venv/\n__pycache__/\n*.egg-info/\n*.dist-info/\n.pytest_cache/\n", encoding="utf-8")
 	subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "add", "--all"], cwd=workspace, check=True, env=env)
 	subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-c", "user.name=isolated", "-c", "user.email=isolated@invalid", "commit", "--allow-empty", "-qm", "snapshot"], cwd=workspace, check=True, env=env)
+	synthetic_git_config_path(manifest).write_text(hashlib.sha256((workspace / ".git/config").read_bytes()).hexdigest(), encoding="ascii")
 
 
 def _check_destination_parents(host, name, deleted_names):
@@ -308,10 +315,12 @@ def _check_destination_parents(host, name, deleted_names):
 		raise _rejection("new result conflicts with host path", "result_conflicts_host")
 
 
-def transfer(host, workspace, manifest):
+def transfer(host, workspace, manifest, scope=None):
 	commands = load_admitted_commands(manifest)
 	baseline = json.loads(manifest.read_text(encoding="utf-8"))
-	results = {name: (data, mode) for name, data, mode in enumerate_workspace(workspace, None, commands)}
+	if scope is not None and hashlib.sha256(read_regular(workspace / ".git/config")[0]).hexdigest() != synthetic_git_config_path(manifest).read_text(encoding="ascii"):
+		raise ValueError("out of heal scope")
+	results = {name: (data, mode) for name, data, mode in enumerate_workspace(workspace, None, commands, strict=scope is not None)}
 	changes = []
 	# Even an untouched result must not conceal a host-side update made since
 	# the snapshot (including a write by another workflow process).
@@ -326,6 +335,16 @@ def transfer(host, workspace, manifest):
 			continue
 		if not allowed(name, None, commands):
 			raise _rejection("unsafe result path", "unsafe_result_path")
+		if scope is not None:
+			from files_touched_scope_guard import entry_matches
+
+			# Git attribute/module files at any depth can name filters or drivers
+			# the credentialed host commit would honour; never transfer them.
+			git_control = any(part.lower() in (".git", ".gitattributes", ".gitmodules") for part in name.split("/"))
+			if name.startswith((".github/ai/", ".claude/")) or git_control or not any(entry_matches(entry, name) for entry in scope):
+				raise ValueError("out of heal scope")
+			if new is not None and old is not None and new[1] != old[1]:
+				raise ValueError("out of heal scope")
 		host_file = checked_path(host, name)
 		if old is None and (host_file.exists() or host_file.is_symlink()):
 			raise ValueError("new result conflicts with host path")
@@ -580,7 +599,8 @@ def main():
 			raise SystemExit(2)
 	else:
 		# snapshot alone takes an optional fifth argument: the host Git dir.
-		if sys.argv[1:2] not in (["snapshot"], ["refresh"], ["transfer"]) or not (len(sys.argv) == 5 or (len(sys.argv) == 6 and sys.argv[1] == "snapshot")):
+		# transfer alone takes an optional "--scope-file <path>" pair.
+		if sys.argv[1:2] not in (["snapshot"], ["refresh"], ["transfer"]) or not (len(sys.argv) == 5 or (len(sys.argv) == 6 and sys.argv[1] == "snapshot") or (len(sys.argv) == 7 and sys.argv[1] == "transfer" and sys.argv[5] == "--scope-file")):
 			raise SystemExit(2)
 	host, workspace, manifest = map(Path, sys.argv[2:5])
 	try:
@@ -591,7 +611,12 @@ def main():
 		elif sys.argv[1] == "refresh":
 			refresh(host, workspace, manifest)
 		else:
-			transfer(host, workspace, manifest)
+			scope = None
+			if len(sys.argv) == 7:
+				scope = Path(sys.argv[6]).read_text(encoding="utf-8").splitlines()
+				if not scope or any(not entry or entry not in ("tests/**", "changelog.d/*.md") and not re.fullmatch(r"[A-Za-z0-9_./-]+", entry) for entry in scope):
+					raise ValueError("out of heal scope")
+			transfer(host, workspace, manifest, scope)
 	except (OSError, ValueError, UnicodeError, subprocess.CalledProcessError) as exc:
 		if isinstance(exc, UnsafeWorkspaceDirectory):
 			category = exc.category if exc.category in _DIRECTORY_CATEGORIES else "other"
@@ -614,6 +639,7 @@ def main():
 				"new result conflicts with host path": "result_conflicts_host",
 				"transfer rollback failed": "transfer_rollback_failed",
 				"unsafe result path": "unsafe_result_path",
+				"out of heal scope": "out_of_heal_scope",
 			}.get(str(exc), "unknown") if sys.argv[1] == "transfer" and isinstance(exc, ValueError) else "size_limit" if sys.argv[1] == "snapshot" and str(exc) == "snapshot size limit exceeded" else "unknown"
 			print(f"::error::Review isolation snapshot or transfer rejected ({type(exc).__name__}) reason={reason_code}", file=sys.stderr)
 		raise SystemExit(1) from None
