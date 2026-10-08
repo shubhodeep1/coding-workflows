@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/hooks/pr_merge_status_guard.py:1347-1395 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: `git_subcommands()` parses nested shell scripts without stripping data heredoc bodies, so a bare guarded git command inside a non-shell heredoc can be incorrectly detected.\n  WHY: Unlike `_guarded_git_invocations`, recursive `git_subcommands()` calls do not apply `_strip_data_heredoc_bodies`, causing false-positive blocks or confirmation prompts.\n- .claude/hooks/pr_merge_status_guard.py: docstring of `_wrapped_shell_text` at lines 666-668; changelog.d/6777-nested-heredoc-wrapper-check.md:3 | severity=low | confidence=[5]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The docstring and changelog incorrectly claim the segment parser drops data heredoc bodies, although `git_subcommands()` does not strip them.\n  WHY: Maintainers may rely on this inaccurate description and repeat the false-positive behavior when calling `git_subcommands()` with raw heredoc-laden text.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description and followup test suite claim both that a nested shell fed by a heredoc (e.g. `bash <<'EOF' ... git push ... EOF`) is now checked AND that data heredocs inside a wrapper (e.g. `python3 <<'EOF' ... EOF`) are not parsed as commands. The new test at tests/test_pr_merge_status_guard.py:2929 only exercises the second claim with `print('git push origin x')` instead of a bare `git push origin x`.\n  expected_change_site: `.claude/hooks/pr_merge_status_guard.py`, `git_subcommands()`, or `tests/test_pr_merge_status_guard.py`\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: No code change to line 1347 strips data heredoc bodies; the only test in the `ignored` list that exercises a data heredoc inside a wrapper (line 2929) wraps the body in `print(...)`, so it does not exercise the bare `git push` / `git commit` case. The diff has 4 changed files; none of them contain a fix to `git_subcommands` or a bare-body regression test.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .claude/hooks/pr_merge_status_guard.py: 1347, and the recursive calls at 1376 and 1395 | severity=high | confidence=4\n  PROBLEM: `git_subcommands()` calls `_shell_segments_with_operators(segment_text)` without first calling `_strip_data_heredoc_bodies(segment_text)`.\n  WHY: A data heredoc containing a bare guarded git command can be tokenized as shell commands at nested recursion depth and cause a false-positive block or confirmation prompt.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/hooks/pr_merge_status_guard.py: `git_subcommands` body at line 1347 (the recursive call in `_wrapped_shell_text` preserves heredoc bodies at every depth, but `git_subcommands` does not strip data heredoc bodies before parsing them) | severity=high | confidence=4\n  PROBLEM: `git_subcommands()` parses heredoc bodies without first stripping data heredoc bodies.\n  WHY: A bare `git push` in a `python3` heredoc inside a nested shell wrapper can be detected as a guarded push, while `_guarded_git_invocations` correctly strips the data body.\n- .claude/hooks/pr_merge_status_guard.py: docstring of `_wrapped_shell_text` at lines 666-668 and the changelog fragment changelog.d/6777-nested-heredoc-wrapper-check.md:3 | severity=low | confidence=5\n  PROBLEM: The docstring and changelog claim the segment parser drops data heredoc bodies, but `git_subcommands()` does not strip them before parsing.\n  WHY: The inaccurate claim may lead maintainers to call `git_subcommands()` with raw heredoc-laden text and repeat the false-positive issue.\n- Requirement: The PR description and followup test suite claim both that a nested shell fed by a heredoc (e.g. `bash <<'EOF' ... git push ... EOF`) is now checked AND that data heredocs inside a wrapper (e.g. `python3 <<'EOF' ... EOF`) are not parsed as commands. The new test at tests/test_pr_merge_status_guard.py:2929 only exercises the second claim with `print('git push origin x')` instead of a bare `git push origin x`.\n  Expected change site: Either `git_subcommands` should call `_strip_data_heredoc_bodies(segment_text)` before `_shell_segments_with_operators(segment_text)` at line 1347 (matching the line 805 / 2015 callers and the docstring contract), or a new regression test should be added to tests/test_pr_merge_status_guard.py in the `test_shell_wrappers_without_git_writes_are_ignored` parametrize list that proves a bare `git push` inside a `python3 <<'EOF'...EOF` body is not detected. Without one of these, the PR leaves a false-positive class open at every wrapper depth > 0.\n  Evidence of absence: No code change to line 1347 strips data heredoc bodies; the only test in the `ignored` list that exercises a data heredoc inside a wrapper (line 2929) wraps the body in `print(...)`, so it does not exercise the bare `git push` / `git commit` case. The diff has 4 changed files; none of them contain a fix to `git_subcommands` or a bare-body regression test.\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .claude/hooks/pr_merge_status_guard.py: git_subcommands() at line 1347, called from _evaluate_bash at line 2016 | severity=high | confidence=4\n  PROBLEM: `git_subcommands()` does not call `_strip_data_heredoc_bodies` before parsing `segment_text`, so nested data heredoc bodies can be tokenized as guarded subcommands.\n  WHY: When `git_subcommands()` recurses into an extracted inner script, a bare git write inside a data heredoc can cause the early API-write block to return BLOCKED even though `_guarded_git_invocations` would allow the command.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "b47e343fb0d407fdde59a5df75f9b364126a04f0f7fd737b80209f94b20b39a9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6791,
+    "run_id": "37824601897",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37824601897",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261008185034_b888a5a1d4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6791,
+    "run_id": "37824601897"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-08T18:50:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
