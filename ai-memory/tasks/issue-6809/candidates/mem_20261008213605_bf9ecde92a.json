@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which five paths may this issue edit? Implement only accepts edits to `.github/` and the other automation folders when the paths are listed in `files_touched` in an issue body written by a trusted author.\nChoices:\nA. `.github/workflows/mark-stable.yml`, `.github/workflows/test-and-mark-stable.yml`, a new `tests/test_stable_release_ci_gate_contract.py` (covers both workflows and the disabled path), `README.md` (adds a `STABLE_RELEASE_ENABLED` row), `changelog.d/6775-stable-release-ci-gate.md` (RECOMMENDED)\nB. Same as A, but `agents.md` replaces `README.md` for the docs row\nC. Only the two workflow files plus the new test file; no docs or changelog edits\nD. A different list of five paths, given in the answer\nQ2: How will that list get into this issue's body? Answers posted as comments did not change #6775's body, so the list only counts if the body itself is edited.\nChoices:\nA. A trusted maintainer, or the pipeline account, edits this issue's body to add a `files_touched:` block with exactly the Q1 paths before `/approved`. If the body still lacks it, the plan stops with `BLOCKED` instead of implementing (RECOMMENDED)\nB. The plan puts the list only in its output and implement continues anyway. **Note:** under the current automation-path guard this repeats the #6775 scope block\nC. The issue is closed and reissued with the `files_touched` block already in its body\nQ3: Which check-run counts as \"a successful CI/lint check-run\" on `RELEASE_TESTED_SHA`?\nChoices:\nA. The check-run of the aggregate `lint` job in `.github/workflows/ci.yml` (shown as `CI / lint`). It must be completed with conclusion `success`. Missing, still pending, any other conclusion, or a failed or paginated-incomplete API read fails the release closed (RECOMMENDED)\nB. Every check-run from the `CI` workflow on that SHA must succeed\nC. Reuse the required-checks resolution from `scripts/pr_checks_lib.sh` (branch protection plus `ORCH_FINAL_MERGE_REQUIRED_CHECKS`) against the SHA",
+  "fingerprint": "e4ec908701df17ca4f3357dbcaf48948ed34c40d94e46a9b3961634e05c8f662",
+  "lineage": {
+    "issue_number": 6809,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37847290089",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37847290089",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008213605_bf9ecde92a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6809,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37847290089"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6809 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T21:36:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
