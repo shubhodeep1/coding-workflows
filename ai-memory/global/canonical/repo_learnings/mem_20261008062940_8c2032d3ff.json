@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "AI engine behavior is configured and exercised across multiple workflow entry points.",
   "timestamps": {
     "created_at": "2026-10-08T06:29:40Z",
