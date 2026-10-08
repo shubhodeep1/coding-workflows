@@ -29,13 +29,44 @@ opencode_emit_failure_alert() { return 0; }
 opencode_require_bootstrap() { return 0; }
 opencode_strip_ansi() { cat; }
 opencode_run_cmd() {
-	cat > "${SUMMARISER_TEST_PROMPT_CAPTURE}"
-	printf '=== CONSENSUS FINDINGS ===\\n(No findings reported.)\\n=== END CONSENSUS FINDINGS ===\\n'
+	printf 'host\\n' >> "${SUMMARISER_TEST_HOST_CAPTURE:-/dev/null}"
+	return 1
 }
 """
 
+# The summariser never runs OpenCode on the host; this stand-in for
+# review_untrusted_sandbox.sh captures the prompt on stdin instead.  `run`
+# arguments: prompt, out, model, effort, config, engine, role, access.
+STUB_SANDBOX = """#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+	prepare-ephemeral)
+		if [ "${SUMMARISER_TEST_PREPARE_FAIL:-0}" = "1" ]; then
+			exit 1
+		fi
+		mkdir -p "${RUNNER_TEMP}/stub-sandbox"
+		printf '%s\\n' "${RUNNER_TEMP}/stub-sandbox"
+		;;
+	run)
+		cat > "${SUMMARISER_TEST_PROMPT_CAPTURE}"
+		printf '%s %s %s\\n' "$7" "$8" "$9" >> "${SUMMARISER_TEST_ENGINE_CAPTURE}"
+		printf '=== CONSENSUS FINDINGS ===\\n(No findings reported.)\\n=== END CONSENSUS FINDINGS ===\\n' > "$3"
+		;;
+	cleanup)
+		exit 0
+		;;
+	*)
+		exit 2
+		;;
+esac
+"""
 
-def _run_summariser(tmp_path: Path, statuses: dict[str, str] | None = None) -> tuple[subprocess.CompletedProcess[str], str, Path]:
+
+def _run_summariser(
+	tmp_path: Path,
+	statuses: dict[str, str] | None = None,
+	extra_env: dict[str, str] | None = None,
+) -> tuple[subprocess.CompletedProcess[str], str, Path]:
 	reviews_dir = tmp_path / "previous_reviews"
 	runtime_dir = tmp_path / "runtime"
 	support_dir = tmp_path / "support"
@@ -65,6 +96,9 @@ def _run_summariser(tmp_path: Path, statuses: dict[str, str] | None = None) -> t
 	helpers.write_text(STUB_HELPERS, encoding="utf-8")
 	writer = support_dir / "write_opencode_config.sh"
 	writer.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+	sandbox = support_dir / "review_untrusted_sandbox.sh"
+	sandbox.write_text(STUB_SANDBOX, encoding="utf-8")
+	sandbox.chmod(0o755)
 
 	capture = tmp_path / "prompt.txt"
 	output = tmp_path / "consensus.txt"
@@ -79,7 +113,10 @@ def _run_summariser(tmp_path: Path, statuses: dict[str, str] | None = None) -> t
 		"RUNNER_TEMP": str(tmp_path),
 		"GITHUB_WORKSPACE": str(workspace),
 		"SUMMARISER_TEST_PROMPT_CAPTURE": str(capture),
+		"SUMMARISER_TEST_ENGINE_CAPTURE": str(tmp_path / "engine.txt"),
+		"SUMMARISER_TEST_HOST_CAPTURE": str(tmp_path / "host.txt"),
 	}
+	env.update(extra_env or {})
 	result = subprocess.run(
 		["bash", str(SUMMARISER_SCRIPT), "--prefix", "review", "--output", str(output)],
 		env=env,
@@ -106,6 +143,62 @@ def test_summariser_prompt_forbids_tool_calls(tmp_path: Path) -> None:
 	assert "Do NOT call any tool" in prompt
 	assert "do not try to open reviewer outputs on disk" in prompt
 	assert "summarise exactly what it" in prompt
+
+
+def test_summariser_codex_selection_runs_in_the_sandbox(tmp_path: Path) -> None:
+	# No ai_engine.sh in the support directory resolves codex: OpenCode still
+	# runs only in the review sandbox, never on the host.
+	result, prompt, _ = _run_summariser(tmp_path)
+	assert result.returncode == 0, result.stderr
+	assert (tmp_path / "engine.txt").read_text(encoding="utf-8") == "codex SUMMARISER read\n"
+	assert not (tmp_path / "host.txt").exists()
+	assert "REVIEW_UTILITY_ISOLATION" not in result.stderr
+
+
+def test_summariser_refuses_host_fallback_when_sandbox_unavailable(tmp_path: Path) -> None:
+	# Finding review-summarizer-host-fallback: a PR that breaks sandbox
+	# preparation must not move the summariser onto the credential-bearing host.
+	stub_bin = tmp_path / "stub-bin"
+	stub_bin.mkdir()
+	sleep_stub = stub_bin / "sleep"
+	sleep_stub.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+	sleep_stub.chmod(0o755)
+	result, prompt, _ = _run_summariser(
+		tmp_path,
+		extra_env={
+			"SUMMARISER_TEST_PREPARE_FAIL": "1",
+			"SUMMARISER_ISOLATION_MAX_ATTEMPTS": "2",
+			"PATH": f"{stub_bin}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+		},
+	)
+	assert result.returncode == 1, result.stderr
+	assert not prompt
+	assert not (tmp_path / "host.txt").exists()
+	refusal = "::error::REVIEW_UTILITY_ISOLATION role=SUMMARISER engine=codex outcome=refused reason=sandbox_unavailable"
+	assert result.stderr.count(refusal) == 2, result.stderr
+	assert "attempt 3/" not in result.stdout
+	assert "review sandbox unavailable for 2 consecutive attempt(s)" in result.stderr
+	assert not (tmp_path / "consensus.txt").exists()
+
+
+def test_summariser_isolation_max_attempts_invalid_value_falls_back(tmp_path: Path) -> None:
+	stub_bin = tmp_path / "stub-bin"
+	stub_bin.mkdir()
+	sleep_stub = stub_bin / "sleep"
+	sleep_stub.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+	sleep_stub.chmod(0o755)
+	result, _, _ = _run_summariser(
+		tmp_path,
+		extra_env={
+			"SUMMARISER_TEST_PREPARE_FAIL": "1",
+			"SUMMARISER_ISOLATION_MAX_ATTEMPTS": "zero",
+			"PATH": f"{stub_bin}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+		},
+	)
+	assert result.returncode == 1, result.stderr
+	assert "SUMMARISER_ISOLATION_MAX_ATTEMPTS must be a positive integer; defaulting to 3" in result.stderr
+	assert result.stderr.count("outcome=refused reason=sandbox_unavailable") == 3, result.stderr
+	assert not (tmp_path / "host.txt").exists()
 
 
 def test_summariser_prompt_still_inlines_every_input(tmp_path: Path) -> None:

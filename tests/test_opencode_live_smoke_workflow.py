@@ -122,7 +122,10 @@ def test_production_review_path_uses_opencode_for_read_and_write_sides() -> None
 	assert 'opencode_run_cmd "$@"' in reviewers
 	assert '"${reviewer_opencode_workspace}"\n    json' in reviewers
 	assert 'reviewer_materialize_opencode_json_text "${tmp_structured_output}" "${tmp_output}"' in reviewers
-	assert 'opencode_run_cmd "$@"' in summariser
+	# The summariser reads PR-derived reviewer output, so OpenCode runs only
+	# in the review sandbox, never as a host opencode_run_cmd.
+	assert 'opencode_run_cmd' not in summariser
+	assert 'summariser_sandbox_attempt codex' in summariser
 	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run' in apply_fixes
 	assert "exec codex --ask-for-approval never" not in apply_fixes
 

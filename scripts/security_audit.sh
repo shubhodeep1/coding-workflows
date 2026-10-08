@@ -423,8 +423,21 @@ fi
 # `project` (default) runs `git blame` over each finding's cited line at the
 # head and tags the finding `"advisory": true` when that line was not written
 # by a commit in base..head (it predates the project), `"advisory": false`
-# otherwise.  Any blame failure tags the finding blocking.  `off` restores the
-# previous payload exactly (no `advisory` field, no `line_ownership` key).
+# otherwise.  Any blame failure tags the finding blocking.  A pre-project
+# line still stays blocking when the project could have removed the control
+# that protected it (finding security-pass-deleted-guard-advisory): the cited
+# file lost or binary-changed lines in base..head (`deleted_lines_in_file`),
+# the project added lines within SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW
+# lines of it (`changed_hunk_within_window`), or the finding text names
+# another file that lost lines (`references_file_with_deletions`), the
+# cited file names a module that lost lines
+# (`cited_file_references_module_with_deletions`), or a module that lost
+# lines names the cited module (`module_with_deletions_references_cited_file`),
+# or an unchanged non-documentation file names both the cited module and a
+# module that lost lines (`shared_referrer_links_module_with_deletions`).
+# A failed project diff, hunk read or module-reference read keeps the
+# finding blocking too.  `off` restores
+# the previous payload exactly (no `advisory` field, no `line_ownership` key).
 SECURITY_AUDIT_LINE_OWNERSHIP="$(printf '%s' "${SECURITY_AUDIT_LINE_OWNERSHIP:-project}" | tr '[:upper:]' '[:lower:]')"
 case "${SECURITY_AUDIT_LINE_OWNERSHIP}" in
 	project|off)
@@ -434,6 +447,11 @@ case "${SECURITY_AUDIT_LINE_OWNERSHIP}" in
 		SECURITY_AUDIT_LINE_OWNERSHIP="project"
 		;;
 esac
+SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW="${SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW:-40}"
+if ! [[ "${SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW}" =~ ^[0-9]+$ ]]; then
+	echo "::warning::security-audit: SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW must be a non-negative integer; defaulting to 40"
+	SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW="40"
+fi
 SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES="${SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES:-16777216}"
 if ! [[ "${SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES}" =~ ^[0-9]+$ ]] || [ "${SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES}" -eq 0 ]; then
 	echo "::warning::security-audit: SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES must be a positive integer; defaulting to 16777216"
@@ -1904,7 +1922,8 @@ if [ "${SECURITY_AUDIT_LINE_OWNERSHIP_EFFECTIVE}" = "project" ]; then
 		"${FILTERED_FINDINGS_FILE}" \
 		"${LINE_OWNERSHIP_SUMMARY_FILE}" \
 		"${AUDIT_SCOPE_BASE_SHA}" \
-		"${AUDIT_SCOPE_HEAD_SHA}" 2> "${LINE_OWNERSHIP_ERROR_FILE}" <<'PY'
+		"${AUDIT_SCOPE_HEAD_SHA}" \
+		"${SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW}" 2> "${LINE_OWNERSHIP_ERROR_FILE}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -1913,19 +1932,27 @@ import re
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 repo_root = Path(sys.argv[1])
 findings_path = Path(sys.argv[2])
 summary_path = Path(sys.argv[3])
 base_sha = sys.argv[4].strip()
 head_sha = sys.argv[5].strip()
+try:
+	hunk_window = int(sys.argv[6]) if len(sys.argv) > 6 else 40
+except ValueError:
+	hunk_window = 40
+if hunk_window < 0:
+	hunk_window = 40
 
 # Per-call bound on `git blame` (and the one-off rev-list); a timeout marks
 # the finding's ownership unknown, which keeps it blocking.
 LINE_OWNERSHIP_BLAME_TIMEOUT_SECS = 30
 LINE_OWNERSHIP_REVLIST_TIMEOUT_SECS = 120
+LINE_OWNERSHIP_DIFF_TIMEOUT_SECS = 120
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
 
 def git(args: list[str], timeout: int) -> subprocess.CompletedProcess:
@@ -1953,6 +1980,8 @@ if not isinstance(findings, list):
 
 global_reason = ""
 project_commits: set[str] = set()
+files_with_deletions: set[str] = set()
+hunk_cache: dict[str, list[tuple[int, int]] | None] = {}
 if not SHA_RE.match(base_sha) or not SHA_RE.match(head_sha):
 	global_reason = "range_unresolved"
 else:
@@ -1968,8 +1997,183 @@ else:
 				global_reason = "rev_list_failed"
 			else:
 				project_commits = {line.strip() for line in revlist.stdout.splitlines() if SHA_RE.match(line.strip())}
+				# One project-wide diff: every path that lost lines (or is
+				# binary) in base..head.  --no-renames reports a rename as a
+				# full delete plus add, the conservative reading.  A failure
+				# keeps every finding blocking.
+				numstat = git(
+					["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--numstat", "-z", base_sha, head_sha],
+					LINE_OWNERSHIP_DIFF_TIMEOUT_SECS,
+				)
+				if numstat.returncode != 0:
+					global_reason = "diff_failed"
+				else:
+					for record in numstat.stdout.split("\0"):
+						parts = record.split("\t", 2)
+						if len(parts) != 3 or not parts[2]:
+							continue
+						added_count, deleted_count, changed_path = parts
+						if deleted_count == "-" or added_count == "-":
+							files_with_deletions.add(changed_path)
+						elif deleted_count.isdigit() and int(deleted_count) > 0:
+							files_with_deletions.add(changed_path)
 	except subprocess.TimeoutExpired:
 		global_reason = "timeout"
+
+
+def added_hunks(path: str) -> list[tuple[int, int]] | None:
+	# Added line ranges [start, end] of the project diff for one file, or None
+	# when the diff cannot be read or parsed (the caller keeps it blocking).
+	if path in hunk_cache:
+		return hunk_cache[path]
+	ranges: list[tuple[int, int]] | None = []
+	try:
+		diff = git(
+			["diff", "-U0", "--no-ext-diff", "--no-textconv", "--no-renames", base_sha, head_sha, "--", path],
+			LINE_OWNERSHIP_DIFF_TIMEOUT_SECS,
+		)
+	except subprocess.TimeoutExpired:
+		ranges = None
+	else:
+		if diff.returncode != 0:
+			ranges = None
+		else:
+			for diff_line in diff.stdout.splitlines():
+				if not diff_line.startswith("@@"):
+					continue
+				match = HUNK_RE.match(diff_line)
+				if match is None:
+					ranges = None
+					break
+				start = int(match.group(1))
+				count = int(match.group(2)) if match.group(2) is not None else 1
+				if count > 0:
+					ranges.append((start, start + count - 1))
+	hunk_cache[path] = ranges
+	return ranges
+
+
+# Basenames too generic to identify a module; the parent directory names it.
+LINE_OWNERSHIP_GENERIC_MODULE_STEMS = {"__init__", "index", "init", "main", "mod"}
+# Files whose mention of two modules is prose, not wiring.
+LINE_OWNERSHIP_DOC_SUFFIXES = {".md", ".markdown", ".rst", ".txt", ".adoc"}
+head_text_cache: dict[str, str | None] = {}
+base_mention_cache: dict[str, set[str] | None] = {}
+
+
+def module_stem(path: str) -> str:
+	pure = PurePosixPath(path)
+	stem = pure.stem
+	if stem.lower() in LINE_OWNERSHIP_GENERIC_MODULE_STEMS and pure.parent.name:
+		stem = pure.parent.name
+	# Two characters minimum: a short module such as db.py or io.py can hold
+	# the deleted guard, but a one-letter stem (a.py, i.py) matches ordinary
+	# words and loop variables and would block unrelated findings.
+	return stem if len(stem) >= 2 else ""
+
+
+def head_file_text(path: str) -> str | None:
+	# The cited file at the audited head, or None when it cannot be read.
+	if path not in head_text_cache:
+		try:
+			shown = git(["show", f"{head_sha}:{path}"], LINE_OWNERSHIP_DIFF_TIMEOUT_SECS)
+		except subprocess.TimeoutExpired:
+			head_text_cache[path] = None
+		else:
+			head_text_cache[path] = shown.stdout if shown.returncode == 0 else None
+	return head_text_cache[path]
+
+
+def base_paths_mentioning(stem: str) -> set[str] | None:
+	# Paths whose base-commit text names `stem` as a word (one `git grep`
+	# per stem), or None when the search fails.
+	if stem not in base_mention_cache:
+		try:
+			grep = git(["grep", "-l", "-I", "-F", "-w", "-e", stem, base_sha, "--"], LINE_OWNERSHIP_DIFF_TIMEOUT_SECS)
+		except subprocess.TimeoutExpired:
+			base_mention_cache[stem] = None
+		else:
+			if grep.returncode == 1:
+				base_mention_cache[stem] = set()
+			elif grep.returncode != 0:
+				base_mention_cache[stem] = None
+			else:
+				prefix = f"{base_sha}:"
+				base_mention_cache[stem] = {
+					line[len(prefix):] if line.startswith(prefix) else line
+					for line in grep.stdout.splitlines()
+					if line
+				}
+	return base_mention_cache[stem]
+
+
+def finding_strings(value: object) -> list[str]:
+	if isinstance(value, str):
+		return [value]
+	if isinstance(value, dict):
+		return [text for item in value.values() for text in finding_strings(item)]
+	if isinstance(value, list):
+		return [text for item in value for text in finding_strings(item)]
+	return []
+
+
+def deletion_block_reason(finding: dict, path: str, line: int) -> tuple[str, bool]:
+	# Returns (reason, unknown) when a pre-project line must stay blocking
+	# because the project may have removed or bypassed its protection.
+	# Matching only ever adds blocking, never removes it.
+	if path in files_with_deletions:
+		return "deleted_lines_in_file", False
+	ranges = added_hunks(path)
+	if ranges is None:
+		return "hunk_diff_failed", True
+	for start, end in ranges:
+		if start - hunk_window <= line <= end + hunk_window:
+			return "changed_hunk_within_window", False
+	texts = finding_strings({key: value for key, value in finding.items() if key not in ("file", "line")})
+	for other_path in files_with_deletions:
+		if other_path != path and any(other_path in text for text in texts):
+			return "references_file_with_deletions", False
+	# A guard can also live in a module the finding never names: the cited
+	# file imports or calls a module that lost lines, or a module that lost
+	# lines (at base, where the guard still was) names the cited module, as a
+	# router or middleware registration would.  Word matches on module names
+	# only ever add blocking; a failed read keeps the finding blocking.
+	other_paths = sorted(other for other in files_with_deletions if other != path)
+	if not other_paths:
+		return "", False
+	cited_text = head_file_text(path)
+	if cited_text is None:
+		return "module_reference_check_failed", True
+	for other_path in other_paths:
+		other_stem = module_stem(other_path)
+		if other_stem and re.search(rf"(?<![A-Za-z0-9_]){re.escape(other_stem)}(?![A-Za-z0-9_])", cited_text):
+			return "cited_file_references_module_with_deletions", False
+	cited_stem = module_stem(path)
+	if cited_stem:
+		referencing = base_paths_mentioning(cited_stem)
+		if referencing is None:
+			return "module_reference_check_failed", True
+		if any(other_path in referencing for other_path in other_paths):
+			return "module_with_deletions_references_cited_file", False
+		# One hop further: an unchanged source file (a router table, registry
+		# or dependency-injection configuration) that names both the cited
+		# module and a module that lost lines can wire the removed guard to
+		# the cited operation.  Documentation files are not wiring.
+		cited_referrers = {
+			referrer for referrer in referencing
+			if referrer != path and PurePosixPath(referrer).suffix.lower() not in LINE_OWNERSHIP_DOC_SUFFIXES
+		}
+		if cited_referrers:
+			for other_path in other_paths:
+				other_stem = module_stem(other_path)
+				if not other_stem or other_stem == cited_stem:
+					continue
+				other_referrers = base_paths_mentioning(other_stem)
+				if other_referrers is None:
+					return "module_reference_check_failed", True
+				if any(referrer != other_path and referrer in cited_referrers for referrer in other_referrers):
+					return "shared_referrer_links_module_with_deletions", False
+	return "", False
 
 blocking = advisory = unknown = 0
 log_lines: list[str] = []
@@ -2004,6 +2208,16 @@ for finding in findings:
 						reason = "parse_failed"
 					else:
 						is_advisory = commit not in project_commits
+						if is_advisory:
+							block_reason, block_unknown = deletion_block_reason(finding, file_value, line_value)
+							if block_reason:
+								is_advisory = False
+								if block_unknown:
+									reason = block_reason
+								else:
+									log_lines.append(
+										f"security-audit: line_ownership_blocking finding={safe_id(finding.get('finding_id'))} reason={block_reason}"
+									)
 	finding = dict(finding)
 	finding["advisory"] = is_advisory
 	annotated.append(finding)
