@@ -6489,6 +6489,84 @@ security_pass_record_waivers() {
   return 0
 }
 
+# security_pass_record_line_ownership_advisories <advisory_file> <head_sha> <merge_base_sha> <integration_branch>
+#
+# Plan item 4b (decision D4).  Record the findings the engine tagged
+# `advisory: true` (every cited line predates the project) as non-blocking
+# waiver rows with `source: "line_ownership"`, so they:
+#   - never gate the pass or count toward MAX_SECURITY_PASS_CYCLES (the caller
+#     already removed them from the findings file);
+#   - travel to the next audit as SECURITY_AUDIT_WAIVED_FINDINGS, so the same
+#     finding is not re-reported every cycle;
+#   - are filed once as `ai:security` follow-ups through the existing
+#     create_security_pass_advisory_followup dedupe (state + markers), deferred
+#     until the final merge when SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED=true.
+# Posts one tracking comment listing the advisories.  GitHub API cost: that
+# comment, plus (deferral off only) create_security_pass_advisory_followup's
+# own calls.  Fail-open: a failed state write warns and the advisories stay
+# out of the gate; the next audit re-reports them and recording is retried.
+security_pass_record_line_ownership_advisories() {
+  local advisory_file="$1"
+  local head_sha="$2"
+  local merge_base_sha="$3"
+  local integration_branch="$4"
+  local cycle defer waivers_json ids finding_json finding_id justification status_lines filed_issue
+  cycle="$(jq -r '(.security_pass_cycle // 0) + 1' "${STATE_FILE}" 2>/dev/null || echo 1)"
+  [[ "${cycle}" =~ ^[0-9]+$ ]] || cycle=1
+  defer=false
+  [ "${SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED:-true}" = "true" ] && defer=true
+  if ! waivers_json="$(jq -c --argjson cycle "${cycle}" --arg head_sha "${head_sha}" \
+    --arg base12 "${merge_base_sha:0:12}" --arg head12 "${head_sha:0:12}" --argjson defer "${defer}" '
+    [.[] | {
+      finding_id: .finding_id,
+      file: .file,
+      line: .line,
+      owasp_or_stride_category: .owasp_or_stride_category,
+      severity: .severity,
+      exploit_scenario: .exploit_scenario,
+      justification: ("Cited line \(.file):\(.line) predates the project (git blame attributes it outside \($base12)..\($head12))."),
+      source: "line_ownership",
+      waived_by: "security-pass-line-ownership",
+      waived_at_cycle: $cycle,
+      issue: null
+    } + (if $defer then {followup_pending: true, audited_head_sha: $head_sha, finding: (. | del(.advisory))} else {} end)]
+  ' "${advisory_file}" 2>/dev/null)" || [ -z "${waivers_json}" ]; then
+    echo "::warning::Could not build line-ownership advisory rows for tracking issue #${TRACKING_NUM}; the advisories stay out of the gate and are retried on the next audit."
+    return 0
+  fi
+  ids="$(printf '%s' "${waivers_json}" | jq -r 'map(.finding_id) | join(",")' 2>/dev/null || true)"
+  if ! security_pass_record_waivers "${waivers_json}"; then
+    echo "::warning::Could not record line-ownership advisories (${ids}) for tracking issue #${TRACKING_NUM}; they stay out of the gate and are retried on the next audit."
+    return 0
+  fi
+  echo "SECURITY_PASS_WAIVED tracking_issue=${TRACKING_NUM} source=line_ownership ids=${ids}"
+  status_lines=""
+  while IFS= read -r finding_json; do
+    [ -n "${finding_json}" ] || continue
+    finding_id="$(printf '%s' "${finding_json}" | jq -r '.finding_id')"
+    if [ "${defer}" = "true" ]; then
+      echo "SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED tracking_issue=${TRACKING_NUM} finding=${finding_id} source=line_ownership reason=integration_branch_not_merged"
+      filed_issue="follow-up filed after \`${integration_branch}\` merges into the default branch"
+    else
+      justification="$(printf '%s' "${finding_json}" | jq -r '.justification // ""')"
+      create_security_pass_advisory_followup "$(printf '%s' "${finding_json}" | jq -c '.finding // {finding_id, file, line, owasp_or_stride_category, severity, exploit_scenario}')" "${integration_branch}" "${head_sha}" "${justification}" "line_ownership"
+      if [[ "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
+        filed_issue="follow-up #${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}"
+      else
+        filed_issue="follow-up not filed (retried via the waiver row)"
+      fi
+    fi
+    status_lines="${status_lines}"$'\n'"- \`$(security_pass_prose "${finding_id}")\` at \`$(security_pass_prose "$(printf '%s' "${finding_json}" | jq -r '"\(.file):\(.line)"')")\` ($(security_pass_prose "$(printf '%s' "${finding_json}" | jq -r '.severity')")): ${filed_issue}"
+  done < <(printf '%s' "${waivers_json}" | jq -c --slurpfile src "${advisory_file}" '
+    .[] | . as $row | . + {finding: ($row.finding // ([$src[0][] | select(.finding_id == $row.finding_id)] | first | del(.advisory)))}
+  ')
+  post_tracking_comment "## 🔐 Security-pass advisory findings (pre-existing code)
+
+The security pass at integration head \`${head_sha}\` reported finding(s) whose cited lines predate the project (\`git blame\` attributes them outside \`${merge_base_sha:0:12}..${head_sha:0:12}\`). They do not gate the project and do not count toward the fix-cycle budget; each is filed as a non-blocking \`ai:security\` follow-up.
+${status_lines}" || true
+  return 0
+}
+
 # create_security_pass_advisory_followup <finding_json> <integration_branch> <head_sha> <justification> <source>
 #
 # File one non-blocking `ai:security` follow-up issue for an accepted
@@ -6580,6 +6658,7 @@ location = f"{finding.get('file')}:{finding.get('line')}"
 accepted_by = {
 	"judge": "the orchestrator's security-pass exhaustion judge",
 	"operator": "an operator (`/security-pass-waive`)",
+	"line_ownership": "the project security pass's line-ownership check",
 }.get(source, source)
 lines = [
 	f"<!-- ai:security-finding:{finding_id} -->",
@@ -6589,6 +6668,12 @@ lines = [
 	f"Non-blocking security follow-up. This finding was reported by the mandatory project security pass for integration branch `{integration_branch}` at `{head_sha}` and accepted as a known risk by {accepted_by} after the consolidated fix-cycle budget was spent. The project completes without this fix; address it through the normal issue pipeline.",
 	"",
 ]
+if source == "line_ownership":
+	lines[4] = (
+		f"Non-blocking security follow-up. This finding was reported by the mandatory project security pass for integration branch `{integration_branch}` at `{head_sha}`. "
+		"Its cited line predates the project (it was written before the integration base), so it does not gate the project. "
+		"The project completes without this fix; address it through the normal issue pipeline."
+	)
 if merged_pr.isdigit():
 	lines.extend(
 		[
@@ -7261,7 +7346,7 @@ run_security_pass_inline() {
   local verified_recheck_refspec="${5:-}"
   local prior_security_status current_integration_ref current_head_sha current_default_ref merge_base_sha
   local context_file findings_file audit_error_file finding_count completed_cycles effective_security_model
-  local required_security_asset
+  local required_security_asset advisory_findings_file advisory_count
 
   prior_security_status="$(jq -r '.security_pass_status // "pending"' "${STATE_FILE}" 2>/dev/null || echo pending)"
   if [ -z "${integration_branch}" ]; then
@@ -7548,6 +7633,7 @@ run_security_pass_inline() {
     SECURITY_AUDIT_WAIVED_FINDINGS="${security_pass_waived_findings_file}" \
     SECURITY_AUDIT_FIX_CYCLE_DIFFS="${security_pass_fix_cycle_diffs_file}" \
     SECURITY_AUDIT_CONFIDENCE_GATE="${SECURITY_PASS_CONFIDENCE_GATE}" \
+    SECURITY_AUDIT_LINE_OWNERSHIP="${SECURITY_AUDIT_LINE_OWNERSHIP:-project}" \
     SECURITY_AUDIT_SKIP_IF_UNCHANGED="false" \
     SECURITY_AUDIT_INCREMENTAL="true" \
     WORKFLOW_EDITOR_MODEL="${effective_security_model}" \
@@ -7584,7 +7670,8 @@ run_security_pass_inline() {
       and (.file | type) == "string" and (.file | length) > 0
       and (.line | type) == "number" and (.line | floor) == .line and .line > 0
       and (.exploit_scenario | type) == "string" and (.exploit_scenario | length) > 0
-      and (.recommendation | type) == "string" and (.recommendation | length) > 0)
+      and (.recommendation | type) == "string" and (.recommendation | length) > 0
+      and (.advisory == null or (.advisory | type) == "boolean"))
   ' "${findings_file}" >/dev/null 2>&1; then
     security_pass_fail_closed "engine_unavailable" "The findings-JSON security audit output was missing or invalid." "${prior_security_status}"
     return 1
@@ -7617,6 +7704,34 @@ run_security_pass_inline() {
   fi
 
   security_pass_apply_waivers_to_findings "${findings_file}"
+  # Line ownership (plan item 4b, decision D4): findings the engine tagged
+  # `advisory: true` cite only lines written before the project's merge-base.
+  # They never gate the pass: split them out here so every downstream consumer
+  # (state write, reported findings, fix issue, cycle budget, exhaustion judge,
+  # terminal failure, lesson events) sees blocking findings only, and record
+  # them as non-blocking advisory follow-ups.  A findings file without the
+  # field (SECURITY_AUDIT_LINE_OWNERSHIP=off, older engine) is all blocking.
+  # A failed split keeps the original file, so every finding stays blocking.
+  advisory_findings_file="${RUNTIME_DIR}/security_pass_findings_${TRACKING_NUM}.advisory.json"
+  advisory_count=0
+  if jq -c '[.findings[] | select(.advisory == true)]' "${findings_file}" > "${advisory_findings_file}" 2>/dev/null; then
+    advisory_count="$(jq -r 'length' "${advisory_findings_file}" 2>/dev/null || echo 0)"
+    [[ "${advisory_count}" =~ ^[0-9]+$ ]] || advisory_count=0
+    if [ "${advisory_count}" -gt 0 ]; then
+      if jq '.findings = [.findings[] | select(.advisory != true)] | .counts.kept = (.findings | length)' \
+        "${findings_file}" > "${findings_file}.blocking" 2>/dev/null \
+        && mv "${findings_file}.blocking" "${findings_file}"; then
+        security_pass_record_line_ownership_advisories "${advisory_findings_file}" "${current_head_sha}" "${merge_base_sha}" "${integration_branch}"
+      else
+        rm -f "${findings_file}.blocking"
+        advisory_count=0
+        echo "::warning::Could not split line-ownership advisories from the security-pass result for tracking issue #${TRACKING_NUM}; every finding stays blocking."
+      fi
+    fi
+  else
+    advisory_count=0
+    echo "::warning::Could not read line-ownership advisories from the security-pass result for tracking issue #${TRACKING_NUM}; every finding stays blocking."
+  fi
   finding_count="$(jq -r '.findings | length' "${findings_file}")"
   completed_cycles="$(jq -r '.security_pass_cycle // 0' "${STATE_FILE}")"
   # Record the audited head as the base of the next delta re-audit and
@@ -7672,11 +7787,11 @@ run_security_pass_inline() {
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     reconcile_tracking_body_after_security_pass_transition
     post_state_comment || true
-    echo "SECURITY_PASS_CLEAN tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha}"
+    echo "SECURITY_PASS_CLEAN tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} advisory=${advisory_count}"
     return 0
   fi
 
-  echo "SECURITY_PASS_BLOCKED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} findings=${finding_count} cycle=${completed_cycles}"
+  echo "SECURITY_PASS_BLOCKED tracking_issue=${TRACKING_NUM} head_sha=${current_head_sha} findings=${finding_count} cycle=${completed_cycles} advisory=${advisory_count}"
   record_orchestrator_lesson_event "$(lesson_event_json_for_security_findings "${findings_file}" "$((completed_cycles + 1))")"
   if [ "${completed_cycles}" -ge "${MAX_SECURITY_PASS_CYCLES}" ]; then
     # Budget spent: let the exhaustion judge decide before terminalizing.  It
