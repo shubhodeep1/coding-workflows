@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.81,
+  "details": "Changes to the review sandbox have addressed deterministic smoke-test seeding, cleanup timing after commits, and untrusted-workspace handling across multiple runs. When modifying this pipeline, check the full sandbox lifecycle and its contract tests rather than changing setup or cleanup in isolation.",
+  "fingerprint": "25a788bae1e247aa2db9fd3ea9024f00b0dc81c55d8cc18d2351ac75cda8bbfc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37711685027",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37711685027",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6681",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6700",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6701",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6705",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6706",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6683",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6702",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6703",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6707",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6708"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261008011809_d18e0e7924",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Treat untrusted review sandbox lifecycle and isolation as linked concerns.",
+  "timestamps": {
+    "created_at": "2026-10-08T01:18:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
