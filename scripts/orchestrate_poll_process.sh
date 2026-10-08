@@ -16800,6 +16800,7 @@ handle_unblock_judge_project_hooks() {
   local login requests count idx request req_item req_id req_title req_body full_body wave_idx new_url new_num
   local binding_pr_json binding_head_issue binding_reason binding_trusted_state_json="" binding_trusted_state_status="unset"
   local close_reason close_marker close_stop
+  local -a unblock_fixup_security_label_args=()
   if has_label "${TRACKING_LABELS}" "ai:unblock-closed"; then
     # Finish a previously issued verdict even if UNBLOCK_JUDGE_ENABLED was switched off.
     close_reason=""
@@ -16951,13 +16952,21 @@ handle_unblock_judge_project_hooks() {
 - Managed by: AI Orchestrator"
     ensure_label_exists "ai:clarification"
     ensure_label_exists "ai:orchestrator-managed"
+    # A request from a trusted unblock verdict that re-issues an ai:security
+    # finding carries its finding marker; the successor keeps the security
+    # label so the split stays bound to the finding (#6541).
+    unblock_fixup_security_label_args=()
+    if grep -Eq '^<!-- ai:security-finding:[A-Za-z0-9][A-Za-z0-9._:-]{0,119} -->$' <<< "${req_body}"; then
+      ensure_label_exists "ai:security"
+      unblock_fixup_security_label_args=(--label "ai:security")
+    fi
     mapfile -t _engine_label_args < <(engine_label_create_args)
     new_url="$(gh_retry gh issue create "${_engine_label_args[@]}" \
       --repo "${GITHUB_REPOSITORY}" \
       --title "${req_title}" \
       --body "${full_body}" \
       --label "ai:clarification" \
-      --label "ai:orchestrator-managed" 2>/dev/null || true)"
+      --label "ai:orchestrator-managed" "${unblock_fixup_security_label_args[@]}" 2>/dev/null || true)"
     new_url="$(printf '%s\n' "${new_url}" | grep -oE 'https://[^ ]+' | tail -n1 || true)"
     new_num="$(basename "${new_url%%[?#]*}")"
     if ! [[ "${new_num}" =~ ^[0-9]+$ ]]; then
