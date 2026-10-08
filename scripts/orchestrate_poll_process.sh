@@ -6515,6 +6515,11 @@ security_pass_record_line_ownership_advisories() {
   [[ "${cycle}" =~ ^[0-9]+$ ]] || cycle=1
   defer=false
   [ "${SECURITY_PASS_ADVISORY_DEFER_UNTIL_MERGED:-true}" = "true" ] && defer=true
+  # Every row carries `followup_pending` + the finding payload from the start,
+  # written in the same state update as the waiver itself.  With deferral off
+  # a successful create clears them; a failed create leaves the row pending,
+  # so security_pass_file_deferred_advisory_followups retries it at the final
+  # merge without needing a second state write that could also fail.
   if ! waivers_json="$(jq -c --argjson cycle "${cycle}" --arg head_sha "${head_sha}" \
     --arg base12 "${merge_base_sha:0:12}" --arg head12 "${head_sha:0:12}" --argjson defer "${defer}" '
     [.[] | {
@@ -6529,7 +6534,7 @@ security_pass_record_line_ownership_advisories() {
       waived_by: "security-pass-line-ownership",
       waived_at_cycle: $cycle,
       issue: null
-    } + (if $defer then {followup_pending: true, audited_head_sha: $head_sha, finding: (. | del(.advisory))} else {} end)]
+    } + {followup_pending: true, audited_head_sha: $head_sha, finding: (. | del(.advisory))}]
   ' "${advisory_file}" 2>/dev/null)" || [ -z "${waivers_json}" ]; then
     echo "::warning::Could not build line-ownership advisory rows for tracking issue #${TRACKING_NUM}; the advisories stay out of the gate and are retried on the next audit."
     return 0
@@ -6553,21 +6558,9 @@ security_pass_record_line_ownership_advisories() {
       if [[ "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
         filed_issue="follow-up #${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}"
       else
-        # Immediate create failed: mark the row pending (with its finding
-        # payload) so security_pass_file_deferred_advisory_followups retries
-        # it at the final merge; otherwise the waiver would suppress the
-        # finding with no follow-up ever filed.
-        if jq --arg id "${finding_id}" --arg head_sha "${head_sha}" --argjson finding "$(printf '%s' "${finding_json}" | jq -c '.finding // {finding_id, file, line, owasp_or_stride_category, severity, exploit_scenario}')" '
-          .security_pass_waived_findings = [
-            (.security_pass_waived_findings // [])[]
-            | if .finding_id == $id and .issue == null then (. + {followup_pending: true, audited_head_sha: $head_sha, finding: $finding}) else . end
-          ]
-        ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
-          filed_issue="follow-up not filed yet (retried after \`${integration_branch}\` merges)"
-        else
-          rm -f "${STATE_FILE}.tmp"
-          filed_issue="follow-up not filed (state write failed)"
-        fi
+        # Immediate create failed: the row was recorded with
+        # `followup_pending`, so the deferred filer retries it at the final merge.
+        filed_issue="follow-up not filed yet (retried after \`${integration_branch}\` merges)"
       fi
     fi
     status_lines="${status_lines}"$'\n'"- \`$(security_pass_prose "${finding_id}")\` at \`$(security_pass_prose "$(printf '%s' "${finding_json}" | jq -r '"\(.file):\(.line)"')")\` ($(security_pass_prose "$(printf '%s' "${finding_json}" | jq -r '.severity')")): ${filed_issue}"
@@ -7295,7 +7288,7 @@ The consolidated fix-cycle budget (${completed_cycles}/${MAX_SECURITY_PASS_CYCLE
 **Summary:** $(security_pass_prose "${summary}")
 ${decisions_table:+
 ${decisions_table}}"
-  echo "SECURITY_PASS_CLEAN tracking_issue=${TRACKING_NUM} head_sha=${head_sha} reason=exhaustion_judge_accepted accepted=${accepted_count}"
+  echo "SECURITY_PASS_CLEAN tracking_issue=${TRACKING_NUM} head_sha=${head_sha} reason=exhaustion_judge_accepted accepted=${accepted_count} advisory=${advisory_count:-0}"
   tg_notify "Project #${TRACKING_NUM} security pass: the exhaustion judge accepted ${accepted_count} remaining finding(s) as known risks after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} fix cycles${followup_tg_suffix}; completion continues." "WARNING"
   SECURITY_PASS_JUDGE_OUTCOME="passed"
   return 0

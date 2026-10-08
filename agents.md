@@ -1586,7 +1586,7 @@ tracking body's `Waived findings: N` includes them and the next audit does
 not re-report them), files them through the deferred
 `create_security_pass_advisory_followup` path, and posts one
 `🔐 Security-pass advisory findings (pre-existing code)` comment.
-`SECURITY_PASS_CLEAN` (main path) and `SECURITY_PASS_BLOCKED` (findings path)
+`SECURITY_PASS_CLEAN` (main and exhaustion-judge paths) and `SECURITY_PASS_BLOCKED` (findings path)
 gain a trailing `advisory=<n>`; `findings=` counts blocking findings only.
 `off` restores the previous behaviour exactly.
 Persistent findings after `MAX_SECURITY_PASS_CYCLES` (default `5`)
