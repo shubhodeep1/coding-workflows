@@ -2846,18 +2846,26 @@ def _line_ownership_base_text() -> str:
 def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") -> tuple[Path, str, str]:
 	"""Build a base commit and one project commit; return (repo_dir, base_sha, head_sha).
 
-	Variants (mod.py always changes in base..head, so it stays in scope):
+	Variants (``_run_line_ownership_audit`` passes a prior finding on mod.py,
+	so mod.py stays in scope even when the project leaves it unchanged):
 	- ``append``: pure addition of line 61; lines 1-60 predate the project.
+	- ``unrelated_change``: mod.py is unchanged; the project adds other.py,
+	  which names nothing.
 	- ``rewrite``: line 2 is rewritten (a deletion plus an addition).
 	- ``delete_guard``: a guard line above an unchanged operation is deleted.
 	- ``insert_near``: one line is inserted after line 50 (no deletion).
-	- ``cross_file``: line 61 is appended to mod.py and auth.py loses a line.
+	- ``cross_file``: mod.py is unchanged and auth.py loses a line.
 	- ``cross_file_import``: as ``cross_file``, but mod.py imports auth.
 	- ``cross_file_reverse``: as ``cross_file``, but auth.py names mod.
 	- ``cross_file_registry``: as ``cross_file``, but an unchanged registry.py
 	  names both auth and mod (neither names the other).
 	- ``cross_file_registry_short``: as ``cross_file_registry``, but the guard
 	  is deleted from the two-letter module db.py instead of auth.py.
+	- ``head_router``: as ``cross_file``, but the project adds router.py
+	  naming both auth and mod (the link exists only at the head).
+	- ``head_override``: no deletions; the project adds patch.py naming mod.
+	- ``test_added``: no deletions; the project adds tests/test_mod.py
+	  naming mod.
 	"""
 	repo_dir = base_dir / "audited-repo"
 	repo_dir.mkdir(parents=True, exist_ok=True)
@@ -2913,27 +2921,40 @@ def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") ->
 		project_lines = base_lines[1:]
 	elif variant == "insert_near":
 		project_lines = [*base_lines[:50], "PROJECT_BYPASS = 1\n", *base_lines[50:]]
-	elif variant in ("cross_file", "cross_file_import", "cross_file_reverse", "cross_file_registry"):
-		project_lines = [*base_lines, f"PROJECT_{LINE_OWNERSHIP_PROJECT_LINE} = 1\n"]
+	elif variant == "unrelated_change":
+		project_lines = list(base_lines)
+		(repo_dir / "other.py").write_text("OTHER = 1\n", encoding="utf-8")
+	elif variant in ("cross_file", "cross_file_import", "cross_file_reverse", "cross_file_registry", "head_router"):
+		project_lines = list(base_lines)
 		(repo_dir / "auth.py").write_text(auth_base_text.replace("\treturn require_admin()\n", ""), encoding="utf-8")
+		if variant == "head_router":
+			(repo_dir / "router.py").write_text("import auth\nimport mod\n", encoding="utf-8")
 	elif variant == "cross_file_registry_short":
-		project_lines = [*base_lines, f"PROJECT_{LINE_OWNERSHIP_PROJECT_LINE} = 1\n"]
+		project_lines = list(base_lines)
 		(repo_dir / "db.py").write_text(db_base_text.replace("\treturn require_admin()\n", ""), encoding="utf-8")
-		_git("add", "db.py")
+	elif variant == "head_override":
+		project_lines = list(base_lines)
+		(repo_dir / "patch.py").write_text("import mod\nmod.BASE_1 = 0\n", encoding="utf-8")
+	elif variant == "test_added":
+		project_lines = list(base_lines)
+		(repo_dir / "tests").mkdir()
+		(repo_dir / "tests" / "test_mod.py").write_text("import mod\n", encoding="utf-8")
 	else:
 		raise AssertionError(f"unknown line ownership fixture variant {variant}")
 	(repo_dir / "mod.py").write_text("".join(project_lines), encoding="utf-8")
-	_git("add", "mod.py", "auth.py")
+	_git("add", "-A")
 	_git("commit", "-q", "-m", "project commit")
 	head_sha = _git("rev-parse", "HEAD")
 	return repo_dir, base_sha, head_sha
 
 
-def _line_ownership_finding(finding_id: str, line: int, *, exploit_scenario: str | None = None) -> dict:
+def _line_ownership_finding(
+	finding_id: str, line: int, *, exploit_scenario: str | None = None, file_path: str = "mod.py"
+) -> dict:
 	if exploit_scenario is None:
-		finding = _finding_payload(finding_id, file_path="mod.py")
+		finding = _finding_payload(finding_id, file_path=file_path)
 	else:
-		finding = _finding_payload(finding_id, file_path="mod.py", exploit_scenario=exploit_scenario)
+		finding = _finding_payload(finding_id, file_path=file_path, exploit_scenario=exploit_scenario)
 	finding["line"] = line
 	return finding
 
@@ -2946,12 +2967,17 @@ def _run_line_ownership_audit(
 	with tempfile.TemporaryDirectory(prefix="security-audit-line-ownership-") as fixture_td:
 		tmp_path = Path(fixture_td)
 		repo_dir, base_sha, head_sha = _git_fixture_repo_line_ownership(tmp_path, variant)
+		# A prior finding on mod.py keeps it in scope when the project leaves
+		# it unchanged, as a delta re-audit does in production.
+		prior_findings_path = tmp_path / "prior_findings.json"
+		prior_findings_path.write_text(json.dumps([_finding_payload("prior-mod", file_path="mod.py")]), encoding="utf-8")
 		env = {
 			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
 			"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
 			"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"),
 			"SECURITY_AUDIT_DIFF_BASE": base_sha,
 			"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+			"SECURITY_AUDIT_PRIOR_FINDINGS": str(prior_findings_path),
 		}
 		env.update(extra_env or {})
 		proc, final_state = _run_security_audit(
@@ -2976,7 +3002,8 @@ def test_security_audit_line_ownership_project_written_line_blocks() -> None:
 
 def test_security_audit_line_ownership_base_only_line_is_advisory() -> None:
 	proc, payload = _run_line_ownership_audit(
-		[_line_ownership_finding("base-line", 1), _line_ownership_finding("project-line", LINE_OWNERSHIP_PROJECT_LINE)]
+		[_line_ownership_finding("base-line", 1), _line_ownership_finding("project-line", 1, file_path="other.py")],
+		variant="unrelated_change",
 	)
 	assert proc.returncode == 0, proc.stderr
 	by_id = {finding["finding_id"]: finding["advisory"] for finding in payload["findings"]}
@@ -3017,9 +3044,21 @@ def test_security_audit_line_ownership_added_hunk_within_window_blocks() -> None
 	)
 	assert proc.returncode == 0, proc.stderr
 	by_id = {finding["finding_id"]: finding["advisory"] for finding in payload["findings"]}
-	assert by_id == {"near-line": False, "far-line": True}
-	assert payload["line_ownership"] == {"mode": "project", "blocking": 1, "advisory": 1, "unknown": 0}
+	assert by_id == {"near-line": False, "far-line": False}
+	assert payload["line_ownership"] == {"mode": "project", "blocking": 2, "advisory": 0, "unknown": 0}
 	assert "security-audit: line_ownership_blocking finding=near-line reason=changed_hunk_within_window" in proc.stdout
+	assert "security-audit: line_ownership_blocking finding=far-line reason=added_lines_in_file" in proc.stdout
+
+
+def test_security_audit_line_ownership_distant_addition_blocks() -> None:
+	# Finding security-pass-distant-override-advisory: the project appends to
+	# the cited file more than the window away from the cited line; distance
+	# alone is no proof that the addition cannot change its execution.
+	proc, payload = _run_line_ownership_audit([_line_ownership_finding("base-line", 1)], variant="append")
+	assert proc.returncode == 0, proc.stderr
+	assert payload["findings"][0]["advisory"] is False
+	assert payload["line_ownership"] == {"mode": "project", "blocking": 1, "advisory": 0, "unknown": 0}
+	assert "security-audit: line_ownership_blocking finding=base-line reason=added_lines_in_file" in proc.stdout
 
 
 def test_security_audit_line_ownership_hunk_window_is_configurable() -> None:
@@ -3042,7 +3081,9 @@ def test_security_audit_line_ownership_invalid_hunk_window_warns_and_uses_defaul
 	assert proc.returncode == 0, proc.stderr
 	assert "SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW must be a non-negative integer; defaulting to 40" in proc.stdout
 	by_id = {finding["finding_id"]: finding["advisory"] for finding in payload["findings"]}
-	assert by_id == {"near-line": False, "far-line": True}
+	assert by_id == {"near-line": False, "far-line": False}
+	assert "security-audit: line_ownership_blocking finding=near-line reason=changed_hunk_within_window" in proc.stdout
+	assert "security-audit: line_ownership_blocking finding=far-line reason=added_lines_in_file" in proc.stdout
 
 
 def test_security_audit_line_ownership_reference_to_file_with_deletions_blocks() -> None:
@@ -3070,6 +3111,8 @@ def test_security_audit_line_ownership_reference_to_file_with_deletions_blocks()
 		("cross_file_reverse", "module_with_deletions_references_cited_file"),
 		("cross_file_registry", "shared_referrer_links_module_with_deletions"),
 		("cross_file_registry_short", "shared_referrer_links_module_with_deletions"),
+		("head_router", "shared_referrer_links_module_with_deletions"),
+		("head_override", "changed_file_references_cited_module"),
 	],
 )
 def test_security_audit_line_ownership_unnamed_module_with_deletions_blocks(variant: str, reason: str) -> None:
@@ -3079,6 +3122,31 @@ def test_security_audit_line_ownership_unnamed_module_with_deletions_blocks(vari
 	assert payload["findings"][0]["advisory"] is False
 	assert payload["line_ownership"] == {"mode": "project", "blocking": 1, "advisory": 0, "unknown": 0}
 	assert f"security-audit: line_ownership_blocking finding=unnamed-guard reason={reason}" in proc.stdout
+
+
+def test_security_audit_line_ownership_project_test_file_naming_module_stays_advisory() -> None:
+	# Test code cannot change production execution.
+	proc, payload = _run_line_ownership_audit([_line_ownership_finding("base-line", 1)], variant="test_added")
+	assert proc.returncode == 0, proc.stderr
+	assert payload["findings"][0]["advisory"] is True
+	assert "line_ownership_blocking" not in proc.stdout
+
+
+@pytest.mark.parametrize("variant", ["head_override", "cross_file_reverse"])
+def test_security_audit_line_ownership_module_reference_failure_blocks(variant: str) -> None:
+	proc, payload = _run_line_ownership_audit(
+		[_line_ownership_finding("base-line", 1)],
+		variant=variant,
+		extra_env={
+			"GIT_CONFIG_COUNT": "1",
+			"GIT_CONFIG_KEY_0": "grep.patternType",
+			"GIT_CONFIG_VALUE_0": "bogus",
+		},
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert payload["findings"][0]["advisory"] is False
+	assert payload["line_ownership"] == {"mode": "project", "blocking": 1, "advisory": 0, "unknown": 1}
+	assert "security-audit: line_ownership_unknown finding=base-line reason=module_reference_check_failed" in proc.stdout
 
 
 def test_security_audit_line_ownership_blame_failure_blocks() -> None:
@@ -3113,7 +3181,9 @@ def test_security_audit_line_ownership_off_changes_nothing() -> None:
 
 def test_security_audit_line_ownership_invalid_value_warns_and_uses_project() -> None:
 	proc, payload = _run_line_ownership_audit(
-		[_line_ownership_finding("base-line", 1)], extra_env={"SECURITY_AUDIT_LINE_OWNERSHIP": "bogus"}
+		[_line_ownership_finding("base-line", 1)],
+		extra_env={"SECURITY_AUDIT_LINE_OWNERSHIP": "bogus"},
+		variant="unrelated_change",
 	)
 	assert proc.returncode == 0, proc.stderr
 	assert "SECURITY_AUDIT_LINE_OWNERSHIP must be project or off" in proc.stdout

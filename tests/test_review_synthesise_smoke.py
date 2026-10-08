@@ -789,17 +789,41 @@ def test_generated_wrappers_report_pass_fail_and_inconclusive_advisory_states() 
 			"src/module.py:3:present": "BEHAVIOURAL_SMOKE_PRESENT_FAILED",
 			"src/module.py:4:unknown": "BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE",
 		}
+		body_echoes = ("# cleared", "# still-present", "# inconclusive")
+		wrapper_env = {key: value for key, value in os.environ.items() if key != "BEHAVIOURAL_SMOKE_SANDBOXED"}
 		for row in payload["files"]:
 			wrapper_path = workspace / row["cache_relpath"]
+			wrapper_text = wrapper_path.read_text(encoding="utf-8")
+			assert 'if [ "${BEHAVIOURAL_SMOKE_SANDBOXED:-}" != "1" ]; then' in wrapper_text
+			assert wrapper_text.index("BEHAVIOURAL_SMOKE_SANDBOXED") < wrapper_text.index("_synth_output_file=")
+			# Finding smoke-synth-credentialed-test-exec: outside the validation
+			# driver's sandbox the model-written body is reported, never run.
+			unsandboxed = subprocess.run(
+				["bash", str(wrapper_path)],
+				cwd=workspace,
+				env=wrapper_env,
+				capture_output=True,
+				text=True,
+				timeout=60,
+			)
+			assert unsandboxed.returncode == 0, unsandboxed.stdout + unsandboxed.stderr
+			assert "reason=not_sandboxed" in unsandboxed.stdout
+			assert "ok 1 - behavioural smoke" in unsandboxed.stdout
+			assert not any(echo in unsandboxed.stdout for echo in body_echoes)
+			assert "BEHAVIOURAL_SMOKE_PRESENT_PASSED" not in unsandboxed.stdout
+			assert "BEHAVIOURAL_SMOKE_PRESENT_FAILED" not in unsandboxed.stdout
+
 			wrapper_result = subprocess.run(
 				["bash", str(wrapper_path)],
 				cwd=workspace,
+				env={**wrapper_env, "BEHAVIOURAL_SMOKE_SANDBOXED": "1"},
 				capture_output=True,
 				text=True,
 				timeout=60,
 			)
 			assert wrapper_result.returncode == 0, wrapper_result.stdout + wrapper_result.stderr
 			assert markers[row["issue_id"]] in wrapper_result.stdout
+			assert "reason=not_sandboxed" not in wrapper_result.stdout
 			assert "ok 1 - behavioural smoke" in wrapper_result.stdout
 
 
@@ -1112,6 +1136,127 @@ def test_validate_process_skips_wrapper_copy_when_manifest_target_is_invalid() -
 		assert not (workspace / "outside.json").exists()
 		assert "skipping synthesised smoke materialization because target_manifest_relpath is invalid" in result.stderr
 		assert "Materialized synthesised behavioural smoke tests" not in result.stdout
+
+
+def _run_materializer(workspace: Path) -> subprocess.CompletedProcess[str]:
+	function_text = _extract_shell_function(VALIDATE_PROCESS, "materialize_synthesised_behavioural_smoke_tests")
+	return subprocess.run(
+		[
+			"bash",
+			"-c",
+			"set -euo pipefail\n"
+			+ "VALIDATION_INCLUDE_SYNTHESISED=true\n"
+			+ function_text
+			+ "materialize_synthesised_behavioural_smoke_tests\n",
+		],
+		cwd=workspace,
+		capture_output=True,
+		text=True,
+		check=True,
+		timeout=60,
+	)
+
+
+def _manifest_row(cache_name: str, target_relpath: str) -> dict:
+	return {
+		"issue_id": cache_name,
+		"file": "src/module.py",
+		"line_start": 3,
+		"line_end": 3,
+		"severity": "must-fix",
+		"slug": "latest_issue",
+		"cache_relpath": f".ai/review_runtime/pr-4242/round-3/synth/{cache_name}",
+		"target_relpath": target_relpath,
+		"suggested_path": target_relpath,
+		"expected_to_fail_until_fixed": True,
+	}
+
+
+def test_validate_process_rejects_non_synth_target_names_and_symlinked_sources() -> None:
+	# Finding smoke-synth-credentialed-test-exec: a cache-poisoned manifest
+	# must not plant a host-run test (or overwrite the canary) under a name
+	# the driver's sandbox routing would miss, nor copy a symlinked secret.
+	with tempfile.TemporaryDirectory(prefix="validate_process_synth_names_") as td:
+		workspace = Path(td)
+		round3_dir = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-3" / "synth"
+		round3_dir.mkdir(parents=True, exist_ok=True)
+		for name in ("synth_round_3_good_issue.sh", "synth_round_3_canary_issue.sh"):
+			(round3_dir / name).write_text("#!/usr/bin/env bash\necho hi\n", encoding="utf-8")
+		secret = workspace / "secret.txt"
+		secret.write_text("TOKEN\n", encoding="utf-8")
+		(round3_dir / "synth_round_3_link_issue.sh").symlink_to(secret)
+		(round3_dir / "synth_round_3_manifest.json").write_text(
+			json.dumps(
+				{
+					"round": 3,
+					"head_sha": "newsha",
+					"target_manifest_relpath": "validation/tests/synth_round_3_manifest.json",
+					"files": [
+						_manifest_row("synth_round_3_good_issue.sh", "validation/tests/synth_round_3_good_issue.sh"),
+						_manifest_row("synth_round_3_canary_issue.sh", "validation/tests/00_canary.sh"),
+						_manifest_row("synth_round_3_link_issue.sh", "validation/tests/synth_round_3_link_issue.sh"),
+					],
+				}
+			)
+			+ "\n",
+			encoding="utf-8",
+		)
+
+		result = _run_materializer(workspace)
+
+		tests_dir = workspace / "validation" / "tests"
+		assert (tests_dir / "synth_round_3_good_issue.sh").is_file()
+		assert not (tests_dir / "00_canary.sh").exists()
+		assert not (tests_dir / "synth_round_3_link_issue.sh").exists()
+		assert "not named synth_round_<n>_<slug>.sh: validation/tests/00_canary.sh" in result.stderr
+		assert "source that is a symlink" in result.stderr
+		assert "files=1" in result.stdout
+
+
+def test_validate_process_rejects_non_synth_manifest_target_name() -> None:
+	with tempfile.TemporaryDirectory(prefix="validate_process_synth_manifest_name_") as td:
+		workspace = Path(td)
+		round3_dir = workspace / ".ai" / "review_runtime" / "pr-4242" / "round-3" / "synth"
+		round3_dir.mkdir(parents=True, exist_ok=True)
+		(round3_dir / "synth_round_3_good_issue.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+		(round3_dir / "synth_round_3_manifest.json").write_text(
+			json.dumps(
+				{
+					"round": 3,
+					"target_manifest_relpath": "validation/tests/00_canary.sh",
+					"files": [_manifest_row("synth_round_3_good_issue.sh", "validation/tests/synth_round_3_good_issue.sh")],
+				}
+			)
+			+ "\n",
+			encoding="utf-8",
+		)
+
+		result = _run_materializer(workspace)
+
+		assert not (workspace / "validation" / "tests" / "00_canary.sh").exists()
+		assert not (workspace / "validation" / "tests" / "synth_round_3_good_issue.sh").exists()
+		assert "target_manifest_relpath is invalid" in result.stderr
+
+
+def test_validate_process_launches_harness_without_pipeline_credentials() -> None:
+	script = VALIDATE_PROCESS.read_text(encoding="utf-8")
+	scrub = script.split("VALIDATION_HARNESS_CREDENTIAL_SCRUB=(", 1)[1].split(")", 1)[0].split()
+	assert scrub[0] == "env"
+	for name in (
+		"GH_TOKEN",
+		"GITHUB_TOKEN",
+		"GH_PAT",
+		"OPENROUTER_API_KEY",
+		"TG_BOT_SECRET",
+		"CHECK_TRIAGE_ISSUES_TOKEN",
+		"ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+		"ACTIONS_ID_TOKEN_REQUEST_URL",
+	):
+		assert f"-u {name}" in " ".join(scrub)
+	launch_lines = [line.strip() for line in script.splitlines() if '> "${VALIDATION_LOG_FILE}" 2>&1 &' in line]
+	assert len(launch_lines) == 3
+	for line in launch_lines:
+		assert line.startswith('"${VALIDATION_HARNESS_CREDENTIAL_SCRUB[@]}" ')
 
 
 def test_validate_process_warns_when_synth_sources_are_missing() -> None:

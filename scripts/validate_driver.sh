@@ -149,6 +149,18 @@ if ! is_positive_int "${TAIL_LINES}"; then
 	TAIL_LINES=30
 fi
 
+# Synthesised behavioural smoke tests (synth_round_*.sh) are model-written
+# from PR-derived context and restored from a PR-scoped cache, so they run
+# only inside a credential-free, network-less container (finding
+# smoke-synth-credentialed-test-exec).  Default lives here, not in a
+# workflow (unattended_system_instructions.md section 8).
+VALIDATION_SYNTH_SANDBOX_TIMEOUT_SECS="${VALIDATION_SYNTH_SANDBOX_TIMEOUT_SECS:-300}"
+if ! is_positive_int "${VALIDATION_SYNTH_SANDBOX_TIMEOUT_SECS}" || [ "${#VALIDATION_SYNTH_SANDBOX_TIMEOUT_SECS}" -gt 5 ]; then
+	echo "::warning::validate_driver: VALIDATION_SYNTH_SANDBOX_TIMEOUT_SECS must be a positive integer of at most 5 digits; defaulting to 300" >&2
+	VALIDATION_SYNTH_SANDBOX_TIMEOUT_SECS=300
+fi
+VALIDATION_SYNTH_SANDBOX_IMAGE="python:3.12-slim"
+
 mkdir -p "${LOG_DIR}"
 
 START_TS="$(date +%s)"
@@ -763,6 +775,107 @@ discover_tests()
 	fi
 }
 
+# Writes a TAP SKIP result for a synthesised test whose content was not run
+# (or did not finish) and logs why.  Never falls back to running on the host.
+synthesised_test_sandbox_skip()
+{
+	local test_name="$1"
+	local test_log="$2"
+	local skip_reason="$3"
+
+	{
+		echo "1..1"
+		echo "# BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE reason=sandbox_unavailable detail=${skip_reason}"
+		echo "ok 1 - ${test_name} # SKIP behavioural smoke sandbox unavailable"
+	} > "${test_log}"
+	echo "BEHAVIOURAL_SMOKE_SANDBOX test=${test_name} outcome=skipped reason=${skip_reason}" >&2
+}
+
+# Runs one synthesised behavioural smoke test in a container with no network,
+# a read-only root, every capability dropped, no credentials (docker is
+# invoked under env -i) and no .git: the source tree arrives as a
+# `git archive` of HEAD on stdin.  Docker or image unavailability skips the
+# test instead of running it on the host.
+run_synthesised_test_sandboxed()
+{
+	local test_file="$1"
+	local test_log="$2"
+	local test_name="${test_file##*/}"
+	local stage_dir=""
+	local container_name=""
+	local snapshot_input="/dev/null"
+	local sandbox_status=0
+	local -a docker_env=(env -i "PATH=${PATH}" HOME=/nonexistent DOCKER_CONFIG=/nonexistent)
+
+	if [ -L "${test_file}" ] || [ ! -f "${test_file}" ]; then
+		synthesised_test_sandbox_skip "${test_name}" "${test_log}" "unsafe_test_path"
+		return 0
+	fi
+	if ! command -v docker >/dev/null 2>&1; then
+		synthesised_test_sandbox_skip "${test_name}" "${test_log}" "docker_missing"
+		return 0
+	fi
+	if ! "${docker_env[@]}" docker image inspect "${VALIDATION_SYNTH_SANDBOX_IMAGE}" >/dev/null 2>&1 \
+		&& ! "${docker_env[@]}" docker pull --quiet "${VALIDATION_SYNTH_SANDBOX_IMAGE}" >/dev/null 2>&1; then
+		synthesised_test_sandbox_skip "${test_name}" "${test_log}" "image_unavailable"
+		return 0
+	fi
+	if ! stage_dir="$(mktemp -d "${TMPDIR:-/tmp}/synth_sandbox.XXXXXX" 2>/dev/null)" \
+		|| ! cp -- "${test_file}" "${stage_dir}/test.sh" 2>/dev/null \
+		|| ! chmod 0644 "${stage_dir}/test.sh" 2>/dev/null; then
+		[ -n "${stage_dir}" ] && rm -rf "${stage_dir}" >/dev/null 2>&1
+		synthesised_test_sandbox_skip "${test_name}" "${test_log}" "stage_failed"
+		return 0
+	fi
+	if git -c core.fsmonitor= archive --format=tar HEAD > "${stage_dir}/source.tar" 2>/dev/null; then
+		snapshot_input="${stage_dir}/source.tar"
+	else
+		echo "BEHAVIOURAL_SMOKE_SANDBOX test=${test_name} source_snapshot=unavailable" >&2
+	fi
+	container_name="synth-smoke-$$-${RANDOM}${RANDOM}"
+
+	# No set +e/-e toggling here: the caller reads this function's status with
+	# errexit off, and re-enabling it would abort on a failing test.
+	(
+		ulimit -f 40000
+		timeout --kill-after=10s "${VALIDATION_SYNTH_SANDBOX_TIMEOUT_SECS}" \
+			"${docker_env[@]}" docker run --rm -i \
+			--pull=never \
+			--name "${container_name}" \
+			--user "$(id -u):$(id -g)" --network none --read-only \
+			--cap-drop ALL --security-opt no-new-privileges --pids-limit 128 \
+			--memory 512m --cpus 2 --tmpfs /tmp:rw,nosuid,nodev,size=32m \
+			--tmpfs /workspace:rw,nosuid,nodev,size=80m,mode=1777 \
+			--mount "type=bind,src=${stage_dir}/test.sh,dst=/synth/test.sh,readonly" \
+			--env HOME=/tmp --env TMPDIR=/tmp --env BEHAVIOURAL_SMOKE_SANDBOXED=1 \
+			--workdir /workspace \
+			"${VALIDATION_SYNTH_SANDBOX_IMAGE}" /bin/bash -c '
+				if ! tar -C /workspace -xf - >/dev/null 2>&1; then
+					echo "# source_snapshot=incomplete"
+				fi
+				exec bash /synth/test.sh
+			' < "${snapshot_input}" > "${test_log}" 2>&1
+	) || sandbox_status=$?
+	"${docker_env[@]}" docker rm -f "${container_name}" >/dev/null 2>&1 || true
+	rm -rf "${stage_dir}" >/dev/null 2>&1 || true
+
+	if [ "${sandbox_status}" -eq 124 ] || [ "${sandbox_status}" -eq 137 ]; then
+		{
+			echo "# BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE reason=sandbox_timeout exit=${sandbox_status}"
+			echo "ok 1 - ${test_name} # SKIP behavioural smoke sandbox timeout"
+		} >> "${test_log}"
+		echo "BEHAVIOURAL_SMOKE_SANDBOX test=${test_name} outcome=ran exit=${sandbox_status}" >&2
+		return 0
+	fi
+	if [ "${sandbox_status}" -eq 125 ] && ! grep -Eq '^[[:space:]]*(not )?ok([[:space:]]|$)' "${test_log}" 2>/dev/null; then
+		# docker run reports its own start failures as 125.
+		synthesised_test_sandbox_skip "${test_name}" "${test_log}" "start_failed"
+		return 0
+	fi
+	echo "BEHAVIOURAL_SMOKE_SANDBOX test=${test_name} outcome=ran exit=${sandbox_status}" >&2
+	return "${sandbox_status}"
+}
+
 run_single_test()
 {
 	local test_file="$1"
@@ -787,7 +900,11 @@ run_single_test()
 	fi
 
 	set +e
-	bash "${test_file}" > "${test_log}" 2>&1
+	if [[ "${test_name}" == synth_round_*.sh ]]; then
+		run_synthesised_test_sandboxed "${test_file}" "${test_log}"
+	else
+		bash "${test_file}" > "${test_log}" 2>&1
+	fi
 	exit_code=$?
 	set -e
 

@@ -1590,6 +1590,13 @@ from pathlib import Path
 repo_root = Path('.').resolve()
 runtime_root = (repo_root / '.ai' / 'review_runtime').resolve()
 target_root = (repo_root / 'validation' / 'tests').resolve()
+# The manifest is restored from a PR-scoped cache, so its names are
+# untrusted: only synth_round_* names may be written, which validate_driver.sh
+# routes into its credential-free sandbox (finding
+# smoke-synth-credentialed-test-exec).  A non-matching name could plant a
+# host-run test or overwrite the canary.
+SYNTH_TARGET_NAME_RE = re.compile(r'^synth_round_[0-9]+_[a-z0-9_]{1,72}\.sh$')
+SYNTH_MANIFEST_NAME_RE = re.compile(r'^synth_round_[0-9]+_manifest\.json$')
 
 
 def _manifest_key(path: Path):
@@ -1618,6 +1625,9 @@ if not manifest_paths:
     sys.exit(0)
 
 manifest_path = max(manifest_paths, key=_manifest_key)
+if manifest_path.is_symlink():
+    print('validate_process: skipping synthesised smoke materialization because the manifest is a symlink.', file=sys.stderr)
+    sys.exit(0)
 with open(manifest_path, 'r', encoding='utf-8') as handle:
     payload = json.load(handle)
 
@@ -1630,7 +1640,7 @@ if not isinstance(rows, list):
 
 target_manifest_relpath = payload.get('target_manifest_relpath')
 target_manifest_path = _safe_target(target_manifest_relpath, target_root)
-if target_manifest_path is None:
+if target_manifest_path is None or not SYNTH_MANIFEST_NAME_RE.match(target_manifest_path.name):
     print('validate_process: skipping synthesised smoke materialization because target_manifest_relpath is invalid.', file=sys.stderr)
     sys.exit(0)
 
@@ -1645,7 +1655,11 @@ for row in rows:
     if not isinstance(source_relpath, str) or not isinstance(target_relpath, str):
         continue
 
-    source_path = (repo_root / source_relpath).resolve()
+    unresolved_source = repo_root / source_relpath
+    if unresolved_source.is_symlink():
+        print(f'validate_process: skipping synthesised smoke source that is a symlink: {source_relpath}', file=sys.stderr)
+        continue
+    source_path = unresolved_source.resolve()
     try:
         source_path.relative_to(runtime_root)
     except ValueError:
@@ -1658,6 +1672,9 @@ for row in rows:
     target_path = _safe_target(target_relpath, target_root)
     if target_path is None:
         print(f'validate_process: skipping synthesised smoke target outside validation/tests: {target_relpath}', file=sys.stderr)
+        continue
+    if not SYNTH_TARGET_NAME_RE.match(target_path.name):
+        print(f'validate_process: skipping synthesised smoke target not named synth_round_<n>_<slug>.sh: {target_relpath}', file=sys.stderr)
         continue
 
     target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3688,20 +3705,35 @@ VALIDATION_EXIT=0
 VALIDATION_IDLE_KILLED=0
 
 set +e
+# The harness runs model-written tests, so it gets no pipeline credentials
+# (finding smoke-synth-credentialed-test-exec, sibling fix): every launch
+# below drops them from its environment.  The driver itself makes no GitHub or
+# OpenRouter calls.
+VALIDATION_HARNESS_CREDENTIAL_SCRUB=(
+  env
+  -u GH_TOKEN
+  -u GITHUB_TOKEN
+  -u GH_PAT
+  -u OPENROUTER_API_KEY
+  -u TG_BOT_SECRET
+  -u CHECK_TRIAGE_ISSUES_TOKEN
+  -u ACTIONS_ID_TOKEN_REQUEST_TOKEN
+  -u ACTIONS_ID_TOKEN_REQUEST_URL
+)
 # Run validation in background, tee output to log file
 if [ -f validation/validate.sh ]; then
   if grep -q 'scripts/validate_driver.sh' validation/validate.sh && [ ! -f scripts/validate_driver.sh ]; then
     ensure_runtime_validation_driver
     GENERATED_VALIDATE_SCRIPT_PATH="${VALIDATION_RUNNER_FILE}"
-    "${VALIDATION_RUNNER_FILE}" > "${VALIDATION_LOG_FILE}" 2>&1 &
+    "${VALIDATION_HARNESS_CREDENTIAL_SCRUB[@]}" "${VALIDATION_RUNNER_FILE}" > "${VALIDATION_LOG_FILE}" 2>&1 &
   else
     GENERATED_VALIDATE_SCRIPT_PATH="validation/validate.sh"
-    bash validation/validate.sh > "${VALIDATION_LOG_FILE}" 2>&1 &
+    "${VALIDATION_HARNESS_CREDENTIAL_SCRUB[@]}" bash validation/validate.sh > "${VALIDATION_LOG_FILE}" 2>&1 &
   fi
 else
   ensure_runtime_validation_driver
   GENERATED_VALIDATE_SCRIPT_PATH="${VALIDATION_RUNNER_FILE}"
-  "${VALIDATION_RUNNER_FILE}" > "${VALIDATION_LOG_FILE}" 2>&1 &
+  "${VALIDATION_HARNESS_CREDENTIAL_SCRUB[@]}" "${VALIDATION_RUNNER_FILE}" > "${VALIDATION_LOG_FILE}" 2>&1 &
 fi
 VALIDATION_PID=$!
 
