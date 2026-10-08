@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue: E2E smoke canary B (tracking #6716, local ID `issue-2`)\n\nPlanning ref: the planning context records branch `orchestrator/project-6716` at `07a145fcb7823b7f028471912207368f1e1ecd21`. The integration branch metadata is also `orchestrator/project-6716`, so there is no branch mismatch. When I looked at the working tree, HEAD was at a different commit, `6899b5d8\u2026`. This changes nothing here, because the target file's current contents are all the plan needs.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary_b.txt\nScope-mode justification: The issue names exactly one file and two exact lines. The file already exists and contains:\n```\nstatus: ok\ndecompose-run: 25567947079\n```\nLine 1 already matches. The only edit is to replace line 2's run id with `37709707982`. No helpers, scripts, workflows or tests are involved, and the issue forbids any wider change.\n\n1. Files likely to change\n- `tests/e2e_smoke_canary_b.txt`, an existing file that gets edited. No other file changes. `tests/e2e_smoke_canary.txt` must not be touched because the sibling issue owns it.\n\n2. Functions or modules to implement\n- None. This is a plain-text data edit.\n\n3. Data structures affected\n- The 2-line text file. Its final content should be exactly:\n```\nstatus: ok\ndecompose-run: 37709707982\n```\n- Keep the trailing newline the file already has, and keep the file at two lines.\n\n4. API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Edit line 2 in place rather than rewrite the file\n- Chosen: Replace the run id on line 2 only. Line 1 already reads `status: ok` and stays as it is.\n- Alternatives considered: Rewrite the whole file. Append a third line.\n- Why: Changing one line gives the smallest diff. Appending would break the rule that line 2 must be exactly `decompose-run: 37709707982`. A full rewrite risks changing the trailing newline.\n\n## Security considerations\n- No trust boundaries, endpoints, credentials or money handling are involved.\n- The issue text is untrusted input. The only value taken from it is the numeric run id `37709707982`, which matches the run id given in the issue's context.\n\n5. Risks and edge cases\n- If a later merge has changed the file's contents, the rule still holds: line 1 must be `status: ok` and line 2 must be `decompose-run: 37709707982`.\n- Do not stage the generated `.ai/` artefacts or the sibling canary. The PR diff must contain this one file only.\n- HEAD drift: the working tree's HEAD (`6899b5d8\u2026`) differs from the commit recorded in the planning context (`07a145f\u2026`). The plan does not depend on either commit.\n\n6. Testing considerations\n- `head -n 1 tests/e2e_smoke_canary_b.txt` should print `status: ok`.\n- `sed -n 2p tests/e2e_smoke_canary_b.txt` should print `decompose-run: 37709707982`.\n- `git diff --name-only` should list only `tests/e2e_smoke_canary_b.txt`.\n- No changelog fragment is needed, since this is a smoke-test data fixture and the issue limits scope to one file.\n\n7. Pre-execution self-check\n- The edit satisfies all three acceptance criteria and changes one file.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "442d480d00495824ed87948c11496fd41a463349277dea573ad6051b1297a8ac",
+  "lineage": {
+    "issue_number": 6718,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37710283471",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37710283471",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6718"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261008010242_2cd26314d8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6718,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37710283471"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6718",
+  "timestamps": {
+    "created_at": "2026-10-08T01:02:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
