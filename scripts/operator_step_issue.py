@@ -55,7 +55,9 @@ never auto-releases a parked item.
 alert when `newly_parked` is true; this module never talks to Telegram.
 `prune` drops entries whose item is no longer open with `ai:needs-human`
 (merged, closed or cleared by a person) and promotes overflow items into
-free slots. Kill switch `NEEDS_HUMAN_DIGEST_ENABLED` (default `true`):
+free slots; whenever it read the digest it prints `items`, the item numbers the
+digest lists afterwards (entries and overflow; a dropped-count item is not
+listed), which the unblock scan uses to tell a parked item from a stranded one. Kill switch `NEEDS_HUMAN_DIGEST_ENABLED` (default `true`):
 `false` makes both subcommands a no-op with no API call. Each action logs
 `NEEDS_HUMAN item= kind= reason= outcome=parked|updated|removed|skip` on stderr.
 
@@ -63,9 +65,13 @@ Digest API budget (CLAUDE.md §15). park: at most one identity read (none with
 --trusted-login), one item label add (none with --item-labeled), one digest
 listing, one label ensure and one create only when no digest exists, at most
 one PATCH per attempt and at most MAX_UPSERT_ATTEMPTS verification listings;
-no per-item reads. When the digest write fails after park added the label, one
-label DELETE rolls it back so the item is not skipped as parked without a
-digest line. prune: one digest listing and, only when the digest has
+no per-item reads. After a create, one more listing: when an older digest is
+found (two writers created one at once), the new issue is closed (one PATCH)
+and the entry goes to the older digest. A failed digest write never removes
+`ai:needs-human` (the label may be a human latch that predates the call); the
+unblock scan treats an item as parked only while the digest lists it (prune
+prints `items`), so an item left labelled without a digest line is judged and
+parked again. prune: one digest listing and, only when the digest has
 entries, the open `ai:needs-human` listing (one call per 100 items) plus,
 only when the body changes, one re-listing (a concurrent writer since the
 first read skips the tick) and at most one PATCH. The body PATCH is not
@@ -396,7 +402,8 @@ def render_digest_entry(item: int, kind: str, stop: str, reason: str, link: str,
 	if text:
 		parts.append(text)
 	if link:
-		parts.append(f"[last verdict]({link})")
+		# A poller-parked project links its tracking issue, not a verdict comment.
+		parts.append(f"[{'last verdict' if '#issuecomment-' in link else 'details'}]({link})")
 	parts.append(f"parked {parked}")
 	return "; ".join(part for part in parts if part) + f" <!-- ai:needs-human:entry item={item} kind={kind} parked={parked} -->"
 
@@ -474,18 +481,14 @@ def needs_human_park(
 	login = _resolve_login(trusted_login)
 	if not item_labeled:
 		# Label first: prune keys on the label, so an entry is never listed without it.
+		# The label is never rolled back on a failed digest write: it may be a
+		# pre-existing human latch, and the scan re-judges an item the digest
+		# does not list (see needs_human_prune `items`).
 		_gh(["api", "-X", "POST", f"repos/{repo}/issues/{item}/labels", "-f", f"labels[]={NEEDS_HUMAN_LABEL}"])
 	try:
 		return _needs_human_park_digest(repo, item, kind, stop, reason_text, link, login, log_reason, now)
-	except (ApiError, KeyError, ValueError, TypeError):
-		if not item_labeled:
-			# Without a digest line the label would make the scan skip the item
-			# as parked forever; drop the label we added so the next run retries.
-			try:
-				_gh(["api", "-X", "DELETE", f"repos/{repo}/issues/{item}/labels/{NEEDS_HUMAN_LABEL}"])
-			except ApiError:
-				pass
-		raise
+	except (KeyError, ValueError, TypeError) as exc:
+		raise ApiError(f"needs-human digest write failed: {exc}") from exc
 
 
 def _needs_human_park_digest(repo: str, item: int, kind: str, stop: str, reason_text: str, link: str,
@@ -493,12 +496,14 @@ def _needs_human_park_digest(repo: str, item: int, kind: str, stop: str, reason_
 	stamp = now or _now_iso()
 	newly_parked: bool | None = None
 	wrote = False
+	created_number = 0
 	for _attempt in range(MAX_UPSERT_ATTEMPTS + 1):
 		digest = _list_digest(repo, login)
 		if digest is None:
-			if wrote:
-				# The verification listing lost the digest; never create a second one.
-				break
+			if wrote or created_number:
+				# The digest left the open listing after our write; never create a
+				# second one and never report a park no open digest records.
+				raise ApiError("needs-human digest disappeared from the open listing after a write")
 			_ensure_operator_label(repo)
 			entries = {item: {"kind": kind, "parked": stamp, "line": render_digest_entry(item, kind, stop, reason_text, link, stamp)}}
 			try:
@@ -509,6 +514,12 @@ def _needs_human_park_digest(repo: str, item: int, kind: str, stop: str, reason_
 			number = int(created.get("number") or 0)
 			if not number:
 				raise ApiError("needs-human digest creation returned no issue number")
+			older = _list_digest(repo, login)
+			if older is not None and int(older.get("number") or 0) < number:
+				# A concurrent writer created a digest first: keep the oldest one only.
+				_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=closed", "-f", "state_reason=not_planned"])
+				created_number = number
+				continue
 			_needs_human_log(item, kind, log_reason, "parked")
 			return {"issue": number, "url": created.get("html_url", ""), "item": item, "outcome": "parked",
 				"newly_parked": True, "entries": 1, "overflow": 0}
@@ -549,11 +560,11 @@ def needs_human_prune(repo: str, trusted_login: str | None = None, now: str | No
 	login = _resolve_login(trusted_login)
 	digest = _list_digest(repo, login)
 	if digest is None:
-		return {"issue": None, "outcome": "skip", "reason": "no_digest", "removed": []}
+		return {"issue": None, "outcome": "skip", "reason": "no_digest", "removed": [], "items": []}
 	body = str(digest.get("body") or "")
 	entries, overflow, dropped = parse_digest(body)
 	if not entries and not overflow:
-		return {"issue": int(digest["number"]), "outcome": "skip", "reason": "empty", "removed": []}
+		return {"issue": int(digest["number"]), "outcome": "skip", "reason": "empty", "removed": [], "items": []}
 	raw = _gh(["api", "--paginate", "--slurp", f"repos/{repo}/issues?state=open&labels={NEEDS_HUMAN_LABEL}&per_page=100"])
 	try:
 		pages = json.loads(raw)
@@ -589,10 +600,12 @@ def needs_human_prune(repo: str, trusted_login: str | None = None, now: str | No
 		current = _list_digest(repo, login)
 		if current is None or str(current.get("body") or "") != body:
 			_needs_human_log("none", "digest", "concurrent_update", "skip")
-			return {"issue": int(digest["number"]), "outcome": "skip", "reason": "concurrent_update", "removed": []}
+			current_entries, current_overflow, _ = parse_digest(str((current or {}).get("body") or ""))
+			return {"issue": int(digest["number"]), "outcome": "skip", "reason": "concurrent_update", "removed": [],
+				"items": sorted(set(current_entries) | set(current_overflow))}
 		_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{int(digest['number'])}", "-f", f"body={new_body}"])
 	return {"issue": int(digest["number"]), "outcome": "pruned" if removed else "unchanged", "removed": removed,
-		"entries": len(entries), "overflow": len(overflow)}
+		"entries": len(entries), "overflow": len(overflow), "items": sorted(set(entries) | set(overflow))}
 
 
 def main(argv: list[str] | None = None) -> int:

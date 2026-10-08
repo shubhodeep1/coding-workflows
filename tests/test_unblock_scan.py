@@ -41,7 +41,7 @@ def _details(label: str, labeled_hours_ago: float, comments: list[dict] | None =
 	return {"labeled": [{"label": label, "created_at": _iso(labeled_hours_ago)}], "comments": comments or []}
 
 
-def _select(search, details, runs=None, failed=None, limit=5) -> dict:
+def _select(search, details, runs=None, failed=None, limit=5, parked=None) -> dict:
 	return scan.select(
 		search,
 		details,
@@ -53,6 +53,7 @@ def _select(search, details, runs=None, failed=None, limit=5) -> dict:
 		dt.timedelta(hours=6),
 		dt.timedelta(minutes=60),
 		limit,
+		parked,
 	)
 
 
@@ -618,3 +619,19 @@ def test_needs_human_kill_switch_lets_parked_items_reach_the_judge(monkeypatch: 
 	search = [_item(1, ["ai:blocked", "ai:needs-human"])]
 	result = _select(search, {"1": _details("ai:needs-human", 10, [_verdict_comment("close", 8)])})
 	assert result["dispatch"] == [{"item": 1, "kind": "issue"}]
+
+
+def test_needs_human_item_missing_from_the_digest_is_judged_again() -> None:
+	search = [_item(1, ["ai:blocked", "ai:needs-human"])]
+	details = {"1": _details("ai:needs-human", 10, [_verdict_comment("close", 8)])}
+	assert _select(search, details, parked=[1])["skipped"] == {"parked": 1}
+	# Labelled with a close marker but no digest line (a failed digest write).
+	assert _select(search, details, parked=[])["dispatch"] == [{"item": 1, "kind": "issue"}]
+
+
+def test_poller_passes_the_digest_items_to_the_scan() -> None:
+	text = POLLER.read_text(encoding="utf-8")
+	body = text[text.index("run_unblock_scan() {"):text.index("\n}\n", text.index("run_unblock_scan() {"))]
+	assert body.count('${parked_args[@]+"${parked_args[@]}"}') == 2
+	prune = text[text.index("needs_human_digest_prune() {"):text.index("\n}\n", text.index("needs_human_digest_prune() {"))]
+	assert prune.index('rm -f "${NEEDS_HUMAN_PARKED_ITEMS_FILE}"') < prune.index("needs-human prune")

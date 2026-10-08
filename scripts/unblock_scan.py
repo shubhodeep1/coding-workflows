@@ -6,7 +6,8 @@ docs/plans/replace-claude-sessions-with-cli-engine-plan.md Phase 7) fetches
 the candidates and hands them to this script, which decides offline:
 
   select --search-file PATH --details-file PATH --runs-file PATH
-         [--failed-projects-file PATH] --trusted-login LOGIN --now ISO8601
+         [--failed-projects-file PATH] [--parked-items-file PATH]
+         --trusted-login LOGIN --now ISO8601
          [--min-blocked-minutes 30] [--marker-hours 6]
          [--inflight-minutes 60] [--max 5]
 
@@ -26,10 +27,16 @@ Inputs:
   --failed-projects-file  JSON array of tracking issue numbers whose project
                           state is `failed` this tick (no API call: the poller
                           already holds the state).
+  --parked-items-file     JSON array of item numbers the needs-human digest
+                          lists this tick (`items` of
+                          `operator_step_issue.py needs-human prune`).
 
 An item that carries `ai:needs-human` and whose newest trusted
 `ai:unblock:v1` marker is a `close` verdict is parked in the needs-human
-digest (scripts/operator_step_issue.py) and skipped as `parked`.
+digest (scripts/operator_step_issue.py) and skipped as `parked`. With
+--parked-items-file, only an item the digest lists counts as parked: one left
+labelled after a failed digest write is judged (and parked) again. Without it
+(prune failed this tick) the label and marker alone decide, as before.
 An item is picked when all hold:
   - it has been blocked for at least --min-blocked-minutes (the newest
     `labeled` event of a block label it still carries; for a failed project
@@ -193,7 +200,9 @@ def select(
 	marker_age: dt.timedelta,
 	inflight: dt.timedelta,
 	limit: int,
+	parked_items: object = None,
 ) -> dict:
+	parked_set = {int(n) for n in parked_items if str(n).isdigit()} if isinstance(parked_items, list) else None
 	block_labels = set(unblock_ledger.BLOCK_LABELS)
 	details = details if isinstance(details, dict) else {}
 	failed = {int(n) for n in (failed_projects if isinstance(failed_projects, list) else []) if str(n).isdigit()}
@@ -251,7 +260,8 @@ def select(
 		# The kill switch (NEEDS_HUMAN_DIGEST_ENABLED=false) lets parked items
 		# reach the judge again, whose planner then restores the legacy close.
 		if (os.environ.get("NEEDS_HUMAN_DIGEST_ENABLED", "true").strip().lower() != "false"
-				and NEEDS_HUMAN_LABEL in labels and _latest_verdict(info.get("comments"), trusted_login) == "close"):
+				and NEEDS_HUMAN_LABEL in labels and _latest_verdict(info.get("comments"), trusted_login) == "close"
+				and (parked_set is None or number in parked_set)):
 			skip("parked")
 			continue
 		marker = _latest_marker(info.get("comments"), trusted_login)
@@ -297,6 +307,7 @@ def build_parser() -> argparse.ArgumentParser:
 	cmd.add_argument("--details-file", required=True)
 	cmd.add_argument("--runs-file", required=True)
 	cmd.add_argument("--failed-projects-file")
+	cmd.add_argument("--parked-items-file")
 	cmd.add_argument("--trusted-login", required=True)
 	cmd.add_argument("--now", required=True)
 	cmd.add_argument("--min-blocked-minutes", type=int, default=30)
@@ -333,6 +344,7 @@ def run(argv: list[str] | None = None) -> dict:
 		dt.timedelta(hours=args.marker_hours),
 		dt.timedelta(minutes=args.inflight_minutes),
 		args.max,
+		_read_json(args.parked_items_file, "--parked-items-file", None),
 	)
 
 

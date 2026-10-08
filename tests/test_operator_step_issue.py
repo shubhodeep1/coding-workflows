@@ -196,24 +196,76 @@ def test_needs_human_digest_cli_round_trip(fake: FakeGitHub, capsys: pytest.Capt
 	assert writer.main(["needs-human", "park", "--repo", "bad", "--item", "7", "--kind", "pr", "--stop", "x"]) == 1
 
 
-def test_needs_human_digest_park_rolls_back_the_label_when_the_digest_write_fails(
+def test_needs_human_digest_park_never_removes_the_label_when_the_digest_write_fails(
 		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch) -> None:
 	calls: list[list[str]] = []
 
 	def failing(args: list[str], *, allow_existing_label: bool = False) -> str:
 		calls.append(args)
-		if args[:3] == ["api", "-X", "POST"] or args[:3] == ["api", "-X", "DELETE"]:
+		if args[:3] == ["api", "-X", "POST"]:
 			return "{}"
 		raise writer.ApiError("listing failed")
 
 	monkeypatch.setattr(writer, "_gh", failing)
 	with pytest.raises(writer.ApiError):
 		_park(7)
-	assert ["api", "-X", "DELETE", f"repos/{REPO}/issues/7/labels/ai:needs-human"] in calls
-	calls.clear()
-	with pytest.raises(writer.ApiError):
-		_park(7, item_labeled=True)
+	# The label may be a pre-existing human latch; the scan re-judges an item
+	# the digest does not list instead.
 	assert not any(args[:3] == ["api", "-X", "DELETE"] for args in calls)
+
+
+def test_needs_human_digest_park_fails_when_the_digest_vanishes_after_its_write(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch) -> None:
+	entries = {8: {"kind": "issue", "parked": NOW, "line": writer.render_digest_entry(8, "issue", "blocked", "x", "", NOW)}}
+	fake.issues.append({"number": 5, "body": writer.render_digest(entries, []), "user": {"login": BOT}})
+	original = fake.__call__
+
+	def closing(args: list[str], *, allow_existing_label: bool = False) -> str:
+		out = original(args, allow_existing_label=allow_existing_label)
+		if args[:3] == ["api", "-X", "PATCH"]:
+			fake.issues.clear()  # Closed by a person between the write and the check.
+		return out
+
+	monkeypatch.setattr(writer, "_gh", closing)
+	with pytest.raises(writer.ApiError):
+		_park(7)
+	assert not any(args[0] == "api" and args[1] == f"repos/{REPO}/issues" for args in fake.calls)
+
+
+def test_needs_human_digest_park_merges_into_an_older_concurrent_digest(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch) -> None:
+	original = fake.__call__
+	other = {"number": 5, "body": writer.render_digest({}, []), "user": {"login": BOT}}
+
+	def racing(args: list[str], *, allow_existing_label: bool = False) -> str:
+		if args[:3] == ["api", "-X", "PATCH"] and "state=closed" in args:
+			fake.issues[:] = [issue for issue in fake.issues if issue["number"] != int(args[3].rsplit("/", 1)[1])]
+			return "{}"
+		out = original(args, allow_existing_label=allow_existing_label)
+		if args[0] == "api" and args[1] == f"repos/{REPO}/issues" and other not in fake.issues:
+			fake.issues.insert(0, other)  # Another writer created #5 at the same time.
+		return out
+
+	monkeypatch.setattr(writer, "_gh", racing)
+	result = _park(7)
+	assert result["issue"] == 5 and result["newly_parked"] is True
+	assert [issue["number"] for issue in fake.issues] == [5]
+	assert list(writer.parse_digest(other["body"])[0]) == [7]
+
+
+def test_needs_human_digest_prune_reports_the_items_it_lists(fake: FakeGitHub) -> None:
+	assert writer.needs_human_prune(REPO, BOT)["items"] == []
+	entries = {n: {"kind": "issue", "parked": NOW, "line": writer.render_digest_entry(n, "issue", "blocked", "x", "", NOW)} for n in (7, 8)}
+	fake.issues.append({"number": 5, "body": writer.render_digest(entries, [9]), "user": {"login": BOT}})
+	fake.open_needs_human = [{"number": n, "labels": [{"name": "ai:needs-human"}]} for n in (8, 9)]
+	assert writer.needs_human_prune(REPO, BOT, now=NOW)["items"] == [8, 9]
+
+
+def test_needs_human_digest_link_label_matches_its_target() -> None:
+	project = writer.render_digest_entry(40, "project", "project-failed", "x", "https://github.com/o/r/issues/40", NOW)
+	assert "[details](https://github.com/o/r/issues/40)" in project and "last verdict" not in project
+	verdict = writer.render_digest_entry(7, "issue", "blocked", "x", "https://github.com/o/r/issues/7#issuecomment-1", NOW)
+	assert "[last verdict](" in verdict
 
 
 def test_needs_human_digest_prune_skips_when_the_digest_changed_since_its_read(

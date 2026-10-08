@@ -17025,7 +17025,10 @@ needs_human_park_project() {
 
 # Once per tick, after the unblock scan: drop digest entries whose item is no
 # longer open with ai:needs-human (merged, closed, or cleared by a person).
+NEEDS_HUMAN_PARKED_ITEMS_FILE="${RUNNER_TEMP:-/tmp}/needs_human_parked_items.json"
 needs_human_digest_prune() {
+  # A stale list from an earlier tick must never decide this tick's scan.
+  rm -f "${NEEDS_HUMAN_PARKED_ITEMS_FILE}" 2>/dev/null || true
   if [ "${NEEDS_HUMAN_DIGEST_ENABLED:-true}" = "false" ]; then
     echo "NEEDS_HUMAN item=none kind=digest reason=disabled outcome=skip"
     return 0
@@ -17039,9 +17042,15 @@ needs_human_digest_prune() {
     echo "NEEDS_HUMAN item=none kind=digest reason=login_unavailable outcome=skip"
     return 0
   fi
-  PYTHONDONTWRITEBYTECODE=1 python3 scripts/operator_step_issue.py needs-human prune \
-    --repo "${GITHUB_REPOSITORY}" --trusted-login "${UNBLOCK_TRUSTED_LOGIN}" >/dev/null \
-    || echo "NEEDS_HUMAN item=none kind=digest reason=prune_failed outcome=skip"
+  local prune_json
+  if prune_json="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/operator_step_issue.py needs-human prune \
+    --repo "${GITHUB_REPOSITORY}" --trusted-login "${UNBLOCK_TRUSTED_LOGIN}")"; then
+    # The scan counts an item as parked only while the digest lists it.
+    jq -ce '.items | select(type == "array")' <<< "${prune_json}" > "${NEEDS_HUMAN_PARKED_ITEMS_FILE}" 2>/dev/null \
+      || rm -f "${NEEDS_HUMAN_PARKED_ITEMS_FILE}"
+  else
+    echo "NEEDS_HUMAN item=none kind=digest reason=prune_failed outcome=skip"
+  fi
   return 0
 }
 
@@ -17175,9 +17184,14 @@ run_unblock_scan() {
   fi
   printf '%s' "${runs}" > "${work_dir}/runs.json"
   now_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  local -a parked_args=()
+  if [ -s "${NEEDS_HUMAN_PARKED_ITEMS_FILE}" ]; then
+    parked_args=(--parked-items-file "${NEEDS_HUMAN_PARKED_ITEMS_FILE}")
+  fi
   if ! selection="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/unblock_scan.py select \
     --search-file "${work_dir}/search.json" --details-file "${work_dir}/details.json" \
     --runs-file "${work_dir}/runs.json" --failed-projects-file "${work_dir}/failed_projects.json" \
+    ${parked_args[@]+"${parked_args[@]}"} \
     --trusted-login "${UNBLOCK_TRUSTED_LOGIN}" --now "${now_iso}" \
     --min-blocked-minutes "${UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES:-30}" \
     --marker-hours "${UNBLOCK_JUDGE_RETRY_HOURS:-6}" \
@@ -17205,6 +17219,7 @@ run_unblock_scan() {
         selection="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/unblock_scan.py select \
           --search-file "${work_dir}/search.json" --details-file "${work_dir}/details.json" \
           --runs-file "${work_dir}/runs.json" --failed-projects-file "${work_dir}/failed_projects.json" \
+          ${parked_args[@]+"${parked_args[@]}"} \
           --trusted-login "${UNBLOCK_TRUSTED_LOGIN}" --now "${now_iso}" \
           --min-blocked-minutes "${UNBLOCK_JUDGE_MIN_BLOCKED_MINUTES:-30}" \
           --marker-hours "${UNBLOCK_JUDGE_RETRY_HOURS:-6}" \
