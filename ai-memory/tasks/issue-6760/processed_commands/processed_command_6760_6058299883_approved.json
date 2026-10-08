@@ -5,13 +5,22 @@
   "entry_id": "processed_command_6760_6058299883_approved",
   "issue_number": 6760,
   "metadata": {
+    "branch": "ai/issue-6760",
+    "changed_files": [
+      "tests/test_implement_post_codex_recovery.py"
+    ],
+    "issue_number": 6760,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6760",
+    "pr_number": 6762,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6762",
+    "run_attempt": "1",
+    "run_id": "37766558925",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37766558925"
   },
   "run_attempt": 1,
   "run_id": "37766558925",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-08T10:56:45Z",
+  "status": "completed",
+  "timestamp": "2026-10-08T11:09:15Z",
   "workflow": "implement"
 }
