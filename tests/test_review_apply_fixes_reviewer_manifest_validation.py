@@ -189,6 +189,49 @@ def test_basename_only_entry_is_accepted() -> None:
 		assert WARNING_KEY not in stdout, stdout
 
 
+def test_short_count_labels_from_claude_editor_are_accepted() -> None:
+	"""The Claude editor writes the four counts with short labels. Review
+	run 37565800725 on PR #6605 rejected all three attempts, with each
+	bullet shaped `total 5; applied 0; already applied 0; ignored 5`, and
+	attempt 2 used commas. Both carry the four counts and must pass."""
+	with tempfile.TemporaryDirectory() as raw:
+		tmp = Path(raw)
+		files = _reviewers(tmp)
+		processed = [f"- `{p}` — checksum `{_sha(p)}` — used" for p in files]
+		audit = [
+			f"- {files[0]} — total 5; applied 0; already applied 0; ignored 5",
+			f"- {files[1]} — total 3, applied 1, already applied 2, ignored 0",
+		]
+		stdout, _ = _run(tmp, files, processed, audit)
+		assert "RESULT reviewer_validation_ok=true" in stdout, stdout
+		assert WARNING_KEY not in stdout, stdout
+
+
+def test_short_labels_still_need_all_four_counts() -> None:
+	"""`already applied` alone must not satisfy the `applied` count."""
+	with tempfile.TemporaryDirectory() as raw:
+		tmp = Path(raw)
+		files = _reviewers(tmp)
+		processed = [f"- `{p}` — checksum `{_sha(p)}` — used" for p in files]
+		audit = [
+			f"- {files[0]} — total 5; already applied 0; ignored 5",
+			_audit_line(files[1]),
+		]
+		stdout, _ = _run(tmp, files, processed, audit)
+		assert "RESULT reviewer_validation_ok=false" in stdout, stdout
+		assert f"Review file issue audit validation failed for {files[0]}" in stdout
+
+
+def test_prompt_spells_out_the_audit_bullet_shape() -> None:
+	"""The editor prompt shows the exact bullet with the full labels, so the
+	model has no reason to shorten them."""
+	text = SCRIPT.read_text(encoding="utf-8")
+	assert (
+		"- <exact file path> — total issues listed: N; issues applied: N; "
+		"issues already applied: N; issues ignored: N"
+	) in text
+
+
 def main() -> int:
 	tests = [value for name, value in sorted(globals().items()) if name.startswith("test_") and callable(value)]
 	for test in tests:

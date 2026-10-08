@@ -6,6 +6,7 @@ set -euo pipefail
 SEMBLE_VERSION="0.1.3"
 SEMBLE_SPEC="semble==${SEMBLE_VERSION}"
 SEMBLE_PYTHON_BIN="${SEMBLE_PYTHON_BIN:-python3}"
+SEMBLE_INSTALL_START_MS="$(date +%s%3N)"
 semble_neutral_dir=""
 
 semble_python()
@@ -108,12 +109,16 @@ binary_matches_pin()
 
 mark_available()
 {
+	if [ -n "${SEMBLE_INSTALL_RESULT_FILE:-}" ]; then printf 'available\n' > "${SEMBLE_INSTALL_RESULT_FILE}" || true; fi
+	write_github_env "SEMBLE_INSTALL_MS" "$(( $(date +%s%3N) - SEMBLE_INSTALL_START_MS ))"
 	write_github_env "SEMBLE_AVAILABLE" "true"
 	log "Semble ${SEMBLE_VERSION} is available."
 }
 
 mark_unavailable()
 {
+	if [ -n "${SEMBLE_INSTALL_RESULT_FILE:-}" ]; then printf 'unavailable\n' > "${SEMBLE_INSTALL_RESULT_FILE}" || true; fi
+	write_github_env "SEMBLE_INSTALL_MS" "$(( $(date +%s%3N) - SEMBLE_INSTALL_START_MS ))"
 	write_github_env "SEMBLE_AVAILABLE" "false"
 	log "Semble ${SEMBLE_VERSION} is unavailable; callers should use fallback paths."
 }

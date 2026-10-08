@@ -181,7 +181,7 @@ def test_clarify_inline_prompt_never_blocks_on_credentials() -> None:
 
 def test_implement_appends_the_section_before_the_lint() -> None:
 	text = IMPLEMENT.read_text(encoding="utf-8")
-	assert "security_dependency.py auto_decisions.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do" in text
+	assert "security_dependency.py auto_decisions.py workflow_failure_heal.py workflow_failure_heal_evidence.sh implement_heal_preflight.sh heal_isolated_implement.sh review_untrusted_workspace.py files_touched_scope_guard.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do" in text
 	section = text.index("auto_decisions.py\" pr-section")
 	assert text.index('printf \'Refs #%s\\n\' "${TRACKING_ISSUE_NUMBER}"') < section < text.index('printf \'%s\\n\\n\' "${PR_TITLE}" > "${PR_LINT_FILE}"')
 
