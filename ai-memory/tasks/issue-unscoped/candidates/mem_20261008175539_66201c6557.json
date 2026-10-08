@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_actions.py:lines 367-382 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The condition combines the unsafe-metadata refusal with the tracked-without-finding-id refusal, but the reviewer says this does not fail and is intended.\n  WHY: The reviewer reports that the return matches the existing test and new assertions, the marker is added only when `security_finding_id` is truthy, and integration-branch / depends-on lines remain gated by `not ctx[\"tracking\"]`.\n- scripts/orchestrate_poll_process.sh:lines 16955-16960 | severity=high | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The finding-marker regex rejects IDs containing characters outside `[A-Za-z0-9._:-]`, which can leave a successor without the `ai:security` label.\n  WHY: The reviewer says real finding IDs have fit this character class, but a future pipeline change that emits another character would silently lose the successor's binding.\n- scripts/orchestrate_poll_process.sh:lines 16955-16969 | severity=high | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The successor-creation path does not verify that GitHub applied the `ai:security` label.\n  WHY: If GitHub drops the label, the successor lacks the binding label and is not detected as a security successor by the security scan / unblock scan.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Repository guidance requires updating README.md when behavior changes.\n  expected_change_site: README.md, \u201cUnblock judge\u201d section.\n  confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: README.md is not changed. It still says `accept_with_followup` is never allowed only for failed security passes or validation (line 3150), and does not document the new restriction for `ai:security` issues. `agents.md` was updated, but the user-facing README remains incomplete.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/unblock_actions.py:lines 367-382 | severity=low | confidence=[2]\n  PROBLEM: The condition combines two refusal paths with `or`, but only the second one (tracked + no finding_id) is the new behavior. The first path (`security_metadata_unsafe`) was already present and was previously gated by `not ctx[\"tracking\"]`.\n  WHY: It does not fail \u2014 the conditional return of `[\"comment\", \"telegram\"]` matches both the pre-existing test and the new assertions (`test_security_reissue_keeps_a_finding_open_or_transfers_its_marker` asserts `[op[\"op\"] for op in unbound] == [\"comment\", \"telegram\"]` for the unbound path). The marker is then added only when `security_finding_id` is truthy (`if security_issue and ctx.get(\"security_finding_id\")`), and integration-branch / depends-on lines remain gated by `not ctx[\"tracking\"]`, so they do not leak into tracked fix-up bodies.\n- scripts/orchestrate_poll_process.sh:lines 16955-16960 | severity=high | confidence=[2]\n  PROBLEM: A non-regex failure from `grep` (for example a missing or unreadable `${req_body}`) would still make the surrounding `if` test pass when grep exits 2 by accident of `set -e` semantics, but more importantly the check rejects legitimate-looking markers with unusual characters outside `[A-Za-z0-9._:-]`.\n  WHY: A security successor for a finding whose ID happens to contain a character outside the allowed set would be created without the `ai:security` label, breaking the \"successor bound to the finding\" contract from the recommendation. The defense-in-depth in `unblock_actions.py` still keeps the original finding open, but the split loses its binding.\n- scripts/orchestrate_poll_process.sh:lines 16955-16969 | severity=high | confidence=[2]\n  PROBLEM: The new label is added as an implicit side effect of marker presence, with no explicit verification that GitHub actually applied the label.\n  WHY: If `gh issue create` accepts the call but silently drops the `ai:security` label (e.g. label rename race, repo setting), the security successor is filed without the binding label. The successor is then managed by the normal fix-up flow but the security scan / unblock scan would not detect it as a security successor (it lacks `ai:security`). The defense-in-depth in `unblock_actions.py` keeps the original open, but the link between them is lost.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: Repository guidance requires updating README.md when behavior changes.\n  Expected change site: README.md, \u201cUnblock judge\u201d section.\n  Evidence of absence: README.md is not changed. It still says `accept_with_followup` is never allowed only for failed security passes or validation (line 3150), and does not document the new restriction for `ai:security` issues. `agents.md` was updated, but the user-facing README remains incomplete.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- The implementation correctly addresses the security finding. The unblock judge now refuses `accept_with_followup` for `ai:security` issues at two layers: the menu restriction in `scripts/unblock_ledger.py:423-427` and the runtime refusal in `scripts/unblock_actions.py:414-426`. When a security finding must be split, the re-issue path carries the finding marker and the `ai:security` label onto the successor (`scripts/orchestrate_poll_process.sh:16955-16963`, `scripts/unblock_actions.py:370-378`). The finding marker regex `^<!-- ai:security-finding:[A-Za-z0-9][A-Za-z0-9._:-]{0,119} -->$` correctly validates the marker format. Tests verify the menu restriction, the refusal behavior, and the poller labeling. The CI failure is due to a cancelled job (`tests-hooks-and-orchestrator`), not a test failure attributable to this diff.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "043d6b8e75c53d5ebe47cea5fa10bc34ed222625c82f8c4d7541b1f71235fe73",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6550,
+    "run_id": "37816060487",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37816060487",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261008175539_66201c6557",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6550,
+    "run_id": "37816060487"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-08T17:55:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
