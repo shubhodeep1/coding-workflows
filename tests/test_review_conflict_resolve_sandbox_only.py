@@ -1,8 +1,10 @@
 """Resolver model launches must stay inside the review sandbox."""
 
+import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 
 import pytest
@@ -324,3 +326,310 @@ def test_no_host_model_launch_or_private_host_index_in_launch():
 	assert "GIT_INDEX_FILE=" not in _launch()
 	assert "GIT_INDEX_FILE=" not in _helper()
 	assert 'codex CONFLICT_RESOLVER write)' in _helper()
+
+
+# --- Host-only conflicts: base wins out of scope, re-issue in scope (#6748) ---
+
+PREPARE = SCRIPT.parent / "review_conflict_prepare.sh"
+HOOK = ".claude/hooks/pr_merge_status_guard.py"
+ALLOWLIST_BODY = "Change the hook.\n\nfiles_touched:\n  - " + HOOK + "\n"
+
+
+def _named_function(name: str) -> str:
+	match = re.search(rf"^{name}\(\)\n\{{\n.*?\n\}}\n", _source(), re.M | re.S)
+	assert match is not None, name
+	return match.group()
+
+
+def _take_base_block() -> str:
+	text = PREPARE.read_text(encoding="utf-8")
+	start = text.index("# >>> host-only take-base (issue #6748)")
+	end = text.index("# <<< host-only take-base (issue #6748)", start)
+	return text[start:end]
+
+
+def _git_env() -> dict:
+	return {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k not in ("BASH_ENV", "ENV")}
+
+
+def _git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+	return subprocess.run(["git", *args], cwd=repo, env=_git_env(), check=check, text=True, capture_output=True)
+
+
+def _host_only_conflict(repo: Path, shape: str = "both", ordinary: bool = False) -> None:
+	"""HEAD `feat` and merged-in `main` conflict on the guard hook.
+
+	shape: `both` (both modify, stages 1 2 3), `base_deleted` (main deletes,
+	stages 1 2), `pr_deleted` (feat deletes, stages 1 3).
+	"""
+	_git(repo, "init", "-q", "-b", "main")
+	_git(repo, "config", "user.name", "t")
+	_git(repo, "config", "user.email", "t@t")
+	hook = repo / HOOK
+	hook.parent.mkdir(parents=True)
+	hook.write_text("x = 0\n", encoding="utf-8")
+	(repo / "notes.md").write_text("base\n", encoding="utf-8")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-qm", "base")
+	_git(repo, "checkout", "-q", "-b", "feat")
+	if shape == "pr_deleted":
+		_git(repo, "rm", "-q", "--", HOOK)
+	else:
+		hook.write_text("x = 'pr side'\n", encoding="utf-8")
+	if ordinary:
+		(repo / "notes.md").write_text("pr\n", encoding="utf-8")
+	_git(repo, "commit", "-qam", "feat change")
+	_git(repo, "checkout", "-q", "main")
+	if shape == "base_deleted":
+		_git(repo, "rm", "-q", "--", HOOK)
+	else:
+		hook.write_text("x = 'base side'\n", encoding="utf-8")
+	if ordinary:
+		(repo / "notes.md").write_text("main\n", encoding="utf-8")
+	_git(repo, "commit", "-qam", "main change")
+	_git(repo, "checkout", "-q", "feat")
+	assert _git(repo, "merge", "--no-commit", "--no-ff", "main", check=False).returncode != 0
+
+
+def _run_take_base(tmp_path: Path, repo: Path, *, linked=None, status="ok", target_branch="", enabled=None):
+	runtime = tmp_path / "runtime"
+	runtime.mkdir()
+	github_env = tmp_path / "github.env"
+	allowlist = runtime / "resolver_unmerged_allowlist.txt"
+	linked_file = runtime / "linked_issues_raw.json"
+	linked_file.write_text(json.dumps(linked if linked is not None else [{"number": 31, "title": "t", "body": "No scope", "labels": []}]), encoding="utf-8")
+	(runtime / "linked_issues_raw.json.status").write_text(status + "\n", encoding="utf-8")
+	script = f"""set -euo pipefail
+RUNTIME_DIR={str(runtime)!r}
+GITHUB_ENV={str(github_env)!r}
+SUPPORT_SCRIPTS_DIR={str(SCRIPT.parent)!r}
+GITHUB_REPOSITORY=o/r
+PR_NUMBER=7
+BASE_BRANCH=main
+HEAD_REF=feat
+IS_WORKFLOW_SOURCE_REPO=true
+RESOLVER_ALLOWLIST_FILE={str(allowlist)!r}
+gh_retry() {{ printf '%s\\n' "$*" >> "$RUNTIME_DIR/gh_calls"; for a in "$@"; do case "$a" in body=@*) cp "${{a#body=@}}" "$RUNTIME_DIR/posted.md" ;; esac; done; }}
+git diff --name-only --diff-filter=U | sort -u > "${{RESOLVER_ALLOWLIST_FILE}}"
+_resolver_allowlist_count="$(wc -l < "${{RESOLVER_ALLOWLIST_FILE}}" | tr -d '[:space:]')"
+{_take_base_block()}
+echo block-fell-through
+"""
+	env = {**_git_env(), "PYTHONDONTWRITEBYTECODE": "1"}
+	for name in ("TARGET_BRANCH", "HOST_ONLY_CONFLICT_TAKE_BASE_ENABLED", "IS_INTEGRATION_SYNC", "LINKED_ISSUES_RAW_FILE"):
+		env.pop(name, None)
+	if target_branch:
+		env["TARGET_BRANCH"] = target_branch
+	if enabled is not None:
+		env["HOST_ONLY_CONFLICT_TAKE_BASE_ENABLED"] = enabled
+	result = subprocess.run(["bash", "-c", script], cwd=repo, env=env, text=True, capture_output=True)
+	return result, runtime, github_env, allowlist
+
+
+def _unmerged(repo: Path) -> list[str]:
+	return _git(repo, "diff", "--name-only", "--diff-filter=U").stdout.split()
+
+
+def test_unlisted_host_only_conflict_takes_base_and_commits(tmp_path):
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_host_only_conflict(repo)
+	result, runtime, github_env, _ = _run_take_base(tmp_path, repo)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "block-fell-through" not in result.stdout
+	assert f"CONFLICT_RESOLVER_HOST_ONLY_TAKE_BASE pr=7 path={HOOK} base=main stages=1 2 3" in result.stdout
+	assert github_env.read_text(encoding="utf-8") == "CONFLICT_RESOLVED=true\n"
+	assert len(_git(repo, "rev-list", "--parents", "-n", "1", "HEAD").stdout.split()) == 3
+	assert _git(repo, "log", "-1", "--format=%s").stdout.strip() == "[ai-merge-resolve] resolve merge conflicts"
+	assert (repo / HOOK).read_text(encoding="utf-8") == "x = 'base side'\n"
+	posted = (runtime / "posted.md").read_text(encoding="utf-8")
+	assert posted.startswith("<!-- ai:host-only-take-base:v1 pr=7 head=")
+	assert "+x = 'pr side'" in posted and "```diff" in posted
+	assert (runtime / "host_only_conflict_scope.tsv").read_text(encoding="utf-8") == f"take_base\t{HOOK}\n"
+
+
+@pytest.mark.parametrize("shape,stages,exists", [("base_deleted", "1 2", False), ("pr_deleted", "1 3", True)])
+def test_modify_delete_host_only_conflict_takes_base(tmp_path, shape, stages, exists):
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_host_only_conflict(repo, shape=shape)
+	result, _runtime, github_env, _ = _run_take_base(tmp_path, repo, linked=[])
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert f"stages={stages}" in result.stdout
+	assert github_env.read_text(encoding="utf-8") == "CONFLICT_RESOLVED=true\n"
+	assert (repo / HOOK).exists() is exists
+	assert (HOOK in _git(repo, "ls-files").stdout.split()) is exists
+	if exists:
+		assert (repo / HOOK).read_text(encoding="utf-8") == "x = 'base side'\n"
+
+
+def test_ordinary_conflicts_still_go_to_the_sandbox(tmp_path):
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_host_only_conflict(repo, ordinary=True)
+	result, runtime, github_env, allowlist = _run_take_base(tmp_path, repo)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "block-fell-through" in result.stdout
+	assert allowlist.read_text(encoding="utf-8") == "notes.md\n"
+	assert _unmerged(repo) == ["notes.md"]
+	assert not github_env.exists()
+	assert (runtime / "host_only_take_base_comment.md").is_file()
+
+
+def test_declared_host_only_path_is_left_for_reissue(tmp_path):
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_host_only_conflict(repo)
+	result, runtime, github_env, _ = _run_take_base(tmp_path, repo, linked=[{"number": 31, "title": "t", "body": ALLOWLIST_BODY, "labels": []}])
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "outcome=in_scope" in result.stdout and "block-fell-through" in result.stdout
+	assert (runtime / "host_only_conflict_scope.tsv").read_text(encoding="utf-8") == f"in_scope\t{HOOK}\n"
+	assert _unmerged(repo) == [HOOK]
+	assert not github_env.exists()
+
+
+@pytest.mark.parametrize("kwargs,log", [
+	({"status": "failed"}, "outcome=unknown reason=linked_issues_unavailable"),
+	({"target_branch": "orchestrator/project-12"}, ""),
+	({"enabled": "false"}, ""),
+])
+def test_unknown_scope_or_disabled_leaves_the_conflict_untouched(tmp_path, kwargs, log):
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_host_only_conflict(repo)
+	result, runtime, github_env, _ = _run_take_base(tmp_path, repo, **kwargs)
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert log in result.stdout and "block-fell-through" in result.stdout
+	assert not (runtime / "host_only_conflict_scope.tsv").exists()
+	assert _unmerged(repo) == [HOOK]
+	assert not github_env.exists()
+
+
+FAKE_GH_SCRIPT = """#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$GH_CALLS"
+endpoint=""
+for a in "$@"; do case "$a" in repos/*) endpoint="$a" ;; body=@*) cat "${a#body=@}" >> "$GH_CALLS.bodies" ;; esac; done
+if [ "$endpoint" = "repos/o/r/issues" ]; then
+  [ -z "${FAIL_CREATE:-}" ] || exit 1
+  labels=""
+  for a in "$@"; do case "$a" in labels\\[\\]=*) labels="${a#labels[]=}" ;; esac; done
+  printf '901\\t%s\\n' "$labels"
+fi
+exit 0
+"""
+
+
+def _run_reissue_guard(tmp_path, *, linked=None, assoc="MEMBER", fail_create=False, comments="[]", scope=None):
+	(tmp_path / ".claude/hooks").mkdir(parents=True)
+	(tmp_path / HOOK).write_text("x = 1\n")
+	paths = tmp_path / "paths"
+	paths.write_text(HOOK + "\n")
+	(tmp_path / "host_only_conflict_scope.tsv").write_text(scope if scope is not None else f"in_scope\t{HOOK}\n")
+	payload = tmp_path / "pr.json"
+	payload.write_text(json.dumps({"title": "Edit the hook", "author_association": assoc, "user": {"login": "alice"}, "head": {"repo": {"full_name": "o/r"}, "sha": "a" * 40}}))
+	linked_file = tmp_path / "linked_issues_raw.json"
+	linked_file.write_text(json.dumps(linked if linked is not None else [{"number": 31, "title": "t", "body": ALLOWLIST_BODY, "labels": []}]))
+	(tmp_path / "linked_issues_raw.json.status").write_text("ok\n")
+	comments_file = tmp_path / "pr_comments.json"
+	comments_file.write_text(comments)
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	(bin_dir / "gh").write_text(FAKE_GH_SCRIPT)
+	(bin_dir / "gh").chmod(0o755)
+	github_env = tmp_path / "github_env"
+	src = _source()
+	guard = src[src.index('# Reject unsupported conflict paths for both engines'):src.index('_resolver_sandbox_opencode_attempt()')]
+	helpers = "".join(_named_function(name) for name in (
+		"_resolver_host_only_scope_requires_reissue", "_resolver_run_unblock_ops", "_resolver_reissue_for_host_only_scope"))
+	env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PATH": f"{bin_dir}:{os.environ['PATH']}", "GH_CALLS": str(tmp_path / "gh_calls")}
+	for name in ("BASH_ENV", "ENV", "TG_BOT_SECRET", "LINKED_ISSUES_RAW_FILE"):
+		env.pop(name, None)
+	if fail_create:
+		env["FAIL_CREATE"] = "1"
+	result = subprocess.run(["bash", "-c", f'''set -euo pipefail
+RUNTIME_DIR={str(tmp_path)!r}
+SUPPORT_SCRIPTS_DIR={str(SCRIPT.parent)!r}
+CONFLICTED_PATHS_FILE={str(paths)!r}
+GITHUB_ENV={str(github_env)!r}
+GITHUB_REPOSITORY=o/r
+PR_NUMBER=7
+BASE_BRANCH=main
+PR_PAYLOAD_FILE={str(payload)!r}
+PR_ISSUE_COMMENTS_FILE={str(comments_file)!r}
+IS_INTEGRATION_SYNC=false
+emit_conflict_resolver_substate() {{ :; }}
+_persist_resolver_retry_state_from_current_failure() {{ :; }}
+{_failure_helper()}
+{helpers}
+{_path_failure_helper()}
+{guard}
+echo guard-passed
+'''], cwd=tmp_path, env=env, capture_output=True, text=True)
+	calls_file = tmp_path / "gh_calls"
+	calls = calls_file.read_text().splitlines() if calls_file.exists() else []
+	return result, calls, (github_env.read_text() if github_env.exists() else "")
+
+
+needs_jq = pytest.mark.skipif(shutil.which("jq") is None, reason="unblock_run_ops and the re-issue context need jq (present on CI runners)")
+
+
+def _call_index(calls, needle):
+	return next(i for i, call in enumerate(calls) if needle in call)
+
+
+@needs_jq
+def test_declared_host_only_path_closes_and_reissues_the_pr(tmp_path):
+	result, calls, env_text = _run_reissue_guard(tmp_path)
+	assert result.returncode == 1 and "guard-passed" not in result.stdout
+	assert f"PR closed and re-issued as #901: {HOOK}" in result.stderr
+	assert "reason=sandbox_path_host_only" in result.stderr
+	assert "outcome=reissued" in result.stdout
+	assert "AUTOFIX_FAILURE_REASON=conflict_resolver_sandbox_path_host_only" in env_text
+	create = _call_index(calls, "api repos/o/r/issues -f title=Re-issue of #7: Edit the hook")
+	comment = _call_index(calls, "api repos/o/r/issues/7/comments")
+	close = _call_index(calls, "-X PATCH repos/o/r/pulls/7 -f state=closed")
+	source_close = _call_index(calls, "-X PATCH repos/o/r/issues/31")
+	assert create < comment < close < source_close
+	assert "ai:unblock-provenance:v1 source_pr=7" in "\n".join(calls)
+	bodies = (tmp_path / "gh_calls.bodies").read_text()
+	assert f"<!-- ai:host-only-conflict-reissue:v1 pr=7 issue=901 head=" in bodies and "as #901" in bodies
+
+
+@needs_jq
+def test_reissue_create_failure_never_closes(tmp_path):
+	result, calls, _ = _run_reissue_guard(tmp_path, fail_create=True)
+	assert result.returncode == 1
+	assert "re-issue failed, manual merge needed" in result.stderr
+	assert "outcome=create_failed" in result.stdout
+	assert not any("PATCH" in call for call in calls)
+
+
+def test_existing_reissue_marker_prevents_a_second_issue(tmp_path):
+	comments = json.dumps([{"body": "x\n<!-- ai:host-only-conflict-reissue:v1 pr=7 issue=900 head=abc -->"}])
+	result, calls, _ = _run_reissue_guard(tmp_path, comments=comments)
+	assert result.returncode == 1 and "reason=already_reissued" in result.stdout
+	assert calls == []
+
+
+@needs_jq
+def test_untrusted_pr_is_closed_without_an_issue(tmp_path):
+	result, calls, _ = _run_reissue_guard(tmp_path, assoc="CONTRIBUTOR")
+	assert result.returncode == 1 and "outcome=untrusted_closed" in result.stdout
+	assert not any(call.startswith("api repos/o/r/issues -f title=") for call in calls)
+	assert any("-X PATCH repos/o/r/pulls/7 -f state=closed" in call for call in calls)
+
+
+@needs_jq
+def test_orchestrator_managed_source_issue_is_only_annotated(tmp_path):
+	linked = [{"number": 31, "title": "t", "body": ALLOWLIST_BODY, "labels": ["ai:orchestrator-managed"]}]
+	result, calls, _ = _run_reissue_guard(tmp_path, linked=linked)
+	assert "outcome=reissued" in result.stdout, result.stdout + result.stderr
+	assert any("repos/o/r/issues/31/comments" in call for call in calls)
+	assert not any("PATCH repos/o/r/issues/31" in call for call in calls)
+
+
+def test_unclassified_scope_keeps_the_manual_merge_failure(tmp_path):
+	result, calls, _ = _run_reissue_guard(tmp_path, scope="")
+	assert result.returncode == 1
+	assert f"need a manual merge: {HOOK}" in result.stderr
+	assert calls == []

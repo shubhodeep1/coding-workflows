@@ -28,6 +28,8 @@
 # UNBLOCK_JUDGE_REASONING, UNBLOCK_JUDGE_TIMEOUT_SECS (default 1500),
 # UNBLOCK_JUDGE_FIXUP_WAIT_HOURS (default 72), MOCK_UNBLOCK_JUDGE_JSON (tests
 # only: used instead of the model), MOCK_UNBLOCK_JUDGE_NOW (tests only).
+# UNBLOCK_CREATED_ISSUES_FILE (optional, default unset): unblock_run_ops
+# appends each issue number it creates to this file.
 #
 # Both engines run in a network-isolated container with a host-side provider relay;
 # its output is data, and verdicts containing literal or encoded credentials
@@ -245,6 +247,11 @@ unblock_run_ops()
 					fi
 				done < <(jq -r ".ops[${idx}].labels[]" "${ops_file}")
 				[ "${ops_failed}" != "true" ] || continue
+				# Opt-in record of created issue numbers (default unset: no-op); the
+				# conflict resolver's host-only re-issue names the replacement with it.
+				if [ -n "${UNBLOCK_CREATED_ISSUES_FILE:-}" ]; then
+					printf '%s\n' "${created}" >> "${UNBLOCK_CREATED_ISSUES_FILE}" 2>/dev/null || true
+				fi
 				number="$(jq -r ".ops[${idx}].wait_on // empty" "${ops_file}")"
 				if [[ "${number}" =~ ^[0-9]+$ ]]; then
 					gh api "repos/${REPOSITORY}/issues/${number}/comments" \
