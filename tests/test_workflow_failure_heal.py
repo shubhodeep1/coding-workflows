@@ -1232,6 +1232,8 @@ if args[:1] == ["api"]:
 		if body_arg.startswith("body=@"):
 			text = Path(body_arg[len("body=@"):]).read_text()
 			state.setdefault("comments_posted", []).append({"path": path, "body": text})
+			if state.get("comment_post_fail"):
+				fail("HTTP 500")
 			out("{}")
 	if "/issues/" in path and path.endswith("/comments"):
 		if method != "GET":
@@ -4587,3 +4589,202 @@ def test_phase_workflows_wire_the_heal_report_job() -> None:
 	assert gate["if"] == comment["if"].replace("(failure() || cancelled()) && ", "failure() && ", 1)
 	assert 'codex_blocked.flag' in gate["run"] and 'echo "report=true" >> "$GITHUB_OUTPUT"' in gate["run"]
 	assert names.index("Comment on issue failure") < names.index("Gate workflow failure heal report") < names.index("Exit safely")
+
+
+# ---------------------------------------------------------------------------
+# Non-retryable autofix_failure routing (#6750 / PR #6535)
+# ---------------------------------------------------------------------------
+
+NR_LOGIN = "workflow-bot"
+NR_PR_COMMENTS = f"repos/{CONSUMER_REPO}/issues/4174/comments"
+NR_DIAG_MARKER_PREFIX = "<!-- ai:workflow-heal-non-retryable:v1"
+
+
+def _nr_failure_comment(*, head: str = SHA_B, author: str = NR_LOGIN, reason: str = HOST_ONLY_REASON, first_error: str = HOST_ONLY_FIRST_ERROR, run: str = "501") -> dict:
+	comment = _failure_marker_comment(AUTOFIX_FAILED_COMMENT, run=run, head=head, author=author, reason=reason)
+	comment["body"] = comment["body"].replace("\n\n<!--", f"\n\n**First error:** `{first_error}`\n\n<!--", 1)
+	return comment
+
+
+def _nr_diagnosis_comment(*, head: str = SHA_B, author: str = NR_LOGIN, reason: str = HOST_ONLY_REASON) -> dict:
+	return {"author_login": author, "body": "diagnosis\n\n" + heal.render_non_retryable_marker(4174, head, reason)}
+
+
+def _nr_tg_setup(tg_log: Path):
+	def _setup(_tmp: Path, work: Path) -> None:
+		(work / "scripts" / "tg_helpers.sh").write_text(
+			f"tg_send_msg() {{ printf '%s\\t%s\\n' \"${{2:-}}\" \"${{1//$'\\n'/ }}\" >> '{tg_log}'; }}\n", encoding="utf-8"
+		)
+	return _setup
+
+
+def _nr_state(comments: list[dict] | None = None, **overrides) -> dict:
+	state = _intake_state(
+		jobs={"500": [{"id": 9001, "name": "review / codex-agent", "workflow_name": "AI Review", "conclusion": "failure", "steps": [{"name": "Resolve conflicts", "conclusion": "failure"}]}]},
+		job_logs={"9001": "2026-09-21T01:49:26.000Z ##[error]Process completed with exit code 1.\n"},
+	)
+	state["comments"][NR_PR_COMMENTS] = comments if comments is not None else [_nr_failure_comment()]
+	state.update(overrides)
+	return state
+
+
+def _nr_label_edits(state: dict) -> list[list[str]]:
+	return [edit for edit in state.get("issue_edits", []) if "ai:needs-human" in edit]
+
+
+def test_non_retryable_route_decisions() -> None:
+	payload = heal.validate_payload(_autofix_payload(failure_reason=HOST_ONLY_REASON))
+	decision = heal.non_retryable_route(payload, comments=[_nr_failure_comment()], trusted_login=NR_LOGIN)
+	assert decision["route"] is True and decision["reason"] == HOST_ONLY_REASON and decision["suffix"] == "host_only"
+	assert decision["paths"] == [".claude/hooks/pr_merge_status_guard.py"] and decision["already_diagnosed"] is False
+	# Suffix map.
+	assert heal.non_retryable_suffix("conflict_resolver_sandbox_path_unsupported") == "unsupported"
+	assert heal.non_retryable_suffix("conflict_resolver_sandbox_support_missing") == "support_missing"
+	# A retryable reason, another source kind, or a missing login never routes.
+	assert heal.non_retryable_route(heal.validate_payload(_autofix_payload()), comments=[], trusted_login=NR_LOGIN)["route"] is False
+	assert heal.non_retryable_route(dict(payload, source_kind="issue"), comments=[], trusted_login=NR_LOGIN)["route"] is False
+	assert heal.non_retryable_route(payload, comments=[], trusted_login="")["route"] is False
+	# Paths: invalid entries and "..." are dropped, at most 20 kept; another head or author yields none.
+	prefix = "Conflict resolver: host-only conflicted path(s) need a manual merge: "
+	many = ", ".join(["../escape"] + [f"f{i}.py" for i in range(25)] + ["..."])
+	decision = heal.non_retryable_route(payload, comments=[_nr_failure_comment(first_error=prefix + many)], trusted_login=NR_LOGIN)
+	assert decision["paths"] == [f"f{i}.py" for i in range(20)]
+	# A First error line cut at FAILURE_HEADLINE_LIMIT drops its possibly truncated last entry.
+	long_line = (prefix + ", ".join(f"some/long/directory/file_{i}.py" for i in range(20)))[: heal.FAILURE_HEADLINE_LIMIT]
+	paths = heal.non_retryable_route(payload, comments=[_nr_failure_comment(first_error=long_line)], trusted_login=NR_LOGIN)["paths"]
+	assert paths and all(long_line.find(path + ", ") >= 0 for path in paths)
+	assert heal.non_retryable_route(payload, comments=[_nr_failure_comment(author="attacker")], trusted_login=NR_LOGIN)["paths"] == []
+	assert heal.non_retryable_route(payload, comments=[_nr_failure_comment(head=SHA_A)], trusted_login=NR_LOGIN)["paths"] == []
+	# already_diagnosed needs the trusted author and the same pr, head and reason.
+	assert heal.non_retryable_route(payload, comments=[_nr_diagnosis_comment()], trusted_login=NR_LOGIN)["already_diagnosed"] is True
+	for other in (_nr_diagnosis_comment(author="attacker"), _nr_diagnosis_comment(head=SHA_A), _nr_diagnosis_comment(reason="conflict_resolver_sandbox_path_unsupported")):
+		assert heal.non_retryable_route(payload, comments=[other], trusted_login=NR_LOGIN)["already_diagnosed"] is False
+	# identical_failure_cap routes only on trusted, same-head, non-retryable markers.
+	cap = heal.validate_payload(_autofix_payload(failure_reason="identical_failure_cap"))
+	assert heal.non_retryable_route(cap, comments=[_nr_failure_comment()], trusted_login=NR_LOGIN)["reason"] == HOST_ONLY_REASON
+	for comment in (_nr_failure_comment(author="attacker"), _nr_failure_comment(head=SHA_A), _nr_failure_comment(reason="editor_empty_noop")):
+		assert heal.non_retryable_route(cap, comments=[comment], trusted_login=NR_LOGIN)["route"] is False
+	# The rendered comment names the path and ends with the marker.
+	decision = heal.non_retryable_route(payload, comments=[_nr_failure_comment()], trusted_login=NR_LOGIN)
+	body = heal.render_non_retryable_comment(decision, pr_number=4174, head_sha=SHA_B, intake_run_url=f"https://github.com/{SELF_REPO}/actions/runs/777")
+	assert "`.claude/hooks/pr_merge_status_guard.py`" in body and "manual merge" in body.lower()
+	assert body.rstrip().endswith(f"{NR_DIAG_MARKER_PREFIX} pr=4174 head={SHA_B} reason={HOST_ONLY_REASON} -->")
+
+
+def test_skip_reason_and_label_suppression_for_non_retryable_diagnosis() -> None:
+	payload = _consumer_payload()
+	assert heal.skip_reason(payload, registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO, non_retryable_diagnosed=True) == "non_retryable_diagnosed"
+	assert heal.skip_reason(dict(payload, label="ai:scope-blocked"), registered_repos=[CONSUMER_REPO], self_repo=SELF_REPO, non_retryable_diagnosed=True) == ""
+	reporter_marker = {"author": NR_LOGIN, "body": _nr_diagnosis_comment()["body"]}
+	assert heal.non_retryable_label_suppressed([reporter_marker], trusted_login=NR_LOGIN) is True
+	assert heal.non_retryable_label_suppressed([dict(reporter_marker, author="attacker")], trusted_login=NR_LOGIN) is False
+	newer_failure = {"author": NR_LOGIN, "body": _nr_failure_comment()["body"]}
+	assert heal.non_retryable_label_suppressed([reporter_marker, newer_failure], trusted_login=NR_LOGIN) is False
+	assert heal.non_retryable_label_suppressed([newer_failure, reporter_marker], trusted_login=NR_LOGIN) is True
+	assert heal.non_retryable_label_suppressed([reporter_marker], trusted_login="") is False
+
+
+def test_intake_routes_verified_host_only_failure_to_manual_merge(tmp_path: Path) -> None:
+	tg_log = tmp_path / "tg.log"
+	result, state, prompt = _run_intake(_autofix_payload(failure_reason=HOST_ONLY_REASON), _nr_state(), diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=_nr_tg_setup(tg_log))
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL skip reason=non_retryable_host_only outcome=diagnosed" in result.stdout
+	assert "issues_created" not in state and prompt == ""
+	posted = [c for c in state["comments_posted"] if c["path"] == NR_PR_COMMENTS]
+	assert len(posted) == 1 and len(state["comments_posted"]) == 1
+	assert ".claude/hooks/pr_merge_status_guard.py" in posted[0]["body"]
+	assert f"{NR_DIAG_MARKER_PREFIX} pr=4174 head={SHA_B} reason={HOST_ONLY_REASON} -->" in posted[0]["body"]
+	assert _nr_label_edits(state) == [["4174", "--repo", CONSUMER_REPO, "--add-label", "ai:needs-human"]]
+	warnings = [line for line in tg_log.read_text().splitlines() if line.startswith("WARNING\t")]
+	assert len(warnings) == 1 and ".claude/hooks/pr_merge_status_guard.py" in warnings[0]
+	assert not any(any(part.endswith("/logs") for part in call) for call in state["calls"])
+
+
+def test_intake_non_retryable_requires_verified_provenance(tmp_path: Path) -> None:
+	tg_log = tmp_path / "tg.log"
+	payload = _autofix_payload(failure_reason=HOST_ONLY_REASON)
+	state = _nr_state([], run_details={"500": {
+		"id": 500, "repository": {"full_name": CONSUMER_REPO}, "head_sha": SHA_B, "html_url": f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+		"status": "completed", "conclusion": "failure", "path": ".github/workflows/ai-review.yml", "pull_requests": [],
+	}})
+	result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=_nr_tg_setup(tg_log))
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "skip reason=provenance_rejected" in result.stdout and "non_retryable" not in result.stdout
+	assert "comments_posted" not in state_after and not _nr_label_edits(state_after)
+	assert "non-retryable" not in (tg_log.read_text() if tg_log.exists() else "")
+	# A missing trusted identity is rejected the same way.
+	result, state_after, _ = _run_intake(payload, _nr_state(user_fetch_fail=True), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert "skip reason=provenance_rejected" in result.stdout and "non_retryable" not in result.stdout
+	assert "comments_posted" not in state_after and not _nr_label_edits(state_after)
+
+
+def test_intake_non_retryable_duplicate_report_stays_silent(tmp_path: Path) -> None:
+	tg_log = tmp_path / "tg.log"
+	state = _nr_state([_nr_failure_comment(), _nr_diagnosis_comment()])
+	result, state_after, _ = _run_intake(_autofix_payload(failure_reason=HOST_ONLY_REASON), state, diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=_nr_tg_setup(tg_log))
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL skip reason=non_retryable_host_only outcome=duplicate" in result.stdout
+	assert "comments_posted" not in state_after and not _nr_label_edits(state_after) and "issues_created" not in state_after
+	assert not tg_log.exists()
+	# A marker by another author does not count as a diagnosis.
+	state = _nr_state([_nr_failure_comment(), _nr_diagnosis_comment(author="attacker")])
+	result, state_after, _ = _run_intake(_autofix_payload(failure_reason=HOST_ONLY_REASON), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert "outcome=diagnosed" in result.stdout and len(state_after["comments_posted"]) == 1
+
+
+def test_intake_retryable_and_disabled_routing_still_file_heal_issues() -> None:
+	result, state, _ = _run_intake(_autofix_payload(), _nr_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "non_retryable" not in result.stdout and len(state["issues_created"]) == 1
+	result, state, _ = _run_intake(_autofix_payload(failure_reason=HOST_ONLY_REASON), _nr_state(), diagnosis=DIAG_WORKFLOW_DEFECT,
+		extra_env={"WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED": "false"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "non_retryable" not in result.stdout and len(state["issues_created"]) == 1
+
+
+def test_intake_identical_failure_cap_routes_only_on_trusted_non_retryable_markers() -> None:
+	cap_payload = _autofix_payload(failure_reason="identical_failure_cap", failure_fingerprint=FP_HEX)
+	result, state, _ = _run_intake(cap_payload, _nr_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "skip reason=non_retryable_host_only outcome=diagnosed" in result.stdout and "issues_created" not in state
+	result, state, _ = _run_intake(cap_payload, _nr_state([_nr_failure_comment(reason="editor_empty_noop")]), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "non_retryable" not in result.stdout and len(state["issues_created"]) == 1
+
+
+def test_intake_non_retryable_comment_failure_adds_no_label_or_issue(tmp_path: Path) -> None:
+	tg_log = tmp_path / "tg.log"
+	result, state, _ = _run_intake(_autofix_payload(failure_reason=HOST_ONLY_REASON), _nr_state(comment_post_fail=True), diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=_nr_tg_setup(tg_log))
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL error non_retryable_comment_failed" in result.stdout
+	assert not _nr_label_edits(state) and "issues_created" not in state
+	assert tg_log.read_text().startswith("WARNING\t")
+
+
+def test_reporter_skips_label_event_caused_by_non_retryable_diagnosis() -> None:
+	def run(comments: list[dict], **state_overrides) -> tuple[subprocess.CompletedProcess[str], dict]:
+		with tempfile.TemporaryDirectory(prefix="heal-reporter-nr-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage(tmp, with_codex=False, wrapper_pin=SHA_A)
+			state = _report_state(**state_overrides)
+			state["comments"][f"repos/{CONSUMER_REPO}/issues/42/comments"].extend(comments)
+			state_file.write_text(json.dumps(state), encoding="utf-8")
+			env.update({"GITHUB_REPOSITORY": CONSUMER_REPO, "WORKFLOW_HEAL_ISSUE_NUMBER": "42", "WORKFLOW_HEAL_LABEL": "ai:needs-human", "WORKFLOW_HEAL_IS_PULL_REQUEST": "true"})
+			return _run(REPORT_SCRIPT, work, env), _state(state_file)
+
+	def marker(author: str = NR_LOGIN) -> dict:
+		return {"body": "diagnosis\n\n" + heal.render_non_retryable_marker(42, SHA_B, HOST_ONLY_REASON), "user": {"login": author}, "created_at": "2026-09-20T00:00:00Z"}
+
+	result, state = run([marker()])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL_REPORT skip reason=non_retryable_diagnosed" in result.stdout and "dispatches" not in state
+	result, state = run([marker(author="attacker")])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert len(state["dispatches"]) == 1
+	newer_failure = {"body": _nr_failure_comment(head=SHA_B)["body"], "user": {"login": NR_LOGIN}, "created_at": "2026-09-21T00:00:00Z"}
+	result, state = run([marker(), newer_failure])
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert len(state["dispatches"]) == 1
+	result, state = run([marker()], user_fetch_fail=True)
+	assert result.returncode == 1
+	assert "error non_retryable_marker_author_unavailable" in result.stdout and "dispatches" not in state

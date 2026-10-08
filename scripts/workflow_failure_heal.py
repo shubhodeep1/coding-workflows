@@ -1257,10 +1257,14 @@ def unwrap_dispatch(client_payload: Any) -> Any:
 	return client_payload
 
 
-def skip_reason(payload: dict[str, Any], *, registered_repos: Iterable[str], self_repo: str, heal_scope_unverified: bool = False) -> str:
+def skip_reason(payload: dict[str, Any], *, registered_repos: Iterable[str], self_repo: str, heal_scope_unverified: bool = False, non_retryable_diagnosed: bool = False) -> str:
 	"""Return a stable skip reason when a validated payload must not be healed."""
 	if heal_scope_unverified and payload.get("label") == "ai:needs-human" and "ai:workflow-heal" in (payload.get("labels") or []):
 		return "heal_scope_unverified"
+	# The heal intake applied ai:needs-human itself after diagnosing a
+	# non-retryable review/autofix failure; reporting that label would loop.
+	if non_retryable_diagnosed and payload.get("label") == "ai:needs-human":
+		return "non_retryable_diagnosed"
 	repo = payload.get("source_repo")
 	if repo != self_repo and repo not in set(registered_repos):
 		return "unregistered_source_repo"
@@ -1939,6 +1943,183 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 			break
 	result["non_retryable"] = result["count"] > 0 and result["reason"] in NON_RETRYABLE_FAILURE_REASONS
 	return result
+
+
+# ---------------------------------------------------------------------------
+# Non-retryable review/autofix failures (heal intake routing)
+# ---------------------------------------------------------------------------
+
+# Durable PR-comment marker the heal intake posts when it routes a verified
+# non-retryable autofix_failure report to a manual merge instead of a heal
+# issue. Trusted only when written by the intake's authenticated account;
+# keyed on (pr, head, reason) so a duplicate report stays silent and a new
+# head earns a fresh diagnosis.
+NON_RETRYABLE_DIAGNOSIS_MARKER_TAG = "ai:workflow-heal-non-retryable:v1"
+NON_RETRYABLE_MAX_PATHS = 20
+_NON_RETRYABLE_MARKER_RE = re.compile(r"<!--\s*" + re.escape(NON_RETRYABLE_DIAGNOSIS_MARKER_TAG) + r"\s+(?P<fields>[^>]*?)\s*-->")
+_FIRST_ERROR_LINE_RE = re.compile(r"\*\*First error:\*\* `(?P<error>[^`\n]{1,400})`")
+_HOST_ONLY_PATHS_PREFIX = "host-only conflicted path(s) need a manual merge: "
+
+
+def _non_retryable_comment_author(comment: dict[str, Any]) -> str:
+	"""Author login of a comment, also accepting the reporter's flat ``author`` string."""
+	login = _comment_author(comment)
+	if not login and isinstance(comment.get("author"), str):
+		login = comment["author"].strip().lower()
+	return login
+
+
+def non_retryable_suffix(reason: str) -> str:
+	"""Short log token for a non-retryable reason (``host_only`` for the host-only resolver refusal)."""
+	text = str(reason or "")
+	for prefix in ("conflict_resolver_sandbox_path_", "conflict_resolver_sandbox_"):
+		if text.startswith(prefix):
+			return safe_token(text[len(prefix):]) or "unknown"
+	return safe_token(text) or "unknown"
+
+
+def render_non_retryable_marker(pr_number: Any, head_sha: str, reason: str) -> str:
+	return f"<!-- {NON_RETRYABLE_DIAGNOSIS_MARKER_TAG} pr={safe_token(pr_number, 20)} head={safe_token(head_sha, 40).lower()} reason={safe_token(reason)} -->"
+
+
+def _non_retryable_host_only_paths(comments: list[dict[str, Any]], *, head_sha: str, author: str) -> list[str]:
+	"""Paths named by the newest trusted failure comment for ``head_sha``.
+
+	Only the ``**First error:**`` line of a ``review-autofix-failure:v1``
+	comment the trusted account wrote on this head is read; every entry must
+	pass ``is_valid_repo_path`` and at most NON_RETRYABLE_MAX_PATHS are kept.
+	"""
+	for comment in reversed(comments):
+		if _non_retryable_comment_author(comment) != author:
+			continue
+		body = sanitize_text(comment.get("body"))
+		fields = _marker_fields(_FAILURE_MARKER_RE.search(body))
+		if fields.get("head", "").lower() != head_sha:
+			continue
+		match = _FIRST_ERROR_LINE_RE.search(body)
+		if match is None:
+			return []
+		error = match.group("error")
+		index = error.find(_HOST_ONLY_PATHS_PREFIX)
+		if index < 0:
+			return []
+		entries = error[index + len(_HOST_ONLY_PATHS_PREFIX):].split(", ")
+		if len(error) >= FAILURE_HEADLINE_LIMIT:
+			# failure_headline() truncates at this length, so the last entry may
+			# be a cut-off path; never name a file that may not exist.
+			entries = entries[:-1]
+		paths: list[str] = []
+		for raw in entries:
+			path = raw.strip()
+			if path == "..." or not is_valid_repo_path(path) or path in paths:
+				continue
+			paths.append(path)
+			if len(paths) >= NON_RETRYABLE_MAX_PATHS:
+				break
+		return paths
+	return []
+
+
+def non_retryable_route(payload: dict[str, Any], *, comments: Iterable[dict[str, Any]], trusted_login: str) -> dict[str, Any]:
+	"""Decide whether a provenance-verified autofix_failure report is non-retryable.
+
+	The caller must have verified the report's run provenance first. A report
+	routes when its ``failure_reason`` is in NON_RETRYABLE_FAILURE_REASONS, or
+	when it is an ``identical_failure_cap`` report whose trailing trusted
+	failure markers on the head carry such a reason (payload evidence text is
+	never consulted). ``already_diagnosed`` is true when the trusted account
+	already posted the non-retryable marker for the same pr, head and reason.
+	"""
+	result: dict[str, Any] = {"route": False, "reason": "", "suffix": "", "paths": [], "already_diagnosed": False, "detail": ""}
+	author = str(trusted_login or "").strip().lower()
+	head = str(payload.get("head_sha") or "").strip().lower()
+	pr_number = str(payload.get("issue_number") or "").strip()
+	ordered = [comment for comment in comments if isinstance(comment, dict)]
+	if payload.get("source_kind") != "autofix_failure":
+		result["detail"] = "not_autofix_failure"
+		return result
+	if not pr_number.isdigit() or not is_valid_sha(head) or not author:
+		result["detail"] = "missing_inputs"
+		return result
+	failure_reason = str(payload.get("failure_reason") or "")
+	reason = ""
+	if failure_reason in NON_RETRYABLE_FAILURE_REASONS:
+		reason = failure_reason
+	elif failure_reason == "identical_failure_cap":
+		counted = count_identical_failures(ordered, head_sha=head, author_login=author)
+		if counted["non_retryable"]:
+			reason = counted["reason"]
+	if not reason:
+		result["detail"] = "retryable"
+		return result
+	result.update({"route": True, "reason": reason, "suffix": non_retryable_suffix(reason), "detail": "non_retryable"})
+	result["paths"] = _non_retryable_host_only_paths(ordered, head_sha=head, author=author)
+	for comment in ordered:
+		if _non_retryable_comment_author(comment) != author:
+			continue
+		for match in _NON_RETRYABLE_MARKER_RE.finditer(sanitize_text(comment.get("body"))):
+			fields = _marker_fields(match)
+			if fields.get("pr") == pr_number and fields.get("head", "").lower() == head and fields.get("reason") == reason:
+				result["already_diagnosed"] = True
+				break
+		if result["already_diagnosed"]:
+			break
+	return result
+
+
+def render_non_retryable_comment(decision: dict[str, Any], *, pr_number: Any, head_sha: str, intake_run_url: str = "") -> str:
+	"""Render the PR diagnosis comment for a routed non-retryable failure, ending with its marker."""
+	reason = safe_token(decision.get("reason"))
+	head = safe_token(head_sha, 40).lower()
+	lines = [
+		"**Workflow failure heal: this review/autofix failure cannot be fixed by another run**",
+		"",
+		f"Failure reason: `{reason}` on head `{head[:12]}`.",
+		"",
+	]
+	paths = [path for path in decision.get("paths") or [] if is_valid_repo_path(path)][:NON_RETRYABLE_MAX_PATHS]
+	if paths:
+		lines.append("Conflicted path(s) that need a manual merge:")
+		lines.append("")
+		lines.extend(f"- `{sanitize_text(path).replace('@', '')}`" for path in paths)
+	else:
+		lines.append("The conflicted path(s) could not be read from the failure comment; see the latest review/autofix failure comment on this pull request.")
+	lines.extend(
+		[
+			"",
+			"Another review/autofix run cannot resolve this: the conflicted path(s) are executed on the host and the resolver sandbox refuses them by design. Merge the conflict by hand, push, then remove `ai:needs-human`.",
+			"",
+			"No heal issue was opened.",
+		]
+	)
+	run_match = _RUN_URL_RE.fullmatch(str(intake_run_url or ""))
+	if run_match:
+		lines.extend(["", f"Heal intake run: {run_match.group(0)}"])
+	lines.extend(["", render_non_retryable_marker(pr_number, head, reason)])
+	return "\n".join(lines) + "\n"
+
+
+def non_retryable_label_suppressed(comments: Iterable[dict[str, Any]], *, trusted_login: str) -> bool:
+	"""True when the trusted account's newest failure-or-diagnosis comment is the non-retryable marker.
+
+	The heal intake posts that marker immediately before it applies
+	``ai:needs-human``, so the resulting label event must not produce another
+	heal report. A newer trusted ``review-autofix-failure:v1`` comment means
+	the PR failed again since, and normal escalation resumes.
+	"""
+	author = str(trusted_login or "").strip().lower()
+	if not author:
+		return False
+	ordered = [comment for comment in comments if isinstance(comment, dict)]
+	for comment in reversed(ordered):
+		if _non_retryable_comment_author(comment) != author:
+			continue
+		body = sanitize_text(comment.get("body"))
+		if _NON_RETRYABLE_MARKER_RE.search(body):
+			return True
+		if _FAILURE_MARKER_RE.search(body):
+			return False
+	return False
 
 
 # ---------------------------------------------------------------------------
@@ -2797,7 +2978,30 @@ def _cmd_skip_reason(args: argparse.Namespace) -> int:
 		except (OSError, json.JSONDecodeError):
 			loaded = []
 		registered = [item for item in loaded if isinstance(item, str)] if isinstance(loaded, list) else []
-	sys.stdout.write(skip_reason(payload, registered_repos=registered, self_repo=args.self_repo, heal_scope_unverified=args.heal_scope_unverified) + "\n")
+	sys.stdout.write(skip_reason(payload, registered_repos=registered, self_repo=args.self_repo, heal_scope_unverified=args.heal_scope_unverified, non_retryable_diagnosed=args.non_retryable_diagnosed) + "\n")
+	return 0
+
+
+def _cmd_non_retryable_route(args: argparse.Namespace) -> int:
+	payload = _load_json_file(args.payload_json)
+	comments = _load_json_file(args.comments_json)
+	if not isinstance(payload, dict) or not isinstance(comments, list):
+		raise ValueError("payload JSON must be an object and comments JSON a list")
+	decision = non_retryable_route(payload, comments=comments, trusted_login=args.trusted_login)
+	decision["comment"] = ""
+	if decision["route"]:
+		decision["comment"] = render_non_retryable_comment(
+			decision, pr_number=payload.get("issue_number"), head_sha=str(payload.get("head_sha") or ""), intake_run_url=args.intake_run_url,
+		)
+	_write_json(decision)
+	return 0
+
+
+def _cmd_non_retryable_label_suppressed(args: argparse.Namespace) -> int:
+	comments = _load_json_file(args.comments_json)
+	if not isinstance(comments, list):
+		raise ValueError("comments JSON must be a list")
+	sys.stdout.write(("true" if non_retryable_label_suppressed(comments, trusted_login=args.trusted_login) else "false") + "\n")
 	return 0
 
 
@@ -3136,6 +3340,18 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--author-login", required=True)
 	p.set_defaults(func=_cmd_autofix_identical_failure_count)
 
+	p = sub.add_parser("non-retryable-route", help="Decide whether a provenance-verified autofix_failure report is non-retryable; prints JSON with the rendered PR comment")
+	p.add_argument("--payload-json", required=True)
+	p.add_argument("--comments-json", required=True)
+	p.add_argument("--trusted-login", required=True)
+	p.add_argument("--intake-run-url", default="")
+	p.set_defaults(func=_cmd_non_retryable_route)
+
+	p = sub.add_parser("non-retryable-label-suppressed", help="Print true when the trusted account's newest failure-or-diagnosis comment is the non-retryable marker")
+	p.add_argument("--comments-json", required=True)
+	p.add_argument("--trusted-login", required=True)
+	p.set_defaults(func=_cmd_non_retryable_label_suppressed)
+
 	p = sub.add_parser("build-run-payload", help="Build the payload for a failed workflow_run event")
 	p.add_argument("--repo", required=True)
 	p.add_argument("--workflow-run-json", required=True)
@@ -3158,6 +3374,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--registry-json", default="")
 	p.add_argument("--self-repo", required=True)
 	p.add_argument("--heal-scope-unverified", action="store_true")
+	p.add_argument("--non-retryable-diagnosed", action="store_true")
 	p.set_defaults(func=_cmd_skip_reason)
 
 	p = sub.add_parser("redact-stream")

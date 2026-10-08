@@ -430,6 +430,23 @@ Phases of the unattended pipeline (each is a separate workflow file under
     specific `::error::` line of the captured stage stderr (including the
     resolver's, `resolver_stage_stderr.txt`), redacted
     (`failure-headline`, log prefix `AUTOFIX_FAILURE_HEADLINE`).
+    Right after its provenance gate, the intake routes a verified
+    `autofix_failure` report with a `NON_RETRYABLE_FAILURE_REASONS` reason
+    away from heal issues. The reason can come directly from the report, or,
+    for an `identical_failure_cap` report, from the trusted account's own
+    failure markers on the head. The intake posts one PR comment naming the
+    host-only paths from the trusted failure comment's **First error** line
+    (#6750 / PR #6535: `.claude/hooks/pr_merge_status_guard.py`). The comment
+    carries the marker
+    `<!-- ai:workflow-heal-non-retryable:v1 pr= head= reason= -->`. The
+    intake then adds `ai:needs-human`, sends a WARNING, and logs
+    `WORKFLOW_HEAL skip reason=non_retryable_<suffix> outcome=diagnosed`. It
+    reuses the provenance comment snapshot and makes no extra read. A
+    repeat for the same pr/head/reason only logs `outcome=duplicate`; a
+    failed comment post adds no label. The label reporter skips the label
+    event this causes (`skip reason=non_retryable_diagnosed`) while the
+    account's newest failure-or-diagnosis comment is that marker. Kill
+    switch: `WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED` (default `true`).
 15. **Claude issue implementer (retired)** — standalone issues always run the
     Codex pipeline (clarify → plan → implement); `clarify.yml` no longer
     routes to Claude, and `AI_ISSUE_IMPLEMENTER` is no longer read. The
