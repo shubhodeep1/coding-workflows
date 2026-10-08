@@ -1615,7 +1615,8 @@ counted unknown),
 or the cited file and such a file both name a third non-documentation, non-test
 repository module at base or head, a shared dependency the upward search cannot
 see (`reason=shared_dependency_links_module_with_deletions`; one `git ls-tree`
-per commit; one-letter dependency names are not searched),
+per commit; a one-letter dependency such as `x.py` that both name keeps it
+blocking as `reason=module_name_too_short`, counted unknown),
 or a file the project changed, other than documentation or tests (a `test`,
 `tests`, `spec` or `__tests__` segment, `test_*`, `*_test.*`, `*.spec.*`,
 `*.test.*`), names the cited module at head, even with no deletion anywhere

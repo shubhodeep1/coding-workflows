@@ -2874,6 +2874,8 @@ def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") ->
 	  five-file reference chain longer than the search bound.
 	- ``cross_file_shared_dependency``: as ``cross_file``, but mod.py and
 	  auth.py both import an unchanged shared.py that names neither.
+	- ``cross_file_shared_one_letter``: as ``cross_file_shared_dependency``,
+	  but the shared module is the one-letter x.py.
 	"""
 	repo_dir = base_dir / "audited-repo"
 	repo_dir.mkdir(parents=True, exist_ok=True)
@@ -2905,10 +2907,15 @@ def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") ->
 		base_lines = [*base_lines[:-1], "import auth\n"]
 	elif variant == "cross_file_shared_dependency":
 		base_lines = [*base_lines[:-1], "import shared\n"]
+	elif variant == "cross_file_shared_one_letter":
+		base_lines = [*base_lines[:-1], "import x\n"]
 	auth_base_text = "def check():\n\treturn require_admin()\n"
 	if variant == "cross_file_shared_dependency":
 		auth_base_text = "import shared\n" + auth_base_text
 		(repo_dir / "shared.py").write_text("ADMIN_CHECKS = []\n", encoding="utf-8")
+	if variant == "cross_file_shared_one_letter":
+		auth_base_text = "import x\n" + auth_base_text
+		(repo_dir / "x.py").write_text("ADMIN_CHECKS = []\n", encoding="utf-8")
 	if variant == "cross_file_reverse":
 		auth_base_text = "import mod\n" + auth_base_text
 	_git("init", "-q")
@@ -2919,6 +2926,8 @@ def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") ->
 		_git("add", "registry.py")
 	if variant == "cross_file_shared_dependency":
 		_git("add", "shared.py")
+	if variant == "cross_file_shared_one_letter":
+		_git("add", "x.py")
 	if variant == "cross_file_chain":
 		(repo_dir / "middleware.py").write_text("import auth\n", encoding="utf-8")
 		(repo_dir / "app.py").write_text("import middleware\nimport mod\n", encoding="utf-8")
@@ -2961,6 +2970,7 @@ def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") ->
 		"cross_file_chain",
 		"cross_file_long_chain",
 		"cross_file_shared_dependency",
+		"cross_file_shared_one_letter",
 	):
 		project_lines = list(base_lines)
 		(repo_dir / "auth.py").write_text(auth_base_text.replace("\treturn require_admin()\n", ""), encoding="utf-8")
@@ -3182,6 +3192,19 @@ def test_security_audit_line_ownership_reference_search_limit_blocks() -> None:
 	assert payload["findings"][0]["advisory"] is False
 	assert payload["line_ownership"] == {"mode": "project", "blocking": 1, "advisory": 0, "unknown": 1}
 	assert "security-audit: line_ownership_unknown finding=base-line reason=reference_search_limit" in proc.stdout
+
+
+def test_security_audit_line_ownership_one_letter_shared_dependency_blocks() -> None:
+	# A one-letter shared dependency (x.py) named by both the cited file and
+	# the file that lost its guard cannot be searched reliably, so the link
+	# cannot be ruled out and the finding stays blocking (fail closed).
+	proc, payload = _run_line_ownership_audit(
+		[_line_ownership_finding("base-line", 1)], variant="cross_file_shared_one_letter"
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert payload["findings"][0]["advisory"] is False
+	assert payload["line_ownership"] == {"mode": "project", "blocking": 1, "advisory": 0, "unknown": 1}
+	assert "security-audit: line_ownership_unknown finding=base-line reason=module_name_too_short" in proc.stdout
 
 
 def test_security_audit_line_ownership_one_letter_module_with_deletions_blocks() -> None:

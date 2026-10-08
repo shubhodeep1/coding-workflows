@@ -2272,22 +2272,34 @@ def shared_dependency_reason(path: str, cited_text: str, guard_paths: set[str]) 
 	# registry in that shared module which the cited operation relies on, and
 	# the referrer search above only walks upward, so it never sees C.
 	# Candidates are non-documentation, non-test modules tracked at base or
-	# head; one-letter module names cannot be searched and are not candidates.
+	# head.  A one-letter module name (x.py) cannot be searched reliably, so
+	# when both files name one as a word the link cannot be ruled out and the
+	# finding stays blocking (module_name_too_short, fail closed).
 	base_paths = tree_paths_at(base_sha)
 	head_paths = tree_paths_at(head_sha)
 	if base_paths is None or head_paths is None:
 		return "module_reference_check_failed", True
 	excluded_stems = {module_stem(path)} | {module_stem(guard) for guard in guard_paths}
 	candidate_stems: set[str] = set()
+	short_candidate_stems: set[str] = set()
 	for candidate in base_paths | head_paths:
 		if candidate == path or candidate in guard_paths or is_doc_path(candidate) or is_test_path(candidate):
 			continue
 		stem = module_stem(candidate)
 		if stem and stem not in excluded_stems:
 			candidate_stems.add(stem)
+		elif not stem:
+			pure_candidate = PurePosixPath(candidate)
+			raw_stem = pure_candidate.stem
+			if raw_stem.lower() in LINE_OWNERSHIP_GENERIC_MODULE_STEMS and pure_candidate.parent.name:
+				raw_stem = pure_candidate.parent.name
+			if raw_stem:
+				short_candidate_stems.add(raw_stem)
 	cited_dependencies = named_stems(cited_text, candidate_stems)
-	if not cited_dependencies:
+	cited_short_dependencies = named_stems(cited_text, short_candidate_stems)
+	if not cited_dependencies and not cited_short_dependencies:
 		return "", False
+	short_match = False
 	for guard in sorted(guard_paths):
 		# Base text holds the deleted guard's own imports; head text holds any
 		# the project added.  A side where the file does not exist is skipped.
@@ -2301,6 +2313,10 @@ def shared_dependency_reason(path: str, cited_text: str, guard_paths: set[str]) 
 			guard_texts.append(guard_text)
 		if guard_texts and named_stems("\n".join(guard_texts), cited_dependencies):
 			return "shared_dependency_links_module_with_deletions", False
+		if guard_texts and named_stems("\n".join(guard_texts), cited_short_dependencies):
+			short_match = True
+	if short_match:
+		return "module_name_too_short", True
 	return "", False
 
 

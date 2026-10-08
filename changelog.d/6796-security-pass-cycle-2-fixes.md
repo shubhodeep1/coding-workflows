@@ -9,7 +9,7 @@ The wrapper the synthesiser writes now runs its body only when `BEHAVIOURAL_SMOK
   - a file the project changed, other than documentation or tests, names the cited module at the head (`reason=changed_file_references_cited_module`);
   - a chain of files naming each other's modules links the cited module to a source file that lost lines through a common referrer, such as an app that imports a middleware that imports the guard module (`reason=transitive_reference_links_module_with_deletions`); a search that needs more than 4 hops or 32 module names cannot rule the link out and also keeps the finding blocking (`line_ownership_unknown reason=reference_search_limit`);
   - the cited file and a source file that lost lines both name a third module of the repository, such as a shared registry the deleted guard populated (`reason=shared_dependency_links_module_with_deletions`);
-  - the cited module, or a module that lost lines, has a one-letter name such as `x.py`, which cannot be searched reliably (`line_ownership_unknown reason=module_name_too_short`).
+  - the cited module, a module that lost lines, or a third module both of them name, has a one-letter name such as `x.py`, which cannot be searched reliably (`line_ownership_unknown reason=module_name_too_short`).
 
 `SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW` is still accepted, but it now only picks the logged reason (`changed_hunk_within_window` or `added_lines_in_file`).
 
