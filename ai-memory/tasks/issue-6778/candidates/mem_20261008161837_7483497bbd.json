@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nCheckpoint:\n- Read `scripts/implement_heal_preflight.sh` only; no files changed. Every check (identity at lines 58\u201359, the live-issue GraphQL read at 64, scope verification at 65, the support checkout at 74\u201385) ends in the same `refuse unavailable`, so a refusal does not say which check failed.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The issue says the fallback work comes only \"after preflight succeeds against the unchanged intake-authored scope\", and the heal is reissued through intake. So this PR covers only the preflight diagnostics, the fixes and the tests, and the `prepare-ephemeral` fallback goes in a follow-up heal issue. Option C would rule out fixing a cause the code clearly shows, and the issue asks for that fix.\nQ2: There is no failing-run log, but the issue explicitly asks to \"fix the evidenced cause\". So fix only causes the code and existing tests prove, each with a regression test, and keep every refusal fail-closed. Option C would loosen checkout or identity checks without proof, which the issue forbids. Option B would skip a fix the code may already prove.\n\nEXECUTION PLAN (required for any non-letter decision):\n(none; both decisions are lettered. Notes for the planner on Q1:A and Q2:A:)\n- Inputs: `scripts/implement_heal_preflight.sh` (lines 58, 59, 64, 65, 74, 75, 82, 83, 85); `scripts/workflow_failure_heal.py` (`heal-scope verify`); the existing tests for the preflight script under `tests/`.\n- Give each `refuse unavailable` site its own fixed reason token, for example `identity_read_failed`, `identity_empty`, `issue_read_failed`, `scope_verify_failed`, `support_scripts_missing`, `support_head_unreadable`, `expected_ref_unresolved`, `expected_ref_invalid` and `support_head_mismatch`. Log it on one line with a stable prefix. Do not print tokens, issue bodies, gh/jq/python stderr or checkout paths. The refusal outcome stays the same.\n- Candidate cause to prove or rule out by reading the code (not to assume): line 82 resolves `refs/heads/${expected_ref}` in the support checkout. If that checkout is a detached HEAD or has no local branch named `main` or `stable`, the check fails even when HEAD is correct. Change it only if the workflow that creates the support checkout proves this. If it does, resolve against the ref that checkout actually creates and still require an exact SHA match. Do not accept other branch names and do not drop the comparison at line 85.\n- Tests: for each check, one success case and one fail-closed case that asserts the new reason token and that no secret appears in the output.\n- Follow-up issue (not in this PR): after merge, reissue the heal through intake. That heal adds the `prepare-ephemeral` workflow fallback, requires a non-empty sandbox root, and tests both the fallback and fatal isolation failures. Validation and required checks stay mandatory.\n- Reversibility: the diagnostics only add log text. Any check fix ships with its own regression test and can be reverted on its own.\n\nESCALATION (required for any ESCALATE decision):\n(none)\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n(none)\n\nAssumptions: \"Evidenced\" means proven by reading the code when no run log exists. Without such proof, this PR ships only the diagnostics, and the next refused run will name the failing check.\nMissing context: I did not read the workflow step that creates the support checkout, so the line 82 cause is still unconfirmed.",
+  "fingerprint": "1edfc6192dcb44c284a9c4541e61dd2e6b390e7cffca430140740f5027ab78a2",
+  "lineage": {
+    "issue_number": 6778,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37806536171",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37806536171",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6778"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008161837_7483497bbd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6778,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37806536171"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6778",
+  "timestamps": {
+    "created_at": "2026-10-08T16:18:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
