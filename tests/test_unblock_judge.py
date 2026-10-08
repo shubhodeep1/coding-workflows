@@ -599,6 +599,10 @@ def test_security_reissue_keeps_a_finding_open_or_transfers_its_marker() -> None
 	assert project_child[0]["issue"] == 12 and project_child[1]["issue"] == 7
 	assert "re-issue request recorded on tracking issue #12" in project_child[1]["body"]
 	assert "newest issue" not in project_child[1]["body"]
+	assert "\n<!-- ai:security-finding:abc-1 -->\n" in project_child[0]["body"]
+	unbound = actions.plan(_verdict("reissue", instructions="correct spec"), _ctx(labels=security_labels, tracking=12))
+	assert [op["op"] for op in unbound] == ["comment", "telegram"]
+	assert unbound[0]["issue"] == 7 and "stays open" in unbound[0]["body"]
 
 
 def test_security_reissue_carries_canonical_metadata() -> None:

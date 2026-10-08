@@ -367,12 +367,16 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 		title = f"Re-issue of #{item}: {ctx['title']}"[:240]
 		body = "\n".join([f"Re-issued by the unblock judge from #{item}.", "", f"Specification: {verdict['instructions']}", "", f"Why: {verdict['reason']}"])
 		security_issue = _is_security_issue(ctx)
-		if security_issue and not ctx["tracking"] and ctx.get("security_metadata_unsafe"):
+		# A tracked security finding is split through the poller's fix-up
+		# request; it carries the finding marker, from which the poller labels
+		# the successor `ai:security` (#6541). Without a valid marker the
+		# successor cannot be bound to the finding, so nothing is split.
+		if security_issue and (ctx.get("security_metadata_unsafe") or (ctx["tracking"] and not ctx.get("security_finding_id"))):
 			return [
 				{"op": "comment", "issue": item, "body": "This security finding stays open: its finding marker, dependency or target-branch metadata could not be carried to a replacement safely, so no re-issue was created."},
 				{"op": "telegram", "level": "WARNING", "text": f"Unblock judge could not safely re-issue security finding #{item}; its metadata needs correction."},
 			]
-		if security_issue and not ctx["tracking"] and ctx.get("security_finding_id"):
+		if security_issue and ctx.get("security_finding_id"):
 			body = f"{SECURITY_FINDING_MARKER_PREFIX}{ctx['security_finding_id']} -->\n{body}"
 		if security_issue and not ctx["tracking"]:
 			if ctx.get("security_target_branch"):
