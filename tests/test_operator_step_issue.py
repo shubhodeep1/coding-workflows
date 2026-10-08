@@ -305,3 +305,18 @@ def test_needs_human_digest_park_reports_the_park_when_the_post_create_listing_f
 	# The digest holds the entry, so the caller must still get newly_parked for its alert.
 	assert result["issue"] == 900 and result["newly_parked"] is True
 	assert list(writer.parse_digest(fake.issues[0]["body"])[0]) == [7]
+
+
+def test_needs_human_digest_prune_merges_and_closes_a_duplicate_digest(fake: FakeGitHub) -> None:
+	def entry(n: int) -> dict:
+		return {"kind": "issue", "parked": NOW, "line": writer.render_digest_entry(n, "issue", "blocked", "x", "", NOW)}
+
+	oldest = {"number": 5, "body": writer.render_digest({7: entry(7)}, []), "user": {"login": BOT}}
+	duplicate = {"number": 6, "body": writer.render_digest({8: entry(8)}, []), "user": {"login": BOT}}
+	fake.issues.extend([oldest, duplicate])
+	fake.open_needs_human = [{"number": n, "labels": [{"name": "ai:needs-human"}]} for n in (7, 8)]
+	result = writer.needs_human_prune(REPO, BOT, now=NOW)
+	assert result["issue"] == 5 and result["items"] == [7, 8]
+	assert sorted(writer.parse_digest(oldest["body"])[0]) == [7, 8]
+	closes = [args for args in fake.patches() if "state=closed" in args]
+	assert [args[3] for args in closes] == [f"repos/{REPO}/issues/6"]

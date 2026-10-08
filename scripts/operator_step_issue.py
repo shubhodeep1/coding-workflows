@@ -74,7 +74,9 @@ prints `items`), so an item left labelled without a digest line is judged and
 parked again. prune: one digest listing and, only when the digest has
 entries, the open `ai:needs-human` listing (one call per 100 items) plus,
 only when the body changes, one re-listing (a concurrent writer since the
-first read skips the tick) and at most one PATCH. The body PATCH is not
+first read skips the tick) and at most one PATCH. Newer duplicate digests
+(left open when a park's post-create check failed) are merged into the oldest
+one and closed, one PATCH each. The body PATCH is not
 atomic; the re-listing narrows the window but does not close it. The unblock scan's search (30 items, lagging index) and the
 staged-support sweep's listing (source repo only, PRs dropped) were audited
 and cannot answer the prune question.
@@ -362,8 +364,14 @@ def _digest_trusted(issue: dict, trusted_login: str) -> bool:
 
 def find_digest(issues: object, trusted_login: str) -> dict | None:
 	"""The oldest open, pipeline-authored issue whose body starts with the digest marker."""
+	candidates = find_digests(issues, trusted_login)
+	return candidates[0] if candidates else None
+
+
+def find_digests(issues: object, trusted_login: str) -> list[dict]:
+	"""All open, pipeline-authored digest issues, oldest first (later ones are duplicates)."""
 	if not isinstance(issues, list):
-		return None
+		return []
 	candidates = [
 		issue
 		for issue in issues
@@ -373,7 +381,7 @@ def find_digest(issues: object, trusted_login: str) -> dict | None:
 		and str(issue.get("body") or "").split("\n", 1)[0].strip() == NEEDS_HUMAN_MARKER
 	]
 	candidates.sort(key=lambda issue: int(issue.get("number") or 0))
-	return candidates[0] if candidates else None
+	return candidates
 
 
 def parse_digest(body: str) -> tuple[dict[int, dict], list[int], int]:
@@ -432,13 +440,18 @@ def render_digest(entries: dict[int, dict], overflow: list[int], dropped: int = 
 		spill.insert(0, kept.pop()[0])
 
 
-def _list_digest(repo: str, trusted_login: str) -> dict | None:
+def _list_digests(repo: str, trusted_login: str) -> list[dict]:
 	listing = _gh(["api", f"repos/{repo}/issues?labels={LABEL}&state=open&per_page=30"])
 	try:
 		issues = json.loads(listing or "[]")
 	except ValueError as exc:
 		raise ApiError(f"unreadable issue list: {exc}") from exc
-	return find_digest(issues, trusted_login)
+	return find_digests(issues, trusted_login)
+
+
+def _list_digest(repo: str, trusted_login: str) -> dict | None:
+	digests = _list_digests(repo, trusted_login)
+	return digests[0] if digests else None
 
 
 def _resolve_login(trusted_login: str | None) -> str:
@@ -519,7 +532,9 @@ def _needs_human_park_digest(repo: str, item: int, kind: str, stop: str, reason_
 			except ApiError:
 				# The digest with this entry exists: report the park so the caller
 				# still sends its one CRITICAL alert. A duplicate digest left open
-				# here is merged on a later park (the oldest one wins).
+				# here is merged into the oldest one and closed by the next prune.
+				print(f"::warning::needs-human digest #{number}: duplicate check failed; "
+					"the next prune merges any duplicate digest", file=sys.stderr)
 				older = None
 			if older is not None and int(older.get("number") or 0) < number:
 				# A concurrent writer created a digest first: keep the oldest one only.
@@ -564,12 +579,22 @@ def needs_human_prune(repo: str, trusted_login: str | None = None, now: str | No
 		_needs_human_log("none", "digest", "disabled", "skip")
 		return {"issue": None, "outcome": "skip", "reason": "disabled", "removed": [], "items": []}
 	login = _resolve_login(trusted_login)
-	digest = _list_digest(repo, login)
-	if digest is None:
+	digests = _list_digests(repo, login)
+	if not digests:
 		return {"issue": None, "outcome": "skip", "reason": "no_digest", "removed": [], "items": []}
+	digest, duplicates = digests[0], digests[1:]
 	body = str(digest.get("body") or "")
 	entries, overflow, dropped = parse_digest(body)
-	if not entries and not overflow:
+	# Two parks can create a digest each when the post-create duplicate check
+	# fails; fold every newer duplicate into the oldest digest, then close it.
+	for duplicate in duplicates:
+		dup_entries, dup_overflow, dup_dropped = parse_digest(str(duplicate.get("body") or ""))
+		for number, entry in dup_entries.items():
+			if number not in overflow:
+				entries.setdefault(number, entry)
+		overflow.extend(n for n in dup_overflow if n not in entries and n not in overflow)
+		dropped += dup_dropped
+	if not entries and not overflow and not duplicates:
 		return {"issue": int(digest["number"]), "outcome": "skip", "reason": "empty", "removed": [], "items": []}
 	raw = _gh(["api", "--paginate", "--slurp", f"repos/{repo}/issues?state=open&labels={NEEDS_HUMAN_LABEL}&per_page=100"])
 	try:
@@ -607,9 +632,19 @@ def needs_human_prune(repo: str, trusted_login: str | None = None, now: str | No
 		if current is None or str(current.get("body") or "") != body:
 			_needs_human_log("none", "digest", "concurrent_update", "skip")
 			current_entries, current_overflow, _ = parse_digest(str((current or {}).get("body") or ""))
+			dup_items = {n for dup in duplicates for part in parse_digest(str(dup.get("body") or ""))[:2] for n in part}
 			return {"issue": int(digest["number"]), "outcome": "skip", "reason": "concurrent_update", "removed": [],
-				"items": sorted(set(current_entries) | set(current_overflow))}
+				"items": sorted(set(current_entries) | set(current_overflow) | dup_items)}
 		_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{int(digest['number'])}", "-f", f"body={new_body}"])
+	for duplicate in duplicates:
+		# Only after the oldest digest holds the merged entries; a failed close
+		# is retried by the next prune (the merge is idempotent).
+		try:
+			_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{int(duplicate['number'])}", "-f", "state=closed",
+				"-f", "state_reason=not_planned"])
+			_needs_human_log("none", "digest", f"duplicate_{int(duplicate['number'])}_merged", "removed")
+		except ApiError:
+			_needs_human_log("none", "digest", f"duplicate_{int(duplicate['number'])}_close_failed", "skip")
 	return {"issue": int(digest["number"]), "outcome": "pruned" if removed else "unchanged", "removed": removed,
 		"entries": len(entries), "overflow": len(overflow), "items": sorted(set(entries) | set(overflow))}
 
