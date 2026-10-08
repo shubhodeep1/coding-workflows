@@ -445,7 +445,8 @@ fi
 # (`changed_file_references_cited_module`), since such a file can wire or
 # override the cited operation without deleting anything.
 # A failed project diff, hunk read or module-reference read keeps the
-# finding blocking too.  `off` restores
+# finding blocking too, as does a one-letter module name that cannot be
+# searched (`module_name_too_short`).  `off` restores
 # the previous payload exactly (no `advisory` field, no `line_ownership` key).
 SECURITY_AUDIT_LINE_OWNERSHIP="$(printf '%s' "${SECURITY_AUDIT_LINE_OWNERSHIP:-project}" | tr '[:upper:]' '[:lower:]')"
 case "${SECURITY_AUDIT_LINE_OWNERSHIP}" in
@@ -2093,7 +2094,8 @@ def module_stem(path: str) -> str:
 		stem = pure.parent.name
 	# Two characters minimum: a short module such as db.py or io.py can hold
 	# the deleted guard, but a one-letter stem (a.py, i.py) matches ordinary
-	# words and loop variables and would block unrelated findings.
+	# words and loop variables, so it is not searched; callers treat an empty
+	# stem as unanalysable and keep the finding blocking (module_name_too_short).
 	return stem if len(stem) >= 2 else ""
 
 
@@ -2157,14 +2159,16 @@ def changed_file_reference_reason(path: str) -> tuple[str, bool]:
 	# tests) that names the cited module at the head can wire or override the
 	# cited operation without deleting a line anywhere.
 	cited_stem = module_stem(path)
-	if not cited_stem:
-		return "", False
 	candidates = {
 		changed for changed in project_changed_paths
 		if changed != path and not is_doc_path(changed) and not is_test_path(changed)
 	}
 	if not candidates:
 		return "", False
+	if not cited_stem:
+		# A one-letter module name cannot be searched reliably, so its links
+		# cannot be ruled out: keep the finding blocking (fail closed).
+		return "module_name_too_short", True
 	referencing = paths_mentioning_at(head_sha, cited_stem)
 	if referencing is None:
 		return "module_reference_check_failed", True
@@ -2215,11 +2219,16 @@ def deletion_block_reason(finding: dict, path: str, line: int) -> tuple[str, boo
 	cited_text = head_file_text(path)
 	if cited_text is None:
 		return "module_reference_check_failed", True
+	cited_stem = module_stem(path)
+	# A one-letter module name (x.py) on either side cannot be searched
+	# reliably, so a link to the removed guard cannot be ruled out: keep the
+	# finding blocking (fail closed) instead of skipping the dependency checks.
+	if not cited_stem or any(not module_stem(other_path) for other_path in other_paths):
+		return "module_name_too_short", True
 	for other_path in other_paths:
 		other_stem = module_stem(other_path)
 		if other_stem and re.search(rf"(?<![A-Za-z0-9_]){re.escape(other_stem)}(?![A-Za-z0-9_])", cited_text):
 			return "cited_file_references_module_with_deletions", False
-	cited_stem = module_stem(path)
 	if cited_stem:
 		referencing = paths_mentioning(cited_stem)
 		if referencing is None:

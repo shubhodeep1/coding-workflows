@@ -159,7 +159,7 @@ def test_discover_tests_excludes_only_synthesised_scripts_when_disabled() -> Non
 
 _SANDBOX_HOST_TOOLS = (
 	"bash", "sh", "env", "git", "mktemp", "cp", "chmod", "rm", "grep", "id",
-	"timeout", "cat", "touch", "dirname", "basename", "printf", "sleep", "mkdir",
+	"timeout", "cat", "touch", "dirname", "basename", "printf", "sleep", "mkdir", "head",
 )
 
 _STUB_DOCKER = """#!/usr/bin/env bash
@@ -184,6 +184,10 @@ case "$1" in
 			echo "1..1"
 			echo "not ok 1 - partial"
 			exec sleep 30
+		fi
+		if [ -e "${0%/*}/../stub_tar_fail" ]; then
+			echo "# source_snapshot=incomplete"
+			exit 86
 		fi
 		if [ -e "${0%/*}/../stub_start_fail" ]; then
 			echo "docker: Error response from daemon" >&2
@@ -312,6 +316,7 @@ def test_synthesised_test_skips_when_image_or_start_unavailable() -> None:
 	for stub_marker, reason in (
 		("stub_image_missing", "image_unavailable"),
 		("stub_start_fail", "start_failed"),
+		("stub_tar_fail", "source_snapshot_incomplete"),
 	):
 		with tempfile.TemporaryDirectory(prefix="validate_driver_synth_unavailable_") as td:
 			workspace = Path(td)

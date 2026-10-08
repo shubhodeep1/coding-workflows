@@ -858,12 +858,20 @@ run_synthesised_test_sandboxed()
 			"${VALIDATION_SYNTH_SANDBOX_IMAGE}" /bin/bash -c '
 				if ! tar -C /workspace -xf - >/dev/null 2>&1; then
 					echo "# source_snapshot=incomplete"
+					exit 86
 				fi
 				exec bash /synth/test.sh
 			' < "${snapshot_input}" > "${test_log}" 2>&1
 	) || sandbox_status=$?
-	"${docker_env[@]}" docker rm -f "${container_name}" >/dev/null 2>&1 || true
+	timeout --kill-after=10s 60 "${docker_env[@]}" docker rm -f "${container_name}" >/dev/null 2>&1 || true
 	rm -rf "${stage_dir}" >/dev/null 2>&1 || true
+
+	# A partial extraction (e.g. the 80 MiB /workspace limit) would give a
+	# meaningless result, so the container exits 86 before running the test.
+	if [ "${sandbox_status}" -eq 86 ] && [ "$(head -n 1 "${test_log}" 2>/dev/null)" = "# source_snapshot=incomplete" ]; then
+		synthesised_test_sandbox_skip "${test_name}" "${test_log}" "source_snapshot_incomplete"
+		return 0
+	fi
 
 	if [ "${sandbox_status}" -eq 124 ] || [ "${sandbox_status}" -eq 137 ]; then
 		# Comment out partial TAP output so only the SKIP result is counted.

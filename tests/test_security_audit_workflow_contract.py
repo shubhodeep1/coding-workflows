@@ -2866,6 +2866,8 @@ def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") ->
 	- ``head_override``: no deletions; the project adds patch.py naming mod.
 	- ``test_added``: no deletions; the project adds tests/test_mod.py
 	  naming mod.
+	- ``one_letter_deleted``: as ``cross_file``, but the guard is deleted
+	  from the one-letter module a.py, whose name cannot be searched.
 	"""
 	repo_dir = base_dir / "audited-repo"
 	repo_dir.mkdir(parents=True, exist_ok=True)
@@ -2905,6 +2907,9 @@ def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") ->
 		(repo_dir / "registry.py").write_text("import auth\nimport mod\n", encoding="utf-8")
 		_git("add", "registry.py")
 	db_base_text = "def guard():\n\treturn require_admin()\n"
+	if variant == "one_letter_deleted":
+		(repo_dir / "a.py").write_text(db_base_text, encoding="utf-8")
+		_git("add", "a.py")
 	if variant == "cross_file_registry_short":
 		(repo_dir / "db.py").write_text(db_base_text, encoding="utf-8")
 		(repo_dir / "registry.py").write_text("import db\nimport mod\n", encoding="utf-8")
@@ -2932,6 +2937,9 @@ def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") ->
 	elif variant == "cross_file_registry_short":
 		project_lines = list(base_lines)
 		(repo_dir / "db.py").write_text(db_base_text.replace("\treturn require_admin()\n", ""), encoding="utf-8")
+	elif variant == "one_letter_deleted":
+		project_lines = list(base_lines)
+		(repo_dir / "a.py").write_text(db_base_text.replace("\treturn require_admin()\n", ""), encoding="utf-8")
 	elif variant == "head_override":
 		project_lines = list(base_lines)
 		(repo_dir / "patch.py").write_text("import mod\nmod.BASE_1 = 0\n", encoding="utf-8")
@@ -3130,6 +3138,16 @@ def test_security_audit_line_ownership_project_test_file_naming_module_stays_adv
 	assert proc.returncode == 0, proc.stderr
 	assert payload["findings"][0]["advisory"] is True
 	assert "line_ownership_blocking" not in proc.stdout
+
+
+def test_security_audit_line_ownership_one_letter_module_with_deletions_blocks() -> None:
+	# A one-letter module name cannot be searched reliably, so a link from
+	# the deleted guard to the cited operation cannot be ruled out.
+	proc, payload = _run_line_ownership_audit([_line_ownership_finding("base-line", 1)], variant="one_letter_deleted")
+	assert proc.returncode == 0, proc.stderr
+	assert payload["findings"][0]["advisory"] is False
+	assert payload["line_ownership"] == {"mode": "project", "blocking": 1, "advisory": 0, "unknown": 1}
+	assert "security-audit: line_ownership_unknown finding=base-line reason=module_name_too_short" in proc.stdout
 
 
 @pytest.mark.parametrize("variant", ["head_override", "cross_file_reverse"])
