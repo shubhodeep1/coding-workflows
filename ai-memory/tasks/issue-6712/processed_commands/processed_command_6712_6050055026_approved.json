@@ -5,13 +5,29 @@
   "entry_id": "processed_command_6712_6050055026_approved",
   "issue_number": 6712,
   "metadata": {
+    "branch": "ai/issue-6712",
+    "changed_files": [
+      ".claude/commands/seed-repo.md",
+      "README.md",
+      "agents.md",
+      "changelog.d/6712-propagate-consumer-secrets-schedule.md",
+      "docs/scripts-pending-removal.md",
+      "scripts/propagate_consumer_secrets.sh",
+      "tests/test_propagate_consumer_secrets.py",
+      "workflow-templates/.claude/commands/seed-repo.md"
+    ],
+    "issue_number": 6712,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6712",
+    "pr_number": 6722,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6722",
+    "run_attempt": "1",
+    "run_id": "37711319946",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37711319946"
   },
   "run_attempt": 1,
   "run_id": "37711319946",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-08T01:09:58Z",
+  "status": "completed",
+  "timestamp": "2026-10-08T01:27:56Z",
   "workflow": "implement"
 }
