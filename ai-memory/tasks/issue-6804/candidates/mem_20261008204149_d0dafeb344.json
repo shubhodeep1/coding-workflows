@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The unblock verdict says the code change comes \"after the operator grants the paths\". Only a trusted person editing this issue's body can supply the exact `files_touched` grant that the commit-time guard checks, so no automated run can produce it. Planning goes ahead assuming the grant exists. The plan must list the exact protected paths so the operator can copy them in. Option C would only repeat #6790's `reason=no_allowlist` refusal. Option B leaves this fix-up with no deliverable.\nQ2: The repo already treats some states as an intentional wait. The managed and standalone stall paths in `scripts/orchestrate_poll_process.sh` (near lines 16270, 22018 and 25803) skip recovery for `ai:merge-queued`. Both stall-ladder `auto_approve)` branches (near lines 14709 and 18121) would otherwise post `/approved` or climb toward the judge or `close_and_reissue`. That would defeat the hold or cause a reissue loop. Option C (`ai:needs-human`) is heavier than needed, because a human `/approved` is enough to resolve the hold.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Both answers are lettered choices. Notes for the planner:\n- Q1 (grant): The plan must list the exact paths to add under a `- files_touched:` block in this issue's body before `/approved`. At minimum these are `.github/workflows/plan.yml` and `scripts/orchestrate_poll_process.sh`. Add any extra `scripts/` helper only if it is truly needed (for example `scripts/files_touched_scope_guard.py` for a plan-mode classifier entry point), plus the non-protected `tests/` files and the `changelog.d/<issue>-<slug>.md` fragment. List every path explicitly. Do not use globs.\n- Q2 (hold behavior): The gate is `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED`, a repo var that defaults to `false`. The plan.yml auto-approval block (near lines 2126\u20132138) runs alongside `AUTO_IMPLEMENT_ON_CLEAR_PLAN`, and the same rule applies in both stall-recovery `auto_approve` branches:\n  - Flag off: do not post `/approved` for any plan whose files list includes a protected automation path. Ordinary plans are unchanged.\n  - Flag on: reuse the existing classifier and the trusted exact-grant parser. Auto-approve only when every protected path has an exact grant from a trusted author. Otherwise report the ungranted paths and hold.\n  - While held: keep `ai:awaiting-approval` and post one comment keyed by a marker, deduplicated. The poller treats that marker as an intentional wait, as it does for `ai:merge-queued`. The ladder does not advance and no judge or reissue runs. A human `/approved` still triggers implementation.\n  - The commit-time automation-path guard stays unchanged.\n- Tests must cover: flag off with a protected path (held), flag off with an ordinary plan (auto-approved), flag on and granted (approved), flag on and ungranted (held, with the ungranted paths reported), and the poller's hold-marker skip in both branches.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED (variable): an operator sets it to `true` after checking the behavior. Until then, plans that list protected automation paths are not auto-approved and wait in `ai:awaiting-approval` for a human `/approved`. Ordinary plans are unaffected.\n- files_touched grant on this issue (resource): before `/approved`, a trusted OWNER, MEMBER or COLLABORATOR (or the pipeline account) adds the exact path list from the plan to this issue's body. Until then, the commit-time guard refuses implementation with `reason=no_allowlist`.",
+  "fingerprint": "1568ce9a09d22357d4e0a39c159ff3125bcb36b02a257935876a05626330f072",
+  "lineage": {
+    "issue_number": 6804,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37840339429",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37840339429",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6804"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008204149_d0dafeb344",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6804,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37840339429"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6804",
+  "timestamps": {
+    "created_at": "2026-10-08T20:41:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
