@@ -26,6 +26,8 @@
 #   ${RUNTIME_DIR}/pre_resolver_state.tsv, conflicted_paths.txt,
 #                  resolver_unmerged_allowlist.txt, integration_fingerprints.json.
 #   ${CONFLICT_RESOLVER_PROMPT_FILE} rendered prompt text.
+#   ${RUNTIME_DIR}/host_only_conflict_scope.tsv, host_only_take_base_comment.md
+#                  (host-only take-base, issue #6748; read by review_conflict_resolve.sh).
 #
 # Failure modes:
 #   - Exits 1 if merge replay fails for non-conflict reasons, or template missing.
@@ -482,6 +484,222 @@ for d in scripts prompts ai-memory .codex-workflow-src .codex-workflow-src-main;
   fi
 done
 rm -rf "${RESOLVE_STASH}"
+
+# >>> host-only take-base (issue #6748)
+# Host-only conflicted paths (host-executed safety code such as
+# .claude/hooks/pr_merge_status_guard.py, and file types the sandbox does not
+# carry) can never reach the sandboxed resolver.  Before issue #6748 they
+# failed the resolver closed with sandbox_path_host_only and stalled the
+# merge train behind a manual merge.  Resolve them here instead:
+#   - A host-only path the PR's linked issue(s) do not list in their
+#     `files_touched:` allowlist (or with no allowlist at all) takes the base
+#     branch's version: the PR did not set out to change host-executed code,
+#     so it must not carry a divergent copy into the base.  The dropped
+#     PR-side diff is written to host_only_take_base_comment.md and posted on
+#     the PR once the merge is committed.
+#   - When any host-only path IS in scope, nothing is changed here; the
+#     classification goes to host_only_conflict_scope.tsv and
+#     review_conflict_resolve.sh closes the PR and re-issues its issue.
+#   - Unknown scope (linked issues unavailable, guard error), unsafe paths,
+#     unexpected index stage shapes, integration-sync branches, and the kill
+#     switch HOST_ONLY_CONFLICT_TAKE_BASE_ENABLED=false all leave the
+#     conflict set untouched, so the pre-#6748 fail-closed path applies.
+# Log keys: CONFLICT_RESOLVER_HOST_ONLY_SCOPE, CONFLICT_RESOLVER_HOST_ONLY_TAKE_BASE.
+HOST_ONLY_CONFLICT_SCOPE_FILE="${RUNTIME_DIR}/host_only_conflict_scope.tsv"
+HOST_ONLY_TAKE_BASE_COMMENT_FILE="${RUNTIME_DIR}/host_only_take_base_comment.md"
+rm -f -- "${HOST_ONLY_CONFLICT_SCOPE_FILE}" "${HOST_ONLY_TAKE_BASE_COMMENT_FILE}" "${HOST_ONLY_TAKE_BASE_COMMENT_FILE}.posted"
+_ho_pr="${PR_NUMBER:-none}"
+_ho_branch_class="${TARGET_BRANCH:-${HEAD_REF:-}}"
+_ho_enabled=true
+if [ "${HOST_ONLY_CONFLICT_TAKE_BASE_ENABLED:-true}" != "true" ]; then
+  _ho_enabled=false
+fi
+case "${_ho_branch_class}" in
+  orchestrator/project-*) _ho_enabled=false ;;
+esac
+if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ]; then
+  _ho_enabled=false
+fi
+_ho_workspace_py="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_workspace.py"
+_ho_scope_py="${SUPPORT_SCRIPTS_DIR:-scripts}/files_touched_scope_guard.py"
+if [ "${_ho_enabled}" = "true" ] && { [ ! -f "${_ho_workspace_py}" ] || [ ! -f "${_ho_scope_py}" ]; }; then
+  echo "CONFLICT_RESOLVER_HOST_ONLY_SCOPE pr=${_ho_pr} outcome=skip reason=support_missing"
+  _ho_enabled=false
+fi
+if [ "${_ho_enabled}" = "true" ] && git rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
+  _ho_dir="$(mktemp -d)"
+  git diff --name-only --diff-filter=U | sed '/^$/d' | sort -u > "${_ho_dir}/unmerged.txt"
+  _ho_check_rc=0
+  PYTHONDONTWRITEBYTECODE=1 python3 "${_ho_workspace_py}" check-paths "$(pwd)" "${_ho_dir}/unmerged.txt" "${_ho_dir}/report.txt" >/dev/null 2>&1 || _ho_check_rc=$?
+  : > "${_ho_dir}/host_only.txt"
+  _ho_report_ok=false
+  if [ "${_ho_check_rc}" -ne 0 ] && [ -s "${_ho_dir}/report.txt" ] && \
+     ! grep -qv $'^host_only\t[A-Za-z0-9_.][A-Za-z0-9._/-]*$' "${_ho_dir}/report.txt"; then
+    _ho_report_ok=true
+    cut -f2 "${_ho_dir}/report.txt" | sort -u > "${_ho_dir}/host_only.txt"
+  fi
+  if [ "${_ho_report_ok}" = "true" ] && [ -s "${_ho_dir}/host_only.txt" ]; then
+    # Scope lookup: linked issues come from review_collect_pr_metadata.sh's
+    # existing GraphQL read (no extra API call here).
+    _ho_linked_file="${LINKED_ISSUES_RAW_FILE:-${RUNTIME_DIR}/linked_issues_raw.json}"
+    _ho_scope_ok=true
+    : > "${_ho_dir}/in_scope.txt"
+    mkdir -p "${_ho_dir}/bodies"
+    # Split the linked issues into one body file each (bodies/<index>.txt).
+    if [ "$(cat "${_ho_linked_file}.status" 2>/dev/null || true)" != "ok" ] || \
+       ! PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 -c '
+import json, sys
+issues = json.load(open(sys.argv[1], encoding="utf-8"))
+if not isinstance(issues, list):
+    raise SystemExit(1)
+for index, issue in enumerate(issues):
+    body = issue.get("body") if isinstance(issue, dict) else None
+    with open(f"{sys.argv[2]}/{index:04d}.txt", "w", encoding="utf-8") as handle:
+        handle.write(body if isinstance(body, str) else "")
+' "${_ho_linked_file}" "${_ho_dir}/bodies" 2>/dev/null; then
+      echo "CONFLICT_RESOLVER_HOST_ONLY_SCOPE pr=${_ho_pr} outcome=unknown reason=linked_issues_unavailable"
+      _ho_scope_ok=false
+    else
+      for _ho_body_file in "${_ho_dir}"/bodies/*.txt; do
+        [ -f "${_ho_body_file}" ] || continue
+        _ho_guard_rc=0
+        PYTHONDONTWRITEBYTECODE=1 python3 "${_ho_scope_py}" --issue-body-file "${_ho_body_file}" \
+          --staged-file "${_ho_dir}/host_only.txt" --strict-allowlist > "${_ho_dir}/out_of_scope.txt" 2>/dev/null || _ho_guard_rc=$?
+        case "${_ho_guard_rc}" in
+          0) cat "${_ho_dir}/host_only.txt" >> "${_ho_dir}/in_scope.txt" ;;
+          10) ;;
+          20)
+            sed '/^$/d' "${_ho_dir}/out_of_scope.txt" | sort -u > "${_ho_dir}/out_sorted.txt"
+            comm -23 "${_ho_dir}/host_only.txt" "${_ho_dir}/out_sorted.txt" >> "${_ho_dir}/in_scope.txt"
+            ;;
+          *)
+            echo "CONFLICT_RESOLVER_HOST_ONLY_SCOPE pr=${_ho_pr} outcome=unknown reason=scope_guard_failed rc=${_ho_guard_rc}"
+            _ho_scope_ok=false
+            break
+            ;;
+        esac
+      done
+    fi
+    if [ "${_ho_scope_ok}" = "true" ]; then
+      sort -u -o "${_ho_dir}/in_scope.txt" "${_ho_dir}/in_scope.txt"
+      while IFS= read -r _ho_path; do
+        if grep -Fxq -- "${_ho_path}" "${_ho_dir}/in_scope.txt"; then
+          printf 'in_scope\t%s\n' "${_ho_path}"
+        else
+          printf 'take_base\t%s\n' "${_ho_path}"
+        fi
+      done < "${_ho_dir}/host_only.txt" > "${HOST_ONLY_CONFLICT_SCOPE_FILE}"
+      _ho_in_scope_count="$(grep -c $'^in_scope\t' "${HOST_ONLY_CONFLICT_SCOPE_FILE}" || true)"
+      _ho_total_count="$(wc -l < "${HOST_ONLY_CONFLICT_SCOPE_FILE}" | tr -d '[:space:]')"
+      echo "CONFLICT_RESOLVER_HOST_ONLY_SCOPE pr=${_ho_pr} outcome=classified host_only=${_ho_total_count} in_scope=${_ho_in_scope_count:-0}"
+      if [ "${_ho_in_scope_count:-0}" -eq 0 ]; then
+        # Every stage shape is checked before the first write, so an
+        # unexpected shape leaves the whole conflict set untouched.
+        _ho_shapes_ok=true
+        while IFS= read -r _ho_path; do
+          _ho_stages="$(git ls-files -u -- "${_ho_path}" | awk '{print $3}' | sort -u | tr '\n' ' ')"
+          case " ${_ho_stages}" in
+            ' 1 2 3 '|' 2 3 '|' 1 2 '|' 1 3 ') ;;
+            *)
+              echo "CONFLICT_RESOLVER_HOST_ONLY_TAKE_BASE pr=${_ho_pr} path=${_ho_path} outcome=skip reason=stage_shape stages=${_ho_stages% }"
+              _ho_shapes_ok=false
+              ;;
+          esac
+        done < "${_ho_dir}/host_only.txt"
+        if [ "${_ho_shapes_ok}" != "true" ]; then
+          rm -f -- "${HOST_ONLY_CONFLICT_SCOPE_FILE}"
+        else
+          _ho_merge_base="$(git merge-base HEAD MERGE_HEAD 2>/dev/null || true)"
+          _ho_head_sha="$(git rev-parse HEAD)"
+          _ho_comment_budget=61440
+          {
+            printf '%s\n' "<!-- ai:host-only-take-base:v1 pr=${_ho_pr} head=${_ho_head_sha} -->"
+            printf '%s\n\n' "### Host-only merge conflicts resolved with \`${BASE_BRANCH}\`'s version"
+            printf '%s\n\n' "The merge with \`origin/${BASE_BRANCH}\` conflicted on path(s) the sandboxed conflict resolver may never edit, and this PR's linked issue does not list them in its \`files_touched:\` allowlist. Each was resolved to the \`${BASE_BRANCH}\` branch's version (log key \`CONFLICT_RESOLVER_HOST_ONLY_TAKE_BASE\`). This PR's changes to them, shown below, were dropped:"
+          } > "${HOST_ONLY_TAKE_BASE_COMMENT_FILE}"
+          while IFS= read -r _ho_path; do
+            _ho_stages="$(git ls-files -u -- "${_ho_path}" | awk '{print $3}' | sort -u | tr '\n' ' ')"
+            _ho_stages="${_ho_stages% }"
+            : > "${_ho_dir}/dropped.diff"
+            if [ -n "${_ho_merge_base}" ]; then
+              git diff "${_ho_merge_base}" HEAD -- "${_ho_path}" > "${_ho_dir}/dropped_full.diff" 2>/dev/null || true
+              head -n 200 "${_ho_dir}/dropped_full.diff" > "${_ho_dir}/dropped.diff"
+              if [ "$(wc -l < "${_ho_dir}/dropped_full.diff" | tr -d '[:space:]')" -gt 200 ]; then
+                printf '%s\n' "... (truncated at 200 lines)" >> "${_ho_dir}/dropped.diff"
+              fi
+            fi
+            case "${_ho_stages}" in
+              '1 2')
+                # The base branch deleted the path: honour the deletion.
+                if ! git rm -q -- "${_ho_path}"; then
+                  echo "::error::Host-only take-base failed path=${_ho_path}"
+                  exit 1
+                fi
+                ;;
+              *)
+                if ! git checkout MERGE_HEAD -- "${_ho_path}"; then
+                  echo "::error::Host-only take-base failed path=${_ho_path}"
+                  exit 1
+                fi
+                ;;
+            esac
+            echo "CONFLICT_RESOLVER_HOST_ONLY_TAKE_BASE pr=${_ho_pr} path=${_ho_path} base=${BASE_BRANCH} stages=${_ho_stages}"
+            _ho_fence_len="$(grep -o '`\+' "${_ho_dir}/dropped.diff" 2>/dev/null | awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }' || true)"
+            [ "${_ho_fence_len:-0}" -ge 3 ] || _ho_fence_len=2
+            _ho_fence="$(printf '%*s' "$((_ho_fence_len + 1))" '' | tr ' ' '`')"
+            _ho_section_file="${_ho_dir}/section.md"
+            {
+              printf '\n#### `%s` (index stages %s)\n\n' "${_ho_path}" "${_ho_stages}"
+              if [ -s "${_ho_dir}/dropped.diff" ]; then
+                printf '%sdiff\n' "${_ho_fence}"
+                cat "${_ho_dir}/dropped.diff"
+                printf '%s\n' "${_ho_fence}"
+              else
+                printf '%s\n' "(no PR-side diff against the merge base)"
+              fi
+            } > "${_ho_section_file}"
+            _ho_section_bytes="$(wc -c < "${_ho_section_file}" | tr -d '[:space:]')"
+            if [ "${_ho_section_bytes}" -le "${_ho_comment_budget}" ]; then
+              cat "${_ho_section_file}" >> "${HOST_ONLY_TAKE_BASE_COMMENT_FILE}"
+              _ho_comment_budget=$((_ho_comment_budget - _ho_section_bytes))
+            else
+              printf '\n#### `%s` (index stages %s)\n\n%s\n' "${_ho_path}" "${_ho_stages}" "(dropped diff omitted: comment size budget reached)" >> "${HOST_ONLY_TAKE_BASE_COMMENT_FILE}"
+            fi
+          done < "${_ho_dir}/host_only.txt"
+          git diff --name-only --diff-filter=U | sort -u > "${RESOLVER_ALLOWLIST_FILE}" || true
+          _resolver_allowlist_count="$(wc -l < "${RESOLVER_ALLOWLIST_FILE}" | tr -d '[:space:]')"
+          echo "Host-only take-base: ${_resolver_allowlist_count} unmerged path(s) remain for the sandboxed resolver."
+          if [ "${_resolver_allowlist_count}" -eq 0 ]; then
+            # Nothing is left for the model: commit the two-parent merge now,
+            # with the same hygiene and end state as the manifest-only commit
+            # above (CONFLICT_RESOLVED=true, MERGE_CONFLICT left as is).
+            git rm -r --cached --ignore-unmatch -- node_modules 2>/dev/null || true
+            if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
+              git reset -q HEAD -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' '.codex-workflow-src-main' 2>/dev/null || true
+              git checkout -- 'prompts' '.github/scripts' '.github/prompts' 'ai-memory' '.codex-workflow-src' 2>/dev/null || true
+            fi
+            git commit -m "[ai-merge-resolve] resolve merge conflicts"
+            if [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]] && [ -n "${GITHUB_REPOSITORY:-}" ]; then
+              if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -F "body=@${HOST_ONLY_TAKE_BASE_COMMENT_FILE}" >/dev/null 2>&1; then
+                mv -f -- "${HOST_ONLY_TAKE_BASE_COMMENT_FILE}" "${HOST_ONLY_TAKE_BASE_COMMENT_FILE}.posted" 2>/dev/null || true
+              else
+                echo "::warning::Host-only take-base: failed to post the dropped-changes comment on PR #${PR_NUMBER}; the merge commit stands."
+              fi
+            fi
+            rm -rf "${_ho_dir}"
+            echo "CONFLICT_RESOLVED=true" >> "$GITHUB_ENV"
+            echo "Host-only take-base: no other unmerged paths — committed deterministic merge resolution (push deferred); Codex resolver will be skipped."
+            exit 0
+          fi
+        fi
+      else
+        echo "CONFLICT_RESOLVER_HOST_ONLY_SCOPE pr=${_ho_pr} outcome=in_scope reason=declared_in_files_touched action=reissue_in_resolver"
+      fi
+    fi
+  fi
+  rm -rf "${_ho_dir}"
+fi
+# <<< host-only take-base (issue #6748)
 
 # Enumerate the unmerged paths git is currently tracking so the
 # resolver prompt can name every conflicted file explicitly.  Without

@@ -17,7 +17,11 @@ the network; the shell only executes.
        `has_plan` is true when the issue already has an implementation plan;
        `security_finding_id` is optional and validated before reuse).
        PR provenance is validated again here; missing or malformed fields fail
-       closed for issue-creating PR verdicts. Trusted PR-derived issue bodies
+       closed for issue-creating PR verdicts. Optional `source_issue_body` /
+       `source_issue_labels` (a trusted PR's single linked issue, sent only by
+       the conflict resolver's host-only re-issue, issue #6748; the unblock
+       judge never sends them) carry that issue's security finding marker,
+       `Integration branch` and `Depends on` lines onto a PR re-issue. Trusted PR-derived issue bodies
        carry an audit-only `ai:unblock-provenance:v1` marker.
        `accept_with_followup` on an `ai:security` issue is refused here too: it
        yields only a keep-open comment and a WARNING, never a follow-up issue
@@ -165,6 +169,31 @@ def _context(raw: object) -> dict:
 	)
 	if security_source_body is not None and SECURITY_FINDING_MARKER_PREFIX in security_source_body and finding_id is None:
 		security_metadata_unsafe = True
+	# A trusted PR's linked issue is the lineage source for a PR re-issue; the
+	# PR body itself stays author-controlled and is never read for metadata.
+	source_body = raw.get("source_issue_body")
+	source_labels = raw.get("source_issue_labels")
+	pr_source_present = (
+		pr_trusted
+		and isinstance(source_body, str)
+		and len(source_body) <= 65536
+		and isinstance(source_labels, list)
+		and all(isinstance(label, str) for label in source_labels)
+	)
+	pr_source_finding_id = None
+	pr_source_depends_on, pr_source_target_branch, pr_source_metadata_unsafe = None, None, False
+	if pr_source_present:
+		linked = raw.get("linked_issue")
+		pr_source_depends_on, pr_source_target_branch, pr_source_metadata_unsafe = _security_reissue_metadata(
+			source_body, source_labels, linked if isinstance(linked, int) and linked > 0 else item
+		)
+		if SECURITY_LABEL in source_labels and SECURITY_FINDING_MARKER_PREFIX in source_body:
+			marker = re.search(r"<!-- ai:security-finding:(.*?) -->", source_body)
+			candidate = marker.group(1) if marker else ""
+			if SECURITY_FINDING_ID_RE.fullmatch(candidate):
+				pr_source_finding_id = candidate
+			else:
+				pr_source_metadata_unsafe = True
 	return {
 		"repo": str(raw.get("repo") or ""),
 		"kind": kind,
@@ -184,6 +213,11 @@ def _context(raw: object) -> dict:
 		"pr_author": pr_author if pr_trusted else "",
 		"pr_head_repo": pr_head_repo if pr_trusted else "",
 		"pr_head_sha": pr_head_sha if pr_trusted else "",
+		"pr_source_present": pr_source_present,
+		"pr_source_finding_id": pr_source_finding_id,
+		"pr_source_depends_on": pr_source_depends_on,
+		"pr_source_target_branch": pr_source_target_branch,
+		"pr_source_metadata_unsafe": pr_source_metadata_unsafe,
 	}
 
 
@@ -388,7 +422,21 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 		if ctx["kind"] == "pr":
 			# PR body lineage is author-controlled; never route its reissue
 			# into an unverified project or reapprove an issue the close event closes.
-			ops.append({"op": "create_issue", "title": title, "body": body + "\n\n" + _provenance_line(ctx), "labels": [], "wait_on": None})
+			pr_labels: list[str] = []
+			if ctx.get("pr_source_present"):
+				if ctx.get("pr_source_metadata_unsafe"):
+					return [
+						{"op": "comment", "issue": item, "body": "This pull request stays open: its linked issue's security finding marker, dependency or target-branch metadata could not be carried to a replacement safely, so no re-issue was created."},
+						{"op": "telegram", "level": "WARNING", "text": f"Could not safely re-issue PR #{item}; its linked issue's metadata needs correction."},
+					]
+				if ctx.get("pr_source_finding_id"):
+					body = f"{SECURITY_FINDING_MARKER_PREFIX}{ctx['pr_source_finding_id']} -->\n{body}"
+					pr_labels = [SECURITY_LABEL]
+				if ctx.get("pr_source_target_branch"):
+					body += f"\n\n- Integration branch: `{ctx['pr_source_target_branch']}`"
+				if ctx.get("pr_source_depends_on") is not None:
+					body += f"\n- Depends on: #{ctx['pr_source_depends_on']}"
+			ops.append({"op": "create_issue", "title": title, "body": body + "\n\n" + _provenance_line(ctx), "labels": pr_labels, "wait_on": None})
 			ops.append({"op": "close", "issue": item, "reason": "not_planned", "pr": True})
 		elif ctx["tracking"]:
 			ops.append(

@@ -21,6 +21,12 @@
 # Outputs:
 #   Writes the files above and appends LINKED_ISSUES_JSON, HAS_PR_DIFF,
 #   PR_DIFF_SOURCE, PR_DIFF_ATTEMPTED_PATHS, and BASE_BRANCH to GITHUB_ENV.
+#   LINKED_ISSUES_RAW_FILE (optional; default linked_issues_raw.json next to
+#   PR_PAYLOAD_FILE, i.e. in RUNTIME_DIR) receives the linked issues as
+#   [{number,title,body,labels:[name]}] and ${LINKED_ISSUES_RAW_FILE}.status
+#   receives `ok` or `failed`; review_conflict_prepare.sh reads them to find
+#   the PR's files_touched scope for host-only conflicts (issue #6748). The
+#   path is published to GITHUB_ENV.
 
 set -euo pipefail
 
@@ -102,11 +108,13 @@ _fetch_linked_issue_bodies_graphql()
             number
             title
             body
+            labels(first: 50) { nodes { name } }
           }
           ... on PullRequest {
             number
             title
             body
+            labels(first: 50) { nodes { name } }
           }
         }"
 	done
@@ -153,7 +161,8 @@ _fetch_linked_issue_bodies_graphql()
 			| {
 				number: (.number // 0),
 				title: (.title // ""),
-				body: (.body // "")
+				body: (.body // ""),
+				labels: [(.labels.nodes // [])[] | .name? // empty | strings]
 			}
 		)
 	' "${response_file}" 2>/dev/null)" || {
@@ -259,7 +268,7 @@ if [ -n "${PR_NUMBER:-}" ]; then
 		-f owner="${REPOSITORY_OWNER}" \
 		-f name="${REPOSITORY_NAME}" \
 		-F number="${PR_NUMBER}" \
-		-f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body}}}}}' \
+		-f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){closingIssuesReferences(first:50){nodes{number title body labels(first:50){nodes{name}}}}}}}' \
 		--jq '.data.repository.pullRequest.closingIssuesReferences.nodes // []'; then
 		_linked_fetch_ok="true"
 		_linked_raw="$(cat "${_linked_tmp}" 2>/dev/null || echo '[]')"
@@ -285,12 +294,22 @@ fi
 
 # Body-text fallback for linked-issue prompt context only.
 _linked_context_raw="${_linked_raw}"
+# Scope completeness for LINKED_ISSUES_RAW_FILE: `ok` only when the linked
+# issue set is known in full (the closing-references read succeeded and any
+# body-text fallback hydrated every referenced issue without truncation).
+_linked_raw_status="failed"
+if [ "${_linked_fetch_ok}" = "true" ]; then
+	_linked_raw_status="ok"
+fi
 if [ "${_linked_context_raw}" = "[]" ] && [ "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON}" != "[]" ]; then
+	_linked_raw_status="failed"
 	_fallback_numbers="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON}" | jq -r '.[]' 2>/dev/null || true)"
 	if [ -n "${_fallback_numbers}" ]; then
 		_FALLBACK_MAX_ISSUES=20
 		_fallback_total="$(printf '%s' "${LINKED_ISSUE_FALLBACK_NUMBERS_JSON}" | jq -r 'length' 2>/dev/null || echo '0')"
+		_fallback_truncated="false"
 		if [[ "${_fallback_total:-0}" =~ ^[0-9]+$ ]] && [ "${_fallback_total:-0}" -gt "${_FALLBACK_MAX_ISSUES}" ]; then
+			_fallback_truncated="true"
 			echo "::warning::Linked-issue body-text fallback: PR title/body referenced ${_fallback_total} distinct in-repo issues; capping fetches at ${_FALLBACK_MAX_ISSUES}."
 			_fallback_numbers="$(printf '%s\n' "${_fallback_numbers}" | head -n "${_FALLBACK_MAX_ISSUES}")"
 		fi
@@ -301,10 +320,31 @@ if [ "${_linked_context_raw}" = "[]" ] && [ "${LINKED_ISSUE_FALLBACK_NUMBERS_JSO
 			echo "::warning::Linked-issue body-text fallback: batched GraphQL issue hydration failed; skipping"
 		elif [ "${_fallback_json}" != "[]" ]; then
 			_linked_context_raw="${_fallback_json}"
+			if [ "${_linked_fetch_ok}" = "true" ] && [ "${_fallback_truncated}" != "true" ] && \
+				[ "$(printf '%s' "${_fallback_json}" | jq 'length' 2>/dev/null || echo -1)" = "$(printf '%s' "${_fallback_numbers_json}" | jq 'length' 2>/dev/null || echo -2)" ]; then
+				_linked_raw_status="ok"
+			fi
 			echo "Linked-issue body-text fallback resolved $(printf '%s' "${_fallback_json}" | jq 'length') issue(s) for context (GraphQL closingIssuesReferences returned empty — likely non-default base branch)."
 		fi
 	fi
 fi
+
+# Persist the linked issues (normalised) for the host-only conflict scope
+# lookup in review_conflict_prepare.sh. Fail-open: a write failure only marks
+# the status `failed`, which keeps that lookup on its fail-closed path.
+LINKED_ISSUES_RAW_FILE="${LINKED_ISSUES_RAW_FILE:-$(dirname -- "${PR_PAYLOAD_FILE}")/linked_issues_raw.json}"
+if printf '%s' "${_linked_context_raw}" | jq -c '[.[]? | select(type == "object") | {
+		number: (.number // 0),
+		title: (.title // ""),
+		body: (.body // ""),
+		labels: (if (.labels | type) == "array" then [.labels[] | strings]
+			else [(.labels.nodes // [])[] | .name? // empty | strings] end)
+	}]' > "${LINKED_ISSUES_RAW_FILE}" 2>/dev/null; then
+	printf '%s\n' "${_linked_raw_status}" > "${LINKED_ISSUES_RAW_FILE}.status" 2>/dev/null || true
+else
+	printf 'failed\n' > "${LINKED_ISSUES_RAW_FILE}.status" 2>/dev/null || true
+fi
+printf 'LINKED_ISSUES_RAW_FILE=%s\n' "${LINKED_ISSUES_RAW_FILE}" >> "${GITHUB_ENV}"
 
 # Build linked issue context file for reviewer/editor prompts.
 _linked_json_file="$(mktemp)"

@@ -624,6 +624,47 @@ def test_security_reissue_carries_canonical_metadata() -> None:
 	assert actions.plan(_verdict("reissue", instructions="correct spec"), _ctx(labels=labels, security_finding_id="abc-1", security_source_body="No metadata")) == actions.plan(_verdict("reissue", instructions="correct spec"), baseline)
 
 
+def test_pr_reissue_carries_linked_issue_metadata_when_sent() -> None:
+	"""Host-only conflict re-issue (#6748): the linked issue is the lineage source."""
+	source = "<!-- ai:security-finding:abc-1 -->\nFix it\n- Integration branch: `claude/x`\n- Depends on: #42"
+	ctx = _ctx("pr", linked_issue=31, source_issue_body=source, source_issue_labels=["ai:security"])
+	ops = actions.plan(_verdict("reissue", instructions="redo on main"), ctx)
+	assert [op["op"] for op in ops] == ["create_issue", "close"]
+	body = ops[0]["body"]
+	assert body.startswith("<!-- ai:security-finding:abc-1 -->\n")
+	assert "- Integration branch: `claude/x`\n- Depends on: #42" in body
+	assert body.endswith("head_sha=" + "a" * 40 + " -->")
+	assert ops[0]["labels"] == ["ai:security"]
+	plain = actions.plan(_verdict("reissue", instructions="redo"), _ctx("pr", linked_issue=31, source_issue_body="- Integration branch: `orchestrator/project-9`", source_issue_labels=[]))
+	assert plain[0]["labels"] == [] and "- Integration branch: `orchestrator/project-9`" in plain[0]["body"]
+	assert "ai:security-finding" not in plain[0]["body"]
+
+
+def test_pr_reissue_without_source_keys_is_unchanged() -> None:
+	baseline = actions.plan(_verdict("reissue", instructions="redo"), _ctx("pr", linked_issue=31))
+	empty = actions.plan(_verdict("reissue", instructions="redo"), _ctx("pr", linked_issue=31, source_issue_body="Nothing", source_issue_labels=[]))
+	assert baseline == empty
+	assert baseline[0]["labels"] == []
+
+
+@pytest.mark.parametrize("body,labels", [
+	("<!-- ai:security-finding:abc def -->", ["ai:security"]),
+	("- Integration branch: `a..b`", []),
+	("- Integration branch: `claude/a`\n- Integration branch: `claude/b`", []),
+])
+def test_pr_reissue_refuses_unsafe_linked_issue_metadata(body: str, labels: list[str]) -> None:
+	ops = actions.plan(_verdict("reissue", instructions="redo"), _ctx("pr", linked_issue=31, source_issue_body=body, source_issue_labels=labels))
+	assert [op["op"] for op in ops] == ["comment", "telegram"]
+	assert "stays open" in ops[0]["body"]
+
+
+def test_untrusted_pr_ignores_linked_issue_metadata() -> None:
+	ctx = _ctx("pr", pr_trusted=False, source_issue_body="<!-- ai:security-finding:abc-1 -->", source_issue_labels=["ai:security"])
+	assert not ctx["pr_source_present"]
+	ops = actions.plan(_verdict("reissue", instructions="redo"), ctx)
+	assert [op["op"] for op in ops] == ["comment", "close", "add_labels", "telegram"]
+
+
 @pytest.mark.parametrize("body,finding_id", [
 	("<!-- ai:security-finding:abc-1 -->\n- Depends on: #42\n- Depends on: #43", "abc-1"),
 	("<!-- ai:security-finding:abc-1 -->\n- Depends on: #42 extra", "abc-1"),
@@ -1545,6 +1586,15 @@ def test_untrusted_pr_reissue_closes_without_creating_an_issue(tmp_path: Path, u
 	assert any(endpoint == "repos/o/r/pulls/7" and fields.get("state") == "closed" for endpoint, fields in state["patched"])
 	assert [label for _, label in state["labels_added"]] == ["ai:unblock-closed"]
 	assert not any("model instructions" in comment["body"] or "model reason" in comment["body"] for comment in state["comments"] if "Unblock judge could not act" in comment["body"])
+
+
+def test_created_issue_numbers_are_recorded_only_when_requested(tmp_path: Path) -> None:
+	pr = dict(ISSUE, pull_request={"url": "u"})
+	record = tmp_path / "created.txt"
+	result, state = _judge(tmp_path, pr, verdict={"verdict": "reissue", "reason": "r", "instructions": "correct spec"}, UNBLOCK_CREATED_ISSUES_FILE=str(record))
+	assert result.returncode == 0, result.stderr
+	assert len(state["created"]) == 1
+	assert record.read_text(encoding="utf-8") == "901\n"
 
 
 def test_trusted_pr_reissue_records_provenance_on_created_issue(tmp_path: Path) -> None:
