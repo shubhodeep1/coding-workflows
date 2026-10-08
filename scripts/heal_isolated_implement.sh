@@ -38,12 +38,13 @@ image="$(env -i PATH="${PATH}" docker build -q -f "${GITHUB_WORKSPACE}/.codex-wo
 env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY:?}" CLARIFY_MODEL="${MODEL_EDITOR:-openai/gpt-6-sol}" PYTHONDONTWRITEBYTECODE=1 \
 	python3 "${support}/clarify_openrouter_broker.py" broker "${root}/socket/provider.sock" &
 broker_pid=$!
-for _ in $(seq 1 50); do
+# Up to 30s: a loaded runner can take more than a few seconds to start Python.
+for _ in $(seq 1 300); do
 	[ ! -S "${root}/socket/provider.sock" ] || break
-	kill -0 "${broker_pid}" 2>/dev/null || exit 1
+	kill -0 "${broker_pid}" 2>/dev/null || { echo 'HEAL_ISOLATED_EDITOR phase=prepare engine=codex outcome=failed reason=broker_exited' >&2; exit 1; }
 	sleep 0.1
 done
-[ -S "${root}/socket/provider.sock" ] || exit 1
+[ -S "${root}/socket/provider.sock" ] || { echo 'HEAL_ISOLATED_EDITOR phase=prepare engine=codex outcome=failed reason=broker_timeout' >&2; exit 1; }
 wall="${HEAL_ISOLATED_EDITOR_WALL_SECS:-${EDITOR_MAX_WALL:-7800}}"
 [[ "${wall}" =~ ^[1-9][0-9]{0,5}$ ]] || exit 1
 run_editor()
