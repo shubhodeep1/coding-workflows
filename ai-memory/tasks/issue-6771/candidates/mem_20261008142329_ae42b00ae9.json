@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The test on the default branch (`tests/test_apply_analysis_on_main.py:362-363`) still looks for `'!= \"stable\"'`, and so does the workflow guard on the default branch (`.github/workflows/test-and-mark-stable.yml:178`, `if [ \"$REF\" != \"stable\" ]; then`). That means the stricter `${DISPATCH_REF}` / `refs/heads/stable` guard exists only on PR #6555's head branch `ai/issue-6546` (open, not merged, head ea56cd45afbc, CI failed there in run 37786379908). The corrected assertion therefore has to ship on that branch, together with the guard it checks. Option C would break default-branch CI until #6555 merges. Option B would keep accepting the weaker bare-`stable` guard, which also lets a tag named `stable` through, and that weakens a security check.\n\nEXECUTION PLAN (required for any non-letter decision):\nNot needed: the decision is a lettered option. Notes for the planner and implementer:\n- Target branch: `ai/issue-6546`, the head of PR #6555. The fix goes onto that PR, not onto `main`.\n- Only one file changes: `tests/test_apply_analysis_on_main.py`, inside `test_release_gate_only_mode_contract`.\n- In that test, change the search so it finds the exact new guard comparison (`\"${DISPATCH_REF}\" != \"refs/heads/stable\"`, as it appears in `.github/workflows/test-and-mark-stable.yml` at about lines 183-187 on `ai/issue-6546`) instead of `'!= \"stable\"'`. Check the exact quoting in the workflow file on that branch before writing the search string.\n- Leave these assertions unchanged:\n  - the guard sits after the gate-only exit;\n  - the guard exits 1;\n  - the guard block closes with `fi`;\n  - `branch=stable` is written to GITHUB_OUTPUT only after the guard, never before it or inside it.\n- Update the assertion message, for example \"release path must check the dispatch ref against 'refs/heads/stable'\".\n- Do not change the workflow guard.\n- Verify by running `pytest tests/test_apply_analysis_on_main.py::test_release_gate_only_mode_contract` on that branch.\n- Reversibility: this edits one test assertion only. Reverting the commit restores the old (failing) assertion.",
+  "fingerprint": "ea01b6b124b282c3ac712d4180285f5cc60a33433b721247390dece06c4bee67",
+  "lineage": {
+    "issue_number": 6771,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37790965604",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37790965604",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6771"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008142329_ae42b00ae9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6771,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37790965604"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6771",
+  "timestamps": {
+    "created_at": "2026-10-08T14:23:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
