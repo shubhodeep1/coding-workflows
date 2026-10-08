@@ -5470,7 +5470,13 @@ ensure_security_pass_state_fields() {
       if (.security_pass_waived_findings | type) == "array" then
         .security_pass_waived_findings
         | map(select(type == "object" and (.finding_id | type) == "string" and (.finding_id | length) > 0))
-        | .[-100:]
+        # Cap settled rows at 100 but never drop a row still awaiting its
+        # advisory follow-up (followup_pending): the deferred filer reads only
+        # persisted rows, so a dropped pending row would never be filed.
+        | . as $rows
+        | ([range(0; length) | select(($rows[.].followup_pending // false) != true)]) as $settled
+        | ($settled[:((($settled | length) - 100) | if . < 0 then 0 else . end)]) as $dropped
+        | [range(0; length) | select((IN($dropped[])) | not) | $rows[.]]
       else [] end
     )
     | .security_pass_followup_issues = (
@@ -6477,7 +6483,14 @@ security_pass_record_waivers() {
     (.security_pass_waived_findings // []) as $existing
     | ($waivers | map(.finding_id)) as $ids
     | .security_pass_waived_findings = (
-        ([$existing[] | select((.finding_id | IN($ids[])) | not)] + $waivers) | .[-100:]
+        ([$existing[] | select((.finding_id | IN($ids[])) | not)] + $waivers)
+        # Same bound as ensure_security_pass_state_fields: cap settled rows at
+        # 100, never drop a followup_pending row (line-ownership advisories can
+        # exceed 100 in one audit and would otherwise never be filed).
+        | . as $rows
+        | ([range(0; length) | select(($rows[.].followup_pending // false) != true)]) as $settled
+        | ($settled[:((($settled | length) - 100) | if . < 0 then 0 else . end)]) as $dropped
+        | [range(0; length) | select((IN($dropped[])) | not) | $rows[.]]
       )
     | .security_pass_reported_findings = (
         [(.security_pass_reported_findings // [])[] | select((.finding_id | IN($ids[])) | not)]
