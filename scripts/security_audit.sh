@@ -432,7 +432,7 @@ fi
 # another file that lost lines (`references_file_with_deletions`), the
 # cited file names a module that lost lines
 # (`cited_file_references_module_with_deletions`), or a module that lost
-# lines names the cited module (`module_with_deletions_references_cited_file`).
+# lines names the cited module (`module_with_deletions_references_cited_file`),
 # or an unchanged non-documentation file names both the cited module and a
 # module that lost lines (`shared_referrer_links_module_with_deletions`).
 # A failed project diff, hunk read or module-reference read keeps the
@@ -2066,7 +2066,9 @@ def module_stem(path: str) -> str:
 	stem = pure.stem
 	if stem.lower() in LINE_OWNERSHIP_GENERIC_MODULE_STEMS and pure.parent.name:
 		stem = pure.parent.name
-	return stem if len(stem) >= 3 else ""
+	# No minimum length: a short module such as db.py or io.py can hold the
+	# deleted guard, and a word match here only ever adds blocking.
+	return stem
 
 
 def head_file_text(path: str) -> str | None:

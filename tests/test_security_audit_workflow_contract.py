@@ -2856,6 +2856,8 @@ def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") ->
 	- ``cross_file_reverse``: as ``cross_file``, but auth.py names mod.
 	- ``cross_file_registry``: as ``cross_file``, but an unchanged registry.py
 	  names both auth and mod (neither names the other).
+	- ``cross_file_registry_short``: as ``cross_file_registry``, but the guard
+	  is deleted from the two-letter module db.py instead of auth.py.
 	"""
 	repo_dir = base_dir / "audited-repo"
 	repo_dir.mkdir(parents=True, exist_ok=True)
@@ -2894,6 +2896,11 @@ def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") ->
 	if variant == "cross_file_registry":
 		(repo_dir / "registry.py").write_text("import auth\nimport mod\n", encoding="utf-8")
 		_git("add", "registry.py")
+	db_base_text = "def guard():\n\treturn require_admin()\n"
+	if variant == "cross_file_registry_short":
+		(repo_dir / "db.py").write_text(db_base_text, encoding="utf-8")
+		(repo_dir / "registry.py").write_text("import db\nimport mod\n", encoding="utf-8")
+		_git("add", "db.py", "registry.py")
 	_git("add", "mod.py", "auth.py")
 	_git("commit", "-q", "-m", "base commit")
 	base_sha = _git("rev-parse", "HEAD")
@@ -2909,6 +2916,10 @@ def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") ->
 	elif variant in ("cross_file", "cross_file_import", "cross_file_reverse", "cross_file_registry"):
 		project_lines = [*base_lines, f"PROJECT_{LINE_OWNERSHIP_PROJECT_LINE} = 1\n"]
 		(repo_dir / "auth.py").write_text(auth_base_text.replace("\treturn require_admin()\n", ""), encoding="utf-8")
+	elif variant == "cross_file_registry_short":
+		project_lines = [*base_lines, f"PROJECT_{LINE_OWNERSHIP_PROJECT_LINE} = 1\n"]
+		(repo_dir / "db.py").write_text(db_base_text.replace("\treturn require_admin()\n", ""), encoding="utf-8")
+		_git("add", "db.py")
 	else:
 		raise AssertionError(f"unknown line ownership fixture variant {variant}")
 	(repo_dir / "mod.py").write_text("".join(project_lines), encoding="utf-8")
@@ -3058,6 +3069,7 @@ def test_security_audit_line_ownership_reference_to_file_with_deletions_blocks()
 		("cross_file_import", "cited_file_references_module_with_deletions"),
 		("cross_file_reverse", "module_with_deletions_references_cited_file"),
 		("cross_file_registry", "shared_referrer_links_module_with_deletions"),
+		("cross_file_registry_short", "shared_referrer_links_module_with_deletions"),
 	],
 )
 def test_security_audit_line_ownership_unnamed_module_with_deletions_blocks(variant: str, reason: str) -> None:
