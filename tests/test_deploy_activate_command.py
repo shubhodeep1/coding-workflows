@@ -38,6 +38,9 @@ def test_cloudflare_preflight_and_deploy_boundaries(command: Path):
 		assert required in cloudflare, (command, required)
 	assert "Never execute unmerged code with credentials" in text.split("## Rules", 1)[1]
 	assert "verified default-branch commit" in text.split("## Tool Access", 1)[1]
+	assert "gh repo view --json defaultBranchRef -R " + (
+		"shubhodeep1/coding-workflows" if command == COMMANDS[0] else "<owner>/<repo>"
+	) in cloudflare
 	assert "When Wrangler and a safe sandbox are available, require a successful `wrangler deploy --dry-run`" in cloudflare
 	assert "a failed dry run blocks deployment" in cloudflare
 	assert "If no such isolation is available, skip local checks and rely on the check-runs" in cloudflare

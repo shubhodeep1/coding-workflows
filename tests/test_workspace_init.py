@@ -229,6 +229,28 @@ def test_finalize_refreshes_source_tree_and_preserves_extra_state(tmp_path: Path
 	assert not (workspace_path / ".serena").exists()
 
 
+def test_finalize_without_committed_manifest_keeps_new_workspace_files_and_prunes_old_inventory(tmp_path: Path) -> None:
+	source_path = tmp_path / "source"
+	workspace_path = tmp_path / "runner-temp" / "workspaces" / "issue-7"
+	source_path.mkdir()
+	workspace_path.mkdir(parents=True)
+	(source_path / "tracked.txt").write_text("fresh\n", encoding="utf-8")
+	(workspace_path / "extra.txt").write_text("keep\n", encoding="utf-8")
+	manifest = workspace_path / ".ai" / ".workspace_source_manifest.txt"
+	assert not (source_path / ".ai").exists()
+	result = _run_helper("finalize", tmp_path, WORKSPACE_SOURCE_PATH=str(source_path), WORKSPACE_PATH=str(workspace_path))
+	assert result.returncode == 0, result.stderr
+	assert (workspace_path / "extra.txt").read_text(encoding="utf-8") == "keep\n"
+	assert manifest.read_text(encoding="utf-8") == "tracked.txt\n"
+
+	(workspace_path / "stale.txt").write_text("stale\n", encoding="utf-8")
+	manifest.write_text(".ai/.workspace_source_manifest.txt\nstale.txt\ntracked.txt\n", encoding="utf-8")
+	result = _run_helper("finalize", tmp_path, WORKSPACE_SOURCE_PATH=str(source_path), WORKSPACE_PATH=str(workspace_path))
+	assert result.returncode == 0, result.stderr
+	assert not (workspace_path / "stale.txt").exists()
+	assert manifest.read_text(encoding="utf-8") == "tracked.txt\n"
+
+
 def test_finalize_ignores_manifest_entries_outside_workspace(tmp_path: Path) -> None:
 	source_path = tmp_path / "source"
 	workspace_path = tmp_path / "runner-temp" / "workspaces" / "issue-7"
@@ -331,6 +353,7 @@ def main() -> int:
 		test_metadata_miss_sets_created_now_true,
 		test_metadata_rejects_workspace_escape_key,
 		test_finalize_refreshes_source_tree_and_preserves_extra_state,
+		test_finalize_without_committed_manifest_keeps_new_workspace_files_and_prunes_old_inventory,
 	):
 		_run_tmp_path_case(case_fn)
 	test_implement_workflow_stages_workspace_helper_and_orders_restore_keys()

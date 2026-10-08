@@ -80,6 +80,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
   pull-requests: read
   actions: write
 
@@ -94,10 +95,36 @@ concurrency:
 jobs:
   sweep:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+      # The stale security-hold step posts its dedup marker comment; the
+      # job-level block replaces the workflow-level one, so grant it here.
+      issues: write
+      actions: write
     steps:
+      - name: Check out budget helper
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Record GH_PAT budget at sweep start
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_sweep
+        run: |
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget start review_autofix_sweep sweep "${GH_PAT_BUDGET_FILE}"
+          else
+            echo 'GH_PAT_BUDGET phase=start workflow=review_autofix_sweep job=sweep remaining=unknown reset=unknown used_in_job=unknown'
+          fi
+
       - name: Enumerate open PRs and dispatch internal-review.yml
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          READ_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           HEAD_REF_FILTER: ${{ inputs.head_ref_filter }}
           DRY_RUN: ${{ inputs.dry_run }}
@@ -112,7 +139,7 @@ jobs:
           # `jq -s 'add // []'` to merge them into one snapshot before
           # filtering. Mirrors the established repo pattern (e.g.
           # implement.yml:786, gh_helpers.sh:916).
-          prs_json="$(gh api --paginate -X GET "repos/${REPOSITORY}/pulls" \
+          prs_json="$(GH_TOKEN="${READ_TOKEN}" gh api --paginate -X GET "repos/${REPOSITORY}/pulls" \
             -f state=open -f per_page=100 \
             | jq -s '(add // []) | map(select(.draft == false) | {
               number,
@@ -182,7 +209,7 @@ jobs:
             # as stale — it is bounded by its running peer's job timeout.
             if snapshot_json="$(
               for status in queued in_progress pending; do
-                gh api --paginate -X GET "repos/${REPOSITORY}/actions/workflows/${workflow}/runs" \
+                GH_TOKEN="${READ_TOKEN}" gh api --paginate -X GET "repos/${REPOSITORY}/actions/workflows/${workflow}/runs" \
                   -f status="${status}" \
                   -f per_page=100 \
                   2>/dev/null || true
@@ -358,6 +385,19 @@ jobs:
 
           echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} failures=${failures} candidates=${total}"
 
+      - name: Record GH_PAT budget at sweep end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_sweep
+        run: |
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget end review_autofix_sweep sweep "${GH_PAT_BUDGET_FILE}"
+          else
+            echo 'GH_PAT_BUDGET phase=end workflow=review_autofix_sweep job=sweep remaining=unknown reset=unknown used_in_job=unknown'
+          fi
+
       # Use the 30-minute sweep rather than the hourly Claude catch-all: it
       # already snapshots every open non-draft PR, including non-Claude PRs.
       # The sweep itself needs no checkout. Fetch only the default-branch
@@ -378,3 +418,14 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
           CI_CANCELLED_PR_SNAPSHOT: ${{ runner.temp }}/ci-cancelled-pr-snapshot.json
         run: PYTHONDONTWRITEBYTECODE=1 python3 .ci-rerun-support/scripts/ci_cancelled_rerun.py
+
+      - name: Re-dispatch stale security holds
+        if: github.event_name == 'schedule' && vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
+          SECURITY_PASS_FOLLOWUP_STALE_HOURS: ${{ vars.SECURITY_PASS_FOLLOWUP_STALE_HOURS || '24' }}
+          # The PR-named wrapper keeps the judge run visible to the active-run guards.
+          SECURITY_HOLD_REVIEW_WORKFLOW: internal-review.yml
+        run: PYTHONDONTWRITEBYTECODE=1 python3 .ci-rerun-support/scripts/review_security_hold_sweep.py

@@ -322,6 +322,7 @@ def export_oversized(host, scope_file, dest, max_file, max_total, scope_mode="ex
 		names = list(walk_paths(host))
 	scoped = []
 	unscoped = []
+	unscoped_text_capped = []
 	explicit_candidates = []
 	extra_candidates = []
 	total = 0
@@ -372,14 +373,20 @@ def export_oversized(host, scope_file, dest, max_file, max_total, scope_mode="ex
 	# are reported as not inspected instead.
 	for name, node, info in extra_candidates:
 		if info.st_size > file_cap:
-			unscoped.append({"path": name, "size": info.st_size, "reason": "over_file_cap"})
+			reason = "over_file_cap"
 		elif total + info.st_size > total_cap:
-			unscoped.append({"path": name, "size": info.st_size, "reason": "over_total_cap"})
+			reason = "over_total_cap"
 		elif _looks_binary(node):
 			unscoped.append({"path": name, "size": info.st_size, "reason": "binary"})
+			continue
 		else:
 			total += info.st_size
 			scoped.append((name, node, info))
+			continue
+		cap_skip_record = {"path": name, "size": info.st_size, "reason": reason}
+		unscoped.append(cap_skip_record)
+		if not _looks_binary(node):
+			unscoped_text_capped.append(cap_skip_record)
 	scoped.sort(key=lambda item: item[0])
 	unscoped.sort(key=lambda entry: entry["path"])
 
@@ -425,8 +432,10 @@ def export_oversized(host, scope_file, dest, max_file, max_total, scope_mode="ex
 		"scope_mode": scope_mode,
 		"chunk_bytes": CHUNK, "scoped": exported, "unscoped_oversized": unscoped[:50],
 		"unscoped_oversized_count": len(unscoped),
+		"unscoped_text_capped": unscoped_text_capped[:50],
+		"unscoped_text_capped_count": len(unscoped_text_capped),
 	}), encoding="utf-8")
-	log(f"export-oversized scoped={len(scoped)} scoped_bytes={total} chunks={chunk_count} unscoped={len(unscoped)} mode={scope_mode}")
+	log(f"export-oversized scoped={len(scoped)} scoped_bytes={total} chunks={chunk_count} unscoped={len(unscoped)} text_capped={len(unscoped_text_capped)} mode={scope_mode}")
 
 
 def load_manifest(manifest):
