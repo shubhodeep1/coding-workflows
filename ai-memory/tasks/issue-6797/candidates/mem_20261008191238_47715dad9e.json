@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where should the tests (and the changelog fragment) go, given the exact four-file `files_touched` grant?\nChoices:\nA) Widen the grant to six exact paths: add a new `tests/test_release_ci_gate.py` (stubbed `gh` that covers both gates, SHA mismatch, and missing/pending/cancelled/failed/unreadable check-runs) and `changelog.d/<issue>-release-ci-gate.md`. Wire the test into an existing `ci.yml` test job. (RECOMMENDED)\nB) Keep the grant at exactly four files. Write the tests as an inline shell step in `.github/workflows/ci.yml` that runs `scripts/release_ci_gate.sh` against a stubbed `gh`, and skip the changelog fragment.\nC) Keep the grant at four files and leave tests out. Track them in a separate follow-up issue.\n   **Note:** C conflicts with the issue's own \"Test both gates and SHA mismatches\" requirement and is likely to fail validation.\nQ2: How should `scripts/release_ci_gate.sh` handle a `CI / lint` check-run that is still queued or in progress on the released SHA? (For example, a promote or auto-release run that starts right after `stable` moves, while the `push` CI run on `stable` is still running.)\nChoices:\nA) Poll for a bounded time (for example a `RELEASE_CI_GATE_WAIT_SECS` variable with a default), then fail closed if the check-run is still not `completed`/`success` when the time runs out. (RECOMMENDED)\nB) Fail closed right away on any non-completed state, with no waiting. A failed gate counts toward `AUTO_RELEASE_STABLE_MAX_ATTEMPTS` and `PROMOTE_CYCLE_MAX_ATTEMPTS`.",
+  "fingerprint": "4a4b56822ed56bb7fccfa119fbfd19e35b954e6f5bc6e0d062c4d4c802724392",
+  "lineage": {
+    "issue_number": 6797,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37829495632",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37829495632",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008191238_47715dad9e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6797,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37829495632"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6797 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T19:12:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
