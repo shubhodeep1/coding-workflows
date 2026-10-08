@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/operator_step_issue.py:224 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The sort key may raise `KeyError` when an issue dict passes the filters but lacks a `\"number\"` key.\n  WHY: Deepseek identifies the bracket access as unsafe, while minimax and qwen argue the conditional type check makes it unreachable.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"list every reused commit SHA in the PR description\"; if no commits were reused, state that explicitly.\n  expected_change_site: PR description body\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: The PR description contains \u201cAutomated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6754\u201d and \u201cRefs #6664\u201d but no reused commit SHAs or explicit statement that none were reused.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/operator_step_issue.py:224 | severity=NIT | confidence=3\n  PROBLEM: The sort key `issue[\"number\"]` uses bare bracket access instead of `.get()`.\n  WHY: A dict that passes the marker/trust filters but lacks a `\"number\"` key would crash with `KeyError`, whereas the old code returned 0.\n- TASK_GAP\n  Requirement: \"list every reused commit SHA in the PR description\" (linked issue #6754, Shared context section, referencing PRs #6209 and #6615)\n  Expected change site: PR description body\n  Evidence of absence: The PR description reads \"Automated implementation. Closes ...\" \"Refs #6664\" with no mention of reused commit SHAs. The linked issue explicitly requires listing every reused commit SHA or stating that none were reused.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"list every reused commit SHA in the PR description\" (linked issue #6754, Shared context section, referencing PRs #6209 and #6615)\n  Expected change site: PR description body\n  Evidence: The PR description reads \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6754\" followed by \"Refs #6664\" with no mention of reused commit SHAs or a statement that none were reused.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"list every reused commit SHA in the PR description\" (linked issue #6754, Shared context: \"Closed PRs #6209 (Phase 5d) and #6615 (fallback alerts) contain reviewed commits... port only the hunks this item needs onto current `main`, and list every reused commit SHA in the PR description. Do not re-apply the whole PR.\")\n  Expected change site: PR description body\n  Evidence of absence: PR description is \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6754\\nRefs #6664\" with no SHA list and no explicit \"no commits reused\" statement. If nothing was ported from #6209/#6615 (the diff contains no `[port-of-...]` markers and the symbols look original), the description should say so. The previous editor deferred this as \"PR body is outside the sandbox\", but the issue explicitly requires the list or an explicit absence statement; that deferral is itself a gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- scripts/operator_step_issue.py, upsert around the `candidates = find_issues(issues)` block, before `number = candidates[0][\"number\"]` | HARDENING_RISK_SCORE=1\n  ISSUE: `upsert` accesses `candidates[0][\"number\"]` directly, unlike `tick`, which validates the issue number before use.\n  Suggested minimal fix: mirror tick's `if not isinstance(number, int) or isinstance(number, bool) or number <= 0: raise ApiError(...)` before the patch URL is built.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cFetch [PRs #6209 and #6615], port only the hunks this item needs onto current main, and list every reused commit SHA in the PR description.\u201d If no commits were reused, the description should state that explicitly.\n  Expected change site: PR description body.\n  Evidence of absence: The provided PR description says \u201cAutomated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6754\u201d and \u201cRefs #6664\u201d; it lists no reused commit SHAs and does not state that none were reused.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- TASK_GAP\n  Requirement: \"list every reused commit SHA in the PR description\" (linked issue #6754, Shared context: \"port only the hunks this item needs onto current main, and list every reused commit SHA in the PR description. Do not re-apply the whole PR.\")\n  Expected change site: PR description body\n  Evidence of absence: The PR description reads \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6754 Refs #6664\" with no mention of reused commit SHAs and no statement that none were reused. The linked issue explicitly requires listing them. The previous editor noted this as outside sandbox control (no GitHub credentials to edit PR body), which is correct \u2014 the implement step or PR-body composer should add either the SHAs or an explicit \"no commits reused\" line.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "beb08cca042650f30c4390e701932d783aa6ec93c324ab8626ea8f80b7f261a0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6758,
+    "run_id": "37769205446",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37769205446",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261008114930_7ada8552e1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6758,
+    "run_id": "37769205446"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-08T11:49:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
