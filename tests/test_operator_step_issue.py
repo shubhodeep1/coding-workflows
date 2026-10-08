@@ -286,3 +286,22 @@ def test_needs_human_digest_prune_skips_when_the_digest_changed_since_its_read(
 	result = writer.needs_human_prune(REPO, BOT, now=NOW)
 	assert result["outcome"] == "skip" and result["reason"] == "concurrent_update"
 	assert fake.patches() == []
+
+
+def test_needs_human_digest_park_reports_the_park_when_the_post_create_listing_fails(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch) -> None:
+	original = fake.__call__
+	listings = {"count": 0}
+
+	def flaky(args: list[str], *, allow_existing_label: bool = False) -> str:
+		if args[0] == "api" and args[1].startswith(f"repos/{REPO}/issues?labels=ai:operator-step"):
+			listings["count"] += 1
+			if listings["count"] == 2:
+				raise writer.ApiError("listing failed after create")
+		return original(args, allow_existing_label=allow_existing_label)
+
+	monkeypatch.setattr(writer, "_gh", flaky)
+	result = _park(7)
+	# The digest holds the entry, so the caller must still get newly_parked for its alert.
+	assert result["issue"] == 900 and result["newly_parked"] is True
+	assert list(writer.parse_digest(fake.issues[0]["body"])[0]) == [7]

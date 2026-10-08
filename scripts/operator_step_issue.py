@@ -514,7 +514,13 @@ def _needs_human_park_digest(repo: str, item: int, kind: str, stop: str, reason_
 			number = int(created.get("number") or 0)
 			if not number:
 				raise ApiError("needs-human digest creation returned no issue number")
-			older = _list_digest(repo, login)
+			try:
+				older = _list_digest(repo, login)
+			except ApiError:
+				# The digest with this entry exists: report the park so the caller
+				# still sends its one CRITICAL alert. A duplicate digest left open
+				# here is merged on a later park (the oldest one wins).
+				older = None
 			if older is not None and int(older.get("number") or 0) < number:
 				# A concurrent writer created a digest first: keep the oldest one only.
 				_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=closed", "-f", "state_reason=not_planned"])
@@ -556,7 +562,7 @@ def needs_human_prune(repo: str, trusted_login: str | None = None, now: str | No
 		raise UsageError(f"--repo must be OWNER/REPO, got {repo!r}")
 	if not needs_human_enabled():
 		_needs_human_log("none", "digest", "disabled", "skip")
-		return {"issue": None, "outcome": "skip", "reason": "disabled", "removed": []}
+		return {"issue": None, "outcome": "skip", "reason": "disabled", "removed": [], "items": []}
 	login = _resolve_login(trusted_login)
 	digest = _list_digest(repo, login)
 	if digest is None:
