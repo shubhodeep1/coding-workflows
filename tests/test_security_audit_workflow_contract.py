@@ -144,6 +144,43 @@ sys.exit(int(os.environ.get("MOCK_CODEX_EXIT_CODE", "0")))
 	_write_exec(bin_dir / "codex", codex_script)
 
 
+def _install_mock_claude(bin_dir: Path) -> None:
+	"""The Claude CLI the fake container runs for claude_run (stream-json out).
+
+	MOCK_CLAUDE_MODE: ok (default), crash, timeout, limit. MOCK_CLAUDE_RESULT
+	is the final result text the audit reads as its findings output.
+	"""
+	claude_script = r'''#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+state_path = Path(os.environ["MOCK_GH_STATE_FILE"])
+state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+state.setdefault("claude_calls", []).append(sys.argv[1:])
+state.setdefault("claude_stdin", []).append(sys.stdin.read())
+state.setdefault("claude_mounts", []).append(json.loads(os.environ.get("FAKE_CONTAINER_MOUNTS", "[]")))
+state.setdefault("claude_secret_env", []).append(sorted(name for name in ("GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "TG_BOT_SECRET") if name in os.environ))
+state_path.write_text(json.dumps(state), encoding="utf-8")
+mode = os.environ.get("MOCK_CLAUDE_MODE", "ok")
+def emit(event):
+	print(json.dumps(event), flush=True)
+emit({"type": "system", "subtype": "init"})
+if mode == "crash":
+	print("boom", file=sys.stderr)
+	sys.exit(3)
+if mode == "timeout":
+	sys.exit(124)
+if mode == "limit":
+	emit({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}})
+	emit({"type": "result", "subtype": "error_during_execution", "is_error": True, "result": "API Error"})
+	sys.exit(1)
+emit({"type": "result", "subtype": "success", "is_error": False, "result": os.environ.get("MOCK_CLAUDE_RESULT", "[]"), "total_cost_usd": 0.01, "usage": {"input_tokens": 1, "output_tokens": 2}})
+'''
+	_write_exec(bin_dir / "claude", claude_script)
+
+
 def _install_security_audit_support_tree(base_dir: Path, *, failure_mode: str) -> Path:
 	support_dir = base_dir / "support"
 	scripts_dir = support_dir / "scripts"
@@ -181,6 +218,7 @@ def _run_security_audit(
 	cwd: Path | None = None,
 	support_failure_mode: str | None = None,
 	script_args: tuple[str, ...] = (),
+	claude_accounts: tuple[str, ...] = (),
 ) -> tuple[subprocess.CompletedProcess[str], dict]:
 	with tempfile.TemporaryDirectory(prefix="security-audit-test-") as td:
 		tmp_path = Path(td)
@@ -190,6 +228,16 @@ def _run_security_audit(
 		_install_mock_gh(bin_dir, state_file)
 		if codex_available:
 			_install_mock_codex(bin_dir, state_file)
+		_install_mock_claude(bin_dir)
+		# The Claude account pool claude_run reads (empty unless a test adds accounts).
+		pool_dir = tmp_path / "claude-pool"
+		(pool_dir / "tokens").mkdir(parents=True)
+		if claude_accounts:
+			(pool_dir / "order").write_text("".join(f"{name}\n" for name in claude_accounts), encoding="utf-8")
+			for name in claude_accounts:
+				token_path = pool_dir / "tokens" / name
+				token_path.write_text(f"tok-{name}\n", encoding="utf-8")
+				token_path.chmod(0o600)
 		state_file.write_text(json.dumps(state), encoding="utf-8")
 		codex_home = tmp_path / "codex-home"
 		codex_home.mkdir(parents=True, exist_ok=True)
@@ -199,6 +247,8 @@ def _run_security_audit(
 		env = os.environ.copy()
 		if Path(run_cwd) != REPO_ROOT:
 			env = {key: value for key, value in env.items() if key not in _SANITIZED_GIT_ENV_KEYS}
+		# Engine selection must not leak in from the caller's environment.
+		env = {key: value for key, value in env.items() if not key.startswith(("AI_ENGINE", "CLAUDE_"))}
 		existing_path_entries = env.get("PATH", "").split(os.pathsep)
 		if not codex_available:
 			existing_path_entries = [
@@ -217,6 +267,9 @@ def _run_security_audit(
 				"PATH": os.pathsep.join((str(bin_dir), *existing_path_entries)),
 				"PYTHONDONTWRITEBYTECODE": "1",
 				"SECURITY_AUDIT_ENABLED": "true" if enabled else "false",
+				# The codex-path tests pin the engine; the Claude tests override it.
+				"AI_ENGINE_SECURITY_AUDIT": "codex",
+				"CLAUDE_ENGINE_POOL_DIR": str(pool_dir),
 			}
 		)
 		if support_failure_mode is not None:
@@ -748,6 +801,10 @@ def test_security_audit_workflow_keeps_executable_support_outside_data_checkout(
 	assert "${{" not in steps("Resolve trusted security audit exclusions")["run"]
 	assert steps("Run security audit")["working-directory"] == "./audit-data"
 	assert steps("Run security audit")["env"]["SECURITY_AUDIT_SUPPORT_DIR"] == "${{ github.workspace }}"
+	assert workflow["on"]["workflow_call"]["secrets"]["TG_BOT_SECRET"]["required"] is False
+	assert steps("Run security audit")["env"]["TG_BOT_SECRET"] == "${{ secrets.TG_BOT_SECRET }}"
+	assert steps("Run security audit")["env"]["TG_ADMIN_CHAT_ID"] == "${{ vars.TG_ADMIN_CHAT_ID || '' }}"
+	assert steps("Run security audit")["env"]["ALERT_MSG_LEVEL"] == "${{ vars.ALERT_MSG_LEVEL || 'DEBUG' }}"
 
 
 def test_security_audit_consumer_template_calls_stable_reusable_workflow() -> None:
@@ -1152,7 +1209,10 @@ def test_security_audit_success_path_retains_codex_and_tracker_behavior() -> Non
 	proc, final_state = _run_security_audit(state)
 
 	assert proc.returncode == 0, proc.stderr
-	assert proc.stderr == ""
+	# Only the engine selection line (scripts/ai_engine.sh) reaches stderr.
+	assert proc.stderr.splitlines() == [
+		"AI_ENGINE_SELECTED role=SECURITY_AUDIT engine=codex model=claude-opus-5-5 effort=high source=var:AI_ENGINE_SECURITY_AUDIT"
+	]
 	assert "codex-stderr-tail" not in proc.stdout
 	assert "tracker=#9000 findings=0 followups_created=0" in proc.stdout
 	assert len(final_state.get("codex_calls", [])) == 1
@@ -1770,12 +1830,12 @@ def test_security_audit_fix_cycle_diffs_fail_open() -> None:
 
 
 def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() -> None:
-	"""Accepted findings reach the prompt as accepted and never reach the output.
+	"""Accepted findings reach the prompt and only the same exploit is suppressed.
 
 	The orchestrator's security-pass exhaustion judge and the operator's
 	`/security-pass-waive` command persist waivers; the engine must drop a
-	re-report by exact id and by location (same file and category within the
-	line window), because the auditor mints a new id every run and fix commits
+	re-report by exact id and by location (same file, category, severity and
+	exploit within the line window), because the auditor mints a new id every run and fix commits
 	move the cited line.
 	"""
 	with tempfile.TemporaryDirectory(prefix="security-audit-waived-") as fixture_td:
@@ -1800,6 +1860,8 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 						"owasp_or_stride_category": "A04:2021-Insecure Design / STRIDE: Denial of Service",
 						"file": "./file_c.py",
 						"line": 1,
+						"severity": "high",
+						"exploit_scenario": "A concrete trust-boundary weakness can be exploited.",
 					},
 					{"finding_id": "waived-id-only"},
 				]
@@ -1807,12 +1869,15 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 			encoding="utf-8",
 		)
 		findings = [
-			_finding_payload("waived-exact", file_path="file_b.py", category="A01: Broken Access Control"),
+			_finding_payload("waived-exact", file_path="file_b.py", category="A04:2021-Insecure Design", severity="medium"),
 			_finding_payload(
 				"fresh-id-same-spot",
 				file_path="file_c.py",
 				category="a04:2021-insecure design / STRIDE: denial of service",
 			),
+			_finding_payload("new-exploit-same-category", file_path="file_c.py",
+				category="a04:2021-insecure design / STRIDE: denial of service",
+				exploit_scenario="A different credential leak is exploitable."),
 			_finding_payload("different-category-same-spot", file_path="file_c.py", category="A01: Broken Access Control"),
 			_finding_payload("waived-id-only", file_path="file_c.py"),
 		]
@@ -1832,8 +1897,8 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 
 	assert proc.returncode == 0, proc.stderr
 	payload = json.loads(final_state["security_audit_findings_output"])
-	assert [finding["finding_id"] for finding in payload["findings"]] == ["different-category-same-spot"]
-	assert payload["counts"]["kept"] == 1
+	assert [finding["finding_id"] for finding in payload["findings"]] == ["different-category-same-spot", "new-exploit-same-category"]
+	assert payload["counts"]["kept"] == 2
 	assert payload["counts"]["suppressed_waived"] == 3
 	assert "waived-findings=3 (line window 40)" in proc.stdout
 	prompt = final_state["codex_stdin"][0]
@@ -1844,11 +1909,37 @@ def test_security_audit_waived_findings_are_listed_as_accepted_and_suppressed() 
 	)[0]
 	assert "- `waived-exact` | A04:2021-Insecure Design | medium | file_b.py:1" in accepted_block
 	assert "Accepted because: Bounded blast radius; tracked [untrusted marker removed] [untrusted marker removed]" in accepted_block
-	assert "- `waived-by-location` | A04:2021-Insecure Design / STRIDE: Denial of Service | unknown | file_c.py:1" in accepted_block
+	assert "- `waived-by-location` | A04:2021-Insecure Design / STRIDE: Denial of Service | high | file_c.py:1" in accepted_block
 	assert "- `waived-id-only` | uncategorised | unknown | (location not recorded)" in accepted_block
 	assert "Rules for accepted findings:" not in accepted_block
-	assert "Never report an accepted finding again" in prompt
+	assert "Never re-report the same accepted exploit" in prompt
+	assert "Report a different exploit even when its file, category and line are near an accepted finding" in prompt
+	assert "Accepted exploit: A concrete trust-boundary weakness can be exploited." in accepted_block
 	assert "An acceptance covers one location." in prompt
+
+
+def test_security_audit_reused_waiver_id_cannot_hide_new_exploit() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-waived-id-") as fixture_td:
+		tmp_path = Path(fixture_td)
+		repo_dir, first_sha, _, head_sha = _git_fixture_repo_three_commits(tmp_path)
+		waived_findings_path = tmp_path / "waived-findings.json"
+		waived_findings_path.write_text(json.dumps([{
+			"finding_id": "waived-exact", "owasp_or_stride_category": "A04:2021-Insecure Design",
+			"severity": "medium", "file": "file_b.py", "line": 1,
+			"exploit_scenario": "The original weakness is bounded.",
+		}]), encoding="utf-8")
+		changed = _finding_payload("waived-exact", file_path="file_b.py", category="A01: Broken Access Control",
+			exploit_scenario="A different exploit.")
+		result, state = _run_security_audit(
+			{}, codex_output=json.dumps([changed]), cwd=repo_dir,
+			extra_env={
+				"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT), "SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+				"SECURITY_AUDIT_FINDINGS_OUT": str(tmp_path / "findings.json"), "SECURITY_AUDIT_DIFF_BASE": first_sha,
+				"SECURITY_AUDIT_DIFF_HEAD": head_sha, "SECURITY_AUDIT_WAIVED_FINDINGS": str(waived_findings_path),
+			},
+		)
+		assert result.returncode == 0, result.stderr
+		assert [row["finding_id"] for row in json.loads(state["security_audit_findings_output"])["findings"]] == ["waived-exact"]
 
 
 def test_security_audit_waived_findings_fail_closed_on_malformed_input() -> None:
@@ -2048,6 +2139,7 @@ def test_security_audit_chunks_scoped_oversized_file_and_reports_coverage() -> N
 		assert payload["schema_version"] == "security_audit_findings.v1"
 		assert payload["findings"] == [] and payload["counts"]["kept"] == 0
 		assert payload["coverage"]["scoped_oversized_chunked"] == ["large.py"]
+		assert payload["coverage"]["unscoped_text_capped_count"] == 0
 
 
 def test_security_audit_oversized_cap_fails_before_codex() -> None:
@@ -2103,13 +2195,101 @@ def test_security_audit_full_scan_chunks_oversized_file() -> None:
 		assert "large.py (" in result["codex_stdin"][0]
 		assert any(mount.get("dst", "").endswith("/oversized-chunks") for mount in result["codex_mounts"][0])
 		assert any(head_sha in body for body in result["issue_edit_bodies"])
+		assert "Coverage: partial" not in result["issue_comment_bodies"][0]
 
 
 def test_security_audit_full_scan_oversized_cap_reports_coverage_note() -> None:
 	# Q24: in a full scan an unscoped file past the cap is listed as not
-	# inspected; it does not fail the audit.
+	# inspected; findings still post, but the audited marker does not move.
 	with tempfile.TemporaryDirectory(prefix="security-audit-oversized-full-cap-") as td:
 		repo_dir, _base_sha, _head_sha = _oversized_fixture_repo(Path(td))
+		state = _security_audit_tracker_state()
+		state["api_responses"] = [[[]]]
+		proc, result = _run_security_audit(state, codex_output=json.dumps([_finding_payload("over-cap", file_path="file_a.py")]), cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES": "1048576",
+		})
+		assert proc.returncode == 0, proc.stderr
+		assert "phase=oversized-scope" not in proc.stderr
+		assert result.get("codex_calls")
+		assert result.get("issue_create_bodies")
+		comment = result["issue_comment_bodies"][0]
+		assert "Coverage note: 1 tracked files over 2 MiB were not inspected" in comment and "`large.py`" in comment
+		assert "Coverage: partial — 1 tracked text files over the export caps were not inspected" in comment
+		assert "`large.py` (2400000 bytes, over_file_cap)" in comment
+		assert "the last-audited-commit marker was not moved" in comment
+		assert "oversized scoped=0 unscoped=1 text_capped=1" in proc.stdout
+		assert "coverage=partial skipped_text=1" in proc.stdout
+		assert any("ai:security-audit-partial-coverage:v1" in body for body in result["issue_edit_bodies"])
+		assert not any("ai:security-audit-last-sha:" in body for body in result["issue_edit_bodies"])
+
+
+def test_security_audit_partial_full_scan_forces_full_scope_until_complete() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-partial-repeat-") as td:
+		repo_dir, _base_sha, last_audited_sha = _oversized_fixture_repo(Path(td))
+		(repo_dir / "small.py").write_text("new = 1\n", encoding="utf-8")
+		subprocess.run(["git", "add", "small.py"], cwd=repo_dir, check=True)
+		subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "small"], cwd=repo_dir, check=True)
+		state = _security_audit_tracker_state()
+		state["issue_list_responses"][0][0]["body"] += f"<!-- ai:security-audit-last-sha:{last_audited_sha} -->\n"
+		state["api_responses"] = [[[]]]
+		audit_env = {
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES": "1048576",
+		}
+		first_run, first_result = _run_security_audit(state, cwd=repo_dir, extra_env={
+			**audit_env, "SECURITY_AUDIT_INCREMENTAL": "false",
+		})
+		assert first_run.returncode == 0, first_run.stderr
+		partial_body = first_result["issue_edit_bodies"][0]
+		assert f"<!-- ai:security-audit-last-sha:{last_audited_sha} -->" in partial_body
+		assert "<!-- ai:security-audit-partial-coverage:v1 -->" in partial_body
+
+		state = _security_audit_tracker_state()
+		state["issue_list_responses"][0][0]["body"] = partial_body
+		state["api_responses"] = [[[]]]
+		second_run, second_result = _run_security_audit(state, cwd=repo_dir, extra_env=audit_env)
+		assert second_run.returncode == 0, second_run.stderr
+		assert "scope=full (previous default-branch full scan skipped over-cap text" in second_run.stdout
+		assert "Coverage: partial" in second_result["issue_comment_bodies"][0]
+		assert f"<!-- ai:security-audit-last-sha:{last_audited_sha} -->" in second_result["issue_edit_bodies"][0]
+
+		subprocess.run(["git", "rm", "large.py"], cwd=repo_dir, check=True, capture_output=True)
+		subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "remove large"], cwd=repo_dir, check=True)
+		new_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_dir, text=True).strip()
+		state = _security_audit_tracker_state()
+		state["issue_list_responses"][0][0]["body"] = second_result["issue_edit_bodies"][0]
+		state["api_responses"] = [[[]]]
+		third_run, third_result = _run_security_audit(state, cwd=repo_dir, extra_env=audit_env)
+		assert third_run.returncode == 0, third_run.stderr
+		assert "scope=full (previous default-branch full scan skipped over-cap text" in third_run.stdout
+		assert f"<!-- ai:security-audit-last-sha:{new_sha} -->" in third_result["issue_edit_bodies"][0]
+		assert "ai:security-audit-partial-coverage:v1" not in third_result["issue_edit_bodies"][0]
+
+
+def test_security_audit_partial_state_persists_before_codex_failure() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-partial-codex-failure-") as td:
+		repo_dir, _base_sha, _head_sha = _oversized_fixture_repo(Path(td))
+		state = _security_audit_tracker_state()
+		state["api_responses"] = [[[]]]
+		proc, result = _run_security_audit(state, cwd=repo_dir, extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES": "1048576",
+			"MOCK_CODEX_EXIT_CODE": "1",
+		})
+		assert proc.returncode != 0
+		assert result.get("codex_calls")
+		assert any("ai:security-audit-partial-coverage:v1" in body for body in result["issue_edit_bodies"])
+		assert result.get("issue_comment_bodies", []) == []
+
+
+def test_security_audit_full_scan_binary_over_cap_still_advances_marker() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-oversized-binary-") as td:
+		repo_dir, _base_sha, _head_sha = _git_fixture_repo(Path(td))
+		(repo_dir / "photo.jpg").write_bytes(b"\x00" + b"x" * (3 * 1024 * 1024))
+		subprocess.run(["git", "add", "photo.jpg"], cwd=repo_dir, check=True)
+		subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "binary"], cwd=repo_dir, check=True)
+		head_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_dir, text=True).strip()
 		state = _security_audit_tracker_state()
 		state["api_responses"] = [[[]]]
 		proc, result = _run_security_audit(state, cwd=repo_dir, extra_env={
@@ -2117,10 +2297,10 @@ def test_security_audit_full_scan_oversized_cap_reports_coverage_note() -> None:
 			"SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES": "1048576",
 		})
 		assert proc.returncode == 0, proc.stderr
-		assert "phase=oversized-scope" not in proc.stderr
-		assert result.get("codex_calls")
-		comment = result["issue_comment_bodies"][0]
-		assert "Coverage note: 1 tracked files over 2 MiB were not inspected" in comment and "`large.py`" in comment
+		assert "Coverage note: 1 tracked files over 2 MiB" in result["issue_comment_bodies"][0]
+		assert "Coverage: partial" not in result["issue_comment_bodies"][0]
+		assert "coverage=partial" not in proc.stdout
+		assert any(f"ai:security-audit-last-sha:{head_sha}" in body for body in result["issue_edit_bodies"])
 
 
 def test_security_audit_no_oversized_file_has_no_tracker_coverage_lines() -> None:
@@ -2407,6 +2587,186 @@ def test_security_audit_target_ref_requires_explicit_range_and_issues_mode() -> 
 	assert proc.returncode == 1
 	assert "SECURITY_AUDIT_TARGET_REF requires SECURITY_AUDIT_DIFF_BASE" in proc.stderr
 	assert not final_state.get("codex_calls")
+
+
+# --- Claude engine (SECURITY_AUDIT role) with codex fallback ----------------
+
+
+def _claude_engine_audit(tmp_path: Path, *, claude_env: dict | None = None, accounts: tuple[str, ...] = ("ACCT1",), fixture=None) -> tuple[subprocess.CompletedProcess[str], dict, dict]:
+	repo_dir, base_sha, head_sha = (fixture or _git_fixture_repo)(tmp_path)
+	output_path = tmp_path / "findings.json"
+	proc, state = _run_security_audit(
+		{},
+		cwd=repo_dir,
+		codex_output=json.dumps([_finding_payload("codex-finding", file_path="file_b.py")]),
+		claude_accounts=accounts,
+		extra_env={
+			"SECURITY_AUDIT_SUPPORT_DIR": str(REPO_ROOT),
+			"SECURITY_AUDIT_OUTPUT_MODE": "findings-json",
+			"SECURITY_AUDIT_FINDINGS_OUT": str(output_path),
+			"SECURITY_AUDIT_DIFF_BASE": base_sha,
+			"SECURITY_AUDIT_DIFF_HEAD": head_sha,
+			"AI_ENGINE_SECURITY_AUDIT": "claude",
+			"MOCK_CLAUDE_RESULT": json.dumps([_finding_payload("claude-finding", file_path="file_b.py")]),
+			**(claude_env or {}),
+		},
+	)
+	payload = json.loads(state["security_audit_findings_output"]) if "security_audit_findings_output" in state else {}
+	return proc, state, payload
+
+
+def _kept_ids(payload: dict) -> list[str]:
+	return [finding["finding_id"] for finding in payload.get("findings", [])]
+
+
+def test_security_audit_claude_engine_success_skips_codex() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-ok-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td))
+		assert proc.returncode == 0, proc.stderr
+		assert "security-audit: engine=claude" in proc.stdout
+		assert "AI_ENGINE_SELECTED role=SECURITY_AUDIT engine=claude model=claude-opus-5-5 effort=high" in proc.stderr
+		assert "AI_ENGINE_FALLBACK" not in proc.stderr
+		assert not state.get("codex_calls")
+		assert len(state.get("claude_calls", [])) == 1
+		argv = state["claude_calls"][0]
+		assert argv[argv.index("--model") + 1] == "claude-opus-5-5"
+		assert argv[argv.index("--effort") + 1] == "high"
+		# Read profile: no shell and no edit tools.
+		assert argv[argv.index("--tools") + 1] == "Read,Grep,Glob"
+		assert "Audit scope" in state["claude_stdin"][0]
+		# The audited code is untrusted: no job credential reaches the agent.
+		assert state["claude_secret_env"] == [[]]
+		assert _kept_ids(payload) == ["claude-finding"]
+
+
+def test_security_audit_claude_engine_accepts_one_outer_json_fence() -> None:
+	fenced = "```json\n" + json.dumps([_finding_payload("fenced-finding", file_path="file_b.py")]) + "\n```"
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-fence-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_RESULT": fenced})
+		assert proc.returncode == 0, proc.stderr
+		assert "security-audit: engine=claude" in proc.stdout
+		assert not state.get("codex_calls")
+		assert _kept_ids(payload) == ["fenced-finding"]
+
+
+def test_security_audit_claude_engine_clean_result_is_clean_without_codex() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-clean-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_RESULT": "[]"})
+		assert proc.returncode == 0, proc.stderr
+		assert "security-audit: engine=claude" in proc.stdout
+		assert not state.get("codex_calls")
+		assert payload["findings"] == [] and payload["counts"]["kept"] == 0
+
+
+def _assert_codex_fallback(proc, state: dict, payload: dict, reason: str, *, claude_called: bool) -> None:
+	assert proc.returncode == 0, proc.stderr
+	assert f"AI_ENGINE_FALLBACK role=SECURITY_AUDIT reason={reason}" in proc.stderr
+	assert "security-audit: engine=codex" in proc.stdout
+	assert bool(state.get("claude_calls")) is claude_called
+	assert len(state.get("codex_calls", [])) == 1
+	assert "--model" in state["codex_calls"][0]
+	assert state["codex_calls"][0][state["codex_calls"][0].index("--model") + 1] == "openai/gpt-6-sol"
+	assert _kept_ids(payload) == ["codex-finding"]
+
+
+def test_security_audit_claude_fallback_no_account() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-noacct-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), accounts=())
+		_assert_codex_fallback(proc, state, payload, "no_credential", claude_called=False)
+
+
+def test_security_audit_claude_fallback_all_accounts_over_usage_gate() -> None:
+	# The pool step drops every account at or above gate_utilization (0.9)
+	# and reports all_gated; the audit must not start Claude at all.
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-gated-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"CLAUDE_POOL_REASON": "all_gated"})
+		_assert_codex_fallback(proc, state, payload, "all_gated", claude_called=False)
+
+
+def test_security_audit_claude_fallback_every_account_usage_limited() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-limit-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), accounts=("ACCT1", "ACCT2"), claude_env={"MOCK_CLAUDE_MODE": "limit"})
+		_assert_codex_fallback(proc, state, payload, "all_accounts_failed", claude_called=True)
+		assert len(state["claude_calls"]) == 2
+
+
+def test_security_audit_claude_fallback_crash() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-crash-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_MODE": "crash"})
+		_assert_codex_fallback(proc, state, payload, "crashed_rc_1", claude_called=True)
+
+
+def test_security_audit_claude_fallback_timeout() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-timeout-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_MODE": "timeout"})
+		_assert_codex_fallback(proc, state, payload, "timeout", claude_called=True)
+
+
+def test_security_audit_claude_fallback_malformed_missing_and_wrong_shape() -> None:
+	cases = (
+		("not json at all", "malformed_output"),
+		("Here are the findings:\n```json\n[]\n```", "malformed_output"),
+		("```json\n[]\n```\n```json\n[]\n```", "malformed_output"),
+		# Only a ```json fence is stripped; an unlabeled fence falls back.
+		("```\n[]\n```", "malformed_output"),
+		("", "missing_output"),
+		(json.dumps({"findings": []}), "schema_mismatch"),
+		(json.dumps(["not an object"]), "schema_mismatch"),
+	)
+	for result_text, reason in cases:
+		with tempfile.TemporaryDirectory(prefix="security-audit-claude-bad-") as td:
+			proc, state, payload = _claude_engine_audit(Path(td), claude_env={"MOCK_CLAUDE_RESULT": result_text})
+			_assert_codex_fallback(proc, state, payload, reason, claude_called=True)
+
+
+def test_security_audit_codex_engine_or_codex_label_never_starts_claude() -> None:
+	for claude_env in ({"AI_ENGINE_SECURITY_AUDIT": "codex"}, {"AI_ENGINE_SECURITY_AUDIT": "", "AI_ENGINE_LABELS": '["ai:codex"]'}):
+		with tempfile.TemporaryDirectory(prefix="security-audit-codex-engine-") as td:
+			proc, state, payload = _claude_engine_audit(Path(td), claude_env=claude_env)
+			assert proc.returncode == 0, proc.stderr
+			assert "security-audit: engine=codex" in proc.stdout
+			assert "AI_ENGINE_FALLBACK" not in proc.stderr
+			assert not state.get("claude_calls")
+			assert _kept_ids(payload) == ["codex-finding"]
+
+
+def test_security_audit_role_default_runs_claude() -> None:
+	# No AI_ENGINE_SECURITY_AUDIT override: the checked-in engine config decides.
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-default-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), claude_env={"AI_ENGINE_SECURITY_AUDIT": ""})
+		assert proc.returncode == 0, proc.stderr
+		assert "AI_ENGINE_SELECTED role=SECURITY_AUDIT engine=claude" in proc.stderr
+		assert "source=default" in proc.stderr
+		assert not state.get("codex_calls")
+		assert _kept_ids(payload) == ["claude-finding"]
+
+
+def test_security_audit_claude_engine_mounts_oversized_chunks() -> None:
+	with tempfile.TemporaryDirectory(prefix="security-audit-claude-oversized-") as td:
+		proc, state, payload = _claude_engine_audit(Path(td), fixture=_oversized_fixture_repo, claude_env={"MOCK_CLAUDE_RESULT": "[]"})
+		assert proc.returncode == 0, proc.stderr
+		assert "security-audit: engine=claude" in proc.stdout
+		assert "large.py (" in state["claude_stdin"][0]
+		assert any(mount.get("dst", "").endswith("/oversized-chunks") for mount in state["claude_mounts"][0])
+		assert payload["coverage"]["scoped_oversized_chunked"] == ["large.py"]
+
+
+def test_security_audit_workflow_wires_claude_engine_with_codex_kept() -> None:
+	content = WORKFLOW_PATH.read_text(encoding="utf-8")
+	assert "id-token: write" in content
+	assert "ai_engine_for_role SECURITY_AUDIT" in content
+	assert "uses: ./.github/actions/install-claude" in content
+	assert "uses: ./.github/actions/claude-pool-token" in content
+	assert "AI_ENGINE_SECURITY_AUDIT: ${{ steps.ai_engine.outputs.engine || 'codex' }}" in content
+	assert "CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || '' }}" in content
+	# The codex fallback path stays intact.
+	assert "uses: ./.github/actions/install-codex" in content
+	assert '--model "openai/gpt-6-sol"' in content
+	poll = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
+	assert "SECURITY_JUDGE RB_JUDGE SECURITY_AUDIT; do" in poll
+	assert "CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || '' }}" in poll
+	process = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	assert 'AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" \\\n    bash scripts/codex_heartbeat.sh \\\n      --phase "orchestrate-security-pass"' in process
 
 
 def main() -> int:

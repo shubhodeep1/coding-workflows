@@ -15,7 +15,9 @@ run-name: ${{ inputs.gate_cycle_id != '' && format('Test & Mark Stable Release [
       test_repo:
         description: >
           Repository to run E2E smoke test on (owner/repo).
-          Defaults to this repository. The target repo must have
+          Defaults to this repository. Any other repository must be
+          listed in .github/ai/smoke_test_repos.json on the default
+          branch (the `source` job rejects it otherwise), and must have
           the internal/consumer workflow wrappers installed.
         required: false
         type: string
@@ -155,33 +157,164 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   source:
     runs-on: ubuntu-latest
-    timeout-minutes: 1
+    timeout-minutes: 3
     outputs:
       branch: ${{ steps.detect.outputs.branch }}
     steps:
+      # The dispatch ref is writer-controlled (a branch may be named
+      # `$(...)`): it reaches the shell only through env. The release path
+      # requires refs/heads/stable exactly, which also rejects the `stable`
+      # tag.
       - name: Validate dispatch ref
         id: detect
         env:
           GATE_ONLY: ${{ inputs.gate_only }}
+          DISPATCH_REF: ${{ github.ref }}
+          DISPATCH_REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          REF="${{ github.ref_name }}"
           if [ "${GATE_ONLY}" = "true" ]; then
             # Gate-only runs never tag or release, so any ref is safe: the
             # test jobs check out the dispatched commit (github.sha, the tip
             # of this ref at dispatch time) and the release/sync-to-main jobs
             # are skipped by their `!inputs.gate_only` conditions.
-            echo "Dispatched from '${REF}' in gate_only mode — test jobs only, no release"
-            echo "branch=${REF}" >> "$GITHUB_OUTPUT"
+            printf "Dispatched from '%s' in gate_only mode — test jobs only, no release\n" "${DISPATCH_REF_NAME}"
+            printf 'branch=%s\n' "${DISPATCH_REF_NAME}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ "$REF" != "stable" ]; then
-            echo "::error::test-and-mark-stable.yml must be dispatched from the 'stable' branch (got '${REF}')."
+          if [ "${DISPATCH_REF}" != "refs/heads/stable" ]; then
+            printf "::error::test-and-mark-stable.yml must be dispatched from the 'stable' branch (refs/heads/stable; got '%s').\n" "${DISPATCH_REF}"
             echo "::error::To promote 'main' to a new stable baseline, run promote-main-to-stable.yml — it fast-forwards stable to main and then dispatches this workflow on stable automatically."
             exit 1
           fi
           echo "Dispatched from 'stable' — proceeding with stable-source release path"
-          echo "branch=stable" >> "$GITHUB_OUTPUT"
+          printf 'branch=stable\n' >> "$GITHUB_OUTPUT"
+
+      # Writer-controlled github.sha must be the stable tip or an ancestor of
+      # it before any later job checks it out (the release job does so with
+      # GH_PAT and runs its scripts). This step runs no repository code: it
+      # never checks anything out and uses github.token read-only.
+      - name: Verify dispatched commit is on stable
+        id: verify_commit
+        if: ${{ !inputs.gate_only }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISPATCH_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if ! [[ "${DISPATCH_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            printf "::error::Dispatched commit '%s' is not a 40-character hex SHA; refusing to release.\n" "${DISPATCH_SHA}"
+            exit 1
+          fi
+          backoff="${RELEASE_SOURCE_VERIFY_BACKOFF_SECONDS:-2}"
+          case "${backoff}" in ''|*[!0-9]*) backoff=2 ;; esac
+          # Bounded retry; only the successful attempt's stdout is used
+          # (gh api prints error bodies to stdout, #5495).
+          release_source_api() {
+            local attempt=1 delay="${backoff}" out=""
+            while [ "${attempt}" -le 3 ]; do
+              if out="$(gh api "$@")"; then
+                printf '%s' "${out}"
+                return 0
+              fi
+              if [ "${attempt}" -lt 3 ]; then
+                echo "::warning::gh api $1 failed (attempt ${attempt}/3); retrying in ${delay}s." >&2
+                sleep "${delay}"
+                delay=$((delay * 2))
+              fi
+              attempt=$((attempt + 1))
+            done
+            return 1
+          }
+          # GitHub API audit (§14): the source job makes no other API call to
+          # extend, and scripts/gh_helpers.sh is not available because
+          # checking it out would run repository code before this trust check.
+          # heads/ is fully qualified: `stable` is also a tag.
+          if ! STABLE_TIP="$(release_source_api "repos/${GITHUB_REPOSITORY}/git/ref/heads/stable" --jq '.object.sha')"; then
+            echo "::error::Could not read the stable branch tip after 3 attempts; refusing to release an unverified commit."
+            exit 1
+          fi
+          if ! [[ "${STABLE_TIP}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The stable branch tip lookup returned no valid SHA; refusing to release an unverified commit."
+            exit 1
+          fi
+          if [ "${STABLE_TIP}" = "${DISPATCH_SHA}" ]; then
+            echo "Dispatched commit ${DISPATCH_SHA} is the stable tip — OK"
+            exit 0
+          fi
+          if ! COMPARE_STATUS="$(release_source_api "repos/${GITHUB_REPOSITORY}/compare/${DISPATCH_SHA}...${STABLE_TIP}" --jq '.status')"; then
+            echo "::error::Could not compare ${DISPATCH_SHA} with the stable tip ${STABLE_TIP} after 3 attempts; refusing to release an unverified commit."
+            exit 1
+          fi
+          case "${COMPARE_STATUS}" in
+            identical|ahead)
+              echo "Dispatched commit ${DISPATCH_SHA} is in the history of the stable tip ${STABLE_TIP} — OK"
+              ;;
+            *)
+              printf "::error::RELEASE_UNTESTED_HEAD tested=%s tip=%s compare='%s': the dispatched commit is not in the stable branch history; refusing to release.\n" "${DISPATCH_SHA}" "${STABLE_TIP}" "${COMPARE_STATUS}"
+              exit 1
+              ;;
+          esac
+
+      # Security finding smoke-target-cross-repo-write (issue #6547): every
+      # job that writes to TEST_REPO with GH_PAT (issues, labels, comments,
+      # contents commits, PR closes, workflow dispatches) needs `source`
+      # through `resolve-version`, so this one fail-closed check covers all
+      # of them. A non-default target must be listed in the allowlist on the
+      # protected default branch; the dispatched ref is not trusted because
+      # gate_only runs accept any ref. Uses github.token, never GH_PAT.
+      - name: Validate smoke-test target repository
+        id: validate-test-repo
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TEST_REPO_INPUT: ${{ inputs.test_repo }}
+          SOURCE_REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SMOKE_TEST_REPO_ALLOWLIST_PATH: .github/ai/smoke_test_repos.json
+        run: |
+          set -euo pipefail
+          smoke_allowlist_path="${SMOKE_TEST_REPO_ALLOWLIST_PATH:-.github/ai/smoke_test_repos.json}"
+          smoke_default_branch="${DEFAULT_BRANCH:-main}"
+          smoke_repo_input="${TEST_REPO_INPUT:-}"
+          smoke_repo_regex='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+          if [ -z "${smoke_repo_input}" ]; then
+            echo "SMOKE_TEST_REPO_ALLOWLIST outcome=allowed reason=default repo=${SOURCE_REPO}"
+            exit 0
+          fi
+          if ! [[ "${smoke_repo_input}" =~ ${smoke_repo_regex} ]]; then
+            echo "::error::test_repo must be empty or match owner/repo."
+            echo "SMOKE_TEST_REPO_ALLOWLIST outcome=rejected reason=invalid_format"
+            exit 1
+          fi
+          smoke_repo_lower="$(printf '%s' "${smoke_repo_input}" | tr '[:upper:]' '[:lower:]')"
+          smoke_source_lower="$(printf '%s' "${SOURCE_REPO}" | tr '[:upper:]' '[:lower:]')"
+          if [ "${smoke_repo_lower}" = "${smoke_source_lower}" ]; then
+            echo "SMOKE_TEST_REPO_ALLOWLIST outcome=allowed reason=self repo=${smoke_repo_input}"
+            exit 0
+          fi
+          smoke_allowlist_file="$(mktemp)"
+          trap 'rm -f "${smoke_allowlist_file}"' EXIT
+          if ! gh api -H "Accept: application/vnd.github.raw+json" \
+              "repos/${SOURCE_REPO}/contents/${smoke_allowlist_path}?ref=${smoke_default_branch}" \
+              > "${smoke_allowlist_file}" 2>/dev/null; then
+            echo "::error::Could not read ${smoke_allowlist_path} from the '${smoke_default_branch}' branch; refusing to run the smoke test against ${smoke_repo_input}."
+            echo "SMOKE_TEST_REPO_ALLOWLIST outcome=rejected reason=allowlist_unavailable repo=${smoke_repo_input}"
+            exit 1
+          fi
+          if ! jq -e 'type == "array" and all(.[]; type == "string" and test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"))' \
+              "${smoke_allowlist_file}" >/dev/null 2>&1; then
+            echo "::error::${smoke_allowlist_path} on '${smoke_default_branch}' must be a JSON array of owner/repo strings."
+            echo "SMOKE_TEST_REPO_ALLOWLIST outcome=rejected reason=allowlist_malformed repo=${smoke_repo_input}"
+            exit 1
+          fi
+          if jq -e --arg r "${smoke_repo_lower}" 'any(.[]; ascii_downcase == $r)' \
+              "${smoke_allowlist_file}" >/dev/null 2>&1; then
+            echo "SMOKE_TEST_REPO_ALLOWLIST outcome=allowed reason=listed repo=${smoke_repo_input}"
+            exit 0
+          fi
+          echo "::error::test_repo '${smoke_repo_input}' is not this repository and is not listed in ${smoke_allowlist_path} on the '${smoke_default_branch}' branch. Add it through a reviewed pull request, or leave test_repo empty."
+          echo "SMOKE_TEST_REPO_ALLOWLIST outcome=rejected reason=not_listed repo=${smoke_repo_input}"
+          exit 1
 
   # ──────────────────────────────────────────────────────────────────
   # Job 0: Resolve version — auto-increment patch if not provided
@@ -305,6 +438,8 @@ jobs:
       # This diagnostic runs after checkout's main step and before
       # checkout's post-step cleanup, then re-executes the same git
       # operations to isolate the failing command.
+      # Print config keys only: values can include checkout's encoded
+      # authorization header (security finding #6531).
       # Remove after root-cause is identified and a targeted fix lands.
       - &git-checkout-diag
         name: git diagnostic (checkout exit-128 probe)
@@ -313,8 +448,8 @@ jobs:
           set +e
           echo "=== git diagnostic: simulating checkout post-step operations ==="
           git --version
-          echo "--- config (first 200) ---"
-          git config --list --show-origin 2>&1 | head -n 200
+          echo "--- config keys (first 200; values withheld) ---"
+          git config --list --name-only --show-origin 2>&1 | head -n 200
           echo "--- status / head ---"
           git status 2>&1; echo "status_rc=$?"
           git log -1 --oneline 2>&1; echo "log_rc=$?"
@@ -445,6 +580,9 @@ jobs:
       - name: Validate prerequisites
         run: |
           set -euo pipefail
+          # Phase 4b caps its queue-time deadline extension against the
+          # job's start, so the serial budget below still holds.
+          echo "E2E_JOB_STARTED_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
           if [ -z "${GH_TOKEN}" ]; then
             echo "::error::GH_PAT secret is required for E2E tests (GITHUB_TOKEN cannot trigger downstream workflows)"
             exit 1
@@ -523,6 +661,26 @@ jobs:
         id: hot-poller-guard
         run: |
           set -euo pipefail
+          # The guard's test module imports pytest, and nothing earlier in
+          # this job installs it (run 37624152181 failed with
+          # ModuleNotFoundError: No module named 'pytest'). Install and
+          # verify it here, failing closed, with the same pip + apt
+          # sequence Phase 4b uses.
+          PYTEST_INSTALL_LOG="${RUNNER_TEMP:-/tmp}/hot_poller_pytest_install.log"
+          : > "${PYTEST_INSTALL_LOG}"
+          python3 -m pip install --quiet pytest >>"${PYTEST_INSTALL_LOG}" 2>&1 || {
+            echo "::warning::pip install pytest failed; trying apt fallback"
+            sudo apt-get update -qq >>"${PYTEST_INSTALL_LOG}" 2>&1 || true
+            sudo apt-get install -y --no-install-recommends python3-pytest >>"${PYTEST_INSTALL_LOG}" 2>&1 || true
+          }
+          if ! python3 -c "import pytest" 2>/dev/null; then
+            echo "::error::pytest is not importable after pip + apt install attempts; cannot run hot orchestrate-poll guard"
+            echo "::group::pytest install diagnostics"
+            cat "${PYTEST_INSTALL_LOG}" || true
+            echo "::endgroup::"
+            echo "status=pytest_unavailable" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
           echo "Running hot orchestrate-poll regression guard..."
           if PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py test_implementation_failed_reissue_preserves_dependency_gates_and_pending_defs; then
             echo "status=success" >> "$GITHUB_OUTPUT"
@@ -1560,22 +1718,22 @@ jobs:
           echo "bait_sha=${BAIT_SHA}" >> "$GITHUB_OUTPUT"
 
           # Emit the bait commit's timestamp (ISO-8601 UTC, e.g.
-          # 2026-06-10T00:11:43Z) so wait-review (Phase 4) can recognise
-          # the in-flight PR-open review run as a valid bait review.
+          # 2026-06-10T00:11:43Z) so wait-review (Phase 4) can consider
+          # the in-flight PR-open review run for bait coverage.
           # That run is TRIGGERED on the pre-bait head SHA, so its
           # run-level head_sha never equals BAIT_SHA and the strict
-          # head_sha pin excludes it — yet because review_autofix.yml
-          # checks out the live branch tip at runtime, a review still
-          # running when the bait lands actually reviews+edits the bait
-          # tree (confirmed by INITIAL_HEAD_SHA=<bait> in its log). The
+          # head_sha pin excludes it. It may have checked out the live
+          # branch before OR after the bait push; only its job log's
+          # Captured INITIAL_HEAD_SHA proves which tree it reviewed. The
           # only thing distinguishing it from the historical
           # stale-implement-review false match (run 25147636528, which
           # COMPLETED before the bait) is whether it was still in flight
           # at bait-injection time. wait-review uses this timestamp as
           # the lower bound: a run with created_at <= bait_created_at
           # and updated_at >= bait_created_at was in flight when the
-          # bait landed and is an acceptable bait review; a run that
-          # finished before the bait is not. committer.date is the
+          # bait landed and is a candidate, not proof of coverage (run
+          # 37395952357). A run that finished before the bait is not.
+          # committer.date is the
           # GitHub-assigned push time for the Contents-API commit.
           # Invalid/malformed values are cleared to empty so wait-review
           # falls back to the strict head_sha pin instead of broadening
@@ -1610,7 +1768,8 @@ jobs:
           # it fires) still serves as the primary path; if neither
           # fires, wait-review surfaces no_review_triggered as before.
           # --repo "${TEST_REPO}" is required because this job supports
-          # dispatching E2E against an arbitrary `inputs.test_repo`;
+          # dispatching E2E against any allowlisted `inputs.test_repo`
+          # (the `source` job's validate-test-repo step);
           # without it, `gh workflow run` would target the default repo
           # from the checkout/CLI context (shubhodeep1/coding-workflows
           # itself, per the early checkout at line 316) instead of the
@@ -1654,9 +1813,9 @@ jobs:
           BAIT_SHA: ${{ steps.inject-bait.outputs.bait_sha }}
           # ISO-8601 UTC timestamp of the bait commit (see inject-bait).
           # Lower bound for recognising the in-flight PR-open review run
-          # as a valid bait review even though its run-level head_sha is
-          # the pre-bait SHA: a review still running when the bait landed
-          # checked out the live (post-bait) tip and reviewed+edited it.
+          # as a candidate even though its run-level head_sha is the
+          # pre-bait SHA. The job's Captured INITIAL_HEAD_SHA must still
+          # prove that the checkout included the bait.
           # Empty when no bait was injected (status != injected); the jq
           # below then leaves the strict head_sha pin untouched because
           # the date comparison short-circuits to false on an empty bound.
@@ -1729,8 +1888,106 @@ jobs:
           # +10m, the bait run was cancelled at +10m22s, and wait-review
           # then idled for the full REVIEW_TIMEOUT before failing.
           PIN_SHA="${BAIT_SHA:-}"
+          BAIT_UNCOVERED_RUN_IDS=""
+          declare -A BAIT_REVIEW_COVERAGE_CACHE=()
+          declare -A BAIT_REVIEW_UNKNOWN_COUNTS=()
 
           . ./scripts/comprehensive_test_and_release_gh_api.sh
+
+          # The runs API reports the trigger SHA, not the SHA checked out by
+          # codex-agent. Only a completed job log can prove leg (b) coverage.
+          # Cache conclusive verdicts; an API/log failure stays retryable.
+          review_run_checked_out_bait() {
+            local coverage_run_id="$1" coverage_jobs="" coverage_job_id=""
+            local coverage_log="" coverage_checked="" coverage_status="" coverage_display="none"
+            local coverage_verdict="unknown" coverage_reason="jobs_unavailable"
+            local coverage_read=0 coverage_failed=0
+            if ! [[ "$coverage_run_id" =~ ^[0-9]+$ ]]; then
+              BAIT_REVIEW_VERDICT="unknown"
+              echo "E2E_BAIT_REVIEW_COVERAGE run=invalid verdict=unknown checked_out=none reason=invalid_run_id"
+              return
+            fi
+            if [ -n "${BAIT_REVIEW_COVERAGE_CACHE[$coverage_run_id]:-}" ]; then
+              BAIT_REVIEW_VERDICT="${BAIT_REVIEW_COVERAGE_CACHE[$coverage_run_id]}"
+              return
+            fi
+            if [ "$RUN_STATUS" = "in_progress" ] && [ -n "${JOBS_JSON:-}" ] && [ "${RUN_ID:-}" = "$coverage_run_id" ]; then
+              coverage_jobs="$JOBS_JSON"
+            else
+              coverage_jobs=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs/${coverage_run_id}/jobs?per_page=10" || echo "")
+            fi
+            if [ -n "$coverage_jobs" ] && printf '%s' "$coverage_jobs" | jq -e '(.jobs | type == "array") and (.jobs | length > 0) and (.total_count == null or .total_count <= (.jobs | length))' >/dev/null 2>&1; then
+              while IFS= read -r coverage_job_id; do
+                coverage_log="$(mktemp)"
+                if ! gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/jobs/${coverage_job_id}/logs" > "$coverage_log"; then
+                  coverage_failed=1
+                else
+                  coverage_read=$((coverage_read + 1))
+                  # Match only a resolved 40-hex SHA, never the echoed shell
+                  # source line containing a literal ${INITIAL_HEAD_SHA}.
+                  coverage_checked=$(grep -am1 -oE 'Captured INITIAL_HEAD_SHA=[0-9a-fA-F]{40}([^0-9a-fA-F]|$)' "$coverage_log" | grep -m1 -oE '[0-9a-fA-F]{40}' || true)
+                fi
+                rm -f "$coverage_log"
+                if [ -n "$coverage_checked" ]; then break; fi
+              done < <(printf '%s' "$coverage_jobs" | jq -r '.jobs[] | select(.status == "completed" and .conclusion != "skipped") | .id | select(type == "number" and . > 0 and . == floor) | tostring')
+              if [ -n "$coverage_checked" ]; then
+                if [ "${coverage_checked,,}" = "${BAIT_SHA,,}" ]; then
+                  coverage_verdict="covered"; coverage_reason="bait_sha"
+                else
+                  coverage_status=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/compare/${BAIT_SHA}...${coverage_checked}" --jq '.status' || echo "")
+                  case "$coverage_status" in
+                    ahead|identical) coverage_verdict="covered"; coverage_reason="bait_ancestor" ;;
+                    behind|diverged) coverage_verdict="not_covered"; coverage_reason="pre_bait_checkout" ;;
+                    *) coverage_reason="compare_unavailable" ;;
+                  esac
+                fi
+              elif [ "$coverage_failed" -eq 1 ] || [ "$coverage_read" -eq 0 ]; then
+                coverage_reason="logs_unavailable"
+              elif [ "$RUN_STATUS" = "completed" ]; then
+                coverage_verdict="not_covered"; coverage_reason="no_checkout_marker"
+              else
+                coverage_reason="checkout_pending"
+              fi
+            fi
+            BAIT_REVIEW_VERDICT="$coverage_verdict"
+            if [ "$coverage_verdict" != "unknown" ]; then
+              BAIT_REVIEW_COVERAGE_CACHE[$coverage_run_id]="$coverage_verdict"
+            fi
+            if [ -n "$coverage_checked" ]; then coverage_display="${coverage_checked:0:7}"; fi
+            echo "E2E_BAIT_REVIEW_COVERAGE run=${coverage_run_id} verdict=${coverage_verdict} checked_out=${coverage_display} reason=${coverage_reason}"
+          }
+
+          # A completed pre-bait-triggered run may finish after bait injection
+          # without ever checking out bait (run 37395952357). Apply this gate
+          # before *every* exit that reports a review run, including the
+          # in-progress failed-step and editor-noop shortcuts.
+          require_bait_review_coverage() {
+            local candidate_head=""
+            if [ -z "${BAIT_SHA:-}" ]; then return 0; fi
+            candidate_head=$(printf '%s' "$REVIEW_RUN" | jq -r '.head_sha // ""')
+            if [ "$candidate_head" = "$PIN_SHA" ] || [ "$candidate_head" = "$BAIT_SHA" ]; then return 0; fi
+            review_run_checked_out_bait "$RUN_ID"
+            if [ "$BAIT_REVIEW_VERDICT" = "covered" ]; then return 0; fi
+            if [ "$BAIT_REVIEW_VERDICT" = "not_covered" ]; then
+              echo "::warning::Review run ${RUN_ID} checked out a pre-bait head or had no checkout marker; not a review of the bait"
+              BAIT_UNCOVERED_RUN_IDS="${BAIT_UNCOVERED_RUN_IDS:+${BAIT_UNCOVERED_RUN_IDS},}${RUN_ID}"
+              LAST_ACTIVITY=$NOW
+              PREV_STATE=""
+            elif [ "$RUN_STATUS" = "completed" ]; then
+              # A completed run outranks the queued bait-head run in the
+              # selector, so persistently unverifiable coverage must not pin
+              # Phase 4 to it. Exclude it (never accept it) after 3 unknowns.
+              BAIT_REVIEW_UNKNOWN_COUNTS[$RUN_ID]=$(( ${BAIT_REVIEW_UNKNOWN_COUNTS[$RUN_ID]:-0} + 1 ))
+              if [ "${BAIT_REVIEW_UNKNOWN_COUNTS[$RUN_ID]}" -ge 3 ]; then
+                echo "::warning::Review run ${RUN_ID} bait coverage stayed unverifiable; waiting for a bait-head review instead"
+                BAIT_UNCOVERED_RUN_IDS="${BAIT_UNCOVERED_RUN_IDS:+${BAIT_UNCOVERED_RUN_IDS},}${RUN_ID}"
+                PREV_STATE=""
+              fi
+            fi
+            sleep "$POLL_INTERVAL"
+            ELAPSED=$((ELAPSED + POLL_INTERVAL))
+            return 1
+          }
 
           # Give the review workflow a moment to start
           sleep 5
@@ -1807,9 +2064,10 @@ jobs:
               # Leg (b) recovers the original PR-open review run: it is
               # triggered on the pre-bait head SHA (so its run-level
               # head_sha never equals BAIT_SHA and leg (a) misses it),
-              # but because review_autofix.yml checks out the live branch
-              # tip at runtime, a review still running when the bait
-              # landed actually reviews+edits the bait tree. Crucially,
+              # but its checkout may predate the bait push. Before
+              # accepting its result, verify Captured INITIAL_HEAD_SHA
+              # from its job log includes the bait (run 37395952357).
+              # Crucially,
               # the bait-SHA runs in leg (a) all serialise behind that
               # original run in review_autofix.yml's `pr-autofix-${PR}`
               # concurrency group (cancel-in-progress: false), so when
@@ -1835,9 +2093,9 @@ jobs:
               # the loop fell through to the queued-sibling fallback, and
               # the phase aged out. A run created at/before the bait that
               # is STILL in_progress was necessarily in flight when the
-              # bait landed (it has not finished and review_autofix checks
-              # out the live tip), so status alone is a sound in-flight
-              # signal independent of the frozen timestamp.
+              # bait landed (it has not finished), so status alone is a
+              # sound candidate signal independent of the frozen timestamp,
+              # but never proof that the checkout saw the bait.
               #
               # Both legs still exclude the historical stale-implement-
               # review false match (run 25147636528) which COMPLETED
@@ -1870,7 +2128,7 @@ jobs:
               # run 35903885958, phantom .github/workflows/review_autofix.yml
               # runs after #4327).
               REVIEW_RUN=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&per_page=100" \
-                --jq "[.workflow_runs[] | select(.name | test(\"Review|review|autofix|self-healing\"; \"i\")) | select((.event == \"dynamic\" or (.name | test(\"copilot\"; \"i\"))) | not) | select(.name != .path) | select(.head_sha == \"${PIN_SHA}\" or (\"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\" and (.updated_at >= \"${BAIT_CREATED_AT:-}\" or .status == \"in_progress\")))] as \$m | (\$m | map(select(.status == \"completed\" and .conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | map(select(.status == \"in_progress\" and \"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\")) | sort_by(.created_at) | first) // (\$m | map(select(.status == \"in_progress\")) | sort_by(.created_at) | last) // (\$m | map(select(.conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | sort_by(.created_at) | last)" || echo "")
+                --jq "[.workflow_runs[] | select(.name | test(\"Review|review|autofix|self-healing\"; \"i\")) | select((.event == \"dynamic\" or (.name | test(\"copilot\"; \"i\"))) | not) | select(.name != .path) | select(.head_sha == \"${PIN_SHA}\" or (\"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\" and (.updated_at >= \"${BAIT_CREATED_AT:-}\" or .status == \"in_progress\"))) | select((.id | tostring) as \$rid | (\"${BAIT_UNCOVERED_RUN_IDS:-}\" | split(\",\") | index(\$rid)) == null)] as \$m | (\$m | map(select(.status == \"completed\" and .conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | map(select(.status == \"in_progress\" and \"${BAIT_CREATED_AT:-}\" != \"\" and .created_at <= \"${BAIT_CREATED_AT:-}\")) | sort_by(.created_at) | first) // (\$m | map(select(.status == \"in_progress\")) | sort_by(.created_at) | last) // (\$m | map(select(.conclusion != \"cancelled\")) | sort_by(.created_at) | last) // (\$m | sort_by(.created_at) | last)" || echo "")
             else
               REVIEW_RUN=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs?branch=${PR_BRANCH}&event=pull_request&per_page=5" \
                 --jq '[.workflow_runs[] | select(.name | test("Review|review|autofix|self-healing"; "i")) | select((.event == "dynamic" or (.name | test("copilot"; "i"))) | not) | select(.name != .path)] | sort_by(.created_at) | last' || echo "")
@@ -1896,11 +2154,13 @@ jobs:
 
               if [ "$RUN_STATUS" = "completed" ]; then
                 if [ "$RUN_CONCLUSION" = "success" ]; then
+                  if ! require_bait_review_coverage; then continue; fi
                   echo "✓ Review & autofix completed successfully"
                   echo "status=success" >> "$GITHUB_OUTPUT"
                   echo "review_run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
                   exit 0
                 elif [ "$RUN_CONCLUSION" = "failure" ]; then
+                  if ! require_bait_review_coverage; then continue; fi
                   echo "::warning::Review workflow completed with failure — this may be acceptable if reviewers found issues"
                   echo "status=completed_with_findings" >> "$GITHUB_OUTPUT"
                   echo "review_run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
@@ -1947,6 +2207,7 @@ jobs:
                   FAILED_STEPS="0"
                 fi
                 if [ "$FAILED_STEPS" -gt 0 ]; then
+                  if ! require_bait_review_coverage; then continue; fi
                   echo "  ⚠ Review run has ${FAILED_STEPS} failed step(s) — main work has failed, cleanup still running"
                   echo "::warning::Review workflow has failed steps while cleanup is still in_progress"
                   echo "status=completed_with_findings" >> "$GITHUB_OUTPUT"
@@ -2056,6 +2317,10 @@ jobs:
                     # workflow-command prefixes verbatim in the raw log
                     # bytes returned by /actions/jobs/{id}/logs.
                     if grep -qaF '::warning::Editor summary contains failure/fallback markers' "$LOG_FILE"; then
+                      if ! require_bait_review_coverage; then
+                        rm -f "$LOG_FILE"
+                        continue
+                      fi
                       # When the editor's no-op was caused by a model
                       # safety-policy refusal (an OpenAI-style "I'm
                       # sorry, but I cannot assist" final-channel
@@ -2750,6 +3015,29 @@ jobs:
           # genuine successful retries. 25 min keeps the upper bound below
           # the orchestrator phase budget while covering the observed P95).
           DEADLINE=$(( $(date +%s) + (EDITOR_RETRY_BUDGET_MINUTES * 60) ))
+          # Time the pinned retry run spends waiting for a runner is not
+          # editor time. Gate run 37395952357's retry run reported
+          # status=queued for about 24 of its 25 minutes and succeeded six
+          # minutes after this deadline. Queued time seen on two consecutive
+          # polls extends the deadline, never past the point that still
+          # leaves Phase 6 (PHASE_TIMEOUT), Phase 7
+          # (PHASE7_WAIT_BUDGET_MINUTES) and the finalization reserve inside
+          # E2E_JOB_TIMEOUT_MINUTES, so the serial budget checked in
+          # "Validate prerequisites" still holds. Without a recorded job
+          # start there is no extension. The cap bounds only the extension:
+          # the base deadline above is never shortened (pre-#6606 behaviour),
+          # so a Phase 4b that starts after the cap gets no extension, not a
+          # smaller budget.
+          RETRY_BASE_DEADLINE="${DEADLINE}"
+          RETRY_DEADLINE_CEILING="${DEADLINE}"
+          if [[ "${E2E_JOB_STARTED_EPOCH:-}" =~ ^[0-9]+$ ]]; then
+            RETRY_DEADLINE_CEILING=$(( E2E_JOB_STARTED_EPOCH + (E2E_JOB_TIMEOUT_MINUTES - PHASE_TIMEOUT - PHASE7_WAIT_BUDGET_MINUTES - E2E_FINALIZATION_RESERVE_MINUTES) * 60 ))
+            if [ "${RETRY_DEADLINE_CEILING}" -lt "${DEADLINE}" ]; then
+              RETRY_DEADLINE_CEILING="${DEADLINE}"
+            fi
+          fi
+          RETRY_QUEUED_SECS=0
+          RETRY_LAST_QUEUED_TS=""
           # Circuit breaker: if fetch_pr_state returns "unknown" (API
           # failure / parse failure) for too many consecutive iterations
           # we're effectively polling blind and the closed-PR guard
@@ -2898,9 +3186,26 @@ jobs:
             if [ "${RETRY_STATUS}" = "completed" ]; then
               break
             fi
+            RETRY_POLL_NOW=$(date +%s)
+            case "${RETRY_STATUS}" in
+              queued|waiting|pending|requested)
+                if [ -n "${RETRY_LAST_QUEUED_TS}" ]; then
+                  RETRY_QUEUED_SECS=$(( RETRY_QUEUED_SECS + RETRY_POLL_NOW - RETRY_LAST_QUEUED_TS ))
+                  DEADLINE=$(( RETRY_BASE_DEADLINE + RETRY_QUEUED_SECS ))
+                  if [ "${DEADLINE}" -gt "${RETRY_DEADLINE_CEILING}" ]; then
+                    DEADLINE="${RETRY_DEADLINE_CEILING}"
+                  fi
+                fi
+                RETRY_LAST_QUEUED_TS="${RETRY_POLL_NOW}"
+                ;;
+              *)
+                RETRY_LAST_QUEUED_TS=""
+                ;;
+            esac
           done
 
           if [ "$(date +%s)" -ge "${DEADLINE}" ] || [ -z "${RETRY_RUN_ID}" ] || [ "${RETRY_STATUS:-}" != "completed" ]; then
+            echo "Retry review run queued for ${RETRY_QUEUED_SECS}s; deadline extended by $(( DEADLINE - RETRY_BASE_DEADLINE ))s (cap $(( RETRY_DEADLINE_CEILING - RETRY_BASE_DEADLINE ))s)."
             echo "::error::Retry review run did not complete within ${EDITOR_RETRY_BUDGET_MINUTES} minutes"
             echo "status=retry_timeout" >> "$GITHUB_OUTPUT"
             exit 1
@@ -3882,8 +4187,9 @@ jobs:
           # fails `no_run` although the cancel wrapper is healthy. Run
           # 35672590166 hit exactly that: the forward-merge of stable into
           # main landed 75 s before the close and rewrote the same hunk of
-          # .ai/.workspace_source_manifest.txt that the smoke PR's workspace
-          # init had regenerated. The scheduled cleanup sweep (#4258) is the
+          # then-tracked .ai/.workspace_source_manifest.txt that the smoke PR's
+          # workspace init had regenerated. New smoke PRs no longer commit it.
+          # The scheduled cleanup sweep (#4258) is the
           # production backstop for such closures, not a substitute for the
           # close trigger, and its observed cadence (median ~12 min) exceeds
           # PHASE7_WAIT_BUDGET_MINUTES, so a conflicted PR would still fail.
@@ -5280,7 +5586,12 @@ jobs:
     needs: [resolve-version]
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The job cap must exceed the dispatch step's 35-minute cap (the
+    # watcher's 1800s registration/completion waits plus poll and retry
+    # headroom) and leave time for the always() soft-error analyser.
+    # At 30 minutes the job was cancelled before the watcher could
+    # report its own timeout (run 37624152181).
+    timeout-minutes: 45
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
@@ -5303,6 +5614,8 @@ jobs:
 
       - name: Dispatch internal-validate.yml standalone
         id: dispatch
+        # 1800s watcher wait + one 20s poll + gh retry backoff headroom.
+        timeout-minutes: 35
         run: |
           set -euo pipefail
           WF_FILE="internal-validate.yml"
@@ -6351,11 +6664,6 @@ jobs:
           echo ""
           echo "Changelog notes:"
           cat "${{ steps.changelog.outputs.notes_file }}"
-
-      # Temporary: reveal which git invocation in checkout's post-step
-      # produces `The process '/usr/bin/git' failed with exit code 128`.
-      # Remove after root-cause is identified and a targeted fix lands.
-      - *git-checkout-diag
 
   # ──────────────────────────────────────────────────────────────────
   # Job 3.5: Sync stable bug fixes back to main

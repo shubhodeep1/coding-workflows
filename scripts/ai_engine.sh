@@ -9,7 +9,8 @@
 #   ai_engine_for_role <role>
 #       Prints `codex` or `claude` and logs
 #       `AI_ENGINE_SELECTED role= engine= model= effort= source=` to stderr.
-#       Order: work-item labels in AI_ENGINE_LABELS (`ai:codex` beats
+#       Order: CLAUDE_FIXER_ENABLED=false for the four review write roles
+#       (codex, Phase 5c), work-item labels in AI_ENGINE_LABELS (`ai:codex` beats
 #       `ai:engine-claude`), AI_ENGINE_<ROLE>, AI_ENGINE, the code default.
 #   ai_engine_model <role> [model_hint]
 #   ai_engine_effort <role> [effort_hint]
@@ -49,12 +50,19 @@
 # Inputs (environment):
 #   AI_ENGINE_LABELS        work-item labels (comma/space list or JSON list)
 #   AI_ENGINE, AI_ENGINE_<ROLE>   `codex` | `claude`
+#   CLAUDE_FIXER_ENABLED    `false` keeps REVIEW_EDITOR, REVIEW_CONSOLIDATOR,
+#                           CONFLICT_RESOLVER and RB_JUDGE on codex (Q35)
 #   AI_ENGINE_MODEL_HINT, AI_ENGINE_EFFORT_HINT   claude_run's D3 hints
 #   CLAUDE_ENGINE_POOL_DIR  account pool written by the token step
 #                           (default ${RUNNER_TEMP}/claude-pool): `order`
 #                           lists account names, best first; `tokens/<NAME>`
 #                           holds each token (0600)
 #   ALLOW_WORKFLOW_EDITS    `true` lifts the .github/workflows deny rules (P5)
+#   AI_ENGINE_READ_ONLY     `true` runs a write role with the read profile
+#   AI_ENGINE_INCLUDE_PATHS newline-separated trusted runtime paths the prompt
+#                           names, passed to the container as --include
+#                           (default empty; the security audit's oversized-
+#                           file export)
 #   SUPPORT_INSTRUCTIONS_FILE   unattended_system_instructions.md
 #
 # The OAuth token never reaches the CLI: scripts/claude_anthropic_relay.py
@@ -69,10 +77,11 @@ _AI_ENGINE_LOADED="true"
 
 _AI_ENGINE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _AI_ENGINE_EXIT_FALLBACK=75
+readonly -a _AI_ENGINE_SANDBOX_ONLY_ROLES=(REVIEW_EDITOR REVIEW_CONSOLIDATOR RB_JUDGE CONFLICT_RESOLVER)
 
 _ai_engine_py()
 {
-	PYTHONDONTWRITEBYTECODE=1 python3 "${_AI_ENGINE_DIR}/claude_engine.py" "$@"
+	PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${_AI_ENGINE_DIR}/claude_engine.py" "$@"
 }
 
 _ai_engine_valid_role()
@@ -94,8 +103,8 @@ ai_engine_for_role()
 		printf 'codex\n'
 		return 0
 	fi
-	engine="$(printf '%s' "${resolved}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["engine"])')" || engine="codex"
-	printf '%s' "${resolved}" | python3 -c '
+	engine="$(printf '%s' "${resolved}" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["engine"])')" || engine="codex"
+	printf '%s' "${resolved}" | python3 -I -c '
 import json, sys
 r = json.load(sys.stdin)
 print("AI_ENGINE_SELECTED role={role} engine={engine} model={model} effort={effort} source={source}".format(**r))
@@ -172,7 +181,7 @@ ai_engine_accounts()
 
 _ai_engine_json_field()
 {
-	python3 -c 'import json,sys; print(json.loads(sys.argv[1])[sys.argv[2]])' "$1" "$2"
+	python3 -I -c 'import json,sys; print(json.loads(sys.argv[1])[sys.argv[2]])' "$1" "$2"
 }
 
 _ai_engine_instructions_file()
@@ -198,6 +207,13 @@ claude_run()
 		echo "::error::claude_run: usage: claude_run <role> <prompt_file> <out_file> <workdir> [session_id]" >&2
 		return 2
 	fi
+	local sandbox_only_role
+	for sandbox_only_role in "${_AI_ENGINE_SANDBOX_ONLY_ROLES[@]}"; do
+		if [ "${role}" = "${sandbox_only_role}" ]; then
+			ai_engine_fallback "${role}" host_run_forbidden
+			return "${_AI_ENGINE_EXIT_FALLBACK}"
+		fi
+	done
 	# The run changes into <workdir>; every path must survive that.
 	workdir="$(cd "${workdir}" && pwd)" || return 2
 	case "${prompt_file}" in /*) ;; *) prompt_file="${PWD}/${prompt_file}" ;; esac
@@ -223,6 +239,11 @@ claude_run()
 	model="$(_ai_engine_json_field "${resolved}" model)"
 	effort="$(_ai_engine_json_field "${resolved}" effort)"
 	profile="$(_ai_engine_json_field "${resolved}" profile)"
+	# Defense in depth: AI_ENGINE_READ_ONLY=true narrows even if resolve
+	# changes; an inherited value only removes tools, never grants them.
+	if [ "${AI_ENGINE_READ_ONLY:-false}" = "true" ]; then
+		profile="read"
+	fi
 	hide_claude_md="$(_ai_engine_py config --key hide_claude_md 2>/dev/null || echo false)"
 	if ! instructions="$(_ai_engine_instructions_file)"; then
 		ai_engine_fallback "${role}" instructions_missing
@@ -268,7 +289,7 @@ claude_run()
 	fi
 	local tools mode isolation_mode
 	case "${profile}" in
-		read) tools="Read,Grep,Glob,Bash"; mode="dontAsk"; isolation_mode="read-only" ;;
+		read) tools="Read,Grep,Glob"; mode="dontAsk"; isolation_mode="read-only" ;;
 		# An explicit list, not "default": the default set loads ~35 tools whose
 		# descriptions push a no-op start-up past the 25,000-token context gate.
 		# Keep in sync with PROFILE_TOOLS["write"] in claude_engine.py.
@@ -285,6 +306,12 @@ claude_run()
 	# The container copy leaves CLAUDE.md out and never writes one back; the
 	# host file is never moved (answer Q19 A).
 	[ "${hide_claude_md}" = "true" ] && isolation_args+=(--hide-claude-md)
+	local include_path
+	while IFS= read -r include_path; do
+		if [ -n "${include_path}" ]; then
+			isolation_args+=(--include "${include_path}")
+		fi
+	done <<< "${AI_ENGINE_INCLUDE_PATHS:-}"
 	# Implement prepares one workspace sandbox per job with the project's
 	# dependencies preinstalled (codex_isolated_exec.sh prepare --deps); a
 	# write role in that job reuses it, as the codex attempts do.

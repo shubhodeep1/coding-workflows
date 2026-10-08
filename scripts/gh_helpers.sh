@@ -25,6 +25,97 @@ if [ "${_GH_HELPERS_LOADED:-}" = "1" ]; then
 fi
 _GH_HELPERS_LOADED=1
 
+# Shared PAT counters are only an estimate of job usage: other jobs may run
+# concurrently. /rate_limit does not debit the primary REST allowance.
+gh_pat_budget()
+{
+	local phase="$1" workflow="$2" job="$3" snapshot_file="$4" response payload header_resource header_remaining header_reset remaining reset used="unknown" previous_remaining previous_reset
+	case "${phase}" in start|end) ;; *) return 1 ;; esac
+	remaining="unknown"
+	reset="unknown"
+	if response="$(gh api -i rate_limit 2>/dev/null)"; then
+		payload="${response}"
+		if [[ "${response}" == *$'\r\n\r\n'* ]]; then
+			payload="${response##*$'\r\n\r\n'}"
+		elif [[ "${response}" == *$'\n\n'* ]]; then
+			payload="${response##*$'\n\n'}"
+		fi
+		read -r remaining reset < <(printf '%s' "${payload}" | jq -r '
+			if (.resources.core.remaining | type) == "number" and
+			   (.resources.core.reset | type) == "number" and
+			   .resources.core.remaining >= 0 and .resources.core.reset > 0 then
+				[(.resources.core.remaining | floor), (.resources.core.reset | floor)] | @tsv
+			else "unknown\tunknown" end' 2>/dev/null || printf 'unknown\tunknown')
+		# Headers describe the authenticated request, not the overview.
+		# Override core only when the response identifies the core resource.
+		header_resource="$(printf '%s\n' "${response}" | tr -d '\r' | grep -im1 '^x-ratelimit-resource:' | cut -d: -f2 | tr -d '[:space:]' || true)"
+		if [ "${header_resource}" = "core" ]; then
+			header_remaining="$(printf '%s\n' "${response}" | tr -d '\r' | grep -im1 '^x-ratelimit-remaining:' | cut -d: -f2 | tr -d '[:space:]' || true)"
+			header_reset="$(printf '%s\n' "${response}" | tr -d '\r' | grep -im1 '^x-ratelimit-reset:' | cut -d: -f2 | tr -d '[:space:]' || true)"
+			if [[ "${header_remaining}" =~ ^[0-9]+$ && "${header_reset}" =~ ^[0-9]+$ ]]; then
+				remaining="${header_remaining}"
+				reset="${header_reset}"
+			fi
+		fi
+	fi
+	if [ "${phase}" = "start" ]; then
+		if [ "${remaining}" != "unknown" ] && [ "${reset}" != "unknown" ]; then
+			printf '%s %s\n' "${remaining}" "${reset}" > "${snapshot_file}" 2>/dev/null || true
+		fi
+	elif [ -r "${snapshot_file}" ]; then
+		read -r previous_remaining previous_reset < "${snapshot_file}" || true
+		if [[ "${previous_remaining:-}" =~ ^[0-9]+$ ]] && [[ "${previous_reset:-}" =~ ^[0-9]+$ ]] &&
+		   [[ "${remaining}" =~ ^[0-9]+$ ]] && [ "${reset}" = "${previous_reset}" ] &&
+		   [ "${previous_remaining}" -ge "${remaining}" ]; then
+			used=$((previous_remaining - remaining))
+		fi
+	fi
+	printf 'GH_PAT_BUDGET phase=%s workflow=%s job=%s remaining=%s reset=%s used_in_job=%s\n' \
+		"${phase}" "${workflow}" "${job}" "${remaining}" "${reset}" "${used}"
+	return 0
+}
+
+# Synchronized job-local PR state for the reviewer and editor watchdogs.
+# With no job-local runner directory, retain the legacy live-read behavior.
+# A cache entry is never used as merge authorization; merge paths still read
+# the current head. A read failure remains an uncached conservative "open".
+gh_review_pr_state()
+{
+	local repo="$1" number="$2" root="${RUNNER_TEMP:-}" cache_file now saved_repo saved_number saved_state expires state
+	if [[ ! "${repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || [[ ! "${number}" =~ ^[1-9][0-9]*$ ]]; then
+		printf 'open\n'
+		return 0
+	fi
+	if [ -z "${root}" ] || ! command -v flock >/dev/null 2>&1; then
+		gh_retry gh api "repos/${repo}/pulls/${number}" --jq .state 2>/dev/null | grep -xE 'open|closed|merged' || echo open
+		return 0
+	fi
+	cache_file="${root}/review_pr_state_${GITHUB_RUN_ID:-local}_${GITHUB_RUN_ATTEMPT:-1}_${repo//\//_}_${number}"
+	(
+		flock -x 9 || { echo open; exit 0; }
+		now="$(date +%s)"
+		if [ -r "${cache_file}" ]; then
+			read -r saved_repo saved_number saved_state expires < "${cache_file}" || true
+			if [ "${saved_repo:-}" = "${repo}" ] && [ "${saved_number:-}" = "${number}" ] &&
+			   [[ "${expires:-}" =~ ^[0-9]+$ ]] && [ "${expires}" -gt "${now}" ] &&
+			   [ "${saved_state:-}" = "open" ]; then
+				printf '%s\n' "${saved_state}"
+				exit 0
+			fi
+		fi
+		state="$(gh_retry gh api "repos/${repo}/pulls/${number}" --jq .state 2>/dev/null)" || state=""
+		if [[ "${state}" =~ ^(open|closed|merged)$ ]]; then
+			if [ "${state}" = "open" ]; then
+				printf '%s %s %s %s\n' "${repo}" "${number}" "${state}" "$((now + 120))" > "${cache_file}.tmp" &&
+					mv -f "${cache_file}.tmp" "${cache_file}"
+			fi
+			printf '%s\n' "${state}"
+		else
+			printf 'open\n'
+		fi
+	) 9>"${cache_file}.lock"
+}
+
 _GH_HELPERS_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "scripts")"
 if [ -f "${_GH_HELPERS_SCRIPT_DIR}/emit_event.sh" ]; then
 	# shellcheck disable=SC1091

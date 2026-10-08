@@ -30,6 +30,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -65,6 +66,11 @@ RELEASE_WORKFLOW_NAMES: tuple[str, ...] = (
 	"Auto release stable",
 	"Forward-merge stable to main",
 )
+
+# CI in coding-workflows. The intake takes its failed runs only for pushes to
+# the default branch: a red main blocks every PR, and pull-request CI failures
+# go to check-failure triage instead.
+MAIN_CI_WORKFLOW_NAMES: tuple[str, ...] = ("CI",)
 
 SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure")
 REPORTABLE_CONCLUSIONS = ("failure", "timed_out")
@@ -162,6 +168,18 @@ FAILURE_CAP_MARKER_TAG = "review-autofix-failure-cap:v1"
 FAILURE_FINGERPRINT_WORKFLOW = "review_autofix"
 FAILURE_EVIDENCE_TAIL_BYTES = 65_536
 DEFAULT_FAILURE_FINGERPRINT_MAX_IDENTICAL = 3
+# Failure reasons another run on the same head cannot fix: the cap stops the
+# head on the first such marker instead of after
+# REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL. review_conflict_resolve.sh writes
+# them as ``conflict_resolver_<fail-closed reason>`` (PR #6438: a conflict set
+# the resolver sandbox cannot carry failed ~28 identical runs on one head).
+NON_RETRYABLE_FAILURE_REASONS = frozenset(
+	{
+		"conflict_resolver_sandbox_path_host_only",
+		"conflict_resolver_sandbox_path_unsupported",
+		"conflict_resolver_sandbox_support_missing",
+	}
+)
 
 ISSUE_EXCERPT_LIMIT = 4000
 COMMENTS_EXCERPT_LIMIT = 6000
@@ -305,6 +323,66 @@ def single_line(value: Any, limit: int = 200) -> str:
 	text = sanitize_text(value)
 	text = " ".join(text.split())
 	return text[:limit]
+
+
+# Keep these keys and rewrites in sync with scripts/check_failure_triage.sh
+# and the parsers they defeat: resolve_integration_ref.sh, orchestrate_lib.py
+# (INTEGRATION_BRANCH_LINE_RE / TARGET_BRANCH_LINE_RE), security_dependency.py.
+UNTRUSTED_ROUTING_KEYS = ("integration branch", "target branch", "tracking issue", "depends on",
+	"local id", "managed by", "prior_pr_baseline_branch", "files_touched")
+_UNTRUSTED_ROUTING_KEY_RE = re.compile(
+	r"\b(" + "|".join(re.escape(key).replace(r"\ ", r"\s+") for key in UNTRUSTED_ROUTING_KEYS) + r")(\s*\**\s*):",
+	re.IGNORECASE,
+)
+_HEAL_ROUTING_LINE_RE = re.compile(
+	r"^\s*(?:[-*>]\s*)*\**\s*(?:" + "|".join(re.escape(key).replace(r"\ ", r"\s+") for key in UNTRUSTED_ROUTING_KEYS) + r")\s*\**\s*:",
+	re.IGNORECASE,
+)
+# Same extraction order and expressions as resolve_integration_ref.sh.
+_HEAL_INTEGRATION_BRANCH_RE = re.compile(
+	r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$", re.MULTILINE,
+)
+_HEAL_TARGET_BRANCH_RE = re.compile(
+	r"^\s*(?:-\s*)?(?:\*\*Target branch:\*\*|Target branch:)\s*(?:`\s*([^`\n]+?)\s*`(?:\s.*)?|([^`\s]+))\s*$", re.MULTILINE,
+)
+
+
+def neutralize_untrusted_routing(text: str) -> tuple[str, int]:
+	text, key_count = _UNTRUSTED_ROUTING_KEY_RE.subn(r"\1 (untrusted)\2:", text)
+	text, reissue_count = re.subn(r"Re-issued from\s*#", "Re-issued from (untrusted) #", text, flags=re.IGNORECASE)
+	text, footer_count = re.subn(r"review-blocked-reissue", "review-blocked (untrusted) reissue", text, flags=re.IGNORECASE)
+	text, marker_count = re.subn(r"<!--", "&lt;!--", text)
+	return text, key_count + reissue_count + footer_count + marker_count
+
+
+def validate_heal_issue_body_routing(body: str, *, target_branch: str | None, integration_branch: str | None) -> str:
+	"""Reject any metadata outside the intake-generated headers."""
+	lines = body.split("\n")
+	if len(lines) < 5 or any(not line.startswith(f"<!-- {MARKER_PREFIX}") or not line.endswith(" -->") for line in lines[:5]) or "<!--" in "\n".join(lines[5:]):
+		return "marker"
+	if re.search(r"Re-issued from\s*#|review-blocked-reissue", body, re.IGNORECASE):
+		return "reissue"
+	tracking_issue = orchestrator_tracking_issue(integration_branch)
+	allowed = set()
+	if target_branch:
+		allowed.add(f"- **Target branch:** `{target_branch}`")
+	if tracking_issue:
+		allowed.add(f"- **Tracking issue:** #{tracking_issue}")
+		allowed.add(f"- **Integration branch:** `{integration_branch}`")
+	routing_lines = [line for line in body.splitlines() + lines if _HEAL_ROUTING_LINE_RE.match(line)]
+	if any(line not in allowed for line in routing_lines):
+		return "routing_key"
+	if any(lines.count(line) != 1 for line in allowed):
+		return "resolved_branch_mismatch"
+	canonical = _HEAL_INTEGRATION_BRANCH_RE.search(body)
+	alias = _HEAL_TARGET_BRANCH_RE.search(body)
+	canonical_branch = canonical.group(1).strip() if canonical else None
+	alias_branch = (alias.group(1) or alias.group(2)).strip() if alias else None
+	if canonical_branch != (integration_branch if tracking_issue else None) or alias_branch != (target_branch or None):
+		return "resolved_branch_mismatch"
+	if tracking_issue and target_branch != integration_branch:
+		return "resolved_branch_mismatch"
+	return ""
 
 
 def _load_json_file(path: str) -> Any:
@@ -523,21 +601,25 @@ def build_issue_payload(
 	"""Build the dispatch payload for an escalation label on an issue / PR."""
 	now = now or _utc_now()
 	body = sanitize_text(issue.get("body"))
-	markers = parse_heal_markers(body)
-	# The intake re-verifies lineage even for labelled reports: consumers may
-	# still run older pinned reporters that emit markers from ordinary issues.
-	is_heal_issue = HEAL_LABEL in _labels_of(issue)
 	comment_texts = [sanitize_text(comment.get("body")) for comment in comments if isinstance(comment, dict)]
-	run_refs = extract_run_refs([body, *comment_texts], repo)
-	if len(run_refs) < MAX_RUN_REFS:
-		known = {ref["run_id"] for ref in run_refs}
-		for run in select_failed_runs(runs, title=str(issue.get("title") or "")):
-			if run["run_id"] in known:
-				continue
-			run_refs.append({"repo": repo, "run_id": run["run_id"], "url": run["url"]})
-			known.add(run["run_id"])
-			if len(run_refs) >= MAX_RUN_REFS:
-				break
+	matching_runs = select_failed_runs(runs, title=str(issue.get("title") or ""))
+	commented_run_ids = {ref["run_id"] for ref in extract_run_refs([body, *comment_texts], repo)}
+	# A URL in a contributor-authored comment is a hint, never proof of a failed run.
+	matching_runs.sort(key=lambda run: run["run_id"] not in commented_run_ids)
+	run_refs = [{"repo": repo, "run_id": run["run_id"], "url": run["url"]} for run in matching_runs]
+	markers = parse_heal_markers(body)
+	marker_header = "\n".join(f"<!-- {MARKER_PREFIX}{key}={markers.get(key, '')} -->" for key in ("fp", "gen", "root", "source", "classification")) + "\n"
+	trusted_lineage = (
+		kind == "issue" and HEAL_LABEL in _labels_of(issue)
+		and (issue.get("author_association") in ("OWNER", "MEMBER", "COLLABORATOR")
+			or (isinstance(issue.get("user"), dict) and issue["user"].get("type") == "Bot"))
+		and body.startswith(marker_header)
+		and bool(_FP_HEX_RE.fullmatch(markers.get("fp") or ""))
+		and _positive_int(markers.get("gen")) is not None
+		and bool(_FP_HEX_RE.fullmatch(markers.get("root") or ""))
+		and bool(_SOURCE_KEY_RE.fullmatch(markers.get("source") or "") or markers.get("source") == f"{repo}#run")
+		and markers.get("classification") in CLASSIFICATIONS
+	)
 	return {
 		"schema_version": SCHEMA_VERSION,
 		"source_repo": repo,
@@ -549,8 +631,8 @@ def build_issue_payload(
 		"labels": _labels_of(issue)[:50],
 		"run_refs": run_refs,
 		"wrapper_sha": wrapper_sha if is_valid_sha(wrapper_sha) else None,
-		"source_gen": _positive_int(markers.get("gen")) if is_heal_issue else None,
-		"source_root": markers.get("root") if is_heal_issue and re.fullmatch(r"[0-9a-f]{64}", markers.get("root") or "") else None,
+		"source_gen": _positive_int(markers.get("gen")) if trusted_lineage else None,
+		"source_root": markers.get("root") if trusted_lineage else None,
 		"issue_excerpt": sanitize_text(body, ISSUE_EXCERPT_LIMIT),
 		"comments_excerpt": _build_recent_comments_excerpt(comment_texts),
 		"workflow_name": None,
@@ -563,7 +645,7 @@ def build_issue_payload(
 
 
 def build_workflow_run_payload(*, repo: str, workflow_run: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
-	"""Build the payload for a failed release / promotion run in this repo."""
+	"""Build the payload for a failed release, promotion, or CI run in this repo."""
 	now = now or _utc_now()
 	run_id = _positive_int(workflow_run.get("id"))
 	head_sha = str(workflow_run.get("head_sha") or "").lower()
@@ -689,7 +771,7 @@ def build_autofix_failure_payload(
 		"head_sha": head_sha if is_valid_sha(head_sha) else None,
 		"conclusion": "failure",
 		"failure_reason": single_line(failure_reason, 80),
-		"failure_evidence": sanitize_text(failure_evidence, FAILURE_EVIDENCE_LIMIT),
+		"failure_evidence": redact_secrets(sanitize_text(failure_evidence, FAILURE_EVIDENCE_LIMIT)),
 		"failure_streak": max(1, _positive_int(failure_streak) or 1),
 		"reporter_run_url": sanitize_text(reporter_run_url, 300) or None,
 		"reported_at": _iso(now),
@@ -1128,7 +1210,9 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		"head_sha": head_sha,
 		"conclusion": single_line(payload.get("conclusion"), 40) or None,
 		"failure_reason": failure_reason,
-		"failure_evidence": sanitize_text(payload.get("failure_evidence"), FAILURE_EVIDENCE_LIMIT) if kind == "autofix_failure" else "",
+		# Runtime log tails can carry Basic headers or encoded PATs; redact here
+		# so they reach neither disk nor the diagnosis prompt (#6463).
+		"failure_evidence": redact_secrets(sanitize_text(payload.get("failure_evidence"), FAILURE_EVIDENCE_LIMIT)) if kind == "autofix_failure" else "",
 		"failure_streak": failure_streak,
 		"failure_fingerprint": failure_fingerprint,
 		"reporter_run_url": sanitize_text(payload.get("reporter_run_url"), 300) or None,
@@ -1173,8 +1257,10 @@ def unwrap_dispatch(client_payload: Any) -> Any:
 	return client_payload
 
 
-def skip_reason(payload: dict[str, Any], *, registered_repos: Iterable[str], self_repo: str) -> str:
+def skip_reason(payload: dict[str, Any], *, registered_repos: Iterable[str], self_repo: str, heal_scope_unverified: bool = False) -> str:
 	"""Return a stable skip reason when a validated payload must not be healed."""
+	if heal_scope_unverified and payload.get("label") == "ai:needs-human" and "ai:workflow-heal" in (payload.get("labels") or []):
+		return "heal_scope_unverified"
 	repo = payload.get("source_repo")
 	if repo != self_repo and repo not in set(registered_repos):
 		return "unregistered_source_repo"
@@ -1223,7 +1309,7 @@ def filter_log(text: str, *, max_lines: int = 400, max_bytes: int = 60_000) -> s
 	are stripped), so the tail and the high-signal matches cover what the
 	steps printed rather than their source.
 	"""
-	lines = sanitize_text(_drop_step_script_lines(text)).split("\n")
+	lines = redact_secrets(sanitize_text(_drop_step_script_lines(text))).split("\n")
 	kept: list[str] = []
 	seen: set[int] = set()
 	tail_start = max(0, len(lines) - max_lines)
@@ -1437,7 +1523,9 @@ _ERROR_LINE_RE = re.compile(r"^\s*(?:::error(?: [^:]*)?::|##\[error\])\s*(?P<msg
 _GENERIC_ERROR_RE = re.compile(r"^(?:Process completed with exit code [0-9]+\.?|.*\bAborting\.?)$", re.IGNORECASE)
 _SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 	(re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@"), r"\1[redacted]@"),
-	(re.compile(r"([Aa]uthorization:\s*)(?:(?:[Bb]earer|[Bb]asic|[Tt]oken)\s+)?\S+"), r"\1[redacted]"),
+	(re.compile(r"(authorization\s*:\s*)(?:(?:bearer|basic|token)\s+)?\S+", re.IGNORECASE), r"\1[redacted]"),
+	(re.compile(r"(extraheader\s*[=:]\s*)\S+(?:\s+\S+)?", re.IGNORECASE), r"\1[redacted]"),
+	(re.compile(r"(basic\s+)[A-Za-z0-9+/=_-]{8,}", re.IGNORECASE), r"\1[redacted]"),
 	(re.compile(r"([Bb]earer\s+)\S+"), r"\1[redacted]"),
 	(re.compile(r"(github_pat_|gh[pousr]_)[A-Za-z0-9_]+"), r"\1[redacted]"),
 	(re.compile(r"(sk-(?:or|ant)-)[A-Za-z0-9_-]+"), r"\1[redacted]"),
@@ -1455,7 +1543,112 @@ def redact_secrets(text: str) -> str:
 	"""
 	for pattern, replacement in _SECRET_PATTERNS:
 		text = pattern.sub(replacement, text)
+	# Encoded x-access-token credentials are not necessarily preceded by a
+	# Basic header (for example when a failed command prints its config).
+	text = re.sub(r"[A-Za-z0-9+/_-]{24,}={0,2}", _redact_encoded_credential, text)
 	return text
+
+
+def _redact_encoded_credential(match: re.Match[str]) -> str:
+	import base64
+
+	value = match.group()
+	for offset in range(4):
+		try:
+			decoded = base64.b64decode(value[offset:] + "=" * (-len(value[offset:]) % 4), altchars=b"-_", validate=True)
+		except (ValueError, base64.binascii.Error):
+			continue
+		# A user:token pair decodes to printable ASCII; random hex (SHAs,
+		# fingerprints) decodes to binary and must not be redacted.
+		if b"x-access-token:" in decoded.lower() or (all(0x20 <= byte < 0x7F for byte in decoded) and re.search(rb"[^:\s]:\S{36,}", decoded)):
+			return "[redacted]"
+	return value
+
+
+def redact_known_secrets(text: str, values: Iterable[str]) -> str:
+	import base64
+
+	for value in values:
+		if not value:
+			continue
+		# Short mock/placeholder values must not erase ordinary prose ("codex").
+		if len(value) < 8:
+			text = re.sub(r"(?<![A-Za-z0-9_])" + re.escape(value) + r"(?![A-Za-z0-9_])", "[redacted]", text)
+			continue
+		text = text.replace(value, "[redacted]")
+		for raw in (value, "x-access-token:" + value):
+			for altchars in (None, b"-_"):
+				encoded = base64.b64encode(raw.encode()) if altchars is None else base64.b64encode(raw.encode(), altchars=altchars)
+				# Match the stable interior for all three possible base64 alignments.
+				for offset in range(3):
+					fragment = encoded.decode()[offset + 4:-(4 if encoded.endswith(b"=") else 0) or None]
+					if len(fragment) >= 12:
+						text = text.replace(fragment, "[redacted]")
+				text = text.replace(encoded.decode(), "[redacted]")
+	return redact_secrets(text)
+
+
+HEAL_SCOPE_RE = re.compile(r"<!-- ai:workflow-heal-scope:v1 paths=([^\s<>]+) runs=([^\s<>]+) -->")
+HEAL_FP_RE = re.compile(r"<!-- workflow-failure-heal:fp=[0-9a-f]{64} -->")
+
+
+def is_heal_route(issue: dict[str, Any]) -> bool:
+	return "ai:workflow-heal" in [label.get("name") if isinstance(label, dict) else label for label in issue.get("labels", [])] or bool(HEAL_FP_RE.search(issue.get("body") or ""))
+
+
+def _safe_heal_path(path: str) -> bool:
+	return (is_valid_repo_path(path) and path.isascii() and not any(c in path for c in ",*?[]\\ \t\r\n")
+		and not any(part.lower() in (".git", ".gitattributes", ".gitmodules") for part in path.split("/"))
+		and not path.lower().startswith((".github/ai/", ".claude/")))
+
+
+def render_heal_scope_marker(*, crash_file: str | None, workflow_paths: Iterable[str], changed_files: Iterable[str], exists: Any, runs: Iterable[str] = ()) -> str:
+	paths = []
+	for path in [crash_file, *workflow_paths, *changed_files]:
+		if isinstance(path, str) and _safe_heal_path(path) and path not in paths and exists(path):
+			paths.append(path)
+		if len(paths) >= 20:
+			break
+	if not paths:
+		return ""
+	refs = list(runs)
+	if not refs or any(not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+:[1-9][0-9]*", ref) for ref in refs):
+		return ""
+	return f"<!-- ai:workflow-heal-scope:v1 paths={','.join(paths + ['tests/**', 'changelog.d/*.md'])} runs={','.join(refs)} -->"
+
+
+def strip_heal_scope_markers(text: str) -> str:
+	return re.sub(r"(?im)^.*ai(?::|&#0*58;|&colon;|&amp;:)workflow-heal-scope.*\n?", "", text)
+
+
+def verify_heal_scope(*, body: str, author_login: str, last_edited_at: str | None, labels: Iterable[str], pipeline_login: str) -> dict[str, Any]:
+	markers = HEAL_SCOPE_RE.findall(body)
+	count = len(re.findall(r"ai:workflow-heal-scope", body, re.IGNORECASE))
+	status = "verified"
+	if count == 0:
+		status = "missing"
+	elif count != 1:
+		status = "duplicated"
+	elif not markers:
+		status = "malformed"
+	elif not pipeline_login or author_login.casefold() != pipeline_login.casefold() or "ai:workflow-heal" not in labels:
+		status = "untrusted_author"
+	elif last_edited_at is not None:
+		status = "edited"
+	paths = markers[0][0].split(",") if markers else []
+	runs = markers[0][1].split(",") if markers else []
+	if status == "verified" and (len(paths) < 3 or len(paths) > 22 or len(set(paths)) != len(paths)
+		or paths[-2:] != ["tests/**", "changelog.d/*.md"]
+		or any(not _safe_heal_path(path) for path in paths[:-2])
+		or not runs or len(runs) > 3 or len(set(runs)) != len(runs)
+		or any(not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+:[1-9][0-9]*", ref) for ref in runs)):
+		status = "malformed"
+	return {"status": status, "paths": paths if status == "verified" else [], "runs": runs if status == "verified" else [], "marker": HEAL_SCOPE_RE.search(body).group() if status == "verified" else ""}
+
+
+def carry_heal_scope(*, child_body: str, parent_verification: dict[str, Any]) -> str:
+	clean = strip_heal_scope_markers(child_body).rstrip()
+	return clean + ("\n\n" + parent_verification["marker"] if parent_verification.get("status") == "verified" else "") + "\n"
 
 
 def failure_headline(texts: Iterable[str], limit: int = FAILURE_HEADLINE_LIMIT) -> str:
@@ -1699,11 +1892,13 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 	``count_autofix_failure_streak``). Markers for another head or from another
 	author are skipped. ``cap_applied`` reports whether a trusted
 	``review-autofix-failure-cap:v1`` marker already exists for the head.
+	``non_retryable`` is true when the newest marker's reason is in
+	NON_RETRYABLE_FAILURE_REASONS.
 	"""
 	head = str(head_sha or "").strip().lower()
 	author = str(author_login or "").strip().lower()
 	ordered = [comment for comment in comments if isinstance(comment, dict)]
-	result: dict[str, Any] = {"count": 0, "fp": "", "reason": "", "cap_applied": False}
+	result: dict[str, Any] = {"count": 0, "fp": "", "reason": "", "cap_applied": False, "non_retryable": False}
 	if not head or not author:
 		return result
 	for comment in ordered:
@@ -1742,6 +1937,7 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 				skip_paired_summary = False
 				continue
 			break
+	result["non_retryable"] = result["count"] > 0 and result["reason"] in NON_RETRYABLE_FAILURE_REASONS
 	return result
 
 
@@ -1991,7 +2187,7 @@ def _context_lines(payload: dict[str, Any], *, run_summaries: list[dict[str, Any
 		else:
 			lines.append(f"- **Escalation label:** `{payload.get('label')}`")
 	if payload.get("workflow_name"):
-		lines.append(f"- **Failed workflow:** `{payload['workflow_name']}` (conclusion: `{payload.get('conclusion') or 'unknown'}`)")
+		lines.append(f"- **Failed workflow:** `{neutralize_untrusted_routing(single_line(payload['workflow_name']))[0]}` (conclusion: `{payload.get('conclusion') or 'unknown'}`)")
 	if payload.get("head_branch"):
 		lines.append(f"- **Failed on branch:** `{payload['head_branch']}`")
 	if payload.get("head_sha"):
@@ -2003,8 +2199,10 @@ def _context_lines(payload: dict[str, Any], *, run_summaries: list[dict[str, Any
 	if payload.get("crash_file"):
 		lines.append(f"- **Crash file:** `{payload['crash_file']}`")
 	for summary in run_summaries:
-		step = summary.get("failing_step") or "unknown step"
-		lines.append(f"- **Failed run:** {summary.get('url')} — workflow `{summary.get('workflow_name') or 'unknown'}`, step `{step}`")
+		step = neutralize_untrusted_routing(single_line(summary.get("failing_step") or "unknown step"))[0]
+		url = neutralize_untrusted_routing(single_line(summary.get("url")))[0]
+		workflow = neutralize_untrusted_routing(single_line(summary.get("workflow_name") or "unknown"))[0]
+		lines.append(f"- **Failed run:** {url} — workflow `{workflow}`, step `{step}`")
 	return lines
 
 
@@ -2025,6 +2223,18 @@ def compose_issue_title(payload: dict[str, Any], *, workflow_name: str | None) -
 	if name:
 		return f"Workflow heal: {name} failed for {target} ({label})"
 	return f"Workflow heal: {label} on {target}"
+
+
+def _neutralize_heal_routing_text(value: Any) -> str:
+	"""Leave untrusted evidence readable without making it issue routing metadata."""
+	text = sanitize_text(value)
+	keys = ("integration branch", "target branch", "tracking issue", "depends on",
+		"local id", "managed by", "prior_pr_baseline_branch", "files_touched")
+	key_pattern = re.compile(r"\b(" + "|".join(re.escape(key).replace(r"\ ", r"[ \t]+") for key in keys) + r")([ \t]*\**[ \t]*):", re.IGNORECASE)
+	text = key_pattern.sub(r"\1 (untrusted)\2:", text)
+	text = re.sub(r"Re-issued from\s*#", "Re-issued from (untrusted) #", text, flags=re.IGNORECASE)
+	text = re.sub(r"review-blocked-reissue", "review-blocked (untrusted) reissue", text, flags=re.IGNORECASE)
+	return text.replace("<!--", "&lt;!--")
 
 
 def compose_issue_body(
@@ -2065,6 +2275,7 @@ def compose_issue_body(
 		parts.append(f"- **Integration branch:** `{integration_branch}`")
 	if target_branch or tracking_issue:
 		parts.append("")
+	routing_header = parts[:]
 	parts.append(f"## Automated workflow failure heal (generation {gen} of max {max_depth})")
 	parts.append("")
 	if classification == "base-self-inflicted":
@@ -2080,9 +2291,13 @@ def compose_issue_body(
 			parts.append(f"Refs #{tracking_issue}")
 	elif classification in UPSTREAM_ISSUE_CLASSIFICATIONS:
 		if payload.get("source_kind") == "workflow_run":
-			intro = (
-				"A release / promotion workflow run failed. This issue was filed automatically for the "
-				"clarify -> plan -> implement -> review pipeline to fix the cause."
+			if payload.get("workflow_name") in MAIN_CI_WORKFLOW_NAMES:
+				intro = "A CI run on the default branch failed."
+			else:
+				intro = "A release / promotion workflow run failed."
+			intro += (
+				" This issue was filed automatically for the clarify -> plan -> implement -> "
+				"review pipeline to fix the cause."
 			)
 		elif payload.get("source_kind") == "autofix_failure":
 			intro = (
@@ -2118,22 +2333,22 @@ def compose_issue_body(
 			"issue was filed here for the normal clarify -> plan -> implement -> review pipeline."
 		)
 	parts.append("")
-	parts.extend(_context_lines(payload, run_summaries=run_summaries))
+	parts.extend(_neutralize_heal_routing_text(line) for line in _context_lines(payload, run_summaries=run_summaries))
 	parts.append(f"- **Classification:** `{classification}`")
 	parts.append(f"- **Heal intake run:** {intake_run_url}")
 	parts.append("")
 	if payload.get("source_kind") == "autofix_failure" and payload.get("failure_evidence"):
-		parts.append("<details><summary>Failure evidence from the reporting run (UNTRUSTED, verbatim)</summary>")
+		parts.append("<details><summary>Failure evidence from the reporting run (UNTRUSTED, routing-neutralized)</summary>")
 		parts.append("")
 		parts.append("```")
-		parts.append(sanitize_text(payload["failure_evidence"], FAILURE_EVIDENCE_LIMIT).replace("```", "` ` `"))
+		parts.append(neutralize_untrusted_routing(sanitize_text(payload["failure_evidence"], FAILURE_EVIDENCE_LIMIT))[0].replace("```", "` ` `"))
 		parts.append("```")
 		parts.append("")
 		parts.append("</details>")
 		parts.append("")
 	parts.append("---")
 	parts.append("")
-	parts.append(sanitize_text(diagnosis).strip() or "_(no diagnosis produced)_")
+	parts.append(neutralize_untrusted_routing(sanitize_text(diagnosis))[0].strip() or "_(no diagnosis produced)_")
 	parts.append("")
 	parts.append("---")
 	parts.append("")
@@ -2159,7 +2374,17 @@ def compose_issue_body(
 		"review/autofix or clarify / plan / implement failure, from the same pull request or issue) are "
 		"recorded as occurrence comments on this issue while it stays open._"
 	)
-	return "\n".join(parts) + "\n"
+	body = "\n".join(parts) + "\n"
+	body_lines = body.splitlines()
+	if body_lines[:len(routing_header)] != routing_header:
+		raise ValueError("heal issue routing header contains unexpected lines")
+	untrusted_body = "\n".join(body_lines[len(routing_header):])
+	if re.search(
+		r"\b(?:integration\s+branch|target\s+branch|tracking\s+issue|depends\s+on|local\s+id|managed\s+by|prior_pr_baseline_branch|files_touched)\s*\**\s*:|Re-issued from\s*#|review-blocked-reissue|<!--",
+		untrusted_body, re.IGNORECASE,
+	):
+		raise ValueError("heal issue body contains untrusted routing metadata")
+	return body
 
 
 def compose_occurrence_comment(payload: dict[str, Any], *, intake_run_url: str) -> str:
@@ -2528,6 +2753,7 @@ def _cmd_autofix_identical_failure_count(args: argparse.Namespace) -> int:
 	sys.stdout.write(f"fp={safe_token(result['fp'], 64)}\n")
 	sys.stdout.write(f"reason={safe_token(result['reason'])}\n")
 	sys.stdout.write(f"cap_applied={'true' if result['cap_applied'] else 'false'}\n")
+	sys.stdout.write(f"non_retryable={'true' if result['non_retryable'] else 'false'}\n")
 	return 0
 
 
@@ -2571,7 +2797,98 @@ def _cmd_skip_reason(args: argparse.Namespace) -> int:
 		except (OSError, json.JSONDecodeError):
 			loaded = []
 		registered = [item for item in loaded if isinstance(item, str)] if isinstance(loaded, list) else []
-	sys.stdout.write(skip_reason(payload, registered_repos=registered, self_repo=args.self_repo) + "\n")
+	sys.stdout.write(skip_reason(payload, registered_repos=registered, self_repo=args.self_repo, heal_scope_unverified=args.heal_scope_unverified) + "\n")
+	return 0
+
+
+def _cmd_redact_stream(args: argparse.Namespace) -> int:
+	values = [os.environ.get(name, "") for name in args.secret_env.split(",")]
+	for line in sys.stdin:
+		sys.stdout.write(redact_known_secrets(_ANSI_RE.sub("", line), values))
+	return 0
+
+
+def select_evidence_jobs(jobs: dict[str, Any], *, kind: str, limit: int) -> list[dict[str, Any]]:
+	items = jobs.get("jobs", []) if isinstance(jobs, dict) else []
+	if not isinstance(items, list):
+		return []
+	failed = [dict(job, selection="failed") for job in items if isinstance(job, dict) and job.get("conclusion") in ("failure", "timed_out", "cancelled") and isinstance(job.get("id"), int) and job["id"] > 0]
+	if failed:
+		return failed[:limit]
+	if kind == "autofix_failure":
+		return [dict(job, selection="review_fallback") for job in items if isinstance(job, dict) and isinstance(job.get("id"), int) and job["id"] > 0 and job.get("conclusion") == "success" and re.search(r"review|codex-agent", job.get("name") or "", re.I)][:1]
+	return []
+
+
+def verify_run(run_json: dict[str, Any], *, repo: str, kind: str, head_sha: str = "", target_repo: str = "", allow_pending: bool = False) -> dict[str, Any]:
+	if not isinstance(run_json, dict) or (run_json.get("repository") or {}).get("full_name") != repo or not isinstance(run_json.get("id"), int) or run_json["id"] < 1:
+		raise ValueError("run identity mismatch")
+	# A phase reporter dispatches while its own run is still in progress; the
+	# caller passes allow_pending only for the run provenance accepted as such.
+	pending = allow_pending and run_json.get("conclusion") is None and run_json.get("status") in ("queued", "in_progress", "pending")
+	if not pending and run_json.get("conclusion") not in (("failure", "timed_out", "cancelled", "success") if kind == "autofix_failure" else ("failure", "timed_out", "cancelled")):
+		raise ValueError("run not completed with expected conclusion")
+	if head_sha and run_json.get("head_sha") != head_sha:
+		raise ValueError("run head mismatch")
+	path = run_json.get("path") or ""
+	paths = [path] if isinstance(path, str) and _safe_heal_path(path) else []
+	for ref in run_json.get("referenced_workflows") or []:
+		if isinstance(ref, dict) and isinstance(ref.get("path"), str) and ref["path"].startswith((target_repo or repo) + "/"):
+			candidate = ref["path"][len(target_repo or repo) + 1:].split("@", 1)[0]
+			if _safe_heal_path(candidate):
+				paths.append(candidate)
+	return {"run_id": run_json["id"], "url": run_json.get("html_url") or "", "path": path, "referenced_paths": paths}
+
+
+def _cmd_select_evidence_jobs(args: argparse.Namespace) -> int:
+	_write_json(select_evidence_jobs(_load_json_file(args.jobs_json), kind=args.kind, limit=args.limit))
+	return 0
+
+
+def _cmd_verify_run(args: argparse.Namespace) -> int:
+	_write_json(verify_run(_load_json_file(args.run_json), repo=args.repo, kind=args.kind, head_sha=args.head_sha, target_repo=args.target_repo, allow_pending=args.allow_pending))
+	return 0
+
+
+def _heal_regular_file_at_ref(checkout: str, ref: str, path: str) -> bool:
+	result = subprocess.run(["git", "ls-tree", "-z", ref, "--", path], cwd=checkout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+	return (result.returncode == 0 and result.stdout.endswith(b"\t" + path.encode("ascii") + b"\0")
+		and result.stdout.startswith((b"100644 blob ", b"100755 blob ")) and result.stdout.count(b"\0") == 1)
+
+
+def _cmd_heal_scope(args: argparse.Namespace) -> int:
+	if args.operation == "strip":
+		sys.stdout.write(strip_heal_scope_markers(Path(args.body_file).read_text()))
+	elif args.operation == "render":
+		data = _load_json_file(args.input_json)
+		marker = render_heal_scope_marker(crash_file=data.get("crash_file"), workflow_paths=data.get("workflow_paths", []), changed_files=data.get("changed_files", []), runs=data.get("runs", []), exists=lambda path: _heal_regular_file_at_ref(args.checkout, args.ref, path) if args.ref else Path(args.checkout).joinpath(path).is_file() and not Path(args.checkout).joinpath(path).is_symlink())
+		sys.stdout.write(marker + "\n")
+	elif args.operation == "verify":
+		data = _load_json_file(args.input_json)
+		_write_json(verify_heal_scope(body=data.get("body") or "", author_login=data.get("author_login") or "", last_edited_at=data.get("last_edited_at"), labels=data.get("labels") or [], pipeline_login=data.get("pipeline_login") or ""))
+	else:
+		if args.parent_issue:
+			if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.parent_repo) or not re.fullmatch(r"[1-9][0-9]*", args.parent_issue):
+				raise ValueError("invalid parent")
+			owner, repository = args.parent_repo.split("/")
+			query = "query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){body lastEditedAt author{login} labels(first:100){nodes{name}}}}}"
+			try:
+				# The reissuers' existing issue REST reads supply body/labels, but
+				# neither lastEditedAt nor the authenticated token's login. One
+				# GraphQL read replaces a second body lookup; failures strip markers.
+				identity = args.pipeline_login or json.loads(subprocess.check_output(["gh", "api", "user"], stderr=subprocess.DEVNULL))["login"]
+				parent = json.loads(subprocess.check_output(["gh", "api", "graphql", "-f", "query=" + query, "-f", "owner=" + owner, "-f", "repo=" + repository, "-F", "number=" + args.parent_issue], stderr=subprocess.DEVNULL))["data"]["repository"]["issue"]
+				data = verify_heal_scope(body=parent["body"] or "", author_login=parent["author"]["login"], last_edited_at=parent["lastEditedAt"], labels=[node["name"] for node in parent["labels"]["nodes"]], pipeline_login=identity)
+			except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError):
+				data = {"status": "unverified"}
+		else:
+			data = _load_json_file(args.input_json)
+		sys.stdout.write(carry_heal_scope(child_body=Path(args.body_file).read_text(), parent_verification=data))
+	return 0
+
+
+def _cmd_heal_route(args: argparse.Namespace) -> int:
+	sys.stdout.write("true\n" if is_heal_route(_load_json_file(args.issue_json)) else "false\n")
 	return 0
 
 
@@ -2656,7 +2973,7 @@ def _cmd_parse_classification(args: argparse.Namespace) -> int:
 
 def _cmd_compose_issue(args: argparse.Namespace) -> int:
 	payload = validate_payload(_load_json_file(args.payload_json))
-	diagnosis = Path(args.diagnosis_file).read_text(encoding="utf-8", errors="replace")
+	diagnosis = strip_heal_scope_markers(Path(args.diagnosis_file).read_text(encoding="utf-8", errors="replace"))
 	run_summaries = _load_json_file(args.run_summaries_json) if args.run_summaries_json else []
 	if not isinstance(run_summaries, list):
 		run_summaries = []
@@ -2679,6 +2996,24 @@ def _cmd_compose_issue(args: argparse.Namespace) -> int:
 		run_summaries=[item for item in run_summaries if isinstance(item, dict)],
 		integration_branch=args.integration_branch or None,
 	)
+	reason = validate_heal_issue_body_routing(body, target_branch=args.target_branch or None, integration_branch=args.integration_branch or None)
+	if reason:
+		print(f"WORKFLOW_HEAL error body_validation_failed reason={reason}", file=sys.stderr)
+		return 1
+	neutralized_count = neutralize_untrusted_routing(sanitize_text(diagnosis))[1]
+	neutralized_count += neutralize_untrusted_routing(sanitize_text(payload.get("failure_evidence"), FAILURE_EVIDENCE_LIMIT))[1]
+	neutralized_count += neutralize_untrusted_routing(single_line(payload.get("workflow_name")))[1]
+	for summary in run_summaries:
+		if isinstance(summary, dict):
+			neutralized_count += sum(neutralize_untrusted_routing(single_line(summary.get(field)))[1] for field in ("url", "workflow_name", "failing_step"))
+	if neutralized_count:
+		print(f"WORKFLOW_HEAL neutralized count={neutralized_count}", file=sys.stderr)
+	# The intake-authored scope marker is appended after routing validation,
+	# which rejects any HTML comment outside the generated header lines.
+	if args.scope_marker_file:
+		marker = Path(args.scope_marker_file).read_text(encoding="utf-8").strip()
+		if marker and HEAL_SCOPE_RE.fullmatch(marker):
+			body = body.rstrip() + "\n\n" + marker + "\n"
 	Path(args.title_out).write_text(title + "\n", encoding="utf-8")
 	Path(args.body_out).write_text(body, encoding="utf-8")
 	return 0
@@ -2795,7 +3130,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--log-file", action="append", default=[], help="reviewer slot or summariser log; repeatable, unreadable files are skipped")
 	p.set_defaults(func=_cmd_reviewer_failure_evidence)
 
-	p = sub.add_parser("autofix-identical-failure-count", help="Print count= / fp= / reason= / cap_applied= for the trailing identical failures on a head")
+	p = sub.add_parser("autofix-identical-failure-count", help="Print count= / fp= / reason= / cap_applied= / non_retryable= for the trailing identical failures on a head")
 	p.add_argument("--comments-json", required=True)
 	p.add_argument("--head-sha", required=True)
 	p.add_argument("--author-login", required=True)
@@ -2822,7 +3157,42 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--payload-json", required=True)
 	p.add_argument("--registry-json", default="")
 	p.add_argument("--self-repo", required=True)
+	p.add_argument("--heal-scope-unverified", action="store_true")
 	p.set_defaults(func=_cmd_skip_reason)
+
+	p = sub.add_parser("redact-stream")
+	p.add_argument("--secret-env", default="GH_PAT,GH_TOKEN,GITHUB_TOKEN,OPENROUTER_API_KEY")
+	p.set_defaults(func=_cmd_redact_stream)
+
+	p = sub.add_parser("select-evidence-jobs")
+	p.add_argument("--jobs-json", required=True)
+	p.add_argument("--kind", default="issue")
+	p.add_argument("--limit", type=int, default=3)
+	p.set_defaults(func=_cmd_select_evidence_jobs)
+
+	p = sub.add_parser("verify-run")
+	p.add_argument("--run-json", required=True)
+	p.add_argument("--repo", required=True)
+	p.add_argument("--target-repo", default="")
+	p.add_argument("--kind", default="issue")
+	p.add_argument("--head-sha", default="")
+	p.add_argument("--allow-pending", action="store_true")
+	p.set_defaults(func=_cmd_verify_run)
+
+	p = sub.add_parser("heal-route")
+	p.add_argument("--issue-json", required=True)
+	p.set_defaults(func=_cmd_heal_route)
+
+	p = sub.add_parser("heal-scope")
+	p.add_argument("operation", choices=("render", "verify", "carry", "strip"))
+	p.add_argument("--input-json", default="")
+	p.add_argument("--body-file", default="")
+	p.add_argument("--checkout", default=".")
+	p.add_argument("--ref", default="")
+	p.add_argument("--parent-repo", default="")
+	p.add_argument("--parent-issue", default="")
+	p.add_argument("--pipeline-login", default="")
+	p.set_defaults(func=_cmd_heal_scope)
 
 	p = sub.add_parser("verify-phase-provenance", help="Verify a phase failure report against GitHub-read run, job and comment evidence")
 	p.add_argument("--payload-json", required=True)
@@ -2896,6 +3266,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--classification", required=True, choices=CLASSIFICATIONS)
 	p.add_argument("--target-branch", default="")
 	p.add_argument("--integration-branch", default="")
+	p.add_argument("--scope-marker-file", default="")
 	p.add_argument("--max-depth", type=int, default=DEFAULT_MAX_LINEAGE_DEPTH)
 	p.add_argument("--intake-run-url", required=True)
 	p.add_argument("--title-out", required=True)

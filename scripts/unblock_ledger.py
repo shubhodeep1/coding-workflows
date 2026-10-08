@@ -36,8 +36,13 @@ Rules enforced here:
   - `auto_answer` and `override_guard` are offered only for an issue, never for
     a pull request or a project;
   - `reissue` is never offered for a whole project;
-  - `accept_with_followup` is never offered for a failed security pass or a
-    failed validation (no waiver, no validation pass).
+  - `accept_with_followup` is never offered for a failed security pass, a
+    failed validation, or an `ai:security` issue (`decide --security-issue`)
+    (no waiver, no validation pass);
+  - `close` is offered and accepted only once a round cap, the 24-hour rule
+    or an exhausted menu applies (TERMINAL_REASONS), never on the model's
+    choice alone: comment text the judge reads is evidence, not a reason to
+    abandon the work (issue #6557).
 
 Subcommands (one JSON line on stdout; exit 0 ok, 1 bad arguments or a refused
 verdict, 2 unreadable input):
@@ -52,6 +57,7 @@ verdict, 2 unreadable input):
   decide --item <n> --stop <id> --fingerprint <fp> --comments-file <path>
          [--project-comments-file <path>] --trusted-login <login>
          --now <iso8601> [--kind issue|pr|project] [--last-activity <iso8601>]
+         [--security-issue]
       Rounds used, the verdicts still allowed, and whether the item is
       terminal (and why).
   validate --verdict-file <path> --decision-file <path> --repo <owner/repo>
@@ -120,6 +126,9 @@ VERDICTS = (
 	"close",
 )
 TERMINAL_VERDICT = "close"
+# The deterministic conditions under which `decide` makes an item terminal;
+# `validate` accepts the terminal close only with one of these.
+TERMINAL_REASONS = ("item_cap", "project_cap", "still_blocked_24h", "menu_exhausted")
 GUARD_STOPS = ("scope-blocked", "destructive-blocked")
 GUARD_FOR_STOP = {"scope-blocked": "scope", "destructive-blocked": "destructive"}
 OVERRIDABLE_DESTRUCTIVE_REASONS = ("bulk-delete",)
@@ -334,6 +343,7 @@ def latest_rejection(comments: object, trusted_login: str, item: int, stop: str)
 		elif lines[0] in (
 			"🚨 **files_touched scope guard rejected this implementation run.**",
 			"🚨 **Issue scope-lock rejected this implementation run.**",
+			"🚨 **Automation-path grant guard rejected this implementation run.**",
 			"🚨 **Destructive-commit guard rejected this implementation run.**",
 		):
 			# A later handler that could not encode its marker must not leave
@@ -386,6 +396,8 @@ def decide(
 	kind: str = "issue",
 	last_activity: dt.datetime | None = None,
 	rejection: dict | None = None,
+	*,
+	security_issue: bool = False,
 ) -> dict:
 	"""What the judge may still do for this item."""
 	if kind not in ITEM_KINDS:
@@ -418,10 +430,20 @@ def decide(
 		allowed = [verdict for verdict in allowed if verdict != "override_guard"]
 	if stop in NO_WAIVER_STOPS:
 		allowed = [verdict for verdict in allowed if verdict != "accept_with_followup"]
+	# An ai:security issue is a security finding: it is never waived with a
+	# follow-up, whatever stop it is blocked under (#6541). A split goes
+	# through `reissue`, which carries the finding marker and label.
+	if kind == "issue" and security_issue:
+		allowed = [verdict for verdict in allowed if verdict != "accept_with_followup"]
 	if kind != "issue":
 		allowed = [verdict for verdict in allowed if verdict not in ISSUE_ONLY_VERDICTS]
 	if kind == "project":
 		allowed = [verdict for verdict in allowed if verdict not in NOT_FOR_PROJECT_VERDICTS]
+	# The terminal close is never on the model's menu (issue #6557): the judge
+	# reads public comments, so a comment steering it to `close` must not be
+	# able to abandon a blocked item. `close` is offered only below, once a
+	# deterministic terminal condition holds.
+	options = [verdict for verdict in allowed if verdict != TERMINAL_VERDICT]
 	last_times = [_parse_time(entry["created_at"]) for entry in pool if entry["item"] == item and entry["created_at"]]
 	# A fix-up's follow-up (the reset posted after it merged) restarts the
 	# 24-hour clock, so the reset gets its chance before the terminal close.
@@ -434,7 +456,7 @@ def decide(
 		terminal_reason = "project_cap"
 	elif last_times and now - max(last_times) >= dt.timedelta(hours=BLOCKED_AFTER_LAST_ROUND_HOURS):
 		terminal_reason = "still_blocked_24h"
-	elif allowed == [TERMINAL_VERDICT]:
+	elif not options:
 		terminal_reason = "menu_exhausted"
 	return {
 		"item": item,
@@ -445,7 +467,7 @@ def decide(
 		"project_rounds": project_rounds,
 		"next_round": item_rounds + 1,
 		"used": used,
-		"allowed": [TERMINAL_VERDICT] if terminal_reason else allowed,
+		"allowed": [TERMINAL_VERDICT] if terminal_reason else options,
 		"terminal": bool(terminal_reason),
 		"terminal_reason": terminal_reason,
 	}
@@ -549,6 +571,12 @@ def validate(verdict: object, decision: object, repo: str, rejection: dict | Non
 		raise UsageError(f"unknown verdict {name!r}")
 	if name not in allowed:
 		raise UsageError(f"verdict {name!r} is not allowed here; allowed: {allowed}")
+	# Independent of `allowed`: a hand-built or tampered decision that lists
+	# `close` without a deterministic terminal condition is refused (#6557).
+	if name == TERMINAL_VERDICT and (
+		decision.get("terminal") is not True or decision.get("terminal_reason") not in TERMINAL_REASONS
+	):
+		raise UsageError("verdict 'close' is accepted only after a round cap, the 24-hour rule or an exhausted menu")
 	normalised = {
 		"verdict": name,
 		"reason": _clean_text(verdict.get("reason"), "reason", True),
@@ -660,6 +688,7 @@ def build_parser() -> argparse.ArgumentParser:
 	decide_cmd.add_argument("--kind", default="issue")
 	decide_cmd.add_argument("--last-activity", default="")
 	decide_cmd.add_argument("--rejection-file")
+	decide_cmd.add_argument("--security-issue", action="store_true")
 	validate_cmd = sub.add_parser("validate")
 	validate_cmd.add_argument("--verdict-file", required=True)
 	validate_cmd.add_argument("--decision-file", required=True)
@@ -718,7 +747,10 @@ def run(argv: list[str] | None = None) -> dict:
 			project_entries = parse_markers(_read_json(args.project_comments_file, "--project-comments-file"), args.trusted_login)
 		last_activity = _parse_time(args.last_activity) if args.last_activity else None
 		rejection = _read_json(args.rejection_file, "--rejection-file") if args.rejection_file else None
-		return decide(item, stop, fp, item_entries, project_entries, _parse_time(args.now), args.kind, last_activity, rejection)
+		return decide(
+			item, stop, fp, item_entries, project_entries, _parse_time(args.now), args.kind, last_activity, rejection,
+			security_issue=args.security_issue,
+		)
 	if args.command == "validate":
 		return validate(
 			_read_json(args.verdict_file, "--verdict-file"),
