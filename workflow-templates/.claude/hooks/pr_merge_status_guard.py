@@ -1344,7 +1344,10 @@ def git_subcommands(command: str, *, _depth: int = 0) -> set[str]:
 	if segment_text is None:
 		return found
 	try:
-		segments = _shell_segments_with_operators(segment_text)
+		# Data heredoc bodies (cat, python3, `git commit -F -`) are never run;
+		# drop them here as _guarded_git_invocations does, so a nested one that
+		# mentions a push cannot block an unrelated API write (#6791 review).
+		segments = _shell_segments_with_operators(_strip_data_heredoc_bodies(segment_text))
 	except ValueError:
 		# Unbalanced quotes — the command is not something we can read.
 		if _depth and _mentions_git_write(command):
