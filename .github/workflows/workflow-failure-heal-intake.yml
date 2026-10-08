@@ -29,6 +29,9 @@ name: Workflow Failure Heal Intake
       - "Promote main to stable"
       - "Auto release stable"
       - "Forward-merge stable to main"
+      # CI on pushes to main (Q51); the job skips CI runs for pull requests
+      # and other branches, which check-failure triage covers.
+      - "CI"
     types:
       - completed
   workflow_dispatch:
@@ -60,7 +63,10 @@ jobs:
     if: >-
       !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED) &&
       (github.event_name != 'workflow_run' ||
-       contains(fromJson('["failure","timed_out"]'), github.event.workflow_run.conclusion))
+       (contains(fromJson('["failure","timed_out"]'), github.event.workflow_run.conclusion) &&
+        (github.event.workflow_run.name != 'CI' ||
+         (github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == github.event.repository.default_branch))))
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -81,6 +87,19 @@ jobs:
       TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
       TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
     steps:
+      - name: Record GH_PAT budget at intake start
+        env:
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_workflow_heal_intake
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=workflow-failure-heal-intake job=intake remaining=${remaining} reset=${reset} used_in_job=unknown"
+
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
@@ -173,3 +192,15 @@ jobs:
           RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           notification="Workflow Failure Heal Intake workflow itself failed (report from '${SOURCE_REPO:-unknown}')."
           tg_send_msg "${notification}"$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+
+      - name: Record GH_PAT budget at intake end
+        if: always()
+        env:
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_workflow_heal_intake
+        run: |
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget end workflow-failure-heal-intake intake "${GH_PAT_BUDGET_FILE}"
+          else
+            echo 'GH_PAT_BUDGET phase=end workflow=workflow-failure-heal-intake job=intake remaining=unknown reset=unknown used_in_job=unknown'
+          fi

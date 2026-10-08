@@ -287,7 +287,8 @@ append_self_heal_semble_context()
 	fi
 
 	echo
-	if semble_query_block "${query_text}" "${SELF_HEAL_SEMBLE_MAX_CHUNKS}" "Validate Self-Heal Context"; then
+	# The self-heal prompt embeds STATIC_CONTEXT_FILE; count overlap with it.
+	if SEMBLE_STATIC_CONTEXT_FILE="${STATIC_CONTEXT_FILE:-}" semble_query_block "${query_text}" "${SELF_HEAL_SEMBLE_MAX_CHUNKS}" "Validate Self-Heal Context"; then
 		echo
 	fi
 }

@@ -42,6 +42,24 @@ class _TelemetryFakeOpenRouterResponse:
 		return json.dumps(self.payload).encode("utf-8")
 
 
+def test_semble_bootstrap_contribution_and_run_echo_filter() -> None:
+	log = "\n".join([
+		"SEMBLE_BOOTSTRAP mode=lazy state=ready install_ms=10 index_ms=20 run=123-2",
+		"SEMBLE_QUERY target=judge chunks=2 bytes=80 ms=3 sources=2 static_dup_bytes=45 run=123-2",
+		"SEMBLE_QUERY target=overflow chunks=2 bytes=40 ms=3 run=123-1",
+	])
+	parsed = parse_log(log, run_key="123-2")
+	assert parsed["semble_query_calls"] == 1
+	assert parsed["semble_echo_lines_dropped"] == 1
+	assert parsed["semble_bootstraps"] == 1
+	assert parsed["semble_bootstraps_unused"] == 0
+	assert parsed["semble_bootstrap_ms_total"] == 30
+	assert parsed["semble_sources_total"] == 2
+	assert parsed["semble_static_dup_bytes_total"] == 45
+	assert parse_log("SEMBLE_BOOTSTRAP mode=eager state=failed install_ms=0 index_ms=9")["semble_bootstraps_unused"] == 1
+	assert parse_log("SEMBLE_BOOTSTRAP mode=eager state=ready install_ms=x index_ms=9")["semble_bootstraps"] == 0
+
+
 def test_format_openrouter_usage_line_preserves_complete_usage_contract() -> None:
 	line = format_openrouter_usage_line(
 		{

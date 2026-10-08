@@ -31,6 +31,8 @@ env:
   CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
   REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
+  SEMBLE_BOOTSTRAP_MODE: ${{ vars.SEMBLE_BOOTSTRAP_MODE || 'lazy' }}
+  TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED: ${{ vars.TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED || 'false' }}
   SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
   WORKSPACE_HOOK_TIMEOUT_SECONDS: ${{ vars.WORKSPACE_HOOK_TIMEOUT_SECONDS || '600' }}
   WORKSPACE_REUSE_ENABLED: ${{ vars.WORKSPACE_REUSE_ENABLED || 'false' }}
@@ -100,6 +102,10 @@ jobs:
       )
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    outputs:
+      # Read by the heal-report job: "true" when this failed run should reach
+      # workflow failure heal (set by "Gate workflow failure heal report").
+      heal_report: ${{ steps.heal_report_gate.outputs.report }}
     concurrency:
       group: ai-implement-${{ github.repository }}-${{ github.event.issue.number }}
       cancel-in-progress: false
@@ -1027,7 +1033,7 @@ jobs:
 
           mkdir -p scripts
           _fetched_scripts=()
-          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh unblock_ledger.py targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh codex_isolated_exec.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py claude_anthropic_relay.py security_dependency.py auto_decisions.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
+          for f in gh_helpers.sh git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh unblock_ledger.py targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh codex_isolated_exec.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py claude_anthropic_relay.py security_dependency.py auto_decisions.py workflow_failure_heal.py workflow_failure_heal_evidence.sh implement_heal_preflight.sh heal_isolated_implement.sh review_untrusted_workspace.py files_touched_scope_guard.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -1541,12 +1547,12 @@ jobs:
           fi
 
       - name: setup-uv
-        if: env.SKIP_IMPLEMENT != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')
+        if: env.SKIP_IMPLEMENT != 'true' && ((env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy') || env.SERENA_ENABLED == 'true')
         continue-on-error: true
         uses: astral-sh/setup-uv@v7
 
       - name: Install semble
-        if: env.SKIP_IMPLEMENT != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')
+        if: env.SKIP_IMPLEMENT != 'true' && env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -1569,7 +1575,7 @@ jobs:
           fi
 
       - name: Build semble index
-        if: env.SKIP_IMPLEMENT != 'true' && (env.SEMBLE_ENABLED == 'true')
+        if: env.SKIP_IMPLEMENT != 'true' && env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -1639,28 +1645,35 @@ jobs:
 
           printf '%s\n' "${ISSUE_BODY}" > "${ISSUE_BODY_FILE}"
 
-          # TRUST BOUNDARY: ISSUE_BODY is user-controlled content from the GitHub
-          # issue. A fixed GITHUB_ENV delimiter lets an issue line containing
-          # EOF inject workflow variables. Check all multiline fields against
-          # a fresh delimiter before exporting any of them.
-          issue_env_delimiter=""
-          for issue_env_attempt in 1 2 3; do
-            issue_env_delimiter="ISSUE_$(openssl rand -hex 16)"
-            [ "${issue_env_delimiter}" != "ISSUE_" ] || exit 1
-            if ! printf '%s\n' "${ISSUE_SCOPE_LOCK_GLOB}" "${ISSUE_TITLE}" "${ISSUE_BODY}" | grep -Fx "${issue_env_delimiter}" >/dev/null; then
-              break
+          # TRUST BOUNDARY (#6504): issue text can close a fixed GITHUB_ENV
+          # delimiter and inject guard settings. Keep the body only in its data
+          # file; frame title and scope label with checked random delimiters.
+          write_untrusted_multiline_env() {
+            local key="$1" value="$2" delim hex
+            if ! hex="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"; then
+              echo "::error::Unable to create GITHUB_ENV delimiter for ${key}."
+              exit 1
             fi
-            issue_env_delimiter=""
-          done
-          [ -n "${issue_env_delimiter}" ] || exit 1
+            if [[ ! "${hex}" =~ ^[0-9a-f]{32}$ ]]; then
+              echo "::error::Unable to create GITHUB_ENV delimiter for ${key}."
+              exit 1
+            fi
+            delim="ghadelimiter_${hex}"
+            case "${value}" in
+              *"${delim}"*)
+                echo "::error::GITHUB_ENV delimiter collision for ${key}."
+                exit 1
+                ;;
+            esac
+            printf '%s<<%s\n%s\n%s\n' "${key}" "${delim}" "${value}" "${delim}" >> "$GITHUB_ENV"
+          }
           {
             echo "ISSUE_NUMBER=${ISSUE_NUMBER_JSON}"
             echo "ISSUE_URL=${ISSUE_URL_JSON}"
             echo "PR_BASE_BRANCH=${PR_BASE_BRANCH}"
-            printf 'ISSUE_SCOPE_LOCK_GLOB<<%s\n%s\n%s\n' "${issue_env_delimiter}" "${ISSUE_SCOPE_LOCK_GLOB}" "${issue_env_delimiter}"
-            printf 'ISSUE_TITLE<<%s\n%s\n%s\n' "${issue_env_delimiter}" "${ISSUE_TITLE}" "${issue_env_delimiter}"
-            printf 'ISSUE_BODY<<%s\n%s\n%s\n' "${issue_env_delimiter}" "${ISSUE_BODY}" "${issue_env_delimiter}"
           } >> "$GITHUB_ENV"
+          write_untrusted_multiline_env ISSUE_SCOPE_LOCK_GLOB "${ISSUE_SCOPE_LOCK_GLOB}"
+          write_untrusted_multiline_env ISSUE_TITLE "${ISSUE_TITLE}"
 
       - name: Detect smoke test and silence Telegram alerts
         if: env.SKIP_IMPLEMENT != 'true'
@@ -1736,7 +1749,7 @@ jobs:
             # falls back to the workflow-level default MODEL_EDITOR
             # rather than failing the implement.
             if echo "${ISSUE_TITLE}" | grep -qi '\[E2E Smoke Test alt-model\]'; then
-              alt_model="$(printf '%s' "${ISSUE_BODY}" | grep -oE 'this run uses `[A-Za-z0-9_./-]+` as the editor model override' | head -1 | sed -E 's/.*`([^`]+)`.*/\1/' || true)"
+              alt_model="$(grep -oE 'this run uses `[A-Za-z0-9_./-]+` as the editor model override' "${ISSUE_BODY_FILE:-/dev/null}" 2>/dev/null | head -1 | sed -E 's/.*`([^`]+)`.*/\1/' || true)"
               if [ -n "${alt_model:-}" ] \
                   && [ "${#alt_model}" -le 128 ] \
                   && printf '%s' "${alt_model}" | grep -qE '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; then
@@ -1772,6 +1785,15 @@ jobs:
             echo "Unable to fetch triggering approval comment from issue comments."
             exit 1
           fi
+
+      - name: Heal route preflight
+        if: env.SKIP_IMPLEMENT != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          WORKFLOW_HEAL_EVIDENCE_MAX_BYTES: ${{ vars.WORKFLOW_HEAL_EVIDENCE_MAX_BYTES || '' }}
+          WORKFLOW_HEAL_EVIDENCE_MAX_RUNS: ${{ vars.WORKFLOW_HEAL_EVIDENCE_MAX_RUNS || '' }}
+        run: |
+          bash scripts/implement_heal_preflight.sh
 
       - name: Validate approval phase label
         if: env.SKIP_IMPLEMENT != 'true'
@@ -2071,9 +2093,14 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true'
         run: |
           set -euo pipefail
+          if [ ! -f "${ISSUE_BODY_FILE:-}" ]; then
+            echo "::error::ISSUE_BODY_FILE is not a regular file." >&2
+            exit 1
+          fi
           {
             echo "ISSUE DESCRIPTION"
-            printf '%s\n\n' "${ISSUE_BODY}"
+            cat "${ISSUE_BODY_FILE}"
+            echo
             echo "CLARIFICATION ANSWERS"
             cat "${CLARIFICATION_ANSWERS_FILE}"
             echo
@@ -2176,7 +2203,7 @@ jobs:
           fi
 
       - name: Run workspace before_run hook
-        if: env.SKIP_IMPLEMENT != 'true'
+        if: env.SKIP_IMPLEMENT != 'true' && env.HEAL_ROUTE != 'true'
         id: workspace_before_run_hook
         run: |
           set -euo pipefail
@@ -2240,6 +2267,7 @@ jobs:
           # timeout below continues to honor it.
           EDITOR_IDLE_TIMEOUT: ${{ vars.EDITOR_IDLE_TIMEOUT || '1200' }}
           EDITOR_MAX_WALL: ${{ vars.EDITOR_MAX_WALL || '7800' }}
+          HEAL_ISOLATED_EDITOR_WALL_SECS: ${{ vars.HEAL_ISOLATED_EDITOR_WALL_SECS || '' }}
           CODEX_HEARTBEAT_ENABLED: ${{ vars.CODEX_HEARTBEAT_ENABLED || '1' }}
           CODEX_HEARTBEAT_INTERVAL_SECS: ${{ vars.CODEX_HEARTBEAT_INTERVAL_SECS || '30' }}
           CODEX_STALL_GUARD_ENABLED: ${{ vars.CODEX_STALL_GUARD_ENABLED || 'false' }}
@@ -2443,7 +2471,7 @@ jobs:
           # section so the editor's first turn is a write rather than a
           # read. A file that would push the cumulative byte count over
           # TARGETED_FILE_CONTEXT_MAX_BYTES is NOT head-truncated — it
-          # gets a "read with read tool" marker so the model uses its
+          # gets a "read with read tool" marker by default so the model uses its
           # native read flow. Fail-open: script errors fall through to
           # an empty output file, the rest of the prompt assembly still
           # works, and the model falls back to the previous read-then-
@@ -2451,15 +2479,16 @@ jobs:
           TARGETED_FILES_CONTEXT_FILE="${RUNTIME_DIR}/targeted_files_context.txt"
           : > "${TARGETED_FILES_CONTEXT_FILE}"
           if [ -s "${PLAN_FILE}" ]; then
-            python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/targeted_file_context.py" \
-              --plan-file "${PLAN_FILE}" \
-              --repo-root "${WORKSPACE_PATH:-${GITHUB_WORKSPACE}}" \
-              --semble-bin "$(command -v semble 2>/dev/null || true)" \
-              --semble-index "${SEMBLE_INDEX_PATH}" \
-              --semble-max-chunks "6" \
-              --semble-fallback "marker" \
-              --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES}" \
-              --output "${TARGETED_FILES_CONTEXT_FILE}" || \
+            tfc_args=(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/targeted_file_context.py"
+              --plan-file "${PLAN_FILE}"
+              --repo-root "${WORKSPACE_PATH:-${GITHUB_WORKSPACE}}"
+              --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES}"
+              --output "${TARGETED_FILES_CONTEXT_FILE}")
+            if [ "$(printf '%s' "${TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ] && [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ]; then
+              tfc_args+=(--semble-bin "$(command -v semble 2>/dev/null || true)"
+                --semble-index "${SEMBLE_INDEX_PATH}" --semble-max-chunks "6" --semble-fallback "marker")
+            fi
+            SEMBLE_STATIC_CONTEXT_FILE="${PWD}/pre_assembled_static.txt" "${tfc_args[@]}" || \
               echo "::warning::targeted_file_context.py failed; continuing without targeted-context block"
           fi
 
@@ -2493,6 +2522,9 @@ jobs:
             echo "=== IMPLEMENTATION CONTEXT ==="
             cat "${IMPLEMENTATION_CONTEXT_FILE}"
           } > "${CODEX_PROMPT_FILE}"
+          if [ "${HEAL_ROUTE:-false}" = true ]; then
+            cat "${RUNTIME_DIR}/heal_evidence.md" >> "${CODEX_PROMPT_FILE}"
+          fi
 
           # Safety net: codex-cli hard-caps `turn/start` stdin at 1,048,576
           # characters. Overshooting fails EVERY attempt before the editor
@@ -2949,6 +2981,13 @@ jobs:
             # variables on main, but a review-blocked baseline branch or an
             # unsynced integration branch checks out an older conftest.py, so
             # the workflow side has to hold on its own.
+            if [ "${HEAL_ROUTE:-false}" = true ]; then
+              bash "${HEAL_TRUSTED_SUPPORT_DIR:-${GITHUB_WORKSPACE}/.codex-workflow-src/scripts}/heal_isolated_implement.sh" "${PROMPT_FILE_TO_USE}" "${CODEX_OUTPUT_FILE}" || cmd_rc=$?
+              if [ "${cmd_rc}" -eq 42 ]; then
+                bash "${HEAL_TRUSTED_SUPPORT_DIR:-${GITHUB_WORKSPACE}/.codex-workflow-src/scripts}/implement_heal_preflight.sh" refuse out_of_heal_scope
+                exit 0
+              fi
+            else
             CODEX_THREAD_REUSE_STATE_KEY="implement" \
               CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT:-codex}" \
               CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT" \
@@ -2964,6 +3003,7 @@ jobs:
               CODEX_THREAD_REUSE_TIMEOUT_SECS="${attempt_wall}" \
               env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \
               bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run || cmd_rc=$?
+            fi
 
             emit_implement_substate "implement" "implement" "Finishing" "${attempt}" "${attempt_log_file}"
 
@@ -3422,7 +3462,7 @@ jobs:
           fi
 
       - name: Run workspace after_run hook
-        if: always() && env.SKIP_IMPLEMENT != 'true' && steps.implement_run.outcome != 'skipped'
+        if: always() && env.SKIP_IMPLEMENT != 'true' && env.HEAL_ROUTE != 'true' && steps.implement_run.outcome != 'skipped'
         run: |
           set -euo pipefail
           bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/run_workspace_hook.sh" implement after_run
@@ -3480,6 +3520,16 @@ jobs:
         # cleanup/exclusion rules, without mutating the real index/worktree.
         if: env.SKIP_IMPLEMENT != 'true'
         id: preflight_destructive_guard
+        # Step env overrides GITHUB_ENV so injected job values cannot weaken guards (#6504).
+        env:
+          ALLOW_BULK_DELETE: ${{ vars.ALLOW_BULK_DELETE || 'false' }}
+          BULK_DELETE_THRESHOLD: ${{ vars.BULK_DELETE_THRESHOLD || '3' }}
+          BULK_DELETE_THRESHOLD_MD: ${{ vars.BULK_DELETE_THRESHOLD_MD || '100' }}
+          ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
+          ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
+          SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}
         run: |
           set -euo pipefail
 
@@ -3553,8 +3603,8 @@ jobs:
           if [ "${{ github.repository }}" = "${wf_source}" ]; then
             is_self_repo="true"
           fi
-          add_u_excludes=(':!node_modules' ':!.codex-workflow-src' ':!.codex-workflow-src-main')
-          add_o_excludes=(':!node_modules' ':!.github/ai' ':!.codex-workflow-src' ':!.codex-workflow-src-main')
+          add_u_excludes=(':!node_modules' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.ai/.workspace_source_manifest.txt')
+          add_o_excludes=(':!node_modules' ':!.github/ai' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.ai/.workspace_source_manifest.txt')
           if [ "${is_self_repo}" = "false" ]; then
             # Build per-file exclusions from the runtime-generated scripts/.gitignore
             # instead of a blanket ':!scripts'.  The blanket exclusion previously
@@ -3580,6 +3630,10 @@ jobs:
             add_o_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
           fi
           git add -u -- "${add_u_excludes[@]}"
+          if git ls-files --error-unmatch -- .ai/.workspace_source_manifest.txt >/dev/null 2>&1 && [ ! -e .ai/.workspace_source_manifest.txt ] && [ ! -L .ai/.workspace_source_manifest.txt ]; then
+            git rm --cached --quiet -- .ai/.workspace_source_manifest.txt
+            echo "IMPLEMENT_GENERATED_MANIFEST_UNTRACKED path=.ai/.workspace_source_manifest.txt"
+          fi
           while IFS= read -r -d '' untracked_candidate; do
             [ -n "${untracked_candidate}" ] || continue
             if is_virtual_cleanup_path "${untracked_candidate}"; then
@@ -3740,7 +3794,7 @@ jobs:
           # is still the temp index here). Fails OPEN — no allowlist, master
           # toggle off, or a missing helper all log-and-allow, matching the
           # missing-allowlist posture used elsewhere in this workflow.
-          if [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ]; then
+          if [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ] && [ "${HEAL_ROUTE:-false}" != true ]; then
             echo "::notice::files_touched scope guard disabled (ENFORCE_FILES_TOUCHED='${ENFORCE_FILES_TOUCHED:-true}')."
           else
             scope_staged="$(git diff --cached --name-only --diff-filter=ACMRD || true)"
@@ -3750,10 +3804,16 @@ jobs:
               printf '%s\n' "${scope_staged}" > "${scope_staged_file}"
               scope_violations=""
               scope_rc=0
+              scope_guard_extra_args=()
+              if [ "${HEAL_ROUTE:-false}" = true ]; then
+                scope_guard_extra_args+=(--strict-allowlist)
+              fi
               if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
                 set +e
                 scope_violations="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
-                  --issue-body-file "${ISSUE_BODY_FILE:-}" \
+                  "$(if [ "${HEAL_ROUTE:-false}" = true ]; then printf '%s' '--allowlist-file'; else printf '%s' '--issue-body-file'; fi)" \
+                  "$(if [ "${HEAL_ROUTE:-false}" = true ]; then printf '%s' "${HEAL_SCOPE_FILE:?}"; else printf '%s' "${ISSUE_BODY_FILE:-}"; fi)" \
+                  "${scope_guard_extra_args[@]}" \
                   --staged-file "${scope_staged_file}" \
                   --allowlist-out "${scope_allowlist_file}")"
                 scope_rc=$?
@@ -3767,12 +3827,16 @@ jobs:
                   echo "files_touched scope guard: all staged paths fall within the issue allowlist."
                   ;;
                 10)
+                  if [ "${HEAL_ROUTE:-false}" = true ]; then
+                    echo '::error::Verified heal scope is empty; refusing scope check.' >&2
+                    exit 1
+                  fi
                   echo "::notice::files_touched scope guard skipped: issue declares no files_touched allowlist."
                   ;;
                 20)
                   scope_count="$(printf '%s\n' "${scope_violations}" | sed '/^$/d' | wc -l | tr -d ' ')"
                   scope_allowlist="$(sed '/^$/d' "${scope_allowlist_file}" 2>/dev/null || true)"
-                  if [ "${ALLOW_OUT_OF_SCOPE_FILES:-false}" = "true" ]; then
+                  if [ "${ALLOW_OUT_OF_SCOPE_FILES:-false}" = "true" ] && [ "${HEAL_ROUTE:-false}" != true ]; then
                     echo "::warning::files_touched scope guard: ${scope_count} staged path(s) outside the allowlist, but ALLOW_OUT_OF_SCOPE_FILES=true — allowing."
                     printf '%s\n' "${scope_violations}" | sed '/^$/d;s/^/  - /'
                   else
@@ -3793,6 +3857,10 @@ jobs:
                   fi
                   ;;
                 *)
+                  if [ "${HEAL_ROUTE:-false}" = true ]; then
+                    echo "::error::Heal scope guard failed with exit ${scope_rc}; refusing scope check." >&2
+                    exit 1
+                  fi
                   echo "::warning::files_touched scope guard failed open (helper exit ${scope_rc}); staged change set not scope-checked this run."
                   ;;
               esac
@@ -3802,7 +3870,7 @@ jobs:
           # <<< files_touched scope-enforcement guard (preflight) <<<
 
       - name: Validate syntax of changed files
-        if: env.SKIP_IMPLEMENT != 'true'
+        if: env.SKIP_IMPLEMENT != 'true' && env.HEAL_ROUTE != 'true'
         id: validate_syntax_changed_files
         continue-on-error: true
         run: |
@@ -3814,7 +3882,7 @@ jobs:
           CAPTURE_FILE="${CAPTURE_FILE}" RUNTIME_DIR="${RUNTIME_DIR}" bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/validate_changed_files_syntax.sh"
 
       - name: Attempt post-Codex syntax repair
-        if: env.SKIP_IMPLEMENT != 'true' && steps.validate_syntax_changed_files.outcome == 'failure'
+        if: env.SKIP_IMPLEMENT != 'true' && env.HEAL_ROUTE != 'true' && steps.validate_syntax_changed_files.outcome == 'failure'
         id: post_codex_syntax_repair
         continue-on-error: true
         env:
@@ -4207,7 +4275,7 @@ jobs:
               done < "${ALLOW_LIST_FILE}"
               echo
               if [ -s "${REPAIR_SEMBLE_QUERY_FILE}" ] && declare -F semble_query_block >/dev/null 2>&1; then
-                semble_query_block "$(cat "${REPAIR_SEMBLE_QUERY_FILE}")" 6 "Implement Repair Context" || true
+                SEMBLE_STATIC_CONTEXT_FILE=./pre_assembled_static.txt semble_query_block "$(cat "${REPAIR_SEMBLE_QUERY_FILE}")" 6 "Implement Repair Context" || true
               fi
             } > "${REPAIR_PROMPT_FILE}"
             emit_implement_substate "implement_repair" "implement_repair" "BuildingPrompt" "${attempt}"
@@ -4337,6 +4405,15 @@ jobs:
       - name: Protect workflow files from implementation edits
         if: env.SKIP_IMPLEMENT != 'true'
         id: protect_workflow_files
+        env:
+          ALLOW_BULK_DELETE: ${{ vars.ALLOW_BULK_DELETE || 'false' }}
+          BULK_DELETE_THRESHOLD: ${{ vars.BULK_DELETE_THRESHOLD || '3' }}
+          BULK_DELETE_THRESHOLD_MD: ${{ vars.BULK_DELETE_THRESHOLD_MD || '100' }}
+          ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
+          ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
+          SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}
         run: |
           set -euo pipefail
 
@@ -4397,7 +4474,7 @@ jobs:
           fi
 
           # shellcheck source=/dev/null
-          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/write_guard.sh"
+          source "${HEAL_TRUSTED_SUPPORT_DIR:-${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}}/write_guard.sh"
           IMPLEMENT_WRITE_GUARD_FILE="$(mktemp)"
           {
             git diff --name-only --diff-filter=ACMRD HEAD || true
@@ -4421,6 +4498,15 @@ jobs:
       - name: Commit changes
         if: env.SKIP_IMPLEMENT != 'true'
         id: commit_changes
+        env:
+          ALLOW_BULK_DELETE: ${{ vars.ALLOW_BULK_DELETE || 'false' }}
+          BULK_DELETE_THRESHOLD: ${{ vars.BULK_DELETE_THRESHOLD || '3' }}
+          BULK_DELETE_THRESHOLD_MD: ${{ vars.BULK_DELETE_THRESHOLD_MD || '100' }}
+          ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
+          ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
+          SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}
         run: |
           set -euo pipefail
           bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"
@@ -4448,6 +4534,14 @@ jobs:
         if: env.SKIP_IMPLEMENT != 'true' && (failure() || cancelled()) && (steps.preflight_destructive_guard.outputs.destructive_commit_blocked != '' || steps.commit_changes.outputs.destructive_commit_blocked != '' || steps.preflight_destructive_guard.outputs.scope_violation_blocked != '' || steps.commit_changes.outputs.scope_violation_blocked != '' || steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict != '' || steps.commit_changes.outputs.staged_support_rebase_conflict != '')
         id: handle_guard_block
         env:
+          ALLOW_BULK_DELETE: ${{ vars.ALLOW_BULK_DELETE || 'false' }}
+          BULK_DELETE_THRESHOLD: ${{ vars.BULK_DELETE_THRESHOLD || '3' }}
+          BULK_DELETE_THRESHOLD_MD: ${{ vars.BULK_DELETE_THRESHOLD_MD || '100' }}
+          ENFORCE_FILES_TOUCHED: ${{ vars.ENFORCE_FILES_TOUCHED || 'true' }}
+          ALLOW_OUT_OF_SCOPE_FILES: ${{ vars.ALLOW_OUT_OF_SCOPE_FILES || 'false' }}
+          ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
+          SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
@@ -5451,6 +5545,8 @@ jobs:
             2>/dev/null || true
           gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
             --add-label 'ai:done' --remove-label 'ai:implementing' >/dev/null 2>&1 || true
+          gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="<!-- ai:implementation-completed -->" >/dev/null 2>&1 || echo "::warning::Could not record implementation completion on issue #${ISSUE_NUMBER}."
 
       - name: Force orchestrate poll after implementation PR
         if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true' && steps.create_pr.outputs.pr_url != ''
@@ -5615,6 +5711,7 @@ jobs:
           # backward compatibility.
           MODEL_DIAGNOSE: ${{ env.MODEL_DIAGNOSE }}
           MODEL_DIAGNOSE_REASONING_EFFORT: ${{ env.MODEL_DIAGNOSE_REASONING_EFFORT }}
+          SEMBLE_STATIC_CONTEXT_FILE: ./pre_assembled_static.txt
         run: |
           set -euo pipefail
           diagnose_path="${PATH}"
@@ -5841,6 +5938,23 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Gate workflow failure heal report
+        # Marks a failed run for the heal-report job. Same predicate as
+        # "Comment on issue failure": a guard block (its ai:destructive-blocked
+        # / ai:scope-blocked latch already reaches heal through the label path)
+        # and a failure the diagnose step turned into fix-up issues are not
+        # reported. A BLOCKED verdict (codex_blocked.flag) is a deliberate
+        # answer, not a pipeline defect, so it is not reported either.
+        id: heal_report_gate
+        if: failure() && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.diagnose_post_codex_failure.outputs.handled != 'true' && steps.preflight_destructive_guard.outputs.scope_violation_blocked == '' && steps.commit_changes.outputs.scope_violation_blocked == '' && steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict == '' && steps.commit_changes.outputs.staged_support_rebase_conflict == ''
+        run: |
+          set -euo pipefail
+          if [ -n "${RUNTIME_DIR:-}" ] && [ -f "${RUNTIME_DIR}/codex_blocked.flag" ]; then
+            echo "WORKFLOW_HEAL_PHASE_REPORT gate=skip reason=blocked_verdict issue=${ISSUE_NUMBER}"
+            exit 0
+          fi
+          echo "report=true" >> "$GITHUB_OUTPUT"
+
       - name: Exit safely
         if: failure() || cancelled()
         run: exit 0
@@ -5901,3 +6015,63 @@ jobs:
              [[ "${CODEX_FAILURE_LOG_DIR}" =~ ^${RUNNER_TEMP:-/tmp}/codex-implement-failure-logs$ ]]; then
             rm -rf "${CODEX_FAILURE_LOG_DIR}"
           fi
+
+  heal-report:
+    # Workflow failure heal (README "Workflow Failure Heal"): report a failed
+    # implement run to coding-workflows' heal intake, which diagnoses it and opens
+    # an ai:workflow-heal issue for the pipeline to fix. A separate job, so the
+    # implement job has finished and the intake reads its complete log. Only a
+    # `failure` result is reported: a cancelled run was superseded or timed
+    # out. A run that ended in a deliberate terminal state (guard block,
+    # diagnosed fix-up issues, BLOCKED verdict) sets no heal_report output and
+    # is not reported. `permissions: {}` keeps the job inside any caller's
+    # grant; GH_PAT does the work. The reporter always exits 0.
+    needs: implement
+    if: >-
+      always() && needs.implement.result == 'failure' &&
+      needs.implement.outputs.heal_report == 'true' &&
+      !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+      WORKFLOW_HEAL_PHASE_FAILURE_STREAK: ${{ vars.WORKFLOW_HEAL_PHASE_FAILURE_STREAK || '1' }}
+      WORKFLOW_HEAL_PHASE: implement
+      WORKFLOW_HEAL_ISSUE_NUMBER: ${{ github.event.issue.number }}
+      REPORT_WORKFLOW_NAME: ${{ github.workflow }}
+    steps:
+      - name: Resolve workflow support ref
+        run: |
+          set -euo pipefail
+          wf_source="shubhodeep1/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            echo "SCRIPT_REF=${{ github.sha }}" >> "$GITHUB_ENV"
+          else
+            echo "SCRIPT_REF=stable" >> "$GITHUB_ENV"
+          fi
+
+      - name: Checkout workflow support source
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ env.SCRIPT_REF }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: scripts
+
+      - name: Report the failed run to workflow failure heal
+        run: |
+          set -euo pipefail
+          reporter=".codex-workflow-src/scripts/workflow_failure_heal_phase_report.sh"
+          if [ ! -f "${reporter}" ]; then
+            echo "WORKFLOW_HEAL_PHASE_REPORT skip reason=reporter_missing ref=${SCRIPT_REF}"
+            exit 0
+          fi
+          REPORT_WRAPPER_SHA="$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" \
+            RUNTIME_DIR="${RUNNER_TEMP}/workflow-heal-phase-report" \
+            bash "${reporter}"

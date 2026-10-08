@@ -246,7 +246,7 @@ def test_clarify_agent_runs_only_in_isolated_container() -> None:
 	wf = _read(CLARIFY_WF)
 	runner = _read(REPO_ROOT / "scripts" / "clarify_isolated_run.sh")
 	assert 'bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt"' in wf
-	assert "codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl; do" in wf
+	assert "codex_helpers.sh clarify_isolated_run.sh clarify_openrouter_broker.py security_dependency.py auto_decisions.py orchestrate_parse_and_post_answer.sh ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl workflow_failure_heal.py workflow_failure_heal_evidence.sh; do" in wf
 	assert 'install -m 0644 "${sandbox_src}" scripts/clarify_sandbox/Dockerfile' in wf
 	assert "--network none --read-only --cap-drop ALL --security-opt no-new-privileges" in runner
 	assert "--sandbox read-only" in runner
@@ -519,8 +519,7 @@ ENGINE_WORKFLOWS = (
 
 def _steps(workflow: str) -> list[dict]:
 	data = yaml.safe_load(_read(REPO_ROOT / ".github" / "workflows" / workflow))
-	(job,) = data["jobs"].values()
-	return job["steps"]
+	return data["jobs"]["respond" if workflow == "orchestrate_clarify_respond.yml" else workflow.removesuffix(".yml")]["steps"]
 
 
 def test_engine_steps_resolve_the_role_and_guard_the_credential() -> None:
