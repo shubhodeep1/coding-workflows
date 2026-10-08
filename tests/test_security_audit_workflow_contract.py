@@ -2829,9 +2829,6 @@ def main() -> int:
 	return 0
 
 
-if __name__ == "__main__":
-	raise SystemExit(main())
-
 
 def _git_fixture_repo_line_ownership(base_dir: Path) -> tuple[Path, str, str]:
 	"""Base commit writes mod.py lines 1-3; the project commit rewrites line 2 only.
@@ -2971,3 +2968,7 @@ def test_security_audit_line_ownership_skips_issues_mode() -> None:
 	gate = script.split("SECURITY_AUDIT_LINE_OWNERSHIP_EFFECTIVE=\"off\"", 1)[1].split("fi\n", 1)[0]
 	assert '"${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json"' in gate
 	assert '-n "${SECURITY_AUDIT_DIFF_BASE}"' in gate
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

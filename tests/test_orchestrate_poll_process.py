@@ -23823,10 +23823,6 @@ def test_needs_human_digest_park_never_triggers_the_staged_support_latch_release
 	assert "/approved" not in park and "ai:awaiting-approval" not in park
 
 
-if __name__ == "__main__":
-	raise SystemExit(main())
-
-
 # --- Line ownership (plan item 4b, decision D4) ------------------------------
 
 
@@ -24013,3 +24009,7 @@ def test_security_pass_line_ownership_off_is_forwarded_and_keeps_findings_blocki
 	assert latest_state["security_pass_status"] == "blocked"
 	assert "security_pass_waived_findings" not in latest_state or latest_state["security_pass_waived_findings"] == []
 	assert "findings=1 cycle=0 advisory=0" in result["stdout"] + result["stderr"]
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

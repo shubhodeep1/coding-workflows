@@ -6553,7 +6553,21 @@ security_pass_record_line_ownership_advisories() {
       if [[ "${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}" =~ ^[0-9]+$ ]]; then
         filed_issue="follow-up #${SECURITY_PASS_ADVISORY_ISSUE_NUMBER}"
       else
-        filed_issue="follow-up not filed (retried via the waiver row)"
+        # Immediate create failed: mark the row pending (with its finding
+        # payload) so security_pass_file_deferred_advisory_followups retries
+        # it at the final merge; otherwise the waiver would suppress the
+        # finding with no follow-up ever filed.
+        if jq --arg id "${finding_id}" --arg head_sha "${head_sha}" --argjson finding "$(printf '%s' "${finding_json}" | jq -c '.finding // {finding_id, file, line, owasp_or_stride_category, severity, exploit_scenario}')" '
+          .security_pass_waived_findings = [
+            (.security_pass_waived_findings // [])[]
+            | if .finding_id == $id and .issue == null then (. + {followup_pending: true, audited_head_sha: $head_sha, finding: $finding}) else . end
+          ]
+        ' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+          filed_issue="follow-up not filed yet (retried after \`${integration_branch}\` merges)"
+        else
+          rm -f "${STATE_FILE}.tmp"
+          filed_issue="follow-up not filed (state write failed)"
+        fi
       fi
     fi
     status_lines="${status_lines}"$'\n'"- \`$(security_pass_prose "${finding_id}")\` at \`$(security_pass_prose "$(printf '%s' "${finding_json}" | jq -r '"\(.file):\(.line)"')")\` ($(security_pass_prose "$(printf '%s' "${finding_json}" | jq -r '.severity')")): ${filed_issue}"
@@ -7723,7 +7737,7 @@ run_security_pass_inline() {
         && mv "${findings_file}.blocking" "${findings_file}"; then
         security_pass_record_line_ownership_advisories "${advisory_findings_file}" "${current_head_sha}" "${merge_base_sha}" "${integration_branch}"
       else
-        rm -f "${findings_file}.blocking"
+        rm -f "${findings_file}.blocking" "${advisory_findings_file}"
         advisory_count=0
         echo "::warning::Could not split line-ownership advisories from the security-pass result for tracking issue #${TRACKING_NUM}; every finding stays blocking."
       fi
