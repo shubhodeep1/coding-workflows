@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should this issue be pointed at `ai/issue-6782`, given that a `/answer` comment cannot change what the resolver reads (it fetches only the issue body via `get_issue_body`)?\nChoices:\nA) Edit this issue's body to add the line `- Integration branch: `ai/issue-6782`` on its own line, then `/reclarify`. Planning and implementation will then check out `ai/issue-6782` and edit the test there. (RECOMMENDED)\nB) Close this issue and open a new one whose body has the standalone `- Integration branch: `ai/issue-6782`` line, with the same specification and links to PR #6786 and #6801.\nC) Close this issue and make the test change on PR #6786 directly, through review autofix or a commit to `ai/issue-6782`, without a separate issue.\nD) Proceed unchanged. Planning will resolve to `main`, where the target test does not exist, and implementation will stop again. **Note:** this reproduces the #6801 block.\nQ2: If PR #6786 is no longer open, or `ai/issue-6782` no longer exists when the implementer checks, what should happen?\nChoices:\nA) Stop with `BLOCKED: PR #6786 not open or branch ai/issue-6782 missing` and do not edit anything on `main`. (RECOMMENDED)\nB) Close this issue as obsolete: the test only exists on that branch, so there is nothing to change.\nAssumptions: the target test lives only on `ai/issue-6782`. I could not see PR #6786's live state from this checkout; the implementer must check it before editing, as the issue requires.",
+  "fingerprint": "74c9259105e1dd2a0a6204b0f28f405fd982334be284372aaae71b9c4b59d872",
+  "lineage": {
+    "issue_number": 6813,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37859404535",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37859404535",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008233109_3a1f3c4b53",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6813,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37859404535"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6813 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T23:31:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
