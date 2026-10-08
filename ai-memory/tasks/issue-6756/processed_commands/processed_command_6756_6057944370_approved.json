@@ -5,13 +5,28 @@
   "entry_id": "processed_command_6756_6057944370_approved",
   "issue_number": 6756,
   "metadata": {
+    "branch": "ai/issue-6756",
+    "changed_files": [
+      "README.md",
+      "agents.md",
+      "changelog.d/6756-heal-non-retryable-routing.md",
+      "scripts/workflow_failure_heal.py",
+      "scripts/workflow_failure_heal_intake.sh",
+      "scripts/workflow_failure_heal_report.sh",
+      "tests/test_workflow_failure_heal.py"
+    ],
+    "issue_number": 6756,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6756",
+    "pr_number": 6761,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6761",
+    "run_attempt": "1",
+    "run_id": "37764166230",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37764166230"
   },
   "run_attempt": 1,
   "run_id": "37764166230",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-08T10:34:57Z",
+  "status": "completed",
+  "timestamp": "2026-10-08T10:57:10Z",
   "workflow": "implement"
 }
