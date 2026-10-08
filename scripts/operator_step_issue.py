@@ -428,7 +428,9 @@ def tick(repo: str, stable_sha: str, repo_dir: str = ".", trusted_login: str | N
 	candidates = find_issues(issues)
 	if not candidates:
 		return result
-	number = int(candidates[0]["number"])
+	number = candidates[0].get("number")
+	if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
+		raise ApiError("unreadable issue list: operator-step tracker has no issue number")
 	result["issue"] = number
 	latest = _authoritative_entry_comments(load_entry_comments(repo, number), login)
 	for key in sorted(latest):
