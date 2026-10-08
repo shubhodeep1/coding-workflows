@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.78,
+  "details": "Multiple merged changes concern manifest union, conflict synchronization, or excluding a generated manifest from merge-train handling. When changing conflict-resolution or merge-train logic, verify how generated workspace manifests are classified and whether their contents must be unioned or ignored.",
+  "fingerprint": "a58bedbdc17807be36ebbc06694df79ddc4be7cd9c6a55f6e2a4f499e01171ca",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37711685027",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37711685027",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6681",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6700",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6701",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6705",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6706",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6683",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6702",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6703",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6707",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6708"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261008012137_04a523307f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Conflict handling should account for generated workspace manifests separately from source changes.",
+  "timestamps": {
+    "created_at": "2026-10-08T01:21:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
