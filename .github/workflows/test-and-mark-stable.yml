@@ -376,6 +376,8 @@ jobs:
       # This diagnostic runs after checkout's main step and before
       # checkout's post-step cleanup, then re-executes the same git
       # operations to isolate the failing command.
+      # Print config keys only: values can include checkout's encoded
+      # authorization header (security finding #6531).
       # Remove after root-cause is identified and a targeted fix lands.
       - &git-checkout-diag
         name: git diagnostic (checkout exit-128 probe)
@@ -384,8 +386,8 @@ jobs:
           set +e
           echo "=== git diagnostic: simulating checkout post-step operations ==="
           git --version
-          echo "--- config (first 200) ---"
-          git config --list --show-origin 2>&1 | head -n 200
+          echo "--- config keys (first 200; values withheld) ---"
+          git config --list --name-only --show-origin 2>&1 | head -n 200
           echo "--- status / head ---"
           git status 2>&1; echo "status_rc=$?"
           git log -1 --oneline 2>&1; echo "log_rc=$?"
@@ -6599,11 +6601,6 @@ jobs:
           echo ""
           echo "Changelog notes:"
           cat "${{ steps.changelog.outputs.notes_file }}"
-
-      # Temporary: reveal which git invocation in checkout's post-step
-      # produces `The process '/usr/bin/git' failed with exit code 128`.
-      # Remove after root-cause is identified and a targeted fix lands.
-      - *git-checkout-diag
 
   # ──────────────────────────────────────────────────────────────────
   # Job 3.5: Sync stable bug fixes back to main
