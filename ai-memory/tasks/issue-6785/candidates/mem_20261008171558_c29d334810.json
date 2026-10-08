@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\nQ3: A\n\nRATIONALE:\nQ1: The grant can only come from the issue body. `build_automation_grant` in `scripts/files_touched_scope_guard.py` (lines 177-199) reads only `issue_meta[\"body\"]`, and the author must be the pipeline login or OWNER/MEMBER/COLLABORATOR, so no answer comment can supply it. Option A is the smallest correct grant. The wrapper changes in option B are not needed: the reusable `.github/workflows/check_failure_triage.yml` already reads repo vars directly (`vars.CHECK_FAILURE_TRIAGE_ENABLED` at lines 54, 171 and 196), so the new flag can be read the same way. Option C is known to fail again with `reason=no_allowlist`. A maintainer must do this edit before `/approved`; it is listed under SETUP REQUIRED.\nQ2: Today the final validation in `scripts/check_failure_triage.sh` (lines 667-698) rejects any `Integration branch:` line as `routing_key`. Option C would therefore make every routed issue fail with exit 1 and a CRITICAL alert. Option A keeps a single fail-closed validation pass over the final body and allows only the one line whose value equals the verified head ref. That is the narrowest change that keeps forged routing keys rejected.\nQ3: The task asks for exactly four checks: an open PR, a same-repository head, a valid head ref, and matching nonempty check/PR head SHAs. It sets no filter on branch names, so option B or C would add a requirement nobody asked for. Option A follows the spec literally. `resolve_integration_ref.sh` already accepts any existing valid branch.\n\nEXECUTION PLAN (required for any non-letter decision):\n(No non-letter decisions. Implementation notes binding on the planner:)\n- Files to change are exactly the four granted paths:\n  - `scripts/check_failure_triage.sh`\n  - `.github/workflows/check_failure_triage.yml`\n  - `tests/test_check_failure_triage_workflow_security.py`\n  - `changelog.d/6773-check-triage-pr-head-routing.md`\n  \n  Do not edit `README.md` or `agents.md`: once the issue declares a `files_touched` list, the general scope guard rejects any path outside it. Document the flag in the changelog fragment and in a comment header in the script instead.\n- Flag: in the workflow, set `CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED: ${{ vars.CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED || 'false' }}`. In the script, read `${CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED:-false}` (\u00a78 requires the default inside the helper). When the flag is anything other than `true`, the body and behaviour must stay byte-identical to today's.\n- When the flag is `true`, read the PR's `state`, `head.repo.full_name`, `head.ref` and `head.sha` only from the authenticated PR API payload, never from event or issue text. Require all of these:\n  - `state == open`;\n  - `head.repo.full_name == REPO`;\n  - `head.ref` passes `git check-ref-format --branch`, contains no whitespace or control characters, and is length-capped;\n  - `CHECK_TRIAGE_HEAD_SHA` and `head.sha` are both nonempty 40-hex values and equal.\n  \n  Pass the head ref through `env:` or a file, never into `run:` source (integration-ref trust boundary).\n- If any check fails, log `CHECK_TRIAGE routing_unverified reason=<state|cross_repo|invalid_ref|sha_mismatch|payload_unavailable> pr=<n>`, send a WARNING through `tg_send_msg`, and exit 0 before `gh issue create`, without filing an issue.\n- If all checks pass, write `Integration branch: <head.ref>` into the body as it is composed (after the marker lines, before the final `}` redirect). Pass the verified ref as an extra argv value to the validator. The validator then allows exactly one routing-key line, which must be exactly `Integration branch: <verified ref>`. Any other routing key, a second line, or a mismatched value still yields `routing_key`. Run this before `CHECK_TRIAGE_PREPARE_ONLY` exits.\n- Tests must cover:\n  - flag off: unchanged body and no routing line;\n  - flag on with a valid PR: exactly one routing line, and the body passes validation;\n  - each rejected case (closed PR, cross-repo head, invalid ref, SHA mismatch, empty SHA, unavailable payload): `routing_unverified`, exit 0, and `gh issue create` is never called;\n  - a forged extra `Integration branch:`/`Target branch:` line in the evidence is still rejected while routing is on.\n\nSETUP REQUIRED:\n- files_touched grant (issue-body edit by OWNER/MEMBER/COLLABORATOR): before `/approved`, a maintainer adds to this issue's body a `files_touched:` block listing exactly `scripts/check_failure_triage.sh`, `.github/workflows/check_failure_triage.yml`, `tests/test_check_failure_triage_workflow_security.py` and `changelog.d/6773-check-triage-pr-head-routing.md`, and confirms `ALLOW_WORKFLOW_EDITS=true`. Until then, implement rejects the commit with `IMPLEMENT_AUTOMATION_PATH_GUARD reason=no_allowlist` and the issue stays latched in `ai:scope-blocked`.\n- CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED (variable): set to `true` once an operator wants check-triage issues routed to the verified PR head branch. While it is unset or not `true`, triage files issues exactly as it does today, with no `Integration branch:` line.",
+  "fingerprint": "df620b7748d4f65fbc1841415a352328c36783973ca4344578e5cee706900950",
+  "lineage": {
+    "issue_number": 6785,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37813777013",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37813777013",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6785"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008171558_c29d334810",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6785,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37813777013"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6785",
+  "timestamps": {
+    "created_at": "2026-10-08T17:15:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
