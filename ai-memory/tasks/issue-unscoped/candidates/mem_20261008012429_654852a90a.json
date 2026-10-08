@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "Merged changes to Claude or AI-engine roles touched `.github/ai/claude_engine.json`, role-dispatching scripts, and focused tests together. When adjusting role behavior, check all three layers so configuration, invocation behavior, and tested contracts remain aligned.",
+  "fingerprint": "a332a711e379f9fcd17f74337245ca0da673321e9d991907f0686d54c241de80",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37711685027",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37711685027",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6681",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6700",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6701",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6705",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6706",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6683",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6702",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6703",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6707",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6708"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261008012429_654852a90a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "AI engine role changes often require coordinated updates across configuration, dispatch scripts, and tests.",
+  "timestamps": {
+    "created_at": "2026-10-08T01:24:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
