@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.72,
+  "details": "Engine-related changes touch shared configuration and several workflows, with tests covering fallback policy and utility roles. When changing engine selection or fallback behavior, check the shared configuration and all workflow consumers rather than updating a single entry point.",
+  "fingerprint": "05451976ea8a049fe91522ef9606eff8dfe67aaa2cdf2a39c5c1f19b3ed7dea3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37737156345",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37737156345",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6463",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6492",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6705",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6706",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6711",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6484",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6496",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6707",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6708",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6719"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261008062940_8c2032d3ff",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "AI engine behavior is configured and exercised across multiple workflow entry points.",
+  "timestamps": {
+    "created_at": "2026-10-08T06:29:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
