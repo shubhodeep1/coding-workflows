@@ -78,6 +78,12 @@ def test_missing_files_touched_skips() -> None:
 	assert oos == []
 
 
+def test_heal_strict_allowlist_does_not_auto_allow_lockfiles() -> None:
+	status, _allow, out_of_scope = guard.evaluate_allowlist(["scripts/fix.py", "tests/**", "changelog.d/*.md"], ["package-lock.json"], allow_lockfiles=False)
+	assert status == guard.STATUS_OUT_OF_SCOPE
+	assert out_of_scope == ["package-lock.json"]
+
+
 def test_empty_files_touched_block_skips() -> None:
 	# A `files_touched:` header with no entries must skip, never enforce-empty.
 	status, _allow, _oos = guard.evaluate("files_touched:\n\nNext paragraph.\n", ["anything.ts"])
