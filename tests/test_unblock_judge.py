@@ -591,9 +591,8 @@ def test_security_reissue_keeps_a_finding_open_or_transfers_its_marker() -> None
 	assert standalone[0]["body"].splitlines()[0] == "<!-- ai:security-finding:abc-1 -->"
 	assert standalone[1] == {"op": "close", "issue": 7, "reason": "not_planned", "pr": False}
 	missing = actions.plan(_verdict("reissue", instructions="correct spec"), _ctx(labels=security_labels))
-	assert [op["op"] for op in missing] == ["create_issue", "comment"]
-	assert missing[0]["labels"] == ["ai:security"]
-	assert missing[1]["issue"] == 7 and "stays open" in missing[1]["body"]
+	assert [op["op"] for op in missing] == ["comment", "telegram"]
+	assert missing[0]["issue"] == 7 and "stays open" in missing[0]["body"]
 	project_child = actions.plan(_verdict("reissue", instructions="correct spec"), _ctx(labels=security_labels, tracking=12, security_finding_id="abc-1"))
 	assert [op["op"] for op in project_child] == ["comment", "comment"]
 	assert project_child[0]["issue"] == 12 and project_child[1]["issue"] == 7

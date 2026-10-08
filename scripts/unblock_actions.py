@@ -370,8 +370,9 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 		# A tracked security finding is split through the poller's fix-up
 		# request; it carries the finding marker, from which the poller labels
 		# the successor `ai:security` (#6541). Without a valid marker the
-		# successor cannot be bound to the finding, so nothing is split.
-		if security_issue and (ctx.get("security_metadata_unsafe") or (ctx["tracking"] and not ctx.get("security_finding_id"))):
+		# successor cannot be bound to the finding, standalone or tracked, so
+		# nothing is split and the original keeps its block.
+		if security_issue and (ctx.get("security_metadata_unsafe") or not ctx.get("security_finding_id")):
 			return [
 				{"op": "comment", "issue": item, "body": "This security finding stays open: its finding marker, dependency or target-branch metadata could not be carried to a replacement safely, so no re-issue was created."},
 				{"op": "telegram", "level": "WARNING", "text": f"Unblock judge could not safely re-issue security finding #{item}; its metadata needs correction."},
