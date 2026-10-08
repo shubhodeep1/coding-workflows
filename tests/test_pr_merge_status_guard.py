@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -2843,3 +2844,162 @@ def test_strip_data_heredoc_bodies_keeps_operator_and_shell_bodies() -> None:
 	piped = "cat <<'EOF' | bash\ngit push\nEOF"
 	assert guard._strip_data_heredoc_bodies(piped) == piped
 	assert guard._strip_data_heredoc_bodies("env cat <<'EOF'\nit's\nEOF") == "env cat <<'EOF'"
+
+
+# ──────────────────────────────────────────────────────────────────
+# Shell wrappers: `bash -c`, `eval`, `$(...)`, backticks, `<(...)`
+# (security finding merged-pr-guard-misses-wrapped-git). Every case runs
+# against both copies; the live copy must match the template byte for byte.
+# ──────────────────────────────────────────────────────────────────
+
+
+def _load_template_guard():
+	spec = importlib.util.spec_from_file_location("pr_merge_status_guard_template", TEMPLATE_GUARD_PATH)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module
+
+
+template_guard = _load_template_guard()
+WRAPPER_GUARD_COPIES = pytest.mark.parametrize(
+	("guard_module", "hook_path"),
+	[(guard, GUARD_PATH), (template_guard, TEMPLATE_GUARD_PATH)],
+	ids=["live", "template"],
+)
+
+
+def _nested_shell(command: str, levels: int) -> str:
+	for _ in range(levels):
+		command = "bash -c " + shlex.quote(command)
+	return command
+
+
+def _run_hook_at(hook_path: Path, repo: Path, stub_bin: Path, command: str) -> subprocess.CompletedProcess:
+	env = _git_env()
+	env["PATH"] = f"{stub_bin}{os.pathsep}{env.get('PATH', '')}"
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	env.pop("CLAUDE_PR_MERGE_GUARD", None)
+	env["TMPDIR"] = str(repo.parent / "cache")
+	(repo.parent / "cache").mkdir(exist_ok=True)
+	return subprocess.run(
+		[sys.executable, str(hook_path)],
+		input=json.dumps({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(repo)}),
+		capture_output=True,
+		text=True,
+		env=env,
+		timeout=60,
+		check=False,
+	)
+
+
+@WRAPPER_GUARD_COPIES
+@pytest.mark.parametrize("command", [
+	"bash -c 'git push origin HEAD:x'",
+	'/bin/sh -c "git commit -m x"',
+	"sh -c 'git commit -m x'",
+	"zsh -lc 'git push'",
+	"bash -e -c 'git push'",
+	"bash -o pipefail -c 'git push'",
+	'eval "git push origin x"',
+	"echo $(git push origin x)",
+	"echo `git push`",
+	"cat <(git push origin x)",
+	"env bash -c 'git push'",
+	"env -S 'bash -c \"git push\"'",
+	"X=$(git commit -m y)",
+	"bash -c \"bash -c 'git push origin x'\"",
+])
+def test_shell_wrapped_git_writes_are_detected(guard_module, hook_path: Path, command: str) -> None:
+	assert guard_module.git_subcommands(command) & guard_module.GUARDED_SUBCOMMANDS
+
+
+@WRAPPER_GUARD_COPIES
+@pytest.mark.parametrize("command", [
+	"bash -c 'echo hi'",
+	"bash script.sh",
+	"echo '$(git push)'",
+	"echo $(git rev-parse HEAD)",
+	"echo $(( 1 + 2 ))",
+])
+def test_shell_wrappers_without_git_writes_are_ignored(guard_module, hook_path: Path, command: str) -> None:
+	assert not (guard_module.git_subcommands(command) & guard_module.GUARDED_SUBCOMMANDS)
+
+
+HEREDOC_COMMIT = "git commit -m \"$(cat <<'EOF'\nDon't git push from here; it's a commit message.\nEOF\n)\""
+
+
+@WRAPPER_GUARD_COPIES
+def test_heredoc_commit_message_is_not_a_wrapped_write(guard_module, hook_path: Path) -> None:
+	assert guard_module.git_subcommands(HEREDOC_COMMIT) == {"commit"}
+	assert [invocation.warning for invocation in guard_module._guarded_git_invocations(HEREDOC_COMMIT, "/")] == [""]
+
+
+@WRAPPER_GUARD_COPIES
+@pytest.mark.parametrize("command", [
+	"bash -c 'git push origin HEAD:feature/x'",
+	"/bin/sh -c 'git push origin HEAD:feature/x'",
+	"/bin/sh -c 'git commit -m x'",
+	'eval "git push origin HEAD:feature/x"',
+	"echo $(git push origin HEAD:feature/x)",
+	"echo `git commit -m x`",
+	_nested_shell("git push origin HEAD:feature/x", 3),
+])
+def test_e2e_blocks_wrapped_write_on_merged_branch(merged_branch_repo, guard_module, hook_path: Path, command: str) -> None:
+	repo, stub_bin = merged_branch_repo
+	proc = _run_hook_at(hook_path, repo, stub_bin, command)
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "pull/41" in proc.stderr
+
+
+@WRAPPER_GUARD_COPIES
+@pytest.mark.parametrize("command", [
+	"bash -c 'git push origin HEAD:feature/open'",
+	"sh -c 'git push origin HEAD:feature/open'",
+])
+def test_e2e_allows_wrapped_push_to_open_branch(merged_branch_repo, guard_module, hook_path: Path, command: str) -> None:
+	repo, stub_bin = merged_branch_repo
+	_worktree_pr_stub(stub_bin, _git(repo, "rev-parse", "HEAD"))
+	proc = _run_hook_at(hook_path, repo, stub_bin, command)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "permissionDecision" not in proc.stdout
+
+
+@WRAPPER_GUARD_COPIES
+def test_e2e_heredoc_commit_on_rebuilt_branch_does_not_ask(merged_branch_repo, guard_module, hook_path: Path) -> None:
+	repo, stub_bin = merged_branch_repo
+	_git(repo, "checkout", "-B", "feature/x", "main")
+	proc = _run_hook_at(hook_path, repo, stub_bin, HEREDOC_COMMIT)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "permissionDecision" not in proc.stdout
+
+
+@WRAPPER_GUARD_COPIES
+@pytest.mark.parametrize("command", [
+	'eval "$x"',
+	'bash -c "$CMD"',
+	"bash -c 'P=git; $P push origin x'",
+	"echo $(git push",
+	"MSG='git push' bash -c",
+	'echo "$(git push origin "$B")"',
+	_nested_shell("git push origin HEAD:feature/x", 4),
+])
+def test_unreadable_wrapped_write_asks_without_querying_prs(
+	merged_branch_repo, monkeypatch, capsys, guard_module, hook_path: Path, command: str,
+) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(
+		guard_module, "query_pull_requests", lambda *args: pytest.fail("unreadable wrapper must not query origin")
+	)
+	code, message = guard_module.evaluate({"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": command}})
+	assert (code, message) == (0, "")
+	decision = json.loads(capsys.readouterr().out.splitlines()[-1])
+	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_shell_wrapper_scanner_reports_unterminated_text() -> None:
+	assert template_guard._scan_shell_text("echo $(git push").unreadable
+	assert template_guard._scan_shell_text("echo `git push").unreadable
+	assert template_guard._scan_shell_text("cat <<EOF\nno terminator").unreadable
+	scan = template_guard._scan_shell_text("a $(b) `c` <(d) \"$(e)\" '$(f)'")
+	assert scan.bodies == ["b", "c", "d", "e"] and not scan.unreadable
