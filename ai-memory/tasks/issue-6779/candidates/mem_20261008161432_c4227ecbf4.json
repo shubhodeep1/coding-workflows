@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: In failed review run `37800211275` (or any later failed run on `drhyg_ecommerce_automation#64`, head `c7729abf`), which step failed and what error did it print?\nChoices:\nA. \"Install project dependencies (best-effort)\" failed: `review_untrusted_sandbox.sh prepare` printed `::error::Review dependency isolation failed`. That covers the 900s `timeout` at line 93, an OOM kill under `--memory 3g`, or `python3 -m venv` failing at line 111. Please name which one.\nB. \"Apply fixes with editor model\" failed or exited without writing a summary. Please give the first error line from the `previous_reviews/editor_attempt_*.err` artifact.\nC. The logs and artifacts can't be retrieved, so the failing step is unknown. Use Q2 to set the scope. (RECOMMENDED)\n**Note:** Q2 only applies if you choose Q1:C. With Q1:A or Q1:B, the fix targets the confirmed step and Q2 is ignored.\nQ2: If the root cause can't be confirmed (Q1:C), what should this heal change do?\nChoices:\nA. Make the failure diagnosable without changing how anything runs. When the editor phase ends as `editor_empty_noop`, put the tail of the dependency-prep log or the editor attempt stderr into the failure evidence and the failure comment. Name the step that failed. Stop reporting a synthetic `attempt_count` of 1 when no `editor_attempt_*` artifact exists; the field stays, only its value becomes accurate. Add regression tests for these. The root-cause fix is left to the next lineage generation, which will then have the evidence. (RECOMMENDED)\nB. Act on the unconfirmed dependency-timeout theory: treat a dependency-container `timeout` exit (124) as a best-effort install failure (warning only), while isolation, snapshot and refresh failures stay fatal. **Note:** this is unconfirmed and may not remove the actual cause.\nC. Make no code change. Escalate this issue to a human until the run logs are supplied.",
+  "fingerprint": "511e3696653d089c03f6562861b6aba0c1caae8ac948a01df79aab7dad405e3f",
+  "lineage": {
+    "issue_number": 6779,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37806356850",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37806356850",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008161432_c4227ecbf4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6779,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37806356850"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6779 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T16:14:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
