@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/test-and-mark-stable.yml:176-317 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: The allowlist check is defined in the workflow loaded from the dispatched ref, so a gate-only dispatch on a ref that omits or weakens the check can bypass it and reach jobs that write to TEST_REPO with GH_PAT.\n  WHY: The check is not anchored to trusted workflow code; severity ranged from major to blocker, so the highest severity is retained.\n- tests/test_deploy_activate_command.py:109 | severity=low | confidence=[3]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  PROBLEM: The test rename is unrelated to the PR scope, although it correctly describes the test's existing assertions.\n  WHY: It causes no runtime failure and is scope drift from the smoke-test target allowlist change.\n- tests/test_deploy_activate_command.py:106 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The renamed test function is reported to misstate the behavior asserted by its body.\n  WHY: The reviewer says the name claims blocking while the body asserts fallback behavior; the change is also outside the issue scope.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"use a short-lived token scoped to the selected target and required operations\"\n  expected_change_site: `test-and-mark-stable.yml` `validate-test-repo` step or a downstream auth swap in jobs that write with GH_TOKEN (currently `GH_PAT`) to TEST_REPO\n  confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: PR DIFF and LAST RUN DIFF add an allowlist check, but the changelog explicitly states \"The token itself is still GH_PAT: a short-lived token scoped to the target repository needs a GitHub App credential this repository does not have.\" No GitHub App / installation token wiring appears anywhere in the diff. Allowlisted repos still receive writes through the broad `GH_PAT`. Changelog/6547 fragment marks this as deferred.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- .github/workflows/test-and-mark-stable.yml:266-317 | severity=high | confidence=4\n  PROBLEM: The allowlist guard is in the dispatched workflow ref, so a gate-only dispatch on a ref without the validation step can bypass allowlist enforcement.\n  WHY: The smoke-test job can then use GH_PAT to write to the caller-supplied TEST_REPO; the reviewer describes this as a defense-in-depth gap under the stated threat model.\n- tests/test_deploy_activate_command.py:109 | severity=low | confidence=3\n  PROBLEM: The test rename is unrelated to the PR scope, although the new name correctly describes the existing assertions.\n  WHY: It does not cause a runtime failure and is scope drift from the merge resolution.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_deploy_activate_command.py:106 | severity=high | confidence=4\n  PROBLEM: The renamed test function is reported to misstate the behavior asserted by its body.\n  WHY: The reviewer says the name claims blocking while the body asserts fallback behavior; the change was also outside the issue scope and introduced by the latest AI autofix run.\n- Requirement: \"use a short-lived token scoped to the selected target and required operations\"\n  Expected change site: `test-and-mark-stable.yml` `validate-test-repo` step or a downstream auth swap in jobs that write with GH_TOKEN (currently `GH_PAT`) to TEST_REPO.\n  Evidence of absence: PR DIFF and LAST RUN DIFF add an allowlist check, but the changelog explicitly states \"The token itself is still GH_PAT: a short-lived token scoped to the target repository needs a GitHub App credential this repository does not have.\" No GitHub App / installation token wiring appears anywhere in the diff. Allowlisted repos still receive writes through the broad `GH_PAT`. Changelog/6547 fragment marks this as deferred.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/test-and-mark-stable.yml:266-317 | severity=high | confidence=3\n  PROBLEM: The allowlist check is in the workflow loaded from the dispatched ref, so a gate-only dispatch on a ref that omits or weakens the check can bypass it.\n  WHY: The downstream smoke-test job can then write to TEST_REPO with GH_PAT; the reviewer notes the allowlist content is read from the protected default branch and the primary attack vector is closed for the default branch.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/test-and-mark-stable.yml:176-317 | severity=critical | confidence=5\n  PROBLEM: The allowlist check is not anchored to trusted workflow code.\n  WHY: A gate-only dispatch runs the workflow definition from the selected ref, and a ref with the check removed or weakened can reach the smoke-test job, which uses GH_PAT against the caller-selected TEST_REPO.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "c8e952b7565f396ac1958745b8a2fd177d9225041633030d325b45343e3dfa5e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6556,
+    "run_id": "37845482512",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37845482512",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261008213946_4cb7d90a2c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6556,
+    "run_id": "37845482512"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-08T21:39:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
