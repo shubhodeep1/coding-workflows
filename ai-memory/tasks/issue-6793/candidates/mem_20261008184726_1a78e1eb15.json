@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: C\n\nRATIONALE:\nQ1: The fix belongs in `scripts/review_untrusted_sandbox.sh`, where the whole dependency container (lines 93\u2013157) runs under one 900s `timeout`. That includes the optional installs at lines 113\u2013132 and the pytest bootstrap at line 149. When the timeout fires, the `|| { echo '::error::Review dependency isolation failed'; exit 1; }` on line 157 turns a best-effort install into a fatal isolation failure. That script is not in this issue's verified scope marker (`.github/workflows/review_autofix.yml,tests/**,changelog.d/*.md`), and the pipeline has no automatic way to widen it:\n- `verify_heal_scope` in `scripts/workflow_failure_heal.py` (lines 1624\u20131646) only accepts an unedited marker written by the intake account.\n- `scripts/implement_heal_preflight.sh` (line 32) refuses with `out_of_heal_scope`, which sets `ai:needs-human`.\n\nSo option A would spend plan and implement runs only to reach a human anyway. Option B can't remove the cause either. The only in-scope surface is the call site at `review_autofix.yml` lines 5033\u20135049, which repeats the same `prepare` for the codex fallback (line 5045). Skipping that repeat saves 900s, but the editor still never runs. That breaks this issue's rule that a fix must remove the cause and ship a reproducing regression test. This is also generation 3 of 3, so the lineage escalates at the cap regardless. Escalating now, with the fix spelled out, is the lowest-risk path. It keeps the heal-scope guard intact rather than weakening it.\n\nEXECUTION PLAN (handoff for the human; no pipeline code change in this issue):\nQ1:\n  strategy: escalate via the lettered option C (`ai:needs-human`); the steps below go to the operator who reissues scope or applies the fix\n  inputs:\n    - scripts/review_untrusted_sandbox.sh lines 93-157 (dependency container, outer `timeout ... 900s`, fatal handler on line 157)\n    - scripts/review_untrusted_sandbox.sh lines 163-167 (snapshot refresh, which must stay fatal)\n    - .github/workflows/review_autofix.yml lines 5033-5049 (prepare call site and codex fallback re-prepare)\n    - scripts/workflow_failure_heal.py `render_heal_scope_marker` / `verify_heal_scope` (lines 1605-1646)\n    - tests/test_review_sandbox_claude_roles.py (regression test location)\n  steps:\n    - Operator either files a fresh heal issue from the intake account whose scope marker includes `scripts/review_untrusted_sandbox.sh`, or applies the fix directly.\n    - Fix: inside the container script, wrap each optional install command (`npm ci`, `yarn install`, `npx pnpm install`, `npm install`, `pip install -r`, `pip install -e`, and the pytest bootstrap `pip install`) in its own `timeout`. Their combined budget must fit under the outer 900s deadline. On expiry, set `install_failed=true` (or print the pytest warning) and continue, so the container exits 0 and the existing \"Editor validation may be limited\" warning reports reduced dependencies.\n    - Keep the outer 900s deadline, and keep these failures fatal: Docker, the proxy-bridge readiness probe, `python3 -m venv` (`|| exit 1`), the snapshot, and the refresh.\n    - Regression test: a stub `docker`/installer that sleeps past the per-command limit must let `prepare` succeed. A failing `venv` or a nonzero container exit must still fail `prepare`. Run it against the reported head (fails) and the fix (passes).\n  replaces_acceptance_criterion: none\n  equivalence_argument: escalation keeps the fail-closed heal-scope boundary and the \"remove the cause\" requirement intact, instead of shipping an in-scope mitigation that leaves the editor blocked\n  reversibility: once the human reissues scope including `scripts/review_untrusted_sandbox.sh`, the pipeline can implement the steps above unchanged",
+  "fingerprint": "bdfb3e09527fcaf0c5b9ef044b6589f558e029a6f2bc3a605b0019be2ee6ee49",
+  "lineage": {
+    "issue_number": 6793,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37825891549",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37825891549",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6793"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008184726_1a78e1eb15",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6793,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37825891549"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6793",
+  "timestamps": {
+    "created_at": "2026-10-08T18:47:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
