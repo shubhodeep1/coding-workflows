@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which exact `files_touched` grant will a person add to this issue's body before `/answer`? Entries must be exact paths with no globs. Once the list exists, ordinary files such as tests, README and the changelog fragment must be on it too.\nChoices:\nA) Full grant: add a `files_touched:` block listing `scripts/check_failure_triage.sh`, `.github/workflows/check_failure_triage.yml`, `tests/test_check_failure_triage_workflow_security.py`, `README.md`, `agents.md` and `changelog.d/6785-check-triage-pr-head-routing.md`. The helper defaults the flag to `false`. The workflow passes `vars.CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED` to the collect and diagnose steps, so the flag can later be turned on per repo. (RECOMMENDED)\nB) Script-only grant: the same list without `.github/workflows/check_failure_triage.yml`. The flag is read only inside the helper with default `false`. Repo variables cannot turn it on until a later PR edits the workflow.\nC) No grant: implement without a `files_touched` block. The automation-path guard will reject the `scripts/` and `.github/` edits again, so this repeats the #6785 failure.\nAssumptions: Routing writes the failing PR's head ref as the issue's `Integration branch:` line. The script adds that line itself after the model text. The final validator then accepts exactly one such line, and only when it equals the verified head ref, before the issue is posted. With the flag off, current behaviour is unchanged.\nMissing context: The original description of #6785 was not available. Only the unblock judge's summary in this issue was used.",
+  "fingerprint": "60f4b6418eef005c6e42b256c9914be26fc16355331bd03663217f168a42842f",
+  "lineage": {
+    "issue_number": 6794,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37825387149",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37825387149",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008184047_8e4d90e052",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6794,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37825387149"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6794 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T18:40:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
