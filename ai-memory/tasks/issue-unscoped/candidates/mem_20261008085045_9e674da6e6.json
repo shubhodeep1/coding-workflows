@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:6476-6481 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: `security_pass_record_waivers` truncates waiver rows to the last 100, so line-ownership advisories beyond that cap are dropped from persistence.\n  WHY: Dropped advisories cannot be selected by the deferred filer for follow-up issues or by waiver suppression on later audits; the pass may still be recorded as passed. All reviewers rated this MAJOR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh\nLine or code reference: 6480 \u2014 `| .[-100:]` in `security_pass_record_waivers`, called from the new `security_pass_record_line_ownership_advisories` at 6545\n  severity=MAJOR confidence=3\n  PROBLEM: The waiver array is truncated to the last 100 rows, silently dropping older rows, including rows with `followup_pending: true`.\n  WHY: Truncated rows never receive follow-up issues, and they no longer suppress re-reporting, so findings can cycle without ever getting a follow-up issue filed.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh\nLine or code reference: security_pass_record_line_ownership_advisories\n  severity=MAJOR confidence=4\n  PROBLEM: Advisory waiver rows processed by `security_pass_record_line_ownership_advisories` are subject to a truncation limit of 100, while audit results have no corresponding finding-count limit.\n  WHY: Truncated findings never receive follow-up issues, and the unchanged head will be re-audited in subsequent cycles.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh\nLine or code reference: 6480 (security_pass_record_waivers' `.[-100:]` slice), 6545 (call site in security_pass_record_line_ownership_advisories), 6772 (deferred filer reads `security_pass_waived_findings`)\n  severity=MAJOR confidence=4\n  PROBLEM: The function concatenates existing and new waiver rows, then retains only the trailing 100, silently dropping earlier rows.\n  WHY: Dropped advisories do not receive follow-up issues and are re-reported on the next delta audit because their waiver rows are gone.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh\nLine or code reference: 6476-6481, especially the `| .[-100:]` waiver-row cap\n  severity=MAJOR confidence=4\n  PROBLEM: The advisory recorder submits all findings, but `security_pass_record_waivers` persists only the last 100 waiver rows.\n  WHY: With the default deferred filing enabled, discarded rows do not receive follow-up issues, while the pass can still record `passed` at the audited head.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh\nLine or code reference: 6480 (`security_pass_record_waivers`), called from 6545 (`security_pass_record_line_ownership_advisories`)\n  severity=MAJOR confidence=4\n  PROBLEM: `security_pass_record_waivers` truncates `security_pass_waived_findings` to the last 100 rows, but the line-ownership advisory split has no corresponding cap on advisory findings.\n  WHY: The caller marks the pass `passed` after recording succeeds, while the deferred filer only sees persisted rows; truncated advisories never receive follow-up issues and are not re-audited.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "16f156cfd5b64b4dcb2c4e65d031e652d1d337a355af79862f668bf880165a64",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6742,
+    "run_id": "37749480805",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37749480805",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261008085045_9e674da6e6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6742,
+    "run_id": "37749480805"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-08T08:50:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
