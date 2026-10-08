@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should the required automation-path grant for `scripts/review_conflict_prepare.sh` be supplied before implementation?\nChoices:\nA) Before `/approved`, the pipeline account or an OWNER/MEMBER/COLLABORATOR edits this issue's body to add a `files_touched:` block. It lists `scripts/review_conflict_prepare.sh`, the new or changed test file under `tests/`, and the new `changelog.d/<n>-<slug>.md` fragment by exact path. (RECOMMENDED)\nB) Proceed without a `files_touched:` block. **Note:** implement will reject the staged script edit with `reason=no_allowlist` again and latch `ai:scope-blocked`, which repeats the #6772 failure.\nC) Do not run the pipeline. A person implements the change by hand on a branch and closes this issue against that PR.\nQ2: Which conflicted paths may the deterministic template-twin resolution handle while `CONFLICT_HOOK_TEMPLATE_RESOLVE_ENABLED=true`?\nChoices:\nA) Only regular files directly under `.claude/hooks/` whose `workflow-templates/.claude/hooks/<same name>` twin is a regular file that merged cleanly. Skip any path listed in `.github/ai/claude_template_divergence.json`; those keep the host-only refusal. (RECOMMENDED)\nB) Any `.claude/**` regular file (hooks, commands, `settings.json`) whose `workflow-templates/.claude/**` twin is a regular file that merged cleanly.\nC) Only the specific hook that conflicted in #6772 (`.claude/hooks/pr_merge_status_guard.py`). Every other path keeps the host-only refusal.",
+  "fingerprint": "826571a94333451d5ca22d7665ef9ce37cfe9c8d8b7ae55167e471ee4e1ae43a",
+  "lineage": {
+    "issue_number": 6784,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37811361900",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37811361900",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008165355_048e1ee58d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6784,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37811361900"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6784 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T16:53:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
