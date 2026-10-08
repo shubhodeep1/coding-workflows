@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_test_and_mark_stable_no_git_config_value_dump.py:20-23 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: CONFIG_LIST requires `git` to be followed directly by `config`, so Git global options between them allow value-dumping `git config` commands to bypass credential-leak detection.\n  WHY: The workflow scan can pass while a future workflow prints credential-bearing configuration values; severity was BLOCKER in google_gemini-3_1-flash-lite and MAJOR in deepseek_deepseek-v4-pro and openai_gpt-6-luna.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Remove the config dump and its release-job invocation; if diagnostics remain, print configuration keys only and exclude credential-bearing values.\"\n  expected_change_site: .github/workflows/test-and-mark-stable.yml diagnostic anchor and release job\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro]\n  EVIDENCE: The diagnostic now uses --name-only (line 316), the release-job invocation of *git-checkout-diag is removed (lines 6531-6536 removed), and a ci.yml regression step runs the guard test; all requirements are satisfied.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_test_and_mark_stable_no_git_config_value_dump.py:21 (`git\\s+config\\b`) | severity=MAJOR | confidence=[4]\n  PROBLEM: CONFIG_LIST requires `git` immediately adjacent to `config`. Git accepts global options (-C, -c, --no-pager, etc.) between `git` and its subcommand. A command such as `git -C \"$GITHUB_WORKSPACE\" config --list --show-origin` prints credential-bearing configuration values but is not detected by this scanner. The regression guard silently passes when such a command exists in any workflow YAML file.\n  WHY: The test_no_workflow_dumps_git_config_values assertion iterates every workflow line through _config_dumps_values which calls CONFIG_LIST.search. The match returns None for the global-option pattern, so the assertion passes for a value-dumping git config command. A future workflow change adding `git -C /tmp config --list --show-origin` would leak the checkout's encoded authorization header to Actions logs with CI green.\n- TASK_GAP:\n  Requirement: \"Remove the config dump and its release-job invocation; if diagnostics remain, print configuration keys only and exclude credential-bearing values.\" (from linked issue #6531)\n  Expected change site: .github/workflows/test-and-mark-stable.yml diagnostic anchor and release job\n  Evidence of absence: The diagnostic now uses --name-only (line 316), the release-job invocation of *git-checkout-diag is removed (lines 6531-6536 removed), and a ci.yml regression step runs the guard test. All requirements are satisfied.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_test_and_mark_stable_no_git_config_value_dump.py: CONFIG_LIST = re.compile(r\"(?:(?<=-c ')|(?<=-c \\\")|\\$\\(|(?<![\\w\\\"'\\\\(]))git\\s+config\\b[^\\n]*?(?:--(?:list|get-regexp|get-all|get-urlmatch)\\b|(?<!\\S)-l\\b|--get\\b(?=[^\\n]*?(?i:extraheader|\\.url\\b|credential|token|password|auth)))\") | severity=BLOCKER | confidence=[5]\n  PROBLEM: The scanner regex expects the word git to be immediately followed by space then config.\n  WHY: If git global options are placed between git and config (e.g., git -C some_dir config --list), the scanner regex git\\s+config\\b fails to match, bypassing the credential-leak detection and allowing secrets to be logged to Actions.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_test_and_mark_stable_no_git_config_value_dump.py:20-23, CONFIG_LIST | severity=MAJOR | confidence=[5]\n  PROBLEM: The scanner misses value-dumping Git config commands when a Git global option appears before the subcommand, such as `git -C \"$GITHUB_WORKSPACE\" config --list --show-origin`.\n  WHY: CONFIG_LIST requires `git` to be followed directly by `config`. The workflow scan therefore does not flag that command, allowing a future workflow to print credential-bearing configuration values while the regression test passes.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "8ccc2e125b3b8af78f4eb5a697af803467ab033019384eafa3452ebe92ef1509",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6537,
+    "run_id": "37765899829",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37765899829",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261008111352_53986215b1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6537,
+    "run_id": "37765899829"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-08T11:13:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
