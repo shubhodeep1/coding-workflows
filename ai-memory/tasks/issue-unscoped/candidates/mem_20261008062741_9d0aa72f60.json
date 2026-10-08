@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.77,
+  "details": "Manifest conflict handling has dedicated preparation and integration logic, with tests for union behavior. When changing conflict resolution or merge-train behavior, avoid assuming a simple file overwrite is safe, especially for generated manifests.",
+  "fingerprint": "dc840ac29aa1aba3b9c21b0527ffef13a416a226a498bb13b3b9c2a9862266f3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37737156345",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37737156345",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6463",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6492",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6705",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6706",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6711",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6484",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6496",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6707",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6708",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6719"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261008062741_9d0aa72f60",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Conflict handling for workspace manifests needs explicit union semantics.",
+  "timestamps": {
+    "created_at": "2026-10-08T06:27:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
