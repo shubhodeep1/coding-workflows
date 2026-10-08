@@ -453,7 +453,7 @@ def test_implement_workflow_stages_and_orders_workspace_hooks() -> None:
 	stage_block = _step_run_text(IMPLEMENT_WORKFLOW, "Stage workflow support files")
 	assert "run_workspace_hook.sh" in stage_block
 	assert _step(IMPLEMENT_WORKFLOW, "Run Codex implementation").get("id") == "implement_run"
-	assert _step(IMPLEMENT_WORKFLOW, "Run workspace after_run hook").get("if") == "always() && env.SKIP_IMPLEMENT != 'true' && steps.implement_run.outcome != 'skipped'"
+	assert _step(IMPLEMENT_WORKFLOW, "Run workspace after_run hook").get("if") == "always() && env.SKIP_IMPLEMENT != 'true' && env.HEAL_ROUTE != 'true' && steps.implement_run.outcome != 'skipped'"
 	assert _step_index(IMPLEMENT_WORKFLOW, "Activate workspace shell context") < _step_index(IMPLEMENT_WORKFLOW, "Run workspace after_create hook") < _step_index(IMPLEMENT_WORKFLOW, "Detect preexisting Serena project config")
 	assert _step_index(IMPLEMENT_WORKFLOW, "Retrieve implementation memory context") < _step_index(IMPLEMENT_WORKFLOW, "Run workspace before_run hook") < _step_index(IMPLEMENT_WORKFLOW, "Run Codex implementation")
 	assert _step_index(IMPLEMENT_WORKFLOW, "Run Codex implementation") < _step_index(IMPLEMENT_WORKFLOW, "Run workspace after_run hook") < _step_index(IMPLEMENT_WORKFLOW, "Write run summary")

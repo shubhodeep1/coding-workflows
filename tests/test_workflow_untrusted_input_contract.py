@@ -247,6 +247,20 @@ def test_release_dispatch_uses_quoted_fields_without_textual_json() -> None:
 	assert '--field "repos_override=${TEST_REPO}"' in workflow
 
 
+def test_heal_evidence_is_fenced_and_editors_are_isolated() -> None:
+	clarify = _step("clarify.yml", "clarify", "Run Codex")["run"]
+	plan = (REPO_ROOT / "scripts/run_plan_codex.sh").read_text(encoding="utf-8")
+	implement = _step("implement.yml", "implement", "Run Codex implementation")["run"]
+	assert isinstance(clarify, str) and 'cat "${RUNTIME_DIR}/heal_evidence.md" >> "${CODEX_PROMPT_FILE}"' in clarify
+	assert 'cat "${HEAL_EVIDENCE_FILE:-${RUNTIME_DIR}/heal_evidence.md}" >> "${CODEX_PROMPT_FILE}"' in plan
+	assert '"${PLAN_ENGINE}" PLAN' in plan and '"${HEAL_ROUTE:-false}" != true' in plan
+	assert isinstance(implement, str) and 'cat "${RUNTIME_DIR}/heal_evidence.md" >> "${CODEX_PROMPT_FILE}"' in implement
+	assert 'heal_isolated_implement.sh' in implement and '"${HEAL_ROUTE:-false}" = true' in implement
+	evidence = (REPO_ROOT / "scripts/workflow_failure_heal_evidence.sh").read_text(encoding="utf-8")
+	assert "=== BEGIN UNTRUSTED WORKFLOW FAILURE EVIDENCE ===" in evidence
+	assert "=== END UNTRUSTED WORKFLOW FAILURE EVIDENCE ===" in evidence
+
+
 def run_all_contract_tests() -> None:
 	for name, test_func in sorted(globals().items()):
 		if name.startswith("test_") and callable(test_func):

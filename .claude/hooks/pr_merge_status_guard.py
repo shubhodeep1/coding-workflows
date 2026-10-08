@@ -14,9 +14,12 @@ Each guarded Bash git invocation is checked in its own effective repository:
 a preceding resolvable cd, git -C, and git-directory/work-tree overrides are
 applied without executing the Bash text. Pushes with explicit branch refspecs
 are checked against the destination branch and the source commit, including
-when the source is a detached HEAD. Unknown directories warn and fall back to
-the session checkout check; unresolvable explicit push targets require
-confirmation. Repeated targets share a PR snapshot
+when the source is a detached HEAD. Unresolved env-wrapped commit directories
+require confirmation rather than checking the wrong repository. Other unknown
+directories warn and check the session checkout; unresolved directory-changing
+commits and pushes then require confirmation. Unresolvable explicit push targets
+also require confirmation.
+Repeated targets share a PR snapshot
 per repository and branch, while different source tips are checked separately.
 A `cd` or `exit` with a redirect that might fail (anything but a plain
 `/dev/null` target) makes the directory unknown. After checking the session
@@ -126,6 +129,26 @@ _SHELL_PUNCTUATION_CHARS = ";&|\n<>"
 _FD_PREFIX_REDIRECT_OPERATORS = frozenset({"<", ">", ">>", ">|", "<>", ">&", "<&", "<<", "<<<"})
 _SHELL_CONTROL_PREFIXES = frozenset({"if", "then", "elif", "else", "do", "while", "until", "{", "(", "!"})
 _SHELL_WORD_DELIMITERS = frozenset(" \t\r" + _SHELL_PUNCTUATION_CHARS)
+# Commands that run a heredoc body as shell text; such a body stays visible to
+# the git parser. Any other heredoc body (cat, python3, `git commit -F -`) is
+# data and is removed before parsing, so prose such as `it's` cannot make the
+# whole command unparseable.
+_SHELL_HEREDOC_READERS = frozenset(
+	{
+		"bash", "sh", "zsh", "dash", "ksh", "fish", "eval", "source", ".", "ssh", "su", "sudo", "doas",
+		"xargs", "parallel", "script",
+	}
+)
+# Wrappers such as `env`, `timeout` or `nohup` are not listed: they run the
+# next word, so `env bash <<EOF` still matches `bash`, while `env cat <<EOF`
+# stays data.
+_SHELL_HEREDOC_READER_RE = re.compile(
+	r"(?:^|[\s;&|(`'\"])(?:\S*/)?(?:" + "|".join(re.escape(word) for word in sorted(_SHELL_HEREDOC_READERS)) + r")(?:[\s;&|)`'\"]|$)"
+)
+_HEREDOC_OPERATOR_RE = re.compile(r"<<(-?)[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
+# Characters that may end a heredoc delimiter word; anything else (`<<EOF-1`,
+# `<<E"OF"`) means the delimiter was not fully read.
+_HEREDOC_DELIMITER_END = frozenset(" \t;|&<>()`")
 
 _API_WRITE_METHODS = frozenset({"PUT", "POST", "PATCH"})
 _API_WRITE_URL_PREFIXES = (
@@ -197,6 +220,15 @@ class _GitInvocation(NamedTuple):
 	arguments: list[str]
 	warning: str = ""
 	config_override: bool = False
+	env_wrapped: bool = False
+	env_directory_unresolved: bool = False
+	explicit_git_directory: bool = False
+	# True when the directory is unknown because of an explicit override the
+	# hook could not resolve (an appended GIT_DIR+=/GIT_WORK_TREE+=, an
+	# unresolvable -C / env -C, GIT_DIR or --git-dir path), as opposed to shell
+	# control flow or an unknown cd. Such a write never falls back to the
+	# session checkout: the override names another repository.
+	explicit_directory_unresolved: bool = False
 
 
 class _GuardTarget(NamedTuple):
@@ -281,7 +313,7 @@ def _shell_segments_with_redirects(command: str) -> list[tuple[str, list[str], b
 	for raw_token in lexer:
 		if raw_token and set(raw_token) <= set(_SHELL_PUNCTUATION_CHARS):
 			part_end = lexer.instream.tell() - len(raw_token)
-			for part in re.findall(r"&>>|&>|&&|\|\||>>|>\||>&|<&|<<<|<<|<>|[;<>&|\n]", raw_token):
+			for part in re.findall(r"&>>|&>|&&|\|\||\|&|>>|>\||>&|<&|<<<|<<|<>|[;<>&|\n]", raw_token):
 				part_end += len(part)
 				tokens.append((part, part_end))
 		else:
@@ -336,6 +368,132 @@ def _shell_segments_with_redirects(command: str) -> list[tuple[str, list[str], b
 def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	"""Return simple commands and the operator preceding each one."""
 	return [(operator, tokens) for operator, tokens, _ in _shell_segments_with_redirects(command)]
+
+
+def _strip_data_heredoc_bodies(command: str) -> str:
+	"""Remove heredoc bodies that Bash passes on as data, not as shell text.
+
+	The `<<WORD` operator stays, so the command keeps its structure; the body
+	and its closing delimiter line are dropped. A body stays when the command
+	before `<<` is a shell reader (`bash`, `eval`, `ssh`, ...) or when its
+	delimiter is unquoted and the body holds a `$(...)` or backtick
+	substitution, because Bash runs that text and git commands in it must
+	still be checked. Quote, `$(...)`, `${...}` and arithmetic context is
+	tracked so a `<<` inside quotes is not read as a heredoc. A shell reader
+	after the operator on the same line (`cat <<EOF | bash`) also keeps the
+	body. A delimiter this parser cannot read in full, or a heredoc line
+	continued with `\\`, returns the command unchanged.
+	"""
+	lines = command.split("\n")
+	output: list[str] = []
+	pending: list[tuple[str, bool, bool, str, str]] = []
+	# Each context is [mode, open quote, nesting depth]; a nested $(...) has
+	# its own quoting rules, even inside "...".
+	contexts: list[list] = [["shell", None, 0]]
+	index = 0
+	while index < len(lines):
+		line = lines[index]
+		output.append(line)
+		position = 0
+		while position < len(line):
+			character = line[position]
+			mode, quote, depth = contexts[-1]
+			if character == "\\" and quote != "'":
+				position += 2
+				continue
+			if quote == "'":
+				if character == "'":
+					contexts[-1][1] = None
+				position += 1
+				continue
+			if character == quote:
+				contexts[-1][1] = None
+				position += 1
+				continue
+			if line.startswith("$((", position):
+				contexts.append(["arithmetic", None, 2])
+				position += 3
+				continue
+			if line.startswith("$(", position):
+				contexts.append(["shell", None, 0])
+				position += 2
+				continue
+			if line.startswith("${", position):
+				contexts.append(["parameter", None, 1])
+				position += 2
+				continue
+			if mode == "parameter":
+				if character == "{":
+					contexts[-1][2] += 1
+				elif character == "}":
+					contexts[-1][2] -= 1
+					if contexts[-1][2] == 0:
+						contexts.pop()
+				position += 1
+				continue
+			if mode == "arithmetic":
+				if character == "(":
+					contexts[-1][2] += 1
+				elif character == ")":
+					contexts[-1][2] -= 1
+					if contexts[-1][2] == 0:
+						contexts.pop()
+				position += 1
+				continue
+			if character == "'" and quote is None:
+				contexts[-1][1] = "'"
+			elif character == '"':
+				contexts[-1][1] = '"' if quote is None else None
+			elif quote is None:
+				if character == "`":
+					if mode == "backtick":
+						contexts.pop()
+					else:
+						contexts.append(["backtick", None, 0])
+				elif mode == "shell" and len(contexts) > 1 and character == ")":
+					if depth == 0:
+						contexts.pop()
+					else:
+						contexts[-1][2] -= 1
+				elif mode == "shell" and len(contexts) > 1 and character == "(":
+					contexts[-1][2] += 1
+				elif line.startswith("((", position) and (position == 0 or line[position - 1] in " \t;|&("):
+					contexts.append(["arithmetic", None, 2])
+					position += 2
+					continue
+				elif character == "#" and (position == 0 or line[position - 1] in " \t;|&()<>"):
+					break
+				elif line.startswith("<<", position) and not line.startswith("<<<", position) and (position == 0 or line[position - 1] != "<"):
+					match = _HEREDOC_OPERATOR_RE.match(line, position)
+					# A partly read delimiter (`<<EOF-1`, `<<\\EOF`) cannot be matched
+					# to its closing line, so keep every line visible.
+					if match is None or (match.end() < len(line) and line[match.end()] not in _HEREDOC_DELIMITER_END):
+						return command
+					pending.append((match.group(3), match.group(1) == "-", bool(match.group(2)), line[:position], line[match.end():]))
+					position = match.end()
+					continue
+			position += 1
+		index += 1
+		while pending:
+			delimiter, strip_tabs, quoted, prefix, suffix = pending.pop(0)
+			if suffix.rstrip().endswith("\\"):
+				return command
+			body: list[str] = []
+			closing: list[str] = []
+			while index < len(lines):
+				body_line = lines[index]
+				index += 1
+				if (body_line.lstrip("\t") if strip_tabs else body_line) == delimiter:
+					closing.append(body_line)
+					break
+				body.append(body_line)
+			# The rest of the line may pipe the body on (`cat <<EOF | bash`).
+			runs_as_shell = bool(_SHELL_HEREDOC_READER_RE.search(prefix) or _SHELL_HEREDOC_READER_RE.search(suffix)) or suffix.rstrip().endswith("|") or (
+				not quoted and any("$(" in body_line or "`" in body_line for body_line in body)
+			)
+			if runs_as_shell:
+				output.extend(body + closing)
+	return "\n".join(output)
 
 
 def _command_after_control_prefix(tokens: list[str]) -> tuple[list[str], bool]:
@@ -433,23 +591,41 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 		return []
 	working_directory: str | None = checkout
 	conditional_cd = False
+	unresolved_directory_change = False
+	# A cd/pushd/popd earlier in the current `&&`/`||` list: a later `||`
+	# branch may run with or without that directory change.
+	list_changed_directory = False
 	invocations: list[_GitInvocation] = []
-	for operator, tokens, redirect_may_fail in segments:
+	for segment_position, (operator, tokens, redirect_may_fail) in enumerate(segments):
 		tokens, control_prefix = _command_after_control_prefix(tokens)
 		if control_prefix:
 			working_directory = None
+		if operator in ("", ";", "\n", "&"):
+			list_changed_directory = False
 		if not tokens:
 			continue
+		next_operator = segments[segment_position + 1][0] if segment_position + 1 < len(segments) else ""
+		# Each pipeline element runs in its own subshell: a directory change
+		# inside one ends with it, and every element starts where the list is.
+		# `|&` pipes stderr too and is a pipeline separator like `|`.
+		in_pipeline = operator in ("|", "|&") or next_operator in ("|", "|&")
 		if operator == "||" and tokens[0] == "exit" and working_directory is not None and not redirect_may_fail:
 			# If this exit runs the following git cannot; otherwise cd succeeded.
 			# A failed builtin redirect means exit did not run (#6289).
 			conditional_cd = False
 			continue
-		if operator not in ("", "&&") and conditional_cd:
+		if operator not in ("", "&&", "|", "|&") and conditional_cd:
 			working_directory = None
+			unresolved_directory_change = True
 			conditional_cd = False
-		if operator not in ("", "&&", ";", "\n"):
+		# `&` backgrounds the whole previous list. A `||` branch is unknown only
+		# after a directory change in its own list, or when it is itself a cd.
+		if operator == "&" or (operator == "||" and (list_changed_directory or (tokens[0] == "cd" and not in_pipeline))):
 			working_directory = None
+		if in_pipeline and tokens[0] in ("cd", "pushd", "popd"):
+			continue
+		if tokens[0] in ("cd", "pushd", "popd"):
+			list_changed_directory = True
 		# A cd after a condition may not have happened when a later list starts.
 		if tokens[0] == "cd":
 			operand = tokens[1:]
@@ -460,13 +636,19 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				_literal_guard_path(operand[0], working_directory, shell_cd=True)
 				if len(operand) == 1 and working_directory is not None and not redirect_may_fail else None
 			)
+			if working_directory is None:
+				unresolved_directory_change = True
 			conditional_cd = operator == "&&" or conditional_cd
 			continue
 		if tokens[0] in ("pushd", "popd", "eval", "source", ".", "(", "{"):
 			working_directory = None
+			unresolved_directory_change = True
 		index = 0
 		environment: dict[str, str] = {}
 		config_override = False
+		appended_git_selector = False
+		# A prior unresolved cd/pushd may select another repository.
+		explicit_git_directory = unresolved_directory_change
 		# Bash append assignments are prefixes too; keep the following git visible.
 		while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*\+?=", tokens[index]):
 			name, value = tokens[index].split("=", 1)
@@ -475,8 +657,11 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				name = name[:-1]
 				if name in ("GIT_DIR", "GIT_WORK_TREE"):
 					working_directory = None
+					explicit_git_directory = True
+					appended_git_selector = True
 			elif name in ("GIT_DIR", "GIT_WORK_TREE"):
 				environment[name] = value
+				explicit_git_directory = True
 			if name == "GIT_CONFIG" or name.startswith("GIT_CONFIG_"):
 				config_override = True
 			index += 1
@@ -486,9 +671,12 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			if any("git" in word or "$" in word for word in tokens[env_index + 1:]):
 				invocations.append(_GitInvocation(checkout, {}, "push", [], "unparsed env wrapper", True))
 			continue
+		env_wrapped = index != env_index
 		env_cwd = working_directory
+		explicit_directory_unresolved = False
+		env_directory_unresolved = False
 		env_chdir_seen = False
-		if index != env_index:
+		if env_wrapped:
 			config_override = True
 			for position in range(env_index + 1, index):
 				word = tokens[position]
@@ -496,7 +684,11 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 					env_chdir_seen = True
 					env_word_value = (tokens[position + 1] if word in ("-C", "--chdir") else
 						word.split("=", 1)[1] if word.startswith("--chdir=") else word[2:])
-					env_cwd = _literal_guard_path(env_word_value, env_cwd) if env_cwd else None
+					# An absolute -C path does not depend on the (possibly unknown) cwd.
+					env_cwd = (_literal_guard_path(env_word_value, env_cwd or checkout)
+						if env_cwd or os.path.isabs(env_word_value) else None)
+					explicit_directory_unresolved |= env_cwd is None
+					env_directory_unresolved |= env_cwd is None
 				elif re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", word):
 					env_name, env_word_value = word.split("=", 1)
 					if env_name in ("GIT_DIR", "GIT_WORK_TREE"):
@@ -505,9 +697,14 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			continue
 		index += 1
 		git_cwd = env_cwd
-		uncertain = git_cwd is None
+		uncertain = git_cwd is None or appended_git_selector
+		# Git applies an appended GIT_DIR+=/GIT_WORK_TREE+= value, but the hook
+		# cannot know the prior value, so the selected repository is unknown.
+		explicit_directory_unresolved |= appended_git_selector
 		while index < len(tokens) and tokens[index].startswith("-"):
 			option = tokens[index]
+			if option.startswith(("-C", "--git-dir", "--work-tree")):
+				explicit_git_directory = True
 			value = None
 			if option in GIT_GLOBAL_OPTS_WITH_VALUE:
 				if index + 1 >= len(tokens):
@@ -526,8 +723,14 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				config_override = True
 			if value is not None:
 				if option.startswith("-C"):
-					git_cwd = _literal_guard_path(value, git_cwd) if git_cwd else None
-					uncertain |= git_cwd is None
+					# Git applies an absolute -C on its own, even after an unknown cd.
+					git_cwd = (_literal_guard_path(value, git_cwd or checkout)
+						if git_cwd or os.path.isabs(value) else None)
+					# Git applies an appended GIT_DIR+=/GIT_WORK_TREE+= value on top
+					# of the shell's, which the hook cannot read, so the directory
+					# stays unresolved whatever -C selects.
+					uncertain = git_cwd is None or appended_git_selector
+					explicit_directory_unresolved |= uncertain
 				elif option.startswith("--git-dir"):
 					environment["GIT_DIR"] = value
 				elif option.startswith("--work-tree"):
@@ -541,16 +744,25 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 				path = _literal_guard_path(value, git_cwd, git_file=name == "GIT_DIR")
 				if path is None:
 					uncertain = True
+					explicit_directory_unresolved = True
 					break
 				environment[name] = path
 		invocations.append(_GitInvocation(
 			checkout if uncertain else git_cwd or checkout,
 			{} if uncertain else environment,
 			tokens[index], tokens[index + 1:],
-			("could not resolve git command directory (env -C/--chdir); cannot check checkout PR history"
+			("could not resolve explicit git push directory; cannot check checkout PR history"
+				if (explicit_directory_unresolved or (env_chdir_seen and env_cwd is None)) and tokens[index] == "push" else
+			 "could not resolve git command directory (env -C/--chdir); cannot check checkout PR history"
 				if env_chdir_seen and env_cwd is None else
+			 "could not resolve explicit git command directory"
+				if explicit_directory_unresolved and tokens[index] == "commit" else
 				"could not resolve git command directory; checking the session checkout instead") if uncertain else "",
 			config_override,
+			env_wrapped,
+			env_directory_unresolved,
+			explicit_git_directory,
+			explicit_directory_unresolved or (env_chdir_seen and env_cwd is None),
 		))
 	return invocations
 
@@ -1511,7 +1723,10 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
 	if not isinstance(command, str) or not command.strip():
 		return 0, ""
-	guarded_git_subcommands = git_subcommands(command) & GUARDED_SUBCOMMANDS
+	# Git parsing ignores heredoc bodies that Bash passes on as data; the
+	# API-write check below still reads the raw command.
+	git_view_command = _strip_data_heredoc_bodies(command)
+	guarded_git_subcommands = git_subcommands(git_view_command) & GUARDED_SUBCOMMANDS
 	api_write_reason = _api_write_confirmation_reason(command)
 	if api_write_reason is not None:
 		if guarded_git_subcommands:
@@ -1528,7 +1743,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		# Bash may execute earlier lines before a later unmatched quote. Raw-text
 		# searches miss quoted/escaped spellings of git and its subcommands.
 		try:
-			_shell_segments_with_operators(command)
+			_shell_segments_with_operators(git_view_command)
 		except ValueError:
 			_request_confirmation("Cannot parse the Bash command; an earlier git commit/push may still execute.")
 		return 0, ""
@@ -1545,14 +1760,32 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	unknown_destination_reasons: list[str] = []
 	unresolved_push_sources: list[str] = []
 	unresolved_push_destinations: list[str] = []
-	for invocation in _guarded_git_invocations(command, checkout):
-		if invocation.subcommand == "commit" and invocation.warning == (
-			"could not resolve git command directory (env -C/--chdir); cannot check checkout PR history"
-		):
-			unknown_destination_reasons.append("could not resolve git commit directory; cannot verify its PR history")
+	for invocation in _guarded_git_invocations(git_view_command, checkout):
+		if invocation.subcommand == "commit" and invocation.env_directory_unresolved:
+			unknown_destination_reasons.append("could not resolve git commit directory; no checkout was checked; cannot verify its PR history")
 			continue
 		if invocation.subcommand == "push" and invocation.warning == "unparsed env wrapper":
 			unverified_destinations.add("unparsed env-wrapped Git command")
+			continue
+		if invocation.subcommand == "commit" and invocation.warning and invocation.env_wrapped:
+			_request_confirmation("could not resolve git commit directory (env-wrapped); the session checkout may not be the commit target")
+			continue
+		if invocation.subcommand == "commit" and invocation.warning and invocation.explicit_git_directory:
+			_request_confirmation("could not resolve git commit directory; PR status cannot be checked for the intended checkout")
+			continue
+		if invocation.subcommand == "commit" and invocation.warning and invocation.config_override:
+			# Author decision Q30 = A: per-command configuration (git -c, --config-env,
+			# GIT_CONFIG_*) may select another checkout, e.g. via core.worktree, so
+			# the commit asks. The session checkout is still checked and can block.
+			unknown_destination_reasons.append(
+				"could not resolve git commit directory; per-command Git configuration may select another checkout"
+			)
+		if invocation.subcommand == "push" and invocation.warning and invocation.explicit_directory_unresolved:
+			# Finding #6305: an unresolvable explicit override (GIT_DIR+=, an
+			# unresolved -C / env -C / GIT_DIR) selects a repository this hook
+			# cannot see. The session checkout's PR history says nothing about
+			# it, so the push asks without querying it.
+			unknown_destination_reasons.append(invocation.warning)
 			continue
 		if invocation.subcommand == "push" and invocation.warning:
 			uncertain_push_reasons.append(invocation.warning)
@@ -1574,8 +1807,11 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			if target.warning.startswith("could not resolve git push"):
 				unknown_destination_reasons.append(target.warning)
 				continue
+			if target.warning.startswith("could not resolve explicit git command directory") and invocation.subcommand == "commit":
+				unverified_destinations.add("could not resolve git commit directory; the session checkout may differ")
+				continue
 			if target.warning:
-				_warn(target.warning)  # Unresolved directory: the session checkout is checked.
+				_warn(target.warning)  # Implicit uncertainty: check the session checkout.
 			if target.remote and target.remote != "origin":
 				# Even a matching explicit URL may be rewritten by url.*.insteadOf.
 				if "://" in target.remote or target.remote.startswith("git@"):

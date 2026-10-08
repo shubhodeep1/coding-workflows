@@ -38,6 +38,9 @@ def test_cloudflare_preflight_and_deploy_boundaries(command: Path):
 		assert required in cloudflare, (command, required)
 	assert "Never execute unmerged code with credentials" in text.split("## Rules", 1)[1]
 	assert "verified default-branch commit" in text.split("## Tool Access", 1)[1]
+	assert "gh repo view --json defaultBranchRef -R " + (
+		"shubhodeep1/coding-workflows" if command == COMMANDS[0] else "<owner>/<repo>"
+	) in cloudflare
 	assert "When Wrangler and a safe sandbox are available, require a successful `wrangler deploy --dry-run`" in cloudflare
 	assert "a failed dry run blocks deployment" in cloudflare
 	assert "If no such isolation is available, skip local checks and rely on the check-runs" in cloudflare
@@ -103,7 +106,7 @@ def test_worker_secrets_remain_operator_only(cloudflare_steps: str) -> None:
 	assert "never set it yourself from a value seen in the conversation" in cloudflare_steps
 
 
-def test_credential_failure_falls_back_without_token_leak(cloudflare_steps: str) -> None:
+def test_credential_failure_blocks_without_token_leak(cloudflare_steps: str) -> None:
 	assert "If the matching credential is unset" in cloudflare_steps
 	assert "`workers/scripts` list) returns 401/403" in cloudflare_steps
 	assert "mark the Cloudflare step BLOCKED in the activation log" in cloudflare_steps
