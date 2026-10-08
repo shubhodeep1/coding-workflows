@@ -15,7 +15,9 @@ run-name: ${{ inputs.gate_cycle_id != '' && format('Test & Mark Stable Release [
       test_repo:
         description: >
           Repository to run E2E smoke test on (owner/repo).
-          Defaults to this repository. The target repo must have
+          Defaults to this repository. Any other repository must be
+          listed in .github/ai/smoke_test_repos.json on the default
+          branch (the `source` job rejects it otherwise), and must have
           the internal/consumer workflow wrappers installed.
         required: false
         type: string
@@ -155,33 +157,164 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   source:
     runs-on: ubuntu-latest
-    timeout-minutes: 1
+    timeout-minutes: 3
     outputs:
       branch: ${{ steps.detect.outputs.branch }}
     steps:
+      # The dispatch ref is writer-controlled (a branch may be named
+      # `$(...)`): it reaches the shell only through env. The release path
+      # requires refs/heads/stable exactly, which also rejects the `stable`
+      # tag.
       - name: Validate dispatch ref
         id: detect
         env:
           GATE_ONLY: ${{ inputs.gate_only }}
+          DISPATCH_REF: ${{ github.ref }}
+          DISPATCH_REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          REF="${{ github.ref_name }}"
           if [ "${GATE_ONLY}" = "true" ]; then
             # Gate-only runs never tag or release, so any ref is safe: the
             # test jobs check out the dispatched commit (github.sha, the tip
             # of this ref at dispatch time) and the release/sync-to-main jobs
             # are skipped by their `!inputs.gate_only` conditions.
-            echo "Dispatched from '${REF}' in gate_only mode — test jobs only, no release"
-            echo "branch=${REF}" >> "$GITHUB_OUTPUT"
+            printf "Dispatched from '%s' in gate_only mode — test jobs only, no release\n" "${DISPATCH_REF_NAME}"
+            printf 'branch=%s\n' "${DISPATCH_REF_NAME}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ "$REF" != "stable" ]; then
-            echo "::error::test-and-mark-stable.yml must be dispatched from the 'stable' branch (got '${REF}')."
+          if [ "${DISPATCH_REF}" != "refs/heads/stable" ]; then
+            printf "::error::test-and-mark-stable.yml must be dispatched from the 'stable' branch (refs/heads/stable; got '%s').\n" "${DISPATCH_REF}"
             echo "::error::To promote 'main' to a new stable baseline, run promote-main-to-stable.yml — it fast-forwards stable to main and then dispatches this workflow on stable automatically."
             exit 1
           fi
           echo "Dispatched from 'stable' — proceeding with stable-source release path"
-          echo "branch=stable" >> "$GITHUB_OUTPUT"
+          printf 'branch=stable\n' >> "$GITHUB_OUTPUT"
+
+      # Writer-controlled github.sha must be the stable tip or an ancestor of
+      # it before any later job checks it out (the release job does so with
+      # GH_PAT and runs its scripts). This step runs no repository code: it
+      # never checks anything out and uses github.token read-only.
+      - name: Verify dispatched commit is on stable
+        id: verify_commit
+        if: ${{ !inputs.gate_only }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISPATCH_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if ! [[ "${DISPATCH_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            printf "::error::Dispatched commit '%s' is not a 40-character hex SHA; refusing to release.\n" "${DISPATCH_SHA}"
+            exit 1
+          fi
+          backoff="${RELEASE_SOURCE_VERIFY_BACKOFF_SECONDS:-2}"
+          case "${backoff}" in ''|*[!0-9]*) backoff=2 ;; esac
+          # Bounded retry; only the successful attempt's stdout is used
+          # (gh api prints error bodies to stdout, #5495).
+          release_source_api() {
+            local attempt=1 delay="${backoff}" out=""
+            while [ "${attempt}" -le 3 ]; do
+              if out="$(gh api "$@")"; then
+                printf '%s' "${out}"
+                return 0
+              fi
+              if [ "${attempt}" -lt 3 ]; then
+                echo "::warning::gh api $1 failed (attempt ${attempt}/3); retrying in ${delay}s." >&2
+                sleep "${delay}"
+                delay=$((delay * 2))
+              fi
+              attempt=$((attempt + 1))
+            done
+            return 1
+          }
+          # GitHub API audit (§14): the source job makes no other API call to
+          # extend, and scripts/gh_helpers.sh is not available because
+          # checking it out would run repository code before this trust check.
+          # heads/ is fully qualified: `stable` is also a tag.
+          if ! STABLE_TIP="$(release_source_api "repos/${GITHUB_REPOSITORY}/git/ref/heads/stable" --jq '.object.sha')"; then
+            echo "::error::Could not read the stable branch tip after 3 attempts; refusing to release an unverified commit."
+            exit 1
+          fi
+          if ! [[ "${STABLE_TIP}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The stable branch tip lookup returned no valid SHA; refusing to release an unverified commit."
+            exit 1
+          fi
+          if [ "${STABLE_TIP}" = "${DISPATCH_SHA}" ]; then
+            echo "Dispatched commit ${DISPATCH_SHA} is the stable tip — OK"
+            exit 0
+          fi
+          if ! COMPARE_STATUS="$(release_source_api "repos/${GITHUB_REPOSITORY}/compare/${DISPATCH_SHA}...${STABLE_TIP}" --jq '.status')"; then
+            echo "::error::Could not compare ${DISPATCH_SHA} with the stable tip ${STABLE_TIP} after 3 attempts; refusing to release an unverified commit."
+            exit 1
+          fi
+          case "${COMPARE_STATUS}" in
+            identical|ahead)
+              echo "Dispatched commit ${DISPATCH_SHA} is in the history of the stable tip ${STABLE_TIP} — OK"
+              ;;
+            *)
+              printf "::error::RELEASE_UNTESTED_HEAD tested=%s tip=%s compare='%s': the dispatched commit is not in the stable branch history; refusing to release.\n" "${DISPATCH_SHA}" "${STABLE_TIP}" "${COMPARE_STATUS}"
+              exit 1
+              ;;
+          esac
+
+      # Security finding smoke-target-cross-repo-write (issue #6547): every
+      # job that writes to TEST_REPO with GH_PAT (issues, labels, comments,
+      # contents commits, PR closes, workflow dispatches) needs `source`
+      # through `resolve-version`, so this one fail-closed check covers all
+      # of them. A non-default target must be listed in the allowlist on the
+      # protected default branch; the dispatched ref is not trusted because
+      # gate_only runs accept any ref. Uses github.token, never GH_PAT.
+      - name: Validate smoke-test target repository
+        id: validate-test-repo
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TEST_REPO_INPUT: ${{ inputs.test_repo }}
+          SOURCE_REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SMOKE_TEST_REPO_ALLOWLIST_PATH: .github/ai/smoke_test_repos.json
+        run: |
+          set -euo pipefail
+          smoke_allowlist_path="${SMOKE_TEST_REPO_ALLOWLIST_PATH:-.github/ai/smoke_test_repos.json}"
+          smoke_default_branch="${DEFAULT_BRANCH:-main}"
+          smoke_repo_input="${TEST_REPO_INPUT:-}"
+          smoke_repo_regex='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+          if [ -z "${smoke_repo_input}" ]; then
+            echo "SMOKE_TEST_REPO_ALLOWLIST outcome=allowed reason=default repo=${SOURCE_REPO}"
+            exit 0
+          fi
+          if ! [[ "${smoke_repo_input}" =~ ${smoke_repo_regex} ]]; then
+            echo "::error::test_repo must be empty or match owner/repo."
+            echo "SMOKE_TEST_REPO_ALLOWLIST outcome=rejected reason=invalid_format"
+            exit 1
+          fi
+          smoke_repo_lower="$(printf '%s' "${smoke_repo_input}" | tr '[:upper:]' '[:lower:]')"
+          smoke_source_lower="$(printf '%s' "${SOURCE_REPO}" | tr '[:upper:]' '[:lower:]')"
+          if [ "${smoke_repo_lower}" = "${smoke_source_lower}" ]; then
+            echo "SMOKE_TEST_REPO_ALLOWLIST outcome=allowed reason=self repo=${smoke_repo_input}"
+            exit 0
+          fi
+          smoke_allowlist_file="$(mktemp)"
+          trap 'rm -f "${smoke_allowlist_file}"' EXIT
+          if ! gh api -H "Accept: application/vnd.github.raw+json" \
+              "repos/${SOURCE_REPO}/contents/${smoke_allowlist_path}?ref=${smoke_default_branch}" \
+              > "${smoke_allowlist_file}" 2>/dev/null; then
+            echo "::error::Could not read ${smoke_allowlist_path} from the '${smoke_default_branch}' branch; refusing to run the smoke test against ${smoke_repo_input}."
+            echo "SMOKE_TEST_REPO_ALLOWLIST outcome=rejected reason=allowlist_unavailable repo=${smoke_repo_input}"
+            exit 1
+          fi
+          if ! jq -e 'type == "array" and all(.[]; type == "string" and test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"))' \
+              "${smoke_allowlist_file}" >/dev/null 2>&1; then
+            echo "::error::${smoke_allowlist_path} on '${smoke_default_branch}' must be a JSON array of owner/repo strings."
+            echo "SMOKE_TEST_REPO_ALLOWLIST outcome=rejected reason=allowlist_malformed repo=${smoke_repo_input}"
+            exit 1
+          fi
+          if jq -e --arg r "${smoke_repo_lower}" 'any(.[]; ascii_downcase == $r)' \
+              "${smoke_allowlist_file}" >/dev/null 2>&1; then
+            echo "SMOKE_TEST_REPO_ALLOWLIST outcome=allowed reason=listed repo=${smoke_repo_input}"
+            exit 0
+          fi
+          echo "::error::test_repo '${smoke_repo_input}' is not this repository and is not listed in ${smoke_allowlist_path} on the '${smoke_default_branch}' branch. Add it through a reviewed pull request, or leave test_repo empty."
+          echo "SMOKE_TEST_REPO_ALLOWLIST outcome=rejected reason=not_listed repo=${smoke_repo_input}"
+          exit 1
 
   # ──────────────────────────────────────────────────────────────────
   # Job 0: Resolve version — auto-increment patch if not provided
@@ -1635,7 +1768,8 @@ jobs:
           # it fires) still serves as the primary path; if neither
           # fires, wait-review surfaces no_review_triggered as before.
           # --repo "${TEST_REPO}" is required because this job supports
-          # dispatching E2E against an arbitrary `inputs.test_repo`;
+          # dispatching E2E against any allowlisted `inputs.test_repo`
+          # (the `source` job's validate-test-repo step);
           # without it, `gh workflow run` would target the default repo
           # from the checkout/CLI context (shubhodeep1/coding-workflows
           # itself, per the early checkout at line 316) instead of the
