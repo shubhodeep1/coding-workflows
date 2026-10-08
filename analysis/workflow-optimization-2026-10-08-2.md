@@ -188,3 +188,41 @@ No `TODO`, `FIXME`, or `HACK` marker was found in the scoped workflow and top-le
 | Code modularization | 3 existing workflow/script files plus 2 proposed helpers | Medium |
 | Expression size reduction | `implement.yml`, `review_autofix.yml`, extracted scripts and staging/test registries | Large |
 | Medium/Low fixes | Approximately 4 existing files across logging, retro comments, recovery, and CI | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-10-08)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` meets the call-equivalence and failure-handling requirements; `NEEDS_VERIFICATION` lacks proof of one or more requirements; `RISKY_SKIP` involves a protected path and must not be auto-implemented.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — RISKY_SKIP.** **Calls:** `scripts/promote_main_cycle.sh:406-407` and `scripts/promote_main_cycle.sh:418`. **Current → proposed:** two GETs → one GET at the *idle-to-dispatch transition* only, conditional on proving equivalent coverage; retain subsequent polling. **Endpoint:** `GET /repos/{repo}/actions/workflows/{workflow}/runs`. **Evidence:** the idle check reads 30 runs across all events; the immediately following baseline reads 50 `workflow_dispatch` runs. Both inspect the same workflow, but their filters and limits differ. **Proposed fix:** If coverage can be proved, retain the final idle-check response and derive `before_gate_ids` from it; do not reuse it for the post-dispatch read at `scripts/promote_main_cycle.sh:433`. **Safety rationale:** The first call is inside an idle-wait polling loop, and the differing event filters and limits can change which runs are seen. **Downstream signal:** Do not auto-implement; manually test histories exceeding both limits and a run arriving between the idle check and dispatch before considering any shared snapshot.
+
+### Redundant Re-Fetch (REUSE-###)
+
+- **REUSE-001 — RISKY_SKIP.** **Calls:** `scripts/workflow_failure_heal_intake.sh:221-224` and `scripts/workflow_failure_heal_intake.sh:495-502`. **Current → proposed:** two GETs → one GET when an `autofix_failure` has a successful first lookup and a numeric `SOURCE_GEN`; retain the second GET on a first-lookup failure. **Endpoint:** `GET /user`. **Evidence:** the first result is stored in `PROVENANCE_LOGIN`; for `autofix_failure`, the later lineage-author lookup can query the same identity again when `PHASE_COMMENT_AUTHOR` is empty. **Proposed fix:** In the `HEAL_TRUSTED_AUTHOR` assignment, reuse a verified, nonempty `PROVENANCE_LOGIN` for that branch, while preserving the current lookup when it is unavailable. **Safety rationale:** These are authentication/provenance reads, so identity reuse cannot be treated as an ordinary cache substitution. **Downstream signal:** Do not auto-implement; manually verify token continuity, provenance-verifier requirements, and first-lookup-failure behavior with branch-specific tests.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: RISKY_SKIP — The proposed batch replaces reads inside `orchestrate_poll_process.sh`; review live-state freshness and cache-miss fallback before implementation.
+- API-002: RISKY_SKIP — Replay depends on a rate-limit probe and complete paginated comment history; batching must not weaken authorization or freshness.
+- API-003: RISKY_SKIP — The proposed change alters retry/backoff paths; manually distinguish permanent errors from rate-limit responses.
+
+### Summary Counts
+
+Counts cover net-new findings; the three Deep Audit cross-references are listed separately.
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 0 | — |
+| RISKY_SKIP | 2 | MERGE-001, REUSE-001 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
