@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should this issue's PR cover?\nChoices:\nA) Only the code change: the `review_autofix.yml` skip on the `force_rb_judge` path, plus regression tests and docs. Filing the fresh heal issue and closing #6733 happen outside this PR, through the existing heal intake/report path. The PR body links #6733 with `Refs #6733` and has no auto-close keyword. (RECOMMENDED)\nB) A, plus changes to `scripts/workflow_failure_heal_intake.sh` / `scripts/workflow_failure_heal.py`, so intake can re-file a successor heal issue for a heal issue whose scope marker is missing, and close the predecessor once it has verified the successor.\nC) A, with the PR body set to `Closes #6733`, so #6733 closes when the PR merges.\n**Note:** C closes #6733 whether or not a verified successor exists, which conflicts with \"link the verified successor and close #6733\".\nQ2: Which failure markers count as \"trusted same-head\" for skipping the conflict steps?\nChoices:\nA) The newest `review-autofix-failure:v1` marker on the PR, posted by the account authenticated through `GH_PAT` (the existing `AUTOFIX_FAILURE_MARKER_AUTHOR` identity), with `head=` exactly equal to the current PR head SHA and `reason=` exactly `conflict_resolver_sandbox_path_host_only`. (RECOMMENDED)\nB) Same as A, but accept the reason in any of the same-head markers, not only the newest one.\nC) Same as A, but also accept markers from `github-actions[bot]`.\nQ3: What should happen when trust can't be checked (identity lookup fails, comment history can't be read, or the marker is malformed)?\nChoices:\nA) Run the conflict steps as today. The sandbox still refuses host-only paths and hands off to a human, so nothing becomes less safe; log a reason token for the fallback. (RECOMMENDED)\nB) Skip the conflict steps anyway and go straight to the review-blocked judge.\nC) Fail the run.\nQ4: Which failure reasons should trigger the skip?\nChoices:\nA) Only `conflict_resolver_sandbox_path_host_only`, as the issue says. (RECOMMENDED)\nB) Every reason in `NON_RETRYABLE_FAILURE_REASONS`, which adds `conflict_resolver_sandbox_path_unsupported` and `conflict_resolver_sandbox_support_missing`.",
+  "fingerprint": "825a74c48ee56e9dcaffb541f94f4c44961587b792ed209ab9b97e0d8375427f",
+  "lineage": {
+    "issue_number": 6743,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37740300584",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37740300584",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008070002_338eddc603",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6743,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37740300584"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6743 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T07:00:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
