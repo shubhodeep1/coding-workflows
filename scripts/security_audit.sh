@@ -2066,9 +2066,10 @@ def module_stem(path: str) -> str:
 	stem = pure.stem
 	if stem.lower() in LINE_OWNERSHIP_GENERIC_MODULE_STEMS and pure.parent.name:
 		stem = pure.parent.name
-	# No minimum length: a short module such as db.py or io.py can hold the
-	# deleted guard, and a word match here only ever adds blocking.
-	return stem
+	# Two characters minimum: a short module such as db.py or io.py can hold
+	# the deleted guard, but a one-letter stem (a.py, i.py) matches ordinary
+	# words and loop variables and would block unrelated findings.
+	return stem if len(stem) >= 2 else ""
 
 
 def head_file_text(path: str) -> str | None:

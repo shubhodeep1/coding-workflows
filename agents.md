@@ -1598,7 +1598,7 @@ that lost lines (`reason=references_file_with_deletions`), the cited file names 
 the module of a file that lost lines
 (`reason=cited_file_references_module_with_deletions`), or such a file names
 the cited module at base (`reason=module_with_deletions_references_cited_file`;
-module = basename without extension, of any length such as `db`, or the
+module = basename without extension, two or more characters such as `db`, or the
 parent directory for `__init__`, `index`, `init`, `main` and `mod`), or an unchanged non-documentation file
 (not `.md`/`.markdown`/`.rst`/`.txt`/`.adoc`) names both the cited module and
 such a module at base, as a router, registry or DI configuration would
