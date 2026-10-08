@@ -2925,12 +2925,15 @@ def test_shell_wrapped_git_writes_are_detected(guard_module, hook_path: Path, co
 	"echo '$(git push)'",
 	"echo $(git rev-parse HEAD)",
 	"echo $(( 1 + 2 ))",
+	# A data heredoc inside a wrapper is never run, even when it mentions a push.
+	"bash -c \"python3 <<'EOF'\nprint('git push origin x')\nEOF\"",
 ])
 def test_shell_wrappers_without_git_writes_are_ignored(guard_module, hook_path: Path, command: str) -> None:
 	assert not (guard_module.git_subcommands(command) & guard_module.GUARDED_SUBCOMMANDS)
 
 
 HEREDOC_COMMIT = "git commit -m \"$(cat <<'EOF'\nDon't git push from here; it's a commit message.\nEOF\n)\""
+# Covers the `git commit -F -` (message on stdin) form only.
 NESTED_HEREDOC_COMMIT = "bash -c \"git commit -q -F - <<'EOF'\nDon't git push; it's a message.\nEOF\""
 
 
