@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: On `main`, line 12 of `prompts/_templates/mode-judge-unblock.txt` and line 19 of `prompts/mode-judge-unblock.txt` are identical, and neither has the `ai:security` clause. That means the mismatch exists only on PR #6550's head branch `ai/issue-6541`, which GITHUB FACTS shows is still open and unmerged. Any fix has to land on that branch. Option C would add an unrelated change to `main` and collide with the PR. Option B depends on the PR's own autofix loop, which may already be spent and leaves this issue with no deliverable. Option A is the smallest change that targets the actual failure.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - Integration branch: `ai/issue-6541` (it exists; its head is now `cc9a1dae3fca`, which is newer than the failing run's `7af00fe26e9b`)\n    - `prompts/mode-judge-unblock.txt`, the line starting with `` - `accept_with_followup` `` (legacy prompt, which is the source of truth on the branch)\n    - `prompts/_templates/mode-judge-unblock.txt`, the matching `accept_with_followup` line (the target)\n    - `tests/test_assemble_prompt.py::test_assembled_templates_match_legacy_prompt_bytes`\n    - files_touched: `prompts/_templates/mode-judge-unblock.txt`\n  steps:\n    - Record `Integration branch: ai/issue-6541` and `files_touched: prompts/_templates/mode-judge-unblock.txt`. The template is under `prompts/`, so the automation-path guard needs this grant.\n    - Check out `ai/issue-6541` at its current head. Run `tests/test_assemble_prompt.py` first, because the branch has moved since the failing run and a later autofix commit may already have fixed it. If the test passes, make no change and close this issue as already resolved.\n    - Otherwise, copy the legacy prompt's `accept_with_followup` line byte-for-byte into the matching line of the template. Keep the `ai:security` exclusion and the instruction to use `reissue` for security-finding splits. Do not touch any other line or file.\n    - Rerun `tests/test_assemble_prompt.py` and confirm the parity assertion passes.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: The parity test treats the legacy prompt as canonical. Copying the PR's intended legacy line into the template restores byte-for-byte parity, keeps the PR's security restriction, and leaves `main` unchanged.\n  reversibility: This is a one-line edit to a template on the PR branch. Reverting it brings back the CI failure, and closing PR #6550 throws the change away.",
+  "fingerprint": "5b0db5834c745923d98a71a8b7805f8ea7152b998efd69a1783964c65b635330",
+  "lineage": {
+    "issue_number": 6783,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37811196602",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37811196602",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6783"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008165525_4c398294ca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6783,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37811196602"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6783",
+  "timestamps": {
+    "created_at": "2026-10-08T16:55:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
