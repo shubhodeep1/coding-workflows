@@ -249,8 +249,10 @@ def _run_security_audit(
 		env = os.environ.copy()
 		if Path(run_cwd) != REPO_ROOT:
 			env = {key: value for key, value in env.items() if key not in _SANITIZED_GIT_ENV_KEYS}
-		# Engine selection must not leak in from the caller's environment.
-		env = {key: value for key, value in env.items() if not key.startswith(("AI_ENGINE", "CLAUDE_"))}
+		# Engine selection must not leak in from the caller's environment,
+		# including the pull_request event payload (GITHUB_EVENT_PATH), whose
+		# ai:engine-claude label would otherwise beat the role variables.
+		env = {key: value for key, value in env.items() if not key.startswith(("AI_ENGINE", "CLAUDE_", "GITHUB_EVENT"))}
 		existing_path_entries = env.get("PATH", "").split(os.pathsep)
 		if not codex_available:
 			existing_path_entries = [

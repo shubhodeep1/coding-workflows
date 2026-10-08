@@ -31,7 +31,9 @@ def _resolve(role: str, **extra_env: str) -> subprocess.CompletedProcess:
 	env = {
 		key: value
 		for key, value in os.environ.items()
-		if not key.startswith(("AI_ENGINE", "SUPPORT_", "CLAUDE_FIXER", "GITHUB_WORKSPACE"))
+		# GITHUB_EVENT_PATH carries the PR labels on a pull_request run, and an
+		# ai:engine-claude label there beats the per-role variable under test.
+		if not key.startswith(("AI_ENGINE", "SUPPORT_", "CLAUDE_FIXER", "GITHUB_WORKSPACE", "GITHUB_EVENT"))
 	}
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	env.update(extra_env)
@@ -431,7 +433,7 @@ def test_log_utility_role_defaults_to_claude(role: str) -> None:
 
 @pytest.mark.parametrize("role", LOG_UTILITY_ROLES)
 def test_log_utility_role_model(role: str) -> None:
-	env = {key: value for key, value in os.environ.items() if not key.startswith(("AI_ENGINE", "SUPPORT_", "GITHUB_WORKSPACE"))}
+	env = {key: value for key, value in os.environ.items() if not key.startswith(("AI_ENGINE", "SUPPORT_", "GITHUB_WORKSPACE", "GITHUB_EVENT"))}
 	result = subprocess.run(
 		["bash", "-c", 'source "$0"; ai_engine_model "$1" openai/gpt-6-luna', str(AI_ENGINE), role],
 		capture_output=True,
