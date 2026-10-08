@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The fix the diagnosis suggests edits `scripts/review_conflict_prepare.sh`. That file is outside this heal issue's scope marker, and implement's automation-path guard will reject it without an exact `files_touched` grant. How should scope be handled?\nChoices:\nA) Widen scope to `scripts/review_conflict_prepare.sh`, `tests/test_conflict_manifest_union_contract.py` and a `changelog.d/` fragment, and add a deterministic template-twin resolution before resolver dispatch. (RECOMMENDED)\nB) Keep the current scope (workflows/tests/changelog only). Add a regression test that pins today's fail-closed behaviour for host-only hook conflicts, plus a changelog note. No change to resolution behaviour; PR #6555 needs a human merge.\nC) Close this heal issue with no code change: the refusal is by design (agents.md: \"No model runs in either case\"). Handle PR #6555's hook conflict by hand.\n**Note:** Q2 applies only if Q1 = A.\nQ2: Which conflicted host-only paths should the deterministic twin resolution cover? In every case it fires only when each side's live copy matches that side's `workflow-templates/` twin byte-for-byte, including executable mode, and the template merged cleanly. Every other case keeps failing closed with `sandbox_path_host_only`.\nChoices:\nA) Only `.claude/hooks/pr_merge_status_guard.py`, the path in this incident.\nB) Any conflicted `.claude/hooks/*.py` that has a `workflow-templates/.claude/hooks/` twin. This also covers `gh_api_write_guard.py`, which has the same parity contract. (RECOMMENDED)\nC) Any conflicted `.claude/**` path that has a `workflow-templates/.claude/**` twin and is not on the divergence allowlist (`.github/ai/claude_template_divergence.json`).\nQ3: When the twin resolution resolves the hook and other conflicts remain, what should happen?\nChoices:\nA) Stage the resolved hook and send only the remaining conflicts to the sandboxed resolver. This mirrors the manifest union-merge path. If the hook was the only conflict, commit the two-parent `[ai-merge-resolve]` merge directly. (RECOMMENDED)\nB) Resolve the hook only when it is the sole conflicted path. Otherwise fail closed as today.",
+  "fingerprint": "34276a9d97ef31d34999d513d609ed8c44c8310549a0f1435fbb14d08eec2a37",
+  "lineage": {
+    "issue_number": 6800,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37833083703",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37833083703",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008194019_df99d81a09",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6800,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37833083703"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6800 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T19:40:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
