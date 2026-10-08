@@ -2927,6 +2927,7 @@ def test_shell_wrapped_git_writes_are_detected(guard_module, hook_path: Path, co
 	"echo $(( 1 + 2 ))",
 	# A data heredoc inside a wrapper is never run, even when it mentions a push.
 	"bash -c \"python3 <<'EOF'\nprint('git push origin x')\nEOF\"",
+	"bash -c \"python3 <<'EOF'\ngit push origin x\nEOF\"",
 ])
 def test_shell_wrappers_without_git_writes_are_ignored(guard_module, hook_path: Path, command: str) -> None:
 	assert not (guard_module.git_subcommands(command) & guard_module.GUARDED_SUBCOMMANDS)
