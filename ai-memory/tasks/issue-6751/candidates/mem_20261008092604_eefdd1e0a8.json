@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: On this checkout the test passes. `tests/test_apply_analysis_on_main.py:341` expects `echo \"branch=${REF}\" >> \"$GITHUB_OUTPUT\"`, and `.github/workflows/test-and-mark-stable.yml:175` still writes exactly that. The `printf` form exists only on PR #6555's head (`ai/issue-6546` @ d6bc0e8b2bcb, open, base `main`), so the test fails only there. An assertion that accepts either form and still requires `branch=stable` after the `stable` check works on `main` now and on PR #6555 once it picks up `main`. The issue has no `Target branch:` metadata, and stacking a test-only PR on another PR's branch is the higher-risk route. Option C would leave the failure with no tracked fix.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - tests/test_apply_analysis_on_main.py:338-341 (`test_release_gate_only_mode_contract`, `source_run = gate[\"jobs\"][\"source\"][\"steps\"][0][\"run\"]`)\n    - .github/workflows/test-and-mark-stable.yml:170-184 (the gate-only branch writes `branch=${REF}`; the `[ \"$REF\" != \"stable\" ]` check exits 1; the release path writes `branch=stable`)\n    - PR #6555 head form, quoted in the triage evidence: `printf 'branch=%s\\n' \"${DISPATCH_REF_NAME}\"` (gate-only) and `branch=stable` (release path)\n  steps:\n    - Target the default branch (`main`). Do not add a `Target branch:` line.\n    - In `test_release_gate_only_mode_contract`, replace the single exact-string assertion at line 341 with an assertion that `source_run` contains at least one of `'echo \"branch=${REF}\" >> \"$GITHUB_OUTPUT\"'` or `\"printf 'branch=%s\\\\n' \\\"${DISPATCH_REF_NAME}\\\"\"`. It must sit after `if [ \"${GATE_ONLY}\" = \"true\" ]; then` and before the first `exit 0` after it. Compare substring indices; keep it a plain literal check.\n    - Add assertions that `source_run` contains the `stable` guard (`'!= \"stable\"'` together with an `exit 1` after it) and a `branch=stable` write to `$GITHUB_OUTPUT` in either `echo \"branch=stable\" >> \"$GITHUB_OUTPUT\"` or a `printf` form. The `branch=stable` write must come after the guard (index comparison).\n    - Keep every other assertion in the test unchanged. Do not edit `.github/workflows/test-and-mark-stable.yml`.\n    - Run `pytest tests/test_apply_analysis_on_main.py -k release_gate_only_mode_contract`. If the sandbox has no pytest, mark it UNVERIFIED.\n    - Add a changelog fragment `changelog.d/<issue>-release-gate-branch-output-test.md` if CLAUDE.md \u00a720 requires one for test-only changes.\n  replaces_acceptance_criterion: \"Update the test to assert the current gate-only `printf` output\". The new criterion: the test accepts either the current or the new gate-only output form, and still requires the guarded `branch=stable` write.\n  equivalence_argument: The test exists to check behaviour: gate-only mode writes the dispatched ref, and the release path writes `stable` only after the `stable`-ref check. The tolerant assertion still checks that behaviour and the guard ordering. It does not depend on which shell command is used, so it passes on `main` and on PR #6555's rewrite. PR #6555 picks up the fix when it merges or syncs `main`.\n  reversibility: Test-only change. If a human wants only the `printf` form, drop the `echo` alternative after PR #6555 merges. Reverting the commit restores the previous exact-string check with no runtime impact.\n\nESCALATION (required for any ESCALATE decision):\n\nSETUP REQUIRED (only when a decision relies on a placeholder):",
+  "fingerprint": "15b68a0e28f2f7a2f2e8a719df452b47dd123d8f4262979f0a20000979656dba",
+  "lineage": {
+    "issue_number": 6751,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37755657888",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37755657888",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6751"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008092604_eefdd1e0a8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6751,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37755657888"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6751",
+  "timestamps": {
+    "created_at": "2026-10-08T09:26:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
