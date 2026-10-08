@@ -918,7 +918,7 @@ def _judge(tmp_path: Path, item: dict, comments: list | None = None, verdict: di
 	import os
 
 	env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", FAKE_GH_STATE=str(state_file), PYTHONDONTWRITEBYTECODE="1")
-	for name in ("UNBLOCK_JUDGE_ENABLED", "TG_BOT_SECRET", "GH_TOKEN"):
+	for name in ("UNBLOCK_JUDGE_ENABLED", "TG_BOT_SECRET", "GH_TOKEN", "NEEDS_HUMAN_DIGEST_ENABLED"):
 		env.pop(name, None)
 	env.update(REPOSITORY="o/r", ITEM="7", SUPPORT_DIR=str(ROOT), RUNTIME_DIR=str(tmp_path / "rt"), MOCK_UNBLOCK_JUDGE_NOW="2026-10-04T12:00:00Z")
 	if verdict is not None:
@@ -1925,7 +1925,8 @@ def test_judge_closes_without_the_model_when_the_caps_are_spent(tmp_path: Path) 
 		_comment(ledger.marker(7, "blocked", "0" * 12, "retry_budget", 1), "pipeline-bot", "2026-10-04T08:00:00Z"),
 		_comment(ledger.marker(7, "blocked", "1" * 12, "reissue", 2), "pipeline-bot", "2026-10-04T09:00:00Z"),
 	]
-	result, state = _judge(tmp_path, ISSUE, comments=comments, MOCK_UNBLOCK_JUDGE_JSON="must not be read")
+	result, state = _judge(tmp_path, ISSUE, comments=comments, MOCK_UNBLOCK_JUDGE_JSON="must not be read",
+		NEEDS_HUMAN_DIGEST_ENABLED="false")
 	assert "verdict=close round=3 outcome=acted" in result.stdout
 	assert any(label == "ai:unblock-closed" for _, label in state["labels_added"])
 	assert any(endpoint == "repos/o/r/issues/7" and fields.get("state") == "closed" for endpoint, fields in state["patched"])
@@ -2004,3 +2005,57 @@ def test_verdict_record_cannot_carry_a_command_line(tmp_path: Path) -> None:
 	record = state["comments"][0]["body"]
 	assert not COMMAND_LINE.search(record)
 	assert not COMMAND_LINE.search(state["created"][0]["body"])
+
+
+# --- needs-human digest (plan item 4a, D6) -------------------------------------
+
+
+def _terminal_decision(**extra) -> dict:
+	decision = {"item": 7, "kind": "issue", "stop": "blocked", "fingerprint": FP, "next_round": 3,
+		"allowed": ["close"], "terminal": True, "terminal_reason": "item_cap"}
+	decision.update(extra)
+	return decision
+
+
+def test_needs_human_validate_adds_terminal_reason_only_when_terminal() -> None:
+	forced = ledger.validate({"verdict": "close", "reason": "Terminal: item_cap"}, _terminal_decision(), "acme/app")
+	assert forced["terminal_reason"] == "item_cap"
+	chosen = ledger.validate({"verdict": "close", "reason": "nothing left"},
+		_terminal_decision(terminal=False, terminal_reason="", allowed=["retry_budget", "close"]), "acme/app")
+	assert "terminal_reason" not in chosen
+
+
+@pytest.mark.parametrize("kind,stop,labels", [
+	("issue", "blocked", ["ai:blocked"]),
+	("pr", "review-autofix-failed", ["ai:review-autofix-failed"]),
+	("project", "project-failed", ["ai:orchestrator-tracking"]),
+	("issue", "blocked", ["ai:blocked", "ai:security"]),
+])
+def test_needs_human_exhaustion_parks_instead_of_closing(kind: str, stop: str, labels: list[str]) -> None:
+	ops = actions.plan(_verdict("close", terminal_reason="item_cap"), _ctx(kind, stop, labels=labels, needs_human_digest=True))
+	assert ops == [{"op": "needs_human", "issue": 7, "kind": kind, "stop": stop, "reason": "item_cap"}]
+	assert not any(op["op"] == "close" or "ai:unblock-closed" in op.get("labels", []) for op in ops)
+
+
+def test_needs_human_model_close_and_kill_switch_keep_the_legacy_close() -> None:
+	legacy = actions.plan(_verdict("close"), _ctx())
+	assert actions.plan(_verdict("close"), _ctx(needs_human_digest=True)) == legacy
+	assert actions.plan(_verdict("close", terminal_reason="item_cap"), _ctx()) == legacy
+	assert {"op": "close", "issue": 7, "reason": "not_planned", "pr": False} in legacy
+
+
+def test_needs_human_exhaustion_parks_in_the_digest_end_to_end(tmp_path: Path) -> None:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required for the unblock judge fixture")
+	comments = [
+		_comment(ledger.marker(7, "blocked", "0" * 12, "retry_budget", 1), "pipeline-bot", "2026-10-04T08:00:00Z"),
+		_comment(ledger.marker(7, "blocked", "1" * 12, "reissue", 2), "pipeline-bot", "2026-10-04T09:00:00Z"),
+	]
+	result, state = _judge(tmp_path, ISSUE, comments=comments, MOCK_UNBLOCK_JUDGE_JSON="must not be read")
+	assert "verdict=close round=3 outcome=acted" in result.stdout, result.stdout + result.stderr
+	assert "NEEDS_HUMAN item=7 kind=issue reason=item_cap outcome=parked" in result.stderr
+	assert not any(fields.get("state") == "closed" for _, fields in state["patched"])
+	assert [label for _, label in state["labels_added"]] == ["ai:needs-human"]
+	digest = [fields for fields in state["created"] if fields.get("body", "").startswith("<!-- ai:needs-human:v1 -->")]
+	assert len(digest) == 1 and digest[0]["labels[]"] == "ai:operator-step"
+	assert "ai:needs-human-latch" not in digest[0]["body"]

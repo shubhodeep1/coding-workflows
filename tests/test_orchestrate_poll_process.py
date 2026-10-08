@@ -23711,3 +23711,115 @@ def test_integration_judge_non_redispatch_verdict_keeps_terminal_path():
 
 if __name__ == "__main__":
 	raise SystemExit(main())
+
+
+# --- needs-human digest (plan item 4a, D6) -------------------------------------
+
+NEEDS_HUMAN_TERMINAL_CALLS = {
+	"security_pass_failed": 3,
+	"validation_failed": 3,
+	"final_merge_exhausted": 1,
+	"integration_conflict_capped": 1,
+	"judge_cycles_exhausted": 1,
+	"judge_repeat_fingerprint": 1,
+	"recovery_exhausted": 1,
+	"judge_output_exhausted": 1,
+}
+
+
+def test_needs_human_digest_terminal_paths_call_the_helper():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	for reason, count in NEEDS_HUMAN_TERMINAL_CALLS.items():
+		assert script.count(f'needs_human_park_project "{reason}"') == count, reason
+	lines = script.splitlines()
+	for idx, line in enumerate(lines):
+		if line.strip() in ('set_tracking_phase_label "ai:security-pass-failed"', 'set_tracking_phase_label "ai:validation-failed"'):
+			assert lines[idx + 1].strip().startswith("needs_human_park_project "), idx
+	assert 'NEEDS_HUMAN_DIGEST_ENABLED="${NEEDS_HUMAN_DIGEST_ENABLED:-true}"' in script
+	# Nothing closes the tracking issue on an exhausted budget.
+	park = _extract_bash_function(script, "needs_human_park_project() {")
+	assert "state=closed" not in park and "gh issue close" not in park and "set_tracking_phase_label" not in park
+
+
+def test_needs_human_digest_prune_runs_once_per_tick_with_the_unblock_scan():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	scan = _extract_bash_function(script, "run_unblock_scan() {")
+	prune_at = scan.index("needs_human_digest_prune || true")
+	# Before the scan's own kill switch, so a disabled judge still prunes.
+	assert prune_at < scan.index('if [ "${UNBLOCK_JUDGE_ENABLED:-true}" = "false" ]')
+	assert script.count("needs_human_digest_prune || true") == 1
+	assert len(re.findall(r"(?m)^\s*run_unblock_scan \|\|", script)) == 2
+
+
+def _run_needs_human_park(tmp: Path, **env_extra: str) -> tuple[subprocess.CompletedProcess, Path, Path]:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	park = _extract_bash_function(script, "needs_human_park_project() {")
+	calls = tmp / "calls.txt"
+	alerts = tmp / "alerts.txt"
+	(tmp / "scripts").mkdir(exist_ok=True)
+	(tmp / "scripts" / "operator_step_issue.py").write_text(
+		"import json, os, sys\n"
+		"open(os.environ['FAKE_PARK_CALLS'], 'a').write(' '.join(sys.argv[1:]) + '\\n')\n"
+		"print(json.dumps({'issue': 900, 'newly_parked': True}))\n",
+		encoding="utf-8",
+	)
+	harness = tmp / "harness.sh"
+	harness.write_text(
+		"set -uo pipefail\n"
+		'UNBLOCK_TRUSTED_LOGIN=""\n'
+		'unblock_trusted_login() { UNBLOCK_TRUSTED_LOGIN="pipeline-bot"; printf "%s" "$UNBLOCK_TRUSTED_LOGIN"; }\n'
+		'tg_notify() { printf "%s %s\\n" "$2" "$1" >> "$FAKE_ALERTS"; }\n'
+		+ park + '\nneeds_human_park_project "recovery_exhausted"\n',
+		encoding="utf-8",
+	)
+	env = dict(os.environ, TRACKING_NUM="40", GITHUB_REPOSITORY="o/r", FAKE_PARK_CALLS=str(calls), FAKE_ALERTS=str(alerts))
+	for name in ("UNBLOCK_JUDGE_ENABLED", "NEEDS_HUMAN_DIGEST_ENABLED"):
+		env.pop(name, None)
+	env.update(env_extra)
+	result = subprocess.run(["bash", str(harness)], cwd=tmp, capture_output=True, text=True, env=env, check=False)
+	return result, calls, alerts
+
+
+def test_needs_human_digest_defers_to_the_unblock_judge_by_default():
+	with tempfile.TemporaryDirectory() as tmp:
+		result, calls, _ = _run_needs_human_park(Path(tmp))
+		assert result.returncode == 0, result.stderr
+		assert "NEEDS_HUMAN item=40 kind=project reason=recovery_exhausted outcome=skip detail=unblock_judge_pending" in result.stdout
+		assert not calls.exists()
+	with tempfile.TemporaryDirectory() as tmp:
+		result, calls, _ = _run_needs_human_park(Path(tmp), UNBLOCK_JUDGE_ENABLED="false", NEEDS_HUMAN_DIGEST_ENABLED="false")
+		assert "outcome=skip detail=disabled" in result.stdout and not calls.exists()
+
+
+def test_needs_human_digest_parks_the_project_when_the_judge_is_off():
+	with tempfile.TemporaryDirectory() as tmp:
+		result, calls, alerts = _run_needs_human_park(Path(tmp), UNBLOCK_JUDGE_ENABLED="false")
+		assert result.returncode == 0, result.stderr
+		args = calls.read_text(encoding="utf-8").split()
+		assert args[:2] == ["needs-human", "park"]
+		for flag, value in (("--repo", "o/r"), ("--item", "40"), ("--kind", "project"), ("--stop", "project-failed"),
+				("--reason", "recovery_exhausted"), ("--trusted-login", "pipeline-bot"),
+				("--link", "https://github.com/o/r/issues/40")):
+			assert args[args.index(flag) + 1] == value, flag
+		if shutil.which("jq"):
+			assert alerts.read_text(encoding="utf-8").startswith("CRITICAL Project #40 parked in needs-human digest #900")
+
+
+def test_needs_human_digest_park_never_triggers_the_staged_support_latch_release():
+	"""Parking must never write the marker release_staged_support_needs_human_latches keys on."""
+	import importlib.util
+
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	sweep = _extract_bash_function(script, "release_staged_support_needs_human_latches() {")
+	assert "<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->" in sweep
+	helper_source = (REPO_ROOT / "scripts" / "operator_step_issue.py").read_text(encoding="utf-8")
+	assert "needs-human-latch" not in helper_source and "needs-human-auto-release" not in helper_source
+	spec = importlib.util.spec_from_file_location("operator_step_issue_latch", REPO_ROOT / "scripts" / "operator_step_issue.py")
+	writer = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(writer)
+	line = writer.render_digest_entry(7, "issue", "needs-human",
+		"<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->", "", "2026-10-08T00:00:00Z")
+	body = writer.render_digest({7: {"kind": "issue", "parked": "2026-10-08T00:00:00Z", "line": line}}, [])
+	assert "<!-- ai:needs-human-latch" not in body
+	park = _extract_bash_function(script, "needs_human_park_project() {")
+	assert "/approved" not in park and "ai:awaiting-approval" not in park

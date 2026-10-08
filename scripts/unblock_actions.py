@@ -36,6 +36,11 @@ Output: one JSON line `{"ops": [...]}`. Operations:
   {"op": "close", "issue": n, "reason": "not_planned", "pr": bool}
   {"op": "dispatch_review", "pr": n}
   {"op": "telegram", "level": s, "text": s}
+  {"op": "needs_human", "issue": n, "kind": s, "stop": s, "reason": s}
+      (a ledger-forced terminal verdict, every round spent: park the item in
+      the needs-human digest, scripts/operator_step_issue.py needs-human park,
+      instead of closing it; only when the context's `needs_human_digest` is
+      true, which unblock_judge.sh sets from NEEDS_HUMAN_DIGEST_ENABLED)
 
 Resume commands are the existing ones (Q10): on a project's tracking issue
 `/re-security-pass`, `/revalidate`, `/judge_resume --reset-recovery`; on an
@@ -181,6 +186,7 @@ def _context(raw: object) -> dict:
 		"pr_author": pr_author if pr_trusted else "",
 		"pr_head_repo": pr_head_repo if pr_trusted else "",
 		"pr_head_sha": pr_head_sha if pr_trusted else "",
+		"needs_human_digest": raw.get("needs_human_digest") is True,
 	}
 
 
@@ -421,6 +427,11 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 		)
 		ops += reset_ops(ctx, f"accepted with a follow-up issue: {verdict['reason']}")
 	elif name == "close":
+		terminal_reason = verdict.get("terminal_reason")
+		if isinstance(terminal_reason, str) and terminal_reason and ctx["needs_human_digest"]:
+			# Plan item 4a (D6): an exhausted budget parks the item; it is never closed.
+			return [{"op": "needs_human", "issue": item, "kind": ctx["kind"], "stop": ctx["stop"],
+				"reason": re.sub(r"[^a-z0-9_]", "", terminal_reason)[:40] or "exhausted"}]
 		if _is_security_issue(ctx):
 			ops.append({"op": "add_labels", "issue": item, "labels": [CLOSED_LABEL]})
 			ops.append({"op": "comment", "issue": item, "body": "The unblock judge has no verdicts left for this security finding. It stays open until a linked fix is merged.\n\nWhy: " + _one_line(verdict["reason"])})
