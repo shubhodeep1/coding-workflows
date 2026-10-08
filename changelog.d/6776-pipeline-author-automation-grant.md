@@ -1,0 +1,2 @@
+<!-- changelog: changed -->
+- Let issues the pipeline account opened without a `files_touched` list (security-pass fix issues, re-issues, heal issues) change `.github/`, `.claude/`, `scripts/`, `prompts/` and `workflow-templates/` files, so they no longer stop at `ai:scope-blocked` until someone edits the issue body. The grant is logged as `reason=pipeline_author_no_allowlist`. Malformed lists, `ALLOW_WORKFLOW_EDITS=false`, and issues written by people behave as before.

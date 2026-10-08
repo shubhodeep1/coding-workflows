@@ -587,6 +587,9 @@ point before and during commit. Staged `.github/`, `.claude/`, `scripts/`,
 `prompts/`, and `workflow-templates/` files (case-insensitive, including rename
 sources) require `ALLOW_WORKFLOW_EDITS=true` plus an exact `files_touched` entry
 from an issue authored by the GH_PAT login or OWNER/MEMBER/COLLABORATOR.
+An issue authored by the GH_PAT login with no `files_touched` block at all gets an
+open grant for every automation path (`reason=pipeline_author_no_allowlist`); a
+declared block grants only its exact entries, and a malformed block blocks for every author.
 The host-only issue-bound grant file is built before the isolated editor runs;
 missing metadata, identity or helper fails closed only for automation paths.
 Both sites reuse `scope_violation_*` outputs and `ai:scope-blocked`; the

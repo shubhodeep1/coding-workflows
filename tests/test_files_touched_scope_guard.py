@@ -307,6 +307,67 @@ def test_automation_grant_requires_trusted_author_and_exact_paths() -> None:
 	assert guard.build_automation_grant(meta, "pipeline[bot]")["reason"] == "malformed_allowlist"
 
 
+def test_pipeline_author_without_block_gets_open_grant() -> None:
+	meta = {"number": 42, "user": {"login": "pipeline[bot]"}, "author_association": "NONE", "body": "missing"}
+	grant = guard.build_automation_grant(meta, "pipeline[bot]")
+	assert grant["trusted"] is True and grant["open"] is True
+	assert grant["reason"] == "pipeline_author_no_allowlist" and grant["paths"] == []
+	assert guard.check_automation_paths(["scripts/a.sh", ".github/workflows/x.yml"], grant, "true", "42") == (
+		"in-scope", [], "pipeline_author_no_allowlist")
+	assert guard.check_automation_paths(["scripts/a.sh"], grant, "false", "42")[2] == "workflow_edits_disabled"
+	assert guard.check_automation_paths(["scripts/a.sh"], grant, "true", "43")[2] == "grant_issue_mismatch"
+	# A malformed block still blocks the pipeline author.
+	malformed = guard.build_automation_grant(dict(meta, body="files_touched:\n  not an item\n"), "pipeline[bot]")
+	assert malformed["reason"] == "malformed_allowlist" and malformed["trusted"] is False and malformed["open"] is False
+	assert guard.check_automation_paths(["scripts/a.sh"], malformed, "true", "42")[0] == "out-of-scope"
+	# A declared block grants only its exact entries (no widening).
+	declared = guard.build_automation_grant(dict(meta, body=_body("scripts/x.sh")), "pipeline[bot]")
+	assert declared["reason"] == "granted" and declared["open"] is False
+	assert guard.check_automation_paths(["scripts/y.sh"], declared, "true", "42") == (
+		"out-of-scope", ["scripts/y.sh"], "path_not_granted")
+	# A human OWNER without a block is still blocked.
+	human = guard.build_automation_grant(dict(meta, user={"login": "maintainer"}, author_association="OWNER"),
+		"pipeline[bot]")
+	assert human["reason"] == "no_allowlist" and human["open"] is False
+	assert guard.check_automation_paths(["scripts/a.sh"], human, "true", "42")[2] == "no_allowlist"
+	# Case-different logins do not match the pipeline identity.
+	assert guard.build_automation_grant(dict(meta, user={"login": "Pipeline[bot]"}), "pipeline[bot]")[
+		"reason"] == "untrusted_author"
+
+
+def test_open_grant_validation_is_strict() -> None:
+	base = {"schema_version": guard.AUTOMATION_GRANT_SCHEMA, "issue_number": 42, "trusted": True,
+		"open": True, "reason": "pipeline_author_no_allowlist", "paths": []}
+	for override in ({"open": "true"}, {"open": 1}, {"trusted": False}, {"paths": ["scripts/a.sh"]},
+		{"reason": "granted"}):
+		assert guard.check_automation_paths(["scripts/a.sh"], dict(base, **override), "true", "42")[2] == \
+			"grant_unavailable", override
+	legacy = {key: value for key, value in base.items() if key != "open"}
+	legacy.update(reason="granted", paths=["scripts/a.sh"])
+	assert guard.check_automation_paths(["scripts/a.sh"], legacy, "true", "42") == ("in-scope", [], "granted")
+	assert guard.check_automation_paths(["scripts/b.sh"], legacy, "true", "42")[2] == "path_not_granted"
+
+
+def test_pipeline_author_open_grant_cli() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		tdp = Path(td)
+		meta = tdp / "meta.json"
+		meta.write_text(json.dumps({"number": 42, "user": {"login": "bot"},
+			"author_association": "NONE", "body": "no block"}), encoding="utf-8")
+		grant_file = tdp / "grant.json"
+		staged = tdp / "staged.txt"
+		staged.write_text("scripts/a.sh\n.github/workflows/x.yml\n", encoding="utf-8")
+		base = [sys.executable, str(GUARD_SCRIPT)]
+		assert subprocess.run(base + ["--emit-automation-grant", str(grant_file),
+			"--issue-meta-file", str(meta), "--pipeline-login", "bot"], check=False).returncode == 0
+		record = json.loads(grant_file.read_text(encoding="utf-8"))
+		assert record["open"] is True and record["reason"] == "pipeline_author_no_allowlist"
+		proc = subprocess.run(base + ["--check-automation-paths", "--automation-grant-file", str(grant_file),
+			"--staged-file", str(staged), "--allow-workflow-edits", "true", "--issue-number", "42"],
+			capture_output=True, text=True)
+		assert proc.returncode == 0 and proc.stdout.strip() == ""
+
+
 def test_automation_grant_cli_denies_invalid_file_and_preserves_old_exit_codes() -> None:
 	with tempfile.TemporaryDirectory() as td:
 		tdp = Path(td)
@@ -507,6 +568,11 @@ def test_automation_fragments_share_logic_and_fail_closed() -> None:
 		assert rc == 0 and "scope_violation_blocked" not in output, (label, output)
 		rc, output = _run_automation_fragment(label, "missing", "docs/x.md", grant_present=False)
 		assert rc == 0 and "scope_violation_blocked" not in output
+		rc, output = _run_automation_fragment(label, "missing", "scripts/a.sh", login="pipeline[bot]")
+		assert rc == 0 and "scope_violation_blocked" not in output, (label, output)
+		rc, output = _run_automation_fragment(label, "files_touched:\n  not an item\n", "scripts/a.sh",
+			login="pipeline[bot]")
+		assert rc == 1 and "reason=malformed_allowlist" in output, (label, output)
 
 
 # --------------------------------------------------------------------------
