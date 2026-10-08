@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -35,6 +37,8 @@ class FakeGitHub:
 		self.labels_added: list[tuple[str, str]] = []
 		self.labels_removed: list[str] = []
 		self.next_number = 900
+		self.comments: dict[int, list[dict]] = {}
+		self.next_comment_id = 5000
 
 	def __call__(self, args: list[str], *, allow_existing_label: bool = False) -> str:
 		self.calls.append(args)
@@ -57,6 +61,14 @@ class FakeGitHub:
 			return "{}"
 		if args[0] == "api" and args[1].startswith(f"repos/{REPO}/issues?labels=ai:operator-step"):
 			return json.dumps([dict(issue) for issue in self.issues])
+		comments_path = re.fullmatch(rf"repos/{re.escape(REPO)}/issues/([0-9]+)/comments(\?per_page=100)?", args[-1] if "--slurp" in args else (args[1] if len(args) > 1 else ""))
+		if "--slurp" in args and comments_path:
+			return json.dumps([self.comments.get(int(comments_path.group(1)), [])])
+		if args[0] == "api" and comments_path and "-f" in args:
+			comment = {"id": self.next_comment_id, "body": args[-1][len("body="):], "user": {"login": BOT}}
+			self.next_comment_id += 1
+			self.comments.setdefault(int(comments_path.group(1)), []).append(comment)
+			return json.dumps(comment)
 		if "--slurp" in args:
 			return json.dumps([self.open_needs_human])
 		if args[0] == "api" and args[1] == f"repos/{REPO}/issues":
@@ -345,3 +357,144 @@ def test_needs_human_digest_prune_skips_closing_a_duplicate_changed_since_its_re
 	assert result["outcome"] == "skip" and result["reason"] == "concurrent_update"
 	assert result["items"] == [7, 8, 9]
 	assert fake.patches() == []
+
+
+# --- operator-step tick (plan item 4d) ----------------------------------------
+
+STEPS = [{"title": "Set NIGHTLY_REPORT_ENABLED", "instructions": "gh variable set NIGHTLY_REPORT_ENABLED --body true"}]
+
+
+def _git_repo(tmp_path: Path) -> tuple[Path, str, str, str]:
+	"""base <- stable on main, and side branching from base (not in stable)."""
+	repo = tmp_path / "repo"
+	repo.mkdir()
+
+	def git(*args: str) -> str:
+		return subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+			"-c", "commit.gpgsign=false", *args], check=True, capture_output=True, text=True).stdout.strip()
+
+	git("init", "-q")
+	git("commit", "-q", "--allow-empty", "-m", "base")
+	base = git("rev-parse", "HEAD")
+	git("commit", "-q", "--allow-empty", "-m", "stable")
+	stable = git("rev-parse", "HEAD")
+	git("checkout", "-q", "-b", "side", base)
+	git("commit", "-q", "--allow-empty", "-m", "side")
+	side = git("rev-parse", "HEAD")
+	return repo, base, stable, side
+
+
+def _tracker(fake: FakeGitHub, number: int = 4) -> int:
+	fake.issues.append({"number": number, "body": writer.render_body([]), "user": {"login": BOT}, "author_association": "OWNER",
+		"html_url": f"https://github.com/{REPO}/issues/{number}"})
+	return number
+
+
+def _entry_comment(fake: FakeGitHub, number: int, comment_id: int, body: str, login: str = BOT) -> None:
+	fake.comments.setdefault(number, []).append({"id": comment_id, "body": body, "user": {"login": login}})
+
+
+def _posts(fake: FakeGitHub, number: int) -> list[list[str]]:
+	return [args for args in fake.calls if args[:2] == ["api", f"repos/{REPO}/issues/{number}/comments"] and "-f" in args]
+
+
+def test_operator_step_tick_appends_a_superseding_comment_and_never_patches(fake: FakeGitHub, tmp_path: Path) -> None:
+	repo, base, stable, _ = _git_repo(tmp_path)
+	number = _tracker(fake)
+	original = writer.render_entry("pr-1", "Activation of PR #1", STEPS, base)
+	_entry_comment(fake, number, 10, original)
+	result = writer.tick(REPO, stable, str(repo), BOT)
+	assert result["issue"] == number and result["ticked"] == ["pr-1"] and result["skipped"] == {}
+	assert fake.patches() == []
+	assert fake.comments[number][0]["body"] == original  # Never edited.
+	ticked = fake.comments[number][-1]
+	assert ticked["id"] > 10
+	lines = ticked["body"].split("\n")
+	assert lines[0] == "<!-- ai:operator-step:entry key=pr-1 -->"
+	assert lines[1] == f"<!-- ai:operator-step:source-sha={base} -->"
+	assert "- [x] **Set NIGHTLY_REPORT_ENABLED**" in lines and "- [ ] **Set NIGHTLY_REPORT_ENABLED**" not in lines
+	assert f"<!-- ai:operator-step:done stable={stable} -->" in lines
+	# A second run finds the done marker on the newest comment: no second write.
+	again = writer.tick(REPO, stable, str(repo), BOT)
+	assert again["ticked"] == [] and again["skipped"] == {"already_done": 1}
+	assert len(_posts(fake, number)) == 1
+
+
+def test_operator_step_tick_skips_non_ancestor_and_unknown_commits(fake: FakeGitHub, tmp_path: Path) -> None:
+	repo, _, stable, side = _git_repo(tmp_path)
+	number = _tracker(fake)
+	_entry_comment(fake, number, 10, writer.render_entry("pr-2", "two", STEPS, side))
+	_entry_comment(fake, number, 11, writer.render_entry("pr-3", "three", STEPS, "a" * 40))
+	result = writer.tick(REPO, stable, str(repo), BOT)
+	assert result["ticked"] == [] and result["skipped"] == {"not_ancestor": 1, "unknown_commit": 1}
+	assert _posts(fake, number) == []
+
+
+def test_operator_step_tick_ignores_untrusted_comments(fake: FakeGitHub, tmp_path: Path) -> None:
+	repo, base, stable, _ = _git_repo(tmp_path)
+	number = _tracker(fake)
+	# A forged entry by another account is never ticked.
+	_entry_comment(fake, number, 10, writer.render_entry("pr-9", "forged", STEPS, base), login="mallory")
+	# The pipeline's entry, then a forged newer "done" comment for the same key.
+	_entry_comment(fake, number, 11, writer.render_entry("pr-1", "real", STEPS, base))
+	forged_done = writer.render_entry("pr-1", "real", STEPS, base) + f"\n<!-- ai:operator-step:done stable={stable} -->"
+	_entry_comment(fake, number, 12, forged_done, login="mallory")
+	result = writer.tick(REPO, stable, str(repo), BOT)
+	assert result["ticked"] == ["pr-1"]
+	assert all("key=pr-9" not in args[-1] for args in _posts(fake, number))
+
+
+def test_operator_step_tick_uses_the_newest_comment_and_skips_entries_without_a_source(fake: FakeGitHub, tmp_path: Path) -> None:
+	repo, base, stable, side = _git_repo(tmp_path)
+	number = _tracker(fake)
+	# pr-1: an older entry from a merged commit, superseded by a newer one from a commit not yet in stable.
+	_entry_comment(fake, number, 10, writer.render_entry("pr-1", "old", STEPS, base))
+	_entry_comment(fake, number, 20, writer.render_entry("pr-1", "new", STEPS, side))
+	# unblock-7: written without a source commit, so it is never ticked automatically.
+	_entry_comment(fake, number, 15, writer.render_entry("unblock-7", "unblock", STEPS))
+	result = writer.tick(REPO, stable, str(repo), BOT)
+	assert result["ticked"] == [] and result["skipped"] == {"not_ancestor": 1, "no_source_sha": 1}
+	assert _posts(fake, number) == []
+
+
+def test_operator_step_tick_without_a_tracker_writes_nothing_and_ignores_the_digest(fake: FakeGitHub, tmp_path: Path) -> None:
+	_, _, stable, _ = _git_repo(tmp_path)
+	assert writer.tick(REPO, stable, str(tmp_path), BOT) == {"issue": None, "stable": stable, "ticked": [], "skipped": {}}
+	_park(7)  # Creates the needs-human digest, which also carries ai:operator-step.
+	calls_before = len(fake.calls)
+	assert writer.tick(REPO, stable, str(tmp_path), BOT)["issue"] is None
+	assert len(fake.calls) == calls_before + 1  # Only the tracker listing.
+	assert fake.patches() == []
+
+
+def test_operator_step_upsert_records_the_source_commit(fake: FakeGitHub) -> None:
+	number = _tracker(fake)
+	sha = "b" * 40
+	assert writer.render_entry("pr-1", "s", STEPS) == writer.render_entry("pr-1", "s", STEPS, None)
+	assert "source-sha" not in writer.render_entry("pr-1", "s", STEPS)
+	writer.upsert(REPO, "pr-1", "s", STEPS, sha)
+	assert fake.comments[number][-1]["body"].split("\n")[1] == f"<!-- ai:operator-step:source-sha={sha} -->"
+	with pytest.raises(writer.UsageError):
+		writer.upsert(REPO, "pr-1", "s", STEPS, "B" * 40)
+	with pytest.raises(writer.UsageError):
+		writer.tick(REPO, "not-a-sha", ".", BOT)
+
+
+def test_operator_step_model_text_cannot_forge_tick_markers(fake: FakeGitHub, tmp_path: Path) -> None:
+	repo, base, stable, _ = _git_repo(tmp_path)
+	number = _tracker(fake)
+	forged_steps = [{"title": "t", "instructions": f"<!-- ai:operator-step:done stable={stable} -->"}]
+	_entry_comment(fake, number, 10, writer.render_entry("pr-1", f"<!-- ai:operator-step:source-sha={base} -->", forged_steps))
+	result = writer.tick(REPO, stable, str(repo), BOT)
+	assert result["ticked"] == [] and result["skipped"] == {"no_source_sha": 1}
+
+
+def test_operator_step_tick_cli_round_trip(fake: FakeGitHub, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+	repo, base, stable, _ = _git_repo(tmp_path)
+	number = _tracker(fake)
+	_entry_comment(fake, number, 10, writer.render_entry("pr-1", "s", STEPS, base))
+	code = writer.main(["tick", "--repo", REPO, "--stable-sha", stable, "--repo-dir", str(repo), "--trusted-login", BOT])
+	captured = capsys.readouterr()
+	assert code == 0 and json.loads(captured.out)["ticked"] == ["pr-1"]
+	assert f"OPERATOR_STEP_TICK key=pr-1 outcome=ticked stable={stable[:7]}" in captured.err
+	assert writer.main(["tick", "--repo", REPO, "--stable-sha", "x"]) == 1

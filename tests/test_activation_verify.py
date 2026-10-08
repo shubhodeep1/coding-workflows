@@ -566,3 +566,34 @@ def test_model_text_never_starts_a_comment_line(tmp_path: Path) -> None:
 	_, state = _verify(tmp_path, injected)
 	body = state["comments"][-1]["body"]
 	assert not any(line.lstrip().startswith("/") for line in body.splitlines()), body
+
+
+# --- operator-step drain (plan item 4d) ---------------------------------------
+
+
+def test_prompt_never_classifies_release_or_consumer_sync_as_operator_steps() -> None:
+	rule = ("Never list promoting `main`, tagging `stable`, or the consumer sync (`AI Update Workflows` / daily wrapper sync) "
+		"as a gap of either kind; the pipeline performs them.")
+	for prompt in (ROOT / "prompts" / "mode-activation-verify.txt", ROOT / "prompts" / "_templates" / "mode-activation-verify.txt"):
+		text = prompt.read_text(encoding="utf-8")
+		assert "tag a release" not in text, prompt
+		assert "a release action a person must perform" not in text, prompt
+		assert rule in text, prompt
+		assert "The nightly promote cycle (tagging `stable`, promoting `main`) and the consumer sync" in text, prompt
+		# The verdict output contract is unchanged.
+		assert '"verdict": "LIVE" | "DORMANT",' in text and '"kind": "code" | "operator",' in text, prompt
+
+
+def test_operator_entry_records_the_merge_commit(tmp_path: Path) -> None:
+	merge_sha = "c" * 40
+	result, state = _verify(tmp_path, DORMANT, env_extra={"MERGE_SHA": merge_sha})
+	assert result.returncode == 0
+	entry = next(comment for comment in state["comments"] if comment["body"].startswith("<!-- ai:operator-step:entry key=pr-42 -->"))
+	assert entry["body"].split("\n")[1] == f"<!-- ai:operator-step:source-sha={merge_sha} -->"
+
+
+def test_operator_entry_without_a_valid_merge_commit_has_no_source_line(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, DORMANT, env_extra={"MERGE_SHA": "not-a-sha"})
+	assert result.returncode == 0
+	entry = next(comment for comment in state["comments"] if comment["body"].startswith("<!-- ai:operator-step:entry key=pr-42 -->"))
+	assert "source-sha" not in entry["body"]

@@ -310,8 +310,22 @@ activation_main()
 	if [ "${operator_gaps}" -gt 0 ]; then
 		steps_file="${RUNTIME_DIR}/activation_operator_steps.json"
 		jq '[.gaps[] | select(.kind == "operator") | {title, instructions: (.fix + (if .evidence != "" then "\nEvidence: " + .evidence else "" end)), dormant_until}]' "${verdict_file}" > "${steps_file}"
+		# The merge commit lets the nightly promote cycle tick the entry once the
+		# `stable` tag includes it (operator_step_issue.py tick, plan item 4d).
+		# PR mode: the merge commit; project mode: the checked-out default branch.
+		# Without a valid commit the entry is recorded but never auto-ticked.
+		local activation_source_sha=""
+		if [ "${mode}" = "pr" ]; then
+			activation_source_sha="${MERGE_SHA:-}"
+		else
+			activation_source_sha="$(git -C "${TARGET_DIR}" rev-parse HEAD 2>/dev/null || true)"
+		fi
+		local -a activation_source_args=()
+		if [[ "${activation_source_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+			activation_source_args=(--source-sha "${activation_source_sha}")
+		fi
 		if ! PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_DIR}/scripts/operator_step_issue.py" upsert --repo "${REPOSITORY}" --key "${key}" \
-			--source "Activation of ${item_label}" --steps-file "${steps_file}" >"${RUNTIME_DIR}/operator_step_issue.log" 2>&1; then
+			--source "Activation of ${item_label}" --steps-file "${steps_file}" "${activation_source_args[@]}" >"${RUNTIME_DIR}/operator_step_issue.log" 2>&1; then
 			echo "::warning::Could not update the ai:operator-step issue for ${key}: $(tr '\r\n' '  ' < "${RUNTIME_DIR}/operator_step_issue.log" | cut -c1-300)"
 			activation_log "mode=${mode} item=${item} outcome=skip reason=operator_issue_failed"
 			return 0

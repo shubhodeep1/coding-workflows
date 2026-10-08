@@ -17,12 +17,13 @@ Read the files the merged change touched and the workflows, scripts and document
 - Secrets and credentials: a run that needs a secret which may be unset is dormant until it is set.
 - Supervisors: a long-running process must be started by automation, not by a person.
 - Database work: a backfill or migration must run from code behind a gate, never wait for a manual command.
-- Consumer propagation: a `workflow-templates/` or `.claude/` change reaches consumer repositories only on the next `@stable` release and sync.
+- Consumer propagation: a `workflow-templates/` or `.claude/` change reaches consumer repositories only on the next `@stable` release and sync. The nightly promote cycle (tagging `stable`, promoting `main`) and the consumer sync (`AI Update Workflows`, the daily wrapper sync) do this on their own; it is not a gap.
 
 Classify every gap:
 - Group related defects into at most 20 gaps without omitting a blocking defect; the result is rejected rather than silently truncated if this limit is exceeded.
 - `code`: the gate is a file in this repository the pipeline can change (a missing or mis-wired workflow, a wrong input, secret or permission name, an impossible `if:`, a missing documentation, contract or registry entry).
-- `operator`: the gate is a repository setting or a release action a person must perform (set a variable, add a secret, flip a default, tag a release, start something). Give the exact steps. When the code can be finished so it stays safely off until the operator acts, say so in `dormant_until`.
+- `operator`: the gate is a repository setting or an action only a person can perform (set a variable, add a secret, flip a default, start something). Give the exact steps. When the code can be finished so it stays safely off until the operator acts, say so in `dormant_until`.
+- Never list promoting `main`, tagging `stable`, or the consumer sync (`AI Update Workflows` / daily wrapper sync) as a gap of either kind; the pipeline performs them.
 
 Do not edit files, commit, push, dispatch workflows or call the GitHub API. Do not report defects unrelated to activation.
 
