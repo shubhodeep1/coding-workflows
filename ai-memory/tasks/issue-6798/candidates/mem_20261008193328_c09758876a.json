@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\nQ2: A\n\nRATIONALE:\nQ1: The issue gives an exact rule: \"Default HEAL_INTAKE_SCOPE_GUARD_ENABLED to off; while off, refuse issue creation rather than use the existing unsafe path.\" Only B follows it. A is marked RECOMMENDED, but it keeps the unsafe path (filing without a marker) while the flag is off, which the issue forbids. C drops the flag, and the issue says to keep one. B stops all heal issue filing until an operator sets the flag to `true`. The issue accepts that cost.\nQ2: The marker is built at `scripts/workflow_failure_heal_intake.sh:1092`. The script logs `written|unresolved` at line 1094 and calls `compose-issue` at line 1096. A check in the shell between lines 1094 and 1096 covers every path that files an issue, so `scripts/workflow_failure_heal.py` (a second protected path, option B) doesn't need to change. The intake workflow already maps `WORKFLOW_HEAL_*: ${{ vars.X || '<default>' }}` at `.github/workflows/workflow-failure-heal-intake.yml:80-85`. Adding one more line there lets the operator turn the flag on without another protected-path change. C would rule that out.\n\nEXECUTION PLAN (required for any non-letter decision):\n(Both decisions are letters. These are the binding details the planner and implementer need.)\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/workflow_failure_heal_intake.sh lines 1057-1114: `scope_marker_file`, the `heal-scope render` call, the `scope paths=... outcome=written|unresolved` log line, the `compose-issue` call, and the existing `log \"error ...\"` / `tg_send_msg ... \"CRITICAL\"` / `return 1` failure pattern.\n    - scripts/workflow_failure_heal.py:1591 `HEAL_SCOPE_RE`: the expected marker format `<!-- ai:workflow-heal-scope:v1 paths=<...> runs=<...> -->`.\n  steps:\n    - Near the script's other config defaults, add `HEAL_INTAKE_SCOPE_GUARD_ENABLED=\"${HEAL_INTAKE_SCOPE_GUARD_ENABLED:-false}\"`. The default lives in the helper itself (\u00a78).\n    - Add the gate in the issue-filing function after line 1094 and before `rm -f \"${title_file}\" \"${body_file}\"` / `compose-issue`.\n      - If the flag is not `true`: log `error issue_create_refused reason=scope_guard_disabled repo=... fp=... source=...`, send a CRITICAL Telegram alert, and `return 1`.\n      - If the flag is `true` and the scope marker file does not hold exactly one line matching the `HEAL_SCOPE_RE` shape (an anchored grep on `^<!-- ai:workflow-heal-scope:v1 paths=[^[:space:]<>]+ runs=[^[:space:]<>]+ -->$`): log `error scope_marker_unverified repo=... fp=... source=...`, send a CRITICAL alert, and `return 1`.\n      - Only a valid marker with the flag `true` goes on to `compose-issue` and `gh issue create`.\n    - Make sure a `return 1` from this function makes the intake exit nonzero. Follow the existing `issue_compose_failed` path; if that path does not end the job with a nonzero exit, propagate the error explicitly.\n    - Do not edit #6779 or #6787. Do not infer scope from issue comments or from the diagnosis text.\n    - Add one test under `tests/` that runs the function with a stubbed `gh` and `python3`/`HEAL_PY`. It covers three cases: flag off refuses even with a valid marker, flag on with an empty or malformed marker refuses, and flag on with a valid marker reaches `gh issue create`. Each refusal must produce the stable log key, a CRITICAL alert, a nonzero exit, and no `gh issue create`.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: Follows the issue's own wording.\n  reversibility: Setting `HEAL_INTAKE_SCOPE_GUARD_ENABLED=true` restores filing for issues with a valid marker. Reverting the gate block restores today's behaviour.\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - The `files_touched` grant, exact paths:\n      - scripts/workflow_failure_heal_intake.sh\n      - .github/workflows/workflow-failure-heal-intake.yml\n      - tests/test_workflow_failure_heal_intake_scope_guard.py\n      - changelog.d/6798-heal-intake-scope-guard.md\n      - README.md\n      - agents.md\n  steps:\n    - Add one line to the intake job env next to lines 80-85, with 2-space YAML indentation: `HEAL_INTAKE_SCOPE_GUARD_ENABLED: ${{ vars.HEAL_INTAKE_SCOPE_GUARD_ENABLED || 'false' }}`.\n    - Add a README variable-table row and one sentence in the agents.md workflow-heal paragraph. Both say: default off; off refuses all heal issue creation; on files only issues with a verified scope marker; the log keys are `issue_create_refused` and `scope_marker_unverified`.\n    - Write the changelog fragment at the exact path listed above.\n    - Change no other path.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: Matches the `compose-issue` call site and the existing pattern for variables in the intake workflow.\n  reversibility: Removing the workflow line falls back to the script's own `false` default.\n\nSETUP REQUIRED:\n- files_touched grant (resource): before `/approved`, an OWNER, MEMBER or COLLABORATOR, or the `GH_PAT` pipeline account, must add the six exact Q2 paths to this issue's body as `files_touched`. Without that grant, implement rejects the commit again under `IMPLEMENT_AUTOMATION_PATH_GUARD`, and protected paths cannot be overridden.\n- HEAL_INTAKE_SCOPE_GUARD_ENABLED (variable): an operator sets the repo variable to `true` after confirming that heal intake writes a verified scope marker. Until then the default `false` applies: intake files no heal issues, and every attempt logs `WORKFLOW_HEAL error issue_create_refused reason=scope_guard_disabled`, sends a CRITICAL alert and exits nonzero.",
+  "fingerprint": "7fa768af628dd9d71a56dfeb5b2b8efcc855c5a2647aaafeeb08818fe4b24748",
+  "lineage": {
+    "issue_number": 6798,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37831833623",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37831833623",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6798"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008193328_c09758876a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6798,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37831833623"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6798",
+  "timestamps": {
+    "created_at": "2026-10-08T19:33:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
