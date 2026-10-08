@@ -180,6 +180,11 @@ case "$1" in
 		printf '%s\\n' "$@" > "${record_dir}/run_argv.txt"
 		env > "${record_dir}/run_env.txt"
 		cat > "${record_dir}/run_stdin.bin"
+		if [ -e "${0%/*}/../stub_hang" ]; then
+			echo "1..1"
+			echo "not ok 1 - partial"
+			exec sleep 30
+		fi
 		if [ -e "${0%/*}/../stub_start_fail" ]; then
 			echo "docker: Error response from daemon" >&2
 			exit 125
@@ -202,7 +207,7 @@ def _sandbox_harness_script() -> str:
 		"set -euo pipefail\n"
 		'LOG_DIR="${PWD}/logs"\nmkdir -p "${LOG_DIR}"\n'
 		"TOTAL_TESTS=0\nPASSED_TESTS=0\nFAILED_TESTS=0\n"
-		"VALIDATION_SYNTH_SANDBOX_TIMEOUT_SECS=60\n"
+		'VALIDATION_SYNTH_SANDBOX_TIMEOUT_SECS="${SANDBOX_TIMEOUT_SECS:-60}"\n'
 		"VALIDATION_SYNTH_SANDBOX_IMAGE=python:3.12-slim\n"
 		"append_failure()\n{\n\tprintf 'APPEND_FAILURE:%s:%s\\n' \"$1\" \"$2\"\n}\n"
 		+ functions
@@ -212,10 +217,27 @@ def _sandbox_harness_script() -> str:
 
 
 def _run_sandbox_case(
-	workspace: Path, test_name: str, *, with_docker: bool, stub_marker: str | None = None
+	workspace: Path,
+	test_name: str,
+	*,
+	with_docker: bool,
+	stub_marker: str | None = None,
+	with_git: bool = True,
+	timeout_secs: int = 60,
 ) -> subprocess.CompletedProcess[str]:
 	# The driver runs docker under env -i, so the stub reads marker files,
 	# not environment variables.
+	if with_git:
+		# The sandbox needs a `git archive` of HEAD as its source snapshot.
+		git_env = {"PATH": os.environ.get("PATH", ""), "HOME": str(workspace)}
+		(workspace / "src.txt").write_text("source\n", encoding="utf-8")
+		for git_args in (
+			["init", "-q"],
+			["add", "src.txt"],
+			["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false",
+			 "commit", "-q", "-m", "base"],
+		):
+			subprocess.run(["git", *git_args], cwd=workspace, env=git_env, check=True, capture_output=True)
 	if stub_marker:
 		(workspace / stub_marker).write_text("", encoding="utf-8")
 	bin_dir = workspace / "bin"
@@ -239,6 +261,7 @@ def _run_sandbox_case(
 		"HOME": str(workspace),
 		"GH_TOKEN": "ghp_secret_sentinel",
 		"OPENROUTER_API_KEY": "sk-or-secret_sentinel",
+		"SANDBOX_TIMEOUT_SECS": str(timeout_secs),
 	}
 	return subprocess.run(
 		[str(bin_dir / "bash"), "-c", _sandbox_harness_script(), "harness", f"validation/tests/{test_name}"],
@@ -277,6 +300,7 @@ def test_synthesised_test_runs_in_credential_free_network_less_container() -> No
 		env_flags = [argv[index + 1] for index, value in enumerate(argv) if value == "--env"]
 		assert env_flags == ["HOME=/tmp", "TMPDIR=/tmp", "BEHAVIOURAL_SMOKE_SANDBOXED=1"]
 		assert not any(value.startswith("--env-file") or value == "-e" for value in argv)
+		assert (workspace / "record" / "run_stdin.bin").stat().st_size > 0
 		docker_env = (workspace / "record" / "run_env.txt").read_text(encoding="utf-8")
 		assert "secret_sentinel" not in docker_env
 		assert "DOCKER_CONFIG=/nonexistent" in docker_env
@@ -296,6 +320,37 @@ def test_synthesised_test_skips_when_image_or_start_unavailable() -> None:
 			assert not (workspace / "sentinel").exists()
 			assert f"outcome=skipped reason={reason}" in result.stderr
 			assert "TOTALS=1/1/0" in result.stdout
+
+
+def test_synthesised_test_skips_when_source_snapshot_unavailable() -> None:
+	# Without a `git archive` of HEAD the test would run against an empty
+	# workspace and report a meaningless result, so it is skipped.
+	with tempfile.TemporaryDirectory(prefix="validate_driver_synth_nosnapshot_") as td:
+		workspace = Path(td)
+		result = _run_sandbox_case(workspace, "synth_round_2_issue.sh", with_docker=True, with_git=False)
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert not (workspace / "sentinel").exists()
+		assert not (workspace / "record" / "run_argv.txt").exists()
+		assert "outcome=skipped reason=source_snapshot_unavailable" in result.stderr
+		assert "TOTALS=1/1/0" in result.stdout
+
+
+def test_synthesised_test_timeout_counts_only_the_skip_result() -> None:
+	# A killed run's partial TAP lines are commented out, so only the SKIP counts.
+	with tempfile.TemporaryDirectory(prefix="validate_driver_synth_timeout_") as td:
+		workspace = Path(td)
+		for tool in ("sed", "mv"):
+			found = shutil.which(tool)
+			if found:
+				(workspace / "bin").mkdir(exist_ok=True)
+				(workspace / "bin" / tool).symlink_to(found)
+		(workspace / "stub_hang").write_text("", encoding="utf-8")
+		result = _run_sandbox_case(workspace, "synth_round_2_issue.sh", with_docker=True, timeout_secs=1)
+		assert result.returncode == 0, result.stdout + result.stderr
+		log = (workspace / "logs" / "synth_round_2_issue.sh").read_text(encoding="utf-8")
+		assert "# partial: not ok 1 - partial" in log
+		assert "# SKIP behavioural smoke sandbox timeout" in log
+		assert "TOTALS=1/1/0" in result.stdout
 
 
 def test_non_synthesised_test_still_runs_on_host() -> None:

@@ -815,8 +815,11 @@ run_synthesised_test_sandboxed()
 		synthesised_test_sandbox_skip "${test_name}" "${test_log}" "docker_missing"
 		return 0
 	fi
-	if ! "${docker_env[@]}" docker image inspect "${VALIDATION_SYNTH_SANDBOX_IMAGE}" >/dev/null 2>&1 \
-		&& ! "${docker_env[@]}" docker pull --quiet "${VALIDATION_SYNTH_SANDBOX_IMAGE}" >/dev/null 2>&1; then
+	# Bounded like docker run, so a stalled daemon or registry reaches the skip.
+	if ! timeout --kill-after=10s "${VALIDATION_SYNTH_SANDBOX_TIMEOUT_SECS}" \
+		"${docker_env[@]}" docker image inspect "${VALIDATION_SYNTH_SANDBOX_IMAGE}" >/dev/null 2>&1 \
+		&& ! timeout --kill-after=10s "${VALIDATION_SYNTH_SANDBOX_TIMEOUT_SECS}" \
+		"${docker_env[@]}" docker pull --quiet "${VALIDATION_SYNTH_SANDBOX_IMAGE}" >/dev/null 2>&1; then
 		synthesised_test_sandbox_skip "${test_name}" "${test_log}" "image_unavailable"
 		return 0
 	fi
@@ -830,7 +833,10 @@ run_synthesised_test_sandboxed()
 	if git -c core.fsmonitor= archive --format=tar HEAD > "${stage_dir}/source.tar" 2>/dev/null; then
 		snapshot_input="${stage_dir}/source.tar"
 	else
-		echo "BEHAVIOURAL_SMOKE_SANDBOX test=${test_name} source_snapshot=unavailable" >&2
+		# Without the source tree the test result would be meaningless: skip.
+		rm -rf "${stage_dir}" >/dev/null 2>&1 || true
+		synthesised_test_sandbox_skip "${test_name}" "${test_log}" "source_snapshot_unavailable"
+		return 0
 	fi
 	container_name="synth-smoke-$$-${RANDOM}${RANDOM}"
 
@@ -860,6 +866,12 @@ run_synthesised_test_sandboxed()
 	rm -rf "${stage_dir}" >/dev/null 2>&1 || true
 
 	if [ "${sandbox_status}" -eq 124 ] || [ "${sandbox_status}" -eq 137 ]; then
+		# Comment out partial TAP output so only the SKIP result is counted.
+		if [ -s "${test_log}" ]; then
+			sed 's/^/# partial: /' "${test_log}" > "${test_log}.partial" 2>/dev/null \
+				&& mv -f "${test_log}.partial" "${test_log}" \
+				|| { rm -f "${test_log}.partial"; : > "${test_log}"; }
+		fi
 		{
 			echo "# BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE reason=sandbox_timeout exit=${sandbox_status}"
 			echo "ok 1 - ${test_name} # SKIP behavioural smoke sandbox timeout"
