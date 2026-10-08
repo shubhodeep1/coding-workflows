@@ -2909,6 +2909,10 @@ def _run_hook_at(hook_path: Path, repo: Path, stub_bin: Path, command: str) -> s
 	"env -S 'bash -c \"git push\"'",
 	"X=$(git commit -m y)",
 	"bash -c \"bash -c 'git push origin x'\"",
+	# A nested shell that reads its script from a heredoc (#6777 review).
+	"bash -c \"bash <<'EOF'\ngit push origin x\nEOF\"",
+	"echo $(bash <<'EOF'\ngit push origin x\nEOF\n)",
+	"bash -c \"cat <<'EOF'\nit's data\nEOF\ngit push origin x\"",
 ])
 def test_shell_wrapped_git_writes_are_detected(guard_module, hook_path: Path, command: str) -> None:
 	assert guard_module.git_subcommands(command) & guard_module.GUARDED_SUBCOMMANDS
@@ -2921,18 +2925,28 @@ def test_shell_wrapped_git_writes_are_detected(guard_module, hook_path: Path, co
 	"echo '$(git push)'",
 	"echo $(git rev-parse HEAD)",
 	"echo $(( 1 + 2 ))",
+	# A data heredoc inside a wrapper is never run, even when it mentions a push.
+	"bash -c \"python3 <<'EOF'\nprint('git push origin x')\nEOF\"",
 ])
 def test_shell_wrappers_without_git_writes_are_ignored(guard_module, hook_path: Path, command: str) -> None:
 	assert not (guard_module.git_subcommands(command) & guard_module.GUARDED_SUBCOMMANDS)
 
 
 HEREDOC_COMMIT = "git commit -m \"$(cat <<'EOF'\nDon't git push from here; it's a commit message.\nEOF\n)\""
+# Covers the `git commit -F -` (message on stdin) form only.
+NESTED_HEREDOC_COMMIT = "bash -c \"git commit -q -F - <<'EOF'\nDon't git push; it's a message.\nEOF\""
 
 
 @WRAPPER_GUARD_COPIES
 def test_heredoc_commit_message_is_not_a_wrapped_write(guard_module, hook_path: Path) -> None:
 	assert guard_module.git_subcommands(HEREDOC_COMMIT) == {"commit"}
 	assert [invocation.warning for invocation in guard_module._guarded_git_invocations(HEREDOC_COMMIT, "/")] == [""]
+
+
+@WRAPPER_GUARD_COPIES
+def test_nested_data_heredoc_commit_is_one_commit(guard_module, hook_path: Path) -> None:
+	invocations = guard_module._guarded_git_invocations(NESTED_HEREDOC_COMMIT, "/")
+	assert [(invocation.subcommand, invocation.warning) for invocation in invocations] == [("commit", "")]
 
 
 @WRAPPER_GUARD_COPIES

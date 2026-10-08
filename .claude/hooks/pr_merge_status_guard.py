@@ -662,20 +662,17 @@ def _wrapped_shell_text(command: str, depth: int) -> tuple[str | None, list[str]
 
 	Returns the text to split into segments (None when it must not be split),
 	the substitution bodies to inspect at depth + 1, and whether the text must
-	be treated as an unparsed Git write. Inner scripts (depth > 0) lose their
-	heredoc bodies before splitting, so prose such as a commit message cannot
-	break the tokenizer; the top level is split exactly as before.
+	be treated as an unparsed Git write. Heredoc bodies stay in the text at
+	every depth: the segment parser drops data bodies itself
+	(_strip_data_heredoc_bodies) and keeps the ones a shell reads, so a nested
+	`bash <<'EOF' ... git push ... EOF` is checked like the top level.
 	"""
 	if depth > _MAX_SHELL_WRAPPER_DEPTH:
 		return None, [], _mentions_git_write(command) or "$" in command or "`" in command
 	scan = _scan_shell_text(command)
 	if scan.unreadable:
 		return (command if depth == 0 else None), [], _mentions_git_write(command)
-	text = command
-	if depth:
-		for start, end in sorted(scan.heredoc_spans, reverse=True):
-			text = text[:start] + text[end:]
-	return text, scan.bodies, False
+	return command, scan.bodies, False
 
 
 def _shell_interpreter_script(tokens: list[str], index: int) -> tuple[str | None, bool]:
