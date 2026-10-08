@@ -6536,7 +6536,7 @@ security_pass_record_line_ownership_advisories() {
   # so security_pass_file_deferred_advisory_followups retries it at the final
   # merge without needing a second state write that could also fail.
   if ! waivers_json="$(jq -c --argjson cycle "${cycle}" --arg head_sha "${head_sha}" \
-    --arg base12 "${merge_base_sha:0:12}" --arg head12 "${head_sha:0:12}" --argjson defer "${defer}" '
+    --arg base12 "${merge_base_sha:0:12}" --arg head12 "${head_sha:0:12}" '
     [.[] | {
       finding_id: .finding_id,
       file: .file,

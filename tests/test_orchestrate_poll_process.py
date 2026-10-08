@@ -24011,5 +24011,64 @@ def test_security_pass_line_ownership_off_is_forwarded_and_keeps_findings_blocki
 	assert "findings=1 cycle=0 advisory=0" in result["stdout"] + result["stderr"]
 
 
+
+def test_security_pass_waiver_cap_keeps_every_followup_pending_row() -> None:
+	"""The 100-row waiver cap drops only the oldest settled rows: a row still
+	awaiting its advisory follow-up (``followup_pending``) is never dropped,
+	in either ``security_pass_record_waivers`` or
+	``ensure_security_pass_state_fields``, and row order is preserved.  A
+	plain ``.[-100:]`` slice would drop pending line-ownership advisories that
+	the deferred filer then never sees."""
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	recorder = _extract_bash_function(script, "security_pass_record_waivers() {")
+	normalizer = _extract_bash_function(script, "ensure_security_pass_state_fields() {")
+	existing: list[dict] = []
+	for index in range(110):
+		existing.append({"finding_id": f"SETTLED-{index:03d}", "issue": 1000 + index})
+		if index in (0, 1, 50, 108):
+			existing.append({"finding_id": f"OLD-PENDING-{index:03d}", "issue": None, "followup_pending": True, "finding": {"finding_id": f"OLD-PENDING-{index:03d}"}})
+	new_waivers = [
+		{"finding_id": f"NEW-PENDING-{index}", "issue": None, "followup_pending": True, "finding": {"finding_id": f"NEW-PENDING-{index}"}}
+		for index in range(3)
+	]
+	with tempfile.TemporaryDirectory() as tmp:
+		state_file = Path(tmp) / "state.json"
+		state_file.write_text(json.dumps({"security_pass_waived_findings": existing}), encoding="utf-8")
+		waivers_file = Path(tmp) / "waivers.json"
+		waivers_file.write_text(json.dumps(new_waivers), encoding="utf-8")
+		snapshot_file = Path(tmp) / "after_record.json"
+		harness = Path(tmp) / "harness.sh"
+		harness.write_text(
+			"set -euo pipefail\n"
+			f"STATE_FILE={str(state_file)!r}\n"
+			+ recorder + "\n" + normalizer + "\n"
+			+ f'security_pass_record_waivers "$(cat {str(waivers_file)!r})"\n'
+			+ f'cp "$STATE_FILE" {str(snapshot_file)!r}\n'
+			+ "ensure_security_pass_state_fields\n",
+			encoding="utf-8",
+		)
+		result = subprocess.run(["bash", str(harness)], capture_output=True, text=True, check=False)
+		assert result.returncode == 0, result.stderr
+		after_record = json.loads(snapshot_file.read_text(encoding="utf-8"))["security_pass_waived_findings"]
+		after_normalize = json.loads(state_file.read_text(encoding="utf-8"))["security_pass_waived_findings"]
+
+	pending_ids = [row["finding_id"] for row in existing if row.get("followup_pending")] + [
+		row["finding_id"] for row in new_waivers
+	]
+	settled_kept = [f"SETTLED-{index:03d}" for index in range(10, 110)]
+	expected_ids = [
+		row["finding_id"]
+		for row in existing + new_waivers
+		if row.get("followup_pending") or row["finding_id"] in settled_kept
+	]
+	ids = [row["finding_id"] for row in after_record]
+	assert ids == expected_ids
+	assert [rid for rid in ids if rid in pending_ids] == pending_ids
+	assert sum(1 for row in after_record if not row.get("followup_pending")) == 100
+	# Normalization on the next tick keeps the same rows: no pending row lost.
+	assert after_normalize == after_record
+
 if __name__ == "__main__":
 	raise SystemExit(main())
