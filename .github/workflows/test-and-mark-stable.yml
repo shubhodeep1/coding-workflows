@@ -15,7 +15,9 @@ run-name: ${{ inputs.gate_cycle_id != '' && format('Test & Mark Stable Release [
       test_repo:
         description: >
           Repository to run E2E smoke test on (owner/repo).
-          Defaults to this repository. The target repo must have
+          Defaults to this repository. Any other repository must be
+          listed in .github/ai/smoke_test_repos.json on the default
+          branch (the `source` job rejects it otherwise), and must have
           the internal/consumer workflow wrappers installed.
         required: false
         type: string
@@ -253,6 +255,66 @@ jobs:
               exit 1
               ;;
           esac
+
+      # Security finding smoke-target-cross-repo-write (issue #6547): every
+      # job that writes to TEST_REPO with GH_PAT (issues, labels, comments,
+      # contents commits, PR closes, workflow dispatches) needs `source`
+      # through `resolve-version`, so this one fail-closed check covers all
+      # of them. A non-default target must be listed in the allowlist on the
+      # protected default branch; the dispatched ref is not trusted because
+      # gate_only runs accept any ref. Uses github.token, never GH_PAT.
+      - name: Validate smoke-test target repository
+        id: validate-test-repo
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TEST_REPO_INPUT: ${{ inputs.test_repo }}
+          SOURCE_REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SMOKE_TEST_REPO_ALLOWLIST_PATH: .github/ai/smoke_test_repos.json
+        run: |
+          set -euo pipefail
+          smoke_allowlist_path="${SMOKE_TEST_REPO_ALLOWLIST_PATH:-.github/ai/smoke_test_repos.json}"
+          smoke_default_branch="${DEFAULT_BRANCH:-main}"
+          smoke_repo_input="${TEST_REPO_INPUT:-}"
+          smoke_repo_regex='^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'
+          if [ -z "${smoke_repo_input}" ]; then
+            echo "SMOKE_TEST_REPO_ALLOWLIST outcome=allowed reason=default repo=${SOURCE_REPO}"
+            exit 0
+          fi
+          if ! [[ "${smoke_repo_input}" =~ ${smoke_repo_regex} ]]; then
+            echo "::error::test_repo must be empty or match owner/repo."
+            echo "SMOKE_TEST_REPO_ALLOWLIST outcome=rejected reason=invalid_format"
+            exit 1
+          fi
+          smoke_repo_lower="$(printf '%s' "${smoke_repo_input}" | tr '[:upper:]' '[:lower:]')"
+          smoke_source_lower="$(printf '%s' "${SOURCE_REPO}" | tr '[:upper:]' '[:lower:]')"
+          if [ "${smoke_repo_lower}" = "${smoke_source_lower}" ]; then
+            echo "SMOKE_TEST_REPO_ALLOWLIST outcome=allowed reason=self repo=${smoke_repo_input}"
+            exit 0
+          fi
+          smoke_allowlist_file="$(mktemp)"
+          trap 'rm -f "${smoke_allowlist_file}"' EXIT
+          if ! gh api -H "Accept: application/vnd.github.raw+json" \
+              "repos/${SOURCE_REPO}/contents/${smoke_allowlist_path}?ref=${smoke_default_branch}" \
+              > "${smoke_allowlist_file}" 2>/dev/null; then
+            echo "::error::Could not read ${smoke_allowlist_path} from the '${smoke_default_branch}' branch; refusing to run the smoke test against ${smoke_repo_input}."
+            echo "SMOKE_TEST_REPO_ALLOWLIST outcome=rejected reason=allowlist_unavailable repo=${smoke_repo_input}"
+            exit 1
+          fi
+          if ! jq -e 'type == "array" and all(.[]; type == "string" and test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"))' \
+              "${smoke_allowlist_file}" >/dev/null 2>&1; then
+            echo "::error::${smoke_allowlist_path} on '${smoke_default_branch}' must be a JSON array of owner/repo strings."
+            echo "SMOKE_TEST_REPO_ALLOWLIST outcome=rejected reason=allowlist_malformed repo=${smoke_repo_input}"
+            exit 1
+          fi
+          if jq -e --arg r "${smoke_repo_lower}" 'any(.[]; ascii_downcase == $r)' \
+              "${smoke_allowlist_file}" >/dev/null 2>&1; then
+            echo "SMOKE_TEST_REPO_ALLOWLIST outcome=allowed reason=listed repo=${smoke_repo_input}"
+            exit 0
+          fi
+          echo "::error::test_repo '${smoke_repo_input}' is not this repository and is not listed in ${smoke_allowlist_path} on the '${smoke_default_branch}' branch. Add it through a reviewed pull request, or leave test_repo empty."
+          echo "SMOKE_TEST_REPO_ALLOWLIST outcome=rejected reason=not_listed repo=${smoke_repo_input}"
+          exit 1
 
   # ──────────────────────────────────────────────────────────────────
   # Job 0: Resolve version — auto-increment patch if not provided
@@ -1706,7 +1768,8 @@ jobs:
           # it fires) still serves as the primary path; if neither
           # fires, wait-review surfaces no_review_triggered as before.
           # --repo "${TEST_REPO}" is required because this job supports
-          # dispatching E2E against an arbitrary `inputs.test_repo`;
+          # dispatching E2E against any allowlisted `inputs.test_repo`
+          # (the `source` job's validate-test-repo step);
           # without it, `gh workflow run` would target the default repo
           # from the checkout/CLI context (shubhodeep1/coding-workflows
           # itself, per the early checkout at line 316) instead of the
