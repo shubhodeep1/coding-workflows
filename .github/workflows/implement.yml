@@ -51,6 +51,8 @@ env:
   OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
   MEMORY_INJECTION_SCAN_ENABLED: ${{ vars.MEMORY_INJECTION_SCAN_ENABLED || 'true' }}
   ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+  # Implement additionally requires a trusted, exact files_touched grant for
+  # staged automation paths; this variable alone cannot authorize them.
   WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
   # files_touched scope-enforcement guard (see the preflight + commit-time
   # scope guards in this workflow and scripts/files_touched_scope_guard.py).
@@ -1644,6 +1646,23 @@ jobs:
           fi
 
           printf '%s\n' "${ISSUE_BODY}" > "${ISSUE_BODY_FILE}"
+
+          # The issue snapshot above already includes author and body. The
+          # later bulk-delete override identity read runs only conditionally;
+          # it cannot supply this grant's pipeline identity before the editor.
+          pipeline_login="$(gh api user --jq .login 2>/dev/null || true)"
+          automation_grant_path="${RUNTIME_DIR:-${TMPDIR:-/tmp}}/automation_path_grant.json"
+          python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
+            --emit-automation-grant "${automation_grant_path}" \
+            --issue-meta-file "${ISSUE_META_FILE:-}" --pipeline-login "${pipeline_login}" || true
+          echo "AUTOMATION_PATH_GRANT_FILE=${automation_grant_path}" >> "$GITHUB_ENV"
+          if [ -f "${automation_grant_path}" ]; then
+            jq -r --arg issue "${ISSUE_NUMBER}" \
+              '"IMPLEMENT_AUTOMATION_PATH_GUARD mode=grant issue=\($issue) trusted=\(.trusted) reason=\(.reason) paths=\(.paths | length) author_association=\(.author_association)"' \
+              "${automation_grant_path}" || echo "IMPLEMENT_AUTOMATION_PATH_GUARD mode=grant issue=${ISSUE_NUMBER} trusted=false reason=grant_error paths=0"
+          else
+            echo "IMPLEMENT_AUTOMATION_PATH_GUARD mode=grant issue=${ISSUE_NUMBER} trusted=false reason=grant_unavailable paths=0"
+          fi
 
           # TRUST BOUNDARY (#6504): issue text can close a fixed GITHUB_ENV
           # delimiter and inject guard settings. Keep the body only in its data
@@ -3810,6 +3829,60 @@ jobs:
               fi
             done < "${STAGED_SUPPORT_LEDGER}"
           fi
+
+          # >>> automation-path grant guard (preflight) >>>
+          # core.quotePath=false keeps non-ASCII names literal; names Git still
+          # C-quotes (control characters, quotes, backslashes) start with '"' and
+          # are denied below rather than slipping past the prefix match.
+          automation_staged="$(git -c core.quotePath=false diff --cached --name-only --no-renames --diff-filter=ACMDT || true)"
+          automation_paths="$(printf '%s\n' "${automation_staged}" | grep -iE '^"?(\.github|\.claude|scripts|prompts|workflow-templates)(/|$)' || true)"
+          if [ -n "${automation_paths}" ]; then
+            automation_staged_file="$(mktemp "${TMPDIR:-/tmp}/implement-automation-staged.XXXXXX")"
+            printf '%s\n' "${automation_paths}" > "${automation_staged_file}"
+            automation_reason="grant_unavailable"
+            automation_denied="${automation_paths}"
+            automation_rc=127
+            if grep -q '^"' <<< "${automation_paths}"; then
+              automation_rc=30
+              automation_reason="quoted_path"
+            elif [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
+              automation_error_file="$(mktemp "${TMPDIR:-/tmp}/implement-automation-error.XXXXXX")"
+              automation_rc=0
+              automation_denied="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
+                --check-automation-paths --staged-file "${automation_staged_file}" \
+                --automation-grant-file "${AUTOMATION_PATH_GRANT_FILE:-${RUNTIME_DIR:-/nonexistent}/automation_path_grant.json}" \
+                --allow-workflow-edits "${ALLOW_WORKFLOW_EDITS:-false}" --issue-number "${ISSUE_NUMBER}" \
+                2> "${automation_error_file}")" || automation_rc=$?
+              if [ "${automation_rc}" -eq 30 ]; then
+                automation_reason="$(grep -m1 '^reason=' "${automation_error_file}" | cut -d= -f2 || true)"
+              fi
+              rm -f "${automation_error_file}"
+            fi
+            rm -f "${automation_staged_file}"
+            if [ "${automation_rc}" -ne 0 ]; then
+              if [ "${automation_rc}" -ne 30 ] || [ -z "${automation_denied}" ]; then
+                automation_denied="${automation_paths}"
+                automation_reason="guard_error"
+              fi
+              automation_count="$(printf '%s\n' "${automation_denied}" | wc -l | tr -d ' ')"
+              automation_granted="$(jq -r '.paths[]? | strings' "${AUTOMATION_PATH_GRANT_FILE:-${RUNTIME_DIR:-/nonexistent}/automation_path_grant.json}" 2>/dev/null || true)"
+              {
+                echo 'scope_violation_blocked=automation-path'
+                echo "scope_violation_count=${automation_count}"
+                echo 'scope_violation_files<<__SVF_EOF__'
+                printf '%s\n' "${automation_denied}"
+                echo '__SVF_EOF__'
+                echo 'scope_violation_allowlist<<__SVA_EOF__'
+                printf 'reason=%s\n%s\n' "${automation_reason}" "${automation_granted}"
+                echo '__SVA_EOF__'
+              } >> "$GITHUB_OUTPUT"
+              echo "::error::Automation-path grant denied ${automation_count} staged path(s)."
+              echo "IMPLEMENT_AUTOMATION_PATH_GUARD mode=check outcome=rejected reason=${automation_reason} issue=${ISSUE_NUMBER} count=${automation_count}"
+              exit 1
+            fi
+            echo "IMPLEMENT_AUTOMATION_PATH_GUARD mode=check outcome=granted issue=${ISSUE_NUMBER} count=0"
+          fi
+          # <<< automation-path grant guard (preflight) <<<
 
           # >>> files_touched scope-enforcement guard (preflight) >>>
           # Mirror of the destructive-commit guard above, for scope drift:
