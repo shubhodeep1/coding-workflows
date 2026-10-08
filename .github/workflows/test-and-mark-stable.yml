@@ -157,33 +157,104 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   source:
     runs-on: ubuntu-latest
-    timeout-minutes: 1
+    timeout-minutes: 3
     outputs:
       branch: ${{ steps.detect.outputs.branch }}
     steps:
+      # The dispatch ref is writer-controlled (a branch may be named
+      # `$(...)`): it reaches the shell only through env. The release path
+      # requires refs/heads/stable exactly, which also rejects the `stable`
+      # tag.
       - name: Validate dispatch ref
         id: detect
         env:
           GATE_ONLY: ${{ inputs.gate_only }}
+          DISPATCH_REF: ${{ github.ref }}
+          DISPATCH_REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          REF="${{ github.ref_name }}"
           if [ "${GATE_ONLY}" = "true" ]; then
             # Gate-only runs never tag or release, so any ref is safe: the
             # test jobs check out the dispatched commit (github.sha, the tip
             # of this ref at dispatch time) and the release/sync-to-main jobs
             # are skipped by their `!inputs.gate_only` conditions.
-            echo "Dispatched from '${REF}' in gate_only mode — test jobs only, no release"
-            echo "branch=${REF}" >> "$GITHUB_OUTPUT"
+            printf "Dispatched from '%s' in gate_only mode — test jobs only, no release\n" "${DISPATCH_REF_NAME}"
+            printf 'branch=%s\n' "${DISPATCH_REF_NAME}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if [ "$REF" != "stable" ]; then
-            echo "::error::test-and-mark-stable.yml must be dispatched from the 'stable' branch (got '${REF}')."
+          if [ "${DISPATCH_REF}" != "refs/heads/stable" ]; then
+            printf "::error::test-and-mark-stable.yml must be dispatched from the 'stable' branch (refs/heads/stable; got '%s').\n" "${DISPATCH_REF}"
             echo "::error::To promote 'main' to a new stable baseline, run promote-main-to-stable.yml — it fast-forwards stable to main and then dispatches this workflow on stable automatically."
             exit 1
           fi
           echo "Dispatched from 'stable' — proceeding with stable-source release path"
-          echo "branch=stable" >> "$GITHUB_OUTPUT"
+          printf 'branch=stable\n' >> "$GITHUB_OUTPUT"
+
+      # Writer-controlled github.sha must be the stable tip or an ancestor of
+      # it before any later job checks it out (the release job does so with
+      # GH_PAT and runs its scripts). This step runs no repository code: it
+      # never checks anything out and uses github.token read-only.
+      - name: Verify dispatched commit is on stable
+        id: verify_commit
+        if: ${{ !inputs.gate_only }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISPATCH_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if ! [[ "${DISPATCH_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            printf "::error::Dispatched commit '%s' is not a 40-character hex SHA; refusing to release.\n" "${DISPATCH_SHA}"
+            exit 1
+          fi
+          backoff="${RELEASE_SOURCE_VERIFY_BACKOFF_SECONDS:-2}"
+          case "${backoff}" in ''|*[!0-9]*) backoff=2 ;; esac
+          # Bounded retry; only the successful attempt's stdout is used
+          # (gh api prints error bodies to stdout, #5495).
+          release_source_api() {
+            local attempt=1 delay="${backoff}" out=""
+            while [ "${attempt}" -le 3 ]; do
+              if out="$(gh api "$@")"; then
+                printf '%s' "${out}"
+                return 0
+              fi
+              if [ "${attempt}" -lt 3 ]; then
+                echo "::warning::gh api $1 failed (attempt ${attempt}/3); retrying in ${delay}s." >&2
+                sleep "${delay}"
+                delay=$((delay * 2))
+              fi
+              attempt=$((attempt + 1))
+            done
+            return 1
+          }
+          # GitHub API audit (§14): the source job makes no other API call to
+          # extend, and scripts/gh_helpers.sh is not available because
+          # checking it out would run repository code before this trust check.
+          # heads/ is fully qualified: `stable` is also a tag.
+          if ! STABLE_TIP="$(release_source_api "repos/${GITHUB_REPOSITORY}/git/ref/heads/stable" --jq '.object.sha')"; then
+            echo "::error::Could not read the stable branch tip after 3 attempts; refusing to release an unverified commit."
+            exit 1
+          fi
+          if ! [[ "${STABLE_TIP}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The stable branch tip lookup returned no valid SHA; refusing to release an unverified commit."
+            exit 1
+          fi
+          if [ "${STABLE_TIP}" = "${DISPATCH_SHA}" ]; then
+            echo "Dispatched commit ${DISPATCH_SHA} is the stable tip — OK"
+            exit 0
+          fi
+          if ! COMPARE_STATUS="$(release_source_api "repos/${GITHUB_REPOSITORY}/compare/${DISPATCH_SHA}...${STABLE_TIP}" --jq '.status')"; then
+            echo "::error::Could not compare ${DISPATCH_SHA} with the stable tip ${STABLE_TIP} after 3 attempts; refusing to release an unverified commit."
+            exit 1
+          fi
+          case "${COMPARE_STATUS}" in
+            identical|ahead)
+              echo "Dispatched commit ${DISPATCH_SHA} is in the history of the stable tip ${STABLE_TIP} — OK"
+              ;;
+            *)
+              printf "::error::RELEASE_UNTESTED_HEAD tested=%s tip=%s compare='%s': the dispatched commit is not in the stable branch history; refusing to release.\n" "${DISPATCH_SHA}" "${STABLE_TIP}" "${COMPARE_STATUS}"
+              exit 1
+              ;;
+          esac
 
       # Security finding smoke-target-cross-repo-write (issue #6547): every
       # job that writes to TEST_REPO with GH_PAT (issues, labels, comments,
@@ -367,6 +438,8 @@ jobs:
       # This diagnostic runs after checkout's main step and before
       # checkout's post-step cleanup, then re-executes the same git
       # operations to isolate the failing command.
+      # Print config keys only: values can include checkout's encoded
+      # authorization header (security finding #6531).
       # Remove after root-cause is identified and a targeted fix lands.
       - &git-checkout-diag
         name: git diagnostic (checkout exit-128 probe)
@@ -375,8 +448,8 @@ jobs:
           set +e
           echo "=== git diagnostic: simulating checkout post-step operations ==="
           git --version
-          echo "--- config (first 200) ---"
-          git config --list --show-origin 2>&1 | head -n 200
+          echo "--- config keys (first 200; values withheld) ---"
+          git config --list --name-only --show-origin 2>&1 | head -n 200
           echo "--- status / head ---"
           git status 2>&1; echo "status_rc=$?"
           git log -1 --oneline 2>&1; echo "log_rc=$?"
@@ -6591,11 +6664,6 @@ jobs:
           echo ""
           echo "Changelog notes:"
           cat "${{ steps.changelog.outputs.notes_file }}"
-
-      # Temporary: reveal which git invocation in checkout's post-step
-      # produces `The process '/usr/bin/git' failed with exit code 128`.
-      # Remove after root-cause is identified and a targeted fix lands.
-      - *git-checkout-diag
 
   # ──────────────────────────────────────────────────────────────────
   # Job 3.5: Sync stable bug fixes back to main
