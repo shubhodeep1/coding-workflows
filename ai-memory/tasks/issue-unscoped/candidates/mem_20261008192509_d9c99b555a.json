@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_apply_analysis_on_main.py:362-363 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The contract test searches for the old `!= \"stable\"` string, but the workflows now compare against `refs/heads/stable`, so the test fails.\n  WHY: The search returns `-1`, causing the assertion to fail and blocking the aggregate `lint` check; all reviewers rated this BLOCKER.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR title and description should enumerate all issues the diff resolves so reviewers and consumers can trace each finding to its fix.\n  expected_change_site: PR title and description\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The PR description references only issue #6546, while changelog fragments and substantive fixes cover issues #6525, #6531, #6533, #6539, #6541, #6546, #6755, and #6777; the title and body omit references to the additional issues.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_apply_analysis_on_main.py:362 | severity=BLOCKER | confidence=5\n  PROBLEM: The test searches for `!= \"stable\"` in the workflow's release-path source, but both `test-and-mark-stable.yml:183` and `mark-stable.yml:53` now use `!= \"refs/heads/stable\"`.\n  WHY: `source_run.find('!= \"stable\"', gate_exit)` returns `-1` because the old substring is no longer present after the security fix changed the comparison to use the fully-qualified ref. The assertion `guard > gate_exit` then fails with `AssertionError: release path must check the dispatch ref against 'stable'`, which is exactly the CI failure in `tests-promote-stall-and-review` (run 37828358634, job 113486956266).\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_apply_analysis_on_main.py:362-363 | severity=BLOCKER | confidence=5\n  PROBLEM: The test suite failure in test_release_gate_only_mode_contract is due to an outdated expectation that the workflow still contains the string != \"stable\".\n  WHY: The PR correctly updated the workflow files to check against refs/heads/stable, but the contract test still looks for the old string != \"stable\" in the workflow source, causing the test to fail and preventing CI from passing.\n- TASK_GAP\n  Requirement: The PR description must reference all issues it resolves, or be broken down into separate PRs per issue.\n  Expected change site: PR description\n  Evidence of absence: The PR description only references https://github.com/shubhodeep1/coding-workflows/issues/6546, but the PR contains changes related to at least 7 other issues (as evidenced by the inclusion of changelog fragments 6525, 6531, 6533, 6539, 6541, 6755, 6777).\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_apply_analysis_on_main.py:362-363 (`guard = source_run.find('!= \"stable\"', gate_exit)` and the `assert guard > gate_exit` immediately below it) | severity=BLOCKER | confidence=5\n  PROBLEM: The test was updated to accept the new `printf` form of the gate-only path write, but the release-path search still uses the old literal `!= \"stable\"`.\n  WHY: The workflow now contains `if [ \"${DISPATCH_REF}\" != \"refs/heads/stable\" ]; then` (test-and-mark-stable.yml:183 and mark-stable.yml:53), so `source_run.find('!= \"stable\"', gate_exit)` returns -1. `guard > gate_exit` is `assert -1 > 484`, raising `AssertionError: release path must check the dispatch ref against 'stable'`. The CI run 37828358634 confirms this is the current `tests-promote-stall-and-review` failure that propagates to the aggregate `lint` check and blocks the PR. The fix is to search for the new string, e.g. `source_run.find('!= \"refs/heads/stable\"', gate_exit)`; the test's intent (find the stable-ref guard after the gate-only path's `exit 0`) is otherwise sound.\n- TASK_GAP\n  Requirement: The PR should account for all issues it resolves \u2014 at minimum its title/body must enumerate the issues that the diff actually closes, otherwise reviewers and consumers cannot trace each finding to its fix.\n  Expected change site: PR title and description (top of the PR).\n  Evidence of absence: The PR body reads \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6546\" and the title reads \"AI implementation for issue #6546\". The diff, however, ships one fragment and one substantive fix per issue in {6525, 6531, 6533, 6539, 6541, 6546, 6755, 6777}: implement automation-path grant guard (6525), release diagnostic no credential dump (6531), api-write-guard worker-scope (6533), security-pass keep-fixing cap fails (6539), unblock judge no security waiver (6541), release-ref exact match (6546), merged-PR guard shell wrappers (6755) and nested-heredoc wrapper check (6777). `Refs #<n>` lines for those issues are absent from the PR body. Issue #6546 alone does not explain any of those seven additional scopes of work, so the description is materially incomplete.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_apply_analysis_on_main.py:362-363 | severity=BLOCKER | confidence=5\n  PROBLEM: The contract test searches for `!= \"stable\"`, but the workflow now compares `DISPATCH_REF` with `refs/heads/stable`.\n  WHY: The search returns `-1`, so `test_release_gate_only_mode_contract` fails. The provided CI log confirms this failure, blocking the aggregate `lint` check.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_apply_analysis_on_main.py:362 | severity=BLOCKER | confidence=5\n  PROBLEM: The test searches for the literal string `!= \"stable\"` in the workflow source, but the PR updated the ref check to compare against `refs/heads/stable` instead.\n  WHY: The `find()` call returns -1 because the old string is absent, causing the assertion `guard > gate_exit` to fail. This is the exact failure reported by CI in the `tests-promote-stall-and-review` job, which causes the aggregate `lint` check to fail and blocks the pipeline.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "d0ced176251ea4118da8997c94f5b1d52abb07c5ac70ae57e08e1683c1ef4556",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6555,
+    "run_id": "37828359475",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37828359475",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261008192509_d9c99b555a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6555,
+    "run_id": "37828359475"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-08T19:25:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
