@@ -18,7 +18,10 @@ WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
 # Multi-value queries always print values; a plain --get counts only for
 # credential-bearing keys so ordinary single-key lookups stay allowed.
 CONFIG_LIST = re.compile(
-	r"(?:(?<=-c ')|(?<=-c \")|\$\(|(?<![\w\"'\\(]))git\s+config\b[^\n]*?"
+	r"(?:(?<=-c ')|(?<=-c \")|\$\(|(?<![\w\"'\\(]))git"
+	# Git global options (-C dir, -c key=val, --no-pager, ...) may precede config.
+	r"(?:\s+(?:-[Cc]\s+(?:\"[^\"\n]*\"|'[^'\n]*'|\S+)|--?[A-Za-z][\w-]*(?:=\S+)?))*"
+	r"\s+config\b[^\n]*?"
 	r"(?:--(?:list|get-regexp|get-all|get-urlmatch)\b|(?<!\S)-l\b"
 	r"|--get\b(?=[^\n]*?(?i:extraheader|\.url\b|credential|token|password|auth)))"
 )
@@ -104,6 +107,10 @@ def test_config_scanner_handles_wrappers_and_comments() -> None:
 	assert _config_dumps_values("git config --get http.https://github.com/.extraheader")
 	assert _config_dumps_values("git config --get remote.origin.url")
 	assert _config_dumps_values('bash -c "git config --list --show-origin"')
+	assert _config_dumps_values('git -C "$GITHUB_WORKSPACE" config --list --show-origin')
+	assert _config_dumps_values("git --no-pager -c core.pager=cat config --get-regexp extraheader")
+	assert not _config_dumps_values('git -C "${PUBLISH_DIR}" config user.name "codex-bot"')
+	assert not _config_dumps_values("git -C /tmp config --list --name-only")
 
 
 def test_release_job_does_not_run_checkout_diagnostic() -> None:
