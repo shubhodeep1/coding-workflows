@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Conflict handling for workspace manifests needs explicit union semantics.",
   "timestamps": {
     "created_at": "2026-10-08T06:27:41Z",
