@@ -113,3 +113,80 @@ Among **364 success-or-failure conclusions**, success is **94.2%**; this exclude
 | Serena per-tool response-byte breakdown | **No tool calls observed**; no breakdown available. |
 | Per-target MCP availability: `probe_ok` / `probe_failed` / `probe_skipped` | **No target rows observed**; aggregate Serena **0 / 0 / 0** means availability was not measured. No Semble probe counts were supplied. |
 | Other MCP servers observed | **None in supplied summaries**; absent full logs prevent ruling out uncollected prefixes. |
+
+## Deep Audit — Workflows & Scripts (2026-10-08)
+
+### Section 1: Bug & Correctness Sweep
+
+Scope: all 54 `.github/workflows/*.yml` files and 181 `scripts/*.sh`/`scripts/*.py` files received an inventory-wide static scan, followed by targeted source review. All 107 shell scripts passed `bash -n`. Local Python 3.11 parsed 73 of 74 Python scripts; `scripts/workflow_retro.py:791-807` uses an f-string form accepted by the workflow’s pinned Python 3.12 (`.github/workflows/workflow-log-analysis.yml:84-86`), so the local parse failure is not filed as a defect. A YAML parser and `shellcheck` were unavailable; their checks were not claimed as completed. The existing report’s checkout and triage-posting diagnostics are not repeated as findings.
+
+- **BUG-001 — High · `bug` · `scripts/label_helpers.sh:189-239`.** `set_issue_phase_label_resilient` reads labels, calculates a replacement, then PUTs the entire set. **Inference:** if `issue_pr_status.yml:449` adds `ai:merged` between that read and a review job’s `ai:ready-to-merge` update (`review_autofix.yml:6198-6203`), the stale PUT can erase the terminal label. The judge has a narrower, terminal-aware mutation pattern at `scripts/review_rb_judge.sh:922-987`. **Recommended fix:** adapt that add-then-remove-and-reconcile pattern in the shared helper; test a terminal-label insertion between its reads and writes.
+
+- **BUG-002 — Medium · `bug` · `scripts/check_failure_triage.sh:348-359`.** A failed open-triage-issue listing is converted to `[]`. Processing then continues as though no matching fingerprint exists, although the deduplication check was not completed. **Recommended fix:** retain and check the listing’s exit status; defer issue creation on lookup failure instead of treating it as an empty result.
+
+- **BUG-003 — Medium · `bug` · `.github/workflows/review_autofix.yml:5517-5549`.** The editor-summary comment is a POST through `gh_retry`, but this path has no pre-POST marker lookup. **Inference:** if GitHub creates the comment and the response is lost, a retry can post a duplicate. **[NEEDS VERIFICATION]** **Recommended fix:** give the comment a run/head-bound marker and reconcile an existing automation-authored comment before retrying an ambiguous POST.
+
+- **BUG-004 — Medium · `bug` · `scripts/review_merge_train.sh:389-408`.** `_mt_upsert_comment` appends `|| true` to both PATCH and POST, so it reports success after either write fails. The release caller’s failure warning at `scripts/review_merge_train.sh:826-830` therefore cannot fire for those failures. **Recommended fix:** return the write status from `_mt_upsert_comment`; let the caller log its existing warning without changing the label-claim decision.
+
+- **SEC-001 — High · `security` · `scripts/gh_helpers.sh:543-605`; `.github/workflows/review_autofix.yml:5517-5533`.** On failure, `gh_retry` prints unescaped `$*`. The editor-summary POST passes the generated comment body as an argument and leaves retry stderr visible. Thus a failed call can print the body into workflow logs; **inference:** body text containing sensitive material or workflow-command syntax could also be exposed or interpreted there. **[NEEDS VERIFICATION]** **Recommended fix:** log an endpoint class, attempt and error class—not command arguments or bodies—and escape any retained diagnostic text before emitting it.
+
+### Section 2: GitHub API Call Redundancy Audit
+
+Counts below are *logical calls on the stated path*, excluding pagination, transport retries and writes unless specified.
+
+- **API-001 — Low · `api-redundancy` · `scripts/review_merge_train.sh:319-332,389-404`.** For an existing marker, `_mt_find_marker_comment` lists comments and reads each candidate’s body to filter it, but returns only ID/time; `_mt_upsert_comment` then GETs that same comment for its body. **Current → proposed:** two reads → one read per existing-marker upsert. **Recommended fix:** return a structured ID/time/body result from the existing comments listing and pass it to `_mt_upsert_comment`; retain its author check. Extend the existing lookup rather than adding a new batching helper.
+
+- **API-002 — Medium · `api-redundancy` · `scripts/gh_helpers.sh:727-770`.** Unlike `gh_retry`’s permanent-error check (`scripts/gh_helpers.sh:575-581`), `gh_api_json_to_file` retries failed commands without classifying a 404 or 422. With the default attempt bound, one permanent failure can make five requests and incur a sleep even after the final attempt. **Current → proposed:** up to five → one call for a classified permanent failure. **Recommended fix:** reuse `_is_gh_permanent_failure` in this helper and sleep only when another attempt remains; retain rate-limit and transient backoff.
+
+- **BATCH-001 — Medium · `api-batching` · `scripts/orchestrate_poll_process.sh:23-86`.** After one queued-issue listing, `replay_failed_reclarify_commands` makes a live issue GET and a paginated comments GET inside its loop. For **N** queued issues, its read path is one budget read, one listing, one identity read and **2N** per-issue reads. **Current → proposed:** `3 + 2N` → approximately `3 + N + ceil(N/25)` reads, before pagination/retries/fallbacks. **Recommended fix:** extend `_fetch_candidate_issue_details_graphql` (`scripts/orchestrate_poll_process.sh:15929-16062`) with the author/type and completeness fields this trust check requires; batch comments, retain the live issue guard, and use the existing REST comments path whenever history is incomplete or the batch fails. Snapshot freshness before replay needs testing. **[NEEDS VERIFICATION]**
+
+### Section 3: Code Duplication & Modularization Opportunities
+
+- **DUP-001 — Low · `duplication` · `.github/workflows/review_autofix.yml:2490-2495,6152-6171,6359-6379,7306-7315`.** Four late-stage blocks define near-identical `set_issue_phase_label_resilient` POST-only fallbacks. **Recommended fix:** make the existing `scripts/label_helpers.sh` own `set_issue_phase_label_resilient(issue_number, target_label, repo)` and stage a verified, durable copy before these steps; update the four callers while preserving their current missing-helper degradation until staging is guaranteed.
+
+- **DUP-002 — Low · `duplication` · `scripts/review_rb_judge.sh:1274-1283`; `scripts/orchestrate_poll_process.sh:22353-22362`.** Both judge paths reproduce the same two REST comment fetches, sorting filters and context-JSON assembly when the preferred helpers are unavailable. **Recommended fix:** put `pr_comments_fallback_snapshot(repo, pr_number, preloaded_meta_json)` in a shared, verified `scripts/pr_checks_lib.sh`; update both callers and preserve the legacy fallback during rollout.
+
+`internal-plan.yml:1-36` and `internal-implement.yml:1-34` share roughly 71% of noncomment lines, but their command gates and permissions differ. Consolidating those job-level gates would not be a safe mechanical deduplication.
+
+### Section 4: Expression Size Limit Risk Assessment
+
+Measurements are **dedented `run:` body characters including literal `${{ }}` placeholders**, not source indentation. Runtime substitutions can change the final length, so headroom is an estimate. Of 836 run blocks scanned, 234 contain interpolation; blocks without interpolation were excluded.
+
+- **EXPR-001 — High · `expression-limit` · `.github/workflows/implement.yml:1005-1395`.** “Stage workflow support files” has three interpolations and an estimated **19,108-character** body: **1,892 characters** of nominal headroom below the stated 21,000-character limit. Its source-indented length is 22,792, which is *not* the measured body length. **[NEEDS VERIFICATION]** **Recommended fix:** extract the staging logic to a trusted script under `scripts/`, bootstrap it from the verified support ref, and pass expression values through step `env:`.
+
+- **EXPR-002 — Medium · `expression-limit` · `.github/workflows/implement.yml:3512-3836`.** The preflight block has one interpolation and an estimated **15,922-character** body: **5,078 characters** of nominal headroom. **[NEEDS VERIFICATION]** **Recommended fix:** move its index and scope-preflight logic to a staged `scripts/implement_preflight_index.sh`, passing the repository value through `env:` and retaining the step’s guards.
+
+- **DEBT-001 — Medium · `tech-debt` · `.github/workflows/review_autofix.yml:6971-7105`.** The workflow is **473,017 bytes**, only **6,983 bytes** below this repository’s 480,000-byte CI guard. The documented/tested hard limit here is **512,000 bytes**, stricter than the prompt’s 1 MB premise (`CLAUDE.md:1613-1627`; `tests/test_workflow_file_size_limit.py:24-27,39-53`). **Recommended fix:** before growing the workflow, extract multiple large inline bodies using its existing `review_autofix_step_*` script pattern until it has the documented 50,000-byte guard headroom.
+
+No workflow exceeds 800 KB. The longest scanned `if:` line is 348 characters (`.github/workflows/clarify.yml:1563`), not near the expression limit.
+
+### Section 5: Cross-Cutting Concerns
+
+- **DEAD-001 — Low · `dead-code` · `scripts/orchestrate_poll_process.sh:14426-14436`.** `stall_recovery_action_is_terminal` has a definition but no call site found in the scoped repository search. An external source-based caller has not been ruled out. **[NEEDS VERIFICATION]** **Recommended fix:** confirm no supported caller sources it, then remove it and its obsolete tests or wire it into the decision path it was intended to classify.
+
+- **CONSIST-001 — Medium · `consistency` · `scripts/activation_verify.sh:250-275,288-297`.** Fix-issue creation and verdict-comment posting use raw, one-attempt `gh api`, while the preceding lookup uses `gh_retry`. A transient write failure returns without a posted verdict. **Recommended fix:** add bounded, marker-aware write reconciliation: on an ambiguous failure, recheck the fix-issue or verdict marker before retrying, so resilience does not create duplicate writes.
+
+- **SHELL-001 — Low · `shellcheck` · `scripts/propagate_consumer_secrets.sh:95-99`.** The `PROPAGATE_TARGETS` expansion deliberately suppresses SC2086, but also permits pathname glob expansion before target validation; a configured token containing a glob can become a different list of targets. **Recommended fix:** split the configured list with a controlled delimiter and `read -r`, without unquoted expansion; retain the registered-repository validation at `scripts/propagate_consumer_secrets.sh:122-135`.
+
+No `TODO`, `FIXME` or `HACK` marker was found in the scoped workflow/script files. Missing `set -euo pipefail` was not treated as a defect in sourced helper libraries solely because they do not set caller shell options.
+
+### Section 6: Summary & Severity Matrix
+
+#### 6A. Findings Summary Table
+
+| Severity | Count | IDs |
+|---|---:|---|
+| Critical | 0 | — |
+| High | 3 | BUG-001, SEC-001, EXPR-001 |
+| Medium | 8 | BUG-002, BUG-003, BUG-004, API-002, BATCH-001, EXPR-002, DEBT-001, CONSIST-001 |
+| Low | 5 | API-001, DUP-001, DUP-002, DEAD-001, SHELL-001 |
+
+#### 6B. Estimated Remediation Scope
+
+| Category | Files Touched | Estimated Effort |
+|---|---|---|
+| Critical/High bug fixes | 3 existing: `scripts/label_helpers.sh`, `scripts/gh_helpers.sh`, `.github/workflows/review_autofix.yml` | Medium |
+| API call optimization | 3 existing: `scripts/review_merge_train.sh`, `scripts/gh_helpers.sh`, `scripts/orchestrate_poll_process.sh` | Medium |
+| Code modularization | 3 existing callers plus shared helper staging | Large |
+| Expression size reduction | `.github/workflows/implement.yml` plus 2 proposed scripts | Large |
+| Medium/Low fixes | 6 existing workflow/script files across triage, review, merge train, activation, poller and secret propagation | Medium |
