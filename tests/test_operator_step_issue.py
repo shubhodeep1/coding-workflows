@@ -320,3 +320,28 @@ def test_needs_human_digest_prune_merges_and_closes_a_duplicate_digest(fake: Fak
 	assert sorted(writer.parse_digest(oldest["body"])[0]) == [7, 8]
 	closes = [args for args in fake.patches() if "state=closed" in args]
 	assert [args[3] for args in closes] == [f"repos/{REPO}/issues/6"]
+
+
+def test_needs_human_digest_prune_skips_closing_a_duplicate_changed_since_its_read(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch) -> None:
+	def entry(n: int) -> dict:
+		return {"kind": "issue", "parked": NOW, "line": writer.render_digest_entry(n, "issue", "blocked", "x", "", NOW)}
+
+	oldest = {"number": 5, "body": writer.render_digest({7: entry(7)}, []), "user": {"login": BOT}}
+	duplicate = {"number": 6, "body": writer.render_digest({8: entry(8)}, []), "user": {"login": BOT}}
+	fake.issues.extend([oldest, duplicate])
+	fake.open_needs_human = [{"number": n, "labels": [{"name": "ai:needs-human"}]} for n in (7, 8, 9)]
+	original = fake.__call__
+
+	def racing(args: list[str], *, allow_existing_label: bool = False) -> str:
+		out = original(args, allow_existing_label=allow_existing_label)
+		if "--slurp" in args:
+			# A concurrent park wrote #9 to the duplicate after prune read it.
+			duplicate["body"] = writer.render_digest({8: entry(8), 9: entry(9)}, [])
+		return out
+
+	monkeypatch.setattr(writer, "_gh", racing)
+	result = writer.needs_human_prune(REPO, BOT, now=NOW)
+	assert result["outcome"] == "skip" and result["reason"] == "concurrent_update"
+	assert result["items"] == [7, 8, 9]
+	assert fake.patches() == []

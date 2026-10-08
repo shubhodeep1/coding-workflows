@@ -73,8 +73,9 @@ unblock scan treats an item as parked only while the digest lists it (prune
 prints `items`), so an item left labelled without a digest line is judged and
 parked again. prune: one digest listing and, only when the digest has
 entries, the open `ai:needs-human` listing (one call per 100 items) plus,
-only when the body changes, one re-listing (a concurrent writer since the
-first read skips the tick) and at most one PATCH. Newer duplicate digests
+only when the body changes or a duplicate digest exists, one re-listing (a
+concurrent writer to the digest or a duplicate since the first read skips the
+tick) and at most one PATCH. Newer duplicate digests
 (left open when a park's post-create check failed) are merged into the oldest
 one and closed, one PATCH each. The body PATCH is not
 atomic; the re-listing narrows the window but does not close it. The unblock scan's search (30 items, lagging index) and the
@@ -618,24 +619,33 @@ def needs_human_prune(repo: str, trusted_login: str | None = None, now: str | No
 		if number not in open_items:
 			overflow.remove(number)
 			removed.append(number)
-			_needs_human_log(number, open_items.get(number, "issue"), "closed_or_cleared", "removed")
+			# Overflow keeps only item numbers, so the kind of a removed item is unknown.
+			_needs_human_log(number, "unknown", "closed_or_cleared", "removed")
 	stamp = now or _now_iso()
 	while overflow and len(entries) < NEEDS_HUMAN_MAX_ENTRIES:
 		number = overflow.pop(0)
 		kind = open_items[number]
 		entries[number] = {"kind": kind, "parked": stamp, "line": render_digest_entry(number, kind, "", "(details in item)", "", stamp)}
 	new_body = render_digest(entries, overflow, dropped)
-	if new_body.replace("\r\n", "\n") != body.replace("\r\n", "\n"):
+	body_changed = new_body.replace("\r\n", "\n") != body.replace("\r\n", "\n")
+	if body_changed or duplicates:
 		# Narrow the read-modify-write window: if a concurrent park changed the
-		# digest since our read, skip this tick instead of overwriting its entry.
-		current = _list_digest(repo, login)
-		if current is None or str(current.get("body") or "") != body:
+		# digest, or a duplicate about to be closed, since our read, skip this
+		# tick instead of overwriting or closing away its entry.
+		current_all = {int(d.get("number") or 0): str(d.get("body") or "") for d in _list_digests(repo, login)}
+		current_body = current_all.get(int(digest["number"]))
+		current = None if current_body is None else {"body": current_body}
+		dup_changed = any(current_all.get(int(dup["number"]), str(dup.get("body") or "")) != str(dup.get("body") or "")
+			for dup in duplicates)
+		if current is None or current_body != body or dup_changed:
 			_needs_human_log("none", "digest", "concurrent_update", "skip")
 			current_entries, current_overflow, _ = parse_digest(str((current or {}).get("body") or ""))
-			dup_items = {n for dup in duplicates for part in parse_digest(str(dup.get("body") or ""))[:2] for n in part}
+			dup_items = {n for dup in duplicates
+				for part in parse_digest(current_all.get(int(dup["number"]), str(dup.get("body") or "")))[:2] for n in part}
 			return {"issue": int(digest["number"]), "outcome": "skip", "reason": "concurrent_update", "removed": [],
 				"items": sorted(set(current_entries) | set(current_overflow) | dup_items)}
-		_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{int(digest['number'])}", "-f", f"body={new_body}"])
+		if body_changed:
+			_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{int(digest['number'])}", "-f", f"body={new_body}"])
 	for duplicate in duplicates:
 		# Only after the oldest digest holds the merged entries; a failed close
 		# is retried by the next prune (the merge is idempotent).
