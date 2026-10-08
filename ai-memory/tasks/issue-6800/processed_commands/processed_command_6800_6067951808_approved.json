@@ -5,13 +5,23 @@
   "entry_id": "processed_command_6800_6067951808_approved",
   "issue_number": 6800,
   "metadata": {
+    "branch": "ai/issue-6800",
+    "changed_files": [
+      "changelog.d/6800-host-only-hook-conflict-pinned.md",
+      "tests/test_review_conflict_resolve_sandbox_only.py"
+    ],
+    "issue_number": 6800,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6800",
+    "pr_number": 6803,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6803",
+    "run_attempt": "1",
+    "run_id": "37835884814",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37835884814"
   },
   "run_attempt": 1,
   "run_id": "37835884814",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-08T20:00:31Z",
+  "status": "completed",
+  "timestamp": "2026-10-08T20:20:17Z",
   "workflow": "implement"
 }
