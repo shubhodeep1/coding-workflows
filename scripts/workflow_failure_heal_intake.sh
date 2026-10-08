@@ -878,6 +878,19 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 	fi
 } > "${PROMPT_FILE}"
 
+# Freeze the heal-scope inputs before the diagnosis model sees any untrusted
+# evidence (#6463): only validated report fields, authenticated run metadata
+# and the ownership facts computed above. _open_issue reads this snapshot,
+# never the diagnosis, so neither evidence nor a model verdict can widen it.
+SCOPE_INPUTS_FROZEN="${RUNTIME_DIR}/scope_inputs_frozen.json"
+jq -n --arg crash "${PAYLOAD_CRASH_FILE}" \
+	--argjson runs "$(jq -s '[.[] | select(.run_id != null) | "'"${SOURCE_REPO}"'" + ":" + (.run_id | tostring)] | unique' "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
+	--argjson self_workflows "$(jq -s '[.[] | .referenced_paths[]?] | unique' "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
+	--argjson consumer_workflows "$(jq -s '[.[] | .path | select(type == "string" and . != "")] | unique' "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
+	--argjson changed "$(if [ "${CRASH_OWNERSHIP}" = pr ]; then jq '.changed_files // []' "${PAYLOAD_FILE}"; elif [ "${CRASH_OWNERSHIP}" = base ]; then jq -R -s 'split("\n") | map(select(. != ""))' "${BASE_CHANGED_FILES_FILE}"; else echo '[]'; fi)" \
+	'{crash_file: $crash, runs: $runs, self_workflows: $self_workflows, consumer_workflows: $consumer_workflows, changed_files: $changed}' > "${SCOPE_INPUTS_FROZEN}" \
+	&& chmod 0444 "${SCOPE_INPUTS_FROZEN}" || { rm -f "${SCOPE_INPUTS_FROZEN}"; log "warn scope_inputs_freeze_failed"; }
+
 # The failed-run logs, issue and comment excerpts are untrusted, so the
 # agent runs in the credential-free, network-isolated container
 # (scripts/codex_isolated_exec.sh, read-only): beyond the env -u below it
@@ -1057,7 +1070,7 @@ _open_issue()
 		_git_fetch_ownership_refs "+refs/heads/${checkout_ref}:refs/remotes/origin/${checkout_ref}" || true
 		scope_ref="refs/remotes/origin/${checkout_ref}"
 	fi
-	local scope_checkout="." scope_workflows_filter='[.[] | .referenced_paths[]?] | unique'
+	local scope_checkout="." scope_workflows_key=self_workflows
 	if [ "${repo}" != "${SELF_REPO}" ]; then
 		# The issue is implemented in the consumer checkout, so its scope must be
 		# checked against the consumer's own tree, never coding-workflows'. Only
@@ -1065,17 +1078,16 @@ _open_issue()
 		# coding-workflows files). An unreadable consumer tree leaves the scope
 		# unresolved, which implement refuses at ai:needs-human (fail closed).
 		scope_checkout="${RUNTIME_DIR}/consumer-scope.git"
-		scope_workflows_filter='[.[] | .path | select(type == "string" and . != "")] | unique'
+		scope_workflows_key=consumer_workflows
 		scope_ref=""
 		if _git_fetch_consumer_scope_ref "${repo}" "${scope_checkout}"; then
 			scope_ref="$(git --git-dir "${scope_checkout}" rev-parse --verify 'FETCH_HEAD^{commit}' 2>/dev/null || true)"
 		fi
 	fi
-	if [ -n "${scope_ref}" ] && git -C "${scope_checkout}" rev-parse --verify "${scope_ref}^{commit}" >/dev/null 2>&1; then
-		jq -n --arg crash "${PAYLOAD_CRASH_FILE}" --argjson runs "$(jq -s '[.[] | select(.run_id != null) | "'"${SOURCE_REPO}"'" + ":" + (.run_id | tostring)] | unique' "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
-			--argjson workflows "$(jq -s "${scope_workflows_filter}" "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
-			--argjson changed "$(if [ "${CRASH_OWNERSHIP}" = pr ]; then jq '.changed_files // []' "${PAYLOAD_FILE}"; elif [ "${CRASH_OWNERSHIP}" = base ]; then jq -R -s 'split("\n") | map(select(. != ""))' "${BASE_CHANGED_FILES_FILE}"; else echo '[]'; fi)" \
-			'{crash_file: $crash, runs: $runs, workflow_paths: $workflows, changed_files: $changed}' > "${RUNTIME_DIR}/scope_inputs.json"
+	# A missing pre-diagnosis snapshot leaves the scope unresolved (fail closed).
+	if [ -n "${scope_ref}" ] && [ -s "${SCOPE_INPUTS_FROZEN:-}" ] && git -C "${scope_checkout}" rev-parse --verify "${scope_ref}^{commit}" >/dev/null 2>&1; then
+		jq --arg key "${scope_workflows_key}" '{crash_file: .crash_file, runs: .runs, workflow_paths: .[$key], changed_files: .changed_files}' \
+			"${SCOPE_INPUTS_FROZEN}" > "${RUNTIME_DIR}/scope_inputs.json"
 		python3 "${HEAL_PY}" heal-scope render --input-json "${RUNTIME_DIR}/scope_inputs.json" --checkout "${scope_checkout}" --ref "${scope_ref}" > "${scope_marker_file}" || : > "${scope_marker_file}"
 	fi
 	log "scope paths=$(grep -o 'paths=[^ ]*' "${scope_marker_file}" | tr ',' '\n' | wc -l | tr -d ' ') runs=${SUMMARY_COUNT} outcome=$([ -s "${scope_marker_file}" ] && grep -q '<!--' "${scope_marker_file}" && echo written || echo unresolved)"

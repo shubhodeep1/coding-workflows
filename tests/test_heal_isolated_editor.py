@@ -472,3 +472,17 @@ def test_generated_plan_files_touched_cannot_widen_heal_scope(tmp_path: Path) ->
 	for path in ("scripts/implement_commit_changes.sh", ".github/workflows/implement.yml"):
 		text = (ROOT / path).read_text()
 		assert '''"$(if [ "${HEAL_ROUTE:-false}" = true ]; then printf '%s' "${HEAL_SCOPE_FILE:?}"; else printf '%s' "${ISSUE_BODY_FILE:-}"; fi)"''' in text
+
+
+def test_intake_freezes_heal_scope_inputs_before_diagnosis() -> None:
+	# The scope must be fixed before untrusted evidence reaches the diagnosis
+	# model; _open_issue may only read the frozen snapshot afterwards.
+	intake = (ROOT / "scripts/workflow_failure_heal_intake.sh").read_text()
+	freeze = intake.index('SCOPE_INPUTS_FROZEN="${RUNTIME_DIR}/scope_inputs_frozen.json"')
+	diagnosis = intake.index('codex_isolated_exec.sh" "${heal_isolated_args[@]}"')
+	assert freeze < diagnosis
+	assert 'chmod 0444 "${SCOPE_INPUTS_FROZEN}"' in intake
+	open_issue = intake[intake.index("_open_issue()\n"):]
+	open_issue = open_issue[:open_issue.index("\n}\n")]
+	assert '"${SCOPE_INPUTS_FROZEN}" > "${RUNTIME_DIR}/scope_inputs.json"' in open_issue
+	assert "*.verified" not in open_issue and "DIAG_FILE" not in open_issue.split("compose-issue")[0]
