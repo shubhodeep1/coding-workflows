@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The plan gate must use the same rules as the implement-side guard, so it has to reuse that guard's own path classifier and its `files_touched (untrusted):` grant parser instead of keeping a second list. A copied prefix list (B) or the `scripts/`-only list in `plan.yml` (C) would drift from the guard, and when they disagreed the gate would either block too much or let through the same rejection this issue is about. I checked this checkout's `scripts/files_touched_scope_guard.py`: it has only the generic `files_touched:` matcher (`evaluate_allowlist`, lines 201-221). No file under `scripts/` has an automation-path classifier, and no file in the checkout has the \"Ungranted automation paths\" text. The heal diagnosis, though, cites protected-path rejection at lines 196-238 of release SHA `0b14e3db`, so the guard should exist on `stable`. Stopping with `BLOCKED` if it is missing there is safer than inventing a list.\nQ2: Holding back `plan.yml`'s own `/approved` isn't enough. The poller's stall-recovery `auto_approve` also posts approval, for managed issues (`scripts/orchestrate_poll_process.sh:14678`) and standalone ones (`:18081`). After 60 minutes it would re-trigger implement, and the guard would reject again with the same fingerprint. That defeats a fix this issue says must be deterministic. Option C is worse: `ai:scope-blocked` is one of the escalation labels that starts the workflow failure heal, so adding it would file another heal issue on every plan and the loop would continue.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Both answers are lettered choices. Implementation notes for the planner, binding with the decisions above:\nQ1:\n  inputs:\n    - The automation-path grant guard on the `stable` target branch: the protected-path classifier and the `files_touched (untrusted):` parser in or near `scripts/files_touched_scope_guard.py`, which the diagnosis cites at lines 196-238 of `0b14e3db`.\n    - `.github/workflows/plan.yml` auto-approval block (about lines 2105-2134), which already loads issue metadata and posts `/approved [auto-approved-by-plan]`.\n  steps:\n    - Add a mode or function to the existing guard script that takes the plan's \"Files likely to change\" paths and the issue body, and prints the protected paths that have no exact grant. Don't copy the classifier into the workflow.\n    - In the `plan.yml` auto-approval step, call that mode using the issue body that step has already fetched, so it makes no new API call. If any paths are ungranted, don't post `/approved`.\n    - If the guard isn't on `stable`, the plan emits `BLOCKED: automation-path grant guard absent on target branch`.\nQ2:\n  inputs:\n    - `.github/workflows/plan.yml`\n    - `scripts/orchestrate_poll_process.sh`: the managed `auto_approve` case at about line 14678 and the standalone one at about line 18081.\n  steps:\n    - When the gate holds approval, `plan.yml` posts one comment from the pipeline account. It contains a stable marker (for example `<!-- ai:plan-automation-grant-hold:v1 paths=<base64-json> -->`), lists the ungranted paths, and tells a maintainer to add exact grants and then post `/approved`. Telegram uses WARNING. Don't add an escalation label.\n    - In both `auto_approve` branches of the poller, skip with `STALL_SKIP ... reason=automation_grant_hold` while the newest trusted plan-outcome comment carries that marker. Trust it only when the current GH_PAT account authored it. Read comments from the caches the poller already builds (`_current_wave_details_json`, `_candidate_details_json`); when the cache is missing or incomplete, fail closed and skip for that tick.\n    - A newer plan outcome without the marker (a re-plan after grants were added) clears the hold. A human `/approved` still triggers implement, and the existing implement guard stays the final check.\n    - Regression tests:\n      - A security-finding issue with no `files_touched (untrusted):` block and a plan touching `.github/workflows/` gets no auto-approval and gets the marker. This test fails on the reported head.\n      - A plan whose paths all have exact grants is still auto-approved.\n      - The poller `auto_approve` skips while the marker is newest, for both managed and standalone issues.\n      - A marker posted by a different author is ignored.\n\nESCALATION (required for any ESCALATE decision):\nNone.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\nNone. Separately from this fix, a maintainer must still add exact grants to issue #6532 and clear `ai:scope-blocked` through the human-gated procedure, as the issue body states.",
+  "fingerprint": "a1e7ccb06620fed49d920b758afd2ae4cca3eb21693372c19160f263b9e5744b",
+  "lineage": {
+    "issue_number": 6766,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37777484235",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37777484235",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6766"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008124029_925d9c4e44",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6766,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37777484235"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6766",
+  "timestamps": {
+    "created_at": "2026-10-08T12:40:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
