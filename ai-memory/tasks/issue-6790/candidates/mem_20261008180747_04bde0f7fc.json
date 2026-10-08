@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\nQ3: A\nQ4: A\n\nRATIONALE:\nQ1: The issue asks for exactly this. It says to suppress automatic `/approved` for plans that list automation paths \"while it is off\", and to use the classifier and trusted exact-grant parser \"when enabled\". Option A is that reading, and it fails closed. Options B and C would keep today's behaviour with the flag off, which is the loop that sends #6781 back to `ai:scope-blocked`.\nQ2: The unblock judge picked `operator_step` because no automated run can supply the grant. The commit-time guard in `scripts/implement_commit_changes.sh` (lines 502-539, through `files_touched_scope_guard.py --check-automation-paths`) only accepts an exact `files_touched` entry from a trusted issue author. A trusted edit to the issue body is the only way through. Option B repeats the `reason=no_allowlist` failure. Option C cannot be done, because every file the change targets is protected.\nQ3: `scripts/orchestrate_poll_process.sh` has two stall-recovery `auto_approve` branches. One is at line 14709 in `execute_stall_recovery_action` (line 14622), for managed issues. The other is at line 18112 in `run_standalone_stall_recovery` (line 17393). The staged-support latch release at line 17361 (`release_staged_support_needs_human_latches`) re-approves a plan that was already approved and was halted by a support-rebase conflict, so it is outside this request. The unblock judge hand-offs are a separate, judge-gated authority.\nQ4: Leaving the issue in `ai:awaiting-approval` with one comment listing the ungranted paths gives a person what they need to act. It does not restart the unblock loop. Option B's `ai:scope-blocked` label would send the issue back to the unblock judge, which recreates this cycle. Option C reports nothing on the issue, but the request is to \"report and deny\".\n\nEXECUTION PLAN (required for any non-letter decision):\nNo non-letter decisions. Implementation notes for the planner:\n- Flag: `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED`, default `false`, read with a default inside each helper (\u00a78). Do not enable it in any workflow or repository-variable default.\n- Classifier: the same case-insensitive prefix set as the commit guard, `^(\\.github|\\.claude|scripts|prompts|workflow-templates)(/|$)`. Apply it to the plan's files-to-change list and also to rename sources.\n- When the flag is on, reuse `scripts/files_touched_scope_guard.py --check-automation-paths` with the trusted issue-body grant (an exact `files_touched` entry from the GH_PAT login or an OWNER/MEMBER/COLLABORATOR author). Do not write a second parser.\n- Sites to gate: the `/approved [auto-approved-by-plan]` post in `.github/workflows/plan.yml` (around line 2134), and the two poller `auto_approve` branches listed under Q3.\n- When suppressing, log `AI_PHASE_GATE_V1 ... reason=automation_path_ungranted` (with the flag on) or `reason=automation_path_flag_off` (with the flag off). Post one deduplicated issue comment listing the paths and leave the labels unchanged.\n- Leave the implementation-time guard in `implement_commit_changes.sh` / `implement.yml` unchanged.\n- Add tests for three cases: a plan with ungranted protected paths (suppressed and reported), a plan whose protected paths are all granted with the flag on (auto-approved), and an ordinary plan (unchanged under both flag values).\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- `files_touched` grant (resource: an edit to the issue body): before `/approved`, a trusted author (the GH_PAT login or an OWNER/MEMBER/COLLABORATOR) adds an exact `files_touched:` block to this issue. It must list `.github/workflows/plan.yml`, `scripts/orchestrate_poll_process.sh` and every other protected path the plan names (for example a new helper under `scripts/`, or `scripts/files_touched_scope_guard.py` if the plan changes it). Test files and `changelog.d/` fragments do not need to be listed. Until this is done, the implementation commit is refused with `IMPLEMENT_AUTOMATION_PATH_GUARD ... reason=no_allowlist` and the issue latches `ai:scope-blocked`.\n- `AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED` (repository variable): an operator sets it to `true` only after the change merges with required checks passing. Until then, plans that list protected automation paths get no automatic `/approved`, and ordinary plans behave as they do today.\n\nNotes:\n- Assumption: the Q2 grant is an operator step that this pipeline cannot perform. A grant written by the pipeline itself would defeat the guard.\n- Missing context: I did not read `scripts/files_touched_scope_guard.py` to confirm how `--check-automation-paths` parses grants. The planner should check its CLI before reusing it.",
+  "fingerprint": "91312728934afffd2a200ecc33c8a40c5c8d5e063c0366db777349878941c799",
+  "lineage": {
+    "issue_number": 6790,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37820693841",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37820693841",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6790"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008180747_04bde0f7fc",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6790,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37820693841"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6790",
+  "timestamps": {
+    "created_at": "2026-10-08T18:07:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
