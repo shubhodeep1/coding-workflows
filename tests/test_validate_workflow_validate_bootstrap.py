@@ -799,6 +799,12 @@ def _run_validate_staging(
 		"GH_TOKEN": "dummy",
 		"WORKFLOW_SUPPORT_REF": support_ref or source_sha,
 		"RUNNER_TEMP": str(runner_temp),
+		# run_overlay_loader in stage_workflow_support.sh refuses to stage the
+		# trusted overlay without these two; Actions sets them for CI, but the
+		# validation container that runs this file as a repo check does not
+		# (nightly gate run 37709707982, validate run 37709826220).
+		"GITHUB_RUN_ID": "1",
+		"GITHUB_RUN_ATTEMPT": "1",
 		"GITHUB_ENV": str(tmp / "github_env"),
 		"PYTHONDONTWRITEBYTECODE": "1",
 	})
