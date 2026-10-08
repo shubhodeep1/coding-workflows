@@ -791,6 +791,20 @@ elif [ "${SELF_INFLICTED_ROUTING_ENABLED,,}" != "false" ] \
 	fi
 fi
 
+# Freeze the heal-scope inputs before the diagnosis prompt assembles any
+# untrusted evidence (#6463): only validated report fields, authenticated run metadata
+# and the ownership facts computed above. _open_issue reads this snapshot,
+# never the diagnosis, so neither evidence nor a model verdict can widen it.
+SCOPE_INPUTS_FROZEN="${RUNTIME_DIR}/scope_inputs_frozen.json"
+jq -n --arg crash "${PAYLOAD_CRASH_FILE}" \
+	--argjson runs "$(jq -s '[.[] | select(.run_id != null) | "'"${SOURCE_REPO}"'" + ":" + (.run_id | tostring)] | unique' "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
+	--argjson self_workflows "$(jq -s '[.[] | .referenced_paths[]?] | unique' "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
+	--argjson consumer_workflows "$(jq -s '[.[] | .path | select(type == "string" and . != "")] | unique' "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
+	--argjson changed "$(if [ "${CRASH_OWNERSHIP}" = pr ]; then jq '.changed_files // []' "${PAYLOAD_FILE}"; elif [ "${CRASH_OWNERSHIP}" = base ]; then jq -R -s 'split("\n") | map(select(. != ""))' "${BASE_CHANGED_FILES_FILE}"; else echo '[]'; fi)" \
+	'{crash_file: $crash, runs: $runs, self_workflows: $self_workflows, consumer_workflows: $consumer_workflows, changed_files: $changed}' > "${SCOPE_INPUTS_FROZEN}" \
+	&& jq -e '(.runs | type == "array") and (.changed_files | type == "array") and (.self_workflows | type == "array") and (.consumer_workflows | type == "array")' "${SCOPE_INPUTS_FROZEN}" >/dev/null 2>&1 \
+	&& chmod 0444 "${SCOPE_INPUTS_FROZEN}" || { rm -f "${SCOPE_INPUTS_FROZEN}"; log "warn scope_inputs_freeze_failed"; }
+
 # --- Run the diagnosis model -----------------------------------------------
 
 PROMPT_FILE="${RUNTIME_DIR}/codex_prompt.txt"
@@ -877,19 +891,6 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 		echo "(no failed run could be linked to this escalation; diagnose from the issue context and the escalation label semantics)"
 	fi
 } > "${PROMPT_FILE}"
-
-# Freeze the heal-scope inputs before the diagnosis model sees any untrusted
-# evidence (#6463): only validated report fields, authenticated run metadata
-# and the ownership facts computed above. _open_issue reads this snapshot,
-# never the diagnosis, so neither evidence nor a model verdict can widen it.
-SCOPE_INPUTS_FROZEN="${RUNTIME_DIR}/scope_inputs_frozen.json"
-jq -n --arg crash "${PAYLOAD_CRASH_FILE}" \
-	--argjson runs "$(jq -s '[.[] | select(.run_id != null) | "'"${SOURCE_REPO}"'" + ":" + (.run_id | tostring)] | unique' "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
-	--argjson self_workflows "$(jq -s '[.[] | .referenced_paths[]?] | unique' "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
-	--argjson consumer_workflows "$(jq -s '[.[] | .path | select(type == "string" and . != "")] | unique' "${LOG_DIR}"/*.verified 2>/dev/null || echo '[]')" \
-	--argjson changed "$(if [ "${CRASH_OWNERSHIP}" = pr ]; then jq '.changed_files // []' "${PAYLOAD_FILE}"; elif [ "${CRASH_OWNERSHIP}" = base ]; then jq -R -s 'split("\n") | map(select(. != ""))' "${BASE_CHANGED_FILES_FILE}"; else echo '[]'; fi)" \
-	'{crash_file: $crash, runs: $runs, self_workflows: $self_workflows, consumer_workflows: $consumer_workflows, changed_files: $changed}' > "${SCOPE_INPUTS_FROZEN}" \
-	&& chmod 0444 "${SCOPE_INPUTS_FROZEN}" || { rm -f "${SCOPE_INPUTS_FROZEN}"; log "warn scope_inputs_freeze_failed"; }
 
 # The failed-run logs, issue and comment excerpts are untrusted, so the
 # agent runs in the credential-free, network-isolated container

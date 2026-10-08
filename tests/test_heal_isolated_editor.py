@@ -480,7 +480,9 @@ def test_intake_freezes_heal_scope_inputs_before_diagnosis() -> None:
 	intake = (ROOT / "scripts/workflow_failure_heal_intake.sh").read_text()
 	freeze = intake.index('SCOPE_INPUTS_FROZEN="${RUNTIME_DIR}/scope_inputs_frozen.json"')
 	diagnosis = intake.index('codex_isolated_exec.sh" "${heal_isolated_args[@]}"')
-	assert freeze < diagnosis
+	# Also before the prompt that embeds the untrusted excerpts and logs is assembled.
+	prompt_assembly = intake.index('} > "${PROMPT_FILE}"')
+	assert freeze < prompt_assembly < diagnosis
 	assert 'chmod 0444 "${SCOPE_INPUTS_FROZEN}"' in intake
 	open_issue = intake[intake.index("_open_issue()\n"):]
 	open_issue = open_issue[:open_issue.index("\n}\n")]
