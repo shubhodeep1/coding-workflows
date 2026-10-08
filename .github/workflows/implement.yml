@@ -1651,10 +1651,10 @@ jobs:
           # later bulk-delete override identity read runs only conditionally;
           # it cannot supply this grant's pipeline identity before the editor.
           pipeline_login="$(gh api user --jq .login 2>/dev/null || true)"
-          automation_grant_path="${RUNTIME_DIR}/automation_path_grant.json"
+          automation_grant_path="${RUNTIME_DIR:-${TMPDIR:-/tmp}}/automation_path_grant.json"
           python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
             --emit-automation-grant "${automation_grant_path}" \
-            --issue-meta-file "${ISSUE_META_FILE}" --pipeline-login "${pipeline_login}" || true
+            --issue-meta-file "${ISSUE_META_FILE:-}" --pipeline-login "${pipeline_login}" || true
           echo "AUTOMATION_PATH_GRANT_FILE=${automation_grant_path}" >> "$GITHUB_ENV"
           if [ -f "${automation_grant_path}" ]; then
             jq -r --arg issue "${ISSUE_NUMBER}" \

@@ -837,6 +837,7 @@ def _run_fetch_issue_metadata_step(
 			"ISSUE_BODY_FILE": str(issue_body_file),
 			"MOCK_GH_STATE_FILE": str(gh_state_file),
 			"TMPDIR": str(runtime_dir),
+			"RUNTIME_DIR": str(runtime_dir),
 		}
 	)
 
@@ -1307,7 +1308,8 @@ def test_fetch_issue_metadata_does_not_let_issue_text_close_env_values() -> None
 			env={**os.environ, "ISSUE_BODY": issue_body, "ISSUE_TITLE": issue_title,
 				"ISSUE_BODY_FILE": str(body_file), "ISSUE_SCOPE_LOCK_GLOB": "EOF\nUNSAFE_SCOPE=enabled",
 				"ISSUE_NUMBER_JSON": "948", "ISSUE_URL_JSON": "https://github.com/owner/repo/issues/948",
-				"PR_BASE_BRANCH": "main", "GITHUB_ENV": str(github_env_file)},
+				"PR_BASE_BRANCH": "main", "GITHUB_ENV": str(github_env_file),
+				"RUNTIME_DIR": td, "ISSUE_NUMBER": "948", "ISSUE_META_FILE": str(Path(td) / "issue_meta.json")},
 			capture_output=True, text=True, check=False,
 		)
 		assert proc.returncode == 0, proc.stderr
@@ -1327,7 +1329,8 @@ def test_fetch_issue_metadata_does_not_let_issue_text_close_env_values() -> None
 			env={**os.environ, "ISSUE_BODY": issue_body, "ISSUE_TITLE": collision + "\nmore detail",
 				"ISSUE_BODY_FILE": str(body_file), "ISSUE_SCOPE_LOCK_GLOB": "",
 				"ISSUE_NUMBER_JSON": "948", "ISSUE_URL_JSON": "https://github.com/owner/repo/issues/948",
-				"PR_BASE_BRANCH": "main", "GITHUB_ENV": str(blocked_github_env_file)},
+				"PR_BASE_BRANCH": "main", "GITHUB_ENV": str(blocked_github_env_file),
+				"RUNTIME_DIR": td, "ISSUE_NUMBER": "948", "ISSUE_META_FILE": str(Path(td) / "issue_meta.json")},
 			capture_output=True, text=True, check=False,
 		)
 		assert blocked.returncode != 0
