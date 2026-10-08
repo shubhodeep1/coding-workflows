@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where should the fix land, and how strict should the updated assertion be?\nChoices:\nA. Target the default branch. Make the assertion match the branch-output behaviour instead of one exact command: the gate-only path must write `branch=<dispatched ref>` to `$GITHUB_OUTPUT` in either the `echo \"branch=${REF}\"` or the `printf 'branch=%s\\n' \"${DISPATCH_REF_NAME}\"` form. The release path must still write `branch=stable` only after the `stable`-ref check. This passes on `main` now and on PR #6555 once it rebases. (RECOMMENDED)\nB. Target PR #6555's head branch `ai/issue-6546` and assert only the new `printf` form, as the triage issue suggests. Planning would need to add `Target branch: ai/issue-6546` to this issue so the fix PR stacks on that branch. Changing only the test here does not alter the workflow's stable-ref check.\nC. Make no change here. Close this issue and let PR #6555's own review/autofix loop update the test alongside its workflow change.",
+  "fingerprint": "13dc7abac4a2081d0f05e9df832b8e9bea7e4ddce71ea8a3ba33c2adaa30f951",
+  "lineage": {
+    "issue_number": 6751,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37755183711",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37755183711",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008091911_8b3d0c885e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6751,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37755183711"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6751 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T09:19:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
