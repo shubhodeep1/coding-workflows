@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_heal_isolated_editor.py:test_intake_freezes_heal_scope_inputs_before_diagnosis | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The assertion checking that `DIAG_FILE` is absent does not catch references to the actual variable `DIAGNOSIS_FALLBACK_FILE`.\n  WHY: A future reference to `DIAGNOSIS_FALLBACK_FILE` before `compose-issue` would still pass this check, leaving the intended regression undetected.\n- tests/test_heal_isolated_editor.py:test_intake_freezes_heal_scope_inputs_before_diagnosis | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The ordering check depends on finding the exact literal `codex_isolated_exec.sh\" \"${heal_isolated_args[@]}\"`.\n  WHY: If diagnosis dispatch changes form, the lookup can raise `ValueError` instead of checking that the scope freeze precedes diagnosis.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_heal_isolated_editor.py | severity=NIT | confidence=4\n  PROBLEM: The second half of the combined assertion is vacuous because `DIAGNOSIS_FALLBACK_FILE` does not contain the substring `DIAG_FILE`.\n  WHY: A later refactor that adds a `DIAGNOSIS_FALLBACK_FILE` reference before `compose-issue` would still satisfy the assertion, so the test would not catch a scope-sourced-from-diagnosis regression.\n- tests/test_heal_isolated_editor.py | severity=NIT | confidence=3\n  PROBLEM: The ordering check assumes the diagnosis invocation uses the exact literal token `heal_isolated_args` and a quoted-script form.\n  WHY: If dispatch changes form, the lookup will raise `ValueError: substring not found` instead of asserting the freeze-before-diagnosis invariant, allowing a future regression to land silently.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "92e60e177f3c294977f2bfca443e70f318dd530d9d1c7781b542102c57bdffee",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6484,
+    "run_id": "37706649851",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37706649851",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261008003348_5173e2a785",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6484,
+    "run_id": "37706649851"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-08T00:33:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
