@@ -1599,10 +1599,13 @@ the module of a file that lost lines
 (`reason=cited_file_references_module_with_deletions`), or such a file names
 the cited module at base (`reason=module_with_deletions_references_cited_file`;
 module = basename without extension, or the parent directory for `__init__`,
-`index`, `init`, `main` and `mod`); each logs
+`index`, `init`, `main` and `mod`), or an unchanged non-documentation file
+(not `.md`/`.markdown`/`.rst`/`.txt`/`.adoc`) names both the cited module and
+such a module at base, as a router, registry or DI configuration would
+(`reason=shared_referrer_links_module_with_deletions`); each logs
 `security-audit: line_ownership_blocking finding=<id> reason=<r>`. The checks
 use one `git diff --numstat --no-renames` for the range, one `-U0` diff and one
-`git show` per cited file, and one `git grep` at base per cited module; a
+`git show` per cited file, and one `git grep` at base per module stem; a
 failure of any keeps the finding blocking
 (`reason=diff_failed|hunk_diff_failed|module_reference_check_failed`, counted unknown). `run_security_pass_inline` splits advisories out of
 the result right after re-applying waivers, so they never make the pass
@@ -2505,7 +2508,7 @@ depend on it.
 | `REVIEW_DIATAXIS_LENS_ENABLED` | `true` | Documentation-only contract row for the advisory `DOCS COVERAGE (DIATAXIS)` consolidator lens. Current branch behavior is prompt-defined only (no separate workflow toggle yet): keep it `low` severity and name only still-missing `Reference` / `How-to` / `Tutorial` / `Explanation` updates. |
 | `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` | `true` | Enable the consolidator-side companion `AGENTS.md` materiality finding. Unlike `AGENTS_MD_MATERIALITY_ENABLED`, which controls the separate advisory comment helper, this flag only controls whether `review_consolidate.sh` passes the helper JSON into Lens 7 (`NAMING / BACKWARD COMPATIBILITY`). |
 | `ENABLE_SECURITY_PASS` | `true` | Enable the scheduled poller's mandatory current-integration-head security gate before validation or finalization. Set to `false` for the immediate operator kill switch and legacy completion behavior. |
-| `SECURITY_AUDIT_LINE_OWNERSHIP` | `project` | Line ownership for the project security pass (plan item 4b, D4). `project` blocks only on findings whose cited line was written in the project's `merge-base..head` range; older lines become non-blocking advisories filed as `ai:security` follow-ups, unless the project deleted lines in the cited file, added lines within the hunk window of the cited line, or deleted lines in another file the finding names or that is linked to the cited file by module name (those stay blocking). `off` restores the previous gate and payload exactly. |
+| `SECURITY_AUDIT_LINE_OWNERSHIP` | `project` | Line ownership for the project security pass (plan item 4b, D4). `project` blocks only on findings whose cited line was written in the project's `merge-base..head` range; older lines become non-blocking advisories filed as `ai:security` follow-ups, unless the project deleted lines in the cited file, added lines within the hunk window of the cited line, or deleted lines in another file the finding names or that is linked to the cited file by module name, directly or through an unchanged file naming both (those stay blocking). `off` restores the previous gate and payload exactly. |
 | `SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW` | `40` | Lines either side of a pre-project cited line within which a project-added hunk keeps the finding blocking. Invalid values warn and fall back to `40`. |
 | `SUMMARISER_ISOLATION_MAX_ATTEMPTS` | `3` | Consecutive consensus-summariser attempts refused because the review sandbox was unavailable before the summariser hard-fails (`opencode_agent_failure ... failure_class=isolation_unavailable`). The summariser and behavioural-smoke synthesiser never run OpenCode on the host; a refused attempt logs `::error::REVIEW_UTILITY_ISOLATION role=<SUMMARISER\|BEHAVIOURAL_SMOKE> engine=<claude\|codex> outcome=refused reason=sandbox_unavailable\|sandbox_helper_outdated`, and smoke synthesis fails open with `BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=isolation_unavailable`. Invalid values warn and fall back to `3`. |
 | `MAX_SECURITY_PASS_CYCLES` | `5` | Maximum completed consolidated security-fix cycles before persistent findings terminalize as `ai:security-pass-failed`. Resets to `0` when an advancing integration head invalidates a recorded clean pass. Re-audits after a merged fix are delta audits, so the budget bounds persisting findings rather than fresh samples of unchanged code. For standalone PRs, a completed current-head audit is required to enter judge exhaustion mode. |

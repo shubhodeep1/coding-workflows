@@ -433,6 +433,8 @@ fi
 # cited file names a module that lost lines
 # (`cited_file_references_module_with_deletions`), or a module that lost
 # lines names the cited module (`module_with_deletions_references_cited_file`).
+# or an unchanged non-documentation file names both the cited module and a
+# module that lost lines (`shared_referrer_links_module_with_deletions`).
 # A failed project diff, hunk read or module-reference read keeps the
 # finding blocking too.  `off` restores
 # the previous payload exactly (no `advisory` field, no `line_ownership` key).
@@ -2053,6 +2055,8 @@ def added_hunks(path: str) -> list[tuple[int, int]] | None:
 
 # Basenames too generic to identify a module; the parent directory names it.
 LINE_OWNERSHIP_GENERIC_MODULE_STEMS = {"__init__", "index", "init", "main", "mod"}
+# Files whose mention of two modules is prose, not wiring.
+LINE_OWNERSHIP_DOC_SUFFIXES = {".md", ".markdown", ".rst", ".txt", ".adoc"}
 head_text_cache: dict[str, str | None] = {}
 base_mention_cache: dict[str, set[str] | None] = {}
 
@@ -2148,6 +2152,24 @@ def deletion_block_reason(finding: dict, path: str, line: int) -> tuple[str, boo
 			return "module_reference_check_failed", True
 		if any(other_path in referencing for other_path in other_paths):
 			return "module_with_deletions_references_cited_file", False
+		# One hop further: an unchanged source file (a router table, registry
+		# or dependency-injection configuration) that names both the cited
+		# module and a module that lost lines can wire the removed guard to
+		# the cited operation.  Documentation files are not wiring.
+		cited_referrers = {
+			referrer for referrer in referencing
+			if referrer != path and PurePosixPath(referrer).suffix.lower() not in LINE_OWNERSHIP_DOC_SUFFIXES
+		}
+		if cited_referrers:
+			for other_path in other_paths:
+				other_stem = module_stem(other_path)
+				if not other_stem or other_stem == cited_stem:
+					continue
+				other_referrers = base_paths_mentioning(other_stem)
+				if other_referrers is None:
+					return "module_reference_check_failed", True
+				if any(referrer != other_path and referrer in cited_referrers for referrer in other_referrers):
+					return "shared_referrer_links_module_with_deletions", False
 	return "", False
 
 blocking = advisory = unknown = 0
