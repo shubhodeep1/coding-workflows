@@ -2872,6 +2872,8 @@ def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") ->
 	  and app.py names middleware and mod (a two-hop link).
 	- ``cross_file_long_chain``: as ``cross_file``, but mod is named by a
 	  five-file reference chain longer than the search bound.
+	- ``cross_file_shared_dependency``: as ``cross_file``, but mod.py and
+	  auth.py both import an unchanged shared.py that names neither.
 	"""
 	repo_dir = base_dir / "audited-repo"
 	repo_dir.mkdir(parents=True, exist_ok=True)
@@ -2901,7 +2903,12 @@ def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") ->
 		base_lines = ["require_admin()\n", *base_lines]
 	elif variant == "cross_file_import":
 		base_lines = [*base_lines[:-1], "import auth\n"]
+	elif variant == "cross_file_shared_dependency":
+		base_lines = [*base_lines[:-1], "import shared\n"]
 	auth_base_text = "def check():\n\treturn require_admin()\n"
+	if variant == "cross_file_shared_dependency":
+		auth_base_text = "import shared\n" + auth_base_text
+		(repo_dir / "shared.py").write_text("ADMIN_CHECKS = []\n", encoding="utf-8")
 	if variant == "cross_file_reverse":
 		auth_base_text = "import mod\n" + auth_base_text
 	_git("init", "-q")
@@ -2910,6 +2917,8 @@ def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") ->
 	if variant == "cross_file_registry":
 		(repo_dir / "registry.py").write_text("import auth\nimport mod\n", encoding="utf-8")
 		_git("add", "registry.py")
+	if variant == "cross_file_shared_dependency":
+		_git("add", "shared.py")
 	if variant == "cross_file_chain":
 		(repo_dir / "middleware.py").write_text("import auth\n", encoding="utf-8")
 		(repo_dir / "app.py").write_text("import middleware\nimport mod\n", encoding="utf-8")
@@ -2951,6 +2960,7 @@ def _git_fixture_repo_line_ownership(base_dir: Path, variant: str = "append") ->
 		"head_router",
 		"cross_file_chain",
 		"cross_file_long_chain",
+		"cross_file_shared_dependency",
 	):
 		project_lines = list(base_lines)
 		(repo_dir / "auth.py").write_text(auth_base_text.replace("\treturn require_admin()\n", ""), encoding="utf-8")
@@ -3144,6 +3154,7 @@ def test_security_audit_line_ownership_reference_to_file_with_deletions_blocks()
 		("head_router", "shared_referrer_links_module_with_deletions"),
 		("head_override", "changed_file_references_cited_module"),
 		("cross_file_chain", "transitive_reference_links_module_with_deletions"),
+		("cross_file_shared_dependency", "shared_dependency_links_module_with_deletions"),
 	],
 )
 def test_security_audit_line_ownership_unnamed_module_with_deletions_blocks(variant: str, reason: str) -> None:

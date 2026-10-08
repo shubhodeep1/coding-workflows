@@ -438,7 +438,8 @@ fi
 # references of any length links them through a common referrer
 # (`transitive_reference_links_module_with_deletions`; a search past
 # LINE_OWNERSHIP_REFERENCE_MAX_HOPS / _MAX_STEMS keeps it blocking as
-# `reference_search_limit`).  Module
+# `reference_search_limit`), or the cited file and a module that lost lines
+# both name a third repository module (`shared_dependency_links_module_with_deletions`).  Module
 # references are read at both the base and the head, so a router the project
 # adds is seen too.  Any project addition in the cited file keeps the finding
 # blocking (finding security-pass-distant-override-advisory): within the
@@ -2220,6 +2221,89 @@ def referrer_closure(start_paths: set[str], searched_stems: set[str]) -> tuple[s
 	return closure, "reference_search_limit"
 
 
+tree_paths_cache: dict[str, set[str] | None] = {}
+revision_text_cache: dict[tuple[str, str], str | None] = {}
+LINE_OWNERSHIP_WORD_RE = re.compile(r"[A-Za-z0-9_]+")
+
+
+def tree_paths_at(sha: str) -> set[str] | None:
+	# Every tracked path at `sha` (one `git ls-tree` per commit), or None
+	# when the listing fails.
+	if sha not in tree_paths_cache:
+		try:
+			listed = git(["ls-tree", "-r", "--name-only", "-z", sha], LINE_OWNERSHIP_DIFF_TIMEOUT_SECS)
+		except subprocess.TimeoutExpired:
+			tree_paths_cache[sha] = None
+		else:
+			tree_paths_cache[sha] = (
+				{item for item in listed.stdout.split("\0") if item} if listed.returncode == 0 else None
+			)
+	return tree_paths_cache[sha]
+
+
+def text_at(sha: str, path: str) -> str | None:
+	key = (sha, path)
+	if key not in revision_text_cache:
+		try:
+			shown = git(["show", f"{sha}:{path}"], LINE_OWNERSHIP_DIFF_TIMEOUT_SECS)
+		except subprocess.TimeoutExpired:
+			revision_text_cache[key] = None
+		else:
+			revision_text_cache[key] = shown.stdout if shown.returncode == 0 else None
+	return revision_text_cache[key]
+
+
+def named_stems(text: str, stems: set[str]) -> set[str]:
+	# The subset of `stems` that `text` names as a word.
+	words = set(LINE_OWNERSHIP_WORD_RE.findall(text))
+	found = {stem for stem in stems if stem in words}
+	for stem in stems - found:
+		if not LINE_OWNERSHIP_WORD_RE.fullmatch(stem) and re.search(
+			rf"(?<![A-Za-z0-9_]){re.escape(stem)}(?![A-Za-z0-9_])", text
+		):
+			found.add(stem)
+	return found
+
+
+def shared_dependency_reason(path: str, cited_text: str, guard_paths: set[str]) -> tuple[str, bool]:
+	# Downward hop (finding security-pass-deleted-guard-advisory): the cited
+	# file and a source file that lost lines both name a third repository
+	# module (A -> C <- B).  The deleted control may have guarded state or a
+	# registry in that shared module which the cited operation relies on, and
+	# the referrer search above only walks upward, so it never sees C.
+	# Candidates are non-documentation, non-test modules tracked at base or
+	# head; one-letter module names cannot be searched and are not candidates.
+	base_paths = tree_paths_at(base_sha)
+	head_paths = tree_paths_at(head_sha)
+	if base_paths is None or head_paths is None:
+		return "module_reference_check_failed", True
+	excluded_stems = {module_stem(path)} | {module_stem(guard) for guard in guard_paths}
+	candidate_stems: set[str] = set()
+	for candidate in base_paths | head_paths:
+		if candidate == path or candidate in guard_paths or is_doc_path(candidate) or is_test_path(candidate):
+			continue
+		stem = module_stem(candidate)
+		if stem and stem not in excluded_stems:
+			candidate_stems.add(stem)
+	cited_dependencies = named_stems(cited_text, candidate_stems)
+	if not cited_dependencies:
+		return "", False
+	for guard in sorted(guard_paths):
+		# Base text holds the deleted guard's own imports; head text holds any
+		# the project added.  A side where the file does not exist is skipped.
+		guard_texts: list[str] = []
+		for sha, tree in ((base_sha, base_paths), (head_sha, head_paths)):
+			if guard not in tree:
+				continue
+			guard_text = text_at(sha, guard)
+			if guard_text is None:
+				return "module_reference_check_failed", True
+			guard_texts.append(guard_text)
+		if guard_texts and named_stems("\n".join(guard_texts), cited_dependencies):
+			return "shared_dependency_links_module_with_deletions", False
+	return "", False
+
+
 def finding_strings(value: object) -> list[str]:
 	if isinstance(value, str):
 		return [value]
@@ -2315,6 +2399,9 @@ def deletion_block_reason(finding: dict, path: str, line: int) -> tuple[str, boo
 			return closure_reason, True
 		if cited_closure & guard_closure:
 			return "transitive_reference_links_module_with_deletions", False
+		dependency_reason, dependency_unknown = shared_dependency_reason(path, cited_text, guard_paths)
+		if dependency_reason:
+			return dependency_reason, dependency_unknown
 	return changed_file_reference_reason(path)
 
 blocking = advisory = unknown = 0
