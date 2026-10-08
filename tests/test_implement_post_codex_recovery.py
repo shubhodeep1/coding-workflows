@@ -837,6 +837,7 @@ def _run_fetch_issue_metadata_step(
 			"ISSUE_BODY_FILE": str(issue_body_file),
 			"MOCK_GH_STATE_FILE": str(gh_state_file),
 			"TMPDIR": str(runtime_dir),
+			"RUNTIME_DIR": str(runtime_dir),
 		}
 	)
 
@@ -1307,7 +1308,8 @@ def test_fetch_issue_metadata_does_not_let_issue_text_close_env_values() -> None
 			env={**os.environ, "ISSUE_BODY": issue_body, "ISSUE_TITLE": issue_title,
 				"ISSUE_BODY_FILE": str(body_file), "ISSUE_SCOPE_LOCK_GLOB": "EOF\nUNSAFE_SCOPE=enabled",
 				"ISSUE_NUMBER_JSON": "948", "ISSUE_URL_JSON": "https://github.com/owner/repo/issues/948",
-				"PR_BASE_BRANCH": "main", "GITHUB_ENV": str(github_env_file)},
+				"PR_BASE_BRANCH": "main", "GITHUB_ENV": str(github_env_file),
+				"RUNTIME_DIR": td, "ISSUE_NUMBER": "948", "ISSUE_META_FILE": str(Path(td) / "issue_meta.json")},
 			capture_output=True, text=True, check=False,
 		)
 		assert proc.returncode == 0, proc.stderr
@@ -1327,7 +1329,8 @@ def test_fetch_issue_metadata_does_not_let_issue_text_close_env_values() -> None
 			env={**os.environ, "ISSUE_BODY": issue_body, "ISSUE_TITLE": collision + "\nmore detail",
 				"ISSUE_BODY_FILE": str(body_file), "ISSUE_SCOPE_LOCK_GLOB": "",
 				"ISSUE_NUMBER_JSON": "948", "ISSUE_URL_JSON": "https://github.com/owner/repo/issues/948",
-				"PR_BASE_BRANCH": "main", "GITHUB_ENV": str(blocked_github_env_file)},
+				"PR_BASE_BRANCH": "main", "GITHUB_ENV": str(blocked_github_env_file),
+				"RUNTIME_DIR": td, "ISSUE_NUMBER": "948", "ISSUE_META_FILE": str(Path(td) / "issue_meta.json")},
 			capture_output=True, text=True, check=False,
 		)
 		assert blocked.returncode != 0
@@ -1800,6 +1803,13 @@ def _staged_support_fixture(tmp_path: Path, worktree_helper: str | None) -> tupl
 	support_run_dir = runtime_dir / "staged_support_run" / "scripts"
 	support_run_dir.mkdir(parents=True)
 	shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, support_run_dir / "implement_commit_changes.sh")
+	shutil.copy2(FILES_TOUCHED_SCOPE_GUARD, support_run_dir / "files_touched_scope_guard.py")
+	# This fixture exercises staged-support reconciliation, not grant rejection:
+	# give the trusted issue an exact grant for its intentionally edited helper.
+	grant_file = runtime_dir / "automation_path_grant.json"
+	grant_file.write_text(json.dumps({"schema_version": "automation_path_grant.v1", "issue_number": 4075,
+		"trusted": True, "reason": "granted", "author_login": "maintainer",
+		"author_association": "OWNER", "paths": ["scripts/helper.sh", "scripts/extra.sh"]}), encoding="utf-8")
 	base_dir = runtime_dir / "staged_support_base"
 	(base_dir / "scripts").mkdir(parents=True)
 	(base_dir / "scripts" / "helper.sh").write_text(_STAGED_HELPER_MAIN, encoding="utf-8")
@@ -1822,6 +1832,8 @@ def _staged_support_fixture(tmp_path: Path, worktree_helper: str | None) -> tupl
 			"GITHUB_OUTPUT": str(github_output),
 			"GITHUB_REPOSITORY": "shubhodeep1/coding-workflows",
 			"ISSUE_NUMBER": "4075",
+			"ALLOW_WORKFLOW_EDITS": "true",
+			"AUTOMATION_PATH_GRANT_FILE": str(grant_file),
 			"RUNTIME_DIR": str(runtime_dir),
 			"SCRIPT_REF": "abc123",
 			"SERENA_PROJECT_BOOTSTRAP_HASH": "",
@@ -2417,7 +2429,7 @@ def test_preflight_scope_guard_projects_only_untouched_staged_support_files() ->
 			{
 				"ALLOW_BULK_DELETE": "false",
 				"ALLOW_OUT_OF_SCOPE_FILES": "false",
-				"ALLOW_WORKFLOW_EDITS": "false",
+				"ALLOW_WORKFLOW_EDITS": "true",
 				"ENFORCE_FILES_TOUCHED": "true",
 				"FETCHED_MANIFEST": str(fetched_manifest),
 				"ISSUE_BODY_FILE": str(issue_body),
