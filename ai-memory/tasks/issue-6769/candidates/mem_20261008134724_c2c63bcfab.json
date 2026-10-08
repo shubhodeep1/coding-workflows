@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: B\nQ2: A\nQ3: B\n\nRATIONALE:\nQ1: Under B, the hold applies only to plans whose planned files include automation paths, so ordinary plans keep the current `AUTO_IMPLEMENT_ON_CLEAR_PLAN` behaviour (`.github/workflows/plan.yml:2126-2138`). It also allows both regressions the issue asks for (an ungranted security finding is held, a granted plan is approved), because the grant check runs once the flag is set to `true`. A would stop auto-approval across the whole repo and rule out the \"granted plan\" regression. C would not suppress anything while the flag is off, which goes against \"suppress automatic /approved posts ... while it is off\".\nQ2: `main` already has the automation-path guard that the gate needs to reuse: `is_automation_path` (line 164), `build_automation_grant` (line 177) and `check_automation_paths` (line 212) in `scripts/files_touched_scope_guard.py`, behind exit code 30. \"Backport ... to stable as needed\" is met by the normal promote/release path. A separate backport PR (B) does not fit the one-issue, one-PR pipeline. C targets the branch that lacks the guard, which is the reason #6766 was blocked.\nQ3: The staged-support latch release (`scripts/orchestrate_poll_process.sh:17330`) only runs in this source repository. It re-approves an issue that was already approved and was mid-implementation. That release also passes the implementation-time automation-path guard, which stays in place. Putting a gate on it would add scope the operator step did not ask for.\n\nEXECUTION PLAN (required for any non-letter decision):\n(none; every decision is a letter)\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED (variable): an operator sets it to `true` once required checks pass on the gated change. Until then, plans whose planned files include `.github/`, `.claude/`, `scripts/`, `prompts/` or `workflow-templates/` get no automatic `/approved`. This covers `plan.yml` and both the managed and standalone stall-recovery `auto_approve` paths, and each held plan is logged with an `AI_PHASE_GATE_V1` line naming the protected paths. Plans touching no protected paths behave as they do today.",
+  "fingerprint": "99a773455450988f9032aca6fb661f117dc93d54fbb5c4a5d9a74669b3ad6edf",
+  "lineage": {
+    "issue_number": 6769,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37786089518",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37786089518",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6769"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008134724_c2c63bcfab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6769,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37786089518"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6769",
+  "timestamps": {
+    "created_at": "2026-10-08T13:47:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
