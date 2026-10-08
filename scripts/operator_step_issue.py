@@ -63,9 +63,13 @@ Digest API budget (CLAUDE.md §15). park: at most one identity read (none with
 --trusted-login), one item label add (none with --item-labeled), one digest
 listing, one label ensure and one create only when no digest exists, at most
 one PATCH per attempt and at most MAX_UPSERT_ATTEMPTS verification listings;
-no per-item reads. prune: one digest listing and, only when the digest has
-entries, the open `ai:needs-human` listing (one call per 100 items) plus at
-most one PATCH. The unblock scan's search (30 items, lagging index) and the
+no per-item reads. When the digest write fails after park added the label, one
+label DELETE rolls it back so the item is not skipped as parked without a
+digest line. prune: one digest listing and, only when the digest has
+entries, the open `ai:needs-human` listing (one call per 100 items) plus,
+only when the body changes, one re-listing (a concurrent writer since the
+first read skips the tick) and at most one PATCH. The body PATCH is not
+atomic; the re-listing narrows the window but does not close it. The unblock scan's search (30 items, lagging index) and the
 staged-support sweep's listing (source repo only, PRs dropped) were audited
 and cannot answer the prune question.
 """
@@ -471,6 +475,21 @@ def needs_human_park(
 	if not item_labeled:
 		# Label first: prune keys on the label, so an entry is never listed without it.
 		_gh(["api", "-X", "POST", f"repos/{repo}/issues/{item}/labels", "-f", f"labels[]={NEEDS_HUMAN_LABEL}"])
+	try:
+		return _needs_human_park_digest(repo, item, kind, stop, reason_text, link, login, log_reason, now)
+	except (ApiError, KeyError, ValueError, TypeError):
+		if not item_labeled:
+			# Without a digest line the label would make the scan skip the item
+			# as parked forever; drop the label we added so the next run retries.
+			try:
+				_gh(["api", "-X", "DELETE", f"repos/{repo}/issues/{item}/labels/{NEEDS_HUMAN_LABEL}"])
+			except ApiError:
+				pass
+		raise
+
+
+def _needs_human_park_digest(repo: str, item: int, kind: str, stop: str, reason_text: str, link: str,
+		login: str, log_reason: str, now: str | None) -> dict:
 	stamp = now or _now_iso()
 	newly_parked: bool | None = None
 	wrote = False
@@ -565,6 +584,12 @@ def needs_human_prune(repo: str, trusted_login: str | None = None, now: str | No
 		entries[number] = {"kind": kind, "parked": stamp, "line": render_digest_entry(number, kind, "", "(details in item)", "", stamp)}
 	new_body = render_digest(entries, overflow, dropped)
 	if new_body.replace("\r\n", "\n") != body.replace("\r\n", "\n"):
+		# Narrow the read-modify-write window: if a concurrent park changed the
+		# digest since our read, skip this tick instead of overwriting its entry.
+		current = _list_digest(repo, login)
+		if current is None or str(current.get("body") or "") != body:
+			_needs_human_log("none", "digest", "concurrent_update", "skip")
+			return {"issue": int(digest["number"]), "outcome": "skip", "reason": "concurrent_update", "removed": []}
 		_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{int(digest['number'])}", "-f", f"body={new_body}"])
 	return {"issue": int(digest["number"]), "outcome": "pruned" if removed else "unchanged", "removed": removed,
 		"entries": len(entries), "overflow": len(overflow)}

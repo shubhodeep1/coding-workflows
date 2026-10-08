@@ -60,6 +60,7 @@ import argparse
 import datetime as dt
 import importlib.util
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -247,7 +248,10 @@ def select(
 			continue
 		# Parked in the needs-human digest (plan item 4a, D6): every round is
 		# spent and a person decides; never re-judge it on every tick.
-		if NEEDS_HUMAN_LABEL in labels and _latest_verdict(info.get("comments"), trusted_login) == "close":
+		# The kill switch (NEEDS_HUMAN_DIGEST_ENABLED=false) lets parked items
+		# reach the judge again, whose planner then restores the legacy close.
+		if (os.environ.get("NEEDS_HUMAN_DIGEST_ENABLED", "true").strip().lower() != "false"
+				and NEEDS_HUMAN_LABEL in labels and _latest_verdict(info.get("comments"), trusted_login) == "close"):
 			skip("parked")
 			continue
 		marker = _latest_marker(info.get("comments"), trusted_login)

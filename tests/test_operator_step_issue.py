@@ -33,6 +33,7 @@ class FakeGitHub:
 		self.open_needs_human = open_needs_human or []
 		self.calls: list[list[str]] = []
 		self.labels_added: list[tuple[str, str]] = []
+		self.labels_removed: list[str] = []
 		self.next_number = 900
 
 	def __call__(self, args: list[str], *, allow_existing_label: bool = False) -> str:
@@ -43,6 +44,9 @@ class FakeGitHub:
 			return BOT
 		if args[:2] == ["api", "-X"] and args[2] == "POST" and args[3].endswith("/labels"):
 			self.labels_added.append((args[3], args[-1]))
+			return "{}"
+		if args[:3] == ["api", "-X", "DELETE"]:
+			self.labels_removed.append(args[3])
 			return "{}"
 		if args[:2] == ["api", "-X"] and args[2] == "PATCH":
 			number = int(args[3].rsplit("/", 1)[1])
@@ -190,3 +194,43 @@ def test_needs_human_digest_cli_round_trip(fake: FakeGitHub, capsys: pytest.Capt
 	assert code == 0 and json.loads(captured.out)["newly_parked"] is True
 	assert "NEEDS_HUMAN item=7 kind=pr reason=item_cap outcome=parked" in captured.err
 	assert writer.main(["needs-human", "park", "--repo", "bad", "--item", "7", "--kind", "pr", "--stop", "x"]) == 1
+
+
+def test_needs_human_digest_park_rolls_back_the_label_when_the_digest_write_fails(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch) -> None:
+	calls: list[list[str]] = []
+
+	def failing(args: list[str], *, allow_existing_label: bool = False) -> str:
+		calls.append(args)
+		if args[:3] == ["api", "-X", "POST"] or args[:3] == ["api", "-X", "DELETE"]:
+			return "{}"
+		raise writer.ApiError("listing failed")
+
+	monkeypatch.setattr(writer, "_gh", failing)
+	with pytest.raises(writer.ApiError):
+		_park(7)
+	assert ["api", "-X", "DELETE", f"repos/{REPO}/issues/7/labels/ai:needs-human"] in calls
+	calls.clear()
+	with pytest.raises(writer.ApiError):
+		_park(7, item_labeled=True)
+	assert not any(args[:3] == ["api", "-X", "DELETE"] for args in calls)
+
+
+def test_needs_human_digest_prune_skips_when_the_digest_changed_since_its_read(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch) -> None:
+	entries = {7: {"kind": "issue", "parked": NOW, "line": writer.render_digest_entry(7, "issue", "blocked", "x", "", NOW)}}
+	digest = {"number": 5, "body": writer.render_digest(entries, []), "user": {"login": BOT}}
+	fake.issues.append(digest)
+	fake.open_needs_human = []
+	original = fake.__call__
+
+	def racing(args: list[str], *, allow_existing_label: bool = False) -> str:
+		out = original(args, allow_existing_label=allow_existing_label)
+		if "--slurp" in args:
+			digest["body"] += "- #8 (issue); parked by a concurrent writer\n"
+		return out
+
+	monkeypatch.setattr(writer, "_gh", racing)
+	result = writer.needs_human_prune(REPO, BOT, now=NOW)
+	assert result["outcome"] == "skip" and result["reason"] == "concurrent_update"
+	assert fake.patches() == []

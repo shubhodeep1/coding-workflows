@@ -611,3 +611,10 @@ def test_needs_human_without_a_trusted_close_marker_is_still_judged() -> None:
 		assert result["dispatch"] == [{"item": 1, "kind": "issue"}], comments
 	no_label = _select([_item(1, ["ai:blocked"])], {"1": _details("ai:blocked", 10, [_verdict_comment("close", 8)])})
 	assert no_label["dispatch"] == [{"item": 1, "kind": "issue"}]
+
+
+def test_needs_human_kill_switch_lets_parked_items_reach_the_judge(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setenv("NEEDS_HUMAN_DIGEST_ENABLED", "false")
+	search = [_item(1, ["ai:blocked", "ai:needs-human"])]
+	result = _select(search, {"1": _details("ai:needs-human", 10, [_verdict_comment("close", 8)])})
+	assert result["dispatch"] == [{"item": 1, "kind": "issue"}]
