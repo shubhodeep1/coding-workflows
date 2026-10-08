@@ -201,11 +201,11 @@ if [ "${_resolver_allowlist_count}" -gt 0 ]; then
   sed 's/^/ - /' "${RESOLVER_ALLOWLIST_FILE}" || true
 fi
 
-# Deterministic union-merge for the generated workspace manifest.
+# Deterministic resolution for the generated workspace manifest.
 # .ai/.workspace_source_manifest.txt is a sorted, unique-line file
 # inventory written by workspace_init.sh's materialize_source_tree();
-# every AI PR that adds files appends lines to it, so any two
-# concurrently-open sibling PRs merging into a shared base conflict on
+# older branches may still track it, so two
+# concurrently-open sibling PRs merging into a shared base could conflict on
 # adjacent insertions with near-certainty (observed on PR #3909: three
 # resolver invocations in one day, each with the manifest as the ONLY
 # conflicted path).  For a sorted set-of-lines file the exact 3-way
@@ -216,7 +216,8 @@ fi
 # check: when it was the only conflicted path the merge is committed
 # below without any model invocation, and when other conflicts remain
 # the manifest is already staged in the merge index and drops out of
-# the resolver prompt/allowlist/snapshot naturally.
+# the resolver prompt/allowlist/snapshot naturally. When only one side
+# tracks it, remove it from the index but keep its generated worktree copy.
 #
 # Guards:
 #   - CONFLICT_MANIFEST_UNION_ENABLED (default true) is the kill
@@ -254,6 +255,7 @@ fi
 # so the merged file satisfies the manifest-sorting contract.
 MANIFEST_UNION_PATH=".ai/.workspace_source_manifest.txt"
 _mu_resolved=false
+_mu_defer_commit=false
 _mu_unhandled_reason=""
 _mu_stages=""
 if [ "${_resolver_allowlist_count}" -gt 0 ] \
@@ -262,7 +264,27 @@ if [ "${_resolver_allowlist_count}" -gt 0 ] \
   if [ "${CONFLICT_MANIFEST_UNION_ENABLED:-true}" != "true" ]; then
     _mu_unhandled_reason="disabled"
   else
-    case "${TARGET_BRANCH:-${HEAD_REF:-}}" in
+    _mu_branch_class="${TARGET_BRANCH:-${HEAD_REF:-}}"
+    if [ "${_resolver_allowlist_count}" -eq 1 ]; then
+      # The manifest is the only unmerged path, so no resolver run follows
+      # and there is no working set the integration-sync exclusion below
+      # protects. Resolve it deterministically on orchestrator/project-*
+      # too: the resolver sandbox excludes .ai/, so leaving the manifest
+      # to it only burns INTEGRATION_CONFLICT_LIFETIME_MAX and fails the
+      # project (tracking issue #6664, final PR #6667).
+      # The merge commit is deferred (_mu_defer_commit) until the
+      # fingerprint-violation check below has run against the merged tree:
+      # auto-merged files can still silently revert merged sub-issue intent,
+      # and committing here would skip that check entirely.
+      case "${_mu_branch_class}" in
+        orchestrator/project-*)
+          echo "Manifest union-merge: integration-sync branch, but ${MANIFEST_UNION_PATH} is the only unmerged path; resolving it deterministically (commit deferred until the integration fingerprint check passes)."
+          _mu_branch_class="integration-sync-manifest-only"
+          _mu_defer_commit=true
+          ;;
+      esac
+    fi
+    case "${_mu_branch_class}" in
       orchestrator/project-*)
         echo "Manifest union-merge: skipped on integration-sync branch (fingerprint expansion may widen the resolver working set)."
         _mu_unhandled_reason="integration_sync"
@@ -318,7 +340,9 @@ if [ "${_resolver_allowlist_count}" -gt 0 ] \
     git diff --name-only --diff-filter=U | sort -u > "${RESOLVER_ALLOWLIST_FILE}" || true
     _resolver_allowlist_count="$(wc -l < "${RESOLVER_ALLOWLIST_FILE}" | tr -d '[:space:]')"
     echo "Manifest union-merge: ${_resolver_allowlist_count} unmerged path(s) remain."
-    if [ "${_resolver_allowlist_count}" -eq 0 ]; then
+    if [ "${_resolver_allowlist_count}" -eq 0 ] && [ "${_mu_defer_commit}" = "true" ]; then
+      echo "Manifest union-merge: integration-sync branch; deferring the merge commit until the integration fingerprint check has run on the merged tree."
+    elif [ "${_resolver_allowlist_count}" -eq 0 ]; then
       # The manifest was the only conflict.  Commit the merge NOW,
       # while MERGE_HEAD is still in place, so this is a real
       # two-parent merge commit (same requirement as the resolver's
@@ -380,13 +404,18 @@ fi
 #      this split step (and downstream gates keyed off it)
 #      treat the conflict as no longer present, and exit 0.
 #
+#   (Skipped for the deferred integration-sync manifest-only commit:
+#    the manifest was the only conflict, the merge must stay in
+#    progress for the fingerprint check, and the commit happens
+#    after it — see "Deferred manifest-only commit" below.)
+#
 #   2. _merge_exit != 0: the merge failed for a non-conflict
 #      reason — dirty tree, missing ref, corrupt index, etc.
 #      We must NOT clear MERGE_CONFLICT here: that would let
 #      the workflow silently continue as if the conflict were
 #      resolved.  Fail loudly with an error annotation and
 #      dump diagnostics so the root cause is visible.
-if [ "${_resolver_allowlist_count}" -eq 0 ]; then
+if [ "${_resolver_allowlist_count}" -eq 0 ] && [ "${_mu_defer_commit}" != "true" ]; then
   if [ "${_merge_exit}" -eq 0 ]; then
     echo "::warning::Merge replay produced no unmerged paths (git merge exit=0) — skipping Codex resolver (nothing to resolve)."
     if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
@@ -623,6 +652,7 @@ fi
 # with any plumbing error (exit 2), skip the expansion and let the
 # verifier's downstream hard-fail surface the issue normally.
 FP_VIOLATED_FILES_LIST=""
+_fp_check_ok=false
 if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ] \
    && [ -n "${INTEGRATION_FINGERPRINTS_FILE:-}" ] \
    && [ -f "${INTEGRATION_FINGERPRINTS_FILE}" ] \
@@ -634,6 +664,9 @@ if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ] \
     python3 "${SUPPORT_SCRIPTS_DIR}/verify_integration_fingerprints.py" \
       --list-violated-files "${INTEGRATION_FINGERPRINTS_FILE}" \
       > "${_fp_violated_tmp}" 2>/dev/null || _fp_list_exit=$?
+  if [ "${_fp_list_exit}" -eq 0 ]; then
+    _fp_check_ok=true
+  fi
   # Belt-and-braces: the verifier's --list-violated-files contract
   # guarantees stdout is file paths only (warnings go to stderr), but
   # defensively strip any `::warning::` / `::error::` annotation line
@@ -682,6 +715,31 @@ if [ "${IS_INTEGRATION_SYNC:-false}" = "true" ] \
     echo "::warning::Fingerprint-violation expansion skipped — verifier exited ${_fp_list_exit} in --list-violated-files mode (plumbing failure). Resolver will still see the git-marked conflicted set; the post-codex verifier will surface any real violations."
   fi
   rm -f "${_fp_violated_tmp}"
+fi
+
+# Deferred manifest-only commit on integration-sync branches.
+# The manifest union block above resolved the manifest (the only
+# unmerged path) but left the merge in progress so the fingerprint
+# check could run against the merged tree.  Commit only when that
+# check ran and found no violation; otherwise fail closed exactly as
+# integration-sync branches did before (reason=integration_sync), so
+# an auto-merged file that reverts merged sub-issue intent can never
+# be committed without the verifier seeing it.
+if [ "${_mu_defer_commit}" = "true" ]; then
+  _mu_remaining_unmerged="$(git diff --name-only --diff-filter=U | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+  if [ "${_fp_check_ok}" != "true" ]; then
+    echo "::error::Manifest union-merge: unhandled reason=integration_sync detail=fingerprint_unverified; the integration fingerprint check could not run on the merged tree, refusing to commit the manifest-only resolution of ${MANIFEST_UNION_PATH}."
+    exit 1
+  fi
+  if [ -n "${FP_VIOLATED_FILES_LIST}" ] || [ "${_mu_remaining_unmerged}" -ne 0 ]; then
+    echo "::error::Manifest union-merge: unhandled reason=integration_sync detail=fingerprint_violations; auto-merged files fail merged sub-issue fingerprints (or unmerged paths remain), refusing to commit the manifest-only resolution of ${MANIFEST_UNION_PATH}."
+    exit 1
+  fi
+  git rm -r --cached --ignore-unmatch -- node_modules 2>/dev/null || true
+  git commit -m "[ai-merge-resolve] resolve merge conflicts"
+  echo "CONFLICT_RESOLVED=true" >> "$GITHUB_ENV"
+  echo "Manifest union-merge: integration fingerprints verified on the merged tree — committed deterministic merge resolution (push deferred); Codex resolver will be skipped."
+  exit 0
 fi
 
 CONFLICT_RESOLVER_SEMBLE_QUERY_FILE="${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-${RUNTIME_DIR}/conflict_resolver_semble_query.txt}"

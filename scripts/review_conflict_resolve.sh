@@ -88,7 +88,7 @@ verify_resolver_index_complete_or_fail() {
 # Deterministic-resolution short-circuit: review_conflict_prepare.sh
 # commits the [ai-merge-resolve] merge itself when every unmerged path
 # was deterministically resolvable (currently: the
-# .ai/.workspace_source_manifest.txt union-merge) and signals that by
+# .ai/.workspace_source_manifest.txt union-merge or modify/delete resolution) and signals that by
 # writing CONFLICT_RESOLVED=true to $GITHUB_ENV.  The workflow step
 # gating (MERGE_CONFLICT == 'true') is deliberately unchanged, so this
 # second half still runs — exit before any model invocation.  Running
@@ -2139,7 +2139,7 @@ if [ -s "${RESOLVER_ALLOWLIST_FILE:-}" ] && [ -f "${TARGETED_FILE_CONTEXT_SCRIPT
     --header-text "These are the conflicted files you must resolve. Their current contents (with Git conflict markers) are inlined below so you can edit immediately without re-reading them. Files marked \"would overflow total budget\" must be read with the read tool — never assume their content is in this block."
     --output "${TARGETED_FILES_CONTEXT_FILE}"
   )
-  if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -s "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-}" ]; then
+  if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -s "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-}" ] && [ "$(printf '%s' "${TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
     targeted_file_context_args+=(
       --semble-bin "${SEMBLE_BIN:-}"
       --semble-index "${SEMBLE_INDEX_PATH:-}"
@@ -2161,7 +2161,13 @@ if [ -s "${TARGETED_FILES_CONTEXT_FILE}" ]; then
   printf '\n' >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
   cat "${TARGETED_FILES_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
 fi
-if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] \
+conflict_semble_should_query=false
+if declare -F semble_should_query >/dev/null 2>&1; then
+  semble_should_query && conflict_semble_should_query=true
+elif [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ]; then
+  conflict_semble_should_query=true
+fi
+if [ "${conflict_semble_should_query}" = "true" ] \
    && [ -s "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-}" ] \
    && declare -F semble_query_block >/dev/null 2>&1; then
   semble_query_block \
@@ -3154,8 +3160,8 @@ if [ -n "$(git status --porcelain)" ]; then
         _rs_script_excludes+=(":!scripts/${_ign_entry}")
       done < scripts/.gitignore
     fi
-    git add -u -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
-    git ls-files --others --exclude-standard -z -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+    git add -u -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts' ':!.ai/.workspace_source_manifest.txt'
+    git ls-files --others --exclude-standard -z -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' ':!.ai/.workspace_source_manifest.txt' | xargs -0 -r git add --
   fi
   echo "Staged files before commit:"
   STAGED_FILES="$(git diff --cached --name-only || true)"

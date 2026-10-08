@@ -465,6 +465,15 @@ def test_overflow_marker_fallback_does_not_read_file_bytes() -> None:
 		assert calls == []
 
 
+def test_default_overflow_arguments_leave_a_read_tool_marker() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "big.py").write_text("value = 123\n" * 100, encoding="utf-8")
+		context = emit_context(["big.py"], root, max_bytes=60)
+		assert "would overflow total budget" in context
+		assert "chunk-retrieved via semble" not in context
+
+
 def test_overflow_read_fallback_counts_rendered_bytes_in_budget() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)

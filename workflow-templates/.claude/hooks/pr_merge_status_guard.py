@@ -129,11 +129,46 @@ _SHELL_PUNCTUATION_CHARS = ";&|\n<>"
 _FD_PREFIX_REDIRECT_OPERATORS = frozenset({"<", ">", ">>", ">|", "<>", ">&", "<&", "<<", "<<<"})
 _SHELL_CONTROL_PREFIXES = frozenset({"if", "then", "elif", "else", "do", "while", "until", "{", "(", "!"})
 _SHELL_WORD_DELIMITERS = frozenset(" \t\r" + _SHELL_PUNCTUATION_CHARS)
+# Commands that run a heredoc body as shell text; such a body stays visible to
+# the git parser. Any other heredoc body (cat, python3, `git commit -F -`) is
+# data and is removed before parsing, so prose such as `it's` cannot make the
+# whole command unparseable.
+_SHELL_HEREDOC_READERS = frozenset(
+	{
+		"bash", "sh", "zsh", "dash", "ksh", "fish", "eval", "source", ".", "ssh", "su", "sudo", "doas",
+		"xargs", "parallel", "script",
+	}
+)
+# Wrappers such as `env`, `timeout` or `nohup` are not listed: they run the
+# next word, so `env bash <<EOF` still matches `bash`, while `env cat <<EOF`
+# stays data.
+_SHELL_HEREDOC_READER_RE = re.compile(
+	r"(?:^|[\s;&|(`'\"])(?:\S*/)?(?:" + "|".join(re.escape(word) for word in sorted(_SHELL_HEREDOC_READERS)) + r")(?:[\s;&|)`'\"]|$)"
+)
+_HEREDOC_OPERATOR_RE = re.compile(r"<<(-?)[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
+# Characters that may end a heredoc delimiter word; anything else (`<<EOF-1`,
+# `<<E"OF"`) means the delimiter was not fully read.
+_HEREDOC_DELIMITER_END = frozenset(" \t;|&<>()`")
+# Shell wrappers whose script runs Git out of the hook's sight (security
+# finding merged-pr-guard-misses-wrapped-git). A literal `-c` / `eval` script
+# or `$(...)` / backtick / `<(...)` body is parsed and gets the normal check;
+# text that cannot be read safely and could run a Git write asks instead.
+# Prefix wrappers (`sudo`, `timeout`, `xargs`) and `... | bash` stay unparsed.
+_SHELL_WRAPPER_INTERPRETERS = frozenset({"bash", "sh", "zsh", "dash"})
+_MAX_SHELL_WRAPPER_DEPTH = 3
+_MAX_SHELL_SCAN_NESTING = 32
+_UNPARSED_SHELL_WRAPPER = "unparsed shell wrapper"
 
 _API_WRITE_METHODS = frozenset({"PUT", "POST", "PATCH"})
 _API_WRITE_URL_PREFIXES = (
 	"https://api.digitalocean.com/",
 	"https://api.cloudflare.com/",
+)
+_API_WRITE_ALWAYS_CONFIRM_URL_PREFIXES = ("https://api.digitalocean.com/",)
+_CF_SESSION_CREDENTIAL_ENV_VARS = ("FUNTOKEN_IO_CF", "FT_GAMES_CF")
+_CF_ACCOUNT_ID_RE = re.compile(r"[0-9a-fA-F]{32}")
+_CF_WORKER_SCRIPT_URL_RE = re.compile(
+	r"https://api\.cloudflare\.com/client/v4/accounts/([0-9a-fA-F]{32})/workers/scripts/([A-Za-z0-9_-]+)((?:/[A-Za-z0-9_-]+)*)"
 )
 # `-q` must remain curl's first option so ~/.curlrc cannot add hidden transfers.
 _API_WRITE_COMMAND_PREFIXES = tuple(
@@ -197,6 +232,12 @@ class _GitInvocation(NamedTuple):
 	env_wrapped: bool = False
 	env_directory_unresolved: bool = False
 	explicit_git_directory: bool = False
+	# True when the directory is unknown because of an explicit override the
+	# hook could not resolve (an appended GIT_DIR+=/GIT_WORK_TREE+=, an
+	# unresolvable -C / env -C, GIT_DIR or --git-dir path), as opposed to shell
+	# control flow or an unknown cd. Such a write never falls back to the
+	# session checkout: the override names another repository.
+	explicit_directory_unresolved: bool = False
 
 
 class _GuardTarget(NamedTuple):
@@ -281,7 +322,7 @@ def _shell_segments_with_redirects(command: str) -> list[tuple[str, list[str], b
 	for raw_token in lexer:
 		if raw_token and set(raw_token) <= set(_SHELL_PUNCTUATION_CHARS):
 			part_end = lexer.instream.tell() - len(raw_token)
-			for part in re.findall(r"&>>|&>|&&|\|\||>>|>\||>&|<&|<<<|<<|<>|[;<>&|\n]", raw_token):
+			for part in re.findall(r"&>>|&>|&&|\|\||\|&|>>|>\||>&|<&|<<<|<<|<>|[;<>&|\n]", raw_token):
 				part_end += len(part)
 				tokens.append((part, part_end))
 		else:
@@ -338,6 +379,132 @@ def _shell_segments_with_operators(command: str) -> list[tuple[str, list[str]]]:
 	return [(operator, tokens) for operator, tokens, _ in _shell_segments_with_redirects(command)]
 
 
+def _strip_data_heredoc_bodies(command: str) -> str:
+	"""Remove heredoc bodies that Bash passes on as data, not as shell text.
+
+	The `<<WORD` operator stays, so the command keeps its structure; the body
+	and its closing delimiter line are dropped. A body stays when the command
+	before `<<` is a shell reader (`bash`, `eval`, `ssh`, ...) or when its
+	delimiter is unquoted and the body holds a `$(...)` or backtick
+	substitution, because Bash runs that text and git commands in it must
+	still be checked. Quote, `$(...)`, `${...}` and arithmetic context is
+	tracked so a `<<` inside quotes is not read as a heredoc. A shell reader
+	after the operator on the same line (`cat <<EOF | bash`) also keeps the
+	body. A delimiter this parser cannot read in full, or a heredoc line
+	continued with `\\`, returns the command unchanged.
+	"""
+	lines = command.split("\n")
+	output: list[str] = []
+	pending: list[tuple[str, bool, bool, str, str]] = []
+	# Each context is [mode, open quote, nesting depth]; a nested $(...) has
+	# its own quoting rules, even inside "...".
+	contexts: list[list] = [["shell", None, 0]]
+	index = 0
+	while index < len(lines):
+		line = lines[index]
+		output.append(line)
+		position = 0
+		while position < len(line):
+			character = line[position]
+			mode, quote, depth = contexts[-1]
+			if character == "\\" and quote != "'":
+				position += 2
+				continue
+			if quote == "'":
+				if character == "'":
+					contexts[-1][1] = None
+				position += 1
+				continue
+			if character == quote:
+				contexts[-1][1] = None
+				position += 1
+				continue
+			if line.startswith("$((", position):
+				contexts.append(["arithmetic", None, 2])
+				position += 3
+				continue
+			if line.startswith("$(", position):
+				contexts.append(["shell", None, 0])
+				position += 2
+				continue
+			if line.startswith("${", position):
+				contexts.append(["parameter", None, 1])
+				position += 2
+				continue
+			if mode == "parameter":
+				if character == "{":
+					contexts[-1][2] += 1
+				elif character == "}":
+					contexts[-1][2] -= 1
+					if contexts[-1][2] == 0:
+						contexts.pop()
+				position += 1
+				continue
+			if mode == "arithmetic":
+				if character == "(":
+					contexts[-1][2] += 1
+				elif character == ")":
+					contexts[-1][2] -= 1
+					if contexts[-1][2] == 0:
+						contexts.pop()
+				position += 1
+				continue
+			if character == "'" and quote is None:
+				contexts[-1][1] = "'"
+			elif character == '"':
+				contexts[-1][1] = '"' if quote is None else None
+			elif quote is None:
+				if character == "`":
+					if mode == "backtick":
+						contexts.pop()
+					else:
+						contexts.append(["backtick", None, 0])
+				elif mode == "shell" and len(contexts) > 1 and character == ")":
+					if depth == 0:
+						contexts.pop()
+					else:
+						contexts[-1][2] -= 1
+				elif mode == "shell" and len(contexts) > 1 and character == "(":
+					contexts[-1][2] += 1
+				elif line.startswith("((", position) and (position == 0 or line[position - 1] in " \t;|&("):
+					contexts.append(["arithmetic", None, 2])
+					position += 2
+					continue
+				elif character == "#" and (position == 0 or line[position - 1] in " \t;|&()<>"):
+					break
+				elif line.startswith("<<", position) and not line.startswith("<<<", position) and (position == 0 or line[position - 1] != "<"):
+					match = _HEREDOC_OPERATOR_RE.match(line, position)
+					# A partly read delimiter (`<<EOF-1`, `<<\\EOF`) cannot be matched
+					# to its closing line, so keep every line visible.
+					if match is None or (match.end() < len(line) and line[match.end()] not in _HEREDOC_DELIMITER_END):
+						return command
+					pending.append((match.group(3), match.group(1) == "-", bool(match.group(2)), line[:position], line[match.end():]))
+					position = match.end()
+					continue
+			position += 1
+		index += 1
+		while pending:
+			delimiter, strip_tabs, quoted, prefix, suffix = pending.pop(0)
+			if suffix.rstrip().endswith("\\"):
+				return command
+			body: list[str] = []
+			closing: list[str] = []
+			while index < len(lines):
+				body_line = lines[index]
+				index += 1
+				if (body_line.lstrip("\t") if strip_tabs else body_line) == delimiter:
+					closing.append(body_line)
+					break
+				body.append(body_line)
+			# The rest of the line may pipe the body on (`cat <<EOF | bash`).
+			runs_as_shell = bool(_SHELL_HEREDOC_READER_RE.search(prefix) or _SHELL_HEREDOC_READER_RE.search(suffix)) or suffix.rstrip().endswith("|") or (
+				not quoted and any("$(" in body_line or "`" in body_line for body_line in body)
+			)
+			if runs_as_shell:
+				output.extend(body + closing)
+	return "\n".join(output)
+
+
 def _command_after_control_prefix(tokens: list[str]) -> tuple[list[str], bool]:
 	"""Expose a command behind shell control words without trusting its cwd."""
 	control_prefix_seen = False
@@ -355,6 +522,202 @@ def _command_after_control_prefix(tokens: list[str]) -> tuple[list[str], bool]:
 			break
 		control_prefix_seen = True
 	return tokens, control_prefix_seen
+
+
+class _ShellScan(NamedTuple):
+	end: int
+	bodies: list[str]
+	heredoc_spans: list[tuple[int, int]]
+	unreadable: bool
+
+
+def _mentions_git_write(text: str) -> bool:
+	"""Whether text could name a Git commit or push, also with quotes removed."""
+	for candidate in (text, re.sub(r"[\"'\\]", "", text)):
+		if re.search(r"\bgit\b", candidate) and re.search(r"\b(?:push|commit)\b", candidate):
+			return True
+	return False
+
+
+def _scan_shell_text(text: str, position: int = 0, closing: str = "", nesting: int = 0) -> _ShellScan:
+	"""Find substitution bodies and heredoc bodies in shell text, without running it.
+
+	Collects `$(...)`, backtick and unquoted `<(...)` / `>(...)` bodies, skips
+	`$((` arithmetic, and records heredoc body spans (terminator line included).
+	`closing` is ")" inside a substitution, so the scan stops at its matching
+	parenthesis. `unreadable` reports text that cannot be split reliably: an
+	unterminated body, quote or heredoc, a nested backtick, nesting deeper than
+	_MAX_SHELL_SCAN_NESTING, or an unquoted heredoc whose expanded body could
+	run a Git write.
+	"""
+	bodies: list[str] = []
+	heredoc_spans: list[tuple[int, int]] = []
+	if nesting > _MAX_SHELL_SCAN_NESTING:
+		return _ShellScan(position, bodies, heredoc_spans, True)
+	pending_heredocs: list[tuple[str, bool, bool]] = []
+	single_quoted = False
+	double_quoted = False
+	parenthesis_depth = 0
+	length = len(text)
+	while position < length:
+		character = text[position]
+		if single_quoted:
+			single_quoted = character != "'"
+			position += 1
+			continue
+		if character == "\\":
+			position += 2
+			continue
+		if character == "\n" and pending_heredocs and not double_quoted:
+			position += 1
+			for delimiter, strip_tabs, quoted in pending_heredocs:
+				body_start = position
+				while True:
+					if position >= length:
+						return _ShellScan(position, bodies, heredoc_spans, True)
+					line_end = text.find("\n", position)
+					next_position = length if line_end == -1 else line_end + 1
+					line = text[position:next_position].rstrip("\n")
+					if (line.lstrip("\t") if strip_tabs else line) == delimiter:
+						break
+					position = next_position
+				heredoc_body = text[body_start:position]
+				if not quoted and ("$(" in heredoc_body or "`" in heredoc_body) and _mentions_git_write(heredoc_body):
+					return _ShellScan(position, bodies, heredoc_spans, True)
+				heredoc_spans.append((body_start, next_position))
+				position = next_position
+			pending_heredocs = []
+			continue
+		if character == "'" and not double_quoted:
+			single_quoted = True
+			position += 1
+			continue
+		if character == '"':
+			double_quoted = not double_quoted
+			position += 1
+			continue
+		if character == "`":
+			cursor = position + 1
+			while cursor < length and text[cursor] != "`":
+				if text[cursor] == "\\":
+					if text.startswith("`", cursor + 1):
+						return _ShellScan(cursor, bodies, heredoc_spans, True)
+					cursor += 2
+					continue
+				cursor += 1
+			if cursor >= length:
+				return _ShellScan(cursor, bodies, heredoc_spans, True)
+			bodies.append(text[position + 1:cursor])
+			position = cursor + 1
+			continue
+		if text.startswith("$((", position):
+			# Arithmetic: its parentheses are counted below; a nested `$(` is still found.
+			position += 1
+			continue
+		if text.startswith("$(", position) or (not double_quoted and text.startswith(("<(", ">("), position)):
+			inner = _scan_shell_text(text, position + 2, ")", nesting + 1)
+			if inner.unreadable:
+				return _ShellScan(inner.end, bodies, heredoc_spans, True)
+			bodies.append(text[position + 2:inner.end])
+			heredoc_spans.extend(inner.heredoc_spans)
+			position = inner.end + 1
+			continue
+		if not double_quoted and text.startswith("<<", position) and not text.startswith("<<<", position):
+			cursor = position + 2
+			strip_tabs = text.startswith("-", cursor)
+			cursor += strip_tabs
+			while cursor < length and text[cursor] in " \t":
+				cursor += 1
+			word_start = cursor
+			while cursor < length and text[cursor] not in " \t\n;&|<>()":
+				if text[cursor] in "'\"":
+					quote_end = text.find(text[cursor], cursor + 1)
+					if quote_end == -1:
+						return _ShellScan(cursor, bodies, heredoc_spans, True)
+					cursor = quote_end + 1
+				else:
+					cursor += 2 if text[cursor] == "\\" else 1
+			word = text[word_start:cursor]
+			delimiter = word.replace("\\", "").replace("'", "").replace('"', "")
+			if not delimiter:
+				return _ShellScan(cursor, bodies, heredoc_spans, True)
+			pending_heredocs.append((delimiter, strip_tabs, any(char in word for char in "'\"\\")))
+			position = cursor
+			continue
+		if not double_quoted and character == "(":
+			parenthesis_depth += 1
+		elif not double_quoted and character == ")":
+			if parenthesis_depth == 0 and closing:
+				return _ShellScan(position, bodies, heredoc_spans, bool(pending_heredocs))
+			parenthesis_depth = max(parenthesis_depth - 1, 0)
+		position += 1
+	return _ShellScan(
+		position, bodies, heredoc_spans,
+		bool(closing) or single_quoted or double_quoted or bool(pending_heredocs),
+	)
+
+
+def _wrapped_shell_text(command: str, depth: int) -> tuple[str | None, list[str], bool]:
+	"""Prepare shell text for both Git walkers at a given wrapper depth.
+
+	Returns the text to split into segments (None when it must not be split),
+	the substitution bodies to inspect at depth + 1, and whether the text must
+	be treated as an unparsed Git write. Heredoc bodies stay in the text at
+	every depth: the segment parser drops data bodies itself
+	(_strip_data_heredoc_bodies) and keeps the ones a shell reads, so a nested
+	`bash <<'EOF' ... git push ... EOF` is checked like the top level.
+	"""
+	if depth > _MAX_SHELL_WRAPPER_DEPTH:
+		return None, [], _mentions_git_write(command) or "$" in command or "`" in command
+	scan = _scan_shell_text(command)
+	if scan.unreadable:
+		return (command if depth == 0 else None), [], _mentions_git_write(command)
+	return command, scan.bodies, False
+
+
+def _shell_interpreter_script(tokens: list[str], index: int) -> tuple[str | None, bool]:
+	"""Return (script, recognised) for `bash|sh|zsh|dash ... -c <script>`.
+
+	`recognised` with no script means a `-c` invocation whose script is missing.
+	An interpreter without `-c` (a script file or stdin) is not recognised.
+	"""
+	if index >= len(tokens) or os.path.basename(tokens[index]) not in _SHELL_WRAPPER_INTERPRETERS:
+		return None, False
+	position = index + 1
+	command_mode = False
+	while position < len(tokens):
+		word = tokens[position]
+		if word == "--":
+			position += 1
+			break
+		if word in ("--rcfile", "--init-file"):
+			position += 2
+		elif word.startswith("--"):
+			position += 1
+		elif re.fullmatch(r"[-+][A-Za-z]+", word):
+			command_mode = command_mode or "c" in word
+			position += 1 + word.count("o") + word.count("O")
+		else:
+			break
+	if not command_mode:
+		return None, False
+	return (tokens[position] if position < len(tokens) else None), True
+
+
+def _segment_wrapper_script(tokens: list[str], index: int) -> tuple[str | None, bool]:
+	"""Return (inner script, unparsed) for an `eval` or shell `-c` segment."""
+	if index >= len(tokens):
+		return None, False
+	if tokens[index] == "eval":
+		return " ".join(tokens[index + 1:]), False
+	script, recognised = _shell_interpreter_script(tokens, index)
+	if recognised and script is None:
+		return None, _mentions_git_write(" ".join(tokens))
+	return script, False
+
+
+def _unparsed_shell_wrapper_invocation(checkout: str) -> _GitInvocation:
+	return _GitInvocation(checkout, {}, "push", [], _UNPARSED_SHELL_WRAPPER, True)
 
 
 @contextmanager
@@ -426,34 +789,68 @@ def _env_wrapped_git_index(tokens: list[str], index: int) -> int:
 	return index
 
 
-def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation]:
-	try:
-		segments = _shell_segments_with_redirects(command)
-	except ValueError:
-		return []
-	working_directory: str | None = checkout
-	conditional_cd = False
-	unresolved_directory_change = False
+def _guarded_git_invocations(
+	command: str, checkout: str, *, _depth: int = 0, _inherited_unresolved: bool = False
+) -> list[_GitInvocation]:
+	segment_text, wrapped_bodies, wrapped_unparsed = _wrapped_shell_text(command, _depth)
 	invocations: list[_GitInvocation] = []
-	for operator, tokens, redirect_may_fail in segments:
+	if wrapped_unparsed:
+		invocations.append(_unparsed_shell_wrapper_invocation(checkout))
+	if segment_text is None:
+		return invocations
+	# The wrapper scan above reads the raw text so quoted heredocs stay intact;
+	# their data bodies are dropped only for the segment parser (see
+	# _strip_data_heredoc_bodies), so prose such as `it's` cannot break it.
+	try:
+		segments = _shell_segments_with_redirects(_strip_data_heredoc_bodies(segment_text))
+	except ValueError:
+		if _depth and _mentions_git_write(command):
+			return [_unparsed_shell_wrapper_invocation(checkout)]
+		return invocations if _depth else []
+	# An inner script started from an unknown directory resolves nothing itself.
+	working_directory: str | None = None if _inherited_unresolved else checkout
+	conditional_cd = False
+	unresolved_directory_change = _inherited_unresolved
+	# A cd/pushd/popd earlier in the current `&&`/`||` list: a later `||`
+	# branch may run with or without that directory change.
+	list_changed_directory = False
+	directory_change_seen = False
+	for segment_position, (operator, tokens, redirect_may_fail) in enumerate(segments):
 		tokens, control_prefix = _command_after_control_prefix(tokens)
 		if control_prefix:
 			working_directory = None
+		if operator in ("", ";", "\n", "&"):
+			list_changed_directory = False
 		if not tokens:
 			continue
+		next_operator = segments[segment_position + 1][0] if segment_position + 1 < len(segments) else ""
+		# Each pipeline element runs in its own subshell: a directory change
+		# inside one ends with it, and every element starts where the list is.
+		# `|&` pipes stderr too and is a pipeline separator like `|`.
+		in_pipeline = operator in ("|", "|&") or next_operator in ("|", "|&")
 		if operator == "||" and tokens[0] == "exit" and working_directory is not None and not redirect_may_fail:
 			# If this exit runs the following git cannot; otherwise cd succeeded.
 			# A failed builtin redirect means exit did not run (#6289).
 			conditional_cd = False
 			continue
-		if operator not in ("", "&&") and conditional_cd:
+		if operator not in ("", "&&", "|", "|&") and conditional_cd:
 			working_directory = None
 			unresolved_directory_change = True
 			conditional_cd = False
-		if operator not in ("", "&&", ";", "\n"):
+		# `&` backgrounds the whole previous list. A `||` branch is unknown only
+		# after a directory change in its own list, or when it is itself a cd.
+		if operator == "&" or (operator == "||" and (list_changed_directory or (tokens[0] == "cd" and not in_pipeline))):
 			working_directory = None
+		if in_pipeline and tokens[0] in ("cd", "pushd", "popd"):
+			continue
+		if tokens[0] in ("cd", "pushd", "popd"):
+			list_changed_directory = True
 		# A cd after a condition may not have happened when a later list starts.
+		# A wrapped script (`bash -c`, `eval`) starts where this segment starts.
+		segment_start_directory = working_directory
+		segment_start_unresolved = unresolved_directory_change
 		if tokens[0] == "cd":
+			directory_change_seen = True
 			operand = tokens[1:]
 			if operand[:1] == ["--"]:
 				operand = operand[1:]
@@ -469,6 +866,7 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 		if tokens[0] in ("pushd", "popd", "eval", "source", ".", "(", "{"):
 			working_directory = None
 			unresolved_directory_change = True
+			directory_change_seen = True
 		index = 0
 		environment: dict[str, str] = {}
 		config_override = False
@@ -519,11 +917,45 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 					env_name, env_word_value = word.split("=", 1)
 					if env_name in ("GIT_DIR", "GIT_WORK_TREE"):
 						environment[env_name] = env_word_value
+		if _depth and index < len(tokens) and ("$" in tokens[index] or "`" in tokens[index]):
+			# An expansion in command position inside a wrapper cannot be read.
+			invocations.append(_unparsed_shell_wrapper_invocation(checkout))
+			continue
+		wrapped_script, wrapper_unparsed = _segment_wrapper_script(tokens, index)
+		if wrapper_unparsed:
+			invocations.append(_unparsed_shell_wrapper_invocation(checkout))
+			continue
+		if wrapped_script is not None:
+			wrapper_directory = env_cwd if index != env_index else segment_start_directory
+			wrapper_unresolved = wrapper_directory is None or segment_start_unresolved
+			# GIT_DIR / GIT_WORK_TREE given to the wrapper reach its Git commands.
+			wrapper_git_location = any(
+				re.match(r"^(?:GIT_DIR|GIT_WORK_TREE)\+?=", word) for word in tokens[:index]
+			)
+			for inner_invocation in _guarded_git_invocations(
+				wrapped_script,
+				checkout if wrapper_unresolved or wrapper_directory is None else wrapper_directory,
+				_depth=_depth + 1,
+				_inherited_unresolved=wrapper_unresolved,
+			):
+				if wrapper_git_location:
+					inner_invocation = inner_invocation._replace(
+						cwd=checkout, environment={}, explicit_git_directory=True,
+						warning=inner_invocation.warning
+						or "could not resolve git command directory; checking the session checkout instead",
+					)
+				if config_override:
+					inner_invocation = inner_invocation._replace(config_override=True)
+				invocations.append(inner_invocation)
+			continue
 		if index >= len(tokens) or (tokens[index] != "git" and not tokens[index].endswith("/git")):
 			continue
 		index += 1
 		git_cwd = env_cwd
 		uncertain = git_cwd is None or appended_git_selector
+		# Git applies an appended GIT_DIR+=/GIT_WORK_TREE+= value, but the hook
+		# cannot know the prior value, so the selected repository is unknown.
+		explicit_directory_unresolved |= appended_git_selector
 		while index < len(tokens) and tokens[index].startswith("-"):
 			option = tokens[index]
 			if option.startswith(("-C", "--git-dir", "--work-tree")):
@@ -549,8 +981,9 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 					# Git applies an absolute -C on its own, even after an unknown cd.
 					git_cwd = (_literal_guard_path(value, git_cwd or checkout)
 						if git_cwd or os.path.isabs(value) else None)
-					# An appended GIT_DIR+=/GIT_WORK_TREE+= value is never applied, so
-					# the directory stays unresolved whatever -C selects.
+					# Git applies an appended GIT_DIR+=/GIT_WORK_TREE+= value on top
+					# of the shell's, which the hook cannot read, so the directory
+					# stays unresolved whatever -C selects.
 					uncertain = git_cwd is None or appended_git_selector
 					explicit_directory_unresolved |= uncertain
 				elif option.startswith("--git-dir"):
@@ -573,7 +1006,9 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			checkout if uncertain else git_cwd or checkout,
 			{} if uncertain else environment,
 			tokens[index], tokens[index + 1:],
-			("could not resolve git command directory (env -C/--chdir); cannot check checkout PR history"
+			("could not resolve explicit git push directory; cannot check checkout PR history"
+				if (explicit_directory_unresolved or (env_chdir_seen and env_cwd is None)) and tokens[index] == "push" else
+			 "could not resolve git command directory (env -C/--chdir); cannot check checkout PR history"
 				if env_chdir_seen and env_cwd is None else
 			 "could not resolve explicit git command directory"
 				if explicit_directory_unresolved and tokens[index] == "commit" else
@@ -582,6 +1017,14 @@ def _guarded_git_invocations(command: str, checkout: str) -> list[_GitInvocation
 			env_wrapped,
 			env_directory_unresolved,
 			explicit_git_directory,
+			explicit_directory_unresolved or (env_chdir_seen and env_cwd is None),
+		))
+	# Substitution bodies run where their segment runs; after any directory
+	# change that position is unknown, so they are checked as unresolved.
+	bodies_unresolved = _inherited_unresolved or unresolved_directory_change or directory_change_seen
+	for body in wrapped_bodies:
+		invocations.extend(_guarded_git_invocations(
+			body, checkout, _depth=_depth + 1, _inherited_unresolved=bodies_unresolved,
 		))
 	return invocations
 
@@ -771,32 +1214,63 @@ def _contains_unquoted_shell_expansion(command: str) -> bool:
 	return False
 
 
-def _api_write_requires_confirmation(command: str) -> bool:
-	"""Return whether an allowlisted API write uses non-canonical curl options.
+def _cloudflare_session_account_ids() -> frozenset[str]:
+	"""Read only the account IDs from well-formed session credentials."""
+	accounts: set[str] = set()
+	for name in _CF_SESSION_CREDENTIAL_ENV_VARS:
+		account, separator, token = os.environ.get(name, "").partition(":")
+		if separator and token and _CF_ACCOUNT_ID_RE.fullmatch(account):
+			accounts.add(account.lower())
+	return frozenset(accounts)
+
+
+def _api_write_destination_reason(url: str) -> str | None:
+	if url.startswith(_API_WRITE_ALWAYS_CONFIRM_URL_PREFIXES):
+		return "DigitalOcean API writes always need confirmation (CLAUDE.md §22.B)."
+	if url.startswith("https://api.cloudflare.com/"):
+		match = _CF_WORKER_SCRIPT_URL_RE.fullmatch(url)
+		if match is None:
+			return (
+				"Only account-scoped Worker script writes (accounts/<id>/workers/scripts/<name>) "
+				"skip confirmation; other Cloudflare writes (DNS, zone, routes, account settings) "
+				"need approval (CLAUDE.md §24.D)."
+			)
+		if match.group(1).lower() not in _cloudflare_session_account_ids():
+			return "Cloudflare account in the URL does not match FUNTOKEN_IO_CF or FT_GAMES_CF (or neither is set)."
+		if any("secret" in segment.lower() for segment in (match.group(2) + match.group(3)).split("/")):
+			return "Worker secret writes need approval (CLAUDE.md §24.D)."
+	return None
+
+
+def _api_write_confirmation_reason(command: str) -> str | None:
+	"""Return the reason an API write needs a harness prompt, if any.
 
 	The settings rules are necessarily prefix matches. Keep their silent path
-	limited to one explicit method and destination followed only by headers and
-	request-body options; anything capable of changing curl's method, URL, or
-	transfer list must go through the normal harness prompt.
+	limited to a Worker script in a session account and canonical curl options.
+	Request bodies are not inspected: an upload can still declare secret bindings.
 	"""
+	noncanonical_reason = "Non-canonical API curl options can override the allowlisted HTTP method or destination."
 	try:
 		segments = _shell_segments(command)
 	except ValueError:
-		return command.lstrip().startswith(_API_WRITE_COMMAND_PREFIXES)
+		return noncanonical_reason if command.lstrip().startswith(_API_WRITE_COMMAND_PREFIXES) else None
 
 	if not segments:
-		return False
+		return None
 	tokens = segments[0]
 	if len(tokens) < 6 or tokens[:4] != ["curl", "-q", "-sS", "-X"]:
-		return False
+		return None
 	if tokens[4] not in _API_WRITE_METHODS:
-		return False
+		return None
 	if not any(tokens[5].startswith(prefix) for prefix in _API_WRITE_URL_PREFIXES):
-		return False
+		return None
+	destination_reason = _api_write_destination_reason(tokens[5])
+	if destination_reason is not None:
+		return destination_reason
 	# The URL token is already host-gated above. Prompt only for expansions that
 	# can synthesize shell words before curl sees the approved API URL shape.
 	if any(marker in tokens[5] for marker in ("$", "{", "[", "*", "?")):
-		return True
+		return noncanonical_reason
 	# Scan only following option text so literal query/path URL characters are
 	# not mistaken for value expansions.
 	api_write_raw_parts = command.lstrip().split(None, 6)
@@ -808,14 +1282,14 @@ def _api_write_requires_confirmation(command: str) -> bool:
 			and _contains_unquoted_shell_expansion(api_write_raw_parts[6])
 		)
 	):
-		return True
+		return noncanonical_reason
 
 	index = 6
 	while index < len(tokens):
 		token = tokens[index]
 		if token in _API_WRITE_VALUE_OPTIONS:
 			if index + 1 >= len(tokens):
-				return True
+				return noncanonical_reason
 			index += 2
 			continue
 		if any(
@@ -831,11 +1305,23 @@ def _api_write_requires_confirmation(command: str) -> bool:
 		):
 			index += 1
 			continue
-		return True
-	return False
+		return noncanonical_reason
+	return None
 
 
-def git_subcommands(command: str) -> set[str]:
+def _api_write_requires_confirmation(command: str) -> bool:
+	"""Return whether an allowlisted API write uses non-canonical curl options.
+
+	The settings rules are necessarily prefix matches. Keep their silent path
+	limited to one explicit method and destination followed only by headers and
+	request-body options; anything capable of changing curl's method, URL, or
+	transfer list must go through the normal harness prompt. The destination
+	policy also asks for writes outside session-owned Worker scripts.
+	"""
+	return _api_write_confirmation_reason(command) is not None
+
+
+def git_subcommands(command: str, *, _depth: int = 0) -> set[str]:
 	"""Return the set of git subcommands invoked by a shell command string.
 
 	Only counts `git` when it is the first real token of a shell segment after
@@ -844,13 +1330,29 @@ def git_subcommands(command: str) -> set[str]:
 	`echo "git commit"` from tripping the guard, at the cost of missing
 	wrapper-prefixed invocations like `sudo git commit` — an acceptable trade,
 	since a false block is more disruptive than a missed check on a rare form.
+
+	Shell `-c` scripts (`bash`, `sh`, `zsh`, `dash`), `eval` arguments and
+	`$(...)` / backtick / `<(...)` bodies are parsed the same way, up to
+	_MAX_SHELL_WRAPPER_DEPTH levels. Wrapped text that cannot be read and could
+	run a Git write reports `push`, so the caller asks for confirmation; this
+	must stay in step with `_guarded_git_invocations`.
 	"""
 	found: set[str] = set()
+	segment_text, wrapped_bodies, wrapped_unparsed = _wrapped_shell_text(command, _depth)
+	if wrapped_unparsed:
+		found.add("push")
+	if segment_text is None:
+		return found
 	try:
-		segments = _shell_segments_with_operators(command)
+		# Data heredoc bodies (cat, python3, `git commit -F -`) are never run;
+		# drop them here as _guarded_git_invocations does, so a nested one that
+		# mentions a push cannot block an unrelated API write (#6791 review).
+		segments = _shell_segments_with_operators(_strip_data_heredoc_bodies(segment_text))
 	except ValueError:
 		# Unbalanced quotes — the command is not something we can read.
-		return found
+		if _depth and _mentions_git_write(command):
+			return {"push"}
+		return found if _depth else set()
 	for _separator, tokens in segments:
 		tokens, _ = _command_after_control_prefix(tokens)
 		# Drop leading environment assignments (`GIT_DIR=... git commit`),
@@ -865,6 +1367,16 @@ def git_subcommands(command: str) -> set[str]:
 				found.add("push")  # Unparseable env commands must request confirmation.
 			continue
 		if index >= len(tokens):
+			continue
+		if _depth and ("$" in tokens[index] or "`" in tokens[index]):
+			found.add("push")  # An expansion in command position inside a wrapper.
+			continue
+		wrapped_script, wrapper_unparsed = _segment_wrapper_script(tokens, index)
+		if wrapper_unparsed:
+			found.add("push")
+			continue
+		if wrapped_script is not None:
+			found |= git_subcommands(wrapped_script, _depth=_depth + 1)
 			continue
 
 		executable = tokens[index]
@@ -882,6 +1394,8 @@ def git_subcommands(command: str) -> set[str]:
 				index += 2
 				continue
 			index += 1
+	for body in wrapped_bodies:
+		found |= git_subcommands(body, _depth=_depth + 1)
 	return found
 
 
@@ -1413,9 +1927,9 @@ def _request_confirmation(reason: str, prompt_reason: str | None = None) -> None
 		_pending_output["ask_reasons"].append(ask_reason)
 
 
-def _request_api_write_confirmation() -> None:
-	"""Restore the harness prompt for a non-canonical allowlisted API write."""
-	ask_reason = (
+def _request_api_write_confirmation(reason: str | None = None) -> None:
+	"""Restore the harness prompt for a non-canonical API write or destination."""
+	ask_reason = reason or (
 		"Non-canonical API curl options can override the allowlisted "
 		"HTTP method or destination."
 	)
@@ -1499,14 +2013,18 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
 	if not isinstance(command, str) or not command.strip():
 		return 0, ""
-	guarded_git_subcommands = git_subcommands(command) & GUARDED_SUBCOMMANDS
-	if _api_write_requires_confirmation(command):
+	# Git parsing ignores heredoc bodies that Bash passes on as data; the
+	# API-write check below still reads the raw command.
+	git_view_command = _strip_data_heredoc_bodies(command)
+	guarded_git_subcommands = git_subcommands(git_view_command) & GUARDED_SUBCOMMANDS
+	api_write_reason = _api_write_confirmation_reason(command)
+	if api_write_reason is not None:
 		if guarded_git_subcommands:
 			return 2, (
 				"BLOCKED: run the non-canonical API write and git commit/push as "
 				"separate Bash calls so both permission guards can evaluate them."
 			)
-		_request_api_write_confirmation()
+		_request_api_write_confirmation(api_write_reason)
 		return 0, ""
 
 	if _guard_disabled():
@@ -1515,7 +2033,7 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		# Bash may execute earlier lines before a later unmatched quote. Raw-text
 		# searches miss quoted/escaped spellings of git and its subcommands.
 		try:
-			_shell_segments_with_operators(command)
+			_shell_segments_with_operators(git_view_command)
 		except ValueError:
 			_request_confirmation("Cannot parse the Bash command; an earlier git commit/push may still execute.")
 		return 0, ""
@@ -1539,8 +2057,11 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 		if invocation.subcommand == "commit" and invocation.env_directory_unresolved:
 			unknown_destination_reasons.append("could not resolve git commit directory; no checkout was checked; cannot verify its PR history")
 			continue
-		if invocation.subcommand == "push" and invocation.warning == "unparsed env wrapper":
-			unverified_destinations.add("unparsed env-wrapped Git command")
+		if invocation.subcommand == "push" and invocation.warning in ("unparsed env wrapper", _UNPARSED_SHELL_WRAPPER):
+			unverified_destinations.add(
+				"unparsed shell-wrapped Git command" if invocation.warning == _UNPARSED_SHELL_WRAPPER
+				else "unparsed env-wrapped Git command"
+			)
 			continue
 		if invocation.subcommand == "commit" and invocation.warning and invocation.env_wrapped:
 			_request_confirmation("could not resolve git commit directory (env-wrapped); the session checkout may not be the commit target")
@@ -1555,6 +2076,13 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 			unknown_destination_reasons.append(
 				"could not resolve git commit directory; per-command Git configuration may select another checkout"
 			)
+		if invocation.subcommand == "push" and invocation.warning and invocation.explicit_directory_unresolved:
+			# Finding #6305: an unresolvable explicit override (GIT_DIR+=, an
+			# unresolved -C / env -C / GIT_DIR) selects a repository this hook
+			# cannot see. The session checkout's PR history says nothing about
+			# it, so the push asks without querying it.
+			unknown_destination_reasons.append(invocation.warning)
+			continue
 		if invocation.subcommand == "push" and invocation.warning:
 			uncertain_push_reasons.append(invocation.warning)
 		if invocation.subcommand == "push" and invocation.config_override:

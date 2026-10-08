@@ -854,10 +854,12 @@ render_review_rb_semble_prefetch() {
   local query_text=""
   local prefetch_text=""
 
-  if [ "${REVIEW_RB_SEMBLE_HELPERS_AVAILABLE}" != "true" ] \
-    || [ "${SEMBLE_AVAILABLE:-false}" != "true" ] \
-    || [ "${SEMBLE_INDEX_AVAILABLE:-false}" != "true" ] \
-    || [ ! -s "${query_file}" ]; then
+  if [ "${REVIEW_RB_SEMBLE_HELPERS_AVAILABLE}" != "true" ] || [ ! -s "${query_file}" ]; then
+    return 0
+  fi
+  if declare -F semble_should_query >/dev/null 2>&1; then
+    semble_should_query || return 0
+  elif [ "${SEMBLE_AVAILABLE:-false}" != "true" ] || [ "${SEMBLE_INDEX_AVAILABLE:-false}" != "true" ]; then
     return 0
   fi
 
@@ -865,7 +867,10 @@ render_review_rb_semble_prefetch() {
   query_text="${query_text:0:${REVIEW_RB_SEMBLE_QUERY_MAX_BYTES}}"
   [ -n "${query_text}" ] || return 0
 
-  prefetch_text="$(semble_query_block "${query_text}" "${REVIEW_RB_SEMBLE_MAX_CHUNKS}" "${header_label}" || true)"
+  # The judge prompt is prefixed with pre_assembled_static.txt; count overlap with it.
+  local static_file=""
+  [ ! -s ./pre_assembled_static.txt ] || static_file=./pre_assembled_static.txt
+  prefetch_text="$(SEMBLE_STATIC_CONTEXT_FILE="${static_file}" semble_query_block "${query_text}" "${REVIEW_RB_SEMBLE_MAX_CHUNKS}" "${header_label}" || true)"
   [ -n "${prefetch_text}" ] || return 0
 
   printf '%s\n' "${prefetch_text:0:${REVIEW_RB_SEMBLE_CONTEXT_MAX_BYTES}}"
@@ -2300,9 +2305,9 @@ __EDIT_DISCIPLINE__
         unset _rb_origin_url
 
         if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
-          git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/openrouter_prompt_cache.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
+          git add -u -- ':!node_modules' ':!scripts/memory_helpers.sh' ':!scripts/ai_memory.py' ':!scripts/ai_memory_lib.py' ':!scripts/openrouter_prompt_cache.py' ':!scripts/review_run_reviewers.sh' ':!scripts/review_apply_fixes.sh' ':!scripts/review_rb_judge.sh' ':!ai-memory' ':!.github/prompts' ':!.github/scripts' ':!.ai/.workspace_source_manifest.txt'
         else
-          git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts'
+          git add -u -- ':!node_modules' ':!scripts' ':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts' ':!.ai/.workspace_source_manifest.txt'
         fi
         echo "Staged files before commit:"
         STAGED_FILES="$(git diff --cached --name-only || true)"
@@ -3211,6 +3216,11 @@ $(printf '  - %s\n' "${RB_REISSUE_FILES[@]}")"
       # (non-orchestrator) reissues do NOT inherit this label so their
       # human-driven clarify semantics are preserved.
       RB_PROPAGATE_LABELS=()
+      if printf '%s' "${FIRST_ISSUE_BODY}" | grep -q 'workflow-failure-heal:fp=' || printf '%s' "${FIRST_ISSUE_LABELS_JSON}" | jq -e 'index("ai:workflow-heal") != null' >/dev/null 2>&1; then
+        FULL_NEW_BODY="$(printf '%s' "${FULL_NEW_BODY}" | PYTHONDONTWRITEBYTECODE=1 python3 "${SUPPORT_SCRIPTS_DIR}/workflow_failure_heal.py" heal-scope carry --body-file /dev/stdin --parent-repo "${REPOSITORY}" --parent-issue "${FIRST_ISSUE}")" || exit 1
+        ensure_label_exists "ai:workflow-heal" "${REPOSITORY}"
+        RB_PROPAGATE_LABELS+=("--label" "ai:workflow-heal")
+      fi
       if printf '%s' "${FIRST_ISSUE_LABELS_JSON}" | jq -e 'index("ai:orchestrator-managed")' >/dev/null 2>&1; then
         ensure_label_exists "ai:orchestrator-managed" "${REPOSITORY}"
         RB_PROPAGATE_LABELS+=("--label" "ai:orchestrator-managed")

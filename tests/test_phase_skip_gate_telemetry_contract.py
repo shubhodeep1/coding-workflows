@@ -18,7 +18,6 @@ PLAN_WF = REPO_ROOT / ".github" / "workflows" / "plan.yml"
 IMPLEMENT_WF = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 ORCH_CLARIFY_RESPOND_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate_clarify_respond.yml"
 ORCH_PARSE_ANSWER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_parse_and_post_answer.sh"
-WORKSPACE_SOURCE_MANIFEST = REPO_ROOT / ".ai" / ".workspace_source_manifest.txt"
 CI_WF = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 AGENTS_MD = REPO_ROOT / "agents.md"
 
@@ -216,7 +215,11 @@ def test_orchestrate_clarify_respond_reuses_cached_issue_payloads_before_live_fa
 	assert "ISSUE_META=\"$(gh_retry gh api \"repos/${{ github.repository }}/issues/${ISSUE_NUMBER}\")\"" in fetch_block
 	assert 'if [ -n "${TRACKING_PAYLOAD_FILE:-}" ] && [ -s "${TRACKING_PAYLOAD_FILE}" ] && jq -e --arg tracking_num "${TRACKING_NUM}"' in fetch_block
 	assert "TRACKING_BODY=\"$(gh_retry gh api \"repos/${{ github.repository }}/issues/${TRACKING_NUM}\" --jq '.body // \"\"')\"" in fetch_block
-	assert "scripts/orchestrate_parse_and_post_answer.sh" in _read(WORKSPACE_SOURCE_MANIFEST)
+	assert ORCH_PARSE_ANSWER_SCRIPT.is_file()
+	assert subprocess.run(
+		["git", "ls-files", "--error-unmatch", "--", "scripts/orchestrate_parse_and_post_answer.sh"],
+		cwd=REPO_ROOT, capture_output=True, check=False,
+	).returncode == 0
 
 
 def test_agents_and_ci_register_phase_gate_contract() -> None:

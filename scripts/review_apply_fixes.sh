@@ -1050,7 +1050,7 @@ if [ -n "${_targeted_paths_source}" ]; then
     --header-text "These files were modified by the previous autofix iteration (or by this PR overall, on the first iteration). Their current contents are inlined so you can apply reviewer findings without re-reading them. If a file is included verbatim below, prefer editing it directly over wide exploration. Files marked \"would overflow total budget\" must be read with the read tool — never assume their content is in this block."
     --output "${TARGETED_FILES_CONTEXT_FILE}"
   )
-  if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -s "${EDITOR_SEMBLE_QUERY_FILE}" ]; then
+  if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -s "${EDITOR_SEMBLE_QUERY_FILE}" ] && [ "$(printf '%s' "${TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
     targeted_file_context_args+=(
       --semble-bin "${SEMBLE_BIN:-}"
       --semble-index "${SEMBLE_INDEX_PATH:-}"
@@ -1059,7 +1059,11 @@ if [ -n "${_targeted_paths_source}" ]; then
       --semble-fallback marker
     )
   fi
-  "${targeted_file_context_args[@]}" || \
+  # The editor prompt is prefixed with pre_assembled_static.txt; overflow
+  # Semble telemetry counts static_dup_bytes against it.
+  _targeted_static_file=""
+  [ ! -s ./pre_assembled_static.txt ] || _targeted_static_file="${PWD}/pre_assembled_static.txt"
+  SEMBLE_STATIC_CONTEXT_FILE="${_targeted_static_file}" "${targeted_file_context_args[@]}" || \
     echo "::warning::targeted_file_context.py failed; continuing without targeted-context block"
 fi
 
@@ -1876,7 +1880,25 @@ if [ "${IS_SMOKE_TEST:-false}" = "true" ]; then
     _expected_run_id="$(grep -oE '^# E2E_EDITOR_BAIT_[0-9]+:' "${_smoke_canary}" \
       | head -1 \
       | sed -E 's/^# E2E_EDITOR_BAIT_([0-9]+):.*/\1/')"
-    if [ -n "${_expected_run_id}" ]; then
+    if [ -n "${_expected_run_id}" ] && [ -n "${REVIEW_SANDBOX_ROOT:-}" ]; then
+      # The isolated review workspace was snapshotted (baseline.json) before
+      # this step. Writing the host canary here made the validated transfer
+      # refuse with host_baseline_changed and the canary was never restored
+      # (release gate run 37669315093, review run 37674139451). Seed the
+      # sandbox source instead; the normal transfer publishes the file. On a
+      # seed failure, never fall back to a host write (it would guarantee
+      # the same rejection) — leave restoration to the model.
+      _smoke_seed_file=""
+      if _smoke_seed_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/smoke-canary-seed.XXXXXX")" \
+         && printf 'status: ok\nrun_id: %s\nupdated-by: ai-pipeline\n' "${_expected_run_id}" > "${_smoke_seed_file}" \
+         && bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" seed tests/e2e_smoke_canary.txt "${_smoke_seed_file}"; then
+        echo "Smoke fixture: seeded deterministic editor pre-write into the isolated review workspace for ${_smoke_canary} (run_id=${_expected_run_id}); the validated transfer publishes it to the host."
+      else
+        echo "::warning::Smoke fixture: could not seed ${_smoke_canary} into the isolated review workspace — falling back to model-driven restoration."
+      fi
+      [ -z "${_smoke_seed_file}" ] || rm -f -- "${_smoke_seed_file}"
+    elif [ -n "${_expected_run_id}" ]; then
+      # No isolated workspace prepared (direct callers): legacy host write.
       printf 'status: ok\nrun_id: %s\nupdated-by: ai-pipeline\n' "${_expected_run_id}" > "${_smoke_canary}"
       echo "Smoke fixture: applied deterministic editor pre-write to ${_smoke_canary} (run_id=${_expected_run_id}); model invocation will see clean tree (mirrors PR #2113 resolver-side fix)."
     else

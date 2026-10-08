@@ -218,7 +218,7 @@ def _run(subcommand: str, tmp_path: Path, bin_dir: Path, fixtures: Path, log: Pa
 	run_env = dict(os.environ)
 	# The review workflow exports these names in the editor process. Tests must
 	# opt in explicitly rather than inherit the live PR's paths or base branch.
-	for inherited_name in ("BASE_BRANCH", "PR_DIFF_FILE", "PR_NUMBER", "TARGET_BRANCH", "IS_SMOKE_TEST"):
+	for inherited_name in ("BASE_BRANCH", "PR_DIFF_FILE", "PR_NUMBER", "TARGET_BRANCH", "IS_SMOKE_TEST", "MERGE_TRAIN_IGNORE_PATHS"):
 		run_env.pop(inherited_name, None)
 	run_env.update({
 		"PATH": f"{bin_dir}:{os.environ['PATH']}",
@@ -268,6 +268,67 @@ def test_gate_queues_younger_overlapping_pr(tmp_path: Path) -> None:
 	assert "POST repos/acme/consumer/issues/4077/comments" in log_text
 	# Own paths came from PR_DIFF_FILE: no pulls/4077/files call.
 	assert "pulls/4077/files" not in log_text
+
+
+@pytest.mark.parametrize("ignored_setting,queued", [(None, False), ("", True), ("none", True), ("*", True)])
+def test_manifest_only_overlap_respects_ignore_setting(tmp_path: Path, ignored_setting: str | None, queued: bool) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"), _pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	manifest = ".ai/.workspace_source_manifest.txt"
+	_write_files(fixtures, 4075, [manifest])
+	_write_files(fixtures, 4077, [manifest])
+	env = {} if ignored_setting is None else {"MERGE_TRAIN_IGNORE_PATHS": ignored_setting}
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064", **env,
+	)
+	assert result.returncode == 0, result.stderr
+	assert f"result={'queued' if queued else 'unblocked'}" in result.stdout
+	assert f"ignored={manifest if not queued else 'none'}" in result.stdout
+	assert ("labels[]=ai:merge-queued" in log_text) == queued
+	assert (env_out.get("AUTOFIX_MERGE_QUEUED") == "true") == queued
+	if ignored_setting == "*":
+		assert "ignoring glob entry" in result.stdout
+
+
+def test_manifest_ignored_but_real_overlap_queues(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"), _pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	manifest = ".ai/.workspace_source_manifest.txt"
+	_write_files(fixtures, 4075, [manifest, "src/shared.py"])
+	_write_files(fixtures, 4077, [manifest, "src/shared.py"])
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064",
+	)
+	assert result.returncode == 0, result.stderr
+	assert f"result=queued blockers=#4075 action=soft_exit ignored={manifest}" in result.stdout
+	assert "src/shared.py" in log_text
+	assert manifest not in log_text
+	assert env_out.get("AUTOFIX_MERGE_QUEUED") == "true"
+
+
+def test_release_unblocks_manifest_only_overlap(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"), _pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4075, [".ai/.workspace_source_manifest.txt"])
+	_write_files(fixtures, 4077, [".ai/.workspace_source_manifest.txt"])
+	result, log_text, _ = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+	assert "workflow run" in log_text
+
+
+def test_merge_train_workflows_forward_ignore_default() -> None:
+	for name in ("review_autofix", "orchestrate_poll", "cancel_on_pr_close"):
+		text = (REPO_ROOT / ".github" / "workflows" / f"{name}.yml").read_text(encoding="utf-8")
+		assert "MERGE_TRAIN_IGNORE_PATHS: ${{ vars.MERGE_TRAIN_IGNORE_PATHS || '.ai/.workspace_source_manifest.txt' }}" in text
 
 
 def test_gate_smoke_bypasses_overlap_but_other_signals_queue(tmp_path: Path) -> None:
