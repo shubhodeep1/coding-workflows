@@ -434,6 +434,16 @@ Phases of the unattended pipeline (each is a separate workflow file under
     Claude issue intake / queue / pickup / dispatcher machinery and its
     `ai:claude*` labels were removed (see the `retired_labels` bullet under
     "Implement scope-lock label").
+16. **consumer secrets propagation** (`propagate-consumer-secrets.yml`,
+    `scripts/propagate_consumer_secrets.sh`) — on every push to `main` that
+    changes `.github/ai/consumer_repos.json` (the `/seed-repo` registration
+    PR, CLAUDE.md §14) it copies `CHECK_TRIAGE_ISSUES_TOKEN`, `GH_PAT`,
+    `OPENROUTER_API_KEY` and `TG_BOT_SECRET` from this repository's secrets
+    into the newly registered consumers via `gh secret set` (value on
+    stdin, never logged); `workflow_dispatch` with an empty `targets` input
+    backfills every registry entry. Unregistered targets are refused; a
+    failed or unverified write leaves the run red and sends a Telegram
+    CRITICAL. Tests: `tests/test_propagate_consumer_secrets.py`.
 
 Planner scope note: the Boil the Lake rule is a planner-side instruction for
 choosing the right scope mode up front, while CLAUDE.md §5 / the unattended
@@ -2557,6 +2567,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/orchestrate_poll.yml
 .github/workflows/plan.yml
 .github/workflows/promote-main-to-stable.yml
+.github/workflows/propagate-consumer-secrets.yml
 .github/workflows/review_autofix.yml
 .github/workflows/review_autofix_sweep.yml
 .github/workflows/review_rb_judge_dispatch.yml
