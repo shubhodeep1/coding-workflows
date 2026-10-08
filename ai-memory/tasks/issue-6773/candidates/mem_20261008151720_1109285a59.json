@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: When routing can't be verified, don't file the issue: log `CHECK_TRIAGE skip reason=routing_unverified ...`, send a WARNING and exit 0. This follows the script's existing skips (`pr_not_open` and `fork_pr` at lines 256-262 of `scripts/check_failure_triage.sh`), which log and exit 0. Option C would recreate the bug in #6771, where a fix is sent to `main` and fails there. Option B would turn an ordinary skip into a red job and a CRITICAL page. Today a failed PR fetch \"proceeds with minimal context\" (lines 234-245) and empty `state`/`head.repo.full_name` pass the guards. When `CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED=true`, those cases become `routing_unverified`. When the flag is off (the default), nothing changes.\nQ2: Treat a SHA mismatch as unverified too. The script already receives the failing check's SHA as `CHECK_TRIAGE_HEAD_SHA` (line 143). Compare it with the PR's `head.sha` from the PR fetch the script already makes (line 234), so no extra API call is needed. An empty `CHECK_TRIAGE_HEAD_SHA` or `head.sha` also counts as unverified. Skipping here loses no coverage: the push that moved the branch starts its own CI run, and a failure there is triaged against the new head.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Both answers are lettered options. Notes for the planner:\n- Add the flag check after the existing PR-fetch block in `scripts/check_failure_triage.sh`. Read `head.sha` from the existing `PR_JSON`; do not add a new `gh api` call.\n- Treat a ref as a valid branch name only if `git check-ref-format --branch` accepts it. The value comes only from the authenticated PR payload, never from check logs or model output.\n- Write the `Integration branch: <ref>` line into the body only after all checks pass, and before the existing body-validation step (lines 667-704) so that step still checks the final body.\n- Tests cover: flag off (no change in behaviour); a fetch failure or invalid JSON; each empty field; a non-open PR; a fork head; an invalid ref; a SHA mismatch; an empty check SHA; and the success path, where the body has exactly one canonical `Integration branch:` line.\n- Leave issue #6771 untouched.\n\nSETUP REQUIRED:\n- CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED (variable): an operator sets it to `true` after confirming that triage issues route to their PR head branch, and after correcting or verifying #6771 by hand. Until it is set, the code keeps today's behaviour: no `Integration branch:` line is written and none of the new routing checks run.\n\nAssumptions: none beyond the recommended defaults above.\nMissing context: I checked only the PR-fetch section and the skip/alert patterns of `scripts/check_failure_triage.sh`. I didn't read the workflow that fills `CHECK_TRIAGE_HEAD_SHA`. The script's own header documents it as \"head SHA the check ran against\", and treating an empty value as unverified covers the case where it isn't filled.",
+  "fingerprint": "5257e9da1896c0ac2957c533296d4a24aca0fba5010e87982fa5e31cbcae2fdb",
+  "lineage": {
+    "issue_number": 6773,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37798149049",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37798149049",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6773"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008151720_1109285a59",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6773,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37798149049"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6773",
+  "timestamps": {
+    "created_at": "2026-10-08T15:17:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
