@@ -588,3 +588,26 @@ def test_bulk_override_spend_and_judge_log_reference_extract_scalar_captures() -
 	assert '(.created_at | type == "string") and .created_at <= $approved_at' in implement
 	assert implement.index('--approved-json "${approved_deletions}"') < implement.index('ai:unblock-override-used:v1 comment=${override_comment_id}')
 	assert 'scan("/actions/runs/([0-9]+)") | .[0]' in judge
+
+
+def _verdict_comment(verdict: str, hours_ago: float, login: str = BOT) -> dict:
+	return {"login": login, "created_at": _iso(hours_ago),
+		"body": f"## Unblock judge\n<!-- ai:unblock:v1 item=1 stop=blocked fingerprint=0123456789ab verdict={verdict} round=3 -->"}
+
+
+def test_needs_human_parked_item_is_skipped_until_a_person_acts() -> None:
+	search = [_item(1, ["ai:blocked", "ai:needs-human"])]
+	parked = _select(search, {"1": _details("ai:needs-human", 10, [_verdict_comment("close", 8)])})
+	assert parked["dispatch"] == [] and parked["skipped"] == {"parked": 1}
+	project = _select([_item(40, ["ai:orchestrator-tracking", "ai:needs-human"])],
+		{"40": _details("ai:needs-human", 10, [_verdict_comment("close", 8)])}, failed=[40])
+	assert project["dispatch"] == [] and project["skipped"] == {"parked": 1}
+
+
+def test_needs_human_without_a_trusted_close_marker_is_still_judged() -> None:
+	search = [_item(1, ["ai:needs-human"])]
+	for comments in ([], [_verdict_comment("retry_budget", 8)], [_verdict_comment("close", 8, login="mallory")]):
+		result = _select(search, {"1": _details("ai:needs-human", 10, comments)})
+		assert result["dispatch"] == [{"item": 1, "kind": "issue"}], comments
+	no_label = _select([_item(1, ["ai:blocked"])], {"1": _details("ai:blocked", 10, [_verdict_comment("close", 8)])})
+	assert no_label["dispatch"] == [{"item": 1, "kind": "issue"}]

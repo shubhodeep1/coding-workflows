@@ -31,12 +31,51 @@ retries, a label lookup and issue create only when absent, and one paginated
 comment read before an entry append. The issue listing has no comments, so
 the paginated read cannot be folded into it. A stale post-create listing
 retries rather than posting an entry to a duplicate tracker.
+
+Needs-human digest (docs/plans/unattended-claude-pipeline-completion-plan.md,
+item 4a, decision D6). When every automated judge round is spent, the item is
+parked instead of closed: it keeps (or gets) `ai:needs-human` and gets one
+line in the repository's single needs-human digest issue. That issue's body
+starts with `<!-- ai:needs-human:v1 -->`. It carries the `ai:operator-step`
+label, which keeps it out of clarify; it never carries `ai:needs-human`,
+because the unblock scan and the staged-support latch sweep both key on that
+label. Only a digest authored by the pipeline login is read or edited. The
+body holds at most 200 entries; beyond that, item numbers go to an overflow
+marker (at most 1,000, then only a dropped count). Parking never writes the
+staged-support release marker, so `release_staged_support_needs_human_latches`
+never auto-releases a parked item.
+
+  operator_step_issue.py needs-human park --repo OWNER/REPO --item N
+      --kind issue|pr|project --stop STOP --reason TEXT [--link URL]
+      [--trusted-login LOGIN] [--item-labeled]
+  operator_step_issue.py needs-human prune --repo OWNER/REPO [--trusted-login LOGIN]
+
+`park` prints `issue`, `url`, `item`, `outcome` (parked|updated|skip),
+`newly_parked`, `entries`, `overflow`. The caller sends the single CRITICAL
+alert when `newly_parked` is true; this module never talks to Telegram.
+`prune` drops entries whose item is no longer open with `ai:needs-human`
+(merged, closed or cleared by a person) and promotes overflow items into
+free slots. Kill switch `NEEDS_HUMAN_DIGEST_ENABLED` (default `true`):
+`false` makes both subcommands a no-op with no API call. Each action logs
+`NEEDS_HUMAN item= kind= reason= outcome=parked|updated|removed|skip` on stderr.
+
+Digest API budget (CLAUDE.md §15). park: at most one identity read (none with
+--trusted-login), one item label add (none with --item-labeled), one digest
+listing, one label ensure and one create only when no digest exists, at most
+one PATCH per attempt and at most MAX_UPSERT_ATTEMPTS verification listings;
+no per-item reads. prune: one digest listing and, only when the digest has
+entries, the open `ai:needs-human` listing (one call per 100 items) plus at
+most one PATCH. The unblock scan's search (30 items, lagging index) and the
+staged-support sweep's listing (source repo only, PRs dropped) were audited
+and cannot answer the prune question.
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
+import os
 import re
 import subprocess
 import sys
@@ -271,6 +310,266 @@ def upsert(repo: str, key: str, source: str, steps: list[dict]) -> dict:
 	raise ApiError(f"operator-step tracker did not converge after {MAX_UPSERT_ATTEMPTS} attempts")
 
 
+# --- needs-human digest (plan item 4a, D6) ------------------------------------
+
+NEEDS_HUMAN_MARKER = "<!-- ai:needs-human:v1 -->"
+NEEDS_HUMAN_LABEL = "ai:needs-human"
+NEEDS_HUMAN_TITLE = "Items waiting for a person"
+NEEDS_HUMAN_MAX_ENTRIES = 200
+NEEDS_HUMAN_OVERFLOW_MAX = 1000
+NEEDS_HUMAN_KINDS = ("issue", "pr", "project")
+NEEDS_HUMAN_ENTRY_RE = re.compile(
+	r"<!-- ai:needs-human:entry item=([1-9][0-9]{0,9}) kind=(issue|pr|project) "
+	r"parked=([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z) -->$"
+)
+NEEDS_HUMAN_OVERFLOW_RE = re.compile(r"^<!-- ai:needs-human:overflow items=([0-9,]*) dropped=([0-9]+) -->$")
+NEEDS_HUMAN_STOP_RE = re.compile(r"^[a-z][a-z-]{0,63}$")
+NEEDS_HUMAN_INTRO = (
+	"Every automated judge round is spent for the items below. They stay open and wait "
+	"for a person to decide. An entry disappears once its item is merged or closed, or "
+	"once `ai:needs-human` is removed from it."
+)
+
+
+def needs_human_enabled() -> bool:
+	return os.environ.get("NEEDS_HUMAN_DIGEST_ENABLED", "true").strip().lower() != "false"
+
+
+def _needs_human_log(item: object, kind: str, reason: str, outcome: str) -> None:
+	safe_reason = re.sub(r"[^A-Za-z0-9_.:-]", "_", reason)[:80] or "none"
+	print(f"NEEDS_HUMAN item={item} kind={kind} reason={safe_reason} outcome={outcome}", file=sys.stderr)
+
+
+def _one_line(value: object, limit: int) -> str:
+	return " ".join(_clean(value, MAX_FIELD).split())[:limit]
+
+
+def _digest_trusted(issue: dict, trusted_login: str) -> bool:
+	"""Stricter than _trusted: only the pipeline login may author the digest."""
+	user = issue.get("user") if isinstance(issue.get("user"), dict) else {}
+	return bool(trusted_login) and user.get("login") == trusted_login
+
+
+def find_digest(issues: object, trusted_login: str) -> dict | None:
+	"""The oldest open, pipeline-authored issue whose body starts with the digest marker."""
+	if not isinstance(issues, list):
+		return None
+	candidates = [
+		issue
+		for issue in issues
+		if isinstance(issue, dict)
+		and "pull_request" not in issue
+		and _digest_trusted(issue, trusted_login)
+		and str(issue.get("body") or "").split("\n", 1)[0].strip() == NEEDS_HUMAN_MARKER
+	]
+	candidates.sort(key=lambda issue: int(issue.get("number") or 0))
+	return candidates[0] if candidates else None
+
+
+def parse_digest(body: str) -> tuple[dict[int, dict], list[int], int]:
+	"""(entries keyed by item, overflow item numbers, dropped count)."""
+	entries: dict[int, dict] = {}
+	overflow: list[int] = []
+	dropped = 0
+	for raw in str(body or "").replace("\r\n", "\n").split("\n"):
+		line = raw.strip()
+		match = NEEDS_HUMAN_ENTRY_RE.search(line)
+		if match and line.startswith("- #"):
+			item = int(match.group(1))
+			entries.setdefault(item, {"kind": match.group(2), "parked": match.group(3), "line": line})
+			continue
+		match = NEEDS_HUMAN_OVERFLOW_RE.match(line)
+		if match:
+			overflow = [int(n) for n in match.group(1).split(",") if n.isdigit() and int(n) > 0]
+			dropped = int(match.group(2))
+	overflow = [n for n in dict.fromkeys(overflow) if n not in entries]
+	return entries, overflow, dropped
+
+
+def render_digest_entry(item: int, kind: str, stop: str, reason: str, link: str, parked: str) -> str:
+	parts = [f"- #{item} ({kind})", f"stop `{stop}`" if stop else ""]
+	text = _one_line(reason, 160)
+	if text:
+		parts.append(text)
+	if link:
+		parts.append(f"[last verdict]({link})")
+	parts.append(f"parked {parked}")
+	return "; ".join(part for part in parts if part) + f" <!-- ai:needs-human:entry item={item} kind={kind} parked={parked} -->"
+
+
+def render_digest(entries: dict[int, dict], overflow: list[int], dropped: int = 0) -> str:
+	ordered = sorted(entries.items(), key=lambda pair: (pair[1]["parked"], pair[0]))
+	kept = ordered[:NEEDS_HUMAN_MAX_ENTRIES]
+	spill = [item for item, _ in ordered[NEEDS_HUMAN_MAX_ENTRIES:]]
+	while True:
+		extra = list(dict.fromkeys(spill + overflow))
+		lost = max(0, len(extra) - NEEDS_HUMAN_OVERFLOW_MAX)
+		extra = extra[:NEEDS_HUMAN_OVERFLOW_MAX]
+		parts = [NEEDS_HUMAN_MARKER, f"## {NEEDS_HUMAN_TITLE}", NEEDS_HUMAN_INTRO]
+		lines = [entry["line"] for _, entry in kept]
+		parts.append("\n".join(lines) if lines else "_Nothing is waiting._")
+		total_dropped = dropped + lost
+		if extra or total_dropped:
+			parts.append(
+				f"<!-- ai:needs-human:overflow items={','.join(str(n) for n in extra)} dropped={total_dropped} -->\n"
+				f"...and {len(extra) + total_dropped} more parked items carry `{NEEDS_HUMAN_LABEL}`."
+			)
+		body = "\n\n".join(parts) + "\n"
+		if len(body.encode("utf-8")) <= MAX_BODY or not kept:
+			return body
+		# Keep the body under the issue limit: the newest entry moves to overflow.
+		spill.insert(0, kept.pop()[0])
+
+
+def _list_digest(repo: str, trusted_login: str) -> dict | None:
+	listing = _gh(["api", f"repos/{repo}/issues?labels={LABEL}&state=open&per_page=30"])
+	try:
+		issues = json.loads(listing or "[]")
+	except ValueError as exc:
+		raise ApiError(f"unreadable issue list: {exc}") from exc
+	return find_digest(issues, trusted_login)
+
+
+def _resolve_login(trusted_login: str | None) -> str:
+	login = (trusted_login or "").strip() or _gh(["api", "user", "--jq", ".login"]).strip()
+	if not login:
+		raise ApiError("needs-human digest writer identity is unavailable")
+	return login
+
+
+def _now_iso() -> str:
+	return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def needs_human_park(
+	repo: str,
+	item: int,
+	kind: str,
+	stop: str,
+	reason: str,
+	link: str = "",
+	trusted_login: str | None = None,
+	item_labeled: bool = False,
+	now: str | None = None,
+) -> dict:
+	if not REPO_RE.match(repo):
+		raise UsageError(f"--repo must be OWNER/REPO, got {repo!r}")
+	if not isinstance(item, int) or item < 1:
+		raise UsageError("--item must be a positive issue or PR number")
+	if kind not in NEEDS_HUMAN_KINDS:
+		raise UsageError(f"--kind must be one of {list(NEEDS_HUMAN_KINDS)}")
+	if not NEEDS_HUMAN_STOP_RE.match(stop or ""):
+		raise UsageError(f"--stop must be a lower-case stop id, got {stop!r}")
+	link_re = re.compile(rf"^https://github\.com/{re.escape(repo)}/(issues|pull)/[0-9]+(#issuecomment-[0-9]+)?$")
+	link = link.strip() if isinstance(link, str) and link_re.match(link.strip()) else ""
+	reason_text = _one_line(reason, 160)
+	log_reason = reason_text.split(" ", 1)[0] if reason_text else stop
+	if not needs_human_enabled():
+		_needs_human_log(item, kind, log_reason, "skip")
+		return {"issue": None, "url": "", "item": item, "outcome": "skip", "reason": "disabled", "newly_parked": False}
+	login = _resolve_login(trusted_login)
+	if not item_labeled:
+		# Label first: prune keys on the label, so an entry is never listed without it.
+		_gh(["api", "-X", "POST", f"repos/{repo}/issues/{item}/labels", "-f", f"labels[]={NEEDS_HUMAN_LABEL}"])
+	stamp = now or _now_iso()
+	newly_parked: bool | None = None
+	wrote = False
+	for _attempt in range(MAX_UPSERT_ATTEMPTS + 1):
+		digest = _list_digest(repo, login)
+		if digest is None:
+			if wrote:
+				# The verification listing lost the digest; never create a second one.
+				break
+			_ensure_operator_label(repo)
+			entries = {item: {"kind": kind, "parked": stamp, "line": render_digest_entry(item, kind, stop, reason_text, link, stamp)}}
+			try:
+				created = json.loads(_gh(["api", f"repos/{repo}/issues", "-f", f"title={NEEDS_HUMAN_TITLE}",
+					"-f", f"body={render_digest(entries, [])}", "-f", f"labels[]={LABEL}"]) or "{}")
+			except ValueError as exc:
+				raise ApiError(f"unreadable created digest: {exc}") from exc
+			number = int(created.get("number") or 0)
+			if not number:
+				raise ApiError("needs-human digest creation returned no issue number")
+			_needs_human_log(item, kind, log_reason, "parked")
+			return {"issue": number, "url": created.get("html_url", ""), "item": item, "outcome": "parked",
+				"newly_parked": True, "entries": 1, "overflow": 0}
+		body = str(digest.get("body") or "")
+		entries, overflow, dropped = parse_digest(body)
+		if newly_parked is None:
+			newly_parked = item not in entries and item not in overflow
+		if item in entries:
+			parked = entries[item]["parked"]
+			entries[item] = {"kind": kind, "parked": parked, "line": render_digest_entry(item, kind, stop, reason_text, link, parked)}
+		elif item not in overflow:
+			if len(entries) < NEEDS_HUMAN_MAX_ENTRIES:
+				entries[item] = {"kind": kind, "parked": stamp, "line": render_digest_entry(item, kind, stop, reason_text, link, stamp)}
+			elif len(overflow) < NEEDS_HUMAN_OVERFLOW_MAX:
+				overflow.append(item)
+			elif not wrote:
+				dropped += 1
+		new_body = render_digest(entries, overflow, dropped)
+		number = int(digest["number"])
+		if new_body.replace("\r\n", "\n") == body.replace("\r\n", "\n"):
+			break
+		_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", f"body={new_body}"])
+		wrote = True
+	else:
+		raise ApiError(f"needs-human digest did not converge after {MAX_UPSERT_ATTEMPTS} attempts")
+	outcome = "parked" if newly_parked else "updated"
+	_needs_human_log(item, kind, log_reason, outcome)
+	return {"issue": int(digest["number"]) if digest else None, "url": (digest or {}).get("html_url", ""), "item": item,
+		"outcome": outcome, "newly_parked": bool(newly_parked), "entries": len(entries), "overflow": len(overflow)}
+
+
+def needs_human_prune(repo: str, trusted_login: str | None = None, now: str | None = None) -> dict:
+	if not REPO_RE.match(repo):
+		raise UsageError(f"--repo must be OWNER/REPO, got {repo!r}")
+	if not needs_human_enabled():
+		_needs_human_log("none", "digest", "disabled", "skip")
+		return {"issue": None, "outcome": "skip", "reason": "disabled", "removed": []}
+	login = _resolve_login(trusted_login)
+	digest = _list_digest(repo, login)
+	if digest is None:
+		return {"issue": None, "outcome": "skip", "reason": "no_digest", "removed": []}
+	body = str(digest.get("body") or "")
+	entries, overflow, dropped = parse_digest(body)
+	if not entries and not overflow:
+		return {"issue": int(digest["number"]), "outcome": "skip", "reason": "empty", "removed": []}
+	raw = _gh(["api", "--paginate", "--slurp", f"repos/{repo}/issues?state=open&labels={NEEDS_HUMAN_LABEL}&per_page=100"])
+	try:
+		pages = json.loads(raw)
+	except ValueError as exc:
+		raise ApiError(f"unreadable needs-human listing: {exc}") from exc
+	if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+		raise ApiError("unreadable needs-human listing: expected pages of issues")
+	open_items: dict[int, str] = {}
+	for issue in (issue for page in pages for issue in page):
+		if not isinstance(issue, dict) or not isinstance(issue.get("number"), int):
+			raise ApiError("unreadable needs-human listing: malformed issue")
+		labels = {label.get("name") if isinstance(label, dict) else label for label in issue.get("labels") or []}
+		open_items[issue["number"]] = "pr" if "pull_request" in issue else ("project" if "ai:orchestrator-tracking" in labels else "issue")
+	removed: list[int] = []
+	for number in list(entries):
+		if number not in open_items:
+			removed.append(number)
+			_needs_human_log(number, entries.pop(number)["kind"], "closed_or_cleared", "removed")
+	for number in list(overflow):
+		if number not in open_items:
+			overflow.remove(number)
+			removed.append(number)
+			_needs_human_log(number, open_items.get(number, "issue"), "closed_or_cleared", "removed")
+	stamp = now or _now_iso()
+	while overflow and len(entries) < NEEDS_HUMAN_MAX_ENTRIES:
+		number = overflow.pop(0)
+		kind = open_items[number]
+		entries[number] = {"kind": kind, "parked": stamp, "line": render_digest_entry(number, kind, "", "(details in item)", "", stamp)}
+	new_body = render_digest(entries, overflow, dropped)
+	if new_body.replace("\r\n", "\n") != body.replace("\r\n", "\n"):
+		_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{int(digest['number'])}", "-f", f"body={new_body}"])
+	return {"issue": int(digest["number"]), "outcome": "pruned" if removed else "unchanged", "removed": removed,
+		"entries": len(entries), "overflow": len(overflow)}
+
+
 def main(argv: list[str] | None = None) -> int:
 	parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
 	sub = parser.add_subparsers(dest="command", required=True)
@@ -279,9 +578,29 @@ def main(argv: list[str] | None = None) -> int:
 	upsert_cmd.add_argument("--key", required=True)
 	upsert_cmd.add_argument("--source", required=True)
 	upsert_cmd.add_argument("--steps-file", required=True)
+	digest_cmd = sub.add_parser("needs-human")
+	digest_sub = digest_cmd.add_subparsers(dest="digest_command", required=True)
+	park_cmd = digest_sub.add_parser("park")
+	park_cmd.add_argument("--repo", required=True)
+	park_cmd.add_argument("--item", required=True, type=int)
+	park_cmd.add_argument("--kind", required=True)
+	park_cmd.add_argument("--stop", required=True)
+	park_cmd.add_argument("--reason", default="")
+	park_cmd.add_argument("--link", default="")
+	park_cmd.add_argument("--trusted-login", default="")
+	park_cmd.add_argument("--item-labeled", action="store_true")
+	prune_cmd = digest_sub.add_parser("prune")
+	prune_cmd.add_argument("--repo", required=True)
+	prune_cmd.add_argument("--trusted-login", default="")
 	args = parser.parse_args(argv)
 	try:
-		result = upsert(args.repo, args.key, args.source, load_steps(args.steps_file))
+		if args.command == "needs-human" and args.digest_command == "park":
+			result = needs_human_park(args.repo, args.item, args.kind, args.stop, args.reason, args.link,
+				args.trusted_login or None, args.item_labeled)
+		elif args.command == "needs-human":
+			result = needs_human_prune(args.repo, args.trusted_login or None)
+		else:
+			result = upsert(args.repo, args.key, args.source, load_steps(args.steps_file))
 	except UsageError as exc:
 		print(json.dumps({"error": str(exc)}))
 		return 1

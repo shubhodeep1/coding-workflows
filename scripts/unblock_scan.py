@@ -27,6 +27,9 @@ Inputs:
                           state is `failed` this tick (no API call: the poller
                           already holds the state).
 
+An item that carries `ai:needs-human` and whose newest trusted
+`ai:unblock:v1` marker is a `close` verdict is parked in the needs-human
+digest (scripts/operator_step_issue.py) and skipped as `parked`.
 An item is picked when all hold:
   - it has been blocked for at least --min-blocked-minutes (the newest
     `labeled` event of a block label it still carries; for a failed project
@@ -70,6 +73,9 @@ TRACKING_LABEL = "ai:orchestrator-tracking"
 CLOSED_LABEL = "ai:unblock-closed"
 MARKER_PREFIXES = ("<!-- ai:unblock:v1 ", "<!-- ai:unblock-wait:v1 ")
 STATE_PREFIX = "<!-- ORCHESTRATOR_STATE_V"
+NEEDS_HUMAN_LABEL = "ai:needs-human"
+VERDICT_PREFIX = "<!-- ai:unblock:v1 "
+VERDICT_RE = re.compile(r" verdict=([a-z_]+) ")
 RUN_NAME_RE = re.compile(r"^Unblock judge #([1-9][0-9]*)$")
 ACTIVE_RUN_STATES = ("queued", "in_progress", "waiting", "requested", "pending")
 
@@ -127,6 +133,23 @@ def _latest_marker(comments: object, trusted_login: str) -> dt.datetime | None:
 		if created and (newest is None or created > newest):
 			newest = created
 	return newest
+
+
+def _latest_verdict(comments: object, trusted_login: str) -> str:
+	"""The verdict name of the newest trusted `ai:unblock:v1` marker, or ''."""
+	newest = None
+	verdict = ""
+	for comment in comments if isinstance(comments, list) else []:
+		if not isinstance(comment, dict) or comment.get("login") != trusted_login:
+			continue
+		lines = [line.strip() for line in str(comment.get("body") or "").splitlines() if line.strip()]
+		if not lines or not lines[-1].startswith(VERDICT_PREFIX):
+			continue
+		created = _time(comment.get("created_at"))
+		match = VERDICT_RE.search(lines[-1])
+		if created and match and (newest is None or created >= newest):
+			newest, verdict = created, match.group(1)
+	return verdict
 
 
 def _latest_state_comment(comments: object, trusted_login: str) -> dt.datetime | None:
@@ -221,6 +244,11 @@ def select(
 			continue
 		if info is None:
 			skip("no_details")
+			continue
+		# Parked in the needs-human digest (plan item 4a, D6): every round is
+		# spent and a person decides; never re-judge it on every tick.
+		if NEEDS_HUMAN_LABEL in labels and _latest_verdict(info.get("comments"), trusted_login) == "close":
+			skip("parked")
 			continue
 		marker = _latest_marker(info.get("comments"), trusted_login)
 		if marker and now - marker < marker_age:

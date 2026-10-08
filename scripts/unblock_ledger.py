@@ -557,6 +557,10 @@ def validate(verdict: object, decision: object, repo: str, rejection: dict | Non
 		"fingerprint": decision.get("fingerprint"),
 		"round": decision.get("next_round"),
 	}
+	if decision.get("terminal") is True and decision.get("terminal_reason"):
+		# A ledger-forced terminal (every round spent): the actions planner
+		# parks the item in the needs-human digest instead of closing it (D6).
+		normalised["terminal_reason"] = str(decision["terminal_reason"])
 	if name in ("retry_budget", "descope", "reissue", "accept_with_followup"):
 		normalised["instructions"] = _clean_text(verdict.get("instructions"), "instructions", True)
 	if name == "auto_answer":

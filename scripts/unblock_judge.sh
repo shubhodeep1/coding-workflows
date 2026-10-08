@@ -24,7 +24,10 @@
 # Optional env: SUPPORT_DIR (checkout with scripts/ and prompts/, default this
 # script's repository root), TARGET_DIR (read-only checkout of the default
 # branch for the model; default SUPPORT_DIR), RUNTIME_DIR,
-# UNBLOCK_JUDGE_ENABLED (default true), UNBLOCK_JUDGE_MODEL,
+# UNBLOCK_JUDGE_ENABLED (default true), NEEDS_HUMAN_DIGEST_ENABLED (default
+# true: a ledger-forced terminal parks the item in the needs-human digest,
+# scripts/operator_step_issue.py, instead of closing it; false restores the
+# terminal close), UNBLOCK_JUDGE_MODEL,
 # UNBLOCK_JUDGE_REASONING, UNBLOCK_JUDGE_TIMEOUT_SECS (default 1500),
 # UNBLOCK_JUDGE_FIXUP_WAIT_HOURS (default 72), MOCK_UNBLOCK_JUDGE_JSON (tests
 # only: used instead of the model), MOCK_UNBLOCK_JUDGE_NOW (tests only).
@@ -56,6 +59,7 @@ TARGET_DIR="${TARGET_DIR:-${SUPPORT_DIR}}"
 RUNTIME_DIR="${RUNTIME_DIR:-${RUNNER_TEMP:-/tmp}/unblock-judge}"
 mkdir -p "${RUNTIME_DIR}"
 UNBLOCK_SOURCE_REPO="shubhodeep1/coding-workflows"
+NEEDS_HUMAN_DIGEST_ENABLED="${NEEDS_HUMAN_DIGEST_ENABLED:-true}"
 if [ -f "${SUPPORT_DIR}/scripts/label_helpers.sh" ]; then
 	# shellcheck source=/dev/null
 	source "${SUPPORT_DIR}/scripts/label_helpers.sh"
@@ -342,6 +346,24 @@ PY
 						|| { close_failed="true"; ops_failed="true"; unblock_log "item=${ITEM} op=close issue=${issue} outcome=failed"; }
 				fi
 				;;
+			needs_human)
+				# Plan item 4a (D6): every round is spent, so park the item in the
+				# needs-human digest; it stays open and never gets ai:unblock-closed.
+				local -a park_args=(needs-human park --repo "${REPOSITORY}" --item "${issue}"
+					--kind "$(jq -r ".ops[${idx}].kind" "${ops_file}")" --stop "$(jq -r ".ops[${idx}].stop" "${ops_file}")"
+					--reason "$(jq -r ".ops[${idx}].reason" "${ops_file}")" --link "${UNBLOCK_VERDICT_URL:-}" --trusted-login "${UNBLOCK_LOGIN}")
+				if [ "${issue}" = "${ITEM}" ] && jq -e 'index("ai:needs-human") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1; then
+					park_args+=(--item-labeled)
+				fi
+				if unblock_py "${SUPPORT_DIR}/scripts/operator_step_issue.py" "${park_args[@]}" > "${RUNTIME_DIR}/needs_human_park.json"; then
+					if jq -e '.newly_parked == true' "${RUNTIME_DIR}/needs_human_park.json" >/dev/null 2>&1; then
+						unblock_tg "CRITICAL" "Unblock judge parked #${issue} ($(jq -r ".ops[${idx}].kind" "${ops_file}"), $(jq -r ".ops[${idx}].stop" "${ops_file}"), $(jq -r ".ops[${idx}].reason" "${ops_file}")) in needs-human digest #$(jq -r '.issue // "?"' "${RUNTIME_DIR}/needs_human_park.json"); a person must decide (${REPOSITORY})."
+					fi
+				else
+					ops_failed="true"
+					unblock_log "item=${ITEM} op=needs_human issue=${issue} outcome=failed"
+				fi
+				;;
 			dispatch_review)
 				number="$(jq -r ".ops[${idx}].pr" "${ops_file}")"
 				local review_workflow="ai-review.yml"
@@ -579,7 +601,8 @@ unblock_main()
 		--argjson has_plan "${has_plan}" --arg title "$(jq -r '.title // ""' "${RUNTIME_DIR}/item.json")" \
 		--arg security_body "${body_text}" \
 		--argjson pr_trusted "${pr_trusted}" --arg pr_author "${pr_author}" --arg pr_head_repo "${pr_head_repo}" --arg pr_head_sha "${head_sha}" \
-		'{repo: $repo, kind: $kind, item: $item, stop: $stop, labels: $labels[0], tracking: (if $tracking == "" then null else ($tracking | tonumber) end), linked_issue: (if $linked == "" then null else ($linked | tonumber) end), has_plan: $has_plan, title: $title, security_finding_id: (if $finding == "" then null else $finding end), security_source_body: (if $kind == "issue" and ($labels[0] | index("ai:security")) != null then $security_body else null end), pr_trusted: $pr_trusted, pr_author: $pr_author, pr_head_repo: $pr_head_repo, pr_head_sha: $pr_head_sha}' \
+		--arg needs_human_digest "${NEEDS_HUMAN_DIGEST_ENABLED}" \
+		'{needs_human_digest: (($needs_human_digest | ascii_downcase) != "false"), repo: $repo, kind: $kind, item: $item, stop: $stop, labels: $labels[0], tracking: (if $tracking == "" then null else ($tracking | tonumber) end), linked_issue: (if $linked == "" then null else ($linked | tonumber) end), has_plan: $has_plan, title: $title, security_finding_id: (if $finding == "" then null else $finding end), security_source_body: (if $kind == "issue" and ($labels[0] | index("ai:security")) != null then $security_body else null end), pr_trusted: $pr_trusted, pr_author: $pr_author, pr_head_repo: $pr_head_repo, pr_head_sha: $pr_head_sha}' \
 		> "${RUNTIME_DIR}/context.json"
 
 	# A pending fix-up comes first (Q11): wait for it, or run its follow-up.
@@ -766,7 +789,7 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 	' "${RUNTIME_DIR}/verdict.json")"
 	# The ledger record goes first, so a failed operation below can never
 	# make the same verdict available again.
-	if ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="${comment_body}" >/dev/null 2>&1; then
+	if ! UNBLOCK_VERDICT_URL="$(gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="${comment_body}" --jq '.html_url // ""' 2>/dev/null)"; then
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} round=${round} outcome=skip reason=record_failed"
 		return 0
 	fi

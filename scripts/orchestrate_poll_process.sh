@@ -5698,6 +5698,7 @@ security_pass_terminal_failure() {
   reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass-failed"
+  needs_human_park_project "security_pass_failed"
   post_tracking_comment "## ❌ Project security pass exhausted
 
 The security pass still reports ${finding_count} blocking finding(s) after ${completed_cycles}/${MAX_SECURITY_PASS_CYCLES} completed fix cycle(s).
@@ -5839,6 +5840,7 @@ security_pass_closed_fix_failure() {
   reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass-failed"
+  needs_human_park_project "security_pass_failed"
   post_tracking_comment "## ❌ Project security-pass fix did not merge
 
 Security-pass fix issue #${issue_number} closed without merged-PR evidence. Completion remains gated; use \`/re-security-pass\` after correcting or replacing the fix."
@@ -5883,6 +5885,7 @@ security_pass_fix_reissue_exhausted() {
   reconcile_tracking_body_after_security_pass_transition
   post_state_comment || true
   set_tracking_phase_label "ai:security-pass-failed"
+  needs_human_park_project "security_pass_failed"
   post_tracking_comment "## ❌ Project security-pass fix could not be implemented
 
 Security-pass fix issue #${issue_number} ended in \`ai:implementation-failed\` again after ${reissue_count} re-issue(s) (cap ${MAX_SECURITY_PASS_FIX_REISSUES}). Completion remains gated; address the findings manually, then comment \`/re-security-pass\` to reset the bounded fix loop."
@@ -11034,6 +11037,7 @@ Final PR #${final_pr} (\`${integration_branch}\` -> \`${default_branch}\`) hit t
     set_failed_completion_status_comment \
       "Integration self-healing hit the lifetime dispatch cap of ${INTEGRATION_CONFLICT_LIFETIME_MAX} resolver+judge attempt(s) for final PR #${final_pr}. Manual intervention required. See the \"❌ Integration self-healing capped\" comment for the diagnostic detail."
     tg_notify "❌ Integration self-healing capped at ${INTEGRATION_CONFLICT_LIFETIME_MAX} dispatches for #${TRACKING_NUM} (PR #${final_pr}). Manual intervention required."
+    needs_human_park_project "integration_conflict_capped"
     return 1
   fi
 
@@ -12852,6 +12856,7 @@ mark_validation_failed() {
     _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
     handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
     set_tracking_phase_label "ai:validation-failed"
+    needs_human_park_project "validation_failed"
     gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validate-failed" >/dev/null || true
     ensure_label_exists "ai:harness-broken" >/dev/null 2>&1 || true
     post_tracking_comment "## ❌ Runtime validation harness error
@@ -12898,6 +12903,7 @@ The latest validation run reported \`raw_status=harness_error\`, so the orchestr
     _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
     handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
     set_tracking_phase_label "ai:validation-failed"
+    needs_human_park_project "validation_failed"
     gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validate-failed" >/dev/null || true
     gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:harness-broken" >/dev/null 2>&1 || true
     post_tracking_comment "## ❌ Runtime validation failed (deterministic)
@@ -12958,6 +12964,7 @@ Transitioning back to judge for re-evaluation."
   _tracking_labels="$(get_issue_labels_json "${TRACKING_NUM}")"
   handle_comprehensive_release_callback_if_needed "failed" "${_tracking_labels}" "${COMMENTS:-[]}"
   set_tracking_phase_label "ai:validation-failed"
+  needs_human_park_project "validation_failed"
   gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:validate-failed" >/dev/null || true
   gh_retry gh issue edit "${TRACKING_NUM}" --repo "${GITHUB_REPOSITORY}" --remove-label "ai:harness-broken" >/dev/null 2>&1 || true
   post_tracking_comment "## ❌ Runtime validation failed
@@ -13072,6 +13079,7 @@ Manual intervention required: resolve the blocking condition on the final PR (me
       "Runtime validation passed, but the final squash merge of \`${integration_branch}\` into \`${default_branch}\` did not land after ${merge_attempt_count}/${MAX_FINAL_MERGE_ATTEMPTS} attempt(s). Manual intervention required. See the \"❌ Final integration merge could not complete\" comment for the diagnostic detail."
     tg_cleanup_msgs "${TRACKING_NUM}"
     tg_notify "Project #${TRACKING_NUM} blocked: validation passed but integration→${default_branch} merge did not land after ${MAX_FINAL_MERGE_ATTEMPTS} attempts. Manual intervention required." "CRITICAL"
+    needs_human_park_project "final_merge_exhausted"
     return 0
   fi
 
@@ -16963,6 +16971,80 @@ unblock_handover_merge_deferral() {
   fi
 }
 
+# Needs-human digest (docs/plans/unattended-claude-pipeline-completion-plan.md
+# item 4a, decision D6). When a project's automated budgets are spent it is
+# parked in the repository's single needs-human digest issue
+# (scripts/operator_step_issue.py needs-human park) with one CRITICAL alert per
+# newly parked project; nothing is closed by an exhausted budget. While the
+# unblock judge is enabled it still has rounds for a failed project, so the
+# poller defers to it and the judge parks the project when its own rounds run
+# out. Kill switch NEEDS_HUMAN_DIGEST_ENABLED (default true). Labels and state
+# transitions at the call sites are unchanged. Never fails the tick.
+# API budget (§15): see the module docstring of scripts/operator_step_issue.py;
+# the pipeline login is the tick's cached unblock_trusted_login.
+NEEDS_HUMAN_DIGEST_ENABLED="${NEEDS_HUMAN_DIGEST_ENABLED:-true}"
+
+needs_human_park_project() {
+  local reason park_json digest
+  reason="$(printf '%s' "${1:-exhausted}" | tr -cd 'a-z0-9_' | cut -c1-40)"
+  [ -n "${reason}" ] || reason="exhausted"
+  if [ "${NEEDS_HUMAN_DIGEST_ENABLED:-true}" = "false" ]; then
+    echo "NEEDS_HUMAN item=${TRACKING_NUM:-none} kind=project reason=${reason} outcome=skip detail=disabled"
+    return 0
+  fi
+  if [ "${UNBLOCK_JUDGE_ENABLED:-true}" != "false" ]; then
+    echo "NEEDS_HUMAN item=${TRACKING_NUM:-none} kind=project reason=${reason} outcome=skip detail=unblock_judge_pending"
+    return 0
+  fi
+  if ! [[ "${TRACKING_NUM:-}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "NEEDS_HUMAN item=none kind=project reason=${reason} outcome=skip detail=no_tracking_issue"
+    return 0
+  fi
+  if [ ! -f scripts/operator_step_issue.py ]; then
+    echo "NEEDS_HUMAN item=${TRACKING_NUM} kind=project reason=${reason} outcome=skip detail=support_missing"
+    return 0
+  fi
+  unblock_trusted_login >/dev/null
+  if [ -z "${UNBLOCK_TRUSTED_LOGIN}" ]; then
+    echo "NEEDS_HUMAN item=${TRACKING_NUM} kind=project reason=${reason} outcome=skip detail=login_unavailable"
+    return 0
+  fi
+  if ! park_json="$(PYTHONDONTWRITEBYTECODE=1 python3 scripts/operator_step_issue.py needs-human park \
+    --repo "${GITHUB_REPOSITORY}" --item "${TRACKING_NUM}" --kind project --stop project-failed \
+    --reason "${reason}" --link "https://github.com/${GITHUB_REPOSITORY}/issues/${TRACKING_NUM}" \
+    --trusted-login "${UNBLOCK_TRUSTED_LOGIN}")"; then
+    echo "NEEDS_HUMAN item=${TRACKING_NUM} kind=project reason=${reason} outcome=skip detail=park_failed"
+    return 0
+  fi
+  if jq -e '.newly_parked == true' <<< "${park_json}" >/dev/null 2>&1; then
+    digest="$(jq -r '.issue // "?"' <<< "${park_json}" 2>/dev/null || echo '?')"
+    tg_notify "Project #${TRACKING_NUM} parked in needs-human digest #${digest} (${reason}): every automated budget is spent and a person must decide." "CRITICAL" || true
+  fi
+  return 0
+}
+
+# Once per tick, after the unblock scan: drop digest entries whose item is no
+# longer open with ai:needs-human (merged, closed, or cleared by a person).
+needs_human_digest_prune() {
+  if [ "${NEEDS_HUMAN_DIGEST_ENABLED:-true}" = "false" ]; then
+    echo "NEEDS_HUMAN item=none kind=digest reason=disabled outcome=skip"
+    return 0
+  fi
+  if [ ! -f scripts/operator_step_issue.py ]; then
+    echo "NEEDS_HUMAN item=none kind=digest reason=support_missing outcome=skip"
+    return 0
+  fi
+  unblock_trusted_login >/dev/null
+  if [ -z "${UNBLOCK_TRUSTED_LOGIN}" ]; then
+    echo "NEEDS_HUMAN item=none kind=digest reason=login_unavailable outcome=skip"
+    return 0
+  fi
+  PYTHONDONTWRITEBYTECODE=1 python3 scripts/operator_step_issue.py needs-human prune \
+    --repo "${GITHUB_REPOSITORY}" --trusted-login "${UNBLOCK_TRUSTED_LOGIN}" >/dev/null \
+    || echo "NEEDS_HUMAN item=none kind=digest reason=prune_failed outcome=skip"
+  return 0
+}
+
 # Hand-over (plan Phase 7, Q13): counts consecutive project-judge runs with
 # no usable output in the state (judge_output_failures, reset on the next
 # parsed verdict). At JUDGE_OUTPUT_FAILURE_MAX the project fails with
@@ -16982,6 +17064,7 @@ unblock_handover_judge_output() {
 The project judge produced no usable output (${why}) ${failures} time(s) in a row (JUDGE_OUTPUT_FAILURE_MAX=${JUDGE_OUTPUT_FAILURE_MAX}). The project is marked failed for the unblock judge; \`/judge_resume\` resumes it." || true
     echo "${TRACKING_NUM}" >> "${UNBLOCK_FAILED_PROJECTS_FILE}" 2>/dev/null || true
     echo "UNBLOCK_HANDOVER tracking_issue=${TRACKING_NUM} stop=judge_output reason=${why} failures=${failures} outcome=failed"
+    needs_human_park_project "judge_output_exhausted"
   else
     jq --argjson n "${failures}" '.judge_output_failures = $n' "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
     post_state_comment || true
@@ -17003,6 +17086,9 @@ The project judge produced no usable output (${why}) ${failures} time(s) in a ro
 run_unblock_scan() {
   local labels_q search_items numbers_json count query fragment i n details_resp details runs now_iso selection verify_item verified_details
   local work_dir="${RUNNER_TEMP:-/tmp}/unblock-scan"
+  # Needs-human digest upkeep (plan item 4a) rides the scan's once-per-tick
+  # slot in both poller modes, also while the unblock judge is off.
+  needs_human_digest_prune || true
   if [ "${UNBLOCK_JUDGE_ENABLED:-true}" = "false" ]; then
     echo "UNBLOCK_SCAN outcome=skip reason=disabled"
     return 0
@@ -24536,6 +24622,7 @@ Manual intervention required." >/dev/null
     set_failed_completion_status_comment \
       "Judge stall cycle limit exceeded (${JUDGE_STALL_CYCLES}/${MAX_JUDGE}). Manual intervention required. See the \"Project Failed — Judge stall cycle limit exceeded\" comment for the diagnostic detail."
     tg_notify "Project #${TRACKING_NUM} FAILED: judge stall cycle limit (${JUDGE_STALL_CYCLES}/${MAX_JUDGE}) exceeded." "CRITICAL"
+    needs_human_park_project "judge_cycles_exhausted"
     tg_cleanup_msgs "${TRACKING_NUM}"
     continue
   fi
@@ -25102,6 +25189,7 @@ To avoid repeating the same recovery loop, the orchestrator is not creating addi
           "The judge repeated the same normalized failure fingerprint ${JUDGE_FINGERPRINT_REPEAT_COUNT} time(s), exceeding JUDGE_REPEAT_FINGERPRINT_MAX=${JUDGE_REPEAT_FINGERPRINT_MAX}. Manual intervention required. See the \"❌ Judge repeat-fingerprint breaker triggered\" comment for the diagnostic detail."
         tg_cleanup_msgs "${TRACKING_NUM}"
         tg_notify "Project #${TRACKING_NUM} blocked: repeated judge failure fingerprint exceeded JUDGE_REPEAT_FINGERPRINT_MAX=${JUDGE_REPEAT_FINGERPRINT_MAX}. Manual intervention required." "CRITICAL"
+        needs_human_park_project "judge_repeat_fingerprint"
         continue
       fi
 
@@ -25151,6 +25239,7 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
         set_failed_completion_status_comment \
           "Recovery was attempted ${RECOVERY_COUNT} time(s) (max ${MAX_RECOVERY_ATTEMPTS}), but the judge still reports failure. Manual intervention required. Fix-up issues tracked for the final verdict: ${EXHAUSTED_FIXUP_REFS}. See the latest \"## Project Failed\" tracking comment for the diagnostic detail."
         tg_notify "Project #${TRACKING_NUM} FAILED after ${RECOVERY_COUNT} recovery attempt(s). Fix-up issues tracked: ${EXHAUSTED_FIXUP_REFS}. Manual intervention needed (/judge_resume)." "CRITICAL"
+        needs_human_park_project "recovery_exhausted"
         tg_cleanup_msgs "${TRACKING_NUM}"
         continue
       fi
