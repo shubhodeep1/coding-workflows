@@ -763,7 +763,13 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 			# trusted state just below instead.
 			if ! recheck_stop_json="$(unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" stop \
 				--labels-json "$(jq -c '[.labels[]?.name]' "${RUNTIME_DIR}/item_recheck.json")" 2>/dev/null)"; then
-				unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} outcome=skip reason=block_state_changed detail=unblocked"
+				# Only the ledger's own "no block label" error means the item was
+				# unblocked; any other failure (crash, bad input) is a failed recheck.
+				if [ "$(jq -r '.error // ""' <<< "${recheck_stop_json}" 2>/dev/null || true)" = "no block label on this item" ]; then
+					unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} outcome=skip reason=block_state_changed detail=unblocked"
+				else
+					unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} outcome=skip reason=block_state_recheck_unavailable"
+				fi
 				return 0
 			fi
 			recheck_stop="$(jq -r '.stop // ""' <<< "${recheck_stop_json}" 2>/dev/null || true)"
