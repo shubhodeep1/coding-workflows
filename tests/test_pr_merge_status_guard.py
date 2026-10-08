@@ -26,6 +26,9 @@ SETTINGS_PATH = REPO_ROOT / ".claude" / "settings.json"
 TEMPLATE_SETTINGS_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "settings.json"
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 TEMPLATE_CLAUDE_MD = REPO_ROOT / "workflow-templates" / "CLAUDE.md"
+_WORKER_ACCOUNT_ID = "a" * 32
+_OTHER_WORKER_ACCOUNT_ID = "b" * 32
+_WORKER_URL = f"https://api.cloudflare.com/client/v4/accounts/{_WORKER_ACCOUNT_ID}/workers/scripts/name"
 
 
 def _load_guard():
@@ -166,15 +169,57 @@ def test_redirection_keeps_numeric_push_refspecs(command: str, expected_branch: 
 @pytest.mark.parametrize(
 	"command",
 	[
-		'curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id -H "Authorization: Bearer ${DIGITALOCEAN_ACCESS_TOKEN}" -d @spec.json',
-		'curl -q -sS -X POST https://api.cloudflare.com/client/v4/accounts/id/workers/scripts/name --header="Authorization: Bearer ${CF_TOKEN}" --data-binary=@worker.js',
-		'curl -q -sS -X PATCH https://api.digitalocean.com/v2/apps/id -d \'{"method":"-X DELETE"}\'',
-		"curl -q -sS -X POST https://api.cloudflare.com/client/v4/workers -d 'prices $(USD) use `literal` markers'",
-		"curl -q -sS -X POST https://api.cloudflare.com/client/v4/~health -H 'Authorization: Bearer token'",
+		f'curl -q -sS -X POST {_WORKER_URL} --header="Authorization: Bearer ${{CF_TOKEN}}" --data-binary=@worker.js',
+		f"curl -q -sS -X PUT {_WORKER_URL}/content -H 'Content-Type: text/javascript' -d @w.js",
+		f"curl -q -sS -X PATCH {_WORKER_URL}/settings -d 'prices $(USD) use `literal` markers'",
+		f"curl -q -sS -X POST {_WORKER_URL.replace(_WORKER_ACCOUNT_ID, _WORKER_ACCOUNT_ID.upper())} -d @worker.js",
 	],
 )
-def test_canonical_api_writes_do_not_request_extra_confirmation(command: str) -> None:
+def test_canonical_api_writes_do_not_request_extra_confirmation(command: str, monkeypatch) -> None:
+	monkeypatch.setenv("FT_GAMES_CF", f"{_WORKER_ACCOUNT_ID}:tok")
+	monkeypatch.delenv("FUNTOKEN_IO_CF", raising=False)
 	assert not guard._api_write_requires_confirmation(command)
+
+
+@pytest.mark.parametrize("command", [
+	'curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id -H "Authorization: Bearer ${DIGITALOCEAN_ACCESS_TOKEN}" -d @spec.json',
+	'curl -q -sS -X POST https://api.digitalocean.com/v2/apps/id -d @spec.json',
+	'curl -q -sS -X PATCH https://api.digitalocean.com/v2/apps/id -d \'{"method":"-X DELETE"}\'',
+	"curl -q -sS -X POST https://api.cloudflare.com/client/v4/workers -d 'prices $(USD) use `literal` markers'",
+	"curl -q -sS -X POST https://api.cloudflare.com/client/v4/~health -H 'Authorization: Bearer token'",
+	"curl -q -sS -X POST https://api.cloudflare.com/client/v4/accounts/id/workers/scripts/name -d @worker.js",
+	"curl -q -sS -X POST https://api.cloudflare.com/client/v4/zones/zone/dns_records -d @zone.json",
+	"curl -q -sS -X PATCH https://api.cloudflare.com/client/v4/zones/zone/settings -d @zone.json",
+	"curl -q -sS -X POST https://api.cloudflare.com/client/v4/zones/zone/workers/routes -d @routes.json",
+	f"curl -q -sS -X POST {_WORKER_URL.replace(_WORKER_ACCOUNT_ID, _OTHER_WORKER_ACCOUNT_ID)} -d @worker.js",
+	f"curl -q -sS -X PUT {_WORKER_URL}/secrets -d @secret.json",
+	f"curl -q -sS -X PUT {_WORKER_URL}/secrets/NAME -d @secret.json",
+	f"curl -q -sS -X PUT {_WORKER_URL}/../../../zones/zone/dns_records -d @zone.json",
+	f"curl -q -sS -X PUT {_WORKER_URL}/%2e%2e -d @worker.js",
+	f"curl -q -sS -X PUT {_WORKER_URL}?x=1 -d @worker.js",
+	f"curl -q -sS -X PUT {_WORKER_URL}/ -d @worker.js",
+	f"curl -q -sS -X PUT {_WORKER_URL.replace('/workers/scripts/name', '/workers/domains')} -d @worker.js",
+	f"curl -q -sS -X PUT {_WORKER_URL.replace('/workers/scripts/name', '/members')} -d @worker.js",
+])
+def test_api_write_destination_requires_confirmation(command: str, monkeypatch) -> None:
+	monkeypatch.setenv("FT_GAMES_CF", f"{_WORKER_ACCOUNT_ID}:tok")
+	monkeypatch.delenv("FUNTOKEN_IO_CF", raising=False)
+	assert guard._api_write_requires_confirmation(command)
+
+
+@pytest.mark.parametrize("credential", [None, _WORKER_ACCOUNT_ID, "a" * 31 + ":tok", _WORKER_ACCOUNT_ID + ":"])
+def test_worker_write_requires_well_formed_credential(credential: str | None, monkeypatch) -> None:
+	monkeypatch.delenv("FT_GAMES_CF", raising=False)
+	monkeypatch.delenv("FUNTOKEN_IO_CF", raising=False)
+	if credential is not None:
+		monkeypatch.setenv("FT_GAMES_CF", credential)
+	assert guard._api_write_requires_confirmation(f"curl -q -sS -X POST {_WORKER_URL} -d @worker.js")
+
+
+def test_worker_write_accepts_either_matching_account(monkeypatch) -> None:
+	monkeypatch.setenv("FT_GAMES_CF", "malformed")
+	monkeypatch.setenv("FUNTOKEN_IO_CF", f"{_WORKER_ACCOUNT_ID}:tok")
+	assert not guard._api_write_requires_confirmation(f"curl -q -sS -X POST {_WORKER_URL} -d @worker.js")
 
 
 @pytest.mark.parametrize(
@@ -213,9 +258,13 @@ def test_canonical_api_writes_do_not_request_extra_confirmation(command: str) ->
 		"curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id -d 'unterminated",
 		"  curl -q -sS -X POST https://api.cloudflare.com/client/v4/workers -H 'unterminated",
 		"curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id>/tmp/response",
+		f"curl -q -sS -X POST {_WORKER_URL} -X DELETE",
+		f"curl -q -sS -X POST {_WORKER_URL} --url https://example.com/",
+		f"curl -q -sS -X POST {_WORKER_URL} -d @worker.js; echo done",
 	],
 )
-def test_noncanonical_api_writes_request_confirmation(command: str) -> None:
+def test_noncanonical_api_writes_request_confirmation(command: str, monkeypatch) -> None:
+	monkeypatch.setenv("FT_GAMES_CF", f"{_WORKER_ACCOUNT_ID}:tok")
 	assert guard._api_write_requires_confirmation(command)
 
 
@@ -232,6 +281,36 @@ def test_noncanonical_api_writes_request_confirmation(command: str) -> None:
 	],
 )
 def test_noncanonical_api_write_emits_ask_decision(command: str, capsys) -> None:
+	assert guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}}) == (0, "")
+	output = json.loads(capsys.readouterr().out)
+	assert output["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+@pytest.mark.parametrize(("url", "expected_reason"), [
+	("https://api.digitalocean.com/v2/apps/id", "CLAUDE.md §22.B"),
+	(_WORKER_URL.replace(_WORKER_ACCOUNT_ID, _OTHER_WORKER_ACCOUNT_ID), "FUNTOKEN_IO_CF or FT_GAMES_CF"),
+	(f"{_WORKER_URL}/secrets/NAME", "Worker secret writes need approval"),
+])
+def test_api_write_reason_emits_ask_decision(url: str, expected_reason: str, monkeypatch, capsys) -> None:
+	monkeypatch.setenv("FT_GAMES_CF", f"{_WORKER_ACCOUNT_ID}:tok")
+	monkeypatch.delenv("FUNTOKEN_IO_CF", raising=False)
+	command = f"curl -q -sS -X PUT {url} -d @body.json"
+	assert guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}}) == (0, "")
+	output = json.loads(capsys.readouterr().out)
+	assert output["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert expected_reason in output["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_api_write_reason_does_not_leak_credential(monkeypatch, capsys) -> None:
+	monkeypatch.setenv("FT_GAMES_CF", f"{_WORKER_ACCOUNT_ID}:SENTINELTOKEN")
+	command = f"curl -q -sS -X PUT {_WORKER_URL}/secrets -d @body.json"
+	guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})
+	assert "SENTINELTOKEN" not in capsys.readouterr().out
+
+
+def test_api_write_confirmation_ignores_merge_guard_kill_switch(monkeypatch, capsys) -> None:
+	monkeypatch.setenv("CLAUDE_PR_MERGE_GUARD", "off")
+	command = "curl -q -sS -X POST https://api.cloudflare.com/client/v4/zones/zone/dns_records -d @body.json"
 	assert guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}}) == (0, "")
 	output = json.loads(capsys.readouterr().out)
 	assert output["hookSpecificOutput"]["permissionDecision"] == "ask"
@@ -2172,17 +2251,15 @@ def test_conditional_cd_or_exit_keeps_worktree_after_semicolon(merged_branch_rep
 def test_api_write_allowlist_disables_implicit_curl_config(path: Path) -> None:
 	settings = json.loads(path.read_text(encoding="utf-8"))
 	allow = settings["permissions"]["allow"]
-	assert allow[:6] == [
-		"Bash(curl -q -sS -X PUT https://api.digitalocean.com/*)",
-		"Bash(curl -q -sS -X POST https://api.digitalocean.com/*)",
-		"Bash(curl -q -sS -X PATCH https://api.digitalocean.com/*)",
-		"Bash(curl -q -sS -X PUT https://api.cloudflare.com/*)",
-		"Bash(curl -q -sS -X POST https://api.cloudflare.com/*)",
-		"Bash(curl -q -sS -X PATCH https://api.cloudflare.com/*)",
+	assert allow[:3] == [
+		"Bash(curl -q -sS -X PUT https://api.cloudflare.com/client/v4/accounts/*)",
+		"Bash(curl -q -sS -X POST https://api.cloudflare.com/client/v4/accounts/*)",
+		"Bash(curl -q -sS -X PATCH https://api.cloudflare.com/client/v4/accounts/*)",
 	]
 	# Every allowed curl rule keeps `-q` so an implicit ~/.curlrc cannot alter the call.
 	curl_rules = [rule for rule in allow if rule.startswith("Bash(curl")]
-	assert curl_rules == allow[:6]
+	assert curl_rules == allow[:3]
+	assert not any("api.digitalocean.com" in rule for rule in allow)
 
 
 @pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
