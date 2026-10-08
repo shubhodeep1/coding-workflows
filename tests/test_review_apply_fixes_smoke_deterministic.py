@@ -225,11 +225,40 @@ def test_editor_smoke_deterministic_block_only_on_smoke() -> None:
 	)
 
 
+
+def _pre_write_block() -> str:
+	src = _apply_fixes_text()
+	start = src.index("# ── Smoke-fixture deterministic editor pre-write")
+	end = src.index("# ── Adaptive progress-aware watchdog", start)
+	return src[start:end]
+
+
+def test_editor_smoke_pre_write_seeds_isolated_sandbox() -> None:
+	"""With a prepared review sandbox the pre-write must seed the sandbox
+	source, never the host: the snapshot is taken before the editor step,
+	so a host write makes the validated transfer refuse with
+	host_baseline_changed (release gate run 37669315093, review run
+	37674139451)."""
+	block = _pre_write_block()
+	seed_call = 'review_untrusted_sandbox.sh" seed tests/e2e_smoke_canary.txt'
+	assert seed_call in block
+	sandbox_branch_idx = block.index('[ -n "${REVIEW_SANDBOX_ROOT:-}" ]; then')
+	legacy_branch_idx = block.index('elif [ -n "${_expected_run_id}" ]; then')
+	assert sandbox_branch_idx < block.index(seed_call) < legacy_branch_idx
+	host_write = '> "${_smoke_canary}"'
+	# The host write appears exactly once, in the no-sandbox branch.
+	assert block.count(host_write) == 1
+	assert block.index(host_write) > legacy_branch_idx
+	sandbox_branch = block[sandbox_branch_idx:legacy_branch_idx]
+	assert host_write not in sandbox_branch
+	assert "::warning::Smoke fixture: could not seed" in sandbox_branch
+
 def main() -> int:
 	test_editor_smoke_deterministic_block_present_and_gated()
 	test_editor_smoke_deterministic_extracts_run_id_from_bait_marker()
 	test_editor_smoke_deterministic_writes_canonical_3line_spec()
 	test_editor_smoke_deterministic_block_only_on_smoke()
+	test_editor_smoke_pre_write_seeds_isolated_sandbox()
 	print(
 		"OK: review_apply_fixes editor smoke deterministic pre-write "
 		"contract assertions hold"
