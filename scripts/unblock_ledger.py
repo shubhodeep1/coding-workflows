@@ -336,6 +336,7 @@ def latest_rejection(comments: object, trusted_login: str, item: int, stop: str)
 		elif lines[0] in (
 			"🚨 **files_touched scope guard rejected this implementation run.**",
 			"🚨 **Issue scope-lock rejected this implementation run.**",
+			"🚨 **Automation-path grant guard rejected this implementation run.**",
 			"🚨 **Destructive-commit guard rejected this implementation run.**",
 		):
 			# A later handler that could not encode its marker must not leave
