@@ -332,7 +332,10 @@ def upsert(repo: str, key: str, source: str, steps: list[dict], source_sha: str 
 			continue
 
 		existing = candidates[0]
-		number = int(existing["number"])
+		number = existing.get("number")
+		# Same guard as tick: a malformed number is a controlled ApiError (exit 2).
+		if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
+			raise ApiError("unreadable issue list: operator-step tracker has no issue number")
 		comments = load_entry_comments(repo, number)
 		marker = f"<!-- ai:operator-step:entry key={key} -->"
 		matches = sorted(
