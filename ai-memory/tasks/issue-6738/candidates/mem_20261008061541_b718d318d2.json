@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What change on `main` should this heal issue produce?\nChoices:\nA) Add a fixed rule, with no model involved, to the resolver preparation (`scripts/review_conflict_prepare.sh` / `review_conflict_resolve.sh`). When the only host-only conflict is the live hook, fill it with the template copy's merge result, but only if Git merged the template copy without a conflict. Otherwise keep stopping as today. Add a scratch-repository regression test that fails on the current code and passes with the fix. (RECOMMENDED)\nB) Copy the template, after the model resolves it in the sandbox, over the live hook as well. This also covers the case where both copies conflict. **Note:** this lets model output reach a host-executed safety hook and gets around the provenance gate that holds AI-written template changes for review in `sync_claude_live_copies.py`.\nC) No change to conflict resolution. Treat `conflict_resolver_sandbox_path_host_only` as needing a person: put the merge stages of the conflicted path in the failure comment and route it to `ai:needs-human` instead of filing more heal issues. Add a regression test for that routing.\nD) A+C: the fixed rule where it applies, and the person-needed route with stage details when it does not.\nQ2: When the fixed rule in Q1 cannot apply (for example the template copy also conflicts, or the two copies already differed on one side), what should happen to the live hook?\nChoices:\nA) Keep stopping before the model runs with the current `::error::` and `sandbox_path_host_only` reason. The PR waits for a manual merge. (RECOMMENDED)\nB) Use the base branch's (`main`'s) reviewed copy of the live hook, record in a PR comment that the PR's hook changes were dropped, and let CI's live/template copy check flag any remaining difference.\nC) Use the PR head's copy of the live hook.\n**Note:** answering Q1:C makes Q2 moot, because no automatic resolution happens under C. Q2:B and Q2:C change a host-executed safety hook without a person checking it.",
+  "fingerprint": "ceba93a4edf2e5e9ecf942a552589f7931afe0daed637efd9616851773c77a17",
+  "lineage": {
+    "issue_number": 6738,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37736114243",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37736114243",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008061541_b718d318d2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6738,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37736114243"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6738 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T06:15:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
