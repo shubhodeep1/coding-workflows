@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:redact_known_secrets function | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The regex for Basic credentials does not account for the standard format `Basic <base64>`.\n  WHY: Credentials may not be redacted if they are not explicitly preceded by \"Authorization:\".\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Target self-repository heals at the support-script branch while preserving ordinary non-heal behavior.\"\n  expected_change_site: scripts/workflow_failure_heal_intake.sh\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff does not show modifications to target the support-script branch when resolving the target for self-repository heals. The logic in `_open_issue` and `heal-route` is still using base logic, not specifically resolving the support ref branch for the fix PR target.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal.py:redact_known_secrets function | severity=MAJOR | confidence=3\n  PROBLEM: The regex for Basic Authorization headers is case-insensitive, but the regex for Basic credentials (base64 part) does not account for the standard format `Basic <base64>`.\n  WHY: Credentials may not be redacted if they are not explicitly preceded by \"Authorization:\".\n- TASK_GAP\n  Requirement: \"Target self-repository heals at the support-script branch while preserving ordinary non-heal behavior.\"\n  Expected change site: scripts/workflow_failure_heal_intake.sh\n  Evidence of absence: The PR diff does not show modifications to target the support-script branch when resolving the target for self-repository heals. The logic in `_open_issue` and `heal-route` is still using base logic, not specifically resolving the support ref branch for the fix PR target.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "3c276095f3aca6331f848cedf106b1868dcd7d4fa934b00e6990b588fef9d0d7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6484,
+    "run_id": "37716220904",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37716220904",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261008024628_f74de6e24a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6484,
+    "run_id": "37716220904"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-08T02:46:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
