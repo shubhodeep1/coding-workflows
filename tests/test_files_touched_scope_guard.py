@@ -496,12 +496,15 @@ def test_automation_fragments_share_logic_and_fail_closed() -> None:
 	for label in ("preflight", "commit"):
 		for options in ({"association": "CONTRIBUTOR"}, {"body": "missing"},
 			{"pipeline_login": ""}, {"allow_edits": "false"}, {"grant_present": False},
-			{"helper_present": False}, {"rename": True, "body": _body("docs/renamed.txt")}):
+			{"helper_present": False}, {"rename": True, "body": _body("docs/renamed.txt")},
+			{"staged": "scripts/a\nb.sh"}):
 			inputs = {"body": _body("scripts/a.sh"), "staged": "scripts/a.sh", **options}
 			rc, output = _run_automation_fragment(label, **inputs)
 			assert rc == 1 and "scope_violation_blocked=automation-path" in output, (label, options, output)
 		rc, output = _run_automation_fragment(label, _body("scripts/a.sh"), "scripts/a.sh")
 		assert rc == 0 and "scope_violation_blocked" not in output
+		rc, output = _run_automation_fragment(label, _body("scripts/\u00e9.sh"), "scripts/\u00e9.sh")
+		assert rc == 0 and "scope_violation_blocked" not in output, (label, output)
 		rc, output = _run_automation_fragment(label, "missing", "docs/x.md", grant_present=False)
 		assert rc == 0 and "scope_violation_blocked" not in output
 

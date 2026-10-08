@@ -500,15 +500,21 @@ if [ -n "${deleted_staged}" ]; then
 fi
 
 # >>> automation-path grant guard (commit) >>>
-automation_staged="$(git diff --cached --name-only --no-renames --diff-filter=ACMDT || true)"
-automation_paths="$(printf '%s\n' "${automation_staged}" | grep -iE '^(\.github|\.claude|scripts|prompts|workflow-templates)(/|$)' || true)"
+# core.quotePath=false keeps non-ASCII names literal; names Git still
+# C-quotes (control characters, quotes, backslashes) start with '"' and
+# are denied below rather than slipping past the prefix match.
+automation_staged="$(git -c core.quotePath=false diff --cached --name-only --no-renames --diff-filter=ACMDT || true)"
+automation_paths="$(printf '%s\n' "${automation_staged}" | grep -iE '^"?(\.github|\.claude|scripts|prompts|workflow-templates)(/|$)' || true)"
 if [ -n "${automation_paths}" ]; then
   automation_staged_file="$(mktemp "${TMPDIR:-/tmp}/implement-automation-staged.XXXXXX")"
   printf '%s\n' "${automation_paths}" > "${automation_staged_file}"
   automation_reason="grant_unavailable"
   automation_denied="${automation_paths}"
   automation_rc=127
-  if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
+  if grep -q '^"' <<< "${automation_paths}"; then
+    automation_rc=30
+    automation_reason="quoted_path"
+  elif [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
     automation_error_file="$(mktemp "${TMPDIR:-/tmp}/implement-automation-error.XXXXXX")"
     automation_rc=0
     automation_denied="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
