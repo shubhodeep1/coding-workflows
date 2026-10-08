@@ -178,16 +178,31 @@ if ! python3 "${HEAL_PY}" build-issue-payload \
 fi
 
 HEAL_SCOPE_SKIP_ARGS=()
+HEAL_REPORTER_LOGIN=""
+if [ "${LABEL}" = "ai:needs-human" ]; then
+	# One identity read shared by the heal-scope and host-only checks below.
+	HEAL_REPORTER_LOGIN="$(gh_retry gh api user --jq .login 2>/dev/null || true)"
+fi
 if [ "${LABEL}" = "ai:needs-human" ] && jq -e '[.labels[]?.name] | index("ai:workflow-heal") != null' "${ISSUE_JSON_FILE}" >/dev/null; then
 	# The comments are already fetched above. Only the authenticated account's
 	# refusal marker may suppress a new heal generation.
-	HEAL_REPORTER_LOGIN="$(gh_retry gh api user --jq .login 2>/dev/null || true)"
 	if [ -z "${HEAL_REPORTER_LOGIN}" ]; then
 		log 'error refusal_marker_author_unavailable; not dispatching another heal'
 		exit 1
 	fi
 	if [ -n "${HEAL_REPORTER_LOGIN}" ] && jq -e --arg login "${HEAL_REPORTER_LOGIN}" 'any(.[]; .author == $login and (.body | contains("<!-- ai:workflow-heal-scope-unverified:v1")))' "${COMMENTS_JSON_FILE}" >/dev/null; then
 		HEAL_SCOPE_SKIP_ARGS=(--heal-scope-unverified)
+	fi
+fi
+if [ "${LABEL}" = "ai:needs-human" ]; then
+	# The resolver's host-only conflict stop needs a human merge, not a heal
+	# issue (#6738). Only the authenticated account's newest autofix failure /
+	# cap marker on this item counts; without a verifiable identity the report
+	# is dispatched as before, so a forged marker can never suppress a heal.
+	if [ -z "${HEAL_REPORTER_LOGIN}" ]; then
+		log "warn host_only_check_identity_unavailable issue=${ISSUE_NUMBER}; dispatching without the host-only check"
+	elif [ "$(python3 "${HEAL_PY}" host-only-conflict-marker --comments-json "${COMMENTS_JSON_FILE}" --author-login "${HEAL_REPORTER_LOGIN}" 2>/dev/null || echo false)" = "true" ]; then
+		HEAL_SCOPE_SKIP_ARGS+=(--host-only-conflict)
 	fi
 fi
 SKIP_REASON="$(python3 "${HEAL_PY}" skip-reason --payload-json "${PAYLOAD_FILE}" --self-repo "${REPO}" "${HEAL_SCOPE_SKIP_ARGS[@]}" 2>/dev/null || echo "")"
