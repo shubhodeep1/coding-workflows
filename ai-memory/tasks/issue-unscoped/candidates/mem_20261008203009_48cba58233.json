@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_apply_analysis_on_main.py:362-365 | severity=critical | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The test searches for the obsolete condition `!= \"stable\"` instead of the workflow's updated `!= \"refs/heads/stable\"`, so the search returns `-1` and the assertion fails.\n  WHY: CI confirms the failing assertion blocks the aggregate check; the severity was reported as BLOCKER and MAJOR, so the higher BLOCKER severity is used. The reported `exit 1` check is a downstream symptom of the same failed search.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The release ref check must treat the full ref as data and require an exact match with `refs/heads/stable`; the linked CI test must be updated to assert against the new ref form.\n  expected_change_site: tests/test_apply_analysis_on_main.py line 362 \u2014 `test_release_gate_only_mode_contract`\n  confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, minimax_minimax-m3]\n  EVIDENCE: Line 362 still searches for `!= \"stable\"` while test-and-mark-stable.yml:183 reads `!= \"refs/heads/stable\"`; the assertion at line 363 still contains the pre-#6546 assertion and CI confirms it fails.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- tests/test_apply_analysis_on_main.py:362 | severity=critical | confidence=5\n  PROBLEM: The test searches for `!= \"stable\"` in the workflow source, but the release workflows use `!= \"refs/heads/stable\"`, so `.find()` returns -1.\n  WHY: The assertion `assert guard > gate_exit` at line 363 fails with `AssertionError: release path must check the dispatch ref against 'stable'` (`assert -1 > 484`); CI confirms this in the `tests-promote-stall-and-review` job.\n- TASK_GAP\n  Requirement: The linked issue #6546 requires the release ref check in test-and-mark-stable.yml to treat the full ref as data and require exact match with `refs/heads/stable`.\n  Expected change site: tests/test_apply_analysis_on_main.py `test_release_gate_only_mode_contract` (line 362)\n  Evidence of absence: The PR diff correctly updated the workflow shell logic but the test was not updated to match. Line 362 still searches for `!= \"stable\"` while the workflow at test-and-mark-stable.yml:183 now reads `!= \"refs/heads/stable\"`. CI confirms the test failure.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_apply_analysis_on_main.py:363 | severity=critical | confidence=5\n  PROBLEM: The test incorrectly expects the legacy ref validation string `!= \"stable\"` instead of the updated `!= \"refs/heads/stable\"`.\n  WHY: CI jobs, including `tests-promote-stall-and-review`, fail with an AssertionError, blocking deployment and release gates.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_apply_analysis_on_main.py:362 | severity=critical | confidence=5\n  PROBLEM: `source_run.find('!= \"stable\"', gate_exit)` searches for the obsolete literal, which is not present in `!= \"refs/heads/stable\"`, so `find` returns `-1` and the assertion fails.\n  WHY: The CI log (`tests-promote-stall-and-review`, run 37836679245) shows the test failure and blocks the aggregate `lint` check. The previous AI autofix run did not update this test.\n- tests/test_apply_analysis_on_main.py:365 | severity=high | confidence=3\n  PROBLEM: The reviewer flagged the downstream `source_run.find(\"exit 1\", guard)` call as needing verification after the primary search is updated.\n  WHY: The reviewer states `exit 1` remains present after the guard in the workflow, so no change is needed there once the primary fix lands.\n- TASK_GAP\n  Requirement: The issue requires the release ref check to treat the full ref as data and require an exact match with `refs/heads/stable`, which the PR's workflow diff implements. The linked CI test `tests/test_apply_analysis_on_main.py::test_release_gate_only_mode_contract` must be updated to assert against the new ref form so the change is contract-tested.\n  Expected change site: `tests/test_apply_analysis_on_main.py` line 362 \u2014 `source_run.find('!= \"stable\"', gate_exit)` must search for `!= \"refs/heads/stable\"` (or both forms, with the new form preferred) and the assertion at line 363 must be updated accordingly.\n  Evidence of absence: The previous AI autofix run's editor summary claimed the fix was applied to `tests/test_apply_analysis_on_main.py`, but the LAST RUN DIFF shows only a one-line rename in `tests/test_deploy_activate_command.py`. The current content of `tests/test_apply_analysis_on_main.py` lines 362-363 still contains the pre-#6546 assertion `source_run.find('!= \"stable\"', gate_exit)` / `assert guard > gate_exit`, and the CI log confirms it still fails with `assert -1 > 484`. The fix was either never committed or was reverted by the subsequent \"Reset carried-in paths to main\" commit (which is consistent with the reset's stated purpose of discarding carried-in paths to resolve the merge-train conflict).\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_apply_analysis_on_main.py:362-363 | severity=critical | confidence=5\n  PROBLEM: The test searches for the obsolete condition `!= \"stable\"`, but the release workflow checks `!= \"refs/heads/stable\"`.\n  WHY: The search returns `-1`, so the assertion fails; CI confirms this failure in `tests-promote-stall-and-review`, blocking the check.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_apply_analysis_on_main.py:362-363 | severity=critical | confidence=5\n  PROBLEM: `test_release_gate_only_mode_contract` searches for `!= \"stable\"` although the workflow was updated to check `!= \"refs/heads/stable\"`, so the search returns -1 and the assertion fails.\n  WHY: CI confirmed the failure in `tests-promote-stall-and-review` with `AssertionError: release path must check the dispatch ref against 'stable'` and `assert -1 > 484`; the release-path guard assertion was not updated to match the new ref format.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "d6b84e5eca62f1c99743c3affaca20839b8a5e4ee86ec15f63111880ce2096c0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6555,
+    "run_id": "37836416940",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37836416940",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261008203009_48cba58233",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6555,
+    "run_id": "37836416940"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-08T20:30:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
