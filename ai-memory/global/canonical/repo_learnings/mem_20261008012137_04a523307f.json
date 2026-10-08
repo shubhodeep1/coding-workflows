@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Conflict handling should account for generated workspace manifests separately from source changes.",
   "timestamps": {
     "created_at": "2026-10-08T01:21:37Z",
