@@ -2735,19 +2735,24 @@ def test_security_audit_codex_engine_or_codex_label_never_starts_claude() -> Non
 			assert _kept_ids(payload) == ["codex-finding"]
 
 
-def test_security_audit_engine_ignores_ci_event_labels(tmp_path: Path, monkeypatch) -> None:
+def test_security_audit_engine_ignores_ci_event_labels() -> None:
 	# CI jobs carry a real GITHUB_EVENT_PATH; a PR labelled ai:engine-claude
 	# must not move a codex-pinned audit onto Claude (PR #6780 CI failure).
-	event_path = tmp_path / "event.json"
-	event_path.write_text(json.dumps({"pull_request": {"labels": [{"name": "ai:engine-claude"}]}}), encoding="utf-8")
-	monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_path))
-	audit_dir = tmp_path / "audit"
-	audit_dir.mkdir()
-	proc, state, payload = _claude_engine_audit(audit_dir, claude_env={"AI_ENGINE_SECURITY_AUDIT": "codex"})
-	assert proc.returncode == 0, proc.stderr
-	assert "security-audit: engine=codex" in proc.stdout
-	assert not state.get("claude_calls")
-	assert _kept_ids(payload) == ["codex-finding"]
+	# No pytest fixtures: main() calls every test_* function without arguments.
+	with tempfile.TemporaryDirectory(prefix="security-audit-event-labels-") as td:
+		tmp_path = Path(td)
+		event_path = tmp_path / "event.json"
+		event_path.write_text(json.dumps({"pull_request": {"labels": [{"name": "ai:engine-claude"}]}}), encoding="utf-8")
+		audit_dir = tmp_path / "audit"
+		audit_dir.mkdir()
+		proc, state, payload = _claude_engine_audit(
+			audit_dir,
+			claude_env={"AI_ENGINE_SECURITY_AUDIT": "codex", "GITHUB_EVENT_PATH": str(event_path)},
+		)
+		assert proc.returncode == 0, proc.stderr
+		assert "security-audit: engine=codex" in proc.stdout
+		assert not state.get("claude_calls")
+		assert _kept_ids(payload) == ["codex-finding"]
 
 
 def test_security_audit_role_default_runs_claude() -> None:
