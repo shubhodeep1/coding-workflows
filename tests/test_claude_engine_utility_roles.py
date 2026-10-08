@@ -337,7 +337,7 @@ def test_check_triage_uses_the_isolated_helpers_claude_branch() -> None:
 	assert '"${RUNTIME_DIR}/pr_payload.json"' in text
 	assert 'AI_ENGINE_LABELS="${triage_engine_labels:-${AI_ENGINE_LABELS:-}}"' in text
 	helper = CLARIFY_ISOLATED.read_text(encoding="utf-8")
-	assert helper.count("^(CLARIFY|CLARIFY_RESPOND|UNBLOCK_JUDGE|CHECK_TRIAGE)$") == 2
+	assert helper.count("^(CLARIFY|CLARIFY_RESPOND|PLAN|UNBLOCK_JUDGE|CHECK_TRIAGE)$") == 2
 
 
 def test_unblock_judge_engine_paths_are_unchanged() -> None:

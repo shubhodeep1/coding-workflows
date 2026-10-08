@@ -2795,16 +2795,37 @@ def test_security_audit_workflow_wires_claude_engine_with_codex_kept() -> None:
 	assert "uses: ./.github/actions/install-codex" in content
 	assert '--model "openai/gpt-6-sol"' in content
 	poll = (REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8")
-	assert "SECURITY_JUDGE RB_JUDGE SECURITY_AUDIT; do" in poll
+	assert "SECURITY_JUDGE RB_JUDGE SECURITY_AUDIT ACTIVATION_VERIFY; do" in poll
 	assert "CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || '' }}" in poll
 	process = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
 	assert 'AI_ENGINE_LABELS="${TRACKING_LABELS:-[]}" \\\n    bash scripts/codex_heartbeat.sh \\\n      --phase "orchestrate-security-pass"' in process
 
 
+def _parametrize_cases(func) -> list[dict]:
+	"""Expand a ``@pytest.mark.parametrize`` mark into keyword sets so the
+	script-style runner below can call the test the way pytest would."""
+	cases: list[dict] = [{}]
+	for mark in getattr(func, "pytestmark", []):
+		if mark.name != "parametrize":
+			continue
+		argnames, argvalues = mark.args[0], mark.args[1]
+		if isinstance(argnames, str):
+			argnames = tuple(part.strip() for part in argnames.split(","))
+		expanded: list[dict] = []
+		for base in cases:
+			for values in argvalues:
+				if len(argnames) == 1:
+					values = (values,)
+				expanded.append({**base, **dict(zip(argnames, values))})
+		cases = expanded
+	return cases
+
+
 def main() -> int:
 	for name in sorted(globals()):
 		if name.startswith("test_") and callable(globals()[name]):
-			globals()[name]()
+			for kwargs in _parametrize_cases(globals()[name]):
+				globals()[name](**kwargs)
 	return 0
 
 

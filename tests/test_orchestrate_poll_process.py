@@ -23709,9 +23709,6 @@ def test_integration_judge_non_redispatch_verdict_keeps_terminal_path():
 		assert result["review_dispatches"] == []
 
 
-if __name__ == "__main__":
-	raise SystemExit(main())
-
 
 # --- needs-human digest (plan item 4a, D6) -------------------------------------
 
@@ -23823,3 +23820,7 @@ def test_needs_human_digest_park_never_triggers_the_staged_support_latch_release
 	assert "<!-- ai:needs-human-latch" not in body
 	park = _extract_bash_function(script, "needs_human_park_project() {")
 	assert "/approved" not in park and "ai:awaiting-approval" not in park
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

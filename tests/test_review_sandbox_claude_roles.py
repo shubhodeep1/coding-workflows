@@ -30,7 +30,8 @@ def test_role_and_access_are_allowlisted(tmp_path):
 	assert 'engine="${7:-codex}"' in text
 	assert 'claude_access="${9:-write}"' in text
 	assert '"${claude_role}" = REVIEW_CONSOLIDATOR' in text
-	assert '# Poller judges (WAVE/STALL/INTEGRATION/SECURITY) are read-only sandbox roles; never transfer.' in text
+	assert '# Poller judges (WAVE/STALL/INTEGRATION/SECURITY) and the review utility roles' in text
+	assert 'are read-only sandbox roles;\n# never transfer.' in text
 	for role in ("WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE"):
 		proc = subprocess.run(["bash", str(SANDBOX), "run", "prompt", "out", "model", "high", "/dev/null", "codex", role, "write"],
 			env=env, capture_output=True, text=True)
@@ -57,8 +58,8 @@ def test_read_role_cannot_write_snapshot_or_transfer():
 	assert 'if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then' in opencode
 	assert "opencode_source_mount+=',readonly'" in opencode
 	assert 'config["snapshot"] = False' in opencode
-	assert '"SECURITY_JUDGE", "RB_JUDGE", "REVIEW_CONSOLIDATOR"}' in opencode
-	rb_judge_case = opencode.split('\tRB_JUDGE|REVIEW_CONSOLIDATOR)\n', 1)[1].split('\n\t\t;;', 1)[0]
+	assert '"SECURITY_JUDGE", "RB_JUDGE", "REVIEW_CONSOLIDATOR", "SUMMARISER", "BEHAVIOURAL_SMOKE"}' in opencode
+	rb_judge_case = opencode.split('\tRB_JUDGE|REVIEW_CONSOLIDATOR|SUMMARISER|BEHAVIOURAL_SMOKE)\n', 1)[1].split('\n\t\t;;', 1)[0]
 	assert '[ "${claude_access}" = read ]' in rb_judge_case
 	assert "opencode_source_mount+=',readonly'" in rb_judge_case
 	assert 'opencode_agent=reviewer' in rb_judge_case

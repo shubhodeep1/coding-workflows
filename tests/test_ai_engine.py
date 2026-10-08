@@ -1033,7 +1033,9 @@ def test_phase_workflows_report_refused_fallbacks_from_trusted_support(name: str
 	assert "AI_ENGINE_FALLBACK_POLICY: ${{ vars.AI_ENGINE_FALLBACK_POLICY || 'capacity' }}" in text
 	start = text.index("      - name: Report refused AI engine fallbacks\n")
 	step = text[start:]
-	assert "        if: always()\n" in step[:200]
+	# The step always runs after a failure; a workflow may add a gate for
+	# the case where no engine ran at all (the respond workflow's decision).
+	assert re.search(r"^        if: always\(\)( && .*)?\n", step[:200], re.MULTILINE), step[:200]
 	assert "continue-on-error: true" in step[:300]
 	assert '/scripts/ai_engine_fallback_report.sh"' in step
 	assert '[ ! -L "${fallback_report}" ]' in step

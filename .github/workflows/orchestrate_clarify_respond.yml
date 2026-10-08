@@ -1381,7 +1381,7 @@ jobs:
       # workflow-failure-heal dispatch plus one Telegram WARNING. Runs only
       # the copy in the trusted support checkout, never a PR-head script.
       - name: Report refused AI engine fallbacks
-        if: always()
+        if: always() && steps.check_orchestrator.outputs.respond == 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
