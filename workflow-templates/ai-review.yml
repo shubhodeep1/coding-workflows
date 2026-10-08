@@ -18,6 +18,9 @@ on:
   # auto-review/automerge until a human reviews them.
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, closed]
+  schedule:
+    # Re-check current-head security findings after their follow-up wait expires.
+    - cron: "17 * * * *"
   workflow_dispatch:
     inputs:
       pr_number:
@@ -34,7 +37,13 @@ on:
         required: false
         default: ""
         type: string
+      force_rb_judge:
+        description: "Skip reviewers/editor and run only the review-blocked judge"
+        required: false
+        default: false
+        type: boolean
 permissions:
+  actions: write
   contents: write
   pull-requests: write
   issues: write
@@ -42,7 +51,7 @@ permissions:
   id-token: write
 jobs:
   review:
-    if: ${{ github.event.action != 'closed' || github.event.pull_request.merged == true }}
+    if: ${{ github.event_name != 'schedule' && (github.event.action != 'closed' || github.event.pull_request.merged == true) }}
     # Review workspace reuse is controlled centrally by the called workflow via
     # vars.WORKSPACE_REUSE_ENABLED from the caller repository; the wrapper
     # interface stays unchanged because no extra workflow_call input is needed.
@@ -53,4 +62,32 @@ jobs:
       pr_title: ${{ github.event_name != 'workflow_dispatch' && format('{0}', github.event.pull_request.title) || '' }}
       pr_body: ${{ github.event_name != 'workflow_dispatch' && format('{0}', github.event.pull_request.body) || '' }}
       allow_workflow_edits: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && vars.ALLOW_WORKFLOW_EDITS != 'false') }}
+      force_rb_judge: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force_rb_judge == 'true' }}
     secrets: inherit
+
+  security-hold-sweep:
+    if: ${{ github.event_name == 'schedule' && vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    # Least privilege for the github.token fallback: list PRs and comments,
+    # post the dedup marker, dispatch the judge. Replaces the workflow block.
+    permissions:
+      actions: write
+      contents: read
+      pull-requests: read
+      issues: write
+    steps:
+      - name: Check out trusted security-hold sweep support
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: stable
+          path: .security-hold-support
+          persist-credentials: false
+      - name: Re-dispatch stale security holds
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
+          SECURITY_PASS_FOLLOWUP_STALE_HOURS: ${{ vars.SECURITY_PASS_FOLLOWUP_STALE_HOURS || '24' }}
+          SECURITY_HOLD_REVIEW_WORKFLOW: ai-review.yml
+        run: PYTHONDONTWRITEBYTECODE=1 python3 .security-hold-support/scripts/review_security_hold_sweep.py

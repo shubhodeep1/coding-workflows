@@ -53,6 +53,10 @@
       "color": "e11d48",
       "description": "Clarify workflow failed before producing a valid response"
     },
+    "ai:reclarify-requeue": {
+      "color": "fbca04",
+      "description": "Trusted /reclarify failed before routing; poller will retry after PAT budget recovers"
+    },
     "ai:clarify-respond-failed": {
       "color": "e11d48",
       "description": "Orchestrator clarify-respond workflow failed before posting an answer"
@@ -211,7 +215,7 @@
     },
     "ai:operator-step": {
       "color": "fbca04",
-      "description": "Steps only a person can take; the pipeline continues and the gated work stays off until they are done"
+      "description": "Steps only a person can take; the pipeline continues and gated work stays off until they are done"
     },
     "ai:unblock-closed": {
       "color": "5c5c5c",

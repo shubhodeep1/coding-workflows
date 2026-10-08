@@ -10,16 +10,15 @@ read `unattended_system_instructions.md` instead and **never see this file**.
 That file deliberately omits the STOP-and-ASK rules below — those rollouts
 must be biased to action.
 
-These instructions are mandatory and must be followed before any action.
-
 ---
 
 ## PRE-TASK MANDATORY CONTEXT LOADING
 
 Before any task, read:
-- `README.md`
-- `agents.md` (or `AGENTS.md` — whichever casing the repo root has; same file,
-  read it every session)
+- the sections of `README.md` and `agents.md` (or `AGENTS.md` — whichever
+  casing the repo root has; same file) that cover what the task touches.
+  Both files can run to hundreds of kilobytes, so search them for the
+  relevant sections instead of reading them end to end.
 - all `/db/contracts/*.yml` (or `.json`) relevant to collections that may be touched
 
 If any are missing or unclear: **STOP and ask using the mandatory Q/A format.**
@@ -29,13 +28,10 @@ Never assume undocumented behavior.
 
 ## §0. Prime Directive (NON-NEGOTIABLE)
 
-If you are **not 100% certain** the outcome matches the user's expectations:
-**STOP. ASK. DO NOT PROCEED.** — even if the task looks trivial or the intent
-seems obvious.
-
-There is no exception: §28, which let unattended `/implement-plan-claude`
-sessions auto-decide, is retired. The unattended pipelines follow
-`unattended_system_instructions.md`.
+If you are not 100% certain the outcome matches the user's expectations,
+stop and ask before acting — even if the task looks trivial or the intent
+seems obvious. In an interactive session a question costs one round trip;
+a wrong guess costs a revert.
 
 ---
 
@@ -245,13 +241,9 @@ Scope: in PR review mode, applies only to new task lists in the current request.
 
 ## §12. PR Review Mode
 
-**This §12 fully supersedes the prior "Intent Preservation / Forbidden /
-Acceptance Criteria" version of §12 in this CLAUDE.md.** The parallel §12
-in `codex.md` (and any rules in `unattended_system_instructions.md`) is
-unaffected — unattended pipelines retain their own policies. Earlier
-guidance to "not introduce new scope, abstractions, or behaviors" no
-longer governs PR review work in interactive sessions; the proactive
-policy below applies instead.
+This §12 governs interactive sessions only. The parallel §12 in `codex.md`
+(and any rules in `unattended_system_instructions.md`) is unaffected —
+unattended pipelines retain their own policies.
 
 **Precedence in PR Review Mode.** While operating under §12, this section
 takes precedence over §0 (Prime Directive), §2 (Always-On Ask-First Mode —
@@ -262,10 +254,10 @@ decisions enumerated in §12.B. §0 and §2 still govern items routed to
 scope. §6 (naming immutability) and §10 (MongoDB contracts) remain hard
 rules even under proactive scope and are NOT superseded.
 
-When the user asks Claude to address PR review feedback — via `@codex change`
-in a PR, a direct chat request, or any equivalent trigger — apply fixes with
-a **wide proactive scope**. Default to action, not to asking. Only stop and
-ask on the genuinely ambiguous items enumerated in §12.D.
+When the user asks Claude, in the session, to address PR review feedback,
+apply fixes with a **wide proactive scope**. Default to action, not to
+asking. Only stop and ask on the genuinely ambiguous items enumerated in
+§12.D.
 
 A `subscribe_pr_activity` event is **not** a trigger for this mode. PR
 watching is disabled by §25, so no such event should ever reach an
@@ -375,59 +367,13 @@ After changes:
 
 ### G) Autofix CI / Address-Comments Mode Add-ons
 
-**INACTIVE — superseded by §25.** The autofix CI / address-comments mode
-this subsection describes was entered by a `subscribe_pr_activity` event
-(a failing required check or a new review comment waking the session).
-§25 disables PR watching entirely, so that mode is never entered and the
-add-ons below are never in force on their own. The text is retained
-unchanged so section references stay stable (§6) and so the categories
-can be re-activated by editing §25 in a reviewed change. When the user
-directly asks in the session to fix CI or address review comments on a
-PR, plain §12 (A–F) applies; the add-ons below do not.
-
-When Claude was invoked under the **autofix CI / address-comments mode** —
-i.e. an **interactive Claude Code session** driven by a
-`subscribe_pr_activity` event tied to a failing required check, an
-`@codex change` / "address the review comments" request on a PR, or any
-equivalent trigger that tasks the interactive session with making the
-branch green and the review thread satisfied — the following were
-first-class auto-apply categories on top of §12.B.
-
-This subsection governs **interactive sessions only**, consistent with
-the preface at the top of this file (lines 7–10): the unattended
-`review_autofix` pipeline reads `unattended_system_instructions.md` and
-keeps its own policy, so the rules below do not flow into that pipeline
-and must not be cited as if they did.
-
-- **Lint / formatter / static-analysis failures**, **including failures
-  whose offending line is outside the current PR's diff.** Owning a green
-  branch is part of this mode, so a lint, formatter, or static-analysis
-  violation surfaced by CI must be fixed even when the violation was
-  introduced by an earlier commit on this branch, lives in a file the
-  current PR did not otherwise touch, or is in code Claude has not
-  modified in this session. The "scope explosion" STOP condition in
-  §12.D does NOT apply to mechanical lint sweeps — bring the branch
-  green even if that touches many files. §6 (naming immutability)
-  still binds: if the only mechanical fix would rename a public
-  identifier flagged by a style rule, route to §12.D instead of
-  renaming.
-- **Merge conflicts with the base branch.** Resolve them automatically
-  so the PR is mergeable. Prefer the resolution that preserves both
-  sides' intent over the resolution that drops one side; never silently
-  discard either side's changes. When both sides genuinely conflict and
-  the correct resolution is non-obvious from the diff (semantic intent
-  unclear, both branches changed the same invariant in incompatible
-  ways, or the resolution would alter a documented contract per §12.D),
-  STOP and ask in Q/A format before committing the resolution. Record
-  the resolution in the merge commit message and call it out in the PR
-  description's "Proactive fixes included" subsection (§12.E).
-
-These add-ons inherit the rest of §12 unchanged: §12.A (one PR — lint
-sweeps and conflict fixes land in this PR, never a follow-up), §12.C
-(weigh reversibility, blast radius, and §6/§10 conflicts before acting),
-§12.E (commit hygiene — group the lint sweep into its own commit
-distinct from the in-scope review fixes; record the conflict resolution
-in its own commit), and §12.F (acceptance criteria).
+**INACTIVE — superseded by §25.** This subsection held add-ons for an
+autofix CI / address-comments mode entered by a `subscribe_pr_activity`
+event, which §25 disables. The heading stays so section references remain
+stable (§6); the retired text is in git history and can be restored by
+editing §25 in a reviewed change. When the user directly asks in the
+session to fix CI or address review comments on a PR, plain §12 (A–F)
+applies.
 
 ---
 
@@ -701,14 +647,8 @@ Rules:
   violation kills the orchestrator's state machine for the project it
   targets.
 
-Historical incident: PR #2760 used `Fixes #2734` in its body. `#2734`
-was an `ai:orchestrator-tracking` issue for the integration-sync
-resolver self-heal project. On merge, GitHub auto-closed `#2734` and
-the orchestrator stopped dispatching waves 2-7; the bulk of the
-project's planned phases never shipped (see
-`docs/completed/integration-sync-resolver-self-heal-plan.md` and the
-full forensic timeline in
-`docs/postmortems/2026-05-18-project-2734-stall.md`).
+The incident behind this rule is recorded in
+`docs/postmortems/2026-05-18-project-2734-stall.md`.
 
 ## §20. CHANGELOG Entries (MANDATORY)
 
@@ -1201,7 +1141,14 @@ your own judgement.
    treat the GraphQL-backed command as a fallback, never the reverse — the
    same reasoning §21.D applies to the merged-PR guard.
 
-4. **Shape `gh api` calls so the §23.H guard can approve them.** Put GET
+4. **Shape `gh api` calls so the §23.H guard can approve them.**
+   **Type IDs literally into the endpoint path** —
+   `gh api repos/o/r/actions/runs/123/jobs`, not `.../runs/$RUN_ID/jobs` or
+   `.../commits/$(git rev-parse HEAD)/check-runs`, and do not wrap `gh api`
+   in `$(...)`. An unquoted expansion in a `gh api` argument prompts in every
+   permission mode, Auto included, and so does a `gh api` call inside a
+   `$(...)` that sits in a loop or in a larger word. Look a value up with one
+   call, then issue the next call with the value typed out. Put GET
    parameters in the URL (`gh api 'search/issues?q=...&per_page=50'`) or
    pass them with `-X GET -f ...`, never as bare `-f` fields (that makes `gh`
    send a POST). Except for the literal-ID read loops in §23.H, keep `gh api`
@@ -1457,9 +1404,31 @@ Constraints that ride along:
 
 - **Only for the covered domains.** A credential is scoped to its account;
   never use it to touch Workers or zones unrelated to the task.
-- **Validate before deploy.** Run the project's checks (typecheck, tests,
-  `wrangler deploy --dry-run` where available) before uploading; a deploy
-  is user-visible on a live site the moment it lands.
+- **Never execute unmerged code with credentials.** Project checks, package
+  install lifecycle scripts, builds, and `wrangler deploy --dry-run` can
+  execute repository code. Never run them from an unmerged PR or branch in
+  a shell holding session credentials, even before deploy approval.
+- **Deploy only a verified default-branch commit.** Require the target
+  repository's default branch to be protected. Resolve its commit SHA via
+  the GitHub API, fetch it, and deploy from a clean detached worktree pinned
+  to that SHA, not a PR checkout or moving ref. Verify the worktree HEAD and
+  cleanliness and recheck the API branch tip and protection immediately
+  before deploying. If any check fails or cannot be verified, block the
+  deploy; do not offer a manual Worker deploy as a workaround.
+- **Validate without credentials.** Prefer GitHub check-runs for the pinned
+  SHA; do not deploy while checks are failing or pending. Run local checks
+  (typecheck, tests, `wrangler deploy --dry-run` where available) only in a
+  credential-free, no-egress sandbox with an isolated home and no host
+  credentials or Docker socket mounted. If isolation is unavailable, skip
+  local checks and rely on check-runs; never run them in the credential-
+  bearing session shell.
+- **Limit deploy credential exposure.** Deploy only from the verified
+  worktree, matching the target Worker against the repo's §24.F registry.
+  Give the deploy process only the matching site's Cloudflare account ID and
+  API token, with a clean home and unrelated session credentials stripped.
+  These account-owned credentials are not Worker-scoped; provisioning a
+  narrower token is an operator task, not a reason to expose additional
+  credentials during deployment.
 - **Preserve rollback.** Prefer versioned uploads/gradual rollouts where
   the account supports them; never delete the previous version as part of
   a deploy.
@@ -1649,9 +1618,7 @@ receives this file via the `@stable` sync, and it is not superseded by §12.
 GitHub does not start runs for a workflow file over **512,000 bytes**
 (500 KiB), and it reports no error: every push instead gets a zero-job
 `failure` run named after the file path ("workflow file issue"), and a
-reusable workflow over the limit cannot be called. Incident: #4327 pushed
-`.github/workflows/review_autofix.yml` to 540,537 bytes and the phantom runs
-broke the stable release gate (run 35903885958).
+reusable workflow over the limit cannot be called.
 
 - **Split at 480,000 bytes.** When a change leaves any
   `.github/workflows/*.yml` at or above 480,000 bytes, move the largest
@@ -1679,6 +1646,106 @@ Retired on 2026-10-03. The session-based Claude automation was replaced by
 the Claude CLI engine in the Actions pipelines
 (docs/plans/replace-claude-sessions-with-cli-engine-plan.md). Section
 number kept per §6.
+
+---
+
+## §29. OpenRouter Access (MANDATORY)
+
+The session environment provides an `OR_MGMT_KEY` env var: an OpenRouter
+**management** (provisioning) key for the account whose API keys the
+pipelines use. This section applies in this repo and in every consumer repo
+that receives this file via the `@stable` sync. It follows the same posture
+split as §22–§24: **reads are self-serve**, **key and account mutations are
+ask-first**.
+
+`OR_MGMT_KEY` is not `OPENROUTER_API_KEY`. The Actions secret
+`OPENROUTER_API_KEY` is an inference key the workflows send model requests
+with (§6: name unchanged). The management key cannot run models; it reads and
+manages the account and its keys.
+
+### A) Read Operations — Act, Do Not Ask
+
+Whenever a task needs OpenRouter data — spend, token usage, per-model cost,
+which key is spending, remaining credit — pull it yourself with `OR_MGMT_KEY`
+instead of asking the user for it, estimating it from list prices, or
+reconstructing it from workflow logs. This is an explicit carve-out from §2
+for **read-only** OpenRouter calls. Do it automatically, every time the data
+is needed.
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/v1/activity` | One row per day × model × provider endpoint for the last 30 completed UTC days: `usage` (USD), `requests`, `prompt_tokens`, `completion_tokens`, `reasoning_tokens`, `cached_tokens`. Optional `?date=YYYY-MM-DD` for a single day. |
+| `GET /api/v1/keys` | Every API key on the account: `name`, `label`, `disabled`, `limit`, and USD `usage` / `usage_daily` / `usage_weekly` / `usage_monthly`. |
+| `GET /api/v1/credits` | `total_credits` and `total_usage` (USD) for the account. |
+
+Transport (no CLI exists; use the REST API):
+
+```
+curl -sS -H "Authorization: Bearer ${OR_MGMT_KEY}" \
+  "https://openrouter.ai/api/v1/activity"
+```
+
+Limits that shape every analysis (verified 2026-10-06):
+
+- **30 days only.** `/activity` rejects dates older than the last 30
+  completed UTC days with HTTP 400, and today's partial day is not included.
+  Anything older has to come from saved data (for example a report under
+  `analysis/`), not from the API.
+- **Split by model, not by key or repo.** `/activity` is account-wide. Cost
+  can be attributed to a pipeline role only when that role is the sole user
+  of the model slug. Check the slugs in `.github/workflows/*.yml` and
+  `scripts/` before attributing, and say when a slug is shared (for example
+  the reviewer-panel slot and the cross-reviewer summariser).
+- **Per-key spend is totals only.** `/keys` gives each key's daily, weekly
+  and calendar-month USD totals with no model breakdown. `usage_monthly` is
+  the current calendar month, not a rolling 30 days.
+- Some direct OpenRouter calls set attribution headers: `scripts/analyze_soft_errors.py`
+  sets `HTTP-Referer` and `X-Title`, and `scripts/summarize_unselected_runs.py`
+  sets `X-Title`. The management API's account-wide `/activity` and `/keys`
+  totals do not provide a workflow, phase, or consumer-repo breakdown; do not
+  infer one from these headers or from a model slug shared by multiple callers.
+
+Write downloaded responses under the session scratchpad, not the repo
+(§13).
+
+### B) Key & Account Mutations — ALWAYS Ask First
+
+**Never perform these without asking first** in the §2 Q/A format, even
+under §12's proactive PR-review scope (this subsection is NOT superseded by
+§12):
+
+- creating, deleting, disabling, re-enabling, or renaming an API key
+  (`POST` / `PATCH` / `DELETE /api/v1/keys/...`);
+- setting or changing a key's spend `limit` or limit reset;
+- buying credits or changing any billing, organization, or workspace
+  setting.
+
+The question must name the exact key (its `name` and `label`, never the key
+value) and what the operation changes. After approval, perform it yourself
+with the key; do not hand the user a command to run (§18).
+
+### C) Token Hygiene and Degradation (hard rules)
+
+- Never echo, log, or print `OR_MGMT_KEY`; reference it only via env
+  expansion (`$OR_MGMT_KEY`).
+- Never write it into committed files, PR bodies, issue comments, commit
+  messages, or diagnostic output. Redact it if a tool response contains it.
+  A newly created key's value, returned once by `POST /api/v1/keys`, gets the
+  same treatment.
+- If the var is missing or the API returns 401/403, **say so once** and
+  continue with what can be done without it. Do not retry-loop, and do not
+  ask the user to run the calls manually (§18).
+
+### D) Interactive Sessions Only
+
+- `OR_MGMT_KEY` is a session env var, like `DIGITALOCEAN_ACCESS_TOKEN` (§22)
+  and the Cloudflare credentials (§24). No Actions workflow reads it, and
+  none may be added that does: never commit a workflow, script, or hook that
+  reads it from the session environment. Actions-side spend reporting would
+  need its own repo secret and its own review; route that through §2.
+- The unattended pipelines read `unattended_system_instructions.md` and
+  never see this file, so §29 grants no new access to any codex-driven
+  phase.
 
 ---
 

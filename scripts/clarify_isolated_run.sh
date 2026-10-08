@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Run one clarify attempt in a credential-free, network-isolated container.
 # Only this helper (not the agent) accesses Docker and the host-side broker.
+# CLARIFY_SOURCE_ROOT optionally selects the source snapshot (default: $PWD).
+# CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS=true omits agent instructions (default: false).
 set -euo pipefail
 
 prompt_file="${1:?prompt file required}"
@@ -10,8 +12,8 @@ log_file="${3:?log file required}"
 engine="${4:-codex}"
 engine_role="${5:-CLARIFY}"
 case "${engine}" in codex|claude) ;; *) echo '::error::Invalid clarify engine' >&2; exit 1 ;; esac
-[[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|UNBLOCK_JUDGE)$ ]] || { echo '::error::Invalid clarify engine role' >&2; exit 1; }
-[ "${engine}" != claude ] || [[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|UNBLOCK_JUDGE)$ ]] || { echo '::error::Invalid Claude engine role' >&2; exit 1; }
+[[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|PLAN|UNBLOCK_JUDGE)$ ]] || { echo '::error::Invalid clarify engine role' >&2; exit 1; }
+[ "${engine}" != claude ] || [[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|PLAN|UNBLOCK_JUDGE)$ ]] || { echo '::error::Invalid Claude engine role' >&2; exit 1; }
 support="scripts"
 if [ -n "${CLARIFY_ISOLATION_SUPPORT_DIR:-}" ]; then
 	if [[ "${CLARIFY_ISOLATION_SUPPORT_DIR}" != /* ]] || [ ! -d "${CLARIFY_ISOLATION_SUPPORT_DIR}" ]; then
@@ -36,6 +38,15 @@ else
 fi
 command -v docker >/dev/null && command -v python3 >/dev/null || { echo '::error::Clarify isolation prerequisites unavailable' >&2; exit 1; }
 [ -f "${support}/clarify_sandbox/Dockerfile" ] && [ -f "${support}/clarify_openrouter_broker.py" ] && [ -f "${support}/write_codex_config.sh" ] && [ -f "${support}/codex_model_catalog.json" ] || { echo '::error::Clarify isolation support missing' >&2; exit 1; }
+# The source root is read as data only; host Python never imports from it.
+source_root="${CLARIFY_SOURCE_ROOT:-${PWD}}"
+omit_agent_instructions="${CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS:-false}"
+case "${omit_agent_instructions}" in true) ;; *) omit_agent_instructions=false ;; esac
+if [ ! -d "${source_root}" ] || [ -L "${source_root}" ]; then
+	echo '::error::Clarify source root unavailable' >&2
+	exit 1
+fi
+source_root="$(cd "${source_root}" && pwd -P)" || { echo '::error::Clarify source root unavailable' >&2; exit 1; }
 
 # The runner-owned temporary root contains no credentials. Its socket child is
 # traversable by the container's matching non-root UID, not by other users.
@@ -57,29 +68,36 @@ mkdir -m 0755 "${run_root}/source" "${run_root}/results"
 # Include only regular, tracked source files with safe path classes. Never
 # follow a symlink (including parent directories); do not include .git,
 # support checkouts, runner configuration, env files or private keys.
-PYTHONDONTWRITEBYTECODE=1 python3 - "${run_root}/source" "${CLARIFY_ISOLATION_SUPPORT_DIR:-}" <<'PY'
+# triage-host-python-import-shadowing: -I excludes both cwd and the script directory.
+PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${source_root}" "${run_root}/source" "${omit_agent_instructions}" "${CLARIFY_ISOLATION_SUPPORT_DIR:-}" <<'PY'
 import os
 import pathlib
 import stat
 import subprocess
 import sys
 
-root = pathlib.Path.cwd()
-dest = pathlib.Path(sys.argv[1])
+root = pathlib.Path(sys.argv[1])
+dest = pathlib.Path(sys.argv[2])
+omit_agent_instructions = sys.argv[3] == "true"
 roots = {"src", "scripts", "tests", "prompts", "docs", "app", "lib", "workflow-templates", "validation", "db", "ai-memory", "changelog.d"}
 root_files = {"README.md", "agents.md", "AGENTS.md", "package.json", "pyproject.toml", "go.mod", "Cargo.toml"}
+agent_instruction_names = {"agents.md", "agents.override.md", "claude.md", "claude.local.md"}
 suffixes = {".py", ".sh", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".java", ".json", ".md", ".yml", ".yaml", ".toml", ".txt", ".css", ".html", ".sql"}
 bad_parts = {".git", ".ai", ".codex", ".codex-workflow-src", ".codex-workflow-src-main", ".env", "secrets", "credentials", "__pycache__"}
 count = 0
 total = 0
+omitted = 0
 
 def copy(path):
-    global count, total
+    global count, total, omitted
     parts = pathlib.PurePosixPath(path).parts
     if (not parts or any(part.lower() in bad_parts or part.lower().startswith(".env") for part in parts)
             or any(part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore")) for part in parts)
             or (path not in root_files and parts[0] not in roots and parts[:2] not in ((".github", "workflows"), (".github", "actions")))
             or (path not in root_files and pathlib.PurePosixPath(path).suffix.lower() not in suffixes and parts[-1] != "Dockerfile")):
+        return
+    if omit_agent_instructions and parts[-1].lower() in agent_instruction_names:
+        omitted += 1
         return
     node = root
     for part in parts:
@@ -114,9 +132,11 @@ try:
     for entry in tracked:
         if entry:
             copy(entry.decode("utf-8"))
+    if omitted:
+        print(f"CLARIFY_SNAPSHOT_AGENT_INSTRUCTIONS_OMITTED count={omitted}", file=sys.stderr)
     # Consumer checkouts do not track the staged writer/catalog; these are
     # fixed support files, never read from the issue prompt or user input.
-    if not sys.argv[2]:
+    if not sys.argv[4]:
         for required in ("scripts/write_codex_config.sh", "scripts/codex_model_catalog.json"):
             if not (dest / required).exists():
                 copy(required)
@@ -160,7 +180,7 @@ if [ "${engine}" = claude ]; then
 	for account in "${claude_accounts[@]}"; do
 		rm -f -- "${run_root}/results/transcript.jsonl" "${run_root}/results/stderr" "${run_root}/socket/provider.sock"
 		env -i PATH="${PATH}" PYTHONDONTWRITEBYTECODE=1 \
-			python3 "${engine_dir}/claude_anthropic_relay.py" broker "${run_root}/socket/provider.sock" "$(ai_engine_pool_dir)/tokens/${account}" "${claude_model},${probe_model}" &
+			python3 -I -B "${engine_dir}/claude_anthropic_relay.py" broker "${run_root}/socket/provider.sock" "$(ai_engine_pool_dir)/tokens/${account}" "${claude_model},${probe_model}" &
 		broker_pid=$!
 		for _ in $(seq 1 50); do
 			[ -S "${run_root}/socket/provider.sock" ] && break
@@ -245,7 +265,7 @@ fi
 image="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker build -q --build-arg "CODEX_VERSION=${version}" -f "${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox")"
 [ -n "${image}" ] || { echo '::error::Clarify image build failed' >&2; exit 1; }
 env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" CLARIFY_MODEL="${MODEL_EDITOR}" PYTHONDONTWRITEBYTECODE=1 \
-	python3 "${support}/clarify_openrouter_broker.py" broker "${run_root}/socket/provider.sock" &
+	python3 -I -B "${support}/clarify_openrouter_broker.py" broker "${run_root}/socket/provider.sock" &
 broker_pid=$!
 for _ in $(seq 1 50); do
 	[ -S "${run_root}/socket/provider.sock" ] && break
