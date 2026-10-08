@@ -337,7 +337,10 @@ class PropagateConsumerSecretsWorkflowContractTests(unittest.TestCase):
 	def test_dispatch_input_is_passed_through_env_only(self) -> None:
 		job = self.workflow["jobs"]["propagate"]
 		resolve = next(s for s in job["steps"] if s.get("id") == "targets")
-		self.assertIn("inputs.targets", resolve["env"]["DISPATCH_TARGETS"])
+		# The dispatch input reaches the shell only through the step env
+		# (INPUT_TARGETS, the name #6709 introduced), never by expression
+		# interpolation inside the script body.
+		self.assertIn("inputs.targets", resolve["env"]["INPUT_TARGETS"])
 		self.assertNotIn("${{", resolve["run"])
 
 	def test_checkout_has_history_for_the_registry_diff(self) -> None:

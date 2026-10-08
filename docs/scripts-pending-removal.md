@@ -105,7 +105,7 @@ Copy this block when adding a new entry:
 
 ### `scripts/propagate_consumer_secrets.sh` + `.github/workflows/propagate-consumer-secrets.yml`
 
-- **Introduced in:** #6712 (2026-10-08)
+- **Introduced in:** #6709 (2026-10-08); weekly only-missing schedule added in #6712 (2026-10-08)
 - **Type:** supervisor
 - **Removal trigger:** permanent — review annually
 - **Removal preflight checks:**
