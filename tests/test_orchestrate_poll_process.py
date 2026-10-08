@@ -6395,6 +6395,89 @@ def test_security_pass_cap_does_not_record_advisories_before_terminal_failure() 
 	assert "| SEC-TEST-2 | medium |" in judge_comments[0]
 
 
+def test_security_pass_cap_converts_low_keep_fixing_to_advisory() -> None:
+	# Issue #6729: low severity is still eligible for the round-cap conversion.
+	low_finding = _security_pass_test_finding()
+	low_finding["severity"] = "low"
+	result = _run_poller(
+		state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
+		enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([low_finding]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing")))},
+	)
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "complete"
+	assert latest_state["security_pass_status"] == "passed"
+	waived = latest_state["security_pass_waived_findings"]
+	assert [row["finding_id"] for row in waived] == ["SEC-TEST-1"]
+	assert waived[0]["justification"].startswith(
+		"[keep_fixing capped after 2 judge round(s); converted to advisory follow-up] SEC-TEST-1: keep_fixing"
+	)
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=192 round=3 cap=2 converted=1" in combined_log
+	assert "blocking_findings_after_cap" not in combined_log
+
+
+def test_security_pass_cap_mixed_blocking_and_low_keep_fixing_waives_nothing() -> None:
+	# Issue #6729: a low finding converted at the cap must not ride through as a
+	# waiver when a high keep_fixing finding terminalizes the same round.
+	low_finding = _security_pass_second_test_finding()
+	low_finding["severity"] = "low"
+	result = _run_poller(
+		state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
+		enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding(), low_finding]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(
+			_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing"), ("SEC-TEST-2", "keep_fixing"))
+		)},
+	)
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "failed"
+	assert latest_state["security_pass_waived_findings"] == []
+	assert result.get("created_issues", []) == []
+	assert "ai:security-pass-failed" in result["tracking_labels"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "reason=blocking_findings_after_cap" in combined_log
+	# The low/medium rewrite runs before the terminal check; its result is discarded.
+	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=192 round=3 cap=2 converted=1" in combined_log
+	assert "SECURITY_PASS_WAIVED" not in combined_log
+	judge_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 3)")]
+	assert len(judge_comments) == 1
+	assert "without recording any new waivers or follow-ups" in judge_comments[0]
+	assert "| SEC-TEST-1 | high |" in judge_comments[0]
+
+
+def test_security_pass_cap_keeps_explicit_judge_accept_of_high_finding() -> None:
+	# Issue #6729: the cap guard only blocks keep_fixing conversion; the judge's
+	# explicit accept_with_followup of a high finding is still honoured.
+	result = _run_poller(
+		state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
+		enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(
+			_security_pass_judge_verdict(("SEC-TEST-1", "accept_with_followup"))
+		)},
+	)
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "complete"
+	assert latest_state["security_pass_status"] == "passed"
+	waived = latest_state["security_pass_waived_findings"]
+	assert [row["finding_id"] for row in waived] == ["SEC-TEST-1"]
+	assert waived[0]["source"] == "judge"
+	assert waived[0]["severity"] == "high"
+	assert waived[0]["justification"].startswith("SEC-TEST-1: accept_with_followup")
+	assert "keep_fixing capped" not in waived[0]["justification"]
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED" not in combined_log
+	assert "blocking_findings_after_cap" not in combined_log
+
+
 def test_security_pass_exhaustion_judge_keep_fixing_allowed_within_cap() -> None:
 	"""Round 2 with the default cap of 2 still grants the consolidated fix cycle."""
 	result = _run_poller(
