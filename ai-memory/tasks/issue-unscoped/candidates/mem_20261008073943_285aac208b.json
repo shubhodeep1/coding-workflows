@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:6555-6570 | severity=high | confidence=[5]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: If immediate follow-up creation fails and the state update to mark the waiver `followup_pending` also fails, the waiver remains without a retry marker and the advisory finding is never filed as a follow-up.\n  WHY: The deferred filer selects only rows with `followup_pending`, while later audits suppress findings matched by the recorded waiver; severity differed (NIT/MAJOR), so the highest severity is used.\n- scripts/security_audit.sh:1977-2029 | severity=high | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The per-finding `git blame` loop can serialize hundreds of subprocess calls, causing excessive audit runtime.\n  WHY: Each finding triggers a separate `git blame` invocation; severity differed (NIT/MAJOR), so the highest severity is used.\n- scripts/orchestrate_poll_process.sh:6560 | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Each advisory finding runs a full `jq` over `security_pass_waived_findings` to set `followup_pending`, producing O(n\u00b2) work when many advisories need markers.\n  WHY: The per-finding full-state update repeats work as the number of advisories grows.\n- scripts/orchestrate_poll_process.sh:7298, 7804 | severity=low | confidence=[2]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The exhaustion-judge-path `SECURITY_PASS_CLEAN` log omits the trailing `advisory=<n>` field present in the main-path log.\n  WHY: Tooling that expects `advisory=` on every `SECURITY_PASS_CLEAN` line will miss advisory counts from exhaustion-judge clean passes.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Verify that the default behavior (SECURITY_AUDIT_LINE_OWNERSHIP=project) is correctly applied when the variable is unset.\n  expected_change_site: tests/test_security_audit_workflow_contract.py\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: No explicit test case validates the scenario where SECURITY_AUDIT_LINE_OWNERSHIP is completely absent from the environment, relying on the script's default assignment. The existing tests set it explicitly to project or off.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/orchestrate_poll_process.sh:6555-6570 | severity=low | confidence=[3]\n  PROBLEM: If the immediate follow-up fails and the state write marking the waiver `followup_pending` also fails, the waiver remains without a retry path.\n  WHY: The deferred filer selects only rows where `followup_pending` is true; the waiver suppresses the finding on the next audit, so no follow-up is filed.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- security_pass_record_line_ownership_advisories() | severity=high | confidence=[4]\n  PROBLEM: Failure to ensure follow-up creation and state update are atomic.\n  WHY: If the advisory waiver is recorded but the subsequent follow-up issue creation or state update fails, the security finding might be suppressed because it is marked advisory, but it is not filed as a follow-up issue, effectively causing the finding to disappear from the security gate and follow-up tracking.\n- git blame loop in findings processing | severity=high | confidence=[4]\n  PROBLEM: git blame is called in a loop for every finding.\n  WHY: Hundreds of findings will cause extreme runtime latency, likely exceeding the security audit's job timeout and exhausting CI capacity.\n- Requirement: Verify that the default behavior (SECURITY_AUDIT_LINE_OWNERSHIP=project) is correctly applied when the variable is unset.\n  Expected change site: tests/test_security_audit_workflow_contract.py\n  Evidence of absence: No explicit test case validates the scenario where SECURITY_AUDIT_LINE_OWNERSHIP is completely absent from the environment, relying on the script's default assignment. The existing tests set it explicitly to project or off.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:6555-6570 | severity=low | confidence=[3]\n  PROBLEM: When both `create_security_pass_advisory_followup` and the subsequent `jq` state-update fail, the waiver row stays with `issue: null` and no `followup_pending` marker.\n  WHY: The deferred filer selects only rows where `followup_pending == true`, and the next audit suppresses the finding via the already-recorded waiver, so the advisory follow-up is never filed and no retry path remains.\n- scripts/orchestrate_poll_process.sh:6560 | severity=low | confidence=[3]\n  PROBLEM: Each advisory finding executes a full `jq` over `security_pass_waived_findings` to set `followup_pending`.\n  WHY: With many advisories needing the marker, the per-tick jq cost grows quadratically and slows the poller tick.\n- scripts/security_audit.sh:1977-2029 | severity=low | confidence=[3]\n  PROBLEM: Every finding gets its own `git blame` invocation, one subprocess per finding.\n  WHY: Hundreds of sequential blame calls can make the path slow; the per-call timeout bounds total wall time, but this is the slowest possible pattern.\n- scripts/orchestrate_poll_process.sh:7298, 7804 | severity=low | confidence=[2]\n  PROBLEM: The exhaustion-judge-path `SECURITY_PASS_CLEAN` log omits an `advisory=<n>` trailing field that the main-path log includes.\n  WHY: Downstream tooling that expects `advisory=` on every `SECURITY_PASS_CLEAN` line can miss exhaustion-judge advisory counts.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:6560-6569 | severity=high | confidence=[5]\n  PROBLEM: If creating the immediate follow-up fails and writing `followup_pending` also fails, the waiver row is left without a retry marker.\n  WHY: The deferred filer selects only rows with `followup_pending: true`; later audits suppress the finding using the recorded waiver, so the finding is neither retried nor filed as a follow-up.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/orchestrate_poll_process.sh:6565-6569 | severity=low | confidence=[3]\n  PROBLEM: If immediate advisory follow-up creation fails and the subsequent jq state update also fails, the waiver row is left with `issue: null` and no `followup_pending: true` marker.\n  WHY: The deferred filer selects only rows with `followup_pending: true`; the recorded waiver suppresses the finding on the next audit, so no follow-up issue is filed and no retry path remains.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "d15edbbc2870ed32990fe614ed46c21f2a5675417937cd6dfb8ab564770a784a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6742,
+    "run_id": "37741926109",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37741926109",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261008073943_285aac208b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6742,
+    "run_id": "37741926109"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-08T07:39:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
