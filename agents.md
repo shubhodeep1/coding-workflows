@@ -582,6 +582,18 @@ a new value, add it to the appropriate overrides file with a
 
 ## Implement scope-lock label
 
+Implement's automation-path grant guard runs on the existing `/approved` entry
+point before and during commit. Staged `.github/`, `.claude/`, `scripts/`,
+`prompts/`, and `workflow-templates/` files (case-insensitive, including rename
+sources) require `ALLOW_WORKFLOW_EDITS=true` plus an exact `files_touched` entry
+from an issue authored by the GH_PAT login or OWNER/MEMBER/COLLABORATOR.
+The host-only issue-bound grant file is built before the isolated editor runs;
+missing metadata, identity or helper fails closed only for automation paths.
+Both sites reuse `scope_violation_*` outputs and `ai:scope-blocked`; the
+`guard=automation-path` rejection is not eligible for unblock overrides.
+General `ENFORCE_FILES_TOUCHED` and `ALLOW_OUT_OF_SCOPE_FILES` switches cannot
+bypass it. Log prefix: `IMPLEMENT_AUTOMATION_PATH_GUARD`.
+
 - When `SCOPE_LOCK_LABEL_ENABLED=true`, `implement.yml` recognizes one active
   dynamic issue label of the form `ai:scope:<glob>` and copies the glob into
   the implementation context.
@@ -1984,6 +1996,7 @@ and shipped:
 - `AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED`
 - `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP`
 - `REVIEW_EDITOR_PREFLIGHT`
+- `IMPLEMENT_AUTOMATION_PATH_GUARD`
 - `STAGE_MAIN_PINNED_DIVERGENCE`
 - `WORKTREE_REGISTER`
 - `WORKTREE_DEREGISTER`
@@ -2216,6 +2229,7 @@ LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED
 LOG_PREFIX.name=NOOP_RECOVERY_SKIP_FINGERPRINT_CAP
 LOG_PREFIX.name=REVIEW_EDITOR_PREFLIGHT
+LOG_PREFIX.name=IMPLEMENT_AUTOMATION_PATH_GUARD
 LOG_PREFIX.name=STAGE_MAIN_PINNED_DIVERGENCE
 LOG_PREFIX.name=WORKTREE_REGISTER
 LOG_PREFIX.name=WORKTREE_DEREGISTER

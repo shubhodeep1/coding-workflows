@@ -26,14 +26,21 @@ Inputs:
                           Reads stdin when omitted.
   --allowlist-out PATH    Optional: write the normalized allowlist (one entry
                           per line) so the caller can surface it in the alert.
+  --emit-automation-grant PATH --issue-meta-file PATH --pipeline-login LOGIN
+                          Snapshot trusted-author exact automation paths.
+  --check-automation-paths --automation-grant-file PATH --staged-file PATH
+                          --allow-workflow-edits VALUE --issue-number NUMBER
+                          Verify staged automation paths against the snapshot.
 
 Output:
   stdout — the out-of-scope staged paths, one per line (empty when none).
 
-Exit codes (the caller maps these; ANY other code => fail open / skip):
+Exit codes (legacy scope callers fail open on other codes; automation callers
+fail closed on any nonzero result):
   0   evaluated, every staged path is in scope.
   10  skipped — the issue declares no (or an empty) files_touched allowlist.
   20  one or more staged paths fall outside the allowlist (stdout lists them).
+  30  one or more automation paths lack a grant (stdout lists them).
 
 Matching semantics (allowlist entry -> staged path):
   * leading "./" is stripped from both sides; surrounding whitespace trimmed.
@@ -55,6 +62,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 from functools import lru_cache
+import json
 from pathlib import PurePosixPath
 import re
 import sys
@@ -63,6 +71,14 @@ import sys
 EXIT_IN_SCOPE = 0
 EXIT_SKIP_NO_ALLOWLIST = 10
 EXIT_OUT_OF_SCOPE = 20
+EXIT_AUTOMATION_UNGRANTED = 30
+
+# Keep this prefix set in sync with _rb_fix_scope_is_protected in
+# scripts/orchestrate_poll_process.sh. Case variants are denied here too.
+AUTOMATION_PATH_PREFIXES = (".github", ".claude", "scripts", "prompts", "workflow-templates")
+TRUSTED_AUTHOR_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+AUTOMATION_GRANT_SCHEMA = "automation_path_grant.v1"
+LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$")
 
 STATUS_IN_SCOPE = "in-scope"
 STATUS_SKIP_NO_ALLOWLIST = "skip-no-allowlist"
@@ -143,6 +159,83 @@ def normalize_allowlist(entries: list[str]) -> list[str]:
 		seen.add(entry)
 		normalized.append(entry)
 	return normalized
+
+
+def is_automation_path(path: str) -> bool:
+	return normalize_path(path).split("/", 1)[0].lower() in AUTOMATION_PATH_PREFIXES
+
+
+def files_touched_block_state(text: str) -> tuple[str, list[str]]:
+	entries = extract_files_touched(text)
+	if entries is not None:
+		return "ok", entries
+	if any(line.strip() in {"files_touched:", "- files_touched:"} for line in text.splitlines()):
+		return "malformed", []
+	return "missing", []
+
+
+def build_automation_grant(issue_meta: dict, pipeline_login: str) -> dict:
+	"""Snapshot the author's authority and exact automation files in the issue."""
+	if not isinstance(issue_meta, dict):
+		raise ValueError("invalid issue metadata")
+	user = issue_meta.get("user")
+	author_login = user.get("login") if isinstance(user, dict) else ""
+	author_login = author_login if isinstance(author_login, str) else ""
+	author_association = issue_meta.get("author_association")
+	author_association = author_association if isinstance(author_association, str) else ""
+	record = {"schema_version": AUTOMATION_GRANT_SCHEMA, "issue_number": issue_meta.get("number"),
+		"trusted": False, "reason": "grant_error", "author_login": author_login,
+		"author_association": author_association, "paths": []}
+	if not isinstance(pipeline_login, str) or not LOGIN_RE.fullmatch(pipeline_login):
+		record["reason"] = "identity_unavailable"
+	elif not LOGIN_RE.fullmatch(author_login):
+		record["reason"] = "untrusted_author"
+	elif author_login != pipeline_login and author_association.upper() not in TRUSTED_AUTHOR_ASSOCIATIONS:
+		record["reason"] = "untrusted_author"
+	else:
+		body = issue_meta.get("body")
+		if not isinstance(body, str):
+			body = ""
+		state, entries = files_touched_block_state(body)
+		if state != "ok":
+			record["reason"] = "no_allowlist" if state == "missing" else "malformed_allowlist"
+		else:
+			record["trusted"] = True
+			record["reason"] = "granted"
+			record["paths"] = [entry for entry in normalize_allowlist(entries)
+			if is_automation_path(entry) and not entry.startswith("/") and not entry.endswith("/")
+			and not any(char in entry for char in _GLOB_CHARS)
+			and all(segment not in {".", ".."} for segment in entry.split("/"))]
+	return record
+
+
+def check_automation_paths(staged: list[str], grant: object, allow_workflow_edits: str,
+	issue_number: str) -> tuple[str, list[str], str]:
+	"""Deny each automation path unless a valid issue-bound exact grant covers it."""
+	paths = [normalize_path(path) for path in staged if is_automation_path(path)]
+	if not paths:
+		return STATUS_IN_SCOPE, [], "none"
+	if allow_workflow_edits != "true":
+		reason = "workflow_edits_disabled"
+	elif not isinstance(grant, dict) or grant.get("schema_version") != AUTOMATION_GRANT_SCHEMA \
+		or type(grant.get("trusted")) is not bool or not isinstance(grant.get("paths"), list) \
+		or not all(isinstance(path, str) and is_automation_path(path) and path == normalize_path(path)
+			and not path.startswith("/") and not path.endswith("/")
+			and not any(char in path for char in _GLOB_CHARS)
+			and all(segment not in {".", ".."} for segment in path.split("/"))
+			for path in grant.get("paths", [])):
+		reason = "grant_unavailable"
+	elif not issue_number.isdecimal() or type(grant.get("issue_number")) is not int \
+		or grant["issue_number"] != int(issue_number):
+		reason = "grant_issue_mismatch"
+	elif not grant["trusted"]:
+		reason = grant.get("reason") if grant.get("reason") in {
+			"identity_unavailable", "untrusted_author", "no_allowlist", "malformed_allowlist", "grant_error"
+		} else "grant_unavailable"
+	else:
+		denied = [path for path in paths if path not in grant["paths"]]
+		return (STATUS_OUT_OF_SCOPE, denied, "path_not_granted") if denied else (STATUS_IN_SCOPE, [], "granted")
+	return STATUS_OUT_OF_SCOPE, paths, reason
 
 
 def is_lockfile(path: str) -> bool:
@@ -260,7 +353,40 @@ def main(argv: list[str] | None = None) -> int:
 	parser.add_argument("--strict-allowlist", action="store_true", help="Do not auto-allow lockfiles outside the explicit scope")
 	parser.add_argument("--staged-file", default="")
 	parser.add_argument("--allowlist-out", default="")
+	parser.add_argument("--emit-automation-grant", default="")
+	parser.add_argument("--issue-meta-file", default="")
+	parser.add_argument("--pipeline-login", default="")
+	parser.add_argument("--check-automation-paths", action="store_true")
+	parser.add_argument("--automation-grant-file", default="")
+	parser.add_argument("--allow-workflow-edits", default="false")
+	parser.add_argument("--issue-number", default="")
 	args = parser.parse_args(argv)
+	if args.emit_automation_grant:
+		try:
+			metadata = json.loads(_read_text_file(args.issue_meta_file))
+			record = build_automation_grant(metadata, args.pipeline_login)
+		except (ValueError, TypeError, KeyError):
+			record = {"schema_version": AUTOMATION_GRANT_SCHEMA, "issue_number": None,
+				"trusted": False, "reason": "grant_error", "author_login": "", "author_association": "", "paths": []}
+		try:
+			with open(args.emit_automation_grant, "w", encoding="utf-8") as handle:
+				json.dump(record, handle)
+				handle.write("\n")
+		except OSError:
+			return 1
+		return 0
+	if args.check_automation_paths:
+		try:
+			grant = json.loads(_read_text_file(args.automation_grant_file))
+		except (ValueError, TypeError):
+			grant = None
+		status, denied, reason = check_automation_paths(_read_staged(args.staged_file or None),
+			grant, args.allow_workflow_edits, args.issue_number)
+		if status == STATUS_OUT_OF_SCOPE:
+			print(f"reason={reason}", file=sys.stderr)
+			sys.stdout.write("\n".join(denied) + "\n")
+			return EXIT_AUTOMATION_UNGRANTED
+		return EXIT_IN_SCOPE
 
 	issue_body = _read_text_file(args.issue_body_file) if args.issue_body_file else ""
 	staged_paths = _read_staged(args.staged_file or None)
