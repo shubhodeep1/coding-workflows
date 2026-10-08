@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Once proximity matching is removed, how should a newly reported finding be tied to an accepted (waived) finding so that it is suppressed?\nChoices:\nA) Match on the exact `finding_id` only, in both filters. Change the accepted-findings prompt rule (`security_audit.sh:301-303`) so the model must re-emit a still-present accepted defect under its original `finding_id` and never under a new one. Any finding whose ID matches no waiver counts as new and blocks the gate. Keep accepting `SECURITY_AUDIT_WAIVER_LINE_WINDOW` (\u00a710) but stop using it for suppression, and log that. (RECOMMENDED)\nB) Add an explicit binding field: the model may set a field such as `accepted_finding_id` on a finding to say it is the same defect as a given waiver. Both filters suppress it only if that waiver exists and has the same `file` and normalized category. A finding without the field, or with a binding that fails those checks, counts as new.\nC) Use a deterministic content fingerprint: hash the file, normalized category and a stable defect descriptor (for example the cited function or symbol). Store it on each waiver row and suppress only on an exact fingerprint match. This adds a new state field to `security_pass_waived_findings` and needs a rule for existing waivers that have no fingerprint.",
+  "fingerprint": "6f6647260688b8555f30c336fe3c10c73ac4c88bb932aef214a7653f1e848015",
+  "lineage": {
+    "issue_number": 6540,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37807708346",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37807708346",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008162346_a8c9b8629a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6540,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37807708346"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6540 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T16:23:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
