@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-10-08T00:06:34Z",
+  "tick_at": "2026-10-08T00:28:40Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -16,13 +16,13 @@
   "tracking_issues": [
     {
       "current_wave": 4,
-      "integration_ahead_by": "15",
+      "integration_ahead_by": "16",
       "issue_counts": {
         "closed": 0,
-        "done": 1,
+        "done": 0,
         "implementation_failed": 0,
         "in_progress": 0,
-        "merged": 0,
+        "merged": 1,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -30,10 +30,10 @@
       },
       "number": 6664,
       "project_complete": false,
-      "status": "in-progress",
+      "status": "waiting",
       "title": "[Orchestrator] Unattended Claude pipeline completion: Claude in every role (phase 3) and blocker reduction (phase 4)",
       "total_waves": 7,
-      "wave_complete": false
+      "wave_complete": true
     }
   ]
 }
