@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nI picked A: the pipeline records the operator step and changes no hook code. A person makes the hook change later in a trusted checkout.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The unblock verdict says to record `WRAPPED_GIT_WRITE_GUARD_UNSET_OPERATOR_STEP` as an unresolved placeholder that enables nothing, and not to mark the finding fixed. It also says both hook copies must be fixed together in a trusted writable checkout, which the pipeline's editors cannot do for `.claude/hooks/**`. Option A does exactly that and nothing more. B would ship different template code to every consumer on the next `@stable` release while this repo's live hook stays as it is. It would also need a divergence allowlist entry for the merged-PR safety hook, and those allowlists are meant to be limited to command files. C cannot merge: CI requires the live security hook to match its template, and GITHUB FACTS shows the held sync branch `ai/sync-claude-live-copies-held` does not exist. D would drop the record the verdict asked for.\n\nSETUP REQUIRED:\n- WRAPPED_GIT_WRITE_GUARD_UNSET_OPERATOR_STEP (operator step): In a trusted checkout, a person changes `.claude/hooks/pr_merge_status_guard.py` and `workflow-templates/.claude/hooks/pr_merge_status_guard.py` identically (the two must stay byte-identical). The change covers:\n  - **What the hooks inspect:** nested `bash`, `sh`, `zsh` and `dash` `-c` scripts, `eval` text, command substitutions, backticks and process substitutions, within bounds.\n  - **What they do:** apply the existing merged-PR check to any Git write found inside. When wrapper text that will run cannot be read safely, they ask for confirmation.\n  - **What must not change:** the existing handling of `sudo`, `timeout`, `xargs` and pipes into `bash`.\n  - **Also needed:** tests that run against both copies, an `agents.md` update and a changelog fragment.\n  - **Until it is done:** the hooks behave as they do today, nothing enables new behaviour, and finding #6755 stays open as a security finding. Nothing should treat it as resolved until both copies are fixed and tested.\n\nThe `agents.md` note and changelog fragment from option A should say the same.",
+  "fingerprint": "f9fdf5aeb59c0030f586982f2054401671cf654bf0ffe49bc763ca3e62def430",
+  "lineage": {
+    "issue_number": 6763,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37771133654",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37771133654",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6763"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261008114450_a26259d47d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6763,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37771133654"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6763",
+  "timestamps": {
+    "created_at": "2026-10-08T11:44:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
