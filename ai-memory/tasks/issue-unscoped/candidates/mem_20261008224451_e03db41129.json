@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:763-770 | severity=low | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: When the stop-label recheck command fails, the code logs `detail=unblocked`, conflating a script or input failure with labels genuinely resolving to no block label.\n  WHY: The close remains fail-closed, but the misleading diagnosis prevents operators from distinguishing an actual unblock from a failed label recheck.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Allow `close` verdict only after a deterministic terminal condition.\n  expected_change_site: scripts/unblock_ledger.py and scripts/unblock_judge.sh\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The logic in scripts/unblock_ledger.py properly restricts `close` and scripts/unblock_judge.sh adds a fresh block state check for `close`. The requirement is satisfied.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/unblock_judge.sh: lines 764-767 | severity=NIT | confidence=4\n  PROBLEM: When `unblock_py stop --labels-json` exits non-zero, the log diagnosis is always `detail=unblocked`. The `stop_for_labels` function in `unblock_ledger.py` raises `UsageError` for three distinct reasons: genuinely no block label (the common case), labels not a list (`--labels-json must be a JSON array`), or a Python-level crash. All three are logged identically, and `2>/dev/null` discards the actual error message.\n  WHY: The behavior is fail-closed (the close is skipped), so no security or correctness bug. The defect is observability: an operator diagnosing a skipped terminal close cannot tell whether the item was genuinely unblocked or whether the stop resolution itself failed (e.g. a corrupted labels artifact, transient Python crash).\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_judge.sh: lines 765-770 | severity=NIT | confidence=4\n  PROBLEM: The logging for stop-label recheck failure is misleading when the Python script itself fails.\n  WHY: If the `recheck` call fails due to a Python crash, missing script, or malformed JSON, the code logs `detail=unblocked`. This misrepresents a potential tool failure as an intentional \"unblocked\" state, complicating debugging.\n- Requirement: Allow `close` verdict only after a deterministic terminal condition.\n  Expected change site: scripts/unblock_ledger.py and scripts/unblock_judge.sh\n  Evidence of absence: The logic in scripts/unblock_ledger.py properly restricts `close` and scripts/unblock_judge.sh adds a fresh block state check for `close`. The requirement is satisfied.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/unblock_judge.sh: lines ~763-770 (the `unblock_py ... stop --labels-json` failure branch) | severity=NIT | confidence=4\n  PROBLEM: When `unblock_py \"${SUPPORT_DIR}/scripts/unblock_ledger.py\" stop --labels-json ...` exits non-zero, the code logs `detail=unblocked`, conflating a Python/script failure (missing script, crash, malformed labels JSON, etc.) with the genuine case where labels resolved to no block label. The only path in the file that produces this `detail` value is the command-failure path, so operators seeing `detail=unblocked` cannot tell whether labels really resolved to no block or whether the resolution itself failed.\n  WHY: An operator responding to a skip alert (\"judge skipped close with reason=block_state_changed detail=unblocked\") would assume the item was unblocked; in reality the script may have crashed before resolving labels, leaving the item still blocked but with no actionable diagnostic. The behavioural effect remains fail-closed (skip), so this is an observability defect, not a correctness one.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/unblock_judge.sh: 764-767 | severity=NIT | confidence=4\n  PROBLEM: When `unblock_py stop --labels-json` exits non-zero, the code logs `reason=block_state_changed detail=unblocked`. That detail is only accurate when the labels genuinely resolved to no block label (the `stop_for_labels` function raises `UsageError(\"no block label on this item\")`). For other failure modes (Python crash, malformed labels JSON from the recheck itself), the operator sees an \"unblocked\" diagnosis that misrepresents the failure.\n  WHY: The behavioral effect is still fail-closed (the close is skipped), so this is purely an observability defect. An operator investigating a close skip would see \"unblocked\" and might not realize the stop command itself failed. The test at line 2057 covers the genuine unblock case but not the crash/malformed case.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "56c22aa83ff59138762029aed13437c785c7533655b741d9a6f08aa18da1d84f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6563,
+    "run_id": "37852248043",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37852248043",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261008224451_e03db41129",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6563,
+    "run_id": "37852248043"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-08T22:44:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
