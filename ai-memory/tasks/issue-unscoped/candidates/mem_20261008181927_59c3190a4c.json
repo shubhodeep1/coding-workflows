@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/security_audit.sh:2064-2071, 2146-2149 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: `module_stem()` accepts one-character stems, so deleting a module such as `a.py` can make ordinary standalone uses of \u201ca\u201d in cited files match as references to the deleted module.\n  WHY: The false match causes `deletion_block_reason()` to classify an unrelated pre-existing finding as blocking instead of advisory, creating a false security-pass blocker; all three reviewers rated this MAJOR, with no severity disagreement.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/security_audit.sh:2064-2071 | severity=MAJOR | confidence=4\n  PROBLEM: The module_stem function now returns module stems regardless of length (e.g., 1-character stems).\n  WHY: When a short module name (e.g., 'a.py' -> 'a') is deleted, the `deletion_block_reason` logic incorrectly treats any other file containing that word as having a guard reference that was removed. Because 'a' is a common article, this leads to many false-positive security findings that are incorrectly marked as blocking, causing unnecessarily strict security pass failures for pre-existing findings.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/security_audit.sh:2064-2071 | severity=MAJOR | confidence=4\n  PROBLEM: Removing the 3-character minimum length check allows single-character module stems (e.g. \"a\" from \"a.py\", \"i\" from \"i.py\") to match ordinary English text in cited files.\n  WHY: With the current word-boundary regex `(?<![A-Za-z0-9_]){stem}(?![A-Za-z0-9_])`, a standalone \"a\" in any prose, comment or even Python identifier like \"for a in items\" matches the module stem \"a\". When a project deletes a single-character file (a.py, i.py), any pre-project finding whose cited file contains the standalone letter \"a\" gets incorrectly classified as blocking under `cited_file_references_module_with_deletions`. The security pass then files a fix issue and consumes a fix cycle for a non-existent guard. The justification comment says \"a short module such as db.py or io.py can hold the deleted guard\" \u2014 those are 2-char examples, but the implementation also accepts 1-char stems, which collide with common English text. A targeted mitigation would preserve the new 2-char case while still rejecting 1-char (e.g. `return stem if len(stem) >= 2 else \"\"`).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/security_audit.sh:2069-2071, 2146-2149 | severity=MAJOR | confidence=5\n  PROBLEM: `module_stem()` now accepts one-character stems, which the cited-file check matches as standalone words.\n  WHY: If a project deletes an unrelated module such as `a.py`, a pre-existing finding\u2019s cited file containing the lowercase word \u201ca\u201d matches this regex. `deletion_block_reason()` then marks the finding blocking, and the classifier counts it as blocking instead of advisory (lines 2211-2213, 2226-2229). This turns an unrelated deletion into a false security-pass blocker.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "7fb3509552c00515fcf7bfe8b721be4720145af430ff6733c47828044734c06f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6774,
+    "run_id": "37818928434",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37818928434",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261008181927_59c3190a4c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6774,
+    "run_id": "37818928434"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-08T18:19:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
