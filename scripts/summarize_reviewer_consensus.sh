@@ -296,30 +296,27 @@ if ! opencode_require_bootstrap review_summariser reviewer "${SUMMARISER_MODEL}"
 	exit 1
 fi
 
-# shellcheck disable=SC2016
-summariser_opencode_cmd=(
-	bash -c
-	'set -euo pipefail; source "$1"; shift; opencode_run_cmd "$@"'
-	opencode-summariser
-	"${OPENCODE_HELPERS_PATH}"
-	reviewer
-	"${SUMMARISER_MODEL}"
-	"${SUMMARISER_REASONING}"
-	"${summariser_opencode_config}"
-	"${summariser_workspace}"
-)
-
 # ── Engine selection (role SUMMARISER, plan item 3d) ─────────────────────
-# The summariser reads PR-derived reviewer output, so Claude runs only in the
-# network-isolated review sandbox (review_untrusted_sandbox.sh, read-only,
-# credential-free relay), like the consolidator; host claude_run refuses
-# review roles. Order: Claude in a fresh sandbox; on exit 75 (Claude
-# unavailable) or 2 (outdated helper) OpenCode in a fresh sandbox; when the
-# sandbox cannot be prepared, the unchanged read-only reviewer-agent command
-# below. A codex selection (AI_ENGINE_SUMMARISER=codex, AI_ENGINE=codex, the
-# ai:codex label) runs only that unchanged command. The engine root is the
-# verified support directory (SUPPORT_SCRIPTS_DIR); every input has a default
-# here because review_autofix.yml does not export one (unattended §8).
+# The summariser reads PR-derived reviewer output, so every engine runs only
+# in the network-isolated review sandbox (review_untrusted_sandbox.sh,
+# read-only, credential-free relay), like the consolidator; host claude_run
+# refuses review roles. Order: Claude in a fresh sandbox; on exit 75 (Claude
+# unavailable) or 2 (outdated helper) OpenCode in a fresh sandbox. A codex
+# selection (AI_ENGINE_SUMMARISER=codex, AI_ENGINE=codex, the ai:codex label,
+# no pool credential, missing ai_engine.sh) starts with sandboxed OpenCode.
+# Host OpenCode is never used (finding review-summarizer-host-fallback): when
+# the sandbox cannot be prepared the attempt is refused with rc 77 and a
+# REVIEW_UTILITY_ISOLATION line, and after SUMMARISER_ISOLATION_MAX_ATTEMPTS
+# consecutive refusals the script hard-fails instead of backing off further.
+# The engine root is the verified support directory (SUPPORT_SCRIPTS_DIR);
+# every input has a default here because review_autofix.yml does not export
+# one (unattended §8).
+SUMMARISER_ISOLATION_REFUSED_RC=77
+SUMMARISER_ISOLATION_MAX_ATTEMPTS="${SUMMARISER_ISOLATION_MAX_ATTEMPTS:-3}"
+if ! [[ "${SUMMARISER_ISOLATION_MAX_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${SUMMARISER_ISOLATION_MAX_ATTEMPTS}" -lt 1 ]; then
+	echo "::warning::summariser (${PREFIX}): SUMMARISER_ISOLATION_MAX_ATTEMPTS must be a positive integer; defaulting to 3" >&2
+	SUMMARISER_ISOLATION_MAX_ATTEMPTS=3
+fi
 summariser_sandbox_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_sandbox.sh"
 summariser_sandbox_unavailable=false
 summariser_sandbox_cleanup()
@@ -345,8 +342,8 @@ summariser_engine_resolve()
 		return 0
 	fi
 	# Without a pool credential the sandboxed Claude run can only exit 75
-	# (no_credential) before any model call; skip the image build and keep
-	# the unchanged read-only command.
+	# (no_credential) before any model call; skip the image build and start
+	# with sandboxed OpenCode.
 	accounts="$(bash -c 'source "$0" >/dev/null 2>&1 || exit 2; ai_engine_accounts' "${engine_script}" 2>/dev/null || true)"
 	if [ -z "${accounts}" ]; then
 		echo "AI_ENGINE_FALLBACK role=SUMMARISER reason=no_credential" >&2
@@ -379,10 +376,17 @@ summariser_sandbox_attempt()
 	summariser_sandbox_cleanup
 	return "${attempt_rc}"
 }
-summariser_engine_state="legacy"
+summariser_engine_state="sandbox_opencode"
 if [ "$(summariser_engine_resolve)" = "claude" ]; then
 	summariser_engine_state="claude"
 fi
+# Refuse an attempt whose sandbox could not be used; never fall back to host.
+summariser_isolation_refuse()
+{
+	local refused_engine="$1" refused_reason="$2"
+	echo "::error::REVIEW_UTILITY_ISOLATION role=SUMMARISER engine=${refused_engine} outcome=refused reason=${refused_reason}" | tee -a "${log_file}" >&2
+	return "${SUMMARISER_ISOLATION_REFUSED_RC}"
+}
 # One model attempt through the selected engine; output to <out>, stderr to <err>.
 summariser_run_attempt()
 {
@@ -390,8 +394,9 @@ summariser_run_attempt()
 	if [ "${summariser_engine_state}" = "claude" ]; then
 		summariser_sandbox_attempt claude "${attempt_out}" "${attempt_err}" || attempt_rc=$?
 		if [ "${summariser_sandbox_unavailable}" = "true" ]; then
-			echo "AI_ENGINE_FALLBACK role=SUMMARISER reason=sandbox_unavailable" | tee -a "${log_file}" >&2
-			summariser_engine_state="legacy"
+			: > "${attempt_out}"
+			summariser_isolation_refuse claude sandbox_unavailable
+			return $?
 		elif [ "${attempt_rc}" -eq 75 ] || [ "${attempt_rc}" -eq 2 ]; then
 			grep -E '^(AI_ENGINE_[A-Z_]+|CLAUDE_POOL) ' "${attempt_err}" >&2 || true
 			if [ "${attempt_rc}" -eq 2 ]; then
@@ -404,20 +409,17 @@ summariser_run_attempt()
 		: > "${attempt_out}"
 		attempt_rc=0
 	fi
-	if [ "${summariser_engine_state}" = "sandbox_opencode" ]; then
-		summariser_sandbox_attempt codex "${attempt_out}" "${attempt_err}" || attempt_rc=$?
-		if [ "${summariser_sandbox_unavailable}" != "true" ] && [ "${attempt_rc}" -ne 2 ]; then
-			return "${attempt_rc}"
-		fi
-		echo "AI_ENGINE_FALLBACK role=SUMMARISER reason=sandbox_unavailable" | tee -a "${log_file}" >&2
-		summariser_engine_state="legacy"
+	summariser_sandbox_attempt codex "${attempt_out}" "${attempt_err}" || attempt_rc=$?
+	if [ "${summariser_sandbox_unavailable}" = "true" ]; then
 		: > "${attempt_out}"
-		attempt_rc=0
+		summariser_isolation_refuse codex sandbox_unavailable
+		return $?
 	fi
-	timeout --signal=KILL "${SUMMARISER_CALL_TIMEOUT}" \
-		"${summariser_opencode_cmd[@]}" < "${prompt_file}" \
-		> "${attempt_out}" 2> "${attempt_err}" \
-		|| attempt_rc=$?
+	if [ "${attempt_rc}" -eq 2 ]; then
+		: > "${attempt_out}"
+		summariser_isolation_refuse codex sandbox_helper_outdated
+		return $?
+	fi
 	return "${attempt_rc}"
 }
 
@@ -455,6 +457,7 @@ sentinel_aware_sleep()
 
 attempt=1
 last_rc=0
+isolation_refusals=0
 while [ "${attempt}" -le "${SUMMARISER_MAX_ATTEMPTS}" ]; do
 	if [ -n "${PR_NUMBER:-}" ] && [ -f "/tmp/pr_closed_sentinel_${PR_NUMBER}" ]; then
 		echo "summariser (${PREFIX}): PR #${PR_NUMBER} closed mid-retry — exiting cleanly." | tee -a "${log_file}" >&2
@@ -510,6 +513,19 @@ while [ "${attempt}" -le "${SUMMARISER_MAX_ATTEMPTS}" ]; do
 	fi
 
 	rm -f "${tmp_stdout}" "${tmp_stderr}"
+
+	# A refused (sandbox-unavailable) attempt is usually deterministic, so cap
+	# consecutive refusals instead of spending the full backoff schedule.
+	if [ "${last_rc}" -eq "${SUMMARISER_ISOLATION_REFUSED_RC}" ]; then
+		isolation_refusals=$(( isolation_refusals + 1 ))
+		if [ "${isolation_refusals}" -ge "${SUMMARISER_ISOLATION_MAX_ATTEMPTS}" ]; then
+			echo "::error::summariser (${PREFIX}): review sandbox unavailable for ${isolation_refusals} consecutive attempt(s); refusing to run on the host. See ${log_file}." >&2
+			opencode_emit_failure_alert review_summariser reviewer "${SUMMARISER_MODEL}" "${SUMMARISER_ISOLATION_REFUSED_RC}" isolation_unavailable || true
+			exit 1
+		fi
+	else
+		isolation_refusals=0
+	fi
 
 	# Sleep before the next attempt (skip after the final attempt).
 	if [ "${attempt}" -lt "${SUMMARISER_MAX_ATTEMPTS}" ]; then

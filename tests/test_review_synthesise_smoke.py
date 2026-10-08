@@ -60,6 +60,7 @@ def _install_mock_codex(
 		"set -euo pipefail\n\n"
 		"if [ \"${1:-}\" = \"--version\" ]; then printf '1.18.23\\n'; exit 0; fi\n"
 		"if [ \"${1:-}\" != \"run\" ]; then echo \"mock-opencode supports only run\" >&2; exit 2; fi\n"
+		"if [ -n \"${MOCK_OPENCODE_CALLED_FILE:-}\" ]; then printf 'called\\n' >> \"${MOCK_OPENCODE_CALLED_FILE}\"; fi\n"
 		"cat \"${MOCK_CODEX_STDOUT_FILE}\"\n"
 		"cat \"${MOCK_CODEX_STDERR_FILE}\" >&2\n"
 		f"exit \"${{MOCK_CODEX_EXIT_CODE:-{exit_code}}}\"\n",
@@ -95,7 +96,7 @@ def _install_mock_timeout(mock_bin_dir: Path) -> Path:
 		"done\n"
 		"duration=\"${1:-}\"\n"
 		"shift || true\n"
-		"printf '%s\\n' \"$duration\" > \"${MOCK_TIMEOUT_DURATION_FILE}\"\n"
+		"printf '%s\\n' \"$duration\" >> \"${MOCK_TIMEOUT_DURATION_FILE}\"\n"
 		"exec \"$@\"\n",
 		encoding="utf-8",
 	)
@@ -138,6 +139,57 @@ def _seed_repo_with_autofix_commit(workspace: Path) -> str:
 	return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=workspace, text=True, timeout=60).strip()
 
 
+# Stub review sandbox: the synthesiser never runs OpenCode on the host, so
+# the tests drive the mock `opencode` through this stand-in for
+# review_untrusted_sandbox.sh.  `run` arguments: prompt, out, model, effort,
+# config, engine, role, access.
+STUB_REVIEW_SANDBOX = """#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+	prepare-ephemeral)
+		if [ "${MOCK_SANDBOX_PREPARE_FAIL:-0}" = "1" ]; then
+			echo "stub sandbox: prepare refused" >&2
+			exit 1
+		fi
+		printf '%s\\n' "${MOCK_SANDBOX_ROOT}"
+		;;
+	run)
+		if [ -n "${MOCK_SANDBOX_ENGINE_FILE:-}" ]; then
+			printf '%s %s %s\\n' "$7" "$8" "$9" >> "${MOCK_SANDBOX_ENGINE_FILE}"
+		fi
+		opencode run < /dev/null > "$3"
+		;;
+	cleanup)
+		exit 0
+		;;
+	*)
+		exit 2
+		;;
+esac
+"""
+
+
+def _install_stub_support_scripts(mock_bin_dir: Path) -> Path:
+	"""Mirror scripts/ as symlinks, with a real stub review sandbox helper.
+
+	The synthesiser refuses a symlinked sandbox helper, so the stub is a
+	regular file; every other helper resolves to the repository copy.
+	"""
+	support_dir = mock_bin_dir / "support_scripts"
+	support_dir.mkdir(parents=True, exist_ok=True)
+	for entry in (REPO_ROOT / "scripts").iterdir():
+		if entry.name == "review_untrusted_sandbox.sh":
+			continue
+		link = support_dir / entry.name
+		if not link.exists() and not link.is_symlink():
+			link.symlink_to(entry)
+	sandbox = support_dir / "review_untrusted_sandbox.sh"
+	sandbox.write_text(STUB_REVIEW_SANDBOX, encoding="utf-8")
+	sandbox.chmod(0o755)
+	(mock_bin_dir / "sandbox_root").mkdir(parents=True, exist_ok=True)
+	return support_dir
+
+
 def _base_env(workspace: Path, runtime_dir: Path, mock_bin_dir: Path) -> dict[str, str]:
 	home_dir = workspace / "home"
 	(home_dir / ".codex").mkdir(parents=True, exist_ok=True)
@@ -151,7 +203,10 @@ def _base_env(workspace: Path, runtime_dir: Path, mock_bin_dir: Path) -> dict[st
 	env["HOME"] = str(home_dir)
 	env["PATH"] = f"{mock_bin_dir}:{env.get('PATH', '')}"
 	env["SUPPORT_ROOT_DIR"] = str(REPO_ROOT)
-	env["SUPPORT_SCRIPTS_DIR"] = str(REPO_ROOT / "scripts")
+	env["SUPPORT_SCRIPTS_DIR"] = str(_install_stub_support_scripts(mock_bin_dir))
+	env["MOCK_SANDBOX_ROOT"] = str(mock_bin_dir / "sandbox_root")
+	env["MOCK_SANDBOX_ENGINE_FILE"] = str(mock_bin_dir / "sandbox_engine.txt")
+	env["MOCK_OPENCODE_CALLED_FILE"] = str(mock_bin_dir / "opencode_called.txt")
 	env["SUPPORT_PROMPTS_DIR"] = str(REPO_ROOT / "prompts")
 	env["RUNTIME_DIR"] = str(runtime_dir)
 	env["PR_NUMBER"] = "4242"
@@ -372,6 +427,73 @@ def test_review_synthesise_smoke_surfaces_codex_stderr_on_failure() -> None:
 		assert "BEHAVIOURAL_SMOKE_SYNTHESIS_STDERR_BEGIN" in result.stderr
 		assert "mock model lookup failed" in result.stderr
 		assert "BEHAVIOURAL_SMOKE_SYNTHESIS_STDERR_END" in result.stderr
+
+
+def test_review_synthesise_smoke_codex_selection_runs_in_the_sandbox() -> None:
+	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_sandbox_codex_") as td:
+		workspace = Path(td)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		mock_bin_dir = workspace / "mock_bin"
+		head_sha = _seed_repo_with_autofix_commit(workspace)
+		_write_judge_artifact(
+			workspace,
+			head_sha,
+			[_make_issue("src/module.py:2:branch-check", 2, 3, "Branch still always returns autofix")],
+		)
+		_install_mock_codex(mock_bin_dir, stdout_text='{"action":"fix"}\n')
+		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+
+		result = subprocess.run(
+			["bash", str(SYNTH_SCRIPT)],
+			cwd=workspace,
+			env=env,
+			capture_output=True,
+			text=True,
+			timeout=60,
+		)
+
+		combined_output = result.stdout + result.stderr
+		assert result.returncode == 0, combined_output
+		assert (mock_bin_dir / "sandbox_engine.txt").read_text(encoding="utf-8") == "codex BEHAVIOURAL_SMOKE read\n"
+		assert "REVIEW_UTILITY_ISOLATION" not in combined_output
+
+
+def test_review_synthesise_smoke_refuses_host_opencode_when_sandbox_unavailable() -> None:
+	# Finding review-summarizer-host-fallback (sibling): a sandbox that cannot
+	# be prepared must never fall back to OpenCode on the credential-bearing host.
+	with tempfile.TemporaryDirectory(prefix="review_synth_smoke_sandbox_refused_") as td:
+		workspace = Path(td)
+		runtime_dir = workspace / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		mock_bin_dir = workspace / "mock_bin"
+		head_sha = _seed_repo_with_autofix_commit(workspace)
+		_write_judge_artifact(
+			workspace,
+			head_sha,
+			[_make_issue("src/module.py:2:branch-check", 2, 3, "Branch still always returns autofix")],
+		)
+		_install_mock_codex(mock_bin_dir, stdout_text='{"action":"fix"}\n')
+		env = _base_env(workspace, runtime_dir, mock_bin_dir)
+		env["MOCK_SANDBOX_PREPARE_FAIL"] = "1"
+
+		result = subprocess.run(
+			["bash", str(SYNTH_SCRIPT)],
+			cwd=workspace,
+			env=env,
+			capture_output=True,
+			text=True,
+			timeout=60,
+		)
+
+		combined_output = result.stdout + result.stderr
+		assert result.returncode == 0, combined_output
+		assert not (mock_bin_dir / "opencode_called.txt").exists(), combined_output
+		assert (
+			"::error::REVIEW_UTILITY_ISOLATION role=BEHAVIOURAL_SMOKE engine=codex outcome=refused reason=sandbox_unavailable"
+			in result.stderr
+		)
+		assert "BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=isolation_unavailable round=1" in combined_output
 
 
 def test_review_synthesise_smoke_fails_open_on_wrong_item_count() -> None:
@@ -606,7 +728,9 @@ def test_review_synthesise_smoke_clamps_large_timeout_values() -> None:
 		combined_output = result.stdout + result.stderr
 		assert result.returncode == 0, combined_output
 		assert manifest.exists(), combined_output
-		assert timeout_capture.read_text(encoding="utf-8").strip() == "120"
+		# Sandbox prepare and run use the clamped budget; sandbox cleanup uses its own 30s bound.
+		durations = timeout_capture.read_text(encoding="utf-8").split()
+		assert [duration for duration in durations if duration != "30s"] == ["120", "120"], durations
 		assert "BEHAVIOURAL_SMOKE_SYNTHESISED count=1 round=1 language=python" in combined_output
 
 
@@ -709,7 +833,9 @@ def test_review_autofix_workflow_wires_behavioural_smoke_after_interim_judge() -
 	assert "env.JUDGE_INTERIM_ENABLED == 'true'" in step_block
 	assert 'timeout --signal=TERM --kill-after=30s -- "${BEHAVIOURAL_SMOKE_TIMEOUT_S}"' in SYNTH_SCRIPT.read_text(encoding="utf-8")
 	assert '--model "${BEHAVIOURAL_SMOKE_MODEL}"' in SYNTH_SCRIPT.read_text(encoding="utf-8")
-	assert 'opencode_run_cmd "$@"' in SYNTH_SCRIPT.read_text(encoding="utf-8")
+	# OpenCode runs only inside the review sandbox, never on the host.
+	assert 'opencode_run_cmd' not in SYNTH_SCRIPT.read_text(encoding="utf-8")
+	assert 'behavioural_smoke_sandbox_attempt codex' in SYNTH_SCRIPT.read_text(encoding="utf-8")
 	assert 'command -v codex' not in SYNTH_SCRIPT.read_text(encoding="utf-8")
 
 

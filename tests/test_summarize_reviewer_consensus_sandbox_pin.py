@@ -20,7 +20,11 @@ def test_summariser_uses_isolated_reviewer_opencode_config() -> None:
 	assert '--config-path "${summariser_opencode_config}"' in src
 	assert '--serena off' in src
 	assert 'opencode_require_bootstrap review_summariser reviewer "${SUMMARISER_MODEL}"' in src
-	assert 'opencode_run_cmd "$@"' in src
+	# OpenCode runs only in the review sandbox (finding
+	# review-summarizer-host-fallback): no host command remains.
+	assert 'opencode_run_cmd' not in src
+	assert 'summariser_opencode_cmd' not in src
+	assert '"${summariser_opencode_config}"' in src
 	assert '"${SUMMARISER_REASONING}"' in src
 	assert 'opencode_strip_ansi < "${tmp_stdout}"' in src
 	assert 'opencode_strip_ansi < "${tmp_stderr}"' in src
@@ -45,6 +49,16 @@ def test_reviewer_role_denies_edits_and_allows_read_bash() -> None:
 	assert '"write": False' in writer
 	assert '"patch": False' in writer
 	assert '"apply_patch": False' in writer
+
+
+def test_summariser_never_falls_back_to_the_host() -> None:
+	src = SUMMARISER_SCRIPT.read_text(encoding="utf-8")
+	assert 'summariser_engine_state="legacy"' not in src
+	assert 'summariser_engine_state="sandbox_opencode"' in src
+	assert "REVIEW_UTILITY_ISOLATION role=SUMMARISER engine=${refused_engine} outcome=refused" in src
+	assert 'SUMMARISER_ISOLATION_MAX_ATTEMPTS="${SUMMARISER_ISOLATION_MAX_ATTEMPTS:-3}"' in src
+	assert 'isolation_unavailable || true' in src
+	assert "AI_ENGINE_FALLBACK role=SUMMARISER reason=sandbox_unavailable" not in src
 
 
 def main() -> int:

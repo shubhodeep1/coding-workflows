@@ -1,0 +1,12 @@
+<!-- changelog: security -->
+- **A deleted guard no longer turns a project security finding into an advisory, and two review helpers no longer fall back to OpenCode on the host.**
+
+The project security pass marks a finding advisory when `git blame` shows its cited line predates the project. A pre-project line now stays blocking when the project deleted (or binary-changed) lines in the same file, added lines within `SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW` (default `40`) lines of it, or deleted lines in another file the finding names. Each case logs `security-audit: line_ownership_blocking finding=<id> reason=deleted_lines_in_file|changed_hunk_within_window|references_file_with_deletions`, and a failed diff keeps the finding blocking.
+
+The reviewer consensus summariser and the behavioural-smoke synthesiser read PR-derived text. They now run OpenCode only inside the network-isolated review sandbox, including when the codex engine is selected. When the sandbox cannot be prepared, the attempt is refused with `::error::REVIEW_UTILITY_ISOLATION role=<SUMMARISER|BEHAVIOURAL_SMOKE> engine=<engine> outcome=refused reason=<reason>` instead of running on the host with the repository credentials. The summariser hard-fails after `SUMMARISER_ISOLATION_MAX_ATTEMPTS` (default `3`) consecutive refusals; smoke synthesis stays advisory and logs `BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=isolation_unavailable`.
+
+What this means for operators: projects may need more security fix cycles for findings near code they deleted or changed. A review run whose sandbox is broken now fails instead of summarising on the host; the existing fingerprint cap and heal reporter handle a persistent failure. Both controls are automated, with no human gate.
+
+### For contributors
+
+The reviewer panel and the interim judge still run OpenCode on the host with the read-only reviewer agent; they have no sandbox role yet. Refs #6664. Tests: `tests/test_security_audit_workflow_contract.py`, `tests/test_summarize_reviewer_consensus_prompt.py`, `tests/test_summarize_reviewer_consensus_sandbox_pin.py`, `tests/test_review_synthesise_smoke.py`, `tests/test_claude_engine_utility_roles.py`.

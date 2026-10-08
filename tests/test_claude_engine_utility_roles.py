@@ -634,22 +634,27 @@ def test_unselected_summaries_codex_selection_never_runs_claude(tmp_path: Path, 
 
 
 @pytest.mark.parametrize(
-	"path, role, legacy",
+	"path, role, host_command",
 	[
-		(SUMMARISER_SCRIPT, "SUMMARISER", '"${summariser_opencode_cmd[@]}" < "${prompt_file}"'),
-		(SMOKE_SCRIPT, "BEHAVIOURAL_SMOKE", '"${behavioural_smoke_opencode_cmd[@]}"'),
+		(SUMMARISER_SCRIPT, "SUMMARISER", "summariser_opencode_cmd"),
+		(SMOKE_SCRIPT, "BEHAVIOURAL_SMOKE", "behavioural_smoke_opencode_cmd"),
 	],
 )
-def test_review_utility_roles_use_the_review_sandbox(path: Path, role: str, legacy: str) -> None:
+def test_review_utility_roles_use_the_review_sandbox(path: Path, role: str, host_command: str) -> None:
 	text = path.read_text(encoding="utf-8")
 	assert f"ai_engine_for_role {role}" in text
 	assert "prepare-ephemeral \"${sandbox_engine}\"" in text
 	assert f'"${{sandbox_engine}}" {role} read' in text
 	assert "summariser_sandbox_attempt claude" in text or "behavioural_smoke_sandbox_attempt claude" in text
 	assert "summariser_sandbox_attempt codex" in text or "behavioural_smoke_sandbox_attempt codex" in text
-	assert f"AI_ENGINE_FALLBACK role={role} reason=sandbox_unavailable" in text
-	# The unchanged read-only reviewer-agent command stays the codex path.
-	assert legacy in text
+	# Finding review-summarizer-host-fallback: no path runs OpenCode on the
+	# host; an unavailable sandbox is refused with REVIEW_UTILITY_ISOLATION.
+	assert host_command not in text
+	assert "opencode_run_cmd" not in text
+	assert f"AI_ENGINE_FALLBACK role={role} reason=sandbox_unavailable" not in text
+	assert f"REVIEW_UTILITY_ISOLATION role={role} engine=" in text
+	assert "outcome=refused reason=" in text
+	assert '_engine_state="legacy"' not in text
 	# Never a host claude_run.
 	assert not re.search(r"^\s*(AI_ENGINE_[A-Z_]+=\S+\s+)*claude_run(_selected)?\s", text, re.M)
 

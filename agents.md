@@ -1588,7 +1588,17 @@ Line ownership (plan item 4b, D4; `SECURITY_AUDIT_LINE_OWNERSHIP`, default
 line at the audited head and adds `"advisory": true` when no commit in
 `merge-base..head` wrote it (`false` otherwise, and `false` whenever blame
 fails), logging `security-audit: line_ownership mode=project blocking=<n>
-advisory=<n> unknown=<n>`. `run_security_pass_inline` splits advisories out of
+advisory=<n> unknown=<n>`. A pre-project line still stays blocking when the
+project could have removed what protected it (finding
+`security-pass-deleted-guard-advisory`): the cited file lost or binary-changed
+lines in the range (`reason=deleted_lines_in_file`), the project added lines
+within `SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW` (default `40`) lines of it
+(`reason=changed_hunk_within_window`), or the finding text names another file
+that lost lines (`reason=references_file_with_deletions`); each logs
+`security-audit: line_ownership_blocking finding=<id> reason=<r>`. The checks
+use one `git diff --numstat --no-renames` for the range plus one `-U0` diff per
+cited file; a failure of either keeps the finding blocking
+(`reason=diff_failed|hunk_diff_failed`, counted unknown). `run_security_pass_inline` splits advisories out of
 the result right after re-applying waivers, so they never make the pass
 `blocked`, enter the fix issue or `security_pass_reported_findings`, or count
 toward `MAX_SECURITY_PASS_CYCLES`; an advisory-only result records `passed` at
@@ -1886,6 +1896,7 @@ and shipped:
 - `AI_ENGINE_FALLBACK` (`scripts/ai_engine.sh`: `role= reason=`; the run uses codex unless `AI_ENGINE_FALLBACK_REFUSED` follows)
 - `AI_ENGINE_FALLBACK_REFUSED` (`scripts/ai_engine.sh` and the sandbox Claude branches, as `::error::AI_ENGINE_FALLBACK_REFUSED role= reason=`: a non-capacity fallback under `AI_ENGINE_FALLBACK_POLICY=capacity`; exit 76, codex does not run)
 - `AI_ENGINE_FALLBACK_REPORT` (`scripts/ai_engine_fallback_report.sh`: `outcome=none|reported pairs= dispatched= records= codex_fallbacks=`, `dispatched role= fallback_reason=`, `skip_dispatch reason=`, `skip reason=no_records|records_symlink|records_oversized`)
+- `REVIEW_UTILITY_ISOLATION` (`scripts/summarize_reviewer_consensus.sh`, `scripts/review_synthesise_smoke.sh`, as `::error::REVIEW_UTILITY_ISOLATION role=SUMMARISER|BEHAVIOURAL_SMOKE engine=claude|codex outcome=refused reason=sandbox_unavailable|sandbox_helper_outdated`: the review sandbox could not run the role, so the attempt was refused instead of running OpenCode on the host)
 - `NEEDS_HUMAN` (`scripts/operator_step_issue.py needs-human park|prune`, called by `scripts/unblock_judge.sh` and `scripts/orchestrate_poll_process.sh`: `item= kind= reason= outcome=parked|updated|removed|skip`, poller skips add `detail=`)
 - `OPERATOR_STEP_TICK` (`scripts/operator_step_issue.py tick`, run by `scripts/promote_main_cycle.sh`: `key= outcome=ticked|already_done|no_source_sha|not_ancestor|unknown_commit stable=`)
 - `CLAUDE_POOL` (`scripts/ai_engine.sh` and the sandbox Claude branches: `run role= account= outcome= reason= exit_code=`, `account_skipped account= reason=`)
@@ -2125,6 +2136,7 @@ LOG_PREFIX.name=AI_ENGINE_SELECTED
 LOG_PREFIX.name=AI_ENGINE_FALLBACK
 LOG_PREFIX.name=AI_ENGINE_FALLBACK_REFUSED
 LOG_PREFIX.name=AI_ENGINE_FALLBACK_REPORT
+LOG_PREFIX.name=REVIEW_UTILITY_ISOLATION
 LOG_PREFIX.name=NEEDS_HUMAN
 LOG_PREFIX.name=OPERATOR_STEP_TICK
 LOG_PREFIX.name=CLAUDE_POOL
@@ -2487,7 +2499,9 @@ depend on it.
 | `REVIEW_DIATAXIS_LENS_ENABLED` | `true` | Documentation-only contract row for the advisory `DOCS COVERAGE (DIATAXIS)` consolidator lens. Current branch behavior is prompt-defined only (no separate workflow toggle yet): keep it `low` severity and name only still-missing `Reference` / `How-to` / `Tutorial` / `Explanation` updates. |
 | `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` | `true` | Enable the consolidator-side companion `AGENTS.md` materiality finding. Unlike `AGENTS_MD_MATERIALITY_ENABLED`, which controls the separate advisory comment helper, this flag only controls whether `review_consolidate.sh` passes the helper JSON into Lens 7 (`NAMING / BACKWARD COMPATIBILITY`). |
 | `ENABLE_SECURITY_PASS` | `true` | Enable the scheduled poller's mandatory current-integration-head security gate before validation or finalization. Set to `false` for the immediate operator kill switch and legacy completion behavior. |
-| `SECURITY_AUDIT_LINE_OWNERSHIP` | `project` | Line ownership for the project security pass (plan item 4b, D4). `project` blocks only on findings whose cited line was written in the project's `merge-base..head` range; older lines become non-blocking advisories filed as `ai:security` follow-ups. `off` restores the previous gate and payload exactly. |
+| `SECURITY_AUDIT_LINE_OWNERSHIP` | `project` | Line ownership for the project security pass (plan item 4b, D4). `project` blocks only on findings whose cited line was written in the project's `merge-base..head` range; older lines become non-blocking advisories filed as `ai:security` follow-ups, unless the project deleted lines in the cited file, added lines within the hunk window of the cited line, or deleted lines in another file the finding names (those stay blocking). `off` restores the previous gate and payload exactly. |
+| `SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW` | `40` | Lines either side of a pre-project cited line within which a project-added hunk keeps the finding blocking. Invalid values warn and fall back to `40`. |
+| `SUMMARISER_ISOLATION_MAX_ATTEMPTS` | `3` | Consecutive consensus-summariser attempts refused because the review sandbox was unavailable before the summariser hard-fails (`opencode_agent_failure ... failure_class=isolation_unavailable`). The summariser and behavioural-smoke synthesiser never run OpenCode on the host; a refused attempt logs `::error::REVIEW_UTILITY_ISOLATION role=<SUMMARISER\|BEHAVIOURAL_SMOKE> engine=<claude\|codex> outcome=refused reason=sandbox_unavailable\|sandbox_helper_outdated`, and smoke synthesis fails open with `BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=isolation_unavailable`. Invalid values warn and fall back to `3`. |
 | `MAX_SECURITY_PASS_CYCLES` | `5` | Maximum completed consolidated security-fix cycles before persistent findings terminalize as `ai:security-pass-failed`. Resets to `0` when an advancing integration head invalidates a recorded clean pass. Re-audits after a merged fix are delta audits, so the budget bounds persisting findings rather than fresh samples of unchanged code. For standalone PRs, a completed current-head audit is required to enter judge exhaustion mode. |
 | `SINGLE_ISSUE_SECURITY_PASS_ENABLED` | `false` | Off by default (opt in with `true`); orchestrator projects keep their own pass under `ENABLE_SECURITY_PASS`. When enabled, hold eligible standalone PRs into the default branch until a security audit of the current head is clean. At the cycle cap an unaudited head gets bounded retries, then remains held without judge exhaustion mode; a completed findings audit for the same head still qualifies if a later attempt fails. A missing or unwritable `GITHUB_OUTPUT` fails the gate step closed; dispatch failure at any cycle holds the merge for a later review retry, and records a failed cycle (past the cap, a failed head attempt). With the flag off (the default) the pre-pass review-gate and deterministic-skip merge behavior applies. Only a sole verified `ai:security` follow-up is exempt; see `README.md` for dispatch and failure modes. |
 | `SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS` | `2` | Maximum trusted pending audit attempts per head with a cycle number above the standalone pass's cycle cap. Pre-cap pending markers do not consume these extra attempts. Invalid or non-positive values fall back to `2`; a failed exhausted retry dispatch holds the merge. |
