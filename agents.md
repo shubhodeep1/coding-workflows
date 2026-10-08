@@ -1014,6 +1014,12 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   redirection (`2 >out`, `'2'>out`) is a push refspec with the normal check;
   only digits glued to it (`2>&1`) are a file descriptor. An
   unresolved push source asks rather than checking the session checkout's HEAD.
+  Shell `-c` scripts (`bash`, `sh`, `zsh`, `dash`, also by absolute path),
+  `eval` arguments and `$(...)` / backtick / `<(...)` bodies are parsed up to
+  three levels deep and get the same check; wrapped text that cannot be read
+  (an expansion in command position, an unterminated body or heredoc, deeper
+  nesting) asks when it could run a Git write. Prefix wrappers such as `sudo`
+  or `xargs` and `... | bash` are still not inspected.
 - **No MCP tools inside.** Serena (and any other MCP server) is not configured
   in the container, so isolated prompts carry no Serena hints. Semble results
   are rendered into prompts on the host and are unaffected.
@@ -1694,13 +1700,18 @@ filed before the merge (#4090 / #4091) without a human.
 how many judge rounds can grant another fix cycle: `judge_round` beyond the cap
 puts `keep_fixing_available: false` and `max_keep_fixing_rounds` in the
 diagnostics, and after verdict normalization the poller rewrites low/medium
-`keep_fixing` decisions to `accept_with_followup` with the justification
-prefixed `[keep_fixing capped after <c> judge round(s); converted to advisory
-follow-up]` (`SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=<N>
-round=<r> cap=<c> converted=<n>`), so the accept-all path runs and the project
-completes with deferred advisories only if no high, critical, or unrated
-`keep_fixing` finding remains. A remaining blocking `keep_fixing` verdict
-terminalizes without waiving it or creating another fix issue. Project #3965
+`keep_fixing` decisions to `fail` with the justification prefixed
+`[keep_fixing capped after <c> judge round(s); converted to fail — needs a fix
+or a human waiver]` (`SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=<N>
+round=<r> cap=<c> converted=<n>`), so the round takes the `fail` path and the
+project terminalizes as `ai:security-pass-failed` (no waiver rows, no
+advisories, even for findings the judge accepted in the same verdict). A
+remaining high, critical, or unrated `keep_fixing` decision terminalizes the
+pass without waiving it or creating another fix issue. The cap never accepts
+a finding (#6539: the earlier conversion to `accept_with_followup` recorded a
+high-severity finding as passed); recovery is the unblock judge, the
+engine-change auto-reset, `/re-security-pass` or `/security-pass-waive`.
+Project #3965
 ran fix cycles 6 and 7 on a 5-cycle budget because rounds 1 and 2 each chose
 `keep_fixing` and nothing bounded the sequence.
 Waivers travel to the engine as `SECURITY_AUDIT_WAIVED_FINDINGS`
