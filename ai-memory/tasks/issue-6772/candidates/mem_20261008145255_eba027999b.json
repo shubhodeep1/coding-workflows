@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Is changing the heal-intake or unblock-judge re-issue code part of this issue, or is the sentence \"Start a fresh issue through trusted heal intake only after\u2026\" just a process constraint?\nChoices:\nA) No intake code changes. Only fix the resolver and add its regression tests (`scripts/review_conflict_resolve.sh` / `scripts/review_conflict_prepare.sh` plus `tests/`). The generation limit and scope-marker verification stay unchanged. This issue goes through the ordinary implement path, and its `files_touched` must list the `scripts/` paths. (RECOMMENDED)\nB) Also change `scripts/unblock_judge.sh` so that a re-issue of an `ai:workflow-heal` issue goes through `workflow_failure_heal_intake.sh` (scope marker added at creation, unedited-issue check, generation limit kept) instead of creating a plain issue.\nC) Only the intake/re-issue change (B). The resolver fix goes in a later issue filed by the intake.\n**Note:** C leaves the host-only hook conflict failing as it does today.\nQ2: When the live hook conflicts and its template twin `workflow-templates/.claude/hooks/pr_merge_status_guard.py` merged cleanly, what should the deterministic resolution write?\nChoices:\nA) Write the merged template content to the live hook and stage it, with no model call. This matches the byte-identical live/template parity rule. If the template is itself unmerged, missing on either side, a symlink, or not a regular file, keep the existing `sandbox_path_host_only` manual-merge refusal. (RECOMMENDED)\nB) Run a 3-way `git merge-file` on the live hook and accept the result only if it is clean and equals the merged template. Otherwise refuse.\n**Note:** with B, a hook that actually conflicts almost never merges cleanly, so it would nearly always fall back to refusing.\nQ3: What should happen when the conflict set holds the live hook plus other paths?\nChoices:\nA) Resolve the hook deterministically as in Q2, then send only the remaining sandbox-admitted paths to the model. Any other host-only or unsafe path still fails closed as it does today. For integration-sync branches, the existing fingerprint check runs on the final tree. (RECOMMENDED)\nB) Handle the hook deterministically only when it is the sole conflicted path. Any mixed set keeps the current fail-closed refusal.",
+  "fingerprint": "f8ce259865da531f39402ea34fb176e6fabad4e7a32be260071cfc8784a25741",
+  "lineage": {
+    "issue_number": 6772,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37795217392",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37795217392",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261008145255_eba027999b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6772,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37795217392"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6772 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-08T14:52:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
