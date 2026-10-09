@@ -20,11 +20,14 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 PREPARE = ROOT / "scripts" / "review_conflict_prepare.sh"
 RESOLVE = ROOT / "scripts" / "review_conflict_resolve.sh"
 COMMIT = ROOT / "scripts" / "review_commit_changes.sh"
@@ -37,7 +40,7 @@ SNAPSHOT_RE = re.compile(
 
 
 def _snapshot_block(path: Path, state_var: str) -> str:
-	text = path.read_text(encoding="utf-8")
+	text = expanded_review_autofix_text() if path == AUTOFIX else path.read_text(encoding="utf-8")
 	for m in SNAPSHOT_RE.finditer(text):
 		if f'"${{{state_var}}}"' in m.group("block"):
 			return _dedent(m.group("block"))
@@ -45,7 +48,7 @@ def _snapshot_block(path: Path, state_var: str) -> str:
 
 
 def _compare_block(path: Path, state_var: str) -> str:
-	text = path.read_text(encoding="utf-8")
+	text = expanded_review_autofix_text() if path == AUTOFIX else path.read_text(encoding="utf-8")
 	m = re.search(
 		r"([ \t]*while IFS=\$'\\t' read -r diff_kind diff_a diff_b diff_c; do\n.*?[ \t]*done < \"\$\{"
 		+ state_var
@@ -171,7 +174,7 @@ def test_no_symlink_blind_hash_object_on_tree_paths():
 	# Every `git hash-object -- <tree path>` in these touched-set paths must sit
 	# in the non-symlink branch of an `if [ -L … ]`.
 	for path in (PREPARE, RESOLVE, COMMIT, AUTOFIX):
-		text = path.read_text(encoding="utf-8")
+		text = expanded_review_autofix_text() if path == AUTOFIX else path.read_text(encoding="utf-8")
 		for m in re.finditer(r'git hash-object -- "\$\{(snap_path|diff_path)\}"', text):
 			window = text[max(0, m.start() - 600) : m.start()]
 			assert 'if [ -L "${' + m.group(1) + '}" ]; then' in window, (path.name, m.group(0))

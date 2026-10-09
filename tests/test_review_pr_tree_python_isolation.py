@@ -11,6 +11,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 SCRIPTS = ROOT / "scripts"
 
 
@@ -214,7 +216,7 @@ def test_pre_review_python_invocations_are_safe_path_scoped() -> None:
 	assert '-- /usr/bin/env -u PYTHONSAFEPATH "${serena_bin}"' in probe
 	assert 'cd -- "${serena_neutral_dir}"' not in probe
 
-	workflow = (ROOT / ".github/workflows/review_autofix.yml").read_text(encoding="utf-8")
+	workflow = expanded_review_autofix_text()
 	pre_review = workflow.split("      - name: Checkout repo", 1)[1].split("      - name: Run reviewer models", 1)[0]
 	guard = pre_review.index("      - name: Require safe-path Python before PR-tree helpers")
 	assert guard < pre_review.index("      - name: Initialize runtime workspace")
@@ -241,7 +243,7 @@ def test_partial_finalize_timeout_probe_never_imports_checkout_yaml(tmp_path: Pa
 		encoding="utf-8",
 	)
 	workflow_path = ROOT / ".github/workflows/review_autofix.yml"
-	timeout_line = next(line for line in workflow_path.read_text(encoding="utf-8").splitlines()
+	timeout_line = next(line for line in expanded_review_autofix_text().splitlines()
 		if "python3 -c 'from pathlib import Path; import sys, yaml;" in line)
 	timeout_command = timeout_line.split("< <(", 1)[1].rsplit("); then", 1)[0]
 	child_env = os.environ.copy()
@@ -263,7 +265,7 @@ def test_break_glass_scan_never_imports_checkout_json(tmp_path: Path) -> None:
 	comments = tmp_path / "comments.json"
 	comments.write_text('[{"user":{"type":"User","login":"owner"},"body":"@codex break-glass"}]', encoding="utf-8")
 	github_env = tmp_path / "github.env"
-	workflow = (ROOT / ".github/workflows/review_autofix.yml").read_text(encoding="utf-8")
+	workflow = expanded_review_autofix_text()
 	break_glass_step = workflow.split("      - name: Detect review-blocked break-glass override", 1)[1]
 	break_glass_command = break_glass_step.split("          PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' >> \"$GITHUB_ENV\"", 1)[1].split("\n          PY\n", 1)[0]
 	break_glass_command = "          PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' >> \"$GITHUB_ENV\"" + break_glass_command + "\n          PY\n"

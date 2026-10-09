@@ -353,7 +353,96 @@ class RequiredChecksWait(unittest.TestCase):
 		self.assertIn("outcome=allow_all", out)
 
 
+THIS_REPO = {"PR_CHECKS_REPOSITORY": "shubhodeep1/coding-workflows"}
+NO_LINT = _runs(("CI", "completed", "success"), ("review / gate", "completed", "success"))
+LINT_RUNNING = _runs(("CI", "completed", "success"), ("lint", "in_progress", ""), ("review / gate", "completed", "success"))
+LINT_SELF_ONLY = json.dumps([{"check_runs": [
+	{"name": "CI", "status": "completed", "conclusion": "success", "details_url": "https://github.com/o/r/actions/runs/999/job/1"},
+	{"name": "lint", "status": "completed", "conclusion": "success", "details_url": "https://github.com/o/r/actions/runs/4242/job/7"},
+]}])
+
+
+class RequiredCiCheckWait(unittest.TestCase):
+	"""Issue #6963: the configured CI check must exist on the head and succeed."""
+
+	def test_empty_listing_never_authorizes_when_ci_check_is_required(self) -> None:
+		rc, out = _wait([EMPTY], max_minutes="0", env=THIS_REPO)
+		self.assertEqual(rc, 1)
+		self.assertIn("outcome=timeout", out)
+		self.assertIn("ci_check=lint ci_state=absent", out)
+		self.assertNotIn("outcome=ok", out)
+
+	def test_missing_ci_check_is_waited_for_even_when_other_checks_are_green(self) -> None:
+		rc, out = _wait([NO_LINT, GREEN], env=THIS_REPO)
+		self.assertEqual(rc, 0)
+		self.assertIn("required CI check 'lint' is absent", out)
+		self.assertIn("outcome=ok waited_s=1", out)
+
+	def test_old_review_gate_success_alone_does_not_authorize(self) -> None:
+		only_gate = _runs(("review / gate", "completed", "success"))
+		rc, out = _wait([only_gate], max_minutes="0", env=THIS_REPO)
+		self.assertEqual(rc, 1)
+		self.assertIn("ci_state=absent", out)
+
+	def test_pending_then_success_proceeds(self) -> None:
+		rc, out = _wait([LINT_RUNNING, GREEN], env=THIS_REPO)
+		self.assertEqual(rc, 0)
+		self.assertIn("outcome=ok waited_s=1", out)
+		self.assertIn("ci_check=lint ci_state=success", out)
+
+	def test_unsuccessful_ci_conclusions_refuse(self) -> None:
+		for conclusion in ("failure", "skipped", "neutral", "cancelled"):
+			with self.subTest(conclusion=conclusion):
+				runs = _runs(("CI", "completed", "success"), ("lint", "completed", conclusion))
+				rc, out = _wait([runs], env=THIS_REPO)
+				self.assertEqual(rc, 1)
+				self.assertIn("ci_check=lint ci_state=failure", out)
+				self.assertIn("outcome=failed", out)
+
+	def test_a_failing_duplicate_outranks_a_success(self) -> None:
+		runs = _runs(("lint", "completed", "success"), ("lint", "completed", "failure"))
+		rc, out = _wait([runs], env={**THIS_REPO, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI"})
+		self.assertEqual(rc, 1)
+		self.assertIn("outcome=failed", out)
+
+	def test_own_run_never_satisfies_the_ci_check(self) -> None:
+		rc, out = _wait([LINT_SELF_ONLY], max_minutes="0", env=THIS_REPO)
+		self.assertEqual(rc, 1)
+		self.assertIn("ci_state=absent", out)
+
+	def test_allow_all_still_waits_for_the_ci_check(self) -> None:
+		rc, out = _wait([NO_LINT], max_minutes="0", env={**THIS_REPO, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": ""})
+		self.assertEqual(rc, 1)
+		self.assertIn("outcome=timeout", out)
+
+	def test_none_restores_the_legacy_grace(self) -> None:
+		rc, out = _wait([EMPTY], env={**THIS_REPO, "AUTO_MERGE_REQUIRED_CI_CHECK": "none"})
+		self.assertEqual(rc, 0)
+		self.assertIn("outcome=ok waited_s=2", out)
+		self.assertIn("ci_check=none ci_state=disabled", out)
+
+	def test_consumer_default_keeps_the_legacy_behaviour(self) -> None:
+		rc, out = _wait([NO_LINT])
+		self.assertEqual(rc, 0)
+		self.assertIn("outcome=ok waited_s=0 pending=0 ci_check=none", out)
+
+	def test_custom_check_name_with_spaces(self) -> None:
+		rc, out = _wait([NO_LINT], env={"AUTO_MERGE_REQUIRED_CI_CHECK": "review / gate"})
+		self.assertEqual(rc, 0)
+		self.assertIn("ci_state=success", out)
+
+
 class RequiredChecksWiring(unittest.TestCase):
+	def test_required_ci_check_variable_reaches_every_auto_merge_path(self) -> None:
+		line = "AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}"
+		text = WORKFLOW.read_text(encoding="utf-8")
+		job = text.split("  deterministic-skip-merge:", 1)[1].split("\n  claude-fixer-auto-merge:", 1)[0]
+		self.assertIn(line, job)
+		step = text.split("- name: Enable auto-merge on PR", 1)[1].split("- name: ", 1)[0]
+		self.assertIn(line, step)
+		judge = text.split("JUDGE_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEW_BLOCKED_JUDGE", 1)[1][:1500]
+		self.assertIn(line, judge)
+
 	def test_review_enable_auto_merge_waits_before_both_tails(self) -> None:
 		text = ENABLE_AUTO_MERGE.read_text(encoding="utf-8")
 		wait_at = text.index('_pr_wait_for_required_checks "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${_orch_pr_base_ref}"')

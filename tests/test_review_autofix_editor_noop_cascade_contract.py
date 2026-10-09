@@ -37,10 +37,13 @@ import os
 import re
 import subprocess
 import tempfile
+import sys
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 REVIEW_AUTOFIX = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 STAGE_HELPER = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
 TEST_AND_MARK_STABLE = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
@@ -63,7 +66,7 @@ NOOP_GUARDED_STEPS = (
 
 
 def _review_autofix_text() -> str:
-	return REVIEW_AUTOFIX.read_text(encoding="utf-8")
+	return expanded_review_autofix_text()
 
 
 def _test_and_mark_stable_text() -> str:
