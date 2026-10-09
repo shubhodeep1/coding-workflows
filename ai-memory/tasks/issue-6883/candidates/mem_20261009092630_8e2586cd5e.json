@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\nQ3: A\n\nRATIONALE:\nQ1: GITHUB FACTS show that PR #6581 (`ai/issue-6579` @ a998d15) is still open against `main`. A failure that only happens on that PR's head is that PR's own defect. The review loop already handles it: `CHECK_RUNS_AUTOFIX_ENABLED` passes the PR's failed check-runs to its editor. This issue should change `main` only when the failure also happens on `main`. Option C would rule out the diagnostic change chosen in Q2.\nQ2: The evidence can't name the failing test. The runner already prints `  FAIL  <name>: <error>` (`tests/test_orchestrate_poll_process.py:23427`). But `.github/workflows/ci.yml:1426-1437` only prints that line inside a collapsed `::group::` log, and the only annotation it raises is `orchestrate-poll shard N failed (exit N)`. That is why triage saw the shard number but not the test. Turning each failed shard's `FAIL` lines into `::error::` annotations fixes this for every future failure. The release-gate copies of the step need the same change so the three stay in step. Trying a local run as well costs little.\nQ3: If the module passes locally on the branch it was checked out from, there is nothing to fix in tests or poller code. Option C is ruled out because it would hide real failures. Option B throws away the diagnostic improvement that would have made this failure diagnosable.\n\nEXECUTION PLAN (required for any non-letter decision):\nApplies to Q1, Q2 and Q3. All three are lettered decisions; these steps make them concrete.\n  strategy: derive_from_repo\n  inputs:\n    - `.github/workflows/ci.yml` lines 1394-1443 (orchestrate-poll shard loop, `job: orchestrate-poll`)\n    - `.github/workflows/mark-stable.yml` and `.github/workflows/test-and-mark-stable.yml`, the sharded orchestrate-poll step in each `validate-scripts` job (`agents.md`, \"CI job layout\")\n    - `tests/test_orchestrate_poll_process.py:23350-23430` (`_run_selected_tests`, `  FAIL  {name}: {failure}` format)\n    - `tests/test_ci_poll_test_sharding.py` (existing contract test for the sharded step in all three workflows)\n  steps:\n    - Implement checks out `main`, the default target. On it, run `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py`, split across 4 parallel shards (`NR % 4 == n`, as the release-gate step does) to fit the time budget. If the run can't finish in budget, record reproduction as UNVERIFIED in the PR body and continue with the next step.\n    - If a test fails on `main`: fix the root cause in that test, or in `scripts/orchestrate_poll_process.sh` only if the failure shows a poller defect. Never loosen an assertion just to make it pass. If nothing fails on `main`: change no test or poller code, and say in the PR body that the original failure was on PR #6581's head and is not reproducible on `main`. It is left to that PR's review loop, or was transient.\n    - In every shard-failure branch of the three workflow steps (`shard_rc -ne 0`, and the no-log branch where applicable), emit one annotation per runner FAIL line. Take up to 20 lines matching `^  FAIL  ` from `/tmp/poll_shard_${shard}.log`, cut each to its first line and about 500 characters, and escape it as GitHub workflow commands require (`%`\u2192`%25`, `\\r`\u2192`%0D`, `\\n`\u2192`%0A`). Emit each as `::error::orchestrate-poll shard ${shard}: <escaped line>`. If no FAIL line is found, emit `::error::orchestrate-poll shard ${shard}: no FAIL line in log (runner or fixture error); see the shard log group`. Keep the existing `shard N failed (exit N)` line, the group output and the exit behaviour exactly as they are (log keys must stay unchanged).\n    - Extend `tests/test_ci_poll_test_sharding.py` to check that all three workflow copies contain the FAIL-line extraction and the escaping. If practical, also run the extraction snippet against a sample log that holds one FAIL line containing `%`, and assert the exact annotation it produces.\n    - After editing, run `wc -c` on each changed workflow and confirm it stays below 480,000 bytes. Add a changelog fragment `changelog.d/<issue>-orchestrate-poll-fail-annotations.md`.\n  replaces_acceptance_criterion: The issue's \"identify shard 1's failing test from the full job log\" becomes: reproduce locally on the target branch, and make future shard failures name their failing test in the run's annotations.\n  equivalence_argument: The implementer can't fetch run 37906796258's log, because the sandbox has no network. A local reproduction plus the new annotations covers the same intent, which is to find and fix the real failure without weakening the check. It is stricter going forward, because every future shard failure will name its test.\n  reversibility: The annotation change only adds output; the exit codes and the existing error lines are unchanged. Reverting one commit removes it, and no state or label migration is involved.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- None. `ALLOW_WORKFLOW_EDITS` already defaults to `true`. The plan must still list exact `files_touched` entries for `.github/workflows/ci.yml`, `.github/workflows/mark-stable.yml`, `.github/workflows/test-and-mark-stable.yml` and `tests/test_ci_poll_test_sharding.py`, plus any reproduced-defect file under `tests/` or `scripts/` and the `changelog.d/` fragment. If the implement automation-path guard still rejects the workflow paths (the triage issue author's trust class is not visible here), the existing `ai:scope-blocked` \u2192 unblock-judge path handles it. No operator step is required ahead of time.",
+  "fingerprint": "b1ccb8207afdb0642f7d5d2b8882cf55bf2bc48dfe558ef328e7a8a4f4591bc5",
+  "lineage": {
+    "issue_number": 6883,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37910315158",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37910315158",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6883"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261009092630_8e2586cd5e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6883,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37910315158"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6883",
+  "timestamps": {
+    "created_at": "2026-10-09T09:26:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
