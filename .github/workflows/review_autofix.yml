@@ -2517,11 +2517,16 @@ jobs:
             exit 0
           fi
           # #6625: a cap marker of another support version does not count; the
-          # support SHA must be a field of the marker, not text elsewhere.
+          # support SHA must be a field of a marker on its own line, not text
+          # elsewhere (an inline "First error" quote can hold a whole marker).
           cap_support=""
-          [[ "${REVIEW_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]] && cap_support="${REVIEW_SUPPORT_SHA}"
+          if [[ "${REVIEW_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+            cap_support="${REVIEW_SUPPORT_SHA}"
+          elif [ -n "${REVIEW_SUPPORT_SHA:-}" ]; then
+            echo "::warning::REVIEW_SUPPORT_SHA is not a 40-hex SHA; the cap marker is written without support=."
+          fi
           if jq -e --arg author "${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}" --arg head "${PR_HEAD_SHA}" --arg support "${cap_support}" \
-            'any(.[]; ((.author_login // "" | ascii_downcase) == ($author | ascii_downcase)) and ((.body // "") | contains("<!-- review-autofix-failure-cap:v1 head=" + $head + " ")) and ($support == "" or ((.body // "") | test("<!-- review-autofix-failure-cap:v1 head=" + $head + "( [^ >\\n]+)* support=" + $support + " -->"))))' \
+            'any(.[]; ((.author_login // "" | ascii_downcase) == ($author | ascii_downcase)) and ((.body // "") | contains("<!-- review-autofix-failure-cap:v1 head=" + $head + " ")) and ($support == "" or ((.body // "") | test("(^|\\n)<!-- review-autofix-failure-cap:v1 head=" + $head + "( [^ >\\n]+)* support=" + $support + "( [^ >\\n]+)* -->[ \\r]*(\\n|$)"))))' \
             "${fresh_cap_comments_file}" >/dev/null; then
             echo "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=${PR_NUMBER} head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP} count=${FINGERPRINT_CAP_COUNT}"
             exit 0

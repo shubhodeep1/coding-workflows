@@ -638,6 +638,17 @@ def test_cap_skip_support_text_outside_marker_does_not_count():
 	assert "NOOP_RECOVERY_FINGERPRINT_CAP_STALE_SUPPORT" in out
 
 
+def test_cap_skip_inline_quoted_marker_does_not_count():
+	"""A whole current-support cap marker quoted inline (a failure comment's
+	"First error" code span) is not a cap marker on its own line."""
+	quoted = _cap_comment("shubhodeep1", support=SUPPORT_NEW)
+	quoted["body"] = "**AI review/autofix failed**\n\n**First error:** `" + quoted["body"].split("\n", 1)[1] + "`"
+	out, _ = _run_cap_skip([quoted], [{"sha": CAP_HEAD}], "shubhodeep1",
+		repo="shubhodeep1/coding-workflows", engine_sha=SUPPORT_NEW)
+	assert out.count("DISPATCH") == 2, out
+	assert "NOOP_RECOVERY_FINGERPRINT_CAP_STALE_SUPPORT" in out
+
+
 def test_cap_skip_legacy_marker_redispatches_when_support_resolved():
 	out, _ = _run_cap_skip([_cap_comment("shubhodeep1")], [{"sha": CAP_HEAD}], "shubhodeep1",
 		repo="shubhodeep1/coding-workflows", engine_sha=SUPPORT_NEW)

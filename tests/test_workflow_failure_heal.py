@@ -3406,6 +3406,14 @@ def test_fingerprint_cap_block_marker_records_support_version() -> None:
 		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", extra_comments=[quoted_cap], extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
 		assert "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED" not in result.stdout, result.stdout
 		assert len(state.get("comments_posted", [])) == 1, result.stdout
+	# A whole current-support cap marker quoted inline (a failure comment's
+	# "First error" code span) is not a cap marker.
+	inline_marker = f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={FP_HEX} reason=editor_empty_noop count=3 support={SUPPORT_NEW} -->"
+	inline_cap = {"author_login": CAP_AUTHOR, "body": f"{AUTOFIX_FAILED_COMMENT}\n\n**First error:** `{inline_marker}`"}
+	with tempfile.TemporaryDirectory(prefix="heal-cap-job-support-inline-") as tmp_name:
+		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", extra_comments=[inline_cap], extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
+		assert "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED" not in result.stdout, result.stdout
+		assert len(state.get("comments_posted", [])) == 1, result.stdout
 	same_cap = {**old_cap, "body": old_cap["body"].replace(SUPPORT_OLD, SUPPORT_NEW)}
 	with tempfile.TemporaryDirectory(prefix="heal-cap-job-support-same-") as tmp_name:
 		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", extra_comments=[same_cap], extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
