@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\nQ3: A\n\nRATIONALE:\nQ1: The issue covers one case: a failure that a newer support commit can fix, here the resolver sandbox-path reasons. Those are exactly the reasons in `NON_RETRYABLE_FAILURE_REASONS` (`scripts/workflow_failure_heal.py`), and they trip the cap on the first marker. The 3-strikes identical-failure cap already lets the same head try three times, so re-arming it on every support change would broaden scope and could bring back the repeated runs the cap exists to stop (PR #6438 had about 28 identical resolver runs on one head).\nQ2: `render_failure_marker` (`scripts/workflow_failure_heal.py:2026-2039`) writes `key=value` fields today, and `_marker_fields` reads them with `setdefault`. An optional `support=<40-hex>` field is therefore additive and backward compatible. Option A is the only choice that also re-arms heads already capped under older markers, which is the purpose of the issue. It stays bounded because the retry's own marker carries the new SHA. Option C would add a separate marker type and rely on a committer date, which is weaker evidence than SHA identity. Note: GITHUB FACTS show PR #6538 is now closed and not merged, so that PR no longer needs re-arming. The general mechanism is still the deliverable.\nQ3: The gate is the single place that decides whether a review runs. `review_autofix_sweep.yml` does not filter on the cap comment, so it reaches the gate anyway. Leaving `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP` in `scripts/orchestrate_poll_process.sh` unchanged keeps the poller's behaviour and API use as they are (\u00a79, \u00a714).\n\nEXECUTION PLAN (required for any non-letter decision):\n(Not required, since all answers are letters. Implementation notes for the planner:)\nQ1/Q2 combined:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/workflow_failure_heal.py (`render_failure_marker`, `_marker_fields`, the `autofix-identical-failure-count` subcommand, `NON_RETRYABLE_FAILURE_REASONS`)\n    - .github/workflows/review_autofix.yml gate job: `resolve_support` step output `review_support_sha` (already checked as 40-hex, lines ~359-392), and the fingerprint-cap evaluation (~1117-1205)\n    - the places that render failure and cap markers (`review_autofix.yml` steps near 2731, 3037, 5470, 6900, 6989, 7236; the cap comment `review-autofix-failure-cap:v1`)\n  steps:\n    - Add an optional `support_sha` parameter to `render_failure_marker`. Write `support=<sha>` only when it is a valid 40-hex SHA, so existing output is unchanged when the parameter is absent. Add the same field to the `review-autofix-failure-cap:v1` comment.\n    - Pass the gate's verified `review_support_sha` (through `env:`, not by inlining `${{ }}` into script bodies) to every place that renders a marker.\n    - In `autofix-identical-failure-count`, accept `--current-support-sha`. When the cap would trip and the newest trusted marker for the head is non-retryable, compare that marker's `support=` value with the current SHA. If they differ, or the field is missing, emit `rearm=1` and do not trip the cap. If they match, trip as today.\n    - Fail closed: if the current support SHA is missing or malformed, never re-arm and keep the cap. Marker-author trust checks and the existing sandbox path checks are unchanged.\n    - In the gate, `rearm=1` keeps `SHOULD_RUN=true`, sets no `skip_reason=fingerprint_cap`, and logs a new stable line `AUTOFIX_FINGERPRINT_CAP_REARMED pr=<n> head=<sha> fp=<fp> prior_support=<sha|none> support=<sha>`. Register it under the stable log prefixes in `agents.md`, with a changelog fragment.\n    - Add contract tests in `tests/` covering: a legacy marker without `support=` re-arms once; a marker with a different support SHA re-arms; a marker with the same support SHA keeps the cap; an invalid current SHA keeps the cap; a 3-strikes (non-non-retryable) cap is never re-armed.\n  replaces_acceptance_criterion: n/a\n  equivalence_argument: One retry per distinct verified support SHA per head. The retry writes the current SHA into its own marker, so another failure restores the cap with no new state store.\n  reversibility: Additive marker field and gate branch. Reverting the gate branch brings back the previous cap behaviour, and markers with the extra field still parse.\n\nESCALATION (required for any ESCALATE decision):\n(none)\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n(none)\n\nAssumptions:\n- A run that ends without posting a failure marker (for example a cancelled run) can be re-dispatched under the same rule. That matches how the gate behaves before any cap exists.\n- Linked-issue `ai:review-blocked` labelling is unchanged.\n- PR #6538 is closed, so nothing will re-arm it.",
+  "fingerprint": "c0863763c2392e3a305eed87c9c7a159008521a853a9a5bf98676996eaa4cc89",
+  "lineage": {
+    "issue_number": 6911,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37919433054",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37919433054",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6911"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261009105359_1292400581",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6911,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37919433054"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6911",
+  "timestamps": {
+    "created_at": "2026-10-09T10:53:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
