@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The evidence does not show which path class failed the check. In `check_paths` (`scripts/review_untrusted_workspace.py:519-550`) and `_host_only_or_unsafe` (`:553-562`), a symlink, an odd name, an existing non-regular entry and a `ValueError`/`OSError` all produce the same bare `unsafe` line. The CLI wrapper (`:590-595`) also exits 1 on `OSError`/`UnicodeError`, possibly without writing any report. `_resolver_fail_closed_for_conflict_paths` (`scripts/review_conflict_resolve.sh:595-606`) then turns every one of these, plus a mix of host_only and unsafe lines, into the same `sandbox_path_unsupported`. Option B guesses at a cause nobody has confirmed. Option C weakens the guard, which the issue's fix constraints forbid. So we add diagnostics only, keep the resolver fail-closed, and fix the real cause once the next occurrence names it.\nQ2: `_resolver_fail_closed` (`review_conflict_resolve.sh:560-583`) already writes `AUTOFIX_FAILURE_REASON=conflict_resolver_sandbox_path_unsupported`. That token is in `NON_RETRYABLE_FAILURE_REASONS`, so the first failure marker trips the cap. Integration-sync PRs rely on the generic reason for retry-state escalation. New reason tokens (B) would break both behaviours and the heal fingerprint lineage. Writing only to the log (C) would not reach the failure comment's \"First error\" or `AUTOFIX_FAILURE_FIRST_ERROR`. An extra path-free `::error::` line emitted before the existing one surfaces the category and leaves every existing token unchanged.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/review_untrusted_workspace.py (`check_paths`, `_host_only_or_unsafe`, `REPORTABLE_PATH_RE`, `main` check-paths branch)\n    - scripts/review_conflict_resolve.sh (`_resolver_fail_closed_for_conflict_paths`, `_resolver_fail_closed`, call sites ~2290 and ~2514)\n    - tests/test_review_conflict_resolve_sandbox_only.py, tests/test_review_sandbox_claude_roles.py\n  steps:\n    - In `_host_only_or_unsafe` and `check_paths`, write each non-host_only rejection as `unsafe<TAB><category>`. `<category>` must be one of a fixed set: `symlink`, `odd_name` (fails `REPORTABLE_PATH_RE`, has a `..` part or contains `//`), `non_regular` (exists but is not a regular file), `unreadable` (`ValueError`/`OSError` from `checked_path`). Never write the path name. host_only lines stay byte-identical, and the shell's `grep -qv '^host_only\\t...'` still classifies every `unsafe*` line as unsupported.\n    - Keep the existing bare `unsafe` form readable on the shell side. Treat a line with no category as `category=unknown`.\n    - In `_resolver_fail_closed_for_conflict_paths`, before `_resolver_fail_closed sandbox_path_unsupported`, classify the report without printing any path:\n      - report missing or empty \u2192 `report_missing`\n      - report is a symlink \u2192 `report_unreadable`\n      - otherwise count lines per category, plus host_only lines for the mixed case.\n    - Emit exactly one line: `::error::Conflict resolver: conflicted path(s) cannot enter the review sandbox (category=<dominant or mixed> counts=<cat>:<n>,... host_only=<n> total=<n>)`. Allow only fixed tokens and integers. Cap the counts field at a bounded length.\n    - Leave the host_only branch, the `sandbox_path_unsupported` token, `AUTOFIX_FAILURE_REASON` and the integration-sync handling unchanged.\n    - Add regression tests for each category, run against `check_paths` and the shell function: a symlink conflict path, a name with a space, a directory/FIFO at the conflict path, a `checked_path` OSError, a missing report and a mixed host_only+unsafe report. Each test asserts the exact `::error::` line, that no path name appears in stderr, that the final reason is still `sandbox_path_unsupported`, and that no model runs.\n    - Add a changelog fragment `changelog.d/<issue>-conflict-resolver-path-category.md`.\n  replaces_acceptance_criterion: \"address the verified root condition\" is deferred until a later occurrence, because the root condition cannot be verified now. This change makes the next occurrence identify it.\n  equivalence_argument: The issue's suggested fix explicitly says to first identify the path class, then fix the verified condition. This change does the identification step with no admission change, and the regression tests reproduce each candidate condition.\n  reversibility: It is additive. Removing the extra `::error::` line and the report suffix restores the old behaviour exactly.\n\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/review_conflict_resolve.sh `_resolver_fail_closed` (lines 560-583)\n    - scripts/workflow_failure_heal.py `NON_RETRYABLE_FAILURE_REASONS`\n  steps:\n    - Print the category `::error::` line from Q1 to stderr before calling `_resolver_fail_closed sandbox_path_unsupported`, so it becomes the first specific `::error::` line in `resolver_stage_stderr.txt`.\n    - Do not add new failure-reason tokens. Do not change `NON_RETRYABLE_FAILURE_REASONS`.\n    - In tests, assert that the category line comes before `Conflict resolver isolation unavailable (reason=sandbox_path_unsupported)`.\n  replaces_acceptance_criterion: none\n  equivalence_argument: The heal intake and the failure comment already pick up the first `::error::` line, so the category reaches them without changing the fingerprint or the cap behaviour.\n  reversibility: Delete the single echo line.",
+  "fingerprint": "80fd2f67f7191856dded91f67af22263222f6f2c2d5ab59cce08ba0ee690d5fe",
+  "lineage": {
+    "issue_number": 6866,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37896197388",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37896197388",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6866"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261009070709_c47aba02de",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6866,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37896197388"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6866",
+  "timestamps": {
+    "created_at": "2026-10-09T07:07:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
