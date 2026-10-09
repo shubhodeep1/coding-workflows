@@ -177,7 +177,15 @@ Phases of the unattended pipeline (each is a separate workflow file under
     Host `claude_run` refuses all four review roles. The resolver checks its
     conflicted paths against sandbox admission before either engine runs; an
     unsupported path is refused and, for integration-sync PRs, counted toward
-    the existing resolver retry-state escalation. `check-paths` writes a
+    the existing resolver retry-state escalation, logging
+    `REVIEW_RESOLVER_PATH_REJECTED reason=<token> path=<path|redacted>`
+    (paths outside a fixed safe character set, and symlinks or odd names,
+    print as `redacted`). When the
+    live `.claude/hooks/pr_merge_status_guard.py` and its `workflow-templates/`
+    twin conflict with identical index stages, the model resolves only the
+    template; the runner copies it byte-for-byte over the live hook, which stays
+    excluded from the sandbox, and requires identical staged blobs before the
+    commit (`REVIEW_RESOLVER_PAIRED_LIVE`). `check-paths` writes a
     per-path report: when every rejected path is a plainly named file the
     sandbox policy keeps on the host, the resolver logs one
     `::error::Conflict resolver: host-only conflicted path(s) need a manual
@@ -2098,6 +2106,8 @@ and shipped:
 - `INTEGRATION_JUDGE_SCOPE`
 - `WORKFLOW_OVERLAY_SOURCE`
 - `WORKFLOW_OVERLAY_REPLACE_REJECTED`
+- `REVIEW_RESOLVER_PATH_REJECTED` (`scripts/review_untrusted_workspace.py check-paths`, re-emitted by `scripts/review_conflict_resolve.sh`: `reason=unsafe_name|operator_input|excluded_component|live_safety_hook|dot_directory|unsupported_type|unsafe_file path=<path|redacted>`)
+- `REVIEW_RESOLVER_PAIRED_LIVE` (`scripts/review_conflict_resolve.sh`: `live= template= outcome=paired`, `outcome=mirrored`, `outcome=skipped reason=template_markers`)
 - `VALIDATION_HARNESS_SANDBOX`
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
@@ -2332,6 +2342,8 @@ LOG_PREFIX.name=SECURITY_AUDIT_TARGET
 LOG_PREFIX.name=INTEGRATION_JUDGE_SCOPE
 LOG_PREFIX.name=WORKFLOW_OVERLAY_SOURCE
 LOG_PREFIX.name=WORKFLOW_OVERLAY_REPLACE_REJECTED
+LOG_PREFIX.name=REVIEW_RESOLVER_PATH_REJECTED
+LOG_PREFIX.name=REVIEW_RESOLVER_PAIRED_LIVE
 LOG_PREFIX.name=VALIDATION_HARNESS_SANDBOX
 
 ---
