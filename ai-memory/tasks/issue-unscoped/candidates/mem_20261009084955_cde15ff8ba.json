@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_process.sh:1585-1590 | severity=low | confidence=4\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The comment incorrectly says template-rendered tests reach the host runner after the manifest shell-safety gate rejected unsafe values.\n  WHY: The comment misrepresents the security model; the renderer does not run when the gate rejects values, and the code itself is correct.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cMake the fallback runner isolate rendered tests or skip them automatically.\u201d\n  expected_change_site: scripts/validate_process.sh, fallback test loop in ensure_runtime_validation_driver()\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: The fallback loop continues to execute rendered test scripts directly via bash without attempting isolation or implementing an automatic skip when the sandbox is absent; the fallback loop still runs every test not identified by is_synthesised_test directly with bash \"${test_script}\" (lines 1584-1592); the fallback loop at lines 1584-1594 runs template-rendered tests directly with `bash \"${test_script}\"` on the host.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Make the fallback runner isolate rendered tests or skip them automatically.\n  Expected change site: scripts/validate_process.sh, fallback test loop.\n  Evidence of absence: The fallback loop continues to execute rendered test scripts directly via bash without attempting isolation or implementing an automatic skip when the sandbox is absent. The changes only implement the manifest shell-safety gate.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cMake the fallback runner isolate rendered tests or skip them automatically.\u201d\n  Expected change site: `scripts/validate_process.sh`, fallback test loop in `ensure_runtime_validation_driver()`.\n  Evidence of absence: The PR adds a manifest validation gate, but the fallback loop still runs every test not identified by `is_synthesised_test` directly with `bash \"${test_script}\"` (lines 1584-1592). That function skips synthesized tests only; the PR adds no isolation or automatic skip for the other rendered tests.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/validate_process.sh:1585-1590 | severity=NIT | confidence=4\n  PROBLEM: The comment says \"Template-rendered tests reach this host runner only after run_template_validation_harness_renderer's manifest shell-safety gate rejected shell-unsafe .ai/validate.yml values\" \u2014 this is backwards. Template-rendered tests reach this host runner because the gate PASSED (verified all values are shell-safe), not because it rejected unsafe values. If the gate rejects values, the renderer never runs, no tests are generated, and this code path never executes with those tests.\n  WHY: The comment misrepresents the security model. A future maintainer reading \"only after the gate rejected unsafe values\" might conclude the fallback runner executes tests in a rejection scenario, when in fact it executes tests only when values are verified safe. The code is correct; the comment is misleading.\n\n- TASK_GAP\n  Requirement: \"Apply strict manifest-value validation or shell-context escaping, and make the fallback runner isolate rendered tests or skip them automatically.\"\n  Expected change site: scripts/validate_process.sh, fallback test loop around lines 1584-1594\n  Evidence of absence: The fallback loop at lines 1584-1594 runs template-rendered tests directly with `bash \"${test_script}\"` on the host. No isolation or automatic skip is added for these rendered tests. The editor's summary documents this as TASK_GAP_DEFERRED with reasoning: no harness sandbox exists on this branch (`scripts/validation_harness_sandbox.sh` is absent), template rendering is the only way tests are generated so skipping would make fallback runs vacuous, the trusted driver runs the same rendered tests on the host, and the injection vector is closed at both render entry points by the shell-safety gate. The primary mitigation (manifest-value validation) is implemented; the secondary mitigation (fallback runner isolation/skip) is deferred as defense-in-depth that requires infrastructure not present on this branch.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "c175fbfe1b05904d70ba8b18e0da5233d7868d820f20ecf8881d4ee26b908566",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6869,
+    "run_id": "37903079593",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37903079593",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009084955_cde15ff8ba",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6869,
+    "run_id": "37903079593"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T08:49:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
