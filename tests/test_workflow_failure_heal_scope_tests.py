@@ -90,6 +90,17 @@ def test_render_marker_keeps_subjects_ahead_of_the_cap_and_warns_on_truncation(c
 	assert verified["status"] == "verified"
 
 
+def test_render_marker_keeps_subjects_when_changed_files_fill_the_cap() -> None:
+	changed = [f"scripts/changed_{i}.py" for i in range(25)]
+	marker = heal.render_heal_scope_marker(crash_file="scripts/crash.sh", workflow_paths=[".github/workflows/ci.yml"], changed_files=changed, runs=[f"{SELF_REPO}:1"],
+		exists=lambda path: True, test_subjects=["tests/test_orchestrate_poll_process.py", "scripts/orchestrate_poll_process.sh"])
+	paths = marker.split("paths=", 1)[1].split(" ", 1)[0].split(",")
+	assert paths[:3] == ["scripts/crash.sh", ".github/workflows/ci.yml", "scripts/orchestrate_poll_process.sh"]
+	assert len(paths) == 22 and paths[3:-2] == changed[:17]
+	verified = heal.verify_heal_scope(body=marker, author_login="bot", last_edited_at=None, labels=[heal.HEAL_LABEL], pipeline_login="bot")
+	assert verified["status"] == "verified" and "scripts/orchestrate_poll_process.sh" in verified["paths"]
+
+
 def _init_scope_repo(root: Path) -> str:
 	subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True)
 	(root / "tests").mkdir(exist_ok=True)

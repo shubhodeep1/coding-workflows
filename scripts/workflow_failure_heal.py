@@ -2132,6 +2132,10 @@ def heal_scope_test_subjects(test_files: Iterable[str], exists: Any) -> list[str
 	return out
 
 
+# Explicit scope slots reserved for failing-test subjects ahead of changed_files.
+HEAL_SCOPE_SUBJECT_RESERVE = 8
+
+
 def render_heal_scope_marker(*, crash_file: str | None, workflow_paths: Iterable[str], changed_files: Iterable[str], exists: Any, runs: Iterable[str] = (), test_subjects: Iterable[str] = ()) -> str:
 	paths = []
 	dropped = 0
@@ -2139,7 +2143,12 @@ def render_heal_scope_marker(*, crash_file: str | None, workflow_paths: Iterable
 	# the subjects they map to take one of the 20 explicit slots
 	# (verify_heal_scope accepts at most 20 explicit paths).
 	subjects = [path for path in test_subjects if isinstance(path, str) and not path.startswith("tests/")]
-	for path in [crash_file, *workflow_paths, *changed_files, *subjects]:
+	# Up to HEAL_SCOPE_SUBJECT_RESERVE subjects go ahead of the ownership
+	# ``changed_files`` list: a PR or base diff touching 20+ files would
+	# otherwise fill every slot first and confine the heal to tests/** again.
+	# The crash file and workflow paths keep priority; remaining subjects follow.
+	ordered = [crash_file, *workflow_paths, *subjects[:HEAL_SCOPE_SUBJECT_RESERVE], *changed_files, *subjects[HEAL_SCOPE_SUBJECT_RESERVE:]]
+	for path in ordered:
 		if not isinstance(path, str) or not _safe_heal_path(path) or path in paths:
 			continue
 		if len(paths) >= 20:
