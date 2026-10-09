@@ -55,7 +55,18 @@ def test_workflow_stages_and_invokes_extracted_runner() -> None:
 	assert "OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}" in step
 	assert "TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_PLAN || '40' }}" in step
 	assert 'TOOL_CALL_BUDGET="${TOOL_CALL_BUDGET:-40}"' in PLAN_RUNNER.read_text(encoding="utf-8")
+	# Heal issues (#6463) collect verified evidence and switch the runner to
+	# the isolated planner before it starts; ordinary issues run it unchanged.
 	assert step.split("        run: |\n", 1)[1] == (
+		'          if ! heal_route="$(python3 scripts/workflow_failure_heal.py heal-route --issue-json "${ISSUE_META_FILE}")"; then\n'
+		"            echo '::error::Heal route classification failed' >&2\n"
+		'            exit 1\n'
+		'          fi\n'
+		'          if [ "${heal_route}" = true ]; then\n'
+		"            echo 'HEAL_ROUTE=true' >> \"${GITHUB_ENV}\"\n"
+		'            HEAL_ROUTE=true HEAL_EVIDENCE_FILE="${RUNTIME_DIR}/heal_evidence.md" bash scripts/workflow_failure_heal_evidence.sh\n'
+		'            export HEAL_ROUTE=true HEAL_EVIDENCE_FILE="${RUNTIME_DIR}/heal_evidence.md"\n'
+		"          fi\n"
 		"          bash scripts/run_plan_codex.sh\n"
 	)
 	assert len(step.encode("utf-8")) < 2_000

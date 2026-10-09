@@ -88,7 +88,7 @@ verify_resolver_index_complete_or_fail() {
 # Deterministic-resolution short-circuit: review_conflict_prepare.sh
 # commits the [ai-merge-resolve] merge itself when every unmerged path
 # was deterministically resolvable (currently: the
-# .ai/.workspace_source_manifest.txt union-merge) and signals that by
+# .ai/.workspace_source_manifest.txt union-merge or modify/delete resolution) and signals that by
 # writing CONFLICT_RESOLVED=true to $GITHUB_ENV.  The workflow step
 # gating (MERGE_CONFLICT == 'true') is deliberately unchanged, so this
 # second half still runs — exit before any model invocation.  Running
@@ -561,6 +561,18 @@ _resolver_fail_closed()
 {
   echo "AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=$1 action=fail_closed" >&2
   echo "::error::Conflict resolver isolation unavailable (reason=$1); refusing host fallback." >&2
+  # Name the failure for the review-autofix-failure:v1 marker ("Assemble
+  # failure evidence" reads AUTOFIX_FAILURE_REASON). The gate's identical-
+  # failure cap stops a head on the first marker whose reason
+  # workflow_failure_heal.py lists in NON_RETRYABLE_FAILURE_REASONS
+  # (PR #6438: ~28 identical sandbox_path_unsupported runs on one head).
+  # Integration-sync PRs keep the generic reason: their failures must keep
+  # counting toward the resolver retry-state escape threshold, whose
+  # escalation drives the orchestrator's automatic branch rebuild.
+  if [ -n "${GITHUB_ENV:-}" ] && [ "${IS_INTEGRATION_SYNC:-false}" != "true" ] &&
+     [[ "$1" =~ ^[a-z][a-z0-9_]{0,60}$ ]]; then
+    echo "AUTOFIX_FAILURE_REASON=conflict_resolver_$1" >> "${GITHUB_ENV}" || true
+  fi
   if type _persist_resolver_retry_state_from_current_failure >/dev/null 2>&1; then
     RESOLVER_ISOLATION_FAILURE_REASON="$1" _persist_resolver_retry_state_from_current_failure || true
   fi
@@ -568,6 +580,30 @@ _resolver_fail_closed()
   if [ -n "${tmp_output:-}" ]; then rm -f -- "${tmp_output}"; fi
   if [ -n "${_stall_status_file:-}" ]; then rm -f -- "${_stall_status_file}"; fi
   exit 1
+}
+
+# Fail closed on a rejected conflict path set (check-paths exit 1).
+# $1 is the report check-paths wrote: `host_only<TAB><path>` per path the
+# sandbox policy keeps on the host (generated files under .ai/, host-executed
+# hooks such as .claude/hooks/pr_merge_status_guard.py, unsupported file
+# types), `unsafe` for symlinks and odd names. When every rejection is
+# host_only the merge needs a human, so name the paths once in one ::error::
+# line (the failure comment's "First error") and stop with
+# sandbox_path_host_only; the model never sees any of the conflict set,
+# because a merge commit needs every path resolved. Anything else keeps the
+# nameless sandbox_path_unsupported.
+_resolver_fail_closed_for_conflict_paths()
+{
+  local conflict_path_report="$1" conflict_host_only_paths=""
+  if [ -s "${conflict_path_report}" ] && [ ! -L "${conflict_path_report}" ] &&
+     ! grep -qv $'^host_only\t[A-Za-z0-9_.][A-Za-z0-9._/-]*$' "${conflict_path_report}"; then
+    conflict_host_only_paths="$(awk -F'\t' 'NR <= 20 { printf "%s%s", (NR > 1 ? ", " : ""), $2 } NR == 21 { printf ", ..." }' "${conflict_path_report}")" || conflict_host_only_paths=""
+  fi
+  if [ -n "${conflict_host_only_paths}" ]; then
+    echo "::error::Conflict resolver: host-only conflicted path(s) need a manual merge: ${conflict_host_only_paths}" >&2
+    _resolver_fail_closed sandbox_path_host_only
+  fi
+  _resolver_fail_closed sandbox_path_unsupported
 }
 
 # Each invocation prepares its own snapshot: a failed Claude run may have
@@ -2103,7 +2139,7 @@ if [ -s "${RESOLVER_ALLOWLIST_FILE:-}" ] && [ -f "${TARGETED_FILE_CONTEXT_SCRIPT
     --header-text "These are the conflicted files you must resolve. Their current contents (with Git conflict markers) are inlined below so you can edit immediately without re-reading them. Files marked \"would overflow total budget\" must be read with the read tool — never assume their content is in this block."
     --output "${TARGETED_FILES_CONTEXT_FILE}"
   )
-  if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -s "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-}" ]; then
+  if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -s "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-}" ] && [ "$(printf '%s' "${TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
     targeted_file_context_args+=(
       --semble-bin "${SEMBLE_BIN:-}"
       --semble-index "${SEMBLE_INDEX_PATH:-}"
@@ -2125,7 +2161,13 @@ if [ -s "${TARGETED_FILES_CONTEXT_FILE}" ]; then
   printf '\n' >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
   cat "${TARGETED_FILES_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
 fi
-if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] \
+conflict_semble_should_query=false
+if declare -F semble_should_query >/dev/null 2>&1; then
+  semble_should_query && conflict_semble_should_query=true
+elif [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ]; then
+  conflict_semble_should_query=true
+fi
+if [ "${conflict_semble_should_query}" = "true" ] \
    && [ -s "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-}" ] \
    && declare -F semble_query_block >/dev/null 2>&1; then
   semble_query_block \
@@ -2242,8 +2284,10 @@ resolver_workspace_py="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_workspac
 if [ ! -f "${resolver_sandbox_sh}" ] || [ ! -f "${resolver_workspace_py}" ]; then
   _resolver_fail_closed sandbox_support_missing
 fi
-if ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}" >/dev/null 2>&1; then
-  _resolver_fail_closed sandbox_path_unsupported
+resolver_conflict_path_report="${RUNTIME_DIR}/resolver_conflict_path_report.txt"
+rm -f -- "${resolver_conflict_path_report}"
+if ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}" "${resolver_conflict_path_report}" >/dev/null 2>&1; then
+  _resolver_fail_closed_for_conflict_paths "${resolver_conflict_path_report}"
 fi
 
 _resolver_sandbox_opencode_attempt()
@@ -2284,8 +2328,11 @@ _resolver_sandbox_opencode_attempt()
   if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then
     if [ -f "${resolver_transfer_reason_file}" ] && [ ! -L "${resolver_transfer_reason_file}" ] &&
        [ "$(wc -c < "${resolver_transfer_reason_file}")" -le 240 ] &&
-       [[ "$(< "${resolver_transfer_reason_file}")" =~ ^::error::Review\ isolation\ snapshot\ or\ transfer\ rejected\ \(ValueError\)\ reason=(admitted_inventory_missing|symlink_path|unsafe_file|file_changed|entry_limit|unsafe_directory(\ dir=[A-Za-z0-9._/-]{1,64})?|unsafe_result_path|workspace_size_limit|host_baseline_changed|host_path_conflict|transfer_rollback_failed)$ ]]; then
-      resolver_transfer_reason=" reason=${BASH_REMATCH[1]%% *}"
+       [[ "$(< "${resolver_transfer_reason_file}")" =~ ^::error::Review\ isolation\ snapshot\ or\ transfer\ rejected\ \(ValueError\)\ reason=(admitted_inventory_missing|symlink_path|symlink_in_path|unsafe_file|file_changed|entry_limit|unsafe_directory(\ category=(symlink|invalid_name|dot_github_subtree|env_like|sensitive_name|key_material_suffix|excluded_name_variant|other)\ depth=(1|2|3[+])|\ dir=[A-Za-z0-9._/-]{1,64})?|unsafe_result_path|workspace_size_limit|size_limit|host_baseline_changed|host_path_conflict|result_conflicts_host|transfer_rollback_failed)$ ]]; then
+       resolver_transfer_reason=" reason=${BASH_REMATCH[1]%% *}"
+       if [ -n "${BASH_REMATCH[3]:-}" ]; then
+         resolver_transfer_reason+=" category=${BASH_REMATCH[3]} depth=${BASH_REMATCH[4]}"
+      fi
     fi
     echo "::error::Conflict resolver sandbox transfer failed; refusing to accept output.${resolver_transfer_reason}" >&2
     rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
@@ -2460,10 +2507,11 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     resolver_sandbox_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_sandbox.sh"
     resolver_workspace_py="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_workspace.py"
     if [ "${AI_ENGINE_RESOLVED_CONFLICT_RESOLVER:-codex}" = "claude" ]; then
+      rm -f -- "${RUNTIME_DIR}/resolver_conflict_path_report.txt"
       if [ ! -f "${resolver_sandbox_sh}" ] || [ ! -f "${resolver_workspace_py}" ]; then
         _resolver_fail_closed sandbox_prepare_failed
-      elif ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}"; then
-        _resolver_fail_closed sandbox_path_unsupported
+      elif ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}" "${RUNTIME_DIR}/resolver_conflict_path_report.txt"; then
+        _resolver_fail_closed_for_conflict_paths "${RUNTIME_DIR}/resolver_conflict_path_report.txt"
       fi
       rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
       resolver_claude_rc=0
@@ -3112,8 +3160,8 @@ if [ -n "$(git status --porcelain)" ]; then
         _rs_script_excludes+=(":!scripts/${_ign_entry}")
       done < scripts/.gitignore
     fi
-    git add -u -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
-    git ls-files --others --exclude-standard -z -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+    git add -u -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts' ':!.ai/.workspace_source_manifest.txt'
+    git ls-files --others --exclude-standard -z -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' ':!.ai/.workspace_source_manifest.txt' | xargs -0 -r git add --
   fi
   echo "Staged files before commit:"
   STAGED_FILES="$(git diff --cached --name-only || true)"

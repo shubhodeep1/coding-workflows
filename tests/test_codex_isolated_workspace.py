@@ -157,6 +157,8 @@ def test_export_oversized_chunks_only_scoped_safe_tracked_files(repo, tmp_path):
 	assert manifest["scope_mode"] == "explicit"
 	assert [item["path"] for item in manifest["unscoped_oversized"]] == ["big.bin", "unscoped.txt"]
 	assert manifest["unscoped_oversized_count"] == 2
+	assert manifest["unscoped_text_capped_count"] == 0
+	assert manifest["unscoped_text_capped"] == []
 	assert len(manifest["scoped"]) == 1
 	item = manifest["scoped"][0]
 	assert item["path"] == "large.txt" and item["sha256"] == hashlib.sha256(data).hexdigest()
@@ -183,6 +185,7 @@ def test_export_oversized_all_chunks_every_eligible_tracked_file(repo, tmp_path)
 	assert [item["path"] for item in manifest["scoped"]] == ["big.bin", "large.txt", "unscoped.txt"]
 	assert manifest["unscoped_oversized"] == []
 	assert manifest["unscoped_oversized_count"] == 0
+	assert manifest["unscoped_text_capped_count"] == 0
 	for item in manifest["scoped"]:
 		assert b"".join((dest / chunk["file"]).read_bytes() for chunk in item["chunks"]) == (data if item["path"] != "big.bin" else b"x" * (2 * 1024 * 1024 + 1))
 
@@ -194,14 +197,19 @@ def test_export_oversized_all_chunks_every_eligible_tracked_file(repo, tmp_path)
 def test_export_oversized_all_reports_unlisted_cap_breach(repo, tmp_path, file_cap, total_cap, expected):
 	# Q24: a full audit lists unscoped files past the caps as not inspected.
 	(repo / "large.txt").write_bytes(b"a" * (2 * 1024 * 1024 + 1))
-	git(repo, "add", "large.txt")
+	(repo / "photo.jpg").write_bytes(b"\x00" + b"a" * (2 * 1024 * 1024))
+	git(repo, "add", "large.txt", "photo.jpg")
 	scope = tmp_path / "scope.txt"
 	scope.write_text("")
 	dest = tmp_path / "export"
 	run("export-oversized", repo, scope, dest, file_cap, total_cap, "all")
 	manifest = json.loads((dest / "manifest.json").read_text())
-	assert {item["path"]: item["reason"] for item in manifest["unscoped_oversized"]} == expected
-	assert manifest["unscoped_oversized_count"] == len(expected)
+	assert {item["path"]: item["reason"] for item in manifest["unscoped_oversized"]} == {
+		**expected, "photo.jpg": "over_file_cap" if file_cap == "2097152" else "over_total_cap",
+	}
+	assert manifest["unscoped_oversized_count"] == len(expected) + 1
+	assert manifest["unscoped_text_capped_count"] == len(expected)
+	assert {item["path"]: item["reason"] for item in manifest["unscoped_text_capped"]} == expected
 	assert {item["path"] for item in manifest["scoped"]} == {"big.bin", "large.txt"} - set(expected)
 
 
@@ -215,7 +223,26 @@ def test_export_oversized_all_lists_binary_files_without_chunking(repo, tmp_path
 	manifest = json.loads((dest / "manifest.json").read_text())
 	assert [item["path"] for item in manifest["scoped"]] == ["big.bin"]
 	assert manifest["unscoped_oversized"] == [{"path": "photo.jpg", "size": 2 * 1024 * 1024 + 3, "reason": "binary"}]
+	assert manifest["unscoped_text_capped_count"] == 0
 	assert not any(path.startswith("f002") for path in tree(dest))
+
+
+def test_export_oversized_text_cap_count_survives_truncated_list(repo, tmp_path, monkeypatch):
+	sys.path.insert(0, str(MODULE.parent))
+	import codex_isolated_workspace as module
+
+	for index in range(51):
+		(repo / f"large-{index:02d}.txt").write_text("abc")
+	monkeypatch.setattr(module, "tracked_paths", lambda _host: [f"large-{index:02d}.txt" for index in range(51)])
+	monkeypatch.setattr(module, "MAX_READONLY_FILE", 1)
+	scope = tmp_path / "scope.txt"
+	scope.write_text("")
+	dest = tmp_path / "export"
+	module.export_oversized(repo, scope, dest, 2, 2, "all")
+	manifest = json.loads((dest / "manifest.json").read_text())
+	assert manifest["unscoped_text_capped_count"] == 51
+	assert len(manifest["unscoped_text_capped"]) == 50
+	assert manifest["unscoped_text_capped"][0]["reason"] == "over_file_cap"
 
 
 def test_export_oversized_all_gives_explicit_scope_the_cap_budget(repo, tmp_path):
@@ -229,6 +256,7 @@ def test_export_oversized_all_gives_explicit_scope_the_cap_budget(repo, tmp_path
 	manifest = json.loads((dest / "manifest.json").read_text())
 	assert [item["path"] for item in manifest["scoped"]] == ["z-listed.txt"]
 	assert manifest["unscoped_oversized"] == [{"path": "big.bin", "size": 2 * 1024 * 1024 + 1, "reason": "over_total_cap"}]
+	assert manifest["unscoped_text_capped_count"] == 1
 
 
 @pytest.mark.parametrize("file_cap,total_cap", [("2097152", "67108864"), ("16777216", "2097152")])
