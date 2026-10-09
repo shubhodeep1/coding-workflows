@@ -1,0 +1,19 @@
+{
+  "entries": [
+    {
+      "context": "## \u274c Runtime validation harness sandbox unavailable Isolated validation harness unavailable; tests were not executed (fail-closed). Reason: `provision rootless_packages_unavailable`",
+      "cycle": 1,
+      "outcome": "failed",
+      "raw_conclusion": "failure",
+      "raw_status": null,
+      "recorded_at": "2026-10-09T16:22:38Z",
+      "run_attempt": 1,
+      "run_id": 37957879661,
+      "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37957879661",
+      "source": "orchestrate_poll.mark_validation_failed"
+    }
+  ],
+  "integration_sha": "a91be9201e63493d2183ddeb7afd636ecfc1ba26",
+  "repository": "shubhodeep1/coding-workflows",
+  "schema_version": "v1"
+}
