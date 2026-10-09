@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.72,
+  "details": "Changes to the unblock flow updated its prompts, scripts, and tests together, with merged work emphasizing terminal-only behavior and avoiding security waivers. When changing this flow, check that operational unblock rules do not silently bypass security requirements.",
+  "fingerprint": "85fd627776760739bef372ecb22ab7cd53dac9ea31c0663b7789068c77380dbd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37868774338",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37868774338",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6506",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6639",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6641",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6782",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6796",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6572",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6643",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6644",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6786",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6805"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261009012414_f9bf4539f6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Unblock/judge flows treat terminal-state handling and security waivers as explicit guardrails.",
+  "timestamps": {
+    "created_at": "2026-10-09T01:24:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
