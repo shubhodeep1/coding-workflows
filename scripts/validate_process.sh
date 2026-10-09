@@ -277,6 +277,27 @@ CANONICAL_VALIDATE_HARNESS_REL="validation/validate.sh"
 mkdir -p "${RUNTIME_DIR}"
 printf 'null\n' > "${NULL_JSON_FILE}"
 
+# Bind the driver Phase 3 launches to the copy present before any model
+# phase runs (findings smoke-synth-unsandboxed-driver /
+# validation-harness-credential-inheritance).  At this point the in-tree
+# scripts/validate_driver.sh is the copy staged with this script, so it is
+# exactly as trusted as validate_process.sh itself; generate, self-heal and
+# hook phases that write back into the workspace must not be able to swap it.
+# The snapshot lives in the private RUNTIME_DIR and survives self-heal
+# re-execs, which reuse the first invocation's record.
+VALIDATE_DRIVER_SNAPSHOT_FILE="${RUNTIME_DIR}/validate_driver_trusted_snapshot.sh"
+VALIDATE_DRIVER_SNAPSHOT_STATE_FILE="${RUNTIME_DIR}/validate_driver_trusted_snapshot.state"
+if [ ! -f "${VALIDATE_DRIVER_SNAPSHOT_STATE_FILE}" ]; then
+  rm -f -- "${VALIDATE_DRIVER_SNAPSHOT_FILE}" >/dev/null 2>&1 || true
+  if [ -f scripts/validate_driver.sh ] && [ ! -L scripts/validate_driver.sh ] \
+    && cp -- scripts/validate_driver.sh "${VALIDATE_DRIVER_SNAPSHOT_FILE}"; then
+    printf 'present\n' > "${VALIDATE_DRIVER_SNAPSHOT_STATE_FILE}"
+  else
+    rm -f -- "${VALIDATE_DRIVER_SNAPSHOT_FILE}" >/dev/null 2>&1 || true
+    printf 'absent\n' > "${VALIDATE_DRIVER_SNAPSHOT_STATE_FILE}"
+  fi
+fi
+
 export VALIDATION_TEST_USERNAME
 export VALIDATION_TEST_PASSWORD
 export VALIDATION_TEST_API_KEY
@@ -3953,12 +3974,22 @@ VALIDATION_IDLE_KILLED=0
 # synthesised-test materialization, and must then equal the canonical wrapper
 # byte for byte; any other validate.sh (freehand, self-healed or committed)
 # is refused, never executed.  Without the driver the trusted fallback runner
-# is always used, whatever validate.sh contains.
+# is always used, whatever validate.sh contains.  The driver the wrapper
+# execs must also be byte-identical to the startup snapshot taken before any
+# model phase; a driver that appeared later is ignored (fallback runner) and
+# one that changed is refused.
 VALIDATION_USE_CANONICAL_WRAPPER="false"
-if [ -f scripts/validate_driver.sh ]; then
+validate_driver_snapshot_state="$(cat -- "${VALIDATE_DRIVER_SNAPSHOT_STATE_FILE}" 2>/dev/null || true)"
+if [ "${validate_driver_snapshot_state}" != "present" ] && { [ -e scripts/validate_driver.sh ] || [ -L scripts/validate_driver.sh ]; }; then
+  echo "::warning::validate_process: scripts/validate_driver.sh was not present as a regular file before the model phases; using the trusted fallback runner." >&2
+fi
+if [ "${validate_driver_snapshot_state}" = "present" ]; then
   validate_wrapper_canonical_ok="false"
   validate_wrapper_canonical_file=""
-  if ensure_validate_wrapper \
+  if [ -f scripts/validate_driver.sh ] && [ ! -L scripts/validate_driver.sh ] && [ ! -L scripts ] \
+    && [ -f "${VALIDATE_DRIVER_SNAPSHOT_FILE}" ] \
+    && cmp -s -- "${VALIDATE_DRIVER_SNAPSHOT_FILE}" scripts/validate_driver.sh \
+    && ensure_validate_wrapper \
     && validate_wrapper_canonical_file="$(mktemp "${TMPDIR:-/tmp}/validate_wrapper_canonical.XXXXXX" 2>/dev/null)" \
     && canonical_validate_wrapper_text > "${validate_wrapper_canonical_file}" \
     && [ ! -L validation ] && [ ! -L validation/validate.sh ] && [ -f validation/validate.sh ] \
@@ -3969,7 +4000,7 @@ if [ -f scripts/validate_driver.sh ]; then
     rm -f -- "${validate_wrapper_canonical_file}" >/dev/null 2>&1 || true
   fi
   if [ "${validate_wrapper_canonical_ok}" != "true" ]; then
-    local_failure_summary="validation/validate.sh could not be regenerated as the canonical wrapper around scripts/validate_driver.sh; the harness was not run."
+    local_failure_summary="scripts/validate_driver.sh no longer matches the copy staged before the model phases, or validation/validate.sh could not be regenerated as the canonical wrapper around it; the harness was not run."
     post_tracking_comment "## ⚠️ Runtime validation harness launch refused\n\n${local_failure_summary}"
     set_tracking_phase_label "ai:validation-failed"
     write_result_files "error" "Validation harness launch refused" "${local_failure_summary}" "harness_error"

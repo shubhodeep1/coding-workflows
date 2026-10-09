@@ -483,6 +483,34 @@ def test_fallback_runner_skips_renamed_and_recased_synthesised_tests() -> None:
 		assert text.index('if is_synthesised_test "${test_script}"; then') < text.index('bash "${test_script}"')
 
 
+def test_is_synthesised_test_copies_stay_equivalent() -> None:
+	# The driver and the fallback runner each carry is_synthesised_test; a
+	# divergence would sandbox a test on one path and host-run it on the other
+	# (finding smoke-synth-fallback-driver-host-exec).
+	def _normalized(text: str) -> list[str]:
+		return [line.strip() for line in text.splitlines() if line.strip() and not line.strip().startswith("#")]
+
+	with tempfile.TemporaryDirectory(prefix="validate_synth_parity_") as td:
+		runner = _fallback_runner(Path(td))
+		driver_copy = _extract_shell_function(VALIDATE_DRIVER, "is_synthesised_test")
+		runner_copy = _extract_shell_function(runner, "is_synthesised_test")
+	assert _normalized(driver_copy) == _normalized(runner_copy)
+
+
+def test_phase3_driver_is_bound_to_the_pre_model_snapshot() -> None:
+	# Findings smoke-synth-unsandboxed-driver: the canonical wrapper execs
+	# scripts/validate_driver.sh, so that driver must equal the copy present
+	# before any model phase could write back into the workspace.
+	script = VALIDATE_PROCESS.read_text(encoding="utf-8")
+	snapshot_index = script.index('cp -- scripts/validate_driver.sh "${VALIDATE_DRIVER_SNAPSHOT_FILE}"')
+	assert snapshot_index < script.index("\nattempt_self_heal_and_reexec()")
+	assert 'if [ ! -f "${VALIDATE_DRIVER_SNAPSHOT_STATE_FILE}" ]; then' in script
+	compare_index = script.index('cmp -s -- "${VALIDATE_DRIVER_SNAPSHOT_FILE}" scripts/validate_driver.sh')
+	launch_index = script.index('bash validation/validate.sh > "${VALIDATION_LOG_FILE}"')
+	assert snapshot_index < compare_index < launch_index
+	assert 'if [ "${validate_driver_snapshot_state}" = "present" ]; then' in script
+
+
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0
