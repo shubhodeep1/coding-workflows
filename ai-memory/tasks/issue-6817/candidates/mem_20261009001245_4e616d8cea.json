@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The two failing tests exist only on PR #6572's head branch `ai/issue-6506`. That branch is still there at 519fd8a80705, and the PR is open and not merged. On the default branch, `tests/test_orchestrate_poll_process.py` has no `untrusted_comment` tests, so a fix made there would change nothing. `scripts/resolve_integration_ref.sh` accepts a `Target branch:` line (its regex is at line 28), so the fix PR can be pointed at `ai/issue-6506`. The default branch already imports `pytest` at line 22, so that import stays. Option B closes this issue without doing anything. Option C leaves the failure in place and adds a lint guard nobody asked for.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - tests/test_orchestrate_poll_process.py (on `ai/issue-6506`, about lines 17170-17207: the two parametrized tests; about 23310-23318: the runner calls each test with no arguments; about 23469-23481: the contract test that rejects tests with required arguments)\n    - scripts/resolve_integration_ref.sh (line 28 accepts `Target branch:`)\n  steps:\n    - Add the line `Target branch: ai/issue-6506` to the plan or issue metadata, so the fix is made on and merged into PR #6572's head branch.\n    - Rewrite `test_judge_resume_from_unauthorized_author_is_ignored` and `test_revalidate_from_unauthorized_author_is_ignored` so neither takes an argument. Drop the `@pytest.mark.parametrize` decorators and loop over the same comment cases inside each test, keeping every assertion. Each case should run in its own sandbox if the test currently builds one per call.\n    - Keep `import pytest`.\n    - Run the custom runner for these two tests and the zero-argument contract test.\n  reversibility: The change touches one test file on a PR branch. Reverting the commit undoes it, and closing PR #6572 throws it away.",
+  "fingerprint": "a0f567f715e7e8f495972a75ecd9f0fe56c38b48a278c1dc5d873b41ba40a14e",
+  "lineage": {
+    "issue_number": 6817,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37862819327",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37862819327",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6817"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261009001245_4e616d8cea",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6817,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37862819327"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6817",
+  "timestamps": {
+    "created_at": "2026-10-09T00:12:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
