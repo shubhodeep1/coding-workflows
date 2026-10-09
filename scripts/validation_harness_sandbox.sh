@@ -466,7 +466,10 @@ cmd_cleanup()
 	build_sandbox_env "${home}" "${home}/work" "$(sandbox_docker_host)"
 	pgid="$(sudo -n cat "${work}.pgid" 2>/dev/null || true)"
 	if [[ "${pgid}" =~ ^[0-9]+$ ]] && [ "${pgid}" -gt 1 ]; then
-		sudo -n kill -KILL -- "-${pgid}" >/dev/null 2>&1 || true
+		# The marker is written by (and writable to) the untrusted sandbox
+		# user, so the kill runs as that user, never as root: a forged value
+		# can then only reach processes the sandbox user already controls.
+		as_sandbox kill -KILL -- "-${pgid}" >/dev/null 2>&1 || true
 	fi
 	compose="${work}/validation/docker-compose.test.yml"
 	if sudo -n test -f "${compose}"; then

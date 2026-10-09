@@ -275,3 +275,14 @@ def test_validation_refresh_self_test_runs_only_through_sandbox() -> None:
 	assert '"checked-run",' in runner
 	assert "str(os.getpid())" in runner
 	assert '("self_test", self_test_command)' not in runner
+
+
+def test_cleanup_never_kills_the_sandbox_written_pgid_as_root() -> None:
+	# ${work}.pgid is written by the untrusted sandbox user; a forged value
+	# must not reach a root-privileged kill (it could target runner processes).
+	text = HELPER.read_text(encoding="utf-8")
+	cleanup = re.search(r"^cmd_cleanup\(\)\n\{\n.*?^\}\n", text, re.M | re.S)
+	assert cleanup is not None
+	body = cleanup.group(0)
+	assert 'as_sandbox kill -KILL -- "-${pgid}"' in body
+	assert "sudo -n kill" not in body
