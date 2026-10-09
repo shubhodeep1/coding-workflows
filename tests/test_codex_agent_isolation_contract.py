@@ -329,3 +329,45 @@ def test_helper_claude_branch_keeps_the_token_on_the_host():
 		if "--mount" in line:
 			assert "claude_token_file" not in line, line
 	assert 'export CODEX_ISOLATED_HIDE="CLAUDE.md"' in text
+
+
+# Findings review-summarizer-host-fallback / review-smoke-host-opencode /
+# review-interim-judge-host-opencode: OpenCode reads untrusted PR-derived
+# text, so a host `opencode run` launch is allowed only where listed here.
+HOST_OPENCODE_LAUNCH = re.compile(r"\bopencode_run_cmd\b|\bopencode\s+run\b")
+HOST_OPENCODE_ALLOWED = {
+	"scripts/opencode_helpers.sh",  # defines opencode_run_cmd
+	"scripts/review_untrusted_sandbox.sh",  # runs it inside the container
+	"scripts/review_run_reviewers.sh",  # review panel: documented residual risk
+	".github/workflows/opencode-live-smoke.yml",  # dispatch-only rollout smoke
+}
+
+
+def test_host_opencode_launches_are_allowlisted() -> None:
+	offenders = []
+	for path in sorted(SCRIPTS.glob("*.sh")) + sorted(WORKFLOWS.glob("*.yml")):
+		rel = path.relative_to(REPO_ROOT).as_posix()
+		if rel in HOST_OPENCODE_ALLOWED:
+			continue
+		if HOST_OPENCODE_LAUNCH.search(path.read_text(encoding="utf-8")):
+			offenders.append(rel)
+	assert not offenders, f"host OpenCode launch outside the allowlist: {offenders}"
+
+
+@pytest.mark.parametrize(
+	("script", "role"),
+	(
+		("summarize_reviewer_consensus.sh", "SUMMARISER"),
+		("review_synthesise_smoke.sh", "BEHAVIOURAL_SMOKE"),
+		("review_run_judge_interim.sh", "JUDGE_INTERIM"),
+	),
+)
+def test_review_utility_scripts_use_only_the_read_only_sandbox(script: str, role: str) -> None:
+	text = (SCRIPTS / script).read_text(encoding="utf-8")
+	assert "opencode_run_cmd" not in text
+	assert 'review_untrusted_sandbox.sh"' in text
+	assert re.search(r'bash "\$\{[a-z_]+_sandbox_sh\}" run ', text), script
+	assert re.search(rf'\b{role} read\b', text), script
+	# The support directory never defaults to the PR checkout's scripts/.
+	assert "${SUPPORT_SCRIPTS_DIR:-scripts}" not in text
+	assert 'SUPPORT_SCRIPTS_DIR="${_self_dir}"' in text

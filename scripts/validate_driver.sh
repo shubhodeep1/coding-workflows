@@ -704,6 +704,32 @@ wait_for_health()
 	done
 }
 
+# Returns 0 when <path> is a synthesised behavioural smoke test, which may
+# run only inside run_synthesised_test_sandboxed.  A test counts as
+# synthesised when its basename matches synth_round_*.sh in any letter case,
+# or when the file carries the generated-wrapper marker (so a renamed copy is
+# still recognised).  A file whose content cannot be checked counts as
+# synthesised: it is sandboxed, never run on the host (findings
+# smoke-synth-unsandboxed-driver / smoke-synth-fallback-driver-host-exec).
+is_synthesised_test()
+{
+	local synth_candidate_path="$1"
+	local synth_candidate_name="${synth_candidate_path##*/}"
+	local synth_marker_status=0
+
+	synth_candidate_name="${synth_candidate_name,,}"
+	if [[ "${synth_candidate_name}" == synth_round_*.sh ]]; then
+		return 0
+	fi
+	if [ -L "${synth_candidate_path}" ] || [ ! -f "${synth_candidate_path}" ] || [ ! -r "${synth_candidate_path}" ]; then
+		return 0
+	fi
+	grep -qF -e 'BEHAVIOURAL_SMOKE_SANDBOXED' -e '__BEHAVIOURAL_SMOKE_' -- "${synth_candidate_path}" 2>/dev/null \
+		|| synth_marker_status=$?
+	# grep exits 1 for "no marker"; any other failure fails closed.
+	[ "${synth_marker_status}" -ne 1 ]
+}
+
 discover_tests()
 {
 	local candidate
@@ -742,7 +768,7 @@ discover_tests()
 			helper_files+=("${candidate}")
 			continue
 		fi
-		if [ "${include_synthesised}" != "true" ] && [[ "${candidate_name}" == synth_round_*.sh ]]; then
+		if [ "${include_synthesised}" != "true" ] && is_synthesised_test "${candidate}"; then
 			synth_files+=("${candidate}")
 			continue
 		fi
@@ -771,7 +797,7 @@ discover_tests()
 		# A synthesised test never becomes the canary: the canary runs on the
 		# host, synthesised tests only in the sandbox (finding
 		# smoke-synth-unsandboxed-driver).
-		if [[ "$(basename "${test_file}")" == synth_round_*.sh ]]; then
+		if is_synthesised_test "${test_file}"; then
 			continue
 		fi
 		if [[ "$(basename "${test_file}")" == ${CANARY_PATTERN} ]]; then
@@ -930,10 +956,10 @@ run_single_test()
 	fi
 
 	set +e
-	# Every synth_round_*.sh test is routed to the credential-free,
-	# network-less sandbox and never run on the host (finding
-	# smoke-synth-unsandboxed-driver).
-	if [[ "${test_name}" == synth_round_*.sh ]]; then
+	# Every synthesised test (by name in any case, or by the generated-wrapper
+	# marker) is routed to the credential-free, network-less sandbox and never
+	# run on the host (finding smoke-synth-unsandboxed-driver).
+	if is_synthesised_test "${test_file}"; then
 		run_synthesised_test_sandboxed "${test_file}" "${test_log}"
 	else
 		bash "${test_file}" > "${test_log}" 2>&1

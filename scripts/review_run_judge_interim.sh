@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
+# Resolve support helpers from this script's own directory unless the
+# workflow passed an absolute SUPPORT_SCRIPTS_DIR: a relative default resolves
+# against the PR checkout, whose copies of the sandbox and engine helpers are
+# untrusted (finding review-interim-judge-host-opencode).
+_self_dir="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ "${SUPPORT_SCRIPTS_DIR:-}" != /* ]]; then
+	echo "::warning::review_run_judge_interim: SUPPORT_SCRIPTS_DIR is unset or not absolute; using this script's own directory." >&2
+	SUPPORT_SCRIPTS_DIR="${_self_dir}"
+fi
 if [ -z "${SUPPORT_ROOT_DIR:-}" ]; then
 	if [ "$(basename "${SUPPORT_SCRIPTS_DIR}")" = "scripts" ]; then
 		SUPPORT_ROOT_DIR="$(dirname "${SUPPORT_SCRIPTS_DIR}")"
@@ -281,7 +289,7 @@ if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>
 	judge_interim_log_fail "missing_opencode_helpers" "${CURRENT_ROUND}" "${ARTIFACT_PATH}"
 	exit 0
 fi
-if [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
+if [ ! -f "${OPENCODE_CONFIG_WRITER_PATH}" ] || [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
 	opencode_emit_failure_alert review_run_judge_interim reviewer "${MODEL_EDITOR:-openai/gpt-6-sol}" 1 config_writer_missing || true
 	judge_interim_log_fail "config_writer_missing" "${CURRENT_ROUND}" "${ARTIFACT_PATH}"
 	exit 0
