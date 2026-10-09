@@ -268,7 +268,8 @@ jobs:
               scripts/apply_audit_gate_assets.py \
               scripts/assemble_changelog.py \
               scripts/verify_release_manifest.py \
-              scripts/release_manifest.py
+              scripts/release_manifest.py \
+              scripts/lint_pr_body_auto_close.py
             for listed_dir in workflow-templates/.claude workflow-templates/audit-gate; do
               if [ -e "${listed_dir}" ] || [ -L "${listed_dir}" ]; then
                 find "${listed_dir}" ! -type d -print
@@ -764,10 +765,45 @@ jobs:
             echo "has_updates=true" >> "$GITHUB_OUTPUT"
           fi
 
+      # Pull-request delivery (issue #6989, orchestrator project #6902).
+      # Assumption: the authoritative plan
+      # (docs/plans/safeguarded-consumer-updater-plan.md on branch
+      # claude/elegant-mendel-5pli2i-safeguarded-updater-plan) could not be
+      # read, so UPDATER_PR_DELIVERY_ENABLED (default false), the branch
+      # prefix auto/update-workflows- and the log prefix UPDATER_PR_DELIVERY
+      # are the provisional names from the issue. With the flag off this step
+      # still pushes straight to the default branch. With it on, nothing is
+      # pushed to the default branch: the commit goes to
+      # auto/update-workflows-<release-sha-12> with a lease-checked push and
+      # one pull request is opened or refreshed. Auto-merge, bound to the
+      # pushed head, is enabled only when manifest verification reported
+      # verified=true. PR calls use GH_PAT, so the job requests no
+      # pull-requests permission: a reusable job cannot raise the caller's
+      # contents: write grant, and asking for more fails the run at startup.
       - name: Commit and push updates
+        id: commit_push
         if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.retired_files.outputs.retired_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || steps.changelog_assemble.outputs.changelog_assembled == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          UPSTREAM_DIR: ${{ steps.fetch.outputs.upstream_dir }}
+          UPSTREAM_SHA: ${{ steps.fetch.outputs.upstream_sha }}
+          VERIFIED: ${{ steps.verify_release_manifest.outputs.verified }}
+          RELEASE_TAG: ${{ steps.verify_release_manifest.outputs.tag }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          UPDATER_PR_DELIVERY_ENABLED: ${{ vars.UPDATER_PR_DELIVERY_ENABLED || 'false' }}
         run: |
           set -euo pipefail
+
+          PR_OUT="${GITHUB_OUTPUT:-/dev/null}"
+          PR_DELIVERY="false"
+          pr_delivery_flag="${UPDATER_PR_DELIVERY_ENABLED:-false}"
+          pr_delivery_flag="${pr_delivery_flag//[[:space:]]/}"
+          pr_delivery_flag="${pr_delivery_flag,,}"
+          if [ "${pr_delivery_flag}" = "true" ]; then
+            PR_DELIVERY="true"
+          elif [ "${pr_delivery_flag}" != "false" ]; then
+            echo "::warning::UPDATER_PR_DELIVERY_ENABLED is neither true nor false; pull-request delivery stays disabled."
+          fi
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -874,12 +910,249 @@ jobs:
 
           if git diff --cached --quiet; then
             echo "No staged changes detected after update step; skipping commit."
+            echo "delivery=none" >> "${PR_OUT}"
             exit 0
           fi
 
+          # Captured before the commit so the PR path never relies on HEAD~1 in
+          # the shallow checkout.
+          BASE_SHA="$(git rev-parse HEAD)"
+          CHECKED_OUT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+
           git commit -m "$(printf 'chore: update AI workflow wrappers from coding-workflows@stable\n\n%b\nAuto-applied by ai-update-workflows. To opt out, set the\nALLOW_WORKFLOW_EDITS repository variable to '\''false'\''.' "$COMMIT_BODY")"
 
-          git push
+          if [ "${PR_DELIVERY}" != "true" ]; then
+            echo "delivery=direct" >> "${PR_OUT}"
+            git push
+            exit 0
+          fi
+
+          # ── Pull-request delivery (UPDATER_PR_DELIVERY_ENABLED=true) ──────────
+          # Nothing below pushes to the default branch. Every failure exits
+          # non-zero before the next write.
+          BRANCH=""
+          PR_NUMBER=""
+          PR_URL=""
+          PR_ACTION=""
+          AUTO_MERGE="none"
+          STALE_CLOSED=0
+          pr_log() {
+            echo "UPDATER_PR_DELIVERY outcome=$1 reason=$2 branch=${BRANCH:-none} pr=${PR_NUMBER:-none} auto_merge=${AUTO_MERGE:-none}"
+          }
+          pr_fail() {
+            echo "::error::$(pr_log failed "$1")"
+            echo "delivery=pr" >> "${PR_OUT}"
+            echo "pr_action=failed" >> "${PR_OUT}"
+            exit 1
+          }
+
+          [[ "${UPSTREAM_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || pr_fail invalid_upstream_sha
+          [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || pr_fail invalid_repository
+          [[ "${BASE_SHA}" =~ ^[0-9a-f]{40}$ ]] || pr_fail invalid_base_sha
+
+          # GitHub API budget for this path (§14): at most 1 default-branch read
+          # (only when the event carries no repository payload), 1 head+base PR
+          # lookup, 1 compare (only when the branch already exists), 1 create or
+          # edit, 1 stale-PR list, 1 user read (only when stale candidates exist),
+          # one close per stale PR, 1 auto-merge enable.
+          BASE="${DEFAULT_BRANCH:-}"
+          if [ -z "${BASE}" ]; then
+            BASE="$(gh api "repos/${GITHUB_REPOSITORY}" --jq .default_branch 2>/dev/null)" || pr_fail default_branch_lookup_failed
+          fi
+          [[ "${BASE}" =~ ^[A-Za-z0-9._/-]+$ ]] || pr_fail invalid_default_branch
+          [ "${CHECKED_OUT_BRANCH}" = "${BASE}" ] || pr_fail not_default_branch
+
+          BRANCH="auto/update-workflows-${UPSTREAM_SHA:0:12}"
+          [[ "${BRANCH}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]] || pr_fail invalid_branch_name
+
+          # Release trailer: the foreign-commit check below accepts only commits
+          # that carry it. The direct path above keeps its message unchanged.
+          UPDATER_COMMIT_MSG="$(git log -1 --format=%B)"
+          git commit --amend -q -m "${UPDATER_COMMIT_MSG}" -m "Updater-Release-SHA: ${UPSTREAM_SHA}"
+          PUSHED_SHA="$(git rev-parse HEAD)"
+
+          TAG_TEXT="${RELEASE_TAG:-}"
+          [[ "${TAG_TEXT}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || TAG_TEXT="unresolved"
+          VERIFIED_TEXT="${VERIFIED:-}"
+          case "${VERIFIED_TEXT}" in
+            true|false|skipped) ;;
+            "") VERIFIED_TEXT="skipped" ;;
+            *) VERIFIED_TEXT="unknown" ;;
+          esac
+          if [ "${TAG_TEXT}" = "unresolved" ]; then
+            TITLE_REF="${UPSTREAM_SHA:0:12}"
+          else
+            TITLE_REF="${TAG_TEXT}"
+          fi
+          PR_TITLE="chore: update AI workflow wrappers from coding-workflows@stable (${TITLE_REF})"
+
+          PR_WORK="$(mktemp -d)" || pr_fail workdir_unavailable
+          trap 'rm -rf "${PR_WORK}"' EXIT
+          BODY="${PR_WORK}/body.md"
+          LINT_INPUT="${PR_WORK}/lint_input.md"
+          COMMIT_MSGS="${PR_WORK}/commit_messages.bin"
+          {
+            echo "Automated update from coding-workflows@stable."
+            echo ""
+            echo "- **Release tag:** ${TAG_TEXT}"
+            echo "- **Release SHA:** \`${UPSTREAM_SHA}\`"
+            echo "- **Release manifest verification:** ${VERIFIED_TEXT}"
+            echo ""
+            if [ "${VERIFIED_TEXT}" = "true" ]; then
+              echo "Release manifest verification passed, so auto-merge is enabled for this exact head commit."
+            else
+              echo "Release manifest verification did not pass (outcome: ${VERIFIED_TEXT}), so this pull request waits for a human to review and merge it."
+            fi
+            echo ""
+            echo "Changed files:"
+            echo ""
+            changed_count=0
+            while IFS= read -r changed_path; do
+              [ -n "${changed_path}" ] || continue
+              changed_count=$((changed_count + 1))
+              if [ "${changed_count}" -gt 200 ]; then
+                echo "- (more files omitted)"
+                break
+              fi
+              case "${changed_path}" in
+                *'`'*) echo "- (a path with unsupported characters)" ;;
+                *) echo "- \`${changed_path}\`" ;;
+              esac
+            done < <(git diff --name-only "${BASE_SHA}" HEAD)
+            echo ""
+            echo "Opened by ai-update-workflows (UPDATER_PR_DELIVERY_ENABLED=true). The plan that names this variable could not be read when it was built, so the variable, the auto/update-workflows- branch prefix and the UPDATER_PR_DELIVERY log prefix are provisional names."
+            echo ""
+            echo "<!-- ai:update-workflows-pr:v1 release_sha=${UPSTREAM_SHA} -->"
+          } > "${BODY}"
+          {
+            printf '%s\n\n' "${PR_TITLE}"
+            cat "${BODY}"
+          } > "${LINT_INPUT}"
+          git log -1 --format='%B%x00' > "${COMMIT_MSGS}"
+
+          # §21: the composed title, body and commit message must not auto-close
+          # any orchestrator tracking issue. No fail-open: a lookup error blocks.
+          UPSTREAM_ROOT="$(cd "${UPSTREAM_DIR:-/nonexistent}/.." 2>/dev/null && pwd -P)" || pr_fail upstream_missing
+          LINT_SCRIPT="${UPSTREAM_ROOT}/scripts/lint_pr_body_auto_close.py"
+          [ -f "${LINT_SCRIPT}" ] || pr_fail pr_body_lint_missing
+          if ! PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${LINT_SCRIPT}" --pr-body-file "${LINT_INPUT}" --commit-messages-file "${COMMIT_MSGS}" --repo "${GITHUB_REPOSITORY}"; then
+            pr_fail pr_body_lint_failed
+          fi
+
+          # One lookup scoped to head and base. The list API (not search) sees a
+          # pull request created seconds earlier.
+          PR_LIST_JSON="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "${BRANCH}" --base "${BASE}" --state all --limit 20 --json number,url,state,isCrossRepository,headRefName,mergedAt)" || pr_fail pr_lookup_failed
+          OPEN_PR="$(printf '%s' "${PR_LIST_JSON}" | jq -r --arg b "${BRANCH}" '[.[] | select(.isCrossRepository == false and .headRefName == $b and .state == "OPEN")] | .[0] | if . == null then "" else "\(.number) \(.url)" end')" || pr_fail pr_lookup_failed
+          CLOSED_UNMERGED="$(printf '%s' "${PR_LIST_JSON}" | jq -r --arg b "${BRANCH}" '[.[] | select(.isCrossRepository == false and .headRefName == $b and .state == "CLOSED" and .mergedAt == null)] | length')" || pr_fail pr_lookup_failed
+          [[ "${CLOSED_UNMERGED}" =~ ^[0-9]+$ ]] || pr_fail pr_lookup_failed
+          if [ -n "${OPEN_PR}" ]; then
+            PR_NUMBER="${OPEN_PR%% *}"
+            PR_URL="${OPEN_PR#* }"
+            [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] || pr_fail pr_lookup_failed
+          elif [ "${CLOSED_UNMERGED}" -gt 0 ]; then
+            # A human closed this release's pull request: respect the rejection.
+            echo "::warning::$(pr_log skipped closed_by_human)"
+            {
+              echo "delivery=pr"
+              echo "branch=${BRANCH}"
+              echo "pr_action=skipped"
+              echo "auto_merge=none"
+            } >> "${PR_OUT}"
+            exit 0
+          fi
+
+          # Lease-checked push. Never overwrites commits the updater did not write.
+          REMOTE_LINE="$(git ls-remote origin "refs/heads/${BRANCH}")" || pr_fail remote_lookup_failed
+          REMOTE_SHA="$(printf '%s\n' "${REMOTE_LINE}" | awk -v ref="refs/heads/${BRANCH}" '$2 == ref {print $1; exit}')"
+          PUSH_REASON="pushed"
+          if [ -z "${REMOTE_SHA}" ]; then
+            # Empty lease value: the push succeeds only if the branch still does not exist.
+            git push --force-with-lease="refs/heads/${BRANCH}:" origin "HEAD:refs/heads/${BRANCH}" || pr_fail lease_mismatch_or_push_rejected
+          else
+            [[ "${REMOTE_SHA}" =~ ^[0-9a-f]{40}$ ]] || pr_fail remote_lookup_failed
+            COMPARE_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${BASE_SHA}...${REMOTE_SHA}")" || pr_fail compare_failed
+            if ! printf '%s' "${COMPARE_JSON}" | jq -e --arg sha "${UPSTREAM_SHA}" '
+              (.ahead_by | type) == "number"
+              and .ahead_by <= 20
+              and .ahead_by == ((.commits // []) | length)
+              and all((.commits // [])[];
+                (.commit.committer.email // "") == "github-actions[bot]@users.noreply.github.com"
+                and ((.commit.message // "") | split("\n") | any(. == ("Updater-Release-SHA: " + $sha))))
+            ' >/dev/null 2>&1; then
+              pr_fail foreign_commits_on_branch
+            fi
+            git fetch --no-tags --depth 1 origin "refs/heads/${BRANCH}" >/dev/null 2>&1 || pr_fail remote_lookup_failed
+            [ "$(git rev-parse FETCH_HEAD)" = "${REMOTE_SHA}" ] || pr_fail lease_mismatch_or_push_rejected
+            if [ "$(git rev-parse 'FETCH_HEAD^{tree}')" = "$(git rev-parse 'HEAD^{tree}')" ]; then
+              PUSHED_SHA="${REMOTE_SHA}"
+              PUSH_REASON="branch_up_to_date"
+            else
+              git push --force-with-lease="refs/heads/${BRANCH}:${REMOTE_SHA}" origin "HEAD:refs/heads/${BRANCH}" || pr_fail lease_mismatch_or_push_rejected
+            fi
+          fi
+
+          if [ -n "${PR_NUMBER}" ]; then
+            gh pr edit "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --body-file "${BODY}" >/dev/null || pr_fail pr_edit_failed
+            PR_ACTION="refreshed"
+          else
+            PR_URL="$(gh pr create --repo "${GITHUB_REPOSITORY}" --base "${BASE}" --head "${BRANCH}" --title "${PR_TITLE}" --body-file "${BODY}" | tail -n1)" || pr_fail pr_create_failed
+            PR_NUMBER="${PR_URL##*/}"
+            [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] || pr_fail pr_create_failed
+            PR_ACTION="created"
+          fi
+
+          # Best effort: close earlier updater pull requests for older releases.
+          # Only same-repository PRs on a strict auto/update-workflows-<sha12>
+          # branch authored by the GH_PAT account are touched.
+          if STALE_JSON="$(gh pr list --repo "${GITHUB_REPOSITORY}" --base "${BASE}" --state open --search "head:auto/update-workflows-" --limit 50 --json number,url,headRefName,isCrossRepository,author 2>/dev/null)"; then
+            STALE_CANDIDATES="$(printf '%s' "${STALE_JSON}" | jq -r --arg b "${BRANCH}" '.[] | select(.isCrossRepository == false and (.headRefName | test("^auto/update-workflows-[0-9a-f]{12}$")) and .headRefName != $b) | "\(.number) \(.author.login // "")"' 2>/dev/null)" || STALE_CANDIDATES=""
+            if [ -n "${STALE_CANDIDATES}" ]; then
+              if PAT_LOGIN="$(gh api user --jq .login 2>/dev/null)" && [ -n "${PAT_LOGIN}" ]; then
+                while read -r stale_number stale_author; do
+                  [[ "${stale_number}" =~ ^[0-9]+$ ]] || continue
+                  [ "${stale_author}" = "${PAT_LOGIN}" ] || continue
+                  if gh pr close "${stale_number}" --repo "${GITHUB_REPOSITORY}" --comment "Superseded by ${PR_URL} (release ${TAG_TEXT}, ${UPSTREAM_SHA})." >/dev/null; then
+                    STALE_CLOSED=$((STALE_CLOSED + 1))
+                  else
+                    echo "::warning::UPDATER_PR_DELIVERY could not close stale updater pull request #${stale_number}."
+                  fi
+                done <<< "${STALE_CANDIDATES}"
+              else
+                echo "::warning::UPDATER_PR_DELIVERY could not read the GH_PAT login; stale updater pull requests stay open."
+              fi
+            fi
+          else
+            echo "::warning::UPDATER_PR_DELIVERY could not list stale updater pull requests."
+          fi
+
+          # Merge policy: auto-merge only a verified release, bound to the pushed head.
+          if [ "${VERIFIED_TEXT}" = "true" ]; then
+            if gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --auto --squash --match-head-commit "${PUSHED_SHA}"; then
+              AUTO_MERGE="enabled"
+            else
+              AUTO_MERGE="failed"
+              echo "::warning::UPDATER_PR_DELIVERY could not enable auto-merge on #${PR_NUMBER}; a human must merge it."
+            fi
+          else
+            AUTO_MERGE="skipped_unverified"
+            echo "::warning::UPDATER_PR_DELIVERY release manifest verification outcome is ${VERIFIED_TEXT}; #${PR_NUMBER} waits for a human to review and merge it."
+          fi
+
+          {
+            echo "delivery=pr"
+            echo "branch=${BRANCH}"
+            echo "pushed_sha=${PUSHED_SHA}"
+            echo "pr_number=${PR_NUMBER}"
+            echo "pr_url=${PR_URL}"
+            echo "pr_action=${PR_ACTION}"
+            echo "auto_merge=${AUTO_MERGE}"
+            echo "stale_closed=${STALE_CLOSED}"
+          } >> "${PR_OUT}"
+          if [ "${PR_ACTION}" = "created" ]; then
+            pr_log opened "${PUSH_REASON}"
+          else
+            pr_log refreshed "${PUSH_REASON}"
+          fi
 
       - name: Send Telegram notification
         if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.retired_files.outputs.retired_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || steps.changelog_assemble.outputs.changelog_assembled == 'true'
@@ -887,6 +1160,10 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          COMMIT_DELIVERY: ${{ steps.commit_push.outputs.delivery }}
+          COMMIT_PR_URL: ${{ steps.commit_push.outputs.pr_url }}
+          COMMIT_PR_ACTION: ${{ steps.commit_push.outputs.pr_action }}
+          COMMIT_AUTO_MERGE: ${{ steps.commit_push.outputs.auto_merge }}
         run: |
           set -euo pipefail
 
@@ -981,12 +1258,23 @@ jobs:
             MSG="${MSG}
           Changelog fragments assembled: ${CHANGELOG_FRAGMENT_COUNT} fragment(s), layout ${CHANGELOG_LAYOUT}."
           fi
+          # Pull-request delivery reports the PR instead of a pushed commit.
+          # A PR left for a human (auto-merge not enabled) is a WARNING.
+          TG_LEVEL="DEBUG"
+          if [ "${COMMIT_DELIVERY:-}" = "pr" ]; then
+            MSG="${MSG}
+          Delivered as a pull request (${COMMIT_PR_ACTION:-unknown}): ${COMMIT_PR_URL:-none}
+          Auto-merge: ${COMMIT_AUTO_MERGE:-none}"
+            if [ "${COMMIT_AUTO_MERGE:-}" != "enabled" ]; then
+              TG_LEVEL="WARNING"
+            fi
+          fi
           MSG="${MSG}
           Source: coding-workflows@stable
           Run: ${RUN_URL}"
 
           if declare -F tg_send_msg >/dev/null 2>&1; then
-            tg_send_msg "${MSG}" "DEBUG" >/dev/null
+            tg_send_msg "${MSG}" "${TG_LEVEL}" >/dev/null
           else
             curl -sS -X POST "https://api.telegram.org/bot${TG_BOT_SECRET}/sendMessage" \
               -d "chat_id=${TG_ADMIN_CHAT_ID}" \
@@ -998,6 +1286,10 @@ jobs:
         if: always()
         env:
           VERIFY_OUTCOME: ${{ steps.verify_release_manifest.outcome }}
+          COMMIT_OUTCOME: ${{ steps.commit_push.outcome }}
+          COMMIT_DELIVERY: ${{ steps.commit_push.outputs.delivery }}
+          COMMIT_PR_URL: ${{ steps.commit_push.outputs.pr_url }}
+          COMMIT_AUTO_MERGE: ${{ steps.commit_push.outputs.auto_merge }}
         run: |
           set -euo pipefail
 
@@ -1100,6 +1392,12 @@ jobs:
           echo "- **Top-level CLAUDE.md synced:** ${CLAUDE_MD_CHANGED:-false}" >> "$GITHUB_STEP_SUMMARY"
           RETIRED_REMOVED_COUNT="${{ steps.retired_files.outputs.retired_removed }}"
           echo "- **Retired files removed:** ${RETIRED_REMOVED_COUNT:-0}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Delivery:** ${COMMIT_DELIVERY:-none}" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${COMMIT_OUTCOME:-}" = "failure" ]; then
+            echo "- **Delivery status:** failed (see the UPDATER_PR_DELIVERY log line)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "- **Pull request:** ${COMMIT_PR_URL:-none}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Auto-merge:** ${COMMIT_AUTO_MERGE:-n/a}" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
 
           if [ "${HAS_UPDATES}" = "true" ]; then
