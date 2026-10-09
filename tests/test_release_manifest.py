@@ -102,6 +102,8 @@ def test_files_sorted_unique_and_scoped(tmp_path: Path) -> None:
 	assert len(paths) == len(set(paths))
 	assert "workflow-templates/validation-harness/ignored.txt" not in paths
 	assert "scripts/unrelated.py" not in paths
+	assert "scripts/tg_helpers.sh" not in paths
+	assert "workflow-templates/audit-gate/contract.json" in paths
 	assert paths.count("workflow-templates/ai-update-workflows.yml") == 1
 
 
@@ -112,7 +114,7 @@ def test_modes_and_symlink_entry(tmp_path: Path) -> None:
 	entries = _entries(output)
 	assert entries["workflow-templates/.claude/hooks/hook.sh"]["mode"] == "100755"
 	assert entries["workflow-templates/.claude/settings.json"]["mode"] == "100644"
-	assert entries["scripts/tg_helpers.sh"]["mode"] == "100644"
+	assert entries["workflow-templates/audit-gate/contract.json"]["mode"] == "100644"
 	claude = entries["CLAUDE.md"]
 	assert claude["sha256"] == hashlib.sha256(b"# rules\n").hexdigest()
 	assert claude["size"] == len(b"# rules\n")
@@ -145,7 +147,7 @@ def _assert_refused(root: Path, output: Path, reason: str, **kwargs) -> None:
 		(lambda root: _write(root, "workflow-templates/.claude/bad name.md", "x\n"), "unsafe_path_name"),
 		(lambda root: os.mkfifo(root / "workflow-templates/.claude/fifo"), "non_regular_file"),
 		(lambda root: (root / "workflow-templates/retired_files.txt").unlink(), "required_path_missing"),
-		(lambda root: (root / "scripts/tg_helpers.sh").unlink(), "required_path_missing"),
+		(lambda root: (root / "workflow-templates/audit-gate/contract.json").unlink(), "required_path_missing"),
 	],
 )
 def test_unsafe_tree_is_refused_without_writing(tmp_path: Path, mutate, reason: str) -> None:
@@ -232,6 +234,15 @@ def test_output_inside_surface_is_refused(tmp_path: Path) -> None:
 	assert not output.exists()
 
 
+def test_missing_audit_gate_tree_is_refused(tmp_path: Path) -> None:
+	root = _fixture(tmp_path)
+	(root / "workflow-templates/audit-gate/contract.json").unlink()
+	(root / "workflow-templates/audit-gate").rmdir()
+	output = tmp_path / "m.json"
+	_assert_refused(root, output, "required_path_missing")
+	assert not output.exists()
+
+
 def test_no_workflow_templates_is_refused(tmp_path: Path) -> None:
 	root = _fixture(tmp_path)
 	(root / "workflow-templates/ai-review.yml").unlink()
@@ -256,9 +267,10 @@ def test_real_repo_tree(tmp_path: Path) -> None:
 		"scripts/workflow_wrapper_refs.py",
 		"scripts/apply_audit_gate_assets.py",
 		"scripts/assemble_changelog.py",
-		"scripts/tg_helpers.sh",
+		"workflow-templates/audit-gate/contract.json",
 	):
 		assert required in paths, required
+	assert "scripts/tg_helpers.sh" not in paths
 
 
 def test_surface_rules_track_the_updater() -> None:
@@ -285,6 +297,5 @@ def test_surface_rules_track_the_updater() -> None:
 		"scripts/workflow_wrapper_refs.py",
 		"scripts/apply_audit_gate_assets.py",
 		"assemble_changelog.py",
-		"scripts/tg_helpers.sh",
 	):
 		assert needle in text, needle

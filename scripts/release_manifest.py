@@ -10,8 +10,9 @@ Surface (one rule per updater step, see SURFACE_RULES):
 - "Prepare immutable workflow wrappers" / "Compare and update workflow
   wrappers": top-level workflow-templates/*.yml, the ai-update-workflows.yml
   sentinel, workflow-templates/profiles/*.txt, scripts/workflow_wrapper_refs.py.
-- "Apply canonical audit-gate assets": workflow-templates/audit-gate/**,
-  scripts/apply_audit_gate_assets.py.
+- "Apply canonical audit-gate assets": workflow-templates/audit-gate/**
+  (contract.json is required: the updater runs the applier unconditionally
+  and it fails without the contract), scripts/apply_audit_gate_assets.py.
 - "Sync .claude/ assets from upstream": workflow-templates/.claude/**.
 - "Remove retired upstream files": workflow-templates/retired_files.txt.
 - "Sync top-level CLAUDE.md from upstream": the workflow-templates/CLAUDE.md
@@ -19,8 +20,9 @@ Surface (one rule per updater step, see SURFACE_RULES):
 - "Sync changelog fragment assets from upstream" / "Assemble changelog
   fragments": scripts/assemble_changelog.py (it generates the changelog
   assets, so the script is the attested asset).
-- "Send Telegram notification": scripts/tg_helpers.sh, which the updater
-  sources (fetched from the stable ref, not the release checkout).
+- Not attested: scripts/tg_helpers.sh. The "Send Telegram notification" step
+  fetches it through the contents API at ref=stable, not from the release
+  checkout, so it is outside the release-to-consumer copy surface.
 
 Assumption: the authoritative plan
 (docs/plans/safeguarded-consumer-updater-plan.md on branch
@@ -70,12 +72,12 @@ SURFACE_RULES = (
 	("file", "workflow-templates/retired_files.txt", True),
 	("tree", "workflow-templates/.claude", False),
 	("tree", "workflow-templates/audit-gate", False),
+	("file", "workflow-templates/audit-gate/contract.json", True),
 	("symlink", "workflow-templates/CLAUDE.md", True),
 	("file", "CLAUDE.md", True),
 	("file", "scripts/workflow_wrapper_refs.py", True),
 	("file", "scripts/apply_audit_gate_assets.py", True),
 	("file", "scripts/assemble_changelog.py", True),
-	("file", "scripts/tg_helpers.sh", True),
 )
 
 # Directories (and the root file) the output must never be written into, so a
