@@ -166,7 +166,7 @@ jobs:
             command -v "${verify_tool}" >/dev/null 2>&1 || reject input tool_missing
           done
 
-          WORK="$(mktemp -d)"
+          WORK="$(mktemp -d)" || reject input workdir_unavailable
           trap 'rm -rf "${WORK}"' EXIT
           MANIFEST="${WORK}/${ASSET_NAME}"
 
@@ -1048,15 +1048,18 @@ jobs:
           fi
 
           if [ "${VERIFY_OUTCOME:-}" = "failure" ]; then
-            VERIFY_FAILURE_DETAIL="Release manifest verification failed before any consumer file was changed."
-            if [ -f "${FAILURE_REASON_FILE}" ]; then
-              VERIFY_FAILURE_DETAIL="$(sed -n '2p' "${FAILURE_REASON_FILE}" 2>/dev/null || true)"
+            # Same path the verify step writes (it honours the override).
+            VERIFY_REASON_FILE="${UPDATER_MANIFEST_VERIFY_REASON_FILE:-${FAILURE_REASON_FILE}}"
+            VERIFY_FAILURE_DETAIL=""
+            if [ -f "${VERIFY_REASON_FILE}" ]; then
+              VERIFY_FAILURE_DETAIL="$(sed -n '2p' "${VERIFY_REASON_FILE}" 2>/dev/null || true)"
             fi
+            [ -n "${VERIFY_FAILURE_DETAIL}" ] || VERIFY_FAILURE_DETAIL="Release manifest verification failed before any consumer file was changed."
             echo "- **Status:** failed" >> "$GITHUB_STEP_SUMMARY"
             echo "- **Failure reason code:** \`ERR_RELEASE_MANIFEST_VERIFY_FAILED\`" >> "$GITHUB_STEP_SUMMARY"
             echo "- **Failure reason detail:** ${VERIFY_FAILURE_DETAIL}" >> "$GITHUB_STEP_SUMMARY"
-            if [ -f "${FAILURE_REASON_FILE}" ]; then
-              echo "- **Failure reason artifact:** \`${FAILURE_REASON_FILE}\`" >> "$GITHUB_STEP_SUMMARY"
+            if [ -f "${VERIFY_REASON_FILE}" ]; then
+              echo "- **Failure reason artifact:** \`${VERIFY_REASON_FILE}\`" >> "$GITHUB_STEP_SUMMARY"
             fi
             exit 1
           fi
