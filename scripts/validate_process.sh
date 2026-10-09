@@ -1582,10 +1582,12 @@ for test_script in "${test_scripts[@]}"; do
     echo "BEHAVIOURAL_SMOKE_SANDBOX test=${test_name} outcome=skipped reason=fallback_driver" >&2
     test_rc=0
   else
-    # Template-rendered tests reach this host runner only after
+    # Template-rendered tests exist only when
     # run_template_validation_harness_renderer's manifest shell-safety gate
-    # rejected shell-unsafe .ai/validate.yml values (finding
-    # validation-manifest-shell-injection-fallback). The validation-refresh
+    # passed: it refuses to render when a shell-reachable .ai/validate.yml
+    # value is shell-unsafe (finding
+    # validation-manifest-shell-injection-fallback). This runner itself is
+    # launched through VALIDATION_HARNESS_CREDENTIAL_SCRUB. The validation-refresh
     # path, which renders without validate_process.sh, applies the same check
     # in validation_refresh_runner.py before it renders.
     set +e
