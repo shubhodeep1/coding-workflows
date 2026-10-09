@@ -77,6 +77,7 @@ EXIT_AUTOMATION_UNGRANTED = 30
 # scripts/orchestrate_poll_process.sh. Case variants are denied here too.
 AUTOMATION_PATH_PREFIXES = (".github", ".claude", "scripts", "prompts", "workflow-templates")
 TRUSTED_AUTHOR_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+PIPELINE_AUTHOR_OPEN_REASON = "pipeline_author_no_allowlist"
 AUTOMATION_GRANT_SCHEMA = "automation_path_grant.v1"
 LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$")
 
@@ -184,7 +185,7 @@ def build_automation_grant(issue_meta: dict, pipeline_login: str) -> dict:
 	author_association = issue_meta.get("author_association")
 	author_association = author_association if isinstance(author_association, str) else ""
 	record = {"schema_version": AUTOMATION_GRANT_SCHEMA, "issue_number": issue_meta.get("number"),
-		"trusted": False, "reason": "grant_error", "author_login": author_login,
+		"trusted": False, "open": False, "reason": "grant_error", "author_login": author_login,
 		"author_association": author_association, "paths": []}
 	if not isinstance(pipeline_login, str) or not LOGIN_RE.fullmatch(pipeline_login):
 		record["reason"] = "identity_unavailable"
@@ -197,7 +198,15 @@ def build_automation_grant(issue_meta: dict, pipeline_login: str) -> dict:
 		if not isinstance(body, str):
 			body = ""
 		state, entries = files_touched_block_state(body)
-		if state != "ok":
+		if state == "missing" and author_login == pipeline_login:
+			# Pipeline-generated issues (security-pass fixes, re-issues, heal
+			# issues) carry no files_touched block; Q24: A grants them every
+			# automation path. A declared block still grants exact entries
+			# only, and a malformed block still blocks.
+			record["trusted"] = True
+			record["open"] = True
+			record["reason"] = PIPELINE_AUTHOR_OPEN_REASON
+		elif state != "ok":
 			record["reason"] = "no_allowlist" if state == "missing" else "malformed_allowlist"
 		else:
 			record["trusted"] = True
@@ -223,7 +232,10 @@ def check_automation_paths(staged: list[str], grant: object, allow_workflow_edit
 			and not path.startswith("/") and not path.endswith("/")
 			and not any(char in path for char in _GLOB_CHARS)
 			and all(segment not in {".", ".."} for segment in path.split("/"))
-			for path in grant.get("paths", [])):
+			for path in grant.get("paths", [])) \
+		or type(grant.get("open", False)) is not bool \
+		or (grant.get("open", False) is True and (grant["trusted"] is not True
+			or grant.get("reason") != PIPELINE_AUTHOR_OPEN_REASON or grant["paths"] != [])):
 		reason = "grant_unavailable"
 	elif not issue_number.isdecimal() or type(grant.get("issue_number")) is not int \
 		or grant["issue_number"] != int(issue_number):
@@ -232,6 +244,8 @@ def check_automation_paths(staged: list[str], grant: object, allow_workflow_edit
 		reason = grant.get("reason") if grant.get("reason") in {
 			"identity_unavailable", "untrusted_author", "no_allowlist", "malformed_allowlist", "grant_error"
 		} else "grant_unavailable"
+	elif grant.get("open", False) is True:
+		return STATUS_IN_SCOPE, [], PIPELINE_AUTHOR_OPEN_REASON
 	else:
 		denied = [path for path in paths if path not in grant["paths"]]
 		return (STATUS_OUT_OF_SCOPE, denied, "path_not_granted") if denied else (STATUS_IN_SCOPE, [], "granted")
@@ -367,7 +381,7 @@ def main(argv: list[str] | None = None) -> int:
 			record = build_automation_grant(metadata, args.pipeline_login)
 		except (ValueError, TypeError, KeyError):
 			record = {"schema_version": AUTOMATION_GRANT_SCHEMA, "issue_number": None,
-				"trusted": False, "reason": "grant_error", "author_login": "", "author_association": "", "paths": []}
+				"trusted": False, "open": False, "reason": "grant_error", "author_login": "", "author_association": "", "paths": []}
 		try:
 			with open(args.emit_automation_grant, "w", encoding="utf-8") as handle:
 				json.dump(record, handle)

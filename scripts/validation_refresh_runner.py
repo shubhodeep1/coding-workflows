@@ -215,6 +215,9 @@ class ValidationRefreshRunner:
 		# gate — e.g. direct `process_repository` calls in tests, or a
 		# non-positive configured budget (explicit unbounded opt-out).
 		self._discovery_deadline: float | None = None
+		# The harness sandbox user and its rootless dockerd are provisioned
+		# once per runner; later repositories reuse them.
+		self._harness_sandbox_provisioned = False
 
 	def run_repositories(self, repositories: list[str], workspace_root: Path) -> list[RefreshResult]:
 		# Establish the aggregate discovery deadline for this cycle so the
@@ -420,10 +423,28 @@ class ValidationRefreshRunner:
 			str(self.source_root / "scripts" / "validation_lint.py"),
 			str(repo_dir / "validation"),
 		]
+		# Consumer validation tests are untrusted and this process holds
+		# GH_TOKEN / OPENROUTER_API_KEY, which a same-user test could read
+		# from /proc. The self-test therefore runs only through
+		# scripts/validation_harness_sandbox.sh (separate user, rootless
+		# Docker, allowlisted env, selfcheck against this pid). Any sandbox
+		# failure is a self_test failure; there is no host fallback.
+		sandbox_script = str(self.source_root / "scripts" / "validation_harness_sandbox.sh")
 		self_test_command = [
 			"bash",
+			sandbox_script,
+			"checked-run",
+			str(os.getpid()),
 			str(self.source_root / "scripts" / "validate_driver.sh"),
 		]
+		self_test_env_overrides = {
+			**pipeline_env_overrides,
+			# Inside the sandbox copy the driver writes its default
+			# validation/logs; the helper copies them back to the old
+			# out-of-clone location so drift detection is unaffected.
+			"LOG_DIR": "validation/logs",
+			"VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST": str(pipeline_log_dir),
+		}
 
 		# Same manifest shell-safety gate as validate_process.sh's
 		# run_template_validation_harness_renderer: this path renders the
@@ -437,13 +458,36 @@ class ValidationRefreshRunner:
 		for stage, command in (
 			("render", render_command),
 			("lint", lint_command),
-			("self_test", self_test_command),
 		):
 			try:
 				self.executor.run(command, cwd=repo_dir, env_overrides=pipeline_env_overrides)
 			except CommandFailure as exc:
 				diagnostics.append(_format_command_failure(stage, exc))
 				return False, diagnostics
+
+		try:
+			if not self._harness_sandbox_provisioned:
+				self.executor.run(
+					["bash", sandbox_script, "provision"],
+					cwd=repo_dir,
+					env_overrides=pipeline_env_overrides,
+					timeout=600,
+				)
+				self._harness_sandbox_provisioned = True
+			self.executor.run(self_test_command, cwd=repo_dir, env_overrides=self_test_env_overrides)
+		except CommandFailure as exc:
+			diagnostics.append(_format_command_failure("self_test", exc))
+			# A timeout kills only the helper; stop the sandbox user's harness.
+			try:
+				self.executor.run(
+					["bash", sandbox_script, "cleanup"],
+					cwd=repo_dir,
+					check=False,
+					env_overrides=pipeline_env_overrides,
+				)
+			except CommandFailure:
+				pass
+			return False, diagnostics
 
 		return True, diagnostics
 

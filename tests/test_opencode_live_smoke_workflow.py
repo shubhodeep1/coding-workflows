@@ -36,6 +36,14 @@ def test_install_action_pins_verifies_and_refreshes() -> None:
 	action = ACTION.read_text(encoding="utf-8")
 	assert re.search(r"(?m)^\s+default: 1\.18\.23$", action)
 	assert 'npm install -g "opencode-ai@${OPENCODE_VERSION}" --no-audit --no-fund' in action
+	# The registry fetch retries a bounded number of times (transient
+	# ECONNRESET, 2026-10-09); the verify/refresh steps after it do not.
+	assert 'until npm install -g "opencode-ai@${OPENCODE_VERSION}" --no-audit --no-fund; do' in action
+	assert '[ "${install_attempt}" -ge "${OPENCODE_INSTALL_MAX_ATTEMPTS}" ]' in action
+	assert re.search(r"(?m)^\s+default: \"3\"$", action)
+	assert 'OPENCODE_INSTALL_MAX_ATTEMPTS: ${{ inputs.install_max_attempts }}' in action
+	assert '[[ ! "${OPENCODE_INSTALL_MAX_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]]' in action
+	assert action.count("opencode models --refresh") == 1
 	assert 'installed_version="$(opencode --version)"' in action
 	assert '[ "${installed_version}" != "${OPENCODE_VERSION}" ]' in action
 	assert "opencode models --refresh" in action
