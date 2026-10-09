@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Since nobody knows which test failed, what should the implementation deliver?\nChoices:\nA: Reproduce only. Run the `orchestrate-poll` group 3 test slice locally against the PR #6881 head and fix the cause of any test that fails reproducibly. If nothing reproduces, make no code change and close the issue as transient.\nB: Observability only. Change the shard step in `.github/workflows/ci.yml` so that, after all shard logs, it prints a short summary of each failed shard: its exit code and the names of its `FAIL` tests. Future triage runs would then see the failing test in the log tail. Pin this with a contract test (e.g. in `tests/test_ci_poll_test_sharding.py`). Leave the gate unchanged.\nC: A + B. Try to reproduce and fix the failing test, and also add the end-of-step failure summary so the next triage is not inconclusive. (RECOMMENDED)\nD: No code change. Treat it as a transient failure and close the issue, relying on a CI rerun of PR #6881.\nQ2: Which branch should the fix PR target?\nChoices:\nA: `main` (the default for check-triage issues). The CI summary change lands there, and the PR #6881 failure is re-checked after its branch syncs with `main`. (RECOMMENDED)\nB: PR #6881's head branch `ai/issue-6868`, by adding an `Integration branch: ai/issue-6868` line. Use this if the failure is a regression introduced by that PR. **Note:** a CI-step summary change (Q1:B/C) on this branch reaches `main` only when #6881 merges.\nC: Split the work. The CI summary change targets `main`; any test-regression fix targets `ai/issue-6868` as a separate follow-up issue.",
+  "fingerprint": "ccd1a0e4e9ee1c9c4500e76bdaa668832c295d16f7d05f28435ab631b05b6d32",
+  "lineage": {
+    "issue_number": 6889,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37910798016",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37910798016",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009092731_abdba964cd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6889,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37910798016"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6889 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T09:27:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
