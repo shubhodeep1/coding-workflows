@@ -926,6 +926,17 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   A missing proxy skips dependency installation without restoring direct
   container network access; review preparation continues, but validations
   needing those dependencies may be unverified.
+  Each review install command runs under `DEPENDENCY_INSTALL_TIMEOUT_SECONDS`
+  (default 600) inside the container; a command that exceeds it is killed and
+  reported as a failed install, and a dependency container that still exceeds
+  its 900-second budget (`timeout` exit 124, or 137 once the budget has
+  elapsed; an earlier 137 is an OOM kill) is treated the same way,
+  with a warning, instead of as `Review dependency isolation failed`. Any
+  other non-zero container exit stays fatal. Before this, pip backtracking
+  through a consumer's unpinned `[dev]` extras hit the 900-second budget
+  twice per run (the Claude prepare and the OpenCode fallback), the editor
+  was skipped and the PR looped on "produced no output, will retry"
+  (`drhyg_ecommerce_automation` PR #70, 2026-10-09).
   An editable source install runs separately with `--network none` for
   parsed `pyproject.toml` projects or requirements with a regular `setup.py`,
   including Node/Python hybrids. Requirements-only projects without an
