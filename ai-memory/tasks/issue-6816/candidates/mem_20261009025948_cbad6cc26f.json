@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nThe live merged-PR guard on `main` already matches its template, so no code change is needed. This plan is verification only.\n\nScope-mode: Hold Scope\nReuse-audit: extends workflow-templates/.claude/hooks/pr_merge_status_guard.py\nScope-mode justification: The fix this issue asks for is already on `main`. The live hook `.claude/hooks/pr_merge_status_guard.py` is now byte-identical to its template. Changing anything else would widen scope beyond the triage finding, and editing the hook again could only create new drift. So the plan is \"verify, change nothing\", and the \"Boil the Lake\" question doesn't apply because there is nothing left to finish.\n\n**Planning ref context**\n- The planning context reports HEAD `e893419f26a37cc21e540da863d709ec0349e668` on `main`. Integration branch metadata is empty, so there is no mismatch.\n- The snapshot I read sits on its own synthetic commit (`0d2f9c2`, branch `isolated`), so I can't see which upstream commit fixed the live copy.\n\n**What changed since the last plan (Q1: A)**\n- Q1: A asked for the held sync PR to be reviewed and merged. Whichever way the fix arrived, the live copy now matches the template at this HEAD:\n  - `cmp .claude/hooks/pr_merge_status_guard.py workflow-templates/.claude/hooks/pr_merge_status_guard.py` reports no difference.\n  - Both files are mode `755` and 92,417 bytes.\n  - Both contain the fresh lookup at line 2279: `pull_requests = query_pull_requests(slug, branch, cwd)`.\n  - `.claude/settings.json` and its template are identical. Those are the second pair `test_template_copies_are_identical` compares (`tests/test_pr_merge_status_guard.py:2306-2310`).\n  - Six other template/live pairs still differ, and all six are listed in `.github/ai/claude_template_divergence.json`: `commands/verify-activation.md`, `analyze-log.md`, `validate-consumer-issue.md`, `deploy-activate.md`, `investigate-issue.md` and `implement-issue-claude.md`. `tests/test_claude_template_live_parity.py` allows those, so it should not fail.\n  - `changelog.d/6641-merge-guard-push-fresh-pr-state.md` is present.\n- The CI failure this triage reported (the template-vs-live mismatch on PR #6643) therefore no longer reproduces from the files on `main`.\n\n**Conflicts with the codebase**\n- The issue's \"Suggested fix\" (update the live hook to match the template) has already been done on `main`. There is nothing left to implement.\n- The `files_touched` grant blocker from the last plan no longer matters, because no `.claude/` path will be staged.\n\n**1. Files likely to change**\n- None.\n\nfiles_touched:\n(none)\n\n**2. Functions or modules to implement**\n- None.\n\n**3. Data structures affected**\n- None.\n\n**4. API or interface changes**\n- None. The live hook already does what the reviewed template does: every push makes a fresh PR-state lookup, with no fallback to the TTL cache (CLAUDE.md \u00a721.D).\n\n## Decisions\n\n### D1 \u2014 Implementation action\n- Chosen: verify only and change no files. This is a no-op implementation.\n- Alternatives considered: re-copying the template over the live hook (that would be an empty diff); touching the template or the tests to make a visible change; adding a divergence allowlist entry.\n- Why: the live hook and its template are already byte-identical with the same mode. Any edit would either do nothing or bring the drift back. The minimal-change rules (\u00a72, \u00a79) forbid making an edit just so the PR has something in it.\n\n### D2 \u2014 How the issue closes\n- Chosen: let implement's existing no-op handling (`Handle no-op implementation` in `implement.yml`, `IMPL_NOOP_ANCESTRY_THRESHOLD`, and the poller's `MAX_IMPL_NOOP_REISSUES`) close the issue as already implemented. A human closing it directly is just as good.\n- Alternatives considered: emitting another clarification batch, which the stall poller's auto-answers would keep looping on.\n- Why: that is the designed route for an issue whose fix is already in place, and it needs no human action and no guard override.\n\n## Security considerations\n- **Trust boundary:** the live `.claude/hooks/pr_merge_status_guard.py` gates interactive pushes to branches whose PRs have merged. It now matches the reviewed template, including the fresh lookup for every remote write, so the stale-cache gap described in the triage is closed.\n- **Authorization:** no new surface. No guard is bypassed: `ALLOW_OUT_OF_SCOPE_FILES` is not used, and no automation-path grant is needed.\n- **External input:** none is added.\n- **Abuse cases:** none new.\n  - The implementer must not re-copy from any other ref, such as the merged `ai/issue-6641` head. That could replace the current `main` template's content with an older version.\n- No money, secrets or credentials are involved.\n\n**5. Risks and edge cases**\n- The no-op handler may first apply `ai:implementation-failed` before the issue is closed as already implemented. That is expected on this path, not a regression.\n- If the template on `main` changes again before implement runs, the two files could drift apart again. In that case the existing `sync-claude-live-copies.yml` path (held PR for `ai/*`-authored changes) should handle it, not this issue.\n- I couldn't run pytest here because it isn't installed in the snapshot, so the parity result is based on `cmp` and file modes, not on a test run.\n\n**6. Testing**\n- Implement, or CI on the default branch, should run `PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/test_pr_merge_status_guard.py::test_template_copies_are_identical tests/test_claude_template_live_parity.py`. Both should pass.\n- `cmp .claude/hooks/pr_merge_status_guard.py workflow-templates/.claude/hooks/pr_merge_status_guard.py` should report no difference, and both files should be mode `755`.\n- Expected `git diff --stat`: empty.\n\n**7. Pre-execution self-check**\nPLAN_SELF_CHECK: WARNING: the parity tests could not be run here (no pytest in the snapshot); parity was confirmed with `cmp`, file modes and the divergence allowlist.\nPLAN_SELF_CHECK: WARNING: implementation is expected to produce no changes, so the issue closes through the existing no-op path rather than through a PR.\n\nSTATUS: CLEAR\n\n- **Actions taken:** At this HEAD I compared the live hook with its template, checked the settings pair and every other `.claude/` template/live pair against the divergence allowlist, and confirmed the fresh-lookup line and the changelog fragment. No repository files were changed.\n- **Assumptions:** The Q1: A route, or an equivalent sync, has already landed on `main`, given that the files are now identical. The triage's failed test was the template-vs-live parity check.\n- **Missing context:** I couldn't tell which commit or PR brought the live copy back into line (the snapshot has a synthetic history), and I couldn't run pytest.\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "4bbe12e6b02910620aa76dd39d5244115d84c35582f7db2c08f8ef96c6cd05e0",
+  "lineage": {
+    "issue_number": 6816,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37876575351",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37876575351",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6816"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261009025948_cbad6cc26f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6816,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37876575351"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6816",
+  "timestamps": {
+    "created_at": "2026-10-09T02:59:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
