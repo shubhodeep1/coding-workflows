@@ -1,0 +1,2 @@
+<!-- changelog: security -->
+- Require a trusted issue author, an exact `files_touched` entry, and `ALLOW_WORKFLOW_EDITS=true` for implement commits touching automation paths. Missing grants now block `.github/`, `.claude/`, `scripts/`, `prompts/`, and `workflow-templates/` changes even when the general scope guard is disabled. Ordinary edits retain their existing scope behavior; blocked issues need their exact grant corrected and `ai:scope-blocked` removed before redispatch.

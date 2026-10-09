@@ -255,7 +255,9 @@ def test_validate_workflow_bootstraps_and_exports_semble_state() -> None:
 	assert 'echo "bootstrap_enabled=${bootstrap_enabled}"' in wf
 	assert "- name: setup-uv\n        if: steps.semble_gate.outputs.bootstrap_enabled == 'true'" in wf
 	assert "uses: astral-sh/setup-uv@v7" in wf
-	assert "- name: Install semble\n        if: steps.semble_gate.outputs.bootstrap_enabled == 'true'" in wf
+	assert "- name: Install semble\n        if: steps.semble_gate.outputs.enabled == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'" in wf
+	assert 'echo "SEMBLE_ENABLED=true" >> "$GITHUB_ENV"' in wf
+	assert "SEMBLE_BOOTSTRAP_MODE: ${{ vars.SEMBLE_BOOTSTRAP_MODE || 'lazy' }}" in wf
 	assert 'echo "::notice::VALIDATION_USE_SEMBLE is not true; skipping Semble install."' in wf
 	assert "bash scripts/install_semble.sh" in wf
 	assert "- name: Build semble index" in _workflow_text()
@@ -340,7 +342,9 @@ def test_self_heal_includes_semble_and_serena_prompt_hooks() -> None:
 	assert 'build_self_heal_semble_query()' in text
 	assert 'build_self_heal_serena_tool_hints()' in text
 	assert 'append_self_heal_semble_context()' in text
-	assert 'if semble_query_block "${query_text}" "${SELF_HEAL_SEMBLE_MAX_CHUNKS}" "Validate Self-Heal Context"; then' in text
+	assert 'if SEMBLE_STATIC_CONTEXT_FILE="${STATIC_CONTEXT_FILE:-}" semble_query_block "${query_text}" "${SELF_HEAL_SEMBLE_MAX_CHUNKS}" "Validate Self-Heal Context"; then' in text
+	validate_text = (REPO_ROOT / "scripts" / "validate_process.sh").read_text(encoding="utf-8")
+	assert 'if SEMBLE_STATIC_CONTEXT_FILE="${STATIC_CONTEXT_FILE:-}" semble_query_block "${query_text}" "${max_chunks}" "${header_label}"; then' in validate_text
 	assert 'self_heal_semble_query="$(build_self_heal_semble_query || true)"' in text
 	assert 'self_heal_serena_tool_hints="$(build_self_heal_serena_tool_hints || true)"' in text
 	assert 'SERENA_TOOL_HINTS="${self_heal_serena_tool_hints}" bash scripts/render_prompt.sh prompts/mode-validate-self-heal.txt' in text

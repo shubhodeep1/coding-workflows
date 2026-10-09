@@ -10,6 +10,9 @@ permissions:
   contents: read
   issues: read
   pull-requests: read
+  # The reusable reporter requests an OIDC token so the intake can verify
+  # which repository sent the heal report.
+  id-token: write
 
 jobs:
   report:

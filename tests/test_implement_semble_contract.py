@@ -158,13 +158,13 @@ def test_stage_workflow_support_files_bootstraps_revalidate_lifecycle_ai_memory_
 
 def test_semble_bootstrap_steps_are_gated_and_fail_open() -> None:
 	setup_step = _step("setup-uv")
-	assert setup_step.get("if") == "env.SKIP_IMPLEMENT != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')"
+	assert setup_step.get("if") == "env.SKIP_IMPLEMENT != 'true' && ((env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy') || env.SERENA_ENABLED == 'true')"
 	assert setup_step.get("continue-on-error") is True
 	assert setup_step.get("uses") == "astral-sh/setup-uv@v7"
 
 	install_step = _step("Install semble")
 	install_block = _step_run_text("Install semble")
-	assert install_step.get("if") == "env.SKIP_IMPLEMENT != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')"
+	assert install_step.get("if") == "env.SKIP_IMPLEMENT != 'true' && env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'"
 	assert install_step.get("continue-on-error") is True
 	assert 'if [ "${SEMBLE_ENABLED:-false}" != "true" ]; then' in install_block
 	assert "scripts/install_semble.sh" in install_block
@@ -175,7 +175,7 @@ def test_semble_bootstrap_steps_are_gated_and_fail_open() -> None:
 
 	index_step = _step("Build semble index")
 	index_block = _step_run_text("Build semble index")
-	assert index_step.get("if") == "env.SKIP_IMPLEMENT != 'true' && (env.SEMBLE_ENABLED == 'true')"
+	assert index_step.get("if") == "env.SKIP_IMPLEMENT != 'true' && env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'"
 	assert index_step.get("continue-on-error") is True
 	# Shared BM25 wrapper builder extracted to scripts/build_semble_wrapper.sh
 	# (semble 0.1.3 lacks the index/query CLI, so the per-workflow inline
@@ -194,11 +194,15 @@ def test_semble_bootstrap_steps_are_gated_and_fail_open() -> None:
 
 def test_targeted_file_context_receives_semble_inputs() -> None:
 	codex_block = _step_run_text("Run Codex implementation")
+	assert "TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED: ${{ vars.TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED || 'false' }}" in _workflow_text()
 	assert 'python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/targeted_file_context.py"' in codex_block
+	assert 'TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED:-false' in codex_block
+	assert 'SEMBLE_INDEX_AVAILABLE:-false' in codex_block
 	assert '--semble-bin "$(command -v semble 2>/dev/null || true)"' in codex_block
 	assert '--semble-index "${SEMBLE_INDEX_PATH}"' in codex_block
 	assert '--semble-max-chunks "6"' in codex_block
 	assert '--semble-fallback "marker"' in codex_block
+	assert '"${tfc_args[@]}"' in codex_block
 
 
 def test_repair_prompt_appends_bounded_semble_context() -> None:
