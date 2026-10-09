@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validate_process.sh:1557-1614 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: The fallback runner can accept a marker-bearing `00_canary.sh`, skip it as synthesized, and count its TAP `# SKIP` as passing without executing the required canary.\n  WHY: If the remaining tests pass, the fallback runner can report an overall pass even though the canary never ran.\n- scripts/validate_process.sh:284-297 | severity=high | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The driver snapshot is taken from the workspace at Phase 3, after model phases may have modified `scripts/validate_driver.sh`.\n  WHY: A compromised model phase could modify the driver before the snapshot, causing malicious code to be trusted as the canonical wrapper.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/validate_process.sh:1557 | severity=MAJOR | confidence=4\n  PROBLEM: The fallback runner checks that `test_scripts[0]` is named `00_canary.sh` but never calls `is_synthesised_test` on it. If a file named `00_canary.sh` carries the generated-wrapper marker (`BEHAVIOURAL_SMOKE_SANDBOXED` or `__BEHAVIOURAL_SMOKE_`), it passes the filename check at line 1557, then the per-test loop at line 1570 catches it as synthesised, emits a TAP `ok ... # SKIP` at line 1578 which is counted as passing, and the canary never actually executes.\n  WHY: A marker-bearing `00_canary.sh` in `validation/tests/` is accepted as the canary by name, never runs, its TAP `# SKIP` counts as a pass, and if all remaining tests pass the fallback runner emits an overall pass without the required canary having executed.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/validate_process.sh:1567-1573 | severity=MAJOR | confidence=4\n  PROBLEM: The fallback runner checks that the first test is named 00_canary.sh, but does not reject it when is_synthesised_test identifies it as a generated test.\n  WHY: A marker-bearing 00_canary.sh passes the filename check, is then reported as # SKIP, and its TAP result is counted as passing. If the remaining tests pass, the fallback runner emits an overall pass without running the required canary.\n- scripts/validate_process.sh:284-297 | severity=MAJOR | confidence=3\n  PROBLEM: The snapshot binding takes the driver from the workspace at Phase 3, which is after potentially untrusted model phases (generate, self-heal) have written back to the workspace.\n  WHY: A compromised model phase could have modified scripts/validate_driver.sh before this snapshot step, causing the snapshot to contain malicious code that is then \"trusted\" as the canonical wrapper.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/validate_process.sh:fallback runner lines 1557-1580 and 1591-1614 | severity=MAJOR | confidence=4\n  PROBLEM: The fallback runner accepts `00_canary.sh` based on its filename, then skips it if `is_synthesised_test` finds a generated-wrapper marker.\n  WHY: The skipped test emits an `ok ... # SKIP` line, which the TAP counter records as passing. If the other tests pass, the runner emits an overall pass even though the required canary never ran.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/validate_process.sh:1557-1563 (canary check) and 1570-1581 (synthesised test skip in fallback runner loop) | severity=MAJOR | confidence=4\n  PROBLEM: The fallback runner's canary check at line 1557 is purely filename-based (`basename == \"00_canary.sh\"`). It does not call `is_synthesised_test` before accepting the file as the canary. If `00_canary.sh` is a symlink, unreadable, or carries the generated-wrapper marker, `is_synthesised_test` returns true at line 1570, the test is SKIP'd with a TAP `ok` line, and that `ok` is counted as a pass at lines 1591-1593.\n  WHY: The driver (validate_driver.sh:796-811) correctly rejects this case \u2014 it calls `is_synthesised_test` before selecting the canary, so a marker-bearing or symlinked `00_canary.sh` is skipped and the driver fails with `canary_missing`. The fallback runner lacks the same guard, so the two paths disagree: the driver refuses to run, but the fallback runner silently passes without a real canary. A PR that makes `00_canary.sh` a symlink (or adds a `__BEHAVIOURAL_SMOKE_` marker to it) would bypass the canary requirement under the fallback runner.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "ddd8279ff867628fd9592a0465c27d604fc8bcb926f73f626c0367356586ccdf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6850,
+    "run_id": "37887004096",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37887004096",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009054137_3c70610889",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6850,
+    "run_id": "37887004096"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T05:41:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
