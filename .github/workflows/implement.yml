@@ -6097,8 +6097,10 @@ jobs:
     # `failure` result is reported: a cancelled run was superseded or timed
     # out. A run that ended in a deliberate terminal state (guard block,
     # diagnosed fix-up issues, BLOCKED verdict) sets no heal_report output and
-    # is not reported. `permissions: {}` keeps the job inside any caller's
-    # grant; GH_PAT does the work. The reporter always exits 0.
+    # is not reported. The job is granted only `id-token: write` (every
+    # caller wrapper grants it) so the reporter can attach the OIDC report
+    # identity the heal intake verifies; GH_PAT does the work. The reporter
+    # always exits 0.
     needs: implement
     if: >-
       always() && needs.implement.result == 'failure' &&
@@ -6106,7 +6108,8 @@ jobs:
       !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED)
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    permissions: {}
+    permissions:
+      id-token: write
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}

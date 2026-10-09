@@ -406,8 +406,8 @@ Phases of the unattended pipeline (each is a separate workflow file under
     the API (`workflow_failure_heal.py verify-report-identity` /
     `bind-report`). A report without a token passes on the binding checks
     while `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH=false` (default) and is skipped
-    when `true` (phase reports, whose `heal-report` job has
-    `permissions: {}`, are exempt). Only label-escalation reports have their
+    when `true` (phase reports included: their `heal-report` job is granted
+    `id-token: write` and attaches a token). Only label-escalation reports have their
     runs bound here (claimed runs that all fail binding reject the report as
     `no_bound_runs`; title, URL and body excerpt come from the fetched issue,
     and an unauthenticated report's comments excerpt is dropped; autofix reports take theirs from the fetched PR); phase, autofix and `workflow_run` runs stay with the
