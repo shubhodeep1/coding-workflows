@@ -87,10 +87,14 @@ def test_attestation_subject_is_the_built_manifest(workflow_path: Path) -> None:
 def test_permissions_add_exactly_attestation_scopes(workflow_path: Path) -> None:
 	workflow = _load(workflow_path)
 	assert workflow["permissions"] == {"contents": "write"}
+	# The release job keeps its existing CI-gate scopes (checks/actions read,
+	# #6797) and adds exactly the two attestation scopes (#6943).
 	assert workflow["jobs"]["release"]["permissions"] == {
 		"contents": "write",
 		"id-token": "write",
 		"attestations": "write",
+		"checks": "read",
+		"actions": "read",
 	}
 	for job_id, job in workflow["jobs"].items():
 		if job_id == "release":
