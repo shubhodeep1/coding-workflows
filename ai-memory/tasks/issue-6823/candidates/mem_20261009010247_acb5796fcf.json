@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nI've written the implementation plan below. This is a one-file content change to `tests/e2e_smoke_canary.txt`. I made no changes to the repository.\n\n## Implementation Plan \u2014 update `tests/e2e_smoke_canary.txt`\n\nPlanning ref: `main` @ `7340bd3c6529cb3fa4de5ffd1a7eb2fa2eb4827e`. The issue names no integration branch, so there is nothing to compare against.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue spells out the exact final content and limits the change to one existing file. No helpers, patterns or new code apply. Changing anything beyond this file would break the issue's constraint. A narrower change is not possible.\n\n### Files likely to change\n- `tests/e2e_smoke_canary.txt` (modify only). It currently reads:\n  ```\n  status: ok\n  run_id: 26151428977\n  updated-by: ai-pipeline\n  ```\n\n### Functions/modules to implement\nNone.\n\n### Data structures affected\nNone. Only the file's text changes: the `run_id` line goes from `26151428977` to `alt-37866821330`.\n\n### API/interface changes\nNone.\n\n### Target content\nThe file must contain exactly these three lines, each ending in a newline (LF), with nothing before or after:\n```\nstatus: ok\nrun_id: alt-37866821330\nupdated-by: ai-pipeline\n```\n\n## Decisions\n### D1 \u2014 Line ending and trailing newline\n- Chosen: End every line with LF, including the last line, matching the file as it is now.\n- Alternatives considered: Leave out the final newline.\n- Why: The current file ends with a newline, and the smoke checks compare the file byte for byte, so keeping the existing convention is the safest choice.\n\n## Security considerations\n- No trust boundary, endpoint, input handling or secret is involved. The file is a static test fixture.\n- Possible abuse: none. The file is not executable and nothing parses it as instructions.\n\n### Risks and edge cases\n- `tests/test_e2e_editor_smoke_canary.py` checks this file byte for byte against a template. It only runs when `E2E_EXPECTED_RUN_ID` is set, and that value must be all digits.\n  - The new `run_id` (`alt-37866821330`) is not numeric, so that test cannot check this content.\n  - This is expected for the alternate-model release gate, which uses its own check. The issue's exact content wins.\n- Leave out any `E2E_EDITOR_BAIT_` line. None is in the file now, and none may be added.\n- Do not add a byte-order mark, trailing spaces or CRLF line endings.\n\n### Testing considerations\n- Check the file with `cat -A tests/e2e_smoke_canary.txt`. It should show exactly three lines, each ending in `$`.\n- `git diff --stat` should list only `tests/e2e_smoke_canary.txt`, with 1 line added and 1 removed.\n- Optionally run `pytest tests/test_e2e_editor_smoke_canary.py`. Without the end-to-end environment variables it skips or passes.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "65f5f263991613a6430ed1ded294943e7312341e65f9a0147e8c3d2d466d542d",
+  "lineage": {
+    "issue_number": 6823,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37867199961",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37867199961",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6823"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261009010247_acb5796fcf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6823,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37867199961"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6823",
+  "timestamps": {
+    "created_at": "2026-10-09T01:02:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
