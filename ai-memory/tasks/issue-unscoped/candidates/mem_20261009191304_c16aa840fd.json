@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:4330-4336 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The PR leaves `review_autofix.yml` at 481,287 bytes, above the 480,000-byte CI guard.\n  WHY: The size-guard test rejects the workflow on CI, leaving the required CI check failing; the supplied PR check run confirms this failure remains.\n- changelog.d/6964-review-support-sha-test-count.md:Lines 1-4 | severity=low | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: This adds a user-facing changelog fragment for a test-only contract update.\n  WHY: The release assembler publishes the fragment even though this change has no observable behavior; the repository changelog policy excludes test-only changes.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/review_autofix.yml; tests/test_workflow_file_size_limit.py | severity=MAJOR | confidence=5\n  PROBLEM: The PR leaves review_autofix.yml at 481,287 bytes, above the 480,000-byte CI guard.\n  WHY: The size-guard test rejects the workflow on CI, leaving the required CI check failing. The supplied PR check run confirms this failure remains.\n- changelog.d/6964-review-support-sha-test-count.md | severity=NIT | confidence=4\n  PROBLEM: This adds a user-facing changelog fragment for a test-only contract update.\n  WHY: The release assembler publishes the fragment even though this change has no observable behavior; the repository changelog policy excludes test-only changes.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "cbfcab460ecff35b172dee39938a9df3dbf1ac7569ea38b68dd35936b7ab7a34",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6966,
+    "run_id": "37976990159",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37976990159",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009191304_c16aa840fd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6966,
+    "run_id": "37976990159"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-09T19:13:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
