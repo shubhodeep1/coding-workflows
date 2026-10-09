@@ -867,7 +867,7 @@ jobs:
 
       # Hourly Telegram WARNING naming every pool account at or above the usage
       # gate (and every rejected token), from the probes the step above already
-      # ran; silent while every account is below the gate.
+      # ran; silent while every account is below the gate (#6951).
       - name: Alert on Claude pool accounts at the usage gate
         if: steps.find_tracking.outputs.has_work == 'true' && steps.ai_engine.outputs.any_claude == 'true'
         continue-on-error: true

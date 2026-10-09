@@ -798,7 +798,7 @@ def _window_summary(probe: dict[str, Any], name: str, label: str, gate: float) -
 
 
 def pool_health(probes: list[dict[str, Any]], gate: float) -> dict[str, Any]:
-	"""One operator-facing reading of the pool for the hourly near-cap alert.
+	"""One operator-facing reading of the pool for the hourly near-cap alert (#6951).
 
 	Input: the probe records ``parse_probe`` produced for every account in the
 	pool (the ``probes`` output of ``.github/actions/claude-pool-token``). Output:
