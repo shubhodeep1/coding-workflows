@@ -12,8 +12,8 @@ log_file="${3:?log file required}"
 engine="${4:-codex}"
 engine_role="${5:-CLARIFY}"
 case "${engine}" in codex|claude) ;; *) echo '::error::Invalid clarify engine' >&2; exit 1 ;; esac
-[[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|UNBLOCK_JUDGE)$ ]] || { echo '::error::Invalid clarify engine role' >&2; exit 1; }
-[ "${engine}" != claude ] || [[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|UNBLOCK_JUDGE)$ ]] || { echo '::error::Invalid Claude engine role' >&2; exit 1; }
+[[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|PLAN|UNBLOCK_JUDGE)$ ]] || { echo '::error::Invalid clarify engine role' >&2; exit 1; }
+[ "${engine}" != claude ] || [[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|PLAN|UNBLOCK_JUDGE)$ ]] || { echo '::error::Invalid Claude engine role' >&2; exit 1; }
 support="scripts"
 if [ -n "${CLARIFY_ISOLATION_SUPPORT_DIR:-}" ]; then
 	if [[ "${CLARIFY_ISOLATION_SUPPORT_DIR}" != /* ]] || [ ! -d "${CLARIFY_ISOLATION_SUPPORT_DIR}" ]; then
