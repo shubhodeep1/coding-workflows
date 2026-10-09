@@ -34,6 +34,7 @@ import sys
 import time
 
 MAX_BODY = 32 * 1024 * 1024
+BODY_READ_TIMEOUT = 60
 UPSTREAM_HOST = "api.anthropic.com"
 PLACEHOLDER = "isolated-placeholder"
 PATH_RE = re.compile(r"^/v1/messages(?:/count_tokens)?(?:\?beta=true)?$")
@@ -131,16 +132,39 @@ class Relay(http.server.BaseHTTPRequestHandler):
 		pass
 
 	def _reject(self, status):
+		if getattr(self, "command", None) == "POST" and not self._request_body_consumed:
+			length = self.headers.get("Content-Length", "")
+			if length.isascii() and length.isdecimal() and len(length) <= len(str(MAX_BODY)) and 0 < int(length) <= MAX_BODY:
+				# Let a sending client finish without letting an incomplete body stall the relay.
+				previous_timeout = self.connection.gettimeout()
+				deadline = time.monotonic() + 1
+				body_remaining = getattr(self, "_unread_body_bytes", int(length))
+				try:
+					while body_remaining and (seconds_left := deadline - time.monotonic()) > 0:
+						self.connection.settimeout(seconds_left)
+						# read1 avoids retrying receives past the overall deadline.
+						drained_chunk = self.rfile.read1(min(65536, body_remaining))
+						if not drained_chunk:
+							break
+						body_remaining -= len(drained_chunk)
+				except OSError:
+					pass
+				finally:
+					self.connection.settimeout(previous_timeout)
 		try:
 			self.connection.settimeout(1)
 		except OSError:
 			pass
-		self.send_error(status, "Request rejected")
+		try:
+			self.send_error(status, "Request rejected")
+		except (ConnectionError, TimeoutError):
+			pass  # The rejection is terminal even when its response cannot be delivered.
 		self.close_connection = True
 
 	def do_POST(self):
 		# No alternate paths, chunked uploads, client-selected hosts, API keys,
 		# or (on the broker) any client authorization cross the boundary.
+		self._request_body_consumed = False
 		mode = self.server.mode
 		length = self.headers.get("Content-Length", "")
 		headers = forwarded_request_headers(self.headers)
@@ -158,7 +182,7 @@ class Relay(http.server.BaseHTTPRequestHandler):
 			or self.headers.get("Content-Type", "").split(";")[0].strip().lower() != "application/json"
 			or not length.isascii()
 			or not length.isdecimal()
-			or len(length) > 10
+			or len(length) > len(str(MAX_BODY))
 			or not 0 < int(length) <= MAX_BODY
 			or headers is None
 		):
@@ -182,9 +206,27 @@ class Relay(http.server.BaseHTTPRequestHandler):
 				except OSError:
 					pass
 			return self._reject(400)
-		body = self.rfile.read(int(length))
-		if len(body) != int(length):
+		previous_timeout = self.connection.gettimeout()
+		deadline = time.monotonic() + BODY_READ_TIMEOUT
+		body_parts = []
+		body_remaining = int(length)
+		try:
+			while body_remaining and (seconds_left := deadline - time.monotonic()) > 0:
+				self.connection.settimeout(seconds_left)
+				chunk = self.rfile.read1(min(65536, body_remaining))
+				if not chunk:
+					break
+				body_parts.append(chunk)
+				body_remaining -= len(chunk)
+		except OSError:
+			pass
+		finally:
+			self.connection.settimeout(previous_timeout)
+		self._request_body_consumed = body_remaining == 0
+		if body_remaining:
+			self._unread_body_bytes = body_remaining
 			return self._reject(400)
+		body = b"".join(body_parts)
 		if mode == "broker":
 			try:
 				request = json.loads(body)
@@ -220,10 +262,7 @@ class Relay(http.server.BaseHTTPRequestHandler):
 		except (OSError, http.client.HTTPException):
 			# Do not echo upstream diagnostics: they can include provider data.
 			if not headers_sent and not self.wfile.closed:
-				try:
-					self._reject(502)
-				except OSError:
-					pass
+				self._reject(502)
 		finally:
 			if connection is not None:
 				connection.close()

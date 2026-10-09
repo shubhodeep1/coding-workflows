@@ -140,7 +140,10 @@ def test_node_runtime_scaffold_has_no_hardhat_assets_and_wires_custom_tests() ->
 		assert dockerfile_text.startswith("FROM node:"), dockerfile_text
 
 		family_marker_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
-		assert "node-runtime family for demo-project" in family_marker_text
+		marker_run = subprocess.run(["bash", "-c", family_marker_text], capture_output=True, text=True, timeout=10)
+		assert marker_run.returncode == 0, marker_run.stderr
+		# project_name is rendered shell-quoted (printf argument), so check the executed output.
+		assert "ok 1 - node-runtime family for demo-project" in marker_run.stdout
 
 		env_values = _read_env_values(output_root / "validate.env")
 		assert json.loads(env_values["CUSTOM_TESTS_JSON"]) == payload["custom_tests"]

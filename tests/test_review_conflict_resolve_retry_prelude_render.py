@@ -618,7 +618,7 @@ def _scope_action(repo: Path, env: dict[str, str], action: str) -> subprocess.Co
 def test_scope_retry_restores_full_attempt_and_keeps_final_gate() -> None:
 	src = _resolve_script_text()
 	loop = src[src.index('attempt=1\nwhile '):src.index('\ndone\n', src.index('attempt=1\nwhile '))]
-	assert loop.index("_resolver_scope_state capture") < loop.index('"${resolver_opencode_cmd[@]}"')
+	assert loop.index("_resolver_scope_state capture") < loop.index('_resolver_sandbox_opencode_attempt')
 	assert loop.index("_resolver_scope_state check") < loop.index('if [ "${_codex_exit}" -ne 0 ]; then')
 	assert loop.index("_resolver_scope_state check") < loop.index('if [ "${_marker_count}" -eq 0 ]')
 	assert "_resolver_scope_state restore || ! _resolver_scope_state verify" in loop
@@ -740,14 +740,6 @@ def _scope_state_source() -> str:
 	return src[start:src.index("\n}\n", start) + 3]
 
 
-def _model_index_wiring_block() -> str:
-	"""The retry loop's own private-index block, verbatim (#5627)."""
-	src = _resolve_script_text()
-	start = src.index('  if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then\n    if ! _resolver_model_index_prepare; then')
-	end = src.index("\n  fi\n", start) + len("\n  fi\n")
-	return src[start:end]
-
-
 def _merge_conflict_fixture(tmp: Path) -> tuple[Path, dict[str, str]]:
 	"""A real in-progress merge: conflict.txt is unmerged, outside.txt is not."""
 	repo = tmp / "repo"
@@ -782,8 +774,7 @@ def _merge_conflict_fixture(tmp: Path) -> tuple[Path, dict[str, str]]:
 
 
 def _run_model_attempt(repo: Path, env: dict[str, str], model_action: str, *, source_repo: bool = True) -> subprocess.CompletedProcess[str]:
-	"""Capture both scope baselines, run a stub model through the loop's own
-	private-index block, then report both scope checks (#5627)."""
+	"""Exercise the retained #5627 helper directly, not the sandboxed launch."""
 	Path(env["RESOLVER_MODEL_INDEX_FILE"]).parent.mkdir(parents=True, exist_ok=True)
 	program = (
 		"set -euo pipefail\n"
@@ -794,7 +785,10 @@ def _run_model_attempt(repo: Path, env: dict[str, str], model_action: str, *, so
 		"_resolver_attempt_state capture\n"
 		"_resolver_scope_state capture\n"
 		'resolver_opencode_cmd=(bash -c "${MODEL_ACTION}")\n'
-		f"{_model_index_wiring_block()}"
+		'if [ "${IS_WORKFLOW_SOURCE_REPO}" = true ]; then\n'
+		'  _resolver_model_index_prepare\n'
+		'  resolver_opencode_cmd=(env "GIT_INDEX_FILE=${RESOLVER_MODEL_INDEX_FILE}" "${resolver_opencode_cmd[@]}")\n'
+		'fi\n'
 		'"${resolver_opencode_cmd[@]}"\n'
 		"_scope_rc=0\n_resolver_scope_state check || _scope_rc=$?\n"
 		'echo "scope_rc=${_scope_rc}"\n'
@@ -973,22 +967,17 @@ def test_resolver_opencode_snapshot_opt_out() -> None:
 
 
 def test_private_model_index_wiring() -> None:
-	"""Source-level wiring (#5627): source-repo only; the snapshot opt-out runs
-	before the bootstrap validates the config; the private index is prepared
-	after the scope baseline and before the model command runs."""
+	"""The retained #5627 helper is no longer used on the sandboxed model path."""
 	src = _resolve_script_text()
 	opt_out = 'if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ] && ! _resolver_disable_opencode_snapshot; then'
 	assert opt_out in src
 	assert src.index('--config-path "${RESOLVER_OPENCODE_CONFIG}"') < src.index(opt_out)
 	assert src.index(opt_out) < src.index('if ! opencode_require_bootstrap review_conflict_resolve writer "${MODEL_EDITOR}"')
 	loop = src[src.index('attempt=1\nwhile '):src.index('\ndone\n', src.index('attempt=1\nwhile '))]
-	block = _model_index_wiring_block()
-	assert block in loop
-	assert 'resolver_opencode_cmd=(env "GIT_INDEX_FILE=${RESOLVER_MODEL_INDEX_FILE}" "${resolver_opencode_cmd[@]}")' in block
-	assert "refusing to invoke model." in block and "exit 1" in block
-	assert loop.index("_resolver_scope_state capture") < loop.index(block)
-	assert loop.index("resolver_opencode_cmd=(\n") < loop.index(block)
-	assert loop.index(block) < loop.index('-- "${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}"')
+	assert '_resolver_model_index_prepare' not in loop
+	assert 'GIT_INDEX_FILE=' not in loop
+	assert loop.index("_resolver_scope_state capture") < loop.index('_resolver_sandbox_opencode_attempt')
+	assert '"${resolver_opencode_cmd[@]}" < "${_effective_prompt_file}"' in src
 	assert 'RESOLVER_MODEL_INDEX_FILE="${RUNTIME_DIR}/resolver_model_index"' in src
 	# The script's own staging stays on the real index: the helper and its
 	# only call site never point GIT_INDEX_FILE at the model's private copy.

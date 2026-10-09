@@ -57,19 +57,19 @@ def test_alt_model_cleanup_targets_ai_issue_head_branch_pr() -> None:
 	assert 'close_with_retry "pulls" "${PR_NUMBER}"' in step
 
 
-def test_internal_review_percent_encodes_head_ref_for_open_pr_lookup() -> None:
-	wf = _read_internal_review()
-	assert "encoded_head_ref=\"$(jq -nr --arg ref \"${HEAD_REF}\" '$ref | @uri')\"" in wf
-	assert '"repos/${REPOSITORY}/pulls?state=open&head=${REPOSITORY%/*}:${encoded_head_ref}"' in wf
-	assert '"repos/${REPOSITORY}/pulls?state=open&head=${REPOSITORY%/*}:${HEAD_REF}"' not in wf
+def test_internal_review_has_no_claude_branch_push_route() -> None:
+	# PR #6438 removed the no-PR claude/** push review (and with it the open-PR
+	# lookup the two earlier tests here pinned): a claude/** branch is reviewed
+	# once it has a PR, like every other branch.
+	import yaml
 
-
-def test_internal_review_prefers_event_default_branch_before_repo_get_fallback() -> None:
 	wf = _read_internal_review()
-	assert "EVENT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch || '' }}" in wf
-	assert 'base_ref="${EVENT_DEFAULT_BRANCH:-}"' in wf
-	assert "base_ref=\"$(gh api \"repos/${REPOSITORY}\" --jq '.default_branch' 2>/dev/null || echo 'main')\"" in wf
-	assert wf.index('base_ref="${EVENT_DEFAULT_BRANCH:-}"') < wf.index("base_ref=\"$(gh api \"repos/${REPOSITORY}\" --jq '.default_branch' 2>/dev/null || echo 'main')\"")
+	parsed = yaml.safe_load(wf)
+	triggers = parsed.get("on", parsed.get(True))
+	assert set(triggers) == {"pull_request", "workflow_dispatch"}
+	assert list(parsed["jobs"]) == ["review"]
+	assert "resolve-claude-branch-pr" not in wf
+	assert "force_claude_branch_review" not in wf
 
 
 def main() -> int:

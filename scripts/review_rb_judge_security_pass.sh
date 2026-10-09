@@ -37,6 +37,11 @@
 #
 # Log: RB_JUDGE_SECURITY_PASS mode= pr= outcome= reason=
 
+# shellcheck source=/dev/null
+if [ -f "$(dirname -- "${BASH_SOURCE[0]}")/review_head_gate.sh" ]; then
+	source "$(dirname -- "${BASH_SOURCE[0]}")/review_head_gate.sh" || true
+fi
+
 rb_security_log()
 {
 	echo "RB_JUDGE_SECURITY_PASS $*"
@@ -225,19 +230,12 @@ rb_security_block_already_reported()
 # The existing PR reads precede the judge LLM, so re-read at this boundary.
 rb_security_disable_auto_merge()
 {
-	local head_sha="$1" live_pr_json
+	local head_sha="$1"
 	[[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]] || return 1
-	# No existing read covers the live enrollment at this point; do not use
-	# the earlier PR payload, which can predate the judge's assessment.
-	live_pr_json="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null)" || return 1
-	if ! jq -e '.state == "open" and (.head.sha | type == "string") and has("auto_merge") and (.auto_merge == null or (.auto_merge | type == "object"))' <<< "${live_pr_json}" >/dev/null 2>&1; then
-		return 1
-	fi
-	if jq -e '.auto_merge != null' <<< "${live_pr_json}" >/dev/null 2>&1; then
-		# Withdraw even if the head moved: an enrollment on the new head is not audited by this judge.
-		gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --disable-auto >/dev/null 2>&1 || return 1
-	fi
-	jq -e --arg sha "${head_sha}" '.head.sha == $sha' <<< "${live_pr_json}" >/dev/null 2>&1
+	type review_head_gate_withdraw_auto_merge >/dev/null 2>&1 || return 1
+	# No earlier judge read covers the live enrollment at this boundary.
+	review_head_gate_withdraw_auto_merge "${REPOSITORY}" "${PR_NUMBER}" || return 1
+	jq -e --arg sha "${head_sha}" '.head.sha == $sha' <<< "${REVIEW_HEAD_GATE_LIVE_PR_JSON}" >/dev/null 2>&1
 }
 
 rb_security_block_hold()
@@ -288,13 +286,19 @@ Open high/critical/unrated security findings (${RB_SECURITY_BLOCKING_ISSUES:-unk
 # The caller enforces the severity decision before this gate: only a
 # security-exhaustion merge without blocking findings may reach it.
 # Returns 0 when a judge merge may proceed, 1 when the security gate holds it.
+# A hold sets RB_SECURITY_HOLD_REASON: the gate's hold_reason (audit_dispatched,
+# audit_pending and awaiting_followups resolve without a human; a failed
+# pending-marker write must keep pending_marker_failed even on a nonzero exit), or
+# security_mode_unverified, gate_failed or unknown.
 rb_security_merge_gate()
 {
-	local script gate_out gate_rc hold exhausted state audited_head
+	local script gate_out gate_rc hold hold_reason exhausted state audited_head
+	RB_SECURITY_HOLD_REASON=""
 	if [ "${RB_SECURITY_MODE:-false}" = "true" ]; then
 		script="$(rb_security_pass_script)"
 		if [ ! -f "${script}" ]; then
 			rb_security_log "mode=merge_gate pr=${PR_NUMBER:-} outcome=hold reason=security_mode_unverified state=script_missing"
+			RB_SECURITY_HOLD_REASON="security_mode_unverified"
 			return 1
 		fi
 		gate_out="$(GITHUB_OUTPUT="" bash "${script}" status 2>/dev/null)" || gate_out=""
@@ -306,6 +310,7 @@ rb_security_merge_gate()
 			return 0
 		fi
 		rb_security_log "mode=merge_gate pr=${PR_NUMBER:-} outcome=hold reason=security_mode_unverified state=${state:-unknown}"
+		RB_SECURITY_HOLD_REASON="security_mode_unverified"
 		return 1
 	fi
 	script="$(rb_security_pass_script)"
@@ -319,18 +324,28 @@ rb_security_merge_gate()
 	gate_rc=0
 	GITHUB_OUTPUT="${gate_out}" bash "${script}" gate || gate_rc=$?
 	hold="$(sed -n 's/^hold=//p' "${gate_out}" | tail -n 1)"
+	hold_reason="$(sed -n 's/^hold_reason=//p' "${gate_out}" | tail -n 1)"
 	exhausted="$(sed -n 's/^exhausted=//p' "${gate_out}" | tail -n 1)"
 	rm -f "${gate_out}"
 	if [ "${gate_rc}" -ne 0 ] || [ -z "${hold}" ]; then
 		echo "::warning::Single-issue security gate failed (exit ${gate_rc}); holding the judge's merge."
-		rb_security_log "mode=merge_gate pr=${PR_NUMBER:-} outcome=hold reason=gate_failed rc=${gate_rc}"
+		RB_SECURITY_HOLD_REASON="gate_failed"
+		if [ "${hold}" = "true" ]; then
+			case "${hold_reason}" in
+				label_write_failed|pending_marker_failed) RB_SECURITY_HOLD_REASON="${hold_reason}" ;;
+			esac
+		fi
+		rb_security_log "mode=merge_gate pr=${PR_NUMBER:-} outcome=hold reason=gate_failed rc=${gate_rc} hold_reason=${RB_SECURITY_HOLD_REASON}"
 		return 1
 	fi
 	if [ "${hold}" = "false" ]; then
 		rb_security_log "mode=merge_gate pr=${PR_NUMBER:-} outcome=allow reason=gate_clear"
 		return 0
 	fi
-	rb_security_log "mode=merge_gate pr=${PR_NUMBER:-} outcome=hold reason=$([ "${exhausted}" = "true" ] && echo exhausted || echo audit_or_findings)"
+	# An unrecognised or missing reason (an older gate script) alerts as stuck.
+	[[ "${hold_reason}" =~ ^[a-z_]+$ ]] || hold_reason="unknown"
+	RB_SECURITY_HOLD_REASON="${hold_reason}"
+	rb_security_log "mode=merge_gate pr=${PR_NUMBER:-} outcome=hold reason=$([ "${exhausted}" = "true" ] && echo exhausted || echo audit_or_findings) hold_reason=${hold_reason}"
 	return 1
 }
 
