@@ -1813,6 +1813,12 @@ def _git_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
 	_git(origin, "config", "uploadpack.allowAnySHA1InWant", "true")
 	work = tmp_path / "work"
 	_git(tmp_path, "clone", "-q", "--no-local", "--single-branch", "-b", "main", str(origin), str(work))
+	# Precondition: every branch head must be missing from the main-only clone,
+	# or tests asserting the probe did (not) fetch an object prove nothing.
+	for branch, sha in shas.items():
+		assert not _has_object(work, sha), (
+			f"fixture precondition: {branch} head must be absent from the main-only clone (local-clone optimisation?)"
+		)
 	return work, shas
 
 
