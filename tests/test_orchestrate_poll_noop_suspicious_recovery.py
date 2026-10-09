@@ -627,6 +627,17 @@ def test_cap_skip_other_support_version_redispatches():
 	assert f"NOOP_RECOVERY_FINGERPRINT_CAP_STALE_SUPPORT pr=4332 head={CAP_HEAD} support={SUPPORT_NEW}" in out
 
 
+def test_cap_skip_support_text_outside_marker_does_not_count():
+	"""The support SHA must be a field of the cap marker: an older cap comment
+	that quotes ` support=<current> ` elsewhere (e.g. its first error) is stale."""
+	stale = _cap_comment("shubhodeep1", support=SUPPORT_OLD)
+	stale["body"] = f"First error: `x support={SUPPORT_NEW} y`\n" + stale["body"]
+	out, _ = _run_cap_skip([stale], [{"sha": CAP_HEAD}], "shubhodeep1",
+		repo="shubhodeep1/coding-workflows", engine_sha=SUPPORT_NEW)
+	assert out.count("DISPATCH") == 2, out
+	assert "NOOP_RECOVERY_FINGERPRINT_CAP_STALE_SUPPORT" in out
+
+
 def test_cap_skip_legacy_marker_redispatches_when_support_resolved():
 	out, _ = _run_cap_skip([_cap_comment("shubhodeep1")], [{"sha": CAP_HEAD}], "shubhodeep1",
 		repo="shubhodeep1/coding-workflows", engine_sha=SUPPORT_NEW)

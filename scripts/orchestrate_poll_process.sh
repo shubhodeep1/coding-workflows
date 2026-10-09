@@ -26133,10 +26133,11 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 			if [ -n "${N_NOOP_CAP_AUTHORS}" ]; then
 				_noop_cap_review_support_sha
 				if [ "${NOOP_CAP_REVIEW_SUPPORT_STATE}" = "ok" ]; then
+					# The support SHA must be a field of the cap marker itself,
+					# not text elsewhere in the comment (e.g. a quoted first error).
 					N_NOOP_CAP_SUPPORT_AUTHORS="$(echo "${N_COMMENTS_JSON}" | jq -r \
-						--arg marker "<!-- review-autofix-failure-cap:v1 head=${N_NOOP_CAP_HEAD_SHA} " \
-						--arg support " support=${NOOP_CAP_REVIEW_SUPPORT_SHA} " \
-						'[.[] | select((.body // "") | (contains($marker) and contains($support))) | (.user.login // "" | ascii_downcase)] | unique | .[]' \
+						--arg marker_re "<!-- review-autofix-failure-cap:v1 head=${N_NOOP_CAP_HEAD_SHA}( [^ >\\n]+)* support=${NOOP_CAP_REVIEW_SUPPORT_SHA} -->" \
+						'[.[] | select((.body // "") | test($marker_re)) | (.user.login // "" | ascii_downcase)] | unique | .[]' \
 						2>/dev/null || echo "")"
 				fi
 			fi

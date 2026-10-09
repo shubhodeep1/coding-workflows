@@ -2516,11 +2516,12 @@ jobs:
             echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=${PR_HEAD_SHA} reason=fresh_cap_marker_lookup_failed"
             exit 0
           fi
-          # #6625: a cap marker of another support version does not count.
+          # #6625: a cap marker of another support version does not count; the
+          # support SHA must be a field of the marker, not text elsewhere.
           cap_support=""
           [[ "${REVIEW_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]] && cap_support="${REVIEW_SUPPORT_SHA}"
           if jq -e --arg author "${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}" --arg head "${PR_HEAD_SHA}" --arg support "${cap_support}" \
-            'any(.[]; ((.author_login // "" | ascii_downcase) == ($author | ascii_downcase)) and ((.body // "") | contains("<!-- review-autofix-failure-cap:v1 head=" + $head + " ")) and ($support == "" or ((.body // "") | contains(" support=" + $support + " "))))' \
+            'any(.[]; ((.author_login // "" | ascii_downcase) == ($author | ascii_downcase)) and ((.body // "") | contains("<!-- review-autofix-failure-cap:v1 head=" + $head + " ")) and ($support == "" or ((.body // "") | test("<!-- review-autofix-failure-cap:v1 head=" + $head + "( [^ >\\n]+)* support=" + $support + " -->"))))' \
             "${fresh_cap_comments_file}" >/dev/null; then
             echo "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=${PR_NUMBER} head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP} count=${FINGERPRINT_CAP_COUNT}"
             exit 0

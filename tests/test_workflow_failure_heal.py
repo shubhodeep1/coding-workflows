@@ -3401,6 +3401,11 @@ def test_fingerprint_cap_block_marker_records_support_version() -> None:
 		comment = state["comments_posted"][0]
 		assert f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={FP_HEX} reason=editor_empty_noop count=3 support={SUPPORT_NEW} -->" in comment
 		assert heal.count_identical_failures([{"author_login": CAP_AUTHOR, "body": comment}], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is True
+	quoted_cap = {**old_cap, "body": f"First error: `x support={SUPPORT_NEW} y`\n" + old_cap["body"]}
+	with tempfile.TemporaryDirectory(prefix="heal-cap-job-support-quoted-") as tmp_name:
+		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", extra_comments=[quoted_cap], extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
+		assert "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED" not in result.stdout, result.stdout
+		assert len(state.get("comments_posted", [])) == 1, result.stdout
 	same_cap = {**old_cap, "body": old_cap["body"].replace(SUPPORT_OLD, SUPPORT_NEW)}
 	with tempfile.TemporaryDirectory(prefix="heal-cap-job-support-same-") as tmp_name:
 		result, state = _run_cap_job(Path(tmp_name), pr_body="Fixes #4255", extra_comments=[same_cap], extra_env={"REVIEW_SUPPORT_SHA": SUPPORT_NEW})
