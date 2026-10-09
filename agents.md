@@ -131,7 +131,14 @@ Phases of the unattended pipeline (each is a separate workflow file under
     validated transfer. For Claude engine fixes it also admits
    `.github/ai/claude_engine.json`, `.claude/hooks/gh_api_write_guard.py`,
     and `scripts/claude_settings.json.tmpl`; the merged-PR safety hook stays
-    excluded from snapshot and transfer. It also admits each
+    excluded from snapshot and transfer. That exclusion is deliberate: #6208
+    reversed #6187's admission of `.claude/hooks/pr_merge_status_guard.py`
+    because the hook runs on the host with credentials, so PR-derived editor
+    output must never rewrite it. Consequence: review autofix cannot repair a
+    CI failure in that hook (as it did in #6481, `fc1c150`); route such a
+    failure to an interactive session, which must change the hook and its
+    `workflow-templates/.claude/hooks/` twin together (byte-identical,
+    `tests/test_claude_template_live_parity.py`). It also admits each
     `.claude/commands/<name>.md` whose `workflow-templates/.claude/commands/<name>.md`
    twin exists both in the host checkout and the verified workflow-support
    checkout (`GITHUB_WORKSPACE/.codex-workflow-src`) when the snapshot is
@@ -244,7 +251,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
    credential-free review sandboxes on both engines. Isolation failure
    defers (never host fallback) and escalates per role after
    `JUDGE_ISOLATION_MAX_FAILURES`; only deterministic poller code writes to
-   GitHub. The standalone stall judge uses verified issue labels; managed
+   GitHub. All five poller judges run on `scripts/review_untrusted_sandbox.sh`,
+   not `codex_isolated_exec.sh` (see "Isolated Codex agents" → "Poller
+   judges"). The standalone stall judge uses verified issue labels; managed
    stall and review-blocked judges combine issue and tracking labels
    (`ai:codex` wins), falling back to codex when the issue's GraphQL label
    page is missing, incomplete (more than 100 labels), or unverifiable.
@@ -507,23 +516,21 @@ The merged-PR guard in `.claude/hooks/pr_merge_status_guard.py` and its
 unquoted file descriptors before checking push destinations. `2 > out` retains
 the branch `2`; `2>out` does not. The copies stay byte-identical.
 
-Open security finding #6755: the merged-PR guard does not inspect Git writes
-wrapped in nested shell text, so it is not resolved and nothing may treat it
-as fixed. `WRAPPED_GIT_WRITE_GUARD_UNSET_OPERATOR_STEP` is an unresolved
-operator-step placeholder from the unblock verdict for #6755; no code reads it
-and setting it enables nothing, so both hook copies behave exactly as before.
-The pending human step, done in a trusted writable checkout, changes both
-`pr_merge_status_guard.py` copies identically (they must stay byte-identical)
-so that they inspect, within bounds, nested `bash`/`sh`/`zsh`/`dash` `-c`
-scripts, `eval` text, command substitutions, backticks and process
-substitutions; apply the existing merged-PR check to any Git write found
-inside; and request confirmation when wrapper text that will run cannot be
-read safely, keeping the existing handling of `sudo`, `timeout`, `xargs` and
-pipes into `bash` unchanged. The same step adds tests against both copies,
-replaces this note and adds a changelog fragment. The pipeline did not make
-the change because its editors cannot write `.claude/hooks/**`, and
-`tests/test_claude_template_live_parity.py` requires the live security hook to
-match its template.
+Security finding #6755 (`merged-pr-guard-misses-wrapped-git`) is fixed in
+both `pr_merge_status_guard.py` copies, which stay byte-identical. The guard
+parses `bash`/`sh`/`zsh`/`dash` `-c` scripts, `eval` text, `$(...)`, backtick
+and `<(...)` bodies up to three levels deep and runs the normal merged-PR
+check on each Git commit or push found there; wrapped text it cannot read
+safely (a dynamic command word, an unterminated body, deeper nesting) asks for
+confirmation when it could run a Git write. `sudo`, `timeout`, `xargs` and
+pipes into `bash` keep their existing handling, and so does the `command`
+builtin: `command git push ...`, bare or inside `bash -c`, is not yet
+inspected (both copies' `_SHELL_CONTROL_PREFIXES` lack it; the fix needs both
+hook copies, which the pipeline cannot write). Tests run against both copies
+in `tests/test_pr_merge_status_guard.py`. The interactive session applied the
+change because the pipeline's editors cannot write `.claude/hooks/**`; the
+former `WRAPPED_GIT_WRITE_GUARD_UNSET_OPERATOR_STEP` placeholder is retired
+and nothing reads it.
 
 Integration-ref trust boundary: `scripts/resolve_integration_ref.sh` can return
 any existing valid Git branch name declared by issue metadata. Workflows may
@@ -1003,14 +1010,37 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   writer runs.
 - **Sites.** plan, implement (attempts, post-Codex repair, diagnose, PR issue
   summary), validate discover / diagnose / self-heal, the validation discovery
-  bootstrap, the orchestrate decomposer, the poller's wave / stall /
-  security-pass / review-blocked / integration-conflict judges, the four
+  bootstrap, the orchestrate decomposer, the four
   workflow-log-analysis passes and the consumer retro fan-out, check-failure
   triage, the security audit, the workflow failure heal intake, and the
   activation verifier (`scripts/activation_verify.sh`).
   `tests/test_codex_agent_isolation_contract.py` fails when a direct `codex`
   launch appears anywhere else (clarify keeps its own
-  `scripts/clarify_isolated_run.sh`).
+  `scripts/clarify_isolated_run.sh`). The poller judges are not on this list;
+  see "Poller judges" below.
+- **Poller judges.** All five poller judges (`WAVE_JUDGE`, `STALL_JUDGE`,
+  `INTEGRATION_JUDGE`, `SECURITY_JUDGE`, `RB_JUDGE`) intentionally run on
+  `scripts/review_untrusted_sandbox.sh`, through `poller_claude_judge` →
+  `poller_judge_isolated` → `_poller_rb_judge_sandbox_attempt`
+  (`prepare-ephemeral` / `run` / `cleanup`), not on `codex_isolated_exec.sh`.
+  Phase 5c (#6208) moved them there from #6187's `codex_isolated_exec.sh`
+  path; `ORCH_CODEX_ISOLATED_EXEC` is still defined in the poller, but no judge
+  uses it. Reasons (decision recorded in #6607): every attempt gets a fresh
+  snapshot, and a root is never reused after a Claude exit 75; the
+  review-blocked fix and integration write paths use validated transfer with
+  rollback of new untracked files; the judges share one OpenCode fallback
+  stack with the review write roles; and escalation is accounted per role
+  through `JUDGE_ISOLATION` / `RB_JUDGE_ISOLATION`
+  (`JUDGE_ISOLATION_MAX_FAILURES`, `RB_JUDGE_ISOLATION_MAX_FAILURES`), not
+  `CODEX_ISOLATION`. For these judges the "codex" engine means OpenCode in a
+  fresh review sandbox (`write_opencode_config.sh`), never the Codex CLI and
+  never the host; a Claude exit 75 retries OpenCode in a new root, and a
+  sandbox failure returns 77 and defers the judge with no host fallback. The
+  two isolation stacks have different failure modes, log prefixes, retry
+  accounting and support-file staging lists, so a fix to one does not cover
+  the other. `test_poller_judges_stay_on_the_review_sandbox` in
+  `tests/test_codex_agent_isolation_contract.py` pins this decision;
+  converging the stacks means revising both this bullet and that test.
 - **Claude engine.** `claude_run` (`scripts/ai_engine.sh`) never starts the
   Claude Code CLI on the runner: each account attempt runs
   `codex_isolated_exec.sh run --engine claude` in the same container, with
@@ -1788,17 +1818,20 @@ filed before the merge (#4090 / #4091) without a human.
 how many judge rounds can grant another fix cycle: `judge_round` beyond the cap
 puts `keep_fixing_available: false` and `max_keep_fixing_rounds` in the
 diagnostics, and after verdict normalization the poller rewrites low/medium
-`keep_fixing` decisions to `fail` with the justification prefixed
-`[keep_fixing capped after <c> judge round(s); converted to fail — needs a fix
-or a human waiver]` (`SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=<N>
-round=<r> cap=<c> converted=<n>`), so the round takes the `fail` path and the
-project terminalizes as `ai:security-pass-failed` (no waiver rows, no
-advisories, even for findings the judge accepted in the same verdict). A
-remaining high, critical, or unrated `keep_fixing` decision terminalizes the
-pass without waiving it or creating another fix issue. The cap never accepts
-a finding (#6539: the earlier conversion to `accept_with_followup` recorded a
-high-severity finding as passed); recovery is the unblock judge, the
-engine-change auto-reset, `/re-security-pass` or `/security-pass-waive`.
+`keep_fixing` decisions to `accept_with_followup` with the justification
+prefixed `[keep_fixing capped after <c> judge round(s); converted to advisory
+follow-up]` (`SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=<N>
+round=<r> cap=<c> converted=<n>`), so the accept-all path runs and the project
+completes with deferred advisories only if no high, critical, or unrated
+`keep_fixing` finding remains. A remaining blocking `keep_fixing` decision
+terminalizes the pass as `ai:security-pass-failed` without waiving it,
+without recording the converted rows of the same verdict, and without
+creating another fix issue. The cap never waives a high, critical or unrated
+finding (#6517, #6729: only low and medium findings may be converted at the
+cap; #6539's stricter "convert to fail" terminalized projects whose remaining
+findings were all low or medium and contradicted #6729). Recovery from the
+terminal state is the unblock judge, the engine-change auto-reset,
+`/re-security-pass` or `/security-pass-waive`.
 Project #3965
 ran fix cycles 6 and 7 on a 5-cycle budget because rounds 1 and 2 each chose
 `keep_fixing` and nothing bounded the sequence.
