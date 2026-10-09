@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which capped failures should get the one extra retry when the verified review-support commit changes?\nChoices:\nA. Only failures whose reason is non-retryable (`NON_RETRYABLE_FAILURE_REASONS`: the `conflict_resolver_sandbox_path_*` / `conflict_resolver_sandbox_support_missing` resolver reasons). (RECOMMENDED)\nB. Any capped fingerprint, including the 3-strikes identical-failure cap (for example editor or reviewer failures).\nQ2: How should the gate decide that the current support commit is \"newer\" than the one that failed?\nChoices:\nA. Add a `support=<sha>` field to new `review-autofix-failure:v1` and `review-autofix-failure-cap:v1` markers. Allow one retry when the current verified support SHA differs from the SHA on the newest failure marker for that head. Markers without the field (older ones, including PR #6538's) count as \"different\", so they get exactly one retry. The retry's own failure marker then carries the new SHA, which restores the cap. (RECOMMENDED)\nB. Same as A, but older markers without `support=` are not re-armed. **Note:** under this option PR #6538 is never re-armed automatically, which defeats the purpose of this issue.\nC. Record nothing new. Allow one retry when the support commit's committer date is later than the newest failure or cap comment on the head, and post a separate re-arm marker comment to stop further retries.\nQ3: Should this also change the orchestrator poller's no-op recovery skip (`NOOP_RECOVERY_SKIP_FINGERPRINT_CAP` in `scripts/orchestrate_poll_process.sh`, which skips re-dispatching a PR whose head has a cap comment)?\nChoices:\nA. No. Change only the review gate. The 30-minute sweep (`review_autofix_sweep.yml` does not filter on the cap) dispatches the PR, and the gate decides whether to retry. (RECOMMENDED)\nB. Yes. Also have the poller skip apply the same support-commit-changed rule so it can re-dispatch too.",
+  "fingerprint": "9c7c308b260e1ea0b9201d5bf9ff83b34f743a63b474f5280bbb402f231acf1b",
+  "lineage": {
+    "issue_number": 6911,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37918449081",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37918449081",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009104542_0abf46f7e2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6911,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37918449081"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6911 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T10:45:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
