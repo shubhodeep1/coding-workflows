@@ -2603,7 +2603,7 @@ def test_untrusted_origin_rows_are_absent_from_both_log_selectors():
 	assert {row["run_id"] for row in categories["errors"]} == {3, 4}
 
 
-def _run_main_with_runs(runs: list[dict], cache_payload: dict | None = None):
+def _run_main_with_runs(runs: list[dict], cache_payload: dict | None = None, list_runs=None):
 	fetched: list[int] = []
 	orig = (
 		collector._cache_read_context,
@@ -2626,7 +2626,7 @@ def _run_main_with_runs(runs: list[dict], cache_payload: dict | None = None):
 
 	collector._cache_read_context = lambda **_: (cache_payload or {"schema_version": "v1", "repositories": {}}, None, None)
 	collector._cache_write_context = lambda **_: True
-	collector.list_runs_for_repo = lambda *a, **k: (runs, False, {"not_modified": False, "etag": None, "status_code": 200})
+	collector.list_runs_for_repo = list_runs or (lambda *a, **k: (runs, False, {"not_modified": False, "etag": None, "status_code": 200}))
 	collector.list_jobs_for_run = fake_list_jobs_for_run
 	collector._fetch_run_log_archive = fake_fetch_run_log_archive
 	stderr = io.StringIO()
@@ -2703,6 +2703,35 @@ def test_main_excludes_fork_run_logs_but_keeps_its_counts():
 		"WORKFLOW_LOG_FORK_EXCLUDED repository=owner/repo run_id=4 reason=origin_unknown",
 	]
 	assert "attacker" not in "\n".join(lines)
+
+
+def test_main_refetches_legacy_304_snapshot_without_origin_fields():
+	# A runs_snapshot cached before #6637 has no "event" key. On HTTP 304 the
+	# collector must refetch the listing rather than classify every cached
+	# trusted run as origin_unknown until the ETag changes.
+	legacy_run = _api_run(8, "push", None)
+	legacy_run.pop("event")
+	fresh_run = _api_run(8, "push", None)
+	cache_payload = {
+		"schema_version": "v1",
+		"repositories": {"owner/repo": {"runs_etag": "W/\"cached\"", "runs_snapshot": [legacy_run]}},
+	}
+	etags: list[object] = []
+
+	def fake_list_runs(*args: object, **kwargs: object):
+		etags.append(kwargs.get("etag"))
+		if kwargs.get("etag"):
+			return [], False, {"not_modified": True, "etag": "W/\"cached\"", "status_code": 304}
+		return [dict(fresh_run)], False, {"not_modified": False, "etag": "W/\"fresh\"", "status_code": 200}
+
+	rc, report, fetched, stderr = _run_main_with_runs([], cache_payload, list_runs=fake_list_runs)
+	assert rc == 0
+	assert etags == ["W/\"cached\"", None]
+	row = report["runs"][0]
+	assert row["origin_trust"] == "trusted"
+	assert row["log_download_status"] != "excluded_untrusted_origin"
+	assert fetched == [8]
+	assert "WORKFLOW_LOG_FORK_EXCLUDED" not in stderr
 
 
 def test_main_strips_cached_fork_row_excerpts_on_reuse():

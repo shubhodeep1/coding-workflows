@@ -1975,7 +1975,11 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 used_cached_runs = bool(run_meta.get("not_modified"))
                 if used_cached_runs:
-                    if cached_runs_snapshot:
+                    # Issue #6637: snapshots cached before the origin fields
+                    # were added lack "event"; reusing them would mark every
+                    # trusted run origin_unknown for as long as the ETag
+                    # matches. Refetch once without the ETag instead.
+                    if cached_runs_snapshot and all("event" in item for item in cached_runs_snapshot):
                         runs = [dict(item) for item in cached_runs_snapshot]
                     else:
                         runs, capped, run_meta = list_runs_for_repo(
