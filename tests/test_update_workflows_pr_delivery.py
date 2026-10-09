@@ -273,7 +273,7 @@ class Fixture:
 		(self.state / "updated_files.txt").write_text("• ai-review.yml\n", encoding="utf-8")
 		(self.state / "created_files.txt").write_text("", encoding="utf-8")
 
-	def run(self, flag: str = "true", verified: str = "true", side_effect: str = "") -> subprocess.CompletedProcess:
+	def run(self, flag: str = "true", verified: str = "true", side_effect: str = "", release_tag: str = "v1.2.3", upstream_sha: str = UPSTREAM_SHA) -> subprocess.CompletedProcess:
 		self.stage_change()
 		self.output.write_text("", encoding="utf-8")
 		script = _run_text().replace("/tmp/", f"{self.state}/")
@@ -290,9 +290,9 @@ class Fixture:
 			"GITHUB_REPOSITORY": REPO,
 			"GH_TOKEN": "dummy",
 			"UPSTREAM_DIR": str(self.upstream / "workflow-templates"),
-			"UPSTREAM_SHA": UPSTREAM_SHA,
+			"UPSTREAM_SHA": upstream_sha,
 			"VERIFIED": verified,
-			"RELEASE_TAG": "v1.2.3",
+			"RELEASE_TAG": release_tag,
 			"DEFAULT_BRANCH": "main",
 			"UPDATER_PR_DELIVERY_ENABLED": flag,
 			"FAKE_GH_LOG": str(self.gh_log),
@@ -480,6 +480,32 @@ def test_forged_updater_metadata_without_pat_push_fails_closed(fx: Fixture, acti
 	assert "reason=foreign_commits_on_branch" in result.stdout
 	assert _remote_sha(fx.origin, f"refs/heads/{BRANCH}") == forged
 	assert not any(call.startswith(("pr create", "pr edit", "pr merge")) for call in fx.gh_calls())
+
+
+@needs_jq
+def test_release_tag_resolved_from_git_when_verification_is_off(fx: Fixture) -> None:
+	# Verification off leaves RELEASE_TAG empty; the PR body still names the
+	# vX.Y.Z tag, resolved over the git protocol on the release clone.
+	_git(fx.upstream, "init", "-q", "-b", "stable")
+	_git(fx.upstream, "add", "-A")
+	_git(fx.upstream, "commit", "-q", "-m", "release")
+	release_sha = _git(fx.upstream, "rev-parse", "HEAD")
+	_git(fx.upstream, "tag", "-a", "v9.9.9", "-m", "v9.9.9")
+	release_origin = fx.tmp / "release.git"
+	_git(fx.tmp, "clone", "-q", "--bare", str(fx.upstream), str(release_origin))
+	_git(fx.upstream, "remote", "add", "origin", f"file://{release_origin}")
+	result = fx.run(verified="skipped", release_tag="", upstream_sha=release_sha)
+	assert result.returncode == 0, result.stdout + result.stderr
+	body = fx.body_copy.read_text(encoding="utf-8")
+	assert "- **Release tag:** v9.9.9" in body
+	assert release_sha in body
+
+
+@needs_jq
+def test_release_tag_stays_unresolved_without_a_matching_tag(fx: Fixture) -> None:
+	result = fx.run(verified="skipped", release_tag="")
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "- **Release tag:** unresolved" in fx.body_copy.read_text(encoding="utf-8")
 
 
 @needs_jq
