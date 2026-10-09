@@ -101,6 +101,14 @@
 #                                         set by the workflow's materialize step
 #   WORKFLOW_HEAL_OIDC_JWKS_FILE          test hook: read the JWKS from this file instead of
 #                                         fetching it (default empty)
+#   HEAL_INTAKE_SCOPE_GUARD_ENABLED       default "false": the intake composes the heal issue,
+#                                         logs `skip reason=scope_guard_disabled` and creates
+#                                         nothing (#6798 / #6871 operator step pending). Only
+#                                         "true" (any letter case) enables issue creation, and
+#                                         then only after the composed body's
+#                                         ai:workflow-heal-scope:v1 marker verifies; a missing
+#                                         or invalid marker logs ::error:: reason=scope_marker_unverified,
+#                                         sends a CRITICAL alert and exits nonzero.
 #   MODEL_EDITOR                          diagnosis model (default openai/gpt-6-sol)
 #   MODEL_VERBOSITY                       codex verbosity (default low)
 
@@ -139,6 +147,9 @@ REGISTRY_FILE="${WORKFLOW_HEAL_CONSUMER_REGISTRY:-.github/ai/consumer_repos.json
 TARGET_BRANCH_DEFAULT="${WORKFLOW_HEAL_TARGET_BRANCH:-stable}"
 SOURCE_CHECKOUT="${WORKFLOW_HEAL_SOURCE_CHECKOUT:-true}"
 SELF_INFLICTED_ROUTING_ENABLED="${WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED:-true}"
+# Heal issue creation gate (#6871): off by default, fail closed. See
+# _heal_intake_scope_guard_permits_create.
+SCOPE_GUARD_ENABLED="${HEAL_INTAKE_SCOPE_GUARD_ENABLED:-false}"
 HEAL_LABEL="ai:workflow-heal"
 ESCALATED_LABEL="ai:workflow-heal-escalated"
 RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${SELF_REPO}/actions/runs/${GITHUB_RUN_ID:-0}"
@@ -1255,6 +1266,44 @@ _git_fetch_consumer_scope_ref()
 		timeout 120 git --git-dir "${scope_dir}" fetch --quiet --depth 1 "https://github.com/${consumer_repo}.git" "${consumer_ref}" >/dev/null 2>&1
 }
 
+# Gate in front of the only heal issue-create call (#6871). With
+# HEAL_INTAKE_SCOPE_GUARD_ENABLED off (the default) it ends the intake with
+# exit 0 before any GitHub write, so no heal issue, label, outcome comment or
+# "created" alert happens. With it on it re-verifies the composed body's
+# ai:workflow-heal-scope:v1 marker through the same `heal-scope verify` the
+# implement preflight uses (author / label / edit checks are satisfied
+# synthetically: the issue does not exist yet, so only the marker shape is
+# checked) and refuses creation, fail closed, on anything but `verified`.
+_heal_intake_scope_guard_permits_create()
+{
+	local scope_guard_repo="$1" scope_guard_body_file="$2" scope_guard_labels="$3" scope_guard_target_branch="${4:-}"
+	local scope_guard_input="${RUNTIME_DIR}/scope_guard_input.json" scope_guard_status=""
+	if [ "${SCOPE_GUARD_ENABLED,,}" != "true" ]; then
+		log "skip reason=scope_guard_disabled repo=${scope_guard_repo} labels=${scope_guard_labels} target_branch=${scope_guard_target_branch:-default} target_branch_source=${TARGET_BRANCH_SOURCE:-none} classification=${CLASSIFICATION} fp=${FP} source=${SOURCE_LABEL}"
+		if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+			echo "Workflow failure heal composed a heal issue for ${SOURCE_LABEL} but did not create it: HEAL_INTAKE_SCOPE_GUARD_ENABLED is off." >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null || true
+		fi
+		exit 0
+	fi
+	if jq -n --rawfile body "${scope_guard_body_file}" --arg label "${HEAL_LABEL}" \
+		'{body: $body, author_login: "heal-intake-precreate", pipeline_login: "heal-intake-precreate", labels: [$label], last_edited_at: null}' \
+		> "${scope_guard_input}" 2>/dev/null; then
+		scope_guard_status="$(PYTHONDONTWRITEBYTECODE=1 python3 "${HEAL_PY}" heal-scope verify --input-json "${scope_guard_input}" 2>/dev/null \
+			| jq -r '.status // empty' 2>/dev/null || true)"
+	fi
+	rm -f "${scope_guard_input}"
+	if [ "${scope_guard_status}" = "verified" ]; then
+		log "scope_guard outcome=verified repo=${scope_guard_repo} fp=${FP} source=${SOURCE_LABEL}"
+		return 0
+	fi
+	scope_guard_status="$(printf '%s' "${scope_guard_status:-unavailable}" | tr -cd 'a-z_' | head -c 40)"
+	[ -n "${scope_guard_status}" ] || scope_guard_status="unavailable"
+	echo "::error::WORKFLOW_HEAL error reason=scope_marker_unverified status=${scope_guard_status} repo=${scope_guard_repo} fp=${FP} source=${SOURCE_LABEL}" >&2
+	log "error reason=scope_marker_unverified status=${scope_guard_status} repo=${scope_guard_repo} fp=${FP} source=${SOURCE_LABEL}"
+	tg_send_msg "Workflow failure heal refused to open an issue in ${scope_guard_repo} for ${SOURCE_LABEL}: the scope marker could not be verified (${scope_guard_status})."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+	return 1
+}
+
 _open_issue()
 {
 	local repo="$1" target_branch="$2" integration_branch="${3:-}"
@@ -1320,14 +1369,20 @@ _open_issue()
 	fi
 	local title
 	title="$(head -1 "${title_file}")"
+	local issue_label_names="${HEAL_LABEL}"
+	if [[ "${integration_branch}" =~ ^orchestrator/project-[0-9]+$ ]]; then
+		# Same lineage convention as the review-blocked judge's
+		# merge_with_followup issues: the orchestrator treats it as a child.
+		label_args+=(--label "ai:orchestrator-managed")
+		issue_label_names="${issue_label_names},ai:orchestrator-managed"
+	fi
+	# Nothing below this gate may run unless it permits creation (#6871).
+	_heal_intake_scope_guard_permits_create "${repo}" "${body_file}" "${issue_label_names}" "${target_branch}" || return 1
 	if [ "${repo}" != "${SELF_REPO}" ]; then
 		ensure_label_exists "${HEAL_LABEL}" "${repo}" || true
 	fi
 	if [[ "${integration_branch}" =~ ^orchestrator/project-[0-9]+$ ]]; then
-		# Same lineage convention as the review-blocked judge's
-		# merge_with_followup issues: the orchestrator treats it as a child.
 		ensure_label_exists "ai:orchestrator-managed" "${repo}" || true
-		label_args+=(--label "ai:orchestrator-managed")
 	fi
 	local issue_url
 	issue_url="$(gh_retry gh issue create --repo "${repo}" --title "${title}" --body-file "${body_file}" "${label_args[@]}" 2>/dev/null || echo '')"

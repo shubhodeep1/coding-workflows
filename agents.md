@@ -414,7 +414,12 @@ Phases of the unattended pipeline (each is a separate workflow file under
     provenance gate; rejections fail closed (`report_auth=rejected reason=…`,
     WARNING, nothing filed). On by
     default; disable per repo via `WORKFLOW_HEAL_ENABLED=false`; never pushes
-    code itself. Stable log prefixes: `WORKFLOW_HEAL_REPORT`,
+    code itself. Heal issue creation is gated by
+    `HEAL_INTAKE_SCOPE_GUARD_ENABLED` (default `false`, #6871): while off the
+    intake composes the issue, logs `skip reason=scope_guard_disabled` and
+    files nothing; when `true` the composed body's scope marker must pass
+    `heal-scope verify` before `gh issue create`, otherwise
+    `reason=scope_marker_unverified`, CRITICAL and a red run. Stable log prefixes: `WORKFLOW_HEAL_REPORT`,
     `WORKFLOW_HEAL_AUTOFIX_REPORT`, `WORKFLOW_HEAL_PHASE_REPORT`,
     `WORKFLOW_HEAL_PR_RECONCILE`, `WORKFLOW_HEAL`.
     Before reading logs for phase, autofix or release reports, the intake
