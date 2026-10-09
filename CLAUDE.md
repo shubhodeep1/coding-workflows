@@ -1141,7 +1141,14 @@ your own judgement.
    treat the GraphQL-backed command as a fallback, never the reverse — the
    same reasoning §21.D applies to the merged-PR guard.
 
-4. **Shape `gh api` calls so the §23.H guard can approve them.** Put GET
+4. **Shape `gh api` calls so the §23.H guard can approve them.**
+   **Type IDs literally into the endpoint path** —
+   `gh api repos/o/r/actions/runs/123/jobs`, not `.../runs/$RUN_ID/jobs` or
+   `.../commits/$(git rev-parse HEAD)/check-runs`, and do not wrap `gh api`
+   in `$(...)`. An unquoted expansion in a `gh api` argument prompts in every
+   permission mode, Auto included, and so does a `gh api` call inside a
+   `$(...)` that sits in a loop or in a larger word. Look a value up with one
+   call, then issue the next call with the value typed out. Put GET
    parameters in the URL (`gh api 'search/issues?q=...&per_page=50'`) or
    pass them with `-X GET -f ...`, never as bare `-f` fields (that makes `gh`
    send a POST). Except for the literal-ID read loops in §23.H, keep `gh api`

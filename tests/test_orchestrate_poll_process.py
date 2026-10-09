@@ -364,6 +364,8 @@ def test_parameterized_search_issues_calls_pin_get_only_on_targeted_poller_paths
 
 
 def test_judge_context_issue_numbers_are_normalized_without_globbing():
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
 	poller_source_text = POLLER_SCRIPT.read_text(encoding="utf-8")
 	block_start_marker = '  MERGED_PR_SUMMARIES=""\n  OPEN_PR_SUMMARIES=""\n'
 	block_end_marker = '  unset _sorted_issue_nums _issue_status _judge_diff_pass _judge_pr_diff_budget_left\n'
@@ -6258,14 +6260,18 @@ def test_security_pass_exhaustion_judge_keep_fixing_creates_consolidated_fix_iss
 	assert "| SEC-TEST-2 | medium | scripts/example.py:1 | accept_with_followup |" in judge_comments[0]
 
 
-def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_advisories() -> None:
-	"""Past the cap, medium/low keep_fixing becomes accept_with_followup.
+def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_fail() -> None:
+	"""Past MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS (default 2), medium/low keep_fixing becomes fail.
 
 	Regression for #3965: the judge was consulted twice on a 5-cycle budget
 	and granted "one more" consolidated cycle both times (cycles 6 and 7),
-	and nothing bounded the sequence. Round 3 converts low/medium
-	keep_fixing decisions to deferred advisories; blocking findings
-	instead terminalize without being waived.
+	and nothing bounded the sequence.  The cap still stops that loop, but
+	per #6539 it must never accept a finding: round 3 converts a medium
+	keep_fixing decision to `fail`, the project terminalizes as
+	ai:security-pass-failed, and no waiver row or advisory is recorded,
+	not even for the finding the judge accepted in the same verdict.
+	High/critical/unrated keep_fixing is covered by
+	test_security_pass_cap_never_waives_a_high_finding.
 	"""
 	medium_finding = _security_pass_test_finding()
 	medium_finding["severity"] = "medium"
@@ -6275,6 +6281,7 @@ def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_advisories()
 		max_validate_cycles="3",
 		enable_security_pass="true",
 		security_audit_payload=_security_audit_findings_payload([medium_finding, _security_pass_second_test_finding()]),
+		capture_telegram_calls=True,
 		issue_labels={10: ["ai:merged"]},
 		existing_branches=["main", "orchestrator/project-192"],
 		env_overrides={
@@ -6285,50 +6292,38 @@ def test_security_pass_exhaustion_judge_keep_fixing_cap_converts_to_advisories()
 	)
 
 	latest_state = result["latest_state"]
-	assert latest_state["status"] == "complete"
-	assert latest_state["security_pass_status"] == "passed"
+	assert latest_state["status"] == "failed"
+	assert latest_state["security_pass_status"] == "failed"
 	assert latest_state["security_pass_judge_rounds"] == 3
-	assert latest_state["security_pass_reported_findings"] == []
-	assert latest_state["security_pass_active_fix_issues"] == []
-	waived = {row["finding_id"]: row for row in latest_state["security_pass_waived_findings"]}
-	assert set(waived) == {"SEC-TEST-1", "SEC-TEST-2"}
-	assert waived["SEC-TEST-1"]["justification"].startswith(
-		"[keep_fixing capped after 2 judge round(s); converted to advisory follow-up] SEC-TEST-1: keep_fixing"
-	)
-	assert waived["SEC-TEST-2"]["justification"].startswith("SEC-TEST-2: accept_with_followup")
-	# Both advisories are filed by the final-merge arm of the same tick; no
-	# consolidated fix issue is created.
-	created = result.get("created_issues", [])
-	assert sorted(issue["labels"] for issue in created) == [["ai:security"], ["ai:security"]]
-	assert {issue["title"] for issue in created} == {
-		"[security-pass] Advisory: SEC-TEST-1 (medium, scripts/example.py:1)",
-		"[security-pass] Advisory: SEC-TEST-2 (medium, scripts/example.py:1)",
-	}
-	assert "ai:security-pass-failed" not in result["tracking_labels"]
-	assert "ai:security-pass-fixing" not in result["tracking_labels"]
+	assert latest_state["security_pass_waived_findings"] == []
+	assert not latest_state.get("security_pass_followup_issues")
+	assert result.get("created_issues", []) == []
+	assert result["tracking_labels"] == ["ai:security-pass-failed"]
 	combined_log = result["stdout"] + result["stderr"]
 	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=192 round=3 cap=2 converted=1" in combined_log
 	assert "SECURITY_PASS_JUDGE_DECIDED tracking_issue=192 round=3" in combined_log
-	assert "accepted=2 keep_fixing=0 failed=0" in combined_log
-	assert "SECURITY_PASS_CLEAN tracking_issue=192" in combined_log
+	assert "accepted=0 keep_fixing=0 failed=2" in combined_log
+	assert "SECURITY_PASS_FAILED reason=cycle_exhausted" in combined_log
+	assert "SECURITY_PASS_CLEAN" not in combined_log
+	assert "SECURITY_PASS_WAIVED" not in combined_log
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_DEFERRED" not in combined_log
 	assert "SECURITY_PASS_FIX_ISSUE_CREATED" not in combined_log
-	assert "SECURITY_PASS_FAILED" not in combined_log
-	# Advisories filed by this tick's final-merge arm are recorded as
-	# merge-checked at creation, so no follow-up is read back.
-	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED" not in combined_log
-	assert sorted(latest_state["security_pass_followups_merge_checked"]) == sorted(issue["number"] for issue in created)
-	judge_comments = [
-		comment["body"]
-		for comment in result["issues"]["192"]["comments"]
-		if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 3)")
-	]
+	comment_bodies = [comment["body"] for comment in result["issues"]["192"]["comments"]]
+	judge_comments = [body for body in comment_bodies if body.startswith("## ⚖️ Security-pass exhaustion judge (round 3)")]
 	assert len(judge_comments) == 1
-	assert "The judge accepted every remaining finding as a known risk" in judge_comments[0]
+	assert "2 finding(s) cannot be accepted" in judge_comments[0]
+	assert "need a human" not in judge_comments[0]
 	assert (
-		"1 of them were `keep_fixing` decisions converted to advisories because the keep_fixing round budget (`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=2`) is spent."
+		"1 of them were `keep_fixing` decisions converted to `fail` because the keep_fixing round budget (`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=2`) is spent; no finding is accepted by the cap."
 		in judge_comments[0]
 	)
-	assert "| SEC-TEST-1 | medium | scripts/example.py:1 | accept_with_followup | [keep_fixing capped after 2 judge round(s); converted to advisory follow-up]" in judge_comments[0]
+	assert "| SEC-TEST-1 | medium | scripts/example.py:1 | fail | [keep_fixing capped after 2 judge round(s); converted to fail" in judge_comments[0]
+	assert "| SEC-TEST-2 | medium | scripts/example.py:1 | fail | [not accepted: the keep_fixing cap failed this verdict]" in judge_comments[0]
+	assert any(body.startswith("## ❌ Project security pass exhausted") for body in comment_bodies)
+	assert any(
+		notification["issue"] == "192" and notification["level"] == "CRITICAL" and "security pass FAILED" in notification["message"]
+		for notification in result["telegram_notifications"]
+	)
 
 
 def test_security_pass_cap_never_waives_a_high_finding() -> None:
@@ -6393,6 +6388,89 @@ def test_security_pass_cap_does_not_record_advisories_before_terminal_failure() 
 	assert "without recording any new waivers or follow-ups" in judge_comments[0]
 	assert "| SEC-TEST-1 | high |" in judge_comments[0]
 	assert "| SEC-TEST-2 | medium |" in judge_comments[0]
+
+
+def test_security_pass_cap_converts_low_keep_fixing_to_advisory() -> None:
+	# Issue #6729: low severity is still eligible for the round-cap conversion.
+	low_finding = _security_pass_test_finding()
+	low_finding["severity"] = "low"
+	result = _run_poller(
+		state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
+		enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([low_finding]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing")))},
+	)
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "complete"
+	assert latest_state["security_pass_status"] == "passed"
+	waived = latest_state["security_pass_waived_findings"]
+	assert [row["finding_id"] for row in waived] == ["SEC-TEST-1"]
+	assert waived[0]["justification"].startswith(
+		"[keep_fixing capped after 2 judge round(s); converted to advisory follow-up] SEC-TEST-1: keep_fixing"
+	)
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=192 round=3 cap=2 converted=1" in combined_log
+	assert "blocking_findings_after_cap" not in combined_log
+
+
+def test_security_pass_cap_mixed_blocking_and_low_keep_fixing_waives_nothing() -> None:
+	# Issue #6729: a low finding converted at the cap must not ride through as a
+	# waiver when a high keep_fixing finding terminalizes the same round.
+	low_finding = _security_pass_second_test_finding()
+	low_finding["severity"] = "low"
+	result = _run_poller(
+		state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
+		enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding(), low_finding]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(
+			_security_pass_judge_verdict(("SEC-TEST-1", "keep_fixing"), ("SEC-TEST-2", "keep_fixing"))
+		)},
+	)
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "failed"
+	assert latest_state["security_pass_waived_findings"] == []
+	assert result.get("created_issues", []) == []
+	assert "ai:security-pass-failed" in result["tracking_labels"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "reason=blocking_findings_after_cap" in combined_log
+	# The low/medium rewrite runs before the terminal check; its result is discarded.
+	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=192 round=3 cap=2 converted=1" in combined_log
+	assert "SECURITY_PASS_WAIVED" not in combined_log
+	judge_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 3)")]
+	assert len(judge_comments) == 1
+	assert "without recording any new waivers or follow-ups" in judge_comments[0]
+	assert "| SEC-TEST-1 | high |" in judge_comments[0]
+
+
+def test_security_pass_cap_keeps_explicit_judge_accept_of_high_finding() -> None:
+	# Issue #6729: the cap guard only blocks keep_fixing conversion; the judge's
+	# explicit accept_with_followup of a high finding is still honoured.
+	result = _run_poller(
+		state=_security_pass_exhausted_state(security_pass_judge_rounds=2),
+		enable_validation="false", max_validate_cycles="3", enable_security_pass="true",
+		security_audit_payload=_security_audit_findings_payload([_security_pass_test_finding()]),
+		issue_labels={10: ["ai:merged"]}, existing_branches=["main", "orchestrator/project-192"],
+		env_overrides={"MOCK_SECURITY_PASS_JUDGE_JSON": json.dumps(
+			_security_pass_judge_verdict(("SEC-TEST-1", "accept_with_followup"))
+		)},
+	)
+	latest_state = result["latest_state"]
+	assert latest_state["status"] == "complete"
+	assert latest_state["security_pass_status"] == "passed"
+	waived = latest_state["security_pass_waived_findings"]
+	assert [row["finding_id"] for row in waived] == ["SEC-TEST-1"]
+	assert waived[0]["source"] == "judge"
+	assert waived[0]["severity"] == "high"
+	assert waived[0]["justification"].startswith("SEC-TEST-1: accept_with_followup")
+	assert "keep_fixing capped" not in waived[0]["justification"]
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	combined_log = result["stdout"] + result["stderr"]
+	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED" not in combined_log
+	assert "blocking_findings_after_cap" not in combined_log
 
 
 def test_security_pass_exhaustion_judge_keep_fixing_allowed_within_cap() -> None:
@@ -10278,19 +10356,24 @@ def test_review_blocked_fix_scope_rejects_mixed_workflow_edit_opt_out():
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
 
 
-def test_review_blocked_fix_scope_accepts_template_pr_file_by_default():
+def test_review_blocked_fix_scope_rejects_template_pr_file_by_default():
+	# Refs #6478: protected paths are rejected even when listed in the PR.
 	result = _review_blocked_fix_scope_case(
 		touch="workflow-templates/ai-review.yml", files=["workflow-templates/ai-review.yml"],
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
-	assert any("HEAD:ai/issue-10" in call for call in result.get("git_push_calls", []))
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=workflow-templates/ai-review.yml" in result["stdout"]
+	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED" not in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
 
 
 def test_review_blocked_fix_scope_rejects_template_outside_pr():
 	result = _review_blocked_fix_scope_case(
 		touch="workflow-templates/ai-review.yml", files=["sandbox_fix.txt"],
 	)
-	assert "reason=protected_not_in_pr rejected=1 paths=workflow-templates/ai-review.yml" in result["stdout"]
+	assert "reason=protected_path_forbidden rejected=1 paths=workflow-templates/ai-review.yml" in result["stdout"]
 	assert result.get("git_push_calls", []) == []
 
 
@@ -10299,7 +10382,37 @@ def test_review_blocked_fix_scope_uses_shared_protected_predicate():
 	predicate = text.split("      _rb_fix_scope_is_protected() {", 1)[1].split("      rb_fix_scope_check() {", 1)[0]
 	check = text.split("      rb_fix_scope_check() {", 1)[1].split("      # Build the judge prompt", 1)[0]
 	assert "|workflow-templates/*) return 0 ;;" in predicate
-	assert 'if [ "${ALLOW_WORKFLOW_EDITS:-true}" != "true" ] && _rb_fix_scope_is_protected "${path}"; then' in check
+	# Refs #6478: the protected-path rejection no longer depends on ALLOW_WORKFLOW_EDITS.
+	assert '              if _rb_fix_scope_is_protected "${path}"; then' in check
+	assert '"${ALLOW_WORKFLOW_EDITS:-true}" != "true" ] && _rb_fix_scope_is_protected' not in check
+	assert "RB_FIX_SCOPE_REASON=workflow_edits_disabled" in check
+	assert "RB_FIX_SCOPE_REASON=protected_path_forbidden" in check
+	# The rejection happens before the paginated PR-files listing call.
+	assert check.index("RB_FIX_SCOPE_REASON=protected_path_forbidden") < check.index("pulls/${pr}/files")
+
+
+def test_review_blocked_fix_scope_rejects_protected_pr_file_with_default_env():
+	result = _review_blocked_fix_scope_case(
+		touch=".github/workflows/ci.yml", files=[".github/workflows/ci.yml"],
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=.github/workflows/ci.yml" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert not any("pulls/901/files" in path for path in result.get("api_calls", []))
+
+
+def test_review_blocked_judge_prompt_flags_protected_path_fixes_unavailable():
+	text = POLLER_SCRIPT.read_text(encoding="utf-8")
+	block = text.split('echo "=== ORCHESTRATOR CONTEXT ==="', 1)[1].split('} > "${RB_JUDGE_PROMPT_FILE}"', 1)[0]
+	assert 'echo "Protected-path fixes: unavailable (the orchestrator rejects any fix that stages a path under .github/, scripts/, prompts/, .claude/ or workflow-templates/)"' in block
+	assert block.index("Protected-path fixes: unavailable") < block.index('if [ "${IS_FINAL}" = "true" ]; then')
+	combined = block.split("=== COMBINED DECIDE + APPLY INSTRUCTIONS ===", 1)[1]
+	assert "Do not modify files under .github/, scripts/, prompts/, .claude/ or" in combined
+	rule = "If the ORCHESTRATOR CONTEXT says `Protected-path fixes: unavailable`, do"
+	for prompt in ("prompts/mode-judge-review-blocked.txt", "prompts/_templates/mode-judge-review-blocked.txt"):
+		assert rule in (REPO_ROOT / prompt).read_text(encoding="utf-8"), prompt
+	# The standalone judge never emits the flag, so its fix path is unchanged.
+	assert "Protected-path fixes: unavailable" not in (REPO_ROOT / "scripts/review_rb_judge.sh").read_text(encoding="utf-8")
 
 
 def test_review_blocked_fix_scope_reports_all_workflow_edit_opt_out_paths():
@@ -10372,7 +10485,7 @@ def test_review_blocked_fix_scope_rejects_protected_judge_citation():
 		touch="scripts/evil.sh", files=["other.txt"],
 		remaining=[{"file": "scripts/evil.sh"}],
 	)
-	assert "reason=protected_not_in_pr" in result["stdout"]
+	assert "reason=protected_path_forbidden" in result["stdout"]
 	assert result.get("git_push_calls", []) == []
 
 
@@ -10381,7 +10494,7 @@ def test_review_blocked_fix_scope_protected_reason_wins_for_mixed_rejections():
 		touch="docs/new.md", files=["other.txt"],
 		env_overrides={"MOCK_CODEX_TOUCH_FILE": "docs/new.md\nscripts/evil.sh"},
 	)
-	assert "reason=protected_not_in_pr rejected=2 paths=docs/new.md,scripts/evil.sh" in result["stdout"]
+	assert "reason=protected_path_forbidden rejected=1 paths=scripts/evil.sh" in result["stdout"]
 	assert result.get("git_push_calls", []) == []
 
 
@@ -10390,7 +10503,7 @@ def test_review_blocked_fix_scope_rejects_uncited_unrelated_workflow():
 		touch=".github/workflows/unrelated.yml", files=["sandbox_fix.txt"],
 		env_overrides={"ALLOW_WORKFLOW_EDITS": "true"},
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_not_in_pr rejected=1 paths=.github/workflows/unrelated.yml" in result["stdout"]
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=.github/workflows/unrelated.yml" in result["stdout"]
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
@@ -10403,7 +10516,7 @@ def test_review_blocked_fix_scope_rejects_uncited_unrelated_script():
 		touch="scripts/unrelated.sh", files=["sandbox_fix.txt"],
 		env_overrides={"ALLOW_WORKFLOW_EDITS": "true"},
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_not_in_pr rejected=1 paths=scripts/unrelated.sh" in result["stdout"]
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=scripts/unrelated.sh" in result["stdout"]
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert "ai:review-blocked" in result["issues"]["10"]["labels"]
@@ -10419,7 +10532,7 @@ def test_review_blocked_fix_scope_rejects_unrelated_action_and_claude_hook():
 			"MOCK_CODEX_TOUCH_FILE": ".github/actions/x/action.yml\n.claude/hooks/x.py",
 		},
 	)
-	assert "reason=protected_not_in_pr rejected=2" in result["stdout"]
+	assert "reason=protected_path_forbidden rejected=2" in result["stdout"]
 	assert any(
 		".github/actions/x/action.yml" in line and ".claude/hooks/x.py" in line
 		for line in result["stdout"].splitlines() if "REVIEW_BLOCKED_FIX_SCOPE_REJECTED" in line
@@ -10438,25 +10551,37 @@ def test_review_blocked_fix_scope_rejects_mixed_in_scope_and_unrelated_workflow(
 			"MOCK_CODEX_TOUCH_FILE": "sandbox_fix.txt\n.github/workflows/unrelated.yml",
 		},
 	)
-	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_not_in_pr rejected=1 paths=.github/workflows/unrelated.yml" in result["stdout"]
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=.github/workflows/unrelated.yml" in result["stdout"]
 	assert result.get("git_push_calls", []) == []
 	assert result.get("review_blocked_fix_commit_calls", []) == []
 	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
 
 
-def test_review_blocked_fix_scope_accepts_protected_pr_file():
+def test_review_blocked_fix_scope_rejects_protected_pr_file():
 	result = _review_blocked_fix_scope_case(touch="scripts/foo.sh", files=["scripts/foo.sh"])
-	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
-	assert result.get("git_push_calls", [])
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=scripts/foo.sh" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
+	assert result.get("review_blocked_fix_commit_calls", []) == []
+	assert result["latest_state"]["review_blocked_retries"].get("10") == 1
+	assert any(n.get("level") == "WARNING" for n in result["telegram_notifications"])
 
 
 def test_review_blocked_fix_scope_accepts_renamed_pr_source():
 	result = _review_blocked_fix_scope_case(
-		touch="scripts/old.sh",
-		files=[{"filename": "scripts/new.sh", "previous_filename": "scripts/old.sh"}],
+		touch="docs/old.md",
+		files=[{"filename": "docs/new.md", "previous_filename": "docs/old.md"}],
 	)
 	assert "REVIEW_BLOCKED_FIX_SCOPE_ACCEPTED issue=10 pr=901" in result["stdout"]
 	assert result.get("git_push_calls", [])
+
+
+def test_review_blocked_fix_scope_rejects_renamed_protected_pr_source():
+	result = _review_blocked_fix_scope_case(
+		touch="scripts/old.sh",
+		files=[{"filename": "scripts/new.sh", "previous_filename": "scripts/old.sh"}],
+	)
+	assert "REVIEW_BLOCKED_FIX_SCOPE_REJECTED issue=10 pr=901 reason=protected_path_forbidden rejected=1 paths=scripts/old.sh" in result["stdout"]
+	assert result.get("git_push_calls", []) == []
 
 
 def test_review_blocked_fix_scope_rejects_capped_pr_listing():
@@ -16084,7 +16209,11 @@ def test_standalone_close_and_reissue_keeps_clarification_only_label():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	anchor = "This issue was re-created by standalone stall recovery."
 	assert anchor in script, "Could not locate standalone close_and_reissue guidance block"
-	window = script[script.index(anchor):script.index(anchor) + 1200]
+	# Bound the window by the reissue's own `gh issue create` line rather than
+	# a byte count: the heal-scope carry block (#6463) sits between them.
+	anchor_idx = script.index(anchor)
+	create_idx = script.index("gh issue create", anchor_idx)
+	window = script[anchor_idx:script.index("\n", create_idx)]
 	assert '--label "ai:clarification"' in window
 	assert '--label "ai:orchestrator-managed"' not in window
 
@@ -17116,6 +17245,119 @@ def test_untrusted_security_pass_reset_cannot_clear_findings():
 		tracking_comments=[{"body": "/re-security-pass", "user": {"login": "outsider"}, "author_association": "NONE"}])
 	assert result["latest_state"]["status"] == "failed"
 	assert result["latest_state"]["security_pass_reported_findings"] == state["security_pass_reported_findings"]
+
+
+# Issue #6506 (security finding unauthorized-project-reset-comments): reset
+# comments must come from the pipeline login or a human OWNER / MEMBER /
+# COLLABORATOR. Missing provenance, bot identities and non-member associations
+# are rejected; forged boundary markers and later outsider commands cannot
+# suppress or escalate an authorized reset.
+# CI runs this module through main(), which calls every test as func(), so
+# these cases loop inside argument-free tests instead of using
+# pytest.mark.parametrize (see test_custom_runner_tests_need_no_pytest_arguments).
+_UNAUTHORIZED_JUDGE_RESUME_COMMENTS = (
+	("missing_author_association", {"body": "/judge_resume --force", "user": {"login": "drive-by"}}),
+	(
+		"bot_with_member_association",
+		{"body": "/judge_resume --force", "user": {"login": "renovate[bot]", "type": "Bot"}, "author_association": "MEMBER"},
+	),
+	(
+		"contributor_association",
+		{"body": "/judge_resume --force", "user": {"login": "past-contributor", "type": "User"}, "author_association": "CONTRIBUTOR"},
+	),
+)
+
+_UNAUTHORIZED_REVALIDATE_COMMENTS = (
+	("missing_author_association", {"body": "/revalidate", "user": {"login": "drive-by"}}),
+	(
+		"contributor_association",
+		{"body": "/revalidate", "user": {"login": "past-contributor", "type": "User"}, "author_association": "CONTRIBUTOR"},
+	),
+)
+
+
+def test_judge_resume_from_unauthorized_author_is_ignored():
+	for case_id, untrusted_comment in _UNAUTHORIZED_JUDGE_RESUME_COMMENTS:
+		state = _base_state(status="failed")
+		state.update(judge_stall_cycles=8, recovery_count=4)
+		result = _run_poller(
+			state=state, enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:implementing"]},
+			tracking_comments=[untrusted_comment],
+		)
+		assert result["latest_state"]["status"] == "failed", case_id
+		assert result["latest_state"]["judge_stall_cycles"] == 8, case_id
+		assert result["latest_state"]["recovery_count"] == 4, case_id
+
+
+def test_revalidate_from_unauthorized_author_is_ignored():
+	for case_id, untrusted_comment in _UNAUTHORIZED_REVALIDATE_COMMENTS:
+		state = _base_state(status="failed")
+		result = _run_poller(
+			state=state, enable_validation="true", max_validate_cycles="3",
+			tracking_labels=["ai:validation-failed"],
+			tracking_comments=[untrusted_comment],
+		)
+		assert result["latest_state"]["status"] == "failed", case_id
+		assert result["validation_dispatches"] == [], case_id
+
+
+def test_revalidate_from_collaborator_is_accepted():
+	state = _base_state(status="failed")
+	state["validation_cycle"] = 3
+	state["validation_recovery_count"] = 2
+	state["validation_failure_reason"] = "Exceeded MAX_VALIDATE_CYCLES"
+	result = _run_poller(
+		state=state, enable_validation="true", max_validate_cycles="3",
+		tracking_labels=["ai:validation-failed"],
+		tracking_comments=[
+			{"body": "/revalidate", "user": {"login": "helper", "type": "User"}, "author_association": "COLLABORATOR"},
+		],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "validating"
+	assert ls["validation_cycle"] == 1
+	assert ls["validation_recovery_count"] == 0
+	assert "ai:validation-failed" not in result["tracking_labels"]
+	assert len(result["validation_dispatches"]) == 1
+
+
+def test_forged_re_security_pass_dedup_marker_does_not_suppress_trusted_command():
+	state = _security_pass_failed_state_for_auto_reset("a" * 40)
+	result = _run_failed_project_tick(
+		state,
+		{"SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE": "false"},
+		tracking_comments=[
+			"/re-security-pass retry after manual remediation",
+			{"body": "<!-- re-security-pass-dedup:1 -->", "user": {"login": "outsider"}, "author_association": "NONE"},
+		],
+	)
+	ls = result["latest_state"]
+	assert ls["security_pass_cycle"] == 0
+	assert ls["security_pass_reported_findings"] != state["security_pass_reported_findings"]
+	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	assert any(
+		"re-security-pass-dedup:" in comment.get("body", "")
+		and (comment.get("user") or {}).get("login") != "outsider"
+		for comment in result["issues"]["192"]["comments"]
+	), "expected a pipeline-authored re-security-pass-dedup marker"
+
+
+def test_untrusted_judge_resume_after_trusted_one_does_not_mask_it():
+	state = _base_state(status="failed")
+	state.update(judge_stall_cycles=8, recovery_count=2)
+	result = _run_poller(
+		state=state, enable_validation="false", max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		tracking_comments=[
+			"/judge_resume --reset-recovery",
+			{"body": "/judge_resume --force", "user": {"login": "outsider"}, "author_association": "NONE"},
+		],
+	)
+	ls = result["latest_state"]
+	assert ls["status"] == "in_progress"
+	assert ls["recovery_count"] == 0
+	assert ls["judge_stall_cycles"] == 8
 
 
 def test_judge_resume_not_blocked_by_prose_marker_comment_after_command():
@@ -23343,6 +23585,8 @@ def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
 	PR whose body carries a close keyword, keep skipping non-open PRs,
 	and treat an API failure as unknown state — all with exactly one
 	``pulls/<n>`` request per candidate."""
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	helper = _extract_bash_function(script, "_linked_pr_is_issue_implementation()\n{")
 	closer = _extract_bash_function(script, "close_linked_pr() {")

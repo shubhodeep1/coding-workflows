@@ -88,7 +88,7 @@ verify_resolver_index_complete_or_fail() {
 # Deterministic-resolution short-circuit: review_conflict_prepare.sh
 # commits the [ai-merge-resolve] merge itself when every unmerged path
 # was deterministically resolvable (currently: the
-# .ai/.workspace_source_manifest.txt union-merge) and signals that by
+# .ai/.workspace_source_manifest.txt union-merge or modify/delete resolution) and signals that by
 # writing CONFLICT_RESOLVED=true to $GITHUB_ENV.  The workflow step
 # gating (MERGE_CONFLICT == 'true') is deliberately unchanged, so this
 # second half still runs — exit before any model invocation.  Running
@@ -561,6 +561,18 @@ _resolver_fail_closed()
 {
   echo "AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=$1 action=fail_closed" >&2
   echo "::error::Conflict resolver isolation unavailable (reason=$1); refusing host fallback." >&2
+  # Name the failure for the review-autofix-failure:v1 marker ("Assemble
+  # failure evidence" reads AUTOFIX_FAILURE_REASON). The gate's identical-
+  # failure cap stops a head on the first marker whose reason
+  # workflow_failure_heal.py lists in NON_RETRYABLE_FAILURE_REASONS
+  # (PR #6438: ~28 identical sandbox_path_unsupported runs on one head).
+  # Integration-sync PRs keep the generic reason: their failures must keep
+  # counting toward the resolver retry-state escape threshold, whose
+  # escalation drives the orchestrator's automatic branch rebuild.
+  if [ -n "${GITHUB_ENV:-}" ] && [ "${IS_INTEGRATION_SYNC:-false}" != "true" ] &&
+     [[ "$1" =~ ^[a-z][a-z0-9_]{0,60}$ ]]; then
+    echo "AUTOFIX_FAILURE_REASON=conflict_resolver_$1" >> "${GITHUB_ENV}" || true
+  fi
   if type _persist_resolver_retry_state_from_current_failure >/dev/null 2>&1; then
     RESOLVER_ISOLATION_FAILURE_REASON="$1" _persist_resolver_retry_state_from_current_failure || true
   fi
@@ -568,6 +580,30 @@ _resolver_fail_closed()
   if [ -n "${tmp_output:-}" ]; then rm -f -- "${tmp_output}"; fi
   if [ -n "${_stall_status_file:-}" ]; then rm -f -- "${_stall_status_file}"; fi
   exit 1
+}
+
+# Fail closed on a rejected conflict path set (check-paths exit 1).
+# $1 is the report check-paths wrote: `host_only<TAB><path>` per path the
+# sandbox policy keeps on the host (generated files under .ai/, host-executed
+# hooks such as .claude/hooks/pr_merge_status_guard.py, unsupported file
+# types), `unsafe` for symlinks and odd names. When every rejection is
+# host_only the merge needs a human, so name the paths once in one ::error::
+# line (the failure comment's "First error") and stop with
+# sandbox_path_host_only; the model never sees any of the conflict set,
+# because a merge commit needs every path resolved. Anything else keeps the
+# nameless sandbox_path_unsupported.
+_resolver_fail_closed_for_conflict_paths()
+{
+  local conflict_path_report="$1" conflict_host_only_paths=""
+  if [ -s "${conflict_path_report}" ] && [ ! -L "${conflict_path_report}" ] &&
+     ! grep -qv $'^host_only\t[A-Za-z0-9_.][A-Za-z0-9._/-]*$' "${conflict_path_report}"; then
+    conflict_host_only_paths="$(awk -F'\t' 'NR <= 20 { printf "%s%s", (NR > 1 ? ", " : ""), $2 } NR == 21 { printf ", ..." }' "${conflict_path_report}")" || conflict_host_only_paths=""
+  fi
+  if [ -n "${conflict_host_only_paths}" ]; then
+    echo "::error::Conflict resolver: host-only conflicted path(s) need a manual merge: ${conflict_host_only_paths}" >&2
+    _resolver_fail_closed sandbox_path_host_only
+  fi
+  _resolver_fail_closed sandbox_path_unsupported
 }
 
 # Each invocation prepares its own snapshot: a failed Claude run may have
@@ -2079,6 +2115,108 @@ _persist_resolver_retry_state_from_current_failure()
   fi
 }
 
+# Paired live/template copies (issue #6595). This repository runs a live
+# `.claude/` copy of some files it ships under `workflow-templates/.claude/`,
+# and the parity test requires both to change together. The live merged-PR
+# safety hook stays excluded from the sandbox, so a PR conflicting on both
+# copies used to fail closed with sandbox_path_unsupported on every run.
+# When both copies conflict with identical index stages, the model resolves
+# only the template and the runner copies it byte-for-byte to the live path
+# (_resolver_mirror_paired_live_copies), then proves index parity before the
+# commit (_resolver_verify_paired_live_index). Any other shape keeps the live
+# path in RESOLVER_MODEL_PATHS_FILE, where check-paths still refuses it.
+RESOLVER_PAIRED_LIVE_FILE="${RUNTIME_DIR}/resolver_paired_live_copies.txt"
+RESOLVER_MODEL_PATHS_FILE="${RUNTIME_DIR}/resolver_model_paths.txt"
+RESOLVER_UNMERGED_INDEX_FILE="${RUNTIME_DIR}/resolver_unmerged_index.z"
+RESOLVER_TARGETED_PATHS_FILE="${RUNTIME_DIR}/resolver_targeted_paths.txt"
+RESOLVER_CHECK_PATHS_STDERR_FILE="${RUNTIME_DIR}/resolver_check_paths_stderr.txt"
+resolver_pairing_workspace_py="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_workspace.py"
+: > "${RESOLVER_PAIRED_LIVE_FILE}"
+if [ ! -f "${resolver_pairing_workspace_py}" ]; then
+  _resolver_fail_closed sandbox_support_missing
+fi
+if ! git ls-files -u -z > "${RESOLVER_UNMERGED_INDEX_FILE}" \
+   || ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_pairing_workspace_py}" paired-live-copies "$(pwd)" \
+        "${CONFLICTED_PATHS_FILE}" "${RESOLVER_UNMERGED_INDEX_FILE}" "${RESOLVER_PAIRED_LIVE_FILE}" "${RESOLVER_MODEL_PATHS_FILE}"; then
+  echo '::error::Conflict resolver paired live copy check failed; refusing to start the model.' >&2
+  _resolver_fail_closed sandbox_path_unsupported
+fi
+: > "${RESOLVER_TARGETED_PATHS_FILE}"
+if [ -s "${RESOLVER_PAIRED_LIVE_FILE}" ]; then
+  # Both paths are fixed constants validated by the Python helper.
+  while IFS=$'\t' read -r _paired_live _paired_template; do
+    [ -n "${_paired_live}" ] || continue
+    echo "REVIEW_RESOLVER_PAIRED_LIVE live=${_paired_live} template=${_paired_template} outcome=paired"
+  done < "${RESOLVER_PAIRED_LIVE_FILE}"
+  if [ -f "${RESOLVER_ALLOWLIST_FILE}" ]; then
+    awk -F'\t' 'NR == FNR { skip[$1] = 1; next } !($0 in skip)' \
+      "${RESOLVER_PAIRED_LIVE_FILE}" "${RESOLVER_ALLOWLIST_FILE}" > "${RESOLVER_TARGETED_PATHS_FILE}"
+  fi
+elif [ -f "${RESOLVER_ALLOWLIST_FILE}" ]; then
+  cp -- "${RESOLVER_ALLOWLIST_FILE}" "${RESOLVER_TARGETED_PATHS_FILE}"
+fi
+
+# Copy each resolved template over its live copy after a model attempt.
+# A template that still has conflict markers is left for the residual-marker
+# scan (the live copy keeps its markers too), so the normal retry path runs.
+# A refused copy (symlink, non-regular file, unknown pair) never retries or commits.
+_resolver_mirror_paired_live_copies()
+{
+  [ -s "${RESOLVER_PAIRED_LIVE_FILE:-}" ] || return 0
+  local _mirror_live _mirror_template _mirror_template_markers=0
+  while IFS=$'\t' read -r _mirror_live _mirror_template; do
+    [ -n "${_mirror_template}" ] || continue
+    if [ -f "${_mirror_template}" ] && [ ! -L "${_mirror_template}" ] \
+       && grep -qE '^(<<<<<<< |>>>>>>> )' -- "${_mirror_template}" 2>/dev/null; then
+      _mirror_template_markers=1
+    fi
+  done < "${RESOLVER_PAIRED_LIVE_FILE}"
+  if [ "${_mirror_template_markers}" -eq 1 ]; then
+    echo "REVIEW_RESOLVER_PAIRED_LIVE outcome=skipped reason=template_markers"
+    return 0
+  fi
+  if ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_pairing_workspace_py}" mirror-live-copies "$(pwd)" "${RESOLVER_PAIRED_LIVE_FILE}"; then
+    echo '::error::Conflict resolver could not sync a paired live copy from its template; refusing to retry or commit.' >&2
+    _resolver_fail_closed sandbox_transfer_failed
+  fi
+  echo "REVIEW_RESOLVER_PAIRED_LIVE outcome=mirrored"
+}
+
+# Each paired live copy must be staged byte-identical (same mode and blob)
+# to its template before the [ai-merge-resolve] commit.
+_resolver_verify_paired_live_index()
+{
+  [ -s "${RESOLVER_PAIRED_LIVE_FILE:-}" ] || return 0
+  local _parity_live _parity_template _parity_live_entry _parity_template_entry
+  while IFS=$'\t' read -r _parity_live _parity_template; do
+    [ -n "${_parity_live}" ] || continue
+    _parity_live_entry="$(git ls-files -s -- "${_parity_live}" 2>/dev/null)" || _parity_live_entry=""
+    _parity_template_entry="$(git ls-files -s -- "${_parity_template}" 2>/dev/null)" || _parity_template_entry=""
+    _parity_live_entry="${_parity_live_entry%%$'\t'*}"
+    _parity_template_entry="${_parity_template_entry%%$'\t'*}"
+    if [[ ! "${_parity_live_entry}" =~ ^[0-7]{6}\ [0-9a-f]{40,64}\ 0$ ]] \
+       || [ "${_parity_live_entry}" != "${_parity_template_entry}" ]; then
+      echo "::error::Paired live copy is not byte-identical to its template in the index; refusing to create [ai-merge-resolve] commit."
+      echo "CONFLICT_RESOLVED=false" >> "$GITHUB_ENV"
+      return 1
+    fi
+  done < "${RESOLVER_PAIRED_LIVE_FILE}"
+  return 0
+}
+
+# Re-emit only a strictly shaped check-paths rejection line; anything else
+# from the helper's stderr stays out of the log.
+_resolver_report_rejected_path()
+{
+  local _rejected_line=""
+  [ -f "${RESOLVER_CHECK_PATHS_STDERR_FILE}" ] && [ ! -L "${RESOLVER_CHECK_PATHS_STDERR_FILE}" ] || return 0
+  _rejected_line="$(grep -m1 '^REVIEW_RESOLVER_PATH_REJECTED ' -- "${RESOLVER_CHECK_PATHS_STDERR_FILE}" 2>/dev/null || true)"
+  if [ "${#_rejected_line}" -le 240 ] \
+     && [[ "${_rejected_line}" =~ ^REVIEW_RESOLVER_PATH_REJECTED\ reason=[a-z_]{1,32}\ path=(redacted|[A-Za-z0-9._/-]{1,128})$ ]]; then
+    echo "${_rejected_line}" >&2
+  fi
+}
+
 # Pre-load the conflicted files into the resolver prompt so the model
 # sees the actual conflict-marker bytes without spending a tool call to
 # read them. RESOLVER_ALLOWLIST_FILE is the canonical in-scope list (one
@@ -2094,16 +2232,16 @@ TARGETED_FILES_CONTEXT_FILE="${RUNTIME_DIR}/targeted_files_context.txt"
 CONFLICT_RESOLVER_SEMBLE_CONTEXT_FILE="${RUNTIME_DIR}/conflict_resolver_semble_context.txt"
 TARGETED_FILE_CONTEXT_SCRIPT="${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_context.py"
 : > "${TARGETED_FILES_CONTEXT_FILE}"
-if [ -s "${RESOLVER_ALLOWLIST_FILE:-}" ] && [ -f "${TARGETED_FILE_CONTEXT_SCRIPT}" ]; then
+if [ -s "${RESOLVER_TARGETED_PATHS_FILE:-}" ] && [ -f "${TARGETED_FILE_CONTEXT_SCRIPT}" ]; then
   targeted_file_context_args=(
     python3 "${TARGETED_FILE_CONTEXT_SCRIPT}"
-    --paths-file "${RESOLVER_ALLOWLIST_FILE}"
+    --paths-file "${RESOLVER_TARGETED_PATHS_FILE}"
     --repo-root "${GITHUB_WORKSPACE:-$(pwd)}"
     --max-bytes "${TARGETED_FILE_CONTEXT_MAX_BYTES:-102400}"
     --header-text "These are the conflicted files you must resolve. Their current contents (with Git conflict markers) are inlined below so you can edit immediately without re-reading them. Files marked \"would overflow total budget\" must be read with the read tool — never assume their content is in this block."
     --output "${TARGETED_FILES_CONTEXT_FILE}"
   )
-  if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -s "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-}" ]; then
+  if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -s "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-}" ] && [ "$(printf '%s' "${TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
     targeted_file_context_args+=(
       --semble-bin "${SEMBLE_BIN:-}"
       --semble-index "${SEMBLE_INDEX_PATH:-}"
@@ -2125,7 +2263,22 @@ if [ -s "${TARGETED_FILES_CONTEXT_FILE}" ]; then
   printf '\n' >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
   cat "${TARGETED_FILES_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
 fi
-if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] \
+if [ -s "${RESOLVER_PAIRED_LIVE_FILE}" ]; then
+  {
+    printf '\n=== PAIRED LIVE COPIES ===\n'
+    while IFS=$'\t' read -r _paired_live _paired_template; do
+      [ -n "${_paired_live}" ] || continue
+      printf -- '- `%s` is synced byte-identically by the runner from `%s`; resolve only the template. The live copy is not in your workspace; do not try to edit it.\n' "${_paired_live}" "${_paired_template}"
+    done < "${RESOLVER_PAIRED_LIVE_FILE}"
+  } >> "${CONFLICT_RESOLVER_PROMPT_FILE}"
+fi
+conflict_semble_should_query=false
+if declare -F semble_should_query >/dev/null 2>&1; then
+  semble_should_query && conflict_semble_should_query=true
+elif [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ]; then
+  conflict_semble_should_query=true
+fi
+if [ "${conflict_semble_should_query}" = "true" ] \
    && [ -s "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE:-}" ] \
    && declare -F semble_query_block >/dev/null 2>&1; then
   semble_query_block \
@@ -2242,8 +2395,11 @@ resolver_workspace_py="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_workspac
 if [ ! -f "${resolver_sandbox_sh}" ] || [ ! -f "${resolver_workspace_py}" ]; then
   _resolver_fail_closed sandbox_support_missing
 fi
-if ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}" >/dev/null 2>&1; then
-  _resolver_fail_closed sandbox_path_unsupported
+resolver_conflict_path_report="${RUNTIME_DIR}/resolver_conflict_path_report.txt"
+rm -f -- "${resolver_conflict_path_report}"
+if ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${RESOLVER_MODEL_PATHS_FILE}" "${resolver_conflict_path_report}" >/dev/null 2>"${RESOLVER_CHECK_PATHS_STDERR_FILE}"; then
+  _resolver_report_rejected_path
+  _resolver_fail_closed_for_conflict_paths "${resolver_conflict_path_report}"
 fi
 
 _resolver_sandbox_opencode_attempt()
@@ -2463,10 +2619,12 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
     resolver_sandbox_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_sandbox.sh"
     resolver_workspace_py="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_workspace.py"
     if [ "${AI_ENGINE_RESOLVED_CONFLICT_RESOLVER:-codex}" = "claude" ]; then
+      rm -f -- "${RUNTIME_DIR}/resolver_conflict_path_report.txt"
       if [ ! -f "${resolver_sandbox_sh}" ] || [ ! -f "${resolver_workspace_py}" ]; then
         _resolver_fail_closed sandbox_prepare_failed
-      elif ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${CONFLICTED_PATHS_FILE}"; then
-        _resolver_fail_closed sandbox_path_unsupported
+      elif ! PYTHONDONTWRITEBYTECODE=1 python3 "${resolver_workspace_py}" check-paths "$(pwd)" "${RESOLVER_MODEL_PATHS_FILE}" "${RUNTIME_DIR}/resolver_conflict_path_report.txt" 2>"${RESOLVER_CHECK_PATHS_STDERR_FILE}"; then
+        _resolver_report_rejected_path
+        _resolver_fail_closed_for_conflict_paths "${RUNTIME_DIR}/resolver_conflict_path_report.txt"
       fi
       rm -f -- "${RUNTIME_DIR}/review_sandbox_transfer_failed"
       resolver_claude_rc=0
@@ -2709,6 +2867,7 @@ while [ "${attempt}" -le "${INTEGRATION_SYNC_RESOLVER_MAX_ATTEMPTS}" ]; do
   # from the post-merge state — retry is strictly better than
   # abort here.  Cheap (single grep per in-scope file), runs
   # before the Python-heavy fingerprint verifier.
+  _resolver_mirror_paired_live_copies
   _scan_residual_markers
   _marker_count="$(wc -l < "${RESOLVER_MARKER_VIOLATIONS_FILE}" 2>/dev/null | tr -d '[:space:]')"
 
@@ -3115,8 +3274,8 @@ if [ -n "$(git status --porcelain)" ]; then
         _rs_script_excludes+=(":!scripts/${_ign_entry}")
       done < scripts/.gitignore
     fi
-    git add -u -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
-    git ls-files --others --exclude-standard -z -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+    git add -u -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts' ':!.ai/.workspace_source_manifest.txt'
+    git ls-files --others --exclude-standard -z -- ':!node_modules' "${_rs_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' ':!.ai/.workspace_source_manifest.txt' | xargs -0 -r git add --
   fi
   echo "Staged files before commit:"
   STAGED_FILES="$(git diff --cached --name-only || true)"
@@ -3142,6 +3301,9 @@ if [ -n "$(git status --porcelain)" ]; then
     STAGED_FILES="$(git diff --cached --name-only || true)"
     echo "Staged files after protected-path reset:"
     printf '%s\n' "${STAGED_FILES}" | sed '/^$/d; s/^/ - /' || true
+  fi
+  if ! _resolver_verify_paired_live_index; then
+    exit 1
   fi
   if ! verify_resolver_index_complete_or_fail; then
     exit 1

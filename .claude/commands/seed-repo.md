@@ -46,7 +46,7 @@ Config:
 
 Remaining checklist (user):
 1. Merge the seed PR (and the registration PR).
-2. Add secrets in <owner/repo>: GH_PAT (repo scope), OPENROUTER_API_KEY, [TG_BOT_SECRET].
+2. Secrets (GH_PAT, CHECK_TRIAGE_ISSUES_TOKEN, OPENROUTER_API_KEY, TG_BOT_SECRET) are copied into <owner/repo> by the library's `Propagate consumer secrets` workflow when the registration PR merges; add them by hand only if that run fails or the repo was seeded with `no-register`.
 3. Grant the library's release GH_PAT repo scope on <owner/repo> (for @stable dispatch).
 4. [Enable "Allow auto-merge" if keeping ENABLE_AUTO_MERGE=true.]
 ```

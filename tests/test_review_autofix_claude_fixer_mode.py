@@ -675,7 +675,7 @@ def test_consolidator_isolation_failures_skip_without_host_writer(tmp_path):
 def _resolver_claude_sections() -> str:
 	text = (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
 	functions = ""
-	for name in ("_resolver_disable_opencode_snapshot", "_resolver_fail_closed", "_resolver_sandbox_attempt", "_resolver_sandbox_opencode_attempt"):
+	for name in ("_resolver_disable_opencode_snapshot", "_resolver_fail_closed", "_resolver_fail_closed_for_conflict_paths", "_resolver_sandbox_attempt", "_resolver_sandbox_opencode_attempt", "_resolver_report_rejected_path"):
 		match = re.search(rf"^{name}\(\)\n\{{\n.*?^\}}\n", text, re.M | re.S)
 		assert match, name
 		functions += match.group(0) + "\n"
@@ -704,6 +704,7 @@ def _run_resolver_claude_section(tmp: Path, *, mode: str, engine: str = "claude"
 		'attempt=1\ntmp_output="${RUNTIME_DIR}/output.txt"\n_stall_status_file="${RUNTIME_DIR}/status.txt"\n'
 		'_effective_prompt_file="${RUNTIME_DIR}/prompt.txt"\n_current_reasoning_effort=high\n'
 		'CONFLICTED_PATHS_FILE="${RUNTIME_DIR}/paths.txt"\nCONFLICT_RESOLVER_PER_ATTEMPT_TIMEOUT_SECS=5\n'
+		'RESOLVER_MODEL_PATHS_FILE="${CONFLICTED_PATHS_FILE}"\nRESOLVER_CHECK_PATHS_STDERR_FILE="${RUNTIME_DIR}/check_paths_stderr.txt"\n'
 		'CODEX_STALL_GUARD_HELPER=/not/staged\nCODEX_HEARTBEAT_HELPER=/not/staged\n'
 		'RESOLVER_OPENCODE_CONFIG="${RUNTIME_DIR}/resolver_sandbox_opencode.json"\n'
 		'resolver_opencode_cmd=(bash -c \'echo host >> "$RUNTIME_DIR/host"\')\n_codex_exit=0\n'
@@ -723,7 +724,7 @@ def test_resolver_claude_isolation_failures_never_call_host(tmp_path):
 	for index, (mode, path, helpers, config_fail, reason) in enumerate((
 		("prepare_failed", "scripts/a.py", True, False, "sandbox_prepare_failed"),
 		("prepare_partial_cleanup_failed", "scripts/a.py", True, False, "sandbox_prepare_failed"),
-		("success", ".github/ai/WORKFLOW.md", True, False, "sandbox_path_unsupported"),
+		("success", ".github/ai/WORKFLOW.md", True, False, "sandbox_path_host_only"),
 		("success", "scripts/a.py", False, False, "sandbox_prepare_failed"),
 		("outdated", "scripts/a.py", True, False, "sandbox_helper_outdated"),
 		("cleanup_failed", "scripts/a.py", True, False, "sandbox_cleanup_failed"),
@@ -738,8 +739,9 @@ def test_resolver_claude_isolation_failures_never_call_host(tmp_path):
 		assert proc.returncode == 1, (reason, proc.stderr)
 		assert f"reason={reason} action=fail_closed" in proc.stderr
 		assert not (work / "host").exists()
-		if reason == "sandbox_path_unsupported":
+		if reason == "sandbox_path_host_only":
 			assert calls == []
+			assert "need a manual merge: .github/ai/WORKFLOW.md" in proc.stderr
 		if reason == "opencode_config_failed":
 			assert calls[-1] == "cleanup"
 		if reason == "sandbox_output_unavailable":

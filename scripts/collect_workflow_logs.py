@@ -1381,11 +1381,20 @@ def _full_logs_to_text(full_logs: list[dict[str, str]]) -> str:
     return "\n".join(parts)
 
 
-def _structured_cost_telemetry_line_key(line: str) -> str | None:
+def _foreign_mcp_telemetry_line(line: str, run_key: str | None) -> bool:
+    if not run_key or not re.search(r"(?:^|\s)(?:SEMBLE|SERENA)_(?:QUERY|FALLBACK|BOOTSTRAP|PROBE)(?:\s|$)", line):
+        return False
+    run_match = re.search(r"(?:^|\s)run=([^\s]+)", line)
+    return run_match is not None and run_match.group(1) != run_key
+
+
+def _structured_cost_telemetry_line_key(line: str, run_key: str | None = None) -> str | None:
     if not isinstance(line, str):
         return None
     line_text = line.rstrip()
     if not line_text:
+        return None
+    if _foreign_mcp_telemetry_line(line_text, run_key):
         return None
     if (
         validated_mcp_telemetry_event(line_text) is not None
@@ -1429,7 +1438,7 @@ def _step_name_has_descendant_match(step_name: str, candidate_step_names: set[st
     return False
 
 
-def _dedupe_structured_cost_telemetry_full_logs(full_logs: list[dict[str, str]]) -> list[dict[str, str]]:
+def _dedupe_structured_cost_telemetry_full_logs(full_logs: list[dict[str, str]], run_key: str | None = None) -> list[dict[str, str]]:
     if not isinstance(full_logs, list):
         return []
 
@@ -1445,7 +1454,7 @@ def _dedupe_structured_cost_telemetry_full_logs(full_logs: list[dict[str, str]])
         if not content:
             continue
         for line in content.splitlines(keepends=True):
-            line_key = _structured_cost_telemetry_line_key(line)
+            line_key = _structured_cost_telemetry_line_key(line, run_key)
             if line_key is None:
                 continue
             structured_line_step_names.setdefault(line_key, set()).add(step_name)
@@ -1460,7 +1469,9 @@ def _dedupe_structured_cost_telemetry_full_logs(full_logs: list[dict[str, str]])
 
         filtered_lines: list[str] = []
         for line in content.splitlines(keepends=True):
-            line_key = _structured_cost_telemetry_line_key(line)
+            if _foreign_mcp_telemetry_line(line, run_key):
+                continue
+            line_key = _structured_cost_telemetry_line_key(line, run_key)
             if line_key is not None and _step_name_has_descendant_match(
                 step_name,
                 structured_line_step_names.get(line_key, set()),
@@ -1475,8 +1486,8 @@ def _dedupe_structured_cost_telemetry_full_logs(full_logs: list[dict[str, str]])
     return deduped_full_logs
 
 
-def _cost_telemetry_text_from_full_logs(full_logs: list[dict[str, str]]) -> str:
-    return _full_logs_to_text(_dedupe_structured_cost_telemetry_full_logs(full_logs))
+def _cost_telemetry_text_from_full_logs(full_logs: list[dict[str, str]], run_key: str | None = None) -> str:
+    return _full_logs_to_text(_dedupe_structured_cost_telemetry_full_logs(full_logs, run_key))
 
 
 def _run_wall_clock_ms(run: dict[str, Any]) -> int | None:
@@ -1487,10 +1498,19 @@ def _run_wall_clock_ms(run: dict[str, Any]) -> int | None:
 
 
 def _apply_cost_telemetry_from_full_logs(run: dict[str, Any], full_logs: list[dict[str, str]]) -> None:
+    run_id = run.get("run_id")
+    run_attempt = run.get("run_attempt")
+    run_key = f"{run_id}-{run_attempt}" if type(run_id) is int and run_id > 0 and type(run_attempt) is int and run_attempt > 0 else None
     telemetry = build_run_cost_telemetry(
-        _cost_telemetry_text_from_full_logs(full_logs),
+        _cost_telemetry_text_from_full_logs(full_logs, run_key),
         fallback_wall_clock_ms=_run_wall_clock_ms(run),
+        run_key=run_key,
     )
+    if run_key:
+        telemetry["semble_echo_lines_dropped"] += sum(
+            _foreign_mcp_telemetry_line(line, run_key)
+            for step in full_logs for line in str(step.get("content") or "").splitlines()
+        )
     run["cost_telemetry"] = telemetry
 
 
