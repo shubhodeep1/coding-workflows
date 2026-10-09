@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate_poll.yml:410 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, qwen_qwen3_7-plus]\n  PROBLEM: The support-script staging loop omits `claude_anthropic_relay.py`, so poller judges configured for Claude can mark the Claude engine unavailable and silently fall back to Codex.\n  WHY: Both reviewers identify the same runtime failure; severity differs (BLOCKER vs MAJOR), so the higher severity is used.\n- CI check-run orchestrate-poll (3): https://github.com/shubhodeep1/coding-workflows/actions/runs/37920705068/job/113787661411 | severity=critical | confidence=[4]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The orchestrate-poll matrix job failed, but the visible log reports 33 passing tests and does not show which other shard failed or why.\n  WHY: The reported CI failure blocks merge, and its cause cannot be determined from the truncated log.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Stage claude_anthropic_relay.py in all workflow orchestrator callers to ensure consistent Claude engine usage, not just in orchestrate.yml.\n  expected_change_site: .github/workflows/orchestrate_poll.yml support-script staging list\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR only applies the fix to orchestrate.yml but fails to update orchestrate_poll.yml, which also uses Claude engine for judges.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/orchestrate_poll.yml\n  Line reference: Support-script staging loop (similar to orchestrate.yml lines 377-383)\n  Problem: Missing claude_anthropic_relay.py in the required support-script staging list.\n  Why it fails at runtime: Poller judges resolving to Claude engine will fail staging and silently fall back to Codex, defeating the Claude engine configuration.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP\n  Requirement: Stage claude_anthropic_relay.py in all workflow orchestrator callers to ensure consistent Claude engine usage, not just in orchestrate.yml.\n  Expected change site: .github/workflows/orchestrate_poll.yml support-script staging list.\n  Evidence of absence: The PR only applies the fix to orchestrate.yml but fails to update orchestrate_poll.yml, which also uses Claude engine for judges.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- .github/workflows/orchestrate_poll.yml\n  Line or code reference: 410\n  Problem: The staging loop includes codex_isolated_exec.sh and codex_isolated_workspace.py but does not include claude_anthropic_relay.py. When a poller judge (WAVE_JUDGE, STALL_JUDGE, INTEGRATION_JUDGE, SECURITY_JUDGE, RB_JUDGE) resolves to the Claude engine, codex_isolated_exec.sh:200-206 requires claude_anthropic_relay.py beside the helper. Without it, the helper calls unavailable support_missing \"support file missing next to the helper: claude_anthropic_relay.py\", causing the Claude engine to be marked unavailable and silently falling back to Codex.\n  Why it fails at runtime: Poller judges configured to use Claude will fail staging and fall back to Codex, defeating the Claude engine configuration. The PR demonstrates the fix pattern (add one filename to the staging list) but only applies it to orchestrate.yml, leaving the identical bug in orchestrate_poll.yml. This is the same defect class as the one being fixed, affecting a different workflow.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n  Note: The linked issue #6908 and AI Issue Summary explicitly scope this PR to orchestrate.yml only, stating \"orchestrate_poll.yml and unrelated behavior are out of scope.\" This finding documents the same bug pattern in the out-of-scope workflow. The fix is trivial (add claude_anthropic_relay.py to the staging loop at line 410, identical to the orchestrate.yml change) and should be tracked as a follow-up issue.\n- CI check-run orchestrate-poll (3)\n  Line or code reference: https://github.com/shubhodeep1/coding-workflows/actions/runs/37920705068/job/113787661411\n  Problem: The orchestrate-poll matrix job failed with \"1 orchestrate-poll shard(s) failed\" but the visible test output shows \"33 passed, 0 failed, 33 total\". The failure occurred in a different shard than the one shown in the log_tail, and the specific failing test is not visible in the truncated log.\n  Why it fails at runtime: The CI failure blocks merge. The root cause could be a test failure in another shard, a timeout, or an infrastructure issue. The new test test_orchestrate_stages_the_claude_relay_beside_the_isolation_helper is in tests-hooks-and-orchestrator (which was cancelled, not failed), so it's unlikely to be the direct cause. The orchestrate-poll failure needs investigation to determine which shard failed and why.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "7c488f1fdfd2df5aedd8867757015408d038aa1de55703a1653fbb8d7e854c12",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6922,
+    "run_id": "37920705607",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37920705607",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009115707_f949a7e8b4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6922,
+    "run_id": "37920705607"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T11:57:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
