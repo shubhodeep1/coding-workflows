@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should the fix land on?\nChoices:\nA) PR #6643's head branch `ai/issue-6641` (as `Integration branch: ai/issue-6641`). Make `.claude/hooks/pr_merge_status_guard.py` identical to that branch's template, keeping the fresh `query_pull_requests` lookup for remote writes. (RECOMMENDED)\nB) The default branch `main`. The template there has no fresh-lookup change yet, so the sync would do nothing or would carry an unmerged change ahead of PR #6643.\nC) Don't open a separate fix. Close this triage issue and let PR #6643's own review/autofix (or the review-blocked judge) add the live-hook edit on `ai/issue-6641`.",
+  "fingerprint": "77f24d13e5aa0fe828acafe9d2c2a09f4e15c27789c1b4029becbcb6e240ab89",
+  "lineage": {
+    "issue_number": 6816,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37862320458",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37862320458",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009000335_bdfe380e24",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6816,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37862320458"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6816 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T00:03:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
