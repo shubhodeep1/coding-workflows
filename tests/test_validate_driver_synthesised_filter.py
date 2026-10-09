@@ -401,7 +401,7 @@ def test_driver_clears_inherited_sandbox_flag_and_routes_synth_by_name() -> None
 	run_single = _extract_shell_function(VALIDATE_DRIVER, "run_single_test")
 	route = 'if is_synthesised_test "${test_file}"; then\n\t\trun_synthesised_test_sandboxed'
 	assert route in run_single
-	assert run_single.index(route) < run_single.index('bash "${test_file}"')
+	assert run_single.index(route) < run_single.index('run_test_without_credentials "${test_file}"')
 
 
 def test_renamed_or_recased_synthesised_test_is_sandboxed_not_run_on_host() -> None:
@@ -480,7 +480,7 @@ def test_fallback_runner_skips_renamed_and_recased_synthesised_tests() -> None:
 			)
 			assert f"rc={expected}" in result.stdout, (name, result.stdout, result.stderr)
 		text = runner.read_text(encoding="utf-8")
-		assert text.index('if is_synthesised_test "${test_script}"; then') < text.index('bash "${test_script}"')
+		assert text.index('if is_synthesised_test "${test_script}"; then') < text.index('run_test_without_credentials "${test_script}"')
 
 
 def test_is_synthesised_test_copies_stay_equivalent() -> None:
@@ -517,7 +517,7 @@ def test_phase3_driver_is_bound_to_the_pre_model_snapshot() -> None:
 	assert snapshot_index < script.index("\nattempt_self_heal_and_reexec()")
 	assert 'if [ ! -f "${VALIDATE_DRIVER_SNAPSHOT_STATE_FILE}" ]; then' in script
 	compare_index = script.index('cmp -s -- "${VALIDATE_DRIVER_SNAPSHOT_FILE}" scripts/validate_driver.sh')
-	launch_index = script.index('bash validation/validate.sh > "${VALIDATION_LOG_FILE}"')
+	launch_index = script.index('bash "${VALIDATION_HARNESS_SANDBOX_SCRIPT}" run "${GENERATED_VALIDATE_SCRIPT_PATH}" > "${VALIDATION_LOG_FILE}"')
 	assert snapshot_index < compare_index < launch_index
 	assert 'if [ "${validate_driver_snapshot_state}" = "present" ]; then' in script
 

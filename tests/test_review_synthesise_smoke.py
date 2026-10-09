@@ -1343,14 +1343,17 @@ def test_validate_process_launches_harness_without_pipeline_credentials() -> Non
 		assert f"-u {name}" in " ".join(scrub)
 	assert "validation_harness_scrub_append\n" in script
 	launch_lines = [line.strip() for line in script.splitlines() if '> "${VALIDATION_LOG_FILE}" 2>&1 &' in line]
-	assert len(launch_lines) == 2
+	# One launch: the selected entry (canonical wrapper or trusted fallback
+	# runner) runs only inside the isolated harness sandbox.
+	assert len(launch_lines) == 1
 	# Finding smoke-synth-unsandboxed-driver: no launch runs an arbitrary
 	# validate.sh; the canonical wrapper is regenerated and verified first.
 	assert 'grep -q \'scripts/validate_driver.sh\' validation/validate.sh && [ ! -f scripts/validate_driver.sh ]' not in script
-	launch_index = script.index('bash validation/validate.sh > "${VALIDATION_LOG_FILE}"')
+	launch_index = script.index('bash "${VALIDATION_HARNESS_SANDBOX_SCRIPT}" run "${GENERATED_VALIDATE_SCRIPT_PATH}" > "${VALIDATION_LOG_FILE}"')
 	check_index = script.index('cmp -s -- "${validate_wrapper_canonical_file}" validation/validate.sh')
 	assert script.index("\nmaterialize_synthesised_behavioural_smoke_tests\n") < check_index < launch_index
-	assert script.index('if [ "${VALIDATION_USE_CANONICAL_WRAPPER}" = "true" ]; then') < launch_index
+	select_index = script.index('if [ "${VALIDATION_USE_CANONICAL_WRAPPER}" = "true" ]; then')
+	assert select_index < script.index('GENERATED_VALIDATE_SCRIPT_PATH="validation/validate.sh"') < launch_index
 	for line in launch_lines:
 		assert line.startswith('"${VALIDATION_HARNESS_CREDENTIAL_SCRUB[@]}" ')
 
@@ -1477,7 +1480,7 @@ def test_validate_process_fallback_runner_skips_synthesised_tests() -> None:
 		subprocess.run(["bash", "-n", str(runner)], check=True)
 		assert "unset BEHAVIOURAL_SMOKE_SANDBOXED" in text
 		skip_index = text.index('if is_synthesised_test "${test_script}"; then')
-		assert skip_index < text.index('bash "${test_script}"')
+		assert skip_index < text.index('run_test_without_credentials "${test_script}"')
 		assert "BEHAVIOURAL_SMOKE_SANDBOX test=${test_name} outcome=skipped reason=fallback_driver" in text
 		assert "# SKIP behavioural smoke sandbox unavailable" in text
 

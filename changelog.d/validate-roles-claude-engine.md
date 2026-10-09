@@ -11,6 +11,8 @@ The three roles move to `"engine": "claude"` in `.github/ai/claude_engine.json`;
 
 What this means for operators: to roll back, set `AI_ENGINE_VALIDATE=codex`, `AI_ENGINE_VALIDATE_SELF_HEAL=codex` or `AI_ENGINE_VALIDATION_REFRESH=codex`, or add the `ai:codex` label to the tracking issue. If the trusted engine helpers cannot be staged, the job log shows `AI_ENGINE_FALLBACK role=<ROLE> reason=engine_support_missing` and codex runs.
 
+The Claude pool broker (`tools/claude-pool-broker`) now also grants the pool to `check_failure_triage.yml`, `issue_pr_status.yml`, `validate.yml`, `validation-refresh.yml`, `workflow-failure-heal-intake.yml` and `workflow-log-analysis.yml`. The broker reads this list from its deployed code, so these workflows get no pool credential until the Worker is redeployed with `wrangler deploy` (CLAUDE.md §24.C).
+
 ### For contributors
 
 `ai_engine_stage_support <source_root> <dest_root>` copies the fixed list of engine support files, and refuses missing files and symlinks. Callers source `ai_engine.sh` only from that root. `discover_manifest_via_codex` takes an optional `engine_resolver`. Refs #6664. Tests: `tests/test_claude_engine_utility_roles.py`, `tests/test_ai_engine.py`, `tests/test_claude_engine.py`.
