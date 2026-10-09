@@ -1554,7 +1554,9 @@ if [ "${#test_scripts[@]}" -eq 0 ]; then
   exit 1
 fi
 
-if [ "$(basename "${test_scripts[0]}")" != "00_canary.sh" ]; then
+# A synthesised test is skipped below, so it can never serve as the canary
+# (same rule as validate_driver.sh's discover_tests).
+if [ "$(basename "${test_scripts[0]}")" != "00_canary.sh" ] || is_synthesised_test "${test_scripts[0]}"; then
   TOTAL_TESTS=$((TOTAL_TESTS + 1))
   FAILED_TESTS=$((FAILED_TESTS + 1))
   append_failure "canary_missing" "first validation test script must be validation/tests/00_canary.sh"

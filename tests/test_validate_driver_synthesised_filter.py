@@ -497,6 +497,17 @@ def test_is_synthesised_test_copies_stay_equivalent() -> None:
 	assert _normalized(driver_copy) == _normalized(runner_copy)
 
 
+def test_fallback_runner_rejects_synthesised_canary() -> None:
+	# A marker-bearing 00_canary.sh would be skipped with a TAP "ok ... # SKIP"
+	# and counted as passing, so the fallback runner must refuse it as the
+	# canary, as validate_driver.sh's discover_tests does.
+	with tempfile.TemporaryDirectory(prefix="validate_process_fallback_canary_") as td:
+		text = _fallback_runner(Path(td)).read_text(encoding="utf-8")
+	guard = 'if [ "$(basename "${test_scripts[0]}")" != "00_canary.sh" ] || is_synthesised_test "${test_scripts[0]}"; then'
+	assert guard in text
+	assert text.index(guard) < text.index('for test_script in "${test_scripts[@]}"; do')
+
+
 def test_phase3_driver_is_bound_to_the_pre_model_snapshot() -> None:
 	# Findings smoke-synth-unsandboxed-driver: the canonical wrapper execs
 	# scripts/validate_driver.sh, so that driver must equal the copy present
