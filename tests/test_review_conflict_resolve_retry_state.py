@@ -26,6 +26,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RESOLVE_SCRIPT = REPO_ROOT / "scripts" / "review_conflict_resolve.sh"
@@ -406,7 +409,7 @@ def test_retry_state_artifact_treats_missing_baseline_as_regressed(tmp_path: Pat
 
 
 def test_review_autofix_wires_escape_threshold_and_failure_comment_suppression() -> None:
-	body = REVIEW_AUTOFIX.read_text(encoding="utf-8")
+	body = expanded_review_autofix_text()
 	resolve_body = RESOLVE_SCRIPT.read_text(encoding="utf-8")
 	assert 'SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"' in resolve_body
 	assert "RESOLVER_ESCAPE_THRESHOLD_N:" in body
