@@ -425,6 +425,15 @@ class ValidationRefreshRunner:
 			str(self.source_root / "scripts" / "validate_driver.sh"),
 		]
 
+		# Same manifest shell-safety gate as validate_process.sh's
+		# run_template_validation_harness_renderer: this path renders the
+		# consumer manifest and runs the tests without going through it
+		# (finding validation-manifest-shell-injection-fallback).
+		safety_violations = manifest_shell_safety_violations(manifest_path)
+		if safety_violations:
+			diagnostics.append("manifest_shell_safety_failed: " + "; ".join(safety_violations[:3]))
+			return False, diagnostics
+
 		for stage, command in (
 			("render", render_command),
 			("lint", lint_command),
@@ -1069,6 +1078,106 @@ def _append_discovery_memory(
 			os.unlink(entry_file)
 		except OSError:
 			pass
+
+
+MANIFEST_SHELL_SAFETY_MAX_BYTES = 2 * 1024 * 1024
+MANIFEST_SHELL_SAFETY_MAX_DEPTH = 32
+# Keep in step with the gate in scripts/validate_process.sh
+# (run_template_validation_harness_renderer).
+MANIFEST_SHELL_SAFETY_EXEMPT_KEYS = frozenset(
+	{"custom_tests", "skip_tests", "env_overrides", "health_check", "services", "port"}
+)
+
+
+def _manifest_shell_safety_pointer(parts: list[Any]) -> str:
+	if not parts:
+		return "$"
+	text = "/" + "/".join(str(part).replace("~", "~0").replace("/", "~1") for part in parts)
+	text = "".join(ch if ch.isprintable() and ch not in "\"'$`\\" else "?" for ch in text)
+	return text if len(text) <= 120 else text[:117] + "..."
+
+
+def _manifest_shell_unsafe_classes(text: str) -> list[str]:
+	found = []
+	if "$" in text:
+		found.append("dollar")
+	if "`" in text:
+		found.append("backtick")
+	if '"' in text or "'" in text:
+		found.append("quote")
+	if "\\" in text:
+		found.append("backslash")
+	if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in text):
+		found.append("control")
+	return found
+
+
+def manifest_shell_safety_violations(manifest_path: Path) -> list[str]:
+	"""Return sanitized violations for shell-unsafe `.ai/validate.yml` values.
+
+	The renderer writes manifest values unescaped into validation test scripts
+	that validate_driver.sh runs with bash, so values outside the exempt keys
+	must not hold quotes, `$`, backticks, backslashes, control characters or
+	non-scalar YAML types. Messages name a sanitized pointer, never the value.
+	Fails closed when the manifest cannot be read or PyYAML is unavailable;
+	parse errors and non-mapping roots are left to the renderer.
+	"""
+	try:
+		import yaml
+	except ImportError:
+		return ["$: PyYAML unavailable; manifest shell-safety check not run"]
+	try:
+		with open(manifest_path, "rb") as handle:
+			raw = handle.read(MANIFEST_SHELL_SAFETY_MAX_BYTES + 1)
+	except OSError as exc:
+		return [f"$: manifest unreadable ({type(exc).__name__})"]
+	if len(raw) > MANIFEST_SHELL_SAFETY_MAX_BYTES:
+		return [f"$: manifest exceeds {MANIFEST_SHELL_SAFETY_MAX_BYTES} bytes"]
+	try:
+		manifest = yaml.safe_load(raw.decode("utf-8"))
+	except (UnicodeDecodeError, yaml.YAMLError):
+		return []
+	except RecursionError:
+		return ["$: manifest nesting too deep"]
+	if not isinstance(manifest, dict):
+		return []
+	stack: list[tuple[list[Any], Any]] = []
+	for key in sorted(manifest, key=str, reverse=True):
+		if key == "slots" or key not in MANIFEST_SHELL_SAFETY_EXEMPT_KEYS:
+			stack.append(([key], manifest[key]))
+	violations: list[str] = []
+	seen_containers: set[int] = set()
+	while stack:
+		parts, value = stack.pop()
+		if isinstance(value, (dict, list)):
+			# Aliases can make a container recursive or shared; check each once.
+			if id(value) in seen_containers:
+				continue
+			seen_containers.add(id(value))
+			if len(parts) > MANIFEST_SHELL_SAFETY_MAX_DEPTH:
+				violations.append(
+					f"{_manifest_shell_safety_pointer(parts)}: nesting exceeds {MANIFEST_SHELL_SAFETY_MAX_DEPTH} levels"
+				)
+				continue
+		if isinstance(value, str):
+			classes = _manifest_shell_unsafe_classes(value)
+			if classes:
+				violations.append(
+					f"{_manifest_shell_safety_pointer(parts)}: contains shell-unsafe character class {','.join(classes)}"
+				)
+		elif isinstance(value, dict):
+			for key in sorted(value, key=str, reverse=True):
+				stack.append((parts + [key], value[key]))
+		elif isinstance(value, list):
+			for index in range(len(value) - 1, -1, -1):
+				stack.append((parts + [index], value[index]))
+		elif value is None or isinstance(value, (bool, int, float)):
+			continue
+		else:
+			violations.append(
+				f"{_manifest_shell_safety_pointer(parts)}: contains unsupported value type {type(value).__name__}"
+			)
+	return violations
 
 
 def _format_command_failure(stage: str, failure: CommandFailure) -> str:

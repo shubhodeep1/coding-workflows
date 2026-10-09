@@ -1585,7 +1585,9 @@ for test_script in "${test_scripts[@]}"; do
     # Template-rendered tests reach this host runner only after
     # run_template_validation_harness_renderer's manifest shell-safety gate
     # rejected shell-unsafe .ai/validate.yml values (finding
-    # validation-manifest-shell-injection-fallback).
+    # validation-manifest-shell-injection-fallback). The validation-refresh
+    # path, which renders without validate_process.sh, applies the same check
+    # in validation_refresh_runner.py before it renders.
     set +e
     bash "${test_script}" > "${test_log}" 2>&1
     test_rc=$?
@@ -2405,6 +2407,7 @@ import yaml, jsonschema, jinja2
 import sys
 import yaml
 MAX_BYTES = 2 * 1024 * 1024
+MAX_DEPTH = 32
 EXEMPT_TOP_LEVEL_KEYS = frozenset({"custom_tests", "skip_tests", "env_overrides", "health_check", "services", "port"})
 QUOTES = (chr(34), chr(39))
 BACKSLASH = chr(92)
@@ -2443,8 +2446,17 @@ for key in sorted(manifest, key=str, reverse=True):
     if key == "slots" or key not in EXEMPT_TOP_LEVEL_KEYS:
         stack.append(([key], manifest[key]))
 violations = []
+seen_containers = set()
 while stack:
     parts, value = stack.pop()
+    if isinstance(value, (dict, list)):
+        # Aliases can make a container recursive or shared; each is checked once.
+        if id(value) in seen_containers:
+            continue
+        seen_containers.add(id(value))
+        if len(parts) > MAX_DEPTH:
+            violations.append(pointer(parts) + ": nesting exceeds " + str(MAX_DEPTH) + " levels")
+            continue
     if isinstance(value, str):
         classes = unsafe_classes(value)
         if classes:

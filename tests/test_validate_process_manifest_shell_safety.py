@@ -205,3 +205,80 @@ def test_gate_runs_before_renderer_in_function() -> None:
 	renderer_index = function_text.index('"${renderer_python}" -I "${renderer_workspace}/${renderer_script}"')
 	assert probe_index < gate_index < renderer_index
 	assert "import importlib.util" not in function_text[gate_index:renderer_index]
+
+
+def test_recursive_alias_terminates_and_is_checked(tmp_path: Path) -> None:
+	# yaml.safe_load builds a cyclic dict from a recursive alias; the gate must
+	# still terminate and check the values inside it.
+	text = yaml.safe_dump(_manifest(), sort_keys=False) + "extra: &loop\n  name: \"$(touch pwned)\"\n  self: *loop\n"
+	_assert_rejected(tmp_path, text, pointer="/extra/name", char_class="dollar", payload="touch pwned")
+
+
+def test_recursive_alias_with_safe_values_is_accepted(tmp_path: Path) -> None:
+	text = yaml.safe_dump(_manifest(), sort_keys=False) + "extra: &loop\n  name: plain\n  self: *loop\n"
+	_assert_accepted(tmp_path, text)
+
+
+def _load_refresh_runner():
+	import importlib.util
+
+	module_path = REPO_ROOT / "scripts" / "validation_refresh_runner.py"
+	spec = importlib.util.spec_from_file_location("validation_refresh_runner_shell_safety", module_path)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	sys.modules[spec.name] = module
+	spec.loader.exec_module(module)
+	return module
+
+
+def test_refresh_runner_gate_matches_validate_process_gate(tmp_path: Path) -> None:
+	runner = _load_refresh_runner()
+	manifest_path = tmp_path / "validate.yml"
+	manifest = _manifest("python-mongo-flask")
+	manifest["slots"]["project_name"] = "$(touch pwned)"
+	manifest["requirements_file"] = "requirements.txt\ntouch pwned"
+	manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+	violations = runner.manifest_shell_safety_violations(manifest_path)
+	assert "/slots/project_name: contains shell-unsafe character class dollar" in violations
+	assert "/requirements_file: contains shell-unsafe character class control" in violations
+	assert not any("touch pwned" in line for line in violations)
+
+	safe = _manifest("node-runtime")
+	safe["custom_tests"] = ["npm test && echo $HOME"]
+	safe["env_overrides"] = {"SECRET_KEY": "a$b\"c"}
+	manifest_path.write_text(yaml.safe_dump(safe, sort_keys=False), encoding="utf-8")
+	assert runner.manifest_shell_safety_violations(manifest_path) == []
+
+	manifest_path.write_text("slots: &loop\n  project_name: demo\n  self: *loop\n", encoding="utf-8")
+	assert runner.manifest_shell_safety_violations(manifest_path) == []
+
+	assert runner.manifest_shell_safety_violations(tmp_path / "missing.yml") == ["$: manifest unreadable (FileNotFoundError)"]
+
+
+def test_refresh_pipeline_refuses_unsafe_manifest_before_render(tmp_path: Path) -> None:
+	runner_module = _load_refresh_runner()
+
+	class RecordingExecutor:
+		def __init__(self) -> None:
+			self.seen: list[list[str]] = []
+
+		def run(self, command, **_kwargs):
+			self.seen.append(list(command))
+			raise AssertionError("no command may run for an unsafe manifest")
+
+	repo_dir = tmp_path / "octo__demo"
+	(repo_dir / ".ai").mkdir(parents=True)
+	manifest_path = repo_dir / ".ai" / "validate.yml"
+	manifest = _manifest()
+	manifest["slots"]["project_name"] = "$(touch pwned)"
+	manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+	executor = RecordingExecutor()
+	runner = runner_module.ValidationRefreshRunner.__new__(runner_module.ValidationRefreshRunner)
+	runner.source_root = REPO_ROOT
+	runner.executor = executor
+	green, diagnostics = runner._run_refresh_pipeline(repo_dir, manifest_path)
+	assert green is False
+	assert executor.seen == []
+	assert diagnostics == [
+		"manifest_shell_safety_failed: /slots/project_name: contains shell-unsafe character class dollar"
+	]

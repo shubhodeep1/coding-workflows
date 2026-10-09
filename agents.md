@@ -1481,6 +1481,15 @@ committing the corresponding file:
   `health_check`, `services`, `port`.
 - The log names only a sanitized JSON pointer and the character class, never
   the value. Parse errors and non-mapping roots are left to the renderer.
+  Recursive or shared YAML aliases are checked once per container, and
+  nesting deeper than 32 levels is rejected.
+- `scripts/validation_refresh_runner.py` renders consumer manifests and runs
+  `validate_driver.sh` without `validate_process.sh`, so
+  `_run_refresh_pipeline` applies the same check
+  (`manifest_shell_safety_violations`) before rendering and reports a red
+  pipeline with `manifest_shell_safety_failed: <pointer>: <class>`. It fails
+  closed when the manifest is unreadable or PyYAML is missing. Keep the two
+  copies' exempt keys and character classes identical.
   Finding `validation-manifest-shell-injection-fallback`; tests:
   `tests/test_validate_process_manifest_shell_safety.py`.
 
