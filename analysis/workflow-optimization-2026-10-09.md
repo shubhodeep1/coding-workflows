@@ -178,3 +178,44 @@ No `TODO`, `FIXME`, or `HACK` markers were found in the scoped workflows and scr
 | Code modularization | Approximately 5 existing files and 2 new helpers | Large |
 | Expression size reduction | `implement.yml` and approximately 2 extracted scripts | Medium |
 | Medium/Low fixes | Approximately 6 existing files, overlapping categories above | Medium |
+
+## API Call Consolidation & Dead-Call Analysis (2026-10-09)
+
+### Safety Tag Legend
+
+`SAFE_TO_MERGE` is authorized for direct implementation; `NEEDS_VERIFICATION` requires the stated checks first; `RISKY_SKIP` must not be auto-implemented because a protected API path needs manual review.
+
+### Consolidation Candidates (MERGE-###)
+
+- **MERGE-001 — `RISKY_SKIP`.** **Calls:** `scripts/orchestrate_poll_process.sh:24083` and `scripts/orchestrate_poll_process.sh:24084`, in the implementation-failure reissue loop. **Current → proposed:** 2 → 1 read per eligible reissue. **Endpoint:** `GET /repos/{owner}/{repo}/issues/{issue_number}`. **Evidence:** Adjacent `gh_retry _safe_gh_jq` calls fetch `.title` and `.body` from the same issue; both values are later used to create the replacement issue at `scripts/orchestrate_poll_process.sh:24109-24149`. **Proposed fix:** In that loop, fetch one issue payload and extract `IF_TITLE` and `IF_BODY` locally, retaining their separate empty-string fallbacks. **Safety rationale:** The calls are inside `orchestrate_poll_process.sh`, an explicit `RISKY_SKIP` trigger, and the separate reads’ failure behavior has not been proved equivalent to one failed fetch. **Downstream signal:** Do not auto-implement; manually test title-read failure, body-read failure, and an issue changed between reads before approving a single-snapshot replacement.
+
+### Redundant Re-Fetch (REUSE-###)
+
+No findings.
+
+### Dead Calls (DEAD-API-###)
+
+No findings.
+
+### Cross-References to Deep Audit Section
+
+- API-001: `RISKY_SKIP` — Poller dispatch and run probes require manual review of override and fallback behavior.
+- API-002: `RISKY_SKIP` — The jobs reads are in a polling path; confirm freshness and rate-limit behavior before reuse.
+- API-003: `RISKY_SKIP` — Changing calls inside `curl_gh_api`’s retry loop requires manual failure-classification review.
+- BATCH-001: `RISKY_SKIP` — Poller batching must preserve cross-reference ordering and the per-PR fallback.
+- BATCH-002: `RISKY_SKIP` — Poller replay authorization depends on complete paginated comments and live issue state.
+- BATCH-003: `NEEDS_VERIFICATION` — Verify fork, multiple-PR, and REST head-filter selection equivalence before batching.
+
+### Summary Counts
+
+Net-new findings only; Section 2 cross-references are excluded.
+
+| Tag | Count | IDs |
+|---|---:|---|
+| SAFE_TO_MERGE | 0 | — |
+| NEEDS_VERIFICATION | 0 | — |
+| RISKY_SKIP | 1 | MERGE-001 |
+
+### Implement-Stage Handoff
+
+No SAFE_TO_MERGE findings in this pass.
