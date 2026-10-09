@@ -222,14 +222,20 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/retarget_merged_base.sh` — Retarget work stacked on a branch whose own PR already merged to that PR's base (port P6).
 - `scripts/review_agents_md_materiality.sh` — Shell helper for review agents md materiality.
 - `scripts/review_apply_fixes.sh` — Shell helper for review apply fixes.
+- `scripts/review_autofix_step_apply_fixes.sh` — body of the review_autofix.yml "Apply fixes with editor model" step (sourced by the step; moved out to keep the workflow under GitHub's 512,000-byte limit).
 - `scripts/review_autofix_step_changes_lost_redispatch.sh` — body of the review_autofix.yml "Re-dispatch review on editor-changes-lost" step (sourced by the step): re-dispatches one review run per head from the default branch, bounded by `autofix_changes_lost_head_retry_consumed` (issue #4898).
 - `scripts/review_autofix_step_count_iterations.sh` — body of the review_autofix.yml "Count autofix iterations" step (sourced by the step, `id: retrigger_guard`): classifies the orchestrator PR mode, counts `[ai-autofix]` rounds since the last `[judge-fix]` to decide `max_iterations_reached`, and counts `[judge-fix]` commits for the review-blocked judge retry budget.
 - `scripts/review_autofix_step_detect_merge_conflicts.sh` — body of the review_autofix.yml "Detect merge conflicts" step (sourced by the step; moved out to keep the workflow under GitHub's 512,000-byte limit).
+- `scripts/review_autofix_step_detect_smoke_test.sh` — body of the review_autofix.yml "Detect smoke test and tune LLM settings" step (sourced by the step; reads the repository from `SMOKE_DETECT_REPOSITORY`, defaulting to `GITHUB_REPOSITORY`).
 - `scripts/review_autofix_step_editor_uncommitted_changes.sh` — body of the review_autofix.yml "Detect editor-claimed-but-uncommitted changes" step (sourced by the step).
+- `scripts/review_autofix_step_generate_diff_context.sh` — body of the review_autofix.yml "Generate diff context" step (sourced by the step).
 - `scripts/review_autofix_step_iteration_summary.sh` — body of the review_autofix.yml "Append review pipeline iteration summary" step (sourced by the step; skips with a warning when the script cannot be found).
 - `scripts/review_autofix_step_merge_topology_gate.sh` — body of the review_autofix.yml "Pre-review deterministic merge-topology gate" step (sourced by the step).
 - `scripts/review_autofix_step_partial_finalize.sh` — body of the review_autofix.yml "Post partial finalize comment and persist runtime marker" step (sourced by the step; skips with a warning when the script cannot be found).
 - `scripts/review_autofix_step_post_commit_retrigger.sh` — body of the review_autofix.yml "Re-trigger review via workflow_dispatch" step (sourced by the step): after an autofix or merge-resolve push, dispatches the next review run from the default branch, PR-named wrappers first (issue #4898).
+- `scripts/review_autofix_step_preflight_required_files.sh` — body of the review_autofix.yml "Preflight: Verify required files before reviewer invocation" step (sourced by the step).
+- `scripts/review_autofix_step_restore_partial_resume.sh` — body of the review_autofix.yml "Restore same-head partial resume state" step (sourced by the step).
+- `scripts/review_autofix_step_validate_editor_noop.sh` — body of the review_autofix.yml "Validate editor no-op disposition" step (sourced by the step).
 - `scripts/review_collect_pr_metadata.sh` — artifacts for review_autofix.yml.
 - `scripts/review_commit_changes.sh` — review_commit_changes.sh — stage + commit editor output in review_autofix.yml.
 - `scripts/review_conflict_prepare.sh` — pre-snapshot for review_autofix.yml.
