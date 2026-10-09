@@ -206,6 +206,20 @@ def test_workflows_stage_the_isolation_support_files(workflow):
 		assert name in text, f"{workflow} must stage {name}"
 
 
+def test_orchestrate_stages_the_claude_relay_beside_the_isolation_helper():
+	# codex_isolated_exec.sh requires claude_anthropic_relay.py in its own
+	# directory for engine=claude; without it a consumer decomposer run is
+	# "unavailable" and silently falls back to Codex (#6908). The relay must be
+	# in the required (fail-closed) loop, not an optional one, so it is always
+	# copied from trusted support over any checkout copy.
+	text = (WORKFLOWS / "orchestrate.yml").read_text(encoding="utf-8")
+	stage = step_block(text, "Stage workflow support files")
+	required = stage.split("for f in ", 1)[1].split("; do", 1)[0].split()
+	for name in ("codex_isolated_exec.sh", "codex_isolated_workspace.py", "claude_anthropic_relay.py"):
+		assert name in required, f"orchestrate.yml must stage {name} in the required loop"
+	assert "::error::Missing required support script" in stage
+
+
 @pytest.mark.parametrize(
 	"workflow",
 	[
