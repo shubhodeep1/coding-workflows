@@ -6296,6 +6296,13 @@ jobs:
     if: ${{ success() && !inputs.gate_only }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Least privilege: only this job gets an OIDC token and attestation write,
+    # for the release-manifest attestation (#6943). A job-level block replaces
+    # the inherited one, so contents: write is listed again.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     # Serialise the mutating tag pushes across every dispatcher of this
     # workflow (auto-release-stable.yml, promote-main-to-stable.yml, manual).
     # The dispatchers' own locks end at dispatch time, so without this lock
@@ -6555,6 +6562,32 @@ jobs:
 
           echo "Tagged $VERSION and updated stable + $MAJOR pointers."
 
+      # Release manifest (safeguarded consumer updater, phase 1, #6943):
+      # build it from the tagged tree, attest it, and upload it as a release
+      # asset before consumers are notified. Any failure stops the job before
+      # consumer dispatch; dry runs skip all three steps. Logic lives in
+      # scripts/release_manifest_publish.sh (log prefix RELEASE_MANIFEST).
+      - name: Build release manifest
+        id: release_manifest
+        if: ${{ !inputs.dry_run }}
+        env:
+          RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
+          RELEASE_MANIFEST_DIR: ${{ runner.temp }}/release-manifest
+        run: |
+          set -euo pipefail
+          RELEASE_SHA="$(git rev-parse "${RELEASE_VERSION}^{commit}")"
+          RELEASE_SHA="${RELEASE_SHA,,}"
+          bash scripts/release_manifest_publish.sh build \
+            --tag "${RELEASE_VERSION}" \
+            --release-sha "${RELEASE_SHA}" \
+            --output-dir "${RELEASE_MANIFEST_DIR}"
+
+      - name: Attest release manifest
+        if: ${{ !inputs.dry_run }}
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: ${{ steps.release_manifest.outputs.manifest_path }}
+
       - name: Create GitHub Release
         if: ${{ !inputs.dry_run }}
         env:
@@ -6616,6 +6649,20 @@ jobs:
           cat "${RELEASE_CREATE_ERROR_FILE}" >&2 2>/dev/null || true
           cat "${RELEASE_LOOKUP_ERROR_FILE}" >&2 2>/dev/null || true
           exit "${RELEASE_CREATE_RC}"
+
+      - name: Upload release manifest asset
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
+          RELEASE_MANIFEST_PATH: ${{ steps.release_manifest.outputs.manifest_path }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          bash scripts/release_manifest_publish.sh upload \
+            --tag "${RELEASE_VERSION}" \
+            --manifest "${RELEASE_MANIFEST_PATH}" \
+            --repo "${RELEASE_REPOSITORY}"
 
       - name: Notify consumer repos via repository_dispatch
         if: ${{ !inputs.dry_run }}

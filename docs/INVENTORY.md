@@ -212,6 +212,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/promote_main_cycle.sh` — Run the scheduled, proof-gated main-to-stable promotion cycle.
 - `scripts/propagate_consumer_secrets.sh` — Copy the library's consumer-facing Actions secrets into registered consumer repositories.
 - `scripts/release_manifest.py` — Build the deterministic release manifest of files the consumer updater copies from a release.
+- `scripts/release_manifest_publish.sh` — Build the release manifest from the tagged tree and upload it as a GitHub Release asset in the stable release jobs.
 - `scripts/render_prompt.py` — Render prompt templates with optional mode contracts.
 - `scripts/render_prompt.sh` — Shell helper for render prompt.
 - `scripts/render_scenario_trace.py` — Render replayable workflow scenario traces from workflow-log collector excerpts.
