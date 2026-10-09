@@ -1592,22 +1592,41 @@ advisory=<n> unknown=<n>`. A pre-project line still stays blocking when the
 project could have removed what protected it (finding
 `security-pass-deleted-guard-advisory`): the cited file lost or binary-changed
 lines in the range (`reason=deleted_lines_in_file`), the project added lines
-within `SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW` (default `40`) lines of it
-(`reason=changed_hunk_within_window`), or the finding text names another file
+anywhere in the cited file (within `SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW`,
+default `40`, lines of it `reason=changed_hunk_within_window`, further away
+`reason=added_lines_in_file`: line distance is no proof that an appended
+override cannot change execution, finding
+`security-pass-distant-override-advisory`; the window only picks the logged
+reason), or the finding text names another file
 that lost lines (`reason=references_file_with_deletions`), the cited file names (as a word)
 the module of a file that lost lines
 (`reason=cited_file_references_module_with_deletions`), or such a file names
-the cited module at base (`reason=module_with_deletions_references_cited_file`;
+the cited module at base or head (`reason=module_with_deletions_references_cited_file`;
 module = basename without extension, two or more characters such as `db`, or the
-parent directory for `__init__`, `index`, `init`, `main` and `mod`), or an unchanged non-documentation file
+parent directory for `__init__`, `index`, `init`, `main` and `mod`), or a non-documentation file
 (not `.md`/`.markdown`/`.rst`/`.txt`/`.adoc`) names both the cited module and
-such a module at base, as a router, registry or DI configuration would
-(`reason=shared_referrer_links_module_with_deletions`); each logs
+such a module at base or head, as a router, registry or DI configuration would,
+including one the project added (`reason=shared_referrer_links_module_with_deletions`),
+or a chain of such files links the cited module and a non-documentation, non-test
+file that lost lines through a common referrer, up to 4 hops each way
+(`reason=transitive_reference_links_module_with_deletions`; a search needing more
+than 4 hops or 32 module names keeps it blocking as `reason=reference_search_limit`,
+counted unknown),
+or the cited file and such a file both name a third non-documentation, non-test
+repository module at base or head, a shared dependency the upward search cannot
+see (`reason=shared_dependency_links_module_with_deletions`; one `git ls-tree`
+per commit; a one-letter dependency such as `x.py` that both name keeps it
+blocking as `reason=module_name_too_short`, counted unknown),
+or a file the project changed, other than documentation or tests (a `test`,
+`tests`, `spec` or `__tests__` segment, `test_*`, `*_test.*`, `*.spec.*`,
+`*.test.*`), names the cited module at head, even with no deletion anywhere
+(`reason=changed_file_references_cited_module`); each logs
 `security-audit: line_ownership_blocking finding=<id> reason=<r>`. The checks
 use one `git diff --numstat --no-renames` for the range, one `-U0` diff and one
-`git show` per cited file, and one `git grep` at base per module stem; a
+`git show` per cited file, and one `git grep` each at base and head per module
+stem; a
 failure of any keeps the finding blocking
-(`reason=diff_failed|hunk_diff_failed|module_reference_check_failed`, counted unknown). `run_security_pass_inline` splits advisories out of
+(`reason=diff_failed|hunk_diff_failed|module_reference_check_failed`, counted unknown); a one-letter module name such as `x.py`, cited or with deletions, cannot be searched reliably and also keeps it blocking (`reason=module_name_too_short`, counted unknown). `run_security_pass_inline` splits advisories out of
 the result right after re-applying waivers, so they never make the pass
 `blocked`, enter the fix issue or `security_pass_reported_findings`, or count
 toward `MAX_SECURITY_PASS_CYCLES`; an advisory-only result records `passed` at
@@ -1927,6 +1946,7 @@ and shipped:
 - `BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL`
 - `BEHAVIOURAL_SMOKE_PRESENT_FAILED`
 - `BEHAVIOURAL_SMOKE_PRESENT_PASSED`
+- `BEHAVIOURAL_SMOKE_SANDBOX` (`scripts/validate_driver.sh`: `test= outcome=ran exit=` or `outcome=skipped reason=docker_missing|image_unavailable|start_failed|stage_failed|source_snapshot_unavailable|source_snapshot_incomplete|unsafe_test_path`; every `validation/tests/synth_round_*.sh` runs in a `python:3.12-slim` container with `--network none`, a read-only root, all capabilities dropped, docker under `env -i` and only `HOME`, `TMPDIR` and `BEHAVIOURAL_SMOKE_SANDBOXED=1` set, with a `git archive` of `HEAD` and no `.git`; an unavailable sandbox reports TAP `ok ... # SKIP` and never runs the test on the host. `VALIDATION_SYNTH_SANDBOX_TIMEOUT_SECS`, default `300`, bounds each run and each image inspect or pull (a timed-out run's partial output is commented out and reported as `# SKIP`); generated wrappers run their body only when `BEHAVIOURAL_SMOKE_SANDBOXED=1` and otherwise log `BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE ... reason=not_sandboxed`. `scripts/validate_process.sh` materialises only `synth_round_<n>_<slug>.sh` / `synth_round_<n>_manifest.json` names from non-symlink cache files and launches the harness without `GH_TOKEN`, `GITHUB_TOKEN`, `GH_PAT`, `OPENROUTER_API_KEY`, `TG_BOT_SECRET`, `CHECK_TRIAGE_ISSUES_TOKEN` or the Actions OIDC request variables. Finding `smoke-synth-credentialed-test-exec`.)
 - `REISSUE_BASELINE_PRESERVED`
 - `REISSUE_BASELINE_DISCARDED`
 - `REISSUE_MODE`
@@ -2166,6 +2186,7 @@ LOG_PREFIX.name=BEHAVIOURAL_SMOKE_SYNTHESISED
 LOG_PREFIX.name=BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL
 LOG_PREFIX.name=BEHAVIOURAL_SMOKE_PRESENT_FAILED
 LOG_PREFIX.name=BEHAVIOURAL_SMOKE_PRESENT_PASSED
+LOG_PREFIX.name=BEHAVIOURAL_SMOKE_SANDBOX
 LOG_PREFIX.name=REISSUE_BASELINE_PRESERVED
 LOG_PREFIX.name=REISSUE_BASELINE_DISCARDED
 LOG_PREFIX.name=REISSUE_MODE
@@ -2508,8 +2529,9 @@ depend on it.
 | `REVIEW_DIATAXIS_LENS_ENABLED` | `true` | Documentation-only contract row for the advisory `DOCS COVERAGE (DIATAXIS)` consolidator lens. Current branch behavior is prompt-defined only (no separate workflow toggle yet): keep it `low` severity and name only still-missing `Reference` / `How-to` / `Tutorial` / `Explanation` updates. |
 | `REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED` | `true` | Enable the consolidator-side companion `AGENTS.md` materiality finding. Unlike `AGENTS_MD_MATERIALITY_ENABLED`, which controls the separate advisory comment helper, this flag only controls whether `review_consolidate.sh` passes the helper JSON into Lens 7 (`NAMING / BACKWARD COMPATIBILITY`). |
 | `ENABLE_SECURITY_PASS` | `true` | Enable the scheduled poller's mandatory current-integration-head security gate before validation or finalization. Set to `false` for the immediate operator kill switch and legacy completion behavior. |
-| `SECURITY_AUDIT_LINE_OWNERSHIP` | `project` | Line ownership for the project security pass (plan item 4b, D4). `project` blocks only on findings whose cited line was written in the project's `merge-base..head` range; older lines become non-blocking advisories filed as `ai:security` follow-ups, unless the project deleted lines in the cited file, added lines within the hunk window of the cited line, or deleted lines in another file the finding names or that is linked to the cited file by module name, directly or through an unchanged file naming both (those stay blocking). `off` restores the previous gate and payload exactly. |
-| `SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW` | `40` | Lines either side of a pre-project cited line within which a project-added hunk keeps the finding blocking. Invalid values warn and fall back to `40`. |
+| `SECURITY_AUDIT_LINE_OWNERSHIP` | `project` | Line ownership for the project security pass (plan item 4b, D4). `project` blocks only on findings whose cited line was written in the project's `merge-base..head` range; older lines become non-blocking advisories filed as `ai:security` follow-ups, unless the project deleted or added lines anywhere in the cited file, deleted lines in another file the finding names or that is linked to the cited file by module name (at base or head), directly, through a file naming both, through a bounded chain of referencing files (a search that cannot finish keeps it blocking) or through a third module both name, or changed a non-documentation, non-test file that names the cited module at head (those stay blocking). `off` restores the previous gate and payload exactly. |
+| `SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW` | `40` | Lines either side of a pre-project cited line within which a project-added hunk logs `reason=changed_hunk_within_window`; an addition further away in the same file still blocks, as `reason=added_lines_in_file`. Invalid values warn and fall back to `40`. |
+| `VALIDATION_SYNTH_SANDBOX_TIMEOUT_SECS` | `300` | Per-test bound on a synthesised behavioural smoke test (`validation/tests/synth_round_*.sh`) in `scripts/validate_driver.sh`'s credential-free, network-less container; a timeout reports TAP `ok ... # SKIP`. Invalid values warn and fall back to `300`. |
 | `SUMMARISER_ISOLATION_MAX_ATTEMPTS` | `3` | Consecutive consensus-summariser attempts refused because the review sandbox was unavailable before the summariser hard-fails (`opencode_agent_failure ... failure_class=isolation_unavailable`). The summariser and behavioural-smoke synthesiser never run OpenCode on the host; a refused attempt logs `::error::REVIEW_UTILITY_ISOLATION role=<SUMMARISER\|BEHAVIOURAL_SMOKE> engine=<claude\|codex> outcome=refused reason=sandbox_unavailable\|sandbox_helper_outdated`, and smoke synthesis fails open with `BEHAVIOURAL_SMOKE_SYNTHESIS_FAIL reason=isolation_unavailable`. Invalid values warn and fall back to `3`. |
 | `MAX_SECURITY_PASS_CYCLES` | `5` | Maximum completed consolidated security-fix cycles before persistent findings terminalize as `ai:security-pass-failed`. Resets to `0` when an advancing integration head invalidates a recorded clean pass. Re-audits after a merged fix are delta audits, so the budget bounds persisting findings rather than fresh samples of unchanged code. For standalone PRs, a completed current-head audit is required to enter judge exhaustion mode. |
 | `SINGLE_ISSUE_SECURITY_PASS_ENABLED` | `false` | Off by default (opt in with `true`); orchestrator projects keep their own pass under `ENABLE_SECURITY_PASS`. When enabled, hold eligible standalone PRs into the default branch until a security audit of the current head is clean. At the cycle cap an unaudited head gets bounded retries, then remains held without judge exhaustion mode; a completed findings audit for the same head still qualifies if a later attempt fails. A missing or unwritable `GITHUB_OUTPUT` fails the gate step closed; dispatch failure at any cycle holds the merge for a later review retry, and records a failed cycle (past the cap, a failed head attempt). With the flag off (the default) the pre-pass review-gate and deterministic-skip merge behavior applies. Only a sole verified `ai:security` follow-up is exempt; see `README.md` for dispatch and failure modes. |

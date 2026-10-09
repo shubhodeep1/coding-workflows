@@ -433,10 +433,25 @@ fi
 # cited file names a module that lost lines
 # (`cited_file_references_module_with_deletions`), or a module that lost
 # lines names the cited module (`module_with_deletions_references_cited_file`),
-# or an unchanged non-documentation file names both the cited module and a
-# module that lost lines (`shared_referrer_links_module_with_deletions`).
+# or a non-documentation file names both the cited module and a module that
+# lost lines (`shared_referrer_links_module_with_deletions`), or a chain of
+# references of any length links them through a common referrer
+# (`transitive_reference_links_module_with_deletions`; a search past
+# LINE_OWNERSHIP_REFERENCE_MAX_HOPS / _MAX_STEMS keeps it blocking as
+# `reference_search_limit`), or the cited file and a module that lost lines
+# both name a third repository module (`shared_dependency_links_module_with_deletions`).  Module
+# references are read at both the base and the head, so a router the project
+# adds is seen too.  Any project addition in the cited file keeps the finding
+# blocking (finding security-pass-distant-override-advisory): within the
+# window it logs `changed_hunk_within_window`, further away
+# `added_lines_in_file`; the window only selects the logged reason.  A
+# project-changed, non-documentation, non-test file that names the cited
+# module at the head keeps it blocking as well
+# (`changed_file_references_cited_module`), since such a file can wire or
+# override the cited operation without deleting anything.
 # A failed project diff, hunk read or module-reference read keeps the
-# finding blocking too.  `off` restores
+# finding blocking too, as does a one-letter module name that cannot be
+# searched (`module_name_too_short`).  `off` restores
 # the previous payload exactly (no `advisory` field, no `line_ownership` key).
 SECURITY_AUDIT_LINE_OWNERSHIP="$(printf '%s' "${SECURITY_AUDIT_LINE_OWNERSHIP:-project}" | tr '[:upper:]' '[:lower:]')"
 case "${SECURITY_AUDIT_LINE_OWNERSHIP}" in
@@ -1981,6 +1996,11 @@ if not isinstance(findings, list):
 global_reason = ""
 project_commits: set[str] = set()
 files_with_deletions: set[str] = set()
+# Every path the project diff touches, and the ones that gained lines (or
+# are binary).  Additions anywhere in the cited file keep a pre-project
+# finding blocking (finding security-pass-distant-override-advisory).
+files_with_additions: set[str] = set()
+project_changed_paths: set[str] = set()
 hunk_cache: dict[str, list[tuple[int, int]] | None] = {}
 if not SHA_RE.match(base_sha) or not SHA_RE.match(head_sha):
 	global_reason = "range_unresolved"
@@ -2013,10 +2033,15 @@ else:
 						if len(parts) != 3 or not parts[2]:
 							continue
 						added_count, deleted_count, changed_path = parts
+						project_changed_paths.add(changed_path)
 						if deleted_count == "-" or added_count == "-":
 							files_with_deletions.add(changed_path)
-						elif deleted_count.isdigit() and int(deleted_count) > 0:
+							files_with_additions.add(changed_path)
+							continue
+						if deleted_count.isdigit() and int(deleted_count) > 0:
 							files_with_deletions.add(changed_path)
+						if not added_count.isdigit() or int(added_count) > 0:
+							files_with_additions.add(changed_path)
 	except subprocess.TimeoutExpired:
 		global_reason = "timeout"
 
@@ -2057,8 +2082,14 @@ def added_hunks(path: str) -> list[tuple[int, int]] | None:
 LINE_OWNERSHIP_GENERIC_MODULE_STEMS = {"__init__", "index", "init", "main", "mod"}
 # Files whose mention of two modules is prose, not wiring.
 LINE_OWNERSHIP_DOC_SUFFIXES = {".md", ".markdown", ".rst", ".txt", ".adoc"}
+# Test files cannot change production execution, so a project-changed test
+# naming the cited module does not keep the finding blocking on its own.
+LINE_OWNERSHIP_TEST_PATH_RE = re.compile(
+	r"(?:^|/)(?:tests?|spec|__tests__)/|(?:^|/)test_[^/]*$|_test\.[^/]*$|\.(?:spec|test)\.[^/]*$",
+	re.IGNORECASE,
+)
 head_text_cache: dict[str, str | None] = {}
-base_mention_cache: dict[str, set[str] | None] = {}
+mention_cache: dict[tuple[str, str], set[str] | None] = {}
 
 
 def module_stem(path: str) -> str:
@@ -2068,7 +2099,8 @@ def module_stem(path: str) -> str:
 		stem = pure.parent.name
 	# Two characters minimum: a short module such as db.py or io.py can hold
 	# the deleted guard, but a one-letter stem (a.py, i.py) matches ordinary
-	# words and loop variables and would block unrelated findings.
+	# words and loop variables, so it is not searched; callers treat an empty
+	# stem as unanalysable and keep the finding blocking (module_name_too_short).
 	return stem if len(stem) >= 2 else ""
 
 
@@ -2084,27 +2116,208 @@ def head_file_text(path: str) -> str | None:
 	return head_text_cache[path]
 
 
-def base_paths_mentioning(stem: str) -> set[str] | None:
-	# Paths whose base-commit text names `stem` as a word (one `git grep`
-	# per stem), or None when the search fails.
-	if stem not in base_mention_cache:
+def paths_mentioning_at(sha: str, stem: str) -> set[str] | None:
+	# Paths whose text at `sha` names `stem` as a word (one `git grep` per
+	# commit and stem), or None when the search fails.
+	key = (sha, stem)
+	if key not in mention_cache:
 		try:
-			grep = git(["grep", "-l", "-I", "-F", "-w", "-e", stem, base_sha, "--"], LINE_OWNERSHIP_DIFF_TIMEOUT_SECS)
+			grep = git(["grep", "-l", "-I", "-F", "-w", "-e", stem, sha, "--"], LINE_OWNERSHIP_DIFF_TIMEOUT_SECS)
 		except subprocess.TimeoutExpired:
-			base_mention_cache[stem] = None
+			mention_cache[key] = None
 		else:
 			if grep.returncode == 1:
-				base_mention_cache[stem] = set()
+				mention_cache[key] = set()
 			elif grep.returncode != 0:
-				base_mention_cache[stem] = None
+				mention_cache[key] = None
 			else:
-				prefix = f"{base_sha}:"
-				base_mention_cache[stem] = {
+				prefix = f"{sha}:"
+				mention_cache[key] = {
 					line[len(prefix):] if line.startswith(prefix) else line
 					for line in grep.stdout.splitlines()
 					if line
 				}
-	return base_mention_cache[stem]
+	return mention_cache[key]
+
+
+def paths_mentioning(stem: str) -> set[str] | None:
+	# Union of the base and head references to `stem`: the base still holds a
+	# deleted guard's wiring, the head holds wiring the project added (a new
+	# router).  Either search failing returns None (the caller keeps blocking).
+	at_base = paths_mentioning_at(base_sha, stem)
+	at_head = paths_mentioning_at(head_sha, stem)
+	if at_base is None or at_head is None:
+		return None
+	return at_base | at_head
+
+
+def is_doc_path(path: str) -> bool:
+	return PurePosixPath(path).suffix.lower() in LINE_OWNERSHIP_DOC_SUFFIXES
+
+
+def is_test_path(path: str) -> bool:
+	return LINE_OWNERSHIP_TEST_PATH_RE.search(path) is not None
+
+
+def changed_file_reference_reason(path: str) -> tuple[str, bool]:
+	# A file the project changed (other than the cited one, documentation or
+	# tests) that names the cited module at the head can wire or override the
+	# cited operation without deleting a line anywhere.
+	cited_stem = module_stem(path)
+	candidates = {
+		changed for changed in project_changed_paths
+		if changed != path and not is_doc_path(changed) and not is_test_path(changed)
+	}
+	if not candidates:
+		return "", False
+	if not cited_stem:
+		# A one-letter module name cannot be searched reliably, so its links
+		# cannot be ruled out: keep the finding blocking (fail closed).
+		return "module_name_too_short", True
+	referencing = paths_mentioning_at(head_sha, cited_stem)
+	if referencing is None:
+		return "module_reference_check_failed", True
+	if candidates & referencing:
+		return "changed_file_references_cited_module", False
+	return "", False
+
+
+# Bounds on the transitive referrer search in deletion_block_reason.  A
+# search that cannot finish inside them proves nothing, so it keeps the
+# finding blocking (`reference_search_limit`, counted unknown).
+LINE_OWNERSHIP_REFERENCE_MAX_HOPS = 4
+LINE_OWNERSHIP_REFERENCE_MAX_STEMS = 32
+
+
+def referrer_closure(start_paths: set[str], searched_stems: set[str]) -> tuple[set[str], str]:
+	# Files that reach any of `start_paths` through a chain of module-name
+	# references at base or head.  Documentation and test files are not
+	# wiring and are not followed.  Returns (closure, reason); a non-empty
+	# reason means the search could not complete and the caller must keep
+	# the finding blocking (fail closed).
+	closure = set(start_paths)
+	frontier = set(start_paths)
+	for _ in range(LINE_OWNERSHIP_REFERENCE_MAX_HOPS):
+		next_frontier: set[str] = set()
+		for node in sorted(frontier):
+			stem = module_stem(node)
+			if not stem:
+				return closure, "module_name_too_short"
+			if stem not in searched_stems:
+				if len(searched_stems) >= LINE_OWNERSHIP_REFERENCE_MAX_STEMS:
+					return closure, "reference_search_limit"
+				searched_stems.add(stem)
+			referrers = paths_mentioning(stem)
+			if referrers is None:
+				return closure, "module_reference_check_failed"
+			for referrer in referrers:
+				if referrer in closure or is_doc_path(referrer) or is_test_path(referrer):
+					continue
+				closure.add(referrer)
+				next_frontier.add(referrer)
+		if not next_frontier:
+			return closure, ""
+		frontier = next_frontier
+	return closure, "reference_search_limit"
+
+
+tree_paths_cache: dict[str, set[str] | None] = {}
+revision_text_cache: dict[tuple[str, str], str | None] = {}
+LINE_OWNERSHIP_WORD_RE = re.compile(r"[A-Za-z0-9_]+")
+
+
+def tree_paths_at(sha: str) -> set[str] | None:
+	# Every tracked path at `sha` (one `git ls-tree` per commit), or None
+	# when the listing fails.
+	if sha not in tree_paths_cache:
+		try:
+			listed = git(["ls-tree", "-r", "--name-only", "-z", sha], LINE_OWNERSHIP_DIFF_TIMEOUT_SECS)
+		except subprocess.TimeoutExpired:
+			tree_paths_cache[sha] = None
+		else:
+			tree_paths_cache[sha] = (
+				{item for item in listed.stdout.split("\0") if item} if listed.returncode == 0 else None
+			)
+	return tree_paths_cache[sha]
+
+
+def text_at(sha: str, path: str) -> str | None:
+	key = (sha, path)
+	if key not in revision_text_cache:
+		try:
+			shown = git(["show", f"{sha}:{path}"], LINE_OWNERSHIP_DIFF_TIMEOUT_SECS)
+		except subprocess.TimeoutExpired:
+			revision_text_cache[key] = None
+		else:
+			revision_text_cache[key] = shown.stdout if shown.returncode == 0 else None
+	return revision_text_cache[key]
+
+
+def named_stems(text: str, stems: set[str]) -> set[str]:
+	# The subset of `stems` that `text` names as a word.
+	words = set(LINE_OWNERSHIP_WORD_RE.findall(text))
+	found = {stem for stem in stems if stem in words}
+	for stem in stems - found:
+		if not LINE_OWNERSHIP_WORD_RE.fullmatch(stem) and re.search(
+			rf"(?<![A-Za-z0-9_]){re.escape(stem)}(?![A-Za-z0-9_])", text
+		):
+			found.add(stem)
+	return found
+
+
+def shared_dependency_reason(path: str, cited_text: str, guard_paths: set[str]) -> tuple[str, bool]:
+	# Downward hop (finding security-pass-deleted-guard-advisory): the cited
+	# file and a source file that lost lines both name a third repository
+	# module (A -> C <- B).  The deleted control may have guarded state or a
+	# registry in that shared module which the cited operation relies on, and
+	# the referrer search above only walks upward, so it never sees C.
+	# Candidates are non-documentation, non-test modules tracked at base or
+	# head.  A one-letter module name (x.py) cannot be searched reliably, so
+	# when both files name one as a word the link cannot be ruled out and the
+	# finding stays blocking (module_name_too_short, fail closed).
+	base_paths = tree_paths_at(base_sha)
+	head_paths = tree_paths_at(head_sha)
+	if base_paths is None or head_paths is None:
+		return "module_reference_check_failed", True
+	excluded_stems = {module_stem(path)} | {module_stem(guard) for guard in guard_paths}
+	candidate_stems: set[str] = set()
+	short_candidate_stems: set[str] = set()
+	for candidate in base_paths | head_paths:
+		if candidate == path or candidate in guard_paths or is_doc_path(candidate) or is_test_path(candidate):
+			continue
+		stem = module_stem(candidate)
+		if stem and stem not in excluded_stems:
+			candidate_stems.add(stem)
+		elif not stem:
+			pure_candidate = PurePosixPath(candidate)
+			raw_stem = pure_candidate.stem
+			if raw_stem.lower() in LINE_OWNERSHIP_GENERIC_MODULE_STEMS and pure_candidate.parent.name:
+				raw_stem = pure_candidate.parent.name
+			if raw_stem:
+				short_candidate_stems.add(raw_stem)
+	cited_dependencies = named_stems(cited_text, candidate_stems)
+	cited_short_dependencies = named_stems(cited_text, short_candidate_stems)
+	if not cited_dependencies and not cited_short_dependencies:
+		return "", False
+	short_match = False
+	for guard in sorted(guard_paths):
+		# Base text holds the deleted guard's own imports; head text holds any
+		# the project added.  A side where the file does not exist is skipped.
+		guard_texts: list[str] = []
+		for sha, tree in ((base_sha, base_paths), (head_sha, head_paths)):
+			if guard not in tree:
+				continue
+			guard_text = text_at(sha, guard)
+			if guard_text is None:
+				return "module_reference_check_failed", True
+			guard_texts.append(guard_text)
+		if guard_texts and named_stems("\n".join(guard_texts), cited_dependencies):
+			return "shared_dependency_links_module_with_deletions", False
+		if guard_texts and named_stems("\n".join(guard_texts), cited_short_dependencies):
+			short_match = True
+	if short_match:
+		return "module_name_too_short", True
+	return "", False
 
 
 def finding_strings(value: object) -> list[str]:
@@ -2129,6 +2342,11 @@ def deletion_block_reason(finding: dict, path: str, line: int) -> tuple[str, boo
 	for start, end in ranges:
 		if start - hunk_window <= line <= end + hunk_window:
 			return "changed_hunk_within_window", False
+	# Any other addition in the cited file can still change how the cited
+	# line executes (an override appended far below it), so line distance is
+	# not proof of safety: the window only selects the reason logged above.
+	if ranges or path in files_with_additions:
+		return "added_lines_in_file", False
 	texts = finding_strings({key: value for key, value in finding.items() if key not in ("file", "line")})
 	for other_path in files_with_deletions:
 		if other_path != path and any(other_path in text for text in texts):
@@ -2140,40 +2358,67 @@ def deletion_block_reason(finding: dict, path: str, line: int) -> tuple[str, boo
 	# only ever add blocking; a failed read keeps the finding blocking.
 	other_paths = sorted(other for other in files_with_deletions if other != path)
 	if not other_paths:
-		return "", False
+		return changed_file_reference_reason(path)
 	cited_text = head_file_text(path)
 	if cited_text is None:
 		return "module_reference_check_failed", True
+	cited_stem = module_stem(path)
+	# A one-letter module name (x.py) on either side cannot be searched
+	# reliably, so a link to the removed guard cannot be ruled out: keep the
+	# finding blocking (fail closed) instead of skipping the dependency checks.
+	if not cited_stem or any(not module_stem(other_path) for other_path in other_paths):
+		return "module_name_too_short", True
 	for other_path in other_paths:
 		other_stem = module_stem(other_path)
 		if other_stem and re.search(rf"(?<![A-Za-z0-9_]){re.escape(other_stem)}(?![A-Za-z0-9_])", cited_text):
 			return "cited_file_references_module_with_deletions", False
-	cited_stem = module_stem(path)
 	if cited_stem:
-		referencing = base_paths_mentioning(cited_stem)
+		referencing = paths_mentioning(cited_stem)
 		if referencing is None:
 			return "module_reference_check_failed", True
 		if any(other_path in referencing for other_path in other_paths):
 			return "module_with_deletions_references_cited_file", False
-		# One hop further: an unchanged source file (a router table, registry
-		# or dependency-injection configuration) that names both the cited
-		# module and a module that lost lines can wire the removed guard to
-		# the cited operation.  Documentation files are not wiring.
+		# One hop further: a source file (a router table, registry or
+		# dependency-injection configuration, existing at base or added by the
+		# project) that names both the cited module and a module that lost
+		# lines can wire the removed guard to the cited operation.
+		# Documentation files are not wiring.
 		cited_referrers = {
 			referrer for referrer in referencing
-			if referrer != path and PurePosixPath(referrer).suffix.lower() not in LINE_OWNERSHIP_DOC_SUFFIXES
+			if referrer != path and not is_doc_path(referrer)
 		}
 		if cited_referrers:
 			for other_path in other_paths:
 				other_stem = module_stem(other_path)
 				if not other_stem or other_stem == cited_stem:
 					continue
-				other_referrers = base_paths_mentioning(other_stem)
+				other_referrers = paths_mentioning(other_stem)
 				if other_referrers is None:
 					return "module_reference_check_failed", True
 				if any(referrer != other_path and referrer in cited_referrers for referrer in other_referrers):
 					return "shared_referrer_links_module_with_deletions", False
-	return "", False
+	# Several hops: follow referrer chains up from the cited file and
+	# from every source file that lost lines (a guard cannot live in
+	# documentation or tests).  A shared ancestor (an app entry point that
+	# imports a middleware which imports the guard module, and the cited
+	# module) can wire the removed control to the cited operation, so only a
+	# search that completes inside its bounds without one leaves the finding advisory
+	# (finding security-pass-deleted-guard-advisory).
+	guard_paths = {other for other in other_paths if not is_doc_path(other) and not is_test_path(other)}
+	if guard_paths:
+		searched_stems: set[str] = set()
+		cited_closure, closure_reason = referrer_closure({path}, searched_stems)
+		if closure_reason:
+			return closure_reason, True
+		guard_closure, closure_reason = referrer_closure(guard_paths, searched_stems)
+		if closure_reason:
+			return closure_reason, True
+		if cited_closure & guard_closure:
+			return "transitive_reference_links_module_with_deletions", False
+		dependency_reason, dependency_unknown = shared_dependency_reason(path, cited_text, guard_paths)
+		if dependency_reason:
+			return dependency_reason, dependency_unknown
+	return changed_file_reference_reason(path)
 
 blocking = advisory = unknown = 0
 log_lines: list[str] = []
