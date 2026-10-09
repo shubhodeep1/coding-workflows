@@ -17167,52 +17167,54 @@ def test_untrusted_security_pass_reset_cannot_clear_findings():
 # COLLABORATOR. Missing provenance, bot identities and non-member associations
 # are rejected; forged boundary markers and later outsider commands cannot
 # suppress or escalate an authorized reset.
-@pytest.mark.parametrize(
-	"untrusted_comment",
-	[
-		pytest.param({"body": "/judge_resume --force", "user": {"login": "drive-by"}}, id="missing_author_association"),
-		pytest.param(
-			{"body": "/judge_resume --force", "user": {"login": "renovate[bot]", "type": "Bot"}, "author_association": "MEMBER"},
-			id="bot_with_member_association",
-		),
-		pytest.param(
-			{"body": "/judge_resume --force", "user": {"login": "past-contributor", "type": "User"}, "author_association": "CONTRIBUTOR"},
-			id="contributor_association",
-		),
-	],
+# CI runs this module through main(), which calls every test as func(), so
+# these cases loop inside argument-free tests instead of using
+# pytest.mark.parametrize (see test_custom_runner_tests_need_no_pytest_arguments).
+_UNAUTHORIZED_JUDGE_RESUME_COMMENTS = (
+	("missing_author_association", {"body": "/judge_resume --force", "user": {"login": "drive-by"}}),
+	(
+		"bot_with_member_association",
+		{"body": "/judge_resume --force", "user": {"login": "renovate[bot]", "type": "Bot"}, "author_association": "MEMBER"},
+	),
+	(
+		"contributor_association",
+		{"body": "/judge_resume --force", "user": {"login": "past-contributor", "type": "User"}, "author_association": "CONTRIBUTOR"},
+	),
 )
-def test_judge_resume_from_unauthorized_author_is_ignored(untrusted_comment):
-	state = _base_state(status="failed")
-	state.update(judge_stall_cycles=8, recovery_count=4)
-	result = _run_poller(
-		state=state, enable_validation="false", max_validate_cycles="3",
-		issue_labels={10: ["ai:implementing"]},
-		tracking_comments=[untrusted_comment],
-	)
-	assert result["latest_state"]["status"] == "failed"
-	assert result["latest_state"]["judge_stall_cycles"] == 8
-	assert result["latest_state"]["recovery_count"] == 4
+
+_UNAUTHORIZED_REVALIDATE_COMMENTS = (
+	("missing_author_association", {"body": "/revalidate", "user": {"login": "drive-by"}}),
+	(
+		"contributor_association",
+		{"body": "/revalidate", "user": {"login": "past-contributor", "type": "User"}, "author_association": "CONTRIBUTOR"},
+	),
+)
 
 
-@pytest.mark.parametrize(
-	"untrusted_comment",
-	[
-		pytest.param({"body": "/revalidate", "user": {"login": "drive-by"}}, id="missing_author_association"),
-		pytest.param(
-			{"body": "/revalidate", "user": {"login": "past-contributor", "type": "User"}, "author_association": "CONTRIBUTOR"},
-			id="contributor_association",
-		),
-	],
-)
-def test_revalidate_from_unauthorized_author_is_ignored(untrusted_comment):
-	state = _base_state(status="failed")
-	result = _run_poller(
-		state=state, enable_validation="true", max_validate_cycles="3",
-		tracking_labels=["ai:validation-failed"],
-		tracking_comments=[untrusted_comment],
-	)
-	assert result["latest_state"]["status"] == "failed"
-	assert result["validation_dispatches"] == []
+def test_judge_resume_from_unauthorized_author_is_ignored():
+	for case_id, untrusted_comment in _UNAUTHORIZED_JUDGE_RESUME_COMMENTS:
+		state = _base_state(status="failed")
+		state.update(judge_stall_cycles=8, recovery_count=4)
+		result = _run_poller(
+			state=state, enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:implementing"]},
+			tracking_comments=[untrusted_comment],
+		)
+		assert result["latest_state"]["status"] == "failed", case_id
+		assert result["latest_state"]["judge_stall_cycles"] == 8, case_id
+		assert result["latest_state"]["recovery_count"] == 4, case_id
+
+
+def test_revalidate_from_unauthorized_author_is_ignored():
+	for case_id, untrusted_comment in _UNAUTHORIZED_REVALIDATE_COMMENTS:
+		state = _base_state(status="failed")
+		result = _run_poller(
+			state=state, enable_validation="true", max_validate_cycles="3",
+			tracking_labels=["ai:validation-failed"],
+			tracking_comments=[untrusted_comment],
+		)
+		assert result["latest_state"]["status"] == "failed", case_id
+		assert result["validation_dispatches"] == [], case_id
 
 
 def test_revalidate_from_collaborator_is_accepted():
