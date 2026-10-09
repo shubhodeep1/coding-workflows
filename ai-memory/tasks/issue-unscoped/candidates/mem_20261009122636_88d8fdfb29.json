@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:orchestrate-poll (3) | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The PR-head CI run reports a failed `orchestrate-poll (3)` shard, causing the aggregate `lint` check to fail.\n  WHY: The visible log tail shows 33 tests passing, but the overall job concludes with failure.\n- .github/workflows/ci.yml:1416-1442 | severity=high | confidence=[5]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The PR head\u2019s `orchestrate-poll (3)` check reports one failed shard, and aggregate `lint` fails, but the available log tail does not identify the failed shard\u2019s exit status or cause.\n  WHY: The workflow exits with status 1 when a shard has a nonzero or missing result file, leaving this CI failure unresolved.\n- scripts/review_untrusted_sandbox.sh:109-110, 189-198 | severity=low | confidence=[3]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: Exit 137 is classified as a timeout whenever at least 900 seconds have elapsed, so an OOM kill during the 10-second kill-after grace period can be treated as a timeout.\n  WHY: The script warns and continues instead of taking the fatal path for an OOM exit.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:orchestrate-poll (3) | confidence=4\n  PROBLEM: The PR-head CI run reports a failed orchestrate-poll shard, causing orchestrate-poll (3) and the aggregate lint check to fail.\n  WHY: The supplied log tail shows tests passing (33 passed, 0 failed), but the overall job conclusion is failure.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:1416-1442 | severity=high | confidence=5\n  PROBLEM: The PR head\u2019s `orchestrate-poll (3)` check reports one failed shard, and aggregate `lint` fails. The available log tail shows 33 tests passing but does not identify the failed shard\u2019s exit status or cause.\n  WHY: The workflow exits with status 1 when a shard has a nonzero or missing result file. This CI failure remains unresolved and needs investigation before the PR can pass its checks.\n- scripts/review_untrusted_sandbox.sh:109-110, 189-198 | severity=low | confidence=3\n  PROBLEM: Exit 137 is classified as a timeout whenever at least 900 seconds have elapsed, but the outer `timeout` uses a 10-second kill-after period. An OOM kill during that grace period can therefore be treated as the timeout rather than as another fatal container exit.\n  WHY: A container OOM after the 900-second TERM but before the 10-second KILL escalation can return 137. The elapsed-time check accepts that exit as a timed-out install, so the script warns and continues instead of taking the fatal path for an OOM exit.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "48cc1e5699156c408e3bc122db8cc8a40d2b75d416f6d86fade5b333b1c0d639",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6900,
+    "run_id": "37922469065",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37922469065",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009122636_88d8fdfb29",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6900,
+    "run_id": "37922469065"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-09T12:26:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
