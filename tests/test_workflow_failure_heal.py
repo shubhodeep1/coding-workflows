@@ -2732,6 +2732,12 @@ def test_failure_markers_are_support_version_aware() -> None:
 	assert count([*current, cap("")], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is False
 	assert count([*current, cap(SUPPORT_NEW)], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is True
 	assert count([*current, cap(SUPPORT_OLD)], head_sha=SHA_A, author_login=CAP_AUTHOR)["cap_applied"] is True
+	# A cap marker quoted inline (a "First error" code span) is not a cap marker,
+	# and it does not hide the real marker on its own line later in the body.
+	inline = {"author_login": CAP_AUTHOR, "body": "**First error:** `" + cap(SUPPORT_NEW)["body"] + "`"}
+	assert count([*current, inline], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is False
+	shadowed = {"author_login": CAP_AUTHOR, "body": "**First error:** `" + cap(SUPPORT_OLD)["body"] + "`\n\n" + cap(SUPPORT_NEW)["body"]}
+	assert count([*current, shadowed], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["cap_applied"] is True
 	# parse_failure_markers applies the same filter and reports the version.
 	parsed = heal.parse_failure_markers([*older, *current], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)
 	assert [marker["run"] for marker in parsed] == ["1", "2", "3"] and {marker["support"] for marker in parsed} == {SUPPORT_NEW}

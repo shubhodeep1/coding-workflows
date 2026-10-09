@@ -558,6 +558,7 @@ def _run_cap_skip(comments: list, commits: list, login: str | None, *, repo: str
 	consumer's `.github/workflows/ai-review.yml` text) drive the
 	review-support SHA resolution. Returns (stdout, GET /user call count)."""
 	import json
+	import shlex
 	import subprocess
 	import tempfile
 
@@ -583,8 +584,8 @@ NOOP_CAP_TRUSTED_LOGIN_STATE="unset"
 GITHUB_REPOSITORY={json.dumps(repo)}
 ORCHESTRATOR_ENGINE_SHA={json.dumps(engine_sha)}
 {_support_resolver_block()}
-N_COMMENTS_JSON={json.dumps(json.dumps(comments))}
-N_COMMITS_JSON={json.dumps(json.dumps(commits))}
+N_COMMENTS_JSON={shlex.quote(json.dumps(comments))}
+N_COMMITS_JSON={shlex.quote(json.dumps(commits))}
 for _pr in a b; do
 {_cap_skip_block()}
 	echo "DISPATCH pr=${{N_PR}}"

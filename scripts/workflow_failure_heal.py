@@ -258,6 +258,9 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 _LOG_TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\s?")
 _FAILURE_MARKER_RE = re.compile(r"<!--\s*" + re.escape(FAILURE_MARKER_TAG) + r"\s+(?P<fields>[^>]*?)\s*-->")
 _FAILURE_CAP_MARKER_RE = re.compile(r"<!--\s*" + re.escape(FAILURE_CAP_MARKER_TAG) + r"\s+(?P<fields>[^>]*?)\s*-->")
+# Issue #6625: a cap marker counts only on its own line, like the workflow and
+# poller jq checks; an inline quote (e.g. a "First error" code span) is not one.
+_FAILURE_CAP_MARKER_LINE_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_CAP_MARKER_TAG) + r"\s+(?P<fields>[^>\n]*?)\s*-->[ \t]*$", re.MULTILINE)
 _MARKER_FIELD_RE = re.compile(r"(?P<key>[a-z_]+)=(?P<value>\S+)")
 _FP_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 _UNSAFE_TOKEN_RE = re.compile(r"[^A-Za-z0-9_.-]")
@@ -2256,8 +2259,11 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 	for comment in ordered:
 		if _comment_author(comment) != author:
 			continue
-		cap_fields = _marker_fields(_FAILURE_CAP_MARKER_RE.search(sanitize_text(comment.get("body"))))
-		if cap_fields.get("head", "").lower() == head and (not support or cap_fields.get("support", "").lower() == support):
+		cap_body = sanitize_text(comment.get("body"))
+		if any(
+			fields.get("head", "").lower() == head and (not support or fields.get("support", "").lower() == support)
+			for fields in (_marker_fields(match) for match in _FAILURE_CAP_MARKER_LINE_RE.finditer(cap_body))
+		):
 			result["cap_applied"] = True
 			break
 	seen_runs: set[str] = set()
