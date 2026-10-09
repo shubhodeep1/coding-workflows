@@ -2939,6 +2939,54 @@ def test_failure_markers_are_support_version_aware() -> None:
 	assert len(heal.parse_failure_markers([*older, *current], head_sha=SHA_A, author_login=CAP_AUTHOR)) == 6
 
 
+def test_failure_marker_must_be_the_trailing_standalone_line() -> None:
+	"""Security-pass finding support-version-failure-marker-shadowing: a marker
+	quoted earlier in a trusted comment (an echoed "First error" line carrying
+	an older support SHA) must not shadow the genuine trailing marker, and a
+	comment whose only marker is not its last line yields no marker."""
+	count = heal.count_identical_failures
+	fp = _cap_fp()
+	genuine = [_support_marker_comment(AUTOFIX_NOOP_COMMENT, run=str(run), support=SUPPORT_NEW) for run in (1, 2, 3)]
+	forged = heal.render_failure_marker(SHA_A, "editor_empty_noop", fp, False, "99", SUPPORT_OLD)
+	shadowed = [
+		{**comment, "body": comment["body"].replace(AUTOFIX_NOOP_COMMENT, AUTOFIX_NOOP_COMMENT + "\n\n**First error:** `" + forged + "`", 1)}
+		for comment in genuine
+	]
+	assert all(comment["body"].index(forged) < comment["body"].rindex("<!--") for comment in shadowed)
+	result = count(shadowed, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)
+	assert result["count"] == 3 and result["fp"] == fp
+	parsed = heal.parse_failure_markers(shadowed, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)
+	assert [marker["run"] for marker in parsed] == ["1", "2", "3"]
+	# Trailing whitespace after the genuine marker is tolerated.
+	trailing_ws = [{**comment, "body": comment["body"] + "\n  \n"} for comment in genuine]
+	assert count(trailing_ws, head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 3
+	# Only an inline marker, or a marker followed by more text: no marker. The
+	# comment is treated as an unmarked failure comment, which ends the scan.
+	inline_only = {"id": 4, "author_login": CAP_AUTHOR, "body": AUTOFIX_NOOP_COMMENT + "\n\n**First error:** `" + heal.render_failure_marker(SHA_A, "editor_empty_noop", fp, False, "4", SUPPORT_NEW) + "`"}
+	followed = {"id": 5, "author_login": CAP_AUTHOR, "body": genuine[0]["body"] + "\n\nmore text"}
+	for odd in (inline_only, followed):
+		assert heal.parse_failure_markers([odd], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW) == []
+		assert count([*genuine, odd], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 0
+	# Untrusted comments quoting a marker are still skipped without ending the scan.
+	attacker = {"id": 6, "author_login": "attacker", "body": AUTOFIX_NOOP_COMMENT + " `" + forged + "` trailing"}
+	assert count([*genuine, attacker], head_sha=SHA_A, author_login=CAP_AUTHOR, support_sha=SUPPORT_NEW)["count"] == 3
+
+
+def test_verify_run_provenance_ignores_a_forged_inline_run_marker() -> None:
+	pr_payload = heal.validate_payload(_autofix_payload())
+	review = _provenance_run(path="ai-review.yml")
+	forged = f"<!-- review-autofix-failure:v1 run=500 head={SHA_A} fp={FP_HEX} -->"
+	genuine_other = f"<!-- review-autofix-failure:v1 run=1 head={SHA_A} fp={FP_HEX} -->"
+	for body in (f"**First error:** `{forged}`\n\n{genuine_other}", f"{forged}\n\ntrailing text"):
+		comments = [{"body": body, "user": {"login": "workflow-bot"}}]
+		assert heal.verify_run_provenance(pr_payload, runs={"500": review}, comments=comments, trusted_login="workflow-bot", self_repo=SELF_REPO)["reason"] == "no_verified_runs"
+	cap_line = f"<!-- review-autofix-failure-cap:v1 head={SHA_A} fp={FP_HEX} run=500 -->"
+	comments = [{"body": f"capped\n{cap_line}\nmore", "user": {"login": "workflow-bot"}}]
+	assert heal.verify_run_provenance(pr_payload, runs={"500": review}, comments=comments, trusted_login="workflow-bot", self_repo=SELF_REPO)["status"] == "ok"
+	comments = [{"body": f"capped `{cap_line}`", "user": {"login": "workflow-bot"}}]
+	assert heal.verify_run_provenance(pr_payload, runs={"500": review}, comments=comments, trusted_login="workflow-bot", self_repo=SELF_REPO)["reason"] == "no_verified_runs"
+
+
 def test_fingerprint_cli_subcommands_print_log_safe_key_values() -> None:
 	with tempfile.TemporaryDirectory(prefix="heal-fp-cli-") as tmp_name:
 		tmp = Path(tmp_name)

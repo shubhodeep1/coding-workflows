@@ -2013,6 +2013,51 @@ _jq_field()
 	fi
 }
 
+# Head-bound squash merge (security-pass finding
+# poller-merge-unbound-to-checked-head). Every direct or auto merge the
+# poller performs goes through here with the head SHA its check-runs and
+# freshness gates evaluated, so GitHub (expectedHeadOid) refuses the merge
+# when the PR author pushed after those gates ran; the next poll tick then
+# re-checks the new head. The final integration merge binds inline because
+# it keeps its own --delete-branch / error-capture handling.
+#
+#   _orch_squash_merge_bound <pr> <head_sha> [auto|sync]
+#     auto (default): enable auto-merge, falling back to a direct merge.
+#     sync:           direct merge only.
+# The noop-suspicious force-merge (auto-merge only) binds inline.
+#   Returns 0 when GitHub accepted the merge or the auto-merge request,
+#   1 when it refused, 2 (no gh call) when the SHA is not 40-hex.
+#   Sets ORCH_MERGE_BOUND_OUTCOME=enabled|merged|failed|refused.
+_orch_squash_merge_bound()
+{
+	local pr="$1"
+	local head_sha="${2:-}"
+	local mode="${3:-auto}"
+	ORCH_MERGE_BOUND_OUTCOME="refused"
+	if ! [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+		echo "::warning::ORCH_MERGE_HEAD_BOUND pr=${pr} outcome=refused reason=unresolved_head_sha"
+		return 2
+	fi
+	case "${mode}" in
+		auto|sync) ;;
+		*) mode="auto" ;;
+	esac
+	if [ "${mode}" != "sync" ] \
+		&& gh_retry gh pr merge "${pr}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${head_sha}" >/dev/null; then
+		ORCH_MERGE_BOUND_OUTCOME="enabled"
+		echo "ORCH_MERGE_HEAD_BOUND pr=${pr} head_sha=${head_sha} mode=${mode} outcome=enabled"
+		return 0
+	fi
+	if gh_retry gh pr merge "${pr}" --repo "${GITHUB_REPOSITORY}" --squash --match-head-commit "${head_sha}" >/dev/null; then
+		ORCH_MERGE_BOUND_OUTCOME="merged"
+		echo "ORCH_MERGE_HEAD_BOUND pr=${pr} head_sha=${head_sha} mode=${mode} outcome=merged"
+		return 0
+	fi
+	ORCH_MERGE_BOUND_OUTCOME="failed"
+	echo "ORCH_MERGE_HEAD_BOUND pr=${pr} head_sha=${head_sha} mode=${mode} outcome=failed"
+	return 1
+}
+
 ENABLE_VALIDATION_RAW="${ENABLE_VALIDATION:-true}"
 ENABLE_VALIDATION="false"
 if is_truthy "${ENABLE_VALIDATION_RAW}"; then
@@ -11868,7 +11913,20 @@ Unable to create or locate the final integration PR from \`${integration_branch}
     return 1
   fi
 
-  if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" = "true" ] && ! _pr_checks_completed "${final_pr}" "" "${default_branch}"; then
+  # Head binding (security-pass finding poller-merge-unbound-to-checked-head):
+  # the head SHA observed here feeds the check-runs gate AND the merge's
+  # --match-head-commit, so a push between the check and the merge is
+  # rejected by GitHub instead of merging an unchecked commit.
+  local pr_head_sha=""
+  pr_head_sha="$(_jq_field "${pr_json}" '.head.sha' '[0-9a-f]{40}')"
+  if [ "${pr_state}" = "open" ] && [ -z "${pr_head_sha}" ]; then
+    FINAL_MERGE_BUDGET_ELIGIBLE="0"
+    echo "::warning::ORCH_MERGE_HEAD_BOUND pr=${final_pr} outcome=refused reason=unresolved_head_sha"
+    echo "  [final-merge] Could not resolve the head SHA of PR #${final_pr}. Will retry next poll."
+    return 1
+  fi
+
+  if [ "${pr_state}" = "open" ] && [ "${pr_mergeable}" = "true" ] && ! _pr_checks_completed "${final_pr}" "${pr_head_sha}" "${default_branch}"; then
     FINAL_MERGE_BUDGET_ELIGIBLE="0"
     echo "  [final-merge] Required checks not complete for PR #${final_pr}. Will retry next poll."
     return 1
@@ -11883,7 +11941,8 @@ Unable to create or locate the final integration PR from \`${integration_branch}
   fi
 
   local merge_err=""
-  if merge_err="$(gh_retry gh pr merge "${final_pr}" --repo "${GITHUB_REPOSITORY}" --squash --delete-branch 2>&1 >/dev/null)"; then
+  echo "ORCH_MERGE_HEAD_BOUND pr=${final_pr} head_sha=${pr_head_sha} mode=sync outcome=attempt"
+  if merge_err="$(gh_retry gh pr merge "${final_pr}" --repo "${GITHUB_REPOSITORY}" --squash --delete-branch --match-head-commit "${pr_head_sha}" 2>&1 >/dev/null)"; then
     jq --argjson final_pr "${final_pr}" \
       '.final_merge_pr = $final_pr |
        .final_merge_status = "merged" |
@@ -11945,6 +12004,18 @@ Integration branch \`${integration_branch}\` was squash-merged into \`${default_
     merge_err="$(printf '%s' "${merge_err}" | head -c 5000)"
     jq --arg err "${merge_err}" '.final_merge_error = $err' \
       "${STATE_FILE}" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "${STATE_FILE}"
+  fi
+
+  # The head moved after the checks ran: GitHub refused the bound merge.
+  # Not a merge failure; the next poll re-checks the new head without
+  # spending the final-merge budget.
+  local post_merge_head_sha=""
+  post_merge_head_sha="$(_jq_field "${pr_json}" '.head.sha' '[0-9a-f]{40}')"
+  if [ "${pr_state}" = "open" ] && [ -n "${post_merge_head_sha}" ] && [ "${post_merge_head_sha}" != "${pr_head_sha}" ]; then
+    FINAL_MERGE_BUDGET_ELIGIBLE="0"
+    echo "ORCH_MERGE_HEAD_BOUND pr=${final_pr} head_sha=${pr_head_sha} mode=sync outcome=failed reason=head_moved current_head=${post_merge_head_sha}"
+    echo "  [final-merge] PR #${final_pr} head moved during the merge attempt. Will retry next poll."
+    return 1
   fi
 
   # Post-merge-attempt conflict path: squash merge was rejected by
@@ -18623,13 +18694,17 @@ STALL_EOF
           [ -n "${merge_pr_json}" ] || merge_pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${merge_pr}" 2>/dev/null || echo "")"
           merge_state="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .state?) then .state else empty end' 2>/dev/null | tail -n1)"
           merge_mergeable="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and (.mergeable == true or .mergeable == false)) then .mergeable else empty end' 2>/dev/null | tail -n1)"
-          if [ "${merge_state}" = "open" ] && [ "${merge_mergeable}" = "true" ] && _pr_checks_completed "${merge_pr}" \
-            && _pr_base_fresh_for_merge "${merge_pr}" \
-              "$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)" \
-              "$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .base.ref?) then .base.ref else empty end' 2>/dev/null | tail -n1)"; then
-            gh_retry gh pr merge "${merge_pr}" --repo "${GITHUB_REPOSITORY}" --squash --auto >/dev/null 2>&1 \
-              || gh_retry gh pr merge "${merge_pr}" --repo "${GITHUB_REPOSITORY}" --squash >/dev/null 2>&1 \
-              || true
+          local merge_head_sha merge_base_ref
+          merge_head_sha="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)"
+          merge_base_ref="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .base.ref?) then .base.ref else empty end' 2>/dev/null | tail -n1)"
+          # One observed head feeds the checks, the freshness gate and the
+          # bound merge (two-argument checks call keeps the legacy
+          # block-on-any filter).
+          if [ "${merge_state}" = "open" ] && [ "${merge_mergeable}" = "true" ] \
+            && [[ "${merge_head_sha}" =~ ^[0-9a-f]{40}$ ]] \
+            && _pr_checks_completed "${merge_pr}" "${merge_head_sha}" \
+            && _pr_base_fresh_for_merge "${merge_pr}" "${merge_head_sha}" "${merge_base_ref}"; then
+            _orch_squash_merge_bound "${merge_pr}" "${merge_head_sha}" auto || true
           fi
         fi
         if ! [[ "${merge_pr}" =~ ^[0-9]+$ ]]; then
@@ -21513,8 +21588,7 @@ The poller will resume processing on the next cycle."
                 echo "  [backward-scan] Backpressure active (ahead_by=${CWS_BACKPRESSURE_AHEAD_BY}, threshold=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS}, effective_threshold=${_bws_effective_threshold}); deferring auto-merge of PR #${PW_PR} for prior-wave issue #${pw_inum}."
                 continue
               fi
-              if gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto 2>/dev/null \
-                || gh_retry gh pr merge "${PW_PR}" --repo "${GITHUB_REPOSITORY}" --squash 2>/dev/null; then
+              if _orch_squash_merge_bound "${PW_PR}" "${_pw_head_sha}" auto; then
                 refresh_integration_backpressure_gate_after_merge || true
               fi
             elif [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "false" ]; then
@@ -22211,11 +22285,14 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
 		    esac
 		  fi
 		  echo "  Merging PR #${RTM_PR} (squash)..."
-		  if gh_retry gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
-		    echo "  PR #${RTM_PR} merge initiated."
-		    refresh_integration_backpressure_gate_after_merge || true
-		  elif gh_retry gh pr merge "${RTM_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
-		    echo "  PR #${RTM_PR} merged directly."
+		  # Bound to the head the check-runs gate evaluated above
+		  # (_sync_integration_and_rebase_subissue rc 0 left it unchanged).
+		  if _orch_squash_merge_bound "${RTM_PR}" "${_rtm_head_sha}" auto; then
+		    if [ "${ORCH_MERGE_BOUND_OUTCOME}" = "merged" ]; then
+		      echo "  PR #${RTM_PR} merged directly."
+		    else
+		      echo "  PR #${RTM_PR} merge initiated."
+		    fi
 		    refresh_integration_backpressure_gate_after_merge || true
 		  else
 		    echo "::warning::Could not merge PR #${RTM_PR} for issue #${rtm_issue}. May need manual merge or branch protection prevents it."
@@ -23372,11 +23449,12 @@ sys.exit(1)
           _rb_merge_base="$(_jq_field "${_rb_merge_json}" '.base.ref')"
 		  if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_merge_sha}" "${_rb_merge_base}" \
 		    && _pr_base_fresh_for_merge "${RB_PR}" "${_rb_merge_sha}" "${_rb_merge_base}"; then
-		    if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
-		      echo "  PR #${RB_PR} merge initiated (auto)."
-		      RB_MERGED="true"
-		    elif gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
-		      echo "  PR #${RB_PR} merged directly."
+		    if _orch_squash_merge_bound "${RB_PR}" "${_rb_merge_sha}" auto; then
+		      if [ "${ORCH_MERGE_BOUND_OUTCOME}" = "merged" ]; then
+		        echo "  PR #${RB_PR} merged directly."
+		      else
+		        echo "  PR #${RB_PR} merge initiated (auto)."
+		      fi
 		      RB_MERGED="true"
 		    else
 		      echo "::warning::Could not merge PR #${RB_PR}."
@@ -23430,8 +23508,7 @@ sys.exit(1)
             _rb_fm_base="$(_jq_field "${_rb_fm_json}" '.base.ref')"
 				if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_fm_sha}" "${_rb_fm_base}" \
 				  && _pr_base_fresh_for_merge "${RB_PR}" "${_rb_fm_sha}" "${_rb_fm_base}"; then
-				  if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
-				    || gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
+				  if _orch_squash_merge_bound "${RB_PR}" "${_rb_fm_sha}" auto; then
 				    RB_FORCE_MERGED="true"
 				  else
 				    echo "::warning::Could not merge PR #${RB_PR} in force-merge path."
@@ -23746,8 +23823,7 @@ ${RB_FIX_DESC}
                   _rb_nofix_base="$(_jq_field "${_rb_nofix_json}" '.base.ref')"
                   if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_nofix_sha}" "${_rb_nofix_base}" \
                     && _pr_base_fresh_for_merge "${RB_PR}" "${_rb_nofix_sha}" "${_rb_nofix_base}"; then
-                    if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
-                      || gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
+                    if _orch_squash_merge_bound "${RB_PR}" "${_rb_nofix_sha}" auto; then
                       tg_notify "Orchestrator judge merged PR #${RB_PR} (no fix changes needed, issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "DEBUG"
                     else
                       echo "::warning::Could not merge PR #${RB_PR} in no-fix merge path."
@@ -26630,7 +26706,12 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 
 	# All gates passed → force-merge.
 	echo "  PR #${N_PR}: all force-merge gates passed. Enabling auto-merge via 'gh pr merge --auto'..."
-	if gh_retry gh pr merge "${N_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto >/dev/null 2>&1; then
+	# Auto-only (no direct-merge fallback), bound to the head the gates above
+	# evaluated so a later push cannot ride this auto-merge; an unresolved
+	# head never reaches gh (security-pass finding
+	# poller-merge-unbound-to-checked-head).
+	if [[ "${N_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]] \
+		&& gh_retry gh pr merge "${N_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${N_HEAD_SHA}" >/dev/null 2>&1; then
 		NOOP_FORCE_MERGED=$((NOOP_FORCE_MERGED + 1))
 		tg_send_msg "Force-merging PR #${N_PR} after ${NOOP_MAX_RETRIES} noop-suspicious retries; reviewer audit was healthy."$'\n'"PR: $(_gh_url "pull/${N_PR}")" "WARNING" >/dev/null 2>&1 || true
 

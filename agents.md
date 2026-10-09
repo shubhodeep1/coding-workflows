@@ -942,9 +942,20 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   names; 300 base-side files counts as overlap) it requests
   `PUT pulls/{n}/update-branch` bound to the head and returns 1, so the
   caller skips the merge and the `synchronize` run re-validates CI and
-  review on the combined tree. `fresh`, `clean`, `disabled`
-  (`MERGE_BASE_FRESHNESS_ENABLED`) and `unknown` (any API failure, logged
-  with a warning) return 0. The `deterministic-skip-merge` job reads the
+  review on the combined tree. `fresh`, `clean` and `disabled`
+  (`MERGE_BASE_FRESHNESS_ENABLED`) return 0. `unknown` (any API failure,
+  or an unresolved head or base) logs a warning with `action=defer` and
+  returns 1 without an update request, so the merge waits for the next
+  poll tick or review round (#6988, security-pass finding
+  `merge-freshness-unknown-proceeds`). Every poller merge (final
+  integration merge, `attempt_merge`, backward-scan, ready-to-merge loop,
+  review-blocked merge / force-merge / no-fix, noop-suspicious
+  force-merge) passes `--match-head-commit` with the head SHA its checks
+  and freshness gate saw, through `_orch_squash_merge_bound` or inline
+  (log `ORCH_MERGE_HEAD_BOUND`); an unresolved head never reaches `gh`.
+  Review/autofix failure markers count only as the comment's trailing
+  standalone line (`_FAILURE_MARKER_TRAILING_RE`), so a marker quoted in
+  an error line cannot shadow the real one. The `deterministic-skip-merge` job reads the
   library from the gate's verified support commit (`.codex-freshness-src`);
   an unverified checkout skips the freshness gate with a warning and
   refuses auto-merge, because the required-checks wait below cannot run.

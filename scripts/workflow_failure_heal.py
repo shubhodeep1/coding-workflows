@@ -273,6 +273,15 @@ _FAILURE_CAP_MARKER_RE = re.compile(r"<!--\s*" + re.escape(FAILURE_CAP_MARKER_TA
 # poller jq checks; an inline quote (e.g. a "First error" code span) is not one.
 _FAILURE_CAP_MARKER_LINE_RE = re.compile(r"^<!--\s*" + re.escape(FAILURE_CAP_MARKER_TAG) + r"\s+(?P<fields>[^>\n]*?)\s*-->[ \t]*$", re.MULTILINE)
 _MARKER_FIELD_RE = re.compile(r"(?P<key>[a-z_]+)=(?P<value>\S+)")
+# Security-pass finding support-version-failure-marker-shadowing: the
+# pipeline appends the failure marker as the comment's last line (render_failure_marker
+# behind AUTOFIX_FAILURE_MARKER_SUFFIX in review_autofix.yml). Only that
+# trailing standalone line is metadata; a marker quoted earlier in the body
+# (an echoed "First error" line, a log tail) is untrusted text and must never
+# shadow the genuine marker or link a run.
+_FAILURE_MARKER_TRAILING_RE = re.compile(
+	r"(?:\A|\n)<!--[ \t]*" + re.escape(FAILURE_MARKER_TAG) + r"[ \t]+(?P<fields>[^>\n]*?)[ \t]*-->\s*\Z"
+)
 _FP_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
 _UNSAFE_TOKEN_RE = re.compile(r"[^A-Za-z0-9_.-]")
 _REPO_PATH_RE = re.compile(r"^[A-Za-z0-9_./-]{1,120}$")
@@ -2278,6 +2287,15 @@ def render_failure_marker(head_sha: str, failure_reason: str, fp: str, degraded:
 	return f"<!-- {FAILURE_MARKER_TAG} " + " ".join(fields) + " -->"
 
 
+def _canonical_failure_marker(body: str) -> re.Match[str] | None:
+	"""Return the comment's trailing standalone failure marker, if any.
+
+	``body`` must already be sanitized. A marker anywhere else in the body is
+	ignored (see ``_FAILURE_MARKER_TRAILING_RE``).
+	"""
+	return _FAILURE_MARKER_TRAILING_RE.search(body)
+
+
 def _marker_fields(match: re.Match[str] | None) -> dict[str, str]:
 	fields: dict[str, str] = {}
 	if match is None:
@@ -2385,7 +2403,9 @@ def verify_run_provenance(
 				if not isinstance(comment, dict) or _comment_author(comment) != trusted_login.strip().lower():
 					continue
 				body = sanitize_text(comment.get("body"))
-				if any(_marker_fields(pattern.search(body)).get("run") == run_id for pattern in (_FAILURE_MARKER_RE, _FAILURE_CAP_MARKER_RE)):
+				if _marker_fields(_canonical_failure_marker(body)).get("run") == run_id or any(
+					_marker_fields(match).get("run") == run_id for match in _FAILURE_CAP_MARKER_LINE_RE.finditer(body)
+				):
 					linked = True
 					break
 				if body.strip().startswith(AUTOFIX_FAILURE_COMMENT_MARKERS) and any(item["run_id"] == run_id for item in extract_run_refs([body], repo)):
@@ -2433,7 +2453,7 @@ def parse_failure_markers(comments: Iterable[dict[str, Any]], *, head_sha: str, 
 	for comment in comments:
 		if not isinstance(comment, dict) or _comment_author(comment) != author:
 			continue
-		fields = _marker_fields(_FAILURE_MARKER_RE.search(sanitize_text(comment.get("body"))))
+		fields = _marker_fields(_canonical_failure_marker(sanitize_text(comment.get("body"))))
 		if fields.get("head", "").lower() != head or not _FP_HEX_RE.match(fields.get("fp", "")):
 			continue
 		if support and fields.get("support", "").lower() != support:
@@ -2494,7 +2514,12 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 	skip_paired_summary = False
 	for comment in reversed(ordered):
 		body = sanitize_text(comment.get("body"))
-		match = _FAILURE_MARKER_RE.search(body)
+		match = _canonical_failure_marker(body)
+		if match is None and _comment_author(comment) != author and _FAILURE_MARKER_RE.search(body) is not None:
+			# Untrusted comment quoting a marker: skipped as before. A trusted
+			# comment whose only marker is not the trailing line is treated as
+			# unmarked below, never parsed for its forged fields.
+			continue
 		if match is not None:
 			fields = _marker_fields(match)
 			if _comment_author(comment) != author or fields.get("head", "").lower() != head or not _FP_HEX_RE.match(fields.get("fp", "")):

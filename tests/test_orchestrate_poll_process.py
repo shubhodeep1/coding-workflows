@@ -23349,7 +23349,7 @@ def test_final_merge_success_sends_critical_telegram_alert():
 	# PR url, tracking-issue url, human-readable gate description, and the
 	# CRITICAL level).
 	poller_body = POLLER_SCRIPT.read_text(encoding="utf-8")
-	merge_marker = '--squash --delete-branch 2>&1 >/dev/null)"; then'
+	merge_marker = '--squash --delete-branch --match-head-commit "${pr_head_sha}" 2>&1 >/dev/null)"; then'
 	merge_idx = poller_body.find(merge_marker)
 	assert merge_idx != -1, (
 		"finalize merge-success arm (`gh pr merge --squash --delete-branch`) "

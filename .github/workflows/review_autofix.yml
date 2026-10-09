@@ -2304,14 +2304,24 @@ jobs:
               echo "Enabling auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER} (head ref '${PR_HEAD_REF}')..."
               echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=merge_commit"
               if ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
-                auto_merge_summary="DEFERRED (base moved under this PR's files; branch update requested, the synchronize run re-validates)"
-                echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
+                if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
+                  auto_merge_summary="DEFERRED (base moved under this PR's files; branch update requested, the synchronize run re-validates)"
+                  echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
+                else
+                  auto_merge_summary="DEFERRED (base freshness could not be verified; no branch update requested, the review sweep retries)"
+                  echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_freshness_unknown"
+                fi
               elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
                 auto_merge_summary="REFUSED (required check-runs ${PR_CHECKS_WAIT_OUTCOME:-unknown} on the gate-observed head)"
                 echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=refuse reason=required_checks_${PR_CHECKS_WAIT_OUTCOME:-unknown}"
               elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null && ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
-                auto_merge_summary="DEFERRED (base moved during the checks wait; branch update requested)"
-                echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
+                if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
+                  auto_merge_summary="DEFERRED (base moved during the checks wait; branch update requested)"
+                  echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
+                else
+                  auto_merge_summary="DEFERRED (base freshness could not be verified; no branch update requested, the review sweep retries)"
+                  echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_freshness_unknown"
+                fi
               elif gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto --match-head-commit "${PR_HEAD_SHA}"; then
                 auto_merge_ready_labels_allowed="true"
                 auto_merge_summary="ENABLED (merge commit)"
@@ -2331,14 +2341,24 @@ jobs:
             echo "Enabling auto-merge (squash) on PR #${PR_NUMBER}..."
             echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=squash"
             if ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
-              auto_merge_summary="DEFERRED (base moved under this PR's files; branch update requested, the synchronize run re-validates)"
-              echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
+              if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
+                auto_merge_summary="DEFERRED (base moved under this PR's files; branch update requested, the synchronize run re-validates)"
+                echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
+              else
+                auto_merge_summary="DEFERRED (base freshness could not be verified; no branch update requested, the review sweep retries)"
+                echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_freshness_unknown"
+              fi
             elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
               auto_merge_summary="REFUSED (required check-runs ${PR_CHECKS_WAIT_OUTCOME:-unknown} on the gate-observed head)"
               echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=refuse reason=required_checks_${PR_CHECKS_WAIT_OUTCOME:-unknown}"
             elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null && ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
-              auto_merge_summary="DEFERRED (base moved during the checks wait; branch update requested)"
-              echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
+              if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
+                auto_merge_summary="DEFERRED (base moved during the checks wait; branch update requested)"
+                echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
+              else
+                auto_merge_summary="DEFERRED (base freshness could not be verified; no branch update requested, the review sweep retries)"
+                echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_freshness_unknown"
+              fi
             elif gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${PR_HEAD_SHA}"; then
               auto_merge_ready_labels_allowed="true"
               auto_merge_summary="ENABLED (squash)"
@@ -2661,7 +2681,7 @@ jobs:
             cap_title="non-retryable failure"
             cap_lead="The last review/autofix run on head \`${PR_HEAD_SHA:0:12}\` failed with a non-retryable reason"
             cap_first_error="$(jq -r --arg author "${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}" --arg head "${PR_HEAD_SHA}" \
-              '[.[] | select((.author_login // "" | ascii_downcase) == ($author | ascii_downcase)) | (.body // "") | select(contains("<!-- review-autofix-failure:v1 head=" + $head + " "))] | last // "" | (capture("[*][*]First error:[*][*] `(?<e>[^`\n]{1,400})`")? // {e: ""}).e' \
+              '[.[] | select((.author_login // "" | ascii_downcase) == ($author | ascii_downcase)) | (.body // "") | select(test("(\\A|\\n)<!-- review-autofix-failure:v1 head=" + $head + "( [^ >\\n]+)* -->\\s*\\z"))] | last // "" | (capture("[*][*]First error:[*][*] `(?<e>[^`\n]{1,400})`")? // {e: ""}).e' \
               "${fresh_cap_comments_file}" 2>/dev/null || true)"
           fi
           BODY="$(cat <<EOF
