@@ -396,12 +396,13 @@ def test_claude_run_passes_the_token_file_only_to_the_host_relay_flag():
 	assert body.index('_ai_engine_pool_isolated "${pool_dir}" "${workdir}"') < body.index('run_dir="$(mktemp -d')
 
 
-def _pool_isolated(pool: Path, workdir: Path, includes: str = "") -> int:
+def _pool_isolated(pool: Path, workdir: Path, includes: str = "", runner_temp: Path | None = None) -> int:
 	import os
 	import subprocess
 
 	env = {key: value for key, value in os.environ.items() if key not in ("BASH_ENV", "ENV")}
 	env["AI_ENGINE_INCLUDE_PATHS"] = includes
+	env["RUNNER_TEMP"] = str(runner_temp if runner_temp is not None else workdir.parent / "rt")
 	result = subprocess.run(
 		["bash", "-c", 'source "$1"; _ai_engine_pool_isolated "$2" "$3"', "_", str(AI_ENGINE), str(pool), str(workdir)],
 		env=env, capture_output=True, text=True, timeout=30, check=False,
@@ -432,6 +433,17 @@ def test_pool_overlap_guard_rejects_pool_inside_workdir_including_symlink_aliase
 	assert _pool_isolated(outside, work, includes=f"{tmp_path}\n") != 0
 	assert _pool_isolated(outside, work, includes=f"{outside / 'tokens' / 'A'}\n") != 0
 	assert _pool_isolated(outside, work, includes=f"{work / 'big.txt'}\n") == 0
+	# An include path that is a symlink into the pool is resolved and rejected.
+	include_alias = tmp_path / "include-alias"
+	include_alias.symlink_to(outside / "tokens", target_is_directory=True)
+	assert _pool_isolated(outside, work, includes=f"{include_alias}\n") != 0
+	# The session store (RUNNER_TEMP/claude-isolated-home) is mounted as ~/.claude.
+	runner_temp = tmp_path / "rt"
+	home_pool = runner_temp / "claude-isolated-home" / "pool"
+	(home_pool / "tokens").mkdir(parents=True)
+	assert _pool_isolated(home_pool, work, runner_temp=runner_temp) != 0
+	assert _pool_isolated(runner_temp, work, runner_temp=runner_temp) != 0
+	assert _pool_isolated(outside, work, runner_temp=runner_temp) == 0
 	# An unresolvable pool fails closed.
 	assert _pool_isolated(tmp_path / "missing", work) != 0
 
