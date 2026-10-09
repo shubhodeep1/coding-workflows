@@ -1466,6 +1466,33 @@ committing the corresponding file:
   pins and verifies that PR's SHA without persisting checkout credentials.
   Empty `target_ref` retains integration/default selection.
 
+## Validation manifest shell-safety gate
+
+- `.ai/validate.yml` is untrusted checkout data, and
+  `scripts/render_validation_templates.py` writes its values unescaped into
+  `validation/tests/*.sh`, which `scripts/validate_driver.sh` and
+  `validate_process.sh`'s runtime fallback runner execute on the host.
+- `run_template_validation_harness_renderer` in `scripts/validate_process.sh`,
+  which both the first render and render recovery call, parses the manifest
+  with the isolated renderer Python and refuses to render (exit 14, harness
+  error) when a value in `slots` or another top-level key holds a quote, `$`,
+  a backtick, a backslash, a control character or a non-scalar YAML type such
+  as `!!binary`. Exempt keys: `custom_tests`, `skip_tests`, `env_overrides`,
+  `health_check`, `services`, `port`.
+- The log names only a sanitized JSON pointer and the character class, never
+  the value. Parse errors and non-mapping roots are left to the renderer.
+  Recursive or shared YAML aliases are checked once per container, and
+  nesting deeper than 32 levels is rejected.
+- `scripts/validation_refresh_runner.py` renders consumer manifests and runs
+  `validate_driver.sh` without `validate_process.sh`, so
+  `_run_refresh_pipeline` applies the same check
+  (`manifest_shell_safety_violations`) before rendering and reports a red
+  pipeline with `manifest_shell_safety_failed: <pointer>: <class>`. It fails
+  closed when the manifest is unreadable or PyYAML is missing. Keep the two
+  copies' exempt keys and character classes identical.
+  Finding `validation-manifest-shell-injection-fallback`; tests:
+  `tests/test_validate_process_manifest_shell_safety.py`.
+
 ## Workflow scenario traces
 
 - Flag: `WORKFLOW_LOG_SCENARIO_TRACE_ENABLED` (default `false`).
