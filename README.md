@@ -2153,6 +2153,8 @@ through `clarify → plan → implement → review`.
 | `DOCS_DECISION_LINT_ENABLED` | `false` | Advisory CI surfacing switch for the plan-decisions linter. The linter still runs on `push` / `pull_request`, but warnings about missing or malformed `## Decisions` blocks in `docs/plans/*.md` are only replayed into CI logs and the step summary when this is `true`. |
 | `UNATTENDED_IDENTITY_REINJECT_ENABLED` | `false` | Opt-in prompt-render flag for the Phase B identity-recall block. Truthy values (`1`, `true`, `yes`, `on`, `y`; case-insensitive, surrounding whitespace ignored) enable the canonical renderer `scripts/render_prompt.py` to parse the canonical `prompts/mode-*.txt` role/goal opening paragraph and inject a rendered `<identity-recall>` block immediately after the opening paragraph of rendered phase prompts; `scripts/render_prompt.sh` inherits the same behavior by delegating to the Python renderer. Parse failures fail open: rendering continues unchanged and logs `IDENTITY_REINJECT_PARSE_FAIL`. |
 | `UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED` | `false` | Opt-in Phase A archive flag. When `true`, the implement, orchestrate-poll judge, review editor, and validate discover/diagnose success paths wrap their captured Codex output files into fail-open `.transcripts/<sanitized-run_id>-<sanitized-phase>-<ts>.json` archives. Archive I/O failures do not fail the host phase; they only log `TRANSCRIPT_ARCHIVE_FAIL`. |
+| `CLAUDE_POOL_HEALTH_ALERT_ENABLED` | `true` | Hourly Telegram `WARNING` from `orchestrate_poll.yml` naming every Claude pool account at or above `gate_utilization` (and every rejected token); `false` turns it off. See "Near-cap alert" under the Claude engine. |
+| `CLAUDE_POOL_HEALTH_WINDOW_MINUTES` | `5` | The near-cap alert is sent only by the poll cycle whose UTC minute is below this value, so it goes out at most once an hour. |
 | `UNATTENDED_NAG_REMINDER_ENABLED` | `false` | Opt-in wrapper-level `<reminder>` injection after repeated silent reviewer/editor/judge turns. When `false`, the wrappers keep the existing retry behavior unchanged. |
 | `UNATTENDED_NAG_SILENT_ROUNDS` | `3` | Consecutive silent-turn threshold before nag-reminder injection in the review editor, review reviewers, and orchestrate-poll judge paths. Invalid or out-of-range values clamp conservatively to `3`. |
 | `WORKFLOW_LOG_SCENARIO_TRACE_ENABLED` | `false` | Enables the additive local-only `.ai/workflow_traces/<run_id>.scenario.json` renderer in `workflow-log-analysis.yml`; parseable runs emit `WORKFLOW_SCENARIO_TRACE_WRITTEN`, per-run parser drift fail-opens with `WORKFLOW_SCENARIO_TRACE_PARSE_FAIL`. |
@@ -2539,13 +2541,34 @@ source `tools/claude-pool-broker/`). A job that hosts a Claude role runs
    writes the accounts under the `0.9` gate, least used first, to
    `$RUNNER_TEMP/claude-pool`; its post step deletes them.
 
-Its outputs are `available` (`true`/`false`), `reason`, `accounts` and
-`pool_dir`; it never fails the job. `available=false` (no broker URL, no
+Its outputs are `available` (`true`/`false`), `reason`, `accounts`,
+`pool_dir` and `probes` (the probe records as a JSON list: account name,
+5-hour and 7-day utilization, reset times, status, error; never a token;
+written even when every account is gated); it never fails the job.
+`available=false` (no broker URL, no
 `id-token: write`, a refusal, every account gated) means every Claude role in
 the job runs codex (D1). The `ai-*.yml` wrapper templates and the
 `internal-*.yml` callers of the Claude-hosting reusable workflows grant
 `id-token: write`; consumers whose sync is stale fall back to codex until
 their next `@stable` sync.
+**Near-cap alert.** `orchestrate_poll.yml` runs
+`scripts/claude_pool_health_alert.sh` right after the pool step on every
+poll cycle that fetched the pool (a tracking issue with work and a Claude
+role). It reads the `probes` output and sends one Telegram `WARNING`
+(`TG_BOT_SECRET` / `TG_ADMIN_CHAT_ID`, so the same chat as the engine
+fallback alert) naming every account at or above `gate_utilization` with
+both utilizations and the reset time of each window at the gate, every
+account whose token was rejected (`auth_failed`), and the usable count;
+accounts whose probe failed are listed but not counted. Nothing is sent
+while every account is below the gate. The poller runs every five minutes,
+so the message goes out at most once an hour: only the cycle whose UTC
+minute is below `CLAUDE_POOL_HEALTH_WINDOW_MINUTES` (default `5`) sends it,
+and a cycle delayed past the window skips that hour instead of sending
+twice. `CLAUDE_POOL_HEALTH_ALERT_ENABLED=false` (repo variable) turns it
+off. The step logs `CLAUDE_POOL_HEALTH accounts= gated= auth_failed=
+probe_failed= alert=sent|not_delivered|none|outside_window|disabled|no_probes|invalid_probes`
+and never fails the job.
+
 The token action accepts only the deployed broker URL in Actions jobs and
 only removes pool directories immediately under `$RUNNER_TEMP`; a rejected
 URL or unsafe directory returns `available=false` without minting an OIDC token.
