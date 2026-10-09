@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The failed run's step log isn't in the repository, and I have no way to fetch it. Option B asks for data I can't supply, so choosing it would just loop back to another question. Option C closes the issue without a fix, which goes against the fix constraints. The action at `.github/actions/install-opencode/action.yml` lines 25, 27, 33 and 34 runs four commands under `set -euo pipefail` with no message saying which one failed. The input validation (line 20) and the version mismatch (line 28) already print their own `::error::` lines, so this run's log would have named those if they had been the cause. Giving each remaining command its own error line, while keeping it fatal, is the smallest change that makes the next failure diagnosable.\nQ2: Nothing shows that `opencode models --refresh` is the stage that failed. Making it non-fatal would weaken a check, which the issue's fix constraints forbid. Keep the current fail-closed behaviour.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - .github/actions/install-opencode/action.yml (lines 18-34: the `npm install`, `opencode --version`, `opencode models --refresh` and `opencode run --help` commands)\n    - tests/test_review_autofix_review_pipeline_contract.py and tests/test_opencode_live_smoke_workflow.py (existing tests that refer to install-opencode; extend these or add a focused test next to them)\n  steps:\n    - Wrap each command in its own check so that on failure it prints `::error::install-opencode: stage=<npm_install|version_check|models_refresh|run_help> rc=<n>` to stderr and then exits with that same code. Behaviour does not change: no retry, no `continue-on-error`, the step still fails.\n    - For `version_check`, keep the existing mismatch error line exactly as it is and add the stage line when `opencode --version` itself fails. Keep the existing semver-validation error line unchanged.\n    - Add a contract test that runs the action's `run:` body with a stub `npm` and a stub `opencode` on PATH. Make each stage fail in turn and check that the step exits non-zero with that stage's `::error::` line. Also check that the step succeeds when every stub succeeds.\n    - Add a changelog fragment at `changelog.d/<issue>-install-opencode-stage-errors.md`.\n  replaces_acceptance_criterion: \"The fix must remove the cause and ship a regression test that reproduces the failing condition\" becomes \"the failing stage is reported in a fixed, testable form, and a regression test fails on the current action (no stage line) and passes with the change\"\n  equivalence_argument: The root cause can't be found from the evidence available. Attributing each stage in a fixed format is the prerequisite for any real fix of the next occurrence, and it weakens no check. The test still fails before the change and passes after it.\n  reversibility: Additive diagnostic lines only. A human can revert the PR or replace it once the run log shows the actual cause.\n\nSETUP REQUIRED:\n- None.",
+  "fingerprint": "87ae1eca1c67fad2e87268a06649af4dd8f5bd9ed2d04cdb477395307582442a",
+  "lineage": {
+    "issue_number": 6818,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37863688133",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37863688133",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6818"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261009002252_1e5bc468f1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6818,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37863688133"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6818",
+  "timestamps": {
+    "created_at": "2026-10-09T00:22:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
