@@ -112,7 +112,7 @@
       "profile": "write"
     },
     "SECURITY_AUDIT": {
-      "engine": "codex",
+      "engine": "claude",
       "claude_model": "claude-opus-5-5",
       "profile": "read"
     },

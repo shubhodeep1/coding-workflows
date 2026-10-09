@@ -80,6 +80,20 @@ def _run_renderer(
 	)
 
 
+def _run_family_marker(script: Path) -> subprocess.CompletedProcess[str]:
+	# Execute the rendered marker script and let callers assert on its TAP
+	# output rather than its source text, so the check holds whether the
+	# template uses `echo` or `printf` (issue #6843, PR #6569 CI failure).
+	return subprocess.run(
+		["bash", str(script)],
+		cwd=str(script.parent),
+		text=True,
+		capture_output=True,
+		timeout=60,
+		env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+	)
+
+
 def _snapshot_directory(root: Path) -> tuple[list[str], str]:
 	files = sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file())
 	hasher = hashlib.sha256()
@@ -144,8 +158,10 @@ def test_renderer_happy_path_creates_expected_files() -> None:
 		assert "--host-header" in http_smoke_text
 		assert "TEST_HOST_HEADER" in http_smoke_text
 
-		family_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
-		assert "python-mongo-flask family for demo-project" in family_text
+		marker = _run_family_marker(output_root / "tests" / "10_family_marker.sh")
+		assert marker.returncode == 0, f"family marker failed rc={marker.returncode}: {marker.stderr}"
+		assert "1..1" in marker.stdout.splitlines(), marker.stdout
+		assert "ok 1 - python-mongo-flask family for demo-project" in marker.stdout.splitlines(), marker.stdout
 
 		lint_result = subprocess.run(
 			["python3", str(REPO_ROOT / "scripts" / "validation_lint.py"), str(output_root)],
@@ -166,10 +182,14 @@ def test_renderer_canary_tools_escaped_for_shell_safety() -> None:
 		_write_yaml(manifest_path, payload)
 
 		result = _run_renderer(manifest_path, output_root)
-		assert result.returncode == 0, result.stderr
-		canary_text = (output_root / "tests" / "00_canary.sh").read_text(encoding="utf-8")
-		assert "'tool$(echo pwn)'" in canary_text
-		assert "'tool'\"'\"'quote'" in canary_text
+		# Shell-active canary tool names are rejected before rendering
+		# (enforce_shell_safe_manifest) rather than rendered quoted; the inline
+		# CANARY_TOOLS default in the node/python-mongo-repo-checks canaries
+		# must stay a literal word list for validation_lint.py.
+		assert result.returncode != 0
+		assert "Manifest safety check failed: /slots/canary_tools/0" in result.stderr
+		assert "pwn" not in result.stderr
+		assert not (output_root / "tests" / "00_canary.sh").exists()
 
 
 def test_renderer_rejects_invalid_string_port() -> None:
@@ -345,8 +365,10 @@ def test_renderer_family_dispatch_routing() -> None:
 		assert '. "${ROOT_DIR}/_lib/graceful_shutdown.sh"' in hardhat_test_text
 		assert "npx hardhat test --network localhost" in hardhat_test_text
 
-		family_marker_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
-		assert "node-hardhat-solidity family for demo-project" in family_marker_text
+		marker = _run_family_marker(output_root / "tests" / "10_family_marker.sh")
+		assert marker.returncode == 0, f"family marker failed rc={marker.returncode}: {marker.stderr}"
+		assert "1..1" in marker.stdout.splitlines(), marker.stdout
+		assert "ok 1 - node-hardhat-solidity family for demo-project" in marker.stdout.splitlines(), marker.stdout
 		assert not (output_root / "tests" / "10_http_smoke.sh").exists()
 
 		lint_result = subprocess.run(
@@ -387,10 +409,12 @@ def test_renderer_node_runtime_family_dispatch_routing() -> None:
 		assert not (output_root / "tests" / "20_rpc_probe.sh").exists()
 		assert not (output_root / "tests" / "30_hardhat_test.sh").exists()
 
-		family_marker_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
 		env_text = (output_root / "validate.env").read_text(encoding="utf-8")
 		repo_checks_text = (output_root / "tests" / "40_repo_checks.sh").read_text(encoding="utf-8")
-		assert "node-runtime family for demo-project" in family_marker_text
+		marker = _run_family_marker(output_root / "tests" / "10_family_marker.sh")
+		assert marker.returncode == 0, f"family marker failed rc={marker.returncode}: {marker.stderr}"
+		assert "1..1" in marker.stdout.splitlines(), marker.stdout
+		assert "ok 1 - node-runtime family for demo-project" in marker.stdout.splitlines(), marker.stdout
 		# node-runtime renders raw (unquoted) JSON arrays so the in-container
 		# JSON.parse in 40_repo_checks.sh succeeds (regression: run 27939731907).
 		assert 'CUSTOM_TESTS_JSON=[' in env_text
@@ -457,8 +481,10 @@ def test_renderer_repo_checks_family_dispatch_routing() -> None:
 		assert "SKIP_TESTS_JSON" in repo_checks_text
 		assert "json.loads(payload)" in repo_checks_text
 
-		family_marker_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
-		assert "python-mongo-repo-checks family for demo-project" in family_marker_text
+		marker = _run_family_marker(output_root / "tests" / "10_family_marker.sh")
+		assert marker.returncode == 0, f"family marker failed rc={marker.returncode}: {marker.stderr}"
+		assert "1..1" in marker.stdout.splitlines(), marker.stdout
+		assert "ok 1 - python-mongo-repo-checks family for demo-project" in marker.stdout.splitlines(), marker.stdout
 
 		lint_result = subprocess.run(
 			["python3", str(REPO_ROOT / "scripts" / "validation_lint.py"), str(output_root)],

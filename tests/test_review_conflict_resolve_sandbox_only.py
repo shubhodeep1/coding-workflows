@@ -27,6 +27,12 @@ def _failure_helper() -> str:
 	return match.group()
 
 
+def _path_failure_helper() -> str:
+	match = re.search(r"^_resolver_fail_closed_for_conflict_paths\(\)\n\{\n.*?\n\}\n", _source(), re.M | re.S)
+	assert match is not None
+	return match.group()
+
+
 def _persistence_helper() -> str:
 	match = re.search(r"^_persist_resolver_retry_state_from_current_failure\(\)\n\{\n.*?\n\}\n", _source(), re.M | re.S)
 	assert match is not None
@@ -61,10 +67,12 @@ case "$1" in
     [ "${MODE:-}" != prepare_failed ] || exit 1
     if [ "${2:-}" = codex ]; then echo "$FAKE_ROOT/codex"; else echo "$FAKE_ROOT/claude"; fi ;;
   run)
-    if [ "${MODE:-}" = transfer_failed ] || [ "${MODE:-}" = transfer_unknown ] || [ "${MODE:-}" = rollback_failed ]; then
+    if [ "${MODE:-}" = transfer_failed ] || [ "${MODE:-}" = transfer_category ] || [ "${MODE:-}" = transfer_unknown ] || [ "${MODE:-}" = rollback_failed ]; then
       touch "$RUNTIME_DIR/review_sandbox_transfer_failed"
       if [ "${MODE:-}" = rollback_failed ]; then
         echo '::error::Review isolation snapshot or transfer rejected (ValueError) reason=transfer_rollback_failed' > "$RUNTIME_DIR/review_sandbox_transfer_reason_${3##*/}"
+      elif [ "${MODE:-}" = transfer_category ]; then
+        echo '::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category=symlink depth=2' > "$RUNTIME_DIR/review_sandbox_transfer_reason_${3##*/}"
       elif [ "${MODE:-}" = transfer_unknown ]; then
         echo 'unexpected transfer error' > "$RUNTIME_DIR/review_sandbox_transfer_reason_${3##*/}"
       else
@@ -84,7 +92,7 @@ esac
 @pytest.mark.parametrize("mode,engine,expected_rc", [
 	("ok", "codex", 0), ("ok", "claude", 0),
 	("prepare_failed", "codex", 1), ("outdated", "codex", 1),
-	("transfer_failed", "codex", 1),
+	("transfer_failed", "codex", 1), ("transfer_category", "codex", 1),
 ])
 def test_attempts_never_run_host_writer(tmp_path, mode, engine, expected_rc):
 	sandbox, calls = _stub(tmp_path)
@@ -147,11 +155,13 @@ attempt=1
 	assert not (tmp_path / "review_sandbox_transfer_failed").exists()
 	if mode == "transfer_failed":
 		assert "reason=unsafe_file" in result.stderr
+	if mode == "transfer_category":
+		assert "reason=unsafe_directory category=symlink depth=2" in result.stderr
 	if mode == "outdated":
 		assert "reason=sandbox_helper_outdated" in result.stderr
 
 
-@pytest.mark.parametrize("mode", ["prepare_failed", "outdated", "transfer_failed", "transfer_unknown", "cleanup_failed", "rollback_failed"])
+@pytest.mark.parametrize("mode", ["prepare_failed", "outdated", "transfer_failed", "transfer_category", "transfer_unknown", "cleanup_failed", "rollback_failed"])
 def test_unsafe_failure_stops_instead_of_retrying(tmp_path, mode):
 	sandbox, calls = _stub(tmp_path)
 	src = _helper()
@@ -183,6 +193,7 @@ echo unexpected
 		"prepare_failed": "reason=sandbox_prepare_failed",
 		"outdated": "reason=sandbox_helper_outdated",
 		"transfer_failed": "reason=sandbox_transfer_failed",
+		"transfer_category": "reason=sandbox_transfer_failed",
 		"transfer_unknown": "reason=sandbox_transfer_failed",
 		"cleanup_failed": "sandbox cleanup failed",
 		"rollback_failed": "reason=transfer_rollback_failed",
@@ -207,6 +218,7 @@ RESOLVER_CHECK_PATHS_STDERR_FILE={str(tmp_path / "check_paths_stderr")!r}
 emit_conflict_resolver_substate() {{ :; }}
 _persist_resolver_retry_state_from_current_failure() {{ printf '%s\\n' "$RESOLVER_ISOLATION_FAILURE_REASON" > "$RUNTIME_DIR/persisted_reason"; }}
 {_failure_helper()}
+{_path_failure_helper()}
 {_report_helper()}
 {_guard()}
 echo guard-passed
@@ -214,27 +226,69 @@ echo guard-passed
 	return result, calls
 
 
-@pytest.mark.parametrize("path,reason,shown", [
-	("assets/x.svg", "unsupported_type", "assets/x.svg"),
-	(".ai/x.txt", "excluded_component", ".ai/x.txt"),
-	(".claude/settings.json", "dot_directory", ".claude/settings.json"),
-	(".claude/hooks/pr_merge_status_guard.py", "live_safety_hook", ".claude/hooks/pr_merge_status_guard.py"),
-	("assets/\x1b[31m::set-output.svg", "unsupported_type", "redacted"),
+# Plainly named paths absent from the host are host-only (origin/main);
+# only the odd name keeps the nameless sandbox_path_unsupported reason.
+@pytest.mark.parametrize("path,reason,shown,fail_reason", [
+	("assets/x.svg", "unsupported_type", "assets/x.svg", "sandbox_path_host_only"),
+	(".ai/x.txt", "excluded_component", ".ai/x.txt", "sandbox_path_host_only"),
+	(".claude/settings.json", "dot_directory", ".claude/settings.json", "sandbox_path_host_only"),
+	(".claude/hooks/pr_merge_status_guard.py", "live_safety_hook", ".claude/hooks/pr_merge_status_guard.py", "sandbox_path_host_only"),
+	("assets/\x1b[31m::set-output.svg", "unsupported_type", "redacted", "sandbox_path_unsupported"),
 ])
-def test_unsupported_path_refuses_before_any_model(tmp_path, path, reason, shown):
+def test_rejected_path_reason_is_logged_before_any_model(tmp_path, path, reason, shown, fail_reason):
 	paths = tmp_path / "paths"
 	paths.write_text(path + "\n", encoding="utf-8")
 	result, calls = _run_guard(tmp_path, paths)
 	assert result.returncode == 1
 	assert "guard-passed" not in result.stdout
 	# The existing fail-closed lines stay byte-identical.
-	assert "AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason=sandbox_path_unsupported action=fail_closed\n" in result.stderr
-	assert "::error::Conflict resolver isolation unavailable (reason=sandbox_path_unsupported); refusing host fallback.\n" in result.stderr
+	assert f"AI_ENGINE_FALLBACK role=CONFLICT_RESOLVER reason={fail_reason} action=fail_closed\n" in result.stderr
+	assert f"::error::Conflict resolver isolation unavailable (reason={fail_reason}); refusing host fallback.\n" in result.stderr
 	rejected = REJECTED_LINE.findall(result.stderr)
 	assert len(rejected) == 1
 	assert f"REVIEW_RESOLVER_PATH_REJECTED reason={reason} path={shown}\n" in result.stderr
 	assert "\x1b" not in result.stderr and "::set-output" not in result.stderr
+	assert (tmp_path / "persisted_reason").read_text().strip() == fail_reason
+	assert not calls.exists()
+
+
+def _run_path_guard(tmp_path, conflicted, integration="false"):
+	paths = tmp_path / "paths"
+	paths.write_text("".join(name + "\n" for name in conflicted))
+	github_env = tmp_path / "github_env"
+	src = _source()
+	guard = src[src.index('# Reject unsupported conflict paths for both engines'):src.index('_resolver_sandbox_opencode_attempt()')]
+	result = subprocess.run(["bash", "-c", f'''set -euo pipefail
+RUNTIME_DIR={str(tmp_path)!r}
+SUPPORT_SCRIPTS_DIR={str(SCRIPT.parent)!r}
+CONFLICTED_PATHS_FILE={str(paths)!r}
+RESOLVER_MODEL_PATHS_FILE={str(paths)!r}
+RESOLVER_CHECK_PATHS_STDERR_FILE={str(tmp_path / "check_paths_stderr")!r}
+GITHUB_ENV={str(github_env)!r}
+IS_INTEGRATION_SYNC={integration}
+emit_conflict_resolver_substate() {{ :; }}
+_persist_resolver_retry_state_from_current_failure() {{ printf '%s\\n' "$RESOLVER_ISOLATION_FAILURE_REASON" > "$RUNTIME_DIR/persisted_reason"; }}
+{_failure_helper()}
+{_path_failure_helper()}
+{_report_helper()}
+{guard}
+echo guard-passed
+'''], cwd=tmp_path, env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}, capture_output=True, text=True)
+	env_text = github_env.read_text() if github_env.exists() else ""
+	return result, env_text
+
+
+def test_unsupported_path_refuses_before_any_model(tmp_path):
+	sandbox, calls = _stub(tmp_path)
+	(tmp_path / "scripts").mkdir()
+	os.symlink("/etc/passwd", tmp_path / "scripts/link.py")
+	result, env_text = _run_path_guard(tmp_path, ["scripts/link.py", "assets/x.svg"])
+	assert result.returncode == 1 and "guard-passed" not in result.stdout
+	assert "reason=sandbox_path_unsupported" in result.stderr
+	# An unsafe entry keeps every name out of the log, even a plain one.
+	assert "assets/x.svg" not in result.stderr and "link.py" not in result.stderr
 	assert (tmp_path / "persisted_reason").read_text().strip() == "sandbox_path_unsupported"
+	assert env_text == "AUTOFIX_FAILURE_REASON=conflict_resolver_sandbox_path_unsupported\n"
 	assert not calls.exists()
 
 
@@ -260,6 +314,47 @@ def test_paired_live_copy_source_contract():
 	assert '--paths-file "${RESOLVER_TARGETED_PATHS_FILE}"' in src
 	workspace = (SCRIPT.parent / "review_untrusted_workspace.py").read_text(encoding="utf-8")
 	assert 'if name == ".claude/hooks/pr_merge_status_guard.py":\n\t\treturn False' in workspace
+
+
+def test_host_only_paths_stop_once_with_their_names(tmp_path):
+	"""PR #6438: the host-executed guard hook must never reach the sandboxed model."""
+	sandbox, calls = _stub(tmp_path)
+	(tmp_path / ".claude/hooks").mkdir(parents=True)
+	(tmp_path / ".claude/hooks/pr_merge_status_guard.py").write_text("x = 1\n")
+	result, env_text = _run_path_guard(tmp_path, [".claude/hooks/pr_merge_status_guard.py", "agents.md", "assets/x.svg"])
+	assert result.returncode == 1 and "guard-passed" not in result.stdout
+	assert "::error::Conflict resolver: host-only conflicted path(s) need a manual merge: .claude/hooks/pr_merge_status_guard.py, assets/x.svg" in result.stderr
+	assert "agents.md" not in result.stderr
+	assert "reason=sandbox_path_host_only" in result.stderr and "sandbox_path_unsupported" not in result.stderr
+	assert (tmp_path / "persisted_reason").read_text().strip() == "sandbox_path_host_only"
+	assert env_text == "AUTOFIX_FAILURE_REASON=conflict_resolver_sandbox_path_host_only\n"
+	assert not calls.exists()
+
+
+def test_integration_sync_keeps_the_generic_failure_reason(tmp_path):
+	"""Integration-sync failures must keep counting toward the retry-state escape threshold."""
+	(tmp_path / ".claude/hooks").mkdir(parents=True)
+	(tmp_path / ".claude/hooks/pr_merge_status_guard.py").write_text("x = 1\n")
+	result, env_text = _run_path_guard(tmp_path, [".claude/hooks/pr_merge_status_guard.py"], integration="true")
+	assert result.returncode == 1 and "reason=sandbox_path_host_only" in result.stderr
+	assert env_text == ""
+
+
+def test_sandbox_supported_paths_pass_the_guard(tmp_path):
+	result, env_text = _run_path_guard(tmp_path, ["agents.md", ".github/workflows/review_autofix.yml"])
+	assert result.returncode == 0, result.stderr
+	assert "guard-passed" in result.stdout and env_text == ""
+
+
+def test_host_only_error_is_the_failure_headline(tmp_path):
+	import importlib.util
+	spec = importlib.util.spec_from_file_location("workflow_failure_heal", SCRIPT.parent / "workflow_failure_heal.py")
+	heal = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(heal)
+	(tmp_path / ".claude/hooks").mkdir(parents=True)
+	(tmp_path / ".claude/hooks/pr_merge_status_guard.py").write_text("x = 1\n")
+	result, _env_text = _run_path_guard(tmp_path, [".claude/hooks/pr_merge_status_guard.py"])
+	assert heal.failure_headline([result.stderr]) == "Conflict resolver: host-only conflicted path(s) need a manual merge: .claude/hooks/pr_merge_status_guard.py"
 
 
 def test_missing_sandbox_support_refuses_before_any_model(tmp_path):
