@@ -759,6 +759,7 @@ def _run_validate_staging(
 	manifest_extra: dict[str, list[str]] | None = None,
 	extra_env: dict[str, str] | None = None,
 	workspace_scripts_symlink: bool = False,
+	workspace_renderer_directory: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
 	overlay_files = {
 		"scripts/load_workflow_overlay.py": (REPO_ROOT / "scripts" / "load_workflow_overlay.py").read_text(encoding="utf-8"),
@@ -779,6 +780,9 @@ def _run_validate_staging(
 		outside_scripts = tmp / "outside_scripts"
 		(workspace / "scripts").rename(outside_scripts)
 		(workspace / "scripts").symlink_to(outside_scripts, target_is_directory=True)
+	if workspace_renderer_directory:
+		(workspace / "scripts" / "render_validation_templates.py").unlink()
+		(workspace / "scripts" / "render_validation_templates.py").mkdir()
 	bin_dir = tmp / "bin"
 	bin_dir.mkdir()
 	if not shutil.which("jq"):
@@ -1002,6 +1006,22 @@ def test_self_repo_validation_renderer_rejects_symlinked_parent_directory() -> N
 		assert outside.read_text(encoding="utf-8") == _STALE_RENDERER
 
 
+def test_self_repo_validation_renderer_rejects_directory_destination() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		result, workspace = _run_validate_staging(
+			Path(tmpdir),
+			source_files={_TEMPLATE_REL: _TRUSTED_CONTAINER_TEMPLATE, _RENDERER_REL: _TRUSTED_RENDERER},
+			manifest_paths=[_TEMPLATE_REL],
+			workspace_files={_RENDERER_REL: _STALE_RENDERER},
+			manifest_extra=_RENDERER_MANIFEST,
+			workspace_renderer_directory=True,
+		)
+		assert result.returncode != 0, result.stdout + result.stderr
+		assert "::error::Refusing non-file or symlinked validation renderer path" in result.stderr
+		assert (workspace / _RENDERER_REL).is_dir()
+		assert list((workspace / _RENDERER_REL).iterdir()) == []
+
+
 def test_consumer_validation_renderer_keeps_the_preserve_rule() -> None:
 	with tempfile.TemporaryDirectory() as tmpdir:
 		result, workspace = _run_validate_staging(
@@ -1064,6 +1084,7 @@ def main() -> int:
 	test_self_repo_validation_renderer_comes_from_the_templates_commit()
 	test_self_repo_validation_renderer_fails_closed_when_the_trusted_copy_is_missing()
 	test_self_repo_validation_renderer_rejects_symlinked_parent_directory()
+	test_self_repo_validation_renderer_rejects_directory_destination()
 	test_consumer_validation_renderer_keeps_the_preserve_rule()
 	test_explicit_target_validation_renderer_keeps_the_preserve_rule()
 	test_stage_workflow_support_helper_routes_self_repo_renderer_to_trusted_commit()
