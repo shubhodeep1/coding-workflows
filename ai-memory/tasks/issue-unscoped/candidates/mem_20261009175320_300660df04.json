@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validation_harness_sandbox.sh:221 | severity=low | confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: If `mktemp` fails while creating `key_tmp`, `install_rootless_packages` returns without logging a specific provision-failure reason.\n  WHY: The caller still fails closed, but operators see only `rootless_packages_unavailable` and cannot distinguish this from other repository-fallback failures.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/validation_harness_sandbox.sh:221 | severity=low | confidence=3\n  PROBLEM: If `mktemp` fails, `install_rootless_packages` returns without logging a specific sandbox_log reason.\n  WHY: The caller still fails closed because the function returns 1, but operators cannot distinguish an `mktemp` failure from other documented failure reasons, violating the requirement for specific reason logging on failure.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/validation_harness_sandbox.sh:line ~221, `key_tmp=\"$(mktemp)\" || return 1` | severity=low | confidence=4\n  PROBLEM: When `mktemp` fails, the function returns 1 without logging a `sandbox_log provision fail <reason>` line.\n  WHY: The caller still fails closed, but operators cannot distinguish a tmpfile-creation failure from the other repository-step failure reasons.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/validation_harness_sandbox.sh:221, `key_tmp=\"$(mktemp)\" || return 1` | severity=low | confidence=3\n  PROBLEM: If temporary-file creation fails during the repository fallback, the function returns without logging a specific failure reason.\n  WHY: When `mktemp` fails, operators cannot distinguish this failure from the other fallback failures using the documented logs.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/validation_harness_sandbox.sh:install_rootless_packages(), `key_tmp=\"$(mktemp)\" || return 1` (line 221 of the PR diff) | severity=low | confidence=3\n  PROBLEM: If mktemp fails, the function returns 1 without logging a specific `sandbox_log provision fail <reason>` line.\n  WHY: The caller still fails closed, but operators see only `rootless_packages_unavailable` and cannot distinguish a tmpfile creation failure from the documented repository-step reasons.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "eb357bc4467286678d6e68817b79085117684c8d83b92cb10dfe006be23d7d34",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6959,
+    "run_id": "37966722013",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37966722013",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009175320_300660df04",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6959,
+    "run_id": "37966722013"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T17:53:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
