@@ -5,13 +5,28 @@
   "entry_id": "processed_command_6882_6078124506_approved",
   "issue_number": 6882,
   "metadata": {
+    "branch": "ai/issue-6882",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/test-and-mark-stable.yml",
+      "README.md",
+      "agents.md",
+      "changelog.d/6882-guard-hook-template-merge.md",
+      "scripts/review_conflict_prepare.sh",
+      "tests/test_conflict_guard_hook_template_merge.py"
+    ],
+    "issue_number": 6882,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6882",
+    "pr_number": 6894,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6894",
+    "run_attempt": "1",
+    "run_id": "37910864456",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37910864456"
   },
   "run_attempt": 1,
   "run_id": "37910864456",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-09T09:24:56Z",
+  "status": "completed",
+  "timestamp": "2026-10-09T09:51:13Z",
   "workflow": "implement"
 }
