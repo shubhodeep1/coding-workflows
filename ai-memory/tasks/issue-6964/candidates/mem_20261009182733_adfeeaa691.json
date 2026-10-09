@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The size-guard fix needs files outside this issue's verified heal scope. How should this issue be scoped?\nChoices:\nA) Fix only what the scope allows: update `test_review_autofix_passes_support_sha_to_every_marker_site` to expect the three verified gate-SHA exports, and add a changelog fragment. Leave the 481,287-byte `review_autofix.yml` split to a separate issue without a heal scope marker, or to an interactive session. CI stays red until that split lands. (RECOMMENDED)\nB) Plan the full fix in this issue: the test update plus moving inline `run:` bodies into `scripts/review_autofix_step_*.sh` and registering them in `stage_workflow_support.sh`, `tests/review_autofix_step_scripts.py` and `docs/INVENTORY.md`. Expect the scoped heal editor to drop or refuse the out-of-scope paths, which latches `ai:needs-human`.\nC) Hand the whole issue (both failures) to an interactive session and close this heal issue without a pipeline change.\nAssumptions: the third export at `review_autofix.yml:2144` is intended (it sits in the deterministic-skip merge step, not a failure-marker site), so the test expectation changes rather than the workflow. No other ambiguity blocks planning.",
+  "fingerprint": "cc81e843425d64c7b175eea4635cb034c3b2af72a2553b2a012c2c1e69bd026e",
+  "lineage": {
+    "issue_number": 6964,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37972787820",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37972787820",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009182733_adfeeaa691",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6964,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37972787820"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6964 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T18:27:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
