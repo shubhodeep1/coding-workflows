@@ -269,6 +269,46 @@ def test_host_only_error_is_the_failure_headline(tmp_path):
 	assert heal.failure_headline([result.stderr]) == "Conflict resolver: host-only conflicted path(s) need a manual merge: .claude/hooks/pr_merge_status_guard.py"
 
 
+def test_real_merge_conflict_on_guard_hook_fails_closed(tmp_path):
+	"""Heal #6800 / PR #6555 (run 37828359475): the host-only hook needs a human merge."""
+	git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_") and key not in {"BASH_ENV", "ENV"}}
+
+	def git(*args, check=True):
+		return subprocess.run(["git", *args], cwd=tmp_path, env=git_env, check=check, capture_output=True, text=True)
+
+	git("init", "-q", "-b", "main")
+	git("config", "user.name", "t")
+	git("config", "user.email", "t@t")
+	git("config", "commit.gpgsign", "false")
+	hook = tmp_path / ".claude/hooks/pr_merge_status_guard.py"
+	hook.parent.mkdir(parents=True)
+	hook.write_text("x = 1\n", encoding="utf-8")
+	git("add", "-A")
+	git("commit", "-qm", "base")
+	git("checkout", "-q", "-b", "pr")
+	hook.write_text("x = 2\n", encoding="utf-8")
+	git("commit", "-qam", "pr")
+	git("checkout", "-q", "main")
+	hook.write_text("x = 3\n", encoding="utf-8")
+	git("commit", "-qam", "main")
+	git("checkout", "-q", "pr")
+	assert git("merge", "--no-edit", "main", check=False).returncode != 0
+	stages = git("ls-files", "-u", "--", ".claude/hooks/pr_merge_status_guard.py").stdout
+	assert set(re.findall(r"^\d+ [0-9a-f]+ ([123])\t", stages, re.M)) == {"1", "2", "3"}
+	conflicted = git("diff", "--name-only", "--diff-filter=U").stdout.splitlines()
+	assert conflicted == [".claude/hooks/pr_merge_status_guard.py"]
+
+	_sandbox, calls = _stub(tmp_path)
+	result, env_text = _run_path_guard(tmp_path, conflicted)
+	assert result.returncode == 1 and "guard-passed" not in result.stdout
+	assert "::error::Conflict resolver: host-only conflicted path(s) need a manual merge: .claude/hooks/pr_merge_status_guard.py" in result.stderr
+	assert "reason=sandbox_path_host_only" in result.stderr and "sandbox_path_unsupported" not in result.stderr
+	assert (tmp_path / "persisted_reason").read_text().strip() == "sandbox_path_host_only"
+	assert env_text == "AUTOFIX_FAILURE_REASON=conflict_resolver_sandbox_path_host_only\n"
+	assert not calls.exists()
+	assert "<<<<<<<" in hook.read_text(encoding="utf-8")
+
+
 def test_missing_sandbox_support_refuses_before_any_model(tmp_path):
 	src = _source()
 	guard = src[src.index('# Reject unsupported conflict paths for both engines'):src.index('_resolver_sandbox_opencode_attempt()')]
