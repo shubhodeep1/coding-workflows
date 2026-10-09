@@ -99,7 +99,7 @@ semble_output="$({
 		_semble_log_event "SEMBLE_FALLBACK" "target=editor-context" "reason=index-unavailable"
 	' >/dev/null
 } 2>&1)"
-assert_equals "SEMBLE_FALLBACK target=editor-context reason=index-unavailable" "${semble_output}"
+assert_equals "SEMBLE_FALLBACK target=editor-context reason=index-unavailable sources=0" "${semble_output}"
 
 serena_fallback_output="$({
 	EVENTS_JSONL_ENABLED=true \
