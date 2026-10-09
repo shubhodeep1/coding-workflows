@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nPlanning ref: `main` @ `9122697405fdf96cec12f4f99591b14d3b135aaf`. No integration branch metadata, so the ref matches. Note that the failure reproduces on `main` too, not only on the PR head.\n\n**Summary**\nOne CI test fails because its expected count is out of date. The workflow is correct as it stands. `test_review_autofix_passes_support_sha_to_every_marker_site` in `tests/test_workflow_failure_heal.py` (line 3625) expects `REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}` to appear **2** times. On this ref, `.github/workflows/review_autofix.yml` has **3** of them, in three different jobs:\n- `:2144`: env of the `deterministic-skip-merge` job's step \"Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge\". The script compares it against the `.codex-freshness-src` HEAD at `:2208-2209`. This export is the one the test does not count yet.\n- `:2478`: job env of the fingerprint-cap-block job. The `cap_support` marker uses it at `:2595-2598`.\n- `:2813`: job env of `codex-agent` (#6625 failure markers).\n\nThe other assertions still match: 5 `--support-sha \"${REVIEW_SUPPORT_SHA:-}\"` sites (`:1186`, `:5572`, `:7008`, `:7098`, `:7376`), and the gate's `steps.resolve_support` export at `:597`.\n\nScope-mode: Hold Scope\nReuse-audit: extends test_review_autofix_passes_support_sha_to_every_marker_site\nScope-mode justification: The workflow is the source of truth and is behaving as intended. The deterministic-skip step needs the verified support SHA to check that the freshness-helper checkout is trusted (see the agents.md \"Merge-base freshness\" bullet). Removing that export would weaken a security check, so the only right fix is in the test. A stronger, per-job assertion would cost a few more lines and add no dependency or interface, so the plan includes it (the Boil the Lake rule applies). That way a later move or removal of the deterministic-skip export fails with a clear message, not as a bare count mismatch. Nothing outside the test file changes.\n\n**1. Files likely to change**\n- `tests/test_workflow_failure_heal.py` (only file).\n\n**2. Functions/modules to implement**\nIn `test_review_autofix_passes_support_sha_to_every_marker_site`:\n- Change the count assertion on line 3625 from `== 2` to `== 3`.\n- Add a short comment above it naming the three consumers: the deterministic-skip freshness-helper check, the fingerprint-cap-block job, and the codex-agent failure markers.\n- Optional pinning, still inside this test: check that the deterministic-skip consumer is still present, without depending on line numbers. For example, assert that `'[ \"$(git -C .codex-freshness-src rev-parse HEAD 2>/dev/null)\" = \"${REVIEW_SUPPORT_SHA:-}\" ]'` is in `wf`. That string is copied exactly from `:2209`, so the extra export is tied to its purpose.\n- Leave the docstring's issue reference (#6625) as it is. Wording can be updated to \"the gate, the deterministic-skip merge and all four failure-marker sites\".\n\n**3. Data structures affected**\nNone.\n\n**4. API/interface changes**\nNone. The workflow, scripts, env vars and log keys are untouched.\n\n## Decisions\n\n### D1 \u2014 Fix the test, not the workflow\n- Chosen: raise the expected count to 3 and pin the deterministic-skip consumer.\n- Alternatives considered: drop the `:2144` export, or add a separate `needs.gate.outputs.review_support_sha` alias for the deterministic-skip step so the count stays at 2.\n- Why: the `:2144` export carries the verified support SHA that the freshness/required-checks gate depends on. Removing it would make the deterministic-skip job refuse auto-merge (an unverified checkout). Renaming it would break \u00a710 naming immutability for no gain. The test is the stale side.\n\n### D2 \u2014 Keep an exact count plus a content anchor\n- Chosen: assert `== 3` and also assert the `.codex-freshness-src` comparison string.\n- Alternatives considered: loosen the check to `>= 2`.\n- Why: an exact count still catches a site added or dropped by accident (the point of #6625). The content anchor makes the cause of a future failure obvious.\n\n## Security considerations\n- Trust boundaries: none touched. This is a test-only change.\n- The plan deliberately keeps the deterministic-skip job's verification of `.codex-freshness-src` HEAD against the verified `REVIEW_SUPPORT_SHA`. Removing it would let an unverified helper checkout drive auto-merge.\n- No new endpoints, inputs, secrets or log output.\n\n**5. Risks and edge cases**\n- Conflict note: the triage issue cites the export lines as `:2145/:2479/:2814` at the PR head `6c617c2`. On `main` they are `:2144/:2478/:2813`. That is the same content one line earlier, so the count and the fix are the same on both refs. PR #6965 (`ai/issue-6963`) will pick up the fix once this merges into `main` and the branch syncs. If #6965 changes the count again before then, the implementer should count the PR head at implement time and use that number.\n- This test may be in other CI jobs or release-gate `validate-scripts` lists. Changing the expectation affects them all the same way, which is fine.\n- Changelog: this is a test-only fix with no user-visible behaviour change. Add a `changelog.d/6968-support-sha-export-count.md` fragment only if CLAUDE.md \u00a720 requires one for test-only changes. Never edit `CHANGELOG.md` directly.\n\n**6. Testing considerations**\n- `PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/test_workflow_failure_heal.py::test_review_autofix_passes_support_sha_to_every_marker_site -q`, which must pass.\n- Then `PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/test_workflow_failure_heal.py -q` to confirm the rest of the module still passes (the triage log showed 237 passed and 1 skipped besides this failure).\n- CI `tests-heal-plan-and-validation` should then succeed, and so should the aggregate `lint` job.\n\n**7. Pre-execution self-check**\n- Every claimed line and string was read on this ref: the test at lines 3619-3626 and the workflow at lines 597, 1186, 2144, 2208-2209, 2478, 2595-2598, 2813, 5572, 7008, 7098 and 7376.\n- There is a single-file change with no workflow size impact and no scope expansion.\n- The planning ref is `main` and matches the absence of integration branch metadata.\n\n**Assumptions:** The third export is intentional (it serves the freshness-helper verification). The `.codex-freshness-src` comparison string remains a stable anchor.\n**Missing context:** I did not inspect the PR head `6c617c2`. The triage evidence and `main` agree on the count.\n\nSTATUS: CLEAR\nPLAN_SELF_CHECK: PASS\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "327bfc9731d2ff577a2a090e0feefb9b339496a14c160a216c0dc4ecc4a21649",
+  "lineage": {
+    "issue_number": 6968,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37978757751",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37978757751",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6968"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261009192154_330fc4733e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6968,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37978757751"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6968",
+  "timestamps": {
+    "created_at": "2026-10-09T19:21:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
