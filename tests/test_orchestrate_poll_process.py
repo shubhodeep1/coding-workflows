@@ -6393,6 +6393,7 @@ def test_security_pass_cap_does_not_record_advisories_before_terminal_failure() 
 def test_security_pass_cap_converts_low_keep_fixing_to_advisory() -> None:
 	# Issue #6729: low severity is eligible for the round-cap conversion to fail,
 	# just like medium; per #6539 the cap never accepts a finding.
+	# Keep the historical name for the CI shard selector.
 	low_finding = _security_pass_test_finding()
 	low_finding["severity"] = "low"
 	result = _run_poller(
