@@ -5,13 +5,27 @@
   "entry_id": "processed_command_6871_6076699797_approved",
   "issue_number": 6871,
   "metadata": {
+    "branch": "ai/issue-6871",
+    "changed_files": [
+      ".github/workflows/workflow-failure-heal-intake.yml",
+      "README.md",
+      "agents.md",
+      "changelog.d/6871-heal-intake-scope-guard.md",
+      "scripts/workflow_failure_heal_intake.sh",
+      "tests/test_workflow_failure_heal.py"
+    ],
+    "issue_number": 6871,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6871",
+    "pr_number": 6874,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6874",
+    "run_attempt": "1",
+    "run_id": "37900718797",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37900718797"
   },
   "run_attempt": 1,
   "run_id": "37900718797",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-09T07:46:34Z",
+  "status": "completed",
+  "timestamp": "2026-10-09T08:11:29Z",
   "workflow": "implement"
 }
