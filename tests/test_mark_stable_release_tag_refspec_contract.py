@@ -10,8 +10,10 @@ release jobs trigger by checking out the `stable` branch and then creating a
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -788,6 +790,340 @@ def test_script_validates_git_identity_for_annotated_tag() -> None:
 	assert "git config --get user.name" in text, (
 		"scripts/mark-stable.sh: must pre-check `git config --get user.name` "
 		"alongside user.email — both are required for annotated tags"
+	)
+
+
+# ──────────────────────────────────────────────────────────────────
+# Issue #6532: CI lint check-run gate and the STABLE_RELEASE_ENABLED switch
+# ──────────────────────────────────────────────────────────────────
+
+CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+TESTED_SHA = "a" * 40
+PUBLISHING_STEP_IF = "        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' }}\n"
+CI_LINT_GATE_MOCK = r'''gh() {
+	local gate_mock_count gate_mock_file
+	gate_mock_count="$(cat "${GATE_MOCK_COUNT}")"
+	gate_mock_count=$((gate_mock_count + 1))
+	printf '%s\n' "${gate_mock_count}" > "${GATE_MOCK_COUNT}"
+	printf 'gh:%s\n' "$*" >> "${GATE_MOCK_CALL_LOG}"
+	gate_mock_file="${GATE_MOCK_RESPONSES}/${gate_mock_count}"
+	[ -f "${gate_mock_file}" ] || gate_mock_file="${GATE_MOCK_RESPONSES}/last"
+	if [ "$(cat "${gate_mock_file}")" = "__FAIL__" ]; then
+		echo 'gh: Resource not accessible by integration (HTTP 403)' >&2
+		return 1
+	fi
+	cat "${gate_mock_file}"
+}
+sleep() {
+	printf 'sleep:%s\n' "$1" >> "${GATE_MOCK_CALL_LOG}"
+}
+'''
+
+
+def _top_level_job_block(workflow_text: str, job_name: str) -> str:
+	match = re.search(
+		rf"^  {re.escape(job_name)}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+		workflow_text,
+		re.MULTILINE | re.DOTALL,
+	)
+	assert match is not None, f"job {job_name!r} is missing"
+	return match.group(1)
+
+
+def _step_block(job_text: str, step_name: str) -> str:
+	start = job_text.index(f"      - name: {step_name}\n")
+	end = job_text.find("\n      - name: ", start + 1)
+	return job_text[start:] if end == -1 else job_text[start:end]
+
+
+def _clean_bash_environment(**extra: str) -> dict[str, str]:
+	environment = {
+		key: value
+		for key, value in os.environ.items()
+		if key not in {"BASH_ENV", "ENV"} and not key.startswith("BASH_FUNC_")
+	}
+	environment.update(extra)
+	return environment
+
+
+def _check_runs_body(*runs: dict, total_count: int | None = None) -> str:
+	return json.dumps({
+		"total_count": len(runs) if total_count is None else total_count,
+		"check_runs": list(runs),
+	})
+
+
+def _lint_run(status: str = "completed", conclusion: str | None = "success", slug: str = "github-actions") -> dict:
+	return {"name": "lint", "status": status, "conclusion": conclusion, "app": {"slug": slug}}
+
+
+def _run_ci_lint_gate_scenario(
+	working_directory: Path,
+	workflow_path: Path,
+	responses: list[str],
+	*,
+	wait_secs: str = "0",
+	tested_sha: str = TESTED_SHA,
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+	scenario_directory = Path(tempfile.mkdtemp(dir=working_directory))
+	response_directory = scenario_directory / "responses"
+	response_directory.mkdir()
+	for index, body in enumerate(responses, start=1):
+		(response_directory / str(index)).write_text(body, encoding="utf-8")
+	(response_directory / "last").write_text(responses[-1], encoding="utf-8")
+	call_log = scenario_directory / "calls.log"
+	call_log.write_text("", encoding="utf-8")
+	call_count = scenario_directory / "count"
+	call_count.write_text("0\n", encoding="utf-8")
+	gate_script = "\n".join(
+		(
+			"unset -f gh_retry 2>/dev/null || true",
+			CI_LINT_GATE_MOCK,
+			_workflow_step_script(_read(workflow_path), "Require successful CI lint check-run"),
+		)
+	)
+	gate_result = subprocess.run(
+		["bash", "-c", gate_script],
+		capture_output=True,
+		check=False,
+		cwd=scenario_directory,
+		env=_clean_bash_environment(
+			CI_CHECK_NAME="lint",
+			GATE_MOCK_CALL_LOG=str(call_log),
+			GATE_MOCK_COUNT=str(call_count),
+			GATE_MOCK_RESPONSES=str(response_directory),
+			GITHUB_REPOSITORY="owner/repo",
+			RELEASE_TESTED_SHA=tested_sha,
+			RUNNER_TEMP=str(scenario_directory),
+			STABLE_RELEASE_CI_WAIT_SECS=wait_secs,
+		),
+		text=True,
+	)
+	return gate_result, call_log.read_text(encoding="utf-8").splitlines()
+
+
+def test_ci_lint_gate_step_is_identical_and_ordered_in_both_release_jobs() -> None:
+	gate_scripts = []
+	switch_scripts = []
+	for workflow_path in WORKFLOWS:
+		workflow_text = _read(workflow_path)
+		release_job = _top_level_job_block(workflow_text, "release")
+		order = [
+			release_job.index("      - name: Record the tested commit\n"),
+			release_job.index("      - name: Resolve stable release switch\n"),
+			release_job.index("      - name: Require successful CI lint check-run\n"),
+			release_job.index("      - name: Assemble changelog fragments\n"),
+			release_job.index("      - name: Tag version and update stable pointer\n"),
+		]
+		assert order == sorted(order), (
+			f"{workflow_path.name}: the CI gate must run after recording the SHA and before any push"
+		)
+		gate_step = _step_block(release_job, "Require successful CI lint check-run")
+		assert "\n        if:" not in gate_step, (
+			f"{workflow_path.name}: the CI gate must run even when publishing is off"
+		)
+		gate_script = _workflow_step_script(workflow_text, "Require successful CI lint check-run")
+		switch_script = _workflow_step_script(workflow_text, "Resolve stable release switch")
+		assert "${{" not in gate_script and "${{" not in switch_script
+		assert "check_name=${gate_check_name}&filter=latest&per_page=100" in gate_script
+		gate_scripts.append(gate_script)
+		switch_scripts.append(switch_script)
+	assert gate_scripts[0] == gate_scripts[1], "both release workflows must keep a byte-identical CI lint gate"
+	assert switch_scripts[0] == switch_scripts[1], "both release workflows must resolve the switch identically"
+
+
+def test_ci_lint_gate_executes_fail_closed_matrix() -> None:
+	if shutil.which("jq") is None:
+		print("skip: jq is not installed")
+		return
+	other_name = {"name": "static-checks", "status": "completed", "conclusion": "success", "app": {"slug": "github-actions"}}
+	scenarios = {
+		"pass": ([_check_runs_body(_lint_run(), _lint_run())], True, "outcome=pass"),
+		"missing": ([_check_runs_body()], False, "reason=missing"),
+		"incomplete": ([_check_runs_body(_lint_run(status="in_progress", conclusion=None))], False, "reason=incomplete"),
+		"failure": ([_check_runs_body(_lint_run(conclusion="failure"))], False, "reason=failed"),
+		"cancelled": ([_check_runs_body(_lint_run(conclusion="cancelled"))], False, "reason=failed"),
+		"mixed": ([_check_runs_body(_lint_run(), _lint_run(conclusion="failure"))], False, "reason=failed"),
+		"api_error": (["__FAIL__"], False, "reason=unreadable"),
+		"malformed": (["{not json"], False, "reason=unreadable"),
+		"no_array": ([json.dumps({"total_count": 1, "check_runs": None})], False, "reason=unreadable"),
+		"partial_page": ([_check_runs_body(_lint_run(), total_count=2)], False, "reason=unreadable"),
+		"foreign_app": ([_check_runs_body(_lint_run(slug="third-party"))], False, "reason=missing"),
+		"other_name": ([_check_runs_body(other_name)], False, "reason=missing"),
+	}
+	expected_call = (
+		f"gh:api repos/owner/repo/commits/{TESTED_SHA}/check-runs?check_name=lint&filter=latest&per_page=100"
+	)
+	with tempfile.TemporaryDirectory() as temporary_directory:
+		working_directory = Path(temporary_directory)
+		for workflow_path in WORKFLOWS:
+			for scenario_name, (responses, should_pass, expected_text) in scenarios.items():
+				result, calls = _run_ci_lint_gate_scenario(working_directory, workflow_path, responses)
+				label = f"{workflow_path.name}:{scenario_name}"
+				assert (result.returncode == 0) is should_pass, (label, result.stdout, result.stderr)
+				assert expected_text in result.stdout, (label, result.stdout)
+				assert [call for call in calls if call.startswith("gh:")] == [expected_call], label
+				assert not [call for call in calls if call.startswith("sleep:")], label
+
+			bad_sha, bad_sha_calls = _run_ci_lint_gate_scenario(
+				working_directory, workflow_path, [_check_runs_body(_lint_run())], tested_sha="not-a-sha"
+			)
+			assert bad_sha.returncode != 0
+			assert "reason=invalid_sha" in bad_sha.stdout
+			assert bad_sha_calls == []
+
+
+def test_ci_lint_gate_waits_a_bounded_time_for_incomplete_ci() -> None:
+	if shutil.which("jq") is None:
+		print("skip: jq is not installed")
+		return
+	incomplete = _check_runs_body(_lint_run(status="queued", conclusion=None))
+	with tempfile.TemporaryDirectory() as temporary_directory:
+		working_directory = Path(temporary_directory)
+		for workflow_path in WORKFLOWS:
+			recovered, recovered_calls = _run_ci_lint_gate_scenario(
+				working_directory, workflow_path, [incomplete, _check_runs_body(_lint_run())], wait_secs="60"
+			)
+			assert recovered.returncode == 0, recovered.stdout
+			assert "outcome=pass" in recovered.stdout
+			assert recovered_calls.count("sleep:30") == 1
+
+			exhausted, exhausted_calls = _run_ci_lint_gate_scenario(
+				working_directory, workflow_path, [incomplete], wait_secs="60"
+			)
+			assert exhausted.returncode != 0
+			assert "reason=incomplete" in exhausted.stdout
+			assert exhausted_calls.count("sleep:30") == 2
+			assert len([call for call in exhausted_calls if call.startswith("gh:")]) == 3
+
+			failed, failed_calls = _run_ci_lint_gate_scenario(
+				working_directory, workflow_path, [_check_runs_body(_lint_run(conclusion="failure"))], wait_secs="60"
+			)
+			assert failed.returncode != 0
+			assert not [call for call in failed_calls if call.startswith("sleep:")], (
+				"only incomplete results may be re-polled"
+			)
+
+
+def test_release_switch_resolution_is_exact_and_defaults_off() -> None:
+	cases = {
+		None: "false",
+		"": "false",
+		"false": "false",
+		"true": "true",
+		"TRUE": "true",
+		"yes": "false",
+		"true ": "false",
+		"1": "false",
+	}
+	with tempfile.TemporaryDirectory() as temporary_directory:
+		working_directory = Path(temporary_directory)
+		for workflow_path in WORKFLOWS:
+			switch_script = _workflow_step_script(_read(workflow_path), "Resolve stable release switch")
+			for index, (raw_value, expected) in enumerate(cases.items()):
+				output_file = working_directory / f"{workflow_path.stem}-{index}.out"
+				environment = _clean_bash_environment(GITHUB_OUTPUT=str(output_file))
+				environment.pop("STABLE_RELEASE_ENABLED", None)
+				if raw_value is not None:
+					environment["STABLE_RELEASE_ENABLED"] = raw_value
+				result = subprocess.run(
+					["bash", "-c", switch_script], capture_output=True, check=False, env=environment, text=True
+				)
+				assert result.returncode == 0, result.stderr
+				assert output_file.read_text(encoding="utf-8") == f"enabled={expected}\n", (
+					workflow_path.name,
+					raw_value,
+				)
+				assert f"STABLE_RELEASE_SWITCH enabled={expected}" in result.stdout
+
+
+def test_release_job_disabled_path_skips_every_publishing_step() -> None:
+	for workflow_path in WORKFLOWS:
+		release_job = _top_level_job_block(_read(workflow_path), "release")
+		assert "    permissions:\n      contents: write\n      checks: read\n" in release_job, workflow_path.name
+		assert "      STABLE_RELEASE_ENABLED: ${{ vars.STABLE_RELEASE_ENABLED || 'false' }}\n" in release_job
+		assert "      STABLE_RELEASE_CI_WAIT_SECS: ${{ vars.STABLE_RELEASE_CI_WAIT_SECS || '600' }}\n" in release_job
+		assert "      release_enabled: ${{ steps.release_switch.outputs.enabled }}\n" in release_job
+		for step_name in (
+			"Tag version and update stable pointer",
+			"Create GitHub Release",
+			"Notify consumer repos via repository_dispatch",
+		):
+			assert _step_block(release_job, step_name).startswith(
+				f"      - name: {step_name}\n{PUBLISHING_STEP_IF}"
+			), f"{workflow_path.name}: {step_name} must be skipped while publishing is off"
+		assemble = _step_block(release_job, "Assemble changelog fragments")
+		assert (
+			"DRY_RUN: ${{ (inputs.dry_run || steps.release_switch.outputs.enabled != 'true') && 'true' || 'false' }}"
+			in assemble
+		), f"{workflow_path.name}: changelog assembly must not push while publishing is off"
+		disabled = _step_block(release_job, "Release disabled summary")
+		assert "if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled != 'true' }}" in disabled
+		assert "STABLE_RELEASE_DISABLED" in disabled
+
+	gate_text = _read(WORKFLOWS[1])
+	sync_if = _top_level_job_block(gate_text, "sync-to-main").split("    runs-on:", 1)[0]
+	assert "!inputs.gate_only" in sync_if
+	assert "!inputs.dry_run" in sync_if
+	assert "needs.release.outputs.release_enabled == 'true'" in sync_if
+	notify_job = _top_level_job_block(gate_text, "notify")
+	assert "RELEASE_ENABLED: ${{ needs.release.outputs.release_enabled }}" in notify_job
+	assert "publishing disabled (STABLE_RELEASE_ENABLED off)" in notify_job
+
+
+def test_disabled_switch_assembles_changelog_without_committing() -> None:
+	with tempfile.TemporaryDirectory() as temporary_directory:
+		repository = Path(temporary_directory)
+		git_environment = _clean_bash_environment(
+			GIT_AUTHOR_NAME="t",
+			GIT_AUTHOR_EMAIL="t@example.invalid",
+			GIT_COMMITTER_NAME="t",
+			GIT_COMMITTER_EMAIL="t@example.invalid",
+		)
+		for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
+			git_environment.pop(key, None)
+		(repository / "scripts").mkdir()
+		(repository / "scripts" / "assemble_changelog.py").write_text(
+			"from pathlib import Path\nPath('CHANGELOG.md').write_text('assembled\\n')\n", encoding="utf-8"
+		)
+		(repository / "CHANGELOG.md").write_text("original\n", encoding="utf-8")
+
+		def git(*arguments: str) -> str:
+			return subprocess.run(
+				["git", *arguments], cwd=repository, check=True, env=git_environment, capture_output=True, text=True
+			).stdout.strip()
+
+		git("init", "-q")
+		git("add", "-A")
+		git("commit", "-qm", "base")
+		base_head = git("rev-parse", "HEAD")
+		for workflow_path in WORKFLOWS:
+			assemble_script = _workflow_step_script(_read(workflow_path), "Assemble changelog fragments")
+			result = subprocess.run(
+				["bash", "-c", assemble_script],
+				capture_output=True,
+				check=False,
+				cwd=repository,
+				env={
+					**git_environment,
+					"DRY_RUN": "true",
+					"SOURCE_BRANCH": "stable",
+					"VERSION": "v1.2.3",
+					"RELEASE_TESTED_SHA": base_head,
+				},
+				text=True,
+			)
+			assert result.returncode == 0, result.stderr
+			assert "Dry run" in result.stdout
+			assert git("rev-parse", "HEAD") == base_head, (
+				f"{workflow_path.name}: no commit may be made while publishing is off"
+			)
+
+
+def test_ci_lint_job_keeps_its_check_run_name() -> None:
+	lint_job = _top_level_job_block(_read(CI_WORKFLOW), "lint")
+	assert not re.search(r"^    name:", lint_job, re.MULTILINE), (
+		"ci.yml's aggregate job must stay unnamed so its check-run is `lint`, which the release gate requires"
 	)
 
 

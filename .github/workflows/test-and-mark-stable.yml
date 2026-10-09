@@ -6295,7 +6295,17 @@ jobs:
     # gate_only runs stop here: every test job above ran, nothing is tagged.
     if: ${{ success() && !inputs.gate_only }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
+    # checks: read lets the CI lint gate read check-runs with github.token;
+    # contents: write keeps the workflow-level grant.
+    permissions:
+      contents: write
+      checks: read
+    outputs:
+      release_enabled: ${{ steps.release_switch.outputs.enabled }}
+    env:
+      STABLE_RELEASE_ENABLED: ${{ vars.STABLE_RELEASE_ENABLED || 'false' }}
+      STABLE_RELEASE_CI_WAIT_SECS: ${{ vars.STABLE_RELEASE_CI_WAIT_SECS || '600' }}
     # Serialise the mutating tag pushes across every dispatcher of this
     # workflow (auto-release-stable.yml, promote-main-to-stable.yml, manual).
     # The dispatchers' own locks end at dispatch time, so without this lock
@@ -6326,11 +6336,123 @@ jobs:
           fi
           echo "RELEASE_TESTED_SHA=${DISPATCHED_SHA}" >> "$GITHUB_ENV"
 
+      # Publishing switch (issue #6532 / #6809). Off unless the repository
+      # variable STABLE_RELEASE_ENABLED is exactly `true` (any case). While
+      # off the gate still runs every validation job and the CI lint check
+      # below, but the changelog push, tags, GitHub release, consumer
+      # dispatch and sync-to-main are skipped. The value reaches the script
+      # only through env.
+      - name: Resolve stable release switch
+        id: release_switch
+        run: |
+          set -euo pipefail
+          release_switch_value="${STABLE_RELEASE_ENABLED:-false}"
+          release_switch_value="${release_switch_value,,}"
+          if [ "${release_switch_value}" = "true" ]; then
+            release_switch_enabled=true
+          else
+            release_switch_enabled=false
+          fi
+          echo "STABLE_RELEASE_SWITCH enabled=${release_switch_enabled}"
+          printf 'enabled=%s\n' "${release_switch_enabled}" >> "$GITHUB_OUTPUT"
+
+      # Issue #6532: never release a commit whose CI failed. GitHub Actions
+      # jobs report as check-runs, not commit statuses, so the validate job's
+      # combined-status read cannot see `lint`, the aggregate job of ci.yml.
+      # Runs before the first step that can push, whatever dry_run and the
+      # switch say. Only `lint` check-runs created by the github-actions app
+      # count; every run must be completed with `success`. Missing,
+      # incomplete (after a bounded wait), failed and unreadable results all
+      # fail closed. GitHub API audit (§14): no existing call in this job
+      # returns check-runs.
+      - name: Require successful CI lint check-run
+        id: ci_lint_gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CHECK_NAME: lint
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          gate_sha="${RELEASE_TESTED_SHA:-}"
+          if ! [[ "${gate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::STABLE_RELEASE_CI_GATE outcome=fail reason=invalid_sha sha=invalid runs=0"
+            exit 1
+          fi
+          gate_check_name="${CI_CHECK_NAME:-lint}"
+          gate_wait_secs="${STABLE_RELEASE_CI_WAIT_SECS:-600}"
+          case "${gate_wait_secs}" in
+            ''|*[!0-9]*)
+              echo "::warning::STABLE_RELEASE_CI_WAIT_SECS is not a non-negative integer; using 600."
+              gate_wait_secs=600
+              ;;
+          esac
+          gate_poll_secs=30
+          gate_polls_left=$((gate_wait_secs / gate_poll_secs))
+          gate_response_file="$(mktemp "${RUNNER_TEMP:-/tmp}/stable_release_ci_gate.XXXXXX")"
+          trap 'rm -f "${gate_response_file}"' EXIT
+
+          # Prints "<reason> <runs>" where reason is one of
+          # pass|missing|incomplete|failed|unreadable.
+          stable_release_ci_gate_classify() {
+            local gate_rc=0
+            local gate_verdict=""
+            set +e
+            gh_retry gh api "repos/${GITHUB_REPOSITORY}/commits/${gate_sha}/check-runs?check_name=${gate_check_name}&filter=latest&per_page=100" >"${gate_response_file}"
+            gate_rc=$?
+            set -e
+            if [ "${gate_rc}" -ne 0 ]; then
+              printf 'unreadable 0\n'
+              return 0
+            fi
+            if ! gate_verdict="$(jq -rs --arg name "${gate_check_name}" '
+                if length != 1 then "unreadable 0"
+                else .[0]
+                  | if (type != "object") or ((.check_runs | type) != "array") or ((.total_count | type) != "number") then "unreadable 0"
+                    elif .total_count > (.check_runs | length) then "unreadable \(.check_runs | length)"
+                    else
+                      [.check_runs[] | select(type == "object" and .name == $name and (.app.slug? // "") == "github-actions")] as $runs
+                      | if ($runs | length) == 0 then "missing 0"
+                        elif any($runs[]; .status != "completed") then "incomplete \($runs | length)"
+                        elif any($runs[]; .conclusion != "success") then "failed \($runs | length)"
+                        else "pass \($runs | length)"
+                        end
+                    end
+                end' "${gate_response_file}" 2>/dev/null)"; then
+              printf 'unreadable 0\n'
+              return 0
+            fi
+            case "${gate_verdict}" in
+              *$'\n'*) printf 'unreadable 0\n' ;;
+              "pass "*|"missing "*|"incomplete "*|"failed "*|"unreadable "*) printf '%s\n' "${gate_verdict}" ;;
+              *) printf 'unreadable 0\n' ;;
+            esac
+          }
+
+          while :; do
+            gate_result="$(stable_release_ci_gate_classify)"
+            gate_reason="${gate_result%% *}"
+            gate_runs="${gate_result##* }"
+            if [ "${gate_reason}" = "pass" ]; then
+              echo "STABLE_RELEASE_CI_GATE outcome=pass sha=${gate_sha} runs=${gate_runs}"
+              exit 0
+            fi
+            if [ "${gate_reason}" = "incomplete" ] && [ "${gate_polls_left}" -gt 0 ]; then
+              gate_polls_left=$((gate_polls_left - 1))
+              echo "STABLE_RELEASE_CI_GATE outcome=wait reason=incomplete sha=${gate_sha} runs=${gate_runs} polls_left=${gate_polls_left}"
+              sleep "${gate_poll_secs}"
+              continue
+            fi
+            echo "::error::STABLE_RELEASE_CI_GATE outcome=fail reason=${gate_reason} sha=${gate_sha} runs=${gate_runs}"
+            exit 1
+          done
+
       - name: Assemble changelog fragments
         id: changelog_assemble
         env:
           SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
-          DRY_RUN: ${{ inputs.dry_run }}
+          # The switch off behaves like a dry run here: assembled locally, never pushed.
+          DRY_RUN: ${{ (inputs.dry_run || steps.release_switch.outputs.enabled != 'true') && 'true' || 'false' }}
           VERSION: ${{ needs.resolve-version.outputs.version }}
         run: |
           set -euo pipefail
@@ -6402,7 +6524,7 @@ jobs:
           echo "notes_file=/tmp/release_notes.md" >> "$GITHUB_OUTPUT"
 
       - name: Tag version and update stable pointer
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' }}
         env:
           SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
         run: |
@@ -6556,7 +6678,7 @@ jobs:
           echo "Tagged $VERSION and updated stable + $MAJOR pointers."
 
       - name: Create GitHub Release
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
@@ -6618,7 +6740,7 @@ jobs:
           exit "${RELEASE_CREATE_RC}"
 
       - name: Notify consumer repos via repository_dispatch
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
         run: |
@@ -6652,6 +6774,15 @@ jobs:
               || echo "::warning::Failed to dispatch to ${REPO} (may lack permissions)"
           done
 
+      - name: Release disabled summary
+        if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled != 'true' }}
+        env:
+          RELEASE_VERSION: ${{ needs.resolve-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "::notice::STABLE_RELEASE_DISABLED version=${RELEASE_VERSION} sha=${RELEASE_TESTED_SHA}: validation and the CI lint gate passed; changelog push, tags, GitHub release, consumer dispatch and sync-to-main skipped"
+          printf 'Stable release %s passed the gate but was not published: STABLE_RELEASE_ENABLED is off.\n' "${RELEASE_VERSION}" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Dry-run summary
         if: ${{ inputs.dry_run }}
         env:
@@ -6676,14 +6807,16 @@ jobs:
   # here guarantees the sync is tied to the release event itself, so
   # `main` can never silently drift behind a tagged stable release.
   #
-  # Skipped on dry runs (no real release happened).
+  # Skipped on dry runs (no real release happened) and while
+  # STABLE_RELEASE_ENABLED is off (nothing was published).
   # ──────────────────────────────────────────────────────────────────
   sync-to-main:
     needs: [release]
     if: >-
       !inputs.dry_run &&
       !inputs.gate_only &&
-      needs.release.result == 'success'
+      needs.release.result == 'success' &&
+      needs.release.outputs.release_enabled == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 2
     permissions:
@@ -6935,6 +7068,7 @@ jobs:
         if: always()
         env:
           GATE_ONLY: ${{ inputs.gate_only }}
+          RELEASE_ENABLED: ${{ needs.release.outputs.release_enabled }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -6996,6 +7130,9 @@ jobs:
           if [ "$E2E" = "success" ] && [ "$SCRIPTS" = "success" ] && [ "$VALIDATE" = "success" ] && [ "$release_ok" = "true" ] && [ "$all_supplemental_ok" = "true" ]; then
             if [ "$GATE_ONLY" = "true" ]; then
               MSG="Release gate ${{ needs.resolve-version.outputs.version }} SUCCEEDED"
+              RELEASE_ICON="⊘"
+            elif [ "${RELEASE_ENABLED:-}" != "true" ]; then
+              MSG="Release gate ${{ needs.resolve-version.outputs.version }} PASSED — publishing disabled (STABLE_RELEASE_ENABLED off); nothing tagged"
               RELEASE_ICON="⊘"
             else
               MSG="Release ${{ needs.resolve-version.outputs.version }} SUCCEEDED"
