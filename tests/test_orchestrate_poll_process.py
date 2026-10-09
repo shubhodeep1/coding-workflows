@@ -364,6 +364,8 @@ def test_parameterized_search_issues_calls_pin_get_only_on_targeted_poller_paths
 
 
 def test_judge_context_issue_numbers_are_normalized_without_globbing():
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
 	poller_source_text = POLLER_SCRIPT.read_text(encoding="utf-8")
 	block_start_marker = '  MERGED_PR_SUMMARIES=""\n  OPEN_PR_SUMMARIES=""\n'
 	block_end_marker = '  unset _sorted_issue_nums _issue_status _judge_diff_pass _judge_pr_diff_budget_left\n'
@@ -6389,8 +6391,9 @@ def test_security_pass_cap_does_not_record_advisories_before_terminal_failure() 
 
 
 def test_security_pass_cap_converts_low_keep_fixing_to_advisory() -> None:
-	# Low severity still reaches the round-cap conversion, but #6539 converts it
-	# to fail, not an advisory. Keep the historical name for the CI shard selector.
+	# Issue #6729: low severity is eligible for the round-cap conversion to fail,
+	# just like medium; per #6539 the cap never accepts a finding.
+	# Keep the historical name for the CI shard selector.
 	low_finding = _security_pass_test_finding()
 	low_finding["severity"] = "low"
 	result = _run_poller(
@@ -6407,7 +6410,7 @@ def test_security_pass_cap_converts_low_keep_fixing_to_advisory() -> None:
 	assert latest_state["security_pass_waived_findings"] == []
 	assert not latest_state.get("security_pass_followup_issues")
 	assert result.get("created_issues", []) == []
-	assert "ai:security-pass-failed" in result["tracking_labels"]
+	assert result["tracking_labels"] == ["ai:security-pass-failed"]
 	combined_log = result["stdout"] + result["stderr"]
 	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=192 round=3 cap=2 converted=1" in combined_log
 	assert "SECURITY_PASS_JUDGE_DECIDED tracking_issue=192 round=3" in combined_log
@@ -6422,7 +6425,12 @@ def test_security_pass_cap_converts_low_keep_fixing_to_advisory() -> None:
 		if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 3)")]
 	assert len(judge_comments) == 1
 	assert "1 finding(s) cannot be accepted" in judge_comments[0]
+	assert (
+		"1 of them were `keep_fixing` decisions converted to `fail` because the keep_fixing round budget (`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=2`) is spent; no finding is accepted by the cap."
+		in judge_comments[0]
+	)
 	assert "| SEC-TEST-1 | low | scripts/example.py:1 | fail | [keep_fixing capped after 2 judge round(s); converted to fail" in judge_comments[0]
+	assert "need a human" not in judge_comments[0]
 
 
 def test_security_pass_cap_mixed_blocking_and_low_keep_fixing_waives_nothing() -> None:
@@ -23595,6 +23603,8 @@ def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
 	PR whose body carries a close keyword, keep skipping non-open PRs,
 	and treat an API failure as unknown state — all with exactly one
 	``pulls/<n>`` request per candidate."""
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	helper = _extract_bash_function(script, "_linked_pr_is_issue_implementation()\n{")
 	closer = _extract_bash_function(script, "close_linked_pr() {")
