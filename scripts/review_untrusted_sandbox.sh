@@ -90,11 +90,28 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 		sleep 0.1
 	done
 	if [ -S "${root}/socket/registry.sock" ]; then
+	# Each install command runs under its own budget so a package manager
+	# that keeps resolving (pip backtracking through dozens of ruff and
+	# structlog releases for a consumer's unpinned pyproject extras,
+	# 2026-10-09) cannot consume the whole container budget below: the
+	# install is reported as failed, the venv and pytest bootstrap still
+	# happen, and the editor runs with partial dependencies. A container
+	# that still outruns the 900s budget is a failed install too, not a
+	# failed isolation boundary (the editor was skipped for 31 minutes per
+	# review run before this distinction, and the PR never left the retry
+	# loop). Any other non-zero exit stays fatal.
+	install_budget="${DEPENDENCY_INSTALL_TIMEOUT_SECONDS:-600}"
+	if ! [[ "${install_budget}" =~ ^[1-9][0-9]*$ ]]; then
+		echo "::warning::Invalid DEPENDENCY_INSTALL_TIMEOUT_SECONDS=${install_budget}; using 600" >&2
+		install_budget=600
+	fi
+	dep_rc=0
 	timeout --signal=TERM --kill-after=10s 900s env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run --rm --name "${dep_container}" --user "$(id -u):$(id -g)" \
 		--network none --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 --memory 3g --cpus 2 \
 		--mount "type=bind,src=${root}/source,dst=/source" \
 		--mount "type=bind,src=${root}/socket,dst=/socket" \
 		--mount "type=bind,src=${root}/dependency_registry_proxy.py,dst=/support/dependency_registry_proxy.py,readonly" \
+		--env "DEPENDENCY_INSTALL_TIMEOUT_SECONDS=${install_budget}" \
 		--env HTTPS_PROXY=http://127.0.0.1:3128 --env https_proxy=http://127.0.0.1:3128 \
 		--env HTTP_PROXY=http://127.0.0.1:3128 --env http_proxy=http://127.0.0.1:3128 \
 		--env npm_config_https_proxy=http://127.0.0.1:3128 --env npm_config_proxy=http://127.0.0.1:3128 \
@@ -108,27 +125,37 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 			python3 -c "import socket,time; [(time.sleep(.1) if s.connect_ex((\"127.0.0.1\",3128)) else exit(0)) for s in (socket.socket() for _ in range(50))]; exit(1)" \
 				|| { echo "::warning::Review dependencies skipped: registry proxy bridge unavailable" >&2; exit 0; }
 			install_failed=false
+			# Bounded install: a resolver that keeps going is a failed install,
+			# reported and skipped, not a reason to lose the editor run.
+			bounded_install() {
+				timeout --signal=TERM --kill-after=10s "${DEPENDENCY_INSTALL_TIMEOUT_SECONDS:-600}" "$@" 2>&1
+				local rc=$?
+				if [ "${rc}" -eq 124 ] || [ "${rc}" -eq 137 ]; then
+					echo "::warning::Review dependency install timed out after ${DEPENDENCY_INSTALL_TIMEOUT_SECONDS:-600}s: $*"
+				fi
+				return "${rc}"
+			}
 			python3 -m venv --system-site-packages /source/.review-venv || exit 1
 			export PATH=/source/.review-venv/bin:$PATH
 			if [ -f package-lock.json ]; then
 				echo "Found package-lock.json — running npm ci"
-				npm ci --ignore-scripts 2>&1 || install_failed=true
+				bounded_install npm ci --ignore-scripts || install_failed=true
 			elif [ -f yarn.lock ]; then
 				echo "Found yarn.lock — running yarn install"
-				yarn install --frozen-lockfile --ignore-scripts 2>&1 || install_failed=true
+				bounded_install yarn install --frozen-lockfile --ignore-scripts || install_failed=true
 			elif [ -f pnpm-lock.yaml ]; then
 				echo "Found pnpm-lock.yaml — running pnpm install"
-				npx pnpm install --frozen-lockfile --ignore-scripts 2>&1 || install_failed=true
+				bounded_install npx pnpm install --frozen-lockfile --ignore-scripts || install_failed=true
 			elif [ -f package.json ]; then
 				echo "Found package.json (no lockfile) — running npm install"
-				npm install --ignore-scripts 2>&1 || install_failed=true
+				bounded_install npm install --ignore-scripts || install_failed=true
 			fi
 			if [ -f requirements.txt ]; then
 				echo "Found requirements.txt — running pip install"
-				pip install -r requirements.txt 2>&1 || install_failed=true
+				bounded_install pip install -r requirements.txt || install_failed=true
 			elif [ -f pyproject.toml ] && [ ! -f package.json ]; then
 				echo "Found pyproject.toml — running pip install"
-				pip install -e ".[dev]" 2>&1 || pip install -e . 2>&1 || install_failed=true
+				bounded_install pip install -e ".[dev]" || bounded_install pip install -e . || install_failed=true
 			fi
 			[ "$install_failed" = false ] || echo "::warning::Some project dependencies could not be installed. Editor validation may be limited."
 			pytest_bootstrap_wanted=false
@@ -154,7 +181,17 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 					fi
 				fi
 			fi
-		' || { echo '::error::Review dependency isolation failed' >&2; exit 1; }
+		' || dep_rc=$?
+	case "${dep_rc}" in
+		0) ;;
+		124|137)
+			echo "::warning::Review dependencies skipped: dependency container timed out after 900s (install budget ${install_budget}s). Editor validation may be limited." >&2
+			;;
+		*)
+			echo '::error::Review dependency isolation failed' >&2
+			exit 1
+			;;
+	esac
 	else
 		echo '::warning::Review dependencies skipped: registry proxy unavailable' >&2
 	fi
