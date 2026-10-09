@@ -136,17 +136,20 @@ class FreshnessOutcomes(unittest.TestCase):
 		self.assertIn("reason=base_diff_truncated", out)
 		self.assertFalse(any("/files" in c for c in calls), "no PR-files read when the base diff is already too large to prove anything")
 
-	def test_api_failure_is_unknown_and_proceeds_with_warning(self) -> None:
+	# Security-pass finding merge-freshness-unknown-proceeds: an unverifiable
+	# freshness result defers the merge (no branch update is requested).
+	def test_api_failure_is_unknown_and_defers(self) -> None:
 		rc, out, calls = _gate(compare_json="")
-		self.assertEqual(rc, 0)
-		self.assertIn("outcome=unknown reason=compare_failed", out)
+		self.assertEqual(rc, 1)
+		self.assertIn("outcome=unknown reason=compare_failed action=defer", out)
 		self.assertIn("::warning::", out)
 		self.assertFalse(any("/update-branch" in c for c in calls))
 
-	def test_pr_files_failure_is_unknown_and_proceeds(self) -> None:
-		rc, out, _ = _gate(compare_json=_compare(1, ["a.py"]), pr_files_json="{}")
-		self.assertEqual(rc, 0)
-		self.assertIn("reason=pr_files_failed", out)
+	def test_pr_files_failure_is_unknown_and_defers(self) -> None:
+		rc, out, calls = _gate(compare_json=_compare(1, ["a.py"]), pr_files_json="{}")
+		self.assertEqual(rc, 1)
+		self.assertIn("reason=pr_files_failed action=defer", out)
+		self.assertFalse(any("/update-branch" in c for c in calls))
 
 	def test_head_and_base_are_resolved_from_the_pr_when_omitted(self) -> None:
 		pr_json = json.dumps({"head": {"sha": HEAD}, "base": {"ref": "release/v1"}})
@@ -155,11 +158,12 @@ class FreshnessOutcomes(unittest.TestCase):
 		self.assertTrue(any(c.endswith("repos/owner/repo/pulls/7") for c in calls))
 		self.assertTrue(any(f"/compare/{HEAD}...release/v1" in c for c in calls))
 
-	def test_unresolvable_head_is_unknown_and_proceeds(self) -> None:
+	def test_unresolvable_head_is_unknown_and_defers(self) -> None:
 		rc, out, calls = _gate(args='7 "" ""', pr_json="{}")
-		self.assertEqual(rc, 0)
-		self.assertIn("reason=unresolved_head_or_base", out)
+		self.assertEqual(rc, 1)
+		self.assertIn("reason=unresolved_head_or_base action=defer", out)
 		self.assertFalse(any("/compare/" in c for c in calls))
+		self.assertFalse(any("/update-branch" in c for c in calls))
 
 
 class Switch(unittest.TestCase):
@@ -195,7 +199,9 @@ class Wiring(unittest.TestCase):
 		merge_commit_at = text.index('--merge --auto --match-head-commit "${INITIAL_HEAD_SHA}"')
 		self.assertLess(gate_at, merge_commit_at)
 		self.assertLess(gate_at, squash_at)
-		self.assertIn("action=defer reason=base_moved_overlap", text)
+		self.assertIn("action=defer reason=$(base_freshness_defer_reason)", text)
+		self.assertIn('echo "base_moved_overlap"', text)
+		self.assertIn('echo "base_freshness_unknown"', text)
 
 	def test_review_rb_judge_gates_both_merge_sites(self) -> None:
 		text = RB_JUDGE.read_text(encoding="utf-8")
@@ -402,6 +408,112 @@ class RequiredChecksWiring(unittest.TestCase):
 		recheck_at = text.index('[ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ]')
 		self.assertLess(wait_at, recheck_at)
 		self.assertLess(recheck_at, text.index('--squash --auto --match-head-commit "${INITIAL_HEAD_SHA}"'))
+
+
+# ---------------------------------------------------------------------------
+# Head-bound poller merges (security-pass finding
+# poller-merge-unbound-to-checked-head).
+# ---------------------------------------------------------------------------
+
+def _poller_function(name: str) -> str:
+	text = POLLER.read_text(encoding="utf-8")
+	start = text.index(f"\n{name}()\n") + 1
+	end = text.index("\n}\n", start) + 3
+	return text[start:end]
+
+
+def _merge_bound(args: str, *, auto_rc: int = 0, sync_rc: int = 0) -> tuple[int, str, list[str]]:
+	log = Path(os.environ.get("TMPDIR", "/tmp")) / f"orch_merge_bound_{os.getpid()}.log"
+	if log.exists():
+		log.unlink()
+	script = f"""
+set -uo pipefail
+gh_retry() {{ "$@"; }}
+gh() {{
+  printf '%s\\n' "$*" >> "${{CALL_LOG}}"
+  case "$*" in
+    *" --auto "*) return "${{AUTO_RC}}" ;;
+    *) return "${{SYNC_RC}}" ;;
+  esac
+}}
+{_poller_function("_orch_squash_merge_bound")}
+_orch_squash_merge_bound {args}; rc=$?
+printf 'rc=%s outcome=%s\\n' "${{rc}}" "${{ORCH_MERGE_BOUND_OUTCOME}}"
+"""
+	env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "GITHUB_REPOSITORY": "owner/repo", "CALL_LOG": str(log),
+		"AUTO_RC": str(auto_rc), "SYNC_RC": str(sync_rc)}
+	res = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=60)
+	assert res.returncode == 0, res.stderr
+	rc = int([line for line in res.stdout.splitlines() if line.startswith("rc=")][-1].split()[0][3:])
+	calls = log.read_text().splitlines() if log.exists() else []
+	return rc, res.stdout, calls
+
+
+class HeadBoundPollerMerge(unittest.TestCase):
+	def test_unresolved_head_refuses_without_calling_gh(self) -> None:
+		for args in ("7 ''", "7 abc123", "7 " + "A" * 40, "7 " + "a" * 39):
+			with self.subTest(args=args):
+				rc, out, calls = _merge_bound(args)
+				self.assertEqual(rc, 2)
+				self.assertIn("outcome=refused reason=unresolved_head_sha", out)
+				self.assertEqual(calls, [])
+
+	def test_auto_mode_binds_both_attempts(self) -> None:
+		rc, out, calls = _merge_bound(f"7 {HEAD} auto", auto_rc=1, sync_rc=0)
+		self.assertEqual(rc, 0)
+		self.assertIn("outcome=merged", out)
+		self.assertEqual(len(calls), 2)
+		for call in calls:
+			self.assertIn(f"--match-head-commit {HEAD}", call)
+		self.assertIn("--auto", calls[0])
+		self.assertNotIn("--auto", calls[1])
+
+	def test_auto_mode_enabled_skips_direct_merge(self) -> None:
+		rc, out, calls = _merge_bound(f"7 {HEAD}")
+		self.assertEqual(rc, 0)
+		self.assertIn("outcome=enabled", out)
+		self.assertEqual(len(calls), 1)
+
+	def test_sync_mode_and_total_failure(self) -> None:
+		rc, _, calls = _merge_bound(f"7 {HEAD} sync")
+		self.assertEqual(rc, 0)
+		self.assertEqual(len(calls), 1)
+		self.assertNotIn("--auto", calls[0])
+		rc, out, calls = _merge_bound(f"7 {HEAD}", auto_rc=1, sync_rc=1)
+		self.assertEqual(rc, 1)
+		self.assertIn("outcome=failed", out)
+		self.assertEqual(len(calls), 2)
+
+	def test_every_poller_merge_is_head_bound(self) -> None:
+		lines = POLLER.read_text(encoding="utf-8").splitlines()
+		offenders = []
+		for number, line in enumerate(lines, 1):
+			code = line.strip()
+			if code.startswith("#") or "gh pr merge" not in code or "--disable-auto" in code:
+				continue
+			if code.startswith(("echo", "tg_send_msg", "tg_notify")) or code.lstrip("\"'").startswith("echo"):
+				continue
+			if "--match-head-commit" in code or "_rb_mwf_match_arg" in code:
+				continue
+			offenders.append(f"{number}: {code}")
+		self.assertEqual(offenders, [])
+
+	def test_final_merge_checks_and_merge_share_the_head(self) -> None:
+		text = POLLER.read_text(encoding="utf-8")
+		self.assertIn('_pr_checks_completed "${final_pr}" "${pr_head_sha}" "${default_branch}"', text)
+		self.assertNotIn('_pr_checks_completed "${final_pr}" "" "${default_branch}"', text)
+		self.assertIn('--squash --delete-branch --match-head-commit "${pr_head_sha}"', text)
+		for site in ('_orch_squash_merge_bound "${merge_pr}" "${merge_head_sha}" auto',
+				'_orch_squash_merge_bound "${PW_PR}" "${_pw_head_sha}" auto',
+				'_orch_squash_merge_bound "${RTM_PR}" "${_rtm_head_sha}" auto',
+				'_orch_squash_merge_bound "${RB_PR}" "${_rb_merge_sha}" auto',
+				'_orch_squash_merge_bound "${RB_PR}" "${_rb_fm_sha}" auto',
+				'_orch_squash_merge_bound "${RB_PR}" "${_rb_nofix_sha}" auto',
+				):
+			self.assertIn(site, text)
+		self.assertIn('--squash --auto --match-head-commit "${N_HEAD_SHA}"', text)
+		self.assertIn('_pr_checks_completed "${merge_pr}" "${merge_head_sha}"', text)
+		self.assertIn('_pr_base_fresh_for_merge "${merge_pr}" "${merge_head_sha}" "${merge_base_ref}"', text)
 
 
 if __name__ == "__main__":
