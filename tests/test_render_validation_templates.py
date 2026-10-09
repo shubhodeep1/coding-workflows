@@ -145,7 +145,10 @@ def test_renderer_happy_path_creates_expected_files() -> None:
 		assert "TEST_HOST_HEADER" in http_smoke_text
 
 		family_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
-		assert "python-mongo-flask family for demo-project" in family_text
+		marker_run = subprocess.run(["bash", "-c", family_text], capture_output=True, text=True, timeout=10)
+		assert marker_run.returncode == 0, marker_run.stderr
+		# project_name is rendered shell-quoted (printf argument), so check the executed output.
+		assert "ok 1 - python-mongo-flask family for demo-project" in marker_run.stdout
 
 		lint_result = subprocess.run(
 			["python3", str(REPO_ROOT / "scripts" / "validation_lint.py"), str(output_root)],
@@ -350,7 +353,10 @@ def test_renderer_family_dispatch_routing() -> None:
 		assert "npx hardhat test --network localhost" in hardhat_test_text
 
 		family_marker_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
-		assert "node-hardhat-solidity family for demo-project" in family_marker_text
+		marker_run = subprocess.run(["bash", "-c", family_marker_text], capture_output=True, text=True, timeout=10)
+		assert marker_run.returncode == 0, marker_run.stderr
+		# project_name is rendered shell-quoted (printf argument), so check the executed output.
+		assert "ok 1 - node-hardhat-solidity family for demo-project" in marker_run.stdout
 		assert not (output_root / "tests" / "10_http_smoke.sh").exists()
 
 		lint_result = subprocess.run(
@@ -394,7 +400,10 @@ def test_renderer_node_runtime_family_dispatch_routing() -> None:
 		family_marker_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
 		env_text = (output_root / "validate.env").read_text(encoding="utf-8")
 		repo_checks_text = (output_root / "tests" / "40_repo_checks.sh").read_text(encoding="utf-8")
-		assert "node-runtime family for demo-project" in family_marker_text
+		marker_run = subprocess.run(["bash", "-c", family_marker_text], capture_output=True, text=True, timeout=10)
+		assert marker_run.returncode == 0, marker_run.stderr
+		# project_name is rendered shell-quoted (printf argument), so check the executed output.
+		assert "ok 1 - node-runtime family for demo-project" in marker_run.stdout
 		# node-runtime renders raw (unquoted) JSON arrays so the in-container
 		# JSON.parse in 40_repo_checks.sh succeeds (regression: run 27939731907).
 		assert 'CUSTOM_TESTS_JSON=[' in env_text
@@ -462,7 +471,10 @@ def test_renderer_repo_checks_family_dispatch_routing() -> None:
 		assert "json.loads(payload)" in repo_checks_text
 
 		family_marker_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
-		assert "python-mongo-repo-checks family for demo-project" in family_marker_text
+		marker_run = subprocess.run(["bash", "-c", family_marker_text], capture_output=True, text=True, timeout=10)
+		assert marker_run.returncode == 0, marker_run.stderr
+		# project_name is rendered shell-quoted (printf argument), so check the executed output.
+		assert "ok 1 - python-mongo-repo-checks family for demo-project" in marker_run.stdout
 
 		lint_result = subprocess.run(
 			["python3", str(REPO_ROOT / "scripts" / "validation_lint.py"), str(output_root)],

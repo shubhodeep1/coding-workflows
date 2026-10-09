@@ -4,7 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/../_lib/tap_helpers.sh"
 
-TAP_PLAN="${TAP_PLAN:-2}"
+_default_tap_plan=2
+TAP_PLAN="${TAP_PLAN:-${_default_tap_plan}}"
 
 echo "1..${TAP_PLAN}"
 
