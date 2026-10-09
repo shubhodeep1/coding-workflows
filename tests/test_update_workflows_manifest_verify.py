@@ -375,3 +375,14 @@ def test_manifest_for_other_commit_rejects(tmp_path: Path, signed_release) -> No
 	asset.write_text(json.dumps(doc), encoding="utf-8")
 	result, outputs, _, reason_file = _run(tmp_path, upstream, sha, asset)
 	_assert_rejected(result, outputs, reason_file, "manifest_header_mismatch")
+
+
+@needs_tools
+def test_workdir_failure_rejects_before_any_gh_call(tmp_path: Path, signed_release) -> None:
+	upstream, sha, asset = signed_release
+	mktemp = _fake_gh(tmp_path) / "mktemp"
+	mktemp.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+	mktemp.chmod(0o755)
+	result, outputs, calls, reason_file = _run(tmp_path, upstream, sha, asset)
+	_assert_rejected(result, outputs, reason_file, "workdir_unavailable")
+	assert calls == []
