@@ -232,19 +232,24 @@ install_rootless_packages()
 	fi
 	keyring="${SANDBOX_DOCKER_APT_KEYRING_DIR}/ai-validation-docker.asc"
 	source_list="${SANDBOX_DOCKER_APT_SOURCES_DIR}/ai-validation-docker.list"
-	if sudo -n install -d -m 0755 "${SANDBOX_DOCKER_APT_KEYRING_DIR}" \
+	if ! { sudo -n install -d -m 0755 "${SANDBOX_DOCKER_APT_KEYRING_DIR}" \
 		&& sudo -n install -m 0644 "${key_tmp}" "${keyring}" \
 		&& printf 'deb [arch=%s signed-by=%s] https://download.docker.com/linux/%s %s stable\n' "${arch}" "${keyring}" "${distro}" "${codename}" \
-			| sudo -n tee "${source_list}" >/dev/null \
-		&& sandbox_apt update -q; then
+			| sudo -n tee "${source_list}" >/dev/null; }; then
+		sandbox_log provision fail docker_repo_source_write_failed
+	elif ! sandbox_apt update -q; then
+		sandbox_log provision fail docker_repo_update_failed
+	else
 		docker_version="$(dpkg-query -W -f='${Version}' docker-ce 2>/dev/null || true)"
 		if [ -n "${docker_version}" ] && sandbox_apt install -y -q "docker-ce-rootless-extras=${docker_version}"; then
 			rc=0
 		elif sandbox_apt install -y -q docker-ce-rootless-extras; then
 			rc=0
+		else
+			sandbox_log provision fail docker_repo_install_failed
 		fi
 	fi
-	rm -f -- "${key_tmp}"
+	rm -f -- "${key_tmp}" || true
 	sudo -n rm -f -- "${source_list}" "${keyring}" >/dev/null 2>&1 || true
 	if [ "${rc}" -eq 0 ]; then
 		sandbox_log provision ok rootless_packages_from_docker_repo

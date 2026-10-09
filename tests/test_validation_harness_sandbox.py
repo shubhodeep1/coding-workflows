@@ -406,6 +406,17 @@ def test_a_wrong_key_fingerprint_is_refused_and_nothing_is_trusted(tmp_path: Pat
 	assert not (tmp_path / "keyrings").exists()
 
 
+def test_a_failed_repo_install_names_its_reason_and_cleans_up(tmp_path: Path) -> None:
+	env = _install_env(tmp_path, pinned_version_exists=False)
+	apt = tmp_path / "bin" / "apt-get"
+	apt.write_text(apt.read_text(encoding="utf-8").replace("\nexit 0\n", "\nexit 100\n"), encoding="utf-8")
+	result = _install(env)
+	assert result.returncode == 1
+	assert "reason=docker_repo_install_failed" in result.stderr
+	assert not (tmp_path / "sources.list.d" / "ai-validation-docker.list").exists()
+	assert not (tmp_path / "keyrings" / "ai-validation-docker.asc").exists()
+
+
 def test_provision_still_fails_closed_when_the_packages_cannot_be_installed() -> None:
 	text = HELPER.read_text(encoding="utf-8")
 	assert "install_rootless_packages || sandbox_fail provision rootless_packages_unavailable" in text

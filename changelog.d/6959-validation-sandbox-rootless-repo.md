@@ -7,7 +7,7 @@ Since #6569, every project validation ended in `harness_error` with `VALIDATION_
 | --- | --- |
 | Pinned Docker apt key fingerprint | `9DC858229FC7DD38854AE2D88D81803C0EBFCD88` |
 | New success log | `VALIDATION_HARNESS_SANDBOX phase=provision outcome=ok reason=rootless_packages_from_docker_repo` |
-| New failure reasons before `rootless_packages_unavailable` | `docker_repo_distro_unsupported`, `docker_repo_platform_unknown`, `docker_repo_key_download_failed`, `docker_repo_key_fingerprint_mismatch` |
+| New failure reasons before `rootless_packages_unavailable` | `docker_repo_distro_unsupported`, `docker_repo_platform_unknown`, `docker_repo_key_download_failed`, `docker_repo_key_fingerprint_mismatch`, `docker_repo_source_write_failed`, `docker_repo_update_failed`, `docker_repo_install_failed` |
 
 What this means for operators: projects stuck in `ai:validation-failed` with the sandbox `harness_error` can be revalidated with `/revalidate` once this reaches their workflows.
 
