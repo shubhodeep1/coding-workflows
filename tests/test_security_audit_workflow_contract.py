@@ -247,8 +247,14 @@ def _run_security_audit(
 		env = os.environ.copy()
 		if Path(run_cwd) != REPO_ROOT:
 			env = {key: value for key, value in env.items() if key not in _SANITIZED_GIT_ENV_KEYS}
-		# Engine selection must not leak in from the caller's environment.
-		env = {key: value for key, value in env.items() if not key.startswith(("AI_ENGINE", "CLAUDE_"))}
+		# Engine selection must not leak in from the caller's environment (CI jobs
+		# carry a real GITHUB_EVENT_PATH whose PR labels would override
+		# AI_ENGINE_SECURITY_AUDIT).
+		env = {
+			key: value
+			for key, value in env.items()
+			if not key.startswith(("AI_ENGINE", "CLAUDE_")) and key != "GITHUB_EVENT_PATH"
+		}
 		existing_path_entries = env.get("PATH", "").split(os.pathsep)
 		if not codex_available:
 			existing_path_entries = [
@@ -269,6 +275,11 @@ def _run_security_audit(
 				"SECURITY_AUDIT_ENABLED": "true" if enabled else "false",
 				# The codex-path tests pin the engine; the Claude tests override it.
 				"AI_ENGINE_SECURITY_AUDIT": "codex",
+				# Without AI_ENGINE_LABELS, claude_engine.work_item_labels falls back to
+				# the labels in GITHUB_EVENT_PATH, so a CI job's PR labels (for example
+				# ai:engine-claude) would pick the engine. Tests that need labels pass
+				# them through extra_env, which is applied after this block.
+				"AI_ENGINE_LABELS": "[]",
 				"CLAUDE_ENGINE_POOL_DIR": str(pool_dir),
 			}
 		)
@@ -2724,10 +2735,51 @@ def test_security_audit_codex_engine_or_codex_label_never_starts_claude() -> Non
 		with tempfile.TemporaryDirectory(prefix="security-audit-codex-engine-") as td:
 			proc, state, payload = _claude_engine_audit(Path(td), claude_env=claude_env)
 			assert proc.returncode == 0, proc.stderr
-			assert "security-audit: engine=codex" in proc.stdout
+			assert "security-audit: engine=codex" in proc.stdout, proc.stderr
 			assert "AI_ENGINE_FALLBACK" not in proc.stderr
 			assert not state.get("claude_calls")
 			assert _kept_ids(payload) == ["codex-finding"]
+
+
+def test_security_audit_engine_ignores_ci_event_labels() -> None:
+	# CI jobs carry a real GITHUB_EVENT_PATH; a PR labelled ai:engine-claude
+	# must not move a codex-pinned audit onto Claude (PR #6780 CI failure).
+	# No pytest fixtures: main() calls every test_* function without arguments.
+	with tempfile.TemporaryDirectory(prefix="security-audit-event-labels-") as td:
+		tmp_path = Path(td)
+		event_path = tmp_path / "event.json"
+		event_path.write_text(json.dumps({"pull_request": {"labels": [{"name": "ai:engine-claude"}]}}), encoding="utf-8")
+		audit_dir = tmp_path / "audit"
+		audit_dir.mkdir()
+		proc, state, payload = _claude_engine_audit(
+			audit_dir,
+			claude_env={"AI_ENGINE_SECURITY_AUDIT": "codex", "GITHUB_EVENT_PATH": str(event_path)},
+		)
+		assert proc.returncode == 0, proc.stderr
+		assert "security-audit: engine=codex" in proc.stdout
+		assert not state.get("claude_calls")
+		assert _kept_ids(payload) == ["codex-finding"]
+
+
+def test_security_audit_ignores_inherited_event_path_labels() -> None:
+	# A CI pull-request job exports GITHUB_EVENT_PATH; its labels must not
+	# override the engine a test pins (issue #6757).
+	with tempfile.TemporaryDirectory(prefix="security-audit-event-path-") as td:
+		event_path = Path(td) / "event.json"
+		event_path.write_text(json.dumps({"pull_request": {"labels": [{"name": "ai:engine-claude"}]}}), encoding="utf-8")
+		previous = os.environ.get("GITHUB_EVENT_PATH")
+		os.environ["GITHUB_EVENT_PATH"] = str(event_path)
+		try:
+			proc, state, payload = _claude_engine_audit(Path(td), claude_env={"AI_ENGINE_SECURITY_AUDIT": "codex"})
+		finally:
+			if previous is None:
+				os.environ.pop("GITHUB_EVENT_PATH", None)
+			else:
+				os.environ["GITHUB_EVENT_PATH"] = previous
+		assert proc.returncode == 0, proc.stderr
+		assert "security-audit: engine=codex" in proc.stdout, proc.stderr
+		assert not state.get("claude_calls")
+		assert _kept_ids(payload) == ["codex-finding"]
 
 
 def test_security_audit_role_default_runs_claude() -> None:

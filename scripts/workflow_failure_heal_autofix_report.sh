@@ -273,8 +273,24 @@ fi
 
 # The report is enveloped under client_payload.report: GitHub rejects a
 # client_payload with more than 10 top-level properties (HTTP 422).
+# Report identity (issue #6559): see workflow_failure_heal_report.sh. Only
+# when the staged helper knows the subcommand (an older copy would fail it);
+# the token file is 0600, never printed, and removed on exit.
+IDENTITY_FILE="${REPORT_DIR}/report_identity.jwt"
 DISPATCH_FILE="${REPORT_DIR}/dispatch.json"
-if ! python3 "${HEAL_PY}" wrap-dispatch --payload-json "${PAYLOAD_FILE}" > "${DISPATCH_FILE}" 2> "${REPORT_DIR}/build_error.txt"; then
+trap 'rm -f "${IDENTITY_FILE}" "${DISPATCH_FILE}"' EXIT
+WRAP_ARGS=(--payload-json "${PAYLOAD_FILE}")
+if grep -q 'request-report-identity' "${HEAL_PY}" 2>/dev/null; then
+	IDENTITY_STATUS="$(python3 "${HEAL_PY}" request-report-identity --out "${IDENTITY_FILE}" 2>/dev/null || echo "identity=absent reason=helper_failed")"
+	IDENTITY_STATUS="$(printf '%s' "${IDENTITY_STATUS}" | head -1 | tr -cd 'A-Za-z0-9_=. -')"
+	log "${IDENTITY_STATUS:-identity=absent reason=unknown} pr=${PR}"
+	if [ -s "${IDENTITY_FILE}" ]; then
+		WRAP_ARGS+=(--report-identity-file "${IDENTITY_FILE}")
+	fi
+else
+	log "identity=absent reason=helper_outdated pr=${PR}"
+fi
+if ! python3 "${HEAL_PY}" wrap-dispatch "${WRAP_ARGS[@]}" > "${DISPATCH_FILE}" 2> "${REPORT_DIR}/build_error.txt"; then
 	log "skip reason=dispatch_envelope_failed pr=${PR} detail=$(head -c 200 "${REPORT_DIR}/build_error.txt" | tr '\n' ' ')"
 	exit 0
 fi

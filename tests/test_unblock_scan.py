@@ -371,6 +371,7 @@ engine_label_create_args() { :; }
 gh_retry() {
 	if [ "$1 $2 $3" = "gh issue create" ]; then
 		echo create >> "$CREATES_FILE"
+		printf '%s\n' "$@" >> "$CREATES_FILE.args"
 		echo https://github.com/o/r/issues/901
 	fi
 }
@@ -390,6 +391,21 @@ def test_fixup_hook_accepts_project_members_without_pr_read(tmp_path: Path, item
 	assert result.returncode == 0, result.stderr
 	assert calls == [] and creates == ["create"]
 	assert state["issue_number_map"][f"unblock-{item}-r1"] == 901
+
+
+@pytest.mark.parametrize("finding_line,labelled", [
+	("<!-- ai:security-finding:abc-1 -->", True),
+	("<!-- ai:security-finding:abc def -->", False),
+	("", False),
+])
+def test_fixup_hook_labels_security_successor(tmp_path: Path, finding_line: str, labelled: bool) -> None:
+	body = f"<!-- ai:unblock-fixup-request:v1 item=5 id=unblock-5-r1 -->\n### Re-issue\n\n{finding_line}\nRe-issued."
+	result, state, _calls, creates = _run_fixup_hook(tmp_path, 5, [5], request_body=body)
+	assert result.returncode == 0, result.stderr
+	assert creates == ["create"] and state["issue_number_map"]["unblock-5-r1"] == 901
+	args = (tmp_path / "creates.args").read_text(encoding="utf-8").splitlines()
+	assert ("ai:security" in args) is labelled
+	assert "ai:orchestrator-managed" in args
 
 
 def test_fixup_hook_reports_malformed_trusted_request(tmp_path: Path) -> None:

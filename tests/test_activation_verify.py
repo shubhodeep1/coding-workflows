@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -44,6 +45,18 @@ for i, a in enumerate(args):
 	if a == "-f":
 		k, _, v = args[i + 1].partition("=")
 		fields.setdefault(k, v)
+if args[:3] == ["label", "create", "ai:operator-step"]:
+	error = os.environ.get("FAKE_GH_LABEL_CREATE_ERROR", "")
+	if not error and state.get("operator_label_exists"):
+		error = "label already exists"
+	if error:
+		if "label already exists" in error or "already_exists" in error:
+			state["operator_label_exists"] = True  # Concurrent creator won the race.
+		json.dump(state, open(state_path, "w"))
+		print(error, file=sys.stderr)
+		sys.exit(1)
+	state["operator_label_exists"] = True
+	done()
 method = args[args.index("-X") + 1] if "-X" in args else ("POST" if "-f" in args else "GET")
 if "user" in args:
 	done("pipeline-bot")
@@ -92,6 +105,10 @@ if endpoint.endswith("/comments"):
 	done(json.dumps(comment))
 if endpoint == "repos/o/r/issues" and "title" in fields:
 	if os.environ.get("FAKE_GH_FAIL_CREATE") == "1":
+		sys.exit(1)
+	if fields.get("labels[]") == "ai:operator-step" and not state.get("operator_label_exists"):
+		json.dump(state, open(state_path, "w"))
+		print("label does not exist", file=sys.stderr)
 		sys.exit(1)
 	state["created"].append(fields)
 	created = {"number": 900 + len(state["created"]), "html_url": "u"}
@@ -161,6 +178,10 @@ DORMANT = {
 def test_dormant_verdict_posts_marker_opens_fix_issue_and_records_operator_step(tmp_path: Path) -> None:
 	result, state = _verify(tmp_path, DORMANT)
 	assert result.returncode == 0
+	assert state["operator_label_exists"] is True
+	label_call = next(i for i, call in enumerate(state["calls"]) if call[:3] == ["label", "create", "ai:operator-step"])
+	issue_call = next(i for i, call in enumerate(state["calls"]) if call[:2] == ["api", "repos/o/r/issues"] and "-f" in call and "title=Operator steps waiting" in call)
+	assert label_call < issue_call
 	assert "ACTIVATION_VERIFY mode=pr item=42 verdict=DORMANT code_gaps=1 operator_gaps=1 outcome=posted" in result.stdout
 	verdict_comment = state["comments"][-1]
 	assert verdict_comment["endpoint"] == "repos/o/r/issues/7/comments"
@@ -191,7 +212,7 @@ def test_operator_tracker_creates_missing_label(tmp_path: Path) -> None:
 	)
 	assert result.returncode == 0, result.stdout
 	state = json.loads(state_file.read_text(encoding="utf-8"))
-	assert any("repos/o/r/labels" in call and "name=ai:operator-step" in call for call in state["calls"])
+	assert any(call[:3] == ["label", "create", "ai:operator-step"] for call in state["calls"])
 	assert state["created"][0]["labels[]"] == "ai:operator-step"
 
 
@@ -352,6 +373,7 @@ def test_writer_replaces_its_own_entry_and_keeps_others(tmp_path: Path) -> None:
 	assert "**B**" in state["comments"][-1]["body"]
 	assert "**A**" in state["operator_issues"][0]["body"]  # Legacy entry is immutable.
 	assert state["created"] == []
+	assert not any(call[:2] == ["label", "create"] for call in state["calls"])
 
 
 def test_writer_reconciles_duplicate_trackers_without_losing_entries(tmp_path: Path) -> None:
@@ -401,6 +423,62 @@ def test_writer_does_not_recreate_when_label_listing_lags_create(tmp_path: Path)
 	assert result.returncode == 0, result.stdout
 	assert len(state["created"]) == 1
 	assert state["comments"][-1]["body"].startswith("<!-- ai:operator-step:entry key=pr-7 -->")
+
+
+def test_writer_uses_registered_label_metadata(tmp_path: Path) -> None:
+	registration = json.loads((ROOT / ".github/ai/label_contract.v1.json").read_text(encoding="utf-8"))["labels"]["ai:operator-step"]
+	helpers = (ROOT / "scripts/label_helpers.sh").read_text(encoding="utf-8")
+	assert registration["color"] == re.search(r'\["ai:operator-step"\]="([0-9a-f]{6})"', helpers).group(1)
+	assert registration["description"] == re.search(r'\["ai:operator-step"\]="([^"]+)"', helpers[helpers.index("declare -A _AI_LABEL_DESCS="):]).group(1)
+	assert len(registration["description"]) <= 100
+	env, state_file = _setup(tmp_path)
+	steps = tmp_path / "steps.json"
+	steps.write_text('[{"title":"Set a variable"}]', encoding="utf-8")
+	result = subprocess.run([sys.executable, str(WRITER), "upsert", "--repo", "o/r", "--key", "pr-7",
+		"--source", "seven", "--steps-file", str(steps)], capture_output=True, text=True, env=env, check=False)
+	assert result.returncode == 0, result.stdout
+	label_call = next(call for call in json.loads(state_file.read_text(encoding="utf-8"))["calls"] if call[:2] == ["label", "create"])
+	assert label_call == ["label", "create", "ai:operator-step", "--repo", "o/r", "--color", registration["color"],
+		"--description", registration["description"]]
+
+
+@pytest.mark.parametrize(("error", "preexisting", "expected_code"), [
+	("", True, 0),
+	("label already exists", False, 0),
+	("Validation Failed: already_exists", False, 0),
+	("Validation Failed", False, 2),
+	("description already exists", False, 2),
+	("forbidden", False, 2),
+	("rate limit exceeded", False, 2),
+])
+def test_writer_label_create_race_or_failure(tmp_path: Path, error: str, preexisting: bool, expected_code: int) -> None:
+	env, state_file = _setup(tmp_path, operator_label_exists=preexisting)
+	if error:
+		env["FAKE_GH_LABEL_CREATE_ERROR"] = error
+	steps = tmp_path / "steps.json"
+	steps.write_text('[{"title":"Set a variable"}]', encoding="utf-8")
+	result = subprocess.run([sys.executable, str(WRITER), "upsert", "--repo", "o/r", "--key", "pr-7",
+		"--source", "seven", "--steps-file", str(steps)], capture_output=True, text=True, env=env, check=False)
+	assert result.returncode == expected_code, result.stdout
+	state = json.loads(state_file.read_text(encoding="utf-8"))
+	assert len(state["created"]) == (1 if expected_code == 0 else 0)
+	assert sum(call[:2] == ["label", "create"] for call in state["calls"]) == 1
+
+
+@pytest.mark.parametrize("registration", [
+	None,
+	{"labels": {"ai:operator-step": {"color": "not-hex", "description": "short"}}},
+	{"labels": {"ai:operator-step": {"color": "fbca04", "description": "x" * 101}}},
+])
+def test_writer_fails_closed_without_valid_label_registration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, registration: dict | None) -> None:
+	if registration is not None:
+		contract_path = tmp_path / ".github/ai/label_contract.v1.json"
+		contract_path.parent.mkdir(parents=True)
+		contract_path.write_text(json.dumps(registration), encoding="utf-8")
+	monkeypatch.setattr(writer, "__file__", str(tmp_path / "scripts" / "operator_step_issue.py"))
+	monkeypatch.setattr(writer, "_gh", lambda *args, **kwargs: pytest.fail("unexpected GitHub call"))
+	with pytest.raises(writer.ApiError, match="(invalid operator-step label registration|operator-step label registration unavailable)"):
+		writer._ensure_operator_label("o/r")
 
 
 def test_writer_trims_oldest_entries_to_fit() -> None:
@@ -488,3 +566,81 @@ def test_model_text_never_starts_a_comment_line(tmp_path: Path) -> None:
 	_, state = _verify(tmp_path, injected)
 	body = state["comments"][-1]["body"]
 	assert not any(line.lstrip().startswith("/") for line in body.splitlines()), body
+
+
+LIVE = {"verdict": "LIVE", "trigger": "push", "summary": "Runs on push.", "gaps": []}
+
+
+def _git_commit_all(target: Path) -> None:
+	subprocess.run(["git", "init", str(target)], check=True, capture_output=True)
+	subprocess.run(["git", "-C", str(target), "add", "-A"], check=True, capture_output=True)
+	subprocess.run(["git", "-C", str(target), "-c", "user.name=test", "-c", "user.email=test@example.invalid",
+		"commit", "-m", "links"], check=True, capture_output=True)
+
+
+def _context(tmp_path: Path) -> dict:
+	return json.loads((tmp_path / "rt" / "activation_context.json").read_text(encoding="utf-8"))
+
+
+def test_tracked_symlinks_reach_model_context(tmp_path: Path) -> None:
+	# The read-only model sandbox omits symlinks, so the host lists them.
+	target = tmp_path / "target"
+	(target / "workflow-templates").mkdir(parents=True)
+	(target / "CLAUDE.md").write_text("rules\n", encoding="utf-8")
+	os.symlink("../CLAUDE.md", target / "workflow-templates" / "CLAUDE.md")
+	_git_commit_all(target)
+	result, state = _verify(tmp_path, LIVE)
+	assert "outcome=posted" in result.stdout
+	context = _context(tmp_path)
+	assert context["tracked_symlinks"] == [
+		{"path": "workflow-templates/CLAUDE.md", "target": "../CLAUDE.md", "target_exists": True}
+	]
+	assert context["tracked_symlinks_truncated"] is False
+	assert context["changed_files"] == ["README.md"]
+	assert state["comments"]
+
+
+def test_tracked_symlinks_fail_open_without_git(tmp_path: Path) -> None:
+	result, state = _verify(tmp_path, LIVE)
+	assert "outcome=posted" in result.stdout
+	assert "ACTIVATION_VERIFY tracked_symlinks unavailable reason=git_failed" in result.stderr
+	context = _context(tmp_path)
+	assert context["tracked_symlinks"] == [] and context["tracked_symlinks_truncated"] is False
+	assert state["comments"][-1]["body"].endswith("<!-- ai:activation:v1 verdict=LIVE source=pr-42 -->")
+
+
+def test_tracked_symlinks_cap_and_filters(tmp_path: Path) -> None:
+	target = tmp_path / "target"
+	target.mkdir()
+	(target / "CLAUDE.md").write_text("rules\n", encoding="utf-8")
+	os.symlink("bad\ntarget", target / "aa-bad")
+	for n in range(201):
+		os.symlink("CLAUDE.md", target / f"link-{n:03d}")
+	_git_commit_all(target)
+	_verify(tmp_path, LIVE)
+	context = _context(tmp_path)
+	links = context["tracked_symlinks"]
+	assert len(links) == 200 and context["tracked_symlinks_truncated"] is True
+	assert links[0] == {"path": "link-000", "target": "CLAUDE.md", "target_exists": True}
+	assert all("\n" not in link["target"] and link["path"] != "aa-bad" for link in links)
+
+
+def test_prompt_tells_model_snapshot_omits_symlinks() -> None:
+	runtime = (ROOT / "prompts" / "mode-activation-verify.txt").read_text(encoding="utf-8")
+	template = (ROOT / "prompts" / "_templates" / "mode-activation-verify.txt").read_text(encoding="utf-8")
+	for text in (runtime, template):
+		assert "tracked_symlinks" in text and "Never report a listed path" in text
+	assert runtime.split("</compaction-rules>\n", 1)[1] == template.split("\n", 1)[1]
+
+
+def test_tracked_symlinks_flag_dangling_targets(tmp_path: Path) -> None:
+	target = tmp_path / "target"
+	(target / "docs").mkdir(parents=True)
+	(target / "docs" / "guide.md").write_text("guide\n", encoding="utf-8")
+	os.symlink("docs", target / "dir-link")
+	os.symlink("missing.md", target / "dangling")
+	os.symlink("../outside.md", target / "escape")
+	_git_commit_all(target)
+	_verify(tmp_path, LIVE)
+	exists = {link["path"]: link["target_exists"] for link in _context(tmp_path)["tracked_symlinks"]}
+	assert exists == {"dangling": False, "dir-link": True, "escape": False}

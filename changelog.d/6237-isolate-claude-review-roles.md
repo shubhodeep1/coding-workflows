@@ -1,2 +1,0 @@
-<!-- changelog: fixed -->
-- **Claude review roles no longer run PR-derived prompts with host credentials in reach.** The consolidator, conflict resolver and review-blocked judge use the network-isolated review sandbox and credential-free model relay. Read-only verdict and consolidation passes cannot transfer workspace edits; resolver and judge fix passes transfer only validated changes. If isolation is unavailable, these roles use the existing OpenCode fallback, never host Claude. Ephemeral judge and resolver sandboxes do not install project dependencies.
