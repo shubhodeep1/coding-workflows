@@ -787,6 +787,21 @@ def test_filter_log_drops_unterminated_step_header() -> None:
 	assert filtered.count(heal._STEP_ENV_UNTERMINATED_MARKER) == 1
 
 
+def test_filter_log_keeps_unterminated_step_header_without_env_block() -> None:
+	# A log cut mid-step whose header never opened an env block carries no env
+	# values, so its diagnostic output must survive (heal intake relies on it).
+	log = (
+		"2026-09-24T00:00:01Z ##[group]Run codex\n"
+		"2026-09-24T00:00:02Z ::error::resolve_integration_ref.sh: branch missing\n"
+		"2026-09-24T00:00:03Z Authorization: Basic dXNlcjpwYXNz\n"
+	)
+	filtered = heal.filter_log(log)
+	assert heal._STEP_ENV_UNTERMINATED_MARKER not in filtered
+	assert "##[group]Run codex" in filtered
+	assert "resolve_integration_ref.sh: branch missing" in filtered
+	assert "dXNlcjpwYXNz" not in filtered
+
+
 def test_filter_log_byte_cut_never_leaves_an_unredacted_token_suffix() -> None:
 	token = "ghp_" + "Z" * 60
 	log = "x" * 200 + "\n" + "value " + token + "\n"

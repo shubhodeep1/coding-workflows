@@ -299,8 +299,9 @@ _STEP_ENV_OPEN_RE = re.compile(r"^env:\s*$")
 _STEP_ENV_ENTRY_RE = re.compile(r"^(\s+[A-Za-z_][A-Za-z0-9_.-]*:)(\s*)(.*)$")
 _STEP_HEADER_KEY_RE = re.compile(r"^(?:shell|with|env):(?:\s|$)")
 _STEP_ENV_REDACTED_LINE = "  [redacted]"
-# A header that never closes (truncated log) cannot be bounded, so everything
-# from its open line to the end of the job log is replaced by this line.
+# A header that never closes (truncated log) after opening an `env:` block
+# cannot be bounded, so everything from its open line to the end of the job
+# log is replaced by this line. An open header without an `env:` block is kept.
 _STEP_ENV_UNTERMINATED_MARKER = "[env block omitted: unterminated step header]"
 # Test & Mark Stable Release runs dispatched by a promote cycle carry the
 # cycle's run id in their run name (`run-name: ... [cycle:<id>]`, which
@@ -1635,14 +1636,18 @@ def _strip_step_env_values(text: str) -> str:
 	(fail closed). The block ends at ``##[endgroup]`` or at the next header
 	key (``shell:`` / ``with:`` / ``env:``). Lines outside the env block and
 	outside step headers are unchanged, so text without a Run header comes
-	back byte-for-byte. A header that is still open when the text ends is
-	dropped from its open line onwards and replaced by one marker line.
+	back byte-for-byte. A header that is still open when the text ends and
+	opened an ``env:`` block cannot be bounded, so it is dropped from its open
+	line onwards and replaced by one marker line; an open header that never
+	opened an ``env:`` block holds no env values and is kept unchanged, so a
+	log cut mid-step still carries the step's diagnostic output.
 	Timestamps are compared without their prefix and kept in the output.
 	"""
 	kept: list[str] = []
 	header_lines: list[str] = []
 	in_header = False
 	in_env = False
+	env_seen = False
 	for line in text.split("\n"):
 		content = _LOG_TIMESTAMP_RE.sub("", line)
 		stamp = line[: len(line) - len(content)]
@@ -1650,6 +1655,7 @@ def _strip_step_env_values(text: str) -> str:
 			if _STEP_HEADER_OPEN_RE.match(content):
 				in_header = True
 				in_env = False
+				env_seen = False
 				header_lines = [line]
 			else:
 				kept.append(line)
@@ -1667,6 +1673,7 @@ def _strip_step_env_values(text: str) -> str:
 			continue
 		if _STEP_ENV_OPEN_RE.match(content):
 			in_env = True
+			env_seen = True
 			header_lines.append(line)
 			continue
 		if in_env and _STEP_HEADER_KEY_RE.match(content):
@@ -1681,8 +1688,12 @@ def _strip_step_env_values(text: str) -> str:
 			header_lines.append(f"{stamp}{entry.group(1)} [redacted]")
 		else:
 			header_lines.append(f"{stamp}{_STEP_ENV_REDACTED_LINE}")
-	if in_header:
+	if in_header and env_seen:
 		kept.append(_STEP_ENV_UNTERMINATED_MARKER)
+	elif in_header:
+		# No env block was opened, so the buffered lines are verbatim and
+		# carry no env values; redact_secrets still runs over them later.
+		kept.extend(header_lines)
 	return "\n".join(kept)
 
 
