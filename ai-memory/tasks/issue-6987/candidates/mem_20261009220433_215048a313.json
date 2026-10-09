@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The scope guard reads its allowlist only from the issue body: `implement.yml` writes `.body` to `ISSUE_BODY_FILE`, and `files_touched_scope_guard.py` parses the first `files_touched:` block there. A block inside a sentence, a plan or an `/answer` comment therefore never counts. The unblock judge's `edit_files_touched` op cannot add these paths either: `unblock_ledger.py:573` rejects `override_guard` for protected automation paths such as `scripts/`. So C would reproduce the #6814 rejection, and B would send this back to the same judge path that wrote the inline-sentence body. A keeps this issue's finding marker, `ai:security` label, integration branch and `Depends on: #6539` unchanged, and adds only the missing block.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1 (letter decision; steps recorded so the planner and implementer treat them as binding):\n  strategy: derive_from_repo\n  inputs:\n    - .github/workflows/implement.yml lines 122-133 (`ISSUE_BODY_FILE` is the raw issue `.body`) and 3757-3815 (scope guard call)\n    - scripts/files_touched_scope_guard.py `extract_files_touched` (needs a standalone `files_touched:` line followed by `- <path>` lines)\n    - scripts/unblock_ledger.py:564-585 (`override_guard` never covers protected automation paths)\n  steps:\n    - Before implementation starts, a trusted account (OWNER, MEMBER or COLLABORATOR, or the pipeline's GH_PAT account) appends this block to the issue body. It goes on its own lines, outside prose and code fences, and nothing else in the body changes:\n        files_touched:\n        - scripts/orchestrate_poll_process.sh\n        - scripts/security_audit.sh\n        - tests/test_orchestrate_poll_process.py\n        - tests/test_security_audit_workflow_contract.py\n        - README.md\n        - docs/plans/security-pass-convergence-plan.md\n    - Leave the marker `<!-- ai:security-finding:waiver-suppresses-distinct-nearby-finding -->`, the `ai:security` label, `- Integration branch: claude/replace-claude-sessions-phase-7` and `- Depends on: #6539` exactly as they are.\n    - The planner limits the plan to those six files and keeps the specification in the issue body:\n      - In both scripts, suppress a finding only when its `finding_id` is non-empty and exactly matches the waiver ID, and every category, severity and exploit scenario the waiver records also matches.\n      - Remove the proximity (line-window) suppression.\n      - Keep accepting and validating `SECURITY_AUDIT_WAIVER_LINE_WINDOW`, and log that it no longer controls suppression.\n      - An accepted defect keeps its original ID; a different ID is a new finding.\n      - Update both contract tests, README.md and the plan doc.\n    - The implementer must not set `ALLOW_OUT_OF_SCOPE_FILES`, use `override_guard`, or otherwise bypass the guard. If the block is still missing when implementation runs, the run stops at the guard as before instead of committing outside a declared scope.\n  replaces_acceptance_criterion: none\n  equivalence_argument: The block is the same six-file list the issue already gives in prose, now in a form the guard can parse. No files are added to scope and the guard is not relaxed.\n  reversibility: Removing or editing the block in the issue body changes the allowlist for the next run. No code or branch state changes until implementation passes the guard.\n\nSETUP REQUIRED (only when a decision relies on a placeholder):\n- ISSUE_BODY_FILES_TOUCHED_BLOCK (resource): a trusted account edits this issue's body to append the standalone `files_touched:` block listed above. The six paths come from the issue text; nothing else in the body changes. Until set: implementation of this issue is not attempted. If it runs anyway, the automation-path guard rejects the `scripts/` edits and nothing is committed or pushed (fail closed, as in #6814). The `Depends on: #6539` hold is unaffected; #6539 is closed as completed.",
+  "fingerprint": "3b1e0fb1854de6ebd3684eb5b0458c609c4c218bf97736f65e09b13047bdde46",
+  "lineage": {
+    "issue_number": 6987,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37996406538",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37996406538",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6987"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261009220433_215048a313",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6987,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37996406538"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6987",
+  "timestamps": {
+    "created_at": "2026-10-09T22:04:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
