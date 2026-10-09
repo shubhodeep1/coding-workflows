@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should the fix land on?\nChoices:\nA) PR #6647's head branch `ai/issue-6635`: add an `Integration branch: ai/issue-6635` line so the fix PR stacks onto it and clears the drift there. (RECOMMENDED)\nB) The default branch (`main`). This is likely a no-op: main does not have #6647's template change yet, so its template and live copy should already match.\nC) No new branch. Close this issue and let PR #6647's own review/repair loop, or a human, fix the drift on `ai/issue-6635`.\n**Note:** B is incompatible with Q2:A and Q2:B. Neither would change CI on PR #6647.\nQ2: How should the live security hook `.claude/hooks/pr_merge_status_guard.py` be updated, given that the pipeline's editors are blocked from writing it?\nChoices:\nA) Allow the implement phase to write it: add an exact `files_touched` grant for `.claude/hooks/pr_merge_status_guard.py` (trusted author, `ALLOW_WORKFLOW_EDITS=true`). It copies the template byte-for-byte and keeps the executable mode. The parity check and CI's security-path exclusion stay as they are.\nB) A human makes the live-copy sync commit on the target branch, because it is a host-executed safety hook. The pipeline only re-runs the two tests and closes this issue. (RECOMMENDED)\nC) Revert #6647's template change so it matches the existing live copy. This needs no `.claude/` write, but it drops the fresh PR-state lookup that #6635 was meant to add.\n**Note:** C conflicts with Q1:C. If #6647 itself is being dropped, there is nothing left to revert.",
+  "fingerprint": "515b31fea28fa744dd6f124b9d24b2a8abc7182afa6bbc5f8e501c87eae6defa",
+  "lineage": {
+    "issue_number": 6828,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37867930680",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37867930680",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009010935_8611a79584",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6828,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37867930680"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6828 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T01:09:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
