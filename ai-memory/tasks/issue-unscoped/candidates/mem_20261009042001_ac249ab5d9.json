@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.79,
+  "details": "Most sampled implementation PRs included a correspondingly named fragment under `changelog.d`, while test-only changes did not consistently do so. When planning a user-visible or operational behavior change, check the repository's changelog-fragment convention and add a fragment if applicable.",
+  "fingerprint": "d4a9d788cf1a9ab0e94ef6b9fb8970514e2ed92399903b8463b528bf4cdaf626",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37882840842",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37882840842",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6559",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6561",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6658",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6763",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6821",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6564",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6566",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6670",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6765",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6833"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261009042001_ac249ab5d9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation changes commonly include a `changelog.d` fragment.",
+  "timestamps": {
+    "created_at": "2026-10-09T04:20:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
