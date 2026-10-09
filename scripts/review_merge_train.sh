@@ -433,7 +433,7 @@ _mt_blockers_for_into() {
 			_mt_conflict_probe "${own_sha}" "${__mt_cand_sha[$idx]}"
 			conflict_state="${_MT_PROBE_RESULT}"
 			case "${conflict_state}" in
-				none)
+				none|ignored)
 					action="skip"
 					skipped_clean=$((skipped_clean + 1))
 					;;
@@ -610,8 +610,9 @@ _mt_blocker_is_stale()
 
 # Conflict probe (issue #6570). `_mt_conflict_probe <own_sha> <blocker_sha>`
 # sets _MT_PROBE_RESULT to none (the heads merge cleanly), conflict (git
-# reports a content conflict; _MT_PROBE_PATHS lists the paths) or unknown (any
-# other outcome). Runs in the caller's shell so its caches persist.
+# reports a content conflict; _MT_PROBE_PATHS lists the paths), ignored (every
+# conflicted path is in MERGE_TRAIN_IGNORE_PATHS; does not block) or unknown
+# (any other outcome). Runs in the caller's shell so its caches persist.
 # Missing heads are fetched by SHA with --no-write-fetch-head (FETCH_HEAD for
 # later steps is untouched) and --depth=200 only in an already-shallow clone,
 # so a full clone is never made shallow. merge-tree writes only objects; it
@@ -747,6 +748,13 @@ _mt_conflict_probe()
 		1)
 			_MT_PROBE_RESULT="conflict"
 			_MT_PROBE_PATHS="$(printf '%s\n' "${probe_out}" | sed '1d' | sed '/^$/d' | sort -u)"
+			# Conflicts only in MERGE_TRAIN_IGNORE_PATHS (the generated
+			# workspace manifest by default) do not block: the path-overlap
+			# rule already ignores those files, and the later merge
+			# regenerates them.
+			if [ -n "${_MT_PROBE_PATHS}" ] && [ -z "$(_mt_drop_ignored "${_MT_PROBE_PATHS}" | sed '/^$/d')" ]; then
+				_MT_PROBE_RESULT="ignored"
+			fi
 			;;
 		*) _MT_PROBE_RESULT="unknown" ;;
 	esac

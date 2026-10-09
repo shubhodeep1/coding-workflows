@@ -1983,6 +1983,57 @@ def test_https_probe_fetch_passes_the_token_through_environment_only() -> None:
 	assert "-c http" not in fetch and "config --" not in fetch
 
 
+def _manifest_conflict_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
+	"""Two heads that merge cleanly in app.txt but both rewrite the generated manifest."""
+	seed = tmp_path / "mseed"
+	seed.mkdir()
+	_git(seed, "init", "-q", "-b", "main")
+	(seed / "app.txt").write_text("".join(f"line {i}\n" for i in range(1, 21)), encoding="utf-8")
+	(seed / ".ai").mkdir()
+	(seed / ".ai" / ".workspace_source_manifest.txt").write_text("base\n", encoding="utf-8")
+	_git(seed, "add", "-A")
+	_git(seed, "commit", "-q", "-m", "base")
+	shas: dict[str, str] = {}
+	for branch, line_no in (("older", 1), ("younger", 15)):
+		_git(seed, "checkout", "-q", "-b", branch, "main")
+		lines = (seed / "app.txt").read_text(encoding="utf-8").splitlines()
+		lines[line_no - 1] = f"{branch} edit"
+		(seed / "app.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+		(seed / ".ai" / ".workspace_source_manifest.txt").write_text(f"{branch}\n", encoding="utf-8")
+		_git(seed, "commit", "-q", "-am", branch)
+		shas[branch] = _git(seed, "rev-parse", "HEAD")
+	origin = tmp_path / "morigin.git"
+	_git(tmp_path, "clone", "-q", "--bare", str(seed), str(origin))
+	_git(origin, "config", "uploadpack.allowAnySHA1InWant", "true")
+	work = tmp_path / "mwork"
+	_git(tmp_path, "clone", "-q", "--no-local", "--single-branch", "-b", "main", str(origin), str(work))
+	return work, shas
+
+
+@pytest.mark.parametrize(("ignore", "expected", "queued"), [
+	(None, "conflict=ignored", False),
+	("none", "conflict=conflict", True),
+])
+def test_conflict_only_in_ignored_paths_does_not_block(tmp_path: Path, ignore: str | None, expected: str, queued: bool) -> None:
+	"""The generated manifest is ignored by the path rule, so a conflict only there does not block either."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	work, shas = _manifest_conflict_fixture(tmp_path)
+	diff = _overlap_scenario(tmp_path, fixtures, _pr(4075, "ai/issue-4063", head_sha=shas["older"]),
+		_pr(4077, "ai/issue-4064", head_sha=shas["younger"]))
+	extra = {} if ignore is None else {"MERGE_TRAIN_IGNORE_PATHS": ignore}
+	result, _log_text, env_out = _run("gate", tmp_path, bin_dir, fixtures, log, run_cwd=work,
+		PR_DIFF_FILE=str(diff), MERGE_TRAIN_PRIORITY_LABELS="none", **extra, **_GATE_4077)
+	assert result.returncode == 0, result.stderr
+	assert f"older=4075 overlap=paths {expected}" in result.stdout
+	if queued:
+		assert "result=queued blockers=#4075" in result.stdout
+		assert env_out.get("AUTOFIX_MERGE_QUEUED") == "true"
+	else:
+		assert "skipped_clean=1" in result.stdout
+		assert "result=unblocked action=continue" in result.stdout
+		assert "AUTOFIX_MERGE_QUEUED" not in env_out
+
+
 def test_gate_conflict_check_off_queues_on_overlap_without_fetch(tmp_path: Path) -> None:
 	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
 	work, shas = _git_fixture(tmp_path)
