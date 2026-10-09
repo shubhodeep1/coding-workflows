@@ -55,10 +55,13 @@ if ! type _pr_base_fresh_for_merge >/dev/null 2>&1; then
 	}
 fi
 if ! type _pr_wait_for_required_checks >/dev/null 2>&1; then
+	# Fail closed: without the library nothing verifies CI, and an
+	# unprotected base would let `gh pr merge --auto` land the PR at once.
 	_pr_wait_for_required_checks()
 	{
-		echo "::warning::pr_checks_lib.sh unavailable; required-checks wait skipped for PR #${1:-unknown}."
-		return 0
+		PR_CHECKS_WAIT_OUTCOME="unavailable"
+		echo "::warning::pr_checks_lib.sh unavailable; refusing auto-merge for PR #${1:-unknown} (required checks cannot be verified)."
+		return 1
 	}
 fi
 
@@ -253,6 +256,17 @@ if ! printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq -- "${ORCH_INTEGRATION_BRAN
 	&& ! _pr_wait_for_required_checks "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${_orch_pr_base_ref}"; then
 	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=refuse reason=required_checks_${PR_CHECKS_WAIT_OUTCOME:-unknown}"
 	echo "::warning::Auto-merge not enabled for PR #${PR_NUMBER}: required check-runs on ${INITIAL_HEAD_SHA:0:7} are ${PR_CHECKS_WAIT_OUTCOME:-unknown}. Nothing merges until a later review round sees them green."
+	exit 0
+fi
+
+# The wait above can take minutes; the base may have moved under this PR's
+# files meanwhile (`--match-head-commit` binds only the head), so re-check
+# freshness once more when the wait actually polled.
+if [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
+	&& ! printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}" \
+	&& ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${_orch_pr_base_ref}"; then
+	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=defer reason=base_moved_overlap"
+	echo "Auto-merge not enabled for PR #${PR_NUMBER}: the base moved under files this PR touches while its checks ran. The branch update's synchronize run re-validates and re-enables auto-merge."
 	exit 0
 fi
 

@@ -199,15 +199,21 @@ class Wiring(unittest.TestCase):
 
 	def test_review_rb_judge_gates_both_merge_sites(self) -> None:
 		text = RB_JUDGE.read_text(encoding="utf-8")
-		self.assertEqual(text.count('if ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then'), 2)
+		self.assertEqual(text.count('if ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then'), 2)
 		for site in text.split('--squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}"')[:-1]:
-			self.assertIn("_pr_base_fresh_for_merge", site[-900:])
+			self.assertIn("_pr_base_fresh_for_merge", site[-1200:])
+		# merge_with_followup's synchronous merge is gated too.
+		self.assertIn('_pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}"; then', text)
 
 	def test_poller_gates_its_direct_merge_sites(self) -> None:
 		text = POLLER.read_text(encoding="utf-8")
 		self.assertIn('_pr_base_fresh_for_merge "${PW_PR}" "${_pw_head_sha}"', text)
 		self.assertIn('_pr_base_fresh_for_merge "${merge_pr}"', text)
 		self.assertIn('_pr_base_fresh_for_merge "${RB_PR}" "${_rb_merge_sha}" "${_rb_merge_base}"', text)
+		# Review-blocked force-merge, no-fix and merge_with_followup paths.
+		self.assertIn('_pr_base_fresh_for_merge "${RB_PR}" "${_rb_fm_sha}" "${_rb_fm_base}"', text)
+		self.assertIn('_pr_base_fresh_for_merge "${RB_PR}" "${_rb_nofix_sha}" "${_rb_nofix_base}"', text)
+		self.assertIn('_pr_base_fresh_for_merge "${RB_PR}" "${_rb_mwf_sha}" "${_rb_mwf_base}"', text)
 		self.assertIn("type _pr_base_fresh_for_merge >/dev/null 2>&1", text)
 
 	def test_deterministic_skip_merge_job_gates_both_auto_merge_calls(self) -> None:
@@ -225,8 +231,11 @@ class Wiring(unittest.TestCase):
 		self.assertIn("MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}", step)
 
 
-if __name__ == "__main__":
-	unittest.main()
+class FreshnessTruncatedPrFiles(unittest.TestCase):
+	def test_capped_pr_file_list_counts_as_overlap(self) -> None:
+		rc, out, _ = _gate(compare_json=_compare(1, ["base_only.py"]), pr_files_json=_pr_files([f"p{i}.py" for i in range(3000)]))
+		self.assertEqual(rc, 1)
+		self.assertIn("reason=pr_files_truncated", out)
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +252,8 @@ def _runs(*entries: tuple[str, str, str]) -> str:
 
 def _wait(runs_sequence: list[str], *, max_minutes: str = "1", poll: str = "1", env: dict[str, str] | None = None) -> tuple[int, str]:
 	"""Each check-runs read returns the next fixture; the last one repeats."""
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
 	seq_file = Path(os.environ.get("TMPDIR", "/tmp")) / f"pr_checks_wait_seq_{os.getpid()}.json"
 	seq_file.write_text(json.dumps(runs_sequence), encoding="utf-8")
 	counter = Path(os.environ.get("TMPDIR", "/tmp")) / f"pr_checks_wait_n_{os.getpid()}"
@@ -313,10 +324,15 @@ class RequiredChecksWait(unittest.TestCase):
 		self.assertEqual(rc, 0)
 		self.assertIn("outcome=ok", out)
 
-	def test_query_failure_refuses(self) -> None:
-		rc, out = _wait(["{}"])
+	def test_query_failure_refuses_once_the_budget_is_spent(self) -> None:
+		rc, out = _wait(["{}"], max_minutes="0")
 		self.assertEqual(rc, 1)
 		self.assertIn("outcome=query_failed", out)
+
+	def test_transient_query_failure_is_retried(self) -> None:
+		rc, out = _wait(["{}", GREEN])
+		self.assertEqual(rc, 0)
+		self.assertIn("outcome=ok waited_s=1", out)
 
 	def test_allow_all_sentinel_proceeds(self) -> None:
 		rc, out = _wait([RED], env={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": ""})
@@ -343,3 +359,25 @@ class RequiredChecksWiring(unittest.TestCase):
 		step = text.split("- name: Enable auto-merge on PR", 1)[1].split("- name: ", 1)[0]
 		self.assertIn("AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}", step)
 		self.assertIn("AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}", step)
+
+	def test_review_rb_judge_waits_before_both_auto_merge_calls(self) -> None:
+		text = RB_JUDGE.read_text(encoding="utf-8")
+		self.assertEqual(text.count('elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then'), 2)
+
+	def test_missing_library_fails_the_wait_closed(self) -> None:
+		for path in (ENABLE_AUTO_MERGE, RB_JUDGE, WORKFLOW):
+			with self.subTest(path=path.name):
+				text = path.read_text(encoding="utf-8")
+				stub = text.split("_pr_wait_for_required_checks()", 1)[1][:400]
+				self.assertIn("return 1", stub)
+
+	def test_review_enable_auto_merge_rechecks_freshness_after_a_wait(self) -> None:
+		text = ENABLE_AUTO_MERGE.read_text(encoding="utf-8")
+		wait_at = text.index('_pr_wait_for_required_checks "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${_orch_pr_base_ref}"')
+		recheck_at = text.index('[ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ]')
+		self.assertLess(wait_at, recheck_at)
+		self.assertLess(recheck_at, text.index('--squash --auto --match-head-commit "${INITIAL_HEAD_SHA}"'))
+
+
+if __name__ == "__main__":
+	unittest.main()

@@ -23168,7 +23168,8 @@ sys.exit(1)
             # Required-checks filter via the PR's base ref (see the merge)
             # branch above) — no extra API call, reuses _rb_fm_json.
             _rb_fm_base="$(_jq_field "${_rb_fm_json}" '.base.ref')"
-				if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_fm_sha}" "${_rb_fm_base}"; then
+				if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_fm_sha}" "${_rb_fm_base}" \
+				  && _pr_base_fresh_for_merge "${RB_PR}" "${_rb_fm_sha}" "${_rb_fm_base}"; then
 				  if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
 				    || gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
 				    RB_FORCE_MERGED="true"
@@ -23483,7 +23484,8 @@ ${RB_FIX_DESC}
                   # Required-checks filter via the PR's base ref (see the
                   # merge) branch above) — no extra API call, reuses _rb_nofix_json.
                   _rb_nofix_base="$(_jq_field "${_rb_nofix_json}" '.base.ref')"
-                  if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_nofix_sha}" "${_rb_nofix_base}"; then
+                  if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_nofix_sha}" "${_rb_nofix_base}" \
+                    && _pr_base_fresh_for_merge "${RB_PR}" "${_rb_nofix_sha}" "${_rb_nofix_base}"; then
                     if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto \
                       || gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash; then
                       tg_notify "Orchestrator judge merged PR #${RB_PR} (no fix changes needed, issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "DEBUG"
@@ -23589,6 +23591,11 @@ ${RB_FIX_DESC}
                 # in. Leave the issue in ai:review-blocked for the
                 # next poll cycle, which re-fetches PR metadata.
                 echo "::warning::PR #${RB_PR} head SHA could not be resolved from the PR-meta fetch — refusing merge_with_followup to avoid an unbound merge (no --match-head-commit guard against concurrent pushes). Leaving issue in ai:review-blocked."
+              elif [ "${ENABLE_AUTO_MERGE}" = "true" ] && ! _pr_base_fresh_for_merge "${RB_PR}" "${_rb_mwf_sha}" "${_rb_mwf_base}"; then
+                # Merge-base freshness gate (Q35: A): the base moved under
+                # files this PR touches; the branch update's synchronize run
+                # re-validates and the next poll cycle re-fires the judge.
+                echo "::warning::PR #${RB_PR} base moved under files it touches — branch update requested; merge_with_followup deferred. Leaving issue in ai:review-blocked."
               elif [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
                 # Sync merge only — NEVER --auto enrollment. The whole
                 # point of the conservative ladder is to ensure follow-

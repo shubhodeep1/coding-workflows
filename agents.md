@@ -936,7 +936,11 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   (`MERGE_BASE_FRESHNESS_ENABLED`) and `unknown` (any API failure, logged
   with a warning) return 0. The `deterministic-skip-merge` job reads the
   library from the gate's verified support commit (`.codex-freshness-src`);
-  an unverified checkout skips the gate with a warning. The orchestrator's
+  an unverified checkout skips the freshness gate with a warning and
+  refuses auto-merge, because the required-checks wait below cannot run.
+  A PR file list of 3,000 entries (GitHub's cap) counts as overlap. The
+  review-blocked judge's `merge_with_followup` and the poller's force-merge,
+  no-fix and `merge_with_followup` sites are gated too. The orchestrator's
   sub-issue path already aligns and defers through
   `_sync_integration_and_rebase_subissue`, and the final integration PR is
   synced by the poller every tick, so those paths see `fresh`. Operator
@@ -947,14 +951,18 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   soon as the base's required status checks pass, and an unprotected base
   has none, so the review's auto-merge paths landed #6906 on `main` while
   its own PR CI run showed `orchestrate-poll (3)` failing. The same two
-  paths now call `_pr_wait_for_required_checks <pr> <head> <base>`
+  paths and the review-blocked judge's `merge` and terminal `fix` paths
+  now call `_pr_wait_for_required_checks <pr> <head> <base>`
   (`scripts/pr_checks_lib.sh`) first: it polls `_pr_checks_completed` with
   the calling run excluded (`PR_CHECKS_SELF_RUN_ID`) for up to
   `AUTO_MERGE_CHECKS_WAIT_MINUTES` (default 45, every
   `AUTO_MERGE_CHECKS_POLL_SECONDS`, default 60), enables auto-merge only on
   `ok`/`allow_all`, and refuses on a settled failure (`PR_CHECKS_LAST_PENDING`
-  is 0 while the gate still blocks), a timeout or a failed query, logging
-  `AUTOFIX_AUTO_MERGE_CHECKS pr=<n> head_sha=<sha> outcome=<...>`. The
+  is 0 while the gate still blocks) or a timeout; a failed query is retried
+  until the budget is spent. It logs
+  `AUTOFIX_AUTO_MERGE_CHECKS pr=<n> head_sha=<sha> outcome=<...>`, and a
+  missing library fails the wait closed. After a wait that actually polled,
+  `review_enable_auto_merge.sh` re-checks freshness before merging. The
   orchestrator's direct merges already gated on `_pr_checks_completed`.
 - **Dependencies.** `codex_isolated_exec.sh prepare --deps` (implement) installs
   dependencies once per job. The network-isolated, credential-free container sees

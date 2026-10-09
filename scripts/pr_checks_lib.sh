@@ -47,6 +47,11 @@
 #                            review_rb_judge.sh's judge_skip_reason) can map
 #                            it. Values: ok | blocking | query_failed |
 #                            unresolved_head_sha | allow_all.
+#   PR_CHECKS_LAST_PENDING — set by _pr_checks_completed (reset to 0 on
+#                            entry): count of still-running check-runs on
+#                            the head (self-run excluded). Read by
+#                            _pr_wait_for_required_checks to tell a
+#                            settled failure from a pending one.
 
 # Built-in default required-check set. Defined set-if-unset so a caller
 # that already declared it (the orchestrator does, near
@@ -305,8 +310,11 @@ _pr_checks_completed()
 #       Polls `_pr_checks_completed` (with PR_CHECKS_SELF_RUN_ID so the
 #       calling run's own check-runs never count) until the required set is
 #       green, a required check has failed with nothing left running, the
-#       budget is spent, or the query fails. Returns 0 only when the gate
-#       reports ok (or allow-all). Sets PR_CHECKS_WAIT_OUTCOME to
+#       budget is spent, or the head cannot be resolved. A failed
+#       check-runs query is retried until the budget is spent (a transient
+#       API error must not refuse a green PR). Returns 0 only when the gate
+#       reports ok (or allow-all). Sets PR_CHECKS_WAIT_WAITED_S to the
+#       seconds slept and PR_CHECKS_WAIT_OUTCOME to
 #       ok|allow_all|failed|timeout|query_failed|unresolved_head_sha and
 #       logs `AUTOFIX_AUTO_MERGE_CHECKS pr=<n> head_sha=<sha> outcome=<...>
 #       waited_s=<n> pending=<n>`.
@@ -323,6 +331,7 @@ _pr_wait_for_required_checks()
 	local poll_seconds="${AUTO_MERGE_CHECKS_POLL_SECONDS:-60}"
 	local waited=0 rc=0
 	PR_CHECKS_WAIT_OUTCOME="timeout"
+	PR_CHECKS_WAIT_WAITED_S=0
 	[[ "${max_minutes}" =~ ^[0-9]+$ ]] || max_minutes=45
 	[[ "${poll_seconds}" =~ ^[1-9][0-9]*$ ]] || poll_seconds=60
 	while :; do
@@ -342,6 +351,14 @@ _pr_wait_for_required_checks()
 					return 1
 				fi
 				;;
+			query_failed)
+				# Transient API failure: keep polling within the budget.
+				if [ "${waited}" -ge $((max_minutes * 60)) ]; then
+					PR_CHECKS_WAIT_OUTCOME="query_failed"
+					echo "AUTOFIX_AUTO_MERGE_CHECKS pr=${pr_number} head_sha=${head_sha:-unknown} outcome=query_failed waited_s=${waited} pending=${PR_CHECKS_LAST_PENDING:-0}"
+					return 1
+				fi
+				;;
 			*)
 				PR_CHECKS_WAIT_OUTCOME="${PR_CHECKS_LAST_REASON:-query_failed}"
 				echo "AUTOFIX_AUTO_MERGE_CHECKS pr=${pr_number} head_sha=${head_sha:-unknown} outcome=${PR_CHECKS_WAIT_OUTCOME} waited_s=${waited} pending=${PR_CHECKS_LAST_PENDING:-0}"
@@ -356,6 +373,7 @@ _pr_wait_for_required_checks()
 		echo "  [check-runs] PR #${pr_number}: ${PR_CHECKS_LAST_PENDING:-0} required/pending check-run(s) still running; waiting ${poll_seconds}s (${waited}/$((max_minutes * 60))s)."
 		sleep "${poll_seconds}"
 		waited=$((waited + poll_seconds))
+		PR_CHECKS_WAIT_WAITED_S="${waited}"
 	done
 }
 
@@ -509,6 +527,7 @@ _pr_base_freshness()
 			| if type == "array" then ([ .[]? | if type == "array" then .[] else . end ] | names)
 			  else null end) as $pr_paths
 		| if $pr_paths == null then "__invalid__"
+		  elif ($pr_files[0] | [ .[]? | if type == "array" then .[] else . end ] | length) >= 3000 then "__capped__"
 		  else ([ $base_paths[] | select(. as $p | $pr_paths | index($p)) ] | unique | join(",")) end
 	' 2>/dev/null | tail -n1)"
 	rm -f "${tmp_compare}" "${tmp_pr_files}"
@@ -516,6 +535,15 @@ _pr_base_freshness()
 		PR_BASE_FRESHNESS_LAST_REASON="pr_files_failed"
 		PR_BASE_FRESHNESS_OUTCOME="unknown"
 		echo "unknown"
+		return 0
+	fi
+	if [ "${overlap}" = "__capped__" ]; then
+		# GitHub lists at most 3,000 PR files; beyond that a shared path
+		# may be missing, so re-validate rather than merge blind.
+		PR_BASE_FRESHNESS_LAST_REASON="pr_files_truncated"
+		PR_BASE_FRESHNESS_OVERLAP="(PR file list capped at 3000; extent unknown)"
+		PR_BASE_FRESHNESS_OUTCOME="overlap"
+		echo "overlap"
 		return 0
 	fi
 	if [ -z "${overlap}" ]; then

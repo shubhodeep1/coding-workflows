@@ -265,6 +265,17 @@ if ! type _pr_base_fresh_for_merge >/dev/null 2>&1; then
     return 0
   }
 fi
+# Required-checks wait before `gh pr merge --auto`: an unprotected base has
+# no required status checks, so auto-merge would land the PR at once.
+# Fail closed when the library did not load (nothing verifies CI then).
+if ! type _pr_wait_for_required_checks >/dev/null 2>&1; then
+  _pr_wait_for_required_checks()
+  {
+    PR_CHECKS_WAIT_OUTCOME="unavailable"
+    echo "::warning::pr_checks_lib.sh unavailable; refusing auto-merge for PR #${1:-unknown} (required checks cannot be verified)."
+    return 1
+  }
+fi
 if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   # Keep prompt sanitization available even when gh_helpers.sh was not
   # sourced. Large-diff truncation can still fall back to a raw byte prefix,
@@ -2040,8 +2051,10 @@ case "${RB_ACTION}" in
         # fire through every other gh_retry-wrapped call in this
         # script.
         review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
-        if ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+        if ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, merge deferred to the synchronize run."
+        elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+          echo "::warning::Review-blocked judge: required check-runs on ${RB_JUDGED_HEAD_SHA:0:7} are ${PR_CHECKS_WAIT_OUTCOME:-unknown}; not enabling auto-merge and withholding ai:ready-to-merge."
         elif gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null \
           || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null; then
           RB_MERGE_READY_LABEL_ALLOWED="true"
@@ -2092,8 +2105,10 @@ case "${RB_ACTION}" in
       if [ "${PR_STATE}" = "open" ] && [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
         # Best-effort merge — see note above re: gh_retry.
         review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
-        if ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+        if ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, terminal merge deferred to the synchronize run."
+        elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+          echo "::warning::Review-blocked judge: required check-runs on ${RB_JUDGED_HEAD_SHA:0:7} are ${PR_CHECKS_WAIT_OUTCOME:-unknown}; not enabling the terminal auto-merge and withholding ai:ready-to-merge."
         elif gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null \
           || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null; then
           RB_MERGE_READY_LABEL_ALLOWED="true"
@@ -2576,6 +2591,12 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
               echo "::warning::PR #${PR_NUMBER} has blocking required check-run(s) for SHA ${RB_JUDGED_HEAD_SHA:0:7} — refusing merge_with_followup until required checks complete with success/neutral/skipped/cancelled (non-required/advisory failures are ignored). Leaving linked issues in ai:review-blocked; stall recovery will re-fire the judge after checks settle."
               echo "judge_skip_reason=blocking_check_runs" >> "$GITHUB_OUTPUT"
             fi
+          elif [ "${ENABLE_AUTO_MERGE}" = "true" ] \
+            && ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}"; then
+            # Merge-base freshness gate (Q35: A): the base moved under files
+            # this PR touches; the update's synchronize run re-validates.
+            echo "::warning::PR #${PR_NUMBER} base moved under files it touches — branch update requested; merge_with_followup deferred. Leaving linked issues in ai:review-blocked."
+            echo "judge_skip_reason=base_moved_overlap" >> "$GITHUB_OUTPUT"
           elif [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
             # Sync merge only — NEVER --auto enrollment. The whole point
             # of the conservative ladder is to ensure follow-up creation

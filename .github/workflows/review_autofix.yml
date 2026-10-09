@@ -2188,16 +2188,17 @@ jobs:
           # auto-merged, so CI runs on the combined tree first (the
           # synchronize run then re-enters this job). The helper is read
           # from the verified support commit; when the checkout is missing
-          # or unverified the gate is skipped with a warning and the
-          # previous behaviour applies. `_safe_gh_jq` is the library's gh
+          # or unverified the freshness gate is skipped with a warning and
+          # the required-checks wait fails closed (auto-merge refused). `_safe_gh_jq` is the library's gh
           # transport; the inline retry wrapper above serves as gh_retry.
           _pr_base_fresh_for_merge() {
             echo "::warning::pr_checks_lib.sh unavailable; merge-base freshness gate skipped for PR #${1:-unknown}."
             return 0
           }
           _pr_wait_for_required_checks() {
-            echo "::warning::pr_checks_lib.sh unavailable; required-checks wait skipped for PR #${1:-unknown}."
-            return 0
+            PR_CHECKS_WAIT_OUTCOME="unavailable"
+            echo "::warning::pr_checks_lib.sh unavailable; refusing auto-merge for PR #${1:-unknown} (required checks cannot be verified)."
+            return 1
           }
           if [ "${FRESHNESS_HELPER_CHECKOUT_OUTCOME}" = "success" ] \
             && [ -f .codex-freshness-src/scripts/pr_checks_lib.sh ] \
@@ -2207,7 +2208,7 @@ jobs:
             # shellcheck disable=SC1091
             source .codex-freshness-src/scripts/pr_checks_lib.sh
           else
-            echo "::warning::Merge-base freshness helper checkout unavailable or unverified (outcome=${FRESHNESS_HELPER_CHECKOUT_OUTCOME}); auto-merge proceeds without the freshness gate."
+            echo "::warning::Merge-base freshness helper checkout unavailable or unverified (outcome=${FRESHNESS_HELPER_CHECKOUT_OUTCOME}); freshness gate skipped and auto-merge refused (required checks cannot be verified)."
           fi
 
           write_deterministic_skip_summary()

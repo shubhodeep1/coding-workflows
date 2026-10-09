@@ -7584,8 +7584,19 @@ def _run_auto_merge_helper_with_fake_gh(
 			        sys.stdout.write("")
 			        sys.exit(0)
 			    if path.endswith("/pulls/42"):
-			        sys.stdout.write(json.dumps({{"head": {{"ref": {head_ref!r}, "sha": {expected_head_sha!r}}}, "body": ""}}))
+			        sys.stdout.write(json.dumps({{"head": {{"ref": {head_ref!r}, "sha": {expected_head_sha!r}}}, "base": {{"ref": "main"}}, "body": ""}}))
 			        sys.exit(0)
+			    # Merge-base freshness gate: the base did not move.
+			    if "/compare/" in path:
+			        sys.stdout.write(json.dumps({{"ahead_by": 0, "files": []}}))
+			        sys.exit(0)
+			    # Required-checks wait: the reviewed head's checks are green.
+			    if "/check-runs" in path:
+			        sys.stdout.write(json.dumps([{{"check_runs": [{{"name": "CI", "status": "completed", "conclusion": "success"}}]}}]))
+			        sys.exit(0)
+			    if path.endswith("/protection"):
+			        sys.stderr.write("Branch not protected\\n")
+			        sys.exit(1)
 			    sys.stderr.write("unhandled gh api path: %r\\n" % (path,))
 			    sys.exit(1)
 			if args[:2] == ["pr", "merge"]:
