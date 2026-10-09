@@ -2566,7 +2566,7 @@ minute is below `CLAUDE_POOL_HEALTH_WINDOW_MINUTES` (default `5`) sends it,
 and a cycle delayed past the window skips that hour instead of sending
 twice. `CLAUDE_POOL_HEALTH_ALERT_ENABLED=false` (repo variable) turns it
 off. The step logs `CLAUDE_POOL_HEALTH accounts= gated= auth_failed=
-probe_failed= alert=sent|none|outside_window|disabled|no_probes|invalid_probes`
+probe_failed= alert=sent|not_delivered|none|outside_window|disabled|no_probes|invalid_probes`
 and never fails the job.
 
 The token action accepts only the deployed broker URL in Actions jobs and

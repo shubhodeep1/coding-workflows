@@ -82,6 +82,13 @@ def test_sends_one_warning_naming_every_account_at_the_gate(env: dict) -> None:
 	assert "bot-secret-value" not in result.stdout + result.stderr
 
 
+def test_a_filtered_or_undelivered_warning_is_not_logged_as_sent(env: dict) -> None:
+	result = _run(env, [_probe("ALPHA", 0.95, 0.1)], ALERT_MSG_LEVEL="ERROR")
+	assert result.returncode == 0, result.stderr
+	assert "alert=not_delivered" in result.stdout and "alert=sent" not in result.stdout
+	assert not env["log"].exists()
+
+
 def test_quiet_while_every_account_is_below_the_gate(env: dict) -> None:
 	result = _run(env, [_probe("ALPHA", 0.85, 0.3), _probe("BETA", 0.2, 0.1)])
 	assert "CLAUDE_POOL_HEALTH accounts=2 gated=0 auth_failed=0 probe_failed=0 alert=none" in result.stdout

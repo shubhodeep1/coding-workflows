@@ -23,7 +23,7 @@
 #   TG_BOT_SECRET / TG_ADMIN_CHAT_ID / ALERT_MSG_LEVEL   scripts/tg_helpers.sh
 #
 # Log: CLAUDE_POOL_HEALTH accounts=N gated=N auth_failed=N probe_failed=N
-#      alert=sent|none|outside_window|disabled|no_probes|invalid_probes
+#      alert=sent|not_delivered|none|outside_window|disabled|no_probes|invalid_probes
 # Never fails the job.
 set -uo pipefail
 
@@ -81,6 +81,12 @@ if [ -n "${GITHUB_SERVER_URL:-}" ] && [ -n "${GITHUB_REPOSITORY:-}" ] && [ -n "$
 	text="${text}
 Probed by ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 fi
-tg_send_msg "${text}" "WARNING" > /dev/null || true
-pool_health_log "${accounts}" "${gated}" "${auth_failed}" "${probe_failed}" sent
+# tg_send_msg returns success without a message id when the level is filtered,
+# credentials are missing or the request fails; only a message id means sent.
+message_id="$(tg_send_msg "${text}" "WARNING" 2>/dev/null)" || message_id=""
+if [ -n "${message_id}" ]; then
+	pool_health_log "${accounts}" "${gated}" "${auth_failed}" "${probe_failed}" sent
+else
+	pool_health_log "${accounts}" "${gated}" "${auth_failed}" "${probe_failed}" not_delivered
+fi
 exit 0
