@@ -862,12 +862,23 @@ def _run_origin_trust(run_payload: dict[str, Any], repository: str) -> str:
     return "trusted"
 
 
+# Fixed family vocabulary from normalize_workflow_family. A family outside it
+# is derived from the workflow file stem, which a fork PR can choose.
+_FIXED_WORKFLOW_FAMILIES = frozenset({
+    "orchestrate_clarify_respond", "orchestrate_poll", "issue_pr_status", "cancel_on_pr_close",
+    "memory_maintenance", "review_autofix", "validate", "clarify", "plan", "implement",
+    "orchestrate", "ci", "workflow_log_analysis", "other",
+})
+
+
 def _apply_untrusted_origin_exclusion(row: dict[str, Any]) -> bool:
     """Strip log-derived and fork-controlled text from an untrusted-origin row.
 
     Run metadata (conclusion, status, retries, durations, timestamps, job
-    conclusions) is kept so report totals stay unchanged. Returns True when
-    the row was excluded.
+    conclusions) is kept so report totals stay unchanged. The workflow name,
+    workflow path and head-repository name are cleared too: a fork PR's own
+    workflow file sets the first two and the fork owner names the third.
+    Returns True when the row was excluded.
     """
     if row.get("origin_trust", "trusted") == "trusted":
         return False
@@ -875,6 +886,11 @@ def _apply_untrusted_origin_exclusion(row: dict[str, Any]) -> bool:
     for key in ("log_excerpts", "cost_telemetry", "log_summary", "log_summary_meta", "full_logs"):
         row.pop(key, None)
     row["failure_point"] = {"job_name": None, "step_name": None}
+    row["workflow_name"] = None
+    row["workflow_path"] = None
+    row["head_repository"] = None
+    if row.get("workflow_family") not in _FIXED_WORKFLOW_FAMILIES:
+        row["workflow_family"] = "other"
     _set_diagnostic_failure_reason(row, "logs", None)
     return True
 
@@ -886,7 +902,8 @@ def _stamp_run_origin(row: dict[str, Any], run_payload: dict[str, Any], reposito
     row["origin_trust"] = _run_origin_trust(run_payload, repository)
     if _apply_untrusted_origin_exclusion(row):
         # Only repository, run id and reason: no log text, workflow name or
-        # head-repository name, which a fork author controls.
+        # head-repository name, which a fork author controls (the row has
+        # those fields cleared by _apply_untrusted_origin_exclusion too).
         print(
             f"WORKFLOW_LOG_FORK_EXCLUDED repository={_sanitize_diagnostic_text(repository)} "
             f"run_id={_to_int(row.get('run_id'), 0)} reason={row['origin_trust']}",
@@ -1626,6 +1643,9 @@ def build_pat_budget_report(
     eligible = [
         run for run in runs
         if _to_int(run.get("run_id"), 0) > 0
+        # Issue #6637: never fetch a fork-origin or unknown-origin run's archive.
+        and run.get("origin_trust", "trusted") == "trusted"
+        and run.get("log_download_status") != "excluded_untrusted_origin"
         and any(
             re.search(r"(?:^|/)\.github/workflows/" + re.escape(filename) + r"(?:@.*)?$", str(run.get("workflow_path") or ""))
             for filename in PAT_BUDGET_WORKFLOWS

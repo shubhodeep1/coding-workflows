@@ -2075,7 +2075,7 @@ and shipped:
 - `WORKFLOW_HEAL_PHASE_REPORT`
 - `WORKFLOW_HEAL_PR_RECONCILE`
 - `WORKFLOW_HEAL`
-- `WORKFLOW_LOG_FORK_EXCLUDED` (`scripts/collect_workflow_logs.py`: `repository= run_id= reason=fork|origin_unknown`; a fork-origin or unknown-origin pull-request run keeps its counts and conclusion but its log text, cost telemetry and job/step names are dropped, and neither the collector nor `scripts/summarize_unselected_runs.py` fetches its log archive, so the workflow-log-analysis model never sees fork-written text; `log_download_status=excluded_untrusted_origin`)
+- `WORKFLOW_LOG_FORK_EXCLUDED` (`scripts/collect_workflow_logs.py`: `repository= run_id= reason=fork|origin_unknown`; a fork-origin or unknown-origin pull-request run keeps its counts and conclusion but its log text, cost telemetry, job/step names, workflow name/path and head-repository name are dropped (a family outside the fixed vocabulary becomes `other`), and neither the collector (including the PAT-budget report) nor `scripts/summarize_unselected_runs.py` fetches its log archive, so the workflow-log-analysis model never sees fork-written text; `log_download_status=excluded_untrusted_origin`)
 - `HEAL_ISOLATED_EDITOR`
 - `HEAL_SCOPE_REFUSED`
 - `WORKFLOW_HEAL_EVIDENCE`
