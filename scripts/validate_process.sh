@@ -1704,6 +1704,16 @@ if (
     print('validate_process: skipping synthesised smoke materialization because target_manifest_relpath is invalid.', file=sys.stderr)
     sys.exit(0)
 
+# A symlinked validation/ or validation/tests would resolve target_root
+# outside the repository; refuse to write anywhere in that case.
+if (
+    (repo_root / 'validation').is_symlink()
+    or (repo_root / 'validation' / 'tests').is_symlink()
+    or not str(target_root).startswith(str(repo_root) + os.sep)
+):
+    print('validate_process: skipping synthesised smoke materialization because validation/tests is a symlink or escapes the repository.', file=sys.stderr)
+    sys.exit(0)
+
 target_root.mkdir(parents=True, exist_ok=True)
 
 copied = 0

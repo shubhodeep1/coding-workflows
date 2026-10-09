@@ -1393,6 +1393,27 @@ def test_validate_process_materializer_never_overwrites_or_follows_targets() -> 
 		assert "synthesised smoke manifest not copied" not in rerun.stderr
 
 
+def test_validate_process_materializer_refuses_symlinked_tests_dir() -> None:
+	# A symlinked validation/tests must not redirect generated executables
+	# outside the repository.
+	with tempfile.TemporaryDirectory(prefix="validate_process_synth_symlink_dir_") as td, tempfile.TemporaryDirectory(
+		prefix="validate_process_synth_outside_"
+	) as outside:
+		workspace = Path(td)
+		round3_dir = _write_round3_manifest(
+			workspace,
+			[_manifest_row("synth_round_3_good_issue.sh", "validation/tests/synth_round_3_good_issue.sh")],
+		)
+		(round3_dir / "synth_round_3_good_issue.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+		(workspace / "validation").mkdir(parents=True, exist_ok=True)
+		(workspace / "validation" / "tests").symlink_to(outside, target_is_directory=True)
+
+		result = _run_materializer(workspace)
+
+		assert list(Path(outside).iterdir()) == []
+		assert "validation/tests is a symlink" in result.stderr
+
+
 def test_validate_process_rejects_manifest_copy_under_another_round_name() -> None:
 	with tempfile.TemporaryDirectory(prefix="validate_process_synth_manifest_round_") as td:
 		workspace = Path(td)
