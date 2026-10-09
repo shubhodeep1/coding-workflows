@@ -799,6 +799,46 @@ stage_self_repo_validation_template_entry()
 	SELF_REPO_TRUSTED_TEMPLATE_STAGED_COUNT=$((SELF_REPO_TRUSTED_TEMPLATE_STAGED_COUNT + 1))
 }
 
+# The renderer and the templates are one unit: a template is only valid
+# against the renderer that defines its filters. The self-repo path above
+# stages templates from the verified support commit while
+# optional_preserve_scripts_before_templates kept the validation checkout's
+# own scripts/render_validation_templates.py, so an integration branch that
+# had not synced the default branch rendered a template using the
+# `shell_quote` filter (#6569) with a renderer that did not define it: run
+# 37925800341 failed with "No filter named 'shell_quote'", project #6664 was
+# marked ai:harness-broken, and its validation stopped. Under the same
+# condition the templates use, the renderer is staged from the same commit,
+# and a missing trusted copy fails closed exactly like a missing template.
+stage_self_repo_validation_renderer_entry()
+{
+	local repo_path="$1"
+	local executable="$2"
+	local track_path="$3"
+	local trusted_path
+
+	ensure_self_repo_trusted_template_root
+	trusted_path="${SELF_REPO_TRUSTED_TEMPLATE_ROOT}/${repo_path}"
+	if [ ! -f "${trusted_path}" ]; then
+		echo "::error::Required trusted validation renderer ${repo_path} is missing from ${ORIGINAL_SCRIPT_REF}." >&2
+		exit 1
+	fi
+	if [ -L "${repo_path}" ] || { [ -e "${repo_path}" ] && [ ! -f "${repo_path}" ]; }; then
+		echo "::error::Refusing non-file or symlinked validation renderer path '${repo_path}'." >&2
+		exit 1
+	fi
+	if [ -e "${repo_path}" ] && ! cmp -s "${repo_path}" "${trusted_path}"; then
+		echo "VALIDATE_TRUSTED_RENDERER_OVERRIDE path=${repo_path} ref=${ORIGINAL_SCRIPT_REF}"
+	fi
+	mkdir -p "$(dirname -- "${repo_path}")"
+	cp --remove-destination -- "${trusted_path}" "${repo_path}"
+	if [ "${executable}" = "true" ]; then
+		chmod +x "${repo_path}"
+	fi
+	record_fetched_script "${track_path}"
+	echo "VALIDATE_TRUSTED_RENDERER path=${repo_path} ref=${ORIGINAL_SCRIPT_REF} source=${WORKFLOW_SOURCE_REPO}"
+}
+
 stage_copy_if_missing_silent_entry()
 {
 	local repo_path="$1"
@@ -941,7 +981,14 @@ stage_validate_support()
 
 	while IFS= read -r repo_path; do
 		[ -n "${repo_path}" ] || continue
-		stage_optional_preserve_entry "${repo_path}" "true" "${repo_path#scripts/}" "true"
+		# Same condition as the trusted-template path below: the renderer
+		# must come from the commit its templates come from.
+		if [ "${IS_SELF_REPO}" = "true" ] && [ -z "${VALIDATE_AUTHORIZED_TARGET_SHA:-}" ] &&
+		   [ "${repo_path}" = "scripts/render_validation_templates.py" ]; then
+			stage_self_repo_validation_renderer_entry "${repo_path}" "true" "${repo_path#scripts/}"
+		else
+			stage_optional_preserve_entry "${repo_path}" "true" "${repo_path#scripts/}" "true"
+		fi
 	done < <(json_array_lines "optional_preserve_scripts_before_templates")
 
 	while IFS= read -r repo_path; do
