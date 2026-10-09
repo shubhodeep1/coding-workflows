@@ -160,6 +160,10 @@ if ! is_positive_int "${VALIDATION_SYNTH_SANDBOX_TIMEOUT_SECS}" || [ "${#VALIDAT
 	VALIDATION_SYNTH_SANDBOX_TIMEOUT_SECS=300
 fi
 VALIDATION_SYNTH_SANDBOX_IMAGE="python:3.12-slim"
+# Only run_synthesised_test_sandboxed sets this flag, inside its container
+# (`docker run --env`).  Clear any inherited value so host-run tests can
+# neither inherit nor spoof it (finding smoke-synth-unsandboxed-driver).
+unset BEHAVIOURAL_SMOKE_SANDBOXED
 
 mkdir -p "${LOG_DIR}"
 
@@ -764,6 +768,12 @@ discover_tests()
 	fi
 
 	for test_file in "${TEST_FILES[@]}"; do
+		# A synthesised test never becomes the canary: the canary runs on the
+		# host, synthesised tests only in the sandbox (finding
+		# smoke-synth-unsandboxed-driver).
+		if [[ "$(basename "${test_file}")" == synth_round_*.sh ]]; then
+			continue
+		fi
 		if [[ "$(basename "${test_file}")" == ${CANARY_PATTERN} ]]; then
 			CANARY_TEST="${test_file}"
 			break
@@ -920,6 +930,9 @@ run_single_test()
 	fi
 
 	set +e
+	# Every synth_round_*.sh test is routed to the credential-free,
+	# network-less sandbox and never run on the host (finding
+	# smoke-synth-unsandboxed-driver).
 	if [[ "${test_name}" == synth_round_*.sh ]]; then
 		run_synthesised_test_sandboxed "${test_file}" "${test_log}"
 	else

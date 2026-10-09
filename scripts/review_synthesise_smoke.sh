@@ -212,6 +212,42 @@ def strip_outer_code_fence(text: str) -> str:
 	return text
 
 
+# Pipeline credential names: a generated body must never reference one, and
+# the generated wrapper refuses to run its body while any is set (finding
+# smoke-synth-credentialed-test-exec).
+SANDBOX_CREDENTIAL_NAMES = (
+	'GH_TOKEN',
+	'GITHUB_TOKEN',
+	'GH_PAT',
+	'OPENROUTER_API_KEY',
+	'TG_BOT_SECRET',
+	'CHECK_TRIAGE_ISSUES_TOKEN',
+	'ACTIONS_ID_TOKEN_REQUEST_TOKEN',
+	'ACTIONS_ID_TOKEN_REQUEST_URL',
+	'ACTIONS_RUNTIME_TOKEN',
+	'CLAUDE_CODE_OAUTH_TOKEN',
+	'ANTHROPIC_API_KEY',
+)
+CREDENTIAL_REFERENCE_RE = re.compile(
+	r'(?<![A-Za-z0-9_])(?:' + '|'.join(SANDBOX_CREDENTIAL_NAMES) + r')(?![A-Za-z0-9_])'
+)
+NETWORK_DEVICE_RE = re.compile(r'/dev/(?:tcp|udp)/')
+NETWORK_CLIENT_TOKENS = {
+	'curl',
+	'wget',
+	'nc',
+	'ncat',
+	'netcat',
+	'socat',
+	'ssh',
+	'scp',
+	'sftp',
+	'telnet',
+	'ftp',
+	'rsync',
+}
+
+
 def normalize_content(text: str) -> str:
 	text = text.replace("\r\n", "\n").replace("\r", "\n")
 	text = strip_outer_code_fence(text)
@@ -230,6 +266,10 @@ def normalize_content(text: str) -> str:
 		stripped = raw_line.strip()
 		if "`" in stripped or "$(" in stripped or "<(" in stripped or ">(" in stripped:
 			raise ValueError("body_unsafe_shell_construct")
+		if CREDENTIAL_REFERENCE_RE.search(stripped):
+			raise ValueError("body_credential_reference")
+		if NETWORK_DEVICE_RE.search(stripped):
+			raise ValueError("body_network_client")
 		lexer = shlex.shlex(stripped, posix=True, punctuation_chars=";&|(){}><")
 		lexer.whitespace_split = True
 		# Keep '#' literal so shlex does not hide trailing separators/commands
@@ -315,6 +355,8 @@ def normalize_content(text: str) -> str:
 				raise ValueError("body_unsafe_shell_construct")
 			if expect_command and token_basename in dangerous_command_tokens:
 				raise ValueError("body_unsafe_shell_construct")
+			if expect_command and token_basename in NETWORK_CLIENT_TOKENS:
+				raise ValueError("body_network_client")
 			expect_command = False
 			passthrough_command = ""
 			passthrough_option_value = False
@@ -485,8 +527,38 @@ def build_wrapper(issue, generated_item, round_value: int, slug: str) -> str:
 		'',
 		'# Run the model-written body only inside the validation driver sandbox',
 		'# (no network, no credentials); anywhere else it is reported, not run.',
+		'# The env flag alone can be set by a host test, so the gate also needs',
+		'# the sandbox mount path, a loopback-only network and no pipeline',
+		'# credentials; any failed check fails closed (finding',
+		'# smoke-synth-credentialed-test-exec).',
+		'_synth_sandbox_detail=""',
 		'if [ "${BEHAVIOURAL_SMOKE_SANDBOXED:-}" != "1" ]; then',
-		'	echo "# BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE issue=${ISSUE_ID} round=${ROUND} reason=not_sandboxed"',
+		'	_synth_sandbox_detail="env"',
+		'elif [ "${BASH_SOURCE[0]:-}" != "/synth/test.sh" ]; then',
+		'	_synth_sandbox_detail="path"',
+		'elif [ ! -d /sys/class/net ]; then',
+		'	_synth_sandbox_detail="network"',
+		'else',
+		'	for _synth_iface in /sys/class/net/*; do',
+		'		if [ ! -e "${_synth_iface}" ] && [ ! -L "${_synth_iface}" ]; then',
+		'			continue',
+		'		fi',
+		'		if [ "${_synth_iface##*/}" != "lo" ]; then',
+		'			_synth_sandbox_detail="network"',
+		'			break',
+		'		fi',
+		'	done',
+		'	if [ -z "${_synth_sandbox_detail}" ]; then',
+		f'		for _synth_cred_name in {" ".join(SANDBOX_CREDENTIAL_NAMES)}; do',
+		'			if [ -n "${!_synth_cred_name:-}" ]; then',
+		'				_synth_sandbox_detail="credentials"',
+		'				break',
+		'			fi',
+		'		done',
+		'	fi',
+		'fi',
+		'if [ -n "${_synth_sandbox_detail}" ]; then',
+		'	echo "# BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE issue=${ISSUE_ID} round=${ROUND} reason=not_sandboxed detail=${_synth_sandbox_detail}"',
 		'	echo "ok 1 - ${TAP_LABEL}"',
 		'	exit 0',
 		'fi',

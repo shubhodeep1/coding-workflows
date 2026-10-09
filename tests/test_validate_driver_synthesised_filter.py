@@ -368,6 +368,39 @@ def test_non_synthesised_test_still_runs_on_host() -> None:
 		assert "BEHAVIOURAL_SMOKE_SANDBOX" not in result.stderr
 
 
+def test_synthesised_test_is_never_chosen_as_canary() -> None:
+	# Finding smoke-synth-unsandboxed-driver: the canary runs on the host, so a
+	# synth_round_*.sh name matching CANARY_PATTERN must never be selected.
+	with tempfile.TemporaryDirectory(prefix="validate_driver_synth_canary_") as td:
+		workspace = Path(td)
+		test_dir = workspace / "validation" / "tests"
+		_write_exec(test_dir / "synth_round_1_canary.sh")
+		_write_exec(test_dir / "zz_canary.sh")
+		result = _run_discover_tests(workspace, include_synthesised=None)
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert _parse_canary(result.stdout) == "validation/tests/zz_canary.sh"
+
+	with tempfile.TemporaryDirectory(prefix="validate_driver_synth_only_canary_") as td:
+		workspace = Path(td)
+		_write_exec(workspace / "validation" / "tests" / "synth_round_1_canary.sh")
+		result = _run_discover_tests(workspace, include_synthesised=None)
+		assert result.returncode == 99, result.stdout + result.stderr
+		assert "FAIL:canary test missing" in result.stderr
+
+
+def test_driver_clears_inherited_sandbox_flag_and_routes_synth_by_name() -> None:
+	driver = VALIDATE_DRIVER.read_text(encoding="utf-8")
+	unset_index = driver.index("\nunset BEHAVIOURAL_SMOKE_SANDBOXED\n")
+	assert unset_index < driver.index("discover_tests()")
+	assert driver.count("BEHAVIOURAL_SMOKE_SANDBOXED=1") == 1, (
+		"Only the sandbox container's docker --env may set the flag."
+	)
+	run_single = _extract_shell_function(VALIDATE_DRIVER, "run_single_test")
+	route = 'if [[ "${test_name}" == synth_round_*.sh ]]; then\n\t\trun_synthesised_test_sandboxed'
+	assert route in run_single
+	assert run_single.index(route) < run_single.index('bash "${test_file}"')
+
+
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = 0

@@ -58,8 +58,8 @@ def test_read_role_cannot_write_snapshot_or_transfer():
 	assert 'if [ "${rc}" -eq 0 ] && [ "${claude_access}" = write ]; then' in opencode
 	assert "opencode_source_mount+=',readonly'" in opencode
 	assert 'config["snapshot"] = False' in opencode
-	assert '"SECURITY_JUDGE", "RB_JUDGE", "REVIEW_CONSOLIDATOR", "SUMMARISER", "BEHAVIOURAL_SMOKE"}' in opencode
-	rb_judge_case = opencode.split('\tRB_JUDGE|REVIEW_CONSOLIDATOR|SUMMARISER|BEHAVIOURAL_SMOKE)\n', 1)[1].split('\n\t\t;;', 1)[0]
+	assert '"SECURITY_JUDGE", "RB_JUDGE", "REVIEW_CONSOLIDATOR", "SUMMARISER", "BEHAVIOURAL_SMOKE", "JUDGE_INTERIM"}' in opencode
+	rb_judge_case = opencode.split('\tRB_JUDGE|REVIEW_CONSOLIDATOR|SUMMARISER|BEHAVIOURAL_SMOKE|JUDGE_INTERIM)\n', 1)[1].split('\n\t\t;;', 1)[0]
 	assert '[ "${claude_access}" = read ]' in rb_judge_case
 	assert "opencode_source_mount+=',readonly'" in rb_judge_case
 	assert 'opencode_agent=reviewer' in rb_judge_case

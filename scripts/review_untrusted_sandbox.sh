@@ -246,19 +246,23 @@ config="$6"
 engine="${7:-codex}"
 case "${engine}" in codex|claude) ;; *) exit 2 ;; esac
 claude_role="${8:-REVIEW_EDITOR}"
-case "${claude_role}" in REVIEW_EDITOR|REVIEW_CONSOLIDATOR|RB_JUDGE|CONFLICT_RESOLVER|WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE|SUMMARISER|BEHAVIOURAL_SMOKE) ;; *) exit 2 ;; esac
+case "${claude_role}" in REVIEW_EDITOR|REVIEW_CONSOLIDATOR|RB_JUDGE|CONFLICT_RESOLVER|WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE|SUMMARISER|BEHAVIOURAL_SMOKE|JUDGE_INTERIM) ;; *) exit 2 ;; esac
 claude_access="${9:-write}"
-if [ "$#" -lt 9 ] && { [ "${claude_role}" = REVIEW_CONSOLIDATOR ] || [ "${claude_role}" = SUMMARISER ] || [ "${claude_role}" = BEHAVIOURAL_SMOKE ]; }; then
+if [ "$#" -lt 9 ] && { [ "${claude_role}" = REVIEW_CONSOLIDATOR ] || [ "${claude_role}" = SUMMARISER ] || [ "${claude_role}" = BEHAVIOURAL_SMOKE ] || [ "${claude_role}" = JUDGE_INTERIM ]; }; then
 	claude_access=read
 fi
 case "${claude_access}" in read|write) ;; *) exit 2 ;; esac
 # Poller judges (WAVE/STALL/INTEGRATION/SECURITY) and the review utility roles
-# (SUMMARISER, BEHAVIOURAL_SMOKE; plan item 3d) are read-only sandbox roles;
+# (SUMMARISER, BEHAVIOURAL_SMOKE; plan item 3d; JUDGE_INTERIM, #6664) are read-only sandbox roles;
 # never transfer.
 case "${claude_role}" in
-	WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE|SUMMARISER|BEHAVIOURAL_SMOKE)
+	WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE|SUMMARISER|BEHAVIOURAL_SMOKE|JUDGE_INTERIM)
 		[ "${claude_access}" = read ] || exit 2 ;;
 esac
+# The interim judge has no Claude engine role; it runs sandboxed OpenCode only.
+if [ "${claude_role}" = JUDGE_INTERIM ] && [ "${engine}" != codex ]; then
+	exit 2
+fi
 
 # Claude engine branch (scripts/ai_engine.sh): the same container, mounts and
 # transfer, with the Claude Code CLI behind scripts/claude_anthropic_relay.py.
@@ -459,7 +463,7 @@ assert config["provider"]["openrouter"]["options"]["baseURL"] == "https://openro
 assert config["model"] == "openrouter/" + sys.argv[3]
 config["provider"]["openrouter"]["options"] = {"baseURL": "http://127.0.0.1:8765/api/v1", "apiKey": "{env:OPENROUTER_API_KEY}"}
 config.pop("mcp", None)  # Serena runs only on the host, never inside the writer.
-if sys.argv[4] == "read" and sys.argv[5] in {"WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE", "RB_JUDGE", "REVIEW_CONSOLIDATOR", "SUMMARISER", "BEHAVIOURAL_SMOKE"}:
+if sys.argv[4] == "read" and sys.argv[5] in {"WAVE_JUDGE", "STALL_JUDGE", "INTEGRATION_JUDGE", "SECURITY_JUDGE", "RB_JUDGE", "REVIEW_CONSOLIDATOR", "SUMMARISER", "BEHAVIOURAL_SMOKE", "JUDGE_INTERIM"}:
 	# OpenCode snapshots write to the private /source/.git; the read role's
 	# source is mounted read-only and the trusted host snapshot already exists.
 	config["snapshot"] = False
@@ -501,7 +505,7 @@ opencode_source_mount="type=bind,src=${root}/source,dst=/source"
 opencode_agent=writer
 case "${claude_role}" in
 	WAVE_JUDGE|STALL_JUDGE|INTEGRATION_JUDGE|SECURITY_JUDGE) opencode_source_mount+=',readonly' ;;
-	RB_JUDGE|REVIEW_CONSOLIDATOR|SUMMARISER|BEHAVIOURAL_SMOKE)
+	RB_JUDGE|REVIEW_CONSOLIDATOR|SUMMARISER|BEHAVIOURAL_SMOKE|JUDGE_INTERIM)
 		if [ "${claude_access}" = read ]; then
 			opencode_source_mount+=',readonly'
 			opencode_agent=reviewer

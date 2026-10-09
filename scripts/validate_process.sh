@@ -1384,6 +1384,11 @@ ensure_runtime_validation_driver()
 #!/usr/bin/env bash
 set -euo pipefail
 
+# This fallback runner has no sandbox, so synthesised behavioural smoke tests
+# are skipped below and this flag must never be inherited (finding
+# smoke-synth-fallback-driver-host-exec).
+unset BEHAVIOURAL_SMOKE_SANDBOXED
+
 COMPOSE_FILE="validation/docker-compose.test.yml"
 TEST_DIR="validation/tests"
 LOG_DIR="validation/logs"
@@ -1519,10 +1524,24 @@ for test_script in "${test_scripts[@]}"; do
   test_log="${LOG_DIR}/${test_name}.log"
 
   echo "=== RUN ${test_name} ==="
-  set +e
-  bash "${test_script}" > "${test_log}" 2>&1
-  test_rc=$?
-  set -e
+  if [[ "${test_name}" == synth_round_*.sh ]]; then
+    # Model-written synthesised tests run only in validate_driver.sh's
+    # credential-free, network-less sandbox; this fallback runner has none,
+    # so they are reported as skipped, never run on the host (finding
+    # smoke-synth-fallback-driver-host-exec).
+    {
+      echo "1..1"
+      echo "# BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE reason=sandbox_unavailable detail=fallback_driver"
+      echo "ok 1 - ${test_name} # SKIP behavioural smoke sandbox unavailable"
+    } > "${test_log}"
+    echo "BEHAVIOURAL_SMOKE_SANDBOX test=${test_name} outcome=skipped reason=fallback_driver" >&2
+    test_rc=0
+  else
+    set +e
+    bash "${test_script}" > "${test_log}" 2>&1
+    test_rc=$?
+    set -e
+  fi
 
   cat "${test_log}" || true
 
@@ -1581,8 +1600,8 @@ materialize_synthesised_behavioural_smoke_tests()
 
   if ! materialize_output="$(PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
 import json
+import os
 import re
-import shutil
 import sys
 from pathlib import Path
 
@@ -1595,8 +1614,38 @@ target_root = (repo_root / 'validation' / 'tests').resolve()
 # routes into its credential-free sandbox (finding
 # smoke-synth-credentialed-test-exec).  A non-matching name could plant a
 # host-run test or overwrite the canary.
-SYNTH_TARGET_NAME_RE = re.compile(r'^synth_round_[0-9]+_[a-z0-9_]{1,72}\.sh$')
-SYNTH_MANIFEST_NAME_RE = re.compile(r'^synth_round_[0-9]+_manifest\.json$')
+SYNTH_TARGET_NAME_RE = re.compile(r'^synth_round_([0-9]+)_[a-z0-9_]{1,72}\.sh$')
+SYNTH_MANIFEST_NAME_RE = re.compile(r'^synth_round_([0-9]+)_manifest\.json$')
+
+
+def _write_new_file(source: Path, target: Path, mode: int) -> str:
+    # Never follow a symlink or overwrite a different file at the target
+    # (finding smoke-manifest-canary-overwrite).  A byte-identical regular
+    # file counts as already materialized, so a self-heal re-run stays
+    # idempotent.  Returns 'written', 'identical' or a skip reason.
+    data = source.read_bytes()
+    if os.path.lexists(target):
+        if target.is_symlink() or not target.is_file():
+            return 'target_not_regular'
+        try:
+            existing = target.read_bytes()
+        except OSError:
+            return 'target_unreadable'
+        return 'identical' if existing == data else 'target_exists'
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)
+    try:
+        fd = os.open(str(target), flags, mode)
+    except OSError:
+        return 'target_create_failed'
+    try:
+        with os.fdopen(fd, 'wb') as handle:
+            fd = -1
+            handle.write(data)
+    finally:
+        if fd != -1:
+            os.close(fd)
+    os.chmod(str(target), mode)
+    return 'written'
 
 
 def _manifest_key(path: Path):
@@ -1610,14 +1659,15 @@ def _manifest_key(path: Path):
 def _safe_target(relpath: object, expected_root: Path):
     if not isinstance(relpath, str) or not relpath.strip():
         return None
-    candidate = (repo_root / relpath).resolve()
-    try:
-        candidate.relative_to(expected_root)
-    except ValueError:
+    unresolved = repo_root / relpath
+    # Checks run on the unresolved path: resolving first would follow a
+    # symlink planted under validation/tests onto another file (finding
+    # smoke-manifest-canary-overwrite).
+    if unresolved.parent.resolve() != expected_root:
         return None
-    if candidate.parent != expected_root:
+    if unresolved.name in ('', '.', '..'):
         return None
-    return candidate
+    return expected_root / unresolved.name
 
 
 manifest_paths = sorted(runtime_root.glob('pr-*/round-*/synth/synth_round_*_manifest.json'))
@@ -1638,15 +1688,26 @@ rows = payload.get('files')
 if not isinstance(rows, list):
     raise ValueError(f'invalid manifest files list at {manifest_path}')
 
+source_manifest_match = SYNTH_MANIFEST_NAME_RE.match(manifest_path.name)
+if source_manifest_match is None:
+    print('validate_process: skipping synthesised smoke materialization because the manifest name is invalid.', file=sys.stderr)
+    sys.exit(0)
+manifest_round = source_manifest_match.group(1)
+
 target_manifest_relpath = payload.get('target_manifest_relpath')
 target_manifest_path = _safe_target(target_manifest_relpath, target_root)
-if target_manifest_path is None or not SYNTH_MANIFEST_NAME_RE.match(target_manifest_path.name):
+if (
+    target_manifest_path is None
+    or not SYNTH_MANIFEST_NAME_RE.match(target_manifest_path.name)
+    or target_manifest_path.name != manifest_path.name
+):
     print('validate_process: skipping synthesised smoke materialization because target_manifest_relpath is invalid.', file=sys.stderr)
     sys.exit(0)
 
 target_root.mkdir(parents=True, exist_ok=True)
 
 copied = 0
+seen_targets = set()
 for row in rows:
     if not isinstance(row, dict):
         continue
@@ -1673,16 +1734,27 @@ for row in rows:
     if target_path is None:
         print(f'validate_process: skipping synthesised smoke target outside validation/tests: {target_relpath}', file=sys.stderr)
         continue
-    if not SYNTH_TARGET_NAME_RE.match(target_path.name):
+    target_name_match = SYNTH_TARGET_NAME_RE.match(target_path.name)
+    if target_name_match is None:
         print(f'validate_process: skipping synthesised smoke target not named synth_round_<n>_<slug>.sh: {target_relpath}', file=sys.stderr)
         continue
+    if target_name_match.group(1) != manifest_round:
+        print(f'validate_process: skipping synthesised smoke target whose round does not match the manifest: {target_relpath}', file=sys.stderr)
+        continue
+    if target_path.name in seen_targets:
+        print(f'validate_process: skipping duplicate synthesised smoke target: {target_relpath}', file=sys.stderr)
+        continue
+    seen_targets.add(target_path.name)
 
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source_path, target_path)
+    outcome = _write_new_file(source_path, target_path, 0o755)
+    if outcome not in ('written', 'identical'):
+        print(f'validate_process: skipping synthesised smoke target ({outcome}): {target_relpath}', file=sys.stderr)
+        continue
     copied += 1
 
-target_manifest_path.parent.mkdir(parents=True, exist_ok=True)
-shutil.copy2(manifest_path, target_manifest_path)
+manifest_outcome = _write_new_file(manifest_path, target_manifest_path, 0o644)
+if manifest_outcome not in ('written', 'identical'):
+    print(f'validate_process: warning: synthesised smoke manifest not copied ({manifest_outcome}).', file=sys.stderr)
 
 if copied == 0 and rows:
     print(
@@ -3719,7 +3791,39 @@ VALIDATION_HARNESS_CREDENTIAL_SCRUB=(
   -u CHECK_TRIAGE_ISSUES_TOKEN
   -u ACTIONS_ID_TOKEN_REQUEST_TOKEN
   -u ACTIONS_ID_TOKEN_REQUEST_URL
+  -u ACTIONS_RUNTIME_TOKEN
+  -u ACTIONS_RESULTS_URL
+  -u ACTIONS_CACHE_URL
+  -u CLAUDE_CODE_OAUTH_TOKEN
+  -u ANTHROPIC_API_KEY
+  -u BEHAVIOURAL_SMOKE_SANDBOXED
 )
+# Also drop every other credential-shaped variable in the environment
+# (finding validation-harness-credential-inheritance).  VALIDATION_TEST_* and
+# TEST_* are test fixtures that validate_driver.sh re-defaults, so they stay.
+validation_harness_scrub_append()
+{
+  local scrub_name
+  local scrub_existing
+  while IFS= read -r scrub_name; do
+    [ -n "${scrub_name}" ] || continue
+    case "${scrub_name}" in
+      VALIDATION_TEST_*|TEST_*)
+        continue
+        ;;
+    esac
+    if [[ "${scrub_name}" =~ ^(GH_|GITHUB_TOKEN$|OPENROUTER_|TG_BOT_|CHECK_TRIAGE_|ACTIONS_ID_TOKEN_|CLAUDE_CODE_OAUTH|ANTHROPIC_) ]] \
+      || [[ "${scrub_name}" =~ (_TOKEN|_SECRET|_API_KEY|_PAT|_PRIVATE_KEY)$ ]]; then
+      for scrub_existing in "${VALIDATION_HARNESS_CREDENTIAL_SCRUB[@]}"; do
+        if [ "${scrub_existing}" = "${scrub_name}" ]; then
+          continue 2
+        fi
+      done
+      VALIDATION_HARNESS_CREDENTIAL_SCRUB+=(-u "${scrub_name}")
+    fi
+  done < <(compgen -e)
+}
+validation_harness_scrub_append
 # Run validation in background, tee output to log file
 if [ -f validation/validate.sh ]; then
   if grep -q 'scripts/validate_driver.sh' validation/validate.sh && [ ! -f scripts/validate_driver.sh ]; then
