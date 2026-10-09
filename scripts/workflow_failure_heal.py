@@ -2045,13 +2045,122 @@ def _safe_heal_path(path: str) -> bool:
 		and not path.lower().startswith((".github/ai/", ".claude/")))
 
 
-def render_heal_scope_marker(*, crash_file: str | None, workflow_paths: Iterable[str], changed_files: Iterable[str], exists: Any, runs: Iterable[str] = ()) -> str:
+# Failing tests named by the run's own logs (operator decision Q37: A,
+# 2026-10-09). A CI heal's scope used to be the workflow file plus tests/**,
+# so the implementer could only edit tests, and when a test and the code
+# disagreed it rewrote the test to match whatever the code did: heal PRs
+# #6907 and #6916 flipped the security-pass cap rule that #6906 had just
+# restored, and main went red. The run logs are authenticated run metadata
+# (fetched by job id from the verified run, redacted and filtered before any
+# model sees them), so the test names they report may widen the frozen scope
+# deterministically: each failing test resolves to the test file that defines
+# it (git grep at the scope commit) and that file's stem to the subject it
+# covers (scripts/<stem>.sh, scripts/<stem>.py, .github/workflows/<stem>.yml,
+# with "-" for "_" too), only when that file exists at the scope commit and
+# passes the same path rules as every other scope entry. The diagnosis still
+# cannot add a path.
+_FAILING_TEST_PATTERNS: tuple[re.Pattern[str], ...] = (
+	# A parameterized test reports ``test_x[param]``; only the function name is kept.
+	re.compile(r'"test_name"\s*:\s*"(test_[A-Za-z0-9_]{1,160})(?:\[[^"\]]{0,200}\])?"\s*,\s*"status"\s*:\s*"fail"'),
+	re.compile(r'"status"\s*:\s*"fail"\s*,\s*"test_name"\s*:\s*"(test_[A-Za-z0-9_]{1,160})(?:\[[^"\]]{0,200}\])?"'),
+	re.compile(r"^\s*FAIL\s+(test_[A-Za-z0-9_]{1,160})\b", re.MULTILINE),
+	# Pytest summary lines start the (timestamp-stripped) line; a class-based
+	# test reports ``tests/x.py::TestClass::test_y``.
+	re.compile(r"^\s*FAILED\s+(tests/[A-Za-z0-9_./-]{1,200}\.py)::(?:[A-Za-z_][A-Za-z0-9_]{0,160}::)?(test_[A-Za-z0-9_]{1,160})", re.MULTILINE),
+	re.compile(r"^\s*FAIL(?:ED)?:?\s+\(?(tests/[A-Za-z0-9_./-]{1,200}\.py)\b", re.MULTILINE),
+)
+FAILING_TEST_LIMIT = 20
+
+
+def extract_failing_tests(text: str) -> dict[str, list[str]]:
+	"""Failing test function names and test files that a filtered job log reports.
+
+	Returns ``{"names": [...], "files": [...], "pairs": [...]}`` in first-seen
+	order, deduped and capped at FAILING_TEST_LIMIT each. ``pairs`` holds
+	``<file>::<name>`` for every line that names both (the pytest summary shape),
+	so an ambiguous name can be bound to the file the log reported for it. Only
+	the shapes the CI shard runner, pytest and unittest print are recognised;
+	prose never matches.
+	"""
+	names: list[str] = []
+	files: list[str] = []
+	pairs: list[str] = []
+	# Raw Actions job logs prefix every line with an ISO timestamp, which
+	# filter_log keeps; strip it so the line-anchored shapes match.
+	cleaned = "\n".join(_LOG_TIMESTAMP_RE.sub("", line) for line in sanitize_text(text).split("\n"))
+	for pattern in _FAILING_TEST_PATTERNS:
+		for match in pattern.finditer(cleaned):
+			for group in match.groups():
+				if not group:
+					continue
+				bucket = files if group.startswith("tests/") else names
+				if group not in bucket and len(bucket) < FAILING_TEST_LIMIT:
+					bucket.append(group)
+			groups = [group for group in match.groups() if group]
+			if len(groups) == 2 and groups[0].startswith("tests/"):
+				pair = f"{groups[0]}::{groups[1]}"
+				if pair not in pairs and len(pairs) < FAILING_TEST_LIMIT:
+					pairs.append(pair)
+	return {"names": names, "files": files, "pairs": pairs}
+
+
+def heal_scope_test_subjects(test_files: Iterable[str], exists: Any) -> list[str]:
+	"""Test files plus the subject each one covers, when that subject exists.
+
+	``tests/test_<stem>.py`` maps to ``scripts/<stem>.sh``, ``scripts/<stem>.py``
+	and ``.github/workflows/<stem>.yml`` (also with ``-`` for ``_``); every
+	candidate must exist at the scope commit and pass ``_safe_heal_path``.
+	"""
+	out: list[str] = []
+	for test_file in test_files:
+		if not isinstance(test_file, str) or not _safe_heal_path(test_file) or not test_file.startswith("tests/"):
+			continue
+		if not exists(test_file):
+			continue
+		if test_file not in out:
+			out.append(test_file)
+		stem = test_file.rsplit("/", 1)[-1]
+		if not stem.startswith("test_") or not stem.endswith(".py"):
+			continue
+		stem = stem[len("test_"):-len(".py")]
+		if not re.fullmatch(r"[A-Za-z0-9_]{1,120}", stem):
+			continue
+		candidates = [f"scripts/{stem}.sh", f"scripts/{stem}.py", f".github/workflows/{stem}.yml"]
+		dashed = stem.replace("_", "-")
+		if dashed != stem:
+			candidates.append(f".github/workflows/{dashed}.yml")
+		for candidate in candidates:
+			if candidate not in out and _safe_heal_path(candidate) and exists(candidate):
+				out.append(candidate)
+	return out
+
+
+# Explicit scope slots reserved for failing-test subjects ahead of changed_files.
+HEAL_SCOPE_SUBJECT_RESERVE = 8
+
+
+def render_heal_scope_marker(*, crash_file: str | None, workflow_paths: Iterable[str], changed_files: Iterable[str], exists: Any, runs: Iterable[str] = (), test_subjects: Iterable[str] = ()) -> str:
 	paths = []
-	for path in [crash_file, *workflow_paths, *changed_files]:
-		if isinstance(path, str) and _safe_heal_path(path) and path not in paths and exists(path):
-			paths.append(path)
+	dropped = 0
+	# Test files are already covered by the trailing ``tests/**`` glob, so only
+	# the subjects they map to take one of the 20 explicit slots
+	# (verify_heal_scope accepts at most 20 explicit paths).
+	subjects = [path for path in test_subjects if isinstance(path, str) and not path.startswith("tests/")]
+	# Up to HEAL_SCOPE_SUBJECT_RESERVE subjects go ahead of the ownership
+	# ``changed_files`` list: a PR or base diff touching 20+ files would
+	# otherwise fill every slot first and confine the heal to tests/** again.
+	# The crash file and workflow paths keep priority; remaining subjects follow.
+	ordered = [crash_file, *workflow_paths, *subjects[:HEAL_SCOPE_SUBJECT_RESERVE], *changed_files, *subjects[HEAL_SCOPE_SUBJECT_RESERVE:]]
+	for path in ordered:
+		if not isinstance(path, str) or not _safe_heal_path(path) or path in paths:
+			continue
 		if len(paths) >= 20:
-			break
+			# Counted without an existence lookup, so this is an upper bound.
+			dropped += 1
+		elif exists(path):
+			paths.append(path)
+	if dropped:
+		print(f"WORKFLOW_HEAL warn heal_scope_truncated kept={len(paths)} dropped_candidates={dropped}", file=sys.stderr)
 	if not paths:
 		return ""
 	refs = list(runs)
@@ -3342,13 +3451,69 @@ def _heal_regular_file_at_ref(checkout: str, ref: str, path: str) -> bool:
 		and result.stdout.startswith((b"100644 blob ", b"100755 blob ")) and result.stdout.count(b"\0") == 1)
 
 
+def _heal_test_files_for_names(checkout: str, ref: str, names: Iterable[str]) -> list[str]:
+	"""Test files under tests/ at ``ref`` that define one of the failing test functions."""
+	found: list[str] = []
+	for name in names:
+		if not isinstance(name, str) or not re.fullmatch(r"test_[A-Za-z0-9_]{1,160}", name):
+			continue
+		# Indented definitions are class-based test methods.
+		cmd = ["git", "grep", "-l", "-z", "-E", f"^[[:space:]]*def {name}\\(", ref, "--", "tests/"]
+		result = subprocess.run(cmd, cwd=checkout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+		if result.returncode != 0:
+			continue
+		for entry in result.stdout.split(b"\0"):
+			text = entry.decode("utf-8", errors="replace")
+			path = text.split(":", 1)[1] if ":" in text else text
+			if path and path not in found and _safe_heal_path(path):
+				found.append(path)
+	return found
+
+
 def _cmd_heal_scope(args: argparse.Namespace) -> int:
 	if args.operation == "strip":
 		sys.stdout.write(strip_heal_scope_markers(Path(args.body_file).read_text()))
 	elif args.operation == "render":
 		data = _load_json_file(args.input_json)
-		marker = render_heal_scope_marker(crash_file=data.get("crash_file"), workflow_paths=data.get("workflow_paths", []), changed_files=data.get("changed_files", []), runs=data.get("runs", []), exists=lambda path: _heal_regular_file_at_ref(args.checkout, args.ref, path) if args.ref else Path(args.checkout).joinpath(path).is_file() and not Path(args.checkout).joinpath(path).is_symlink())
+		exists = (lambda path: _heal_regular_file_at_ref(args.checkout, args.ref, path)) if args.ref else (lambda path: Path(args.checkout).joinpath(path).is_file() and not Path(args.checkout).joinpath(path).is_symlink())
+		failing = data.get("failing_tests") if isinstance(data.get("failing_tests"), dict) else {}
+		test_files = [path for path in (failing.get("files") or []) if isinstance(path, str)]
+		if args.ref:
+			# Bind log-reported test files to the scope commit: a file is kept only
+			# when it defines one of the reported failing tests there, so a stray or
+			# forged "FAILED tests/x.py" line naming an unrelated file cannot add it
+			# (or the subject its stem maps to). Names still come from the same
+			# verified-run logs, so an existing test name remains the residual trust.
+			# Each name resolves on its own: a name defined in more than one test
+			# file is ambiguous (another file can define the same name, so the
+			# failure does not establish which file, or subject, it exercised) and
+			# is kept only for the files the log itself reported for that name
+			# (a ``<file>::<name>`` pair), never for a file another failure reported.
+			reported_for_name: dict[str, set[str]] = {}
+			for pair in failing.get("pairs") or []:
+				if isinstance(pair, str) and "::" in pair:
+					pair_file, pair_name = pair.split("::", 1)
+					reported_for_name.setdefault(pair_name, set()).add(pair_file)
+			test_files = []
+			for name in failing.get("names") or []:
+				matches = _heal_test_files_for_names(args.checkout, args.ref, [name])
+				if len(matches) > 1:
+					matches = [path for path in matches if isinstance(name, str) and path in reported_for_name.get(name, set())]
+				test_files.extend(path for path in matches if path not in test_files)
+		marker = render_heal_scope_marker(crash_file=data.get("crash_file"), workflow_paths=data.get("workflow_paths", []), changed_files=data.get("changed_files", []), runs=data.get("runs", []), exists=exists, test_subjects=heal_scope_test_subjects(test_files, exists))
 		sys.stdout.write(marker + "\n")
+	elif args.operation == "failing-tests":
+		merged: dict[str, list[str]] = {"names": [], "files": [], "pairs": []}
+		for log_path in args.log_files or []:
+			try:
+				found = extract_failing_tests(Path(log_path).read_text(encoding="utf-8", errors="replace"))
+			except OSError:
+				continue
+			for key in ("names", "files", "pairs"):
+				for item in found[key]:
+					if item not in merged[key] and len(merged[key]) < FAILING_TEST_LIMIT:
+						merged[key].append(item)
+		_write_json(merged)
 	elif args.operation == "verify":
 		data = _load_json_file(args.input_json)
 		_write_json(verify_heal_scope(body=data.get("body") or "", author_login=data.get("author_login") or "", last_edited_at=data.get("last_edited_at"), labels=data.get("labels") or [], pipeline_login=data.get("pipeline_login") or ""))
@@ -3783,7 +3948,8 @@ def build_parser() -> argparse.ArgumentParser:
 	p.set_defaults(func=_cmd_heal_route)
 
 	p = sub.add_parser("heal-scope")
-	p.add_argument("operation", choices=("render", "verify", "carry", "strip"))
+	p.add_argument("operation", choices=("render", "verify", "carry", "strip", "failing-tests"))
+	p.add_argument("--log-files", nargs="*")
 	p.add_argument("--input-json", default="")
 	p.add_argument("--body-file", default="")
 	p.add_argument("--checkout", default=".")
