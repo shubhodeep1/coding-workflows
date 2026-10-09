@@ -300,3 +300,39 @@ def test_deeply_nested_manifest_reports_clean_violation(tmp_path: Path) -> None:
 	manifest_path = tmp_path / "deep.yml"
 	manifest_path.write_text(text, encoding="utf-8")
 	assert runner.manifest_shell_safety_violations(manifest_path) == ["$: manifest nesting too deep"]
+
+
+def test_gate_copies_share_constants_and_report_identical_violations(tmp_path: Path) -> None:
+	# The gate exists twice (validate_process.sh's embedded Python and
+	# validation_refresh_runner.manifest_shell_safety_violations); this keeps
+	# the exempt keys, limits and per-class reporting of the two in step.
+	import ast
+	import re
+
+	runner = _load_refresh_runner()
+	function_text = _renderer_function_text()
+	exempt_match = re.search(r"^EXEMPT_TOP_LEVEL_KEYS = frozenset\((\{.*\})\)$", function_text, re.MULTILINE)
+	assert exempt_match is not None
+	assert frozenset(ast.literal_eval(exempt_match.group(1))) == runner.MANIFEST_SHELL_SAFETY_EXEMPT_KEYS
+	assert re.search(r"^MAX_BYTES = 2 \* 1024 \* 1024$", function_text, re.MULTILINE)
+	assert runner.MANIFEST_SHELL_SAFETY_MAX_BYTES == 2 * 1024 * 1024
+	depth_match = re.search(r"^MAX_DEPTH = (\d+)$", function_text, re.MULTILINE)
+	assert depth_match is not None
+	assert int(depth_match.group(1)) == runner.MANIFEST_SHELL_SAFETY_MAX_DEPTH
+
+	manifest = _manifest()
+	manifest["slots"]["a_dollar"] = "x$y"
+	manifest["slots"]["b_backtick"] = "x`y"
+	manifest["slots"]["c_quote"] = "x'y"
+	manifest["slots"]["d_backslash"] = "x\\y"
+	manifest["slots"]["e_control"] = "x\ty"
+	manifest["slots"]["f_all"] = "$`\"\\\n"
+	text = yaml.safe_dump(manifest, sort_keys=False)
+	result = _run_gate(tmp_path, text)
+	assert result.returncode == 14
+	log_lines = (tmp_path / "renderer.log").read_text(encoding="utf-8").splitlines()
+	shell_violations = [line[2:] for line in log_lines if line.startswith("- ")]
+	manifest_path = tmp_path / "parity.yml"
+	manifest_path.write_text(text, encoding="utf-8")
+	assert shell_violations == runner.manifest_shell_safety_violations(manifest_path)
+	assert "/slots/f_all: contains shell-unsafe character class dollar,backtick,quote,backslash,control" in shell_violations
