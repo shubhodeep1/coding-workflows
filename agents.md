@@ -114,6 +114,12 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP` instead of sending the "retry N/3"
    Telegram WARNING. A push clears the skip, and an unresolvable head SHA or
    token identity keeps the old re-dispatch.
+   Failure and cap markers carry `support=<sha>`, the gate's verified review
+   support SHA (#6625); the gate, the cap job and the sweep ignore markers of
+   another or no support version, so a support fix lets the scheduled sweep
+   retry a capped head (`NOOP_RECOVERY_FINGERPRINT_CAP_STALE_SUPPORT`). The
+   sweep takes the support SHA from its engine SHA here and from the
+   `ai-review.yml` pin in consumers; unresolved, any cap marker still skips.
    The gate runs `scripts/review_head_gate.sh` from its verified support SHA:
    `pull_request.synchronize` withdraws stale auto-merge (failure fails the
    gate), and opened/synchronize events mark their SHA `pending` immediately
@@ -944,6 +950,52 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   and PRs), never from "the test should match what the code does now".
   `tests/test_workflow_failure_heal_scope_tests.py` covers extraction, the
   mapping, the render CLI at a scope commit and the intake wiring.
+- **Merge-base freshness.** `scripts/pr_checks_lib.sh` carries
+  `_pr_base_fresh_for_merge <pr> [<head_sha>] [<base_ref>]` beside the
+  check-runs gate. Every path that enables auto-merge or merges directly
+  (`scripts/review_enable_auto_merge.sh`, the `deterministic-skip-merge`
+  job, `scripts/review_rb_judge.sh`, and the poller's backward-scan,
+  `attempt_merge` and review-blocked merge sites) calls it first. It reads
+  `compare/{head}...{base}` and, only when the base gained commits, the
+  PR's file list; when the two sets share a path (renames under both
+  names; 300 base-side files counts as overlap) it requests
+  `PUT pulls/{n}/update-branch` bound to the head and returns 1, so the
+  caller skips the merge and the `synchronize` run re-validates CI and
+  review on the combined tree. `fresh`, `clean`, `disabled`
+  (`MERGE_BASE_FRESHNESS_ENABLED`) and `unknown` (any API failure, logged
+  with a warning) return 0. The `deterministic-skip-merge` job reads the
+  library from the gate's verified support commit (`.codex-freshness-src`);
+  an unverified checkout skips the freshness gate with a warning and
+  refuses auto-merge, because the required-checks wait below cannot run.
+  A PR file list of 3,000 entries (GitHub's cap) counts as overlap. The
+  review-blocked judge's `merge_with_followup` and the poller's force-merge,
+  no-fix and `merge_with_followup` sites are gated too. The orchestrator's
+  sub-issue path already aligns and defers through
+  `_sync_integration_and_rebase_subissue`, and the final integration PR is
+  synced by the poller every tick, so those paths see `fresh`. Operator
+  decision Q35: A (2026-10-09), after #6741 merged green against a base
+  that #6549 had changed under its tests. `tests/test_pr_base_freshness_gate.py`
+  covers the outcomes, the switch and every wiring point.
+- **Required checks before auto-merge.** `gh pr merge --auto` merges as
+  soon as the base's required status checks pass, and an unprotected base
+  has none, so the review's auto-merge paths landed #6906 on `main` while
+  its own PR CI run showed `orchestrate-poll (3)` failing. The same two
+  paths and the review-blocked judge's `merge` and terminal `fix` paths
+  now call `_pr_wait_for_required_checks <pr> <head> <base>`
+  (`scripts/pr_checks_lib.sh`) first: it polls `_pr_checks_completed` with
+  the calling run excluded (`PR_CHECKS_SELF_RUN_ID`) for up to
+  `AUTO_MERGE_CHECKS_WAIT_MINUTES` (default 45, every
+  `AUTO_MERGE_CHECKS_POLL_SECONDS`, default 60), enables auto-merge only on
+  `ok`/`allow_all`, and refuses on a settled failure (`PR_CHECKS_LAST_PENDING`
+  is 0 while the gate still blocks) or a timeout; a failed query is retried
+  until the budget is spent. It logs
+  `AUTOFIX_AUTO_MERGE_CHECKS pr=<n> head_sha=<sha> outcome=<...>`, and a
+  missing library fails the wait closed. A head with no check-runs yet
+  (`PR_CHECKS_LAST_TOTAL=0`) is polled two more intervals before it counts
+  as green. After a wait that actually polled, every caller
+  (`review_enable_auto_merge.sh`, the `deterministic-skip-merge` job and
+  the judge) re-checks freshness before merging. The
+  orchestrator's direct merges already gated on `_pr_checks_completed`.
 - **Dependencies.** `codex_isolated_exec.sh prepare --deps` (implement) installs
   dependencies once per job. The network-isolated, credential-free container sees
   only staged Node manifests and filtered third-party Python requirements
@@ -1991,6 +2043,7 @@ and shipped:
 - `AI_ENGINE_SELECTED` (`scripts/ai_engine.sh`: `role= engine= model= effort= source=`)
 - `AI_ENGINE_FALLBACK` (`scripts/ai_engine.sh`: `role= reason=`; the run uses codex)
 - `CLAUDE_POOL` (`scripts/ai_engine.sh` and the sandbox Claude branches: `run role= account= outcome= reason= exit_code=`, `account_skipped account= reason=`)
+- `CLAUDE_POOL_HEALTH` (`scripts/claude_pool_health_alert.sh`, the "Alert on Claude pool accounts at the usage gate" step of `orchestrate_poll.yml`: `accounts= gated= auth_failed= probe_failed= alert=sent|not_delivered|none|outside_window|disabled|no_probes|invalid_probes`; `sent` means one Telegram WARNING named every account at or above `gate_utilization` and every rejected token; the step reads the pool action's `probes` output and sends at most once an hour, see README "Near-cap alert")
 - `AI_ENGINE_PROJECT_LABEL` (`orchestrate.yml` "Ensure orchestrator labels exist": `label=`, `none` when unset; the label the tracking and wave-1 issues get)
 - `AI_ENGINE_PR_LABEL` (`implement.yml` "Create Pull Request": `issue= label=`; the engine label copied from the issue to its PR)
 - `SINGLE_ISSUE_SECURITY_PASS` (`scripts/review_single_issue_security_pass.sh`: `mode=gate|status|report pr= head= outcome=clean|hold|dispatched|skip|findings|failed|exhausted reason= cycle=`; clean markers require the authenticated pipeline author and an exact audited PR head. Missing/disabled audits report failed, and an unverifiable marker source holds auto-merge. A failed dispatch logs `outcome=hold reason=dispatch_failed` and posts a `failed` marker for the used cycle (past the cap, `reason=dispatch_failed_exhausted` and the marker counts as a used head attempt). If result publication fails, report skips review re-dispatch so it cannot run without the marker. After dispatch the gate confirms the pending-marker comment response with bounded retries and fails closed with `reason=pending_marker_failed` if none is confirmed. `mode=status` writes no GitHub state or step output, but may fetch missing Git history to verify extension ancestry before the review-blocked judge chooses its mode; failed verification reports `unverifiable`. `outcome=hold reason=cycles_exhausted` writes `exhausted=true` only for completed current-head findings, and status also emits `SINGLE_ISSUE_SECURITY_PASS_AUDITED_HEAD`. Without a completed audit the gate retries a bounded number of times per head before reporting `exhausted_unaudited` and holding without the judge bypass. The judge re-verifies the audited head before a security-mode merge. Cycles available = `MAX_SECURITY_PASS_CYCLES` plus one per distinct fix SHA in a trusted `ai:single-issue-security-pass-extension:v1` marker whose commit is reachable from the audited head; duplicate comments for one SHA count once, and a mismatched checkout holds the gate and skips report publication. On a current-head findings marker before exhaustion, `awaiting_followups` requires an open `ai:security` issue authored by the pipeline account for that branch and a findings marker younger than `SECURITY_PASS_FOLLOWUP_STALE_HOURS`; otherwise the gate holds with `followups_missing`, `followups_unverifiable` or `followups_stalled`.)
@@ -2072,6 +2125,8 @@ and shipped:
 - `VALIDATION_DISCOVERY_DRY_RUN`
 - `VALIDATE_TRUSTED_TEMPLATE_OVERRIDE`
 - `VALIDATE_TRUSTED_TEMPLATES`
+- `VALIDATE_TRUSTED_RENDERER_OVERRIDE`
+- `VALIDATE_TRUSTED_RENDERER`
 - `REVIEWER_RISK_TIER`
 - `REVIEWER_FILTER_SKIP`
 - `REVIEWER_FAILBACK`
@@ -2152,6 +2207,7 @@ and shipped:
 - `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`
 - `AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED`
 - `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP`
+- `NOOP_RECOVERY_FINGERPRINT_CAP_STALE_SUPPORT`
 - `REVIEW_EDITOR_PREFLIGHT`
 - `IMPLEMENT_AUTOMATION_PATH_GUARD`
 - `STAGE_MAIN_PINNED_DIVERGENCE`
@@ -2231,6 +2287,7 @@ LOG_PREFIX.name=STANDALONE_AUTO_DECIDE
 LOG_PREFIX.name=AI_ENGINE_SELECTED
 LOG_PREFIX.name=AI_ENGINE_FALLBACK
 LOG_PREFIX.name=CLAUDE_POOL
+LOG_PREFIX.name=CLAUDE_POOL_HEALTH
 LOG_PREFIX.name=AI_ENGINE_PROJECT_LABEL
 LOG_PREFIX.name=AI_ENGINE_PR_LABEL
 LOG_PREFIX.name=SINGLE_ISSUE_SECURITY_PASS
@@ -2311,6 +2368,8 @@ LOG_PREFIX.name=VALIDATION_DISCOVERY_SKIPPED_BUDGET
 LOG_PREFIX.name=VALIDATION_DISCOVERY_DRY_RUN
 LOG_PREFIX.name=VALIDATE_TRUSTED_TEMPLATE_OVERRIDE
 LOG_PREFIX.name=VALIDATE_TRUSTED_TEMPLATES
+LOG_PREFIX.name=VALIDATE_TRUSTED_RENDERER_OVERRIDE
+LOG_PREFIX.name=VALIDATE_TRUSTED_RENDERER
 LOG_PREFIX.name=REVIEWER_RISK_TIER
 LOG_PREFIX.name=REVIEWER_FILTER_SKIP
 LOG_PREFIX.name=REVIEWER_FAILBACK
@@ -2390,6 +2449,7 @@ LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_TRIPPED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED
 LOG_PREFIX.name=NOOP_RECOVERY_SKIP_FINGERPRINT_CAP
+LOG_PREFIX.name=NOOP_RECOVERY_FINGERPRINT_CAP_STALE_SUPPORT
 LOG_PREFIX.name=REVIEW_EDITOR_PREFLIGHT
 LOG_PREFIX.name=IMPLEMENT_AUTOMATION_PATH_GUARD
 LOG_PREFIX.name=STAGE_MAIN_PINNED_DIVERGENCE

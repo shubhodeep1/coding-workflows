@@ -593,6 +593,8 @@ jobs:
           # evaluating the cap (failure comments keep their marker).
           REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED || 'true' }}
           REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL: ${{ vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL || '3' }}
+          # #6625: markers from other support versions are not counted.
+          REVIEW_SUPPORT_SHA: ${{ steps.resolve_support.outputs.review_support_sha }}
         run: |
           set -euo pipefail
 
@@ -1180,7 +1182,8 @@ jobs:
                 if ! fingerprint_cap_decision="$(PYTHONDONTWRITEBYTECODE=1 python3 "${fingerprint_cap_helper}" autofix-identical-failure-count \
                   --comments-json "${gate_marker_comments_file}" \
                   --head-sha "${pr_head_sha_gate}" \
-                  --author-login "${gate_marker_author_login}" 2>/dev/null)"; then
+                  --author-login "${gate_marker_author_login}" \
+                  --support-sha "${REVIEW_SUPPORT_SHA:-}" 2>/dev/null)"; then
                   fingerprint_cap_decision=""
                 fi
                 fingerprint_cap_count="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "count" { print $2 }' | tail -n 1)"
@@ -1201,9 +1204,9 @@ jobs:
                     FINGERPRINT_CAP="true"
                     SHOULD_RUN="false"
                     SKIP_REASON="fingerprint_cap"
-                    echo "AUTOFIX_FINGERPRINT_CAP_TRIPPED pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} count=${FINGERPRINT_CAP_COUNT} max=${FINGERPRINT_CAP_MAX} already_applied=${FINGERPRINT_CAP_ALREADY_APPLIED} non_retryable=${FINGERPRINT_CAP_NON_RETRYABLE}"
+                    echo "AUTOFIX_FINGERPRINT_CAP_TRIPPED pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} count=${FINGERPRINT_CAP_COUNT} max=${FINGERPRINT_CAP_MAX} already_applied=${FINGERPRINT_CAP_ALREADY_APPLIED} non_retryable=${FINGERPRINT_CAP_NON_RETRYABLE} support=${REVIEW_SUPPORT_SHA:-none}"
                   else
-                    echo "AUTOFIX_FINGERPRINT cap=not_tripped pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP:-none} reason=${FINGERPRINT_CAP_REASON:-none} count=${FINGERPRINT_CAP_COUNT} max=${FINGERPRINT_CAP_MAX}"
+                    echo "AUTOFIX_FINGERPRINT cap=not_tripped pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP:-none} reason=${FINGERPRINT_CAP_REASON:-none} count=${FINGERPRINT_CAP_COUNT} max=${FINGERPRINT_CAP_MAX} support=${REVIEW_SUPPORT_SHA:-none}"
                   fi
                 fi
               fi
@@ -2097,7 +2100,30 @@ jobs:
       # Exact PR head whose diff authorized this deterministic skip. Every
       # merge-capable path below is bound to it and refuses an empty value.
       PR_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
+      # Merge-base freshness gate (scripts/pr_checks_lib.sh, operator
+      # decision Q35: A), read from the same verified support commit the
+      # gate resolved.
+      MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+      # Required-checks wait before `gh pr merge --auto` (pr_checks_lib.sh):
+      # without branch protection, auto-merge lands the PR immediately.
+      AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
+      AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
     steps:
+      - name: Checkout merge-base freshness helper
+        id: checkout_freshness_helper
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ needs.gate.outputs.review_support_sha }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-freshness-src
+          fetch-depth: 1
+          sparse-checkout: |
+            scripts/pr_checks_lib.sh
+            scripts/gh_helpers.sh
+          sparse-checkout-cone-mode: false
+
       - name: Record GH_PAT budget at deterministic-skip-merge start
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -2113,6 +2139,9 @@ jobs:
           echo "GH_PAT_BUDGET phase=start workflow=review_autofix job=deterministic-skip-merge remaining=${remaining} reset=${reset} used_in_job=unknown"
 
       - name: Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge
+        env:
+          FRESHNESS_HELPER_CHECKOUT_OUTCOME: ${{ steps.checkout_freshness_helper.outcome }}
+          REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}
         run: |
           set -euo pipefail
 
@@ -2156,6 +2185,34 @@ jobs:
             local label="$1" repo="$2" color="$3" desc="$4"
             gh_retry gh label create "${label}" --repo "${repo}" --color "${color}" --description "${desc}" >/dev/null 2>&1 || true
           }
+
+          # Merge-base freshness gate: a gate-observed head whose base moved
+          # under files this PR touches is updated from the base instead of
+          # auto-merged, so CI runs on the combined tree first (the
+          # synchronize run then re-enters this job). The helper is read
+          # from the verified support commit; when the checkout is missing
+          # or unverified the freshness gate is skipped with a warning and
+          # the required-checks wait fails closed (auto-merge refused). `_safe_gh_jq` is the library's gh
+          # transport; the inline retry wrapper above serves as gh_retry.
+          _pr_base_fresh_for_merge() {
+            echo "::warning::pr_checks_lib.sh unavailable; merge-base freshness gate skipped for PR #${1:-unknown}."
+            return 0
+          }
+          _pr_wait_for_required_checks() {
+            PR_CHECKS_WAIT_OUTCOME="unavailable"
+            echo "::warning::pr_checks_lib.sh unavailable; refusing auto-merge for PR #${1:-unknown} (required checks cannot be verified)."
+            return 1
+          }
+          if [ "${FRESHNESS_HELPER_CHECKOUT_OUTCOME:-}" = "success" ] \
+            && [ -f .codex-freshness-src/scripts/pr_checks_lib.sh ] \
+            && [[ "${REVIEW_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]] \
+            && [ "$(git -C .codex-freshness-src rev-parse HEAD 2>/dev/null)" = "${REVIEW_SUPPORT_SHA:-}" ]; then
+            _safe_gh_jq() { gh api "$@"; }
+            # shellcheck disable=SC1091
+            source .codex-freshness-src/scripts/pr_checks_lib.sh
+          else
+            echo "::warning::Merge-base freshness helper checkout unavailable or unverified (outcome=${FRESHNESS_HELPER_CHECKOUT_OUTCOME:-unset}); freshness gate skipped and auto-merge refused (required checks cannot be verified)."
+          fi
 
           write_deterministic_skip_summary()
           {
@@ -2246,7 +2303,16 @@ jobs:
             if [ "${FORWARD_MERGE_FALLBACK_AUTO_MERGE}" = "true" ]; then
               echo "Enabling auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER} (head ref '${PR_HEAD_REF}')..."
               echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=merge_commit"
-              if gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto --match-head-commit "${PR_HEAD_SHA}"; then
+              if ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
+                auto_merge_summary="DEFERRED (base moved under this PR's files; branch update requested, the synchronize run re-validates)"
+                echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
+              elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
+                auto_merge_summary="REFUSED (required check-runs ${PR_CHECKS_WAIT_OUTCOME:-unknown} on the gate-observed head)"
+                echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=refuse reason=required_checks_${PR_CHECKS_WAIT_OUTCOME:-unknown}"
+              elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null && ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
+                auto_merge_summary="DEFERRED (base moved during the checks wait; branch update requested)"
+                echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
+              elif gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto --match-head-commit "${PR_HEAD_SHA}"; then
                 auto_merge_ready_labels_allowed="true"
                 auto_merge_summary="ENABLED (merge commit)"
                 echo "Auto-merge (merge commit) enabled. PR will merge once all required checks pass, preserving stable's ancestry on main."
@@ -2264,7 +2330,16 @@ jobs:
           else
             echo "Enabling auto-merge (squash) on PR #${PR_NUMBER}..."
             echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=squash"
-            if gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${PR_HEAD_SHA}"; then
+            if ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
+              auto_merge_summary="DEFERRED (base moved under this PR's files; branch update requested, the synchronize run re-validates)"
+              echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
+            elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
+              auto_merge_summary="REFUSED (required check-runs ${PR_CHECKS_WAIT_OUTCOME:-unknown} on the gate-observed head)"
+              echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=refuse reason=required_checks_${PR_CHECKS_WAIT_OUTCOME:-unknown}"
+            elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null && ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then
+              auto_merge_summary="DEFERRED (base moved during the checks wait; branch update requested)"
+              echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_moved_overlap"
+            elif gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${PR_HEAD_SHA}"; then
               auto_merge_ready_labels_allowed="true"
               auto_merge_summary="ENABLED (squash)"
               echo "Auto-merge enabled. PR will merge once all required checks pass."
@@ -2400,6 +2475,7 @@ jobs:
       FINGERPRINT_CAP_ALREADY_APPLIED: ${{ needs.gate.outputs.fingerprint_cap_already_applied }}
       FINGERPRINT_CAP_NON_RETRYABLE: ${{ needs.gate.outputs.fingerprint_cap_non_retryable }}
       FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN: ${{ needs.gate.outputs.fingerprint_cap_marker_author_login }}
+      REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}
       WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
       REPORT_WORKFLOW_NAME: ${{ github.workflow }}
       REPORT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -2512,8 +2588,17 @@ jobs:
             echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=${PR_HEAD_SHA} reason=fresh_cap_marker_lookup_failed"
             exit 0
           fi
-          if jq -e --arg author "${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}" --arg head "${PR_HEAD_SHA}" \
-            'any(.[]; ((.author_login // "" | ascii_downcase) == ($author | ascii_downcase)) and ((.body // "") | contains("<!-- review-autofix-failure-cap:v1 head=" + $head + " ")))' \
+          # #6625: a cap marker of another support version does not count; the
+          # support SHA must be a field of a marker on its own line, not text
+          # elsewhere (an inline "First error" quote can hold a whole marker).
+          cap_support=""
+          if [[ "${REVIEW_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+            cap_support="${REVIEW_SUPPORT_SHA}"
+          elif [ -n "${REVIEW_SUPPORT_SHA:-}" ]; then
+            echo "::warning::REVIEW_SUPPORT_SHA is not a 40-hex SHA; the cap marker is written without support=."
+          fi
+          if jq -e --arg author "${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}" --arg head "${PR_HEAD_SHA}" --arg support "${cap_support}" \
+            'any(.[]; ((.author_login // "" | ascii_downcase) == ($author | ascii_downcase)) and ((.body // "") | contains("<!-- review-autofix-failure-cap:v1 head=" + $head + " ")) and ($support == "" or ((.body // "") | test("(^|\\n)<!-- review-autofix-failure-cap:v1 head=" + $head + "( [^ >\\n]+)* support=" + $support + "( [^ >\\n]+)* -->[ \\r]*(\\n|$)"))))' \
             "${fresh_cap_comments_file}" >/dev/null; then
             echo "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=${PR_NUMBER} head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP} count=${FINGERPRINT_CAP_COUNT}"
             exit 0
@@ -2564,7 +2649,7 @@ jobs:
             labeled_summary="this pull request (no linked issue found)"
           fi
 
-          cap_marker="<!-- review-autofix-failure-cap:v1 head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} count=${FINGERPRINT_CAP_COUNT} -->"
+          cap_marker="<!-- review-autofix-failure-cap:v1 head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} count=${FINGERPRINT_CAP_COUNT}${cap_support:+ support=${cap_support}} -->"
           cap_title="identical failure repeated"
           cap_first_error=""
           cap_lead="The last ${FINGERPRINT_CAP_COUNT} review/autofix runs on head \`${PR_HEAD_SHA:0:12}\` failed the same way"
@@ -2724,6 +2809,8 @@ jobs:
 
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      # #6625: failure markers record support= for the version-aware cap.
+      REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}
       # Issue #6308: host Python must not import modules from the PR checkout
       # (or its workspace copy) when running -c, -, or -m.
       PYTHONSAFEPATH: "1"
@@ -5482,6 +5569,7 @@ jobs:
                 --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
                 --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
                 --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
+                --support-sha "${REVIEW_SUPPORT_SHA:-}" \
                 --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null | sed -n 's/^marker=//p' | head -n 1 || true)"
               if [ -n "${autofix_failure_marker_line}" ]; then
                 AUTOFIX_FAILURE_MARKER_SUFFIX=$'\n\n'"${autofix_failure_marker_line}"
@@ -6119,6 +6207,9 @@ jobs:
           FORWARD_MERGE_FALLBACK_AUTO_MERGE: ${{ vars.FORWARD_MERGE_FALLBACK_AUTO_MERGE || 'true' }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
           INITIAL_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}
+          MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+          AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
+          AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
         run: |
           bash "${SUPPORT_SCRIPTS_DIR}/review_enable_auto_merge.sh"
 
@@ -6291,6 +6382,9 @@ jobs:
           JUDGE_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEW_BLOCKED_JUDGE || 'high' }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
+          MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+          AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
+          AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
           REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
           # Single-issue security pass settings, the same as the
@@ -6911,6 +7005,7 @@ jobs:
               --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
               --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
               --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
+              --support-sha "${REVIEW_SUPPORT_SHA:-}" \
               --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null | sed -n 's/^marker=//p' | head -n 1 || true)"
             if [ -n "${autofix_failure_marker_line}" ]; then
               AUTOFIX_FAILURE_MARKER_SUFFIX=$'\n\n'"${autofix_failure_marker_line}"
@@ -7000,6 +7095,7 @@ jobs:
               --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
               --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
               --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
+              --support-sha "${REVIEW_SUPPORT_SHA:-}" \
               --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null | sed -n 's/^marker=//p' | head -n 1 || true)"
             if [ -n "${autofix_failure_marker_line}" ]; then
               AUTOFIX_FAILURE_MARKER_SUFFIX=$'\n\n'"${autofix_failure_marker_line}"
@@ -7277,6 +7373,7 @@ jobs:
             --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
             --evidence-out "${evidence_out}" \
             --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
+            --support-sha "${REVIEW_SUPPORT_SHA:-}" \
             --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null || true)"
           failure_fp="$(printf '%s\n' "${fingerprint_out}" | sed -n 's/^fp=//p' | head -n 1)"
           failure_degraded="$(printf '%s\n' "${fingerprint_out}" | sed -n 's/^degraded=//p' | head -n 1)"
