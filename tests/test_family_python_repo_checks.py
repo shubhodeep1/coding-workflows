@@ -58,6 +58,20 @@ def _run_renderer(manifest_path: Path, output_root: Path) -> subprocess.Complete
 	)
 
 
+def _run_family_marker(script: Path) -> subprocess.CompletedProcess[str]:
+	# Execute the rendered marker script and let callers assert on its TAP
+	# output rather than its source text, so the check holds whether the
+	# template uses `echo` or `printf` (issue #6843, PR #6569 CI failure).
+	return subprocess.run(
+		["bash", str(script)],
+		cwd=str(script.parent),
+		text=True,
+		capture_output=True,
+		timeout=60,
+		env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+	)
+
+
 def _snapshot_directory(root: Path) -> tuple[list[str], str]:
 	files = sorted(path.relative_to(root).as_posix() for path in root.rglob("*") if path.is_file())
 	hasher = hashlib.sha256()
@@ -124,8 +138,10 @@ def test_python_repo_checks_invariants_regression_guards() -> None:
 		assert "pip install --no-cache-dir pyyaml jsonschema jinja2" in dockerfile_text
 		assert "flask" not in dockerfile_text
 
-		family_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
-		assert "python-repo-checks family for demo-project" in family_text
+		marker = _run_family_marker(output_root / "tests" / "10_family_marker.sh")
+		assert marker.returncode == 0, f"family marker failed rc={marker.returncode}: {marker.stderr}"
+		assert "1..1" in marker.stdout.splitlines(), marker.stdout
+		assert "ok 1 - python-repo-checks family for demo-project" in marker.stdout.splitlines(), marker.stdout
 
 		repo_check_text = (output_root / "tests" / "40_repo_checks.sh").read_text(encoding="utf-8")
 		assert "REPO_CHECK_ENTRY" in repo_check_text
