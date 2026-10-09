@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:2059-2070 | severity=high | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, qwen_qwen3_7-plus]\n  PROBLEM: The test-name patterns do not match parameterized pytest names containing square brackets, so the failing test name and its covered subjects may not be added to the heal scope.\n  WHY: Parameterized failures can leave the scope without the subjects the test covers; severity differs across reviewers, with the highest assessment being MAJOR and lower assessments described as low or NIT.\n- scripts/workflow_failure_heal.py:3427-3433 | severity=high | confidence=[5]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: Ambiguous test names are filtered against a global set of reported files rather than the file reported for that specific failure.\n  WHY: If another failing test reports a file that also defines the ambiguous name, that file and its mapped subjects can enter the edit scope even though the ambiguous test was not reported there.\n- scripts/workflow_failure_heal.py:3429-3433 | severity=high | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: When a failing test name has exactly one match at the scope commit, the code keeps that match without checking whether the log reported that file for the test.\n  WHY: A name from a shard-runner failure can add its defining file to scope even when the log did not associate that file with the failure.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/workflow_failure_heal.py:2060-2070 | confidence=[3]\n  PROBLEM: The pytest FAILED pattern does not match parameterized test names containing square brackets, and the JSON patterns also miss them.\n  WHY: A parameterized failure may not add its test name and covered subjects to the heal scope; the scope falls back to the base tests/** glob, which is narrower but still functional.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal.py:2060-2070 | confidence=[4]\n  PROBLEM: The regex patterns do not match parameterized tests whose names contain square brackets.\n  WHY: Parameterized failing tests are not extracted from the log, so the heal scope may not cover the subjects associated with them.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal.py:3427-3433 in `_cmd_heal_scope` (LAST RUN DIFF block) | severity=high | confidence=[5]\n  PROBLEM: Ambiguous test names are filtered against a global reported_files set rather than the files reported for that specific name.\n  WHY: A different reported failure can cause an unrelated matching file and its mapped subjects to enter the heal scope.\n- scripts/workflow_failure_heal.py:2059-2066 `_FAILING_TEST_PATTERNS` regex character class `test_[A-Za-z0-9_]{1,160}` | severity=high | confidence=[4]\n  PROBLEM: The test-name capture rejects parameterized suffixes such as `[bar]`.\n  WHY: The test file may enter scope, but its mapped subject scripts or workflows are not added for the parameterized failure.\n- scripts/workflow_failure_heal.py:3429-3433 in `_cmd_heal_scope` (LAST RUN DIFF block) | severity=high | confidence=[4]\n  PROBLEM: A test name with exactly one match is kept without checking whether the log reported that file for the name.\n  WHY: A shard-runner failure can add the name's defining file to scope even when the log did not associate that file with the failure.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal.py:3427-3433 | severity=high | confidence=[5]\n  PROBLEM: Ambiguous test names are matched against the global set of reported files, not the file reported for that specific failure.\n  WHY: Both files can pass the ambiguity filter, allowing the healer to edit code unrelated to the reported failure.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- extract_failing_tests lines 2078-2090 and _cmd_heal_scope lines 3427-3433 | severity=high | confidence=[5]\n  PROBLEM: Ambiguous test names are checked against a global set of reported files rather than preserving which file reported each name.\n  WHY: The scope can include subjects from a file where that specific test was not reported as failing.\n- _FAILING_TEST_PATTERNS regex definitions lines 2060-2070 | severity=low | confidence=[4]\n  PROBLEM: The test-name regex patterns do not match parameterized test names containing square brackets.\n  WHY: Parameterized failures are not extracted, so the automated heal scope may not cover their associated subjects.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "0542e5b80b09e2515f082e75f0c270c63ef8fe65506282108ed061a4562291f2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6947,
+    "run_id": "37956383904",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37956383904",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009164121_ccd00145d8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6947,
+    "run_id": "37956383904"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T16:41:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
