@@ -20,6 +20,10 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "unblock_scan.py"
 POLLER = ROOT / "scripts" / "orchestrate_poll_process.sh"
 POLL_WORKFLOW = ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
+if str(ROOT / "tests") not in sys.path:
+	sys.path.insert(0, str(ROOT / "tests"))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
+
 SPEC = importlib.util.spec_from_file_location("unblock_scan", SCRIPT)
 scan = importlib.util.module_from_spec(SPEC)
 sys.modules["unblock_scan"] = scan
@@ -559,7 +563,7 @@ def test_hand_overs_add_a_scanned_label_or_failed_state() -> None:
 	assert text.count('unblock_handover_judge_output "llm_failed"') == 1
 	assert text.count('unblock_handover_judge_output "unparseable"') == 1
 	assert text.count("unblock_handover_merge_deferral ") == 2
-	review = (ROOT / ".github/workflows/review_autofix.yml").read_text(encoding="utf-8")
+	review = expanded_review_autofix_text()
 	assert "llm_failed*|json_parse_failed*|missing_followup_details|merged_pr_unsafe_action|auto_merge_disabled)" in review
 	heal = (ROOT / "scripts/workflow_failure_heal_intake.sh").read_text(encoding="utf-8")
 	assert 'gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${SOURCE_REPO}" --add-label "${ESCALATED_LABEL}"' in heal
