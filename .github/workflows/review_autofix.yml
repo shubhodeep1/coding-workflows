@@ -3111,7 +3111,7 @@ jobs:
           fi
 
       - name: Install OpenCode CLI
-        uses: shubhodeep1/coding-workflows/.github/actions/install-opencode@28f5134003514b5cf31fb8ae52778c2be79d8fde
+        uses: shubhodeep1/coding-workflows/.github/actions/install-opencode@0e8d83a7bc8c05218b77026899c8d53f45ab921f
         with:
           opencode_version: ${{ env.OPENCODE_VERSION }}
 

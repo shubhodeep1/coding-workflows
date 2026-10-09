@@ -2844,7 +2844,7 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert "Create Codex config" not in workflow
 	assert ".codex/config.toml" not in workflow
 	opencode_install = _step_block("Install OpenCode CLI")
-	assert "install-opencode@28f5134003514b5cf31fb8ae52778c2be79d8fde" in opencode_install
+	assert "install-opencode@0e8d83a7bc8c05218b77026899c8d53f45ab921f" in opencode_install
 	assert "opencode_version: ${{ env.OPENCODE_VERSION }}" in opencode_install
 	assert "continue-on-error" not in opencode_install
 
