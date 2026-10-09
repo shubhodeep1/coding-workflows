@@ -7288,13 +7288,19 @@ def _run_dependency_install_step(
 	repo_files: dict[str, str],
 	*,
 	pytest_importable: bool,
+	extra_env: dict[str, str] | None = None,
+	pip_stub_body: str | None = None,
+	extra_stubs: dict[str, str] | None = None,
 ) -> dict[str, str]:
 	"""Execute the container's dependency-install body against a synthetic repo.
 
 	`pip` and `python3` are stubbed on PATH so nothing is really installed:
 	the `python3` stub reports pytest importability from `pytest_importable`
 	and records every invocation.  Returns the step's stdout/stderr under
-	"output" and the recorded stub invocations under "calls".
+	"output", the recorded stub invocations under "calls" and the wall time
+	in seconds under "elapsed". `extra_env` reaches the body the way the
+	helper's `--env` flags do inside the container; `pip_stub_body` replaces
+	the `pip` stub and `extra_stubs` adds further PATH stubs.
 	"""
 	workflow_step = _step_run_script("Install project dependencies (best-effort)")
 	assert 'review_untrusted_sandbox.sh" prepare' in workflow_step
@@ -7317,7 +7323,9 @@ def _run_dependency_install_step(
 		script_path = root / "step.sh"
 		script_path.write_text(script)
 		(bin_dir / "pip").write_text(
-			'#!/bin/sh\necho "pip $*" >> "$STUB_CALL_LOG"\nexit 0\n'
+			pip_stub_body
+			if pip_stub_body is not None
+			else '#!/bin/sh\necho "pip $*" >> "$STUB_CALL_LOG"\nexit 0\n'
 		)
 		(bin_dir / "python3").write_text(
 			"#!/bin/sh\n"
@@ -7328,11 +7336,17 @@ def _run_dependency_install_step(
 			"esac\n"
 			"exit 0\n" % (0 if pytest_importable else 1)
 		)
-		for stub in ("pip", "python3"):
+		for stub_name, stub_body in (extra_stubs or {}).items():
+			(bin_dir / stub_name).write_text(stub_body)
+		for stub in ("pip", "python3", *(extra_stubs or {})):
 			(bin_dir / stub).chmod(0o755)
 		env = _git_clean_env()
+		env.pop("REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED", None)
+		env.pop("REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS", None)
+		env.update(extra_env or {})
 		env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
 		env["STUB_CALL_LOG"] = str(log_path)
+		started = time.monotonic()
 		completed = subprocess.run(
 			["bash", str(script_path)],
 			cwd=str(repo),
@@ -7345,6 +7359,7 @@ def _run_dependency_install_step(
 			"output": completed.stdout + completed.stderr,
 			"calls": log_path.read_text() if log_path.exists() else "",
 			"returncode": str(completed.returncode),
+			"elapsed": str(time.monotonic() - started),
 		}
 
 
@@ -7399,6 +7414,131 @@ def test_dependency_install_skips_pytest_bootstrap_for_non_pytest_repos() -> Non
 		pytest_importable=False,
 	)
 	assert "-m pip install pytest" not in result["calls"], result["calls"]
+
+
+# Issue #6835: a pip stub that stalls on `-r requirements.txt` stands in for a
+# registry hang through the dependency proxy.
+_STALLING_PIP_STUB = (
+	"#!/bin/sh\n"
+	'echo "pip $*" >> "$STUB_CALL_LOG"\n'
+	'case "$*" in *-r*) exec sleep 120 ;; esac\n'
+	"exit 0\n"
+)
+
+
+def test_dependency_install_stalled_optional_install_times_out_when_bounded() -> None:
+	"""A stalled optional install warns and continues instead of eating the
+	outer 900s isolation timeout (which is fatal) when the flag is on."""
+	result = _run_dependency_install_step(
+		{
+			"requirements.txt": "requests\n",
+			"pyproject.toml": "[tool.pytest.ini_options]\n",
+		},
+		pytest_importable=False,
+		extra_env={
+			"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": "true",
+			"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "3",
+		},
+		pip_stub_body=_STALLING_PIP_STUB,
+	)
+	assert result["returncode"] == "0", result["output"]
+	assert float(result["elapsed"]) < 30, result
+	assert "Review dependency install timed out (step=pip_requirements" in result["output"], result["output"]
+	assert "Some project dependencies could not be installed" in result["output"], result["output"]
+	assert (
+		"-m pip install pytest" in result["calls"]
+		or "skipped (step=pytest_bootstrap" in result["output"]
+	), result
+
+
+def test_dependency_install_unbounded_when_flag_disabled() -> None:
+	"""Off by default: no `timeout` wrapper and the same stub calls as before."""
+	timeout_stub = '#!/bin/sh\necho "timeout $*" >> "$STUB_CALL_LOG"\nexit 99\n'
+	repo = {"requirements.txt": "requests\n", "pyproject.toml": "[tool.pytest.ini_options]\n"}
+	for extra_env in ({}, {"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": "false"}):
+		result = _run_dependency_install_step(
+			repo,
+			pytest_importable=False,
+			extra_env=extra_env,
+			extra_stubs={"timeout": timeout_stub},
+		)
+		assert result["returncode"] == "0", result["output"]
+		assert "timeout " not in result["calls"], result["calls"]
+		assert "pip install -r requirements.txt" in result["calls"], result["calls"]
+		assert "python3 -m pip install pytest" in result["calls"], result["calls"]
+		assert "--user --break-system-packages pytest" in result["calls"], result["calls"]
+		assert "Review dependency install" not in result["output"], result["output"]
+
+
+def test_dependency_install_budget_exhausted_skips_remaining_steps() -> None:
+	result = _run_dependency_install_step(
+		{"requirements.txt": "requests\n", "pyproject.toml": "[tool.pytest.ini_options]\n"},
+		pytest_importable=False,
+		extra_env={
+			"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": "true",
+			"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "1",
+		},
+		pip_stub_body=_STALLING_PIP_STUB,
+	)
+	assert result["returncode"] == "0", result["output"]
+	assert "skipped (step=pytest_bootstrap" in result["output"], result["output"]
+	assert "-m pip install pytest" not in result["calls"], result["calls"]
+	assert "pytest is declared by this repository but could not be installed" in result["output"], result["output"]
+
+
+def test_review_sandbox_bounded_install_flag_contract() -> None:
+	helper = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert '"${REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED:-false}"' in helper
+	assert 'bounded_deps_budget="${REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS:-600}"' in helper
+	assert '--env "REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED=${bounded_deps_enabled}"' in helper
+	assert '--env "REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS=${bounded_deps_budget}"' in helper
+	# Isolation failures stay fatal.
+	assert "python3 -m venv --system-site-packages /source/.review-venv || exit 1" in helper
+	assert "timeout --signal=TERM --kill-after=10s 900s env -i" in helper
+	assert "|| { echo '::error::Review dependency isolation failed' >&2; exit 1; }" in helper
+	assert 'review_untrusted_workspace.py" refresh "${workspace}"' in helper
+	block = _step_block("Install project dependencies (best-effort)")
+	assert (
+		"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED: ${{ vars.REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED || 'false' }}"
+		in block
+	)
+	assert (
+		"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS: ${{ vars.REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS || '600' }}"
+		in block
+	)
+
+
+def test_review_sandbox_bounded_install_host_normalization() -> None:
+	helper = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	start = helper.index("\tbounded_deps_enabled=false\n")
+	end_marker = '\tbounded_deps_budget="$((10#${bounded_deps_budget}))"\n'
+	snippet = helper[start:helper.index(end_marker) + len(end_marker)]
+	snippet += 'printf "%s %s\\n" "${bounded_deps_enabled}" "${bounded_deps_budget}"\n'
+	cases = [
+		({}, "false 600", False),
+		({"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": "TRUE"}, "true 600", False),
+		({"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": "maybe"}, "false 600", False),
+		({"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "0300"}, "false 300", False),
+		({"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "abc"}, "false 600", True),
+		({"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "0"}, "false 600", True),
+		({"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "9999"}, "false 600", True),
+		({"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "99999999999999999999"}, "false 600", True),
+	]
+	for extra, expected, warns in cases:
+		env = _git_clean_env()
+		env.pop("REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED", None)
+		env.pop("REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS", None)
+		env.update(extra)
+		completed = subprocess.run(
+			["bash", "-c", "set -euo pipefail\n" + snippet],
+			env=env,
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		assert completed.returncode == 0, (extra, completed.stderr)
+		assert completed.stdout.strip() == expected, (extra, completed.stdout)
+		assert ("::warning::" in completed.stderr) == warns, (extra, completed.stderr)
 
 
 def test_deterministic_skip_merge_is_bound_to_gate_evaluated_head_sha() -> None:
@@ -8212,6 +8352,11 @@ def main() -> int:
 	test_dependency_install_bootstraps_pytest_for_nested_conftest()
 	test_dependency_install_skips_pytest_bootstrap_when_already_importable()
 	test_dependency_install_skips_pytest_bootstrap_for_non_pytest_repos()
+	test_dependency_install_stalled_optional_install_times_out_when_bounded()
+	test_dependency_install_unbounded_when_flag_disabled()
+	test_dependency_install_budget_exhausted_skips_remaining_steps()
+	test_review_sandbox_bounded_install_flag_contract()
+	test_review_sandbox_bounded_install_host_normalization()
 	test_deterministic_skip_merge_is_bound_to_gate_evaluated_head_sha()
 	test_codex_agent_auto_merge_helper_is_bound_to_reviewed_head_sha()
 	test_review_blocked_judge_merges_are_bound_to_judged_head_sha()
