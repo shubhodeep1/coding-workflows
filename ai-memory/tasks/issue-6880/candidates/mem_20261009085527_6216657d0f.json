@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which behavior should the keep_fixing round cap have once it is spent, for low/medium findings? (High, critical and unrated stay blocking with no waivers in every option.)\nChoices:\nA. Do what the issue says: convert low and medium keep_fixing to accept_with_followup (a waiver plus a deferred advisory). If the verdict terminalizes, record no waivers. Rewrite the #6539 medium test at 6261-6324, and change README.md, agents.md and the exhaustion-judge prompt so they no longer say \"the cap never accepts a finding\".\nB. Convert only low keep_fixing to accept_with_followup. Medium keeps converting to fail, so the medium test at 6261-6324 stays as it is. Make the low tests (6391+) pass and add a docs exception for low severity.\nC. Keep the current #6539 policy: low/medium keep_fixing still converts to fail. Change the #6729 low tests (6391-6414 and the mixed test at 6416+) to expect `fail` and no waivers. Leave the docs and prompt alone. (RECOMMENDED)\n**Note:** Option C means the \"Fix\" text in this issue is not carried out. Choose A if #6729 was a deliberate decision to accept findings at the cap.",
+  "fingerprint": "d1d06eceee395581913b9d4bdeae628191408cac58a528ce41bd64f928165eaf",
+  "lineage": {
+    "issue_number": 6880,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37907364111",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37907364111",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009085527_6216657d0f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6880,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37907364111"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6880 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T08:55:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
