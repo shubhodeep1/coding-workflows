@@ -1193,5 +1193,192 @@ esac
 			self.assertFalse(capture_path.exists())
 
 
+def _run_collect_stage(*, parent_body: str) -> tuple[subprocess.CompletedProcess[str], dict[str, str], dict]:
+	"""Run scripts/check_failure_triage.sh (stage=collect) for a failing CI check on
+	PR #17, whose head branch is ai/issue-41, against a fake ``gh`` that serves
+	the PR, its source issue #41 with ``parent_body``, and an empty open-triage
+	list. Returns the process, the GITHUB_OUTPUT map, and the collected
+	triage_metadata.json (empty when the script exited before writing it)."""
+	temp_dir = tempfile.TemporaryDirectory(prefix="check-triage-lineage-")
+	temp_path = Path(temp_dir.name)
+	bin_dir = temp_path / "bin"
+	bin_dir.mkdir()
+	trusted = temp_path / "trusted"
+	(trusted / "prompts").mkdir(parents=True)
+	(trusted / "unattended_system_instructions.md").write_text("instructions\n", encoding="utf-8")
+	(trusted / "prompts" / "mode-check-failure-triage.txt").write_text("prompt\n", encoding="utf-8")
+	runtime_dir = temp_path / "runtime"
+	output_path = temp_path / "github-output"
+	(temp_path / "parent_body.txt").write_text(parent_body, encoding="utf-8")
+	pr_payload = json.dumps({
+		"state": "open",
+		"title": "AI implementation for issue #41",
+		"html_url": "https://github.com/owner/repo/pull/17",
+		"body": "",
+		"head": {"ref": "ai/issue-41", "sha": "a" * 40, "repo": {"full_name": "owner/repo"}},
+	})
+	_write_executable(
+		bin_dir / "gh",
+		"""#!/usr/bin/env bash
+set -euo pipefail
+case "$*" in
+  "api repos/owner/repo/pulls/17") printf '%s\\n' "${MOCK_PR_PAYLOAD}" ;;
+  "api repos/owner/repo/issues/41") jq -n --rawfile body "${MOCK_PARENT_BODY_FILE}" '{number: 41, body: $body}' ;;
+  "api --paginate --method GET repos/owner/repo/issues "*) printf '[]\\n' ;;
+  "label create "*) ;;
+  *) printf 'unexpected gh call: %s\\n' "$*" >&2; exit 2 ;;
+esac
+""",
+	)
+	_write_executable(bin_dir / "sleep", "#!/usr/bin/env bash\nexit 0\n")
+	env = os.environ.copy()
+	env.pop("BASH_ENV", None)
+	env.pop("ENV", None)
+	for name in ("GH_TOKEN", "GITHUB_TOKEN", "TG_BOT_SECRET", "TG_CHAT_ID", "TG_ADMIN_CHAT_ID"):
+		env.pop(name, None)
+	env.update(
+		{
+			"CHECK_FAILURE_TRIAGE_ENABLED": "true",
+			"CHECK_RUNS_AUTOFIX_ENABLED": "false",
+			"CHECK_TRIAGE_CHECK_CONCLUSION": "failure",
+			"CHECK_TRIAGE_CHECK_NAME": "CI",
+			"CHECK_TRIAGE_DETAILS_URL": "https://github.com/owner/repo/actions/runs/1",
+			"CHECK_TRIAGE_HEAD_SHA": "a" * 40,
+			"CHECK_TRIAGE_PR_NUMBER": "17",
+			"CHECK_TRIAGE_STAGE": "collect",
+			"CHECK_TRIAGE_TRUSTED_SUPPORT_DIR": str(trusted),
+			"GH_RETRY_MAX_ATTEMPTS": "1",
+			"GITHUB_OUTPUT": str(output_path),
+			"GITHUB_REPOSITORY": "owner/repo",
+			"GITHUB_RUN_ID": "1",
+			"MOCK_PARENT_BODY_FILE": str(temp_path / "parent_body.txt"),
+			"MOCK_PR_PAYLOAD": pr_payload,
+			"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+			"RUNTIME_DIR": str(runtime_dir),
+		}
+	)
+	proc = subprocess.run(
+		["bash", "--noprofile", "--norc", str(TRIAGE_SCRIPT_PATH)],
+		cwd=REPO_ROOT,
+		env=env,
+		capture_output=True,
+		text=True,
+		encoding="utf-8",
+	)
+	outputs: dict[str, str] = {}
+	if output_path.exists():
+		for line in output_path.read_text(encoding="utf-8").splitlines():
+			key, value = line.split("=", 1)
+			outputs[key] = value
+	metadata: dict = {}
+	metadata_path = runtime_dir / "triage_metadata.json"
+	if metadata_path.exists() and metadata_path.stat().st_size:
+		metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+	temp_dir.cleanup()
+	return proc, outputs, metadata
+
+
+class CheckFailureTriageLineageTests(unittest.TestCase):
+	"""An ai/issue-<N> fix PR inherits its generation from a triage source issue;
+	any other ai/issue-<N> PR (clarify/plan/implement, activation gaps, an
+	orchestrator wave) starts a new lineage at generation 1 instead of crashing
+	the triage run (#6273 made every failed CI run reach this code path)."""
+
+	def test_source_issue_without_triage_marker_starts_generation_one(self) -> None:
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body="<!-- ai:activation-fix:v1 source=pr-6271 -->\n## Activation gaps\n",
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn(
+			"CHECK_TRIAGE lineage parent_issue=41 parent_gen=none gen=1 root=",
+			proc.stdout,
+		)
+		self.assertIn("reason=source_issue_not_triage", proc.stdout)
+		self.assertNotIn("parent_generation_missing_or_malformed", proc.stdout)
+		self.assertEqual(outputs.get("ready"), "true")
+		self.assertEqual(metadata.get("generation"), "1")
+		self.assertEqual(metadata.get("head_ref"), "ai/issue-41")
+
+	def test_source_issue_mentioning_marker_in_prose_starts_generation_one(self) -> None:
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body="The triage marker `<!-- check-failure-triage:gen=N -->` is missing here.\n",
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("reason=source_issue_not_triage", proc.stdout)
+		self.assertEqual(outputs.get("ready"), "true")
+		self.assertEqual(metadata.get("generation"), "1")
+
+	def test_source_issue_mentioning_numeric_marker_inline_starts_generation_one(self) -> None:
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body="The marker `<!-- check-failure-triage:gen=2 -->` and root=" + "c" * 64 + " are quoted here.\n",
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("parent_gen=none gen=1", proc.stdout)
+		self.assertIn("reason=source_issue_not_triage", proc.stdout)
+		self.assertEqual(outputs.get("ready"), "true")
+		self.assertEqual(metadata.get("generation"), "1")
+		self.assertNotEqual(metadata.get("root"), "c" * 64)
+
+	def test_source_issue_with_marker_inside_fenced_block_starts_generation_one(self) -> None:
+		for fenced in ("<!-- check-failure-triage:gen=3 -->", "<!-- check-failure-triage:gen=abc -->"):
+			with self.subTest(fenced=fenced):
+				proc, outputs, metadata = _run_collect_stage(
+					parent_body=(
+						"## Example\n```markdown\n" + fenced + "\n"
+						"<!-- check-failure-triage:root=" + "d" * 64 + " -->\n```\n"
+						"~~~~\n" + fenced + "\n~~~\nstill fenced\n~~~~\n"
+					),
+				)
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertIn("parent_gen=none gen=1", proc.stdout)
+				self.assertIn("reason=source_issue_not_triage", proc.stdout)
+				self.assertEqual(outputs.get("ready"), "true")
+				self.assertEqual(metadata.get("generation"), "1")
+				self.assertNotEqual(metadata.get("root"), "d" * 64)
+
+	def test_source_issue_with_marker_in_indented_code_block_starts_generation_one(self) -> None:
+		for indent in ("    ", "\t", "      "):
+			for marker in ("<!-- check-failure-triage:gen=3 -->", "<!-- check-failure-triage:gen=abc -->"):
+				with self.subTest(indent=repr(indent), marker=marker):
+					proc, outputs, metadata = _run_collect_stage(
+						parent_body=(
+							"## Example\n\n" + indent + marker + "\n"
+							+ indent + "<!-- check-failure-triage:root=" + "e" * 64 + " -->\n"
+						),
+					)
+					self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+					self.assertIn("parent_gen=none gen=1", proc.stdout)
+					self.assertIn("reason=source_issue_not_triage", proc.stdout)
+					self.assertEqual(outputs.get("ready"), "true")
+					self.assertEqual(metadata.get("generation"), "1")
+					self.assertNotEqual(metadata.get("root"), "e" * 64)
+
+	def test_source_issue_with_triage_marker_increments_generation(self) -> None:
+		root = "b" * 64
+		proc, outputs, metadata = _run_collect_stage(
+			parent_body=f"<!-- check-failure-triage:gen=2 -->\n<!-- check-failure-triage:root={root} -->\n",
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn(f"CHECK_TRIAGE lineage parent_issue=41 parent_gen=2 gen=3 root={root}", proc.stdout)
+		self.assertEqual(outputs.get("ready"), "true")
+		self.assertEqual(metadata.get("generation"), "3")
+		self.assertEqual(metadata.get("root"), root)
+
+	def test_source_issue_with_malformed_triage_marker_still_fails(self) -> None:
+		# The large body (well past the pipe buffer) guards against the marker
+		# check misreading a SIGPIPE under pipefail as "no marker".
+		for parent_body in (
+			"<!-- check-failure-triage:gen=abc -->\n",
+			"<!-- check-failure-triage:gen=abc -->\n" + "filler line\n" * 40000,
+		):
+			with self.subTest(body_bytes=len(parent_body)):
+				proc, outputs, metadata = _run_collect_stage(parent_body=parent_body)
+				self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+				self.assertIn("CHECK_TRIAGE error parent_generation_missing_or_malformed issue=41", proc.stdout)
+				self.assertNotIn("source_issue_not_triage", proc.stdout)
+				self.assertNotIn("ready", outputs)
+				self.assertEqual(metadata, {})
+
+
 if __name__ == "__main__":
 	unittest.main()

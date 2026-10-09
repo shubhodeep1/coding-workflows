@@ -687,7 +687,7 @@ jobs:
       - name: Workflow failure heal contract and driver tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal.py tests/test_workflow_failure_heal_pr_reconcile.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_workflow_failure_heal.py tests/test_workflow_failure_heal_pr_reconcile.py tests/test_heal_isolated_editor.py
 
       - name: CI failure workflow_run trigger tests
         run: |
@@ -1157,6 +1157,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_review_blocked_budget.py
 
+      - name: Test-and-mark-stable test_repo allowlist contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_test_and_mark_stable_test_repo_allowlist.py
+
       - name: Test-and-mark-stable closed-PR single-fetch regression test
         run: |
           set -euo pipefail
@@ -1177,10 +1182,20 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_phantom_review_run_filter.py
 
+      - name: Test-and-mark-stable git-config credential dump guard test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_no_git_config_value_dump.py
+
       - name: Mark-stable release-tag refspec contract test
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mark_stable_release_tag_refspec_contract.py
+
+      - name: Consumer secrets propagation contract tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_propagate_consumer_secrets.py
 
       - name: Soft-error report consolidator unit tests
         run: |
@@ -1250,6 +1265,7 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_retro.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_log_analysis_failure_contract.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_stage_workflow_log_bundle.py
 
       - name: Semantic cache unit tests
         run: |

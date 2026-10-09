@@ -144,6 +144,15 @@ Phases of the unattended pipeline (each is a separate workflow file under
     from the sandbox; host CI still runs it. The isolation helpers must already
     exist in the verified workflow support commit; a PR's own copies are review data,
    not executable support, so review fails closed until that commit lands.
+   A rejected transfer names its cause without printing untrusted paths:
+   known rejections carry fixed `reason=<r>` tokens, and unsafe directories
+   also carry `category=<c> depth=<d>`. Transfer diagnostics are written to
+   an attempt-scoped `review_sandbox_transfer_reason_<output>` file and
+   archived as `review_sandbox_transfer_reason_<attempt>.txt` (#6413).
+   The smoke-only canary pre-write (`IS_SMOKE_TEST=true`) is seeded into the
+   sandbox source with `scripts/review_untrusted_sandbox.sh seed`, not written
+   to the host, so validated transfer publishes it; a host write after the
+   snapshot is refused as `host_baseline_changed` (run 37669315093).
    PR-backed `claude/*` heads take the normal review path like every other
    PR: the GPT editor, conflict resolver, review-blocked judge and auto-merge
    all run on them. The former Claude-fixer hand-off (the reviewer panel
@@ -166,8 +175,7 @@ Phases of the unattended pipeline (each is a separate workflow file under
     unsupported path is refused and, for integration-sync PRs, counted toward
     the existing resolver retry-state escalation. `check-paths` writes a
     per-path report: when every rejected path is a plainly named file the
-    sandbox policy keeps on the host (for example
-    `.claude/hooks/pr_merge_status_guard.py`), the resolver logs one
+    sandbox policy keeps on the host, the resolver logs one
     `::error::Conflict resolver: host-only conflicted path(s) need a manual
     merge: <paths>` line and fails closed with `sandbox_path_host_only`;
     symlinks and odd names keep the nameless `sandbox_path_unsupported`. No
@@ -293,9 +301,9 @@ Phases of the unattended pipeline (each is a separate workflow file under
     and sends a `repository_dispatch` (`workflow-failure-heal`) to this repo;
     the intake fetches the failed job logs, diagnoses against the source at
     that SHA, classifies (`workflow-defect` / `inconclusive` → issue here with
-    `Target branch: stable`, or the PR's head branch when a review/autofix
-    failure comes from a PR in this repo, since that run executed the PR's
-    own workflow code; `consumer-app-defect` → issue in the consumer;
+    `Target branch: stable`, or the verified support ref's branch for a
+    review/autofix failure from a PR in this repo (`stable` or main ancestor),
+    falling back to the PR head if unresolved; `consumer-app-defect` → issue in the consumer;
     `consumer-config` / `transient` → Telegram + comment only;
     `already-fixed` → Telegram + comment only, honoured only when its
     `## Fixed by` section cites a commit that landed after the failing SHA,
@@ -405,7 +413,13 @@ Phases of the unattended pipeline (each is a separate workflow file under
     linked failed run. Label-escalation `issue` and `pull_request` reports are
     outside this gate even when their issue/comment-derived `run_refs` are
     present; those reports can still fetch unverified job logs with the shared
-    `GH_PAT`.
+    `GH_PAT`. The intake redacts logs before disk, then writes a scope marker
+    derived from verified paths (or leaves it absent when unresolved). Heal
+    planning uses the read-only container; implementation verifies the PAT
+    author's unedited marker and runs an editor in a disposable container,
+    transferring only scoped paths. An unverifiable marker latches
+    `ai:needs-human`; the reporter skips that pipeline-authored refusal.
+    Ordinary issue editors remain unchanged.
     A report whose failure reason is `identical_failure_cap`, or a generation
     > 1 of its lineage, is deterministic (`is_deterministic_failure`): the
     intake never files it as `transient` (remaps to `inconclusive`,
@@ -422,6 +436,16 @@ Phases of the unattended pipeline (each is a separate workflow file under
     Claude issue intake / queue / pickup / dispatcher machinery and its
     `ai:claude*` labels were removed (see the `retired_labels` bullet under
     "Implement scope-lock label").
+16. **consumer secrets propagation** (`propagate-consumer-secrets.yml`,
+    `scripts/propagate_consumer_secrets.sh`) — on every push to `main` that
+    changes `.github/ai/consumer_repos.json` (the `/seed-repo` registration
+    PR, CLAUDE.md §14) it copies `CHECK_TRIAGE_ISSUES_TOKEN`, `GH_PAT`,
+    `OPENROUTER_API_KEY` and `TG_BOT_SECRET` from this repository's secrets
+    into the newly registered consumers via `gh secret set` (value on
+    stdin, never logged); `workflow_dispatch` with an empty `targets` input
+    backfills every registry entry. Unregistered targets are refused; a
+    failed or unverified write leaves the run red and sends a Telegram
+    CRITICAL. Tests: `tests/test_propagate_consumer_secrets.py`.
 
 Planner scope note: the Boil the Lake rule is a planner-side instruction for
 choosing the right scope mode up front, while CLAUDE.md §5 / the unattended
@@ -557,6 +581,18 @@ a new value, add it to the appropriate overrides file with a
   `sha256(salt.encode("utf-8"))`, including the empty-string salt.
 
 ## Implement scope-lock label
+
+Implement's automation-path grant guard runs on the existing `/approved` entry
+point before and during commit. Staged `.github/`, `.claude/`, `scripts/`,
+`prompts/`, and `workflow-templates/` files (case-insensitive, including rename
+sources) require `ALLOW_WORKFLOW_EDITS=true` plus an exact `files_touched` entry
+from an issue authored by the GH_PAT login or OWNER/MEMBER/COLLABORATOR.
+The host-only issue-bound grant file is built before the isolated editor runs;
+missing metadata, identity or helper fails closed only for automation paths.
+Both sites reuse `scope_violation_*` outputs and `ai:scope-blocked`; the
+`guard=automation-path` rejection is not eligible for unblock overrides.
+General `ENFORCE_FILES_TOUCHED` and `ALLOW_OUT_OF_SCOPE_FILES` switches cannot
+bypass it. Log prefix: `IMPLEMENT_AUTOMATION_PATH_GUARD`.
 
 - When `SCOPE_LOCK_LABEL_ENABLED=true`, `implement.yml` recognizes one active
   dynamic issue label of the form `ai:scope:<glob>` and copies the glob into
@@ -978,6 +1014,12 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   redirection (`2 >out`, `'2'>out`) is a push refspec with the normal check;
   only digits glued to it (`2>&1`) are a file descriptor. An
   unresolved push source asks rather than checking the session checkout's HEAD.
+  Shell `-c` scripts (`bash`, `sh`, `zsh`, `dash`, also by absolute path),
+  `eval` arguments and `$(...)` / backtick / `<(...)` bodies are parsed up to
+  three levels deep and get the same check; wrapped text that cannot be read
+  (an expansion in command position, an unterminated body or heredoc, deeper
+  nesting) asks when it could run a Git write. Prefix wrappers such as `sudo`
+  or `xargs` and `... | bash` are still not inspected.
 - **No MCP tools inside.** Serena (and any other MCP server) is not configured
   in the container, so isolated prompts carry no Serena hints. Semble results
   are rendered into prompts on the host and are unaffected.
@@ -1658,13 +1700,18 @@ filed before the merge (#4090 / #4091) without a human.
 how many judge rounds can grant another fix cycle: `judge_round` beyond the cap
 puts `keep_fixing_available: false` and `max_keep_fixing_rounds` in the
 diagnostics, and after verdict normalization the poller rewrites low/medium
-`keep_fixing` decisions to `accept_with_followup` with the justification
-prefixed `[keep_fixing capped after <c> judge round(s); converted to advisory
-follow-up]` (`SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=<N>
-round=<r> cap=<c> converted=<n>`), so the accept-all path runs and the project
-completes with deferred advisories only if no high, critical, or unrated
-`keep_fixing` finding remains. A remaining blocking `keep_fixing` verdict
-terminalizes without waiving it or creating another fix issue. Project #3965
+`keep_fixing` decisions to `fail` with the justification prefixed
+`[keep_fixing capped after <c> judge round(s); converted to fail — needs a fix
+or a human waiver]` (`SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=<N>
+round=<r> cap=<c> converted=<n>`), so the round takes the `fail` path and the
+project terminalizes as `ai:security-pass-failed` (no waiver rows, no
+advisories, even for findings the judge accepted in the same verdict). A
+remaining high, critical, or unrated `keep_fixing` decision terminalizes the
+pass without waiving it or creating another fix issue. The cap never accepts
+a finding (#6539: the earlier conversion to `accept_with_followup` recorded a
+high-severity finding as passed); recovery is the unblock judge, the
+engine-change auto-reset, `/re-security-pass` or `/security-pass-waive`.
+Project #3965
 ran fix cycles 6 and 7 on a 5-cycle budget because rounds 1 and 2 each chose
 `keep_fixing` and nothing bounded the sequence.
 Waivers travel to the engine as `SECURITY_AUDIT_WAIVED_FINDINGS`
@@ -1951,12 +1998,16 @@ and shipped:
 - `WORKFLOW_HEAL_PHASE_REPORT`
 - `WORKFLOW_HEAL_PR_RECONCILE`
 - `WORKFLOW_HEAL`
+- `HEAL_ISOLATED_EDITOR`
+- `HEAL_SCOPE_REFUSED`
+- `WORKFLOW_HEAL_EVIDENCE`
 - `AUTOFIX_FINGERPRINT`
 - `AUTOFIX_FINGERPRINT_CAP_TRIPPED`
 - `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`
 - `AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED`
 - `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP`
 - `REVIEW_EDITOR_PREFLIGHT`
+- `IMPLEMENT_AUTOMATION_PATH_GUARD`
 - `STAGE_MAIN_PINNED_DIVERGENCE`
 - `WORKTREE_REGISTER`
 - `WORKTREE_DEREGISTER`
@@ -1971,6 +2022,7 @@ and shipped:
 - `CLAUDE_FIXER_AUTO_MERGE`
 - `RB_JUDGE_ISOLATION`
 - `CONSOLIDATOR_ISOLATION`
+- `REVIEW_SANDBOX_CLEANUP` (`scripts/review_untrusted_sandbox.sh cleanup`, run after `Commit changes`: `reason=root_pattern_mismatch|root_outside_runner_temp|image_marker_missing|baseline_missing|remove_permission_repaired|remove_failed cause=permission_denied|not_empty|busy|other`; path-free, teed into `editor_stage_stderr.txt`)
 - `JUDGE_ISOLATION`
 - `JUDGE_ENGINE_LABELS` (`scripts/orchestrate_poll_process.sh`: `role= outcome=forced_codex reason=issue_labels_unavailable` when a per-issue label snapshot cannot be verified).
 - `SECURITY_AUDIT_TARGET`
@@ -2179,12 +2231,16 @@ LOG_PREFIX.name=WORKFLOW_HEAL_AUTOFIX_REPORT
 LOG_PREFIX.name=WORKFLOW_HEAL_PHASE_REPORT
 LOG_PREFIX.name=WORKFLOW_HEAL_PR_RECONCILE
 LOG_PREFIX.name=WORKFLOW_HEAL
+LOG_PREFIX.name=HEAL_ISOLATED_EDITOR
+LOG_PREFIX.name=HEAL_SCOPE_REFUSED
+LOG_PREFIX.name=WORKFLOW_HEAL_EVIDENCE
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_TRIPPED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED
 LOG_PREFIX.name=NOOP_RECOVERY_SKIP_FINGERPRINT_CAP
 LOG_PREFIX.name=REVIEW_EDITOR_PREFLIGHT
+LOG_PREFIX.name=IMPLEMENT_AUTOMATION_PATH_GUARD
 LOG_PREFIX.name=STAGE_MAIN_PINNED_DIVERGENCE
 LOG_PREFIX.name=WORKTREE_REGISTER
 LOG_PREFIX.name=WORKTREE_DEREGISTER
@@ -2199,6 +2255,7 @@ LOG_PREFIX.name=AUTOFIX_FAILURE_HEADLINE
 LOG_PREFIX.name=CLAUDE_FIXER_AUTO_MERGE
 LOG_PREFIX.name=RB_JUDGE_ISOLATION
 LOG_PREFIX.name=CONSOLIDATOR_ISOLATION
+LOG_PREFIX.name=REVIEW_SANDBOX_CLEANUP
 LOG_PREFIX.name=JUDGE_ISOLATION
 LOG_PREFIX.name=JUDGE_ENGINE_LABELS
 LOG_PREFIX.name=SECURITY_AUDIT_TARGET
@@ -2345,7 +2402,7 @@ depend on it.
 | `REVIEW_APPROVAL_RUBRIC_ENABLED` | `false` | Enable logical review-state output from the review-blocked judge and outbound PR-review mapping through `post_review_comment.sh --review-state`. |
 | `REVIEW_BREAK_GLASS_ENABLED` | `false` | Enable the anchored `@codex break-glass` override scan; when active it downgrades only the outbound `REQUEST_CHANGES` event to comment-only. |
 | `CI_POLL_TEST_SHARDS` | `4` | Parallel local shards for the orchestrate-poll module in each group of CI's `orchestrate-poll` matrix and in the release gates' `validate-scripts` job. `1` is sequential; invalid values warn and fall back to `1`. |
-| `CONFLICT_MANIFEST_UNION_ENABLED` | `true` | Resolve two-sided `.ai/.workspace_source_manifest.txt` content conflicts (index stages `1 2 3` or add/add `2 3`) and gitignored one-sided delete/modify conflicts before the model resolver; manifest-only conflicts are committed as `[ai-merge-resolve]`. Other manifest conflicts, including disabled and integration-sync cases, fail preparation with `Manifest union-merge: unhandled reason=...` instead of dispatching a resolver whose sandbox excludes `.ai/`. Before PR #6438 the stage check never matched, so the manifest always reached the resolver, whose sandbox cannot carry `.ai/`. |
+| `CONFLICT_MANIFEST_UNION_ENABLED` | `true` | Resolve two-sided `.ai/.workspace_source_manifest.txt` content conflicts (index stages `1 2 3` or add/add `2 3`) and gitignored one-sided delete/modify conflicts before the model resolver; manifest-only conflicts are committed as `[ai-merge-resolve]`. Other manifest conflicts, including disabled cases and integration-sync branches with further unmerged paths (a manifest-only conflict on `orchestrator/project-*` is resolved like any other branch, but committed only after the integration fingerprint check passes on the merged tree; an unavailable check or a violation fails with `reason=integration_sync detail=fingerprint_unverified|fingerprint_violations`), fail preparation with `Manifest union-merge: unhandled reason=...` instead of dispatching a resolver whose sandbox excludes `.ai/`. Before PR #6438 the stage check never matched, so the manifest always reached the resolver, whose sandbox cannot carry `.ai/`. |
 | `MERGE_TRAIN_IGNORE_PATHS` | `.ai/.workspace_source_manifest.txt` | Exact repo-relative paths excluded from merge-train overlap checks in gate and release. Comma/newline-separated; `none` (or an empty helper env value) restores legacy behavior. Glob entries are rejected. |
 | `REVIEW_RESOLVE_THREADS_ENABLED` | `true` | Resolve PR review threads the editor audited in its `PR comment audit:` section. Keyed on comment id, so two comments at one path cannot resolve each other; `ignored` entries get the editor's reason as a reply before resolving. |
 | `REVIEW_RESOLVE_THREADS_MAX` | `50` | Per-run cap on resolved review threads; anything above it is warned about and left open. |
@@ -2416,10 +2473,10 @@ depend on it.
 - `.github/workflows/security-audit.yml` (weekly `0 8 * * 0` plus `workflow_dispatch` plus `workflow_call`, gated by `SECURITY_AUDIT_ENABLED`, default `true`) is a default-branch maintenance audit that runs on the source repo and, via the synced `workflow-templates/ai-security-audit.yml` wrapper, on every consumer repo against its own default branch (consumer runs stage this repo's `scripts/` + `prompts/` from a `@stable` support checkout into `SECURITY_AUDIT_SUPPORT_DIR` and need `OPENROUTER_API_KEY`, optionally `GH_PAT`). It runs `scripts/security_audit.sh` with `prompts/mode-security-audit.txt`, appends dated findings sections to the stable `AI Security Audit Tracker` issue (`ai:security-audit`, marker `<!-- ai:security-audit-tracker:v1 -->`), and opens one `ai:security` follow-up issue for every finding that survives confidence-gate + false-positive-exclusion filtering, with no per-run or weekly cap (the former 3-per-week cap deferred findings silently: tracker #3576, run 35996690244, surfaced 5 and filed 3). Findings whose `<!-- ai:security-finding:<id> -->` marker is already on any `ai:security` issue, open or closed, are skipped; that dedupe reads every such issue with one paginated REST listing (`gh api --paginate --slurp repos/<repo>/issues?labels=ai:security&state=all`), so it no longer stops at 200 issues, and it ignores pull requests. The orchestrator's `[security-pass] Advisory: …` issues carry the same marker and label, so the audit never re-files a finding the security pass already filed. Each completed default-branch run records the audited HEAD on the tracker body (marker `<!-- ai:security-audit-last-sha:… -->`) unless a full scan skipped over-cap text: findings and the partial-coverage tracker comment still post, a WARNING is sent, the SHA remains unchanged, and `<!-- ai:security-audit-partial-coverage:v1 -->` is stored on the tracker body. While this marker remains, subsequent default-branch runs repeat a full scan even when HEAD is unchanged or incremental diff scope would normally apply; a complete scan clears it when advancing the SHA. Binary skips do not hold the marker. Otherwise unchanged HEAD skips (`SECURITY_AUDIT_SKIP_IF_UNCHANGED=true`, log-only skip) and changed HEAD diff-scopes the audit (`SECURITY_AUDIT_INCREMENTAL=true`; the post-filter drops findings citing unchanged files as `suppressed_out_of_scope`; first runs, history rewrites, and >200-file diffs fall back to the full scope). `.github/workflows/internal-clarify.yml` skips `ai:security-audit` issues so tracker bookkeeping never recurses into the normal clarify/plan pipeline.
 - **Security dependency hold (issue #4934).** When the audit files a second finding for a file it already filed one for, the new `ai:security` issue carries one `- Depends on: #<n>` line. `scripts/security_dependency.py security-dependency --issue-json <file> --repo <owner/repo> --issue-number <n> [--number-only]` prints `{"status": "none" | "ready" | "held", "reason", "depends_on"}`; a malformed, repeated or unverifiable declaration is `held` (fail closed). Clarify (`Decide clarify route`), both implement gates and the standalone stall poller hold such an issue until #<n> is closed with `ai:merged`; the poller then posts one `/reclarify` with the `<!-- ai:security-dependency-released:<n> -->` marker. The check costs one issue read, only for an issue that declares a dependency. It moved unchanged from the retired Claude issue router.
 - **Standalone clarify auto-decide (port P3).** On an issue that is not `ai:orchestrator-managed`, `clarify.yml`'s "Standalone auto-decide" step answers freshly posted questions with each question's RECOMMENDED option: `scripts/auto_decisions.py parse` builds the `Q1: A` lines and `scripts/orchestrate_parse_and_post_answer.sh` posts them with its loop guard (an exhausted guard still escalates to `ai:blocked`). Every pick becomes an `AD-<n>` entry (question, pick, why, alternatives) in the single trusted `<!-- ai:auto-decisions:v1 -->` comment, edited in place; `implement.yml` copies the entries into the PR body with `#<digits>` broken up. The existing clarify comment read is now paginated once (one API call per page), shared with semantic-cache history and auto-decide; the prompt still gets only the oldest 50, while the auto-decide fallback guard counts prior auto-answers from the full snapshot. If pagination fails, clarification stops before the answer; if the full history cannot be read at auto-decide time, it skips the answer. Skipped after a human `/reclarify`, when a question has no RECOMMENDED option, or with `STANDALONE_AUTO_DECIDE_ENABLED=false`. Costs one comment write for the answer and one for the AD comment; no additional comment read at the auto-decide step.
-- **Unblock judge (Phase 7).** Markers, all trusted only when posted by the pipeline's own login (the GH_PAT user): `<!-- ai:unblock:v1 item=<n> stop=<id> fingerprint=<12 hex> verdict=<v> round=<k>[ override=bulk_delete] -->` as the last line of each verdict comment, on the item and, for a project's item, on the tracking issue (the ledger `scripts/unblock_ledger.py` counts rounds and never repeats a verdict per fingerprint from these); `<!-- ai:unblock-wait:v1 item=<n> fixup=<m>[ done] -->` (or `reason=invalid_verdict`) while a fix-up is pending, refreshed in place; `<!-- ai:unblock-fixup:v1 item=<n> round=<k> -->` opening a standalone fix-up issue; `<!-- ai:unblock-fixup-request:v1 item=<n> id=unblock-<n>-r<k> -->` on a tracking issue, which `handle_unblock_judge_project_hooks` files into the current wave (local id in `issue_number_map`, so once only); `<!-- ai:unblock-override-used:v1 comment=<id> -->`, which `implement.yml` posts when it spends a bulk-delete override. PR-derived issues carry the audit-only `<!-- ai:unblock-provenance:v1 source_pr=<n> author=<login> head_repo=<owner/repo> head_sha=<sha> -->`; issue-creating verdicts for PRs without a verified same-repository head and trusted author close the PR without creating an issue. Label `ai:unblock-closed` marks an item the judge closed; on a tracking issue the poller sets state `abandoned` and closes the issue only when the newest pipeline-authored verdict marker for that tracking issue is `close`, no later pipeline-authored V1 or V2 state comment supersedes it, and the project is still `failed` with the verdict's stop label (unless it is already `abandoned` for a close retry). State field `judge_output_failures` counts project-judge runs with no usable output (`JUDGE_OUTPUT_FAILURE_MAX`). Kill switch `UNBLOCK_JUDGE_ENABLED` (default `true`).
+- **Unblock judge (Phase 7).** Markers, all trusted only when posted by the pipeline's own login (the GH_PAT user): `<!-- ai:unblock:v1 item=<n> stop=<id> fingerprint=<12 hex> verdict=<v> round=<k>[ override=bulk_delete] -->` as the last line of each verdict comment, on the item and, for a project's item, on the tracking issue (the ledger `scripts/unblock_ledger.py` counts rounds and never repeats a verdict per fingerprint from these); `<!-- ai:unblock-wait:v1 item=<n> fixup=<m>[ done] -->` (or `reason=invalid_verdict`) while a fix-up is pending, refreshed in place; `<!-- ai:unblock-fixup:v1 item=<n> round=<k> -->` opening a standalone fix-up issue; `<!-- ai:unblock-fixup-request:v1 item=<n> id=unblock-<n>-r<k> -->` on a tracking issue, which `handle_unblock_judge_project_hooks` files into the current wave (local id in `issue_number_map`, so once only); `<!-- ai:unblock-override-used:v1 comment=<id> -->`, which `implement.yml` posts when it spends a bulk-delete override. PR-derived issues carry the audit-only `<!-- ai:unblock-provenance:v1 source_pr=<n> author=<login> head_repo=<owner/repo> head_sha=<sha> -->`; issue-creating verdicts for PRs without a verified same-repository head and trusted author close the PR without creating an issue. Label `ai:unblock-closed` marks an item the judge closed; on a tracking issue the poller sets state `abandoned` and closes the issue only when the newest pipeline-authored verdict marker for that tracking issue is `close`, no later pipeline-authored V1 or V2 state comment supersedes it, and the project is still `failed` with the verdict's stop label (unless it is already `abandoned` for a close retry). State field `judge_output_failures` counts project-judge runs with no usable output (`JUDGE_OUTPUT_FAILURE_MAX`). The `close` verdict is offered and accepted only after a fixed terminal condition (item or project round cap, 24 hours still blocked after the last round, or an exhausted menu; `TERMINAL_REASONS` in `scripts/unblock_ledger.py`), never on the model's choice, so comment text cannot make the judge abandon an item (#6557). Before recording a close, the judge re-reads the item and requires it to be open with the same block stop (`reason=block_state_changed` / `block_state_recheck_unavailable` otherwise, no marker posted). Kill switch `UNBLOCK_JUDGE_ENABLED` (default `true`).
   The poller reads V1/V2 state only from the authenticated GH_PAT login's comments, skipping the tracking issue if identity is unavailable. Project reset commands require that login or a human OWNER/MEMBER/COLLABORATOR; outsider comments cannot resume failed work.
   An unavailable identity sends one fail-open CRITICAL Telegram alert per tick when Telegram is configured; the login probe is cached across projects.
-  For `ai:security` issues, a terminal verdict leaves the issue open with `ai:unblock-closed` and its block label; reissue copies a validated finding marker, `ai:security` label, dependency and integration-branch metadata onto a standalone replacement before closing the original. A malformed finding marker or other metadata prevents replacement creation, and a create response missing the requested label leaves the original open.
+  For `ai:security` issues, a terminal verdict leaves the issue open with `ai:unblock-closed` and its block label; reissue copies a validated finding marker, `ai:security` label, dependency and integration-branch metadata onto a standalone replacement before closing the original. A malformed finding marker or other metadata prevents replacement creation, and a create response missing the requested label leaves the original open. `accept_with_followup` is never offered for an `ai:security` issue (`unblock_ledger.py decide --security-issue`), and `unblock_actions.py` refuses it again with a keep-open comment and a WARNING, so a finding is never waived with an unbound follow-up (#6541). A tracked (project) security reissue puts the finding marker in its fix-up request, and the poller labels that successor `ai:security`; a tracked security issue without a valid marker is not split.
   An unlabeled tracking issue uses the `project-failed` fallback only when its latest V2 write from the pipeline login is complete and still `failed`; the judge's `--require-latest` read rejects an incomplete or malformed newer write instead of falling back to an older failed state. The judge re-reads that state before recording a verdict and again after label-catalog preparation, directly before adding `ai:unblock-closed`. A late change after the verdict comment may leave a recorded but unacted-on verdict. A failed project stays eligible for the unblock scan even if it carries an unverified `ai:unblock-closed` label.
   Guard rejection comments also end with `<!-- ai:guard-rejection:v1 item=<n> guard=<scope|scope-lock|destructive> reason=<reason> run=<id> count=<n> truncated=<true|false> paths=<base64-json-array> -->`. Only the newest trusted, complete, unused `scope` or `bulk-delete` rejection can authorize an `override_guard`; scope paths must match the verdict exactly, while bulk-delete paths may be a verified subset. `scope-lock` cannot be overridden through `files_touched`.
   The failing-run log in the judge prompt is taken only from a pipeline-login comment (not a verdict or state comment), after a metadata read binds the run to the item: same repository, not a fork, and a PR head SHA/branch, `[pr:<n>]` or `[tracking:<n>]` run name, or an `ai/issue-<n>` or `orchestrator/project-<n>` branch. A matching issue title alone cannot bind a run; at most three candidates are tried, otherwise the log is omitted (`op=run_log outcome=omitted`).
@@ -2514,6 +2571,7 @@ Active workflow files (regenerate with `make generate`):
 .github/workflows/orchestrate_poll.yml
 .github/workflows/plan.yml
 .github/workflows/promote-main-to-stable.yml
+.github/workflows/propagate-consumer-secrets.yml
 .github/workflows/review_autofix.yml
 .github/workflows/review_autofix_sweep.yml
 .github/workflows/review_rb_judge_dispatch.yml

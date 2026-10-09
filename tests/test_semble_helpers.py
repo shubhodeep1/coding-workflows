@@ -169,8 +169,11 @@ def test_lazy_build_timeout_records_one_failed_bootstrap() -> None:
 		helpers_dir.mkdir()
 		(helpers_dir / "semble_helpers.sh").write_bytes(HELPERS.read_bytes())
 		_write_executable(helpers_dir / "install_semble.sh", "#!/bin/bash\nprintf 'available\\n' > \"${SEMBLE_INSTALL_RESULT_FILE}\"\n")
-		_write_executable(helpers_dir / "build_semble_wrapper.sh", "#!/bin/bash\nsleep 2\n")
-		result = _run_bash(f"source '{helpers_dir}/semble_helpers.sh'\nsemble_ensure_ready timeout || true\n", root, {"RUNTIME_DIR": str(root), "SEMBLE_ENABLED": "true", "SEMBLE_BOOTSTRAP_MODE": "lazy", "SEMBLE_LAZY_BOOTSTRAP_TIMEOUT_SECS": "1", "SEMBLE_BOOTSTRAP_STATE_FILE": str(root / "bootstrap.state")})
+		_write_executable(helpers_dir / "build_semble_wrapper.sh", "#!/bin/bash\nsleep 6\n")
+		# The deadline has one-second granularity: a 1s budget can expire
+		# before the builder starts (remaining=0 logs index_ms=0). With 3s the
+		# builder always starts and is killed by the timeout.
+		result = _run_bash(f"source '{helpers_dir}/semble_helpers.sh'\nsemble_ensure_ready timeout || true\n", root, {"RUNTIME_DIR": str(root), "SEMBLE_ENABLED": "true", "SEMBLE_BOOTSTRAP_MODE": "lazy", "SEMBLE_LAZY_BOOTSTRAP_TIMEOUT_SECS": "3", "SEMBLE_BOOTSTRAP_STATE_FILE": str(root / "bootstrap.state")})
 		assert result.returncode == 0, result.stderr
 		assert (root / "bootstrap.state").read_text().startswith("state=failed\n")
 		assert result.stderr.count("SEMBLE_BOOTSTRAP mode=lazy state=failed") == 1

@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -26,6 +27,9 @@ SETTINGS_PATH = REPO_ROOT / ".claude" / "settings.json"
 TEMPLATE_SETTINGS_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "settings.json"
 CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
 TEMPLATE_CLAUDE_MD = REPO_ROOT / "workflow-templates" / "CLAUDE.md"
+_WORKER_ACCOUNT_ID = "a" * 32
+_OTHER_WORKER_ACCOUNT_ID = "b" * 32
+_WORKER_URL = f"https://api.cloudflare.com/client/v4/accounts/{_WORKER_ACCOUNT_ID}/workers/scripts/name"
 
 
 def _load_guard():
@@ -166,15 +170,57 @@ def test_redirection_keeps_numeric_push_refspecs(command: str, expected_branch: 
 @pytest.mark.parametrize(
 	"command",
 	[
-		'curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id -H "Authorization: Bearer ${DIGITALOCEAN_ACCESS_TOKEN}" -d @spec.json',
-		'curl -q -sS -X POST https://api.cloudflare.com/client/v4/accounts/id/workers/scripts/name --header="Authorization: Bearer ${CF_TOKEN}" --data-binary=@worker.js',
-		'curl -q -sS -X PATCH https://api.digitalocean.com/v2/apps/id -d \'{"method":"-X DELETE"}\'',
-		"curl -q -sS -X POST https://api.cloudflare.com/client/v4/workers -d 'prices $(USD) use `literal` markers'",
-		"curl -q -sS -X POST https://api.cloudflare.com/client/v4/~health -H 'Authorization: Bearer token'",
+		f'curl -q -sS -X POST {_WORKER_URL} --header="Authorization: Bearer ${{CF_TOKEN}}" --data-binary=@worker.js',
+		f"curl -q -sS -X PUT {_WORKER_URL}/content -H 'Content-Type: text/javascript' -d @w.js",
+		f"curl -q -sS -X PATCH {_WORKER_URL}/settings -d 'prices $(USD) use `literal` markers'",
+		f"curl -q -sS -X POST {_WORKER_URL.replace(_WORKER_ACCOUNT_ID, _WORKER_ACCOUNT_ID.upper())} -d @worker.js",
 	],
 )
-def test_canonical_api_writes_do_not_request_extra_confirmation(command: str) -> None:
+def test_canonical_api_writes_do_not_request_extra_confirmation(command: str, monkeypatch) -> None:
+	monkeypatch.setenv("FT_GAMES_CF", f"{_WORKER_ACCOUNT_ID}:tok")
+	monkeypatch.delenv("FUNTOKEN_IO_CF", raising=False)
 	assert not guard._api_write_requires_confirmation(command)
+
+
+@pytest.mark.parametrize("command", [
+	'curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id -H "Authorization: Bearer ${DIGITALOCEAN_ACCESS_TOKEN}" -d @spec.json',
+	'curl -q -sS -X POST https://api.digitalocean.com/v2/apps/id -d @spec.json',
+	'curl -q -sS -X PATCH https://api.digitalocean.com/v2/apps/id -d \'{"method":"-X DELETE"}\'',
+	"curl -q -sS -X POST https://api.cloudflare.com/client/v4/workers -d 'prices $(USD) use `literal` markers'",
+	"curl -q -sS -X POST https://api.cloudflare.com/client/v4/~health -H 'Authorization: Bearer token'",
+	"curl -q -sS -X POST https://api.cloudflare.com/client/v4/accounts/id/workers/scripts/name -d @worker.js",
+	"curl -q -sS -X POST https://api.cloudflare.com/client/v4/zones/zone/dns_records -d @zone.json",
+	"curl -q -sS -X PATCH https://api.cloudflare.com/client/v4/zones/zone/settings -d @zone.json",
+	"curl -q -sS -X POST https://api.cloudflare.com/client/v4/zones/zone/workers/routes -d @routes.json",
+	f"curl -q -sS -X POST {_WORKER_URL.replace(_WORKER_ACCOUNT_ID, _OTHER_WORKER_ACCOUNT_ID)} -d @worker.js",
+	f"curl -q -sS -X PUT {_WORKER_URL}/secrets -d @secret.json",
+	f"curl -q -sS -X PUT {_WORKER_URL}/secrets/NAME -d @secret.json",
+	f"curl -q -sS -X PUT {_WORKER_URL}/../../../zones/zone/dns_records -d @zone.json",
+	f"curl -q -sS -X PUT {_WORKER_URL}/%2e%2e -d @worker.js",
+	f"curl -q -sS -X PUT {_WORKER_URL}?x=1 -d @worker.js",
+	f"curl -q -sS -X PUT {_WORKER_URL}/ -d @worker.js",
+	f"curl -q -sS -X PUT {_WORKER_URL.replace('/workers/scripts/name', '/workers/domains')} -d @worker.js",
+	f"curl -q -sS -X PUT {_WORKER_URL.replace('/workers/scripts/name', '/members')} -d @worker.js",
+])
+def test_api_write_destination_requires_confirmation(command: str, monkeypatch) -> None:
+	monkeypatch.setenv("FT_GAMES_CF", f"{_WORKER_ACCOUNT_ID}:tok")
+	monkeypatch.delenv("FUNTOKEN_IO_CF", raising=False)
+	assert guard._api_write_requires_confirmation(command)
+
+
+@pytest.mark.parametrize("credential", [None, _WORKER_ACCOUNT_ID, "a" * 31 + ":tok", _WORKER_ACCOUNT_ID + ":"])
+def test_worker_write_requires_well_formed_credential(credential: str | None, monkeypatch) -> None:
+	monkeypatch.delenv("FT_GAMES_CF", raising=False)
+	monkeypatch.delenv("FUNTOKEN_IO_CF", raising=False)
+	if credential is not None:
+		monkeypatch.setenv("FT_GAMES_CF", credential)
+	assert guard._api_write_requires_confirmation(f"curl -q -sS -X POST {_WORKER_URL} -d @worker.js")
+
+
+def test_worker_write_accepts_either_matching_account(monkeypatch) -> None:
+	monkeypatch.setenv("FT_GAMES_CF", "malformed")
+	monkeypatch.setenv("FUNTOKEN_IO_CF", f"{_WORKER_ACCOUNT_ID}:tok")
+	assert not guard._api_write_requires_confirmation(f"curl -q -sS -X POST {_WORKER_URL} -d @worker.js")
 
 
 @pytest.mark.parametrize(
@@ -213,9 +259,13 @@ def test_canonical_api_writes_do_not_request_extra_confirmation(command: str) ->
 		"curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id -d 'unterminated",
 		"  curl -q -sS -X POST https://api.cloudflare.com/client/v4/workers -H 'unterminated",
 		"curl -q -sS -X PUT https://api.digitalocean.com/v2/apps/id>/tmp/response",
+		f"curl -q -sS -X POST {_WORKER_URL} -X DELETE",
+		f"curl -q -sS -X POST {_WORKER_URL} --url https://example.com/",
+		f"curl -q -sS -X POST {_WORKER_URL} -d @worker.js; echo done",
 	],
 )
-def test_noncanonical_api_writes_request_confirmation(command: str) -> None:
+def test_noncanonical_api_writes_request_confirmation(command: str, monkeypatch) -> None:
+	monkeypatch.setenv("FT_GAMES_CF", f"{_WORKER_ACCOUNT_ID}:tok")
 	assert guard._api_write_requires_confirmation(command)
 
 
@@ -232,6 +282,36 @@ def test_noncanonical_api_writes_request_confirmation(command: str) -> None:
 	],
 )
 def test_noncanonical_api_write_emits_ask_decision(command: str, capsys) -> None:
+	assert guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}}) == (0, "")
+	output = json.loads(capsys.readouterr().out)
+	assert output["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+@pytest.mark.parametrize(("url", "expected_reason"), [
+	("https://api.digitalocean.com/v2/apps/id", "CLAUDE.md §22.B"),
+	(_WORKER_URL.replace(_WORKER_ACCOUNT_ID, _OTHER_WORKER_ACCOUNT_ID), "FUNTOKEN_IO_CF or FT_GAMES_CF"),
+	(f"{_WORKER_URL}/secrets/NAME", "Worker secret writes need approval"),
+])
+def test_api_write_reason_emits_ask_decision(url: str, expected_reason: str, monkeypatch, capsys) -> None:
+	monkeypatch.setenv("FT_GAMES_CF", f"{_WORKER_ACCOUNT_ID}:tok")
+	monkeypatch.delenv("FUNTOKEN_IO_CF", raising=False)
+	command = f"curl -q -sS -X PUT {url} -d @body.json"
+	assert guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}}) == (0, "")
+	output = json.loads(capsys.readouterr().out)
+	assert output["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert expected_reason in output["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_api_write_reason_does_not_leak_credential(monkeypatch, capsys) -> None:
+	monkeypatch.setenv("FT_GAMES_CF", f"{_WORKER_ACCOUNT_ID}:SENTINELTOKEN")
+	command = f"curl -q -sS -X PUT {_WORKER_URL}/secrets -d @body.json"
+	guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}})
+	assert "SENTINELTOKEN" not in capsys.readouterr().out
+
+
+def test_api_write_confirmation_ignores_merge_guard_kill_switch(monkeypatch, capsys) -> None:
+	monkeypatch.setenv("CLAUDE_PR_MERGE_GUARD", "off")
+	command = "curl -q -sS -X POST https://api.cloudflare.com/client/v4/zones/zone/dns_records -d @body.json"
 	assert guard.evaluate({"tool_name": "Bash", "tool_input": {"command": command}}) == (0, "")
 	output = json.loads(capsys.readouterr().out)
 	assert output["hookSpecificOutput"]["permissionDecision"] == "ask"
@@ -1391,6 +1471,11 @@ def test_push_to_unverified_repository_requires_confirmation(merged_branch_repo,
 	"git --config-env=remote.origin.url=REMOTE_URL push origin HEAD:feature/x",
 	"git --config-env remote.origin.url=REMOTE_URL push origin HEAD:feature/x",
 	"git -c user.name=bot push origin HEAD:feature/x",
+	# #6336/#6639 exploit shape: inline remote + --repo with the default branch as positional.
+	"git -c remote.main.url=https://github.com/other/repo -c push.default=current push --repo=origin main",
+	"git -c push.default=current push --repo=origin main",
+	"git -cremote.main.url=https://github.com/other/repo push --repo origin main",
+	"git --config-env=remote.main.url=REMOTE_URL push --repo=origin main",
 ])
 def test_per_command_config_push_asks_without_using_origin_prs(merged_branch_repo, monkeypatch, capsys, command: str) -> None:
 	repo, _ = merged_branch_repo
@@ -1629,17 +1714,21 @@ def test_absolute_chdir_inside_shell_control_checks_selected_repo(merged_branch_
 def test_non_env_uncertain_configured_commit_keeps_warning_only_behavior(merged_branch_repo, monkeypatch, capsys) -> None:
 	"""Per-command config on an unresolved commit asks (author decision Q30 = A).
 
-	The name predates that decision and is kept per CLAUDE.md §6. The commit
-	is not blocked (no merged PR), but it asks for confirmation.
+	The name predates that decision and is kept per CLAUDE.md §6. A `git -c`
+	commit whose directory is unknown only because of shell control flow is
+	never blocked on the session checkout alone (code 0, no message), but it
+	asks: per-command configuration may select another checkout
+	(core.worktree), so the hook cannot vouch for it.
 	"""
 	repo, _ = merged_branch_repo
 	monkeypatch.setattr(guard, "query_pull_requests", lambda *args: [])
 	code, message = guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
-		"tool_input": {"command": "if true; then git -c user.name=bot commit -m x"}})
+		"tool_input": {"command": "if true; then git -c user.name=bot commit -m x; fi"}})
 	assert code == 0 and message == ""
-	response = json.loads(capsys.readouterr().out.splitlines()[-1])
-	assert "could not resolve git commit directory" in response["hookSpecificOutput"]["permissionDecisionReason"]
-	assert response["hookSpecificOutput"]["permissionDecision"] == "ask"
+	decision = json.loads(capsys.readouterr().out.splitlines()[-1])
+	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "could not resolve git commit directory" in decision["hookSpecificOutput"]["permissionDecisionReason"]
+	assert "per-command Git configuration may select another checkout" in decision["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_env_chdir_does_not_change_subsequent_command_directory(merged_branch_repo, monkeypatch) -> None:
@@ -2173,17 +2262,15 @@ def test_conditional_cd_or_exit_keeps_worktree_after_semicolon(merged_branch_rep
 def test_api_write_allowlist_disables_implicit_curl_config(path: Path) -> None:
 	settings = json.loads(path.read_text(encoding="utf-8"))
 	allow = settings["permissions"]["allow"]
-	assert allow[:6] == [
-		"Bash(curl -q -sS -X PUT https://api.digitalocean.com/*)",
-		"Bash(curl -q -sS -X POST https://api.digitalocean.com/*)",
-		"Bash(curl -q -sS -X PATCH https://api.digitalocean.com/*)",
-		"Bash(curl -q -sS -X PUT https://api.cloudflare.com/*)",
-		"Bash(curl -q -sS -X POST https://api.cloudflare.com/*)",
-		"Bash(curl -q -sS -X PATCH https://api.cloudflare.com/*)",
+	assert allow[:3] == [
+		"Bash(curl -q -sS -X PUT https://api.cloudflare.com/client/v4/accounts/*)",
+		"Bash(curl -q -sS -X POST https://api.cloudflare.com/client/v4/accounts/*)",
+		"Bash(curl -q -sS -X PATCH https://api.cloudflare.com/client/v4/accounts/*)",
 	]
 	# Every allowed curl rule keeps `-q` so an implicit ~/.curlrc cannot alter the call.
 	curl_rules = [rule for rule in allow if rule.startswith("Bash(curl")]
-	assert curl_rules == allow[:6]
+	assert curl_rules == allow[:3]
+	assert not any("api.digitalocean.com" in rule for rule in allow)
 
 
 @pytest.mark.parametrize("path", [SETTINGS_PATH, TEMPLATE_SETTINGS_PATH])
@@ -2767,3 +2854,291 @@ def test_strip_data_heredoc_bodies_keeps_operator_and_shell_bodies() -> None:
 	piped = "cat <<'EOF' | bash\ngit push\nEOF"
 	assert guard._strip_data_heredoc_bodies(piped) == piped
 	assert guard._strip_data_heredoc_bodies("env cat <<'EOF'\nit's\nEOF") == "env cat <<'EOF'"
+
+
+# ──────────────────────────────────────────────────────────────────
+# Shell wrappers: `bash -c`, `eval`, `$(...)`, backticks, `<(...)`
+# (security finding merged-pr-guard-misses-wrapped-git). Every case runs
+# against both copies; the live copy must match the template byte for byte.
+# ──────────────────────────────────────────────────────────────────
+
+
+def _load_template_guard():
+	spec = importlib.util.spec_from_file_location("pr_merge_status_guard_template", TEMPLATE_GUARD_PATH)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module
+
+
+template_guard = _load_template_guard()
+WRAPPER_GUARD_COPIES = pytest.mark.parametrize(
+	("guard_module", "hook_path"),
+	[(guard, GUARD_PATH), (template_guard, TEMPLATE_GUARD_PATH)],
+	ids=["live", "template"],
+)
+
+
+def _nested_shell(command: str, levels: int) -> str:
+	for _ in range(levels):
+		command = "bash -c " + shlex.quote(command)
+	return command
+
+
+def _run_hook_at(hook_path: Path, repo: Path, stub_bin: Path, command: str) -> subprocess.CompletedProcess:
+	env = _git_env()
+	env["PATH"] = f"{stub_bin}{os.pathsep}{env.get('PATH', '')}"
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	env.pop("CLAUDE_PR_MERGE_GUARD", None)
+	env["TMPDIR"] = str(repo.parent / "cache")
+	(repo.parent / "cache").mkdir(exist_ok=True)
+	return subprocess.run(
+		[sys.executable, str(hook_path)],
+		input=json.dumps({"tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(repo)}),
+		capture_output=True,
+		text=True,
+		env=env,
+		timeout=60,
+		check=False,
+	)
+
+
+@WRAPPER_GUARD_COPIES
+@pytest.mark.parametrize("command", [
+	"bash -c 'git push origin HEAD:x'",
+	'/bin/sh -c "git commit -m x"',
+	"sh -c 'git commit -m x'",
+	"zsh -lc 'git push'",
+	"bash -e -c 'git push'",
+	"bash -o pipefail -c 'git push'",
+	'eval "git push origin x"',
+	"echo $(git push origin x)",
+	"echo `git push`",
+	"cat <(git push origin x)",
+	"env bash -c 'git push'",
+	"env -S 'bash -c \"git push\"'",
+	"X=$(git commit -m y)",
+	"bash -c \"bash -c 'git push origin x'\"",
+	# A nested shell that reads its script from a heredoc (#6777 review).
+	"bash -c \"bash <<'EOF'\ngit push origin x\nEOF\"",
+	"echo $(bash <<'EOF'\ngit push origin x\nEOF\n)",
+	"bash -c \"cat <<'EOF'\nit's data\nEOF\ngit push origin x\"",
+])
+def test_shell_wrapped_git_writes_are_detected(guard_module, hook_path: Path, command: str) -> None:
+	assert guard_module.git_subcommands(command) & guard_module.GUARDED_SUBCOMMANDS
+
+
+@WRAPPER_GUARD_COPIES
+@pytest.mark.parametrize("command", [
+	"bash -c 'echo hi'",
+	"bash script.sh",
+	"echo '$(git push)'",
+	"echo $(git rev-parse HEAD)",
+	"echo $(( 1 + 2 ))",
+	# A data heredoc inside a wrapper is never run, even when it mentions a push.
+	"bash -c \"python3 <<'EOF'\nprint('git push origin x')\nEOF\"",
+	"bash -c \"python3 <<'EOF'\ngit push origin x\nEOF\"",
+])
+def test_shell_wrappers_without_git_writes_are_ignored(guard_module, hook_path: Path, command: str) -> None:
+	assert not (guard_module.git_subcommands(command) & guard_module.GUARDED_SUBCOMMANDS)
+
+
+HEREDOC_COMMIT = "git commit -m \"$(cat <<'EOF'\nDon't git push from here; it's a commit message.\nEOF\n)\""
+# Covers the `git commit -F -` (message on stdin) form only.
+NESTED_HEREDOC_COMMIT = "bash -c \"git commit -q -F - <<'EOF'\nDon't git push; it's a message.\nEOF\""
+
+
+@WRAPPER_GUARD_COPIES
+def test_heredoc_commit_message_is_not_a_wrapped_write(guard_module, hook_path: Path) -> None:
+	assert guard_module.git_subcommands(HEREDOC_COMMIT) == {"commit"}
+	assert [invocation.warning for invocation in guard_module._guarded_git_invocations(HEREDOC_COMMIT, "/")] == [""]
+
+
+@WRAPPER_GUARD_COPIES
+def test_nested_data_heredoc_commit_is_one_commit(guard_module, hook_path: Path) -> None:
+	invocations = guard_module._guarded_git_invocations(NESTED_HEREDOC_COMMIT, "/")
+	assert [(invocation.subcommand, invocation.warning) for invocation in invocations] == [("commit", "")]
+
+
+@WRAPPER_GUARD_COPIES
+@pytest.mark.parametrize("command", [
+	"bash -c 'git push origin HEAD:feature/x'",
+	"/bin/sh -c 'git push origin HEAD:feature/x'",
+	"/bin/sh -c 'git commit -m x'",
+	'eval "git push origin HEAD:feature/x"',
+	"echo $(git push origin HEAD:feature/x)",
+	"echo `git commit -m x`",
+	_nested_shell("git push origin HEAD:feature/x", 3),
+])
+def test_e2e_blocks_wrapped_write_on_merged_branch(merged_branch_repo, guard_module, hook_path: Path, command: str) -> None:
+	repo, stub_bin = merged_branch_repo
+	proc = _run_hook_at(hook_path, repo, stub_bin, command)
+	assert proc.returncode == 2, proc.stdout + proc.stderr
+	assert "pull/41" in proc.stderr
+
+
+@WRAPPER_GUARD_COPIES
+@pytest.mark.parametrize("command", [
+	"bash -c 'git push origin HEAD:feature/open'",
+	"sh -c 'git push origin HEAD:feature/open'",
+])
+def test_e2e_allows_wrapped_push_to_open_branch(merged_branch_repo, guard_module, hook_path: Path, command: str) -> None:
+	repo, stub_bin = merged_branch_repo
+	_worktree_pr_stub(stub_bin, _git(repo, "rev-parse", "HEAD"))
+	proc = _run_hook_at(hook_path, repo, stub_bin, command)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "permissionDecision" not in proc.stdout
+
+
+@WRAPPER_GUARD_COPIES
+def test_e2e_heredoc_commit_on_rebuilt_branch_does_not_ask(merged_branch_repo, guard_module, hook_path: Path) -> None:
+	repo, stub_bin = merged_branch_repo
+	_git(repo, "checkout", "-B", "feature/x", "main")
+	proc = _run_hook_at(hook_path, repo, stub_bin, HEREDOC_COMMIT)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "permissionDecision" not in proc.stdout
+
+
+@WRAPPER_GUARD_COPIES
+@pytest.mark.parametrize("command", [
+	'eval "$x"',
+	'bash -c "$CMD"',
+	"bash -c 'P=git; $P push origin x'",
+	"echo $(git push",
+	"MSG='git push' bash -c",
+	'echo "$(git push origin "$B")"',
+	_nested_shell("git push origin HEAD:feature/x", 4),
+])
+def test_unreadable_wrapped_write_asks_without_querying_prs(
+	merged_branch_repo, monkeypatch, capsys, guard_module, hook_path: Path, command: str,
+) -> None:
+	repo, _ = merged_branch_repo
+	monkeypatch.setattr(
+		guard_module, "query_pull_requests", lambda *args: pytest.fail("unreadable wrapper must not query origin")
+	)
+	code, message = guard_module.evaluate({"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": command}})
+	assert (code, message) == (0, "")
+	decision = json.loads(capsys.readouterr().out.splitlines()[-1])
+	assert decision["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_shell_wrapper_scanner_reports_unterminated_text() -> None:
+	assert template_guard._scan_shell_text("echo $(git push").unreadable
+	assert template_guard._scan_shell_text("echo `git push").unreadable
+	assert template_guard._scan_shell_text("cat <<EOF\nno terminator").unreadable
+	scan = template_guard._scan_shell_text("a $(b) `c` <(d) \"$(e)\" '$(f)'")
+	assert scan.bodies == ["b", "c", "d", "e"] and not scan.unreadable
+
+
+# ──────────────────────────────────────────────────────────────────
+# Remote writes never trust the TTL cache (#6641, CLAUDE.md §21.D)
+# ──────────────────────────────────────────────────────────────────
+# These tests load the template copy, which carries the fix first; the
+# parity tests above keep the live copy byte-identical to it.
+
+
+def _load_pr_merge_guard_template():
+	spec = importlib.util.spec_from_file_location("pr_merge_status_guard_template", TEMPLATE_GUARD_PATH)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module
+
+
+fresh_state_guard = _load_pr_merge_guard_template()
+
+
+def _cached_allow_live_merged(monkeypatch, merged_sha: str, calls: list[str]) -> None:
+	merged = dict(MERGED_PR, headRefOid=merged_sha)
+	monkeypatch.setattr(fresh_state_guard, "_read_cache", lambda slug, branch: [merged, OPEN_PR])
+	monkeypatch.setattr(fresh_state_guard, "_write_cache", lambda *args: None)
+
+	def listing(slug, branch, cwd):
+		calls.append(branch)
+		return [merged]
+
+	monkeypatch.setattr(fresh_state_guard, "query_pull_requests", listing)
+	monkeypatch.delenv("CLAUDE_PR_MERGE_GUARD", raising=False)
+
+
+def test_push_ignores_cached_open_pr_and_requeries_live(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	calls: list[str] = []
+	_cached_allow_live_merged(monkeypatch, _git(repo, "rev-parse", "HEAD"), calls)
+	code, message = fresh_state_guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push origin HEAD:feature/x"}})
+	assert code == 2, message
+	assert "https://github.com/o/r/pull/41" in message
+	assert calls == ["feature/x"]
+
+
+def test_commit_then_push_reverifies_cached_snapshot_once(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	calls: list[str] = []
+	_cached_allow_live_merged(monkeypatch, _git(repo, "rev-parse", "HEAD"), calls)
+	code, message = fresh_state_guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git commit --allow-empty -m x && git push origin HEAD:feature/x"}})
+	assert code == 2, message
+	assert calls == ["feature/x"]
+
+
+def test_bare_commit_still_uses_a_cached_allow(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	calls: list[str] = []
+	_cached_allow_live_merged(monkeypatch, _git(repo, "rev-parse", "HEAD"), calls)
+	code, _ = fresh_state_guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git commit --allow-empty -m x"}})
+	assert code == 0
+	assert calls == []
+
+
+def test_push_does_not_fall_back_to_cache_when_lookup_fails(merged_branch_repo, monkeypatch, capsys) -> None:
+	repo, _ = merged_branch_repo
+	merged = dict(MERGED_PR, headRefOid=_git(repo, "rev-parse", "HEAD"))
+	monkeypatch.setattr(fresh_state_guard, "_read_cache", lambda slug, branch: [merged, OPEN_PR])
+	monkeypatch.setattr(fresh_state_guard, "_write_cache", lambda *args: None)
+
+	def unavailable(slug, branch, cwd):
+		raise fresh_state_guard.LookupUnavailable("HTTP 403")
+
+	monkeypatch.setattr(fresh_state_guard, "query_pull_requests", unavailable)
+	monkeypatch.setattr(
+		fresh_state_guard,
+		"git_history_verdict",
+		lambda tip, branch, base, cwd: (fresh_state_guard.VERDICT_INCONCLUSIVE, "no evidence"),
+	)
+	monkeypatch.delenv("CLAUDE_PR_MERGE_GUARD", raising=False)
+	code, _ = fresh_state_guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push origin HEAD:feature/x"}})
+	assert code == 0
+	decision = _ask_decision(
+		subprocess.CompletedProcess([], 0, stdout=capsys.readouterr().out, stderr="")
+	)
+	assert decision is not None
+	assert "HTTP 403" in decision["systemMessage"]
+
+
+def test_mcp_push_never_reads_the_cache(monkeypatch, tmp_path: Path) -> None:
+	pull_requests = [MERGED_PR]
+	calls: list[str] = []
+	cache_writes: list[tuple[str, str, list[dict]]] = []
+	monkeypatch.setattr(fresh_state_guard, "repo_slug", lambda cwd: "o/local")
+	monkeypatch.setattr(
+		fresh_state_guard, "_read_cache", lambda slug, branch: pytest.fail("a push must not read the cache")
+	)
+
+	def listing(slug, branch, cwd):
+		calls.append(branch)
+		return pull_requests
+
+	monkeypatch.setattr(fresh_state_guard, "query_pull_requests", listing)
+	monkeypatch.setattr(
+		fresh_state_guard,
+		"_write_cache",
+		lambda slug, branch, entries: cache_writes.append((slug, branch, entries)),
+	)
+	monkeypatch.delenv("CLAUDE_PR_MERGE_GUARD", raising=False)
+	payload = {**_mcp_payload(), "cwd": str(tmp_path)}
+	assert fresh_state_guard.evaluate(payload) == (0, "")
+	assert calls == ["feature/x"]
+	assert cache_writes == [("o/r", "feature/x", pull_requests)]

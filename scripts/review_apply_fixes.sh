@@ -1880,7 +1880,25 @@ if [ "${IS_SMOKE_TEST:-false}" = "true" ]; then
     _expected_run_id="$(grep -oE '^# E2E_EDITOR_BAIT_[0-9]+:' "${_smoke_canary}" \
       | head -1 \
       | sed -E 's/^# E2E_EDITOR_BAIT_([0-9]+):.*/\1/')"
-    if [ -n "${_expected_run_id}" ]; then
+    if [ -n "${_expected_run_id}" ] && [ -n "${REVIEW_SANDBOX_ROOT:-}" ]; then
+      # The isolated review workspace was snapshotted (baseline.json) before
+      # this step. Writing the host canary here made the validated transfer
+      # refuse with host_baseline_changed and the canary was never restored
+      # (release gate run 37669315093, review run 37674139451). Seed the
+      # sandbox source instead; the normal transfer publishes the file. On a
+      # seed failure, never fall back to a host write (it would guarantee
+      # the same rejection) — leave restoration to the model.
+      _smoke_seed_file=""
+      if _smoke_seed_file="$(mktemp "${RUNTIME_DIR:-${TMPDIR:-/tmp}}/smoke-canary-seed.XXXXXX")" \
+         && printf 'status: ok\nrun_id: %s\nupdated-by: ai-pipeline\n' "${_expected_run_id}" > "${_smoke_seed_file}" \
+         && bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" seed tests/e2e_smoke_canary.txt "${_smoke_seed_file}"; then
+        echo "Smoke fixture: seeded deterministic editor pre-write into the isolated review workspace for ${_smoke_canary} (run_id=${_expected_run_id}); the validated transfer publishes it to the host."
+      else
+        echo "::warning::Smoke fixture: could not seed ${_smoke_canary} into the isolated review workspace — falling back to model-driven restoration."
+      fi
+      [ -z "${_smoke_seed_file}" ] || rm -f -- "${_smoke_seed_file}"
+    elif [ -n "${_expected_run_id}" ]; then
+      # No isolated workspace prepared (direct callers): legacy host write.
       printf 'status: ok\nrun_id: %s\nupdated-by: ai-pipeline\n' "${_expected_run_id}" > "${_smoke_canary}"
       echo "Smoke fixture: applied deterministic editor pre-write to ${_smoke_canary} (run_id=${_expected_run_id}); model invocation will see clean tree (mirrors PR #2113 resolver-side fix)."
     else

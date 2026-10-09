@@ -8,6 +8,18 @@
 
 set -euo pipefail
 
+if [ "${HEAL_ROUTE:-false}" = true ]; then
+  HEAL_SCOPE_FILE="${HEAL_SCOPE_FILE:-${RUNNER_TEMP:-/tmp}/heal-scope-${GITHUB_RUN_ID:-local}.txt}"
+  [ -s "${HEAL_SCOPE_FILE}" ] || { echo '::error::Verified heal scope missing; refusing commit.' >&2; exit 1; }
+  export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+  export GIT_CONFIG_COUNT=5
+  export GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null
+  export GIT_CONFIG_KEY_1=core.fsmonitor GIT_CONFIG_VALUE_1=false
+  export GIT_CONFIG_KEY_2=core.attributesFile GIT_CONFIG_VALUE_2=/dev/null
+  export GIT_CONFIG_KEY_3=commit.gpgsign GIT_CONFIG_VALUE_3=false
+  export GIT_CONFIG_KEY_4=diff.external GIT_CONFIG_VALUE_4=''
+fi
+
 STEP_NAME="Commit changes"
 STEP_STDERR_FILE="$(mktemp)"
 CAPTURE_FILE=""
@@ -487,6 +499,60 @@ if [ -n "${deleted_staged}" ]; then
   fi
 fi
 
+# >>> automation-path grant guard (commit) >>>
+# core.quotePath=false keeps non-ASCII names literal; names Git still
+# C-quotes (control characters, quotes, backslashes) start with '"' and
+# are denied below rather than slipping past the prefix match.
+automation_staged="$(git -c core.quotePath=false diff --cached --name-only --no-renames --diff-filter=ACMDT || true)"
+automation_paths="$(printf '%s\n' "${automation_staged}" | grep -iE '^"?(\.github|\.claude|scripts|prompts|workflow-templates)(/|$)' || true)"
+if [ -n "${automation_paths}" ]; then
+  automation_staged_file="$(mktemp "${TMPDIR:-/tmp}/implement-automation-staged.XXXXXX")"
+  printf '%s\n' "${automation_paths}" > "${automation_staged_file}"
+  automation_reason="grant_unavailable"
+  automation_denied="${automation_paths}"
+  automation_rc=127
+  if grep -q '^"' <<< "${automation_paths}"; then
+    automation_rc=30
+    automation_reason="quoted_path"
+  elif [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
+    automation_error_file="$(mktemp "${TMPDIR:-/tmp}/implement-automation-error.XXXXXX")"
+    automation_rc=0
+    automation_denied="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
+      --check-automation-paths --staged-file "${automation_staged_file}" \
+      --automation-grant-file "${AUTOMATION_PATH_GRANT_FILE:-${RUNTIME_DIR:-/nonexistent}/automation_path_grant.json}" \
+      --allow-workflow-edits "${ALLOW_WORKFLOW_EDITS:-false}" --issue-number "${ISSUE_NUMBER}" \
+      2> "${automation_error_file}")" || automation_rc=$?
+    if [ "${automation_rc}" -eq 30 ]; then
+      automation_reason="$(grep -m1 '^reason=' "${automation_error_file}" | cut -d= -f2 || true)"
+    fi
+    rm -f "${automation_error_file}"
+  fi
+  rm -f "${automation_staged_file}"
+  if [ "${automation_rc}" -ne 0 ]; then
+    if [ "${automation_rc}" -ne 30 ] || [ -z "${automation_denied}" ]; then
+      automation_denied="${automation_paths}"
+      automation_reason="guard_error"
+    fi
+    automation_count="$(printf '%s\n' "${automation_denied}" | wc -l | tr -d ' ')"
+    automation_granted="$(jq -r '.paths[]? | strings' "${AUTOMATION_PATH_GRANT_FILE:-${RUNTIME_DIR:-/nonexistent}/automation_path_grant.json}" 2>/dev/null || true)"
+    {
+      echo 'scope_violation_blocked=automation-path'
+      echo "scope_violation_count=${automation_count}"
+      echo 'scope_violation_files<<__SVF_EOF__'
+      printf '%s\n' "${automation_denied}"
+      echo '__SVF_EOF__'
+      echo 'scope_violation_allowlist<<__SVA_EOF__'
+      printf 'reason=%s\n%s\n' "${automation_reason}" "${automation_granted}"
+      echo '__SVA_EOF__'
+    } >> "$GITHUB_OUTPUT"
+    echo "::error::Automation-path grant denied ${automation_count} staged path(s)."
+    echo "IMPLEMENT_AUTOMATION_PATH_GUARD mode=check outcome=rejected reason=${automation_reason} issue=${ISSUE_NUMBER} count=${automation_count}"
+    exit 1
+  fi
+  echo "IMPLEMENT_AUTOMATION_PATH_GUARD mode=check outcome=granted issue=${ISSUE_NUMBER} count=0"
+fi
+# <<< automation-path grant guard (commit) <<<
+
 # >>> files_touched scope-enforcement guard (commit) >>>
 # Mirror of the destructive-commit guard above, for scope drift:
 # reject when the staged change set includes paths the issue's
@@ -496,7 +562,7 @@ fi
 # log-and-allow. On a violation the commit is neither created nor
 # pushed; the "Destructive-commit guard — label + alert on rejection"
 # step labels the issue ai:scope-blocked and alerts.
-if [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ]; then
+if [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ] && [ "${HEAL_ROUTE:-false}" != true ]; then
   echo "::notice::files_touched scope guard disabled (ENFORCE_FILES_TOUCHED='${ENFORCE_FILES_TOUCHED:-true}')."
 else
   scope_staged="$(git diff --cached --name-only --diff-filter=ACMRD || true)"
@@ -506,10 +572,16 @@ else
     printf '%s\n' "${scope_staged}" > "${scope_staged_file}"
     scope_violations=""
     scope_rc=0
+    scope_guard_extra_args=()
+    if [ "${HEAL_ROUTE:-false}" = true ]; then
+      scope_guard_extra_args+=(--strict-allowlist)
+    fi
     if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
       set +e
       scope_violations="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
-        --issue-body-file "${ISSUE_BODY_FILE:-}" \
+        "$(if [ "${HEAL_ROUTE:-false}" = true ]; then printf '%s' '--allowlist-file'; else printf '%s' '--issue-body-file'; fi)" \
+        "$(if [ "${HEAL_ROUTE:-false}" = true ]; then printf '%s' "${HEAL_SCOPE_FILE:?}"; else printf '%s' "${ISSUE_BODY_FILE:-}"; fi)" \
+        "${scope_guard_extra_args[@]}" \
         --staged-file "${scope_staged_file}" \
         --allowlist-out "${scope_allowlist_file}")"
       scope_rc=$?
@@ -523,12 +595,16 @@ else
         echo "files_touched scope guard: all staged paths fall within the issue allowlist."
         ;;
       10)
+        if [ "${HEAL_ROUTE:-false}" = true ]; then
+          echo '::error::Verified heal scope is empty; refusing scope check.' >&2
+          exit 1
+        fi
         echo "::notice::files_touched scope guard skipped: issue declares no files_touched allowlist."
         ;;
       20)
         scope_count="$(printf '%s\n' "${scope_violations}" | sed '/^$/d' | wc -l | tr -d ' ')"
         scope_allowlist="$(sed '/^$/d' "${scope_allowlist_file}" 2>/dev/null || true)"
-        if [ "${ALLOW_OUT_OF_SCOPE_FILES:-false}" = "true" ]; then
+        if [ "${ALLOW_OUT_OF_SCOPE_FILES:-false}" = "true" ] && [ "${HEAL_ROUTE:-false}" != true ]; then
           echo "::warning::files_touched scope guard: ${scope_count} staged path(s) outside the allowlist, but ALLOW_OUT_OF_SCOPE_FILES=true — allowing."
           printf '%s\n' "${scope_violations}" | sed '/^$/d;s/^/  - /'
         else
@@ -549,6 +625,10 @@ else
         fi
         ;;
       *)
+        if [ "${HEAL_ROUTE:-false}" = true ]; then
+          echo "::error::Heal scope guard failed with exit ${scope_rc}; refusing scope check." >&2
+          exit 1
+        fi
         echo "::warning::files_touched scope guard failed open (helper exit ${scope_rc}); staged change set not scope-checked this run."
         ;;
     esac
