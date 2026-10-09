@@ -455,6 +455,14 @@ jobs:
               is_managed_child=true
             fi
 
+            # Tracking issues are skipped before the completion check so they
+            # never enter LINEAGE_FINALIZE_ISSUE_NUMBERS: their label, close and
+            # lineage are owned by orchestrate_poll_process.sh (#5619).
+            if [ -n "${TRACKING_ISSUES}" ] && printf '%s\n' "${TRACKING_ISSUES}" | grep -qxF "${issue_number}"; then
+              echo "Skipping orchestrator-tracking issue #${issue_number} — terminal phase label, close and lineage are owned by orchestrate_poll_process.sh; PR-close path must not mutate it."
+              continue
+            fi
+
             # A real completion is a close without merge (ai:closed), a merge
             # into the default branch, or an orchestrator-managed child merged
             # into its integration branch. A merge into any other branch must
@@ -464,11 +472,6 @@ jobs:
             if [ "${PR_MERGED}" != "true" ] || [ "${PR_BASE_REF}" = "${REPO_DEFAULT_BRANCH}" ] || [ "${is_managed_child}" = "true" ]; then
               issue_is_completion=true
               LINEAGE_FINALIZE_ISSUE_NUMBERS="$(merge_issue_number_list "${LINEAGE_FINALIZE_ISSUE_NUMBERS}" "${issue_number}")"
-            fi
-
-            if [ -n "${TRACKING_ISSUES}" ] && printf '%s\n' "${TRACKING_ISSUES}" | grep -qxF "${issue_number}"; then
-              echo "Skipping orchestrator-tracking issue #${issue_number} — terminal phase label and close are owned by orchestrate_poll_process.sh; PR-close path must not mutate it."
-              continue
             fi
 
             if [ "${issue_is_completion}" != "true" ]; then

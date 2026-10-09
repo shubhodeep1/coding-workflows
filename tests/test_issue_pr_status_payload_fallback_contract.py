@@ -655,6 +655,26 @@ def test_unmerged_close_keeps_closed_label_close_and_lineage() -> None:
 	assert len(finalize) == 1 and "--final-state closed" in finalize[0], finalize
 
 
+def test_tracking_issue_never_labelled_closed_or_lineage_finalized() -> None:
+	"""Tracking issues stay poller-owned on every completion path, lineage included."""
+	if _jq_missing("test_tracking_issue_never_labelled_closed_or_lineage_finalized"):
+		return
+	tracking = _issue_node(90, labels=["ai:orchestrator-tracking"])
+	for merged in (True, False):
+		result = _run_status_sync(
+			merged=merged,
+			base_ref="main",
+			default_branch="main",
+			closing_nodes=[tracking],
+			classify_nodes=[tracking],
+		)
+		assert _label_calls(result) == [], (merged, result)
+		assert _close_calls(result) == [], (merged, result)
+		assert _finalize_calls(result) == [], (merged, result)
+		assert result["env"].get("LINEAGE_FINALIZE_ISSUE_NUMBERS", "") == "", (merged, result)
+		assert '"reason":"non_completion_merge"' in result["lineage_out"], (merged, result["lineage_out"])
+
+
 def _extract_refs(text: str) -> str:
 	proc = subprocess.run(
 		[
@@ -720,6 +740,7 @@ if __name__ == "__main__":
 	test_managed_child_integration_merge_still_labels_closes_and_finalizes()
 	test_default_branch_merge_with_fixes_labels_closes_and_finalizes()
 	test_unmerged_close_keeps_closed_label_close_and_lineage()
+	test_tracking_issue_never_labelled_closed_or_lineage_finalized()
 	test_extract_helper_ignores_fragment_urls_but_keeps_issue_links()
 	test_completion_gate_uses_event_default_branch_without_run_interpolation()
 	print("PASS")
