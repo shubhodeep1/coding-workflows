@@ -46,7 +46,7 @@ def _fixture(tmp_path: Path) -> Path:
 	_write(root, "workflow-templates/audit-gate/contract.json", "{}\n")
 	_write(root, "workflow-templates/validation-harness/ignored.txt", "not attested\n")
 	(root / "workflow-templates" / "CLAUDE.md").symlink_to("../CLAUDE.md")
-	for name in ("workflow_wrapper_refs.py", "apply_audit_gate_assets.py", "assemble_changelog.py"):
+	for name in ("workflow_wrapper_refs.py", "apply_audit_gate_assets.py", "assemble_changelog.py", "verify_release_manifest.py", "release_manifest.py"):
 		_write(root, f"scripts/{name}", f"# {name}\n", 0o755)
 	_write(root, "scripts/tg_helpers.sh", "# tg\n")
 	_write(root, "scripts/unrelated.py", "# not attested\n")
@@ -279,6 +279,8 @@ def test_real_repo_tree(tmp_path: Path) -> None:
 		"scripts/workflow_wrapper_refs.py",
 		"scripts/apply_audit_gate_assets.py",
 		"scripts/assemble_changelog.py",
+		"scripts/verify_release_manifest.py",
+		"scripts/release_manifest.py",
 		"workflow-templates/audit-gate/contract.json",
 	):
 		assert required in paths, required
@@ -296,6 +298,7 @@ def test_surface_rules_track_the_updater() -> None:
 		"Sync top-level CLAUDE.md from upstream",
 		"Sync changelog fragment assets from upstream",
 		"Assemble changelog fragments",
+		"Verify attested release manifest",
 	):
 		assert f"name: {step}" in text, step
 	for needle in (
@@ -309,5 +312,7 @@ def test_surface_rules_track_the_updater() -> None:
 		"scripts/workflow_wrapper_refs.py",
 		"scripts/apply_audit_gate_assets.py",
 		"assemble_changelog.py",
+		"scripts/verify_release_manifest.py",
+		"scripts/release_manifest.py",
 	):
 		assert needle in text, needle

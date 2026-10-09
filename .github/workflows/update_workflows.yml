@@ -104,6 +104,201 @@ jobs:
           echo "upstream_dir=${TMPDIR}/upstream/${TEMPLATES_DIR}" >> "$GITHUB_OUTPUT"
           echo "upstream_sha=${UPSTREAM_SHA}" >> "$GITHUB_OUTPUT"
 
+      # Fail-closed release-manifest verification (orchestrator project #6902,
+      # issue #6960). Runs before every step that writes the consumer
+      # checkout; any failure stops the job, so "Commit and push updates"
+      # never runs. Off unless the repo variable
+      # UPDATER_VERIFY_RELEASE_MANIFEST is "true".
+      # Assumption: the authoritative plan
+      # (docs/plans/safeguarded-consumer-updater-plan.md on branch
+      # claude/elegant-mendel-5pli2i-safeguarded-updater-plan) could not be
+      # read from the planning/implementation sandbox, so the variable, asset
+      # name and log prefix are the provisional names from the issue. If the
+      # plan names different identifiers, the plan wins.
+      # The logic stays inline: in consumer runs the only scripts/ copy is
+      # the release checkout being verified, so a helper there would be
+      # unverified code.
+      - name: Verify attested release manifest
+        id: verify_release_manifest
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          UPSTREAM_DIR: ${{ steps.fetch.outputs.upstream_dir }}
+          UPSTREAM_SHA: ${{ steps.fetch.outputs.upstream_sha }}
+          UPDATER_VERIFY_RELEASE_MANIFEST: ${{ vars.UPDATER_VERIFY_RELEASE_MANIFEST || 'false' }}
+          RELEASE_MANIFEST_ASSET_NAME: release-manifest.v1.json
+        run: |
+          set -euo pipefail
+
+          VERIFY_OUT="${GITHUB_OUTPUT:-/dev/null}"
+          VERIFY_REASON_FILE="${UPDATER_MANIFEST_VERIFY_REASON_FILE:-/tmp/update_workflows_failure_reason.txt}"
+          ASSET_NAME="${RELEASE_MANIFEST_ASSET_NAME:-release-manifest.v1.json}"
+          RELEASE_REPO="shubhodeep1/coding-workflows"
+          MANIFEST_MAX_BYTES=16777216
+
+          verify_flag="${UPDATER_VERIFY_RELEASE_MANIFEST:-false}"
+          verify_flag="${verify_flag//[[:space:]]/}"
+          verify_flag="${verify_flag,,}"
+          if [ "${verify_flag}" != "true" ]; then
+            if [ "${verify_flag}" != "false" ]; then
+              echo "::warning::UPDATER_VERIFY_RELEASE_MANIFEST is neither true nor false; release-manifest verification stays disabled."
+            fi
+            echo "UPDATER_MANIFEST_VERIFY outcome=skip reason=disabled"
+            echo "verified=skipped" >> "${VERIFY_OUT}"
+            echo "reason=disabled" >> "${VERIFY_OUT}"
+            exit 0
+          fi
+
+          # Fixed, path-free tokens only; never echo URLs or credentials.
+          reject() {
+            local stage="$1"
+            local reason="$2"
+            echo "::error::UPDATER_MANIFEST_VERIFY outcome=rejected reason=${reason} stage=${stage}"
+            echo "verified=false" >> "${VERIFY_OUT}"
+            echo "reason=${reason}" >> "${VERIFY_OUT}"
+            printf '%s\n%s\n' "ERR_RELEASE_MANIFEST_VERIFY_FAILED" "Release manifest verification failed at stage ${stage} (reason ${reason}); no consumer file was changed." > "${VERIFY_REASON_FILE}"
+            exit 1
+          }
+
+          [[ "${UPSTREAM_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || reject input invalid_upstream_sha
+          [ -n "${UPSTREAM_DIR:-}" ] && [ -d "${UPSTREAM_DIR}" ] || reject input upstream_missing
+          UPSTREAM_ROOT="$(cd "${UPSTREAM_DIR}/.." && pwd -P)" || reject input upstream_missing
+          for verify_tool in git gh jq sha256sum python3; do
+            command -v "${verify_tool}" >/dev/null 2>&1 || reject input tool_missing
+          done
+
+          WORK="$(mktemp -d)"
+          trap 'rm -rf "${WORK}"' EXIT
+          MANIFEST="${WORK}/${ASSET_NAME}"
+
+          # Release tag for UPSTREAM_SHA: git protocol on the existing clone
+          # (no REST call). Peeled ^{} lines override annotated-tag objects.
+          if ! tag_refs="$(git -C "${UPSTREAM_ROOT}" ls-remote --tags origin 'refs/tags/v*' 2>/dev/null)"; then
+            reject tag release_tag_missing
+          fi
+          TAG="$(printf '%s\n' "${tag_refs}" | awk -v want="${UPSTREAM_SHA}" '
+            NF >= 2 {
+              sha = tolower($1); ref = $2
+              sub(/^refs\/tags\//, "", ref)
+              if (ref ~ /\^\{\}$/) { sub(/\^\{\}$/, "", ref); peeled[ref] = sha } else { direct[ref] = sha }
+            }
+            END {
+              for (t in direct) {
+                c = (t in peeled) ? peeled[t] : direct[t]
+                if (t ~ /^v[0-9]+\.[0-9]+\.[0-9]+$/ && c == want) print t
+              }
+            }' | sort -V | tail -n1)"
+          [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || reject tag release_tag_missing
+
+          # GitHub API (§14): no existing call in this job returns release
+          # data, so this adds exactly one release lookup and one asset
+          # download, only when the flag is on.
+          if ! release_json="$(gh api "repos/${RELEASE_REPO}/releases/tags/${TAG}" 2>/dev/null)"; then
+            reject release release_lookup_failed
+          fi
+          if ! asset_line="$(printf '%s' "${release_json}" | jq -r --arg name "${ASSET_NAME}" '
+            if type == "object" and .draft == false and .prerelease == false then
+              [(.assets // [])[] | select(type == "object" and .name == $name and .state == "uploaded")]
+              | if length == 1 then "\(.[0].id) \(.[0].size)" else "missing" end
+            else "invalid" end' 2>/dev/null)"; then
+            reject release release_lookup_failed
+          fi
+          case "${asset_line}" in
+            invalid|"") reject release release_lookup_failed ;;
+            missing) reject release asset_missing ;;
+          esac
+          ASSET_ID="${asset_line%% *}"
+          ASSET_SIZE="${asset_line##* }"
+          [[ "${ASSET_ID}" =~ ^[0-9]+$ ]] && [[ "${ASSET_SIZE}" =~ ^[0-9]+$ ]] || reject release release_lookup_failed
+          if [ "${ASSET_SIZE}" -le 0 ] || [ "${ASSET_SIZE}" -gt "${MANIFEST_MAX_BYTES}" ]; then
+            reject release asset_missing
+          fi
+
+          if ! gh api -H 'Accept: application/octet-stream' "repos/${RELEASE_REPO}/releases/assets/${ASSET_ID}" > "${MANIFEST}" 2>/dev/null; then
+            reject download asset_download_failed
+          fi
+          downloaded_size="$(wc -c < "${MANIFEST}" | tr -d '[:space:]')"
+          [ "${downloaded_size}" = "${ASSET_SIZE}" ] || reject download asset_download_failed
+
+          # Attestation with the runner's gh, never code from the release
+          # tree. Both release workflows attest on GitHub-hosted runners.
+          if ! gh attestation verify "${MANIFEST}" \
+            --repo shubhodeep1/coding-workflows \
+            --cert-identity-regex '^https://github\.com/shubhodeep1/coding-workflows/\.github/workflows/(mark-stable|test-and-mark-stable)\.yml@refs/heads/(main|stable)$' \
+            --predicate-type https://slsa.dev/provenance/v1 \
+            --deny-self-hosted-runners; then
+            reject attestation attestation_failed
+          fi
+
+          if ! jq -e --arg repo "${RELEASE_REPO}" --arg sha "${UPSTREAM_SHA}" --arg tag "${TAG}" \
+            'type == "object" and .repository == $repo and .release_sha == $sha and .tag == $tag' \
+            "${MANIFEST}" >/dev/null 2>&1; then
+            reject header manifest_header_mismatch
+          fi
+
+          # Bootstrap: hash every Python module the verifier executes before
+          # running any code from the release tree.
+          for bootstrap_rel in scripts/verify_release_manifest.py scripts/release_manifest.py scripts/workflow_wrapper_refs.py; do
+            expected_sha256="$(jq -r --arg p "${bootstrap_rel}" \
+              '[(.files // [])[] | select(type == "object" and .path == $p and .mode != "120000")] | if length == 1 then (.[0].sha256 // "") else "" end' \
+              "${MANIFEST}" 2>/dev/null)" || expected_sha256=""
+            [[ "${expected_sha256}" =~ ^[0-9a-f]{64}$ ]] || reject bootstrap verifier_unattested
+            bootstrap_path="${UPSTREAM_ROOT}/${bootstrap_rel}"
+            if [ ! -f "${bootstrap_path}" ] || [ -L "${bootstrap_path}" ]; then
+              reject bootstrap verifier_hash_mismatch
+            fi
+            actual_sha256="$(sha256sum -- "${bootstrap_path}" | awk '{print $1}')"
+            [ "${actual_sha256}" = "${expected_sha256}" ] || reject bootstrap verifier_hash_mismatch
+          done
+
+          # Every path the later steps read, relative to the release root.
+          # Whole directories are enumerated so an injected file is reported
+          # as unlisted_path.
+          PATHS_FILE="${WORK}/paths.txt"
+          (
+            cd "${UPSTREAM_ROOT}"
+            shopt -s nullglob
+            for listed in workflow-templates/*.yml workflow-templates/profiles/*.txt; do
+              printf '%s\n' "${listed}"
+            done
+            printf '%s\n' \
+              workflow-templates/retired_files.txt \
+              workflow-templates/CLAUDE.md \
+              CLAUDE.md \
+              scripts/workflow_wrapper_refs.py \
+              scripts/apply_audit_gate_assets.py \
+              scripts/assemble_changelog.py \
+              scripts/verify_release_manifest.py \
+              scripts/release_manifest.py
+            for listed_dir in workflow-templates/.claude workflow-templates/audit-gate; do
+              if [ -e "${listed_dir}" ] || [ -L "${listed_dir}" ]; then
+                find "${listed_dir}" ! -type d -print
+              fi
+            done
+          ) > "${PATHS_FILE}" || reject paths paths_enumeration_failed
+
+          set +e
+          verify_line="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${UPSTREAM_ROOT}/scripts/verify_release_manifest.py" verify \
+            --manifest "${MANIFEST}" \
+            --release-root "${UPSTREAM_ROOT}" \
+            --expected-sha "${UPSTREAM_SHA}" \
+            --expected-repository shubhodeep1/coding-workflows \
+            --paths-file "${PATHS_FILE}" 2>/dev/null | head -n1)"
+          verify_rc=$?
+          set -e
+          if [ "${verify_rc}" -ne 0 ]; then
+            verify_reason="$(printf '%s\n' "${verify_line}" | sed -n 's/^UPDATER_MANIFEST_VERIFY outcome=rejected reason=\([a-z_]*\).*/\1/p')"
+            [ -n "${verify_reason}" ] || verify_reason="internal_error"
+            if [ -n "${verify_line}" ]; then
+              echo "::error::${verify_line}"
+            fi
+            reject verify "${verify_reason}"
+          fi
+          echo "${verify_line}"
+          echo "UPDATER_MANIFEST_VERIFY outcome=ok reason=ok tag=${TAG}"
+          echo "verified=true" >> "${VERIFY_OUT}"
+          echo "reason=ok" >> "${VERIFY_OUT}"
+          echo "tag=${TAG}" >> "${VERIFY_OUT}"
+
       - name: Prepare immutable workflow wrappers
         id: render_wrappers
         run: |
@@ -801,6 +996,8 @@ jobs:
 
       - name: Summary
         if: always()
+        env:
+          VERIFY_OUTCOME: ${{ steps.verify_release_manifest.outcome }}
         run: |
           set -euo pipefail
 
@@ -846,6 +1043,20 @@ jobs:
             echo "- **Failure reason detail:** Fetch step failed before pre-mutation validation could run." >> "$GITHUB_STEP_SUMMARY"
             if [ -f "${FAILURE_REASON_FILE}" ]; then
               echo "- **Failure reason artifact:** \\`${FAILURE_REASON_FILE}\\`" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            exit 1
+          fi
+
+          if [ "${VERIFY_OUTCOME:-}" = "failure" ]; then
+            VERIFY_FAILURE_DETAIL="Release manifest verification failed before any consumer file was changed."
+            if [ -f "${FAILURE_REASON_FILE}" ]; then
+              VERIFY_FAILURE_DETAIL="$(sed -n '2p' "${FAILURE_REASON_FILE}" 2>/dev/null || true)"
+            fi
+            echo "- **Status:** failed" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Failure reason code:** \`ERR_RELEASE_MANIFEST_VERIFY_FAILED\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Failure reason detail:** ${VERIFY_FAILURE_DETAIL}" >> "$GITHUB_STEP_SUMMARY"
+            if [ -f "${FAILURE_REASON_FILE}" ]; then
+              echo "- **Failure reason artifact:** \`${FAILURE_REASON_FILE}\`" >> "$GITHUB_STEP_SUMMARY"
             fi
             exit 1
           fi

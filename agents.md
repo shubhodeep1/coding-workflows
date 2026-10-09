@@ -2159,6 +2159,7 @@ and shipped:
 - `REVIEW_RESOLVER_PAIRED_LIVE` (`scripts/review_conflict_resolve.sh`: `live= template= outcome=paired`, `outcome=mirrored`, `outcome=skipped reason=template_markers`)
 - `VALIDATION_HARNESS_SANDBOX`
 - `RELEASE_MANIFEST` (`scripts/release_manifest.py`: `outcome=written files=`, `error reason=`; `scripts/release_manifest_publish.sh` in the stable release jobs: `outcome=built|uploaded|failed reason= tag=`)
+- `UPDATER_MANIFEST_VERIFY` (`scripts/verify_release_manifest.py`: `outcome=ok|rejected reason= count= [path=]`; the "Verify attested release manifest" step of `update_workflows.yml`, gated by `UPDATER_VERIFY_RELEASE_MANIFEST` (default `false`): `outcome=skip reason=disabled`, `outcome=rejected reason= stage=`, `outcome=ok reason=ok tag=`)
 
 When `EVENTS_JSONL_ENABLED=true`, `scripts/emit_event.sh` and
 `scripts/emit_event.py` append a fail-open JSONL mirror to
@@ -2401,6 +2402,7 @@ LOG_PREFIX.name=REVIEW_RESOLVER_PATH_REJECTED
 LOG_PREFIX.name=REVIEW_RESOLVER_PAIRED_LIVE
 LOG_PREFIX.name=VALIDATION_HARNESS_SANDBOX
 LOG_PREFIX.name=RELEASE_MANIFEST
+LOG_PREFIX.name=UPDATER_MANIFEST_VERIFY
 
 ---
 
