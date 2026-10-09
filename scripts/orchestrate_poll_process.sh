@@ -156,6 +156,18 @@ elif [ -f "scripts/pr_checks_lib.sh" ]; then
   source scripts/pr_checks_lib.sh
 fi
 unset _OPP_LIB_DIR
+# Merge-base freshness gate (scripts/pr_checks_lib.sh, operator decision
+# Q35: A): before a direct merge, a PR whose base moved under files it
+# touches is updated from the base instead and re-validated by its
+# synchronize run. Fail-open stub when the library is missing: the
+# check-runs gate is already undefined then and refuses the merge.
+if ! type _pr_base_fresh_for_merge >/dev/null 2>&1; then
+  _pr_base_fresh_for_merge()
+  {
+    echo "::warning::pr_checks_lib.sh unavailable; merge-base freshness gate skipped for PR #${1:-unknown}."
+    return 0
+  }
+fi
 # Claude engine (replace-claude-sessions plan Phase 5c): the orchestrator
 # judges run through scripts/ai_engine.sh next to this script, or the staged
 # CWD copy.
@@ -18351,7 +18363,10 @@ STALL_EOF
           [ -n "${merge_pr_json}" ] || merge_pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${merge_pr}" 2>/dev/null || echo "")"
           merge_state="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .state?) then .state else empty end' 2>/dev/null | tail -n1)"
           merge_mergeable="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and (.mergeable == true or .mergeable == false)) then .mergeable else empty end' 2>/dev/null | tail -n1)"
-          if [ "${merge_state}" = "open" ] && [ "${merge_mergeable}" = "true" ] && _pr_checks_completed "${merge_pr}"; then
+          if [ "${merge_state}" = "open" ] && [ "${merge_mergeable}" = "true" ] && _pr_checks_completed "${merge_pr}" \
+            && _pr_base_fresh_for_merge "${merge_pr}" \
+              "$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)" \
+              "$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .base.ref?) then .base.ref else empty end' 2>/dev/null | tail -n1)"; then
             gh_retry gh pr merge "${merge_pr}" --repo "${GITHUB_REPOSITORY}" --squash --auto >/dev/null 2>&1 \
               || gh_retry gh pr merge "${merge_pr}" --repo "${GITHUB_REPOSITORY}" --squash >/dev/null 2>&1 \
               || true
@@ -21231,7 +21246,8 @@ The poller will resume processing on the next cycle."
                 unset _bws_pr
               fi
               unset _bws_integ
-            elif [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${PW_PR}" "${_pw_head_sha}"; then
+            elif [ "${PW_PR_STATE}" = "open" ] && [ "${PW_PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${PW_PR}" "${_pw_head_sha}" \
+              && _pr_base_fresh_for_merge "${PW_PR}" "${_pw_head_sha}" "$(_jq_field "${_pw_pr_json}" '.base.ref')"; then
               if [ "${INTEGRATION_BACKPRESSURE_BLOCK_MERGES:-false}" = "true" ]; then
                 _integration_backpressure_effective_threshold _bws_effective_threshold
                 echo "  [backward-scan] Backpressure active (ahead_by=${CWS_BACKPRESSURE_AHEAD_BY}, threshold=${ORCH_INTEGRATION_MAX_AHEAD_COMMITS}, effective_threshold=${_bws_effective_threshold}); deferring auto-merge of PR #${PW_PR} for prior-wave issue #${pw_inum}."
@@ -23094,7 +23110,8 @@ sys.exit(1)
           # non-required/environmental check (e.g. CodeQL with code scanning
           # disabled) no longer deadlocks the review-blocked merge.
           _rb_merge_base="$(_jq_field "${_rb_merge_json}" '.base.ref')"
-		  if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_merge_sha}" "${_rb_merge_base}"; then
+		  if [ "${PR_STATE}" = "open" ] && [ "${PR_MERGEABLE}" = "true" ] && _pr_checks_completed "${RB_PR}" "${_rb_merge_sha}" "${_rb_merge_base}" \
+		    && _pr_base_fresh_for_merge "${RB_PR}" "${_rb_merge_sha}" "${_rb_merge_base}"; then
 		    if gh_retry gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash --auto; then
 		      echo "  PR #${RB_PR} merge initiated (auto)."
 		      RB_MERGED="true"

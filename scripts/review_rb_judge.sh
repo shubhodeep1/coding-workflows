@@ -255,6 +255,16 @@ if [ -f "${SUPPORT_SCRIPTS_DIR}/pr_checks_lib.sh" ]; then
   # shellcheck disable=SC1091
   source "${SUPPORT_SCRIPTS_DIR}/pr_checks_lib.sh" 2>/dev/null || true
 fi
+# Merge-base freshness gate (operator decision Q35: A). Fail-open stub when
+# the library did not load: the check-runs gate above already refuses an
+# unbound merge in that case.
+if ! type _pr_base_fresh_for_merge >/dev/null 2>&1; then
+  _pr_base_fresh_for_merge()
+  {
+    echo "::warning::pr_checks_lib.sh unavailable; merge-base freshness gate skipped for PR #${1:-unknown}."
+    return 0
+  }
+fi
 if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   # Keep prompt sanitization available even when gh_helpers.sh was not
   # sourced. Large-diff truncation can still fall back to a raw byte prefix,
@@ -2030,7 +2040,9 @@ case "${RB_ACTION}" in
         # fire through every other gh_retry-wrapped call in this
         # script.
         review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
-        if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null \
+        if ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+          echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, merge deferred to the synchronize run."
+        elif gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null \
           || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null; then
           RB_MERGE_READY_LABEL_ALLOWED="true"
         else
@@ -2080,7 +2092,9 @@ case "${RB_ACTION}" in
       if [ "${PR_STATE}" = "open" ] && [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
         # Best-effort merge — see note above re: gh_retry.
         review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
-        if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null \
+        if ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+          echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, terminal merge deferred to the synchronize run."
+        elif gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null \
           || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null; then
           RB_MERGE_READY_LABEL_ALLOWED="true"
         else

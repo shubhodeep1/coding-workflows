@@ -276,3 +276,218 @@ _pr_checks_completed()
 	PR_CHECKS_LAST_REASON="ok"
 	return 0
 }
+
+# ---------------------------------------------------------------------------
+# Merge-base freshness gate (operator decision Q35: A, 2026-10-09).
+#
+# A green PR whose base branch moved after its CI ran can merge code that
+# was never tested against the current base: #6741 (issue #6729) merged on
+# 2026-10-09 08:42 UTC with check-runs from the previous day, after #6549
+# had changed the code its new tests exercised, and `main` CI was red for
+# the next three hours. GitHub's auto-merge binds to the PR head, not to the
+# base the checks ran against, and "require branches to be up to date" is
+# not enabled because it costs one CI run per merged sibling on every open
+# PR (the merge train holds 25-30 PRs that edit the same files).
+#
+# The gate re-validates only when it can matter: when the commits the base
+# gained since the PR's merge-base touch a file the PR also touches. Then
+# the branch is updated from the base (GitHub's update-branch merge), which
+# fires `synchronize`, so CI and review run on the combined tree and the
+# merge waits for that round. Base commits that touch only other files
+# merge immediately, as before.
+#
+#   _pr_base_freshness <pr> [<head_sha>] [<base_ref>]
+#       Prints exactly one word: fresh (the base gained no commits), clean
+#       (the base commits touch no PR file), overlap (at least one shared
+#       path, or the base-side diff is too large to prove otherwise),
+#       disabled (MERGE_BASE_FRESHNESS_ENABLED is off), unknown (API
+#       failure, or an unresolved head or base). Sets PR_BASE_FRESHNESS_OUTCOME to the
+#       same word, plus PR_BASE_FRESHNESS_LAST_REASON,
+#       PR_BASE_FRESHNESS_HEAD_SHA, PR_BASE_FRESHNESS_BEHIND_BY and
+#       PR_BASE_FRESHNESS_OVERLAP.
+#   _pr_base_sync_for_fresh_ci <pr> <head_sha>
+#       PUT /pulls/{n}/update-branch bound to <head_sha>; returns 0 when
+#       GitHub accepted the update.
+#   _pr_base_fresh_for_merge <pr> [<head_sha>] [<base_ref>]
+#       The one call merge paths make. Returns 0 when the merge may go
+#       ahead (fresh, clean, disabled, or unknown: an API failure is logged
+#       and never holds a merge that today's gates allow), and 1 after
+#       requesting the base update on overlap (also when that request
+#       failed), so the caller skips this round and lets the synchronize
+#       run re-validate.
+#
+# API budget (§15): one `compare/{head}...{base}` call plus one paginated
+# `pulls/{n}/files` listing per gated merge, one `pulls/{n}` read when the
+# caller passes no head SHA or base ref, and the update-branch PUT on
+# overlap. Log lines: `MERGE_BASE_FRESHNESS pr=<n> head_sha=<sha>
+# base=<ref> outcome=<word> reason=<token> behind_by=<k> overlap=<paths|->`
+# and `MERGE_BASE_SYNC pr=<n> head_sha=<sha> action=update_branch
+# outcome=accepted|failed`.
+#
+# Env: MERGE_BASE_FRESHNESS_ENABLED (default true; true/1/yes/on,
+# case-insensitive; anything else disables the gate and every merge path
+# behaves as before).
+_pr_base_freshness()
+{
+	local pr_number="$1"
+	local head_sha="${2:-}"
+	local base_ref="${3:-}"
+	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	PR_BASE_FRESHNESS_OUTCOME=""
+	PR_BASE_FRESHNESS_LAST_REASON=""
+	PR_BASE_FRESHNESS_HEAD_SHA=""
+	PR_BASE_FRESHNESS_BEHIND_BY=""
+	PR_BASE_FRESHNESS_OVERLAP=""
+	case "$(printf '%s' "${MERGE_BASE_FRESHNESS_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		true|1|yes|on) ;;
+		*)
+			PR_BASE_FRESHNESS_LAST_REASON="disabled"
+			PR_BASE_FRESHNESS_OUTCOME="disabled"
+			echo "disabled"
+			return 0
+			;;
+	esac
+	if [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ] || [ -z "${base_ref}" ] || [ "${base_ref}" = "null" ]; then
+		local pr_json
+		pr_json="$(gh_retry _safe_gh_jq "repos/${repo}/pulls/${pr_number}" 2>/dev/null || echo "")"
+		if [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ]; then
+			head_sha="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)"
+		fi
+		if [ -z "${base_ref}" ] || [ "${base_ref}" = "null" ]; then
+			base_ref="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .base.ref?) then .base.ref else empty end' 2>/dev/null | tail -n1)"
+		fi
+	fi
+	if ! [[ "${head_sha}" =~ ^[0-9a-f]{7,40}$ ]] || [ -z "${base_ref}" ]; then
+		PR_BASE_FRESHNESS_LAST_REASON="unresolved_head_or_base"
+		PR_BASE_FRESHNESS_OUTCOME="unknown"
+		echo "unknown"
+		return 0
+	fi
+	PR_BASE_FRESHNESS_HEAD_SHA="${head_sha}"
+
+	# `compare/{head}...{base}`: `ahead_by` counts the commits the base
+	# gained since the merge-base and `files` is the base-side diff. GitHub
+	# returns at most 300 files and does not flag the cut, so 300 means the
+	# extent is unknown and counts as overlap (re-validate rather than
+	# merge blind).
+	local compare_json ahead_by base_files_count
+	compare_json="$(gh_retry _safe_gh_jq "repos/${repo}/compare/${head_sha}...${base_ref}" 2>/dev/null || echo "")"
+	ahead_by="$(printf '%s' "${compare_json}" | jq -r 'if (type == "object" and (.ahead_by | type) == "number") then .ahead_by else empty end' 2>/dev/null | tail -n1)"
+	if ! [[ "${ahead_by}" =~ ^[0-9]+$ ]]; then
+		PR_BASE_FRESHNESS_LAST_REASON="compare_failed"
+		PR_BASE_FRESHNESS_OUTCOME="unknown"
+		echo "unknown"
+		return 0
+	fi
+	PR_BASE_FRESHNESS_BEHIND_BY="${ahead_by}"
+	if [ "${ahead_by}" -eq 0 ]; then
+		PR_BASE_FRESHNESS_LAST_REASON="up_to_date"
+		PR_BASE_FRESHNESS_OUTCOME="fresh"
+		echo "fresh"
+		return 0
+	fi
+	base_files_count="$(printf '%s' "${compare_json}" | jq -r 'if (type == "object") then ((.files // []) | length) else empty end' 2>/dev/null | tail -n1)"
+	if ! [[ "${base_files_count}" =~ ^[0-9]+$ ]]; then
+		PR_BASE_FRESHNESS_LAST_REASON="compare_failed"
+		PR_BASE_FRESHNESS_OUTCOME="unknown"
+		echo "unknown"
+		return 0
+	fi
+	if [ "${base_files_count}" -ge 300 ]; then
+		PR_BASE_FRESHNESS_LAST_REASON="base_diff_truncated"
+		PR_BASE_FRESHNESS_OVERLAP="(base diff lists ${base_files_count} files; extent unknown)"
+		PR_BASE_FRESHNESS_OUTCOME="overlap"
+		echo "overlap"
+		return 0
+	fi
+
+	# The PR's own paths: `--paginate --slurp` yields an array of pages,
+	# each an array of file objects; renames count under both names.
+	local pr_files_json tmp_compare tmp_pr_files overlap
+	pr_files_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${repo}/pulls/${pr_number}/files?per_page=100" 2>/dev/null || echo "{}")"
+	if ! tmp_compare="$(mktemp "${TMPDIR:-/tmp}/pr_base_compare.XXXXXX" 2>/dev/null)"; then
+		PR_BASE_FRESHNESS_LAST_REASON="tmp_failed"
+		PR_BASE_FRESHNESS_OUTCOME="unknown"
+		echo "unknown"
+		return 0
+	fi
+	if ! tmp_pr_files="$(mktemp "${TMPDIR:-/tmp}/pr_base_files.XXXXXX" 2>/dev/null)"; then
+		rm -f "${tmp_compare}"
+		PR_BASE_FRESHNESS_LAST_REASON="tmp_failed"
+		PR_BASE_FRESHNESS_OUTCOME="unknown"
+		echo "unknown"
+		return 0
+	fi
+	printf '%s' "${compare_json}" > "${tmp_compare}"
+	printf '%s' "${pr_files_json}" > "${tmp_pr_files}"
+	overlap="$(jq -n -r --slurpfile compare "${tmp_compare}" --slurpfile pr_files "${tmp_pr_files}" '
+		def names: [ .[]? | select(type == "object") | (.filename // empty), (.previous_filename // empty) ];
+		(($compare[0].files // []) | names) as $base_paths
+		| ($pr_files[0]
+			| if type == "array" then ([ .[]? | if type == "array" then .[] else . end ] | names)
+			  else null end) as $pr_paths
+		| if $pr_paths == null then "__invalid__"
+		  else ([ $base_paths[] | select(. as $p | $pr_paths | index($p)) ] | unique | join(",")) end
+	' 2>/dev/null | tail -n1)"
+	rm -f "${tmp_compare}" "${tmp_pr_files}"
+	if [ "${overlap}" = "__invalid__" ] || [ -z "${overlap+x}" ]; then
+		PR_BASE_FRESHNESS_LAST_REASON="pr_files_failed"
+		PR_BASE_FRESHNESS_OUTCOME="unknown"
+		echo "unknown"
+		return 0
+	fi
+	if [ -z "${overlap}" ]; then
+		PR_BASE_FRESHNESS_LAST_REASON="no_shared_paths"
+		PR_BASE_FRESHNESS_OUTCOME="clean"
+		echo "clean"
+		return 0
+	fi
+	PR_BASE_FRESHNESS_OVERLAP="${overlap}"
+	PR_BASE_FRESHNESS_LAST_REASON="shared_paths"
+	PR_BASE_FRESHNESS_OUTCOME="overlap"
+	echo "overlap"
+	return 0
+}
+
+_pr_base_sync_for_fresh_ci()
+{
+	local pr_number="$1"
+	local head_sha="$2"
+	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	if ! [[ "${head_sha}" =~ ^[0-9a-f]{7,40}$ ]]; then
+		echo "::warning::MERGE_BASE_SYNC pr=${pr_number} head_sha=${head_sha:-unknown} action=update_branch outcome=failed reason=unresolved_head_sha"
+		return 1
+	fi
+	if gh_retry _safe_gh_jq -X PUT "repos/${repo}/pulls/${pr_number}/update-branch" -f "expected_head_sha=${head_sha}" >/dev/null 2>&1; then
+		echo "MERGE_BASE_SYNC pr=${pr_number} head_sha=${head_sha} action=update_branch outcome=accepted"
+		return 0
+	fi
+	echo "::warning::MERGE_BASE_SYNC pr=${pr_number} head_sha=${head_sha} action=update_branch outcome=failed"
+	return 1
+}
+
+_pr_base_fresh_for_merge()
+{
+	local pr_number="$1"
+	local head_sha="${2:-}"
+	local base_ref="${3:-}"
+	# Run in this shell (no command substitution) so the side-channel
+	# variables survive for the log line and the update call.
+	_pr_base_freshness "${pr_number}" "${head_sha}" "${base_ref}" >/dev/null
+	case "${PR_BASE_FRESHNESS_OUTCOME:-unknown}" in
+		overlap)
+			echo "MERGE_BASE_FRESHNESS pr=${pr_number} head_sha=${PR_BASE_FRESHNESS_HEAD_SHA:-unknown} base=${base_ref:-unknown} outcome=overlap reason=${PR_BASE_FRESHNESS_LAST_REASON} behind_by=${PR_BASE_FRESHNESS_BEHIND_BY:--} overlap=${PR_BASE_FRESHNESS_OVERLAP:--}"
+			echo "  [base-freshness] PR #${pr_number}: the base gained ${PR_BASE_FRESHNESS_BEHIND_BY:-?} commit(s) touching ${PR_BASE_FRESHNESS_OVERLAP:-shared paths}; updating the branch so CI and review run on the combined tree before merging."
+			_pr_base_sync_for_fresh_ci "${pr_number}" "${PR_BASE_FRESHNESS_HEAD_SHA}" || true
+			return 1
+			;;
+		unknown)
+			echo "::warning::MERGE_BASE_FRESHNESS pr=${pr_number} head_sha=${head_sha:-unknown} base=${base_ref:-unknown} outcome=unknown reason=${PR_BASE_FRESHNESS_LAST_REASON} action=proceed"
+			return 0
+			;;
+		*)
+			echo "MERGE_BASE_FRESHNESS pr=${pr_number} head_sha=${PR_BASE_FRESHNESS_HEAD_SHA:-${head_sha:-unknown}} base=${base_ref:-unknown} outcome=${PR_BASE_FRESHNESS_OUTCOME} reason=${PR_BASE_FRESHNESS_LAST_REASON} behind_by=${PR_BASE_FRESHNESS_BEHIND_BY:--} action=proceed"
+			return 0
+			;;
+	esac
+}
