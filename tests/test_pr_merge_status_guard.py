@@ -3018,3 +3018,117 @@ def test_shell_wrapper_scanner_reports_unterminated_text() -> None:
 	assert template_guard._scan_shell_text("cat <<EOF\nno terminator").unreadable
 	scan = template_guard._scan_shell_text("a $(b) `c` <(d) \"$(e)\" '$(f)'")
 	assert scan.bodies == ["b", "c", "d", "e"] and not scan.unreadable
+
+
+# ──────────────────────────────────────────────────────────────────
+# Remote writes never trust the TTL cache (#6641, CLAUDE.md §21.D)
+# ──────────────────────────────────────────────────────────────────
+# These tests load the template copy, which carries the fix first; the
+# parity tests above keep the live copy byte-identical to it.
+
+
+def _load_pr_merge_guard_template():
+	spec = importlib.util.spec_from_file_location("pr_merge_status_guard_template", TEMPLATE_GUARD_PATH)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module
+
+
+fresh_state_guard = _load_pr_merge_guard_template()
+
+
+def _cached_allow_live_merged(monkeypatch, merged_sha: str, calls: list[str]) -> None:
+	merged = dict(MERGED_PR, headRefOid=merged_sha)
+	monkeypatch.setattr(fresh_state_guard, "_read_cache", lambda slug, branch: [merged, OPEN_PR])
+	monkeypatch.setattr(fresh_state_guard, "_write_cache", lambda *args: None)
+
+	def listing(slug, branch, cwd):
+		calls.append(branch)
+		return [merged]
+
+	monkeypatch.setattr(fresh_state_guard, "query_pull_requests", listing)
+	monkeypatch.delenv("CLAUDE_PR_MERGE_GUARD", raising=False)
+
+
+def test_push_ignores_cached_open_pr_and_requeries_live(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	calls: list[str] = []
+	_cached_allow_live_merged(monkeypatch, _git(repo, "rev-parse", "HEAD"), calls)
+	code, message = fresh_state_guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push origin HEAD:feature/x"}})
+	assert code == 2, message
+	assert "https://github.com/o/r/pull/41" in message
+	assert calls == ["feature/x"]
+
+
+def test_commit_then_push_reverifies_cached_snapshot_once(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	calls: list[str] = []
+	_cached_allow_live_merged(monkeypatch, _git(repo, "rev-parse", "HEAD"), calls)
+	code, message = fresh_state_guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git commit --allow-empty -m x && git push origin HEAD:feature/x"}})
+	assert code == 2, message
+	assert calls == ["feature/x"]
+
+
+def test_bare_commit_still_uses_a_cached_allow(merged_branch_repo, monkeypatch) -> None:
+	repo, _ = merged_branch_repo
+	calls: list[str] = []
+	_cached_allow_live_merged(monkeypatch, _git(repo, "rev-parse", "HEAD"), calls)
+	code, _ = fresh_state_guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git commit --allow-empty -m x"}})
+	assert code == 0
+	assert calls == []
+
+
+def test_push_does_not_fall_back_to_cache_when_lookup_fails(merged_branch_repo, monkeypatch, capsys) -> None:
+	repo, _ = merged_branch_repo
+	merged = dict(MERGED_PR, headRefOid=_git(repo, "rev-parse", "HEAD"))
+	monkeypatch.setattr(fresh_state_guard, "_read_cache", lambda slug, branch: [merged, OPEN_PR])
+	monkeypatch.setattr(fresh_state_guard, "_write_cache", lambda *args: None)
+
+	def unavailable(slug, branch, cwd):
+		raise fresh_state_guard.LookupUnavailable("HTTP 403")
+
+	monkeypatch.setattr(fresh_state_guard, "query_pull_requests", unavailable)
+	monkeypatch.setattr(
+		fresh_state_guard,
+		"git_history_verdict",
+		lambda tip, branch, base, cwd: (fresh_state_guard.VERDICT_INCONCLUSIVE, "no evidence"),
+	)
+	monkeypatch.delenv("CLAUDE_PR_MERGE_GUARD", raising=False)
+	code, _ = fresh_state_guard.evaluate({"tool_name": "Bash", "cwd": str(repo),
+		"tool_input": {"command": "git push origin HEAD:feature/x"}})
+	assert code == 0
+	decision = _ask_decision(
+		subprocess.CompletedProcess([], 0, stdout=capsys.readouterr().out, stderr="")
+	)
+	assert decision is not None
+	assert "HTTP 403" in decision["systemMessage"]
+
+
+def test_mcp_push_never_reads_the_cache(monkeypatch, tmp_path: Path) -> None:
+	pull_requests = [MERGED_PR]
+	calls: list[str] = []
+	cache_writes: list[tuple[str, str, list[dict]]] = []
+	monkeypatch.setattr(fresh_state_guard, "repo_slug", lambda cwd: "o/local")
+	monkeypatch.setattr(
+		fresh_state_guard, "_read_cache", lambda slug, branch: pytest.fail("a push must not read the cache")
+	)
+
+	def listing(slug, branch, cwd):
+		calls.append(branch)
+		return pull_requests
+
+	monkeypatch.setattr(fresh_state_guard, "query_pull_requests", listing)
+	monkeypatch.setattr(
+		fresh_state_guard,
+		"_write_cache",
+		lambda slug, branch, entries: cache_writes.append((slug, branch, entries)),
+	)
+	monkeypatch.delenv("CLAUDE_PR_MERGE_GUARD", raising=False)
+	payload = {**_mcp_payload(), "cwd": str(tmp_path)}
+	assert fresh_state_guard.evaluate(payload) == (0, "")
+	assert calls == ["feature/x"]
+	assert cache_writes == [("o/r", "feature/x", pull_requests)]
