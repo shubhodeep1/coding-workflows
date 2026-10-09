@@ -943,6 +943,19 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   decision Q35: A (2026-10-09), after #6741 merged green against a base
   that #6549 had changed under its tests. `tests/test_pr_base_freshness_gate.py`
   covers the outcomes, the switch and every wiring point.
+- **Required checks before auto-merge.** `gh pr merge --auto` merges as
+  soon as the base's required status checks pass, and an unprotected base
+  has none, so the review's auto-merge paths landed #6906 on `main` while
+  its own PR CI run showed `orchestrate-poll (3)` failing. The same two
+  paths now call `_pr_wait_for_required_checks <pr> <head> <base>`
+  (`scripts/pr_checks_lib.sh`) first: it polls `_pr_checks_completed` with
+  the calling run excluded (`PR_CHECKS_SELF_RUN_ID`) for up to
+  `AUTO_MERGE_CHECKS_WAIT_MINUTES` (default 45, every
+  `AUTO_MERGE_CHECKS_POLL_SECONDS`, default 60), enables auto-merge only on
+  `ok`/`allow_all`, and refuses on a settled failure (`PR_CHECKS_LAST_PENDING`
+  is 0 while the gate still blocks), a timeout or a failed query, logging
+  `AUTOFIX_AUTO_MERGE_CHECKS pr=<n> head_sha=<sha> outcome=<...>`. The
+  orchestrator's direct merges already gated on `_pr_checks_completed`.
 - **Dependencies.** `codex_isolated_exec.sh prepare --deps` (implement) installs
   dependencies once per job. The network-isolated, credential-free container sees
   only staged Node manifests and filtered third-party Python requirements

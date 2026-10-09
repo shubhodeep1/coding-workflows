@@ -54,6 +54,13 @@ if ! type _pr_base_fresh_for_merge >/dev/null 2>&1; then
 		return 0
 	}
 fi
+if ! type _pr_wait_for_required_checks >/dev/null 2>&1; then
+	_pr_wait_for_required_checks()
+	{
+		echo "::warning::pr_checks_lib.sh unavailable; required-checks wait skipped for PR #${1:-unknown}."
+		return 0
+	}
+fi
 
 record_auto_merge_ready_labels_allowed()
 {
@@ -234,6 +241,18 @@ if ! printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq -- "${ORCH_INTEGRATION_BRAN
 	&& ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${_orch_pr_base_ref}"; then
 	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=defer reason=base_moved_overlap"
 	echo "Auto-merge not enabled for PR #${PR_NUMBER}: the base moved under files this PR touches since its checks ran. The branch update's synchronize run re-validates and re-enables auto-merge."
+	exit 0
+fi
+
+# `gh pr merge --auto` merges immediately when the base has no required
+# status checks (no branch protection), whatever CI says. Wait for the
+# required set on the reviewed head to settle, and enable auto-merge only
+# when it is green; a settled failure leaves the PR for the next review
+# round (the sweep re-dispatches) and withholds the merge labels.
+if ! printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}" \
+	&& ! _pr_wait_for_required_checks "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${_orch_pr_base_ref}"; then
+	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=refuse reason=required_checks_${PR_CHECKS_WAIT_OUTCOME:-unknown}"
+	echo "::warning::Auto-merge not enabled for PR #${PR_NUMBER}: required check-runs on ${INITIAL_HEAD_SHA:0:7} are ${PR_CHECKS_WAIT_OUTCOME:-unknown}. Nothing merges until a later review round sees them green."
 	exit 0
 fi
 

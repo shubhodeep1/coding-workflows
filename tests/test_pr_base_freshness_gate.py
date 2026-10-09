@@ -227,3 +227,119 @@ class Wiring(unittest.TestCase):
 
 if __name__ == "__main__":
 	unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# Required-checks wait before `gh pr merge --auto` (same library).
+# ---------------------------------------------------------------------------
+
+def _runs(*entries: tuple[str, str, str]) -> str:
+	"""Production --paginate --slurp shape: an array of page objects."""
+	return json.dumps([{"check_runs": [
+		{"name": name, "status": status, "conclusion": conclusion or None, "details_url": "https://github.com/o/r/actions/runs/999/job/1"}
+		for name, status, conclusion in entries
+	]}])
+
+
+def _wait(runs_sequence: list[str], *, max_minutes: str = "1", poll: str = "1", env: dict[str, str] | None = None) -> tuple[int, str]:
+	"""Each check-runs read returns the next fixture; the last one repeats."""
+	seq_file = Path(os.environ.get("TMPDIR", "/tmp")) / f"pr_checks_wait_seq_{os.getpid()}.json"
+	seq_file.write_text(json.dumps(runs_sequence), encoding="utf-8")
+	counter = Path(os.environ.get("TMPDIR", "/tmp")) / f"pr_checks_wait_n_{os.getpid()}"
+	counter.write_text("0", encoding="utf-8")
+	preamble = f"""
+set -uo pipefail
+gh_retry() {{ "$@"; }}
+_safe_gh_jq() {{
+  case "$*" in
+    *"/protection"*) printf '%s' '' ;;
+    *"/check-runs"*)
+      n="$(cat "{counter}")"; printf '%s' "$((n + 1))" > "{counter}"
+      jq -r --argjson n "${{n}}" '.[ ([$n, (length - 1)] | min) ]' "{seq_file}" ;;
+    *) printf '%s' '{{}}' ;;
+  esac
+}}
+source {str(LIB)!r}
+_pr_wait_for_required_checks 7 {HEAD} main {max_minutes}; rc=$?
+printf 'rc=%s outcome=%s\\n' "${{rc}}" "${{PR_CHECKS_WAIT_OUTCOME}}"
+"""
+	full_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "PR_CHECKS_REPOSITORY": "owner/repo",
+		"AUTO_MERGE_CHECKS_POLL_SECONDS": poll, "GITHUB_RUN_ID": "4242", "PYTHONDONTWRITEBYTECODE": "1"}
+	full_env.update(env or {})
+	res = subprocess.run(["bash", "-c", preamble], env=full_env, capture_output=True, text=True, timeout=120)
+	assert res.returncode == 0, res.stderr
+	last = [line for line in res.stdout.splitlines() if line.startswith("rc=")][-1]
+	return int(last.split()[0][3:]), res.stdout
+
+
+GREEN = _runs(("CI", "completed", "success"), ("lint", "completed", "success"), ("review / gate", "completed", "success"))
+RED = _runs(("CI", "completed", "failure"), ("lint", "completed", "success"), ("review / gate", "completed", "success"))
+RUNNING = _runs(("CI", "in_progress", ""), ("lint", "completed", "success"), ("review / gate", "completed", "success"))
+RUNNING_SELF_ONLY = json.dumps([{"check_runs": [
+	{"name": "CI", "status": "completed", "conclusion": "success", "details_url": "https://github.com/o/r/actions/runs/999/job/1"},
+	{"name": "review / codex-agent", "status": "in_progress", "conclusion": None, "details_url": "https://github.com/o/r/actions/runs/4242/job/7"},
+]}])
+
+
+class RequiredChecksWait(unittest.TestCase):
+	def test_green_required_set_returns_immediately(self) -> None:
+		rc, out = _wait([GREEN])
+		self.assertEqual(rc, 0)
+		self.assertIn("outcome=ok waited_s=0", out)
+
+	def test_settled_failure_refuses_without_waiting(self) -> None:
+		rc, out = _wait([RED])
+		self.assertEqual(rc, 1)
+		self.assertIn("outcome=failed waited_s=0 pending=0", out)
+
+	def test_pending_then_green_waits_and_proceeds(self) -> None:
+		rc, out = _wait([RUNNING, RUNNING, GREEN])
+		self.assertEqual(rc, 0)
+		self.assertIn("still running; waiting 1s", out)
+		self.assertIn("outcome=ok waited_s=2", out)
+
+	def test_pending_then_failure_refuses(self) -> None:
+		rc, out = _wait([RUNNING, RED])
+		self.assertEqual(rc, 1)
+		self.assertIn("outcome=failed waited_s=1", out)
+
+	def test_budget_exhausted_times_out(self) -> None:
+		rc, out = _wait([RUNNING], max_minutes="0")
+		self.assertEqual(rc, 1)
+		self.assertIn("outcome=timeout waited_s=0 pending=1", out)
+
+	def test_own_run_never_counts_as_pending(self) -> None:
+		rc, out = _wait([RUNNING_SELF_ONLY])
+		self.assertEqual(rc, 0)
+		self.assertIn("outcome=ok", out)
+
+	def test_query_failure_refuses(self) -> None:
+		rc, out = _wait(["{}"])
+		self.assertEqual(rc, 1)
+		self.assertIn("outcome=query_failed", out)
+
+	def test_allow_all_sentinel_proceeds(self) -> None:
+		rc, out = _wait([RED], env={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": ""})
+		self.assertEqual(rc, 0)
+		self.assertIn("outcome=allow_all", out)
+
+
+class RequiredChecksWiring(unittest.TestCase):
+	def test_review_enable_auto_merge_waits_before_both_tails(self) -> None:
+		text = ENABLE_AUTO_MERGE.read_text(encoding="utf-8")
+		wait_at = text.index('_pr_wait_for_required_checks "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${_orch_pr_base_ref}"')
+		self.assertLess(wait_at, text.index('--merge --auto --match-head-commit "${INITIAL_HEAD_SHA}"'))
+		self.assertLess(wait_at, text.index('--squash --auto --match-head-commit "${INITIAL_HEAD_SHA}"'))
+		self.assertIn("reason=required_checks_${PR_CHECKS_WAIT_OUTCOME:-unknown}", text)
+
+	def test_deterministic_skip_merge_waits_before_both_auto_merge_calls(self) -> None:
+		text = WORKFLOW.read_text(encoding="utf-8")
+		job = text.split("  deterministic-skip-merge:", 1)[1].split("\n  claude-fixer-auto-merge:", 1)[0]
+		self.assertEqual(job.count('elif ! _pr_wait_for_required_checks "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then'), 2)
+		self.assertIn("AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}", job)
+
+	def test_codex_agent_auto_merge_step_passes_the_wait_variables(self) -> None:
+		text = WORKFLOW.read_text(encoding="utf-8")
+		step = text.split("- name: Enable auto-merge on PR", 1)[1].split("- name: ", 1)[0]
+		self.assertIn("AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}", step)
+		self.assertIn("AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}", step)

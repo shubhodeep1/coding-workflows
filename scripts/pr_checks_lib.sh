@@ -143,6 +143,7 @@ _pr_required_check_names_for_base()
 _pr_checks_completed()
 {
 	PR_CHECKS_LAST_REASON="query_failed"
+	PR_CHECKS_LAST_PENDING=0
 	local pr_number="$1"
 	local head_sha="${2:-}"
 	local base_ref="${3:-}"
@@ -257,6 +258,18 @@ _pr_checks_completed()
 		PR_CHECKS_LAST_REASON="query_failed"
 		return 1
 	fi
+	# Side channel for callers that wait: how many of the blocking runs are
+	# still running (status != completed, self-run excluded). A blocking
+	# result with zero pending runs is a settled failure, not a wait.
+	PR_CHECKS_LAST_PENDING="$(printf '%s' "${check_runs_json}" | jq -r --arg self_run "${self_run}" '
+		def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
+		(
+			if (type == "array") then [.[]? | (.check_runs // [])[]]
+			elif (type == "object" and (.check_runs | type == "array")) then .check_runs
+			else [] end
+		) | [.[] | select(.status != "completed" and (_is_self_check_run | not))] | length
+	' 2>/dev/null | tail -n1)"
+	[[ "${PR_CHECKS_LAST_PENDING}" =~ ^[0-9]+$ ]] || PR_CHECKS_LAST_PENDING=0
 
 	if [ "${incomplete}" -gt 0 ]; then
 		if [ "${required_names_csv}" = "*" ]; then
@@ -275,6 +288,75 @@ _pr_checks_completed()
 	fi
 	PR_CHECKS_LAST_REASON="ok"
 	return 0
+}
+
+# ---------------------------------------------------------------------------
+# Required-checks wait before enabling auto-merge (2026-10-09).
+#
+# `gh pr merge --auto` merges as soon as the base branch's required status
+# checks pass. A base branch with no branch protection has none, so the
+# merge happens the moment auto-merge is enabled, whatever CI says: #6906
+# landed on `main` while its own pull-request CI run (37924079118) already
+# showed `orchestrate-poll (3)` failing on the merge ref, and `main` went
+# red. The orchestrator's direct merges already gate on
+# `_pr_checks_completed`; the review workflow's auto-merge paths did not.
+#
+#   _pr_wait_for_required_checks <pr> <head_sha> <base_ref> [<max_minutes>]
+#       Polls `_pr_checks_completed` (with PR_CHECKS_SELF_RUN_ID so the
+#       calling run's own check-runs never count) until the required set is
+#       green, a required check has failed with nothing left running, the
+#       budget is spent, or the query fails. Returns 0 only when the gate
+#       reports ok (or allow-all). Sets PR_CHECKS_WAIT_OUTCOME to
+#       ok|allow_all|failed|timeout|query_failed|unresolved_head_sha and
+#       logs `AUTOFIX_AUTO_MERGE_CHECKS pr=<n> head_sha=<sha> outcome=<...>
+#       waited_s=<n> pending=<n>`.
+#
+# Env: AUTO_MERGE_CHECKS_WAIT_MINUTES (default 45; 0 = one check, no wait),
+# AUTO_MERGE_CHECKS_POLL_SECONDS (default 60). One check-runs listing (plus
+# the branch-protection read) per poll.
+_pr_wait_for_required_checks()
+{
+	local pr_number="$1"
+	local head_sha="${2:-}"
+	local base_ref="${3:-}"
+	local max_minutes="${4:-${AUTO_MERGE_CHECKS_WAIT_MINUTES:-45}}"
+	local poll_seconds="${AUTO_MERGE_CHECKS_POLL_SECONDS:-60}"
+	local waited=0 rc=0
+	PR_CHECKS_WAIT_OUTCOME="timeout"
+	[[ "${max_minutes}" =~ ^[0-9]+$ ]] || max_minutes=45
+	[[ "${poll_seconds}" =~ ^[1-9][0-9]*$ ]] || poll_seconds=60
+	while :; do
+		rc=0
+		PR_CHECKS_SELF_RUN_ID="${PR_CHECKS_SELF_RUN_ID:-${GITHUB_RUN_ID:-}}" \
+			_pr_checks_completed "${pr_number}" "${head_sha}" "${base_ref}" >/dev/null || rc=$?
+		case "${PR_CHECKS_LAST_REASON}" in
+			ok|allow_all)
+				PR_CHECKS_WAIT_OUTCOME="${PR_CHECKS_LAST_REASON}"
+				echo "AUTOFIX_AUTO_MERGE_CHECKS pr=${pr_number} head_sha=${head_sha:-unknown} outcome=${PR_CHECKS_WAIT_OUTCOME} waited_s=${waited} pending=0"
+				return 0
+				;;
+			blocking)
+				if [ "${PR_CHECKS_LAST_PENDING:-0}" -eq 0 ]; then
+					PR_CHECKS_WAIT_OUTCOME="failed"
+					echo "AUTOFIX_AUTO_MERGE_CHECKS pr=${pr_number} head_sha=${head_sha:-unknown} outcome=failed waited_s=${waited} pending=0"
+					return 1
+				fi
+				;;
+			*)
+				PR_CHECKS_WAIT_OUTCOME="${PR_CHECKS_LAST_REASON:-query_failed}"
+				echo "AUTOFIX_AUTO_MERGE_CHECKS pr=${pr_number} head_sha=${head_sha:-unknown} outcome=${PR_CHECKS_WAIT_OUTCOME} waited_s=${waited} pending=${PR_CHECKS_LAST_PENDING:-0}"
+				return 1
+				;;
+		esac
+		if [ "${waited}" -ge $((max_minutes * 60)) ]; then
+			PR_CHECKS_WAIT_OUTCOME="timeout"
+			echo "AUTOFIX_AUTO_MERGE_CHECKS pr=${pr_number} head_sha=${head_sha:-unknown} outcome=timeout waited_s=${waited} pending=${PR_CHECKS_LAST_PENDING:-0}"
+			return 1
+		fi
+		echo "  [check-runs] PR #${pr_number}: ${PR_CHECKS_LAST_PENDING:-0} required/pending check-run(s) still running; waiting ${poll_seconds}s (${waited}/$((max_minutes * 60))s)."
+		sleep "${poll_seconds}"
+		waited=$((waited + poll_seconds))
+	done
 }
 
 # ---------------------------------------------------------------------------

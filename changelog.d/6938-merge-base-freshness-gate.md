@@ -5,11 +5,13 @@ PR #6741 merged on 2026-10-09 with check-runs from the previous day; #6549 had m
 
 | The numbers that matter | Value |
 | --- | --- |
-| Repository variable | `MERGE_BASE_FRESHNESS_ENABLED` (default `true`) |
+| Repository variables | `MERGE_BASE_FRESHNESS_ENABLED` (default `true`), `AUTO_MERGE_CHECKS_WAIT_MINUTES` (default `45`), `AUTO_MERGE_CHECKS_POLL_SECONDS` (default `60`) |
 | API calls per gated merge | 1 compare, plus 1 files listing only when the base moved, plus 1 update on overlap |
 | Extra validation rounds | 1 CI and review round, only for a PR whose files the base changed |
 
-What this means for operators: a green PR can no longer land code that was never tested against the current base, and non-overlapping PRs merge at the same speed as before. Set `MERGE_BASE_FRESHNESS_ENABLED=false` to restore the previous behaviour.
+The same two review auto-merge paths also wait for the reviewed head's required check-runs before calling `gh pr merge --auto` (`AUTO_MERGE_CHECKS_WAIT_MINUTES`, default 45, polled every `AUTO_MERGE_CHECKS_POLL_SECONDS`, default 60): without branch protection the base has no required status checks and auto-merge lands the PR immediately, which is how #6906 reached `main` at 12:38 UTC while its own PR CI already showed `orchestrate-poll (3)` failing. A settled failure or a timeout now refuses auto-merge and withholds the merge labels.
+
+What this means for operators: a green PR can no longer land code that was never tested against the current base, a red PR no longer lands because the base has no required checks, and non-overlapping green PRs merge at the same speed as before. Set `MERGE_BASE_FRESHNESS_ENABLED=false` to restore the previous freshness behaviour.
 
 ### For contributors
 
