@@ -1,0 +1,6 @@
+<!-- changelog: fixed -->
+- **The identical-failure cap now resets when the review support version changes.**
+
+Every review/autofix failure marker and cap marker now records the verified review-support SHA as `support=<sha>`. The gate counts only the failures recorded by its own support version, and the `fingerprint-cap-block` job only treats a cap marker from that version as already applied. The poller's noop-suspicious sweep also skips a capped head only when the cap marker carries the current review-support SHA: here that is its engine SHA, and in consumer repos it is the `review_autofix.yml` pin in `ai-review.yml`. Otherwise it logs `NOOP_RECOVERY_FINGERPRINT_CAP_STALE_SUPPORT` and dispatches the review again. When the sweep cannot resolve the support SHA, any trusted cap marker still skips the head, as before. Markers written before this change carry no `support=` field and count as an older version.
+
+What this means for operators: pull requests capped before a support-script fix are reviewed again automatically by the scheduled sweep. Repeated failures on the new support version are still capped after the usual three failures, or after one non-retryable failure. In this repository every new `main` commit is a new support version, so a persistently failing head can be reviewed up to three more times per `main` commit.
