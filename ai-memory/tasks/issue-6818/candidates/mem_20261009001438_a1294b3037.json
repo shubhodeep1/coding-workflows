@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should this heal proceed when the failed step's log is unavailable?\nChoices:\nA. Make the step report which command failed: each command in `install-opencode/action.yml` gets its own `::error::install-opencode: stage=<npm_install|version_check|models_refresh|run_help> rc=<n>` line. Exit behaviour stays the same (still fails closed, no retry), and a contract test pins each stage's error line by simulating that stage failing. This makes the next occurrence diagnosable; it does not claim to fix a root cause. (RECOMMENDED)\nB. Supply the step log from run 37862635273 in an `/answer` (or name the failing command) so the plan can target the actual root cause with a reproducing regression test.\nC. Close this heal issue as not actionable (no code change), and rely on the lineage cap and escalation if the failure happens again.\nQ2: If the failing stage turns out to be (or is presumed to be) `opencode models --refresh`, the network warm-up of the models.dev cache, should that stage stay fatal?\nChoices:\nA. Keep it fatal: a failed cache warm-up keeps failing the step, matching the current fail-closed behaviour. (RECOMMENDED)\nB. Make only the cache warm-up non-fatal: log a `::warning::` and continue, while the install, version-check and `run --help` checks stay fatal. **Note:** this may count as weakening a check under the issue's fix constraints. Choose it only with Q1:B evidence that the refresh is the failing stage.",
+  "fingerprint": "f3bf101c3fe61ac2154385af7891f9f5e8ecca38f9bd5a229f3380f580ea43ef",
+  "lineage": {
+    "issue_number": 6818,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37863381293",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37863381293",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009001438_a1294b3037",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6818,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37863381293"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6818 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T00:14:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
