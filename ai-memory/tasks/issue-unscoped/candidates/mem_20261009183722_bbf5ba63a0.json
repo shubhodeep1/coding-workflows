@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/validation_harness_sandbox.sh: lines around the fingerprint extraction (gpg --show-keys ... | awk ...)\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: When `gpg` is missing, broken, or the keyring file is invalid, the empty fingerprint is reported as `docker_repo_key_fingerprint_mismatch`, obscuring the cause.\n  WHY: The script fails closed, but operators cannot distinguish a changed key from an unavailable or malfunctioning `gpg`.\n- tests/test_validation_harness_sandbox.py: `test_a_failed_repo_install_names_its_reason_and_cleans_up` (the `.replace(\"\\nexit 0\\n\", \"\\nexit 100\\n\")` line)\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The positional replacement could silently change multiple `exit 0` paths if the fake apt-get stub gains another matching line.\n  WHY: Today it only matches the trailing `exit 0\\n` because no other `\\nexit 0\\n` substring exists, but that invariant is implicit.\n- tests/test_validation_harness_sandbox.py: Line 419\n  severity=high | confidence=[5]\n  flagged_by: [qwen_qwen3_7-plus]\n  PROBLEM: The cleanup test asserts that the `keyrings` directory does not exist even though cleanup removes only files within it.\n  WHY: The test setup creates the directory at line 310 and the script removes only the files at line 253, so the directory persists; the assertion should check that the specific files do not exist.\n\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: scripts/validation_harness_sandbox.sh\n  Location: lines around the fingerprint extraction (gpg --show-keys ... | awk ...)\n  Issue: When `gpg` is missing, broken, or the keyring file is not a valid PGP block, `fingerprint` ends up empty and the function logs `docker_repo_key_fingerprint_mismatch`. That reason is technically true but misleading \u2014 operators can't tell whether the key changed or the runner lacks `gpg`. The script remains fail-closed in both cases, so this is an observability concern, not a security one.\n  Suggested minimal fix: probe `command -v gpg` first; when missing, log a distinct reason such as `docker_repo_gpg_unavailable` before the fingerprint check. ~3 lines.\n  HARDENING_RISK_SCORE: 1\n- File: tests/test_validation_harness_sandbox.py\n  Location: `test_a_failed_repo_install_names_its_reason_and_cleans_up` (the `.replace(\"\\nexit 0\\n\", \"\\nexit 100\\n\")` line)\n  Issue: The replacement is positional and would silently break if the fake apt-get ever grew another `exit 0` on its own line (e.g. an idempotency guard added later), flipping more code paths to exit 100 than the test intends. Today it only matches the trailing `exit 0\\n` because no other `\\nexit 0\\n` substring exists, but that invariant is implicit.\n  Suggested minimal fix: anchor the replacement to the final line (`text.rsplit(\"exit 0\", 1)`) or rewrite the apt-get stub to honour a `MODE=fail_after_source` env var and set it in the test. ~2\u20134 lines.\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- tests/test_validation_harness_sandbox.py: Line 419\n  severity=MAJOR | confidence=[5]\n  PROBLEM: The test asserts `assert not (tmp_path / \"keyrings\").exists()`, but the script creates the keyrings directory (line 235 of validation_harness_sandbox.sh: `sudo -n install -d -m 0755 \"${SANDBOX_DOCKER_APT_KEYRING_DIR}\"`) and only removes the files within it (line 253: `sudo -n rm -f -- \"${source_list}\" \"${keyring}\"`), not the directory itself. The directory will still exist after cleanup.\n  WHY: The test setup in `_install_env` creates the keyrings directory (line 310: `keyrings.mkdir()`), and the script's cleanup removes only the files, not the directory. The assertion should check that the specific files don't exist. This differs from `test_a_wrong_key_fingerprint_is_refused_and_nothing_is_trusted`, where the directory correctly doesn't exist because the function returns before creating it (line 231 returns before line 235 creates the directory).\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "0c32eeb74a6281cff8ecdc9750acaf2488dbbc720ce145492e7898c18cf72282",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6959,
+    "run_id": "37969688631",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37969688631",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009183722_bbf5ba63a0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6959,
+    "run_id": "37969688631"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-09T18:37:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
