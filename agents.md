@@ -516,23 +516,21 @@ The merged-PR guard in `.claude/hooks/pr_merge_status_guard.py` and its
 unquoted file descriptors before checking push destinations. `2 > out` retains
 the branch `2`; `2>out` does not. The copies stay byte-identical.
 
-Open security finding #6755: the merged-PR guard does not inspect Git writes
-wrapped in nested shell text, so it is not resolved and nothing may treat it
-as fixed. `WRAPPED_GIT_WRITE_GUARD_UNSET_OPERATOR_STEP` is an unresolved
-operator-step placeholder from the unblock verdict for #6755; no code reads it
-and setting it enables nothing, so both hook copies behave exactly as before.
-The pending human step, done in a trusted writable checkout, changes both
-`pr_merge_status_guard.py` copies identically (they must stay byte-identical)
-so that they inspect, within bounds, nested `bash`/`sh`/`zsh`/`dash` `-c`
-scripts, `eval` text, command substitutions, backticks and process
-substitutions; apply the existing merged-PR check to any Git write found
-inside; and request confirmation when wrapper text that will run cannot be
-read safely, keeping the existing handling of `sudo`, `timeout`, `xargs` and
-pipes into `bash` unchanged. The same step adds tests against both copies,
-replaces this note and adds a changelog fragment. The pipeline did not make
-the change because its editors cannot write `.claude/hooks/**`, and
-`tests/test_claude_template_live_parity.py` requires the live security hook to
-match its template.
+Security finding #6755 (`merged-pr-guard-misses-wrapped-git`) is fixed in
+both `pr_merge_status_guard.py` copies, which stay byte-identical. The guard
+parses `bash`/`sh`/`zsh`/`dash` `-c` scripts, `eval` text, `$(...)`, backtick
+and `<(...)` bodies up to three levels deep and runs the normal merged-PR
+check on each Git commit or push found there; wrapped text it cannot read
+safely (a dynamic command word, an unterminated body, deeper nesting) asks for
+confirmation when it could run a Git write. `sudo`, `timeout`, `xargs` and
+pipes into `bash` keep their existing handling, and so does the `command`
+builtin: `command git push ...`, bare or inside `bash -c`, is not yet
+inspected (both copies' `_SHELL_CONTROL_PREFIXES` lack it; the fix needs both
+hook copies, which the pipeline cannot write). Tests run against both copies
+in `tests/test_pr_merge_status_guard.py`. The interactive session applied the
+change because the pipeline's editors cannot write `.claude/hooks/**`; the
+former `WRAPPED_GIT_WRITE_GUARD_UNSET_OPERATOR_STEP` placeholder is retired
+and nothing reads it.
 
 Integration-ref trust boundary: `scripts/resolve_integration_ref.sh` can return
 any existing valid Git branch name declared by issue metadata. Workflows may
