@@ -26,6 +26,8 @@
 #   GH_TOKEN, GITHUB_REPOSITORY            required
 #   MERGE_TRAIN_ENABLED                    default true; any other value = no-op
 #   MERGE_TRAIN_MAX_OLDER_PRS              default 20; older PRs examined per PR
+#   MERGE_TRAIN_IGNORE_PATHS                default .ai/.workspace_source_manifest.txt;
+#                                           exact paths separated by comma/newline, none disables
 #   MERGE_TRAIN_LABEL                      default ai:merge-queued
 #   MERGE_TRAIN_HEAD_REF_PREFIX            default ai/issue-
 #   MERGE_TRAIN_ALLOW_WORKFLOW_EDITS       default true; forwarded on dispatch
@@ -97,6 +99,8 @@ MT_ENABLED="${MERGE_TRAIN_ENABLED:-true}"
 MT_LABEL="${MERGE_TRAIN_LABEL:-ai:merge-queued}"
 MT_PREFIX="${MERGE_TRAIN_HEAD_REF_PREFIX:-ai/issue-}"
 MT_MAX_OLDER="${MERGE_TRAIN_MAX_OLDER_PRS:-20}"
+MT_IGNORE_RAW="${MERGE_TRAIN_IGNORE_PATHS-.ai/.workspace_source_manifest.txt}"
+MT_IGNORE_PATHS=""
 MT_REPO="${GITHUB_REPOSITORY:-}"
 MT_MARKER="<!-- merge-train:queued -->"
 MT_RELEASED_MARKER="<!-- merge-train:released -->"
@@ -104,6 +108,20 @@ MT_BYPASSED_MARKER="<!-- merge-train:bypassed -->"
 MT_RETIRED_MARKER="<!-- merge-train:queue-retired -->"
 MT_AUTOMATION_LOGIN=""
 [[ "${MT_MAX_OLDER}" =~ ^[0-9]+$ ]] || MT_MAX_OLDER=20
+
+# Exact paths only. The empty string and the repo-variable sentinel 'none'
+# deliberately retain legacy overlap behavior.
+if [ "$(printf '%s' "${MT_IGNORE_RAW}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" != "none" ]; then
+	while IFS= read -r mt_ignored_path; do
+		mt_ignored_path="$(printf '%s' "${mt_ignored_path}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+		[ -n "${mt_ignored_path}" ] || continue
+		case "${mt_ignored_path}" in
+			*'*'*|*'?'*|*'['*) _mt_warn "merge-train: ignoring glob entry in MERGE_TRAIN_IGNORE_PATHS: ${mt_ignored_path}"; continue ;;
+		esac
+		MT_IGNORE_PATHS+="${mt_ignored_path}"$'\n'
+	done < <(printf '%s\n' "${MT_IGNORE_RAW}" | tr ',' '\n')
+fi
+MT_IGNORE_PATHS="${MT_IGNORE_PATHS%$'\n'}"
 
 case "$(printf '%s' "${MT_ENABLED}" | tr '[:upper:]' '[:lower:]')" in
 	true|1|yes|on) ;;
@@ -188,8 +206,21 @@ _mt_own_files() {
 }
 
 # Intersection of two newline-separated sorted lists.
+_mt_drop_ignored() {
+	if [ -z "${MT_IGNORE_PATHS}" ]; then
+		printf '%s\n' "$1"
+	else
+		printf '%s\n' "$1" | grep -Fxv -f <(printf '%s\n' "${MT_IGNORE_PATHS}") || true
+	fi
+}
+
+_mt_ignored_in() {
+	[ -n "${MT_IGNORE_PATHS}" ] || return 0
+	printf '%s\n' "$1" | grep -Fx -f <(printf '%s\n' "${MT_IGNORE_PATHS}") | sort -u || true
+}
+
 _mt_intersect() {
-	comm -12 <(printf '%s\n' "$1" | sed '/^$/d' | sort -u) <(printf '%s\n' "$2" | sed '/^$/d' | sort -u)
+	comm -12 <(_mt_drop_ignored "$1" | sed '/^$/d' | sort -u) <(_mt_drop_ignored "$2" | sed '/^$/d' | sort -u)
 }
 
 # Open PRs, oldest first, one compact JSON object per line:
@@ -397,7 +428,7 @@ _mt_gate() {
 		_mt_log "MERGE_TRAIN_GATE pr=${pr} head=${head} result=not_ai_issue_branch action=continue"
 		return 0
 	fi
-	local own_files="" prs_json blockers=""
+	local own_files="" prs_json blockers="" ignored_csv="none"
 	if [ "${IS_SMOKE_TEST:-}" != "true" ]; then
 		if ! _mt_own_files_into own_files "${pr}"; then
 			_mt_warn "merge-train gate: could not list changed files for PR #${pr}; fail-open (not queued)."
@@ -407,6 +438,8 @@ _mt_gate() {
 			_mt_log "MERGE_TRAIN_GATE pr=${pr} result=no_changed_files action=continue"
 			return 0
 		fi
+		ignored_csv="$( _mt_ignored_in "${own_files}" | paste -sd, - )"
+		ignored_csv="${ignored_csv:-none}"
 	fi
 	if ! prs_json="$(_mt_list_open_prs "${base}")"; then
 		_mt_warn "merge-train gate: could not list open PRs on ${base}; fail-open (not queued)."
@@ -421,7 +454,7 @@ _mt_gate() {
 	local own_labels queued_comment_id queued_comment_created queued_comment bypass_reason queue_label_persisted queue_state_verified
 	own_labels="$(printf '%s\n' "${prs_json}" | jq -r --argjson n "${pr}" 'select(.number == $n) | .labels | join(",")' 2>/dev/null | head -n 1 || true)"
 	if [ -z "${blockers}" ]; then
-		_mt_log "MERGE_TRAIN_GATE pr=${pr} base=${base} result=unblocked action=continue"
+		_mt_log "MERGE_TRAIN_GATE pr=${pr} base=${base} result=unblocked action=continue ignored=${ignored_csv}"
 		if _mt_has_label "${own_labels}"; then
 			if ! _mt_resolve_automation_login || ! queued_comment_id="$(_mt_find_marker_comment_id "${pr}" "${MT_MARKER}")"; then
 				_mt_warn "merge-train gate: could not inspect queue marker for unblocked PR #${pr}; retaining ${MT_LABEL} for the release backstop."
@@ -454,7 +487,7 @@ _mt_gate() {
 			if gh_retry gh api -X PATCH "repos/${MT_REPO}/issues/comments/${queued_comment_id}" \
 				-f body="${MT_BYPASSED_MARKER}
 **Merge train bypassed once.** The queue label was removed while older overlapping PRs remain open, so this review run is proceeding. A later run will evaluate the train normally." >/dev/null 2>&1; then
-				_mt_log "MERGE_TRAIN_GATE pr=${pr} base=${base} result=bypassed blockers=$(printf '%s\n' "${blockers}" | sed 's/:.*//' | paste -sd, -) action=continue"
+				_mt_log "MERGE_TRAIN_GATE pr=${pr} base=${base} result=bypassed blockers=$(printf '%s\n' "${blockers}" | sed 's/:.*//' | paste -sd, -) action=continue ignored=${ignored_csv}"
 				return 0
 			fi
 			_mt_warn "merge-train gate: could not persist the one-shot bypass marker for PR #${pr}; keeping it queued."
@@ -465,7 +498,7 @@ _mt_gate() {
 	local blocker_numbers blocker_lines
 	blocker_numbers="$(printf '%s\n' "${blockers}" | sed 's/:.*//' | paste -sd' ' -)"
 	blocker_lines="$(printf '%s\n' "${blockers}" | sed 's/^\(#[0-9]*\):\(.*\)$/- \1 — `\2`/' | sed 's/,/`, `/g')"
-	_mt_log "MERGE_TRAIN_GATE pr=${pr} base=${base} result=queued blockers=${blocker_numbers// /,} action=soft_exit"
+	_mt_log "MERGE_TRAIN_GATE pr=${pr} base=${base} result=queued blockers=${blocker_numbers// /,} action=soft_exit ignored=${ignored_csv}"
 	_mt_ensure_label
 	queue_label_persisted="true"
 	if ! _mt_has_label "${own_labels}"; then

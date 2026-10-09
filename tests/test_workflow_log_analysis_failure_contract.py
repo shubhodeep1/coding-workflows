@@ -49,6 +49,17 @@ def test_codex_jobs_use_heartbeat_wrapper() -> None:
 	assert "2> >(tee -a /tmp/workflow-weekly-retro-codex.log >&2)" in wf
 
 
+def test_analyze_mounts_bounded_log_bundle_or_falls_back_to_context() -> None:
+	wf = _workflow_text()
+	analyze = wf.split("      - name: Run workflow log analysis\n", 1)[1].split("\n      - name: ", 1)[0]
+	assert 'RUN_LOGS_DIR="$(realpath -e -- "${RUN_LOGS_DIR}" 2>/dev/null)"' in analyze
+	assert 'python3 -I -B scripts/stage_workflow_log_bundle.py "${RUN_LOGS_DIR}"' in analyze
+	assert 'wla_run_logs_include_args=(--include "${RUN_LOGS_DIR}")' in analyze
+	assert 'bash scripts/codex_isolated_exec.sh run --mode read-only ${wla_run_logs_include_args[@]+"${wla_run_logs_include_args[@]}"} --' in analyze
+	assert 'RUN_LOGS_DIR=""' in analyze
+	assert 'BOUNDED_SUBSET.txt' in analyze
+
+
 def test_weekly_retro_path_is_schedule_gated_and_default_on() -> None:
 	wf = _workflow_text()
 	assert "schedule:" in wf
@@ -148,6 +159,7 @@ def main() -> int:
 	test_codex_retry_knobs_are_env_driven()
 	test_issue_context_failure_marker_and_label_contract_present()
 	test_codex_jobs_use_heartbeat_wrapper()
+	test_analyze_mounts_bounded_log_bundle_or_falls_back_to_context()
 	test_weekly_retro_path_is_schedule_gated_and_default_on()
 	test_scenario_trace_renderer_is_flag_gated_and_local_only()
 	test_semble_wiring_is_consistent_across_four_codex_jobs()
