@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should the updated test expectation land on?\nChoices:\nA. On PR #6849's head branch `ai/issue-6838`, so the test and the new auto-approval step land together. The fix PR targets `ai/issue-6838`, or the commit goes straight onto PR #6849. (RECOMMENDED)\nB. On `main`, held until PR #6849 merges, then changed from 4 to 5. PR #6849's CI stays red until then.\nC. On `main` now, with the test accepting either 4 or 5 declarations for `plan.yml`. This weakens the exact-count check the test exists to enforce.",
+  "fingerprint": "588a3375c6cce0b7ee1fae555107424988258c7176d45fd258491e7cf66cd91e",
+  "lineage": {
+    "issue_number": 6856,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37882779987",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37882779987",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009041753_79b71d8b11",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6856,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37882779987"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6856 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T04:17:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
