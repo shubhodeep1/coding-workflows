@@ -23,6 +23,18 @@
       "run_id": 37961317760,
       "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37961317760",
       "source": "orchestrate_poll.mark_validation_failed"
+    },
+    {
+      "context": "## \u274c Runtime validation harness sandbox unavailable Isolated validation harness unavailable; tests were not executed (fail-closed). Reason: `provision rootless_packages_unavailable`",
+      "cycle": 1,
+      "outcome": "failed",
+      "raw_conclusion": "failure",
+      "raw_status": null,
+      "recorded_at": "2026-10-09T21:16:44Z",
+      "run_attempt": 1,
+      "run_id": 37991755383,
+      "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37991755383",
+      "source": "orchestrate_poll.mark_validation_failed"
     }
   ],
   "integration_sha": "a91be9201e63493d2183ddeb7afd636ecfc1ba26",
