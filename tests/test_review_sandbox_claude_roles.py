@@ -465,3 +465,68 @@ def _reset_repo(repo):
 	_git(repo, "merge", "--abort")
 	assert _git(repo, "merge", "-q", "feature").returncode != 0
 	return repo
+
+
+MANIFEST = ".ai/.workspace_source_manifest.txt"
+
+
+def test_prepare_manifest_preprocessing_leaves_only_paired_hooks(tmp_path):
+	"""Run prepare's live manifest-union block on a PR #6538-shaped merge
+	(manifest plus both hook copies conflicting), then capture the unmerged
+	paths the way prepare builds CONFLICTED_PATHS_FILE. Only the two hook
+	copies may remain, and pairing must leave the model a sandbox-safe set."""
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_git(repo, "init", "-q", "-b", "main")
+	for name in (LIVE_HOOK, TEMPLATE_HOOK):
+		_write(repo, name, "value = 0\n", 0o755)
+	_write(repo, MANIFEST, "a.py\nb.py\n")
+	_git(repo, "add", "-A")
+	_git(repo, "commit", "-qm", "base")
+	_git(repo, "checkout", "-qb", "feature")
+	for name in (LIVE_HOOK, TEMPLATE_HOOK):
+		_write(repo, name, "value = 2\n", 0o755)
+	_write(repo, MANIFEST, "a.py\nc.py\n")
+	_git(repo, "commit", "-qam", "feature")
+	_git(repo, "checkout", "-q", "main")
+	for name in (LIVE_HOOK, TEMPLATE_HOOK):
+		_write(repo, name, "value = 1\n", 0o755)
+	_write(repo, MANIFEST, "a.py\nd.py\n")
+	_git(repo, "commit", "-qam", "main")
+	_git(repo, "checkout", "-q", "feature")
+	assert _git(repo, "merge", "--no-commit", "--no-ff", "main").returncode != 0
+	prepare = (ROOT / "scripts/review_conflict_prepare.sh").read_text(encoding="utf-8")
+	start = prepare.index('MANIFEST_UNION_PATH=".ai/.workspace_source_manifest.txt"')
+	block = prepare[start:prepare.index("# When the allowlist is empty there is nothing for Codex to", start)]
+	runtime = tmp_path / "runtime"
+	runtime.mkdir()
+	(tmp_path / "stash").mkdir()
+	program = f'''set -euo pipefail
+RUNTIME_DIR={str(runtime)!r}
+GITHUB_ENV={str(tmp_path / "github_env")!r}
+RESOLVE_STASH={str(tmp_path / "stash")!r}
+_merge_stderr_file="$(mktemp)"
+IS_WORKFLOW_SOURCE_REPO=true
+HEAD_REF=feature
+RESOLVER_ALLOWLIST_FILE="${{RUNTIME_DIR}}/resolver_unmerged_allowlist.txt"
+git diff --name-only --diff-filter=U | sort -u > "${{RESOLVER_ALLOWLIST_FILE}}"
+_resolver_allowlist_count="$(wc -l < "${{RESOLVER_ALLOWLIST_FILE}}" | tr -d '[:space:]')"
+{block}
+git ls-files --unmerged | awk '{{print $4}}' | sort -u > {str(tmp_path / "conflicted")!r}
+git ls-files -u -z > {str(tmp_path / "unmerged.z")!r}
+'''
+	env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k not in ("BASH_ENV", "ENV", "CONFLICT_MANIFEST_UNION_ENABLED", "TARGET_BRANCH")}
+	env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@invalid",
+		GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@invalid")
+	proc = subprocess.run(["bash", "-c", program], cwd=repo, env=env, capture_output=True, text=True)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	# The manifest is resolved by preprocessing; the hooks are what remains.
+	assert (tmp_path / "conflicted").read_text() == f"{LIVE_HOOK}\n{TEMPLATE_HOOK}\n"
+	assert (runtime / "resolver_unmerged_allowlist.txt").read_text() == f"{LIVE_HOOK}\n{TEMPLATE_HOOK}\n"
+	# Without pairing the live hook is refused, naming it safely.
+	unpaired = _workspace("check-paths", repo, tmp_path / "conflicted")
+	assert unpaired.returncode == 1
+	assert f"REVIEW_RESOLVER_PATH_REJECTED reason=live_safety_hook path={LIVE_HOOK}\n" in unpaired.stderr
+	assert _pair(tmp_path, repo).returncode == 0
+	assert (tmp_path / "pairs").read_text() == f"{LIVE_HOOK}\t{TEMPLATE_HOOK}\n"
+	assert _workspace("check-paths", repo, tmp_path / "model_paths").returncode == 0
