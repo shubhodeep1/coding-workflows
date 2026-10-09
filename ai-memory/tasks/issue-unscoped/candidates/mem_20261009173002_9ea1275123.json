@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal_intake.sh:`FAILING_TESTS_JSON=\"$(python3 ... || echo '{\"names\":[],\"files\":[]}')\"` (around the new failing-tests extraction block) | severity=low | confidence=[3]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The failure-path fallback JSON omits the `pairs` key present in the success-path shape, creating an asymmetric shape that may become a future bug trap if a caller reads `failing_tests[\"pairs\"]` directly.\n  WHY: Current readers use `failing.get(\"pairs\") or []`, so this does not fail at runtime today, but the differing shapes require future callers to account for the omission.\n- scripts/workflow_failure_heal.py:_cmd_heal_scope render branch (`matches = [path for path in matches if isinstance(name, str) and path in reported_for_name.get(name, set())]`) | severity=low | confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The `isinstance(name, str)` guard in the list comprehension is redundant because `name` has already been validated as a string.\n  WHY: The guard does not fail at runtime or add safety, since `_heal_test_files_for_names` already validates `name` before doing the git grep.\n- scripts/workflow_failure_heal.py:2137-2141 | severity=high | confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The scope renderer processes crash, workflow, and changed-file paths before newly added test subjects, then stops after 20 explicit paths, so later test subjects can be silently omitted from the frozen scope.\n  WHY: When earlier paths and mapped test subjects exceed the 20-path limit, the diagnosis cannot add omitted subjects, so a CI heal may be unable to edit code corresponding to a reported failing test.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- File: scripts/workflow_failure_heal_intake.sh\n  Line or code reference: `FAILING_TESTS_JSON=\"$(python3 ... || echo '{\"names\":[],\"files\":[]}')\"` (around the new failing-tests extraction block)\n  Problem: The fallback JSON emitted when the Python helper crashes lacks the new `pairs` key. Downstream consumers that read `failing_tests.pairs` via `failing.get(\"pairs\") or []` still tolerate the omission, so this is benign in practice, but it is an asymmetric fallback shape that has to be remembered at every read site.\n  Why it fails at runtime: It does not actually fail at runtime today (every read uses `or []`), but the shape drift between the success path (`{names, files, pairs}`) and the failure path (`{names, files}`) creates a future-bug trap if a new caller reads `failing_tests[\"pairs\"]` directly instead of via `get(..., [])`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- File: scripts/workflow_failure_heal.py\n  Line or code reference: `_cmd_heal_scope` render branch (`matches = [path for path in matches if isinstance(name, str) and path in reported_for_name.get(name, set())]`)\n  Problem: The `isinstance(name, str)` guard inside the list comprehension is dead defensive code. `name` was just produced by iterating over `failing.get(\"names\") or []`, and `_heal_test_files_for_names` already validates `isinstance(name, str)` before doing the git grep \u2014 so when `len(matches) > 1` is reached, `name` is guaranteed to be a string already.\n  Why it fails at runtime: It does not fail. The guard is harmless redundancy, but it widens the implicit-execution surface of the comprehension (extra attribute lookups, hidden truthiness check) without contributing any real safety since the inner function already validates the same condition.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- File: scripts/workflow_failure_heal.py\n  Line or code reference: render_heal_scope_marker, lines 2137-2141\n  Problem: The scope renderer processes crash, workflow, and changed-file paths before the newly added test subjects, then stops after 20 explicit paths.\n  Why it fails at runtime: When those earlier paths and mapped test subjects exceed the 20-path limit, later test subjects are silently omitted from the frozen scope. The diagnosis cannot add them, so a CI heal may be unable to edit the code corresponding to a reported failing test.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "aad893cc992a52831e1c5d03d9b3ef5a6b59e9bf344e59fdec046bb8cfb4bea7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6947,
+    "run_id": "37961236319",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37961236319",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009173002_9ea1275123",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6947,
+    "run_id": "37961236319"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-10-09T17:30:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
