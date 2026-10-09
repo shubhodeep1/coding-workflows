@@ -1414,6 +1414,10 @@ jobs:
           done
 
           shard_failures=0
+          # Failing tests' names, repeated after every shard's log group so they
+          # reach the end of the job log and its annotations (#6919).
+          shard_failure_details=()
+          shard_crash_tails=()
           for shard in $(seq 0 "$((shards - 1))"); do
             [ -s "/tmp/poll_shard_${shard}.txt" ] || continue
             # A shard with tests but no log died before its runner started, so
@@ -1435,9 +1439,37 @@ jobs:
             if [ "${shard_rc}" -ne 0 ]; then
               echo "::error::orchestrate-poll shard ${shard} failed (exit ${shard_rc})"
               shard_failures=$((shard_failures + 1))
+              # grep exits 1 on no match; `|| true` keeps pipefail from ending the step.
+              shard_fail_total="$(grep -c '^  FAIL  ' "/tmp/poll_shard_${shard}.log" || true)"
+              case "${shard_fail_total}" in
+                ''|*[!0-9]*) shard_fail_total=0 ;;
+              esac
+              if [ "${shard_fail_total}" -gt 0 ]; then
+                while IFS= read -r shard_fail_line; do
+                  shard_fail_line="${shard_fail_line#  }"
+                  shard_fail_line="${shard_fail_line//$'\r'/}"
+                  shard_fail_line="${shard_fail_line:0:300}"
+                  shard_fail_line="${shard_fail_line//"%"/%25}"
+                  shard_failure_details+=("orchestrate-poll shard ${shard}: ${shard_fail_line}")
+                done < <(grep -m 5 '^  FAIL  ' "/tmp/poll_shard_${shard}.log" || true)
+                if [ "${shard_fail_total}" -gt 5 ]; then
+                  shard_failure_details+=("orchestrate-poll shard ${shard}: and $((shard_fail_total - 5)) more FAIL line(s); see the shard's log group")
+                fi
+              else
+                # No FAIL line: the runner died outside a test (or never recorded an rc).
+                shard_failure_details+=("orchestrate-poll shard ${shard}: no FAIL line in its log; last lines follow")
+                shard_crash_tails+=("${shard}")
+              fi
             fi
           done
           if [ "${shard_failures}" -ne 0 ]; then
+            for shard_failure_detail in ${shard_failure_details[@]+"${shard_failure_details[@]}"}; do
+              echo "::error::${shard_failure_detail}"
+            done
+            for shard in ${shard_crash_tails[@]+"${shard_crash_tails[@]}"}; do
+              echo "--- orchestrate-poll shard ${shard} log tail ---"
+              tail -n 30 "/tmp/poll_shard_${shard}.log" || true
+            done
             echo "::error::${shard_failures} orchestrate-poll shard(s) failed."
             exit 1
           fi
