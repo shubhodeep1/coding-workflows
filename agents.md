@@ -492,23 +492,16 @@ The merged-PR guard in `.claude/hooks/pr_merge_status_guard.py` and its
 unquoted file descriptors before checking push destinations. `2 > out` retains
 the branch `2`; `2>out` does not. The copies stay byte-identical.
 
-Open security finding #6755: the merged-PR guard does not inspect Git writes
-wrapped in nested shell text, so it is not resolved and nothing may treat it
-as fixed. `WRAPPED_GIT_WRITE_GUARD_UNSET_OPERATOR_STEP` is an unresolved
-operator-step placeholder from the unblock verdict for #6755; no code reads it
-and setting it enables nothing, so both hook copies behave exactly as before.
-The pending human step, done in a trusted writable checkout, changes both
-`pr_merge_status_guard.py` copies identically (they must stay byte-identical)
-so that they inspect, within bounds, nested `bash`/`sh`/`zsh`/`dash` `-c`
-scripts, `eval` text, command substitutions, backticks and process
-substitutions; apply the existing merged-PR check to any Git write found
-inside; and request confirmation when wrapper text that will run cannot be
-read safely, keeping the existing handling of `sudo`, `timeout`, `xargs` and
-pipes into `bash` unchanged. The same step adds tests against both copies,
-replaces this note and adds a changelog fragment. The pipeline did not make
-the change because its editors cannot write `.claude/hooks/**`, and
-`tests/test_claude_template_live_parity.py` requires the live security hook to
-match its template.
+Both `pr_merge_status_guard.py` copies also inspect Git writes wrapped in
+nested shell text: `bash`/`sh`/`zsh`/`dash` `-c` scripts, `eval` text, and
+`$(...)`, backtick and `<(...)` bodies, up to three levels deep
+(`_MAX_SHELL_WRAPPER_DEPTH`). Each commit or push found there gets the normal
+merged-PR check; wrapped text that cannot be read safely but could run a Git
+write requests confirmation. Prefix wrappers (`sudo`, `timeout`, `xargs`) and
+`... | bash` are still not inspected. The live hook runs on every Bash call
+through the `PreToolUse` entry in `.claude/settings.json`; no variable or
+operator step enables it. The copies stay byte-identical; the full rules are
+in the "Merged-PR guard" bullet under "Isolated Codex agents".
 
 Integration-ref trust boundary: `scripts/resolve_integration_ref.sh` can return
 any existing valid Git branch name declared by issue metadata. Workflows may
