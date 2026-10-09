@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which branch should the guard sync land on?\nChoices:\nA) `ai/issue-6561`, the head branch of PR #6566. Only that branch has the drift, so the PR's own CI turns green. (RECOMMENDED)\nB) The default branch `main`. This only makes sense if the template's live-lookup change is already on `main`; otherwise it ships PR #6566's behaviour before that PR has been reviewed.\nC) No separate fix. Close this issue and let PR #6566's own review or review-blocked judge decide on it. **Note:** this does not work with Q2:A or Q2:B.\nQ2: Who should write the `.claude/hooks/pr_merge_status_guard.py` change? An implement run refuses `.claude/` writes unless a trusted author grants an exact `files_touched` entry, and this triage issue cannot carry one.\nChoices:\nA) A maintainer (OWNER/MEMBER/COLLABORATOR) opens a new standalone issue that includes `Integration branch: <Q1 branch>` and `files_touched: .claude/hooks/pr_merge_status_guard.py`. The pipeline implements that issue (needs `ALLOW_WORKFLOW_EDITS=true`), and this issue is closed as superseded.\nB) A human commits the live copy, byte-identical to the template, directly to the Q1 branch through the trusted review path, then closes this issue. This matches the triage's suggested fix and needs no pipeline grant. (RECOMMENDED)\nC) Revert the template change in PR #6566 so that both copies keep the old cached lookup. **Note:** this undoes the PR's intended behaviour, and the reviewer should confirm that is acceptable.\n---\nAssumptions: the failing parity check is `tests/test_pr_merge_status_guard.py:2306-2308` (cited in the triage). CI's exclusion of security hooks from parity preparation and the equality assertion must both stay as they are.\nNot checked: the live `.claude/` copy (missing from this checkout), whether issues filed with the triage token count as a trusted author, and the state of `main`'s template.",
+  "fingerprint": "557c30a21aec680565d28d41a943f33482dfdbd30dbf174472645d20555eb346",
+  "lineage": {
+    "issue_number": 6836,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37873400723",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37873400723",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009021615_527a86a4d5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6836,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37873400723"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #6836 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T02:16:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
