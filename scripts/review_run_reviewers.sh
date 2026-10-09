@@ -2093,7 +2093,7 @@ prepare_reviewer_scoped_context() {
     --header-text "These files are the focused reviewer scope for this later autofix iteration. They were derived from LAST RUN CHANGED FILES plus still-actionable ledger rows (NEW, PERSISTING, RESURGENT). Prefer this scoped file context over re-reading the full PR. Files marked \"would overflow total budget\" must be read with the read tool — never assume their content is in this block."
     --output "${REVIEWER_SCOPED_FILES_CONTEXT_FILE}"
   )
-  if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -s "${REVIEWER_SCOPE_QUERY_SEED_FILE}" ]; then
+  if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] && [ -s "${REVIEWER_SCOPE_QUERY_SEED_FILE}" ] && [ "$(printf '%s' "${TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
     targeted_file_context_args+=(
       --semble-bin "${SEMBLE_BIN:-}"
       --semble-index "${SEMBLE_INDEX_PATH:-}"
@@ -2102,7 +2102,11 @@ prepare_reviewer_scoped_context() {
       --semble-fallback marker
     )
   fi
-  if ! "${targeted_file_context_args[@]}" || [ ! -s "${REVIEWER_SCOPED_FILES_CONTEXT_FILE}" ]; then
+  # Reviewer prompts are prefixed with pre_assembled_static.txt; overflow
+  # Semble telemetry counts static_dup_bytes against it.
+  local targeted_static_file=""
+  [ ! -s ./pre_assembled_static.txt ] || targeted_static_file="${PWD}/pre_assembled_static.txt"
+  if ! SEMBLE_STATIC_CONTEXT_FILE="${targeted_static_file}" "${targeted_file_context_args[@]}" || [ ! -s "${REVIEWER_SCOPED_FILES_CONTEXT_FILE}" ]; then
     write_reviewer_scope_summary "full-diff" "failed to render scoped reviewer file context"
     return 1
   fi
@@ -3000,10 +3004,18 @@ REVIEWER_SEMBLE_CONTEXT_FILE="${RUNTIME_DIR}/reviewer_semble_context.txt"
 : > "${REVIEWER_SEMBLE_CONTEXT_FILE}"
 build_reviewer_semble_query
 
-if [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ] \
+reviewer_semble_should_query=false
+if declare -F semble_should_query >/dev/null 2>&1; then
+  semble_should_query && reviewer_semble_should_query=true
+elif [ "${SEMBLE_INDEX_AVAILABLE:-false}" = "true" ]; then
+  reviewer_semble_should_query=true
+fi
+if [ "${reviewer_semble_should_query}" = "true" ] \
    && [ -s "${REVIEWER_SEMBLE_QUERY_FILE}" ] \
    && declare -F semble_query_block >/dev/null 2>&1; then
-  semble_query_block \
+  REVIEWER_SEMBLE_STATIC_FILE=""
+  [ ! -s ./pre_assembled_static.txt ] || REVIEWER_SEMBLE_STATIC_FILE=./pre_assembled_static.txt
+  SEMBLE_STATIC_CONTEXT_FILE="${REVIEWER_SEMBLE_STATIC_FILE}" semble_query_block \
     "$(cat "${REVIEWER_SEMBLE_QUERY_FILE}")" \
     "${SEMBLE_REVIEWER_PROMPT_CHUNKS:-12}" \
     "Reviewer Context" \

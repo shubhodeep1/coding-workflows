@@ -25,9 +25,11 @@ SCRIPTS = REPO_ROOT / "scripts"
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 HELPER = SCRIPTS / "codex_isolated_exec.sh"
 
-# Files allowed to start the codex binary directly: the two container
+# Files allowed to start the codex binary directly: the container
 # entrypoints (Codex runs inside the isolated container there).
-CONTAINER_ENTRYPOINTS = {"codex_isolated_exec.sh", "clarify_isolated_run.sh"}
+# heal_isolated_implement.sh runs the workflow-heal editor in its own
+# credential-free `--network none --read-only --cap-drop ALL` container (#6463).
+CONTAINER_ENTRYPOINTS = {"codex_isolated_exec.sh", "clarify_isolated_run.sh", "heal_isolated_implement.sh"}
 
 RAW_CODEX = re.compile(r'''(?:^|[\s;&|(]|--\s)(?<!Usage: )codex\s+(?:--ask-for-approval|-c\s|exec\b|"\$@")''')
 PY_RAW_CODEX = re.compile(r'''\[\s*"codex"\s*,''')
@@ -96,7 +98,7 @@ def test_thread_reuse_launches_through_the_isolated_launcher():
 		("scripts/validation_discovery_bootstrap.py", 'CODEX_ISOLATED_EXEC = Path(__file__).resolve().parent / "codex_isolated_exec.sh"'),
 		("scripts/orchestrate_poll_process.sh", 'ORCH_CODEX_ISOLATED_EXEC="${ORCH_SCRIPTS_ROOT}/codex_isolated_exec.sh"'),
 		(".github/workflows/orchestrate.yml", "bash scripts/codex_isolated_exec.sh run --mode read-only --"),
-		(".github/workflows/workflow-log-analysis.yml", "bash scripts/codex_isolated_exec.sh run --mode read-only --"),
+		(".github/workflows/workflow-log-analysis.yml", 'bash scripts/codex_isolated_exec.sh run --mode read-only ${wla_run_logs_include_args[@]+"${wla_run_logs_include_args[@]}"} --'),
 		(".github/workflows/implement.yml", 'codex_isolated_exec.sh" run --mode read-only \\'),
 	],
 )

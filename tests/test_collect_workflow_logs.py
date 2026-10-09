@@ -31,6 +31,19 @@ def _write_exec(path: Path, body: str) -> None:
 	path.chmod(0o755)
 
 
+def test_full_log_cost_telemetry_rejects_other_run_attempts() -> None:
+	run = {"run_id": 123, "run_attempt": 2}
+	full_logs = [{"step_name": "index", "content": "\n".join([
+		"SEMBLE_BOOTSTRAP mode=lazy state=ready install_ms=10 index_ms=20 run=123-2",
+		"SEMBLE_QUERY target=judge chunks=1 bytes=45 ms=2 run=123-2 sources=1",
+		"SEMBLE_QUERY target=judge chunks=1 bytes=75 ms=2 run=123-1 sources=4",
+	])}]
+	collector._apply_cost_telemetry_from_full_logs(run, full_logs)
+	assert run["cost_telemetry"]["semble_bootstraps"] == 1
+	assert run["cost_telemetry"]["semble_query_calls"] == 1
+	assert run["cost_telemetry"]["semble_echo_lines_dropped"] == 1
+
+
 def test_normalize_workflow_family_core_and_formerly_excluded():
 	assert collector.normalize_workflow_family("AI Clarify", ".github/workflows/clarify.yml") == "clarify"
 	assert collector.normalize_workflow_family("AI Plan", ".github/workflows/plan.yml") == "plan"

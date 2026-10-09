@@ -432,7 +432,7 @@ if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" = "true" ]; then
   while IFS= read -r touched_path; do
     [ -z "${touched_path}" ] && continue
     case "${touched_path}" in
-      node_modules|node_modules/*|*/node_modules|*/node_modules/*) continue ;;
+      node_modules|node_modules/*|*/node_modules|*/node_modules/*|.ai/.workspace_source_manifest.txt) continue ;;
     esac
     if [ -e "${touched_path}" ]; then
       git add -- "${touched_path}" 2>/dev/null || true
@@ -452,8 +452,8 @@ else
       _ra_script_excludes+=(":!scripts/${_ign_entry}")
     done < scripts/.gitignore
   fi
-  git add -u -- ':!node_modules' "${_ra_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts'
-  git ls-files --others --exclude-standard -z -- ':!node_modules' "${_ra_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.serena' ':!.serena/**' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' | xargs -0 -r git add --
+  git add -u -- ':!node_modules' "${_ra_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/prompts' ':!.github/scripts' ':!.ai/.workspace_source_manifest.txt'
+  git ls-files --others --exclude-standard -z -- ':!node_modules' "${_ra_script_excludes[@]}" ':!prompts' ':!ai-memory' ':!.serena' ':!.serena/**' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.github/ai' ':!.github/prompts' ':!.github/scripts' ':!.ai/.workspace_source_manifest.txt' | xargs -0 -r git add --
 fi
 
 echo "Staged files before commit:"

@@ -116,6 +116,14 @@ if [ -n "${SVB_REASON:-}" ]; then
     SCOPE_COMMIT_STATE="The out-of-scope commit was created locally, rolled back before push, and **not** pushed."
     SCOPE_REDISPATCH_HINT="If these paths are legitimately in scope, update or remove the issue's \`ai:scope:<glob>\` label, then remove \`ai:scope-blocked\` and redispatch. **Note:** the orchestrator judge may still regenerate this task under a different issue number — the per-issue block does not cover judge-cycle regeneration."
     SCOPE_TG_TITLE="🚨 CRITICAL: ai:scope label blocked implementation"
+  elif [ "${SVB_REASON}" = "automation-path" ]; then
+    SCOPE_HEADER="🚨 **Automation-path grant guard rejected this implementation run.**"
+    SCOPE_COUNT_LABEL="Ungranted automation paths"
+    SCOPE_DETAIL_HEADING="Staged automation paths without a trusted exact grant:"
+    SCOPE_ALLOWLIST_HEADING="Granted automation paths (exact files_touched entries from a trusted author) and grant reason:"
+    SCOPE_COMMIT_STATE="The commit was **not** created and **not** pushed."
+    SCOPE_REDISPATCH_HINT="Automation paths (.github/, .claude/, scripts/, prompts/, workflow-templates/) require ALLOW_WORKFLOW_EDITS=true, an issue authored by the pipeline account or an OWNER/MEMBER/COLLABORATOR, and an exact files_touched entry for each path. ALLOW_OUT_OF_SCOPE_FILES and ENFORCE_FILES_TOUCHED cannot override this guard. After correcting the grant, remove \`ai:scope-blocked\` and redispatch."
+    SCOPE_TG_TITLE="🚨 CRITICAL: automation-path grant guard blocked implementation"
   fi
   SCOPE_BLOCK_LABEL_DESCRIPTION='Implementation blocked: staged files fell outside files_touched scope; human review required'
   if ! gh label create 'ai:scope-blocked' \
@@ -177,6 +185,8 @@ if [ -n "${SVB_REASON:-}" ]; then
       guard_rejection_marker scope-lock "${SVB_REASON}" "${SVB_FILES}" "${SVB_COUNT}" || true
     elif [ "${SVB_REASON}" = "out-of-scope" ]; then
       guard_rejection_marker scope "${SVB_REASON}" "${SVB_FILES}" "${SVB_COUNT}" || true
+    elif [ "${SVB_REASON}" = "automation-path" ]; then
+      guard_rejection_marker automation-path "${SVB_REASON}" "${SVB_FILES}" "${SVB_COUNT}" || true
     fi
   } > "${GUARD_COMMENT_FILE}"
   gh issue comment "${ISSUE_NUMBER}" --repo "${GITHUB_REPOSITORY}" \

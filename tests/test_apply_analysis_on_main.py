@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -337,8 +338,48 @@ def test_release_gate_only_mode_contract() -> None:
 	assert "!inputs.gate_only" in gate["jobs"]["sync-to-main"]["if"]
 	source_run = gate["jobs"]["source"]["steps"][0]["run"]
 	assert gate["jobs"]["source"]["steps"][0]["env"]["GATE_ONLY"] == "${{ inputs.gate_only }}"
-	assert 'if [ "${GATE_ONLY}" = "true" ]; then' in source_run
-	assert 'echo "branch=${REF}" >> "$GITHUB_OUTPUT"' in source_run
+	gate_marker = 'if [ "${GATE_ONLY}" = "true" ]; then'
+	assert gate_marker in source_run
+	gate_start = source_run.index(gate_marker)
+
+	def _writes_github_output(line: str) -> bool:
+		return '>> "$GITHUB_OUTPUT"' in line or '>> "${GITHUB_OUTPUT}"' in line
+
+	# Gate-only path: the dispatched ref is written to GITHUB_OUTPUT before the
+	# path exits. Either spelling of the write is accepted (the `echo` form on
+	# main, the `printf` form introduced by PR #6555).
+	gate_exit = source_run.find("exit 0", gate_start)
+	assert gate_exit != -1, "gate-only path must end with exit 0"
+	gate_block = source_run[gate_start:gate_exit]
+	dispatched_ref_writes = ('echo "branch=${REF}"', "printf 'branch=%s\\n' \"${DISPATCH_REF_NAME}\"")
+	assert any(
+		_writes_github_output(line) and any(form in line for form in dispatched_ref_writes)
+		for line in gate_block.splitlines()
+	), "gate-only path must write the dispatched ref to GITHUB_OUTPUT before exit 0"
+
+	# Release path: the stable-ref guard exits 1 for any other ref, and only
+	# after it is `branch=stable` written.
+	# Since #6546 the guard compares the full ref (`refs/heads/stable`); the
+	# short form is still accepted for older checkouts of this workflow.
+	guard = source_run.find('!= "refs/heads/stable"', gate_exit)
+	if guard == -1:
+		guard = source_run.find('!= "stable"', gate_exit)
+	assert guard > gate_exit, "release path must check the dispatch ref against 'stable'"
+	guard_exit = source_run.find("exit 1", guard)
+	assert guard_exit != -1, "the stable-ref guard must exit 1 for any other ref"
+	# Search for the write only after the guard's closing `fi`: a write between
+	# `exit 1` and `fi` is unreachable and must not satisfy the contract.
+	guard_fi = re.search(r"^[ \t]*fi[ \t]*$", source_run[guard_exit:], re.MULTILINE)
+	assert guard_fi is not None, "the stable-ref guard block must be closed with fi"
+	guard_end = guard_exit + guard_fi.end()
+	assert any(
+		_writes_github_output(line) and ("branch=stable" in line or ("branch=%s" in line and "stable" in line))
+		for line in source_run[guard_end:].splitlines()
+	), "release path must write branch=stable to GITHUB_OUTPUT only after the stable-ref guard"
+	assert not any(
+		_writes_github_output(line) and "branch=stable" in line
+		for line in source_run[:guard_end].splitlines()
+	), "branch=stable must not be written before or inside the stable-ref guard"
 	notify_step = next(step for step in gate["jobs"]["notify"]["steps"] if step.get("id") == "tg_send")
 	assert notify_step["env"]["GATE_ONLY"] == "${{ inputs.gate_only }}"
 	notify_run = notify_step["run"]

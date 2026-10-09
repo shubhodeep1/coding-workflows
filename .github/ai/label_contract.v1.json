@@ -215,7 +215,7 @@
     },
     "ai:operator-step": {
       "color": "fbca04",
-      "description": "Steps only a person can take; the pipeline continues and the gated work stays off until they are done"
+      "description": "Steps only a person can take; the pipeline continues and gated work stays off until they are done"
     },
     "ai:unblock-closed": {
       "color": "5c5c5c",

@@ -112,6 +112,7 @@ env:
   # the same base that edit the same files (scripts/review_merge_train.sh).
   MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
   MERGE_TRAIN_MAX_OLDER_PRS: ${{ vars.MERGE_TRAIN_MAX_OLDER_PRS || '20' }}
+  MERGE_TRAIN_IGNORE_PATHS: ${{ vars.MERGE_TRAIN_IGNORE_PATHS || '.ai/.workspace_source_manifest.txt' }}
   OPENCODE_VERSION: ${{ vars.OPENCODE_VERSION || '1.18.23' }}
   EVENTS_JSONL_ENABLED: ${{ vars.EVENTS_JSONL_ENABLED || 'false' }}
   UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED: ${{ vars.UNATTENDED_TRANSCRIPT_ARCHIVE_ENABLED || 'false' }}
@@ -254,6 +255,8 @@ env:
   CHECK_RUNS_LOG_TAIL_BYTES: ${{ vars.CHECK_RUNS_LOG_TAIL_BYTES || '16384' }}
   FINGERPRINT_QUARANTINE_RUNS_M: ${{ vars.FINGERPRINT_QUARANTINE_RUNS_M || '3' }}
   SEMBLE_ENABLED: ${{ vars.SEMBLE_ENABLED || 'true' }}
+  SEMBLE_BOOTSTRAP_MODE: ${{ vars.SEMBLE_BOOTSTRAP_MODE || 'lazy' }}
+  TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED: ${{ vars.TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED || 'false' }}
   SERENA_ENABLED: ${{ vars.SERENA_ENABLED || 'false' }}
   UNATTENDED_NAG_REMINDER_ENABLED: ${{ vars.UNATTENDED_NAG_REMINDER_ENABLED || 'false' }}
   UNATTENDED_NAG_SILENT_ROUNDS: ${{ vars.UNATTENDED_NAG_SILENT_ROUNDS || '3' }}
@@ -3363,12 +3366,12 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Setup uv for Semble
-        if: env.PR_CLOSED != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')
+        if: env.PR_CLOSED != 'true' && ((env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy') || env.SERENA_ENABLED == 'true')
         continue-on-error: true
         uses: astral-sh/setup-uv@v7
 
       - name: Install semble
-        if: env.PR_CLOSED != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')
+        if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'
         continue-on-error: true
         run: |
           set -euo pipefail
@@ -3399,7 +3402,7 @@ jobs:
           fi
 
       - name: Build semble index
-        if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true'
+        if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'
         # Defense-in-depth: the shared script is fail-soft already, but the
         # step-level guard ensures a future wrapper regression still
         # degrades to SEMBLE_INDEX_AVAILABLE=false instead of hard-failing.
@@ -3429,8 +3432,9 @@ jobs:
             # stderr before any cleanup runs, so it's always present in the
             # captured log on failure.
             bash "${wrapper_script}" > "${RUNTIME_DIR}/semble_index.log" 2>&1 || true
+            grep -m1 '^SEMBLE_BOOTSTRAP ' "${RUNTIME_DIR}/semble_index.log" || true
             if grep -q '^build_semble_wrapper: Semble wrapper unavailable:' "${RUNTIME_DIR}/semble_index.log" 2>/dev/null; then
-              tail -n 20 "${RUNTIME_DIR}/semble_index.log" 2>/dev/null | sed 's/^/semble index: /' || true
+              tail -n 20 "${RUNTIME_DIR}/semble_index.log" 2>/dev/null | grep -v '^SEMBLE_BOOTSTRAP ' | sed 's/^/semble index: /' || true
             fi
           else
             echo "::notice::build_semble_wrapper.sh not staged; continuing without Semble-backed prompt context."
@@ -4113,9 +4117,10 @@ jobs:
             # modifications in the worktree, mirroring the `reset --hard`
             # in the sibling branch above. The "Initialize/Finalize
             # workspace contents" steps materialize the source tree into
-            # this worktree and regenerate the gitignored-but-tracked
-            # runtime artifact .ai/.workspace_source_manifest.txt. Without
-            # -f, a plain `git checkout -B` aborts with "Your local changes
+            # this worktree and regenerate the gitignored runtime artifact
+            # .ai/.workspace_source_manifest.txt (still tracked on older
+            # branches). Without -f, a plain `git checkout -B` can abort on
+            # older branches with "Your local changes
             # to the following files would be overwritten by checkout"
             # whenever the target branch's committed copy of that manifest
             # differs from the index's (e.g. a cross-base PR whose base is
@@ -5242,10 +5247,6 @@ jobs:
             fi
           fi
 
-      - name: Clean up isolated review workspace
-        if: always() && env.REVIEW_SANDBOX_ROOT != ''
-        run: bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup
-
       - name: Remove slop-scan runtime artifact
         if: always()
         run: |
@@ -5329,6 +5330,18 @@ jobs:
         run: |
           set -euo pipefail
           bash "${SUPPORT_SCRIPTS_DIR}/review_commit_changes.sh"
+
+      # Runs after the commit (#6484, run 37666355049): a failed cleanup must not
+      # skip the commit and be misreported as editor_changes_lost; push and the
+      # other success()-gated steps still stay blocked.
+      - name: Clean up isolated review workspace
+        if: always() && env.REVIEW_SANDBOX_ROOT != ''
+        run: |
+          if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ]; then
+            bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup 2> >(tee -a "${RUNTIME_DIR}/editor_stage_stderr.txt" >&2)
+          else
+            bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup
+          fi
 
       - name: Run interim judge
         if: env.JUDGE_INTERIM_ENABLED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && steps.commit_changes.outputs.did_commit == 'true' && env.LEDGER_ONLY_COMMIT_STRICT != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'
@@ -5814,9 +5827,9 @@ jobs:
         if: success() && env.CAN_PUSH == 'true' && env.MERGE_CONFLICT == 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
-          # Kill switch for the deterministic union-merge of the generated
-          # .ai/.workspace_source_manifest.txt (see the "Deterministic
-          # union-merge" block in scripts/review_conflict_prepare.sh).
+          # Kill switch for deterministic resolution of conflicts on the generated
+          # .ai/.workspace_source_manifest.txt (union-merge or deletion in
+          # scripts/review_conflict_prepare.sh).
           # Default true; set the repo var to 'false' to route manifest
           # conflicts back through the Codex resolver.
           CONFLICT_MANIFEST_UNION_ENABLED: ${{ vars.CONFLICT_MANIFEST_UNION_ENABLED || 'true' }}

@@ -281,15 +281,15 @@ def test_workflow_adds_gated_setup_install_index_and_editor_only_serena_steps() 
 	detect_serena_block = _step_block(workflow, "Detect preexisting Serena project config")
 
 	assert "astral-sh/setup-uv@v7" in uv_block
-	assert "if: env.PR_CLOSED != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')" in uv_block
+	assert "if: env.PR_CLOSED != 'true' && ((env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy') || env.SERENA_ENABLED == 'true')" in uv_block
 	assert "continue-on-error: true" in uv_block
-	assert "if: env.PR_CLOSED != 'true' && (env.SEMBLE_ENABLED == 'true' || env.SERENA_ENABLED == 'true')" in install_block
+	assert "if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'" in install_block
 	assert "continue-on-error: true" in install_block
 	assert 'if [ "${SEMBLE_ENABLED:-false}" != "true" ]; then' in install_block
 	assert 'if ! bash "${SUPPORT_SCRIPTS_DIR}/install_semble.sh"; then' in install_block
 	assert 'echo "SEMBLE_BIN=${SEMBLE_BIN_PATH}" >> "$GITHUB_ENV"' in install_block
 	assert "Optional Semble installer is unavailable" in install_block
-	assert "if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true'" in index_block
+	assert "if: env.PR_CLOSED != 'true' && env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'" in index_block
 	# Inline `semble index . --out ...` was unreachable code on the pinned
 	# semble (0.1.3 lacks the CLI). The shared wrapper builder owns the
 	# index build now and writes SEMBLE_INDEX_AVAILABLE=true on success.
@@ -609,8 +609,16 @@ def test_conflict_prepare_and_resolve_wire_semble_query_and_prompt_append() -> N
 	assert 'Resolver Serena hints:' not in resolve
 	assert 'TARGETED_FILE_CONTEXT_SCRIPT="${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_context.py"' in resolve
 	assert '--semble-query-from "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE}"' in resolve
+	assert 'TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED:-false' in resolve
 	assert 'semble_query_block \\\n    "$(cat "${CONFLICT_RESOLVER_SEMBLE_QUERY_FILE}")"' in resolve
 	assert resolve.index('cat "${TARGETED_FILES_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"') < resolve.index('cat "${CONFLICT_RESOLVER_SEMBLE_CONTEXT_FILE}" >> "${CONFLICT_RESOLVER_PROMPT_FILE}"')
+
+
+def test_targeted_semble_overflow_is_opt_in_in_all_reusable_workflows() -> None:
+	for filename in ("implement.yml", "review_autofix.yml", "orchestrate_poll.yml"):
+		assert "TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED: ${{ vars.TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED || 'false' }}" in _read(REPO_ROOT / ".github" / "workflows" / filename)
+	for script_path in (REPO_ROOT / "scripts" / "review_apply_fixes.sh", REPO_ROOT / "scripts" / "review_run_reviewers.sh", CONFLICT_RESOLVE):
+		assert "TARGETED_FILE_CONTEXT_SEMBLE_OVERFLOW_ENABLED:-false" in _read(script_path)
 
 
 def main() -> int:

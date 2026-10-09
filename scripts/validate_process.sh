@@ -613,7 +613,8 @@ append_validate_semble_context()
   fi
 
   echo
-  if semble_query_block "${query_text}" "${max_chunks}" "${header_label}"; then
+  # Validate prompts are prefixed with STATIC_CONTEXT_FILE; count overlap with it.
+  if SEMBLE_STATIC_CONTEXT_FILE="${STATIC_CONTEXT_FILE:-}" semble_query_block "${query_text}" "${max_chunks}" "${header_label}"; then
     echo
   fi
 }

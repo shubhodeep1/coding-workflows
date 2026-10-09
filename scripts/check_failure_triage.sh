@@ -290,12 +290,55 @@ if [ -n "${PARENT_ISSUE}" ]; then
 		log "error parent_body_parse_failed issue=${PARENT_ISSUE}"
 		exit 1
 	fi
-	PGEN="$(printf '%s' "${PARENT_BODY}" | sed -n "s/.*${MARKER_PREFIX}gen=\([0-9]\{1,\}\).*/\1/p" | head -1)"
-	PROOT="$(printf '%s' "${PARENT_BODY}" | sed -n "s/.*${MARKER_PREFIX}root=\([0-9a-f]\{64\}\).*/\1/p" | head -1)"
+	# Drop fenced code blocks (``` / ~~~, CommonMark closing rules) so a
+	# marker quoted as an example inside a fence cannot set or break the
+	# lineage. The markers this script writes sit outside any fence.
+	if ! PARENT_MARKER_BODY="$(printf '%s' "${PARENT_BODY}" | PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c '
+import re
+import sys
+
+fence = None
+kept = []
+for line in sys.stdin.read().split("\n"):
+	match = re.match(r" {0,3}(`{3,}|~{3,})", line)
+	if fence is None:
+		if match:
+			fence = match.group(1)
+			continue
+		kept.append(line)
+	elif match and match.group(1)[0] == fence[0] and len(match.group(1)) >= len(fence) and not line[match.end():].strip():
+		fence = None
+sys.stdout.write("\n".join(kept))
+')"; then
+		log "error parent_body_fence_strip_failed issue=${PARENT_ISSUE}"
+		exit 1
+	fi
+	# Read only line-leading HTML-comment markers (the shape this script
+	# writes), so a prose or inline-code mention such as
+	# `<!-- check-failure-triage:gen=2 -->` cannot set the lineage. At most
+	# three leading spaces are allowed: four spaces or a tab start an
+	# indented Markdown code block, whose example markers are not lineage.
+	PGEN="$(printf '%s' "${PARENT_MARKER_BODY}" | sed -n "s/^ \{0,3\}<!-- ${MARKER_PREFIX}gen=\([0-9]\{1,\}\)[[:space:]]*-->.*/\1/p" | head -1)"
+	PROOT="$(printf '%s' "${PARENT_MARKER_BODY}" | sed -n "s/^ \{0,3\}<!-- ${MARKER_PREFIX}root=\([0-9a-f]\{64\}\)[[:space:]]*-->.*/\1/p" | head -1)"
 	if [[ "${PGEN}" =~ ^[0-9]+$ ]]; then
 		GEN=$((PGEN + 1))
 		[ -n "${PROOT}" ] && ROOT="${PROOT}"
 		log "lineage parent_issue=${PARENT_ISSUE} parent_gen=${PGEN} gen=${GEN} root=${ROOT}"
+	# grep reads a here-string (not a pipeline) so set -o pipefail cannot
+	# turn printf's SIGPIPE after grep -q's early exit into "no marker".
+	elif ! grep -qE "^ {0,3}<!-- ${MARKER_PREFIX}gen=" <<<"${PARENT_MARKER_BODY}"; then
+		# Only a line-leading HTML-comment marker (the shape this script
+		# writes) counts as a triage marker; prose or inline code that merely
+		# mentions check-failure-triage:gen= does not.
+		# The source issue carries no triage lineage marker: this is an
+		# ordinary pipeline PR (clarify/plan/implement, activation gaps, an
+		# orchestrator wave, a heal issue), not a fix PR for an earlier
+		# triage issue. Its failure starts a new lineage at generation 1,
+		# exactly like a PR on any other branch. Until #6273 routed every
+		# failed CI run through this script, only triage-born
+		# ai/issue-<N> PRs reached this branch, so a missing marker was
+		# treated as an error and every ordinary PR's triage crashed here.
+		log "lineage parent_issue=${PARENT_ISSUE} parent_gen=none gen=${GEN} root=${ROOT} reason=source_issue_not_triage"
 	else
 		log "error parent_generation_missing_or_malformed issue=${PARENT_ISSUE}"
 		exit 1
