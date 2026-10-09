@@ -539,17 +539,35 @@ def _cap_skip_block() -> str:
 	return sweep[start:end]
 
 
-def _run_cap_skip(comments: list, commits: list, login: str | None) -> tuple[str, int]:
+def _support_resolver_block() -> str:
+	"""Return the verbatim `_noop_cap_review_support_sha` definition and its state."""
+	sweep = _sweep_block()
+	start = sweep.find('NOOP_CAP_REVIEW_SUPPORT_SHA=""')
+	assert start != -1, "Sweep must declare the review-support SHA cache"
+	end = sweep.find("\n}\n", sweep.find("_noop_cap_review_support_sha() {", start))
+	assert end != -1
+	return sweep[start:end + 3]
+
+
+def _run_cap_skip(comments: list, commits: list, login: str | None, *, repo: str = "o/consumer",
+		engine_sha: str = "", ai_review: str | None = None) -> tuple[str, int]:
 	"""Run the verbatim skip snippet inside a one-iteration loop.
 
 	`gh_retry` / `_safe_gh_jq` are stubbed; `login=None` makes the
-	identity lookup fail. Returns (stdout, GET /user call count)."""
+	identity lookup fail. `repo` / `engine_sha` / `ai_review` (the
+	consumer's `.github/workflows/ai-review.yml` text) drive the
+	review-support SHA resolution. Returns (stdout, GET /user call count)."""
 	import json
+	import shlex
 	import subprocess
 	import tempfile
 
 	with tempfile.TemporaryDirectory() as tmp:
 		calls = Path(tmp) / "calls"
+		if ai_review is not None:
+			wf_dir = Path(tmp) / ".github" / "workflows"
+			wf_dir.mkdir(parents=True)
+			(wf_dir / "ai-review.yml").write_text(ai_review)
 		script = f"""
 set -uo pipefail
 gh_retry() {{ "$@"; }}
@@ -563,24 +581,118 @@ NOOP_MAX_RETRIES=3
 NOOP_RECOVERY_CAP_SKIPPED=0
 NOOP_CAP_TRUSTED_LOGIN=""
 NOOP_CAP_TRUSTED_LOGIN_STATE="unset"
-N_COMMENTS_JSON={json.dumps(json.dumps(comments))}
-N_COMMITS_JSON={json.dumps(json.dumps(commits))}
+GITHUB_REPOSITORY={json.dumps(repo)}
+ORCHESTRATOR_ENGINE_SHA={json.dumps(engine_sha)}
+{_support_resolver_block()}
+N_COMMENTS_JSON={shlex.quote(json.dumps(comments))}
+N_COMMITS_JSON={shlex.quote(json.dumps(commits))}
 for _pr in a b; do
 {_cap_skip_block()}
 	echo "DISPATCH pr=${{N_PR}}"
 done
 echo "SKIPPED=${{NOOP_RECOVERY_CAP_SKIPPED}}"
 """
-		result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True)
+		result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=True, cwd=tmp)
 		call_count = len(calls.read_text().splitlines()) if calls.exists() else 0
 		return result.stdout, call_count
 
 
-def _cap_comment(login: str, head: str = CAP_HEAD) -> dict:
+def _cap_comment(login: str, head: str = CAP_HEAD, support: str = "") -> dict:
+	support_field = f" support={support}" if support else ""
 	return {
 		"user": {"login": login},
-		"body": f"**AI review/autofix stopped: identical failure repeated**\n<!-- review-autofix-failure-cap:v1 head={head} fp={'a' * 64} reason=editor_empty_noop count=3 -->",
+		"body": f"**AI review/autofix stopped: identical failure repeated**\n<!-- review-autofix-failure-cap:v1 head={head} fp={'a' * 64} reason=editor_empty_noop count=3{support_field} -->",
 	}
+
+
+SUPPORT_NEW = "5" * 40
+SUPPORT_OLD = "6" * 40
+
+
+def test_cap_skip_matching_support_in_source_repo_skips():
+	"""Issue #6625: in this repository the review support SHA is the
+	poller's engine SHA; a cap marker carrying it still skips."""
+	out, _ = _run_cap_skip([_cap_comment("shubhodeep1", support=SUPPORT_NEW)], [{"sha": CAP_HEAD}], "shubhodeep1",
+		repo="shubhodeep1/coding-workflows", engine_sha=SUPPORT_NEW)
+	assert "DISPATCH" not in out, out
+	assert f"support={SUPPORT_NEW}" in out
+	assert "SKIPPED=2" in out
+
+
+def test_cap_skip_other_support_version_redispatches():
+	"""A cap marker written by an older review support version does not
+	stop the gate any more, so the sweep re-dispatches and logs why."""
+	out, _ = _run_cap_skip([_cap_comment("shubhodeep1", support=SUPPORT_OLD)], [{"sha": CAP_HEAD}], "shubhodeep1",
+		repo="shubhodeep1/coding-workflows", engine_sha=SUPPORT_NEW)
+	assert out.count("DISPATCH") == 2, out
+	assert f"NOOP_RECOVERY_FINGERPRINT_CAP_STALE_SUPPORT pr=4332 head={CAP_HEAD} support={SUPPORT_NEW}" in out
+
+
+def test_cap_skip_support_text_outside_marker_does_not_count():
+	"""The support SHA must be a field of the cap marker: an older cap comment
+	that quotes ` support=<current> ` elsewhere (e.g. its first error) is stale."""
+	stale = _cap_comment("shubhodeep1", support=SUPPORT_OLD)
+	stale["body"] = f"First error: `x support={SUPPORT_NEW} y`\n" + stale["body"]
+	out, _ = _run_cap_skip([stale], [{"sha": CAP_HEAD}], "shubhodeep1",
+		repo="shubhodeep1/coding-workflows", engine_sha=SUPPORT_NEW)
+	assert out.count("DISPATCH") == 2, out
+	assert "NOOP_RECOVERY_FINGERPRINT_CAP_STALE_SUPPORT" in out
+
+
+def test_cap_skip_inline_quoted_marker_does_not_count():
+	"""A whole current-support cap marker quoted inline (a failure comment's
+	"First error" code span) is not a cap marker on its own line, so the PR
+	is dispatched as if no cap marker existed (no cap log, no identity lookup)."""
+	quoted = _cap_comment("shubhodeep1", support=SUPPORT_NEW)
+	quoted["body"] = "**AI review/autofix failed**\n\n**First error:** `" + quoted["body"].split("\n", 1)[1] + "`"
+	out, calls = _run_cap_skip([quoted], [{"sha": CAP_HEAD}], "shubhodeep1",
+		repo="shubhodeep1/coding-workflows", engine_sha=SUPPORT_NEW)
+	assert out.count("DISPATCH") == 2, out
+	assert "NOOP_RECOVERY_SKIP_FINGERPRINT_CAP" not in out, out
+	assert calls == 0
+
+
+def test_cap_skip_inline_quoted_marker_does_not_count_when_support_unresolved():
+	"""With the support SHA unresolved the any-version fallback applies, but an
+	inline-quoted cap marker is still not a cap marker (the gate ignores it)."""
+	quoted = _cap_comment("shubhodeep1")
+	quoted["body"] = "**AI review/autofix failed**\n\n**First error:** `" + quoted["body"].split("\n", 1)[1] + "`"
+	out, calls = _run_cap_skip([quoted], [{"sha": CAP_HEAD}], "shubhodeep1")
+	assert out.count("DISPATCH") == 2, out
+	assert "NOOP_RECOVERY_SKIP_FINGERPRINT_CAP" not in out
+	assert calls == 0
+
+
+def test_cap_skip_legacy_marker_redispatches_when_support_resolved():
+	out, _ = _run_cap_skip([_cap_comment("shubhodeep1")], [{"sha": CAP_HEAD}], "shubhodeep1",
+		repo="shubhodeep1/coding-workflows", engine_sha=SUPPORT_NEW)
+	assert out.count("DISPATCH") == 2, out
+	assert "NOOP_RECOVERY_FINGERPRINT_CAP_STALE_SUPPORT" in out
+
+
+def test_cap_skip_consumer_support_from_ai_review_pin():
+	"""Consumer pollers run `stable`, but reviews run the SHA pinned in the
+	local ai-review.yml wrapper; that pin is the support version."""
+	wrapper = f"    uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@{SUPPORT_NEW} # stable\n"
+	out, _ = _run_cap_skip([_cap_comment("shubhodeep1", support=SUPPORT_NEW)], [{"sha": CAP_HEAD}], "shubhodeep1",
+		engine_sha=SUPPORT_OLD, ai_review=wrapper)
+	assert "DISPATCH" not in out, out
+	out, _ = _run_cap_skip([_cap_comment("shubhodeep1", support=SUPPORT_OLD)], [{"sha": CAP_HEAD}], "shubhodeep1",
+		engine_sha=SUPPORT_OLD, ai_review=wrapper)
+	assert out.count("DISPATCH") == 2, out
+
+
+def test_cap_skip_unresolved_support_keeps_legacy_skip():
+	"""An unrendered `@stable` wrapper (or none) leaves the support SHA
+	unresolved: any trusted cap marker for the head still skips."""
+	wrapper = "    uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@stable\n"
+	out, _ = _run_cap_skip([_cap_comment("shubhodeep1", support=SUPPORT_OLD)], [{"sha": CAP_HEAD}], "shubhodeep1",
+		ai_review=wrapper)
+	assert "DISPATCH" not in out, out
+	assert "support=unresolved" in out
+	out, _ = _run_cap_skip([_cap_comment("shubhodeep1")], [{"sha": CAP_HEAD}], "shubhodeep1",
+		repo="shubhodeep1/coding-workflows", engine_sha="abc1234")
+	assert "DISPATCH" not in out, out
 
 
 def test_cap_skip_suppresses_redispatch_when_cap_applied_on_head():
