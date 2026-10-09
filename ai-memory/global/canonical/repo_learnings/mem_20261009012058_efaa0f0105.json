@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Release automation should validate exact refs and explicitly allowlisted repositories.",
   "timestamps": {
     "created_at": "2026-10-09T01:20:58Z",
