@@ -5,13 +5,32 @@
   "entry_id": "processed_command_6989_6090371927_approved",
   "issue_number": 6989,
   "metadata": {
+    "branch": "ai/issue-6989",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/update_workflows.yml",
+      "README.md",
+      "agents.md",
+      "changelog.d/6989-updater-pr-delivery.md",
+      "scripts/release_manifest.py",
+      "tests/test_release_manifest.py",
+      "tests/test_release_manifest_workflow_contract.py",
+      "tests/test_update_workflows_manifest_verify.py",
+      "tests/test_update_workflows_pr_delivery.py",
+      "tests/test_verify_release_manifest.py"
+    ],
+    "issue_number": 6989,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6989",
+    "pr_number": 6993,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6993",
+    "run_attempt": "1",
+    "run_id": "37999866376",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37999866376"
   },
   "run_attempt": 1,
   "run_id": "37999866376",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-09T22:35:30Z",
+  "status": "completed",
+  "timestamp": "2026-10-09T22:54:06Z",
   "workflow": "implement"
 }
