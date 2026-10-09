@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6838,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6838\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6849\",\"pr_number\":6849,\"branch\":\"ai/issue-6838\",\"run_id\":\"37878944447\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37878944447\",\"changed_files\":[\".github/workflows/plan.yml\",\"README.md\",\"agents.md\",\"changelog.d/6838-automation-path-plan-auto-approval.md\",\"scripts/orchestrate_poll_process.sh\",\"tests/test_orchestrate_poll_process.py\",\"tests/test_plan_auto_approve_safe_state_fetch.py\"]}",
+  "fingerprint": "9d954b13695e793d166993a00d73d9cd8639ce5abbc0a6cdb088b42d84627513",
+  "lineage": {
+    "issue_number": 6838,
+    "parent_ids": [],
+    "pr_number": 6849,
+    "run_id": "37878944447",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37878944447",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6849"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261009035235_89a7d8048a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6838,
+    "level": "run",
+    "pr_number": 6849,
+    "run_id": "37878944447"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6838: https://github.com/shubhodeep1/coding-workflows/pull/6849",
+  "timestamps": {
+    "created_at": "2026-10-09T03:52:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
