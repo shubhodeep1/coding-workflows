@@ -815,7 +815,7 @@ stage_self_repo_validation_renderer_entry()
 	local repo_path="$1"
 	local executable="$2"
 	local track_path="$3"
-	local trusted_path
+	local trusted_path inspected_renderer_path
 
 	ensure_self_repo_trusted_template_root
 	trusted_path="${SELF_REPO_TRUSTED_TEMPLATE_ROOT}/${repo_path}"
@@ -823,7 +823,19 @@ stage_self_repo_validation_renderer_entry()
 		echo "::error::Required trusted validation renderer ${repo_path} is missing from ${ORIGINAL_SCRIPT_REF}." >&2
 		exit 1
 	fi
-	if [ -L "${repo_path}" ] || { [ -e "${repo_path}" ] && [ ! -f "${repo_path}" ]; }; then
+	# Like the template path above, refuse a symlink at any component
+	# (e.g. a checked-out `scripts` symlink), so mkdir/cp cannot write the
+	# trusted renderer outside the validation workspace.
+	inspected_renderer_path="${repo_path}"
+	while :; do
+		if [ -L "${inspected_renderer_path}" ]; then
+			echo "::error::Refusing non-file or symlinked validation renderer path '${repo_path}'." >&2
+			exit 1
+		fi
+		[[ "${inspected_renderer_path}" == */* ]] || break
+		inspected_renderer_path="${inspected_renderer_path%/*}"
+	done
+	if [ -e "${repo_path}" ] && [ ! -f "${repo_path}" ]; then
 		echo "::error::Refusing non-file or symlinked validation renderer path '${repo_path}'." >&2
 		exit 1
 	fi

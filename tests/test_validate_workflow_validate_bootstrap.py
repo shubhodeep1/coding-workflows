@@ -758,6 +758,7 @@ def _run_validate_staging(
 	workspace_files: dict[str, str] | None = None,
 	manifest_extra: dict[str, list[str]] | None = None,
 	extra_env: dict[str, str] | None = None,
+	workspace_scripts_symlink: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
 	overlay_files = {
 		"scripts/load_workflow_overlay.py": (REPO_ROOT / "scripts" / "load_workflow_overlay.py").read_text(encoding="utf-8"),
@@ -774,6 +775,10 @@ def _run_validate_staging(
 	if workspace_template_directory:
 		(workspace / _TEMPLATE_REL).unlink()
 		(workspace / _TEMPLATE_REL).mkdir()
+	if workspace_scripts_symlink:
+		outside_scripts = tmp / "outside_scripts"
+		(workspace / "scripts").rename(outside_scripts)
+		(workspace / "scripts").symlink_to(outside_scripts, target_is_directory=True)
 	bin_dir = tmp / "bin"
 	bin_dir.mkdir()
 	if not shutil.which("jq"):
@@ -979,6 +984,24 @@ def test_self_repo_validation_renderer_fails_closed_when_the_trusted_copy_is_mis
 		assert (workspace / _RENDERER_REL).read_text(encoding="utf-8") == _STALE_RENDERER
 
 
+def test_self_repo_validation_renderer_rejects_symlinked_parent_directory() -> None:
+	# A checked-out `scripts` symlink must not let mkdir/cp write the trusted
+	# renderer outside the validation workspace.
+	with tempfile.TemporaryDirectory() as tmpdir:
+		result, _workspace = _run_validate_staging(
+			Path(tmpdir),
+			source_files={_TEMPLATE_REL: _TRUSTED_CONTAINER_TEMPLATE, _RENDERER_REL: _TRUSTED_RENDERER},
+			manifest_paths=[_TEMPLATE_REL],
+			workspace_files={_RENDERER_REL: _STALE_RENDERER},
+			manifest_extra=_RENDERER_MANIFEST,
+			workspace_scripts_symlink=True,
+		)
+		assert result.returncode != 0, result.stdout + result.stderr
+		assert "symlinked validation renderer path" in result.stderr
+		outside = Path(tmpdir) / "outside_scripts" / "render_validation_templates.py"
+		assert outside.read_text(encoding="utf-8") == _STALE_RENDERER
+
+
 def test_consumer_validation_renderer_keeps_the_preserve_rule() -> None:
 	with tempfile.TemporaryDirectory() as tmpdir:
 		result, workspace = _run_validate_staging(
@@ -1040,6 +1063,7 @@ def main() -> int:
 	test_stage_workflow_support_helper_routes_self_repo_templates_to_trusted_commit()
 	test_self_repo_validation_renderer_comes_from_the_templates_commit()
 	test_self_repo_validation_renderer_fails_closed_when_the_trusted_copy_is_missing()
+	test_self_repo_validation_renderer_rejects_symlinked_parent_directory()
 	test_consumer_validation_renderer_keeps_the_preserve_rule()
 	test_explicit_target_validation_renderer_keeps_the_preserve_rule()
 	test_stage_workflow_support_helper_routes_self_repo_renderer_to_trusted_commit()
