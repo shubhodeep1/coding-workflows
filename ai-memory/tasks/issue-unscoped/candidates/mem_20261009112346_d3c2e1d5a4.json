@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py:1625-1698 | severity=critical | confidence=[4]\n  flagged_by: [deepseek_deepseek-v4-pro, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: `_strip_step_env_values` processes `##[endgroup]` and `##[group]Run ` as header boundaries before checking whether the line belongs to a multiline `env:` value, so redaction can stop early and retain following value lines verbatim.\n  WHY: Arbitrary derived credentials on those lines can reach diagnosis evidence because `redact_secrets` only catches known secret patterns; severity was rated BLOCKER by google_gemini-3_1-flash-lite and MAJOR by the other reviewers.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Redact environment values before logs are used. (Original task #6640)\n  expected_change_site: scripts/workflow_failure_heal.py\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The implemented _strip_step_env_values parser is flawed; it incorrectly parses multiline environment variable values that contain step-header markers, causing them to leak verbatim.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- scripts/workflow_failure_heal.py:1668; scripts/workflow_failure_heal.py:1675 | severity=high | confidence=2\n  PROBLEM: The parser treats `##[endgroup]` and `##[group]Run ` as structural markers that unconditionally close or reset the env block, even when they appear inside a multi-line environment variable value.\n  WHY: An unrecognized derived credential on leaked lines can reach diagnosis evidence.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal.py:1625, 1640 | severity=critical | confidence=4\n  PROBLEM: The parser incorrectly treats step header markers (`##[group]Run ` and `##[endgroup]`) as the start or end of a step header even when they appear inside a multiline environment variable value.\n  WHY: Redaction stops, leaving subsequent lines of the environment variable value verbatim in the diagnosis evidence, which may leak secrets or credentials.\n- Requirement: Redact environment values before logs are used. (Original task #6640)\n  Expected change site: scripts/workflow_failure_heal.py\n  Evidence of absence: The implemented _strip_step_env_values parser is flawed; it incorrectly parses multiline environment variable values that contain step-header markers, causing them to leak verbatim.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal.py:1668-1678 | severity=high | confidence=3\n  PROBLEM: The parser checks for header close (`##[endgroup]`) and a nested header open (`##[group]Run `) before consulting the `in_env` state, so a marker inside a multiline env value terminates the env block early.\n  WHY: Subsequent value lines are appended verbatim; arbitrary derived credentials can survive into diagnosis evidence and any heal issue body.\n- scripts/workflow_failure_heal.py:1656-1698 | severity=high | confidence=3\n  PROBLEM: A header close observed mid-env-block causes following value lines to be appended verbatim because the parser is no longer in the header.\n  WHY: The premature-close edge case bypasses the unterminated-header handling and redaction.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal.py:1668-1677 | severity=high | confidence=4\n  PROBLEM: The parser treats `##[endgroup]` as a header boundary and `##[group]Run ` as a new header even while redacting an `env:` block.\n  WHY: Following continuation lines are retained verbatim, and `redact_secrets` does not mask arbitrary derived credentials.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/workflow_failure_heal.py:1668-1677 | severity=high | confidence=4\n  PROBLEM: The parser checks for `##[endgroup]` and `##[group]Run ` before evaluating whether the line is part of a multiline `env:` value.\n  WHY: Subsequent value lines bypass env-block redaction, so derived credentials or arbitrary secrets may reach diagnosis evidence unredacted.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "310b4f7240c19445eff670d78b4cb401c59c901d68b54ee8c0a51e54d4e4ed0b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6651,
+    "run_id": "37914485671",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37914485671",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009112346_d3c2e1d5a4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6651,
+    "run_id": "37914485671"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T11:23:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
