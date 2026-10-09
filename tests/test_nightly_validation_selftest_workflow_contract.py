@@ -68,6 +68,29 @@ def test_checkout_does_not_persist_credentials_for_generated_tests() -> None:
 	assert 'token' not in selftest_step.lower()
 
 
+def test_status_commit_runs_in_separate_job_from_generated_tests() -> None:
+	# Tests run as the runner user and can rewrite the checkout's .git (hooks,
+	# config, HEAD) before a later step uses a write token (#6568). The commit
+	# therefore runs in its own job on a fresh checkout; the self-test job only
+	# holds a read-only token and hands over just the summary JSON.
+	wf = _workflow_text()
+	selftest_job, commit_job = wf.split('  commit-selftest-status:', 1)
+	assert 'contents: read' in selftest_job
+	assert 'contents: write' not in selftest_job
+	assert 'actions: write' not in selftest_job
+	assert 'STATUS_PUSH_TOKEN' not in selftest_job
+	assert 'git push' not in selftest_job
+	assert 'name: validation-selftest-summary-${{ github.run_id }}-${{ github.run_attempt }}' in selftest_job
+	assert 'needs: validation-selftest' in commit_job
+	assert "if: always() && github.ref_type == 'branch'" in commit_job
+	assert 'contents: write' in commit_job
+	assert 'uses: actions/checkout@v5' in commit_job
+	assert 'uses: actions/download-artifact@v4' in commit_job
+	assert 'name: validation-selftest-summary-${{ github.run_id }}-${{ github.run_attempt }}' in commit_job
+	assert 'validation_selftest_matrix.py' not in commit_job
+	assert commit_job.index('python3 scripts/validation_selftest_status.py') < commit_job.index('git push origin')
+
+
 def test_workflow_emits_machine_readable_summary_to_step_summary() -> None:
 	wf = _workflow_text()
 	assert '- name: Write self-test summary' in wf
@@ -87,6 +110,7 @@ def main() -> int:
 	test_workflow_runs_matrix_and_always_uploads_artifacts()
 	test_workflow_commits_only_status_file_when_changed()
 	test_checkout_does_not_persist_credentials_for_generated_tests()
+	test_status_commit_runs_in_separate_job_from_generated_tests()
 	test_workflow_emits_machine_readable_summary_to_step_summary()
 	return 0
 
