@@ -6401,11 +6401,15 @@ def test_security_pass_cap_does_not_record_advisories_before_terminal_failure() 
 
 
 def test_security_pass_cap_converts_low_keep_fixing_to_advisory() -> None:
-	# Issue #6729: low severity is still eligible for the round-cap conversion
-	# to an advisory follow-up (#6906 restored that rule after #6549 had turned it
+	# Issue #6729: at the cap, low keep_fixing becomes an advisory just like
+	# medium; high, critical and unrated findings still block (see
+	# test_security_pass_cap_never_waives_a_high_finding).
+	# Low severity is still eligible for the round-cap conversion to an
+	# advisory follow-up (#6906 restored that rule after #6549 had turned it
 	# into fail; the heal PRs #6907 and #6916 rewrote this test to the fail rule
 	# while #6906 was in flight, which left main red with the new code and the
 	# old expectation).
+	# Keep the historical name for the CI shard selector.
 	low_finding = _security_pass_test_finding()
 	low_finding["severity"] = "low"
 	result = _run_poller(
@@ -6418,15 +6422,41 @@ def test_security_pass_cap_converts_low_keep_fixing_to_advisory() -> None:
 	latest_state = result["latest_state"]
 	assert latest_state["status"] == "complete"
 	assert latest_state["security_pass_status"] == "passed"
+	assert latest_state["security_pass_judge_rounds"] == 3
+	assert latest_state["security_pass_reported_findings"] == []
+	assert latest_state["security_pass_active_fix_issues"] == []
 	waived = latest_state["security_pass_waived_findings"]
-	assert [row["finding_id"] for row in waived] == ["SEC-TEST-1"]
+	assert len(waived) == 1
+	assert waived[0]["finding_id"] == "SEC-TEST-1"
+	assert waived[0]["severity"] == "low"
 	assert waived[0]["justification"].startswith(
 		"[keep_fixing capped after 2 judge round(s); converted to advisory follow-up] SEC-TEST-1: keep_fixing"
 	)
+	created = result.get("created_issues", [])
+	assert len(created) == 1
+	assert created[0]["labels"] == ["ai:security"]
+	assert created[0]["title"] == "[security-pass] Advisory: SEC-TEST-1 (low, scripts/example.py:1)"
+	assert sorted(latest_state["security_pass_followups_merge_checked"]) == [created[0]["number"]]
 	assert "ai:security-pass-failed" not in result["tracking_labels"]
+	assert "ai:security-pass-fixing" not in result["tracking_labels"]
 	combined_log = result["stdout"] + result["stderr"]
 	assert "SECURITY_PASS_JUDGE_KEEP_FIXING_CAPPED tracking_issue=192 round=3 cap=2 converted=1" in combined_log
+	assert "SECURITY_PASS_JUDGE_DECIDED tracking_issue=192 round=3" in combined_log
+	assert "accepted=1 keep_fixing=0 failed=0" in combined_log
+	assert "SECURITY_PASS_CLEAN tracking_issue=192" in combined_log
+	assert "SECURITY_PASS_FAILED" not in combined_log
 	assert "blocking_findings_after_cap" not in combined_log
+	assert "SECURITY_PASS_FIX_ISSUE_CREATED" not in combined_log
+	assert "SECURITY_PASS_ADVISORY_FOLLOWUP_UNBLOCKED" not in combined_log
+	judge_comments = [comment["body"] for comment in result["issues"]["192"]["comments"]
+		if comment["body"].startswith("## ⚖️ Security-pass exhaustion judge (round 3)")]
+	assert len(judge_comments) == 1
+	assert "The judge accepted every remaining finding as a known risk" in judge_comments[0]
+	assert (
+		"1 of them were `keep_fixing` decisions converted to advisories because the keep_fixing round budget (`MAX_SECURITY_PASS_KEEP_FIXING_ROUNDS=2`) is spent; high, critical and unrated findings are never waived by the cap."
+		in judge_comments[0]
+	)
+	assert "| SEC-TEST-1 | low | scripts/example.py:1 | accept_with_followup | [keep_fixing capped after 2 judge round(s); converted to advisory follow-up]" in judge_comments[0]
 
 
 def test_security_pass_cap_mixed_blocking_and_low_keep_fixing_waives_nothing() -> None:
