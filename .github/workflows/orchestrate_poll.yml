@@ -824,13 +824,18 @@ jobs:
               # Fail open: a failed read keeps any_claude=false and the
               # judge falls back to the sandboxed OpenCode path.
               # --limit 1000 matches run_standalone_stall_recovery's
-              # per-label scan, so every issue it can select is covered.
+              # per-label scan. A listing that fills the cap may omit an
+              # eligible issue that recovery still selects, so it fetches
+              # the pool rather than risk a judge without credentials.
               source scripts/gh_helpers.sh 2>/dev/null || true
               type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
               standalone_claude_issues=""
               if standalone_claude_issues="$(gh_retry gh issue list --repo "${GITHUB_REPOSITORY}" --label "ai:engine-claude" --state open --json number,labels --limit 1000 2>/dev/null)"; then
                 if printf '%s' "${standalone_claude_issues}" | jq -e 'type == "array"' >/dev/null 2>&1; then
-                  if printf '%s' "${standalone_claude_issues}" | jq -e 'any(.[]; any(.labels[]?; .name=="ai:engine-claude") and (any(.labels[]?; .name=="ai:codex")|not) and (any(.labels[]?; .name=="ai:orchestrator-tracking")|not))' >/dev/null 2>&1; then
+                  if printf '%s' "${standalone_claude_issues}" | jq -e 'length >= 1000' >/dev/null 2>&1; then
+                    any_claude=true
+                    decided_by=standalone_listing_capped
+                  elif printf '%s' "${standalone_claude_issues}" | jq -e 'any(.[]; any(.labels[]?; .name=="ai:engine-claude") and (any(.labels[]?; .name=="ai:codex")|not) and (any(.labels[]?; .name=="ai:orchestrator-tracking")|not))' >/dev/null 2>&1; then
                     any_claude=true
                     decided_by=standalone_label
                   fi

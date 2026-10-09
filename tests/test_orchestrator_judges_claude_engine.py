@@ -991,6 +991,7 @@ def _run_standalone_preflight(
 	engine: str,
 	gh_labels: list[str] | None = None,
 	gh_rc: int = 0,
+	gh_count: int = 1,
 	standalone: str = "true",
 	stall_judge: str = "true",
 ) -> tuple[subprocess.CompletedProcess[str], str, list[str]]:
@@ -1002,7 +1003,7 @@ def _run_standalone_preflight(
 	bin_dir = work / "bin"
 	bin_dir.mkdir()
 	gh_calls = work / "gh_calls"
-	listing = json.dumps([{"number": 7, "labels": [{"name": label} for label in (gh_labels or [])]}])
+	listing = json.dumps([{"number": 7 + i, "labels": [{"name": label} for label in (gh_labels or [])]} for i in range(gh_count)])
 	gh = bin_dir / "gh"
 	gh.write_text(
 		"#!/usr/bin/env bash\n"
@@ -1043,6 +1044,8 @@ def _run_standalone_preflight(
 		({"engine": "claude", "standalone": "false"}, "false", False),
 		({"engine": "claude", "stall_judge": "FALSE"}, "false", False),
 		({"engine": "codex", "gh_labels": ["ai:engine-claude"], "gh_rc": 1}, "false", True),
+		# A listing that fills the 1000 cap may hide an eligible issue: fetch the pool.
+		({"engine": "codex", "gh_labels": ["ai:engine-claude", "ai:codex"], "gh_count": 1000}, "true", True),
 	),
 )
 def test_poll_preflight_fetches_pool_for_standalone_stall_judge(

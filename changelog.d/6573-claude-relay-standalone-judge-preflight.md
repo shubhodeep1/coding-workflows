@@ -7,4 +7,4 @@ The "Resolve AI engine" step in `orchestrate_poll.yml` used to decide whether to
 - whether `STALL_JUDGE` defaults to Claude, which needs no API call;
 - otherwise, one read-only listing of open `ai:engine-claude` issues that are neither tracking issues nor labelled `ai:codex`.
 
-If that listing fails, the step warns and skips the fetch, and the judge keeps its sandboxed OpenCode fallback.
+If that listing returns 1,000 issues, it may be incomplete, so the step fetches the pool anyway. If the listing fails, the step warns and skips the fetch, and the judge keeps its sandboxed OpenCode fallback.
