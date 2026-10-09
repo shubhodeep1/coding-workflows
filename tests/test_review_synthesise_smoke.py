@@ -24,6 +24,16 @@ REVIEW_AUTOFIX_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.
 TEST_AND_MARK_STABLE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
 VALIDATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "validate.yml"
 
+# CREDENTIAL_NAME_POLICY shared by the generated wrapper gate and the
+# validation harness scrub (finding smoke-synth-credentialed-test-exec).
+CREDENTIAL_PREFIX_REGEX = (
+	"^(GH_|GITHUB_TOKEN$|OPENROUTER_|TG_BOT_|CHECK_TRIAGE_|ACTIONS_ID_TOKEN_|ACTIONS_RUNTIME_|ACTIONS_CACHE_|"
+	"ACTIONS_RESULTS_|CLAUDE_|ANTHROPIC_|GIT_CONFIG_|GIT_ASKPASS$|SSH_ASKPASS$|SSH_AUTH_SOCK$)"
+)
+CREDENTIAL_SUFFIX_REGEX = "(_TOKEN|_SECRET|_KEY|_API_KEY|_PAT|_PRIVATE_KEY|_PASSWORD|_PASSWD|_CREDENTIAL|_CREDENTIALS|_COOKIE)$"
+_CREDENTIAL_PREFIX_RE = re.compile(CREDENTIAL_PREFIX_REGEX)
+_CREDENTIAL_SUFFIX_RE = re.compile(CREDENTIAL_SUFFIX_REGEX)
+
 
 def _install_mock_codex(
 	mock_bin_dir: Path,
@@ -870,13 +880,21 @@ def test_generated_wrappers_report_pass_fail_and_inconclusive_advisory_states() 
 			sandbox_env = {
 				key: value
 				for key, value in wrapper_env.items()
-				if key not in {
-					"GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "OPENROUTER_API_KEY", "TG_BOT_SECRET",
-					"CHECK_TRIAGE_ISSUES_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
-					"ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_RUNTIME_TOKEN",
-					"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY",
-				}
+				if not (_CREDENTIAL_PREFIX_RE.search(key) or _CREDENTIAL_SUFFIX_RE.search(key))
 			}
+			# A credential-shaped name outside the old fixed list also blocks
+			# the body; the image's public GPG_KEY and test fixtures do not.
+			with_other_credential = subprocess.run(
+				["bash", str(simulated)],
+				cwd=workspace,
+				env={**sandbox_env, "BEHAVIOURAL_SMOKE_SANDBOXED": "1", "AWS_SECRET_ACCESS_KEY": "x"},
+				capture_output=True,
+				text=True,
+				timeout=60,
+			)
+			assert "reason=not_sandboxed detail=credentials" in with_other_credential.stdout
+			assert not any(echo in with_other_credential.stdout for echo in body_echoes)
+			sandbox_env = {**sandbox_env, "GPG_KEY": "7169605F62C751356D054A26A821E680E5FA6305", "TEST_API_KEY": "fixture"}
 			wrapper_result = subprocess.run(
 				["bash", str(simulated)],
 				cwd=workspace,
@@ -966,7 +984,9 @@ def test_validate_driver_can_exclude_synthesised_smoke_files() -> None:
 			path.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
 			path.chmod(0o755)
 
-		function_text = _extract_shell_function(VALIDATE_DRIVER, "discover_tests")
+		function_text = _extract_shell_function(VALIDATE_DRIVER, "is_synthesised_test") + _extract_shell_function(
+			VALIDATE_DRIVER, "discover_tests"
+		)
 		base_script = (
 			"set -euo pipefail\n"
 			f"TEST_DIR={test_dir}\n"
@@ -1323,7 +1343,14 @@ def test_validate_process_launches_harness_without_pipeline_credentials() -> Non
 		assert f"-u {name}" in " ".join(scrub)
 	assert "validation_harness_scrub_append\n" in script
 	launch_lines = [line.strip() for line in script.splitlines() if '> "${VALIDATION_LOG_FILE}" 2>&1 &' in line]
-	assert len(launch_lines) == 3
+	assert len(launch_lines) == 2
+	# Finding smoke-synth-unsandboxed-driver: no launch runs an arbitrary
+	# validate.sh; the canonical wrapper is regenerated and verified first.
+	assert 'grep -q \'scripts/validate_driver.sh\' validation/validate.sh && [ ! -f scripts/validate_driver.sh ]' not in script
+	launch_index = script.index('bash validation/validate.sh > "${VALIDATION_LOG_FILE}"')
+	check_index = script.index('cmp -s -- "${validate_wrapper_canonical_file}" validation/validate.sh')
+	assert script.index("\nmaterialize_synthesised_behavioural_smoke_tests\n") < check_index < launch_index
+	assert script.index('if [ "${VALIDATION_USE_CANONICAL_WRAPPER}" = "true" ]; then') < launch_index
 	for line in launch_lines:
 		assert line.startswith('"${VALIDATION_HARNESS_CREDENTIAL_SCRUB[@]}" ')
 
@@ -1449,7 +1476,7 @@ def test_validate_process_fallback_runner_skips_synthesised_tests() -> None:
 		text = runner.read_text(encoding="utf-8")
 		subprocess.run(["bash", "-n", str(runner)], check=True)
 		assert "unset BEHAVIOURAL_SMOKE_SANDBOXED" in text
-		skip_index = text.index('if [[ "${test_name}" == synth_round_*.sh ]]; then')
+		skip_index = text.index('if is_synthesised_test "${test_script}"; then')
 		assert skip_index < text.index('bash "${test_script}"')
 		assert "BEHAVIOURAL_SMOKE_SANDBOX test=${test_name} outcome=skipped reason=fallback_driver" in text
 		assert "# SKIP behavioural smoke sandbox unavailable" in text
@@ -1480,6 +1507,13 @@ def test_validate_process_scrub_drops_credential_shaped_variables() -> None:
 		"ACTIONS_RUNTIME_TOKEN": "secret-6",
 		"ANTHROPIC_API_KEY": "secret-7",
 		"BEHAVIOURAL_SMOKE_SANDBOXED": "1",
+		"AWS_SECRET_ACCESS_KEY": "secret-8",
+		"DB_PASSWORD": "secret-9",
+		"GIT_CONFIG_VALUE_0": "secret-10",
+		"SSH_AUTH_SOCK": "/tmp/secret-11",
+		"CLAUDE_POOL_REASON_FILE": "/tmp/secret-12",
+		"SESSION_COOKIE": "secret-13",
+		"VALIDATION_TEST_TOKEN": "fixture-token",
 	}
 	result = subprocess.run(
 		["bash", "-c", block + '"${VALIDATION_HARNESS_CREDENTIAL_SCRUB[@]}" env\n'],
@@ -1490,11 +1524,13 @@ def test_validate_process_scrub_drops_credential_shaped_variables() -> None:
 		timeout=60,
 	)
 	names = {line.split("=", 1)[0] for line in result.stdout.splitlines() if "=" in line}
-	for kept in ("PATH", "HOME", "DOCKER_HOST", "COMPOSE_PROJECT_NAME", "VALIDATION_TEST_API_KEY", "TEST_API_KEY"):
+	for kept in ("PATH", "HOME", "DOCKER_HOST", "COMPOSE_PROJECT_NAME", "VALIDATION_TEST_API_KEY", "TEST_API_KEY", "VALIDATION_TEST_TOKEN"):
 		assert kept in names, kept
 	for dropped in (
 		"FOO_TOKEN", "MY_SERVICE_SECRET", "DEPLOY_PRIVATE_KEY", "SOME_API_KEY", "GH_REPO",
 		"GH_TOKEN", "ACTIONS_RUNTIME_TOKEN", "ANTHROPIC_API_KEY", "BEHAVIOURAL_SMOKE_SANDBOXED",
+		"AWS_SECRET_ACCESS_KEY", "DB_PASSWORD", "GIT_CONFIG_VALUE_0", "SSH_AUTH_SOCK",
+		"CLAUDE_POOL_REASON_FILE", "SESSION_COOKIE",
 	):
 		assert dropped not in names, dropped
 	assert "secret-" not in result.stdout
@@ -1586,3 +1622,83 @@ def main() -> int:
 
 if __name__ == "__main__":
 	raise SystemExit(main())
+
+
+def test_credential_name_policy_is_shared_by_wrapper_gate_and_harness_scrub() -> None:
+	synth = SYNTH_SCRIPT.read_text(encoding="utf-8")
+	process = VALIDATE_PROCESS.read_text(encoding="utf-8")
+	assert "# CREDENTIAL_NAME_POLICY (keep identical to validate_process.sh)" in synth
+	assert "# CREDENTIAL_NAME_POLICY (keep identical to review_synthesise_smoke.sh)" in process
+	for text in (synth, process):
+		assert f"=~ {CREDENTIAL_PREFIX_REGEX} ]]" in text
+		assert f"=~ {CREDENTIAL_SUFFIX_REGEX} ]]" in text
+	assert "done < <(compgen -e)" in synth
+	assert "VALIDATION_TEST_*|TEST_*|BEHAVIOURAL_SMOKE_SANDBOXED|GPG_KEY)" in synth
+	assert "for _synth_cred_name in" not in synth
+
+
+def test_review_utility_scripts_default_support_dir_to_their_own_directory() -> None:
+	# A relative `scripts` default would run the PR checkout's helpers
+	# (findings review-smoke-host-opencode / review-interim-judge-host-opencode).
+	for script in (SYNTH_SCRIPT, REPO_ROOT / "scripts" / "review_run_judge_interim.sh"):
+		text = script.read_text(encoding="utf-8")
+		assert 'SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"' not in text
+		assert "${SUPPORT_SCRIPTS_DIR:-scripts}" not in text
+		assert 'if [[ "${SUPPORT_SCRIPTS_DIR:-}" != /* ]]; then' in text
+		assert text.index('SUPPORT_SCRIPTS_DIR="${_self_dir}"') < text.index("SUPPORT_PROMPTS_DIR=")
+
+
+def test_validate_process_materializer_refuses_symlinked_ai_root() -> None:
+	# Finding smoke-manifest-canary-overwrite: a symlinked .ai would move the
+	# trusted cache root outside the checkout.
+	with tempfile.TemporaryDirectory(prefix="validate_process_synth_ai_link_") as td, tempfile.TemporaryDirectory(
+		prefix="validate_process_synth_ai_outside_"
+	) as outside:
+		workspace = Path(td)
+		outside_root = Path(outside)
+		round3_dir = _write_round3_manifest(
+			outside_root, [_manifest_row("synth_round_3_good_issue.sh", "validation/tests/synth_round_3_good_issue.sh")]
+		)
+		(round3_dir / "synth_round_3_good_issue.sh").write_text("#!/usr/bin/env bash\necho x\n", encoding="utf-8")
+		(workspace / ".ai").symlink_to(outside_root / ".ai")
+		result = _run_materializer(workspace)
+		assert ".ai or .ai/review_runtime is a symlink" in result.stderr
+		assert not (workspace / "validation" / "tests" / "synth_round_3_good_issue.sh").exists()
+
+
+def test_validate_process_materializer_refuses_tracked_review_runtime_files() -> None:
+	# A PR that force-adds files under .ai/review_runtime must not have them
+	# taken for cache output.
+	with tempfile.TemporaryDirectory(prefix="validate_process_synth_tracked_") as td:
+		workspace = Path(td)
+		round3_dir = _write_round3_manifest(
+			workspace, [_manifest_row("synth_round_3_good_issue.sh", "validation/tests/synth_round_3_good_issue.sh")]
+		)
+		(round3_dir / "synth_round_3_good_issue.sh").write_text("#!/usr/bin/env bash\necho x\n", encoding="utf-8")
+		git_env = {"PATH": os.environ.get("PATH", ""), "HOME": str(workspace)}
+		subprocess.run(["git", "init", "-q"], cwd=workspace, env=git_env, check=True)
+		subprocess.run(["git", "add", "-f", ".ai/review_runtime"], cwd=workspace, env=git_env, check=True)
+		result = _run_materializer(workspace)
+		assert "tracked review-runtime files" in result.stderr
+		assert not (workspace / "validation" / "tests" / "synth_round_3_good_issue.sh").exists()
+
+		# Untracked cache output in a git checkout is still materialized.
+		subprocess.run(["git", "rm", "-r", "-q", "--cached", ".ai/review_runtime"], cwd=workspace, env=git_env, check=True)
+		allowed = _run_materializer(workspace)
+		assert "files=1" in allowed.stdout, allowed.stdout + allowed.stderr
+
+
+def test_validate_process_materializer_skips_oversized_source() -> None:
+	with tempfile.TemporaryDirectory(prefix="validate_process_synth_oversized_") as td:
+		workspace = Path(td)
+		round3_dir = _write_round3_manifest(
+			workspace, [_manifest_row("synth_round_3_big_issue.sh", "validation/tests/synth_round_3_big_issue.sh")]
+		)
+		(round3_dir / "synth_round_3_big_issue.sh").write_bytes(b"#" * (1048576 + 1))
+		result = _run_materializer(workspace)
+		assert "(source_too_large)" in result.stderr
+		assert not (workspace / "validation" / "tests" / "synth_round_3_big_issue.sh").exists()
+		script = VALIDATE_PROCESS.read_text(encoding="utf-8")
+		assert "SYNTH_SOURCE_MAX_BYTES = 1048576" in script
+		assert "os.chmod(str(target)" not in script
+		assert "os.fchmod(fd, mode)" in script

@@ -62,7 +62,9 @@ def _write_exec(path: Path) -> None:
 
 
 def _run_discover_tests(workspace: Path, *, include_synthesised: str | None) -> subprocess.CompletedProcess[str]:
-	function_text = _extract_shell_function(VALIDATE_DRIVER, "discover_tests")
+	function_text = _extract_shell_function(VALIDATE_DRIVER, "is_synthesised_test") + _extract_shell_function(
+		VALIDATE_DRIVER, "discover_tests"
+	)
 	env = os.environ.copy()
 	env["PYTHONDONTWRITEBYTECODE"] = "1"
 	env["TEST_DIR"] = "validation/tests"
@@ -205,7 +207,7 @@ exit 0
 def _sandbox_harness_script() -> str:
 	functions = "".join(
 		_extract_shell_function(VALIDATE_DRIVER, name)
-		for name in ("synthesised_test_sandbox_skip", "run_synthesised_test_sandboxed", "run_single_test")
+		for name in ("is_synthesised_test", "synthesised_test_sandbox_skip", "run_synthesised_test_sandboxed", "run_single_test")
 	)
 	return (
 		"set -euo pipefail\n"
@@ -228,6 +230,7 @@ def _run_sandbox_case(
 	stub_marker: str | None = None,
 	with_git: bool = True,
 	timeout_secs: int = 60,
+	body_extra: str = "",
 ) -> subprocess.CompletedProcess[str]:
 	# The driver runs docker under env -i, so the stub reads marker files,
 	# not environment variables.
@@ -257,7 +260,7 @@ def _run_sandbox_case(
 	test_file = workspace / "validation" / "tests" / test_name
 	test_file.parent.mkdir(parents=True, exist_ok=True)
 	test_file.write_text(
-		f'#!/usr/bin/env bash\ntouch "{sentinel}"\necho "1..1"\necho "ok 1 - host"\n', encoding="utf-8"
+		f'#!/usr/bin/env bash\n{body_extra}touch "{sentinel}"\necho "1..1"\necho "ok 1 - host"\n', encoding="utf-8"
 	)
 	test_file.chmod(0o755)
 	env = {
@@ -396,9 +399,127 @@ def test_driver_clears_inherited_sandbox_flag_and_routes_synth_by_name() -> None
 		"Only the sandbox container's docker --env may set the flag."
 	)
 	run_single = _extract_shell_function(VALIDATE_DRIVER, "run_single_test")
-	route = 'if [[ "${test_name}" == synth_round_*.sh ]]; then\n\t\trun_synthesised_test_sandboxed'
+	route = 'if is_synthesised_test "${test_file}"; then\n\t\trun_synthesised_test_sandboxed'
 	assert route in run_single
 	assert run_single.index(route) < run_single.index('bash "${test_file}"')
+
+
+def test_renamed_or_recased_synthesised_test_is_sandboxed_not_run_on_host() -> None:
+	# A synthesised test is recognised by name in any letter case and, when
+	# renamed, by the generated-wrapper marker (finding
+	# smoke-synth-unsandboxed-driver).
+	for test_name, body_extra in (
+		("SYNTH_ROUND_1_X.sh", ""),
+		("10_check.sh", "# __BEHAVIOURAL_SMOKE_X__\n"),
+		("20_flag.sh", 'if [ "${BEHAVIOURAL_SMOKE_SANDBOXED:-}" != "1" ]; then :; fi\n'),
+	):
+		with tempfile.TemporaryDirectory(prefix="validate_driver_synth_renamed_") as td:
+			workspace = Path(td)
+			result = _run_sandbox_case(workspace, test_name, with_docker=False, body_extra=body_extra)
+			assert result.returncode == 0, result.stdout + result.stderr
+			assert not (workspace / "sentinel").exists(), test_name
+			assert f"BEHAVIOURAL_SMOKE_SANDBOX test={test_name} outcome=skipped reason=docker_missing" in result.stderr
+			assert "TOTALS=1/1/0" in result.stdout
+
+
+def test_marker_bearing_or_recased_file_is_never_the_canary() -> None:
+	with tempfile.TemporaryDirectory(prefix="validate_driver_synth_marker_canary_") as td:
+		workspace = Path(td)
+		test_dir = workspace / "validation" / "tests"
+		marked = test_dir / "00_canary.sh"
+		marked.parent.mkdir(parents=True, exist_ok=True)
+		marked.write_text("#!/usr/bin/env bash\n# __BEHAVIOURAL_SMOKE_X__\n", encoding="utf-8")
+		marked.chmod(0o755)
+		_write_exec(test_dir / "SYNTH_ROUND_1_canary.sh")
+		_write_exec(test_dir / "zz_canary.sh")
+		result = _run_discover_tests(workspace, include_synthesised="false")
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert _parse_canary(result.stdout) == "validation/tests/zz_canary.sh"
+		assert _parse_test_files(result.stdout) == ["validation/tests/zz_canary.sh"]
+
+
+VALIDATE_PROCESS = REPO_ROOT / "scripts" / "validate_process.sh"
+
+
+def _fallback_runner(workspace: Path) -> Path:
+	runner = workspace / "runner.sh"
+	function_text = _extract_shell_function(VALIDATE_PROCESS, "ensure_runtime_validation_driver")
+	subprocess.run(
+		["bash", "-c", function_text + "ensure_runtime_validation_driver\n"],
+		env={**os.environ, "VALIDATION_RUNNER_FILE": str(runner)},
+		check=True,
+		capture_output=True,
+		text=True,
+		timeout=60,
+	)
+	return runner
+
+
+def test_fallback_runner_skips_renamed_and_recased_synthesised_tests() -> None:
+	# Finding smoke-synth-fallback-driver-host-exec: the fallback runner has
+	# no sandbox, so it identifies synthesised tests like the driver and skips them.
+	with tempfile.TemporaryDirectory(prefix="validate_process_fallback_renamed_") as td:
+		workspace = Path(td)
+		runner = _fallback_runner(workspace)
+		function_text = _extract_shell_function(runner, "is_synthesised_test")
+		test_dir = workspace / "validation" / "tests"
+		test_dir.mkdir(parents=True)
+		cases = {
+			"SYNTH_ROUND_1_X.sh": ("echo hi\n", "0"),
+			"10_check.sh": ("# __BEHAVIOURAL_SMOKE_X__\n", "0"),
+			"20_plain.sh": ("echo plain\n", "1"),
+		}
+		for name, (body, _expected) in cases.items():
+			(test_dir / name).write_text("#!/usr/bin/env bash\n" + body, encoding="utf-8")
+		for name, (_body, expected) in cases.items():
+			result = subprocess.run(
+				["bash", "-c", function_text + 'is_synthesised_test "$1"; echo "rc=$?"', "x", str(test_dir / name)],
+				capture_output=True,
+				text=True,
+				timeout=60,
+			)
+			assert f"rc={expected}" in result.stdout, (name, result.stdout, result.stderr)
+		text = runner.read_text(encoding="utf-8")
+		assert text.index('if is_synthesised_test "${test_script}"; then') < text.index('bash "${test_script}"')
+
+
+def test_is_synthesised_test_copies_stay_equivalent() -> None:
+	# The driver and the fallback runner each carry is_synthesised_test; a
+	# divergence would sandbox a test on one path and host-run it on the other
+	# (finding smoke-synth-fallback-driver-host-exec).
+	def _normalized(text: str) -> list[str]:
+		return [line.strip() for line in text.splitlines() if line.strip() and not line.strip().startswith("#")]
+
+	with tempfile.TemporaryDirectory(prefix="validate_synth_parity_") as td:
+		runner = _fallback_runner(Path(td))
+		driver_copy = _extract_shell_function(VALIDATE_DRIVER, "is_synthesised_test")
+		runner_copy = _extract_shell_function(runner, "is_synthesised_test")
+	assert _normalized(driver_copy) == _normalized(runner_copy)
+
+
+def test_fallback_runner_rejects_synthesised_canary() -> None:
+	# A marker-bearing 00_canary.sh would be skipped with a TAP "ok ... # SKIP"
+	# and counted as passing, so the fallback runner must refuse it as the
+	# canary, as validate_driver.sh's discover_tests does.
+	with tempfile.TemporaryDirectory(prefix="validate_process_fallback_canary_") as td:
+		text = _fallback_runner(Path(td)).read_text(encoding="utf-8")
+	guard = 'if [ "$(basename "${test_scripts[0]}")" != "00_canary.sh" ] || is_synthesised_test "${test_scripts[0]}"; then'
+	assert guard in text
+	assert text.index(guard) < text.index('for test_script in "${test_scripts[@]}"; do')
+
+
+def test_phase3_driver_is_bound_to_the_pre_model_snapshot() -> None:
+	# Findings smoke-synth-unsandboxed-driver: the canonical wrapper execs
+	# scripts/validate_driver.sh, so that driver must equal the copy present
+	# before any model phase could write back into the workspace.
+	script = VALIDATE_PROCESS.read_text(encoding="utf-8")
+	snapshot_index = script.index('cp -- scripts/validate_driver.sh "${VALIDATE_DRIVER_SNAPSHOT_FILE}"')
+	assert snapshot_index < script.index("\nattempt_self_heal_and_reexec()")
+	assert 'if [ ! -f "${VALIDATE_DRIVER_SNAPSHOT_STATE_FILE}" ]; then' in script
+	compare_index = script.index('cmp -s -- "${VALIDATE_DRIVER_SNAPSHOT_FILE}" scripts/validate_driver.sh')
+	launch_index = script.index('bash validation/validate.sh > "${VALIDATION_LOG_FILE}"')
+	assert snapshot_index < compare_index < launch_index
+	assert 'if [ "${validate_driver_snapshot_state}" = "present" ]; then' in script
 
 
 def main() -> int:

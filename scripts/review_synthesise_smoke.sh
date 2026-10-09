@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}"
+# Resolve support helpers from this script's own directory unless the
+# workflow passed an absolute SUPPORT_SCRIPTS_DIR: a relative default resolves
+# against the PR checkout, whose copies of the sandbox and engine helpers are
+# untrusted (finding review-smoke-host-opencode).
+_self_dir="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ "${SUPPORT_SCRIPTS_DIR:-}" != /* ]]; then
+	echo "::warning::review_synthesise_smoke: SUPPORT_SCRIPTS_DIR is unset or not absolute; using this script's own directory." >&2
+	SUPPORT_SCRIPTS_DIR="${_self_dir}"
+fi
 if [ -z "${SUPPORT_ROOT_DIR:-}" ]; then
 	if [ "$(basename "${SUPPORT_SCRIPTS_DIR}")" = "scripts" ]; then
 		SUPPORT_ROOT_DIR="$(dirname "${SUPPORT_SCRIPTS_DIR}")"
@@ -212,8 +220,9 @@ def strip_outer_code_fence(text: str) -> str:
 	return text
 
 
-# Pipeline credential names: a generated body must never reference one, and
-# the generated wrapper refuses to run its body while any is set (finding
+# Pipeline credential names a generated body must never reference.  The
+# generated wrapper refuses to run its body while any credential-shaped
+# variable (CREDENTIAL_NAME_POLICY) is set (finding
 # smoke-synth-credentialed-test-exec).
 SANDBOX_CREDENTIAL_NAMES = (
 	'GH_TOKEN',
@@ -549,12 +558,24 @@ def build_wrapper(issue, generated_item, round_value: int, slug: str) -> str:
 		'		fi',
 		'	done',
 		'	if [ -z "${_synth_sandbox_detail}" ]; then',
-		f'		for _synth_cred_name in {" ".join(SANDBOX_CREDENTIAL_NAMES)}; do',
-		'			if [ -n "${!_synth_cred_name:-}" ]; then',
-		'				_synth_sandbox_detail="credentials"',
-		'				break',
+		'		# Any non-empty credential-shaped variable blocks the run; the names',
+		'		# follow the harness scrub in validate_process.sh.  GPG_KEY is the',
+		'		# public CPython release-signing key ID the sandbox image sets.',
+		'		while IFS= read -r _synth_cred_name; do',
+		'			case "${_synth_cred_name}" in',
+		'				VALIDATION_TEST_*|TEST_*|BEHAVIOURAL_SMOKE_SANDBOXED|GPG_KEY)',
+		'					continue',
+		'					;;',
+		'			esac',
+		'			# CREDENTIAL_NAME_POLICY (keep identical to validate_process.sh)',
+		'			if [[ "${_synth_cred_name}" =~ ^(GH_|GITHUB_TOKEN$|OPENROUTER_|TG_BOT_|CHECK_TRIAGE_|ACTIONS_ID_TOKEN_|ACTIONS_RUNTIME_|ACTIONS_CACHE_|ACTIONS_RESULTS_|CLAUDE_|ANTHROPIC_|GIT_CONFIG_|GIT_ASKPASS$|SSH_ASKPASS$|SSH_AUTH_SOCK$) ]] \\',
+		'				|| [[ "${_synth_cred_name}" =~ (_TOKEN|_SECRET|_KEY|_API_KEY|_PAT|_PRIVATE_KEY|_PASSWORD|_PASSWD|_CREDENTIAL|_CREDENTIALS|_COOKIE)$ ]]; then',
+		'				if [ -n "${!_synth_cred_name:-}" ]; then',
+		'					_synth_sandbox_detail="credentials"',
+		'					break',
+		'				fi',
 		'			fi',
-		'		done',
+		'		done < <(compgen -e)',
 		'	fi',
 		'fi',
 		'if [ -n "${_synth_sandbox_detail}" ]; then',
@@ -812,7 +833,7 @@ if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>
 	behavioural_smoke_log_fail "missing_opencode_helpers" "${CURRENT_ROUND}" "${MANIFEST_PATH}"
 	exit 0
 fi
-if [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
+if [ ! -f "${OPENCODE_CONFIG_WRITER_PATH}" ] || [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
 	opencode_emit_failure_alert review_synthesise_smoke reviewer "${BEHAVIOURAL_SMOKE_MODEL}" 1 config_writer_missing || true
 	behavioural_smoke_log_fail "config_writer_missing" "${CURRENT_ROUND}" "${MANIFEST_PATH}"
 	exit 0

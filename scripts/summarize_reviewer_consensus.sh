@@ -58,11 +58,21 @@ fi
 : "${PREVIOUS_REVIEWS_DIR:?PREVIOUS_REVIEWS_DIR must be set}"
 : "${RUNTIME_DIR:?RUNTIME_DIR must be set}"
 
+# Resolve support helpers from this script's own directory unless the
+# workflow passed an absolute SUPPORT_SCRIPTS_DIR: a relative default resolves
+# against the PR checkout, whose copies of the sandbox and engine helpers are
+# untrusted (finding review-summarizer-host-fallback).
+_self_dir="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ "${SUPPORT_SCRIPTS_DIR:-}" != /* ]]; then
+	echo "::warning::summarize_reviewer_consensus: SUPPORT_SCRIPTS_DIR is unset or not absolute; using this script's own directory." >&2
+	SUPPORT_SCRIPTS_DIR="${_self_dir}"
+fi
+
 # Source gh_helpers.sh for sanitize_codex_prompt_file (best-effort).
-if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" ]; then
+if [ -f "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" ]; then
 	# shellcheck source=gh_helpers.sh
 	# shellcheck disable=SC1091
-	source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
+	source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 fi
 
 SUMMARISER_MODEL="${XPOLL_SUMMARISER_MODEL:-openai/gpt-6-luna}"
@@ -70,14 +80,14 @@ summariser_helpers_alert_model="$(printf '%s' "${SUMMARISER_MODEL}" | LC_ALL=C t
 if [ -z "${summariser_helpers_alert_model}" ]; then
 	summariser_helpers_alert_model="unknown"
 fi
-OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/opencode_helpers.sh}"
-OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh}"
+OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh}"
+OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR}/write_opencode_config.sh}"
 # shellcheck source=/dev/null
 if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then
 	summariser_helpers_missing_alert="opencode_agent_failure phase=review_summariser role=reviewer model=${summariser_helpers_alert_model} rc=1 failure_class=helpers_missing"
-	if ! type tg_send_msg >/dev/null 2>&1 && [ -r "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" ]; then
+	if ! type tg_send_msg >/dev/null 2>&1 && [ -r "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" ]; then
 		# shellcheck source=/dev/null
-		source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true
+		source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" 2>/dev/null || true
 	fi
 	if type tg_send_msg >/dev/null 2>&1; then
 		tg_send_msg "${summariser_helpers_missing_alert}" ERROR >/dev/null || true
@@ -85,7 +95,7 @@ if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>
 	echo "${summariser_helpers_missing_alert}" >&2
 	exit 1
 fi
-if [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
+if [ ! -f "${OPENCODE_CONFIG_WRITER_PATH}" ] || [ ! -r "${OPENCODE_CONFIG_WRITER_PATH}" ]; then
 	opencode_emit_failure_alert review_summariser reviewer "${SUMMARISER_MODEL}" 1 config_writer_missing || true
 	exit 1
 fi
@@ -317,7 +327,7 @@ if ! [[ "${SUMMARISER_ISOLATION_MAX_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${SUMMARISER
 	echo "::warning::summariser (${PREFIX}): SUMMARISER_ISOLATION_MAX_ATTEMPTS must be a positive integer; defaulting to 3" >&2
 	SUMMARISER_ISOLATION_MAX_ATTEMPTS=3
 fi
-summariser_sandbox_sh="${SUPPORT_SCRIPTS_DIR:-scripts}/review_untrusted_sandbox.sh"
+summariser_sandbox_sh="${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh"
 summariser_sandbox_unavailable=false
 summariser_sandbox_cleanup()
 {
@@ -330,7 +340,7 @@ summariser_sandbox_cleanup()
 }
 summariser_engine_resolve()
 {
-	local engine_script="${SUPPORT_SCRIPTS_DIR:-scripts}/ai_engine.sh" resolved_engine accounts
+	local engine_script="${SUPPORT_SCRIPTS_DIR}/ai_engine.sh" resolved_engine accounts
 	if [ ! -f "${engine_script}" ] || [ -L "${engine_script}" ]; then
 		printf 'codex\n'
 		return 0
