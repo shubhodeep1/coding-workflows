@@ -202,8 +202,22 @@ RUN_REF_COUNT="$(jq -r '.run_refs | length' "${PAYLOAD_FILE}")"
 
 # The report is enveloped under client_payload.report: GitHub rejects a
 # client_payload with more than 10 top-level properties (HTTP 422).
+# Report identity (issue #6559): a GitHub Actions OIDC token (audience
+# coding-workflows-heal-report) lets the intake verify which repository sent
+# the report. It needs id-token: write; without it the report is sent without
+# identity and the intake applies its binding checks. The token is written to
+# a 0600 file, never printed, and removed with the dispatch body on exit.
+IDENTITY_FILE="${RUNTIME_DIR}/report_identity.jwt"
 DISPATCH_FILE="${RUNTIME_DIR}/dispatch.json"
-if ! python3 "${HEAL_PY}" wrap-dispatch --payload-json "${PAYLOAD_FILE}" > "${DISPATCH_FILE}" 2> "${RUNTIME_DIR}/build_error.txt"; then
+trap 'rm -f "${IDENTITY_FILE}" "${DISPATCH_FILE}"' EXIT
+IDENTITY_STATUS="$(python3 "${HEAL_PY}" request-report-identity --out "${IDENTITY_FILE}" 2>/dev/null || echo "identity=absent reason=helper_failed")"
+IDENTITY_STATUS="$(printf '%s' "${IDENTITY_STATUS}" | head -1 | tr -cd 'A-Za-z0-9_=. -')"
+log "${IDENTITY_STATUS:-identity=absent reason=unknown} issue=${ISSUE_NUMBER}"
+WRAP_ARGS=(--payload-json "${PAYLOAD_FILE}")
+if [ -s "${IDENTITY_FILE}" ]; then
+	WRAP_ARGS+=(--report-identity-file "${IDENTITY_FILE}")
+fi
+if ! python3 "${HEAL_PY}" wrap-dispatch "${WRAP_ARGS[@]}" > "${DISPATCH_FILE}" 2> "${RUNTIME_DIR}/build_error.txt"; then
 	log "error dispatch_build_failed issue=${ISSUE_NUMBER} detail=$(head -c 200 "${RUNTIME_DIR}/build_error.txt" | tr '\n' ' ') reason=dispatch_envelope_failed"
 	exit 1
 fi

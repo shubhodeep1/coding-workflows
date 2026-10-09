@@ -88,6 +88,19 @@
 #   WORKFLOW_HEAL_SOURCE_CHECKOUT         "false" to skip the release-SHA worktree (tests)
 #   WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED  "false" routes pr-/base-self-inflicted
 #                                         as workflow-defect and adds no ownership facts (default true)
+#   WORKFLOW_HEAL_REQUIRE_REPORT_AUTH     "true" skips repository_dispatch reports without an
+#                                         OIDC identity; default "false" (transition mode: they
+#                                         are accepted after the binding checks). A report that
+#                                         carries an identity is always verified (issue #6559).
+#   WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS  max age of the identity's iat (default 3600)
+#   WORKFLOW_HEAL_REPORT_ORIGIN           repository_dispatch | workflow_run | workflow_dispatch
+#                                         (default GITHUB_EVENT_NAME, else repository_dispatch)
+#   WORKFLOW_HEAL_REPORT_IDENTITY_FILE    0600 file holding the report's OIDC token
+#                                         (default ${RUNTIME_DIR}/report_identity.jwt)
+#   WORKFLOW_HEAL_REPORT_IDENTITY_STATE   present | absent | malformed (default absent),
+#                                         set by the workflow's materialize step
+#   WORKFLOW_HEAL_OIDC_JWKS_FILE          test hook: read the JWKS from this file instead of
+#                                         fetching it (default empty)
 #   MODEL_EDITOR                          diagnosis model (default openai/gpt-6-sol)
 #   MODEL_VERBOSITY                       codex verbosity (default low)
 
@@ -146,6 +159,28 @@ MAX_RUNS="$(_positive_or_default "${WORKFLOW_HEAL_MAX_RUNS:-}" 3)"
 MAX_FAILED_JOBS="$(_positive_or_default "${WORKFLOW_HEAL_MAX_FAILED_JOBS:-}" 3)"
 MAX_LOG_BYTES="$(_positive_or_default "${WORKFLOW_HEAL_MAX_RUN_LOG_BYTES:-}" 60000)"
 LOG_TAIL_LINES="$(_positive_or_default "${WORKFLOW_HEAL_LOG_TAIL_LINES:-}" 400)"
+REPORT_MAX_AGE="$(_positive_or_default "${WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS:-}" 3600)"
+REQUIRE_REPORT_AUTH="${WORKFLOW_HEAL_REQUIRE_REPORT_AUTH:-false}"
+case "${REQUIRE_REPORT_AUTH,,}" in
+	true|false) REQUIRE_REPORT_AUTH="${REQUIRE_REPORT_AUTH,,}" ;;
+	*)
+		log "warn invalid_require_report_auth value=$(printf '%s' "${REQUIRE_REPORT_AUTH}" | tr -cd 'A-Za-z0-9_.-' | head -c 40); using false"
+		REQUIRE_REPORT_AUTH="false"
+		;;
+esac
+REPORT_ORIGIN="${WORKFLOW_HEAL_REPORT_ORIGIN:-${GITHUB_EVENT_NAME:-repository_dispatch}}"
+case "${REPORT_ORIGIN}" in
+	repository_dispatch|workflow_run|workflow_dispatch) ;;
+	# Unknown origins take the strictest path.
+	*) REPORT_ORIGIN="repository_dispatch" ;;
+esac
+REPORT_IDENTITY_FILE="${WORKFLOW_HEAL_REPORT_IDENTITY_FILE:-${RUNTIME_DIR}/report_identity.jwt}"
+REPORT_IDENTITY_STATE="${WORKFLOW_HEAL_REPORT_IDENTITY_STATE:-absent}"
+case "${REPORT_IDENTITY_STATE}" in
+	present|absent|malformed) ;;
+	*) REPORT_IDENTITY_STATE="malformed" ;;
+esac
+OIDC_JWKS_FILE_OVERRIDE="${WORKFLOW_HEAL_OIDC_JWKS_FILE:-}"
 
 # --- Gates -----------------------------------------------------------------
 
@@ -191,6 +226,76 @@ PAYLOAD_BASE_BRANCH="$(_pf '.base_branch // ""')"
 PAYLOAD_SCRIPT_REF="$(_pf '.script_ref // ""')"
 PAYLOAD_CRASH_FILE="$(_pf '.crash_file // ""')"
 
+# --- Report authentication (issue #6559) -------------------------------------
+#
+# repository_dispatch: a report carrying an OIDC identity is always verified
+# (RS256 against GitHub's JWKS; issuer, audience, iat freshness, repository ==
+# source_repo, this repo's reusable reporter workflow, reporter run). Without
+# one it is accepted only after the binding checks below, or skipped when
+# WORKFLOW_HEAL_REQUIRE_REPORT_AUTH=true. workflow_run payloads are built here
+# from GitHub's own event (`event`); manual workflow_dispatch re-runs always
+# take the binding checks (`manual`). Every rejection fails closed: WARNING,
+# exit 0, no issue or comment written. The token is never logged.
+
+_report_auth_reject()
+{
+	local reject_reason="${1:-verification_failed}"
+	rm -f "${REPORT_IDENTITY_FILE}" 2>/dev/null || true
+	log "report_auth=rejected reason=${reject_reason} source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none}"
+	tg_send_msg "Workflow failure heal intake rejected a report claiming to come from ${SOURCE_REPO} (reason ${reject_reason}); nothing was filed."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+	exit 0
+}
+
+REPORT_AUTH=""
+case "${REPORT_ORIGIN}" in
+	workflow_run)
+		REPORT_AUTH="event"
+		;;
+	workflow_dispatch)
+		REPORT_AUTH="manual"
+		;;
+	*)
+		case "${REPORT_IDENTITY_STATE}" in
+			malformed)
+				_report_auth_reject "identity_malformed"
+				;;
+			present)
+				if [ ! -s "${REPORT_IDENTITY_FILE}" ]; then
+					_report_auth_reject "identity_missing"
+				fi
+				JWKS_FILE="${RUNTIME_DIR}/github_oidc_jwks.json"
+				if [ -n "${OIDC_JWKS_FILE_OVERRIDE}" ]; then
+					cp "${OIDC_JWKS_FILE_OVERRIDE}" "${JWKS_FILE}" 2>/dev/null || : > "${JWKS_FILE}"
+				elif ! curl -sS --fail --max-time 30 --retry 2 --max-filesize 65536 \
+					"https://token.actions.githubusercontent.com/.well-known/jwks" -o "${JWKS_FILE}" 2>/dev/null; then
+					: > "${JWKS_FILE}"
+				fi
+				if ! jq -e '.keys | type == "array"' "${JWKS_FILE}" >/dev/null 2>&1; then
+					_report_auth_reject "jwks_unavailable"
+				fi
+				VERIFY_FILE="${RUNTIME_DIR}/report_identity_verify.json"
+				if ! python3 "${HEAL_PY}" verify-report-identity --token-file "${REPORT_IDENTITY_FILE}" --jwks-json "${JWKS_FILE}" \
+					--payload-json "${PAYLOAD_FILE}" --self-repo "${SELF_REPO}" --max-age "${REPORT_MAX_AGE}" > "${VERIFY_FILE}" 2>/dev/null; then
+					_report_auth_reject "$(jq -r '.reason // "verification_failed"' "${VERIFY_FILE}" 2>/dev/null | tr -cd 'a-z0-9_' | head -c 60 || echo verification_failed)"
+				fi
+				REPORT_AUTH="verified"
+				;;
+			*)
+				# phase_failure reports come from the heal-report job of the
+				# clarify / plan / implement workflows, which runs with
+				# `permissions: {}` and so carries no identity; the provenance
+				# gate below binds them to a run of that workflow in source_repo
+				# linked from the issue by a trusted author.
+				if [ "${REQUIRE_REPORT_AUTH}" = "true" ] && [ "${SOURCE_KIND}" != "phase_failure" ]; then
+					_report_auth_reject "unauthenticated_report"
+				fi
+				REPORT_AUTH="absent"
+				;;
+		esac
+		;;
+esac
+rm -f "${REPORT_IDENTITY_FILE}" 2>/dev/null || true
+
 SKIP_REASON="$(python3 "${HEAL_PY}" skip-reason --payload-json "${PAYLOAD_FILE}" --registry-json "${REGISTRY_FILE}" --self-repo "${SELF_REPO}" 2>/dev/null || echo "")"
 if [ -n "${SKIP_REASON}" ]; then
 	log "skip reason=${SKIP_REASON} source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none}"
@@ -201,6 +306,106 @@ if [ -n "${SKIP_REASON}" ]; then
 fi
 
 SOURCE_LABEL="${SOURCE_REPO}#${ISSUE_NUMBER:-run}"
+
+# --- Claim binding (issue #6559) -----------------------------------------------
+#
+# The claimed issue / PR must exist in source_repo (and carry the claimed
+# label); every claimed run must belong to source_repo and have failed (the
+# reporter's own verified run may still be in progress). CLAUDE.md §14 audit:
+# the intake read no issue or pull request object before this, and the jobs
+# reads below are the same per-run reads the log collection used to make, done
+# once here and reused there.
+LOG_DIR="${RUNTIME_DIR}/logs"
+JOBS_DIR="${RUNTIME_DIR}/jobs"
+mkdir -p "${LOG_DIR}" "${JOBS_DIR}"
+if [ "${REPORT_AUTH}" != "event" ]; then
+	BIND_ISSUE_FILE="${RUNTIME_DIR}/bind_issue.json"
+	BIND_PULL_FILE="${RUNTIME_DIR}/bind_pull.json"
+	BIND_ARGS=(--payload-json "${PAYLOAD_FILE}" --jobs-dir "${JOBS_DIR}")
+	if [ "${SOURCE_KIND}" = "issue" ] || [ "${SOURCE_KIND}" = "pull_request" ]; then
+		if [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]] && gh_api_json_to_file "${BIND_ISSUE_FILE}" gh api "repos/${SOURCE_REPO}/issues/${ISSUE_NUMBER}" 2>/dev/null; then
+			BIND_ARGS+=(--issue-json "${BIND_ISSUE_FILE}")
+			if ! jq -e --arg l "${LABEL}" '[.labels[]? | if type == "object" then .name else . end] | index($l) != null' "${BIND_ISSUE_FILE}" >/dev/null 2>&1; then
+				# The label may have been removed since the report; its
+				# labeled event still proves the escalation happened.
+				BIND_EVENTS_FILE="${RUNTIME_DIR}/bind_events.json"
+				if gh_retry gh api --method GET --paginate "repos/${SOURCE_REPO}/issues/${ISSUE_NUMBER}/events" -F per_page=100 \
+					--jq '.[] | select(.event == "labeled") | .label.name // ""' > "${BIND_EVENTS_FILE}" 2>/dev/null; then
+					if grep -qxF -- "${LABEL}" "${BIND_EVENTS_FILE}"; then
+						BIND_ARGS+=(--labeled-event-found)
+					fi
+				else
+					_report_auth_reject "label_unverifiable"
+				fi
+			fi
+		else
+			_report_auth_reject "issue_not_found"
+		fi
+	elif [ "${SOURCE_KIND}" = "autofix_failure" ]; then
+		if [[ "${ISSUE_NUMBER}" =~ ^[0-9]+$ ]] && gh_api_json_to_file "${BIND_PULL_FILE}" gh api "repos/${SOURCE_REPO}/pulls/${ISSUE_NUMBER}" 2>/dev/null; then
+			BIND_ARGS+=(--pull-json "${BIND_PULL_FILE}")
+			BIND_PR_HEAD="$(jq -r '.head.sha // ""' "${BIND_PULL_FILE}" 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo "")"
+			if [ -n "${HEAD_SHA}" ] && [[ "${BIND_PR_HEAD}" =~ ^[0-9a-f]{40}$ ]] && [ "${HEAD_SHA}" != "${BIND_PR_HEAD}" ]; then
+				# The PR head moved after the failure: the reported head must
+				# still be an ancestor of it.
+				BIND_COMPARE_FILE="${RUNTIME_DIR}/bind_compare.json"
+				if gh_api_json_to_file "${BIND_COMPARE_FILE}" gh api --method GET "repos/${SOURCE_REPO}/compare/${HEAD_SHA}...${BIND_PR_HEAD}" 2>/dev/null \
+					&& jq -e '.status == "ahead" or .status == "identical"' "${BIND_COMPARE_FILE}" >/dev/null 2>&1; then
+					BIND_ARGS+=(--head-ancestor)
+				fi
+			fi
+		else
+			_report_auth_reject "pull_request_not_found"
+		fi
+	fi
+	BIND_RUN_COUNT=0
+	# Only label-escalation reports bind their runs here; phase, autofix and
+	# workflow_run reports have their runs bound by the provenance gate below,
+	# which keeps the current run first and reads no earlier run it rejects.
+	BIND_RUNS_HERE=false
+	if [ "${SOURCE_KIND}" = "issue" ] || [ "${SOURCE_KIND}" = "pull_request" ]; then
+		BIND_RUNS_HERE=true
+	fi
+	while [ "${BIND_RUNS_HERE}" = "true" ] && IFS= read -r bind_run_id; do
+		[[ "${bind_run_id}" =~ ^[0-9]+$ ]] || continue
+		BIND_RUN_COUNT=$((BIND_RUN_COUNT + 1))
+		[ "${BIND_RUN_COUNT}" -le "${MAX_RUNS}" ] || break
+		BIND_JOBS_FILE="${JOBS_DIR}/${bind_run_id}.json"
+		if ! gh_api_json_to_file "${BIND_JOBS_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${bind_run_id}/jobs" -F per_page=100 2>/dev/null \
+			|| ! jq -e '.jobs | type == "array"' "${BIND_JOBS_FILE}" >/dev/null 2>&1; then
+			rm -f "${BIND_JOBS_FILE}"
+		fi
+	done < <(jq -r '.run_refs[].run_id' "${PAYLOAD_FILE}")
+	if [ "${REPORT_AUTH}" = "verified" ]; then
+		# Only a verified report's own run (bound to its token) may still be
+		# in progress.
+		BIND_REPORTER_RUN_ID="$(jq -r '.claims.run_id // ""' "${VERIFY_FILE}" 2>/dev/null || echo "")"
+		if [[ "${BIND_REPORTER_RUN_ID}" =~ ^[0-9]+$ ]]; then
+			BIND_ARGS+=(--reporter-run-id "${BIND_REPORTER_RUN_ID}")
+		fi
+		# A verified reporter built the comments excerpt from GitHub; an
+		# unauthenticated one may have made it up, so binding clears it.
+		BIND_ARGS+=(--trusted-excerpts)
+	fi
+	BIND_RESULT_FILE="${RUNTIME_DIR}/bind_result.json"
+	if ! python3 "${HEAL_PY}" bind-report "${BIND_ARGS[@]}" > "${BIND_RESULT_FILE}" 2>/dev/null; then
+		_report_auth_reject "$(jq -r '.reason // "binding_failed"' "${BIND_RESULT_FILE}" 2>/dev/null | tr -cd 'a-z0-9_' | head -c 60 || echo binding_failed)"
+	fi
+	# The fetched issue / PR replaces the report's title, URL and body excerpt.
+	if ! jq --slurpfile bind "${BIND_RESULT_FILE}" '.run_refs = $bind[0].run_refs | . + ($bind[0].overrides // {})' "${PAYLOAD_FILE}" > "${PAYLOAD_FILE}.tmp" \
+		|| ! mv "${PAYLOAD_FILE}.tmp" "${PAYLOAD_FILE}"; then
+		_report_auth_reject "binding_failed"
+	fi
+	ISSUE_TITLE="$(_pf '.issue_title // ""')"
+	ISSUE_URL="$(_pf '.issue_url // ""')"
+	log "report_auth=${REPORT_AUTH} reason=bound source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} runs_kept=$(jq -r '.run_refs | length' "${BIND_RESULT_FILE}") runs_dropped=$(jq -r '.dropped | length' "${BIND_RESULT_FILE}")"
+	if [ "${REPORT_AUTH}" = "absent" ]; then
+		tg_send_msg "Workflow failure heal accepted an unauthenticated report from ${SOURCE_REPO} after binding checks; sync its @stable workflow wrappers so reports carry an identity."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+	fi
+else
+	log "report_auth=event reason=workflow_run_event source=${SOURCE_REPO} kind=${SOURCE_KIND}"
+fi
+
 log "received source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} label=${LABEL:-none} workflow=${PAYLOAD_WORKFLOW_NAME:-none}"
 
 # --- Provenance (before any log read) --------------------------------------
@@ -263,8 +468,6 @@ fi
 
 # --- Collect failed jobs + logs --------------------------------------------
 
-LOG_DIR="${RUNTIME_DIR}/logs"
-mkdir -p "${LOG_DIR}"
 SUMMARIES_FILE="${RUNTIME_DIR}/run_summaries.json"
 printf '[]' > "${SUMMARIES_FILE}"
 LOG_FILES=()
@@ -298,7 +501,10 @@ while IFS=$'\t' read -r run_id run_url; do
 		continue
 	fi
 	JOBS_FILE="${LOG_DIR}/run-${run_id}-jobs.json"
-	if ! gh_api_json_to_file "${JOBS_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${run_id}/jobs" -F per_page=100; then
+	if [ -s "${JOBS_DIR}/${run_id}.json" ]; then
+		# Already read (and bound) above.
+		cp "${JOBS_DIR}/${run_id}.json" "${JOBS_FILE}"
+	elif ! gh_api_json_to_file "${JOBS_FILE}" gh api --method GET "repos/${SOURCE_REPO}/actions/runs/${run_id}/jobs" -F per_page=100; then
 		log "warn jobs_fetch_failed source=${SOURCE_REPO} run=${run_id}"
 		if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${RUN_COUNT}" -eq 1 ]; then
 			log "provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} run_id=${run_id} reason=current_run_jobs_unavailable"

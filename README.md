@@ -1720,6 +1720,39 @@ through `clarify → plan → implement → review`.
   accepts the older flat shape. A rejected dispatch logs the first 300
   characters of the API error as `detail=…` on the `error dispatch_failed` /
   `skip reason=dispatch_denied` line.
+- **Report authentication (issue #6559):** each reporter requests a GitHub
+  Actions OIDC token (audience `coding-workflows-heal-report`, so the
+  wrappers grant `id-token: write`; the request goes only to an `https://`
+  endpoint, or a loopback test stub) and sends it as
+  `client_payload.report_identity` (`identity=attached|absent` on the
+  reporter's log line; the token is never logged). The intake verifies a
+  token whenever one is present: RS256 against GitHub's JWKS, issuer,
+  audience, `iat` no older than `WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS`
+  (default 3600; `exp` is not enforced, so a queued intake still accepts it),
+  `repository` equal to `source_repo`, `job_workflow_ref` pointing at this
+  repository's `workflow_failure_heal.yml` or `review_autofix.yml`, and the
+  token's run equal to the report's `reporter_run_url`. It then binds the
+  claims through the GitHub API: the claimed issue / PR exists in
+  `source_repo` (with the claimed label, or a `labeled` event for it), an
+  autofix report's head is the PR head or an ancestor of it, and every run a
+  label-escalation report claims belongs to `source_repo` and failed (other
+  runs are dropped; a report that claimed runs and keeps none is rejected as
+  `no_bound_runs`). A label-escalation report's title, URL and body excerpt
+  are replaced with the fetched issue / PR's, and an unauthenticated report's
+  comments excerpt is dropped; an autofix report's are replaced the same way
+  from its fetched pull request. Phase, autofix and `workflow_run` reports leave their runs
+  to the existing provenance gate, which already checks run repository,
+  workflow path, failure and issue / PR linkage. A report without a token
+  (a consumer whose wrappers have not synced yet) is accepted after the
+  binding checks with a Telegram WARNING while
+  `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH=false` (the default) and skipped when it
+  is `true`. Phase reports are the exception: the clarify / plan / implement
+  `heal-report` job runs with `permissions: {}`, so they carry no token (the
+  phase reporter attaches one only if the job is granted `id-token: write`)
+  and are always left to the provenance gate. Manual `workflow_dispatch` re-runs always take the binding
+  checks; `workflow_run` payloads come from GitHub's own event. Every
+  rejection fails closed with `WORKFLOW_HEAL report_auth=rejected reason=…`,
+  a Telegram WARNING, and no issue or comment.
 - **Intake (coding-workflows):** `scripts/workflow_failure_heal_intake.sh`
   re-validates the payload (`scripts/workflow_failure_heal.py validate-payload`),
   accepts reports only from this repo and the repos listed in
@@ -2125,6 +2158,8 @@ through `clarify → plan → implement → review`.
 | `WORKFLOW_HEAL_MAX_OPEN_ISSUES` | `10` | coding-workflows only. Max open `ai:workflow-heal` issues; further reports are logged with `skip reason=budget_exhausted` and a Telegram WARNING. |
 | `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY` | `20` | coding-workflows only. Max `ai:workflow-heal` issues opened per UTC day. |
 | `WORKFLOW_HEAL_TARGET_BRANCH` | `stable` | coding-workflows only. Branch a heal issue declares as `Target branch`. Failed release runs use their failed branch; same-repo review failures use the verified support-script branch when resolvable, otherwise the PR head (falling back to stable if missing). |
+| `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH` | `false` | coding-workflows only. `true` makes the heal intake skip `repository_dispatch` reports that carry no OIDC `report_identity` (`reason=unauthenticated_report`), except phase reports, which the provenance gate binds. `false` (transition default) accepts them after the binding checks, with a Telegram WARNING. A report that carries an identity is always verified. Only `true` / `false` are accepted; other values warn and use `false`. See [Workflow Failure Heal](#workflow-failure-heal). |
+| `WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS` | `3600` | coding-workflows only. Maximum age of a heal report identity's `iat` claim when the intake verifies it; older tokens are rejected as `identity_stale`. |
 | `WORKFLOW_HEAL_EVIDENCE_MAX_BYTES` | `24000` | Maximum redacted workflow evidence bytes supplied to heal prompts; only an unedited, pipeline-authored scope marker authorizes collection. |
 | `WORKFLOW_HEAL_EVIDENCE_MAX_RUNS` | `3` | Maximum verified run references used for heal prompt evidence. |
 | `HEAL_ISOLATED_EDITOR_WALL_SECS` | `EDITOR_MAX_WALL` (`7800` by default) | Heal editor container wall-time limit. Missing or untrusted heal scope refuses implementation and latches `ai:needs-human`; non-heal issues retain the existing editor path. |

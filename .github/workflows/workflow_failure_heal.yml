@@ -59,6 +59,10 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
+      # OIDC token (audience coding-workflows-heal-report) that proves to the
+      # intake which repository sent the report (issue #6559). Callers must
+      # grant id-token: write as well.
+      id-token: write
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       GITHUB_REPOSITORY: ${{ github.repository }}

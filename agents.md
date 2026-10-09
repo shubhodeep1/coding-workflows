@@ -396,7 +396,23 @@ Phases of the unattended pipeline (each is a separate workflow file under
     the report as `client_payload: {schema_version, report}` (GitHub caps
     `client_payload` at 10 top-level properties); the intake unwraps it and
     accepts the flat shape too, and a rejected dispatch logs `detail=` with
-    the first 300 characters of the API error. On by
+    the first 300 characters of the API error. Reporters also attach a
+    GitHub Actions OIDC token (`client_payload.report_identity`, audience
+    `coding-workflows-heal-report`, wrappers grant `id-token: write`); the
+    intake verifies it when present (JWKS signature, issuer, audience, `iat`
+    within `WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS`, `repository` = source repo,
+    `job_workflow_ref` = this repo's reporter workflow, reporter run), then
+    binds the claimed issue / PR, label and runs to the source repository via
+    the API (`workflow_failure_heal.py verify-report-identity` /
+    `bind-report`). A report without a token passes on the binding checks
+    while `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH=false` (default) and is skipped
+    when `true` (phase reports, whose `heal-report` job has
+    `permissions: {}`, are exempt). Only label-escalation reports have their
+    runs bound here (claimed runs that all fail binding reject the report as
+    `no_bound_runs`; title, URL and body excerpt come from the fetched issue,
+    and an unauthenticated report's comments excerpt is dropped; autofix reports take theirs from the fetched PR); phase, autofix and `workflow_run` runs stay with the
+    provenance gate; rejections fail closed (`report_auth=rejected reason=…`,
+    WARNING, nothing filed). On by
     default; disable per repo via `WORKFLOW_HEAL_ENABLED=false`; never pushes
     code itself. Stable log prefixes: `WORKFLOW_HEAL_REPORT`,
     `WORKFLOW_HEAL_AUTOFIX_REPORT`, `WORKFLOW_HEAL_PHASE_REPORT`,
