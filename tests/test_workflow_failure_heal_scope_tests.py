@@ -71,11 +71,23 @@ def test_scope_subjects_map_test_files_to_existing_subjects_only() -> None:
 
 
 def test_render_marker_appends_test_subjects_before_the_globs() -> None:
+	# Test files are covered by tests/**, so only their subjects take explicit slots.
 	marker = heal.render_heal_scope_marker(crash_file=None, workflow_paths=[".github/workflows/ci.yml"], changed_files=[], runs=[f"{SELF_REPO}:1"],
 		exists=lambda path: True, test_subjects=["tests/test_orchestrate_poll_process.py", "scripts/orchestrate_poll_process.sh"])
-	assert marker == f"<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/ci.yml,tests/test_orchestrate_poll_process.py,scripts/orchestrate_poll_process.sh,tests/**,changelog.d/*.md runs={SELF_REPO}:1 -->"
+	assert marker == f"<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/ci.yml,scripts/orchestrate_poll_process.sh,tests/**,changelog.d/*.md runs={SELF_REPO}:1 -->"
 	verified = heal.verify_heal_scope(body=marker, author_login="bot", last_edited_at=None, labels=[heal.HEAL_LABEL], pipeline_login="bot")
 	assert verified["status"] == "verified" and "scripts/orchestrate_poll_process.sh" in verified["paths"]
+
+
+def test_render_marker_keeps_subjects_ahead_of_the_cap_and_warns_on_truncation(capsys) -> None:
+	subjects = [f"scripts/s{i}.sh" for i in range(25)]
+	marker = heal.render_heal_scope_marker(crash_file=None, workflow_paths=[".github/workflows/ci.yml"], changed_files=[], runs=[f"{SELF_REPO}:1"],
+		exists=lambda path: True, test_subjects=[item for i, subject in enumerate(subjects) for item in (f"tests/test_s{i}.py", subject)])
+	paths = marker.split("paths=", 1)[1].split(" ", 1)[0].split(",")
+	assert paths[:-2] == [".github/workflows/ci.yml", *subjects[:19]]
+	assert "WORKFLOW_HEAL warn heal_scope_truncated kept=20 dropped_candidates=6" in capsys.readouterr().err
+	verified = heal.verify_heal_scope(body=marker, author_login="bot", last_edited_at=None, labels=[heal.HEAL_LABEL], pipeline_login="bot")
+	assert verified["status"] == "verified"
 
 
 def _init_scope_repo(root: Path) -> str:
@@ -107,7 +119,7 @@ def test_render_cli_resolves_failing_test_names_at_the_scope_commit() -> None:
 			capture_output=True, text=True, check=True).stdout.strip()
 		# The pytest-style file from the log does not exist at the scope commit and is dropped; the
 		# name resolves through git grep to its file, whose stem maps to the poller script.
-		assert marker == f"<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/ci.yml,tests/test_orchestrate_poll_process.py,scripts/orchestrate_poll_process.sh,tests/**,changelog.d/*.md runs={SELF_REPO}:1 -->"
+		assert marker == f"<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/ci.yml,scripts/orchestrate_poll_process.sh,tests/**,changelog.d/*.md runs={SELF_REPO}:1 -->"
 
 
 def test_render_cli_drops_log_reported_files_that_do_not_define_a_failing_test() -> None:
@@ -125,7 +137,7 @@ def test_render_cli_drops_log_reported_files_that_do_not_define_a_failing_test()
 			"failing_tests": {"names": ["test_method"], "files": ["tests/test_unrelated.py", "tests/test_klass.py"]}}))
 		marker = subprocess.run([sys.executable, str(HEAL_PY), "heal-scope", "render", "--input-json", str(inputs), "--checkout", str(root), "--ref", sha],
 			capture_output=True, text=True, check=True).stdout.strip()
-		assert marker == f"<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/ci.yml,tests/test_klass.py,scripts/klass.py,tests/**,changelog.d/*.md runs={SELF_REPO}:1 -->"
+		assert marker == f"<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/ci.yml,scripts/klass.py,tests/**,changelog.d/*.md runs={SELF_REPO}:1 -->"
 
 
 def test_render_cli_drops_a_name_defined_in_several_files_unless_the_log_names_one() -> None:
@@ -151,7 +163,7 @@ def test_render_cli_drops_a_name_defined_in_several_files_unless_the_log_names_o
 		inputs.write_text(json.dumps({**base, "failing_tests": {"names": [name], "files": ["tests/test_orchestrate_poll_process.py"],
 			"pairs": [f"tests/test_orchestrate_poll_process.py::{name}"]}}))
 		marker = subprocess.run(render, capture_output=True, text=True, check=True).stdout.strip()
-		assert marker == f"<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/ci.yml,tests/test_orchestrate_poll_process.py,scripts/orchestrate_poll_process.sh,tests/**,changelog.d/*.md runs={SELF_REPO}:1 -->"
+		assert marker == f"<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/ci.yml,scripts/orchestrate_poll_process.sh,tests/**,changelog.d/*.md runs={SELF_REPO}:1 -->"
 
 
 def test_extract_failing_tests_pairs_files_with_names_and_strips_parameters() -> None:

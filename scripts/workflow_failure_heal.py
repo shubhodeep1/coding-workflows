@@ -2134,11 +2134,21 @@ def heal_scope_test_subjects(test_files: Iterable[str], exists: Any) -> list[str
 
 def render_heal_scope_marker(*, crash_file: str | None, workflow_paths: Iterable[str], changed_files: Iterable[str], exists: Any, runs: Iterable[str] = (), test_subjects: Iterable[str] = ()) -> str:
 	paths = []
-	for path in [crash_file, *workflow_paths, *changed_files, *test_subjects]:
-		if isinstance(path, str) and _safe_heal_path(path) and path not in paths and exists(path):
-			paths.append(path)
+	dropped = 0
+	# Test files are already covered by the trailing ``tests/**`` glob, so only
+	# the subjects they map to take one of the 20 explicit slots
+	# (verify_heal_scope accepts at most 20 explicit paths).
+	subjects = [path for path in test_subjects if isinstance(path, str) and not path.startswith("tests/")]
+	for path in [crash_file, *workflow_paths, *changed_files, *subjects]:
+		if not isinstance(path, str) or not _safe_heal_path(path) or path in paths:
+			continue
 		if len(paths) >= 20:
-			break
+			# Counted without an existence lookup, so this is an upper bound.
+			dropped += 1
+		elif exists(path):
+			paths.append(path)
+	if dropped:
+		print(f"WORKFLOW_HEAL warn heal_scope_truncated kept={len(paths)} dropped_candidates={dropped}", file=sys.stderr)
 	if not paths:
 		return ""
 	refs = list(runs)
