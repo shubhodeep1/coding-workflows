@@ -106,6 +106,7 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 		install_budget=600
 	fi
 	dep_rc=0
+	dep_started_at="${SECONDS}"
 	timeout --signal=TERM --kill-after=10s 900s env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run --rm --name "${dep_container}" --user "$(id -u):$(id -g)" \
 		--network none --cap-drop ALL --security-opt no-new-privileges --pids-limit 128 --memory 3g --cpus 2 \
 		--mount "type=bind,src=${root}/source,dst=/source" \
@@ -127,10 +128,13 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 			install_failed=false
 			# Bounded install: a resolver that keeps going is a failed install,
 			# reported and skipped, not a reason to lose the editor run.
+			# Exit 137 is also an OOM kill under the 3g memory limit; only call it
+			# a timeout when the budget actually elapsed.
 			bounded_install() {
+				local started_at="${SECONDS}"
 				timeout --signal=TERM --kill-after=10s "${DEPENDENCY_INSTALL_TIMEOUT_SECONDS:-600}" "$@" 2>&1
 				local rc=$?
-				if [ "${rc}" -eq 124 ] || [ "${rc}" -eq 137 ]; then
+				if [ "${rc}" -eq 124 ] || { [ "${rc}" -eq 137 ] && [ $((SECONDS - started_at)) -ge "${DEPENDENCY_INSTALL_TIMEOUT_SECONDS:-600}" ]; }; then
 					echo "::warning::Review dependency install timed out after ${DEPENDENCY_INSTALL_TIMEOUT_SECONDS:-600}s: $*"
 				fi
 				return "${rc}"
@@ -173,7 +177,7 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 					echo "Repository declares pytest configuration and pytest is already importable."
 				else
 					echo "Repository declares pytest configuration but pytest is not importable — installing pytest"
-					python3 -m pip install pytest 2>&1 || python3 -m pip install --user --break-system-packages pytest 2>&1 || true
+					bounded_install python3 -m pip install pytest || bounded_install python3 -m pip install --user --break-system-packages pytest || true
 					if python3 -c "import pytest" >/dev/null 2>&1; then
 						echo "pytest bootstrap succeeded."
 					else
@@ -182,6 +186,12 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 				fi
 			fi
 		' || dep_rc=$?
+	# timeout exits 137 when its KILL escalation fires, but a container
+	# OOM-killed under --memory 3g also exits 137 well before the budget;
+	# only the former is a timeout, the latter stays fatal.
+	if [ "${dep_rc}" -eq 137 ] && [ $((SECONDS - dep_started_at)) -lt 900 ]; then
+		dep_rc=1
+	fi
 	case "${dep_rc}" in
 		0) ;;
 		124|137)

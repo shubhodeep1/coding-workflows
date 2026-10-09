@@ -81,9 +81,8 @@ def _cleanup(tmp_path: Path) -> None:
 		SUPPORT_SCRIPTS_DIR=str(ROOT / "scripts"), RUNNER_TEMP=str(tmp_path)), capture_output=True)
 
 
-@pytest.mark.parametrize("run_exit", (124, 137))
-def test_timed_out_dependency_container_is_a_failed_install_not_an_isolation_failure(tmp_path, run_exit):
-	proc, log = _prepare(tmp_path, run_exit)
+def test_timed_out_dependency_container_is_a_failed_install_not_an_isolation_failure(tmp_path):
+	proc, log = _prepare(tmp_path, 124)
 	try:
 		assert proc.returncode == 0, proc.stderr
 		assert "dependency container timed out after 900s" in proc.stderr
@@ -94,8 +93,10 @@ def test_timed_out_dependency_container_is_a_failed_install_not_an_isolation_fai
 		_cleanup(tmp_path)
 
 
-def test_any_other_container_failure_is_still_fatal(tmp_path):
-	proc, _ = _prepare(tmp_path, 1)
+@pytest.mark.parametrize("run_exit", (1, 137))
+def test_any_other_container_failure_is_still_fatal(tmp_path, run_exit):
+	# 137 before the 900s budget elapsed is an OOM kill, not a timeout.
+	proc, _ = _prepare(tmp_path, run_exit)
 	assert proc.returncode == 1
 	assert "Review dependency isolation failed" in proc.stderr
 	assert not (tmp_path / "github_env").exists()
@@ -127,9 +128,11 @@ def test_every_install_command_inside_the_container_is_bounded():
 	inner = text.split("/bin/bash -c '", 1)[1].split("\n\t\t' || dep_rc=$?", 1)[0]
 	assert "bounded_install() {" in inner
 	assert 'timeout --signal=TERM --kill-after=10s "${DEPENDENCY_INSTALL_TIMEOUT_SECONDS:-600}" "$@" 2>&1' in inner
+	assert '[ $((SECONDS - started_at)) -ge "${DEPENDENCY_INSTALL_TIMEOUT_SECONDS:-600}" ]' in inner
 	for command in ("npm ci --ignore-scripts", "yarn install --frozen-lockfile --ignore-scripts",
 			"npx pnpm install --frozen-lockfile --ignore-scripts", "npm install --ignore-scripts",
-			"pip install -r requirements.txt", 'pip install -e ".[dev]"', "pip install -e ."):
+			"pip install -r requirements.txt", 'pip install -e ".[dev]"', "pip install -e .",
+			"python3 -m pip install pytest", "python3 -m pip install --user --break-system-packages pytest"):
 		assert f"bounded_install {command}" in inner, command
 		assert not re.search(r"(?<![\w-])" + re.escape(command) + r" 2>&1", inner), f"{command} runs unbounded"
 	assert 'echo "::warning::Review dependency install timed out after' in inner

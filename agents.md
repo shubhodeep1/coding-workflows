@@ -921,7 +921,8 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   Each review install command runs under `DEPENDENCY_INSTALL_TIMEOUT_SECONDS`
   (default 600) inside the container; a command that exceeds it is killed and
   reported as a failed install, and a dependency container that still exceeds
-  its 900-second budget (`timeout` exit 124 or 137) is treated the same way,
+  its 900-second budget (`timeout` exit 124, or 137 once the budget has
+  elapsed; an earlier 137 is an OOM kill) is treated the same way,
   with a warning, instead of as `Review dependency isolation failed`. Any
   other non-zero container exit stays fatal. Before this, pip backtracking
   through a consumer's unpinned `[dev]` extras hit the 900-second budget
