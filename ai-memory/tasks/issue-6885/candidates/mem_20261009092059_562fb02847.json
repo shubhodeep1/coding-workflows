@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should this issue deliver, given that the failing test cannot be identified from the evidence here?\nChoices:\n- A: A diagnostics fix. In the shard tally loop, when a shard fails, also print each of its `FAIL` lines as an `::error::` annotation, or the last ~20 lines of its log if it has none. That way a future failure names the failing test in the annotations and the log tail. Extend `tests/test_ci_poll_test_sharding.py` to cover it. Do not change any test or poller behaviour. (RECOMMENDED)\n- B: No code change. Close the issue as unconfirmed and rely on a CI rerun of PR #6648's head.\n- C: Wait until someone pastes the shard-1 `FAIL` line from run 37907020014 into the issue, then fix that test or the poller behaviour it shows.\nQ2: If Q1 is A, which copies of the sharded poll-test step get the annotation change?\nChoices:\n- A: `ci.yml` and the identical sharded step in the `validate-scripts` job of `mark-stable.yml` and `test-and-mark-stable.yml`, which `tests/test_ci_poll_test_sharding.py` already pins to match. (RECOMMENDED)\n- B: Only `.github/workflows/ci.yml`.\n**Note:** Q2 only matters if Q1 is A. With Q1:B or Q1:C, answer Q2:A or leave it out.\nAssumptions: the clarify sandbox can't open the auth-walled run log, so the root cause stays unknown. Missing context: the shard-1 `FAIL` line from run 37907020014.",
+  "fingerprint": "7e775d59eff43e02526b1530b412dce20686e82c7fbf900b3af57d398715fecf",
+  "lineage": {
+    "issue_number": 6885,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37909956135",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37909956135",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009092059_562fb02847",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6885,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37909956135"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6885 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T09:20:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
