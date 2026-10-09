@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add and commit workflow-templates/CLAUDE.md as a symlink to ../CLAUDE.md. Verify the section-number test and release gate.\"\n  expected_change_site: workflow-templates/CLAUDE.md\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: These four reviewers report that the PR diff or changed-file list does not add workflow-templates/CLAUDE.md, and that tests/test_claude_md_section_numbers.py:33-36 or tests/test_claude_md_section_numbers.py:36 fails because the symlink is absent; deepseek_deepseek-v4-pro disputes the gap, reporting that the symlink exists with the same content as root CLAUDE.md and that the PR correctly addresses the verifier snapshot issue instead.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n- Requirement: \"Add and commit workflow-templates/CLAUDE.md as a symlink to ../CLAUDE.md. Verify the section-number test and release gate.\" (linked issue #6561)\n  Expected change site: workflow-templates/CLAUDE.md (new tracked symlink)\n  Evidence of absence: The PR changed-files list does not include workflow-templates/CLAUDE.md, but the directory listing and file read confirm the file is present with the same content as root CLAUDE.md. The test test_template_claude_md_is_the_same_file at tests/test_claude_md_section_numbers.py:33-36 verifies it resolves to the root file. The PR correctly addresses the root cause (the verifier snapshot omitting symlinks) rather than re-adding a file that already exists.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- The CI failure in the tests-hooks-and-orchestrator job is a pre-existing issue on main unrelated to this PR. The log tail shows test failures in pr_merge_status_guard.py related to template parity drift that came in with the merge from main (changelog fragment 6641). The affected .claude/hooks/ path is sandbox-excluded and cannot be edited by this pass.\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- Requirement: Add and commit workflow-templates/CLAUDE.md as a symlink to ../CLAUDE.md. Verify the section-number test and release gate.\n  Expected change site: workflow-templates/CLAUDE.md (should exist as a tracked symlink)\n  Evidence of absence: The file workflow-templates/CLAUDE.md does not exist in the PR; the PR diff contains no hunk to create it. The test tests/test_claude_md_section_numbers.py:33-36 fails at runtime because the assertion (Path(\"workflow-templates/CLAUDE.md\").resolve() == Path(\"CLAUDE.md\").resolve()) fails when the symlink is missing.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- Requirement: \"Add and commit workflow-templates/CLAUDE.md as a symlink to ../CLAUDE.md. Verify the section-number test and release gate.\" (linked issue #6561, fix section; PR description says \"Closes https://github.com/shubhodeep1/coding-workflows/issues/6561\")\n  Expected change site: workflow-templates/CLAUDE.md (a new tracked symlink to ../CLAUDE.md, plus a passing `pytest tests/test_claude_md_section_numbers.py::test_template_claude_md_is_the_same_file` at tests/test_claude_md_section_numbers.py:33-36 which asserts `(ROOT / \"workflow-templates\" / \"CLAUDE.md\").resolve() == CLAUDE_MD.resolve()`)\n  Evidence of absence: a glob for `workflow-templates/CLAUDE.md` and `**/CLAUDE.md` from the repository root returns no such file (only the root `CLAUDE.md` exists); a grep across the repo for the path returns no tracked file. The PR's `pr_changed_files.txt` and `last_run_changed_files.txt` both list only `agents.md`, `changelog.d/6561-activation-verify-tracked-symlinks.md`, `prompts/_templates/mode-activation-verify.txt`, `prompts/mode-activation-verify.txt`, `scripts/activation_verify.sh`, and `tests/test_activation_verify.py` \u2014 none of them under `workflow-templates/`. The PR's own `agents.md` change, the new `changelog.d/6561-...md`, and both copies of `prompts/mode-activation-verify.txt` all describe the change as \"the verifier now lists tracked symlinks so a tracked link such as `workflow-templates/CLAUDE.md` is never reported missing\" \u2014 they describe a workaround for the false positive, not the addition of the symlink the issue asks for. `tests/test_claude_md_section_numbers.py:33-36` will fail on the branch: `Path(\"workflow-templates/CLAUDE.md\").resolve()` resolves to `<ROOT>/workflow-templates/CLAUDE.md` (no symlink, no target), which is not equal to `Path(\"CLAUDE.md\").resolve()`. The release gate runs this test at `.github/workflows/test-and-mark-stable.yml:4662-4675` (referenced by the issue itself) and `.github/workflows/update_workflows.yml:309-349` will skip the root-file sync, so the gate the issue asks to verify will not pass on this PR.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: \u201cAdd and commit workflow-templates/CLAUDE.md as a symlink to ../CLAUDE.md. Verify the section-number test and release gate.\u201d\n  Expected change site: workflow-templates/CLAUDE.md\n  Evidence of absence: The PR diff adds no symlink, and the current checkout has no workflow-templates/CLAUDE.md. The assertion at tests/test_claude_md_section_numbers.py:36 therefore fails because the unresolved template path does not resolve to the root CLAUDE.md.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: \"Add and commit workflow-templates/CLAUDE.md as a symlink to ../CLAUDE.md. Verify the section-number test and release gate.\"\n  Expected change site: workflow-templates/CLAUDE.md (new tracked symlink)\n  Evidence of absence: The PR changed-file list contains no entry for workflow-templates/CLAUDE.md. The original_pr_diff shows no hunk adding this symlink. The linked issue body states \"workflow-templates/CLAUDE.md is absent from the tracked checkout\" and explicitly requires adding it. The editor summary deferred this deliverable with the claim \"the link's absence here is not evidence that the repository lacks it,\" but the issue body confirms the symlink is absent from the tracked tree. Without this symlink, tests/test_claude_md_section_numbers.py:33-36 (test_template_claude_md_is_the_same_file) fails its assertion that Path(\"workflow-templates/CLAUDE.md\").resolve() equals Path(\"CLAUDE.md\").resolve(), and the release gate the issue asks to verify cannot pass.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "a4d77565a0238f406b5e2fbd610306836b4546e83cc278c3f9094a48fe8d4cad",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6566,
+    "run_id": "37874356831",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37874356831",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009024938_e161b09b9e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6566,
+    "run_id": "37874356831"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T02:49:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
