@@ -19538,6 +19538,10 @@ def test_deferred_creation_relinks_issue_number_map_entry_without_creation_comme
 
 def test_truncated_comments_json_is_handled_gracefully():
 	"""Poller exits cleanly when the comments API returns invalid/truncated JSON."""
+	# The poller itself needs jq (it aborts with `jq: command not found`
+	# otherwise), so skip like the module's other poller tests (#6944).
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
 	with tempfile.TemporaryDirectory(prefix="poller-test-truncated-") as td:
 		tmp = Path(td)
 		bin_dir = tmp / "bin"
