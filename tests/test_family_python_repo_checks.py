@@ -125,7 +125,10 @@ def test_python_repo_checks_invariants_regression_guards() -> None:
 		assert "flask" not in dockerfile_text
 
 		family_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
-		assert "python-repo-checks family for demo-project" in family_text
+		marker_run = subprocess.run(["bash", "-c", family_text], capture_output=True, text=True, timeout=10)
+		assert marker_run.returncode == 0, marker_run.stderr
+		# project_name is rendered shell-quoted (printf argument), so check the executed output.
+		assert "ok 1 - python-repo-checks family for demo-project" in marker_run.stdout
 
 		repo_check_text = (output_root / "tests" / "40_repo_checks.sh").read_text(encoding="utf-8")
 		assert "REPO_CHECK_ENTRY" in repo_check_text
@@ -148,9 +151,11 @@ def test_python_repo_checks_invariants_regression_guards() -> None:
 		# image, so the audit must run inside the app container, not on the
 		# host runner (#6031 validation run 37315007990).
 		import_audit_shell = (output_root / "tests" / "20_import_audit.sh").read_text(encoding="utf-8")
-		assert 'COMPOSE_FILE="${COMPOSE_FILE:-out/docker-compose.test.yml}"' in import_audit_shell
+		assert "_default_compose_file=out/docker-compose.test.yml" in import_audit_shell
+		assert 'COMPOSE_FILE="${COMPOSE_FILE:-${_default_compose_file}}"' in import_audit_shell
 		assert 'APP_SERVICE="${APP_SERVICE:-app}"' in import_audit_shell
-		assert 'CONTAINER_IMPORT_AUDIT="${CONTAINER_IMPORT_AUDIT:-/workspace/out/tests/_lib/import_audit.py}"' in import_audit_shell
+		assert "_default_container_import_audit=/workspace/out/tests/_lib/import_audit.py" in import_audit_shell
+		assert 'CONTAINER_IMPORT_AUDIT="${CONTAINER_IMPORT_AUDIT:-${_default_container_import_audit}}"' in import_audit_shell
 		assert 'docker compose -f "${COMPOSE_FILE}" exec -T "${APP_SERVICE}" python3 "${CONTAINER_IMPORT_AUDIT}"' in import_audit_shell
 		assert "/bin/sh -c" not in import_audit_shell
 		assert "printf '%s\\n' \"${audit_output}\" | sed 's/^/# /'" in import_audit_shell

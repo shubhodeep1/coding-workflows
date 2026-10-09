@@ -10,9 +10,16 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
+import hmac
+import http.server
 import importlib.util
 import base64
 import json
+import math
+import random
+import threading
+import time
 import os
 import re
 import shutil
@@ -252,7 +259,14 @@ def test_intake_workflow_triggers_and_release_names() -> None:
 	payload_step = [s for s in job["steps"] if s.get("id") == "payload"][0]
 	# External inputs are env-bound, never interpolated into the script body.
 	assert "${{" not in payload_step["run"]
-	assert payload_step["env"]["CLIENT_PAYLOAD_JSON"] == "${{ toJson(github.event.client_payload) }}"
+	# client_payload (which may carry the report's OIDC identity) is read from
+	# the event file, never echoed in the step's env block (issue #6559).
+	assert "CLIENT_PAYLOAD_JSON" not in payload_step["env"]
+	assert "toJson(github.event.client_payload)" not in INTAKE_WORKFLOW.read_text(encoding="utf-8")
+	assert '"${GITHUB_EVENT_PATH}"' in payload_step["run"]
+	assert "extract-report-identity" in payload_step["run"]
+	assert job["env"]["WORKFLOW_HEAL_REQUIRE_REPORT_AUTH"] == "${{ vars.WORKFLOW_HEAL_REQUIRE_REPORT_AUTH || 'false' }}"
+	assert job["env"]["WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS"] == "${{ vars.WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS || '3600' }}"
 	checkout_step = [s for s in job["steps"] if s.get("name") == "Checkout repository"][0]
 	assert checkout_step["with"]["persist-credentials"] is False
 	intake_script = INTAKE_SCRIPT.read_text(encoding="utf-8")
@@ -568,21 +582,33 @@ def test_intake_materialize_step_unwraps_enveloped_repository_dispatch() -> None
 	intake = _yaml(INTAKE_WORKFLOW)
 	step = [s for s in intake["jobs"]["intake"]["steps"] if s.get("id") == "payload"][0]
 	flat = _consumer_payload()
-	for client_payload in (heal.wrap_dispatch(flat)["client_payload"], flat):
+	fake_identity = "aGVhZGVy.Y2xhaW1z.c2lnbmF0dXJl"
+	cases = (
+		(heal.wrap_dispatch(flat)["client_payload"], "absent"),
+		(flat, "absent"),
+		(heal.wrap_dispatch(flat, fake_identity)["client_payload"], "present"),
+		({**heal.wrap_dispatch(flat)["client_payload"], "report_identity": "not a token"}, "malformed"),
+	)
+	for client_payload, expected_state in cases:
 		with tempfile.TemporaryDirectory(prefix="heal-materialize-") as tmp_name:
 			tmp = Path(tmp_name)
 			output_file = tmp / "github_output"
+			env_file = tmp / "github_env"
 			payload_file = tmp / "payload_raw.json"
+			event_file = tmp / "event.json"
+			event_file.write_text(json.dumps({"client_payload": client_payload}), encoding="utf-8")
+			env = {key: value for key, value in os.environ.items() if key != "CLIENT_PAYLOAD_JSON"}
 			result = subprocess.run(
 				["bash", "-c", step["run"]],
 				cwd=REPO_ROOT,
 				env={
-					**os.environ,
+					**env,
 					"EVENT_NAME": "repository_dispatch",
-					"CLIENT_PAYLOAD_JSON": json.dumps(client_payload),
+					"GITHUB_EVENT_PATH": str(event_file),
 					"RUNTIME_DIR": str(tmp),
 					"WORKFLOW_HEAL_PAYLOAD_FILE": str(payload_file),
 					"GITHUB_OUTPUT": str(output_file),
+					"GITHUB_ENV": str(env_file),
 					"PYTHONDONTWRITEBYTECODE": "1",
 				},
 				capture_output=True,
@@ -593,6 +619,18 @@ def test_intake_materialize_step_unwraps_enveloped_repository_dispatch() -> None
 			assert json.loads(payload_file.read_text(encoding="utf-8")) == flat
 			assert heal.validate_payload(json.loads(payload_file.read_text(encoding="utf-8")))["source_kind"] == "issue"
 			assert f"source_repo={CONSUMER_REPO}" in output_file.read_text(encoding="utf-8")
+			assert f"WORKFLOW_HEAL_REPORT_IDENTITY_STATE={expected_state}" in env_file.read_text(encoding="utf-8")
+			identity_file = tmp / "report_identity.jwt"
+			if expected_state == "present":
+				assert identity_file.read_text(encoding="utf-8") == fake_identity
+				assert (identity_file.stat().st_mode & 0o777) == 0o600
+			else:
+				assert not identity_file.exists()
+			# The token lives only in the 0600 file: not in the payload, the
+			# outputs, the env file, the log, or a leftover client payload copy.
+			assert not (tmp / "client_payload.json").exists()
+			for text in (payload_file.read_text(encoding="utf-8"), output_file.read_text(encoding="utf-8"), env_file.read_text(encoding="utf-8"), result.stdout, result.stderr):
+				assert fake_identity not in text
 
 
 def test_error_signature_ignores_volatile_tokens_and_prefers_error_annotations() -> None:
@@ -1227,6 +1265,13 @@ if args[:1] == ["api"]:
 		out("")
 	if path.endswith("/dispatches"):
 		fail("unexpected dispatch call")
+	if "/issues/" in path and path.endswith("/events"):
+		if method != "GET":
+			fail("HTTP method must be GET for issue events")
+		if state.get("events_fail"):
+			fail("HTTP 500")
+		names = state.get("labeled_events", {}).get(path, [])
+		out("".join(name + "\n" for name in names))
 	if path.startswith("repos/") and "/issues/" in path and path.endswith("/comments") and "-F" in rest:
 		body_arg = rest[rest.index("-F") + 1]
 		if body_arg.startswith("body=@"):
@@ -1432,6 +1477,8 @@ def test_report_script_dispatches_thin_payload() -> None:
 		result = _run(REPORT_SCRIPT, work, env)
 		assert result.returncode == 0, result.stderr + result.stdout
 		assert "WORKFLOW_HEAL_REPORT dispatched issue=42 kind=issue label=ai:needs-human runs=2" in result.stdout
+		# No OIDC request env: the report is sent without identity.
+		assert "WORKFLOW_HEAL_REPORT identity=absent reason=oidc_unavailable issue=42" in result.stdout
 		state = _state(state_file)
 		assert len(state["dispatches"]) == 1
 		dispatch = state["dispatches"][0]
@@ -1537,12 +1584,38 @@ def _intake_state(**overrides) -> dict:
 	return state
 
 
+def _with_binding_fixtures(payload: dict, state: dict) -> dict:
+	"""Give the mock gh the issue / pull request the report claims (issue #6559).
+
+	The intake binds every repository_dispatch report to its source repository
+	before routing; tests that are not about binding get a matching object.
+	"""
+	state = json.loads(json.dumps(state))
+	if not isinstance(payload, dict):
+		return state
+	kind = payload.get("source_kind")
+	number = payload.get("issue_number")
+	if kind in ("issue", "pull_request") and number is not None:
+		issue = {"number": int(number), "title": payload.get("issue_title") or "", "body": payload.get("issue_excerpt") or "", "html_url": payload.get("issue_url") or "", "labels": [{"name": payload.get("label") or ""}]}
+		if kind == "pull_request":
+			issue["pull_request"] = {"url": "x"}
+		if "issues" not in state:
+			state["issues"] = {str(number): issue}
+	if kind == "autofix_failure" and number is not None:
+		pr = _pr(int(number))
+		if payload.get("head_sha"):
+			pr["head"]["sha"] = payload["head_sha"]
+		state.setdefault("pull_request", pr)
+	return state
+
+
 def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[str, str] | None = None, setup_git=None) -> tuple[subprocess.CompletedProcess[str], dict, str]:
 	with tempfile.TemporaryDirectory(prefix="heal-intake-") as tmp_name:
 		tmp = Path(tmp_name)
 		work, state_file, env = _stage(tmp, with_codex=True)
 		if setup_git is not None:
 			setup_git(tmp, work)
+		state = _with_binding_fixtures(payload, state)
 		# Default run GET fixtures; an explicit run_details map can model 404s
 		# or mismatched identities without a permissive mock API fallback.
 		# Keyed by run id so both the provenance read and the evidence
@@ -1575,6 +1648,9 @@ def _run_intake(payload: dict, state: dict, *, diagnosis: str, extra_env: dict[s
 				"MOCK_PROMPT_OUT": str(prompt_out),
 			}
 		)
+		if isinstance(payload, dict) and payload.get("source_kind") == "workflow_run":
+			# workflow_run payloads come from GitHub's own event in production.
+			env["WORKFLOW_HEAL_REPORT_ORIGIN"] = "workflow_run"
 		env.update(extra_env or {})
 		# The diagnosis agent runs through scripts/codex_isolated_exec.sh; the
 		# fake docker runs the mock codex in the fake container.
@@ -3934,6 +4010,474 @@ def test_review_autofix_failure_comment_names_the_failed_step_and_first_error() 
 	assert 'echo "AUTOFIX_FAILURE_FIRST_ERROR=${first_error}" >> "$GITHUB_ENV"' in wf
 	assert '"**Failed step:** \\`${AUTOFIX_FAILED_STEP//\\`/\\\'}\\`"' in wf
 	assert '"**First error:** \\`${AUTOFIX_FAILURE_FIRST_ERROR//\\`/\\\'}\\`"' in wf
+
+
+# ---------------------------------------------------------------------------
+# Report identity (issue #6559): OIDC verification + claim binding
+# ---------------------------------------------------------------------------
+
+_ID_NOW = 1_791_290_000
+_ID_RUN_ID = "1234"
+_RSA_TEST_KEYS: dict[int, tuple[int, int, int]] = {}
+
+
+def _b64u(raw: bytes) -> str:
+	return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _is_probable_prime(n: int, rng: random.Random, rounds: int = 24) -> bool:
+	if n < 2:
+		return False
+	for small in (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37):
+		if n % small == 0:
+			return n == small
+	d, s = n - 1, 0
+	while d % 2 == 0:
+		d //= 2
+		s += 1
+	for _ in range(rounds):
+		x = pow(rng.randrange(2, n - 1), d, n)
+		if x in (1, n - 1):
+			continue
+		for _ in range(s - 1):
+			x = pow(x, 2, n)
+			if x == n - 1:
+				break
+		else:
+			return False
+	return True
+
+
+def _rsa_test_key(bits: int = 2048) -> tuple[int, int, int]:
+	"""Deterministic test-only RSA key (generated per run; no key is committed)."""
+	if bits not in _RSA_TEST_KEYS:
+		rng = random.Random(6559 + bits)
+		e = 65537
+		while True:
+			primes = []
+			while len(primes) < 2:
+				candidate = rng.getrandbits(bits // 2) | (3 << (bits // 2 - 2)) | 1
+				if _is_probable_prime(candidate, rng):
+					primes.append(candidate)
+			p_, q_ = primes
+			phi = (p_ - 1) * (q_ - 1)
+			if p_ != q_ and math.gcd(e, phi) == 1 and (p_ * q_).bit_length() == bits:
+				_RSA_TEST_KEYS[bits] = (p_ * q_, e, pow(e, -1, phi))
+				break
+	return _RSA_TEST_KEYS[bits]
+
+
+def _test_jwks(kid: str = "kid-1", bits: int = 2048) -> dict:
+	n, e, _ = _rsa_test_key(bits)
+	return {"keys": [{"kty": "RSA", "kid": kid, "alg": "RS256", "use": "sig", "n": _b64u(n.to_bytes((n.bit_length() + 7) // 8, "big")), "e": _b64u(e.to_bytes(3, "big"))}]}
+
+
+def _sign_test_jwt(claims: dict, *, kid: str = "kid-1", alg: str = "RS256", bits: int = 2048) -> str:
+	header = _b64u(json.dumps({"alg": alg, "kid": kid, "typ": "JWT"}).encode())
+	body = _b64u(json.dumps(claims).encode())
+	signing_input = f"{header}.{body}".encode()
+	if alg == "none":
+		return f"{header}.{body}."
+	if alg == "HS256":
+		return f"{header}.{body}.{_b64u(hmac.new(b'secret', signing_input, hashlib.sha256).digest())}"
+	n, _e, d = _rsa_test_key(bits)
+	k = (n.bit_length() + 7) // 8
+	digest_info = heal._SHA256_DIGEST_INFO + hashlib.sha256(signing_input).digest()
+	em = b"\x00\x01" + b"\xff" * (k - len(digest_info) - 3) + b"\x00" + digest_info
+	signature = pow(int.from_bytes(em, "big"), d, n).to_bytes(k, "big")
+	return f"{header}.{body}.{_b64u(signature)}"
+
+
+def _id_claims(*, now: int = _ID_NOW, **overrides) -> dict:
+	claims = {
+		"iss": heal.GITHUB_OIDC_ISSUER,
+		"aud": heal.REPORT_IDENTITY_AUDIENCE,
+		"iat": now - 60,
+		"nbf": now - 60,
+		"exp": now + 240,
+		"repository": CONSUMER_REPO,
+		"run_id": _ID_RUN_ID,
+		"job_workflow_ref": f"{SELF_REPO}/.github/workflows/workflow_failure_heal.yml@refs/heads/stable",
+	}
+	claims.update(overrides)
+	return {key: value for key, value in claims.items() if value is not None}
+
+
+def _verify_id(token: str, *, kind: str = "issue", repo: str = CONSUMER_REPO, run_url: str | None = f"https://github.com/{CONSUMER_REPO}/actions/runs/{_ID_RUN_ID}", jwks: dict | None = None, now: int = _ID_NOW, max_age: int = 3600) -> dict:
+	return heal.verify_report_identity(token, jwks=jwks or _test_jwks(), source_repo=repo, source_kind=kind, reporter_run_url=run_url, self_repo=SELF_REPO, now=now, max_age=max_age)
+
+
+def test_verify_report_identity_accepts_a_valid_token() -> None:
+	result = _verify_id(_sign_test_jwt(_id_claims()))
+	assert result["ok"] is True and result["reason"] == "verified"
+	assert result["claims"] == {"repository": CONSUMER_REPO, "run_id": _ID_RUN_ID, "job_workflow_ref": f"{SELF_REPO}/.github/workflows/workflow_failure_heal.yml@refs/heads/stable"}
+	# exp is not enforced: a queued intake still accepts a fresh-iat token.
+	assert _verify_id(_sign_test_jwt(_id_claims(exp=_ID_NOW - 600)))["ok"] is True
+	# aud may be a list; repository compares case-insensitively.
+	assert _verify_id(_sign_test_jwt(_id_claims(aud=["other", heal.REPORT_IDENTITY_AUDIENCE])))["ok"] is True
+	assert _verify_id(_sign_test_jwt(_id_claims(repository=CONSUMER_REPO.upper())), run_url=f"https://github.com/{CONSUMER_REPO.upper()}/actions/runs/{_ID_RUN_ID}")["ok"] is True
+	# The review/autofix reporter is bound to review_autofix.yml.
+	autofix = _id_claims(job_workflow_ref=f"{SELF_REPO}/.github/workflows/review_autofix.yml@{SHA_A}")
+	assert _verify_id(_sign_test_jwt(autofix), kind="autofix_failure")["ok"] is True
+	# The clarify / plan / implement heal-report job is bound to its phase workflow.
+	for phase_file in ("clarify.yml", "plan.yml", "implement.yml"):
+		phase = _id_claims(job_workflow_ref=f"{SELF_REPO}/.github/workflows/{phase_file}@refs/heads/stable")
+		assert _verify_id(_sign_test_jwt(phase), kind="phase_failure")["ok"] is True
+	assert _verify_id(_sign_test_jwt(autofix), kind="phase_failure")["reason"] == "job_workflow_ref_mismatch"
+
+
+def test_verify_report_identity_rejections() -> None:
+	header_ok, body_ok, sig_ok = _sign_test_jwt(_id_claims()).split(".")
+	tampered_body = _b64u(json.dumps(_id_claims(repository="shubhodeep1/other")).encode())
+	weak_jwks = _test_jwks(bits=1024)
+	cases = [
+		(_sign_test_jwt(_id_claims(repository="shubhodeep1/other")), {}, "repository_mismatch"),
+		(_sign_test_jwt(_id_claims(aud="coding-workflows-claude-pool")), {}, "audience_mismatch"),
+		(_sign_test_jwt(_id_claims(iss="https://evil.example")), {}, "issuer_mismatch"),
+		(_sign_test_jwt(_id_claims(iat=_ID_NOW - 7200)), {}, "identity_stale"),
+		(_sign_test_jwt(_id_claims(iat=_ID_NOW + 3600)), {}, "identity_not_yet_valid"),
+		(_sign_test_jwt(_id_claims(iat=None)), {}, "identity_stale"),
+		(_sign_test_jwt(_id_claims(), alg="none"), {}, "alg_not_allowed"),
+		(_sign_test_jwt(_id_claims(), alg="HS256"), {}, "alg_not_allowed"),
+		(_sign_test_jwt(_id_claims(), kid="kid-unknown"), {}, "unknown_kid"),
+		(f"{header_ok}.{tampered_body}.{sig_ok}", {}, "bad_signature"),
+		(f"{header_ok}.{body_ok}.{sig_ok[:-4]}AAAA", {}, "bad_signature"),
+		(_sign_test_jwt(_id_claims(), bits=1024), {"jwks": weak_jwks}, "bad_signature"),
+		(_sign_test_jwt(_id_claims(job_workflow_ref=f"{CONSUMER_REPO}/.github/workflows/workflow_failure_heal.yml@refs/heads/main")), {}, "job_workflow_ref_mismatch"),
+		(_sign_test_jwt(_id_claims()), {"kind": "autofix_failure"}, "job_workflow_ref_mismatch"),
+		(_sign_test_jwt(_id_claims()), {"kind": "workflow_run"}, "kind_not_attestable"),
+		(_sign_test_jwt(_id_claims(run_id="999")), {}, "reporter_run_mismatch"),
+		(_sign_test_jwt(_id_claims()), {"run_url": None}, "reporter_run_unbound"),
+		("not-a-token", {}, "identity_malformed"),
+		("a.b", {}, "identity_malformed"),
+		("a" * (heal.REPORT_IDENTITY_MAX_CHARS + 1) + ".b.c", {}, "identity_malformed"),
+	]
+	for token, kwargs, expected in cases:
+		result = _verify_id(token, **kwargs)
+		assert result["ok"] is False and result["reason"] == expected, (expected, result)
+
+
+def test_rs256_verify_rejects_short_moduli_and_length_mismatch() -> None:
+	n, e, _ = _rsa_test_key(2048)
+	assert heal._rs256_verify(b"x", b"\x00" * 10, n, e) is False
+	n_small, e_small, _ = _rsa_test_key(1024)
+	assert heal._rs256_verify(b"x", b"\x00" * 128, n_small, e_small) is False
+
+
+def _bind_jobs(conclusion: str = "failure", run_id: str = "500", head_sha: str | None = None) -> dict:
+	job = {"id": 1, "run_id": int(run_id), "conclusion": conclusion}
+	if head_sha:
+		job["head_sha"] = head_sha
+	return {"jobs": [job]}
+
+
+def test_bind_report_claims_issue_reports() -> None:
+	payload = heal.validate_payload(_consumer_payload())
+	issue = _issue()
+	ok = heal.bind_report_claims(payload, issue_json=issue, jobs_by_run={"500": _bind_jobs()})
+	assert ok["ok"] is True and [ref["run_id"] for ref in ok["run_refs"]] == ["500"]
+	# The fetched issue, not the report, supplies title, URL and body excerpt;
+	# an unauthenticated report's comments excerpt is dropped.
+	assert ok["overrides"] == {"issue_title": issue["title"], "issue_url": issue["html_url"], "issue_excerpt": issue["body"], "comments_excerpt": ""}
+	forged = heal.bind_report_claims({**payload, "issue_title": "forged", "issue_excerpt": "forged body"}, issue_json=issue, jobs_by_run={"500": _bind_jobs()})
+	assert forged["overrides"]["issue_title"] == issue["title"] and forged["overrides"]["issue_excerpt"] == issue["body"]
+	trusted = heal.bind_report_claims(payload, issue_json=issue, jobs_by_run={"500": _bind_jobs()}, trusted_excerpts=True)
+	assert "comments_excerpt" not in trusted["overrides"]
+	# A claimed run that is not in the source repository (404) or did not fail
+	# is dropped; a report left with none of its claimed runs is rejected.
+	two_runs = {**payload, "run_refs": [*payload["run_refs"], {**payload["run_refs"][0], "run_id": "501"}]}
+	partial = heal.bind_report_claims(two_runs, issue_json=issue, jobs_by_run={"500": _bind_jobs()})
+	assert partial["ok"] is True and [ref["run_id"] for ref in partial["run_refs"]] == ["500"] and partial["dropped"] == [{"run_id": "501", "reason": "run_not_in_source_repo"}]
+	dropped = heal.bind_report_claims(payload, issue_json=issue, jobs_by_run={})
+	assert dropped["ok"] is False and dropped["reason"] == "no_bound_runs" and dropped["dropped"] == [{"run_id": "500", "reason": "run_not_in_source_repo"}]
+	healthy = heal.bind_report_claims(payload, issue_json=issue, jobs_by_run={"500": _bind_jobs("success")})
+	assert healthy["reason"] == "no_bound_runs" and healthy["dropped"][0]["reason"] == "run_not_failed"
+	other_run = heal.bind_report_claims(payload, issue_json=issue, jobs_by_run={"500": _bind_jobs(run_id="501")})
+	assert other_run["reason"] == "no_bound_runs" and other_run["dropped"][0]["reason"] == "run_id_mismatch"
+	# A label escalation that claimed no run is still bound by its issue.
+	no_runs = heal.bind_report_claims({**payload, "run_refs": []}, issue_json=issue, jobs_by_run={})
+	assert no_runs["ok"] is True and no_runs["run_refs"] == []
+	# The claimed issue must exist, be the claimed kind, and carry the label.
+	assert heal.bind_report_claims(payload, issue_json=None)["reason"] == "issue_not_found"
+	assert heal.bind_report_claims(payload, issue_json=_issue(number=43))["reason"] == "issue_not_found"
+	assert heal.bind_report_claims(payload, issue_json={**issue, "pull_request": {"url": "x"}})["reason"] == "kind_mismatch"
+	unlabeled = _issue(labels=["ai:implementing"])
+	assert heal.bind_report_claims(payload, issue_json=unlabeled)["reason"] == "label_not_present"
+	assert heal.bind_report_claims(payload, issue_json=unlabeled, jobs_by_run={"500": _bind_jobs()}, labeled_event_found=True)["ok"] is True
+
+
+def test_bind_report_claims_autofix_and_workflow_run_reports() -> None:
+	payload = heal.validate_payload(_autofix_payload())
+	pr = _pr()
+	assert heal.bind_report_claims(payload, pull_json=pr, jobs_by_run={"500": _bind_jobs()})["ok"] is True
+	assert heal.bind_report_claims(payload, pull_json=None, jobs_by_run={"500": _bind_jobs()})["reason"] == "pull_request_not_found"
+	moved = {**pr, "head": {**pr["head"], "sha": SHA_C}}
+	assert heal.bind_report_claims(payload, pull_json=moved, jobs_by_run={"500": _bind_jobs()})["reason"] == "head_sha_mismatch"
+	assert heal.bind_report_claims(payload, pull_json=moved, jobs_by_run={"500": _bind_jobs()}, head_ancestor=True)["ok"] is True
+	# The fetched PR, not the report, supplies title, URL and body excerpt; an
+	# unauthenticated report's comments excerpt is dropped.
+	forged = heal.bind_report_claims({**payload, "issue_title": "forged", "issue_excerpt": "forged body", "comments_excerpt": "forged comments"}, pull_json=pr, jobs_by_run={})
+	assert forged["overrides"] == {"issue_title": pr["title"], "issue_url": pr["html_url"], "issue_excerpt": pr["body"], "comments_excerpt": ""}
+	assert "comments_excerpt" not in heal.bind_report_claims(payload, pull_json=pr, jobs_by_run={}, trusted_excerpts=True)["overrides"]
+	# Runs of provenance-gated kinds pass through unchanged: the intake's
+	# provenance gate binds them (current run first, successful-review-job
+	# fallback for autofix reports).
+	for jobs in ({}, {"500": _bind_jobs("success")}):
+		passed = heal.bind_report_claims(payload, pull_json=pr, jobs_by_run=jobs)
+		assert passed["ok"] is True and passed["run_refs"] == payload["run_refs"] and passed["dropped"] == []
+	run_payload = heal.validate_payload(heal.build_workflow_run_payload(
+		repo=SELF_REPO,
+		workflow_run={"id": 500, "name": "Mark Stable Release", "conclusion": "failure", "head_sha": SHA_B, "head_branch": "main", "html_url": f"https://github.com/{SELF_REPO}/actions/runs/500", "display_title": "Mark Stable Release"},
+	))
+	assert heal.bind_report_claims(run_payload, jobs_by_run={})["run_refs"] == run_payload["run_refs"]
+	phase_payload = heal.validate_payload(_phase_payload())
+	assert heal.bind_report_claims(phase_payload, jobs_by_run={})["run_refs"] == phase_payload["run_refs"]
+
+
+def test_dispatch_envelope_carries_optional_report_identity() -> None:
+	flat = _consumer_payload()
+	token = _sign_test_jwt(_id_claims())
+	assert heal.wrap_dispatch(flat) == {"event_type": heal.DISPATCH_EVENT_TYPE, "client_payload": {"schema_version": heal.SCHEMA_VERSION, "report": flat}}
+	enveloped = heal.wrap_dispatch(flat, token)["client_payload"]
+	assert set(enveloped) == {"schema_version", "report", "report_identity"}
+	assert len(enveloped) <= heal.DISPATCH_CLIENT_PAYLOAD_MAX_KEYS
+	assert heal.unwrap_dispatch(enveloped) == flat
+	assert heal.extract_report_identity(enveloped) == ("present", token)
+	assert heal.extract_report_identity(heal.wrap_dispatch(flat)["client_payload"]) == ("absent", None)
+	assert heal.extract_report_identity(flat) == ("absent", None)
+	assert heal.extract_report_identity({**enveloped, "report_identity": {"x": 1}}) == ("malformed", None)
+	assert heal.extract_report_identity({**enveloped, "report_identity": "a b.c.d"}) == ("malformed", None)
+	with tempfile.TemporaryDirectory(prefix="heal-identity-cli-") as tmp_name:
+		tmp = Path(tmp_name)
+		(tmp / "payload.json").write_text(json.dumps(flat), encoding="utf-8")
+		(tmp / "token.jwt").write_text(token, encoding="utf-8")
+		without = subprocess.run(["python3", str(LIB_PATH), "wrap-dispatch", "--payload-json", str(tmp / "payload.json")], capture_output=True, text=True, check=True)
+		with_empty = subprocess.run(["python3", str(LIB_PATH), "wrap-dispatch", "--payload-json", str(tmp / "payload.json"), "--report-identity-file", str(tmp / "missing.jwt")], capture_output=True, text=True, check=True)
+		assert without.stdout == with_empty.stdout
+		with_token = subprocess.run(["python3", str(LIB_PATH), "wrap-dispatch", "--payload-json", str(tmp / "payload.json"), "--report-identity-file", str(tmp / "token.jwt")], capture_output=True, text=True, check=True)
+		assert json.loads(with_token.stdout)["client_payload"]["report_identity"] == token
+		(tmp / "client.json").write_text(json.dumps(enveloped), encoding="utf-8")
+		extracted = subprocess.run(["python3", str(LIB_PATH), "extract-report-identity", "--client-payload-json", str(tmp / "client.json"), "--out", str(tmp / "out.jwt")], capture_output=True, text=True, check=True)
+		assert extracted.stdout.strip() == "present" and token not in extracted.stdout
+		assert (tmp / "out.jwt").read_text(encoding="utf-8") == token
+		assert ((tmp / "out.jwt").stat().st_mode & 0o777) == 0o600
+		# verify-report-identity prints JSON without the token; exit 1 on rejection.
+		(tmp / "jwks.json").write_text(json.dumps(_test_jwks()), encoding="utf-8")
+		(tmp / "report.json").write_text(json.dumps(heal.validate_payload(_consumer_payload(reporter_run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/{_ID_RUN_ID}"))), encoding="utf-8")
+		verify_args = ["python3", str(LIB_PATH), "verify-report-identity", "--token-file", str(tmp / "token.jwt"), "--jwks-json", str(tmp / "jwks.json"), "--payload-json", str(tmp / "report.json"), "--self-repo", SELF_REPO, "--now", str(_ID_NOW)]
+		verified = subprocess.run(verify_args, capture_output=True, text=True, check=False)
+		assert verified.returncode == 0 and json.loads(verified.stdout)["reason"] == "verified" and token not in verified.stdout
+		stale = subprocess.run(verify_args[:-1] + [str(_ID_NOW + 7200)], capture_output=True, text=True, check=False)
+		assert stale.returncode == 1 and json.loads(stale.stdout)["reason"] == "identity_stale"
+
+
+class _OidcStubHandler(http.server.BaseHTTPRequestHandler):
+	token = ""
+	seen: list[tuple[str, str]] = []
+
+	def do_GET(self) -> None:  # noqa: N802
+		type(self).seen.append((self.path, self.headers.get("Authorization", "")))
+		body = json.dumps({"value": type(self).token}).encode()
+		self.send_response(200)
+		self.send_header("Content-Type", "application/json")
+		self.send_header("Content-Length", str(len(body)))
+		self.end_headers()
+		self.wfile.write(body)
+
+	def log_message(self, *args) -> None:  # noqa: D401 - silence the stub
+		return
+
+
+def _oidc_stub(token: str):
+	_OidcStubHandler.token = token
+	_OidcStubHandler.seen = []
+	server = http.server.HTTPServer(("127.0.0.1", 0), _OidcStubHandler)
+	thread = threading.Thread(target=server.serve_forever, daemon=True)
+	thread.start()
+	return server
+
+
+def test_request_report_identity_uses_the_heal_audience_and_never_prints_the_token() -> None:
+	token = _sign_test_jwt(_id_claims())
+	server = _oidc_stub(token)
+	try:
+		url = f"http://127.0.0.1:{server.server_address[1]}/token?api-version=2.0"
+		with tempfile.TemporaryDirectory(prefix="heal-oidc-") as tmp_name:
+			out = Path(tmp_name) / "id.jwt"
+			env = {**os.environ, "ACTIONS_ID_TOKEN_REQUEST_URL": url, "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "request-bearer", "PYTHONDONTWRITEBYTECODE": "1"}
+			result = subprocess.run(["python3", str(LIB_PATH), "request-report-identity", "--out", str(out)], env=env, capture_output=True, text=True, check=True)
+			assert result.stdout.strip() == "identity=attached"
+			assert token not in result.stdout + result.stderr
+			assert out.read_text(encoding="utf-8") == token and (out.stat().st_mode & 0o777) == 0o600
+			path, auth = _OidcStubHandler.seen[-1]
+			assert path == "/token?api-version=2.0&audience=coding-workflows-heal-report"
+			assert auth == "bearer request-bearer"
+			# Plain HTTP is accepted only for a loopback stub; the bearer is never sent elsewhere.
+			remote_http = subprocess.run(["python3", str(LIB_PATH), "request-report-identity", "--out", str(out)], env={**env, "ACTIONS_ID_TOKEN_REQUEST_URL": "http://example.invalid/token"}, capture_output=True, text=True, check=True)
+			assert remote_http.stdout.strip() == "identity=absent reason=oidc_unavailable"
+			env_absent = {k: v for k, v in env.items() if not k.startswith("ACTIONS_ID_TOKEN_REQUEST")}
+			absent = subprocess.run(["python3", str(LIB_PATH), "request-report-identity", "--out", str(out)], env=env_absent, capture_output=True, text=True, check=True)
+			assert absent.stdout.strip() == "identity=absent reason=oidc_unavailable"
+			assert not out.exists()
+	finally:
+		server.shutdown()
+
+
+def _fresh_identity(tmp: Path, **claim_overrides) -> tuple[Path, Path, str]:
+	now = int(time.time())
+	token = _sign_test_jwt(_id_claims(now=now, **claim_overrides))
+	token_file = tmp / "identity.jwt"
+	token_file.write_text(token, encoding="utf-8")
+	jwks_file = tmp / "jwks.json"
+	jwks_file.write_text(json.dumps(_test_jwks()), encoding="utf-8")
+	return token_file, jwks_file, token
+
+
+def _identity_env(token_file: Path, jwks_file: Path) -> dict[str, str]:
+	return {
+		"WORKFLOW_HEAL_REPORT_IDENTITY_STATE": "present",
+		"WORKFLOW_HEAL_REPORT_IDENTITY_FILE": str(token_file),
+		"WORKFLOW_HEAL_OIDC_JWKS_FILE": str(jwks_file),
+	}
+
+
+def _api_writes(state: dict) -> list:
+	return state.get("issues_created", []) + state.get("comments_posted", []) + state.get("issue_edits", [])
+
+
+def test_intake_verifies_report_identity_and_rejects_a_forged_repository() -> None:
+	payload = _consumer_payload(reporter_run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/{_ID_RUN_ID}")
+	with tempfile.TemporaryDirectory(prefix="heal-identity-") as tmp_name:
+		token_file, jwks_file, token = _fresh_identity(Path(tmp_name))
+		result, state, _ = _run_intake(payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=_identity_env(token_file, jwks_file))
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"WORKFLOW_HEAL report_auth=verified reason=bound source={CONSUMER_REPO}" in result.stdout
+		assert len(state["issues_created"]) == 1
+		assert token not in result.stdout + result.stderr
+		assert not token_file.exists()  # removed once verified
+
+	with tempfile.TemporaryDirectory(prefix="heal-identity-forged-") as tmp_name:
+		token_file, jwks_file, token = _fresh_identity(Path(tmp_name), repository="shubhodeep1/attacker")
+		result, state, _ = _run_intake(payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=_identity_env(token_file, jwks_file))
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"WORKFLOW_HEAL report_auth=rejected reason=repository_mismatch source={CONSUMER_REPO}" in result.stdout
+		assert _api_writes(state) == []
+		assert token not in result.stdout + result.stderr
+		# Rejected before any binding read or log fetch.
+		assert not any(any("/jobs" in part or "/issues/42" in part for part in call) for call in state.get("calls", []))
+
+	with tempfile.TemporaryDirectory(prefix="heal-identity-stale-") as tmp_name:
+		token_file, jwks_file, _ = _fresh_identity(Path(tmp_name), aud="wrong-audience")
+		result, state, _ = _run_intake(payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=_identity_env(token_file, jwks_file))
+		assert "report_auth=rejected reason=audience_mismatch" in result.stdout
+		assert _api_writes(state) == []
+
+	result, state, _ = _run_intake(payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REPORT_IDENTITY_STATE": "malformed"})
+	assert "report_auth=rejected reason=identity_malformed" in result.stdout
+	assert _api_writes(state) == []
+
+
+def test_intake_unauthenticated_report_transition_and_enforcement() -> None:
+	# Default (false): accepted after binding, with a log line.
+	result, state, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert f"WORKFLOW_HEAL report_auth=absent reason=bound source={CONSUMER_REPO} kind=issue issue=42 runs_kept=1 runs_dropped=0" in result.stdout
+	assert len(state["issues_created"]) == 1
+	# Enforcement: skipped before any read of the claimed objects.
+	result, state, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REQUIRE_REPORT_AUTH": "true"})
+	assert result.returncode == 0
+	assert "report_auth=rejected reason=unauthenticated_report" in result.stdout
+	assert _api_writes(state) == []
+	# An invalid value warns and keeps the transition default.
+	result, state, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REQUIRE_REPORT_AUTH": "yes"})
+	assert "WORKFLOW_HEAL warn invalid_require_report_auth value=yes; using false" in result.stdout
+	assert "report_auth=absent reason=bound" in result.stdout
+	# Phase reports carry no identity (heal-report runs with permissions: {});
+	# the provenance gate binds them, so enforcement does not skip them.
+	result, state, _ = _run_intake(_phase_payload(), _plan_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REQUIRE_REPORT_AUTH": "true"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "unauthenticated_report" not in result.stdout and "provenance_verified" in result.stdout
+	# Manual re-runs are bound but never need an identity.
+	result, state, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REQUIRE_REPORT_AUTH": "true", "WORKFLOW_HEAL_REPORT_ORIGIN": "workflow_dispatch"})
+	assert "report_auth=manual reason=bound" in result.stdout
+	assert len(state["issues_created"]) == 1
+
+
+def test_intake_binding_rejects_unbacked_claims() -> None:
+	# The claimed issue does not carry the claimed label and never did.
+	state = _intake_state(issues={"42": _issue(labels=["ai:implementing"])})
+	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "report_auth=rejected reason=label_not_present" in result.stdout
+	assert _api_writes(state_after) == []
+	# ...but a removed label whose labeled event exists is accepted.
+	state = _intake_state(issues={"42": _issue(labels=["ai:implementing"])}, labeled_events={f"repos/{CONSUMER_REPO}/issues/42/events": ["ai:needs-human"]})
+	result, state_after, _ = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert "report_auth=absent reason=bound" in result.stdout
+	assert len(state_after["issues_created"]) == 1
+	# The claimed issue does not exist in the source repository.
+	result, state_after, _ = _run_intake(_consumer_payload(), _intake_state(issues={}), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert "report_auth=rejected reason=issue_not_found" in result.stdout
+	assert _api_writes(state_after) == []
+	# A label escalation whose only claimed run is not in the source repository
+	# (404 under the source repo) is rejected before any log read.
+	result, state_after, _ = _run_intake(_consumer_payload(), _intake_state(jobs={}), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert "report_auth=rejected reason=no_bound_runs" in result.stdout
+	assert _api_writes(state_after) == []
+
+
+def test_intake_workflow_run_event_skips_report_auth() -> None:
+	run_payload = heal.build_workflow_run_payload(
+		repo=SELF_REPO,
+		workflow_run={"id": 500, "name": "Mark Stable Release", "conclusion": "failure", "head_sha": SHA_B, "head_branch": "main", "html_url": f"https://github.com/{SELF_REPO}/actions/runs/500", "display_title": "Mark Stable Release"},
+	)
+	result, state, _ = _run_intake(run_payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REQUIRE_REPORT_AUTH": "true"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL report_auth=event reason=workflow_run_event" in result.stdout
+	assert len(state["issues_created"]) == 1
+	# Only the log collection reads the run's jobs; no issue / PR binding read.
+	assert not any(any(part.startswith("repos/") and ("/issues/" in part or "/pulls/" in part) for part in call) for call in state["calls"])
+
+
+def test_report_script_attaches_report_identity_without_logging_it() -> None:
+	token = _sign_test_jwt(_id_claims())
+	server = _oidc_stub(token)
+	try:
+		with tempfile.TemporaryDirectory(prefix="heal-report-identity-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage(tmp, with_codex=False, wrapper_pin=SHA_A)
+			state_file.write_text(json.dumps(_report_state()), encoding="utf-8")
+			env.update({
+				"GITHUB_REPOSITORY": CONSUMER_REPO,
+				"WORKFLOW_HEAL_ISSUE_NUMBER": "42",
+				"WORKFLOW_HEAL_LABEL": "ai:needs-human",
+				"ACTIONS_ID_TOKEN_REQUEST_URL": f"http://127.0.0.1:{server.server_address[1]}/token?api-version=2.0",
+				"ACTIONS_ID_TOKEN_REQUEST_TOKEN": "request-bearer",
+			})
+			result = _run(REPORT_SCRIPT, work, env)
+			assert result.returncode == 0, result.stderr + result.stdout
+			assert "WORKFLOW_HEAL_REPORT identity=attached issue=42" in result.stdout
+			assert token not in result.stdout + result.stderr
+			client_payload = _state(state_file)["dispatches"][0]["body"]["client_payload"]
+			assert set(client_payload) == {"schema_version", "report", "report_identity"}
+			assert client_payload["report_identity"] == token
+			assert not (tmp / "runtime" / "report_identity.jwt").exists()
+	finally:
+		server.shutdown()
+
+
+def test_heal_reporter_workflows_grant_id_token() -> None:
+	reusable = _yaml(REUSABLE_WORKFLOW)
+	assert reusable["jobs"]["report"]["permissions"].get("id-token") == "write"
+	# A reusable job cannot request more than its caller grants.
+	for wrapper in (INTERNAL_WRAPPER, CONSUMER_TEMPLATE):
+		assert _yaml(wrapper)["permissions"].get("id-token") == "write", wrapper
+	# The review/autofix reporter runs under the review wrappers, which grant
+	# it already (claude pool broker).
+	for wrapper in (REPO_ROOT / ".github" / "workflows" / "internal-review.yml", REPO_ROOT / "workflow-templates" / "ai-review.yml"):
+		doc = _yaml(wrapper)
+		granted = [doc.get("permissions") or {}] + [job.get("permissions") or {} for job in (doc.get("jobs") or {}).values() if "review_autofix.yml@" in str(job.get("uses") or "")]
+		assert any(isinstance(perms, dict) and perms.get("id-token") == "write" for perms in granted), wrapper
 
 
 # ---------------------------------------------------------------------------
