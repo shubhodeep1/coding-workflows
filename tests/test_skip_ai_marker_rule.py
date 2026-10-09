@@ -21,6 +21,11 @@ from pathlib import Path
 import pytest
 import yaml
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 GATE_WF = ROOT / ".github" / "workflows" / "review_autofix.yml"
 SWEEP_WF = ROOT / ".github" / "workflows" / "review_autofix_sweep.yml"
@@ -73,7 +78,8 @@ CASES = [
 def _awk_programs():
 	programs = {}
 	for path in (GATE_WF, SWEEP_WF):
-		found = AWK_LINE_RE.findall(path.read_text(encoding="utf-8"))
+		text = expanded_review_autofix_text() if path == GATE_WF else path.read_text(encoding="utf-8")
+		found = AWK_LINE_RE.findall(text)
 		assert len(found) == 1, f"{path.name} must define SKIP_AI_BODY_AWK exactly once"
 		programs[path.name] = found[0]
 	return programs
@@ -95,7 +101,7 @@ def test_workflow_rule_matches_the_case_table(title, body, skipped):
 
 
 def test_the_old_substring_checks_are_gone():
-	gate = GATE_WF.read_text(encoding="utf-8")
+	gate = expanded_review_autofix_text()
 	sweep = SWEEP_WF.read_text(encoding="utf-8")
 	assert 'printf "%s" "${PR_TITLE} ${PR_BODY}" | grep -Fq "[skip ai]"' not in gate
 	assert '[[ "${PR_TITLE}" == *"[skip ai]"* ]]' in gate
@@ -123,7 +129,7 @@ def test_the_gate_input_descriptions_state_the_rule():
 # --- the gate's skip log and notice -----------------------------------------------
 
 def _gate_script() -> str:
-	workflow = yaml.safe_load(GATE_WF.read_text(encoding="utf-8"))
+	workflow = yaml.safe_load(expanded_review_autofix_text())
 	steps = workflow["jobs"]["gate"]["steps"]
 	return next(step["run"] for step in steps if step.get("name") == "Evaluate review gate")
 

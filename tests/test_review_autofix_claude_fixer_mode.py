@@ -42,7 +42,8 @@ RETIRED_HANDOFF = f"<!-- ai:claude-fixer-handoff:v1 kind=findings head={HEAD} ro
 
 
 def _load(path: Path) -> dict:
-	workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+	text = expanded_review_autofix_text() if path == REVIEW_AUTOFIX_WORKFLOW_PATH else path.read_text(encoding="utf-8")
+	workflow = yaml.safe_load(text)
 	if True in workflow:
 		workflow["on"] = workflow.pop(True)
 	return workflow
@@ -76,7 +77,7 @@ def test_wrappers_accept_but_no_longer_pass_the_retired_input():
 
 
 def test_handoff_machinery_is_gone():
-	text = REVIEW_AUTOFIX_WORKFLOW_PATH.read_text(encoding="utf-8")
+	text = expanded_review_autofix_text()
 	for needle in (
 		"CLAUDE_FIXER_MODE",
 		"CLAUDE_FIXER_VERIFICATION",

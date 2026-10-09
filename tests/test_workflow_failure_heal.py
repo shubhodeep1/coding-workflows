@@ -167,6 +167,8 @@ heal = _load_lib()
 
 
 def _yaml(path: Path) -> dict:
+	if path == REVIEW_AUTOFIX_WORKFLOW:
+		return yaml.safe_load(expanded_review_autofix_text())
 	return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
@@ -3097,7 +3099,7 @@ def test_fingerprint_cap_log_prefixes_are_registered() -> None:
 	for prefix in ("AUTOFIX_FINGERPRINT", "AUTOFIX_FINGERPRINT_CAP_TRIPPED", "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED", "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED"):
 		assert f"- `{prefix}`" in agents_text, prefix
 		assert f"LOG_PREFIX.name={prefix}" in agents_text, prefix
-	workflow_text = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+	workflow_text = expanded_review_autofix_text()
 	for prefix in ("AUTOFIX_FINGERPRINT_CAP_TRIPPED pr=", "AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=", "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=", "AUTOFIX_FINGERPRINT pr="):
 		assert prefix in workflow_text, prefix
 
@@ -3618,7 +3620,7 @@ def test_fingerprint_cap_block_marker_records_support_version() -> None:
 
 def test_review_autofix_passes_support_sha_to_every_marker_site() -> None:
 	"""Issue #6625: the gate and all four failure-marker sites use the verified support SHA."""
-	wf = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+	wf = expanded_review_autofix_text()
 	assert wf.count('--support-sha "${REVIEW_SUPPORT_SHA:-}"') == 5
 	assert wf.count("autofix-failure-fingerprint \\\n") == 4
 	assert "REVIEW_SUPPORT_SHA: ${{ steps.resolve_support.outputs.review_support_sha }}" in wf

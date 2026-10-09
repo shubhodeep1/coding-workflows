@@ -26,6 +26,10 @@ import sys
 import textwrap
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
@@ -38,7 +42,8 @@ MARKER_AUTHOR_LOGIN = "workflow-pat-user"
 
 
 def _workflow_text() -> str:
-	return WORKFLOW.read_text(encoding="utf-8")
+	# The gate body lives in scripts/review_autofix_step_evaluate_gate.sh.
+	return expanded_review_autofix_text()
 
 
 def _gate_block() -> str:

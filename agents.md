@@ -1224,6 +1224,15 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   - Contract tests keep reading the step bodies through
     `expanded_review_autofix_text()`, which inlines each script again, so
     their assertions do not change.
+  - Steps in the `gate` job run before support staging, so their wrapper
+    has no `SUPPORT_SCRIPTS_DIR` or `.codex-workflow-src` fallback: add the
+    script to the SHA-pinned "Checkout head-gate helper" sparse checkout and
+    to the file check in "Verify head-gate helper identity", and resolve only
+    `${GITHUB_WORKSPACE}/.codex-head-gate-src/scripts/<script>` with
+    `HEAD_GATE_HELPER_VERIFIED=true` required (failing the step otherwise).
+    `REVIEW_AUTOFIX_GATE_JOB_STEP_SCRIPTS` in
+    `tests/review_autofix_step_scripts.py` lists them. The "Evaluate review
+    gate" body (`review_autofix_step_evaluate_gate.sh`, #6972) is the first.
   - For other workflows, move the body to a `scripts/` file that the job
     already stages or checks out, and invoke it the same way.
 - The `.codex-workflow-src` fallback is the verified workflow-commit checkout;
