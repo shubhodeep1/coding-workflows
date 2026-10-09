@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6967,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6967\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6971\",\"pr_number\":6971,\"branch\":\"ai/issue-6967\",\"run_id\":\"37979288294\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37979288294\",\"changed_files\":[\".github/workflows/review_autofix.yml\",\"docs/INVENTORY.md\",\"scripts/review_autofix_step_apply_fixes.sh\",\"scripts/review_autofix_step_generate_diff_context.sh\",\"scripts/review_autofix_step_post_editor_summary.sh\",\"scripts/review_autofix_step_post_review_blocked_comment.sh\",\"scripts/review_autofix_step_restore_partial_resume.sh\",\"scripts/review_autofix_step_reviewer_preflight.sh\",\"scripts/review_autofix_step_validate_editor_noop.sh\",\"scripts/stage_workflow_support.sh\",\"tests/review_autofix_step_scripts.py\",\"tests/test_retarget_merged_base.py\",\"tests/test_review_autofix_claude_fixer_mode.py\",\"tests/test_review_autofix_editor_noop_cascade_contract.py\",\"tests/test_review_autofix_last_run_diff_oscillation_guard.py\",\"tests/test_review_commit_new_files_preserved.py\",\"tests/test_review_conflict_resolve_retry_state.py\",\"tests/test_review_rb_judge_self_run_exclusion.py\",\"tests/test_review_semble_contract.py\",\"tests/test_touched_set_symlink_aware.py\",\"tests/test_workflow_failure_heal.py\"]}",
+  "fingerprint": "9964ba98b6c6fe6d51ddb9441c835622bb3a4168cb4771b9459604bb0dd8ab3f",
+  "lineage": {
+    "issue_number": 6967,
+    "parent_ids": [],
+    "pr_number": 6971,
+    "run_id": "37979288294",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37979288294",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6971"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261009194608_1ec9e926f4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6967,
+    "level": "run",
+    "pr_number": 6971,
+    "run_id": "37979288294"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6967: https://github.com/shubhodeep1/coding-workflows/pull/6971",
+  "timestamps": {
+    "created_at": "2026-10-09T19:46:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
