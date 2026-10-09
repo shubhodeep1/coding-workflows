@@ -106,7 +106,12 @@ Phases of the unattended pipeline (each is a separate workflow file under
    `conflict_resolver_sandbox_support_missing`) trips the cap on its first
    marker (`non_retryable=true` in `AUTOFIX_FINGERPRINT_CAP_TRIPPED`); the cap
    comment is then titled "non-retryable failure" and quotes the failed run's
-   **First error** line (PR #6438: ~28 identical resolver runs on one head). The poller's noop-suspicious
+   **First error** line (PR #6438: ~28 identical resolver runs on one head). Failure and
+   cap markers also record the gate's verified review-support SHA as `support=`; a
+   non-retryable cap is re-armed for one run when the current verified support SHA is on no
+   trusted marker for the head yet, at most 3 distinct support SHAs per head
+   (`AUTOFIX_FINGERPRINT_CAP_REARMED`, #6911), so a resolver fix on `main` reaches a capped
+   head without a manual rerun; that run's own marker restores the cap. The poller's noop-suspicious
    recovery sweep (`scripts/orchestrate_poll_process.sh`) does not
    re-dispatch a PR whose current head already has a
    `review-autofix-failure-cap:v1` comment by the `GH_PAT` account, because
@@ -2082,6 +2087,7 @@ and shipped:
 - `AUTOFIX_FINGERPRINT_CAP_TRIPPED`
 - `AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED`
 - `AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED`
+- `AUTOFIX_FINGERPRINT_CAP_REARMED`
 - `NOOP_RECOVERY_SKIP_FINGERPRINT_CAP`
 - `REVIEW_EDITOR_PREFLIGHT`
 - `IMPLEMENT_AUTOMATION_PATH_GUARD`
@@ -2318,6 +2324,7 @@ LOG_PREFIX.name=AUTOFIX_FINGERPRINT
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_TRIPPED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED
 LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED
+LOG_PREFIX.name=AUTOFIX_FINGERPRINT_CAP_REARMED
 LOG_PREFIX.name=NOOP_RECOVERY_SKIP_FINGERPRINT_CAP
 LOG_PREFIX.name=REVIEW_EDITOR_PREFLIGHT
 LOG_PREFIX.name=IMPLEMENT_AUTOMATION_PATH_GUARD

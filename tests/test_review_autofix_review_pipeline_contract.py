@@ -7731,6 +7731,28 @@ def test_identical_failure_fingerprint_cap_gate_wiring() -> None:
 	assert 'FINGERPRINT_CAP_SUPPORT_VERIFIED:-false' in gate_job
 
 
+def test_fingerprint_cap_support_sha_rearm_wiring() -> None:
+	"""#6911: the verified support SHA reaches the cap decision and every marker."""
+	verify = _step_block("Verify fingerprint cap support identity")
+	assert 'echo "FINGERPRINT_CAP_SUPPORT_SHA=${WORKFLOW_SHA}" >> "$GITHUB_ENV"' in verify
+	assert verify.index("FINGERPRINT_CAP_SUPPORT_VERIFIED=true") < verify.index("FINGERPRINT_CAP_SUPPORT_SHA=${WORKFLOW_SHA}")
+	gate = _step_block("Evaluate review gate")
+	assert "if grep -q 'current-support-sha' \"${fingerprint_cap_helper}\"; then" in gate
+	assert 'fingerprint_cap_extra_args=(--current-support-sha "${FINGERPRINT_CAP_SUPPORT_SHA:-}")' in gate
+	assert '"${fingerprint_cap_extra_args[@]}"' in gate
+	assert '[[ "${FINGERPRINT_CAP_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]]' in gate
+	rearm = gate.index("AUTOFIX_FINGERPRINT_CAP_REARMED pr=${PR_NUMBER}")
+	assert rearm < gate.index('SKIP_REASON="fingerprint_cap"')
+	assert "prior_support=${fingerprint_cap_prior_support:-none} support=${FINGERPRINT_CAP_SUPPORT_SHA}" in gate
+	agent = _job_block("codex-agent")
+	assert "AUTOFIX_FAILURE_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}" in agent
+	cap_job = _job_block("fingerprint-cap-block")
+	assert "FINGERPRINT_CAP_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}" in cap_job
+	assert 'if [[ "${FINGERPRINT_CAP_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then' in cap_job
+	assert "count=${FINGERPRINT_CAP_COUNT}${cap_support} -->" in cap_job
+	assert "review_support_sha: ${{ steps.resolve_support.outputs.review_support_sha }}" in _job_block("gate")
+
+
 def test_identical_failure_fingerprint_cap_block_job_wiring() -> None:
 	job = _job_block("fingerprint-cap-block")
 	assert "needs: gate" in job

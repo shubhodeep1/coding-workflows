@@ -432,6 +432,7 @@ jobs:
             exit 1
           fi
           echo "FINGERPRINT_CAP_SUPPORT_VERIFIED=true" >> "$GITHUB_ENV"
+          echo "FINGERPRINT_CAP_SUPPORT_SHA=${WORKFLOW_SHA}" >> "$GITHUB_ENV"
 
       # Port P6 (docs/plans/replace-claude-sessions-with-cli-engine-plan.md,
       # Phase 8d): "Evaluate review gate" retargets a stacked PR whose base
@@ -1128,7 +1129,9 @@ jobs:
           # failure to workflow failure heal. A push (new head) resets the
           # count by construction. A reason the helper reports as
           # non_retryable=true (NON_RETRYABLE_FAILURE_REASONS) trips the cap on
-          # its first marker (PR #6438: ~28 identical resolver runs).
+          # its first marker (PR #6438: ~28 identical resolver runs). It is
+          # re-armed once per verified support SHA not yet recorded as support=
+          # on a trusted marker for the head (#6911, rearm=true from the helper).
           #
           # Scope and fail-open rules:
           #   * Every event (pull_request and workflow_dispatch) of a PR with
@@ -1177,10 +1180,14 @@ jobs:
                 echo "AUTOFIX_FINGERPRINT_CAP_QUERY_FAILED pr=${PR_NUMBER} head=${pr_head_sha_gate} reason=${gate_marker_fetch_state}"
               else
                 fingerprint_cap_decision=""
+                fingerprint_cap_extra_args=()
+                if grep -q 'current-support-sha' "${fingerprint_cap_helper}"; then
+                  fingerprint_cap_extra_args=(--current-support-sha "${FINGERPRINT_CAP_SUPPORT_SHA:-}")
+                fi
                 if ! fingerprint_cap_decision="$(PYTHONDONTWRITEBYTECODE=1 python3 "${fingerprint_cap_helper}" autofix-identical-failure-count \
                   --comments-json "${gate_marker_comments_file}" \
                   --head-sha "${pr_head_sha_gate}" \
-                  --author-login "${gate_marker_author_login}" 2>/dev/null)"; then
+                  --author-login "${gate_marker_author_login}" "${fingerprint_cap_extra_args[@]}" 2>/dev/null)"; then
                   fingerprint_cap_decision=""
                 fi
                 fingerprint_cap_count="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "count" { print $2 }' | tail -n 1)"
@@ -1197,7 +1204,12 @@ jobs:
                   if [ "${FINGERPRINT_CAP_COUNT}" -ge 1 ] && [ "$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "non_retryable" { print $2 }' | tail -n 1)" = "true" ]; then
                     FINGERPRINT_CAP_NON_RETRYABLE="true"
                   fi
-                  if [ "${FINGERPRINT_CAP_COUNT}" -ge "${FINGERPRINT_CAP_MAX}" ] || [ "${FINGERPRINT_CAP_NON_RETRYABLE}" = "true" ]; then
+                  fingerprint_cap_rearm="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "rearm" { print $2 }' | tail -n 1)"
+                  fingerprint_cap_prior_support="$(printf '%s\n' "${fingerprint_cap_decision}" | awk -F= '$1 == "support" { print $2 }' | tail -n 1)"
+                  if [ "${FINGERPRINT_CAP_NON_RETRYABLE}" = "true" ] && [ "${fingerprint_cap_rearm}" = "true" ] \
+                    && [[ "${FINGERPRINT_CAP_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+                    echo "AUTOFIX_FINGERPRINT_CAP_REARMED pr=${PR_NUMBER} head=${pr_head_sha_gate} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} prior_support=${fingerprint_cap_prior_support:-none} support=${FINGERPRINT_CAP_SUPPORT_SHA}"
+                  elif [ "${FINGERPRINT_CAP_COUNT}" -ge "${FINGERPRINT_CAP_MAX}" ] || [ "${FINGERPRINT_CAP_NON_RETRYABLE}" = "true" ]; then
                     FINGERPRINT_CAP="true"
                     SHOULD_RUN="false"
                     SKIP_REASON="fingerprint_cap"
@@ -2400,6 +2412,7 @@ jobs:
       FINGERPRINT_CAP_ALREADY_APPLIED: ${{ needs.gate.outputs.fingerprint_cap_already_applied }}
       FINGERPRINT_CAP_NON_RETRYABLE: ${{ needs.gate.outputs.fingerprint_cap_non_retryable }}
       FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN: ${{ needs.gate.outputs.fingerprint_cap_marker_author_login }}
+      FINGERPRINT_CAP_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}
       WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
       REPORT_WORKFLOW_NAME: ${{ github.workflow }}
       REPORT_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -2564,7 +2577,11 @@ jobs:
             labeled_summary="this pull request (no linked issue found)"
           fi
 
-          cap_marker="<!-- review-autofix-failure-cap:v1 head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} count=${FINGERPRINT_CAP_COUNT} -->"
+          cap_support=""
+          if [[ "${FINGERPRINT_CAP_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+            cap_support=" support=${FINGERPRINT_CAP_SUPPORT_SHA}"
+          fi
+          cap_marker="<!-- review-autofix-failure-cap:v1 head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP} reason=${FINGERPRINT_CAP_REASON} count=${FINGERPRINT_CAP_COUNT}${cap_support} -->"
           cap_title="identical failure repeated"
           cap_first_error=""
           cap_lead="The last ${FINGERPRINT_CAP_COUNT} review/autofix runs on head \`${PR_HEAD_SHA:0:12}\` failed the same way"
@@ -2732,6 +2749,8 @@ jobs:
       # failure comment records it so the gate's identical-failure cap can
       # match markers to the current head.
       AUTOFIX_FAILURE_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
+      # Verified support commit, recorded as support= on that marker (#6911).
+      AUTOFIX_FAILURE_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}
       REVIEW_CHECKOUT_SHA: ${{ needs.gate.outputs.review_checkout_sha }}
       RETARGETED_BASE_REF: ${{ needs.gate.outputs.retargeted_base_ref }}
       RETARGETED_BASE_UPDATED_AT: ${{ needs.gate.outputs.retargeted_base_updated_at }}

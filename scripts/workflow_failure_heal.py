@@ -186,6 +186,11 @@ NON_RETRYABLE_FAILURE_REASONS = frozenset(
 		"conflict_resolver_sandbox_support_missing",
 	}
 )
+# A non-retryable cap is re-armed once per verified review-support commit not
+# yet recorded (``support=``) on a trusted marker for the head, so a resolver
+# fix on main reaches a capped head without a manual rerun (#6911). Bounded
+# per head so frequent pushes to main cannot undo the cap (#6438).
+DEFAULT_FAILURE_CAP_MAX_REARMS = 3
 
 ISSUE_EXCERPT_LIMIT = 4000
 COMMENTS_EXCERPT_LIMIT = 6000
@@ -2023,11 +2028,15 @@ def autofix_failure_fingerprint(*, failure_reason: str, evidence_text: str) -> d
 	}
 
 
-def render_failure_marker(head_sha: str, failure_reason: str, fp: str, degraded: bool, run_id: str | None = None) -> str:
+def render_failure_marker(
+	head_sha: str, failure_reason: str, fp: str, degraded: bool, run_id: str | None = None, support_sha: str | None = None
+) -> str:
 	"""Render the ``review-autofix-failure:v1`` marker appended to a failure comment.
 
 	``run`` lets the counter treat two failure comments of one run as a single
-	failure. Returns an empty string when the head or fingerprint is malformed.
+	failure. ``support`` (only for a valid 40-hex SHA) records the verified
+	review-support commit the run used, for the cap re-arm (#6911). Returns an
+	empty string when the head or fingerprint is malformed.
 	"""
 	head = str(head_sha or "").strip().lower()
 	if not is_valid_sha(head) or not _FP_HEX_RE.match(str(fp or "")):
@@ -2036,6 +2045,9 @@ def render_failure_marker(head_sha: str, failure_reason: str, fp: str, degraded:
 	run = safe_token(run_id, 20)
 	if run.isdigit():
 		fields.append(f"run={run}")
+	support = str(support_sha or "").strip().lower()
+	if is_valid_sha(support):
+		fields.append(f"support={support}")
 	return f"<!-- {FAILURE_MARKER_TAG} " + " ".join(fields) + " -->"
 
 
@@ -2206,7 +2218,14 @@ def parse_failure_markers(comments: Iterable[dict[str, Any]], *, head_sha: str, 
 	return markers
 
 
-def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: str, author_login: str) -> dict[str, Any]:
+def count_identical_failures(
+	comments: Iterable[dict[str, Any]],
+	*,
+	head_sha: str,
+	author_login: str,
+	current_support_sha: str = "",
+	max_rearms: int = DEFAULT_FAILURE_CAP_MAX_REARMS,
+) -> dict[str, Any]:
 	"""Count the trailing identical failures on ``head_sha``.
 
 	``comments`` is the PR's issue-comment list, oldest first. Scanning from the
@@ -2220,20 +2239,40 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 	``review-autofix-failure-cap:v1`` marker already exists for the head.
 	``non_retryable`` is true when the newest marker's reason is in
 	NON_RETRYABLE_FAILURE_REASONS.
+
+	``support`` is the newest counted marker's ``support=`` value. ``rearm``
+	(#6911) is true only for a non-retryable result when ``current_support_sha``
+	is a valid SHA that no trusted marker for the head records yet and fewer
+	than ``max_rearms`` distinct support SHAs are recorded for the head; an
+	invalid current SHA or ``max_rearms <= 0`` never re-arms.
 	"""
 	head = str(head_sha or "").strip().lower()
 	author = str(author_login or "").strip().lower()
 	ordered = [comment for comment in comments if isinstance(comment, dict)]
-	result: dict[str, Any] = {"count": 0, "fp": "", "reason": "", "cap_applied": False, "non_retryable": False}
+	result: dict[str, Any] = {
+		"count": 0,
+		"fp": "",
+		"reason": "",
+		"cap_applied": False,
+		"non_retryable": False,
+		"support": "",
+		"rearm": False,
+	}
 	if not head or not author:
 		return result
+	recorded_supports: set[str] = set()
 	for comment in ordered:
 		if _comment_author(comment) != author:
 			continue
-		cap_fields = _marker_fields(_FAILURE_CAP_MARKER_RE.search(sanitize_text(comment.get("body"))))
+		body = sanitize_text(comment.get("body"))
+		cap_fields = _marker_fields(_FAILURE_CAP_MARKER_RE.search(body))
 		if cap_fields.get("head", "").lower() == head:
 			result["cap_applied"] = True
-			break
+		failure_fields = _marker_fields(_FAILURE_MARKER_RE.search(body))
+		if failure_fields.get("head", "").lower() == head:
+			recorded = failure_fields.get("support", "").lower()
+			if is_valid_sha(recorded):
+				recorded_supports.add(recorded)
 	seen_runs: set[str] = set()
 	skip_paired_summary = False
 	for comment in reversed(ordered):
@@ -2250,6 +2289,8 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 			if not result["fp"]:
 				result["fp"] = fields["fp"]
 				result["reason"] = fields.get("reason") or "unknown"
+				support_field = fields.get("support", "").lower()
+				result["support"] = support_field if is_valid_sha(support_field) else ""
 			elif fields["fp"] != result["fp"]:
 				break
 			result["count"] += 1
@@ -2264,6 +2305,17 @@ def count_identical_failures(comments: Iterable[dict[str, Any]], *, head_sha: st
 				continue
 			break
 	result["non_retryable"] = result["count"] > 0 and result["reason"] in NON_RETRYABLE_FAILURE_REASONS
+	current_support = str(current_support_sha or "").strip().lower()
+	try:
+		rearm_limit = int(max_rearms)
+	except (TypeError, ValueError):
+		rearm_limit = 0
+	result["rearm"] = (
+		result["non_retryable"]
+		and is_valid_sha(current_support)
+		and current_support not in recorded_supports
+		and len(recorded_supports) < rearm_limit
+	)
 	return result
 
 
@@ -3044,7 +3096,11 @@ def _cmd_autofix_failure_fingerprint(args: argparse.Namespace) -> int:
 	sys.stdout.write(f"degraded={1 if result['degraded'] else 0}\n")
 	sys.stdout.write(f"reason={safe_token(reason)}\n")
 	if args.head_sha:
-		sys.stdout.write("marker=" + render_failure_marker(args.head_sha, reason, result["fp"], result["degraded"], args.run_id or None) + "\n")
+		sys.stdout.write(
+			"marker="
+			+ render_failure_marker(args.head_sha, reason, result["fp"], result["degraded"], args.run_id or None, args.support_sha or None)
+			+ "\n"
+		)
 	return 0
 
 
@@ -3074,12 +3130,20 @@ def _cmd_autofix_identical_failure_count(args: argparse.Namespace) -> int:
 	comments = _load_json_file(args.comments_json)
 	if not isinstance(comments, list):
 		raise ValueError("comments JSON must be a list")
-	result = count_identical_failures(comments, head_sha=args.head_sha, author_login=args.author_login)
+	result = count_identical_failures(
+		comments,
+		head_sha=args.head_sha,
+		author_login=args.author_login,
+		current_support_sha=args.current_support_sha,
+		max_rearms=args.max_rearms,
+	)
 	sys.stdout.write(f"count={int(result['count'])}\n")
 	sys.stdout.write(f"fp={safe_token(result['fp'], 64)}\n")
 	sys.stdout.write(f"reason={safe_token(result['reason'])}\n")
 	sys.stdout.write(f"cap_applied={'true' if result['cap_applied'] else 'false'}\n")
 	sys.stdout.write(f"non_retryable={'true' if result['non_retryable'] else 'false'}\n")
+	sys.stdout.write(f"support={safe_token(result['support'], 40)}\n")
+	sys.stdout.write(f"rearm={'true' if result['rearm'] else 'false'}\n")
 	return 0
 
 
@@ -3560,16 +3624,26 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--evidence-out", default="", help="also write the joined evidence tail to this file")
 	p.add_argument("--head-sha", default="")
 	p.add_argument("--run-id", default="")
+	p.add_argument(
+		"--support-sha",
+		default=os.environ.get("AUTOFIX_FAILURE_SUPPORT_SHA", ""),
+		help="verified review-support commit recorded as support= on the marker (#6911); defaults to AUTOFIX_FAILURE_SUPPORT_SHA",
+	)
 	p.set_defaults(func=_cmd_autofix_failure_fingerprint)
 
 	p = sub.add_parser("reviewer-failure-evidence", help="Summarise a failed reviewer step (slot / summariser exit codes, self-named script errors) from its logs")
 	p.add_argument("--log-file", action="append", default=[], help="reviewer slot or summariser log; repeatable, unreadable files are skipped")
 	p.set_defaults(func=_cmd_reviewer_failure_evidence)
 
-	p = sub.add_parser("autofix-identical-failure-count", help="Print count= / fp= / reason= / cap_applied= / non_retryable= for the trailing identical failures on a head")
+	p = sub.add_parser(
+		"autofix-identical-failure-count",
+		help="Print count= / fp= / reason= / cap_applied= / non_retryable= / support= / rearm= for the trailing identical failures on a head",
+	)
 	p.add_argument("--comments-json", required=True)
 	p.add_argument("--head-sha", required=True)
 	p.add_argument("--author-login", required=True)
+	p.add_argument("--current-support-sha", default="", help="verified review-support commit; a non-retryable cap re-arms once per new SHA (#6911)")
+	p.add_argument("--max-rearms", type=int, default=DEFAULT_FAILURE_CAP_MAX_REARMS)
 	p.set_defaults(func=_cmd_autofix_identical_failure_count)
 
 	p = sub.add_parser("build-run-payload", help="Build the payload for a failed workflow_run event")
