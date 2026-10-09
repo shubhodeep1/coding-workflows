@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/update_workflows.yml:~104-304 | severity=low | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: When multiple tags point to the same `UPSTREAM_SHA`, version-sorted selection can choose a non-canonical tag and verify against the wrong release manifest.\n  WHY: The selected tag determines the release lookup and manifest expectation; a legitimate but wrong release could pass verification and deliver the wrong release bytes.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"If the plan cannot be read, use the provisional names and record that assumption in a code comment and the PR body.\"\n  expected_change_site: PR description\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  EVIDENCE: The workflow code comment records the assumption, but the PR description only says \u201cAutomated implementation,\u201d references issue #6960, and refs #6902; it does not record the assumption or provisional identifiers.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/update_workflows.yml:~104-304 | severity=NIT | confidence=3\n  PROBLEM: When multiple tags point to the same UPSTREAM_SHA, the version-sorted selection may choose a tag whose release manifest does not correspond to the intended release if tags are not strictly vX.Y.Z, or if older releases are tagged.\n  WHY: Potential for verifying against the wrong release manifest or version if the git-tag mapping is ambiguous.\n- Requirement: If the plan cannot be read, use the provisional names and record that assumption in a code comment and the PR body.\n  Expected change site: PR description\n  Evidence of absence: The PR description only says \u201cAutomated implementation,\u201d references issue #6960, and refs #6902; it does not contain the assumption that the authoritative plan could not be read and that provisional names were used instead.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/update_workflows.yml:lines 188-204 (tag resolution + sort -V | tail -n1) | severity=NIT | confidence=3\n  PROBLEM: When multiple vX.Y.Z tags point to the same UPSTREAM_SHA (e.g. a backport tag like v1.2.3-hotfix1 plus the canonical v1.2.3), the tag selection `sort -V | tail -n1` always picks the highest semver string and does not attempt to pick the canonical release tag.\n  WHY: The selected tag drives the release lookup and `release_manifest.py` file expectation; a non-canonical tag could yield a manifest that does not correspond to the consumer's pinned release, and a legitimate-but-wrong release could silently succeed.\n- Requirement: \"If the plan cannot be read, use the provisional names and behaviour in this issue and record that assumption in a code comment and the PR body.\"\n  Expected change site: PR description / body (`.github` PR metadata).\n  Evidence of absence: The PR body in the inlined PR DESCRIPTION block reads \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6960\\nRefs #6902\" only. The code comment block at `.github/workflows/update_workflows.yml:107-114` records the assumption for the workflow, but the PR body does not. The previous editor summary explicitly deferred this as a TASK_GAP because the editor's workspace does not contain the PR description; that deferral leaves the issue's explicit requirement unmet.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- Requirement: \u201cIf the plan cannot be read, use the provisional names and record that assumption in a code comment and the PR body.\u201d\n  Expected change site: PR description\n  Evidence of absence: The workflow records the plan-unavailable assumption in a code comment, but the PR description says only \u201cAutomated implementation,\u201d references issue #6960, and refs #6902. It does not record the assumption or provisional identifiers.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- Requirement: \"If the plan cannot be read, use the provisional names and record that assumption in a code comment and the PR body.\"\n  Expected change site: PR description (GitHub metadata)\n  Evidence of absence: The workflow file contains the code comment documenting the unavailable plan and provisional names (lines 107-120 of update_workflows.yml), but the PR description only states \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/6960\" and \"Refs #6902\". The PR description is GitHub metadata outside the editor's workspace, so this run cannot modify it. The assumption needs to be added to the PR description by someone with GitHub access.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "a4ef8eb9033d0b7cfd7bc6cf47fa5d56c1cb10efdd2791f5bfb36eba8ecff92e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6961,
+    "run_id": "37974170667",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37974170667",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009190010_c3be110025",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6961,
+    "run_id": "37974170667"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T19:00:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
