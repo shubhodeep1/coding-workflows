@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A+B\nQ2: A\n\nRATIONALE:\nQ1: The full `orchestrate-poll (3)` log is the only place the failing test is named, and the network-isolated implementer cannot fetch it. So the useful work is to try to reproduce the failure locally (option A), and also make the next triage able to see the cause (option B). The cause is hidden because of how `.github/workflows/ci.yml:1416-1442` prints results. Each shard's log is printed inside a collapsed `::group::`, followed by `::error::orchestrate-poll shard N failed (exit rc)`. That line has no test names, and the log tail only keeps the final aggregate. This is option C (A + B); it adds no new requirement, it just covers both causes the triage could not tell apart.\nQ2: PR #6881 merged into `main` at 2026-10-09T09:19:31Z (GITHUB FACTS), so `ai/issue-6868` is a finished branch. The failing code is now on `main`, and that is where any test fix and the CI summary change belong.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - `.github/workflows/ci.yml` lines 1395-1443 (the sharded orchestrate-poll step: per-shard `.log`/`.rc` files, the `shard_failures` loop, the final `exit 1`)\n    - `tests/test_orchestrate_poll_process.py` (its runner prints `FAIL` lines and `\"status\":\"fail\"` records, per the triage evidence at about lines 23334-23345)\n    - `tests/test_ci_poll_test_sharding.py` (existing contract test for this step; extend it, don't create a new file)\n    - Group selection: `NR % CI_POLL_TEST_GROUP_COUNT == CI_POLL_TEST_GROUP_INDEX` with index `3`, count `4`, applied to the post-fast-fail test list, as the step builds it\n  steps:\n    - Reproduce. On `main` (it includes #6881's head `a1c8da49c0cc`), rebuild the group-3 test list the same way the CI step does, run `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_process.py <group-3 tests>`, and record any `FAIL`.\n    - If a test fails reproducibly, fix the cause it shows, in the test or in `scripts/orchestrate_poll_process.sh`, whichever the failure points at. Do not weaken, skip or retry the test. If nothing reproduces, make no test or poller change and say in the PR body that the failure did not reproduce locally.\n    - Observability. In the `shard_failures` loop of `.github/workflows/ci.yml`, collect a summary line for each failed shard: shard number, exit code, and up to 20 test names taken from the `FAIL` / `\"status\":\"fail\"` lines of `/tmp/poll_shard_${shard}.log`. Use `grep` (the CI guard forbids `rg`). If the shard died with no `FAIL` lines, write `no FAIL lines (process failure)` instead.\n    - After the loop and before `exit 1`, print the collected lines outside any `::group::`, each as `::error::orchestrate-poll shard <n> exit <rc> failed tests: <names>`. They then land in the log tail and the job annotations.\n    - Keep the gate exactly as it is: same failure counting, same no-log and missing-`.rc` handling, same `exit 1`. Don't change the partition expressions.\n    - Add assertions to `tests/test_ci_poll_test_sharding.py` that the summary is printed after the shard loop and before `exit 1`, and that the partition and failure-handling contracts still hold.\n    - The plan's `files_touched` must list `.github/workflows/ci.yml` and `tests/test_ci_poll_test_sharding.py`, plus `tests/test_orchestrate_poll_process.py` and/or `scripts/orchestrate_poll_process.sh` only if reproduction implicates them. The implement automation-path guard needs an exact entry for `.github/`.\n    - Add a changelog fragment at `changelog.d/<issue>-orchestrate-poll-shard-failure-summary.md`.\n  replaces_acceptance_criterion: \"identify the failing shard and test from the full job log before changing code\" is replaced by \"try a local reproduction of group 3, and make every future shard failure name its failing tests in the log tail\"\n  equivalence_argument: Without the full log the specific test cannot be named. Local reproduction catches a deterministic failure. The summary means any recurrence, deterministic or flaky, names its test in the tail that triage reads. That closes the gap that made this triage, and its generation-1 parent, inconclusive.\n  reversibility: The summary only adds output and leaves pass/fail behaviour unchanged. One revert of the `ci.yml` hunk and the test assertion removes it. A test or poller fix can be reverted on its own.\nQ2:\n  strategy: derive_from_repo\n  inputs:\n    - GITHUB FACTS: PR #6881 merged into `main` at 09:19:31Z\n  steps:\n    - Don't add an `Integration branch:` line, so the fix PR targets `main`.\n    - Don't push to `ai/issue-6868`; it is merged.\n  replaces_acceptance_criterion: \"re-check PR #6881's CI after its branch syncs with main\" is replaced by \"the fix PR's own CI on `main` passes the orchestrate-poll matrix\"\n  equivalence_argument: #6881's code is already on `main`, so a green orchestrate-poll group 3 on the fix PR checks the same code.\n  reversibility: If a human later wants a separate regression fix, it can be filed as its own issue against `main`.\n\nESCALATION (required for any ESCALATE decision):\n\nSETUP REQUIRED (only when a decision relies on a placeholder):",
+  "fingerprint": "2041b09b8ceca17a95a76499f0ec67ac422c21baf4482642fe6b49659291ac31",
+  "lineage": {
+    "issue_number": 6889,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37911253228",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37911253228",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6889"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261009093441_f3ff5730d2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6889,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37911253228"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6889",
+  "timestamps": {
+    "created_at": "2026-10-09T09:34:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
