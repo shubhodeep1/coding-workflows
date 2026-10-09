@@ -3420,7 +3420,17 @@ def _cmd_heal_scope(args: argparse.Namespace) -> int:
 			# forged "FAILED tests/x.py" line naming an unrelated file cannot add it
 			# (or the subject its stem maps to). Names still come from the same
 			# verified-run logs, so an existing test name remains the residual trust.
-			test_files = _heal_test_files_for_names(args.checkout, args.ref, failing.get("names") or [])
+			# Each name resolves on its own: a name defined in more than one test
+			# file is ambiguous (another file can define the same name, so the
+			# failure does not establish which file, or subject, it exercised) and
+			# is kept only for the files the log itself reported for it.
+			reported_files = set(test_files)
+			test_files = []
+			for name in failing.get("names") or []:
+				matches = _heal_test_files_for_names(args.checkout, args.ref, [name])
+				if len(matches) > 1:
+					matches = [path for path in matches if path in reported_files]
+				test_files.extend(path for path in matches if path not in test_files)
 		marker = render_heal_scope_marker(crash_file=data.get("crash_file"), workflow_paths=data.get("workflow_paths", []), changed_files=data.get("changed_files", []), runs=data.get("runs", []), exists=exists, test_subjects=heal_scope_test_subjects(test_files, exists))
 		sys.stdout.write(marker + "\n")
 	elif args.operation == "failing-tests":

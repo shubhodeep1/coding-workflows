@@ -128,6 +128,26 @@ def test_render_cli_drops_log_reported_files_that_do_not_define_a_failing_test()
 		assert marker == f"<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/ci.yml,tests/test_klass.py,scripts/klass.py,tests/**,changelog.d/*.md runs={SELF_REPO}:1 -->"
 
 
+def test_render_cli_drops_a_name_defined_in_several_files_unless_the_log_names_one() -> None:
+	with tempfile.TemporaryDirectory() as tmpdir:
+		root = Path(tmpdir) / "repo"
+		(root / "tests").mkdir(parents=True)
+		(root / "tests/test_planted.py").write_text("def test_security_pass_cap_converts_low_keep_fixing_to_advisory() -> None:\n\tpass\n")
+		(root / "scripts").mkdir()
+		(root / "scripts/planted.sh").write_text("#!/usr/bin/env bash\n")
+		sha = _init_scope_repo(root)
+		inputs = Path(tmpdir) / "scope_inputs.json"
+		base = {"crash_file": "", "runs": [f"{SELF_REPO}:1"], "workflow_paths": [".github/workflows/ci.yml"], "changed_files": []}
+		name = "test_security_pass_cap_converts_low_keep_fixing_to_advisory"
+		render = [sys.executable, str(HEAL_PY), "heal-scope", "render", "--input-json", str(inputs), "--checkout", str(root), "--ref", sha]
+		inputs.write_text(json.dumps({**base, "failing_tests": {"names": [name], "files": []}}))
+		marker = subprocess.run(render, capture_output=True, text=True, check=True).stdout.strip()
+		assert marker == f"<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/ci.yml,tests/**,changelog.d/*.md runs={SELF_REPO}:1 -->"
+		inputs.write_text(json.dumps({**base, "failing_tests": {"names": [name], "files": ["tests/test_orchestrate_poll_process.py"]}}))
+		marker = subprocess.run(render, capture_output=True, text=True, check=True).stdout.strip()
+		assert marker == f"<!-- ai:workflow-heal-scope:v1 paths=.github/workflows/ci.yml,tests/test_orchestrate_poll_process.py,scripts/orchestrate_poll_process.sh,tests/**,changelog.d/*.md runs={SELF_REPO}:1 -->"
+
+
 def test_render_cli_without_failing_tests_is_unchanged() -> None:
 	with tempfile.TemporaryDirectory() as tmpdir:
 		root = Path(tmpdir) / "repo"
