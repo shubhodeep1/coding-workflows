@@ -2374,7 +2374,7 @@ repos carry the same section in their root `AGENTS.md`.
 
 | Resource | Type | ID / name | Credential | Notes |
 |---|---|---|---|---|
-| claude-pool-broker | worker | `claude-pool-broker` (`https://claude-pool-broker.shubhodeep.workers.dev`, workers.dev only) | FT_GAMES_CF | Claude engine token broker (plan Phase 4). Source `tools/claude-pool-broker/`; deployed by the session with `wrangler deploy` (§24.C). Secret `CLAUDE_POOL_TOKENS` is written only by `shubhodeep1/claude-workers` `claude-pool-key-sync.yml`. |
+| claude-pool-broker | worker | `claude-pool-broker` (`https://claude-pool-broker.shubhodeep.workers.dev`, workers.dev only) | FT_GAMES_CF | Claude engine token broker (plan Phase 4). Source `tools/claude-pool-broker/`; deployed by the session with `wrangler deploy` (§24.C). Secret `CLAUDE_POOL_TOKENS` is written only by `shubhodeep1/claude-workers` `claude-pool-key-sync.yml`. Grants only the exact workflow files in `ALLOWED_WORKFLOW_FILES` at `refs/heads/main` or at a SHA reachable from `main`/`stable` (#6636); optional secret `BROKER_GITHUB_READ_TOKEN` authenticates that check. |
 
 ## Reference
 

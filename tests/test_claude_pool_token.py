@@ -210,6 +210,8 @@ def test_probe_false_keeps_the_broker_order(env: dict) -> None:
 	[
 		(403, {"error": "repo_not_allowed"}, "broker_refused_repo_not_allowed"),
 		(403, {"error": "Weird Reason!"}, "broker_refused_unknown"),
+		(403, {"error": "workflow_ref_not_allowed"}, "broker_refused_workflow_ref_not_allowed"),
+		(403, {"error": "workflow_sha_unverifiable"}, "broker_refused_workflow_sha_unverifiable"),
 		(503, {"error": "pool_empty"}, "broker_unavailable_503"),
 		(200, {"accounts": "nope"}, "broker_response_invalid"),
 		(200, {"accounts": [{"name": "bad name", "token": "x"}]}, "no_accounts"),
@@ -350,3 +352,17 @@ def test_no_workflow_or_template_references_pool_secrets() -> None:
 				if pattern.search(path.read_text(encoding="utf-8", errors="replace")):
 					offenders.append(str(path.relative_to(REPO_ROOT)))
 	assert offenders == []
+
+
+def test_broker_workflow_allowlist_matches_pool_action_users() -> None:
+	"""The broker's exact workflow allowlist equals the workflows that fetch the pool (#6636)."""
+	source = (REPO_ROOT / "tools" / "claude-pool-broker" / "src" / "index.ts").read_text(encoding="utf-8")
+	match = re.search(r"ALLOWED_WORKFLOW_FILES[^=]*=\s*Object\.freeze\(\[(.*?)\]\)", source, re.S)
+	assert match, "ALLOWED_WORKFLOW_FILES not found in the broker source"
+	allowed = set(re.findall(r'"([^"]+)"', match.group(1)))
+	users = {
+		path.name
+		for path in (REPO_ROOT / ".github" / "workflows").glob("*.yml")
+		if ".github/actions/claude-pool-token" in path.read_text(encoding="utf-8", errors="replace")
+	}
+	assert allowed == users
