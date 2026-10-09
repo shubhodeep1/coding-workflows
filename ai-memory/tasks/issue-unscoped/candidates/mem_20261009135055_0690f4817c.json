@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1625-1627, with the `lint` aggregate requiring `orchestrate-poll` at lines 1643-1650 | severity=critical | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The PR-head `orchestrate-poll (3)` check run failed, so the release fix has not passed CI validation.\n  WHY: The workflow requires every `orchestrate-poll` shard to succeed; the supplied log tail reports a failed shard but does not identify its failing test. Two reviewers characterize the failure as unrelated or pre-existing, while the two flagging reviewers rate it BLOCKER.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Re-issue the security fix with a trusted exact files_touched grant for `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/mark-stable.yml`, `.github/workflows/ci.yml`, and `scripts/release_ci_gate.sh`.\n  expected_change_site: The PR's authorized changed-file set.\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The PR also changes `README.md`, `agents.md`, `changelog.d/6797-release-ci-gate.md`, and `docs/INVENTORY.md`, none of which is in the stated four-path grant; the supplied context does not show authorization extending the grant.\n- requirement: \u201cKeep stable releases halted until the fix passes validation.\u201d\n  expected_change_site: `.github/workflows/auto-release-stable.yml` and `.github/workflows/promote-main-to-stable.yml`, or an explicitly documented operational hold.\n  confidence=[4]\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: Those release-dispatch paths are not changed, and the supplied context does not show an operational hold in place.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:CI aggregate validation | severity=critical | confidence=5\n  PROBLEM: The PR-head check run orchestrate-poll (3) is failing.\n  WHY: The lint aggregate requires every orchestrate-poll matrix job to succeed. The security fix cannot be considered validated if the test-suite itself fails on this branch.\n- TASK_GAP\n  Requirement: Re-issue the security fix with a trusted exact files_touched grant for .github/workflows/test-and-mark-stable.yml, .github/workflows/mark-stable.yml, .github/workflows/ci.yml, and scripts/release_ci_gate.sh.\n  Expected change site: The PR authorized changed-file set.\n  Evidence of absence: The PR modifies README.md, agents.md, changelog.d/6797-release-ci-gate.md, and docs/INVENTORY.md in addition to the four mandated files, violating the explicit instruction that the grant be exact.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Reissue the security fix with a trusted exact files_touched grant\" for `.github/workflows/test-and-mark-stable.yml`, `.github/workflows/mark-stable.yml`, `.github/workflows/ci.yml`, and `scripts/release_ci_gate.sh`. The clarification decision (AD-1, option B) is described as keeping the grant at four paths because the scope guard has no exemption for `tests/` or `changelog.d/`.\n  Expected change site: The PR's authorized changed-file set.\n  Evidence of absence: The PR changes the four granted paths and also `README.md`, `agents.md`, `changelog.d/6797-release-ci-gate.md`, and `docs/INVENTORY.md`. None of those four additional files is in the issue's stated four-path grant. The auto-decision text describes option B as \"the issue asks for an exact grant of four paths\", and the SETUP-1 placeholder requires an operator to confirm the grant before dispatch, but the implementation went beyond the grant for metadata/documentation files that the scope guard (`scripts/files_touched_scope_guard.py`) would normally reject (`is_lockfile` only auto-allows lockfiles per AD-1). If the operator confirmed only the four-path grant, the additional files are out-of-scope edits; if the operator confirmed a wider grant, the PR description does not document that.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:1625-1627, with the `lint` aggregate requiring `orchestrate-poll` at lines 1643-1650 | severity=critical | confidence=5\n  PROBLEM: The PR-head `orchestrate-poll (3)` check run failed.\n  WHY: The workflow exits nonzero when a shard fails, and the `lint` aggregate requires `orchestrate-poll` to succeed. The PR therefore has not passed CI validation, so the release fix is not yet validated.\n- TASK_GAP\n  Requirement: \u201cRe-issue the security fix with a trusted exact files_touched grant\u201d for the four specified paths; the clarification decision says to keep the grant at four paths.\n  Expected change site: The PR\u2019s authorized changed-file set.\n  Evidence of absence: The PR changes the four specified paths, but also changes `README.md`, `agents.md`, `changelog.d/6797-release-ci-gate.md`, and `docs/INVENTORY.md`. The supplied context does not show an authorization extending the exact four-path grant.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \u201cKeep stable releases halted until the fix passes validation.\u201d\n  Expected change site: The release dispatch and promotion paths, including `.github/workflows/auto-release-stable.yml` and `.github/workflows/promote-main-to-stable.yml`, or an explicitly documented operational hold.\n  Evidence of absence: The diff adds the CI gate to the release workflows but does not halt or gate their dispatch while this PR is unvalidated. Those release-dispatch paths are not changed, and the supplied context does not show an operational hold in place.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "7ccdab747b72c2e4c1a564a3f3cb3da03f3da64712892399468d851b8046adf3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6935,
+    "run_id": "37934044682",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37934044682",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009135055_0690f4817c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6935,
+    "run_id": "37934044682"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T13:50:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
