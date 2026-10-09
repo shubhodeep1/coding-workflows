@@ -1596,7 +1596,7 @@ def _with_binding_fixtures(payload: dict, state: dict) -> dict:
 	kind = payload.get("source_kind")
 	number = payload.get("issue_number")
 	if kind in ("issue", "pull_request") and number is not None:
-		issue = {"number": int(number), "title": payload.get("issue_title") or "", "labels": [{"name": payload.get("label") or ""}]}
+		issue = {"number": int(number), "title": payload.get("issue_title") or "", "body": payload.get("issue_excerpt") or "", "html_url": payload.get("issue_url") or "", "labels": [{"name": payload.get("label") or ""}]}
 		if kind == "pull_request":
 			issue["pull_request"] = {"url": "x"}
 		if "issues" not in state:
@@ -4176,20 +4176,34 @@ def test_bind_report_claims_issue_reports() -> None:
 	issue = _issue()
 	ok = heal.bind_report_claims(payload, issue_json=issue, jobs_by_run={"500": _bind_jobs()})
 	assert ok["ok"] is True and [ref["run_id"] for ref in ok["run_refs"]] == ["500"]
-	# A run that is not in the source repository (404) or did not fail is dropped.
+	# The fetched issue, not the report, supplies title, URL and body excerpt;
+	# an unauthenticated report's comments excerpt is dropped.
+	assert ok["overrides"] == {"issue_title": issue["title"], "issue_url": issue["html_url"], "issue_excerpt": issue["body"], "comments_excerpt": ""}
+	forged = heal.bind_report_claims({**payload, "issue_title": "forged", "issue_excerpt": "forged body"}, issue_json=issue, jobs_by_run={"500": _bind_jobs()})
+	assert forged["overrides"]["issue_title"] == issue["title"] and forged["overrides"]["issue_excerpt"] == issue["body"]
+	trusted = heal.bind_report_claims(payload, issue_json=issue, jobs_by_run={"500": _bind_jobs()}, trusted_excerpts=True)
+	assert "comments_excerpt" not in trusted["overrides"]
+	# A claimed run that is not in the source repository (404) or did not fail
+	# is dropped; a report left with none of its claimed runs is rejected.
+	two_runs = {**payload, "run_refs": [*payload["run_refs"], {**payload["run_refs"][0], "run_id": "501"}]}
+	partial = heal.bind_report_claims(two_runs, issue_json=issue, jobs_by_run={"500": _bind_jobs()})
+	assert partial["ok"] is True and [ref["run_id"] for ref in partial["run_refs"]] == ["500"] and partial["dropped"] == [{"run_id": "501", "reason": "run_not_in_source_repo"}]
 	dropped = heal.bind_report_claims(payload, issue_json=issue, jobs_by_run={})
-	assert dropped["ok"] is True and dropped["run_refs"] == [] and dropped["dropped"] == [{"run_id": "500", "reason": "run_not_in_source_repo"}]
+	assert dropped["ok"] is False and dropped["reason"] == "no_bound_runs" and dropped["dropped"] == [{"run_id": "500", "reason": "run_not_in_source_repo"}]
 	healthy = heal.bind_report_claims(payload, issue_json=issue, jobs_by_run={"500": _bind_jobs("success")})
-	assert healthy["run_refs"] == [] and healthy["dropped"][0]["reason"] == "run_not_failed"
+	assert healthy["reason"] == "no_bound_runs" and healthy["dropped"][0]["reason"] == "run_not_failed"
 	other_run = heal.bind_report_claims(payload, issue_json=issue, jobs_by_run={"500": _bind_jobs(run_id="501")})
-	assert other_run["run_refs"] == [] and other_run["dropped"][0]["reason"] == "run_id_mismatch"
+	assert other_run["reason"] == "no_bound_runs" and other_run["dropped"][0]["reason"] == "run_id_mismatch"
+	# A label escalation that claimed no run is still bound by its issue.
+	no_runs = heal.bind_report_claims({**payload, "run_refs": []}, issue_json=issue, jobs_by_run={})
+	assert no_runs["ok"] is True and no_runs["run_refs"] == []
 	# The claimed issue must exist, be the claimed kind, and carry the label.
 	assert heal.bind_report_claims(payload, issue_json=None)["reason"] == "issue_not_found"
 	assert heal.bind_report_claims(payload, issue_json=_issue(number=43))["reason"] == "issue_not_found"
 	assert heal.bind_report_claims(payload, issue_json={**issue, "pull_request": {"url": "x"}})["reason"] == "kind_mismatch"
 	unlabeled = _issue(labels=["ai:implementing"])
 	assert heal.bind_report_claims(payload, issue_json=unlabeled)["reason"] == "label_not_present"
-	assert heal.bind_report_claims(payload, issue_json=unlabeled, labeled_event_found=True)["ok"] is True
+	assert heal.bind_report_claims(payload, issue_json=unlabeled, jobs_by_run={"500": _bind_jobs()}, labeled_event_found=True)["ok"] is True
 
 
 def test_bind_report_claims_autofix_and_workflow_run_reports() -> None:
@@ -4293,6 +4307,9 @@ def test_request_report_identity_uses_the_heal_audience_and_never_prints_the_tok
 			path, auth = _OidcStubHandler.seen[-1]
 			assert path == "/token?api-version=2.0&audience=coding-workflows-heal-report"
 			assert auth == "bearer request-bearer"
+			# Plain HTTP is accepted only for a loopback stub; the bearer is never sent elsewhere.
+			remote_http = subprocess.run(["python3", str(LIB_PATH), "request-report-identity", "--out", str(out)], env={**env, "ACTIONS_ID_TOKEN_REQUEST_URL": "http://example.invalid/token"}, capture_output=True, text=True, check=True)
+			assert remote_http.stdout.strip() == "identity=absent reason=oidc_unavailable"
 			env_absent = {k: v for k, v in env.items() if not k.startswith("ACTIONS_ID_TOKEN_REQUEST")}
 			absent = subprocess.run(["python3", str(LIB_PATH), "request-report-identity", "--out", str(out)], env=env_absent, capture_output=True, text=True, check=True)
 			assert absent.stdout.strip() == "identity=absent reason=oidc_unavailable"
@@ -4397,10 +4414,11 @@ def test_intake_binding_rejects_unbacked_claims() -> None:
 	result, state_after, _ = _run_intake(_consumer_payload(), _intake_state(issues={}), diagnosis=DIAG_WORKFLOW_DEFECT)
 	assert "report_auth=rejected reason=issue_not_found" in result.stdout
 	assert _api_writes(state_after) == []
-	# A label-escalation run claimed for another repository (404 under the
-	# source repo) is dropped before any log read.
+	# A label escalation whose only claimed run is not in the source repository
+	# (404 under the source repo) is rejected before any log read.
 	result, state_after, _ = _run_intake(_consumer_payload(), _intake_state(jobs={}), diagnosis=DIAG_WORKFLOW_DEFECT)
-	assert "report_auth=absent reason=bound" in result.stdout and "runs_kept=0 runs_dropped=1" in result.stdout
+	assert "report_auth=rejected reason=no_bound_runs" in result.stdout
+	assert _api_writes(state_after) == []
 
 
 def test_intake_workflow_run_event_skips_report_auth() -> None:

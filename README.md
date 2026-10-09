@@ -1722,7 +1722,8 @@ through `clarify → plan → implement → review`.
   `skip reason=dispatch_denied` line.
 - **Report authentication (issue #6559):** each reporter requests a GitHub
   Actions OIDC token (audience `coding-workflows-heal-report`, so the
-  wrappers grant `id-token: write`) and sends it as
+  wrappers grant `id-token: write`; the request goes only to an `https://`
+  endpoint, or a loopback test stub) and sends it as
   `client_payload.report_identity` (`identity=attached|absent` on the
   reporter's log line; the token is never logged). The intake verifies a
   token whenever one is present: RS256 against GitHub's JWKS, issuer,
@@ -1735,7 +1736,10 @@ through `clarify → plan → implement → review`.
   `source_repo` (with the claimed label, or a `labeled` event for it), an
   autofix report's head is the PR head or an ancestor of it, and every run a
   label-escalation report claims belongs to `source_repo` and failed (other
-  runs are dropped). Phase, autofix and `workflow_run` reports leave their runs
+  runs are dropped; a report that claimed runs and keeps none is rejected as
+  `no_bound_runs`). A label-escalation report's title, URL and body excerpt
+  are replaced with the fetched issue / PR's, and an unauthenticated report's
+  comments excerpt is dropped. Phase, autofix and `workflow_run` reports leave their runs
   to the existing provenance gate, which already checks run repository,
   workflow path, failure and issue / PR linkage. A report without a token
   (a consumer whose wrappers have not synced yet) is accepted after the

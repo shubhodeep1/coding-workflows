@@ -383,15 +383,21 @@ if [ "${REPORT_AUTH}" != "event" ]; then
 		if [[ "${BIND_REPORTER_RUN_ID}" =~ ^[0-9]+$ ]]; then
 			BIND_ARGS+=(--reporter-run-id "${BIND_REPORTER_RUN_ID}")
 		fi
+		# A verified reporter built the comments excerpt from GitHub; an
+		# unauthenticated one may have made it up, so binding clears it.
+		BIND_ARGS+=(--trusted-excerpts)
 	fi
 	BIND_RESULT_FILE="${RUNTIME_DIR}/bind_result.json"
 	if ! python3 "${HEAL_PY}" bind-report "${BIND_ARGS[@]}" > "${BIND_RESULT_FILE}" 2>/dev/null; then
 		_report_auth_reject "$(jq -r '.reason // "binding_failed"' "${BIND_RESULT_FILE}" 2>/dev/null | tr -cd 'a-z0-9_' | head -c 60 || echo binding_failed)"
 	fi
-	if ! jq --slurpfile bind "${BIND_RESULT_FILE}" '.run_refs = $bind[0].run_refs' "${PAYLOAD_FILE}" > "${PAYLOAD_FILE}.tmp" \
+	# The fetched issue / PR replaces the report's title, URL and body excerpt.
+	if ! jq --slurpfile bind "${BIND_RESULT_FILE}" '.run_refs = $bind[0].run_refs | . + ($bind[0].overrides // {})' "${PAYLOAD_FILE}" > "${PAYLOAD_FILE}.tmp" \
 		|| ! mv "${PAYLOAD_FILE}.tmp" "${PAYLOAD_FILE}"; then
 		_report_auth_reject "binding_failed"
 	fi
+	ISSUE_TITLE="$(_pf '.issue_title // ""')"
+	ISSUE_URL="$(_pf '.issue_url // ""')"
 	log "report_auth=${REPORT_AUTH} reason=bound source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} runs_kept=$(jq -r '.run_refs | length' "${BIND_RESULT_FILE}") runs_dropped=$(jq -r '.dropped | length' "${BIND_RESULT_FILE}")"
 	if [ "${REPORT_AUTH}" = "absent" ]; then
 		tg_send_msg "Workflow failure heal accepted an unauthenticated report from ${SOURCE_REPO} after binding checks; sync its @stable workflow wrappers so reports carry an identity."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true

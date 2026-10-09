@@ -1331,7 +1331,12 @@ def request_report_identity(audience: str = REPORT_IDENTITY_AUDIENCE, *, timeout
 	request_token = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
 	if not request_url or not request_token:
 		return None, "oidc_unavailable"
-	if not request_url.startswith(("https://", "http://")):
+	parsed_request_url = urllib.parse.urlsplit(request_url)
+	# The runner always serves the OIDC endpoint over HTTPS; plain HTTP is
+	# accepted only for a loopback stub, so the bearer never leaves the host.
+	if parsed_request_url.scheme != "https" and not (
+		parsed_request_url.scheme == "http" and parsed_request_url.hostname in ("127.0.0.1", "localhost", "::1")
+	):
 		return None, "oidc_unavailable"
 	separator = "&" if "?" in request_url else "?"
 	url = f"{request_url}{separator}audience={urllib.parse.quote(audience, safe='')}"
@@ -1504,17 +1509,24 @@ def bind_report_claims(
 	reporter_run_id: str | None = None,
 	labeled_event_found: bool = False,
 	head_ancestor: bool = False,
+	trusted_excerpts: bool = False,
 ) -> dict[str, Any]:
 	"""Bind a validated report's claims to GitHub data the intake fetched.
 
 	``jobs_by_run`` maps run id -> the ``repos/<source_repo>/actions/runs/<id>/jobs``
 	response (absent when the read failed or 404'd, i.e. the run is not in the
 	source repository). Runs of ``PROVENANCE_BOUND_KINDS`` pass through for the
-	provenance gate. Returns ``{"ok", "reason", "run_refs", "dropped"}``.
+	provenance gate. A label-escalation report that claimed runs but kept none
+	is rejected (``no_bound_runs``); one that claimed no run stays valid.
+	Returns ``{"ok", "reason", "run_refs", "dropped", "overrides"}``:
+	``overrides`` replaces a label-escalation report's title, URL and body
+	excerpt with the fetched issue's, and clears its comments excerpt unless
+	``trusted_excerpts`` (an OIDC-verified reporter built it from GitHub).
 	"""
 	kind = payload.get("source_kind")
 	number = payload.get("issue_number")
 	jobs_by_run = jobs_by_run or {}
+	overrides: dict[str, str] = {}
 	if kind in ("issue", "pull_request"):
 		if not isinstance(issue_json, dict) or issue_json.get("number") != number:
 			return {"ok": False, "reason": "issue_not_found", "run_refs": [], "dropped": []}
@@ -1523,6 +1535,13 @@ def bind_report_claims(
 			return {"ok": False, "reason": "kind_mismatch", "run_refs": [], "dropped": []}
 		if payload.get("label") not in _labels_of(issue_json) and not labeled_event_found:
 			return {"ok": False, "reason": "label_not_present", "run_refs": [], "dropped": []}
+		overrides = {
+			"issue_title": single_line(issue_json.get("title"), 300),
+			"issue_url": sanitize_text(issue_json.get("html_url"), 300),
+			"issue_excerpt": sanitize_text(sanitize_text(issue_json.get("body")), ISSUE_EXCERPT_LIMIT),
+		}
+		if not trusted_excerpts:
+			overrides["comments_excerpt"] = ""
 	elif kind == "autofix_failure":
 		if not isinstance(pull_json, dict) or pull_json.get("number") != number:
 			return {"ok": False, "reason": "pull_request_not_found", "run_refs": [], "dropped": []}
@@ -1551,7 +1570,9 @@ def bind_report_claims(
 			dropped.append({"run_id": run_id, "reason": "run_not_failed"})
 			continue
 		kept.append(ref)
-	return {"ok": True, "reason": "bound", "run_refs": kept, "dropped": dropped}
+	if (payload.get("run_refs") or []) and not kept:
+		return {"ok": False, "reason": "no_bound_runs", "run_refs": [], "dropped": dropped}
+	return {"ok": True, "reason": "bound", "run_refs": kept, "dropped": dropped, "overrides": overrides}
 
 
 # ---------------------------------------------------------------------------
@@ -3296,6 +3317,7 @@ def _cmd_bind_report(args: argparse.Namespace) -> int:
 		reporter_run_id=args.reporter_run_id or None,
 		labeled_event_found=args.labeled_event_found,
 		head_ancestor=args.head_ancestor,
+		trusted_excerpts=args.trusted_excerpts,
 	)
 	_write_json(result)
 	return 0 if result["ok"] else 1
@@ -3623,6 +3645,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p.add_argument("--reporter-run-id", default="")
 	p.add_argument("--labeled-event-found", action="store_true")
 	p.add_argument("--head-ancestor", action="store_true")
+	p.add_argument("--trusted-excerpts", action="store_true", help="keep the report's comments excerpt (OIDC-verified reports)")
 	p.set_defaults(func=_cmd_bind_report)
 
 	p = sub.add_parser("unwrap-dispatch", help="Print the report inside an enveloped client_payload (flat payloads pass through)")
