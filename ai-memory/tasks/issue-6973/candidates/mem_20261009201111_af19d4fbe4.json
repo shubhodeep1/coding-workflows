@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nImplementation plan for issue #6973: make the hand-over test read the review workflow with moved step scripts inlined\n\nPlanning ref: `git rev-parse HEAD` = `9122697405fdf96cec12f4f99591b14d3b135aaf`, branch `main`. The issue declares no integration branch, so there is no mismatch.\n\nScope-mode: Hold Scope\nReuse-audit: extends expanded_review_autofix_text\nScope-mode justification: This is a one-test fix. `tests/review_autofix_step_scripts.py` already provides `expanded_review_autofix_text()`, which returns `review_autofix.yml` with every moved step script inlined again. The agents.md \"Workflow file size limit\" section says contract tests should use it, and about ten tests already do (for example `tests/test_detect_editor_changes_lost.py`). Switching this one assertion to that helper fixes the root cause: the test was reading the raw YAML, so it broke when the step body moved into a script. Nothing else changes. Production code, the workflow, and the other assertions in the test stay as they are. There is no cheaper shortcut and nothing more complete is needed.\n\nWhere things stand (please read)\n- On the current `main` ref, `scripts/review_autofix_step_post_review_blocked_comment.sh` does not exist. The asserted case line is still inline at `.github/workflows/review_autofix.yml:6644`, so the test passes on `main` today.\n- The step body was moved into a script on PR #6971's branch (`ai/issue-6967`), and that is where the test fails.\n- The fix works both ways. Today, `expanded_review_autofix_text()` returns the raw YAML unchanged because there is nothing to inline for this step. After the move, it inlines the sourced script, so the assertion still holds.\n- PR #6971 goes green once it picks up `main`. The merge-base freshness gate and the update-branch path handle that, or PR #6971 can make the same change itself.\n\n1. Files likely to change\n- `tests/test_unblock_scan.py`. This is the only file. No new files.\n\n2. Functions / modules\n- Add a test-path import near the other module-level setup, after `ROOT` is defined, using the existing repo pattern:\n  `sys.path.insert(0, str(ROOT / \"tests\"))` (only if not already present), then\n  `from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402`\n  - `pyproject.toml` already sets `pythonpath = [\".\"]`, but that is the repo root, not `tests/`. Use the same `sys.path` insert as `tests/test_ai_engine.py:30` and `tests/test_ai_labels_retired.py:18`. Check first that the name `expanded_review_autofix_text` is not already used in the module.\n- In `test_hand_overs_add_a_scanned_label_or_failed_state`, replace\n  `review = (ROOT / \".github/workflows/review_autofix.yml\").read_text(encoding=\"utf-8\")`\n  with `review = expanded_review_autofix_text()`.\n- Keep the existing assertion string `llm_failed*|json_parse_failed*|missing_followup_details|merged_pr_unsafe_action|auto_merge_disabled)` exactly as it is, along with the POLLER and heal-script assertions.\n\n3. Data structures affected: none.\n4. API or interface changes: none. This is a test-only change. Workflow, scripts and env vars are untouched.\n\n## Decisions\n### D1 \u2014 Read the workflow through the shared step-script expander\n- Chosen: `expanded_review_autofix_text()` from `tests/review_autofix_step_scripts.py`.\n- Alternatives considered: read `scripts/review_autofix_step_post_review_blocked_comment.sh` directly. That fails on `main`, where the file does not exist yet, and would break again if the body moves back or is renamed. Or assert on both files with an OR. That is ad hoc and duplicates the helper.\n- Why: agents.md documents the helper as the way contract tests keep their assertions stable across workflow-size splits (\u00a724 pattern). It works whether or not the step has been moved.\n\n## Security considerations\n- No trust boundary, endpoint, credential or external input is involved. The test reads files from the repository checkout only.\n- Abuse cases: none. The assertion stays strict, so a real regression that drops the hand-over case still fails the test.\n\nAutomation (\u00a720.E)\n- No new script and no supervisor. This only modifies existing test code. It runs in the existing `.github/workflows/ci.yml` `tests-hooks-and-orchestrator` job. No DB work and no entry needed in the removal registry.\n\n5. Risks and edge cases\n- Import order: `sys.path` must be modified before the import. Add `# noqa: E402` as the other tests do so ruff stays green.\n- If PR #6971 renames the script, the expander follows the wrapper's `source` line, so the test keeps working as long as the script is registered in `REVIEW_AUTOFIX_STEP_SCRIPTS`.\n- If `expand_review_autofix_step_scripts` raises an error for an unterminated wrapper, that is a real contract failure and should surface.\n\n6. Testing\n- `PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/test_unblock_scan.py -q`. Expect all tests to pass on `main`.\n- `PYTHONDONTWRITEBYTECODE=1 python -m pytest tests/test_unblock_judge*.py tests/test_unblock_scan.py -q`, as the issue asks.\n- `ruff check tests/test_unblock_scan.py`.\n- Optionally, check against PR #6971's head by checking out `ai/issue-6967`, applying the change, and confirming the test passes with the moved script.\n\n7. Pre-execution self-check\n- The edit is limited to one test and keeps the existing assertion. The helper exists at `tests/review_autofix_step_scripts.py:95-97`, and the import pattern is already used elsewhere in the repo.\n- The conflict about where the script lives (PR branch vs `main`) is noted above and does not block, because the fix works on both.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify",
+  "fingerprint": "c9e3ba64859c3db292db094f9481f1e2476c81592da0c4011ae6ade48d393787",
+  "lineage": {
+    "issue_number": 6973,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37984362134",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37984362134",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6973"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261009201111_af19d4fbe4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6973,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37984362134"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #6973",
+  "timestamps": {
+    "created_at": "2026-10-09T20:11:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
