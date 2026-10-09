@@ -749,25 +749,54 @@ def test_filter_log_redacts_step_env_values_but_keeps_names() -> None:
 
 
 def test_strip_step_env_values_keeps_other_header_sections() -> None:
+	# The runner prints `with:` / `shell:` before `env:`; those stay readable.
 	log = (
 		"##[group]Run actions/checkout@v4\n"
-		"env:\n"
-		"  A: secret-a\n"
 		"with:\n"
 		"  ref: main\n"
 		"shell: /usr/bin/bash\n"
+		"env:\n"
+		"  A: secret-a\n"
 		"##[endgroup]\n"
 	)
 	stripped = heal._strip_step_env_values(log)
 	assert "secret-a" not in stripped
 	assert "  A: [redacted]" in stripped
-	assert "with:\n  ref: main\nshell: /usr/bin/bash\n" in stripped
+	assert "with:\n  ref: main\nshell: /usr/bin/bash\nenv:\n" in stripped
 	# Text without a Run header comes back unchanged, and the pass is idempotent.
 	evidence = "::error::PR diff unavailable\nenv:\n  X: y\n"
 	assert heal._strip_step_env_values(evidence) == evidence
 	assert heal._strip_step_env_values(stripped) == stripped
 	once = heal._strip_step_env_values(ENV_STEP_LOG)
 	assert heal._strip_step_env_values(once) == once
+
+
+def test_strip_step_env_values_header_like_lines_do_not_end_env_block() -> None:
+	# A multi-line value continuation that looks like a header key must not
+	# switch redaction off for the rest of the block.
+	log = (
+		"2026-09-24T00:00:01Z ##[group]Run ./mint.sh\n"
+		"2026-09-24T00:00:01Z shell: /usr/bin/bash -e {0}\n"
+		"2026-09-24T00:00:01Z env:\n"
+		"2026-09-24T00:00:01Z   MULTI: first\n"
+		"with: confidential-one\n"
+		"shell: confidential-two\n"
+		"env: FOO=confidential-three\n"
+		"2026-09-24T00:00:01Z   TOKEN2: confidential-four\n"
+		"2026-09-24T00:00:01Z ##[endgroup]\n"
+		"2026-09-24T00:00:02Z ##[group]Run ./other.sh\n"
+		"2026-09-24T00:00:02Z env: INLINE=confidential-five\n"
+		"2026-09-24T00:00:02Z   NEXT: confidential-six\n"
+		"2026-09-24T00:00:02Z ##[endgroup]\n"
+	)
+	stripped = heal._strip_step_env_values(log)
+	for n in ("one", "two", "three", "four", "five", "six"):
+		assert f"confidential-{n}" not in stripped
+	assert "2026-09-24T00:00:01Z shell: /usr/bin/bash -e {0}" in stripped
+	assert "  TOKEN2: [redacted]" in stripped
+	assert "2026-09-24T00:00:02Z env: [redacted]" in stripped
+	assert "  NEXT: [redacted]" in stripped
+	assert heal._strip_step_env_values(stripped) == stripped
 
 
 def test_filter_log_drops_unterminated_step_header() -> None:

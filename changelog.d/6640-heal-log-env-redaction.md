@@ -5,7 +5,7 @@
 
 `filter_log` now does three things:
 
-- It keeps each env variable's name and replaces its value with `[redacted]`. Any other line inside an `env:` block, such as a multi-line value, is replaced whole.
+- It keeps each env variable's name and replaces its value with `[redacted]`. Any other line inside an `env:` block, such as a multi-line value, is replaced whole. The block ends only at the header close, so a value line that looks like `with:` or `shell:` cannot switch redaction off, and an inline `env: <value>` line keeps only `env:`.
 - When a step header that opened an `env:` block is still open where the log ends (a truncated log), it drops everything from that header onward and adds one `[env block omitted: unterminated step header]` line. The other jobs and the earlier part of the log are kept. An open header with no `env:` block holds no env values, so its lines are kept and the step's output still reaches the diagnosis.
 - It runs `redact_secrets` over the whole text before the tail and byte cut, so the cut can never leave part of a token behind without its prefix.
 

@@ -294,10 +294,13 @@ _STEP_SCRIPT_LINE_PREFIX = "\x1b[36;1m"
 # derived credentials) are not masked. filter_log keeps only the names: an
 # entry keeps `NAME:` and gets `[redacted]` for its value, any other line in
 # the block (a multi-line value, an unparseable shape) is replaced whole, and
-# the block ends only at the header close or the next header key.
+# the block ends only at the header close. The runner prints `env:` as the last
+# section of a Run header (after `shell:` / `with:`), so a `with:` or `shell:`
+# line inside the block is a multi-line value continuation, not a header key,
+# and is redacted too. An inline `env: <value>` line keeps only `env:`.
 _STEP_ENV_OPEN_RE = re.compile(r"^env:\s*$")
+_STEP_ENV_INLINE_RE = re.compile(r"^env:\s*\S")
 _STEP_ENV_ENTRY_RE = re.compile(r"^(\s+[A-Za-z_][A-Za-z0-9_.-]*:)(\s*)(.*)$")
-_STEP_HEADER_KEY_RE = re.compile(r"^(?:shell|with|env):(?:\s|$)")
 _STEP_ENV_REDACTED_LINE = "  [redacted]"
 # A header that never closes (truncated log) after opening an `env:` block
 # cannot be bounded, so everything from its open line to the end of the job
@@ -1633,8 +1636,10 @@ def _strip_step_env_values(text: str) -> str:
 	Inside a ``##[group]Run`` header, each ``NAME: value`` entry of the
 	``env:`` block keeps its name and gets ``[redacted]`` for its value; any
 	other non-empty line of the block is replaced with ``  [redacted]``
-	(fail closed). The block ends at ``##[endgroup]`` or at the next header
-	key (``shell:`` / ``with:`` / ``env:``). Lines outside the env block and
+	(fail closed). The block ends only at ``##[endgroup]``: the runner prints
+	``env:`` last, so a ``with:`` / ``shell:`` line inside it is part of a
+	multi-line value and is redacted. An inline ``env: <value>`` line keeps
+	``env:`` and opens the block. Lines outside the env block and
 	outside step headers are unchanged, so text without a Run header comes
 	back byte-for-byte. A header that is still open when the text ends and
 	opened an ``env:`` block cannot be bounded, so it is dropped from its open
@@ -1676,8 +1681,11 @@ def _strip_step_env_values(text: str) -> str:
 			env_seen = True
 			header_lines.append(line)
 			continue
-		if in_env and _STEP_HEADER_KEY_RE.match(content):
-			in_env = False
+		if not in_env and _STEP_ENV_INLINE_RE.match(content):
+			in_env = True
+			env_seen = True
+			header_lines.append(f"{stamp}env: [redacted]")
+			continue
 		if not in_env or not content.strip():
 			header_lines.append(line)
 			continue
