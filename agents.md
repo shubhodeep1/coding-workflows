@@ -927,6 +927,52 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   (`scripts/codex_isolated_workspace.py`). Both modes get a credential-free
   synthetic `.git` whose `HEAD` contains only allowed blobs from the host's
   `HEAD`, so filtered tracked files cannot be retrieved with `git show`.
+- **Merge-base freshness.** `scripts/pr_checks_lib.sh` carries
+  `_pr_base_fresh_for_merge <pr> [<head_sha>] [<base_ref>]` beside the
+  check-runs gate. Every path that enables auto-merge or merges directly
+  (`scripts/review_enable_auto_merge.sh`, the `deterministic-skip-merge`
+  job, `scripts/review_rb_judge.sh`, and the poller's backward-scan,
+  `attempt_merge` and review-blocked merge sites) calls it first. It reads
+  `compare/{head}...{base}` and, only when the base gained commits, the
+  PR's file list; when the two sets share a path (renames under both
+  names; 300 base-side files counts as overlap) it requests
+  `PUT pulls/{n}/update-branch` bound to the head and returns 1, so the
+  caller skips the merge and the `synchronize` run re-validates CI and
+  review on the combined tree. `fresh`, `clean`, `disabled`
+  (`MERGE_BASE_FRESHNESS_ENABLED`) and `unknown` (any API failure, logged
+  with a warning) return 0. The `deterministic-skip-merge` job reads the
+  library from the gate's verified support commit (`.codex-freshness-src`);
+  an unverified checkout skips the freshness gate with a warning and
+  refuses auto-merge, because the required-checks wait below cannot run.
+  A PR file list of 3,000 entries (GitHub's cap) counts as overlap. The
+  review-blocked judge's `merge_with_followup` and the poller's force-merge,
+  no-fix and `merge_with_followup` sites are gated too. The orchestrator's
+  sub-issue path already aligns and defers through
+  `_sync_integration_and_rebase_subissue`, and the final integration PR is
+  synced by the poller every tick, so those paths see `fresh`. Operator
+  decision Q35: A (2026-10-09), after #6741 merged green against a base
+  that #6549 had changed under its tests. `tests/test_pr_base_freshness_gate.py`
+  covers the outcomes, the switch and every wiring point.
+- **Required checks before auto-merge.** `gh pr merge --auto` merges as
+  soon as the base's required status checks pass, and an unprotected base
+  has none, so the review's auto-merge paths landed #6906 on `main` while
+  its own PR CI run showed `orchestrate-poll (3)` failing. The same two
+  paths and the review-blocked judge's `merge` and terminal `fix` paths
+  now call `_pr_wait_for_required_checks <pr> <head> <base>`
+  (`scripts/pr_checks_lib.sh`) first: it polls `_pr_checks_completed` with
+  the calling run excluded (`PR_CHECKS_SELF_RUN_ID`) for up to
+  `AUTO_MERGE_CHECKS_WAIT_MINUTES` (default 45, every
+  `AUTO_MERGE_CHECKS_POLL_SECONDS`, default 60), enables auto-merge only on
+  `ok`/`allow_all`, and refuses on a settled failure (`PR_CHECKS_LAST_PENDING`
+  is 0 while the gate still blocks) or a timeout; a failed query is retried
+  until the budget is spent. It logs
+  `AUTOFIX_AUTO_MERGE_CHECKS pr=<n> head_sha=<sha> outcome=<...>`, and a
+  missing library fails the wait closed. A head with no check-runs yet
+  (`PR_CHECKS_LAST_TOTAL=0`) is polled two more intervals before it counts
+  as green. After a wait that actually polled, every caller
+  (`review_enable_auto_merge.sh`, the `deterministic-skip-merge` job and
+  the judge) re-checks freshness before merging. The
+  orchestrator's direct merges already gated on `_pr_checks_completed`.
 - **Dependencies.** `codex_isolated_exec.sh prepare --deps` (implement) installs
   dependencies once per job. The network-isolated, credential-free container sees
   only staged Node manifests and filtered third-party Python requirements
@@ -1551,6 +1597,7 @@ committing the corresponding file:
   Errors name only the JSON pointer. Canary entries are charset-gated rather than quoted because `validation_lint.py` and the `validate_process.sh` canary-scope preflight read the literal `CANARY_TOOLS="${CANARY_TOOLS:-…}"` line. Every other manifest value in a `*.sh.j2` template goes through the `shell_quote` filter into a `_default_*` local, never inside double quotes. `tests/test_render_validation_templates_shell_quoting.py` fails on an unquoted interpolation.
 - `scripts/validate_process.sh` Phase 3 never runs the harness itself. `scripts/validation_harness_sandbox.sh` handles it:
   - `provision` creates the `VALIDATION_HARNESS_SANDBOX_USER` (default `ai-validation`, not in `docker`/`sudo`) and starts its rootless dockerd. It runs once per job; self-heal re-execs reuse it through `SANDBOX_PROVISIONED`.
+    It installs `uidmap` and `docker-ce-rootless-extras` with apt when they are missing. GitHub's Ubuntu runner images install Docker from download.docker.com and then delete that apt source, so when the plain install fails `provision` adds Docker's repository for that one install, accepts the key only when its fingerprint is `9DC858229FC7DD38854AE2D88D81803C0EBFCD88`, prefers the installed `docker-ce` version, and removes the source and key again. Success logs `VALIDATION_HARNESS_SANDBOX phase=provision outcome=ok reason=rootless_packages_from_docker_repo`. Failure stays fail-closed with `reason=rootless_packages_unavailable`, after one of `docker_repo_distro_unsupported`, `docker_repo_platform_unknown`, `docker_repo_tmpfile_failed`, `docker_repo_key_download_failed`, `docker_repo_key_fingerprint_mismatch`, `docker_repo_source_write_failed`, `docker_repo_update_failed` or `docker_repo_install_failed` when the repository step itself failed.
   - `selfcheck <pid>` runs as that user and verifies that `/proc/<pid>/environ`, the host Docker socket, `sudo`, credential env vars, git credential config and the runner's home/temp/workspace directories are all unreachable.
   - `run <entry>` stages a screened copy: tracked files plus `validation/` and `.ai/validate.yml`, minus `codex_isolated_workspace.readonly_allowed` exclusions, with the trusted `validate_driver.sh` overlaid. It executes the copy under `env -i` with an allowlist, inside `setsid --wait`.
   - After the run, only regular files under `validation/logs/` are copied back, within `VALIDATION_HARNESS_SANDBOX_MAX_COPYBACK_BYTES` / `_MAX_FILES`, all or nothing.
