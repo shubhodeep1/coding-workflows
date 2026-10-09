@@ -281,7 +281,12 @@ case "${REPORT_ORIGIN}" in
 				REPORT_AUTH="verified"
 				;;
 			*)
-				if [ "${REQUIRE_REPORT_AUTH}" = "true" ]; then
+				# phase_failure reports come from the heal-report job of the
+				# clarify / plan / implement workflows, which runs with
+				# `permissions: {}` and so carries no identity; the provenance
+				# gate below binds them to a run of that workflow in source_repo
+				# linked from the issue by a trusted author.
+				if [ "${REQUIRE_REPORT_AUTH}" = "true" ] && [ "${SOURCE_KIND}" != "phase_failure" ]; then
 					_report_auth_reject "unauthenticated_report"
 				fi
 				REPORT_AUTH="absent"
@@ -354,7 +359,14 @@ if [ "${REPORT_AUTH}" != "event" ]; then
 		fi
 	fi
 	BIND_RUN_COUNT=0
-	while IFS= read -r bind_run_id; do
+	# Only label-escalation reports bind their runs here; phase, autofix and
+	# workflow_run reports have their runs bound by the provenance gate below,
+	# which keeps the current run first and reads no earlier run it rejects.
+	BIND_RUNS_HERE=false
+	if [ "${SOURCE_KIND}" = "issue" ] || [ "${SOURCE_KIND}" = "pull_request" ]; then
+		BIND_RUNS_HERE=true
+	fi
+	while [ "${BIND_RUNS_HERE}" = "true" ] && IFS= read -r bind_run_id; do
 		[[ "${bind_run_id}" =~ ^[0-9]+$ ]] || continue
 		BIND_RUN_COUNT=$((BIND_RUN_COUNT + 1))
 		[ "${BIND_RUN_COUNT}" -le "${MAX_RUNS}" ] || break
@@ -376,7 +388,10 @@ if [ "${REPORT_AUTH}" != "event" ]; then
 	if ! python3 "${HEAL_PY}" bind-report "${BIND_ARGS[@]}" > "${BIND_RESULT_FILE}" 2>/dev/null; then
 		_report_auth_reject "$(jq -r '.reason // "binding_failed"' "${BIND_RESULT_FILE}" 2>/dev/null | tr -cd 'a-z0-9_' | head -c 60 || echo binding_failed)"
 	fi
-	jq --slurpfile bind "${BIND_RESULT_FILE}" '.run_refs = $bind[0].run_refs' "${PAYLOAD_FILE}" > "${PAYLOAD_FILE}.tmp" && mv "${PAYLOAD_FILE}.tmp" "${PAYLOAD_FILE}"
+	if ! jq --slurpfile bind "${BIND_RESULT_FILE}" '.run_refs = $bind[0].run_refs' "${PAYLOAD_FILE}" > "${PAYLOAD_FILE}.tmp" \
+		|| ! mv "${PAYLOAD_FILE}.tmp" "${PAYLOAD_FILE}"; then
+		_report_auth_reject "binding_failed"
+	fi
 	log "report_auth=${REPORT_AUTH} reason=bound source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} runs_kept=$(jq -r '.run_refs | length' "${BIND_RESULT_FILE}") runs_dropped=$(jq -r '.dropped | length' "${BIND_RESULT_FILE}")"
 	if [ "${REPORT_AUTH}" = "absent" ]; then
 		tg_send_msg "Workflow failure heal accepted an unauthenticated report from ${SOURCE_REPO} after binding checks; sync its @stable workflow wrappers so reports carry an identity."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true

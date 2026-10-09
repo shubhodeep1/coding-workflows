@@ -202,10 +202,17 @@ REPORT_IDENTITY_CLOCK_SKEW_SECONDS = 60
 DEFAULT_REPORT_MAX_AGE_SECONDS = 3600
 REPORT_IDENTITY_MIN_RSA_BITS = 2048
 REPORT_IDENTITY_WORKFLOW_BY_KIND = {
-	"issue": "workflow_failure_heal.yml",
-	"pull_request": "workflow_failure_heal.yml",
-	"autofix_failure": "review_autofix.yml",
+	"issue": ("workflow_failure_heal.yml",),
+	"pull_request": ("workflow_failure_heal.yml",),
+	"autofix_failure": ("review_autofix.yml",),
+	# The heal-report job of the clarify / plan / implement reusable workflows.
+	"phase_failure": ("clarify.yml", "plan.yml", "implement.yml"),
 }
+# Kinds whose run_refs the intake's provenance gate already binds to the
+# source repository (run repository, workflow path, failure, issue/PR link);
+# claim binding leaves their runs to that gate so its current-run ordering and
+# successful-review-job fallback stay intact.
+PROVENANCE_BOUND_KINDS = ("phase_failure", "autofix_failure", "workflow_run")
 FAILED_JOB_CONCLUSIONS = ("failure", "timed_out", "cancelled")
 SIGNATURE_LINE_LIMIT = 5
 # Ownership facts carried by an autofix_failure report (self-repo routing).
@@ -1467,11 +1474,11 @@ def verify_report_identity(
 		return _reject("identity_not_yet_valid", summary)
 	if not isinstance(repository, str) or not isinstance(source_repo, str) or repository.lower() != source_repo.lower():
 		return _reject("repository_mismatch", summary)
-	workflow_file = REPORT_IDENTITY_WORKFLOW_BY_KIND.get(source_kind)
-	if workflow_file is None:
+	workflow_files = REPORT_IDENTITY_WORKFLOW_BY_KIND.get(source_kind)
+	if workflow_files is None:
 		return _reject("kind_not_attestable", summary)
-	expected_prefix = f"{self_repo}/.github/workflows/{workflow_file}@"
-	if not isinstance(job_workflow_ref, str) or not job_workflow_ref.startswith(expected_prefix):
+	expected_prefixes = tuple(f"{self_repo}/.github/workflows/{workflow_file}@" for workflow_file in workflow_files)
+	if not isinstance(job_workflow_ref, str) or not job_workflow_ref.startswith(expected_prefixes):
 		return _reject("job_workflow_ref_mismatch", summary)
 	if not reporter_run_url:
 		return _reject("reporter_run_unbound", summary)
@@ -1502,7 +1509,8 @@ def bind_report_claims(
 
 	``jobs_by_run`` maps run id -> the ``repos/<source_repo>/actions/runs/<id>/jobs``
 	response (absent when the read failed or 404'd, i.e. the run is not in the
-	source repository). Returns ``{"ok", "reason", "run_refs", "dropped"}``.
+	source repository). Runs of ``PROVENANCE_BOUND_KINDS`` pass through for the
+	provenance gate. Returns ``{"ok", "reason", "run_refs", "dropped"}``.
 	"""
 	kind = payload.get("source_kind")
 	number = payload.get("issue_number")
@@ -1523,6 +1531,10 @@ def bind_report_claims(
 		if head_sha and head_sha != pr_head and not head_ancestor:
 			return {"ok": False, "reason": "head_sha_mismatch", "run_refs": [], "dropped": []}
 
+	if kind in PROVENANCE_BOUND_KINDS:
+		# The provenance gate verifies these runs (and their order) next.
+		return {"ok": True, "reason": "bound", "run_refs": list(payload.get("run_refs") or []), "dropped": []}
+
 	kept: list[dict[str, Any]] = []
 	dropped: list[dict[str, str]] = []
 	for ref in payload.get("run_refs") or []:
@@ -1532,22 +1544,13 @@ def bind_report_claims(
 			dropped.append({"run_id": run_id, "reason": "run_not_in_source_repo"})
 			continue
 		if any(str(job.get("run_id")) != run_id for job in jobs if job.get("run_id") is not None):
-			dropped.append({"run_id": run_id, "reason": "run_not_in_source_repo"})
+			dropped.append({"run_id": run_id, "reason": "run_id_mismatch"})
 			continue
 		failed = any((job.get("conclusion") or "") in FAILED_JOB_CONCLUSIONS for job in jobs)
-		if kind == "workflow_run":
-			head_sha = payload.get("head_sha")
-			if not failed or (head_sha and not any(str(job.get("head_sha") or "").lower() == head_sha for job in jobs)):
-				dropped.append({"run_id": run_id, "reason": "run_binding_failed"})
-				continue
-		elif not failed and not (reporter_run_id and run_id == str(reporter_run_id)):
+		if not failed and not (reporter_run_id and run_id == str(reporter_run_id)):
 			dropped.append({"run_id": run_id, "reason": "run_not_failed"})
 			continue
 		kept.append(ref)
-	if kind == "workflow_run" and not kept:
-		return {"ok": False, "reason": "run_binding_failed", "run_refs": [], "dropped": dropped}
-	if kind == "autofix_failure" and (payload.get("run_refs") or []) and not kept:
-		return {"ok": False, "reason": "no_bound_runs", "run_refs": [], "dropped": dropped}
 	return {"ok": True, "reason": "bound", "run_refs": kept, "dropped": dropped}
 
 

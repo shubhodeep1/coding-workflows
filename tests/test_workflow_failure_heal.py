@@ -4119,6 +4119,11 @@ def test_verify_report_identity_accepts_a_valid_token() -> None:
 	# The review/autofix reporter is bound to review_autofix.yml.
 	autofix = _id_claims(job_workflow_ref=f"{SELF_REPO}/.github/workflows/review_autofix.yml@{SHA_A}")
 	assert _verify_id(_sign_test_jwt(autofix), kind="autofix_failure")["ok"] is True
+	# The clarify / plan / implement heal-report job is bound to its phase workflow.
+	for phase_file in ("clarify.yml", "plan.yml", "implement.yml"):
+		phase = _id_claims(job_workflow_ref=f"{SELF_REPO}/.github/workflows/{phase_file}@refs/heads/stable")
+		assert _verify_id(_sign_test_jwt(phase), kind="phase_failure")["ok"] is True
+	assert _verify_id(_sign_test_jwt(autofix), kind="phase_failure")["reason"] == "job_workflow_ref_mismatch"
 
 
 def test_verify_report_identity_rejections() -> None:
@@ -4177,7 +4182,7 @@ def test_bind_report_claims_issue_reports() -> None:
 	healthy = heal.bind_report_claims(payload, issue_json=issue, jobs_by_run={"500": _bind_jobs("success")})
 	assert healthy["run_refs"] == [] and healthy["dropped"][0]["reason"] == "run_not_failed"
 	other_run = heal.bind_report_claims(payload, issue_json=issue, jobs_by_run={"500": _bind_jobs(run_id="501")})
-	assert other_run["run_refs"] == [] and other_run["dropped"][0]["reason"] == "run_not_in_source_repo"
+	assert other_run["run_refs"] == [] and other_run["dropped"][0]["reason"] == "run_id_mismatch"
 	# The claimed issue must exist, be the claimed kind, and carry the label.
 	assert heal.bind_report_claims(payload, issue_json=None)["reason"] == "issue_not_found"
 	assert heal.bind_report_claims(payload, issue_json=_issue(number=43))["reason"] == "issue_not_found"
@@ -4195,19 +4200,19 @@ def test_bind_report_claims_autofix_and_workflow_run_reports() -> None:
 	moved = {**pr, "head": {**pr["head"], "sha": SHA_C}}
 	assert heal.bind_report_claims(payload, pull_json=moved, jobs_by_run={"500": _bind_jobs()})["reason"] == "head_sha_mismatch"
 	assert heal.bind_report_claims(payload, pull_json=moved, jobs_by_run={"500": _bind_jobs()}, head_ancestor=True)["ok"] is True
-	# Every claimed run dropped -> rejected; the verified reporter's own run
-	# may still be in progress.
-	assert heal.bind_report_claims(payload, pull_json=pr, jobs_by_run={})["reason"] == "no_bound_runs"
-	assert heal.bind_report_claims(payload, pull_json=pr, jobs_by_run={"500": _bind_jobs("success")})["reason"] == "no_bound_runs"
-	assert heal.bind_report_claims(payload, pull_json=pr, jobs_by_run={"500": _bind_jobs("success")}, reporter_run_id="500")["ok"] is True
+	# Runs of provenance-gated kinds pass through unchanged: the intake's
+	# provenance gate binds them (current run first, successful-review-job
+	# fallback for autofix reports).
+	for jobs in ({}, {"500": _bind_jobs("success")}):
+		passed = heal.bind_report_claims(payload, pull_json=pr, jobs_by_run=jobs)
+		assert passed["ok"] is True and passed["run_refs"] == payload["run_refs"] and passed["dropped"] == []
 	run_payload = heal.validate_payload(heal.build_workflow_run_payload(
 		repo=SELF_REPO,
 		workflow_run={"id": 500, "name": "Mark Stable Release", "conclusion": "failure", "head_sha": SHA_B, "head_branch": "main", "html_url": f"https://github.com/{SELF_REPO}/actions/runs/500", "display_title": "Mark Stable Release"},
 	))
-	assert heal.bind_report_claims(run_payload, jobs_by_run={"500": _bind_jobs(head_sha=SHA_B)})["ok"] is True
-	assert heal.bind_report_claims(run_payload, jobs_by_run={"500": _bind_jobs(head_sha=SHA_A)})["reason"] == "run_binding_failed"
-	assert heal.bind_report_claims(run_payload, jobs_by_run={"500": _bind_jobs("success", head_sha=SHA_B)})["reason"] == "run_binding_failed"
-	assert heal.bind_report_claims(run_payload, jobs_by_run={})["reason"] == "run_binding_failed"
+	assert heal.bind_report_claims(run_payload, jobs_by_run={})["run_refs"] == run_payload["run_refs"]
+	phase_payload = heal.validate_payload(_phase_payload())
+	assert heal.bind_report_claims(phase_payload, jobs_by_run={})["run_refs"] == phase_payload["run_refs"]
 
 
 def test_dispatch_envelope_carries_optional_report_identity() -> None:
@@ -4337,7 +4342,7 @@ def test_intake_verifies_report_identity_and_rejects_a_forged_repository() -> No
 		assert _api_writes(state) == []
 		assert token not in result.stdout + result.stderr
 		# Rejected before any binding read or log fetch.
-		assert not any(any("/jobs" in part or "/issues/42" in part for part in call) for call in state["calls"])
+		assert not any(any("/jobs" in part or "/issues/42" in part for part in call) for call in state.get("calls", []))
 
 	with tempfile.TemporaryDirectory(prefix="heal-identity-stale-") as tmp_name:
 		token_file, jwks_file, _ = _fresh_identity(Path(tmp_name), aud="wrong-audience")
@@ -4365,6 +4370,11 @@ def test_intake_unauthenticated_report_transition_and_enforcement() -> None:
 	result, state, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REQUIRE_REPORT_AUTH": "yes"})
 	assert "WORKFLOW_HEAL warn invalid_require_report_auth value=yes; using false" in result.stdout
 	assert "report_auth=absent reason=bound" in result.stdout
+	# Phase reports carry no identity (heal-report runs with permissions: {});
+	# the provenance gate binds them, so enforcement does not skip them.
+	result, state, _ = _run_intake(_phase_payload(), _plan_intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REQUIRE_REPORT_AUTH": "true"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "unauthenticated_report" not in result.stdout and "provenance_verified" in result.stdout
 	# Manual re-runs are bound but never need an identity.
 	result, state, _ = _run_intake(_consumer_payload(), _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REQUIRE_REPORT_AUTH": "true", "WORKFLOW_HEAL_REPORT_ORIGIN": "workflow_dispatch"})
 	assert "report_auth=manual reason=bound" in result.stdout
@@ -4387,11 +4397,10 @@ def test_intake_binding_rejects_unbacked_claims() -> None:
 	result, state_after, _ = _run_intake(_consumer_payload(), _intake_state(issues={}), diagnosis=DIAG_WORKFLOW_DEFECT)
 	assert "report_auth=rejected reason=issue_not_found" in result.stdout
 	assert _api_writes(state_after) == []
-	# A run claimed for another repository (404 under the source repo) is
-	# dropped, and an autofix report left with no bound run is rejected.
-	result, state_after, _ = _run_intake(_autofix_payload(), _intake_state(jobs={}), diagnosis=DIAG_WORKFLOW_DEFECT)
-	assert "report_auth=rejected reason=no_bound_runs" in result.stdout
-	assert _api_writes(state_after) == []
+	# A label-escalation run claimed for another repository (404 under the
+	# source repo) is dropped before any log read.
+	result, state_after, _ = _run_intake(_consumer_payload(), _intake_state(jobs={}), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert "report_auth=absent reason=bound" in result.stdout and "runs_kept=0 runs_dropped=1" in result.stdout
 
 
 def test_intake_workflow_run_event_skips_report_auth() -> None:

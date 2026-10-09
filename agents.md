@@ -406,7 +406,10 @@ Phases of the unattended pipeline (each is a separate workflow file under
     the API (`workflow_failure_heal.py verify-report-identity` /
     `bind-report`). A report without a token passes on the binding checks
     while `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH=false` (default) and is skipped
-    when `true`; rejections fail closed (`report_auth=rejected reason=…`,
+    when `true` (phase reports, whose `heal-report` job has
+    `permissions: {}`, are exempt). Only label-escalation reports have their
+    runs bound here; phase, autofix and `workflow_run` runs stay with the
+    provenance gate; rejections fail closed (`report_auth=rejected reason=…`,
     WARNING, nothing filed). On by
     default; disable per repo via `WORKFLOW_HEAL_ENABLED=false`; never pushes
     code itself. Stable log prefixes: `WORKFLOW_HEAL_REPORT`,

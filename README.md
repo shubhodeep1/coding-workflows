@@ -1733,13 +1733,18 @@ through `clarify → plan → implement → review`.
   token's run equal to the report's `reporter_run_url`. It then binds the
   claims through the GitHub API: the claimed issue / PR exists in
   `source_repo` (with the claimed label, or a `labeled` event for it), an
-  autofix report's head is the PR head or an ancestor of it, and every
-  claimed run belongs to `source_repo` and failed (other runs are dropped; an
-  autofix report with no bound run is rejected). A report without a token
+  autofix report's head is the PR head or an ancestor of it, and every run a
+  label-escalation report claims belongs to `source_repo` and failed (other
+  runs are dropped). Phase, autofix and `workflow_run` reports leave their runs
+  to the existing provenance gate, which already checks run repository,
+  workflow path, failure and issue / PR linkage. A report without a token
   (a consumer whose wrappers have not synced yet) is accepted after the
   binding checks with a Telegram WARNING while
   `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH=false` (the default) and skipped when it
-  is `true`. Manual `workflow_dispatch` re-runs always take the binding
+  is `true`. Phase reports are the exception: the clarify / plan / implement
+  `heal-report` job runs with `permissions: {}`, so they carry no token (the
+  phase reporter attaches one only if the job is granted `id-token: write`)
+  and are always left to the provenance gate. Manual `workflow_dispatch` re-runs always take the binding
   checks; `workflow_run` payloads come from GitHub's own event. Every
   rejection fails closed with `WORKFLOW_HEAL report_auth=rejected reason=…`,
   a Telegram WARNING, and no issue or comment.
@@ -2148,7 +2153,7 @@ through `clarify → plan → implement → review`.
 | `WORKFLOW_HEAL_MAX_OPEN_ISSUES` | `10` | coding-workflows only. Max open `ai:workflow-heal` issues; further reports are logged with `skip reason=budget_exhausted` and a Telegram WARNING. |
 | `WORKFLOW_HEAL_MAX_ISSUES_PER_DAY` | `20` | coding-workflows only. Max `ai:workflow-heal` issues opened per UTC day. |
 | `WORKFLOW_HEAL_TARGET_BRANCH` | `stable` | coding-workflows only. Branch a heal issue declares as `Target branch`. Failed release runs use their failed branch; same-repo review failures use the verified support-script branch when resolvable, otherwise the PR head (falling back to stable if missing). |
-| `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH` | `false` | coding-workflows only. `true` makes the heal intake skip `repository_dispatch` reports that carry no OIDC `report_identity` (`reason=unauthenticated_report`). `false` (transition default) accepts them after the binding checks, with a Telegram WARNING. A report that carries an identity is always verified. Only `true` / `false` are accepted; other values warn and use `false`. See [Workflow Failure Heal](#workflow-failure-heal). |
+| `WORKFLOW_HEAL_REQUIRE_REPORT_AUTH` | `false` | coding-workflows only. `true` makes the heal intake skip `repository_dispatch` reports that carry no OIDC `report_identity` (`reason=unauthenticated_report`), except phase reports, which the provenance gate binds. `false` (transition default) accepts them after the binding checks, with a Telegram WARNING. A report that carries an identity is always verified. Only `true` / `false` are accepted; other values warn and use `false`. See [Workflow Failure Heal](#workflow-failure-heal). |
 | `WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS` | `3600` | coding-workflows only. Maximum age of a heal report identity's `iat` claim when the intake verifies it; older tokens are rejected as `identity_stale`. |
 | `WORKFLOW_HEAL_EVIDENCE_MAX_BYTES` | `24000` | Maximum redacted workflow evidence bytes supplied to heal prompts; only an unedited, pipeline-authored scope marker authorizes collection. |
 | `WORKFLOW_HEAL_EVIDENCE_MAX_RUNS` | `3` | Maximum verified run references used for heal prompt evidence. |
