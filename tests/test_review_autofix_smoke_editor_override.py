@@ -35,7 +35,12 @@ under the unchanged production prompt.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -44,7 +49,7 @@ EDITOR_SCRIPT = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
 
 
 def _workflow_text() -> str:
-	return REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+	return expanded_review_autofix_text()
 
 
 def _editor_script_text() -> str:

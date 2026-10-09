@@ -41,7 +41,12 @@ silently re-introduce the empty-output failure mode on smoke runs.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -51,7 +56,7 @@ CONFLICT_RESOLVER_TPL = REPO_ROOT / "prompts" / "conflict-resolver.txt"
 
 
 def _workflow_text() -> str:
-	return REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+	return expanded_review_autofix_text()
 
 
 def _prepare_script_text() -> str:
