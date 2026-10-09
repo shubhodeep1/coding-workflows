@@ -48,6 +48,11 @@
 #   CHECK_TRIAGE_TRUSTED_SUPPORT_DIR          trusted prompt root (required for diagnosis)
 #   CHECK_TRIAGE_STAGE                        all (default), collect, or diagnose
 #   CHECK_TRIAGE_PREPARE_ONLY                 true: write issue body without posting
+#   CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED      "true" adds a verified
+#                                            "Integration branch" line naming
+#                                            the failing PR's head ref
+#                                            (default "false"; off until an
+#                                            operator enables it)
 
 set -euo pipefail
 
@@ -91,6 +96,65 @@ print(value[:200] or "(unnamed check)")
 ' "$1"
 }
 
+# Verify that the PR payload names an open, same-repository PR whose head SHA
+# equals the failing check's SHA and whose head ref is a safe branch name.
+# Prints the verified ref and returns 0, or prints a fixed reason token and
+# returns 1. Used only when CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED is on.
+triage_verify_pr_head_route()
+{
+	local _route_payload="$1"
+	local _route_check_sha="$2"
+	local _route_state _route_head_repo _route_base_repo _route_pr_sha _route_ref
+	if ! jq -e 'type == "object"' "${_route_payload}" >/dev/null 2>&1; then
+		echo "pr_not_open"
+		return 1
+	fi
+	_route_state="$(jq -r '.state | if type == "string" then . else "" end' "${_route_payload}" 2>/dev/null)" || _route_state=""
+	if [ "${_route_state}" != "open" ]; then
+		echo "pr_not_open"
+		return 1
+	fi
+	_route_head_repo="$(jq -r '.head.repo.full_name | if type == "string" then . else "" end' "${_route_payload}" 2>/dev/null)" || _route_head_repo=""
+	_route_base_repo="$(jq -r '.base.repo.full_name | if type == "string" then . else "" end' "${_route_payload}" 2>/dev/null)" || _route_base_repo=""
+	if [ -z "${_route_head_repo}" ] || [ "${_route_head_repo}" != "${REPO}" ] ||
+		{ [ -n "${_route_base_repo}" ] && [ "${_route_base_repo}" != "${REPO}" ]; }; then
+		echo "not_same_repo"
+		return 1
+	fi
+	if ! [[ "${_route_check_sha}" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+		echo "check_sha_missing"
+		return 1
+	fi
+	_route_pr_sha="$(jq -r '.head.sha | if type == "string" then . else "" end' "${_route_payload}" 2>/dev/null)" || _route_pr_sha=""
+	if ! [[ "${_route_pr_sha}" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+		echo "pr_sha_missing"
+		return 1
+	fi
+	if [ "${_route_pr_sha}" != "${_route_check_sha}" ]; then
+		echo "sha_mismatch"
+		return 1
+	fi
+	_route_ref="$(jq -r '.head.ref | if type == "string" then . else "" end' "${_route_payload}" 2>/dev/null)" || _route_ref=""
+	# The character set excludes backticks, whitespace and newlines, so the
+	# ref can never leave the routing line's backtick span.
+	if ! [[ "${_route_ref}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$ ]]; then
+		echo "invalid_head_ref"
+		return 1
+	fi
+	case "${_route_ref}" in
+		*..*|*//*|*@\{*|*/|*.|*.lock)
+			echo "invalid_head_ref"
+			return 1
+			;;
+	esac
+	if ! command -v git >/dev/null 2>&1 || ! git check-ref-format --branch "${_route_ref}" >/dev/null 2>&1; then
+		echo "invalid_head_ref"
+		return 1
+	fi
+	printf '%s\n' "${_route_ref}"
+	return 0
+}
+
 # --- Helpers (fail open if unavailable) ------------------------------------
 
 source scripts/gh_helpers.sh 2>/dev/null || true
@@ -132,6 +196,18 @@ TRIAGE_LABEL="ai:check-triage"
 ESCALATED_LABEL="ai:check-triage-escalated"
 MARKER_PREFIX="check-failure-triage:"
 SELF_FRAGMENT="${CHECK_TRIAGE_SELF_CHECK_NAME_FRAGMENT:-Check Failure Triage}"
+# PR-head routing stays off unless an operator enables it explicitly.
+PR_HEAD_ROUTING_ENABLED="${CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED:-false}"
+case "${PR_HEAD_ROUTING_ENABLED,,}" in
+	true|1|yes|on)
+		PR_HEAD_ROUTING_ENABLED="true"
+		;;
+	*)
+		PR_HEAD_ROUTING_ENABLED="false"
+		;;
+esac
+ROUTING_REF=""
+ROUTING_LINE=""
 
 REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 RUNTIME_DIR="${RUNTIME_DIR:-/tmp/check-triage-${GITHUB_RUN_ID:-local}}"
@@ -173,6 +249,25 @@ if [ "${TRIAGE_STAGE}" = "diagnose" ]; then
 	PR_TITLE="$(jq -r '.title' "${TRIAGE_METADATA_FILE}")"
 	PR_URL="$(jq -er '.url' "${TRIAGE_METADATA_FILE}")"
 	FP_MARKER="<!-- ${MARKER_PREFIX}fp=${FP} -->"
+	if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
+		# Re-check the collect stage's verified ref against the same payload;
+		# a disagreement means the hand-off was altered, so fail closed.
+		routing_meta_ref="$(jq -r '.routing_ref // "" | if type == "string" then . else "" end' "${TRIAGE_METADATA_FILE}" 2>/dev/null)" || routing_meta_ref=""
+		routing_detail=""
+		if [ -z "${routing_meta_ref}" ]; then
+			routing_detail="metadata_missing"
+		elif ! routing_verified_ref="$(triage_verify_pr_head_route "${RUNTIME_DIR}/pr_payload.json" "${HEAD_SHA}")"; then
+			routing_detail="${routing_verified_ref}"
+		elif [ "${routing_verified_ref}" != "${routing_meta_ref}" ]; then
+			routing_detail="ref_mismatch"
+		else
+			ROUTING_REF="${routing_verified_ref}"
+		fi
+		if [ -n "${routing_detail}" ]; then
+			log "error reason=routing_unverified detail=${routing_detail} pr=${PR_NUMBER}"
+			exit 1
+		fi
+	fi
 fi
 
 if ! CHECK_NAME_DISPLAY="$(sanitize_check_name_display "${CHECK_NAME}")"; then
@@ -381,6 +476,19 @@ if [ "${GEN}" -gt "${MAX_DEPTH}" ]; then
 	exit 0
 fi
 
+# --- PR-head routing gate (off by default) ---------------------------------
+
+if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
+	if routing_result="$(triage_verify_pr_head_route "${PR_JSON_FILE}" "${HEAD_SHA}")"; then
+		ROUTING_REF="${routing_result}"
+		log "routing=pr_head pr=${PR_NUMBER} ref=${ROUTING_REF}"
+	else
+		log "skip reason=routing_unverified detail=${routing_result} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+		tg_send_msg "Check-failure auto-triage skipped ${REPO} PR #${PR_NUMBER}: PR-head routing could not be verified (detail: ${routing_result}). No issue was filed."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		exit 0
+	fi
+fi
+
 # --- Collect failing check-run context (logs) ------------------------------
 
 PR_PAYLOAD_FILE="${PR_JSON_FILE}"
@@ -403,7 +511,8 @@ if [ "${TRIAGE_STAGE}" = "collect" ]; then
 	jq -n --arg pr_number "${PR_NUMBER}" --arg check_name "${CHECK_NAME}" \
 		--arg fingerprint "${FP}" --arg generation "${GEN}" --arg root "${ROOT}" \
 		--arg head_ref "${HEAD_REF}" --arg title "${PR_TITLE}" --arg url "${PR_URL}" \
-		'{pr_number: $pr_number, check_name: $check_name, fingerprint: $fingerprint, generation: $generation, root: $root, head_ref: $head_ref, title: $title, url: $url}' > "${TRIAGE_METADATA_FILE}"
+		--arg routing_ref "${ROUTING_REF}" \
+		'{pr_number: $pr_number, check_name: $check_name, fingerprint: $fingerprint, generation: $generation, root: $root, head_ref: $head_ref, title: $title, url: $url, routing_ref: $routing_ref}' > "${TRIAGE_METADATA_FILE}"
 	if [ -n "${GITHUB_OUTPUT:-}" ]; then
 		echo "ready=true" >> "${GITHUB_OUTPUT}"
 	fi
@@ -612,6 +721,11 @@ fi
 # --- Compose and open the issue --------------------------------------------
 
 TITLE="CI failure: ${CHECK_NAME_DISPLAY} on PR #${PR_NUMBER}"
+if [ -n "${ROUTING_REF}" ]; then
+	# The only routing line the body validator admits; the ref was verified
+	# against the PR payload by triage_verify_pr_head_route.
+	ROUTING_LINE="- **Integration branch:** \`${ROUTING_REF}\`"
+fi
 BODY_FILE="${RUNTIME_DIR}/issue_body.md"
 {
 	echo "${FP_MARKER}"
@@ -625,6 +739,9 @@ BODY_FILE="${RUNTIME_DIR}/issue_body.md"
 	echo
 	echo "- **Repository:** \`${REPO}\`"
 	echo "- **Pull request:** ${PR_URL_DISPLAY} (\`${HEAD_REF_DISPLAY}\`)"
+	if [ -n "${ROUTING_LINE}" ]; then
+		echo "${ROUTING_LINE}"
+	fi
 	echo "- **Failing check:** \`${CHECK_NAME_DISPLAY}\` (conclusion: \`${CHECK_CONCLUSION_DISPLAY}\`)"
 	if [ -n "${CHECK_RUN_ID}" ]; then
 		echo "- **Check run id:** \`${CHECK_RUN_ID_DISPLAY}\`"
@@ -664,7 +781,7 @@ then
 	exit 1
 fi
 
-if ! body_validation_reason="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${BODY_FILE}" "${FP_MARKER}" "${GEN}" "${ROOT}" "${PR_NUMBER}" <<'PY'
+if ! body_validation_reason="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${BODY_FILE}" "${FP_MARKER}" "${GEN}" "${ROOT}" "${PR_NUMBER}" "${ROUTING_LINE}" <<'PY'
 import pathlib
 import re
 import sys
@@ -686,7 +803,21 @@ else:
 	# Cover resolve_integration_ref.sh, security_dependency.py and
 	# orchestrate_lib.py's TARGET_BRANCH_LINE_RE, including Unicode newlines.
 	key = re.compile(r"^\s*(?:[-*>]\s*)*\**\s*(?:integration\s+branch|target\s+branch|tracking\s+issue|depends\s+on|local\s+id|managed\s+by|prior_pr_baseline_branch|files_touched)\s*\**\s*:", re.IGNORECASE)
-	print("routing_key" if any(key.match(line) for line in body.splitlines() + lines) else "")
+	routing_line = sys.argv[6] if len(sys.argv) > 6 else ""
+	if not routing_line:
+		print("routing_key" if any(key.match(line) for line in body.splitlines() + lines) else "")
+	else:
+		# Admit exactly one script-generated routing line, in the header bullets.
+		split_hits = [index for index, line in enumerate(lines) if key.match(line)]
+		unicode_hits = [line for line in body.splitlines() if key.match(line)]
+		separator = lines.index("---") if "---" in lines else -1
+		allowed = (
+			re.fullmatch(r"- \*\*Integration branch:\*\* `[A-Za-z0-9._/-]+`", routing_line) is not None
+			and len(split_hits) == 1 and len(unicode_hits) == 1
+			and lines[split_hits[0]] == routing_line and unicode_hits[0] == routing_line
+			and 4 <= split_hits[0] < separator
+		)
+		print("" if allowed else "routing_key")
 PY
 )"; then
 	body_validation_reason="marker"

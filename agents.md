@@ -288,6 +288,11 @@ Phases of the unattended pipeline (each is a separate workflow file under
     in-flight triage per repo+PR+check and caps the
     auto-fix lineage at `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH` generations
     (escalates with `ai:check-triage-escalated` + Telegram at the cap).
+    `CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED` (default `false`) adds one verified
+    `Integration branch` line naming the failing PR's head ref; the collect
+    step checks open state, same repository, a matching check/PR head SHA and
+    a valid ref, else logs `reason=routing_unverified`, sends a WARNING and
+    files nothing, and the diagnose step re-checks the hand-off.
     The PR-head checkout does not persist credentials; collection uses a
     GitHub token before Codex runs from a trusted support directory in a
     separate, GitHub-token-free step. Missing trusted support fails closed.
