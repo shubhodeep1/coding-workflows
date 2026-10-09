@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":6946,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/6946\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/6953\",\"pr_number\":6953,\"branch\":\"ai/issue-6946\",\"run_id\":\"37941399543\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/37941399543\",\"changed_files\":[\".github/workflows/ci.yml\",\"changelog.d/6946-ci-poll-shard-failure-summary.md\",\"tests/test_ci_poll_test_sharding.py\"]}",
+  "fingerprint": "ee9885f02f001b5bb20de08a5eb17d27176d8104f4046cbcfcc1186609d19d19",
+  "lineage": {
+    "issue_number": 6946,
+    "parent_ids": [],
+    "pr_number": 6953,
+    "run_id": "37941399543",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37941399543",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/6953"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261009142411_20445ba001",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6946,
+    "level": "run",
+    "pr_number": 6953,
+    "run_id": "37941399543"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #6946: https://github.com/shubhodeep1/coding-workflows/pull/6953",
+  "timestamps": {
+    "created_at": "2026-10-09T14:24:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
