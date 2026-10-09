@@ -921,6 +921,29 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   (`scripts/codex_isolated_workspace.py`). Both modes get a credential-free
   synthetic `.git` whose `HEAD` contains only allowed blobs from the host's
   `HEAD`, so filtered tracked files cannot be retrieved with `git show`.
+- **Heal scope from failing tests.** A workflow-failure heal's edit scope
+  (`<!-- ai:workflow-heal-scope:v1 paths=... -->`) is frozen before the
+  diagnosis runs (#6463), from the verified run's workflow paths, the crash
+  file and the ownership facts, plus `tests/**` and `changelog.d/*.md`. For
+  a CI failure that left the implementer with tests only, so when a test
+  and the code disagreed it rewrote the test to match the code (heal PRs
+  #6907 and #6916 flipped the security-pass cap rule that #6906 restored).
+  Since operator decision Q37: A (2026-10-09) the intake also extracts the
+  failing test names and files from the verified runs' own filtered job
+  logs (`heal-scope failing-tests`, shapes: the CI shard runner's
+  `TEST_CASE_EVENT ... "status":"fail"` and `FAIL  test_x`, pytest's
+  `FAILED tests/x.py::test_y`), freezes them with the other inputs, and
+  `heal-scope render` resolves each name to the test file that defines it
+  (`git grep` at the scope commit) and that file's stem to the subject it
+  covers: `scripts/<stem>.sh`, `scripts/<stem>.py`,
+  `.github/workflows/<stem>.yml` (also with `-` for `_`), only when the file
+  exists at the scope commit and passes the usual path rules (never
+  `.claude/` or `.github/ai/`). The diagnosis still cannot add a path. The
+  heal prompt tells the healer to pick the wrong side from the documented
+  behaviour (README, agents.md, changelog fragments, the introducing issues
+  and PRs), never from "the test should match what the code does now".
+  `tests/test_workflow_failure_heal_scope_tests.py` covers extraction, the
+  mapping, the render CLI at a scope commit and the intake wiring.
 - **Dependencies.** `codex_isolated_exec.sh prepare --deps` (implement) installs
   dependencies once per job. The network-isolated, credential-free container sees
   only staged Node manifests and filtered third-party Python requirements
