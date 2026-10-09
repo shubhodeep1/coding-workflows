@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: B\n\nRATIONALE:\nQ1: The drift shows up on PR #6566's head, `ai/issue-6561` at 731ec6fe0171, where CI run 37872030453 failed. That branch exists and the PR is open and not merged, so the fix belongs there. Landing the PR's behaviour on `main` first (B) would ship unreviewed code. Closing this issue (C) leaves the PR permanently red.\nQ2: The pipeline cannot write this file. Implement grants `.claude/` and `workflow-templates/` paths only from an exact `files_touched` entry in a trusted issue body (`implement.yml:1653-1657`, `files_touched_scope_guard.py --emit-automation-grant`). This triage issue has no such entry. Per agents.md, the review editor always excludes the merged-PR safety hook, and CI never prepares security hooks. So every option needs one human step. B is the smallest one and matches how the repo is meant to work. C is also blocked for the pipeline, because reverting the template is itself an automation-path edit, and it would undo PR #6566's intended change. A adds an extra issue round-trip and still needs a human to file it.\n\nEXECUTION PLAN (required for any non-letter decision):\n(none \u2014 both decisions are lettered options)\n\nNotes for the planner/implementer (binding):\n- Who acts: a maintainer (OWNER/MEMBER/COLLABORATOR).\n- Where: `ai/issue-6561` (PR #6566).\n- Change: make `.claude/hooks/pr_merge_status_guard.py` byte-identical to `workflow-templates/.claude/hooks/pr_merge_status_guard.py` at that branch's head, including executable bits. The template keeps the live PR lookup for remote writes (`cached = None if target.reaches_remote else _read_cache(...)` / `query_pull_requests(...)`).\n- Do not change: the template, `tests/test_pr_merge_status_guard.py` (its equality assertion stays), the security-hook exclusion in `ci.yml`, and `scripts/sync_claude_live_copies.py`.\n- Check: re-run CI on PR #6566. Pass means `tests-hooks-and-orchestrator` is green, so the aggregate `CI / lint` is green, and `tests/test_claude_template_live_parity.py` passes.\n- Then: close this issue as resolved by that commit. No implement run should start from this issue. If one runs anyway, it should emit `BLOCKED: automation-path grant absent for .claude/hooks/pr_merge_status_guard.py` rather than edit the template.\n- Reversibility: a single-file commit on the PR branch, so a plain revert undoes it. If reviewers reject the live-lookup behaviour, PR #6566's own review or the review-blocked judge decides that, and both copies are reverted together.\n\nESCALATION (required for any ESCALATE decision):\n(none)\n\nAssumptions:\n- I don't know which branch this checkout is. Its template already has `pull_requests = query_pull_requests(slug, branch, cwd)` at line 2279 and the remote-aware cache bypass at 2159, which matches the triage's description of the PR-head template.\n- `.claude/` is not in this checkout, so I could not diff the live copy directly. The decision relies on the CI log diff quoted in the triage.\n- If `main` already has the template change but an unsynced live copy, `main` CI would fail the same way. The same human sync on `main` would then be needed after PR #6566 merges, which the `sync-claude-live-copies.yml` held/authorized PR path covers.",
+  "fingerprint": "bbdb92bd0653808a730adc7c62d5b64f2662b1bcb80d4bf899b77da0200d7884",
+  "lineage": {
+    "issue_number": 6836,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37873700855",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37873700855",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6836"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261009022402_52f0da2fe4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6836,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37873700855"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #6836",
+  "timestamps": {
+    "created_at": "2026-10-09T02:24:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
