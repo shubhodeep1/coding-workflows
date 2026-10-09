@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1416-1442 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The `orchestrate-poll (3)` shard is reported as failed even though the available log tail shows passing tests, leaving the aggregate CI check red without identifying the failure.\n  WHY: The aggregation step exits 1 when any shard fails; reviewers agree this blocks CI but note the available evidence does not establish whether the failure is related to the PR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The review autofix sweep must skip PRs labeled `ai:merge-queued` when `MERGE_TRAIN_ENABLED` is true.\n  expected_change_site: .github/workflows/review_autofix_sweep.yml\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The logic added to `.github/workflows/review_autofix_sweep.yml` (lines 354-361) correctly implements this requirement.\n- requirement: Add changelog fragment for the new functionality.\n  expected_change_site: changelog.d/\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR includes changelog.d/6895-sweep-skips-merge-queued.md.\n- requirement: Update documentation for MERGE_TRAIN_ENABLED.\n  expected_change_site: README.md, agents.md\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: Both README.md and agents.md have been updated to reflect the sweep's new behavior regarding the merge-train.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml | severity=BLOCKER | confidence=5\n  PROBLEM: The orchestrate-poll CI job (shard 3) reported a failure, blocking PR CI. The logs report \"33 passed, 0 failed\" but also emit \"##[error]1 orchestrate-poll shard(s) failed.\"\n  WHY: This indicates a failure in the sharding infrastructure or the test aggregator script, preventing the CI gate from passing.\n- TASK_GAP\n  Requirement: The review autofix sweep must skip PRs labeled `ai:merge-queued` when `MERGE_TRAIN_ENABLED` is true.\n  Expected change site: .github/workflows/review_autofix_sweep.yml\n  Evidence of absence: The logic added to `.github/workflows/review_autofix_sweep.yml` (lines 354-361) correctly implements this requirement.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: Add changelog fragment for the new functionality.\n  Expected change site: changelog.d/\n  Evidence of absence: The PR includes changelog.d/6895-sweep-skips-merge-queued.md.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: Update documentation for MERGE_TRAIN_ENABLED.\n  Expected change site: README.md, agents.md\n  Evidence of absence: Both README.md and agents.md have been updated to reflect the sweep's new behavior regarding the merge-train.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:1416-1442 | severity=BLOCKER | confidence=5\n  PROBLEM: PR-head run 37918843220 reports a failed `orchestrate-poll` shard, but the supplied log tail shows passing tests and does not identify the failed shard\u2019s test or exit reason.\n  WHY: The aggregation step exits 1 when any shard fails, so the aggregate CI check remains red. The available evidence does not establish whether this failure is related to the PR.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n(No findings reported.)\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "e3ac70194656644bb0ef722afed0aa2787058d970fa22269b6fa7756ecc9bc43",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6895,
+    "run_id": "37918868520",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37918868520",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009113849_f00d547ed5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6895,
+    "run_id": "37918868520"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T11:38:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
