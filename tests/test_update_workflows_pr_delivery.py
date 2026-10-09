@@ -220,6 +220,7 @@ esac
 if [ "$1" = "api" ]; then
   case "$2" in
     user) echo "${FAKE_PAT_LOGIN}"; exit 0 ;;
+    */activity*) cat "${FAKE_ACTIVITY_JSON}"; exit 0 ;;
     */compare/*)
       if [ -n "${FAKE_COMPARE_SIDE_EFFECT:-}" ]; then bash -c "${FAKE_COMPARE_SIDE_EFFECT}" >/dev/null 2>&1; fi
       cat "${FAKE_COMPARE_JSON}"; exit 0 ;;
@@ -259,10 +260,11 @@ class Fixture:
 		self.pr_list = self.tmp / "pr_list.json"
 		self.stale_list = self.tmp / "stale_list.json"
 		self.compare = self.tmp / "compare.json"
+		self.activity = self.tmp / "activity.json"
 		self.body_copy = self.tmp / "body_copy.md"
 		self.gh_log = self.tmp / "gh.log"
 		self.output = self.tmp / "github_output"
-		for path in (self.pr_list, self.stale_list):
+		for path in (self.pr_list, self.stale_list, self.activity):
 			path.write_text("[]", encoding="utf-8")
 		self.compare.write_text(json.dumps({"ahead_by": 0, "commits": []}), encoding="utf-8")
 
@@ -297,6 +299,7 @@ class Fixture:
 			"FAKE_PR_LIST": str(self.pr_list),
 			"FAKE_STALE_LIST": str(self.stale_list),
 			"FAKE_COMPARE_JSON": str(self.compare),
+			"FAKE_ACTIVITY_JSON": str(self.activity),
 			"FAKE_COMPARE_SIDE_EFFECT": side_effect,
 			"FAKE_BODY_COPY": str(self.body_copy),
 			"FAKE_PAT_LOGIN": PAT_LOGIN,
@@ -326,6 +329,9 @@ class Fixture:
 		)
 		_git(work, "push", "-q", "origin", f"HEAD:refs/heads/{BRANCH}")
 		return _remote_sha(self.origin, f"refs/heads/{BRANCH}")
+
+	def record_push(self, after: str, login: str = PAT_LOGIN) -> None:
+		self.activity.write_text(json.dumps([{"ref": f"refs/heads/{BRANCH}", "after": after, "activity_type": "push", "actor": {"login": login}}]), encoding="utf-8")
 
 
 needs_jq = pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required by the step body")
@@ -437,6 +443,7 @@ def test_branch_moved_during_run_fails_closed(fx: Fixture) -> None:
 	_git(mover, "add", "-A")
 	_git(mover, "commit", "-q", "-m", "moved")
 	moved_sha = _git(mover, "rev-parse", "HEAD")
+	fx.record_push(fx.base_sha)
 	side_effect = f"git -C '{mover}' push -q -f origin HEAD:refs/heads/{BRANCH}"
 	result = fx.run(side_effect=side_effect)
 	assert result.returncode != 0
@@ -448,12 +455,31 @@ def test_branch_moved_during_run_fails_closed(fx: Fixture) -> None:
 @needs_jq
 def test_existing_updater_branch_is_updated_with_lease(fx: Fixture) -> None:
 	_git(fx.origin, "update-ref", f"refs/heads/{BRANCH}", fx.base_sha)
+	fx.record_push(fx.base_sha)
 	result = fx.run()
 	assert result.returncode == 0, result.stdout + result.stderr
 	pushed = _remote_sha(fx.origin, f"refs/heads/{BRANCH}")
 	assert pushed != fx.base_sha
 	assert fx.outputs()["pushed_sha"] == pushed
 	assert _remote_sha(fx.origin, "refs/heads/main") == fx.base_sha
+
+
+@pytest.mark.parametrize("activity", ["foreign_pusher", "stale_tip", "empty"])
+@needs_jq
+def test_forged_updater_metadata_without_pat_push_fails_closed(fx: Fixture, activity: str) -> None:
+	# Committer email and trailer match the updater, but the authenticated
+	# pusher record does not prove the GH_PAT account wrote the branch tip.
+	forged = fx.seed_branch("github-actions[bot]@users.noreply.github.com", f"forged\n\nUpdater-Release-SHA: {UPSTREAM_SHA}")
+	fx.compare.write_text(json.dumps({"ahead_by": 1, "commits": [{"commit": {"committer": {"email": "github-actions[bot]@users.noreply.github.com"}, "message": f"forged\n\nUpdater-Release-SHA: {UPSTREAM_SHA}"}}]}), encoding="utf-8")
+	if activity == "foreign_pusher":
+		fx.record_push(forged, login="someone")
+	elif activity == "stale_tip":
+		fx.record_push(fx.base_sha)
+	result = fx.run()
+	assert result.returncode != 0
+	assert "reason=foreign_commits_on_branch" in result.stdout
+	assert _remote_sha(fx.origin, f"refs/heads/{BRANCH}") == forged
+	assert not any(call.startswith(("pr create", "pr edit", "pr merge")) for call in fx.gh_calls())
 
 
 @needs_jq

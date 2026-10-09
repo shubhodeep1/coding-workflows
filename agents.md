@@ -1567,7 +1567,10 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   updates` step (`id: commit_push`) never pushes to the default branch: it
   commits to `auto/update-workflows-<release-sha-12>` (never `ai/issue-*`, so
   the merge train ignores it) with a `Updater-Release-SHA:` trailer, pushes
-  with `--force-with-lease`, fails closed on commits it did not write, lints
+  with `--force-with-lease`, fails closed on commits it did not write (an
+  existing branch is replaced only when the repository activity API shows
+  every push to it came from the `GH_PAT` account and the newest produced its
+  tip; committer email and trailer alone are forgeable), lints
   the PR text with `scripts/lint_pr_body_auto_close.py` (now part of the
   attested release manifest), opens or refreshes one PR and enables auto-merge
   bound to the pushed head only for a `verified=true` release. PR calls use

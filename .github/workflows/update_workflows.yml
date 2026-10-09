@@ -952,8 +952,9 @@ jobs:
 
           # GitHub API budget for this path (§14): at most 1 default-branch read
           # (only when the event carries no repository payload), 1 head+base PR
-          # lookup, 1 compare (only when the branch already exists), 1 create or
-          # edit, 1 stale-PR list, 1 user read (only when stale candidates exist),
+          # lookup, 1 compare + 1 user read + 1 branch-activity read (only when the
+          # branch already exists), 1 create or edit, 1 stale-PR list, 1 user read
+          # (only when stale candidates exist and the login is not yet known),
           # one close per stale PR, 1 auto-merge enable.
           BASE="${DEFAULT_BRANCH:-}"
           if [ -z "${BASE}" ]; then
@@ -968,7 +969,7 @@ jobs:
           # Release trailer: the foreign-commit check below accepts only commits
           # that carry it. The direct path above keeps its message unchanged.
           UPDATER_COMMIT_MSG="$(git log -1 --format=%B)"
-          git commit --amend -q -m "${UPDATER_COMMIT_MSG}" -m "Updater-Release-SHA: ${UPSTREAM_SHA}"
+          git commit --amend -q -m "${UPDATER_COMMIT_MSG}" -m "Updater-Release-SHA: ${UPSTREAM_SHA}" || pr_fail commit_amend_failed
           PUSHED_SHA="$(git rev-parse HEAD)"
 
           TAG_TEXT="${RELEASE_TAG:-}"
@@ -1081,6 +1082,25 @@ jobs:
             ' >/dev/null 2>&1; then
               pr_fail foreign_commits_on_branch
             fi
+            # Committer email and trailer are git metadata anyone with push
+            # access can forge, so they only pre-filter. The proof is the
+            # authenticated pusher: every push recorded for this branch (repository
+            # activity API, newest first) must come from the GH_PAT account the
+            # checkout pushes with, and the newest one must have produced
+            # REMOTE_SHA. A full page (possible older history) or any lookup error
+            # fails closed.
+            PAT_LOGIN="$(gh api user --jq .login 2>/dev/null)" || PAT_LOGIN=""
+            [ -n "${PAT_LOGIN}" ] || pr_fail branch_pusher_unverified
+            ACTIVITY_JSON="$(gh api "repos/${GITHUB_REPOSITORY}/activity?ref=refs/heads/${BRANCH}&per_page=100" 2>/dev/null)" || pr_fail branch_pusher_unverified
+            if ! printf '%s' "${ACTIVITY_JSON}" | jq -e --arg login "${PAT_LOGIN}" --arg sha "${REMOTE_SHA}" --arg ref "refs/heads/${BRANCH}" '
+              type == "array"
+              and length > 0
+              and length < 100
+              and .[0].after == $sha
+              and all(.[]; (.actor.login // "") == $login and (.ref // "") == $ref)
+            ' >/dev/null 2>&1; then
+              pr_fail foreign_commits_on_branch
+            fi
             git fetch --no-tags --depth 1 origin "refs/heads/${BRANCH}" >/dev/null 2>&1 || pr_fail remote_lookup_failed
             [ "$(git rev-parse FETCH_HEAD)" = "${REMOTE_SHA}" ] || pr_fail lease_mismatch_or_push_rejected
             if [ "$(git rev-parse 'FETCH_HEAD^{tree}')" = "$(git rev-parse 'HEAD^{tree}')" ]; then
@@ -1107,7 +1127,7 @@ jobs:
           if STALE_JSON="$(gh pr list --repo "${GITHUB_REPOSITORY}" --base "${BASE}" --state open --search "head:auto/update-workflows-" --limit 50 --json number,url,headRefName,isCrossRepository,author 2>/dev/null)"; then
             STALE_CANDIDATES="$(printf '%s' "${STALE_JSON}" | jq -r --arg b "${BRANCH}" '.[] | select(.isCrossRepository == false and (.headRefName | test("^auto/update-workflows-[0-9a-f]{12}$")) and .headRefName != $b) | "\(.number) \(.author.login // "")"' 2>/dev/null)" || STALE_CANDIDATES=""
             if [ -n "${STALE_CANDIDATES}" ]; then
-              if PAT_LOGIN="$(gh api user --jq .login 2>/dev/null)" && [ -n "${PAT_LOGIN}" ]; then
+              if { [ -n "${PAT_LOGIN:-}" ] || PAT_LOGIN="$(gh api user --jq .login 2>/dev/null)"; } && [ -n "${PAT_LOGIN}" ]; then
                 while read -r stale_number stale_author; do
                   [[ "${stale_number}" =~ ^[0-9]+$ ]] || continue
                   [ "${stale_author}" = "${PAT_LOGIN}" ] || continue
