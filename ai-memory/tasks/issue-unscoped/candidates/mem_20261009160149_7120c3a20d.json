@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/workflow_failure_heal.py: 3390-3408, 3415-3423 | severity=high | confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, qwen_qwen3_7-plus]\n  PROBLEM: With `--ref`, scope rendering searches test files by log-reported test name and maps matching file stems to subject paths, potentially widening the frozen heal scope to unrelated scripts or workflows.\n  WHY: The log-reported test file is discarded, so a matching test in a PR-controlled or previously merged test file can cause its stem-mapped subject paths to enter the heal scope even though the failure did not establish that those subjects caused it.\n- scripts/workflow_failure_heal_intake.sh: 1019-1037 | confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The intake assumes failing-test logs are available in the standard log directory format and contain recognizable test-name patterns.\n  WHY: A change in runner log formatting or non-standard test reporting may cause failing tests to go undetected, silently reducing the edit scope to its pre-widening state.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: A CI heal may now fix the code its failing tests cover.\n  expected_change_site: scripts/workflow_failure_heal.py, scripts/workflow_failure_heal_intake.sh\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The implementation maps test file stems to subjects in scripts/*.sh, scripts/*.py, and .github/workflows/*.yml, so tests/test_foo.py that covers scripts/bar.sh will not map to that subject.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM deepseek_deepseek-v4-pro ===\n(No findings reported.)\n=== END FINDINGS FROM deepseek_deepseek-v4-pro ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/workflow_failure_heal.py: 3409-3423 | severity=high | confidence=5\n  PROBLEM: The automatic scope widening based on log-reported test names blindly trusts the test names found in the logs to resolve to the test file and subsequently maps its stem to subjects, potentially including unrelated files if they share a naming pattern.\n  WHY: A PR can introduce a log line reporting a test failure with a name that is not actually failing or is named similarly to a target file (e.g., test_target.py and scripts/target.py), causing the automation to include scripts/target.py in the frozen edit scope even when that code was not implicated in a genuine failure.\n- scripts/workflow_failure_heal_intake.sh: 1019-1037\n  PROBLEM: The script now assumes failing test logs are always available in the standard log directory format and that they contain specific, recognizable patterns for test names.\n  WHY: If the runner environment changes how it formats log files, or if a failing test uses a non-standard reporting format, this automation will fail to detect any failing tests, silently reducing the edit scope back to the pre-widening state.\n- TASK_GAP\n  Requirement: A CI heal may now fix the code its failing tests cover.\n  Expected change site: scripts/workflow_failure_heal.py, scripts/workflow_failure_heal_intake.sh\n  Evidence of absence: The current implementation relies on a heuristic mapping from test file stems to subject files (scripts/*.sh, scripts/*.py, .github/workflows/*.yml). This mapping is inherently incomplete and will miss subjects that do not follow this strict naming convention (e.g., a test file `tests/test_foo.py` that covers `scripts/bar.sh`).\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/workflow_failure_heal.py: 3417-3423, 3390-3406, 2094-2122 | severity=high | confidence=4\n  PROBLEM: The `heal-scope render` `--ref` path replaces the log-reported test file list with the result of `_heal_test_files_for_names`, which `git grep`s every `tests/` file at the scope ref for each log-reported test name and returns any file that defines that name.\n  WHY: A merged PR can add a test whose filename stem maps through `heal_scope_test_subjects` to script or workflow subject files; if a real CI failure later shares that test name, the heal scope can widen to those subjects even though the failure did not establish any link to them.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/workflow_failure_heal.py: 3393-3405, 3423 | severity=high | confidence=4\n  PROBLEM: With `--ref`, scope rendering searches every `tests/` file for each log-reported test name, then uses each matching file\u2019s stem to add subject paths. The test file reported by the log is discarded.\n  WHY: PR-controlled test output can report a failing test name that the PR defines in a file named for an existing script or workflow, causing the global search to add that subject to the frozen heal scope even though the log did not establish that the subject caused the failure.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM qwen_qwen3_7-plus ===\n- scripts/workflow_failure_heal.py: `_heal_test_files_for_names` (lines 3393-3408) and `_cmd_heal_scope` render branch (lines 3415-3423) | severity=high | confidence=4\n  PROBLEM: When `--ref` is set, the renderer discards the log-reported test files and searches every `tests/` file at the scope ref for each log-reported test name, then maps every match's filename stem to script and workflow paths. For consumer PRs, the intake resolves the scope against the PR head commit, which the PR controls.\n  WHY: A PR can add or edit a test file named `tests/test_<target>.py` that defines a test which fails in the CI run; the renderer's global `git grep` finds the test in the PR-controlled file at the PR head and stem mapping adds subject paths to the frozen heal scope even though the failure did not establish that the target file caused it.\n=== END FINDINGS FROM qwen_qwen3_7-plus ===",
+  "fingerprint": "9255926d21f03ab68d31032c72a72c50c0bb7cd729d21b804ea0ca5f5f1004e5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 6947,
+    "run_id": "37951550209",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37951550209",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261009160149_7120c3a20d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 6947,
+    "run_id": "37951550209"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-10-09T16:01:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
