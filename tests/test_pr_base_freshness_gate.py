@@ -286,6 +286,7 @@ printf 'rc=%s outcome=%s\\n' "${{rc}}" "${{PR_CHECKS_WAIT_OUTCOME}}"
 GREEN = _runs(("CI", "completed", "success"), ("lint", "completed", "success"), ("review / gate", "completed", "success"))
 RED = _runs(("CI", "completed", "failure"), ("lint", "completed", "success"), ("review / gate", "completed", "success"))
 RUNNING = _runs(("CI", "in_progress", ""), ("lint", "completed", "success"), ("review / gate", "completed", "success"))
+EMPTY = json.dumps([{"check_runs": []}])
 RUNNING_SELF_ONLY = json.dumps([{"check_runs": [
 	{"name": "CI", "status": "completed", "conclusion": "success", "details_url": "https://github.com/o/r/actions/runs/999/job/1"},
 	{"name": "review / codex-agent", "status": "in_progress", "conclusion": None, "details_url": "https://github.com/o/r/actions/runs/4242/job/7"},
@@ -334,6 +335,18 @@ class RequiredChecksWait(unittest.TestCase):
 		self.assertEqual(rc, 0)
 		self.assertIn("outcome=ok waited_s=1", out)
 
+	def test_no_registered_check_runs_waits_for_ci_to_register(self) -> None:
+		"""A fresh push with no check-runs yet must not read as green."""
+		rc, out = _wait([EMPTY, RUNNING, RED])
+		self.assertEqual(rc, 1)
+		self.assertIn("no check-runs registered", out)
+		self.assertIn("outcome=failed waited_s=2", out)
+
+	def test_no_check_runs_at_all_proceeds_after_the_grace(self) -> None:
+		rc, out = _wait([EMPTY])
+		self.assertEqual(rc, 0)
+		self.assertIn("outcome=ok waited_s=2", out)
+
 	def test_allow_all_sentinel_proceeds(self) -> None:
 		rc, out = _wait([RED], env={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": ""})
 		self.assertEqual(rc, 0)
@@ -357,6 +370,18 @@ class RequiredChecksWiring(unittest.TestCase):
 	def test_codex_agent_auto_merge_step_passes_the_wait_variables(self) -> None:
 		text = WORKFLOW.read_text(encoding="utf-8")
 		step = text.split("- name: Enable auto-merge on PR", 1)[1].split("- name: ", 1)[0]
+		self.assertIn("AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}", step)
+		self.assertIn("AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}", step)
+
+	def test_freshness_is_rechecked_after_a_wait_on_every_auto_merge_path(self) -> None:
+		job = WORKFLOW.read_text(encoding="utf-8").split("  deterministic-skip-merge:", 1)[1].split("\n  claude-fixer-auto-merge:", 1)[0]
+		self.assertEqual(job.count('elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null && ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${PR_HEAD_SHA}" ""; then'), 2)
+		judge = RB_JUDGE.read_text(encoding="utf-8")
+		self.assertEqual(judge.count('elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \\\n          && ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge'), 2)
+
+	def test_review_blocked_judge_step_passes_the_wait_variables(self) -> None:
+		text = WORKFLOW.read_text(encoding="utf-8")
+		step = text.split("JUDGE_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_REVIEW_BLOCKED_JUDGE", 1)[1][:1500]
 		self.assertIn("AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}", step)
 		self.assertIn("AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}", step)
 

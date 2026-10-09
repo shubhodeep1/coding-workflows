@@ -2056,6 +2056,11 @@ case "${RB_ACTION}" in
           echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, merge deferred to the synchronize run."
         elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           echo "::warning::Review-blocked judge: required check-runs on ${RB_JUDGED_HEAD_SHA:0:7} are ${PR_CHECKS_WAIT_OUTCOME:-unknown}; not enabling auto-merge and withholding ai:ready-to-merge."
+        elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
+          && ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+          # The wait can take minutes and --match-head-commit binds only the
+          # head: re-check that the base did not move under this PR meanwhile.
+          echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches during the checks wait; branch update requested, merge deferred."
         else
           review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
           if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null \
@@ -2114,6 +2119,11 @@ case "${RB_ACTION}" in
           echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, terminal merge deferred to the synchronize run."
         elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_wait_for_required_checks "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           echo "::warning::Review-blocked judge: required check-runs on ${RB_JUDGED_HEAD_SHA:0:7} are ${PR_CHECKS_WAIT_OUTCOME:-unknown}; not enabling the terminal auto-merge and withholding ai:ready-to-merge."
+        elif [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
+          && ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+          # The wait can take minutes and --match-head-commit binds only the
+          # head: re-check that the base did not move under this PR meanwhile.
+          echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches during the checks wait; branch update requested, merge deferred."
         else
           review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
           if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>/dev/null \

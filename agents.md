@@ -961,8 +961,11 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   is 0 while the gate still blocks) or a timeout; a failed query is retried
   until the budget is spent. It logs
   `AUTOFIX_AUTO_MERGE_CHECKS pr=<n> head_sha=<sha> outcome=<...>`, and a
-  missing library fails the wait closed. After a wait that actually polled,
-  `review_enable_auto_merge.sh` re-checks freshness before merging. The
+  missing library fails the wait closed. A head with no check-runs yet
+  (`PR_CHECKS_LAST_TOTAL=0`) is polled two more intervals before it counts
+  as green. After a wait that actually polled, every caller
+  (`review_enable_auto_merge.sh`, the `deterministic-skip-merge` job and
+  the judge) re-checks freshness before merging. The
   orchestrator's direct merges already gated on `_pr_checks_completed`.
 - **Dependencies.** `codex_isolated_exec.sh prepare --deps` (implement) installs
   dependencies once per job. The network-isolated, credential-free container sees

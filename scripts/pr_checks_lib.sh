@@ -52,6 +52,9 @@
 #                            the head (self-run excluded). Read by
 #                            _pr_wait_for_required_checks to tell a
 #                            settled failure from a pending one.
+#   PR_CHECKS_LAST_TOTAL   — set by _pr_checks_completed when it reads the
+#                            check-runs: total non-self check-runs on the
+#                            head (0 = none registered yet).
 
 # Built-in default required-check set. Defined set-if-unset so a caller
 # that already declared it (the orchestrator does, near
@@ -149,6 +152,7 @@ _pr_checks_completed()
 {
 	PR_CHECKS_LAST_REASON="query_failed"
 	PR_CHECKS_LAST_PENDING=0
+	PR_CHECKS_LAST_TOTAL=""
 	local pr_number="$1"
 	local head_sha="${2:-}"
 	local base_ref="${3:-}"
@@ -275,6 +279,16 @@ _pr_checks_completed()
 		) | [.[] | select(.status != "completed" and (_is_self_check_run | not))] | length
 	' 2>/dev/null | tail -n1)"
 	[[ "${PR_CHECKS_LAST_PENDING}" =~ ^[0-9]+$ ]] || PR_CHECKS_LAST_PENDING=0
+	# Total non-self check-runs on the head: 0 on a fresh push means CI has
+	# not registered yet, which the wait must not read as green.
+	PR_CHECKS_LAST_TOTAL="$(printf '%s' "${check_runs_json}" | jq -r --arg self_run "${self_run}" '
+		def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
+		(
+			if (type == "array") then [.[]? | (.check_runs // [])[]]
+			elif (type == "object" and (.check_runs | type == "array")) then .check_runs
+			else [] end
+		) | [.[] | select(_is_self_check_run | not)] | length
+	' 2>/dev/null | tail -n1)"
 
 	if [ "${incomplete}" -gt 0 ]; then
 		if [ "${required_names_csv}" = "*" ]; then
@@ -340,6 +354,17 @@ _pr_wait_for_required_checks()
 			_pr_checks_completed "${pr_number}" "${head_sha}" "${base_ref}" >/dev/null || rc=$?
 		case "${PR_CHECKS_LAST_REASON}" in
 			ok|allow_all)
+				# No check-run registered yet (fresh push, CI not queued): poll up
+				# to two more intervals before reading "none" as green. A repo
+				# with no CI at all still proceeds once that grace is spent.
+				if [ "${PR_CHECKS_LAST_REASON}" = "ok" ] && [ "${PR_CHECKS_LAST_TOTAL:-1}" = "0" ] \
+					&& [ "${waited}" -lt $((poll_seconds * 2)) ] && [ "${waited}" -lt $((max_minutes * 60)) ]; then
+					echo "  [check-runs] PR #${pr_number}: no check-runs registered on ${head_sha:0:7} yet; waiting ${poll_seconds}s for CI to register."
+					sleep "${poll_seconds}"
+					waited=$((waited + poll_seconds))
+					PR_CHECKS_WAIT_WAITED_S="${waited}"
+					continue
+				fi
 				PR_CHECKS_WAIT_OUTCOME="${PR_CHECKS_LAST_REASON}"
 				echo "AUTOFIX_AUTO_MERGE_CHECKS pr=${pr_number} head_sha=${head_sha:-unknown} outcome=${PR_CHECKS_WAIT_OUTCOME} waited_s=${waited} pending=0"
 				return 0
@@ -361,7 +386,7 @@ _pr_wait_for_required_checks()
 				;;
 			*)
 				PR_CHECKS_WAIT_OUTCOME="${PR_CHECKS_LAST_REASON:-query_failed}"
-				echo "AUTOFIX_AUTO_MERGE_CHECKS pr=${pr_number} head_sha=${head_sha:-unknown} outcome=${PR_CHECKS_WAIT_OUTCOME} waited_s=${waited} pending=${PR_CHECKS_LAST_PENDING:-0}"
+				echo "::warning::AUTOFIX_AUTO_MERGE_CHECKS pr=${pr_number} head_sha=${head_sha:-unknown} outcome=${PR_CHECKS_WAIT_OUTCOME} waited_s=${waited} pending=${PR_CHECKS_LAST_PENDING:-0}"
 				return 1
 				;;
 		esac
