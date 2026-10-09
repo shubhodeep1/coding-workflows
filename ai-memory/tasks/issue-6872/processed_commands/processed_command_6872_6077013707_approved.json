@@ -5,13 +5,26 @@
   "entry_id": "processed_command_6872_6077013707_approved",
   "issue_number": 6872,
   "metadata": {
+    "branch": "ai/issue-6872",
+    "changed_files": [
+      ".github/workflows/orchestrate_poll.yml",
+      ".github/workflows/review_autofix.yml",
+      "changelog.d/6872-advance-install-opencode-pin.md",
+      "tests/test_orchestrator_judges_claude_engine.py",
+      "tests/test_review_autofix_review_pipeline_contract.py"
+    ],
+    "issue_number": 6872,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/6872",
+    "pr_number": 6875,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/6875",
+    "run_attempt": "1",
+    "run_id": "37902946479",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/37902946479"
   },
   "run_attempt": 1,
   "run_id": "37902946479",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-10-09T08:09:37Z",
+  "status": "completed",
+  "timestamp": "2026-10-09T08:22:22Z",
   "workflow": "implement"
 }
