@@ -1260,6 +1260,14 @@ def test_unlabeled_failed_project_still_closes(tmp_path: Path) -> None:
 	assert "verdict=close round=3 outcome=acted" in result.stdout, result.stderr
 	assert state["item_comments_reads"] == 3
 	assert state["comments"][0]["body"].splitlines()[-1].startswith("<!-- ai:unblock:v1")
+	# Every round is spent: the project is parked (needs-human digest), not closed.
+	assert [label for _, label in state["labels_added"]] == ["ai:needs-human"]
+	assert not any(fields.get("state") == "closed" for _, fields in state["patched"])
+	# The legacy close (kill switch) still adds the terminal label after the same recheck.
+	result, state = _judge(tmp_path, project, comments=_terminal_markers() + [_project_state_comment("failed")],
+		verdict={"verdict": "close", "reason": "still failed"}, NEEDS_HUMAN_DIGEST_ENABLED="false")
+	assert "verdict=close round=3 outcome=acted" in result.stdout, result.stderr
+	assert state["item_comments_reads"] == 3
 	assert any(label == "ai:unblock-closed" for _, label in state["labels_added"])
 
 
@@ -1307,7 +1315,7 @@ def test_labeled_project_is_not_subject_to_failed_state_check(tmp_path: Path) ->
 		verdict={"verdict": "close", "reason": "stop remains"})
 	assert "verdict=close round=3 outcome=acted" in result.stdout, result.stderr
 	assert state["item_comments_reads"] == 1
-	assert any(label == "ai:unblock-closed" for _, label in state["labels_added"])
+	assert any(label == "ai:needs-human" for _, label in state["labels_added"])
 
 
 def test_unlabeled_project_recheck_failure_skips_actuation(tmp_path: Path) -> None:
@@ -1504,7 +1512,8 @@ def test_reissue_does_not_close_pr_when_issue_creation_fails(tmp_path: Path) -> 
 
 def test_security_close_keeps_issue_open_and_extracts_first_finding_marker(tmp_path: Path) -> None:
 	item = dict(ISSUE, labels=ISSUE["labels"] + [{"name": "ai:security"}], body="<!-- ai:security-finding:abc-1 -->\n<!-- ai:security-finding:second -->")
-	result, state = _judge(tmp_path, item, comments=_terminal_markers(), verdict={"verdict": "close", "reason": "nothing left"})
+	result, state = _judge(tmp_path, item, comments=_terminal_markers(), verdict={"verdict": "close", "reason": "nothing left"},
+		NEEDS_HUMAN_DIGEST_ENABLED="false")
 	assert "verdict=close round=3 outcome=acted" in result.stdout, result.stderr
 	assert not any(fields.get("state") == "closed" for _, fields in state["patched"])
 	assert [label for _, label in state["labels_added"]] == ["ai:unblock-closed"]
@@ -1523,7 +1532,7 @@ def test_security_close_alerts_even_when_terminal_label_fails(tmp_path: Path) ->
 	alerts = tmp_path / "alerts.txt"
 	item = dict(ISSUE, labels=ISSUE["labels"] + [{"name": "ai:security"}])
 	result, state = _judge(tmp_path, item, comments=_terminal_markers(), verdict={"verdict": "close", "reason": "nothing left"},
-		SUPPORT_DIR=str(support), FAKE_GH_FAIL_LABEL="1", FAKE_TG_ALERTS=str(alerts))
+		SUPPORT_DIR=str(support), FAKE_GH_FAIL_LABEL="1", FAKE_TG_ALERTS=str(alerts), NEEDS_HUMAN_DIGEST_ENABLED="false")
 	assert "reason=actuation_failed" in result.stdout
 	assert not any(fields.get("state") == "closed" for _, fields in state["patched"])
 	assert "kept security finding #7 open" in alerts.read_text(encoding="utf-8")
@@ -1908,7 +1917,8 @@ def test_comment_fetch_failure_does_not_reset_the_ledger(tmp_path: Path) -> None
 
 
 def test_failed_close_does_not_add_terminal_label(tmp_path: Path) -> None:
-	result, state = _judge(tmp_path, ISSUE, comments=_terminal_markers(), verdict={"verdict": "close", "reason": "nothing left"}, FAKE_GH_FAIL_CLOSE="1")
+	result, state = _judge(tmp_path, ISSUE, comments=_terminal_markers(), verdict={"verdict": "close", "reason": "nothing left"}, FAKE_GH_FAIL_CLOSE="1",
+		NEEDS_HUMAN_DIGEST_ENABLED="false")
 	assert "op=close issue=7 outcome=failed" in result.stdout
 	assert "reason=actuation_failed" in result.stdout
 	assert state["labels_added"] == []
@@ -2001,14 +2011,14 @@ def test_closed_item_still_alerts_when_terminal_label_fails(tmp_path: Path) -> N
 	)
 	alerts = tmp_path / "alerts.txt"
 	result, state = _judge(tmp_path, ISSUE, comments=_terminal_markers(), verdict={"verdict": "close", "reason": "nothing left"},
-		SUPPORT_DIR=str(support), FAKE_GH_FAIL_LABEL="1", FAKE_TG_ALERTS=str(alerts))
+		SUPPORT_DIR=str(support), FAKE_GH_FAIL_LABEL="1", FAKE_TG_ALERTS=str(alerts), NEEDS_HUMAN_DIGEST_ENABLED="false")
 	assert "op=add_labels issue=7 label=ai:unblock-closed outcome=failed" in result.stdout
 	assert "reason=actuation_failed" in result.stdout
 	assert any(fields.get("state") == "closed" for _, fields in state["patched"])
 	assert state["labels_added"] == []
 	assert alerts.read_text(encoding="utf-8").splitlines() == ["CRITICAL"]
 	result, _ = _judge(tmp_path, ISSUE, comments=_terminal_markers(), verdict={"verdict": "close", "reason": "nothing left"},
-		SUPPORT_DIR=str(support), FAKE_GH_FAIL_CLOSE="1", FAKE_TG_ALERTS=str(alerts))
+		SUPPORT_DIR=str(support), FAKE_GH_FAIL_CLOSE="1", FAKE_TG_ALERTS=str(alerts), NEEDS_HUMAN_DIGEST_ENABLED="false")
 	assert "reason=actuation_failed" in result.stdout
 	assert alerts.read_text(encoding="utf-8").splitlines() == ["CRITICAL"]
 
@@ -2026,7 +2036,7 @@ def test_project_label_failure_sends_critical_without_claiming_it_closed(tmp_pat
 	alerts = tmp_path / "alerts.txt"
 	project = dict(ISSUE, labels=ISSUE["labels"] + [{"name": "ai:orchestrator-tracking"}])
 	result, state = _judge(tmp_path, project, comments=_terminal_markers(), verdict={"verdict": "close", "reason": "nothing left"},
-		SUPPORT_DIR=str(support), FAKE_GH_FAIL_LABEL="1", FAKE_TG_ALERTS=str(alerts))
+		SUPPORT_DIR=str(support), FAKE_GH_FAIL_LABEL="1", FAKE_TG_ALERTS=str(alerts), NEEDS_HUMAN_DIGEST_ENABLED="false")
 	assert "op=add_labels issue=7 label=ai:unblock-closed outcome=failed" in result.stdout
 	assert "reason=actuation_failed" in result.stdout
 	assert state["patched"] == []
@@ -2156,9 +2166,13 @@ def _terminal_decision(**extra) -> dict:
 def test_needs_human_validate_adds_terminal_reason_only_when_terminal() -> None:
 	forced = ledger.validate({"verdict": "close", "reason": "Terminal: item_cap"}, _terminal_decision(), "acme/app")
 	assert forced["terminal_reason"] == "item_cap"
-	chosen = ledger.validate({"verdict": "close", "reason": "nothing left"},
+	# A non-terminal round never carries terminal_reason (and refuses `close`, #6557).
+	chosen = ledger.validate({"verdict": "retry_budget", "reason": "retry", "instructions": "try again"},
 		_terminal_decision(terminal=False, terminal_reason="", allowed=["retry_budget", "close"]), "acme/app")
 	assert "terminal_reason" not in chosen
+	with pytest.raises(ledger.UsageError):
+		ledger.validate({"verdict": "close", "reason": "nothing left"},
+			_terminal_decision(terminal=False, terminal_reason="", allowed=["retry_budget", "close"]), "acme/app")
 
 
 @pytest.mark.parametrize("kind,stop,labels", [

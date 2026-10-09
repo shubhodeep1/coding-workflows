@@ -2880,7 +2880,9 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'REVIEWER_FAILBACK:' in reviewers
 	assert 'reviewer_record_health_outcome' in reviewers
 
-	assert 'opencode_run_cmd "$@"' in summariser
+	assert 'opencode_run_cmd' not in summariser
+	assert 'bash "${summariser_sandbox_sh}" run' in summariser
+	assert '"${sandbox_engine}" SUMMARISER read' in summariser
 	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in summariser
 	assert 'OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR}/write_opencode_config.sh}"' in summariser
 	assert 'opencode_emit_failure_alert review_summariser reviewer "${SUMMARISER_MODEL}" 1 config_writer_missing' in summariser
@@ -2900,7 +2902,7 @@ def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
 	assert 'CONSOLIDATOR_ISOLATION outcome=skipped reason=%s' in consolidate
 	sandbox = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
 	assert '"RB_JUDGE", "REVIEW_CONSOLIDATOR"' in sandbox
-	assert 'RB_JUDGE|REVIEW_CONSOLIDATOR|SUMMARISER|BEHAVIOURAL_SMOKE)' in sandbox
+	assert 'RB_JUDGE|REVIEW_CONSOLIDATOR|SUMMARISER|BEHAVIOURAL_SMOKE|JUDGE_INTERIM)' in sandbox
 	assert 'opencode_source_mount+=\',readonly\'' in sandbox
 	assert 'opencode_agent=reviewer' in sandbox
 	assert 'LOG_PREFIX.name=CONSOLIDATOR_ISOLATION' in (REPO_ROOT / "agents.md").read_text(encoding="utf-8")

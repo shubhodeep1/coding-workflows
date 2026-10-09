@@ -156,12 +156,33 @@ except ValueError:
 PY
 }
 
+# Re-reads a project-failed fallback's trusted state directly before a
+# terminal label (ai:unblock-closed or the needs-human park) is applied.
+# Returns 1, after logging, unless the project is still failed.
+unblock_project_terminal_recheck()
+{
+	local recheck_op="$1" terminal_project_status
+	if ! unblock_fetch_comments "${ITEM}" "${RUNTIME_DIR}/item_comments_terminal.json"; then
+		unblock_log "item=${ITEM} kind=project op=${recheck_op} outcome=skip reason=project_state_terminal_recheck_unavailable"
+		return 1
+	fi
+	if ! terminal_project_status="$(unblock_trusted_project_status "${RUNTIME_DIR}/item_comments_terminal.json" "${RUNTIME_DIR}/project_state_trusted.json")"; then
+		unblock_log "item=${ITEM} kind=project op=${recheck_op} outcome=skip reason=project_state_terminal_unverified"
+		return 1
+	fi
+	if [ "${terminal_project_status}" != "failed" ]; then
+		unblock_log "item=${ITEM} kind=project op=${recheck_op} outcome=skip reason=project_state_changed_before_terminal_label status=$(printf '%s' "${terminal_project_status}" | tr -cd 'a-z_-' | cut -c1-40)"
+		return 1
+	fi
+	return 0
+}
+
 # Runs the operations of unblock_actions.py output, in order. A failed
 # operation is logged and the rest still run, except a failed prerequisite
 # must not close an item, and a failed close must not add the terminal label.
 unblock_run_ops()
 {
-	local ops_file="$1" project_failed_guard="${2:-false}" count idx op issue number created body label close_failed="false" close_succeeded="false" ops_failed="false" terminal_project_status unblock_removed_guard=""
+	local ops_file="$1" project_failed_guard="${2:-false}" count idx op issue number created body label close_failed="false" close_succeeded="false" ops_failed="false" unblock_removed_guard=""
 	count="$(jq '.ops | length' "${ops_file}" 2>/dev/null || echo 0)"
 	for ((idx = 0; idx < count; idx++)); do
 		op="$(jq -r ".ops[${idx}].op" "${ops_file}")"
@@ -196,18 +217,7 @@ unblock_run_ops()
 						ensure_label_exists "${label}" "${REPOSITORY}" >/dev/null 2>&1 || true
 					fi
 					if [ "${project_failed_guard}" = "true" ] && [ "${label}" = "ai:unblock-closed" ]; then
-						if ! unblock_fetch_comments "${ITEM}" "${RUNTIME_DIR}/item_comments_terminal.json"; then
-							unblock_log "item=${ITEM} kind=project op=add_labels outcome=skip reason=project_state_terminal_recheck_unavailable"
-							return 1
-						fi
-						if ! terminal_project_status="$(unblock_trusted_project_status "${RUNTIME_DIR}/item_comments_terminal.json" "${RUNTIME_DIR}/project_state_trusted.json")"; then
-							unblock_log "item=${ITEM} kind=project op=add_labels outcome=skip reason=project_state_terminal_unverified"
-							return 1
-						fi
-						if [ "${terminal_project_status}" != "failed" ]; then
-							unblock_log "item=${ITEM} kind=project op=add_labels outcome=skip reason=project_state_changed_before_terminal_label status=$(printf '%s' "${terminal_project_status}" | tr -cd 'a-z_-' | cut -c1-40)"
-							return 1
-						fi
+						unblock_project_terminal_recheck add_labels || return 1
 					fi
 					gh api -X POST "repos/${REPOSITORY}/issues/${issue}/labels" -f "labels[]=${label}" >/dev/null 2>&1 \
 						|| { ops_failed="true"; unblock_log "item=${ITEM} op=add_labels issue=${issue} label=${label} outcome=failed"; }
@@ -354,6 +364,15 @@ PY
 					--reason "$(jq -r ".ops[${idx}].reason" "${ops_file}")" --link "${UNBLOCK_VERDICT_URL:-}" --trusted-login "${UNBLOCK_LOGIN}")
 				if [ "${issue}" = "${ITEM}" ] && jq -e 'index("ai:needs-human") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1; then
 					park_args+=(--item-labeled)
+				fi
+				if [ "${project_failed_guard}" = "true" ] && [ "${issue}" = "${ITEM}" ]; then
+					# Same late-resume guard as ai:unblock-closed: the poller may have
+					# resumed the project after the earlier recheck, and parking adds
+					# ai:needs-human, which would leave the resumed project blocked.
+					if declare -F ensure_label_exists >/dev/null 2>&1; then
+						ensure_label_exists "ai:needs-human" "${REPOSITORY}" >/dev/null 2>&1 || true
+					fi
+					unblock_project_terminal_recheck needs_human || return 1
 				fi
 				if unblock_py "${SUPPORT_DIR}/scripts/operator_step_issue.py" "${park_args[@]}" > "${RUNTIME_DIR}/needs_human_park.json"; then
 					if jq -e '.newly_parked == true' "${RUNTIME_DIR}/needs_human_park.json" >/dev/null 2>&1; then

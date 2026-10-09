@@ -72,6 +72,9 @@ SUMMARIZER_TELEMETRY_OP = "summarize_unselected_runs"
 # call, so its per-run timeout never drops below this floor.
 LOG_SUMMARY_ROLE = "LOG_SUMMARY"
 CLAUDE_ENGINE_EXIT_FALLBACK = 75
+# A refused (non-capacity) fallback under AI_ENGINE_FALLBACK_POLICY=capacity
+# (scripts/ai_engine.sh, plan item 3e): OpenRouter must not run for it.
+CLAUDE_ENGINE_EXIT_REFUSED = 76
 CLAUDE_ENGINE_MIN_TIMEOUT_SECONDS = 300
 CLAUDE_ENGINE_RESOLVE_TIMEOUT_SECONDS = 60
 # Never passed to the Claude child process (the host relay holds the Claude
@@ -467,6 +470,10 @@ class ClaudeEngineUnavailable(RuntimeError):
 	"""claude_run exited 75: Claude is unavailable, use the OpenRouter path."""
 
 
+class ClaudeEngineRefused(RuntimeError):
+	"""claude_run exited 76: a refused (non-capacity) fallback; never use OpenRouter."""
+
+
 def resolve_engine_script(support_dir: str | None) -> Path | None:
 	"""The trusted ``scripts/ai_engine.sh`` under ``support_dir``, or None.
 
@@ -571,6 +578,8 @@ class ClaudeEngineSummarizer:
 				raise RuntimeError(f"claude_run could not start: {exc}") from exc
 			if result.returncode == CLAUDE_ENGINE_EXIT_FALLBACK:
 				raise ClaudeEngineUnavailable("claude_run exited 75")
+			if result.returncode == CLAUDE_ENGINE_EXIT_REFUSED:
+				raise ClaudeEngineRefused("claude_run exited 76")
 			if result.returncode != 0:
 				raise RuntimeError(f"claude_run exited {result.returncode}")
 			try:
@@ -692,6 +701,7 @@ def main(argv: list[str] | None = None) -> int:
 		"skipped_summary_error": 0,
 		"skipped_budget_exhausted": 0,
 		"skipped_disabled": 0,
+		"skipped_engine_refused": 0,
 		"tokens_used": 0,
 		"model": model,
 		"started_at": datetime.now(timezone.utc).isoformat(),
@@ -812,6 +822,17 @@ def main(argv: list[str] | None = None) -> int:
 					break
 				summarizer = _openrouter_summarizer()
 				summary, tokens_used = summarizer.summarize(run, logs_text)
+		except ClaudeEngineRefused:
+			# Every later run would be refused the same way, and the policy
+			# forbids the OpenRouter fallback: stop and surface the refusal
+			# loudly. The script stays fail-open (exit 0) because mini
+			# summaries are advisory input to the analysis pass.
+			print(
+				f"::error::AI_ENGINE_FALLBACK_REFUSED role={LOG_SUMMARY_ROLE} surfaced=summarize_unselected_runs; remaining summaries skipped",
+				file=sys.stderr,
+			)
+			stats["skipped_engine_refused"] += len(targets) - index
+			break
 		except Exception as exc:  # noqa: BLE001 — fail-open per run
 			_warn(f"mini summary failed for {repository}#{run_id}: {exc}")
 			stats["skipped_summary_error"] += 1

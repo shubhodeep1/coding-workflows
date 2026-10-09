@@ -858,6 +858,7 @@ jobs:
           config_path: .codex-workflow-src/.github/ai/claude_engine.json
 
       - name: Resolve Claude credential
+        id: claude_pool
         if: steps.ai_engine.outputs.engine == 'claude'
         continue-on-error: true
         uses: ./.codex-workflow-src/.github/actions/claude-pool-token
@@ -885,8 +886,11 @@ jobs:
           # Codex version baked into the isolated verifier image (scripts/codex_isolated_exec.sh).
           CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
-          AI_ENGINE_ACTIVATION_VERIFY: ${{ vars.AI_ENGINE_ACTIVATION_VERIFY || '' }}
-          AI_ENGINE_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          # A caller without id-token: write (the consumer wrapper before its sync)
+          # gets no pool credential (oidc_unavailable); the documented behaviour is
+          # isolated codex, not the capacity policy's refusal (exit 76).
+          AI_ENGINE_ACTIVATION_VERIFY: ${{ steps.claude_pool.outputs.reason == 'oidc_unavailable' && 'codex' || vars.AI_ENGINE_ACTIVATION_VERIFY || '' }}
+          AI_ENGINE_LABELS: ${{ steps.claude_pool.outputs.reason == 'oidc_unavailable' && '["ai:codex"]' || toJSON(github.event.pull_request.labels.*.name) }}
           SUPPORT_INSTRUCTIONS_FILE: ${{ github.workspace }}/.codex-workflow-src/unattended_system_instructions.md
         run: |
           SUPPORT_DIR="${GITHUB_WORKSPACE}/.codex-workflow-src" \

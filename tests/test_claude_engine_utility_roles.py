@@ -404,9 +404,19 @@ def test_activation_verify_job_adds_no_permissions_and_poller_resolves_the_role(
 	assert "permissions" not in data["jobs"]["activation-verify"]
 	# The merged PR's labels reach both the preflight resolve and the verifier.
 	labels_expr = "${{ toJSON(github.event.pull_request.labels.*.name) }}"
-	for step in data["jobs"]["activation-verify"]["steps"]:
-		if step.get("name") in ("Resolve AI engine", "Verify activation"):
-			assert step["env"]["AI_ENGINE_LABELS"] == labels_expr
+	steps = {step.get("name"): step for step in data["jobs"]["activation-verify"]["steps"]}
+	assert steps["Resolve AI engine"]["env"]["AI_ENGINE_LABELS"] == labels_expr
+	# A caller without id-token: write (oidc_unavailable) runs the verifier on
+	# codex instead of being refused (exit 76) under the capacity policy.
+	assert steps["Resolve Claude credential"]["id"] == "claude_pool"
+	verify_env = steps["Verify activation"]["env"]
+	assert verify_env["AI_ENGINE_LABELS"] == (
+		"${{ steps.claude_pool.outputs.reason == 'oidc_unavailable' && '[\"ai:codex\"]' || "
+		"toJSON(github.event.pull_request.labels.*.name) }}"
+	)
+	assert verify_env["AI_ENGINE_ACTIVATION_VERIFY"] == (
+		"${{ steps.claude_pool.outputs.reason == 'oidc_unavailable' && 'codex' || vars.AI_ENGINE_ACTIVATION_VERIFY || '' }}"
+	)
 	poll = (WORKFLOWS / "orchestrate_poll.yml").read_text(encoding="utf-8")
 	assert "SECURITY_AUDIT ACTIVATION_VERIFY; do" in poll
 	assert poll.count("AI_ENGINE_ACTIVATION_VERIFY: ${{ vars.AI_ENGINE_ACTIVATION_VERIFY || '' }}") == 2

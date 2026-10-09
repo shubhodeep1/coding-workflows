@@ -5338,7 +5338,8 @@ def test_engine_fallback_cli_round_trip(tmp_path: Path) -> None:
 
 def test_intake_fingerprints_engine_fallback_without_logs() -> None:
 	text = (REPO_ROOT / "scripts" / "workflow_failure_heal_intake.sh").read_text(encoding="utf-8")
-	branch = text[text.index('if [ "${SOURCE_KIND}" = "engine_fallback" ]; then'):text.index('elif [ "${SOURCE_KIND}" = "autofix_failure" ]; then')]
+	branch_start = text.index('if [ "${SOURCE_KIND}" = "engine_fallback" ]; then')
+	branch = text[branch_start:text.index('elif [ "${SOURCE_KIND}" = "autofix_failure" ]; then', branch_start)]
 	assert 'FIRST_WORKFLOW_NAME="ai-engine-fallback"' in branch
 	assert 'FIRST_FAILING_STEP="${ENGINE_ROLE}"' in branch
 	assert 'SIGNATURE="${ENGINE_REASON}"' in branch
