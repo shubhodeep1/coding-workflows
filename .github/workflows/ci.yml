@@ -577,6 +577,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_claude_pool_token.py
 
+      - name: Validation harness sandbox tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validation_harness_sandbox.py
+
       - name: Claude pool health alert tests
         run: |
           set -euo pipefail

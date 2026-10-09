@@ -227,7 +227,11 @@ def test_fail_closed_handler_writes_harness_error_without_running_tests() -> Non
 			+ handler.group(0)
 			+ "fail_closed_validation_sandbox 'selfcheck proc_environ_readable'\necho unreachable\n"
 		)
-		result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30)
+		# validate_process.sh always sets these; the handler reads them under set -u.
+		result = subprocess.run(
+			["bash", "-c", script], capture_output=True, text=True, timeout=30,
+			env={**os.environ, "GITHUB_REPOSITORY": "test-owner/test-repo", "TRACKING_ISSUE_RAW": "42"},
+		)
 		assert result.returncode == 0, result.stderr
 		assert "unreachable" not in result.stdout
 		assert '"status": "harness_error"' in diag.read_text()
@@ -286,3 +290,128 @@ def test_cleanup_never_kills_the_sandbox_written_pgid_as_root() -> None:
 	body = cleanup.group(0)
 	assert 'as_sandbox kill -KILL -- "-${pgid}"' in body
 	assert "sudo -n kill" not in body
+
+
+# --- rootless package install on runners without Docker's apt source ---------
+
+DOCKER_FPR = "9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+
+
+def _install_env(tmp: Path, *, plain_install_works: bool = False, fingerprint: str = DOCKER_FPR, pinned_version_exists: bool = True) -> dict[str, str]:
+	"""Fake sudo/apt-get/curl/gpg/dpkg on PATH; apt-get only finds the rootless
+	package once our Docker source list exists (or always, when plain_install_works)."""
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	sources = tmp / "sources.list.d"
+	keyrings = tmp / "keyrings"
+	sources.mkdir()
+	(tmp / "os-release").write_text('ID=ubuntu\nVERSION_CODENAME=noble\n', encoding="utf-8")
+	log = tmp / "calls.log"
+	scripts = {
+		"sudo": '#!/bin/bash\n[ "$1" = "-n" ] && shift\nexec "$@"\n',
+		"apt-get": f'''#!/bin/bash
+echo "apt-get $*" >> "{log}"
+case "$*" in
+	*update*) exit 0 ;;
+esac
+want=""
+for a in "$@"; do case "$a" in docker-ce-rootless-extras*) want="$a" ;; esac; done
+[ -z "$want" ] && exit 0
+{"exit 0" if plain_install_works else ""}
+[ -f "{sources}/ai-validation-docker.list" ] || exit 100
+case "$want" in
+	docker-ce-rootless-extras=*) {"exit 0" if pinned_version_exists else "exit 100"} ;;
+esac
+exit 0
+''',
+		"curl": f'''#!/bin/bash
+echo "curl $*" >> "{log}"
+out=""
+while [ "$#" -gt 0 ]; do [ "$1" = "-o" ] && out="$2"; shift; done
+echo "-----BEGIN PGP PUBLIC KEY BLOCK-----" > "$out"
+''',
+		"gpg": f'#!/bin/bash\necho "fpr:::::::::{fingerprint}:"\n',
+		"dpkg": '#!/bin/bash\necho amd64\n',
+		"dpkg-query": '#!/bin/bash\necho "5:28.4.0-1~ubuntu.24.04~noble"\n',
+	}
+	for name, body in scripts.items():
+		path = bin_dir / name
+		path.write_text(body, encoding="utf-8")
+		path.chmod(0o755)
+	return {
+		"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+		"SANDBOX_DOCKER_APT_KEYRING_DIR": str(keyrings),
+		"SANDBOX_DOCKER_APT_SOURCES_DIR": str(sources),
+		"SANDBOX_OS_RELEASE_FILE": str(tmp / "os-release"),
+		"CALLS_LOG": str(log),
+	}
+
+
+def _install(env: dict[str, str]) -> subprocess.CompletedProcess:
+	return subprocess.run(
+		["bash", "-c", f'source "{HELPER}"; install_rootless_packages'],
+		capture_output=True, text=True, timeout=60, env={"HOME": os.environ.get("HOME", "/tmp"), **env},
+	)
+
+
+def test_rootless_packages_come_from_a_temporary_docker_repo_when_the_runner_has_none(tmp_path: Path) -> None:
+	env = _install_env(tmp_path)
+	result = _install(env)
+	assert result.returncode == 0, result.stderr
+	calls = Path(env["CALLS_LOG"]).read_text(encoding="utf-8").splitlines()
+	assert "curl -fsSL --retry 3 --max-time 60 -o" in " ".join(calls)
+	assert any(c.endswith("https://download.docker.com/linux/ubuntu/gpg") for c in calls)
+	# The installed docker-ce version is preferred.
+	assert "apt-get install -y -q docker-ce-rootless-extras=5:28.4.0-1~ubuntu.24.04~noble" in calls
+	assert "VALIDATION_HARNESS_SANDBOX phase=provision outcome=ok reason=rootless_packages_from_docker_repo" in result.stderr
+	# The temporary source and key are removed again.
+	assert not (tmp_path / "sources.list.d" / "ai-validation-docker.list").exists()
+	assert not (tmp_path / "keyrings" / "ai-validation-docker.asc").exists()
+
+
+def test_the_temporary_source_is_signed_by_the_pinned_key(tmp_path: Path) -> None:
+	env = _install_env(tmp_path)
+	sources = tmp_path / "sources.list.d"
+	# Keep a copy of the list apt saw by having apt-get copy it on the pinned install.
+	apt = tmp_path / "bin" / "apt-get"
+	apt.write_text(apt.read_text(encoding="utf-8").replace(
+		'case "$want" in', f'cp "{sources}/ai-validation-docker.list" "{tmp_path}/seen.list"\ncase "$want" in', 1,
+	), encoding="utf-8")
+	assert _install(env).returncode == 0
+	assert (tmp_path / "seen.list").read_text(encoding="utf-8") == (
+		f"deb [arch=amd64 signed-by={tmp_path}/keyrings/ai-validation-docker.asc] https://download.docker.com/linux/ubuntu noble stable\n"
+	)
+
+
+def test_plain_install_needs_no_docker_repo(tmp_path: Path) -> None:
+	env = _install_env(tmp_path, plain_install_works=True)
+	result = _install(env)
+	assert result.returncode == 0, result.stderr
+	assert "curl" not in Path(env["CALLS_LOG"]).read_text(encoding="utf-8")
+
+
+def test_unpinned_install_when_the_installed_version_is_not_in_the_repo(tmp_path: Path) -> None:
+	env = _install_env(tmp_path, pinned_version_exists=False)
+	result = _install(env)
+	assert result.returncode == 0, result.stderr
+	assert Path(env["CALLS_LOG"]).read_text(encoding="utf-8").splitlines()[-1] == "apt-get install -y -q docker-ce-rootless-extras"
+
+
+def test_a_wrong_key_fingerprint_is_refused_and_nothing_is_trusted(tmp_path: Path) -> None:
+	env = _install_env(tmp_path, fingerprint="0" * 40)
+	result = _install(env)
+	assert result.returncode == 1
+	assert "reason=docker_repo_key_fingerprint_mismatch" in result.stderr
+	assert not list((tmp_path / "sources.list.d").iterdir())
+	assert not (tmp_path / "keyrings").exists()
+
+
+def test_provision_still_fails_closed_when_the_packages_cannot_be_installed() -> None:
+	text = HELPER.read_text(encoding="utf-8")
+	assert "install_rootless_packages || sandbox_fail provision rootless_packages_unavailable" in text
+	assert 'SANDBOX_DOCKER_APT_KEY_FINGERPRINT="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"' in text
+
+
+def test_ci_runs_this_file() -> None:
+	ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+	assert "tests/test_validation_harness_sandbox.py" in ci
