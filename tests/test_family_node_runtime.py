@@ -74,6 +74,20 @@ def _run_validation_lint(output_root: Path) -> subprocess.CompletedProcess[str]:
 	)
 
 
+def _run_family_marker(script: Path) -> subprocess.CompletedProcess[str]:
+	# Execute the rendered marker script and let callers assert on its TAP
+	# output rather than its source text, so the check holds whether the
+	# template uses `echo` or `printf` (issue #6843, PR #6569 CI failure).
+	return subprocess.run(
+		["bash", str(script)],
+		cwd=str(script.parent),
+		text=True,
+		capture_output=True,
+		timeout=60,
+		env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+	)
+
+
 def _read_env_values(path: Path) -> dict[str, str]:
 	# Mirror the load_env_file semantics that matter to these tests: preserve
 	# trailing whitespace (except a trailing CR), fail fast on malformed
@@ -139,11 +153,10 @@ def test_node_runtime_scaffold_has_no_hardhat_assets_and_wires_custom_tests() ->
 		dockerfile_text = (output_root / "Dockerfile.app").read_text(encoding="utf-8")
 		assert dockerfile_text.startswith("FROM node:"), dockerfile_text
 
-		family_marker_text = (output_root / "tests" / "10_family_marker.sh").read_text(encoding="utf-8")
-		marker_run = subprocess.run(["bash", "-c", family_marker_text], capture_output=True, text=True, timeout=10)
-		assert marker_run.returncode == 0, marker_run.stderr
-		# project_name is rendered shell-quoted (printf argument), so check the executed output.
-		assert "ok 1 - node-runtime family for demo-project" in marker_run.stdout
+		marker = _run_family_marker(output_root / "tests" / "10_family_marker.sh")
+		assert marker.returncode == 0, f"family marker failed rc={marker.returncode}: {marker.stderr}"
+		assert "1..1" in marker.stdout.splitlines(), marker.stdout
+		assert "ok 1 - node-runtime family for demo-project" in marker.stdout.splitlines(), marker.stdout
 
 		env_values = _read_env_values(output_root / "validate.env")
 		assert json.loads(env_values["CUSTOM_TESTS_JSON"]) == payload["custom_tests"]
