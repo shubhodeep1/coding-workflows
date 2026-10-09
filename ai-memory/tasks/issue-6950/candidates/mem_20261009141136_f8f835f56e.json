@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The suggested test change already exists in this checkout. How should implementation proceed?\nChoices:\nA: Re-check against the current default branch during planning. If the test there already expects the advisory result, make no code change and treat the issue as already fixed; PR #6947 gets the fix by syncing the default branch. (RECOMMENDED)\nB: Make the fix on the PR branch `claude/elegant-mendel-5pli2i-heal-scope-test-subjects` (head `8092a3209de78fcc7456499d992a66eb20d51f7e`) by bringing its copy of the test in line with the default branch.\nC: Assume a different shard-1 test failed, and look for and fix the real failing test in `tests/test_orchestrate_poll_process.py` from the default-branch code.\nQ2: The log says both `orchestrate-poll` and `tests-hooks-and-orchestrator` failed, but the triage only covers the first. Should this issue cover the second job?\nChoices:\nA: No. Limit this issue to the `orchestrate-poll` shard failure. Any `tests-hooks-and-orchestrator` failure is left to its own triage issue or a rerun. (RECOMMENDED)\nB: Yes. Also find and fix whatever made `tests-hooks-and-orchestrator` fail. **Note:** neither the issue nor the repository records which test failed in that job, so planning may have to work from the PR #6947 diff alone.\n---\n- **Actions taken:** read the test the issue cites and the matching cap-conversion code in the script, and found the test already expects the advisory behaviour.\n- **Assumptions:** the read-only snapshot reflects the default branch, not the PR #6947 head.\n- **Missing context:** the full shard-1 log and the `tests-hooks-and-orchestrator` job log. They are not available here because this phase has no GitHub access.",
+  "fingerprint": "e4b902ba7ead1a07a4b1005760d36f987da2ee4cfd7f16e1edbdb27ce605d899",
+  "lineage": {
+    "issue_number": 6950,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37941637886",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37941637886",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261009141136_f8f835f56e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 6950,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "37941637886"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #6950 needs clarification",
+  "timestamps": {
+    "created_at": "2026-10-09T14:11:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
