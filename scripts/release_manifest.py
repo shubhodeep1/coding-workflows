@@ -20,6 +20,9 @@ Surface (one rule per updater step, see SURFACE_RULES):
 - "Sync changelog fragment assets from upstream" / "Assemble changelog
   fragments": scripts/assemble_changelog.py (it generates the changelog
   assets, so the script is the attested asset).
+- "Verify attested release manifest": scripts/verify_release_manifest.py and
+  scripts/release_manifest.py (the step hash-checks both, plus
+  scripts/workflow_wrapper_refs.py, before running the verifier).
 - Not attested: scripts/tg_helpers.sh. The "Send Telegram notification" step
   fetches it through the contents API at ref=stable, not from the release
   checkout, so it is outside the release-to-consumer copy surface.
@@ -78,6 +81,10 @@ SURFACE_RULES = (
 	("file", "scripts/workflow_wrapper_refs.py", True),
 	("file", "scripts/apply_audit_gate_assets.py", True),
 	("file", "scripts/assemble_changelog.py", True),
+	# The updater's verification step (#6960) runs these two modules from the
+	# release checkout, so their bytes must be attested too.
+	("file", "scripts/verify_release_manifest.py", True),
+	("file", "scripts/release_manifest.py", True),
 )
 
 # Directories (and the root file) the output must never be written into, so a

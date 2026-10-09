@@ -176,7 +176,7 @@ def _make_repo(tmp_path: Path) -> tuple[Path, str]:
 	for name in ("release_manifest.py", "workflow_wrapper_refs.py"):
 		(root / "scripts").mkdir(exist_ok=True)
 		shutil.copy2(REPO_ROOT / "scripts" / name, root / "scripts" / name)
-	for name in ("apply_audit_gate_assets.py", "assemble_changelog.py"):
+	for name in ("apply_audit_gate_assets.py", "assemble_changelog.py", "verify_release_manifest.py"):
 		_write(root, f"scripts/{name}", f"# {name}\n", 0o755)
 	_git(root, "init", "-q")
 	_git(root, "add", "-A")
