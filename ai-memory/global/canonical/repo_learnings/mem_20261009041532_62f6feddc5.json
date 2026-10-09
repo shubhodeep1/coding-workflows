@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Keep the workspace source manifest in sync when changing workspace-managed files.",
   "timestamps": {
     "created_at": "2026-10-09T04:15:32Z",
