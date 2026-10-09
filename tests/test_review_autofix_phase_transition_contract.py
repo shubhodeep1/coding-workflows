@@ -3,10 +3,13 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 
 
@@ -32,7 +35,7 @@ POST_MERGE_GH_RETRY_NOOP = 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; 
 
 
 def _workflow_text() -> str:
-	return WORKFLOW.read_text(encoding="utf-8")
+	return expanded_review_autofix_text()
 
 
 def _step_block(text: str, step_name: str) -> str:

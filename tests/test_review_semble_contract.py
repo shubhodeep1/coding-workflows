@@ -6,10 +6,13 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
+import sys
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 STAGE_HELPER = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
 REVIEWERS = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
@@ -27,7 +30,8 @@ OPENCODE_REVIEWER_EVENTS_FIXTURE = (
 
 
 def _read(path: Path) -> str:
-	return path.read_text(encoding="utf-8")
+	# Moved review_autofix.yml step bodies (scripts/review_autofix_step_*.sh) inlined again.
+	return expanded_review_autofix_text() if path == WORKFLOW else path.read_text(encoding="utf-8")
 
 
 def _stage_helper_text() -> str:

@@ -432,6 +432,88 @@ def test_orchestrator_rb_gates_pass_base_ref() -> None:
 	)
 
 
+# ---------------------------------------------------------------------------
+# Issue #6963: the configured CI check side channel. _pr_checks_completed
+# records PR_CHECKS_LAST_CI_NAME / PR_CHECKS_LAST_CI_STATE from the listing
+# it already fetched; its return value and reason do not change.
+# ---------------------------------------------------------------------------
+
+THIS_REPO_ENV = {"PR_CHECKS_REPOSITORY": "shubhodeep1/coding-workflows"}
+
+
+def _ci_side_channel(runs_json: str, env: dict[str, str], args: str = '5 "abc1234" "main"') -> tuple[str, str, str]:
+	body = (
+		f'_pr_checks_completed {args} >/dev/null 2>&1; rc=$?; '
+		'printf "%s|%s|%s|%s\\n" "${rc}:${PR_CHECKS_LAST_REASON}" "${PR_CHECKS_LAST_CI_NAME}" "${PR_CHECKS_LAST_CI_STATE}" "end"'
+	)
+	res = _run(body, runs_json=runs_json, env=env)
+	assert res.returncode == 0, res.stderr
+	gate, name, state, _ = res.stdout.strip().split("|")
+	return gate, name, state
+
+
+def _ci_run(name: str, status: str, conclusion: str | None, run_id: str = "999") -> dict:
+	return {"name": name, "status": status, "conclusion": conclusion, "head_sha": "abc1234",
+		"details_url": f"https://github.com/o/r/actions/runs/{run_id}/job/1"}
+
+
+def test_ci_side_channel_defaults_to_lint_only_in_this_repo() -> None:
+	runs = _page([_ci_run("lint", "completed", "success")])
+	gate, name, state = _ci_side_channel(runs, THIS_REPO_ENV)
+	assert (gate, name, state) == ("0:ok", "lint", "success"), (gate, name, state)
+	gate, name, state = _ci_side_channel(runs, {"PR_CHECKS_REPOSITORY": "SHUBHODEEP1/Coding-Workflows"})
+	assert name == "lint" and state == "success", (name, state)
+	gate, name, state = _ci_side_channel(runs, REPO_ENV)
+	assert (gate, name, state) == ("0:ok", "none", "disabled"), (gate, name, state)
+
+
+def test_ci_side_channel_does_not_change_the_gate_result() -> None:
+	runs = _page([_ci_run("CI", "completed", "success"), _ci_run("review / gate", "completed", "success")])
+	gate, name, state = _ci_side_channel(runs, THIS_REPO_ENV)
+	assert gate == "0:ok" and name == "lint" and state == "absent", (gate, name, state)
+
+
+def test_ci_side_channel_aggregates_every_matching_run() -> None:
+	cases = [
+		([_ci_run("lint", "completed", "success"), _ci_run("lint", "completed", "failure")], "failure"),
+		([_ci_run("lint", "completed", "success"), _ci_run("lint", "in_progress", None)], "pending"),
+		([_ci_run("lint", "completed", "skipped")], "failure"),
+		([_ci_run("lint", "completed", "neutral")], "failure"),
+		([_ci_run("lint", "completed", "cancelled")], "failure"),
+		([_ci_run("lint", "completed", "success", run_id="4242")], "absent"),
+		([{**_ci_run("lint", "completed", "success"), "head_sha": "fff0000"}], "absent"),
+	]
+	for runs, expected in cases:
+		_, _, state = _ci_side_channel(_page(runs), {**THIS_REPO_ENV, "PR_CHECKS_SELF_RUN_ID": "4242"})
+		assert state == expected, (runs, state, expected)
+
+
+def test_ci_side_channel_is_unknown_on_api_failure_and_set_on_allow_all() -> None:
+	_, _, state = _ci_side_channel("{}", THIS_REPO_ENV)
+	assert state == "unknown", state
+	gate, _, state = _ci_side_channel(_page([_ci_run("lint", "completed", "success")]),
+		{**THIS_REPO_ENV, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": ""})
+	assert gate == "0:allow_all" and state == "success", (gate, state)
+
+
+def test_ci_check_name_resolution() -> None:
+	cases = [
+		({**REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": "  build  "}, "build"),
+		({**THIS_REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": "NONE"}, "none"),
+		({**THIS_REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": ""}, "lint"),
+		({**THIS_REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": "review / gate"}, "review / gate"),
+		({**THIS_REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": "a,b"}, "lint"),
+		({**THIS_REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": "li\nnt"}, "lint"),
+		({**REPO_ENV, "AUTO_MERGE_REQUIRED_CI_CHECK": "x" * 101}, "none"),
+	]
+	for env, expected in cases:
+		res = _run('printf "%s\\n" "$(_pr_auto_merge_required_ci_check_name)"', env=env)
+		assert res.returncode == 0, res.stderr
+		assert res.stdout.strip() == expected, (env.get("AUTO_MERGE_REQUIRED_CI_CHECK"), res.stdout)
+		if expected != "none" and env.get("AUTO_MERGE_REQUIRED_CI_CHECK", "").strip() not in ("", expected):
+			assert "::warning::AUTO_MERGE_REQUIRED_CI_CHECK" in res.stderr, res.stderr
+
+
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = skipped = failed = 0

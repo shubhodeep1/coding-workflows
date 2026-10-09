@@ -973,6 +973,18 @@ carries the `GH_PAT` remote URL and the checkout extraheader).
   (`review_enable_auto_merge.sh`, the `deterministic-skip-merge` job and
   the judge) re-checks freshness before merging. The
   orchestrator's direct merges already gated on `_pr_checks_completed`.
+  The wait also requires the configured CI check (#6963,
+  `AUTO_MERGE_REQUIRED_CI_CHECK`; unset or empty means `lint` here and
+  off in consumers, `none` turns it off) to exist on the reviewed head and
+  succeed: an absent, pending or unreadable check keeps polling until the
+  budget is spent (`timeout`), any failed, skipped, neutral or cancelled
+  run with that name refuses (`failed`), and the two-interval zero-check
+  grace applies only when the requirement is off. `_pr_checks_completed`
+  only records `PR_CHECKS_LAST_CI_NAME` / `PR_CHECKS_LAST_CI_STATE` from
+  the listing it already read; its result is unchanged. The log line
+  gains `ci_check=<name> ci_state=<state>`. The match is by name and head
+  SHA, not by workflow path, so a same-repository PR could add its own job
+  named `lint`.
 - **Dependencies.** `codex_isolated_exec.sh prepare --deps` (implement) installs
   dependencies once per job. The network-isolated, credential-free container sees
   only staged Node manifests and filtered third-party Python requirements
