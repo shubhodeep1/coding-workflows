@@ -545,9 +545,13 @@ def _run_cap_skip(comments: list, commits: list, login: str | None) -> tuple[str
 	`gh_retry` / `_safe_gh_jq` are stubbed; `login=None` makes the
 	identity lookup fail. Returns (stdout, GET /user call count)."""
 	import json
+	import shlex
 	import subprocess
 	import tempfile
 
+	# Fixture JSON is single-quoted with shlex.quote so Bash performs no
+	# command substitution (backticks, $(...)) or parameter expansion on
+	# comment bodies before the verbatim snippet sees them.
 	with tempfile.TemporaryDirectory() as tmp:
 		calls = Path(tmp) / "calls"
 		script = f"""
@@ -563,8 +567,8 @@ NOOP_MAX_RETRIES=3
 NOOP_RECOVERY_CAP_SKIPPED=0
 NOOP_CAP_TRUSTED_LOGIN=""
 NOOP_CAP_TRUSTED_LOGIN_STATE="unset"
-N_COMMENTS_JSON={json.dumps(json.dumps(comments))}
-N_COMMITS_JSON={json.dumps(json.dumps(commits))}
+N_COMMENTS_JSON={shlex.quote(json.dumps(comments))}
+N_COMMITS_JSON={shlex.quote(json.dumps(commits))}
 for _pr in a b; do
 {_cap_skip_block()}
 	echo "DISPATCH pr=${{N_PR}}"
@@ -593,6 +597,17 @@ def test_cap_skip_suppresses_redispatch_when_cap_applied_on_head():
 	assert f"NOOP_RECOVERY_SKIP_FINGERPRINT_CAP pr=4332 head={CAP_HEAD} count=2 max=3" in out, out
 	assert "SKIPPED=2" in out, out
 	assert calls == 1, f"GET /user must be issued once per cycle, got {calls}"
+
+
+def test_cap_skip_harness_preserves_shell_metacharacters():
+	"""Fixture bodies with backticks, `$(...)` and `$VAR` must reach the
+	snippet byte for byte. Double-quoted assignment let Bash run command
+	substitution on them (an unbalanced backtick aborted the shell)."""
+	stray = {"user": {"login": "mallory"}, "body": "stray ` backtick and $(nope) and $HOME"}
+	out, _ = _run_cap_skip([_cap_comment("shubhodeep1"), stray], [{"sha": CAP_HEAD}], "shubhodeep1")
+	assert "DISPATCH" not in out, out
+	assert "SKIPPED=2" in out, out
+	assert f"NOOP_RECOVERY_SKIP_FINGERPRINT_CAP pr=4332 head={CAP_HEAD}" in out, out
 
 
 def test_cap_skip_ignores_marker_for_older_head():
