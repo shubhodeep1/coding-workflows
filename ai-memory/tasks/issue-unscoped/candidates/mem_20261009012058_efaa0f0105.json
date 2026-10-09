@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.77,
+  "details": "Changes to stable-release workflows have paired exact-ref matching with tests for repository allowlisting. When modifying release or promotion automation, preserve these checks rather than relying on loose ref comparisons or implicit repository trust.",
+  "fingerprint": "7895842231f85e8ce3c15dc7fde40515fda4404bebdcfccc2eca0bfaa547f88f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "37868774338",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "37868774338",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/6506",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6639",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6641",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6782",
+      "https://github.com/shubhodeep1/coding-workflows/issues/6796",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6572",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6643",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6644",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6786",
+      "https://github.com/shubhodeep1/coding-workflows/pull/6805"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261009012058_efaa0f0105",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Release automation should validate exact refs and explicitly allowlisted repositories.",
+  "timestamps": {
+    "created_at": "2026-10-09T01:20:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
