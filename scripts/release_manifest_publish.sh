@@ -241,7 +241,7 @@ cmd_upload()
 		fail manifest_missing
 	fi
 	if [ "$(basename "${manifest}")" != "${RELEASE_MANIFEST_ASSET_NAME}" ]; then
-		fail manifest_missing
+		fail manifest_name_mismatch
 	fi
 	local local_size
 	local_size="$(wc -c < "${manifest}" | tr -d '[:space:]')"

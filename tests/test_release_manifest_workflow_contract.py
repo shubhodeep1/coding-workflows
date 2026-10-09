@@ -323,6 +323,14 @@ def test_upload_requires_repository(tmp_path: Path) -> None:
 	assert "reason=missing_repository" in result.stderr
 
 
+def test_upload_refuses_wrongly_named_manifest(tmp_path: Path) -> None:
+	manifest = tmp_path / "other.json"
+	manifest.write_text("{}\n", encoding="utf-8")
+	result = _run(["upload", "--tag", TAG, "--manifest", str(manifest), "--repo", "o/r"], _env(tmp_path))
+	assert result.returncode != 0
+	assert f"::error::RELEASE_MANIFEST outcome=failed reason=manifest_name_mismatch tag={TAG}" in result.stderr
+
+
 def test_unknown_command_is_usage_error(tmp_path: Path) -> None:
 	result = _run(["publish"], _env(tmp_path))
 	assert result.returncode != 0
