@@ -21,4 +21,5 @@ On every caller, each test is also started with credential variables and `GIT_CO
 What this means for operators:
 - Validation now needs passwordless `sudo`, `uidmap`, `docker-ce-rootless-extras` and unprivileged user namespaces on the runner. Provisioning installs or enables them when it can.
 - Otherwise validation reports `harness_error` (`VALIDATION_HARNESS_SANDBOX phase=provision outcome=fail reason=…`) and does not run the tests.
-- `validation-refresh` and the nightly self-test still run the driver on the host. There they get only the per-test credential scrub.
+- `validation-refresh` also runs each consumer's self-test through the sandbox (`checked-run`, which proves isolation against the token-holding runner process first). If the sandbox is unavailable the repository is reported `red` with a `self_test_failed` diagnostic; its tests do not run on the host.
+- The nightly self-test still runs the driver on the host with only the per-test credential scrub. It runs this repository's own fixtures, not consumer tests.

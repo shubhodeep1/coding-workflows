@@ -239,3 +239,39 @@ def test_fail_closed_handler_writes_harness_error_without_running_tests() -> Non
 
 def test_validate_workflow_stages_sandbox_helper() -> None:
 	assert '"scripts/validation_harness_sandbox.sh",' in WORKFLOW.read_text(encoding="utf-8")
+
+
+def test_checked_run_rejects_bad_pid_and_never_runs_entry() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		marker = root / "ran"
+		entry = root / "entry.sh"
+		entry.write_text(f"touch {marker}\n", encoding="utf-8")
+		env = {"VALIDATION_HARNESS_SANDBOX_STATUS_FILE": str(root / "status")}
+		for pid in ("", "abc", "1;id"):
+			result = _run(["checked-run", pid, str(entry)], env=env, cwd=root)
+			assert result.returncode == 3, result.stderr
+			assert b"invalid_caller_pid" in result.stderr
+		# A valid pid without sudo fails closed in selfcheck before `run`.
+		bin_dir = _stub_bin(root, "exit 1")
+		result = _run(["checked-run", "1", str(entry)], env={**env, "PATH": f"{bin_dir}:{os.environ['PATH']}"}, cwd=root)
+		assert result.returncode == 3
+		assert b"phase=selfcheck outcome=fail reason=sudo_unavailable" in result.stderr
+		assert not marker.exists()
+
+
+def test_copyback_destination_override_is_used_and_must_be_absolute() -> None:
+	text = HELPER.read_text(encoding="utf-8")
+	assert 'copyback_dest="${VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST:-${workspace}/validation/logs}"' in text
+	assert '| cmd_ingest_logs "${copyback_dest}" "validation/logs"' in text
+	assert "sandbox_fail run invalid_copyback_dest" in text
+	# The override never enters the sandbox environment.
+	result = _run(["print-env-names"], env={"VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST": "/tmp/x"})
+	assert b"VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST" not in result.stdout
+
+
+def test_validation_refresh_self_test_runs_only_through_sandbox() -> None:
+	runner = (REPO_ROOT / "scripts" / "validation_refresh_runner.py").read_text(encoding="utf-8")
+	assert '"checked-run",' in runner
+	assert "str(os.getpid())" in runner
+	assert '("self_test", self_test_command)' not in runner

@@ -1478,7 +1478,9 @@ committing the corresponding file:
   - `*_TOKEN`, `*_SECRET`, `*_PAT` and `*_API_KEY`;
   - `GIT_CONFIG_*`, `ACTIONS_*` and the runner command files.
 
-  It keeps the synthetic `TEST_*` fixtures and masks global/system git config. This is the only protection on `validation-refresh` and the nightly self-test, which still call the driver on the host. Log prefix: `VALIDATION_HARNESS_SANDBOX`.
+  It keeps the synthetic `TEST_*` fixtures and masks global/system git config.
+- `scripts/validation_refresh_runner.py` runs each consumer self-test through the same sandbox: `provision` once per runner, then `checked-run <runner pid> scripts/validate_driver.sh`, which runs `selfcheck` against the `GH_TOKEN`-holding runner process before `run`. Logs are copied back to the old out-of-clone directory through `VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST` (default `<workspace>/validation/logs`), so drift detection is unchanged. A sandbox failure is a `self_test` failure (`red`); there is no host fallback.
+- The nightly self-test still calls the driver on the host, with only the per-test scrub. It runs this repository's own `tests/fixtures/selftest` fixtures, not consumer or model-written tests. Log prefix: `VALIDATION_HARNESS_SANDBOX`.
 
 ## Workflow scenario traces
 

@@ -16,6 +16,7 @@
 #   provision            create the sandbox user and start its rootless dockerd (idempotent)
 #   selfcheck [pid]      prove, as the sandbox user, that credentials are out of reach
 #   run <entry> [args]   stage a screened copy, run <entry> as the sandbox user, copy logs back
+#   checked-run <pid> <entry> [args]  selfcheck against <pid>, then run (one call for callers)
 #   cleanup              stop harness processes and containers, remove the work copy
 #   print-env-names      print the variable NAMES the sandbox would receive (never values)
 #   ingest-logs <dest>   validate a log tar on stdin and write it under <dest> (all or nothing)
@@ -36,6 +37,10 @@ VALIDATION_HARNESS_SANDBOX_MAX_COPYBACK_BYTES="${VALIDATION_HARNESS_SANDBOX_MAX_
 VALIDATION_HARNESS_SANDBOX_MAX_FILES="${VALIDATION_HARNESS_SANDBOX_MAX_FILES:-50000}"
 VALIDATION_HARNESS_SANDBOX_DOCKER_START_TIMEOUT="${VALIDATION_HARNESS_SANDBOX_DOCKER_START_TIMEOUT:-90}"
 VALIDATION_HARNESS_SANDBOX_STATUS_FILE="${VALIDATION_HARNESS_SANDBOX_STATUS_FILE:-${RUNTIME_DIR:-${TMPDIR:-/tmp}}/validation_harness_sandbox.status}"
+# Optional absolute destination for the copied-back validation/logs tree.
+# Empty (the default) keeps <workspace>/validation/logs. validation-refresh
+# sets it so logs stay outside the consumer clone it diffs for drift.
+VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST="${VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST:-}"
 SANDBOX_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 sandbox_log()
@@ -478,11 +483,16 @@ cmd_run()
 	shift
 	require_sudo run
 	id -u "${VALIDATION_HARNESS_SANDBOX_USER}" >/dev/null 2>&1 || sandbox_fail run sandbox_user_missing
-	local home work workspace entry_rel stage_status extract_status harness_exit
+	local home work workspace entry_rel stage_status extract_status harness_exit copyback_dest
 	local -a overlays=()
 	home="$(sandbox_home)"
 	work="$(sandbox_work_dir)"
 	workspace="$(pwd -P)"
+	copyback_dest="${VALIDATION_HARNESS_SANDBOX_COPYBACK_DEST:-${workspace}/validation/logs}"
+	case "${copyback_dest}" in
+		/*) ;;
+		*) sandbox_fail run invalid_copyback_dest ;;
+	esac
 	build_sandbox_env "${home}" "${work}/.tmp" "$(sandbox_docker_host)"
 	rootless_docker_ready || sandbox_fail run rootless_docker_unavailable
 	[ -f "${SANDBOX_HELPER_DIR}/codex_isolated_workspace.py" ] || sandbox_fail run support_missing
@@ -535,7 +545,7 @@ cmd_run()
 	set +e
 	as_sandbox bash -c 'cd "$1" && if [ -d validation/logs ]; then tar -c -f - validation/logs; else tar -c -f - --files-from /dev/null; fi' \
 		copyback "${work}" 2>/dev/null \
-		| cmd_ingest_logs "${workspace}/validation/logs" "validation/logs"
+		| cmd_ingest_logs "${copyback_dest}" "validation/logs"
 	extract_status=("${PIPESTATUS[@]}")
 	set -e
 	# cmd_ingest_logs exits 3 itself on refusal (status already written).
@@ -547,6 +557,18 @@ cmd_run()
 	exit "${harness_exit}"
 }
 
+# One call for callers that cannot sequence subcommands themselves
+# (scripts/validation_refresh_runner.py): prove isolation against the
+# credentialed caller's pid, then run. Either failure exits 3.
+cmd_checked_run()
+{
+	local caller_pid="${1:-}"
+	[[ "${caller_pid}" =~ ^[0-9]+$ ]] || sandbox_fail selfcheck invalid_caller_pid
+	shift
+	cmd_selfcheck "${caller_pid}"
+	cmd_run "$@"
+}
+
 main()
 {
 	local command="${1:-}"
@@ -555,11 +577,12 @@ main()
 		provision) cmd_provision "$@" ;;
 		selfcheck) cmd_selfcheck "$@" ;;
 		run) cmd_run "$@" ;;
+		checked-run) cmd_checked_run "$@" ;;
 		cleanup) cmd_cleanup "$@" ;;
 		print-env-names) cmd_print_env_names "$@" ;;
 		ingest-logs) cmd_ingest_logs "$@" ;;
 		*)
-			echo "usage: $(basename -- "$0") {provision|selfcheck [pid]|run <entry> [args]|cleanup|print-env-names|ingest-logs <dest> [prefix]}" >&2
+			echo "usage: $(basename -- "$0") {provision|selfcheck [pid]|run <entry> [args]|checked-run <pid> <entry> [args]|cleanup|print-env-names|ingest-logs <dest> [prefix]}" >&2
 			exit 2
 			;;
 	esac
