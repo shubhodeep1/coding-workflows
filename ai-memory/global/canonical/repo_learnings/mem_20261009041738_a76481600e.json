@@ -38,7 +38,7 @@
     "run_id": null
   },
   "sensitive": false,
-  "status": "promoted",
+  "status": "active",
   "summary": "Workflow behavior is often protected by focused contract tests.",
   "timestamps": {
     "created_at": "2026-10-09T04:17:38Z",
