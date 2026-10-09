@@ -650,6 +650,17 @@ def test_cap_skip_inline_quoted_marker_does_not_count():
 	assert "NOOP_RECOVERY_FINGERPRINT_CAP_STALE_SUPPORT" in out
 
 
+def test_cap_skip_inline_quoted_marker_does_not_count_when_support_unresolved():
+	"""With the support SHA unresolved the any-version fallback applies, but an
+	inline-quoted cap marker is still not a cap marker (the gate ignores it)."""
+	quoted = _cap_comment("shubhodeep1")
+	quoted["body"] = "**AI review/autofix failed**\n\n**First error:** `" + quoted["body"].split("\n", 1)[1] + "`"
+	out, calls = _run_cap_skip([quoted], [{"sha": CAP_HEAD}], "shubhodeep1")
+	assert out.count("DISPATCH") == 2, out
+	assert "NOOP_RECOVERY_SKIP_FINGERPRINT_CAP" not in out
+	assert calls == 0
+
+
 def test_cap_skip_legacy_marker_redispatches_when_support_resolved():
 	out, _ = _run_cap_skip([_cap_comment("shubhodeep1")], [{"sha": CAP_HEAD}], "shubhodeep1",
 		repo="shubhodeep1/coding-workflows", engine_sha=SUPPORT_NEW)

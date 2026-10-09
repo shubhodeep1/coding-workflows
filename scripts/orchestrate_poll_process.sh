@@ -26127,9 +26127,12 @@ for (( nidx=0; nidx<STANDALONE_COUNT; nidx++ )); do
 		# is oldest-first, so its last entry is the current head.
 		N_NOOP_CAP_HEAD_SHA="$(echo "${N_COMMITS_JSON}" | jq -r '.[-1].sha // ""' 2>/dev/null || echo "")"
 		if [[ "${N_NOOP_CAP_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+			# A cap marker counts only on its own line (the gate's rule); an
+			# inline quote of one in a failure comment's first error does not.
 			N_NOOP_CAP_AUTHORS="$(echo "${N_COMMENTS_JSON}" | jq -r \
 				--arg marker "<!-- review-autofix-failure-cap:v1 head=${N_NOOP_CAP_HEAD_SHA} " \
-				'[.[] | select((.body // "") | contains($marker)) | (.user.login // "" | ascii_downcase)] | unique | .[]' \
+				--arg marker_line_re "(^|\\n)<!-- review-autofix-failure-cap:v1 head=${N_NOOP_CAP_HEAD_SHA}( [^ >\\n]+)* -->[ \\r]*(\\n|\$)" \
+				'[.[] | select((.body // "") | contains($marker) and test($marker_line_re)) | (.user.login // "" | ascii_downcase)] | unique | .[]' \
 				2>/dev/null || echo "")"
 			N_NOOP_CAP_SUPPORT_AUTHORS=""
 			if [ -n "${N_NOOP_CAP_AUTHORS}" ]; then
