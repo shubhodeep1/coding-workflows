@@ -2042,6 +2042,9 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 	# A snapshot is memoized per slug/branch, not per tip: two refspecs may
 	# share a destination while pushing different commits. An API failure is
 	# memoized as well, to keep the call budget bounded on repeated targets.
+	# A push never trusts the TTL cache (CLAUDE.md §21.D): it reuses only a
+	# snapshot that came from a live lookup in this hook run, while a bare
+	# commit may still share a cache-derived snapshot.
 	pr_snapshots: dict[tuple[str, str], tuple[list[dict] | None, bool, str]] = {}
 	blocks: list[str] = []
 	bulk_reasons: list[str] = []
@@ -2148,8 +2151,12 @@ def _evaluate_bash(payload: dict) -> tuple[int, str]:
 					continue
 				tip = target.tip
 				key = (slug, branch)
-				if key not in pr_snapshots:
-					cached = _read_cache(slug, branch)
+				snapshot = pr_snapshots.get(key)
+				if snapshot is None or (target.reaches_remote and not snapshot[1]):
+					# A push lands on origin: the TTL cache may predate a merge, so it
+					# is never read, and a cache-derived snapshot memoized by an
+					# earlier `git commit` in this command is re-queried once.
+					cached = None if target.reaches_remote else _read_cache(slug, branch)
 					try:
 						pull_requests = cached if cached is not None else query_pull_requests(slug, branch, target.cwd)
 					except LookupUnavailable as exc:
@@ -2221,6 +2228,10 @@ def _evaluate_mcp_push(payload: dict) -> tuple[int, str]:
 	local checkout, the tip is fetched and the full three-condition rule
 	applies; otherwise ancestry cannot be verified and a merged-PR match asks
 	for confirmation instead of blocking (a block could not self-clear).
+
+	A push is a remote write, so PR state always comes from a live lookup: the
+	TTL cache may predate a merge and is never read here (CLAUDE.md §21.D). A
+	failed lookup follows §21.C and never falls back to cached data.
 	"""
 	if _guard_disabled():
 		return 0, ""
@@ -2264,15 +2275,13 @@ def _evaluate_mcp_push(payload: dict) -> tuple[int, str]:
 				return 0, ""
 			tip = remote_tip
 
-	cached = _read_cache(slug, branch)
 	try:
-		pull_requests = cached if cached is not None else query_pull_requests(slug, branch, cwd)
+		pull_requests = query_pull_requests(slug, branch, cwd)
 	except LookupUnavailable as exc:
 		return _unreachable_outcome(str(exc), tip, branch, base, cwd, True, slug)
+	_write_cache(slug, branch, pull_requests)
 
 	if not tip:
-		if cached is None:
-			_write_cache(slug, branch, pull_requests)
 		match = merged_without_open(pull_requests)
 		if match is not None:
 			_request_confirmation(
@@ -2283,18 +2292,6 @@ def _evaluate_mcp_push(payload: dict) -> tuple[int, str]:
 		return 0, ""
 
 	offender = blocking_pull_request(pull_requests, cwd, base, tip)
-	if offender is not None and cached is not None:
-		try:
-			pull_requests = query_pull_requests(slug, branch, cwd)
-		except LookupUnavailable as exc:
-			return _unreachable_outcome(
-				f"could not re-verify: {exc}", tip, branch, base, cwd, True, slug
-			)
-		_write_cache(slug, branch, pull_requests)
-		offender = blocking_pull_request(pull_requests, cwd, base, tip)
-	elif cached is None:
-		_write_cache(slug, branch, pull_requests)
-
 	if offender is None:
 		return 0, ""
 	return 2, _block_message(offender, branch, base, tip_label=f"origin/{branch}")
