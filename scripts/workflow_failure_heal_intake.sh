@@ -86,6 +86,9 @@
 #   WORKFLOW_HEAL_PY                      path of workflow_failure_heal.py
 #   WORKFLOW_HEAL_PROMPT_FILE             diagnosis prompt (default prompts/mode-workflow-failure-heal.txt)
 #   WORKFLOW_HEAL_SOURCE_CHECKOUT         "false" to skip the release-SHA worktree (tests)
+#   WORKFLOW_HEAL_DEFAULT_BRANCH          default branch a CI `workflow_run` report must
+#                                         come from (default: the intake event's
+#                                         repository.default_branch; empty rejects CI runs)
 #   WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED  "false" routes pr-/base-self-inflicted
 #                                         as workflow-defect and adds no ownership facts (default true)
 #   WORKFLOW_HEAL_REQUIRE_REPORT_AUTH     "true" skips repository_dispatch reports without an
@@ -423,6 +426,19 @@ if [[ "${SOURCE_KIND}" == "phase_failure" || "${SOURCE_KIND}" == "autofix_failur
 	# repository, workflow path, conclusion or PR association, and no issue/PR
 	# comments were read here before. At most one /user read, three run GETs,
 	# and one paginated comment read; failures reject rather than bypass this gate.
+	# The default branch a CI run must come from is read from the intake's own
+	# event file (always this repository), so it costs no GitHub call; empty
+	# rejects CI runs (fail closed) and leaves release runs unaffected.
+	PROVENANCE_DEFAULT_BRANCH="${WORKFLOW_HEAL_DEFAULT_BRANCH:-}"
+	if [ -z "${PROVENANCE_DEFAULT_BRANCH}" ] && [ -n "${GITHUB_EVENT_PATH:-}" ] && [ -f "${GITHUB_EVENT_PATH}" ] && [ -r "${GITHUB_EVENT_PATH}" ]; then
+		PROVENANCE_DEFAULT_BRANCH="$(jq -r '.repository.default_branch // ""' "${GITHUB_EVENT_PATH}" 2>/dev/null || true)"
+	fi
+	PROVENANCE_DEFAULT_BRANCH="$(printf '%s' "${PROVENANCE_DEFAULT_BRANCH}" | tr -cd 'A-Za-z0-9._/-' | head -c 255)"
+	if [ "${SOURCE_KIND}" = "workflow_run" ] && [ -z "${PROVENANCE_DEFAULT_BRANCH}" ]; then
+		# Lets operators tell "default branch unknown" apart from "run not on the
+		# default branch"; both still reject CI runs as ci_not_default_branch_push.
+		log "provenance_default_branch_unavailable source=${SOURCE_REPO} kind=${SOURCE_KIND} effect=ci_runs_rejected"
+	fi
 	if [ "${SOURCE_KIND}" != "workflow_run" ]; then
 		if [ "${SOURCE_KIND}" != "phase_failure" ] || [ "${SOURCE_REPO,,}" = "${SELF_REPO,,}" ]; then
 			PROVENANCE_LOGIN="$(gh_retry gh api --method GET user --jq .login 2>/dev/null || true)"
@@ -444,7 +460,8 @@ if [[ "${SOURCE_KIND}" == "phase_failure" || "${SOURCE_KIND}" == "autofix_failur
 		fi
 	done < <(jq -r '.run_refs[].run_id' "${PAYLOAD_FILE}")
 	if ! python3 "${HEAL_PY}" verify-run-provenance --payload-json "${PAYLOAD_FILE}" --runs-json "${PROVENANCE_RUNS}" \
-		--comments-json "${PROVENANCE_COMMENTS}" --trusted-login "${PROVENANCE_LOGIN}" --self-repo "${SELF_REPO}" > "${PROVENANCE_RESULT}" 2>/dev/null \
+		--comments-json "${PROVENANCE_COMMENTS}" --trusted-login "${PROVENANCE_LOGIN}" --self-repo "${SELF_REPO}" \
+		--default-branch "${PROVENANCE_DEFAULT_BRANCH}" > "${PROVENANCE_RESULT}" 2>/dev/null \
 		|| ! jq -e 'type == "object" and (.status == "ok" or .status == "rejected") and (.run_refs | type == "array") and (.rejections | type == "array")' "${PROVENANCE_RESULT}" >/dev/null 2>&1; then
 		printf '{"status":"rejected","reason":"verifier_error","rejections":[]}\n' > "${PROVENANCE_RESULT}"
 	fi
