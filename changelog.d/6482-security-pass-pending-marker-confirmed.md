@@ -1,2 +1,0 @@
-<!-- changelog: fixed -->
-- **Security audit dispatch no longer silently stalls when its pending comment cannot be confirmed.** The single-issue security gate retries the comment write a bounded number of times and fails the review closed with `pending_marker_failed` if no response confirms the marker. The review-blocked judge preserves that alertable reason; duplicate pending comments for one exhausted-head cycle count as one attempt.

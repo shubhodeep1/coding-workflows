@@ -240,6 +240,47 @@ jobs:
             --catalog-path "${GITHUB_WORKSPACE}/scripts/codex_model_catalog.json"
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
+      # Claude engine: the SECURITY_AUDIT role (.github/ai/claude_engine.json)
+      # runs on Claude unless AI_ENGINE_SECURITY_AUDIT or AI_ENGINE says codex.
+      # The CLI and the account pool are fetched only then; any Claude failure,
+      # including every account at the usage gate (reason all_gated), falls
+      # back to the unchanged codex path in scripts/security_audit.sh.
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          AUDIT_ENABLED: ${{ vars.SECURITY_AUDIT_ENABLED || 'true' }}
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_SECURITY_AUDIT: ${{ vars.AI_ENGINE_SECURITY_AUDIT || '' }}
+        run: |
+          set -euo pipefail
+          engine="codex"
+          case "${AUDIT_ENABLED,,}" in
+            1|true|yes|on)
+              if [ -f scripts/ai_engine.sh ]; then
+                # shellcheck disable=SC1091
+                source scripts/ai_engine.sh
+                engine="$(ai_engine_for_role SECURITY_AUDIT || echo codex)"
+              fi
+              ;;
+          esac
+          [ "${engine}" = "claude" ] || engine="codex"
+          echo "engine=${engine}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        id: claude_pool
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
+
       - name: Resolve trusted security audit exclusions
         env:
           AUDIT_ENABLED: ${{ vars.SECURITY_AUDIT_ENABLED || 'true' }}
@@ -295,6 +336,9 @@ jobs:
           SECURITY_AUDIT_CONFIDENCE_GATE: ${{ vars.SECURITY_AUDIT_CONFIDENCE_GATE || '8' }}
           SECURITY_AUDIT_SKIP_IF_UNCHANGED: ${{ vars.SECURITY_AUDIT_SKIP_IF_UNCHANGED || 'true' }}
           SECURITY_AUDIT_INCREMENTAL: ${{ vars.SECURITY_AUDIT_INCREMENTAL || 'true' }}
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_SECURITY_AUDIT: ${{ steps.ai_engine.outputs.engine || 'codex' }}
+          CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || '' }}
         run: |
           set -euo pipefail
           # The single-issue security pass reads the summary line from this log.

@@ -1386,41 +1386,129 @@ else
 	exit "${PROMPT_CONTEXT_STATUS}"
 fi
 
-security_audit_require_file "codex-preflight" "${RENDERED_PROMPT_FILE}"
-SECURITY_AUDIT_CODEX_HOME="${CODEX_HOME:-${HOME:-}/.codex}"
-security_audit_require_directory "codex-preflight" "${SECURITY_AUDIT_CODEX_HOME}"
-security_audit_require_file "codex-preflight" "${SECURITY_AUDIT_CODEX_HOME}/config.toml"
-if ! command -v codex >/dev/null 2>&1; then
-	security_audit_emit_failure "codex-preflight" "codex" "required command is unavailable"
-	exit 1
-fi
-security_audit_require_writable_destination "codex-preflight" "${CODEX_OUTPUT_FILE}"
-security_audit_require_writable_destination "codex-preflight" "${CODEX_ERROR_FILE}"
-
-# The audited code is untrusted input, so the agent runs in the
-# credential-free, network-isolated container (read-only snapshot of the
-# audit checkout), launched from the trusted support checkout.
-audit_isolated_args=()
-if [ "${OVERSIZED_SCOPED_COUNT}" -gt 0 ]; then
-	audit_isolated_args=(--include "${OVERSIZED_EXPORT_DIR}")
-fi
-if bash "${SECURITY_AUDIT_SUPPORT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/scripts/codex_isolated_exec.sh" run --mode read-only ${audit_isolated_args[@]+"${audit_isolated_args[@]}"} -- \
-		--ask-for-approval never \
-		-c model_verbosity=low \
-		-c include_apply_patch_tool=true \
-		exec \
-		--skip-git-repo-check \
-		--model "${WORKFLOW_EDITOR_MODEL:-openai/gpt-6-sol}" \
-		--sandbox read-only < "${RENDERED_PROMPT_FILE}" \
-		> "${CODEX_OUTPUT_FILE}" 2> "${CODEX_ERROR_FILE}"; then
-	:
+# --- Engine: Claude first (SECURITY_AUDIT role), codex on any failure ------
+# The role resolves through scripts/ai_engine.sh from the trusted support
+# tree: the engine config, the project's labels in AI_ENGINE_LABELS (`ai:codex`
+# keeps the audit on codex), AI_ENGINE_SECURITY_AUDIT, AI_ENGINE. Claude runs
+# in the same credential-free, network-isolated container as codex
+# (claude_run, read profile) on the role's model and effort. Every Claude
+# failure -- the account pool gated at gate_utilization (CLAUDE_POOL_REASON=
+# all_gated), no usable account, no isolation, a crash, a timeout, or output
+# that is missing or is not a JSON array of objects -- logs
+# AI_ENGINE_FALLBACK role=SECURITY_AUDIT and reruns the same prompt on codex.
+CLAUDE_AUDIT_OUTPUT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/claude-output.txt"
+SECURITY_AUDIT_ENGINE="codex"
+SECURITY_AUDIT_AI_ENGINE_SCRIPT="${SECURITY_AUDIT_SUPPORT_DIR}/scripts/ai_engine.sh"
+if [ -f "${SECURITY_AUDIT_AI_ENGINE_SCRIPT}" ]; then
+	# shellcheck source=/dev/null
+	if source "${SECURITY_AUDIT_AI_ENGINE_SCRIPT}"; then
+		SECURITY_AUDIT_ENGINE="$(AI_ENGINE_MODEL_HINT="" AI_ENGINE_EFFORT_HINT="" ai_engine_for_role SECURITY_AUDIT || echo codex)"
+	else
+		echo "security-audit: ai_engine.sh could not be loaded; running codex" >&2
+	fi
 else
-	CODEX_EXECUTION_STATUS=$?
-	CODEX_TAIL_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/codex-stderr-tail.txt"
-	CODEX_PROVIDER_CLASS="$(security_audit_emit_codex_stderr_tail "${CODEX_ERROR_FILE}" "${RENDERED_PROMPT_FILE}" "${CODEX_TAIL_FILE}")" || CODEX_PROVIDER_CLASS="unknown"
-	security_audit_emit_path_diagnostic "${CODEX_TAIL_FILE}" "sanitized-tail"
-	security_audit_emit_failure "codex-execution" "codex" "Codex exited nonzero" "${CODEX_PROVIDER_CLASS}"
-	exit "${CODEX_EXECUTION_STATUS}"
+	echo "security-audit: ai_engine.sh not found in the support tree; running codex" >&2
+fi
+[ "${SECURITY_AUDIT_ENGINE}" = "claude" ] || SECURITY_AUDIT_ENGINE="codex"
+
+# Returns 0 with the findings array in CODEX_OUTPUT_FILE (the file the
+# post-filter reads), or 1 after logging the fallback reason.
+security_audit_try_claude()
+{
+	local claude_rc=0 claude_include="" claude_check_reason=""
+	if [ "${CLAUDE_POOL_REASON:-}" = "all_gated" ]; then
+		ai_engine_fallback SECURITY_AUDIT all_gated
+		return 1
+	fi
+	if [ "${OVERSIZED_SCOPED_COUNT}" -gt 0 ]; then
+		claude_include="${OVERSIZED_EXPORT_DIR}"
+	fi
+	AI_ENGINE_MODEL_HINT="" AI_ENGINE_EFFORT_HINT="" AI_ENGINE_READ_ONLY="true" \
+		AI_ENGINE_INCLUDE_PATHS="${claude_include}" \
+		claude_run SECURITY_AUDIT "${RENDERED_PROMPT_FILE}" "${CLAUDE_AUDIT_OUTPUT_FILE}" "${PWD}" || claude_rc=$?
+	case "${claude_rc}" in
+		0) ;;
+		# claude_run already logged AI_ENGINE_FALLBACK with its reason.
+		75) return 1 ;;
+		124) ai_engine_fallback SECURITY_AUDIT timeout; return 1 ;;
+		*) ai_engine_fallback SECURITY_AUDIT "crashed_rc_${claude_rc}"; return 1 ;;
+	esac
+	# Same top-level contract the post-filter enforces on codex output: a JSON
+	# array. One outer ```json fence is stripped; anything else falls back.
+	if ! claude_check_reason="$(python3 - "${CLAUDE_AUDIT_OUTPUT_FILE}" "${CODEX_OUTPUT_FILE}" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+try:
+	text = Path(sys.argv[1]).read_text(encoding="utf-8").strip()
+except OSError:
+	text = ""
+if not text:
+	print("missing_output")
+	sys.exit(1)
+fenced = re.fullmatch(r"```json[ \t]*\n(.*)\n```", text, re.S)
+if fenced:
+	text = fenced.group(1).strip()
+try:
+	findings = json.loads(text)
+except ValueError:
+	print("malformed_output")
+	sys.exit(1)
+if not isinstance(findings, list) or not all(isinstance(item, dict) for item in findings):
+	print("schema_mismatch")
+	sys.exit(1)
+Path(sys.argv[2]).write_text(json.dumps(findings) + "\n", encoding="utf-8")
+print("ok")
+PY
+)"; then
+		ai_engine_fallback SECURITY_AUDIT "${claude_check_reason:-malformed_output}"
+		return 1
+	fi
+	return 0
+}
+
+if [ "${SECURITY_AUDIT_ENGINE}" = "claude" ] && security_audit_try_claude; then
+	echo "security-audit: engine=claude"
+else
+	security_audit_require_file "codex-preflight" "${RENDERED_PROMPT_FILE}"
+	SECURITY_AUDIT_CODEX_HOME="${CODEX_HOME:-${HOME:-}/.codex}"
+	security_audit_require_directory "codex-preflight" "${SECURITY_AUDIT_CODEX_HOME}"
+	security_audit_require_file "codex-preflight" "${SECURITY_AUDIT_CODEX_HOME}/config.toml"
+	if ! command -v codex >/dev/null 2>&1; then
+		security_audit_emit_failure "codex-preflight" "codex" "required command is unavailable"
+		exit 1
+	fi
+	security_audit_require_writable_destination "codex-preflight" "${CODEX_OUTPUT_FILE}"
+	security_audit_require_writable_destination "codex-preflight" "${CODEX_ERROR_FILE}"
+
+	# The audited code is untrusted input, so the agent runs in the
+	# credential-free, network-isolated container (read-only snapshot of the
+	# audit checkout), launched from the trusted support checkout.
+	audit_isolated_args=()
+	if [ "${OVERSIZED_SCOPED_COUNT}" -gt 0 ]; then
+		audit_isolated_args=(--include "${OVERSIZED_EXPORT_DIR}")
+	fi
+	if bash "${SECURITY_AUDIT_SUPPORT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/scripts/codex_isolated_exec.sh" run --mode read-only ${audit_isolated_args[@]+"${audit_isolated_args[@]}"} -- \
+			--ask-for-approval never \
+			-c model_verbosity=low \
+			-c include_apply_patch_tool=true \
+			exec \
+			--skip-git-repo-check \
+			--model "${WORKFLOW_EDITOR_MODEL:-openai/gpt-6-sol}" \
+			--sandbox read-only < "${RENDERED_PROMPT_FILE}" \
+			> "${CODEX_OUTPUT_FILE}" 2> "${CODEX_ERROR_FILE}"; then
+		:
+	else
+		CODEX_EXECUTION_STATUS=$?
+		CODEX_TAIL_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/codex-stderr-tail.txt"
+		CODEX_PROVIDER_CLASS="$(security_audit_emit_codex_stderr_tail "${CODEX_ERROR_FILE}" "${RENDERED_PROMPT_FILE}" "${CODEX_TAIL_FILE}")" || CODEX_PROVIDER_CLASS="unknown"
+		security_audit_emit_path_diagnostic "${CODEX_TAIL_FILE}" "sanitized-tail"
+		security_audit_emit_failure "codex-execution" "codex" "Codex exited nonzero" "${CODEX_PROVIDER_CLASS}"
+		exit "${CODEX_EXECUTION_STATUS}"
+	fi
+	echo "security-audit: engine=codex"
 fi
 
 python3 - \

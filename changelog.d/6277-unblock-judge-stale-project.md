@@ -1,2 +1,0 @@
-<!-- changelog: security -->
-- **The unblock judge no longer abandons an unlabeled project that has resumed.** It refuses to treat an older complete `failed` snapshot as current when a newer V2 state write is incomplete or malformed. It checks again before recording a verdict and immediately before adding the terminal label, after label-catalog preparation. A late resume or unreadable state withholds the terminal label; a resume after the verdict was recorded can leave an unacted-on verdict comment.
